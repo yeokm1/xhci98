@@ -6060,6 +6060,62 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
     return set;
 }
 
+const unsigned char instStorSilent[INST_STOR_SILENT_COUNT][4] = {
+    { 0xC3, 0x08, 0x02, 0x50 },
+    { 0xC3, 0x08, 0x05, 0x50 },
+    { 0xC3, 0x08, 0x06, 0x50 }
+};
+
+INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
+                              const int *valid, int n)
+{
+    INST_U32 set = 0;
+    int k;
+    int i;
+    int found;
+
+    for (k = 0; k < INST_STOR_SILENT_COUNT; k++) {
+        found = 0;
+        for (i = 0; i < n && !found; i++) {
+            found = valid[i] && memcmp(have[i], instStorSilent[k], 4) == 0;
+        }
+        if (!found) {
+            set |= 1UL << k;
+        }
+    }
+    return set;
+}
+
+void inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                           void *ctx, char *out, size_t cap)
+{
+    unsigned long n = (unsigned long)k + 1UL;
+    char num[16];
+    int d;
+    unsigned long t;
+
+    for (;;) {
+        /* "XHCI98S" and the number in decimal, built by hand (no stdio in
+         * the pure half). */
+        d = 0;
+        t = n;
+        do {
+            num[d++] = (char)('0' + (int)(t % 10UL));
+            t /= 10UL;
+        } while (t != 0UL && d < 15);
+        inst_copy(out, "XHCI98S", cap);
+        while (d > 0 && strlen(out) + 1 < cap) {
+            size_t l = strlen(out);
+            out[l] = num[--d];
+            out[l + 1] = '\0';
+        }
+        if (taken == NULL || !taken(out, ctx)) {
+            return;
+        }
+        n += INST_STOR_SILENT_COUNT;
+    }
+}
+
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
 {
     INST_U32 set = 0;

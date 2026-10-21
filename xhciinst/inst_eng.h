@@ -261,6 +261,10 @@ int inst_eng_s98_state(int *have, char *version, size_t cap);
  * detection's line or why it is greyed. */
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap);
 void inst_eng_stor_choose(int include);
+/* Record 26 section 6.5.12: 1 when XhciSilentInstall is preselected 1
+ * (the storage row on 98 SE, no machine-wide value set). */
+int inst_eng_stor_silent_pre(void);
+void inst_eng_silent_decline(int declined);
 /* Record 26 section 5.3.1 (task 43.43): the Components page's warnings for
  * the boxes as ticked (stor: the storage row), their text for dir; 0 none. */
 INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, const char *dir,

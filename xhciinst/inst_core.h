@@ -1712,6 +1712,21 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
  * (named[0] USBSTOR.INF, named[1] USBNTMAP.INF: 1 a file of the name is
  * there, -1 unreadable, either keeping it out). */
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2]);
+/* The SilentClasses entries the storage row adds on 98 SE (record 26
+ * section 6.5.12, task 43.42 option A): USBSTOR.INF's generic Bulk-Only
+ * lines, each a 4-byte entry of design record 13 section 6.11's form. */
+#define INST_STOR_SILENT_COUNT  3
+extern const unsigned char instStorSilent[INST_STOR_SILENT_COUNT][4];
+#define INST_STOR_SILENT_KEY    INST_MW_KEY "\\SilentClasses"
+/* The entries to add, a bit per index of instStorSilent: each one no value
+ * of the list (have[0..n), each 4 bytes; valid[i] 0 for a value of another
+ * type or length, which never counts) already holds. */
+INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
+                              const int *valid, int n);
+/* The name for added entry k: "XHCI98S<k+1>", or the next number when that
+ * name is taken (taken(name, ctx) 1). */
+void inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                           void *ctx, char *out, size_t cap);
 /* The detection's text: none, some ("not known to be ready"), all, or
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,

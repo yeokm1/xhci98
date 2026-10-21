@@ -465,6 +465,9 @@ static int stor_any(int kind);
 static int stor_covered(void);
 static void stor_tools_copy(void);
 static int stor_tools_remove(void);
+static void stor_silent_merge(void);
+static int stor_silent_remove(void);
+static int silentDeclined;  /* the window's explicit 0 (section 6.5.12) */
 static int controller_listed(void);
 static int stor_un_devices(void);
 static int stor_un_adopt(int record);
@@ -2521,6 +2524,16 @@ static void ask_values(void)
             answerValue[v] = chosenValue[v];
         }
     }
+    /* The console's preselection with the storage row (record 26 section
+     * 6.5.12); the window's page carries its own. */
+    v = inst_value_find("XhciSilentInstall");
+    if (v >= 0 && v < INST_MAX_VALUES && !answerSet[v] && !silentDeclined &&
+        !opts.Defaults && inst_eng_stor_silent_pre()) {
+        answerSet[v] = 1;
+        answerValue[v] = 1;
+        logonly("storage: XhciSilentInstall preselected\n");
+        answerChosen[v] = 2;
+    }
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
         INST_U32 m = inst_value_asked_mask(v, &envNow);
         INST_U32 def;
@@ -2534,6 +2547,8 @@ static void ask_values(void)
         if (answerSet[v]) {
             out("%s: set to %lu %s%s.\n", instValues[v].Name,
                 (unsigned long)answerValue[v],
+                answerChosen[v] == 2 ? "with the USB storage drivers (/set "
+                "XhciSilentInstall=0\nkeeps it off)" :
                 answerChosen[v] ? "on the settings page" : "by /set",
                 targets ? "" : " (machine-wide: no device takes it now)");
             set_caution(v, answerValue[v]);
@@ -2844,7 +2859,11 @@ static void write_values(void)
             if (envNow.Nt) {
                 continue;
             }
-            if (answerValue[v] == 1 && !silent_list_merge()) {
+            /* The storage row's preselection (answerChosen 2) merges
+             * no SILENT.REG line: the row adds its own entries (record 26
+             * section 6.5.12). */
+            if (answerValue[v] == 1 && answerChosen[v] != 2 &&
+                !silent_list_merge()) {
                 flagFailed = 1;
                 continue;
             }
@@ -11463,6 +11482,7 @@ static int run_uninstall_9x(void)
         files_9x(1);
         stor_un_rest();
         stor_tools_remove();
+        stor_silent_remove();
         finish_remove();
         return INST_EXIT_DONE;
     }
@@ -11517,6 +11537,10 @@ static int run_uninstall_9x(void)
     if (!stor_tools_remove()) {
         return stop_uninstall("a USB storage file in the tools folder could "
                               "not be removed.");
+    }
+    if (!stor_silent_remove()) {
+        return stop_uninstall("a SilentClasses entry of the USB storage "
+                              "drivers could not be removed.");
     }
     if (flagSteps || flagFailed) {
         return stop_uninstall("a driver file is still in use.");
@@ -17739,6 +17763,7 @@ static void stor_place_infs(void)
             return;
         }
     }
+    stor_silent_merge();
 }
 
 /* After the package's copy is made: Source cleared when it was made
@@ -19088,6 +19113,7 @@ static int stor_forget(void)
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Infs");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Placed");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Tools");
+    RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Silent");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Devices");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Before");
     w = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY);
@@ -19220,6 +19246,230 @@ static int stor_tools_remove(void)
         }
     }
     return !left;
+}
+
+/* ---- the silent install with the storage row (record 26 section 6.5.12,
+ * task 43.42 option A) ------------------------------------------------- */
+
+static int silent_taken(const char *name, void *ctx)
+{
+    HKEY k = (HKEY)ctx;
+    DWORD t;
+    DWORD n = 0;
+
+    return RegQueryValueExA(k, name, NULL, &t, NULL, &n) != ERROR_FILE_NOT_FOUND;
+}
+
+static void silent_hex(const unsigned char *e, char *out)
+{
+    static const char hx[] = "0123456789ABCDEF";
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        out[2 * i] = hx[(e[i] >> 4) & 0x0F];
+        out[2 * i + 1] = hx[e[i] & 0x0F];
+    }
+    out[8] = '\0';
+}
+
+/* The Bulk-Only entries added to SilentClasses where none holds their
+ * bytes, each recorded before it is written; never over a value. */
+static void stor_silent_merge(void)
+{
+    HKEY k;
+    LONG r;
+    DWORD i;
+    DWORD n;
+    DWORD t;
+    DWORD dn;
+    char name[256];
+    unsigned char data[16];
+    unsigned char have[64][4];
+    int valid[64];
+    int nh = 0;
+    int full = 0;
+    int kept = 0;
+    INST_U32 set;
+    int e;
+    char hex[9];
+
+    if (!storCopyOk || opts.List || !stor_98se()) {
+        return;
+    }
+    r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_SILENT_KEY, 0, NULL, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &k, NULL);
+    if (r != ERROR_SUCCESS) {
+        out("USB storage: the SilentClasses list could not be opened (error "
+            "%ld): new USB disks\nmay still open Windows' wizard.\n", (long)r);
+        return;
+    }
+    for (i = 0;; i++) {
+        n = sizeof(name);
+        dn = sizeof(data);
+        r = RegEnumValueA(k, i, name, &n, NULL, &t, data, &dn);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS && r != ERROR_MORE_DATA) {
+            out("USB storage: the SilentClasses list could not be read whole: "
+                "nothing is added.\n");
+            RegCloseKey(k);
+            return;
+        }
+        if (nh >= 64) {
+            full = 1;
+            continue;
+        }
+        valid[nh] = r == ERROR_SUCCESS && t == REG_BINARY && dn == 4;
+        memcpy(have[nh], data, 4);
+        if (valid[nh] && (data[0] & 0xC0) != 0) {
+            kept++;
+        }
+        nh++;
+    }
+    if (full) {
+        out("USB storage: the SilentClasses list is longer than this installer "
+            "reads: nothing\nis added.\n");
+        RegCloseKey(k);
+        return;
+    }
+    set = inst_stor_silent_add((const unsigned char (*)[4])have, valid, nh);
+    for (e = 0; e < INST_STOR_SILENT_COUNT; e++) {
+        if ((set & (1UL << e)) == 0) {
+            continue;
+        }
+        inst_stor_silent_name(e, silent_taken, (void *)k, name, sizeof(name));
+        silent_hex(instStorSilent[e], hex);
+        if (!stor_rec_text("Silent", name, hex)) {
+            continue;
+        }
+        r = RegSetValueExA(k, name, 0, REG_BINARY, instStorSilent[e], 4);
+        if (r != ERROR_SUCCESS) {
+            out("USB storage: SilentClasses %s could not be written (error "
+                "%ld).\n", name, (long)r);
+            stor_rec_del("Silent", name);
+            continue;
+        }
+        flagChanged = 1;
+        kept++;
+        out("USB storage: SilentClasses %s added (class 08, subclass %02X, "
+            "protocol 50).\n", name, (unsigned)instStorSilent[e][2]);
+    }
+    RegCloseKey(k);
+    if (kept > (int)32) {
+        out("USB storage: SilentClasses holds more than the 32 entries the "
+            "driver reads: one\nadded here may not be read.\n");
+    }
+}
+
+/* The uninstall: each entry the Silent record names, deleted while it holds
+ * the recorded bytes; the key and every other value stay. 1 done; 0 the
+ * record or the list could not be read or written (the record kept). */
+static int stor_silent_remove(void)
+{
+    char name[256];
+    char data[96];
+    char hex[9];
+    unsigned char now[16];
+    DWORD t;
+    DWORD dn;
+    DWORD i = 0;
+    HKEY k = NULL;
+    LONG r;
+    int e;
+
+    for (;;) {
+        e = stor_rec_enum("Silent", i, name, sizeof(name), data, sizeof(data));
+        if (e < 0) {
+            flagFailed = 1;
+            if (k != NULL) {
+                RegCloseKey(k);
+            }
+            return 0;
+        }
+        if (e == 0) {
+            break;
+        }
+        if (k == NULL) {
+            r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_SILENT_KEY, 0,
+                              KEY_QUERY_VALUE | KEY_SET_VALUE, &k);
+            if (r == ERROR_FILE_NOT_FOUND) {
+                k = NULL;
+            } else if (r != ERROR_SUCCESS) {
+                flagFailed = 1;
+                return 0;
+            }
+        }
+        dn = sizeof(now);
+        r = k != NULL ? RegQueryValueExA(k, name, NULL, &t, now, &dn)
+                      : ERROR_FILE_NOT_FOUND;
+        if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND &&
+            r != ERROR_MORE_DATA) {
+            /* Unreadable: the evidence is kept for the next run. */
+            out("  SilentClasses %s cannot be read: it stays for now.\n", name);
+            flagFailed = 1;
+            if (k != NULL) {
+                RegCloseKey(k);
+            }
+            return 0;
+        }
+        if (r == ERROR_SUCCESS && t == REG_BINARY && dn == 4) {
+            silent_hex(now, hex);
+        } else {
+            hex[0] = '\0';
+        }
+        if (opts.List) {
+            out("(/list) SilentClasses %s %s.\n", name,
+                r == ERROR_FILE_NOT_FOUND ? "is gone" :
+                inst_eq(hex, data) ? "would be deleted" :
+                "has changed and would stay");
+            i++;
+            continue;
+        }
+        if (r != ERROR_FILE_NOT_FOUND && inst_eq(hex, data)) {
+            if (RegDeleteValueA(k, name) != ERROR_SUCCESS) {
+                out("  SilentClasses %s could not be deleted.\n", name);
+                flagFailed = 1;
+                if (k != NULL) {
+                    RegCloseKey(k);
+                }
+                return 0;
+            }
+            out("Removed SilentClasses %s.\n", name);
+            flagChanged = 1;
+        } else if (r != ERROR_FILE_NOT_FOUND) {
+            out("  SilentClasses %s stays: it has changed since this installer "
+                "added it.\n", name);
+        }
+        if (!stor_rec_del("Silent", name)) {
+            if (k != NULL) {
+                RegCloseKey(k);
+            }
+            return 0;
+        }
+    }
+    if (k != NULL) {
+        RegCloseKey(k);
+    }
+    return !flagFailed;
+}
+
+/* The window's 0 chosen on the USB page over the preselection: the user's
+ * own, so the preselection is not written. */
+void inst_eng_silent_decline(int declined)
+{
+    silentDeclined = declined ? 1 : 0;
+}
+
+/* The gate's preselection (section 6.5.12): the storage row on 98 SE with
+ * its pack, and no machine-wide XhciSilentInstall set. */
+int inst_eng_stor_silent_pre(void)
+{
+    int v = inst_value_find("XhciSilentInstall");
+    DWORD mwv;
+
+    return v >= 0 && storHere && storInclude && storPack > 0 && stor_98se() &&
+           usbInclude && mw_value(v, &mwv) == 0;
 }
 
 /* ---- the window's (record 26 section 5.3) ------------------------------- */

@@ -3987,6 +3987,13 @@ static void test_marks(void)
 
 /* ---- record 26 section 6.5: the USB storage drivers on Windows 98 SE ---- */
 
+/* A name taken: XHCI98S2 alone. */
+static int silent_taken_s2(const char *name, void *ctx)
+{
+    (void)ctx;
+    return strcmp(name, "XHCI98S2") == 0;
+}
+
 static void stor_fill(int *st, int v)
 {
     int i;
@@ -4355,6 +4362,45 @@ static void test_storage(void)
      * is held by Placed, so recorded, and adopted. */
     CHECK(inst_stor_adoptable(1, 1, 0, 0, 1, 1),
           "a stick bound from the placed INF: adopted");
+    /* The SilentClasses entries with the storage row (task 43.42 option A,
+     * record 26 section 6.5.12). */
+    {
+        unsigned char have[4][4];
+        int valid[4];
+        char nm[32];
+        CHECK(instStorSilent[2][0] == 0xC3 && instStorSilent[2][1] == 0x08 &&
+              instStorSilent[2][2] == 0x06 && instStorSilent[2][3] == 0x50 &&
+              instStorSilent[0][2] == 0x02 && instStorSilent[1][2] == 0x05,
+              "silent: the three Bulk-Only entries, silent.reg's among them");
+        CHECK(inst_stor_silent_add((const unsigned char (*)[4])have, valid,
+                                   0) == 0x7UL,
+              "silent: an empty list takes all three");
+        memcpy(have[0], instStorSilent[2], 4);
+        valid[0] = 1;
+        memcpy(have[1], instStorSilent[0], 4);
+        valid[1] = 0;
+        have[2][0] = 0x83;
+        have[2][1] = 0x03;
+        have[2][2] = 0x01;
+        have[2][3] = 0x01;
+        valid[2] = 1;
+        CHECK(inst_stor_silent_add((const unsigned char (*)[4])have, valid,
+                                   3) == 0x3UL,
+              "silent: an entry already there is not added again; a value of "
+              "another type or length does not count");
+        memcpy(have[1], instStorSilent[0], 4);
+        valid[1] = 1;
+        memcpy(have[3], instStorSilent[1], 4);
+        valid[3] = 1;
+        CHECK(inst_stor_silent_add((const unsigned char (*)[4])have, valid,
+                                   4) == 0,
+              "silent: all three there (silent-on.bat and more): none added");
+        inst_stor_silent_name(0, NULL, NULL, nm, sizeof(nm));
+        CHECK(strcmp(nm, "XHCI98S1") == 0, "silent: the first name");
+        inst_stor_silent_name(1, silent_taken_s2, NULL, nm, sizeof(nm));
+        CHECK(strcmp(nm, "XHCI98S5") == 0,
+              "silent: a name in use is never written over");
+    }
     /* A run whose package copy failed after its storage copies: nothing
      * published, so a hand install of the same INFs later is never
      * taken by the uninstall. */

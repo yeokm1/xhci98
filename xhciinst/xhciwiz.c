@@ -167,6 +167,9 @@ static char dirNow[WIZ_PATH];
 /* The settings chosen on the pages and in Advanced (record 26 section
  * 5.4): set, and the value; handed to the engine at Install. */
 static int choiceSet[INST_MAX_VALUES];
+static int silentAuto;      /* choiceSet of XhciSilentInstall is the storage
+                               row's preselection (record 26 6.5.12)      */
+static int silentExplicit;  /* the user changed that row on the page      */
 
 /* A choice whose driver is in the run as the components stand: a value of
  * the USB drivers' INFs only with them ticked, the connection manager's
@@ -466,9 +469,17 @@ static unsigned __stdcall job_main(void *arg)
         inst_copy(opts->To, dirChoice, sizeof(opts->To));
         opts->NoTray = !trayChoice;
         opts->SetCount = 0;
-        for (i = 0; i < INST_MAX_VALUES; i++) {
-            inst_eng_choose_value(i, choiceSet[i] && choice_live(i),
-                                  choiceVal[i]);
+        {
+            int sv = inst_value_find("XhciSilentInstall");
+            for (i = 0; i < INST_MAX_VALUES; i++) {
+                /* The storage row's preselection is the engine's own
+                 * write (no SILENT.REG merge): not passed as a choice. */
+                inst_eng_choose_value(i, choiceSet[i] && choice_live(i) &&
+                                      !(i == sv && silentAuto),
+                                      choiceVal[i]);
+            }
+            inst_eng_silent_decline(silentExplicit && sv >= 0 &&
+                                    !(choiceSet[sv] && choiceVal[sv] == 1));
         }
         for (i = 0; i < INST_S98_COUNT; i++) {
             inst_eng_s98_choose_value(i, s98Choice && s98WinSet[i],
@@ -1046,6 +1057,25 @@ static int comp_leave(HWND dlg)
         storChoice = stor;
         replan();
     }
+    /* With the storage row on 98 SE, XhciSilentInstall starts at 1 on the
+     * USB page where no machine-wide value is set (record 26 section
+     * 6.5.12); the page can set 0, and unticking the row takes the
+     * preselection back. */
+    {
+        int sv = inst_value_find("XhciSilentInstall");
+        if (sv >= 0 && sv < INST_MAX_VALUES) {
+            if (inst_eng_stor_silent_pre()) {
+                if (!silentExplicit) {
+                    choiceSet[sv] = 1;
+                    choiceVal[sv] = 1;
+                    silentAuto = 1;
+                }
+            } else if (silentAuto) {
+                choiceSet[sv] = 0;
+                silentAuto = 0;
+            }
+        }
+    }
     return 1;
 }
 
@@ -1512,6 +1542,16 @@ static int settings_leave(HWND dlg, int page)
             return 0;
         } else {
             choiceSet[r->Value] = 0;
+        }
+    }
+    /* The storage row's preselection left at 1, or changed by the user,
+     * whose choice it then is (record 26 section 6.5.12). */
+    if (page == P_USB && silentAuto) {
+        int sv = inst_value_find("XhciSilentInstall");
+        if (sv >= 0 && sv < INST_MAX_VALUES &&
+            !(choiceSet[sv] && choiceVal[sv] == 1)) {
+            silentAuto = 0;
+            silentExplicit = 1;
         }
     }
     return 1;
