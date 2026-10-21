@@ -427,7 +427,7 @@ static int s98_reread_9x(const char *id, char *infPath, size_t cap);
 static int s98_base_state(const char *id);
 static int s98_rec_text(const char *sub, const char *name, const char *text);
 static int s98_rec_has(const char *sub, const char *name);
-static void s98_pending_resolve(int uninstall);
+static int s98_pending_resolve(int uninstall);
 static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
 
@@ -14174,7 +14174,9 @@ static int s98_pending_mark(const char *id, const char *state)
     return s98_rec_text("Pending", id, state);
 }
 
-static void s98_pending_resolve(int uninstall)
+/* 1 resolved as far as the reading allows; 0 the record could not be read
+ * or written (the evidence is kept, said). */
+static int s98_pending_resolve(int uninstall)
 {
     char id[INST_ID_CHARS];
     char state[16];
@@ -14186,13 +14188,18 @@ static void s98_pending_resolve(int uninstall)
     const DEVREC *d;
 
     if (!envNow.Nt || opts.List) {
-        return;
+        return 1;
     }
     join(path, sizeof(path), INST_S98_KEY, "Pending");
     for (;;) {
         e = s98_rec_enum("Pending", i, id, sizeof(id));
-        if (e <= 0) {
-            return;
+        if (e < 0) {
+            out("Stor98's record of a replaced Windows NVMe driver cannot be "
+                "read.\n");
+            return 0;
+        }
+        if (e == 0) {
+            return 1;
         }
         d = NULL;
         for (j = 0; j < devCount; j++) {
@@ -14205,15 +14212,15 @@ static void s98_pending_resolve(int uninstall)
         if (g < 0) {
             /* Evidence that cannot be read is kept, and nothing else is
              * resolved in this run. */
-            logonly("stor98: pending %s cannot be read: kept\n", id);
-            return;
+            out("Stor98's record of %s cannot be read: it is kept.\n", id);
+            return 0;
         }
         if (g > 0 && inst_eq(state, "done")) {
             if (d != NULL && inst_eq(d->Service, "stor98") &&
                 (d->Present || uninstall)) {
                 if (!s98_record_device(d, "its Windows NVMe driver was "
                                        "replaced by this installer")) {
-                    return;
+                    return 0;
                 }
                 continue;
             }
@@ -14226,7 +14233,7 @@ static void s98_pending_resolve(int uninstall)
              * this installer's, and kept, so no later adoption takes it. */
             if (!(g > 0 && inst_eq(state, "unknown")) &&
                 !s98_rec_text("Pending", id, "unknown")) {
-                return;
+                return 0;
             }
             logonly("stor98: %s runs Stor98 after a replacement of unknown "
                     "outcome: not this installer's\n", id);
@@ -14239,7 +14246,7 @@ static void s98_pending_resolve(int uninstall)
         logonly("stor98: pending %s forgotten (%s)\n", id,
                 d == NULL ? "no entry" : "another driver");
         if (!s98_rec_del("Pending", id)) {
-            return;
+            return 0;
         }
     }
 }
@@ -16121,8 +16128,12 @@ static int s98_un_adopt(void)
         return 1;
     }
     /* A drive whose stornvme this installer replaced is its own whatever
-     * PreExisting says (record 26 section 5.3.1 case 3b). */
-    s98_pending_resolve(1);
+     * PreExisting says (record 26 section 5.3.1 case 3b); a record that
+     * cannot be read stops the uninstall with it kept. */
+    if (!s98_pending_resolve(1)) {
+        flagFailed = 1;
+        return 0;
+    }
     if (s98Pre) {
         return 1;
     }
@@ -19139,10 +19150,7 @@ static int stor_tools_remove(void)
     char data[96];
     char hex[65];
     char dir[INST_PATH_CHARS];
-    char dirs[4][INST_PATH_CHARS];
     DWORD i = 0;
-    int nd = 0;
-    int k;
     int e;
     int h;
     int left = 0;
@@ -19161,11 +19169,6 @@ static int stor_tools_remove(void)
         s = strrchr(dir, '\\');
         if (s != NULL) {
             *s = '\0';
-        }
-        for (k = 0; k < nd && !inst_eq(dirs[k], dir); k++) {
-        }
-        if (k == nd && nd < 4) {
-            inst_copy(dirs[nd++], dir, INST_PATH_CHARS);
         }
         h = stor_hash(name, hex);
         if (h < 0) {
@@ -19202,10 +19205,9 @@ static int stor_tools_remove(void)
         if (!stor_rec_del("Tools", name)) {
             return 0;
         }
-    }
-    for (k = 0; k < nd && !opts.List; k++) {
-        if (RemoveDirectoryA(dirs[k])) {
-            out("%s removed.\n", dirs[k]);
+        /* The folder goes with its last file, whichever folder it is. */
+        if (RemoveDirectoryA(dir)) {
+            out("%s removed.\n", dir);
         }
     }
     return !left;
