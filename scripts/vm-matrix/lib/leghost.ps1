@@ -248,12 +248,16 @@ function Invoke-LegHostStep {
             # it), so Alt+Tab brings it forward and Escape cancels it; its
             # left panel is the one place XP's screen shows pure navy.
             for ($i = 1; $i -le 4; $i++) {
-                if ((Get-LegNavyCount -QmpPort $QmpPort -Dir $Dir) -lt 20) { return "${Step}: poller up, no wizard open (after $($i - 1) tries)" }
+                $n = Get-LegNavyCount -QmpPort $QmpPort -Dir $Dir
+                if ($n -lt 0) { Start-Sleep -Seconds 3; continue }
+                if ($n -lt 20) { return "${Step}: poller up, no wizard open (after $($i - 1) tries)" }
                 Send-QmpChord -Port $QmpPort -Chord 'alt-tab'; Start-Sleep -Seconds 3
                 Send-QmpChord -Port $QmpPort -Chord 'esc'; Start-Sleep -Seconds 6
                 Save-LegShot $QmpPort $Dir "$Tag-fnh-$i"
             }
-            if ((Get-LegNavyCount -QmpPort $QmpPort -Dir $Dir) -lt 20) { return "${Step}: poller up, wizard cancelled" }
+            $n = Get-LegNavyCount -QmpPort $QmpPort -Dir $Dir
+            if ($n -ge 0 -and $n -lt 20) { return "${Step}: poller up, wizard cancelled" }
+            if ($n -lt 0) { return "${Step}: FAILED, the screen could not be read to see the wizard gone" }
             return "${Step}: FAILED, the Found New Hardware wizard is still open"
         }
         'wizard98-hcd' {

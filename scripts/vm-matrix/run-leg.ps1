@@ -165,13 +165,21 @@ try {
                 Set-LegCd $ports $legIso
                 $null = Invoke-Qmp -Port $ports.Qmp -Command 'cont'
                 $b.restoreSeconds = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+            } elseif ($boot -eq 1 -and $guest.ContainsKey('ColdStep')) {
+                # A cold first start (-Cold) takes the guest's cold step with
+                # the empty CD in, and only then the leg's CD: the leg must not
+                # begin while the step is still clearing the way (XP's wizard).
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg"
+                $r = Invoke-LegHostStep -Step $guest.ColdStep -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag -Layout $guest.Layout
+                $rec.steps += "boot $boot $r"
+                if ($r -match 'FAILED|no BOOT line') { throw "cold step: $r" }
+                Set-LegCd $ports $legIso
             } else {
                 $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg"
             }
             # The step a start needs comes from the phase the last start ended
             # in (AfterPhaseN), so it follows the guest, not a count of starts.
             $step = ''
-            if ($boot -eq 1 -and $Cold -and $guest.ContainsKey('ColdStep')) { $step = $guest.ColdStep }
             if ($boot -gt 1 -and $pendingStep) { $step = $pendingStep; $pendingStep = '' }
             if ($mode -eq 'window' -and $boot -eq 1) {
                 Write-Host "OPERATOR: VNC 127.0.0.1:$($ports.Vnc). Run the installer's window from the CD (PKG\SETUP.EXE), take the defaults, Finish; then shut Windows down (98 SE: never Restart). The host waits."

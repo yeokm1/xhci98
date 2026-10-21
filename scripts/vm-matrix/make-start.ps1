@@ -142,8 +142,9 @@ $proc = Start-LegQemu -Config $cfg -Guest $g -Ports $ports -Disk $disk -Iso $idl
 try {
     $serial = Join-Path $dir 'serial-save.log'
     if ($g.ContainsKey('ColdStep')) {
-        $r = Invoke-LegHostStep -Step $g.ColdStep -QmpPort $ports.Qmp -Dir $dir -Since $t1 -Process $proc -SerialPath $serial -Tag 'save'
+        $r = Invoke-LegHostStep -Step $g.ColdStep -QmpPort $ports.Qmp -Dir $dir -Since $t1 -Process $proc -SerialPath $serial -Tag 'save' -Layout $layout
         Write-Host $r
+        if ($r -match 'FAILED|no BOOT line') { throw "guest ${Guest}: $r" }
     }
     if (-not (Wait-Line $serial '^XHLEG BOOT' $bootWait $proc)) { Save-LegShot $ports.Qmp $dir 'save-noboot'; throw "guest ${Guest}: no BOOT line on COM1 in $bootWait s" }
     $coldSeconds = [math]::Round(((Get-Date) - $t1).TotalSeconds, 1)

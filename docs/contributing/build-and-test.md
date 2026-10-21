@@ -8126,7 +8126,7 @@ The host takes the steps a guest cannot take. These are named in
   it (exit 4, "Windows is still installing something"): Alt+Tab and
   Escape, before the state is saved and on a cold start (`esc-fnh`);
 - on XP, should the unsigned-driver question come all the same, Continue
-  Anyway (`PromptStep`, `xp-logo`, recognised by its warning sign).
+  Anyway (`PromptStep` `xp`, recognised by its warning sign).
 
 A step is tied to the phase the guest last reported (`AfterPhaseN`), not
 to a count of starts, so it follows the guest, and it is taken once: the
