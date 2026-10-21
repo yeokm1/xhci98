@@ -263,6 +263,24 @@ function Get-LegSerialLines {
     return , @($text -split "`r?`n" | Where-Object { $_ -like 'XHLEG *' } | ForEach-Object { $_.TrimEnd() })
 }
 
+# The vCPUs one QEMU command line asks for: -smp N, -smp cpus=N, or the
+# product of its topology (sockets, dies, clusters, cores, threads); none
+# is one. A -smp this cannot read returns a count no budget admits beside,
+# so the matrix waits rather than guess.
+function Get-QemuSmpCount {
+    param([string]$CommandLine)
+    if ($CommandLine -notmatch '-smp\s+"?([^\s"]+)') { return 1 }
+    $spec = $Matches[1]
+    if ($spec -match '^(\d+)(,|$)') { return [int]$Matches[1] }
+    if ($spec -match '(^|,)cpus=(\d+)') { return [int]$Matches[2] }
+    $n = 1; $any = $false
+    foreach ($k in 'sockets', 'dies', 'clusters', 'cores', 'threads') {
+        if ($spec -match "(^|,)$k=(\d+)") { $n *= [int]$Matches[2]; $any = $true }
+    }
+    if ($any) { return $n }
+    return 100000
+}
+
 # vCPUs of every QEMU on the host, ours and others' (the owner's budget is
 # the host's sum, feedback-vm-core-budget). A QEMU with no -smp counts one.
 function Get-HostQemuVcpus {
@@ -272,11 +290,7 @@ function Get-HostQemuVcpus {
         $mine = $false
         foreach ($p in $ExcludeQmpPorts) { if ($q.CommandLine -like "*tcp:127.0.0.1:$p,server*") { $mine = $true } }
         if ($mine) { continue }
-        # -smp N or -smp cpus=N; a -smp this cannot read counts as four, so
-        # an unread topology errs towards the budget.
-        if ($q.CommandLine -match '-smp\s+"?(?:cpus=)?(\d+)') { $sum += [int]$Matches[1] }
-        elseif ($q.CommandLine -match '-smp\b') { $sum += 4 }
-        else { $sum += 1 }
+        $sum += Get-QemuSmpCount $q.CommandLine
     }
     return $sum
 }

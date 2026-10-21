@@ -119,7 +119,7 @@ function Invoke-LegHostStep {
                 $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 4 -MaxSeconds 60
                 Save-LegShot $QmpPort $Dir "$Tag-hcd-$i"
             }
-            $typed = 0; $disk = 0; $quiet = 0
+            $typed = 0; $disk = 0; $quiet = 0; $copySeen = $false
             $deadline = (Get-Date).AddSeconds(300)
             while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
                 $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
@@ -133,19 +133,31 @@ function Invoke-LegHostStep {
                     Send-QmpText -Port $QmpPort -Text $InstallDir
                     Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 5; $quiet = 0; continue
                 }
-                if ($state -eq 'wizard' -and (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir -GapSeconds 4)) { $quiet++ } else { $quiet = 0 }
+                # The copy runs in a window of its own over the wizard (its
+                # title bar then inactive): only once that has been seen is
+                # the wizard's own page, active and still, its last one.
+                if ($state -ne 'wizard') { $copySeen = $true }
+                if ($copySeen -and $state -eq 'wizard' -and (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir -GapSeconds 4)) { $quiet++ } else { $quiet = 0 }
                 if ($quiet -ge 2) { break }
                 Start-Sleep -Seconds 2
             }
             if ($Process.HasExited) { return "${Step}: FAILED, QEMU ended before the wizard's last page" }
-            # The wizard's own page, active and still, after the copy: its
-            # last page (Finish). Anything else by the deadline is a failure,
-            # and no further key is sent.
+            # The wizard's own page, active and still, after the copy window:
+            # its last page (Finish). Anything else by the deadline is a
+            # failure, and no further key is sent.
             if ($quiet -lt 2) { Save-LegShot $QmpPort $Dir "$Tag-hcd-timeout"; return "${Step}: FAILED, the wizard's last page not seen in 300 s (Insert Disk $disk, directory typed $typed)" }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-finish"
             Send-QmpChord -Port $QmpPort -Chord 'ret'
-            $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 6 -MaxSeconds 60
+            # The restart question replaces the wizard: answer it only once
+            # the wizard is gone and the screen is still.
+            $gone = $false
+            $deadline = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
+                if ((Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir) -eq 'other' -and (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir -GapSeconds 4)) { $gone = $true; break }
+                Start-Sleep -Seconds 2
+            }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-restart"
+            if (-not $gone) { return "${Step}: FAILED, the wizard did not close after Finish (Insert Disk $disk, directory typed $typed)" }
             Send-QmpChord -Port $QmpPort -Chord 'ret'
             if ($Process.WaitForExit(300000)) { return "${Step}: walked (Insert Disk $disk, directory typed $typed), QEMU ended at the restart" }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-end"
