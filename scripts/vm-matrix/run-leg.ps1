@@ -67,7 +67,7 @@ $hostSteps = @{}; if ($def.ContainsKey('HostSteps')) { $hostSteps = $def.HostSte
 $rec = [ordered]@{
     leg = $Leg; guest = $guest.Id; mode = $mode; cold = [bool]$Cold; package = (Resolve-Path -LiteralPath $Package).Path
     qemu = $qver; started = (Get-Date -Format s); boots = @(); steps = @(); checks = [ordered]@{}; exits = [ordered]@{}
-    verdict = ''; reasons = @(); seconds = 0
+    verdict = ''; reasons = @(); seconds = 0; pausedSeconds = 0
 }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $legDeadline = (Get-Date).AddMinutes($LegMinutes)
@@ -181,9 +181,20 @@ try {
             }
             $lastNew = Get-Date
             $lastShot = Get-Date
+            $tick = Get-Date
             while (-not $proc.HasExited) {
-                if (Read-LegLines $serial $proc $tag) { $lastNew = Get-Date }
-                if (((Get-Date) - $lastShot).TotalSeconds -ge 60) { Save-LegShot $ports.Qmp $RunDir "$tag-last"; $lastShot = Get-Date }
+                # A guest frozen from outside (QMP stop, for a quiet host) does
+                # not run down the stall timer or the leg's deadline.
+                $now = Get-Date
+                if ((Get-QmpRunState $ports.Qmp) -eq 'paused') {
+                    $gap = $now - $tick
+                    $lastNew = $lastNew + $gap; $legDeadline = $legDeadline + $gap
+                    if ($endAt) { $endAt = $endAt + $gap }
+                    $rec.pausedSeconds = [math]::Round($rec.pausedSeconds + $gap.TotalSeconds, 1)
+                    $tick = $now; Start-Sleep -Seconds 5; continue
+                }
+                $tick = $now
+                if (Read-LegLines $serial $proc $tag) { $lastNew = Get-Date }                if (((Get-Date) - $lastShot).TotalSeconds -ge 60) { Save-LegShot $ports.Qmp $RunDir "$tag-last"; $lastShot = Get-Date }
                 $waitLimit = $stall
                 if ($mode -eq 'window' -and $boot -eq 1) { $waitLimit = 4 * 3600 }
                 if (((Get-Date) - $lastNew).TotalSeconds -gt $waitLimit) {
