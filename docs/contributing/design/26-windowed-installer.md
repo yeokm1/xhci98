@@ -1738,12 +1738,14 @@ cut (2026-10-22) still raised the Add New Hardware wizard for a new stick,
 and so did a 98 SE with NUSB 3.3 installed in full: with `USBSTOR.INF` and
 `USBNTMAP.INF` in `%windir%\INF`, a new Bulk-Only devnode behind this bus
 still brings the wizard, which finds `C:\WINDOWS\INF\USBSTOR.INF` with no
-file prompt. Under this bus a new devnode of a class with drivers installs
-with no wizard only through the driver's own silent install:
+file prompt. So the placement alone does not give a silent first plug.
+The route this package documents for installing a new devnode of a class
+with drivers with no wizard is the driver's own silent install:
 `XhciSilentInstall` 1 and the device's interface in
 `HKLM\System\CurrentControlSet\Services\USB\SilentClasses` (design record
-13 section 6.11; the release notes, "The silent install"). The owner's
-decision (2026-10-22): option A.
+13 section 6.11; the release notes, "The silent install"); that it gives
+the storage row a silent first plug is expected, and is the legs'
+reading. The owner's decision (2026-10-22): option A.
 
 **What the run does**, on 98 SE when the storage row's same-bytes route is
 taken (section 6.5.4: `storCopyOk`), after the INFs' placement and its
@@ -1765,25 +1767,45 @@ reading (section 6.5.11):
    (`XHCI_SILENT_MAX`); a list already full keeps its own first 32, and
    the run says so.
 2. **The gate.** `XhciSilentInstall` is preselected 1, machine-wide, when
-   the storage row is ticked on 98 SE and no machine-wide value is set
-   (record 23 section 8.4's location; a value the user set is kept, an
-   update included). In the window the USB settings page shows the row at
-   1 (the page's own preselection, as a `/set` preselects), which the user
-   can change to 0 before Next; unticking the storage row takes the
-   preselection back. In the console the run says "XhciSilentInstall: set
-   to 1 with the USB storage drivers (/set XhciSilentInstall=0 keeps it
-   off)" in place of the question; `/yes` takes it as the window's
-   untouched page would (proposal for the owner), and `/defaults`, which
-   keeps every value, does not. A per-controller value is left as it is;
-   the machine-wide one rules (section 5.4).
-3. **The INF placement of section 6.5.11 stays**: a silent install takes
-   the class's driver from the index with no wizard, so an INF the index
-   holds is what lets it find `USBSTOR.INF` with no prompt.
+   the storage row is ticked on 98 SE, the USB drivers are in the run (the
+   value is `xhci98.sys`'s; with them out, section 5.3.1 case 2, there is
+   no gate to set and only the list is added), and no machine-wide value
+   is set (record 23 section 8.4's location; a value the user set is kept,
+   an update included). **The preselection is the engine's own**, written
+   machine-wide in the run whatever page is shown, and it is the one
+   write of `XhciSilentInstall` 1 that does **not** merge the whole
+   `SILENT.REG` list (record 23 section 8.4's `silent_list_merge`, which
+   an explicit 1 - the page's choice of the user's own, `/set`,
+   `silent-on.bat` - still does): only the storage entries of item 1 are
+   added. **An explicit choice overrides it**: `/set XhciSilentInstall=0`
+   or `=1`, `/defaults` (which keeps every value), and in the window the
+   USB settings page's row, which starts at 1 as the preselection; a 0
+   chosen there is remembered as the user's own (`inst_eng_silent_decline`)
+   across Back, the plan made again and the storage row ticked again, and
+   the preselection is then not written. Unticking the storage row takes
+   the preselection back; a 1 the user chose stays the user's. Where the
+   row is not on the page (no controller present yet), the preselection
+   applies as in the console. In the console the run says
+   "XhciSilentInstall: set to 1 with the USB storage drivers (/set
+   XhciSilentInstall=0 keeps it off)" in place of the question, and `/yes`
+   takes it as the window's untouched page does (owner, 2026-10-22, the
+   proposals of option A accepted). A per-controller value is left as it
+   is; the machine-wide one rules (section 5.4). Record 23 section 8.4 is
+   amended so (revision 27).
+3. **The INF placement of section 6.5.11 stays**: a silent install is
+   expected to take the class's driver from the index with no wizard, so
+   an INF the index holds is expected to let it find `USBSTOR.INF` with no
+   prompt; whether the copied INFs are indexed, and which copy is chosen,
+   are the legs' readings.
 
 **The uninstall** (section 6.5.8): each value the `Silent` record names
-is deleted from `SilentClasses` when it still holds the recorded bytes, a
-changed one is left and said, and the record's value goes; the key and
-every value it did not add stay. This runs whether or not NUSB is
+is deleted from `SilentClasses` when it still holds the recorded bytes,
+and its record value goes then; a value found absent, or read and found
+changed (left and said), has its record value go too; a record or a list
+that cannot be read, or a deletion that fails, keeps the record value,
+stops the uninstall there and keeps its Add/Remove Programs entry for the
+next run (section 9.3's incomplete uninstall). The key and every value it
+did not add stay. This runs whether or not NUSB is
 installed (the entries are this installer's own). `XhciSilentInstall`
 machine-wide goes with the other machine-wide values the uninstall
 removes (section 9.3). The `Silent` subkey goes with the `Storage` key.

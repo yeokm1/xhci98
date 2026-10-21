@@ -1982,7 +1982,11 @@ controller's driver key, as `silent-on.bat` does; a list that cannot be
 read or does not read back leaves the switch unchanged (exit 2). Off (an
 explicit 0 when the switch is on) writes the switch at 0 and leaves the
 list, as `silent-off.bat` does. Enter keeps the state; the default answer
-is off.
+is off. (Revision 27, record 26 section 6.5.12) The one exception is the
+98 SE storage row's preselection of 1, written machine-wide where no
+machine-wide value is set and nothing explicit was chosen: it merges no
+`SILENT.REG` line, the row adding its own Bulk-Only entries to the list
+under its record instead; an explicit 1 still merges the whole list.
 
 ### 8.5 The Thunderbolt 3 / USB4 question (owner, 2026-10-15)
 
