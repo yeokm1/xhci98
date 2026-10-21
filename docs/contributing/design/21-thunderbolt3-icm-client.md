@@ -3291,18 +3291,23 @@ this, reviewed and revised:
   (`CR_FAILURE`, a retry's outcome). The unit's identity at acceptance is
   read through `HalGetBusData` (the route the rest of the thread reads
   with), not `PCI.VXD`.
-- **No request, two cases.** A unit no `UP` entry names - a dock's switch
-  port, or a function with no Stor98 channel (no receiver has read the
-  proof, or none was published) - gets the query and the removal with no
-  request, as part 1 says for "an NVMe function with an `UP` entry" and
-  record 24 section 7.1 made them. A unit an `UP` entry names whose
-  request was not published (its identity changed between the query and
-  the request) takes the branch of no answer: isolation first, or the
-  block - never a plain removal.
+- **No request, only for a unit that is not an NVMe function.** A dock's
+  switch port gets the query and the removal with no request, as record
+  24 section 7.1 made them. An NVMe function is asked of Stor98 or not
+  removed: the ask is refused before the query (`CM_EJ_WHY_NO_CHANNEL`,
+  nothing changed, exit 1) when no Stor98 channel entry names the
+  function - no Stor98 runs it, or none has read the channel - since a
+  missing channel is no removal support (`stor98cm.h` R2) and an accepted
+  query alone is no isolation; and an NVMe function the channel no longer
+  names after its query, or whose request was not published, takes the
+  branch of no answer: isolation first, or the block - never a plain
+  removal.
 - **O6 read before every removal result.** A removal's result taken after
   the 30 s from its first attempt, whatever it says and on whichever
   thread, is a retry's outcome: the result is "blocked" (it keeps failing)
-  before the success is applied, never "removed clean".
+  before the success is applied, never "removed clean". The clock is read
+  after the call returned, on whichever thread takes its result (the
+  thread, the late taker, the detached loop).
 - **The decision's deadline at its taking.** A slot reading counts only
   when both its read (the worker's clock) and its taking by the thread
   fall before the decision's deadline; the USB4 allowance left is read at
