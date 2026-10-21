@@ -167,6 +167,10 @@ rem                  40.6, design record 23): the INF reader over src\'s INFs,
 rem                  the models section per system, versions, ids, the action
 rem                  per device, the uninstall order, the registry value
 rem                  table and its applicability, the switches, exit codes
+rem   test_wizlay  - the installer window's settings-page layout arithmetic
+rem                  (xhciinst\wiz_lay.c, task 43.10, design record 26
+rem                  section 5.4): the "now" column, the split into parts of
+rem                  at most three rows, the open list's width, the note
 rem   test_tr      - the device viewer and tray's pure half (xhcitr\tr_core.c,
 rem                  task 41-A.2, design record 25 section 10): the bounded
 rem                  printf, the USB IOCTL answers, the descriptor decoders
@@ -600,6 +604,9 @@ rem test_di links XHCIDI.EXE's pure part (xhciinst\di\di_core.c, design
 rem record 27 section 11) and reads setupx.h from tools\win98ddk-extracted\
 rem where it is there, a recorded copy of its values where it is not.
 call :run test_di "test_di.c ..\xhciinst\di\di_core.c"
+rem test_wizlay links the installer window's layout arithmetic alone
+rem (xhciinst\wiz_lay.c, task 43.10, design record 26 section 5.4).
+call :run test_wizlay "test_wizlay.c ..\xhciinst\wiz_lay.c"
 rem test_dijob links both pure halves, the installer's and the helper's:
 rem each reads what the other writes (record 27 sections 4.1 and 4.2).
 call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_core.c"
