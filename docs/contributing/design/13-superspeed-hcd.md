@@ -2775,6 +2775,527 @@ and enable, each read on 98 SE (of the refusals, the wrong-value one; the
 unreadable `SILENT.REG` was not read). Not read on Windows 2000: the base at
 hand had no `xhci98` controller.
 
+### 6.12 Windows 8 and 8.1: what NT 6.2 and 6.3 ask of the bus (task 43.26, 2026-10-22; draft)
+
+**A draft.** Roadmap-usb4 task 43.26 reads, before 43.29 makes
+`xhci98.sys` an opt-in install on Windows 8 and 8.1, what those systems
+change for a bus driver that takes the controller from Windows' own USB 3
+stack (`usbxhci.sys` with `ucx01000.sys` and `usbhub3.sys`; `usbport.sys`
+and `usbhub.sys` for USB 2.0 controllers): the controller's INF match, what
+the class drivers send the device PDO, the bus interfaces and versions a
+client asks for, and the x64 test signature. Everything below is
+**static**; nothing from these media was executed, and no Windows 8 or 8.1
+system has run this driver in this project. What only a running system can
+settle is listed in 6.12.9, marked "VM" where it appears.
+
+**Method.** The owner's install media (2026-10-21): `en_windows_8_pro_vl_x86_dvd_917830.iso`
+(`install.wim`, one image, Windows 8 Pro, build 9200), `Windows 8 x64.iso`
+(image 1 of 2, Windows 8 Pro, 9200.16384) and
+`en_windows_8.1_with_update_x64_dvd_6051480.iso` (image 1 of 2, Windows 8.1
+Pro, 9600.17415); the edition names from each WIM's own XML. There is **no
+Windows 8.1 x86 medium**, so every 8.1 row is x64 only. Files taken with
+`7z e <iso>:\sources\install.wim [1\]Windows\System32\drivers\<file>` (and
+`Windows\inf\*.inf`, and the `DriverStore\FileRepository` copies of
+`USBAUDIO.sys` and `winusb.sys`) into a git-ignored scratch directory
+outside the tree; versions and SHA-256 by PowerShell's `VersionInfo` and
+`Get-FileHash`. Code read with `cdb.exe -z` from WDK 7.1's debuggers
+(6.12, which loads a raw image and executes nothing) with Microsoft's public
+or private PDBs from msdl (all images below had one), WDK 7.1 `link -dump
+-imports` / `-exports`, and capstone 5.0.7 for x64 RIP-relative operands,
+which cdb 6.12 prints unresolved under `-z`. IOCTL immediates and GUID
+bytes were found by a byte scan of each image and attributed to the
+enclosing PDB function, URB function codes by a straight-line scan for
+stores to `[urb+2]` with the codes passed to helpers resolved at their call
+sites, as 6.1's readings did. Four subagents read the class drivers, KMDF,
+`usbd.sys` and the hubs on 2026-10-22; the coordinator did not re-read them
+line by line. **Addresses in 6.12 are RVAs** (each image's own base is
+`0x10000`, so an RVA is cdb's address less `0x10000`), and "8 x86 / 8 x64 /
+8.1 x64" gives the three builds in that order. Constants beyond WDK 7.1
+come from the mingw-w64 headers (`mingw-w64-headers`, master `62891fa4`:
+`usb.h` for the URB functions `0x35` to `0x38`, `usbioctl.h` for
+`FILE_DEVICE_USBEX` = `0x49` and the composite IOCTLs) or are named by the
+PDB symbol that holds them (the GUIDs below); an IOCTL neither names is
+given raw with its function index, `(code >> 2) & 0xFFF`.
+
+Files read (8.1's are the versions its image carries, so they differ per
+file):
+
+| Build | File | Version | Bytes | SHA-256 |
+|---|---|---|---|---|
+| 8 x86 | `USBSTOR.SYS` | 6.2.9200.16384 | 97,008 | `7e2f2af92561514f4c78c5d4f825f2e9f942a66fae450aa1ea6922cbd10cc0a6` |
+| 8 x64 | `USBSTOR.SYS` | 6.2.9200.16384 | 119,024 | `646e345de5aff26b338e17bc9d03d0eda5608df77d7685de7aff6e4113b9eb87` |
+| 8.1 x64 | `USBSTOR.SYS` | 6.3.9600.17331 | 148,800 | `b582c0f348d8f79419ca5a58f10ca151e06d7ca3be162344cada46d9d7fed97c` |
+| 8 x86 | `uaspstor.sys` | 6.2.9200.16384 | 76,016 | `ca1f7b7e79820f401112cb5568e4df3d4fe93b24ee29bdcd97dd5539fa1405dc` |
+| 8 x64 | `uaspstor.sys` | 6.2.9200.16384 | 97,008 | `f09c5188aafcf4c77b05ba1e604f9912782a9f1371f72f959288ebc2725407ed` |
+| 8.1 x64 | `uaspstor.sys` | 6.3.9600.16384 | 74,080 | `2c330ed00e49ba55e25564230e0dfb8a35f2b5320eb18d4af7caacfa9a449044` |
+| 8 x86 | `hidusb.sys` | 6.2.9200.16384 | 19,456 | `ee0cb433f925c094bb0d7922984d820e395fd94b82b489950a7b6001d527dc7d` |
+| 8 x64 | `hidusb.sys` | 6.2.9200.16384 | 27,648 | `5ced8accbbf373607a8cec81e9f9856c450a73a969e07df3218b85f444ca7d3f` |
+| 8.1 x64 | `hidusb.sys` | 6.3.9600.17041 | 33,280 | `eda23e6909eb83e5e148816dfb16cc29ea01bd6bd2f73aa46b3d820b85fb9c83` |
+| 8 x86 | `hidclass.sys` | 6.2.9200.16384 | 60,416 | `bc9038b33a634e042783d2ad7af8f47f5d3f0c5e68a749a0027c35138ba62ad5` |
+| 8 x64 | `hidclass.sys` | 6.2.9200.16384 | 82,944 | `c890c0b95035b08552478459877fb22a62529a4f361055716bdf0fd651f13996` |
+| 8.1 x64 | `hidclass.sys` | 6.3.9600.17041 | 111,616 | `b9c1d2d5e7d781a4ceff17bd5c8e4cbc586d00c4f8315892561ea52f4cb339d2` |
+| 8 x86 | `usbccgp.sys` | 6.2.9200.16384 | 84,992 | `700913929142a497543d6d95a8a80d1f357f1827ed74236c59a6fb4a473fb352` |
+| 8 x64 | `usbccgp.sys` | 6.2.9200.16384 | 120,832 | `aadb8991174ccda3ade14af3efb3a9826ec17a0f989f449ff43010a99d8caa1f` |
+| 8.1 x64 | `usbccgp.sys` | 6.3.9600.17238 | 143,680 | `5dae02414271231f5fdbb751afeb99874779b467947020815d4ae54432d4269d` |
+| 8 x86 | `USBAUDIO.sys` | 6.2.9200.16384 | 85,760 | `be22479ae00a58a40e78da8593a02f3e4b9fb2d4c11bda0ec557e1f8ad2527b1` |
+| 8 x64 | `USBAUDIO.sys` | 6.2.9200.16384 | 121,856 | `b0b45103ea209de5b75396c5a25cbbbfaf05e199c7b5092342dc3afeb70a0ce6` |
+| 8.1 x64 | `USBAUDIO.sys` | 6.3.9600.16490 | 121,088 | `9e158bd07389b4cff99674716647fa3aabeecbd1a98edf20e544e099a99a8768` |
+| 8 x86 | `winusb.sys` | 6.2.9200.16384 | 46,592 | `46731bceddf89e35808f0c4070f0fb34ae382e7d4a76fa4435340c5fe3931f09` |
+| 8 x64 | `winusb.sys` | 6.2.9200.16384 | 57,344 | `2c55f1c7553a527a7c4c34e730be943269ae23928731c64d3dc945e07ae1771e` |
+| 8.1 x64 | `winusb.sys` | 6.3.9600.16384 | 78,848 | `81b46e551d6130a2c3d113ec3b563cedb5a06bb340986c0e03136ce5be729481` |
+| 8 x86 | `Wdf01000.sys` | 1.11.9200.16384 | 526,952 | `b20f7caeea790290072bc170ebeeadb4c19e1c40db0b3fe0d4a640d0d82300d6` |
+| 8 x64 | `Wdf01000.sys` | 1.11.9200.16384 | 785,512 | `09254970265476214f3187cc22a4f9c7c2769d419600e83fbe302c3a103e527f` |
+| 8.1 x64 | `Wdf01000.sys` | 1.13.9600.16384 | 839,488 | `be017ce91e3bab293de6ecf143797cce3f33cc63024437472b4e38c6961ad884` |
+| 8 x86 | `usbd.sys` | 6.2.9200.16384 | 18,672 | `6b2953cd2c3a40f02106d0c3ffb45e293e63d3e421e8e51a3059212ff2a98041` |
+| 8 x64 | `usbd.sys` | 6.2.9200.16384 | 21,744 | `1f21958ef25657069ea1987f71bb8c2d69bb39d5de212682b0e615a9287aa59d` |
+| 8.1 x64 | `usbd.sys` | 6.3.9600.17195 | 27,480 | `7d93885c5b86f4bddbd2fac588a1091858b674fa401bee30d336f4b6d717443d` |
+| 8 x86 | `usbhub.sys` | 6.2.9200.16384 | 331,504 | `df8132f77fcba07c6150a5df99bd561b0e9f3859a625f62e45c40eb97f094e7d` |
+| 8 x64 | `usbhub.sys` | 6.2.9200.16384 | 496,368 | `e5889991a4c100135e52bda66d808290bb74ddbe153f762c4f492292b756f7c2` |
+| 8.1 x64 | `usbhub.sys` | 6.3.9600.17238 | 419,648 | `b3ef738be1e6b6027f29c9713cd3f367ea067d2be46580afbc0fb58046ef6bbd` |
+| 8 x86 | `USBHUB3.SYS` | 6.2.9200.16384 | 361,200 | `b543ac14cb1c9b7fce814c7cce57334828d01f3f5339868a59dcee0bb837576b` |
+| 8 x64 | `USBHUB3.SYS` | 6.2.9200.16384 | 445,168 | `d83869186344c10289c31bfbcdc04cb8734349c14d9a8bb1b8d1402674701d48` |
+| 8.1 x64 | `USBHUB3.SYS` | 6.3.9600.17396 | 467,776 | `1d2cd13dc0b02dd40657ee4f93f4a13c78d2f2ef91685e563d78e217c96df544` |
+| 8 x86 | `UCX01000.SYS` | 6.2.9200.16384 | 179,952 | `e39004323e938a1f4271fe49a3f2ac3f2970b59aea026da5ebc206df1b06e6c6` |
+| 8 x64 | `UCX01000.SYS` | 6.2.9200.16384 | 212,208 | `1ee1f1422cbb43cbb2c2af13584065be0243bd2642ab4fdbc51ac34c79972d0d` |
+| 8.1 x64 | `UCX01000.SYS` | 6.3.9600.17393 | 189,248 | `43cdeac2bfc5091c11dfc0e7f7171af9a598ae56cb056c3cf382ae7807f79ef0` |
+| 8 x86 | `USBXHCI.SYS` | 6.2.9200.16384 | 267,504 | `7037f70e8e016fb5da4ca5e74ff4ea34b7465030e35963d3d20349fc89e511bf` |
+| 8 x64 | `USBXHCI.SYS` | 6.2.9200.16384 | 337,136 | `d22b9955095924e162cf457421a60545ef0b76206cbd816836c9637eceb1bb8f` |
+| 8.1 x64 | `USBXHCI.SYS` | 6.3.9600.17393 | 324,928 | `76f8be9f412d4397437e60a7e6231c80ea9b4f5436c9a8fab967c78604994ae9` |
+| 8 x86 | `usbui.dll` | 6.2.9200.16384 | 72,192 | `6ceeaa1a9afbac806fa39673eb5f137e0225677a487a5d225a9776a1b6303775` |
+| 8 x64 | `usbui.dll` | 6.2.9200.16384 | 87,552 | `5863ed74fa7b680a357d0a63356b3fe24dc8c7082ee407f968bec6eabc999157` |
+| 8.1 x64 | `usbui.dll` | 6.3.9600.17415 | 89,088 | `126e1f4740c174737f0c4e6e8823a66a7b369533f73f9a5e28b05174bd74a58c` |
+| 8 x86 | `usbxhci.inf` | - | 5,572 | `dcccddc1acfd4de48b89cdfaa024828aa54e4273aeec891326c78fe5957b6b93` |
+| 8 x64 | `usbxhci.inf` | - | 5,580 | `cd4687e4cd3714772323bdc588712f4d0c22ff47bc50a677b441a5fb891f70fb` |
+| 8.1 x64 | `usbxhci.inf` | - | 7,332 | `3d19cb7b79fd5e31c56af812a4a8302ad2e20233d79461cf6aa708f14c5a156b` |
+| 8 x86 | `usbport.inf` | - | 78,300 | `043e65f2fef077511ca1c9fefee145ad4784289dac84454df37e88f08a96e920` |
+| 8 x64 | `usbport.inf` | - | 78,428 | `7c73cadf5e8ed191fb59fa853f92b1b93b529acf26e92a60c9c09a9334b71a37` |
+| 8.1 x64 | `usbport.inf` | - | 80,720 | `fd4d36a51fb8357b61ea219c532a7a5df9d9c56330450477b145700667c11014` |
+| 8 x86 | `usb.inf` | - | 43,988 | `59d5c4203e2af557faf26f216c6b1c56e3b67ef42021a2a2d81407959a1f793b` |
+| 8 x64 | `usb.inf` | - | 44,308 | `abfca745e1d05191a93386c87b41d64f3a1513bf42361b86ae5305d67e50a128` |
+| 8.1 x64 | `usb.inf` | - | 44,788 | `57c3d74ceb3608f62419eca11a44f08f38de44fc7e8fdc6bee4bd9acfc34c77b` |
+| 8 x86 | `usbhub3.inf` | - | 10,188 | `a30528822345b608d049bfcf89458f8d29431239c8547b34726ffb5818201faa` |
+| 8 x64 | `usbhub3.inf` | - | 10,196 | `7edef9c7be2ce182b644a8004dcac2aeaa21d0d4093482fe4f3ab5404bd04a9e` |
+| 8.1 x64 | `usbhub3.inf` | - | 10,622 | `7ea862be757984d569309db8e61a0efc85422c520544d596f633e3b059f8562f` |
+| 8 x86 | `usbstor.inf` | - | 31,500 | `658dc4cf6b37d9b97e37ed42a62532fb49d562a9cc5609749462002d22c6f72c` |
+| 8 x64 | `usbstor.inf` | - | 31,692 | `75eea280acfd34db105ac0ee338d08d9389e60393f820d26dac6b7f60bece1e3` |
+| 8.1 x64 | `usbstor.inf` | - | 31,676 | `bebb6f710e32a2bb7cb41575a4fa54731dbe5ff1e01ac75cfff5ee73e297989e` |
+| 8 x86 | `uaspstor.inf` | - | 4,252 | `4524ff6d88e61b72fc41ff046cd2d842906894423cb0eee63b50c82becaa3c86` |
+| 8 x64 | `uaspstor.inf` | - | 4,260 | `2ec9b6061d086bda0080157ac4d1aefbe7fca872eb8cf8ae038359a2fc80ed40` |
+| 8.1 x64 | `uaspstor.inf` | - | 4,248 | `1341c9e3f15c4385fd89673c11159326c8ad7e682baa1fc799fb61aa0593c403` |
+| 8 x86 | `input.inf` | - | 70,558 | `223ce8c06c33823034ea4faefaf600ed6889d00af72010af18cc3e3f72560675` |
+| 8 x64 | `input.inf` | - | 71,150 | `8f30d04321dacad25e91ef87fffa5f643c2f42b2b99fc3039347528ae11eba20` |
+| 8.1 x64 | `input.inf` | - | 76,248 | `cc03a9a0259ee5a0c28195e1b05b9461d0b4162848dbe7ebec153348487611b6` |
+| 8 x86 | `wdma_usb.inf` | - | 90,872 | `d894db3555a6b4f9d9e21980b6139eba9015009db27b978fb4b4f439fbbf845c` |
+| 8 x64 | `wdma_usb.inf` | - | 91,008 | `f4da0733bdee35f48cf3b353afa19879d9be5998e3cad3ed8c3479538c47da3e` |
+| 8.1 x64 | `wdma_usb.inf` | - | 93,474 | `c71d466ffcf27040e917dcb37f88b2d51f0a3c81a01abb303a19d7c8e880fa70` |
+| 8 x86 | `winusb.inf` | - | 2,996 | `7c56a7326b4bdde8891362b8a09df2fc041355e20c909c6cd06797186ec67e5d` |
+| 8 x64 | `winusb.inf` | - | 3,004 | `91d2aa3d322503207db2f596ae852211b0d8fd619ba6379d9fa12b2910518ad9` |
+| 8.1 x64 | `winusb.inf` | - | 3,002 | `2c26480463aa987635b9752365d8ede402fc805dee7d6dae817cac372847faf6` |
+
+The INFs are UTF-16LE except `usbxhci.inf` and `usbhub3.inf` (UTF-8 with
+a byte-order mark), hashed as the original bytes; their `DriverVer` lines
+are quoted in 6.12.1.
+
+#### 6.12.1 The controller's match
+
+**Only `usbxhci.inf` matches an xHCI controller on Windows 8 and 8.1.**
+`usbport.inf` keeps `PCI\CC_0C0300`, `PCI\CC_0C0310`, `PCI\CC_0C0320`,
+`ACPI\PNP0D20` and the root hubs `USB\ROOT_HUB` and `USB\ROOT_HUB20`, and
+names no `PCI\CC_0C0330`; a text sweep of every `Windows\inf\*.inf` of the
+three images (553, 564 and 577 INFs; the method of 10.13.2) finds
+`PCI\CC_0C0330` on a model line of `usbxhci.inf` alone. What that INF
+says, 8 (`DriverVer=07/25/2012,6.2.9200.16384`, `signature="$Windows NT$"`):
+
+- **The models.** `[Manufacturer]` `%Generic.Mfg%=Generic,NTx86` (x64
+  `NTamd64`); `[Generic.NTx86]` lists `PCI\CC_0C0330` and `ACPI\PNP0D10`,
+  both `=Generic.Install`. 8.1 (`DriverVer=10/06/2014,6.3.9600.17393`,
+  `PnpLockdown=1`) adds `ACPI\PNP0D15` `=Generic_NoDebug.Install`.
+- **`FeatureScore=80`** on `[Generic.Install.NT]` (and 8.1's
+  `[Generic_NoDebug.Install.NT]`), with the INF's own comment
+  "FeatureScore values between 0x00-0x7F are reserved. Values 0x81-0xFE are
+  for OEMs."
+- **Three `ExcludeID` lines** on `[Generic.Install.NT]`, unchanged in 8.1:
+  `PCI\VEN_1B73&DEV_1000&CC_0C0330`, `PCI\VEN_1B73&DEV_1400&CC_0C0330` and
+  `PCI\VEN_1B73&DEV_1009&REV_00` - Fresco Logic's FL1000, FL1400 and the
+  first FL1009 revision, which the inbox driver therefore never takes.
+- `[ControlFlags]` `BasicDriverOk = *` and `ExcludeFromSelect = *`; the
+  services `USBXHCI` (`StartType 3`, `BootFlags` 16, commented
+  `CM_SERVICE_USB3_DISK_BOOT_LOAD`) and `UCX01000`; `[Generic_AddReg.HW]`
+  sets `MSISupported` 1 with no `MessageNumberLimit`; `Needs=PciD3ColdSupported`
+  from `machine.inf`; 8.1 adds a `.WMI` section.
+
+`usbxhci.sys` itself refuses no controller by id in what was read: a
+string and immediate search of the x64 builds finds no refusal table, and
+`Controller_RetrieveDeviceFlags` (8 x64 `0x46C54`; 8.1
+`Controller_PopulateDeviceFlags`) only sets quirk bits for hard-coded ids
+(`1B73:1009` flags 2, `1B6F:7023` `|= 0xC`, `1B21:1040` to `1042`
+`|= 0x10`), with more from the kernel shim database (keys formatted
+`USBXHCI:PCI\VEN_%04X&DEV_%04X...`, `g_KseQueryDeviceFlags`) and the
+registry, whose contents are not in the image. What the bits do was not
+traced, nor the x86 function.
+
+`usbhub3.inf` (`FeatureScore=0` on 8, `FeatureScore=80` on 8.1, with the
+comment `usbxhci.inf` carries) binds `USB\ROOT_HUB30`, `USB\USB30_HUB` and
+`USB\USB20_HUB`, the ids Windows 8's own USB 3 stack gives its hubs;
+`usb.inf` keeps `USB\CLASS_09&SUBCLASS_01` and `USB\CLASS_09` (its
+`StandardHub.Dev` includes `usbport.inf`'s `ROOTHUB.Dev`) and
+`USB\COMPOSITE` (service `usbccgp`).
+
+**How Windows ranks the two INFs** (documentation: Microsoft's "How
+Windows Ranks Driver Packages" and "Signature Score" pages, read
+2026-10-22; Windows Vista and later). A rank is `0xSSGGTHHH`, lower is
+better: signature score `SS`, feature score `GG` ("An unspecified feature
+score is represented as 0x00FF0000"), identifier score `THHH`. An inbox
+package gets the best signature score; a package "not signed or whose
+signing state is unknown" the worst. This package has no catalog (record
+19 section 3: the x64 binaries carry an embedded signature, the package
+none; Device Manager says "Not digitally signed"), and its INFs no
+`FeatureScore`. Both INFs match the same compatible id, `PCI\CC_0C0330`, so
+the identifier scores are equal, and **`usbxhci.inf` outranks this
+package's INF on its signature score alone, and again on its feature score
+(0x80 against an unspecified 0xFF)**; `DriverVer` dates (this package's
+`10/19/2026`) are compared only between equal ranks. Inference, VM: on 8
+and 8.1, `xhci98.sys` takes a controller only through the installer's
+forced route (`UpdateDriverForPlugAndPlayDevices` with
+`INSTALLFLAG_FORCE`, `inst_eng.c` `call_flags`), never by Windows' own
+choice - which is the default 43.29 wants - **except on the three excluded
+Fresco Logic ids**, where no inbox INF matches and a staged `xhci98.inf`
+is the only candidate, so a controller of those ids that appears after the
+package was staged (a hot-plugged card, a tunnelled one) would be offered
+this driver unasked. The uninstall's way back is the same rule in reverse,
+and only where that INF matches: with the OEM INF deleted, the next search
+finds `usbxhci.inf` alone on a controller it does not exclude, and on one
+of the three excluded Fresco Logic ids finds no inbox driver at all (the
+controller is left without one, as before the install; inference, VM).
+
+**This package's INFs on NT 6.2 and 6.3.** `src\xhci98.inf`'s
+`%Mfg%=XhciModels,NTx86.6.0` and `src\xhci98-amd64.inf`'s
+`NTamd64,NTamd64.6.0` mean the `.6.0` models sections (`Xhci.Dev6` and its
+siblings) apply on 6.2 and 6.3 as on 6.0 and 6.1: the setup engine takes
+the highest decoration not above the running version, and no INF here has
+a `.6.2` or `.6.3` one. `Signature="$CHICAGO$"` is what Vista and 7 took;
+whether 8's engine takes it unchanged is VM.
+
+**The bus's own ids.** The same sweep finds no line containing `XHCI98`
+in any Windows 8 or 8.1 INF, no `USB\` token with `*` or `?`, and as the
+only `USB\X...` token `wdma_usb.inf`'s `USB\XUSB_AUDIO_DEVICE` (as on Vista
+and 7). The non-VID `USB\` ids matched are 8.6's list plus
+`USB\ROOT_HUB30`, `USB\USB30_HUB`, `USB\USB20_HUB`, the failure ids `usb.inf`
+binds to `BADDEVICE.Dev` (`USB\RESET_FAILURE`, `USB\DESCRIPTOR_FAILURE`,
+`USB\SET_ADDRESS_FAILURE`, `USB\DEVICE_DESCRIPTOR_VALIDATION_FAILURE`,
+`USB\CONFIGURATION_DESCRIPTOR_VALIDATION_FAILURE`,
+`USB\PORT_LINK_SSINACTIVE`, `USB\PORT_LINK_COMPLIANCE_MODE`; 8.1 adds
+`USB\CONFIG_DESCRIPTOR_FAILURE`), and a few private names (`USB\GENDISK`,
+`USB\HPRESTSCAN`, `USB\HPRESTSCANV1`, `USB\HPSOAPSCAN`,
+`USB\D8F87D9C-4EE4-4A61-92D1-3CAA420A227B`): **none is one of 10.13.1's
+four bases**, so 10.13.2's conclusion holds on 8 and 8.1 for the swept
+set.
+
+**The UAS interface has an inbox driver on 8 and 8.1.** `uaspstor.inf`
+(`Class=SCSIAdapter`, no `FeatureScore`) binds `USB\Class_08&SubClass_06&Prot_62`,
+the id `src\uas\xhciuas.inf` and `xhciuas-amd64.inf` bind; `usbstor.inf`
+binds the Bulk-Only ids `USB\Class_08&SubClass_{02,05,06,08}&Prot_50` and
+`SubClass_08&Prot_52`, as on 7. By the ranking above, **an unforced search
+on 8 and 8.1 puts `uaspstor.sys` on a UAS interface of this bus, not
+`xhciuas.sys`**, and 6.12.4 reads what `uaspstor` then asks of the bus.
+
+#### 6.12.2 What the class drivers send the device PDO
+
+| Binary | IOCTLs sent to the PDO | `QUERY_INTERFACE` | URB functions | `usbd.sys` imports | Against 7 SP1 (6.4) |
+|---|---|---|---|---|---|
+| `hidusb` (all three) | `SUBMIT_URB` (`HumCallUSB` `0x1931` / `0x20D2` / `0x1ACF`), `GET_PORT_STATUS` (`HumGetPortStatus` `0x2CFC` / `0x3DE4` / `0x4783`), `RESET_PORT` (`HumResetParentPort` `0x2D72` / `0x3EAE` / `0x4C0F`), `SUBMIT_IDLE_NOTIFICATION` (`0x31CB` / inlined in `HumInternalIoctl` `0x1283` / `0x24C1`) | none | 0x00 (and the unconfigure, 0x3C / 0x58), 0x02, 0x09, 0x0B, 0x28, 0x1B, 0x1C, 0x1E, 0x2A | `CreateConfigurationRequestEx`, `ParseConfigurationDescriptorEx` | **identical** |
+| `hidclass` (all three) | none (its idle request to `hidusb` is `IOCTL_HID_SEND_IDLE_NOTIFICATION_REQUEST` `0xB002B`, which `hidusb` turns into `0x220027` as on 7) | none | none | none | `QUERY_CAPABILITIES` (Size 0x40, Version 1; a failure fails start on 8.1, inferred on 8), `SET_POWER` and `WAIT_WAKE` through `PoRequestPowerIrp`; 8.1 drives power through PoFx but sends the PDO the same kinds |
+| `usbstor` (all three) | as 7: `SUBMIT_URB`, `GET_PORT_STATUS` (`IsDeviceConnected` `0xA424` / `0xCC72` / `0xED02`), `RESET_PORT` (`ResetDevice` `0xA574` / `ResetDeviceWorkItem` `0xC6BD` / `0x1055E`), `GET_TOPOLOGY_ADDRESS` (`IsDeviceConnectedToRootHub` `0x11AA7` / `0x16725` / `0x1BF36`); new: `0x220FB3`, `0x49104B`, `0x49140F`, `0x491404`, `0x491408` (6.12.3) | USBDI **V1**, Size 0x24 / 0x48 (`USBSTOR_GetBusInterface` `0x11984` / `0x1657F` / `0x1B99E`; `IsDeviceHighSpeed`, `InterfaceDereference`; a failure stores "not High Speed" and start goes on); new: `GUID_USBD_INTERFACE_V1` from `USBD_CreateHandle` (6.12.3) | as 7: 0x00, 0x01, 0x09, 0x0B, 0x12, 0x1B, 0x1E; 8.1 adds 0x09 sites (an async-notification interrupt IN path) | `CreateConfigurationRequestEx` | every 7 request kept; the new ones and their fallbacks in 6.12.3 |
+| `uaspstor` (all three; none on 7) | `SUBMIT_URB`, `GET_PORT_STATUS` (`IsDeviceConnected` `0x7121` / `0x9538`; 8.1 `BulkResetDeviceWorkItem` `0x6962`), `RESET_PORT` (`ResetDevice` `0x73D2` / `0x98C4` / `0x6A3B`), `0x220FB3`, `0x49104B`, `0x49140F`, `0x491404`, `0x491408` | USBDI **V1** (`UaspGetBusInterface` `0x6EEB` / `0x9249` / `0x6621`), and `GUID_USBD_INTERFACE_V1` from `USBD_CreateHandle` | 0x00, 0x09, 0x0B, 0x1E, **0x35 `OPEN_STATIC_STREAMS`** (Length 0x20 / 0x30, `StreamInfoVersion` 0x100, `StreamInfoSize` 0x10 / 0x18); 8.1 adds 0x02; no 0x36, 0x37, 0x38 | `CreateConfigurationRequestEx` | new driver: 6.12.4 |
+| `USBAUDIO` (all three) | as 7: `SUBMIT_URB`, `RECORD_FAILURE` (`USBHwLogStartFailure`) | USBDI **V1**, Size 0x24 / 0x48 (`USBHwGetUsbBusInterface` `0xDA95` x86; inlined in `USBDeviceStart` x64); `IsDeviceHighSpeed`, `QueryBusTime`, `InterfaceDereference`; **a failed query fails start** (after `RECORD_FAILURE`) | as 7: 0x00, 0x01, 0x02, 0x09, 0x0A, 0x0B, 0x1B, 0x1C, 0x1E | `ParseDescriptors`, `ParseConfigurationDescriptorEx`, `CreateConfigurationRequestEx` | **identical** |
+| `Wdf01000` USB target (KMDF 1.11 on 8, 1.13 on 8.1) | `SUBMIT_URB` (`FxFormatUsbRequest`), `RESET_PORT` (`FxUsbDevice::Reset`), `GET_PORT_STATUS` (`FxUsbDevice::GetPortStatus`; `IsConnected` reads bit 1), `CYCLE_PORT` (`FxUsbDevice::FormatCycleRequest`), `SUBMIT_IDLE_NOTIFICATION` (`FxPkgPnp::PowerPolicySubmitUsbIdleNotification`), `0x49104B` | USBDI **V1** (Size 0x24 / 0x48, `FxUsbDevice::InitDevice` `0x3F103` / `0x59516` / `0x887D3`), and on any failure **V0** (0x20 / 0x40); plus `GUID_USBD_INTERFACE_V1` from `USBD_CreateHandle` when the client created the target "WithParameters" | 0x0B (and string descriptors), **0x13 `GET_STATUS_FROM_DEVICE`** at create (a failure tolerated), 0x00, 0x01, 0x08, 0x09, 0x02, 0x1E; isochronous URBs built by the client | none | no KMDF was read on 7, so against the 7 class drivers: `CYCLE_PORT` and URB 0x08 / 0x13 are sent by no 7 driver read |
+| `winusb` (all three) | none of its own; forwards an upper driver's `SUBMIT_IDLE_NOTIFICATION`; the rest through KMDF | through KMDF: `WdfUsbTargetDeviceCreateWithParameters` with contract `0x602` in `PrepareHardware` (`0x1A6B` / `0x1E87` / `0x12F4A`), so `USBD_CreateHandle` runs; a failed create fails start | 0x0B of its own; 8.1 adds isochronous (0x0A, `WinUSB_SetupIsochUrb`) | 8.1 only: `ParseConfigurationDescriptorEx`, `ParseDescriptors` | new to this reading |
+| `usbccgp` (all three) | as 7: `SUBMIT_URB`, `RESET_PORT` (`ResetDevice`), `RECORD_FAILURE` (`ReportStartFailData`), `GET_TOPOLOGY_ADDRESS` (`UsbcGetTopologyAddress`), `SUBMIT_IDLE_NOTIFICATION` (`SubmitParentIdleIrp`); new: `0x490003` `REGISTER_COMPOSITE_DEVICE`, `0x490007` `UNREGISTER_COMPOSITE_DEVICE`, `0x49000B` `REQUEST_REMOTE_WAKE_NOTIFICATION`, `0x49104B`, `0x49104F`; 8.1 also `0x220FB3` | `GUID_USBD_INTERFACE_V1` then USBDI V1 (from `USBD_CreateHandle`); `USB_BUS_INTERFACE_USBC_CONFIGURATION_GUID` V1, Size 0x34 / 0x68, **as on 7**; new: `GUID_D3COLD_SUPPORT_INTERFACE` V1 (result ignored) | as 7: 0x00, 0x01, 0x0B, 0x2A; new: **0x32 `CONTROL_TRANSFER_EX`** (function-suspend `GET_STATUS` and `SET_FEATURE`, only after a successful `FUNCTION_SUSPEND` capability query) | `ParseConfigurationDescriptorEx`, `ParseDescriptors` | not used under this bus, which presents its composite parents as `USB\XHCI98_COMPOSITE` with no compatible id (10.13.1), so `usb.inf`'s `USB\COMPOSITE` row never matches; read for completeness |
+
+**Sent by none of these on 8 or 8.1** (byte scans of all nine class-driver
+and KMDF images): `GET_DEVICE_HANDLE(_EX)`, `GET_TT_DEVICE_HANDLE`,
+`GET_PARENT_HUB_INFO`, `NOTIFY_IDLE_READY`, `GET_BUSGUID_INFO`; the
+`USB_BUS_INTERFACE_HUB_GUID`, `USB_BUS_INTERFACE_HUB_SS_GUID` and
+`USB_BUS_INTERFACE_HUB_MINIDUMP_GUID` bytes appear in none of them, and no
+`QUERY_INTERFACE` asks USBDI above version 1. Windows 8's own `usbhub3.sys`
+answers `GET_PARENT_HUB_INFO`, `GET_DEVICE_HANDLE_EX`,
+`GET_TT_DEVICE_HANDLE`, `NOTIFY_IDLE_READY` and `GET_ROOTHUB_PDO` at its
+PDOs with `STATUS_NOT_SUPPORTED` (6.12.5), so no inbox class driver can
+depend on them. URB 0x2A (`hidusb`, `usbccgp`) is the request this bus
+already refuses (`hcd_urb.c`), as on 7.
+
+#### 6.12.3 The Windows 8 client contract: `usbdex`, and the versions a client asks for
+
+**Windows 8's client routines are a static library, not `usbd.sys`.**
+`USBD_CreateHandle`, `USBD_QueryUsbCapability`, `USBD_UrbAllocate`,
+`USBD_AssignUrbToIoStackLocation`, `USBD_CloseHandle` and their
+`USBDInternal_*` helpers are named by the PDBs inside `usbstor`, `uaspstor`,
+`usbccgp`, `Wdf01000`, `usbhub3` and `usbhub`; Windows 8's `usbd.sys`
+exports none of them. Read in each copy, with the same behaviour in all:
+
+1. **`USBD_CreateHandle`** sends `IRP_MN_QUERY_INTERFACE` for
+   `GUID_USBD_INTERFACE_V1` `{deee98ea-c0a1-42c3-9738-a04606c84e93}` (the
+   value of the PDB symbol of that name), **Version `0x602`, Size 0x58
+   (x86) / 0x98 (x64)**. Answered, the handle's contract is `0x602`. Refused
+   for any reason, the contract becomes `0x600`, the status is cleared, and
+   it asks **`USB_BUS_INTERFACE_USBDI_GUID` Version 1, Size 0x24 / 0x48**,
+   calls `IsDeviceHighSpeed` (cached for later) and `InterfaceDereference`.
+   Refused too, the contract is `0xFFFFFFFF` and **the handle is still
+   returned with success**: `USBD_CreateHandle` fails only on a bad
+   parameter, the IRQL or pool, never on a bus's refusal. (`Wdf01000`'s copy
+   calls neither member through a NULL check; `usbccgp`'s 8.0 copy calls
+   `IsDeviceHighSpeed` unchecked, its 8.1 copy checks it.)
+2. **`USBD_QueryUsbCapability`**, by contract: `0x602` sends
+   `IRP_MJ_INTERNAL_DEVICE_CONTROL` **`0x49104B`** (`FILE_DEVICE_USBEX`,
+   function `0x412`, `METHOD_NEITHER`; no header read names it;
+   `Argument1` a 0x20 / 0x28-byte block of `USHORT 1`, `USHORT size`, the
+   interface's context, the capability GUID and the output length, the
+   output in `SystemBuffer`); `0x600` answers **locally, with no IRP**:
+   `GUID_USB_CAPABILITY_DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE` succeeds
+   when the cached `IsDeviceHighSpeed` was TRUE and is otherwise
+   `STATUS_NOT_SUPPORTED`, `GUID_USB_CAPABILITY_SELECTIVE_SUSPEND` succeeds,
+   and **every other capability, `STATIC_STREAMS` and
+   `SUPER_SPEED_COMPATIBLE` among them, is `STATUS_NOT_IMPLEMENTED`
+   (`0xC0000002`)**; `0xFFFFFFFF` returns `STATUS_NOT_IMPLEMENTED` for all.
+3. **`USBD_UrbAllocate`** and its siblings call the V1 interface's
+   allocators when the contract is `0x602` (a direct call into the bus, no
+   IRP) and `ExAllocatePool` otherwise.
+
+The capability GUIDs, from PDB-named symbols in these images (Microsoft's
+`USBD_QueryUsbCapability` page names them without values):
+`SELECTIVE_SUSPEND` `{755c630d-c8a0-4765-946f-90cc703856a4}`,
+`CHAINED_MDLS` `{f5ceeb23-ad90-458c-979a-d59b3ad6884f}`, `STATIC_STREAMS`
+`{09051e1f-0dc9-4e6b-8b12-960cbd81aa8f}`, `FUNCTION_SUSPEND`
+`{f4563183-d66e-42bd-bd53-1ac7b04cd59d}`,
+`DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE`
+`{81a885a6-f239-42a2-8397-a5d95bea6953}`, `..._SUPER_SPEED_COMPATIBLE`
+`{8a2f776c-9bd0-4f29-9771-c7a38846d4c7}`, `..._FULL_SPEED_COMPATIBLE`
+`{cde43191-1fad-4120-a7ab-740956c66f37}`, `..._LOW_SPEED_COMPATIBLE`
+`{ad6f2a13-c4d1-4925-83cc-96857a2431d9}`,
+`CLEAR_TT_BUFFER_ON_ASYNC_TRANSFER_CANCEL`
+`{09b76d52-0a6d-4e4f-a911-d036d1929497}`.
+
+**Who answers `GUID_USBD_INTERFACE_V1` on Windows 8.** Only
+`ucx01000.sys`, at the PDOs `usbhub3.sys` passes the query down from
+(`RootHub_EvtUSBDInterfaceV1Request`: Size must equal 0x58 / 0x98, Version
+must equal `0x602`, else `STATUS_NOT_SUPPORTED`; its members are UCX's
+URB allocators, `Xrb_Allocate` and the like). **Windows 8's own USB 2.0 hub,
+`usbhub.sys`, does not answer it** (`UsbhPdoPnp_QueryInterface` completes an
+unknown GUID with the status it came with) and does not handle `0x49104B`
+either, so every device on an EHCI or UHCI/OHCI controller of a Windows 8
+system already runs the inbox clients on the `0x600` path. That is the path
+this bus puts them on: `hcd_pdo.c` completes a `QUERY_INTERFACE` it does not
+serve with the status it came with, and `hcd_urb.c` refuses an unknown
+internal IOCTL with `STATUS_NOT_SUPPORTED`.
+
+**The versions a client asks for, then.** `USB_BUS_INTERFACE_USBDI_GUID`:
+Version 1 (Size 0x24 / 0x48) from every reader and from `usbdex`'s
+fallback, Version 0 (0x20 / 0x40) from KMDF after a refused V1; never 2 or
+3. This bus answers versions 0 to 3 (`HcdUrbQueryInterface`), so every one
+asked is served. `USB_BUS_INTERFACE_HUB_GUID` (and the `HUB_SS` and
+`HUB_MINIDUMP` interfaces): asked by **no** class driver read on 8 or 8.1,
+as by none on 2000 to 7; on Windows 8 it is a hub-to-bus interface
+(`usbhub.sys` passes it down to `usbport.sys`). `USB_BUS_INTERFACE_USBC_CONFIGURATION_GUID`:
+`usbccgp` only, as on 7. `GUID_USBD_INTERFACE_V1`: every `usbdex` client,
+with the fallback above.
+
+**`usbd.sys` itself.** Windows 8 keeps every Windows 7 export (18 on x86
+with the three decorated aliases, 15 on x64) and adds five, imported only
+by `usbhub.sys` and `usbhub3.sys`: `USBD_AddDeviceToGlobalList`,
+`USBD_RemoveDeviceFromGlobalList`, `USBD_MarkDeviceAsDisconnected`,
+`USBD_AllocateHubNumber`, `USBD_ReleaseHubNumber`. `USBD_GetUSBDIVersion`
+stores `0x600` / `0x100` as on 7; `USBD_QueryBusTime` returns
+`STATUS_NOT_SUPPORTED` with no IRP, as on 7. New is a **Kernel Shim Engine
+shim**: `ShimLoad` (x86 `0x6006`; inlined into `DllInitialize` on x64)
+registers `usbshim` (`{fd8fd62e-4d94-4fc7-8a68-bff7865a706b}`) through
+`KseRegisterShimEx`, with one hook, on `IofCallDriver`
+(`ShimHookIofCallDriver`, `0x1D32` / `0x2024` / `0x2DB4`): an IRP with
+fewer stack locations than its target needs is re-sent as a new IRP of the
+right depth and the original completed from it. Which drivers it is
+applied to is decided by the kernel's shim database, not by `usbd.sys`;
+not read. It concerns a client's IRPs, not what the bus answers.
+
+#### 6.12.4 `uaspstor`: what a UAS device needs from the bus on 8 and 8.1
+
+`UasInitializeDevice` (`0x24F0` / `0x3050` / `0x2D98`) in order: the
+descriptors, a UAS alternate setting with four pipes (else `0xC0000185`),
+then `USBD_CreateHandle`, then `USBD_QueryUsbCapability(STATIC_STREAMS)`:
+
+- **Streams granted** (contract `0x602`, `0x49104B` answering a count):
+  URB `0x35` on the three pipes; any failure there **fails start**, with no
+  fallback to the mode below.
+- **Streams not granted** (the query fails): `UaspGetBusInterface` asks
+  USBDI V1 and calls `IsDeviceHighSpeed`. TRUE: 32 tags, UAS without
+  streams ("HS" mode, `IssueCommandHS`). FALSE, or the query refused:
+  **start fails with `0xC0000182`**.
+
+On this bus the contract is `0x600`, so the capability query returns
+`STATUS_NOT_IMPLEMENTED`, and `hcdBusifHighSpeed` answers TRUE only for a
+High-Speed connection (`pdo->SpeedClass == XHCI_SPEED_HIGH`). So under
+`uaspstor` on 8 and 8.1 **a High-Speed UAS device would run without
+streams, and a SuperSpeed UAS device would fail to start** (inference from
+the code above; VM). This package's own `xhciuas.sys` reaches streams
+through the bus's private interface (`xhci98_streams.h`), not through
+`usbdex`; but 6.12.1's ranking puts `uaspstor` on the interface unless the
+installer forces `xhciuas.inf` there. For 43.29 (owner's decision, 6.12.10):
+force `xhciuas.inf` onto the UAS interfaces under this bus as on 7 (which
+reaches only the devices present when the installer runs: `install_inf`
+in `inst_eng.c` forces the hardware ids of the devices it finds, and a UAS
+disk plugged in for the first time later is ranked by Windows, so it gets
+`uaspstor`), or
+implement `GUID_USBD_INTERFACE_V1` and `0x49104B` with URB `0x35` and
+`0x36` for `uaspstor` (and with them the V1 interface's allocators, since a
+`0x602` contract sends `USBD_UrbAllocate` there), or leave UAS disks to
+`usbstor`'s Bulk-Only alternate setting where the device has one.
+
+#### 6.12.5 What Windows 8's own hub PDOs answer
+
+The set an inbox Windows 8 class driver meets under Microsoft's stack,
+read from the PDO dispatch of each hub driver (`usbhub3.sys`
+`HUBPDO_EvtDeviceWdmIrpPreprocess`, 8 x64 `0x112D8`; `usbhub.sys`
+`UsbhPdoInternalDeviceControl`); the 8 x64 switch decoded in full, the other
+builds compared by their constants:
+
+| Request at the device PDO | `usbhub3.sys` (USB 3 stack) | `usbhub.sys` (USB 2.0 stack) | This bus today |
+|---|---|---|---|
+| `SUBMIT_URB` | served (0x09 and 0x0A sent straight down to UCX; 0x00, 0x01, 0x1E, 0x30, 0x31, 0x35, 0x36 queued at the PDO) | served (to `usbport`) | served, 0x30 and 0x31 among them; 0x32 to 0x38 refused |
+| `RESET_PORT`, `GET_PORT_STATUS`, `CYCLE_PORT`, `SUBMIT_IDLE_NOTIFICATION`, `RECORD_FAILURE`, `GET_TOPOLOGY_ADDRESS`, `GET_BUS_INFO` | served | served | served |
+| `GET_HUB_COUNT`, `ENABLE_PORT` | completed | served | `GET_HUB_COUNT` served; `ENABLE_PORT` refused |
+| `GET_HUB_NAME`, `GET_CONTROLLER_NAME`, `GET_DEVICE_CONFIG_INFO`, `GET_DEVICE_HANDLE` | served | served | `GET_DEVICE_HANDLE` served; the rest refused |
+| `GET_ROOTHUB_PDO`, `GET_PARENT_HUB_INFO`, `GET_DEVICE_HANDLE_EX`, `GET_TT_DEVICE_HANDLE`, `NOTIFY_IDLE_READY` | `STATUS_NOT_SUPPORTED` | served but `GET_PARENT_HUB_INFO` (`STATUS_NOT_SUPPORTED`) | refused |
+| `0x220FB3` (function `0x3EC`; no header read names it) | a port reset, queued | `UsbhFdoResetPdoPort`, as `RESET_PORT` | refused |
+| `0x490003`, `0x490007`, `0x49000B`, `0x49104F` (composite) | served or passed to UCX | not handled | refused |
+| `0x49104B` (capability query) | answered at the PDO for `FUNCTION_SUSPEND`, `STATIC_STREAMS` and the four `DEVICE_CONNECTION_*` GUIDs, the rest by UCX (`CHAINED_MDLS`, `SELECTIVE_SUSPEND`, `STATIC_STREAMS`) | not handled | refused |
+| `0x491404` (`UsbhFdoHandleGetDumpDataIoctl`), `0x491408` (its sibling, inferred free), `0x49140F` (`UsbhFdoHandleNotifyForwardProgress`) | served or forwarded | served or forwarded | refused |
+| `QUERY_INTERFACE` USBDI | passed to UCX: V0 to V3, by Size | passed to `usbport` (its range not read) | V0 to V3 |
+| `QUERY_INTERFACE` `GUID_USBD_INTERFACE_V1` | passed to UCX (6.12.3) | not answered | not answered |
+| `QUERY_INTERFACE` `GUID_D3COLD_SUPPORT_INTERFACE`, `GUID_PNP_LOCATION_INTERFACE` | answered | `PNP_LOCATION` answered; `D3COLD` from 8.1 | not answered |
+
+The names of `0x220FB3` and the `0x4914xx` codes come from the PDB
+function names that handle them, not from a header; Microsoft's pages
+read give no numeric values for them.
+
+**What the new requests mean for this bus** (static, with the
+inference marked):
+
+- `0x220FB3` is sent by `usbstor` and `uaspstor` **instead of** `RESET_PORT`
+  when the device is on the paging, hibernation or dump path
+  (`FdoDeviceUsageNotification` sets the flag; 8.1 `usbccgp` likewise), and
+  its failure is not retried as `RESET_PORT` (`ResetDeviceWorkItem` retries
+  the same request up to three times). Refused here, a reset of a disk that
+  holds a page file would fail. Inference: rare under this package, whose
+  disks are not boot disks on NT 6.x; VM.
+- `0x49140F`, `0x491404`, `0x491408` are sent on the same paths (forward
+  progress, crash dump); `usbstor` tolerates a refused `0x49140F` (a flag
+  stays clear); the dump requests' failure paths were not read.
+- Everything else new is behind a `0x602` contract and never sent on this
+  bus.
+
+#### 6.12.6 What the bus already answers that 8's drivers need
+
+On the `0x600` path every inbox client read starts on what this bus serves
+today: `hidusb` and `USBAUDIO` ask exactly the 7 set; `usbstor` adds only
+requests with fallbacks or paging-path ones; KMDF needs USBDI V1 or V0 with
+a non-NULL `GetUSBDIVersion` (called unchecked) and, when V1 is answered,
+non-NULL `IsDeviceHighSpeed` and `InterfaceDereference` (`usbdex` calls
+them unchecked) - `HcdUrbQueryInterface` fills all three - and the URBs
+0x0B, 0x13 (a failure tolerated), 0x00, 0x01, 0x08, 0x09, 0x02 and 0x1E;
+winusb's isochronous path on 8.1 needs 0x0A and `QueryBusTime`. **The one
+inbox driver that does not start on this bus by static reading is
+`uaspstor` on a SuperSpeed UAS device** (6.12.4).
+
+#### 6.12.7 Device Manager's pages
+
+Windows 8's and 8.1's `usbui.dll` carry as DWORD bytes the request codes
+Windows 7's does (`0x220408` to `0x220450`, the 8.1 build `0x220440`
+twice), plus **`0x22045C`, `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`**,
+which none of the Vista SP2 and Windows 7 SP1 builds of section 8's table carries
+(`tools\{vista,win7}-{x86,x64}-extracted\ui\usbui.dll`; a byte scan of
+the files for `0x0022xxxx` codes of function index 0x100 to 0x13F, not
+attributed to code). The bus
+answers it on every target since task 36.18 (8.4), and its capable flags
+stay false for a USB 3 device on a USB 2.0 port (8.4, the BOS read at High
+Speed left out). Whether 8's pages read it, and for what, is 43.25's
+reading.
+
+#### 6.12.8 The x64 test signature on 8 and 8.1
+
+Nothing in this reading changes record 19: the x64 binaries carry the
+embedded SHA-1 Authenticode test signature, no catalog, the services are
+demand-start. Not read statically: whether Windows 8's and 8.1's code
+integrity (`ci.dll`, extracted beside the files above and not read) loads a SHA-1-signed test binary in test-signing mode as 7
+did, the Secure Boot interaction (the owner's Windows 10 rows assume Secure
+Boot off; not read for 8),
+and what the 32-bit Windows 8 does with the unsigned x86 binary (record 19
+section 3's premise, that 32-bit Windows does not enforce, is read for 7
+and earlier only). All three are 43.24's and 43.31's legs.
+
+#### 6.12.9 What only a running system settles (VM, owed to 43.24 and 43.31)
+
+1. The forced install on 8 and 8.1, x86 and x64: `Signature="$CHICAGO$"`
+   and the `.6.0` models taken by 8's engine, the unsigned-package prompt,
+   and that Windows does not move the controller back to `usbxhci.sys` by
+   itself afterwards (a rescan, Windows Update's driver search).
+2. The ranking: with this package staged, a controller `usbxhci.inf` matches
+   stays on `usbxhci.sys` unless forced; and a Fresco Logic `1B73:1000`,
+   `1B73:1400` or `1B73:1009` rev 00 controller is offered this driver
+   unasked (needs such a controller or an emulator that presents one).
+3. The uninstall giving a controller `usbxhci.inf` matches back to
+   `usbxhci.sys` (and the root hub to `usbhub3.sys`); on an excluded
+   Fresco Logic id, what the controller is left with.
+4. The class drivers on the `0x600` path as read: HID, a Bulk-Only stick, a
+   hub, audio, a winusb device; the trace line `hcd: QUERY_INTERFACE not
+   answered` with `GUID_USBD_INTERFACE_V1`'s Data1 `deee98ea` and
+   `hcd: internal IOCTL not served` for any new code (a debug build).
+5. A UAS disk on 8 under `uaspstor`: High Speed (no streams, expected to
+   run) and SuperSpeed (expected `0xC0000182`, Code 10), and the same disk
+   under a forced `xhciuas.inf`; and a SuperSpeed UAS disk plugged in for
+   the first time after the install, to read which driver Windows gives
+   it.
+6. Test-signing mode on 8 x64 and 8.1 x64 with Secure Boot off, the
+   watermark and the Code shown without it; 8 x86 with the unsigned
+   binary.
+7. The Device Manager pages (`usbui.dll` 6.2 and 6.3) on the controller
+   and root hub, as sections 8.1 to 8.3 read them on 7.
+
+**What 43.25 needs from a Windows 8 VM** (not this task's, noted so the
+legs can be planned together): under Microsoft's stack, a SuperSpeed stick
+on a USB 2.0 port (QEMU: `qemu-xhci` with a `usb-storage` device on a
+USB 2.0 port, or an `usb-ehci` controller) with Explorer's details pane
+and Device Manager read for the "can perform faster" line and its source -
+a property (`DEVPKEY_Device_*` read with `pnputil` or the Details tab), the
+hub's WMI or notification, or the `_EX_V2` flags `usbui.dll` 6.2 reads
+(6.12.7); the same device under this bus on 8 after a forced install (43.31
+reads it beside Windows' own driver); and on Vista or 7, a High-Speed
+device behind a Full-Speed hub under Microsoft's stack and under this bus,
+for 7's "can perform faster" balloon. Statically still open for 43.25:
+the strings and their callers in 8's `usbui.dll` and the shell
+(`hotplug.dll`, the details pane's property handler), not read here.
+
+#### 6.12.10 Questions this reading leaves for the owner
+
+1. **The UAS interface on 8 and 8.1** (6.12.4): force `xhciuas.inf` there
+   (as on 7; the installer already forces every INF but Stor98's first
+   install and the 2000 filter), or teach the bus the `0x602` contract for
+   `uaspstor`. Recommendation: force `xhciuas.inf`; the `0x602` contract
+   brings UCX's allocator interface with it, which Windows 8's own USB 2.0
+   stack does not offer either. The force covers only the disks present
+   at install; for a disk first plugged in later, either the release notes
+   say to run the installer again (or use Device Manager's Update Driver),
+   or 43.29 finds a way for the package to win that device's ranking (a
+   more specific id the bus presents and `xhciuas.inf` alone names is one
+   to read: 10.13's namespace rules apply). The owner to choose.
+2. **`GUID_USBD_INTERFACE_V1` and `0x49104B`**: recommendation, not
+   answered (the `0x600` path is the one Windows 8's own `usbhub.sys`
+   gives every client, so every inbox client already copes with it).
+3. **`0x220FB3`**: recommendation, served as `RESET_PORT` (the alias
+   `usbhub.sys` makes), a one-line change with a host vector, since its
+   refusal has no fallback in `usbstor` and `uaspstor`; 43.29 to take it or
+   not.
+4. **The three Fresco Logic ids**: whether 43.29's install should avoid
+   staging `xhci98.inf` where it would become the only match, or say so in
+   the note.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the
