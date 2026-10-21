@@ -535,21 +535,29 @@ should set from an installer is not offered by one.
 **The layout** (draft 19, roadmap-usb4 task 43.10; the owner, 2026-10-20:
 "some drop-down text is longer than the menu, and the description at the
 bottom shows only two lines"). The USB, Thunderbolt and Stor98 settings
-pages are laid out when each is shown, from the page itself, not from
-fixed sizes: the page's client rectangle (the sheet gives every page the
-size of its largest template), the page's own font (the dialog's), text
-measured with `DrawTextA` (`DT_CALCRECT | DT_WORDBREAK`) in a device
-context holding that font, and the margins and gaps in dialog units
-through `MapDialogRect`. No size is a pixel constant, so 98 SE's 96 DPI,
-7's 120 DPI and any shell font lay out by the same rule. Up to draft 18
-the rows were placed at fixed dialog-unit offsets, four to a page, each
-drop-down 160 dialog units wide (200 on Stor98's page) with the "now"
-text beside it, and the note under the rows 20 dialog units tall, two
-lines.
+pages are laid out each time one is shown, from the page itself, not
+from fixed sizes: the page's client rectangle (the sheet gives every page
+the size of its largest template), the page's own font (the dialog's),
+text measured with `DrawTextA` (`DT_CALCRECT | DT_WORDBREAK`) in a device
+context holding that font, a drop-down's closed height read from one made
+in that font (`GetWindowRect` of a `CBS_DROPDOWNLIST` box after
+`WM_SETFONT`, then destroyed; the height it is created with is its open
+list's room, not the row's), and every margin and gap in dialog units
+through `MapDialogRect`. No size is a pixel constant, so 98 SE at
+96 DPI and XP and 7 at 96 and 120 DPI (Windows' small and large fonts)
+lay out by one rule. Up to draft 18 the rows were placed at fixed
+dialog-unit offsets, four to a page, each drop-down 160 dialog units
+wide (200 on Stor98's page) with the "now" text beside it, and the note
+under the rows 20 dialog units tall, two lines.
 
 - *The column*: the page's width less 8 dialog units each side. The
   head (the page's sentence of section 5.4, 5.5 or 5.6) runs across it
-  at its measured height, 2 dialog units from the top.
+  2 dialog units from the top, at the measured height of the whole head
+  with the widest part words it can carry, "(page n of n)" with n the
+  page's number of rows (no page has more parts than rows, and a part
+  number never has more digits than n), whenever the page has more than
+  one row; the rows start 4 dialog units under it. The head's height is
+  so fixed before the split is decided and does not change with it.
 - *A row*: the label (the value's name and its sentence) at the left,
   wrapped to its measured height; the "now" text on the label's line,
   at the right, right-aligned in a column as wide as the widest "now"
@@ -559,43 +567,65 @@ lines.
   Under the taller of the two, 2 dialog units down, the choice: a
   drop-down across the whole column, so a long choice shows whole in
   the closed box, or for a range (`Hi` nonzero) the number box,
-  60 dialog units wide as before. Rows are 9 dialog units apart, the
+  60 by 12 dialog units as before. Rows are 9 dialog units apart, the
   etched line in the middle of that gap.
 - *The open list*: every drop-down's list as wide as its longest
-  entry (`CB_SETDROPPEDWIDTH`), the entries measured in the box's own
-  font, plus the list's frame and vertical scroll bar (system metrics)
-  and 4 dialog units; never narrower than the closed box, never wider
-  than the screen. The same on Stor98's page and on the Advanced
+  entry (`CB_SETDROPPEDWIDTH`, which sets the list's least width), the
+  entries measured in the box's own font, plus the list's frame and
+  vertical scroll bar (system metrics) and 4 dialog units; never
+  narrower than the closed box, and never wider than the work area
+  (`SPI_GETWORKAREA`), where the placing of a list near the screen's
+  edge is USER's. The self-test holds every entry the table and
+  Stor98's rows offer within the closed box's text room (the box less
+  its frame and its arrow) at the template's size, so with the shipped
+  texts the open list is the closed box's width and nothing is placed
+  past the box; the measured width is the guard for an entry a later
+  change makes longer, and a drivers' row's note names each choice
+  whole as well. The same on Stor98's page and on the Advanced
   dialogs' choice, whose closed box is widened to the dialog's right
   margin (`IDC_A_CHOICE`, 262 dialog units in place of 200).
 - *Parts, three rows at most*: a page whose asked rows do not fit
-  takes more than one part. The room for rows is from under the head
-  to the note's least height above the page's bottom margin; the
-  split is the fewest parts of at most three rows each, the rows in
-  their order and spread evenly (the first parts take one row more
-  where they cannot be equal: four rows are two and two), such that
-  every part's rows and the gaps between them fit that room; a part
-  of one row stands whatever its height. The head then ends with
-  "(page k of n)", and its height is measured with the widest such
-  words whenever the page has more than one row, so the head does not
-  grow when a split is decided. One property-sheet page carries every
-  part: Next on a part before the last takes that part's choices with
-  the check that leaving the page makes (a range's number out of its
-  range keeps the user there, as today) and shows the next part;
-  Back on a part after the first does the same towards the first.
-  Entered with Next from the page before, a page shows its first
-  part; entered with Back from a page after, its last. A choice is
-  kept where leaving the page keeps it today (`choiceSet` and
-  `choiceVal`, Stor98's `s98WinSet` and `s98WinVal`), so a value set
-  on one part is there when the user comes back to it, and the
-  Summary and the run read every part's choices.
-- *The note* (`IDC_S_NOTE`): from under the tallest part's rows (the
-  same top on every part, so it does not move as Next steps) down to
-  the page's bottom margin, "Advanced..." at its right at its foot;
-  never less than six lines of the note's font with its frame, a
-  longer text scrolling in it as today.
+  takes more than one part. The room for rows is from their top to
+  6 dialog units above the note's least height, which stands above
+  the page's bottom margin of 4 dialog units; the split is the fewest
+  parts of at most three rows each, the rows in their order and spread
+  evenly (the first parts take one row more where they cannot be
+  equal: four rows are two and two), such that every part of two or
+  more rows fits that room. A lone row taller than the room takes it
+  from the note, down to two lines of the note's font; a row taller
+  still is beyond what the window lays out (a font about three times
+  the dialog's), and the note then keeps its two lines at the page's
+  foot. With the head carrying its part words, one property-sheet page
+  carries every part.
+- *Moving between parts*: Next on a part before the last takes the
+  shown part's choices with the check that leaving the page makes (a
+  range's number out of its range keeps the user on that part, as
+  today), shows the next part, and keeps the sheet on the page
+  (`PSN_WIZNEXT` answered -1); Back on a part after the first does the
+  same towards the first. Before the shown part's controls are
+  destroyed the focus moves to the sheet's button pressed (Next or
+  Back), where it stays, and the note shows the new part's first row.
+  The direction a page is entered from is the last departure from a
+  page: Next or Back that leaves a page records it, a move between
+  parts and a page skipped by `PSN_SETACTIVE` leave it as it is.
+  Entered by Next, a settings page shows its first part; by Back, its
+  last. "Advanced..." takes the shown part's choices first, as today,
+  and the page shows the same part when the dialog closes, whether by
+  OK or Cancel. A choice is kept where leaving the page keeps it today
+  (`choiceSet` and `choiceVal`, Stor98's `s98WinSet` and
+  `s98WinVal`): a value set on one part is there when the user comes
+  back to it, a choice put back to the value in force is no longer to
+  be written, and the Summary and the run read every part's choices.
+- *The note* (`IDC_S_NOTE`): from 6 dialog units under the tallest
+  part's rows (the same top on every part, so it does not move as Next
+  steps) down to the bottom margin; as wide as the column less
+  "Advanced..." (60 by 14 dialog units, at the note's right, at its
+  foot) and a 6-unit gap; its least height six lines of its font plus
+  its frame (the control's window less its client height) and 2
+  dialog units for the edit control's own margins; a longer text
+  scrolls in it as today.
 - *640 by 480 on 98 SE*: no template grows (`IDD_SETTINGS` stays 300
-  by 200 dialog units, the Components page the tallest), so the
+  by 200 dialog units, the Components page the tallest at 223), so the
   window is the size it was.
 - *The arithmetic*, pure and host-tested (`test\test_wizlay.c`), is
   in `xhciinst\wiz_lay.c` of its own, not in `inst_core.c`, which
@@ -604,13 +634,19 @@ lines.
   without a change of theirs: the "now" column's width, a part's
   height, the split, the open list's width and the note's top. What
   measures, makes and places the controls is the window's
-  (`xhciwiz.c`), and its `/selftest` lays out every settings page on
-  the `IDD_SETTINGS` template at its own size, every part, with every
-  asked value of the table in its mixed, machine-wide and greyed
-  forms and every asked Stor98 row on both systems, set and not set:
-  each text whole in its control, no control over another or outside
-  the page, the note at least six lines, each closed box across the
-  column, and each open list at least as wide as its longest entry.
+  (`xhciwiz.c`). Its `/selftest` lays out every settings page, every
+  part, at two sizes, the `IDD_SETTINGS` template's own and the sheet's
+  page size (the Components template's), with every asked value of the
+  table in its mixed, machine-wide and greyed forms and every asked
+  Stor98 row on both systems, set and not set: each text whole in its
+  control, every list entry within its closed box's text room and the
+  open list at least as wide as the longest, no control over another
+  or outside the page, the note at least six lines, each closed box
+  across the column, the rows in their order with each in one part,
+  the last part shown when entered by Back; a choice made on the first
+  part still chosen after Next and Back; and the Advanced dialog with
+  every advanced value of the table shown in turn, its list's entries
+  within its closed box and its open list at least as wide.
 
 ### 5.5 The Thunderbolt settings
 
@@ -1800,7 +1836,8 @@ column (the widest text, at most two fifths), a part's height, the split
 (at most three rows a part, the fewest parts, even, a part of one row
 always standing, every row in exactly one part, in order), the open
 list's width (the longest entry and its frame, at least the closed box,
-at most the screen) and the note's top; the window's self-test lays the
+at most the work area) and the note's top (under the tallest part, a
+lone tall row taking from the note down to its floor); the window's self-test lays the
 pages out as that section's last item says.
 
 ## 12. What this record changes in record 23
