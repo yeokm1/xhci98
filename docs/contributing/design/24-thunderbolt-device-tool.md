@@ -472,10 +472,15 @@ same port, and its USB devices may reach the host's own USB controller
 outside every unit - through a USB4 USB3 tunnel, or over the cable's USB
 2.0 pair, which no record describes. So after an eject the tool says
 first what Windows did ("Windows has stopped <unit>."), then reads the
-port again, and gives the unconditional advice only when everything it
-needs is positively established:
+port again, and classifies what it reads (`inst_unplug_kind`). Since
+revision 7 the classification no longer decides between unconditional
+and qualified advice after the eject - once Windows has stopped the unit
+only what to do now is said - but its first case's conditions still
+decide whether the reminder is given before the eject (the third
+bullet):
 
-- **"You can now unplug the device."** only when the walk after the eject
+- **"You can now unplug the device."**, `INST_UNPLUG_NOW` - the
+  unconditional case, the one needing no reminder - when the walk after the eject
   was read whole, no other unit behind that port is still running (the
   ejected one, held by Windows until the unplug, does not count; if it
   has started again, nothing is established), the removed unit was a
