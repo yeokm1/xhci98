@@ -181,19 +181,23 @@ try {
             }
             $lastNew = Get-Date
             $lastShot = Get-Date
-            $tick = Get-Date
+            $pausedSince = $null
             while (-not $proc.HasExited) {
                 # A guest frozen from outside (QMP stop, for a quiet host) does
-                # not run down the stall timer or the leg's deadline.
-                $now = Get-Date
+                # not run down the stall timer or the leg's deadline: the time
+                # from the first sample that saw it paused to the first that
+                # sees it running again is added to both.
                 if ((Get-QmpRunState $ports.Qmp) -eq 'paused') {
-                    $gap = $now - $tick
+                    if (-not $pausedSince) { $pausedSince = Get-Date }
+                    Start-Sleep -Seconds 5; continue
+                }
+                if ($pausedSince) {
+                    $gap = (Get-Date) - $pausedSince
+                    $pausedSince = $null
                     $lastNew = $lastNew + $gap; $legDeadline = $legDeadline + $gap
                     if ($endAt) { $endAt = $endAt + $gap }
                     $rec.pausedSeconds = [math]::Round($rec.pausedSeconds + $gap.TotalSeconds, 1)
-                    $tick = $now; Start-Sleep -Seconds 5; continue
                 }
-                $tick = $now
                 if (Read-LegLines $serial $proc $tag) { $lastNew = Get-Date }                if (((Get-Date) - $lastShot).TotalSeconds -ge 60) { Save-LegShot $ports.Qmp $RunDir "$tag-last"; $lastShot = Get-Date }
                 $waitLimit = $stall
                 if ($mode -eq 'window' -and $boot -eq 1) { $waitLimit = 4 * 3600 }

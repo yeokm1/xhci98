@@ -8134,8 +8134,10 @@ script), the host stops that start's QEMU, by its own QMP or its own
 process id, before the next start or the end of the leg.
 
 A guest frozen from outside with QMP `stop` (a quiet host for a measurement)
-does not run down the stall timer or the leg's deadline; the time it spent
-frozen is recorded as `pausedSeconds`.
+does not run down the stall timer or the leg's deadline while the host waits
+on COM1; the time it spent frozen is recorded as `pausedSeconds`. The
+host's own steps (the 98 SE wizards, a few minutes each) keep their own
+deadlines, so a freeze during one can fail that step and the leg.
 
 `-Cold` runs the same leg from a cold start instead of the saved state.
 That is the measurement of what the starting points save.

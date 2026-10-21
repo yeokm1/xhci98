@@ -166,8 +166,9 @@ function Invoke-LegHostStep {
             if ($quiet -lt 2) { Save-LegShot $QmpPort $Dir "$Tag-hcd-timeout"; return "${Step}: FAILED, the wizard's last page not seen in 300 s (Insert Disk $disk, directory typed $typed)" }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-finish"
             Send-QmpChord -Port $QmpPort -Chord 'ret'
-            # The restart question replaces the wizard: answer it only once
-            # the wizard is gone and the screen is still.
+            # The restart question (System Settings Change) comes over the
+            # wizard's last page, whose title bar goes inactive: answer it
+            # only once it is recognised and the screen is still.
             $gone = $false
             $deadline = (Get-Date).AddSeconds(90)
             while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
