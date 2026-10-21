@@ -6668,10 +6668,11 @@ executables" sentence change with them.
 
 #### 10.13.9 Task NOX.1 (38.12 until 2026-10-13)
 
-**Amended 2026-10-22 (task 43.15).** NOX.1 is done as tasks 43.14 and 43.15
-(10.7.1): the refused PDO's device id moved to the
-`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]` form, and no 38.8 gate,
-nor the tool's selection rule, changed with it, as this section foresaw.
+**Amended 2026-10-22 (task 43.15).** NOX.1's reading and change are tasks
+43.14 and 43.15 (10.7.1), its legs task 43.16: the refused PDO's device id
+moved to the `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]` form, and no
+38.8 gate, nor the tool's selection rule, changed with it, as this section
+foresaw.
 The text below is as written before it.
 
 Task 38.12 - whether a refused storage interface's VID/PID device id binds

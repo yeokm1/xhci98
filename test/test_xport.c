@@ -255,24 +255,34 @@ static void test_uas_only(void)
     choose(uasCfg, sizeof(uasCfg), 0, 0, &x);
     {
         char buf[64];
+        char ref[64];
         ULONG used;
 
+        memset(buf, 'x', sizeof(buf));
+        memset(ref, 'x', sizeof(ref));
         used = 0xDEAD;
         CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI,
                              XHCI_XPORT_ID_DEVICE, buf, sizeof(buf), &used),
                  XHCI_XPORT_NO_IDS, "UAS: no device id from the policy");
-        CHECK_EQ(used, 0, "UAS: device id, nothing written");
+        CHECK_EQ(used, 0, "UAS: device id, *used 0");
+        CHECK_EQ(memcmp(buf, ref, sizeof(buf)), 0,
+                 "UAS: device id, nothing written");
     }
     choose(dualCfg, sizeof(dualCfg), 0, FRC, &x);
     {
         char buf[64];
+        char ref[64];
         ULONG used;
 
+        memset(buf, 'x', sizeof(buf));
+        memset(ref, 'x', sizeof(ref));
         used = 0xDEAD;
         CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI,
                              XHCI_XPORT_ID_DEVICE, buf, sizeof(buf), &used),
                  XHCI_XPORT_NO_IDS, "BOT: no device id from the policy");
-        CHECK_EQ(used, 0, "BOT: device id, nothing written");
+        CHECK_EQ(used, 0, "BOT: device id, *used 0");
+        CHECK_EQ(memcmp(buf, ref, sizeof(buf)), 0,
+                 "BOT: device id, nothing written");
     }
 
     choose(uasCfg, sizeof(uasCfg), 0, SS | FRC, &x);
