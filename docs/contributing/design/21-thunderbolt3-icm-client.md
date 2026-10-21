@@ -3189,6 +3189,92 @@ reading can be; XHCITR's query device on 98 SE and ME reading the result
 from the hardware key while the ask goes to the driver key (two keys, both
 every user's there).
 
+*As built (roadmap-usb4.md task 43.18, 2026-10-22).* Parts 1 and 2 are
+coded on 42-A.12's call workers (`cm_eject.c`, the pure transaction and
+decision, `test_cm_eject`; `cm_ejectos.c`, their driver half;
+`xhciinst\inst_ej9x.c`, the tools' half both tools link, `test_ej9x`;
+`src\cm\cm_ejask.h`, the three values' layout). Where the code had to
+settle what the text above leaves open, or found it unworkable, it does
+this, reviewed and revised:
+
+- **The unit's bus.** A tool on 98 SE and ME reads no bus number: a
+  unit's instance id is the path form (its devfn, then the member's path),
+  never the `BUS_` form a bus-0 function has. So the ask's unit word may
+  carry bus 0, which names the member's secondary bus: the thread reads
+  that bus (one `HalGetBusData` read of the member's bus numbers) before
+  the acceptance checks, and the "not below" check then holds by
+  construction for such an ask, while a unit word with a bus is still
+  checked against it. The tool names the unit the walk found as the
+  member's child, under the epoch and content generation it was chosen
+  under.
+- **The ask found at a start** is not cleared: the driver never writes
+  the tool's value (record 24 section 3.3: "the driver only reads it").
+  The nonce the start's first read finds is taken as seen, which is the
+  same guarantee (never taken), and the result slot is written empty at
+  that read instead.
+- **The blocked mask is in the status record**, bits 11:8 of its flags
+  word (`CM_ST_F_BLOCKED_*`, one a port in the record's port order), not
+  a new field of the query answer's header. The record is framed byte for
+  byte in the answer, so XHCITR reads it there, and a change of the mask
+  changes the content generation as any record byte does; XHCIINST reads
+  the same bits in the registry. No answer version and no header growth
+  were needed. XHCITR shows "Blocked" in the port's details.
+- **One gate.** The member's removal gate and exposure gate are one: an
+  eject transaction not retired, a block, or a statement decision pending
+  raises the member's existing gate (`CmNvlinkHeld`, task 42-A.12), which
+  holds that member's removal and exposure together. The vanished-child
+  removals stay on the domain's CONFIGMG worker (`cm_cfgwk.c`), as 42-A.12
+  left them; the transaction removes its own unit when the unit's
+  function stops answering after the accepted query (the unplug's
+  link-down reset being the isolation, assumption A1), which retires it
+  and lowers the gate, and the held tunnel-down re-enumeration then runs.
+  A vanished child's veto therefore still lets that member's
+  re-enumeration go ahead, as before 43.18, unless an eject is in progress
+  on the member; moving those removals onto the transaction is not done.
+- **The transactions' clock** is the driver's own, from the tick count,
+  shared by every thread that steps a record, so a deadline survives the
+  NHI's stop and a later start's adoption. The records are image-static
+  (eight, for every domain), which makes each one the member blocker of
+  part 0 by construction.
+- **After the stop.** A record whose removal is authorised and owed, with
+  no call out, is handed to its member's worker as a detached operation
+  that retries `Remove_SubTree` every 2 s until 30 s after the first
+  attempt and withdraws the request on success; a call out at the stop
+  ends at the record's late taker, which keeps its result and then does
+  the same. A worker busy with another operation at the stop (a statement
+  decision's reading) takes nothing: the removal is then made by the
+  adopting start. A later start adopts every other record on one of its
+  members before any exposure of it, looks the devnode up again by the
+  kept instance id over the whole tree, and resumes in the phase the
+  record stood in: an answer still awaited is read with its original
+  deadline, so it has usually passed and the failed branch follows; a
+  teardown, statement or re-enumeration in progress at the stop is not
+  carried over (an isolation in progress becomes the block). The query's
+  recorded outcome is never re-issued.
+- **Every call that names the unit's devnode** reads that handle's
+  instance id back first and answers `CR_NO_SUCH_DEVNODE` when it is no
+  longer the unit's (CONFIGMG reuses handles); a removal answered so
+  retires the transaction as a devnode verified gone. The unit's identity
+  at acceptance is read through `HalGetBusData` (the route the rest of the
+  thread reads with), not `PCI.VXD`.
+- **A terminal step is written once.** What follows it - O6's later
+  success, a block lifted by the unplug - is the member's state (the
+  mask), never a second terminal step in the slot.
+- **Priority.** A pending statement decision has its member's worker
+  first: no transaction call is submitted to a member with a decision
+  pending.
+- **The qualification** (V4) is a table in `cm_eject.c`,
+  `CmEjQualified9x`, with neither system admitted; until the driver tells
+  98 SE from ME (the VMM's version, read with the first admission), a 9x
+  statement needs both. Until then every 9x decision ends withheld
+  (`CM_NVLINK_UNQUALIFIED`) after its reading, the failed branch's
+  isolation is never available on 9x (so it blocks under both connection
+  managers), and a clean removal's teardown under the USB4 profile is made
+  without its `DOWN_QUIESCED`.
+- **Not built.** XHCITR's tray does not poll a result after the tool's
+  wait has ended; the port's "Blocked" line is what shows a transaction
+  that outlived it.
+
 ### 7.3 What this driver never claims
 
 It never reports a link down it has not seen the firmware report; an

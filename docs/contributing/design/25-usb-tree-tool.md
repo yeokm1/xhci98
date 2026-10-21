@@ -779,7 +779,10 @@ record.
    record 21 section 7.2, the 9x half; the code is 42-A.13) a unit's
    eject on 98 SE and ME is asked of the connection manager through
    record 24's ask and result values instead, the two calls staying for
-   the plain USB devices of section 6.5. Never forced, never
+   the plain USB devices of section 6.5 (as built in task 43.18 under Q3's
+   epoch and content generation, which Q4 just confirmed; the port's
+   details say "Blocked" while the status record's blocked bit for it is
+   set, record 24 section 3.1). Never forced, never
    `DIF_REMOVE`, one unit at a
    time. Since revision 11 the not-removable fallback is
    `CM_Query_And_Remove_SubTreeW`, decided by `inst_eject_nt_step` as
