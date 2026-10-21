@@ -19242,20 +19242,36 @@ static int stor_tools_remove(void)
 /* ---- the silent install with the storage row (record 26 section 6.5.12,
  * task 43.42 option A) ------------------------------------------------- */
 
-/* 1 when XhciSilentInstall is on after this run: machine-wide, or written
- * 1 by it. */
+/* 1 when XhciSilentInstall reads on after this run's writes, as the
+ * driver reads it: the machine-wide value where there is one, else every
+ * controller's own value. */
 static int silent_gate_on(void)
 {
     int v = inst_value_find("XhciSilentInstall");
     DWORD mwv = 0;
+    INST_VNOW vnow[INST_MAX_NOW];
+    int nNow = 0;
+    int cmNew = 0;
+    int mw;
+    int i;
 
     if (v < 0 || v >= INST_MAX_VALUES) {
         return 0;
     }
-    if (answerSet[v]) {
-        return answerValue[v] == 1;
+    mw = mw_value(v, &mwv);
+    if (mw != 0) {
+        return mw > 0 && mwv == 1;
     }
-    return mw_value(v, &mwv) > 0 && mwv == 1;
+    if (value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew) == 0 ||
+        nNow == 0) {
+        return 0;
+    }
+    for (i = 0; i < nNow; i++) {
+        if (vnow[i].State != 1 || vnow[i].Value != 1) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int silent_taken(const char *name, void *ctx)

@@ -1817,12 +1817,15 @@ the legs' readings), and until 43.6 is done the caution is still printed
 when the user turns the gate on. Task 43.43's case 1 (the row elsewhere)
 adds no entries.
 
-**The legs** (43.5's first leg taken again on this draft's cut): a new
-Bulk-Only stick after the install's restart installs with no wizard, on
-a SuperSpeed and a High Speed port; a second stick; a subclass 02 or 05
-device where one is at hand; the unit's binding and whether it raises a
-wizard; `XhciSilentInstall` 0 chosen on the page leaves the wizard; the
-uninstall leaves `SilentClasses` as it found it.
+**The legs** (43.5's first leg taken again on this draft's cut): with the
+gate left as it is (the default; the window untouched, the console's
+`/yes` and `/defaults`), the entries are added, a new stick still raises
+the wizard and the Finish note says why; with the gate turned on by the
+user (the USB settings page, or `/set XhciSilentInstall=1`) and Windows
+restarted, a new Bulk-Only stick installs with no wizard, on a SuperSpeed
+and a High Speed port, and a second stick too; a subclass 02 or 05 device
+where one is at hand; the unit's binding and whether it raises a wizard;
+the uninstall leaves `SilentClasses` as it found it.
 
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 
