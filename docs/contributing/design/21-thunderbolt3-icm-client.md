@@ -41,9 +41,10 @@ root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
 package keeps `nt\` (section 3.3, the packaging in section 3.3's last
 paragraphs, section 6.2's filter install).
 Section 5.3 revised 2026-10-21 (task 43.44, the owner's choice of that
-day): on the integrated rows and Maple Ridge the client reads each
-announced router's USB4 Version once per occupancy, so the status record
-no longer calls every such router Thunderbolt 3.
+day): the client reads each announced router's USB4 Version once per
+occupancy, so the status record no longer calls every such router
+Thunderbolt 3; first on the integrated rows and Maple Ridge, and from
+2026-10-22 (the owner's answer of that day) on every row.
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -1324,31 +1325,45 @@ the DROM's names and ids, and neither says whether the device router is
 a Thunderbolt 3 router or a USB4 one. Until this revision every entry
 was written "Thunderbolt 3", which the owner's Framework 13 (12th
 generation, Alder Lake, this row's Tiger Lake class) showed wrong for
-the ORICO ASM246x enclosure, a USB4 device router on a USB4 host. On
-the hosts named below the client therefore reads the router itself, as
-Linux's client does for every router the firmware announces
+the ORICO ASM246x enclosure, a USB4 device router on a USB4 host. The
+client therefore reads the router itself, as Linux's client does for
+every router the firmware announces
 (`icm.c` `alloc_switch`, `switch.c` `tb_switch_alloc`: one DW of the
 router space at the route, then ROUTER_CS_0 to 4, five DWs, and
 `tb_switch_get_generation` from ROUTER_CS_4's USB4 Version [linux]).
 
-- **Which hosts.** The ICL row (Ice Lake, and Tiger Lake to Meteor
-  Lake) and Maple Ridge, which runs the TR row's messages but is a USB4
-  host: on both a USB4 device router is possible, so "Thunderbolt 3" is
-  an assumption there. The driver tells the client at bind
-  (`TbtIcmSetReadVersion`, from the hardware row: the ICL message row,
-  or a TR row whose ownership predicate is NVM authentication done).
-  Falcon, Alpine and Titan Ridge keep "Thunderbolt 3" with no read:
-  their links are Thunderbolt 3 links whatever router is at the other
-  end. Maple Ridge is the one host this revision adds beyond the
-  owner's wording of the task, by the same reasoning; the same change
-  stops the record claiming "no USB3 tunnel" there (record 24 section
-  3), which is a Thunderbolt 3 host's property.
+- **Which hosts: every row** (the owner, 2026-10-22). The generation
+  is the device router's, not the link's: the ORICO behind Alpine Ridge
+  reads USB4 Version `20h` [obs] and Linux names it generation 4, while
+  a Thunderbolt 3 dock behind a USB4 host reads major 0. So the driver
+  turns the read on at bind (`TbtIcmSetReadVersion`) on each row:
+  - ICL (Ice Lake, and Tiger Lake to Meteor Lake) and TR (Titan Ridge,
+    and Maple Ridge in ICM mode): the route from the event;
+  - AR: the route from `get route` [obs], the read following it as
+    Linux's did in the capture;
+  - FR: the route from the topology query (section 1.4.4). Linux's
+    `icm_fr_device_connected` reaches `alloc_switch` too [linux], so
+    the read is as safe there as on the other uncaptured rows. What it
+    can say there is narrower: the record has no Thunderbolt 1 or 2
+    value, so a Thunderbolt 1 or 2 router (major 0, as every pre-USB4
+    router [linux] `tb_switch_is_usb4`) shows "Thunderbolt 3" as it did
+    before, and only a USB4 router - behind a Thunderbolt 3 to 2
+    adapter, if one ever works there - is told apart. That is still the
+    router's own word rather than an assumption, at the cost of one
+    read per occupancy, and one rule for every row is simpler to hold
+    than an exception whose reason is a value the record lacks.
+  A host test may leave it off (the default of `TbtIcmInit`). The USB3
+  field is a separate matter and stays the host's: none on Falcon,
+  Alpine and Titan Ridge, whose links carry no USB3 tunnel whatever the
+  router, and not known on the integrated rows and on Maple Ridge, a
+  USB4 host the TR row also serves (told apart by the hardware row's
+  ownership predicate, NVM authentication done; record 24 section 3).
 - **The frame.** One Read Request (PDF 1, Spec 6.4.2.3) on TX ring 0,
   the ring the ICM's own commands use, through `TbtRingCtlRead`, the
   path the host-router poll of section 5.1 step 9 already takes at
   route 0 on every row: router configuration space, DW 0, five DWs
   (ROUTER_CS_0 to 4, the read Linux makes), at the route the entry
-  holds (on these rows the route the event carried, section 1.4.4). It
+  holds (the one its row gives, above). It
   is a read alone: no write of any kind, no router operation, nothing a
   firmware connection manager could take for a competing one. The
   response is a Read Response (PDF 1) matched by route and by the echo
@@ -1363,10 +1378,10 @@ router space at the route, then ROUTER_CS_0 to 4, five DWs, and
   requests in 13 ms for the ORICO, `0x2463174c 0x001101c0 0x00000001
   0x80000000 0x200000fe`, USB4 Version `20h`, and the TS3 Plus's
   `0x020000fe`, USB4 Version `02h`, a Thunderbolt 3 router
-  (`ICM-PROTOCOL` sections 5.3, 5.5, 6.4 and 13.3) [obs]. On this
-  record's rows the same read is [linux] (`icm_tr_device_connected`
-  and `icm_icl_device_connected` both reach `alloc_switch`) and
-  uncaptured. A router not yet approved is read the same way: approval
+  (`ICM-PROTOCOL` sections 5.3, 5.5, 6.4 and 13.3) [obs]. On the
+  other rows the same read is [linux] (`icm_fr_device_connected`,
+  `icm_tr_device_connected` and `icm_icl_device_connected` all reach
+  `alloc_switch`) and uncaptured. A router not yet approved is read the same way: approval
   is the firmware's decision to build the PCIe tunnel, and the router
   answers configuration requests on the control channel before it
   ([obs] section 6.4, the dock enumerated between its announcement with
@@ -1466,18 +1481,19 @@ router space at the route, then ROUTER_CS_0 to 4, five DWs, and
   its entry left, or after the slot was taken by another occupancy, is
   discarded.
 - **What has been verified, and where.** The host vectors (section
-  10.1) exercise the client against the read and the selection of the
-  hosts that make it. No virtual-machine leg exercises it: the
+  10.1) exercise the client against the read on every row. The
   emulator's firmware-connection-manager models are Alpine Ridge and
   Titan Ridge (`usb4-emu` `src/qemu/hw/usb4/usb4-host.c`, its profile
-  selector), it has no Ice Lake class or Maple Ridge model, and a leg
-  on either of the two exercises only that this driver still reads
-  nothing there. An emulator model of an integrated or Maple Ridge
-  ICM is the prerequisite of such a leg, asked of its maintainer
-  through the owner; until then the evidence is the owner's Framework
-  13 with the ORICO enclosure, which must read USB4 Version major 1.
-- **The USB3 tunnel stays "not known".** The record's USB3 field on
-  these hosts is not filled from this read. ROUTER_CS_5's USB3
+  selector), each able to carry a USB4 device router (its port's
+  `usb4` flag, `usb4-icm.c`) or a Thunderbolt 3 one: the legs read the
+  generation there, a USB4 router and a Thunderbolt 3 router on each.
+  It has no Ice Lake class or Maple Ridge model yet (one is being
+  added at the owner's request); until a leg on it, the integrated
+  rows' evidence is the owner's Framework 13 with the ORICO enclosure,
+  which must read USB4 Version major 1.
+- **The USB3 tunnel stays "not known"** on the integrated rows and
+  Maple Ridge. The record's USB3 field there is not filled from this
+  read. ROUTER_CS_5's USB3
   Tunneling On is a bit the connection manager sets to let the router's
   USB3 function work tunnelled, not evidence that a path exists, and
   what the firmware sets there is uncaptured; the paths themselves are
@@ -4587,8 +4603,8 @@ vectors):
   identical announcement (the route retried, then the approve sent), a
   short frame, an all-zero UUID, a name block overrunning its frame, and a
   disconnect matching no entry; and section 5.3's generation read - none
-  on the Thunderbolt 3 rows, one per occupancy on the others at the next
-  idle poll and none on a refresh, a USB4 major 1 and 2, a major 0, a
+  where it is left off, one per occupancy on every row at the next
+  idle poll (FR at the topology query's route, AR after get route) and none on a refresh, a USB4 major 1 and 2, a major 0, a
   reserved major, a header that is not the route's, no answer, a
   request-error notification, a disconnect during the read, an
   announcement arriving during an unanswered read, and the reads stopped
