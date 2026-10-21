@@ -424,7 +424,10 @@ static unsigned __stdcall job_main(void *arg)
             /* Ticked with the Thunderbolt box (owner, 2026-10-19,
              * replacing "never unasked"); /nostor98 unticks it. */
             inst_eng_s98_state(&s98Have, s98Ver, sizeof(s98Ver));
-            s98Choice = s98Have && tbChoice && !opts->NoStor98;
+            /* On 8 and 8.1 never ticked unasked (record 26 section 5.3.1
+             * case 3b). */
+            s98Choice = s98Have && tbChoice && !opts->NoStor98 &&
+                        (!usbNotHere || opts->Stor98);
             inst_eng_s98_choose(s98Choice);
             storShown = inst_eng_stor_state(&storOffered, &storChoice,
                                             storNote, sizeof(storNote));
@@ -799,7 +802,8 @@ static void comp_usb_state(HWND dlg)
     if (!usb && tbHave) {
         /* Locked on: Stor98 follows its parent here too (owner,
          * 2026-10-19), as on a click of the Thunderbolt box. */
-        if (IsDlgButtonChecked(dlg, IDC_C_TB) != BST_CHECKED) {
+        if (IsDlgButtonChecked(dlg, IDC_C_TB) != BST_CHECKED &&
+            !usbNotHere) {
             CheckDlgButton(dlg, IDC_C_S98, BST_CHECKED);
         }
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
@@ -1017,6 +1021,22 @@ static int comp_leave(HWND dlg)
     }
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
+    /* Record 26 section 5.3.1 (task 43.43): a box that does not apply here
+     * is warned of once, on this Next; Cancel stays on the page. */
+    {
+        char warn[2048];
+        char box[2200];
+        if (inst_eng_comp_warn(usb, stor, s98, checked, warn,
+                               sizeof(warn)) != 0) {
+            _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays "
+                      "on this page to change the choice.", warn);
+            box[sizeof(box) - 1] = '\0';
+            if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
+                            MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+                return 0;
+            }
+        }
+    }
     if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
         uas != uasChoice || stor != storChoice) {
         usbChoice = usb;
@@ -2526,9 +2546,12 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             if (HIWORD(wp) == BN_CLICKED) {
                 /* Stor98 follows its parent (owner, 2026-10-19): ticked
                  * with it, and can be unticked under it. */
+                /* On 8 and 8.1 never ticked unasked (record 26 section
+                 * 5.3.1 case 3b). */
                 CheckDlgButton(dlg, IDC_C_S98,
                                IsDlgButtonChecked(dlg, IDC_C_TB) ==
-                               BST_CHECKED ? BST_CHECKED : BST_UNCHECKED);
+                               BST_CHECKED && !usbNotHere ?
+                               BST_CHECKED : BST_UNCHECKED);
                 comp_s98_sync(dlg);
             }
             return TRUE;

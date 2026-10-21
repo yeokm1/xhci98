@@ -261,6 +261,10 @@ int inst_eng_s98_state(int *have, char *version, size_t cap);
  * detection's line or why it is greyed. */
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap);
 void inst_eng_stor_choose(int include);
+/* Record 26 section 5.3.1 (task 43.43): the Components page's warnings for
+ * the boxes as ticked (stor: the storage row), their text for dir; 0 none. */
+INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, const char *dir,
+                            char *text, size_t cap);
 /* The Summary's line for it, "" when it is not shown. */
 void inst_eng_stor_summary(char *out, size_t cap);
 void inst_eng_s98_choose(int include);
