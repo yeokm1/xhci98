@@ -2596,6 +2596,11 @@ int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value)
     return !(trayMode && haveValue && value == 0);
 }
 
+int tr_warn_removed(int haveValue, TR_U32 value)
+{
+    return !(haveValue && value == 0);
+}
+
 /* ---- the drivers' logging levels (section 7.5) ---------------------------- */
 
 const char *tr_level_driver(int driver)

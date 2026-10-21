@@ -646,6 +646,13 @@ void tr_wrap(const char *in, char *out, size_t cap, int width);
  * read as a DWORD. */
 int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value);
 
+/* The unexpected-removal warning's option (record 25 section 7.6 item 8):
+ * the DWORD under the same settings key, read as TR_LOGIN_VALUE is - only
+ * a DWORD 0 turns the warning off; absent, another type or any other
+ * number leaves it on. haveValue: the value was read as a DWORD. */
+#define TR_WARN_VALUE           "WarnRemoved"
+int tr_warn_removed(int haveValue, TR_U32 value);
+
 /* ---- the tree's labels (record 25 revision 10 addendum) ------------------ */
 
 /* VEN_ and DEV_ of a PCI id or instance id ("PCI\VEN_8086&DEV_02ED&..."),

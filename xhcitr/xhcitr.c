@@ -6023,6 +6023,59 @@ static void login_item(HMENU m, int append)
     }
 }
 
+/* The unexpected-removal warning, per user (record 25 section 7.6 item 8):
+ * a DWORD beside TrayAtLogin, read at each use, so a change reaches every
+ * running copy of the user's tray at its next poll. */
+static int warn_on(void)
+{
+    HKEY k;
+    DWORD t;
+    DWORD v = 1;
+    DWORD n = sizeof(v);
+    int have = 0;
+
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        have = RegQueryValueExA(k, TR_WARN_VALUE, NULL, &t, (LPBYTE)&v, &n) ==
+                   ERROR_SUCCESS && t == REG_DWORD && n == sizeof(v);
+        RegCloseKey(k);
+    }
+    return tr_warn_removed(have, (TR_U32)v);
+}
+
+static void warn_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_WARN_VALUE, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
+/* The item in a menu: NT only (98 SE and ME never warn). */
+static void warn_item(HMENU m, int append)
+{
+    UINT flags = MF_STRING | (warn_on() ? MF_CHECKED : MF_UNCHECKED);
+    const char *text = "&Warn when a device is removed unexpectedly";
+
+    if (!envNt) {
+        if (!append) {
+            DeleteMenu(m, IDM_RMWARN, MF_BYCOMMAND);
+        }
+        return;
+    }
+    if (append) {
+        AppendMenuA(m, flags, IDM_RMWARN, text);
+    } else {
+        ModifyMenuA(m, IDM_RMWARN, MF_BYCOMMAND | flags, IDM_RMWARN, text);
+    }
+}
+
 static void settings_save(void)
 {
     HKEY k;
@@ -6431,6 +6484,9 @@ static void init_menu(HMENU m)
     if (GetMenuState(m, IDM_LOGIN, MF_BYCOMMAND) != (UINT)-1) {
         login_item(m, 0);
     }
+    if (GetMenuState(m, IDM_RMWARN, MF_BYCOMMAND) != (UINT)-1) {
+        warn_item(m, 0);
+    }
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
                                           ? MF_ENABLED : MF_GRAYED));
@@ -6461,6 +6517,9 @@ static int command(HWND w, UINT id)
         return 1;
     case IDM_LOGIN:
         login_set(!login_on());
+        return 1;
+    case IDM_RMWARN:
+        warn_set(!warn_on());
         return 1;
     case IDM_LEVEL:
         level_dialog(w, lv_driver_of_node(tree_selected()));
@@ -6829,6 +6888,11 @@ static void poll(void)
     count = tr_diff(&snapOld, now, ev, 8);
     for (i = 0; i < count; i++) {
         char text[256];
+        /* The user's option skips the warning's balloon alone (record 25
+         * section 7.6 item 8); the count still shows in the details. */
+        if (ev[i].Kind == TR_EV_REMOVED && !warn_on()) {
+            continue;
+        }
         tr_event_text(&ev[i], text, sizeof(text));
         tray_balloon(tr_event_title(ev[i].Kind), text,
                      ev[i].Kind == TR_EV_STOPPED || ev[i].Kind == TR_EV_FAILED ||
@@ -6947,6 +7011,7 @@ static void tray_context_menu(void)
     AppendMenuA(m, MF_STRING, IDM_REFRESH, "&Refresh");
     AppendMenuA(m, MF_STRING, IDM_ABOUT, "&About");
     login_item(m, 1);
+    warn_item(m, 1);
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_EXIT, "E&xit");
     SetMenuDefaultItem(m, IDM_OPEN, FALSE);
@@ -6969,6 +7034,9 @@ static void tray_context_menu(void)
         break;
     case IDM_LOGIN:
         login_set(!login_on());
+        break;
+    case IDM_RMWARN:
+        warn_set(!warn_on());
         break;
     case IDM_EXIT:
         quit_all();

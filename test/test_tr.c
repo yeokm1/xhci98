@@ -1232,6 +1232,13 @@ static void test_removals(void)
     CHECK(ev[1].Kind == TR_EV_LEFT && strcmp(ev[1].Name, "Acme Dock") == 0,
           "the unit's disconnected, named");
 
+    /* The option: only a DWORD 0 turns the warning off. */
+    CHECK(tr_warn_removed(0, 0UL), "option: no value - on");
+    CHECK(tr_warn_removed(1, 1UL), "option: 1 - on");
+    CHECK(tr_warn_removed(1, 7UL), "option: another number - on");
+    CHECK(!tr_warn_removed(1, 0UL), "option: a DWORD 0 - off");
+    CHECK(strcmp(TR_WARN_VALUE, "WarnRemoved") == 0, "option: its name");
+
     qbRmFlags = 0UL;
     qbRmCount = 0UL;
     qbRmMember = CM_Q_UNKNOWN;

@@ -509,8 +509,10 @@ the logged-on user, with no administrator rights.
   that had not been stopped first: unplugged without Safely Remove, its
   link lost, or its own driver failed. It does not say whether any data
   was lost. The controller's details count these since it started, with
-  the tunnel port of the last. On Windows 98 SE and ME such a device is
-  shown as disconnected, as before.
+  the tunnel port of the last. Each user can turn the balloon off with
+  "Warn when a device is removed unexpectedly" in the icon's right-click
+  menu or the View menu; the count is kept either way. On Windows 98 SE
+  and ME such a device is shown as disconnected, as before.
 - The link rate and width of a USB4 device are read from its lane
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
