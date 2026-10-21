@@ -216,8 +216,12 @@ static void test_uas_only(void)
     CHECK_EQ(x.Why, XHCI_XPORT_WHY_NO_STREAMS, "UAS-only SS no streams: why");
     CHECK_EQ(x.ShortHardwareId, 0, "refused: no VID/PID-only id");
     CHECK_ID(dualDev, &x, XHCI_XPORT_NO_MI, XHCI_XPORT_ID_HARDWARE,
-             "USB\\XHCI98_NOXPORT&VID_174C&PID_5106&REV_0210\0\0",
-             "refused: the project-owned id alone, no USB\\VID_ form");
+             "USB\\XHCI98_NOXPORT&VID_174C&PID_5106&REV_0210\0"
+             "USB\\XHCI98_NOXPORT&VID_174C&PID_5106\0\0",
+             "refused: the project-owned ids alone, no USB\\VID_ form");
+    CHECK_ID(dualDev, &x, XHCI_XPORT_NO_MI, XHCI_XPORT_ID_DEVICE,
+             "USB\\XHCI98_NOXPORT&VID_174C&PID_5106\0",
+             "refused: the device id is the second hardware id, one string");
     {
         char buf[16];
         ULONG used;
@@ -228,6 +232,47 @@ static void test_uas_only(void)
                              &used),
                  XHCI_XPORT_NO_IDS, "refused: no compatible ids at all");
         CHECK_EQ(used, 0, "refused: nothing written");
+
+        memset(buf, 'x', sizeof(buf));
+        used = 0xDEAD;
+        CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI,
+                             XHCI_XPORT_ID_DEVICE, buf, sizeof(buf), &used),
+                 XHCI_XPORT_TOO_SMALL, "refused device id: too small");
+        CHECK_EQ(used, sizeof("USB\\XHCI98_NOXPORT&VID_174C&PID_5106"),
+                 "refused device id: the size it needs");
+        CHECK_EQ(memcmp(buf, "USB\\XHCI98_NOXPORT", 16), 0,
+                 "refused device id: what fits is written");
+
+        used = 0xDEAD;
+        CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI,
+                             XHCI_XPORT_ID_DEVICE, NULL, 0, &used),
+                 XHCI_XPORT_TOO_SMALL, "refused device id: sized with no buffer");
+        CHECK_EQ(used, sizeof("USB\\XHCI98_NOXPORT&VID_174C&PID_5106"),
+                 "refused device id: sized");
+    }
+
+    /* Any other transport keeps the PDO's ordinary device id. */
+    choose(uasCfg, sizeof(uasCfg), 0, 0, &x);
+    {
+        char buf[64];
+        ULONG used;
+
+        used = 0xDEAD;
+        CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI,
+                             XHCI_XPORT_ID_DEVICE, buf, sizeof(buf), &used),
+                 XHCI_XPORT_NO_IDS, "UAS: no device id from the policy");
+        CHECK_EQ(used, 0, "UAS: device id, nothing written");
+    }
+    choose(dualCfg, sizeof(dualCfg), 0, FRC, &x);
+    {
+        char buf[64];
+        ULONG used;
+
+        used = 0xDEAD;
+        CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI,
+                             XHCI_XPORT_ID_DEVICE, buf, sizeof(buf), &used),
+                 XHCI_XPORT_NO_IDS, "BOT: no device id from the policy");
+        CHECK_EQ(used, 0, "BOT: device id, nothing written");
     }
 
     choose(uasCfg, sizeof(uasCfg), 0, SS | FRC, &x);
@@ -322,17 +367,25 @@ static void test_function(void)
              "storage function forced: Prot_50");
 
     /* A refused function (the decision is test_uas_only's; only the ids
-     * are new here): the project-owned id with its &MI_, nothing else. */
+     * are new here): the project-owned ids with their &MI_, nothing else. */
     memset(&x, 0, sizeof(x));
     x.Transport = XHCI_XPORT_REFUSED;
     x.Why = XHCI_XPORT_WHY_NO_STREAMS;
     CHECK_ID(compDev, &x, 1, XHCI_XPORT_ID_HARDWARE,
-             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&REV_0001&MI_01\0\0",
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&REV_0001&MI_01\0"
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&MI_01\0\0",
              "refused function: no USB\\VID_ form, &MI_ kept");
+    CHECK_ID(compDev, &x, 1, XHCI_XPORT_ID_DEVICE,
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&MI_01\0",
+             "refused function: device id with its &MI_");
     x.ShortHardwareId = 1;
     CHECK_ID(compDev, &x, 1, XHCI_XPORT_ID_HARDWARE,
-             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&REV_0001&MI_01\0\0",
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&REV_0001&MI_01\0"
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&MI_01\0\0",
              "refused function: ShortHardwareId cannot bring one back");
+    CHECK_ID(compDev, &x, 0xFF, XHCI_XPORT_ID_DEVICE,
+             "USB\\XHCI98_NOXPORT&VID_1234&PID_5678&MI_FF\0",
+             "refused function: the widest &MI_");
 }
 
 static void test_single(void)
@@ -394,7 +447,10 @@ static void test_malformed(void)
              XHCI_XPORT_BAD_PARAM, "an MI past two hex digits");
     CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI, 0, buf, sizeof(buf),
                          &used),
-             XHCI_XPORT_BAD_PARAM, "the device id is not this module's");
+             XHCI_XPORT_BAD_PARAM, "an id type the module does not know");
+    CHECK_EQ(XhciXportId(dualDev, &x, XHCI_XPORT_NO_MI, 4, buf, sizeof(buf),
+                         &used),
+             XHCI_XPORT_BAD_PARAM, "past the device id");
     CHECK_EQ(XhciXportId(dualCfg, &x, XHCI_XPORT_NO_MI,
                          XHCI_XPORT_ID_HARDWARE, buf, sizeof(buf), &used),
              XHCI_XPORT_MALFORMED, "not a device descriptor");

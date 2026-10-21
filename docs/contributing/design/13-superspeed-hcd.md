@@ -4778,24 +4778,17 @@ one transport, and both tables above change for it. The compatible ids are
 the chosen setting's triple - `USB\Class_08&SubClass_06&Prot_62` and its two
 shorter forms under UAS, alternate 0's `Prot_50` triple under Bulk-Only -
 and none at all for an interface with no transport it can run. That
-refused interface shows no VID/PID-derived hardware id either: its one
-hardware id is the project-owned
-`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp&REV_rrrr` (`&MI_nn` on a function),
-which no INF names. Its device id, though, keeps the VID/PID form
-(`USB\VID_vvvv&PID_pppp[&MI_nn]`; `hcdDeviceQueryId` routes only the
-hardware and compatible ids through the transport), and so does its
-instance path. So "no INF line can bind it" holds for the hardware ids
-only. Read on Windows 98 SE under NUSB 3.3 (runtime, 2026-10-13, task 38.2,
-a `usb-uas` refused in place): the refused devnode's `HardwareID` value
-carries the device id as a second entry,
-`USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\VID_46F4&PID_0003`,
-and the wizard found no driver for it. Not read: whether an INF whose only
-line is the VID/PID form binds a refused device on 98 SE or ME; whether a
-device with a serial number, once its working form (High Speed, or a
-controller that streams) is installed, brings that devnode's driver back
-to its refused form, since both answer the same device and instance id;
-and how either goes on NT. Roadmap task NOX.1, deferred, reads them
-(10.7.1).
+refused interface shows no VID/PID-derived id at all: its hardware ids are
+the project-owned `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp&REV_rrrr` and
+`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp` (`&MI_nn` on a function), which no
+INF names, and its device id is the second of them (`hcdDeviceQueryId`
+routes a refused PDO's `BusQueryDeviceID` through the transport too). Until
+task 43.15 the device id kept the VID/PID form
+(`USB\VID_vvvv&PID_pppp[&MI_nn]`), and so did the instance path. Windows
+98 SE and ME add the device id to the devnode's `HardwareID` value and
+match INF lines against it, so an INF whose only line was that VID/PID form
+bound a refused device, on 98 SE with and without NUSB 3.3 and on ME
+(runtime, 2026-10-22, task 43.14; 10.7.1). NT's matching was not read.
 Where it sits decides the rest (`XhciXportRefusedAt`): on a
 companion-paired root port the bus asks 29-A.5's hold to send it back to
 USB 2.0 (`HcdHoldRequestUsb2`, Phase 29's executor: an accepted request is
@@ -4917,12 +4910,18 @@ under `USB\XHCI98_HUB` or `USB\XHCI98_HUB30` from `2.4.0.0`; still never a
 `USB\CLASS_09*`, `USB\ROOT_HUB*` or `USB\COMPOSITE` id. `USB\MS_COMP_*` is
 out of scope for 2.0.0.0.
 
-#### 10.7.1 A refused interface's device id (task NOX.1, deferred)
+#### 10.7.1 A refused interface's device id (tasks 43.14 and 43.15, was NOX.1)
 
-**Deferred.** The owner deferred roadmap task NOX.1 on 2026-10-13 until
-after `2.4.0.0`. This section is the plan for that task. It has not been
-reviewed, and nothing in it is implemented. The answers the owner gave the
-same day are recorded below as decisions taken.
+**Status.** Read and changed in `3.2.0.0`: task 43.14 read route 1 on 98
+SE (stock and under NUSB 3.3) and ME, and an INF line matched against the
+device id bound a refused device on all three (runtime, 2026-10-22; "The
+reading", below, and `runs/run-43.md`, "43.14"). By decision 1 the device
+id moved, on every target (task 43.15, "The change", below). The owner
+deferred the task (then NOX.1) on 2026-10-13 until after `2.4.0.0` and
+moved it into Phase 43 on 2026-10-20 as 43.14 to 43.16. The plan of
+2026-10-13 follows as it was written, with the owner's answers of that day
+as decisions taken; what the reading did differently from it is said under
+"The reading".
 
 **What was read.** Task 38.2's legs (runtime, 2026-10-13; `runs/run-38.md`,
 "38.2"; `out\p38-2\legs\notes.txt`, `w98\R2ENUM.txt`) used Windows 98 SE
@@ -5034,6 +5033,67 @@ these ids. It runs on a published `release-x86`.
    `USB\XHCI98_NOXPORT`.
 6. No `usbstor.sys` probe is run. Whether a line binds is what decides the
    change.
+
+**The reading (task 43.14, runtime, 2026-10-22).** `runs/run-43.md`,
+"43.14", has the detail. QEMU 11.1.0 under TCG, 1 vCPU and 256 MB, the
+published `3.1.0.0` x86 package (its refused-interface ids are those of
+every release since `2.0.0.0`), `qemu-xhci,p2=1,p3=4,streams=off`, a
+`usb-uas` hot-plugged on port 3 with a serial never seen before. Three
+guests, which differ from the plan's: a 98 SE installed fresh from its CD
+with no NUSB, the same with NUSB 3.3 installed over it (its agreement
+accepted in the guest, owner, 2026-10-20 and 2026-10-21), and stock ME
+from `vm\t37me\winme-stock-base.qcow2`; `3.1.0.0` installed on each from
+its INF. A 98 SE without NUSB is read after all, since a fresh base now
+exists. The plan's 2000 leg and route 2 were not taken: route 1 bound on
+the 9x guests, which decides the change on every target by decision 1.
+
+- **Route 1, the INF offered.** On all three the wizard came for "USB
+  Attached SCSI HBA". Offered probe V's folder, it named "NOX probe V
+  device id" and `PROBEV.INF` and installed it. The devnode read
+  `HardwareID` `USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\VID_46F4&PID_0003`,
+  `DeviceDesc` "NOX probe V device id", `Mfg` "NOX probe", `Class` `USB`
+  and a `Driver` key whose `MatchingDeviceId` is `USB\VID_46F4&PID_0003`:
+  the line matched the device id. Device Manager listed it under Universal
+  Serial Bus controllers by the probe's name.
+- **Route 1, the INF already installed.** The wizard had copied the probe
+  into `INF\OTHER`. With `DRVIDX.BIN` and `DRVDATA.BIN` deleted, a second
+  `usb-uas` with a new serial was bound to probe V with no wizard and no
+  prompt: a refused device takes such an INF silently once it is on the
+  machine.
+- **The control.** Probe C, whose one line is the hardware id, was not
+  offered: V binding answers the question C was there to qualify.
+- **Not read.** NT's matching (2000 SP4), and route 2 (a serial-number
+  device's working devnode reloaded in its refused form). After 43.15
+  neither can bind a refused device: its device id is project-owned, and
+  differs from the working form's, so the two forms no longer share a
+  devnode.
+
+**The change (task 43.15).** The first outcome above, as planned:
+
+- `XhciXportId` (`xhci_xport.c`) answers `XHCI_XPORT_ID_DEVICE`, for a
+  refused interface alone, with
+  `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]`, and `XHCI_XPORT_NO_IDS`
+  for any other transport, whose device id stays the PDO's ordinary one. A
+  refused interface's hardware ids gain that form as their second entry,
+  as on every other PDO.
+- `hcdDeviceQueryId` (`hcd_pdo.c`) sends a refused PDO's
+  `BusQueryDeviceID` to `hcdXportQueryId`, before its `pdo->Function`
+  fallthrough. `pdo->Xport` is set once at the PDO's creation, compared by
+  `hcdDormantSame` and copied by `HcdDevicePdoRepresentFunctions`, so a
+  PDO keeps one device id for its life.
+- Host vectors in `test_xport`: the device and function forms, the widest
+  `&MI_`, the size of a short buffer and of none, and the policy's silence
+  for UAS and Bulk-Only.
+- On every target the refused device's instance path moves from
+  `Enum\USB\VID_vvvv&PID_pppp\...` to
+  `Enum\USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp\...`. Its first plug after
+  the update brings the wizard once more, which finds no driver; a VID/PID
+  INF a user had bound to the old devnode no longer binds. The old devnode
+  is left alone (decision 4), and `XHCICLN` already leaves any
+  `USB\XHCI98_NOXPORT` id (10.13.9).
+- 38.8's gates are untouched: `HCD-USBRES` and `OEM-USBID` already refuse
+  any `USB\XHCI98_NOXPORT` line, and the installer's `inst_bus_id` and
+  `inst_remove_rank` already treat that form as not the bus's and leave it.
 
 ### 10.8 When and how the bus splits a device
 
@@ -6607,6 +6667,12 @@ link it); `legal-provenance.md` section 2a and `AGENTS.md`'s "the two tool
 executables" sentence change with them.
 
 #### 10.13.9 Task NOX.1 (38.12 until 2026-10-13)
+
+**Amended 2026-10-22 (task 43.15).** NOX.1 is done as tasks 43.14 and 43.15
+(10.7.1): the refused PDO's device id moved to the
+`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]` form, and no 38.8 gate,
+nor the tool's selection rule, changed with it, as this section foresaw.
+The text below is as written before it.
 
 Task 38.12 - whether a refused storage interface's VID/PID device id binds
 a VID/PID-only INF, and if so moving that PDO's device id to the
