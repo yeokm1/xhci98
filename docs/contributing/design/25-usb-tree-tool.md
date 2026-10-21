@@ -1354,8 +1354,13 @@ shown as disconnected, as before.
      member's bit leaves `RecBarred` only once `CmReenumRetired` has seen
      its old devices' removal finish - so a lost device's surprise
      removal, which comes before that removal finishes, finds its member
-     barred even after ACTIVE. A loss the liveness has not yet noticed
-     when the removal comes is not told apart.
+     barred even after ACTIVE. The commit moves the debt into the barrier
+     (`RecBarred |= RecDebtMask`, then `RecDebtMask = 0`) under the
+     registration list's lock, which the event holds while it reads both,
+     so a member moving from one to the other is never seen in neither;
+     every other write to either is a single aligned word. A loss the
+     liveness has not yet noticed when the removal comes is not told
+     apart.
 
    Never counted: a removal after a query-remove (an eject from any tool,
    a disable, a driver update, an uninstall: Windows does not
@@ -1368,62 +1373,35 @@ shown as disconnected, as before.
    reports itself failed (`PNP_DEVICE_FAILED`), a function its tunnel lost
    to a link fault, a unit gone across a sleep. That is why the notice
    says "removed unexpectedly", never "unplugged", and nothing about data.
-2. **Which unit.** The child filter knows the PDO's entry and member, not
-   a router, so the connection-manager thread binds each current entry to
-   the router it runs behind. After each pass it reads the record it
-   built: for each member, of the router entries whose bridge word
-   (`CM_ST_E_BRIDGE`) is the member's bus, device and function, those at
-   the smallest depth (an ICM entry's place bits 15:8; a router on a host
-   USB4 port is depth 1; a deeper USB4 router has no bridge word). Where
-   there is exactly one:
-   - a current entry of that member holding no router takes a copy of it
-     (the whole 128-byte record entry) with the member's connection
-     generation (`CM_REENUM` port `ConnGen`, the USB4 profile's) - but
-     only where that generation is still the entry's own, the one the
-     member had when the bridge's answer first listed the device
-     (`cmMarksSyncAll` gives it to a new entry), so a router of a later
-     connection never names a device of an earlier one; and under the
-     ICM, which has no generation, only in the first pass that sees the
-     entry (a later candidate could be a replacement);
-   - an entry holding a router refreshes its copy when it is the same
-     router (the same kind, place, route, ids and UUID suffix) and the
-     member's connection generation is still the one it took;
-   - a different router at the same generation clears the entry's
-     router for good: continuity is lost, and the entry names none.
-
-   Anything else - no candidate, several at the smallest depth, a newer
-   generation - leaves every entry as it is. A tombstone is never
-   updated, so the name is the router the device ran behind, whatever
-   the thread has seen on the port since: a replacement on the same port
-   is a new connection (a new generation under USB4; under the ICM a
-   different router, or the same model with the same place and ids, which
-   only its UUID suffix tells apart) and a new device with a new entry.
-   No clock decides it. At the count, the domain's last removal takes the
-   entry's member and, when it has one, its router. The count, the lost
-   count and the last removal live beside the marks table, under the
-   registration list's lock, and are emptied with it at the domain's
-   start and stop, so they are per start, as the epoch is.
-   Where this names no unit: a device whose member had no single router
-   when it could be bound (under the ICM the bridge word is given
-   only while the domain has one active member, `cm_status.c`; a USB4
-   bind in conflict gives none); a device surprise-removed before any
-   pass bound it. A chain's first device is named when it is unplugged
-   (its followers leave with it); a deeper device's unplug removes no
-   member's direct child and gives no notice.
+2. **Which unit.** The child filter knows the device's entry and its
+   member - the tunnel port, by bus, device and function - and nothing
+   of a router: which router a device ran behind cannot be proved from
+   the driver's side without a continuity token neither connection
+   manager gives at the moment a bridge's answer lists the device (under
+   the ICM a replacement can be announced and approved before the bus
+   answer that drops the old device; under the USB4 profile the member's
+   connection generation is refreshed only when the re-enumeration is
+   serviced, after the answer it caused may already have come). So the
+   driver publishes the member as the last removal's key, and the tray
+   names the unit from what it saw leave (item 4): a router that leaves
+   is the one evidence that it was the one unplugged, and a replacement
+   has not left. The count, the lost count and the last member live
+   beside the marks table, under the registration list's lock, and are
+   emptied with it at the domain's start and stop, so they are per
+   start, as the epoch is.
 3. **The answer, version 2.** `CM_Q_VERSION` is 2. The 64-byte header is
    version 1's. At offset 64 follows the removal block, `CM_Q_RM_BYTES`
-   = 160:
+   = 32:
 
    | Offset | Field |
    |---|---|
-   | +0 | `CM_Q_RM_FLAGS`: `CM_Q_RF_WATCHED` (this domain's removals are watched: an NT target whose domain is listed on the filter route), `CM_Q_RF_ENTRY` (the entry below names the last removal's unit) |
+   | +0 | `CM_Q_RM_FLAGS`: `CM_Q_RF_WATCHED` (this domain's removals are watched: an NT target whose domain is listed on the filter route) |
    | +4 | `CM_Q_RM_COUNT`: unexpected removals counted since this start; it wraps |
-   | +8 | `CM_Q_RM_MEMBER`: the last removal's member, bus 15:8, device 7:3, function 2:0; `CM_Q_UNKNOWN` before the first |
+   | +8 | `CM_Q_RM_MEMBER`: the last one's member, bus 15:8, device 7:3, function 2:0; `CM_Q_UNKNOWN` before the first |
    | +12 | `CM_Q_RM_LOST`: surprise removals in a loss of the host interface (item 1), counted apart; it wraps |
    | +16 | reserved, 0, to +31 |
-   | +32 | `CM_Q_RM_ENTRY`: the router entry (record 24 section 3.1's layout, `CM_ST_ENTRY_BYTES`) the last removal's device was bound to (item 2), as last copied; zeros without `CM_Q_RF_ENTRY` |
 
-   The record follows at 224 (`CM_Q_O_REC_OFFSET` says so), then the
+   The record follows at 96 (`CM_Q_O_REC_OFFSET` says so), then the
    extensions and the instance ID, each at its offset as before;
    `CM_Q_BUILD_MAX` grows by the block. The answer the device holds
    before the thread's first pass carries the block as the table stands
@@ -1437,35 +1415,44 @@ shown as disconnected, as before.
    refuses version 2, as the header's rule says; the package replaces
    its drivers and tools together (section 8).
 4. **The tray.** The snapshot keeps each NHI's block (flags, count,
-   entry). Between two snapshots, for an NHI both hold at the same epoch,
-   each with `CM_Q_RF_WATCHED` and the liveness ACTIVE, a count that
-   differs gives one event, however much it moved (one unplug can remove
-   several devices, and they are counted in one burst): "<name> was
-   removed unexpectedly.", titled as a warning, named from the entry
-   (`tr_router_name`) with `CM_Q_RF_ENTRY`, else "A Thunderbolt/USB4
-   device was removed unexpectedly." A domain whose liveness has left
-   ACTIVE already says it stopped answering: no notice. Where a burst
-   straddles two polls a second notice can follow; that is accepted.
+   member). Between two snapshots, for an NHI both hold at the same
+   epoch, each with `CM_Q_RF_WATCHED` and the liveness ACTIVE, a count
+   that differs is one removal, however much it moved (one unplug can
+   remove several devices, counted in one burst; where a burst straddles
+   two polls a second notice can follow, which is accepted). A domain
+   whose liveness has left ACTIVE already says it stopped answering: no
+   notice.
 
-   The router's departure from the record and the count's rise are not
-   ordered, and nothing bounds how far apart they come; they usually
-   fall in one poll or the next. The tray suppresses the duplicate on a
-   best-effort, bounded basis: on a watched NHI, a router's
-   "disconnected" is held one poll and shown at the next unless a
-   removal names it (`tr_same_router`, the entry read with the NHI's key
-   and epoch) by then; and a router a removal named is remembered for
-   three polls, in which its "disconnected" is not shown - until a
-   router of the same key connects again (a replacement at the same
-   route is a new connection, whose own departure is shown). Further
-   apart than that, both balloons come. The snapshot carries both lists
-   from one poll to the next. A held
-   event whose NHI is gone or at another epoch is dropped, as any event
-   of an old epoch is. On an NHI that is not watched the event is shown
-   at once, as before. Balloons are 2000 and later anyway, and 98 SE and
-   ME never set `CM_Q_RF_WATCHED`.
+   The removal is named by a departure: a router of that NHI and epoch
+   that left the record whose bridge word, as the tray last saw it while
+   the router was listed, is the block's member. The router's departure
+   and the count's rise are not ordered and nothing bounds how far apart
+   they come; they usually fall in one poll or the next. So, on a
+   watched NHI:
+   - a router's departure is held, its "disconnected" not shown, for up
+     to two polls;
+   - a removal waits for up to two polls for a departure on its member;
+   - a removal and the held departures on its member: exactly one names
+     the event, "<name> was removed unexpectedly.", and that departure's
+     "disconnected" is never shown; more than one, or none by the end of
+     its wait, gives "A Thunderbolt/USB4 device was removed
+     unexpectedly." (still in the details with its tunnel port), and the
+     departures are shown as they come due;
+   - a held departure no removal took by the end of its hold is shown,
+     "<name> was disconnected.", late by its hold.
+
+   Further apart than that both balloons come; it is a bounded best
+   effort, and T.11 reads it within a poll. The snapshot carries the
+   held departures and the waiting removal from one poll to the next; a
+   held one whose NHI is gone or at another epoch is dropped, as any
+   event of an old epoch is. On an NHI that is not watched a departure is
+   shown at once, as before. The warning title is the tray's existing
+   one. Balloons are 2000 and later anyway, and 98 SE and ME never set
+   `CM_Q_RF_WATCHED`.
 5. **The window and the report.** The NHI's details carry
    "Unexpected removals:" with the count since this start and, after
-   the first, the last one's unit name and tunnel port; "not watched on
+   the first, the last one's tunnel port, and the count in a loss when
+   it is not 0; "not watched on
    this system" without `CM_Q_RF_WATCHED`; "not reported by this driver"
    for a version 1 answer. Save Report and `/report` carry the same line.
 6. **Windows 2000** shows its own Unsafe Removal dialog after an unplug
@@ -1576,19 +1563,17 @@ what each level serves, the ring's text and cut, the configuration read's
 states, the sizing) and the tool's reader and texts of it in
 `test\test_xhq.c`, with the default level.
 
-Revision 16: the count and the bound routers (`cm_marks.c`: once per
-PDO, a tombstone found by serial, a member's stop and start, a device
-never started, a loss counted apart, the smallest depth, two at it, none,
-the first binding refused at a later generation and, under the ICM,
-after the first pass, the same router refreshed, a newer generation, a
-different router clearing, the reset) in `test\test_cm_marks.c`; the
-version 2 layout, the block, the record at its offset and the content
-generation in `test\test_cm_query.c`; the readers of both versions, the
-event (a rise, a wrap, an epoch change, the liveness gate, not watched,
-no entry, the "disconnected" held a poll and dropped either way round,
-both shown beyond the two windows, the memory ended by a reconnection)
-and the details line in `test\test_tr.c`, with the mark service's reader
-of version 2.
+Revision 16: the count (`cm_marks.c`: once per PDO, a tombstone found
+by serial, a serial of another start or of another PDO refused, a device
+never started, a loss counted apart, the block, the reset) in
+`test\test_cm_marks.c`; the version 2 layout, the block, the record at
+its offset and the content generation in `test\test_cm_query.c`; the
+readers of both versions, the event (a rise, a wrap, an epoch change,
+the liveness gate, not watched, a departure on the member naming it in
+the same poll, before and after, two departures on it, a departure on
+another port, none, the held "disconnected" shown when no removal takes
+it, both shown beyond the windows) and the details line in
+`test\test_tr.c`, with the mark service's reader of version 2.
 
 ## 11. Legs
 
@@ -1723,8 +1708,10 @@ of version 2.
   filter saw Windows surprise-remove a running device of it, from a
   count in the query's answer (version 2), on NT only; never that it was
   unplugged or that data was lost (section 7.6). The count, not the 1 s
-  diff, is the evidence; the router named is the one the thread bound
-  the removed device to while it ran, or none.
+  diff, is the evidence. The answer's key for the last removal is its
+  tunnel port, not a router: the driver cannot prove which router a
+  device ran behind, and the tray names the unit only from a router it
+  saw leave from that port.
 
 ## 13. Open
 
