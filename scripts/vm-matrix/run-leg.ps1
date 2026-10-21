@@ -75,6 +75,7 @@ $legDeadline = (Get-Date).AddMinutes($LegMinutes)
 # The CD.
 $cd = Join-Path $RunDir 'cd'
 Remove-LegTree $cd
+if (Test-Path -LiteralPath $cd) { throw "the staging directory $cd could not be emptied; give a new -RunDir" }
 New-Item -ItemType Directory -Force $cd, (Join-Path $cd 'XHDATA') | Out-Null
 $legDir = Join-Path $PSScriptRoot 'leg'
 if ($guest.Family -eq '9x') {
@@ -101,7 +102,7 @@ $stickN = 0
 $boot = 0
 $maxBoots = 6
 $failed = $false
-$lastPhase = ''
+$pendingStep = ''
 
 # The guest's new complete lines since the last call, acted on in order.
 function Read-LegLines {
@@ -110,8 +111,12 @@ function Read-LegLines {
     if ($lines.Count -le $script:nLines) { return $false }
     foreach ($ln in $lines[$script:nLines..($lines.Count - 1)]) {
         if ($ln -match '^XHLEG BOOT' -and -not $script:b.Contains('bootLineSecond')) { $script:b.bootLineSecond = [math]::Round(((Get-Date) - $script:t0).TotalSeconds, 1) }
-        if ($ln -match '^XHLEG PHASE (\S+)') { $script:lastPhase = $Matches[1] }
-        if ($ln -match '^XHLEG OPERATOR') { $script:lastPhase = '1' }
+        # A phase seen now schedules the host step for the next start, once.
+        $ph = ''
+        if ($ln -match '^XHLEG PHASE (\S+)') { $ph = $Matches[1] }
+        if ($ln -match '^XHLEG OPERATOR') { $ph = '1' }
+        if ($ph) { $script:pendingStep = ''; if ($hostSteps.ContainsKey("AfterPhase$ph")) { $script:pendingStep = $hostSteps["AfterPhase$ph"] } }
+        if ($ln -match '^XHLEG POWEROFF') { $script:sawPowerOff = $true }
         if ($ln -match '^XHLEG CHECK (\S+) (PASS|FAIL)(.*)$') { $rec.checks[$Matches[1]] = ($Matches[2] + $Matches[3]).Trim() }
         if ($ln -match '^XHLEG EXIT (\S+) (\S+)$') { $rec.exits[$Matches[1]] = $Matches[2] }
         if ($ln -match '^XHLEG END') { $script:ended = $true; if (-not $script:endAt) { $script:endAt = Get-Date } }
@@ -148,6 +153,9 @@ try {
         $proc = $null
         $nLines = 0
         $endAt = $null
+        $sawPowerOff = $false
+        $stepEnded = $false
+        $hostStopped = $false
         try {
             if ($restore) {
                 $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $start.Idle -RunDir $RunDir -Tag $tag -Incoming -Name "xhleg-$Leg"
@@ -162,13 +170,14 @@ try {
             # in (AfterPhaseN), so it follows the guest, not a count of starts.
             $step = ''
             if ($boot -eq 1 -and $Cold -and $guest.ContainsKey('ColdStep')) { $step = $guest.ColdStep }
-            if ($boot -gt 1 -and $lastPhase -and $hostSteps.ContainsKey("AfterPhase$lastPhase")) { $step = $hostSteps["AfterPhase$lastPhase"] }
+            if ($boot -gt 1 -and $pendingStep) { $step = $pendingStep; $pendingStep = '' }
             if ($mode -eq 'window' -and $boot -eq 1) {
                 Write-Host "OPERATOR: VNC 127.0.0.1:$($ports.Vnc). Run the installer's window from the CD (PKG\SETUP.EXE), take the defaults, Finish; then shut Windows down (98 SE: never Restart). The host waits."
             }
             if ($step) {
                 $r = Invoke-LegHostStep -Step $step -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag
                 $rec.steps += "boot $boot $r"
+                if ($r -match 'QEMU ended at the restart') { $stepEnded = $true }
             }
             $lastNew = Get-Date
             $lastShot = Get-Date
@@ -201,13 +210,21 @@ try {
             $failed = $true
         } finally {
             if ($proc) {
-                if (-not $proc.HasExited) { Stop-LegQemu $cfg $proc $ports.Qmp "leg $Leg boot $boot ended by the host" }
+                if (-not $proc.HasExited) { $hostStopped = $true; Stop-LegQemu $cfg $proc $ports.Qmp "leg $Leg boot $boot ended by the host" }
                 $null = $proc.WaitForExit(30000)
                 Add-LegPidLog $cfg "exited pid $($proc.Id) (leg $Leg boot $boot)"
             }
         }
         # What the guest wrote between the last poll and its power-off.
         $null = Read-LegLines $serial $proc $tag
+        # A start ends by the guest's own power-off (POWEROFF on COM1), or by
+        # the restart a host step answered; QEMU ending any other way, or
+        # with an error code, is a failure even when a later start passes.
+        if ($proc -and -not $hostStopped) {
+            $code = $null; try { $code = $proc.ExitCode } catch { }
+            if ($null -ne $code -and $code -ne 0) { $rec.reasons += "boot $boot QEMU exit code $code"; $failed = $true }
+            elseif (-not $sawPowerOff -and -not $stepEnded -and -not ($mode -eq 'window' -and $boot -eq 1)) { $rec.reasons += "boot $boot ended with no power-off from the guest"; $failed = $true }
+        }
         $err = Join-Path $RunDir "qemu-$tag.err"
         if ((Test-Path -LiteralPath $err) -and (Get-Item -LiteralPath $err).Length -gt 0) {
             $rec.reasons += "boot $boot QEMU stderr: " + ((Get-Content -Raw -LiteralPath $err).Trim())

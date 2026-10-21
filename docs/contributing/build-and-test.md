@@ -8117,8 +8117,9 @@ The host takes the steps a guest cannot take. These are named in
   controller has no driver again: it is escaped;
 - the first stick's wizard (roadmap-usb4 43.42, still open).
 
-A step is tied to the phase the previous start ended in
-(`AfterPhaseN`), not to a count of starts, so it follows the guest.
+A step is tied to the phase the guest last reported (`AfterPhaseN`), not
+to a count of starts, so it follows the guest, and it is taken once: the
+start it was for consumes it.
 
 The verdict is PASS when all of these hold:
 
@@ -8126,7 +8127,7 @@ The verdict is PASS when all of these hold:
 - every check passed;
 - each exit code is one the leg allows;
 - no step failed, and every start ended with the guest switching itself
-  off.
+  off, or with the restart a host step answered, and QEMU exited cleanly.
 
 Whatever ends a start (a stall, the deadline, an error in the host's
 script), the host stops that start's QEMU, by its own QMP or its own

@@ -135,17 +135,20 @@ function Start-LegQemu {
     $p = Start-Process -FilePath $Config.QemuExe -ArgumentList $line -PassThru -WindowStyle Hidden `
         -RedirectStandardError $err -RedirectStandardOutput (Join-Path $RunDir "qemu-$Tag.out")
     $deadline = (Get-Date).AddSeconds(30)
+    # Reading the handle now keeps the exit code readable after the exit.
+    $null = $p.Handle
     try {
         while (-not (Test-QmpUp $Ports.Qmp)) {
             if ($p.HasExited) { throw "QEMU exited at start: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
             if ((Get-Date) -gt $deadline) { throw "QEMU's QMP did not come up on $($Ports.Qmp)" }
             Start-Sleep -Milliseconds 300
         }
+        Add-LegPidLog $Config "started $Name tag $Tag pid $($p.Id) qmp $($Ports.Qmp)"
     } catch {
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(10000) }
         Add-LegPidLog $Config "start failed, pid $($p.Id) ended ($Name tag $Tag)"
         throw
-    }    Add-LegPidLog $Config "started $Name tag $Tag pid $($p.Id) qmp $($Ports.Qmp)"
+    }
     return $p
 }
 
@@ -269,7 +272,11 @@ function Get-HostQemuVcpus {
         $mine = $false
         foreach ($p in $ExcludeQmpPorts) { if ($q.CommandLine -like "*tcp:127.0.0.1:$p,server*") { $mine = $true } }
         if ($mine) { continue }
-        if ($q.CommandLine -match '-smp\s+"?(\d+)') { $sum += [int]$Matches[1] } else { $sum += 1 }
+        # -smp N or -smp cpus=N; a -smp this cannot read counts as four, so
+        # an unread topology errs towards the budget.
+        if ($q.CommandLine -match '-smp\s+"?(?:cpus=)?(\d+)') { $sum += [int]$Matches[1] }
+        elseif ($q.CommandLine -match '-smp\b') { $sum += 4 }
+        else { $sum += 1 }
     }
     return $sum
 }

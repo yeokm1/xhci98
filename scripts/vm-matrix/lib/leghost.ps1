@@ -75,7 +75,7 @@ function Get-Leg98Dialog {
         $b = New-Object System.Drawing.Bitmap $p
         if ($b.Width -ne 640 -or $b.Height -ne 480) { return 'other' }
         $navy = { param($c) $c.R -lt 40 -and $c.G -lt 40 -and $c.B -gt 120 }
-        if (& $navy ($b.GetPixel(400, 213)) -and -not (& $navy ($b.GetPixel(400, 199)))) { return 'insert-disk' }
+        if ((& $navy ($b.GetPixel(400, 213))) -and -not (& $navy ($b.GetPixel(400, 199)))) { return 'insert-disk' }
         $w = $b.GetPixel(300, 363)
         if ((& $navy ($b.GetPixel(400, 199))) -and $w.R -gt 240 -and $w.G -gt 240 -and $w.B -gt 240) { return 'copy-files' }
         if (& $navy ($b.GetPixel(400, 77))) { return 'wizard' }
@@ -94,11 +94,13 @@ function Invoke-LegHostStep {
             # New Hardware wizard at every start; until it closes, nothing
             # started at logon runs. Escape it until the poller says BOOT.
             $deadline = $Since.AddSeconds(420)
-            while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
+            while ((Get-Date) -lt $deadline) {
                 if ((Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT') { return "${Step}: poller up" }
+                if ($Process.HasExited) { break }
                 if (((Get-Date) - $Since).TotalSeconds -ge 30) { try { Send-QmpChord -Port $QmpPort -Chord 'esc' } catch { } }
                 Start-Sleep -Seconds 10
             }
+            if ((Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT') { return "${Step}: poller up" }
             return "${Step}: no BOOT line in 420 s"
         }
         'wizard98-hcd' {
@@ -136,6 +138,10 @@ function Invoke-LegHostStep {
                 Start-Sleep -Seconds 2
             }
             if ($Process.HasExited) { return "${Step}: FAILED, QEMU ended before the wizard's last page" }
+            # The wizard's own page, active and still, after the copy: its
+            # last page (Finish). Anything else by the deadline is a failure,
+            # and no further key is sent.
+            if ($quiet -lt 2) { Save-LegShot $QmpPort $Dir "$Tag-hcd-timeout"; return "${Step}: FAILED, the wizard's last page not seen in 300 s (Insert Disk $disk, directory typed $typed)" }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-finish"
             Send-QmpChord -Port $QmpPort -Chord 'ret'
             $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 6 -MaxSeconds 60
