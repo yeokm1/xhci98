@@ -1819,9 +1819,10 @@ and lands on "USB Disk" rather than "Disk drive", is the legs' reading.
 
 **Interactions.** Roadmap task 43.6 drops `XhciSilentInstall`'s
 caution ("turn it on only once each listed class's drivers have been
-installed at least once"); with the storage row the condition is met for
-the storage class by the row itself (the files in place, the INFs
-indexed), and until 43.6 is done the caution is still printed beside the
+installed at least once"); the storage row is meant to supply that
+condition for the storage class itself (the files in place, the INFs
+placed for the index; whether they are indexed, and the first plug, are
+the legs' readings), and until 43.6 is done the caution is still printed beside the
 preselection. Task 43.43's case 1 (the row elsewhere) neither adds entries
 nor preselects anything.
 
