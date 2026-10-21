@@ -689,6 +689,16 @@ VOID CmRegAttLocateCaps(struct _CM_FILTER *filter, ULONG address);
 BOOLEAN CmRegAttMayMark(struct _CM_FILTER *filter);
 VOID CmRegAttAnswered(struct _CM_FILTER *filter);
 VOID CmRegAttEvent(struct _CM_FILTER *filter, ULONG which);
+/* CmRegAttSurprise  IRP_MN_SURPRISE_REMOVAL on the PDO (design record 25
+ *                   section 7.6): the entry this attachment was bound to
+ *                   (cmMarkAtt: domain, start and serial), current or a
+ *                   tombstone (the member bridge's bus answer buried it
+ *                   first), its count moved, and, with `started` (this
+ *                   attachment saw the device started) and the entry not
+ *                   counted before, the domain's unexpected removal - or,
+ *                   while the liveness is not ACTIVE or a loss is drained,
+ *                   one counted apart (CmMarksSurprise). PASSIVE_LEVEL. */
+VOID CmRegAttSurprise(struct _CM_FILTER *filter, BOOLEAN started);
 
 /*
  * CmRegStartAllowed  at a start's way down, for an object of this driver's
@@ -711,6 +721,15 @@ VOID CmRegAttRemoved(struct _CM_FILTER *filter, BOOLEAN afterQr);
  * its length. PASSIVE_LEVEL, the connection-manager thread. */
 ULONG CmReenumMarksBuild(struct _CM_NHI *nhi, UCHAR *out, BOOLEAN readAny,
                          ULONG readGen);
+/* The query answer's removal block (design record 25 section 7.6) into
+ * out (CM_Q_RM_BYTES): CM_Q_RF_WATCHED while the domain is listed on the
+ * filter route. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmReenumRemovals(struct _CM_NHI *nhi, UCHAR *out);
+/* A recovery's commit: the debt moved into the barrier (RecBarred |=
+ * RecDebtMask, RecDebtMask = 0) under the registration list's lock, which
+ * CmRegAttSurprise holds while it reads both, so a member is never seen
+ * in neither. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmReenumLossMove(struct _CM_NHI *nhi);
 /* XhciCmEjectConfirm as read (`bytes` of v): checked against the table
  * and, when it names a pending departure, the eject posted once for its
  * member. PASSIVE_LEVEL, the connection-manager thread. */

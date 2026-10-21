@@ -936,6 +936,10 @@ static VOID cmMarkAtt(PCM_NHI d, PCM_MARK m)
         if (f->Answered) {
             flags |= CM_QM_EF_REMOVABLE;
         }
+        /* The entry the attachment's surprise removal is counted in. */
+        f->MarkDom = d;
+        f->MarkStarts = d->Reenum.Starts;
+        f->MarkSerial = m->Serial;
     }
     /* A location once known stays known: the PDO is the same device. */
     flags |= m->Flags & CM_QM_EF_LOCATED;
@@ -1193,6 +1197,47 @@ VOID CmRegAttEvent(PCM_FILTER filter, ULONG which)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* Design record 25 section 7.6 (cm_reenum.h): the entry this attachment
+ * was bound to, by serial in its domain, if that domain is still listed in
+ * the same start; a loss of the host interface counts apart. */
+VOID CmRegAttSurprise(PCM_FILTER filter, BOOLEAN started)
+{
+    KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_NHI d;
+    PCM_MARK m;
+    BOOLEAN lost;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        d = CONTAINING_RECORD(CONTAINING_RECORD(e, CM_REENUM, Link), CM_NHI,
+                              Reenum);
+        if (d != filter->MarkDom || d->Reenum.Starts != filter->MarkStarts) {
+            continue;
+        }
+        m = CmMarksFindSerial(&d->Reenum.Marks, filter->MarkSerial);
+        if (m == NULL || (PVOID)filter->Common.Pdo != m->Pdo) {
+            break;
+        }
+        /* A loss: the liveness not ACTIVE, a loss drained, or the
+         * member owed or held for a recovery's retirement (the barrier
+         * outlives the return to ACTIVE until the removal finishes). */
+        lost = (BOOLEAN)(d->Live.State != CM_LIVE_ACTIVE ||
+                         d->Reenum.LossDrain != 0 ||
+                         (m->Member < 32 &&
+                          ((d->RecBarred | d->RecDebtMask) &
+                           (1UL << m->Member)) != 0));
+        if (CmMarksSurprise(&d->Reenum.Marks, m, started, lost,
+                            cmMarkNow(d))) {
+            CmLogNote(d, "cm.reenum.unexpected", m->MemberBdf);
+        } else if (lost && started) {
+            CmLogNote(d, "cm.reenum.unexpected.lost", m->MemberBdf);
+        }
+        break;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 /*
  * The attachment's device has been removed (cm_reenum.h). A departure
  * after a query-remove is recorded only when the last attachment of this
@@ -1348,6 +1393,29 @@ ULONG CmReenumMarksBuild(PCM_NHI nhi, UCHAR *out, BOOLEAN readAny,
     bytes = CmMarksBuild(out, &r->Marks, &in);
     KeReleaseSpinLock(&cmRegLock, irql);
     return bytes;
+}
+
+VOID CmReenumRemovals(PCM_NHI nhi, UCHAR *out)
+{
+    PCM_REENUM r;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    CmMarksRemovalBlock(out, &r->Marks,
+                        (BOOLEAN)(r->Listed &&
+                                  r->Route == CM_ROUTE_FILTER));
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmReenumLossMove(PCM_NHI nhi)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    nhi->RecBarred |= nhi->RecDebtMask;
+    nhi->RecDebtMask = 0;
+    KeReleaseSpinLock(&cmRegLock, irql);
 }
 
 VOID CmReenumConfirm(PCM_NHI nhi, const UCHAR *v, ULONG bytes)

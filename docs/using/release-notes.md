@@ -501,7 +501,16 @@ the logged-on user, with no administrator rights.
 - **Balloons** say when a device connects, waits for approval or
   disconnects, on Windows 2000, ME and later; on 98 SE the icon's tooltip
   shows the last event. A balloon never says how a device left: only a
-  removal the tool made reports its outcome.
+  removal the tool made reports its outcome, and, from `3.2.0.0`, the
+  next item.
+- **From `3.2.0.0`, on Windows 2000 and later only**, a warning balloon
+  says "A Thunderbolt or USB4 device was removed unexpectedly." when
+  Windows removed a running device behind a Thunderbolt or USB4 tunnel
+  that had not been stopped first: unplugged without Safely Remove, its
+  link lost, or its own driver failed. It does not say whether any data
+  was lost. The controller's details count these since it started, with
+  the tunnel port of the last. On Windows 98 SE and ME such a device is
+  shown as disconnected, as before.
 - The link rate and width of a USB4 device are read from its lane
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;

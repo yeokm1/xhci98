@@ -36,7 +36,8 @@ int mk_query_parse(const unsigned char *b, size_t n, MK_QUERY *q,
     *need = 0;
     if (b == NULL || n < CM_Q_HDR_BYTES ||
         mk_get32(b, CM_Q_O_MAGIC) != CM_Q_MAGIC ||
-        mk_get32(b, CM_Q_O_VERSION) != CM_Q_VERSION) {
+        (mk_get32(b, CM_Q_O_VERSION) != CM_Q_VERSION &&
+         mk_get32(b, CM_Q_O_VERSION) != CM_Q_VERSION_1)) {
         return 0;
     }
     bytes = mk_get32(b, CM_Q_O_BYTES);

@@ -43,6 +43,7 @@ static VOID cmMkBump(PCM_MARKS m)
 VOID CmMarksReset(PCM_MARKS m)
 {
     cmMkZero(m, sizeof(*m));
+    m->RmMember = CM_Q_UNKNOWN;
 }
 
 PCM_MARK CmMarksFind(PCM_MARKS m, PVOID pdo)
@@ -263,6 +264,51 @@ VOID CmMarksCount(PCM_MARKS m, PCM_MARK e, ULONG which, ULONG now)
         e->Count[which]++;
     }
     CmMarksTouch(m, e, now);
+}
+
+PCM_MARK CmMarksFindSerial(PCM_MARKS m, ULONG serial)
+{
+    ULONG i;
+
+    if (serial == 0) {
+        return NULL;
+    }
+    for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+        if (m->E[i].Pdo != NULL && m->E[i].Serial == serial) {
+            return &m->E[i];
+        }
+    }
+    return NULL;
+}
+
+BOOLEAN CmMarksSurprise(PCM_MARKS m, PCM_MARK e, BOOLEAN started,
+                        BOOLEAN lost, ULONG now)
+{
+    CmMarksCount(m, e, CM_MK_SURPRISE, now);
+    if (!started || e->Unexpected) {
+        return FALSE;
+    }
+    e->Unexpected = 1;
+    if (lost) {
+        m->Lost++;
+        return FALSE;
+    }
+    m->Removals++;
+    m->RmMember = e->MemberBdf;
+    return TRUE;
+}
+
+VOID CmMarksRemovalBlock(UCHAR *out, const CM_MARKS *m, BOOLEAN watched)
+{
+    cmMkZero(out, CM_Q_RM_BYTES);
+    cmMkPut32(out, CM_Q_RM_FLAGS, watched ? CM_Q_RF_WATCHED : 0);
+    if (m == NULL) {
+        cmMkPut32(out, CM_Q_RM_MEMBER, CM_Q_UNKNOWN);
+        return;
+    }
+    cmMkPut32(out, CM_Q_RM_COUNT, m->Removals);
+    cmMkPut32(out, CM_Q_RM_MEMBER, m->RmMember);
+    cmMkPut32(out, CM_Q_RM_LOST, m->Lost);
 }
 
 VOID CmMarksEvict(PCM_MARKS m, ULONG now)

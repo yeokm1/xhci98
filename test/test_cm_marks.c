@@ -329,8 +329,104 @@ static void test_confirm(void)
           "a location not known");
 }
 
+/* The unexpected removals (design record 25 section 7.6): an entry found
+ * by serial, current or a tombstone; counted once per PDO, only when the
+ * attachment saw the device started; a loss counted apart; the block. */
+static void test_removals(void)
+{
+    PVOID snap[4];
+    PCM_MARK e1;
+    PCM_MARK e2;
+    PCM_MARK e3;
+    ULONG s1;
+    ULONG s2;
+    ULONG i;
+
+    CmMarksReset(&t);
+    CHECK_EQ(t.RmMember, CM_Q_UNKNOWN, "reset: no member");
+    CmMarksRemovalBlock(buf, &t, TRUE);
+    CHECK_EQ(get32(buf, CM_Q_RM_FLAGS), CM_Q_RF_WATCHED, "block: watched");
+    CHECK_EQ(get32(buf, CM_Q_RM_COUNT), 0, "block: none counted");
+    CHECK_EQ(get32(buf, CM_Q_RM_MEMBER), CM_Q_UNKNOWN, "block: no member");
+    CHECK_EQ(get32(buf, CM_Q_RM_LOST), 0, "block: none lost");
+    CmMarksRemovalBlock(buf, &t, FALSE);
+    CHECK_EQ(get32(buf, CM_Q_RM_FLAGS), 0, "block: not watched");
+    memset(buf, 0xCC, CM_Q_RM_BYTES);
+    CmMarksRemovalBlock(buf, NULL, FALSE);
+    CHECK_EQ(get32(buf, CM_Q_RM_MEMBER), CM_Q_UNKNOWN, "no table: no member");
+    for (i = 16; i < CM_Q_RM_BYTES; i++) {
+        CHECK_EQ(buf[i], 0, "no table: reserved 0");
+    }
+
+    snap[0] = P(1);
+    snap[1] = P(2);
+    snap[2] = P(3);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 3, FALSE, TRUE, 100);
+    e1 = CmMarksFind(&t, P(1));
+    e2 = CmMarksFind(&t, P(2));
+    e3 = CmMarksFind(&t, P(3));
+    s1 = e1->Serial;
+    s2 = e2->Serial;
+    CHECK(CmMarksFindSerial(&t, 0) == NULL, "serial 0: none");
+    CHECK(CmMarksFindSerial(&t, 999) == NULL, "an unknown serial: none");
+    CHECK(CmMarksFindSerial(&t, s2) == e2, "a current entry by serial");
+
+    /* The bus answer drops P(1) first: its entry is a tombstone. */
+    snap[0] = P(2);
+    snap[1] = P(3);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 2, FALSE, TRUE, 200);
+    CHECK(CmMarksFind(&t, P(1)) == NULL, "P(1) no longer current");
+    e1 = CmMarksFindSerial(&t, s1);
+    CHECK(e1 != NULL && e1->Tomb, "the tombstone found by serial");
+    CHECK(CmMarksSurprise(&t, e1, TRUE, FALSE, 210), "counted");
+    CHECK_EQ(t.Removals, 1, "one removal");
+    CHECK_EQ(t.RmMember, 0x0300, "its member");
+    CHECK_EQ(e1->Count[CM_MK_SURPRISE], 1, "the entry's own count");
+    CHECK(!CmMarksSurprise(&t, e1, TRUE, FALSE, 211),
+          "a second attachment of the same PDO: not again");
+    CHECK_EQ(t.Removals, 1, "still one");
+    CHECK_EQ(e1->Count[CM_MK_SURPRISE], 2, "the entry's count still moves");
+
+    /* A device the attachment never saw started; then one that did. */
+    CHECK(!CmMarksSurprise(&t, e2, FALSE, FALSE, 220), "never started: not");
+    CHECK_EQ(t.Removals, 1, "unchanged");
+    CHECK(CmMarksSurprise(&t, e2, TRUE, FALSE, 221),
+          "another attachment saw it started: counted");
+    CHECK_EQ(t.Removals, 2, "two");
+
+    /* In a loss: apart, once. */
+    CHECK(!CmMarksSurprise(&t, e3, TRUE, TRUE, 230), "a loss: not unexpected");
+    CHECK_EQ(t.Lost, 1, "counted apart");
+    CHECK_EQ(t.Removals, 2, "the count unchanged");
+    CHECK(!CmMarksSurprise(&t, e3, TRUE, FALSE, 231),
+          "the same PDO after the loss ended: not again");
+    CHECK_EQ(t.Removals, 2, "still two");
+
+    CmMarksRemovalBlock(buf, &t, TRUE);
+    CHECK_EQ(get32(buf, CM_Q_RM_COUNT), 2, "block: two");
+    CHECK_EQ(get32(buf, CM_Q_RM_MEMBER), 0x0300, "block: the member");
+    CHECK_EQ(get32(buf, CM_Q_RM_LOST), 1, "block: one lost");
+
+    /* The counts wrap. */
+    t.Removals = 0xFFFFFFFFUL;
+    snap[0] = P(4);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 1, 0x0400, snap, 1, FALSE, TRUE, 300);
+    CHECK(CmMarksSurprise(&t, CmMarksFind(&t, P(4)), TRUE, FALSE, 301),
+          "counted past the top");
+    CHECK_EQ(t.Removals, 0, "wrapped");
+    CHECK_EQ(t.RmMember, 0x0400, "the last one's member");
+
+    CmMarksReset(&t);
+    CHECK_EQ(t.Removals | t.Lost, 0, "reset: counts 0");
+    CHECK(CmMarksFindSerial(&t, s1) == NULL, "reset: no entry");
+}
+
 int main(void)
 {
+    test_removals();
     test_sync();
     test_relocate();
     test_tombs();

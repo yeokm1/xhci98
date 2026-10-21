@@ -543,9 +543,21 @@ static void test_bos_hub_string(void)
 
 /* ---- xhcicm.sys's query -------------------------------------------------- */
 
+/* The answer qb_build lays out: version 2 (the removal block at 64, the
+ * record after it) unless qbV1; the block's flags, count and member. */
+static int qbV1;
+static TR_U32 qbRmFlags;
+static TR_U32 qbRmCount;
+static TR_U32 qbRmMember = CM_Q_UNKNOWN;
+
+static TR_U32 qb_rec(void)
+{
+    return qbV1 ? CM_Q_HDR_BYTES : CM_Q_HDR_BYTES + CM_Q_RM_BYTES;
+}
+
 static size_t qb_eoff(TR_U32 i)
 {
-    return (size_t)(CM_Q_HDR_BYTES + CM_ST_HDR_BYTES + i * CM_ST_ENTRY_BYTES);
+    return (size_t)(qb_rec() + CM_ST_HDR_BYTES + i * CM_ST_ENTRY_BYTES);
 }
 
 /* A whole, valid answer with `routers` zeroed entries; its size. */
@@ -553,22 +565,27 @@ static size_t qb_build(unsigned char *b, TR_U32 routers, TR_U32 epochLo,
                        TR_U32 pass)
 {
     TR_U32 recBytes = CM_ST_HDR_BYTES + routers * CM_ST_ENTRY_BYTES;
-    TR_U32 extOff = CM_Q_HDR_BYTES + recBytes;
+    TR_U32 extOff = qb_rec() + recBytes;
     TR_U32 idOff = extOff + routers * CM_Q_EXT_BYTES;
     TR_U32 idLen = (TR_U32)strlen(QB_ID);
     TR_U32 bytes = idOff + idLen;
-    unsigned char *r = b + CM_Q_HDR_BYTES;
+    unsigned char *r = b + qb_rec();
     TR_U32 i;
 
     memset(b, 0, (size_t)bytes + 64);
     put32(b, CM_Q_O_MAGIC, CM_Q_MAGIC);
-    put32(b, CM_Q_O_VERSION, CM_Q_VERSION);
+    put32(b, CM_Q_O_VERSION, qbV1 ? CM_Q_VERSION_1 : CM_Q_VERSION);
+    if (!qbV1) {
+        put32(b + CM_Q_HDR_BYTES, CM_Q_RM_FLAGS, qbRmFlags);
+        put32(b + CM_Q_HDR_BYTES, CM_Q_RM_COUNT, qbRmCount);
+        put32(b + CM_Q_HDR_BYTES, CM_Q_RM_MEMBER, qbRmMember);
+    }
     put32(b, CM_Q_O_BYTES, bytes);
     put32(b, CM_Q_O_PASS, pass);
     put32(b, CM_Q_O_PASS_AGE_MS, 100UL);
     put32(b, CM_Q_O_LIVE, 1UL);
     put32(b, CM_Q_O_FLAGS, 0UL);
-    put32(b, CM_Q_O_REC_OFFSET, CM_Q_HDR_BYTES);
+    put32(b, CM_Q_O_REC_OFFSET, qb_rec());
     put32(b, CM_Q_O_EXT_OFFSET, extOff);
     put32(b, CM_Q_O_EXT_SHAPE, routers | (CM_Q_EXT_BYTES << 16));
     put32(b, CM_Q_O_EPOCH_LO, epochLo);
@@ -645,8 +662,8 @@ static void test_query(void)
              CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     qb_entry(qa, 1UL, CM_ST_KIND_ICM, 0x0102UL, 0UL, CM_ST_APPR_APPROVED,
              CM_ST_TUN_UP, CM_ST_GEN_TBT3, "Apple", "Display");
-    CHECK_EQ(n, 64 + 128 + 256 + 64 + strlen(QB_ID), "the built answer's size");
-    extOff = 64UL + 128UL + 256UL;
+    CHECK_EQ(n, 96 + 128 + 256 + 64 + strlen(QB_ID), "the built answer's size");
+    extOff = 96UL + 128UL + 256UL;
     idOff = extOff + 64UL;
 
     CHECK(tr_query_parse(qa, n, &q) == 1, "a whole answer parses");
@@ -661,7 +678,7 @@ static void test_query(void)
     CHECK_EQ(q.NhiBdf, 0x0300, "NhiBdf");
     CHECK_EQ(q.ContentGen, 3, "ContentGen");
     CHECK(strcmp(q.Id, QB_ID) == 0, "Id");
-    CHECK(q.Rec == qa + 64, "Rec");
+    CHECK(q.Rec == qa + 96, "Rec");
     CHECK_EQ(q.RecBytes, 128 + 256, "RecBytes");
     CHECK_EQ(q.ExtOffset, extOff, "ExtOffset");
     CHECK_EQ(q.ExtCount, 2, "ExtCount");
@@ -705,7 +722,7 @@ static void test_query(void)
     put32(qa, CM_Q_O_MAGIC, 0x514D4359UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "bad magic refused");
     put32(qa, CM_Q_O_MAGIC, CM_Q_MAGIC);
-    put32(qa, CM_Q_O_VERSION, 2UL);
+    put32(qa, CM_Q_O_VERSION, 3UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "bad version refused");
     put32(qa, CM_Q_O_VERSION, CM_Q_VERSION);
 
@@ -762,12 +779,14 @@ static void test_query(void)
     put32(qa, CM_Q_O_REC_OFFSET, 32UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "record inside the header");
     put32(qa, CM_Q_O_REC_OFFSET, 64UL);
-    put32(qa, 64 + CM_ST_O_ENTRY_BYTES, 64UL);
+    CHECK(tr_query_parse(qa, n, &q) == 0, "version 2: a record inside the block");
+    put32(qa, CM_Q_O_REC_OFFSET, 96UL);
+    put32(qa, 96 + CM_ST_O_ENTRY_BYTES, 64UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "a record inst_st_check refuses");
-    put32(qa, 64 + CM_ST_O_ENTRY_BYTES, CM_ST_ENTRY_BYTES);
-    put32(qa, 64 + CM_ST_O_BYTES, 0x10000UL);
+    put32(qa, 96 + CM_ST_O_ENTRY_BYTES, CM_ST_ENTRY_BYTES);
+    put32(qa, 96 + CM_ST_O_BYTES, 0x10000UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "a record bigger than the answer");
-    put32(qa, 64 + CM_ST_O_BYTES, 128UL + 256UL);
+    put32(qa, 96 + CM_ST_O_BYTES, 128UL + 256UL);
 
     CHECK(tr_query_parse(qa, n, &q) == 1, "restored answer parses");
 
@@ -797,10 +816,10 @@ static void test_query(void)
     CHECK(tr_query_eject_ready(&q, &why) == 0 && has(why, "idle"),
           "eject: inert");
     q.Flags = CM_Q_F_TRUNCATED;
-    put32(qa, 64 + CM_ST_O_STAGE, CM_ST_STAGE_FAILED);
+    put32(qa, 96 + CM_ST_O_STAGE, CM_ST_STAGE_FAILED);
     CHECK(tr_query_eject_ready(&q, &why) == 0 && has(why, "not active"),
           "eject: stage not active");
-    put32(qa, 64 + CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
+    put32(qa, 96 + CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
     q.Live = 3;
     CHECK(tr_query_eject_ready(&q, &why) == 0 && has(why, "not answering"),
           "eject: live not active");
@@ -838,10 +857,10 @@ static void test_query(void)
     q2.Pass = 7;
 
     CHECK(tr_query_same_content(&q, &q2), "same epoch and content");
-    put32(qb, 64 + CM_ST_O_GENERATION, 8UL);
+    put32(qb, 96 + CM_ST_O_GENERATION, 8UL);
     CHECK(tr_query_same_content(&q, &q2),
           "the record's generation alone is not content");
-    put32(qb, 64 + CM_ST_O_GENERATION, 7UL);
+    put32(qb, 96 + CM_ST_O_GENERATION, 7UL);
     q2.ContentGen = 4;
     CHECK(!tr_query_same_content(&q, &q2), "another content generation");
     q2.ContentGen = 3;
@@ -1064,6 +1083,142 @@ static void snap_of(TR_SNAP *s, const unsigned char *b, size_t n, TR_U32 live)
 
 static TR_SNAP so;
 static TR_SNAP sn;
+
+/* Design record 25 section 7.6: the removal block's readers, the event and
+ * the details line. */
+static void test_removals(void)
+{
+    TR_EVENT ev[8];
+    TR_QUERY q;
+    MK_QUERY mq;
+    INST_U32 need;
+    char out[160];
+    size_t n;
+    int k;
+
+    /* Version 2. */
+    qbRmFlags = CM_Q_RF_WATCHED;
+    qbRmCount = 3UL;
+    qbRmMember = 0x0E21UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    CHECK(tr_query_parse(qa, n, &q) == 1, "v2 parses");
+    CHECK_EQ(q.Version, 2, "v2: version");
+    CHECK_EQ(q.RmFlags, CM_Q_RF_WATCHED, "v2: watched");
+    CHECK_EQ(q.RmCount, 3, "v2: count");
+    CHECK_EQ(q.RmMember, 0x0E21, "v2: member");
+    CHECK(q.Rec == qa + 96, "v2: the record at 96");
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "3 since this start; the last on tunnel port 0E:04.1")
+              == 0, "text: count and port");
+    put32(qa, CM_Q_HDR_BYTES + CM_Q_RM_LOST, 2UL);
+    (void)tr_query_parse(qa, n, &q);
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(has(out, "; 2 in a loss of the controller"), "text: the loss");
+    CHECK(mk_query_parse(qa, n, &mq, &need) == 1, "the mark service takes v2");
+    put32(qa, CM_Q_O_REC_OFFSET, 80UL);
+    CHECK(tr_query_parse(qa, n, &q) == 0, "v2: a record inside the block");
+    qbRmCount = 0UL;
+    qbRmMember = CM_Q_UNKNOWN;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    (void)tr_query_parse(qa, n, &q);
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "none since this start") == 0, "text: none");
+    qbRmFlags = 0UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    (void)tr_query_parse(qa, n, &q);
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "not watched on this system") == 0, "text: not watched");
+
+    /* Version 1: no block. */
+    qbV1 = 1;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    CHECK(tr_query_parse(qa, n, &q) == 1, "v1 still parses");
+    CHECK_EQ(q.Version, 1, "v1: version");
+    CHECK_EQ(q.RmFlags | q.RmCount, 0, "v1: no block");
+    CHECK_EQ(q.RmMember, CM_Q_UNKNOWN, "v1: no member");
+    CHECK(q.Rec == qa + 64, "v1: the record at 64");
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "not reported by this driver") == 0, "text: v1");
+    CHECK(mk_query_parse(qa, n, &mq, &need) == 1, "the mark service takes v1");
+    qbV1 = 0;
+
+    /* The event: a watched NHI, both ACTIVE, the count moved. */
+    qbRmFlags = CM_Q_RF_WATCHED;
+    qbRmCount = 3UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    snap_of(&so, qa, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &so, ev, 8), 0, "no change: none");
+    qbRmCount = 4UL;
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 1UL);
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK_EQ(k, 1, "a rise: one event");
+    CHECK_EQ(ev[0].Kind, TR_EV_REMOVED, "removed");
+    tr_event_text(&ev[0], out, sizeof(out));
+    CHECK(strcmp(out, "A Thunderbolt or USB4 device was removed unexpectedly.")
+              == 0, "the text names no unit");
+    CHECK(strcmp(tr_event_title(TR_EV_REMOVED), "Thunderbolt/USB4 warning") == 0,
+          "a warning");
+    CHECK(!has(out, "data") && !has(out, "unplug"), "no data, no unplug");
+    CHECK_EQ(tr_diff(&so, &sn, ev, 0), 0, "cap 0");
+    qbRmCount = 7UL;
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 1, "a rise of four: one event");
+    qbRmCount = 0xFFFFFFFFUL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    snap_of(&so, qa, n, 1UL);
+    qbRmCount = 0UL;
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 1, "a wrap: one event");
+    /* Another start: none. */
+    qbRmCount = 1UL;
+    n = qb_build(qb, 1UL, 0x22222222UL, 1UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "a new epoch: none");
+    /* The liveness, either side (cm_live.h: 1 ACTIVE, 5 RECOVERING,
+     * 7 CONTAINED). */
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 7UL);
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "left ACTIVE: the stop event alone");
+    snap_of(&so, qa, qb_build(qa, 1UL, 0x11111111UL, 5UL), 5UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "not ACTIVE before: none");
+    /* Not watched on either side: none. */
+    qbRmFlags = 0UL;
+    qbRmCount = 5UL;
+    snap_of(&so, qa, qb_build(qa, 1UL, 0x11111111UL, 5UL), 1UL);
+    qbRmFlags = CM_Q_RF_WATCHED;
+    qbRmCount = 6UL;
+    snap_of(&sn, qb, qb_build(qb, 1UL, 0x11111111UL, 6UL), 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "not watched before: none");
+    CHECK_EQ(tr_diff(&sn, &so, ev, 8), 0, "not watched now: none");
+    /* Version 1 before: none. */
+    qbV1 = 1;
+    snap_of(&so, qa, qb_build(qa, 1UL, 0x11111111UL, 5UL), 1UL);
+    qbV1 = 0;
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "a v1 answer before: none");
+    /* Beside a departure, which is shown as before. */
+    qbRmCount = 1UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
+    snap_of(&so, qa, n, 1UL);
+    qbRmCount = 2UL;
+    snap_of(&sn, qb, qb_build(qb, 0UL, 0x11111111UL, 6UL), 1UL);
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK_EQ(k, 2, "a departure and a removal");
+    CHECK(ev[0].Kind == TR_EV_LEFT && strcmp(ev[0].Name, "Acme Dock") == 0,
+          "the unit's disconnected, named");
+    CHECK_EQ(ev[1].Kind, TR_EV_REMOVED, "then the removal");
+
+    qbRmFlags = 0UL;
+    qbRmCount = 0UL;
+    qbRmMember = CM_Q_UNKNOWN;
+}
 
 static void test_events(void)
 {
@@ -2685,6 +2840,7 @@ int main(void)
     test_query();
     test_texts();
     test_events();
+    test_removals();
     test_keys_args_report();
     test_sizes();
     test_desc_lengths();

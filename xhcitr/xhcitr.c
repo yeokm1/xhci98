@@ -2866,6 +2866,11 @@ static void details_nhi(TR_TEXT *t, int k)
         }
         tr_printf(t, "  Start epoch:         %08lX%08lX\n",
                   (unsigned long)h->Q.EpochHi, (unsigned long)h->Q.EpochLo);
+        {
+            char rmText[160];
+            tr_removal_text(&h->Q, rmText, sizeof(rmText));
+            tr_printf(t, "  Unexpected removals: %s\n", rmText);
+        }
         if (h->Q.Flags & CM_Q_F_STOPPING) {
             tr_put(t, "  The controller is stopping.\n");
         }
@@ -6826,7 +6831,8 @@ static void poll(void)
         char text[256];
         tr_event_text(&ev[i], text, sizeof(text));
         tray_balloon(tr_event_title(ev[i].Kind), text,
-                     ev[i].Kind == TR_EV_STOPPED || ev[i].Kind == TR_EV_FAILED);
+                     ev[i].Kind == TR_EV_STOPPED || ev[i].Kind == TR_EV_FAILED ||
+                         ev[i].Kind == TR_EV_REMOVED);
     }
     memcpy(&snapOld, now, sizeof(*now));
     free(now);

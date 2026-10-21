@@ -19,6 +19,8 @@
 
 #include <stddef.h>
 #include "../xhcimark/mark_core.h"
+#include "../src/cm/cm_status.h"
+#include "../src/cm/cm_query.h"
 
 typedef unsigned long TR_U32;
 
@@ -242,11 +244,18 @@ typedef struct _TR_QUERY {
     TR_U32 ExtOffset;
     TR_U32 ExtCount;
     TR_U32 ExtBytes;
+    /* The removal block (version 2; record 25 section 7.6). */
+    TR_U32 Version;             /* CM_Q_VERSION_1 or CM_Q_VERSION           */
+    TR_U32 RmFlags;             /* CM_Q_RF_*; 0 in version 1               */
+    TR_U32 RmCount;
+    TR_U32 RmMember;            /* CM_Q_UNKNOWN in version 1                */
+    TR_U32 RmLost;
 } TR_QUERY;
 
-/* An answer of n bytes (no more than the call returned). 1 a whole,
- * consistent answer; -1 the header alone, or a header whose size field
- * asks for more than n (q->Bytes says how much, at most CM_Q_MAX_BYTES);
+/* An answer of n bytes (no more than the call returned), version 1 or
+ * 2. 1 a whole, consistent answer; -1 the header alone, or a header whose
+ * size field asks for more than n (q->Bytes says how much, at most
+ * CM_Q_MAX_BYTES);
  * 0 anything else: wrong magic or version, a record that does not check,
  * counts, offsets or sizes that disagree, an epoch of 0. */
 int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q);
@@ -349,6 +358,8 @@ typedef struct _TR_SNAP {
     TR_U32 Live[TR_SNAP_NHI];
     TR_U32 EpochLo[TR_SNAP_NHI];
     TR_U32 EpochHi[TR_SNAP_NHI];
+    TR_U32 RmFlags[TR_SNAP_NHI];        /* the removal block's, 0 in v1    */
+    TR_U32 RmCount[TR_SNAP_NHI];
     int Count;
     int Truncated;
     TR_SROUTER R[TR_SNAP_ROUTERS];
@@ -372,6 +383,8 @@ int tr_same_router(const TR_SROUTER *a, const TR_SROUTER *b);
 #define TR_EV_FAILED            3
 #define TR_EV_STOPPED           5
 #define TR_EV_LEFT              6   /* disconnected                          */
+#define TR_EV_REMOVED           7   /* removed unexpectedly (record 25 7.6);
+                                       it names no unit                     */
 
 typedef struct _TR_EVENT {
     int Kind;
@@ -386,8 +399,16 @@ typedef struct _TR_EVENT {
  * ICM entries (a USB4 entry's approval word folds held, failed and
  * unsupported together); a router that leaves is "disconnected", never
  * "unplugged while in use" (decision T9); the stop event when the
- * liveness leaves ACTIVE. */
+ * liveness leaves ACTIVE. Revision 16 (section 7.6): one "removed
+ * unexpectedly" event, naming no unit, for an NHI whose removal count
+ * differs, both snapshots of it watched and ACTIVE at the same epoch. */
 int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap);
+
+/* The NHI details' line for an answer's removal block (record 25 section
+ * 7.6, item 5): "3 since this start; the last on tunnel port 00:1C.4"
+ * (and "; 1 in a loss of the controller" where any), "none since this
+ * start", "not watched on this system", "not reported by this driver". */
+void tr_removal_text(const TR_QUERY *q, char *out, size_t cap);
 
 /* The balloon's text and title for an event. */
 void tr_event_text(const TR_EVENT *e, char *out, size_t cap);
