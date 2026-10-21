@@ -3542,10 +3542,12 @@ page's status), `StreamInfoSize` `sizeof(USBD_STREAM_INFORMATION)` (0x10 /
 0x18; the page names `USBD_STATUS_INFO_LENGTH_MISMATCH` for this case, a
 value no header available here defines - not the WDK 7.1 `usb.h`, not the
 Windows 2000 DDK's `usbdi.h`, not mingw-w64's `usb.h` at 6.12's commit - so
-the bus answers `USBD_STATUS_INVALID_PARAMETER` and the IRP
-`STATUS_INVALID_PARAMETER`, which is what the IRP carries for a refused
-parameter either way; 6.13.8 owes the value, read on Windows 8, and the
-code takes it when it is known), `NumberOfStreams` 1 to
+the bus answers `USBD_STATUS_INVALID_PARAMETER`, and the IRP
+`STATUS_INVALID_PARAMETER` as for every URB this dispatch refuses; what
+Windows 8's own stack answers is not known - UCX's
+`Endpoint_StaticStreamsEnableUrb`, 8 x64 RVA `0xB5AC`, tests no
+`StreamInfoSize`, and its failures map to `0x80000300` - and 6.13.8 owes
+the value, read on Windows 8, which the code takes when it is known), `NumberOfStreams` 1 to
 `XHCI98_STREAMS_MAX` and `Streams` not NULL (else
 `USBD_STATUS_INVALID_PARAMETER`). On the thread it is the private open
 (`hcdCfgStreamsOpen`, the same checks of pipe, controller and endpoint, the
@@ -3554,7 +3556,10 @@ must equal the request**. The public URB has no "granted" field - "The
 number of streams to open ... must be ... less than or equal to the maximum
 number of streams supported by the USB driver stack, the host controller,
 and the endpoint" - so a plan that would grant fewer is refused before
-anything is built (`USBD_STATUS_INVALID_PARAMETER`). Granted, entry `i`
+anything is built (`USBD_STATUS_INVALID_PARAMETER`), while the private
+request keeps its partial grant (`XhciUsbdxGrantCheck`: 31 asked of an
+endpoint whose companion allows 16 is refused on the public path and
+granted 16 on the private one). Granted, entry `i`
 (0-based) of `Streams` gets stream `i + 1`'s pipe handle, `StreamID`
 `i + 1` ("sequential and start at 1"), `MaximumTransferSize` the command
 size the controller's start latched (`Xstat.CommandBytes`, the size
@@ -3574,9 +3579,14 @@ served as the private interface serves them; a select, `RESET_PORT` and
 removal as there.
 
 **`URB_FUNCTION_CLOSE_STATIC_STREAMS` (`0x36`)**, a `_URB_PIPE_REQUEST`
-with the endpoint's handle: the private close. No streams open:
+with the endpoint's handle: `Length` at least
+`sizeof(struct _URB_PIPE_REQUEST)` (0x18 x86, 0x28 amd64) before
+`PipeHandle` is read, else `USBD_STATUS_INVALID_PARAMETER` at dispatch
+(`XhciUsbdxCloseCheck`); then the private close. No streams open:
 `USBD_STATUS_INVALID_PARAMETER` (the page: "Don't send a close-stream
-request to an endpoint that doesn't have open streams").
+request to an endpoint that doesn't have open streams"). The open's
+`Length` is checked the same way before any field after the header is
+read.
 
 The private answers map to URB status as `XhciUsbdxStreamsUsbd` (pure)
 says: success `USBD_STATUS_SUCCESS`; no controller or no endpoint
@@ -3698,7 +3708,11 @@ enforces none of them beyond what it checks for every client today.
   offsets of the pointer width given, which the driver half asserts against
   the DDK's structures, so the host vectors read what a client will;
 - `XhciUsbdxOpenCheck(length, structBytes, infoVersion, infoSize,
-  infoBytes, streams, streamsPresent, &usbd)`;
+  infoBytes, streams, streamsPresent)` and `XhciUsbdxCloseCheck(length,
+  pipeRequestBytes)`;
+- `XhciUsbdxGrantCheck(requested, planned, exact)`: the public path's
+  exact grant against the private path's partial one, with vectors over
+  `XhciStreamPlan`'s own answers;
 - `XhciUsbdxStreamsUsbd(answer, gone)`;
 - `XhciUsbdxIoctlAlias(code)`.
 
@@ -3730,8 +3744,9 @@ an unserved request.
    per data and status pipe) of the smaller of that count and the figure
    `uaspstor` takes from the endpoints, I/O, a hot unplug, Safely Remove and
    a rescan; a device whose endpoints allow fewer streams than the
-   controller (QEMU's `usb-uas` takes a stream count; a smaller one than
-   the controller's), read the same way; the same disk at High Speed (the
+   controller advertises - QEMU's `usb-uas`, whose companions say 16
+   (`UAS_STREAM_BM_ATTR` 4 in `hw/usb/dev-uas.c`), on a `qemu-xhci` that
+   advertises more - with both figures recorded; the same disk at High Speed (the
    capability refused, `uaspstor`'s streamless mode); a disk reset under
    I/O with streams open (`uaspstor`'s `RESET_PORT`, or a stalled command
    and `RESET_PIPE` on the endpoint's handle).
