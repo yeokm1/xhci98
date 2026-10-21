@@ -1553,13 +1553,17 @@ static int settings_leave(HWND dlg, int page)
         /* The storage row's preselection left at 1 stays the engine's;
          * any other value the user chose there is the user's own (record
          * 26 section 6.5.12). */
-        if (silentAuto && r->Value == inst_value_find("XhciSilentInstall")) {
-            if (v != 1) {
+        if (r->Value == inst_value_find("XhciSilentInstall")) {
+            if (silentAuto && v != 1) {
                 silentAuto = 0;
                 silentExplicit = 1;
-            } else {
+            } else if (silentAuto) {
                 choiceSet[r->Value] = 1;
                 choiceVal[r->Value] = 1;
+            } else if (choiceSet[r->Value]) {
+                /* A change made before any preselection is the user's
+                 * too, and survives the storage row ticked later. */
+                silentExplicit = 1;
             }
         }
     }
