@@ -3335,10 +3335,10 @@ const char *inst_unplug_text(int kind, int tool)
     case INST_UNPLUG_RESTARTED:
         return tool == INST_TOOL_TREE
                    ? "The device has started again, so it is not safe to "
-                     "unplug. Close the programs using it and stop it again "
+                     "unplug. Close the programs\nusing it and stop it again "
                      "in the xHCI98 USB Tree."
                    : "The device has started again, so it is not safe to "
-                     "unplug. Close the programs using it and run INSTALL "
+                     "unplug. Close the programs\nusing it and run INSTALL "
                      "/console /eject again.";
     default:
         return "You can now unplug the device.";
@@ -3379,7 +3379,7 @@ int inst_eject_remind(int singleFunction, INST_U32 usb3)
 const char *inst_eject_remind_text(void)
 {
     return "Before you eject it, make sure none of its other devices (USB "
-           "ports, card readers, network) is in use; stop them in Windows "
+           "ports, card\nreaders, network) is in use; stop them in Windows "
            "first.";
 }
 
