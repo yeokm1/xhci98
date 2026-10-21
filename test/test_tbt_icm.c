@@ -83,6 +83,7 @@ typedef struct FW {
     unsigned long DevReadRouteLo;
     unsigned long DevReadDw3;
     unsigned long DisconnectInReadUs;   /* the device leaves during the read */
+    const unsigned long *AnnounceUuid;  /* NULL: kUuid */
 } FW;
 
 static FW g_fw;
@@ -173,10 +174,13 @@ static void trDisconnected(unsigned long routeLo, unsigned long delayUs)
 
 static void fwAnnounce(unsigned long delayUs)
 {
+    const unsigned long *uuid = g_fw.AnnounceUuid != NULL ? g_fw.AnnounceUuid
+                                                          : kUuid;
+
     if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
-        trConnected(g_fw.ConnId, g_fw.Approved, 1, kUuid, delayUs, 0);
+        trConnected(g_fw.ConnId, g_fw.Approved, 1, uuid, delayUs, 0);
     } else {
-        arConnected(g_fw.ConnId, g_fw.Approved, 1, 1, kUuid, delayUs);
+        arConnected(g_fw.ConnId, g_fw.Approved, 1, 1, uuid, delayUs);
     }
 }
 
@@ -2104,6 +2108,8 @@ static void test_router_version(void)
 {
     TBT_ICM_ACTION act[8];
     unsigned long t0;
+    unsigned long serial;
+    unsigned long k;
 
     /* The Thunderbolt 3 hosts read nothing. */
     setup(GEN_AR, 1, 1);
@@ -2213,15 +2219,22 @@ static void test_router_version(void)
     CHECK_EQ(g_fw.DevReads, 1, "no read while an answer may be late");
     CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_OWED,
              "the replacement not known meanwhile");
+    serial = firstDev()->Serial;
     TbtIcmSuspend(&g_icm);
     g_fw.Present = 1;
+    g_fw.AnnounceUuid = kUuid2;
     CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume: the rings restart");
     CHECK(!g_icm.VersionStopped, "a restarted ring ends the stop");
+    CHECK(firstDev() != NULL && firstDev()->Serial == serial,
+          "the same occupancy, refreshed");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_OWED,
+             "still owed through the resume");
+    CHECK_EQ(g_fw.DevReads, 1, "nothing read inside the resume");
     idle(200);
     CHECK_EQ(g_fw.DevReads, 2, "read after the restart");
-    CHECK(firstDev() != NULL &&
+    CHECK(firstDev() != NULL && firstDev()->Serial == serial &&
               firstDev()->VersionState == TBT_ICM_VER_USB4,
-          "and known");
+          "that occupancy now known");
 
     /* A driver ready whose host-router poll was never answered: one of
      * its requests may still draw a notification, so no router read. */
@@ -2287,6 +2300,29 @@ static void test_router_version(void)
     TbtIcmPoll(&g_icm);
     CHECK_EQ(g_fw.DevReads, 2, "the next poll");
     CHECK_EQ(g_fw.DevReadRouteLo, 3, "the newer entry");
+
+    /* Two owed at once, the older in the higher slot, before and across
+     * the serial's wrap (0xFFFFFFFF, then 1: 0 is never a serial). */
+    for (k = 0; k < 2; k++) {
+        setup(GEN_ICL, 1, 1);
+        g_fw.VerByte = 0x20;
+        CHECK_EQ(start(), TBT_OK, "bind, reads not yet asked");
+        trConnected(9, 1, 3, kUuid2, 0, 0);
+        idle(200);
+        CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "two entries, both owed");
+        CHECK(g_icm.Devices[1].InUse && g_icm.Devices[1].Route.Lo == 3,
+              "route 3 in slot 1");
+        g_icm.Devices[1].Serial = k == 0 ? 5UL : 0xFFFFFFFFUL;
+        g_icm.Devices[0].Serial = k == 0 ? 6UL : 1UL;
+        TbtIcmSetReadVersion(&g_icm, TRUE);
+        TbtIcmPoll(&g_icm);
+        CHECK_EQ(g_fw.DevReadRouteLo, 3,
+                 k == 0 ? "the older, in the higher slot, first"
+                        : "the older across the wrap first");
+        TbtIcmPoll(&g_icm);
+        CHECK_EQ(g_fw.DevReadRouteLo, 1, "then the newer");
+        CHECK_EQ(g_fw.DevReads, 2, "one a poll");
+    }
 }
 
 int main(void)
