@@ -3546,7 +3546,8 @@ the bus answers `USBD_STATUS_INVALID_PARAMETER`, and the IRP
 `STATUS_INVALID_PARAMETER` as for every URB this dispatch refuses; what
 Windows 8's own stack answers is not known - UCX's
 `Endpoint_StaticStreamsEnableUrb`, 8 x64 RVA `0xB5AC`, tests no
-`StreamInfoSize`, and its failures map to `0x80000300` - and 6.13.8 owes
+`StreamInfoSize`, and its generic failure fallback maps to
+`0x80000300` - and 6.13.8 owes
 the value, read on Windows 8, which the code takes when it is known), `NumberOfStreams` 1 to
 `XHCI98_STREAMS_MAX` and `Streams` not NULL (else
 `USBD_STATUS_INVALID_PARAMETER`). On the thread it is the private open
