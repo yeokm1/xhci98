@@ -1387,7 +1387,9 @@ shown as disconnected, as before.
    the same port can fall beside another device's removal. So the key the
    answer carries for the last removal is its tunnel port, and the
    notice names no unit; the unit's own "disconnected" balloon, which the
-   tray shows as before, names it where it left the record. The count,
+   tray shows as before, names it where it left the record (accepted by
+   the owner, 2026-10-22, in place of the roadmap entry's "last router
+   key"). The count,
    the lost count and the last member live beside the marks table, under
    the registration list's lock, and are emptied with it at the domain's
    start and stop, so they are per start, as the epoch is.
@@ -1429,7 +1431,8 @@ shown as disconnected, as before.
    departures are shown as before: where the unit's router left the
    record, its own "<name> was disconnected." comes too, in the same poll
    or another, and names it. Balloons are 2000 and later anyway, and 98
-   SE and ME never set `CM_Q_RF_WATCHED`.
+   SE and ME never set `CM_Q_RF_WATCHED`. Item 8's option can turn the
+   warning off.
 5. **The window and the report.** The NHI's details carry
    "Unexpected removals:" with the count since this start and, after
    the first, the last one's tunnel port, and the count in a loss when
@@ -1438,11 +1441,27 @@ shown as disconnected, as before.
    for a version 1 answer. Save Report and `/report` carry the same line.
 6. **Windows 2000** shows its own Unsafe Removal dialog after an unplug
    without an eject (record 21 section 7.4, read by leg 39-V.2). The
-   tray's notice comes as well there; whether to leave it out on 2000 is
-   the owner's (section 13).
+   tray's notice comes as well there (the owner, 2026-10-22: every NT
+   system, 2000 included), and item 8's option is the way to have only
+   Windows' own.
 7. **Release notes.** "The tray's unexpected-removal notice is shown on
    Windows 2000 and later only; on Windows 98 SE and ME a Thunderbolt or
-   USB4 unit removed without an eject is shown as disconnected."
+   USB4 unit removed without an eject is shown as disconnected", with
+   item 8's option.
+8. **The option** (the owner, 2026-10-22). A checked item, "Warn when a
+   device is removed unexpectedly", in the tray's right-click menu and
+   the window's View menu beside "Start at login", on by default, per
+   user: the DWORD `WarnRemoved` under the tool's settings key
+   (`HKCU\Software\xHCI98\XHCITR`, where "Start at login" keeps
+   `TrayAtLogin`, section 7.4), no driver value. It reads as section
+   7.4's value does: only a DWORD 0 turns the warning off; absent,
+   another type or any other number is on (`tr_warn_removed`,
+   host-tested). With it off the tray skips the warning's balloon alone:
+   the count still rises in the driver and shows in the details, and the
+   "disconnected" balloons are unchanged. It is read when a warning is
+   due, so a change takes effect at the next poll in every running copy
+   of the user's tray. On 98 SE and ME, where there is no warning, the
+   item is not shown.
 
 ## 8. Install, upgrade and uninstall
 
@@ -1551,8 +1570,9 @@ never started, a loss counted apart, the block, the reset) in
 its offset and the content generation in `test\test_cm_query.c`; the
 readers of both versions, the event (a rise, a wrap, a rise of more than
 one, an epoch change, the liveness gate either side, not watched, a
-version 1 answer, the "disconnected" beside it unchanged) and the details
-line in `test\test_tr.c`, with the mark service's reader of version 2.
+version 1 answer, the "disconnected" beside it unchanged), the details
+line and the option's reading (`tr_warn_removed`) in `test\test_tr.c`,
+with the mark service's reader of version 2.
 
 ## 11. Legs
 
@@ -1567,7 +1587,7 @@ line in `test\test_tr.c`, with the mark service's reader of version 2.
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciCmLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 | T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
-| T.11 | 2000, XP, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "A Thunderbolt or USB4 device was removed unexpectedly." beside the unit's "disconnected"; a chain's first device unplugged gives one such notice where its removals fall in one sampled change of the count (another where they straddle two samples); an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; on 98 SE the unplug reads "disconnected" and the details "not watched on this system" |
+| T.11 | 2000, XP, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "A Thunderbolt or USB4 device was removed unexpectedly." beside the unit's "disconnected"; a chain's first device unplugged gives one such notice where its removals fall in one sampled change of the count (another where they straddle two samples); an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; with "Warn when a device is removed unexpectedly" unchecked, an unplug with no eject gives no warning balloon and the count still rises in the details; on 98 SE the unplug reads "disconnected", the details "not watched on this system", and the item is not shown |
 | T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
 
 ## 12. Decisions
@@ -1682,15 +1702,18 @@ line in `test\test_tr.c`, with the mark service's reader of version 2.
   Report carries the snapshot, so one file is the bug report. Its level
   switches do not move: section 7.5 already replaces them.
 
-- **T22** (owner, 2026-10-18 and 2026-10-20, roadmap-usb4 43.21; revision
-  16) The tray says a unit "was removed unexpectedly" when the child
+- **T22** (owner, 2026-10-18, 2026-10-20 and 2026-10-22, roadmap-usb4
+  43.21; revision 16) The tray says a unit "was removed unexpectedly" when the child
   filter saw Windows surprise-remove a running device of it, from a
   count in the query's answer (version 2), on NT only; never that it was
   unplugged or that data was lost (section 7.6). The count, not the 1 s
   diff, is the evidence. The answer's key for the last removal is its
   tunnel port, not a router, and the notice names no unit: neither the
   driver nor the tray can prove which router a removed device ran
-  behind, and the unit's own "disconnected" balloon names it.
+  behind, and the unit's own "disconnected" balloon names it. The owner
+  accepted that on 2026-10-22, had the warning shown on every NT system,
+  2000 included, and asked for a per-user option to turn it off, on by
+  default (section 7.6 item 8).
 
 ## 13. Open
 
@@ -1709,10 +1732,10 @@ line in `test\test_tr.c`, with the mark service's reader of version 2.
   returns to `DeviceIoControl` for the removed-device answer.
 - Whether the ICM's firmware messages carry a link rate the client could
   keep; until read, "not reported by the firmware".
-- Revision 16, for the owner: whether Windows 2000, which shows its own
-  Unsafe Removal dialog after an unplug without an eject, should get the
-  tray's notice too. As designed it does (one rule for every NT target,
-  and the dialog names the disk, not the unit).
+- Revision 16: whether Windows 2000, which shows its own Unsafe Removal
+  dialog after an unplug without an eject, gets the tray's notice too.
+  Closed by the owner, 2026-10-22: it does, with the option of section
+  7.6 item 8.
 
 ## 14. As built
 
