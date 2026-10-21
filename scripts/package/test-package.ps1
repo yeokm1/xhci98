@@ -3288,7 +3288,7 @@ try {
            Why  = "the publish destination is no longer the leg's own directory" },
         @{ Find = '$makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,';
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
-        @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
+        @{ Find = 'Stop-CutCheck "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
         @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable';
            Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's files and txtsetup.oem" },
@@ -4871,7 +4871,7 @@ try {
     $destRoot = $coDir
     $script:cutCheckFaults = New-Object System.Collections.ArrayList
     $CheckOnly = $true
-    Write-GeneratedText -Path (Join-Path $coDir "readme.txt") -Lines @("fits", ("x" * 79), ("caf" + [char]0xE9))
+    Write-GeneratedText -Path (Join-Path $coDir "readme.txt") -Lines @("fits", ("x" * 79), ("caf" + [char]0xE9)) 6>$null
     Assert-True ($script:cutCheckFaults.Count -eq 2 -and $script:cutCheckFaults[0].Contains("past 78 columns") -and
                  $script:cutCheckFaults[1].Contains("not printable ASCII")) `
         ("-CheckOnly did not note both refusals of one generated text: " + ($script:cutCheckFaults -join " | "))
