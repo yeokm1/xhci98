@@ -263,8 +263,8 @@ function Get-LegSerialLines {
     return , @($text -split "`r?`n" | Where-Object { $_ -like 'XHLEG *' } | ForEach-Object { $_.TrimEnd() })
 }
 
-# The vCPUs one QEMU command line asks for: -smp N, -smp cpus=N, or the
-# product of its topology (sockets, dies, clusters, cores, threads); none
+# The vCPUs one QEMU command line asks for: -smp N, -smp cpus=N, maxcpus=N
+# when cpus is not given, or the product of its topology (sockets, dies, clusters, cores, threads); none
 # is one. A -smp this cannot read returns a count no budget admits beside,
 # so the matrix waits rather than guess.
 function Get-QemuSmpCount {
@@ -273,6 +273,8 @@ function Get-QemuSmpCount {
     $spec = $Matches[1]
     if ($spec -match '^(\d+)(,|$)') { return [int]$Matches[1] }
     if ($spec -match '(^|,)cpus=(\d+)') { return [int]$Matches[2] }
+    # QEMU starts maxcpus vCPUs when cpus is omitted.
+    if ($spec -match '(^|,)maxcpus=(\d+)') { return [int]$Matches[2] }
     $n = 1; $any = $false
     foreach ($k in 'sockets', 'dies', 'clusters', 'cores', 'threads') {
         if ($spec -match "(^|,)$k=(\d+)") { $n *= [int]$Matches[2]; $any = $true }

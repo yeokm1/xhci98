@@ -60,27 +60,40 @@ function Save-LegShot {
 
 # What a 98 SE guest's 640x480 screen shows, by a few pixels of the dialogs
 # the controller's wizard brings up (Windows 98 SE's standard colours, read
-# off this lab's screens on 2026-10-22): 'insert-disk' (its active title bar
-# across y 213), 'copy-files' ("Copying Files..." with its "Copy files from"
-# box: an active title bar across y 199 and the white box at y 363),
-# 'wizard' (the Add New Hardware wizard's own title bar active at y 77), or
-# 'other'.
+# off this lab's screens on 2026-10-22):
+#   'insert-disk'    its active title bar across y 213
+#   'copy-files'     "Copying Files..." with its "Copy files from" box: an
+#                    active title bar across y 199 and the white box at y 363
+#   'copy-progress'  the file copy's progress window, title bar at y 143
+#                    (active, or inactive under one of the two above), with
+#                    the wizard's own title bar inactive
+#   'wizard'         the Add New Hardware wizard's title bar active at y 77
+#   'question'       the wizard gone (no title bar at y 77, active or not)
+#                    and an active title bar across the middle of the screen
+#   'other'          anything else; 'unknown' when no screen could be read
 function Get-Leg98Dialog {
     param([int]$QmpPort, [string]$Dir)
     $p = Join-Path $Dir 'state.png'
-    try { Save-QmpScreen -Port $QmpPort -Path $p; Start-Sleep -Milliseconds 400 } catch { return 'other' }
+    try { Save-QmpScreen -Port $QmpPort -Path $p; Start-Sleep -Milliseconds 400 } catch { return 'unknown' }
     Add-Type -AssemblyName System.Drawing
     $b = $null
     try {
         $b = New-Object System.Drawing.Bitmap $p
-        if ($b.Width -ne 640 -or $b.Height -ne 480) { return 'other' }
+        if ($b.Width -ne 640 -or $b.Height -ne 480) { return 'unknown' }
         $navy = { param($c) $c.R -lt 40 -and $c.G -lt 40 -and $c.B -gt 120 }
+        $dim = { param($c) $c.R -ge 120 -and $c.R -le 150 -and $c.G -ge 120 -and $c.G -le 150 -and $c.B -ge 125 -and $c.B -le 160 }
         if ((& $navy ($b.GetPixel(400, 213))) -and -not (& $navy ($b.GetPixel(400, 199)))) { return 'insert-disk' }
         $w = $b.GetPixel(300, 363)
         if ((& $navy ($b.GetPixel(400, 199))) -and $w.R -gt 240 -and $w.G -gt 240 -and $w.B -gt 240) { return 'copy-files' }
-        if (& $navy ($b.GetPixel(400, 77))) { return 'wizard' }
+        $wiz = $b.GetPixel(400, 77)
+        if (& $navy $wiz) { return 'wizard' }
+        $pr = $b.GetPixel(380, 143)
+        if ((& $dim $wiz) -and ((& $navy $pr) -or (& $dim $pr))) { return 'copy-progress' }
+        if (-not (& $dim $wiz)) {
+            for ($y = 120; $y -le 320; $y += 2) { if (& $navy ($b.GetPixel(320, $y))) { return 'question' } }
+        }
         return 'other'
-    } catch { return 'other' } finally { if ($b) { $b.Dispose() } }
+    } catch { return 'unknown' } finally { if ($b) { $b.Dispose() } }
 }
 # One named host step. Returns a line for the leg's record. The key
 # sequences are the ones the 43.5 legs walked by hand on 98 SE with this
@@ -124,19 +137,19 @@ function Invoke-LegHostStep {
             while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
                 $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
                 if ($state -eq 'insert-disk') {
-                    $disk++; Save-LegShot $QmpPort $Dir "$Tag-hcd-disk$disk"
+                    $copySeen = $true; $disk++; Save-LegShot $QmpPort $Dir "$Tag-hcd-disk$disk"
                     Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 4; $quiet = 0; continue
                 }
                 if ($state -eq 'copy-files') {
                     if ($typed -ge 2) { Save-LegShot $QmpPort $Dir "$Tag-hcd-copyagain"; return "${Step}: FAILED, the copy still asks for files after the directory was given twice" }
-                    $typed++; Save-LegShot $QmpPort $Dir "$Tag-hcd-copy$typed"
+                    $copySeen = $true; $typed++; Save-LegShot $QmpPort $Dir "$Tag-hcd-copy$typed"
                     Send-QmpText -Port $QmpPort -Text $InstallDir
                     Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 5; $quiet = 0; continue
                 }
                 # The copy runs in a window of its own over the wizard (its
                 # title bar then inactive): only once that has been seen is
                 # the wizard's own page, active and still, its last one.
-                if ($state -ne 'wizard') { $copySeen = $true }
+                if ($state -eq 'copy-progress') { $copySeen = $true }
                 if ($copySeen -and $state -eq 'wizard' -and (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir -GapSeconds 4)) { $quiet++ } else { $quiet = 0 }
                 if ($quiet -ge 2) { break }
                 Start-Sleep -Seconds 2
@@ -153,11 +166,11 @@ function Invoke-LegHostStep {
             $gone = $false
             $deadline = (Get-Date).AddSeconds(90)
             while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
-                if ((Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir) -eq 'other' -and (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir -GapSeconds 4)) { $gone = $true; break }
+                if ((Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir) -eq 'question' -and (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir -GapSeconds 4)) { $gone = $true; break }
                 Start-Sleep -Seconds 2
             }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-restart"
-            if (-not $gone) { return "${Step}: FAILED, the wizard did not close after Finish (Insert Disk $disk, directory typed $typed)" }
+            if (-not $gone) { return "${Step}: FAILED, no restart question after Finish (Insert Disk $disk, directory typed $typed)" }
             Send-QmpChord -Port $QmpPort -Chord 'ret'
             if ($Process.WaitForExit(300000)) { return "${Step}: walked (Insert Disk $disk, directory typed $typed), QEMU ended at the restart" }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-end"
@@ -172,15 +185,16 @@ function Invoke-LegHostStep {
             $state = 'other'
             while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
                 $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
-                if ($state -ne 'other') { break }
+                if ($state -in 'wizard', 'copy-files', 'insert-disk') { break }
                 Start-Sleep -Seconds 3
             }
             Save-LegShot $QmpPort $Dir "$Tag-stor-0"
-            if ($state -eq 'other') { return "${Step}: no wizard came in 120 s" }
+            if ($state -ne 'wizard' -and $state -ne 'copy-files' -and $state -ne 'insert-disk') { return "${Step}: no wizard came in 120 s" }
             for ($i = 1; $i -le 8; $i++) {
                 $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 3 -MaxSeconds 60
                 $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
-                if ($state -eq 'other') { return "${Step}: walked, $($i - 1) pages" }
+                if ($state -in 'other', 'question') { return "${Step}: walked, $($i - 1) pages" }
+                if ($state -eq 'unknown' -or $state -eq 'copy-progress') { continue }
                 if ($state -eq 'copy-files') { Send-QmpText -Port $QmpPort -Text $InstallDir }
                 Send-QmpChord -Port $QmpPort -Chord 'ret'
                 Save-LegShot $QmpPort $Dir "$Tag-stor-$i"
