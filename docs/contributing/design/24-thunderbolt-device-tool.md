@@ -34,6 +34,13 @@ revision 3 (a privileged service writing a device-specific `LowerFilters`
 value), section 7.2's query-and-remove route staying as the fallback for
 a unit the service has not reached.
 
+Revision 7, 2026-10-21 (roadmap-usb4.md task 43.44, the owner's choice
+of that day): an ICM entry's generation on the integrated rows and Maple
+Ridge comes from the router's USB4 Version, which the connection manager
+reads once per occupancy (record 21 section 5.3), and is "not known"
+until then or where the read fails; Maple Ridge's USB3 tunnel is "not
+known" like the integrated rows' (section 3, offsets 28 and 36).
+
 It is not a Thunderbolt control panel: it approves nothing, changes no
 security level, updates no firmware, and publishes or shows no secret or
 authentication material.
@@ -164,9 +171,9 @@ version it does not know.
 | 16 | approval: 1 approved, 2 approved before the system started, 4 refused by the firmware, 5 never answered, 6 not approved (policy, or not yet), 7 held, failed or unsupported (USB4) | from the table entry | from the port state | 1, or 6 while its removal is pending |
 | 20 | USB4 port state (7:0) and reason (15:8), record 22 section 7.2 | 0 | yes | 0 |
 | 24 | ids | the Thunderbolt vendor and model ids where the DROM's Intel entry carried them | the router's PCI-style vendor and device | unknown |
-| 28 | generation: 1 Thunderbolt 3, 2 USB4 (version in 15:8) | 1 | from the router | from the link record |
+| 28 | generation: 0 not known, 1 Thunderbolt 3, 2 USB4 (version in 15:8) | 1 on Falcon, Alpine and Titan Ridge; on the integrated rows and Maple Ridge from the router's ROUTER_CS_4, read once per occupancy (record 21 section 5.3): 2 with the version for USB4 Version major 1 or 2, 1 for major 0, 0 before the read, after a failed one or for a reserved major | from the router | from the link record |
 | 32 | lanes: 0 unknown, 1 single, 2 bonded | 0 | where configured or verified | 0 |
-| 36 | tunnels, 4 bits each: PCIe (3:0), USB3 (7:4), DisplayPort (11:8); 0 none, 1 up, 2 found at start and kept, 3 failed, 4 torn down after an eject, 5 unknown | PCIe up while approved, else none; USB3 none on the Thunderbolt 3 rows (Falcon, Alpine and Titan Ridge: a Thunderbolt 3 device carries USB inside its PCIe tunnel, through its own controller), unknown on the integrated rows; DisplayPort unknown | from the port | all unknown |
+| 36 | tunnels, 4 bits each: PCIe (3:0), USB3 (7:4), DisplayPort (11:8); 0 none, 1 up, 2 found at start and kept, 3 failed, 4 torn down after an eject, 5 unknown | PCIe up while approved, else none; USB3 none on the Thunderbolt 3 hosts (Falcon, Alpine and Titan Ridge: a Thunderbolt 3 device carries USB inside its PCIe tunnel, through its own controller), unknown on the integrated rows and Maple Ridge; DisplayPort unknown | from the port | all unknown |
 | 40 | the tunnel port its PCIe tunnel reaches (bus/device/function) | the domain's single active member when it has exactly one, else unknown | the port-to-bridge correspondence (`XHCI_TBT_BINDS`, record 22 section 7.6), else unknown | unknown |
 | 44 | the UUID's last 16 bits | yes | where read | where read |
 | 48 | reserved, 0 | | | |

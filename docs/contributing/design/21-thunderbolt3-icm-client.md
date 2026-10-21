@@ -40,6 +40,10 @@ day): the x64 package keeps the filter INF at the flavour directory's
 root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
 package keeps `nt\` (section 3.3, the packaging in section 3.3's last
 paragraphs, section 6.2's filter install).
+Section 5.3 revised 2026-10-21 (task 43.44, the owner's choice of that
+day): on the integrated rows and Maple Ridge the client reads each
+announced router's USB4 Version once per occupancy, so the status record
+no longer calls every such router Thunderbolt 3.
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -1311,6 +1315,133 @@ after every `driver ready` the table is reconciled: an entry not re-announced
 within 500 ms of the host-router poll succeeding, or of its 50 tries running
 out (section 5.1 step 9), is treated as gone and the
 tunnel-down sequence runs for it [inf, the client's own 500 ms check].
+
+**The router's generation, read from the router (task 43.44, the owner's
+choice of 2026-10-21).** The status record (design record 24 section 3)
+gives each table entry a generation. Nothing in an announcement carries
+one: the event's flags give the link's rate and width, the name block
+the DROM's names and ids, and neither says whether the device router is
+a Thunderbolt 3 router or a USB4 one. Until this revision every entry
+was written "Thunderbolt 3", which the owner's Framework 13 (12th
+generation, Alder Lake, this row's Tiger Lake class) showed wrong for
+the ORICO ASM246x enclosure, a USB4 device router on a USB4 host. On
+the hosts named below the client therefore reads the router itself, as
+Linux's client does for every router the firmware announces
+(`icm.c` `alloc_switch`, `switch.c` `tb_switch_alloc`: one DW of the
+router space at the route, then ROUTER_CS_0 to 4, five DWs, and
+`tb_switch_get_generation` from ROUTER_CS_4's USB4 Version [linux]).
+
+- **Which hosts.** The ICL row (Ice Lake, and Tiger Lake to Meteor
+  Lake) and Maple Ridge, which runs the TR row's messages but is a USB4
+  host: on both a USB4 device router is possible, so "Thunderbolt 3" is
+  an assumption there. The driver tells the client at bind
+  (`TbtIcmSetReadVersion`, from the hardware row: the ICL message row,
+  or a TR row whose ownership predicate is NVM authentication done).
+  Falcon, Alpine and Titan Ridge keep "Thunderbolt 3" with no read:
+  their links are Thunderbolt 3 links whatever router is at the other
+  end. Maple Ridge is the one host this revision adds beyond the
+  owner's wording of the task, by the same reasoning; the same change
+  stops the record claiming "no USB3 tunnel" there (record 24 section
+  3), which is a Thunderbolt 3 host's property.
+- **The frame.** One Read Request (PDF 1, Spec 6.4.2.3) on TX ring 0,
+  the ring the ICM's own commands use, through `TbtRingCtlRead`, the
+  path the host-router poll of section 5.1 step 9 already takes at
+  route 0 on every row: router configuration space, DW 0, five DWs
+  (ROUTER_CS_0 to 4, the read Linux makes), at the route the entry
+  holds (on these rows the route the event carried, section 1.4.4). It
+  is a read alone: no write of any kind, no router operation, nothing a
+  firmware connection manager could take for a competing one. The
+  response is a Read Response (PDF 1) matched by route and by the echo
+  of Address, Size, CS and Sequence Number (`tbt_ring.c`); a
+  request-error notification ends it (`TBT_E_NOTIFY`); every other
+  frame met during it - an ICM event among them - is handed to the
+  client's receiver, where, as in any wait, an announcement is queued
+  and a disconnect acts at once (section 5.2).
+- **That the firmware answers it.** Observed on the Alpine Ridge
+  firmware: Linux's client read the dock's router header at route 1
+  after the get route of every announcement, approved or not - 85
+  requests in 13 ms for the ORICO, `0x2463174c 0x001101c0 0x00000001
+  0x80000000 0x200000fe`, USB4 Version `20h`, and the TS3 Plus's
+  `0x020000fe`, USB4 Version `02h`, a Thunderbolt 3 router
+  (`ICM-PROTOCOL` sections 5.3, 5.5, 6.4 and 13.3) [obs]. On this
+  record's rows the same read is [linux] (`icm_tr_device_connected`
+  and `icm_icl_device_connected` both reach `alloc_switch`) and
+  uncaptured. A router not yet approved is read the same way: approval
+  is the firmware's decision to build the PCIe tunnel, and the router
+  answers configuration requests on the control channel before it
+  ([obs] section 6.4, the dock enumerated between its announcement with
+  `approved` = 0 and the approve). Under level `user`, `secure` (which
+  this driver never satisfies, section 5.4) or a level that never
+  tunnels PCIe, the router the firmware announced with a route has been
+  enumerated by it, and the read neither approves nor refuses anything.
+  Under level `none` the firmware tunnels before it announces; the read
+  is the same.
+- **What the firmware may be doing.** The firmware announces a router
+  after it enumerated it; it may still be configuring it (tunnels,
+  deeper routers) when the read arrives. A read changes nothing a
+  configuration depends on, and the router answers each control request
+  on its own; Linux's 85 reads interleave with the firmware's own work
+  in the capture without effect [obs]. After the first `driver ready`
+  the firmware holds configuration requests while it announces (about
+  580 ms, 2.77 s under BIOS Assist with a pre-boot device [obs] section
+  5.5's paragraph on held requests); the read is made only after the
+  host-router poll, which waited out that hold, and its timeout covers
+  it in any case.
+- **When.** Never in an event's path and never in a wait: a new entry
+  (a new occupancy, section 5.3's last case) is marked "version owed",
+  and the next idle poll (`TbtIcmPoll`) makes the read before it takes
+  any frame, so the actions of the poll that created the entry have
+  already been drained (section 6.5) and an approve or a tunnel-up
+  sequence never waits behind it. One read per poll, the oldest owed
+  entry first; the client counts itself in a wait for its duration
+  (section 5.2), so a re-entrant command is refused. A read is owed
+  only by an entry with a route; not on a failed or stopped instance,
+  in a resume, a recovery or a rediscovery.
+- **Timeout and retry.** One attempt, bounded by the command timeout
+  (`XhciCmCmdTimeoutMs`, 5 s by default, the value Linux's control
+  channel takes under the ICM, `ICM_TIMEOUT`), with no retry: a read
+  that answers comes in milliseconds [obs], and its value is
+  informational, so a timeout is cheaper to report as "not known" than
+  to retry at the cost of the thread. That is inside section 5.5's
+  per-command bound and outside the resume budget of section 5.6 (no
+  read runs in a resume). The liveness monitor's gate (section 5.5)
+  ends the wait at once on a lost host interface.
+- **What is kept.** The fifth DW's bits 31:24, the USB4 Version, by its
+  major alone (design record 22 section 3.5, `TbtHwRouterVersion`): a
+  major of 1 or 2 is USB4 with the byte kept, and the entry carries
+  `CM_ST_GEN_USB4 | version << 8` as the software connection manager's
+  USB4 rows do; major 0 is a Thunderbolt 3 router and the entry carries
+  `CM_ST_GEN_TBT3`, as the software connection manager writes such a
+  router; any other major is reserved and the generation not known. The
+  answer is taken only if ROUTER_CS_3 has TopologyID Valid set and
+  ROUTER_CS_2 and ROUTER_CS_3 hold the entry's route (the TopologyID a
+  router at that route carries once enumerated, Spec 8.2.1.1 [obs] in
+  both readings above): one that does not is logged with its five DWs
+  and the generation is not known. The five DWs are logged in every
+  case, for the row no capture has seen.
+- **Failure.** A timeout, a request-error notification, a short
+  response, a header that is not the route's, or a reserved major: the
+  generation is "not known" (`CM_ST_GEN_UNKNOWN`) for that occupancy,
+  logged and counted, and never "Thunderbolt 3" on these hosts; nothing
+  else of the entry changes and nothing is retried. Until the read is
+  made the entry is "not known" as well.
+- **Resume, reconnect and the occupancy.** The value belongs to the
+  occupancy (the entry's serial): a refresh of the same occupancy (the
+  resume case, a recovery's or a rediscovery's re-announcement) keeps
+  it and reads nothing, as Linux reads nothing on that path [obs]
+  section 6.5; a disconnect, a replacement or a move ends the
+  occupancy, and the new one is read afresh. An answer that lands after
+  its entry left, or after the slot was taken by another occupancy, is
+  discarded.
+- **The USB3 tunnel stays "not known".** The record's USB3 field on
+  these hosts is not filled from this read. ROUTER_CS_5's USB3
+  Tunneling On is a bit the connection manager sets to let the router's
+  USB3 function work tunnelled, not evidence that a path exists, and
+  what the firmware sets there is uncaptured; the paths themselves are
+  in the adapters' configuration spaces at both ends, a walk of several
+  reads (adapter headers, capability chains, path entries) of state
+  the firmware changes without an event. That is not a read-once
+  value, and this revision does not take it.
 
 ### 5.4 Approval policy (decision D4, taken 2026-10-14)
 
@@ -4412,7 +4543,12 @@ vectors):
   an announcement settling it), a failed route request followed by an
   identical announcement (the route retried, then the approve sent), a
   short frame, an all-zero UUID, a name block overrunning its frame, and a
-  disconnect matching no entry;
+  disconnect matching no entry; and section 5.3's generation read - none
+  on the Thunderbolt 3 rows, one per occupancy on the others at the next
+  idle poll and none on a refresh, a USB4 major 1 and 2, a major 0, a
+  reserved major, a header that is not the route's, no answer, a
+  request-error notification, and a disconnect during the read - with
+  the status record's generation for each (`test_cm_status`);
 - selection and hardware profiles (`test_tbt_hw`), pure (section 1.4.2),
   as a table of register readings to
   outcomes: each row's ownership predicate passing; ICM enabled clear on
