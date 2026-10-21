@@ -20,12 +20,15 @@
  *             while it still carries that id.
  *   QUERY     Query_Remove_SubTree (a call). Refused: terminal, nothing
  *             else is done (REFUSED with its CONFIGRET).
- *   REQUEST   accepted: for an NVMe function with an UP entry published
- *             for it, REMOVE_PENDING with a fresh sequence (R9a), T_ack
- *             measured from before its publication; otherwise no request,
- *             and the removal is authorised by the query alone (a unit that
- *             is not an NVMe function, or no channel: record 24 section
- *             7.1's removal).
+ *   REQUEST   accepted: for an NVMe function (which a channel entry named
+ *             at acceptance, or the ask was refused before its query,
+ *             CM_EJ_WHY_NO_CHANNEL), REMOVE_PENDING with a fresh sequence
+ *             (R9a), T_ack measured from before its publication; an NVMe
+ *             function the channel no longer names, or whose request was
+ *             not published, takes the branch of no answer (isolation
+ *             first, or the block). A unit that is not an NVMe function
+ *             gets no request, its removal authorised by the query alone
+ *             (record 24 section 7.1's removal).
  *   ANSWER    the answer read on every step, the deadline first (R11),
  *             twice unchanged (R6d) - CmNvlinkRemoveStep's rules.
  *   then R11 O5's branches, kept apart:
@@ -456,7 +459,10 @@ VOID CmEjectDown(struct _CM_NHI *nhi, ULONG member);
 /*
  * The 9x statement decision (part 2): entered for member `member` before
  * its slot reading is posted to that member's call worker, `budgetMs`
- * from now; TRUE when entered (the caller answers CM_NVLINK_PENDING and
+ * from its anchor - for the ICM (`kind` 1) the tunnel-down action's start
+ * (CmEjectDownBegin), so no scheduling delay extends the absolute
+ * deadline; otherwise now; TRUE when entered (the caller answers
+ * CM_NVLINK_PENDING and
  * the decision's completion publishes or withholds, CmNvlinkDecided).
  * FALSE when no worker can read: the caller decides at once.
  */

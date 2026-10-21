@@ -825,6 +825,12 @@ static VOID test_decision(VOID)
           "taken late");
     CHECK_EQ(d.Reading, XHCI_TBT_PORT_ERROR, "taken late is no reading");
 
+    /* Entered late against an anchor in the past: the delay spends the
+     * same absolute allowance. */
+    CmEjDecideBegin(&d, 1, 0, 0, 9, 1000, 2000);
+    CHECK_EQ(CmEjDecideLeft(&d, 2900), 100, "100 ms left of the 2 s");
+    CHECK(CmEjDecideExpire(&d, 3000), "expired at the anchor's 2 s");
+
     CmEjDecideBegin(&d, 2, 1, 0, 7, 0xFFFFFF00UL, 400);
     CHECK(!CmEjDecideExpire(&d, 0x10UL), "across the clock's wrap");
     CHECK(CmEjDecideExpire(&d, 0x90UL), "expired");

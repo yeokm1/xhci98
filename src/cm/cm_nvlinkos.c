@@ -1094,10 +1094,8 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
             CmLogNote(nhi, "cm.nvlink.9x.no-time", pollState);
             reading = XHCI_TBT_PORT_ERROR;
             state = XHCI_TBT_POLL_TIMEOUT;
-        } else if (!cmNvNt &&
-                   CmEjectDecide(nhi, 0, 1, FALSE,
-                                 CmEjectDownLeft(nhi,
-                                                 XHCI_TBT_POLL_BUDGET_MS))) {
+        } else if (!cmNvNt && CmEjectDecide(nhi, 0, 1, FALSE,
+                                            XHCI_TBT_POLL_BUDGET_MS)) {
             /* 98 SE and ME: the decision is entered and the reading posted
              * to the member's call worker; its completion publishes or
              * withholds (CmNvlinkDecided), and the member's removal is held

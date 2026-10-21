@@ -1475,7 +1475,8 @@ BOOLEAN CmEjectDecide(PCM_NHI nhi, ULONG member, ULONG kind,
     /* Entered before the read is posted: the identity and the absolute
      * deadline first. */
     CmEjDecideBegin(&d->Dec[member], kind, member,
-                    nhi->Reenum.Port[member].Bdf, d->DecSerial, cmEjNow(),
+                    nhi->Reenum.Port[member].Bdf, d->DecSerial,
+                    (kind == 1 && d->DownAtValid) ? d->DownAt : cmEjNow(),
                     budgetMs);
     d->Dec[member].PathClosed = pathClosed;
     (VOID)InterlockedIncrement(&cmEjDecPending);
