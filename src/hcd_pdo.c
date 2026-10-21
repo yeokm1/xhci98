@@ -64,6 +64,7 @@
  */
 
 #include "hcd.h"
+#include "xhci_usbdx.h"
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
 
@@ -885,6 +886,9 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         pdo->HubMttOn = dev->Hub->Alternate == 1;
     }
     hcdXportDecide(hc, pdo, xportFlags);
+    pdo->UsbdxStreams = (xportFlags & XHCI_XPORT_F_HC_STREAMS)
+                            ? hc->UsbdxMaxStreams
+                            : 0;
 
     obj->Flags |= DO_POWER_PAGABLE;
     obj->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -1620,15 +1624,20 @@ static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
 static ULONG hcdXportFlags(PHCD_CONTROLLER hc)
 {
     ULONG xportFlags;
+    ULONG entries;
 
     xportFlags = 0;
     /* 38.10, XhciStreamsOff (design record 20 section 4.2): a listed
      * controller reads as streamless here and at OPEN_STREAMS alike. */
-    if (XhciStreamHcEntries(XhciQuirkStreamsHcc1(
-            XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_STREAMS_OFF),
-            XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1))) != 0) {
+    entries = XhciStreamHcEntries(XhciQuirkStreamsHcc1(
+        XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_STREAMS_OFF),
+        XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1)));
+    if (entries != 0) {
         xportFlags |= XHCI_XPORT_F_HC_STREAMS;
     }
+    /* What 0x49104B answers for STATIC_STREAMS on the PDOs this pass
+     * creates (task 43.29; hcdPdoNew latches it). */
+    hc->UsbdxMaxStreams = XhciUsbdxMaxStreams(entries);
     if (HcdCtlForceBulkOnly(hc)) {
         xportFlags |= XHCI_XPORT_F_FORCE_BOT;
     }
@@ -3126,6 +3135,13 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             HcdUrbIsUsbdiQuery(
                 stack->Parameters.QueryInterface.InterfaceType)) {
             return HcdUrbQueryInterface(pdo, irp);
+        }
+        /* Windows 8's usbdex clients (task 43.29, design record 13
+         * section 6.13): no client on 98 SE to 7 asks it. */
+        if (!pdo->Composite &&
+            HcdUrbIsUsbdxQuery(
+                stack->Parameters.QueryInterface.InterfaceType)) {
+            return HcdUrbQueryUsbdx(pdo, irp);
         }
         hcdQueryInterfaceTrace(stack);
         return HcdCompleteIrp(irp, irp->IoStatus.Status,

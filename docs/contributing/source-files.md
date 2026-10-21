@@ -27,6 +27,7 @@ The rule that organises the directory: files in the pure core **decide** (they e
 | `xhci_sshub.c` | The SuperSpeed hub class's decisions: the 0x2A descriptor, the SuperSpeed port decision, hot or warm hub-port reset, the extended port status and a downstream SuperSpeedPlus rate's speed ID. | `test_sshub` |
 | `xhci_stream.c` | Bulk streams: the plan, the block layout (and the big layout of 36.25), Stream Contexts, the command encoders and an event's stream. | `test_stream` |
 | `xhci_xport.c` | The mass-storage transport policy: Bulk-Only or UAS for an interface that offers both, and the ids that follow; applied in `hcd_pdo.c`. | `test_xport` |
+| `xhci_usbdx.c` | Windows 8's client contract served by the bus (task 43.29, design record 13 section 6.13): the `GUID_USBD_INTERFACE_V1` and capability-request checks, the capability answers, the select and isochronous URB sizes and fills, the stream URBs' checks, the exact grant, and `0x220FB3` as `RESET_PORT`; applied in `hcd_urb.c` and `hcd_cfg.c`. | `test_usbdx` |
 | `xhci_psw.c` | The Intel EHCI-to-xHCI port switchover: the device-id gate, the board exemption, the `XhciIntelPortSwitch` rule, the start decision and the route and release sequences over caller-supplied configuration-space accessors ([design record 16](design/16-intel-port-switchover.md)); also compiled into `XHCIINST`. | `test_psw` |
 | `xhci_pirq.c` | The Intel PCH interrupt routing quirk: the `XhciIntelIrqRoute` rule, the listed xHCI and LPC pairs, the PIRQ that delivers the assigned IRQ in APIC and PIC mode, and `XhciPirqRun` over caller-supplied accessors (issue 12 section 5.1); also built into `XHCIQUAL`'s routing report. | `test_pirq` |
 | `xhci_tol.c` | Controller tolerance: each tolerant behaviour's decision, the `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` rules, the tolerance clock's arithmetic, the budgets and the terminal reasons ([design record 17](design/17-controller-tolerance.md)). | `test_tol`, `test_xfer`, `test_iso`, `test_td` |
@@ -110,6 +111,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `xhci_sshub.h` | The SuperSpeed hub class's pure half (`xhci_sshub.c`). | yes |
 | `xhci_stream.h` | Bulk streams' pure half (`xhci_stream.c`). | yes |
 | `xhci_xport.h` | The transport policy (`xhci_xport.c`). | yes |
+| `xhci_usbdx.h` | Windows 8's client contract, the pure half (`xhci_usbdx.c`). | yes |
 | `xhci_psw.h` | The port switchover (`xhci_psw.c`). | yes |
 | `xhci_pirq.h` | The interrupt routing quirk (`xhci_pirq.c`). | yes |
 | `xhci_tol.h` | Controller tolerance (`xhci_tol.c`), its constants and the state kept in the extension. | yes |
@@ -312,6 +314,7 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | `test_sshub.c` | `xhci_sshub.c`: the SuperSpeed hub decisions as tables. |
 | `test_stream.c` | `xhci_stream.c`: array sizes, contexts, layouts and encoders. |
 | `test_xport.c` | `xhci_xport.c` over constructed device shapes. |
+| `test_usbdx.c` | `xhci_usbdx.c`, with `xhci_stream.c`'s plan for the exact grant: both pointer widths' sizes and fills, every capability at every speed. |
 | `test_silent.c` | `xhci_silent.c` over constructed configurations. |
 | `test_regsrc.c` | `xhci_regsrc.c`: absent, per-device only, machine-wide only, both, and another type in either key. |
 | `test_psw.c` | `xhci_psw.c` over a modelled configuration space. |

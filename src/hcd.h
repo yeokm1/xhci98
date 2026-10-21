@@ -797,6 +797,12 @@ typedef struct _HCD_DEVICE_PDO {
     PIRP IdleIrp;
     volatile LONG IdlePending;
     PVOID BusifSlot;
+    /* What the capability request 0x49104B answers for STATIC_STREAMS
+     * (task 43.29; xhci_usbdx.h, XhciUsbdxMaxStreams): the most streams the
+     * bus grants an endpoint on this controller, 0 when it does not
+     * stream; latched at creation on the thread, so the dispatch reads no
+     * register. */
+    ULONG UsbdxStreams;
     ULONG PciBus;
     ULONG PciAddress;
     volatile ULONG PciRead;
@@ -1121,6 +1127,39 @@ typedef struct _HCD_HOLD {
  * unknown. */
 #define HCD_URB_FUNCTIONS 0x40UL
 
+/*
+ * Windows 8's stream URBs (task 43.29, design record 13 section 6.13.2):
+ * URB_FUNCTION_OPEN_STATIC_STREAMS with its _URB_OPEN_STATIC_STREAMS and
+ * USBD_STREAM_INFORMATION, and URB_FUNCTION_CLOSE_STATIC_STREAMS, which
+ * carries a _URB_PIPE_REQUEST. Declared here because neither DDK this tree
+ * builds with has them (Microsoft's "_URB_OPEN_STATIC_STREAMS" and
+ * "_USBD_STREAM_INFORMATION" pages give the members); the sizes are
+ * asserted in hcd_urb.c.
+ */
+#define HCD_URB_OPEN_STATIC_STREAMS     0x0035
+#define HCD_URB_CLOSE_STATIC_STREAMS    0x0036
+
+typedef struct _HCD_STREAM_INFO {
+    PVOID PipeHandle;
+    ULONG StreamID;
+    ULONG MaximumTransferSize;
+    ULONG PipeFlags;
+} HCD_STREAM_INFO, *PHCD_STREAM_INFO;
+
+typedef struct _HCD_URB_OPEN_STREAMS {
+    /* _URB_HEADER, spelled out so this header needs no usbdi.h. */
+    USHORT Length;
+    USHORT Function;
+    LONG Status;
+    PVOID UsbdDeviceHandle;
+    ULONG UsbdFlags;
+    PVOID PipeHandle;
+    ULONG NumberOfStreams;
+    USHORT StreamInfoVersion;
+    USHORT StreamInfoSize;
+    PHCD_STREAM_INFO Streams;
+} HCD_URB_OPEN_STREAMS, *PHCD_URB_OPEN_STREAMS;
+
 /* The enumeration's DMA scratch (hcd_dma.c), one common buffer: the
  * thread's control transfers use its first 4 KB, the limit a configuration
  * descriptor had before Phase 27, and each hub's status-change report has
@@ -1300,6 +1339,13 @@ typedef struct _HCD_CONTROLLER {
     ULONG UrbCount[HCD_URB_FUNCTIONS];
     ULONG UrbUnknown;
     ULONG IoctlUnknown;
+    /* Windows 8's client contract (task 43.29, design record 13 section
+     * 6.13.7): the streams count each new PDO latches (written by the
+     * thread at hcdXportFlags), and the stream URBs served and refused. */
+    ULONG UsbdxMaxStreams;
+    ULONG UsbdxStreamOpens;
+    ULONG UsbdxStreamCloses;
+    ULONG UsbdxStreamRefused;
 
     /* The map pump (hcd_dma.c, design record 13 section 11.3): records
      * waiting for map registers, one AllocateAdapterChannel outstanding at
@@ -2284,6 +2330,8 @@ VOID HcdCompRecordRelease(PHCD_COMP_RECORD rec);
 LONG HcdUrbIoRequest(PVOID urb, PHCD_IO_REQUEST req);
 ULONG HcdUrbIsUsbdiQuery(const GUID *guid);
 NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp);
+ULONG HcdUrbIsUsbdxQuery(const GUID *guid);
+NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp);
 VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo);
 VOID HcdUrbBusifRelease(PHCD_DEVICE_PDO pdo);
 VOID HcdUrbInit(VOID);
@@ -2619,6 +2667,9 @@ VOID HcdPoolFree(PVOID p);
 ULONG HcdPoolOutstandingCount(VOID);
 PVOID HcdPoolAllocHandedOff(ULONG bytes);
 VOID HcdPoolFreeForeign(PVOID p);
+PVOID HcdPoolAllocClient(ULONG bytes);
+VOID HcdPoolFreeClient(PVOID p);
+ULONG HcdPoolClientCount(VOID);
 PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes);
 VOID HcdPoolMdlFree(PMDL mdl);
 
