@@ -8069,7 +8069,11 @@ saved machine state beside a frozen disk:
    this is a Run value. On 2000 and XP it is a Run value, and the
    unsigned-driver policy is set to Ignore. On Vista and 7 it is an
    elevated logon task, so that no elevation prompt stops an unattended
-   install. The host then shuts Windows down from Start, Run.
+   install; creating it needs elevation itself, so for a guest marked
+   `SetupElevated` the host types the command into the Start menu's search
+   box, starts it with Ctrl+Shift+Enter and answers the consent prompt
+   (not yet run on a Vista or 7 guest). The host then shuts Windows down
+   from Start, Run.
 3. A second, cold start follows that shut down. Once the poller has said
    `XHLEG BOOT` on COM1, and a settling time has passed, the host stops the
    machine and saves its state.
@@ -8095,7 +8099,7 @@ phase ends by switching the machine off:
    - a USB stick the host plugs in on request must show up, and a 4 MiB
      file copied to it must compare equal with `fc /b`;
    - `INSTALL /console /uninstall /yes /nopause` runs.
-3. After the next start, `/list` must show nothing current.
+3. After the next start, `/list` must succeed and show nothing current.
 
 Each exit code and check, and the logs, go to COM1 as `XHLEG ...` lines.
 The host reads only COM1, and every restart is a cold start that the host
@@ -8109,14 +8113,24 @@ The host takes the steps a guest cannot take. These are named in
   after the install (record 23 section 6.2). It blocks every program
   started at logon until it is answered, so the poller cannot run until
   the host has walked it;
+- on 98 SE, the same wizard at the start after the uninstall, when the
+  controller has no driver again: it is escaped;
 - the first stick's wizard (roadmap-usb4 43.42, still open).
+
+A step is tied to the phase the previous start ended in
+(`AfterPhaseN`), not to a count of starts, so it follows the guest.
 
 The verdict is PASS when all of these hold:
 
 - the guest says `END`;
 - every check passed;
 - each exit code is one the leg allows;
-- no step failed.
+- no step failed, and every start ended with the guest switching itself
+  off.
+
+Whatever ends a start (a stall, the deadline, an error in the host's
+script), the host stops that start's QEMU, by its own QMP or its own
+process id, before the next start or the end of the leg.
 
 `-Cold` runs the same leg from a cold start instead of the saved state.
 That is the measurement of what the starting points save.
@@ -8135,6 +8149,9 @@ the budget:
 
 - the matrix's own vCPUs at most `MaxVcpu`;
 - every QEMU on the host together at most its logical processors.
+
+A running leg holds its vCPUs for its whole life, between its cold starts
+too. Other QEMUs on the host are counted as they run.
 
 It writes one table, `results.md` and `results.csv`, with each leg's
 verdict, minutes, starts, restore time, exit codes and reasons. The Manual
@@ -8168,7 +8185,15 @@ QEMU 11.1.0, are below. Each one is enforced in code.
 - **98 SE can switch itself off from a batch file.**
   `rundll32.exe shell32.dll,SHExitWindowsEx 5` does it from the poller's
   minimised DOS box, with no dialog.
-
+- **The wizard's file copy asks when it gets there.** "Insert Disk" and
+  "Copy files from" come after the copy has scanned for a while, not at a
+  fixed time; a timed key sequence typed the install directory into the
+  progress dialog and the leg stalled. The host step recognises the two
+  dialogs, and the wizard's own page, by a few pixels of their title bars
+  and box on the 640x480 screen (`Get-Leg98Dialog`).
+- **The CD image builder holds its source files** until its objects are
+  collected, so a staging directory deleted at once can fail with "in use";
+  the scripts collect first and retry.
 Timings, read on development host A with `3.2.0.0` at `e61538ae` (TCG):
 TIMINGS-PENDING
 

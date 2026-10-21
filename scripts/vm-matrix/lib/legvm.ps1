@@ -127,37 +127,25 @@ function Start-LegQemu {
     foreach ($p in $Ports.Qmp, $Ports.Vnc, $Ports.Mig) {
         if (-not (Test-LegPortFree $p)) { throw "port $p is in use" }
     }
-    $pidFile = Join-Path $RunDir "qemu-$Tag.pid"
-    if (Test-Path -LiteralPath $pidFile) { Remove-Item -LiteralPath $pidFile -Force }
-    $a += @('-pidfile', $pidFile)
     $err = Join-Path $RunDir "qemu-$Tag.err"
     $line = ($a | ForEach-Object { Quote-LegArg $_ }) -join ' '
     Set-Content -LiteralPath (Join-Path $RunDir "cmdline-$Tag.txt") -Value "`"$($Config.QemuExe)`" $line" -Encoding ASCII
-    # Through cmd.exe so QEMU's own stderr (an assertion, a refused option)
-    # lands in a file, with no console window: CreateNoWindow, never a shell.
-    $si = New-Object System.Diagnostics.ProcessStartInfo
-    $si.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
-    $si.Arguments = "/d /c `"`"$($Config.QemuExe)`" $line > `"$(Join-Path $RunDir "qemu-$Tag.out")`" 2> `"$err`"`""
-    $si.UseShellExecute = $false
-    $si.CreateNoWindow = $true
-    $shell = [System.Diagnostics.Process]::Start($si)
+    # QEMU itself, no shell between: its stderr (an assertion, a refused
+    # option) goes to a file, and its console window is hidden.
+    $p = Start-Process -FilePath $Config.QemuExe -ArgumentList $line -PassThru -WindowStyle Hidden `
+        -RedirectStandardError $err -RedirectStandardOutput (Join-Path $RunDir "qemu-$Tag.out")
     $deadline = (Get-Date).AddSeconds(30)
-    $p = $null
-    while (-not $p) {
-        if (Test-Path -LiteralPath $pidFile) {
-            $id = (Get-Content -Raw -LiteralPath $pidFile -ErrorAction SilentlyContinue) -replace '\D', ''
-            if ($id) { $p = Get-Process -Id ([int]$id) -ErrorAction SilentlyContinue }
+    try {
+        while (-not (Test-QmpUp $Ports.Qmp)) {
+            if ($p.HasExited) { throw "QEMU exited at start: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
+            if ((Get-Date) -gt $deadline) { throw "QEMU's QMP did not come up on $($Ports.Qmp)" }
+            Start-Sleep -Milliseconds 300
         }
-        if (-not $p -and $shell.HasExited) { throw "QEMU exited at start: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
-        if (-not $p -and (Get-Date) -gt $deadline) { throw 'QEMU wrote no pid file in 30 s' }
-        if (-not $p) { Start-Sleep -Milliseconds 300 }
-    }
-    while (-not (Test-QmpUp $Ports.Qmp)) {
-        if ($p.HasExited) { throw "QEMU exited at start: $(Get-Content -Raw -LiteralPath $err -ErrorAction SilentlyContinue)" }
-        if ((Get-Date) -gt $deadline) { throw "QEMU's QMP did not come up on $($Ports.Qmp)" }
-        Start-Sleep -Milliseconds 300
-    }
-    Add-LegPidLog $Config "started $Name tag $Tag pid $($p.Id) qmp $($Ports.Qmp)"
+    } catch {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(10000) }
+        Add-LegPidLog $Config "start failed, pid $($p.Id) ended ($Name tag $Tag)"
+        throw
+    }    Add-LegPidLog $Config "started $Name tag $Tag pid $($p.Id) qmp $($Ports.Qmp)"
     return $p
 }
 
@@ -232,6 +220,8 @@ function Restore-LegState {
             Start-Sleep -Milliseconds 200
         }
     }
+    # A write that QEMU stops taking times out rather than hanging the leg.
+    $c.SendTimeout = 60000
     $f = [System.IO.File]::OpenRead($Path)
     try { $f.CopyTo($c.GetStream()) } finally { $f.Close(); $c.Close() }
     $deadline = (Get-Date).AddSeconds(120)
@@ -255,22 +245,30 @@ function Set-LegCd {
 # the file so far; callers keep their own position.
 function Get-LegSerialLines {
     param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    if (-not (Test-Path -LiteralPath $Path)) { return , @() }
     try {
         $fs = New-Object System.IO.FileStream($Path, 'Open', 'Read', 'ReadWrite')
         try {
             $r = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::ASCII)
             $text = $r.ReadToEnd()
         } finally { $fs.Close() }
-    } catch { return @() }
-    return @($text -split "`r?`n" | Where-Object { $_ -like 'XHLEG *' } | ForEach-Object { $_.TrimEnd() })
+    } catch { return , @() }
+    # Only complete lines: one still being written is read on a later call.
+    $cut = $text.LastIndexOf("`n")
+    if ($cut -lt 0) { return , @() }
+    $text = $text.Substring(0, $cut)
+    return , @($text -split "`r?`n" | Where-Object { $_ -like 'XHLEG *' } | ForEach-Object { $_.TrimEnd() })
 }
 
 # vCPUs of every QEMU on the host, ours and others' (the owner's budget is
 # the host's sum, feedback-vm-core-budget). A QEMU with no -smp counts one.
 function Get-HostQemuVcpus {
+    param([int[]]$ExcludeQmpPorts = @())
     $sum = 0
     foreach ($q in @(Get-CimInstance Win32_Process -Filter "Name like 'qemu-system%'")) {
+        $mine = $false
+        foreach ($p in $ExcludeQmpPorts) { if ($q.CommandLine -like "*tcp:127.0.0.1:$p,server*") { $mine = $true } }
+        if ($mine) { continue }
         if ($q.CommandLine -match '-smp\s+"?(\d+)') { $sum += [int]$Matches[1] } else { $sum += 1 }
     }
     return $sum

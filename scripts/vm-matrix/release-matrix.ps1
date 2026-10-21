@@ -49,6 +49,7 @@ foreach ($l in $legSet.Legs) {
     $g = Get-LegGuest $cfg $l.Guest
     $null = Get-LegStartPoint $cfg $g $qver
     if ($MaxVcpu -gt 0 -and [int]$g.Smp -gt $MaxVcpu) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over MaxVcpu $MaxVcpu" }
+    if ([int]$g.Smp -gt $logical) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over the host's $logical" }
     [void]$todo.Add(@{ Def = $l; Smp = [int]$g.Smp })
 }
 if ($todo.Count -eq 0 -and $manual.Count -eq 0) { throw 'no leg selected' }
@@ -72,11 +73,15 @@ while ($todo.Count -gt 0 -or $running.Count -gt 0) {
     }
     $started = $false
     if ($todo.Count -gt 0 -and $free.Count -gt 0) {
-        $own = 0; foreach ($r in $running) { $own += $r.Smp }
-        $hostNow = Get-HostQemuVcpus
+        # A running leg holds its vCPUs for its whole life (between cold
+        # starts and while its CD is built, too); other QEMUs on the host are
+        # counted as they run, ours left out of that count by their QMP ports.
+        $own = 0; $ownPorts = @()
+        foreach ($r in $running) { $own += $r.Smp; $ownPorts += (Get-LegPorts $cfg $r.Slot).Qmp }
+        $external = Get-HostQemuVcpus -ExcludeQmpPorts $ownPorts
         foreach ($t in @($todo)) {
             if ($MaxVcpu -gt 0 -and $own + $t.Smp -gt $MaxVcpu) { continue }
-            if ($hostNow + $t.Smp -gt $logical) { continue }
+            if ($external + $own + $t.Smp -gt $logical) { continue }
             $slot = $free[0]; $free.RemoveAt(0)
             $id = $t.Def.Id
             $dir = Join-Path $runRoot $id
@@ -85,12 +90,9 @@ while ($todo.Count -gt 0 -or $running.Count -gt 0) {
                 '-Leg', $id, '-Package', (Quote-LegArg $Package), '-Legs', (Quote-LegArg $Legs), '-RunDir', (Quote-LegArg $dir), '-Slot', $slot)
             if ($cfgPath) { $la += @('-Config', (Quote-LegArg (Resolve-RepoPath $cfgPath))) }
             if ($Cold) { $la += '-Cold' }
-            $si = New-Object System.Diagnostics.ProcessStartInfo
-            $si.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
-            $si.Arguments = "/d /c `"`"$(Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')`"  $($la -join ' ') > `"$(Join-Path $dir 'run-leg.log')`" 2>&1`""
-            $si.UseShellExecute = $false
-            $si.CreateNoWindow = $true
-            $p = [System.Diagnostics.Process]::Start($si)
+            $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+                -ArgumentList ($la -join ' ') -PassThru -WindowStyle Hidden `
+                -RedirectStandardOutput (Join-Path $dir 'run-leg.log') -RedirectStandardError (Join-Path $dir 'run-leg.err')
             $running += @{ Id = $id; Proc = $p; Slot = $slot; Smp = $t.Smp }
             $todo.Remove($t)
             Write-Host ("{0,7:N0} s  {1} started in slot {2}" -f $sw.Elapsed.TotalSeconds, $id, $slot)

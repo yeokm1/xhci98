@@ -60,11 +60,11 @@ set XN=
 for %%d in (D E F G H I J K L M) do if exist %%d:\TESTDATA.BIN set XS=%%d
 if not "%XS%"=="" goto gots
 set XN=%XN%x
-if "%XN%"=="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" goto nos
+if "%XN%"=="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" goto nos
 choice /c:x /t:x,3 /n >NUL
 goto waits
 :nos
-echo XHLEG CHECK stick-seen FAIL no drive with TESTDATA.BIN in 120 s>COM1
+echo XHLEG CHECK stick-seen FAIL no drive with TESTDATA.BIN in 240 s>COM1
 goto unin
 :gots
 echo XHLEG CHECK stick-seen PASS %XS%:>COM1
@@ -97,12 +97,17 @@ echo XHLEG PHASE 3 removed>COM1
 %XC%:
 cd \PKG
 TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 /list>C:\XHLEG\LIST3.TXT
+call %XC%:\XHEXIT.BAT list-final
 C:
 cd \
 call %XC%:\XHSEND.BAT list C:\XHLEG\LIST3.TXT
 find "current (this" C:\XHLEG\LIST3.TXT>NUL
+if errorlevel 2 goto l3err
 if errorlevel 1 goto l3ok
 echo XHLEG CHECK list-removed FAIL a device still current>COM1
+goto done
+:l3err
+echo XHLEG CHECK list-removed FAIL find could not read the list>COM1
 goto done
 :l3ok
 echo XHLEG CHECK list-removed PASS>COM1

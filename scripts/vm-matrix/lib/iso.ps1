@@ -48,4 +48,19 @@ function New-LegIso {
     [XhciLegIsoWriter]::Save($img.ImageStream, $Path)
     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($img)
     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($fsi)
+    # The image builder holds its source files until its objects are
+    # collected; the caller usually deletes the staging directory next.
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+}
+
+# Deletes a staging directory, retrying while a scanner or the image builder
+# still holds a file in it; what cannot be deleted is left and said.
+function Remove-LegTree {
+    param([string]$Path)
+    for ($i = 0; $i -lt 10; $i++) {
+        if (-not (Test-Path -LiteralPath $Path)) { return }
+        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop; return } catch { Start-Sleep -Seconds 2 }
+    }
+    Write-Warning "could not delete $Path; left in place"
 }

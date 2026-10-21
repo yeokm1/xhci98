@@ -57,7 +57,7 @@ if ($g.Family -eq '9x') { $files = 'XHSETUP.BAT', 'XHSETUP.REG', 'XHPOLL.BAT'; $
 else { $files = 'XHSETUP.CMD', 'XHPOLL.CMD'; $setup = 'XHSETUP.CMD' }
 foreach ($f in $files) { Copy-Item -LiteralPath (Join-Path $legDir $f) -Destination $pd }
 New-LegIso -SourceDir $pd -Path $prep -Label 'XHPREP'
-Remove-Item -LiteralPath $pd -Recurse -Force
+Remove-LegTree $pd
 
 $layout = $g.Layout
 $letters = @('D', 'E', 'F', 'G')
@@ -75,9 +75,20 @@ function Wait-Line {
     return [bool]((Get-LegSerialLines $Serial) -match $Pattern)
 }
 
-function Invoke-RunBox {
+# SetupElevated (Vista, 7): the setup must run elevated to create its logon
+# task, so it is typed into the Start menu's search box and started with
+# Ctrl+Shift+Enter, and the consent prompt answered Yes (Alt+Y).
+function Invoke-ElevatedBox {
     param([string]$Text)
     Send-QmpChord -Port $ports.Qmp -Chord 'esc' -Layout $layout; Start-Sleep -Seconds 2
+    Send-QmpChord -Port $ports.Qmp -Chord 'meta_l' -Layout $layout; Start-Sleep -Seconds 4
+    Send-QmpText -Port $ports.Qmp -Text $Text -Layout $layout; Start-Sleep -Seconds 3
+    Send-QmpChord -Port $ports.Qmp -Chord 'ctrl-shift-ret' -Layout $layout; Start-Sleep -Seconds 8
+    Send-QmpChord -Port $ports.Qmp -Chord 'alt-y' -Layout $layout
+}
+
+function Invoke-RunBox {
+    param([string]$Text)    Send-QmpChord -Port $ports.Qmp -Chord 'esc' -Layout $layout; Start-Sleep -Seconds 2
     Send-QmpChord -Port $ports.Qmp -Chord 'meta_l-r' -Layout $layout; Start-Sleep -Seconds 4
     Send-QmpText -Port $ports.Qmp -Text $Text -Layout $layout; Start-Sleep -Seconds 1
     Send-QmpChord -Port $ports.Qmp -Chord 'ret' -Layout $layout
@@ -103,7 +114,8 @@ try {
     Save-LegShot $ports.Qmp $dir 'prep-desktop'
     $ok = $false
     foreach ($L in $letters) {
-        Invoke-RunBox "$($L):\$setup $L"
+        if ($g.ContainsKey('SetupElevated') -and $g.SetupElevated) { Invoke-ElevatedBox "$($L):\$setup $L" }
+        else { Invoke-RunBox "$($L):\$setup $L" }
         if (Wait-Line $serial '^XHLEG SETUP (OK|FAIL)' 60 $proc) { $ok = $true; break }
     }
     Save-LegShot $ports.Qmp $dir 'prep-setup'

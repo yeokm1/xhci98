@@ -21,7 +21,7 @@ call :send ver %XL%\VER.TXT
 if "%XHMODE%"=="window" goto operator
 pushd %XC%:\PKG
 call INSTALL.BAT /console /yes /nopause /log %XL%\INSTALL.LOG >%XL%\INSTALL.TXT 2>&1
-echo XHLEG EXIT install %ERRORLEVEL%>COM1
+>COM1 echo XHLEG EXIT install %ERRORLEVEL%
 popd
 call :send install %XL%\INSTALL.LOG
 goto off
@@ -39,7 +39,7 @@ if exist %SystemRoot%\System32\drivers\xhci98.sys (
 )
 pushd %XC%:\PKG
 call INSTALL.BAT /console /list >%XL%\LIST2.TXT 2>&1
-echo XHLEG EXIT list %ERRORLEVEL%>COM1
+>COM1 echo XHLEG EXIT list %ERRORLEVEL%
 popd
 call :send list %XL%\LIST2.TXT
 find "current (this" %XL%\LIST2.TXT >NUL
@@ -76,7 +76,7 @@ ping -n 6 127.0.0.1 >NUL 2>&1
 :unin
 pushd %XC%:\PKG
 call INSTALL.BAT /console /uninstall /yes /nopause /log %XL%\UNINST.LOG >%XL%\UNINST.TXT 2>&1
-echo XHLEG EXIT uninstall %ERRORLEVEL%>COM1
+>COM1 echo XHLEG EXIT uninstall %ERRORLEVEL%
 popd
 call :send uninstall %XL%\UNINST.LOG
 goto off
@@ -86,10 +86,13 @@ echo x>%XL%\PH4.ON
 echo XHLEG PHASE 3 removed>COM1
 pushd %XC%:\PKG
 call INSTALL.BAT /console /list >%XL%\LIST3.TXT 2>&1
+>COM1 echo XHLEG EXIT list-final %ERRORLEVEL%
 popd
 call :send list %XL%\LIST3.TXT
 find "current (this" %XL%\LIST3.TXT >NUL
-if errorlevel 1 (
+if errorlevel 2 (
+    echo XHLEG CHECK list-removed FAIL find could not read the list>COM1
+) else if errorlevel 1 (
     echo XHLEG CHECK list-removed PASS>COM1
 ) else (
     echo XHLEG CHECK list-removed FAIL a device still current>COM1

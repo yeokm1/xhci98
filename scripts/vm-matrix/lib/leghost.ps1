@@ -39,7 +39,7 @@ function New-LegIdleIso {
     New-Item -ItemType Directory -Force $d | Out-Null
     Set-Content -LiteralPath (Join-Path $d 'XHIDLE.TXT') -Value 'release matrix: no leg on this CD' -Encoding ASCII
     New-LegIso -SourceDir $d -Path $Path -Label 'XHIDLE'
-    Remove-Item -LiteralPath $d -Recurse -Force
+    Remove-LegTree $d
 }
 
 # Waits until the screen has stopped changing (a dialog has finished
@@ -58,11 +58,36 @@ function Save-LegShot {
     try { Save-QmpScreen -Port $QmpPort -Path (Join-Path $Dir "$Name.png") } catch { }
 }
 
+# What a 98 SE guest's 640x480 screen shows, by a few pixels of the dialogs
+# the controller's wizard brings up (Windows 98 SE's standard colours, read
+# off this lab's screens on 2026-10-22): 'insert-disk' (its active title bar
+# across y 213), 'copy-files' ("Copying Files..." with its "Copy files from"
+# box: an active title bar across y 199 and the white box at y 363),
+# 'wizard' (the Add New Hardware wizard's own title bar active at y 77), or
+# 'other'.
+function Get-Leg98Dialog {
+    param([int]$QmpPort, [string]$Dir)
+    $p = Join-Path $Dir 'state.png'
+    try { Save-QmpScreen -Port $QmpPort -Path $p; Start-Sleep -Milliseconds 400 } catch { return 'other' }
+    Add-Type -AssemblyName System.Drawing
+    $b = $null
+    try {
+        $b = New-Object System.Drawing.Bitmap $p
+        if ($b.Width -ne 640 -or $b.Height -ne 480) { return 'other' }
+        $navy = { param($c) $c.R -lt 40 -and $c.G -lt 40 -and $c.B -gt 120 }
+        if (& $navy ($b.GetPixel(400, 213)) -and -not (& $navy ($b.GetPixel(400, 199)))) { return 'insert-disk' }
+        $w = $b.GetPixel(300, 363)
+        if ((& $navy ($b.GetPixel(400, 199))) -and $w.R -gt 240 -and $w.G -gt 240 -and $w.B -gt 240) { return 'copy-files' }
+        if (& $navy ($b.GetPixel(400, 77))) { return 'wizard' }
+        return 'other'
+    } catch { return 'other' } finally { if ($b) { $b.Dispose() } }
+}
 # One named host step. Returns a line for the leg's record. The key
 # sequences are the ones the 43.5 legs walked by hand on 98 SE with this
 # package (Enter takes each wizard page's default button).
 function Invoke-LegHostStep {
-    param([string]$Step, [int]$QmpPort, [string]$Dir, [datetime]$Since, $Process, [string]$SerialPath, [string]$Tag)
+    param([string]$Step, [int]$QmpPort, [string]$Dir, [datetime]$Since, $Process, [string]$SerialPath, [string]$Tag,
+        [string]$InstallDir = 'C:\XHCI98')
     switch ($Step) {
         'esc-wizard98' {
             # A 9x guest with a controller it has no driver for raises the Add
@@ -79,41 +104,71 @@ function Invoke-LegHostStep {
         'wizard98-hcd' {
             # The first start after the console install on 98 SE: the wizard
             # for "xHCI98 USB 3.x eXtensible Host Controller" (record 23 s6.2):
-            # Next x3, Next (install), OK at "Insert Disk", the install
-            # directory typed into "Copy files from", OK, Finish, Yes to the
-            # restart (which ends QEMU).
+            # Next three times, Next to install; then, as the file copy asks,
+            # OK at "Insert Disk" and the install directory typed into "Copy
+            # files from"; Finish; Yes to the restart (which ends QEMU). The
+            # copy's dialogs come when the copy reaches them, so they are
+            # recognised on the screen (Get-Leg98Dialog), not timed.
             $settled = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since $Since -MinSeconds 40
             Save-LegShot $QmpPort $Dir "$Tag-hcd-0"
-            $seq = @(@('ret', 12), @('ret', 15), @('ret', 12), @('ret', 30), @('ret', 8))
-            $i = 1
-            foreach ($s in $seq) {
-                if ($Process.HasExited) { return "${Step}: QEMU ended at key $i" }
-                Send-QmpChord -Port $QmpPort -Chord $s[0]; Start-Sleep -Seconds $s[1]
-                Save-LegShot $QmpPort $Dir "$Tag-hcd-$i"; $i++
+            for ($i = 1; $i -le 4; $i++) {
+                if ($Process.HasExited) { return "${Step}: FAILED, QEMU ended at Next $i" }
+                Send-QmpChord -Port $QmpPort -Chord 'ret'
+                $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 4 -MaxSeconds 60
+                Save-LegShot $QmpPort $Dir "$Tag-hcd-$i"
             }
-            Send-QmpText -Port $QmpPort -Text 'C:\XHCI98'
-            Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 30
-            Save-LegShot $QmpPort $Dir "$Tag-hcd-$i"; $i++
-            Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 30
-            Save-LegShot $QmpPort $Dir "$Tag-hcd-$i"; $i++
+            $typed = 0; $disk = 0; $quiet = 0
+            $deadline = (Get-Date).AddSeconds(300)
+            while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
+                $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
+                if ($state -eq 'insert-disk') {
+                    $disk++; Save-LegShot $QmpPort $Dir "$Tag-hcd-disk$disk"
+                    Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 4; $quiet = 0; continue
+                }
+                if ($state -eq 'copy-files') {
+                    if ($typed -ge 2) { Save-LegShot $QmpPort $Dir "$Tag-hcd-copyagain"; return "${Step}: FAILED, the copy still asks for files after the directory was given twice" }
+                    $typed++; Save-LegShot $QmpPort $Dir "$Tag-hcd-copy$typed"
+                    Send-QmpText -Port $QmpPort -Text $InstallDir
+                    Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 5; $quiet = 0; continue
+                }
+                if ($state -eq 'wizard' -and (Test-ScreenSettled -QmpPort $QmpPort -Dir $Dir -GapSeconds 4)) { $quiet++ } else { $quiet = 0 }
+                if ($quiet -ge 2) { break }
+                Start-Sleep -Seconds 2
+            }
+            if ($Process.HasExited) { return "${Step}: FAILED, QEMU ended before the wizard's last page" }
+            Save-LegShot $QmpPort $Dir "$Tag-hcd-finish"
             Send-QmpChord -Port $QmpPort -Chord 'ret'
-            if ($Process.WaitForExit(300000)) { return "${Step}: walked (screen settled: $settled), QEMU ended at the restart" }
+            $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 6 -MaxSeconds 60
+            Save-LegShot $QmpPort $Dir "$Tag-hcd-restart"
+            Send-QmpChord -Port $QmpPort -Chord 'ret'
+            if ($Process.WaitForExit(300000)) { return "${Step}: walked (Insert Disk $disk, directory typed $typed), QEMU ended at the restart" }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-end"
-            return "${Step}: walked (screen settled: $settled), QEMU still running 300 s after the restart answer"
-        }
-        'wizard98-stor' {
+            return "${Step}: FAILED, QEMU still running 300 s after the restart answer (Insert Disk $disk, directory typed $typed)"
+        }        'wizard98-stor' {
             # A first Bulk-Only stick on 98 SE raises "USB Mass Storage
-            # Device" (roadmap-usb4 43.42, open): Next x4, Finish; the INF is
-            # found through DevicePath with no prompt.
-            $settled = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since $Since -MinSeconds 20 -MaxSeconds 120
+            # Device" (roadmap-usb4 43.42, open), whose INF is found through
+            # DevicePath with no prompt (the 43.5 leg of 2026-10-20): Enter on
+            # each page while the wizard is the active window; no wizard in
+            # 120 s is said, not failed (a later build may install silently).
+            $deadline = (Get-Date).AddSeconds(120)
+            $state = 'other'
+            while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
+                $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
+                if ($state -ne 'other') { break }
+                Start-Sleep -Seconds 3
+            }
             Save-LegShot $QmpPort $Dir "$Tag-stor-0"
-            for ($i = 1; $i -le 5; $i++) {
-                Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 10
+            if ($state -eq 'other') { return "${Step}: no wizard came in 120 s" }
+            for ($i = 1; $i -le 8; $i++) {
+                $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 3 -MaxSeconds 60
+                $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
+                if ($state -eq 'other') { return "${Step}: walked, $($i - 1) pages" }
+                if ($state -eq 'copy-files') { Send-QmpText -Port $QmpPort -Text $InstallDir }
+                Send-QmpChord -Port $QmpPort -Chord 'ret'
                 Save-LegShot $QmpPort $Dir "$Tag-stor-$i"
             }
-            return "${Step}: walked (screen settled: $settled)"
-        }
-        default { throw "unknown host step '$Step'" }
+            return "${Step}: FAILED, the wizard was still up after 8 pages"
+        }        default { throw "unknown host step '$Step'" }
     }
 }
 
