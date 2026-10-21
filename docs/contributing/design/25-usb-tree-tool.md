@@ -1150,7 +1150,7 @@ A new epoch is a new set of devices.
 | an ICM device's approval becomes failed | "<name> could not be approved." |
 | a router entry leaves | "<name> was disconnected." |
 | the liveness state leaves ACTIVE | "The Thunderbolt/USB4 controller stopped answering." |
-| the NHI's unexpected-removal count rises (revision 16, section 7.6; NT) | "<name> was removed unexpectedly." |
+| the NHI's unexpected-removal count rises (revision 16, section 7.6; NT) | "A Thunderbolt or USB4 device was removed unexpectedly." |
 
 The approval events read the ICM's approval states only: a USB4 entry's
 approval word folds held, failed and unsupported together and an eject
@@ -1375,20 +1375,22 @@ shown as disconnected, as before.
    says "removed unexpectedly", never "unplugged", and nothing about data.
 2. **Which unit.** The child filter knows the device's entry and its
    member - the tunnel port, by bus, device and function - and nothing
-   of a router: which router a device ran behind cannot be proved from
-   the driver's side without a continuity token neither connection
-   manager gives at the moment a bridge's answer lists the device (under
-   the ICM a replacement can be announced and approved before the bus
-   answer that drops the old device; under the USB4 profile the member's
+   of a router. Which router a device ran behind cannot be proved from
+   the driver's side: neither connection manager gives a continuity
+   token at the moment a bridge's answer lists the device (under the
+   ICM a replacement can be announced and approved before the bus answer
+   that drops the old device; under the USB4 profile the member's
    connection generation is refreshed only when the re-enumeration is
-   serviced, after the answer it caused may already have come). So the
-   driver publishes the member as the last removal's key, and the tray
-   names the unit from what it saw leave (item 4): a router that leaves
-   is the one evidence that it was the one unplugged, and a replacement
-   has not left. The count, the lost count and the last member live
-   beside the marks table, under the registration list's lock, and are
-   emptied with it at the domain's start and stop, so they are per
-   start, as the epoch is.
+   serviced, after the answer it caused may already have come). Nor can
+   the tray prove it from what it sees leave: a router is keyed by its
+   route or place, which a replacement shares, and a clean departure on
+   the same port can fall beside another device's removal. So the key the
+   answer carries for the last removal is its tunnel port, and the
+   notice names no unit; the unit's own "disconnected" balloon, which the
+   tray shows as before, names it where it left the record. The count,
+   the lost count and the last member live beside the marks table, under
+   the registration list's lock, and are emptied with it at the domain's
+   start and stop, so they are per start, as the epoch is.
 3. **The answer, version 2.** `CM_Q_VERSION` is 2. The 64-byte header is
    version 1's. At offset 64 follows the removal block, `CM_Q_RM_BYTES`
    = 32:
@@ -1417,38 +1419,17 @@ shown as disconnected, as before.
 4. **The tray.** The snapshot keeps each NHI's block (flags, count,
    member). Between two snapshots, for an NHI both hold at the same
    epoch, each with `CM_Q_RF_WATCHED` and the liveness ACTIVE, a count
-   that differs is one removal, however much it moved (one unplug can
+   that differs gives one event, however much it moved (one unplug can
    remove several devices, counted in one burst; where a burst straddles
-   two polls a second notice can follow, which is accepted). A domain
-   whose liveness has left ACTIVE already says it stopped answering: no
-   notice.
-
-   The removal is named by a departure: a router of that NHI and epoch
-   that left the record whose bridge word, as the tray last saw it while
-   the router was listed, is the block's member. The router's departure
-   and the count's rise are not ordered and nothing bounds how far apart
-   they come; they usually fall in one poll or the next. So, on a
-   watched NHI:
-   - a router's departure is held, its "disconnected" not shown, for up
-     to two polls;
-   - a removal waits for up to two polls for a departure on its member;
-   - a removal and the held departures on its member: exactly one names
-     the event, "<name> was removed unexpectedly.", and that departure's
-     "disconnected" is never shown; more than one, or none by the end of
-     its wait, gives "A Thunderbolt/USB4 device was removed
-     unexpectedly." (still in the details with its tunnel port), and the
-     departures are shown as they come due;
-   - a held departure no removal took by the end of its hold is shown,
-     "<name> was disconnected.", late by its hold.
-
-   Further apart than that both balloons come; it is a bounded best
-   effort, and T.11 reads it within a poll. The snapshot carries the
-   held departures and the waiting removal from one poll to the next; a
-   held one whose NHI is gone or at another epoch is dropped, as any
-   event of an old epoch is. On an NHI that is not watched a departure is
-   shown at once, as before. The warning title is the tray's existing
-   one. Balloons are 2000 and later anyway, and 98 SE and ME never set
-   `CM_Q_RF_WATCHED`.
+   two polls a second notice can follow, which is accepted): "A
+   Thunderbolt or USB4 device was removed unexpectedly.", under the
+   tray's warning title. It is decided within that one diff, so nothing
+   waits across polls: a domain whose liveness has left ACTIVE in either
+   sample gives none (it already says it stopped answering). The
+   departures are shown as before: where the unit's router left the
+   record, its own "<name> was disconnected." comes too, in the same poll
+   or another, and names it. Balloons are 2000 and later anyway, and 98
+   SE and ME never set `CM_Q_RF_WATCHED`.
 5. **The window and the report.** The NHI's details carry
    "Unexpected removals:" with the count since this start and, after
    the first, the last one's tunnel port, and the count in a loss when
@@ -1568,12 +1549,10 @@ by serial, a serial of another start or of another PDO refused, a device
 never started, a loss counted apart, the block, the reset) in
 `test\test_cm_marks.c`; the version 2 layout, the block, the record at
 its offset and the content generation in `test\test_cm_query.c`; the
-readers of both versions, the event (a rise, a wrap, an epoch change,
-the liveness gate, not watched, a departure on the member naming it in
-the same poll, before and after, two departures on it, a departure on
-another port, none, the held "disconnected" shown when no removal takes
-it, both shown beyond the windows) and the details line in
-`test\test_tr.c`, with the mark service's reader of version 2.
+readers of both versions, the event (a rise, a wrap, a rise of more than
+one, an epoch change, the liveness gate either side, not watched, a
+version 1 answer, the "disconnected" beside it unchanged) and the details
+line in `test\test_tr.c`, with the mark service's reader of version 2.
 
 ## 11. Legs
 
@@ -1588,7 +1567,7 @@ it, both shown beyond the windows) and the details line in
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciCmLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 | T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
-| T.11 | 2000, XP, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "<name> was removed unexpectedly." and, where the two readings come within a poll of each other, no "disconnected" balloon for that unit besides; an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; on 98 SE the unplug reads "disconnected" and the details "not watched on this system" |
+| T.11 | 2000, XP, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "A Thunderbolt or USB4 device was removed unexpectedly." beside the unit's "disconnected"; a chain's first device unplugged gives one such notice; an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; on 98 SE the unplug reads "disconnected" and the details "not watched on this system" |
 | T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
 
 ## 12. Decisions
@@ -1709,9 +1688,9 @@ it, both shown beyond the windows) and the details line in
   count in the query's answer (version 2), on NT only; never that it was
   unplugged or that data was lost (section 7.6). The count, not the 1 s
   diff, is the evidence. The answer's key for the last removal is its
-  tunnel port, not a router: the driver cannot prove which router a
-  device ran behind, and the tray names the unit only from a router it
-  saw leave from that port.
+  tunnel port, not a router, and the notice names no unit: neither the
+  driver nor the tray can prove which router a removed device ran
+  behind, and the unit's own "disconnected" balloon names it.
 
 ## 13. Open
 
