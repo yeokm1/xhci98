@@ -3214,23 +3214,45 @@ this, reviewed and revised:
   that read instead.
 - **The blocked mask is in the status record**, bits 11:8 of its flags
   word (`CM_ST_F_BLOCKED_*`, one a port in the record's port order), not
-  a new field of the query answer's header. The record is framed byte for
-  byte in the answer, so XHCITR reads it there, and a change of the mask
-  changes the content generation as any record byte does; XHCIINST reads
-  the same bits in the registry. No answer version and no header growth
-  were needed. XHCITR shows "Blocked" in the port's details.
+  a new field of the query answer's header, and beside it, bits 15:12,
+  the members with a transaction in progress and not blocked
+  (`CM_ST_F_EJECTING_SHIFT`). The record is framed byte for byte in the
+  answer, so XHCITR reads it there, and a change of either mask changes
+  the content generation as any record byte does; XHCIINST reads the same
+  bits in the registry. No answer version and no header growth were
+  needed. XHCITR's port details say "Blocked" or "A removal is in
+  progress"; a clear bit says neither that a removal ended nor that
+  nothing changed.
 - **One gate.** The member's removal gate and exposure gate are one: an
-  eject transaction not retired, a block, or a statement decision pending
-  raises the member's existing gate (`CmNvlinkHeld`, task 42-A.12), which
-  holds that member's removal and exposure together. The vanished-child
-  removals stay on the domain's CONFIGMG worker (`cm_cfgwk.c`), as 42-A.12
-  left them; the transaction removes its own unit when the unit's
-  function stops answering after the accepted query (the unplug's
-  link-down reset being the isolation, assumption A1), which retires it
-  and lowers the gate, and the held tunnel-down re-enumeration then runs.
-  A vanished child's veto therefore still lets that member's
-  re-enumeration go ahead, as before 43.18, unless an eject is in progress
-  on the member; moving those removals onto the transaction is not done.
+  eject transaction not retired, a block, a statement decision pending,
+  or a vanished child not retired raises the member's existing gate
+  (`CmNvlinkHeld`, task 42-A.12), which holds that member's removal calls,
+  exposures and re-enumerations together.
+- **Vanished children** stay on the domain's CONFIGMG worker
+  (`cm_cfgwk.c`), as 42-A.12 left them, with part 3's barrier added
+  there: a vanished child whose query is vetoed, or whose removal fails,
+  is a debt of its member (`CmCfgwkDebt`); the worker makes no
+  `Reenumerate_DevNode` of that member and tries the removal again every
+  2 s, never forcing it, and the debt raises the member's gate, so no
+  `UP` is published and no re-enumeration posted there before every
+  vanished child is retired (R8c, R12 S4 and S5). A debt is cleared by a
+  complete reading that finds no vanished child left unretired, or by
+  `CONTROLLER_UNAVAILABLE`'s own removal of the retained children taking
+  them over.
+- **The unit's own disappearance.** The transaction cannot wait on its
+  own gate, so it removes its own unit itself, and only on evidence the
+  rest of the channel accepts: a tunnel down on its member
+  (`CmEjectDown`, from the seam's tunnel-down action; every member under
+  the firmware connection manager), after which the unit's function is
+  read gone, the member's statement decided and any acknowledgement wait
+  ended (the deadline read before the answer, as always). That is the
+  unplug's link-down reset, assumption A1, as for every vanished child; an
+  all-ones read without a tunnel down is a presence signal and nothing
+  else (section 7.3) and authorises nothing. The removal retires the
+  transaction and lowers the gate, and the held tunnel-down
+  re-enumeration then runs. A record a later start adopts has seen no
+  tunnel down of that start, so it is retired by its devnode verified
+  gone, or by a tunnel down after the adoption.
 - **The transactions' clock** is the driver's own, from the tick count,
   shared by every thread that steps a record, so a deadline survives the
   NHI's stop and a later start's adoption. The records are image-static
@@ -3272,8 +3294,8 @@ this, reviewed and revised:
   managers), and a clean removal's teardown under the USB4 profile is made
   without its `DOWN_QUIESCED`.
 - **Not built.** XHCITR's tray does not poll a result after the tool's
-  wait has ended; the port's "Blocked" line is what shows a transaction
-  that outlived it.
+  wait has ended; the port's two lines, read from the record's masks, are
+  what show a transaction that outlived it.
 
 ### 7.3 What this driver never claims
 

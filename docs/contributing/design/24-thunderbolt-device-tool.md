@@ -149,7 +149,7 @@ version it does not know.
 | 56 | four words: each port's bus (15:8), device (7:3), function (2:0) | `0xFFFFFFFF` |
 | 72 | the router entries that follow, 0 to 24 | - |
 | 76 | the entry size, 128 | - |
-| 80 | flags: bit 0, more routers than entries; bits 11:8, one a port in the port order, that member blocked by a 98 SE or ME eject (record 21 section 7.2 part 1, task 43.18) | - |
+| 80 | flags: bit 0, more routers than entries; bits 11:8, one a port in the port order, that member blocked by a 98 SE or ME eject (record 21 section 7.2 part 1, task 43.18); bits 15:12, the same order, an eject in progress there and not blocked | - |
 | 84 | four 8-byte paths: each port's Windows 98 instance path, a count (0 for unknown, at most 7) then its elements, leaf first (section 4.3) | count 0 |
 | 116 | the system time at the write, as `KeQuerySystemTime` returned it, low word then high word at 120 (100 ns units since 1601; the driver does no arithmetic on it) | - |
 | 124 | the echo: the last `XhciCmStatusAsk` the driver read (section 3.3) | 0 |
