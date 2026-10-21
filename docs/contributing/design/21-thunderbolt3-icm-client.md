@@ -3230,21 +3230,33 @@ this, reviewed and revised:
   exposures and re-enumerations together.
 - **Vanished children** stay on the domain's CONFIGMG worker
   (`cm_cfgwk.c`), as 42-A.12 left them, with part 3's barrier added
-  there: a vanished child whose query is vetoed, or whose removal fails,
-  is a debt of its member, recorded by its devnode handle and instance id
-  (`CM_WK_PORT.Debt`, `CmCfgwkDebt`); the worker makes no
-  `Reenumerate_DevNode` of that member and tries the removal again every
-  2 s, never forcing it, and the debt raises the member's gate, so no
-  `UP` is published and no re-enumeration posted there before every
-  vanished child is retired (R8c, R12 S4 and S5). An entry is discharged
-  only by its removal succeeding or by its handle no longer carrying its
-  instance id (verified gone): what answers on the bus has no say, so a
-  device plugged in again with the same ids does not discharge the old
-  devnode. `CONTROLLER_UNAVAILABLE` and record 22 section 7.7's
-  removal-only request leave the debt as it stands (their own removals
-  may retire the same devnodes, which the next payment then finds gone);
-  the removal-only request is held by the acknowledgement waits and the
-  eject's gate but not by the debt, which it is one way of paying.
+  there: a vanished child whose query is vetoed, or whose removal fails
+  after its query was accepted, is a debt of its member, recorded by the
+  member's location, its devnode handle, its instance id's hash and
+  whether its query was accepted, in a boot-resident table beside the
+  eject records (`CmEjectDebt*` in `cm_ejectos.c`), so the debt and its
+  gate outlive the worker and a later start pays it. The worker makes no
+  `Reenumerate_DevNode` of that member, and pays the member's debts every
+  2 s on its own, whether or not any request names the member: a vetoed
+  query asked again, never forced; after an accepted query,
+  `Remove_SubTree` alone (an accepted query is never issued twice). The
+  debt raises the member's gate, so no `UP` is published and no
+  re-enumeration posted there before every vanished child is retired
+  (R8c, R12 S4 and S5). An entry is discharged only by its removal
+  succeeding, by CONFIGMG answering that the handle does not exist, or by
+  a successful read of the handle's instance id finding another id
+  (verified gone); an inconclusive read keeps it, and what answers on the
+  bus has no say, so a device plugged in again with the same ids does not
+  discharge the old devnode. `CONTROLLER_UNAVAILABLE` and record 22
+  section 7.7's removal-only request leave the debt standing (their own
+  removals may retire the same devnodes, which the next payment, made on
+  the worker's own 2 s clock, finds gone); the payment waits while that
+  member's `CONTROLLER_UNAVAILABLE` removal or retirement barrier stands,
+  and the removal-only request is held by the acknowledgement waits and
+  the eject's gate but not by the debt, which it is one way of paying.
+  A Stor98 request the worker's removal step made for such a child is
+  withdrawn after that step whatever its outcome, as before 43.18; a
+  later payment makes a new one only with a new query.
 - **The unit's own disappearance.** The transaction cannot wait on its
   own gate, so it removes its own unit itself, and only on evidence the
   rest of the channel accepts: a tunnel down on its member
