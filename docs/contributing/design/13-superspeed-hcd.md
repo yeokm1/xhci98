@@ -3296,6 +3296,423 @@ the strings and their callers in 8's `usbui.dll` and the shell
    staging `xhci98.inf` where it would become the only match, or say so in
    the note.
 
+### 6.13 Windows 8's client contract served by the bus (task 43.29, 2026-10-22)
+
+**The owner's decisions on 6.12.10** (2026-10-22): (1) `xhciuas.inf` is
+**not** forced onto a UAS interface on 8 and 8.1; the bus instead answers
+Windows 8's client contract - `GUID_USBD_INTERFACE_V1` at version `0x602`,
+the capability request `0x49104B` and the stream URBs - so Windows' own
+`uaspstor.sys` runs a SuperSpeed UAS disk with streams under this bus. This
+reverses 6.12.10's recommendation 2 (and makes recommendation 1 moot). (3)
+`0x220FB3` is served as `RESET_PORT`. (4) The three Fresco Logic ids
+(6.12.1) are noted only. This section is the driver's half of task 43.29;
+the installer's half is record 26 and record 23 (task 43.43, branch
+`p43-42`), whose one consequence of decision (1) is named in 6.13.9.
+
+**Sources.** Microsoft's published documentation (read 2026-10-22, each page
+by its title on learn.microsoft.com): `USBD_CreateHandle`,
+`USBD_QueryUsbCapability`, `USBD_UrbAllocate`, `USBD_IsochUrbAllocate`,
+`USBD_SelectConfigUrbAllocateAndBuild`,
+`USBD_SelectInterfaceUrbAllocateAndBuild`, `USBD_UrbFree`,
+`_URB_OPEN_STATIC_STREAMS`, `_USBD_STREAM_INFORMATION`, "How to Open and
+Close Static Streams in a USB Bulk Endpoint" and "Best Practices: Using
+URBs"; the public headers as mirrored by mingw-w64 (6.12's commit) for the
+structures those pages define (`usb.h`: `URB_FUNCTION_OPEN_STATIC_STREAMS`
+`0x35`, `URB_FUNCTION_CLOSE_STATIC_STREAMS` `0x36`,
+`URB_OPEN_STATIC_STREAMS_VERSION_100` `0x100`, `USBD_STREAM_INFORMATION`,
+`_URB_OPEN_STATIC_STREAMS`; `usbdlib.h`: `GET_ISO_URB_SIZE`). **No public
+header or page defines the bus's half**: Microsoft's `usbbusif.h` index
+lists the USBDI interfaces V0 to V3 and `USBC_DEVICE_CONFIGURATION_INTERFACE_V1`
+and nothing named `USBD_INTERFACE_V1`, and the documentation names neither
+`GUID_USBD_INTERFACE_V1` nor `0x49104B`. That half - the interface's layout,
+its callbacks' arguments and the capability request's block - is therefore
+read statically, as 6.12 read the rest: `usbdex` inside `uaspstor.sys` and
+`USBSTOR.SYS` (the client side) and `ucx01000.sys` (Windows 8's own server
+side), 8 x86, 8 x64 and 8.1 x64, the files and hashes of 6.12's table, with
+the same tools and PDBs; RVAs as in 6.12. Nothing was executed. No DDK
+sample was read.
+
+#### 6.13.1 What the interface is, read from both ends
+
+**The client's half (`usbdex`, `USBD_CreateHandle`, `uaspstor` 8 x64
+`0x11140`, 8 x86 `0xCE62`, 8.1 x64 `0xC238`).** The handle is a block of
+the client's own pool (0xB8 bytes on x64, signature `'USBD'` at +0); the
+interface lives inside it at +8 (x64) / +4 (x86). Before the query the
+client writes: `Size` 0x98 / 0x58, `Version` `0x602`, and four fields of
+its own - the contract (`0x602`), its device object, its pool tag and the
+handle's own address - and, when the Driver Verifier's USB settings are
+on, a flag and five ULONGs (`USBDInternal_QueryUsbVerifierSettings`).
+After a successful query it reads back two things only: the bus's context
+for the handle, and the six routines below; it never calls the INTERFACE
+header's reference or dereference. The handle is reference-counted by the
+client (one for the handle, one per URB allocated through it):
+`USBD_CloseHandle` (`0x114E4` x64) and the last `USBD_UrbFree` call the
+interface's **unregister routine** with the bus context when the count
+reaches zero, and on a failed `USBD_CreateHandle` after a successful query
+too.
+
+**The server's half (`ucx01000.sys`, `RootHub_EvtUSBDInterfaceV1Request`,
+8 x64 `0x5D84`, 8 x86 `0x499C`, 8.1 x64 `0x5BF0`).** Refuses a `Size` other
+than 0x98 / 0x58 (`STATUS_BUFFER_TOO_SMALL`), a `Version` other than
+`0x602` (`STATUS_NOT_SUPPORTED`), a NULL device object or a zero pool tag
+(`STATUS_INVALID_PARAMETER`); otherwise allocates a per-handle record
+(0x80 bytes x64, `'UDdh'`), and writes: `Context` NULL, both INTERFACE
+references a no-op (`WdfDeviceInterfaceReferenceNoOp` on x86; the x64 PDB
+names the folded stub `invalid_parameter`), the per-handle record into the
+bus-context field, and the six routines. The layout, as both ends use it:
+
+| Field (name this record's) | x64 | x86 | Who writes |
+|---|---|---|---|
+| `Size` (USHORT) | 0x00 | 0x00 | client: 0x98 / 0x58 |
+| `Version` (USHORT) | 0x02 | 0x02 | client: `0x602` |
+| `Context` (the INTERFACE header's) | 0x08 | 0x04 | bus: NULL |
+| `InterfaceReference`, `InterfaceDereference` | 0x10, 0x18 | 0x08, 0x0C | bus: no-ops |
+| `ClientContract` (ULONG) | 0x20 | 0x10 | client: `0x602` |
+| `BusHandleContext` (PVOID) | 0x28 | 0x14 | bus |
+| `ClientDeviceObject` | 0x30 | 0x18 | client (UCX refuses NULL) |
+| `ClientPoolTag` (ULONG) | 0x38 | 0x1C | client (UCX refuses 0) |
+| `ClientHandle` | 0x40 | 0x20 | client |
+| `VerifierOn` (ULONG), `Verifier[5]` | 0x48, 0x4C | 0x24, 0x28 | client |
+| reserved (PVOID) | 0x60 | 0x3C | nobody |
+| `Unregister(BusHandleContext)` | 0x68 | 0x40 | bus |
+| `UrbAllocate(BusHandleContext, PURB *)` | 0x70 | 0x44 | bus |
+| `IsochUrbAllocate(BusHandleContext, ULONG packets, PURB *)` | 0x78 | 0x48 | bus |
+| `SelectConfigUrbAllocateAndBuild(BusHandleContext, PUSB_CONFIGURATION_DESCRIPTOR, PUSBD_INTERFACE_LIST_ENTRY, PURB *)` | 0x80 | 0x4C | bus |
+| `SelectInterfaceUrbAllocateAndBuild(BusHandleContext, USBD_CONFIGURATION_HANDLE, PUSBD_INTERFACE_LIST_ENTRY, PURB *)` | 0x88 | 0x50 | bus |
+| `UrbFree(PURB)` | 0x90 | 0x54 | bus |
+
+Every routine is `__stdcall` (x86 `ret 4`, `ret 8`, `ret 0xC`, `ret 0x10`,
+`ret 4` for `Unregister`, `UrbAllocate`, `IsochUrbAllocate`, the two
+builders and `UrbFree`) and returns `NTSTATUS` but `Unregister` and
+`UrbFree` (VOID). **`UrbFree` takes the URB alone**: `USBD_UrbFree` (x64
+`0x10C20`) loads the routine from the handle and calls it with the URB as
+its one argument, so the bus must find everything it needs from the URB.
+The arguments after the context are the public routines' own (the pages
+above), and so are their semantics: a zeroed URB of the system's URB size
+(the client's own fallback allocates 0x98 / 0x60 bytes,
+`USBD_UrbAllocate` x64 `0x10A4C` / x86 `0xC954`); an isochronous URB "large
+enough to hold the maximum number of isochronous packets"; a
+select-configuration URB "filled ... with information about the specified
+configuration, its interfaces and endpoints", each list entry's `Interface`
+set to its `USBD_INTERFACE_INFORMATION` in the URB; a select-interface URB
+for the one interface named, the entry's `Interface` set likewise. UCX's
+allocations put a 0x50-byte (x64) / 0x30-byte (x86) header before the URB
+carrying `'XRB.'` and a marker, and `Xrb_Free` bugchecks (0x144) when they
+are missing; nothing reads that header but UCX itself.
+
+`USBD_AssignUrbToIoStackLocation` (x64 `0x10CF4`) on a `0x602` handle
+also stores the URB in the next stack location's `FileObject`; this bus
+reads no stack location's `FileObject` on an internal IOCTL.
+
+#### 6.13.2 What the bus answers
+
+**`IRP_MN_QUERY_INTERFACE` for `GUID_USBD_INTERFACE_V1`** at a device or
+function PDO (never a composite parent's, as for USBDI): answered when
+`Size` is this build's (0x98 amd64, 0x58 x86) and `Version` is `0x602`;
+any other size or version is completed with the status it came with, as an
+interface this bus does not export, so the client takes the `0x600` path
+it takes today. A NULL device object or a zero pool tag:
+`STATUS_INVALID_PARAMETER`, as UCX. A PDO not listed or orphaned:
+`STATUS_NO_SUCH_DEVICE`. Answered, the bus writes `Context` NULL, two no-op
+references, `BusHandleContext` = the PDO's **bus-interface slot** (the
+static `hcdBusifSlots` entry USBDI already uses, claimed the same way, one
+per PDO, and shared by every handle on it), and the six routines. The
+query takes one reference on the slot (`Refs`) and `Unregister` releases
+it. No pool is allocated for a registration: the slot outlives the PDO
+(its `Gone` flag), the routines never follow it to the PDO, and a client
+that unregisters after its PDO was deleted touches only the slot. A full
+slot table refuses the query (`STATUS_INSUFFICIENT_RESOURCES`), and the
+client then runs the `0x600` path.
+
+**The allocators** (`hcd_pool.c`, a new pair of the pool file's,
+`HcdPoolAllocClient` / `HcdPoolFreeClient`): `NonPagedPool`, the client's
+pool tag is not known to them (the slot is shared), so the bus tags them
+`'X98U'`, distinct from its own `'X98H'`, so that a client's leak is not
+read as the bus's. Each block is a 16-byte header - signature `'X98U'`,
+the kind (plain, isochronous, select-configuration, select-interface) and
+the block's size - then the URB, zeroed. `UrbFree` checks the signature
+and the kind and frees; a URB without the header is not freed and is
+counted (`UsbdxForeignFree`, the log's `usbdx.free` note) - never a
+bugcheck, never a `ExFreePool` of memory the bus did not allocate. Sizes:
+
+- `UrbAllocate`: `HCD_USBDX_URB_BYTES`, 0x98 amd64 / 0x60 x86 (the
+  clients' own fallback size, 6.13.1), asserted at build time to be at least
+  the build's `sizeof(URB)`.
+- `IsochUrbAllocate(n)`: `GET_ISO_URB_SIZE(n)`; `n` 0 refused
+  (`STATUS_INVALID_PARAMETER`), and a size above 0xFFFF refused the same
+  way, since `_URB_HEADER.Length` is a USHORT and no URB longer than that can
+  be described (the pure `XhciUsbdxIsochBytes`).
+- `SelectConfigUrbAllocateAndBuild`: a NULL descriptor or list refused;
+  the list walked to its NULL `InterfaceDescriptor` (at most 32 entries,
+  the interfaces this bus's select tracks, `InterfaceMask`), each
+  interface descriptor's `bInterfaceNumber`, `bAlternateSetting` and
+  `bNumEndpoints` read; the URB sized as `HcdCompositeSelectDown` already
+  sizes one, which is `USBD_CreateConfigurationRequestEx`'s rule - the
+  header up to `Interface`, then per interface a whole
+  `USBD_INTERFACE_INFORMATION` (which holds one pipe) plus room for its
+  other pipes - and refused above 0xFFFF; built as that function builds
+  one: `Function` `SELECT_CONFIGURATION`, `Length`, `ConfigurationDescriptor`
+  the caller's, each `USBD_INTERFACE_INFORMATION`'s `Length`,
+  `InterfaceNumber`, `AlternateSetting` and `NumberOfPipes`, each pipe's
+  `MaximumTransferSize` `USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE`, and each list
+  entry's `Interface` pointing at its entry in the URB. The arithmetic is
+  pure (`XhciUsbdxSelectLayout`: the offsets and the total from the
+  per-interface pipe counts and the three structure sizes, which differ per
+  architecture).
+- `SelectInterfaceUrbAllocateAndBuild`: a NULL list entry or descriptor
+  refused; one interface, the same per-interface size after
+  `_URB_SELECT_INTERFACE`'s header, `Function` `SELECT_INTERFACE`,
+  `ConfigurationHandle` the caller's, the entry's `Interface` set.
+
+Every allocator writes `*Urb` NULL first and returns
+`STATUS_INSUFFICIENT_RESOURCES` when the pool is empty. They read the
+caller's descriptors and write the caller's list as `usbd.sys`'s
+`USBD_CreateConfigurationRequestEx` does, trusting the descriptor the
+caller passes as that routine does; the bus's select still validates the
+configuration it is sent (`hcdCfgSelect`), as for any client.
+
+**`0x49104B`, the capability request**, `IRP_MJ_INTERNAL_DEVICE_CONTROL`
+at the PDO. Read from `USBD_QueryUsbCapability` (8 x64 `0x11558`, x86
+`0xD24C`, 8.1 x64 `0xC5A4`) and `USBDInternal_BuildandSendIoctlSynchronously`
+(x64 `0x10918`): `Parameters.Others.Argument1` is a block - USHORT
+version 1, USHORT size (0x28 x64, 0x20 x86), the bus context of the
+handle, the capability GUID, the output length - and the output buffer is
+`Irp->AssociatedIrp.SystemBuffer`; sent at PASSIVE_LEVEL and waited for.
+UCX (`Controller_QueryUsbCapability`, 8 x64 `0xDBE4`, x86 `0xAA3A`)
+refuses a block whose size or version is not those, a NULL context, and an
+output length and buffer that disagree (one zero, the other not), all
+`STATUS_INVALID_PARAMETER`, zeroes the block's last ULONG (x64 +0x24, x86
++0x1C) and writes the result length there; `STATIC_STREAMS` wants an
+output length of exactly 2. The bus does the same checks, does not follow
+the context (the request arrives at the PDO it is about), and answers:
+
+| Capability | Answer |
+|---|---|
+| `SELECTIVE_SUSPEND` | `STATUS_SUCCESS` (the bus serves `SUBMIT_IDLE_NOTIFICATION`; the `0x600` path answers the same today) |
+| `DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE` | `STATUS_SUCCESS` at High Speed or faster, else `STATUS_NOT_SUPPORTED` ("whether the bus is operating at high-speed or higher") |
+| `DEVICE_CONNECTION_SUPER_SPEED_COMPATIBLE` | `STATUS_SUCCESS` at SuperSpeed or faster, else `STATUS_NOT_SUPPORTED` |
+| `STATIC_STREAMS` | output length 2 required (else `STATUS_INVALID_PARAMETER`); `STATUS_SUCCESS` with a USHORT count when the PDO is SuperSpeed and its controller streams, else `STATUS_NOT_SUPPORTED` |
+| `CHAINED_MDLS`, `FUNCTION_SUSPEND`, `TIME_SYNC`, `CLEAR_TT_BUFFER_ON_ASYNC_TRANSFER_CANCEL`, the full- and low-speed GUIDs, any other | `STATUS_NOT_SUPPORTED` |
+
+The streams count is the most this bus grants any endpoint on the
+controller: `min(XHCI98_STREAMS_MAX, hcEntries - 1)`, 31 on a controller
+whose array takes 32 entries or more (`XhciUsbdxMaxStreams`, from
+`XhciStreamHcEntries` and the `XhciStreamsOff` quirk exactly as
+`hcdXportFlags` reads them). It is latched at the PDO's creation on the
+thread (`pdo->UsbdxStreams`), so the dispatch reads no register (the rule
+`hcdPortStatus` states). The per-PDO SuperSpeed test matters: `uaspstor`
+opens streams on every pipe once the capability succeeds and fails its
+start with no fallback if the open fails (6.12.4), so a High-Speed UAS
+device must be told no and run `uaspstor`'s streamless mode, as it does
+today. The transport decision (31-A.3, `xhci_xport.h`) already keeps every
+UAS interface at SuperSpeed on a streaming controller, so `uaspstor` never
+meets a SuperSpeed UAS device that this answer refuses.
+`FUNCTION_SUSPEND` is the composite parent's and the bus has none above it
+(10.12); `CHAINED_MDLS` is refused because the transfer path takes one MDL
+per URB.
+
+**`URB_FUNCTION_OPEN_STATIC_STREAMS` (`0x35`)** at the PDO, checked at
+dispatch and then pended for the thread with a device reference, as the
+private `IOCTL_XHCI98_OPEN_STREAMS` is: `Length` at least
+`sizeof(_URB_OPEN_STATIC_STREAMS)` (0x20 x86, 0x30 amd64),
+`StreamInfoVersion` `0x100` (else `USBD_STATUS_INVALID_PARAMETER`, the
+page's status), `StreamInfoSize` `sizeof(USBD_STREAM_INFORMATION)` (0x10 /
+0x18; the page names `USBD_STATUS_INFO_LENGTH_MISMATCH`, whose value no
+header read here defines, so `USBD_STATUS_INVALID_PARAMETER`), `NumberOfStreams` 1 to
+`XHCI98_STREAMS_MAX` and `Streams` not NULL (else
+`USBD_STATUS_INVALID_PARAMETER`). On the thread it is the private open
+(`hcdCfgStreamsOpen`, the same checks of pipe, controller and endpoint, the
+same commands, the same failure paths) with one difference: **the grant
+must equal the request**. The public URB has no "granted" field - "The
+number of streams to open ... must be ... less than or equal to the maximum
+number of streams supported by the USB driver stack, the host controller,
+and the endpoint" - so a plan that would grant fewer is refused before
+anything is built (`USBD_STATUS_INVALID_PARAMETER`). Granted, entry `i`
+(0-based) of `Streams` gets stream `i + 1`'s pipe handle, `StreamID`
+`i + 1` ("sequential and start at 1"), `MaximumTransferSize` the command
+size the controller's start latched (`Xstat.CommandBytes`, the size
+`IOCTL_XHCI98_TRANSFER_POLICY` reports, 1 MiB by default) and `PipeFlags`
+0. The URB's header and other fields are left as sent: `uaspstor` reuses
+one URB for its three pipes, changing only `PipeHandle` (`OpenStreamArray`,
+8 x64 `0x10D0`), and reads `NumberOfStreams` back after each open.
+
+What follows an open is the private interface's model, unchanged
+(`xhci98_streams.h`): a transfer on a stream handle runs on that stream; a
+transfer on the endpoint's own handle is refused (Microsoft: "don't send
+I/O requests by using the endpoint pipe handle" once streams are open);
+`RESET_PIPE` on the endpoint's handle resets the endpoint with its streams
+open, as the page asks for recovery; `ABORT_PIPE` and `RESET_PIPE` on a
+stream handle, which the page says Windows 8's stack does not support, are
+served as the private interface serves them; a select, `RESET_PORT` and
+removal as there.
+
+**`URB_FUNCTION_CLOSE_STATIC_STREAMS` (`0x36`)**, a `_URB_PIPE_REQUEST`
+with the endpoint's handle: the private close. No streams open:
+`USBD_STATUS_INVALID_PARAMETER` (the page: "Don't send a close-stream
+request to an endpoint that doesn't have open streams").
+
+The private answers map to URB status as `XhciUsbdxStreamsUsbd` (pure)
+says: success `USBD_STATUS_SUCCESS`; no controller or no endpoint
+`USBD_STATUS_NOT_SUPPORTED`; an invalid pipe `USBD_STATUS_INVALID_PIPE_HANDLE`;
+an invalid request, streams already open or not open
+`USBD_STATUS_INVALID_PARAMETER`; no resources
+`USBD_STATUS_INSUFFICIENT_RESOURCES`; failed `USBD_STATUS_DEVICE_GONE` when
+the device left, else `USBD_STATUS_INTERNAL_HC_ERROR`; the IRP's status from
+the URB status through `XhciPipeNtStatus`, as every URB's.
+
+**`0x220FB3`** (6.12.5): served as `IOCTL_INTERNAL_USB_RESET_PORT` - the
+same pended reset (`hcdCfgResetPort`) - since `usbhub.sys` aliases it to
+`RESET_PORT` (`UsbhFdoResetPdoPort`) and `usbstor` and `uaspstor` send it
+instead of `RESET_PORT` on the paging, hibernation and dump paths with no
+fallback. The pure `XhciUsbdxIoctlAlias` names it.
+
+#### 6.13.3 The rest of the `0x602` contract under this bus
+
+Once the query is answered, every `usbdex` client on that PDO runs the
+`0x602` path, not only `uaspstor`: `USBSTOR.SYS` (it creates a handle, asks
+one capability and closes it at start, `USBSTOR_FdoStartDevice+0x355`,
+8 x64 RVA `0x810D`), KMDF clients created "WithParameters" - `winusb` among them
+(6.12.2) - whose URBs then come from these allocators and whose
+`WdfUsbTargetDeviceSelectConfig` builds through
+`SelectConfigUrbAllocateAndBuild`. What changes for them:
+
+- `USBD_QueryUsbCapability` asks the bus (`0x49104B`) instead of answering
+  locally: `HIGH_SPEED_COMPATIBLE` becomes true at SuperSpeed too (the
+  `0x600` path took it from `IsDeviceHighSpeed`, which this bus answers
+  TRUE at High Speed only, 6.12.4), as the documentation defines it and as
+  UCX's `Usbd_IsDeviceAtleastHighSpeed` (8 x64 `0x127B8`: false for two
+  values of the device's speed field and true for the rest; which speeds
+  those are was not traced) suggests on Windows 8's own stack.
+- `USBD_UrbAllocate` and its siblings allocate through the bus.
+- `usbdex` no longer asks USBDI V1 itself; clients that ask it themselves
+  (`USBSTOR_GetBusInterface`, `UaspGetBusInterface`, KMDF) still do, and
+  are answered as today.
+
+The rules the documentation puts on a `0x602` client (no stale pipe
+handles, URBs from these allocators, an active URB not reused, the
+isochronous period and packet-count rules) bind the client; this bus
+enforces none of them beyond what it checks for every client today.
+
+#### 6.13.4 Invisible on 98 SE, ME and 2000 to 7
+
+- **Nothing is answered unless asked.** The V1 interface, `0x49104B`,
+  `0x220FB3` and URBs `0x35`/`0x36` are sent only by Windows 8's clients: a
+  byte scan of every `.sys`, `.dll`, `.vxd`, `.pdr`, `.mpd` and `.exe` of
+  the 98 SE, ME, 2000 SP4, XP SP3, XP x64, Vista and 7 extracts in
+  `tools\*-extracted` and of NUSB 3.3, NUSB 3.6 and SweetLow's packs (235
+  files, 2026-10-22) finds the GUID's bytes, `0x49104B` and `0x220FB3` in
+  none, and 6.3 and 6.4 read no URB `0x35` or `0x36` in any class driver
+  of those targets. A third-party driver built with the Windows 8 kit's
+  `usbdex` and run on Vista or 7 would be answered too, and get the
+  contract it gets on 8 under Microsoft's stack; no OS gate is possible
+  without a new import (`IoIsWdmVersionAvailable` cannot tell 8 from 7:
+  Windows 8's and 8.1's `ntoskrnl.exe` answer it TRUE for major 6 with any
+  minor and FALSE above, as 7's - read statically, 8 x64 RVA `0x50B8B0`).
+- **No new import.** The allocators use `ExAllocatePoolWithTag` and
+  `ExFreePool` inside `hcd_pool.obj`, the allowlist's existing `SITES`;
+  the GUID is compared field by field as USBDI's is (no `RtlCompareMemory`,
+  no `IsEqualGUID` import); nothing else is called that the bus does not
+  call today. The import gate is the check.
+- **No change to what 98 to 7 run.** The paths that change on every target
+  are the dispatch's new `case` labels; each is reached only by a request
+  that, by the scan above, those systems' drivers never send. The new
+  per-PDO latch (`UsbdxStreams`) is written at creation on every target and
+  read only by `0x49104B`.
+
+#### 6.13.5 IRQL and locks
+
+- `QUERY_INTERFACE`: PASSIVE_LEVEL (PnP); the slot claim under
+  `hcdBusifLock`, as USBDI's.
+- The allocators and `UrbFree`: at most DISPATCH_LEVEL (the documentation's
+  IRQL for each: `UrbAllocate`, `IsochUrbAllocate` and `UrbFree` at or below
+  DISPATCH_LEVEL, the two builders at DISPATCH_LEVEL); `NonPagedPool` only;
+  no lock taken, no PDO, controller or device record touched, so they are
+  safe while the PDO is being removed and after. They read the caller's
+  descriptors and list, which the caller keeps resident (the documentation
+  allows DISPATCH_LEVEL, so a caller there passes nonpaged memory).
+- `Unregister`: at most DISPATCH_LEVEL; an interlocked decrement of the
+  slot's `Refs`.
+- `0x49104B`: answered and completed in the dispatch, at the IRQL it
+  arrives at (PASSIVE_LEVEL from `usbdex`), from the PDO's own fields
+  (`SpeedClass`, `UsbdxStreams`, `Listed`), no lock, no register.
+- URBs `0x35`/`0x36`: the dispatch checks the URB at the caller's IRQL
+  (at most DISPATCH_LEVEL) and pends it with `HcdCfgQueue`; the thread
+  serves it at PASSIVE_LEVEL under the private interface's locking
+  (5.4; the controller lock around pipe lookups, none held across a
+  command). The caller's `Streams` array is written on the thread, after
+  the open succeeded and before the IRP completes.
+- `0x220FB3`: `hcdResetPortIoctl`'s path unchanged.
+
+#### 6.13.6 The pure half and its host vectors
+
+`src\xhci_usbdx.c` / `xhci_usbdx.h`, DDK-free, with `test\test_usbdx.c`:
+
+- `XhciUsbdxV1Bytes(pointerBytes)` (0x58 / 0x98) and
+  `XhciUsbdxCapBlockBytes(pointerBytes)` (0x20 / 0x28), with the field
+  offsets of 6.13.1 as constants the driver asserts its structures against;
+- `XhciUsbdxV1Check(size, version, pointerBytes, deviceObject, poolTag)`:
+  answered / not ours / invalid;
+- `XhciUsbdxCapabilityId(guid16)`: the capability a GUID's 16 bytes name,
+  or unknown; `XhciUsbdxCapability(id, outLength, outPresent, speedClass,
+  maxStreams, &count)`: the status and the USHORT, per the table above;
+  `XhciUsbdxCapBlockCheck(version, size, pointerBytes, context, outLength,
+  outPresent)`;
+- `XhciUsbdxMaxStreams(hcEntries)`;
+- `XhciUsbdxIsochBytes(packets, isochHeaderBytes, packetBytes, &bytes)`;
+- `XhciUsbdxSelectLayout(pipeCounts, count, headerBytes, ifInfoBytes,
+  pipeInfoBytes, offsets, &total)` for both builders;
+- `XhciUsbdxOpenCheck(length, structBytes, infoVersion, infoSize,
+  infoBytes, streams, streamsPresent, &usbd)`;
+- `XhciUsbdxStreamsUsbd(answer, gone)`;
+- `XhciUsbdxIoctlAlias(code)`.
+
+Vectors: both architectures' sizes; every capability with every speed and
+streams value; the boundaries (0 and 0xFFFF bytes, 32 interfaces, 0 and
+31 streams, 4 and 0 array entries); every private answer's mapping.
+
+#### 6.13.7 Counters and the log
+
+New counters in the controller's record (`HCD_CONTROLLER`; the snapshot's
+layout is unchanged, a debugger reads them): `UsbdxRegistered` (queries answered), `UsbdxCapability` (requests
+answered), `UsbdxStreamsOpened`, `UsbdxStreamsRefused`, `UsbdxForeignFree`.
+The first answered query and each refused open note `usbdx.*` in the log;
+debug builds trace the first of each new request as the dispatch traces
+any.
+
+#### 6.13.8 What only a running system settles (owed to 43.31, on 43.24's VMs)
+
+1. A SuperSpeed UAS disk on 8 x86, 8 x64 and 8.1 x64 under `uaspstor`,
+   forced `xhci98.sys` on the controller: the trace shows the query answered,
+   `STATIC_STREAMS` answered with the controller's count, three opens of
+   that many streams, I/O, a hot unplug, Safely Remove and a rescan; the same
+   disk at High Speed (the capability refused, `uaspstor`'s streamless mode).
+2. The classes now on the `0x602` path under this bus: a Bulk-Only stick
+   (`usbstor`'s handle and capability at start), a `winusb` device
+   (KMDF's select through `SelectConfigUrbAllocateAndBuild`, isochronous on
+   8.1 if a device is at hand), HID and audio (no `usbdex`, unchanged), a
+   hub; each started, used, removed; no `usbdx.free` note.
+3. `0x220FB3` on a disk holding a page file (a second disk, the page file
+   moved to it): a reset forced while paging (a stalled command, or a
+   cable pull and replug) completes, and the system does not hang.
+4. The forced install on 7 x86 and 7 x64 with the same build: the
+   device matrix 7 runs, unchanged (no query, no new request in the trace).
+
+#### 6.13.9 The installer's half (not this task's code)
+
+Decision (1) means the installer does not force `xhciuas.inf` onto a UAS
+interface on 8 and 8.1: on NT 6.2 and 6.3 the run takes `xhciuas.inf` out
+of the forced INFs (task 43.43's engine, `uasInclude`), stages it (so a
+user may still pick it in Device Manager) or not, as record 26 decides.
+Raised with the owner and the installer's task; not changed here.
+
+#### 6.13.10 Questions left for the owner
+
+1. **The installer's half** (6.13.9): whether `xhciuas.inf` is still
+   staged on 8 and 8.1, or left out of the run there.
+2. **`HIGH_SPEED_COMPATIBLE` at SuperSpeed** (6.13.3): answered true as
+   the documentation and UCX have it; a `0x600` client keeps today's answer
+   (false at SuperSpeed). Recommendation: as designed.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the
