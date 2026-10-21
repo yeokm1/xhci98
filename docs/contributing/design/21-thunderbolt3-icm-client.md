@@ -3301,13 +3301,16 @@ this, reviewed and revised:
   query alone is no isolation; and an NVMe function the channel no longer
   names after its query, or whose request was not published, takes the
   branch of no answer: isolation first, or the block - never a plain
-  removal.
+  removal. A unit whose class code cannot be read is taken as nothing
+  answering there (`CM_EJ_WHY_NOTHING`), never as "not an NVMe function".
 - **O6 read before every removal result.** A removal's result taken after
   the 30 s from its first attempt, whatever it says and on whichever
   thread, is a retry's outcome: the result is "blocked" (it keeps failing)
   before the success is applied, never "removed clean". The clock is read
   after the call returned, on whichever thread takes its result (the
-  thread, the late taker, the detached loop).
+  thread, the late taker, the detached loop), and the deadline found
+  passed there is the same transition as on a step: the block, and under
+  the USB4 profile with the port known the tunnel's teardown owed once.
 - **The decision's deadline at its taking.** A slot reading counts only
   when both its read (the worker's clock) and its taking by the thread
   fall before the decision's deadline; the USB4 allowance left is read at
