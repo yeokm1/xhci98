@@ -175,7 +175,8 @@ function Invoke-LegHostStep {
             if ($Process.WaitForExit(300000)) { return "${Step}: walked (Insert Disk $disk, directory typed $typed), QEMU ended at the restart" }
             Save-LegShot $QmpPort $Dir "$Tag-hcd-end"
             return "${Step}: FAILED, QEMU still running 300 s after the restart answer (Insert Disk $disk, directory typed $typed)"
-        }        'wizard98-stor' {
+        }
+        'wizard98-stor' {
             # A first Bulk-Only stick on 98 SE raises "USB Mass Storage
             # Device" (roadmap-usb4 43.42, open), whose INF is found through
             # DevicePath with no prompt (the 43.5 leg of 2026-10-20): Enter on
@@ -190,17 +191,25 @@ function Invoke-LegHostStep {
             }
             Save-LegShot $QmpPort $Dir "$Tag-stor-0"
             if ($state -ne 'wizard' -and $state -ne 'copy-files' -and $state -ne 'insert-disk') { return "${Step}: no wizard came in 120 s" }
-            for ($i = 1; $i -le 8; $i++) {
+            # Keys only on a recognised page, at most eight; waiting for a copy
+            # or a readable screen costs time, not pages.
+            $keys = 0
+            $deadline = (Get-Date).AddSeconds(300)
+            while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
                 $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 3 -MaxSeconds 60
                 $state = Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir
-                if ($state -in 'other', 'question') { return "${Step}: walked, $($i - 1) pages" }
-                if ($state -eq 'unknown' -or $state -eq 'copy-progress') { continue }
+                if ($state -in 'other', 'question') { return "${Step}: walked, $keys pages" }
+                if ($state -notin 'wizard', 'copy-files', 'insert-disk') { continue }
+                if ($keys -ge 8) { break }
                 if ($state -eq 'copy-files') { Send-QmpText -Port $QmpPort -Text $InstallDir }
                 Send-QmpChord -Port $QmpPort -Chord 'ret'
-                Save-LegShot $QmpPort $Dir "$Tag-stor-$i"
+                $keys++
+                Save-LegShot $QmpPort $Dir "$Tag-stor-$keys"
             }
-            return "${Step}: FAILED, the wizard was still up after 8 pages"
-        }        default { throw "unknown host step '$Step'" }
+            Save-LegShot $QmpPort $Dir "$Tag-stor-end"
+            return "${Step}: FAILED, the wizard was still up after $keys pages"
+        }
+        default { throw "unknown host step '$Step'" }
     }
 }
 
