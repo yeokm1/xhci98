@@ -227,6 +227,21 @@ static VOID xhciXportMi(XHCI_XPORT_TEXT *t, ULONG mi)
     }
 }
 
+/* XHCI_XPORT_REFUSED_PREFIX "VID_v&PID_p", with "&REV_r" when `rev`. */
+static VOID xhciXportRefused(XHCI_XPORT_TEXT *t, const UCHAR *device,
+                             ULONG rev)
+{
+    xhciXportStr(t, XHCI_XPORT_REFUSED_PREFIX);
+    xhciXportStr(t, "VID_");
+    xhciXportHexN(t, xhciXportWord(device + 8), 4);
+    xhciXportStr(t, "&PID_");
+    xhciXportHexN(t, xhciXportWord(device + 10), 4);
+    if (rev) {
+        xhciXportStr(t, "&REV_");
+        xhciXportHexN(t, xhciXportWord(device + 12), 4);
+    }
+}
+
 ULONG XhciXportId(const UCHAR *device, const XHCI_XPORT *x, ULONG mi,
                   ULONG which, char *out, ULONG capacity, PULONG used)
 {
@@ -248,14 +263,12 @@ ULONG XhciXportId(const UCHAR *device, const XHCI_XPORT *x, ULONG mi,
     switch (which) {
     case XHCI_XPORT_ID_HARDWARE:
         if (x->Transport == XHCI_XPORT_REFUSED) {
-            /* No VID/PID-derived id any INF could name (xhci_xport.h). */
-            xhciXportStr(&t, XHCI_XPORT_REFUSED_PREFIX);
-            xhciXportStr(&t, "VID_");
-            xhciXportHexN(&t, xhciXportWord(device + 8), 4);
-            xhciXportStr(&t, "&PID_");
-            xhciXportHexN(&t, xhciXportWord(device + 10), 4);
-            xhciXportStr(&t, "&REV_");
-            xhciXportHexN(&t, xhciXportWord(device + 12), 4);
+            /* No VID/PID-derived id any INF could name (xhci_xport.h); the
+             * second is the device id, as on every other PDO. */
+            xhciXportRefused(&t, device, 1);
+            xhciXportMi(&t, mi);
+            xhciXportChar(&t, 0);
+            xhciXportRefused(&t, device, 0);
             xhciXportMi(&t, mi);
             xhciXportChar(&t, 0);
             xhciXportChar(&t, 0);
@@ -291,6 +304,17 @@ ULONG XhciXportId(const UCHAR *device, const XHCI_XPORT *x, ULONG mi,
             }
             xhciXportChar(&t, 0);
         }
+        xhciXportChar(&t, 0);
+        break;
+    case XHCI_XPORT_ID_DEVICE:
+        if (x->Transport != XHCI_XPORT_REFUSED) {
+            *used = 0;
+            return XHCI_XPORT_NO_IDS;
+        }
+        /* Windows 98 SE and ME match INF lines against the device id too,
+         * so the VID/PID form bound a refused device (task 43.14). */
+        xhciXportRefused(&t, device, 0);
+        xhciXportMi(&t, mi);
         xhciXportChar(&t, 0);
         break;
     default:
