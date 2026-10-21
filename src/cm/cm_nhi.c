@@ -2579,15 +2579,10 @@ VOID CmNhiStartWork(PCM_NHI nhi)
                            (BOOLEAN)(nhi->Values.Value[CM_VAL_APPROVE] != 0));
     TbtIcmSetTimeouts(&nhi->Icm, nhi->Values.Value[CM_VAL_CMD_TIMEOUT_MS],
                       nhi->Values.Value[CM_VAL_APPROVE_TIMEOUT_MS]);
-    /* Record 21 section 5.3: where a USB4 device router is possible - the
-     * integrated row, and Maple Ridge on the Titan Ridge row - each
-     * announced router's USB4 Version is read; the Thunderbolt 3 hosts'
-     * links are Thunderbolt 3 whatever the router. */
-    TbtIcmSetReadVersion(&nhi->Icm,
-                         (BOOLEAN)(nhi->Hw->Icm == &TbtIcmProfileIceLake ||
-                                   (nhi->Hw->Icm == &TbtIcmProfileTitanRidge &&
-                                    nhi->Hw->Ownership ==
-                                        TBT_HW_OWN_AUTH_DONE)));
+    /* Record 21 section 5.3: on every row, each announced router's USB4
+     * Version is read - the generation is the router's, whatever the
+     * host (the ORICO behind Alpine Ridge reads 20h). */
+    TbtIcmSetReadVersion(&nhi->Icm, TRUE);
     CmLogNote(nhi, "cm.icm.row", nhi->Hw->Icm->Generation);
     CmReenumStart(nhi);
     nhi->ReenumOn = 1;

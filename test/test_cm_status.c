@@ -183,8 +183,8 @@ static void test_icm(void)
 }
 
 /* Record 21 section 5.3: an ICM entry's generation where the client reads
- * the router's USB4 Version (the integrated rows and Maple Ridge), and
- * Thunderbolt 3 where it does not. */
+ * the router's USB4 Version (every row, as the driver runs it), and
+ * Thunderbolt 3 where no read was asked. */
 static void test_icm_gen(void)
 {
     CM_STATUS_IN in;
@@ -229,9 +229,14 @@ static void test_icm_gen(void)
     (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
     CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_UNKNOWN,
              "a failed read: not known");
-    in.IcmNoUsb3 = 0;
     CHECK_EQ(get32(entry(rec, 0), CM_ST_E_TUNNELS), 0x551UL,
-             "a reading host's USB3 tunnel stays unknown");
+             "a USB4 host's USB3 tunnel stays unknown, read or not");
+    in.IcmNoUsb3 = 1;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_TUNNELS), 0x501UL,
+             "a Thunderbolt 3 host: no USB3 tunnel, whatever the router");
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_UNKNOWN,
+             "and its generation still the router's");
 }
 
 static void test_limit(void)

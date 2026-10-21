@@ -2111,15 +2111,55 @@ static void test_router_version(void)
     unsigned long serial;
     unsigned long k;
 
-    /* The Thunderbolt 3 hosts read nothing. */
+    /* Left off (TbtIcmInit's default): nothing is read. */
     setup(GEN_AR, 1, 1);
-    CHECK_EQ(start(), TBT_OK, "AR bind");
+    CHECK_EQ(start(), TBT_OK, "AR bind, not asked");
     idle(1000);
-    CHECK_EQ(g_fw.DevReads, 0, "no router read on a Thunderbolt 3 host");
+    CHECK_EQ(g_fw.DevReads, 0, "no router read unless asked");
     setup(GEN_ICL, 1, 1);
     CHECK_EQ(start(), TBT_OK, "ICL bind, not asked");
     idle(1000);
     CHECK_EQ(g_fw.DevReads, 0, "no read unless the driver asks");
+
+    /* Every row reads when asked (the owner, 2026-10-22): the ORICO
+     * behind Alpine Ridge reads 20h [obs], at the route get route gave. */
+    setup(GEN_AR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "AR bind");
+    CHECK_EQ(g_fw.Routes, 1, "get route at the announcement");
+    CHECK_EQ(g_fw.DevReads, 0, "the read not in the event's path");
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 1, "AR: read at the next idle poll");
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "at get route's route");
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_USB4 &&
+              firstDev()->Usb4Version == 0x20,
+          "AR: the ORICO is USB4 1.0");
+    setup(GEN_AR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x02;
+    CHECK_EQ(start(), TBT_OK, "AR bind, the TS3 Plus");
+    idle(200);
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_TBT3,
+          "AR: 02h, the TS3 Plus [obs], Thunderbolt 3");
+    setup(GEN_TR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "TR bind");
+    idle(200);
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "TR: at the event's route");
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_USB4,
+          "TR: USB4");
+    setup(GEN_FR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x02;
+    CHECK_EQ(start(), TBT_OK, "FR bind");
+    idle(200);
+    CHECK_EQ(g_fw.Topos, 1, "FR: the route from the topology query");
+    CHECK_EQ(g_fw.DevReads, 1, "FR: read");
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "FR: at the walked route");
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_TBT3,
+          "FR: major 0");
 
     /* USB4 1.0, as the ORICO reads (ICM-PROTOCOL 13.3 [obs]). */
     setup(GEN_ICL, 1, 1);

@@ -560,16 +560,16 @@ VOID TbtIcmSetTimeouts(PTBT_ICM icm, ULONG cmdMs, ULONG approveMs);
 VOID TbtIcmSetResumeBudget(PTBT_ICM icm, ULONG ms);
 
 /*
- * Record 21 section 5.3: on a host where a USB4 device router is possible
- * (the ICL row; Maple Ridge on the TR row), TRUE has the idle poll read
- * ROUTER_CS_0 to 4 of each new occupancy at its route, once, before it
+ * Record 21 section 5.3: TRUE (the driver sets it on every row) has the
+ * idle poll read ROUTER_CS_0 to 4 of each new occupancy at its route,
+ * once, before it
  * takes any frame - one read a poll, one attempt of
  * TBT_ICM_VERSION_TIMEOUT_MS - and keep the USB4 Version's verdict in the
  * entry (VersionState). A read sent and never answered stops the reads
  * until the rings restart: its late answer could pass for a later read's
  * at the same route; and none is made after a driver ready whose
  * host-router poll went unanswered, until one is answered. FALSE (the
- * default, the Thunderbolt 3 hosts) reads nothing.
+ * default, for the host suite) reads nothing.
  */
 VOID TbtIcmSetReadVersion(PTBT_ICM icm, BOOLEAN on);
 

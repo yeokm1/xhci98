@@ -152,9 +152,10 @@ static UCHAR *cmStEntry(UCHAR *buf, ULONG *count, ULONG *flags)
     return e;
 }
 
-/* An ICM entry's generation (record 21 section 5.3): Thunderbolt 3 on a
- * host whose links all are; elsewhere what the router's USB4 Version
- * said, and not known before the read or where it failed. */
+/* An ICM entry's generation (record 21 section 5.3): what the router's
+ * USB4 Version said, and not known before the read or where it failed;
+ * Thunderbolt 3, as before the read existed, where none was asked (the
+ * driver asks on every row). */
 static ULONG cmStIcmGen(const TBT_ICM *icm, const TBT_ICM_DEVICE *d)
 {
     if (!icm->ReadVersion) {
