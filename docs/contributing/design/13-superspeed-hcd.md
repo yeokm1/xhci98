@@ -3428,12 +3428,34 @@ client then runs the `0x600` path.
 `HcdPoolAllocClient` / `HcdPoolFreeClient`): `NonPagedPool`, the client's
 pool tag is not known to them (the slot is shared), so the bus tags them
 `'X98U'`, distinct from its own `'X98H'`, so that a client's leak is not
-read as the bus's. Each block is a 16-byte header - signature `'X98U'`,
-the kind (plain, isochronous, select-configuration, select-interface) and
-the block's size - then the URB, zeroed. `UrbFree` checks the signature
-and the kind and frees; a URB without the header is not freed and is
-counted (`UsbdxForeignFree`, the log's `usbdx.free` note) - never a
-bugcheck, never a `ExFreePool` of memory the bus did not allocate. Sizes:
+read as the bus's. Each block is a header - a `LIST_ENTRY`, signature
+`'X98U'`, the kind (plain, isochronous, select-configuration,
+select-interface) and the block's size, rounded up to 8 bytes on x86 and
+16 on amd64 so the URB keeps the pool's alignment - then the URB, zeroed.
+**Every block the bus hands out is on one image-wide list** under one
+image-wide spin lock (`hcdUsbdxLock`, initialised in `HcdUrbInit`). Because
+`UrbFree` gets the URB alone (6.13.1), it computes the header's address by
+arithmetic and looks for that address on the list, comparing pointers and
+reading no memory of the caller's: found, the block is unlinked under the
+lock and freed after it; not found, nothing is read or freed and the call
+is counted (`hcdUsbdxForeignFrees`, image-wide; a debug build traces it).
+Never a bugcheck, never an `ExFreePool` of memory the bus did not
+allocate, never a read before a pointer the bus does not own. (UCX reads
+its header before the URB unchecked and bugchecks on a mismatch,
+`Xrb_Free` 8 x64 `0x14A54`.) The walk is as long as the client URBs
+outstanding, which is the clients' own count of URBs allocated and not
+freed.
+
+**This is a pool site record 13 section 7.5 did not name**, and rule 3 is
+amended for it there: the memory is the client's, allocated on the
+client's call and freed on the client's call - the documentation's
+"The client driver must free the URB when the driver has finished using
+it" - so the bus's own counter (rule 6, which must read 0 after the
+controller's remove) does not count it. `hcd_pool.c` counts it apart
+(`HcdPoolClientOutstanding`, image-wide, as `HcdPoolHandedOff` is), and a
+block outstanding when a controller is removed stays valid, on the list,
+until its client frees it; the image cannot unload before then, since the
+client's device object sits on a PDO of this driver's. Sizes:
 
 - `UrbAllocate`: `HCD_USBDX_URB_BYTES`, 0x98 amd64 / 0x60 x86 (the
   clients' own fallback size, 6.13.1), asserted at build time to be at least
@@ -3517,8 +3539,13 @@ private `IOCTL_XHCI98_OPEN_STREAMS` is: `Length` at least
 `sizeof(_URB_OPEN_STATIC_STREAMS)` (0x20 x86, 0x30 amd64),
 `StreamInfoVersion` `0x100` (else `USBD_STATUS_INVALID_PARAMETER`, the
 page's status), `StreamInfoSize` `sizeof(USBD_STREAM_INFORMATION)` (0x10 /
-0x18; the page names `USBD_STATUS_INFO_LENGTH_MISMATCH`, whose value no
-header read here defines, so `USBD_STATUS_INVALID_PARAMETER`), `NumberOfStreams` 1 to
+0x18; the page names `USBD_STATUS_INFO_LENGTH_MISMATCH` for this case, a
+value no header available here defines - not the WDK 7.1 `usb.h`, not the
+Windows 2000 DDK's `usbdi.h`, not mingw-w64's `usb.h` at 6.12's commit - so
+the bus answers `USBD_STATUS_INVALID_PARAMETER` and the IRP
+`STATUS_INVALID_PARAMETER`, which is what the IRP carries for a refused
+parameter either way; 6.13.8 owes the value, read on Windows 8, and the
+code takes it when it is known), `NumberOfStreams` 1 to
 `XHCI98_STREAMS_MAX` and `Streams` not NULL (else
 `USBD_STATUS_INVALID_PARAMETER`). On the thread it is the private open
 (`hcdCfgStreamsOpen`, the same checks of pipe, controller and endpoint, the
@@ -3626,8 +3653,11 @@ enforces none of them beyond what it checks for every client today.
 - The allocators and `UrbFree`: at most DISPATCH_LEVEL (the documentation's
   IRQL for each: `UrbAllocate`, `IsochUrbAllocate` and `UrbFree` at or below
   DISPATCH_LEVEL, the two builders at DISPATCH_LEVEL); `NonPagedPool` only;
-  no lock taken, no PDO, controller or device record touched, so they are
-  safe while the PDO is being removed and after. They read the caller's
+  the one lock they take is `hcdUsbdxLock`, a leaf (no other lock is taken
+  under it, and it is taken under none), held for a list insert, or a walk
+  and an unlink, never across the allocation or the free; no PDO,
+  controller or device record touched, so they are safe while the PDO is
+  being removed and after. They read the caller's
   descriptors and list, which the caller keeps resident (the documentation
   allows DISPATCH_LEVEL, so a caller there passes nonpaged memory).
 - `Unregister`: at most DISPATCH_LEVEL; an interlocked decrement of the
@@ -3660,7 +3690,13 @@ enforces none of them beyond what it checks for every client today.
 - `XhciUsbdxMaxStreams(hcEntries)`;
 - `XhciUsbdxIsochBytes(packets, isochHeaderBytes, packetBytes, &bytes)`;
 - `XhciUsbdxSelectLayout(pipeCounts, count, headerBytes, ifInfoBytes,
-  pipeInfoBytes, offsets, &total)` for both builders;
+  pipeInfoBytes, offsets, &total)` for both builders, and
+  `XhciUsbdxSelectFill`: the URB's every field but its pointers written into
+  a zeroed buffer from that layout - `Length` and `Function` of the header,
+  and per interface its `Length`, `InterfaceNumber`, `AlternateSetting`,
+  `NumberOfPipes` and each pipe's `MaximumTransferSize` - at the field
+  offsets of the pointer width given, which the driver half asserts against
+  the DDK's structures, so the host vectors read what a client will;
 - `XhciUsbdxOpenCheck(length, structBytes, infoVersion, infoSize,
   infoBytes, streams, streamsPresent, &usbd)`;
 - `XhciUsbdxStreamsUsbd(answer, gone)`;
@@ -3668,34 +3704,60 @@ enforces none of them beyond what it checks for every client today.
 
 Vectors: both architectures' sizes; every capability with every speed and
 streams value; the boundaries (0 and 0xFFFF bytes, 32 interfaces, 0 and
-31 streams, 4 and 0 array entries); every private answer's mapping.
+31 streams, 4 and 0 array entries); the filled select URBs, byte by byte,
+for both widths; every private answer's mapping. The list, the lock, the
+slot's references and the thread's exact-grant refusal are the driver
+half's, read by review and by 6.13.8's legs.
 
 #### 6.13.7 Counters and the log
 
-New counters in the controller's record (`HCD_CONTROLLER`; the snapshot's
-layout is unchanged, a debugger reads them): `UsbdxRegistered` (queries answered), `UsbdxCapability` (requests
-answered), `UsbdxStreamsOpened`, `UsbdxStreamsRefused`, `UsbdxForeignFree`.
-The first answered query and each refused open note `usbdx.*` in the log;
-debug builds trace the first of each new request as the dispatch traces
-any.
+Image-wide counters in `hcd_urb.c` (the allocators and `UrbFree` may run
+with no controller, so none of these can live in one): queries answered,
+capability requests answered, client URBs outstanding (in `hcd_pool.c`),
+and frees refused (`hcdUsbdxForeignFrees`). Per controller, in
+`HCD_CONTROLLER` beside the URB counts: stream opens and closes served
+through the public URBs and refused. The snapshot's layout is unchanged;
+a debugger reads them. A refused open notes `usbdx.open` in the
+controller's log with the answer and the endpoint; debug builds trace the
+first of each new request, and every foreign free, as the dispatch traces
+an unserved request.
 
 #### 6.13.8 What only a running system settles (owed to 43.31, on 43.24's VMs)
 
 1. A SuperSpeed UAS disk on 8 x86, 8 x64 and 8.1 x64 under `uaspstor`,
    forced `xhci98.sys` on the controller: the trace shows the query answered,
-   `STATIC_STREAMS` answered with the controller's count, three opens of
-   that many streams, I/O, a hot unplug, Safely Remove and a rescan; the same
-   disk at High Speed (the capability refused, `uaspstor`'s streamless mode).
+   `STATIC_STREAMS` answered with the controller's count, three opens (one
+   per data and status pipe) of the smaller of that count and the figure
+   `uaspstor` takes from the endpoints, I/O, a hot unplug, Safely Remove and
+   a rescan; a device whose endpoints allow fewer streams than the
+   controller (QEMU's `usb-uas` takes a stream count; a smaller one than
+   the controller's), read the same way; the same disk at High Speed (the
+   capability refused, `uaspstor`'s streamless mode); a disk reset under
+   I/O with streams open (`uaspstor`'s `RESET_PORT`, or a stalled command
+   and `RESET_PIPE` on the endpoint's handle).
 2. The classes now on the `0x602` path under this bus: a Bulk-Only stick
    (`usbstor`'s handle and capability at start), a `winusb` device
-   (KMDF's select through `SelectConfigUrbAllocateAndBuild`, isochronous on
-   8.1 if a device is at hand), HID and audio (no `usbdex`, unchanged), a
-   hub; each started, used, removed; no `usbdx.free` note.
+   (KMDF's select through `SelectConfigUrbAllocateAndBuild`; a device with
+   an alternate setting and an in-guest tool that changes it, for
+   `SelectInterfaceUrbAllocateAndBuild`; isochronous on 8.1 if a device is
+   at hand), HID and audio (no `usbdex`, unchanged), a hub; each started,
+   used, removed; no foreign free in the trace, and the client URB count
+   back to its value before the device came.
 3. `0x220FB3` on a disk holding a page file (a second disk, the page file
    moved to it): a reset forced while paging (a stalled command, or a
    cable pull and replug) completes, and the system does not hang.
-4. The forced install on 7 x86 and 7 x64 with the same build: the
-   device matrix 7 runs, unchanged (no query, no new request in the trace).
+4. The forced install on 7 x86 and 7 x64 with the same build, and the
+   package on 98 SE and 2000 SP4: each target's device matrix, unchanged
+   (no query, no new request in the trace).
+5. The value of `USBD_STATUS_INFO_LENGTH_MISMATCH` (6.13.2), read from a
+   Windows 8 stack's answer to an open with a wrong `StreamInfoSize` (an
+   in-guest test driver), or from a further static read.
+
+No inbox client sends `CLOSE_STATIC_STREAMS` (6.12.2: `uaspstor` sends
+`0x35` and never `0x36`), and only a test driver of the project's own could
+send a close and a reopen, or an open the plan would grant short; until
+one exists, those paths rest on the host vectors and on the private
+interface's legs (31-A.1), which run the same thread code.
 
 #### 6.13.9 The installer's half (not this task's code)
 
@@ -4050,6 +4112,12 @@ DMA"). That rule left the tree with the miniport; it remains the rule of the
    enumeration, or from a lookaside list initialised there if 25.7 needs one
    (`ExInitializeNPagedLookasideList` and the two SList pairs have stock
    precedents in `ks.sys` and `ohci1394.sys`).
+   Since task 43.29 one more kind of site: the URBs a Windows 8 client
+   allocates through the allocators of `GUID_USBD_INTERFACE_V1`
+   (section 6.13.2) - the client's memory, allocated and freed on the
+   client's own calls, counted apart from rule 6's counter
+   (`HcdPoolClientOutstanding`), and never on the bus's own submit or
+   completion path.
 4. **Two files own every call.** A pool file (`src\hcd_pool.c`: the
    allocate and free wrappers, the tag, an outstanding-allocation counter the
    `XHCISNAP` door reports, and the only `ExAllocatePoolWithTag`,
