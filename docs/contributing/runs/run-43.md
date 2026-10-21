@@ -105,12 +105,13 @@ By record 13 section 10.7.1's decision 1, the refused PDO's device id
 moves to `USB\XHCI98_NOXPORT&VID_v&PID_p[&MI_nn]` on every target: task
 43.15.
 
-## 43.16 the legs: a refused interface under the new device id, 98 SE and ME (2026-10-22)
+## 43.16 the legs: a refused interface under the new device id, 98 SE, ME and 2000 (2026-10-22)
 
 NOX.1's legs (design record 13 section 10.7.1) for task 43.15's change,
 on the three guests 43.14 read, each continued from the disk 43.14 left:
 probe V (`USB\VID_46F4&PID_0003`) installed in `INF\OTHER` and bound to
-the two refused devnodes 43.14 made. Runtime, development host A.
+the two refused devnodes 43.14 made; and on Windows 2000 (below).
+Runtime, development host A.
 
 ### The vehicle
 
@@ -156,8 +157,36 @@ guest), were left as they were - the same `HardwareID`, `Driver`
 (`USB\0002`, `USB\0003`) and probe V's `Class\USB` keys as 43.14 read -
 by decision 4; the device did not return to them.
 
+### Windows 2000
+
+The plan's NT target, on a fresh overlay of the project's clean Windows
+2000 image (`vm\t26\win2k-clean.qcow2`), the same controller and
+device:
+
+1. `3.1.0.0` installed through the controller's Found New Hardware
+   wizard from the package's INF, then a restart.
+2. A refused `usb-uas` plugged under `3.1.0.0` (serial `NOXW2KO1`), and
+   the wizard pointed at probe V's folder: "Windows was unable to locate a
+   driver for this device"; "Skip driver installation" chosen.
+3. The gated `xhci98.sys` of `66840a9e` copied over `3.1.0.0`'s in
+   `C:\WINNT\system32\drivers`, the guest shut down, the copy read back off
+   the disk with the same SHA-256, a cold boot.
+4. The same device plugged again (the same serial): a new wizard, probe V
+   offered again, "unable to locate a driver", skipped.
+
+`regedit /e` of `HKLM\SYSTEM\CurrentControlSet\Enum\USB` and of the USB
+class key, off the disk after a clean shut down:
+
+- Step 2's devnode, `Enum\USB\VID_46F4&PID_0003\NOXW2KO1`, its
+  `HardwareID` the one id the PDO answered,
+  `USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000`: 2000 does not add the
+  device id to that value as 98 SE and ME do, and probe V's
+  `USB\VID_46F4&PID_0003` line did not bind the old form either.
+- Step 4's devnode, `Enum\USB\XHCI98_NOXPORT&VID_46F4&PID_0003\NOXW2KO1`,
+  its `HardwareID` the two NOXPORT ids, no `Driver`; the old devnode left
+  beside it, not present (no `Control` key), by decision 4.
+- No USB class key past the controller's and the root hub's.
+
 ### Not read
 
-- Windows 2000 (the plan's NT target): no 2000 guest with `xhci98` and
-  this branch's driver was at hand; owed.
 - A refused function of a composite device (`&MI_nn`): host vectors only.
