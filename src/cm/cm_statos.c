@@ -238,8 +238,11 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
         } else if (nhi->Icm.Ring != NULL) {
             in->Cm = CM_ST_CM_ICM;
             /* The running row's generation (the AddDevice profile is
-             * not read on 98 SE and ME). */
+             * not read on 98 SE and ME); Maple Ridge runs the Titan Ridge
+             * row but is a USB4 host, and reads its routers' versions
+             * (record 21 section 5.3). */
             in->IcmNoUsb3 = (ULONG)(nhi->Icm.Profile != NULL &&
+                                    !nhi->Icm.ReadVersion &&
                                     (nhi->Icm.Profile->Generation ==
                                          TBT_ICM_GEN_FALCON_RIDGE ||
                                      nhi->Icm.Profile->Generation ==

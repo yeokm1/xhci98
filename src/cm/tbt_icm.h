@@ -193,6 +193,9 @@
  * 63). A shorter frame is malformed. */
 #define TBT_ICM_FR_CONNECTED_WORDS  61UL
 #define TBT_ICM_TR_CONNECTED_WORDS  63UL
+/* A router read for the generation (record 21 section 5.3): one
+ * attempt, this long. */
+#define TBT_ICM_VERSION_TIMEOUT_MS  1000UL
 /* How much one TbtIcmPoll takes before it returns to the driver. */
 #define TBT_ICM_POLL_FRAMES         64UL
 #define TBT_ICM_POLL_EVENTS         32UL
@@ -277,7 +280,16 @@ typedef struct _TBT_ICM_DEVICE {
     ULONG EventFlags;
     TBT_ROUTE Route;
     TBT_ICM_NAMES Names;
+    ULONG VersionState;     /* TBT_ICM_VER_*: this occupancy's router read */
+    ULONG Usb4Version;      /* ROUTER_CS_4 31:24 where VersionState says USB4 */
 } TBT_ICM_DEVICE, *PTBT_ICM_DEVICE;
+
+/* The router's generation, read once per occupancy where the driver asked
+ * for it (TbtIcmSetReadVersion; record 21 section 5.3). */
+#define TBT_ICM_VER_OWED            0UL     /* not read yet */
+#define TBT_ICM_VER_USB4            1UL     /* USB4 Version major 1 or 2 */
+#define TBT_ICM_VER_TBT3            2UL     /* major 0: a Thunderbolt 3 router */
+#define TBT_ICM_VER_UNKNOWN         3UL     /* the read failed, or a reserved major */
 
 /* ---------------------------------------------------------------------- */
 /* The per-generation table (record 21 section 1.4)                       */
@@ -452,6 +464,8 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG ResumeBudgetExpired;  /* resumes abandoned at their budget */
     ULONG Lost;             /* TbtIcmLost: the host interface lost */
     ULONG Recoveries;       /* TbtIcmRecover called */
+    ULONG VersionReads;     /* router reads for the generation */
+    ULONG VersionFailures;  /* of them, no generation known */
 } TBT_ICM_COUNTERS;
 
 typedef struct _TBT_ICM {
@@ -467,6 +481,11 @@ typedef struct _TBT_ICM {
     TBT_ICM_APPROVE_HOOK ApproveHook;
     PVOID ApproveHookContext;
     BOOLEAN ApproveAll;         /* XhciCmApprove: 1 TRUE (default), 0 FALSE */
+    BOOLEAN ReadVersion;        /* read each router's USB4 Version */
+    BOOLEAN VersionStopped;     /* a router read went unanswered: none
+                                   until the rings restart */
+    BOOLEAN HostPollOk;         /* the last driver ready's host-router poll
+                                   was answered */
     ULONG CmdTimeoutMs;
     ULONG ApproveTimeoutMs;
     ULONG Retries;
@@ -540,6 +559,20 @@ VOID TbtIcmSetTimeouts(PTBT_ICM icm, ULONG cmdMs, ULONG approveMs);
  * For the host suite: the driver keeps the default. */
 VOID TbtIcmSetResumeBudget(PTBT_ICM icm, ULONG ms);
 
+/*
+ * Record 21 section 5.3: on a host where a USB4 device router is possible
+ * (the ICL row; Maple Ridge on the TR row), TRUE has the idle poll read
+ * ROUTER_CS_0 to 4 of each new occupancy at its route, once, before it
+ * takes any frame - one read a poll, one attempt of
+ * TBT_ICM_VERSION_TIMEOUT_MS - and keep the USB4 Version's verdict in the
+ * entry (VersionState). A read sent and never answered stops the reads
+ * until the rings restart: its late answer could pass for a later read's
+ * at the same route; and none is made after a driver ready whose
+ * host-router poll went unanswered, until one is answered. FALSE (the
+ * default, the Thunderbolt 3 hosts) reads nothing.
+ */
+VOID TbtIcmSetReadVersion(PTBT_ICM icm, BOOLEAN on);
+
 
 /* One NHI mailbox command (ICM 2.3; Linux nhi.c nhi_mailbox_cmd): TBT_OK,
  * TBT_E_ERROR_FLAG or TBT_E_TIMEOUT. */
@@ -561,7 +594,8 @@ LONG TbtIcmMailbox(PTBT_ICM icm, ULONG code, ULONG data);
 LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes);
 
 /*
- * The idle poll: every frame the RX ring holds is decoded and acted on -
+ * The idle poll: first the one router read owed, where TbtIcmSetReadVersion
+ * asked for them; then every frame the RX ring holds is decoded and acted on -
  * a new device gets its route and its approval here, so this may send
  * commands and wait - then the events decoded inside those waits. Bounded
  * by TBT_ICM_POLL_FRAMES and TBT_ICM_POLL_EVENTS; what is left waits for
