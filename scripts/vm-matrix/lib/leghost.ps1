@@ -68,13 +68,20 @@ function Save-LegShot {
 #                    (active, or inactive under one of the two above), with
 #                    the wizard's own title bar inactive
 #   'wizard'         the Add New Hardware wizard's title bar active at y 77
-#   'question'       the wizard gone (no title bar at y 77, active or not)
+#   'question'       none of the above, the wizard's title bar not active,
 #                    and an active title bar across the middle of the screen
+#                    (System Settings Change, over the wizard's last page)
 #   'other'          anything else; 'unknown' when no screen could be read
 function Get-Leg98Dialog {
     param([int]$QmpPort, [string]$Dir)
     $p = Join-Path $Dir 'state.png'
     try { Save-QmpScreen -Port $QmpPort -Path $p; Start-Sleep -Milliseconds 400 } catch { return 'unknown' }
+    return Get-Leg98DialogOf $p
+}
+
+# The same reading of a saved screen (a PNG).
+function Get-Leg98DialogOf {
+    param([string]$p)
     Add-Type -AssemblyName System.Drawing
     $b = $null
     try {
@@ -89,9 +96,7 @@ function Get-Leg98Dialog {
         if (& $navy $wiz) { return 'wizard' }
         $pr = $b.GetPixel(380, 143)
         if ((& $dim $wiz) -and ((& $navy $pr) -or (& $dim $pr))) { return 'copy-progress' }
-        if (-not (& $dim $wiz)) {
-            for ($y = 120; $y -le 320; $y += 2) { if (& $navy ($b.GetPixel(320, $y))) { return 'question' } }
-        }
+        for ($y = 120; $y -le 320; $y += 2) { if (& $navy ($b.GetPixel(320, $y))) { return 'question' } }
         return 'other'
     } catch { return 'unknown' } finally { if ($b) { $b.Dispose() } }
 }
