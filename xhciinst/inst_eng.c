@@ -12925,7 +12925,9 @@ static int run_eject(void)
                 return INST_EXIT_REFUSED;
             }
         }
-        out("\nThere is nothing to eject.\n");
+        /* /eject is for Thunderbolt and USB4 devices (owner, 2026-10-22). */
+        out("\nThere is nothing to eject.\nFor a USB drive, use Safely Remove "
+            "in the xHCI98 USB Tree.\n");
         tb_unask();
         return INST_EXIT_REFUSED;
     }
