@@ -2841,7 +2841,7 @@ try {
     # ignores case. The check is read from the renderer, then applied to a
     # lower-case brace (which must pass) and an upper-case one (which must not).
     Write-Step "the leftover-placeholder check passes lower-case braces such as {current}"
-    $leftoverCheck = [regex]::Match($releaserText, "if \(\`$readme -(c?match) '([^']+)'\) \{\s*throw `"readme template left an unsubstituted placeholder")
+    $leftoverCheck = [regex]::Match($releaserText, "if \(\`$readme -(c?match) '([^']+)'\) \{\s*(?:throw|Stop-CutCheck) `"readme template left an unsubstituted placeholder")
     Assert-True $leftoverCheck.Success "make-release.ps1 no longer has a leftover-placeholder check on the rendered readme that this test can find."
     if ($leftoverCheck.Success) {
         Assert-True ($leftoverCheck.Groups[1].Value -ceq "cmatch") (
@@ -3364,7 +3364,7 @@ try {
            Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
         @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
            Why  = "a cut no longer refuses an install tool older than its sources (task 40.6)" },
-        @{ Find = 'throw "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."';
+        @{ Find = 'Stop-CutCheck "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."';
            Why  = "a cut no longer refuses an INSTALL.BAT with LF endings (task 40.6)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT")';
            Why  = "a cut no longer writes the NOTICE.TXT recording the install tool's statically linked runtimes (legal-provenance.md section 2a)" },
@@ -3439,6 +3439,11 @@ try {
     $tfvAt = $releaserText.IndexOf("function Assert-ToolFileVersion")
     Assert-True ($tfvAt -ge 0) "make-release.ps1 no longer has Assert-ToolFileVersion (task 41-A.6)."
     if ($tfvAt -ge 0) {
+        # Its refusal goes through the cut's Stop-CutCheck, which throws
+        # outside -CheckOnly (task 43.9).
+        $sccAt = $releaserText.IndexOf("function Stop-CutCheck")
+        Invoke-Expression $releaserText.Substring($sccAt, $releaserText.IndexOf("`n}", $sccAt) - $sccAt + 2)
+        $CheckOnly = $false
         Invoke-Expression $releaserText.Substring($tfvAt, $releaserText.IndexOf("`n}", $tfvAt) - $tfvAt + 2)
         $tfvDll = Join-Path $env:SystemRoot "System32\kernel32.dll"
         $tfvInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($tfvDll)
@@ -4734,6 +4739,158 @@ try {
     }
     Assert-True (-not (Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState read the fixture repository as dirty after its flags were cleared."
     Assert-True ((Get-GitTreeState -Repo (Join-Path $soDir "not-a-repo")).Head -eq "none") "Get-GitTreeState gave a commit for a directory that is no repository."
+    # --- a HEAD newer than the gated build's commit (task 43.9) -------------
+    #
+    # Admitted when the recorded commit is an ancestor of HEAD and no file
+    # changed since is a build input; a change to a source, a header, the
+    # host suite or the import gates is refused as before. The rules are
+    # read from this tree; the commits are a fixture repository's.
+    Write-Step "a HEAD newer than the gated build is admitted only when no build input changed"
+    foreach ($d in @("xhci98", "xhciuas", "xhcicm", "xhcihlpr", "stor98", "stor98mpd")) {
+        $l = @(& (Join-Path $repo "scripts\source-stamp.ps1") -Driver $d -List)
+        Assert-True ($l -contains "src\xhci_version.h") "source-stamp.ps1 -Driver $d -List does not name src\xhci_version.h."
+        Assert-True (@($l | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repo $_) -PathType Leaf) }).Count -eq 0) `
+            "source-stamp.ps1 -Driver $d -List names a file that is not in the tree."
+    }
+    $biRules = Get-BuildInputRules -Repo $repo
+    foreach ($v in @(
+        @{ P = "docs/contributing/build-and-test.md"; In = $false },
+        @{ P = "releases/history.md";                In = $false },
+        @{ P = "README.md";                          In = $false },
+        @{ P = "xhciinst/README.TXT";                In = $false },
+        @{ P = "scripts/package/make-release.ps1";   In = $false },
+        @{ P = "src/xhci98.inf";                     In = $false },
+        @{ P = "src/stor98/docs/package-readme.txt"; In = $false },
+        @{ P = "src/stor98/inf/stor98-x86.inf";      In = $false },
+        @{ P = "src/xhci_ring.c";                    In = $true },
+        @{ P = "src/xhci_version.h";                 In = $true },
+        @{ P = "src/sources";                        In = $true },
+        @{ P = "src/xhci_added_since.c";             In = $true },
+        @{ P = "src/cm/cm_added_since.h";            In = $true },
+        @{ P = "src/uas/sources";                    In = $true },
+        @{ P = "src/hlpr/xhci_hlpr.rc";              In = $true },
+        @{ P = "src/stor98/src/engine.c";            In = $true },
+        @{ P = "src/stor98/tests/unit/build.cmd";    In = $true },
+        @{ P = "test/test_ring.c";                   In = $true },
+        @{ P = "test/run-host-tests.cmd";            In = $true },
+        @{ P = "xhciinst/inst_core.c";               In = $true },
+        @{ P = "xhcitr/tr_core.c";                   In = $true },
+        @{ P = "scripts/import-gate/xhci98-imports.allow"; In = $true },
+        @{ P = "scripts/build-driver.cmd";           In = $true },
+        @{ P = "scripts\source-stamp.ps1";           In = $true }
+    )) {
+        Assert-True ((Test-BuildInputPath -Rules $biRules -Path $v.P) -eq $v.In) `
+            ("Test-BuildInputPath says {0} for '{1}'." -f (-not $v.In), $v.P)
+    }
+    # The fixture: a build at A, a documentation commit B, a source commit C
+    # on B, and a commit D on a branch from A that B and C do not contain.
+    $adGit = Join-Path $soDir "advance"
+    New-Item -ItemType Directory -Force -Path (Join-Path $adGit "docs") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $adGit "src") | Out-Null
+    function Invoke-AdGit {
+        param([string[]]$GitArgs)
+        $ErrorActionPreference = "Continue"
+        try {
+            $o = & git -C $adGit -c user.name=t -c user.email=t@t -c commit.gpgsign=false @GitArgs 2>&1 | Out-String
+        } finally { $ErrorActionPreference = $savedEap }
+        return $o.Trim()
+    }
+    [void](Invoke-AdGit @("init", "-q"))
+    [System.IO.File]::WriteAllText((Join-Path $adGit "docs\notes.md"), "a")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "src\xhci_ring.c"), "a")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "A"))
+    $adA = Invoke-AdGit @("rev-parse", "HEAD")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "docs\notes.md"), "b")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "README.md"), "b")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "B"))
+    $adB = Invoke-AdGit @("rev-parse", "HEAD")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "src\xhci_ring.c"), "c")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "C"))
+    $adC = Invoke-AdGit @("rev-parse", "HEAD")
+    [void](Invoke-AdGit @("checkout", "-q", "-b", "side", $adA))
+    [System.IO.File]::WriteAllText((Join-Path $adGit "docs\other.md"), "d")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "D"))
+    $adD = Invoke-AdGit @("rev-parse", "HEAD")
+    Assert-True ((@($adA, $adB, $adC, $adD) | Where-Object { $_ -match '^[0-9a-f]{40}$' }).Count -eq 4) "the advance fixture's commits were not made."
+    $adv = Get-GatedHeadAdvance -Repo $adGit -From $adA -To $adB -Rules $biRules
+    Assert-True ($adv.Fault -eq "" -and $adv.Commits -eq 1 -and $adv.Changed.Count -eq 2) `
+        ("a documentation commit after the build was not admitted: '{0}', {1} commit(s), {2} file(s)" -f $adv.Fault, $adv.Commits, $adv.Changed.Count)
+    $advC = Get-GatedHeadAdvance -Repo $adGit -From $adA -To $adC -Rules $biRules
+    Assert-True ($advC.Fault.Contains("src/xhci_ring.c") -and $advC.Fault.Contains("build input")) `
+        ("a source commit after the build was not refused by name: '{0}'" -f $advC.Fault)
+    $advD = Get-GatedHeadAdvance -Repo $adGit -From $adB -To $adD -Rules $biRules
+    Assert-True ($advD.Fault.Contains("not an ancestor")) ("a HEAD the build's commit is not an ancestor of was not refused: '{0}'" -f $advD.Fault)
+    $advX = Get-GatedHeadAdvance -Repo $adGit -From ("0" * 40) -To $adB -Rules $biRules
+    Assert-True ($advX.Fault -ne "") "a recorded commit the repository does not hold was admitted."
+    # The record's comparison takes the answer only for its own commit and HEAD.
+    $soAdvM = ConvertFrom-GatedManifest -Text ($soText -replace "(?m)^commit=[0-9a-f]{40}", ("commit=" + $adA))
+    Assert-True ((Get-SoFault -M $soAdvM -Head $adB) -ne "") "a newer HEAD was admitted with no advance given."
+    Assert-True ((Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+                    -Head $adB -Dirty $false -NoTargetEvidence $false -Advance $adv) -eq "") `
+        "a newer HEAD with no build input changed since was refused."
+    $f = Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+            -Head $adC -Dirty $false -NoTargetEvidence $false -Advance $advC
+    Assert-True ($f.Contains("it was built at commit") -and $f.Contains("src/xhci_ring.c")) ("a newer HEAD with a source changed since was not refused by name: '{0}'" -f $f)
+    $f = Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+            -Head $adC -Dirty $false -NoTargetEvidence $false -Advance $adv
+    Assert-True ($f.Contains("it was built at commit")) "an advance computed for another HEAD was taken."
+    Assert-True ((Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+                    -Head $adB -Dirty $true -NoTargetEvidence $false -Advance $adv).Contains("uncommitted changes since")) `
+        "a newer HEAD in a dirty tree was not refused for the tree."
+    $soPkgAdvText = [System.IO.File]::ReadAllText($packager)
+    Assert-True ($soPkgAdvText.Contains('$advance = Get-GatedHeadAdvance -Repo $repo -From $gated.Commit -To $tree.Head') -and
+                 $soPkgAdvText.Contains('-NoTargetEvidence ([bool]$NoTargetEvidence) -Advance $advance')) `
+        "make-package.ps1 -SignOnly no longer gives the record's comparison the advance to a newer HEAD."
+
+    # --- make-release.ps1 -CheckOnly (task 43.9) -----------------------------
+    #
+    # Refused with the two modes it cannot go with; its refusal helper and the
+    # generated-text gate are EXECUTED, loaded from the script's text: under
+    # -CheckOnly a refusal is noted and the run goes on, and without it the
+    # same call throws, as the cut always has. Then where it stops: after the
+    # staged tree's last check, before the upload set and the publish.
+    Write-Step "-CheckOnly notes each refusal, writes nothing under releases\ and stops before the publish"
+    foreach ($bad in @(
+        @{ Args = @("-CheckOnly", "-UploadSetOnly");          Says = "give one" },
+        @{ Args = @("-CheckOnly", "-TestSignPfx", "x.pfx");   Says = "drop -TestSignPfx" }
+    )) {
+        $r = Invoke-Releaser $bad.Args
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains($bad.Says)) `
+            ("make-release.ps1 did not refuse {0} with '{1}'. Output:`n{2}" -f ($bad.Args -join " "), $bad.Says, $r.Output)
+    }
+    $coText = [System.IO.File]::ReadAllText($releaser)
+    foreach ($fn in @("function Stop-CutCheck", "function Write-GeneratedText")) {
+        $at = $coText.IndexOf($fn)
+        Assert-True ($at -ge 0) "make-release.ps1 no longer has $fn."
+        if ($at -ge 0) { Invoke-Expression $coText.Substring($at, $coText.IndexOf("`n}", $at) - $at + 2) }
+    }
+    $coDir = Join-Path $soDir "checkonly"
+    New-Item -ItemType Directory -Force -Path $coDir | Out-Null
+    $destRoot = $coDir
+    $script:cutCheckFaults = New-Object System.Collections.ArrayList
+    $CheckOnly = $true
+    Write-GeneratedText -Path (Join-Path $coDir "readme.txt") -Lines @("fits", ("x" * 79), ("caf" + [char]0xE9))
+    Assert-True ($script:cutCheckFaults.Count -eq 2 -and $script:cutCheckFaults[0].Contains("past 78 columns") -and
+                 $script:cutCheckFaults[1].Contains("not printable ASCII")) `
+        ("-CheckOnly did not note both refusals of one generated text: " + ($script:cutCheckFaults -join " | "))
+    Assert-True ($script:cutCheckFaults.Count -ge 1 -and $script:cutCheckFaults[0].StartsWith("readme.txt has")) `
+        "a generated text's refusal does not name it by its path in the release."
+    $CheckOnly = $false
+    $threw = $false
+    try { Write-GeneratedText -Path (Join-Path $coDir "readme2.txt") -Lines @(("x" * 79)) } catch { $threw = $_.Exception.Message.Contains("past 78 columns") }
+    Assert-True $threw "a cut no longer stops on a generated text past 78 columns."
+    Remove-Variable -Name CheckOnly, destRoot -ErrorAction SilentlyContinue
+    $coAnchors = @(
+        @{ Name = "the staged tree's last check"; Find = 'Assert-NoTestClient -Root $destRoot -What "the staged release' },
+        @{ Name = "the -CheckOnly end";           Find = 'Write-Step "-CheckOnly: done"' },
+        @{ Name = "the publish swap";             Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
+    )
+    $coAt = @($coAnchors | ForEach-Object { $coText.IndexOf($_.Find) })
+    Assert-True ((@($coAt | Where-Object { $_ -lt 0 })).Count -eq 0 -and $coAt[0] -lt $coAt[1] -and $coAt[1] -lt $coAt[2]) `
+        "make-release.ps1 -CheckOnly no longer ends after the staged tree's last check and before the publish swap."
+    Assert-True ($coText.Contains('if (-not $SkipUploadSet -and -not $CheckOnly) {')) "make-release.ps1 -CheckOnly would assemble an upload set."
+    Assert-True ($coText.Contains('$destRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-checkonly-"')) `
+        "make-release.ps1 -CheckOnly no longer renders into a private directory of its own."
 
     # The record's writer certifies nothing on its own: without the token of
     # the build-driver.cmd run holding the lock it refuses, before it reads or

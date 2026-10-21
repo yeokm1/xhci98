@@ -3145,8 +3145,8 @@ binaries are never signed.
   copy that every later step uses, and refuses unless the record is for
   that architecture and flavour, every copy has exactly its recorded
   SHA-256, the build ran in a clean tree, the tree is still at that commit
-  with no change, and the build's gates had target evidence (or the run
-  passes `-NoTargetEvidence` too); each copy is checked against its hash
+  - or at a newer one, below - with no change, and the build's gates had
+  target evidence (or the run passes `-NoTargetEvidence` too); each copy is checked against its hash
   again just before it is signed. It then skips the host test suite and the import gates, which
   are about the bytes, and keeps everything about the package: the
   flavour markers, the INF gates before staging (the media-layout one
@@ -3166,6 +3166,31 @@ binaries are never signed.
   ```
 
   `make-release.ps1` does not use it: a cut runs every gate.
+- **A documentation commit after the gated build** (roadmap-usb4.md task
+  43.9; owner, 2026-10-20). `-SignOnly` also admits a HEAD newer than the
+  record's commit when that commit is an ancestor of HEAD and no file
+  changed between the two (`git diff --name-only`) is a build input
+  (`package-common.ps1`, `Get-GatedHeadAdvance`), and it lists the files
+  that changed. A build input is a file any of the six source stamps lists
+  (`scripts\source-stamp.ps1 -Driver <name> -List` prints the stamp's own
+  list); a `.c`, `.h`, `.rc`, `.asm`, `.def`, `.mc` or `.inc` file, or a
+  `sources`, `makefile`, `makefile.inc` or `dirs`, in those files'
+  directories, so that a file added or removed since counts too; a file
+  `test\run-host-tests.cmd` compiles and the same kinds beside it (the
+  installer's, XHCITR's and XHCIMARK's pure halves); anything under
+  `test\`, `scripts\import-gate\` and Stor98's `src\`, `include\`,
+  `scripts\`, `tests\` and `third_party\`; and `build-driver.cmd`,
+  `build-all.cmd`, `source-stamp.ps1` and the build's binary checks. So a
+  change to the documents, `releases\history.md`, a tool's `README.TXT`,
+  an INF or the packaging scripts after the build costs no rebuild (the
+  INF gates and the package's own gate run under `-SignOnly` anyway),
+  and a change to a source, a header, the host suite or the import gates
+  is refused as before, naming the files. A HEAD the record's commit is not
+  an ancestor of (a rebase, another branch) is refused too.
+- **The cut's checks without the cut: `make-release.ps1 -CheckOnly`**
+  (task 43.9). Releases `README.md`, "Cutting a release", says what it runs.
+  It reports each leg's gated build record as above, as a warning only,
+  since the cut itself does not read it.
 - **Verifying.** `tools\WinDDK71\bin\x86\SignTool.exe verify /pa /v
   <dir>\xhci98.sys` shows the SHA-1 file hash, the chain with the
   certificate's SHA-1 hash, "File is not timestamped", and then fails on
