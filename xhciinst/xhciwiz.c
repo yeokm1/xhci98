@@ -3365,24 +3365,33 @@ static void st_combo(HWND combo, const char *what)
     int dropped = (int)SendMessageA(combo, CB_GETDROPPEDWIDTH, 0, 0);
     int n = (int)SendMessageA(combo, CB_GETCOUNT, 0, 0);
     int longest = 0;
+    int measured = 0;
     int room;
     RECT r;
     SIZE sz;
     int k;
 
+    /* Every entry measured, or the checks below prove nothing. */
     for (k = 0; k < n; k++) {
         int len = (int)SendMessageA(combo, CB_GETLBTEXTLEN, (WPARAM)k, 0);
-        if (len <= 0 || len >= (int)sizeof(text)) {
+        if (len <= 0 || len >= (int)sizeof(text) ||
+            (int)SendMessageA(combo, CB_GETLBTEXT, (WPARAM)k,
+                              (LPARAM)text) != len ||
+            !GetTextExtentPoint32A(dc, text, len, &sz)) {
             continue;
         }
-        SendMessageA(combo, CB_GETLBTEXT, (WPARAM)k, (LPARAM)text);
-        if (GetTextExtentPoint32A(dc, text, len, &sz) && sz.cx > longest) {
+        measured++;
+        if (sz.cx > longest) {
             longest = sz.cx;
         }
     }
     if (old != NULL) {
         SelectObject(dc, old);
     }
+    _snprintf(msg, sizeof(msg) - 1, "%s: every entry measured (%d of %d)",
+              what, measured, n);
+    msg[sizeof(msg) - 1] = '\0';
+    st(n > 0 && measured == n, msg);
     ReleaseDC(combo, dc);
     GetWindowRect(combo, &r);
     room = (r.right - r.left) - combo_extra(combo);
@@ -3480,11 +3489,13 @@ static void st_lay_part(HWND d, const ROWPAGE *rp, const char *what)
         SelectObject(dc, old);
     }
     ReleaseDC(note, dc);
-    GetClientRect(note, &nc);
+    /* The edit control's formatting rectangle: where its text is drawn. */
+    SendMessageA(note, EM_GETRECT, 0, (LPARAM)&nc);
     _snprintf(msg, sizeof(msg) - 1, "%s: the note shows six lines (%ld px, "
-              "a line %ld)", what, (long)nc.bottom, (long)tm.tmHeight);
+              "a line %ld)", what, (long)(nc.bottom - nc.top),
+              (long)tm.tmHeight);
     msg[sizeof(msg) - 1] = '\0';
-    st(nc.bottom >= 6 * tm.tmHeight, msg);
+    st(nc.bottom - nc.top >= 6 * tm.tmHeight, msg);
 }
 
 /* The made-up Stor98 rows: both systems, set and not set. */
