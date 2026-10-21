@@ -4777,7 +4777,9 @@ try {
         @{ P = "xhcitr/tr_core.c";                   In = $true },
         @{ P = "scripts/import-gate/xhci98-imports.allow"; In = $true },
         @{ P = "scripts/build-driver.cmd";           In = $true },
-        @{ P = "scripts\source-stamp.ps1";           In = $true }
+        @{ P = "scripts\source-stamp.ps1";           In = $true },
+        @{ P = "scripts/common.ps1";                 In = $true },
+        @{ P = "scripts/import-gate/evidence-common.ps1"; In = $true }
     )) {
         Assert-True ((Test-BuildInputPath -Rules $biRules -Path $v.P) -eq $v.In) `
             ("Test-BuildInputPath says {0} for '{1}'." -f (-not $v.In), $v.P)

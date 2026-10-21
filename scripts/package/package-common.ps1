@@ -1270,7 +1270,8 @@ function Get-GitTreeState {
 # compiles (test\run-host-tests.cmd) and the same kinds in its directory;
 # test\ itself; the import gates' scripts\import-gate\; Stor98's sources,
 # build scripts and unit tests; and the scripts that build the binaries and
-# judge them for the record. Over-covering is the safe side: a file wrongly
+# judge them for the record, with scripts\common.ps1, which they dot-source.
+# Over-covering is the safe side: a file wrongly
 # counted costs a rebuild, one wrongly left out lets the host suite's and the
 # import gates' old verdict stand for a tree they never read. What the
 # record's commit also stood for - the INFs and the packaging scripts the
@@ -1294,7 +1295,8 @@ $script:BuildInputScripts = @(
     "scripts\check-flavour-marker.ps1",
     "scripts\check-helper-build.ps1",
     "scripts\check-stor98-build.ps1",
-    "scripts\check-stor98-header.ps1"
+    "scripts\check-stor98-header.ps1",
+    "scripts\common.ps1"
 )
 $script:StampDrivers = @("xhci98", "xhciuas", "xhcicm", "xhcihlpr", "stor98", "stor98mpd")
 

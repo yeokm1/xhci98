@@ -4348,7 +4348,7 @@ helper (xhciinst\di\build.cmd).
         $dbg = "debug-$a"
         if ($staged.ContainsKey($rel) -and $staged.ContainsKey($dbg) -and
             $staged[$rel].Sha256 -eq $staged[$dbg].Sha256) {
-            throw "the release and debug $a binaries are identical - one build was packaged twice."
+            Stop-CutCheck "the release and debug $a binaries are identical - one build was packaged twice."
         }
     }
 

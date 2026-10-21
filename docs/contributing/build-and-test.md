@@ -3180,7 +3180,8 @@ binaries are never signed.
   installer's, XHCITR's and XHCIMARK's pure halves); anything under
   `test\`, `scripts\import-gate\` and Stor98's `src\`, `include\`,
   `scripts\`, `tests\` and `third_party\`; and `build-driver.cmd`,
-  `build-all.cmd`, `source-stamp.ps1` and the build's binary checks. So a
+  `build-all.cmd`, `source-stamp.ps1`, the build's binary checks and the
+  `scripts\common.ps1` they dot-source. So a
   change to the documents, `releases\history.md`, a tool's `README.TXT`,
   an INF or the packaging scripts after the build costs no rebuild (the
   INF gates and the package's own gate run under `-SignOnly` anyway),
