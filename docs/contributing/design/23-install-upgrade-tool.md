@@ -2653,7 +2653,12 @@ the user.
   USB storage drivers' INFs when record 26 section 6.5's row is ticked.
 - **D3** A device bound to another vendor's driver is listed and left,
   including an xHCI controller, whatever its problem code; Device Manager
-  remains the way to replace a vendor driver (section 5.4).
+  remains the way to replace a vendor driver (section 5.4). Amended by
+  revision 26 (record 26 section 5.3.1 cases 3a and 3b): on Windows 8 and
+  8.1 alone, with the box ticked by the user, Windows' own in-box drivers
+  `USBXHCI` (a controller) and `stornvme` (a drive behind a tunnel, for
+  Stor98) are not another vendor's, and are installed over; every other
+  vendor's driver is left as before.
 - **D4** A group running a newer release is not downgraded without
   `/force`, and an unknown version is never overridden (section 5.4).
 - **D5** The Vista and 7 trap is reported by default and replaced only with

@@ -515,10 +515,10 @@ words):
 
 | Case | When | What the run does | The warning's words (proposal for the owner) |
 |---|---|---|---|
-| 1 | the USB storage drivers ticked on ME, or on 2000 to 8.1 | the pack's seven files copied to `<the install directory>\NUSB33\` and nothing else: nothing in `%windir%`, the INF directory, `INF\OTHER` or `DevicePath`, no device job, no `Storage` record but the copies' own (below) | "The USB storage drivers (NUSB 3.3's) are for Windows 98 SE only. On this Windows they are not installed: their seven files are copied to <dir>\NUSB33 for you to use by hand, and Windows is not told about them." |
-| 2 | the USB drivers unticked on 98 SE or ME | the connection manager installed alone, as on 2000 to 7 (record 23 section 4.5, amended): `xhci98.inf` and `xhciuas.inf` out of the run, the Thunderbolt support in it; on these two systems through the helper (record 27 section 6 step 5), and the local copy on `DevicePath` made without `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`, as `/nouas` already leaves the UAS pair out of it, so no hardware wizard can offer them; an `xhci98.sys` already installed stays as it is (record 23 section 4.5) | "Without the xHCI98 USB drivers, Windows 98 SE and ME have no driver for a USB 3 controller: every xHCI controller, a dock's included, stays without one, and the USB devices on it do not work. Only the Thunderbolt 3 / USB4 connection manager is installed. This has not been tested on Windows 98 SE or ME." |
-| 3a | the USB drivers ticked on 8 or 8.1 | `xhci98.sys` and, with its box, `xhciuas.sys` installed as on Vista and 7 (`Xhci.Dev6`, the NT route of record 23 section 5), taking roadmap task 43.29's row | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall removes them; Windows then installs its own driver again." |
-| 3b | Stor98 ticked on 8 or 8.1 | the bundled Stor98 on tunnel drives as on 2000 to 7 (section 6.3), taking roadmap task 43.23's row | "Stor98 has not been tested on Windows 8 or 8.1." |
+| 1 | the USB storage drivers ticked on ME, or on 2000 to 8.1 | the pack's seven files copied to `<the install directory>\NUSB33\` and nothing else: nothing in `%windir%`, the INF directory, `INF\OTHER` or `DevicePath`, no device job, no `Storage` record but the copies' own (below). A file of the seven's names already in that folder - the same bytes, other bytes or unreadable - is left as it is and never recorded; each absent one is written as `<name>.TMP` with `CREATE_NEW`, compared byte for byte with the download's, its `Tools` value written, then moved to its name with `MoveFileA`, which never replaces; a step that fails deletes the `.TMP` and the value and leaves the rest copied. The run says how many of the seven are in the folder and names any left out (a note, not a step); a later ticked run copies only those still absent. **Acceptance condition (ME):** Windows ME must not find the INFs there - the install directory is on ME's `DevicePath`, and whether ME's device search reads its subfolders is unread; if case 1's ME leg shows ME offering the pack's INF from `NUSB33` (or binding a stick from it), this placement is withdrawn before the code is released and the owner chooses another place or form for ME | "The USB storage drivers (NUSB 3.3's) are for Windows 98 SE only. On this Windows they are not installed: their seven files are copied to <dir>\NUSB33 for you to use by hand, and nothing installs them." |
+| 2 | the USB drivers unticked on 98 SE or ME | the connection manager installed alone, as on 2000 to 7 (record 23 section 4.5, amended): `xhci98.inf` and `xhciuas.inf` out of the run, the Thunderbolt support in it; on these two systems through the helper (record 27 section 6 step 5), and the local copy on `DevicePath` made without `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`, as `/nouas` already leaves the UAS pair out of it, so no hardware wizard can offer them; an `xhci98.sys` already installed stays as it is (record 23 section 4.5) | "Without the xHCI98 USB drivers, Windows 98 SE and ME have no driver of their own for a USB 3 controller: an xHCI controller with no other driver installed, a dock's included, stays without one, and the USB devices on it do not work. Only the Thunderbolt 3 / USB4 connection manager is installed; xHCI98 USB drivers already installed stay as they are. This has not been tested on Windows 98 SE or ME." |
+| 3a | the USB drivers ticked on 8 or 8.1 | `xhci98.sys` and, with its box, `xhciuas.sys` installed through the NT route of record 23 section 5 (`Xhci.Dev6`), taking roadmap task 43.29's row; and, the one narrow exception to record 23 decision D3 (amended, revision 26), a controller whose service is Windows' own `USBXHCI` is not "another driver" here: with the box ticked it is planned as an install and installed with `INSTALLFLAG_FORCE` (Windows' signed in-box driver otherwise outranks this package's INF), as the user chose; every other vendor's driver on a controller stays foreign and left, as before; such a controller is this package's from then on, and the uninstall removes its devnode and rescans (record 23 section 9.2), after which Windows is expected to bind `usbxhci.sys` again (43.29's "the controller given back", unread until 43.31) | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall is meant to give the controllers back to Windows' own driver; that has not been tested either." |
+| 3b | Stor98 ticked on 8 or 8.1 | the bundled Stor98 on tunnel drives as on 2000 to 7 (section 6.3), taking roadmap task 43.23's installer row; the same narrow exception as 3a for Windows' own NVMe driver: on 8.1 a tunnel drive whose service is `stornvme` is installed over with `INSTALLFLAG_FORCE` when the box is ticked, and becomes Stor98's by section 6.3's record (its first binding by this installer); an internal drive, and a drive another vendor's driver runs, are left as before; the uninstall removes Stor98 from it and rescans, Windows then expected to bind `stornvme` again, unread until 43.24 | "Stor98 has not been tested on Windows 8 or 8.1. On a drive behind a Thunderbolt or USB4 tunnel it replaces Windows' own NVMe driver." |
 
 Case 3's defaults: on 8 and 8.1 both boxes are shown unticked, as the
 USB drivers' box was; Stor98's box, which elsewhere is ticked with the
@@ -529,9 +529,9 @@ says "untested" until roadmap tasks 43.31 (the USB drivers) and 43.24
 amended to "admitted for the connection manager, with the USB drivers
 and Stor98 opt-in and untested".
 
-The words of case 3a's last sentence state what 43.29 asks of the
-uninstall (the controller given back to `usbxhci.sys`); no leg has read
-it, and the warning's first sentence covers it.
+Case 3a's and 3b's last sentences state what 43.29 and 43.23 ask of the
+uninstall (the controller given back to `usbxhci.sys`, a drive to
+`stornvme`) as intended and untested, which the legs read.
 
 **The window** (case 4, the owner's): on Next from the Components page,
 after the folder's check, when `inst_comp_warnings` is not zero for the
@@ -568,14 +568,22 @@ console's choices:
 **What the uninstall removes** (proposals for the owner):
 
 - case 1: the seven in `<the install directory>\NUSB33\`, each by the
-  record `HKLM\Software\xhci98\Storage\Tools` (one value per copy, its
-  path and SHA-256, written before its copy is made, as `Files` is),
-  deleted when its bytes are still the recorded ones, then the folder if
-  it is empty; a changed file is kept and said. On ME and 2000 to 8.1
-  nothing else of section 6.5.8 runs (no `Files`, `Infs`, `Placed` or
-  `Devices` can exist there). A later run with the row unticked leaves
-  the copies (unticking is "not now"); a later run with it ticked again
-  finds them by the record and copies only what is missing.
+  record `HKLM\Software\xhci98\Storage\Tools` (one value per copy this
+  installer made, its path and SHA-256, written before its move, as
+  `Files` is; a file it found there is never recorded), deleted when its
+  bytes are still the recorded ones, then the folder if it is empty; a
+  changed file is kept, said, and its value goes. This runs on both
+  uninstall routes (NT's record 23 section 9.2 and 98 SE's and ME's
+  section 9.3), before the installer's own files and the records go; a
+  deletion that fails keeps its value, sets the restart and steps flags
+  and leaves the uninstall incomplete with its Add/Remove Programs entry,
+  as section 6.5.8 step 4 does; the `Tools` subkey is deleted with the
+  `Storage` key by the run that finishes (`stor_forget` gains it, so a
+  non-recursive key deletion on NT does not fail on it). On ME and 2000
+  to 8.1 nothing else of section 6.5.8 runs (no `Files`, `Infs`,
+  `Placed` or `Devices` can exist there). A later run with the row
+  unticked leaves the copies (unticking is "not now"); a later run with
+  it ticked copies only what is absent.
 - case 2: what the connection manager's install placed, as record 23
   section 9 and record 26 section 9.3 remove it on 98 SE and ME (its
   devnodes through the helper, its INF copies, its file, the mark
@@ -867,7 +875,8 @@ unasked. With the box ticked:
   `stor98.inf`'s models match that has **no** driver (`Service` absent, or
   problem code 28) **and sits behind a Thunderbolt or USB4 tunnel** (draft
   12; record 23 section 4.4's gate and place reading), never on one another
-  driver runs (record 23 decision D3 applies to Stor98's devices as to
+  driver runs (draft 20: but for `stornvme` on a tunnel drive on 8.1, section
+  5.3.1 case 3b) (record 23 decision D3 applies to Stor98's devices as to
   this package's: an internal NVMe drive under a vendor's driver is listed
   and left), and never on an internal drive or one whose place cannot be
   read, which is left with its reason on screen and in the log. A tunnel
