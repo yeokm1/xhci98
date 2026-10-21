@@ -992,6 +992,12 @@ static void test_values(void)
         CHECK(!inst_value_applies(si, &e9), "no controller: not asked");
         CHECK(instValues[si].Caution != NULL &&
               instValues[si].CautionMask == 0, "its caveat shown every time");
+        /* Roadmap 43.6 (owner, 2026-10-19): the note says only to
+         * restart; the user knows what is being plugged in. */
+        CHECK(strstr(instValues[si].Caution, "Restart") != NULL &&
+              strstr(instValues[si].Caution, "at least once") == NULL &&
+              strstr(instValues[si].Caution, "CD") == NULL,
+              "the silent install's note: the restart alone");
     }
     CHECK_EQ(inst_value_asked_mask(im, &e), 0x7, "2000: no MSI");
     e = env(1, 6, 1, INST_ARCH_AMD64);
@@ -2120,7 +2126,8 @@ static void test_tb_eject(void)
              "unknown state");
     CHECK(strstr(text, "shut down") != NULL, "an unknown state: shut down first");
     test_tb_fallback();
-    CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED), "not safe") != NULL,
+    CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED, INST_TOOL_CONSOLE),
+                 "not safe") != NULL,
           "a unit that started again is not safe to unplug");
     CHECK_EQ(inst_eject_code(INST_EJ_DONE), INST_EXIT_DONE, "done 0");
     CHECK_EQ(inst_eject_code(INST_EJ_VETO), INST_EXIT_STEPS, "veto 4");
@@ -2142,8 +2149,85 @@ static void test_tb_eject(void)
              "USB3 up");
     CHECK_EQ(inst_unplug_kind(0, 0, 1, CM_ST_TUN_NONE), INST_UNPLUG_CHECK,
              "the walk after it incomplete");
-    CHECK(inst_eq(inst_unplug_text(INST_UNPLUG_NOW),
+    CHECK(inst_eq(inst_unplug_text(INST_UNPLUG_NOW, INST_TOOL_CONSOLE),
                   "You can now unplug the device."), "the owner's words");
+    /* Roadmap 43.8 (owner, 2026-10-20): after the stop each kind says
+     * only what to do now, in either tool; the restarted text names the
+     * tool the user is in. */
+    {
+        int kind;
+        int tool;
+        for (tool = INST_TOOL_CONSOLE; tool <= INST_TOOL_TREE; tool++) {
+            for (kind = INST_UNPLUG_NOW; kind <= INST_UNPLUG_RESTARTED;
+                 kind++) {
+                const char *s = inst_unplug_text(kind, tool);
+                CHECK(strstr(s, "stop them in Windows") == NULL &&
+                          strstr(s, "first") == NULL,
+                      "no step that comes too late after the stop");
+            }
+            CHECK(inst_eq(inst_unplug_text(INST_UNPLUG_CHECK, tool),
+                          "You can now unplug the device."),
+                  "a dock-shaped unit: unplug it now");
+            CHECK(strstr(inst_unplug_text(INST_UNPLUG_OTHERS, tool),
+                         "eject them") != NULL, "other units: eject them");
+            CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED, tool),
+                         "not safe") != NULL, "restarted: not safe");
+        }
+        CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED,
+                                      INST_TOOL_CONSOLE),
+                     "INSTALL /console /eject") != NULL,
+              "the console names its own switch");
+        CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED, INST_TOOL_TREE),
+                     "xHCI98 USB Tree") != NULL &&
+                  strstr(inst_unplug_text(INST_UNPLUG_RESTARTED,
+                                          INST_TOOL_TREE), "INSTALL") == NULL,
+              "the USB Tree names itself, not the console");
+    }
+    /* The reminder, asked before the eject where the unit as it is now
+     * would not get "unplug now" after it. */
+    CHECK(!inst_eject_remind(1, CM_ST_TUN_NONE),
+          "an enclosure alone, no USB3 tunnel: no reminder");
+    CHECK(inst_eject_remind(0, CM_ST_TUN_NONE), "a dock-shaped unit: reminded");
+    CHECK(inst_eject_remind(1, CM_ST_TUN_UP), "USB3 up: reminded");
+    CHECK(inst_eject_remind(1, CM_ST_TUN_UNKNOWN), "USB3 not known: reminded");
+    CHECK(strstr(inst_eject_remind_text(), "Before you eject it") != NULL &&
+              strstr(inst_eject_remind_text(), "stop them in Windows") != NULL,
+          "the reminder's words, before the eject");
+    {
+        unsigned char r[CM_ST_MAX_BYTES];
+        unsigned char *e1 = r + CM_ST_HDR_BYTES;
+        unsigned char *e2 = e1 + CM_ST_ENTRY_BYTES;
+
+        CHECK_EQ(CM_ST_O_PORT_COUNT, 48, "port count offset");
+        CHECK_EQ(CM_ST_O_PORT_ACTIVE, 52, "active offset");
+        CHECK_EQ(CM_ST_O_PORTS, 56, "ports offset");
+        CHECK_EQ(CM_ST_MAX_PORTS, 4, "port limit");
+        CHECK_EQ(CM_ST_E_TUNNELS, 36, "tunnels offset");
+        CHECK_EQ(CM_ST_E_BRIDGE, 40, "bridge offset");
+        CHECK_EQ(CM_ST_TUN_UNKNOWN, 5, "unknown tunnel");
+        memset(r, 0, sizeof(r));
+        put32(r, CM_ST_O_PORT_COUNT, 2);
+        put32(r, CM_ST_O_PORT_ACTIVE, 0x2);
+        put32(r, CM_ST_O_PORTS, 0x0018);
+        put32(r, CM_ST_O_PORTS + 4, 0x0020);
+        put32(r, CM_ST_O_ROUTER_COUNT, 2);
+        put32(e1, CM_ST_E_BRIDGE, 0x0020);
+        put32(e1, CM_ST_E_TUNNELS, (CM_ST_TUN_UP << 4) | CM_ST_TUN_UP);
+        put32(e2, CM_ST_E_BRIDGE, 0x0018);
+        put32(e2, CM_ST_E_TUNNELS, CM_ST_TUN_UP);
+        CHECK_EQ(inst_port_usb3(r, 0x0020), CM_ST_TUN_UP,
+                 "the one router behind an active port: its USB3 tunnel");
+        put32(e1, CM_ST_E_TUNNELS, CM_ST_TUN_UP);
+        CHECK_EQ(inst_port_usb3(r, 0x0020), CM_ST_TUN_NONE, "none");
+        CHECK_EQ(inst_port_usb3(r, 0x0018), CM_ST_TUN_UNKNOWN,
+                 "a port not active: not known");
+        put32(e2, CM_ST_E_BRIDGE, 0x0020);
+        CHECK_EQ(inst_port_usb3(r, 0x0020), CM_ST_TUN_UNKNOWN,
+                 "two routers behind the port: not known");
+        put32(r, CM_ST_O_ROUTER_COUNT, 0);
+        CHECK_EQ(inst_port_usb3(r, 0x0020), CM_ST_TUN_UNKNOWN,
+                 "no router: not known");
+    }
 
     /* The switches. */
     argv1[0] = "x";
@@ -3750,6 +3834,10 @@ static void test_s98(void)
               NULL &&
           strstr(inst_page_text(INST_PT_S98_T), "internal") == NULL,
           "the Components page's sentence");
+    /* Roadmap 43.7 (owner, 2026-10-19): part of this package. */
+    CHECK(strcmp(inst_page_text(INST_PT_S98),
+                 "Stor98, the bundled NVMe driver") == 0,
+          "the Components row names Stor98 as this package's");
 }
 
 /* ---- task 42-A.17's reading rule; task 42-A.5's installer hooks --------- */

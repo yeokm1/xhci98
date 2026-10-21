@@ -42,6 +42,15 @@ and is "not known" until then or where the read fails; Maple Ridge's
 USB3 tunnel is "not known" like the integrated rows' (section 3, offsets
 28 and 36).
 
+Revision 8, 2026-10-21 (roadmap-usb4.md task 43.8; the owner,
+2026-10-20: "after successfully ejecting the drive, don't have to say stop
+them in Windows first. It's too late"): the text after a successful eject
+says only what to do now, and the reminder to stop the unit's other
+devices first is shown before the confirmation instead, for a unit that
+as it is then would not get "You can now unplug the device." after it;
+the started-again text names the tool the user is in (section 5.4). The
+tray and window of the xHCI98 USB Tree (record 25) take the same texts.
+
 It is not a Thunderbolt control panel: it approves nothing, changes no
 security level, updates no firmware, and publishes or shows no secret or
 authentication material.
@@ -471,10 +480,15 @@ same port, and its USB devices may reach the host's own USB controller
 outside every unit - through a USB4 USB3 tunnel, or over the cable's USB
 2.0 pair, which no record describes. So after an eject the tool says
 first what Windows did ("Windows has stopped <unit>."), then reads the
-port again, and gives the unconditional advice only when everything it
-needs is positively established:
+port again, and classifies what it reads (`inst_unplug_kind`). Since
+revision 8 the classification no longer decides between unconditional
+and qualified advice after the eject - once Windows has stopped the unit
+only what to do now is said - but its first case's conditions still
+decide whether the reminder is given before the eject (the third
+bullet):
 
-- **"You can now unplug the device."** only when the walk after the eject
+- **"You can now unplug the device."**, `INST_UNPLUG_NOW` - the
+  unconditional case, the one needing no reminder - when the walk after the eject
   was read whole, no other unit behind that port is still running (the
   ejected one, held by Windows until the unplug, does not count; if it
   has started again, nothing is established), the removed unit was a
@@ -491,17 +505,28 @@ needs is positively established:
   same Thunderbolt port are still running: eject them too before you
   unplug it.";
 - otherwise (a dock-shaped unit, a USB3 tunnel up or not known, the walk
-  incomplete): "Before you unplug it, make sure none of its other devices
-  (USB ports, card readers, network) is in use; stop them in Windows
-  first."
+  incomplete): "You can now unplug the device." as well (revision 8).
+  Once Windows has stopped the unit it is too late to stop its other
+  devices first, so the reminder is given before the eject instead:
+  where the confirmation is asked (not under `/eject id= /yes`), the
+  unit as the walk the user chose from shows it - the single storage
+  function above, from that walk, and the USB3 tunnel of the one router
+  the confirmed record names behind the port (`inst_port_usb3`) - is
+  checked against the first bullet's conditions, the walk taken as whole
+  and no other unit counted, and where it would not meet them
+  (`inst_eject_remind`) the question is preceded by "Before you eject
+  it, make sure none of its other devices (USB ports, card readers,
+  network) is in use; stop them in Windows first."
 
 The exit code is 0 in all three: the asked eject succeeded. The legs read
 the first; the others have no vehicle here (section 12). If the ejected
 unit itself is running again in the reading after the eject (re-enumerated
 meanwhile), the line is instead "The device has started again, so it is
-not safe to unplug. Close the programs using it and run INSTALL /eject
-again." and the exit code 4. The router and port facts are taken from the
-same record the stable walk was checked against, never from a later read.
+not safe to unplug. Close the programs using it and run INSTALL /console
+/eject again." (in the xHCI98 USB Tree, record 25: "... and stop it again
+in the xHCI98 USB Tree.") and the exit code 4. The router and port facts
+are taken from the same record the stable walk was checked against, never
+from a later read.
 
 ## 6. What `/devices` prints
 
@@ -785,7 +810,8 @@ virtual machines, emulators or what was tested (the owner's rule):
 - "Nothing is connected to the Thunderbolt or USB4 ports."
 - "Windows refused: the device is in use ..." (98 SE and ME) and the veto
   texts of section 7.2 (NT).
-- "You can now unplug the device." and the qualified forms of section 5.4.
+- "You can now unplug the device.", the other forms of section 5.4, and
+  its reminder before the eject.
 - "Until you unplug it, Device Manager's Refresh, or the Thunderbolt
   driver looking at the port again, can start it again." (98 SE and ME,
   after an eject)
@@ -933,7 +959,8 @@ and have no live vehicle here; they are owed to the bench.
   printed for a single storage function whose port and router the
   confirmed record establishes, taking on trust only that a storage-only
   enclosure reaches no USB 2.0 function over the cable (section 5.4);
-  everything else gets the qualified advice.
+  everything else got the qualified advice after the eject until revision
+  8, which gives it before the eject instead (the owner, 2026-10-20).
 
 ## 14. Open
 

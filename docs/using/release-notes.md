@@ -970,11 +970,9 @@ binds the Thunderbolt host interface, logs it and touches nothing.
   `tools\silent\` directory carries the list, `SILENT.REG` (hubs, boot
   keyboards and mice, Bulk-Only storage; UAS is not in it), `SILENT.VBS`,
   and `silent-on.bat` and `silent-off.bat`, which turn it on and off in one
-  double-click; restart Windows after either. Run `silent-on.bat` only once
-  each listed class's drivers have been installed at least once: with no
-  wizard, 98 SE asks for a missing driver file from its CD (read for a
-  mouse and a keyboard), and a device whose driver is not on the machine
-  depends on that CD being at hand. Never on 2000 and later. SweetLow
+  double-click; restart Windows after either. With no wizard, 98 SE asks
+  for a missing driver file from its CD (read for a mouse and a
+  keyboard). Never on 2000 and later. SweetLow
   provided the information on how the silent install is decided and the
   list. Read in QEMU virtual machines: on 98 SE a mouse, keyboard, stick
   and hub, each a device of its own, installed with no wizard and worked
@@ -1643,8 +1641,7 @@ each only where the hardware or the Windows it affects is present:
 `XhciInterruptMode`, `XhciForceBulkOnly`, `XhciSilentInstall` (Windows 98
 SE and ME only, off by default; on does exactly what
 `tools\silent\silent-on.bat` does, off what `silent-off.bat` does, and the
-question first says to turn it on only once each listed class's drivers
-have been installed at least once, and to restart after), and
+question says to restart after), and
 `XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` (only with a
 Thunderbolt or USB4 controller). Each shows the value now, the default
 and the values allowed, with a warning where the setting has one; Enter

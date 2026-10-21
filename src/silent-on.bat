@@ -9,8 +9,8 @@ rem reads first; the controllers' own values are left alone (roadmap-usb4
 rem task 42-A.17).
 rem
 rem Windows 98 SE and ME only: double-click it, or run it at a prompt in
-rem this directory, then restart Windows. Run it only once each listed
-rem class's drivers have been installed at least once on this machine.
+rem this directory, then restart Windows. With no wizard, 98 SE may ask
+rem for its CD for a missing driver file.
 rem
 rem One file for COMMAND.COM and cmd.exe. COMMAND.COM never runs the lines
 rem after the nt label: the goto run before them jumps over them. Every line

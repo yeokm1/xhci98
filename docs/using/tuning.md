@@ -301,7 +301,7 @@ On Windows 98 SE, a device Windows already has drivers for still brings the Add 
 
 `silent-on.bat` in `tools\silent\` merges the list (`SILENT.REG`: hubs, boot keyboards and mice, Bulk-Only storage) and then sets `1`. `silent-off.bat` sets `0` and keeps the list, as another USB stack may read it too. Restart after either. An update keeps the `1`. From `3.1.0.0` both set the value machine-wide, in `Services\USB` beside the list, and leave each controller's own value as it is; `silent.vbs show` shows both.
 
-Run `silent-on.bat` only once each listed class's drivers have been installed at least once, by plugging such a device and finishing its wizard. With no wizard, 98 SE asks for a missing driver file from its CD.
+With no wizard, 98 SE may ask for its CD for a missing driver file.
 
 With it on, Windows 98 SE installs a keyboard, mouse, stick and hub, each a device of its own, with no wizard. Windows ME installs those with no wizard even without it. Composite keyboards, mice and sticks may still bring up the wizard.
 

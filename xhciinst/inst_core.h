@@ -794,8 +794,8 @@ extern const char instCmOffText[];
 int inst_own_service(const char *service);
 
 /* 1 when a file of the flavour directory is the bundled Stor98 driver's
- * (a separate project: every name of its files there starts with "stor98",
- * package-common.ps1). The tool installs none of them and copies none into
+ * (every name of its files there starts with "stor98", package-common.ps1).
+ * The tool installs none of them and copies none into
  * its local copy, which is on the hardware wizard's search path. */
 int inst_bundled_file(const char *name);
 
@@ -989,7 +989,22 @@ int inst_eject9x_remove(INST_U32 cr, const char **text);
 #define INST_UNPLUG_RESTARTED 3 /* the ejected unit started again: exit 4 */
 int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
                      INST_U32 usb3);
-const char *inst_unplug_text(int kind);
+/* The text of a kind, for the tool the user is in (roadmap 43.8): only
+ * INST_UNPLUG_RESTARTED's differs, naming how to eject again. */
+#define INST_TOOL_CONSOLE   0   /* XHCIINST /eject */
+#define INST_TOOL_TREE      1   /* the xHCI98 USB Tree */
+const char *inst_unplug_text(int kind, int tool);
+
+/* The USB3 tunnel of the one router behind an active port of a checked
+ * status record (inst_st_check): CM_ST_TUN_*, 5 when the port is not an
+ * active member or not exactly one router is behind it. */
+INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf);
+
+/* Before the eject (roadmap 43.8): 1 when the confirmation carries
+ * inst_eject_remind_text, i.e. when the unit as it is now would not get
+ * INST_UNPLUG_NOW after it. */
+int inst_eject_remind(int singleFunction, INST_U32 usb3);
+const char *inst_eject_remind_text(void);
 
 /* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
 
