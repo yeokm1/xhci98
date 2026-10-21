@@ -3309,8 +3309,12 @@ this, reviewed and revised:
   before the success is applied, never "removed clean". The clock is read
   after the call returned, on whichever thread takes its result (the
   thread, the late taker, the detached loop), and the deadline found
-  passed there is the same transition as on a step: the block, and under
-  the USB4 profile with the port known the tunnel's teardown owed once.
+  passed there is the same transition as on a step: the block, and the
+  tunnel's teardown owed once - an obligation the record keeps whoever
+  found the deadline (a late taker, the detached loop), made by the start
+  that knows the member's USB4 port (an adopting one included), and
+  discharged by the retirement; under the firmware connection manager
+  there is none to make.
 - **The decision's deadline at its taking.** A slot reading counts only
   when both its read (the worker's clock) and its taking by the thread
   fall before the decision's deadline; the USB4 allowance left is read at
