@@ -1239,7 +1239,8 @@ static const char *s98_state_text(void)
     case S98_ST_OK:
         return "";
     default:
-        return "This disk is not driven by Stor98; the Stor98 page has nothing to show.";
+        return "Stor98's counters are not reported by this disk's driver: it is not Stor98, "
+               "or a Stor98 without the counter answer.";
     }
 }
 
