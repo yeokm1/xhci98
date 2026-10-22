@@ -2907,6 +2907,20 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             Write-Ok ("Stor98 {0} built from src\stor98 for {1}: version, flavour marker, imports, source stamp and INFs checked" -f `
                 $stor98.Version, ($s98Arches -join " and "))
         }
+        # STOR98.VXD (task 43.46, design record 30 section 6.4): a cut whose
+        # x86 package carries Stor98 carries it too; make-package.ps1 stages
+        # it and holds it to src\vsd\check-vsd.ps1, and goes without it only
+        # on a host that could not build it, which a cut is not.
+        if ($null -ne $stor98 -and $s98Arches -contains "x86") {
+            $vsdImage = Join-Path $repo "src\vsd\obj\STOR98.VXD"
+            if (-not (Test-Path -LiteralPath $vsdImage -PathType Leaf)) {
+                Stop-CutCheck "no STOR98.VXD at '$vsdImage': build it (scripts\build-driver.cmd builds src\vsd on the x86 run; it needs Open Watcom 2.0 and the Windows 98 SE DDK)."
+            } else {
+                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\vsd\check-vsd.ps1") $vsdImage 2>&1
+                if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("STOR98.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+                else { Write-Ok "STOR98.VXD built from src\vsd: its DDB, services, stamp and no debug-port write checked" }
+            }
+        }
     }
 
     # --- NUSB's 98 SE storage files, from the driver pack -------------------

@@ -694,6 +694,29 @@ time; they land in different directories on purpose.
         }
         Write-Ok ("its interface header is {0} byte for byte (link-state interface {1})" -f $Stor98HeaderPath, $stor98.Interface)
         $stor98Files = @(Get-Stor98PackageFiles -Release $stor98 -Arch $Arch)
+        # STOR98.VXD (task 43.46, design record 30 section 6.4), the 98 SE
+        # and ME IOS layer for Stor98's disks: this project's own image, staged
+        # beside stor98.mpd in the x86 package that carries Stor98, the qemu
+        # flavour's image in the qemu package; held to src\vsd\check-vsd.ps1
+        # again here. A package built where src\vsd\build.cmd could not build
+        # it goes without it (make-release.ps1 refuses that for a cut).
+        if ($Arch -eq "x86") {
+            $vsdPath = Join-Path $repo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "STOR98.VXD")
+            if (Test-Path -LiteralPath $vsdPath -PathType Leaf) {
+                if (-not $SkipBinaryGates) {
+                    $vsdArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\vsd\check-vsd.ps1"), $vsdPath)
+                    if ($Flavor -eq "qemu") { $vsdArgs += "-Qemu" }
+                    $out = & powershell.exe @vsdArgs 2>&1
+                    if ($LASTEXITCODE -ne 0) { throw ("STOR98.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+                }
+                $stor98Files += [pscustomobject]@{ Source = "..\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "STOR98.VXD"
+                                                   FullPath = $vsdPath; Dest = "STOR98.VXD"
+                                                   Sha256 = (Get-FileHash -LiteralPath $vsdPath -Algorithm SHA256).Hash }
+                Write-Ok ("STOR98.VXD from {0}" -f $vsdPath)
+            } else {
+                Write-Warn ("no STOR98.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdPath)
+            }
+        }
     }
 
     $gated = $null
