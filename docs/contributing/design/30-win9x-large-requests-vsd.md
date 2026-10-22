@@ -1,6 +1,8 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 8, 2026-10-22 (section 2.3 item 3: `SCSIPORT.PDR`'s own
+Status: draft 9, 2026-10-22 (D8 the owner's: the layer follows Stor98's
+rule when Stor98's box is unticked, the recovery table's modes with it);
+draft 8, 2026-10-22 (section 2.3 item 3: `SCSIPORT.PDR`'s own
 requests read, the one with data a `REQUEST SENSE` that Stor98 answers
 without DMA); draft 7, 2026-10-22 (section 2.3: the first pass of the
 readings owed before the code, the disk SCSI'izer named, and
@@ -895,10 +897,14 @@ setup engine copies it. On 98 SE and ME:
   installer again", as record 26 section 9.3 leaves a driver file in use.
   The loaded copy keeps serving the disks until the shutdown, which is
   harmless (it is the same layer that was installed).
-- **Greyed because Stor98's box is unticked**: nothing; an installed
-  `STOR98.VXD` stays, as an unticked Stor98 is "not now" and stays
-  (record 26 section 5.3). Without Stor98's disks it claims nothing
-  (section 3.3).
+- **Greyed because Stor98's box is unticked**: `STOR98.VXD` follows
+  Stor98 (owner, 2026-10-22): whatever the run does to the bundled
+  Stor98 with its box unticked, it does to `STOR98.VXD` too, so the two
+  never disagree. Today an unticked Stor98 is "not now" and stays (record
+  26 section 5.3), so an installed `STOR98.VXD` stays with it; a rule that
+  removes Stor98 in such a run (now or later) removes `STOR98.VXD` in the
+  same run, by the deselected column of the table below. Without
+  Stor98's disks it claims nothing (section 3.3).
 
 **Every run first recovers** (before it classifies the file), from five
 facts: the destination's bytes (absent, `File`'s hash, `Pending`'s hash,
@@ -913,8 +919,10 @@ the run's **mode** for the layer:
 - **selected**: the box ticked, its target the package's file (hash `H`);
 - **deselected**: the box unticked by the user while Stor98's box is
   ticked;
-- **inactive**: the box greyed because Stor98's box is unticked or greyed
-  (D8: nothing of the layer is changed);
+- **inactive**: the box greyed because Stor98's box is unticked or greyed,
+  and the run keeps Stor98 (D8: nothing of the layer is changed); a run
+  that removes Stor98 with its box unticked takes the **deselected**
+  column instead (D8, owner, 2026-10-22: the layer follows Stor98);
 - **uninstall**.
 
 Only a file whose bytes a value names, and only that exact entry, are
@@ -1114,8 +1122,11 @@ On the owner's real hardware: the throughput before and after
 - **D7** The row greyed with "(Windows 98 SE and ME only)" rather than
   hidden on other systems; `/stor98vxd` and `/nostor98vxd` both refused
   there (section 7.1, 7.2).
-- **D8** The box greyed by an unticked Stor98 removes nothing; only the
-  user's untick of the box itself removes the file (section 7.3).
+- **D8** (owner, 2026-10-22) `STOR98.VXD` follows Stor98's rule: with
+  Stor98's box unticked, the run does to the layer what it does to Stor98,
+  keeping it when Stor98 is kept and removing it when Stor98 is removed;
+  with Stor98 ticked, the user's untick of the layer's box removes it
+  (section 7.3).
 - **D9** An update of an installer-placed file through `WININIT.INI`, as
   Stor98's file; a removal by a direct delete (section 7.3).
 - **D10** The release image carries no debug-port writes; the `qemu`
