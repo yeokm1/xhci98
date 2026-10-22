@@ -403,6 +403,7 @@ disk present at boot; real hardware (the owner's).
 
 Binary-derived facts used here: `legal-provenance.md` section 4, the row
 "Task 43.46 read-first".
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on
