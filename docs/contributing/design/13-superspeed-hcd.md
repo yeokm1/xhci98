@@ -6328,7 +6328,9 @@ device still present, or a hub, keeps the reset.
    door's `HCD_EP0_COMPLETED`); a command that failed (anything but
    Success or Context State Error, or none sent), or EP0 still Running or
    Disabled, keeps the reset with the scratch tainted, exactly as before;
-   otherwise (Stopped, Halted or Error) the TD is inert.
+   so does Halted with no completion seen, which nothing explains and
+   where Set TR Dequeue is not legal (step 4); otherwise (Stopped or
+   Error) the TD is inert.
 2. **The departure is read** as `hcdCfgDeviceLeft` reads it: the record
    gone or no longer its port's, or `HcdHubPathPresent` - every hub port
    on the path by GET_STATUS (disconnected, disabled, or a connect or
@@ -6352,14 +6354,22 @@ device still present, or a hub, keeps the reset.
    creation that succeeds with `Ep0Stuck` set and no reset asked has the
    now-published device cycled (`hcdCreateLate`), or, for a hub or a
    device with no PDO group, the reset `hcdCfgFault` keeps for them.
-4. **What is left behind** where no reset is requested: EP0 Stopped with
-   the thread's record still queued (or already off the queue, where the
-   door's withdrawal took it off and then failed at Set TR Dequeue) and
-   `Ep0Stuck` set, so nothing more
-   is sent to the device and its pipe stays paused; the scratch is not
-   tainted. The teardown that follows (section 10.5, steps 3 and 4) finds
-   EP0 not Running, drains the record with the rest (`HcdIoDeviceDrain`)
-   and disables the slot. The caller gets `HCD_CTL_NOT_SENT`, as for any
+4. **The record is retired from EP0** before anything else is done for
+   a device found leaving (`hcdEp0Retire`, `XhciTolLateRetired`): taken
+   off the engine's queue where it is still there (the door's withdrawal
+   may have taken it off already and failed at Set TR Dequeue) and the
+   controller's dequeue moved to the enqueue position (Set TR Dequeue). A
+   stopped TD left on the ring is not enough: a cancel's restart of the
+   endpoint's survivors (`hcdCfgCancelPipe`) rings EP0 without reading
+   the pause or `Ep0Stuck`, and would run it again into a scratch the
+   thread is by then using for something else. A record that cannot be
+   retired - another record queued, the command failing - keeps the
+   reset.
+5. **What is left behind** where no reset is requested: EP0 Stopped and
+   empty, `Ep0Stuck` set, so nothing more is sent to the device and its
+   pipe stays paused; the scratch is not tainted. The teardown that
+   follows (section 10.5, steps 3 and 4) disables the slot. The caller
+   gets `HCD_CTL_NOT_SENT`, as for any
    timeout, and every caller already reads `Ep0Stuck` as "the device is
    being taken"; a select then answers DEVICE_GONE (`hcdCfgSelectAnswer`).
    Counted (`EnumTransfersDeparted`, beside `EnumTransfersTimedOut`; the
@@ -6376,7 +6386,8 @@ not finish.
 **Host vectors** (`test\test_tol.c`, `test_late`): every row of both
 halves, and the composition - a completion before the stop wins, a failed
 stop keeps the reset whatever the path reads, a present path keeps it, a
-hub keeps it, a published device cycles and a pre-PDO one is left to its
+hub keeps it, a record that cannot be retired keeps it, a published
+device cycles and a pre-PDO one is left to its
 enumeration.
 
 **Unread, and owed.** Metal: whether a real controller ever leaves such a

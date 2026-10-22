@@ -309,8 +309,7 @@ ULONG XhciTolLateStopped(ULONG stopCode, ULONG epState, ULONG done)
         stopCode != XHCI_CC_CONTEXT_STATE_ERROR) {
         return XHCI_TOL_LATE_RESET;
     }
-    if (epState == XHCI_EP_STATE_STOPPED ||
-        epState == XHCI_EP_STATE_HALTED || epState == XHCI_EP_STATE_ERROR) {
+    if (epState == XHCI_EP_STATE_STOPPED || epState == XHCI_EP_STATE_ERROR) {
         return XHCI_TOL_LATE_INERT;
     }
     return XHCI_TOL_LATE_RESET;
@@ -326,6 +325,14 @@ ULONG XhciTolLateVerdict(ULONG left, ULONG present, ULONG hub,
         return XHCI_TOL_LATE_RESET;
     }
     return published ? XHCI_TOL_LATE_CYCLE : XHCI_TOL_LATE_LEFT;
+}
+
+ULONG XhciTolLateRetired(ULONG verdict, ULONG retired)
+{
+    if (verdict != XHCI_TOL_LATE_LEFT && verdict != XHCI_TOL_LATE_CYCLE) {
+        return verdict;
+    }
+    return retired ? verdict : XHCI_TOL_LATE_RESET;
 }
 
 ULONG XhciTolBackstop(PXHCI_TOL_OBS obs, ULONG tolerance, ULONG pending,

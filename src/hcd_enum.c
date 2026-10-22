@@ -781,6 +781,52 @@ static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
+ * The thread's stopped record taken off EP0 for good (task 43.53): off the
+ * engine's queue if it is still there - the door's withdrawal may have
+ * taken it off already and then failed at Set TR Dequeue, having moved the
+ * software dequeue - and the controller's dequeue moved to the enqueue
+ * position (Set TR Dequeue), so no later doorbell - a cancel's or an
+ * abort's restart of survivors (hcdCfgCancelPipe), which reads neither the
+ * pause nor Ep0Stuck - can run the TD again into the scratch. As
+ * hcdEp0Withdraw does, but for a device behind a TT too: EP0 is not used
+ * again, the device is going. The caller has EP0 Stopped or in Error,
+ * where Set TR Dequeue is legal; any other record queued, or the command
+ * failing, returns 0 and the caller keeps the reset. Thread only,
+ * powered, EP0 paused.
+ */
+static ULONG hcdEp0Retire(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG pa;
+    ULONG dcs;
+    ULONG ok;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Ep0Queue.Head == &dev->Ep0Xfer) {
+        ok = dev->Ep0Xfer.Next == NULL &&
+             XhciXferQueueRemove(&dev->Ep0Queue, &dev->Ep0Xfer) &&
+             XhciRingSetDequeue(&dev->Ep0,
+                                XhciRingTrbPA(&dev->Ep0, dev->Ep0.Enqueue)) ==
+                 XHCI_RING_OK;
+    } else {
+        ok = dev->Ep0Queue.Count == 0;
+    }
+    pa = XhciRingDequeuePA(&dev->Ep0);
+    dcs = XhciRingDequeueCycle(&dev->Ep0);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!ok) {
+        return 0;
+    }
+    return (XhciTrbSetTrDequeue(&trb, dev->SlotId, 1, pa, dcs) ==
+                XHCI_RING_OK &&
+            hcdCommand(hc, &trb, &control) == XHCI_CC_SUCCESS)
+               ? 1UL
+               : 0UL;
+}
+
+/*
  * Task 43.53 (design record 13 section 10.5.1): a thread transfer past its
  * deadline, before the controller reset is requested for it. Under QEMU a
  * transfer queued to a slot whose device was just detached gets no event
@@ -788,13 +834,12 @@ static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * recovery window on an ordinary unplug. EP0 is stopped first, so the
  * scratch is safe from the TD before the departure is read through it
  * (a hub port's GET_STATUS, HcdHubPathPresent); then XhciTolLateVerdict
- * decides in hcdCfgFault's order, and a published device leaving has its
- * location cycled here. Returns XHCI_TOL_LATE_DONE (it completed before
- * the stop), _RESET (the caller's recovery, as before), _LEFT or _CYCLE
- * (no reset: EP0 stays Stopped and paused with the record queued - or
- * already off the queue, a door withdrawal's Set TR Dequeue having failed -
- * for the teardown to drain). Thread only, powered, EP0 paused, the thread's wait
- * over (ThreadEp0Dev cleared).
+ * decides in hcdCfgFault's order. A device found leaving has its record
+ * retired from EP0 (hcdEp0Retire, XhciTolLateRetired) and, published, its
+ * location cycled. Returns XHCI_TOL_LATE_DONE (it completed before the
+ * stop), _RESET (the caller's recovery, as before), _LEFT or _CYCLE (no
+ * reset: EP0 Stopped, empty and paused, for the teardown). Thread only,
+ * powered, EP0 paused, the thread's wait over (ThreadEp0Dev cleared).
  */
 static ULONG hcdEp0Late(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
@@ -833,6 +878,10 @@ static ULONG hcdEp0Late(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                                  (dev->Pdo != NULL && dev->PdoGroup != 0)
                                      ? 1UL
                                      : 0UL);
+    if (verdict == XHCI_TOL_LATE_RESET) {
+        return verdict;
+    }
+    verdict = XhciTolLateRetired(verdict, hcdEp0Retire(hc, dev));
     if (verdict == XHCI_TOL_LATE_CYCLE) {
         HcdCfgCycle(hc, dev);
     }

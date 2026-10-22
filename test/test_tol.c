@@ -554,7 +554,7 @@ static ULONG join_model(ULONG epState, ULONG headDeferred, ULONG refused,
  * the TD is inert. *read says whether it was. */
 static ULONG late_model(ULONG stopCode, ULONG state, ULONG done, ULONG left,
                         ULONG present, ULONG hub, ULONG published,
-                        ULONG *read)
+                        ULONG retired, ULONG *read)
 {
     ULONG verdict;
 
@@ -564,7 +564,11 @@ static ULONG late_model(ULONG stopCode, ULONG state, ULONG done, ULONG left,
         return verdict;
     }
     *read = 1;
-    return XhciTolLateVerdict(left, present, hub, published);
+    verdict = XhciTolLateVerdict(left, present, hub, published);
+    if (verdict == XHCI_TOL_LATE_RESET) {
+        return verdict;
+    }
+    return XhciTolLateRetired(verdict, retired);
 }
 
 static void test_late(void)
@@ -589,8 +593,12 @@ static void test_late(void)
     CHECK_EQ(XhciTolLateStopped(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 0),
              XHCI_TOL_LATE_INERT, "stopped: inert");
     CHECK_EQ(XhciTolLateStopped(XHCI_CC_CONTEXT_STATE_ERROR,
+                                XHCI_EP_STATE_STOPPED, 0),
+             XHCI_TOL_LATE_INERT, "stopped meanwhile (Context State Error)");
+    CHECK_EQ(XhciTolLateStopped(XHCI_CC_CONTEXT_STATE_ERROR,
                                 XHCI_EP_STATE_HALTED, 0),
-             XHCI_TOL_LATE_INERT, "halted meanwhile (Context State Error)");
+             XHCI_TOL_LATE_RESET,
+             "Halted with no completion: unexplained, the reset");
     CHECK_EQ(XhciTolLateStopped(XHCI_CC_SUCCESS, XHCI_EP_STATE_ERROR, 0),
              XHCI_TOL_LATE_INERT, "in Error: inert");
     CHECK_EQ(XhciTolLateStopped(XHCI_CC_SUCCESS, XHCI_EP_STATE_RUNNING, 0),
@@ -611,7 +619,6 @@ static void test_late(void)
             if ((codes[c] == XHCI_CC_SUCCESS ||
                  codes[c] == XHCI_CC_CONTEXT_STATE_ERROR) &&
                 (states[s] == XHCI_EP_STATE_STOPPED ||
-                 states[s] == XHCI_EP_STATE_HALTED ||
                  states[s] == XHCI_EP_STATE_ERROR)) {
                 want = XHCI_TOL_LATE_INERT;
             }
@@ -660,25 +667,47 @@ static void test_late(void)
      * to a published mouse just pulled at a root port, and the first EP0
      * request after Address Device behind a hub, the mouse pulled. */
     CHECK_EQ(late_model(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 0, 0, 0, 0,
-                        1, &read),
+                        1, 1, &read),
              XHCI_TOL_LATE_CYCLE, "43.49 a2: the select's device cycled");
     CHECK_EQ(read, 1, "its path read once the TD was stopped");
     CHECK_EQ(late_model(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 0, 0, 0, 0,
-                        0, &read),
+                        0, 1, &read),
              XHCI_TOL_LATE_LEFT, "43.49 b: left to its enumeration");
     /* A device still present that never answers keeps the reset. */
     CHECK_EQ(late_model(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 0, 0, 1, 0,
-                        1, &read),
+                        1, 1, &read),
              XHCI_TOL_LATE_RESET, "present: the reset");
     /* A stop that fails is the controller's, whatever the path would
      * read, and the path is not read through a scratch still at risk. */
-    CHECK_EQ(late_model(0, XHCI_EP_STATE_RUNNING, 0, 0, 0, 0, 1, &read),
+    CHECK_EQ(late_model(0, XHCI_EP_STATE_RUNNING, 0, 0, 0, 0, 1, 1, &read),
              XHCI_TOL_LATE_RESET, "stop failed: reset");
     CHECK_EQ(read, 0, "and no departure read");
     CHECK_EQ(late_model(XHCI_CC_SUCCESS, XHCI_EP_STATE_RUNNING, 1, 0, 0, 0,
-                        1, &read),
+                        1, 1, &read),
              XHCI_TOL_LATE_DONE, "completed before the stop");
     CHECK_EQ(read, 0, "a completion reads no departure");
+    /* A record that cannot be retired - Set TR Dequeue failing, another
+     * record queued - keeps the reset: a later restart of the endpoint
+     * (a cancel's survivors) would run it again into the scratch. */
+    CHECK_EQ(late_model(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 0, 0, 0, 0,
+                        1, 0, &read),
+             XHCI_TOL_LATE_RESET, "leaving but not retired: reset");
+    CHECK_EQ(late_model(XHCI_CC_SUCCESS, XHCI_EP_STATE_STOPPED, 0, 1, 1, 0,
+                        0, 0, &read),
+             XHCI_TOL_LATE_RESET, "gone but not retired: reset");
+
+    CHECK_EQ(XhciTolLateRetired(XHCI_TOL_LATE_CYCLE, 1), XHCI_TOL_LATE_CYCLE,
+             "cycle, retired");
+    CHECK_EQ(XhciTolLateRetired(XHCI_TOL_LATE_LEFT, 1), XHCI_TOL_LATE_LEFT,
+             "left, retired");
+    CHECK_EQ(XhciTolLateRetired(XHCI_TOL_LATE_CYCLE, 0), XHCI_TOL_LATE_RESET,
+             "cycle, not retired: reset");
+    CHECK_EQ(XhciTolLateRetired(XHCI_TOL_LATE_LEFT, 0), XHCI_TOL_LATE_RESET,
+             "left, not retired: reset");
+    CHECK_EQ(XhciTolLateRetired(XHCI_TOL_LATE_RESET, 1), XHCI_TOL_LATE_RESET,
+             "reset stays reset");
+    CHECK_EQ(XhciTolLateRetired(XHCI_TOL_LATE_DONE, 0), XHCI_TOL_LATE_DONE,
+             "done is not a retirement's");
 }
 
 static void test_retry_join(void)
