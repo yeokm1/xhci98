@@ -781,6 +781,64 @@ static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
+ * Task 43.53 (design record 13 section 10.5.1): a thread transfer past its
+ * deadline, before the controller reset is requested for it. Under QEMU a
+ * transfer queued to a slot whose device was just detached gets no event
+ * at all (runs/run-43.md, 43.49), and the reset that answered it spent the
+ * recovery window on an ordinary unplug. EP0 is stopped first, so the
+ * scratch is safe from the TD before the departure is read through it
+ * (a hub port's GET_STATUS, HcdHubPathPresent); then XhciTolLateVerdict
+ * decides in hcdCfgFault's order, and a published device leaving has its
+ * location cycled here. Returns XHCI_TOL_LATE_DONE (it completed before
+ * the stop), _RESET (the caller's recovery, as before), _LEFT or _CYCLE
+ * (no reset: EP0 stays Stopped and paused with the record queued, for the
+ * teardown to drain). Thread only, powered, EP0 paused, the thread's wait
+ * over (ThreadEp0Dev cleared).
+ */
+static ULONG hcdEp0Late(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG code;
+    ULONG state;
+    ULONG done;
+    ULONG left;
+    ULONG present;
+    ULONG verdict;
+
+    code = XHCI_CC_SUCCESS;
+    state = hcdEp0State(hc, dev);
+    if (state == XHCI_EP_STATE_RUNNING) {
+        code = 0;
+        if (XhciTrbStopEndpoint(&trb, dev->SlotId, 1, 0) == XHCI_RING_OK) {
+            code = hcdCommand(hc, &trb, &control);
+        }
+        state = hcdEp0State(hc, dev);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    done = dev->Ep0Done;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    verdict = XhciTolLateStopped(code, state, done);
+    if (verdict != XHCI_TOL_LATE_INERT) {
+        return verdict;
+    }
+    left = (dev->Gone || dev->Location == 0 ||
+            dev->Location > HCD_PORT_COUNT ||
+            hc->Ports[dev->Location - 1].Device != dev) ? 1UL : 0UL;
+    present = left ? 1UL
+                   : HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1]);
+    verdict = XhciTolLateVerdict(left, present, dev->Hub != NULL ? 1UL : 0UL,
+                                 (dev->Pdo != NULL && dev->PdoGroup != 0)
+                                     ? 1UL
+                                     : 0UL);
+    if (verdict == XHCI_TOL_LATE_CYCLE) {
+        HcdCfgCycle(hc, dev);
+    }
+    return verdict;
+}
+
+/*
  * The records an unpowered root-hub detach left Abandoned - off their
  * ports, their slots still enabled - get their Disable Slot at the first
  * powered pass, so a restore that kept the slots does not strand them
@@ -1292,6 +1350,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG step;
     ULONG reason;
     ULONG abandoned;
+    ULONG late;
     ULONG padded;
     ULONG i;
 
@@ -1461,6 +1520,21 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             break;
         default:
             break;
+        }
+    }
+    if (!done) {
+        late = hcdEp0Late(hc, dev);
+        if (late == XHCI_TOL_LATE_DONE) {
+            done = 1;
+        } else if (late != XHCI_TOL_LATE_RESET) {
+            /* The device has left: its teardown, or the cycle just asked
+             * for, takes the stopped record and the slot. */
+            hc->EnumTransfersTimedOut++;
+            hc->EnumTransfersDeparted++;
+            dev->Ep0Stuck = 1;
+            XhciLogNote(&hc->Hc, "enum.xfer.gone",
+                        (dev->SlotId << 8) | late);
+            return HCD_CTL_NOT_SENT;
         }
     }
     if (!done) {
