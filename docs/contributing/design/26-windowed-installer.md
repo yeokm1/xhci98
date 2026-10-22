@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 27, 2026-10-22 (roadmap-usb4 task 43.5's finding, the
+Status: draft 28, 2026-10-22 (the owner's point of that day for the
+simplified Components page: roadmap task 43.46's 98 SE and ME
+request-size driver a box under Stor98's; for roadmap 43.48's rows, one folder per driver and, on 98 SE and ME, staging by `DevicePath` entries, section 5.0); draft 27,
+2026-10-22 (roadmap-usb4 task 43.5's finding, the
 owner's answer of that day: the two storage INFs all or nothing wherever
 Windows finds them, since `USBSTOR.INF` alone lets a stock 98 SE's own
 `NTMAP.INF` take the disk unit and stop Windows; the `DISKDRV.INF`
@@ -466,6 +469,7 @@ the uninstall's pages (section 9) are unchanged.
       [x] UAS disk driver
 [ ] Thunderbolt 3 / USB4 support (experimental)
       [x] Stor98, the NVMe driver (bundled)
+            [x] Request-size driver          98 SE and ME only (43.46)
 [x] USB storage drivers for Windows 98 SE (NUSB 3.3's)    98 SE only
 [x] xHCI98 USB Tree, started at login
 [ ] Replace the stored build                 Vista and 7, the trap found
@@ -519,6 +523,18 @@ Tools folder: C:\XHCI98
   `/defaults` too, as the rest of that description is), never in
   the warning box; the alternative is to drop it with the paragraph. The USB drivers' warning on 8 and 8.1 (case
   3a) stays.
+- **The request-size driver's box under Stor98's** (owner, 2026-10-22,
+  draft 28): roadmap task 43.46's Windows 98 SE and ME request-size
+  driver (a static VxD in `IOSUBSYS`; design record 30, branch
+  `p43-46`) is a box of its own indented under Stor98's, a child of
+  Stor98's the way Stor98's is a child of the Thunderbolt box: shown on
+  98 SE and ME only and on no other system, open only while Stor98's box
+  is ticked (unticked and greyed while it is not), and ticked by default
+  whenever Stor98's box is ticked; following Stor98's own rule, ticking
+  Stor98's box again ticks it again unless the user had unticked it while
+  it was open. Its sentence, what it installs and removes, its console
+  question and its Summary line are record 30's (task 43.46 designs and
+  builds it); this section only gives it its place on the page.
 - **The USB storage drivers' row on Windows 98 SE only** (owner,
   2026-10-22), in place of draft 20's "every system": on ME and 2000 to
   8.1 the row is not shown, `inst_eng_stor_state` offers it only on 98
@@ -563,8 +579,14 @@ The owner, 2026-10-22, for 43.48: the installer copies those folders and
 installs neither. Each pack has a row, unticked by default, that copies
 it, and one sub-box under it, also unticked: "Let Windows use these
 automatically when a device is plugged in", which stages the pack's
-INFs (the INF folder on 98 SE and ME, the driver store on 2000 and
-later) and forces nothing onto a device. The non-free row's sentence
+INFs and forces nothing onto a device: on 2000 and later into the
+driver store (`SetupCopyOEMInf`); on 98 SE and ME (owner, 2026-10-22,
+decided) by adding each staged driver's copied folder to
+`HKLM\Software\Microsoft\Windows\CurrentVersion\DevicePath`, as the
+storage row already does for its package directory (section 6.5.11,
+record 23 section 9.6), so a device plugged in later finds its driver
+with no browsing; the uninstall removes exactly the `DevicePath`
+entries the installer added, recorded at the time, and never another. The non-free row's sentence
 and its sub-box carry a firmer warning ("not tested by this project;
 the vendors' drivers as released"): the pack's vendors' own setups are
 the user's to run, this package carrying the pack and not being its
@@ -574,9 +596,15 @@ with "run its own setup" in the text; and where two of a pack's drivers
 match the same hardware id (FTDI, FT2232D and CH341; the two Xbox 360
 controller drivers), one only is staged, chosen by a written list
 shipped with the pack (its manifest), never guessed at run time. The
-copies go to one fixed folder under the install directory (for example
-`<tools folder>\Drivers\...`), which the readme and the Finish page
-name for the Found New Hardware wizard; the uninstall removes the
+copies go under one fixed folder in the install directory (for example
+`<tools folder>\Drivers\...`), one folder per driver, never one flat
+folder (owner, 2026-10-22, decided): same-named files of different
+drivers, or of two versions of one, would overwrite each other, and the
+Add New Hardware wizard of 98 SE and ME, like 2000's, searches only the
+exact folder it is given, not its subfolders. For a driver copied and
+not staged (on 2000, or on 98 SE and ME with the staging sub-box left
+unticked) the Finish page and the readme give the exact folder per kind
+of device, for the Found New Hardware wizard; the uninstall removes the
 copied folders and whatever was staged. Each row is shown only when its
 folder is there and holds what its record names, and the rows carry the
 free drivers' beta notice and the two project addresses
