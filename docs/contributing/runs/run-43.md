@@ -526,3 +526,179 @@ cover ACTIVE to OFF to ACTIVE.
   part 2), and the owner's machine, which cannot put 98 SE in Stand by.
   It is listed as untested ground.
 - The two XHCITR fixes above.
+
+## 43.23 Stor98 on Windows 8 and 8.1, x86 and x64 (2026-10-22)
+
+Branch `p43-23`. The owner's instruction of 2026-10-20 ("stor98 can be
+adjusted to work on win 8 also since it's in this repo now"), in place of
+42-A.21's "the bundled Stor98 not offered on 8 and 8.1". Static readings
+from the owner's install media and runtime readings in QEMU on development
+host A; Stor98's own record of the runtime legs is its `docs/TESTING.md`,
+"Windows 8 and 8.1", and its `docs/PLAN.md` item 2.2.
+
+### The installer row
+
+43.43 (merged into `3.2.0.0` at `22ec1372`) already took 43.23's row, as
+its entry says: Stor98's box shown and tickable on 8 and 8.1, unticked by
+default, its case 3b warning, the bundled Stor98 placed on tunnel drives
+only, and on 8.1 a tunnel drive whose service is `stornvme` installed over
+with `INSTALLFLAG_FORCE` and recorded under `Software\xhci98\Stor98\Pending`
+(record 26 section 5.3.1, case 3b). 43.23 adds no behaviour there. It moves
+the `stornvme` test, written three times in `inst_eng.c` (the plan's
+"no driver" reading, `call_flags` and the pending mark), into one pure
+function, `inst_s98_over_inbox(is8, service)` in `inst_core.c`, and holds
+it with host vectors in `test_inst.c`: on 8 and 8.1 `stornvme` in any case
+is installed over; on 2000 to 7 it is another driver and left; Stor98
+itself, a vendor's NVMe service (`secnvme`, `iaStorAC`), a longer name
+(`stornvme2`), an empty service and no service are never installed over.
+`call_flags` and the pending mark now test the system as the plan always
+did (they had tested the service name alone, which on 2000 to 7 can reach
+neither, since the plan leaves such a drive). `test_inst`: 1780 checks,
+0 failures.
+
+### Static: what SCSIport and the class driver on NT 6.2 and 6.3 are
+
+Taken with `7z e` from `sources\install.wim` of
+`en_windows_8_pro_vl_x86_dvd_917830.iso`, `Windows 8 x64.iso` (image 1),
+`en_windows_8.1_with_update_x64_dvd_6051480.iso` (image 1) and, for the
+comparison, `en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso`,
+into a scratch directory outside the tree; read with WDK 7.1's
+`link -dump -exports` / `-imports` and a strings sweep by a PowerShell
+script kept outside the tree; nothing executed.
+
+| Build | File | Version | Bytes | SHA-256 |
+|---|---|---|---|---|
+| 7 x64 | `scsiport.sys` | 6.1.7601.17514 | 171,392 | `8bbda37be8f842719a3324ca5120a9327fbc799d0d8596aecc97c538d2b28ba3` |
+| 7 x64 | `Classpnp.sys` | 6.1.7601.17514 | 179,072 | `f0f1c47cc164b8bf4b99cc4e9c0d34d603051cd01ed369acb9a781ec9cca56aa` |
+| 8 x86 | `scsiport.sys` | 6.2.9200.16384 | 146,672 | `a677380bb7cde97f7f74adc74e793565be3e71a2e1637f48bec9eef6ff7e2dec` |
+| 8 x86 | `Classpnp.sys` | 6.2.9200.16384 | 299,760 | `966adacfef0037de184aa514e9136ebf085330106504c2dc023feb9066510297` |
+| 8 x86 | `ntoskrnl.exe` | 6.2.9200.16384 | 5,563,120 | `fce2e5990281c3564a4f9aa684999e1c79f7531cacdd391adbe7eee323ad265f` |
+| 8 x86 | `hal.dll` | 6.2.9200.16384 | 319,216 | `ce46da146250c6b0cde8fa14cdc5c85cdc19bcf64ceb9c383ecc732c12cfdd99` |
+| 8 x64 | `scsiport.sys` | 6.2.9200.16384 | 172,784 | `d6515d9a5bb252b3fc77b8f20cd6becf12731c342949502057bde27d7a2111c2` |
+| 8 x64 | `Classpnp.sys` | 6.2.9200.16384 | 336,624 | `0f95c7b3fd6b5485c5ede2dd50579cde8d9866cf35661a359e0d046a0ec7fe65` |
+| 8 x64 | `ntoskrnl.exe` | 6.2.9200.16384 | 6,969,584 | `309d04e864809f20f23c1fbc77cd10de0d581b078b132281cdb6a1b7bdeb475a` |
+| 8 x64 | `hal.dll` | 6.2.9200.16384 | 395,504 | `6b711a6c86c1564978ca65e360416918caf8991ddf9d041683588d59ff6bff7d` |
+| 8.1 x64 | `scsiport.sys` | 6.3.9600.16384 | 170,848 | `b5ac8890b2d584d070f2a95118eb15b8b256b793b812d678c544f784699d901f` |
+| 8.1 x64 | `Classpnp.sys` | 6.3.9600.17396 | 337,728 | `35ca4cc06d29dc068081976aceb5d5bec32d4663b7d93cb21599da3f92ef47a4` |
+| 8.1 x64 | `ntoskrnl.exe` | 6.3.9600.17415 | 7,474,496 | `2676bd81b52e8e35d149d8753eb0c438f04c3bbbc11348f9f34758dbee26c843` |
+| 8.1 x64 | `hal.dll` | 6.3.9600.17196 | 423,768 | `898637660689dc5cf91e3536109eb439a21f6f65bfd22e6f857fb75605fc22a8` |
+| 8.1 x64 | `stornvme.sys` | 6.3.9600.16421 | 57,176 | `2ddea1568a85ad64fce5d10d348304fcd9be6e96c2313353ef70a2933306d188` |
+| 8.1 x64 | `stornvme.inf` | - | 8,666 | `12257b98c43b178825dec26a6b54bcc2c0d060790aeeb15cdef29f2d6c6a2124` |
+
+- **Stor98's imports are all exported.** Every NT line of
+  `scripts\import-gate\stor98-imports.allow` (x86 against 8 x86, amd64
+  against 8 x64 and 8.1 x64): the 19 x86 names (11 `SCSIPORT.SYS`, 8
+  `NTOSKRNL.EXE`) and the 18 amd64 names (9 and 9) are all present in
+  those builds' export tables. 8 x86's `scsiport.sys` exports 47 names, 8 x64's and 8.1 x64's 50.
+- **SCSIport on 6.2 and 6.3 is 7's.** 7 x64, 8 x64 and 8.1 x64 export the
+  same 50 names. Their imports differ by five names in all: 8 adds
+  `KeInitializeSpinLock`, `KeLowerIrql`, `KfRaiseIrql` and
+  `MmAllocateContiguousNodeMemory` and drops
+  `MmAllocateContiguousMemorySpecifyCache` (the uncached extension now
+  comes from the node-aware allocator); 8.1 imports what 8 does. The
+  registry values the port reads are the same names on 7 x64 and 8 x64
+  (`PnpInterface`, `MaximumSGList`, `NumberOfRequests`,
+  `DisableTaggedQueuing`, `TimeoutValue` and the rest); 8 adds the
+  `RtlQueryRegistryValuesEx` lookup, 8.1 a read of
+  `Control\MiniNT` (Windows PE). Nothing read asks more of the miniport
+  than 7 did: `HwInitializationData`, the callbacks and the INF's
+  `PnpInterface\5` are taken as Stor98's NT path gives them, which the
+  runtime leg below then showed.
+- **The class driver.** `Classpnp.sys` exports the same 60 names on 7 x64
+  and 8 x64; 8.1 adds `ClassModeSelect` and `ClassModeSenseEx`. Its retry
+  policy was not read statically; the runtime legs read it.
+- **8.1's own NVMe driver.** `stornvme.inf` (`DriverVer=06/21/2006,
+  6.3.9600.16421`, `Provider=%MSFT%`) binds `PCI\CC_010802` in its
+  `NVME.NTamd64` and `NVME.NTx86` models, as a boot-start Storport
+  miniport with `ExcludeFromSelect = *`; Stor98's INFs match the same
+  compatible id, so Windows' ranking (a signed in-box INF over an unsigned
+  one) gives every NVMe controller to `stornvme`, which the 8.1 guest
+  showed at first boot. A tunnel drive the installer forces onto Stor98
+  keeps its devnode, and with it Stor98, for as long as Windows keeps that
+  devnode; a drive of another model (other PCI ids) gets a new devnode and
+  `stornvme`, until the installer runs again (Q2 below).
+
+### Runtime: the vehicle
+
+usb4-emu's QEMU `bin-2a893ea` (SHA-256 `6a1dfcc8...bd66`), xhci98's
+pristine images `w8x86`, `w8x64` and `w81x64` (`E:\xhci98-vm\win8-10`)
+through overlays, `-machine pc`, TCG, `-cpu qemu64,+3dnowprefetch`,
+2 vCPUs, 2048 MB (the coordinator's resource rule of the day), one guest
+at a time from 13:20; kit `E:\xhci98-vm\p43-23`, QMP 48640-48642. Each
+guest: a plain QEMU `nvme` on the root bus (a blank 1 GiB disk, serial
+`S98W8INT1`), and a `usb4-tunnel-bridge` (SHPC, `x-force-tunnel=on`,
+`nvme-drive=`, serial `S98W8TUN1`) with the FAT test image
+`vm\u4-asm\base\nvme-fat.qcow2` behind it; a `qemu-xhci` with a
+`usb-tablet` for the pointer. No connection manager in the guest (8 and
+8.1's connection-manager path is 43.22's): the tunnel up at power-on,
+down with `qom-set /machine/peripheral/tb0 tunnel surprise`. **Windows 8
+does not take the bridge's SHPC**: the emulator's trace shows the
+surprise removal signalled and never acknowledged, and the controller's
+devnode stayed started; so each removal below is a link loss with no
+notice from Windows, Stor98's all-ones detection and its gone deadline
+alone. The install: `UpdateDriverForPlugAndPlayDevices(NULL,
+"PCI\CC_010802", <inf>, INSTALLFLAG_FORCE)` from a PowerShell script in
+the guest, the installer's own call, its "Windows can't verify the
+publisher" prompt answered "Install this driver software anyway". The
+guest's scripts wrote `wmic`, `sc`, `reg` and `wevtutil` output to COM1;
+the debug-port builds' stage lines went to `isa-debugcon` with
+`usb4-debug-port`. Host load: the coordinator's note of the day (CPU
+97 %), so timings are to the second.
+
+### Runtime: results
+
+| Leg | Driver | Result |
+|---|---|---|
+| 8 x86, before | - | Both controllers "PCI Device", problem 28, no service: Windows 8 has no NVMe driver |
+| 8 x86, install | this branch's free x86 `stor98.sys` (`2fd7005b...29bfd`) and `stor98-x86.inf` | `ok=True` after the prompt; both controllers "Stor98 Storage Controller for NVMe SSDs", service `stor98` running, demand-start, `SCSI Miniport`, `Parameters\PnpInterface\5` = 1; both disks present (serials `S98W8INT1`, `S98W8TUN1`), the tunnel volume F:; `StorInterrupt` "pin 1 line 10 msi no msix yes port 10/10 interrupt" and "pin 1 line 5 ... interrupt" |
+| 8 x86, unplug during writes | the same | a 4 MB copy looped onto F:: the 181st failed with "The system cannot find the drive specified"; disk event 153 ("... was retried") three times for each of the four lazy writes; the disk and volume gone, the controller started |
+| 8 x86, with stage codes | the `STOR98_DBGPORT=1` free x86 build (`5c6de2f3...d245`) | gone entered with no command issued; each WRITE fast-failed `SRB_STATUS_NO_DEVICE` (0x08) at 0, 1.3 and 4.0 s (the same four, classpnp's retries, event 153 each time); the gone deadline at 5.0 s, `BusChangeDetected`, the next INQUIRY failed `NO_DEVICE`, the disk removed; the copy failed at about 5.4 s |
+| 8 x86, `SRB_STATUS_SELECTION_TIMEOUT` | a test build with Stor98's two terminal sites set to 0x0A, never committed (`71fcde8f...05f1`), installed over the first by a copy of the INF with its `DriverVer` raised in the guest | the same shape: 0x0A fast-fails from 0.4 s, 38 event 153 entries, fastfat event 141 and the "Windows - Delayed Write Failed" popup (event 26) at about 4.7 s, the deadline and the disk's removal at 5.0 s, the copy failed at about 5.6 s |
+| 8 x64, install | `releases\3.1.0.0\release-x64\stor98.sys` and `stor98.inf` (test-signed; Stor98's source unchanged since `v3.1.0.0`) | **refused**: `0xE000022F` (`ERROR_NO_CATALOG_FOR_OEM_INF`); `setupapi.dev.log`: "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode", "Failed to import driver package into Driver Store", a NULL driver installed. `bcdedit`: `testsigning Yes` |
+| 8.1 x64, before | - | `stornvme` on both controllers ("Standard NVM Express Controller"), the tunnel volume F: |
+| 8.1 x64, forced install over `stornvme` | the same `3.1.0.0` x64 pair | the same `0xE000022F` and the same `setupapi` lines |
+| 8.1 x64, unplug during writes under `stornvme` | Windows' own | the copy in flight blocked; `stornvme` events 129 ("Reset to device ... was issued") and 11 ("controller error") every 35 s, the disk never removed; with the tunnel brought back after 4.6 min the copy completed with success 23 s later |
+
+### What it decides
+
+- Stor98's NT path runs on Windows 8 (32-bit) as it is: no source change.
+  Its INFs need no new decoration; their comments, Stor98's `AGENTS.md`,
+  `README.md`, `docs/TESTING.md`, `docs/PLAN.md` 2.2 and the package
+  readme now say 2000 to 8.1.
+- PLAN 2.2's question for 8: neither `NO_DEVICE` nor `SELECTION_TIMEOUT`
+  ends classpnp's retries there (2000 and XP x64: both did). What ends
+  them is the disk's removal after `BusChangeDetected`, and Stor98's
+  fast-fail makes each retry cost nothing. `NO_DEVICE` stays the default.
+- **The x64 package cannot be installed on 8 x64 or 8.1 x64**, Stor98's
+  nor, by the same rule, any of this package's x64 INFs: none names a
+  `CatalogFile` (record 19: "no catalog"). That is 43.22's to settle for
+  `xhcicm`, and an owner decision (Q1).
+
+### Not read
+
+- Windows 8.1 x86: no medium (owner, 2026-10-22: skipped for `3.2.0.0`,
+  untested ground, covered by 8 x86 and 8.1 x64; the release notes'
+  untested row).
+- Stor98 x64 running on 8 and 8.1 (refused at the driver store), and so
+  the kernel's acceptance of its SHA-1 test signature there.
+- A removal Windows is told of (pci.sys removing the controller), and
+  xhci98's link-down statement on 8 and 8.1: 43.24, with the installer's
+  own run there.
+
+### Questions for the owner
+
+1. **A catalog for the x64 package.** Windows 8 x64 and 8.1 x64 refuse
+   every catalog-less package in test-signing mode, so Stor98, and by the
+   same rule `xhcicm.inf` and the USB drivers' x64 INFs, cannot install
+   there as the package stands. Recommendation: the packager makes one
+   catalog per x64 INF (WDK 7.1's `inf2cat` or `makecat`) and signs it with
+   the same test key at the same step, each x64 INF gaining
+   `CatalogFile=`; record 19 amended; read on 7 x64 again (a catalog the
+   test certificate signs must not change what 7 x64 does) and on 8 x64.
+   Until then the release notes say the x64 drivers do not install on 8
+   and 8.1.
+2. **A tunnel drive first plugged after the install, on 8.1.** It gets
+   `stornvme` (Windows' ranking), not Stor98, until the installer runs
+   again; on 2000 to 7 the staged `stor98.inf` takes it by itself.
+   Recommendation: accept it and say so in the release notes and the
+   installer's warning text, rather than raise Stor98's rank.

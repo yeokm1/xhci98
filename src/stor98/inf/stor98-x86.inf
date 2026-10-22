@@ -13,7 +13,8 @@
 ;                        PortDriver). Derived from SweetLow's nvme9x.inf,
 ;                        without its NVMEVSD.VXD helper (docs/PLAN.md 0.12).
 ;   Windows 2000, XP,    the .NTx86 install and services sections:
-;   Vista, 7 (32-bit)    stor98.sys into system32\drivers (DIRID 12 on NT)
+;   Vista, 7, 8, 8.1     stor98.sys into system32\drivers (DIRID 12 on NT)
+;   (32-bit)
 ;                        as the demand-start SCSIport miniport service
 ;                        stor98. Derived from upstream nvme2k 1.2.0.0
 ;                        WDM\NVMe2K.inf.
@@ -27,6 +28,11 @@
 ; that is refused leaves only that device stopped and Windows still starts.
 ; Booting from an NVMe disk needs StartType=0, which no release supports yet
 ; (docs/BUILD.md, "INFs and version").
+;
+; Windows 8 and 8.1 (xhci98 roadmap 43.23) take the .NTx86 sections as 2000
+; to 7 do. 8.1 binds its own stornvme to every NVMe controller first: its
+; signed in-box INF outranks this one, so xhci98's installer installs over
+; it on a tunnel drive with INSTALLFLAG_FORCE (record 26 section 5.3.1).
 ;
 ; DriverVer is xhci98's package version and release date, from
 ; src\xhci_version.h (XHCI_VER_STR, XHCI_DRIVERVER_DATE), as in the other
@@ -73,7 +79,7 @@ HKR,,DontLoadIfConflict,,"Y"
 [Stor98_AddReg_9x]
 HKR,,PortDriver,,stor98.mpd
 
-; ---- Windows 2000, XP, Vista and 7, 32-bit ---------------------------------
+; ---- Windows 2000, XP, Vista, 7, 8 and 8.1, 32-bit -------------------------
 
 [Stor98_Inst.NTx86]
 CopyFiles=Stor98_Files_NT

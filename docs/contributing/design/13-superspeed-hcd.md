@@ -3236,6 +3236,15 @@ and what the 32-bit Windows 8 does with the unsigned x86 binary (record 19
 section 3's premise, that 32-bit Windows does not enforce, is read for 7
 and earlier only). All three are 43.24's and 43.31's legs.
 
+Read since, at runtime (roadmap-usb4 task 43.23, 2026-10-22,
+`runs/run-43.md`): before any of that, **8 x64's and 8.1 x64's driver
+store refuses a package with no catalog file** in test-signing mode -
+`0xE000022F`, "Driver package does not contain a catalog file, and Code
+Integrity is in Test Signing mode" - so none of this package's x64 INFs,
+which name no `CatalogFile`, installs there as they stand (read with
+Stor98's `3.1.0.0` x64 pair); 8 x86 took the uncatalogued x86 Stor98
+package with the unsigned-driver prompt.
+
 #### 6.12.9 What only a running system settles (VM, owed to 43.24 and 43.31)
 
 1. The forced install on 8 and 8.1, x86 and x64: `Signature="$CHICAGO$"`

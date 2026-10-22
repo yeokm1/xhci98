@@ -4,7 +4,8 @@
 Thunderbolt host. Its tunnel bridges put QEMU's `nvme` device behind a PCIe bridge whose
 link can be raised, torn down cleanly or surprise-removed, which is the situation Stor98
 must survive. Its `docs/XHCI98-HANDOFF.md` describes the test VMs (Windows 98 SE on
-i440FX; Windows 2000, XP x64 and Windows 7 x64 setups) and the launch scripts.
+i440FX; Windows 2000, XP x64 and Windows 7 x64 setups) and the launch scripts; Windows 8
+and 8.1 ran on xhci98's own images ("Windows 8 and 8.1", below).
 
 Each case below cites the [PLAN.md](PLAN.md) item or feasibility gate (G1-G9, PLAN 0.0) it
 validates. Thresholds are initial targets; if a measurement shows one is wrong for a given
@@ -118,6 +119,10 @@ roots (until 0.4.0.0, the folders of a release stage):
 - **2000, XP, Vista, 7 (32-bit)**: Device Manager, Update / Reinstall Driver, the `x86\`
   folder. **XP x64, Vista x64, 7 x64**: the same with `x64\`; Vista x64 and 7 x64 need
   test-signing on and a signed image (Code 52 otherwise).
+- **8 and 8.1**: 8 x86 installs from `x86\` (read 2026-10-22 through the installer's own
+  call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refuse the
+  `x64\` package at the driver store because it has no catalog (`0xE000022F`, with
+  test-signing on; off not read); 8.1 x86 not run.
 - Pass: the controller shows "Stor98 Storage Controller for NVMe SSDs" working, its test volume is
   readable, and each OS has only its own image: `dir C:\stor98.* /s` finds only
   `SYSTEM\IOSUBSYS\STOR98.MPD` on 9x (and the class key's `PortDriver` is `stor98.mpd`),
@@ -138,6 +143,53 @@ demand-start and F: was readable. XP x86, Vista and 7 x86 had no test image.
 Note, not investigated: on the 98 SE image the driver date shown (and the class key's
 `DriverDate`) was the INF file's date, 10-15-2026, not `DriverVer` 10/14/2026; ME showed
 the `DriverVer` date.
+
+## Windows 8 and 8.1 (xhci98 roadmap 43.23, 2026-10-22)
+
+Stor98 on NT 6.2 and 6.3, read in QEMU on xhci98's pristine Windows 8 and 8.1 images
+(`E:\xhci98-vm\win8-10\<name>\<name>-pristine.qcow2` on development host A, through
+overlays; `-machine pc`, TCG, `-cpu qemu64,+3dnowprefetch`, 2 vCPUs, 2 GB, test-signing on):
+Windows 8 Pro x86 and x64 (6.2.9200) and Windows 8.1 Pro x64 (6.3.9600, with Update). There
+is no Windows 8.1 x86 medium, so **32-bit Windows 8.1 has not been run** (owner,
+2026-10-22: untested ground, covered by 8 x86 and 8.1 x64; see the table at the end).
+
+Vehicle: usb4-emu's QEMU (`bin-2a893ea`, the build xhci98's p42-s98tun legs use), each guest
+with two NVMe controllers: a plain QEMU `nvme` on the root bus (a blank 1 GiB disk) and a
+`usb4-tunnel-bridge` (SHPC, `x-force-tunnel=on`, `nvme-drive=`) with the FAT test image
+behind it; no connection manager in the guest (xhci98's 8 and 8.1 path is its roadmap
+43.22's), so the tunnel is forced up at power-on and taken down with `qom-set ... tunnel
+surprise`. Windows 8 does not take the bridge's SHPC: the emulator's trace shows its
+surprise-removal event never acknowledged, the controller's devnode stays started, and so
+every removal below is a link loss with **no platform notification** - Stor98's own
+detection and its gone deadline (PLAN 0.10, MD-1), the case the deadline exists for. The
+install: `UpdateDriverForPlugAndPlayDevices(PCI\CC_010802, stor98.inf, INSTALLFLAG_FORCE)`
+from a PowerShell script in the guest (the call xhci98's installer makes), the unsigned
+prompt answered "Install anyway". Output went to COM1 (`wmic`, `sc`, `reg`, `wevtutil`);
+the debug-port builds' stage lines to `isa-debugcon` with `usb4-debug-port`.
+
+| Leg | Build | What was read |
+|---|---|---|
+| 8 x86, no driver | - | Both NVMe controllers "PCI Device", problem 28, no service: Windows 8 has no NVMe driver of its own, as the read of its install media found (no `*nvme*` file in either `install.wim`) |
+| 8 x86, install | free x86 of `p43-23` (3.1.0.0 stamp, SHA-256 `2fd7005b...29bfd`) | `ok=True`; both controllers "Stor98 Storage Controller for NVMe SSDs", service `stor98` running, demand-start, group `SCSI Miniport`, `Parameters\PnpInterface\5` = 1; disks "QEMU NVMe Ctrl SCSI Disk Device" with serials `S98W8INT1` and `S98W8TUN1`, the tunnel volume mounted (F:); `StorInterrupt` "pin 1 line 10 ... interrupt" and "pin 1 line 5 ... interrupt". SCSIport on 6.2 loads, finds and starts the NT path unchanged |
+| 8 x86, unplug during writes | the same | a 4 MB copy in a loop onto F:: 180 copies, then the 181st failed with "The system cannot find the drive specified"; three rounds of disk event 153 ("The IO operation at logical block address ... was retried") for the four lazy writes in flight, about 1.4 s apart; afterwards the disk and volume gone, the controller still started |
+| 8 x86, the same with stage codes | `STOR98_DBGPORT=1` free x86 (`5c6de2f3...d245`) | gone entered with no command issued (the copies had gone to the cache); every WRITE fast-failed with `SRB_STATUS_NO_DEVICE` (0x08), the same four in three rounds, at 0, 1.3 and 4.0 s; at 5.0 s the gone deadline, `BusChangeDetected`, the INQUIRY that followed failed `NO_DEVICE`, and the disk was removed; the copy failed at 5.4 s. **NO_DEVICE does not end classpnp's retries on Windows 8** (unlike 2000 and XP x64, PLAN 2.2): the retries end when the disk is removed after the deadline |
+| 8 x86, `SRB_STATUS_SELECTION_TIMEOUT` instead | a test-only build with both terminal sites (`LcGoneFailSrb`, `ENG_CANCEL_GONE`) set to 0x0A, never committed (`71fcde8f...05f1`) | the same shape: every WRITE fast-failed 0x0A from 0.4 s on, 38 disk event 153 entries (more lazy writes this time), then fastfat event 141 and the "Windows - Delayed Write Failed" popup (event 26), all logged at about 4.7 s; deadline, `BusChangeDetected` and the disk's removal at 5.0 s; the copy failed at 5.6 s. Neither status stops the retries; `NO_DEVICE` stays the default |
+| 8 x64, install | xhci98 `3.1.0.0` `release-x64` `stor98.sys` and `stor98.inf` (test-signed, the same source) | **refused before the driver is touched**: `0xE000022F`, "The third-party INF does not contain digital signature information"; `setupapi.dev.log`: "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode", the package not imported into the driver store, a NULL driver installed. Both controllers stay problem 28 |
+| 8.1 x64, no driver | - | Windows' own `stornvme` (6.3.9600.16421) binds both controllers at first boot ("Standard NVM Express Controller"); the tunnel volume mounted |
+| 8.1 x64, forced install over `stornvme` | xhci98 `3.1.0.0` `release-x64` | the same `0xE000022F`, the same `setupapi` lines: a catalog-less package does not reach the driver store on 6.3 either, so the forced install over `stornvme` cannot happen with the package as it is |
+| 8.1 x64, unplug during writes under `stornvme` (no Stor98) | - | the copy in flight blocked for five minutes: `stornvme` logged event 129 ("Reset to device, \Device\RaidPort0, was issued") and event 11 ("controller error") every 35 s, the disk never removed; with the tunnel brought back after 4.6 min the reset succeeded 23 s later and the copy completed with success. For xhci98's release notes (its roadmap 43.24 owes the leg under its own connection manager) |
+
+What it leaves unread: 32-bit Windows 8.1 (no medium); Stor98 x64 running on 8 and 8.1 at
+all (refused at the driver store; the kernel's acceptance of the SHA-1 test signature there
+is unread behind that); a removal with a platform notification (pci.sys removing the
+controller) and xhci98's connection manager's link-down statement on 8 and 8.1 (roadmap
+43.24); the xhci98 installer's own run on 8 and 8.1 (43.24).
+
+| Untested ground on 8 and 8.1 | State |
+|---|---|
+| Windows 8.1, 32-bit | Not run: no install medium (owner, 2026-10-22: skipped for xhci98 `3.2.0.0`, covered by 8 x86 and 8.1 x64). The x86 package is the one 8 x86 ran; 8.1 x86's `stornvme` and SCSIport are unread |
+| Stor98 x64 on 8 and 8.1 | Not loaded: the package is refused at the driver store (no catalog, above) |
+| Removal with a platform notification, and xhci98's link-down statement, on 8 and 8.1 | Not read; xhci98's roadmap 43.24 |
 
 ## Harness work needed
 
