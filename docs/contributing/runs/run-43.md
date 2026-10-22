@@ -272,6 +272,129 @@ With that, the Watcom-built VSD loads and registers on 98 SE
 (`IOS_Register` result 1, `DRP_REMAIN_RESIDENT`) and configures Stor98's
 DCB as the MASM prototype did; MSVC 6.0 was not needed.
 
+**The C port against Stor98 alone**, run back to back on one guest
+(2026-10-22, 14:18 to 14:44; host at 88 to 91 % CPU with 8 to 11 QEMU
+guests of other tasks running, so the absolute values say even less than
+the earlier pairs'): MB/s, 256 MiB per phase.
+
+| Op | Buffer | KiB | A (Stor98 alone) | C (with the C port) |
+|---|---|---|---|---|
+| write | +0 | 64 | 14.6 | 11.7 |
+| read | +0 | 64 | 19.4 | 15.8 |
+| write | +0 | 256 | 39.3 | 31.1 |
+| read | +0 | 256 | 43.2 | 30.7 |
+| write | +0 | 512 | 48.1 | 42.3 |
+| read | +0 | 512 | 54.3 | 46.2 |
+| write | +512 | 128 | 14.8 | 23.3 |
+| read | +512 | 128 | 14.8 | 25.5 |
+| write | +512 | 256 | 18.6 | 30.2 |
+| read | +512 | 256 | 19.5 | 31.4 |
+| write | +512 | 512 | 24.6 | 39.2 |
+| read | +512 | 512 | 26.4 | 40.0 |
+| write | either | 1,024 | 31.0 / 32.5 | 28.1 / 28.0 |
+
+The same shape as the MASM prototype's pairs: 1.5 to 1.7 times arm A's
+rate on the fragmented buffer at 128 to 512 KiB, 12 to 29 % slower on the
+near-contiguous one, nothing gained at 1 MiB. Every verify compared clean,
+no list overflowed.
+
+### Requests over 512 KiB (2026-10-22)
+
+The owner's direction of 2026-10-21 ("read more first"): measure, before
+the design chooses, a VSD that cuts a large request itself, Stor98's 9x
+maximum raised, and both. Four arms, the C port in each, Stor98 the 9x
+free build of `p43-46` except where raised:
+
+- **SC**: Stor98 as built (`STOR98_MAX_TRANSFER` 128 pages, 512 KiB) and
+  the VSD as above (the baseline: IOS still cuts a request over 512 KiB to
+  63 KiB pieces);
+- **SS** (option a): Stor98 as built, the VSD built to advertise
+  `DCB_max_xfer_len` 2 MiB to IOS and cut a larger request into pieces of
+  Stor98's own 512 KiB, one after another, from its callback;
+- **BG** (option b): a test build of Stor98 with `STOR98_MAX_TRANSFER`
+  512 pages (2 MiB; not committed), the VSD with room for a 2 MiB list at a
+  run a page (520 entries; the 200 of the arms above overflowed, and those
+  requests failed, in the first try of this arm);
+- **BS** (both): the 2 MiB Stor98 and the cutting VSD (which then cuts
+  nothing: Stor98's maximum is the 2 MiB it advertises).
+
+`PERF2 file` with 512, 1,024 and 2,048 KiB requests, aligned and at +512,
+256 MiB per phase. Round 3 ran the four arms back to back on one guest
+(13:32 to 14:18, host 83 to 97 % CPU); round 2 two at a time on two guests
+(SS with BG, then SC with BS), heavier load still.
+
+| Op | Buffer | KiB | SC | SS | BG | BS | SC r2 | SS r2 | BG r2 | BS r2 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| write | +0 | 512 | 38.5 | 33.9 | 35.3 | 37.0 | 29.1 | 34.3 | 34.8 | 25.7 |
+| read | +0 | 512 | 58.2 | 46.3 | 52.4 | 52.3 | 40.8 | 48.8 | 49.5 | 36.9 |
+| write | +0 | 1,024 | 33.1 | 61.3 | 66.0 | 60.0 | 26.7 | 59.9 | 60.3 | 48.5 |
+| read | +0 | 1,024 | 32.9 | 65.0 | 69.2 | 66.0 | 27.2 | 62.0 | 63.8 | 51.7 |
+| write | +0 | 2,048 | 38.3 | 70.5 | 80.4 | 86.1 | 27.8 | 75.3 | 79.9 | 67.8 |
+| read | +0 | 2,048 | 37.4 | 73.4 | 80.6 | 87.7 | 30.6 | 73.1 | 82.8 | 76.0 |
+| write | +512 | 512 | 40.2 | 41.5 | 44.4 | 43.7 | 37.3 | 41.2 | 41.1 | 34.9 |
+| read | +512 | 512 | 47.6 | 45.3 | 53.6 | 62.8 | 38.6 | 47.5 | 47.2 | 51.9 |
+| write | +512 | 1,024 | 28.2 | 57.7 | 62.5 | 69.0 | 25.1 | 55.2 | 55.8 | 64.2 |
+| read | +512 | 1,024 | 28.9 | 62.3 | 66.6 | 70.4 | 25.2 | 58.4 | 60.2 | 74.7 |
+| write | +512 | 2,048 | 33.3 | 74.4 | 78.6 | 83.6 | 23.7 | 71.8 | 71.7 | 79.4 |
+| read | +512 | 2,048 | 34.8 | 75.9 | 84.3 | 92.1 | 25.7 | 72.2 | 78.8 | 82.0 |
+
+**At the NVMe** (QEMU's `pci_nvme_read`/`write` traces, every phase of
+both rounds): SC sends a 1 MiB request as 63 KiB commands (4,096) and one
+16 KiB command per request, a 2 MiB one as 63 KiB commands and one of
+32 KiB; SS, BG and BS send 512 KiB commands only, 512 per 256 MiB phase,
+at every size. The emulator's controller limits a command to 512 KiB
+(MDTS), so with the 2 MiB Stor98 the cut to 512 KiB moves from IOS or the
+VSD into Stor98's own children; the commands reaching the disk are the
+same in the three arms.
+
+**Data.** Every verify of both rounds compared clean, the +512 buffers at
+2 MiB included (up to 513 physical runs a request in BG and BS, with
+`IOR_num_sgds`, a byte, held at 255: `SCSIPORT.PDR` evidently walks the
+list by length, not by that count; not read in its code).
+
+**What the cutting VSD needs** (found on the way, round 1). The first SS
+build changed only the IOR's start sector, count and list for each piece,
+and the data came back wrong (each 1 MiB request wrote its first half
+twice, at the request's own start). The request arrives with
+`IORF_SRB_VALID` set: the SCSI'izer, load group `0x0B`, above this VSD's
+`0x11`, has already built the SRB `SCSIPORT.PDR` executes, at `IOP_srb`,
+for the whole request (function 0, a 10-byte `WRITE(10)`/`READ(10)` CDB,
+`DataTransferLength` 1 MiB, `DataBuffer` the linear buffer), and
+`SCSIPORT.PDR` reads its CDB, not the IOR. So each piece also rewrites the
+CDB's block address and count, the SRB's length, buffer and sort key, and
+clears its two status bytes, and the last restores them; a request whose
+SRB is not a 10-byte read, write, verify or write-and-verify is refused
+rather than cut (none was seen). With that, round 2 and 3's SS compared
+clean.
+
+### What it adds for the design
+
+- Requests over 512 KiB: either way of letting them through (a VSD that
+  cuts them, or Stor98's 9x maximum raised) takes 1 and 2 MiB unbuffered
+  requests from 28-38 MB/s to 58-92 MB/s in round 3; at 512 KiB
+  nothing changes. The two are within the run-to-run spread of each other
+  here (BG at or above SS in most rows); both together equal the raised
+  maximum alone, the VSD then cutting nothing. On this emulator the disk
+  sees the same 512 KiB commands either way, so the difference on real
+  hardware would come from a controller whose MDTS is over 512 KiB and
+  from one IOS round trip a piece against Stor98's children.
+- The cutting VSD has to own the SRB the SCSI'izer built, a structure of
+  `SCSIPORT.PDR`'s path rather than of IOS's IOR, and restore it; raising
+  Stor98's maximum touches Stor98 alone (its PRP-list and NLB checks hold
+  at 512 pages) but changes a value Stor98's own `AGENTS.md` and records
+  govern, so it is Stor98's change to make.
+- The list's room: 200 runs suffice up to 512 KiB at a run a page; 2 MiB
+  needs 513 runs and a list of over 4 KiB in each IOP's expansion area.
+
+Harness notes for these runs: under this host load the scripted DOS box
+lost the keyboard focus to the tunnel drive's Explorer window, so two
+first tries ran without the VSD installed and one leg's later commands
+were typed into Explorer; the legs that count proved their DOS box with a
+mark in the debug log, checked that the VSD had loaded, and dropped the
+VCACHE copy phase (unchanged in every earlier arm). Kept on development
+host A in the reading's VM folder (`vm\res-x3*.txt`, `a4`, `c6`, and
+`hostload.txt` for the load samples).
+
 Legs owed by this reading: ME; 98 SE with the gold IOS set; a boot with the
 disk present at boot; real hardware (the owner's).
 
