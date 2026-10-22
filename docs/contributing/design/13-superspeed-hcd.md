@@ -2775,6 +2775,1661 @@ and enable, each read on 98 SE (of the refusals, the wrong-value one; the
 unreadable `SILENT.REG` was not read). Not read on Windows 2000: the base at
 hand had no `xhci98` controller.
 
+### 6.12 Windows 8 and 8.1: what NT 6.2 and 6.3 ask of the bus (task 43.26, 2026-10-22; draft)
+
+**A draft.** Roadmap-usb4 task 43.26 reads, before 43.29 makes
+`xhci98.sys` an opt-in install on Windows 8 and 8.1, what those systems
+change for a bus driver that takes the controller from Windows' own USB 3
+stack (`usbxhci.sys` with `ucx01000.sys` and `usbhub3.sys`; `usbport.sys`
+and `usbhub.sys` for USB 2.0 controllers): the controller's INF match, what
+the class drivers send the device PDO, the bus interfaces and versions a
+client asks for, and the x64 test signature. Everything below is
+**static**; nothing from these media was executed, and no Windows 8 or 8.1
+system has run this driver in this project. What only a running system can
+settle is listed in 6.12.9, marked "VM" where it appears.
+
+**Method.** The owner's install media (2026-10-21): `en_windows_8_pro_vl_x86_dvd_917830.iso`
+(`install.wim`, one image, Windows 8 Pro, build 9200), `Windows 8 x64.iso`
+(image 1 of 2, Windows 8 Pro, 9200.16384) and
+`en_windows_8.1_with_update_x64_dvd_6051480.iso` (image 1 of 2, Windows 8.1
+Pro, 9600.17415); the edition names from each WIM's own XML. There is **no
+Windows 8.1 x86 medium**, so every 8.1 row is x64 only. Files taken with
+`7z e <iso>:\sources\install.wim [1\]Windows\System32\drivers\<file>` (and
+`Windows\inf\*.inf`, and the `DriverStore\FileRepository` copies of
+`USBAUDIO.sys` and `winusb.sys`) into a git-ignored scratch directory
+outside the tree; versions and SHA-256 by PowerShell's `VersionInfo` and
+`Get-FileHash`. Code read with `cdb.exe -z` from WDK 7.1's debuggers
+(6.12, which loads a raw image and executes nothing) with Microsoft's public
+or private PDBs from msdl (all images below had one), WDK 7.1 `link -dump
+-imports` / `-exports`, and capstone 5.0.7 for x64 RIP-relative operands,
+which cdb 6.12 prints unresolved under `-z`. IOCTL immediates and GUID
+bytes were found by a byte scan of each image and attributed to the
+enclosing PDB function, URB function codes by a straight-line scan for
+stores to `[urb+2]` with the codes passed to helpers resolved at their call
+sites, as 6.1's readings did. Four subagents read the class drivers, KMDF,
+`usbd.sys` and the hubs on 2026-10-22; the coordinator did not re-read them
+line by line. **Addresses in 6.12 are RVAs** (each image's own base is
+`0x10000`, so an RVA is cdb's address less `0x10000`), and "8 x86 / 8 x64 /
+8.1 x64" gives the three builds in that order. Constants beyond WDK 7.1
+come from the mingw-w64 headers (`mingw-w64-headers`, master `62891fa4`:
+`usb.h` for the URB functions `0x35` to `0x38`, `usbioctl.h` for
+`FILE_DEVICE_USBEX` = `0x49` and the composite IOCTLs) or are named by the
+PDB symbol that holds them (the GUIDs below); an IOCTL neither names is
+given raw with its function index, `(code >> 2) & 0xFFF`.
+
+Files read (8.1's are the versions its image carries, so they differ per
+file):
+
+| Build | File | Version | Bytes | SHA-256 |
+|---|---|---|---|---|
+| 8 x86 | `USBSTOR.SYS` | 6.2.9200.16384 | 97,008 | `7e2f2af92561514f4c78c5d4f825f2e9f942a66fae450aa1ea6922cbd10cc0a6` |
+| 8 x64 | `USBSTOR.SYS` | 6.2.9200.16384 | 119,024 | `646e345de5aff26b338e17bc9d03d0eda5608df77d7685de7aff6e4113b9eb87` |
+| 8.1 x64 | `USBSTOR.SYS` | 6.3.9600.17331 | 148,800 | `b582c0f348d8f79419ca5a58f10ca151e06d7ca3be162344cada46d9d7fed97c` |
+| 8 x86 | `uaspstor.sys` | 6.2.9200.16384 | 76,016 | `ca1f7b7e79820f401112cb5568e4df3d4fe93b24ee29bdcd97dd5539fa1405dc` |
+| 8 x64 | `uaspstor.sys` | 6.2.9200.16384 | 97,008 | `f09c5188aafcf4c77b05ba1e604f9912782a9f1371f72f959288ebc2725407ed` |
+| 8.1 x64 | `uaspstor.sys` | 6.3.9600.16384 | 74,080 | `2c330ed00e49ba55e25564230e0dfb8a35f2b5320eb18d4af7caacfa9a449044` |
+| 8 x86 | `hidusb.sys` | 6.2.9200.16384 | 19,456 | `ee0cb433f925c094bb0d7922984d820e395fd94b82b489950a7b6001d527dc7d` |
+| 8 x64 | `hidusb.sys` | 6.2.9200.16384 | 27,648 | `5ced8accbbf373607a8cec81e9f9856c450a73a969e07df3218b85f444ca7d3f` |
+| 8.1 x64 | `hidusb.sys` | 6.3.9600.17041 | 33,280 | `eda23e6909eb83e5e148816dfb16cc29ea01bd6bd2f73aa46b3d820b85fb9c83` |
+| 8 x86 | `hidclass.sys` | 6.2.9200.16384 | 60,416 | `bc9038b33a634e042783d2ad7af8f47f5d3f0c5e68a749a0027c35138ba62ad5` |
+| 8 x64 | `hidclass.sys` | 6.2.9200.16384 | 82,944 | `c890c0b95035b08552478459877fb22a62529a4f361055716bdf0fd651f13996` |
+| 8.1 x64 | `hidclass.sys` | 6.3.9600.17041 | 111,616 | `b9c1d2d5e7d781a4ceff17bd5c8e4cbc586d00c4f8315892561ea52f4cb339d2` |
+| 8 x86 | `usbccgp.sys` | 6.2.9200.16384 | 84,992 | `700913929142a497543d6d95a8a80d1f357f1827ed74236c59a6fb4a473fb352` |
+| 8 x64 | `usbccgp.sys` | 6.2.9200.16384 | 120,832 | `aadb8991174ccda3ade14af3efb3a9826ec17a0f989f449ff43010a99d8caa1f` |
+| 8.1 x64 | `usbccgp.sys` | 6.3.9600.17238 | 143,680 | `5dae02414271231f5fdbb751afeb99874779b467947020815d4ae54432d4269d` |
+| 8 x86 | `USBAUDIO.sys` | 6.2.9200.16384 | 85,760 | `be22479ae00a58a40e78da8593a02f3e4b9fb2d4c11bda0ec557e1f8ad2527b1` |
+| 8 x64 | `USBAUDIO.sys` | 6.2.9200.16384 | 121,856 | `b0b45103ea209de5b75396c5a25cbbbfaf05e199c7b5092342dc3afeb70a0ce6` |
+| 8.1 x64 | `USBAUDIO.sys` | 6.3.9600.16490 | 121,088 | `9e158bd07389b4cff99674716647fa3aabeecbd1a98edf20e544e099a99a8768` |
+| 8 x86 | `winusb.sys` | 6.2.9200.16384 | 46,592 | `46731bceddf89e35808f0c4070f0fb34ae382e7d4a76fa4435340c5fe3931f09` |
+| 8 x64 | `winusb.sys` | 6.2.9200.16384 | 57,344 | `2c55f1c7553a527a7c4c34e730be943269ae23928731c64d3dc945e07ae1771e` |
+| 8.1 x64 | `winusb.sys` | 6.3.9600.16384 | 78,848 | `81b46e551d6130a2c3d113ec3b563cedb5a06bb340986c0e03136ce5be729481` |
+| 8 x86 | `Wdf01000.sys` | 1.11.9200.16384 | 526,952 | `b20f7caeea790290072bc170ebeeadb4c19e1c40db0b3fe0d4a640d0d82300d6` |
+| 8 x64 | `Wdf01000.sys` | 1.11.9200.16384 | 785,512 | `09254970265476214f3187cc22a4f9c7c2769d419600e83fbe302c3a103e527f` |
+| 8.1 x64 | `Wdf01000.sys` | 1.13.9600.16384 | 839,488 | `be017ce91e3bab293de6ecf143797cce3f33cc63024437472b4e38c6961ad884` |
+| 8 x86 | `usbd.sys` | 6.2.9200.16384 | 18,672 | `6b2953cd2c3a40f02106d0c3ffb45e293e63d3e421e8e51a3059212ff2a98041` |
+| 8 x64 | `usbd.sys` | 6.2.9200.16384 | 21,744 | `1f21958ef25657069ea1987f71bb8c2d69bb39d5de212682b0e615a9287aa59d` |
+| 8.1 x64 | `usbd.sys` | 6.3.9600.17195 | 27,480 | `7d93885c5b86f4bddbd2fac588a1091858b674fa401bee30d336f4b6d717443d` |
+| 8 x86 | `usbhub.sys` | 6.2.9200.16384 | 331,504 | `df8132f77fcba07c6150a5df99bd561b0e9f3859a625f62e45c40eb97f094e7d` |
+| 8 x64 | `usbhub.sys` | 6.2.9200.16384 | 496,368 | `e5889991a4c100135e52bda66d808290bb74ddbe153f762c4f492292b756f7c2` |
+| 8.1 x64 | `usbhub.sys` | 6.3.9600.17238 | 419,648 | `b3ef738be1e6b6027f29c9713cd3f367ea067d2be46580afbc0fb58046ef6bbd` |
+| 8 x86 | `USBHUB3.SYS` | 6.2.9200.16384 | 361,200 | `b543ac14cb1c9b7fce814c7cce57334828d01f3f5339868a59dcee0bb837576b` |
+| 8 x64 | `USBHUB3.SYS` | 6.2.9200.16384 | 445,168 | `d83869186344c10289c31bfbcdc04cb8734349c14d9a8bb1b8d1402674701d48` |
+| 8.1 x64 | `USBHUB3.SYS` | 6.3.9600.17396 | 467,776 | `1d2cd13dc0b02dd40657ee4f93f4a13c78d2f2ef91685e563d78e217c96df544` |
+| 8 x86 | `UCX01000.SYS` | 6.2.9200.16384 | 179,952 | `e39004323e938a1f4271fe49a3f2ac3f2970b59aea026da5ebc206df1b06e6c6` |
+| 8 x64 | `UCX01000.SYS` | 6.2.9200.16384 | 212,208 | `1ee1f1422cbb43cbb2c2af13584065be0243bd2642ab4fdbc51ac34c79972d0d` |
+| 8.1 x64 | `UCX01000.SYS` | 6.3.9600.17393 | 189,248 | `43cdeac2bfc5091c11dfc0e7f7171af9a598ae56cb056c3cf382ae7807f79ef0` |
+| 8 x86 | `USBXHCI.SYS` | 6.2.9200.16384 | 267,504 | `7037f70e8e016fb5da4ca5e74ff4ea34b7465030e35963d3d20349fc89e511bf` |
+| 8 x64 | `USBXHCI.SYS` | 6.2.9200.16384 | 337,136 | `d22b9955095924e162cf457421a60545ef0b76206cbd816836c9637eceb1bb8f` |
+| 8.1 x64 | `USBXHCI.SYS` | 6.3.9600.17393 | 324,928 | `76f8be9f412d4397437e60a7e6231c80ea9b4f5436c9a8fab967c78604994ae9` |
+| 8 x86 | `usbui.dll` | 6.2.9200.16384 | 72,192 | `6ceeaa1a9afbac806fa39673eb5f137e0225677a487a5d225a9776a1b6303775` |
+| 8 x64 | `usbui.dll` | 6.2.9200.16384 | 87,552 | `5863ed74fa7b680a357d0a63356b3fe24dc8c7082ee407f968bec6eabc999157` |
+| 8.1 x64 | `usbui.dll` | 6.3.9600.17415 | 89,088 | `126e1f4740c174737f0c4e6e8823a66a7b369533f73f9a5e28b05174bd74a58c` |
+| 8 x86 | `usbxhci.inf` | - | 5,572 | `dcccddc1acfd4de48b89cdfaa024828aa54e4273aeec891326c78fe5957b6b93` |
+| 8 x64 | `usbxhci.inf` | - | 5,580 | `cd4687e4cd3714772323bdc588712f4d0c22ff47bc50a677b441a5fb891f70fb` |
+| 8.1 x64 | `usbxhci.inf` | - | 7,332 | `3d19cb7b79fd5e31c56af812a4a8302ad2e20233d79461cf6aa708f14c5a156b` |
+| 8 x86 | `usbport.inf` | - | 78,300 | `043e65f2fef077511ca1c9fefee145ad4784289dac84454df37e88f08a96e920` |
+| 8 x64 | `usbport.inf` | - | 78,428 | `7c73cadf5e8ed191fb59fa853f92b1b93b529acf26e92a60c9c09a9334b71a37` |
+| 8.1 x64 | `usbport.inf` | - | 80,720 | `fd4d36a51fb8357b61ea219c532a7a5df9d9c56330450477b145700667c11014` |
+| 8 x86 | `usb.inf` | - | 43,988 | `59d5c4203e2af557faf26f216c6b1c56e3b67ef42021a2a2d81407959a1f793b` |
+| 8 x64 | `usb.inf` | - | 44,308 | `abfca745e1d05191a93386c87b41d64f3a1513bf42361b86ae5305d67e50a128` |
+| 8.1 x64 | `usb.inf` | - | 44,788 | `57c3d74ceb3608f62419eca11a44f08f38de44fc7e8fdc6bee4bd9acfc34c77b` |
+| 8 x86 | `usbhub3.inf` | - | 10,188 | `a30528822345b608d049bfcf89458f8d29431239c8547b34726ffb5818201faa` |
+| 8 x64 | `usbhub3.inf` | - | 10,196 | `7edef9c7be2ce182b644a8004dcac2aeaa21d0d4093482fe4f3ab5404bd04a9e` |
+| 8.1 x64 | `usbhub3.inf` | - | 10,622 | `7ea862be757984d569309db8e61a0efc85422c520544d596f633e3b059f8562f` |
+| 8 x86 | `usbstor.inf` | - | 31,500 | `658dc4cf6b37d9b97e37ed42a62532fb49d562a9cc5609749462002d22c6f72c` |
+| 8 x64 | `usbstor.inf` | - | 31,692 | `75eea280acfd34db105ac0ee338d08d9389e60393f820d26dac6b7f60bece1e3` |
+| 8.1 x64 | `usbstor.inf` | - | 31,676 | `bebb6f710e32a2bb7cb41575a4fa54731dbe5ff1e01ac75cfff5ee73e297989e` |
+| 8 x86 | `uaspstor.inf` | - | 4,252 | `4524ff6d88e61b72fc41ff046cd2d842906894423cb0eee63b50c82becaa3c86` |
+| 8 x64 | `uaspstor.inf` | - | 4,260 | `2ec9b6061d086bda0080157ac4d1aefbe7fca872eb8cf8ae038359a2fc80ed40` |
+| 8.1 x64 | `uaspstor.inf` | - | 4,248 | `1341c9e3f15c4385fd89673c11159326c8ad7e682baa1fc799fb61aa0593c403` |
+| 8 x86 | `input.inf` | - | 70,558 | `223ce8c06c33823034ea4faefaf600ed6889d00af72010af18cc3e3f72560675` |
+| 8 x64 | `input.inf` | - | 71,150 | `8f30d04321dacad25e91ef87fffa5f643c2f42b2b99fc3039347528ae11eba20` |
+| 8.1 x64 | `input.inf` | - | 76,248 | `cc03a9a0259ee5a0c28195e1b05b9461d0b4162848dbe7ebec153348487611b6` |
+| 8 x86 | `wdma_usb.inf` | - | 90,872 | `d894db3555a6b4f9d9e21980b6139eba9015009db27b978fb4b4f439fbbf845c` |
+| 8 x64 | `wdma_usb.inf` | - | 91,008 | `f4da0733bdee35f48cf3b353afa19879d9be5998e3cad3ed8c3479538c47da3e` |
+| 8.1 x64 | `wdma_usb.inf` | - | 93,474 | `c71d466ffcf27040e917dcb37f88b2d51f0a3c81a01abb303a19d7c8e880fa70` |
+| 8 x86 | `winusb.inf` | - | 2,996 | `7c56a7326b4bdde8891362b8a09df2fc041355e20c909c6cd06797186ec67e5d` |
+| 8 x64 | `winusb.inf` | - | 3,004 | `91d2aa3d322503207db2f596ae852211b0d8fd619ba6379d9fa12b2910518ad9` |
+| 8.1 x64 | `winusb.inf` | - | 3,002 | `2c26480463aa987635b9752365d8ede402fc805dee7d6dae817cac372847faf6` |
+
+The INFs are UTF-16LE except `usbxhci.inf` and `usbhub3.inf` (UTF-8 with
+a byte-order mark), hashed as the original bytes; their `DriverVer` lines
+are quoted in 6.12.1.
+
+#### 6.12.1 The controller's match
+
+**Only `usbxhci.inf` matches an xHCI controller on Windows 8 and 8.1.**
+`usbport.inf` keeps `PCI\CC_0C0300`, `PCI\CC_0C0310`, `PCI\CC_0C0320`,
+`ACPI\PNP0D20` and the root hubs `USB\ROOT_HUB` and `USB\ROOT_HUB20`, and
+names no `PCI\CC_0C0330`; a text sweep of every `Windows\inf\*.inf` of the
+three images (553, 564 and 577 INFs; the method of 10.13.2) finds
+`PCI\CC_0C0330` on a model line of `usbxhci.inf` alone. What that INF
+says, 8 (`DriverVer=07/25/2012,6.2.9200.16384`, `signature="$Windows NT$"`):
+
+- **The models.** `[Manufacturer]` `%Generic.Mfg%=Generic,NTx86` (x64
+  `NTamd64`); `[Generic.NTx86]` lists `PCI\CC_0C0330` and `ACPI\PNP0D10`,
+  both `=Generic.Install`. 8.1 (`DriverVer=10/06/2014,6.3.9600.17393`,
+  `PnpLockdown=1`) adds `ACPI\PNP0D15` `=Generic_NoDebug.Install`.
+- **`FeatureScore=80`** on `[Generic.Install.NT]` (and 8.1's
+  `[Generic_NoDebug.Install.NT]`), with the INF's own comment
+  "FeatureScore values between 0x00-0x7F are reserved. Values 0x81-0xFE are
+  for OEMs."
+- **Three `ExcludeID` lines** on `[Generic.Install.NT]`, unchanged in 8.1:
+  `PCI\VEN_1B73&DEV_1000&CC_0C0330`, `PCI\VEN_1B73&DEV_1400&CC_0C0330` and
+  `PCI\VEN_1B73&DEV_1009&REV_00` - Fresco Logic's FL1000, FL1400 and the
+  first FL1009 revision, which the inbox driver therefore never takes.
+- `[ControlFlags]` `BasicDriverOk = *` and `ExcludeFromSelect = *`; the
+  services `USBXHCI` (`StartType 3`, `BootFlags` 16, commented
+  `CM_SERVICE_USB3_DISK_BOOT_LOAD`) and `UCX01000`; `[Generic_AddReg.HW]`
+  sets `MSISupported` 1 with no `MessageNumberLimit`; `Needs=PciD3ColdSupported`
+  from `machine.inf`; 8.1 adds a `.WMI` section.
+
+`usbxhci.sys` itself refuses no controller by id in what was read: a
+string and immediate search of the x64 builds finds no refusal table, and
+`Controller_RetrieveDeviceFlags` (8 x64 `0x46C54`; 8.1
+`Controller_PopulateDeviceFlags`) only sets quirk bits for hard-coded ids
+(`1B73:1009` flags 2, `1B6F:7023` `|= 0xC`, `1B21:1040` to `1042`
+`|= 0x10`), with more from the kernel shim database (keys formatted
+`USBXHCI:PCI\VEN_%04X&DEV_%04X...`, `g_KseQueryDeviceFlags`) and the
+registry, whose contents are not in the image. What the bits do was not
+traced, nor the x86 function.
+
+`usbhub3.inf` (`FeatureScore=0` on 8, `FeatureScore=80` on 8.1, with the
+comment `usbxhci.inf` carries) binds `USB\ROOT_HUB30`, `USB\USB30_HUB` and
+`USB\USB20_HUB`, the ids Windows 8's own USB 3 stack gives its hubs;
+`usb.inf` keeps `USB\CLASS_09&SUBCLASS_01` and `USB\CLASS_09` (its
+`StandardHub.Dev` includes `usbport.inf`'s `ROOTHUB.Dev`) and
+`USB\COMPOSITE` (service `usbccgp`).
+
+**How Windows ranks the two INFs** (documentation: Microsoft's "How
+Windows Ranks Driver Packages" and "Signature Score" pages, read
+2026-10-22; Windows Vista and later). A rank is `0xSSGGTHHH`, lower is
+better: signature score `SS`, feature score `GG` ("An unspecified feature
+score is represented as 0x00FF0000"), identifier score `THHH`. An inbox
+package gets the best signature score; a package "not signed or whose
+signing state is unknown" the worst. This package has no catalog (record
+19 section 3: the x64 binaries carry an embedded signature, the package
+none; Device Manager says "Not digitally signed"), and its INFs no
+`FeatureScore`. Both INFs match the same compatible id, `PCI\CC_0C0330`, so
+the identifier scores are equal, and **`usbxhci.inf` outranks this
+package's INF on its signature score alone, and again on its feature score
+(0x80 against an unspecified 0xFF)**; `DriverVer` dates (this package's
+`10/19/2026`) are compared only between equal ranks. Inference, VM: on 8
+and 8.1, `xhci98.sys` takes a controller only through the installer's
+forced route (`UpdateDriverForPlugAndPlayDevices` with
+`INSTALLFLAG_FORCE`, `inst_eng.c` `call_flags`), never by Windows' own
+choice - which is the default 43.29 wants - **except on the three excluded
+Fresco Logic ids**, where no inbox INF matches and a staged `xhci98.inf`
+is the only candidate, so a controller of those ids that appears after the
+package was staged (a hot-plugged card, a tunnelled one) would be offered
+this driver unasked. The uninstall's way back is the same rule in reverse,
+and only where that INF matches: with the OEM INF deleted, the next search
+finds `usbxhci.inf` alone on a controller it does not exclude, and on one
+of the three excluded Fresco Logic ids finds no inbox driver at all (the
+controller is left without one, as before the install; inference, VM).
+
+**This package's INFs on NT 6.2 and 6.3.** `src\xhci98.inf`'s
+`%Mfg%=XhciModels,NTx86.6.0` and `src\xhci98-amd64.inf`'s
+`NTamd64,NTamd64.6.0` mean the `.6.0` models sections (`Xhci.Dev6` and its
+siblings) apply on 6.2 and 6.3 as on 6.0 and 6.1: the setup engine takes
+the highest decoration not above the running version, and no INF here has
+a `.6.2` or `.6.3` one. `Signature="$CHICAGO$"` is what Vista and 7 took;
+whether 8's engine takes it unchanged is VM.
+
+**The bus's own ids.** The same sweep finds no line containing `XHCI98`
+in any Windows 8 or 8.1 INF, no `USB\` token with `*` or `?`, and as the
+only `USB\X...` token `wdma_usb.inf`'s `USB\XUSB_AUDIO_DEVICE` (as on Vista
+and 7). The non-VID `USB\` ids matched are 8.6's list plus
+`USB\ROOT_HUB30`, `USB\USB30_HUB`, `USB\USB20_HUB`, the failure ids `usb.inf`
+binds to `BADDEVICE.Dev` (`USB\RESET_FAILURE`, `USB\DESCRIPTOR_FAILURE`,
+`USB\SET_ADDRESS_FAILURE`, `USB\DEVICE_DESCRIPTOR_VALIDATION_FAILURE`,
+`USB\CONFIGURATION_DESCRIPTOR_VALIDATION_FAILURE`,
+`USB\PORT_LINK_SSINACTIVE`, `USB\PORT_LINK_COMPLIANCE_MODE`; 8.1 adds
+`USB\CONFIG_DESCRIPTOR_FAILURE`), and a few private names (`USB\GENDISK`,
+`USB\HPRESTSCAN`, `USB\HPRESTSCANV1`, `USB\HPSOAPSCAN`,
+`USB\D8F87D9C-4EE4-4A61-92D1-3CAA420A227B`): **none is one of 10.13.1's
+four bases**, so 10.13.2's conclusion holds on 8 and 8.1 for the swept
+set.
+
+**The UAS interface has an inbox driver on 8 and 8.1.** `uaspstor.inf`
+(`Class=SCSIAdapter`, no `FeatureScore`) binds `USB\Class_08&SubClass_06&Prot_62`,
+the id `src\uas\xhciuas.inf` and `xhciuas-amd64.inf` bind; `usbstor.inf`
+binds the Bulk-Only ids `USB\Class_08&SubClass_{02,05,06,08}&Prot_50` and
+`SubClass_08&Prot_52`, as on 7. By the ranking above, **an unforced search
+on 8 and 8.1 puts `uaspstor.sys` on a UAS interface of this bus, not
+`xhciuas.sys`**, and 6.12.4 reads what `uaspstor` then asks of the bus.
+
+#### 6.12.2 What the class drivers send the device PDO
+
+| Binary | IOCTLs sent to the PDO | `QUERY_INTERFACE` | URB functions | `usbd.sys` imports | Against 7 SP1 (6.4) |
+|---|---|---|---|---|---|
+| `hidusb` (all three) | `SUBMIT_URB` (`HumCallUSB` `0x1931` / `0x20D2` / `0x1ACF`), `GET_PORT_STATUS` (`HumGetPortStatus` `0x2CFC` / `0x3DE4` / `0x4783`), `RESET_PORT` (`HumResetParentPort` `0x2D72` / `0x3EAE` / `0x4C0F`), `SUBMIT_IDLE_NOTIFICATION` (`0x31CB` / inlined in `HumInternalIoctl` `0x1283` / `0x24C1`) | none | 0x00 (and the unconfigure, 0x3C / 0x58), 0x02, 0x09, 0x0B, 0x28, 0x1B, 0x1C, 0x1E, 0x2A | `CreateConfigurationRequestEx`, `ParseConfigurationDescriptorEx` | **identical** |
+| `hidclass` (all three) | none (its idle request to `hidusb` is `IOCTL_HID_SEND_IDLE_NOTIFICATION_REQUEST` `0xB002B`, which `hidusb` turns into `0x220027` as on 7) | none | none | none | `QUERY_CAPABILITIES` (Size 0x40, Version 1; a failure fails start on 8.1, inferred on 8), `SET_POWER` and `WAIT_WAKE` through `PoRequestPowerIrp`; 8.1 drives power through PoFx but sends the PDO the same kinds |
+| `usbstor` (all three) | as 7: `SUBMIT_URB`, `GET_PORT_STATUS` (`IsDeviceConnected` `0xA424` / `0xCC72` / `0xED02`), `RESET_PORT` (`ResetDevice` `0xA574` / `ResetDeviceWorkItem` `0xC6BD` / `0x1055E`), `GET_TOPOLOGY_ADDRESS` (`IsDeviceConnectedToRootHub` `0x11AA7` / `0x16725` / `0x1BF36`); new: `0x220FB3`, `0x49104B`, `0x49140F`, `0x491404`, `0x491408` (6.12.3) | USBDI **V1**, Size 0x24 / 0x48 (`USBSTOR_GetBusInterface` `0x11984` / `0x1657F` / `0x1B99E`; `IsDeviceHighSpeed`, `InterfaceDereference`; a failure stores "not High Speed" and start goes on); new: `GUID_USBD_INTERFACE_V1` from `USBD_CreateHandle` (6.12.3) | as 7: 0x00, 0x01, 0x09, 0x0B, 0x12, 0x1B, 0x1E; 8.1 adds 0x09 sites (an async-notification interrupt IN path) | `CreateConfigurationRequestEx` | every 7 request kept; the new ones and their fallbacks in 6.12.3 |
+| `uaspstor` (all three; none on 7) | `SUBMIT_URB`, `GET_PORT_STATUS` (`IsDeviceConnected` `0x7121` / `0x9538`; 8.1 `BulkResetDeviceWorkItem` `0x6962`), `RESET_PORT` (`ResetDevice` `0x73D2` / `0x98C4` / `0x6A3B`), `0x220FB3`, `0x49104B`, `0x49140F`, `0x491404`, `0x491408` | USBDI **V1** (`UaspGetBusInterface` `0x6EEB` / `0x9249` / `0x6621`), and `GUID_USBD_INTERFACE_V1` from `USBD_CreateHandle` | 0x00, 0x09, 0x0B, 0x1E, **0x35 `OPEN_STATIC_STREAMS`** (Length 0x20 / 0x30, `StreamInfoVersion` 0x100, `StreamInfoSize` 0x10 / 0x18); 8.1 adds 0x02; no 0x36, 0x37, 0x38 | `CreateConfigurationRequestEx` | new driver: 6.12.4 |
+| `USBAUDIO` (all three) | as 7: `SUBMIT_URB`, `RECORD_FAILURE` (`USBHwLogStartFailure`) | USBDI **V1**, Size 0x24 / 0x48 (`USBHwGetUsbBusInterface` `0xDA95` x86; inlined in `USBDeviceStart` x64); `IsDeviceHighSpeed`, `QueryBusTime`, `InterfaceDereference`; **a failed query fails start** (after `RECORD_FAILURE`) | as 7: 0x00, 0x01, 0x02, 0x09, 0x0A, 0x0B, 0x1B, 0x1C, 0x1E | `ParseDescriptors`, `ParseConfigurationDescriptorEx`, `CreateConfigurationRequestEx` | **identical** |
+| `Wdf01000` USB target (KMDF 1.11 on 8, 1.13 on 8.1) | `SUBMIT_URB` (`FxFormatUsbRequest`), `RESET_PORT` (`FxUsbDevice::Reset`), `GET_PORT_STATUS` (`FxUsbDevice::GetPortStatus`; `IsConnected` reads bit 1), `CYCLE_PORT` (`FxUsbDevice::FormatCycleRequest`), `SUBMIT_IDLE_NOTIFICATION` (`FxPkgPnp::PowerPolicySubmitUsbIdleNotification`), `0x49104B` | USBDI **V1** (Size 0x24 / 0x48, `FxUsbDevice::InitDevice` `0x3F103` / `0x59516` / `0x887D3`), and on any failure **V0** (0x20 / 0x40); plus `GUID_USBD_INTERFACE_V1` from `USBD_CreateHandle` when the client created the target "WithParameters" | 0x0B (and string descriptors), **0x13 `GET_STATUS_FROM_DEVICE`** at create (a failure tolerated), 0x00, 0x01, 0x08, 0x09, 0x02, 0x1E; isochronous URBs built by the client | none | no KMDF was read on 7, so against the 7 class drivers: `CYCLE_PORT` and URB 0x08 / 0x13 are sent by no 7 driver read |
+| `winusb` (all three) | none of its own; forwards an upper driver's `SUBMIT_IDLE_NOTIFICATION`; the rest through KMDF | through KMDF: `WdfUsbTargetDeviceCreateWithParameters` with contract `0x602` in `PrepareHardware` (`0x1A6B` / `0x1E87` / `0x12F4A`), so `USBD_CreateHandle` runs; a failed create fails start | 0x0B of its own; 8.1 adds isochronous (0x0A, `WinUSB_SetupIsochUrb`) | 8.1 only: `ParseConfigurationDescriptorEx`, `ParseDescriptors` | new to this reading |
+| `usbccgp` (all three) | as 7: `SUBMIT_URB`, `RESET_PORT` (`ResetDevice`), `RECORD_FAILURE` (`ReportStartFailData`), `GET_TOPOLOGY_ADDRESS` (`UsbcGetTopologyAddress`), `SUBMIT_IDLE_NOTIFICATION` (`SubmitParentIdleIrp`); new: `0x490003` `REGISTER_COMPOSITE_DEVICE`, `0x490007` `UNREGISTER_COMPOSITE_DEVICE`, `0x49000B` `REQUEST_REMOTE_WAKE_NOTIFICATION`, `0x49104B`, `0x49104F`; 8.1 also `0x220FB3` | `GUID_USBD_INTERFACE_V1` then USBDI V1 (from `USBD_CreateHandle`); `USB_BUS_INTERFACE_USBC_CONFIGURATION_GUID` V1, Size 0x34 / 0x68, **as on 7**; new: `GUID_D3COLD_SUPPORT_INTERFACE` V1 (result ignored) | as 7: 0x00, 0x01, 0x0B, 0x2A; new: **0x32 `CONTROL_TRANSFER_EX`** (function-suspend `GET_STATUS` and `SET_FEATURE`, only after a successful `FUNCTION_SUSPEND` capability query) | `ParseConfigurationDescriptorEx`, `ParseDescriptors` | not used under this bus, which presents its composite parents as `USB\XHCI98_COMPOSITE` with no compatible id (10.13.1), so `usb.inf`'s `USB\COMPOSITE` row never matches; read for completeness |
+
+**Sent by none of these on 8 or 8.1** (byte scans of all nine class-driver
+and KMDF images): `GET_DEVICE_HANDLE(_EX)`, `GET_TT_DEVICE_HANDLE`,
+`GET_PARENT_HUB_INFO`, `NOTIFY_IDLE_READY`, `GET_BUSGUID_INFO`; the
+`USB_BUS_INTERFACE_HUB_GUID`, `USB_BUS_INTERFACE_HUB_SS_GUID` and
+`USB_BUS_INTERFACE_HUB_MINIDUMP_GUID` bytes appear in none of them, and no
+`QUERY_INTERFACE` asks USBDI above version 1. Windows 8's own `usbhub3.sys`
+answers `GET_PARENT_HUB_INFO`, `GET_DEVICE_HANDLE_EX`,
+`GET_TT_DEVICE_HANDLE`, `NOTIFY_IDLE_READY` and `GET_ROOTHUB_PDO` at its
+PDOs with `STATUS_NOT_SUPPORTED` (6.12.5), so no inbox class driver can
+depend on them. URB 0x2A (`hidusb`, `usbccgp`) is the request this bus
+already refuses (`hcd_urb.c`), as on 7.
+
+#### 6.12.3 The Windows 8 client contract: `usbdex`, and the versions a client asks for
+
+**Windows 8's client routines are a static library, not `usbd.sys`.**
+`USBD_CreateHandle`, `USBD_QueryUsbCapability`, `USBD_UrbAllocate`,
+`USBD_AssignUrbToIoStackLocation`, `USBD_CloseHandle` and their
+`USBDInternal_*` helpers are named by the PDBs inside `usbstor`, `uaspstor`,
+`usbccgp`, `Wdf01000`, `usbhub3` and `usbhub`; Windows 8's `usbd.sys`
+exports none of them. Read in each copy, with the same behaviour in all:
+
+1. **`USBD_CreateHandle`** sends `IRP_MN_QUERY_INTERFACE` for
+   `GUID_USBD_INTERFACE_V1` `{deee98ea-c0a1-42c3-9738-a04606c84e93}` (the
+   value of the PDB symbol of that name), **Version `0x602`, Size 0x58
+   (x86) / 0x98 (x64)**. Answered, the handle's contract is `0x602`. Refused
+   for any reason, the contract becomes `0x600`, the status is cleared, and
+   it asks **`USB_BUS_INTERFACE_USBDI_GUID` Version 1, Size 0x24 / 0x48**,
+   calls `IsDeviceHighSpeed` (cached for later) and `InterfaceDereference`.
+   Refused too, the contract is `0xFFFFFFFF` and **the handle is still
+   returned with success**: `USBD_CreateHandle` fails only on a bad
+   parameter, the IRQL or pool, never on a bus's refusal. (`Wdf01000`'s copy
+   calls neither member through a NULL check; `usbccgp`'s 8.0 copy calls
+   `IsDeviceHighSpeed` unchecked, its 8.1 copy checks it.)
+2. **`USBD_QueryUsbCapability`**, by contract: `0x602` sends
+   `IRP_MJ_INTERNAL_DEVICE_CONTROL` **`0x49104B`** (`FILE_DEVICE_USBEX`,
+   function `0x412`, `METHOD_NEITHER`; no header read names it;
+   `Argument1` a 0x20 / 0x28-byte block of `USHORT 1`, `USHORT size`, the
+   interface's context, the capability GUID and the output length, the
+   output in `SystemBuffer`); `0x600` answers **locally, with no IRP**:
+   `GUID_USB_CAPABILITY_DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE` succeeds
+   when the cached `IsDeviceHighSpeed` was TRUE and is otherwise
+   `STATUS_NOT_SUPPORTED`, `GUID_USB_CAPABILITY_SELECTIVE_SUSPEND` succeeds,
+   and **every other capability, `STATIC_STREAMS` and
+   `SUPER_SPEED_COMPATIBLE` among them, is `STATUS_NOT_IMPLEMENTED`
+   (`0xC0000002`)**; `0xFFFFFFFF` returns `STATUS_NOT_IMPLEMENTED` for all.
+3. **`USBD_UrbAllocate`** and its siblings call the V1 interface's
+   allocators when the contract is `0x602` (a direct call into the bus, no
+   IRP) and `ExAllocatePool` otherwise.
+
+The capability GUIDs, from PDB-named symbols in these images (Microsoft's
+`USBD_QueryUsbCapability` page names them without values):
+`SELECTIVE_SUSPEND` `{755c630d-c8a0-4765-946f-90cc703856a4}`,
+`CHAINED_MDLS` `{f5ceeb23-ad90-458c-979a-d59b3ad6884f}`, `STATIC_STREAMS`
+`{09051e1f-0dc9-4e6b-8b12-960cbd81aa8f}`, `FUNCTION_SUSPEND`
+`{f4563183-d66e-42bd-bd53-1ac7b04cd59d}`,
+`DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE`
+`{81a885a6-f239-42a2-8397-a5d95bea6953}`, `..._SUPER_SPEED_COMPATIBLE`
+`{8a2f776c-9bd0-4f29-9771-c7a38846d4c7}`, `..._FULL_SPEED_COMPATIBLE`
+`{cde43191-1fad-4120-a7ab-740956c66f37}`, `..._LOW_SPEED_COMPATIBLE`
+`{ad6f2a13-c4d1-4925-83cc-96857a2431d9}`,
+`CLEAR_TT_BUFFER_ON_ASYNC_TRANSFER_CANCEL`
+`{09b76d52-0a6d-4e4f-a911-d036d1929497}`.
+
+**Who answers `GUID_USBD_INTERFACE_V1` on Windows 8.** Only
+`ucx01000.sys`, at the PDOs `usbhub3.sys` passes the query down from
+(`RootHub_EvtUSBDInterfaceV1Request`: Size must equal 0x58 / 0x98, Version
+must equal `0x602`, else `STATUS_NOT_SUPPORTED`; its members are UCX's
+URB allocators, `Xrb_Allocate` and the like). **Windows 8's own USB 2.0 hub,
+`usbhub.sys`, does not answer it** (`UsbhPdoPnp_QueryInterface` completes an
+unknown GUID with the status it came with) and does not handle `0x49104B`
+either, so every device on an EHCI or UHCI/OHCI controller of a Windows 8
+system already runs the inbox clients on the `0x600` path. That is the path
+this bus puts them on: `hcd_pdo.c` completes a `QUERY_INTERFACE` it does not
+serve with the status it came with, and `hcd_urb.c` refuses an unknown
+internal IOCTL with `STATUS_NOT_SUPPORTED`.
+
+**The versions a client asks for, then.** `USB_BUS_INTERFACE_USBDI_GUID`:
+Version 1 (Size 0x24 / 0x48) from every reader and from `usbdex`'s
+fallback, Version 0 (0x20 / 0x40) from KMDF after a refused V1; never 2 or
+3. This bus answers versions 0 to 3 (`HcdUrbQueryInterface`), so every one
+asked is served. `USB_BUS_INTERFACE_HUB_GUID` (and the `HUB_SS` and
+`HUB_MINIDUMP` interfaces): asked by **no** class driver read on 8 or 8.1,
+as by none on 2000 to 7; on Windows 8 it is a hub-to-bus interface
+(`usbhub.sys` passes it down to `usbport.sys`). `USB_BUS_INTERFACE_USBC_CONFIGURATION_GUID`:
+`usbccgp` only, as on 7. `GUID_USBD_INTERFACE_V1`: every `usbdex` client,
+with the fallback above.
+
+**`usbd.sys` itself.** Windows 8 keeps every Windows 7 export (18 on x86
+with the three decorated aliases, 15 on x64) and adds five, imported only
+by `usbhub.sys` and `usbhub3.sys`: `USBD_AddDeviceToGlobalList`,
+`USBD_RemoveDeviceFromGlobalList`, `USBD_MarkDeviceAsDisconnected`,
+`USBD_AllocateHubNumber`, `USBD_ReleaseHubNumber`. `USBD_GetUSBDIVersion`
+stores `0x600` / `0x100` as on 7; `USBD_QueryBusTime` returns
+`STATUS_NOT_SUPPORTED` with no IRP, as on 7. New is a **Kernel Shim Engine
+shim**: `ShimLoad` (x86 `0x6006`; inlined into `DllInitialize` on x64)
+registers `usbshim` (`{fd8fd62e-4d94-4fc7-8a68-bff7865a706b}`) through
+`KseRegisterShimEx`, with one hook, on `IofCallDriver`
+(`ShimHookIofCallDriver`, `0x1D32` / `0x2024` / `0x2DB4`): an IRP with
+fewer stack locations than its target needs is re-sent as a new IRP of the
+right depth and the original completed from it. Which drivers it is
+applied to is decided by the kernel's shim database, not by `usbd.sys`;
+not read. It concerns a client's IRPs, not what the bus answers.
+
+#### 6.12.4 `uaspstor`: what a UAS device needs from the bus on 8 and 8.1
+
+`UasInitializeDevice` (`0x24F0` / `0x3050` / `0x2D98`) in order: the
+descriptors, a UAS alternate setting with four pipes (else `0xC0000185`),
+then `USBD_CreateHandle`, then `USBD_QueryUsbCapability(STATIC_STREAMS)`:
+
+- **Streams granted** (contract `0x602`, `0x49104B` answering a count):
+  URB `0x35` on the three pipes; any failure there **fails start**, with no
+  fallback to the mode below.
+- **Streams not granted** (the query fails): `UaspGetBusInterface` asks
+  USBDI V1 and calls `IsDeviceHighSpeed`. TRUE: 32 tags, UAS without
+  streams ("HS" mode, `IssueCommandHS`). FALSE, or the query refused:
+  **start fails with `0xC0000182`**.
+
+On this bus the contract is `0x600`, so the capability query returns
+`STATUS_NOT_IMPLEMENTED`, and `hcdBusifHighSpeed` answers TRUE only for a
+High-Speed connection (`pdo->SpeedClass == XHCI_SPEED_HIGH`). So under
+`uaspstor` on 8 and 8.1 **a High-Speed UAS device would run without
+streams, and a SuperSpeed UAS device would fail to start** (inference from
+the code above; VM). This package's own `xhciuas.sys` reaches streams
+through the bus's private interface (`xhci98_streams.h`), not through
+`usbdex`; but 6.12.1's ranking puts `uaspstor` on the interface unless the
+installer forces `xhciuas.inf` there. For 43.29 (owner's decision, 6.12.10):
+force `xhciuas.inf` onto the UAS interfaces under this bus as on 7 (which
+reaches only the devices present when the installer runs: `install_inf`
+in `inst_eng.c` forces the hardware ids of the devices it finds, and a UAS
+disk plugged in for the first time later is ranked by Windows, so it gets
+`uaspstor`), or
+implement `GUID_USBD_INTERFACE_V1` and `0x49104B` with URB `0x35` and
+`0x36` for `uaspstor` (and with them the V1 interface's allocators, since a
+`0x602` contract sends `USBD_UrbAllocate` there), or leave UAS disks to
+`usbstor`'s Bulk-Only alternate setting where the device has one. The
+owner took the second on 2026-10-22 (6.12.10): no forced `xhciuas.inf` on
+8 and 8.1, the bus answering the `0x602` contract so that `uaspstor`
+starts a SuperSpeed UAS disk with streams (43.30); what is said above of
+the `0x600` path is the bus as it is before that work.
+
+#### 6.12.5 What Windows 8's own hub PDOs answer
+
+The set an inbox Windows 8 class driver meets under Microsoft's stack,
+read from the PDO dispatch of each hub driver (`usbhub3.sys`
+`HUBPDO_EvtDeviceWdmIrpPreprocess`, 8 x64 `0x112D8`; `usbhub.sys`
+`UsbhPdoInternalDeviceControl`); the 8 x64 switch decoded in full, the other
+builds compared by their constants:
+
+| Request at the device PDO | `usbhub3.sys` (USB 3 stack) | `usbhub.sys` (USB 2.0 stack) | This bus today |
+|---|---|---|---|
+| `SUBMIT_URB` | served (0x09 and 0x0A sent straight down to UCX; 0x00, 0x01, 0x1E, 0x30, 0x31, 0x35, 0x36 queued at the PDO) | served (to `usbport`) | served, 0x30 and 0x31 among them; 0x32 to 0x38 refused |
+| `RESET_PORT`, `GET_PORT_STATUS`, `CYCLE_PORT`, `SUBMIT_IDLE_NOTIFICATION`, `RECORD_FAILURE`, `GET_TOPOLOGY_ADDRESS`, `GET_BUS_INFO` | served | served | served |
+| `GET_HUB_COUNT`, `ENABLE_PORT` | completed | served | `GET_HUB_COUNT` served; `ENABLE_PORT` refused |
+| `GET_HUB_NAME`, `GET_CONTROLLER_NAME`, `GET_DEVICE_CONFIG_INFO`, `GET_DEVICE_HANDLE` | served | served | `GET_DEVICE_HANDLE` served; the rest refused |
+| `GET_ROOTHUB_PDO`, `GET_PARENT_HUB_INFO`, `GET_DEVICE_HANDLE_EX`, `GET_TT_DEVICE_HANDLE`, `NOTIFY_IDLE_READY` | `STATUS_NOT_SUPPORTED` | served but `GET_PARENT_HUB_INFO` (`STATUS_NOT_SUPPORTED`) | refused |
+| `0x220FB3` (function `0x3EC`; no header read names it) | a port reset, queued | `UsbhFdoResetPdoPort`, as `RESET_PORT` | refused |
+| `0x490003`, `0x490007`, `0x49000B`, `0x49104F` (composite) | served or passed to UCX | not handled | refused |
+| `0x49104B` (capability query) | answered at the PDO for `FUNCTION_SUSPEND`, `STATIC_STREAMS` and the four `DEVICE_CONNECTION_*` GUIDs, the rest by UCX (`CHAINED_MDLS`, `SELECTIVE_SUSPEND`, `STATIC_STREAMS`) | not handled | refused |
+| `0x491404` (`UsbhFdoHandleGetDumpDataIoctl`), `0x491408` (its sibling, inferred free), `0x49140F` (`UsbhFdoHandleNotifyForwardProgress`) | served or forwarded | served or forwarded | refused |
+| `QUERY_INTERFACE` USBDI | passed to UCX: V0 to V3, by Size | passed to `usbport` (its range not read) | V0 to V3 |
+| `QUERY_INTERFACE` `GUID_USBD_INTERFACE_V1` | passed to UCX (6.12.3) | not answered | not answered |
+| `QUERY_INTERFACE` `GUID_D3COLD_SUPPORT_INTERFACE`, `GUID_PNP_LOCATION_INTERFACE` | answered | `PNP_LOCATION` answered; `D3COLD` from 8.1 | not answered |
+
+The names of `0x220FB3` and the `0x4914xx` codes come from the PDB
+function names that handle them, not from a header; Microsoft's pages
+read give no numeric values for them.
+
+**What the new requests mean for this bus** (static, with the
+inference marked):
+
+- `0x220FB3` is sent by `usbstor` and `uaspstor` **instead of** `RESET_PORT`
+  when the device is on the paging, hibernation or dump path
+  (`FdoDeviceUsageNotification` sets the flag; 8.1 `usbccgp` likewise), and
+  its failure is not retried as `RESET_PORT` (`ResetDeviceWorkItem` retries
+  the same request up to three times). Refused here, a reset of a disk that
+  holds a page file would fail. Inference: rare under this package, whose
+  disks are not boot disks on NT 6.x; VM.
+- `0x49140F`, `0x491404`, `0x491408` are sent on the same paths (forward
+  progress, crash dump); `usbstor` tolerates a refused `0x49140F` (a flag
+  stays clear); the dump requests' failure paths were not read.
+- Everything else new is behind a `0x602` contract and never sent on this
+  bus.
+
+#### 6.12.6 What the bus already answers that 8's drivers need
+
+On the `0x600` path every inbox client read starts on what this bus serves
+today: `hidusb` and `USBAUDIO` ask exactly the 7 set; `usbstor` adds only
+requests with fallbacks or paging-path ones; KMDF needs USBDI V1 or V0 with
+a non-NULL `GetUSBDIVersion` (called unchecked) and, when V1 is answered,
+non-NULL `IsDeviceHighSpeed` and `InterfaceDereference` (`usbdex` calls
+them unchecked) - `HcdUrbQueryInterface` fills all three - and the URBs
+0x0B, 0x13 (a failure tolerated), 0x00, 0x01, 0x08, 0x09, 0x02 and 0x1E;
+winusb's isochronous path on 8.1 needs 0x0A and `QueryBusTime`. **The one
+inbox driver that does not start on this bus by static reading is
+`uaspstor` on a SuperSpeed UAS device** (6.12.4).
+
+#### 6.12.7 Device Manager's pages
+
+Windows 8's and 8.1's `usbui.dll` carry as DWORD bytes the request codes
+Windows 7's does (`0x220408` to `0x220450`, the 8.1 build `0x220440`
+twice), plus **`0x22045C`, `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`**,
+which none of the Vista SP2 and Windows 7 SP1 builds of section 8's table carries
+(`tools\{vista,win7}-{x86,x64}-extracted\ui\usbui.dll`; a byte scan of
+the files for `0x0022xxxx` codes of function index 0x100 to 0x13F, not
+attributed to code). The bus
+answers it on every target since task 36.18 (8.4), and its capable flags
+stay false for a USB 3 device on a USB 2.0 port (8.4, the BOS read at High
+Speed left out). What reads it on 8 and 8.1 - Explorer's details pane in
+`shell32.dll` and a Devices and Printers status provider in `usbui.dll`,
+for the "can perform faster" line - is 6.12.11; what 8's property pages
+do with it is not read.
+
+#### 6.12.8 The x64 test signature on 8 and 8.1
+
+Nothing in this reading changes record 19: the x64 binaries carry the
+embedded SHA-1 Authenticode test signature, no catalog, the services are
+demand-start. Not read statically: whether Windows 8's and 8.1's code
+integrity (`ci.dll`, extracted beside the files above and not read) loads a SHA-1-signed test binary in test-signing mode as 7
+did, the Secure Boot interaction (the owner's Windows 10 rows assume Secure
+Boot off; not read for 8),
+and what the 32-bit Windows 8 does with the unsigned x86 binary (record 19
+section 3's premise, that 32-bit Windows does not enforce, is read for 7
+and earlier only). All three are 43.24's and 43.31's legs.
+
+#### 6.12.9 What only a running system settles (VM, owed to 43.24 and 43.31)
+
+1. The forced install on 8 and 8.1, x86 and x64: `Signature="$CHICAGO$"`
+   and the `.6.0` models taken by 8's engine, the unsigned-package prompt,
+   and that Windows does not move the controller back to `usbxhci.sys` by
+   itself afterwards (a rescan, Windows Update's driver search).
+2. The ranking: with this package staged, a controller `usbxhci.inf` matches
+   stays on `usbxhci.sys` unless forced; and a Fresco Logic `1B73:1000`,
+   `1B73:1400` or `1B73:1009` rev 00 controller is offered this driver
+   unasked (needs such a controller or an emulator that presents one).
+3. The uninstall giving a controller `usbxhci.inf` matches back to
+   `usbxhci.sys` (and the root hub to `usbhub3.sys`); on an excluded
+   Fresco Logic id, what the controller is left with.
+4. The class drivers on the `0x600` path as read: HID, a Bulk-Only stick, a
+   hub, audio, a winusb device; the trace line `hcd: QUERY_INTERFACE not
+   answered` with `GUID_USBD_INTERFACE_V1`'s Data1 `deee98ea` and
+   `hcd: internal IOCTL not served` for any new code (a debug build).
+5. A UAS disk on 8 under `uaspstor`: High Speed (no streams, expected to
+   run) and SuperSpeed, which after 43.30's `0x602` contract (the owner,
+   2026-10-22, 6.12.10) is expected to start with streams and run, a
+   SuperSpeed UAS disk plugged in for the first time after the install
+   included; read on the bus before that work, SuperSpeed is expected to
+   fail with `0xC0000182` (Code 10), a baseline only. No forced
+   `xhciuas.inf` leg on 8 and 8.1.
+6. Test-signing mode on 8 x64 and 8.1 x64 with Secure Boot off, the
+   watermark and the Code shown without it; 8 x86 with the unsigned
+   binary.
+7. The Device Manager pages (`usbui.dll` 6.2 and 6.3) on the controller
+   and root hub, as sections 8.1 to 8.3 read them on 7.
+
+**What 43.25 needs from a Windows 8 VM** (not this task's, noted so the
+legs can be planned together): under Microsoft's stack, a SuperSpeed stick
+on a USB 2.0 port (QEMU: `qemu-xhci` with a `usb-storage` device on a
+USB 2.0 port, or an `usb-ehci` controller) with Explorer's details pane
+and Device Manager read for the "can perform faster" line and its source -
+a property (`DEVPKEY_Device_*` read with `pnputil` or the Details tab), the
+hub's WMI or notification, or the `_EX_V2` flags `usbui.dll` 6.2 reads
+(6.12.7); the same device under this bus on 8 after a forced install (43.31
+reads it beside Windows' own driver); and on Vista or 7, a High-Speed
+device behind a Full-Speed hub under Microsoft's stack and under this bus,
+for 7's "can perform faster" balloon. The strings, their callers and
+what they test, and the Windows 7 legs, are read in 6.12.11 (task 43.25),
+which lists what is left for this VM.
+
+#### 6.12.10 Questions this reading leaves for the owner
+
+1. **The UAS interface on 8 and 8.1** (6.12.4): force `xhciuas.inf` there
+   (as on 7; the installer already forces every INF but Stor98's first
+   install and the 2000 filter), or teach the bus the `0x602` contract for
+   `uaspstor`. Recommendation: force `xhciuas.inf`; the `0x602` contract
+   brings UCX's allocator interface with it, which Windows 8's own USB 2.0
+   stack does not offer either. The force covers only the disks present
+   at install; for a disk first plugged in later, either the release notes
+   say to run the installer again (or use Device Manager's Update Driver),
+   or 43.29 finds a way for the package to win that device's ranking (a
+   more specific id the bus presents and `xhciuas.inf` alone names is one
+   to read: 10.13's namespace rules apply). The owner to choose.
+2. **`GUID_USBD_INTERFACE_V1` and `0x49104B`**: recommendation, not
+   answered (the `0x600` path is the one Windows 8's own `usbhub.sys`
+   gives every client, so every inbox client already copes with it).
+3. **`0x220FB3`**: recommendation, served as `RESET_PORT` (the alias
+   `usbhub.sys` makes), a one-line change with a host vector, since its
+   refusal has no fallback in `usbstor` and `uaspstor`; 43.29 to take it or
+   not.
+4. **The three Fresco Logic ids**: whether 43.29's install should avoid
+   staging `xhci98.inf` where it would become the only match, or say so in
+   the note.
+
+Owner, 2026-10-22: (1) and (2) `xhciuas.inf` is not forced on 8 and
+8.1; instead the bus answers Windows 8's newer client contract - the
+`0x602` `GUID_USBD_INTERFACE_V1` interface, the capability query
+`0x49104B` and stream allocation - so that Windows' own `uaspstor` runs a
+UAS disk at SuperSpeed, a disk first plugged in after the install
+included. This reverses the recommendations of questions 1 and 2 above;
+what the contract needs beyond them (6.12.3, 6.12.4: UCX's allocator
+interface among them) is 43.30's design to settle. (3) `0x220FB3` is
+served as `RESET_PORT`. (4) The three Fresco Logic ids are noted only;
+43.29's install does not change what it stages for them.
+
+#### 6.12.11 "Device can perform faster when connected to USB 3.0" (task 43.25, 2026-10-22)
+
+The report (owner, 2026-10-20): a Windows 8 user saw Explorer's details
+pane show "Device can perform faster when connected to USB 3.0" for a USB
+3 stick on a USB 2.0 port under Windows 8's own USB 3 stack, and not under
+`xhci98.sys` forced onto 8. This section reads where the line comes from
+and what it tests (**static**, Windows 8 x86 and 8.1 x64; no Windows 8
+system has run), what this bus answers for each input (**static**, read
+from `src\` at `77384e93`), and the Windows 7 legs of the High-Speed notice
+(**measured**, one Windows 7 x86 guest, 2026-10-22).
+
+**Method.** Files taken with `7z e` from `sources\install.wim` of
+`en_windows_8_pro_vl_x86_dvd_917830.iso` and of
+`en_windows_8.1_with_update_x64_dvd_6051480.iso` (image 1), the media of
+6.12, into a scratch directory outside the tree: `shell32.dll`,
+`hotplug.dll`, `usbui.dll`, their `en-US` MUI files, every
+`Windows\System32\en-US\*.mui` of the 8 x86 image (1,542 files) for a text
+search, and the `SOFTWARE` hive. String tables and the hive read by Python
+scripts kept outside the tree (a PE resource walk; a registry hive walk);
+code read with capstone 5.0.9 for the interfaces only: import names, the
+string and property-key references, IOCTL codes, the buffer fields set and
+the flag bits tested. Nothing from the media was executed.
+
+| Build | File | Version | Size | SHA-256 |
+|---|---|---|---|---|
+| 8 x86 | `shell32.dll` | 6.2.9200.16384 | 17,559,552 | `41b5eb7d846e31192f4299170a282ae19757cadb3cfc1850d65b15b448140e7f` |
+| 8 x86 | `en-US\shell32.dll.mui` | 6.2.9200.16384 | 411,648 | `a09ce13e4ea521754d9cd70a486fb89758700db2fc01104c4ece9d53745b1142` |
+| 8 x86 | `hotplug.dll` | 6.2.9200.16384 | 58,368 | `6bf9e460c46cc47b924ebf38d2101fb1b13bc4d3e88f6389f34efdb490769969` |
+| 8 x86 | `config\SOFTWARE` | - | 25,165,824 | `acd9aa4bb289a24e4c46fa3f2525c7b49a01fbfbc72537a95e3e80199d9047b4` |
+| 8.1 x64 | `shell32.dll` | 6.3.9600.17415 | 22,295,200 | `27fb61ac6490b44e8ab99d84adcb0f15c1fbf77a1c7232be582ce0b8d2675039` |
+| 8.1 x64 | `en-US\shell32.dll.mui` | 6.3.9600.17031 | 417,280 | `442f5b6ab511f1326f40825ace9c1ce535b487d36515e03630b1999e0baa1e33` |
+| 8.1 x64 | `hotplug.dll` | 6.3.9600.17415 | 67,584 | `be58d04344764dec751ded177c09d4e617370b28a76f73673516669975a135f2` |
+| 8.1 x64 | `config\SOFTWARE` | - | 57,671,680 | `76daea96abff02b113dd2f5e257afef23619aa774c9c326ac748008e6f38f544` |
+
+`usbui.dll` is 6.12's (its table above).
+
+**Two sources of the same text (static).**
+
+- **`shell32.dll`, string 38252** "Device can perform faster when connected
+  to USB 3.0" and **38253** "Connected to USB 3.0" (`shell32.dll.mui`, 8
+  and 8.1). Explorer's preview and details pane is a DirectUI layout inside
+  `shell32.dll` whose elements `PreviewUSB3CanBeFaster` and
+  `PreviewUSB3Connected` take their text as `resstr(0x956C,
+  library(shell32.dll))` and `resstr(0x956D, ...)`. The code that shows one
+  of them runs when the selected item is a drive root (`PathIsRootW`, then
+  `PathGetDriveNumberW`; 8 x86 RVA `0x4750D1`). **This is the line of the
+  report.**
+- **`usbui.dll` 6.2 and 6.3, strings 1210 and 1211**, the same two texts,
+  used by a status provider for Devices and Printers: `usbui.dll` 6.2 newly
+  exports `DllGetClassObject` and imports `PSCreateMemoryPropertyStore`;
+  its class factory serves CLSID `{df6775de-380d-4c14-8b62-fb69912e6d30}`,
+  which the hive registers as "Function Discovery USB Provider"
+  (`Classes\CLSID\...\InProcServer32` = `usbui.dll`), as the
+  `DeviceDisplayStatus` of `Classes\DeviceDisplayObject\InterfaceClass\{a5dcbf10-6530-11d2-901f-00c04fb951ed}`
+  (`GUID_DEVINTERFACE_USB_DEVICE`; "Device Center Status Provider for USB
+  Devices"), and under `Microsoft\Windows NT\CurrentVersion\DeviceDisplayObjects\StatusProviders`
+  with `Rank` 0x3E8 (8 x86 and 8.1 x64 hives alike). It hands back a
+  property store holding the text as `VT_VECTOR | VT_LPWSTR` under
+  `{D08DD4C0-3A9E-462E-8290-7B636B2576B9}`, 259 (the `PKEY_Devices_*` set;
+  WDK 7.1's `propkey.h` names 257 `Status1` and 258 `Status2`, not 259) and
+  1 or 2 as `VT_VECTOR | VT_UI4` under
+  `{C62789A9-9C86-4BC6-95B1-20D15B682B74}`, 1 (not in WDK 7.1's headers).
+- **Nowhere else**: no other of the 1,542 MUI files of the 8 x86
+  `System32\en-US` carries "perform faster"; `hotplug.dll` 6.2 and 6.3
+  carry neither text, `usbxhci`, `0x220448` nor `0x22045C`.
+- **Windows 8's `usbui.dll` drops Windows 7's High-Speed notice texts**:
+  7 SP1's strings 82 to 96 ("This device can perform faster", "This USB
+  device can perform faster if you connect it to a Hi-Speed USB 2.0
+  port...", the port-finder texts) are absent from 6.2; 97 "HI-SPEED USB
+  Hub" and 1117 remain. Whether anything on 8 still shows a High-Speed
+  notice is not read.
+
+**What the details pane tests (static; 8 x86 read in full at the
+interface level, 8.1 x64 checked at the same points).** For the drive
+selected:
+
+1. `\\.\X:` answers `IOCTL_STORAGE_QUERY_PROPERTY` (`0x2D1400`) with
+   `BusType` 7 (`BusTypeUsb`); any other bus, no line.
+2. `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` (`0x560000`) gives the disk; the
+   `GUID_DEVINTERFACE_DISK` interface with that number is found by
+   `IOCTL_STORAGE_GET_DEVICE_NUMBER` (`0x2D1080`).
+3. The disk's `DEVPKEY_Device_ContainerId` must differ from that of
+   `HTREE\ROOT\0` (the computer's own container); a device inside the
+   computer's container gets no line.
+4. From the disk's devnode, `DEVPKEY_Device_Parent` leads to the USB
+   device and its hub (the depth of that walk not read), whose `GUID_DEVINTERFACE_USB_HUB` interface is
+   opened; `DEVPKEY_Device_Address` is the connection index. The hub is
+   sent `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` (`0x220448`), of
+   which only `Speed` (byte offset 0x17) is kept, and
+   `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2` (`0x22045C`), 16
+   bytes in and out, `Length` 16, `SupportedUsbProtocols` 7 (`Usb110 |
+   Usb200 | Usb300`).
+5. **The decision.** *Capable* is `_EX_V2` flag bit 1
+   (`DeviceIsSuperSpeedCapableOrHigher`); without it, no line. Capable and
+   either flag bit 0 (`DeviceIsOperatingAtSuperSpeedOrHigher`) or an `_EX`
+   `Speed` of 3: "Connected to USB 3.0". Capable and not operating: "Device
+   can perform faster when connected to USB 3.0" - **only if** some
+   `GUID_DEVINTERFACE_USB_HOST_CONTROLLER` devnode has
+   `DEVPKEY_Device_Service` equal, ignoring case, to `usbxhci` or
+   `usbxhci_dsf` and `DEVPKEY_Device_ProblemCode` 0 (the strings at 8 x86
+   RVA `0x590930`; 8.1 x64 carries the same two). Bit 2 and bit 3
+   (the SuperSpeedPlus pair) are not tested.
+
+**What the Devices and Printers provider tests (static, `usbui.dll` 6.2
+x86, 8.1 x64 checked at the same points).** Given a device container: none
+for the computer's own container (`HTREE\ROOT\0`'s); then the same
+`usbxhci` / `usbxhci_dsf` test, here **before either line**; then a
+`DevCreateObjectQuery` (the Windows 8 device query API) for the
+`GUID_DEVINTERFACE_USB_DEVICE` and `GUID_DEVINTERFACE_USB_HUB` interfaces
+of that container, each item's `DEVPKEY_Device_InstanceId`, `_Address` and
+`_Parent` read and the parent's hub interface opened, and the same
+`_EX_V2` request (protocols 7, `Length` 16) per item. An item whose parent
+hub lies in another container is the container's attachment point. No line
+unless an attachment point reads bit 1; "Connected to USB 3.0" if one reads
+bit 0; otherwise "can perform faster".
+
+**What this bus answers for each input today (static, from `src\`).**
+
+| Input | Under `xhci98.sys` | Where |
+|---|---|---|
+| Bus type of the volume | `usbstor`'s own answer (`BusTypeUsb`); not the bus's | - |
+| A container of its own | device PDOs report `Removable` TRUE, the root hub FALSE, so PnP gives the stick its own container (documented PnP behaviour; not read on 8) | `hcd_pdo.c`, `hcd_rh.c` |
+| Hub interface and connection index | root hub and hub FDOs register `GUID_DEVINTERFACE_USB_HUB`, device PDOs `GUID_DEVINTERFACE_USB_DEVICE`; `Address` is the root port number on a root port (the root hub's door takes the same number as `ConnectionIndex`), the parent hub's port for a child of an external hub devnode, and an instance key otherwise (`XhciHubPdoAddress`), where the request would name another port | `hcd_door.c`, `xhci_hub.c` |
+| `_EX` `Speed` | 0 to 2; a SuperSpeed connection reads 2 on every NT target, never 3 (8.4) | `xhci_hub.c` |
+| `_EX_V2` request of protocols 7, `Length` 16 | accepted (it carries `Usb300`) | `hcd_door.c` |
+| `_EX_V2` bit 0 | set for a SuperSpeed connection | `XhciHubExV2Flags` |
+| `_EX_V2` bit 1 | set when operating at SuperSpeed, or from the BOS; **the BOS is read only on the SuperSpeed enumeration path**, so a USB 3 device on a USB 2.0 port reads 0 (8.4) | `xhci_enum.c` state `XHCI_ENUM_DESC18` |
+| The `usbxhci` test | the controller's service is `xhci98` (`xhci98.inf` `AddService`); false unless another controller in the machine runs `usbxhci` | INFs |
+
+So under `xhci98.sys` on 8 and 8.1, by this reading: a USB 3 stick on a USB
+2.0 port gets **no line, for two independent reasons** - bit 1 is clear
+(no BOS read at High Speed) and, even with it set, the "can perform
+faster" text needs a working `usbxhci` controller; a SuperSpeed stick on a
+USB 3 port should get "Connected to USB 3.0" in the details pane (bits 0
+and 1 set, no `usbxhci` test on that branch) but no status in Devices and
+Printers (the provider tests `usbxhci` first). Both predictions are
+static, for the Windows 8 VM (6.12.9).
+
+**Windows 7's High-Speed notice (measured, 2026-10-22).** One Windows 7
+SP1 x86 guest: an overlay of `w7x86-p38f.qcow2` (the Phase 38 matrix
+overlay of `mtx-w7x86-f`, `xhci98.sys` from the 2.4.0.0 dry cut on
+`qemu-xhci`), QEMU headless, TCG, 2 vCPUs, with an `ich9-usb-ehci1` and
+its three `ich9-usb-uhci` companions added, so that Microsoft's
+`usbehci`, `usbuhci` and `usbhub` drive them beside `xhci98.sys`. A QEMU
+`usb-hub` (Full Speed) with a `usb-storage` (QEMU's device has a High-Speed configuration) on its
+port 1, hot-plugged at the desktop; QEMU's
+`info usb` read 12 Mb/s for both. Screen read by QMP `screendump`.
+
+| Stack | First plug | Replug of the stick | The drive |
+|---|---|---|---|
+| Microsoft's (EHCI port 1, the hub routed to its UHCI companion) | "Your device is ready to use" (driver install) only | **"This device can perform faster" - "This USB device can perform faster if you connect it to a Hi-Speed USB 2.0 port. For a list of available ports, click here."** within 10 s | F:, 127 MB |
+| `xhci98.sys` (`qemu-xhci` USB 2.0 port 1) | "xHCI98 USB Hub" installed only | none (screens at 10 to 60 s after the first plug and after each of two replugs) | F:, 127 MB |
+
+The balloon's text is 7's `usbui.dll` strings 83 and 82. Its trigger,
+`usbhub.sys`'s notification (the `USB_NOTIFICATION` route roadmap 43.25
+names), was not read here; `src\` registers no WMI provider (no
+`IoWMIRegistrationControl`), so this bus raises no such notification.
+Vista was not run.
+
+**Options for 43.30** (the owner to pick; none is taken here):
+
+1. **Read the BOS at High Speed** (and Full Speed) for a device whose
+   `bcdUSB` is 0x0210 or more, so `_EX_V2`'s capable flags are answered on
+   every connection. It is what 43.27's tray notice needs on every target,
+   and Explorer's capable test on 8 and 8.1. Alone it does not bring
+   Explorer's "can perform faster" under `xhci98.sys` (the `usbxhci`
+   test); it changes every such device's enumeration by two requests, the
+   risk 8.4 named.
+2. **Answer `_EX` `Speed` 3 for SuperSpeed on NT 6.2 and later** (8.4 keeps
+   2 because Vista's and 7's pages test for exactly 2): Explorer already
+   says "Connected to USB 3.0" from bit 0, so this gains nothing there;
+   listed only because the details pane reads it. What 8's `usbui.dll`
+   pages do with a 3 is not read.
+3. **XHCITR's own notice (43.27) on by default on 8 and 8.1 under
+   `xhci98.sys`**, since by this reading Windows' line cannot appear there
+   (its rule: on by default where Windows shows no notice of its own under
+   this driver); with option 1 for its input.
+4. **The release notes and 43.29's install note** say that under
+   `xhci98.sys` on 8 and 8.1 the details pane shows "Connected to USB 3.0"
+   but never "can perform faster", and on Vista and 7 that the High-Speed
+   balloon is not raised (measured on 7).
+5. **A High-Speed notice under this bus on Vista and 7** (the balloon
+   Microsoft's stack raises, measured above): only through XHCITR (43.27
+   widened to a High-Speed device behind a Full-Speed hub), since the
+   balloon's route is `usbhub.sys`'s WMI notification.
+
+Not offered: answering the `usbxhci` test (it reads the controller's
+service name, which only Windows' own driver has).
+
+**Owed to the Windows 8 VM (6.12.9):** under Microsoft's stack, the line
+for a SuperSpeed stick on a USB 2.0 port and "Connected to USB 3.0" on a
+USB 3 port, in the details pane and in Devices and Printers; under
+`xhci98.sys` forced, the two predictions above; and whether 8 shows any
+High-Speed notice.
+
+### 6.13 Windows 8's client contract served by the bus (task 43.29, 2026-10-22)
+
+**The owner's decisions on 6.12.10** (2026-10-22): (1) `xhciuas.inf` is
+**not** forced onto a UAS interface on 8 and 8.1; the bus instead answers
+Windows 8's client contract - `GUID_USBD_INTERFACE_V1` at version `0x602`,
+the capability request `0x49104B` and the stream URBs - so Windows' own
+`uaspstor.sys` runs a SuperSpeed UAS disk with streams under this bus. This
+reverses 6.12.10's recommendation 2 (and makes recommendation 1 moot). (3)
+`0x220FB3` is served as `RESET_PORT`. (4) The three Fresco Logic ids
+(6.12.1) are noted only. This section is the driver's half of task 43.29;
+the installer's half is record 26 and record 23 (task 43.43, branch
+`p43-42`), whose one consequence of decision (1) is named in 6.13.9.
+
+**Sources.** Microsoft's published documentation (read 2026-10-22, each page
+by its title on learn.microsoft.com): `USBD_CreateHandle`,
+`USBD_QueryUsbCapability`, `USBD_UrbAllocate`, `USBD_IsochUrbAllocate`,
+`USBD_SelectConfigUrbAllocateAndBuild`,
+`USBD_SelectInterfaceUrbAllocateAndBuild`, `USBD_UrbFree`,
+`_URB_OPEN_STATIC_STREAMS`, `_USBD_STREAM_INFORMATION`, "How to Open and
+Close Static Streams in a USB Bulk Endpoint" and "Best Practices: Using
+URBs"; the public headers as mirrored by mingw-w64 (6.12's commit) for the
+structures those pages define (`usb.h`: `URB_FUNCTION_OPEN_STATIC_STREAMS`
+`0x35`, `URB_FUNCTION_CLOSE_STATIC_STREAMS` `0x36`,
+`URB_OPEN_STATIC_STREAMS_VERSION_100` `0x100`, `USBD_STREAM_INFORMATION`,
+`_URB_OPEN_STATIC_STREAMS`; `usbdlib.h`: `GET_ISO_URB_SIZE`). **No public
+header or page defines the bus's half**: Microsoft's `usbbusif.h` index
+lists the USBDI interfaces V0 to V3 and `USBC_DEVICE_CONFIGURATION_INTERFACE_V1`
+and nothing named `USBD_INTERFACE_V1`, and the documentation names neither
+`GUID_USBD_INTERFACE_V1` nor `0x49104B`. That half - the interface's layout,
+its callbacks' arguments and the capability request's block - is therefore
+read statically, as 6.12 read the rest: `usbdex` inside `uaspstor.sys` and
+`USBSTOR.SYS` (the client side) and `ucx01000.sys` (Windows 8's own server
+side), 8 x86, 8 x64 and 8.1 x64, the files and hashes of 6.12's table, with
+the same tools and PDBs; RVAs as in 6.12. Nothing was executed. No DDK
+sample was read.
+
+#### 6.13.1 What the interface is, read from both ends
+
+**The client's half (`usbdex`, `USBD_CreateHandle`, `uaspstor` 8 x64
+`0x11140`, 8 x86 `0xCE62`, 8.1 x64 `0xC238`).** The handle is a block of
+the client's own pool (0xB8 bytes on x64, signature `'USBD'` at +0); the
+interface lives inside it at +8 (x64) / +4 (x86). Before the query the
+client writes: `Size` 0x98 / 0x58, `Version` `0x602`, and four fields of
+its own - the contract (`0x602`), its device object, its pool tag and the
+handle's own address - and, when the Driver Verifier's USB settings are
+on, a flag and five ULONGs (`USBDInternal_QueryUsbVerifierSettings`).
+After a successful query it reads back two things only: the bus's context
+for the handle, and the six routines below; it never calls the INTERFACE
+header's reference or dereference. The handle is reference-counted by the
+client (one for the handle, one per URB allocated through it):
+`USBD_CloseHandle` (`0x114E4` x64) and the last `USBD_UrbFree` call the
+interface's **unregister routine** with the bus context when the count
+reaches zero, and on a failed `USBD_CreateHandle` after a successful query
+too.
+
+**The server's half (`ucx01000.sys`, `RootHub_EvtUSBDInterfaceV1Request`,
+8 x64 `0x5D84`, 8 x86 `0x499C`, 8.1 x64 `0x5BF0`).** Refuses a `Size` other
+than 0x98 / 0x58 (`STATUS_BUFFER_TOO_SMALL`), a `Version` other than
+`0x602` (`STATUS_NOT_SUPPORTED`), a NULL device object or a zero pool tag
+(`STATUS_INVALID_PARAMETER`); otherwise allocates a per-handle record
+(0x80 bytes x64, `'UDdh'`), and writes: `Context` NULL, both INTERFACE
+references a no-op (`WdfDeviceInterfaceReferenceNoOp` on x86; the x64 PDB
+names the folded stub `invalid_parameter`), the per-handle record into the
+bus-context field, and the six routines. The layout, as both ends use it:
+
+| Field (name this record's) | x64 | x86 | Who writes |
+|---|---|---|---|
+| `Size` (USHORT) | 0x00 | 0x00 | client: 0x98 / 0x58 |
+| `Version` (USHORT) | 0x02 | 0x02 | client: `0x602` |
+| `Context` (the INTERFACE header's) | 0x08 | 0x04 | bus: NULL |
+| `InterfaceReference`, `InterfaceDereference` | 0x10, 0x18 | 0x08, 0x0C | bus: no-ops |
+| `ClientContract` (ULONG) | 0x20 | 0x10 | client: `0x602` |
+| `BusHandleContext` (PVOID) | 0x28 | 0x14 | bus |
+| `ClientDeviceObject` | 0x30 | 0x18 | client (UCX refuses NULL) |
+| `ClientPoolTag` (ULONG) | 0x38 | 0x1C | client (UCX refuses 0) |
+| `ClientHandle` | 0x40 | 0x20 | client |
+| `VerifierOn` (ULONG), `Verifier[5]` | 0x48, 0x4C | 0x24, 0x28 | client |
+| reserved (PVOID) | 0x60 | 0x3C | nobody |
+| `Unregister(BusHandleContext)` | 0x68 | 0x40 | bus |
+| `UrbAllocate(BusHandleContext, PURB *)` | 0x70 | 0x44 | bus |
+| `IsochUrbAllocate(BusHandleContext, ULONG packets, PURB *)` | 0x78 | 0x48 | bus |
+| `SelectConfigUrbAllocateAndBuild(BusHandleContext, PUSB_CONFIGURATION_DESCRIPTOR, PUSBD_INTERFACE_LIST_ENTRY, PURB *)` | 0x80 | 0x4C | bus |
+| `SelectInterfaceUrbAllocateAndBuild(BusHandleContext, USBD_CONFIGURATION_HANDLE, PUSBD_INTERFACE_LIST_ENTRY, PURB *)` | 0x88 | 0x50 | bus |
+| `UrbFree(PURB)` | 0x90 | 0x54 | bus |
+
+Every routine is `__stdcall` (x86 `ret 4`, `ret 8`, `ret 0xC`, `ret 0x10`,
+`ret 4` for `Unregister`, `UrbAllocate`, `IsochUrbAllocate`, the two
+builders and `UrbFree`) and returns `NTSTATUS` but `Unregister` and
+`UrbFree` (VOID). **`UrbFree` takes the URB alone**: `USBD_UrbFree` (x64
+`0x10C20`) loads the routine from the handle and calls it with the URB as
+its one argument, so the bus must find everything it needs from the URB.
+The arguments after the context are the public routines' own (the pages
+above), and so are their semantics: a zeroed URB of the system's URB size
+(the client's own fallback allocates 0x98 / 0x60 bytes,
+`USBD_UrbAllocate` x64 `0x10A4C` / x86 `0xC954`); an isochronous URB "large
+enough to hold the maximum number of isochronous packets"; a
+select-configuration URB "filled ... with information about the specified
+configuration, its interfaces and endpoints", each list entry's `Interface`
+set to its `USBD_INTERFACE_INFORMATION` in the URB; a select-interface URB
+for the one interface named, the entry's `Interface` set likewise. UCX's
+allocations put a 0x50-byte (x64) / 0x30-byte (x86) header before the URB
+carrying `'XRB.'` and a marker, and `Xrb_Free` bugchecks (0x144) when they
+are missing; nothing reads that header but UCX itself.
+
+`USBD_AssignUrbToIoStackLocation` (x64 `0x10CF4`) on a `0x602` handle
+also stores the URB in the next stack location's `FileObject`; this bus
+reads no stack location's `FileObject` on an internal IOCTL.
+
+#### 6.13.2 What the bus answers
+
+**`IRP_MN_QUERY_INTERFACE` for `GUID_USBD_INTERFACE_V1`** at a device or
+function PDO (never a composite parent's, as for USBDI): answered when
+`Size` is this build's (0x98 amd64, 0x58 x86) and `Version` is `0x602`;
+any other size or version is completed with the status it came with, as an
+interface this bus does not export, so the client takes the `0x600` path
+it takes today. A NULL device object or a zero pool tag:
+`STATUS_INVALID_PARAMETER`, as UCX. A PDO not listed or orphaned:
+`STATUS_NO_SUCH_DEVICE`. Answered, the bus writes `Context` NULL, two no-op
+references, `BusHandleContext` = the PDO's **bus-interface slot** (the
+static `hcdBusifSlots` entry USBDI already uses, claimed the same way, one
+per PDO, and shared by every handle on it), and the six routines. The
+query takes one reference on the slot (`Refs`) and `Unregister` releases
+it. No pool is allocated for a registration: the slot outlives the PDO
+(its `Gone` flag), the routines never follow it to the PDO, and a client
+that unregisters after its PDO was deleted touches only the slot. A full
+slot table refuses the query (`STATUS_INSUFFICIENT_RESOURCES`), and the
+client then runs the `0x600` path.
+
+**The allocators** (`hcd_pool.c`, a new pair of the pool file's,
+`HcdPoolAllocClient` / `HcdPoolFreeClient`): `NonPagedPool`, the client's
+pool tag is not known to them (the slot is shared), so the bus tags them
+`'X98U'`, distinct from its own `'X98H'`, so that a client's leak is not
+read as the bus's. Each block is a header - a `LIST_ENTRY`, signature
+`'X98U'`, the kind (plain, isochronous, select-configuration,
+select-interface) and the block's size, rounded up to 8 bytes on x86 and
+16 on amd64 so the URB keeps the pool's alignment - then the URB, zeroed.
+**Every block the bus hands out is on one image-wide list** under one
+image-wide spin lock (`hcdUsbdxLock`, initialised in `HcdUrbInit`). Because
+`UrbFree` gets the URB alone (6.13.1), it computes the header's address by
+arithmetic and looks for that address on the list, comparing pointers and
+reading no memory of the caller's: found, the block is unlinked under the
+lock and freed after it; not found, nothing is read or freed and the call
+is counted (`hcdUsbdxForeignFrees`, image-wide; a debug build traces it).
+Never a bugcheck, never an `ExFreePool` of memory the bus did not
+allocate, never a read before a pointer the bus does not own. (UCX reads
+its header before the URB unchecked and bugchecks on a mismatch,
+`Xrb_Free` 8 x64 `0x14A54`.) The walk is as long as the client URBs
+outstanding, which is the clients' own count of URBs allocated and not
+freed.
+
+**This is a pool site record 13 section 7.5 did not name**, and rule 3 is
+amended for it there: the memory is the client's, allocated on the
+client's call and freed on the client's call - the documentation's
+"The client driver must free the URB when the driver has finished using
+it" - so the bus's own counter (rule 6, which must read 0 after the
+controller's remove) does not count it. `hcd_pool.c` counts it apart
+(`HcdPoolClientOutstanding`, image-wide, as `HcdPoolHandedOff` is), and a
+block outstanding when a controller is removed stays valid, on the list,
+until its client frees it; the image cannot unload before then, since the
+client's device object sits on a PDO of this driver's. Sizes:
+
+- `UrbAllocate`: `HCD_USBDX_URB_BYTES`, 0x98 amd64 / 0x60 x86 (the
+  clients' own fallback size, 6.13.1), asserted at build time to be at least
+  the build's `sizeof(URB)`.
+- `IsochUrbAllocate(n)`: `GET_ISO_URB_SIZE(n)`; `n` 0 refused
+  (`STATUS_INVALID_PARAMETER`), and a size above 0xFFFF refused the same
+  way, since `_URB_HEADER.Length` is a USHORT and no URB longer than that can
+  be described (the pure `XhciUsbdxIsochBytes`).
+- `SelectConfigUrbAllocateAndBuild`: a NULL descriptor or list refused;
+  the list walked to its NULL `InterfaceDescriptor` (at most 32 entries,
+  the interfaces this bus's select tracks, `InterfaceMask`), each
+  interface descriptor's `bInterfaceNumber`, `bAlternateSetting` and
+  `bNumEndpoints` read; the URB sized as `HcdCompositeSelectDown` already
+  sizes one, which is `USBD_CreateConfigurationRequestEx`'s rule - the
+  header up to `Interface`, then per interface a whole
+  `USBD_INTERFACE_INFORMATION` (which holds one pipe) plus room for its
+  other pipes - and refused above 0xFFFF; built as that function builds
+  one: `Function` `SELECT_CONFIGURATION`, `Length`, `ConfigurationDescriptor`
+  the caller's, each `USBD_INTERFACE_INFORMATION`'s `Length`,
+  `InterfaceNumber`, `AlternateSetting` and `NumberOfPipes`, each pipe's
+  `MaximumTransferSize` `USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE`, and each list
+  entry's `Interface` pointing at its entry in the URB. The arithmetic is
+  pure (`XhciUsbdxSelectLayout`: the offsets and the total from the
+  per-interface pipe counts and the three structure sizes, which differ per
+  architecture).
+- `SelectInterfaceUrbAllocateAndBuild`: a NULL list entry or descriptor
+  refused; one interface, the same per-interface size after
+  `_URB_SELECT_INTERFACE`'s header, `Function` `SELECT_INTERFACE`,
+  `ConfigurationHandle` the caller's, the entry's `Interface` set.
+
+Every allocator writes `*Urb` NULL first and returns
+`STATUS_INSUFFICIENT_RESOURCES` when the pool is empty. They read the
+caller's descriptors and write the caller's list as `usbd.sys`'s
+`USBD_CreateConfigurationRequestEx` does, trusting the descriptor the
+caller passes as that routine does; the bus's select still validates the
+configuration it is sent (`hcdCfgSelect`), as for any client.
+
+**`0x49104B`, the capability request**, `IRP_MJ_INTERNAL_DEVICE_CONTROL`
+at the PDO. Read from `USBD_QueryUsbCapability` (8 x64 `0x11558`, x86
+`0xD24C`, 8.1 x64 `0xC5A4`) and `USBDInternal_BuildandSendIoctlSynchronously`
+(x64 `0x10918`): `Parameters.Others.Argument1` is a block - USHORT
+version 1, USHORT size (0x28 x64, 0x20 x86), the bus context of the
+handle, the capability GUID, the output length - and the output buffer is
+`Irp->AssociatedIrp.SystemBuffer`; sent at PASSIVE_LEVEL and waited for.
+UCX (`Controller_QueryUsbCapability`, 8 x64 `0xDBE4`, x86 `0xAA3A`)
+refuses a block whose size or version is not those, a NULL context, and an
+output length and buffer that disagree (one zero, the other not), all
+`STATUS_INVALID_PARAMETER`, zeroes the block's last ULONG (x64 +0x24, x86
++0x1C) and writes the result length there; `STATIC_STREAMS` wants an
+output length of exactly 2. The bus does the same checks, does not follow
+the context (the request arrives at the PDO it is about), and answers:
+
+| Capability | Answer |
+|---|---|
+| `SELECTIVE_SUSPEND` | `STATUS_SUCCESS` (the bus serves `SUBMIT_IDLE_NOTIFICATION`; the `0x600` path answers the same today) |
+| `DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE` | `STATUS_SUCCESS` at High Speed or faster, else `STATUS_NOT_SUPPORTED` ("whether the bus is operating at high-speed or higher") |
+| `DEVICE_CONNECTION_SUPER_SPEED_COMPATIBLE` | `STATUS_SUCCESS` at SuperSpeed or faster, else `STATUS_NOT_SUPPORTED` |
+| `STATIC_STREAMS` | output length 2 required (else `STATUS_INVALID_PARAMETER`); `STATUS_SUCCESS` with a USHORT count when the PDO is SuperSpeed and its controller streams, else `STATUS_NOT_SUPPORTED` |
+| `CHAINED_MDLS`, `FUNCTION_SUSPEND`, `TIME_SYNC`, `CLEAR_TT_BUFFER_ON_ASYNC_TRANSFER_CANCEL`, the full- and low-speed GUIDs, any other | `STATUS_NOT_SUPPORTED` |
+
+The streams count is the most this bus grants any endpoint on the
+controller: `min(XHCI98_STREAMS_MAX, hcEntries - 1)`, 31 on a controller
+whose array takes 32 entries or more (`XhciUsbdxMaxStreams`, from
+`XhciStreamHcEntries` and the `XhciStreamsOff` quirk exactly as
+`hcdXportFlags` reads them). It is latched at the PDO's creation on the
+thread (`pdo->UsbdxStreams`), so the dispatch reads no register (the rule
+`hcdPortStatus` states). The per-PDO SuperSpeed test matters: `uaspstor`
+opens streams on every pipe once the capability succeeds and fails its
+start with no fallback if the open fails (6.12.4), so a High-Speed UAS
+device must be told no and run `uaspstor`'s streamless mode, as it does
+today. The transport decision (31-A.3, `xhci_xport.h`) already keeps every
+UAS interface at SuperSpeed on a streaming controller, so `uaspstor` never
+meets a SuperSpeed UAS device that this answer refuses.
+`FUNCTION_SUSPEND` is the composite parent's and the bus has none above it
+(10.12); `CHAINED_MDLS` is refused because the transfer path takes one MDL
+per URB.
+
+**`URB_FUNCTION_OPEN_STATIC_STREAMS` (`0x35`)** at the PDO, checked at
+dispatch and then pended for the thread with a device reference, as the
+private `IOCTL_XHCI98_OPEN_STREAMS` is: `Length` at least
+`sizeof(_URB_OPEN_STATIC_STREAMS)` (0x20 x86, 0x30 amd64),
+`StreamInfoVersion` `0x100` (else `USBD_STATUS_INVALID_PARAMETER`, the
+page's status), `StreamInfoSize` `sizeof(USBD_STREAM_INFORMATION)` (0x10 /
+0x18; the page names `USBD_STATUS_INFO_LENGTH_MISMATCH` for this case, a
+value no header available here defines - not the WDK 7.1 `usb.h`, not the
+Windows 2000 DDK's `usbdi.h`, not mingw-w64's `usb.h` at 6.12's commit - so
+the bus answers `USBD_STATUS_INVALID_PARAMETER`, and the IRP
+`STATUS_INVALID_PARAMETER` as for every URB this dispatch refuses; what
+Windows 8's own stack answers is not known - UCX's
+`Endpoint_StaticStreamsEnableUrb`, 8 x64 RVA `0xB5AC`, tests no
+`StreamInfoSize`, and its generic failure fallback maps to
+`0x80000300` - and 6.13.8 owes
+the value, read on Windows 8, which the code takes when it is known), `NumberOfStreams` 1 to
+`XHCI98_STREAMS_MAX` and `Streams` not NULL (else
+`USBD_STATUS_INVALID_PARAMETER`). On the thread it is the private open
+(`hcdCfgStreamsOpen`, the same checks of pipe, controller and endpoint, the
+same commands, the same failure paths) with one difference: **the grant
+must equal the request**. The public URB has no "granted" field - "The
+number of streams to open ... must be ... less than or equal to the maximum
+number of streams supported by the USB driver stack, the host controller,
+and the endpoint" - so a plan that would grant fewer is refused before
+anything is built (`USBD_STATUS_INVALID_PARAMETER`), while the private
+request keeps its partial grant (`XhciUsbdxGrantCheck`: 31 asked of an
+endpoint whose companion allows 16 is refused on the public path and
+granted 16 on the private one). Granted, entry `i`
+(0-based) of `Streams` gets stream `i + 1`'s pipe handle, `StreamID`
+`i + 1` ("sequential and start at 1"), `MaximumTransferSize` the command
+size the controller's start latched (`Xstat.CommandBytes`, the size
+`IOCTL_XHCI98_TRANSFER_POLICY` reports, 1 MiB by default) and `PipeFlags`
+0. The URB's header and other fields are left as sent: `uaspstor` reuses
+one URB for its three pipes, changing only `PipeHandle` (`OpenStreamArray`,
+8 x64 `0x10D0`), and reads `NumberOfStreams` back after each open.
+
+What follows an open is the private interface's model, unchanged
+(`xhci98_streams.h`): a transfer on a stream handle runs on that stream; a
+transfer on the endpoint's own handle is refused (Microsoft: "don't send
+I/O requests by using the endpoint pipe handle" once streams are open);
+`RESET_PIPE` on the endpoint's handle resets the endpoint with its streams
+open, as the page asks for recovery; `ABORT_PIPE` and `RESET_PIPE` on a
+stream handle, which the page says Windows 8's stack does not support, are
+served as the private interface serves them; a select, `RESET_PORT` and
+removal as there.
+
+**`URB_FUNCTION_CLOSE_STATIC_STREAMS` (`0x36`)**, a `_URB_PIPE_REQUEST`
+with the endpoint's handle: `Length` at least
+`sizeof(struct _URB_PIPE_REQUEST)` (0x18 x86, 0x28 amd64) before
+`PipeHandle` is read, else `USBD_STATUS_INVALID_PARAMETER` at dispatch
+(`XhciUsbdxCloseCheck`); then the private close. No streams open:
+`USBD_STATUS_INVALID_PARAMETER` (the page: "Don't send a close-stream
+request to an endpoint that doesn't have open streams"). The open's
+`Length` is checked the same way before any field after the header is
+read.
+
+The private answers map to URB status as `XhciUsbdxStreamsUsbd` (pure)
+says: success `USBD_STATUS_SUCCESS`; no controller or no endpoint
+`USBD_STATUS_NOT_SUPPORTED`; an invalid pipe `USBD_STATUS_INVALID_PIPE_HANDLE`;
+an invalid request, streams already open or not open
+`USBD_STATUS_INVALID_PARAMETER`; no resources
+`USBD_STATUS_INSUFFICIENT_RESOURCES`; failed `USBD_STATUS_DEVICE_GONE` when
+the device left, else `USBD_STATUS_INTERNAL_HC_ERROR`; the IRP's status from
+the URB status through `XhciPipeNtStatus`, as every URB's.
+
+**`0x220FB3`** (6.12.5): served as `IOCTL_INTERNAL_USB_RESET_PORT` - the
+same pended reset (`hcdCfgResetPort`) - since `usbhub.sys` aliases it to
+`RESET_PORT` (`UsbhFdoResetPdoPort`) and `usbstor` and `uaspstor` send it
+instead of `RESET_PORT` on the paging, hibernation and dump paths with no
+fallback. The pure `XhciUsbdxIoctlAlias` names it.
+
+#### 6.13.3 The rest of the `0x602` contract under this bus
+
+Once the query is answered, every `usbdex` client on that PDO runs the
+`0x602` path, not only `uaspstor`: `USBSTOR.SYS` (it creates a handle, asks
+one capability and closes it at start, `USBSTOR_FdoStartDevice+0x355`,
+8 x64 RVA `0x810D`), KMDF clients created "WithParameters" - `winusb` among them
+(6.12.2) - whose URBs then come from these allocators and whose
+`WdfUsbTargetDeviceSelectConfig` builds through
+`SelectConfigUrbAllocateAndBuild`. What changes for them:
+
+- `USBD_QueryUsbCapability` asks the bus (`0x49104B`) instead of answering
+  locally: `HIGH_SPEED_COMPATIBLE` becomes true at SuperSpeed too (the
+  `0x600` path took it from `IsDeviceHighSpeed`, which this bus answers
+  TRUE at High Speed only, 6.12.4), as the documentation defines it and as
+  UCX's `Usbd_IsDeviceAtleastHighSpeed` (8 x64 `0x127B8`: false for two
+  values of the device's speed field and true for the rest; which speeds
+  those are was not traced) suggests on Windows 8's own stack.
+- `USBD_UrbAllocate` and its siblings allocate through the bus.
+- `usbdex` no longer asks USBDI V1 itself; clients that ask it themselves
+  (`USBSTOR_GetBusInterface`, `UaspGetBusInterface`, KMDF) still do, and
+  are answered as today.
+
+The rules the documentation puts on a `0x602` client (no stale pipe
+handles, URBs from these allocators, an active URB not reused, the
+isochronous period and packet-count rules) bind the client; this bus
+enforces none of them beyond what it checks for every client today.
+
+#### 6.13.4 Invisible on 98 SE, ME and 2000 to 7
+
+- **Nothing is answered unless asked.** The V1 interface, `0x49104B`,
+  `0x220FB3` and URBs `0x35`/`0x36` are sent only by Windows 8's clients: a
+  byte scan of every `.sys`, `.dll`, `.vxd`, `.pdr`, `.mpd` and `.exe` of
+  the 98 SE, ME, 2000 SP4, XP SP3, XP x64, Vista and 7 extracts in
+  `tools\*-extracted` and of NUSB 3.3, NUSB 3.6 and SweetLow's packs (235
+  files, 2026-10-22) finds the GUID's bytes, `0x49104B` and `0x220FB3` in
+  none, and 6.3 and 6.4 read no URB `0x35` or `0x36` in any class driver
+  of those targets. A third-party driver built with the Windows 8 kit's
+  `usbdex` and run on Vista or 7 would be answered too, and get the
+  contract it gets on 8 under Microsoft's stack; no OS gate is possible
+  without a new import (`IoIsWdmVersionAvailable` cannot tell 8 from 7:
+  Windows 8's and 8.1's `ntoskrnl.exe` answer it TRUE for major 6 with any
+  minor and FALSE above, as 7's - read statically, 8 x64 RVA `0x50B8B0`).
+- **No new import.** The allocators use `ExAllocatePoolWithTag` and
+  `ExFreePool` inside `hcd_pool.obj`, the allowlist's existing `SITES`;
+  the GUID is compared field by field as USBDI's is (no `RtlCompareMemory`,
+  no `IsEqualGUID` import); nothing else is called that the bus does not
+  call today. The import gate is the check.
+- **No change to what 98 to 7 run.** The paths that change on every target
+  are the dispatch's new `case` labels; each is reached only by a request
+  that, by the scan above, those systems' drivers never send. The new
+  per-PDO latch (`UsbdxStreams`) is written at creation on every target and
+  read only by `0x49104B`.
+
+#### 6.13.5 IRQL and locks
+
+- `QUERY_INTERFACE`: PASSIVE_LEVEL (PnP); the slot claim under
+  `hcdBusifLock`, as USBDI's.
+- The allocators and `UrbFree`: at most DISPATCH_LEVEL (the documentation's
+  IRQL for each: `UrbAllocate`, `IsochUrbAllocate` and `UrbFree` at or below
+  DISPATCH_LEVEL, the two builders at DISPATCH_LEVEL); `NonPagedPool` only;
+  the one lock they take is `hcdUsbdxLock`, a leaf (no other lock is taken
+  under it, and it is taken under none), held for a list insert, or a walk
+  and an unlink, never across the allocation or the free; no PDO,
+  controller or device record touched, so they are safe while the PDO is
+  being removed and after. They read the caller's
+  descriptors and list, which the caller keeps resident (the documentation
+  allows DISPATCH_LEVEL, so a caller there passes nonpaged memory).
+- `Unregister`: at most DISPATCH_LEVEL; an interlocked decrement of the
+  slot's `Refs`.
+- `0x49104B`: answered and completed in the dispatch, at the IRQL it
+  arrives at (PASSIVE_LEVEL from `usbdex`), from the PDO's own fields
+  (`SpeedClass`, `UsbdxStreams`, `Listed`), no lock, no register.
+- URBs `0x35`/`0x36`: the dispatch checks the URB at the caller's IRQL
+  (at most DISPATCH_LEVEL) and pends it with `HcdCfgQueue`; the thread
+  serves it at PASSIVE_LEVEL under the private interface's locking
+  (5.4; the controller lock around pipe lookups, none held across a
+  command). The caller's `Streams` array is written on the thread, after
+  the open succeeded and before the IRP completes.
+- `0x220FB3`: `hcdResetPortIoctl`'s path unchanged.
+
+#### 6.13.6 The pure half and its host vectors
+
+`src\xhci_usbdx.c` / `xhci_usbdx.h`, DDK-free, with `test\test_usbdx.c`:
+
+- `XhciUsbdxV1Bytes(pointerBytes)` (0x58 / 0x98) and
+  `XhciUsbdxCapBlockBytes(pointerBytes)` (0x20 / 0x28), with the field
+  offsets of 6.13.1 as constants the driver asserts its structures against;
+- `XhciUsbdxV1Check(size, version, pointerBytes, deviceObject, poolTag)`:
+  answered / not ours / invalid;
+- `XhciUsbdxCapabilityId(guid16)`: the capability a GUID's 16 bytes name,
+  or unknown; `XhciUsbdxCapability(id, outLength, outPresent, speedClass,
+  maxStreams, &count)`: the status and the USHORT, per the table above;
+  `XhciUsbdxCapBlockCheck(version, size, pointerBytes, context, outLength,
+  outPresent)`;
+- `XhciUsbdxMaxStreams(hcEntries)`;
+- `XhciUsbdxIsochBytes(packets, isochHeaderBytes, packetBytes, &bytes)`;
+- `XhciUsbdxSelectLayout(pipeCounts, count, headerBytes, ifInfoBytes,
+  pipeInfoBytes, offsets, &total)` for both builders, and
+  `XhciUsbdxSelectFill`: the URB's every field but its pointers written into
+  a zeroed buffer from that layout - `Length` and `Function` of the header,
+  and per interface its `Length`, `InterfaceNumber`, `AlternateSetting`,
+  `NumberOfPipes` and each pipe's `MaximumTransferSize` - at the field
+  offsets of the pointer width given, which the driver half asserts against
+  the DDK's structures, so the host vectors read what a client will;
+- `XhciUsbdxOpenCheck(length, structBytes, infoVersion, infoSize,
+  infoBytes, streams, streamsPresent)` and `XhciUsbdxCloseCheck(length,
+  pipeRequestBytes)`;
+- `XhciUsbdxGrantCheck(requested, planned, exact)`: the public path's
+  exact grant against the private path's partial one, with vectors over
+  `XhciStreamPlan`'s own answers;
+- `XhciUsbdxStreamsUsbd(answer, gone)`;
+- `XhciUsbdxIoctlAlias(code)`.
+
+Vectors: both architectures' sizes; every capability with every speed and
+streams value; the boundaries (0 and 0xFFFF bytes, 32 interfaces, 0 and
+31 streams, 4 and 0 array entries); the filled select URBs, byte by byte,
+for both widths; every private answer's mapping. The list, the lock, the
+slot's references and the thread's exact-grant refusal are the driver
+half's, read by review and by 6.13.8's legs.
+
+#### 6.13.7 Counters and the log
+
+Image-wide counters in `hcd_urb.c` (the allocators and `UrbFree` may run
+with no controller, so none of these can live in one): queries answered,
+capability requests answered, client URBs outstanding (in `hcd_pool.c`),
+and frees refused (`hcdUsbdxForeignFrees`). Per controller, in
+`HCD_CONTROLLER` beside the URB counts: stream opens and closes served
+through the public URBs and refused. The snapshot's layout is unchanged;
+a debugger reads them. A refused open notes `usbdx.open` in the
+controller's log with the answer and the endpoint; debug builds trace the
+first of each new request, and every foreign free, as the dispatch traces
+an unserved request.
+
+#### 6.13.8 What only a running system settles (owed to 43.31, on 43.24's VMs)
+
+1. A SuperSpeed UAS disk on 8 x86, 8 x64 and 8.1 x64 under `uaspstor`,
+   forced `xhci98.sys` on the controller: the trace shows the query answered,
+   `STATIC_STREAMS` answered with the controller's count, three opens (one
+   per data and status pipe) of the smaller of that count and the figure
+   `uaspstor` takes from the endpoints, I/O, a hot unplug, Safely Remove and
+   a rescan; a device whose endpoints allow fewer streams than the
+   controller advertises - QEMU's `usb-uas`, whose companions say 16
+   (`UAS_STREAM_BM_ATTR` 4 in `hw/usb/dev-uas.c`), on a `qemu-xhci` that
+   advertises more - with both figures recorded; the same disk at High Speed (the
+   capability refused, `uaspstor`'s streamless mode); a disk reset under
+   I/O with streams open (`uaspstor`'s `RESET_PORT`, or a stalled command
+   and `RESET_PIPE` on the endpoint's handle).
+2. The classes now on the `0x602` path under this bus: a Bulk-Only stick
+   (`usbstor`'s handle and capability at start), a `winusb` device
+   (KMDF's select through `SelectConfigUrbAllocateAndBuild`; a device with
+   an alternate setting and an in-guest tool that changes it, for
+   `SelectInterfaceUrbAllocateAndBuild`; isochronous on 8.1 if a device is
+   at hand), HID and audio (no `usbdex`, unchanged), a hub; each started,
+   used, removed; no foreign free in the trace, and the client URB count
+   back to its value before the device came.
+3. `0x220FB3` on a disk holding a page file (a second disk, the page file
+   moved to it): a reset forced while paging (a stalled command, or a
+   cable pull and replug) completes, and the system does not hang.
+4. The forced install on 7 x86 and 7 x64 with the same build, and the
+   package on 98 SE and 2000 SP4: each target's device matrix, unchanged
+   (no query, no new request in the trace).
+5. The value of `USBD_STATUS_INFO_LENGTH_MISMATCH` (6.13.2), read from a
+   Windows 8 stack's answer to an open with a wrong `StreamInfoSize` (an
+   in-guest test driver), or from a further static read.
+
+No inbox client sends `CLOSE_STATIC_STREAMS` (6.12.2: `uaspstor` sends
+`0x35` and never `0x36`), and only a test driver of the project's own could
+send a close and a reopen, or an open the plan would grant short; until
+one exists, those paths rest on the host vectors and on the private
+interface's legs (31-A.1), which run the same thread code.
+
+#### 6.13.9 The installer's half (not this task's code)
+
+Decision (1) means the installer does not force `xhciuas.inf` onto a UAS
+interface on 8 and 8.1: on NT 6.2 and 6.3 the run takes `xhciuas.inf` out
+of the forced INFs (task 43.43's engine, `uasInclude`), stages it (so a
+user may still pick it in Device Manager) or not, as record 26 decides.
+Raised with the owner and the installer's task; not changed here.
+
+#### 6.13.10 Questions left for the owner
+
+1. **The installer's half** (6.13.9): whether `xhciuas.inf` is still
+   staged on 8 and 8.1, or left out of the run there.
+2. **`HIGH_SPEED_COMPATIBLE` at SuperSpeed** (6.13.3): answered true as
+   the documentation and UCX have it; a `0x600` client keeps today's answer
+   (false at SuperSpeed). Recommendation: as designed.
+
+### 6.14 Windows 10: what 22H2 asks of the bus, read again (task 43.33 (a) and (b), 2026-10-22; draft)
+
+**A draft, and a reading only**: no code changed. Roadmap-usb4 task 43.33
+reads again on Windows 10 22H2 what 43.25 and 43.26 read on 8 and 8.1
+(6.12, 6.12.11), on the machines of task 43.32 (`build-and-test.md`,
+"Windows 10 target VMs"). This section holds 43.33's (a), its own USB
+stack, and (b), the "can perform faster" line; (c), Thunderbolt on 10,
+is design record 21 section 3.6, and (d) and (e), the signature policy
+and the version, are design record 23 section 5.12. Each fact is
+labelled by how it was read: **static** (read out of a file of the
+image; nothing from it executed), **measured** (seen in a Windows 10
+guest under QEMU, through Windows' own tools: `pnputil`, the setup
+log, the registry, `msinfo32`, a screendump), **documentation**
+(Microsoft's pages, read 2026-10-22) or **inference**. `xhci98.sys` (the published `3.1.0.0`) has run on
+Windows 10 x86 only, in one guest leg (6.14.5); on 10 x64 the forced
+install was refused before any file was copied.
+
+**Method.** The two images of 43.32 (`E:\xhci98-vm\win8-10`, built
+2026-10-22 from the owner's `Win10_22H2_English_x64v1.iso` and
+`Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965).
+Files taken read-only with `7z e <image>.qcow2` (7-Zip reads the
+single-partition qcow2's NTFS directly) into a scratch directory outside
+the tree: the USB drivers, `usbd.sys`, `Wdf01000.sys`, `usbui.dll`,
+`shell32.dll`, `UsbTask.dll`, `UsbSettingsHandlers.dll`, their `en-US`
+MUI files, every `Windows\INF\*.inf` (679 x64, 636 x86) and every
+`Windows\System32\en-US\*.mui` of the x64 image (1,770). Read by Python
+scripts kept outside the tree: `pefile` for versions, imports and
+exports, a byte scan for the USB internal IOCTL codes (computed from the
+mingw-w64 `usbioctl.h` and `usbiodef.h` of 6.12, plus 6.12's six raw
+codes) in executable sections and for the GUIDs of 6.12.3 anywhere in
+the image, a PE string-table walk, and capstone 5.0.7 for the few code
+paths quoted. **No PDB and no debugger was used**, unlike 6.12, so no
+fact below is attributed to a named function; the byte scan was checked
+against 6.12 by running it over 6.12's own 8.1 x64 `USBSTOR.SYS`, where
+it finds exactly 6.12.2's row. Versions, sizes and SHA-256:
+
+| Build | File | Version | Bytes | SHA-256 |
+|---|---|---|---|---|
+| 10 x86 | `USBXHCI.SYS` | 10.0.19041.2546 | 471,376 | `c279d155ec96bd7b021a04ff122d23b647f2863a58b4f249e312364709654d23` |
+| 10 x64 | `USBXHCI.SYS` | 10.0.19041.2546 | 624,976 | `bf34bc7c9fe69a59cbb90680619966bd380d99f673ca9d2db8a6bd4f56cff4e3` |
+| 10 x86 | `Ucx01000.sys` | 10.0.19041.1 | 202,256 | `5ab18e166eaaded5b8d9e355d55025dff5aeeecb951eddd729b815700187f38f` |
+| 10 x64 | `Ucx01000.sys` | 10.0.19041.1 | 259,896 | `2f5a5ba7aec40c1a440c8dff81dce5ab0bdf9cc70adde48f8b652665b61f9915` |
+| 10 x86 | `USBHUB3.SYS` | 10.0.19041.1202 | 502,600 | `5f4f608f7b760a859f980cef7e06d5642a5b9cc9f3e427dc4c9ce034a60cff0f` |
+| 10 x64 | `USBHUB3.SYS` | 10.0.19041.1202 | 648,016 | `54c736c9a40a769ceb7bc094d5458f2ec4fa2a5128ecb86dbce2f2a83eaeb203` |
+| 10 x86 | `usbhub.sys` | 10.0.19041.1 | 383,288 | `1d707361afa0a2ab84bb1425783a6c060786ebea66b35e5e2a32351483c61dec` |
+| 10 x64 | `usbhub.sys` | 10.0.19041.1 | 528,184 | `42404ec0f658121f6553b7daa3511ed512b7f4b336c2032ba85cd91e8879eeae` |
+| 10 x86 | `usbd.sys` | 10.0.19041.1 | 25,616 | `b245bb70732cb3cde3570d34b8e7d36fd8fb05c7184df615a0d2d59ccede71ad` |
+| 10 x64 | `usbd.sys` | 10.0.19041.1 | 33,080 | `5821f96b3a1382db1c4caf943a0007a0730ebc764b4736eae6759eb82d18c381` |
+| 10 x86 | `USBSTOR.SYS` | 10.0.19041.1949 | 108,888 | `8dc93ba53a5bd1ac7b94b0e7226845d570a00ef1f0b0a89e4e06ef90c02571ff` |
+| 10 x64 | `USBSTOR.SYS` | 10.0.19041.1949 | 139,624 | `e068e0b161f5a44968c2e5af7cd39cd5fd2eaf33294015db06acde3bd4810a63` |
+| 10 x86 | `uaspstor.sys` | 10.0.19041.1949 | 60,240 | `740fb10ee42f92a9e0ff37d0cd6b8eed59183bd011e1072ad6cedc4cc8f5e7cd` |
+| 10 x64 | `uaspstor.sys` | 10.0.19041.1949 | 83,816 | `ea651602246a6e9ec5786cfc7b92e15f5529908ca1646cf0d8648841d986979c` |
+| 10 x86 | `hidusb.sys` | 10.0.19041.2486 | 28,672 | `20a4e207b462e6d0db27b59db19e8cfe8808e9a7597f750e6f923413b21b36de` |
+| 10 x64 | `hidusb.sys` | 10.0.19041.2486 | 44,032 | `2cd165759db28a974f64cff355ff2203980c7b3ec55c04cb42facd7b7638c33a` |
+| 10 x86 | `hidclass.sys` | 10.0.19041.2486 | 166,912 | `fa6fc9a452a6d5c07a2292160ba2c8d81d2af6f63f878164227cab230f5a25c0` |
+| 10 x64 | `hidclass.sys` | 10.0.19041.2486 | 241,152 | `42f6c08e51d1766b5c777f52ec8e216d89a04f0923919b0d0c1427a2d65c11d8` |
+| 10 x86 | `usbccgp.sys` | 10.0.19041.2546 | 139,128 | `2e84d97ad3e12f87651d2f6036f463161f9dfe98d29b99cc0832b157471c1238` |
+| 10 x64 | `usbccgp.sys` | 10.0.19041.2546 | 190,336 | `a9f804cabfbc2cb82b4ddceae9695933273519caabe56c24ed8e1225824cc263` |
+| 10 x86 | `USBAUDIO.sys` | 10.0.19041.2604 | 142,336 | `f2c380c72919ef5ca84f67a8f35e8ac39f1bd1b3172539900fc11f0b1313f510` |
+| 10 x64 | `USBAUDIO.sys` | 10.0.19041.2604 | 209,920 | `7fc9d74b746147b711257eac92fee4e24f6d9541656d3086da05c27af3ebae9c` |
+| 10 x86 | `usbaudio2.sys` | 10.0.19041.1 | 178,688 | `9dc4e34fa41b91a5e57b31988f1487cd99c887089566f2edff0ef76fc595d125` |
+| 10 x64 | `usbaudio2.sys` | 10.0.19041.1 | 260,608 | `7d38fa294da179e5535e3e481746f07e2ae47ce57192c2d1c5b780b583fd9c6d` |
+| 10 x86 | `winusb.sys` | 10.0.19041.1 | 80,896 | `9caea186fdc95c6b59d9b31ce9464affc8a4d3d5bda65cb1354bfff232276994` |
+| 10 x64 | `winusb.sys` | 10.0.19041.1 | 107,008 | `6f8f89b350fc6bc0d23a50c593f02514854ab7d6cd234d8c8ad4b5dddd586ba0` |
+| 10 x86 | `Wdf01000.sys` | 1.31.19041.1151 | 610,624 | `20e6a809de7bd2143464ab0805f4618a95dd7950ffd84119d36cad0220a41a04` |
+| 10 x64 | `Wdf01000.sys` | 1.31.19041.2193 | 828,752 | `6ec1b4b6da86876590b869ffca093a8630b185a1ab502c3e6495055fcd89fb10` |
+| 10 x86 | `UcmUcsiCx.sys` | 10.0.19041.488 | 80,896 | `c316366d092b1e5af5416a79804dc9e23468b39a19692452feebbbfc5f34344f` |
+| 10 x64 | `UcmUcsiCx.sys` | 10.0.19041.488 | 113,152 | `3e5cdcc098149853a7efa05ea1b714182c82e4153f2da3c50ba30df2b3e05eb6` |
+| 10 x86 | `UcmUcsiAcpiClient.sys` | 10.0.19041.1 | 25,088 | `5df5262ea7c70631a894d6414b12d9c599065e8b438e40c2d1b18f1c1270c7cb` |
+| 10 x64 | `UcmUcsiAcpiClient.sys` | 10.0.19041.1 | 36,864 | `3626760aee42ee36e047da6899a81e0646dfba344a234270eae5d635f049be37` |
+| 10 x86 | `usbui.dll` | 10.0.19041.1 | 75,776 | `3f38558e94e75b5550bfbe51e6e68e54079ac277c5c1b62ce0aea07b5e5ce2d2` |
+| 10 x64 | `usbui.dll` | 10.0.19041.1 | 93,696 | `7429846740b83557a0125073eb3615029841bbb9ddb157fc252fcf74bd2f0871` |
+| 10 x86 | `UsbTask.dll` | 10.0.19041.746 | 45,056 | `d6499523fe8ddddf85533fab1a0300f01badc2aebcf50b58d2ba2c4a655ca114` |
+| 10 x64 | `UsbTask.dll` | 10.0.19041.746 | 55,808 | `0599b1cb756b9b7f3118dfdb16b402968885cf9a9a03f01ff9b835eb5e76dadf` |
+| 10 x86 | `UsbSettingsHandlers.dll` | 10.0.19041.746 | 56,832 | `63e0070489a7c5dfecb62eb5f03af3a45c3cc575ac7c16c89e9b5a92615b3a7c` |
+| 10 x64 | `UsbSettingsHandlers.dll` | 10.0.19041.746 | 78,336 | `2c2a2abb08cbe51529a73d3809fab9b3628c48af1254eff561109168413fee40` |
+| 10 x86 | `shell32.dll` | 10.0.19041.2788 | 6,017,784 | `5db83c3a7a5b199664f98cb8485c1cba6ae645c35de0629be58e8f58c14f08d9` |
+| 10 x64 | `shell32.dll` | 10.0.19041.2788 | 7,650,920 | `03b7a32454ae46a26511ad8933ba9026af099976b9e896f5251615e196e83cf8` |
+| 10 x86 | `en-US\shell32.dll.mui` | 10.0.19041.964 | 395,264 | `884fe230c56d685d19c04edb5c190d336d913c5ca50522e024e6d8a1b7763259` |
+| 10 x64 | `en-US\shell32.dll.mui` | 10.0.19041.964 | 395,264 | `884fe230c56d685d19c04edb5c190d336d913c5ca50522e024e6d8a1b7763259` |
+| 10 x86 | `en-US\usbui.dll.mui` | 10.0.19041.1 | 14,848 | `9a1f2408cc3e8ef071fc3e55d3c79c1c0e9a4315b1aafc85ad2409d237277409` |
+| 10 x64 | `en-US\usbui.dll.mui` | 10.0.19041.1 | 14,848 | `9a1f2408cc3e8ef071fc3e55d3c79c1c0e9a4315b1aafc85ad2409d237277409` |
+| 10 x86 | `en-US\UsbTask.dll.mui` | 10.0.19041.1 | 7,680 | `cc4472de738d1897b62ba151f6405c96f3eb87c74b88703c6a10a84afd9f2d86` |
+| 10 x64 | `en-US\UsbTask.dll.mui` | 10.0.19041.1 | 7,680 | `cc4472de738d1897b62ba151f6405c96f3eb87c74b88703c6a10a84afd9f2d86` |
+| 10 x86 | `usbxhci.inf` | - | 6,818 | `743311c721462115e8331ed1040a44a186df40633f2d2abc6c62de79d4c5e1de` |
+| 10 x64 | `usbxhci.inf` | - | 8,350 | `fb7255db1751a1409891b705d5a7c71f7e9e100b6aa5c0a5273a8783f34c8bcb` |
+| 10 x86 | `usbhub3.inf` | - | 11,154 | `3c29d673a8a9e0b4d7d41edd3f6a472e989f8098fbae2fc4beca5876a598d3c4` |
+| 10 x64 | `usbhub3.inf` | - | 11,162 | `0da3aa0d0a504f4824291e0b67b86587e2884c79cb8b3f41b20d3ec9454b1fb2` |
+| 10 x86 | `usb.inf` | - | 41,164 | `ac4e55a3bc0e1e18882dedee7f5555637ec06ef4b0dbe2e1f611195bcfbd18ec` |
+| 10 x64 | `usb.inf` | - | 41,484 | `791da775eb0d4a50d0ca72dd887566d8dd01b410e8be03ab0e5907d004eb6708` |
+| 10 x86 | `usbport.inf` | - | 77,416 | `b22f9d580d65746b906f522007a07187bada5830cba4c9d86d0f40d656558284` |
+| 10 x64 | `usbport.inf` | - | 77,552 | `b28f8ef0e7f8a3937bda6f9e43ca894a3c0af505895e566578045ef19b4c92c9` |
+| 10 x86 | `usbstor.inf` | - | 31,346 | `41ac4ae87ae118ec9aca4996019b7a061d7ac4ef81bc1c0653efbfcd87dae69e` |
+| 10 x64 | `usbstor.inf` | - | 31,538 | `df712f9f8a13bde56b7a325c34e0b982c1abf997ca360f7cb6a8739da13a96bf` |
+| 10 x86 | `uaspstor.inf` | - | 4,060 | `716da1d6ae6e877a8706bb15e865dfa4aa992b5130f0341c543b3d396008c3a7` |
+| 10 x64 | `uaspstor.inf` | - | 4,068 | `11283a30ac3d4f91c5069e9eaf88418ce2dd3b4bb6533ab191ae234d9f32196a` |
+| 10 x86 | `input.inf` | - | 73,926 | `f5acc2dc285ff3987ce5c9e85b9be129e10f8c82f61e76e883aa457e9f945df7` |
+| 10 x64 | `input.inf` | - | 74,518 | `c37d0822edf1dbedfc5d838be286400c64c9a51c45da48e5e0c3b612f3dbf59a` |
+| 10 x86 | `wdma_usb.inf` | - | 92,872 | `b1666d4f3185bd026a634e058e04b417dfb22638be79a22e6306d35284aa65da` |
+| 10 x64 | `wdma_usb.inf` | - | 93,008 | `98fb412409c1eba9f8cb7983deed66aa9e0b3edfa052f284da7de6952d8ca0e3` |
+| 10 x86 | `usbaudio2.inf` | - | 13,968 | `9ad1bef8408ccc57dd3a186ff27236fc692da2b91267922fb39cebe80e5103e5` |
+| 10 x64 | `usbaudio2.inf` | - | 13,976 | `2f507b5f57d2efc21593b6ccccb8bfafa239496701dbd6a5907773a35be695c6` |
+| 10 x86 | `winusb.inf` | - | 4,368 | `7e25adb724cf73e924ba85f0e2e38ff91694c95eee4e0c851aa57393a98509f8` |
+| 10 x64 | `winusb.inf` | - | 4,376 | `9ede409763b992bd39bc2ae048a12d4f4b3fc3890824178f3f3130c1c47e9cc6` |
+| 10 x86 | `UcmUcsiAcpiClient.inf` | - | 2,752 | `7fe196e3508f2eb91d568529f98b7ea14719f4cba4fc52e3f5a060f93bdeac54` |
+| 10 x64 | `UcmUcsiAcpiClient.inf` | - | 2,760 | `f0420b1c9886b2003ab146ef1485ed3feaacbd4d5294a2efc99982ba6a6ad7b8` |
+
+The INFs are UTF-16LE (`usbhub3.inf` and `usbxhci.inf` included, unlike
+8's UTF-8), hashed as the original bytes.
+
+#### 6.14.1 The controller's match on 10
+
+**Static.** As on 8 and 8.1, only `usbxhci.inf` names `PCI\CC_0C0330`
+in any of the 679 (x64) and 636 (x86) INFs; `usbport.inf` keeps
+`PCI\CC_0C0300`, `_0C0310`, `_0C0320`, `USB\ROOT_HUB` and
+`USB\ROOT_HUB20`. `usbxhci.inf` (`DriverVer = 01/13/2023,10.0.19041.2546`,
+`PnpLockdown=1`) keeps 8.1's models (`PCI\CC_0C0330`, `ACPI\PNP0D10`,
+`ACPI\PNP0D15`), `FeatureScore=80` and the three Fresco Logic `ExcludeID`
+lines unchanged; what it adds over 8.1:
+
+- `[USBXHCI.AddReg]` writes `Parameters\DmaRemappingCompatible` = 2 and
+  `DmaRemappingCompatibleSelfhost` = 1 (the Kernel DMA Protection opt-in,
+  record 21 section 3.6);
+- `[Generic.AddProperty]` sets `{540b947e-8b40-45bc-a8a2-6a0b894cbda2},12`
+  (`DEVPKEY_Device_DebuggerSafe`, type 7) to 1;
+- x64 only: a UMDF companion, `UsbXhciCompanion.dll` copied to
+  `%12%\UMDF`, `ServiceType = SecureCompanion`, `TrustletIdentity=4096`
+  (the x86 INF has no companion and no `.Wdf` section);
+- a `.WMI` section, as 8.1's.
+
+`usbhub3.inf` (`DriverVer = 08/25/2021,10.0.19041.1202`) binds
+`USB\ROOT_HUB30`, `USB\USB30_HUB` and `USB\USB20_HUB` with
+`FeatureScore=80`, as 8.1's; `usb.inf` keeps `USB\CLASS_09` and
+`USB\COMPOSITE`; `uaspstor.inf` binds `USB\Class_08&SubClass_06&Prot_62`
+and `usbstor.inf` the Bulk-Only ids, as on 8. New against 8.1 by the
+same sweep: `usbaudio2.inf` binds the USB Audio 2.0 ids
+`USB\Class_01&SubClass_0{0,1,2,3}&Prot_20`, which `wdma_usb.inf`
+(`USB\Class_01`, `usbaudio.sys`) now `ExcludeID`s; and
+`UcmUcsiAcpiClient.inf` binds `ACPI\USBC000` and `ACPI\PNP0CA0`
+(`FeatureScore = 80`), the USB Type-C connector manager over UCSI, an
+ACPI device beside the controller and not a child of it. **No INF of
+either image names `XHCI98`, a wildcard `USB\` id, or any of 10.13.1's
+four bases**; the non-VID `USB\` ids are 6.12.1's list plus
+`USB\UNKNOWN` (`usb.inf`), so 10.13.2's conclusion holds on 10.
+
+**Measured, the ranking** (x64 guest, 2026-10-22; `pnputil
+/enum-devices /connected /drivers` and `setupapi.dev.log`): Windows'
+choice for QEMU's `qemu-xhci` (`1B36:000D`) is `usbxhci.inf` at **rank
+`0x00802005`** ("Standard USB 3.0 eXtensible Host Controller - 1.0
+(Microsoft)"), and for the emulator's Alpine Ridge xHCI (`8086:15C1`)
+the same INF at the same rank; this package's `xhci98.inf`, offered the
+same controller, was built into a driver node at **`0x80FF2005`**,
+"Signer Score - Not digitally signed", section `Xhci.Dev6.NTamd64`. So
+6.12.1's static ranking holds on 10, measured: `usbxhci.inf` wins on the
+signature score and again on the feature score, and the identifier part
+(`2005`, the compatible id `PCI\CC_0C0330`) is equal. The root hubs went
+to `usbhub3.inf` at `0x00800002`, a USB 2.0 hub to `usbhub3.inf`
+(`USB\USB20_HUB`, `0x00802000`) over `usb.inf` (`0x00FF0001`,
+outranked).
+
+#### 6.14.2 What 10's class drivers send the device PDO, against 8.1
+
+**Static** (the byte scan above; 10 x64 against 6.12's 8.1 x64 files,
+then 10 x86 against 10 x64). The IOCTL codes, the `QUERY_INTERFACE`
+GUIDs and the `usbd.sys` imports of `USBSTOR`, `uaspstor`, `hidusb`,
+`hidclass`, `usbccgp`, `winusb` and `Wdf01000` (KMDF 1.31) are **those
+6.12.2 lists for 8.1**, with three differences:
+
+- **`USBAUDIO.sys` (10.0.19041.2604) is now a `usbdex` client**: it
+  carries `GUID_USBD_INTERFACE_V1`, the capability query `0x49104B` and
+  the `SELECTIVE_SUSPEND` and `DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE`
+  GUIDs, which 8.1's did not, and `RESET_PORT` (`0x220007`) and, on x64,
+  `CYCLE_PORT` (`0x22001F`) beside 8.1's `SUBMIT_URB` and
+  `RECORD_FAILURE`. Since 43.29 the bus answers that interface at
+  version `0x602` (6.13.2) and refuses any other version, the client then
+  taking the `0x600` path (6.12.3's reading of `usbdex`, static, on 8).
+  Which version 10's `usbdex` asks for was not read (the library was
+  not re-read on 10; inference: `0x602` is the last version the public
+  headers define), so whether 10's clients get 6.13's contract or the
+  `0x600` path, and whether `USBAUDIO` starts on either, is a guest leg
+  under `xhci98.sys` (6.14.6).
+- **`usbaudio2.sys`** (USB Audio 2.0; no 8 counterpart) imports
+  `portcls.sys` and `wdfldr.sys` and carries no USB IOCTL immediate: its
+  USB requests go through KMDF's USB target, whose set is `Wdf01000`'s
+  row of 6.12.2. It carries the `DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE`
+  and `..._SUPER_SPEED_COMPATIBLE` capability GUIDs; on the `0x600` path
+  the second is `STATUS_NOT_IMPLEMENTED` (6.12.3). What it does with that
+  is not read. The QEMU vehicle has no USB Audio 2.0 device.
+- `uaspstor.sys` 10 x64 no longer carries the `SUPER_SPEED_COMPATIBLE`
+  GUID 8.1's did; `STATIC_STREAMS`, `0x49104B` and `GUID_USBD_INTERFACE_V1`
+  remain, so 6.12.4's start sequence (streams through `0x49104B`, else
+  `IsDeviceHighSpeed`, else `0xC0000182`) is the expectation on 10 too
+  (inference from the constants; the sequence itself was not re-read).
+
+`usbd.sys` 10 exports the same 20 names as 8.1's (x64; x86 adds the
+three decorated aliases); `usbhub3.sys` 10 carries the same PDO request
+constants as 8.1's (6.12.5's table, compared by constants only), and
+`ucx01000.sys` 10 the same set but `0x49104F`, with `0x491404` and
+`0x491408` added. **So no class driver of 10 asks the bus for anything
+6.12.6 does not already list**, by constants; `0x220FB3`, which 43.29
+serves as `RESET_PORT` (6.12.10), is still sent by `USBSTOR`,
+`uaspstor` and `usbccgp`, and `ucx01000.sys` handles it.
+
+#### 6.14.3 What 10 binds under its own driver (measured)
+
+The x64 guest of 43.32 with QEMU's `qemu-xhci` (`p2=8,p3=4`) and the
+emulator's Thunderbolt 3 NHI, read with `pnputil /enum-devices
+/connected /drivers`, 2026-10-22 (the x86 guest's reading is run sheet
+43.33's):
+
+| Device (QEMU) | Port | Bound by 10 | Matching id, rank | State |
+|---|---|---|---|---|
+| `qemu-xhci` `1B36:000D`; emulator xHCI `8086:15C1` | - | `usbxhci.inf` | `PCI\CC_0C0330`, `00802005` | started |
+| their root hubs | - | `usbhub3.inf` | `USB\ROOT_HUB30`, `00800002` | started |
+| `usb-hub` (USB 2.0) | 8 | `usbhub3.inf` | `USB\USB20_HUB`, `00802000` | started |
+| `usb-tablet`, `usb-kbd` behind the hub | 5, 8.1 | `input.inf` (`hidusb`) | `USB\Class_03&SubClass_01`, `00FF3101` | started |
+| `usb-storage`, SuperSpeed (`P4333SS3`) and High Speed (`P4333SS2`) | 1, 6 | `usbstor.inf` | `USB\Class_08&SubClass_06&Prot_50`, `00FF2000` | started; F: and G: |
+| `usb-uas` | 2 | `uaspstor.inf` | `USB\Class_08&SubClass_06&Prot_62`, `00FF2000` | **Code 10, `0xC0000001`** |
+| `usb-audio` (Audio 1.0, two interfaces) | 7 | `usb.inf` composite, then `wdma_usb.inf` on `MI_00` | `USB\COMPOSITE` `00FF2003`; `USB\Class_01` `00FF2002` | started |
+| Thunderbolt 3 NHI `8086:15BF` | - | none | - | Code 28, "Base System Device" (record 21 section 3.6) |
+
+`usb-uas` failing under **Microsoft's own** `uaspstor` is a fact about
+the vehicle, not about this bus: QEMU's UAS device does not start under
+10's inbox stack either, so no UAS leg on 10 can be read on this
+vehicle (43.37 needs a real UAS disk or a different emulated one). No
+`ACPI\USBC000` or `ACPI\PNP0CA0` device exists on QEMU's firmware, so
+the Type-C stack (`UcmUcsiAcpiClient`, `UcmUcsiCx`, `UcmCx`) is not
+loaded in either guest; on a machine whose firmware offers UCSI it binds
+an ACPI device beside the controller, which a third-party xHCI driver
+does not replace (inference: its INF names no USB id).
+
+#### 6.14.4 "Device can perform faster when connected to USB 3.0" on 10 (task 43.33 (b))
+
+**Where 10 shows it (static).** In the same two places as 8, and in no
+notification:
+
+- **Explorer's details pane**: `shell32.dll` 10.0.19041.2788 (x64 and
+  x86), strings 38252 "Device can perform faster when connected to USB
+  3.0" and 38253 "Connected to USB 3.0" of `en-US\shell32.dll.mui`, the
+  DirectUI ids `PreviewUSB3CanBeFaster` and `PreviewUSB3Connected`, and
+  the strings `usbxhci` and `usbxhci_dsf`.
+- **Devices and Printers' status**: `usbui.dll` 10.0.19041.1, strings
+  1210 and 1211 (the same texts), `usbxhci` and `usbxhci_dsf`, and
+  `0x22045C`.
+- **Not a toast.** Windows 10's USB toasts come from `UsbTask.dll`
+  10.0.19041.746 ("Usb Error Notification Task", the hidden scheduled
+  task `\Microsoft\Windows\USB\Usb-Notifications`, measured in the
+  guest; toasts as `Windows.SystemToast.Usb.Notification` on WNF
+  states): its strings are the charger, Type-C alternate mode, cable,
+  billboard, power and data-role texts (1306 to 1342), and no "faster".
+  No other of the x64 image's 1,770 `en-US` MUI files carries "perform
+  faster". Windows 7's balloon texts ("This device can perform faster",
+  `usbui.dll` 7 strings 82 to 96) are absent from 10's `usbui.dll`, as
+  from 8's.
+- **No setting turns it off**: Settings > Devices > USB
+  (`UsbSettingsHandlers.dll`, `SystemSettings_Usb_ErrorNotify`) writes
+  `NotifyOnUsbErrors` under `HKCU\Software\Microsoft\Shell\USB` (absent,
+  so default, in the guest, measured); `usbui.dll` carries the value's
+  name beside its `USBErrorHandler`. That switch is the USB-error balloons' (power surge, device
+  not recognised, hub power); it was not traced to the details pane's
+  line, which reads no value of that key by its strings.
+
+**What it tests (static, 10 x64 `shell32.dll` read with capstone at the
+interface level; x86 checked by its strings and IOCTL constants).** The
+same decision as 8's (6.12.11): `_EX_V2` (`0x22045C`, 16 bytes,
+`Length` 0x10, at x64 RVA `0x5624C4`) with `_EX` (`0x220448`) beside
+it; the flags word's bit 1 is kept as *capable*, bit 0 sets the speed to
+3 (x64 `0x561C9A` to `0x561CAC`); capable and speed 3 gives state 2,
+"Connected to USB 3.0"; capable and not gives state 1, "can perform
+faster", **only if** the host-controller test (x64 `0x562538`, which
+compares a devnode's service with `usbxhci` at `0x562681` and then
+`usbxhci_dsf`, then reads a 4-byte property) succeeds (x64 `0x561A7D`
+to `0x561AAF`); the line is chosen from the two DirectUI ids at x64
+`0x40CF32` to `0x40CF49`. **So on 10 22H2 the line has 8's two
+conditions: `_EX_V2` bit 1 and a host controller run by `usbxhci`.**
+
+**Measured on 10's own stack** (x64 guest, Explorer, This PC, the
+details pane, 2026-10-22): of the two `usb-storage` drives, one on a USB 3
+port (SuperSpeed) and one on a USB 2.0-only port (High Speed), F: shows
+**"Connected to USB 3.0"** and G: **no line** (which letter is which port
+was not read; only the SuperSpeed one can report bit 0). That second reading is the vehicle, not
+a counterexample: QEMU's `usb-storage` reports `bcdUSB` 0x0200 at High
+Speed (`hw/usb/dev-storage.c`, `desc_device_high`), so no hub reads its
+BOS and bit 1 cannot be set; the "can perform faster" line cannot be
+shown on QEMU under either stack (a real USB 3 stick reports `bcdUSB`
+0x0210 or more at High Speed).
+
+**Under `xhci98.sys` (inference from the above and 6.12.11's table):**
+the controller's service is `xhci98`, so the `usbxhci` test fails and 10
+shows **no "can perform faster" line under this driver**, whatever the
+bus answers; a SuperSpeed stick on a USB 3 port would show "Connected to
+USB 3.0" in the details pane (bits 0 and 1, no `usbxhci` test on that
+branch) and no status in Devices and Printers (whose provider tests
+`usbxhci` first). By 43.27's rule (on by default only where Windows
+shows no notice of its own under this driver), XHCITR's notice is **on
+by default on 10**, as on 8 and 8.1. Measured under this driver (10 x86, after
+the restart of 6.14.5, Explorer's details pane, 16:11): F: **"Connected
+to USB 3.0"**, G: no line, as under Windows' own driver - so this bus
+answers Explorer's `_EX_V2` request with bit 0 for the SuperSpeed stick,
+and the line's "Connected" branch needs no `usbxhci`. The "can perform
+faster" branch cannot be shown on this vehicle under either driver.
+
+#### 6.14.5 The forced install on 10: refused on x64 for want of a catalog, run on x86 (measured)
+
+The installer's NT route by hand in the x64 guest (test-signing on,
+Secure Boot unsupported by the legacy-BIOS machine): the published
+`3.1.0.0` `release-x64` directory's `xhci98.inf` (`xhci98.sys` test-signed,
+record 19), `UpdateDriverForPlugAndPlayDevicesW` with `INSTALLFLAG_FORCE`
+on the controller's first hardware id
+`PCI\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01`, 2026-10-22 14:10. It
+returned FALSE, `GetLastError` **`0xE000022F`** ("The third-party INF does
+not contain digital signature information"), in 7 seconds, and the
+setup log says why:
+
+```
+sig:  Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode.
+sig:  Driver package failed signature validation. Error = 0xE000022F
+sto:  Failed to import driver package into Driver Store. Error = 0xE000022F
+```
+
+after `_VERIFY_FILE_SIGNATURE` found no catalog for `xhci98.inf`
+(`0x490`), built the driver node (rank `0x80FF2005`, 6.14.1), selected it
+and began the staging; no "Windows can't verify the publisher" dialog
+was shown, and the controller stayed on `usbxhci.sys`. (`Could not find
+include INF file "layout.inf"` and "legacy DelProperty operation ... NOT
+configurable" are logged on the way and are not the failure.) **So on
+Windows 10 the driver store refuses a package with no catalog outright,
+before any prompt**, which Vista and 7 x64 did not (they prompted;
+`build-and-test.md`, the x64 Vista and 7 section): **the package as
+published cannot be installed on 10 x64, by the installer or by Device
+Manager, without a catalog file signed by a certificate the machine
+trusts** - the test certificate, in test-signing mode (by inference
+for Device Manager, which imports into the same store; whether a start
+with "Disable driver signature enforcement" lets the store take the
+package with the prompt instead is unread). That is 43.36's question
+for the owner (6.14.8).
+
+**On 10 x86** (no Secure Boot, test-signing on; 2026-10-22 15:16) the
+same call with the `3.1.0.0` x86 `xhci98.inf` (unsigned, record 19)
+showed "Windows can't verify the publisher of this driver software";
+"Install this driver software anyway" let it through, the setup log
+reading "Driver package does not contain a catalog file, but user wants
+to install anyway" and "Signer Score = 0x80000000 (Unsigned)", and it
+returned TRUE with a restart required ("Device required reboot:
+'Reboot' in section: [Xhci.Dev6.NTx86]"). After the restart
+**`xhci98.sys` ran the `qemu-xhci` controller on Windows 10** (Code
+Integrity event 3001, "an unsigned kernel module ... `xhci98.sys` is
+loaded"): its root hub, the USB 2.0 hub and the composite parent as
+`USB\XHCI98_*` devnodes, and under them HID (the tablet and the keyboard
+behind the hub, `input.inf`, working), both Bulk-Only sticks
+(`usbstor.inf`, F: and G:) and USB Audio 1.0 (`wdma_usb.inf` on
+`MI_00`), all started; `usb-uas` Code 10 under `uaspstor`, as under
+Windows' own driver (6.14.3), so not a reading of this bus. The device
+table is run sheet 43.33's. `usbxhci.inf` stays listed as the "Best
+Ranked" driver for the controller beside the installed `oem2.inf`;
+nothing in the leg moved it back (no rescan, no Windows Update, no
+network).
+
+#### 6.14.6 What only a running `xhci98.sys` on 10 settles (owed to 43.37)
+
+1. On x64, the install with a catalog: the package staged, the
+   controller moved to `xhci98.sys`; on both, no automatic return to
+   `usbxhci.sys` (a rescan, Windows Update's driver search).
+2. The class drivers beyond the x86 leg's (HID, Bulk-Only, a hub and USB
+   Audio 1.0 under `wdma_usb`/`usbaudio.sys` started, 6.14.5): which
+   version of `GUID_USBD_INTERFACE_V1` 10's clients ask and whether they
+   take 6.13's contract (6.14.2), a winusb device, a USB Audio 2.0 device
+   under `usbaudio2` (needs a real device), a UAS disk under `uaspstor`
+   (needs a real one, 6.14.3), on x64 too.
+3. Device Manager's pages (`usbui.dll` 10.0.19041.1) on the controller
+   and root hub; a hot-plug, Sleep, the update and the uninstall
+   (43.37).
+
+#### 6.14.7 What 10 shows or does under its own driver that `xhci98.sys` does not (43.33 (a), the owner's list)
+
+As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
+
+| Item | Under Windows' own driver | Under `xhci98.sys` |
+|---|---|---|
+| Explorer's "can perform faster" line | shown for a capable device at High Speed (static; not shown on QEMU, 6.14.4) | never (the `usbxhci` test, static) |
+| "Connected to USB 3.0" in the details pane | shown (measured) | shown (measured, 10 x86) |
+| Devices and Printers status lines | shown (static) | never (`usbxhci` test first, static) |
+| USB error toasts (`UsbTask`: charger, Type-C, cable, power, billboard) | from the UCM / UCSI stack and the hub's WNF states (static; none on QEMU, no UCSI) | none from this bus (inference: it publishes no WNF state) |
+| USB error balloons (`usbui`: power surge, not recognised, too many hubs) | from `usbhub3`'s notifications (static strings) | none (6.12.11: no WMI provider in `src\`) |
+| Settings > Devices > USB ("Notify me if there are issues connecting to USB devices") | the switch for the above (static) | no effect |
+| USB 3 link power management and hub selective suspend timeout in Power Options (`usbhub3.inf` `AddPowerSetting`) | present (static) | the settings stay in Power Options (installed with `usbhub3.inf`) but nothing reads them (inference) |
+| Kernel DMA Protection opt-in (`DmaRemappingCompatible` 2) | yes (static; `msinfo32` "Kernel DMA Protection Off" on this vehicle, measured) | no value written (record 21 section 3.6) |
+| USB debugging (`DebuggerSafe`, `ACPI\PNP0D15` debug models) | yes (static) | no |
+| UAS with streams under `uaspstor` | yes (static) | through 6.13's `0x602` contract, if 10's `usbdex` asks `0x602` (unread, 6.14.2) |
+| USB Audio 2.0 class driver `usbaudio2` | yes (static) | binds by class id; untested (6.14.2) |
+| Type-C connector manager (UCSI) | beside the controller, unaffected | unaffected (inference) |
+
+#### 6.14.8 Questions this reading leaves for the owner
+
+1. **The catalog (6.14.5)**: on 10 x64 the package installs only with a
+   catalog signed by the test certificate (test-signing mode), so 43.36
+   must either add a test-signed `.cat` to the x64 package (the packager
+   signing it at staging, record 19's route widened from the binaries to
+   a catalog) or not offer `xhci98.sys` on 10 x64. Recommendation: the
+   catalog, made and signed by `make-package.ps1` alone, never by hand,
+   and read on 8 and 8.1 too (43.24, 43.31), where 6.12.9 owes the same
+   question. The catalog applies to the connection manager's x64
+   package too (`xhcicm.inf`, 43.34), which the same store refuses by the
+   same rule (inference). 10 x86 does not need one (it prompts, 6.14.5).
+2. **XHCITR's notice on 10**: on by default under `xhci98.sys`, by
+   6.14.4 (the owner's instruction of 2026-10-22 for 43.27 agrees).
+3. **The vehicle**: QEMU's `usb-uas` does not start under 10's own
+   `uaspstor`, and QEMU's `usb-storage` cannot raise the "can perform
+   faster" condition; 43.37's UAS and High-Speed-notice clauses need a
+   real device on the bench, or a recorded "not readable on the
+   vehicle".
+4. **Stor98 and Kernel DMA Protection** (record 21 section 3.6): Stor98
+   writes no `DmaRemappingCompatible`, so on a 10 x64 machine with the
+   protection on, an NVMe drive behind a tunnel under Stor98 waits for
+   the user's sign-in (never starts under the "block all" policy).
+   Recommendation: 43.34 reads whether Stor98's DMA goes only through
+   its DMA adapter and, if so, writes 1 in Stor98's INF on 10 x64,
+   read on a machine with the protection on before it ships.
+5. **The OVMF guest with Secure Boot** (43.32, not built): needed only
+   for 43.36's refusal case. Recommendation: build it in 43.37, with
+   Microsoft's KEK and DB certificates enrolled by hand in the
+   firmware's custom mode and a fresh UEFI install of 10 x64, or accept
+   the refusal from Microsoft's documented policy (record 23 section
+   5.12) without a guest.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the
@@ -3112,6 +4767,12 @@ DMA"). That rule left the tree with the miniport; it remains the rule of the
    enumeration, or from a lookaside list initialised there if 25.7 needs one
    (`ExInitializeNPagedLookasideList` and the two SList pairs have stock
    precedents in `ks.sys` and `ohci1394.sys`).
+   Since task 43.29 one more kind of site: the URBs a Windows 8 client
+   allocates through the allocators of `GUID_USBD_INTERFACE_V1`
+   (section 6.13.2) - the client's memory, allocated and freed on the
+   client's own calls, counted apart from rule 6's counter
+   (`HcdPoolClientOutstanding`), and never on the bus's own submit or
+   completion path.
 4. **Two files own every call.** A pool file (`src\hcd_pool.c`: the
    allocate and free wrappers, the tag, an outstanding-allocation counter the
    `XHCISNAP` door reports, and the only `ExAllocatePoolWithTag`,
@@ -4778,24 +6439,17 @@ one transport, and both tables above change for it. The compatible ids are
 the chosen setting's triple - `USB\Class_08&SubClass_06&Prot_62` and its two
 shorter forms under UAS, alternate 0's `Prot_50` triple under Bulk-Only -
 and none at all for an interface with no transport it can run. That
-refused interface shows no VID/PID-derived hardware id either: its one
-hardware id is the project-owned
-`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp&REV_rrrr` (`&MI_nn` on a function),
-which no INF names. Its device id, though, keeps the VID/PID form
-(`USB\VID_vvvv&PID_pppp[&MI_nn]`; `hcdDeviceQueryId` routes only the
-hardware and compatible ids through the transport), and so does its
-instance path. So "no INF line can bind it" holds for the hardware ids
-only. Read on Windows 98 SE under NUSB 3.3 (runtime, 2026-10-13, task 38.2,
-a `usb-uas` refused in place): the refused devnode's `HardwareID` value
-carries the device id as a second entry,
-`USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\VID_46F4&PID_0003`,
-and the wizard found no driver for it. Not read: whether an INF whose only
-line is the VID/PID form binds a refused device on 98 SE or ME; whether a
-device with a serial number, once its working form (High Speed, or a
-controller that streams) is installed, brings that devnode's driver back
-to its refused form, since both answer the same device and instance id;
-and how either goes on NT. Roadmap task NOX.1, deferred, reads them
-(10.7.1).
+refused interface shows no VID/PID-derived id at all: its hardware ids are
+the project-owned `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp&REV_rrrr` and
+`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp` (`&MI_nn` on a function), which no
+INF names, and its device id is the second of them (`hcdDeviceQueryId`
+routes a refused PDO's `BusQueryDeviceID` through the transport too). Until
+task 43.15 the device id kept the VID/PID form
+(`USB\VID_vvvv&PID_pppp[&MI_nn]`), and so did the instance path. Windows
+98 SE and ME add the device id to the devnode's `HardwareID` value and
+match INF lines against it, so an INF whose only line was that VID/PID form
+bound a refused device, on 98 SE with and without NUSB 3.3 and on ME
+(runtime, 2026-10-22, task 43.14; 10.7.1). NT's matching was not read.
 Where it sits decides the rest (`XhciXportRefusedAt`): on a
 companion-paired root port the bus asks 29-A.5's hold to send it back to
 USB 2.0 (`HcdHoldRequestUsb2`, Phase 29's executor: an accepted request is
@@ -4917,12 +6571,18 @@ under `USB\XHCI98_HUB` or `USB\XHCI98_HUB30` from `2.4.0.0`; still never a
 `USB\CLASS_09*`, `USB\ROOT_HUB*` or `USB\COMPOSITE` id. `USB\MS_COMP_*` is
 out of scope for 2.0.0.0.
 
-#### 10.7.1 A refused interface's device id (task NOX.1, deferred)
+#### 10.7.1 A refused interface's device id (tasks 43.14 and 43.15, was NOX.1)
 
-**Deferred.** The owner deferred roadmap task NOX.1 on 2026-10-13 until
-after `2.4.0.0`. This section is the plan for that task. It has not been
-reviewed, and nothing in it is implemented. The answers the owner gave the
-same day are recorded below as decisions taken.
+**Status.** Read and changed in `3.2.0.0`: task 43.14 read route 1 on 98
+SE (stock and under NUSB 3.3) and ME, and an INF line matched against the
+device id bound a refused device on all three (runtime, 2026-10-22; "The
+reading", below, and `runs/run-43.md`, "43.14"). By decision 1 the device
+id moved, on every target (task 43.15, "The change", below). The owner
+deferred the task (then NOX.1) on 2026-10-13 until after `2.4.0.0` and
+moved it into Phase 43 on 2026-10-20 as 43.14 to 43.16. The plan of
+2026-10-13 follows as it was written, with the owner's answers of that day
+as decisions taken; what the reading did differently from it is said under
+"The reading".
 
 **What was read.** Task 38.2's legs (runtime, 2026-10-13; `runs/run-38.md`,
 "38.2"; `out\p38-2\legs\notes.txt`, `w98\R2ENUM.txt`) used Windows 98 SE
@@ -5034,6 +6694,67 @@ these ids. It runs on a published `release-x86`.
    `USB\XHCI98_NOXPORT`.
 6. No `usbstor.sys` probe is run. Whether a line binds is what decides the
    change.
+
+**The reading (task 43.14, runtime, 2026-10-22).** `runs/run-43.md`,
+"43.14", has the detail. QEMU 11.1.0 under TCG, 1 vCPU and 256 MB, the
+published `3.1.0.0` x86 package (its refused-interface ids are those of
+every release since `2.0.0.0`), `qemu-xhci,p2=1,p3=4,streams=off`, a
+`usb-uas` hot-plugged on port 3 with a serial never seen before. Three
+guests, which differ from the plan's: a 98 SE installed fresh from its CD
+with no NUSB, the same with NUSB 3.3 installed over it (its agreement
+accepted in the guest, owner, 2026-10-20 and 2026-10-21), and stock ME
+from `vm\t37me\winme-stock-base.qcow2`; `3.1.0.0` installed on each from
+its INF. A 98 SE without NUSB is read after all, since a fresh base now
+exists. The plan's 2000 leg and route 2 were not taken: route 1 bound on
+the 9x guests, which decides the change on every target by decision 1.
+
+- **Route 1, the INF offered.** On all three the wizard came for "USB
+  Attached SCSI HBA". Offered probe V's folder, it named "NOX probe V
+  device id" and `PROBEV.INF` and installed it. The devnode read
+  `HardwareID` `USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\VID_46F4&PID_0003`,
+  `DeviceDesc` "NOX probe V device id", `Mfg` "NOX probe", `Class` `USB`
+  and a `Driver` key whose `MatchingDeviceId` is `USB\VID_46F4&PID_0003`:
+  the line matched the device id. Device Manager listed it under Universal
+  Serial Bus controllers by the probe's name.
+- **Route 1, the INF already installed.** The wizard had copied the probe
+  into `INF\OTHER`. With `DRVIDX.BIN` and `DRVDATA.BIN` deleted, a second
+  `usb-uas` with a new serial was bound to probe V with no wizard and no
+  prompt: a refused device takes such an INF silently once it is on the
+  machine.
+- **The control.** Probe C, whose one line is the hardware id, was not
+  offered: V binding answers the question C was there to qualify.
+- **Not read.** NT's matching (2000 SP4), and route 2 (a serial-number
+  device's working devnode reloaded in its refused form). After 43.15
+  neither can bind a refused device: its device id is project-owned, and
+  differs from the working form's, so the two forms no longer share a
+  devnode.
+
+**The change (task 43.15).** The first outcome above, as planned:
+
+- `XhciXportId` (`xhci_xport.c`) answers `XHCI_XPORT_ID_DEVICE`, for a
+  refused interface alone, with
+  `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]`, and `XHCI_XPORT_NO_IDS`
+  for any other transport, whose device id stays the PDO's ordinary one. A
+  refused interface's hardware ids gain that form as their second entry,
+  as on every other PDO.
+- `hcdDeviceQueryId` (`hcd_pdo.c`) sends a refused PDO's
+  `BusQueryDeviceID` to `hcdXportQueryId`, before its `pdo->Function`
+  fallthrough. `pdo->Xport` is set once at the PDO's creation, compared by
+  `hcdDormantSame` and copied by `HcdDevicePdoRepresentFunctions`, so a
+  PDO keeps one device id for its life.
+- Host vectors in `test_xport`: the device and function forms, the widest
+  `&MI_`, the size of a short buffer and of none, and the policy's silence
+  for UAS and Bulk-Only.
+- On every target the refused device's instance path moves from
+  `Enum\USB\VID_vvvv&PID_pppp\...` to
+  `Enum\USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp\...`. Its first plug after
+  the update brings the wizard once more, which finds no driver; a VID/PID
+  INF a user had bound to the old devnode no longer binds. The old devnode
+  is left alone (decision 4), and `XHCICLN` already leaves any
+  `USB\XHCI98_NOXPORT` id (10.13.9).
+- 38.8's gates are untouched: `HCD-USBRES` and `OEM-USBID` already refuse
+  any `USB\XHCI98_NOXPORT` line, and the installer's `inst_bus_id` and
+  `inst_remove_rank` already treat that form as not the bus's and leave it.
 
 ### 10.8 When and how the bus splits a device
 
@@ -6607,6 +8328,13 @@ link it); `legal-provenance.md` section 2a and `AGENTS.md`'s "the two tool
 executables" sentence change with them.
 
 #### 10.13.9 Task NOX.1 (38.12 until 2026-10-13)
+
+**Amended 2026-10-22 (task 43.15).** NOX.1's reading and change are tasks
+43.14 and 43.15 (10.7.1), its legs task 43.16: the refused PDO's device id
+moved to the `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]` form, and no
+38.8 gate, nor the tool's selection rule, changed with it, as this section
+foresaw.
+The text below is as written before it.
 
 Task 38.12 - whether a refused storage interface's VID/PID device id binds
 a VID/PID-only INF, and if so moving that PDO's device id to the
@@ -8610,6 +10338,331 @@ either; on Windows 98 SE, the roadmap's low-memory machine
 (a 64 MiB guest) shows its allocations unchanged by this stage - a
 regression leg, since nothing here runs there. The full 36.26
 compatibility and multi-device load matrix applies.
+
+### 11.8 The isochronous ring: a page of its own, the event budget and moderation (43.38 to 43.40)
+
+**Why.** The owner's decision of 2026-10-20 (roadmap-usb4, Phase 43, tasks 43.38 to
+43.40; the larger event ring of point 9, 43.41 until the owner deferred it on
+2026-10-22, is the planned ISORING.4): enlarge the isochronous ring now, and consider
+interrupt moderation in the same work. Today every isochronous pipe sits
+on a pool ring of 64 TRBs, 62 usable (design record 04 section 3.6), a
+request may carry at most 62 packets and 62 TRBs
+(`XHCI_XFER_MAX_ISO_PACKETS`, `XHCI_XFER_MAX_ISO_TRBS`, `src\xhci.h`), and
+a packet that crosses a 4 KiB page costs two TRBs. The ring is shared by
+every request of the pipe, so it bounds what the pipe holds in flight, not
+only one request: at High Speed with one TD a microframe, 62 TRBs are 7.75
+ms of stream when no packet crosses a page and 3.875 ms when every one
+does. A 3 x 1024-byte High Speed endpoint (a UVC camera's high-bandwidth
+alternate setting, 3,072 bytes a microframe) crosses on half to three
+quarters of its packets, so it holds about 4.4 to 5.2 ms. xHCI98 has never
+carried High Speed isochronous traffic in any recorded reading (the release
+notes, "Untested ground").
+
+**The limit that is not the ring: the event ring.** Every isochronous TD
+carries IOC (the builder, `xhciXferBuildIsoPacket`), so each TD the
+controller completes is one Transfer Event, and a TD of two TRBs can be
+two: a short packet on its first TRB raises one by ISP and the TD's last
+TRB raises a second ("a second for the last TRB with the IOC flag set",
+4.10.1.1.2 p.175), and a Missed Service Error on its first TRB is followed
+by the IOC TRB's own ("shall not drop Events associated with TRBs",
+p.201). A ring adds one event more each time it runs empty, the Ring
+Underrun or Overrun (4.10.3.1 p.185; "only generated the first Interval
+that an empty Transfer Ring is detected", p.196) - once per empty stretch,
+and a stretch ends at the next doorbell, which every publication rings
+(`HcdIoMapped`). While software is not draining, each of the pipe's four
+records (`HCD_PIPE_XFERS`) is published at most once: a record that
+reached the ring is freed only by its completion, which the drain
+delivers (an event of its own, or the Stop Endpoint's completion a cancel
+waits for), and a record completed without reaching the ring - refused,
+or cancelled while held - publishes nothing and rings no doorbell; a held
+record that such a completion releases is still one of the four, published
+once. So at most four doorbells reach the ring in that time: four more empty
+stretches, and the one already running when it began. So
+a pipe's events are at most its ring's TRBs plus five - on a compliant
+controller. Controllers under
+`XhciIsochSpuriousSuccess` (design record 20 section 4.14) may follow an
+error with a Success for the same TRB, two events for one; on those the
+bound does not hold and no page is granted (point 2). The event ring is
+one segment of 256 entries (record 04 section 4), and an Event Ring Full
+is fatal here: a Host Controller Event escalates to a controller reset
+(`xhci_evt.c`, the `XHCI_TRB_TYPE_HOST_CONTROLLER` case), because a
+dropped event strands a completion matched by identity. Software stops
+draining whenever the event DPC is late, and under polled delivery
+(design record 15) for a whole poll period, which the system timer
+stretches to 15 ms or more (`runs/run-36.md` read 15 to 62 ms on the
+E7250). Today a pipe's 62 TRBs cap what it can leave there; a ring sized
+for 20 ms at High Speed would let one stream fill the event ring during a
+20 ms stall and reset the controller with every device on it, where
+today the same stall costs an underrun. **So the ring is enlarged only as
+far as an event budget allows**, and the budget is the event ring's: what
+lifts the limit further is a larger event ring (point 9), not a larger
+transfer ring.
+
+**What changes.**
+
+1. **A page of its own.** An isochronous pipe that needs more than the
+   pool ring (point 2) and is granted a budget (point 3) has its ring in
+   a common-buffer allocation of its own, the **iso page**: whole pages
+   from `AllocateCommonBuffer` through the adapter, cache-enabled, below
+   4 GB, as a stream block is (`HcdDmaStreamAlloc`, section 11.2),
+   allocated at the pipe's open on the thread at PASSIVE_LEVEL. The ring
+   is `allowance + 2` TRBs (`XhciRingInit` takes any count of 3 or more;
+   no ring arithmetic in `xhci_ring.c` assumes a power of two), so
+   `XhciRingCapacity` is the allowance itself and every existing check -
+   the empty-ring refusal `XHCI_XFER_ISO_TOO_LARGE`, the ring-full
+   `XHCI_XFER_BUSY` and the pipe's `RingWait` - enforces the budget with
+   no new arithmetic. The ring starts at the page's start and is at most
+   256 TRBs (4,096 bytes), so a page-aligned allocation never crosses 64
+   KiB (record 04's alignment table; `XhciSegmentUsable` refuses it
+   anyway). On a controller with `XhciStreamRingPad` in effect (design
+   record 20 section 4.12, `XHCI_TRB_OVERFETCH`), the allocation holds a
+   second ring's bytes after the ring, as a stream block does: one page
+   while the doubled ring fits in it, two otherwise. **The pipe still
+   takes its pool entry**, as every endpoint's pipe does, and leaves that
+   ring unused: the pool's count is also the bound on the controller's
+   endpoint contexts that design record 20 rests on (32 EP0 contexts and
+   32 pool-backed ones against Panther Point's 64, its
+   `XHCI_EP_LIMIT_QUIRK` row), and `PoolRings`, the per-device cap, the
+   fairness count, a switch's reservation and the held pipes' accounting
+   stay exactly as they are. The cost is one 1 KiB pool ring idle while
+   the page pipe is open. A pipe refused a page - not a candidate, no
+   budget, or no memory - opens on its pool ring exactly as today,
+   counted.
+2. **Which pipes.** One whose endpoint is serviced more than once a
+   frame: the Endpoint Context's Interval (`XHCI_PIPE_EP.Interval`, 125
+   us units as a power of two) of 0, 1 or 2 - High Speed or SuperSpeed
+   with `bInterval` 1 to 3 - and not zero-bandwidth
+   (`XhciPipeZeroBandwidth`; `roadmap-hcd.md`, decisions table,
+   "Zero-size isochronous endpoints"), on a controller where
+   `XhciIsochSpuriousSuccess` is not in effect. At one TD a frame or
+   fewer the pool ring already holds 31 to 62 ms, so Full and Low Speed
+   isochronous pipes, and High Speed ones with `bInterval` 4 or more, keep
+   it: Full Speed audio, the only isochronous device in this project's
+   records, is unchanged. The `qemu` flavour's `XhciQemuIsoRing` (1: every
+   non-zero-bandwidth isochronous pipe is a candidate) lets QEMU's Full
+   Speed `usb-audio` exercise the page in a leg; it is read at start and
+   logged, as `XhciQemuBigRefuse` is, and never exists in a published
+   flavour.
+3. **The event budget.** Every open isochronous pipe of the controller,
+   on a pool ring or a page, is counted at its ring's capacity plus five
+   (the underrun events above): 67 on a pool ring. A page is granted only
+   when that count, a margin and room for the new pipe and one more pool
+   pipe fit the event ring: the grant is `EventRingTrbs - 64 - counted -
+   2 x 67`, at most 192 (so the ring is at most 256 TRBs, one page), and
+   refused below 16 (not worth a page). The 64 is a margin for every
+   other source (commands, port changes, bulk, interrupt and stream TDs,
+   each pipe holding a few TDs), which nothing enforces, as nothing does
+   today. The "one more pool pipe" keeps room for a second isochronous
+   pipe opened after the page - a camera's microphone, an audio device's
+   other direction. With today's 256-entry event ring and no other
+   isochronous pipe open the grant is 58: allowance 120, ring 122 TRBs,
+   counted 125, and 125 + 67 = 192, the 256 less the margin. With any
+   isochronous pipe already open no page is granted at 256 entries (the
+   order matters: a camera opened before its microphone gets a page, one
+   opened after does not). **What it bounds, and what it does not**: a
+   page is granted only into room the event ring has, but a pipe is never
+   refused for the budget, so pipes opened after a page are counted and
+   may take the count past the event ring, as four pool pipes do today (4
+   x 67 = 268); the page adds at most 58 to what today's rule would allow
+   for the same pipes. The count lives in the controller (`IsoCapOut`,
+   controller lock); a pipe gives its count back when it can publish no
+   more and holds no TD - when it is freed or held (`hcdCfgPipeFree`,
+   `hcdCfgRetain`) - exactly once, never at a stop or reset of the
+   endpoint, which keeps the pipe. **An interface switch**
+   (`hcdCfgSelectInterface`, and a function's select,
+   `hcdCfgSelectFunction`; record 20 section 5.3) creates the new
+   setting's pipes after the old ones are detached, aborted and drained
+   (step 1 before step 2), and the old ones are dropped by the switch's
+   own command: their counts are subtracted when the new pipes are sized
+   (`hcdCfgSwitchIsoBorrow`), as the pool reservation counts their rings.
+   Old and new are then both counted while the old hold no TD; a switch
+   that fails frees the new pipes, returning their counts, and reattaches
+   the old with theirs.
+4. **The request's limits on a page.** Packets: at most 128 (16 ms at one
+   a microframe; a multiple of 8, as High Speed URBs are), and at most the
+   allowance; TRBs: at most the allowance, refused as
+   `XHCI_XFER_ISO_TOO_LARGE` from the ring's own capacity. On a pool ring
+   both stay 62. The URB-side check (`hcd_urb.c`, before the pipe is
+   known) takes 128 and the pipe's own bound is `hcdIsoAdmit`'s, refused
+   as today (`IsoRefusalsTooLarge`, `USBD_STATUS_INVALID_PARAMETER`). The
+   per-record block the engine reads (`HCD_ISO_BLOCK`) is allocated with
+   the pipe at the pipe's own packet bound, by a stride, so a pool pipe's
+   blocks stay their present size. **Not chained.** A request is still one
+   group of TDs published at once; one longer than the allowance is
+   refused rather than split across ring refills, because a split request
+   would retire positionally across two publications - the engine's group
+   rule (`XhciRingRetireIsoGroup`, the tail rule of 4.11.7 p.214) - and the
+   budget, not the ring, is what bounds a request anyway. A client keeps a
+   stream continuous with at least two requests in flight, each at most
+   half the allowance; that is stated in the release notes' isochronous
+   row with the numbers below.
+5. **The data a request may carry is unchanged**: one chunk, at most
+   `HCD_SG_ELEMENTS` (32) pages and the adapter's grant (section 11.5;
+   `hcdPlanChunk` never splits an isochronous URB), so a 3 x 1024-byte
+   request holds at most 41 or 42 packets. With four records a pipe
+   (`HCD_PIPE_XFERS`) that is 164 or more TDs, more than the allowance
+   holds, so the allowance binds, not the records.
+6. **The scratch.** The build writes a whole request's TRBs and TD
+   lengths before the ring is touched (`XhciXferBuildIso`); the
+   extension's `IsoScratch` (62 TRBs) and `IsoLayout.TdLengths` (62) are
+   too small for a page's request and the extension's layout is not
+   changed (its size and offsets travel in the snapshot, section 8). The
+   controller (`HCD_CONTROLLER`) gains one scratch of 254 TRBs and one
+   array of 128 TD lengths, used by every isochronous publication under
+   the controller lock, as the extension's were. The request gains
+   `MaxPackets` (0 meaning 62, above 128 refused), a pointer to a length
+   array of `MaxPackets` entries, and `BeiInterval`. With the pointer NULL
+   the layout's own 62-entry array is used and a `MaxPackets` above 62 is
+   refused as `XHCI_XFER_BAD_PARAM` before any packet is read; the build
+   and the ring's enqueue take the same array. The host suites' request
+   constructors (`test_iso.c`'s `iso_request`, `test_td.c`'s) zero the
+   whole request first, as `hcdIsoPublish` does, so the new fields start
+   0. `XhciXferIsoUsesFrameIds` takes the same bound.
+7. **Moderation: BEI, never fewer events.** IOC stays on every TD's last
+   TRB, so every TD still answers its packet with its own event - the
+   per-packet truth the completion relies on (`XhciXferIsoEvent`: packets
+   answered in ring order, a skipped one stamped `NOT_ACCESSED`). IOC on
+   the request's last TD alone was considered and rejected: a successful
+   TD without IOC raises no event, so its packet would have to be inferred
+   as complete, which the spec forbids ("Software shall not infer TRB
+   completions based on Frame ID, MFINDEX, or other information", 4.11.2
+   p.191), and a controller without CFC "may not generate a Missed Service
+   Error Transfer Event for every ESIT missed" (4.10.3.2 p.187), so a
+   skipped IN packet would be reported full of whatever the buffer held -
+   QEMU's controller, CFC 0, among them. Instead the last TRB of every TD
+   carries **BEI** (Block Event Interrupt, Isoch and Normal TRB bit 9:
+   "the Transfer Event generated by IOC shall not assert an interrupt to
+   the host at the next interrupt threshold", Table 6-34 p.437, 4.17.5)
+   but the request's last and every eighth (the 8th, 16th, 24th and so
+   on, counting from 1): the event is written, and drained at the next
+   interrupt that is not blocked - the eighth TD's, the request's last,
+   any other source's. This is this driver's policy, modelled on Linux's
+   (`xhci-ring.c:4036-4052`, `trb_block_event_intr`: BEI on every TD but
+   the last, and with `XHCI_AVOID_BEI`, set on every Intel controller at
+   `xhci-pci.c:345-349`, BEI cleared where the zero-based index is a
+   nonzero multiple of the interval - the 9th, 17th and so on - the
+   interval falling to `AVOID_BEI_INTERVAL_MIN` = 8 under load,
+   `xhci.h:1279`, `xhci-ring.c:3097-3104`): here on every controller at
+   the fixed interval 8, and like Linux never below xHCI 1.0
+   (`hci_version < 0x100`), where 38.11's policy writes no new field
+   anyway. `docs/usb-xhci-info/xhci-programming.md`'s "Never set BEI" read
+   `XHCI_AVOID_BEI` as "never", which Linux does not do; it is rewritten
+   to this rule, and design record 20's row for the flag with it. A High
+   Speed stream interrupts once a millisecond and at each request's end
+   instead of eight times a millisecond; Full Speed once every eight TDs
+   and at each request's end. URB completion is not later: a request
+   completes on its last TD's event, which is never blocked. Errors,
+   Missed Service and short packets raise events as before; nothing in
+   the drain depends on which interrupt delivered an event. Polled
+   delivery reads the ring on its own schedule and is unaffected; QEMU
+   ignores BEI (`hcd-xhci.c` defines `TRB_TR_BEI` and never reads it), so
+   a leg there shows the events, not the interrupt saving, which is a
+   reading for real hardware.
+8. **Everything else is the ring's own geometry, unchanged.** Configure
+   Endpoint names the page's ring (TR Dequeue Pointer, DCS 1) as it named
+   the pool ring; bandwidth admission is the Endpoint Context's Max ESIT
+   Payload and Interval, which the ring does not touch, and a refusal
+   (Bandwidth Error, Resource Error) frees the pipe and its page, or holds
+   it under 38.10's rule when the command's outcome is unknown. Missed
+   Service, Ring Underrun and Overrun, the flow rule (36.57,
+   `XhciXferIsoFlowNext`) and TRB Error's recovery are the engine's, by
+   the ring's PA and size; Stop Endpoint, Set TR Dequeue and the abort
+   and cancel chain address the ring by `ring->Trbs` as stream rings do
+   (section 11.7, point 5); RESET_PORT and a recycle re-add the pipe with
+   its ring (`hcdCfgConfigureAdd`); a suspend leaves the page allocated
+   with its pipe and a resume that cannot restore rebuilds the device,
+   freeing it. **The page's lifetime is the stream block's** (section
+   11.7, point 7): freed with its pipe when the endpoint is Disabled or
+   the slot gone; otherwise retired to the device (`IsoPagesRetired`) and
+   freed by the proof that frees a retired stream block - a Configure
+   Endpoint that dropped the DCI (`hcdCfgRetiredReclaim`), a Reset Device,
+   the slot's going (`HcdCfgDeviceGone`) - and kept for good and counted
+   while a bus master may still run (`CommonBufferPinned`,
+   `HcdDmaStreamFree`). A held (retained or pinned) pipe keeps its page
+   until its own release, as it keeps its pool ring.
+9. **What lifts the limit next.** A larger event ring raises the grant by
+   the difference: at 1,024 entries three page pipes take the full
+   allowance of 254 and a fourth 111 (each counted at its allowance plus
+   five, with the margin and one pool pipe's room kept). The event ring is
+   record 04's fixed one-page segment, so that is a change of its own - a
+   second allocation or a larger, physically placed region, every leg
+   touching it - and it is the owner's question, not this one's.
+10. **Telemetry.** No serialized structure grows (section 8's snapshot
+    and `XHCITR` read the extension and the counter block by layout). The
+    controller keeps pages granted, refused for budget and for memory,
+    pages retired, the largest request published on a page (TRBs and
+    packets) and BEI TDs published, for the debugger and the `qemu`
+    trace; the log notes `iso.page` at each grant or refusal (slot, DCI,
+    allowance or the reason) and `iso.page.free` at each return, and the
+    existing `hcd: isoch published` trace carries the TRB count.
+
+**The numbers** (High Speed, one TD a microframe, 3 x 1024 = 3,072 bytes
+a TD; a TD of one page or two):
+
+| | TRBs a pipe | every TD two TRBs | half (page-aligned buffer) | none crossing |
+|---|---|---|---|---|
+| Today, pool ring | 62 | 31 TDs, 3.9 ms | 41 TDs, 5.1 ms | 62 TDs, 7.75 ms |
+| A page, 256-entry event ring | 120 | 60 TDs, 7.5 ms | 80 TDs, 10.0 ms | 120 TDs, 15.0 ms |
+| A page, 1,024-entry event ring (point 9) | 254 | 127 TDs, 15.9 ms | 168 TDs, 21.0 ms | 168 TDs, 21.0 ms |
+
+The last row is held by the records, not the ring: a 3,072-byte TD's
+request carries at most 42 packets (point 5), so four records hold at
+most 168 TDs whatever the ring's geometry (169 and 254 without that cap),
+and fewer with a smaller adapter grant or an unaligned buffer. A High
+Speed UAC 2 stream of small packets, one TRB a TD, moves from 7.75 to 15
+ms. Memory on Windows 98 SE, per page pipe: one page of contiguous common
+buffer (also with the overfetch pad: 122 TRBs doubled is 3,904 bytes),
+its pool ring idle, and its four request blocks at 120 packets, 4 x
+6,736 = 26,944 bytes of non-paged pool against 4 x 3,488 = 13,952 today;
+the controller's scratch, 4,576 bytes once.
+
+**Host vectors.**
+- `test_iso`: `MaxPackets` 0 as today and 128 accepted, 129 refused
+  before a packet is read; the length array honoured and
+  `IsoLayout.TdLengths` untouched when it is given; `MaxPackets` above 62
+  with no array refused before a packet is read; a 120-packet request of
+  one-TRB TDs built and published on a 122-TRB ring, and a request of
+  two-TRB TDs across its Link TRB; the empty-ring refusal at 121 TRBs; BEI on exactly the TDs the rule names for 1, 7, 8,
+  9, 16 and 128 packets, never on the last, none at interval 0; IOC
+  still on every TD; completion of a request whose middle TDs carried
+  BEI, with a short packet, a Missed Service and a skipped packet, as
+  today.
+- `test_ring`: a 122-TRB ring's wrap, capacity 120, and Set TR Dequeue
+  across its Link TRB.
+- `test_pipe`: the candidate rule per Interval, zero bandwidth and the
+  `qemu` override; the grant from 256 and 1,024 entries with nothing,
+  one pool pipe, one page and the borrow of a switch counted (each pipe
+  at its capacity plus five), refusals below 16, the cap at 192; the ring's TRBs from the grant; the
+  allocation's bytes with and without the pad.
+- `test_td`: hcdIsoFill's model over a 128-packet block at the new
+  stride.
+
+**What the legs show.** QEMU's controller has no High Speed isochronous
+device: its `usb-audio` is Full Speed, so a High Speed stream, a camera,
+the interrupt saving, High Speed's 8,000 events a second and a request
+of more than 62 packets through the whole HCD path (`usbaudio.sys` sends
+short requests) remain unread until real hardware; the engine's side of
+those is the host vectors'. The legs read the regression and the page's
+mechanics under `XhciQemuIsoRing` 1: QEMU's audio device played whole
+(`TONE.WAV`) on Windows 2000, XP and 7 x64 (98 SE's own `USBAUDIO.VXD`
+faults on it, so its leg is the binding and the counters), once on the
+pool ring and once on a page, `IsoPacketErrors` and Missed Service at 0,
+`iso.page` granted with allowance 120 and the requests' TRB counts read
+from the trace; a second play after the device's alternate setting went
+back to 0 and up again (the page freed or retired and granted anew, the
+count back at 0 between); the device unplugged while playing (the page
+freed or retired, then freed); and the switch's failure paths through the `qemu` flavour's
+faults 18 (SET_INTERFACE stalled or not established) and 19 (the
+switch's Configure Endpoint refused, or answered with no completion and
+the controller reset), each read for `iso.page.free` exactly once per
+grant, the pages freed or retired then freed, and the pool's count back
+at its start value; and the other traffic - a stick read and written, a
+mouse - on the same controller, unchanged. RESET_PORT with a page pipe
+open is not among them: `usbaudio.sys` sends no port request
+(`legal-provenance.md` section 4, task 35-T.0's row) and a
+device's disable and enable does not reach `hcdCfgResetPort`, so the page
+across RESET_PORT, which re-adds the pipe with its ring as it re-adds a
+stream's, is read by review and owed to a client that sends one.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 

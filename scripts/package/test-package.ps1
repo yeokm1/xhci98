@@ -1603,7 +1603,7 @@ try {
         # wrong hash.
         Write-Step "the driver pack: one revision's bytes, held to SHA256.TXT and the allowlist"
         $packRepo = Join-Path $script:work "usb-wdm-nonfree"
-        $packSub = "non-free/storage/nusb33/w98se"
+        $packSub = "nusb33/w98se"
         $packDirFx = Join-Path $packRepo ($packSub.Replace('/', '\'))
         Ensure-Directory $packDirFx
         function Invoke-PackGit {
@@ -1644,14 +1644,18 @@ try {
         }
         Invoke-PackGit @("init", "-q") | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $packRepo ".gitattributes"), "* -text`n")
-        [System.IO.File]::WriteAllText((Join-Path $packRepo "NOTICE.md"), "# Notice`n`nStand-in.`n")
+        # The pack's own NOTICE.md and NUSB 3.3's nusb33/NOTICE.md differ, so
+        # the export is seen to take the second (owner, 2026-10-22: NUSB is
+        # kept apart from the non-free pack).
+        [System.IO.File]::WriteAllText((Join-Path $packRepo "NOTICE.md"), "# Notice`n`nThe pack's stand-in.`n")
+        [System.IO.File]::WriteAllText((Join-Path $packRepo "nusb33\NOTICE.md"), "# Notice`n`nNUSB 3.3's stand-in.`n")
         Write-PackFixture -Map $packText
         $allowPath = Join-Path $script:work "drvpack-allow.txt"
         [System.IO.File]::WriteAllText($allowPath, ((@($packText.Keys | ForEach-Object {
             (Get-FileSha256 -Path (Join-Path $packDirFx $_)) + "  " + $_ }) -join "`r`n") + "`r`n"))
         $packGood = [ordered]@{}
         foreach ($name in $packText.Keys) { $packGood[$name] = Get-FileSha256 -Path (Join-Path $packDirFx $name) }
-        $packGood["NOTICE.md"] = Get-FileSha256 -Path (Join-Path $packRepo "NOTICE.md")
+        $packGood["NOTICE.md"] = Get-FileSha256 -Path (Join-Path $packRepo "nusb33\NOTICE.md")
         Invoke-PackGit @("add", "-A") | Out-Null
         Invoke-PackGit @("commit", "-q", "-m", "c1") | Out-Null
         $c1 = Invoke-PackGit @("rev-parse", "HEAD")
@@ -1676,7 +1680,7 @@ try {
         # revision refused with its reason. A package of make-package.ps1's
         # never carries the pack.
         $packDl = [ordered]@{}
-        foreach ($name in $packText.Keys) { $packDl["STORAGE\NUSB33\W98SE\$name"] = $packGood[$name] }
+        foreach ($name in $packText.Keys) { $packDl["W98SE\$name"] = $packGood[$name] }
         $packDl["NOTICE.md"] = $packGood["NOTICE.md"]
         $packAllow = Read-DriverPackAllowlist -Path $allowPath
         $exp = Export-DriverPack -Root $packRepo -Revision $c1 -Dest (Join-Path $script:work "drvpack-c1") -Allowlist $packAllow
@@ -1686,9 +1690,11 @@ try {
         }
         Assert-True ($exp.Files.Count -eq 9 -and $exp.Files.Contains("SHA256.TXT")) "the export does not hold the seven, NOTICE.md and its own SHA256.TXT."
         $sumsDl = Read-DriverPackHashList -Text ([System.IO.File]::ReadAllText((Join-Path $exp.Dir "SHA256.TXT"))) -Label "the download's SHA256.TXT"
-        Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["STORAGE/NUSB33/W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NONFREE\ paths."
+        Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NUSB33\ paths."
         Assert-True ((Get-DriverPackFolderFault -Dir $exp.Dir -Files $exp.Files) -eq "") "the export does not pass its own folder check."
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "NONFREE"))) "a package of make-package.ps1's carries NONFREE\."
+        foreach ($dlDir in @("NUSB33", "NONFREE")) {
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $dlDir))) "a package of make-package.ps1's carries $dlDir\."
+        }
         foreach ($bad in @(
                 @{ Rev = $c2; Want = "not the allowlisted file"; Why = "changed bytes under a matching SHA256.TXT" },
                 @{ Rev = $c3; Want = "not the allowlisted folder"; Why = "an eighth file" },
@@ -1725,20 +1731,24 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
         $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
         foreach ($fl in @("release", "debug")) {
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NONFREE"))) "the upload set's $fl\ holds NONFREE\; it belongs at the root."
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
         }
-        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NONFREE") -Files $exp.Files
-        Assert-True ($fault -eq "") "the upload set's NONFREE\ is not the recorded folder: $fault."
+        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NUSB33") -Files $exp.Files
+        Assert-True ($fault -eq "") "the upload set's NUSB33\ is not the recorded folder: $fault."
+        # NUSB 3.3's folder stands beside the installer, never inside a
+        # NONFREE\ (owner, 2026-10-22).
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "the upload set holds a NONFREE\; NUSB 3.3's files belong in NUSB33\."
         foreach ($inf in @("USBSTOR.INF", "USBNTMAP.INF")) {
-            $p = Join-Path $uploadDir "NONFREE\STORAGE\NUSB33\W98SE\$inf"
+            $p = Join-Path $uploadDir "NUSB33\W98SE\$inf"
             Assert-True ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).LastWriteTime -eq $projStamp) "the upload set's $inf is not dated by this project's INFs."
         }
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NONFREE"))) "-UploadSetOnly put the driver pack under releases\."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NUSB33"))) "-UploadSetOnly put the driver pack under releases\."
         $zip = [System.IO.Compression.ZipFile]::OpenRead($uploadZip)
         try { $entries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
-        foreach ($want in @("NONFREE/STORAGE/NUSB33/W98SE/USBSTOR.INF", "NONFREE/NOTICE.md", "NONFREE/SHA256.TXT")) {
+        foreach ($want in @("NUSB33/W98SE/USBSTOR.INF", "NUSB33/NOTICE.md", "NUSB33/SHA256.TXT")) {
             Assert-True ($entries -contains $want) "the archive has no '$want' entry."
         }
+        Assert-True (@($entries | Where-Object { $_ -like "NONFREE/*" }).Count -eq 0) "the archive has a NONFREE/ entry."
         $pubAfter = @{}
         foreach ($f in (Get-ChildItem -LiteralPath $pubRoot -File -Recurse)) { $pubAfter[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash }
         Assert-True ($pubAfter.Count -eq $pubBefore.Count -and @($pubBefore.Keys | Where-Object { $pubAfter[$_] -ne $pubBefore[$_] }).Count -eq 0) `
@@ -1767,17 +1777,17 @@ try {
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", (Join-Path $script:work "no-such-pack")))
         Assert-True ($r.ExitCode -eq 0) ("a release recorded without the driver pack was not assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "a release recorded without the driver pack got NONFREE\ in its download."
-        # A published tree holding NONFREE\ is refused: the pack is never
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NUSB33"))) "a release recorded without the driver pack got NUSB33\ in its download."
+        # A published tree holding NUSB33\ is refused: the pack is never
         # in releases\.
-        Ensure-Directory (Join-Path $pubRoot "NONFREE")
-        Set-Content -LiteralPath (Join-Path $pubRoot "NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        Ensure-Directory (Join-Path $pubRoot "NUSB33")
+        Set-Content -LiteralPath (Join-Path $pubRoot "NUSB33\NOTICE.md") -Value "committed by hand" -Encoding ASCII
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
         $r = Invoke-Releaser $packRelArgs
-        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NONFREE\ was assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NONFREE\."
-        Remove-Item -LiteralPath (Join-Path $pubRoot "NONFREE") -Recurse -Force
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NUSB33\ was assembled:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NUSB33\."
+        Remove-Item -LiteralPath (Join-Path $pubRoot "NUSB33") -Recurse -Force
         Write-AsciiFile -Path $recPath -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
 
         # The record is required from 3.2.0.0 (an older release may lack
@@ -1805,8 +1815,15 @@ try {
         # The installer's own table of the seven (xhciinst\inst_core.c,
         # instStorFile; design record 26 section 6.5.1) is this allowlist:
         # the same names and the same hashes, so the installer verifies the
-        # download's NONFREE\ folder by what the cut put there.
+        # download's NUSB33\ folder by what the cut put there.
         $coreText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhciinst\inst_core.c"))
+        # And the installer reads them from the folder the cut writes them
+        # to: inst_core.h's INST_STOR_PACK_DIR is NUSB33\W98SE.
+        $coreHText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhciinst\inst_core.h"))
+        $packDirM = [regex]::Match($coreHText, '#define\s+INST_STOR_PACK_DIR\s+"([^"]+)"')
+        $packDirWant = "$($script:DriverPackFolder)\$($script:DriverPackStorageDir)"
+        Assert-True ($packDirM.Success -and $packDirM.Groups[1].Value.Replace('\\', '\') -eq $packDirWant) `
+            ("the installer's INST_STOR_PACK_DIR is '{0}', not the download's {1}." -f $packDirM.Groups[1].Value, $packDirWant)
         $instSeven = [ordered]@{}
         foreach ($m in [regex]::Matches($coreText, '\{\s*"([A-Za-z0-9.]+)",\s*INST_STOR_DIR_\w+,\s*"([0-9A-Fa-f]{64})"')) {
             $instSeven[$m.Groups[1].Value.ToUpperInvariant()] = $m.Groups[2].Value.ToUpperInvariant()
@@ -2841,7 +2858,7 @@ try {
     # ignores case. The check is read from the renderer, then applied to a
     # lower-case brace (which must pass) and an upper-case one (which must not).
     Write-Step "the leftover-placeholder check passes lower-case braces such as {current}"
-    $leftoverCheck = [regex]::Match($releaserText, "if \(\`$readme -(c?match) '([^']+)'\) \{\s*throw `"readme template left an unsubstituted placeholder")
+    $leftoverCheck = [regex]::Match($releaserText, "if \(\`$readme -(c?match) '([^']+)'\) \{\s*(?:throw|Stop-CutCheck) `"readme template left an unsubstituted placeholder")
     Assert-True $leftoverCheck.Success "make-release.ps1 no longer has a leftover-placeholder check on the rendered readme that this test can find."
     if ($leftoverCheck.Success) {
         Assert-True ($leftoverCheck.Groups[1].Value -ceq "cmatch") (
@@ -3288,7 +3305,7 @@ try {
            Why  = "the publish destination is no longer the leg's own directory" },
         @{ Find = '$makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,';
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
-        @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
+        @{ Find = 'Stop-CutCheck "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
         @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable';
            Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's files and txtsetup.oem" },
@@ -3364,7 +3381,7 @@ try {
            Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
         @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
            Why  = "a cut no longer refuses an install tool older than its sources (task 40.6)" },
-        @{ Find = 'throw "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."';
+        @{ Find = 'Stop-CutCheck "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."';
            Why  = "a cut no longer refuses an INSTALL.BAT with LF endings (task 40.6)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT")';
            Why  = "a cut no longer writes the NOTICE.TXT recording the install tool's statically linked runtimes (legal-provenance.md section 2a)" },
@@ -3439,6 +3456,11 @@ try {
     $tfvAt = $releaserText.IndexOf("function Assert-ToolFileVersion")
     Assert-True ($tfvAt -ge 0) "make-release.ps1 no longer has Assert-ToolFileVersion (task 41-A.6)."
     if ($tfvAt -ge 0) {
+        # Its refusal goes through the cut's Stop-CutCheck, which throws
+        # outside -CheckOnly (task 43.9).
+        $sccAt = $releaserText.IndexOf("function Stop-CutCheck")
+        Invoke-Expression $releaserText.Substring($sccAt, $releaserText.IndexOf("`n}", $sccAt) - $sccAt + 2)
+        $CheckOnly = $false
         Invoke-Expression $releaserText.Substring($tfvAt, $releaserText.IndexOf("`n}", $tfvAt) - $tfvAt + 2)
         $tfvDll = Join-Path $env:SystemRoot "System32\kernel32.dll"
         $tfvInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($tfvDll)
@@ -4734,6 +4756,160 @@ try {
     }
     Assert-True (-not (Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState read the fixture repository as dirty after its flags were cleared."
     Assert-True ((Get-GitTreeState -Repo (Join-Path $soDir "not-a-repo")).Head -eq "none") "Get-GitTreeState gave a commit for a directory that is no repository."
+    # --- a HEAD newer than the gated build's commit (task 43.9) -------------
+    #
+    # Admitted when the recorded commit is an ancestor of HEAD and no file
+    # changed since is a build input; a change to a source, a header, the
+    # host suite or the import gates is refused as before. The rules are
+    # read from this tree; the commits are a fixture repository's.
+    Write-Step "a HEAD newer than the gated build is admitted only when no build input changed"
+    foreach ($d in @("xhci98", "xhciuas", "xhcicm", "xhcihlpr", "stor98", "stor98mpd")) {
+        $l = @(& (Join-Path $repo "scripts\source-stamp.ps1") -Driver $d -List)
+        Assert-True ($l -contains "src\xhci_version.h") "source-stamp.ps1 -Driver $d -List does not name src\xhci_version.h."
+        Assert-True (@($l | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repo $_) -PathType Leaf) }).Count -eq 0) `
+            "source-stamp.ps1 -Driver $d -List names a file that is not in the tree."
+    }
+    $biRules = Get-BuildInputRules -Repo $repo
+    foreach ($v in @(
+        @{ P = "docs/contributing/build-and-test.md"; In = $false },
+        @{ P = "releases/history.md";                In = $false },
+        @{ P = "README.md";                          In = $false },
+        @{ P = "xhciinst/README.TXT";                In = $false },
+        @{ P = "scripts/package/make-release.ps1";   In = $false },
+        @{ P = "src/xhci98.inf";                     In = $false },
+        @{ P = "src/stor98/docs/package-readme.txt"; In = $false },
+        @{ P = "src/stor98/inf/stor98-x86.inf";      In = $false },
+        @{ P = "src/xhci_ring.c";                    In = $true },
+        @{ P = "src/xhci_version.h";                 In = $true },
+        @{ P = "src/sources";                        In = $true },
+        @{ P = "src/xhci_added_since.c";             In = $true },
+        @{ P = "src/cm/cm_added_since.h";            In = $true },
+        @{ P = "src/uas/sources";                    In = $true },
+        @{ P = "src/hlpr/xhci_hlpr.rc";              In = $true },
+        @{ P = "src/stor98/src/engine.c";            In = $true },
+        @{ P = "src/stor98/tests/unit/build.cmd";    In = $true },
+        @{ P = "test/test_ring.c";                   In = $true },
+        @{ P = "test/run-host-tests.cmd";            In = $true },
+        @{ P = "xhciinst/inst_core.c";               In = $true },
+        @{ P = "xhcitr/tr_core.c";                   In = $true },
+        @{ P = "scripts/import-gate/xhci98-imports.allow"; In = $true },
+        @{ P = "scripts/build-driver.cmd";           In = $true },
+        @{ P = "scripts\source-stamp.ps1";           In = $true },
+        @{ P = "scripts/common.ps1";                 In = $true },
+        @{ P = "scripts/import-gate/evidence-common.ps1"; In = $true }
+    )) {
+        Assert-True ((Test-BuildInputPath -Rules $biRules -Path $v.P) -eq $v.In) `
+            ("Test-BuildInputPath says {0} for '{1}'." -f (-not $v.In), $v.P)
+    }
+    # The fixture: a build at A, a documentation commit B, a source commit C
+    # on B, and a commit D on a branch from A that B and C do not contain.
+    $adGit = Join-Path $soDir "advance"
+    New-Item -ItemType Directory -Force -Path (Join-Path $adGit "docs") | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $adGit "src") | Out-Null
+    function Invoke-AdGit {
+        param([string[]]$GitArgs)
+        $ErrorActionPreference = "Continue"
+        try {
+            $o = & git -C $adGit -c user.name=t -c user.email=t@t -c commit.gpgsign=false @GitArgs 2>&1 | Out-String
+        } finally { $ErrorActionPreference = $savedEap }
+        return $o.Trim()
+    }
+    [void](Invoke-AdGit @("init", "-q"))
+    [System.IO.File]::WriteAllText((Join-Path $adGit "docs\notes.md"), "a")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "src\xhci_ring.c"), "a")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "A"))
+    $adA = Invoke-AdGit @("rev-parse", "HEAD")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "docs\notes.md"), "b")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "README.md"), "b")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "B"))
+    $adB = Invoke-AdGit @("rev-parse", "HEAD")
+    [System.IO.File]::WriteAllText((Join-Path $adGit "src\xhci_ring.c"), "c")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "C"))
+    $adC = Invoke-AdGit @("rev-parse", "HEAD")
+    [void](Invoke-AdGit @("checkout", "-q", "-b", "side", $adA))
+    [System.IO.File]::WriteAllText((Join-Path $adGit "docs\other.md"), "d")
+    [void](Invoke-AdGit @("add", "-A")); [void](Invoke-AdGit @("commit", "-q", "-m", "D"))
+    $adD = Invoke-AdGit @("rev-parse", "HEAD")
+    Assert-True ((@($adA, $adB, $adC, $adD) | Where-Object { $_ -match '^[0-9a-f]{40}$' }).Count -eq 4) "the advance fixture's commits were not made."
+    $adv = Get-GatedHeadAdvance -Repo $adGit -From $adA -To $adB -Rules $biRules
+    Assert-True ($adv.Fault -eq "" -and $adv.Commits -eq 1 -and $adv.Changed.Count -eq 2) `
+        ("a documentation commit after the build was not admitted: '{0}', {1} commit(s), {2} file(s)" -f $adv.Fault, $adv.Commits, $adv.Changed.Count)
+    $advC = Get-GatedHeadAdvance -Repo $adGit -From $adA -To $adC -Rules $biRules
+    Assert-True ($advC.Fault.Contains("src/xhci_ring.c") -and $advC.Fault.Contains("build input")) `
+        ("a source commit after the build was not refused by name: '{0}'" -f $advC.Fault)
+    $advD = Get-GatedHeadAdvance -Repo $adGit -From $adB -To $adD -Rules $biRules
+    Assert-True ($advD.Fault.Contains("not an ancestor")) ("a HEAD the build's commit is not an ancestor of was not refused: '{0}'" -f $advD.Fault)
+    $advX = Get-GatedHeadAdvance -Repo $adGit -From ("0" * 40) -To $adB -Rules $biRules
+    Assert-True ($advX.Fault -ne "") "a recorded commit the repository does not hold was admitted."
+    # The record's comparison takes the answer only for its own commit and HEAD.
+    $soAdvM = ConvertFrom-GatedManifest -Text ($soText -replace "(?m)^commit=[0-9a-f]{40}", ("commit=" + $adA))
+    Assert-True ((Get-SoFault -M $soAdvM -Head $adB) -ne "") "a newer HEAD was admitted with no advance given."
+    Assert-True ((Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+                    -Head $adB -Dirty $false -NoTargetEvidence $false -Advance $adv) -eq "") `
+        "a newer HEAD with no build input changed since was refused."
+    $f = Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+            -Head $adC -Dirty $false -NoTargetEvidence $false -Advance $advC
+    Assert-True ($f.Contains("it was built at commit") -and $f.Contains("src/xhci_ring.c")) ("a newer HEAD with a source changed since was not refused by name: '{0}'" -f $f)
+    $f = Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+            -Head $adC -Dirty $false -NoTargetEvidence $false -Advance $adv
+    Assert-True ($f.Contains("it was built at commit")) "an advance computed for another HEAD was taken."
+    Assert-True ((Get-GatedManifestFault -Manifest $soAdvM -Arch "amd64" -Flavor "release" -Binaries $soBins `
+                    -Head $adB -Dirty $true -NoTargetEvidence $false -Advance $adv).Contains("uncommitted changes since")) `
+        "a newer HEAD in a dirty tree was not refused for the tree."
+    $soPkgAdvText = [System.IO.File]::ReadAllText($packager)
+    Assert-True ($soPkgAdvText.Contains('$advance = Get-GatedHeadAdvance -Repo $repo -From $gated.Commit -To $tree.Head') -and
+                 $soPkgAdvText.Contains('-NoTargetEvidence ([bool]$NoTargetEvidence) -Advance $advance')) `
+        "make-package.ps1 -SignOnly no longer gives the record's comparison the advance to a newer HEAD."
+
+    # --- make-release.ps1 -CheckOnly (task 43.9) -----------------------------
+    #
+    # Refused with the two modes it cannot go with; its refusal helper and the
+    # generated-text gate are EXECUTED, loaded from the script's text: under
+    # -CheckOnly a refusal is noted and the run goes on, and without it the
+    # same call throws, as the cut always has. Then where it stops: after the
+    # staged tree's last check, before the upload set and the publish.
+    Write-Step "-CheckOnly notes each refusal, writes nothing under releases\ and stops before the publish"
+    foreach ($bad in @(
+        @{ Args = @("-CheckOnly", "-UploadSetOnly");          Says = "give one" },
+        @{ Args = @("-CheckOnly", "-TestSignPfx", "x.pfx");   Says = "drop -TestSignPfx" }
+    )) {
+        $r = Invoke-Releaser $bad.Args
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains($bad.Says)) `
+            ("make-release.ps1 did not refuse {0} with '{1}'. Output:`n{2}" -f ($bad.Args -join " "), $bad.Says, $r.Output)
+    }
+    $coText = [System.IO.File]::ReadAllText($releaser)
+    foreach ($fn in @("function Stop-CutCheck", "function Write-GeneratedText")) {
+        $at = $coText.IndexOf($fn)
+        Assert-True ($at -ge 0) "make-release.ps1 no longer has $fn."
+        if ($at -ge 0) { Invoke-Expression $coText.Substring($at, $coText.IndexOf("`n}", $at) - $at + 2) }
+    }
+    $coDir = Join-Path $soDir "checkonly"
+    New-Item -ItemType Directory -Force -Path $coDir | Out-Null
+    $destRoot = $coDir
+    $script:cutCheckFaults = New-Object System.Collections.ArrayList
+    $CheckOnly = $true
+    Write-GeneratedText -Path (Join-Path $coDir "readme.txt") -Lines @("fits", ("x" * 79), ("caf" + [char]0xE9)) 6>$null
+    Assert-True ($script:cutCheckFaults.Count -eq 2 -and $script:cutCheckFaults[0].Contains("past 78 columns") -and
+                 $script:cutCheckFaults[1].Contains("not printable ASCII")) `
+        ("-CheckOnly did not note both refusals of one generated text: " + ($script:cutCheckFaults -join " | "))
+    Assert-True ($script:cutCheckFaults.Count -ge 1 -and $script:cutCheckFaults[0].StartsWith("readme.txt has")) `
+        "a generated text's refusal does not name it by its path in the release."
+    $CheckOnly = $false
+    $threw = $false
+    try { Write-GeneratedText -Path (Join-Path $coDir "readme2.txt") -Lines @(("x" * 79)) } catch { $threw = $_.Exception.Message.Contains("past 78 columns") }
+    Assert-True $threw "a cut no longer stops on a generated text past 78 columns."
+    Remove-Variable -Name CheckOnly, destRoot -ErrorAction SilentlyContinue
+    $coAnchors = @(
+        @{ Name = "the staged tree's last check"; Find = 'Assert-NoTestClient -Root $destRoot -What "the staged release' },
+        @{ Name = "the -CheckOnly end";           Find = 'Write-Step "-CheckOnly: done"' },
+        @{ Name = "the publish swap";             Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
+    )
+    $coAt = @($coAnchors | ForEach-Object { $coText.IndexOf($_.Find) })
+    Assert-True ((@($coAt | Where-Object { $_ -lt 0 })).Count -eq 0 -and $coAt[0] -lt $coAt[1] -and $coAt[1] -lt $coAt[2]) `
+        "make-release.ps1 -CheckOnly no longer ends after the staged tree's last check and before the publish swap."
+    Assert-True ($coText.Contains('if (-not $SkipUploadSet -and -not $CheckOnly) {')) "make-release.ps1 -CheckOnly would assemble an upload set."
+    Assert-True ($coText.Contains('$destRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-checkonly-"')) `
+        "make-release.ps1 -CheckOnly no longer renders into a private directory of its own."
 
     # The record's writer certifies nothing on its own: without the token of
     # the build-driver.cmd run holding the lock it refuses, before it reads or

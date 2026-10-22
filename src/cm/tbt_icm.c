@@ -461,6 +461,11 @@ VOID TbtIcmSetResumeBudget(PTBT_ICM icm, ULONG ms)
     icm->ResumeBudgetMs = ms != 0 ? ms : TBT_ICM_RESUME_BUDGET_MS;
 }
 
+VOID TbtIcmSetReadVersion(PTBT_ICM icm, BOOLEAN on)
+{
+    icm->ReadVersion = on;
+}
+
 /*
  * What is left of the resume's budget, ms. What is spent is a sum of
  * intervals that do not overlap: the host's millisecond clock's progress
@@ -1820,8 +1825,10 @@ static LONG tbtIcmBringUpEx(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
         return rc;
     }
     icm->Started = TRUE;
-    /* A restarted ring delivers nothing of an earlier command. */
+    /* A restarted ring delivers nothing of an earlier command, nor of an
+     * earlier router read. */
     icm->Ambiguous = FALSE;
+    icm->VersionStopped = FALSE;
 
     /* Linux icm.c icm_firmware_init sends allow-all only where it reads
      * the mode, and only at bind (ICM 6.5 [inf]: not on resume). */
@@ -1869,6 +1876,7 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
             }
         }
     }
+    icm->HostPollOk = FALSE;
 
     req[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_DRIVER_READY);
     /* FR and AR: the command timeout, XhciCmCmdTimeoutMs; TR and ICL: the
@@ -1923,6 +1931,10 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
         tbtIcmServiceFor(icm, TBT_ICM_HOSTPOLL_GAP_MS);
     }
     icm->InWait = FALSE;
+    /* Until a poll is answered, one of its requests may still draw a
+     * notification, which no router read could tell from its own
+     * (record 21 section 5.3, "the stale answer"). */
+    icm->HostPollOk = (BOOLEAN)(rc == TBT_OK);
     if (rc != TBT_OK) {
         tbtIcmLog(icm, "tbt.icm.host-poll-unanswered", i);
     }
@@ -2161,6 +2173,117 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
 }
 
 /* ====================================================================== */
+/* The router's generation (record 21 section 5.3)                        */
+/* ====================================================================== */
+
+/* The verdict on ROUTER_CS_0 to 4 read at `route`: the header must be the
+ * one a router enumerated at that route carries (TopologyID Valid, and
+ * the TopologyID its route gives, Spec 8.2.1.1), and the USB4 Version is
+ * decided by its major alone, as tbt_hw.c TbtHwRouterVersion does. */
+static ULONG tbtIcmVersionOf(const ULONG *v, const TBT_ROUTE *route)
+{
+    ULONG major;
+
+    if ((v[3] & TBT_RTR3_V) == 0 || v[2] != route->Lo ||
+        (v[3] & TBT_RTR3_TOPOLOGY_MASK) !=
+            (route->Hi & TBT_RTR3_TOPOLOGY_MASK)) {
+        return TBT_ICM_VER_UNKNOWN;
+    }
+    major = TBT_USB4_VERSION_MAJOR(TBT_RTR4_VERSION(v[4]));
+    if (major == TBT_USB4_MAJOR_1 || major == TBT_USB4_MAJOR_2) {
+        return TBT_ICM_VER_USB4;
+    }
+    if (major == TBT_USB4_MAJOR_TBT3) {
+        return TBT_ICM_VER_TBT3;
+    }
+    return TBT_ICM_VER_UNKNOWN;
+}
+
+/*
+ * The oldest occupancy still owed its read: one control read of five DWs
+ * at its route, one attempt of TBT_ICM_VERSION_TIMEOUT_MS. Counted as a
+ * wait for its duration, so an announcement arriving meanwhile is queued
+ * and a disconnect acts at once (section 5.2). An answer for an entry that
+ * left, or whose slot another occupancy took, is dropped. A read sent and
+ * not answered stops the reads until the rings restart: nothing in a Read
+ * Response names the occupancy, and the two-bit sequence number would let
+ * its late answer match a later read of the same header at the same route.
+ */
+static VOID tbtIcmReadVersion(PTBT_ICM icm)
+{
+    ULONG i;
+    ULONG slot;
+    ULONG serial;
+    ULONG v[5];
+    ULONG verdict;
+    ULONG published;
+    LONG rc;
+    TBT_ROUTE route;
+    PTBT_ICM_DEVICE d;
+
+    if (!icm->ReadVersion || icm->VersionStopped || !icm->HostPollOk ||
+        icm->InWait || icm->Failed) {
+        return;
+    }
+    slot = TBT_ICM_NO_SLOT;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        d = &icm->Devices[i];
+        if (d->InUse && d->RouteValid &&
+            d->VersionState == TBT_ICM_VER_OWED &&
+            (slot == TBT_ICM_NO_SLOT ||
+             d->Serial - icm->Devices[slot].Serial >= 0x80000000UL)) {
+            slot = i;
+        }
+    }
+    if (slot == TBT_ICM_NO_SLOT) {
+        return;
+    }
+    d = &icm->Devices[slot];
+    serial = d->Serial;
+    route = d->Route;
+    icm->Counters.VersionReads++;
+    icm->InWait = TRUE;
+    icm->WaitSlot = slot;
+    icm->WaitSerial = serial;
+    icm->WaitGone = FALSE;
+    published = icm->Ring->Counters.Tx;
+    rc = TbtRingCtlRead(icm->Ring, &route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_0,
+                        5, v, TBT_ICM_VERSION_TIMEOUT_MS, 0);
+    icm->InWait = FALSE;
+    icm->WaitSlot = TBT_ICM_NO_SLOT;
+    icm->WaitSerial = 0;
+    icm->WaitGone = FALSE;
+    if (rc != TBT_OK && rc != TBT_E_NOTIFY &&
+        icm->Ring->Counters.Tx != published) {
+        icm->VersionStopped = TRUE;
+        tbtIcmLog(icm, "tbt.icm.version-stopped", slot);
+    }
+    if (!d->InUse || d->Serial != serial) {
+        tbtIcmLog(icm, "tbt.icm.version-abandoned", slot);
+        return;
+    }
+    if (rc != TBT_OK) {
+        d->VersionState = TBT_ICM_VER_UNKNOWN;
+        icm->Counters.VersionFailures++;
+        tbtIcmLog(icm, "tbt.icm.version-failed",
+                  (slot << 24) | ((ULONG)(-rc) << 8) |
+                      (rc == TBT_E_NOTIFY ? (icm->Ring->LastEvent & 0xFFUL) : 0));
+        return;
+    }
+    for (i = 0; i < 5; i++) {
+        tbtIcmLog(icm, "tbt.icm.version-header", v[i]);
+    }
+    verdict = tbtIcmVersionOf(v, &route);
+    d->VersionState = verdict;
+    d->Usb4Version = TBT_RTR4_VERSION(v[4]);
+    if (verdict == TBT_ICM_VER_UNKNOWN) {
+        icm->Counters.VersionFailures++;
+    }
+    tbtIcmLog(icm, "tbt.icm.version",
+              (slot << 24) | (verdict << 8) | d->Usb4Version);
+}
+
+/* ====================================================================== */
 /* The idle poll                                                          */
 /* ====================================================================== */
 
@@ -2173,6 +2296,7 @@ VOID TbtIcmPoll(PTBT_ICM icm)
         return;
     }
     icm->Counters.IdlePolls++;
+    tbtIcmReadVersion(icm);
     frames = 0;
     while (frames < TBT_ICM_POLL_FRAMES && TbtRingReceive(icm->Ring, &f)) {
         frames++;

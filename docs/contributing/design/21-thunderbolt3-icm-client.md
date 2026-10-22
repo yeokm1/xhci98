@@ -40,6 +40,11 @@ day): the x64 package keeps the filter INF at the flavour directory's
 root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
 package keeps `nt\` (section 3.3, the packaging in section 3.3's last
 paragraphs, section 6.2's filter install).
+Section 5.3 revised 2026-10-21 (task 43.44, the owner's choice of that
+day): the client reads each announced router's USB4 Version once per
+occupancy, so the status record no longer calls every such router
+Thunderbolt 3; first on the integrated rows and Maple Ridge, and from
+2026-10-22 (the owner's answer of that day) on every row.
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -1007,6 +1012,154 @@ On 64-bit 8 and 8.1 it loads only as on Vista x64 and 7 x64: test-signing
 mode (Secure Boot off) or a start with signature enforcement disabled
 (design record 19; record 23 section 5.10).
 
+**Windows 10** (roadmap-usb4 task 43.34, the owner's decision of
+2026-10-20; record 23 sections 4.3 and 4.5, revision 28): NT 10.0 below
+build 22000, the client releases 1507 to 22H2, the LTSC releases and
+Windows Server 2016 to 2022, gets what 8.1 gets above, by the same
+install: the connection manager alone, or beside `xhci98.sys` where the
+user ticks it (task 43.35), the PCIe tunnel and its re-enumeration, an
+NVMe drive behind it under Stor98 or 10's own `stornvme`, a dock's xHCI
+controller and the USB3 tunnel's devices under whichever USB driver runs
+them, and safe eject with the marks. It is the target this driver gives
+most to: 10 carries no Thunderbolt or USB4 driver of its own (USB4
+arrived with Windows 11, build 22000, which has its own connection
+manager and stays refused). What is 10's own, and unread until task
+43.33 (c): Intel's Thunderbolt driver, which computer makers ship for
+10 on the NHI - its ids and service, the approval it does with the
+firmware connection manager, and whether `xhcicm.inf`'s match outranks
+it (until the owner decides, an NHI it runs is another vendor's device
+and the installer leaves it, record 23 decision D3); and Kernel DMA
+Protection (10 1803 and later), whether a device behind a tunnel waits
+for the user's sign-in or is refused where the firmware turns the
+protection on. No export table of 10 is in the tree either, so the
+import surface on 10 is as unread as on 8; 10 is expected to answer the
+driver's WDM version tests as 7 does, which is unread. On 64-bit 10 the
+driver loads as on 64-bit 8 and 8.1 (record 23 section 5.10, revision
+28); from 10 1607 with Secure Boot on, only portal-signed drivers load
+(older cross-signed ones excepted, which the project's test signature is
+not), so Secure Boot off is the condition there.
+
+### 3.6 Thunderbolt on Windows 10: Intel's driver, the ranking and Kernel DMA Protection (task 43.33 (c), 2026-10-22; a reading)
+
+A reading for roadmap-usb4 task 43.33 (c), before 43.34 widens the
+connection manager to Windows 10; no code changed. Each fact is labelled
+as design record 13 section 6.14 labels them: **static** (read out of a
+file, nothing from it executed), **measured** (seen in a Windows 10 22H2
+guest of task 43.32 through Windows' own tools), **documentation**
+(a page read on 2026-10-22, cited by URL and a short phrase) or
+**inference**. `legal-provenance.md` section 4 has the rows.
+
+**Windows 10 has no Thunderbolt driver of its own** (static, both 22H2
+images, 10.0.19045.2965): none of the 679 (x64) and 636 (x86)
+`Windows\INF\*.inf` names an Intel NHI id of section 3.3's list, the
+class `PCI\CC_0880`, or `PCI\CC_0C0340`; the word "Thunderbolt" occurs
+only in two device descriptions (an LSI SAS adapter, two Lenovo dock
+Ethernet chips). Measured on the x64 guest with the emulator's
+`tb3-alpine-ridge` profile: the NHI `PCI\VEN_8086&DEV_15BF&SUBSYS_22B017AA&REV_01`
+stays "Base System Device", Code 28 (`CM_PROB_FAILED_INSTALL`, problem
+status `0xC0000490`), and the emulator's Alpine Ridge xHCI (`8086:15C1`)
+is bound by `usbxhci.inf` (record 13 section 6.14.3). So on a 10 machine
+the NHI runs whatever the computer maker installed, Intel's driver, or
+nothing.
+
+**Intel's driver as makers ship it** (static: three packages taken from
+the Microsoft Update Catalog as `.cab` files, unpacked with 7-Zip, only
+their INF text read; nothing executed):
+
+| Package | INF and service | NHI ids it names | Signature, other |
+|---|---|---|---|
+| Older package with the Thunderbolt Software tray application, 17.4.77.13 (Catalog "Windows 10 version 1803 and Later Servicing Drivers") | `tbt100x.inf`, `DriverVer=05/16/2018,17.4.77.13`, `Class=System`, `[Manufacturer] ... NTamd64.10.0.1`; `AddService = nhi`, binary `tbt100x.sys`, demand start, KMDF 1.15; a co-installer `tbtcoinx_17_4_77_13.dll`; copies `setup.msi` (the tray application `Thunderbolt.exe` and the service `tbtsvc.exe`) | `PCI\VEN_8086&DEV_<id>&CC_0880` for 1575, 1577, 15BF, 15D2, 15D9, 15DC, 15DD, 15DE, 15E8, 15EB | Microsoft "Windows Hardware Compatibility Publisher" catalog `tbt100x.cat`; no `DmaRemappingCompatible`; x64 only |
+| DCH driver 1.41.1379.0 (Catalog "Windows 10, version 1809 and later") | `TbtHostController.inf`, `DriverVer = 07/27/2023,1.41.1379.0`, decorations `NTamd64.10.0...16299` and `...19041`; `AddService = nhi`, binary `TbtBusDrv.sys`; a UMDF upper filter (`TbtFilterDrv`, `WUDFRd`) | the same ten Alpine Ridge and Titan Ridge ids with `&CC_0880`; `PCI\VEN_8086&DEV_1137` and `&DEV_1134` bare; Ice Lake 8A17, 8A0D, 8AA3, 8AA0, 8AB3, 8AB0 with `&CC_0880`; Tiger Lake and later (9A1B ... A834) with `&CC_0C03` | the same publisher; `HKR, Parameters, DmaRemappingCompatible, 0x00010001, 1` (one Tiger Lake A0 section writes 0); x64 only |
+| DCH driver 1.41.1423.0 (Catalog "Windows 10, version 1903 and later") | as 1.41.1379.0, decorations adding `...22000` | **no Alpine Ridge id any more** (1575, 1577, 15BF, 15D2, 15D9, 15DC to 15DE gone); 15E8, 15EB, 1137, 1134, 8A17, 8A0D and the later ids kept | as above; the DCH tie to the Store application is a software component, `TbtHostControllerHsaComponent.inf` (`SoftwareID = pfn://AppUp.ThunderboltControlCenter_8j3eq9eme6ctt`, the Thunderbolt Control Center) |
+
+No package has an x86 INF, so **on 10 x86 the NHI has no Intel driver to
+meet** (static). No INF of the three carries a `FeatureScore`. Files,
+hashes and the Catalog's update ids are in `legal-provenance.md`
+section 4's row.
+
+**Whether `xhcicm.inf`'s match outranks it** (static and documentation,
+then inference). `xhcicm-amd64.inf` names the NHIs by `PCI\VEN_8086&DEV_<id>`
+alone. Microsoft's page on PCI identifiers
+(learn.microsoft.com, "Identifiers for PCI devices") lists as hardware ids
+`VEN&DEV&SUBSYS&REV`, `VEN&DEV&SUBSYS`, `VEN&DEV&REV`, `VEN&DEV`,
+`VEN&DEV&CC_ccsspp` and `VEN&DEV&CC_ccss`, and says "In Windows 10, some
+IDs that previously appeared in the Hardware IDs list now appear in the
+list of Compatible IDs". Measured on the x86 guest (the emulator's NHI,
+its Enum key): `HardwareID` is `VEN&DEV&SUBSYS&REV`, `VEN&DEV&SUBSYS`,
+`VEN&DEV&CC_088000`, `VEN&DEV&CC_0880`, and `CompatibleIDs` begins
+`VEN&DEV&REV`, `VEN&DEV` - **so on 10 the bare `PCI\VEN_8086&DEV_15BF`
+that `xhcicm.inf` names is a compatible id**, and Intel's `&CC_0880`
+form is a hardware id. Intel's match is the better one twice over: a
+hardware id against a compatible one, and its package is signed by Microsoft
+(signature score 0), where this project's carries no catalog and ranks
+`0xFF` in the signer byte (record 13 section 6.14.1 measured
+`0x80FF2005` for `xhci98.inf` on the controller) - on 10 x64 it is not
+staged at all without a catalog (record 13 section 6.14.5). **So Windows
+never picks `xhcicm.inf` over Intel's driver by itself**: the installer's
+forced install (`UpdateDriverForPlugAndPlayDevices` with
+`INSTALLFLAG_FORCE`, record 23 section 5.5) is the only way the NHI
+comes to `xhcicm.sys` on a machine with Intel's driver, and a later
+driver search (Windows Update offers the Intel DCH package by these ids)
+can take it back. What an install, update and uninstall of ours do to
+Intel's driver is 43.37's leg "where an image of it is at hand"
+(none has run here): by inference from record 23 section 9, the
+uninstall's rescan gives the NHI back to the best-ranked driver in the
+store, Intel's where it is still staged.
+
+**The approval it does** (documentation; Intel publishes no Windows
+interface of its driver). The firmware connection manager's security
+levels are SL0 none, SL1 user, SL2 secure, SL3 DisplayPort and USB only
+(docs.kernel.org, "USB4 and Thunderbolt": "User is asked whether the
+device is allowed to be connected"); on SL1 Intel's software asks at the
+first connection "Do Not Connect", "Connect Only Once", "Always Connect"
+(the tray application's "Approve Attached Devices" on the older package,
+the Control Center's "Approve Thunderbolt devices" on the DCH one;
+Seagate's support article 007783en), "Always Connect" being kept by the
+firmware's access list. The messages are the ICM's that section 5 sends
+(`ICM_APPROVE_DEVICE`, `ICM_CHALLENGE_DEVICE`, `ICM_PREBOOT_ACL`; Linux
+`icm.c`, the same mirror section 1.4.1 reads), so the approval policy of
+section 5.4 replaces Intel's dialog when `xhcicm.sys` runs the NHI, and
+the firmware's access list is shared between the two.
+
+**Kernel DMA Protection** (documentation: Microsoft's "Kernel DMA
+Protection" page, ms.date 2025-08-15, and "Enabling DMA remapping for
+device drivers", ms.date 2025-08-25):
+
+- Windows 10 1803 and later, 64-bit only, on firmware that sets
+  `DMA_CTRL_PLATFORM_OPT_IN_FLAG` in the DMAR table (Intel) or the IVRS
+  "DMA remap support" bit (AMD) and tags its external ports
+  (`ExternalFacingPort` `_DSD`): "peripherals with DMA Remapping
+  incompatible drivers are blocked from starting and performing DMA
+  until an authorized user signs into the system or unlocks the screen";
+  after that they run until a restart or an unplug. The
+  `DmaGuard/DeviceEnumerationPolicy` policy (10 1809 and later) makes it
+  0 block all, 1 (default) after sign-in or unlock, 2 allow all.
+- A driver opts in with `HKR,Parameters,DmaRemappingCompatible,0x00010001,<v>`
+  in its service key: 0 incompatible, 1 compatible, 2 compatible "only
+  when ... the device is an external device (for example, Thunderbolt)"
+  or DMA verification is on; no value lets the system decide.
+  Windows' own `usbxhci.inf` writes 2 on 10 (record 13 section 6.14.1,
+  static), Intel's DCH `TbtHostController.inf` writes 1 (static).
+- msinfo32's "Kernel DMA Protection" line reads **Off** on both guests'
+  QEMU firmware (measured: no DMAR table), so nothing of this is read on
+  the vehicle.
+
+What that means here (inference): the NHI is an internal device, not
+behind an external port, so `xhcicm.sys` on the NHI is not itself held.
+What the tunnel adds - a dock's xHCI controller (bound by `usbxhci.sys`,
+opted in), an NVMe drive (Windows' `stornvme` opts in; **Stor98 writes no
+`DmaRemappingCompatible`**) - sits behind an external-facing port, so on a
+machine with the protection on, an NVMe drive behind a tunnel under
+Stor98 is held until the user signs in, and never started under policy 0;
+the same for any device whose driver has no value. Whether Stor98 should
+write 1 (it maps its buffers through the DMA adapter) is a question for
+43.34 (record 13 section 6.14.8). The protection is a feature of the
+firmware and of 64-bit 10 only; it is unread on any machine here.
+Linux's documentation adds that such machines usually ship with the
+Thunderbolt security level set to "none", the IOMMU doing the gating
+(docs.kernel.org, "security levels (if set) are redundant"), in which
+case section 5.4's approval has nothing to approve.
+
 ## 4. The host interface: ring 0, polled
 
 ### 4.1 Registers
@@ -1311,6 +1464,191 @@ after every `driver ready` the table is reconciled: an entry not re-announced
 within 500 ms of the host-router poll succeeding, or of its 50 tries running
 out (section 5.1 step 9), is treated as gone and the
 tunnel-down sequence runs for it [inf, the client's own 500 ms check].
+
+**The router's generation, read from the router (task 43.44, the owner's
+choice of 2026-10-21).** The status record (design record 24 section 3)
+gives each table entry a generation. Nothing in an announcement carries
+one: the event's flags give the link's rate and width, the name block
+the DROM's names and ids, and neither says whether the device router is
+a Thunderbolt 3 router or a USB4 one. Until this revision every entry
+was written "Thunderbolt 3", which the owner's Framework 13 (12th
+generation, Alder Lake, this row's Tiger Lake class) showed wrong for
+the ORICO ASM246x enclosure, a USB4 device router on a USB4 host. The
+client therefore reads the router itself, as Linux's client does for
+every router the firmware announces
+(`icm.c` `alloc_switch`, `switch.c` `tb_switch_alloc`: one DW of the
+router space at the route, then ROUTER_CS_0 to 4, five DWs, and
+`tb_switch_get_generation` from ROUTER_CS_4's USB4 Version [linux]).
+
+- **Which hosts: every row** (the owner, 2026-10-22). The generation
+  is the device router's, not the link's: the ORICO behind Alpine Ridge
+  reads USB4 Version `20h` [obs] and Linux names it generation 4, while
+  a Thunderbolt 3 dock behind a USB4 host reads major 0. So the driver
+  turns the read on at bind (`TbtIcmSetReadVersion`) on each row:
+  - ICL (Ice Lake, and Tiger Lake to Meteor Lake) and TR (Titan Ridge,
+    and Maple Ridge in ICM mode): the route from the event;
+  - AR: the route from `get route` [obs], the read following it as
+    Linux's did in the capture;
+  - FR: the route from the topology query (section 1.4.4). Linux's
+    `icm_fr_device_connected` reaches `alloc_switch` too [linux], so
+    the read is as safe there as on the other uncaptured rows. What it
+    can say there is narrower: the record has no Thunderbolt 1 or 2
+    value, so a Thunderbolt 1 or 2 router (major 0, as every pre-USB4
+    router [linux] `tb_switch_is_usb4`) shows "Thunderbolt 3" as it did
+    before, and only a USB4 router - behind a Thunderbolt 3 to 2
+    adapter, if one ever works there - is told apart. That is still the
+    router's own word rather than an assumption, at the cost of one
+    read per occupancy, and one rule for every row is simpler to hold
+    than an exception whose reason is a value the record lacks.
+  A host test may leave it off (the default of `TbtIcmInit`). The USB3
+  field is a separate matter and stays the host's: none on Falcon,
+  Alpine and Titan Ridge, whose links carry no USB3 tunnel whatever the
+  router, and not known on the integrated rows and on Maple Ridge, a
+  USB4 host the TR row also serves (told apart by the hardware row's
+  ownership predicate, NVM authentication done; record 24 section 3).
+- **The frame.** One Read Request (PDF 1, Spec 6.4.2.3) on TX ring 0,
+  the ring the ICM's own commands use, through `TbtRingCtlRead`, the
+  path the host-router poll of section 5.1 step 9 already takes at
+  route 0 on every row: router configuration space, DW 0, five DWs
+  (ROUTER_CS_0 to 4, the read Linux makes), at the route the entry
+  holds (the one its row gives, above). It
+  is a read alone: no write of any kind, no router operation, nothing a
+  firmware connection manager could take for a competing one. The
+  response is a Read Response (PDF 1) matched by route and by the echo
+  of Address, Size, CS and Sequence Number (`tbt_ring.c`); a
+  request-error notification ends it (`TBT_E_NOTIFY`); every other
+  frame met during it - an ICM event among them - is handed to the
+  client's receiver, where, as in any wait, an announcement is queued
+  and a disconnect acts at once (section 5.2).
+- **That the firmware answers it.** Observed on the Alpine Ridge
+  firmware: Linux's client read the dock's router header at route 1
+  after the get route of every announcement, approved or not - 85
+  requests in 13 ms for the ORICO, `0x2463174c 0x001101c0 0x00000001
+  0x80000000 0x200000fe`, USB4 Version `20h`, and the TS3 Plus's
+  `0x020000fe`, USB4 Version `02h`, a Thunderbolt 3 router
+  (`ICM-PROTOCOL` sections 5.3, 5.5, 6.4 and 13.3) [obs]. On the
+  other rows the same read is [linux] (`icm_fr_device_connected`,
+  `icm_tr_device_connected` and `icm_icl_device_connected` all reach
+  `alloc_switch`) and uncaptured. A router not yet approved is read the same way: approval
+  is the firmware's decision to build the PCIe tunnel, and the router
+  answers configuration requests on the control channel before it
+  ([obs] section 6.4, the dock enumerated between its announcement with
+  `approved` = 0 and the approve). Under level `user`, `secure` (which
+  this driver never satisfies, section 5.4) or a level that never
+  tunnels PCIe, the router the firmware announced with a route has been
+  enumerated by it, and the read neither approves nor refuses anything.
+  Under level `none` the firmware tunnels before it announces; the read
+  is the same.
+- **What the firmware may be doing.** The firmware announces a router
+  after it enumerated it; it may still be configuring it (tunnels,
+  deeper routers) when the read arrives. A read changes nothing a
+  configuration depends on, and the router answers each control request
+  on its own; Linux's 85 reads interleave with the firmware's own work
+  in the capture without effect [obs]. After the first `driver ready`
+  the firmware holds configuration requests while it announces (about
+  580 ms, 2.77 s under BIOS Assist with a pre-boot device [obs] section
+  5.5's paragraph on held requests); the read is made only after the
+  host-router poll, which waited out that hold; a read that met a hold
+  still on would time out and leave the generation not known.
+- **When.** Never in an event's path and never in a wait: a new entry
+  (a new occupancy, section 5.3's last case) is marked "version owed",
+  and the next idle poll (`TbtIcmPoll`) makes the read before it takes
+  any frame, so the actions of the poll that created the entry have
+  already been drained (section 6.5) and never wait behind it. An
+  announcement already on the RX ring, or arriving during the read, is
+  queued as in any wait (section 5.2) and handled after the read: its
+  route request and approve wait at most the read's bound below, which
+  is well inside the 9.4 s a USB4 device waits for its approve on the
+  P14s before it falls back to USB (section 5.4) - and at most once per
+  ring session, since a read that goes unanswered stops the reads (the
+  stale answer, below). One read per poll, the oldest owed entry
+  first; the client counts itself in a wait for its duration, so a
+  re-entrant command is refused. A read is owed only by an entry with a
+  route; none is made on a failed or stopped instance, nor inside a
+  resume, a recovery or a rediscovery, nor after a `driver ready` whose
+  host-router poll was never answered (until a later one is).
+- **Timeout and retry.** One attempt: a response wait of its own 1 s
+  (`TBT_ICM_VERSION_TIMEOUT_MS`), not the command timeout, after the
+  request's consumption by the host interface, which the ring bounds
+  separately (`TBT_TX_CONSUME_MS`, 100 ms) - about 1.1 s in all - with
+  no retry: a read that answers comes in milliseconds [obs] (85 requests
+  in 13 ms), and its value is informational, so a timeout is cheaper to
+  report as "not known" than to retry, or to wait longer, at the cost of
+  the thread and of an approve queued behind it. That is inside section
+  5.5's per-command bound and outside the resume budget of section 5.6
+  (no read runs in a resume). A liveness gate already closed, or
+  revoked from another context, ends the wait at once; otherwise a host
+  interface lost during the read is seen at the thread's next sample
+  (section 5.5) and the read's own bound is what it costs.
+- **The stale answer.** A Read Response is matched by its route and the
+  echo of Address, Size, CS and a Sequence Number of two bits
+  (`tbt_ring.c`); nothing in it names the occupancy. A read that was
+  sent and not answered (a timeout, or a request published and not seen
+  consumed) may still be answered later, and after a replacement at the
+  same route and three more requests that late answer would match a new
+  read of the same header and be taken for the new router's. So the
+  first unanswered read stops the reads until the rings restart (a
+  resume, a full recovery, a new bind: a restarted ring delivers
+  nothing of an earlier request, section 5.6), and every occupancy
+  owed a read meanwhile stays "not known" and is read after the
+  restart. A request-error notification carries no sequence number
+  either, so it is taken as this read's answer only where no other
+  request outstanding could have drawn it: no earlier router read (an
+  unanswered one has stopped the reads), and no host-router poll - the
+  polls read route 0's DW 0, which the host router answers and has no
+  request error to give, and a router read is made only in a session
+  whose last host-router poll was answered (section 5.1 step 9; the
+  firmware serves the requests it held when it releases the hold [obs]
+  section 6.2). A notification so taken stops nothing, so a device that
+  left and its re-plug at the same port are not left "not known".
+- **What is kept.** The fifth DW's bits 31:24, the USB4 Version, by its
+  major alone (design record 22 section 3.5, `TbtHwRouterVersion`): a
+  major of 1 or 2 is USB4 with the byte kept, and the entry carries
+  `CM_ST_GEN_USB4 | version << 8` as the software connection manager's
+  USB4 rows do; major 0 is a Thunderbolt 3 router and the entry carries
+  `CM_ST_GEN_TBT3`, as the software connection manager writes such a
+  router; any other major is reserved and the generation not known. The
+  answer is taken only if ROUTER_CS_3 has TopologyID Valid set and
+  ROUTER_CS_2 and ROUTER_CS_3 hold the entry's route (the TopologyID a
+  router at that route carries once enumerated, Spec 8.2.1.1 [obs] in
+  both readings above): one that does not is logged with its five DWs
+  and the generation is not known. The five DWs are logged in every
+  case, for the row no capture has seen.
+- **Failure.** A timeout, a request-error notification, a short
+  response, a header that is not the route's, or a reserved major: the
+  generation is "not known" (`CM_ST_GEN_UNKNOWN`) for that occupancy,
+  logged and counted, and never "Thunderbolt 3" on these hosts; nothing
+  else of the entry changes and nothing is retried. Until the read is
+  made the entry is "not known" as well.
+- **Resume, reconnect and the occupancy.** The value belongs to the
+  occupancy (the entry's serial): a refresh of the same occupancy (the
+  resume case, a recovery's or a rediscovery's re-announcement) keeps
+  it and reads nothing, as Linux reads nothing on that path [obs]
+  section 6.5; a disconnect, a replacement or a move ends the
+  occupancy, and the new one is read afresh. An answer that lands after
+  its entry left, or after the slot was taken by another occupancy, is
+  discarded.
+- **What has been verified, and where.** The host vectors (section
+  10.1) exercise the client against the read on every row. The
+  emulator's firmware-connection-manager models are Alpine Ridge and
+  Titan Ridge (`usb4-emu` `src/qemu/hw/usb4/usb4-host.c`, its profile
+  selector), each able to carry a USB4 device router (its port's
+  `usb4` flag, `usb4-icm.c`) or a Thunderbolt 3 one: the legs read the
+  generation there, a USB4 router and a Thunderbolt 3 router on each.
+  It has no Ice Lake class or Maple Ridge model yet (one is being
+  added at the owner's request); until a leg on it, the integrated
+  rows' evidence is the owner's Framework 13 with the ORICO enclosure,
+  which must read USB4 Version major 1.
+- **The USB3 tunnel stays "not known"** on the integrated rows and
+  Maple Ridge. The record's USB3 field there is not filled from this
+  read. ROUTER_CS_5's USB3
+  Tunneling On is a bit the connection manager sets to let the router's
+  USB3 function work tunnelled, not evidence that a path exists, and
+  what the firmware sets there is uncaptured; the paths themselves are
+  in the adapters' configuration spaces at both ends, a walk of several
+  reads (adapter headers, capability chains, path entries) of state
+  the firmware changes without an event. That is not a read-once
+  value, and this revision does not take it.
 
 ### 5.4 Approval policy (decision D4, taken 2026-10-14)
 
@@ -2447,8 +2785,9 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   are a pair the ordering is qualified on: Windows 2000 (x86) and XP x64
   (amd64), where gate G3 passed and where nothing but this driver removes
   the device - not XP x86 (G3 not run there yet), not Vista or 7 (native
-  hot plug races the connection manager; G3 not run), not 98 SE or ME (no
-  reading). This qualification list is an orchestrator decision of
+  hot plug races the connection manager; G3 not run); 98 SE and ME were
+  added on 2026-10-22, each on its own reading (the 9x half below, part
+  2). This qualification list is an orchestrator decision of
   2026-10-15 for the owner to confirm. Otherwise the entries on that member
   whose function no longer answers move to `IN_USE` alone (`UP` cleared,
   no `DOWN_QUIESCED`), which Stor98 ignores, and its gone deadline (MD-1)
@@ -2868,14 +3207,19 @@ still present. The ask is the status record's mechanism (record 24 section
     O6 cannot be met as the interface writes it**: it asks for the tunnel
     to be torn down after the deadline, and a firmware connection manager
     offers no per-port teardown (section 7.4), so this driver blocks and
-    retries and tears nothing down. That is a departure from interface
-    3's O6 that `stor98cm.h` does not provide for; it is recorded here as
-    an **open interface exception** to be agreed with Stor98's maintainer
-    (an O6 clause for a connection manager without a per-port teardown,
-    or Stor98's own handling of a request left in place past O6) before
-    42-A.13 ships it, and until then the release notes say that under the
-    firmware connection manager on 98 SE and ME a removal that keeps
-    failing leaves the drive stopped until the unplug (decision V8).
+    retries and tears nothing down. That was a departure from interface
+    3's O6 that `stor98cm.h` did not provide for, recorded here as an
+    open interface exception for Stor98's maintainer; **it is agreed**
+    (the owner, as Stor98's maintainer, 2026-10-22; decision V8): O6
+    now carries a clause for a connection manager without a per-port
+    teardown - no teardown is made, the devnode and the request stay in
+    place (the instance stays terminal, R9d), the eject is reported
+    failed, the removal is retried every 2 s with vetoes honoured, and no
+    `UP` is published on that port until the removal succeeds or the
+    devnode is gone; the unplug's link down is then R12's. The release
+    notes say that under the firmware connection manager on 98 SE and ME
+    a removal that keeps failing leaves the drive stopped until the
+    unplug.
 - **A unit that is not an NVMe function** (a dock's switch upstream port)
   gets the query and the removal with no request, as record 24 section 7.1
   made them, under the same transaction (the population check before any
@@ -3008,12 +3352,25 @@ The qualification: 98 SE and ME join the pairs the ordering is qualified
 on (`cmNvOsQualified`) only once gate G3's ordering check has passed on
 each - the statement's marker later than the stage-2 reset and quiesce
 event in the emulator's host trace, with the disconnect injected at every
-point section 7.2's budget names and under a saturated queue - read by
+point section 7.2's budget names and under a saturated queue (on 9x, by
+the owner's decision of 2026-10-22, a held request with more behind it
+in Windows: an MS-DOS copy keeps one request at the drive, so no deeper
+queue was read) - read by
 42-V.6 on each system separately (ME is not 98 SE: its port never calls a
 stop, Stor98's MD-5, so its receiver's behaviour is its own). Until a
 system's reading is in `runs/run-42.md`, the verdict there stays
 `CM_NVLINK_UNQUALIFIED` (9) as today, and the release notes say which
-systems make the statement (decision V4). The other prerequisites of the
+systems make the statement (decision V4). Both readings were taken on
+2026-10-22 by task 43.18 on the owner's answer of that day, in
+`runs/run-43.md` (Phase 43's sheet, not `run-42.md`): on 98 SE under
+the ICM client and on ME under the USB4 profile, the statement came
+after the stage-2 reset and quiesce at every point read - an idle unplug,
+a read held at its fetch, every read held, an unplug at the `UP` of a
+re-plug - and the removal after the acknowledgement; both systems are
+admitted. The queue never held more than one request at the drive (an
+MS-DOS copy reads one at a time), and the owner decided the same day
+that this one-request reading meets the saturated-queue point on 98 SE
+and ME; a deeper queue on 9x is not read. The other prerequisites of the
 condition (the emulator's SHPC bridge, the single member under the ICM,
 the known correspondence under USB4) are unchanged.
 
@@ -3168,9 +3525,10 @@ word per member, the 50 ms pass while a wait is pending; V6 no isolation
 is ever synthesised: where none can be made the devnode stays
 query-removed and the member blocked until the unplug, said in the release
 notes; V7 no answer to an ask is an uncertain outcome, never "nothing was
-changed"; V8 O6 under the firmware connection manager is an open
-interface exception for Stor98's maintainer, the driver blocking and
-retrying meanwhile; V9 one tool eject per domain at a time, the result
+changed"; V8 O6 under the firmware connection manager is an interface
+exception, the driver blocking and retrying and tearing nothing down
+(agreed by Stor98's maintainer, the owner, 2026-10-22, and written into
+O6); V9 one tool eject per domain at a time, the result
 slot owned by one accepted transaction until consumed, rejections in a
 value of their own, the acceptance word persistent, the budget governing
 the tool's wait; V10 acceptance is the ownership boundary of an ask, and
@@ -3178,8 +3536,7 @@ a detached block completes only a removal already authorised, the
 retirement debt kept in a persistent member blocker a later start adopts.
 
 *Open.* Interface 3's O6 under a connection manager with no per-port
-teardown (V8), to be settled with Stor98's maintainer before 42-A.13.
-Whether four call workers per domain cost anything measurable on
+teardown (V8) is settled: agreed 2026-10-22 (above). Whether four call workers per domain cost anything measurable on
 98 SE and ME (threads are cheap there, but the leg reads it); whether a
 `Query_Remove_SubTree` left accepted and never followed by `Remove_SubTree`
 (the blocked case) disturbs the configuration manager's own state on ME,
@@ -3188,6 +3545,188 @@ blocks behind an open wizard on each system, which bounds how late a slot
 reading can be; XHCITR's query device on 98 SE and ME reading the result
 from the hardware key while the ask goes to the driver key (two keys, both
 every user's there).
+
+*As built (roadmap-usb4.md task 43.18, 2026-10-22).* Parts 1 and 2 are
+coded on 42-A.12's call workers (`cm_eject.c`, the pure transaction and
+decision, `test_cm_eject`; `cm_ejectos.c`, their driver half;
+`xhciinst\inst_ej9x.c`, the tools' half both tools link, `test_ej9x`;
+`src\cm\cm_ejask.h`, the three values' layout). Where the code had to
+settle what the text above leaves open, or found it unworkable, it does
+this, reviewed and revised:
+
+- **The unit's bus.** A tool on 98 SE and ME reads no bus number: a
+  unit's instance id is the path form (its devfn, then the member's path),
+  never the `BUS_` form a bus-0 function has. So the ask's unit word may
+  carry bus 0, which names the member's secondary bus: the thread reads
+  that bus (one `HalGetBusData` read of the member's bus numbers) before
+  the acceptance checks, and the "not below" check then holds by
+  construction for such an ask, while a unit word with a bus is still
+  checked against it. The tool names the unit the walk found as the
+  member's child, under the epoch and content generation it was chosen
+  under.
+- **The ask found at a start** is not cleared: the driver never writes
+  the tool's value (record 24 section 3.3: "the driver only reads it").
+  The nonce the start's first read finds is taken as seen, which is the
+  same guarantee (never taken), and the result slot is written empty at
+  that read instead.
+- **The blocked mask is in the status record**, bits 11:8 of its flags
+  word (`CM_ST_F_BLOCKED_*`, one a port in the record's port order), not
+  a new field of the query answer's header, and beside it, bits 15:12,
+  the members with a transaction in progress and not blocked
+  (`CM_ST_F_EJECTING_SHIFT`). The record is framed byte for byte in the
+  answer, so XHCITR reads it there, and a change of either mask changes
+  the content generation as any record byte does; XHCIINST reads the same
+  bits in the registry. No answer version and no header growth were
+  needed. XHCITR's port details say "Blocked" or "A removal is in
+  progress"; a clear bit says neither that a removal ended nor that
+  nothing changed.
+- **One gate.** The member's removal gate and exposure gate are one: an
+  eject transaction not retired, a block, or a statement decision pending
+  raises the member's existing gate (`CmNvlinkHeld`, task 42-A.12), which
+  holds that member's removal calls, exposures and re-enumerations
+  together.
+- **Vanished children are not moved (open).** Part 3's transaction for
+  the functions a tunnel down took away - a veto retried every 2 s, the
+  member's exposure and re-enumeration held until every one is retired,
+  the obligation kept across the NHI's stop, an accepted query never
+  issued twice, a Stor98 request left in place through the retries - is
+  not built: those removals stay on the domain's CONFIGMG worker
+  (`cm_cfgwk.c`) as 42-A.12 left them, where a vanished child's vetoed
+  query is not retried and the member's re-enumeration goes ahead (the
+  behaviour since `3.0.0.0`; R8c and R12 S4 and S5 are not met for that
+  case). A barrier added to the worker alone was tried and set aside
+  while 43.18 was built: done properly it needs the transaction's whole
+  lifetime discipline (a call owner and operation identity per obligation
+  across the stop, the takeovers by `CONTROLLER_UNAVAILABLE` and record
+  22 section 7.7's removal-only request sharing the same accepted-query
+  state, capacity reserved before an irreversible query), which is
+  this record's part 0 machinery applied to those removals: a task of its
+  own, which the owner placed on 2026-10-22 as roadmap-usb4.md task
+  43.47, built on these transaction records.
+- **The unit's own disappearance.** The transaction cannot wait on its
+  own gate, so it removes its own unit itself, and only on evidence the
+  rest of the channel accepts: a tunnel down on its member
+  (`CmEjectDown`, from the seam's tunnel-down action, called after that
+  action has entered the member's statement decision, so a decision not
+  pending then has completed; every member under the firmware connection
+  manager), after which the unit's function is read gone, the member's
+  statement decided and any acknowledgement wait ended (the deadline read
+  before the answer, as always). That is the
+  unplug's link-down reset, assumption A1, as for every vanished child; an
+  all-ones read without a tunnel down is a presence signal and nothing
+  else (section 7.3) and authorises nothing. The removal retires the
+  transaction and lowers the gate, and the held tunnel-down
+  re-enumeration then runs. A record a later start adopts has seen no
+  tunnel down of that start, so it is retired by its devnode verified
+  gone, or by a tunnel down after the adoption.
+- **The transactions' clock** is the driver's own, from the tick count,
+  shared by every thread that steps a record, so a deadline survives the
+  NHI's stop and a later start's adoption. The records are image-static
+  (eight, for every domain), which makes each one the member blocker of
+  part 0 by construction.
+- **After the stop.** A record whose removal is authorised and owed, with
+  no call out, is handed to its member's worker as a detached operation
+  that retries `Remove_SubTree` every 2 s until 30 s after the first
+  attempt and withdraws the request on success; a call out at the stop
+  ends at the record's late taker, which keeps its result and then does
+  the same. A worker busy with another operation at the stop (a statement
+  decision's reading) takes nothing: the removal is then made by the
+  adopting start. A later start adopts every other record on one of its
+  members before any exposure of it, looks the devnode up again by the
+  kept instance id over the whole tree, and resumes in the phase the
+  record stood in: an answer still awaited is read with its original
+  deadline, so it has usually passed and the failed branch follows; a
+  teardown, statement or re-enumeration in progress at the stop is not
+  carried over (an isolation in progress, its acknowledgement wait
+  included, becomes the block). The query's recorded outcome is never
+  re-issued.
+- **Every call that names the unit's devnode** reads that handle's
+  instance id back first: CONFIGMG answering that the handle does not
+  exist, or a successful read finding another id (CONFIGMG reuses
+  handles), is the devnode verified gone, the call answering
+  `CR_NO_SUCH_DEVNODE` and a removal so answered retiring the
+  transaction; an inconclusive read makes no call and concludes nothing
+  (`CR_FAILURE`, a retry's outcome). The unit's identity at acceptance is
+  read through `HalGetBusData` (the route the rest of the thread reads
+  with), not `PCI.VXD`.
+- **No request, only for a unit that is not an NVMe function.** A dock's
+  switch port gets the query and the removal with no request, as record
+  24 section 7.1 made them. An NVMe function is asked of Stor98 or not
+  removed: the ask is refused before the query (`CM_EJ_WHY_NO_CHANNEL`,
+  nothing changed, exit 1) when no Stor98 channel entry names the
+  function - no Stor98 runs it, or none has read the channel - since a
+  missing channel is no removal support (`stor98cm.h` R2) and an accepted
+  query alone is no isolation (the owner confirmed the refusal on
+  2026-10-22; both tools say "The drive cannot be asked to stop cleanly
+  (Stor98 is not running it), so it is not ejected from here. Shut down
+  Windows before you unplug it."); and an NVMe function the channel no longer
+  names after its query, or whose request was not published, takes the
+  branch of no answer: isolation first, or the block - never a plain
+  removal. A unit whose class code cannot be read is taken as nothing
+  answering there (`CM_EJ_WHY_NOTHING`), never as "not an NVMe function".
+- **O6 read before every removal result.** A removal's result taken after
+  the 30 s from its first attempt, whatever it says and on whichever
+  thread, is a retry's outcome: the result is "blocked" (it keeps failing)
+  before the success is applied, never "removed clean". The clock is read
+  after the call returned, on whichever thread takes its result (the
+  thread, the late taker, the detached loop), and the deadline found
+  passed there is the same transition as on a step: the block, and the
+  tunnel's teardown owed once - an obligation the record keeps whoever
+  found the deadline (a late taker, the detached loop), made by the start
+  that knows the member's USB4 port (an adopting one included), and
+  discharged by the retirement; under the firmware connection manager
+  there is none to make.
+- **The decision's deadline at its taking.** A slot reading counts only
+  when both its read (the worker's clock) and its taking by the thread
+  fall before the decision's deadline; the USB4 allowance left is read at
+  the taking, which is when the statement is published.
+- **A terminal step is written once.** What follows it - O6's later
+  success, a block lifted by the unplug - is the member's state (the
+  mask), never a second terminal step in the slot.
+- **Priority.** A pending statement decision has its member's worker
+  first: no transaction call is submitted to a member with a decision
+  pending.
+- **The qualification** (V4) is a table in `cm_eject.c`,
+  `CmEjQualified9x`, with neither system admitted; until the driver tells
+  98 SE from ME (the VMM's version, read with the first admission), a 9x
+  statement needs both. Until then every 9x decision ends withheld
+  (`CM_NVLINK_UNQUALIFIED`) after its reading, the failed branch's
+  isolation is never available on 9x (so it blocks under both connection
+  managers), and a clean removal's teardown under the USB4 profile is made
+  without its `DOWN_QUIESCED`. *Since 2026-10-22* both systems are
+  admitted, each on its own G3 reading (`runs/run-43.md`), so no
+  version read was needed: a 9x decision now follows the condition as on
+  2000 and XP x64, the failed branch's isolation is available where the
+  condition holds, and the USB4 profile's clean-removal teardown carries
+  its `DOWN_QUIESCED`. Those two eject paths are read by 43.19's legs.
+  The eject's own statements (the isolation's, the clean removal's and
+  O6's teardown) take the whole qualification, not the systems' admission
+  alone (`CmEjStatementQualified`, reviewed and revised 2026-10-22): the
+  member must also read as the emulator's bridge (QEMU's vendor id on it
+  or the bus-0 bridge above it, an SHPC capability, no PCI Express
+  capability), read once per transaction. A teardown read back closed
+  proves isolation, not that the endpoint's reset completed (record 22),
+  so on a real host no eject path makes a statement: the clean removal is
+  torn down without `DOWN_QUIESCED`, a failed stop blocks, O6 retries.
+- **The entry after a clean eject with no teardown** (owner, 2026-10-22,
+  on 43.19's first leg on 98 SE). A removal that ends clean (or plain)
+  with an entry and no teardown to follow - the firmware connection
+  manager, which has none (V8) - moves the transaction to a last phase,
+  `CM_EJ_P_RETIRE`, whose action (`CmNvlinkRetireEjected`) takes the
+  entry from `UP` to `IN_USE` alone: no `DOWN_QUIESCED`, no wait, the
+  generation unchanged, as the drive's Stor98 went with the devnode.
+  Left `UP`, the unplug that followed made its statement and waited the
+  whole 3 s for an answer nobody could give. Not from a servicing point
+  inside a wait; an adopting start does not carry it over (the entry then
+  stays `UP`, as before). A drive started again by Device Manager's
+  Refresh before the unplug runs without the channel until its next `UP`
+  (a new tunnel). Not changed, because not read: the USB4 profile's clean
+  removal with a sibling running (no teardown, so no mark), and the NT
+  side, where Windows ejects and nothing tells this driver that Stor98
+  left.
+- **Not built.** XHCITR's tray does not poll a result after the tool's
+  wait has ended; the port's two lines, read from the record's masks, are
+  what show a transaction that outlived it.
 
 ### 7.3 What this driver never claims
 
@@ -3832,8 +4371,14 @@ made the service look:
   5.2's second line), and the release notes' fallback; a unit disabled
   and enabled, or updated, or restarted by the service, is never read as
   ejected whatever the rebuild takes. The tools' watch for the tunnel
-  line (record 24 section 5.2, 10 s) covers the service's poll and the
-  thread's status-ask read. This ends a defect `3.0.0.0` has: a driver update or
+  line (record 24 section 5.2, 10 s) covers the thread's status-ask read
+  of a tool's own confirmation. It did not cover the service's: the
+  service writes under the eject mutex, which the tool held through its
+  watch, and an unelevated XHCITR on 7 under emulation saw the
+  confirmation 12 to 18 s after the stop (the 43.45 legs, 2026-10-22).
+  Since then XHCITR, when it has not confirmed the eject itself, lets go
+  of the mutex before its watch and waits for the service's pass
+  (record 25 section 6.2 step 7). This ends a defect `3.0.0.0` has: a driver update or
   a disable and enable of a unit under the USB4 profile, whose
   query-remove and remove today post an eject and tear its tunnel down.
   Record 22 section 10.4's clause that the tunnel is down before the
@@ -4412,7 +4957,14 @@ vectors):
   an announcement settling it), a failed route request followed by an
   identical announcement (the route retried, then the approve sent), a
   short frame, an all-zero UUID, a name block overrunning its frame, and a
-  disconnect matching no entry;
+  disconnect matching no entry; and section 5.3's generation read - none
+  where it is left off, one per occupancy on every row at the next
+  idle poll (FR at the topology query's route, AR after get route) and none on a refresh, a USB4 major 1 and 2, a major 0, a
+  reserved major, a header that is not the route's, no answer, a
+  request-error notification, a disconnect during the read, an
+  announcement arriving during an unanswered read, and the reads stopped
+  by an unanswered one until the rings restart - with
+  the status record's generation for each (`test_cm_status`);
 - selection and hardware profiles (`test_tbt_hw`), pure (section 1.4.2),
   as a table of register readings to
   outcomes: each row's ownership predicate passing; ICM enabled clear on

@@ -1583,8 +1583,6 @@ const INST_VALUE instValues[] = {
     { "XhciSilentInstall", INST_INF_XHCI, INST_APPLY_9X_XHCI, 0x3UL, 0x3UL,
       "install hubs, boot keyboards and mice and Bulk-Only storage with no "
       "Add New Hardware wizard",
-      "turn it on only once each listed class's drivers have been installed "
-      "at least once: otherwise 98 SE asks for its CD, with no wizard. "
       "Restart Windows after changing it.", 0,
       { "off", "on", NULL, NULL } },
     { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3UL, 0x3UL,
@@ -2847,10 +2845,11 @@ int inst_mw_reading(int found, INST_U32 type, INST_U32 bytes, INST_U32 dword,
 
 int inst_mk_system(const INST_ENV *env)
 {
-    /* 2000 to 7, and 8 and 8.1 for the connection manager alone (record 23
-     * section 4.5, revision 13). */
+    /* 2000 to 7, and 8, 8.1 and 10 (record 23 section 4.5, revisions 13
+     * and 27; 11, also 10.0, is refused before this is asked). */
     return env->Nt && (env->Major == 5UL ||
-                       (env->Major == 6UL && env->Minor <= 3UL));
+                       (env->Major == 6UL && env->Minor <= 3UL) ||
+                       (env->Major == 10UL && env->Minor == 0UL));
 }
 
 int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
@@ -3335,22 +3334,65 @@ int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
     return INST_UNPLUG_CHECK;
 }
 
-const char *inst_unplug_text(int kind)
+/* Roadmap 43.8 (owner, 2026-10-20): once Windows has stopped the device
+ * it is too late to stop its other devices first, so the text after a
+ * successful eject says only what to do now, and the reminder is asked
+ * before the eject (inst_eject_remind). */
+const char *inst_unplug_text(int kind, int tool)
 {
     switch (kind) {
-    case INST_UNPLUG_NOW:
-        return "You can now unplug the device.";
     case INST_UNPLUG_OTHERS:
         return "Other devices behind the same Thunderbolt port are still "
                "running: eject them\ntoo before you unplug it.";
     case INST_UNPLUG_RESTARTED:
-        return "The device has started again, so it is not safe to unplug. "
-               "Close the programs\nusing it and run INSTALL /console /eject again.";
+        return tool == INST_TOOL_TREE
+                   ? "The device has started again, so it is not safe to "
+                     "unplug. Close the programs\nusing it and stop it again "
+                     "in the xHCI98 USB Tree."
+                   : "The device has started again, so it is not safe to "
+                     "unplug. Close the programs\nusing it and run INSTALL "
+                     "/console /eject again.";
     default:
-        return "Before you unplug it, make sure none of its other devices "
-               "(USB ports, card\nreaders, network) is in use; stop them in "
-               "Windows first.";
+        return "You can now unplug the device.";
     }
+}
+
+INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf)
+{
+    INST_U32 count = inst_get32(rec, 48);       /* CM_ST_O_PORT_COUNT   */
+    INST_U32 active = inst_get32(rec, 52);      /* CM_ST_O_PORT_ACTIVE  */
+    INST_U32 n = inst_get32(rec, 72);           /* CM_ST_O_ROUTER_COUNT */
+    INST_U32 usb3 = 5UL;                        /* CM_ST_TUN_UNKNOWN    */
+    INST_U32 j;
+    int portKnown = 0;
+    int routers = 0;
+
+    for (j = 0; j < count && j < 4UL; j++) {    /* CM_ST_MAX_PORTS      */
+        if ((active & (1UL << j)) != 0 &&
+            inst_get32(rec, 56 + 4 * j) == portBdf) {   /* CM_ST_O_PORTS */
+            portKnown = 1;
+        }
+    }
+    for (j = 0; portKnown && j < n && j < INST_ST_MAX_ROUTERS; j++) {
+        const unsigned char *e = rec + INST_ST_HDR + j * INST_ST_ENTRY;
+        if (inst_get32(e, 40) == portBdf) {     /* CM_ST_E_BRIDGE       */
+            routers++;
+            usb3 = (inst_get32(e, 36) >> 4) & 0xFUL;    /* CM_ST_E_TUNNELS */
+        }
+    }
+    return routers == 1 ? usb3 : 5UL;
+}
+
+int inst_eject_remind(int singleFunction, INST_U32 usb3)
+{
+    return inst_unplug_kind(1, 0, singleFunction, usb3) != INST_UNPLUG_NOW;
+}
+
+const char *inst_eject_remind_text(void)
+{
+    return "Before you eject it, make sure none of its other devices (USB "
+           "ports, card\nreaders, network) is in use; stop them in Windows "
+           "first.";
 }
 
 /* ======================================================================== */
@@ -3375,10 +3417,16 @@ int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build)
     if (major == 6UL && (minor == 2UL || minor == 3UL)) {
         return INST_OS_CMONLY;
     }
+    /* Revision 28: 11 reports 10.0 too, from build 22000, and has a USB4
+     * connection manager of its own. No Server check (owner, 2026-10-20). */
+    if (major == 10UL && minor == 0UL && build < INST_OS_BUILD_W11) {
+        return INST_OS_CMONLY;
+    }
     return INST_OS_REFUSED;
 }
 
-const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor)
+const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor,
+                         INST_U32 build)
 {
     if (!nt) {
         return minor >= 90UL ? "Windows ME" : "Windows 98 SE";
@@ -3391,6 +3439,9 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor)
         return minor == 0UL ? "Windows Vista" : minor == 1UL ? "Windows 7" :
                minor == 2UL ? "Windows 8" : minor == 3UL ? "Windows 8.1" :
                "Windows";
+    }
+    if (major == 10UL && minor == 0UL) {
+        return build < INST_OS_BUILD_W11 ? "Windows 10" : "Windows 11";
     }
     return "Windows";
 }
@@ -3518,7 +3569,7 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
     if (set & INST_CW_USB8) {
         inst_cat_para(out, cap,
                       "The xHCI98 USB drivers have not been tested on Windows "
-                      "8 or 8.1. They replace Windows' own USB 3 driver on "
+                      "8, 8.1 or 10. They replace Windows' own USB 3 driver on "
                       "every xHCI controller, the one your keyboard and mouse "
                       "may use included. The uninstall is meant to give the "
                       "controllers back to Windows' own driver; that has not "
@@ -3530,13 +3581,13 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
     if (set & INST_CW_NOCM8) {
         inst_cat_para(out, cap,
                       "This package carries no Thunderbolt 3 / USB4 driver. "
-                      "On Windows 8 and 8.1 it installs only what is ticked: "
+                      "On Windows 8, 8.1 and 10 it installs only what is ticked: "
                       "the xHCI98 tools, and the xHCI98 USB drivers if their "
                       "box is ticked.");
     }
     if (set & INST_CW_S98_8) {
         inst_cat_para(out, cap,
-                      "Stor98 has not been tested on Windows 8 or 8.1. If a "
+                      "Stor98 has not been tested on Windows 8, 8.1 or 10. If a "
                       "drive behind a Thunderbolt or USB4 tunnel uses "
                       "Windows' own NVMe driver, this choice replaces it.");
     }
@@ -5120,8 +5171,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       284, 20 },
     { INST_PT_NOW, "Restart Windows now", 284, 10 },
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
-    { INST_PT_S98, "Stor98, the bundled NVMe driver (a separate project)",
-      258, 10 },
+    { INST_PT_S98, "Stor98, the bundled NVMe driver", 258, 10 },
     { INST_PT_S98_T,
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",
@@ -6059,11 +6109,18 @@ int inst_stor_route(int storCase)
            storCase == INST_STOR_CASE_OWN;
 }
 
-int inst_stor_default(int haveChoice, int choice,
+int inst_stor_default(int usb20u, int haveChoice, int choice,
                       const int st[INST_STOR_COUNT])
 {
     int i;
 
+    /* NUSB installed: never ticked for the user, not by a choice an
+     * earlier run recorded before NUSB came, nor with NUSB's storage
+     * files missing (owner, 2026-10-22). /storage still ticks it, and
+     * a ticked run still copies over nothing present. */
+    if (usb20u) {
+        return 0;
+    }
     if (haveChoice) {
         return choice != 0;
     }
@@ -6308,6 +6365,15 @@ void inst_stor_found_text(char *out, size_t cap,
     inst_stor_names(out, cap, st);
     strncat(out, ". Only some of the seven: USB storage is not known to be "
             "ready.", cap - strlen(out) - 1);
+}
+
+void inst_stor_note_text(char *out, size_t cap,
+                         const int st[INST_STOR_COUNT], int usb20u)
+{
+    inst_stor_found_text(out, cap, st);
+    if (usb20u && cap > 0) {
+        strncat(out, " " INST_STOR_NUSB_TEXT, cap - strlen(out) - 1);
+    }
 }
 
 int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,

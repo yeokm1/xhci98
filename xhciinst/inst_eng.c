@@ -64,6 +64,9 @@
 #include "inst_eng.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/cm/cm_ejask.h"
+#include "inst_ej9x.h"
+#include "../src/cm/cm_query.h"
 
 /* The driver's own switchover gate (src\xhci_psw.c), declared here rather
  * than through xhci_psw.h, whose compatibility header is the driver's. */
@@ -4878,7 +4881,7 @@ static int package_files(PKG_EACH each, void *ctx)
         }
         FindClose(h);
     }
-    /* 98 SE: the USB storage drivers' seven, from the download's NONFREE\
+    /* 98 SE: the USB storage drivers' seven, from the download's NUSB33\
      * folder, once their files are in place (record 26 section 6.5.4). */
     if (!envNow.Nt && storCopyOk) {
         int i;
@@ -7216,12 +7219,12 @@ static void check_results(void)
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
                    changedReboot[c]) {
             /* 32-bit Vista and 7 hold the controller until the helper's
              * restart (release notes, "Installing", step 3). */
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
                    (d->Problem == 52UL || d->Problem == 39UL) &&
                    !testSigningConfirmed) {
             out("  %s does not load: test-signing mode is needed (see the "
@@ -7378,11 +7381,12 @@ static void testsigning_note0(void)
 
 /* The note for the connection manager alone (record 23 section 5.10,
  * revision 13): the binary read is xhcicm.sys, the device that shows the
- * code the NHI, and on 8 and 8.1 the Secure Boot condition. */
+ * code the NHI, and on 8, 8.1 and 10 (revision 28) the Secure Boot
+ * condition. */
 static void testsigning_note_cm(void)
 {
     char opt[512];
-    int w8 = envNow.Major == 6 && envNow.Minor >= 2;
+    int w8 = envNow.Major > 6 || (envNow.Major == 6 && envNow.Minor >= 2);
 
     if (!stScreens &&
         reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
@@ -7418,11 +7422,11 @@ static void testsigning_note_cm(void)
             "it.\n");
     }
     if (w8) {
-        out("Windows 8 and 8.1: test-signing mode can be turned on only with "
-            "Secure Boot\noff in the computer's firmware setup. The start "
-            "without signature enforcement\nis Advanced startup, Troubleshoot, "
-            "Startup Settings, \"Disable driver\nsignature enforcement\", at "
-            "every start.\n");
+        out("Windows 8, 8.1 and 10: test-signing mode can be turned on only "
+            "with Secure\nBoot off in the computer's firmware setup. The "
+            "start without signature\nenforcement is Advanced startup, "
+            "Troubleshoot, Startup Settings, \"Disable\ndriver signature "
+            "enforcement\", at every start.\n");
     }
     out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
         "(52 on 7).\nIf this start is one without signature enforcement, go "
@@ -12974,8 +12978,234 @@ static int eject_confirm(void)
            inst_tb_answer(line, 0) == 1;
 }
 
+/*
+ * 98 SE and ME: a unit's eject asked of xhcicm.sys (record 24 section 7.1,
+ * revision 6; record 21 section 7.2 part 1; task 43.18). The tool makes
+ * neither CONFIGMG call for a unit: it writes XhciCmEjectAsk to the NHI's
+ * driver key and reads XhciCmEjectReply and XhciCmEjectResult from its
+ * hardware key.
+ */
+
+/* The query device's token for NHI k: its name from the NHI's hardware
+ * key (XhciCmQueryName), one IOCTL_XHCICM_QUERY, the header checked and
+ * the record's NHI ids compared with the devnode's. 1 when read. */
+static int tb_token(int k, INST_EJ_TOKEN *tok)
+{
+    char path[INST_PATH_CHARS];
+    char name[32];
+    char dev[48];
+    unsigned char *buf;
+    HKEY key;
+    HANDLE h;
+    DWORD type;
+    DWORD n;
+    DWORD got;
+    DWORD size;
+    INST_U32 vd;
+    INST_U32 rec;
+    int ok;
+    int tries;
+
+    memset(tok, 0, sizeof(*tok));
+    if (tbh[k].Node < 0) {
+        return 0;
+    }
+    join(path, sizeof(path), "Enum", tbn[tbh[k].Node].R.Id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    n = sizeof(name) - 1;
+    ok = RegQueryValueExA(key, CM_Q_NAME_VALUE, NULL, &type,
+                          (LPBYTE)name, &n) == ERROR_SUCCESS &&
+         type == REG_SZ && n > 1;
+    RegCloseKey(key);
+    if (!ok) {
+        return 0;
+    }
+    name[n < sizeof(name) ? n : sizeof(name) - 1] = '\0';
+    _snprintf(dev, sizeof(dev) - 1, "\\\\.\\%s", name);
+    dev[sizeof(dev) - 1] = '\0';
+    h = CreateFileA(dev, GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                    0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        h = CreateFileA(dev, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        OPEN_EXISTING, 0, NULL);
+    }
+    if (h == INVALID_HANDLE_VALUE) {
+        logonly("query device %s: not opened (%lu)\n", dev,
+                (unsigned long)GetLastError());
+        return 0;
+    }
+    ok = 0;
+    buf = NULL;
+    size = CM_Q_ASK_BYTES;
+    for (tries = 0; tries < 3 && !ok; tries++) {
+        unsigned char *b = (unsigned char *)realloc(buf, size);
+        if (b == NULL) {
+            break;
+        }
+        buf = b;
+        got = 0;
+        if (!DeviceIoControl(h, CM_Q_IOCTL, NULL, 0, buf, size, &got,
+                             NULL) ||
+            got < CM_Q_HDR_BYTES || got > size) {
+            break;
+        }
+        if (inst_get32(buf, CM_Q_O_BYTES) > got) {
+            size = inst_get32(buf, CM_Q_O_BYTES);
+            if (size > CM_Q_MAX_BYTES) {
+                break;
+            }
+            continue;
+        }
+        if (!inst_ej_token(buf, got, tok)) {
+            break;
+        }
+        /* The answer is this NHI's: the record's ids are the devnode's. */
+        rec = inst_get32(buf, CM_Q_O_REC_OFFSET);
+        ok = rec + CM_ST_HDR_BYTES <= got &&
+             inst_pci_vendev(tbn[tbh[k].Node].R.Id, &vd) &&
+             inst_get32(buf + rec, CM_ST_O_NHI_ID) == vd;
+    }
+    CloseHandle(h);
+    free(buf);
+    logonly("query token %s: %s epoch %08lX%08lX generation %lu%s\n", dev,
+            ok ? "read" : "refused", (unsigned long)tok->EpochHi,
+            (unsigned long)tok->EpochLo, (unsigned long)tok->ContentGen,
+            tok->Eligible ? "" : " (not eligible)");
+    return ok;
+}
+
+/* A REG_BINARY of exactly `want` bytes from NHI k's hardware key. */
+static int tb_hw_binary(int k, const char *value, unsigned char *b,
+                        DWORD want)
+{
+    char path[INST_PATH_CHARS];
+    HKEY key;
+    DWORD type;
+    DWORD n;
+    int ok;
+
+    if (tbh[k].Node < 0) {
+        return 0;
+    }
+    join(path, sizeof(path), "Enum", tbn[tbh[k].Node].R.Id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    n = want;
+    ok = RegQueryValueExA(key, value, NULL, &type, b, &n) == ERROR_SUCCESS &&
+         type == REG_BINARY && n == want;
+    RegCloseKey(key);
+    return ok;
+}
+
+static void tb_eject_unask(int k)
+{
+    HKEY key;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[k].DrvPath, 0, KEY_SET_VALUE,
+                      &key) == ERROR_SUCCESS) {
+        RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+        RegCloseKey(key);
+    }
+}
+
+/*
+ * The ask and its wait. Returns the outcome (INST_EJ_*) with its text, or
+ * -1 for the uncertain end; *notClean as inst_ej_outcome's.
+ */
+static int tb_eject9x(int k, INST_U32 member, INST_U32 unit,
+                      const INST_EJ_TOKEN *tok, const char **text,
+                      int *notClean)
+{
+    unsigned char ask[CM_EJ_ASK_BYTES];
+    unsigned char res[CM_EJ_RESULT_BYTES];
+    unsigned char rep[CM_EJ_REPLY_BYTES];
+    INST_EJ_RESULT r;
+    INST_EJ_WAIT w;
+    INST_U32 nonce;
+    INST_U32 reason;
+    INST_U32 lastStep;
+    HKEY key;
+    int got;
+    int end;
+    int written;
+    static INST_U32 lastNonce;
+
+    *notClean = 0;
+    *text = "";
+    nonce = inst_ej_nonce(GetTickCount() ^ (GetCurrentProcessId() << 8),
+                          lastNonce);
+    lastNonce = nonce;
+    inst_ej_ask(ask, nonce, member, unit, tok);
+    driver_key_path(&tbn[tbh[k].Node].R, tbh[k].DrvPath,
+                    sizeof(tbh[k].DrvPath));
+    written = 0;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[k].DrvPath, 0, KEY_SET_VALUE,
+                      &key) == ERROR_SUCCESS) {
+        written = RegSetValueExA(key, CM_EJ_ASK_VALUE, 0, REG_BINARY, ask,
+                                 sizeof(ask)) == ERROR_SUCCESS;
+        RegCloseKey(key);
+    }
+    logonly("eject ask 0x%08lX (port %04lX, unit %04lX) to %s: %s\n",
+            (unsigned long)nonce, (unsigned long)member, (unsigned long)unit,
+            tbh[k].DrvPath, written ? "written" : "refused");
+    if (!written) {
+        *text = "The Thunderbolt driver could not be asked (its registry key "
+                "is not writable).";
+        return INST_EJ_UNSUPPORTED;
+    }
+    out("Asked the Thunderbolt driver to stop the device.\n");
+    inst_ej_wait_init(&w, GetTickCount());
+    lastStep = 0;
+    end = INST_EJ_W_WAIT;
+    while (end == INST_EJ_W_WAIT || end == INST_EJ_W_DELETE) {
+        Sleep(CM_EJ_POLL_MS);
+        reason = tb_hw_binary(k, CM_EJ_REPLY_VALUE, rep, sizeof(rep))
+                     ? inst_ej_reply(rep, sizeof(rep), nonce)
+                     : 0;
+        got = tb_hw_binary(k, CM_EJ_RESULT_VALUE, res, sizeof(res)) &&
+              inst_ej_result(res, sizeof(res), nonce, &r);
+        if (got && r.Step != lastStep) {
+            lastStep = r.Step;
+            logonly("eject step %lu outcome %lu query 0x%lX remove 0x%lX "
+                    "answer 0x%08lX clock %lu\n",
+                    (unsigned long)r.Step, (unsigned long)r.Outcome,
+                    (unsigned long)r.QueryCr, (unsigned long)r.RemoveCr,
+                    (unsigned long)r.Answer, (unsigned long)r.Clock);
+        }
+        end = inst_ej_wait_step(&w, GetTickCount(), reason,
+                                got ? &r : NULL);
+        if (end == INST_EJ_W_DELETE) {
+            tb_eject_unask(k);
+            logonly("eject ask unanswered after %lu ms: deleted\n",
+                    (unsigned long)CM_EJ_ANSWER_MS);
+        }
+        if (end == INST_EJ_W_REJECTED) {
+            logonly("eject ask rejected: reason %lu\n",
+                    (unsigned long)reason);
+        }
+    }
+    tb_eject_unask(k);
+    if (end == INST_EJ_W_REJECTED) {
+        return inst_ej_rejected(reason, text);
+    }
+    if (end == INST_EJ_W_UNCERTAIN) {
+        *text = inst_ej_uncertain_text();
+        return -1;
+    }
+    return inst_ej_outcome(&r, text, notClean);
+}
+
 static int run_eject(void)
 {
+    INST_EJ_TOKEN tok1;
+    INST_EJ_TOKEN tok2;
+    int haveTok;
     char id[INST_ID_CHARS];
     char portId[INST_ID_CHARS];
     char desc[128];
@@ -13064,12 +13294,19 @@ static int run_eject(void)
     portBdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
     out("\nDevice %d: %s\n  %s\n", tbn[u].Number, desc, id);
     if (!(opts.Yes && opts.EjectId[0] != '\0')) {
+        if (inst_eject_remind(tb_single(u),
+                              inst_port_usb3(tbh[nhiK].Rec, portBdf))) {
+            out("%s\n", inst_eject_remind_text());
+        }
         if (!eject_confirm()) {
             out("\nCancelled.\n");
             tb_unask();
             return INST_EXIT_REFUSED;
         }
     }
+    /* 98 SE and ME: the topology the unit is chosen under, before the
+     * revalidation (record 21 section 7.2 part 1, the freshness token). */
+    haveTok = !envNow.Nt && tb_token(nhiK, &tok1);
     /* Revalidation (record 24 section 7.3), immediately before the call:
      * a fresh ask answered, then the tree read again at that generation. */
     if (!tb_reconfirm() || !tb_scan(0) || tbnBad != 0 || tbChanging) {
@@ -13155,34 +13392,45 @@ static int run_eject(void)
         }
         tb_watch_tunnel(nhiK, portBdf);
     } else {
-        cr = tbQueryRemove(tbn[u].Dn, INST_UI_NOT_OK);
-        logonly("CM_Query_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
-        outcome = inst_eject9x_query(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            out("%s\n", text);
-            if (cr != INST_CR_REMOVE_VETOED && outcome == INST_EJ_VETO) {
-                out("(code 0x%08lX)\n", (unsigned long)cr);
-            }
+        INST_U32 unit;
+        int notClean;
+
+        /* Asked of the Thunderbolt driver (task 43.18): the unit chosen
+         * under the same start and content of the query answer before and
+         * after the revalidation, then the ask and its result. */
+        unit = inst_ej_unit_loc(id);
+        if (!haveTok || !tb_token(nhiK, &tok2) || !tok2.Eligible ||
+            !inst_ej_same_token(&tok1, &tok2) || unit == INST_EJ_NO_LOC) {
+            out("The device list changed, or the Thunderbolt driver's own "
+                "list could not be read;\nnothing was ejected.\n");
             tb_unask();
-            return inst_eject_code(outcome);
+            return INST_EXIT_REFUSED;
         }
-        /* Accepted: the removal always follows (record 24 section 7.1). */
-        cr = tbRemove(tbn[u].Dn, INST_UI_NOT_OK);
-        logonly("CM_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
-        outcome = inst_eject9x_remove(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            out("%s\n(code 0x%08lX)\n", text, (unsigned long)cr);
+        outcome = tb_eject9x(nhiK, portBdf, unit, &tok2, &text, &notClean);
+        if (outcome < 0) {
+            out("%s\n", text);
             tb_unask();
             devLast = text;
+            return INST_EXIT_FAILED;
+        }
+        if (outcome != INST_EJ_DONE) {
+            out("%s\n", text);
+            tb_unask();
+            if (outcome == INST_EJ_FAILED) {
+                devLast = text;
+            }
             return inst_eject_code(outcome);
         }
         out("Windows has stopped %s.\n", desc);
+        if (notClean) {
+            out("%s\n", inst_ej_not_clean_text());
+        }
         out("Until you unplug it, Device Manager's Refresh, or the "
             "Thunderbolt driver\nlooking at the port again, can start it "
             "again.\n");
     }
     i = tb_after(portId, id, nhiK, portBdf, single);
-    devLast = inst_unplug_text(i);
+    devLast = inst_unplug_text(i, INST_TOOL_CONSOLE);
     tb_unask();
     return i == INST_UNPLUG_RESTARTED ? INST_EXIT_STEPS : INST_EXIT_DONE;
 }
@@ -15365,8 +15613,7 @@ static void s98_question(void)
         s98_apply(0);
         return;
     }
-    out("Stor98 %s, the bundled NVMe driver (a separate project)\n",
-        s98VersionText);
+    out("Stor98 %s, the bundled NVMe driver\n", s98VersionText);
     out("  For NVMe drives behind a Thunderbolt or USB4 tunnel; the "
         "installer selects tunnel drives only. On such a drive it installs "
         "where no driver is, and updates an older Stor98. An internal NVMe "
@@ -15397,7 +15644,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [%s].\n", def ? "Y" : "N");
     } else if (!def) {
-        out("  /yes: N on Windows 8 and 8.1 (/stor98 installs it).\n");
+        out("  /yes: N on Windows 8, 8.1 and 10 (/stor98 installs it).\n");
     } else {
         out("  /yes: Y, with the Thunderbolt support (/nostor98 leaves it "
             "out).\n");
@@ -17035,7 +17282,8 @@ static void stor_read(void)
     storPack = stor_pack_check();
     stor_read_states(storSt);
     storPlanCase = inst_stor_case(storSt, storSource);
-    storDefault = inst_stor_default(storHaveChoice, (int)storChoice, storSt);
+    storDefault = inst_stor_default(storUsb20u, storHaveChoice,
+                                    (int)storChoice, storSt);
     /* A lone USBSTOR.INF (record 26 section 6.5.5): the row ticked when a
      * ticked run completes the pair, NUSB installed winning (unticked);
      * the row says so either way. */
@@ -17078,7 +17326,7 @@ static void stor_note(char *out, size_t cap)
 {
     if (storPack == 0) {
         inst_copy(out, "This download does not carry the USB storage drivers "
-                  "(NONFREE\\STORAGE\\NUSB33\\W98SE).", cap);
+                  "(NUSB33\\W98SE).", cap);
         stor_note_half(out, cap);
         return;
     }
@@ -17088,11 +17336,7 @@ static void stor_note(char *out, size_t cap)
         stor_note_half(out, cap);
         return;
     }
-    inst_stor_found_text(out, cap, storSt);
-    if (storUsb20u) {
-        strncat(out, " NUSB is installed (its Uninstall\\USB20U entry is "
-                "there).", cap - strlen(out) - 1);
-    }
+    inst_stor_note_text(out, cap, storSt, storUsb20u);
     stor_note_half(out, cap);
 }
 
@@ -19976,7 +20220,7 @@ void inst_eng_usage(void)
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (on 98 SE and ME with a warning)\n"
-"  /usb          Windows 8 and 8.1: install the USB drivers too (untested)\n"
+"  /usb          Windows 8, 8.1 and 10: install the USB drivers too (untested)\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
@@ -20175,7 +20419,7 @@ static void st_screens_once(int longest)
         storUsb20u = 1;
         storSource = 0;
         storPlanCase = inst_stor_case(storSt, 0);
-        storDefault = inst_stor_default(0, 0, storSt);
+        storDefault = inst_stor_default(storUsb20u, 0, 0, storSt);
         storInclude = storDefault;
 
         /* /list */
@@ -20320,12 +20564,13 @@ static void st_screens_once(int longest)
     {
         INST_U32 n;
         if (eject_choose(&n)) {
+            out("%s\n", inst_eject_remind_text());
             eject_confirm();
         }
     }
     stInput = NULL;
     for (i = 0; i < 6; i++) {
-        out("%s\n", inst_unplug_text(i < 4 ? i : 0));
+        out("%s\n", inst_unplug_text(i < 4 ? i : 0, INST_TOOL_CONSOLE));
     }
     out("%s\n", inst_not_removable_text());
     tbnCount = 0;
@@ -21148,8 +21393,8 @@ int inst_eng_begin(int argc, char **argv)
         envNow.Nt = 1;
         if (osKind == INST_OS_REFUSED) {
             out("This Windows is not one this package supports (2000, XP, "
-                "XP x64, Vista, 7;\n8 and 8.1 for the Thunderbolt 3 / USB4 "
-                "connection manager alone).\n");
+                "XP x64, Vista, 7;\n8, 8.1 and 10 below build 22000 for the "
+                "Thunderbolt 3 / USB4\nconnection manager).\n");
             return INST_EXIT_REFUSED;
         }
         isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
@@ -21183,7 +21428,7 @@ int inst_eng_begin(int argc, char **argv)
         if ((opts.CmOnly || (osKind == INST_OS_CMONLY && !opts.Usb)) &&
             (sk == INST_INF_XHCI || sk == INST_INF_UAS)) {
             out("REFUSED: /set %s:\nthe USB drivers are not in this run "
-                "(/cmonly, or Windows 8 and 8.1).\n",
+                "(/cmonly, or Windows 8, 8.1 and 10).\n",
                 instValues[opts.SetIndex[i]].Name);
             return INST_EXIT_REFUSED;
         }
@@ -21304,19 +21549,22 @@ static int usb_decide(void)
         /* Record 26 section 5.3.1 case 5 (owner, 2026-10-22). */
         out("%s: this package carries no Thunderbolt 3 / USB4 driver; it "
             "installs the xHCI98\ntools, and the xHCI98 USB drivers only "
-            "with /usb (untested on Windows 8 and\n8.1).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            "with /usb (untested on Windows 8, 8.1\nand 10).\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY && r == 0) {
         /* Decision D18 as amended by record 23 revision 26 (task 43.43):
          * the USB drivers and Stor98 are offered here, unticked. */
         out("%s: this package installs the Thunderbolt 3 / USB4 connection "
             "manager\nhere; Windows' own USB 3 driver keeps running the USB "
             "controllers unless\n/usb puts the xHCI98 USB drivers in the run "
-            "(untested on Windows 8 and 8.1).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            "(untested on Windows 8, 8.1\nand 10).\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY) {
         out("/usb: the xHCI98 USB drivers are in this run (untested on %s).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (r == 0) {
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");

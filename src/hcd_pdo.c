@@ -37,10 +37,10 @@
  * A storage interface offering UAS gets one transport, chosen at creation
  * (31-A.3; xhci_xport.h, hcdXportDecide), and its hardware and compatible
  * ids follow it: only that transport's class ids. A device with no
- * transport it can run shows the project-owned XHCI98_NOXPORT hardware id
- * and no compatible id - but keeps the ordinary VID/PID device id, which
- * Windows 98 SE adds to the devnode's HardwareID value (xhci_xport.h;
- * design record 13 section 10.7.1) - and on a companion-paired root port
+ * transport it can run shows the project-owned XHCI98_NOXPORT hardware and
+ * device ids and no compatible id - the device id since task 43.15, as
+ * Windows 98 SE and ME match INF lines against it (xhci_xport.h, design
+ * record 13 section 10.7.1) - and on a companion-paired root port
  * is offered to 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
  *
  * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets one
@@ -64,6 +64,7 @@
  */
 
 #include "hcd.h"
+#include "xhci_usbdx.h"
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
 
@@ -210,7 +211,8 @@ static NTSTATUS hcdFunctionQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 /* The hardware or compatible ids of a PDO whose storage transport the bus
  * chose (31-A.3; xhci_xport.c): only that transport's class ids, and no
  * VID/PID-only hardware id under UAS. A refused interface answers its
- * compatible-id query with none, as an id type the PDO does not handle. */
+ * compatible-id query with none, as an id type the PDO does not handle, and
+ * its device id here too, in the USB\XHCI98_NOXPORT form (task 43.15). */
 static NTSTATUS hcdXportQueryId(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG which)
 {
     char text[160];
@@ -379,6 +381,10 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
         }
         if (type == BusQueryCompatibleIDs) {
             return hcdXportQueryId(pdo, irp, XHCI_XPORT_ID_COMPATIBLE);
+        }
+        if (type == BusQueryDeviceID &&
+            pdo->Xport.Transport == XHCI_XPORT_REFUSED) {
+            return hcdXportQueryId(pdo, irp, XHCI_XPORT_ID_DEVICE);
         }
     }
     if (pdo->Function) {
@@ -676,8 +682,8 @@ static VOID hcdSilentDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
  * companion-paired root port 29-A.5's hold is asked to send it back to USB
  * 2.0 (HcdHoldRequestUsb2); on a root port with no companion, behind a
  * SuperSpeed hub, or when the hold is not taken, it is refused in place -
- * its PDOs list with the XHCI98_NOXPORT hardware id and no compatible ids
- * (the device id stays VID/PID; xhci_xport.h, design record 13 10.7.1),
+ * its PDOs list with the XHCI98_NOXPORT hardware and device ids and no
+ * compatible ids (xhci_xport.h, design record 13 10.7.1),
  * its hub port and siblings untouched. Each place is counted. Returns
  * nonzero when the hold request was accepted - queued for the thread's next
  * pass, which reads the device's identity on the SuperSpeed port, writes PED
@@ -885,6 +891,9 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         pdo->HubMttOn = dev->Hub->Alternate == 1;
     }
     hcdXportDecide(hc, pdo, xportFlags);
+    pdo->UsbdxStreams = (xportFlags & XHCI_XPORT_F_HC_STREAMS)
+                            ? hc->UsbdxMaxStreams
+                            : 0;
 
     obj->Flags |= DO_POWER_PAGABLE;
     obj->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -1620,15 +1629,20 @@ static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
 static ULONG hcdXportFlags(PHCD_CONTROLLER hc)
 {
     ULONG xportFlags;
+    ULONG entries;
 
     xportFlags = 0;
     /* 38.10, XhciStreamsOff (design record 20 section 4.2): a listed
      * controller reads as streamless here and at OPEN_STREAMS alike. */
-    if (XhciStreamHcEntries(XhciQuirkStreamsHcc1(
-            XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_STREAMS_OFF),
-            XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1))) != 0) {
+    entries = XhciStreamHcEntries(XhciQuirkStreamsHcc1(
+        XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_STREAMS_OFF),
+        XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1)));
+    if (entries != 0) {
         xportFlags |= XHCI_XPORT_F_HC_STREAMS;
     }
+    /* What 0x49104B answers for STATIC_STREAMS on the PDOs this pass
+     * creates (task 43.29; hcdPdoNew latches it). */
+    hc->UsbdxMaxStreams = XhciUsbdxMaxStreams(entries);
     if (HcdCtlForceBulkOnly(hc)) {
         xportFlags |= XHCI_XPORT_F_FORCE_BOT;
     }
@@ -3126,6 +3140,13 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             HcdUrbIsUsbdiQuery(
                 stack->Parameters.QueryInterface.InterfaceType)) {
             return HcdUrbQueryInterface(pdo, irp);
+        }
+        /* Windows 8's usbdex clients (task 43.29, design record 13
+         * section 6.13): no client on 98 SE to 7 asks it. */
+        if (!pdo->Composite &&
+            HcdUrbIsUsbdxQuery(
+                stack->Parameters.QueryInterface.InterfaceType)) {
+            return HcdUrbQueryUsbdx(pdo, irp);
         }
         hcdQueryInterfaceTrace(stack);
         return HcdCompleteIrp(irp, irp->IoStatus.Status,

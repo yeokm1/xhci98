@@ -412,6 +412,13 @@ VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
  * (cm_power.c's D0 completion calls it). */
 VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
 VOID CmReenumStop(struct _CM_NHI *nhi);
+/* Task 43.18 (cm_ejectos.c): the index of member `bdf` in this start's
+ * set and its flags (CM_PORT_*), or XHCI_TBT_NO_MEMBER; and member i's
+ * re-enumeration owed with its exposure, run by the next pass that finds
+ * its gate down (ISOLATED_NOT_CLEAN's re-enumeration on the same tunnel).
+ * On the thread. */
+ULONG CmReenumMemberFlags(struct _CM_NHI *nhi, ULONG bdf, PULONG flags);
+VOID CmReenumOwe(struct _CM_NHI *nhi, ULONG i);
 /*
  * The host interface lost (cm_live.h, CM_LIVE_ACT_RECONCILE) in that
  * episode: called once per episode after the client's TUNNEL_DOWN and
@@ -541,6 +548,14 @@ ULONG CmCfgwkOpenState(struct _CM_CFGWK *w, PULONG why, PULONG version);
 /* A walk of every member forgetting the known children no longer present
  * (a tunnel down: a child the user removed is gone by then). */
 VOID CmCfgwkPrune(struct _CM_CFGWK *w);
+/* The 98 instance path of the function at `bdf` (cm_ports.h CmPortsIdPath:
+ * its devfn, each parent bridge's up to the root bus, the root bus), read
+ * through HalGetBusData; and whether a 98 device id names location `bdf`
+ * in either instance form, its expected path given. For the 9x eject
+ * transaction's executors (cm_ejectos.c). PASSIVE_LEVEL, any thread. */
+BOOLEAN CmCfgwkPciPath(ULONG bdf, PULONG path, PULONG count);
+BOOLEAN CmCfgwkIdNames(const char *id, ULONG bdf, const ULONG *want,
+                       ULONG wantCount);
 
 /* CONTROLLER_UNAVAILABLE (CmReenumUnavailable): each member in `active`
  * owes the removal of the children retained at its last healthy walk,
@@ -689,6 +704,16 @@ VOID CmRegAttLocateCaps(struct _CM_FILTER *filter, ULONG address);
 BOOLEAN CmRegAttMayMark(struct _CM_FILTER *filter);
 VOID CmRegAttAnswered(struct _CM_FILTER *filter);
 VOID CmRegAttEvent(struct _CM_FILTER *filter, ULONG which);
+/* CmRegAttSurprise  IRP_MN_SURPRISE_REMOVAL on the PDO (design record 25
+ *                   section 7.6): the entry this attachment was bound to
+ *                   (cmMarkAtt: domain, start and serial), current or a
+ *                   tombstone (the member bridge's bus answer buried it
+ *                   first), its count moved, and, with `started` (this
+ *                   attachment saw the device started) and the entry not
+ *                   counted before, the domain's unexpected removal - or,
+ *                   while the liveness is not ACTIVE or a loss is drained,
+ *                   one counted apart (CmMarksSurprise). PASSIVE_LEVEL. */
+VOID CmRegAttSurprise(struct _CM_FILTER *filter, BOOLEAN started);
 
 /*
  * CmRegStartAllowed  at a start's way down, for an object of this driver's
@@ -711,6 +736,15 @@ VOID CmRegAttRemoved(struct _CM_FILTER *filter, BOOLEAN afterQr);
  * its length. PASSIVE_LEVEL, the connection-manager thread. */
 ULONG CmReenumMarksBuild(struct _CM_NHI *nhi, UCHAR *out, BOOLEAN readAny,
                          ULONG readGen);
+/* The query answer's removal block (design record 25 section 7.6) into
+ * out (CM_Q_RM_BYTES): CM_Q_RF_WATCHED while the domain is listed on the
+ * filter route. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmReenumRemovals(struct _CM_NHI *nhi, UCHAR *out);
+/* A recovery's commit: the debt moved into the barrier (RecBarred |=
+ * RecDebtMask, RecDebtMask = 0) under the registration list's lock, which
+ * CmRegAttSurprise holds while it reads both, so a member is never seen
+ * in neither. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmReenumLossMove(struct _CM_NHI *nhi);
 /* XhciCmEjectConfirm as read (`bytes` of v): checked against the table
  * and, when it names a pending departure, the eject posted once for its
  * member. PASSIVE_LEVEL, the connection-manager thread. */

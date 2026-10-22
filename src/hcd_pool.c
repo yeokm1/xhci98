@@ -84,6 +84,42 @@ PVOID HcdPoolAllocRequirements(ULONG bytes)
     return p;
 }
 
+/*
+ * A URB a Windows 8 client allocates through GUID_USBD_INTERFACE_V1's
+ * allocators (task 43.29; design record 13 sections 6.13.2 and 7.5 rule 3):
+ * the client's memory, allocated and freed on the client's own calls, so
+ * counted apart from the driver's own allocations, which must read 0 after
+ * a remove (rule 6). Tagged 'X98U', not 'X98H', so a client's leak is not
+ * read as the bus's. IRQL: <= DISPATCH_LEVEL.
+ */
+#define HCD_POOL_CLIENT_TAG 0x55383958UL
+
+static LONG HcdPoolClientOutstanding;
+
+PVOID HcdPoolAllocClient(ULONG bytes)
+{
+    PVOID p;
+
+    p = ExAllocatePoolWithTag(NonPagedPool, bytes, HCD_POOL_CLIENT_TAG);
+    if (p != NULL) {
+        (VOID)InterlockedIncrement(&HcdPoolClientOutstanding);
+    }
+    return p;
+}
+
+VOID HcdPoolFreeClient(PVOID p)
+{
+    if (p != NULL) {
+        ExFreePool(p);
+        (VOID)InterlockedDecrement(&HcdPoolClientOutstanding);
+    }
+}
+
+ULONG HcdPoolClientCount(VOID)
+{
+    return (ULONG)HcdPoolClientOutstanding;
+}
+
 /* A relations list a lower or earlier driver allocated, which this driver
  * replaces with a longer one; and a requirements list the filter
  * replaces. */

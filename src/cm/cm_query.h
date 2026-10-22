@@ -12,7 +12,9 @@
  * Every field is a little-endian 32-bit unsigned value at a fixed offset,
  * or a byte string; the readers take bytes, never a structure overlay.
  * A layout change is a new CM_Q_VERSION: a reader refuses a version it
- * does not know.
+ * does not know. Version 2 (design record 25 revision 16, roadmap-usb4
+ * 43.21) puts the removal block (CM_Q_RM_*) between the header and the
+ * record; a reader of version 2 takes version 1 too, which has none.
  */
 
 #ifndef CM_QUERY_H
@@ -44,7 +46,8 @@
 #define CM_Q_ASK_BYTES          8192UL  /* the reader's first buffer */
 
 #define CM_Q_MAGIC              0x514D4358UL    /* 'XCMQ' */
-#define CM_Q_VERSION            1UL
+#define CM_Q_VERSION            2UL
+#define CM_Q_VERSION_1          1UL     /* no removal block               */
 
 /* The header. */
 #define CM_Q_HDR_BYTES          64UL
@@ -110,6 +113,29 @@
                                            on its own path, not assumed */
 
 #define CM_Q_UNKNOWN            0xFFFFFFFFUL
+
+/*
+ * The removal block (version 2; design record 25 section 7.6): at
+ * CM_Q_HDR_BYTES, before the record. What this driver's attachments saw
+ * Windows do on NT: a surprise removal of a started device an active
+ * member's bridge reported, counted once per PDO (cm_marks.h), and the
+ * member (tunnel port) of the last one, shown for diagnosis: the notice a
+ * reader gives names no unit.
+ */
+#define CM_Q_RM_BYTES           32UL
+#define CM_Q_RM_FLAGS           0UL     /* CM_Q_RF_*                      */
+#define CM_Q_RM_COUNT           4UL     /* unexpected removals counted
+                                           since this start; wraps        */
+#define CM_Q_RM_MEMBER          8UL     /* the last one's member: bus
+                                           15:8, device 7:3, function 2:0;
+                                           CM_Q_UNKNOWN before the first  */
+#define CM_Q_RM_LOST            12UL    /* surprise removals in a loss of
+                                           the host interface, counted
+                                           apart; wraps                   */
+/* 16..31 reserved, 0 */
+
+#define CM_Q_RF_WATCHED         0x01UL  /* this domain's removals are
+                                           watched (NT, the filter route) */
 
 /*
  * ---- The log answer (design record 25 section 4.5, revision 9) ----

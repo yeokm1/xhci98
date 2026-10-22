@@ -38,12 +38,13 @@ manager, for a computer whose USB 3 controllers already run another
 maker's driver - untick the USB drivers on the Components page, or
 INSTALL /console /cmonly. On Windows 98 SE and ME the installer warns
 first: those systems have no USB 3 driver of their own, and this has not
-been tested there. On Windows 8 and 8.1 the USB drivers and Stor98 are
-unticked by default, Windows' own drivers running the controllers and
+been tested there. On Windows 8, 8.1 and 10 the USB drivers and Stor98
+are unticked by default, Windows' own drivers running the controllers and
 NVMe drives; ticking them (or /usb, /stor98) replaces Windows' own, with
-a warning that they are untested there. Windows 10 and later are
-refused. Every box of the Components page is shown on every system; one
-that does not apply there gets a warning when you click Next, and Cancel
+a warning that they are untested there. Windows 11 (build 22000 and
+later) is refused: it has a USB4 connection manager of its own. Every
+box of the Components page is shown on every system; one that does not
+apply there gets a warning when you click Next, and Cancel
 on it takes you back to the page. See "The connection manager alone"
 below.
 
@@ -51,8 +52,8 @@ Which file
 ----------
 
   XHCIWIZ.EXE    the window: Windows 98 SE, ME, 2000, XP, 32-bit Vista
-                 and 7 (on 64-bit Windows it starts XHCIWZ64.EXE itself)
-  XHCIWZ64.EXE   the window: Windows XP x64, Vista x64 and 7 x64
+                 to 10 (on 64-bit Windows it starts XHCIWZ64.EXE itself)
+  XHCIWZ64.EXE   the window: Windows XP x64, and Vista x64 to 10 x64
   XHCIINST.EXE   the console tool, for scripts: 32-bit Windows
   XHCIIN64.EXE   the console tool: 64-bit Windows
   XHCIDI.EXE     Windows 98 SE and ME only: the helper that installs a
@@ -74,7 +75,8 @@ architecture and this build.
   Windows 98 SE, ME: double-click SETUP.EXE.
   Windows 2000, XP:  sign in as an administrator, then double-click
                      SETUP.EXE.
-  Windows Vista, 7:  double-click SETUP.EXE and answer Yes when Windows
+  Windows Vista to 10:
+                     double-click SETUP.EXE and answer Yes when Windows
                      asks for an administrator's approval (once, for the
                      window; SETUP.EXE itself asks for none).
 
@@ -117,8 +119,8 @@ Thunderbolt settings page; devices then get no connection unless the BIOS
 already gave them one. Unticked, a Thunderbolt driver already installed
 stays as it is, and this package's is kept out of Windows' reach.
 
-Stor98, the bundled NVMe driver (a separate project, with its own
-stor98-readme.txt): ticked with the Thunderbolt 3 / USB4 box, and you
+Stor98, the bundled NVMe driver (its guide is stor98-readme.txt):
+ticked with the Thunderbolt 3 / USB4 box, and you
 can untick it. Ticked, it is installed on every NVMe drive behind a
 Thunderbolt or USB4 tunnel that has no driver - never on one another
 driver runs, nor on an internal drive - and an older Stor98 is
@@ -139,9 +141,15 @@ there: a Stor98 installed before, by hand or by an earlier tool, stays.
 USB storage drivers (Windows 98 SE only). Windows 98 SE has no USB
 mass-storage driver: every USB disk, Bulk-Only or UAS under xhciuas.sys,
 needs NUSB 3.3's seven storage files, which a download built with them
-carries in its NONFREE\ folder. The row for them is ticked when none of
-the seven is found, and unticked when any of them is there; the
-installer never copies over a file already present, and with only some
+carries in its NUSB33\ folder. The row for them is ticked when none of
+the seven is found, and unticked when any of them is there or NUSB is
+installed (its Uninstall\USB20U entry; whatever an earlier run chose;
+/storage still ticks it). With NUSB not installed, a USBSTOR.INF found
+in Windows' INF folders without USBNTMAP.INF ticks it, and the row says
+that such a USBSTOR.INF lets Windows' own NTMAP.INF take a new USB disk
+and stop Windows; a run that ends with it still alone says so and leaves
+a step. The installer never copies over a file
+already present, and with only some
 of the seven found, one of them not this download's, it copies nothing
 and says the storage install is not complete. It installs a stick at
 "Unknown Device" with the two INFs in place. It also puts the two INFs,
@@ -185,17 +193,18 @@ The console tool
   INSTALL /console /cmonly      installs the Thunderbolt 3 / USB4
                                 connection manager alone, without the
                                 USB drivers (with a warning on 98 SE and
-                                ME; on 8 and 8.1 the default)
-  INSTALL /console /usb         Windows 8 and 8.1: installs the USB drivers
-                                too, over Windows' own (untested there)
+                                ME; on 8, 8.1 and 10 the default)
+  INSTALL /console /usb         Windows 8, 8.1 and 10: installs the USB
+                                drivers too, over Windows' own (untested
+                                there)
   INSTALL /console /thunderbolt /stor98
                                 installs the bundled Stor98 without asking;
                                 it is part of the Thunderbolt 3 / USB4
                                 support, so /stor98 needs /thunderbolt (or
                                 /cmonly); without /stor98 the console asks,
                                 Enter for Y, and /yes installs it: Stor98
-                                comes with the Thunderbolt support (on 8
-                                and 8.1 Enter and /yes give N)
+                                comes with the Thunderbolt support (on 8,
+                                8.1 and 10 Enter and /yes give N)
   INSTALL /console /thunderbolt /nostor98
                                 the Thunderbolt support without Stor98
   INSTALL /console /nouas       installs without the UAS disk driver
@@ -225,14 +234,14 @@ The connection manager alone
 ----------------------------
 
 What it gives on a computer whose USB 3 driver is another one (Windows'
-own on 8 and 8.1): the Thunderbolt 3 and USB4 controllers are driven by
+own on 8, 8.1 and 10): the Thunderbolt 3 and USB4 controllers are driven by
 this package's connection manager - the devices are approved (see
 XhciCmApprove), connected and disconnected - and what a device brings is
 driven by whatever driver Windows has for it: an NVMe drive by an NVMe
-driver (Windows 8.1 has its own; Windows 8 has none; the bundled Stor98
-is unticked there by default and untested), the USB controller inside a
-dock by
-Windows' own USB 3 driver on 8 and 8.1 (on 2000 to 7 by another maker's
+driver (Windows 8.1 and 10 have their own; Windows 8 has none; the
+bundled Stor98 is unticked there by default and untested), the USB
+controller inside a dock by
+Windows' own USB 3 driver on 8, 8.1 and 10 (on 2000 to 7 by another maker's
 driver only where it supports that controller), and the USB devices of a
 USB4 port's USB 3 connection on the computer's own USB controller.
 Safely Remove (the xHCI98 USB Tree, INSTALL /console /eject) works as
@@ -255,7 +264,25 @@ driver signature enforcement disabled (Advanced startup, Troubleshoot,
 Startup Settings, "Disable driver signature enforcement", at every start).
 It is not Microsoft-signed. When the installer asks for a restart, use
 Restart, not Shut down: Windows 8's Shut down does not start the drivers
-afresh.
+afresh (nor does Windows 10's).
+
+Windows 10 is installable and has never been run with this package: the
+installer admits every build below 22000 - the releases 1507 to 22H2 and
+the LTSC releases - and Windows Server 2016, 2019 and 2022, which it
+treats as Windows 10 and which are untested; only 22H2 is to be tested.
+It installs there as on Windows 8.1: the connection manager, and the USB
+drivers and Stor98 only when you tick them. Windows 10 has no Thunderbolt
+or USB4 driver of its own (USB4 support came with Windows 11), but many
+computers come with Intel's Thunderbolt driver: where it runs the
+Thunderbolt controller, the installer leaves it as it is. On 64-bit
+Windows 10 the drivers load only in test-signing mode, which Windows 10
+lets you turn on only with Secure Boot off in the computer's firmware
+setup, or on a start with driver signature enforcement disabled (as on
+Windows 8 above); with Secure Boot on, Windows 10 from 1607 loads only
+drivers Microsoft has signed (and some older cross-signed ones), and this
+package's are neither. Whether 32-bit
+Windows 10 with Secure Boot on refuses this package's 32-bit drivers,
+which are not signed, has not been read.
 
 Neither ever runs XHCICLN. After an update from 2.3.x or earlier they say,
 in one line, when old XHCI98\ entries are still recorded; nothing needs
@@ -287,8 +314,9 @@ C:\WINDOWS\OPTIONS\CABS: type that instead.
 
 On Vista x64 and 7 x64 the drivers are test-signed: they load in
 test-signing mode (bcdedit /set testsigning on, then restart) or on a
-start where F8 chose "Disable Driver Signature Enforcement". The installer
-says whether it could confirm test-signing mode; it never changes it.
+start where F8 chose "Disable Driver Signature Enforcement"; on 8, 8.1
+and 10 x64 test-signing mode needs Secure Boot off first (above). The
+installer says whether it could confirm test-signing mode; it never changes it.
 
 The options
 -----------

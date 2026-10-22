@@ -81,6 +81,16 @@ using the device, Windows refuses and the tool tells you which.
 Close the programs and windows that use the device first, as with
 Windows' own Safely Remove Hardware.
 
+Under the USB4 connection manager on Windows 2000 to 7, the stop also
+closes the device's PCIe tunnel once the Thunderbolt driver has the stop
+confirmed. Run as an administrator, the tool confirms it at once. Without
+administrator rights on XP, Vista and 7 the xHCI98 mark service
+confirms it in the background: the tool waits up to 30 seconds for that,
+and if the tunnel is still up then it says the tunnel has not been seen
+closed and closes if the mark service confirms the eject. On Windows 2000 without administrator
+rights, or with the mark service stopped, nothing confirms it and the
+tunnel stays up until you unplug the device.
+
 Stopping a USB stick or disk
 ----------------------------
 
@@ -239,7 +249,16 @@ INSTALL /notray, so it starts for nobody; run INSTALL again without
 The icon says when a Thunderbolt or USB4 device is connected, is waiting
 to be approved, could not be approved or was disconnected, and when the
 controller stops answering: in a balloon on Windows ME, 2000 and later,
-and in the icon's tooltip on Windows 98 SE.
+and in the icon's tooltip on Windows 98 SE. Sleep, hibernation and a
+stop of the controller are not reported as the controller not answering;
+a controller that does not start again after a sleep is.
+
+Windows 98 SE has no balloons, so there the tool also shows a pop-up of
+its own beside the icon in their place, for each event a balloon
+reports elsewhere and for the outcome of a removal started from the
+icon. The pop-up takes no focus; it closes after 10 seconds, or by its
+close box or a right click; a click on it does what a click on a
+balloon does; several wait their turn.
 
 From a command line
 -------------------

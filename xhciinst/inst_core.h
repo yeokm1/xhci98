@@ -797,8 +797,8 @@ extern const char instCmOffText[];
 int inst_own_service(const char *service);
 
 /* 1 when a file of the flavour directory is the bundled Stor98 driver's
- * (a separate project: every name of its files there starts with "stor98",
- * package-common.ps1). The tool installs none of them and copies none into
+ * (every name of its files there starts with "stor98", package-common.ps1).
+ * The tool installs none of them and copies none into
  * its local copy, which is on the hardware wizard's search path. */
 int inst_bundled_file(const char *name);
 
@@ -950,15 +950,19 @@ int inst_removal_retry(INST_U32 cr, INST_U32 flags);
  * a re-plug. */
 const char *inst_admin_text(void);
 
-/* The system's kind (record 23 sections 4.3 and 4.5, revision 13): a full
- * target, Windows 8 and 8.1 for the connection manager alone, or refused.
+/* The system's kind (record 23 sections 4.3 and 4.5, revisions 13 and
+ * 27): a full target; Windows 8, 8.1 and 10 below build 22000 (Server
+ * 2016 to 2022 among them) for the connection manager, the USB drivers
+ * opt-in; or refused, Windows 11 (10.0 from build 22000) among them.
  * nt and the version as RtlGetVersion (or GetVersionEx before 8) reads
  * them; build is the build number's low word. */
 #define INST_OS_REFUSED     0
 #define INST_OS_FULL        1
 #define INST_OS_CMONLY      2
+#define INST_OS_BUILD_W11   22000UL
 int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build);
-const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor);
+const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor,
+                         INST_U32 build);
 
 /* The USB drivers (xhci98.sys, xhciuas.sys; record 23 section 4.5): 1 in
  * the run, 0 left out, -1 refused (why in *refusal). *offered: the window's
@@ -1015,7 +1019,22 @@ int inst_eject9x_remove(INST_U32 cr, const char **text);
 #define INST_UNPLUG_RESTARTED 3 /* the ejected unit started again: exit 4 */
 int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
                      INST_U32 usb3);
-const char *inst_unplug_text(int kind);
+/* The text of a kind, for the tool the user is in (roadmap 43.8): only
+ * INST_UNPLUG_RESTARTED's differs, naming how to eject again. */
+#define INST_TOOL_CONSOLE   0   /* XHCIINST /eject */
+#define INST_TOOL_TREE      1   /* the xHCI98 USB Tree */
+const char *inst_unplug_text(int kind, int tool);
+
+/* The USB3 tunnel of the one router behind an active port of a checked
+ * status record (inst_st_check): CM_ST_TUN_*, 5 when the port is not an
+ * active member or not exactly one router is behind it. */
+INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf);
+
+/* Before the eject (roadmap 43.8): 1 when the confirmation carries
+ * inst_eject_remind_text, i.e. when the unit as it is now would not get
+ * INST_UNPLUG_NOW after it. */
+int inst_eject_remind(int singleFunction, INST_U32 usb3);
+const char *inst_eject_remind_text(void);
 
 /* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
 
@@ -1662,7 +1681,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
 #define INST_STOR_DIR_DRIVERS   0   /* %windir%\SYSTEM32\DRIVERS (dirid 10) */
 #define INST_STOR_DIR_IOS       1   /* the system directory's IOSUBSYS (12) */
 #define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
-#define INST_STOR_PACK_DIR      "NONFREE\\STORAGE\\NUSB33\\W98SE"
+#define INST_STOR_PACK_DIR      "NUSB33\\W98SE"
 #define INST_STOR_KEY           "Software\\xhci98\\Storage"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
@@ -1710,9 +1729,11 @@ int inst_stor_case(const int st[INST_STOR_COUNT], int source);
 /* 1 when the case admits the same-bytes route (copies, the package's copy
  * of the seven, the device jobs). */
 int inst_stor_route(int storCase);
-/* The row's default: a recorded choice when there is one, else ticked only
+/* The row's default: unticked while NUSB is installed (usb20u, its
+ * Uninstall\USB20U entry), whatever was recorded or found (owner,
+ * 2026-10-22); else a recorded choice when there is one, else ticked only
  * when none of the seven is found (absent or this installer's). */
-int inst_stor_default(int haveChoice, int choice,
+int inst_stor_default(int usb20u, int haveChoice, int choice,
                       const int st[INST_STOR_COUNT]);
 /* The binaries a ticked run copies, a bit per index: on the route, each
  * absent one; never a present one, never an INF. */
@@ -1793,6 +1814,15 @@ int inst_stor_silent_name(int k, int (*taken)(const char *, void *),
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,
                           const int st[INST_STOR_COUNT]);
+/* The row's note on every page and in the console: the detection's text,
+ * and with usb20u (NUSB's Uninstall\USB20U entry) a sentence saying NUSB
+ * is installed and the row can be left unticked (owner, 2026-10-22). */
+#define INST_STOR_NUSB_TEXT \
+    "NUSB is installed on this computer (found its Uninstall\\USB20U " \
+    "entry). It already provides the USB storage drivers, so you can " \
+    "leave this unticked."
+void inst_stor_note_text(char *out, size_t cap,
+                         const int st[INST_STOR_COUNT], int usb20u);
 
 /* A device's storage kind by its ids (record 26 section 6.5.5). */
 #define INST_STOR_KIND_NONE     0

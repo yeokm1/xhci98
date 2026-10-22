@@ -19,7 +19,22 @@ refusal of a package without the connection manager on 8 and 8.1, which
 becomes case 5's warning; record 23 revision 30); draft 24, 2026-10-22 (roadmap-usb4 task 43.42, the owner's
 option A of that day: with the storage row on 98 SE the Bulk-Only
 entries added to SilentClasses and XhciSilentInstall preselected,
-section 6.5.12); draft 20, 2026-10-21 (roadmap-usb4 task 43.43, the owner's
+section 6.5.12); draft 23, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+owner's decisions of 2026-10-20 and 2026-10-21: Windows 10 below build
+22000 takes 8 and 8.1's pages, every box shown and tickable, the USB
+drivers and Stor98 unticked with case 3's warning until the Windows 10
+legs pass; and the Secure Boot state read for the signature note,
+section 5.3.2; record 23 revision 28); draft 22, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
+NUSB apart from the non-free driver pack: the seven are read from the
+download's own `NUSB33\W98SE\` beside the version root, no longer
+`NONFREE\STORAGE\NUSB33\W98SE\`, sections 6.5 and 6.5.1; record 23
+revision 27; and, the owner's requirement of the same day, the row's
+default unticked while NUSB is installed, ahead of a recorded choice,
+sections 6.5.2 and 6.5.3); draft 21, 2026-10-21 (roadmap-usb4 task 43.10, the owner's
+request of 2026-10-20: the settings pages laid out from their own font
+and size, the open lists as wide as their longest entry, three rows a
+part and more parts where needed, the note six lines at least; section
+5.4, "The layout", and sections 5.6, 11 and 15); draft 20, 2026-10-21 (roadmap-usb4 task 43.43, the owner's
 decisions of that day: every Components box shown and tickable on every
 system, the defaults as they are, a box ticked where it does not apply
 warned in one message box on Next and the run going on, section 5.3.1;
@@ -549,10 +564,10 @@ Tools folder: C:\XHCI98
   case 1's warning (owner, 2026-10-22: decided). The row reads the
   download's `NUSB33\W98SE` (owner, 2026-10-22: NUSB 3.3's files a
   top-level folder of their own beside `NONFREE\`, no longer inside it;
-  section 6.5.1 follows when that change lands). When NUSB 3.3 or 3.6 is
+  roadmap 43.51, draft 22, section 6.5.1). When NUSB 3.3 or 3.6 is
   found installed (its `Uninstall\USB20U` entry, section 6.5.3) the row
-  is unticked by default (owner, 2026-10-22; built with the pack's new
-  folder, not by this section) and its sentence says so: "NUSB is
+  is unticked by default (owner, 2026-10-22; roadmap 43.51, draft 22,
+  sections 6.5.2 and 6.5.3) and its sentence says so: "NUSB is
   installed on this computer. It already provides the USB storage
   drivers, so you can leave this unticked." in place of the detection's
   line of section 6.5.3 for that case.
@@ -770,7 +785,8 @@ Thunderbolt 3 / USB4 connection manager and the xHCI98 tools on this
 computer, that Windows' own USB 3 driver keeps running the USB
 controllers, and that it asks for a restart at the end; the system line
 names 8 or 8.1 by the version `RtlGetVersion` reads (record 23 section
-4.3). A refusal of record 23
+4.3); from draft 23 Windows 10 below build 22000 takes the same
+paragraph, named "Windows 10" by its build (section 5.3.2). A refusal of record 23
 section 4 (the ZIP folder, a mixed architecture, a wrong flavour, a stale
 `.sys`, a wrong Windows, rights) ends here: the page shows the refusal's
 text and Next is disabled; Cancel closes with exit 1. Under `/uninstall`
@@ -803,7 +819,7 @@ Check boxes, one a line, each with one sentence:
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
 | Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
-| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | ticked with a lone `USBSTOR.INF` in the INF directories when a ticked run completes the pair (draft 31, section 6.5.5); otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone until draft 20, and from draft 20 on every system, unticked by default but on 98 SE, ticked elsewhere with section 5.3.1's warning and its files then only copied to the tools folder; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
+| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | no while NUSB is installed (its `Uninstall\USB20U` entry; task 43.51, owner, 2026-10-22), ahead of an earlier run's recorded choice, and the note says the user can leave it unticked; otherwise ticked with a lone `USBSTOR.INF` in the INF directories when a ticked run completes the pair (draft 31, section 6.5.5); otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone, never on ME, 2000 or later; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -957,6 +973,96 @@ connection manager alone with the helper, the emulator's host interface
 bound, the warning, the uninstall); case 3 on 8 with 43.24's VMs; the
 console's warnings and `/yes` on each.
 
+#### 5.3.2 Windows 10 (tasks 43.34 to 43.36; draft 23)
+
+The owner, 2026-10-20: Windows 10, x86 and x64, a target of the
+connection manager and of `xhci98.sys` as an opt-in install, as planned
+for 8 and 8.1, the x64 drivers loading in test-signing mode, which the
+installer documents with Secure Boot off; and 2026-10-21, for the
+Components page: every box shown and tickable on 10 as section 5.3.1
+makes it on 8.1, the USB drivers' and Stor98's untested warning on 10
+lifted once roadmap-usb4 task 43.37's emulator legs pass ("Technically
+can be tested if we run in the emulator").
+
+**Which systems.** Record 23 section 4.3, revision 28: NT 10.0 below build
+22000 - the client releases 1507 to 22H2, the LTSC releases, and Windows
+Server 2016 to 2022 with no Server check - is the kind 8 and 8.1 are;
+build 22000 and later (Windows 11) is refused at the Welcome page with
+record 23's refusal text, which names "8, 8.1 and 10 (below build 22000)"
+among the systems admitted. So every rule this record gives 8 and 8.1 by
+that kind holds on 10 with no code of its own, and the words that name
+the systems say "8, 8.1 and 10" where they said "8 and 8.1".
+
+**The pages on 10:**
+
+- Welcome (section 5.1): the connection manager's paragraph and title;
+  the system line "Windows 10 (10.0.<build> <CSD>), x64." (or 32-bit),
+  a Server build named "Windows 10" too, since the tool makes no Server
+  check.
+- Components (sections 5.3 and 5.3.1), as on 8.1: the USB drivers' box
+  unticked, 8's sentence under it ("Windows' own USB 3 driver runs the
+  controllers here; ticked, this replaces it (untested here)"), until
+  roadmap-usb4 task 43.33 (a) gives the note on what the user gains and
+  loses (task 43.35); ticked, case 3a, with its warning; the UAS box under
+  it; the Thunderbolt box unticked; Stor98 under it, unticked whatever the
+  Thunderbolt box does, ticked, case 3b, with its warning (10's own
+  `stornvme` on a tunnel drive installed over, as on 8.1); the NUSB
+  pack's storage row shown, unticked, ticked, case 1 - its warning, then
+  the seven files copied to `<the install directory>\NUSB33\` only,
+  nothing put in `%windir%`, the INF directory or `DevicePath`; and the
+  tray box, as everywhere.
+- The warnings' words name 10 beside 8 and 8.1: case 3a "The xHCI98 USB
+  drivers have not been tested on Windows 8, 8.1 or 10. ..." and case 3b
+  "Stor98 has not been tested on Windows 8, 8.1 or 10. ...", the rest of
+  each as section 5.3.1 has it. When task 43.37's emulator legs pass for
+  the USB drivers' box and Stor98's on 10, 10 leaves those two sentences
+  (no blanket "untested" for those two boxes on 10 after, owner
+  2026-10-21) and they name 8 and 8.1 alone until 43.31 and 43.24 pass;
+  the pure half then takes 10 as a flag of its own (`inst_comp_warnings`
+  gains it), with host vectors, which is that task's change, not this
+  one's. Case 1's words are unchanged: they name no system but 98 SE.
+- The console (section 6.4, record 23 section 7.1): `/usb` on 10 as on 8
+  and 8.1, its help line "Windows 8, 8.1 and 10: install the USB drivers
+  too (untested)"; the Stor98 question with Enter for N and `/yes`'s N,
+  "N on Windows 8, 8.1 and 10"; a `/set` of a USB value refused when the
+  USB drivers are not in the run, "(/cmonly, or Windows 8, 8.1 and 10)".
+- The uninstall (section 9) as on 8 and 8.1: the controllers given back
+  to `usbxhci.sys` by removal and rescan, Stor98 by its record, the
+  pack's copies by case 1's `Tools` record.
+
+**The signature note's Secure Boot state** (task 43.36: "whether the
+installer reads Secure Boot's state to say which applies, designed in
+record 26 before its code"). Proposed: yes, on 8, 8.1 and 10 only, read
+and shown, never changed. The value is
+`HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State`,
+`UEFISecureBootEnabled`, a `REG_DWORD` that Microsoft documents as 1
+with Secure Boot on and 0 with it off (not read here on any guest; read
+first on roadmap-usb4 task 43.32's legacy-BIOS guests and its OVMF guest
+with Secure Boot on, before the code is released). The pure half,
+`inst_sb_state(found, type, value)`, gives three answers:
+
+| Read | Answer | The note's Secure Boot sentence |
+|---|---|---|
+| `REG_DWORD` 1 | on | "Secure Boot is on: Windows does not load the test-signed drivers, and test-signing mode cannot be turned on, until you turn Secure Boot off in the computer's firmware setup. Until then only a start with driver signature enforcement disabled loads them (Advanced startup, Troubleshoot, Startup Settings, at every start)." |
+| `REG_DWORD` 0 | off | "Secure Boot is off: test-signing mode can be turned on (an elevated Command Prompt: bcdedit /set testsigning on, then restart)." |
+| absent, another type or value, unreadable | not known | the sentence of record 23 section 5.10 as it stands, naming both cases (a computer that starts from a legacy BIOS has no Secure Boot, and its key may be absent or read 0, which is why absent is not taken for off) |
+
+With the answer "on", test-signing mode never counts as confirmed, even
+when `SystemStartOptions` holds `TESTSIGNING`: Microsoft's documentation
+of the option has Secure Boot turned off before test signing can be
+enabled (not read here on any guest; read on 43.37's OVMF guest), so the
+post-install check (record 23 section
+5.10) reports the controller's or the NHI's Code 52 as the note's case
+and not as an unexplained failure. The raw value is logged. Nothing is
+refused and the run goes on as now when the user confirms. On 7 and
+earlier nothing is read (no Secure Boot); on 32-bit 8, 8.1 and 10 the
+sentence is used only where record 23 section 5.10 gives that system a
+Secure Boot note at all (task 43.22's reading for 8 and 8.1, 43.33 (d)'s
+for 10). Host vectors for `inst_sb_state` (each row, and "on" with
+`TESTSIGNING` not confirmed). The code waits on task 43.22's note for 8
+and 8.1, whose text it changes; memory integrity enters the note only if
+43.33 (d) finds it refuses these drivers.
+
 ### 5.4 The USB settings
 
 The values of record 23 section 8.1 whose "Asked when" holds for this
@@ -979,9 +1085,9 @@ systems it is for ("(Windows 98 SE and ME only)", "(Windows 2000 to 7
 only)", "(Intel 7-9 series, C610 only)"), and it never writes: the page
 does not take it and the engine refuses it (`inst_value_greyed`,
 `inst_value_only`, host-tested). A value with no controller for it at all
-stays off the pages. Rows are 38 dialog units apart with an etched line
-between them, so a label is not read as the title of the choice above it
-(owner, 2026-10-19).
+stays off the pages. An etched line stands between rows, so a label is
+not read as the title of the choice above it (owner, 2026-10-19); where
+the rows go is "The layout" below (draft 21).
 
 **Where it is written** (task 42-A.17, the owner's decision of 2026-10-18,
 "The machine-wide registry key"): the settings pages write the machine-wide
@@ -1015,6 +1121,123 @@ that these are for the release notes' advice and a tester's use. The
 fourteen Linux quirk values (record 20), the log values and the poll
 periods stay out, as record 23 section 8.1 keeps them out: a value nobody
 should set from an installer is not offered by one.
+
+**The layout** (draft 21, roadmap-usb4 task 43.10; the owner, 2026-10-20:
+"some drop-down text is longer than the menu, and the description at the
+bottom shows only two lines"). The USB, Thunderbolt and Stor98 settings
+pages are laid out each time one is shown, from the page itself, not
+from fixed sizes: the page's client rectangle (the sheet gives every page
+the size of its largest template), the page's own font (the dialog's),
+text measured with `DrawTextA` (`DT_CALCRECT | DT_WORDBREAK`) in a device
+context holding that font, a drop-down's closed height read from one made
+in that font (`GetWindowRect` of a `CBS_DROPDOWNLIST` box after
+`WM_SETFONT`, then destroyed; the height it is created with is its open
+list's room, not the row's), and every margin and gap in dialog units
+through `MapDialogRect`. No size is a pixel constant, so 98 SE at
+96 DPI and XP and 7 at 96 and 120 DPI (Windows' small and large fonts)
+lay out by one rule. Up to draft 20 the rows were placed at fixed
+dialog-unit offsets, four to a page, each drop-down 160 dialog units
+wide (200 on Stor98's page) with the "now" text beside it, and the note
+under the rows 20 dialog units tall, two lines.
+
+- *The column*: the page's width less 8 dialog units each side. The
+  head (the page's sentence of section 5.4, 5.5 or 5.6) runs across it
+  2 dialog units from the top, at the measured height of the whole head
+  with the widest part words it can carry, "(page n of n)" with n the
+  page's number of rows (no page has more parts than rows, and a part
+  number never has more digits than n), whenever the page has more than
+  one row; the rows start 4 dialog units under it. The head's height is
+  so fixed before the split is decided and does not change with it.
+- *A row*: the label (the value's name and its sentence) at the left,
+  wrapped to its measured height; the "now" text on the label's line,
+  at the right, right-aligned in a column as wide as the widest "now"
+  text of the page's rows (all its parts, so the column does not move
+  between parts), at most two fifths of the column, wrapping inside it
+  past that; the label takes the rest of the line less a 6-unit gap.
+  Under the taller of the two, 2 dialog units down, the choice: a
+  drop-down across the whole column, so a long choice shows whole in
+  the closed box, or for a range (`Hi` nonzero) the number box,
+  60 by 12 dialog units as before. Rows are 9 dialog units apart, the
+  etched line in the middle of that gap.
+- *The open list*: every drop-down's list as wide as its longest
+  entry (`CB_SETDROPPEDWIDTH`, which sets the list's least width), the
+  entries measured in the box's own font, plus the list's frame and
+  vertical scroll bar (system metrics) and 4 dialog units; never
+  narrower than the closed box, and never wider than the work area
+  (`SPI_GETWORKAREA`), where the placing of a list near the screen's
+  edge is USER's. The self-test holds every entry the table and
+  Stor98's rows offer within the closed box's width less the very
+  allowance the open list adds (the frame, the scroll bar and the
+  4 dialog units), so the open list's width before any cap is the
+  closed box's, which it checks too: with the shipped texts nothing is
+  placed past the box; the measured width is the guard for an entry a later
+  change makes longer, and a drivers' row's note names each choice
+  whole as well. The same on Stor98's page and on the Advanced
+  dialogs' choice, whose closed box is widened to the dialog's right
+  margin (`IDC_A_CHOICE`, 262 dialog units in place of 200).
+- *Parts, three rows at most*: a page whose asked rows do not fit
+  takes more than one part. The room for rows is from their top to
+  6 dialog units above the note's least height, which stands above
+  the page's bottom margin of 4 dialog units; the split is the fewest
+  parts of at most three rows each, the rows in their order and spread
+  evenly (the first parts take one row more where they cannot be
+  equal: four rows are two and two), such that every part of two or
+  more rows fits that room. A lone row taller than the room takes it
+  from the note, down to two lines of the note's font; a row taller
+  still is beyond what the window lays out (a font about three times
+  the dialog's), and the note then keeps its two lines at the page's
+  foot. With the head carrying its part words, one property-sheet page
+  carries every part.
+- *Moving between parts*: Next on a part before the last takes the
+  shown part's choices with the check that leaving the page makes (a
+  range's number out of its range keeps the user on that part, as
+  today), shows the next part, and keeps the sheet on the page
+  (`PSN_WIZNEXT` answered -1); Back on a part after the first does the
+  same towards the first. Before the shown part's controls are
+  destroyed the focus moves to the sheet's button pressed (Next or
+  Back), where it stays, and the note shows the new part's first row.
+  The direction a page is entered from is the last departure from a
+  page: Next or Back that leaves a page records it, a move between
+  parts and a page skipped by `PSN_SETACTIVE` leave it as it is.
+  Entered by Next, a settings page shows its first part; by Back, its
+  last. "Advanced..." takes the shown part's choices first, as today,
+  and the page shows the same part when the dialog closes, whether by
+  OK or Cancel. A choice is kept where leaving the page keeps it today
+  (`choiceSet` and `choiceVal`, Stor98's `s98WinSet` and
+  `s98WinVal`): a value set on one part is there when the user comes
+  back to it, a choice put back to the value in force is no longer to
+  be written, and the Summary and the run read every part's choices.
+- *The note* (`IDC_S_NOTE`): from 6 dialog units under the tallest
+  part's rows (the same top on every part, so it does not move as Next
+  steps) down to the bottom margin; as wide as the column less
+  "Advanced..." (60 by 14 dialog units, at the note's right, at its
+  foot) and a 6-unit gap; its least height six lines of its font plus
+  its frame (the control's window less its client height) and 2
+  dialog units for the edit control's own margins; a longer text
+  scrolls in it as today.
+- *640 by 480 on 98 SE*: no template grows (`IDD_SETTINGS` stays 300
+  by 200 dialog units, the Components page the tallest at 223), so the
+  window is the size it was.
+- *The arithmetic*, pure and host-tested (`test\test_wizlay.c`), is
+  in `xhciinst\wiz_lay.c` of its own, not in `inst_core.c`, which
+  `XHCICLN`, the mark service and `XHCITR` also compile and whose
+  change would make their binaries stale for `make-release.ps1`
+  without a change of theirs: the "now" column's width, a part's
+  height, the split, the open list's width and the note's top. What
+  measures, makes and places the controls is the window's
+  (`xhciwiz.c`). Its `/selftest` lays out every settings page, every
+  part, at two sizes, the `IDD_SETTINGS` template's own and the sheet's
+  page size (the Components template's), with every asked value of the
+  table in its mixed, machine-wide and greyed forms and every asked
+  Stor98 row on both systems, set and not set: each text whole in its
+  control, every list entry within its closed box's text room and the
+  open list at least as wide as the longest, no control over another
+  or outside the page, the note at least six lines, each closed box
+  across the column, the rows in their order with each in one part,
+  the last part shown when entered by Back; a choice made on the first
+  part still chosen after Next and Back; and the Advanced dialog with
+  every advanced value of the table shown in turn, its list's entries
+  within its closed box and its open list at least as wide.
 
 ### 5.5 The Thunderbolt settings
 
@@ -1064,8 +1287,9 @@ DWORD); on 2000 to 7 the one `DriverParameter` string (`REG_SZ`) under
 separated by semicolons (`writethrough=`, `pollmode=`, `maxtransferkb=`,
 `pollbusyus=`, `pollidlems=`, `pollspinus=`, `gone=`, `idle=`), which the
 engine reads, edits one key at a time and writes back whole, keeping a
-pair it does not know and the order it found. Its rows are 48 dialog units apart with an etched line between them, as
-section 5.4's are (owner, 2026-10-19). The page names Stor98's
+pair it does not know and the order it found. Its rows are laid out as
+section 5.4's, "The layout" (draft 21), with an etched line between
+them as there (owner, 2026-10-19). The page names Stor98's
 readme as the authority, from which the table's meanings, defaults,
 ranges, types and key names are copied at the version the package bundles
 (since `3.1.0.0` the package's own version: Stor98 is built from
@@ -1426,7 +1650,8 @@ Code 2, because `xhciuas.inf` names `USBNTMAP.SYS` as an upper filter and
 NTKERN fails a devnode whose named filter is missing (`runs/run-28.md`,
 "Windows 98 SE with no USB 2.0 stack, and with SweetLow's alone"). From `3.2.0.0` the release
 download carries NUSB 3.3's seven storage files at its root as
-`NONFREE\` (task 43.3; `legal-provenance.md` section 5, "NUSB 3.3's
+`NUSB33\`, a folder of its own and never inside a `NONFREE\` (task 43.3;
+owner, 2026-10-22; `legal-provenance.md` section 5, "NUSB 3.3's
 Windows 98 SE storage files"), and the installer offers them. The owner's
 decisions of 2026-10-20: selectable, so a user who already has NUSB need
 not install them; on 98 SE only, ME and later using their own drivers;
@@ -1444,9 +1669,9 @@ text; nothing here edits them):
 
 #### 6.5.1 Where the files come from
 
-From the download's `NONFREE\STORAGE\NUSB33\W98SE\` beside the version
-root, the package root of record 23 section 4.2 (owner, 2026-10-20; task
-43.3), read by those seven names alone and each held to its SHA-256 in a
+From the download's `NUSB33\W98SE\` beside the version root, the
+package root of record 23 section 4.2 (owner, 2026-10-20, and 2026-10-22
+for the folder; task 43.3), read by those seven names alone and each held to its SHA-256 in a
 table the installer carries (`instStorFile`, `inst_core.c`: the seven
 names, their destinations and the hashes of `legal-provenance.md`
 section 5's table, which `scripts\package\test-package.ps1` holds equal
@@ -1457,7 +1682,7 @@ carries the pack), the row is shown on 98 SE greyed, its note saying that
 this download does not carry the USB storage drivers; where a file is
 missing or its bytes differ, greyed with "the storage files in this
 download are not the ones this release carries", the log naming each.
-Nothing in `NONFREE\` but the seven is read.
+Nothing in `NUSB33\` but the seven is read, and nothing in a `NONFREE\`.
 
 #### 6.5.2 The row
 
@@ -1471,7 +1696,12 @@ needs these files for every USB disk: Bulk-Only disks, and UAS disks
 under xhciuas.sys too (its INF names USBNTMAP.SYS as a filter; without
 it a UAS disk stays at Code 2). Install them unless NUSB is installed."
 Under it the detection's line (section 6.5.3) and, when NUSB's uninstall
-entry is there, a second line saying so. The default is section 6.5.3's;
+entry is there, a sentence after it (`inst_stor_note_text`,
+host-tested; owner, 2026-10-22): "NUSB is installed on this computer
+(found its Uninstall\USB20U entry). It already provides the USB storage
+drivers, so you can leave this unticked." The same note is on the
+Components row, the Summary and the console's plan and question. The
+default is section 6.5.3's;
 the box can be ticked or unticked whatever was found, and ticked it never
 copies over a file already present (section 6.5.4).
 
@@ -1509,12 +1739,20 @@ CurrentVersion\Uninstall\USB20U` (static: NUSB 3.3's `_NUSB.INF` line
 129 and 3.6's line 145 write it; NUSB's `_USB2UN.INF` deletes it with
 the USB 2.0 stack's three files and leaves the storage files), is read
 and recorded apart from the files: it is said under the row and in the
-log, it decides neither the default nor what is copied, and while it is
-present the uninstall deletes none of the seven (section 6.5.8).
+log, it unticks the default (below) but does not decide what is copied,
+and while it is present the uninstall deletes none of the seven (section
+6.5.8).
 
-**The default** (`inst_stor_default`): an earlier run's recorded choice
-when there is one (section 6.5.7); otherwise ticked when none of the
-seven is found (every file absent or this installer's), and unticked
+**The default** (`inst_stor_default`): unticked while NUSB's
+`Uninstall\USB20U` entry is there, ahead of everything else (owner,
+2026-10-22: a choice an earlier run recorded before NUSB was installed,
+or NUSB with its storage files missing or removed, no longer ticks it;
+`/storage` still does, and a ticked run still copies over no file
+present); otherwise ticked when the INF directories hold a lone
+`USBSTOR.INF` and a ticked run completes the pair (draft 31, section
+6.5.5, `inst_stor_half_default`); otherwise an earlier run's recorded
+choice when there is one (section 6.5.7); otherwise ticked when none of
+the seven is found (every file absent or this installer's), and unticked
 when any is.
 
 **The text** (`inst_stor_found_text`, host-tested), on the row, the
@@ -1733,7 +1971,7 @@ Windows can find them:
   case admits the route), over a recorded choice and over the files
   found (`inst_stor_half_default`). The two rules are ordered so: NUSB
   installed (its `Uninstall\USB20U` entry) comes first and wins, the row
-  unticked (roadmap 43.51's rule on branch 3.2.0.0); the lone half
+  unticked (roadmap 43.51, draft 22, `inst_stor_default`); the lone half
   comes second; `inst_stor_default` (the recorded choice, then the
   files found) last. `/storage` and `/nostorage` still decide over all
   three. The row's note (the Components page, the Summary, the console's
@@ -2602,7 +2840,9 @@ which waits.
 - (draft 17) the USB storage drivers of section 6.5: the seven's table
   (names, destinations, SHA-256s) against `legal-provenance.md` section
   5's; `inst_stor_state` for each state; `inst_stor_default` (none found
-  ticked, any found unticked, a recorded choice kept either way);
+  ticked, any found unticked, a recorded choice kept either way, and
+  from draft 22 unticked whenever NUSB is installed: none found, a
+  recorded Yes, the files the same);
   `inst_stor_found_text` for none, some (the "not known to be ready"
   sentence, and never "ready"), all and this installer's;
   `inst_stor_case` over every combination; `inst_stor_copy_set` (which
@@ -2630,6 +2870,16 @@ so the self-test runs on a build host with no desktop interaction) and
 checks each control holds its text whole; the import tables of all four;
 the switch refusals, the window's included (`/yes` refused, `/console`
 refused).
+
+(Draft 21) `wiz_lay.c` holds the settings pages' layout arithmetic of
+section 5.4, "The layout", host-tested in `test\test_wizlay.c`: the "now"
+column (the widest text, at most two fifths), a part's height, the split
+(at most three rows a part, the fewest parts, even, a part of one row
+always standing, every row in exactly one part, in order), the open
+list's width (the longest entry and its frame, at least the closed box,
+at most the work area) and the note's top (under the tallest part, a
+lone tall row taking from the note down to its floor); the window's self-test lays the
+pages out as that section's last item says.
 
 ## 12. What this record changes in record 23
 
@@ -2859,11 +3109,13 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 | `xhciinst\inst_eng.c`, `inst_eng.h` | the engine: record 23's system half behind `INST_FRONT` |
 | `xhciinst\xhciinst.c` | the console front end |
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 11) |
+| `xhciinst\wiz_lay.c`, `wiz_lay.h` | (draft 21) the settings pages' layout arithmetic (sections 5.4 and 11) |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the four builds and the helper's; the self-tests; the import allowlists per executable |
 | `xhciinst\INSTALL.BAT` | the launcher with `/console` |
 | `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, the package root's starter of the window (draft 15) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt`; the wizard first, the console second |
 | `test\test_inst.c` | the host suite |
+| `test\test_wizlay.c` | (draft 21) the layout arithmetic's host suite |
 | `scripts\package\test-package.ps1` | (draft 17) the installer's table of the seven held to `package-common.ps1`'s allowlist |
 | `scripts\package\make-release.ps1`, `test-package.ps1`, `scripts\build-driver.cmd` | staging, the mutation cases, the gates |
 | `docs\contributing\design\23-install-upgrade-tool.md` | revised as section 12 says |

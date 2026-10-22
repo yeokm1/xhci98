@@ -238,7 +238,7 @@ an INF or a package that names one of those Microsoft files (`OS-MEDIA`,
 `PKG-MSFILE`), so the download cannot drift back. From `3.2.0.0` one other
 exception is decided, and kept out of this tracked tree: NUSB 3.3's seven
 Windows 98 SE storage files, unmodified, from the driver pack, in the upload
-set only, at the download's root as `NONFREE\` (roadmap-usb4
+set only, at the download's root as `NUSB33\` (roadmap-usb4
 task 43.3; legal-provenance.md section 5). What this tree holds of it is
 `<version>\drvpack.txt`: whether the download carries the pack, and if it
 does, the pack's revision and each file's hash, from which `-UploadSetOnly`
@@ -450,8 +450,40 @@ Read it before installing anything.
 ## Cutting a release
 
 ```
+powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -CheckOnly
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <path to xhci98-test.pfx>
 ```
+
+**Run `-CheckOnly` first, after the builds** (roadmap-usb4 task 43.9;
+owner, 2026-10-20, after the `3.1.0.0` cut stopped twice on text that only
+its last steps read, among them two lines past 78 columns in
+`tools\xhciinst\readme.txt`). It runs the cut's own checks of text, readmes
+and staleness, in about a minute, with no build, no package and no key, and
+writes nothing under `releases\` or `out\`: the history entry (one, dated as
+the INF), the draft markers of the entry and the release notes, the notes'
+Stor98 declaration, the bundled Stor98 build and the driver pack; each
+driver's version, debug flag, flavour marker and source stamp where the
+build left it; each tool's freshness against its sources and its version;
+and every generated text - the readme, each tool's readme and `NOTICE.TXT` -
+rendered into a private temporary directory and held to 78 columns of
+printable ASCII with no placeholder or draft marker left. Where the cut
+stops at its first refusal, `-CheckOnly` lists them all and exits 1; a
+missing build or tool still stops it, naming what to build. It also says, as
+a warning, whether each leg's gated build record
+(`out\gated-<arch>-<flavour>.txt`) admits the binaries and the tree's HEAD,
+which the cut does not need and the signing step `make-package.ps1
+-SignOnly` does. What it cannot run is what needs a package or the key: the
+host test suite and the import gates, the staged packages' checks, the x64
+test signatures and the upload set; the cut runs them. Give it the cut's
+arguments but `-TestSignPfx` (`-Force`, `-TestLabel` with its
+`-ReleasesDir`, a `-Skip...` switch).
+
+**A documentation commit after the gated build costs no rebuild.** The cut
+itself runs every gate and does not read the gated build record; the signing
+step's `-SignOnly`, which does, admits a HEAD newer than the record's commit
+when no file changed since is a build input
+(`docs\contributing\build-and-test.md`, "A documentation commit after the
+gated build"). The cut checks every text file whatever the record says.
 
 **The x64 legs are signed as they are staged, and a cut without the key is
 refused** (design record 19; owner, 2026-10-11). `-TestSignPfx` names the
