@@ -1986,6 +1986,8 @@ typedef BOOL (WINAPI *PFN_SETDIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
 typedef BOOL (WINAPI *PFN_DRVLIST)(HDEVINFO, PSP_DEVINFO_DATA, DWORD);
 typedef DWORD (WINAPI *PFN_HWPROFFLAGS)(LPSTR, ULONG, PULONG, ULONG);
 #define MK_CSCONFIGFLAG_DISABLED 0x00000001UL
+#define MK_SPDRP_CONFIGFLAGS    0x0000000AUL
+#define MK_CONFIGFLAG_DISABLED  0x00000001UL
 typedef BOOL (WINAPI *PFN_GETSELDRVW)(HDEVINFO, PSP_DEVINFO_DATA,
                                       PSP_DRVINFO_DATA_W);
 typedef BOOL (WINAPI *PFN_DIINSTALL)(HWND, HDEVINFO, PSP_DEVINFO_DATA,
@@ -2268,21 +2270,32 @@ static int mk_s98_propchange(HDEVINFO set, SP_DEVINFO_DATA *data,
 }
 
 /* 1 when the current hardware profile's flags of `id` read and do not
- * disable it: what a DICS_ENABLE with DICS_FLAG_CONFIGSPECIFIC writes. 0
- * when they disable it or cannot be read. */
-static int mk_s98_profile_enabled(const char *id)
+ * disable it (what a DICS_ENABLE with DICS_FLAG_CONFIGSPECIFIC writes),
+ * and its global ConfigFlags read and do not disable it either (which no
+ * config-specific change touches). 0 when either disables it or cannot be
+ * read. */
+static int mk_s98_profile_enabled(HDEVINFO set, SP_DEVINFO_DATA *data,
+                                  const char *id)
 {
     char buf[INST_ID_CHARS];
     ULONG flags = 0;
+    DWORD cfg = 0;
+    DWORD type = 0;
 
     if (s98api.HwProfFlags == NULL) {
         return 0;
     }
     inst_copy(buf, id, sizeof(buf));
-    if (s98api.HwProfFlags(buf, 0, &flags, 0) != MK_CR_SUCCESS) {
+    if (s98api.HwProfFlags(buf, 0, &flags, 0) != MK_CR_SUCCESS ||
+        (flags & MK_CSCONFIGFLAG_DISABLED) != 0) {
         return 0;
     }
-    return (flags & MK_CSCONFIGFLAG_DISABLED) == 0;
+    if (!api.GetRegProp(set, data, MK_SPDRP_CONFIGFLAGS, &type, (PBYTE)&cfg,
+                        sizeof(cfg), NULL) ||
+        type != REG_DWORD) {
+        return 0;
+    }
+    return (cfg & MK_CONFIGFLAG_DISABLED) == 0;
 }
 
 /* Opens the one devnode into a set of its own; INVALID_HANDLE_VALUE when
@@ -2429,14 +2442,15 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
         err = GetLastError();
         /* A refused stop asked for a restart; the enable withdraws it. Its
          * own answer is a restart too while the devnode runs on (Windows 10
-         * x86, 2026-10-22): then the profile's flag the enable clears is
-         * what shows it held. */
+         * x86, 2026-10-22): then the profile's flag the enable clears, and
+         * the global one, show it held. */
         st = 0;
         pr = 0;
         enabled = mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
         fresh = mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn);
         if (!enabled && vetoed && fresh && (st & MK_DN_STARTED) != 0 &&
-            !mk_s98_disabled(st, pr) && mk_s98_profile_enabled(id)) {
+            !mk_s98_disabled(st, pr) &&
+            mk_s98_profile_enabled(set, &data, id)) {
             enabled = 1;
         }
         if (!enabled || !fresh || mk_s98_disabled(st, pr)) {
