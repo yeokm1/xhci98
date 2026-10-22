@@ -1766,3 +1766,109 @@ function Read-ToolReadmeLines {
     }
     return $lines
 }
+
+# --- the release history the top-level readme embeds (task 43.61) -----------
+#
+# make-release.ps1 embeds releases\history.md in the release's readme.txt,
+# from its first '##' heading down, each entry heading demoted one level,
+# rendered to plain text by ConvertFrom-MarkdownBlocks at the rule's width.
+# The three are here so scripts\check-readme-text.ps1 renders it the same
+# way: a word too long to wrap or a non-ASCII character in a history entry
+# stops a cut as a readme line does.
+
+function Get-HistoryEmbedLines {
+    # history.md's lines from its first '##' heading down, each '##' heading
+    # made '###' to sit under the readme's "Release history" section, so the
+    # file's own title and maintenance note stay out of the readme.
+    param([string[]]$Lines)
+
+    if ($null -eq $Lines -or $Lines.Count -eq 0) { return @() }
+    $firstHeading = 0
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^##\s') { $firstHeading = $i; break }
+    }
+    return @($Lines[$firstHeading..($Lines.Count - 1)] | ForEach-Object {
+        if ($_ -match '^##\s') { "#" + $_ } else { $_ }
+    })
+}
+
+function Format-Wrapped {
+    # Greedy word wrap with a separate first-line and continuation prefix, so a
+    # bullet hangs under its own text rather than under the marker.
+    param(
+        [string]$Text,
+        [int]$Width,
+        [string]$FirstPrefix = "",
+        [string]$RestPrefix = ""
+    )
+
+    $words = @($Text -split '\s+' | Where-Object { $_ -ne "" })
+    if ($words.Count -eq 0) { return @() }
+
+    $out = @()
+    $line = $FirstPrefix + $words[0]
+    for ($i = 1; $i -lt $words.Count; $i++) {
+        if (($line + " " + $words[$i]).Length -gt $Width) {
+            $out += $line
+            $line = $RestPrefix + $words[$i]
+        } else {
+            $line = $line + " " + $words[$i]
+        }
+    }
+    # @() or a single-line block returns a bare string, and Set-StrictMode 2.0
+    # then makes .Count on it a runtime error at the call site.
+    return @($out + $line)
+}
+
+function ConvertFrom-MarkdownBlocks {
+    # The narrow subset releases\history.md actually uses: '###' headings,
+    # '-' bullets that may continue on indented lines, and plain paragraphs.
+    # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
+    # rendered - there is nothing to render them with in a .txt file.
+    param([string[]]$Lines, [int]$Width = 78)
+
+    $out = @()
+    $pending = ""          # text of the block being accumulated
+    $kind = "none"         # none | bullet | para
+
+    function Flush {
+        param([string]$Text, [string]$Kind, [int]$W, [object[]]$Acc)
+        if ($Text -eq "") { return @($Acc) }
+        if ($Kind -eq "bullet") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
+        }
+        return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
+    }
+
+    foreach ($raw in $Lines) {
+        $line = $raw -replace '\*\*', '' -replace '`', ''
+        # Single-asterisk emphasis, but only around a word - never a bullet
+        # marker, which lives at the start of the line and is handled below.
+        $line = $line -replace '(?<=\S)\*(\S[^*]*?)\*', '$1' -replace '(?<=\s)\*(\S[^*]*?)\*', '$1'
+
+        if ($line.Trim() -eq "") {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = ""; $kind = "none"
+            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
+            continue
+        }
+        if ($line -match '^###\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = ""; $kind = "none"
+            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
+            $out += ("  " + $Matches[1].Trim())
+            $out += ""
+            continue
+        }
+        if ($line -match '^\s*-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "bullet"
+            continue
+        }
+        # A continuation of whatever block is open, or the start of a paragraph.
+        if ($kind -eq "none") { $kind = "para" }
+        $pending = if ($pending -eq "") { $line.Trim() } else { $pending + " " + $line.Trim() }
+    }
+    $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+    return $out
+}

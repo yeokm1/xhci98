@@ -25,8 +25,9 @@ rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
 rem      pass makes every later FAIL and NODRIVER word untrustworthy
 rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
 rem      fail on an LF-only .BAT, and the field wrappers are .BAT files -
-rem      then the source charset, the tool readmes the release cut publishes
-rem      held to its 78-column printable-ASCII rule (task 43.61,
+rem      then the source charset, the tool readmes and the release history
+rem      the release cut publishes held to its 78-column printable-ASCII
+rem      rule (task 43.61,
 rem      scripts\check-readme-text.ps1, self-tested first), and the two
 rem      copies of Stor98's interface
 rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1),
@@ -542,7 +543,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-source-charset.ps1"
 if errorlevel 1 goto charsetfail
 
-rem The tool readmes make-release.ps1 publishes (task 43.61): a line past 78
+rem The tool readmes make-release.ps1 publishes, and releases\history.md as
+rem rendered into the release readme (task 43.61): a line past 78
 rem columns or a character that is not printable ASCII stops a cut, and until
 rem this gate nothing met it before one - 43.11's test cut found two such
 rem lines that two merges had left. The rule and the list are
@@ -1379,8 +1381,8 @@ exit /b 1
 
 :readmetextfail
 echo.
-echo ERROR: a tool readme the release cut publishes has a line past 78 columns
-echo or a character that is not printable ASCII, and make-release.ps1 would
+echo ERROR: a tool readme or the release history the release cut publishes has
+echo a line past 78 columns or a character that is not printable ASCII, and make-release.ps1 would
 echo refuse it - see the check's output above.
 endlocal
 exit /b 1

@@ -1243,86 +1243,9 @@ function New-ReleaseLegs {
     return @($out)
 }
 
-function Format-Wrapped {
-    # Greedy word wrap with a separate first-line and continuation prefix, so a
-    # bullet hangs under its own text rather than under the marker.
-    param(
-        [string]$Text,
-        [int]$Width,
-        [string]$FirstPrefix = "",
-        [string]$RestPrefix = ""
-    )
-
-    $words = @($Text -split '\s+' | Where-Object { $_ -ne "" })
-    if ($words.Count -eq 0) { return @() }
-
-    $out = @()
-    $line = $FirstPrefix + $words[0]
-    for ($i = 1; $i -lt $words.Count; $i++) {
-        if (($line + " " + $words[$i]).Length -gt $Width) {
-            $out += $line
-            $line = $RestPrefix + $words[$i]
-        } else {
-            $line = $line + " " + $words[$i]
-        }
-    }
-    # @() or a single-line block returns a bare string, and Set-StrictMode 2.0
-    # then makes .Count on it a runtime error at the call site.
-    return @($out + $line)
-}
-
-function ConvertFrom-MarkdownBlocks {
-    # The narrow subset releases\history.md actually uses: '###' headings,
-    # '-' bullets that may continue on indented lines, and plain paragraphs.
-    # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
-    # rendered - there is nothing to render them with in a .txt file.
-    param([string[]]$Lines, [int]$Width = 78)
-
-    $out = @()
-    $pending = ""          # text of the block being accumulated
-    $kind = "none"         # none | bullet | para
-
-    function Flush {
-        param([string]$Text, [string]$Kind, [int]$W, [object[]]$Acc)
-        if ($Text -eq "") { return @($Acc) }
-        if ($Kind -eq "bullet") {
-            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
-        }
-        return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
-    }
-
-    foreach ($raw in $Lines) {
-        $line = $raw -replace '\*\*', '' -replace '`', ''
-        # Single-asterisk emphasis, but only around a word - never a bullet
-        # marker, which lives at the start of the line and is handled below.
-        $line = $line -replace '(?<=\S)\*(\S[^*]*?)\*', '$1' -replace '(?<=\s)\*(\S[^*]*?)\*', '$1'
-
-        if ($line.Trim() -eq "") {
-            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-            $pending = ""; $kind = "none"
-            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
-            continue
-        }
-        if ($line -match '^###\s+(.*)$') {
-            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-            $pending = ""; $kind = "none"
-            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
-            $out += ("  " + $Matches[1].Trim())
-            $out += ""
-            continue
-        }
-        if ($line -match '^\s*-\s+(.*)$') {
-            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-            $pending = $Matches[1].Trim(); $kind = "bullet"
-            continue
-        }
-        # A continuation of whatever block is open, or the start of a paragraph.
-        if ($kind -eq "none") { $kind = "para" }
-        $pending = if ($pending -eq "") { $line.Trim() } else { $pending + " " + $line.Trim() }
-    }
-    $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-    return $out
-}
+# Format-Wrapped and ConvertFrom-MarkdownBlocks, which render the embedded
+# release history, are package-common.ps1's since task 43.61, so the gated
+# build's readme check renders history.md exactly as the cut does.
 
 function Get-InfDriverVersion {
     param([string]$Path)
@@ -4376,13 +4299,7 @@ helper (xhciinst\di\build.cmd).
     # maintenance note stay out of the user-facing file, and demote each entry
     # heading by one level to sit under this README's "Release history" section.
     # The *check* that an entry exists ran before anything was built.
-    $firstHeading = 0
-    for ($i = 0; $i -lt $historyLines.Count; $i++) {
-        if ($historyLines[$i] -match '^##\s') { $firstHeading = $i; break }
-    }
-    $history = @($historyLines[$firstHeading..($historyLines.Count - 1)] | ForEach-Object {
-        if ($_ -match '^##\s') { "#" + $_ } else { $_ }
-    })
+    $history = @(Get-HistoryEmbedLines -Lines $historyLines)
 
     #
     # One block per published directory, in leg order. The architecture is named
@@ -6507,7 +6424,7 @@ which XHCITR matches this driver by that number; correct the sentence.
     # breaking lines in the wrong places. So each block is joined back into one
     # string, stripped of inline markup, and wrapped to fit with a hanging
     # indent - the paragraph shape survives, the width is enforced.
-    $historyText = @(ConvertFrom-MarkdownBlocks -Lines $history -Width 78)
+    $historyText = @(ConvertFrom-MarkdownBlocks -Lines $history -Width $script:PlainTextColumns)
 
     #
     # **An incomplete cut has to say so IN THE FILE**, which is the audit of

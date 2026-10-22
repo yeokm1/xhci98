@@ -19,7 +19,15 @@
 # The footer the cut appends is make-release.ps1's own text and is checked
 # there; what a merge changes is the tracked readme.
 #
-#   check-readme-text.ps1             check the four tracked readmes
+# And releases\history.md, which the cut embeds in the release's top-level
+# readme.txt: rendered here as the cut renders it (Get-HistoryEmbedLines and
+# ConvertFrom-MarkdownBlocks, package-common.ps1's too) and held to the same
+# rule, since the wrap cannot shorten a word longer than a line and passes a
+# non-ASCII character through. The rest of that readme is make-release.ps1's
+# template, met at a cut.
+#
+#   check-readme-text.ps1             check the four tracked readmes and
+#                                     the rendered release history
 #   check-readme-text.ps1 -SelfTest   the rule's own refusals, in memory
 #
 # Exit 0 when every readme keeps the rule (or the self-test passes), 1
@@ -68,6 +76,20 @@ if ($SelfTest) {
         Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
     }
 
+    # The history as the cut renders it: from the first '##' heading, demoted,
+    # wrapped, and a word too long for a line still refused.
+    $hist = @(ConvertFrom-MarkdownBlocks -Lines @(Get-HistoryEmbedLines -Lines @(
+        "# Title", "note", "", "## 1.0.0.0 - 01/01/2026", "", "- a bullet")) -Width $script:PlainTextColumns)
+    if (($hist -join "|") -ne "  1.0.0.0 - 01/01/2026||    * a bullet") {
+        Write-Host ("SELFTEST FAIL: the history rendered as '{0}'" -f ($hist -join "|")) -ForegroundColor Red
+        $failed++
+    }
+    $hist = @(ConvertFrom-MarkdownBlocks -Lines @("## v", "", ("w" * 79)) -Width $script:PlainTextColumns)
+    if (@(Get-PlainTextFaults -Name "h" -Lines $hist).Count -ne 1) {
+        Write-Host "SELFTEST FAIL: a 79-character word in the history was not refused" -ForegroundColor Red
+        $failed++
+    }
+
     if ($script:ToolReadmeDirs.Count -lt 4) {
         Write-Host "SELFTEST FAIL: package-common.ps1 lists fewer than the four tool readmes" -ForegroundColor Red
         $failed++
@@ -88,10 +110,22 @@ foreach ($dir in $script:ToolReadmeDirs.Values) {
     $faults += @(Get-PlainTextFaults -Name $rel -Lines @(Read-ToolReadmeLines $path))
 }
 
+# The release history the top-level readme embeds, read as the cut reads it
+# (Get-Content; make-release.ps1's default -ReleasesDir).
+$histRel = "releases\history.md"
+$histPath = Join-Path $repo $histRel
+if (-not (Test-Path -LiteralPath $histPath)) {
+    $faults += "$histRel is missing; make-release.ps1 embeds it in readme.txt."
+} else {
+    $histText = @(ConvertFrom-MarkdownBlocks -Lines @(Get-HistoryEmbedLines -Lines @(Get-Content -LiteralPath $histPath)) `
+                                             -Width $script:PlainTextColumns)
+    $faults += @(Get-PlainTextFaults -Name "readme.txt's release history ($histRel)" -Lines $histText)
+}
+
 if ($faults.Count -gt 0) {
     foreach ($f in $faults) { Write-Host "FAIL: $f" -ForegroundColor Red }
-    Write-Host ("{0} fault(s) in the tool readmes; make-release.ps1 would refuse the cut." -f $faults.Count) -ForegroundColor Red
+    Write-Host ("{0} fault(s) in the readmes; make-release.ps1 would refuse the cut." -f $faults.Count) -ForegroundColor Red
     exit 1
 }
-Write-Host ("readme text: OK ({0} tool readmes, {1} columns, printable ASCII)" -f $script:ToolReadmeDirs.Count, $script:PlainTextColumns)
+Write-Host ("readme text: OK ({0} tool readmes and the release history, {1} columns, printable ASCII)" -f $script:ToolReadmeDirs.Count, $script:PlainTextColumns)
 exit 0
