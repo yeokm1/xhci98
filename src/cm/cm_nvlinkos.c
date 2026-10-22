@@ -1297,7 +1297,9 @@ BOOLEAN CmNvlinkAckHeld(PCM_NHI nhi, ULONG bridge)
 BOOLEAN CmNvlinkHeld(PCM_NHI nhi, ULONG bridge)
 {
     if (cmNvTable == NULL) {
-        return FALSE;
+        /* No table, no acknowledgement wait: the 9x transactions and
+         * sweeps hold the member all the same (tasks 43.18, 43.47). */
+        return CmEjectHeld(nhi, bridge);
     }
     CmNvlinkStep(nhi);
     /* The acknowledgement waits behind the member, and on 98 SE and ME its

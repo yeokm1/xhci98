@@ -152,7 +152,9 @@ static VOID cmEjO6(CM_EJ_TX *t, ULONG nowMs)
     }
     t->Flags |= CM_EJ_F_BLOCKED;
     cmEjTerminal(t, CM_EJ_STEP_BLOCKED, CM_EJ_OUT_KEEPS_FAILING, nowMs);
-    if ((t->Flags & CM_EJ_F_TORN) == 0) {
+    if ((t->Flags & (CM_EJ_F_TORN | CM_EJ_F_VANISH)) == 0) {
+        /* A vanished child's tunnel is gone with it: O6 without the
+         * request, no teardown under either connection manager (V8). */
         t->Flags |= CM_EJ_F_O6TEAR;
     }
 }
@@ -314,10 +316,11 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
             if (t->Pending != 0) {
                 return CM_EJ_DO_NONE;
             }
-            if ((t->Flags & CM_EJ_F_QUERIED) == 0 &&
+            if ((t->Flags & (CM_EJ_F_QUERIED | CM_EJ_F_VANISH)) == 0 &&
                 (t->Phase == CM_EJ_P_IDENT || t->Phase == CM_EJ_P_QUERY)) {
                 /* No query was accepted (none made, or refused): nothing
-                 * is owed, and no lookup is needed. */
+                 * is owed, and no lookup is needed. A vanished child's
+                 * refusal owes its retries: looked up. */
                 t->Flags &= ~CM_EJ_F_ADOPT;
                 t->Phase = CM_EJ_P_DONE;
                 return CM_EJ_DO_NONE;
@@ -338,6 +341,12 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
             return CM_EJ_DO_FIND;
         case CM_EJ_P_QUERY:
             if (t->Pending != 0 || !in->SlotIdle) {
+                return CM_EJ_DO_NONE;
+            }
+            if ((t->Flags & CM_EJ_F_VANISH) != 0 && t->QueryAttempts != 0 &&
+                in->NowMs - t->LastQueryAt < CM_NVLINK_RETRY_MS) {
+                /* A vetoed vanished child: asked again every 2 s, never
+                 * forced (R12 S4). */
                 return CM_EJ_DO_NONE;
             }
             return CM_EJ_DO_QUERY;
@@ -418,7 +427,8 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
             }
             return CM_EJ_DO_RETIRE;
         default:
-            /* FREE, HELD (waiting for the unplug), DONE. */
+            /* FREE, HELD (waiting for the unplug), DONE, and CLAIMED (the
+             * CONFIGMG worker's own calls). */
             return CM_EJ_DO_NONE;
         }
     }
@@ -431,6 +441,10 @@ VOID CmEjSubmitted(CM_EJ_TX *t, ULONG what, BOOLEAN ok, ULONG nowMs)
         return;
     }
     t->Pending = what;
+    if (what == CM_EJ_DO_QUERY) {
+        t->QueryAttempts++;
+        t->LastQueryAt = nowMs;
+    }
     if (what == CM_EJ_DO_REMOVE) {
         t->Attempts++;
         if (t->Attempts == 1) {
@@ -473,6 +487,30 @@ VOID CmEjFeed(CM_EJ_TX *t, ULONG kind, ULONG value, ULONG aux, ULONG nowMs)
         }
         t->Pending = 0;
         t->QueryCr = value;
+        if ((t->Flags & CM_EJ_F_VANISH) != 0) {
+            if (t->Phase != CM_EJ_P_QUERY) {
+                return;
+            }
+            if (value == CM_EJ_CR_NO_SUCH_DEVNODE) {
+                /* Verified gone (its instance id no longer on the
+                 * handle): retired by its disappearance. */
+                t->Flags |= CM_EJ_F_REMOVED;
+                t->Outcome = CM_EJ_OUT_GONE;
+                t->Phase = CM_EJ_P_DONE;
+                return;
+            }
+            if (value != CM_EJ_CR_SUCCESS) {
+                /* Vetoed, or not made: asked again (CmEjNext's 2 s). */
+                return;
+            }
+            /* Accepted: nothing behind it to isolate (its link-down reset
+             * the endpoint, A1); the removal is owed, never a second
+             * query. */
+            t->Flags |= CM_EJ_F_QUERIED | CM_EJ_F_AUTH;
+            t->Outcome = CM_EJ_OUT_GONE;
+            t->Phase = CM_EJ_P_REMOVE;
+            return;
+        }
         if (value != CM_EJ_CR_SUCCESS) {
             /* A refusal is final; nothing else is done. */
             t->Phase = CM_EJ_P_DONE;
@@ -637,9 +675,11 @@ VOID CmEjFeed(CM_EJ_TX *t, ULONG kind, ULONG value, ULONG aux, ULONG nowMs)
         }
         t->Flags &= ~CM_EJ_F_ADOPT;
         t->Devnode = value;
-        if ((t->Flags & CM_EJ_F_QUERIED) == 0 &&
+        if ((t->Flags & (CM_EJ_F_QUERIED | CM_EJ_F_VANISH)) == 0 &&
             (t->Phase == CM_EJ_P_IDENT || t->Phase == CM_EJ_P_QUERY)) {
-            /* No query was made, or it was refused: nothing is owed. */
+            /* No query was made, or it was refused: nothing is owed. A
+             * vanished child resumes where it stood (its query asked
+             * again, an accepted one never). */
             t->Phase = CM_EJ_P_DONE;
         }
         return;
@@ -658,8 +698,10 @@ BOOLEAN CmEjBusy(const CM_EJ_TX *t)
     if ((t->Flags & CM_EJ_F_ADOPT) != 0) {
         return TRUE;
     }
+    /* A claim's calls are the CONFIGMG worker's: nothing for the passes. */
     return (BOOLEAN)(t->Phase != CM_EJ_P_FREE && t->Phase != CM_EJ_P_DONE &&
-                     t->Phase != CM_EJ_P_HELD);
+                     t->Phase != CM_EJ_P_HELD &&
+                     t->Phase != CM_EJ_P_CLAIMED);
 }
 
 VOID CmEjResultEncode(CM_EJ_TX *t, UCHAR *out, ULONG nowMs)
@@ -758,6 +800,304 @@ BOOLEAN CmEjOwesRemoval(const CM_EJ_TX *t)
     return (BOOLEAN)((t->Flags & (CM_EJ_F_AUTH | CM_EJ_F_REMOVED)) ==
                          CM_EJ_F_AUTH &&
                      t->Phase == CM_EJ_P_REMOVE);
+}
+
+/* ---- the vanished child (task 43.47) ------------------------------------- */
+
+static VOID cmEjBeginRecord(CM_EJ_TX *t, ULONG bridge, ULONG devnode,
+                            ULONG phase, ULONG nowMs)
+{
+    cmEjZero((PUCHAR)t, (ULONG)sizeof(*t));
+    t->Phase = phase;
+    t->Bridge = bridge;
+    t->Devnode = devnode;
+    t->QueryCr = CM_EJ_NO_CR;
+    t->RemoveCr = CM_EJ_NO_CR;
+    t->Entry = CM_EJ_NONE;
+    t->Step = CM_EJ_STEP_ACCEPTED;
+    t->StampAt = nowMs;
+    /* No tool owns a result slot for it. */
+    t->Flags = CM_EJ_F_VANISH | CM_EJ_F_CONSUMED;
+}
+
+VOID CmEjBeginVanished(CM_EJ_TX *t, ULONG bridge, ULONG devnode,
+                       ULONG nowMs)
+{
+    cmEjBeginRecord(t, bridge, devnode, CM_EJ_P_QUERY, nowMs);
+}
+
+VOID CmEjClaimBegin(CM_EJ_TX *t, ULONG bridge, ULONG devnode, ULONG nowMs)
+{
+    cmEjBeginRecord(t, bridge, devnode, CM_EJ_P_CLAIMED, nowMs);
+}
+
+BOOLEAN CmEjClaimEnd(CM_EJ_TX *t, ULONG queryCr, ULONG removeCr,
+                     ULONG firstAt, ULONG lastAt, ULONG attempts,
+                     ULONG entry, ULONG sequence, ULONG generation,
+                     BOOLEAN vanished, BOOLEAN takeover, ULONG nowMs)
+{
+    if (t->Phase != CM_EJ_P_CLAIMED) {
+        return FALSE;
+    }
+    t->Flags &= ~CM_EJ_F_PARKED;
+    if (removeCr == CM_EJ_CR_SUCCESS || removeCr == CM_EJ_CR_NO_SUCH_DEVNODE ||
+        queryCr == CM_EJ_CR_NO_SUCH_DEVNODE ||
+        (queryCr != CM_EJ_CR_SUCCESS && !vanished)) {
+        /* The devnode removed or gone, or a loss's or removal-only
+         * request's refusal or query not made (their rule: settled, the
+         * removal-only request asked again by its own recovery): nothing
+         * is owed. */
+        t->Phase = CM_EJ_P_FREE;
+        return FALSE;
+    }
+    if (queryCr != CM_EJ_CR_SUCCESS) {
+        /* A vanished child's refusal (or its query not made) owes its
+         * retries (R12 S4), 2 s after this one: the transaction's, or,
+         * with no call worker, its parked claim's (CmEjClaimRetry). */
+        t->Flags &= ~(CM_EJ_F_QUERIED | CM_EJ_F_AUTH);
+        t->QueryCr = queryCr;
+        t->QueryAttempts = queryCr == CM_EJ_NO_CR ? 0UL : 1UL;
+        t->LastQueryAt = nowMs;
+        t->Attempts = 0;
+        if (!takeover) {
+            t->Flags |= CM_EJ_F_PARKED;
+            return FALSE;
+        }
+        t->Phase = CM_EJ_P_QUERY;
+        return TRUE;
+    }
+    /* An accepted query whose removal failed: the obligation is the
+     * transaction's from here, the query never asked again. */
+    t->Flags |= CM_EJ_F_QUERIED | CM_EJ_F_AUTH;
+    t->QueryCr = CM_EJ_CR_SUCCESS;
+    t->RemoveCr = removeCr;
+    t->Outcome = CM_EJ_OUT_GONE;
+    if (t->Attempts == 0) {
+        /* CmEjClaimProgress records the first attempt; a resumed claim
+         * keeps its own. */
+        t->FirstRemoveAt = firstAt;
+    }
+    if (attempts > t->Attempts) {
+        t->Attempts = attempts;
+    }
+    if (t->Attempts == 0) {
+        t->Attempts = 1;
+    }
+    t->LastRemoveAt = lastAt;
+    t->Entry = entry;
+    t->Sequence = sequence & 0x00FFFFFFUL;
+    t->Generation = generation;
+    if (!takeover) {
+        /* No call worker could make its calls: kept for the CONFIGMG
+         * worker, which makes the removal alone when it comes back to the
+         * devnode (CmEjClaimResume), or for a start that can take it over
+         * (CmEjClaimAdopt). */
+        t->Flags |= CM_EJ_F_PARKED;
+        return FALSE;
+    }
+    t->Phase = CM_EJ_P_REMOVE;
+    cmEjO6(t, nowMs);
+    return TRUE;
+}
+
+BOOLEAN CmEjClaimResume(CM_EJ_TX *t)
+{
+    if (t->Phase != CM_EJ_P_CLAIMED || (t->Flags & CM_EJ_F_PARKED) == 0 ||
+        (t->Flags & CM_EJ_F_QUERIED) == 0) {
+        return FALSE;
+    }
+    t->Flags &= ~CM_EJ_F_PARKED;
+    return TRUE;
+}
+
+ULONG CmEjClaimRetry(CM_EJ_TX *t, ULONG nowMs)
+{
+    ULONG last;
+
+    if (t->Phase != CM_EJ_P_CLAIMED || (t->Flags & CM_EJ_F_PARKED) == 0) {
+        return CM_EJ_DO_NONE;
+    }
+    if ((t->Flags & CM_EJ_F_QUERIED) != 0) {
+        last = t->LastRemoveAt;
+    } else {
+        last = t->QueryAttempts != 0 ? t->LastQueryAt : nowMs - CM_NVLINK_RETRY_MS;
+    }
+    if (nowMs - last < CM_NVLINK_RETRY_MS) {
+        return CM_EJ_DO_NONE;
+    }
+    t->Flags &= ~CM_EJ_F_PARKED;
+    return (t->Flags & CM_EJ_F_QUERIED) != 0 ? CM_EJ_DO_REMOVE
+                                             : CM_EJ_DO_QUERY;
+}
+
+BOOLEAN CmEjClaimAdopt(CM_EJ_TX *t, ULONG nowMs)
+{
+    if (t->Phase != CM_EJ_P_CLAIMED || (t->Flags & CM_EJ_F_PARKED) == 0) {
+        return FALSE;
+    }
+    t->Flags &= ~CM_EJ_F_PARKED;
+    if ((t->Flags & CM_EJ_F_QUERIED) == 0) {
+        t->Phase = CM_EJ_P_QUERY;
+        return TRUE;
+    }
+    t->Phase = CM_EJ_P_REMOVE;
+    cmEjO6(t, nowMs);
+    return TRUE;
+}
+
+VOID CmEjClaimProgress(CM_EJ_TX *t, ULONG firstAt)
+{
+    if (t->Phase != CM_EJ_P_CLAIMED) {
+        return;
+    }
+    t->Flags |= CM_EJ_F_QUERIED;
+    t->QueryCr = CM_EJ_CR_SUCCESS;
+    if (t->Attempts == 0) {
+        t->Attempts = 1;
+        t->FirstRemoveAt = firstAt;
+    }
+}
+
+BOOLEAN CmEjClaimBlocked(const CM_EJ_TX *t, ULONG nowMs)
+{
+    return (BOOLEAN)(t->Phase == CM_EJ_P_CLAIMED &&
+                     (t->Flags & CM_EJ_F_QUERIED) != 0 && t->Attempts != 0 &&
+                     nowMs - t->FirstRemoveAt >= CM_NVLINK_RETRY_FOR_MS);
+}
+
+VOID CmEjSweepBegin(CM_EJ_SWEEP *s, ULONG nowMs)
+{
+    if (s->State == CM_EJ_SW_IDLE) {
+        s->BeganAt = nowMs;
+        s->Readings = 0;
+        s->Records = 0;
+        s->LastAt = 0;
+    }
+    if (s->State == CM_EJ_SW_OUT) {
+        /* The reading out may predate what this request saw: one more
+         * after it. */
+        s->Again = 1;
+    } else {
+        s->State = CM_EJ_SW_READ;
+    }
+}
+
+BOOLEAN CmEjSweepNext(const CM_EJ_SWEEP *s, BOOLEAN slotIdle, ULONG nowMs)
+{
+    if (!slotIdle) {
+        return FALSE;
+    }
+    if (s->State == CM_EJ_SW_READ) {
+        return TRUE;
+    }
+    return (BOOLEAN)(s->State == CM_EJ_SW_RETRY &&
+                     nowMs - s->LastAt >= CM_NVLINK_RETRY_MS);
+}
+
+VOID CmEjSweepSubmitted(CM_EJ_SWEEP *s, BOOLEAN ok)
+{
+    if (ok && (s->State == CM_EJ_SW_READ || s->State == CM_EJ_SW_RETRY)) {
+        s->State = CM_EJ_SW_OUT;
+    }
+}
+
+VOID CmEjSweepMade(CM_EJ_SWEEP *s)
+{
+    if (s->State != CM_EJ_SW_IDLE && s->State != CM_EJ_SW_OUT) {
+        s->Records++;
+        s->State = CM_EJ_SW_READ;
+    }
+}
+
+VOID CmEjSweepLost(CM_EJ_SWEEP *s)
+{
+    if (s->State == CM_EJ_SW_OUT) {
+        s->State = CM_EJ_SW_READ;
+        s->Again = 0;
+    }
+}
+
+ULONG CmEjSweepTake(CM_EJ_SWEEP *s, BOOLEAN complete, BOOLEAN found,
+                    BOOLEAN made, ULONG claims, ULONG nowMs)
+{
+    ULONG again;
+
+    if (s->State != CM_EJ_SW_OUT) {
+        return CM_EJ_SW_END_NONE;
+    }
+    again = s->Again;
+    s->Again = 0;
+    s->Readings++;
+    s->LastAt = nowMs;
+    if (found && made) {
+        /* One more record: the next reading at once. */
+        s->Records++;
+        s->State = CM_EJ_SW_READ;
+        return CM_EJ_SW_END_NONE;
+    }
+    if (found) {
+        /* No free record (the driver keeps the child: CmEjSweepMade), or
+         * named by another since: read again later, the gate up
+         * meanwhile - never a query without its record. */
+        s->State = CM_EJ_SW_RETRY;
+        return CM_EJ_SW_END_NONE;
+    }
+    if (claims != 0) {
+        /* A worker's claim may end refused, leaving the child to this
+         * sweep: read again once it has ended. */
+        s->State = CM_EJ_SW_RETRY;
+        return CM_EJ_SW_END_NONE;
+    }
+    if (again) {
+        /* A request came while this reading was out: read again. */
+        s->State = CM_EJ_SW_READ;
+        return CM_EJ_SW_END_NONE;
+    }
+    if (complete) {
+        s->State = CM_EJ_SW_IDLE;
+        return CM_EJ_SW_END_DONE;
+    }
+    /* Not read completely: read again, the member held meanwhile - a
+     * vanished child is never left unread for a time limit. */
+    s->State = CM_EJ_SW_RETRY;
+    return CM_EJ_SW_END_NONE;
+}
+
+BOOLEAN CmEjSweepHeld(const CM_EJ_SWEEP *s)
+{
+    return (BOOLEAN)(s->State != CM_EJ_SW_IDLE);
+}
+
+ULONG CmEjSweepPick(const ULONG *busIds, ULONG nIds, const ULONG *childIds,
+                    const ULONG *owner, ULONG n, PULONG claims)
+{
+    ULONG c;
+    ULONG k;
+    ULONG pick;
+    BOOLEAN answers;
+
+    pick = CM_EJ_NONE;
+    *claims = 0;
+    for (c = 0; c < n; c++) {
+        if (childIds[c] == 0) {
+            continue;
+        }
+        answers = FALSE;
+        for (k = 0; k < nIds; k++) {
+            if (busIds[k] == childIds[c]) {
+                answers = TRUE;
+            }
+        }
+        if (answers) {
+            continue;
+        }
+        if (owner[c] == CM_EJ_OWN_CLAIM) {
+            (*claims)++;
+        } else if (owner[c] == CM_EJ_OWN_NONE && pick == CM_EJ_NONE) {
+            pick = c;
+        }
+    }
+    return pick;
 }
 
 /* ---- the statement decision ---------------------------------------------- */

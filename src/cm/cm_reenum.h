@@ -219,6 +219,8 @@ typedef struct _CM_REENUM_PORT {
                                change in publication mode none alone -
                                record 22 section 7.7, U25 - is serviced as
                                the re-enumeration alone)                  */
+    ULONG HeldMark;         /* the work held behind a vanished-child sweep
+                               (task 43.47) carries a marking window      */
     ULONG EjectSerial;      /* the eject's bridge publication and          */
     ULONG EjectGen;         /* population generation, checked at hand-off */
     ULONG WalkLogged;       /* 98: a failed devnode walk was logged       */
@@ -556,6 +558,15 @@ VOID CmCfgwkPrune(struct _CM_CFGWK *w);
 BOOLEAN CmCfgwkPciPath(ULONG bdf, PULONG path, PULONG count);
 BOOLEAN CmCfgwkIdNames(const char *id, ULONG bdf, const ULONG *want,
                        ULONG wantCount);
+/* The identities answering on the secondary bus of the bridge at
+ * `bridge` (vendor 15:0, device 31:16), at most `room`; room + 1 when the
+ * bus could not be read completely (a Retry Status, an unread function).
+ * The vanished-child sweep's reading (task 43.47). PASSIVE_LEVEL. */
+ULONG CmCfgwkBusIds(ULONG bridge, PULONG ids, ULONG room);
+/* The members whose call worker is live (task 43.47): a claim of theirs
+ * whose removal failed may become the vanished transaction. Set by the
+ * thread once its call workers are made. <= DISPATCH_LEVEL. */
+VOID CmCfgwkTakeover(struct _CM_CFGWK *w, ULONG members);
 
 /* CONTROLLER_UNAVAILABLE (CmReenumUnavailable): each member in `active`
  * owes the removal of the children retained at its last healthy walk,

@@ -65,6 +65,24 @@
  * publishes no UP and is not re-enumerated (R8c, S5): CmEjGate, which
  * the seam reads beside the acknowledgement waits' gate.
  *
+ * THE VANISHED CHILD (task 43.47; record 21 section 7.2, "The
+ * vanished-child transaction"). A function a tunnel down took away is a
+ * record of the same kind with CM_EJ_F_VANISH: no tool, no result slot,
+ * no request, its devnode and instance id known from the member's sweep
+ * (CM_EJ_SWEEP) before its first query (CmEjBeginVanished). QUERY is asked
+ * while the member's removal gate is down; a refusal is not final - it is
+ * asked again every CM_NVLINK_RETRY_MS, never forced, with no deadline
+ * (R12 S4); accepted, the removal is authorised (A1) and REMOVE runs as
+ * above, blocked after R11 O6's 30 s with no teardown under either
+ * connection manager (V8), retried until it succeeds or the devnode is
+ * verified gone. A stopped start's vanished record is resumed where it
+ * stood by the adopting start, a refused query asked again. The domain's
+ * CONFIGMG worker claims a devnode in the same records before its own
+ * query (CM_EJ_P_CLAIMED, CmEjClaimBegin): a devnode a record names is
+ * never queried by it, and a claim whose query was accepted and whose
+ * removal failed becomes the vanished transaction (CmEjClaimEnd), never
+ * queried again.
+ *
  * THE STATEMENT DECISION (part 2). A 9x tunnel down's statement needs the
  * member's SHPC slot read empty, through PCI.VXD's dword write of the
  * capability's DWORD Select on the member's call worker: the decision is
@@ -109,6 +127,9 @@
 #define CM_EJ_P_RETIRE          14UL    /* a clean removal with no teardown:
                                            the entry leaves UP, no
                                            statement (task 43.18)           */
+#define CM_EJ_P_CLAIMED         15UL    /* the domain's CONFIGMG worker is
+                                           querying or removing the devnode
+                                           (task 43.47): not stepped       */
 
 /* What the driver is to do next (CmEjNext). */
 #define CM_EJ_DO_NONE           0UL
@@ -174,6 +195,15 @@
                                            up again by its instance id      */
 #define CM_EJ_F_NOREQ           0x4000UL /* an UP entry, its request not
                                            published: no answer can come    */
+#define CM_EJ_F_VANISH          0x8000UL /* a vanished child's transaction,
+                                           or a CONFIGMG worker's claim
+                                           (task 43.47)                     */
+#define CM_EJ_F_PARKED          0x10000UL /* a claim whose query was
+                                           accepted and whose removal
+                                           failed, with no call worker to
+                                           take it over: the CONFIGMG
+                                           worker's to finish, removal
+                                           only                             */
 
 /* The inputs of one step. */
 typedef struct _CM_EJ_IN {
@@ -217,6 +247,8 @@ typedef struct _CM_EJ_TX {
     ULONG AdoptAt;          /* the last lookup by id that read the tree
                                incompletely                                 */
     ULONG Generation;       /* the request's LinkGeneration                */
+    ULONG QueryAttempts;    /* a vanished child's queries asked            */
+    ULONG LastQueryAt;      /* ... and the last one's submission           */
 } CM_EJ_TX;
 
 /* ---- the ask and its acceptance --------------------------------------- */
@@ -326,6 +358,136 @@ VOID CmEjAdopt(CM_EJ_TX *t, ULONG nowMs);
 /* Whether the removal is authorised and still owed: the record's own
  * worker may complete it after the NHI's stop, alone. */
 BOOLEAN CmEjOwesRemoval(const CM_EJ_TX *t);
+
+/* ---- the vanished child (task 43.47) ---------------------------------- */
+
+/* A vanished child of member `bridge`, its devnode read by the sweep: QUERY
+ * owed at once, no tool's result slot (consumed from the start). */
+VOID CmEjBeginVanished(CM_EJ_TX *t, ULONG bridge, ULONG devnode,
+                       ULONG nowMs);
+
+/* The CONFIGMG worker's claim on member `bridge`'s `devnode`, made before
+ * its Query_Remove_SubTree: CM_EJ_P_CLAIMED, which the thread never steps
+ * and which holds the member's gate. */
+VOID CmEjClaimBegin(CM_EJ_TX *t, ULONG bridge, ULONG devnode, ULONG nowMs);
+
+/*
+ * The worker's claim ended: its query's CONFIGRET (CM_EJ_NO_CR: no query
+ * was made) and, after an accepted one, its last Remove_SubTree's, the
+ * clock at its first and last attempts and their count, and the Stor98
+ * request it left in place (`entry` CM_EJ_NONE: none; its sequence and
+ * generation). A query not made, a removal that succeeded or found the
+ * devnode gone, or a refusal of a loss's or removal-only request's claim
+ * (their rule: settled): the record FREE, FALSE. With `takeover` (the
+ * member's call worker live): a refusal of a vanished child's claim
+ * (`vanished`) becomes the vanished transaction in QUERY, its retries
+ * owed, TRUE; an accepted query whose removal failed, the vanished
+ * transaction in REMOVE - authorised, never queried again, R11 O6 read
+ * from `firstAt`, the request withdrawn by it on success - TRUE. Without
+ * it a refusal frees the claim, and an accepted query whose removal
+ * failed parks it (CM_EJ_F_PARKED, its request kept in it), FALSE.
+ */
+BOOLEAN CmEjClaimEnd(CM_EJ_TX *t, ULONG queryCr, ULONG removeCr,
+                     ULONG firstAt, ULONG lastAt, ULONG attempts,
+                     ULONG entry, ULONG sequence, ULONG generation,
+                     BOOLEAN vanished, BOOLEAN takeover, ULONG nowMs);
+
+/* A parked claim (CM_EJ_F_PARKED) taken up again by the CONFIGMG worker
+ * for the same devnode: TRUE, the claim in use again, its query accepted
+ * already - the worker makes the removal alone, never a second query. */
+BOOLEAN CmEjClaimResume(CM_EJ_TX *t);
+
+/* A parked claim's own retry, the CONFIGMG worker's scheduler (no call
+ * worker): CM_EJ_DO_QUERY (a vanished child's refused query) or
+ * CM_EJ_DO_REMOVE (an accepted one) once CM_NVLINK_RETRY_MS have passed
+ * since its last attempt, the claim in use again; CM_EJ_DO_NONE
+ * otherwise. Its end is CmEjClaimEnd again. */
+ULONG CmEjClaimRetry(CM_EJ_TX *t, ULONG nowMs);
+
+/* A parked claim found by a start whose member's call worker is live: the
+ * vanished transaction in REMOVE (or QUERY, a refused one), as a takeover
+ * makes it (TRUE). */
+BOOLEAN CmEjClaimAdopt(CM_EJ_TX *t, ULONG nowMs);
+
+/* The claim's query accepted and its first removal attempt about to be
+ * made at `firstAt`: published before the call, so O6's 30 s are read
+ * while it runs (CmEjClaimBlocked). */
+VOID CmEjClaimProgress(CM_EJ_TX *t, ULONG firstAt);
+
+/* TRUE when a claim's removal has run past R11 O6's deadline: the
+ * member's blocked bit. */
+BOOLEAN CmEjClaimBlocked(const CM_EJ_TX *t, ULONG nowMs);
+
+/* The sweep of one member: which of its children vanished, one reading
+ * at a time on its call worker (record 21 section 7.2, "The vanished-child
+ * transaction"). */
+#define CM_EJ_SW_IDLE           0UL
+#define CM_EJ_SW_READ           1UL     /* a reading owed now              */
+#define CM_EJ_SW_RETRY          2UL     /* ... at LastAt + the retry        */
+#define CM_EJ_SW_OUT            3UL     /* submitted                       */
+
+/* How a sweep ended. */
+#define CM_EJ_SW_END_NONE       0UL     /* not ended                       */
+#define CM_EJ_SW_END_DONE       1UL     /* a complete reading, none left   */
+
+typedef struct _CM_EJ_SWEEP {
+    ULONG State;            /* CM_EJ_SW_*                                  */
+    ULONG BeganAt;
+    ULONG LastAt;           /* the last reading taken                      */
+    ULONG Readings;
+    ULONG Records;          /* records it made                             */
+    ULONG Again;            /* asked again while a reading was out         */
+} CM_EJ_SWEEP;
+
+/* A sweep asked: a reading owed at once (a sweep already running reads
+ * again from now, its records kept). */
+VOID CmEjSweepBegin(CM_EJ_SWEEP *s, ULONG nowMs);
+
+/* TRUE when a reading is to be submitted now (`slotIdle`: the member's
+ * worker can take it). */
+BOOLEAN CmEjSweepNext(const CM_EJ_SWEEP *s, BOOLEAN slotIdle, ULONG nowMs);
+
+/* A child a reading found when no record was free, kept by the driver,
+ * made a record since: the next reading at once. */
+VOID CmEjSweepMade(CM_EJ_SWEEP *s);
+
+/* The reading submitted (`ok`), or withdrawn or lost (READ again). */
+VOID CmEjSweepSubmitted(CM_EJ_SWEEP *s, BOOLEAN ok);
+VOID CmEjSweepLost(CM_EJ_SWEEP *s);
+
+/*
+ * A reading taken: `complete` every child and the bus read; `found` a
+ * vanished child no record names was reported, and `made` its record was
+ * made (FALSE: no free record - the driver keeps the child and makes its
+ * record later, CmEjSweepMade - or a record named it since); `claims`
+ * vanished children held for now (a CONFIGMG worker's claim, an eject's
+ * query not yet accepted). An incomplete reading is made again every
+ * CM_NVLINK_RETRY_MS, with no deadline. Returns CM_EJ_SW_END_* (the
+ * sweep IDLE unless NONE).
+ */
+ULONG CmEjSweepTake(CM_EJ_SWEEP *s, BOOLEAN complete, BOOLEAN found,
+                    BOOLEAN made, ULONG claims, ULONG nowMs);
+
+/* TRUE while the sweep runs: the member's gate. */
+BOOLEAN CmEjSweepHeld(const CM_EJ_SWEEP *s);
+
+/* Who names a child (CmEjSweepPick's `owner`). */
+#define CM_EJ_OWN_NONE          0UL
+#define CM_EJ_OWN_RECORD        1UL     /* a transaction's record          */
+#define CM_EJ_OWN_CLAIM         2UL     /* held for now: a CONFIGMG worker's
+                                           claim, an eject's query not yet
+                                           accepted                        */
+
+/*
+ * The reading's verdict over a member's `n` children: child c is vanished
+ * when its vendor and device (`childIds[c]`, read from its instance id; 0
+ * not read: never vanished) is none of the `nIds` identities answering on
+ * the member's secondary bus. The first vanished child no record or claim
+ * names (CM_EJ_NONE for none); *claims the vanished children under a
+ * claim.
+ */
+ULONG CmEjSweepPick(const ULONG *busIds, ULONG nIds, const ULONG *childIds,
+                    const ULONG *owner, ULONG n, PULONG claims);
 
 /* ---- the statement decision (part 2) ---------------------------------- */
 
@@ -496,6 +658,69 @@ ULONG CmEjectDownLeft(struct _CM_NHI *nhi, ULONG budgetMs);
  * detached, and one whose removal is authorised and owed is handed to its
  * member's worker to complete alone (CM_CALL_K_DETACH). PASSIVE_LEVEL. */
 VOID CmEjectStop(struct _CM_NHI *nhi);
+
+/*
+ * Task 43.47. The member `member`'s sweep for its vanished children, asked
+ * where its re-enumeration would have removed them: TRUE when it was
+ * entered (98 SE and ME, the member's call worker live; the caller has
+ * read the host interface live) - the member's gate is then up and the
+ * caller holds the re-enumeration without the removal, which is the
+ * sweep's. FALSE: the caller posts the removal as before. On the thread.
+ */
+BOOLEAN CmEjectSweep(struct _CM_NHI *nhi, ULONG member);
+
+/* The transactions' clock (ms), for the CONFIGMG worker's attempts. Any
+ * IRQL <= DISPATCH_LEVEL. */
+ULONG CmEjectNow(VOID);
+
+/*
+ * The CONFIGMG worker's claim on member `bridge`'s `devnode` (instance id
+ * `id`) before its Query_Remove_SubTree (record 21 section 7.2, "The
+ * takeovers"): a nonzero handle, or 0 when a record already names that
+ * devnode with that id (*owned TRUE: never call it) or no record is free
+ * (*owned FALSE: not called now). *accepted TRUE when the handle is a
+ * parked claim of the same devnode taken up again (CmEjClaimResume): its
+ * query was accepted, so the worker makes the removal alone, with the
+ * Stor98 request it left in place (*entry, CM_EJ_NONE none, *sequence,
+ * *generation). <= DISPATCH_LEVEL; on that worker.
+ */
+ULONG CmEjectClaim(ULONG bridge, ULONG devnode, const char *id,
+                   BOOLEAN *owned, BOOLEAN *accepted, PULONG entry,
+                   PULONG sequence, PULONG generation);
+
+/* The claim's query accepted, its first removal attempt about to be made
+ * at `firstAt` (CmEjClaimProgress). <= DISPATCH_LEVEL. */
+VOID CmEjectClaimAccepted(ULONG claim, ULONG firstAt);
+
+/* The claim's end, as CmEjClaimEnd (`vanished`: a vanished child's
+ * removal, not a loss's): TRUE when the record became the vanished
+ * transaction - only with `takeover`, the member's call worker live (the
+ * worker then leaves its request in place and makes no rescan of its
+ * own); without it the claim is freed. <= DISPATCH_LEVEL. */
+BOOLEAN CmEjectClaimEnd(ULONG claim, ULONG queryCr, ULONG removeCr,
+                        ULONG firstAt, ULONG lastAt, ULONG attempts,
+                        ULONG entry, ULONG sequence, ULONG generation,
+                        BOOLEAN vanished, BOOLEAN takeover);
+
+/*
+ * The CONFIGMG worker's scheduler for its parked claims on member
+ * `bridge` (no call worker to take them over): the next one due
+ * (CmEjClaimRetry) as a claim in use - its devnode, instance id (at most
+ * `idChars`), CM_EJ_DO_QUERY or CM_EJ_DO_REMOVE in *what, and the Stor98
+ * request it keeps - or 0. Ended by CmEjectClaimEnd. CmEjectParkedAny:
+ * whether member `bridge` has one parked (the worker's timed wait).
+ * <= DISPATCH_LEVEL.
+ */
+ULONG CmEjectParkedNext(ULONG bridge, PULONG devnode, char *id,
+                        ULONG idChars, PULONG what, PULONG entry,
+                        PULONG sequence, PULONG generation);
+BOOLEAN CmEjectParkedAny(ULONG bridge);
+
+/* TRUE while a sweep, a vanished child's record (retired and not yet
+ * pruned included) or a claim on member `bridge` stands: the CONFIGMG
+ * worker makes no re-enumeration of it. Any IRQL <= DISPATCH_LEVEL; it
+ * takes the records' lock, the innermost. */
+BOOLEAN CmEjectVanishHeld(ULONG bridge);
 
 #endif /* !XHCI_HOST_TEST */
 

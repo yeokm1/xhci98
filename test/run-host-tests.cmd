@@ -243,6 +243,10 @@ rem                  (src\cm\cm_eject.c, task 43.18): the ask's checks,
 rem                  the result's layout, every branch through a fake
 rem                  configuration manager, R11 O6, a stopped start's
 rem                  record adopted, the decision's identity and deadline
+rem                  (43.18); the vanished child's transaction and sweep
+rem                  (43.47): the veto retried with a re-plug held, the
+rem                  stop and adoption, O6 with no teardown, the claims
+rem                  taken over, parked and resumed, two members
 rem   test_cm_nvlink - the stor98 link-state channel's pure half
 rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
 rem                  table of stor98's stor98cm.h, its entry protocol read
@@ -576,8 +580,9 @@ call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
 rem test_cm_call links nothing else: the call workers' handoff word is pure
 rem (42-A.12).
 call :run test_cm_call "test_cm_call.c ..\src\cm\cm_call.c"
-rem test_cm_eject links the transaction's pure half alone (43.18).
-call :run test_cm_eject "test_cm_eject.c ..\src\cm\cm_eject.c"
+rem test_cm_eject links the transaction's pure half and, for the vanished
+rem child's held re-enumeration, the channel's pure hold (43.18, 43.47).
+call :run test_cm_eject "test_cm_eject.c ..\src\cm\cm_eject.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
