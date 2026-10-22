@@ -307,6 +307,44 @@ int inst_cddb_service_gone(const char *service, const char *const *gone,
 /* 1 when a SystemStartOptions value holds the word TESTSIGNING. */
 int inst_testsigning(const char *options);
 
+/* The signature note a run prints (record 23 section 5.10, revision 27):
+ * none; the x64 test-signing note (Vista and later, x64); or, on 32-bit
+ * Windows 8 and 8.1, the Secure Boot note, since Microsoft's Driver
+ * Signing Policy lists 32-bit beside 64-bit for 8 and 8.1 with Secure
+ * Boot on and the x86 drivers are never signed (AGENTS.md). arch is
+ * INST_ARCH_*; nt and the version as RtlGetVersion reads them. */
+#define INST_SIG_NONE       0
+#define INST_SIG_X64        1
+#define INST_SIG_X86_SB     2
+int inst_sig_note_kind(int arch, int nt, INST_U32 major, INST_U32 minor);
+/* The Secure Boot note's text, INST_SIG_X86_SB. */
+const char *inst_sig_x86_sb_text(void);
+
+/* What a refused staging means (record 23 section 5.6, revision 27): for
+ * SPAPI_E_NO_CATALOG_FOR_OEM_INF on Windows 8 and 8.1 x64, which refuse
+ * an INF with no signed catalog in test-signing mode (read on 8 x64,
+ * task 43.22), the way through; NULL for any other error or system. */
+/* 64-bit Windows 8 and 8.1 and the connection manager (record 23 section
+ * 5.10, revision 27): Windows makes xhcicm a boot-start driver when it
+ * installs the tunnel-port filter on a PCI bridge, and a start that cannot
+ * load it then goes to Automatic Repair (read on 8 x64, task 43.22). So on
+ * those systems the connection manager is installed only with a
+ * test-signed package (cmSigned 1) in confirmed test-signing mode
+ * (tsOn); INST_CMW8_WARN goes on with the boot-driver warning,
+ * INST_CMW8_REFUSE refuses the run, INST_CMW8_NONE is every other
+ * system. */
+#define INST_CMW8_NONE      0
+#define INST_CMW8_WARN      1
+#define INST_CMW8_REFUSE    2
+int inst_cm_w8_gate(int arch, int nt, INST_U32 major, INST_U32 minor,
+                    int cmSigned, int tsOn);
+const char *inst_cm_w8_warn_text(void);
+const char *inst_cm_w8_refuse_text(void);
+
+#define INST_E_NO_CATALOG   0xE000022FUL
+const char *inst_stage_error_text(INST_U32 err, int arch, int nt,
+                                  INST_U32 major, INST_U32 minor);
+
 /* ---- registry values (record 23 section 8) ---------------------------------------- */
 
 #define INST_INF_XHCI       0

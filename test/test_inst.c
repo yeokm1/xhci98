@@ -184,6 +184,61 @@ static void test_cm_only(void)
           strcmp(inst_os_name(0, 4, 10), "Windows 98 SE") == 0 &&
           strcmp(inst_os_name(1, 10, 0), "Windows") == 0, "the names");
 
+    /* The signature note (section 5.10, revision 27; task 43.22). */
+    CHECK(inst_sig_note_kind(INST_ARCH_X86, 0, 4, 10) == INST_SIG_NONE &&
+          inst_sig_note_kind(INST_ARCH_X86, 1, 5, 1) == INST_SIG_NONE &&
+          inst_sig_note_kind(INST_ARCH_X86, 1, 6, 0) == INST_SIG_NONE &&
+          inst_sig_note_kind(INST_ARCH_X86, 1, 6, 1) == INST_SIG_NONE,
+          "x86 98 SE to 7: no signature note");
+    CHECK(inst_sig_note_kind(INST_ARCH_X86, 1, 6, 2) == INST_SIG_X86_SB &&
+          inst_sig_note_kind(INST_ARCH_X86, 1, 6, 3) == INST_SIG_X86_SB,
+          "x86 8 and 8.1: the Secure Boot note");
+    CHECK(inst_sig_note_kind(INST_ARCH_X86, 1, 10, 0) == INST_SIG_NONE,
+          "x86 10: not yet (43.34)");
+    CHECK(inst_sig_note_kind(INST_ARCH_AMD64, 1, 5, 2) == INST_SIG_NONE,
+          "XP x64: no note");
+    CHECK(inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, 0) == INST_SIG_X64 &&
+          inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, 1) == INST_SIG_X64 &&
+          inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, 2) == INST_SIG_X64 &&
+          inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, 3) == INST_SIG_X64,
+          "x64 Vista to 8.1: the test-signing note");
+    CHECK(strstr(inst_sig_x86_sb_text(), "Secure Boot") != NULL &&
+          strstr(inst_sig_x86_sb_text(), "test-signing mode does not help")
+          != NULL, "the Secure Boot note's words");
+    CHECK(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, 1, 6, 2)
+          != NULL &&
+          inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, 1, 6, 3)
+          != NULL, "8 and 8.1 x64: no catalog explained");
+    CHECK(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, 1, 6, 1)
+          == NULL &&
+          inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, 1, 5, 2)
+          == NULL &&
+          inst_stage_error_text(0xE0000203UL, INST_ARCH_AMD64, 1, 6, 2)
+          == NULL &&
+          inst_stage_error_text(5UL, INST_ARCH_AMD64, 1, 6, 3) == NULL,
+          "other systems and errors: nothing added");
+    CHECK(strstr(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, 1,
+                                       6, 2), "Startup Settings") != NULL,
+          "the way through is named");
+    /* 8 and 8.1 x64 make xhcicm a boot driver (task 43.22). */
+    CHECK(inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 2, 1, 1) == INST_CMW8_WARN &&
+          inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 3, 1, 1) == INST_CMW8_WARN,
+          "8 and 8.1 x64, test-signed, test-signing on: the warning");
+    CHECK(inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 2, 1, 0) == INST_CMW8_REFUSE &&
+          inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 3, 0, 1) == INST_CMW8_REFUSE &&
+          inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 2, -1, 1) == INST_CMW8_REFUSE &&
+          inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 3, 0, 0) == INST_CMW8_REFUSE,
+          "8 and 8.1 x64: refused without test-signing or a test signature");
+    CHECK(inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 1, 0, 0) == INST_CMW8_NONE &&
+          inst_cm_w8_gate(INST_ARCH_AMD64, 1, 6, 0, 1, 0) == INST_CMW8_NONE &&
+          inst_cm_w8_gate(INST_ARCH_AMD64, 1, 5, 2, 0, 0) == INST_CMW8_NONE &&
+          inst_cm_w8_gate(INST_ARCH_X86, 1, 6, 2, 0, 0) == INST_CMW8_NONE &&
+          inst_cm_w8_gate(INST_ARCH_X86, 1, 6, 3, 0, 0) == INST_CMW8_NONE,
+          "Vista, 7, XP x64 and 32-bit 8 and 8.1: not gated");
+    CHECK(strstr(inst_cm_w8_refuse_text(), "bcdedit /set testsigning on")
+          != NULL && strstr(inst_cm_w8_warn_text(), "Automatic Repair") != NULL,
+          "the gate's words");
+
     /* The USB drivers (section 4.5). */
     /* Draft 20 (task 43.43): every box on every system. */
     CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 0, 0, &offered, &why) == 1 &&

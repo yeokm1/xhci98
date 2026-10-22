@@ -262,6 +262,7 @@ static int idle_filtered_port(const DEVREC *d, int inf);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
+static int cmW8Refused;      /* 8 and 8.1 x64: the CM refused (43.22) */
 static int pkgSigned = -1;  /* xhci98.sys signed: 1, unsigned: 0, unread: -1 */
 static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
 static char srcDir[INST_PATH_CHARS];
@@ -6140,10 +6141,17 @@ static int stage_nt(void)
         logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, media);
         if (!api.CopyOem(path, media, SPOST_PATH, 0, dest, sizeof(dest), NULL,
                          &component)) {
+            DWORD err = GetLastError();
+            const char *why = inst_stage_error_text(err, INST_MY_ARCH,
+                                                    envNow.Nt, envNow.Major,
+                                                    envNow.Minor);
             out("%s could not be staged (error 0x%08lX).%s\n", instInfFile[k],
-                (unsigned long)GetLastError(),
+                (unsigned long)err,
                 trapOem[k][0] ? " Run INSTALL.BAT again: it stages from the "
                                 "same local copy." : "");
+            if (why != NULL) {
+                out("%s\n", why);
+            }
             return 0;
         }
         if (k == INST_INF_CM) {
@@ -7151,6 +7159,13 @@ static void check_results(void)
             out("  %s does not load: test-signing mode is needed (see the "
                 "note above).\n", d->Desc);
             flagSteps = 1;
+        } else if (inst_sig_note_kind(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                                      envNow.Minor) == INST_SIG_X86_SB &&
+                   d->Problem == 52UL) {
+            out("  %s does not load: Windows refuses the unsigned driver "
+                "while Secure Boot\n  is on (see the note above).\n",
+                d->Desc);
+            flagSteps = 1;
         } else if (changedReboot[c] && d->Problem == 0) {
             /* The old release runs until the restart its install asked for. */
         } else if (inst_tunnel_restart(win2000, tunnelChanged, changedInf[c],
@@ -7233,7 +7248,25 @@ static void testsigning_note_cm(void);
  * imported. */
 static void testsigning_note(void)
 {
+    cmW8Refused = 0;
     testsigning_note0();
+    if (usbInclude && tbInclude) {
+        /* The USB drivers ticked on 8 and 8.1 x64 (task 43.43 case 3): the
+         * connection manager in the run is a boot driver all the same. */
+        switch (inst_cm_w8_gate(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                                envNow.Minor, pkgCmSigned,
+                                testSigningConfirmed)) {
+        case INST_CMW8_WARN:
+            out("%s\n", inst_cm_w8_warn_text());
+            break;
+        case INST_CMW8_REFUSE:
+            cmW8Refused = 1;
+            out("%s\n", inst_cm_w8_refuse_text());
+            break;
+        default:
+            break;
+        }
+    }
     if (INST_MY_ARCH == INST_ARCH_AMD64 && envNow.Major >= 6 && s98Include) {
         out("stor98.sys, the bundled Stor98, is signed (or not) with the "
             "drivers above, by\nthe same certificate: it loads as they "
@@ -7246,7 +7279,14 @@ static void testsigning_note0(void)
     char opt[512];
 
     testSigningConfirmed = 0;
-    if (INST_MY_ARCH != INST_ARCH_AMD64 || envNow.Major < 6) {
+    switch (inst_sig_note_kind(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                               envNow.Minor)) {
+    case INST_SIG_X64:
+        break;
+    case INST_SIG_X86_SB:
+        out("%s\n", inst_sig_x86_sb_text());
+        return;
+    default:
         return;
     }
     if (!usbInclude) {
@@ -7312,6 +7352,22 @@ static void testsigning_note_cm(void)
             testSigningConfirmed = 1;
         }
     }
+    /* Task 43.22: 8 and 8.1 x64 make xhcicm a boot driver. */
+    switch (inst_cm_w8_gate(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                            envNow.Minor, pkgCmSigned,
+                            testSigningConfirmed)) {
+    case INST_CMW8_WARN:
+        out("Test-signing mode is on: the test-signed x64 connection manager "
+            "loads.\n%s\n", inst_cm_w8_warn_text());
+        return;
+    case INST_CMW8_REFUSE:
+        testSigningConfirmed = 0;
+        cmW8Refused = 1;
+        out("%s\n", inst_cm_w8_refuse_text());
+        return;
+    default:
+        break;
+    }
     if (pkgCmSigned < 0) {
         testSigningConfirmed = 0;
         out("NOTE: whether the x64 connection manager (xhcicm.sys) carries "
@@ -7339,10 +7395,7 @@ static void testsigning_note_cm(void)
     }
     if (w8) {
         out("Windows 8 and 8.1: test-signing mode can be turned on only with "
-            "Secure Boot\noff in the computer's firmware setup. The start "
-            "without signature enforcement\nis Advanced startup, Troubleshoot, "
-            "Startup Settings, \"Disable driver\nsignature enforcement\", at "
-            "every start.\n");
+            "Secure Boot\noff in the computer's firmware setup.\n");
     }
     out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
         "(52 on 7).\nIf this start is one without signature enforcement, go "
@@ -7665,6 +7718,9 @@ static int plan_nt(void)
     memset(refusalSeen, 0, sizeof(refusalSeen));
     note_refusals(1);
     testsigning_note();
+    if (cmW8Refused) {
+        return INST_EXIT_REFUSED;
+    }
     return -1;
 }
 
@@ -19679,6 +19735,14 @@ static void st_screens_once(int longest)
         for (i = -1; i <= 1; i++) {
             pkgCmSigned = i;
             testsigning_note_cm();
+        }
+        if (k == 0) {
+            /* Test-signing mode confirmed, and what 32-bit 8 and 8.1 print
+             * in its place (task 43.22). */
+            pkgCmSigned = 1;
+            testSigningConfirmed = 1;
+            testsigning_note_cm();
+            out("%s\n", inst_sig_x86_sb_text());
         }
         pkgCmSigned = -1;
         testSigningConfirmed = 0;

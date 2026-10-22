@@ -1545,6 +1545,83 @@ int inst_testsigning(const char *options)
     return 0;
 }
 
+int inst_sig_note_kind(int arch, int nt, INST_U32 major, INST_U32 minor)
+{
+    if (!nt || major < 6UL) {
+        return INST_SIG_NONE;
+    }
+    if (arch == INST_ARCH_AMD64) {
+        return INST_SIG_X64;
+    }
+    /* 10 (task 43.34) is admitted by no version rule yet. */
+    if (major == 6UL && (minor == 2UL || minor == 3UL)) {
+        return INST_SIG_X86_SB;
+    }
+    return INST_SIG_NONE;
+}
+
+const char *inst_sig_x86_sb_text(void)
+{
+    return "NOTE: 32-bit Windows 8 and 8.1 load only signed drivers when "
+           "Secure Boot is on\nin the computer's firmware setup, and this "
+           "package's 32-bit drivers are not\nsigned. With Secure Boot on, "
+           "turn it off there, or start with Advanced startup,\n"
+           "Troubleshoot, Startup Settings, \"Disable driver signature "
+           "enforcement\", at\nevery start; test-signing mode does not help. "
+           "A computer that starts from a\nlegacy BIOS has no Secure Boot, "
+           "and the drivers load as on Windows 7.\n";
+}
+
+int inst_cm_w8_gate(int arch, int nt, INST_U32 major, INST_U32 minor,
+                    int cmSigned, int tsOn)
+{
+    if (!nt || arch != INST_ARCH_AMD64 || major != 6UL ||
+        (minor != 2UL && minor != 3UL)) {
+        return INST_CMW8_NONE;
+    }
+    return (cmSigned == 1 && tsOn) ? INST_CMW8_WARN : INST_CMW8_REFUSE;
+}
+
+const char *inst_cm_w8_warn_text(void)
+{
+    return "Windows 8 and 8.1 make the connection manager a boot driver (it "
+           "filters a PCI\nbridge). Keep test-signing mode on, and Secure Boot "
+           "off, while it is installed:\nstarted without test-signing mode, "
+           "Windows 8 and 8.1 stop in Automatic Repair\nuntil a start with "
+           "driver signature enforcement disabled (Advanced startup,\n"
+           "Troubleshoot, Advanced options, Startup Settings, Restart, then 7). "
+           "From such a\nstart, turn test-signing mode on again or run the "
+           "uninstall.\n";
+}
+
+const char *inst_cm_w8_refuse_text(void)
+{
+    return "REFUSED: on 64-bit Windows 8 and 8.1 the connection manager is "
+           "installed only\nin test-signing mode, from a test-signed package. "
+           "Windows makes it a boot\ndriver, and a start that cannot load it "
+           "does not finish (Automatic Repair).\nTurn test-signing mode on - "
+           "Secure Boot off in the firmware setup, then in an\nelevated "
+           "Command Prompt: bcdedit /set testsigning on  - restart, and run "
+           "this\nagain. Nothing was changed.\n";
+}
+
+const char *inst_stage_error_text(INST_U32 err, int arch, int nt,
+                                  INST_U32 major, INST_U32 minor)
+{
+    if (err != INST_E_NO_CATALOG || !nt || arch != INST_ARCH_AMD64 ||
+        major != 6UL || (minor != 2UL && minor != 3UL)) {
+        return NULL;
+    }
+    return "64-bit Windows 8 and 8.1 install a driver package only with a "
+           "signed catalog,\neven in test-signing mode, and this package's "
+           "INFs have none (its x64\ndrivers carry the project's test "
+           "signature in the files themselves). To\ninstall it, keep "
+           "test-signing mode on, start once with driver signature\n"
+           "enforcement disabled - Advanced startup, Troubleshoot, Advanced "
+           "options,\nStartup Settings, Restart, then 7 - and run the "
+           "installer again. Later starts\nneed only test-signing mode.";
+}
+
 /* ======================================================================== */
 /* Registry values                                                           */
 /* ======================================================================== */
