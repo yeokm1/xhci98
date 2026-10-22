@@ -339,7 +339,8 @@ On Vista x64 and 7 x64 the drivers are test-signed: they load in
 test-signing mode (bcdedit /set testsigning on, then restart) or on a
 start where F8 chose "Disable Driver Signature Enforcement"; on 8, 8.1
 and 10 x64 test-signing mode needs Secure Boot off first (above). The
-installer says whether it could confirm test-signing mode; it never changes it.
+installer says whether it could confirm test-signing mode; it never
+changes it.
 
 The options
 -----------
