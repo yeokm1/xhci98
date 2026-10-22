@@ -22305,7 +22305,9 @@ static int other_adopt(int set)
     }
     if (e > 0 && (!other_adopted(set) ||
                   (reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made) &&
-                   made == 1))) {
+                   made != 0))) {
+        /* Not an adoption cut short: RecordMade 1 is a whole record, 2 an
+         * uninstall whose copies are done. */
         return 0;
     }
     join(dir, sizeof(dir), toolDir, inst_other_folder(set));
@@ -22456,9 +22458,36 @@ static int other_adopted_keep(int set, const char *dir, const OTHREC *recs,
         }
         return 1;
     }
-    (void)recs;
-    (void)count;
-    (void)i;
+    /* The recorded INFs too, by their recorded bytes: a source INF since
+     * deleted or changed may still be in the store. */
+    for (i = 0; i < count; i++) {
+        char list[1024];
+        const char *pth = recs[i].Path;
+        size_t pl = strlen(pth);
+        if (pl < 4 || !inst_eq(pth + pl - 4, ".inf") || pl <= dl + 1) {
+            continue;
+        }
+        if (!other_inventory(recs[i].Hash, 0xFFFFFFFFUL, list,
+                             sizeof(list))) {
+            out("  The driver store could not be listed: %s's copies are "
+                "left.\n", inst_other_label(set));
+            flagSteps = 1;
+            return 0;
+        }
+        if (list[0] != '\0') {
+            char folder[INST_PATH_CHARS];
+            inst_copy(folder, pth, sizeof(folder));
+            if (strrchr(folder, '\\') != NULL) {
+                *strrchr(folder, '\\') = '\0';
+            }
+            if (strlen(kept) + strlen(folder) + 2 >= cap) {
+                othKeepFull = 1;
+            } else {
+                strcat(kept, folder);
+                strcat(kept, ";");
+            }
+        }
+    }
     return other_keep_store_infs(set, dir, kept, cap);
 }
 
@@ -22841,8 +22870,17 @@ static void other_recover_only(int set)
     if (opts.List) {
         return;
     }
-    if (other_key_exists(set) == 0 && other_adopt(set) <= 0) {
-        return;
+    if (other_key_exists(set) == 0 || other_adopted(set)) {
+        int ad = other_adopt(set);
+        if (ad < 0) {
+            out("%s: its record could not be taken up again; it is left as "
+                "it is.\n", inst_other_label(set));
+            flagSteps = 1;
+            return;
+        }
+        if (ad == 0 && other_key_exists(set) != 1) {
+            return;
+        }
     }
     if (other_key_exists(set) != 1) {
         return;
