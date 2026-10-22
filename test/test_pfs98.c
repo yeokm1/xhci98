@@ -209,6 +209,21 @@ static void test_buckets_page(void)
     s98_parse(ans, S98_ANSWER_BYTES, &a);
     s98_diff(&b, &a, &d);
     CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_HIDDEN, "a whole minority: hidden");
+    /* nine whole scattered requests and ten cut ones (eight full pieces each) */
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    put_total(S98_T_RUNS + 3 * 10 + 4, 9);
+    put_total(S98_T_SRBSIZE + 13 + 6, 80);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_HIDDEN, "nine whole, ten cut: hidden");
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    put_total(S98_T_RUNS + 3 * 10 + 4, 11);
+    put_total(S98_T_SRBSIZE + 13 + 6, 80);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_YES, "eleven whole, ten cut: scattered");
 }
 
 int main(void)

@@ -689,7 +689,8 @@ int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_
         } else {
             sec += (pf_u64)s->timeSec * times;
         }
-        sec += (pf_u64)p->pauseSec;
+        /* the pause comes before every pass, a warm-up's included */
+        sec += (pf_u64)p->pauseSec * times;
     }
     if (pl->budgetWrites > PF_GEN_LAST) {
         return pf_refuse(why, whyCap, "This run would write too many requests to verify; lower the total or the passes.");

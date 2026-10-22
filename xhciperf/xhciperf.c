@@ -2804,6 +2804,12 @@ static void cell_text(int step, char *big, size_t bcap, char *sub, size_t scap)
     }
     if (sh.status == PF_ST_DATAERR) {
         sz_cat(sub, scap, ", data error");
+    } else if (sh.status == PF_ST_FAILED) {
+        sz_cat(sub, scap, ", failed");
+    } else if (sh.status == PF_ST_STOPPED) {
+        sz_cat(sub, scap, ", stopped");
+    } else if (sh.status == PF_ST_SKIPPED) {
+        sz_cat(sub, scap, ", not accepted");
     }
     if (sh.cpuLimited) {
         sz_cat(sub, scap, ", cpu");
@@ -3508,6 +3514,7 @@ static void start_run(void)
         controls_enable(1);
         EnableWindow(ctl(IDC_START), TRUE);
         EnableWindow(ctl(IDC_STOP), FALSE);
+        refuse("The run could not start (no thread could be made).");
     }
     InvalidateRect(g_view, NULL, TRUE);
 }

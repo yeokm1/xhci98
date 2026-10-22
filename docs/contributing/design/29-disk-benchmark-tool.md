@@ -1529,6 +1529,10 @@ a choice:
   to outnumber those cut into 63 KiB pieces or not seen.
 - **The millisecond timer** (no performance counter) takes its differences
   as DWORDs, across `GetTickCount`'s rollover.
+- **The estimate** counts the pause before every pass, a warm-up's
+  included. A test with a failed, stopped or refused pass shows that beside
+  its rate. A start whose controller thread cannot be made is refused (exit
+  2).
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

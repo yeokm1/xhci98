@@ -519,6 +519,21 @@ static void test_key_saved(void)
         CHECK_EQ(pf_plan(&q, &e, &pq, why, sizeof(why)), PF_OK, "a read-only verified run plans");
         CHECK_EQ(pq.mapBlock, 4096u, "its map's block is the smallest read");
         CHECK(pq.mapBlocks != 0, "and it has a map");
+        /* the pause before every pass, a warm-up's included */
+        {
+            PF_PLAN p0, p1;
+            pf_u32 d;
+
+            pf_defaults(&q, PF_OS_NT);
+            q.passes = 3;
+            q.warmup = 1;
+            q.pauseSec = 0;
+            CHECK_EQ(pf_plan(&q, &e, &p0, why, sizeof(why)), PF_OK, "planned without a pause");
+            q.pauseSec = 5;
+            CHECK_EQ(pf_plan(&q, &e, &p1, why, sizeof(why)), PF_OK, "planned with a pause");
+            d = p1.estimateSec - p0.estimateSec;
+            CHECK_EQ(d, (pf_u32)p0.nsteps * 4u * 5u, "a pause per pass and per warm-up");
+        }
     }
     CHECK_EQ(pf_change10(110, 100), 100, "+10.0%");
     CHECK_EQ(pf_change10(90, 100), -100, "-10.0%");

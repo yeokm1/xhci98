@@ -209,10 +209,19 @@ int s98_scattered(const S98_DELTA *d, pf_u32 size, int write)
         }
         return S98_SCAT_UNKNOWN;
     }
-    /* the test's requests that arrived cut (each in this many 63 KiB
-     * pieces) or with a layout not seen: unless the whole, seen ones are
-     * most of them, the layout is hidden */
-    cutReqs = pieces / (((pf_u64)size + 64511u) / 64512u);
+    /* the test's requests that arrived cut or with a layout not seen:
+     * unless the whole, seen ones are most of them, the layout is hidden.
+     * The pieces counted are the full 63 KiB ones (a cut request's last,
+     * smaller piece falls in another class), so a request gives
+     * size / 63 KiB of them; a part group counts as a request. */
+    {
+        pf_u64 full = (pf_u64)size / 64512u;
+
+        if (full == 0) {
+            full = 1;
+        }
+        cutReqs = (pieces + full - 1u) / full;
+    }
     if (sum <= cutReqs + unseen) {
         return S98_SCAT_HIDDEN;
     }
