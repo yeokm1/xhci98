@@ -1,6 +1,10 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 5, 2026-10-22, reviewed and revised (the SRB's data range
+Status: draft 6, 2026-10-22, reviewed and revised (a request with no
+SRB admitted only for functions whose SRB construction is read before the
+code; `WININIT.INI`'s lines absent, exact or conflicting; an owned
+`.TMP` withdrawn under a foreign destination); draft 5, 2026-10-22,
+reviewed and revised (the SRB's data range
 checked for wrap, the double buffer's substitution part of the reading
 owed before the code, a foreign `.TMP` with nothing in flight a row of
 the recovery table); draft 4, 2026-10-22, reviewed and revised (the installer's
@@ -485,14 +489,19 @@ the same IOR fields without these checks, so a request that fails one
 was one whose SRB `SCSIPORT.PDR` already translated through an
 inadequate list; refusing it is stricter than today, never looser
 [hyp: no requester sends one; the pass-through and SMART legs of section
-9.2 read it]. Without `IORF_SRB_VALID` the list is built and sent once
-section 4.2's coverage check holds: `SCSIPORT.PDR` then builds the SRB
+9.2 read it]. **Without `IORF_SRB_VALID`** `SCSIPORT.PDR` builds the SRB
 itself, `DataBuffer` the linear buffer or the first fragment [static,
-Stor98's investigation section 7] and its length the IOR's count [hyp],
-which that check makes the list cover. Which functions arrive without an
-SRB is counted per function in the `qemu` build, and section 9.2 item 5
-runs the paths that do; a function seen there whose SRB is built another
-way is refused by the code until this section says how it is built.
+Stor98's investigation section 7]; its length is not read yet. So a
+request with data and no SRB is admitted only for a function whose
+SRB construction in `SCSIPORT.PDR` (its buffer and its length, in the
+three builds of section 2.1) is read and recorded with its provenance
+row before the code is written - read, write, verify and
+write-and-verify are the ones to read, being what IOS's own requests
+are - and only when section 4.2's coverage check covers that length. A
+request with data, no SRB and any other function, an undefined value
+included, is refused (section 4.5), counted per function in the `qemu`
+build; section 9.2 item 5 runs the admitted paths and reads that no
+refusal of this kind occurs in a boot, a format and the file phases.
 
 ### 4.4 The list's cost
 
@@ -840,10 +849,12 @@ setup engine copies it. On 98 SE and ME:
 **Every run first recovers** (before it classifies the file), from five
 facts: the destination's bytes (absent, `File`'s hash, `Pending`'s hash,
 other), the `.TMP`'s (absent, `Pending`'s or `File`'s hash, other),
-whether `WININIT.INI` holds this installer's exact entry (the one line
-above, both paths compared without regard to case, and nothing else
-naming either file), the record's values, and the run's **mode** for the
-layer:
+the state of `WININIT.INI`'s `[rename]` section for the two files -
+**absent** (no line names either file), **exact** (this installer's one
+line above, both paths compared without regard to case, and no other
+line naming either file) or **conflicting** (any other line naming
+either file, with or without the exact one) - the record's values, and
+the run's **mode** for the layer:
 
 - **selected**: the box ticked, its target the package's file (hash `H`);
 - **deselected**: the box unticked by the user while Stor98's box is
@@ -868,9 +879,12 @@ the leftovers are removed.
 | set | absent or `File`'s hash | `Pending`'s hash | absent | cut short before the entry (an update) or the move (a first placement) | when `Pending` is `H`, finished (the entry written, or the `.TMP` moved into an absent destination); otherwise withdrawn and `H` placed afresh | withdrawn, then as the first row | nothing |
 | set | absent or `File`'s hash | absent | any | cut short before the `.TMP` was whole, or the `.TMP` gone | the exact entry removed; `Pending` deleted; the step started again with `H` | the same, then as the first row | the same (nothing of the layer is left in flight to keep) |
 | set | any | other bytes | any | a `.TMP` that is not this installer's | left; the exact entry removed (it would rename a foreign file); no placement or update until the user removes it, a step that says so | the same, then as the first row for the destination | the exact entry removed only |
-| any | other bytes, not `Pending`'s | - | - | another installation's file | left and said; the exact entry removed; the values deleted when they name no file present | the same | the same |
+| any | other bytes, not `Pending`'s | - | not conflicting | another installation's file | left and said; the exact entry removed; a `.TMP` of `Pending`'s hash deleted, then `Pending` deleted; `File` deleted when it names no file present | the same | the exact entry removed only |
+| any | any | any | conflicting | another program's rename names one of the files | every line left as it is, said; no placement, update or queue change (a step: the user resolves it, then runs again) | a destination of `File`'s bytes deleted, a `.TMP` of `Pending`'s hash deleted, then the values; the foreign lines left and said (they may put a file there at the next start) | nothing |
 
-The table's every row is a state some step cut short can leave, and each
+The rows are read top to bottom, the conflicting row first of all. In the other rows, an entry "present" is the exact one. A
+step that fails leaves the record and the state for the next run (an
+uninstall that cannot finish says so and keeps the key). The table's every row is a state some step cut short can leave, and each
 of its actions, cut short in turn, leaves another row of it; section 9.1
 holds the table and every cut. So an untick or an uninstall over a queued
 update withdraws it before it removes the destination of `File`'s hash,
@@ -961,7 +975,11 @@ and without an SRB; a sector count whose shift overflows; a sum over
 `DCB_max_xfer_len`; a descriptor pointer that wraps; the callback table
 full and one free. The installer's recovery table of section 7.3,
 every row, and every step of a placement and of an update cut short,
-an altered `.TMP` and an altered or extra `WININIT.INI` line. And the installer's
+an altered `.TMP`, an altered or extra `WININIT.INI` line (a line
+renaming another file onto `STOR98.VXD`, a line naming `S98VSD.TMP` as a
+destination), and a queued update whose destination another installer
+replaced; and the request side's admission of a no-SRB request by
+function, a function not admitted refused. And the installer's
 decision (`inst_vsd_decide`) in the installer's host suite: every system
 by every state of Stor98's box and both switches.
 
