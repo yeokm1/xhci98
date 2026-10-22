@@ -1460,6 +1460,18 @@ a choice:
   `-SkipPerfTool`) with the freshness, shared-version and file-version
   checks, a readme and a `NOTICE.TXT`; `test-package.ps1`'s tools list and
   `build-driver.cmd`'s rebuild and self-test follow.
+- **Host-test coverage**: section 9's vectors cover what `pf_core.c` and
+  `pf_s98.c` decide (the pattern and its check, the generation allocator,
+  the plan, the statistics, the saved file). The in-flight exclusion, the
+  bounded redraw and the marking of a write that did not complete are in
+  `xhciperf.c` (`pick`, `complete_one`, `map_mark`) and are read on the legs,
+  not by host vectors.
+- **Verification**: a verified run that writes nothing checks the whole
+  file against the preparation at its end; "Verify the whole file" includes
+  the preparation's blocks; a verification that cannot read the file fails
+  the step, and a whole-file verification that fails makes the run's exit 1.
+  The window's workload controls are disabled while a run lasts. On 98 SE and
+  ME the ASPI search runs on a thread of its own, waited for at most 5 s.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

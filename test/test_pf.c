@@ -464,7 +464,8 @@ static void test_key_saved(void)
     CHECK_EQ(pf_saved_parse(buf, t.len, &sv), 0, "the saved file reads back");
     CHECK_EQ(sv.nrows, 8, "eight results");
     CHECK(strcmp(sv.rows[0].label, "Seq 1M d8 t1") == 0 && sv.rows[0].op == PF_OP_WRITE, "the first row");
-    CHECK_EQ(sv.rows[1].rate10mb, 2000, "the second row's rate");
+    CHECK_EQ(pf_saved_value(&sv.rows[1], PF_SHOW_BEST, 0), 2000, "the second row's rate");
+    CHECK_EQ(sv.rows[1].npass, 1, "one pass kept");
     CHECK(pf_key_same(sv.key, k1, diff, sizeof(diff)), "its key is the run's");
     {
         static char bad[] = "XPRF-RUN 1 file=1\r\nXPRF-RESULT 1 Seq 1M d1 t1|read|aligned|1|1|x|1|1|1\r\n";
@@ -475,6 +476,31 @@ static void test_key_saved(void)
         static char none[] = "hello\r\n";
 
         CHECK(pf_saved_parse(none, sizeof(none) - 1, &sv) != 0, "a file with no run line is refused");
+    }
+    {
+        PF_SAVED_ROW row;
+
+        memset(&row, 0, sizeof(row));
+        row.npass = 3;
+        row.bytes[0] = 100000000u;
+        row.bytes[1] = 300000000u;
+        row.bytes[2] = 200000000u;
+        row.us[0] = row.us[1] = row.us[2] = 1000000u;
+        CHECK_EQ(pf_saved_value(&row, PF_SHOW_BEST, 0), 3000, "a saved row's best");
+        CHECK_EQ(pf_saved_value(&row, PF_SHOW_MEAN, 0), 2000, "a saved row's mean");
+        CHECK_EQ(pf_saved_value(&row, PF_SHOW_MEDIAN, 0), 2000, "a saved row's median");
+    }
+    {
+        PF_PARAMS q;
+        PF_PLAN pq;
+
+        pf_defaults(&q, PF_OS_NT);
+        q.pattern = PF_PAT_VERIFY;
+        q.verify = 1;
+        q.ops = PF_OP_READ;
+        CHECK_EQ(pf_plan(&q, &e, &pq, why, sizeof(why)), PF_OK, "a read-only verified run plans");
+        CHECK_EQ(pq.mapBlock, 4096u, "its map's block is the smallest read");
+        CHECK(pq.mapBlocks != 0, "and it has a map");
     }
     CHECK_EQ(pf_change10(110, 100), 100, "+10.0%");
     CHECK_EQ(pf_change10(90, 100), -100, "-10.0%");

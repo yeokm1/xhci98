@@ -194,6 +194,8 @@ static pf_u64 g_freq;
 static PF_PARAMS g_p;
 static PF_PLAN g_plan;
 static PF_RESULT g_res[PF_MAX_STEPS * PF_MAX_PASSES];
+static CRITICAL_SECTION g_resCs;        /* g_res and g_s98steps: the controller writes, the window reads */
+static volatile LONG g_runBad;          /* a verification failed or could not read: the run's exit is 1 */
 static int g_haveResults;
 static int g_npasses;
 static volatile LONG g_running;
@@ -704,10 +706,10 @@ static void nt_find(const char *folder)
         g_s98target = sa.TargetId;
         g_s98lun = sa.Lun;
         g_s98drive = folder[0];
-        g_s98state = S98_ST_OK;
-        if (DeviceIoControl(h, PF_IOCTL_VOLUME_DISK_EXTENTS, NULL, 0, buf, sizeof(buf), &n, NULL) && n >= 4 &&
-            *(DWORD *)buf != 1) {
-            g_s98state = S98_ST_NONE;
+        /* Only a volume shown to lie on one disk is attributed to it */
+        if (DeviceIoControl(h, PF_IOCTL_VOLUME_DISK_EXTENTS, NULL, 0, buf, sizeof(buf), &n, NULL) && n >= 8 &&
+            *(DWORD *)buf == 1) {
+            g_s98state = S98_ST_OK;
         }
     }
     CloseHandle(h);
@@ -1029,13 +1031,49 @@ static int s98_read(S98_ANSWER *a)
     return ok;
 }
 
+typedef struct s98_find_req {
+    char folder[MAX_PATH];
+} S98_FIND_REQ;
+
+static unsigned __stdcall s98_find_thread(void *arg)
+{
+    aspi_find(((S98_FIND_REQ *)arg)->folder);
+    return 0;
+}
+
+/* On 9x the search asks each ASPI target and may wait on one that does
+ * not answer: it runs on a thread of its own, the caller waits at most
+ * 5 s, and a search that has not returned keeps its thread and request. */
 static void s98_find(const char *folder)
 {
-    if (g_os == PF_OS_9X) {
-        aspi_find(folder);
-    } else {
+    S98_FIND_REQ *rq;
+    HANDLE th;
+    unsigned id;
+
+    if (g_os != PF_OS_9X) {
         nt_find(folder);
+        return;
     }
+    if (g_s98state == S98_ST_DEAD) {
+        return;
+    }
+    rq = (S98_FIND_REQ *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(S98_FIND_REQ));
+    if (rq == NULL) {
+        return;
+    }
+    sz_cpy(rq->folder, sizeof(rq->folder), folder);
+    th = (HANDLE)_beginthreadex(NULL, 0, s98_find_thread, rq, 0, &id);
+    if (th == NULL) {
+        HeapFree(GetProcessHeap(), 0, rq);
+        return;
+    }
+    if (WaitForSingleObject(th, 5000) != WAIT_OBJECT_0) {
+        g_s98state = S98_ST_DEAD;
+        CloseHandle(th);
+        return;
+    }
+    CloseHandle(th);
+    HeapFree(GetProcessHeap(), 0, rq);
 }
 
 static const char *s98_state_text(void)
@@ -1107,6 +1145,7 @@ struct run {
     unsigned char *bufScatter;
     size_t stride;
     unsigned char *vbuf;
+    pf_u32 vbufBytes;
     pf_u32 sector;
     int unbuffered;
     int async;
@@ -1119,6 +1158,11 @@ struct run {
 };
 
 static RUN g_run;
+
+static int stopped(void)
+{
+    return WaitForSingleObject(g_stopEvent, 0) == WAIT_OBJECT_0;
+}
 
 static unsigned char *slot_buf(RUN *r, int thread, int slot, int buffer, int depth)
 {
@@ -1179,7 +1223,7 @@ static int pick(WORKER *w, pf_u64 *off, int write, int depth)
     pf_u64 o;
     int k, tries;
 
-    if (r->issueEnd || WaitForSingleObject(r->stepEnd, 0) == WAIT_OBJECT_0) {
+    if (r->issueEnd || WaitForSingleObject(r->stepEnd, 0) == WAIT_OBJECT_0 || stopped()) {
         return 0;
     }
     if (s->budget != 0 && w->budgetLeft < s->size) {
@@ -1353,7 +1397,7 @@ static void worker_async(WORKER *w)
     }
     for (;;) {
         int npend = 0;
-        HANDLE wl[PF_MAX_DEPTH + 1];
+        HANDLE wl[PF_MAX_DEPTH + 2];
         int wk[PF_MAX_DEPTH];
         DWORD rc;
 
@@ -1410,8 +1454,9 @@ static void worker_async(WORKER *w)
             break;
         }
         wl[npend] = r->stepEnd;
-        rc = WaitForMultipleObjects(npend + (stopping ? 0 : 1), wl, FALSE, INFINITE);
-        if (rc == WAIT_OBJECT_0 + (DWORD)npend) {
+        wl[npend + 1] = g_stopEvent;
+        rc = WaitForMultipleObjects(npend + (stopping ? 0 : 2), wl, FALSE, INFINITE);
+        if (rc == WAIT_OBJECT_0 + (DWORD)npend || rc == WAIT_OBJECT_0 + (DWORD)npend + 1) {
             /* Stop or a failure elsewhere: cancel our own, then collect each */
             if (g_cancelIo != NULL) {
                 g_cancelIo(w->h);
@@ -1594,7 +1639,9 @@ static int leftover_offer(HWND owner, const char *path, int quiet)
     char msg[512];
     pf_u64 size;
 
-    h = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+    /* Opened alone, with delete access where the system has the
+     * handle-bound deletion, and kept through the check to the deletion */
+    h = CreateFileA(path, GENERIC_READ | (g_setFileInfo != NULL ? DELETE : 0), 0, NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         return GetFileAttributesA(path) == 0xFFFFFFFF ? 0 : 1;
     }
@@ -1631,15 +1678,9 @@ static int leftover_offer(HWND owner, const char *path, int quiet)
     }
     if (g_setFileInfo != NULL) {
         BYTE del = 1;
-        HANDLE h2;
 
+        g_setFileInfo(h, 4, &del, sizeof(del));
         CloseHandle(h);
-        /* delete through a handle with delete access, still exclusive */
-        h2 = CreateFileA(path, GENERIC_READ | DELETE, 0, NULL, OPEN_EXISTING, 0, NULL);
-        if (h2 != INVALID_HANDLE_VALUE) {
-            g_setFileInfo(h2, 4, &del, sizeof(del));
-            CloseHandle(h2);
-        }
     } else {
         CloseHandle(h);
         DeleteFileA(path);
@@ -1675,7 +1716,8 @@ static int alloc_buffers(RUN *r, const PF_PLAN *pl, int scatter)
     r->stride = ((size_t)pl->maxSize + page - 1) / page * page + page;
     n = r->stride * (pl->slots + 1);
     r->bufNormal = (unsigned char *)VirtualAlloc(NULL, n, MEM_COMMIT, PAGE_READWRITE);
-    r->vbuf = (unsigned char *)VirtualAlloc(NULL, PF_PREP_CHUNK + page, MEM_COMMIT, PAGE_READWRITE);
+    r->vbufBytes = PF_PREP_CHUNK > pl->maxSize ? PF_PREP_CHUNK : pl->maxSize;
+    r->vbuf = (unsigned char *)VirtualAlloc(NULL, r->vbufBytes + page, MEM_COMMIT, PAGE_READWRITE);
     if (r->bufNormal == NULL || r->vbuf == NULL) {
         return 0;
     }
@@ -1750,10 +1792,6 @@ static void fill_buffers(RUN *r, const PF_PLAN *pl)
     }
 }
 
-static int stopped(void)
-{
-    return WaitForSingleObject(g_stopEvent, 0) == WAIT_OBJECT_0;
-}
 
 /* The preparation (record 29 section 3.1): the region written once. */
 static int prepare(RUN *r, const PF_PLAN *pl, PF_ENV *env, char *why, size_t cap)
@@ -1813,22 +1851,35 @@ static int prepare(RUN *r, const PF_PLAN *pl, PF_ENV *env, char *why, size_t cap
             sinceCheck = 0;
         }
     }
-    FlushFileBuffers(h);
+    if (!FlushFileBuffers(h)) {
+        DWORD e = GetLastError();
+
+        CloseHandle(h);
+        err_text(e, why, cap);
+        return 0;
+    }
     CloseHandle(h);
-    if (r->anchor != NULL) {
-        FlushFileBuffers(r->anchor);
+    if (r->anchor != NULL && !FlushFileBuffers(r->anchor)) {
+        err_text(GetLastError(), why, cap);
+        return 0;
     }
     record_put(r, pl->fileBytes, pl->fileBytes);
     return 1;
 }
 
 /* The untimed verification of what a write step wrote (record 29 section 3.3) */
-static pf_u32 verify_since(RUN *r, pf_u32 genStart, pf_u32 *firstBad)
+/* All: every block but the unknown ones, the preparation's included; else
+ * the blocks written since generation genStart. */
+static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad)
 {
     HANDLE h = open_test(r, 0, g_p.access == PF_ACC_UNBUF, 0);
     pf_u64 b = 0;
     pf_u32 bad = 0;
-    pf_u32 perChunk = PF_PREP_CHUNK / r->mapBlock;
+    pf_u32 perChunk = r->vbufBytes / r->mapBlock;
+
+    if (perChunk == 0) {
+        perChunk = 1;
+    }
 
     *firstBad = 0;
     if (h == INVALID_HANDLE_VALUE) {
@@ -1841,15 +1892,18 @@ static pf_u32 verify_since(RUN *r, pf_u32 genStart, pf_u32 *firstBad)
         DWORD got = 0, len;
 
         if (r->map[b] == PF_GEN_UNKNOWN) {
-            r->incomplete++;
+            if (all) {
+                r->incomplete++;
+            }
             b++;
             continue;
         }
-        if (r->map[b] <= genStart) {
+        if (!all && r->map[b] <= genStart) {
             b++;
             continue;
         }
-        for (e = b + 1; e < r->mapBlocks && e - b < perChunk && r->map[e] > genStart && r->map[e] != PF_GEN_UNKNOWN; e++) {
+        for (e = b + 1; e < r->mapBlocks && e - b < perChunk && (all || r->map[e] > genStart) &&
+             r->map[e] != PF_GEN_UNKNOWN; e++) {
         }
         off = PF_HEADER_BYTES + b * r->mapBlock;
         len = (DWORD)((e - b) * r->mapBlock);
@@ -1947,7 +2001,11 @@ static void run_step(RUN *r, int i, PF_RESULT *res)
     t0 = qpc_now();
     SetEvent(r->go);
     if (s->budget == 0) {
-        WaitForSingleObject(r->stepEnd, (DWORD)s->timeSec * 1000u);
+        HANDLE ends[2];
+
+        ends[0] = r->stepEnd;
+        ends[1] = g_stopEvent;
+        WaitForMultipleObjects(2, ends, FALSE, (DWORD)s->timeSec * 1000u);
         InterlockedExchange((LONG *)&r->issueEnd, 1);
     }
     for (t = 0; t < nt; t++) {
@@ -1956,8 +2014,26 @@ static void run_step(RUN *r, int i, PF_RESULT *res)
             CloseHandle(th[t]);
         }
     }
+    /* A cached write ends with its flush, in the time when the box says so
+     * (record 29 section 3.2), else just after it */
+    if (s->op == PF_OP_WRITE && !r->unbuffered && g_p.flushInWrite) {
+        for (t = 0; t < nt; t++) {
+            if (!FlushFileBuffers(r->w[t].h) && !r->w[t].failed) {
+                r->w[t].failed = 1;
+                r->w[t].error = GetLastError();
+            }
+        }
+    }
     t1 = qpc_now();
     k1 = GetTickCount();
+    if (s->op == PF_OP_WRITE && !r->unbuffered && !g_p.flushInWrite) {
+        for (t = 0; t < nt; t++) {
+            if (!FlushFileBuffers(r->w[t].h) && !r->w[t].failed) {
+                r->w[t].failed = 1;
+                r->w[t].error = GetLastError();
+            }
+        }
+    }
     res->us = ticks_us(t1 - t0);
     if (g_highRes && !pf_timer_plausible(res->us, (pf_u64)(k1 - k0))) {
         res->timerBad = 1;
@@ -2067,7 +2143,7 @@ static unsigned __stdcall run_main(void *arg)
         goto done;
     }
     if (g_p.verify && g_plan.mapBlocks != 0) {
-        r->mapBlock = g_plan.minWrite;
+        r->mapBlock = g_plan.mapBlock;
         r->mapBlocks = g_plan.mapBlocks;
         r->map = (pf_u32 *)VirtualAlloc(NULL, (size_t)(r->mapBlocks * 4u), MEM_COMMIT, PAGE_READWRITE);
         if (r->map == NULL) {
@@ -2167,10 +2243,14 @@ static unsigned __stdcall run_main(void *arg)
 
                     if (s98_diff(&r->s98before, &after, &d)) {
                         PF_TEXT t;
+                        static char page[sizeof(g_s98steps[0])];
 
-                        pf_tx_init(&t, g_s98steps[i], sizeof(g_s98steps[i]));
+                        pf_tx_init(&t, page, sizeof(page));
                         s98_page(&t, &after, &d, g_os == PF_OS_9X, res.reqs, g_plan.steps[i].size,
                                  g_plan.steps[i].op == PF_OP_WRITE);
+                        EnterCriticalSection(&g_resCs);
+                        memcpy(g_s98steps[i], page, sizeof(page));
+                        LeaveCriticalSection(&g_resCs);
                     }
                 }
                 if (g_plan.steps[i].op == PF_OP_WRITE && g_p.verify && r->map != NULL && res.status == PF_ST_OK) {
@@ -2178,9 +2258,11 @@ static unsigned __stdcall run_main(void *arg)
                     pf_u32 bad;
 
                     post_status("Verifying what was written");
-                    bad = verify_since(r, genStart, &fb);
+                    bad = verify_since(r, genStart, 0, &fb);
                     if (bad == 0xFFFFFFFFu) {
                         post_log("The verification could not read the file.");
+                        res.status = PF_ST_FAILED;
+                        res.error = GetLastError();
                     } else if (bad != 0) {
                         char line[200];
 
@@ -2194,7 +2276,9 @@ static unsigned __stdcall run_main(void *arg)
                     }
                 }
                 if (!warm) {
+                    EnterCriticalSection(&g_resCs);
                     g_res[i * PF_MAX_PASSES + pass] = res;
+                    LeaveCriticalSection(&g_resCs);
                     log_result(i, pass, &res);
                     PostMessageA(g_wnd, WM_APP_RESULT, (WPARAM)i, 0);
                 }
@@ -2217,13 +2301,21 @@ static unsigned __stdcall run_main(void *arg)
     if (r->genOut) {
         post_log("The run reached the limit of four thousand million writes for a verified run.");
     }
-    if (g_p.verify && g_p.verifyEnd && r->map != NULL && !stopped()) {
+    /* The whole file at the end: when asked, and always for a verified run
+     * that wrote nothing (its reads are checked against the preparation) */
+    if (g_p.verify && r->map != NULL && !stopped() && (g_p.verifyEnd || g_plan.minWrite == 0)) {
         pf_u32 fb;
         pf_u32 bad;
 
         post_status("Verifying the whole file");
-        bad = verify_since(r, 0, &fb);
-        post_log(bad == 0 ? "The whole file verified clean." : "The whole file's verification found data errors.");
+        bad = verify_since(r, 0, 1, &fb);
+        if (bad == 0) {
+            post_log("The whole file verified clean.");
+        } else {
+            InterlockedExchange((LONG *)&g_runBad, 1);
+            post_log(bad == 0xFFFFFFFFu ? "The whole file's verification could not read the file." :
+                     "The whole file's verification found data errors.");
+        }
     }
     if (r->incomplete != 0) {
         char line[160];
@@ -2303,6 +2395,7 @@ static char *build_report(size_t *lenOut)
     if (buf == NULL) {
         return NULL;
     }
+    EnterCriticalSection(&g_resCs);
     g_s98page[0] = 0;
     for (i = 0; i < g_plan.nsteps; i++) {
         if (g_s98steps[i][0] != 0 && strlen(g_s98page) + strlen(g_s98steps[i]) + 64 < sizeof(g_s98page)) {
@@ -2329,6 +2422,7 @@ static char *build_report(size_t *lenOut)
     ri.stor98 = g_s98page;
     pf_tx_init(&t, buf, cap);
     pf_report(&t, &g_p, &g_plan, g_res, g_npasses, &ri);
+    LeaveCriticalSection(&g_resCs);
     *lenOut = t.len;
     return buf;
 }
@@ -2425,7 +2519,7 @@ static void cell_text(int step, char *big, size_t bcap, char *sub, size_t scap)
     }
     sv = saved_row(&g_plan.steps[step]);
     if (sv != NULL) {
-        pf_u64 old = g_p.unitMiB ? sv->rate10mib : sv->rate10mb;
+        pf_u64 old = pf_saved_value(sv, g_p.show, g_p.unitMiB);
         long ch = pf_change10(sh.rate10, old);
         char c[32];
 
@@ -2593,6 +2687,7 @@ static LRESULT CALLBACK view_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 
         GetClientRect(w, &rc);
         FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
+        EnterCriticalSection(&g_resCs);
         if (g_plan.nsteps == 0) {
             const char *s = "Choose the drive or folder and the tests, then press Start.";
 
@@ -2604,6 +2699,7 @@ static LRESULT CALLBACK view_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         } else {
             paint_summary(dc, &rc);
         }
+        LeaveCriticalSection(&g_resCs);
         EndPaint(w, &ps);
         return 0;
     }
@@ -2820,7 +2916,11 @@ static void refresh_s98_page(void)
         return;
     }
     if (i >= 0 && i < g_plan.nsteps && g_s98steps[i][0] != 0) {
-        SetWindowTextA(g_s98, g_s98steps[i]);
+        EnterCriticalSection(&g_resCs);
+        memcpy(buf, g_s98steps[i], sizeof(buf) < sizeof(g_s98steps[i]) ? sizeof(buf) : sizeof(g_s98steps[i]));
+        LeaveCriticalSection(&g_resCs);
+        buf[sizeof(buf) - 1] = 0;
+        SetWindowTextA(g_s98, buf);
         return;
     }
     {
@@ -2993,6 +3093,22 @@ static void browse(void)
     }
 }
 
+/* The workload is the run's while it lasts (record 29 section 5.1) */
+static void controls_enable(int on)
+{
+    static const int ids[] = { IDC_FOLDER, IDC_BROWSE, IDC_PRESET, IDC_FSIZE, IDC_PASSES, IDC_TIME, IDC_OPS,
+                               IDC_ACCESS, IDC_WT, IDC_BUFFER, IDC_PATTERN, IDC_VERIFY, IDC_THREADS, IDC_MORE };
+    HMENU m = GetMenu(g_wnd);
+    int i;
+
+    for (i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++) {
+        EnableWindow(ctl(ids[i]), on);
+    }
+    EnableWindow(ctl(IDC_DEPTH), on && g_os == PF_OS_NT);
+    EnableMenuItem(m, IDM_COMPARE, MF_BYCOMMAND | (on ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(m, IDM_SAVEPRESET, MF_BYCOMMAND | (on ? MF_ENABLED : MF_GRAYED));
+}
+
 static void refuse(const char *why)
 {
     if (g_cl.exitAtEnd) {
@@ -3053,12 +3169,15 @@ static void start_run(void)
     save_settings();
     ResetEvent(g_stopEvent);
     InterlockedExchange((LONG *)&g_running, 1);
+    InterlockedExchange((LONG *)&g_runBad, 0);
+    controls_enable(0);
     EnableWindow(ctl(IDC_START), FALSE);
     EnableWindow(ctl(IDC_STOP), TRUE);
     log_add("Run started.");
     g_ctrl = (HANDLE)_beginthreadex(NULL, 0, run_main, NULL, 0, &id);
     if (g_ctrl == NULL) {
         InterlockedExchange((LONG *)&g_running, 0);
+        controls_enable(1);
         EnableWindow(ctl(IDC_START), TRUE);
         EnableWindow(ctl(IDC_STOP), FALSE);
     }
@@ -3278,7 +3397,14 @@ static void open_readme(void)
     if (s != NULL) {
         s[1] = 0;
     }
-    sz_cat(p, sizeof(p), "readme.txt");
+    sz_cat(p, sizeof(p), "XHCIPERF.TXT");
+    if (GetFileAttributesA(p) == 0xFFFFFFFF) {
+        s = strrchr(p, '\\');
+        if (s != NULL) {
+            s[1] = 0;
+        }
+        sz_cat(p, sizeof(p), "readme.txt");
+    }
     ShellExecuteA(g_wnd, "open", "notepad.exe", p, NULL, SW_SHOWNORMAL);
 }
 
@@ -3468,7 +3594,7 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
             }
             return 0;
         case IDC_FOLDER:
-            if (HIWORD(wp) == EN_KILLFOCUS) {
+            if (HIWORD(wp) == EN_KILLFOCUS && !g_running) {
                 params_from_ui();
                 refresh_disk();
                 update_estimate();
@@ -3503,6 +3629,9 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
             compare_results();
             return 0;
         case IDM_SAVEPRESET:
+            if (g_running) {
+                return 0;
+            }
             params_from_ui();
             save_settings();
             log_add("These settings are kept for the next start.");
@@ -3590,6 +3719,7 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         CloseHandle(g_ctrl);
         g_ctrl = NULL;
         InterlockedExchange((LONG *)&g_running, 0);
+        controls_enable(1);
         EnableWindow(ctl(IDC_START), TRUE);
         EnableWindow(ctl(IDC_STOP), FALSE);
         SetWindowTextA(g_status, "Ready");
@@ -3619,7 +3749,7 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
                     }
                 }
             }
-            g_cliExit = (failed || data) ? 1 : (int)wp;
+            g_cliExit = (failed || data || g_runBad) ? 1 : (int)wp;
         }
         if (lp != 0) {
             if (!g_cl.exitAtEnd) {
@@ -3830,9 +3960,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     system_text(g_system, sizeof(g_system));
 
     pf_defaults(&g_p, g_os);
-    default_folder();
     load_settings();
     g_p.os = g_os;
+    InitializeCriticalSection(&g_resCs);
     if (pf_cmdline(__argc, __argv, &g_p, &g_cl, why, sizeof(why)) != 0) {
         if (std_out_ok()) {
             out_text(why);
@@ -3851,6 +3981,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     if (g_cl.folder[0] != 0) {
         sz_cpy(g_folder, sizeof(g_folder), g_cl.folder);
+    } else if (g_folder[0] == 0) {
+        default_folder();
     }
     g_cliExit = 0;
     g_stopEvent = CreateEventA(NULL, TRUE, FALSE, NULL);

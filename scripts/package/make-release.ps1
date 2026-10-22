@@ -7364,6 +7364,9 @@ this file records.
 "@
         $perfLines = @($perfReadme) + @($perfFooter.Replace("{VERSION}", $Version) -split "`r?`n")
         Write-GeneratedText -Path (Join-Path $perftoolStaged "readme.txt") -Lines $perfLines
+        # The same text under the tool's own name, which the installer copies
+        # beside the tool in the install directory and its Help opens.
+        Write-GeneratedText -Path (Join-Path $perftoolStaged "XHCIPERF.TXT") -Lines $perfLines
         $perfNotice = @"
 ==============================================================================
                           x h c i 9 8   {VERSION}

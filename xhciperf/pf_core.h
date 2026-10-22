@@ -129,6 +129,7 @@ typedef struct pf_plan {
     pf_u32 minWrite;        /* the smallest write, the map's block */
     pf_u32 slots;           /* buffers: the most depth x threads */
     pf_u64 bufferBytes;     /* all buffers */
+    pf_u32 mapBlock;        /* the map's block: the smallest write, or with no write the smallest read */
     pf_u64 mapBlocks;       /* verifiable runs */
     pf_u64 budgetWrites;    /* writes of the byte-budgeted steps, passes and warm-ups */
     pf_u32 estimateSec;
@@ -322,10 +323,10 @@ typedef struct pf_saved_row {
     char label[40];
     int op;
     int buffer;
-    pf_u64 rate10mb;        /* best pass, MB/s x10 */
-    pf_u64 rate10mib;
-    pf_u64 iops;
-    pf_u64 latMeanUs;
+    int npass;
+    pf_u64 bytes[PF_MAX_PASSES];
+    pf_u64 us[PF_MAX_PASSES];
+    pf_u64 reqs[PF_MAX_PASSES];
 } PF_SAVED_ROW;
 typedef struct pf_saved {
     char key[512];
@@ -334,6 +335,8 @@ typedef struct pf_saved {
 } PF_SAVED;
 /* 0 and *s filled, or the 1-based line number of the first bad line */
 long pf_saved_parse(const char *text, size_t len, PF_SAVED *s);
+/* A saved row's value aggregated as Show says, as pf_shown does */
+pf_u64 pf_saved_value(const PF_SAVED_ROW *row, int show, int mib);
 /* change in percent tenths of cur against old; 0 when old is 0 */
 long pf_change10(pf_u64 cur, pf_u64 old);
 

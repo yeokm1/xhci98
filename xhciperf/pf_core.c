@@ -649,8 +649,16 @@ int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_
         (env->memBytes != 0 && pl->bufferBytes > env->memBytes / 4)) {
         return pf_refuse(why, whyCap, "The buffers would be too large: lower the queue depth, the threads or the largest size.");
     }
-    if (p->verify && writes) {
-        pl->mapBlocks = region / pl->minWrite;
+    if (p->verify) {
+        pf_u32 smallest = 0xFFFFFFFFu;
+
+        for (i = 0; i < pl->nsteps; i++) {
+            if (pl->steps[i].size < smallest) {
+                smallest = pl->steps[i].size;
+            }
+        }
+        pl->mapBlock = writes ? pl->minWrite : smallest;
+        pl->mapBlocks = region / pl->mapBlock;
         if (pl->mapBlocks * 4 > PF_MAP_MAX_BYTES) {
             return pf_refuse(why, whyCap, "To verify, lower the file size or raise the smallest write size.");
         }
@@ -1260,6 +1268,23 @@ int pf_key_same(const char *a, const char *b, char *diff, size_t cap)
     return same;
 }
 
+pf_u64 pf_saved_value(const PF_SAVED_ROW *row, int show, int mib)
+{
+    PF_RESULT r[PF_MAX_PASSES];
+    PF_SHOWN sh;
+    int i;
+
+    memset(r, 0, sizeof(r));
+    for (i = 0; i < row->npass && i < PF_MAX_PASSES; i++) {
+        r[i].status = PF_ST_OK;
+        r[i].bytes = row->bytes[i];
+        r[i].us = row->us[i];
+        r[i].reqs = row->reqs[i];
+    }
+    pf_shown(r, row->npass, show, mib, 0, &sh);
+    return sh.rate10;
+}
+
 long pf_change10(pf_u64 cur, pf_u64 old)
 {
     pf_u64 d;
@@ -1626,18 +1651,14 @@ long pf_saved_parse(const char *text, size_t len, PF_SAVED *sv)
                 row->op = (fl[1] == 5) ? PF_OP_WRITE : PF_OP_READ;
                 row->buffer = pf_buf_by_name(f[2], fl[2]);
             }
-            {
-                pf_u64 us = ns / 1000u;
-                pf_u64 mb = pf_rate10(bytes, us, 0);
-
-                if (mb > row->rate10mb) {
-                    row->rate10mb = mb;
-                    row->rate10mib = pf_rate10(bytes, us, 1);
-                    row->iops = pf_iops(reqs, us);
-                    row->latMeanUs = lat / 1000u;
-                }
+            if (row->npass < PF_MAX_PASSES) {
+                row->bytes[row->npass] = bytes;
+                row->us[row->npass] = ns / 1000u;
+                row->reqs[row->npass] = reqs;
+                row->npass++;
             }
             (void)pass;
+            (void)lat;
         }
         pos = e + 1;
     }

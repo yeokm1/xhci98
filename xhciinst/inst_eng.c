@@ -19944,6 +19944,7 @@ static int selftest_screens(void)
 #else
 #define INST_PERF_NAME      "XHCIPERF.EXE"
 #endif
+#define INST_PERF_README    "XHCIPERF.TXT"   /* its readme, which its Help opens */
 
 /* The installer's files of this architecture, from the package's
  * tools\xhciinst\: the window, the console tool, and on 98 SE and ME the
@@ -19958,13 +19959,15 @@ static int own_names(const char **names)
         names[n++] = INST_DI_NAME;
     }
     names[n++] = INST_PERF_NAME;
+    names[n++] = INST_PERF_README;
     return n;
 }
 
 /* The package folder a file of own_names comes from */
 static const char *own_src(const char *name)
 {
-    return strcmp(name, INST_PERF_NAME) == 0 ? "tools\\xhciperf" : "tools\\xhciinst";
+    return (strcmp(name, INST_PERF_NAME) == 0 || strcmp(name, INST_PERF_README) == 0) ? "tools\\xhciperf"
+                                                                                     : "tools\\xhciinst";
 }
 
 /* One file put in place by the USB tree tool's route (record 23 section
