@@ -14,8 +14,12 @@ U = lambda o: struct.unpack_from('<I', d, le + o)[0]
 ps, dp, ot, om = U(0x28), U(0x80), le + U(0x40), le + U(0x48)
 vs, _, fl, pti, npe, _ = struct.unpack_from('<6I', d, ot)
 img = bytearray(vs + ps)
+npages = U(0x14)
 for k in range(npe):
     e = d[om + 4 * (pti + k - 1): om + 4 * (pti + k)]; pn = (e[0] << 16) | (e[1] << 8) | e[2]
+    # only ordinary file pages: what the loader maps for another type is not these bytes
+    if e[3] != 0 or pn < 1 or pn > npages or dp + (pn - 1) * ps >= len(d):
+        print('callcheck: code page %d: type %d, number %d: not a file page this check can read' % (k, e[3], pn)); sys.exit(1)
     src = d[dp + (pn - 1) * ps: dp + pn * ps]; img[k * ps:k * ps + len(src)] = src
 pub = {}
 mt = open(mp, encoding='latin-1').read()

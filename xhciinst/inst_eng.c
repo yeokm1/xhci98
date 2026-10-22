@@ -16080,7 +16080,8 @@ static int vsd_rec_del(const char *name)
     return 1;
 }
 
-/* A file against the record's two hashes: INST_VF_*. */
+/* A file against the record's two hashes: INST_VF_*, or -1 when it is
+ * there and cannot be read (then nothing is decided about it). */
 static int vsd_class(const char *path, const char *file, const char *pend)
 {
     char hex[65];
@@ -16090,7 +16091,8 @@ static int vsd_class(const char *path, const char *file, const char *pend)
         return INST_VF_ABSENT;
     }
     if (s < 0) {
-        return INST_VF_OTHER;
+        logonly("stor98vxd: %s cannot be read\n", path);
+        return -1;
     }
     if (pend[0] != '\0' && inst_eq(hex, pend)) {
         return INST_VF_PENDING;
@@ -16185,6 +16187,9 @@ static int vsd_facts(int mode, INST_VSDFACTS *f, char *file, char *pend,
     f->FileVal = file[0] != '\0';
     f->Dest = vsd_class(dest, file, pend);
     f->Tmp = vsd_class(tmp, file, pend);
+    if (f->Dest < 0 || f->Tmp < 0) {
+        return 0;
+    }
     f->Entry = vsd_entry(dest, tmp, destS, tmpS);
     f->Mode = mode;
     f->PkgIsPending = haveVsd && f->Pending && inst_eq(pend, vsdHash);
@@ -16265,8 +16270,13 @@ static int vsd_do(int op, const char *file, const char *pend)
     case INST_VOP_SET_FILE:
         return vsd_rec_set("File", pend);
     case INST_VOP_DEL_ENTRY:
-        WritePrivateProfileStringA("rename", destS, NULL, ini);
-        WritePrivateProfileStringA("rename", dest, NULL, ini);
+        if (!WritePrivateProfileStringA("rename", destS, NULL, ini) ||
+            !WritePrivateProfileStringA("rename", dest, NULL, ini) ||
+            vsd_entry(dest, tmp, destS, tmpS) == INST_VE_EXACT) {
+            out("STOR98.VXD's [rename] line in %s could not be taken back "
+                "(error %lu).\n", ini, (unsigned long)GetLastError());
+            return 0;
+        }
         logonly("stor98vxd: WININIT.INI [rename] %s taken back\n", destS);
         return 1;
     case INST_VOP_DEL_TMP:

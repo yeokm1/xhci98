@@ -32,6 +32,10 @@ if ($d[$le] -ne 0x4C -or $d[$le + 1] -ne 0x45) { Bad 'not an LE image'; exit 1 }
 # The objects mapped as the loader maps them (page map, data pages).
 $ps = [int](U32 ($le + 0x28)); $dp = [int](U32 ($le + 0x80))
 $nobj = [int](U32 ($le + 0x44)); $ot = $le + [int](U32 ($le + 0x40)); $om = $le + [int](U32 ($le + 0x48))
+# Every page an ordinary file page (flags 0), its number within the module's
+# page count and its bytes within the file: any other page type is refused,
+# since what the loader maps for it is not the file's bytes these checks read.
+$npages = [int](U32 ($le + 0x14))
 $mem = @{}
 for ($o = 0; $o -lt $nobj; $o++) {
     $vs = [int](U32 ($ot + 24 * $o)); $pti = [int](U32 ($ot + 24 * $o + 12)); $npe = [int](U32 ($ot + 24 * $o + 16))
@@ -39,9 +43,12 @@ for ($o = 0; $o -lt $nobj; $o++) {
     for ($k = 0; $k -lt $npe; $k++) {
         $e = $om + 4 * ($pti + $k - 1)
         $pn = ($d[$e] -shl 16) -bor ($d[$e + 1] -shl 8) -bor $d[$e + 2]
+        if ($d[$e + 3] -ne 0) { Bad ('object {0} page {1}: page type {2}, not a file page' -f ($o + 1), $k, $d[$e + 3]); continue }
+        if ($pn -lt 1 -or $pn -gt $npages) { Bad ('object {0} page {1}: page number {2} outside 1..{3}' -f ($o + 1), $k, $pn, $npages); continue }
         $src = $dp + ($pn - 1) * $ps
+        if ($src -ge $d.Length) { Bad ('object {0} page {1}: its data lies past the file end' -f ($o + 1), $k); continue }
         $len = [Math]::Min($ps, $d.Length - $src)
-        if ($len -gt 0) { [Array]::Copy($d, $src, $buf, $k * $ps, $len) }
+        [Array]::Copy($d, $src, $buf, $k * $ps, $len)
     }
     $mem[$o + 1] = $buf
 }
