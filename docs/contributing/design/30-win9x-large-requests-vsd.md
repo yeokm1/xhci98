@@ -1,6 +1,12 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 2, 2026-10-22, reviewed and revised (the page-table
+Status: draft 3, 2026-10-22, reviewed and revised (the list held to the
+IOR's count on every request, an SRB or none; page residency argued from
+the translation window and the layers between, with the reading it rests
+on owed before the code; the installer's own key and a recovery table for
+every step of a placement or an update; the fragment limit counting the
+terminator apart; the release notes' wording); draft 2, 2026-10-22,
+reviewed and revised (the page-table
 service's result checked, the list's room bounded by two partial pages a
 fragment, checked arithmetic and a fragment limit on the logical list, the
 SRB's data covered before every call down, the callback table's depth,
@@ -377,20 +383,31 @@ The input first, every step checked, a failure being a refusal:
 - the count to bytes: a sector count is shifted by
   `DCB_apparent_blk_shift` only after checking it is below
   `2^(32 - shift)`; a byte count is taken as it is;
-- a logical list is walked one 8-byte descriptor at a time to its
-  zero-count terminator, which must come within `VSD_MAX_FRAGS` (255)
-  descriptors; the descriptor pointer is advanced only after checking
-  the advance does not wrap; a zero-length fragment before the
-  terminator, a terminator not found, and more descriptors are refusals;
+- a logical list is walked one 8-byte descriptor at a time: up to
+  `VSD_MAX_FRAGS` (255) descriptors with a non-zero count, then one more
+  descriptor read, which must be the zero-count terminator (a zero count
+  is the terminator by the list's definition [hdr: `BLOCKDEV.H`], so
+  there is no zero-length fragment); the descriptor pointer is advanced,
+  and the 256th descriptor's address formed, only after checking that
+  the advance does not wrap; a list whose first descriptor is the
+  terminator (no data) under a non-zero `IOR_xfer_count`, and a 256th
+  descriptor with a non-zero count, are refusals;
 - the fragments' bytes are summed with a check against wrap, and the sum
   (or the one linear buffer's count) must be at most `DCB_max_xfer_len`
   (IOS checks it too, section 2.2 item 2; the layer does not rely on it);
 - each fragment's address plus its length must not wrap.
 
-The relation between the logical list and `IOR_xfer_count` is the one
-IOS's builder takes: the list is the data, to its terminator (section
-2.2 item 2), and the count is not compared with it; what `SCSIPORT.PDR`
-translates is bounded by section 4.3.
+- the list must cover the request: its bytes are at least
+  `IOR_xfer_count`'s (as bytes), on every request, an SRB or none;
+  `SCSIPORT.PDR`'s own SRB for a request that arrives without one takes
+  its data from the first fragment and its length from the IOR (Stor98's
+  investigation, section 7, read in all three `SCSIPORT.PDR` builds:
+  `DataBuffer` the first fragment when `IORF_SCATTER_GATHER`)
+  [static; the length's source is a hyp, which the per-function count of
+  section 4.3 and its legs read], and an SRB that does arrive is held to
+  the list by section 4.3. More bytes in the list than the count is
+  allowed (IOS's builder walks to the terminator too); fewer is a
+  refusal.
 
 Then for each fragment:
 
@@ -452,12 +469,14 @@ the same IOR fields without these checks, so a request that fails one
 was one whose SRB `SCSIPORT.PDR` already translated through an
 inadequate list; refusing it is stricter than today, never looser
 [hyp: no requester sends one; the pass-through and SMART legs of section
-9.2 read it]. Without `IORF_SRB_VALID` the list is built and sent as it
-is: `SCSIPORT.PDR` then builds the SRB itself from the IOR [hyp], with
-`DataBuffer` the IOR's buffer and its length the IOR's count, which the
-list covers by construction. Which functions arrive without an SRB is
-counted per function in the `qemu` build, and section 9.2 item 5 runs
-the paths that do.
+9.2 read it]. Without `IORF_SRB_VALID` the list is built and sent once
+section 4.2's coverage check holds: `SCSIPORT.PDR` then builds the SRB
+itself, `DataBuffer` the linear buffer or the first fragment [static,
+Stor98's investigation section 7] and its length the IOR's count [hyp],
+which that check makes the list cover. Which functions arrive without an
+SRB is counted per function in the `qemu` build, and section 9.2 item 5
+runs the paths that do; a function seen there whose SRB is built another
+way is refused by the code until this section says how it is built.
 
 ### 4.4 The list's cost
 
@@ -520,30 +539,47 @@ to stay 0.
 
 ### 4.7 Page locking
 
-The layer locks nothing, as IOS's own builder locks nothing (section 2.2
-item 2) [static]: on the `phys_sgd` path every request on Stor98's disk
-already reached `SCSIPORT.PDR` with a physical list read from the page
-tables by IOS at that moment and no lock taken there, so the pages'
-residency until the transfer ends was already the requester's
-responsibility, not the translator's. This layer admits the same
-requests (section 4.1 item 3) and translates them at the same point of
-their path (just above `SCSIPORT.PDR`, where IOS's criteria routine ran
-for the topmost entry's demands), so it inherits that contract and
-widens it to no new requester. Who locks for each family:
+The layer locks nothing, and IOS's own builder locks nothing either
+(section 2.2 item 2) [static]. The question is therefore not whether the
+layer must lock, but whether moving the translation from IOS's builder
+to this layer asks more of the pages' residency than today. The argument,
+and what it rests on:
 
-- unbuffered Win32 file I/O and VCACHE's own buffers: the file system
-  and VCACHE, before the request enters IOS [hyp: the DDK names the
-  locking as the requester's (`IOR.H`'s request notes do not say a layer
-  locks); not read in `VFAT.VXD` or `VCACHE.VXD`];
-- IOS's double buffer: IOS's own buffer, allocated locked [hyp];
-- pass-through: the requester's (ASPI's `WNASPI32` layer locks its
-  buffers [hyp: not read]).
+1. **The window.** A physical list is safe while every page it names
+   stays resident and mapped to the same frame from the moment it is
+   read until the DMA that uses it ends. Under `phys_sgd` IOS reads the
+   page tables in the criteria routine when the request is sent
+   (`IOS_SendCommand`, before the calldown chain, Stor98's investigation
+   section 1), so today's requirement covers the window from that call
+   to the end of the DMA. This layer reads them later, when the request
+   reaches it below the layers above it, for the same transfer; its
+   window is the later part of today's [static, for the order of the
+   calls].
+2. **The same pages.** The window is a subset of today's only if the
+   buffer translated is the one IOS would have translated: no layer
+   between `IOS_SendCommand` and this layer replaces `IOR_buffer_ptr` or
+   the logical list with other memory. IOS's own double buffer is
+   substituted at `IOS_SendCommand` (section 4.6), before either
+   translation, so it is the same buffer in both. For the layers above
+   this one on Stor98's disk (load groups 7, `DISKTSD`; `0x0B`, the
+   SCSI'izer; `0x10`; and VOLTRACK's) it is a [hyp], **read before the
+   code is written** (a static reading of each layer's request routine,
+   whether it writes `IOR_buffer_ptr`, `IOR_flags`' `IORF_SCATTER_GATHER`
+   or the list it points at, recorded with its provenance row); a layer
+   that does replaces the argument for its requests, and the design is
+   revised before the code.
+3. **What follows.** Where 1 and 2 hold, a request whose pages this
+   layer translates had pages resident over a longer window under
+   today's builder, whoever locked them (the file system and VCACHE for
+   file I/O, IOS for its double buffer, the ASPI layer for pass-through);
+   the layer needs no lock of its own and admits no request that did not
+   already rely on that residency. Who locks for each family is not
+   needed for the argument and is not claimed.
 
 The present-bit check of section 4.2 refuses a page that is not present
-at translation; it is a guard, not evidence of residency later. Because
-the contract is inherited rather than read, it stays a [hyp] that blocks
-the release until the legs of section 9.2 item 8 (a transfer under
-memory pressure, with data compared) pass on 98 SE and ME.
+at translation; it is a guard, not evidence of residency later. The
+memory-pressure leg of section 9.2 item 8 corroborates the argument; it
+does not replace item 2's reading, which is the condition for the code.
 
 ### 4.8 Surprise removal, link-down and `AEP_UNCONFIG_DCB`
 
@@ -739,31 +775,34 @@ large transfers for Stor98? (Y/n)" after Stor98's question; Enter and
 The file is the installer's to place: no INF names it, and nothing in the
 setup engine copies it. On 98 SE and ME:
 
-- **Ticked, `IOSUBSYS\STOR98.VXD` absent**: written as
-  `IOSUBSYS\S98VSD.TMP` with `CREATE_NEW`, compared byte for byte with the
-  package's, the record's `Vsd` value written (section 7.4), then moved
-  to `STOR98.VXD` with `MoveFileA`, which never replaces (record 26
-  section 6.5.4's sequence). `.TMP` is not `*.vxd`, so IOS never loads the
-  half-written file (section 2.2 item 1). A failed step deletes the
-  `.TMP` and the value; Stor98 is unaffected.
+- **Ticked, `IOSUBSYS\STOR98.VXD` absent**: the record's `Pending`
+  value written with the package file's hash (the intent, section 7.4),
+  then `IOSUBSYS\S98VSD.TMP` written with `CREATE_NEW`, compared byte for
+  byte with the package's, then moved to `STOR98.VXD` with `MoveFileA`,
+  which never replaces, then `File` takes the hash and `Pending` is
+  deleted (record 26 section 6.5.4's sequence, with the intent first).
+  `.TMP` is not `*.vxd`, so IOS never loads the half-written file
+  (section 2.2 item 1). A step that fails is recovered by the table
+  below; Stor98 is unaffected.
 - **Ticked, present with the package's bytes**: nothing is copied or
-  recorded (a file this installer placed is already in the record; one
-  of these bytes the record does not name stays another hand's).
-- **Ticked, present with other bytes, recorded as this installer's** (an
+  recorded (a file this installer placed is already `File`'s; one of
+  these bytes `File` does not name stays another hand's).
+- **Ticked, present with other bytes, `File`'s** (an
   older release): updated as Stor98's own file is (record 26 section 6.3,
   record 23 revision 23): `S98VSD.TMP` beside it and a `WININIT.INI`
-  `[rename]` entry, since the loaded copy is IOS's for the session. `Vsd`
-  keeps the hash of the file in place; `VsdPending` takes the new hash
-  once the `.TMP` is compared, before the entry is written (section
-  7.4).
-- **Ticked, present with other bytes, not recorded**: another
+  `[rename]` entry, since the loaded copy is IOS's for the session:
+  `Pending` written with the new hash first, then the `.TMP`
+  (`CREATE_NEW`), compared, then the entry
+  `<system>\IOSUBSYS\STOR98.VXD=<system>\IOSUBSYS\S98VSD.TMP`; `File`
+  keeps the hash of the file in place until the start has done the
+  rename (section 7.4).
+- **Ticked, present with bytes neither value names**: another
   installation's file of that name. Left as it is, said on the Summary
   and in the log, and never recorded; the row's note says so.
 - **Unticked by the user on 98 SE or ME, while Stor98's box is ticked,
-  over a file the record counts as this installer's**: removed (owner,
-  2026-10-22: "unticking it on an update removes it"). The file is
-  deleted (`DeleteFileA`); a pending `[rename]` entry and `S98VSD.TMP` of
-  an earlier run go with it; the value is deleted after the file. A
+  over a file of `File`'s bytes**: removed (owner, 2026-10-22: "unticking
+  it on an update removes it"). A queued update is withdrawn first (the
+  table below), then the file is deleted (`DeleteFileA`), then `File`. A
   delete that fails is a step with the restart flag, "restart and run the
   installer again", as record 26 section 9.3 leaves a driver file in use.
   The loaded copy keeps serving the disks until the shutdown, which is
@@ -773,19 +812,31 @@ setup engine copies it. On 98 SE and ME:
   (record 26 section 5.3). Without Stor98's disks it claims nothing
   (section 3.3).
 
-**Every run first reconciles a pending update** (before it classifies
-the file): with `VsdPending` set, a `STOR98.VXD` of the pending hash and
-no `[rename]` entry or `.TMP` left means the start did the update, so
-`Vsd` takes that hash and `VsdPending` is deleted; a `[rename]` entry and
-a `.TMP` of the pending hash still there mean the update is still queued,
-and the run treats the file as this installer's under either hash; any
-other combination (an entry with no `.TMP`, a `.TMP` of other bytes, a
-file of neither hash) withdraws what is queued - the entry and the `.TMP`
-removed - and leaves the file classified by `Vsd` alone. An untick or an
-uninstall over a queued update removes the entry and the `.TMP` first,
-then the file if its bytes are `Vsd`'s, so the queued file can never
-arrive after the user removed the layer; and it does so also when the
-destination is absent.
+**Every run first recovers** (before it classifies the file), from
+four facts: the destination's bytes (absent, `File`'s hash, `Pending`'s
+hash, other), the `.TMP`'s (absent, `Pending`'s hash, other), whether
+`WININIT.INI` holds this installer's exact entry (the one line above,
+both paths compared without regard to case, and nothing else naming
+either file), and the record's values. Only a file whose bytes a value
+names, and only that exact entry, are ever this installer's; anything
+else is left, said and logged.
+
+| `Pending` | Destination | `.TMP` | Entry | Meaning | The run does |
+|---|---|---|---|---|---|
+| absent | - | absent | absent | nothing in flight | classifies the destination by `File` |
+| set | `Pending`'s hash | any | any | the start (or the move) did it | `File` takes the hash, `Pending` deleted; a `.TMP` of `Pending`'s hash and the exact entry, if left, removed |
+| set | absent or `File`'s hash | `Pending`'s hash | present | an update queued | treats both files as its own: a ticked run leaves it queued, an untick or uninstall withdraws it (entry, then `.TMP`, then the value) |
+| set | absent or `File`'s hash | `Pending`'s hash | absent | cut short before the entry (an update) or before the move (a first placement) | finishes the step (writes the entry, or moves the `.TMP` into an absent destination) on a ticked run; withdraws it otherwise |
+| set | absent or `File`'s hash | absent | any | cut short before the `.TMP` was whole, or the `.TMP` gone | the exact entry, if any, removed; `Pending` deleted; a ticked run starts the step again |
+| set | any | other bytes | any | a `.TMP` that is not this installer's | left; the exact entry, if any, removed (it would rename a foreign file); no placement or update until the user removes the file, a step that says so |
+| any | other bytes, not `Pending`'s | - | - | another installation's file | left and said; the exact entry, if any, removed; the values deleted when they name neither file present |
+
+An untick or an uninstall over a queued update withdraws it (entry, then
+`.TMP`, then `Pending`) before it removes the destination of `File`'s
+hash, and does so also when the destination is absent, so a queued file
+can never arrive after the user removed the layer. Each step's failure
+leaves the state as one row of the table, which the next run recovers;
+section 9.1 holds the table, every row and every step cut short.
 
 Any run that places, updates or removes the file ends with the shutdown
 or restart flag Stor98's file update uses: the layer is loaded at boot
@@ -795,19 +846,28 @@ installation's file").
 
 ### 7.4 The record and the uninstall
 
-Under `HKLM\Software\xhci98\Stor98`, the bundled Stor98's record (record
-26 section 6.3), two values: `Vsd` (`REG_SZ`), the SHA-256 of the
-`STOR98.VXD` bytes this installer placed and that are in place, written
-before the move into place and deleted after the file; and
-`VsdPending` (`REG_SZ`), the SHA-256 of a queued update's `S98VSD.TMP`,
-present only between the queueing run and the start or run that
-reconciles it (section 7.3). The key may then exist for this value
-alone (a run that placed the layer and changed nothing of Stor98). The
-uninstall (record 26 section 9.3 step 4, with the driver files) removes a
-`STOR98.VXD` whose bytes the value names, with its pending `[rename]`
-entry and `.TMP`, by the delete rule of section 7.3, whether or not
-Stor98 itself stays; a file of other bytes is left and said. Then the
-value, and the key by record 26's rule.
+A key of its own, `HKLM\Software\xhci98\Stor98Vxd`, apart from the
+bundled Stor98's record (`HKLM\Software\xhci98\Stor98`, record 26
+section 6.3), whose `PreExisting` baseline and devices it must not
+change the meaning of: a run that places only `STOR98.VXD` (Stor98 at the
+package version already, or a Stor98 installed by hand) writes nothing
+under Stor98's key, and Stor98's own rules read that key as before.
+Values:
+
+- `File` (`REG_SZ`): the SHA-256 of the `STOR98.VXD` bytes this
+  installer placed and that are in place, written once the file is in
+  place (the move done, or the start's rename seen), deleted after the
+  file;
+- `Pending` (`REG_SZ`): the SHA-256 of the package's file a placement or
+  an update is about to put in place, written before the `.TMP` is
+  created, deleted once `File` names those bytes or the step is
+  withdrawn.
+
+The uninstall (record 26 section 9.3 step 4, with the driver files)
+recovers by section 7.3's table, withdraws a queued update, removes a
+`STOR98.VXD` whose bytes `File` names by the delete rule of section 7.3,
+whether or not Stor98 itself stays, leaves a file of other bytes and
+says so, then deletes the values and the key.
 
 ### 7.5 What the code changes in `xhciinst`
 
@@ -816,8 +876,9 @@ its decision in `inst_core.c` (`inst_vsd_decide`: the defaults, the
 child rule, the greyed rule, the switches and their refusals,
 host-tested), the row in the window's Components template and its
 greying, the console question, the placement, update and removal of
-section 7.3 in `inst_eng.c` beside Stor98's own file steps, the `Vsd`
-value, and the package's file list. Nothing of the device install, the
+section 7.3 in `inst_eng.c` beside Stor98's own file steps with the
+recovery table as a pure function host-tested, the `Stor98Vxd` key, and
+the package's file list. Nothing of the device install, the
 helper or the NT route changes.
 
 ## 8. The release notes
@@ -825,10 +886,10 @@ helper or the NT route changes.
 To say, in these words or close: "On Windows 98 SE and ME, STOR98.VXD
 lets reads and writes of up to 2 MiB reach Stor98 whole, which helps
 large unbuffered transfers (disk benchmarks, some copy and imaging
-tools). It does not change copies through the file cache, which Windows
-98 SE and ME make in 64 KiB pieces, and it does not change queueing: a
-single program's file I/O on these systems is one request at a time, as
-it was. Requests over 2 MiB are still cut into 63 KiB pieces." And what
+tools). It does not change copies through the file cache, whose
+requests are 64 KiB or smaller, and it does not change queueing; the
+gains were measured with one program reading and writing one request at
+a time. Requests over 2 MiB are still cut into 63 KiB pieces." And what
 no vehicle has read (section 11).
 
 ## 9. Verification
@@ -851,10 +912,14 @@ a no-data function and on a zero count refused. The checks of section
 present, wrong entries (refused, no entry read); sixteen 512-byte
 fragments and one of 2 MiB - 8 KiB, each starting at page offset 4092,
 on discontiguous frames (543 pages, within the room of 1,022); 255
-fragments and 256; a list with no terminator within 255; a zero-length
-fragment; a sector count whose shift overflows; a sum over
+fragments and a terminator, 255 and a 256th non-zero descriptor; a
+fragment count of 0 as the first descriptor under a non-zero count; a
+list covering fewer, as many and more bytes than `IOR_xfer_count`, with
+and without an SRB; a sector count whose shift overflows; a sum over
 `DCB_max_xfer_len`; a descriptor pointer that wraps; the callback table
-full and one free. The installer's
+full and one free. The installer's recovery table of section 7.3,
+every row, and every step of a placement and of an update cut short,
+an altered `.TMP` and an altered or extra `WININIT.INI` line. And the installer's
 decision (`inst_vsd_decide`) in the installer's host suite: every system
 by every state of Stor98's box and both switches.
 
@@ -898,9 +963,11 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
    (same bytes, older bytes); unticked on an update; the uninstall; each
    read back from `IOSUBSYS`, `WININIT.INI` and the record, on 98 SE and
    ME; an update then an untick, and an update then the uninstall, with
-   no start between (the queued file must not arrive); an update cut
-   short after the `.TMP`; `/stor98vxd` and `/nostor98vxd` refused on
-   2000.
+   no start between (the queued file must not arrive); a placement and
+   an update each cut short at every step of section 7.3 (the guest
+   stopped there), then the next run; `STOR98.VXD` placed over a Stor98
+   installed by hand, then updated and uninstalled, Stor98's key read
+   unchanged; `/stor98vxd` and `/nostor98vxd` refused on 2000.
 8. **Memory pressure** (section 4.7): the 2 MiB phases while a second
    program commits and touches more memory than the guest has, on 98 SE
    and ME, data compared.
@@ -943,9 +1010,9 @@ On the owner's real hardware: the throughput before and after
   (section 9.2 item 3); if `phys_sgd` stays demanded, the layer is inert
   there (D2) and the owner decides whether to edit the entries above.
 - `IORF_DOUBLE_BUFFER`'s buffer at this layer (section 4.6) [hyp].
-- Page locking is inherited from IOS's own builder, not read in the
-  requesters (section 4.7): release-blocking until section 9.2 item 8
-  passes.
+- Page residency (section 4.7): the static reading of the layers above
+  this one on Stor98's disk is owed before the code; the memory-pressure
+  leg corroborates it.
 - About 10 KiB in each IOP of the disk (section 3.4): IOS's allocation of
   IOPs of that size is read on the legs, not in IOS.
 - Whether `DeleteFileA` succeeds on a loaded `STOR98.VXD` (VXDLDR closing
