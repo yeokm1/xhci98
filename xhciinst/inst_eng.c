@@ -10816,8 +10816,19 @@ static void mk_end_of_run(void)
  * installer's own files, the records and the Add/Remove Programs entry
  * stay, the entry's name saying so, so the next run has its entry point
  * once the package is gone. */
+static int storUnAudit;      /* the uninstall withdrew DevicePath (98 SE) */
+static int stor_pair_left(void);
+static int stor_98se(void);
+
 static int stop_uninstall(const char *why)
 {
+    /* DevicePath withdrawn and the run stopping before its storage INF
+     * step: the INF directories read for a USBSTOR.INF left alone (record
+     * 26 section 6.5.5). */
+    if (storUnAudit && !opts.List) {
+        storUnAudit = 0;
+        stor_pair_left();
+    }
     out("\nSTOPPED: %s\nNothing after this step was done. Restart Windows if "
         "it asked, then run\nthe uninstall again (Add/Remove Programs, or "
         "INSTALL /console /uninstall):\nit goes on from what is left.\n", why);
@@ -11572,6 +11583,7 @@ static int run_uninstall_9x(void)
         return stop_uninstall("DevicePath could not be updated.");
     }
     flagChanged = 1;
+    storUnAudit = stor_98se();
     if (!copies_remove_all()) {
         flagSteps = 1;
         return stop_uninstall("the package copy could not be removed whole.");
@@ -17643,6 +17655,9 @@ static int stor_run_begin(void)
             "be withdrawn:\nnothing else is changed. Run the installer "
             "again.\n");
         flagFailed = 1;
+        if (storWithdrawn) {
+            stor_pair_left();
+        }
         return 0;
     }
     /* With the package directory off DevicePath, a copy of USBSTOR.INF
@@ -17650,6 +17665,7 @@ static int stor_run_begin(void)
      * findable (record 26 section 6.5.5): said, a step. */
     if (storWithdrawn && !opts.List && stor_pair_left()) {
         storStepsLeft = 1;
+        flagSteps = 1;
     }
     storSourceOff = storSource && !storCopyOk;
     return 1;
@@ -19242,6 +19258,7 @@ static int stor_un_rest(void)
         }
     }
     /* Neither half alone left where Windows finds it (section 6.5.5). */
+    storUnAudit = 0;
     if (!opts.List && stor_pair_left()) {
         flagSteps = 1;
     }

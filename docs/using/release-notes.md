@@ -1384,7 +1384,8 @@ well as Bulk-Only ones. A download built without them says so in its
   the folder (read in a virtual machine, roadmap-usb4 task 43.5). With
   `USBNTMAP.INF` in `C:\WINDOWS\INF` first, the disk installed as "USB
   Disk" with a drive letter and no restart. The installer's storage row
-  never leaves one INF without the other. After that the storage devices
+  places and removes the two together, and says so, with a step, if it
+  finds `USBSTOR.INF` left in the INF folder without `USBNTMAP.INF`. After that the storage devices
   read here, Bulk-Only and UAS, worked with no extra step, and a UAS device
   that sat at Code 2 started at the next boot. On a
   Windows 98 SE that still held NUSB's other files (`IOS.VXD`,

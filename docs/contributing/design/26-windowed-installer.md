@@ -1696,7 +1696,10 @@ Windows can find them:
   deployment, which then had `USBNTMAP.INF` only through `DevicePath`),
   or a reading that fails, is said with the advice to plug in no new USB
   disk until both or neither are there, and a step is left
-  (`inst_stor_pair_warn`); nothing more is deleted for it.
+  (`inst_stor_pair_warn`); nothing more is deleted for it. The same
+  reading is taken on every way out of the run after `DevicePath` was
+  withdrawn: a withdrawal whose INF deletion fails, and an uninstall
+  stopped before its INF step.
 
 **Absent devices** bind at their first plug through Windows' own
 detection. Until draft 19 that was from the package directory on

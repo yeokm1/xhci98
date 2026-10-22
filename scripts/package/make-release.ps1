@@ -4929,7 +4929,8 @@ and NUSB 3.6 install:
   disk is then taken by Windows' own NTMAP.INF, which copies NTMAPHLP.PDR
   from the Windows CD; Windows stops with "Invalid VxD dynamic link call
   from NTMAPHLP" and hangs, even with all seven in the folder. The
-  installer's storage row never leaves one INF without the other.
+  installer's storage row places and removes the two together, and says
+  so if it finds USBSTOR.INF left in the INF folder without USBNTMAP.INF.
 
   With USBNTMAP.INF in C:\WINDOWS\INF first, the storage devices tried,
   USB sticks and UAS disks, worked with no extra step. On a Windows 98 SE
