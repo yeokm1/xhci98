@@ -702,6 +702,7 @@ static BYTE g_aspiHa, g_aspiTarget;
 /* ASPI requests sent and not yet given back: the process does not end
  * while ASPI may still write their SRB or buffer */
 static volatile LONG g_aspiOut;
+static int g_s98matches, g_s98ids;   /* the last 9x search's counts */
 /* Threads that may send to ASPI (counter reads, searches), alive */
 static volatile LONG g_aspiThreads;
 /* Set as the process ends: no ASPI request is sent after it */
@@ -952,6 +953,7 @@ typedef struct s98_find_req {
     int state;
     BYTE ha, target;
     volatile LONG done;
+    int matches, idCount;   /* what decided an ambiguity, for the page */
 } S98_FIND_REQ;
 
 typedef DWORD (WINAPI *PF_CMLOCATE)(DWORD *, char *, ULONG);
@@ -994,7 +996,7 @@ static int instance_location(const char *in, pf_u32 *loc)
  * are present now (the configuration manager, where it answers) and, where
  * the instance name carries a PCI location, are on the adapter at pci.
  * Devnodes of disks seen before stay in the registry, and are not counted. */
-static int scsi_model_count(const char *want, pf_u32 pci)
+static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier)
 {
     HKEY scsi, dev;
     char dn[256], in[256], nd[256], id[600];
@@ -1010,15 +1012,15 @@ static int scsi_model_count(const char *want, pf_u32 pci)
         /* the device id begins with the INQUIRY vendor and product as 9x
          * writes them (a space as '_'): a spelling an earlier driver gave
          * the same disk is another id, and not this one */
-        (void)nd;
-        if (strlen(dn) < 24 || _strnicmp(dn, want, 24) != 0 ||
+        norm(dn, strlen(dn), nd, sizeof(nd));
+        if ((tier < 2 ? (strlen(dn) < 24 || _strnicmp(dn, want, 24) != 0) : strstr(nd, model) == NULL) ||
             RegOpenKeyExA(scsi, dn, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
             continue;
         }
         for (j = 0; RegEnumKeyA(dev, j, in, sizeof(in)) == ERROR_SUCCESS; j++) {
             pf_u32 loc;
 
-            if (instance_location(in, &loc) && loc != pci) {
+            if (tier == 0 && instance_location(in, &loc) && loc != pci) {
                 continue;       /* on another adapter */
             }
             all++;
@@ -1046,6 +1048,20 @@ static int scsi_model_count(const char *want, pf_u32 pci)
     return count != 0 ? count : all;
 }
 
+/* The tiers, most precise first, the first that finds any deciding: the
+ * id as spelt on the identity page's adapter; the id as spelt; the model.
+ * (How 9x writes the instance's PCI location and the id is read from the
+ * emulator; on a system that writes them otherwise a later tier decides.) */
+static int scsi_model_count(const char *want, const char *model, pf_u32 pci)
+{
+    int tier, n = 0;
+
+    for (tier = 0; tier < 3 && n == 0; tier++) {
+        n = scsi_count(want, model, pci, tier);
+    }
+    return n;
+}
+
 /* The adapter is proved Stor98's by its identity page; the disk is matched
  * to the drive letter by its model, which must then be the only disk of
  * that model the system enumerates: otherwise the attribution is left
@@ -1061,6 +1077,7 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
 
     char found[64];
     pf_u32 foundPci = 0;
+    char foundModel[64];
 
     if (letter >= 'a' && letter <= 'z') {
         letter = (char)(letter - 'a' + 'A');
@@ -1141,6 +1158,7 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
                 rq->ha = ha;
                 rq->target = t;
                 foundPci = pci;
+                sz_cpy(foundModel, sizeof(foundModel), want);
                 /* the vendor and product as 9x spells them in a device id */
                 for (k = 0; k < 24; k++) {
                     char c = (char)std[8 + k];
@@ -1151,9 +1169,11 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
             }
         }
     }
+    rq->matches = matches;
+    rq->idCount = matches == 1 ? scsi_model_count(found, foundModel, foundPci) : 0;
     if (g_aspiHung) {
         rq->state = S98_ST_DEAD;
-    } else if (matches == 1 && scsi_model_count(found, foundPci) == 1) {
+    } else if (matches == 1 && rq->idCount == 1) {
         rq->state = S98_ST_OK;
     } else if (matches >= 1) {
         rq->state = S98_ST_AMBIG;
@@ -1305,6 +1325,8 @@ static void s98_find(const char *folder)
     g_aspiHa = rq->ha;
     g_aspiTarget = rq->target;
     g_s98state = rq->state;
+    g_s98matches = rq->matches;
+    g_s98ids = rq->idCount;
     HeapFree(GetProcessHeap(), 0, rq);
 }
 
@@ -1315,8 +1337,16 @@ static const char *s98_state_text(void)
         return "This disk is driven by Stor98. Reading its counters needs administrator rights.";
     case S98_ST_NOASPI:
         return "Windows' ASPI layer (WNASPI32.DLL) is not here, so Stor98's counters cannot be read.";
-    case S98_ST_AMBIG:
-        return "This disk's Stor98 adapter could not be told apart from another one.";
+    case S98_ST_AMBIG: {
+        static char t[200];
+
+        sz_cpy(t, sizeof(t), "This disk's Stor98 adapter could not be told apart from another one (Stor98 targets of its model: ");
+        sz_u(t, sizeof(t), (pf_u64)g_s98matches);
+        sz_cat(t, sizeof(t), "; present disks of its id: ");
+        sz_u(t, sizeof(t), (pf_u64)g_s98ids);
+        sz_cat(t, sizeof(t), ").");
+        return t;
+    }
     case S98_ST_DEAD:
         return "Stor98 did not answer in time; its counters are not read for the rest of this run.";
     case S98_ST_OK:
