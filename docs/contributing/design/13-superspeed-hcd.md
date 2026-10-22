@@ -3219,8 +3219,10 @@ the files for `0x0022xxxx` codes of function index 0x100 to 0x13F, not
 attributed to code). The bus
 answers it on every target since task 36.18 (8.4), and its capable flags
 stay false for a USB 3 device on a USB 2.0 port (8.4, the BOS read at High
-Speed left out). Whether 8's pages read it, and for what, is 43.25's
-reading.
+Speed left out). What reads it on 8 and 8.1 - Explorer's details pane in
+`shell32.dll` and a Devices and Printers status provider in `usbui.dll`,
+for the "can perform faster" line - is 6.12.11; what 8's property pages
+do with it is not read.
 
 #### 6.12.8 The x64 test signature on 8 and 8.1
 
@@ -3274,9 +3276,9 @@ hub's WMI or notification, or the `_EX_V2` flags `usbui.dll` 6.2 reads
 (6.12.7); the same device under this bus on 8 after a forced install (43.31
 reads it beside Windows' own driver); and on Vista or 7, a High-Speed
 device behind a Full-Speed hub under Microsoft's stack and under this bus,
-for 7's "can perform faster" balloon. Statically still open for 43.25:
-the strings and their callers in 8's `usbui.dll` and the shell
-(`hotplug.dll`, the details pane's property handler), not read here.
+for 7's "can perform faster" balloon. The strings, their callers and
+what they test, and the Windows 7 legs, are read in 6.12.11 (task 43.25),
+which lists what is left for this VM.
 
 #### 6.12.10 Questions this reading leaves for the owner
 
@@ -3312,6 +3314,201 @@ what the contract needs beyond them (6.12.3, 6.12.4: UCX's allocator
 interface among them) is 43.30's design to settle. (3) `0x220FB3` is
 served as `RESET_PORT`. (4) The three Fresco Logic ids are noted only;
 43.29's install does not change what it stages for them.
+
+#### 6.12.11 "Device can perform faster when connected to USB 3.0" (task 43.25, 2026-10-22)
+
+The report (owner, 2026-10-20): a Windows 8 user saw Explorer's details
+pane show "Device can perform faster when connected to USB 3.0" for a USB
+3 stick on a USB 2.0 port under Windows 8's own USB 3 stack, and not under
+`xhci98.sys` forced onto 8. This section reads where the line comes from
+and what it tests (**static**, Windows 8 x86 and 8.1 x64; no Windows 8
+system has run), what this bus answers for each input (**static**, read
+from `src\` at `77384e93`), and the Windows 7 legs of the High-Speed notice
+(**measured**, one Windows 7 x86 guest, 2026-10-22).
+
+**Method.** Files taken with `7z e` from `sources\install.wim` of
+`en_windows_8_pro_vl_x86_dvd_917830.iso` and of
+`en_windows_8.1_with_update_x64_dvd_6051480.iso` (image 1), the media of
+6.12, into a scratch directory outside the tree: `shell32.dll`,
+`hotplug.dll`, `usbui.dll`, their `en-US` MUI files, every
+`Windows\System32\en-US\*.mui` of the 8 x86 image (1,542 files) for a text
+search, and the `SOFTWARE` hive. String tables and the hive read by Python
+scripts kept outside the tree (a PE resource walk; a registry hive walk);
+code read with capstone 5.0.9 for the interfaces only: import names, the
+string and property-key references, IOCTL codes, the buffer fields set and
+the flag bits tested. Nothing from the media was executed.
+
+| Build | File | Version | Size | SHA-256 |
+|---|---|---|---|---|
+| 8 x86 | `shell32.dll` | 6.2.9200.16384 | 17,559,552 | `41b5eb7d846e31192f4299170a282ae19757cadb3cfc1850d65b15b448140e7f` |
+| 8 x86 | `en-US\shell32.dll.mui` | 6.2.9200.16384 | 411,648 | `a09ce13e4ea521754d9cd70a486fb89758700db2fc01104c4ece9d53745b1142` |
+| 8 x86 | `hotplug.dll` | 6.2.9200.16384 | 58,368 | `6bf9e460c46cc47b924ebf38d2101fb1b13bc4d3e88f6389f34efdb490769969` |
+| 8 x86 | `config\SOFTWARE` | - | 25,165,824 | `acd9aa4bb289a24e4c46fa3f2525c7b49a01fbfbc72537a95e3e80199d9047b4` |
+| 8.1 x64 | `shell32.dll` | 6.3.9600.17415 | 22,295,200 | `27fb61ac6490b44e8ab99d84adcb0f15c1fbf77a1c7232be582ce0b8d2675039` |
+| 8.1 x64 | `en-US\shell32.dll.mui` | 6.3.9600.17031 | 417,280 | `442f5b6ab511f1326f40825ace9c1ce535b487d36515e03630b1999e0baa1e33` |
+| 8.1 x64 | `hotplug.dll` | 6.3.9600.17415 | 67,584 | `be58d04344764dec751ded177c09d4e617370b28a76f73673516669975a135f2` |
+| 8.1 x64 | `config\SOFTWARE` | - | 57,671,680 | `76daea96abff02b113dd2f5e257afef23619aa774c9c326ac748008e6f38f544` |
+
+`usbui.dll` is 6.12's (its table above).
+
+**Two sources of the same text (static).**
+
+- **`shell32.dll`, string 38252** "Device can perform faster when connected
+  to USB 3.0" and **38253** "Connected to USB 3.0" (`shell32.dll.mui`, 8
+  and 8.1). Explorer's preview and details pane is a DirectUI layout inside
+  `shell32.dll` whose elements `PreviewUSB3CanBeFaster` and
+  `PreviewUSB3Connected` take their text as `resstr(0x956C,
+  library(shell32.dll))` and `resstr(0x956D, ...)`. The code that shows one
+  of them runs when the selected item is a drive root (`PathIsRootW`, then
+  `PathGetDriveNumberW`; 8 x86 RVA `0x4750D1`). **This is the line of the
+  report.**
+- **`usbui.dll` 6.2 and 6.3, strings 1210 and 1211**, the same two texts,
+  used by a status provider for Devices and Printers: `usbui.dll` 6.2 newly
+  exports `DllGetClassObject` and imports `PSCreateMemoryPropertyStore`;
+  its class factory serves CLSID `{df6775de-380d-4c14-8b62-fb69912e6d30}`,
+  which the hive registers as "Function Discovery USB Provider"
+  (`Classes\CLSID\...\InProcServer32` = `usbui.dll`), as the
+  `DeviceDisplayStatus` of `Classes\DeviceDisplayObject\InterfaceClass\{a5dcbf10-6530-11d2-901f-00c04fb951ed}`
+  (`GUID_DEVINTERFACE_USB_DEVICE`; "Device Center Status Provider for USB
+  Devices"), and under `Microsoft\Windows NT\CurrentVersion\DeviceDisplayObjects\StatusProviders`
+  with `Rank` 0x3E8 (8 x86 and 8.1 x64 hives alike). It hands back a
+  property store holding the text as `VT_VECTOR | VT_LPWSTR` under
+  `{D08DD4C0-3A9E-462E-8290-7B636B2576B9}`, 259 (the `PKEY_Devices_*` set;
+  WDK 7.1's `propkey.h` names 257 `Status1` and 258 `Status2`, not 259) and
+  1 or 2 as `VT_VECTOR | VT_UI4` under
+  `{C62789A9-9C86-4BC6-95B1-20D15B682B74}`, 1 (not in WDK 7.1's headers).
+- **Nowhere else**: no other of the 1,542 MUI files of the 8 x86
+  `System32\en-US` carries "perform faster"; `hotplug.dll` 6.2 and 6.3
+  carry neither text, `usbxhci`, `0x220448` nor `0x22045C`.
+- **Windows 8's `usbui.dll` drops Windows 7's High-Speed notice texts**:
+  7 SP1's strings 82 to 96 ("This device can perform faster", "This USB
+  device can perform faster if you connect it to a Hi-Speed USB 2.0
+  port...", the port-finder texts) are absent from 6.2; 97 "HI-SPEED USB
+  Hub" and 1117 remain. Whether anything on 8 still shows a High-Speed
+  notice is not read.
+
+**What the details pane tests (static; 8 x86 read in full at the
+interface level, 8.1 x64 checked at the same points).** For the drive
+selected:
+
+1. `\\.\X:` answers `IOCTL_STORAGE_QUERY_PROPERTY` (`0x2D1400`) with
+   `BusType` 7 (`BusTypeUsb`); any other bus, no line.
+2. `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` (`0x560000`) gives the disk; the
+   `GUID_DEVINTERFACE_DISK` interface with that number is found by
+   `IOCTL_STORAGE_GET_DEVICE_NUMBER` (`0x2D1080`).
+3. The disk's `DEVPKEY_Device_ContainerId` must differ from that of
+   `HTREE\ROOT\0` (the computer's own container); a device inside the
+   computer's container gets no line.
+4. From the disk's devnode, `DEVPKEY_Device_Parent` leads to the USB
+   device and its hub (the depth of that walk not read), whose `GUID_DEVINTERFACE_USB_HUB` interface is
+   opened; `DEVPKEY_Device_Address` is the connection index. The hub is
+   sent `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` (`0x220448`), of
+   which only `Speed` (byte offset 0x17) is kept, and
+   `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2` (`0x22045C`), 16
+   bytes in and out, `Length` 16, `SupportedUsbProtocols` 7 (`Usb110 |
+   Usb200 | Usb300`).
+5. **The decision.** *Capable* is `_EX_V2` flag bit 1
+   (`DeviceIsSuperSpeedCapableOrHigher`); without it, no line. Capable and
+   either flag bit 0 (`DeviceIsOperatingAtSuperSpeedOrHigher`) or an `_EX`
+   `Speed` of 3: "Connected to USB 3.0". Capable and not operating: "Device
+   can perform faster when connected to USB 3.0" - **only if** some
+   `GUID_DEVINTERFACE_USB_HOST_CONTROLLER` devnode has
+   `DEVPKEY_Device_Service` equal, ignoring case, to `usbxhci` or
+   `usbxhci_dsf` and `DEVPKEY_Device_ProblemCode` 0 (the strings at 8 x86
+   RVA `0x590930`; 8.1 x64 carries the same two). Bit 2 and bit 3
+   (the SuperSpeedPlus pair) are not tested.
+
+**What the Devices and Printers provider tests (static, `usbui.dll` 6.2
+x86, 8.1 x64 checked at the same points).** Given a device container: none
+for the computer's own container (`HTREE\ROOT\0`'s); then the same
+`usbxhci` / `usbxhci_dsf` test, here **before either line**; then a
+`DevCreateObjectQuery` (the Windows 8 device query API) for the
+`GUID_DEVINTERFACE_USB_DEVICE` and `GUID_DEVINTERFACE_USB_HUB` interfaces
+of that container, each item's `DEVPKEY_Device_InstanceId`, `_Address` and
+`_Parent` read and the parent's hub interface opened, and the same
+`_EX_V2` request (protocols 7, `Length` 16) per item. An item whose parent
+hub lies in another container is the container's attachment point. No line
+unless an attachment point reads bit 1; "Connected to USB 3.0" if one reads
+bit 0; otherwise "can perform faster".
+
+**What this bus answers for each input today (static, from `src\`).**
+
+| Input | Under `xhci98.sys` | Where |
+|---|---|---|
+| Bus type of the volume | `usbstor`'s own answer (`BusTypeUsb`); not the bus's | - |
+| A container of its own | device PDOs report `Removable` TRUE, the root hub FALSE, so PnP gives the stick its own container (documented PnP behaviour; not read on 8) | `hcd_pdo.c`, `hcd_rh.c` |
+| Hub interface and connection index | root hub and hub FDOs register `GUID_DEVINTERFACE_USB_HUB`, device PDOs `GUID_DEVINTERFACE_USB_DEVICE`; `Address` is the root port number on a root port (the root hub's door takes the same number as `ConnectionIndex`), the parent hub's port for a child of an external hub devnode, and an instance key otherwise (`XhciHubPdoAddress`), where the request would name another port | `hcd_door.c`, `xhci_hub.c` |
+| `_EX` `Speed` | 0 to 2; a SuperSpeed connection reads 2 on every NT target, never 3 (8.4) | `xhci_hub.c` |
+| `_EX_V2` request of protocols 7, `Length` 16 | accepted (it carries `Usb300`) | `hcd_door.c` |
+| `_EX_V2` bit 0 | set for a SuperSpeed connection | `XhciHubExV2Flags` |
+| `_EX_V2` bit 1 | set when operating at SuperSpeed, or from the BOS; **the BOS is read only on the SuperSpeed enumeration path**, so a USB 3 device on a USB 2.0 port reads 0 (8.4) | `xhci_enum.c` state `XHCI_ENUM_DESC18` |
+| The `usbxhci` test | the controller's service is `xhci98` (`xhci98.inf` `AddService`); false unless another controller in the machine runs `usbxhci` | INFs |
+
+So under `xhci98.sys` on 8 and 8.1, by this reading: a USB 3 stick on a USB
+2.0 port gets **no line, for two independent reasons** - bit 1 is clear
+(no BOS read at High Speed) and, even with it set, the "can perform
+faster" text needs a working `usbxhci` controller; a SuperSpeed stick on a
+USB 3 port should get "Connected to USB 3.0" in the details pane (bits 0
+and 1 set, no `usbxhci` test on that branch) but no status in Devices and
+Printers (the provider tests `usbxhci` first). Both predictions are
+static, for the Windows 8 VM (6.12.9).
+
+**Windows 7's High-Speed notice (measured, 2026-10-22).** One Windows 7
+SP1 x86 guest: an overlay of `w7x86-p38f.qcow2` (the Phase 38 matrix
+overlay of `mtx-w7x86-f`, `xhci98.sys` from the 2.4.0.0 dry cut on
+`qemu-xhci`), QEMU headless, TCG, 2 vCPUs, with an `ich9-usb-ehci1` and
+its three `ich9-usb-uhci` companions added, so that Microsoft's
+`usbehci`, `usbuhci` and `usbhub` drive them beside `xhci98.sys`. A QEMU
+`usb-hub` (Full Speed) with a `usb-storage` (QEMU's device has a High-Speed configuration) on its
+port 1, hot-plugged at the desktop; QEMU's
+`info usb` read 12 Mb/s for both. Screen read by QMP `screendump`.
+
+| Stack | First plug | Replug of the stick | The drive |
+|---|---|---|---|
+| Microsoft's (EHCI port 1, the hub routed to its UHCI companion) | "Your device is ready to use" (driver install) only | **"This device can perform faster" - "This USB device can perform faster if you connect it to a Hi-Speed USB 2.0 port. For a list of available ports, click here."** within 10 s | F:, 127 MB |
+| `xhci98.sys` (`qemu-xhci` USB 2.0 port 1) | "xHCI98 USB Hub" installed only | none (screens at 10 to 60 s after the first plug and after each of two replugs) | F:, 127 MB |
+
+The balloon's text is 7's `usbui.dll` strings 83 and 82. Its trigger,
+`usbhub.sys`'s notification (the `USB_NOTIFICATION` route roadmap 43.25
+names), was not read here; `src\` registers no WMI provider (no
+`IoWMIRegistrationControl`), so this bus raises no such notification.
+Vista was not run.
+
+**Options for 43.30** (the owner to pick; none is taken here):
+
+1. **Read the BOS at High Speed** (and Full Speed) for a device whose
+   `bcdUSB` is 0x0210 or more, so `_EX_V2`'s capable flags are answered on
+   every connection. It is what 43.27's tray notice needs on every target,
+   and Explorer's capable test on 8 and 8.1. Alone it does not bring
+   Explorer's "can perform faster" under `xhci98.sys` (the `usbxhci`
+   test); it changes every such device's enumeration by two requests, the
+   risk 8.4 named.
+2. **Answer `_EX` `Speed` 3 for SuperSpeed on NT 6.2 and later** (8.4 keeps
+   2 because Vista's and 7's pages test for exactly 2): Explorer already
+   says "Connected to USB 3.0" from bit 0, so this gains nothing there;
+   listed only because the details pane reads it. What 8's `usbui.dll`
+   pages do with a 3 is not read.
+3. **XHCITR's own notice (43.27) on by default on 8 and 8.1 under
+   `xhci98.sys`**, since by this reading Windows' line cannot appear there
+   (its rule: on by default where Windows shows no notice of its own under
+   this driver); with option 1 for its input.
+4. **The release notes and 43.29's install note** say that under
+   `xhci98.sys` on 8 and 8.1 the details pane shows "Connected to USB 3.0"
+   but never "can perform faster", and on Vista and 7 that the High-Speed
+   balloon is not raised (measured on 7).
+5. **A High-Speed notice under this bus on Vista and 7** (the balloon
+   Microsoft's stack raises, measured above): only through XHCITR (43.27
+   widened to a High-Speed device behind a Full-Speed hub), since the
+   balloon's route is `usbhub.sys`'s WMI notification.
+
+Not offered: answering the `usbxhci` test (it reads the controller's
+service name, which only Windows' own driver has).
+
+**Owed to the Windows 8 VM (6.12.9):** under Microsoft's stack, the line
+for a SuperSpeed stick on a USB 2.0 port and "Connected to USB 3.0" on a
+USB 3 port, in the details pane and in Devices and Printers; under
+`xhci98.sys` forced, the two predictions above; and whether 8 shows any
+High-Speed notice.
 
 ### 6.13 Windows 8's client contract served by the bus (task 43.29, 2026-10-22)
 
