@@ -644,7 +644,18 @@ int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_
     if (!writes) {
         pl->minWrite = 0;
     }
-    pl->bufferBytes = (pf_u64)pl->maxSize * pl->slots + pl->maxSize;
+    {
+        /* As the system half allocates them: one bank of slots + 1 buffers,
+         * each the largest size rounded to a page plus a page; the scattered
+         * layout's bank and the temporary bank it is made with; and the
+         * verification buffer (at least the 1 MiB preparation chunk) */
+        pf_u64 page = 4096u;
+        pf_u64 stride = ((pf_u64)pl->maxSize + page - 1u) / page * page + page;
+        pf_u64 bank = stride * ((pf_u64)pl->slots + 1u);
+        pf_u64 vb = ((pl->maxSize > 1048576u) ? (pf_u64)pl->maxSize : (pf_u64)1048576u) + page;
+
+        pl->bufferBytes = bank * (((p->bufMask & (1 << PF_BUF_SCATTER)) != 0) ? 3u : 1u) + vb;
+    }
     if (pl->bufferBytes > (pf_u64)256 * 1048576u ||
         (env->memBytes != 0 && pl->bufferBytes > env->memBytes / 4)) {
         return pf_refuse(why, whyCap, "The buffers would be too large: lower the queue depth, the threads or the largest size.");
@@ -1070,7 +1081,18 @@ void pf_shown(const PF_RESULT *pa, int n, int show, int mib, int highRes, PF_SHO
                 }
             }
             out->rate10 = (nok % 2) ? s[nok / 2] : (s[nok / 2 - 1] + s[nok / 2] + 1) / 2;
-            out->iops = (io + (pf_u64)nok / 2) / (pf_u64)nok;
+            for (i = 0; i < nok; i++) {
+                s[i] = pf_iops(pa[okIdx[i]].reqs, pa[okIdx[i]].us);
+            }
+            for (i = 1; i < nok; i++) {
+                for (j = i; j > 0 && s[j - 1] > s[j]; j--) {
+                    t2 = s[j];
+                    s[j] = s[j - 1];
+                    s[j - 1] = t2;
+                }
+            }
+            out->iops = (nok % 2) ? s[nok / 2] : (s[nok / 2 - 1] + s[nok / 2] + 1) / 2;
+            (void)io;
         }
     }
     if (highRes && merged.count != 0) {

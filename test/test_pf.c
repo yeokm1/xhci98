@@ -491,6 +491,24 @@ static void test_key_saved(void)
         CHECK_EQ(pf_saved_value(&row, PF_SHOW_MEDIAN, 0), 2000, "a saved row's median");
     }
     {
+        PF_RESULT r3[3];
+        PF_SHOWN sh3;
+
+        memset(r3, 0, sizeof(r3));
+        r3[0].status = r3[1].status = r3[2].status = PF_ST_OK;
+        r3[0].us = r3[1].us = r3[2].us = 1000000u;
+        r3[0].reqs = 100;
+        r3[1].reqs = 200;
+        r3[2].reqs = 900;
+        r3[0].bytes = 100u * 4096u;
+        r3[1].bytes = 200u * 4096u;
+        r3[2].bytes = 900u * 4096u;
+        pf_shown(r3, 3, PF_SHOW_MEDIAN, 0, 0, &sh3);
+        CHECK_EQ(sh3.iops, 200, "the median's IOPS is the median pass's, not the mean");
+        pf_shown(r3, 3, PF_SHOW_MEAN, 0, 0, &sh3);
+        CHECK_EQ(sh3.iops, 400, "the mean's IOPS");
+    }
+    {
         PF_PARAMS q;
         PF_PLAN pq;
 

@@ -181,7 +181,7 @@ int s98_scattered(const S98_DELTA *d, pf_u32 size, int write)
     int b = s98_size_bucket(size);
     int cls = b - S98_RUN_CLASS_FIRST;
     int dir = write ? 1 : 0;
-    pf_u64 few = 0, more = 0, unseen, sum;
+    pf_u64 few = 0, more = 0, unseen, sum, pieces, cutReqs;
     pf_u32 per64 = (size + 65535u) / 65536u;
     int i;
 
@@ -201,12 +201,20 @@ int s98_scattered(const S98_DELTA *d, pf_u32 size, int write)
         }
     }
     unseen = d->tot[S98_T_RUNS + cls * S98_RUN_BUCKETS + S98_RUN_NOT_SEEN];
+    pieces = d->tot[S98_T_SRBSIZE + dir * S98_SIZES + 6];
     sum = few + more;
     if (sum == 0) {
-        if (d->tot[S98_T_SRBSIZE + dir * S98_SIZES + 6] != 0 || unseen != 0) {
+        if (pieces != 0 || unseen != 0) {
             return S98_SCAT_HIDDEN;
         }
         return S98_SCAT_UNKNOWN;
+    }
+    /* the test's requests that arrived cut (each in this many 63 KiB
+     * pieces) or with a layout not seen: unless the whole, seen ones are
+     * most of them, the layout is hidden */
+    cutReqs = pieces / (((pf_u64)size + 64511u) / 64512u);
+    if (sum <= cutReqs + unseen) {
+        return S98_SCAT_HIDDEN;
     }
     return more * 2 > sum ? S98_SCAT_YES : S98_SCAT_NO;
 }

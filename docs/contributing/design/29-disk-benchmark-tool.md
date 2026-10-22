@@ -1514,6 +1514,21 @@ a choice:
   Stor98 always reads as "not seen".
 - **Comparison**: loaded saved results are checked again against each new
   run's workload and dropped from the display when they differ.
+- **A stopped verification** is never reported clean: a step's becomes
+  Stopped, the whole file's says it is not known to be clean.
+- **The plan is made aside**: a refused start leaves the shown results and
+  their plan as they were.
+- **Medians**: with Show set to Median, IOPS is the median pass's too.
+- **The memory limit** counts the buffers as allocated: the bank of
+  depth x threads + 1 page-rounded buffers, two more banks for the
+  scattered layout (its own and the one it is made with), and the
+  verification buffer.
+- **The Stor98 page of a test** is its latest pass's and names that pass;
+  a pass whose counters were not read says so instead of keeping an
+  earlier page. Its scattered conclusion needs the whole, seen requests
+  to outnumber those cut into 63 KiB pieces or not seen.
+- **The millisecond timer** (no performance counter) takes its differences
+  as DWORDs, across `GetTickCount`'s rollover.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

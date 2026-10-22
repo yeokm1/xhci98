@@ -201,6 +201,14 @@ static void test_buckets_page(void)
     s98_parse(ans, S98_ANSWER_BYTES, &a);
     s98_diff(&b, &a, &d);
     CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_HIDDEN, "double-buffered with runs: hidden");
+    /* one whole scattered request among many cut ones: hidden, not scattered */
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    put_total(S98_T_RUNS + 3 * 10 + 4, 1);
+    put_total(S98_T_SRBSIZE + 13 + 6, 900);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_HIDDEN, "a whole minority: hidden");
 }
 
 int main(void)

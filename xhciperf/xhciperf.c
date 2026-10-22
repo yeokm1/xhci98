@@ -283,11 +283,15 @@ static pf_u64 ticks_us(pf_u64 ticks)
     return pf_ticks_us(ticks, g_freq);
 }
 
-/* Microseconds since t0, or 0 with *back set when the counter ran back */
+/* Microseconds since t0, or 0 with *back set when the counter ran back;
+ * the millisecond counter's difference wraps as a DWORD */
 static pf_u64 since_us(pf_u64 t0, int *back)
 {
     pf_u64 n = qpc_now();
 
+    if (!g_highRes) {
+        return (pf_u64)(DWORD)((DWORD)n - (DWORD)t0) * 1000u;
+    }
     if (n < t0) {
         *back = 1;
         return 0;
@@ -1278,6 +1282,7 @@ struct run {
     DWORD failError;
     WORKER w[PF_MAX_THREADS];
     pf_u32 incomplete;
+    int verifyCut;          /* the last verification was stopped before its end */
     int s98ok;
     S98_ANSWER s98before;
 };
@@ -2065,11 +2070,18 @@ static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad)
     if (h == INVALID_HANDLE_VALUE) {
         return 0xFFFFFFFFu;
     }
-    while (b < r->mapBlocks && !stopped()) {
+    r->verifyCut = 0;
+    while (b < r->mapBlocks) {
         pf_u64 e;
         pf_u64 off;
         LONG hi;
         DWORD got = 0, len;
+
+        if (stopped()) {
+            /* cut short: what was not read is not called clean */
+            r->verifyCut = 1;
+            break;
+        }
 
         if (r->map[b] == PF_GEN_UNKNOWN) {
             if (all) {
@@ -2255,7 +2267,7 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
             }
         }
     }
-    res->us = ticks_us(t1 - t0);
+    res->us = g_highRes ? ticks_us(t1 - t0) : (pf_u64)(DWORD)(k1 - k0) * 1000u;
     if (g_highRes && !pf_timer_plausible(res->us, (pf_u64)(k1 - k0))) {
         res->timerBad = 1;
         res->us = (pf_u64)(k1 - k0) * 1000u;
@@ -2284,8 +2296,9 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
     if (res->stampUs != 0 && nt != 0) {
         res->stampUs /= (pf_u64)nt;
     }
-    if (t1 < t0) {
+    if (g_highRes && t1 < t0) {
         res->timerBad = 1;
+        res->us = (pf_u64)(DWORD)(k1 - k0) * 1000u;
     }
     if (res->timerBad) {
         /* the counter is not to be trusted: no latency, no stamping share */
@@ -2366,6 +2379,11 @@ static unsigned __stdcall run_main(void *arg)
     r->go = CreateEventA(NULL, TRUE, FALSE, NULL);
     r->stepEnd = CreateEventA(NULL, TRUE, FALSE, NULL);
     file_path(g_folder, r->path, sizeof(r->path));
+    why[0] = 0;
+    if (r->go == NULL || r->stepEnd == NULL) {
+        sz_cpy(why, sizeof(why), "The run could not start (no system events left).");
+        goto done;
+    }
     read_env(g_folder, &env);
     r->sector = env.sector != 0 ? env.sector : 512;
     r->region = g_plan.regionBytes;
@@ -2478,20 +2496,27 @@ static unsigned __stdcall run_main(void *arg)
                 genStart = r->gen.last;
                 LeaveCriticalSection(&r->cs);
                 run_step(r, i, &res, warm ? NULL : &r->s98before, &haveBefore, warm ? NULL : &after, &haveAfter);
-                if (haveBefore && !warm && haveAfter) {
+                /* The test's page is its latest pass's, and says which */
+                if (!warm && (haveBefore || g_s98state == S98_ST_OK || g_s98steps[i][0] != 0)) {
                     S98_DELTA d;
+                    PF_TEXT t;
+                    static char page[sizeof(g_s98steps[0])];
 
-                    if (s98_diff(&r->s98before, &after, &d)) {
-                        PF_TEXT t;
-                        static char page[sizeof(g_s98steps[0])];
-
-                        pf_tx_init(&t, page, sizeof(page));
+                    pf_tx_init(&t, page, sizeof(page));
+                    pf_tx_s(&t, "Pass ");
+                    pf_tx_u(&t, (pf_u64)(pass + 1));
+                    pf_tx_s(&t, " of ");
+                    pf_tx_u(&t, (pf_u64)npass);
+                    if (haveBefore && haveAfter && s98_diff(&r->s98before, &after, &d)) {
+                        pf_tx_s(&t, " (each pass's counters replace the one's before):\r\n");
                         s98_page(&t, &after, &d, g_os == PF_OS_9X, res.reqs, g_plan.steps[i].size,
                                  g_plan.steps[i].op == PF_OP_WRITE);
-                        EnterCriticalSection(&g_resCs);
-                        memcpy(g_s98steps[i], page, sizeof(page));
-                        LeaveCriticalSection(&g_resCs);
+                    } else {
+                        pf_tx_s(&t, ": Stor98's counters could not be read.\r\n");
                     }
+                    EnterCriticalSection(&g_resCs);
+                    memcpy(g_s98steps[i], page, sizeof(page));
+                    LeaveCriticalSection(&g_resCs);
                 }
                 if (g_plan.steps[i].op == PF_OP_WRITE && g_p.verify && r->map != NULL && res.status == PF_ST_OK) {
                     pf_u32 fb;
@@ -2499,7 +2524,10 @@ static unsigned __stdcall run_main(void *arg)
 
                     post_status("Verifying what was written");
                     bad = verify_since(r, genStart, 0, &fb);
-                    if (bad == 0xFFFFFFFFu) {
+                    if (bad == 0 && r->verifyCut) {
+                        post_log("The verification was stopped before its end.");
+                        res.status = PF_ST_STOPPED;
+                    } else if (bad == 0xFFFFFFFFu) {
                         post_log("The verification could not read the file.");
                         res.status = PF_ST_FAILED;
                         res.error = GetLastError();
@@ -2552,7 +2580,9 @@ static unsigned __stdcall run_main(void *arg)
 
         post_status("Verifying the whole file");
         bad = verify_since(r, 0, 1, &fb);
-        if (bad == 0) {
+        if (bad == 0 && r->verifyCut) {
+            post_log("The whole file's verification was stopped before its end; it is not known to be clean.");
+        } else if (bad == 0) {
             post_log("The whole file verified clean.");
         } else {
             InterlockedExchange((LONG *)&g_runBad, 1);
@@ -3419,9 +3449,17 @@ static void start_run(void)
     read_env(g_folder, &e);
     disk_facts(g_folder, &e);
     SetWindowTextA(g_disk, g_diskText);
-    if (pf_plan(&g_p, &e, &g_plan, why, sizeof(why)) != PF_OK) {
-        refuse(why);
-        return;
+    {
+        /* planned aside: a refused plan leaves the results shown as they are */
+        static PF_PLAN np;
+
+        if (pf_plan(&g_p, &e, &np, why, sizeof(why)) != PF_OK) {
+            refuse(why);
+            return;
+        }
+        EnterCriticalSection(&g_resCs);
+        g_plan = np;
+        LeaveCriticalSection(&g_resCs);
     }
     s98_find(g_folder);
     memset(g_res, 0, sizeof(g_res));
@@ -4283,6 +4321,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     g_cliExit = 0;
     g_stopEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (g_stopEvent == NULL) {
+        MessageBoxA(NULL, "The xHCI98 Disk Benchmark could not start (no system events left).",
+                    "xHCI98 Disk Benchmark", MB_OK | MB_ICONSTOP);
+        return 2;
+    }
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_TAB_CLASSES | ICC_BAR_CLASSES;
     if (!InitCommonControlsEx(&icc)) {
