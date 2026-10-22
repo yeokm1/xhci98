@@ -1496,6 +1496,24 @@ a choice:
   configuration-manager check is not built.
 - **Paths**: a full or long path name that does not fit, or leaves no room
   for `\XHCIPERF.TMP`, is refused.
+- **The header first**: the ownership header is written right after
+  `CREATE_NEW`, before the attribute and free-space checks, so a run that
+  ends at any later point leaves a file the cleanup and the next start
+  recognise; on 98 SE and ME a file that is not recognisable is kept with
+  its record.
+- **Timing**: on SMP before Vista the controller, which takes T0 and T1,
+  stays on the first processor. A counter reading that runs back marks the
+  result's timer unreliable, and such a result shows no latency and no
+  stamping share. Stor98's before-read is taken after every handle has
+  been opened and checked, as the workers are released.
+- **The Stor98 page**: a counter read takes the target as it was when asked
+  and changes the state only when it returns in time; the report carries
+  every step's page.
+- **The scattered conclusion** counts a request as scattered when its runs
+  exceed one per 64 KiB of the test's size, and double-buffering before
+  Stor98 always reads as "not seen".
+- **Comparison**: loaded saved results are checked again against each new
+  run's workload and dropped from the display when they differ.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

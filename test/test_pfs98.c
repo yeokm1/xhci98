@@ -172,6 +172,35 @@ static void test_buckets_page(void)
     s98_diff(&b, &a, &d);
     CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_NO, "one run each: not scattered");
     CHECK_EQ(s98_scattered(&d, 4096u, 1), S98_SCAT_UNKNOWN, "no class for 4 KiB");
+
+    /* two runs in 512 KiB are not more than one per 64 KiB; nine are */
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    put_total(S98_T_RUNS + 3 * 10 + 1, 512);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_NO, "two runs in 512 KiB: not scattered");
+    CHECK_EQ(s98_scattered(&d, 65536u, 1), S98_SCAT_UNKNOWN, "another class has no requests");
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    put_total(S98_T_RUNS + 3 * 10 + 4, 512);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_YES, "9-16 runs in 512 KiB: scattered");
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    put_total(S98_T_RUNS + 0 * 10 + 1, 512);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    CHECK_EQ(s98_scattered(&d, 65536u, 1), S98_SCAT_YES, "two runs in 64 KiB: scattered");
+    /* double-buffered: the runs Stor98 saw are IOS's buffer, not the caller's */
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    put_total(S98_T_RUNS + 3 * 10 + 4, 512);
+    put_total(S98_T_DOUBLEBUF, 512);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_HIDDEN, "double-buffered with runs: hidden");
 }
 
 int main(void)

@@ -169,25 +169,41 @@ const char *s98_size_name(int bucket)
     return s98_size_names[bucket];
 }
 
+/* The fewest runs of each run bucket (stor98pf.h) */
+static const pf_u32 s98_run_min[S98_RUN_NOT_SEEN] = { 1, 2, 3, 5, 9, 17, 18, 33, 65 };
+
+/* Scattered: in the test's size class, most requests arrived whole with
+ * more than one physical run per 64 KiB of the request (record 29 section
+ * 3.2). Double-buffering before Stor98 hides the caller's layout, whatever
+ * the runs say. */
 int s98_scattered(const S98_DELTA *d, pf_u32 size, int write)
 {
     int b = s98_size_bucket(size);
     int cls = b - S98_RUN_CLASS_FIRST;
     int dir = write ? 1 : 0;
-    pf_u64 one, more = 0, unseen, sum;
+    pf_u64 few = 0, more = 0, unseen, sum;
+    pf_u32 per64 = (size + 65535u) / 65536u;
     int i;
 
     if (cls < 0 || cls >= S98_RUN_CLASSES) {
         return S98_SCAT_UNKNOWN;
     }
-    one = d->tot[S98_T_RUNS + cls * S98_RUN_BUCKETS + 0];
-    for (i = 1; i < S98_RUN_NOT_SEEN; i++) {
-        more += d->tot[S98_T_RUNS + cls * S98_RUN_BUCKETS + i];
+    if (d->tot[S98_T_DOUBLEBUF] != 0) {
+        return S98_SCAT_HIDDEN;
+    }
+    for (i = 0; i < S98_RUN_NOT_SEEN; i++) {
+        pf_u64 v = d->tot[S98_T_RUNS + cls * S98_RUN_BUCKETS + i];
+
+        if (s98_run_min[i] > per64) {
+            more += v;
+        } else {
+            few += v;
+        }
     }
     unseen = d->tot[S98_T_RUNS + cls * S98_RUN_BUCKETS + S98_RUN_NOT_SEEN];
-    sum = one + more;
+    sum = few + more;
     if (sum == 0) {
-        if (d->tot[S98_T_SRBSIZE + dir * S98_SIZES + 6] != 0 || d->tot[S98_T_DOUBLEBUF] != 0 || unseen != 0) {
+        if (d->tot[S98_T_SRBSIZE + dir * S98_SIZES + 6] != 0 || unseen != 0) {
             return S98_SCAT_HIDDEN;
         }
         return S98_SCAT_UNKNOWN;

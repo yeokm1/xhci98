@@ -210,7 +210,6 @@ static int g_tabSel;
 static int g_selftestChecks, g_selftestFails;
 static PF_CMDLINE g_cl;
 static int g_cliExit;
-static char g_s98page[16384];
 static char g_s98steps[PF_MAX_STEPS][4096];
 static char g_diskText[4096];
 static char g_runDate[40];
@@ -282,6 +281,18 @@ static pf_u64 ticks_us(pf_u64 ticks)
         return ticks * 1000u;
     }
     return pf_ticks_us(ticks, g_freq);
+}
+
+/* Microseconds since t0, or 0 with *back set when the counter ran back */
+static pf_u64 since_us(pf_u64 t0, int *back)
+{
+    pf_u64 n = qpc_now();
+
+    if (n < t0) {
+        *back = 1;
+        return 0;
+    }
+    return ticks_us(n - t0);
 }
 
 static void post_log(const char *s)
@@ -407,7 +418,11 @@ static int check_folder(const char *in, char *out, size_t cap, char *why, size_t
     }
     if (g_getLongPath != NULL) {
         fl = g_getLongPath(full, lng, sizeof(lng));
-        if (fl != 0 && fl < sizeof(lng)) {
+        if (fl >= sizeof(lng)) {
+            sz_cpy(why, whyCap, "The folder's name is too long; choose a folder nearer the drive's root.");
+            return 1;
+        }
+        if (fl != 0) {
             sz_cpy(full, sizeof(full), lng);
         }
     }
@@ -684,10 +699,16 @@ static volatile LONG g_aspiHung;
 /* A search that timed out and has not returned */
 static volatile LONG g_findOut;
 
+/* One counter read: the target as it was when asked, and what it found,
+ * published by s98_read only when it returned in time */
 typedef struct s98_req {
     int ok;
     unsigned char data[2048];
     DWORD len;
+    char drive;
+    UCHAR port, path, target, lun;
+    BYTE ha, aspiTarget;
+    int newState;           /* 0, or the state the read found */
 } S98_REQ;
 
 static int devicemap_is_stor98(UCHAR port)
@@ -759,19 +780,19 @@ static int nt_read(S98_REQ *rq)
     int ok = 0;
 
     volume_name("C:", vol, sizeof(vol));
-    vol[4] = g_s98drive;
+    vol[4] = rq->drive;
     h = CreateFileA(vol, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         if (GetLastError() == ERROR_ACCESS_DENIED) {
-            g_s98state = S98_ST_ADMIN;
+            rq->newState = S98_ST_ADMIN;
         }
         return 0;
     }
     /* the same volume, the same port and target, still Stor98's */
-    if (!nt_address(h, &sa) || sa.PortNumber != g_s98port || sa.PathId != g_s98path || sa.TargetId != g_s98target ||
-        sa.Lun != g_s98lun || !devicemap_is_stor98(sa.PortNumber)) {
+    if (!nt_address(h, &sa) || sa.PortNumber != rq->port || sa.PathId != rq->path || sa.TargetId != rq->target ||
+        sa.Lun != rq->lun || !devicemap_is_stor98(sa.PortNumber)) {
         CloseHandle(h);
-        g_s98state = S98_ST_NONE;
+        rq->newState = S98_ST_NONE;
         return 0;
     }
     memset(&b, 0, sizeof(b));
@@ -1050,7 +1071,7 @@ static int aspi_read(S98_REQ *rq)
     cdb[1] = 0x01;
     cdb[2] = S98_VPD_PAGE;
     cdb[4] = S98_VPD_LEN;
-    if (!aspi_exec(g_aspiHa, g_aspiTarget, cdb, 6, page, S98_VPD_LEN, &got) || !s98_identity(page, S98_VPD_LEN, &pci)) {
+    if (!aspi_exec(rq->ha, rq->aspiTarget, cdb, 6, page, S98_VPD_LEN, &got) || !s98_identity(page, S98_VPD_LEN, &pci)) {
         return 0;
     }
     memset(cdb, 0, sizeof(cdb));
@@ -1060,7 +1081,7 @@ static int aspi_read(S98_REQ *rq)
     cdb[6] = (BYTE)(S98_ANSWER_BYTES >> 16);
     cdb[7] = (BYTE)(S98_ANSWER_BYTES >> 8);
     cdb[8] = (BYTE)S98_ANSWER_BYTES;
-    if (!aspi_exec(g_aspiHa, g_aspiTarget, cdb, 10, rq->data, S98_ANSWER_BYTES, &got)) {
+    if (!aspi_exec(rq->ha, rq->aspiTarget, cdb, 10, rq->data, S98_ANSWER_BYTES, &got)) {
         return 0;
     }
     rq->len = got;
@@ -1091,6 +1112,13 @@ static int s98_read(S98_ANSWER *a)
     if (rq == NULL) {
         return 0;
     }
+    rq->drive = g_s98drive;
+    rq->port = g_s98port;
+    rq->path = g_s98path;
+    rq->target = g_s98target;
+    rq->lun = g_s98lun;
+    rq->ha = g_aspiHa;
+    rq->aspiTarget = g_aspiTarget;
     th = (HANDLE)_beginthreadex(NULL, 0, s98_thread, rq, 0, &id);
     if (th == NULL) {
         HeapFree(GetProcessHeap(), 0, rq);
@@ -1102,6 +1130,9 @@ static int s98_read(S98_ANSWER *a)
         return 0;
     }
     CloseHandle(th);
+    if (rq->newState != 0) {
+        g_s98state = rq->newState;
+    }
     if (rq->ok && s98_parse(rq->data, rq->len, a)) {
         ok = 1;
     }
@@ -1209,6 +1240,7 @@ typedef struct worker {
     DWORD error;
     int failed;
     int skipped;
+    int timerBack;          /* the counter ran back between two readings */
     pf_u32 bad;
     pf_u64 inflight[PF_MAX_DEPTH];
     int busy[PF_MAX_DEPTH];
@@ -1382,7 +1414,7 @@ static int prep_write_buf(WORKER *w, unsigned char *buf, pf_u64 off, pf_u32 size
     }
     t0 = qpc_now();
     pf_stamp(buf, size, r->runId, off / PF_UNIT, *gen);
-    w->stampUs += ticks_us(qpc_now() - t0);
+    w->stampUs += since_us(t0, &w->timerBack);
     return 1;
 }
 
@@ -1408,7 +1440,7 @@ static void complete_one(WORKER *w, unsigned char *buf, pf_u64 off, pf_u32 gen, 
 {
     RUN *r = w->run;
     const PF_STEP *s = r->step;
-    pf_u64 us = ticks_us(qpc_now() - issued);
+    pf_u64 us = since_us(issued, &w->timerBack);
 
     if (!ok || got != s->size) {
         if (write) {
@@ -1487,6 +1519,15 @@ static void worker_async(WORKER *w)
         memset(&ov[k], 0, sizeof(ov[k]));
         ov[k].hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
         w->busy[k] = 0;
+        if (ov[k].hEvent == NULL) {
+            DWORD e = GetLastError();
+
+            while (--k >= 0) {
+                CloseHandle(ov[k].hEvent);
+            }
+            worker_fail(w, e != 0 ? e : ERROR_NOT_ENOUGH_MEMORY);
+            return;
+        }
     }
     for (;;) {
         int npend = 0;
@@ -1556,7 +1597,8 @@ static void worker_async(WORKER *w)
         }
         wl[npend] = r->stepEnd;
         wl[npend + 1] = g_stopEvent;
-        rc = WaitForMultipleObjects(npend + (stopping ? 0 : 2), wl, FALSE, INFINITE);
+        /* the stop events stay watched until the cancel has been asked */
+        rc = WaitForMultipleObjects(npend + (cancelled ? 0 : 2), wl, FALSE, INFINITE);
         if (rc == WAIT_OBJECT_0 + (DWORD)npend || rc == WAIT_OBJECT_0 + (DWORD)npend + 1) {
             /* Stop or a failure elsewhere: cancel our own, then collect each */
             if (g_cancelIo != NULL && !cancelled) {
@@ -1584,7 +1626,14 @@ static void worker_async(WORKER *w)
                 stopping = 1;
             }
         } else {
-            /* the wait itself failed: collect everything, synchronously */
+            /* the wait itself failed: the step fails; cancel, then collect
+             * everything, synchronously */
+            DWORD e = GetLastError();
+
+            if (g_cancelIo != NULL) {
+                g_cancelIo(w->h);
+            }
+            worker_fail(w, e != 0 ? e : ERROR_INVALID_HANDLE);
             for (k = 0; k < depth; k++) {
                 if (w->busy[k]) {
                     DWORD got;
@@ -1824,7 +1873,8 @@ static void cleanup_file(RUN *r)
             int ours = handle_is_ours(r, h, 0);
 
             CloseHandle(h);
-            if (ours && !DeleteFileA(r->path)) {
+            /* not recognisable as this run's: kept, and its record with it */
+            if (!ours || !DeleteFileA(r->path)) {
                 gone = 0;
             }
         } else if (GetFileAttributesA(r->path) != 0xFFFFFFFF) {
@@ -2068,9 +2118,12 @@ static void step_status(int i, int pass, int npass, int warm)
     post_status(st);
 }
 
-/* after: when not NULL, Stor98's counters read as the timed window ends,
- * before a flush the window excludes; *gotAfter says whether they were */
-static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *after, int *gotAfter)
+/* before, after: when not NULL, Stor98's counters read just before the
+ * workers are released (after every handle has been opened and checked)
+ * and as the timed window ends (before a flush the window excludes);
+ * *gotBefore and *gotAfter say whether they were. */
+static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *gotBefore, S98_ANSWER *after,
+                     int *gotAfter)
 {
     const PF_STEP *s = &g_plan.steps[i];
     int t, nt = s->threads;
@@ -2080,6 +2133,10 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *after, int *gotA
     unsigned id;
     pf_u64 part = r->region / (pf_u64)nt;
     DWORD thErr = 0;
+
+    if (gotBefore != NULL) {
+        *gotBefore = 0;
+    }
 
     memset(res, 0, sizeof(*res));
     part -= part % s->size;
@@ -2155,6 +2212,9 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *after, int *gotA
         SetEvent(g_stopEvent);
         return;
     }
+    if (before != NULL && gotBefore != NULL) {
+        *gotBefore = s98_read(before);
+    }
     k0 = GetTickCount();
     t0 = qpc_now();
     SetEvent(r->go);
@@ -2184,7 +2244,7 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *after, int *gotA
     }
     t1 = qpc_now();
     k1 = GetTickCount();
-    if (after != NULL && gotAfter != NULL) {
+    if (after != NULL && gotAfter != NULL && gotBefore != NULL && *gotBefore) {
         *gotAfter = s98_read(after);
     }
     if (s->op == PF_OP_WRITE && !r->unbuffered && !g_p.flushInWrite) {
@@ -2210,6 +2270,9 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *after, int *gotA
         res->stampUs += w->stampUs;
         res->badUnits += w->bad;
         pf_lat_merge(&res->lat, &w->lat);
+        if (w->timerBack) {
+            res->timerBad = 1;
+        }
         if (w->failed) {
             res->status = PF_ST_FAILED;
             res->error = w->error;
@@ -2220,6 +2283,14 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *after, int *gotA
     }
     if (res->stampUs != 0 && nt != 0) {
         res->stampUs /= (pf_u64)nt;
+    }
+    if (t1 < t0) {
+        res->timerBad = 1;
+    }
+    if (res->timerBad) {
+        /* the counter is not to be trusted: no latency, no stamping share */
+        pf_lat_init(&res->lat);
+        res->stampUs = 0;
     }
     res->cpuLimited = pf_cpu_limited(res->stampUs, res->us);
     if (res->status == PF_ST_OK && res->badUnits != 0) {
@@ -2285,6 +2356,11 @@ static unsigned __stdcall run_main(void *arg)
 
     (void)arg;
     memset(r, 0, sizeof(*r));
+    /* The controller takes T0 and T1: on SMP before Vista it stays on the
+     * first processor, the workers on the others (record 29 section 7) */
+    if (g_os == PF_OS_NT && g_preVista && g_ncpu > 1) {
+        SetThreadAffinityMask(GetCurrentThread(), 1);
+    }
     InitializeCriticalSection(&r->cs);
     pf_gen_init(&r->gen);
     r->go = CreateEventA(NULL, TRUE, FALSE, NULL);
@@ -2343,6 +2419,22 @@ static unsigned __stdcall run_main(void *arg)
     r->indexLo = bi.nFileIndexLow;
     r->indexHi = bi.nFileIndexHigh;
     record_put(r, g_plan.fileBytes, 0);
+    /* The ownership header at once, so that every later end, a refusal's
+     * included, finds the file recognisably this run's */
+    hb = r->vbuf;
+    memset(hb, 0, PF_PREP_CHUNK);
+    memset(&hd, 0, sizeof(hd));
+    hd.runLo = r->runId;
+    hd.runHi = r->runHi;
+    hd.plannedBytes = g_plan.fileBytes;
+    hd.volSerial = r->volSerial;
+    hd.createdLo = ft.dwLowDateTime;
+    hd.createdHi = ft.dwHighDateTime;
+    pf_header_build(&hd, hb);
+    if (!WriteFile(h, hb, PF_HEADER_BYTES, &got, NULL) || got != PF_HEADER_BYTES || !FlushFileBuffers(h)) {
+        err_text(GetLastError(), why, sizeof(why));
+        goto done;
+    }
     g_attributes = GetFileAttributesA(r->path);
     if (g_attributes != 0xFFFFFFFF &&
         (g_attributes & (PF_FILE_ATTRIBUTE_COMPRESS | PF_FILE_ATTRIBUTE_ENCRYPT | PF_FILE_ATTRIBUTE_SPARSE)) != 0) {
@@ -2357,20 +2449,6 @@ static unsigned __stdcall run_main(void *arg)
         env.systemVolume = (r->volSerial != 0 && (r->volSerial == serial_of(win) || r->volSerial == serial_of(swap)));
     }
     if (pf_free_check(&env, g_plan.fileBytes, why, sizeof(why))) {
-        goto done;
-    }
-    hb = r->vbuf;
-    memset(hb, 0, PF_PREP_CHUNK);
-    memset(&hd, 0, sizeof(hd));
-    hd.runLo = r->runId;
-    hd.runHi = r->runHi;
-    hd.plannedBytes = g_plan.fileBytes;
-    hd.volSerial = r->volSerial;
-    hd.createdLo = ft.dwLowDateTime;
-    hd.createdHi = ft.dwHighDateTime;
-    pf_header_build(&hd, hb);
-    if (!WriteFile(h, hb, PF_HEADER_BYTES, &got, NULL) || got != PF_HEADER_BYTES || !FlushFileBuffers(h)) {
-        err_text(GetLastError(), why, sizeof(why));
         goto done;
     }
     if (!prepare(r, &g_plan, &env, why, sizeof(why))) {
@@ -2395,11 +2473,11 @@ static unsigned __stdcall run_main(void *arg)
                     WaitForSingleObject(g_stopEvent, (DWORD)g_p.pauseSec * 1000u);
                 }
                 step_status(i, pass, npass, warm);
-                haveBefore = s98_read(&r->s98before);
+                haveBefore = 0;
                 EnterCriticalSection(&r->cs);
                 genStart = r->gen.last;
                 LeaveCriticalSection(&r->cs);
-                run_step(r, i, &res, (haveBefore && !warm) ? &after : NULL, &haveAfter);
+                run_step(r, i, &res, warm ? NULL : &r->s98before, &haveBefore, warm ? NULL : &after, &haveAfter);
                 if (haveBefore && !warm && haveAfter) {
                     S98_DELTA d;
 
@@ -2551,26 +2629,36 @@ static void system_text(char *out, size_t cap)
 
 static char *build_report(size_t *lenOut)
 {
-    size_t cap = 512u * 1024u;
+    /* room for every step's Stor98 page and its heading, and the report
+     * around them */
+    size_t pcap = (size_t)g_plan.nsteps * (sizeof(g_s98steps[0]) + 160u) + 1u;
+    size_t cap = 512u * 1024u + pcap;
     char *buf = (char *)HeapAlloc(GetProcessHeap(), 0, cap);
+    char *pages = (char *)HeapAlloc(GetProcessHeap(), 0, pcap);
     PF_TEXT t;
     PF_RUNINFO ri;
     int i;
 
-    if (buf == NULL) {
+    if (buf == NULL || pages == NULL) {
+        if (buf != NULL) {
+            HeapFree(GetProcessHeap(), 0, buf);
+        }
+        if (pages != NULL) {
+            HeapFree(GetProcessHeap(), 0, pages);
+        }
         return NULL;
     }
     EnterCriticalSection(&g_resCs);
-    g_s98page[0] = 0;
+    pages[0] = 0;
     for (i = 0; i < g_plan.nsteps; i++) {
-        if (g_s98steps[i][0] != 0 && strlen(g_s98page) + strlen(g_s98steps[i]) + 64 < sizeof(g_s98page)) {
-            sz_cat(g_s98page, sizeof(g_s98page), "Stor98 during ");
-            sz_cat(g_s98page, sizeof(g_s98page), g_plan.steps[i].label);
-            sz_cat(g_s98page, sizeof(g_s98page), g_plan.steps[i].op == PF_OP_WRITE ? " write, " : " read, ");
-            sz_cat(g_s98page, sizeof(g_s98page), pf_buf_name(g_plan.steps[i].buffer));
-            sz_cat(g_s98page, sizeof(g_s98page), ":\r\n");
-            sz_cat(g_s98page, sizeof(g_s98page), g_s98steps[i]);
-            sz_cat(g_s98page, sizeof(g_s98page), "\r\n");
+        if (g_s98steps[i][0] != 0) {
+            sz_cat(pages, pcap, "Stor98 during ");
+            sz_cat(pages, pcap, g_plan.steps[i].label);
+            sz_cat(pages, pcap, g_plan.steps[i].op == PF_OP_WRITE ? " write, " : " read, ");
+            sz_cat(pages, pcap, pf_buf_name(g_plan.steps[i].buffer));
+            sz_cat(pages, pcap, ":\r\n");
+            sz_cat(pages, pcap, g_s98steps[i]);
+            sz_cat(pages, pcap, "\r\n");
         }
     }
     memset(&ri, 0, sizeof(ri));
@@ -2584,7 +2672,7 @@ static char *build_report(size_t *lenOut)
     ri.physSector = g_runPhys;
     ri.timerFreq = g_highRes ? g_freq : 0;
     ri.attributes = g_attributes;
-    ri.stor98 = g_s98page;
+    ri.stor98 = pages;
     pf_tx_init(&t, buf, cap);
     {
         /* the run's workload; only how values are shown follows the window */
@@ -2594,6 +2682,7 @@ static char *build_report(size_t *lenOut)
         rp.unitMiB = g_p.unitMiB;
         pf_report(&t, &rp, &g_plan, g_res, g_npasses, &ri);
     }
+    HeapFree(GetProcessHeap(), 0, pages);
     LeaveCriticalSection(&g_resCs);
     *lenOut = t.len;
     return buf;
@@ -3338,7 +3427,16 @@ static void start_run(void)
     memset(g_res, 0, sizeof(g_res));
     memset(g_s98steps, 0, sizeof(g_s98steps));
     g_runP = g_p;
-    sz_cpy(g_runDrive, sizeof(g_runDrive), g_driveText);
+    if (g_haveSaved) {
+        char key[512];
+
+        pf_key(&g_runP, g_highRes, key, sizeof(key));
+        if (!pf_key_same(g_saved.key, key, g_savedDiff, sizeof(g_savedDiff))) {
+            g_haveSaved = 0;
+            log_add("The saved results were measured differently from this run; they are no longer shown beside it.");
+        }
+    }
+    sz_cpy(g_runDrive, sizeof(g_runDrive), g_folder);
     sz_cpy(g_runFs, sizeof(g_runFs), g_fsName);
     sz_cpy(g_runModel, sizeof(g_runModel), g_model);
     g_runSector = g_sector;
@@ -3476,6 +3574,10 @@ static void run_as_admin(void)
     GetModuleFileNameA(NULL, exe, sizeof(exe));
     sz_cpy(args, sizeof(args), "/folder \"");
     sz_cat(args, sizeof(args), g_folder);
+    /* backslashes before the closing quote are doubled (the CRT's rule) */
+    if (g_folder[0] != 0 && g_folder[strlen(g_folder) - 1] == '\\') {
+        sz_cat(args, sizeof(args), "\\");
+    }
     sz_cat(args, sizeof(args), "\"");
     if (g_preVista) {
         MessageBoxA(g_wnd, "Run the xHCI98 Disk Benchmark as an administrator to read Stor98's counters.",
