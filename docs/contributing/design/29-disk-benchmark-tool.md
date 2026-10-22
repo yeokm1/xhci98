@@ -1,7 +1,10 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 3, 2026-10-22, before code (roadmap-usb4 task 43.50),
-reviewed and revised twice the same day. Draft 3: every reopened handle
+Status: draft 4, 2026-10-22, before code (roadmap-usb4 task 43.50),
+reviewed and revised three times the same day. Draft 4: a write
+generation in every stamp and in the expected-state map, so a dropped
+repeated write is found; the random generator's zero state and its
+redraws bounded. Draft 3: every reopened handle
 bound to the created file, a partly prepared leftover recognised, writes
 in flight never overlapping in sequential tests either, the preparation
 flushed before the first measurement, one byte budget for the whole
@@ -266,9 +269,12 @@ Every test reads and writes one file of the tool's own,
 - **Three patterns.**
   - **Verifiable** (the default when verification is on): every 512-byte
     unit carries a 16-byte stamp - the signature `XPRF`, the low 32 bits of
-    the run's identity, the unit's index in the file, the number of the
-    test that wrote it (0 for the preparation) - and 496 bytes from a
-    32-bit xorshift generator seeded from those three values. Every unit
+    the run's identity, the unit's index in the file, and the write's
+    generation (a 32-bit count, run-wide, taken by every write request at
+    its issue, 0 for the preparation, so a block written again by a
+    wrapped sequential test, a later pass or a warm-up gets a new value
+    each time) - and 496 bytes from the generator of section 3.5 seeded
+    from those three values. Every unit
     can be checked alone, at any offset, with no copy of what was written.
     The buffer of each request is stamped before the request is issued,
     which costs processor time inside the test (see below).
@@ -279,13 +285,15 @@ Every test reads and writes one file of the tool's own,
     verifiable.
   The two generated patterns are meant to defeat a controller's
   compression; no claim is made for every controller.
-- **The expected-state map.** For a verifiable run the tool keeps one byte
-  per block of the run's smallest write size over the test region (the
-  number of the last test that wrote the block, 0 for the preparation).
-  A write is recorded in the map when it completes successfully. The plan
-  refuses a verifiable run whose map would exceed 16 MiB ("lower the file
-  size, or raise the smallest write size, to verify"), and a run of more
-  than 254 write tests.
+- **The expected-state map.** For a verifiable run the tool keeps one
+  32-bit word per block of the run's smallest write size over the test
+  region: the generation of the last write that completed on the block (0
+  for the preparation). A write is recorded in the map when it completes
+  successfully; since no two writes to a block are ever in flight
+  together, the map is the block's exact expected content. The plan
+  refuses a verifiable run whose map would exceed 16 MiB, four million
+  blocks ("lower the file size, or raise the smallest write size, to
+  verify"), or that could issue more than 2^32 - 1 writes.
 - **No overlapping writes in flight.** Before any write is issued the
   worker checks its block against that thread's requests still in flight
   (at most 32, by a scan): a random write draws its offset again, a
@@ -296,8 +304,9 @@ Every test reads and writes one file of the tool's own,
 - **Verification**, a box (default on for the 9x presets, off otherwise):
   after each write test, an untimed pass reads every block that test
   wrote (unbuffered when the test was) and checks every unit against the
-  map: the stamp's signature, run, index and test number, and the body. A
-  unit whose stamp names an older test (a dropped write), another index (a
+  map: the stamp's signature, run, index and generation, and the body. A
+  unit whose stamp carries an older generation (a dropped write, a
+  repeated one included), another index (a
   misplaced write), another run, or whose body differs, is a mismatch.
   "Verify the whole file at the end" (a box, off) checks every block of
   the region against the map once more after the last test. A second box,
@@ -395,9 +404,20 @@ The buffer choices:
   before it is issued (section 3.3), so a part smaller than the depth
   costs depth, which the plan warns of.
 - **Random**: requests of the test's size at block-aligned offsets in the
-  thread's part, chosen uniformly by a xorshift generator whose seed is in
-  the result ("seed 0x1A2B3C4D"; each thread's seed derived from it), so a
-  run can be repeated; writes avoid blocks in flight (section 3.3).
+  thread's part, chosen uniformly, so a run can be repeated; writes avoid
+  blocks in flight (section 3.3).
+- **The generator** (offsets, and the patterns' bodies): Marsaglia's
+  32-bit xorshift (shifts 13, 17, 5) on a nonzero state. The run's seed
+  is in the result ("seed 0x1A2B3C4D"), the user may set it, and a seed of
+  0 is replaced by `0x9E3779B9`; thread n's state is the seed XOR
+  `(n + 1) * 0x9E3779B9`, and the pattern's per-unit state the three stamp
+  values mixed the same way, each replaced by `0x9E3779B9` whenever it
+  comes out 0. An offset is the state modulo the part's block count (the
+  small bias of a modulus below 2^32 is accepted and stated). A write
+  that draws a block in flight draws again at most 8 times; then the
+  worker waits for its oldest outstanding request to complete (collecting
+  it, and checking Stop) and draws again, so a worker never spins without
+  collecting completions.
 - **Queue depth** (1, 2, 4, 8, 16, 32): requests outstanding per thread.
   On NT, by overlapped I/O (`FILE_FLAG_OVERLAPPED`), one event per
   outstanding request and `WaitForMultipleObjects` on those events and the
@@ -522,7 +542,7 @@ and refuses one that cannot run, each refusal one sentence naming what to
 change: a size below the logical sector in unbuffered mode; a region
 smaller than the largest request times the depth times the threads; a
 thread part smaller than one block; buffers above section 3.4's cap; a
-verifiable run whose map exceeds 16 MiB or with more than 254 write tests;
+verifiable run whose map exceeds 16 MiB;
 the free-space rule of section 4.3; a depth above 1 on 98 SE or ME (not
 reachable from the window, reachable from a command line or a saved
 preset); an offset breaking the adapter's alignment; a run over 2 hours
@@ -1000,7 +1020,7 @@ when two answers cannot be subtracted.
 What a benchmark needs and the answer gives: the request sizes at the
 drive (3) beside those the test issued (the tool's own count) and those
 the driver received (2), so a user sees a 1 MiB request become sixteen 63
-KiB requests at (2) and (3); the splits Stor98 made itself (3); the depth
+KiB requests and one of 16 KiB at (2) and (3); the splits Stor98 made itself (3); the depth
 reached (3); the errors (5); and why (6, 7).
 
 ### 6.4 The 43.46 VSD
@@ -1152,9 +1172,11 @@ of section 3.4, and the panel's text.
 system family (9x refusing depth 8 from a command line, NT accepting it),
 4,096-byte logical and physical sectors, a region too small, buffers and
 maps over the cap; the pattern's unit for given seeds and its check
-against the map finding a dropped write (an older test's stamp), a
+against the map finding a dropped write (an older generation's stamp,
+also when the same block was written earlier in the same test or pass), a
 misplaced write, another run's unit, a changed body, an untouched region
-and a block written twice; the in-flight exclusion at depth 32; the
+and a block written twice; the in-flight exclusion at depth 32, the bounded redraw
+and a part of one block; a zero seed and a derived zero state; the
 arithmetic at its bounds (frequencies of 1,193,182 Hz, 3,579,545 Hz and
 near 2^32, a 2-hour interval, a zero interval) and each rounding edge; a
 backwards and an implausible timer reading; percentiles of a histogram;
