@@ -16469,6 +16469,13 @@ static void vsd_question(void)
                        &shown, &open);
     if (envNow.Nt || !shown || !open) {
         vsdChoice = 0;
+        if (!envNow.Nt && shown && opts.Stor98Vxd) {
+            /* Asked for, but Stor98 is not in the run (a No to its
+             * question): said, not dropped in silence. */
+            out("/stor98vxd: STOR98.VXD is not installed: Stor98 is not in "
+                "this run.\n");
+            logonly("stor98vxd: /stor98vxd without Stor98 in the run\n");
+        }
         if (!envNow.Nt && shown && !s98Include) {
             out("STOR98.VXD, large transfers for Stor98: follows Stor98, which "
                 "is not in this run.\n\n");
