@@ -2321,7 +2321,12 @@ The tooltip's last event (section 7.1) is kept as it is.
    word of `lParam`, which is how the shell reports a balloon's click
    after `NIM_SETVERSION` 3, so whatever the tray does for a balloon's
    click it does for the pop-up's, with no second path (until 43.27 it
-   does nothing; 43.27's notice opens its list). The time running out
+   does nothing; 43.27's notice opens its list). `wParam` is the id the
+   notice was raised with, kept with it in the queue (`TR_POP_NOTE`'s
+   `Id`), not the last one raised: a notice queued behind another
+   reports its own, so the tray opens 43.27's list for that notice's
+   click alone (its id 2, every other notice's 1; the batch 7 merge,
+   2026-10-23). The time running out
    and the close box send `NIN_BALLOONTIMEOUT` (`WM_USER + 4`), and the
    showing sends `NIN_BALLOONSHOW` (`WM_USER + 2`), as the shell does.
    Either way the next waiting notice shows. Showing takes nothing from

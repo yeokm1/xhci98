@@ -5341,6 +5341,8 @@ static void ej_elevated(HWND owner, const char *unitId)
 }
 
 static void tray_balloon(const char *title, const char *text, int warn);
+static void tray_balloon_as(const char *title, const char *text, int warn,
+                            int fast);
 
 /* ======================================================================== */
 /* Plain USB devices (record 25 section 6.5, revision 7)                     */
@@ -6511,8 +6513,7 @@ static void fast_announce(void)
     if (!fastOn) {
         return;
     }
-    tray_balloon(TR_FAST_TITLE, fastText, 0);
-    fastBalloon = 1;
+    tray_balloon_as(TR_FAST_TITLE, fastText, 0, 1);
 }
 
 /* After every model refresh (section 7.7 items 3 and 4): the counted set,
@@ -7557,7 +7558,14 @@ static void tray_remove(void)
     iconAdded = 0;
 }
 
-static void tray_balloon(const char *title, const char *text, int warn)
+/* fast: the "can run faster" notice, whose click opens the list. The
+ * shell shows one balloon, the last replacing the one before, so a flag
+ * of the last balloon serves it; 98 SE's pop-up queues its notices, so
+ * there the notice carries its own id (TRAY_POP_FAST), which its click
+ * reports. */
+#define TRAY_POP_FAST   2
+static void tray_balloon_as(const char *title, const char *text, int warn,
+                            int fast)
 {
     TR_NID n;
 
@@ -7570,7 +7578,7 @@ static void tray_balloon(const char *title, const char *text, int warn)
         tray_update();
         /* 98 SE: the tool's own pop-up in the balloon's place (record 25
          * section 16). */
-        tr_pop_show(hTray, WM_TRAYICON, 1, title, text,
+        tr_pop_show(hTray, WM_TRAYICON, fast ? TRAY_POP_FAST : 1, title, text,
                     warn ? TR_POP_WARNING : TR_POP_INFO);
         return;
     }
@@ -7584,6 +7592,12 @@ static void tray_balloon(const char *title, const char *text, int warn)
     TR_NID_VERSION(n) = 10000;
     n.dwInfoFlags = warn ? NIIF_WARNING : NIIF_INFO;
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+    fastBalloon = fast;
+}
+
+static void tray_balloon(const char *title, const char *text, int warn)
+{
+    tray_balloon_as(title, text, warn, 0);
 }
 
 /* One second's poll: every NHI's query, the snapshot and its events
@@ -7872,7 +7886,7 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             tray_unit_menu();
             break;
         case WM_USER + 5:       /* NIN_BALLOONUSERCLICK */
-            if (fastBalloon) {
+            if (shellV5 ? fastBalloon : wp == TRAY_POP_FAST) {
                 fastBalloon = 0;
                 fast_box(NULL);
             }

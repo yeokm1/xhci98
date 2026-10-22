@@ -339,6 +339,7 @@ int tr_popq_push(TR_POP_QUEUE *q, const char *title, const char *text,
     pop_copy(n->Title, TR_POP_TITLE, title);
     pop_copy(n->Text, TR_POP_TEXT, text);
     n->Icon = (icon >= TR_POP_NONE && icon <= TR_POP_ERROR) ? icon : TR_POP_INFO;
+    n->Id = 0;
     q->Count++;
     return dropped ? 2 : 1;
 }

@@ -391,6 +391,17 @@ static void test_queue(void)
           n.Text[0] == '\0' && n.Icon == TR_POP_ERROR, "then the third, no text");
     CHECK_EQ(tr_popq_pop(&q, &n), 0, "then none");
 
+    /* Each notice keeps its own id (tr_pop_show sets it after the push):
+     * the push leaves 0, and one queued behind another reports its own. */
+    tr_popq_init(&q);
+    tr_popq_push(&q, "a", "first", TR_POP_INFO);
+    CHECK_EQ((int)q.Note[0].Id, 0, "the push leaves the id 0");
+    q.Note[0].Id = 2;
+    tr_popq_push(&q, "b", "second", TR_POP_INFO);
+    q.Note[1].Id = 1;
+    CHECK(tr_popq_pop(&q, &n) && n.Id == 2, "the first keeps its id");
+    CHECK(tr_popq_pop(&q, &n) && n.Id == 1, "the second keeps its own");
+
     /* The bound: the oldest information notice goes. */
     tr_popq_init(&q);
     for (i = 1; i <= TR_POP_QMAX; i++) {
