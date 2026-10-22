@@ -192,6 +192,7 @@ static DWORD g_ncpu;
 static int g_highRes;
 static pf_u64 g_freq;
 static PF_PARAMS g_p;
+static PF_PARAMS g_runP;                /* the workload of the results shown (start_run's copy of g_p) */
 static PF_PLAN g_plan;
 static PF_RESULT g_res[PF_MAX_STEPS * PF_MAX_PASSES];
 static CRITICAL_SECTION g_resCs;        /* g_res and g_s98steps: the controller writes, the window reads */
@@ -213,6 +214,9 @@ static char g_s98page[16384];
 static char g_s98steps[PF_MAX_STEPS][4096];
 static char g_diskText[4096];
 static char g_runDate[40];
+/* The disk's facts as the run found them, for its report */
+static char g_runDrive[MAX_PATH], g_runFs[32], g_runModel[96];
+static pf_u32 g_runSector, g_runPhys;
 static char g_system[80];
 static char g_driveText[MAX_PATH];
 static char g_fsName[32];
@@ -394,12 +398,23 @@ static int check_folder(const char *in, char *out, size_t cap, char *why, size_t
     UINT dt;
     size_t i;
 
-    if (GetFullPathNameA(in, sizeof(full), full, &fp) == 0) {
+    DWORD fl;
+
+    fl = GetFullPathNameA(in, sizeof(full), full, &fp);
+    if (fl == 0 || fl >= sizeof(full)) {
         sz_cpy(why, whyCap, "The folder's name is not valid.");
         return 1;
     }
-    if (g_getLongPath != NULL && g_getLongPath(full, lng, sizeof(lng)) != 0) {
-        sz_cpy(full, sizeof(full), lng);
+    if (g_getLongPath != NULL) {
+        fl = g_getLongPath(full, lng, sizeof(lng));
+        if (fl != 0 && fl < sizeof(lng)) {
+            sz_cpy(full, sizeof(full), lng);
+        }
+    }
+    /* room for the separator and the test file's name */
+    if (strlen(full) + 1 + strlen(PF_FILENAME) >= MAX_PATH) {
+        sz_cpy(why, whyCap, "The folder's name is too long; choose a folder nearer the drive's root.");
+        return 1;
     }
     if (full[0] == '\\' || strlen(full) < 3 || full[1] != ':') {
         sz_cpy(why, whyCap, "Network folders are not tested; choose a folder on a local drive.");
@@ -441,6 +456,21 @@ static int check_folder(const char *in, char *out, size_t cap, char *why, size_t
     }
     GetWindowsDirectoryA(win, sizeof(win));
     GetSystemDirectoryA(sys, sizeof(sys));
+    if (g_os == PF_OS_9X) {
+        char wroot[4];
+        DWORD a, b;
+
+        /* 98 SE and ME cannot say whether a letter is SUBST: a letter other
+         * than the Windows drive's with the Windows drive's volume serial is
+         * taken as another name of it */
+        root_of(win, wroot, sizeof(wroot));
+        a = serial_of(full);
+        b = serial_of(win);
+        if ((full[0] | 0x20) != (wroot[0] | 0x20) && a != 0 && a == b) {
+            sz_cpy(why, whyCap, "This drive letter looks like another name (SUBST) of the Windows drive; choose that drive itself.");
+            return 1;
+        }
+    }
     if (pf_path_under(full, win) || pf_path_under(full, sys)) {
         sz_cpy(why, whyCap, "The Windows folder is not tested; choose another folder, such as the drive's root.");
         return 1;
@@ -649,6 +679,10 @@ static UCHAR g_s98port, g_s98path, g_s98target, g_s98lun;
 static HMODULE g_aspi;
 static PF_SENDASPI g_sendAspi;
 static BYTE g_aspiHa, g_aspiTarget;
+/* Set once an ASPI request has not come back: ASPI is not asked again */
+static volatile LONG g_aspiHung;
+/* A search that timed out and has not returned */
+static volatile LONG g_findOut;
 
 typedef struct s98_req {
     int ok;
@@ -803,9 +837,9 @@ static int aspi_exec(BYTE ha, BYTE target, const BYTE *cdb, int cdbLen, BYTE *bu
             ab.ToAbort = &s;
             g_sendAspi(&ab);
             /* the request owns s and buf until ASPI says it is done */
+            InterlockedExchange((LONG *)&g_aspiHung, 1);
             WaitForSingleObject(ev, INFINITE);
             CloseHandle(ev);
-            g_s98state = S98_ST_DEAD;
             return 0;
         }
     }
@@ -870,7 +904,45 @@ static int devnode_of_letter(char letter, char *id, size_t cap)
     return found;
 }
 
-static void aspi_find(const char *folder)
+/* A 9x search's request: its findings stay here until the caller, still
+ * waiting, publishes them; whichever of the two finishes second frees it */
+typedef struct s98_find_req {
+    char folder[MAX_PATH];
+    int state;
+    BYTE ha, target;
+    volatile LONG done;
+} S98_FIND_REQ;
+
+/* 9x: how many SCSI-enumerated disk instances have this model in their id */
+static int scsi_model_count(const char *want)
+{
+    HKEY scsi, dev;
+    char dn[256], in[256], nd[256];
+    DWORD i, j;
+    int count = 0;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\SCSI", 0, KEY_READ, &scsi) != ERROR_SUCCESS) {
+        return 0;
+    }
+    for (i = 0; RegEnumKeyA(scsi, i, dn, sizeof(dn)) == ERROR_SUCCESS; i++) {
+        norm(dn, strlen(dn), nd, sizeof(nd));
+        if (strstr(nd, want) == NULL || RegOpenKeyExA(scsi, dn, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            continue;
+        }
+        for (j = 0; RegEnumKeyA(dev, j, in, sizeof(in)) == ERROR_SUCCESS; j++) {
+            count++;
+        }
+        RegCloseKey(dev);
+    }
+    RegCloseKey(scsi);
+    return count;
+}
+
+/* The adapter is proved Stor98's by its identity page; the disk is matched
+ * to the drive letter by its model, which must then be the only disk of
+ * that model the system enumerates: otherwise the attribution is left
+ * unavailable rather than guessed. */
+static void aspi_find(const char *folder, S98_FIND_REQ *rq)
 {
     PF_GETASPIINFO info;
     DWORD si;
@@ -879,10 +951,13 @@ static void aspi_find(const char *folder)
     int matches = 0;
     char letter = folder[0];
 
+    char found[64];
+
     if (letter >= 'a' && letter <= 'z') {
         letter = (char)(letter - 'a' + 'A');
     }
-    g_s98state = S98_ST_NONE;
+    rq->state = S98_ST_NONE;
+    found[0] = 0;
     if (!devnode_of_letter(letter, devid, sizeof(devid))) {
         return;
     }
@@ -891,18 +966,18 @@ static void aspi_find(const char *folder)
         g_aspi = LoadLibraryA("WNASPI32.DLL");
     }
     if (g_aspi == NULL) {
-        g_s98state = S98_ST_NOASPI;
+        rq->state = S98_ST_NOASPI;
         return;
     }
     info = (PF_GETASPIINFO)GetProcAddress(g_aspi, "GetASPI32SupportInfo");
     g_sendAspi = (PF_SENDASPI)GetProcAddress(g_aspi, "SendASPI32Command");
     if (info == NULL || g_sendAspi == NULL) {
-        g_s98state = S98_ST_NOASPI;
+        rq->state = S98_ST_NOASPI;
         return;
     }
     si = info();
     if (((si >> 8) & 0xFF) != PF_SS_COMP) {
-        g_s98state = S98_ST_NOASPI;
+        rq->state = S98_ST_NOASPI;
         return;
     }
     nha = (BYTE)(si & 0xFF);
@@ -948,15 +1023,18 @@ static void aspi_find(const char *folder)
             sz_cpy(want, sizeof(want), v);
             if (want[0] != 0 && strstr(ndev, want) != NULL) {
                 matches++;
-                g_aspiHa = ha;
-                g_aspiTarget = t;
+                rq->ha = ha;
+                rq->target = t;
+                sz_cpy(found, sizeof(found), want);
             }
         }
     }
-    if (matches == 1) {
-        g_s98state = S98_ST_OK;
-    } else if (matches > 1) {
-        g_s98state = S98_ST_AMBIG;
+    if (g_aspiHung) {
+        rq->state = S98_ST_DEAD;
+    } else if (matches == 1 && scsi_model_count(found) == 1) {
+        rq->state = S98_ST_OK;
+    } else if (matches >= 1) {
+        rq->state = S98_ST_AMBIG;
     }
 }
 
@@ -1031,13 +1109,16 @@ static int s98_read(S98_ANSWER *a)
     return ok;
 }
 
-typedef struct s98_find_req {
-    char folder[MAX_PATH];
-} S98_FIND_REQ;
-
 static unsigned __stdcall s98_find_thread(void *arg)
 {
-    aspi_find(((S98_FIND_REQ *)arg)->folder);
+    S98_FIND_REQ *rq = (S98_FIND_REQ *)arg;
+
+    aspi_find(rq->folder, rq);
+    if (InterlockedExchange((LONG *)&rq->done, 1) != 0) {
+        /* its caller gave up on it: nothing is published */
+        HeapFree(GetProcessHeap(), 0, rq);
+        InterlockedExchange((LONG *)&g_findOut, 0);
+    }
     return 0;
 }
 
@@ -1054,7 +1135,9 @@ static void s98_find(const char *folder)
         nt_find(folder);
         return;
     }
-    if (g_s98state == S98_ST_DEAD) {
+    g_s98state = S98_ST_NONE;
+    if (g_aspiHung || g_findOut) {
+        g_s98state = S98_ST_DEAD;
         return;
     }
     rq = (S98_FIND_REQ *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(S98_FIND_REQ));
@@ -1068,11 +1151,20 @@ static void s98_find(const char *folder)
         return;
     }
     if (WaitForSingleObject(th, 5000) != WAIT_OBJECT_0) {
+        InterlockedExchange((LONG *)&g_findOut, 1);
+        if (InterlockedExchange((LONG *)&rq->done, 1) != 0) {
+            /* it finished just now: it is not used, and is freed here */
+            HeapFree(GetProcessHeap(), 0, rq);
+            InterlockedExchange((LONG *)&g_findOut, 0);
+        }
         g_s98state = S98_ST_DEAD;
         CloseHandle(th);
         return;
     }
     CloseHandle(th);
+    g_aspiHa = rq->ha;
+    g_aspiTarget = rq->target;
+    g_s98state = rq->state;
     HeapFree(GetProcessHeap(), 0, rq);
 }
 
@@ -1125,6 +1217,7 @@ typedef struct worker {
 struct run {
     char path[MAX_PATH];
     HANDLE anchor;
+    int created;            /* this run's CREATE_NEW succeeded: cleanup may delete */
     pf_u32 runId;
     pf_u32 runHi;
     DWORD volSerial;
@@ -1388,7 +1481,7 @@ static void worker_async(WORKER *w)
     HANDLE ev[PF_MAX_DEPTH + 1];
     pf_u64 issued[PF_MAX_DEPTH];
     pf_u32 gens[PF_MAX_DEPTH];
-    int k, stopping = 0;
+    int k, stopping = 0, cancelled = 0;
 
     for (k = 0; k < depth; k++) {
         memset(&ov[k], 0, sizeof(ov[k]));
@@ -1453,14 +1546,23 @@ static void worker_async(WORKER *w)
         if (npend == 0) {
             break;
         }
+        /* Stopping for Stop, a failure or the step's end (not for a spent
+         * budget): what is still pending is cancelled, once */
+        if (stopping && !cancelled && (stopped() || w->failed || WaitForSingleObject(r->stepEnd, 0) == WAIT_OBJECT_0)) {
+            if (g_cancelIo != NULL) {
+                g_cancelIo(w->h);
+            }
+            cancelled = 1;
+        }
         wl[npend] = r->stepEnd;
         wl[npend + 1] = g_stopEvent;
         rc = WaitForMultipleObjects(npend + (stopping ? 0 : 2), wl, FALSE, INFINITE);
         if (rc == WAIT_OBJECT_0 + (DWORD)npend || rc == WAIT_OBJECT_0 + (DWORD)npend + 1) {
             /* Stop or a failure elsewhere: cancel our own, then collect each */
-            if (g_cancelIo != NULL) {
+            if (g_cancelIo != NULL && !cancelled) {
                 g_cancelIo(w->h);
             }
+            cancelled = 1;
             stopping = 1;
             continue;
         }
@@ -1692,18 +1794,46 @@ static int leftover_offer(HWND owner, const char *path, int quiet)
     return 1;
 }
 
+/* Only a file this run created is deleted, and never by its name alone:
+ * on NT the anchor's FILE_FLAG_DELETE_ON_CLOSE deletes it as the last
+ * handle closes; on 9x, which has no handle-bound deletion, the name is
+ * deleted only after an exclusive open shows this run's header. */
 static void cleanup_file(RUN *r)
 {
+    HANDLE h;
+    int gone = 1;
+
+    if (!r->created) {
+        return;
+    }
     if (r->anchor != NULL && r->anchor != INVALID_HANDLE_VALUE) {
         CloseHandle(r->anchor);
         r->anchor = NULL;
     }
-    if (r->path[0] != 0 && GetFileAttributesA(r->path) != 0xFFFFFFFF) {
-        DeleteFileA(r->path);
+    if (g_os == PF_OS_NT) {
+        h = CreateFileA(r->path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0,
+                        NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            /* still there and still ours: another program holds it open */
+            gone = !handle_is_ours(r, h, 0);
+            CloseHandle(h);
+        }
+    } else {
+        h = CreateFileA(r->path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            int ours = handle_is_ours(r, h, 0);
+
+            CloseHandle(h);
+            if (ours && !DeleteFileA(r->path)) {
+                gone = 0;
+            }
+        } else if (GetFileAttributesA(r->path) != 0xFFFFFFFF) {
+            gone = 0;
+        }
     }
-    if (r->path[0] != 0 && GetFileAttributesA(r->path) == 0xFFFFFFFF) {
+    if (gone) {
         record_clear();
-    } else if (r->path[0] != 0) {
+    } else {
         post_log("The test file could not be deleted; the next start offers to delete it.");
     }
 }
@@ -1938,7 +2068,9 @@ static void step_status(int i, int pass, int npass, int warm)
     post_status(st);
 }
 
-static void run_step(RUN *r, int i, PF_RESULT *res)
+/* after: when not NULL, Stor98's counters read as the timed window ends,
+ * before a flush the window excludes; *gotAfter says whether they were */
+static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *after, int *gotAfter)
 {
     const PF_STEP *s = &g_plan.steps[i];
     int t, nt = s->threads;
@@ -1947,6 +2079,7 @@ static void run_step(RUN *r, int i, PF_RESULT *res)
     DWORD k0, k1;
     unsigned id;
     pf_u64 part = r->region / (pf_u64)nt;
+    DWORD thErr = 0;
 
     memset(res, 0, sizeof(*res));
     part -= part % s->size;
@@ -1991,11 +2124,36 @@ static void run_step(RUN *r, int i, PF_RESULT *res)
             return;
         }
     }
+    if (gotAfter != NULL) {
+        *gotAfter = 0;
+    }
     for (t = 0; t < nt; t++) {
         th[t] = (HANDLE)_beginthreadex(NULL, 0, worker_main, &r->w[t], 0, &id);
+        if (th[t] == NULL && thErr == 0) {
+            thErr = GetLastError() != 0 ? GetLastError() : ERROR_NOT_ENOUGH_MEMORY;
+        }
         if (th[t] != NULL && g_os == PF_OS_NT && g_preVista && g_ncpu > 1) {
             SetThreadAffinityMask(th[t], (DWORD_PTR)1 << ((t + 1) % g_ncpu));
         }
+    }
+    if (thErr != 0) {
+        /* a missing worker would change the workload: the step fails */
+        InterlockedExchange((LONG *)&r->issueEnd, 1);
+        SetEvent(r->stepEnd);
+        SetEvent(r->go);
+        for (t = 0; t < nt; t++) {
+            if (th[t] != NULL) {
+                WaitForSingleObject(th[t], INFINITE);
+                CloseHandle(th[t]);
+            }
+            CloseHandle(r->w[t].h);
+        }
+        res->status = PF_ST_FAILED;
+        res->error = thErr;
+        r->failed = 1;
+        r->failError = thErr;
+        SetEvent(g_stopEvent);
+        return;
     }
     k0 = GetTickCount();
     t0 = qpc_now();
@@ -2026,6 +2184,9 @@ static void run_step(RUN *r, int i, PF_RESULT *res)
     }
     t1 = qpc_now();
     k1 = GetTickCount();
+    if (after != NULL && gotAfter != NULL) {
+        *gotAfter = s98_read(after);
+    }
     if (s->op == PF_OP_WRITE && !r->unbuffered && !g_p.flushInWrite) {
         for (t = 0; t < nt; t++) {
             if (!FlushFileBuffers(r->w[t].h) && !r->w[t].failed) {
@@ -2175,6 +2336,7 @@ static unsigned __stdcall run_main(void *arg)
         goto done;
     }
     r->anchor = h;
+    r->created = 1;
     memset(&bi, 0, sizeof(bi));
     GetFileInformationByHandle(h, &bi);
     r->volSerial = bi.dwVolumeSerialNumber;
@@ -2227,7 +2389,7 @@ static unsigned __stdcall run_main(void *arg)
             for (pass = 0; pass < passes && !stopped(); pass++) {
                 PF_RESULT res;
                 S98_ANSWER after;
-                int haveBefore;
+                int haveBefore, haveAfter = 0;
 
                 if (g_p.pauseSec > 0) {
                     WaitForSingleObject(g_stopEvent, (DWORD)g_p.pauseSec * 1000u);
@@ -2237,8 +2399,8 @@ static unsigned __stdcall run_main(void *arg)
                 EnterCriticalSection(&r->cs);
                 genStart = r->gen.last;
                 LeaveCriticalSection(&r->cs);
-                run_step(r, i, &res);
-                if (haveBefore && !warm && s98_read(&after)) {
+                run_step(r, i, &res, (haveBefore && !warm) ? &after : NULL, &haveAfter);
+                if (haveBefore && !warm && haveAfter) {
                     S98_DELTA d;
 
                     if (s98_diff(&r->s98before, &after, &d)) {
@@ -2274,6 +2436,9 @@ static unsigned __stdcall run_main(void *arg)
                         sz_u(line, sizeof(line), (pf_u64)fb * PF_UNIT);
                         post_log(line);
                     }
+                }
+                if (res.status == PF_ST_FAILED || res.status == PF_ST_DATAERR) {
+                    InterlockedExchange((LONG *)&g_runBad, 1);
                 }
                 if (!warm) {
                     EnterCriticalSection(&g_resCs);
@@ -2412,16 +2577,23 @@ static char *build_report(size_t *lenOut)
     ri.toolVersion = XHCIPERF_VERSION;
     ri.date = g_runDate;
     ri.system = g_system;
-    ri.drive = g_driveText;
-    ri.fileSystem = g_fsName;
-    ri.model = g_model;
-    ri.sector = g_sector;
-    ri.physSector = g_physSector;
+    ri.drive = g_runDrive;
+    ri.fileSystem = g_runFs;
+    ri.model = g_runModel;
+    ri.sector = g_runSector;
+    ri.physSector = g_runPhys;
     ri.timerFreq = g_highRes ? g_freq : 0;
     ri.attributes = g_attributes;
     ri.stor98 = g_s98page;
     pf_tx_init(&t, buf, cap);
-    pf_report(&t, &g_p, &g_plan, g_res, g_npasses, &ri);
+    {
+        /* the run's workload; only how values are shown follows the window */
+        PF_PARAMS rp = g_runP;
+
+        rp.show = g_p.show;
+        rp.unitMiB = g_p.unitMiB;
+        pf_report(&t, &rp, &g_plan, g_res, g_npasses, &ri);
+    }
     LeaveCriticalSection(&g_resCs);
     *lenOut = t.len;
     return buf;
@@ -2579,7 +2751,7 @@ static void paint_summary(HDC dc, RECT *rc)
         FillRect(dc, &cell, GetSysColorBrush(COLOR_BTNFACE));
         cell.left += 4;
         DrawTextA(dc, lbl, -1, &cell, DT_LEFT | DT_WORDBREAK);
-        if ((g_p.bufMask & (g_p.bufMask - 1)) != 0) {
+        if ((g_runP.bufMask & (g_runP.bufMask - 1)) != 0) {
             cell.top += 28;
             DrawTextA(dc, pf_buf_name(g_plan.steps[i].buffer), -1, &cell, DT_LEFT);
         }
@@ -2610,6 +2782,20 @@ static void paint_summary(HDC dc, RECT *rc)
         }
     }
     SelectObject(dc, old);
+}
+
+/* Step i begins a row of the sweep chart: a size and buffer's write and
+ * read share one row, whichever of them the run has */
+static int sweep_first(int i)
+{
+    const PF_STEP *a, *b;
+
+    if (i <= 0 || i >= g_plan.nsteps) {
+        return 1;
+    }
+    a = &g_plan.steps[i - 1];
+    b = &g_plan.steps[i];
+    return !(a->op == PF_OP_WRITE && b->op == PF_OP_READ && a->size == b->size && a->buffer == b->buffer);
 }
 
 static void paint_sweep(HDC dc, RECT *rc)
@@ -2651,9 +2837,9 @@ static void paint_sweep(HDC dc, RECT *rc)
         int len;
 
         pf_shown(&g_res[i * PF_MAX_PASSES], g_npasses, g_p.show, g_p.unitMiB, g_highRes, &sh);
-        if (s->op == PF_OP_WRITE || i == 0 || g_plan.steps[i - 1].size != s->size) {
+        if (sweep_first(i)) {
             pf_size_text(s->size, lbl, sizeof(lbl));
-            if ((g_p.bufMask & (g_p.bufMask - 1)) != 0) {
+            if ((g_runP.bufMask & (g_runP.bufMask - 1)) != 0) {
                 sz_cat(lbl, sizeof(lbl), " ");
                 sz_cat(lbl, sizeof(lbl), pf_buf_name(s->buffer));
             }
@@ -2670,7 +2856,7 @@ static void paint_sweep(HDC dc, RECT *rc)
             pf_fmt_tenths(sh.rate10, v, sizeof(v));
             TextOutA(dc, x0 + len + 4, b.top - 3, v, (int)strlen(v));
         }
-        if (s->op == PF_OP_READ) {
+        if (sweep_first(i + 1)) {
             y += 2 * barh + 6;
         }
     }
@@ -2694,7 +2880,7 @@ static LRESULT CALLBACK view_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
             SelectObject(dc, g_font);
             SetBkMode(dc, TRANSPARENT);
             TextOutA(dc, 8, 8, s, (int)strlen(s));
-        } else if (g_tabSel == 1 || g_p.sweep) {
+        } else if (g_tabSel == 1 || g_runP.sweep) {
             paint_sweep(dc, &rc);
         } else {
             paint_summary(dc, &rc);
@@ -3151,6 +3337,12 @@ static void start_run(void)
     s98_find(g_folder);
     memset(g_res, 0, sizeof(g_res));
     memset(g_s98steps, 0, sizeof(g_s98steps));
+    g_runP = g_p;
+    sz_cpy(g_runDrive, sizeof(g_runDrive), g_driveText);
+    sz_cpy(g_runFs, sizeof(g_runFs), g_fsName);
+    sz_cpy(g_runModel, sizeof(g_runModel), g_model);
+    g_runSector = g_sector;
+    g_runPhys = g_physSector;
     g_npasses = g_p.passes;
     g_haveResults = 1;
     GetLocalTime(&st);
@@ -3262,7 +3454,7 @@ static void compare_results(void)
         g_haveSaved = 0;
         return;
     }
-    pf_key(&g_p, g_highRes, key, sizeof(key));
+    pf_key(g_haveResults ? &g_runP : &g_p, g_highRes, key, sizeof(key));
     if (!pf_key_same(g_saved.key, key, g_savedDiff, sizeof(g_savedDiff))) {
         sz_cpy(msg, sizeof(msg), "The saved results were measured differently (");
         sz_cat(msg, sizeof(msg), g_savedDiff);
@@ -3729,8 +3921,11 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
             size_t n;
             char *r = build_report(&n);
 
+            if (r == NULL || !write_file(g_cl.report, r, n)) {
+                log_add("The report could not be written.");
+                InterlockedExchange((LONG *)&g_runBad, 1);
+            }
             if (r != NULL) {
-                write_file(g_cl.report, r, n);
                 HeapFree(GetProcessHeap(), 0, r);
             }
         }

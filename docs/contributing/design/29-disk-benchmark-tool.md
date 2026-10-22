@@ -1471,7 +1471,31 @@ a choice:
   the preparation's blocks; a verification that cannot read the file fails
   the step, and a whole-file verification that fails makes the run's exit 1.
   The window's workload controls are disabled while a run lasts. On 98 SE and
-  ME the ASPI search runs on a thread of its own, waited for at most 5 s.
+  ME the ASPI search runs on a thread of its own, waited for at most 5 s;
+  its findings are published only by a caller still waiting, and once an
+  ASPI request has not come back, or a search has not returned, ASPI is not
+  asked again in that session.
+- **Exit status**: a failed or data-error pass, a warm-up's included, and a
+  `/report` that cannot be written make the exit 1. A worker thread that
+  cannot be started fails its step rather than running with fewer threads.
+- **The test file's end**: only a file the run created is deleted; on NT by
+  the anchor's `FILE_FLAG_DELETE_ON_CLOSE` alone, on 98 SE and ME by name
+  after an exclusive open shows the run's header.
+- **Stor98 and the excluded flush**: with "Include the flush" off, the
+  after-read of Stor98's counters is taken as the timed window ends, before
+  the flush, so the counters cover what was timed.
+- **The results keep their workload**: the report, the comparison key and
+  the chart use the run's copy of the settings and of the disk's facts;
+  only Show and the unit follow the window afterwards.
+- **98 SE and ME attribution**: the adapter is proved Stor98's by its
+  identity page (section 6.1); the disk is matched to the drive letter by
+  its model, and that model must be the only one among the disks under
+  `Enum\SCSI`, else the counters are not attributed. A SUBST drive is
+  detected only when it names the Windows drive (a letter other than the
+  Windows drive's with its volume serial number); section 4.1's wider
+  configuration-manager check is not built.
+- **Paths**: a full or long path name that does not fit, or leaves no room
+  for `\XHCIPERF.TMP`, is refused.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.
