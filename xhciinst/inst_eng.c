@@ -16623,6 +16623,18 @@ static int vsd_old_lines(const char *ini, const char *old, const char *oldS,
         free(sec);
         return 0;
     }
+    if (n == 0 && GetFileAttributesA(ini) != (DWORD)0xFFFFFFFF) {
+        /* Nothing read from a file that is there: an empty section only
+         * when the file itself opens for reading. */
+        HANDLE h = CreateFileA(ini, GENERIC_READ, FILE_SHARE_READ |
+                               FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+
+        if (h == INVALID_HANDLE_VALUE) {
+            free(sec);
+            return 0;
+        }
+        CloseHandle(h);
+    }
     for (p = sec; n != 0 && *p != '\0'; p += strlen(p) + 1) {
         char line[2 * INST_PATH_CHARS];
         char *eq;
@@ -16711,8 +16723,11 @@ static int vsd_old_name(void)
         return 0;
     }
     for (k = 0; ownLines != 0 && k < 16; k++) {
-        WritePrivateProfileStringA("rename", (k & 1) == 0 ? oldS : old, NULL,
-                                   ini);
+        if (!WritePrivateProfileStringA("rename", (k & 1) == 0 ? oldS : old,
+                                        NULL, ini)) {
+            ownLines = -1;
+            break;
+        }
         if ((k & 1) != 0 &&
             !vsd_old_lines(ini, old, oldS, tmp, tmpS, &ownLines, &otherLines)) {
             /* Unread, nothing shows the line gone: the failure below. */
