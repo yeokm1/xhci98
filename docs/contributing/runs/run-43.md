@@ -190,6 +190,7 @@ out of room for a list (overflow 0).
 1. Requests over `DCB_max_xfer_len`: let IOS keep cutting them to 63 KiB,
    have the VSD cut them itself into `DCB_max_xfer_len` pieces, or raise
    Stor98's 9x maximum (512 KiB today) towards the controller's MDTS.
+   Measured 2026-10-22: "Requests over 512 KiB" below.
 2. The list's cost: one `_CopyPageTable` call for a run of pages instead
    of one a page, and whether to build a list at all when the request is
    already within 17 runs (a request IOS would pass whole anyway).
@@ -214,6 +215,8 @@ out of room for a list (overflow 0).
    Open Watcom; and what is taken from the DDK's headers into tracked
    source (`docs/references/README.md` records that none of the DDK's
    declarations or sample code is reproduced today).
+   2026-10-22: Open Watcom with the DDK's LINK 5.12 builds a VSD that
+   loads, under the rules in "The C port" below.
 
 ### The C port (2026-10-22)
 
