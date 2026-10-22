@@ -1012,6 +1012,32 @@ On 64-bit 8 and 8.1 it loads only as on Vista x64 and 7 x64: test-signing
 mode (Secure Boot off) or a start with signature enforcement disabled
 (design record 19; record 23 section 5.10).
 
+**Windows 10** (roadmap-usb4 task 43.34, the owner's decision of
+2026-10-20; record 23 sections 4.3 and 4.5, revision 27): NT 10.0 below
+build 22000, the client releases 1507 to 22H2, the LTSC releases and
+Windows Server 2016 to 2022, gets what 8.1 gets above, by the same
+install: the connection manager alone, or beside `xhci98.sys` where the
+user ticks it (task 43.35), the PCIe tunnel and its re-enumeration, an
+NVMe drive behind it under Stor98 or 10's own `stornvme`, a dock's xHCI
+controller and the USB3 tunnel's devices under whichever USB driver runs
+them, and safe eject with the marks. It is the target this driver gives
+most to: 10 carries no Thunderbolt or USB4 driver of its own (USB4
+arrived with Windows 11, build 22000, which has its own connection
+manager and stays refused). What is 10's own, and unread until task
+43.33 (c): Intel's Thunderbolt driver, which computer makers ship for
+10 on the NHI - its ids and service, the approval it does with the
+firmware connection manager, and whether `xhcicm.inf`'s match outranks
+it (until the owner decides, an NHI it runs is another vendor's device
+and the installer leaves it, record 23 decision D3); and Kernel DMA
+Protection (10 1803 and later), whether a device behind a tunnel waits
+for the user's sign-in or is refused where the firmware turns the
+protection on. No export table of 10 is in the tree either, so the
+import surface on 10 is as unread as on 8; 10 is expected to answer the
+driver's WDM version tests as 7 does, which is unread. On 64-bit 10 the
+driver loads as on 64-bit 8 and 8.1 (record 23 section 5.10, revision
+27); from 10 1607 with Secure Boot on, only portal-signed drivers load,
+so Secure Boot off is the condition there.
+
 ## 4. The host interface: ring 0, polled
 
 ### 4.1 Registers
