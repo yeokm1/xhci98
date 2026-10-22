@@ -576,8 +576,10 @@ every system `INSTALL /devices` shows what is connected and
 64-bit Windows, in `tools\xhciinst\` takes the same switches).
 
 - **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /eject`;
-  these systems have no other way, since the "Unplug or Eject Hardware" applet NUSB installs
-  does not list a device behind a Thunderbolt port. The tool lists the
+  only these offer a device behind a Thunderbolt or USB4 port there.
+  Windows 98 SE as shipped has no "Unplug or Eject Hardware" applet, and
+  the one ME has (or NUSB adds to 98 SE) does not list such a device,
+  though it lists USB sticks and UAS disks. The tool lists the
   devices, asks which one, and then (from `3.2.0.0`) asks the Thunderbolt
   driver, `xhcicm.sys`, to remove it; before, the tool asked Windows
   itself. The driver asks Windows to query the device's removal (a volume
@@ -742,7 +744,7 @@ Restart Windows, or disable and enable the controller, after a change.
 |---|---|---|
 | `XhciCmMode` | `1` | `0` off: the driver binds the controller, logs it and touches nothing. `1` automatic: the firmware's connection manager's client where it runs, `xhcicm.sys`'s own on a USB4 host whose firmware runs none, and nothing where neither is certain. `2`: an Intel controller the table above does not list, driven as an Alpine Ridge, at your own risk, after adding its id to a copy of `xhcicm.inf`. `3`: force `xhcicm.sys`'s own USB4 connection manager, at your own risk; refused on Falcon, Alpine and Titan Ridge and Ice Lake, and wherever the firmware's runs |
 | `XhciCmApprove` | `1` | `1` approves every device (see "Thunderbolt 3: which devices get a tunnel"); `0` approves none |
-| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal; `0` does not |
+| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal (on 98 SE and ME only through the USB Tree and `INSTALL /eject`: 98 SE as shipped has no "Unplug or Eject Hardware", and ME's does not list them); `0` does not |
 | `XhciCmReenum` | `1` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh, for a machine where that misbehaves |
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
@@ -799,7 +801,9 @@ have every leg.
 - **Windows ME:** the install through `INSTALL.BAT`, and under both
   connection managers a plug, unplug and re-plug with the NVMe drive
   found with no Refresh and its data intact; Stand by and resume under
-  both. "Unplug or Eject Hardware" lists nothing, as on 98 SE.
+  both. ME's "Unplug or Eject Hardware" does not list the drive (98 SE
+  as shipped has no such applet): the USB Tree and `INSTALL /eject` remove
+  it.
 - **Windows 2000:** the firmware connection manager's legs read on 98 SE,
   the open wizard aside, and the Titan Ridge model,
   safe removal through "Unplug or Eject Hardware", the USB4 connection
