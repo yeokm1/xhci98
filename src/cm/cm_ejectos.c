@@ -1650,7 +1650,9 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
                 /* A call of the stopped start still out stays its late
                  * taker's (OpId kept): the adoption waits for it. */
                 rec->DownSeen = 0;
-                rec->SweepGone = 0;
+                /* A sweep's observation (SweepGone, VanishOwed) is kept:
+                 * the vanished devnode's evidence stands for any start
+                 * (task 43.47). */
                 CmEjAdopt(&rec->Tx, cmEjClockMs);
                 KeReleaseSpinLock(&cmEjLock, irql);
                 CmLogNote(nhi, "cm.eject.adopt",

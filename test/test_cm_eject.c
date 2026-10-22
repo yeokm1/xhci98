@@ -1142,6 +1142,39 @@ static VOID test_vanished_stop(VOID)
     drive(&t, &f, &in);
     CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "late acceptance: no second query");
     CHECK_EQ(t.Phase, CM_EJ_P_DONE, "late acceptance: removed");
+
+    /* The stop during the query; its late result a refusal: still owed,
+     * asked again after the adoption. */
+    fakeInit(&f);
+    f.Hold = TRUE;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CmEjFeed(&t, CM_EJ_FED_QUERY, VETOED, 0, 300);
+    CHECK(!CmEjOwesRemoval(&t), "late refusal: nothing authorised");
+    CmEjAdopt(&t, 3000);
+    f.Hold = FALSE;
+    f.QueryCr = VETOED;
+    in.NowMs = 3000;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 2, "late refusal: asked again");
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY, "late refusal: still owed");
+
+    /* A taken-over record keeping a Stor98 request, adopted and found
+     * gone: the request withdrawn before it retires. */
+    fakeInit(&f);
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CmEjClaimProgress(&t, 0);
+    CHECK(CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, VETOED, 0, 0, 1, 5, 0x42, 3,
+                       TRUE, TRUE, 10),
+          "a failed removal with a request: taken over");
+    CmEjAdopt(&t, 100);
+    f.Devnode = 0;
+    in = mkIn(100);
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_WITHDRAW], 1, "adopted, gone: request withdrawn");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "adopted, gone: then retired");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "adopted, gone: no removal call");
 }
 
 /* A removal that keeps failing past 30 s: blocked, no teardown under

@@ -3826,10 +3826,12 @@ revised:
   CONFIGMG worker holds the same barrier on its own side
   (`CmEjectVanishHeld`: a sweep, a vanished record, a claim, or an eject
   given or carrying a vanished child, on the member and not retired),
-  read under its lock in the admission that marks a re-enumeration in
-  flight (`cmWkEnumAdmit`) and before each request's operation: no
-  re-enumeration of such a member is made from any request (the loss's
-  own included), and one refused for it is retried as a failed one is.
+  read under its lock, with its prune debt, in the admissions that mark
+  a re-enumeration or a record 28 no-IRQ operation in flight
+  (`cmWkEnumAdmit`, `cmWkNiAdmit`, and that window's gate) and before
+  each request's operation: no re-enumeration or `Reprocess_DevNode` of
+  such a member is made from any request (the loss's own included), and
+  one refused for it is retried as a failed one is.
   Another member's work goes on (decision V5).
 - **Its retirement, and the worker's sets.** A vanished record that is
   retired - removed, verified gone, by the thread, the detached worker or
@@ -3849,7 +3851,11 @@ revised:
   devnode looked up again by its instance id over the whole tree - gone,
   the record retired; present, the record resumed where it stood, a
   vetoed query asked again (a refusal owes the vanished child its
-  retries, unlike an eject's), an accepted one never.
+  retries, unlike an eject's), an accepted one never; gone with a Stor98
+  request still kept (a takeover's), that request withdrawn before the
+  record retires. A sweep's observations on a record (an eject given or
+  carrying a vanished child) stand across the adoption: the old
+  devnode's disappearance is evidence for any start.
 - **The takeovers.** `CONTROLLER_UNAVAILABLE`'s removal of retained
   children (section 5.5), record 22 section 7.7's removal-only request
   and the worker's own vanished-child removal where no sweep can be made

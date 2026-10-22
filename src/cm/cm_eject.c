@@ -664,10 +664,16 @@ VOID CmEjFeed(CM_EJ_TX *t, ULONG kind, ULONG value, ULONG aux, ULONG nowMs)
         t->Pending = 0;
         if (value == 0) {
             if (aux != 0) {
-                /* Verified gone: retired by its disappearance. */
+                /* Verified gone: retired by its disappearance, a request
+                 * it still keeps withdrawn first (O5). */
                 t->Flags &= ~CM_EJ_F_ADOPT;
                 t->Flags |= CM_EJ_F_REMOVED;
-                t->Phase = CM_EJ_P_DONE;
+                if (t->Entry != CM_EJ_NONE &&
+                    (t->Flags & CM_EJ_F_WITHDRAWN) == 0) {
+                    t->Phase = CM_EJ_P_WITHDRAW;
+                } else {
+                    t->Phase = CM_EJ_P_DONE;
+                }
             } else {
                 t->AdoptAt = nowMs != 0 ? nowMs : 1;
             }

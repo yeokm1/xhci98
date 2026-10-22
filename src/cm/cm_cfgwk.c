@@ -2218,9 +2218,13 @@ static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
     ULONG open;
 
     KeAcquireSpinLock(&w->Lock, &irql);
+    /* Task 43.47: nor while a vanished child of the member is not retired
+     * or the worker's prune walk is owed. */
     open = (ULONG)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                   ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
-                    (1UL << i)) == 0);
+                   ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold |
+                     w->PruneOwed) &
+                    (1UL << i)) == 0 &&
+                   !CmEjectVanishHeld(w->Port[i].Bdf));
     KeReleaseSpinLock(&w->Lock, irql);
     return open;
 }
@@ -2237,8 +2241,10 @@ static BOOLEAN cmWkNiAdmit(PCM_CFGWK w, ULONG i)
 
     KeAcquireSpinLock(&w->Lock, &irql);
     open = (BOOLEAN)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                     ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
-                      (1UL << i)) == 0);
+                     ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold |
+                       w->PruneOwed) &
+                      (1UL << i)) == 0 &&
+                     !CmEjectVanishHeld(w->Port[i].Bdf));
     if (open) {
         w->EnumBusy |= 1UL << i;
     }
