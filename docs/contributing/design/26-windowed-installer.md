@@ -2801,13 +2801,19 @@ the file and lose the registry's key, which those systems write out
 later; read on the 43.48 leg of 2026-10-23) takes the file as this
 installer's and makes the key again - a ticked run, an unticked one
 (which then recovers it) and the uninstall alike, `/list` saying so and
-writing nothing. What the lost key's `Staged` values protected is rebuilt
-first, conservatively: on 98 SE and ME every `DevicePath` entry under the
-folder is recorded as staged; on 2000 and later every INF of the store
-holding a recorded INF's bytes is recorded as `foreign` (its folder kept,
-the INF never removed); a store or `DevicePath` that cannot be read
-leaves the file as it was found, with the steps flag. Only then is
-`RecordMade` set to 1, and the file recovered and appended to; any other
+writing nothing. The key is marked `Adopted` (written first, `RecordMade`
+1 last, so a run cut short in between resumes the adoption): what the
+lost `Staged` values recorded is not known, so nothing of it is removed
+on their account - the uninstall of an adopted set keeps, on 98 SE and
+ME, every folder a `DevicePath` entry names under the set's folder and
+the entry with it (said: whose the entry is is not known), and on 2000
+and later every folder under it holding an INF, whoever put it there,
+whose bytes an INF of the store holds; a `DevicePath` or a store that
+cannot be read leaves every copy, with the steps flag. An install
+directory under the legacy `%windir%\XHCI98` loses an adopted set's
+`DevicePath` entries to that function's cleanup (an earlier build's
+directory only; accepted, a proposal). The file is then recovered and
+appended to; any other
 file of that name is in doubt, as above. Each write of `RecordMade` is
 followed by `RegFlushKey` (a flush that fails stops the step, the record
 kept), and each copied file

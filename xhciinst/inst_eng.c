@@ -21099,6 +21099,7 @@ typedef struct _OTHSET {
 static OTHSET oth[INST_SET_COUNT];
 static int othRead;             /* other_read ran (an install run)          */
 static int othSys = -1;         /* inst_sys_token for this system           */
+static int othKeepFull;         /* a folder to keep did not fit kept        */
 
 /* Record lines, read back. */
 typedef struct _OTHREC {
@@ -22262,22 +22263,34 @@ static int other_copy_file(OTHSET *o, const char *recPath, const char *dest,
 
 static int other_remove(int set, int uninstall);
 
-/* No key for the set, and at the install directory's name a record file
- * whose whole first line is this set's header for that folder: the key
- * was lost (on 98 SE and ME a power cut before the registry was written
- * out; section 6.7.5), the file is this installer's, and the key is made
- * again for it. What the lost key's Staged values protected is rebuilt
- * conservatively first: on 98 SE and ME every DevicePath entry under the
- * folder recorded as staged; on 2000 and later every INF of the store
- * holding a recorded INF's bytes recorded as foreign (its folder kept,
- * the INF never removed). 1 adopted, 0 nothing to adopt, -1 in doubt or
- * failed (said). */
+static int other_adopted(int set)
+{
+    char key[INST_PATH_CHARS];
+    DWORD v = 0;
+
+    other_key(set, key, sizeof(key));
+    return reg_dword(HKEY_LOCAL_MACHINE, key, "Adopted", &v) && v == 1;
+}
+
+/* No key for the set (or one this function began and did not finish:
+ * Adopted 1 with RecordMade not yet 1), and at the install directory's
+ * name a record file whose whole first line is this set's header for that
+ * folder: the key was lost (on 98 SE and ME a power cut before the
+ * registry was written out; section 6.7.5), the file is this installer's,
+ * and the key is made again for it, marked Adopted: what its lost Staged
+ * values recorded is not known, so the uninstall keeps what any staging
+ * may need (other_adopted_keep). Adopted is written first and RecordMade
+ * last, so a run cut short in between resumes here. 1 adopted, 0 nothing
+ * to adopt, -1 in doubt or failed (said). */
 static int other_adopt(int set)
 {
+    char key[INST_PATH_CHARS];
     char dir[INST_PATH_CHARS];
     char recPath[INST_PATH_CHARS];
     char header[INST_PATH_CHARS + 40];
     DWORD n = 0;
+    DWORD made = 0;
+    DWORD one = 1;
     char *text;
     size_t hl;
     int e;
@@ -22285,9 +22298,15 @@ static int other_adopt(int set)
     if (toolDir[0] == '\0') {
         return 0;
     }
+    other_key(set, key, sizeof(key));
     e = other_key_exists(set);
-    if (e != 0) {
-        return e < 0 ? -1 : 0;
+    if (e < 0) {
+        return -1;
+    }
+    if (e > 0 && (!other_adopted(set) ||
+                  (reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made) &&
+                   made == 1))) {
+        return 0;
     }
     join(dir, sizeof(dir), toolDir, inst_other_folder(set));
     _snprintf(recPath, sizeof(recPath) - 1, "%s\\%s.REC", toolDir,
@@ -22314,36 +22333,120 @@ static int other_adopt(int set)
             recPath, inst_other_label(set));
         return 0;
     }
-    if (!other_key_str(set, NULL, "Record", recPath) ||
+    if (!other_key_put(set, NULL, "Adopted", REG_DWORD, &one, sizeof(one)) ||
+        !other_key_str(set, NULL, "Record", recPath) ||
         !other_key_str(set, NULL, "Dir", dir) ||
-        !other_key_str(set, NULL, "Sums", inst_other_sums(set))) {
+        !other_key_str(set, NULL, "Sums", inst_other_sums(set)) ||
+        !other_key_made(set, 1)) {
         flagFailed = 1;
         return -1;
     }
+    out("%s: its record %s was found with no registry key, and is taken "
+        "as this\ninstaller's again; what it had staged is not known, and "
+        "the uninstall keeps\nwhat a staged driver may need.\n",
+        inst_other_label(set), recPath);
+    return 1;
+}
+
+/* 2000 and later, an adopted set: each folder under dir holding an INF
+ * whose bytes an INF of the store holds, added to kept; every INF of the
+ * tree is read, whoever put it there. 0 when that cannot be read. */
+static int other_keep_store_infs(int set, const char *dir, char *kept,
+                                 size_t cap)
+{
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+    DWORD e;
+    int ok = 1;
+    int added = 0;
+
+    join(pattern, sizeof(pattern), dir, "*");
+    f = FindFirstFileA(pattern, &fd);
+    if (f == INVALID_HANDLE_VALUE) {
+        e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND;
+    }
+    do {
+        size_t nl = strlen(fd.cFileName);
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) {
+            continue;
+        }
+        join(path, sizeof(path), dir, fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (!other_keep_store_infs(set, path, kept, cap)) {
+                ok = 0;
+            }
+            continue;
+        }
+        if (added || nl < 4 || !inst_eq(fd.cFileName + nl - 4, ".inf")) {
+            continue;
+        }
+        {
+            char hex[65];
+            char list[1024];
+            if (other_hash(path, hex) != 1 ||
+                !other_inventory(hex, 0xFFFFFFFFUL, list, sizeof(list))) {
+                out("  The driver store could not be compared with %s: %s's "
+                    "copies are left.\n", path, inst_other_label(set));
+                ok = 0;
+                continue;
+            }
+            if (list[0] != '\0') {
+                if (strlen(kept) + strlen(dir) + 2 >= cap) {
+                    othKeepFull = 1;
+                } else {
+                    strcat(kept, dir);
+                    strcat(kept, ";");
+                }
+                added = 1;
+            }
+        }
+    } while (FindNextFileA(f, &fd));
+    e = GetLastError();
+    FindClose(f);
+    return ok && e == ERROR_NO_MORE_FILES;
+}
+
+/* The uninstall of an adopted set (section 6.7.5): every folder that may
+ * have been staged is kept - on 98 SE and ME each folder a DevicePath
+ * entry names under dir (the entry left too: whose it is is not known), on
+ * 2000 and later each folder of an INF under dir whose bytes an INF of the
+ * store holds. 0 when that cannot be read (nothing deleted). */
+static int other_adopted_keep(int set, const char *dir, const OTHREC *recs,
+                              int count, char *kept, size_t cap)
+{
+    size_t dl = strlen(dir);
+    int i;
+
     if (!envNow.Nt) {
         char list[2048];
         char entry[INST_PATH_CHARS];
         DWORD type = REG_SZ;
         const char *s;
-        size_t dl = strlen(dir);
         if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
                       sizeof(list), &type)) {
-            out("DevicePath could not be read: %s's record is kept as it "
-                "was found.\n", inst_other_label(set));
+            out("  DevicePath could not be read: %s's copies are left.\n",
+                inst_other_label(set));
             flagSteps = 1;
-            return -1;
+            return 0;
         }
         for (s = list; *s != '\0';) {
             const char *end = strchr(s, ';');
             size_t len = end != NULL ? (size_t)(end - s) : strlen(s);
-            if (len < sizeof(entry)) {
+            if (len < sizeof(entry) && len > dl + 1 &&
+                inst_eqn(s, dir, dl) && s[dl] == '\\') {
                 memcpy(entry, s, len);
                 entry[len] = '\0';
-                if (len > dl && inst_eqn(entry, dir, dl) &&
-                    entry[dl] == '\\' &&
-                    !other_key_str(set, "Staged", entry, "DevicePath")) {
-                    flagFailed = 1;
-                    return -1;
+                out("  %s stays on DevicePath, and its folder with it: whose "
+                    "the entry is is not\n  known (its record was lost).\n",
+                    entry);
+                if (strlen(kept) + len + 2 >= cap) {
+                    othKeepFull = 1;
+                } else {
+                    strcat(kept, entry);
+                    strcat(kept, ";");
                 }
             }
             if (end == NULL) {
@@ -22351,75 +22454,12 @@ static int other_adopt(int set)
             }
             s = end + 1;
         }
-    } else {
-        OTHREC *recs = NULL;
-        int count = 0;
-        int i;
-        if (other_rec_load(set, recPath, dir, &recs, &count) <= 0) {
-            flagSteps = 1;
-            return -1;
-        }
-        for (i = 0; i < count; i++) {
-            const char *pth = recs[i].Path;
-            size_t pl = strlen(pth);
-            char list[1024];
-            char rel[INST_PATH_CHARS];
-            char *c;
-            const char *q;
-            if (pl < 4 || !inst_eq(pth + pl - 4, ".inf") ||
-                strlen(pth) <= strlen(dir) + 1) {
-                continue;
-            }
-            inst_copy(rel, pth + strlen(dir) + 1, sizeof(rel));
-            for (c = rel; *c != '\0'; c++) {
-                if (*c == '\\') {
-                    *c = '/';
-                }
-            }
-            if (!other_inventory(recs[i].Hash, 0xFFFFFFFFUL, list,
-                                 sizeof(list))) {
-                out("The driver store could not be listed: %s's record is "
-                    "kept as it was found.\n", inst_other_label(set));
-                free(recs);
-                flagSteps = 1;
-                return -1;
-            }
-            q = list;
-            while (*q != '\0') {
-                const char *end = strchr(q, '|');
-                size_t len = end != NULL ? (size_t)(end - q) : strlen(q);
-                char nm[INST_PATH_CHARS];
-                char vn[INST_PATH_CHARS * 2];
-                char vd[INST_PATH_CHARS + 96];
-                if (len < sizeof(nm)) {
-                    memcpy(nm, q, len);
-                    nm[len] = '\0';
-                    _snprintf(vn, sizeof(vn) - 1, "%s|%s", rel, nm);
-                    vn[sizeof(vn) - 1] = '\0';
-                    _snprintf(vd, sizeof(vd) - 1, "foreign %s %s",
-                              recs[i].Hash, nm);
-                    vd[sizeof(vd) - 1] = '\0';
-                    if (!other_key_str(set, "Staged", vn, vd)) {
-                        free(recs);
-                        flagFailed = 1;
-                        return -1;
-                    }
-                }
-                if (end == NULL) {
-                    break;
-                }
-                q = end + 1;
-            }
-        }
-        free(recs);
+        return 1;
     }
-    if (!other_key_made(set, 1)) {
-        flagFailed = 1;
-        return -1;
-    }
-    out("%s: its record %s was found with no registry key, and is taken "
-        "as this\ninstaller's again.\n", inst_other_label(set), recPath);
-    return 1;
+    (void)recs;
+    (void)count;
+    (void)i;
+    return other_keep_store_infs(set, dir, kept, cap);
 }
 
 /* The set's key and record for this run (section 6.7.5): 1 ready, with
@@ -22458,7 +22498,13 @@ static int other_begin(int set, const char *dir, char *recPath, size_t cap)
                     other_key_text(set, "Dir", v, sizeof(v)) > 0 &&
                     other_key_text(set, "Sums", sums, sizeof(sums)) > 0 &&
                     reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &md);
-            if (!whole || md == 0) {
+            if ((!whole || md == 0) && other_adopted(set)) {
+                if (other_adopt(set) < 0) {
+                    inst_copy(o->Why, "its record could not be made again",
+                              sizeof(o->Why));
+                    return 0;
+                }
+            } else if (!whole || md == 0) {
                 if (other_key_text(set, "Record", rp, sizeof(rp)) <= 0) {
                     inst_copy(rp, recPath, sizeof(rp));
                 }
@@ -23070,7 +23116,6 @@ static int other_kept(const char *kept, const char *path)
     return 0;
 }
 
-static int othKeepFull;         /* a folder to keep did not fit kept   */
 
 static void other_keep(char *kept, size_t cap, const char *dir,
                        const char *rel)
@@ -23357,9 +23402,12 @@ static int other_remove(int set, int uninstall)
     (void)uninstall;
     other_key(set, key, sizeof(key));
     r = other_key_exists(set);
-    if (r == 0) {
+    if (r == 0 || (r > 0 && other_adopted(set))) {
         /* A record file whose key was lost (section 6.7.5). */
         r = other_adopt(set);
+        if (r == 0 && other_key_exists(set) == 1) {
+            r = 1;
+        }
         if (r == 0) {
             return 1;
         }
@@ -23437,6 +23485,13 @@ static int other_remove(int set, int uninstall)
         othRecBroken = 0;
         if (!opts.List && !other_rec_recover(recPath, recs, count)) {
             free(recs);
+            return 0;
+        }
+        if (other_adopted(set) &&
+            (!other_adopted_keep(set, dir, recs, count, kept, sizeof(kept)) ||
+             othKeepFull)) {
+            free(recs);
+            flagSteps = 1;
             return 0;
         }
         for (i = 0; i < count; i++) {
