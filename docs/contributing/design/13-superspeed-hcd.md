@@ -3482,7 +3482,8 @@ Vista was not run.
    and Explorer's capable test on 8 and 8.1. Alone it does not bring
    Explorer's "can perform faster" under `xhci98.sys` (the `usbxhci`
    test); it changes every such device's enumeration by two requests, the
-   risk 8.4 named.
+   risk 8.4 named. Designed in 8.4.1 as 43.27's prerequisite, shared
+   with 43.30 (2026-10-22).
 2. **Answer `_EX` `Speed` 3 for SuperSpeed on NT 6.2 and later** (8.4 keeps
    2 because Vista's and 7's pages test for exactly 2): Explorer already
    says "Connected to USB 3.0" from bit 0, so this gains nothing there;
@@ -4714,6 +4715,97 @@ Speed ceiling above is replaced, in two halves:
     neither capable flag. Reading the BOS of every High-Speed device with a
     `bcdUSB` of 0x0210 or more would change every such device's enumeration
     for one flag, which is the larger risk (`XhciHubExV2Flags`).
+
+### 8.4.1 The BOS read at High Speed and Full Speed (task 43.27, 2026-10-22)
+
+36.18 left `_EX_V2`'s capable flags unanswered for a USB 3 device running
+at High or Full Speed, because the BOS was read only on the SuperSpeed
+enumeration path (8.4 above). Roadmap 43.27's tray notice needs those
+flags on every connection, so this section adds the read. It is **a
+prerequisite shared with 43.30**: it is 6.12.11's option 1 for 43.30 word
+for word, and if the owner picks that option this section is it, with
+nothing more to do there; if the owner does not, 43.27 still needs it.
+Alone it brings no "can perform faster" line to Windows 8's Explorer
+under `xhci98.sys` (6.12.11: that text also needs a running `usbxhci`
+controller).
+
+**The gate, from the specification** (read in the USB 3.2 revision 1.1
+text, `docs/references/usb32-r1.1-dump.txt`, 2026-10-22): section 9.2.6.6,
+"Devices with a value of at least 0210H in the bcdUSB field of their
+device descriptor shall support GetDescriptor (BOS Descriptor)
+requests"; section 9.6.1, "The device descriptor of an Enhanced
+SuperSpeed device operating in one of the USB 2.0 modes shall have a
+version number of 2.1 (0210H)", and section 11.3 the same. So the read is
+made for a device at High or Full Speed whose `bcdUSB` is 0x0210 or more:
+every USB 3 device in a USB 2.0 mode, and the USB 2.0 devices that declare
+2.1, which the same sentence obliges to answer. A device declaring 0x0201
+(the USB 2.0 Link Power Management addendum's version) is not read: the
+notice gains nothing from it and the reach stays smaller. A Low Speed
+device is never read: no USB 3 device runs at Low Speed.
+
+**The machine** (`xhci_enum.c`, pure, host vectors in `test_enum.c`):
+
+1. After the 18-byte device descriptor read, the event's `Value` carries
+   `bcdUSB` (bytes 2 and 3; `hcd_enum.c` fills it, as it fills
+   `bMaxPacketSize0` after the 8-byte read). `XhciEnumWantsBos(speed,
+   bcdUsb, on, skip)` decides: SuperSpeed always, as before; High or Full
+   Speed when `bcdUSB` >= 0x0210, the switch is on and the port's
+   `Usb2BosSkip` is clear; never Low Speed. Yes: Bos5 and BosFull as at
+   SuperSpeed, with the port's `Usb2BosTried` set when the speed is not
+   SuperSpeed.
+2. **Every failure of the read is tolerated**, as at SuperSpeed: a STALL,
+   a short or malformed answer (`XhciPipeParseBos` refuses it, the
+   device's `BosInfo` stays zero) or no answer each set `BosMissing`, and
+   the machine goes on to the configuration reads.
+3. **An attempt that tried the read and then failed is retried without
+   it.** `xhciEnumFail` sets `Usb2BosSkip` when `Usb2BosTried` is set, and
+   the retry (`XHCI_ENUM_RETRIES` on a root port, the hub port's
+   attempts) keeps it, so a device the read confuses enumerates on the
+   next attempt exactly as it did before this task. A new connection
+   clears both flags. The cost to such a device is one attempt.
+
+**The transfer** (`hcd_enum.c`, `XHCI_ENUM_ACT_GET_BOS`): at SuperSpeed
+nothing changes. At High and Full Speed the read goes through the door's
+soft path, `HcdThreadControlDoor`, not the enumeration's own: a STALL halts
+EP0 and the next request's `hcdEp0Quiet` recovers it with Reset Endpoint
+(the path every client STALL takes), and a device that never answers is
+withdrawn from EP0 at the transfer's deadline (`HCD_TRANSFER_WAIT_MS`,
+5 s; `hcdEp0Withdraw`) instead of the controller reset an enumeration
+read's timeout requests. Only a withdrawal that cannot be made falls to
+that reset, as a door read's does. A read withdrawn, stalled or refused
+costs `SsBosMissing` nothing: that counter stays SuperSpeed's, and the
+counter block (word count 246, read by the matrix and by XHCITR) is not
+changed. Each such read leaves a log note instead, `enum.bos.usb2`, the
+bytes received shifted left 8 or'd with the `HCD_CTL_*` outcome.
+
+**The switch.** `XhciUsb2Bos`, a DWORD read at every start, machine-wide
+first as the other values are (`hcdReadDword`): only 0 turns the read off;
+absent, another number or another type is on. No INF writes it. The start
+logs it (`enum.bos.usb2.on`). It is the way out for a device that the read
+upsets in a way the retry does not cure, until the device is known.
+
+**Who reads what the read keeps.** `dev->BosInfo` and `dev->Bos`, as at
+SuperSpeed. Every reader was checked (`src\`, 2026-10-22): the door's
+connection record (`hcd_door.c`, `BosSs`, `BosSsp`), which is the point:
+`XhciHubExV2Flags` sets bit 1 from a SuperSpeed capability and bits 1 and
+3 from a SuperSpeedPlus one, whatever the speed; and the SuperSpeed hub
+code, which reads a hub's `BosInfo` only for a SuperSpeed hub
+(`hcd_sshub.c`; `XhciSsHubParentOf` and `XhciSsHubChildRank` behind
+`hub->Usb3`; `hcd_enum.c`'s rank lookup behind `p->Hub->Usb3`). The USB
+2.0 Extension's attributes are kept and never acted on (no USB 2.0 Link
+Power Management is enabled from them). So the behaviour that changes is
+the two requests and the two flags.
+
+**What it changes per target.** The flags reach XHCITR on every target
+(record 25 section 7.6). Windows 8 and 8.1's details pane reads bit 1 and
+would now find a USB 3 stick on a USB 2.0 port capable, and still show no
+"can perform faster" line (6.12.11's `usbxhci` test); Vista's and 7's
+pages and XP's never read `_EX_V2`.
+
+**Not read.** Whether QEMU's emulated devices declare 0x0210 at High
+Speed (QEMU's device sources are not among `external\`'s files): if they
+declare 0x0200, no QEMU device exercises this read, and 43.28's legs need
+a device that does. No real USB 3 device has been read through it.
 
 ### 8.5 The OS INFs' registrations, quoted
 

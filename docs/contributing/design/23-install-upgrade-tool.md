@@ -1,6 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
+Status: revision 27, 2026-10-22 (roadmap-usb4 task 43.27, record 25
+section 7.6: `/faster` and `/nofaster`, the computer's choice of
+XHCITR's "can run faster" notice, section 9.5 and the switch table);
+revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
 draft 20 section 5.3.1: every component on every system, the defaults as
 they are, a warning where one does not apply; sections 4.5 and 7.1, and
 decision D18 amended); revision 25, 2026-10-21 (roadmap-usb4 task 43.42, record 26
@@ -1666,6 +1669,7 @@ these systems.
 | `/storage`, `/nostorage` | (revision 24) Windows 98 SE: install the USB storage drivers of record 26 section 6.5 without asking, or leave them out; `/storage` refused on any other system, where the download does not carry them or carries other bytes, and with `/nostorage`; both refused with `/uninstall`, `/devices` and `/eject`; `/nostorage` changes nothing on another system |
 | `/usb` | (revision 26, proposal) Windows 8 and 8.1: put the USB drivers in the run, which there are otherwise left out, with record 26 section 5.3.1 case 3a's warning; elsewhere it changes nothing; refused with `/cmonly`, `/uninstall`, `/devices` and `/eject`. Revision 26 also lifts `/cmonly`'s refusal on 98 SE and ME (case 2's warning), `/storage`'s on any system but 98 SE (case 1: the copy to the tools folder), and `/stor98`'s "never offered on 8 and 8.1" (case 3b), each warning printed before the go-ahead question and printed and logged under `/yes` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
+| `/faster`, `/nofaster` | (revision 27) the computer's choice of XHCITR's "can run faster" notice, on or off (section 9.5 item 7; record 25 section 7.6); refused together, and with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
 | `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
@@ -2364,6 +2368,15 @@ deferred on NT, and `WININIT.INI` is never edited.
      existing one (`inst_tray_run_action`). A deletion that fails, as
      against a value that is not there, is reported and fails the run
      (exit 2).
+  7. (Revision 27) `/faster` and `/nofaster` write the DWORD
+     `TrayFasterNotice` under `HKLM\Software\xhci98` (the install
+     directory's key, section 9.6) as 1 and 0: the computer's choice of
+     XHCITR's "can run faster" notice (record 25 section 7.6), which a
+     user's own choice in XHCITR overrides. Neither switch writes
+     nothing, and the value stays as it is; the console asks no question
+     for it. Written when the tool's file is in place, whatever the Run
+     value; a write that fails is reported and fails the run (exit 2);
+     `/list` says what would be written (`inst_fast_list_text`).
 - **Uninstall.** As the first step of the removal of the install
   directory and `%windir%\XHCI98` (both routes, after everything else;
   under `/list` one line each; section 9.6),
@@ -2375,7 +2388,9 @@ deferred on NT, and `WININIT.INI` is never edited.
   delay until reboot), and the then-empty `%windir%\XHCI98` is scheduled
   for removal too; the next install or uninstall deletes a leftover
   `.DEL`. On 98 SE and ME it is left and reported, with steps left: it no
-  longer starts at login, and the next uninstall deletes it.
+  longer starts at login, and the next uninstall deletes it. (Revision
+  27) `TrayFasterNotice` goes with the install directory's record
+  (section 9.6), its deletion checked as `InstallDir`'s is.
 - **Exit codes.** The tool's steps left and failures join the run's: on
   98 SE and ME an install ends with steps left when a device or the tool
   leaves one, and an uninstall, whose manual steps are always left, ends
