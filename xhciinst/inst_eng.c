@@ -10361,10 +10361,14 @@ static int mk_delete_copy(void)
 }
 
 /* Record 21 section 7.5 (task 43.59): before the service and its key go,
- * every drive its Stor98 switch left owing an enable ("disable",
- * "install", "enable" under its Stor98 key) is enabled again, present or
- * not, so no drive is left disabled with nobody to enable it. 1 none left;
- * 0 one could not be (the service's key stays). The service is stopped. */
+ * every drive its records name that Windows has bound to Stor98 (its
+ * Service value, present or not) is entered under Stor98's Devices, as
+ * the service enters the drives it switched, so the uninstall's Stor98
+ * step gives it back whatever state the switch reached; and every drive a
+ * switch left owing an enable ("disable", "install", "enable") is enabled
+ * again, present or not, so no drive is left disabled with nobody to
+ * enable it. 1 all done; 0 not (the service's key stays). The service is
+ * stopped. */
 #define INST_MK_S98_KEY     "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Stor98"
 static int mk_s98_settle(void)
 {
@@ -10376,6 +10380,8 @@ static int mk_s98_settle(void)
     char id[INST_ID_CHARS];
     char text[32];
     static char todo[64][INST_ID_CHARS];
+    static int owed[64];
+    char svc[64];
     int n = 0;
     int j;
     int ok = 1;
@@ -10397,11 +10403,9 @@ static int mk_s98_settle(void)
             break;
         }
         id[sizeof(id) - 1] = '\0';
-        if (type == REG_SZ && (inst_eq(text, "disable") ||
-                               inst_eq(text, "install") ||
-                               inst_eq(text, "enable"))) {
-            inst_copy(todo[n++], id, sizeof(todo[0]));
-        }
+        owed[n] = type != REG_SZ || inst_eq(text, "disable") ||
+                  inst_eq(text, "install") || inst_eq(text, "enable");
+        inst_copy(todo[n++], id, sizeof(todo[0]));
     }
     RegCloseKey(k);
     if (n == 0) {
@@ -10409,17 +10413,30 @@ static int mk_s98_settle(void)
     }
     set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) {
-        out("The device list could not be opened: a drive the mark service "
-            "left disabled\nis not enabled again.\n");
+        out("The device list could not be opened: the drives the mark service "
+            "moved to\nStor98 are not settled.\n");
         return 0;
     }
     for (j = 0; j < n; j++) {
-        out("Enabling %s, left disabled by the mark service's switch to "
-            "Stor98 ... ", todo[j]);
         if (!find_in_set(set, todo[j], &data)) {
-            out("gone.\n");
             continue;
         }
+        memset(svc, 0, sizeof(svc));
+        if (api.GetRegProp(set, &data, SPDRP_SERVICE, &type, (PBYTE)svc,
+                           sizeof(svc) - 1, NULL) &&
+            inst_eq(svc, "stor98") && s98_rec_has("Devices", todo[j]) != 1) {
+            if (!s98_rec_text("Devices", todo[j], "switched")) {
+                ok = 0;
+                continue;
+            }
+            out("%s, which the mark service moved to Stor98, is recorded as "
+                "this\ninstaller's.\n", todo[j]);
+        }
+        if (!owed[j]) {
+            continue;
+        }
+        out("Enabling %s, left disabled by the mark service's switch to "
+            "Stor98 ... ", todo[j]);
         memset(&pcp, 0, sizeof(pcp));
         pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
         pcp.ClassInstallHeader.InstallFunction = DIF_PROPERTYCHANGE;
@@ -20980,36 +20997,56 @@ void inst_eng_tb_choose(int include)
 static int planResult = -1;
 
 /* Record 21 section 7.5 (task 43.59): the mark service switches no drive
- * to Stor98 while an install or an uninstall runs. This lock, taken by the
- * plan, the run and the uninstall (each time, so whichever thread runs the
- * engine holds it), is held to the process's end. */
-#define INST_S98_PAUSE_MUTEX "Global\\Xhci98S98Switch"
+ * to Stor98 while an install or an uninstall runs. The run creates the
+ * pause event and keeps it open to its process's end (an event is not a
+ * thread's, so any thread of the window may run the engine), then waits
+ * for a switch already under way: the service holds the switch mutex
+ * through each switch and checks the event inside it. 1 paused; 0 not
+ * (the run is refused). Once per process. */
+#define INST_S98_PAUSE_EVENT "Global\\Xhci98S98Pause"
+#define INST_S98_SWITCH_MUTEX "Global\\Xhci98S98Switch"
 static HANDLE s98Pause;
 
-static void s98_pause(void)
+static int s98_pause(void)
 {
+    SHARED_SD s;
+    HANDLE m;
     DWORD w;
 
-    if (!envNow.Nt) {
-        return;
+    if (!envNow.Nt || s98Pause != NULL) {
+        return 1;
     }
+    s98Pause = CreateEventA(shared_sd(&s, SYNCHRONIZE, EVENT_ALL_ACCESS), TRUE,
+                            FALSE, INST_S98_PAUSE_EVENT);
     if (s98Pause == NULL) {
-        s98Pause = shared_mutex(INST_S98_PAUSE_MUTEX);
+        out("The mark service's Stor98 pause could not be made (error %lu): "
+            "nothing is\nchanged.\n", (unsigned long)GetLastError());
+        return 0;
     }
-    if (s98Pause == NULL) {
-        logonly("stor98: the switch's pause lock could not be opened (error "
-                "%lu)\n", (unsigned long)GetLastError());
-        return;
-    }
-    w = WaitForSingleObject(s98Pause, 60000);
+    m = shared_mutex(INST_S98_SWITCH_MUTEX);
+    w = m != NULL ? WaitForSingleObject(m, 60000) : WAIT_FAILED;
     if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
-        logonly("stor98: the switch's pause lock was not taken within 60 s\n");
+        out("The mark service is moving a drive to Stor98 and did not finish "
+            "within 60 s:\nnothing is changed. Run INSTALL.BAT again.\n");
+        if (m != NULL) {
+            CloseHandle(m);
+        }
+        CloseHandle(s98Pause);
+        s98Pause = NULL;
+        return 0;
     }
+    ReleaseMutex(m);
+    CloseHandle(m);
+    logonly("stor98: the mark service's switch paused\n");
+    return 1;
 }
 
 int inst_eng_plan(void)
 {
-    s98_pause();
+    if (!s98_pause()) {
+        planResult = INST_EXIT_REFUSED;
+        return planResult;
+    }
     planResult = envNow.Nt ? plan_nt() : plan_9x();
     return planResult;
 }
@@ -21115,7 +21152,9 @@ int inst_eng_run(void)
     int r;
     int s;
 
-    s98_pause();
+    if (!s98_pause()) {
+        return INST_EXIT_REFUSED;
+    }
     code = envNow.Nt ? run_install_nt() : run_install_9x();
     f = flagFailed;
     r = flagRestart;
@@ -21249,7 +21288,9 @@ int inst_eng_uninstall(void)
     PFN_MOVEEX moveEx = move_ex();
     char path[INST_PATH_CHARS];
 
-    s98_pause();
+    if (!s98_pause()) {
+        return INST_EXIT_REFUSED;
+    }
     code = envNow.Nt ? run_uninstall_nt() : run_uninstall_9x();
     helper_files_gone();
     if (tempCopyDir[0] != '\0' && !opts.List) {

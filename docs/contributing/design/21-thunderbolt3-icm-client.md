@@ -4588,15 +4588,26 @@ store published it (`%SystemRoot%\INF\oemNN.inf`, the name
 - **Never written on 98 SE to 7.** On 8 it is written and has nothing to
   find, because 8 has no `stornvme`.
 
-*The installer's pause.* An install, update or uninstall run takes the
-mutex `Global\Xhci98S98Switch` at its plan, its run and its uninstall
-(each time, so whichever thread runs the engine holds it), waiting up to
-60 s, and holds it to the end of its process. The service takes it with
-no wait around each switch and switches nothing while it is held. So no
-switch runs beside an installer's reading of the devices, its case 3b
-jobs or its uninstall, on the first run or any later one, whatever the
-value already says. An installer that ends without releasing it leaves
-it abandoned, which the service takes as free.
+*The installer's pause.* Two objects, because a mutex is a thread's
+and the window runs the engine on more than one thread (its plan on the
+window's thread, its run on a worker, `xhciwiz.c`):
+
+- The **pause event** `Global\Xhci98S98Pause`. An install, update or
+  uninstall run creates it at the first of its plan, its run or its
+  uninstall, and keeps the handle open to the end of its process. Its
+  existence is the pause: the service tests it with `OpenEvent`, and any
+  answer but "not found" counts as paused.
+- The **switch mutex** `Global\Xhci98S98Switch`. The service holds it,
+  with the eject mutex, through each switch and each recovery, and tests
+  the event inside it. Once the event exists the installer waits for the
+  mutex (up to 60 s) and releases it at once: a barrier, so a switch
+  already under way ends before the run reads anything, and none starts
+  after. A run that cannot create the event, or does not get the mutex
+  within 60 s, is refused with nothing changed.
+
+So no switch or recovery runs beside an installer's reading of the
+devices, its case 3b jobs or its uninstall, on the first run or any
+later one, whatever the value already says.
 
 The service reads the value at every poll that has a candidate. It acts only
 when the value names an existing file `oem<digits>.inf` directly in
@@ -4649,25 +4660,33 @@ attempts, 10 s apart (`mk_s98_retry`). A record whose devnode no longer
 exists even as a phantom is deleted at the inventory (each minute),
 unless it still owes an enable.
 
-*Ownership.* A drive recorded `done` is also entered under the
-installer's record of Stor98's devices
-(`HKLM\Software\xhci98\Stor98\Devices`, the data `switched`; record 26
-section 6.3), only when that record exists, as a device the installer's
-own call bound is entered: the reading before showed `stornvme`, the
-reading after shows Stor98. The uninstall then removes it whatever
-`PreExisting` says, as it removes the installer's own devices.
+*Ownership.* A drive the switch bound to Stor98 - its `Service` value
+reads `stor98`, started or not - is entered under the installer's record
+of Stor98's devices (`HKLM\Software\xhci98\Stor98\Devices`, the data
+`switched`; record 26 section 6.3), as a device the installer's own call
+bound is entered: the reading before showed `stornvme`, the reading
+after shows Stor98. The entry is written **before** the record's final
+state (`done`, `restart` or `failed`). An entry that cannot be written
+leaves the record `enable`, which the recovery reads again at the next
+poll, so a crash or a failed write between the two loses nothing. With
+no installer record (`HKLM\Software\xhci98\Stor98` absent) nothing is
+entered and the service says so in its log. The uninstall then removes
+the drive whatever `PreExisting` says, as it removes the installer's own
+devices, and before it deletes the service's key it enters every drive
+the records name that is bound to Stor98, present or not, whatever state
+its record reached (`mk_s98_settle`).
 
 *The switch*, under the tools' eject mutex (`Global\XhciinstTbAsk`, 1 s,
 as the restart takes it), so it never runs inside an eject or a restart,
-and the installer's pause mutex (no wait):
+and the switch mutex (1 s), with the pause event absent:
 
 1. **Fresh reads.** `CM_Locate_DevNode` of the id, its service still
    `stornvme`, started with no problem, and its parent chain still
    reaching the member's location. The member's domain is read again as
    the restart reads it (`mk_fresh_same`): its NHI started, both answers
    read and verifiable (`mk_verifiable`), the epoch the poll sampled, the
-   member still active. Anything changed, or either mutex held, ends the
-   attempt with no record change and no attempt counted.
+   member still active. Anything changed, a mutex held or the pause on
+   ends the attempt with no record change and no attempt counted.
 2. **`disable` written, then the stop.** `DIF_PROPERTYCHANGE` with
    `DICS_DISABLE` and `DICS_FLAG_CONFIGSPECIFIC` (the current profile, as
    Device Manager disables). This is a query-remove, so an open file, a
@@ -4702,11 +4721,13 @@ error, the veto, the read-back.
 now. A record owing an enable (`disable` or `install`: a stop or crash
 in the middle of a switch; `enable`: an enable that did not hold) waits
 while its devnode is absent, since it would come back disabled. Once the
-devnode is present and disabled it is enabled under the eject mutex, and
+devnode is present and disabled it is enabled under the same locks as a
+switch (the eject mutex, the switch mutex, the pause event absent), and
 the record stays `enable` until a read shows it not disabled; a failure
 is logged once and tried again at each poll. Once present and not
-disabled, the record becomes `done` (with its ownership entry) when the
-drive runs Stor98, and `failed` otherwise. A `restart` record is decided
+disabled, the record becomes `done` when the drive runs Stor98 and
+`failed` otherwise, the ownership entry first wherever it is bound to
+Stor98. A `restart` record is decided
 the same way at the first poll after the service's start. **The
 uninstall** (and a run that removes the service with safe eject off,
 `mk_remove`) enables every devnode whose record still owes an enable,
@@ -4736,7 +4757,8 @@ own key is the ownership entry above.
 | A drive already on `stornvme` with a file open, a paging file, or Windows on it (a tunnelled boot disk) | the stop is refused; enabled again at once, `busy`; two retries 10 s apart, then again only at the next arrival; nothing is left for a restart, so Stor98 (demand-start, data disks only, its INF) never becomes a boot disk's driver |
 | The user puts the drive back on `stornvme`, or Windows Update installs a vendor's driver on it | `done` is final: left as chosen; a vendor's driver is never a candidate anyway (rule 2) |
 | The uninstall | step 3 stops the service, enables any drive still owed an enable, and deletes the service's key (value and records) before Stor98's devices are removed; the switched drives are under `Devices` and are removed (record 26 section 6.3), with `PreExisting` set or not, and Windows binds `stornvme` at their next enumeration with no service to switch them back |
-| An installer run while the service is polling | the run holds the pause mutex from its plan to its end: no switch beside its reading, its case 3b jobs or its uninstall |
+| An installer run while the service is polling | the run's pause event exists from its plan to its end, and the barrier waits out a switch already under way: no switch or recovery beside its reading, its case 3b jobs or its uninstall; a switch that does not end within 60 s refuses the run |
+| Stor98 bound but not started, or the service stopped between the bind and the record | the ownership entry is written before the final state (or the record is left `enable` and read again); the uninstall enters any bound drive its records name before the key goes |
 | The enclosure unplugged in the middle of a switch | the record owes an enable (`disable`, `install` or `enable`); at the drive's next arrival it is enabled, then `done` or `failed`; at an uninstall it is enabled first, present or not |
 | A run with the Stor98 box unticked, or safe eject off | the value stays (unticked), or goes with the service (safe eject off: Q1); with no value the service switches nothing |
 | The service stopped, or the domain not verifiable (an NHI not answering, Intel's own Thunderbolt driver on the NHI) | nothing switches; the drive keeps `stornvme` until the installer runs, as before this task |

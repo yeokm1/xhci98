@@ -1968,7 +1968,8 @@ static void mk_inventory(int quiet)
 
 #define MK_S98_KEY_PATH     MK_SVC_KEY "\\" MK_S98_KEY
 #define MK_S98_OWN_KEY      "Software\\xhci98\\Stor98"
-#define MK_S98_PAUSE_MUTEX  "Global\\Xhci98S98Switch"
+#define MK_S98_SWITCH_MUTEX "Global\\Xhci98S98Switch"
+#define MK_S98_PAUSE_EVENT  "Global\\Xhci98S98Pause"
 #define MK_S98_SEEN_MAX     64
 #define MK_S98_TODO_MAX     16
 #define MK_PROB_DISABLED    0x00000016UL
@@ -2141,18 +2142,24 @@ static int mk_s98_rec_set(const char *id, int state)
  * Stor98's devices (record 26 section 6.3), as a device the installer's
  * own call bound is, so the uninstall gives it back to stornvme whatever
  * PreExisting says. Only into a record the installer made. */
-static void mk_s98_own(const char *id)
+static int mk_s98_own(const char *id)
 {
     HKEY k;
     HKEY d;
     LONG r;
     static const char text[] = "switched";
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_OWN_KEY, 0, KEY_CREATE_SUB_KEY,
-                      &k) != ERROR_SUCCESS) {
-        mk_log("Stor98: %s runs Stor98, and the installer's record of Stor98 "
-               "is not there: not entered", id);
-        return;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_OWN_KEY, 0, KEY_CREATE_SUB_KEY,
+                      &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        mk_log("Stor98: %s is bound to Stor98, and the installer's record of "
+               "Stor98 is not there: not entered", id);
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        mk_log("Stor98: the installer's record of Stor98 did not open (error "
+               "%ld)", (long)r);
+        return 0;
     }
     r = RegCreateKeyExA(k, "Devices", 0, NULL, REG_OPTION_NON_VOLATILE,
                         KEY_SET_VALUE, NULL, &d, NULL);
@@ -2165,14 +2172,54 @@ static void mk_s98_own(const char *id)
     if (r != ERROR_SUCCESS) {
         mk_log("Stor98: %s could not be entered among Stor98's devices "
                "(error %ld)", id, (long)r);
+        return 0;
     }
+    return 1;
 }
 
-static void mk_s98_finish(const char *id, int state)
+/* A final state, after the ownership entry when the devnode is bound to
+ * Stor98 (its Service value, started or not): an entry that cannot be
+ * written leaves the record "enable", so the recovery tries again. */
+static void mk_s98_finish(const char *id, int state, int bound)
 {
-    if (mk_s98_rec_set(id, state) && state == MK_S98_DONE) {
-        mk_s98_own(id);
+    if (bound && !mk_s98_own(id)) {
+        (void)mk_s98_rec_set(id, MK_S98_ENABLE);
+        return;
     }
+    (void)mk_s98_rec_set(id, state);
+}
+
+/* 1 while an installer run holds its pause event open. */
+static int mk_s98_paused(void)
+{
+    HANDLE e = OpenEventA(SYNCHRONIZE, FALSE, MK_S98_PAUSE_EVENT);
+
+    if (e != NULL) {
+        CloseHandle(e);
+        return 1;
+    }
+    return GetLastError() != ERROR_FILE_NOT_FOUND;
+}
+
+/* The eject mutex, then the switch mutex the installer waits on, with no
+ * installer run in progress: 1 with both held. */
+static int mk_s98_lock(HANDLE *em, HANDLE *sm)
+{
+    *em = mk_lock(MK_EJECT_MUTEX, 1000);
+    if (*em == NULL) {
+        return 0;
+    }
+    *sm = mk_lock(MK_S98_SWITCH_MUTEX, 1000);
+    if (*sm == NULL) {
+        mk_unlock(*em);
+        return 0;
+    }
+    if (mk_s98_paused()) {
+        mk_unlock(*sm);
+        mk_unlock(*em);
+        return 0;
+    }
+    return 1;
 }
 
 /* DIF_PROPERTYCHANGE on the one devnode; 1 when made with no restart asked
@@ -2294,14 +2341,14 @@ static int mk_s98_domain_fresh(const MK_NHI *h, INST_U32 member)
 }
 
 /* The switch of one devnode (section 7.5.3, "The switch"), under the tools'
- * eject mutex and the installer's pause mutex. Returns the state recorded,
- * or MK_S98_NONE when nothing was done (a lock held, a fresh read
- * changed). */
+ * eject mutex and the switch mutex, with no installer pause. Returns the
+ * state recorded, or MK_S98_NONE when nothing was done (a lock held, the
+ * pause on, a fresh read changed). */
 static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
                          const char *inf)
 {
     HANDLE em;
-    HANDLE pm;
+    HANDLE sm;
     HDEVINFO set = INVALID_HANDLE_VALUE;
     SP_DEVINFO_DATA data;
     SP_DEVINSTALL_PARAMS_A ip;
@@ -2318,15 +2365,9 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
     int enabled;
     DWORD err = 0;
 
-    em = mk_lock(MK_EJECT_MUTEX, 1000);
-    if (em == NULL) {
-        return MK_S98_NONE;
-    }
-    /* An installer run holds this for its whole run: no switch beside its
-     * own Stor98 jobs and reads. */
-    pm = mk_lock(MK_S98_PAUSE_MUTEX, 0);
-    if (pm == NULL) {
-        mk_unlock(em);
+    /* An installer run keeps its pause event open from its plan to its
+     * end: no switch beside its reads and Stor98 jobs. */
+    if (!mk_s98_lock(&em, &sm)) {
         return MK_S98_NONE;
     }
     if (!mk_no_install_pending() ||
@@ -2424,12 +2465,16 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
                mk_s98_rec_text(result));
     }
 record:
-    mk_s98_finish(id, result);
+    if (result == MK_S98_ENABLE || result == MK_S98_BUSY) {
+        (void)mk_s98_rec_set(id, result);
+    } else {
+        mk_s98_finish(id, result, inst_eq(service, "stor98"));
+    }
 out:
     if (set != INVALID_HANDLE_VALUE) {
         api.Destroy(set);
     }
-    mk_unlock(pm);
+    mk_unlock(sm);
     mk_unlock(em);
     return result;
 }
@@ -2478,16 +2523,17 @@ static void mk_s98_recover_all(void)
     int vetoed;
     int ok;
     HANDLE em;
+    HANDLE sm;
     HDEVINFO set;
     SP_DEVINFO_DATA data;
     static char todo[MK_S98_TODO_MAX][INST_ID_CHARS];
     int nTodo = 0;
     int j;
-    int first = !s98FirstDone;
+    int first;
 
-    s98FirstDone = 1;
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_KEY_PATH, 0, KEY_READ, &k) !=
         ERROR_SUCCESS) {
+        s98FirstDone = 1;
         return;
     }
     for (i = 0; nTodo < MK_S98_TODO_MAX; i++) {
@@ -2501,22 +2547,32 @@ static void mk_s98_recover_all(void)
         id[sizeof(id) - 1] = '\0';
         r = type == REG_SZ ? mk_s98_rec_parse(text) : MK_S98_FAILED;
         if (r == MK_S98_DISABLE || r == MK_S98_INSTALL ||
-            r == MK_S98_ENABLE || (r == MK_S98_RESTART && first)) {
+            r == MK_S98_ENABLE || (r == MK_S98_RESTART && !s98FirstDone)) {
             inst_copy(todo[nTodo++], id, sizeof(todo[0]));
         }
     }
     RegCloseKey(k);
+    if (nTodo == 0) {
+        s98FirstDone = 1;
+        return;
+    }
+    /* The same locks as a switch: nothing beside an installer run. The
+     * first poll's "restart" records wait for the first poll that runs. */
+    if (!mk_s98_lock(&em, &sm)) {
+        return;
+    }
+    first = !s98FirstDone;
+    s98FirstDone = 1;
     for (j = 0; j < nTodo; j++) {
         r = mk_s98_rec_get(todo[j]);
+        if (r == MK_S98_RESTART && !first) {
+            continue;
+        }
         present = mk_s98_fresh(todo[j], service, sizeof(service), &st, &pr,
                                &dn);
         a = mk_s98_recover(r, present, mk_s98_disabled(st, pr),
                            mk_s98_runs(service, st), first);
         if (a == MK_S98_R_ENABLE) {
-            em = mk_lock(MK_EJECT_MUTEX, 1000);
-            if (em == NULL) {
-                continue;
-            }
             ok = 0;
             set = mk_s98_open(todo[j], &data);
             if (set != INVALID_HANDLE_VALUE) {
@@ -2525,7 +2581,6 @@ static void mk_s98_recover_all(void)
                 ok = mk_s98_fresh(todo[j], service, sizeof(service), &st,
                                   &pr, &dn) && !mk_s98_disabled(st, pr);
             }
-            mk_unlock(em);
             if (!ok) {
                 if (!mk_s98_enable_logged(todo[j], 1)) {
                     mk_log("Stor98: %s, left disabled by a switch, could not "
@@ -2544,12 +2599,15 @@ static void mk_s98_recover_all(void)
         }
         if (a == MK_S98_R_DONE || a == MK_S98_R_FAIL) {
             mk_s98_finish(todo[j], a == MK_S98_R_DONE ? MK_S98_DONE
-                                                      : MK_S98_FAILED);
+                                                      : MK_S98_FAILED,
+                          inst_eq(service, "stor98"));
             mk_log("Stor98: %s recorded %s (service %s)", todo[j],
                    a == MK_S98_R_DONE ? "done" : "failed",
                    service[0] ? service : "(none)");
         }
     }
+    mk_unlock(sm);
+    mk_unlock(em);
 }
 
 /* The records whose devnode Windows no longer has, even as a phantom. A
