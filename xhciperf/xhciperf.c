@@ -999,7 +999,7 @@ static int scsi_model_count(const char *want, pf_u32 pci)
     HKEY scsi, dev;
     char dn[256], in[256], nd[256], id[600];
     DWORD i, j;
-    int count = 0;
+    int count = 0, all = 0;
     HMODULE cm = LoadLibraryA("CFGMGR32.DLL");
     PF_CMLOCATE locate = (cm != NULL) ? (PF_CMLOCATE)GetProcAddress(cm, "CM_Locate_DevNodeA") : NULL;
 
@@ -1007,13 +1007,21 @@ static int scsi_model_count(const char *want, pf_u32 pci)
         return 0;
     }
     for (i = 0; RegEnumKeyA(scsi, i, dn, sizeof(dn)) == ERROR_SUCCESS; i++) {
-        norm(dn, strlen(dn), nd, sizeof(nd));
-        if (strstr(nd, want) == NULL || RegOpenKeyExA(scsi, dn, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+        /* the device id begins with the INQUIRY vendor and product as 9x
+         * writes them (a space as '_'): a spelling an earlier driver gave
+         * the same disk is another id, and not this one */
+        (void)nd;
+        if (strlen(dn) < 24 || _strnicmp(dn, want, 24) != 0 ||
+            RegOpenKeyExA(scsi, dn, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
             continue;
         }
         for (j = 0; RegEnumKeyA(dev, j, in, sizeof(in)) == ERROR_SUCCESS; j++) {
             pf_u32 loc;
 
+            if (instance_location(in, &loc) && loc != pci) {
+                continue;       /* on another adapter */
+            }
+            all++;
             if (locate != NULL) {
                 DWORD dnode = 0;
 
@@ -1024,11 +1032,8 @@ static int scsi_model_count(const char *want, pf_u32 pci)
                 if (locate(&dnode, id, 0) != 0) {
                     continue;   /* not present: a disk seen before */
                 }
+                count++;
             }
-            if (instance_location(in, &loc) && loc != pci) {
-                continue;       /* on another adapter */
-            }
-            count++;
         }
         RegCloseKey(dev);
     }
@@ -1036,7 +1041,9 @@ static int scsi_model_count(const char *want, pf_u32 pci)
     if (cm != NULL) {
         FreeLibrary(cm);
     }
-    return count;
+    /* where the configuration manager found none present (it may not
+     * answer a 32-bit program), every instance of the id counts */
+    return count != 0 ? count : all;
 }
 
 /* The adapter is proved Stor98's by its identity page; the disk is matched
@@ -1124,11 +1131,19 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
             norm((char *)std + 8, 24, v, sizeof(v));
             sz_cpy(want, sizeof(want), v);
             if (want[0] != 0 && strstr(ndev, want) != NULL) {
+                int k;
+
                 matches++;
                 rq->ha = ha;
                 rq->target = t;
                 foundPci = pci;
-                sz_cpy(found, sizeof(found), want);
+                /* the vendor and product as 9x spells them in a device id */
+                for (k = 0; k < 24; k++) {
+                    char c = (char)std[8 + k];
+
+                    found[k] = (c == ' ' || c == 0) ? '_' : ((c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c);
+                }
+                found[24] = 0;
             }
         }
     }
