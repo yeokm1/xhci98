@@ -5,7 +5,7 @@ the storage row does not preselect XhciSilentInstall, section 8.4);
 revision 28, 2026-10-22 (roadmap-usb4 task 43.43, the owner: on
 8 and 8.1 a package without the connection manager warned, not refused,
 section 4.5); revision 27, 2026-10-22 (roadmap-usb4 task 43.42, option A,
-record 26 draft 21 section 6.5.12: with the 98 SE storage row the
+record 26 draft 22 section 6.5.12: with the 98 SE storage row the
 Bulk-Only SilentClasses entries added and recorded, and XhciSilentInstall
 preselected 1 machine-wide where none is set - the console's question
 replaced by that preselection, section 8.3; the uninstall removes the
