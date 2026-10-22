@@ -1207,6 +1207,7 @@ const char *inst_action_text(int action)
     case INST_ACT_FOREIGN: return "another driver: left";
     case INST_ACT_FILTER:  return "add the tunnel-port filter";
     case INST_ACT_UNKNOWN: return "version unreadable: left";
+    case INST_ACT_WINDOWS: return "left for Windows' own UAS driver (xhciuas staged)";
     default:               return "?";
     }
 }
@@ -3573,6 +3574,14 @@ int inst_uas_decide(int usbInclude, int noUas)
     return usbInclude && !noUas;
 }
 
+int inst_uas_nt6_action(int osKind, int action)
+{
+    if (osKind == INST_OS_CMONLY && action == INST_ACT_INSTALL) {
+        return INST_ACT_WINDOWS;
+    }
+    return action;
+}
+
 int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
                     int *offered, const char **refusal)
 {
@@ -3587,9 +3596,12 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
         return -1;
     }
     if (osKind == INST_OS_CMONLY) {
-        if (!haveCm) {
-            *refusal = "this package carries no Thunderbolt or USB4 driver: "
-                       "there is nothing to install on Windows 8, 8.1 or 10.";
+        /* Without the connection manager (owner, 2026-10-22, record 26
+         * section 5.3.1 case 5): warned, and the run goes on with what
+         * the package has. */
+        if (!haveCm && cmOnly) {
+            *refusal = "/cmonly: this package carries no Thunderbolt or USB4 "
+                       "driver.";
             return -1;
         }
         *offered = 1;
@@ -3611,11 +3623,14 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
     return cmOnly ? 0 : 1;
 }
 
-INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
-                            int s98)
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
+                            int usb, int stor, int s98)
 {
     INST_U32 w = 0;
 
+    if (is8 && !haveCm) {
+        w |= INST_CW_NOCM8;
+    }
     if (stor && !is98se) {
         w |= INST_CW_STOR;
     }
@@ -3681,7 +3696,17 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "every xHCI controller, the one your keyboard and mouse "
                       "may use included. The uninstall is meant to give the "
                       "controllers back to Windows' own driver; that has not "
-                      "been tested either.");
+                      "been tested either. There the UAS disk driver, when "
+                      "ticked, is only staged: Windows' own UAS driver stays "
+                      "the default, and xhciuas.sys can be chosen for a disk "
+                      "in Device Manager.");
+    }
+    if (set & INST_CW_NOCM8) {
+        inst_cat_para(out, cap,
+                      "This package carries no Thunderbolt 3 / USB4 driver. "
+                      "On Windows 8, 8.1 and 10 it installs only what is ticked: "
+                      "the xHCI98 tools, and the xHCI98 USB drivers if their "
+                      "box is ticked.");
     }
     if (set & INST_CW_S98_8) {
         inst_cat_para(out, cap,
@@ -5288,6 +5313,13 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "3 driver keeps running the USB controllers. Nothing is changed until "
       "you click Install on the Summary page. Help opens the readme.",
       284, 58 },
+    { INST_PT_WELCOME_TOOLS,
+      "This puts the xHCI98 tools in a folder you choose, and installs the "
+      "xHCI98 USB 3.x drivers only if you tick them on the next page "
+      "(untested on this Windows, where its own USB 3 driver runs the "
+      "controllers). Nothing is changed until you click Install on the "
+      "Summary page. Help opens the readme.",
+      284, 58 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "
       "replaces it (untested here).",
@@ -6245,6 +6277,69 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
     return set;
 }
 
+const unsigned char instStorSilent[INST_STOR_SILENT_COUNT][4] = {
+    { 0xC3, 0x08, 0x02, 0x50 },
+    { 0xC3, 0x08, 0x05, 0x50 },
+    { 0xC3, 0x08, 0x06, 0x50 }
+};
+
+INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
+                              const int *valid, int n)
+{
+    INST_U32 set = 0;
+    int k;
+    int i;
+    int found;
+
+    for (k = 0; k < INST_STOR_SILENT_COUNT; k++) {
+        found = 0;
+        for (i = 0; i < n && !found; i++) {
+            found = valid[i] && memcmp(have[i], instStorSilent[k], 4) == 0;
+        }
+        if (!found) {
+            set |= 1UL << k;
+        }
+    }
+    return set;
+}
+
+int inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                          void *ctx, char *out, size_t cap)
+{
+    unsigned long n = (unsigned long)k + 1UL;
+    char num[16];
+    int d;
+    int tries;
+    int r;
+    unsigned long t;
+
+    for (tries = 0; tries < 1000; tries++) {
+        /* "XHCI98S" and the number in decimal, built by hand (no stdio in
+         * the pure half). */
+        d = 0;
+        t = n;
+        do {
+            num[d++] = (char)('0' + (int)(t % 10UL));
+            t /= 10UL;
+        } while (t != 0UL && d < 15);
+        inst_copy(out, "XHCI98S", cap);
+        while (d > 0 && strlen(out) + 1 < cap) {
+            size_t l = strlen(out);
+            out[l] = num[--d];
+            out[l + 1] = '\0';
+        }
+        r = taken == NULL ? 0 : taken(out, ctx);
+        if (r < 0) {
+            return 0;
+        }
+        if (r == 0) {
+            return 1;
+        }
+        n += INST_STOR_SILENT_COUNT;
+    }
+    return 0;
+}
+
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
 {
     INST_U32 set = 0;
@@ -6259,6 +6354,85 @@ INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
         set |= 1UL << INST_STOR_IDX_USBNTMAP_INF;
     }
     return set;
+}
+
+const int instStorCopyOrder[INST_STOR_COUNT] = {
+    0, 1, 2, 3, 4, INST_STOR_IDX_USBNTMAP_INF, INST_STOR_IDX_USBSTOR_INF
+};
+
+int inst_stor_rm_late(const char *name, const char *sha256)
+{
+    const INST_STOR_FILE *f = &instStorFile[INST_STOR_IDX_USBNTMAP_INF];
+
+    if (name != NULL) {
+        return inst_eq(name, f->Name);
+    }
+    return sha256 != NULL && inst_eq(sha256, f->Sha256);
+}
+
+int inst_stor_pair(int stor, int ntmap)
+{
+    if (stor < 0 || ntmap < 0) {
+        return -1;
+    }
+    if (stor) {
+        return ntmap ? INST_STOR_PAIR_BOTH : INST_STOR_PAIR_STOR;
+    }
+    return ntmap ? INST_STOR_PAIR_NTMAP : INST_STOR_PAIR_NONE;
+}
+
+int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair)
+{
+    return copyOk && ntmapPkg == 1 && infPair >= 0 &&
+           infPair != INST_STOR_PAIR_STOR;
+}
+
+int inst_stor_half(int pair, int placed)
+{
+    if (pair == INST_STOR_PAIR_BOTH || pair == INST_STOR_PAIR_NONE) {
+        return INST_STOR_HALF_NONE;
+    }
+    if (pair < 0 || placed <= 0) {
+        return INST_STOR_HALF_STEP;
+    }
+    return INST_STOR_HALF_WITHDRAW;
+}
+
+int inst_stor_scan(int found, int unread, int incomplete)
+{
+    if (found) {
+        return 1;
+    }
+    return (unread || incomplete) ? -1 : 0;
+}
+
+int inst_stor_pair_warn(int pair)
+{
+    return pair < 0 || pair == INST_STOR_PAIR_STOR;
+}
+
+int inst_stor_half_default(int def, int usb20u, int pair, int route)
+{
+    if (usb20u) {
+        return 0;
+    }
+    if (pair == INST_STOR_PAIR_STOR && route) {
+        return 1;
+    }
+    return def != 0;
+}
+
+const char *inst_stor_half_text(int fixable)
+{
+    return fixable ?
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
+        "own NTMAP.INF would take a new USB disk and stop Windows. Installing "
+        "these drivers puts USBNTMAP.INF beside it; until then, plug in no "
+        "new USB disk." :
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
+        "own NTMAP.INF would take a new USB disk and stop Windows. This run "
+        "cannot complete the pair: remove that copy of USBSTOR.INF before "
+        "plugging in a new USB disk.";
 }
 
 static void inst_stor_names(char *out, size_t cap,
@@ -6358,20 +6532,9 @@ int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
     return INST_STOR_KIND_NONE;
 }
 
-int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
-                         const char *portDriver, const char *ntmpDriver,
-                         const char *infPath, int infInWindowsInf)
+int inst_stor_unit_takes(int hasDriver)
 {
-    if (!hasDriver) {
-        return 1;
-    }
-    if (!readable || cls == NULL || portDriver == NULL ||
-        ntmpDriver == NULL || infPath == NULL) {
-        return 0;
-    }
-    return inst_eq(cls, "DiskDrive") && portDriver[0] == '\0' &&
-           ntmpDriver[0] == '\0' && inst_eq(infPath, "DISKDRV.INF") &&
-           infInWindowsInf;
+    return !hasDriver;
 }
 
 int inst_stor_adoptable(int published, int beforeOk, int inBefore,

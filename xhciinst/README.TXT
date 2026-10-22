@@ -144,13 +144,19 @@ needs NUSB 3.3's seven storage files, which a download built with them
 carries in its NUSB33\ folder. The row for them is ticked when none of
 the seven is found, and unticked when any of them is there or NUSB is
 installed (its Uninstall\USB20U entry; whatever an earlier run chose;
-/storage still ticks it); the installer never copies over a file
+/storage still ticks it). With NUSB not installed, a USBSTOR.INF found
+in Windows' INF folders without USBNTMAP.INF ticks it, and the row says
+that such a USBSTOR.INF lets Windows' own NTMAP.INF take a new USB disk
+and stop Windows; a run that ends with it still alone says so and leaves
+a step. The installer never copies over a file
 already present, and with only some
 of the seven found, one of them not this download's, it copies nothing
 and says the storage install is not complete. It installs a stick at
-"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". It
-also puts the two INFs, USBSTOR.INF and USBNTMAP.INF, in Windows' INF
-folder where NUSB's installer puts them, never over a file of that name,
+"Unknown Device" with the two INFs in place. It also puts the two INFs,
+USBSTOR.INF and USBNTMAP.INF, in Windows' INF folder where NUSB's
+installer puts them, USBNTMAP.INF first and never one without the other
+(USBSTOR.INF alone lets Windows' own NTMAP.INF take a disk, which stops a
+stock Windows 98 SE), never over a file of that name,
 so that a USB disk plugged in later is meant to install without the New
 Hardware wizard. The uninstall removes the files it copied, the INFs it
 put in the INF folder, the copies Windows made of their INFs for it and

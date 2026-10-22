@@ -1418,17 +1418,25 @@ well as Bulk-Only ones. A download built without them says so in its
 - **With NUSB 3.3 or 3.6 installed**, storage works.
 - **The seven files can also be installed on their own**, without NUSB's USB
   2.0 stack: point the Add New Hardware Wizard, or Update Driver on the
-  device, at a folder holding them. **On the first storage device, one step
-  is not obvious**: Windows binds the new disk to its own generic "Disk
-  drive" before it has seen `USBNTMAP.INF`, and no drive letter appears. In
-  Device Manager open Disk drives, "Disk drive", Driver, Update Driver, and
-  point it at the same folder, which installs "USB Disk"; then unplug the
-  device and plug it back in. After that the storage devices read here,
-  Bulk-Only and UAS, worked with no extra step, and a UAS device that sat at
-  Code 2 started at the next boot. **Read only on a Windows 98 SE that still
-  held NUSB's other files** (`IOS.VXD`, `DISKTSD.VXD`, `NTMAP.SYS`): whether a
-  stock Windows 98 SE installed from the CD needs any of those as well is not
-  yet read (roadmap-usb4 task 43.5).
+  device, at a folder holding them. **First copy `USBNTMAP.INF` into
+  `C:\WINDOWS\INF`, before the first USB disk is plugged in.** The wizard
+  takes `USBSTOR.INF` from the folder but not `USBNTMAP.INF`, and on a stock
+  Windows 98 SE the disk is then taken by Windows' own `NTMAP.INF`, which
+  copies `NTMAPHLP.PDR` from the Windows CD; Windows stops with "Invalid
+  VxD dynamic link call from NTMAPHLP" and hangs - even with all seven in
+  the folder (read in a virtual machine, roadmap-usb4 task 43.5). With
+  `USBNTMAP.INF` in `C:\WINDOWS\INF` first, the disk installed as "USB
+  Disk" with a drive letter and no restart. The installer's storage row
+  places and removes the two together, and says so, with a step, if it
+  finds `USBSTOR.INF` left in the INF folder without `USBNTMAP.INF`. After that the storage devices
+  read here, Bulk-Only and UAS, worked with no extra step, and a UAS device
+  that sat at Code 2 started at the next boot. On a
+  Windows 98 SE that still held NUSB's other files (`IOS.VXD`,
+  `DISKTSD.VXD`, `NTMAP.SYS`), a disk installed before `USBNTMAP.INF` was
+  seen went to Windows' generic "Disk drive" with no drive letter instead;
+  Update Driver on it, pointed at the same folder, installs "USB Disk",
+  then unplug it and plug it back in. Whether a stock Windows 98 SE needs
+  any of NUSB's other files as well is roadmap-usb4 task 43.5's reading.
 
 **Windows ME ships its own mass-storage files.** Windows ME carries its own
 `USBSTOR` and `USBNTMAP` INFs, and the files are copied from Windows ME's

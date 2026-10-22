@@ -626,7 +626,8 @@ static void welcome_texts(HWND dlg)
     /* The connection manager alone: on 8 and 8.1 the install's texts; on a
      * machine with it alone registered the uninstall's (record 26 draft
      * 8). */
-    int cm = uninstallMode ? inst_eng_cm_only_machine() : is_cm_only_system();
+    int cm = uninstallMode ? inst_eng_cm_only_machine() :
+             (is_cm_only_system() && tbHave);
 
     _snprintf(title, sizeof(title) - 1, "%s %s",
               uninstallMode ? inst_page_text(cm ? INST_PT_UN_TITLE_CM :
@@ -641,6 +642,8 @@ static void welcome_texts(HWND dlg)
                                                   (cm ? INST_PT_UN_WARN_CM :
                                                    INST_PT_UN_WARN) :
                                                   cm ? INST_PT_WELCOME_CM :
+                                                  is_cm_only_system() ?
+                                                  INST_PT_WELCOME_TOOLS :
                                                   INST_PT_WELCOME));
     if (uninstallMode) {
         SetDlgItemTextA(dlg, IDC_U_AGREE, inst_page_text(cm ?
@@ -2467,8 +2470,10 @@ static void summary_fill(HWND dlg)
             tb_add(&t, "- none present: the drivers are staged for later.\n");
         }
         tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys\n" :
+               tbHave ? "\nThe components:\n- xhci98.sys and xhciuas.sys: "
+               "left out (the connection manager alone)\n" :
                "\nThe components:\n- xhci98.sys and xhciuas.sys: left out "
-               "(the connection manager alone)\n");
+               "(the xHCI98 tools alone)\n");
         if (usbChoice) {
             tb_add(&t, uasChoice ? "- xhciuas.sys, the UAS disk driver\n" :
                    "- xhciuas.sys, the UAS disk driver: left out (one "
@@ -2491,10 +2496,13 @@ static void summary_fill(HWND dlg)
             char sl[400];
             inst_eng_stor_summary(sl, sizeof(sl));
             if (sl[0] != '\0') {
-                _snprintf(line, sizeof(line) - 1, "- %s\n  %s\n", sl,
-                          storNote);
-                line[sizeof(line) - 1] = '\0';
-                tb_add(&t, line);
+                /* Each part added whole: the note may carry the lone
+                 * USBSTOR.INF's sentence (record 26 section 6.5.5). */
+                tb_add(&t, "- ");
+                tb_add(&t, sl);
+                tb_add(&t, "\n  ");
+                tb_add(&t, storNote);
+                tb_add(&t, "\n");
             }
         }
         if (trayHere) {

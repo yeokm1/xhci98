@@ -1,12 +1,21 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 30, 2026-10-22 (roadmap-usb4 task 43.22, section
+Status: revision 32, 2026-10-22 (roadmap-usb4 task 43.42, the owner:
+the storage row does not preselect XhciSilentInstall, section 8.4);
+revision 31, 2026-10-22 (roadmap-usb4 task 43.43, the owner: on
+8 and 8.1 a package without the connection manager warned, not refused,
+section 4.5); revision 30, 2026-10-22 (roadmap-usb4 task 43.22, section
 5.10: on 64-bit Windows 8 and 8.1 the connection manager installed only
 from a test-signed package in test-signing mode, Windows making it a
 boot driver; the catalog refusal explained; the Secure Boot note for
 32-bit 8 and 8.1; Secure Boot's state read and shown there, record 26
 section 5.3.2; keyed on the system's kind, so 10 takes them);
-revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+revision 29, 2026-10-22 (roadmap-usb4 task 43.42, option A,
+record 26 draft 24 section 6.5.12: with the 98 SE storage row the
+Bulk-Only SilentClasses entries added and recorded, and XhciSilentInstall
+preselected 1 machine-wide where none is set - the console's question
+replaced by that preselection, section 8.3; the uninstall removes the
+entries it added, section 9); revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
 owner's decisions of 2026-10-20: Windows 10, NT 10.0 below build 22000,
 admitted beside 8 and 8.1, Windows Server 2016 to 2022 as 10 with no
 Server check, 11 still refused; sections 4.3, 4.5 and 5.10; record 26
@@ -816,8 +825,10 @@ tunnel brings are driven by whatever driver Windows binds to them.
 the owner's decision of 2026-10-21: every component on every system,
 the defaults as they are, a warning where one does not apply.) The table
 becomes, with `inst_usb_decide` refusing nothing but a `/cmonly` with no
-connection manager in the package, `/usb` with `/cmonly`, and a package
-without the connection manager on 8 and 8.1:
+connection manager in the package and `/usb` with `/cmonly` (revision 31,
+owner 2026-10-22: a package without the connection manager on 8 and 8.1
+is no longer refused; the run warns, record 26 section 5.3.1 case 5, and
+goes on with the USB drivers' box and the tools):
 
 | System | The USB drivers | `/cmonly` |
 |---|---|---|
@@ -2284,7 +2295,9 @@ controller's driver key, as `silent-on.bat` does; a list that cannot be
 read or does not read back leaves the switch unchanged (exit 2). Off (an
 explicit 0 when the switch is on) writes the switch at 0 and leaves the
 list, as `silent-off.bat` does. Enter keeps the state; the default answer
-is off.
+is off. (Revision 29, record 26 section 6.5.12) The 98 SE storage row
+adds its own Bulk-Only entries to the list under its record and does
+not turn the switch on: it stays the user's, as above.
 
 ### 8.5 The Thunderbolt 3 / USB4 question (owner, 2026-10-15)
 

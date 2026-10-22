@@ -174,6 +174,7 @@ int inst_bus_id(const char *instanceId);
 #define INST_ACT_FOREIGN    4   /* another driver: left                    */
 #define INST_ACT_FILTER     5   /* tunnel port on pci without our filter   */
 #define INST_ACT_UNKNOWN    6   /* ours, version unreadable: refused        */
+#define INST_ACT_WINDOWS    7   /* 8, 8.1: a UAS disk left to Windows' own  */
 
 /* A driver key's DriverVersion: three answers (record 23 section 5.3). */
 #define INST_VS_ABSENT      0
@@ -1042,8 +1043,9 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 #define INST_CW_CMALONE     0x02UL  /* 98 SE, ME: the CM alone           */
 #define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
 #define INST_CW_S98_8       0x08UL  /* 8, 8.1: Stor98                    */
-INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
-                            int s98);
+#define INST_CW_NOCM8       0x10UL  /* 8, 8.1: no connection manager     */
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
+                            int usb, int stor, int s98);
 /* Every warning of the set, one paragraph each in that order, separated by
  * a blank line; dir the tools folder. "" for none. */
 void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
@@ -1054,6 +1056,14 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
  * unticked box leaves it out. Left out, xhciuas.inf is neither staged nor
  * installed and an xhciuas already installed stays as it is. */
 int inst_uas_decide(int usbInclude, int noUas);
+
+/* Windows 8 and 8.1 (task 43.29, owner 2026-10-22; record 26 section
+ * 5.3.1 case 3a): xhciuas.inf is staged but never forced, so Windows' own
+ * UAS driver stays the default. A UAS disk with no driver is left for
+ * Windows (INST_ACT_WINDOWS); one on another driver stays foreign; one
+ * already on xhciuas (the user's own pick) is kept current. Any other
+ * system, or kind: the action as given. */
+int inst_uas_nt6_action(int osKind, int action);
 
 /* The step when that routine is not implemented either: exit 4, nothing
  * changed. */
@@ -1431,6 +1441,8 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 /* Record 26 section 6.5 (task 43.4): the USB storage drivers, 98 SE. */
 #define INST_PT_STOR            41
 #define INST_PT_STOR_T          42
+/* Record 26 section 5.3.1 case 5: 8 and 8.1, no connection manager. */
+#define INST_PT_WELCOME_TOOLS   43
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1809,6 +1821,71 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
  * (named[0] USBSTOR.INF, named[1] USBNTMAP.INF: 1 a file of the name is
  * there, -1 unreadable, either keeping it out). */
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2]);
+/* The two INFs are all or nothing wherever Windows can find them (record
+ * 26 section 6.5.5; roadmap-usb4 task 43.5): USBSTOR.INF without
+ * USBNTMAP.INF lets 98 SE's own NTMAP.INF take the disk unit, and its
+ * NTMAPHLP.PDR stops Windows. The order the seven are copied and placed:
+ * the binaries, USBNTMAP.INF, USBSTOR.INF last; they are deleted in the
+ * reverse order of the two INFs (USBSTOR.INF first). */
+extern const int instStorCopyOrder[INST_STOR_COUNT];
+/* 1 when a file (by its name, or NULL and its recorded SHA-256) is
+ * USBNTMAP.INF, deleted only once USBSTOR.INF of the same place is gone. */
+int inst_stor_rm_late(const char *name, const char *sha256);
+/* The pair in one place: stor and ntmap 1 present, 0 absent, -1 unread. */
+#define INST_STOR_PAIR_NONE     0
+#define INST_STOR_PAIR_BOTH     1
+#define INST_STOR_PAIR_STOR     2   /* USBSTOR.INF alone: the hazard     */
+#define INST_STOR_PAIR_NTMAP    3   /* USBNTMAP.INF alone                */
+int inst_stor_pair(int stor, int ntmap);
+/* The helper's Bulk-Only step admitted: the package's copy made with the
+ * seven (copyOk), its USBNTMAP.INF of the download's bytes (ntmapPkg 1),
+ * and %windir%\INF not holding USBSTOR.INF without USBNTMAP.INF (infPair,
+ * an INST_STOR_PAIR_* or -1 unread). */
+int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair);
+/* After the placement in %windir%\INF: the pair as it stands (an
+ * INST_STOR_PAIR_* or -1 unread) and whether the record's Placed names a
+ * copy (placed 1, 0 none, -1 unread; any run's). */
+#define INST_STOR_HALF_NONE     0   /* whole, or neither: nothing to do   */
+#define INST_STOR_HALF_WITHDRAW 1   /* a half of this installer's: the
+                                       placed copies withdrawn, a step  */
+#define INST_STOR_HALF_STEP     2   /* a half that is not, or unread: a
+                                       step, nothing deleted            */
+int inst_stor_half(int pair, int placed);
+/* A presence scan of INF and INF\OTHER for one INF: found (a copy by name
+ * or text), unread (an INF whose text could not be read) and incomplete
+ * (a listing that ended in an error): 1 found, -1 unknown, 0 none. */
+int inst_stor_scan(int found, int unread, int incomplete);
+/* 1 when the INF directories' pair (an INST_STOR_PAIR_* or -1 unread),
+ * after a withdrawal or the uninstall's INF step, must be said as a step:
+ * USBSTOR.INF without USBNTMAP.INF, or not known. */
+int inst_stor_pair_warn(int pair);
+/* The row's default with the INF directories read (record 26 section
+ * 6.5.5, the owner's answer of 2026-10-22): NUSB installed (usb20u) wins,
+ * unticked; else a lone USBSTOR.INF (pair INST_STOR_PAIR_STOR) ticks the
+ * row when a ticked run can complete the pair (route: the case admits the
+ * route and the download carries the seven), over a recorded choice;
+ * else def, the default of inst_stor_default. */
+int inst_stor_half_default(int def, int usb20u, int pair, int route);
+/* The sentence said with the row (Components, Summary, console) when the
+ * INF directories hold USBSTOR.INF without USBNTMAP.INF; fixable: a ticked
+ * run completes the pair. */
+const char *inst_stor_half_text(int fixable);
+/* The SilentClasses entries the storage row adds on 98 SE (record 26
+ * section 6.5.12, task 43.42 option A): USBSTOR.INF's generic Bulk-Only
+ * lines, each a 4-byte entry of design record 13 section 6.11's form. */
+#define INST_STOR_SILENT_COUNT  3
+extern const unsigned char instStorSilent[INST_STOR_SILENT_COUNT][4];
+#define INST_STOR_SILENT_KEY    INST_MW_KEY "\\SilentClasses"
+/* The entries to add, a bit per index of instStorSilent: each one no value
+ * of the list (have[0..n), each 4 bytes; valid[i] 0 for a value of another
+ * type or length, which never counts) already holds. */
+INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
+                              const int *valid, int n);
+/* The name for added entry k: "XHCI98S<k+1>", or the next number when that
+ * name is taken (taken(name, ctx) 1; -1 it cannot be told). 1 named; 0
+ * not (a reading failed, or no free name in reach). */
+int inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                          void *ctx, char *out, size_t cap);
 /* The detection's text: none, some ("not known to be ready"), all, or
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,
@@ -1829,14 +1906,10 @@ void inst_stor_note_text(char *out, size_t cap,
 #define INST_STOR_KIND_UNIT     2   /* USBSTOR\GenDisk, GenCdRom, GenSfloppy */
 int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes);
-/* A unit's binding: 1 when the helper takes it - no driver, or Windows'
- * generic disk binding, every value read (readable): class DiskDrive, no
- * PortDriver and no NTMPDriver ("" for none), its InfPath exactly
- * DISKDRV.INF and that file in %windir%\INF itself; 0 when it is left
- * (USBMPHLP.PDR's already, or anything else, or a value unread). */
-int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
-                         const char *portDriver, const char *ntmpDriver,
-                         const char *infPath, int infInWindowsInf);
+/* A unit's binding: 1 when the helper takes it, a unit with no driver;
+ * 0 when it is left, bound any way at all (record 26 section 6.5.5: a
+ * stock 98 SE never binds a unit to DISKDRV.INF, task 43.5). */
+int inst_stor_unit_takes(int hasDriver);
 /* With the record's Source (an earlier run put the seven in the package
  * directory), a file of the download's bytes is this installer's own
  * deployment, not another installation: made own, in place, before the
