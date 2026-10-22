@@ -549,11 +549,12 @@ the logged-on user, with no administrator rights.
   system". The drivers read configuration space and never change it. An
   older driver's item reads "not served by this xhci98.sys" (or
   xhcicm.sys).
-- **"Can run faster" (new in `3.2.0.0`, roadmap task 43.27).** When a
-  USB device that declares SuperSpeed or SuperSpeedPlus runs slower than
-  it can on a controller `xhci98.sys` drives - on a USB 2.0 port, behind
-  a USB 2.0 hub, fallen back to USB 2.0 in a USB 3 port, or a 10 Gbit/s
-  device at 5 Gbit/s - a balloon names it ("A USB device can run
+- **"Can run faster" (new in `3.2.0.0`, roadmap tasks 43.27 and
+  43.30).** When a USB device that declares SuperSpeed or SuperSpeedPlus
+  runs slower than it can on a controller `xhci98.sys` drives - on a USB
+  2.0 port, behind a USB 2.0 hub, fallen back to USB 2.0 in a USB 3 port,
+  or a 10 Gbit/s device at 5 Gbit/s - or a High Speed device runs at Full
+  Speed behind a Full Speed hub, a balloon names it ("A USB device can run
   faster"; the tooltip on 98 SE) and the icon turns red until every such
   device is reconnected at its speed or removed. Clicking the balloon, or
   the first item of the icon's menu while it is red, lists each device
@@ -565,9 +566,19 @@ the logged-on user, with no administrator rights.
   the View menu and the icon's right-click menu turns it on or off for
   you; the installer's box of the same name on the Components page, or
   `INSTALL /faster` and `INSTALL /nofaster`, sets it for the computer,
-  which your own choice overrides. It is on by default on 98 SE to 8.1
-  (Windows' own "can perform faster" notices do not appear under this
-  driver there) and off on Windows 10 and later. It reads what
+  which your own choice overrides. It is on by default on every
+  Windows this package runs on. **Windows' own notices do not appear
+  under `xhci98.sys`**: Explorer's "Device can perform faster when
+  connected to USB 3.0" on 8, 8.1 and 10 needs Windows' own USB 3 driver
+  running a controller (read in Windows 8's and 8.1's files; 10 not yet
+  read), and Windows 7's "This device can perform faster" balloon for a
+  High Speed device behind a Full Speed hub comes from Windows' own hub
+  driver, which this package replaces (measured on 7: not raised). For
+  the High Speed case the tool asks such a device once for its
+  device_qualifier descriptor, which only a High Speed-capable device
+  has. On a Windows 8, 8.1 or 10 computer where another USB 3 controller
+  runs Windows' own driver, Explorer's line may show for the stick too.
+  It reads what
   `xhci98.sys` answers; from `3.2.0.0` the driver asks a USB 3 device at
   High or Full Speed for its BOS descriptor to know it is one
   (`XhciUsb2Bos` below). Read on no virtual machine or computer yet

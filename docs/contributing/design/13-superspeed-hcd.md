@@ -3534,6 +3534,15 @@ devices by the service `xhci98` (`inst_own_service` in
 `xhciinst\inst_core.c`; the uninstall's device removal in
 `inst_eng.c`).
 
+**The owner's picks (2026-10-22):** options 1 (built as 8.4.1), 3 and 5,
+widened the same day to XHCITR's notice on by default on every target,
+for both cases (a SuperSpeed-capable device below SuperSpeed and a High
+Speed device slowed by a Full Speed hub), and 4 (the release notes say
+that Windows' own line does not appear under `xhci98.sys` on 8, 8.1 and
+10, and that 7's High Speed balloon is not raised); option 2 not taken.
+Design record 25 section 7.6 records them; they are roadmap 43.30's "can
+perform faster" part, done on branch `p43-27` with 43.27.
+
 **Owed to the Windows 8 VM (6.12.9):** under Microsoft's stack, the line
 for a SuperSpeed stick on a USB 2.0 port and "Connected to USB 3.0" on a
 USB 3 port, in the details pane and in Devices and Printers; under
@@ -4752,8 +4761,8 @@ at High or Full Speed, because the BOS was read only on the SuperSpeed
 enumeration path (8.4 above). Roadmap 43.27's tray notice needs those
 flags on every connection, so this section adds the read. It is **a
 prerequisite shared with 43.30**: it is 6.12.11's option 1 for 43.30 word
-for word, and if the owner picks that option this section is it, with
-nothing more to do there; if the owner does not, 43.27 still needs it.
+for word, which the owner picked on 2026-10-22, so this section is that
+option too, with nothing more to do in 43.30.
 Alone it brings no "can perform faster" line to Windows 8's Explorer
 under `xhci98.sys` (6.12.11: that text also needs a running `usbxhci`
 controller).

@@ -247,7 +247,8 @@ Can run faster
 
 When a USB 3 device runs slower than it can on a controller xhci98.sys
 drives - on a USB 2.0 port, behind a USB 2.0 hub, fallen back to USB 2.0
-in a USB 3 port, or a 10 Gbit/s device at 5 Gbit/s - a balloon names it
+in a USB 3 port, or a 10 Gbit/s device at 5 Gbit/s - or a High Speed
+device runs at Full Speed behind a Full Speed hub, a balloon names it
 (the tooltip on Windows 98 SE) and the icon turns red until every such
 device is reconnected at its speed or removed. Click the balloon, or the
 first item of the icon's menu while it is red, for each device's port and
@@ -258,8 +259,8 @@ Speed.
 "Tell me when a device can run faster" in the View menu and the icon's
 right-click menu turns this on or off for you. The installer's box of the
 same name (or INSTALL /faster and /nofaster) sets it for the computer;
-your own choice overrides that. It is on by default on Windows 98 SE to
-8.1 and off on Windows 10 and later.
+your own choice overrides that. It is on by default on every Windows:
+Windows' own "can perform faster" notices do not appear under xhci98.sys.
 
 From a command line
 -------------------

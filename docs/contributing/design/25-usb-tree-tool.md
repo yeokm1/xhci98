@@ -1,8 +1,9 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
 Status: revision 16, 2026-10-22 (revision 16, the "can run faster"
-notice, roadmap-usb4 task 43.27: section 7.6, with sections 8, 10 and
-11; record 13 section 8.4.1 is its driver half); revision 15,
+notice, roadmap-usb4 tasks 43.27 and 43.30, with the owner's decisions
+of 2026-10-22: section 7.6, with sections 8, 10 and 11; record 13 section
+8.4.1 is its driver half); revision 15,
 2026-10-19 (revision 15, Windows 2000's USB disk
 class and its stopped mark, roadmap-usb4 task 42-A.28: sections 6.5 and
 14; revision 14, XHCISNAP's reading
@@ -1300,6 +1301,20 @@ runs at and the speed it can, and what to try. Its input is the
 from record 13 section 8.4.1 (the BOS read at High and Full Speed, built
 with this task).
 
+**The owner's decisions of 2026-10-22** (picking from record 13 section
+6.12.11's options for 43.30, then widening them the same day): option 1,
+the BOS read at High and Full Speed for `bcdUSB` 0x0210 or more (record 13
+section 8.4.1); option 3, this notice on by default on 8, 8.1 and 10, and
+then **on by default on every target** - 98 SE, ME, 2000, XP, XP x64,
+Vista, 7, 8, 8.1 and 10 - since under `xhci98.sys` Windows' own notice
+appears on none of them; option 4, the release notes saying so; option 5,
+the notice widened to **a High Speed device slowed by a Full Speed hub**,
+on every target too. Option 2 (`_EX` `Speed` 3 on NT 6.2 and later) is not
+taken. Delivery is section 7.2's rule: a `NIF_INFO` balloon where
+`shell32.dll` is 5.0 or later, the tooltip on 98 SE (4.72). The user's
+choice to turn it off stays (item 7). These items are 43.30's "can perform
+faster" part, done here; the UAS client-contract half of 43.30 is separate.
+
 1. **Which devices count** (`tr_fast_check`, host-tested). A port the
    scan read (section 5) counts when all of these hold: its controller is
    `xhci98.sys`'s (`UCTRL.Ours`); it is connected; the device is not a
@@ -1319,6 +1334,27 @@ with this task).
    3.2 section 11.3), which the tool does not read, so it cannot tell
    that half from a USB 3 hub on a USB 2.0 port. A SuperSpeed device
    behind a hub that runs slow counts itself, and its text names the hub.
+   **The High Speed case** (option 5): a device that declares no
+   SuperSpeed, runs at Full Speed behind a hub that runs at Full Speed,
+   declares `bcdUSB` 0x0200 or more, and answers GET_DESCRIPTOR(DEVICE_
+   QUALIFIER) (type 6, WDK 7.1 `usb200.h`'s
+   `USB_DEVICE_QUALIFIER_DESCRIPTOR`, 10 bytes) with a descriptor of
+   bLength 10 and type 6, counts, its declared speed High. USB 2.0 section
+   9.6.2 (from memory, not read here: no USB 2.0 text is in
+   `docs/references`) gives a High Speed-capable device that descriptor
+   and has a Full Speed-only device refuse it; USB 3.2 section 9.4.3
+   (read) has a SuperSpeed device refuse it at Gen X speed only. The
+   driver keeps no such reading, so the tool asks
+   (`IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`, which `xhci98.sys`'s
+   door forwards to the device) **once per candidate**: only for a port
+   `tr_fast_wants_qual` admits (the conditions above but the answer), and
+   only when its key (item 4) is not among the answers kept from earlier
+   refreshes (32 at most, `TR_FAST_MAX`, the oldest dropped first). A
+   refused, short or malformed answer is "Full Speed only" and is kept as
+   such, so the device is never asked again while it stays on that port.
+   On a root port a High Speed device runs at High Speed (every USB 2.0
+   root port of an xHCI controller is High Speed), so a root port is
+   never asked.
 2. **Where it is, and what to try** (`TR_FW_*`, `tr_fast_where`,
    `tr_fast_try`):
 
@@ -1326,7 +1362,7 @@ with this task).
    |---|---|---|
    | `TR_FW_PORT2` | on a root port, below SuperSpeed (a root port at High or Full Speed is a USB 2.0 port: a USB 3 connector's SuperSpeed port carries nothing slower) | "Connect it to a USB 3 port of this computer (often blue, or marked SS). If it is already in one, it fell back to USB 2.0 there: try another cable or another port." |
    | `TR_FW_HUB2` | behind a hub at High Speed that declares no SuperSpeed | "Connect it to a USB 3 port of this computer, or through a USB 3 hub." |
-   | `TR_FW_HUB1` | behind a hub at Full Speed that declares no SuperSpeed | the same |
+   | `TR_FW_HUB1` | behind a hub at Full Speed that declares no SuperSpeed | the same; for the High Speed case (declared High Speed): "Connect it to a port of this computer, or through a USB 2.0 or USB 3 hub, rather than through this Full Speed hub." |
    | `TR_FW_HUB3` | behind a hub that declares SuperSpeed and runs below it | "Connect the hub to a USB 3 port of this computer with a USB 3 cable. If it already is, try another cable for the hub, then for the device." |
    | `TR_FW_LINK` | a SuperSpeedPlus device at 5 Gbit/s | "Connect it to a port rated 10 Gbit/s or more (USB 3.1 Gen 2 or USB 3.2), with a cable rated for that speed. A 5 Gbit/s port is the most it gets there." |
 
@@ -1334,9 +1370,10 @@ with this task).
    `_EX_V2` refused) is taken as `TR_FW_HUB2` by its speed.
 3. **When it is read.** At every model refresh (`refresh_model`): the
    start, F5 and the window's automatic refresh, and the tray's refresh
-   500 ms after each `DBT_DEVNODES_CHANGED`. Nothing new is polled and no
-   device is asked anything: the scan's `_EX` and `_EX_V2` requests are
-   all it reads.
+   500 ms after each `DBT_DEVNODES_CHANGED`. Nothing new is polled. No
+   device is asked anything but item 1's High Speed candidate, once for
+   as long as it stays on its port; otherwise the scan's `_EX` and
+   `_EX_V2` requests are all it reads.
 4. **The set and its balloons.** Each counted device is keyed by its
    controller's driver key, its port path and its VID:PID (`tr_fast_key`);
    the tool keeps the last refresh's keys, 32 at most (`TR_FAST_MAX`; a
@@ -1389,14 +1426,24 @@ with this task).
      else this system's default. Another type or another number counts
      as absent.
    - The default (43.27's rule: on where Windows shows no notice of its
-     own under this driver): **on** on 98 SE, ME, 2000, XP, XP x64,
-     Vista, 7, 8 and 8.1 - on 8 and 8.1 because Explorer's own line
-     cannot appear under `xhci98.sys` there (record 13 section 6.12.11:
-     it needs a running `usbxhci` controller), which 43.30 may change and
-     this default with it; **off** on NT 10.0 and later, until 43.33 (b)
-     reads what Windows 10 shows and 43.35 sets its default. The version
-     is `GetVersionExA`'s, which reports 10.0 on 10 since the manifest
-     names 10's `supportedOS`.
+     own under this driver; the owner's decision of 2026-10-22 above):
+     **on on every system**. Under `xhci98.sys` Windows' own notices
+     appear on none, but for one case below: 7's High Speed balloon is
+     raised by `usbhub.sys`,
+     which this bus replaces (measured on 7, record 13 section 6.12.11),
+     and 8's and 8.1's Explorer line needs a running `usbxhci`
+     controller (static, the same section); 10's is assumed to need the
+     same until 43.33 (b) reads it, and a reading that says otherwise
+     goes back to the owner. `inst_fast_default` keeps the system as an
+     argument for that. The case: Explorer's test accepts any working
+     `usbxhci` controller, so on an 8, 8.1 or 10 computer where another
+     controller runs Windows' own driver, its line may show for a stick on
+     an `xhci98.sys` controller too (record 13 section 6.12.11, "A
+     computer with both drivers"), beside this notice. The tool keeps its
+     own on there (the orchestrator's choice, for the owner to confirm):
+     reading the other controller's service to stay quiet would rest on
+     a test of Windows' that is static and unread on 10, and a double
+     notice tells the user nothing wrong. 43.28 reads such a computer.
    - Off: no balloon, no red icon, no menu line. Turned on, the icon
      turns red at once when the set holds a device, with no balloon;
      turned off, it goes back.
