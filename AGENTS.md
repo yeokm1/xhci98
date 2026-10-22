@@ -431,7 +431,7 @@ SuperSpeed and USB 3 hub material, checked against xHCI 1.2c and USB 3.2
 ### Language and arithmetic
 
 - C89/C90 only. No `//` comments, no mid-block declarations, no `stdint.h`. Use `ULONG`/`USHORT`/`UCHAR` from `ntddk.h`.
-  The one exception is a third-party interface header carried byte for byte, `src/cm/stor98cm.h` (Stor98's, with `//` comments; `legal-provenance.md` section 2a): never edited here, and every compiler of the tree accepts it as it is.
+  The exceptions are Stor98's interface headers, with `//` comments: `src/cm/stor98cm.h`, carried byte for byte (`legal-provenance.md` section 2a), and `src/stor98/include/stor98pf.h`, which XHCIPERF includes in place (design record 29 section 7.2); never edited outside Stor98, and every compiler of the tree accepts them as they are.
 - No 64-bit DMA. Win98 is 32-bit; the upper 32 bits of all hardware addresses are always 0.
 - No 64-bit arithmetic (the `_alldiv`-style compiler helpers may not exist on Win98's kernel). Keep 64-bit hardware fields as Lo/Hi ULONG pairs, Hi always 0.
 - No floating point in kernel mode.
