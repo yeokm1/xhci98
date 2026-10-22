@@ -1,0 +1,7 @@
+# vsd-services.allow - the VxD services S98VSD.VXD may call (design record 30
+# section 6.4; check-vsd.ps1). One row per service: its dword (device id in
+# the high word, ordinal in the low), the name, and where the value is read
+# (src\vsd\vsd_vmm.h has the citation). A service not listed fails the gate;
+# a row no call uses fails it too.
+0x00010061  VMM _CopyPageTable    VMM.H 1521 (VMM device 1)
+0x00100007  IOS IOS_Register      IOS.H 162 (BLOCKDEV_DEVICE_ID 0x10)

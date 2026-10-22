@@ -9,7 +9,7 @@ the drive in a Thunderbolt or USB4 enclosure, as a SCSI adapter on:
   - Windows 2000 SP4, XP, Vista, 7, 8, 8.1      the 32-bit package
     and 10 (32-bit; 10 below build 22000)
   - Windows XP x64, Vista x64 and 7 x64          the 64-bit package
-    (8 x64, 8.1 x64 and 10 x64: not yet; see WINDOWS 8, 8.1 AND 10)
+    (8 x64, 8.1 x64 and 10 x64: untested; see WINDOWS 8, 8.1 AND 10)
 
 In the 32-bit package stor98.inf serves every 32-bit system, with
 stor98.mpd for Windows 98 SE and ME and stor98.sys for Windows 2000 to
@@ -94,9 +94,12 @@ manager. Windows 8 has no NVMe driver of its own; Windows 8.1 and 10
 run their own (stornvme), and a ticked box puts Stor98 in its place on
 a drive behind a tunnel. The 32-bit package was read on Windows 8 and
 Windows 10 22H2 (32-bit); 32-bit Windows 8.1 has not been run. The
-64-bit package does not install on Windows 8 x64, 8.1 x64 or 10 x64:
-it has no catalog file, which those systems require ('The third-party
-INF does not contain digital signature information').
+64-bit package carries a catalog file, stor98.cat, which Windows 8 x64,
+8.1 x64 and 10 x64 require in test-signing mode (without it: 'The
+third-party INF does not contain digital signature information'):
+keep it beside stor98.inf. With it the package was taken into the
+driver store on 8.1 x64 and 10 x64; Stor98 x64 has not yet run a drive
+on 8 x64, 8.1 x64 or 10 x64.
 
 TEST SIGNING (64-bit Vista and 7)
 
@@ -138,7 +141,7 @@ Windows 8, 8.1 and 10 as well.
 
   9x name / NT key        Unit  Default            Range
   ----------------------  ----  -----------------  ------------------------
-  StorMaxTransferKB       KiB   512 on 98 SE / ME  64 to the default, in
+  StorMaxTransferKB       KiB   2048 on 98 SE / ME 64 to the default, in
   maxtransferkb=                256 on 2000 to 7   multiples of 4; anything
                                                    else is refused and the
                                                    default stands

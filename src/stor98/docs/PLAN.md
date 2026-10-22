@@ -733,7 +733,7 @@ the timer and interrupts active throughout (R6-5).
 | # | Item | Source |
 |---|---|---|
 | 2.1 | **Presence detection and transitions** over the states defined in 0.7: all-ones CSTS/MMIO moves to `gone`, which holds issued SRBs until evidence 1 or 2 (the G3 notification) or the gone deadline of 0.10 (MD-1 outcome); all-ones is never itself the evidence. CSTS.CFS or a failed reset moves to `failed` | C6, #7, R3-2, R4-1 |
-| 2.2 | **Terminal removal contract** (applies on path down, evidence 2 of 0.10, and at the gone deadline under MD-1 option (b), where held SRBs complete with this status while driver-owned DMA memory stays quarantined; ordinary I/O errors use the parent error mapping). One gone-state gate before every dispatch. Complete held SRBs promptly with `SRB_STATUS_NO_DEVICE` (consistent `ScsiStatus`, conservative transfer length), fast-fail later media requests and discovery probes (INQUIRY, TEST UNIT READY must fail, not return BUSY), and keep issuing readiness notifications so port-held requests drain. On NT, `BusChangeDetected` once per transition. Determine per OS (2000, XP, XP x64, Vista, 7) which status stops class-driver retries; `SRB_STATUS_SELECTION_TIMEOUT` is a candidate to test, not a known answer. Measured: on 2000 and XP x64 both NO_DEVICE and SELECTION_TIMEOUT stop retries (NO_DEVICE stays the default, G2); on 7 x64 NO_DEVICE at the deadline gave the application error 2 at once and the disk was gone 1 s later (Q-NT, G2 run B; SELECTION_TIMEOUT not run); on 98 SE and Me NO_DEVICE ends IOS retries after 6 tries (G9); on 8 x86 (xhci98 roadmap 43.23, 2026-10-22, no platform notification, TESTING.md "Windows 8 and 8.1") **neither status stops classpnp's retries**: a fast-failed WRITE was retried (disk event 153) about every 1.4-2.7 s under NO_DEVICE and under SELECTION_TIMEOUT alike, the retries ending only when the disk was removed after the gone deadline's `BusChangeDetected` (the failed INQUIRY), the application's error at 5.4 s (NO_DEVICE) or 5.6 s (SELECTION_TIMEOUT, which also raised the "Delayed Write Failed" popup); NO_DEVICE stays the default; 8 x64 and 8.1 x64 not run (the x64 package is refused at their driver store), 8.1 x86 not run (no medium); on 10 x86 (22H2, 2026-10-22, TESTING.md "Windows 10") NO_DEVICE ran without stage codes: Delayed Write Failed and paging errors, the disk removed at the deadline, the copy failed at about 5.9 s, no retry event logged; SELECTION_TIMEOUT not run, 10 x64 refused as 8 x64; Vista and XP x86 not yet run | C7, R2-4, G2, G9; nvme2k_scsi.c:68, 204; nvme2k.c:1040; XP x64 hang |
+| 2.2 | **Terminal removal contract** (applies on path down, evidence 2 of 0.10, and at the gone deadline under MD-1 option (b), where held SRBs complete with this status while driver-owned DMA memory stays quarantined; ordinary I/O errors use the parent error mapping). One gone-state gate before every dispatch. Complete held SRBs promptly with `SRB_STATUS_NO_DEVICE` (consistent `ScsiStatus`, conservative transfer length), fast-fail later media requests and discovery probes (INQUIRY, TEST UNIT READY must fail, not return BUSY), and keep issuing readiness notifications so port-held requests drain. On NT, `BusChangeDetected` once per transition. Determine per OS (2000, XP, XP x64, Vista, 7) which status stops class-driver retries; `SRB_STATUS_SELECTION_TIMEOUT` is a candidate to test, not a known answer. Measured: on 2000 and XP x64 both NO_DEVICE and SELECTION_TIMEOUT stop retries (NO_DEVICE stays the default, G2); on 7 x64 NO_DEVICE at the deadline gave the application error 2 at once and the disk was gone 1 s later (Q-NT, G2 run B; SELECTION_TIMEOUT not run); on 98 SE and Me NO_DEVICE ends IOS retries after 6 tries (G9); on 8 x86 (xhci98 roadmap 43.23, 2026-10-22, no platform notification, TESTING.md "Windows 8 and 8.1") **neither status stops classpnp's retries**: a fast-failed WRITE was retried (disk event 153) about every 1.4-2.7 s under NO_DEVICE and under SELECTION_TIMEOUT alike, the retries ending only when the disk was removed after the gone deadline's `BusChangeDetected` (the failed INQUIRY), the application's error at 5.4 s (NO_DEVICE) or 5.6 s (SELECTION_TIMEOUT, which also raised the "Delayed Write Failed" popup); NO_DEVICE stays the default; 8 x64 and 8.1 x64 not run (xhci98 3.1.0.0's catalog-less x64 package was refused at their driver store; with `stor98.cat`, xhci98 roadmap 43.36, 8.1 x64 took the package into the store and bound no drive to it), 8.1 x86 not run (no medium); on 10 x86 (22H2, 2026-10-22, TESTING.md "Windows 10") NO_DEVICE ran without stage codes: Delayed Write Failed and paging errors, the disk removed at the deadline, the copy failed at about 5.9 s, no retry event logged; SELECTION_TIMEOUT not run; 10 x64 not run (the catalog-less package refused as on 8 x64; with `stor98.cat` taken into the store, no drive bound); Vista and XP x86 not yet run | C7, R2-4, G2, G9; nvme2k_scsi.c:68, 204; nvme2k.c:1040; XP x64 hang |
 | 2.3 | Watchdog armed while any command is outstanding; per-command deadlines; presence checks independent of unrelated activity | N1 |
 | 2.4 | Bounded waits within the stall budget of 0.10; no multi-second stall loops on removal, shutdown or init | #6, #7 |
 | 2.5 | Safe bring-up failure per the bring-up rule of 0.10: at boot or start, failure is returned to the port only before CC.EN was written or after an acknowledged disable; on resume never (R6-7); otherwise the adapter stays started in `failed` and keeps its memory. Resume-failure handling verified by the combined G1 + G7 prototype on 2000, XP x64 and 7 x64 (Q-NT) | #6, R3-1, R6-7, Q-NT |
@@ -1141,6 +1141,39 @@ isolation evidence.
   PlatCmLinkPoll, P9EvidenceE1, P9Work; contract text: `include/stor98cm.h` R7, R8d.
   Tests: TESTING.md "Two drives in one ICM domain (9x)" and "Quarantined block after a
   surprise removal (9x)".
+- **Kernel DMA Protection: `DmaRemappingCompatible` 1 in the x64 INF, decided 2026-10-22
+  (owner, on xhci98's roadmap-usb4 task 43.33's reading).** On a 64-bit Windows 10 (1803
+  and later) whose firmware turns Kernel DMA Protection on, a device behind an external
+  port whose driver has not opted in to DMA remapping is held until a user signs in, and
+  never started under the DMAGuard policy "block all" (xhci98's design record 21 section
+  3.6), so a tunnelled NVMe drive under Stor98 waited for sign-in. A static read of the NT
+  build (2026-10-22, read only, nothing run): it is a SCSIport miniport (`scsiport.lib`,
+  `ScsiPortInitialize`; no Storport call); HwFindAdapter sets `Master`, `ScatterGather`,
+  `NeedPhysicalAddresses`, `MapBuffers`, `Dma32BitAddresses` and
+  `Dma64BitAddresses = SCSI_DMA64_MINIPORT_SUPPORTED`; every bus address written to the
+  controller - ASQ and ACQ, the I/O queues' creation PRP1, the identify and log buffers,
+  the PRP list pages, the bounce pages and every direct PRP entry of a READ or WRITE -
+  comes from `ScsiPortGetUncachedExtension` memory translated by
+  `ScsiPortGetPhysicalAddress(DevExt, NULL, va)` inside that extension
+  (`src/platform.c` `PlatPortPagePa`, `src/lifecycle.c` `LcCarve`) or from the SRB's own
+  data buffer by `ScsiPortGetPhysicalAddress(DevExt, Srb, ...)` (`src/engine.c`); the NT
+  import allowlist admits no `MmGetPhysicalAddress`, contiguous allocation or
+  `MmMapIoSpace`, and the 9x pool (`pool9x.c`, `_PageAllocate`) is compiled out of the NT
+  build. So the driver's DMA goes through the port's DMA adapter, and
+  `inf/stor98-x64.inf` writes `HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,1`
+  in the service's AddReg, Microsoft's per-driver opt-in ("Enable DMA Remapping for Device
+  Drivers", read 2026-10-22: for releases up to Windows 11 23H2; 24H2 and later read the
+  per-device `DMA Management\RemappingSupported`, and Windows 11 is not a target).
+  xhci98's `check-stor98-inf.ps1` holds the line. Options not chosen: 2 (opt in only for
+  an external device), which the owner's instruction did not take; no value. Unread, and
+  owed to a machine with the protection on (no emulator here exposes it): that 10's own
+  `scsiport.sys` maps the uncached extension and the SRB buffers through the remapped
+  adapter so the drive starts before sign-in and runs; whether its page offsets survive
+  remapping (else every direct child bounces, correct but slower); and how a late DMA
+  after the MD-1 gone deadline shows under an IOMMU (a fault rather than a write into
+  reused memory). A future NT DMA pool (the MD-3 option (b) of the open entries, with
+  `MmGetPhysicalAddress`) would take addresses around the adapter and must not ship with
+  this value.
 - **R11 O6 under a CM with no per-port teardown, decided 2026-10-22 (maintainer, the
   owner).** O6 asks the CM to tear the tunnel down once `Remove_SubTree` has kept failing
   for 30 s, so that `DOWN_QUIESCED` releases what the terminal instance holds. Under the
@@ -1154,6 +1187,65 @@ isolation evidence.
   down is R12's (`DOWN_QUIESCED` where xhci98 states it, otherwise the MD-1 deadline).
   Nothing changes in the receiver. Option not chosen: a receiver-side handling of a
   request left in place past O6. Contract text: `include/stor98cm.h` R11 O6.
+
+- **MD-8: a read-only counter answer for xhci98's disk benchmark. Decided 2026-10-22
+  (owner, Yeo Kheng Meng).** xhci98's XHCIPERF (its design record 29, section 7) reads
+  Stor98's request counters to show what reached the drive. Stor98 answers READ BUFFER
+  (3Ch) mode 02h (data) and 03h (descriptor) with buffer ID 53h from its device
+  extension, with no NVMe command and no access to the medium; any other mode, buffer ID
+  or offset is refused with INVALID FIELD IN CDB. The answer's layout is
+  `include/stor98pf.h` (BSD-3-Clause, an interface definition licensed on its own like
+  `stor98cm.h`; signature 'S98P', `STOR98PF_VERSION` 1, a protocol version). It carries
+  totals that only rise (each a 32-bit low and high pair carried by hand), facts, limits
+  and an epoch that changes at each adapter start; nothing resets and nothing is written.
+  Data SRBs are counted once at `HwStartIo`'s entry, before dispatch, hold or refusal;
+  the engine's own admission counters keep their meaning. On 98 SE and ME the DCB's
+  `DCB_max_xfer_len`, `DCB_max_sg_elements` and `DCB_dmd_flags` are copied through a
+  checked accessor of their own (IOP in the arena and pointing back at the SRB, the DCB
+  pointer in the arena). Carriers (xhci98's side): `IOCTL_SCSI_PASS_THROUGH` on NT, ASPI
+  (`SC_EXEC_SCSI_CMD`) on 98 SE and ME, the latter pending xhci98's reading P.0 of ASPI on
+  stock 98 SE and ME. Nothing of xhci98's GPL-2.0 code comes into Stor98. Options not
+  chosen: `IOCTL_SCSI_MINIPORT` (NT only), a registry value written from the timer, a
+  table in the 9x system arena read from ring 3, a vendor LOG SENSE page (kept as the
+  fallback if a layer refuses READ BUFFER). Tests: `tests/unit/` (the answer's builder,
+  the DCB accessor); TESTING.md "Counter answer (READ BUFFER)".
+  **P.0 (xhci98, 2026-10-22, static):** stock 98 SE and ME install `WNASPI32.DLL` and
+  `APIX.VXD` (their setup's `subase.inf`, section `[winbase]`), but the ASPI adapter
+  identity a program reads is not shown to name the miniport (`APIX.VXD`, 29,497 bytes, the same
+  file on both CDs, SHA-256 d98f340a..., carries the fixed string "OEM SCSI HBA" at file offset
+  0x5864), so the adapter is proved Stor98's by the target
+  itself: INQUIRY lists a vendor page C9h (`include/stor98pf.h`, the identity page,
+  signature 'S98P' and the PCI location), which a reader asks before any READ BUFFER.
+  INQUIRY and its EVPD pages are answered by every SCSI target, so asking them is safe.
+
+### Decided 2026-10-22 (owner, Yeo Kheng Meng)
+
+- **9x maximum transfer of 2 MiB.** On Windows 98 SE and ME,
+  `STOR98_MAX_TRANSFER` is 512 pages (2 MiB; NumberOfPhysicalBreaks 513),
+  raised from the 128 pages of "0.4.0.0 plan" item 1; NT stays at 256 KiB.
+  It is xhci98's option (b) for roadmap-usb4 task 43.46 (xhci98 design
+  record 30): xhci98's own IOS layer, `S98VSD.VXD` (GPL-2.0, in xhci98,
+  not in this driver; MD-5's "no VxD" stands for Stor98 itself), drops
+  `DCB_dmd_phys_sgd` above `SCSIPORT.PDR` on Stor98's disks and builds the
+  physical list, so IOS's hard 512 KiB and 17-run limits no longer cut a
+  request; this driver's part is only the larger maximum. Without that
+  layer nothing changes: on the physical-list path IOS still cuts a request
+  over 512 KiB into 63 KiB pieces. What holds at 512 pages: one PRP list
+  page (512 entries) covers a 512-page child at any offset (513 pages,
+  512 list entries), and 4,096 blocks of 512 bytes fit the 16-bit NLB,
+  both checked at compile time in `nvme2k.h`; the PRP list pages, bounce
+  pages and the DMA block are counted per child and are unchanged; a
+  child is still capped at MDTS, so a 2 MiB request becomes children of
+  the controller's limit (512 KiB on the emulator, measured with a test
+  build in xhci98's `runs/run-43.md`, "Requests over 512 KiB": every
+  compare clean at 512 KiB to 2 MiB, aligned and at +512). The setting
+  `StorMaxTransferKB` accepts 64 to 2048 KiB on 9x
+  (`tests/unit/xfer_ut.c`). Legs: xhci98 record 30 section 9.2, with the
+  layer. A condition that layer rests on (record 30 section 2.3):
+  `REQUEST SENSE` stays answered in software (`ScsiCompletesInSoftware`),
+  never through `ScsiPortGetPhysicalAddress`, because `SCSIPORT.PDR`'s own
+  sense fetch carries a list slot that nothing fills once
+  `DCB_dmd_phys_sgd` is dropped.
 
 ### Open (undecided)
 
@@ -1404,7 +1496,8 @@ review loop and a 9x/NT requalification before the release.
    the MD-1 gone deadline applies as before. Refusal cases are tested with the stand-in
    `tests/cmnt`; the joint legs with xhci98 3.0.0.0 are in TESTING.md ("CM notification").
 
-1. **9x maximum transfer of 512 KiB. Done (branch `xfer512`, 2026-10-16).** On Windows 9x
+1. **9x maximum transfer of 512 KiB. Done (branch `xfer512`, 2026-10-16); raised to 2 MiB
+   on 2026-10-22 ("Decided 2026-10-22").** On Windows 9x
    only, MaximumTransferLength is 512 KiB (`STOR98_MAX_TRANSFER` 128 pages,
    NumberOfPhysicalBreaks 129); NT stays at 256 KiB and its images are byte-identical to
    the previous build apart from the PE timestamp, checksum and PDB identity. The PRP list

@@ -996,8 +996,9 @@ hosts of section 3.3's lists, the PCIe tunnel and its re-enumeration, an
 NVMe drive behind it (Stor98 is not offered there; record 23 section
 4.5), a dock's xHCI controller and its devices under Windows' own USB
 driver, the USB3 tunnel's devices on the host's controller under the same
-driver, and safe eject with the marks. None of it has been read on 8 or
-8.1, where no guest exists here. The import gate holds the x86 driver to
+driver, and safe eject with the marks. Of it, the install and the driver's start on
+the NHI are read on 8 and 8.1 (below); the tunnels, eject and the marks
+are task 43.24's. The import gate holds the x86 driver to
 Windows 98's evidence and Windows 2000's export tables, and the amd64
 driver to NT 5.2's (`build-driver.cmd`'s gate for `xhcicm.sys`,
 `check-imports.ps1`); Vista and 7 are read in guests, not by the gate;
@@ -1011,6 +1012,20 @@ and later), which 8 and 8.1 answer as 7 does, so it takes 7's paths there.
 On 64-bit 8 and 8.1 it loads only as on Vista x64 and 7 x64: test-signing
 mode (Secure Boot off) or a start with signature enforcement disabled
 (design record 19; record 23 section 5.10).
+
+Read since (task 43.22, 2026-10-22, in QEMU guests of 8 x86, 8 x64 and
+8.1 x64 with the emulator's Thunderbolt 3 controller, the `3.1.0.0`
+package; `runs/run-43.md`, "43.22"): the install takes the
+`.NTx86.6.0` and `.NTamd64.6.0` models sections and the `Cm.Dev6` and
+`CmF.Dev6` install sections, as on Vista and 7; the NHI starts on
+`xhcicm` and the tunnel port carries the filter; so the driver loads on
+8's and 8.1's kernels (no import refused). Two things differ from 7, both
+record 23 section 5.10 revision 30's: 64-bit 8 and 8.1 refuse a package
+with no catalog in test-signing mode, and on every 8 and 8.1 the setup
+engine makes `xhcicm` a boot-start driver when its filter goes onto the
+bridge, so on x64 a start without test-signing mode does not finish. The installer's gates
+for this key on the system's kind, so 64-bit 10 below build 22000 takes
+them too (record 23 section 5.10, revision 30); unread on 10.
 
 **Windows 10** (roadmap-usb4 task 43.34, the owner's decision of
 2026-10-20; record 23 sections 4.3 and 4.5, revision 28): NT 10.0 below
@@ -1035,7 +1050,8 @@ protection on. No export table of 10 is in the tree either, so the
 import surface on 10 is as unread as on 8; 10 is expected to answer the
 driver's WDM version tests as 7 does, which is unread. On 64-bit 10 the
 driver loads as on 64-bit 8 and 8.1 (record 23 section 5.10, revision
-28); from 10 1607 with Secure Boot on, only portal-signed drivers load
+28; from `3.2.0.0` with a test-signed catalog per INF, record 19 section
+3a, without which 10 x64 refuses the package); from 10 1607 with Secure Boot on, only portal-signed drivers load
 (older cross-signed ones excepted, which the project's test signature is
 not), so Secure Boot off is the condition there.
 
@@ -1094,7 +1110,11 @@ hardware id against a compatible one, and its package is signed by Microsoft
 (signature score 0), where this project's carries no catalog and ranks
 `0xFF` in the signer byte (record 13 section 6.14.1 measured
 `0x80FF2005` for `xhci98.inf` on the controller) - on 10 x64 it is not
-staged at all without a catalog (record 13 section 6.14.5). **So Windows
+staged at all without a catalog (record 13 section 6.14.5). *(From
+3.2.0.0 the x64 package carries a test-signed catalog per INF, record 19
+section 3a; what signer score 10 gives a catalog by an untrusted
+certificate in test-signing mode is unread, and Intel's Microsoft
+signature outranks it either way.)* **So Windows
 never picks `xhcicm.inf` over Intel's driver by itself**: the installer's
 forced install (`UpdateDriverForPlugAndPlayDevices` with
 `INSTALLFLAG_FORCE`, record 23 section 5.5) is the only way the NHI
@@ -1153,7 +1173,14 @@ machine with the protection on, an NVMe drive behind a tunnel under
 Stor98 is held until the user signs in, and never started under policy 0;
 the same for any device whose driver has no value. Whether Stor98 should
 write 1 (it maps its buffers through the DMA adapter) is a question for
-43.34 (record 13 section 6.14.8). The protection is a feature of the
+43.34 (record 13 section 6.14.8). *(Settled 2026-10-22, the owner: a
+static read of Stor98's NT path found every bus address it gives the
+controller produced by SCSIport's DMA path - the uncached extension and
+the SRB's own buffer, `ScsiPortGetPhysicalAddress` - and none taken around
+it, so from `3.2.0.0` its x64 INF writes `DmaRemappingCompatible` 1, the
+per-driver value Microsoft documents for releases up to Windows 11 23H2;
+`src\stor98\docs\PLAN.md`, "Kernel DMA Protection". Unread on a machine
+with the protection on.)* The protection is a feature of the
 firmware and of 64-bit 10 only; it is unread on any machine here.
 Linux's documentation adds that such machines usually ship with the
 Thunderbolt security level set to "none", the IOMMU doing the gating

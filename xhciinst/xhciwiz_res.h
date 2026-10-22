@@ -36,7 +36,7 @@
 #define IDC_C_TB                1012
 #define IDC_C_TB_T              1013
 #define IDC_C_TRAY              1014
-#define IDC_C_TRAY_T            1015
+#define IDC_C_FAST              1015   /* was IDC_C_TRAY_T (43.27) */
 #define IDC_C_DIR               1016
 #define IDC_C_BROWSE            1017
 #define IDC_C_DIR_T             1018
@@ -48,6 +48,7 @@
 #define IDC_C_UAS_T             1024
 #define IDC_C_STOR              1025    /* 98 SE: the USB storage drivers */
 #define IDC_C_STOR_T            1026
+#define IDC_C_VSD               1027    /* S98VSD.VXD, Stor98's child     */
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

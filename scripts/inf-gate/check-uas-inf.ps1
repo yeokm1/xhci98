@@ -63,12 +63,19 @@ param(
     [string]$PackageDir = "",
     [ValidateSet("x86", "amd64")]
     [string]$Arch = "x86",
+    # The version a published tree was published at (make-release.ps1's
+    # upload assembly); empty: this tree. Before 3.2.0.0 no catalog is asked.
+    [string]$PublishedVersion = "",
     [switch]$SelfTest
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
+# The catalog rule (BOTH-CATALOG) holds an INF of this tree and of a tree
+# published from 3.2.0.0; a published tree before 3.2.0.0 carries no catalog
+# and is not asked about one.
+$catalogRequired = ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge [version]"3.2.0.0")
 
 $repo = Get-RepoRoot
 $infFor = @{ x86 = (Join-Path $repo "src\uas\xhciuas.inf"); amd64 = (Join-Path $repo "src\uas\xhciuas-amd64.inf") }
@@ -171,6 +178,18 @@ function Test-UasInfText {
         } else { & $add "BOTH-VERSION" "src\xhci_version.h has no XHCI_DRIVERVER_DATE." }
     }
     if (@(& $directive $ver "LayoutFile").Count -ne 0) { & $add "UAS-LAYOUT" "LayoutFile: this driver needs no OS-supplied file." }
+    # The catalog (design record 19, owner 2026-10-22): the amd64 INF names
+    # the one the packager makes and test-signs, undecorated, once; the x86
+    # INF names none, since the x86 package carries none.
+    $catLines = @($ver.Lines | Where-Object { $_.Key -match '^(?i)CatalogFile(\..*)?$' })
+    if (-not $catalogRequired) {
+    } elseif ($Profile -eq "amd64") {
+        if ($catLines.Count -ne 1 -or $catLines[0].Key -ine "CatalogFile" -or $catLines[0].Value -cne "xhciuas.cat") {
+            & $add "BOTH-CATALOG" "[Version] must name its catalog once, as CatalogFile=xhciuas.cat: the packager makes and test-signs it (design record 19)."
+        }
+    } elseif ($catLines.Count -ne 0) {
+        & $add "BOTH-CATALOG" "[Version] names a catalog, and the x86 package carries none (design record 19)."
+    }
 
     # [DestinationDirs].
     $dest = & $get "DestinationDirs"
@@ -397,7 +416,9 @@ if ($SelfTest) {
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`nCopyFiles=Uas.CopyFiles") },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.Dev.NTx86.Services]") },
                 @{ Rule = "UAS-MSFILE";    Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys`r`nusbntmap.sys") },
-                @{ Rule = "UAS-TMPNAME";   Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys,,xhciuas.tmp") }
+                @{ Rule = "UAS-TMPNAME";   Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys,,xhciuas.tmp") },
+                @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile=xhciuas.cat") },
+                @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile.NTx86=xhciuas.cat") }
             )
         } else {
             $cases = @(
@@ -410,7 +431,11 @@ if ($SelfTest) {
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
                 @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
-                @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") }
+                @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
+                @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat`r`n", "") },
+                @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat", "CatalogFile=xhci98.cat") },
+                @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat", "CatalogFile.NTamd64=xhciuas.cat") },
+                @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat", "CatalogFile=xhciuas.cat`r`nCatalogFile.NTamd64=xhciuas.cat") }
             )
         }
         foreach ($c in $cases) {

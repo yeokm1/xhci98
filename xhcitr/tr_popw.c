@@ -28,7 +28,6 @@ static int popState;            /* 0 not tried, 1 ready, -1 refused */
 static HWND popWnd;
 static HWND popTray;
 static UINT popMsg;
-static UINT popId;
 static TR_POP_QUEUE popQ;
 static TR_POP_NOTE popCur;
 static int popShowing;
@@ -76,7 +75,7 @@ static void pop_tell(UINT code)
     /* Posted, as the shell's are: the tray's answer to a click may be a
      * message box, and the next notice should not wait behind it. */
     if (popTray != NULL && IsWindow(popTray)) {
-        PostMessageA(popTray, popMsg, (WPARAM)popId, (LPARAM)code);
+        PostMessageA(popTray, popMsg, (WPARAM)popCur.Id, (LPARAM)code);
     }
 }
 
@@ -316,8 +315,10 @@ void tr_pop_show(HWND tray, UINT msg, UINT id, const char *title,
     }
     popTray = tray;
     popMsg = msg;
-    popId = id;
+    /* The id goes with the notice, not the window: a notice queued behind
+     * another reports its own when it is shown and clicked. */
     tr_popq_push(&popQ, title, text, icon);
+    popQ.Note[popQ.Count - 1].Id = id;
     if (popShowing && !popTimed &&
         tr_pop_expired(popShown, GetTickCount(), TR_POP_TIMEOUT_MS)) {
         pop_close(TR_POP_NIN_TIMEOUT);     /* shows the next one */

@@ -9,7 +9,7 @@ storage driver for NVMe SSDs that xhci98's connection manager brings up behind a
 |---|---|---|
 | Windows 9x | Windows 98 SE, ME | SCSI miniport (`.mpd`); no helper VxD ([PLAN.md](docs/PLAN.md) 0.12, MD-5) |
 | NT, 32-bit | Windows 2000 SP4, XP, Vista, 7, 8, 8.1, 10 (below build 22000) | SCSIport miniport (`.sys`) |
-| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8 x64, 8.1 x64 and 10 x64 not yet (the package does not install there) | SCSIport miniport (`.sys`, amd64) |
+| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8 x64, 8.1 x64 and 10 x64 untested (from xhci98 3.2.0.0 the package installs there with its catalog; the driver has not run there) | SCSIport miniport (`.sys`, amd64) |
 
 Windows 8, 8.1 and 10 since xhci98 3.2.0.0 (xhci98's roadmap 43.23; 10 below build 22000,
 which xhci98's installer admits beside 8 and 8.1 from its roadmap 43.34): see
@@ -61,8 +61,11 @@ What Stor98 adds:
   completed exactly once with the right status; a controller that stops answering is reset
   within bounded time; shutdown, stop and resume flush, shut down and re-initialise the
   drive.
-- **Requests of up to 512 KiB on Windows 98 SE / ME** (256 KiB on Windows 2000 to 10;
-  a setting can lower either, see [Settings](#settings)):
+- **Requests of up to 2 MiB on Windows 98 SE / ME** (256 KiB on Windows 2000 to 10;
+  a setting can lower either, see [Settings](#settings)). Above 512 KiB this needs
+  xHCI98's `S98VSD.VXD`, which the xHCI98 installer offers on 98 SE and ME; without it
+  Windows still cuts every request over 512 KiB into 63 KiB pieces. Without it, and
+  up to 512 KiB:
   Windows 98 SE / ME passes a request to the driver whole only if it is at most 512 KiB
   and its buffer is page-aligned and physically contiguous enough. Only such requests
   larger than 256 KiB gain from the higher limit: in the emulator, aligned 512 KiB reads
@@ -93,12 +96,14 @@ on 2026-10-22 ([docs/TESTING.md](docs/TESTING.md), "Windows 8 and 8.1" and "Wind
   Unplugged during writes with no notice from Windows, the requests failed at once, the
   disk was removed at the 5-second deadline and the copy failed at 5.4 s. Windows 8's disk
   class driver retries a failed write whichever terminal status Stor98 uses (PLAN 2.2).
-- **Windows 8 x64 and 8.1 x64: the 64-bit package does not install.** It carries no
-  catalog file, and these systems' driver store refuses such a package in test-signing
-  mode ("The third-party INF does not contain digital signature information",
-  `0xE000022F`) before the driver is ever loaded. Until the package carries a catalog
-  (xhci98 is adding a test-signed one, the owner's decision of 2026-10-22), Stor98 does
-  not run on 64-bit 8 and 8.1, and on 8.1 x64 the drive stays with `stornvme`.
+- **Windows 8 x64 and 8.1 x64: the 64-bit package installs; Stor98 x64 has not run.**
+  Without a catalog file (xhci98 3.1.0.0's package) these systems' driver store refused
+  it in test-signing mode ("The third-party INF does not contain digital signature
+  information", `0xE000022F`) before the driver was ever loaded. From xhci98 3.2.0.0
+  `stor98.inf` names `stor98.cat`, and on 8.1 x64 in test-signing mode the package with
+  it was taken into the driver store after the publisher prompt (xhci98's roadmap
+  43.36). No drive was bound to it there, so Stor98 x64 has run no drive on 64-bit 8
+  and 8.1; 8 x64 with the catalog was not run.
 - **Windows 8.1, 32-bit:** not run (no install medium); its SCSIport and `stornvme` are
   taken to be 8.1 x64's and 8 x86's, untested.
 - **Windows 10, 32-bit** (22H2, build 19045; xhci98's roadmap 43.34 admits 10 below build
@@ -108,8 +113,10 @@ on 2026-10-22 ([docs/TESTING.md](docs/TESTING.md), "Windows 8 and 8.1" and "Wind
   with no notice from Windows, the copy failed at about 6 s, the disk was removed ("Disk 2
   has been surprise removed") at the deadline, and Windows showed "Delayed Write Failed"
   for the lazy writes in flight. Earlier and later 10 builds were not run.
-- **Windows 10 x64:** the 64-bit package is refused at the driver store as on 8 x64 and
-  8.1 x64 (`0xE000022F`, the same `setupapi` lines); the drive stays with `stornvme`.
+- **Windows 10 x64:** without a catalog the 64-bit package was refused at the driver
+  store as on 8 x64 and 8.1 x64 (`0xE000022F`, the same `setupapi` lines), the drive
+  staying with `stornvme`; with `stor98.cat` (xhci98 3.2.0.0) it was taken into the
+  driver store as on 8.1 x64 (xhci98's roadmap 43.36), and has bound no drive there.
 - **Windows 11** is not a target (xhci98's installer refuses it; it has its own USB4
   support).
 - **Under 8.1's own `stornvme`** (no Stor98), a drive unplugged during a write with no
@@ -162,7 +169,7 @@ Where they are set:
 
 | Setting | Windows 98 SE / ME value | Windows 2000 to 10 key | Unit | Default | Range | Outside the range |
 |---|---|---|---|---|---|---|
-| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `maxtransferkb=` | KiB | 512 on 98 SE / ME, 256 on 2000 to 10 | 64 to the default, in multiples of 4 | refused: the default stands |
+| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `maxtransferkb=` | KiB | 2048 on 98 SE / ME, 256 on 2000 to 10 | 64 to the default, in multiples of 4 | refused: the default stands |
 | Write-through | `StorWriteThrough` (string only) | `writethrough=` | - | `auto`: `cacheoff` on ME, `off` on 98 SE and on 2000 to 10 | `auto`, `off`, `cacheoff`, `fua` | an unknown word means `auto` |
 | Polling mode | `StorPollMode` (DWORD or string) | `pollmode=` | - | 0 | 0-1 | clamped to the nearer end |
 | Polling period while busy | `StorPollBusyUs` (DWORD or string) | `pollbusyus=` | microseconds | 1000 (1 ms); on 2000 to 10 in effect at least 10 ms | 1000-100000; 0 = the default | clamped to the nearer end |
@@ -178,9 +185,10 @@ shown to the user.
   (MaximumTransferLength, with as many physical breaks as pages plus one). It can only
   lower the built-in maximum, never raise it: a larger value, a value below 64, one that
   is not a multiple of 4, or a string that is not a plain decimal number is refused and
-  the default stands. On Windows 98 SE / ME only aligned, physically contiguous requests
-  above 256 KiB gain from 512 KiB (see above); a lower value is for testing or for
-  hardware that misbehaves with large requests.
+  the default stands. On Windows 98 SE / ME without `S98VSD.VXD` only aligned,
+  physically contiguous requests above 256 KiB gain from more than 256 KiB, and nothing
+  gains above 512 KiB (see above); a lower value is for testing or for hardware that
+  misbehaves with large requests.
 - **Write-through** turns the drive's volatile write cache off (`cacheoff`, checked
   after setting it, with `fua` used if the drive refuses), or marks every write
   Force Unit Access (`fua`), or leaves the drive as it is (`off`). `auto` is `cacheoff`

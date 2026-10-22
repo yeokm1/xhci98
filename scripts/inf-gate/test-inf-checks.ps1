@@ -2264,6 +2264,23 @@ try {
     Assert-RuleFires "amd64-usbhub20" "OS-NEVER" {
         param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbhub20.sys,,,16`r`nusbd.sys,,,16")
     } -Source $prodInfAmd64 -Arch amd64
+    # The catalog line (design record 19, owner 2026-10-22): the amd64 INF
+    # names xhci98.cat once, undecorated; the x86 INF names none.
+    Assert-RuleFires "amd64-no-catalog" "BOTH-CATALOG" {
+        param($t) $t.Replace("CatalogFile=xhci98.cat`r`n", "")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-other-catalog" "BOTH-CATALOG" {
+        param($t) $t.Replace("CatalogFile=xhci98.cat", "CatalogFile=xhcicm.cat")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-decorated-catalog" "BOTH-CATALOG" {
+        param($t) $t.Replace("CatalogFile=xhci98.cat", "CatalogFile.NTamd64=xhci98.cat")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-two-catalogs" "BOTH-CATALOG" {
+        param($t) $t.Replace("CatalogFile=xhci98.cat", "CatalogFile=xhci98.cat`r`nCatalogFile.NTamd64=xhci98.cat")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "x86-catalog" "BOTH-CATALOG" {
+        param($t) $t.Replace("[Version]`r`n", "[Version]`r`nCatalogFile=xhci98.cat`r`n")
+    }
     # The 64-bit file must refuse the same two spellings. Both files carry the
     # rules, but the accepted cost of two INFs is that they can drift, and this
     # is the drift that would matter: the 64-bit half is the one whose targets

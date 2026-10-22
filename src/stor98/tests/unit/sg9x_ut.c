@@ -109,6 +109,32 @@ int main(void)
         srb[0x40 / 4] = (ULONG)iop;
         iop[0x20 / 4] = (ULONG)srb;
         iop[0x04 / 4] = (ULONG)dcb;
+
+        /* The counter answer's DCB facts (Sg9xDcbFacts), linear and SG alike */
+        {
+            ULONG mx = 0, sg = 0, dmd = 0, fl = 0;
+            *(ULONG *)(dcb + 0x1C) = 0x00040600;
+            *(ULONG *)(dcb + 0x50) = 0x80000;
+            dcb[0x77] = 17;
+            iop[(0x64 + 0x08) / 4] = SG9X_IORF_DBLBUF;
+            check(Sg9xDcbFacts(srb, &mx, &sg, &dmd, &fl) && mx == 0x80000 && sg == 17 && dmd == 0x00040600 &&
+                  fl == SG9X_IORF_DBLBUF, "DCB facts on a linear request");
+            iop[(0x64 + 0x08) / 4] = SG9X_IORF_SG;
+            mx = sg = dmd = fl = 0;
+            check(Sg9xDcbFacts(srb, &mx, &sg, &dmd, &fl) && mx == 0x80000 && sg == 17 && fl == SG9X_IORF_SG,
+                  "DCB facts on a scatter/gather request");
+            iop[0x04 / 4] = 0x100;
+            mx = 7;
+            check(!Sg9xDcbFacts(srb, &mx, &sg, &dmd, &fl) && mx == 7, "DCB facts: DCB outside the arena -> none");
+            iop[0x04 / 4] = (ULONG)dcb;
+            iop[0x20 / 4] = (ULONG)srb + 4;
+            check(!Sg9xDcbFacts(srb, &mx, &sg, &dmd, &fl), "DCB facts: IOP_srb does not point back -> none");
+            iop[0x20 / 4] = (ULONG)srb;
+            srb[0x40 / 4] = 0;
+            check(!Sg9xDcbFacts(srb, &mx, &sg, &dmd, &fl), "DCB facts: no IOP -> none");
+            srb[0x40 / 4] = (ULONG)iop;
+            iop[(0x64 + 0x08) / 4] = SG9X_IORF_SG;
+        }
         iop[(0x64 + 0x1C) / 4] = (ULONG)l;
         iop[(0x64 + 0x08) / 4] = 0;
         check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_LINEAR, "classify: no SG flag -> linear");

@@ -2553,9 +2553,12 @@ double-click and at a 98 SE or ME prompt under their long names. **Decided
   switch (`XhciSilentInstall`, off unless it is 1). `silent-on.bat` does
   both; a list merged by hand, or by another stack, does nothing while the
   switch is off.
-- **Run `silent-on.bat` only once each listed class's drivers have been
-  installed at least once on this machine**, by plugging such a device with
-  the switch off and finishing its wizard: with no wizard, a silent install
+- **A device whose driver is not yet on the machine** (the user turns the
+  switch on knowing what will be plugged in: roadmap-usb4 task 43.6, the
+  owner, 2026-10-19, in place of the earlier "run `silent-on.bat` only
+  once each listed class's drivers have been installed at least once",
+  by plugging such a device with the switch off and finishing its wizard):
+  with no wizard, a silent install
   on 98 SE asks for a missing driver file from the CD (38.2's legs:
   `hidusb.sys` and `kbdhid.vxd` asked for, 6.11.11), so a device whose
   driver is not yet on the machine depends on the CD being at hand; the
@@ -3247,6 +3250,21 @@ package with the unsigned-driver prompt. Windows 10 22H2 does the same
 (read the same day): 10 x64 refuses with `0xE000022F`, 10 x86 takes the
 x86 package with the prompt.
 
+Read since for the connection manager (task 43.22, 2026-10-22, **runtime**,
+in QEMU guests; record 23 section 5.10 revision 30 and `runs/run-43.md`,
+"43.22"): 8 x64 and 8.1 x64 load the test-signed `xhcicm.sys` in
+test-signing mode with Secure Boot off (SHA-1 file digest, as on 7), but
+refuse to install a package with no catalog in that mode (`0xE000022F`),
+so the first install needs a start with driver signature enforcement
+disabled; 32-bit 8 installs the unsigned package after the publisher
+prompt and loads it with test-signing mode off, on SeaBIOS (no Secure
+Boot); and Microsoft's "Driver Signing Policy" table lists 32-bit beside
+64-bit for 8 and 8.1 with Secure Boot on. On both architectures the setup
+engine made `xhcicm` boot start when its filter went onto a PCI bridge.
+For `xhci98.sys` all of this is still 43.31's: whether the catalog refusal
+and a start-type change reach the controller's and the hubs' INFs is
+unread.
+
 #### 6.12.9 What only a running system settles (VM, owed to 43.24 and 43.31)
 
 1. The forced install on 8 and 8.1, x86 and x64: `Signature="$CHICAGO$"`
@@ -3464,6 +3482,16 @@ and 1 set, no `usbxhci` test on that branch) but no status in Devices and
 Printers (the provider tests `usbxhci` first). Both predictions are
 static, for the Windows 8 VM (6.12.9).
 
+**A computer with both drivers.** The `usbxhci` test asks for *any*
+`GUID_DEVINTERFACE_USB_HOST_CONTROLLER` devnode whose service is
+`usbxhci` or `usbxhci_dsf` with problem 0, not the stick's own
+controller. On a computer where one xHCI controller runs `xhci98.sys` and
+another runs Windows' own driver, the test passes, and once bit 1 is
+answered at High Speed (8.4.1) the details pane would show "can perform
+faster" for a stick on the `xhci98.sys` controller too, and Devices and
+Printers its status. So "no line under `xhci98.sys`" holds only where no
+controller runs `usbxhci` (static; not read on a VM with both).
+
 **Windows 7's High-Speed notice (measured, 2026-10-22).** One Windows 7
 SP1 x86 guest: an overlay of `w7x86-p38f.qcow2` (the Phase 38 matrix
 overlay of `mtx-w7x86-f`, `xhci98.sys` from the 2.4.0.0 dry cut on
@@ -3481,8 +3509,9 @@ port 1, hot-plugged at the desktop; QEMU's
 
 The balloon's text is 7's `usbui.dll` strings 83 and 82. Its trigger,
 `usbhub.sys`'s notification (the `USB_NOTIFICATION` route roadmap 43.25
-names), was not read here; `src\` registers no WMI provider (no
-`IoWMIRegistrationControl`), so this bus raises no such notification.
+names), was not read here, so how it reaches the shell is unverified;
+what is read is that `src\` registers no WMI provider (no
+`IoWMIRegistrationControl`) and raises nothing that route could carry.
 Vista was not run.
 
 **Options for 43.30** (the owner to pick; none is taken here):
@@ -3492,28 +3521,56 @@ Vista was not run.
    every connection. It is what 43.27's tray notice needs on every target,
    and Explorer's capable test on 8 and 8.1. Alone it does not bring
    Explorer's "can perform faster" under `xhci98.sys` (the `usbxhci`
-   test); it changes every such device's enumeration by two requests, the
-   risk 8.4 named.
+   test), except on a computer where another controller runs `usbxhci`
+   (above); it changes every such device's enumeration by two requests, the
+   risk 8.4 named. Its compatibility requirement: a device may stall the
+   request, time out or answer a malformed BOS, and a `bcdUSB` of 0x0210
+   does not promise usable flags, so every failure must leave the
+   enumeration going on (the SuperSpeed path's continue-on-failure,
+   `xhci_enum.c` states Bos5 and BosFull), EP0 recovered before the
+   configuration reads, and the capability "not known" (no flag) rather
+   than "not capable" when the BOS cannot be read. Designed in 8.4.1 as 43.27's prerequisite, shared
+   with 43.30 (2026-10-22).
 2. **Answer `_EX` `Speed` 3 for SuperSpeed on NT 6.2 and later** (8.4 keeps
    2 because Vista's and 7's pages test for exactly 2): Explorer already
    says "Connected to USB 3.0" from bit 0, so this gains nothing there;
    listed only because the details pane reads it. What 8's `usbui.dll`
    pages do with a 3 is not read.
 3. **XHCITR's own notice (43.27) on by default on 8 and 8.1 under
-   `xhci98.sys`**, since by this reading Windows' line cannot appear there
-   (its rule: on by default where Windows shows no notice of its own under
-   this driver); with option 1 for its input.
+   `xhci98.sys`**, since by this reading Windows' line does not appear
+   there unless another controller runs `usbxhci` (above; on such a
+   computer both could show for one stick); its rule: on by default where
+   Windows shows no notice of its own under this driver; with option 1
+   for its input.
 4. **The release notes and 43.29's install note** say that under
    `xhci98.sys` on 8 and 8.1 the details pane shows "Connected to USB 3.0"
-   but never "can perform faster", and on Vista and 7 that the High-Speed
-   balloon is not raised (measured on 7).
+   but no "can perform faster" while no controller runs Windows' own
+   driver, and on Vista and 7 that the High-Speed balloon is not raised
+   (measured on 7).
 5. **A High-Speed notice under this bus on Vista and 7** (the balloon
-   Microsoft's stack raises, measured above): only through XHCITR (43.27
-   widened to a High-Speed device behind a Full-Speed hub), since the
-   balloon's route is `usbhub.sys`'s WMI notification.
+   Microsoft's stack raises, measured above): through XHCITR (43.27
+   widened to a High-Speed device behind a Full-Speed hub). The balloon's
+   own route is taken to be `usbhub.sys`'s `USB_NOTIFICATION` through WMI,
+   unverified (above); serving that native contract from the bus, so that
+   7's own balloon appears, is an alternative not explored here.
 
-Not offered: answering the `usbxhci` test (it reads the controller's
-service name, which only Windows' own driver has).
+Not offered: answering the `usbxhci` test. It reads the controller's
+service name, and naming this driver's service `usbxhci` would collide
+with Windows' own service of that name on 8 and later (and with
+`usbxhci.inf`'s install), and would break what this package's installer
+owns by that name: its update and uninstall find `xhci98.sys`'s
+devices by the service `xhci98` (`inst_own_service` in
+`xhciinst\inst_core.c`; the uninstall's device removal in
+`inst_eng.c`).
+
+**The owner's picks (2026-10-22):** options 1 (built as 8.4.1), 3 and 5,
+widened the same day to XHCITR's notice on by default on every target,
+for both cases (a SuperSpeed-capable device below SuperSpeed and a High
+Speed device slowed by a Full Speed hub), and 4 (the release notes say
+that Windows' own line does not appear under `xhci98.sys` on 8, 8.1 and
+10, and that 7's High Speed balloon is not raised); option 2 not taken.
+Design record 25 section 7.7 records them; they are roadmap 43.30's "can
+perform faster" part, done on branch `p43-27` with 43.27.
 
 **Owed to the Windows 8 VM (6.12.9):** under Microsoft's stack, the line
 for a SuperSpeed stick on a USB 2.0 port and "Connected to USB 3.0" on a
@@ -4420,6 +4477,12 @@ As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
    question. The catalog applies to the connection manager's x64
    package too (`xhcicm.inf`, 43.34), which the same store refuses by the
    same rule (inference). 10 x86 does not need one (it prompts, 6.14.5).
+   **Decided 2026-10-22 (owner): the catalog**, one per x64 INF, made and
+   signed by `make-package.ps1` alone (design record 19 section 3a); the
+   x86 package carries none. Read the same day on 10 x64 and 8.1 x64
+   (run sheet 43, "43.36 the x64 catalog"): with the catalogs every INF
+   enters the store after the publisher prompt and `xhci98.sys` and
+   `xhcicm.sys` run after a restart; without them, `0xE000022F`.
 2. **XHCITR's notice on 10**: on by default under `xhci98.sys`, by
    6.14.4 (the owner's instruction of 2026-10-22 for 43.27 agrees).
 3. **The vehicle**: QEMU's `usb-uas` does not start under 10's own
@@ -4434,12 +4497,20 @@ As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
    Recommendation: 43.34 reads whether Stor98's DMA goes only through
    its DMA adapter and, if so, writes 1 in Stor98's INF on 10 x64,
    read on a machine with the protection on before it ships.
+   **Decided 2026-10-22 (owner)**: read statically, every bus address
+   Stor98's NT build gives the controller comes from SCSIport's DMA path
+   (record 21 section 3.6), so `stor98-x64.inf` writes
+   `DmaRemappingCompatible` 1 from `3.2.0.0` (`src\stor98\docs\PLAN.md`,
+   "Kernel DMA Protection"); no machine here has the protection on, so
+   the run-time reading stays owed.
 5. **The OVMF guest with Secure Boot** (43.32, not built): needed only
    for 43.36's refusal case. Recommendation: build it in 43.37, with
    Microsoft's KEK and DB certificates enrolled by hand in the
    firmware's custom mode and a fresh UEFI install of 10 x64, or accept
    the refusal from Microsoft's documented policy (record 23 section
-   5.12) without a guest.
+   5.12) without a guest. **Decided 2026-10-22 (owner): the documented
+   policy is accepted**, the guest is not built, and 43.32 is closed with
+   its two TCG machines (record 23 section 5.12, "Settled").
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
@@ -5151,6 +5222,135 @@ Speed ceiling above is replaced, in two halves:
     `bcdUSB` of 0x0210 or more would change every such device's enumeration
     for one flag, which is the larger risk (`XhciHubExV2Flags`).
 
+### 8.4.1 The BOS read at High Speed and Full Speed (task 43.27, 2026-10-22)
+
+36.18 left `_EX_V2`'s capable flags unanswered for a USB 3 device running
+at High or Full Speed, because the BOS was read only on the SuperSpeed
+enumeration path (8.4 above). Roadmap 43.27's tray notice needs those
+flags on every connection, so this section adds the read. It is **a
+prerequisite shared with 43.30**: it is 6.12.11's option 1 for 43.30 word
+for word, which the owner picked on 2026-10-22, so this section is that
+option too, with nothing more to do in 43.30.
+Alone it brings no "can perform faster" line to Windows 8's Explorer
+under `xhci98.sys` (6.12.11: that text also needs a running `usbxhci`
+controller).
+
+**The gate, from the specification** (read in the USB 3.2 revision 1.1
+text, `docs/references/usb32-r1.1-dump.txt`, 2026-10-22): section 9.2.6.6,
+"Devices with a value of at least 0210H in the bcdUSB field of their
+device descriptor shall support GetDescriptor (BOS Descriptor)
+requests"; section 9.6.1, "The device descriptor of an Enhanced
+SuperSpeed device operating in one of the USB 2.0 modes shall have a
+version number of 2.1 (0210H)", and section 11.3 the same. So the read is
+made for a device at High or Full Speed whose `bcdUSB` is 0x0210 or more:
+every USB 3 device in a USB 2.0 mode, and the USB 2.0 devices that declare
+2.1, which the same sentence obliges to answer. A device declaring 0x0201
+(the USB 2.0 Link Power Management addendum's version) is not read: the
+notice gains nothing from it and the reach stays smaller. A Low Speed
+device is never read: no USB 3 device runs at Low Speed.
+
+**The machine** (`xhci_enum.c`, pure, host vectors in `test_enum.c`):
+
+1. After the 18-byte device descriptor read, the event's `Value` carries
+   `bcdUSB` (bytes 2 and 3; `hcd_enum.c` fills it, as it fills
+   `bMaxPacketSize0` after the 8-byte read). `XhciEnumWantsBos(speed,
+   bcdUsb, on, skip)` decides: SuperSpeed always, as before; High or Full
+   Speed when `bcdUSB` >= 0x0210, the switch is on and the port's
+   `Usb2BosSkip` is clear; never Low Speed. Yes: Bos5 and BosFull as at
+   SuperSpeed, with the port's `Usb2BosTried` set when the speed is not
+   SuperSpeed.
+2. **Every failure of the read is tolerated**, as at SuperSpeed: a STALL,
+   a short or malformed answer (`XhciPipeParseBos` refuses it, the
+   device's `BosInfo` stays zero) or no answer each set `BosMissing`, and
+   the machine goes on to the configuration reads.
+3. **An attempt that tried the read and then failed is retried without
+   it.** `xhciEnumFail` sets `Usb2BosSkip` when `Usb2BosTried` is set, and
+   the retry (`XHCI_ENUM_RETRIES` on a root port, the hub port's
+   attempts) keeps it, so a device the read confuses enumerates on the
+   next attempt exactly as it did before this task. A new connection
+   clears both flags. The cost to such a device is one attempt.
+
+**The transfer** (`hcd_enum.c`, `XHCI_ENUM_ACT_GET_BOS`): at SuperSpeed
+nothing changes. At High and Full Speed the read goes through the door's
+soft path, `HcdThreadControlDoor`, not the enumeration's own: a STALL halts
+EP0 and the next request's `hcdEp0Quiet` recovers it with Reset Endpoint
+(the path every client STALL takes), and a device that never answers is
+withdrawn from EP0 at the transfer's deadline (`HCD_TRANSFER_WAIT_MS`,
+5 s; `hcdEp0Withdraw`) instead of the controller reset an enumeration
+read's timeout requests. Only a withdrawal that cannot be made falls to
+that reset, as a door read's does. A read withdrawn, stalled or refused
+costs `SsBosMissing` nothing: that counter stays SuperSpeed's, and the
+counter block (word count 246, read by the matrix and by XHCITR) is not
+changed. Each such read leaves a log note instead, `enum.bos.usb2`, the
+bytes received shifted left 8 or'd with the `HCD_CTL_*` outcome.
+
+**A read that could cost the controller a reset is not made again**
+(43.27, reviewed and revised 2026-10-22). Item 3's retry does not cover the
+cases where the attempt ends in a controller recovery: `hcdRun` stops at
+the halt before `xhciEnumFail` can set `Usb2BosSkip`, and the recovery
+takes the attachment through disconnect and connect, which clears it. So
+the same device could time out again on the re-enumeration and reset the
+controller again, disturbing every other device on it. Three rules close
+that:
+
+1. **Not behind a TT.** A Full Speed device behind a High Speed hub
+   (`TtSlot` not 0) is not read: `hcdEp0Withdraw` refuses to withdraw
+   EP0 behind a TT, so its read's timeout is a controller reset. Nothing
+   is lost to the notice: a USB 3 device behind a High Speed hub connects
+   at High Speed, not Full.
+2. **The memo.** A read at High or Full Speed that ends other than done,
+   stalled or abandoned for a device cycle (`HCD_CTL_FAILED`,
+   `HCD_CTL_NOT_SENT`: an error other than a STALL, or no answer by the
+   deadline) records the device's VID:PID in the controller's
+   `Usb2BosMemo` (`XHCI_ENUM_BOS_MEMO`, 16 entries, none ever dropped: a
+   device that finds it full saturates it, and then no device is read at
+   High or Full Speed until the next start, so a recovery that revisits
+   every earlier device asks none of them;
+   `XhciEnumBosMemoAdd` and `XhciEnumBosMemoHas`, pure, host vectors in
+   `test_enum.c`). It is recorded in `hcdPerform`, as soon as the read
+   returns, before the run looks for a halt. A device in the memo is not
+   read again for the controller's started life: the extension is zeroed
+   at start and not by a recovery, so a recovery keeps the memo and a
+   restart (a PnP stop and start, a reboot) clears it.
+3. **A halt after the read.** A run that stops at a controller halt after
+   this attempt made the read (`Usb2BosTried`) records the device in the
+   memo too, by the VID:PID the read kept on the port (`Usb2BosVidPid`:
+   the attempt's teardown, `hcdDeviceGo` before Disable Slot, frees the
+   device object before a halt it causes is seen), so a later step's timeout after a successful BOS read (the
+   configuration read, say) does not repeat with the read either. The
+   cost is that a device enumerating when an unrelated recovery or a stop
+   halts the controller loses the read until the next start; it then has
+   `_EX_V2`'s capable bits clear, as before this task.
+
+**The switch.** `XhciUsb2Bos`, a DWORD read at every start, machine-wide
+first as the other values are (`hcdReadDword`): only 0 turns the read off;
+absent, another number or another type is on. No INF writes it. The start
+logs it (`enum.bos.usb2.on`). It is the way out for a device that the read
+upsets in a way the retry does not cure, until the device is known.
+
+**Who reads what the read keeps.** `dev->BosInfo` and `dev->Bos`, as at
+SuperSpeed. Every reader was checked (`src\`, 2026-10-22): the door's
+connection record (`hcd_door.c`, `BosSs`, `BosSsp`), which is the point:
+`XhciHubExV2Flags` sets bit 1 from a SuperSpeed capability and bits 1 and
+3 from a SuperSpeedPlus one, whatever the speed; and the SuperSpeed hub
+code, which reads a hub's `BosInfo` only for a SuperSpeed hub
+(`hcd_sshub.c`; `XhciSsHubParentOf` and `XhciSsHubChildRank` behind
+`hub->Usb3`; `hcd_enum.c`'s rank lookup behind `p->Hub->Usb3`). The USB
+2.0 Extension's attributes are kept and never acted on (no USB 2.0 Link
+Power Management is enabled from them). So the behaviour that changes is
+the two requests and the two flags.
+
+**What it changes per target.** The flags reach XHCITR on every target
+(record 25 section 7.7). Windows 8 and 8.1's details pane reads bit 1 and
+would now find a USB 3 stick on a USB 2.0 port capable, and still show no
+"can perform faster" line (6.12.11's `usbxhci` test); Vista's and 7's
+pages and XP's never read `_EX_V2`.
+
+**Not read.** Whether QEMU's emulated devices declare 0x0210 at High
+Speed (QEMU's device sources are not among `external\`'s files): if they
+declare 0x0200, no QEMU device exercises this read, and 43.28's legs need
+a device that does. No real USB 3 device has been read through it.
+
 ### 8.5 The OS INFs' registrations, quoted
 
 Root hub, NT paths - every NT target registers the same provider:
@@ -5523,7 +5723,10 @@ for the length of one transfer.
   Error, another record queued - falls back to the controller recovery too,
   EP0 still paused and the scratch not reused, the rule as before. Under
   XhciTolerance a cycle mark ends the wait as for any thread transfer
-  (35-T.3/4).
+  (35-T.3/4). Since task 43.53 any thread transfer past its deadline, the
+  door's included where its withdrawal does not finish, first has EP0
+  stopped and its device's path read, and a device that has left keeps
+  no controller recovery (section 10.5.1).
 - *How long a taken request is not cancellable:* no single deadline covers
   it, and none is claimed. It is the sum of the thread path's separate
   waits, each bounded on its own and each ending in the bus's existing
@@ -6280,6 +6483,117 @@ connect change is queued behind it. The miniport's measured shape (design
 record 02, "Step 4 observed": a whole hub out with three live devices below
 it, taken leaf-first with nothing stranded) is the expected reading for
 27-V.1, now produced by the bus rather than inferred from usbhub's traffic.
+
+#### 10.5.1 A thread transfer to a departed device that never completes (task 43.53, 2026-10-22)
+
+**What was read.** Under task 43.49's plug and unplug series on Windows 98
+SE (`runs/run-43.md`, 43.49, "Readings, Windows 98 SE"; runtime, QEMU, one
+vCPU) a thread control transfer queued to a device just pulled - the
+SET_CONFIGURATION of a client's select, and the first EP0 request after
+Address Device behind a hub - never completed. Its 5 s deadline
+(`HCD_TRANSFER_WAIT_MS`, `hcdThreadControlQuiet`) took that for the
+controller's failure and requested the reset; the fourth such reset inside
+ten minutes was refused by task 35-T.6's window and the bus stayed latched
+failed until a restart. QEMU's trace showed why (runtime): its
+`xhci_kick_epctx` returns without an event once the slot's device is
+detached (`hcd-xhci.c`, `xhci_slot_ok`; static, the mirror in
+`external/qemu`). What a real controller does with such a transfer is
+**unread here**: whether metal reaches this path at all (a device pulled
+mid-enumeration at a root port and behind a hub) is task 43.53's owed
+bench reading.
+
+**The rule until now.** A thread transfer the device never ends - other
+than the door's, which `hcdEp0Withdraw` takes back where it can (section
+6, "Timeout, cancellation and surprise removal") - leaves its TD on the
+ring, marks the scratch tainted (the TD may still write it) and requests
+the controller reset, whose HCRST takes every slot. That is right for a
+device still present and wrong for one that has left: one unplug at the
+wrong moment drops every device on the controller and spends the
+recovery window. `hcdCfgFault` already draws that line for a failed
+command (record 17 section 4.2): a departed device's failure requests
+nothing, a departing one with a PDO has its location cycled, and only a
+device still present, or a hub, keeps the reset.
+
+**The design.** At the deadline, before the reset is requested
+(`hcdEp0Late`, `src\hcd_enum.c`; the two pure halves in `src\xhci_tol.c`):
+
+1. **EP0 is stopped first** (Stop Endpoint, when it reads Running), as
+   `hcdEp0Withdraw` and the teardown's `hcdDeviceStop` stop it. A stopped
+   TD is not processed again (xHCI 4.6.9), so once the command has
+   completed the scratch is no longer at risk from it - which is what lets
+   the departure be read next, since a hub port's status is read through
+   the scratch. `XhciTolLateStopped` decides from the command's code, the
+   state EP0 reads after it and the completion flag: a completion that
+   arrived before the stop is taken as the transfer's answer (as the
+   door's `HCD_EP0_COMPLETED`); a command that failed (anything but
+   Success or Context State Error, or none sent), or EP0 still Running or
+   Disabled, keeps the reset with the scratch tainted, exactly as before;
+   so does Halted with no completion seen, which nothing explains and
+   where Set TR Dequeue is not legal (step 4); otherwise (Stopped or
+   Error) the TD is inert.
+2. **The departure is read** as `hcdCfgDeviceLeft` reads it: the record
+   gone or no longer its port's, or `HcdHubPathPresent` - every hub port
+   on the path by GET_STATUS (disconnected, disabled, or a connect or
+   enable change pending; a hub already draining) and the root port's
+   PORTSC (CCS 0 or CSC set; all ones proves nothing). A hub that does not
+   answer confirms nothing.
+3. **`XhciTolLateVerdict`** then decides, in `hcdCfgFault`'s order: a
+   record already gone or off its port - nothing more, its teardown is in
+   hand; a path that reads present - the reset, as before; a hub - the
+   reset, as `hcdCfgFault` keeps it, since a hub's devnode is presentation
+   only and its departure is its upstream port's to see; a device with a
+   PDO - its location cycled (`HcdEnumCycle` with its group's serial,
+   charged as `hcdCfgCycle` charges a departing device's failed command,
+   35-T.5's hold if refused), so a latched enable change the port service
+   would find enabled and leave alone cannot strand the paused pipe; a
+   device with no PDO yet - nothing more: it is the enumeration's, whose
+   failed step runs its own DISABLE_SLOT and retries only where the port
+   still reads connected (section 10.2 step 7). Not every read during
+   CREATE_PDO fails the creation (selective suspend's optional reads at
+   the end of a composite configuration, `HcdSuspCfgExit`, do not), so a
+   creation that succeeds with `Ep0Stuck` set and no reset asked has the
+   now-published device cycled (`hcdCreateLate`), or, for a hub or a
+   device with no PDO group, the reset `hcdCfgFault` keeps for them.
+4. **The record is retired from EP0** before anything else is done for
+   a device found leaving (`hcdEp0Retire`, `XhciTolLateRetired`): taken
+   off the engine's queue where it is still there (the door's withdrawal
+   may have taken it off already and failed at Set TR Dequeue) and the
+   controller's dequeue moved to the enqueue position (Set TR Dequeue). A
+   stopped TD left on the ring is not enough: a cancel's restart of the
+   endpoint's survivors (`hcdCfgCancelPipe`) rings EP0 without reading
+   the pause or `Ep0Stuck`, and would run it again into a scratch the
+   thread is by then using for something else. A record that cannot be
+   retired - another record queued, the command failing - keeps the
+   reset.
+5. **What is left behind** where no reset is requested: EP0 Stopped and
+   empty, `Ep0Stuck` set, so nothing more is sent to the device and its
+   pipe stays paused; the scratch is not tainted. The teardown that
+   follows (section 10.5, steps 3 and 4) disables the slot. The caller
+   gets `HCD_CTL_NOT_SENT`, as for any
+   timeout, and every caller already reads `Ep0Stuck` as "the device is
+   being taken"; a select then answers DEVICE_GONE (`hcdCfgSelectAnswer`).
+   Counted (`EnumTransfersDeparted`, beside `EnumTransfersTimedOut`; the
+   stop dump's `enum.xfer.departed`) and noted per transfer
+   (`enum.xfer.gone`, the slot in bits 15:8 and the verdict below).
+
+A device behind a TT is stopped too, unlike the door's withdrawal: that
+withdrawal keeps using EP0 and so must clear the TT buffer the stopped
+split may hold, where here EP0 is never used again and the device is torn
+down, as the teardown's own Stop Endpoint does with a split that may be in
+flight. The door's transfer takes the same path when its withdrawal does
+not finish.
+
+**Host vectors** (`test\test_tol.c`, `test_late`): every row of both
+halves, and the composition - a completion before the stop wins, a failed
+stop keeps the reset whatever the path reads, a present path keeps it, a
+hub keeps it, a record that cannot be retired keeps it, a published
+device cycles and a pre-PDO one is left to its
+enumeration.
+
+**Unread, and owed.** Metal: whether a real controller ever leaves such a
+transfer without an event (the bench reading above). The 43.49 series
+re-run on 98 SE with no controller reset is the runtime check of this
+change.
 
 ### 10.6 The ids the targets' INFs match
 
