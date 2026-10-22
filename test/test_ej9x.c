@@ -30,7 +30,9 @@ static INST_U32 get(const unsigned char *b, unsigned long at)
            ((INST_U32)b[at + 2] << 16) | ((INST_U32)b[at + 3] << 24);
 }
 
-static unsigned char answer[CM_Q_HDR_BYTES + CM_ST_HDR_BYTES];
+/* Version 2's layout: header, removal block, then the record (cm_query.h). */
+#define EJ_REC_V2 (CM_Q_HDR_BYTES + CM_Q_RM_BYTES)
+static unsigned char answer[EJ_REC_V2 + CM_ST_HDR_BYTES];
 
 static void mkAnswer(INST_U32 gen)
 {
@@ -40,11 +42,11 @@ static void mkAnswer(INST_U32 gen)
     put(answer, CM_Q_O_BYTES, sizeof(answer));
     put(answer, CM_Q_O_PASS, 9);
     put(answer, CM_Q_O_LIVE, 1);
-    put(answer, CM_Q_O_REC_OFFSET, CM_Q_HDR_BYTES);
+    put(answer, CM_Q_O_REC_OFFSET, EJ_REC_V2);
     put(answer, CM_Q_O_EPOCH_LO, 0x1234UL);
     put(answer, CM_Q_O_EPOCH_HI, 0x5678UL);
     put(answer, CM_Q_O_CONTENT_GEN, gen);
-    put(answer + CM_Q_HDR_BYTES, CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
+    put(answer + EJ_REC_V2, CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
 }
 
 static void test_token(void)
