@@ -476,6 +476,20 @@ the ones `INCS_DDK.INF`'s `[DestinationDirs]` and `[WIN98_Files1]` give:
 | `inc\win98\inc16\windows.h` | `INC_WIN98_INC16_WINDOWS.H` of `INCS_DDK.CAB` | 193,759 | `2578d377949f1b46909ee300572acb4c0f9e5010032a4bb215a93688844d9b9a` |
 | `BINS_DDK.CAB` | of `win98se_ddk.exe` | 2,503,474 | `b9ba649a546b762235c7734001cbd60c8c13a73721c5c1c281555eb1f387fd0b` |
 | `lib\win98\setupx.lib` | `LIB_WIN98_SETUPX.LIB` of `BINS_DDK.CAB` | 21,504 | `726554e15a456db37c9960aa12975e35080227403681e5bc132c94c052a98e4c` |
+| `inc\win98\basedef.h` | `INC_WIN98_BASEDEF.H` of `INCS_DDK.CAB` | 5,184 | `4ec05ef035f0b0d6b3c6effa727122c5ee38ad54e9e1b7b0fec7d8659bdb27ce` |
+| `inc\win98\sgd.h` | `INC_WIN98_SGD.H` of `INCS_DDK.CAB` | 1,194 | `8c3eed175aebc0f6cf8b800fd7ac65077c981db977d11abeac7de277fecdddf8` |
+| `inc\win98\blockdev.h` | `INC_WIN98_BLOCKDEV.H` of `INCS_DDK.CAB` | 7,786 | `541ee548bf0481a0643ba92c8f25daf04000a3e612bc15998b35bdee162574fb` |
+| `inc\win98\ior.h` | `INC_WIN98_IOR.H` of `INCS_DDK.CAB` | 24,414 | `bd5160bb960fa2ec02fbec268da724b4096c91d0f9e0607256591052f2dac10a` |
+| `inc\win98\isp.h` | `INC_WIN98_ISP.H` of `INCS_DDK.CAB` | 20,207 | `89f58d26bcb9155f01fd209a730ea618cfea0a0166cb1a7aee6e49cdcba30971` |
+| `inc\win98\aep.h` | `INC_WIN98_AEP.H` of `INCS_DDK.CAB` | 23,444 | `3c2738f4d5148d343c6d507f778582e8895f0983142be3f5b6964900eea2de87` |
+| `inc\win98\ilb.h` | `INC_WIN98_ILB.H` of `INCS_DDK.CAB` | 2,377 | `c66a71ab9d38cdc19c9a61bd855443f46bc6ec0e667b89bae95ee49d3c1c30da` |
+| `inc\win98\drp.h` | `INC_WIN98_DRP.H` of `INCS_DDK.CAB` | 8,923 | `9d2e497f2e479f13d318e96bc80c62524e51fae983e9a6ea935c71a731afe484` |
+| `BLCK_DDK.CAB` | of `win98se_ddk.exe` | 249,071 | `a6b64af13506ba5bbd4552979a2ce4e9370124268d0c32c021cc7fba1747c162` |
+| `src\block\inc\iop.h` | `SRC_BLOCK_INC_IOP.H` of `BLCK_DDK.CAB` | 2,502 | `f109eb5933d8baa66bf1090273f4e1504361b1d679cfd50a3ff7dee7ac6c2900` |
+| `src\block\inc\dcb.h` | `SRC_BLOCK_INC_DCB.H` of `BLCK_DDK.CAB` | 35,489 | `50933f200fc02c042b8ee55ed89ae9440bc1d75654a56e5391f6eee7cea73d04` |
+| `src\block\inc\srb.h` | `SRC_BLOCK_INC_SRB.H` of `BLCK_DDK.CAB` | 21,084 | `1d85ce365874e5f139f3b53660a30083a93451a9b2afcf380455a5cf559fd614` |
+| `bin\link.exe` | `BIN_LINK.EXE` of `BINS_DDK.CAB` (Microsoft Incremental Linker 5.12.8181) | 462,899 | `62a80af374052f78c82d7e1407b662646fc80425aa38b63ea6d67ee0ff3cd259` |
+| `bin\mspdb50.dll` | `BIN_MSPDB50.DLL` of `BINS_DDK.CAB` (the linker's program-database library) | 157,456 | `30ba958542770c0b4ccc6171ad9ce28ca8c2f2a61df5058f1cfdab122ee245e1` |
 | `LICENSE.TXT` | of `win98se_ddk.exe` | 11,803 | `89f90f047aa98c71a405bf75a377ca075a6dfab3540692e0e6a65655ee2b4019` |
 
 The two `setupx` members, `prsht.h`, which `setupx.h` includes, and the
@@ -503,6 +517,22 @@ header's text; `legal-provenance.md` section 2 has the row.
   declaration, macro body, comment or sample code is reproduced
   (`docs/contributing/legal-provenance.md` section 4, the CONFIGMG row).
   Fetched, never tracked.
+
+**`STOR98.VXD`'s build (roadmap-usb4 task 43.46; design record 30
+section 6).** The eleven headers from `inc\win98\basedef.h` to
+`src\block\inc\srb.h` above are what the 98 SE and ME IOS layer is
+compiled against, for their structure layouts and values, and the DDK's
+linker and its library (`bin\link.exe`, `bin\mspdb50.dll`) link it
+(`/VXD`); `src\vsd\stage-ddk.ps1` holds each to its hash in this table
+and copies it into the git-ignored `src\vsd\obj\`, with a trailing
+Ctrl-Z cut and `aep.h`'s three `} AEP_x; *PAEP_x;` typedefs made
+`} AEP_x, *PAEP_x;` in the copy, never in a tracked file. None of them
+is shipped, and the image holds none of their text; the linker adds its
+MS-DOS stub and its `Rich` record of tool identifiers to the image, as
+Microsoft's linkers do to every PE driver of this package
+(`docs/contributing/legal-provenance.md` section 2). The members the
+read-first prototype used beside them (MASM 6.11d, `BIN_WIN98_ML.EXE`,
+the `.INC` headers and the `HELPVSD` sample) are not used by the build.
 
 **Stor98's two headers (roadmap-usb4 task 42-A.20).** Stor98's 9x image
 (`src/stor98/`) is compiled with a Windows 98 (or NT4) DDK's `SCSI.H` and
