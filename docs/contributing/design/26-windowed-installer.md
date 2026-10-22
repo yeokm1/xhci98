@@ -1,6 +1,6 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 24, 2026-10-22 (roadmap-usb4 task 43.29, the owner: on 8 and 8.1 `xhciuas.inf` staged, never forced, section 5.3.1 case 3a); draft 23, 2026-10-22 (roadmap-usb4 task 43.42, the owner: no
+Status: draft 25, 2026-10-22 (the owner's simplification of that day: Welcome, Components, Summary, Progress, Steps, Finish, the settings pages replaced by one Settings dialog, room for roadmap 43.48's rows, section 5.0); draft 24, 2026-10-22 (roadmap-usb4 task 43.29, the owner: on 8 and 8.1 `xhciuas.inf` staged, never forced, section 5.3.1 case 3a); draft 23, 2026-10-22 (roadmap-usb4 task 43.42, the owner: no
 preselection of XhciSilentInstall, section 6.5.12 item 2; record 23
 revision 29); draft 22, 2026-10-22 (roadmap-usb4 task 43.43, the owner's
 answers of that day: every proposal of section 5.3.1 accepted but the
@@ -430,6 +430,208 @@ through the built binary, as record 23 section 10 does for the console's
 screens. The window's text follows the console's rules (record 23 sections
 7.6 and 8.3): practical guidance, no virtual machines, no emulators, no
 word on what has or has not been tested.
+
+### 5.0 The simplified flow (draft 25; the owner's decisions of 2026-10-22)
+
+The owner's simplification of 2026-10-22 replaces the pages of sections
+5.1 to 5.7 where this section differs; everything not named here (the
+engine, its texts, the refusals, the uninstall of section 9, a row "left
+as it is" writing nothing, section 5.4) stands. Proposals of this
+section's own, for the owner to confirm, are marked so. Not built yet:
+the owner reads this design before its code.
+
+**The pages.** Welcome -> Components -> Summary -> Progress -> (Steps) ->
+Finish. The Welcome page takes in section 5.2's "What was found": below
+the paragraph of section 5.1 it shows the device list (each device, what
+runs it now, what will be done) and the plan's warnings (the input
+warning, the test-signing note, the "newer release installed" refusal of
+a group, the empty reading's advice of section 7), with "Please wait"
+while `READ` and `PLAN` run; a device Windows is installing by itself is
+waited for there as section 5.2 waits for it. The USB settings,
+Thunderbolt settings and Stor98 settings pages (`P_USB`, `P_TBS`,
+`P_S98`) and the What was found page are removed; their rows move to the
+Settings dialog below. A refusal of section 5.1 still ends on the Welcome
+page with Next disabled. The Steps page of section 7 (98 SE and ME) and
+the uninstall's pages (section 9) are unchanged.
+
+**The Components page**, one box a line, each with its sentence:
+
+```
+[x] xHCI98 USB 3.x driver
+      [x] UAS disk driver
+[ ] Thunderbolt 3 / USB4 support (experimental)
+      [x] Stor98, the NVMe driver (bundled)
+[x] USB storage drivers for Windows 98 SE (NUSB 3.3's)    98 SE only
+[x] xHCI98 USB Tree, started at login
+[ ] Replace the stored build                 Vista and 7, the trap found
+Tools folder: C:\XHCI98
+            [Settings...]   [Change folder...]
+```
+
+- **The USB drivers' box and the UAS box** as section 5.3 has them, the
+  defaults of section 5.3.1 unchanged (ticked, but unticked on 8 and
+  8.1): the UAS box a separate box indented under the USB drivers',
+  ticked by default, greyed and unticked while the USB drivers are
+  unticked, its own state back when they are ticked again. On 8 and 8.1
+  a ticked UAS box stages `xhciuas.inf` and forces it on no disk
+  (section 5.3.1 case 3a, draft 24).
+- **The Thunderbolt box and Stor98's** (owner, 2026-10-22): the
+  Thunderbolt box unticked by default as now; Stor98's box a separate box
+  indented under it, ticked by default only while the Thunderbolt box is
+  ticked; unticking the Thunderbolt box unticks and greys it; ticking it
+  again ticks Stor98 again unless the user had unticked Stor98 while it
+  was open. What Stor98 takes when the Thunderbolt box is ticked comes
+  from one table, one row per system - 98 SE, ME, 2000, XP, Vista, 7, 8,
+  8.1, 10 - (`instS98Default` in the pure half, host-tested), ticked on
+  every system for now, 8, 8.1 and 10 included, so a change for one
+  system is one line. The rule for changing it later: on 8.1 and 10 the
+  default becomes unticked only if Windows' own NVMe driver (`stornvme`)
+  is shown to handle a hot-plug behind this package's tunnel (roadmap
+  43.24 for 8.1, 43.33 and 43.37 for 10); on Windows 8, which has no
+  in-box NVMe driver (to be confirmed in 43.24's image), it stays ticked.
+  Section 5.3.1's case 3b is amended so: Stor98 on 8 and 8.1 is ticked
+  with the Thunderbolt box, its "Stor98 has not been tested on Windows 8
+  or 8.1" warning paragraph (`INST_CW_S98_8`, the console's counterpart
+  and the host check of its text) and any "untested" mark on its row
+  removed, and the console's Stor98 question takes Enter for [Y] there as
+  elsewhere (`inst_s98_decide`'s `is8` dropped); Stor98 on 8 and 8.1 is
+  still to be read by roadmap 43.24, which revisits the default and the
+  wording. The USB drivers' warning on 8 and 8.1 (case 3a) stays.
+- **The USB storage drivers' row on Windows 98 SE only** (owner,
+  2026-10-22), in place of draft 20's "every system": on ME and 2000 to
+  8.1 the row is not shown, `inst_eng_stor_state` offers it only on 98
+  SE (today it shows it on every system through `storTools`, and
+  `comp_layout`'s comment is brought back to "98 SE only"), and section
+  5.3.1's case 1 (the pack's files copied to the tools folder) is
+  withdrawn from the window; the console's `/storage` keeps case 1
+  (proposal: or refuses it again elsewhere - the owner's call). The row
+  reads the download's `NUSB33\W98SE` (owner, 2026-10-22: NUSB 3.3's
+  files a top-level folder of their own beside `NONFREE\`, no longer
+  inside it; section 6.5.1 follows when that change lands).
+- **The USB Tree box** as now.
+- **"Replace the stored build"**: the box of section 5.2 (the window's
+  `/restage`) moves here, shown only where section 5.2 shows it (Vista
+  and 7, the store trap found), unticked by default, `/restage`
+  preselecting it, its precondition and journal as record 23 section 5.7
+  has them.
+- **[Settings...]** opens the Settings dialog; **[Change folder...]**
+  opens a small dialog with the tools folder's edit box, Browse, and the
+  checks of section 5.3 (record 23 section 9.6), OK staying in it until
+  the folder passes; the page itself shows the folder chosen as one line
+  of text. The 98 SE and ME line about the drivers going there too and the
+  8.3 rule moves into that dialog.
+- **The warnings** of section 5.3.1 on Next as now (one OK/Cancel box,
+  Cancel staying on the page); on 8 and 8.1 the USB drivers ticked and a
+  package without the connection manager are warned, never refused
+  (cases 3a and 5); the Summary repeats them (below).
+
+**Room for the bundled driver rows (roadmap 43.48, not designed here).**
+The second and third downloads carry the usb-wdm-free drivers and the
+usb-wdm-nonfree pack in folders beside the installer (NUSB 3.3's 98 SE
+storage files are a folder of their own beside them, `NUSB33\W98SE`,
+owner 2026-10-22, read by the storage row above and in neither pack).
+The owner, 2026-10-22, for 43.48: the installer copies those folders and
+installs neither. Each pack has a row, unticked by default, that copies
+it, and one sub-box under it, also unticked: "Let Windows use these
+automatically when a device is plugged in", which stages the pack's
+INFs (the INF folder on 98 SE and ME, the driver store on 2000 and
+later) and forces nothing onto a device. The non-free row's sentence
+and its sub-box carry a firmer warning ("not tested by this project;
+the vendors' drivers as released"): the pack's vendors' own setups are
+the user's to run, this package carrying the pack and not being its
+installer. Three rules bound the staging: only an INF-based driver is
+staged, a driver that comes with a setup program being copied only,
+with "run its own setup" in the text; and where two of a pack's drivers
+match the same hardware id (FTDI, FT2232D and CH341; the two Xbox 360
+controller drivers), one only is staged, chosen by a written list
+shipped with the pack (its manifest), never guessed at run time. The
+copies go to one fixed folder under the install directory (for example
+`<tools folder>\Drivers\...`), which the readme and the Finish page
+name for the Found New Hardware wizard; the uninstall removes the
+copied folders and whatever was staged. Each row is shown only when its
+folder is there and holds what its record names, and the rows carry the
+free drivers' beta notice and the two project addresses
+(`https://github.com/yeokm1/usb-wdm-free`,
+`https://github.com/yeokm1/usb-wdm-nonfree`) beside them and on the
+Finish page. This design leaves that room and settles nothing more: the
+page's rows are built from a row table (the box, its parent box, its
+sentence, shown or not, ticked or not, greyed with its parent), not from
+fixed positions, so a row with one sub-box, as the UAS and Stor98 boxes
+are, is two entries more; the rows above the buttons may exceed a 640
+by 480 page once 43.48's are added, and then the list scrolls in a
+frame (proposal) with the buttons and the folder line kept below it;
+one line of text under the list is kept for the addresses; the Finish
+page keeps a line for the copied folder's path; the Settings dialog
+gains no tab for them; the Summary lists them as it lists every
+component, the copy and the staging as separate lines; the same warning
+box takes their warnings; the uninstall's order (section 9.3) gains a
+step for the copied folders and the staged INFs. Which drivers, one row
+per pack or per driver, their systems, the folder's name, the
+manifest's form and the staging's details are 43.48's.
+
+**The Settings dialog.** One dialog, three tabs - USB, Thunderbolt,
+Stor98 - each tab shown only while its component is ticked (proposal: a
+tab of an unticked component shown greyed instead), each with its main
+rows and an "Advanced..." button that opens that tab's advanced rows,
+the rows built and read as sections 5.4 to 5.6 build and read them (the
+combo boxes, "now", the machine-wide location, the greyed row of another
+system, the mixed state, each row's "Asked when"; a row left as it is
+writes nothing):
+
+| Tab | Main | Advanced |
+|---|---|---|
+| USB | `XhciIntelPortSwitch` (live only on a controller `XhciPswGate` admits; greyed otherwise, as now), `XhciSilentInstall` (98 SE and ME, as its "Asked when" has it; default off, no preselection, section 6.5.12) | `XhciInterruptMode`, `XhciForceBulkOnly`, `XhciPollFineTimer`, `XhciSelectiveSuspend`, `XhciFastPollFsLs` |
+| Thunderbolt | `XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject` | the ten of section 5.5's Advanced, `XhciCmNoIrqStart` (98 SE and ME) and the mark service's `Restart` (2000 to 7) |
+| Stor98 | `StorWriteThrough`, `StorPollMode` | the six of section 5.6's Advanced |
+
+`XhciCmNoIrqStart` and `Restart` are designed in section 5.5 and not in
+the engine's value table yet (`instValues`); this design builds them.
+Each tab's rows are laid out by roadmap task 43.10's font- and
+size-driven layout (`xhciinst\wiz_lay.c`, branch `p43-10`: the combo's
+closed and open widths, a description box of at least six lines, at most
+three rows a part, `test_wizlay.c`), reused per tab rather than written
+again; this section is written against it once `3.2.0.0` takes `p43-10`
+(whose record 26 draft 19 this branch's drafts 19 to 25 are renumbered
+after when the two meet). OK keeps the dialog's choices for the run
+(nothing is written before Install); Cancel drops the changes made since
+it opened. The new install note of section 5.5 (`XhciCmMode` and
+`XhciCmApprove` with the INF's defaults until the restart) stands on the
+Thunderbolt tab.
+
+**The console** asks the main rows only: `XhciInterruptMode` and
+`XhciForceBulkOnly` are no longer asked (they are Advanced now); `/set`
+still sets them, as it sets every value.
+
+**The Summary** repeats, after the headline, each component warning of
+section 5.3.1 that applies, each warning's first sentence. On 98 SE and
+ME the Stor98 file update's checkbox ("Please disconnect all external
+NVMe drives before proceeding", section 6.3) becomes a message box, OK
+and Cancel, shown on Install only when Stor98's file would be replaced
+(`inst_eng_s98_file_update`); Cancel stays on the Summary and nothing is
+written.
+
+**The silent install covers `xhciuas.inf` too** (owner, 2026-10-22, from
+the 43.5 legs: a UAS disk's first plug on 98 SE raises the wizard and an
+"Insert Disk" prompt for `C:\XHCI98`, and a replug at another port the
+wizard again): with `XhciSilentInstall` on, a UAS device is to install
+with no wizard and no prompt. Two things stand in the way and are this
+task's design points, read first: the driver's silent decision bars a
+device it presents as UAS (design record 13 section 6.11,
+`XHCI_SILENT_BARRED`, decision O2), which a change of the bus lifts only
+with record 13 amended; and the "Insert Disk" prompt shows that the
+engine takes `xhciuas.inf` from somewhere other than the install
+directory at that plug, which the legs read (`InfPath`, the `OEM Name`
+record, the prompt's path). The design of that part is a separate, later
+step of this task (proposal), after the Components page and the Settings
+dialog.
+
+**Host vectors**: the Stor98 default table on every system; the
+Thunderbolt and Stor98 boxes' rule (ticked with the parent, unticked and
+greyed without it, the user's own untick kept); the tab and row sets per
+system and component; the console asking the main rows only; the
+storage row on 98 SE alone; the Summary's repeated warnings. **Legs**:
+the page at 640 by 480 on 98 SE, ME, XP and 7; the Settings dialog's
+three tabs; Stor98 on 8 with 43.24's VMs.
 
 ### 5.1 Welcome
 
