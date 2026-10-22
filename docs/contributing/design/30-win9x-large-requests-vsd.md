@@ -1,6 +1,8 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 7, 2026-10-22 (section 2.3: the first pass of the
+Status: draft 8, 2026-10-22 (section 2.3 item 3: `SCSIPORT.PDR`'s own
+requests read, the one with data a `REQUEST SENSE` that Stor98 answers
+without DMA); draft 7, 2026-10-22 (section 2.3: the first pass of the
 readings owed before the code, the disk SCSI'izer named, and
 `SCSIPORT.PDR`'s own requests an open item); draft 6, 2026-10-22,
 reviewed and revised (a request with no
@@ -247,11 +249,19 @@ addresses; in short [static, QuickInstall builds]:
    criteria routine builds no list for such a request [hyp: it reads the
    DCB's demand]; a request of `SCSIPORT.PDR`'s own that carries data and
    does not pass through this layer would then be translated through an
-   unfilled slot. Which events make `SCSIPORT.PDR` issue such a request
-   after the DCB is configured, and whether any carries data and by which
-   route it is sent, is read before the code; if one does and bypasses
-   this layer, the design is revised (section 11). No construction for an
-   incoming IOR without an SRB was found, so the code admits no
+   unfilled slot. The builder has two callers [static]: a `REQUEST
+   SENSE` of its own (`SCSIPORT.PDR`'s sense fetch after a check
+   condition without autosense; a 0x40-byte buffer in the IOP), and a
+   request with no buffer from its initialisation object. The `REQUEST
+   SENSE` carries data, but Stor98 answers `REQUEST SENSE` in software
+   from its kept sense (`ScsiCompletesInSoftware`, `nvme2k.c`: "no child,
+   no DMA"; Stor98 calls `ScsiPortGetPhysicalAddress` only in its
+   engine's mapping of read and write children, `engine.c`, and for its
+   own uncached extension), so the slot is never walked. The hazard is
+   therefore closed by a property of Stor98's, which the code's comment
+   and Stor98's `docs/PLAN.md` record as a condition: a Stor98 that ever
+   moved `REQUEST SENSE` to a DMA path would reopen it. No construction
+   for an incoming IOR without an SRB was found, so the code admits no
    no-SRB function (section 4.3) until one is.
 
 ## 3. The layer
@@ -1122,8 +1132,9 @@ On the owner's real hardware: the throughput before and after
   (section 9.2 item 3); if `phys_sgd` stays demanded, the layer is inert
   there (D2) and the owner decides whether to edit the entries above.
 - `IORF_DOUBLE_BUFFER`'s buffer at this layer (section 4.6) [hyp].
-- `SCSIPORT.PDR`'s own requests after configuration (section 2.3 item 3):
-  whether any carries data past this layer's reach. Release-blocking.
+- `SCSIPORT.PDR`'s own requests (section 2.3 item 3): closed by Stor98
+  answering `REQUEST SENSE` in software; a condition on Stor98, recorded in
+  its `docs/PLAN.md`.
 - Page residency (section 4.7): the static reading of the layers above
   this one on Stor98's disk is owed before the code; the memory-pressure
   leg corroborates it.

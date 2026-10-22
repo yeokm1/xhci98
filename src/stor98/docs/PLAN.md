@@ -1165,7 +1165,11 @@ isolation evidence.
   compare clean at 512 KiB to 2 MiB, aligned and at +512). The setting
   `StorMaxTransferKB` accepts 64 to 2048 KiB on 9x
   (`tests/unit/xfer_ut.c`). Legs: xhci98 record 30 section 9.2, with the
-  layer.
+  layer. A condition that layer rests on (record 30 section 2.3):
+  `REQUEST SENSE` stays answered in software (`ScsiCompletesInSoftware`),
+  never through `ScsiPortGetPhysicalAddress`, because `SCSIPORT.PDR`'s own
+  sense fetch carries a list slot that nothing fills once
+  `DCB_dmd_phys_sgd` is dropped.
 
 ### Open (undecided)
 

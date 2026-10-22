@@ -447,9 +447,12 @@ count at `0x100CAA`/`0x100CB0`, the criteria routine called (`0x100CBA`, the
 only call of it in the image, `IORF_DOUBLE_BUFFER` set on a non-zero
 result at `0x100CC7`), then the SRB inside the IOP at `+0xBC`
 (`0x100CDA`), `SrbIopPointer` (`0x100CE3`) and `DataTransferLength` from
-`IOR_xfer_count` (`0x100CEE`). Its callers and the route the request takes
-were not found (no direct call; capstone's linear sweep loses sync around
-it). No construction of an SRB for an incoming IOR that has none was
+`IOR_xfer_count` (`0x100CEE`). The builder's function starts at `0x100BDF`;
+its two callers are `0x100707` (a `REQUEST SENSE`, CDB `03h`, its 0x40-byte
+buffer in the IOP, completion routine `0x100D42`) and `0x2019ED` (object 2,
+no buffer, IOR function `0x0F`). Stor98 answers `REQUEST SENSE` in software
+(`ScsiCompletesInSoftware`, no DMA), so that request's unfilled list slot
+is never walked. No construction of an SRB for an incoming IOR that has none was
 found.
 
 What it changes in record 30: its section 2.3 (and the chain's names in
