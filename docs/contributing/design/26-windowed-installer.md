@@ -2218,7 +2218,7 @@ checks each control holds its text whole; the import tables of all four;
 the switch refusals, the window's included (`/yes` refused, `/console`
 refused).
 
-(Draft 19) `wiz_lay.c` holds the settings pages' layout arithmetic of
+(Draft 21) `wiz_lay.c` holds the settings pages' layout arithmetic of
 section 5.4, "The layout", host-tested in `test\test_wizlay.c`: the "now"
 column (the widest text, at most two fifths), a part's height, the split
 (at most three rows a part, the fewest parts, even, a part of one row
