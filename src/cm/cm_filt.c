@@ -246,6 +246,7 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
     NTSTATUS status;
     KIRQL irql;
     BOOLEAN child;
+    BOOLEAN started;
 
     child = (BOOLEAN)(filter->Common.Kind == CM_KIND_CHILD);
     stack = IoGetCurrentIrpStackLocation(irp);
@@ -316,9 +317,10 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         break;
 
     case IRP_MN_SURPRISE_REMOVAL:
+        started = (BOOLEAN)(filter->Started != 0);
         filter->Started = 0;
         filter->SurpriseRemoved = 1;
-        CmRegAttEvent(filter, CM_MK_SURPRISE);
+        CmRegAttSurprise(filter, started);
         if (!child) {
             CmRegWithdraw(filter);
         }

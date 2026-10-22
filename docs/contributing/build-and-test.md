@@ -3278,11 +3278,14 @@ hardware wizard's search path (design record 23 section 4.4).
 #### The driver pack: NUSB 3.3's 98 SE storage files (roadmap-usb4 task 43.3)
 
 The release download carries NUSB 3.3's seven Windows 98 SE storage files
-at its root as `NONFREE\`, the pack's own layout, storage part only, in 8.3
-names (owner, 2026-10-20): `NONFREE\NOTICE.md` (the pack's),
-`NONFREE\SHA256.TXT` (the seven's hashes at their paths under `NONFREE\`)
-and `NONFREE\STORAGE\NUSB33\W98SE\` with the seven files, where the
-installer takes them from (task 43.4). This is the one Microsoft file
+at its root as `NUSB33\`, a folder of its own beside the installer, in 8.3
+names (owner, 2026-10-20; the folder 2026-10-22): `NUSB33\NOTICE.md` (the
+pack's `nusb33/NOTICE.md`), `NUSB33\SHA256.TXT` (the seven's hashes at
+their paths under `NUSB33\`) and `NUSB33\W98SE\` with the seven files,
+where the installer takes them from (task 43.4). NUSB is kept apart from
+the non-free driver pack (owner, 2026-10-22): in the pack's repository its
+files are the top-level `nusb33/w98se/`, not under `non-free/`, and the
+download never puts them inside a `NONFREE\`. This is the one Microsoft file
 exception of the download (`legal-provenance.md` section 5). Only
 `make-release.ps1` adds it, to the upload set; no package of
 `make-package.ps1`'s carries it, and `releases\<version>\` never does.
@@ -3301,7 +3304,7 @@ before anything is built (`-NoDriverPack` cuts without the pack). It
 refuses to start while any of the seven names is under `releases\` or among
 the tracked files, and writes `releases\<version>\drvpack.txt`: whether the
 pack is included and, if so, its revision and every file's hash. The upload
-set adds `NONFREE\` before its gates run, and refuses a published tree that
+set adds `NUSB33\` before its gates run, and refuses a published tree that
 already holds one; its one-date rule reads this project's INFs only, the
 pack's two INFs (`USBSTOR.INF` dated 07/01/2001, `USBNTMAP.INF` 06/08/2000
 with no version) being held to their hashes instead, and every file, the
@@ -3359,6 +3362,41 @@ guest:
 7z e vm\win7-x64.img 1.ntfs -o<scratch>
 7z l <scratch>\1.ntfs
 ```
+
+### Windows 10 target VMs (roadmap-usb4 43.32)
+
+Two Windows 10 22H2 guests, x86 and x64, for the Windows 10 tasks 43.33
+to 43.37 (run sheet `runs/run-43.md`, "43.32"). They are set up as the
+Vista and 7 machines above are - TCG, the legacy BIOS, test-signing on,
+the transfer drive, a prepared starting point under every leg - and they
+live, like the Windows 8 and 8.1 images they were built beside, on the
+VM disk of development host A, outside the tree:
+
+| | value |
+|---|---|
+| Media | the owner's `Win10_22H2_English_x64v1.iso` and `Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965 (the GVLK selects Pro; the guests are never activated) |
+| Pristine images | `E:\xhci98-vm\win8-10\w10x64\w10x64-pristine.qcow2` (SHA-256 `770f2795...6fdb636`) and `...\w10x86\w10x86-pristine.qcow2` (`10bfd472...135c92d`), read-only, 64 GiB, one NTFS partition on MBR; built 2026-10-22 by `E:\xhci98-vm\win8-10\scripts\install2.sh` (`RECIPE.txt` there has the recipe and the full hashes): WinPE and the image copy under WHPX, specialize, OOBE and the first logon under TCG. Local administrator `xhci` / `xhci98` with autologon; `bcdedit /set testsigning on` (the desktop shows "Test Mode"); hibernation and Windows Update off; no network |
+| Prepared starting points | `E:\xhci98-vm\p43-33\<g>\prep.qcow2` (read-only) over each pristine image: a scheduled task `xrun` (highest privileges, as `xhci`) that runs `<transfer drive>\auto\go.cmd`. A leg starts it with Win+R `schtasks /run /tn xrun`, elevated without a consent prompt; its logon trigger does not fire on these images |
+| Leg overlays | `E:\xhci98-vm\p43-33\<g>-<set>\disk.qcow2` over `prep.qcow2`, one directory per leg, never reused across legs; a fresh `out.qcow2` (1 GiB, formatted `OUT` as O: by the leg's script, read after power-off with 7-Zip) |
+| Launcher | `E:\xhci98-vm\p43-33\scripts\launch.ps1 -Guest w10x86\|w10x64 -Set <leg> [-Out] [-Devs ...]`; `q.ps1` (screendump, keys, typing, Win+R, the CD) and `stop.ps1` (ACPI power-off of only the pid the kit started) beside it |
+| QEMU | the usb4-emu build `vm\usb4\bin-2a893ea\qemu-system-x86_64.exe` (hash checked by the launcher), `-machine pc` (SeaBIOS), `-accel tcg,thread=multi`, `-cpu qemu64,+3dnowprefetch` (8.1 and 10 x64 need PrefetchW), `-smp 2`, 2048 MB, `-vga std`, `-display none`, `-nic none` |
+| Ports | QMP **48660** (`w10x86`) and **48661** (`w10x64`), from the block 48660-48689 |
+| USB | `qemu-xhci,p2=8,p3=4` at 00:03 (QEMU ports 1-4 USB 3 and 2.0, 5-8 USB 2.0 only): `usb-tablet` port 5, `usb-storage` on a USB 3 port (1) and a USB 2.0-only port (6), `usb-uas` port 2, `usb-audio` port 7, `usb-hub` port 8 with `usb-kbd` behind it; the emulator's Thunderbolt 3 NHI (`tb3-alpine-ridge`, 00:04), its xHCI (00:07) and tunnel bridge (00:05) |
+| Transfer | `E:\xhci98-vm\p43-33\xfer` as an IDE VVFAT drive (read at launch only): `auto\` the leg scripts, `pkg\` the package under test |
+| Secure Boot | none: SeaBIOS has none, which is why test-signing mode needs no firmware change. The OVMF guest with Secure Boot on that 43.32 asks for (for 43.36's refusal case) is **not built** (run sheet 43.32) |
+
+**The speed under TCG** (2026-10-22, host loaded): from power-on to the
+autologon desktop about 4.5 minutes at `-smp 2`, both guests; a
+`pnputil` or registry reading a few seconds; `msinfo32 /report` about ten
+minutes; `Get-PnpDeviceProperty` one key at a time far too slow (one
+pipeline per reading instead). Usable for the reading and install legs;
+no WHPX for the legs (43.12 keeps every guest on TCG). The display
+sleeps after about ten minutes: send a key before a screendump.
+
+**The vehicle's limits on 10** (record 13 section 6.14.3): QEMU's
+`usb-uas` does not start under 10's own `uaspstor` (Code 10), and QEMU's
+`usb-storage` reports `bcdUSB` 0x0200 at High Speed, so it cannot raise
+the "can perform faster" condition; the NHI has no driver on 10 (Code 28).
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
@@ -8086,6 +8124,184 @@ Three things about it that are easy to get wrong:
   after the last transfer), never after, and never on the QEMU command line,
   which wedges SeaBIOS.
 
+### Faster emulator legs: starting points and the release matrix (roadmap-usb4 43.12)
+
+Release legs used to start each guest cold from its base image. Then an
+operator, or an agent typing blind into the guest, ran the installer, and
+the results were read off screenshots. Most of a leg's time went on boots
+under TCG and on that driving. Three things now replace it. Each is a
+tracked script in `scripts\vm-matrix\` and none depends on `scripts\local\`.
+Every guest stays on TCG: the owner ruled out WHPX on 2026-10-20, because
+the NT guests have problems under it.
+
+**A starting point per guest** (`make-start.ps1 -Guest <id>`). This is a
+saved machine state beside a frozen disk:
+
+1. An overlay of the guest's base image becomes the starting point's disk.
+   The base image itself is only read.
+2. A first, cold start with a CD that holds the poller. The host types the
+   CD's `XHSETUP` into Start, Run. It copies the poller to `C:\XHLEG` and
+   makes it start at every logon, then says so on COM1, and turns AutoRun
+   off on NT, so a leg's CD opens no window. On 98 SE and ME this is a Run
+   value. On 2000 and XP it is a Run value; on XP the host then sets the
+   unsigned-driver policy to Ignore, made the system default, through
+   System Properties' Driver Signing dialog (`PrepSteps`,
+   `xp-signing-ignore`), because the registry value a script writes is not
+   honoured and under Warn every unsigned install raises a question and a
+   Found New Hardware wizard. On Vista and 7 it is an
+   elevated logon task, so that no elevation prompt stops an unattended
+   install; creating it needs elevation itself, so for a guest marked
+   `SetupElevated` the host types the command into the Start menu's search
+   box, starts it with Ctrl+Shift+Enter and answers the consent prompt
+   (not yet run on a Vista or 7 guest). The host then shuts Windows down
+   from Start, Run.
+3. A second, cold start follows that shut down. Once the poller has said
+   `XHLEG BOOT` on COM1, and a settling time has passed, the host stops the
+   machine and saves its state.
+
+Every leg begins from that state, which is one cold start after a shut
+down. So Windows 98 SE's rule holds (feedback: never a warm restart; shut
+down, power off, start cold) and no leg starts from a warm restart.
+`start.json` records a hash of the machine's command line and the QEMU
+version. A leg refuses a starting point that was saved for another
+machine or another QEMU.
+
+**Unattended legs** (`run-leg.ps1 -Leg <id> -Package <unpacked download>`).
+The leg restores the starting point into a fresh overlay and puts the leg's
+CD in the drive. The CD holds the package under `PKG\` and the guest's leg
+script (`leg\LEG9X.BAT` or `leg\LEGNT.CMD`). The poller finds the CD and
+runs the script. The script runs one phase per Windows start, and each
+phase ends by switching the machine off:
+
+1. `INSTALL /console /yes /nopause /log ...`.
+2. After the start that follows:
+   - the driver file is checked;
+   - `INSTALL /console /list` must show the controller current;
+   - a USB stick the host plugs in on request must show up, and a 4 MiB
+     file copied to it must compare equal with `fc /b`;
+   - `INSTALL /console /uninstall /yes /nopause` runs.
+3. After the next start, `/list` must succeed and show nothing current.
+
+Each exit code and check, and the logs, go to COM1 as `XHLEG ...` lines.
+The host reads only COM1, and every restart is a cold start that the host
+makes. QEMU runs with `-action reboot=shutdown`, so a guest's restart ends
+the process.
+
+The host takes the steps a guest cannot take. These are named in
+`release-legs.psd1`:
+
+- on 98 SE, the controller's Add New Hardware wizard at the first start
+  after the install (record 23 section 6.2). It blocks every program
+  started at logon until it is answered, so the poller cannot run until
+  the host has walked it;
+- on 98 SE, the same wizard at the start after the uninstall, when the
+  controller has no driver again: it is escaped;
+- the first stick's wizard (roadmap-usb4 43.42, still open);
+- on XP, the Found New Hardware wizard for the controller with no driver,
+  which opens after logon without the focus and makes an install wait on
+  it (exit 4, "Windows is still installing something"): Alt+Tab and
+  Escape, before the state is saved and on a cold start (`esc-fnh`);
+- on XP, should the unsigned-driver question come all the same, Continue
+  Anyway (`PromptStep` `xp`, recognised by its warning sign).
+
+A step is tied to the phase the guest last reported (`AfterPhaseN`), not
+to a count of starts, so it follows the guest, and it is taken once: the
+start it was for consumes it.
+
+The verdict is PASS when all of these hold:
+
+- the guest says `END`;
+- every check passed;
+- each exit code is one the leg allows;
+- no step failed, and every start ended with the guest switching itself
+  off, or with the restart a host step answered, and QEMU exited cleanly.
+
+Whatever ends a start (a stall, the deadline, an error in the host's
+script), the host stops that start's QEMU, by its own QMP or its own
+process id, before the next start or the end of the leg.
+
+A guest frozen from outside with QMP `stop` (a quiet host for a measurement)
+does not run down the stall timer or the leg's deadline while the host waits
+on COM1; the time it spent frozen is recorded as `pausedSeconds`. The
+host's own steps (the 98 SE wizards, a few minutes each) keep their own
+deadlines, so a freeze during one can fail that step and the leg.
+
+`-Cold` runs the same leg from a cold start instead of the saved state.
+That is the measurement of what the starting points save.
+
+**One leg per system stays with the installer's window.** These are the
+Manual legs, run as `run-leg.ps1 -Leg <id>-window`. The guest is restored
+with the CD in and VNC on `127.0.0.1`. The operator runs `PKG\SETUP.EXE`
+and shuts Windows down, and the same checks follow unattended. The script
+opens no viewer.
+
+**The release matrix** (`release-matrix.ps1 -Package <dir>`). It checks
+every leg's starting point and starts nothing if one is stale. It then
+starts the standard legs of `release-legs.psd1` in parallel, each in its
+own port slot of three ports (QMP, VNC and the migration socket), within
+the budget:
+
+- the matrix's own vCPUs at most `MaxVcpu`;
+- every QEMU on the host together at most its logical processors.
+
+A running leg holds its vCPUs for its whole life, between its cold starts
+too. Other QEMUs on the host are counted as they run.
+
+It writes one table, `results.md` and `results.csv`, with each leg's
+verdict, minutes, starts, restore time, exit codes and reasons. The Manual
+legs appear in it as owed. The package goes onto each CD and is never run
+on the host.
+
+Per-host settings live in `release.config.psd1`, a copy of
+`release.config.sample.psd1` that is git-ignored: QEMU, the work
+directory, the port block, the vCPU cap, the stick image, and the guests
+with their base images, CPU, memory and keyboard layout. The NT images of
+this file are US Dvorak, and the host types through that layout.
+
+Facts these scripts rest on, read on development host A on 2026-10-22 with
+QEMU 11.1.0, are below. Each one is enforced in code.
+
+- **QEMU on Windows cannot migrate to a `file:` URI.** It fails with
+  "Failed to set FD nonblocking". The host listens on the migration port
+  and writes the stream itself, and a restore feeds the file back to
+  `-incoming tcp:`. QEMU keeps the socket open after the migration
+  completes, so the copy ends when `query-migrate` says completed and every
+  byte it counted has arrived.
+- **A qemu-xhci whose MSI-X was not set up cannot load its state.** The
+  state load asserts in `msix_vector_unuse` and QEMU exits. A CPU without
+  an APIC (`pentium3,-apic`, as earlier 98 SE kits used) has no MSI, so
+  the 9x guests take `pentium3` with its local APIC, which Windows 98 SE
+  does not use.
+- **The 98 SE wizard blocks logon programs.** Until the Add New Hardware
+  wizard for a controller with no driver is closed, nothing in the Run key
+  starts. So the host escapes it on a cold start (`ColdStep`) and walks it
+  after an install.
+- **98 SE can switch itself off from a batch file.**
+  `rundll32.exe shell32.dll,SHExitWindowsEx 5` does it from the poller's
+  minimised DOS box, with no dialog.
+- **The wizard's file copy asks when it gets there.** "Insert Disk" and
+  "Copy files from" come after the copy has scanned for a while, not at a
+  fixed time; a timed key sequence typed the install directory into the
+  progress dialog and the leg stalled. The host step recognises the two
+  dialogs, and the wizard's own page, by a few pixels of their title bars
+  and box on the 640x480 screen (`Get-Leg98Dialog`).
+- **The CD image builder holds its source files** until its objects are
+  collected, so a staging directory deleted at once can fail with "in use";
+  the scripts collect first and retry.
+Timings, read on development host A with `3.2.0.0` at `e61538ae` (TCG, QEMU
+11.1.0, 2026-10-22; the x86 upload set built locally with the driver pack):
+
+| What | Before (cold start) | After (saved starting point) |
+|---|---|---|
+| 98 SE console leg (4 starts) | 700 s; first start 230 s | 553 s; restore 0.7 s, first start 35 s |
+| XP console leg (3 starts, 2 vCPUs) | 572 s; first start 301 s | 424 s; restore 1.5 s, first start 130 s |
+| Both legs | 1272 s one after the other | 7.4 min wall time (`release-matrix.ps1`, run together, 3 vCPUs) |
+
+Making a starting point took 206 s on 98 SE (state 36 MB) and 335 s on XP
+(state 221 MB), once per guest and QEMU. The later starts are cold starts
+in both columns, so the saving is in the first start: the cold boot, and
+on 98 SE the wizard escaped. Before 43.12 the same checks were typed or
+clicked in a guest by an operator or by an agent reading screenshots.
 ### Testing Checklist
 
 From Phase 3 onward, run every applicable checklist item on both target VMs

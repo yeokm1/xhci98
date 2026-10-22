@@ -31,6 +31,10 @@ typedef struct _CM_STATUS_IN {
     ULONG IcmNoUsb3;        /* a Thunderbolt 3 ICM host (Falcon, Alpine or
                                Titan Ridge, not Maple Ridge): no USB3
                                tunnel exists                              */
+    ULONG Blocked;          /* bit n: port n blocked by a 9x eject; bit
+                               4 + n: an eject in progress there
+                               (CM_ST_F_BLOCKED_*, CM_ST_F_EJECTING_SHIFT;
+                               task 43.18)                                */
 } CM_STATUS_IN, *PCM_STATUS_IN;
 
 /*

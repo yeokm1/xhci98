@@ -69,6 +69,7 @@ BEGIN
         MENUITEM "Auto &Refresh",                       IDM_V_AUTO
         MENUITEM SEPARATOR
         MENUITEM "Start at &login",                     IDM_LOGIN
+        MENUITEM "&Warn when a device is removed unexpectedly", IDM_RMWARN
         MENUITEM SEPARATOR
         MENUITEM "Logging le&vel...",                   IDM_LEVEL
     END

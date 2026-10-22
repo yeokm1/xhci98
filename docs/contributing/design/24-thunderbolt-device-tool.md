@@ -166,7 +166,7 @@ version it does not know.
 | 56 | four words: each port's bus (15:8), device (7:3), function (2:0) | `0xFFFFFFFF` |
 | 72 | the router entries that follow, 0 to 24 | - |
 | 76 | the entry size, 128 | - |
-| 80 | flags: bit 0, more routers than entries | - |
+| 80 | flags: bit 0, more routers than entries; bits 11:8, one a port in the port order, that member blocked by a 98 SE or ME eject (record 21 section 7.2 part 1, task 43.18); bits 15:12, the same order, an eject in progress there and not blocked | - |
 | 84 | four 8-byte paths: each port's Windows 98 instance path, a count (0 for unknown, at most 7) then its elements, leaf first (section 4.3) | count 0 |
 | 116 | the system time at the write, as `KeQuerySystemTime` returned it, low word then high word at 120 (100 ns units since 1601; the driver does no arithmetic on it) | - |
 | 124 | the echo: the last `XhciCmStatusAsk` the driver read (section 3.3) | 0 |
@@ -443,7 +443,14 @@ the USB4 profile, the tool watches the record for up to ten seconds for
 the router's PCIe tunnel to read "torn down after an eject" and says
 which it saw ("The PCIe tunnel was closed." or "The Thunderbolt driver has
 not confirmed that the PCIe tunnel was closed."). Neither changes what
-Windows answered, and neither is the unplug advice of section 5.4. A unit
+Windows answered, and neither is the unplug advice of section 5.4.
+XHCITR run without administrator rights (2026-10-22, from the 43.45
+legs, record 25 section 6.2 step 7) does not confirm its own eject, so
+on XP and later it lets go of the eject mutex, waits up to 30 s for the
+mark service's pass, and otherwise says the tunnel has not been seen
+closed and closes if the mark service confirms the eject; on 2000, or with the service stopped, it
+says the tunnel stays up until the unplug. This tool always runs as an
+administrator and keeps the ten seconds. A unit
 with no child filter reaches nothing in `xhcicm.sys`; its tunnel stays up
 until the unplug.
 
@@ -629,6 +636,15 @@ running, and section 5.2's tunnel line is shown on 98 SE and ME too;
 under the firmware connection manager the tunnel stays up, as before. The direct calls stay in the
 tool for the plain USB devices of record 25 section 6.5 alone, and a
 unit's eject is still refused without a confirmed record (section 3.3).
+As built (task 43.18): the ask's unit word carries the unit's devfn with
+bus 0, which names the member's secondary bus (a 98 instance id below a
+bridge holds no bus number), and the tool reads the query device's token
+before and after section 7.3's revalidation and asks only when the two
+are the same start and content generation, the answer eligible (record
+21 section 7.2, "As built"). One more rejection exists: an NVMe drive
+no Stor98 channel entry names (no Stor98 runs it) is refused before its
+query, exit 1, since no clean stop can be asked of it. The layout is
+`src\cm\cm_ejask.h`, the tools' half `xhciinst\inst_ej9x.c`.
 
 `cfgmgr32.dll` on 98 SE (4.10.2222, 45,056 bytes) and ME (4.90.3000, 40,960
 bytes) exports the same 179 names (read 2026-10-15 from each guest image's

@@ -27,8 +27,11 @@
 /* The largest answer this driver builds: a full record, its extensions
  * and the longest instance id. */
 #define CM_Q_BUILD_MAX \
-    (CM_Q_HDR_BYTES + CM_ST_MAX_BYTES + CM_ST_MAX_ROUTERS * CM_Q_EXT_BYTES + \
-     CM_Q_ID_MAX)
+    (CM_Q_HDR_BYTES + CM_Q_RM_BYTES + CM_ST_MAX_BYTES + \
+     CM_ST_MAX_ROUTERS * CM_Q_EXT_BYTES + CM_Q_ID_MAX)
+
+/* Where the record starts in a version 2 answer: after the removal block. */
+#define CM_Q_REC_AT             (CM_Q_HDR_BYTES + CM_Q_RM_BYTES)
 
 typedef struct _CM_QUERY_IN {
     const UCHAR *Record;    /* as CmStatusBuild made it                    */
@@ -42,6 +45,8 @@ typedef struct _CM_QUERY_IN {
     ULONG NhiBdf;           /* CM_ST_UNKNOWN where not read                */
     const char *Id;         /* the instance id, ASCII                      */
     ULONG IdBytes;
+    const UCHAR *Removal;   /* the removal block, CM_Q_RM_BYTES; NULL: not
+                               watched, none counted                       */
 } CM_QUERY_IN, *PCM_QUERY_IN;
 
 /*
@@ -55,7 +60,9 @@ typedef struct _CM_QUERY_IN {
 ULONG CmQueryExt(UCHAR *ext, ULONG room, const UCHAR *record,
                  ULONG recordBytes, const TBT_ICM *icm, const TBT_U4CM *u4);
 
-/* The answer into buf (at least CM_Q_BUILD_MAX), PASS 0, the age unknown,
+/* The answer into buf (at least CM_Q_BUILD_MAX), version 2: the header,
+ * the removal block, the record at CM_Q_REC_AT, the extensions, the id;
+ * PASS 0, the age unknown,
  * no stopping flag, content generation 0; returns its length. A record shorter than its header
  * or longer than CM_ST_MAX_BYTES, or whose own size disagrees with its
  * router count, is cut to its header and router count 0's length. */
