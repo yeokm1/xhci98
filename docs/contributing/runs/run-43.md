@@ -4,6 +4,131 @@ Phase 43 of `roadmap-usb4.md`, for release `3.2.0.0`. This sheet records
 what each task did and every reading; the roadmap's task list and
 decisions table are the current state.
 
+## 43.11 the installer's settings pages on 98 SE, XP and 7 (2026-10-22)
+
+43.10's layout (design record 26 section 5.4, "The layout") read on the
+screen: 98 SE at 640x480, XP and 7 at 96 DPI, 7 at 120 DPI. Runtime,
+development host A, QEMU, one guest at a time, 16:54 to 19:11.
+
+**Verdict: passes on every point, on all four.** Every drop-down of every
+settings page opened and closed shows its longest entry whole; the note
+shows its whole text with no scroll at all; the USB settings page, the
+one with four asked rows, is two parts, "(page 1 of 2)" and "(page 2 of
+2)", and Back and Next move between them and to the pages either side;
+a value set on a part or a page is still set after Back and Next, and
+the Summary lists it.
+
+### The vehicle
+
+- The build: the gated build of `3.2.0.0`'s HEAD `2038250e`, on branch
+  `p43-11` (`build-driver.cmd all` and `all -amd64` both passed; the
+  installer's window self-test 584 checks and `test_wizlay` 199, both
+  with no failure). Staged with `make-release.ps1 -Arch x86 -TestLabel
+  -NoDriverPack -SkipQualtool` into a scratch directory; `XHCIWIZ.EXE`
+  `16ab9fc5...`, the gated build's own file. The package still reads
+  `3.1.0.0` (the version is not yet bumped).
+- The guests, each on an overlay of its own over another kit's image
+  (kit `E:\xhci98-vm\p43-11`, not in the tree; every screen is in its
+  `shots\`):
+  - 98 SE: p43-12's pristine 98 SE (no display driver: 640x480, 16
+    colours), 1 vCPU, 256 MB; then p43-13's `w98-hcd310`, the same
+    install with `3.1.0.0`'s drivers on the controller (see below).
+  - XP SP3 32-bit: 1024x768, `LogPixels` 0x60 (96 DPI, read from the
+    registry), 2 vCPUs, 512 MB.
+  - 7 SP1 32-bit: Phase 38's matrix `f` overlay (`2.4.0.0` installed,
+    `XhciInterruptMode` 2 on the controller from 43.13's legs), 800x600,
+    2 vCPUs, 1536 MB; read at 96 DPI, then with `LogPixels` 120 written
+    under `HKCU\Control Panel\Desktop` and Windows restarted (the fonts
+    and the window larger on the screen).
+- Every guest: a `qemu-xhci` with no device on it, so no Thunderbolt
+  controller. The package was on an IDE VVFAT drive; `SETUP.EXE` was run
+  inside the guest (Start, Run), elevated through UAC on 7. Keys by QMP
+  `send-key`, screens by QMP `screendump`; no display client.
+- Each run: on Components, Thunderbolt 3 / USB4 support and then Stor98
+  ticked (the staged-only case of section 5.5, so the Thunderbolt and
+  Stor98 pages are shown); on each settings page every enabled drop-down
+  focused and opened (Alt+Down) and closed, a value changed with the
+  arrow keys; Back and Next across the parts and pages; the Summary
+  read; Back from the Summary to the USB page's first part; the wizard
+  cancelled, so nothing was installed.
+
+### Results
+
+The pages, the same on all four but for the one 98 SE row:
+
+| Page | Rows | Parts |
+|---|---|---|
+| USB settings | `XhciIntelPortSwitch` (greyed, "(Intel 7-9 series, C610 only)"), `XhciInterruptMode`; then `XhciSilentInstall` (greyed on XP and 7, "(Windows 98 SE and ME only)"; asked on 98 SE), `XhciForceBulkOnly` | two, "(page 1 of 2)" and "(page 2 of 2)" |
+| Thunderbolt settings | `XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject`, each "now: not set (default 1)" | one, no count |
+| Stor98's settings | `writethrough`, `pollmode` (`StorWriteThrough`, `StorPollMode` on 98 SE) | one, no count |
+
+- **Drop-downs.** Every closed box spans the column and its choice reads
+  whole; every open list is as wide as the closed box and every entry
+  reads whole. The longest: "3  the driver's own USB4 connection
+  manager, forced", "cacheoff - turns the drive's write cache off (fua if
+  it refuses)", "not set (the built-in default is auto (here: off))",
+  and on 7 "3  a message-signalled interrupt only". The "now" text sits
+  on the label's line at the right, whole, wrapping inside its column
+  where long (Stor98's "not set (the built-in default is auto (here:
+  off))" in two lines). The greyed rows' boxes show their value whole.
+- **The note.** The longest note, `XhciIntelPortSwitch`'s, is nine lines
+  at 96 DPI (seven at 120) in a box of about thirteen; every note read
+  whole with no scroll. Focusing a drop-down shows its row's note; a new
+  part shows its first row's.
+- **Parts, Back and Next.** Next on part 1 shows part 2 on the same
+  page; Back on part 2 shows part 1; Next on part 2 goes to the
+  Thunderbolt page; Back from the Thunderbolt page shows the USB page's
+  part 2 (entered by Back, its last part). "Advanced..." from part 2
+  (USB, 7 at 96 DPI and 98 SE) returned to part 2.
+
+**Values kept.** Set, then read after Next and Back across parts and
+pages, and after Back from the Summary:
+
+| System | USB part 1 | USB part 2 | Thunderbolt | Stor98 | Summary |
+|---|---|---|---|---|---|
+| 98 SE (update over `3.1.0.0`) | `XhciInterruptMode` 0 to 1 | `XhciSilentInstall` 0 to 1 | `XhciCmApprove` 0 | `StorPollMode` 1 | lists `XhciInterruptMode = 1`, `XhciSilentInstall = 1` (the rest under a scroll) |
+| XP, 96 DPI (fresh) | 0 to 1 | `XhciForceBulkOnly` 0 to 1 | 0 | `pollmode` 0 | `XhciInterruptMode = 1`, `XhciForceBulkOnly = 1`, `XhciCmApprove = 0` |
+| 7, 96 DPI (update over `2.4.0.0`) | 2 to 3 | 0 to 1 | 0 | `pollmode` 1 | `= 3`, `= 1`, `= 0` |
+| 7, 120 DPI | 2 to 3 | 0 to 1 | 0 | `pollmode` 0 | `= 3`, `= 1`, `= 0` |
+
+Each value was in its box on every return.
+
+- **The Advanced dialogs** (43.10's; read here once each, not a 43.11
+  point): the USB one on 7 at 96 DPI and on 98 SE, `XhciFastPollFsLs`'s
+  list whole, the dialog inside 640x480; the Thunderbolt one on 7 at 120
+  DPI, `XhciCmLogVerbosity`'s list whole.
+
+### Seen on the way, not 43.11's points
+
+- **98 SE with no controller listed has no USB settings page.** On the
+  pristine 98 SE, its Add New Hardware wizard for the controller
+  cancelled, "What was found" says no device is present and the wizard
+  goes from Components to the Thunderbolt page: a value with no
+  controller stays off the pages (section 5.4). The 98 SE leg was
+  therefore read on the same install with `3.1.0.0` on the controller,
+  as an update.
+- **7 at 120 DPI on 800x600**: the window (about 635 by 575) is taller
+  than the work area; its frame below the buttons sits under the
+  taskbar, the buttons whole. A screen size, not the pages' layout.
+- **Components**: with the keyboard, ticking Thunderbolt and then Tab,
+  Space on Stor98 left it unticked on all four; a second Space ticked
+  it. Not read further (the Components page is not 43.10's).
+- **`XhciCmLogVerbosity`'s value 4** is listed as a bare "4" in the
+  Thunderbolt Advanced dialog (the table carries four meanings, for 0 to
+  3), and the note reads "4: allowed."; its sentence is in the note's
+  NOTE. A text, not the layout.
+- **The cut's text checks refuse HEAD**: `make-release.ps1` stopped on
+  two readme lines past 78 columns, `xhciinst\README.TXT` line 313 ("...
+  it never changes it.", from the 43.34 merge) and `xhcitr\README.TXT`
+  line 90 ("... On Windows 2000 without administrator", from 43.52). The
+  test package was staged with both lines rewrapped in the working tree
+  for that run only; neither change is committed here.
+
+### Owed
+
+Nothing for 43.11. The three findings above are for the owner; the two
+readme lines must be rewrapped before the `3.2.0.0` cut.
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on
