@@ -3894,6 +3894,18 @@ or says it was found by reading the code.
   "What this is"), or disable driver signature enforcement at every start
   (F8); otherwise the controller sits at Code 39 on Vista, Code 52 on 7, and
   nothing on it works.
+- **Windows ME: plugging and unplugging a USB mouse (or another USB HID
+  device) rapidly, over and over, can stop the machine.** The taskbar clock stops, typing
+  does nothing, and only a restart ends it. The wait is in ME's own
+  `hidusb.sys` (4.90): when a HID device's start fails because the device
+  has already been pulled, ME stops it, and the removal that follows waits
+  for ever inside `hidusb.sys`, before this driver is asked anything.
+  Windows 98 SE's `hidusb.sys` does not have this flaw. It was seen in a
+  virtual machine after 4 to 17 back-to-back plug and unplug cycles at a
+  few seconds each; ME's own USB stack, on a UHCI controller in the same
+  virtual machine, ran 160 such cycles without stopping, so this driver
+  reaches it far more readily. Plugs a few seconds apart, each left until
+  the device worked, did not reach it.
 - **Windows 98 SE: a USB audio device can wedge the machine as it loads,
   and it is not this driver's doing.** After a cold boot, attaching a USB
   audio device wedges the guest often, with the taskbar clock stopped and
