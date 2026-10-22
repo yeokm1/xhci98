@@ -239,6 +239,9 @@ typedef struct _CM_CFGWK {
     ULONG Takeover;         /* members whose call worker is live: a claim
                                whose removal failed may become their
                                vanished transaction (task 43.47)         */
+    ULONG ClaimFull;        /* a claim found no free record in the
+                               operation in progress: its removal is owed,
+                               so no re-enumeration follows it            */
     ULONG Retry;            /* member calls owed after a failure          */
     ULONG RetryVanish;
     ULONG RetryAt;          /* ms clock of the last failure               */
@@ -1460,6 +1463,9 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
                              &keptEntry, &keptSeq, &keptGen);
     }
     if (claim == 0) {
+        if (!owned) {
+            w->ClaimFull = 1;
+        }
         cmWkLog(w, "cm.vanish.claim.refused",
                 (w->Port[i].Bdf << 8) |
                     (owned ? 1UL : (textOk ? 2UL : 3UL)));
@@ -2048,6 +2054,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         w->C.CallFailures++;
         return FALSE;
     }
+    w->ClaimFull = 0;
     if (removeVanished) {
         idCount = cmWkBusIds(p->Bdf, ids, CM_WK_BUS_FUNCTIONS);
         complete = FALSE;
@@ -2099,6 +2106,12 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     }
     if (!cmWkCurrent(w, i, gen)) {
         return TRUE;
+    }
+    if (w->ClaimFull) {
+        /* Task 43.47: a vanished child found no free record for its
+         * claim, so it was not removed: failed, tried again (its removal
+         * before any re-enumeration of the member). */
+        return FALSE;
     }
     if (!cmWkPruneClear(w, i)) {
         /* A prune posted during the operation: paid first (failed,

@@ -3907,7 +3907,15 @@ revised:
 - **Not built.** A function that answers again at its location before
   the sweep's first reading - a re-plug within the down's own poll - is
   taken as present, as before this task, and its old devnode is left to
-  Windows.
+  Windows. The fallback (no call worker with an open
+  route, or the host interface lost) keeps its own order: the
+  exposure is made before the worker's request that removes the
+  vanished children, as before this task, so there a claim can come
+  after that member's `UP`; the loss and the removal-only request
+  expose nothing for their member while they run (the host interface
+  lost, the member barred). A fallback claim that finds no free record
+  removes nothing and fails the member's request, retried, so no
+  re-enumeration follows it.
 
 *Host vectors* (`test_cm_eject`): a vetoed vanished child retried every
 2 s with the gate up, and released at its removal; a re-plug of the
