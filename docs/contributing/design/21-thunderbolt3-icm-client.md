@@ -3610,7 +3610,11 @@ this, reviewed and revised:
   transaction and lowers the gate, and the held tunnel-down
   re-enumeration then runs. A record a later start adopts has seen no
   tunnel down of that start, so it is retired by its devnode verified
-  gone, or by a tunnel down after the adoption.
+  gone, by a tunnel down after the adoption, or (task 43.47) by a sweep
+  of that start reading its unit vanished, which stands for the tunnel
+  down with the same prerequisites: the member's statement decided and
+  any acknowledgement wait ended before the unit's function is read
+  gone.
 - **The transactions' clock** is the driver's own, from the tick count,
   shared by every thread that steps a record, so a deadline survives the
   NHI's stop and a later start's adoption. The records are image-static
@@ -3734,56 +3738,66 @@ revised:
   it enters the member's **sweep** at once, before its gates are looked
   at, and the re-enumeration it asked is held behind the member's gate
   without the removal (it is the sweep's now), its publication mode and
-  marking window kept with it. The sweep is a read, made on the member's
-  call worker as one operation: the identities answering on the member's
-  secondary bus (the reading the worker's removal made, a Retry Status or
-  an unread function leaving it incomplete), the member's devnode found
-  by its path, and its children walked; a child whose instance id names a
-  vendor and device that no longer answer is vanished. One vanished child
-  is reported per reading, with its devnode and instance id, and the next
-  reading follows at once, until a complete reading finds none that is
-  not already a record's. A reading that is not complete is made again
-  every 2 s, with no deadline, the member held meanwhile (shown "a
-  removal is in progress"): a vanished child is never left unread for a
-  time limit. A decision pending on the member has its worker first (the
-  slot reading); no reading is submitted while the CONFIGMG worker has a
-  re-enumeration of the member admitted and not returned, nor while the
-  host interface is lost. The removal gate does not hold the sweep: it
-  calls nothing that removes, so the children are read as close to the
-  down as the worker allows, and only their removals wait for the
-  statement's decision and its acknowledgement.
+  marking window kept with it. The sweep is made on the member's call
+  worker, one **reading** at a time: the identities answering on the
+  member's secondary bus (the reading the worker's removal made, a Retry
+  Status or an unread function leaving it incomplete), the member's
+  devnode found by its path, and its children walked; a child whose
+  instance id names a vendor and device that no longer answer is vanished.
+  Every vanished child is **recorded by the reading itself, the moment it
+  is read**, under the records' lock, in image-static state - so no
+  observation lives only in a call's result, and neither a re-plug before
+  the next reading nor the NHI's stop can lose it (what a reading recorded
+  stands whatever becomes of its result). A complete reading that
+  recorded nothing new ends the sweep; one that recorded something is
+  followed by another at once. A reading that is not complete is made
+  again every 2 s, with no deadline, the member held meanwhile (shown "a
+  removal is in progress"). A decision pending on the member has its
+  worker first (the slot reading); no reading is submitted while the
+  CONFIGMG worker has a re-enumeration of the member admitted and not
+  returned, nor while the host interface is lost. The removal gate does
+  not hold the sweep: a reading calls nothing that removes, so the
+  children are read as close to the down as the worker allows, and only
+  their removals wait for the statement's decision and its
+  acknowledgement.
 - **The sweep is image-static, like the records.** A sweep is kept per
   member location in the image (eight), not in the NHI's extension: the
-  NHI's stop detaches it with its reading's outcome (the reading's late
-  taker marks it to be read again), and a later start whose set names
-  the member adopts it before any exposure or re-enumeration of that
-  member, as it adopts a record. A vanished child a reading found when no
-  record was free is kept in the sweep (its devnode and instance id) and
-  made a record as soon as one is free, never read again for it, so a
-  re-plug between two readings cannot lose it.
-- **One record per vanished child, before its query.** A vanished child
-  becomes a record of 43.18's kind (`CM_EJ_F_VANISH`: no tool, no result
-  slot, no request) under the records' lock, and only if no record
-  already names that devnode with that instance id; the record exists
-  before anything irreversible is called, so the obligation an accepted
-  query creates always has its record. The records become sixteen. Who
-  names a child: a vanished record owns it; an eject whose query was
-  accepted owns it too, and the sweep gives that eject the child's
-  disappearance (as a tunnel down on its member would: its own removal
-  then follows, after the statement's decision and acknowledgement and
-  its unit read gone, part 1's rule), which also retires an eject a later
-  start adopted after an unplug made while it was stopped; a CONFIGMG
-  worker's claim (below) or an eject whose query is not yet accepted
-  holds it for now. A child held for now is kept in the sweep by its
-  devnode and instance id (four a sweep; more are read again), and the
-  sweep does not end while one is kept: once its holder lets it go
-  without owning it (a claim freed after a refusal, an eject that ended
-  refused) it is made a vanished record at once, without being read
-  again, so a re-plug meanwhile cannot lose it; once its holder owns it
-  it is that holder's. An eject that finds its unit's devnode already
-  named by a record, a sweep or a claim when its devnode is found is
-  answered as not found, nothing called, under the records' lock, so an
-  eject and a claim never both query one devnode.
+  NHI's stop detaches it (a reading out then reaches its late taker,
+  which marks the sweep to be read again; what that reading recorded
+  stands), and a later start whose set names the member adopts it before
+  any exposure or re-enumeration of that member, as it adopts a record.
+- **What a reading records, child by child.** A vanished child no record
+  names becomes a record of 43.18's kind (`CM_EJ_F_VANISH`: no tool, no
+  result slot, no request) before anything irreversible is called, so the
+  obligation an accepted query creates always has its record; the
+  records become sixteen. **Capacity:** with none free, the first such
+  child is kept in the sweep by its devnode and instance id and made a
+  record as soon as one is free, never read again for it, and no further
+  reading is made until it is; a child beyond it in the same reading is
+  read again then (sixteen records, against at most four members with in
+  practice one child each, make this a backpressure rule, not a path a
+  leg reaches). A child a vanished record already names is that record's.
+  A child an **eject whose query was accepted** names is given its
+  disappearance (as a tunnel down on its member would: the eject's own
+  removal then follows, after the statement's decision and
+  acknowledgement and its unit read gone, part 1's rule), which also
+  retires an eject a later start adopted after an unplug made while it
+  was stopped; until that eject is retired it holds the member's gate and
+  the CONFIGMG worker's barrier as a vanished record does, and its
+  retirement asks for the prune walk below. A child **held without being
+  owned** - by a CONFIGMG worker's claim (below) or an eject whose query
+  is not yet accepted - makes that holder carry the vanished child's
+  obligation (it is marked so, in its own record, which keeps the devnode
+  and instance id): the holder holds the gate and the barrier until it is
+  retired, an eject so marked whose unit's disappearance is then its
+  evidence as above, and a holder that lets the child go without
+  removing it (a claim refused or never queried, an eject refused or
+  answered not found) becomes the vanished child's transaction itself,
+  in its query phase - never freed, never read again. An eject that
+  finds its unit's devnode already named by a record, a sweep or a claim
+  when its devnode is found is answered as not found, nothing called,
+  under the records' lock, so an eject and a claim never both query one
+  devnode.
 - **Its course.** `Query_Remove_SubTree` (a call on the member's worker,
   its instance id read back first as every call of a record is), made
   only while the member's removal gate is down (no decision pending, no
@@ -3810,12 +3824,13 @@ revised:
   retries is such a post: the returning drive is exposed and enumerated
   only after the old devnode is removed, never served by it. The domain's
   CONFIGMG worker holds the same barrier on its own side
-  (`CmEjectVanishHeld`: a sweep, a vanished record or a claim on the
-  member not retired), read under its lock in the admission that marks a
-  re-enumeration in flight (`cmWkEnumAdmit`) and before each request's
-  operation: no re-enumeration of such a member is made from any request
-  (the loss's own included), and one refused for it is retried as a
-  failed one is. Another member's work goes on (decision V5).
+  (`CmEjectVanishHeld`: a sweep, a vanished record, a claim, or an eject
+  given or carrying a vanished child, on the member and not retired),
+  read under its lock in the admission that marks a re-enumeration in
+  flight (`cmWkEnumAdmit`) and before each request's operation: no
+  re-enumeration of such a member is made from any request (the loss's
+  own included), and one refused for it is retried as a failed one is.
+  Another member's work goes on (decision V5).
 - **Its retirement, and the worker's sets.** A vanished record that is
   retired - removed, verified gone, by the thread, the detached worker or
   a late taker - is not freed at once: it stays, still holding the gate,
@@ -3857,20 +3872,28 @@ revised:
   worker made left in place for the record to withdraw on success - and
   is never asked again; the worker's own stale-request rescan is then
   not made (the re-enumeration it owed waits for the retirement). A
-  refused query frees a loss's or a removal-only request's claim (their
-  rule: settled, the child kept retained), but makes a vanished child's
-  claim the vanished transaction in its query phase, its retries owed. A
-  takeover is made only for a member whose call worker is live (the
-  thread tells the CONFIGMG worker which): otherwise nothing could make
-  the transaction's calls, so a refusal is settled as before, and an
-  accepted query whose removal failed **parks** its claim (still
-  `CM_EJ_P_CLAIMED`, the query recorded accepted, its first attempt and
-  its request kept, the member's gate up): the worker, coming back to the
-  devnode, takes its own parked claim up again and makes the removal
-  alone - never a second query - and a start whose member has a live call
-  worker takes a parked claim over as the transaction. The record a
-  takeover makes belongs to no start and is adopted by the running one as
-  a stopped start's is.
+  refusal frees a loss's or a removal-only request's claim (their rule:
+  settled for that request, the child kept retained; the removal-only
+  request itself is sent again by record 22 section 7.7's recovery,
+  every `CM_U4_RETIRE_RETRY_MS`, until the devnode is seen retired), but
+  makes a vanished child's claim - the worker's own vanished-child
+  removal, or a claim a sweep marked - the vanished transaction in its
+  query phase, its retries owed. A takeover is made only for a member
+  whose call worker is live (the thread tells the CONFIGMG worker which):
+  otherwise nothing could make the transaction's calls, and the claim
+  **parks** instead (still `CM_EJ_P_CLAIMED`, the member's gate and the
+  barrier up, its state kept: a vanished child's refused query, or an
+  accepted query with its first attempt and its request). Parked claims
+  have a **scheduler of their own** on the CONFIGMG worker, run on every
+  tick whatever the members' admission and outside the loss's attempt
+  count: each is taken up again 2 s after its last attempt - its devnode's
+  instance id read back first (gone: freed; not read: parked again) - and
+  makes its query again where it was refused, or its removal alone where
+  it was accepted (never a second query), its request withdrawn on
+  success; it parks again on a refusal or a failure. A start whose
+  member has a live call worker takes a parked claim over as the
+  transaction. The record a takeover makes belongs to no start and is
+  adopted by the running one as a stopped start's is.
 - **Not built.** A function that answers again at its location before
   the sweep's first reading - a re-plug within the down's own poll - is
   taken as present, as before this task, and its old devnode is left to
@@ -3884,12 +3907,14 @@ after the retirement); the NHI stopped mid-retry and the record adopted
 by the detached worker, never asked again); a removal that keeps failing
 past 30 s (blocked, no teardown, still retried, the block lifted by its
 success); the takeovers (a claim refused, removed, and failed into the
-transaction, never queried again; a vanished child's refused claim
-made the transaction; a parked claim resumed for its removal alone and
-taken over by a start); two members, one held while the other's work
-goes on; the sweep's reading, its retries with no deadline, a found child
-kept while no record is free, and a child under a claim or an unaccepted
-eject kept and made a record when its holder lets go.
+transaction, never queried again; a vanished child's refused or
+unqueried claim made the transaction; with no call worker a refused
+query and a failed removal parked, retried every 2 s by the worker's
+scheduler - the query again, then the removal alone - and a parked claim
+taken over by a start; a loss's refusal settled); two members, one held
+while the other's work goes on; the sweep's readings, their retries with
+no deadline, a full reading's kept child, a request while a reading is
+out, and the reading's verdict.
 
 *Legs* (on 98 SE and ME with the bundled Stor98, under the ICM client and
 under the USB4 profile): an unplug with a file open on the drive (the
