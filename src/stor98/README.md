@@ -212,9 +212,10 @@ it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 - **StorPollMode** (`pollmode=`): 0 polls only when there is no usable interrupt; 1
   always polls.
 - **StorPollBusyUs** (`pollbusyus=`) is the polling period while requests are
-  outstanding. It only takes full effect on Windows 98 SE and ME. On Windows 2000 to 10
+  outstanding. It only takes full effect on Windows 98 SE and ME. On Windows 2000 to 8.1
   the port rounds every timer period up to the OS clock tick (10-15.6 ms), so Stor98
-  uses at least 10 ms there and a value below that changes nothing. A shorter period
+  uses at least 10 ms there and a value below that changes nothing; Windows 10's
+  rounding is not read yet (Stor98 asks for the same 10 ms minimum there). A shorter period
   completes requests sooner, at a higher CPU cost while busy.
 - **StorPollIdleMs** (`pollidlems=`) is the period with nothing outstanding and nothing
   left to flush. 0 stops polling when idle, as with an interrupt; the timer still runs
@@ -222,8 +223,8 @@ it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 - **StorPollSpinUs** (`pollspinus=`) lets the driver keep checking for a completion for
   that long right after sending a request, which helps short requests at a CPU cost (a
   busy-wait of at most that long per request while one is outstanding, only in the
-  polling mode). The defaults differ by family: on Windows 2000 to 10 the timer cannot run
-  faster than the OS clock tick, so the spin is what keeps polling close to interrupt
+  polling mode). The defaults differ by family: on Windows 2000 to 8.1 the timer cannot run
+  faster than the OS clock tick (10's is not read yet, and it takes 2000's defaults), so the spin is what keeps polling close to interrupt
   throughput; on 98 SE and ME the 1 ms timer works and the CPU is scarcer.
 
 Measured on Windows 98 SE in the emulator (QEMU TCG, polling forced, before the 512 KiB
