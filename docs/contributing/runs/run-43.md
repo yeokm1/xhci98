@@ -668,6 +668,15 @@ first checked to move the pointer under ME's own stack.
   gone. Why the configuration manager is that much slower here was not
   read; the log shows no request of its waiting on this driver.
 
+Note, 2026-10-22 (task 43.54, `runs/run-43-54.md`): this conclusion does
+not hold. With each mouse pulled a fixed 1.0 s after its plug, this driver
+had the device addressed and started sooner than ME's own stack (medians
+0.16 and 0.30 s against 0.58 and 0.66 s), and ME's own stack stopped the
+same way, at cycles 58 and 8, with the same `hidusb.sys` state in memory.
+The 160 clean cycles above came from the series' pointer detector, which
+held most devices on ME's own stack past their START and, under this
+driver, often fired before any START could come.
+
 ### Candidate fixes (none made)
 
 No fix is clear and small, so none was committed. In the order the owner
@@ -709,7 +718,8 @@ opened as task 43.53 with 1 noted there as the later option for ME, and
 ### Owed
 
 - Why ME's configuration manager starts this driver's PDOs so much later
-  than its own stack's (not read; 43.53's ME line).
+  than its own stack's (not read; 43.53's ME line). Read by 43.54
+  (2026-10-22): it does not; see the note above.
 
 ## 43.52 two XHCITR defects from 43.45's legs: the code (2026-10-22)
 

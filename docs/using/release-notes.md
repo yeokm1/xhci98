@@ -3904,12 +3904,14 @@ or says it was found by reading the code.
   `hidusb.sys` (4.90): when a HID device's start fails because the device
   has already been pulled, ME stops it, and the removal that follows waits
   for ever inside `hidusb.sys`, before this driver is asked anything.
-  Windows 98 SE's `hidusb.sys` does not have this flaw. It was seen in a
-  virtual machine after 4 to 17 back-to-back plug and unplug cycles at a
-  few seconds each; ME's own USB stack, on a UHCI controller in the same
-  virtual machine, ran 160 such cycles without stopping, so this driver
-  reaches it far more readily. Plugs a few seconds apart, each left until
-  the device worked, did not reach it.
+  Windows 98 SE's `hidusb.sys` does not have this flaw. Any USB stack
+  can reach it, ME's own included: it was seen in a virtual machine after
+  4 to 17 back-to-back plug and unplug cycles under this driver, and ME's
+  own USB stack, on a UHCI controller in the same virtual machine, stopped
+  the same way after 8 and 58 cycles of a series that pulled each mouse
+  one second after its plug. This driver starts a new device no later
+  than ME's own stack does - sooner, in those readings. Plugs a few
+  seconds apart, each left until the device worked, did not reach it.
 - **Windows 98 SE: a USB audio device can wedge the machine as it loads,
   and it is not this driver's doing.** After a cold boot, attaching a USB
   audio device wedges the guest often, with the taskbar clock stopped and
