@@ -16602,59 +16602,82 @@ static int vsd_do(int op, const char *file, const char *pend)
 }
 
 /* WININIT.INI's [rename] lines whose destination is the old name: own
- * when the source is this installer's S98VSD.TMP, other otherwise. 0 when
- * the section cannot be read whole. */
+ * when the source is this installer's S98VSD.TMP, other otherwise. The
+ * file is read whole and parsed here, so a read that fails is never an
+ * empty section: 0 unless the file was read, or is not there at all. */
 static int vsd_old_lines(const char *ini, const char *old, const char *oldS,
                          const char *tmp, const char *tmpS, int *own,
                          int *other)
 {
-    char *sec;
+    char *buf;
     char *p;
-    DWORD n;
+    DWORD size = 0;
+    DWORD err;
+    int inRename = 0;
 
     *own = 0;
     *other = 0;
-    sec = (char *)malloc(32768);
-    if (sec == NULL) {
+    if (GetFileAttributesA(ini) == (DWORD)0xFFFFFFFF) {
+        err = GetLastError();
+        return err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND;
+    }
+    buf = read_file(ini, &size);
+    if (buf == NULL) {
         return 0;
     }
-    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
-    if (n >= 32768 - 2) {
-        free(sec);
-        return 0;
-    }
-    if (n == 0 && GetFileAttributesA(ini) != (DWORD)0xFFFFFFFF) {
-        /* Nothing read from a file that is there: an empty section only
-         * when the file itself opens for reading. */
-        HANDLE h = CreateFileA(ini, GENERIC_READ, FILE_SHARE_READ |
-                               FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    for (p = buf; *p != '\0';) {
+        char line[2 * INST_PATH_CHARS];
+        char *end = p;
+        char *a;
+        char *z;
+        char *eq;
+        size_t len;
 
-        if (h == INVALID_HANDLE_VALUE) {
-            free(sec);
+        while (*end != '\0' && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        len = (size_t)(end - p);
+        if (len >= sizeof(line)) {
+            /* A line this long names no path this installer wrote, but
+             * it cannot be read as one either: unread. */
+            free(buf);
             return 0;
         }
-        CloseHandle(h);
-    }
-    for (p = sec; n != 0 && *p != '\0'; p += strlen(p) + 1) {
-        char line[2 * INST_PATH_CHARS];
-        char *eq;
-
-        inst_copy(line, p, sizeof(line));
-        eq = strchr(line, '=');
-        if (eq == NULL) {
+        memcpy(line, p, len);
+        line[len] = '\0';
+        p = end;
+        while (*p == '\r' || *p == '\n') {
+            p++;
+        }
+        for (a = line; *a == ' ' || *a == '\t'; a++) {
+        }
+        z = a + strlen(a);
+        while (z > a && (z[-1] == ' ' || z[-1] == '\t')) {
+            *--z = '\0';
+        }
+        if (*a == '[') {
+            inRename = inst_eq(a, "[rename]");
+            continue;
+        }
+        if (!inRename || *a == ';' || (eq = strchr(a, '=')) == NULL) {
             continue;
         }
         *eq = '\0';
-        if (!vsd_names(line, old, oldS)) {
+        for (z = eq; z > a && (z[-1] == ' ' || z[-1] == '\t'); ) {
+            *--z = '\0';
+        }
+        for (z = eq + 1; *z == ' ' || *z == '\t'; z++) {
+        }
+        if (!vsd_names(a, old, oldS)) {
             continue;
         }
-        if (vsd_names(eq + 1, tmp, tmpS)) {
+        if (vsd_names(z, tmp, tmpS)) {
             (*own)++;
         } else {
             (*other)++;
         }
     }
-    free(sec);
+    free(buf);
     return 1;
 }
 
@@ -16728,6 +16751,9 @@ static int vsd_old_name(void)
             ownLines = -1;
             break;
         }
+        /* 9x keeps profile writes in a cache: flushed before the file is
+         * read back. */
+        WritePrivateProfileStringA(NULL, NULL, NULL, ini);
         if ((k & 1) != 0 &&
             !vsd_old_lines(ini, old, oldS, tmp, tmpS, &ownLines, &otherLines)) {
             /* Unread, nothing shows the line gone: the failure below. */
