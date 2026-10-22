@@ -7140,12 +7140,12 @@ static void check_results(void)
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
                    changedReboot[c]) {
             /* 32-bit Vista and 7 hold the controller until the helper's
              * restart (release notes, "Installing", step 3). */
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
                    (d->Problem == 52UL || d->Problem == 39UL) &&
                    !testSigningConfirmed) {
             out("  %s does not load: test-signing mode is needed (see the "
@@ -7298,11 +7298,12 @@ static void testsigning_note0(void)
 
 /* The note for the connection manager alone (record 23 section 5.10,
  * revision 13): the binary read is xhcicm.sys, the device that shows the
- * code the NHI, and on 8 and 8.1 the Secure Boot condition. */
+ * code the NHI, and on 8, 8.1 and 10 (revision 27) the Secure Boot
+ * condition. */
 static void testsigning_note_cm(void)
 {
     char opt[512];
-    int w8 = envNow.Major == 6 && envNow.Minor >= 2;
+    int w8 = envNow.Major > 6 || (envNow.Major == 6 && envNow.Minor >= 2);
 
     if (!stScreens &&
         reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
@@ -7338,11 +7339,11 @@ static void testsigning_note_cm(void)
             "it.\n");
     }
     if (w8) {
-        out("Windows 8 and 8.1: test-signing mode can be turned on only with "
-            "Secure Boot\noff in the computer's firmware setup. The start "
-            "without signature enforcement\nis Advanced startup, Troubleshoot, "
-            "Startup Settings, \"Disable driver\nsignature enforcement\", at "
-            "every start.\n");
+        out("Windows 8, 8.1 and 10: test-signing mode can be turned on only "
+            "with Secure\nBoot off in the computer's firmware setup. The "
+            "start without signature\nenforcement is Advanced startup, "
+            "Troubleshoot, Startup Settings, \"Disable\ndriver signature "
+            "enforcement\", at every start.\n");
     }
     out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
         "(52 on 7).\nIf this start is one without signature enforcement, go "
