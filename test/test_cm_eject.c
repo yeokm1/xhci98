@@ -880,8 +880,8 @@ static VOID test_bytewrite(VOID)
     CHECK(!CmEjByteWrite(rd, wr, NULL, 0, 0x42, 2, 0), "width 2 refused");
     space[0x11] = 0;
     CHECK(CmEjByteWrite(rd, wr, NULL, 0, 0x44, 4, 0xDEADBEEFUL), "dword");
-    CHECK(!CmEjQualified9x(FALSE), "98 SE not admitted yet");
-    CHECK(!CmEjQualified9x(TRUE), "ME not admitted yet");
+    CHECK(CmEjQualified9x(FALSE), "98 SE admitted (its G3 reading)");
+    CHECK(CmEjQualified9x(TRUE), "ME admitted (its G3 reading)");
 }
 
 int main(void)

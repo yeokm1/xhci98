@@ -66,9 +66,9 @@
  *     is the documented later-than-stage-2 signal), the operating system
  *     and architecture are a pair the ordering is qualified on (Windows
  *     2000 on x86, XP x64 on amd64; not XP x86 until gate G3 runs there,
- *     not Vista or 7, whose native hot plug races the connection manager,
- *     not 98 SE or ME until each is admitted on its own reading,
- *     cm_eject.c CmEjQualified9x), and the channel's own reading of the
+ *     not Vista or 7, whose native hot plug races the connection manager;
+ *     98 SE and ME each admitted on its own reading, cm_eject.c
+ *     CmEjQualified9x), and the channel's own reading of the
  *     slot came DOWN within 2 s - on 98 SE and ME asynchronously: the
  *     decision entered, the reading made through PCI.VXD by the member's
  *     call worker, the verdict at CmNvlinkDecided (CM_NVLINK_PENDING

@@ -832,10 +832,13 @@ BOOLEAN CmEjByteWrite(CM_EJ_READ32 read, CM_EJ_WRITE32 write, PVOID context,
     return (BOOLEAN)(((back >> shift) & 0xFFUL) == (value & 0xFFUL));
 }
 
-/* Neither system's gate-G3 reading is in the run record yet (decision V4):
- * a system is admitted here once it is. */
-#define CM_EJ_QUALIFIED_98SE    0
-#define CM_EJ_QUALIFIED_ME      0
+/* Each system admitted on its own gate-G3 reading (decision V4), both read
+ * on 2026-10-22 in the emulator with this driver's qemu flavour (task
+ * 43.18, runs/run-43-18.md): 98 SE under the ICM client, ME under the USB4
+ * profile; at every point read the statement came after the stage-2 reset
+ * and quiesce, and the removal after the wait's end. */
+#define CM_EJ_QUALIFIED_98SE    1
+#define CM_EJ_QUALIFIED_ME      1
 
 BOOLEAN CmEjQualified9x(BOOLEAN me)
 {

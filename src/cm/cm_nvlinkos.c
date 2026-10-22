@@ -59,7 +59,7 @@ static CM_NV_SHADOW cmNvShadow[STOR98LS_ENTRIES];
  * CmNvlinkPublishUp's record (task 42-A.6); under cmNvLock. */
 static ULONG cmNvTunnel[STOR98LS_ENTRIES];
 static BOOLEAN cmNvNt;
-static BOOLEAN cmNvOsQualified; /* 2000 x86, XP x64 (record 21 7.2)      */
+static BOOLEAN cmNvOsQualified; /* 2000, XP x64, 98 SE, ME (21 7.2)      */
 static PCALLBACK_OBJECT cmNvObject;
 static PVOID cmNvRegistration;
 static ULONG cmNvReloaded;      /* NT: an earlier load made the object    */
@@ -338,17 +338,17 @@ VOID CmNvlinkInit(VOID)
     KeInitializeSpinLock(&cmNvLock);
     cmNvNt = IoIsWdmVersionAvailable(1, 0x10);
     /* The OS and architecture pairs gate G3 qualified: Windows 2000 (x86:
-     * WDM 1.10, not 1.20) and XP x64 (amd64: below WDM 6.0, Vista). XP
-     * x86 (1.20), Vista and 7 are not admitted until their own
-     * qualification exists (record 21 section 7.2). */
+     * WDM 1.10, not 1.20), XP x64 (amd64: below WDM 6.0, Vista), and 98 SE
+     * and ME (below). XP x86 (1.20), Vista and 7 are not admitted until
+     * their own qualification exists (record 21 section 7.2). */
 #if defined(_WIN64)
     cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(6, 0));
 #else
     cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(1, 0x20));
     if (!cmNvNt) {
         /* 98 SE and ME, each on its own G3 reading (record 21 section 7.2
-         * part 2, decision V4; cm_eject.c CmEjQualified9x). Until this
-         * driver tells the two apart, both are needed. */
+         * part 2, decision V4; cm_eject.c CmEjQualified9x). Both are
+         * admitted, so nothing here tells the two apart. */
         cmNvOsQualified = (BOOLEAN)(CmEjQualified9x(FALSE) &&
                                     CmEjQualified9x(TRUE));
     }

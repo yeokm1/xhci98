@@ -725,9 +725,9 @@ static BOOLEAN cmEj9x(PCM_NHI nhi)
                      nhi->Reenum.Callwk != NULL);
 }
 
-/* Until the two systems are told apart here, a 9x statement needs both
- * admitted (decision V4 admits them one at a time: the version read that
- * separates them comes with the first admission). */
+/* A 9x statement needs both systems admitted. Decision V4 admits them one
+ * at a time; both are, each on its own reading, so no version read has to
+ * tell them apart here. */
 static BOOLEAN cmEjQualified(VOID)
 {
     return (BOOLEAN)(CmEjQualified9x(FALSE) && CmEjQualified9x(TRUE));

@@ -228,6 +228,8 @@ static void test_outcome(void)
     CHECK_EQ(inst_ej_rejected(CM_EJ_WHY_NO_CHANNEL, &text),
              INST_EJ_UNSUPPORTED, "no channel: exit 1");
     CHECK(strstr(text, "Stor98") != NULL, "says why");
+    CHECK(strstr(text, "Shut down Windows before you unplug it") != NULL,
+          "says what to do instead");
     CHECK(strstr(inst_ej_uncertain_text(), "did not answer") != NULL,
           "the uncertain text");
 }

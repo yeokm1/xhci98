@@ -680,9 +680,9 @@ beside a key that proves it belongs to the current boot,
 `HKEY_DYN_DATA\Stor98LinkState`, which `xhcicm.sys` answers for as long
 as Windows runs. The bundled Stor98 reads it on every target:
 
-- On Windows 2000 and XP x64, where `xhcicm.sys` can prove that the
-  drive's link went down and the drive was reset (today only in its
-  emulator), it says so on the channel, Stor98 acknowledges, and the
+- On Windows 2000, XP x64, 98 SE and ME, where `xhcicm.sys` can prove
+  that the drive's link went down and the drive was reset (today only in
+  its emulator), it says so on the channel, Stor98 acknowledges, and the
   drive is removed at once rather than after Stor98's own deadline of
   about 5 seconds.
 - Everywhere else nothing is stated: Stor98 detects a removed drive by
@@ -692,10 +692,10 @@ as Windows runs. The bundled Stor98 reads it on every target:
   after it starts). From `3.2.0.0` an eject with the install or tray tool
   goes through `xhcicm.sys`, which asks Stor98 for a clean stop and waits
   for its answer before Windows removes the drive ("Removing a Thunderbolt
-  or USB4 device safely"). The link-down statement is prepared there but
-  not made: each of 98 SE and ME is admitted only once its own reading of
-  the statement's ordering exists, and neither has one yet, so for an
-  unplugged drive Stor98 relies on its own deadline.
+  or USB4 device safely"). From `3.2.0.0` the link-down statement is made
+  there too, as on 2000 and XP x64 above: each of 98 SE and ME was
+  admitted on its own reading of the statement's ordering in the
+  emulator.
 
 ### The connection manager's registry values
 

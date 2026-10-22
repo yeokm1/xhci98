@@ -2447,8 +2447,9 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   are a pair the ordering is qualified on: Windows 2000 (x86) and XP x64
   (amd64), where gate G3 passed and where nothing but this driver removes
   the device - not XP x86 (G3 not run there yet), not Vista or 7 (native
-  hot plug races the connection manager; G3 not run), not 98 SE or ME (no
-  reading). This qualification list is an orchestrator decision of
+  hot plug races the connection manager; G3 not run); 98 SE and ME were
+  added on 2026-10-22, each on its own reading (the 9x half below, part
+  2). This qualification list is an orchestrator decision of
   2026-10-15 for the owner to confirm. Otherwise the entries on that member
   whose function no longer answers move to `IN_USE` alone (`UP` cleared,
   no `DOWN_QUIESCED`), which Stor98 ignores, and its gone deadline (MD-1)
@@ -3018,7 +3019,14 @@ point section 7.2's budget names and under a saturated queue - read by
 stop, Stor98's MD-5, so its receiver's behaviour is its own). Until a
 system's reading is in `runs/run-42.md`, the verdict there stays
 `CM_NVLINK_UNQUALIFIED` (9) as today, and the release notes say which
-systems make the statement (decision V4). The other prerequisites of the
+systems make the statement (decision V4). Both readings were taken on
+2026-10-22 by task 43.18 on the owner's answer of that day, in
+`runs/run-43-18.md` (Phase 43's sheet, not `run-42.md`): on 98 SE under
+the ICM client and on ME under the USB4 profile, the statement came
+after the stage-2 reset and quiesce at every point read - an idle unplug,
+a read held at its fetch, every read held, an unplug at the `UP` of a
+re-plug - and the removal after the acknowledgement; both systems are
+admitted. The other prerequisites of the
 condition (the emulator's SHPC bridge, the single member under the ICM,
 the known correspondence under USB4) are unchanged.
 
@@ -3341,7 +3349,12 @@ this, reviewed and revised:
   (`CM_NVLINK_UNQUALIFIED`) after its reading, the failed branch's
   isolation is never available on 9x (so it blocks under both connection
   managers), and a clean removal's teardown under the USB4 profile is made
-  without its `DOWN_QUIESCED`.
+  without its `DOWN_QUIESCED`. *Since 2026-10-22* both systems are
+  admitted, each on its own G3 reading (`runs/run-43-18.md`), so no
+  version read was needed: a 9x decision now follows the condition as on
+  2000 and XP x64, the failed branch's isolation is available where the
+  condition holds, and the USB4 profile's clean-removal teardown carries
+  its `DOWN_QUIESCED`. Those two eject paths are read by 43.19's legs.
 - **Not built.** XHCITR's tray does not poll a result after the tool's
   wait has ended; the port's two lines, read from the record's masks, are
   what show a transaction that outlived it.
