@@ -21,7 +21,10 @@ for k in range(npe):
     need = U(0x2c) if pn == npages else ps   # a whole page, but the module's last
     if e[3] != 0 or pn < 1 or pn > npages or dp + (pn - 1) * ps + need > len(d):
         print('callcheck: code page %d: type %d, number %d: not a whole file page this check can read' % (k, e[3], pn)); sys.exit(1)
-    src = d[dp + (pn - 1) * ps: dp + pn * ps]; img[k * ps:k * ps + len(src)] = src
+    if need > ps:
+        print('callcheck: the last page size %d exceeds the page size %d' % (need, ps)); sys.exit(1)
+    src = d[dp + (pn - 1) * ps: dp + (pn - 1) * ps + need]; img[k * ps:k * ps + len(src)] = src
+mapped = min(vs, sum(ps for _ in range(npe)))
 pub = {}
 mt = open(mp, encoding='latin-1').read()
 for m in re.finditer(r'(?m)^\s*0001:([0-9a-f]{8})\s+(\S+)\s+[0-9a-f]{8}\s+\S+\.obj', mt):
@@ -55,8 +58,12 @@ for obj in objs:
             if base is None:
                 print('callcheck: %s: calls, but no public to place its code by' % obj); sys.exit(1)
             loc = base + cur[1] + int(m.group(1), 16); name = ext[int(m.group(2))]
+            if loc + 4 > mapped:
+                print('callcheck: %s: a call at %#x lies outside the mapped code' % (obj, loc)); sys.exit(1)
             tgt = (loc + 4 + struct.unpack_from('<i', img, loc)[0]) & 0xffffffff
             n += 1
+            if tgt >= mapped:
+                print('callcheck: %s: a call at %#x targets %#x, outside the mapped code' % (obj, loc, tgt)); sys.exit(1)
             if pub.get(name) != tgt:
                 bad += 1
                 print('MISMATCH %s at %#x: compiler %s (%s), image %#x' % (obj, loc, name, hex(pub[name]) if name in pub else '?', tgt))

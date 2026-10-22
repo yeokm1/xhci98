@@ -5774,7 +5774,13 @@ int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
  * the destination of File's bytes, then the values. */
 static int inst_vsd_clear(const INST_VSDFACTS *f)
 {
-    if (f->Dest == INST_VF_FILE) {
+    /* A destination the start (or the move) made the pending bytes is the
+     * installer's: File first, then it is removed with the rest. */
+    if (f->Pending && f->Dest == INST_VF_PENDING && !f->FileIsPending) {
+        return INST_VOP_SET_FILE;
+    }
+    if (f->Dest == INST_VF_FILE ||
+        (f->Dest == INST_VF_PENDING && f->FileIsPending)) {
         return INST_VOP_DEL_DEST;
     }
     if (f->Tmp == INST_VF_PENDING) {

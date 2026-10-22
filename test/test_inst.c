@@ -4834,6 +4834,17 @@ static void test_vsd(void)
     CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Tmp == 9 && m.Pending == 0 &&
           m.File == 0, "a done update beside a foreign .TMP: promoted, then "
           "removed; the .TMP left");
+    /* Moved into place, then cut short before File (Pending=B, the
+     * destination B, no .TMP), and another program's rename line naming
+     * S98VSD.TMP: the uninstall removes the installer's destination. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Pending = 1;
+    m.Dest = 1;
+    m.Entry = INST_VE_CONFLICT;
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Pending == 0 && m.File == 0,
+          "a moved-but-unpromoted file under a foreign line: removed");
     /* A queued update whose destination another installer replaced. */
     memset(&m, 0, sizeof(m));
     m.File = 2;

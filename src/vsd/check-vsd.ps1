@@ -91,8 +91,12 @@ foreach ($l in (Get-Content -LiteralPath (Join-Path $repo 'src\xhci_version.h'))
     if ($l -match '^#define\s+XHCI_VER_STR\s+"([^"]+)"') { $ver = $Matches[1] }
 }
 if ($ver -eq '') { Bad 'no XHCI_VER_STR in src\xhci_version.h' }
-$text = [System.Text.Encoding]::ASCII.GetString($d)
-if ($text.IndexOf("STOR98.VXD $ver") -lt 0) { Bad "no stamp 'STOR98.VXD $ver' in the image" }
+# In what the loader maps, not anywhere in the file.
+$found = $false
+foreach ($o in $mem.Keys) {
+    if ([System.Text.Encoding]::ASCII.GetString($mem[$o]).IndexOf("STOR98.VXD $ver") -ge 0) { $found = $true }
+}
+if (-not $found) { Bad "no stamp 'STOR98.VXD $ver' in the image's mapped objects" }
 
 # The release image writes to no debug port.
 if (-not $Qemu) {
