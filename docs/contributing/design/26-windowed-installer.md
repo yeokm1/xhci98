@@ -2213,15 +2213,24 @@ for every component), wherever they are.
 `\NONFREE.REC`, ASCII, CRLF, a file and not registry values because on 98
 SE and ME a registry key holds at most 64 KB of values and `NONFREE\`'s
 457 files would pass that. Its first line is `XHCI98 SET RECORD 1 <Free or
-NonFree> <Dir>`; it is made with `CREATE_NEW`, and an existing file is
-appended to only when the set's key names it and its first line is that
-line: a file of that name that is not, or that cannot be read, stops the
-set's copy (said; it is never written to or deleted). Each later line is
-`F <sha256, lower case> <full path>` and ends with CRLF; a last line
-without its CRLF is a write cut short and is dropped, and any other line
-that does not read so makes the record unreadable, which stops the set's
-copy and keeps the uninstall from deleting by it (said, with the steps
-flag).
+NonFree> <Dir>`. It is made with `CREATE_NEW` and its header written and
+flushed before the key's `Record` names it; a file of that name the key
+does not name is taken over only when its bytes are that exact header or
+a beginning of it (a run cut short while making it), and is otherwise
+left alone and stops the set's copy, as does one whose first line is not
+the header or that cannot be read (said, with the steps flag). Each later
+line ends with CRLF and is one of:
+
+- `R <8 hex digits>`: a run's token, chosen at random by each run that
+  copies, written before its first temporary file;
+- `F <sha256, lower case> <full path>`: a file this run is about to make;
+- `D <full path>`: that file made, with its recorded bytes;
+- `A <full path>`: that file not made (its temporary file deleted).
+
+A last line without its CRLF is a write cut short and is dropped; any
+other line that does not read so makes the record unreadable, which stops
+the set's copy and keeps the uninstall from deleting by it (said, with
+the steps flag).
 
 **The files.** Each listed file of the set's `SHA256.TXT` (`STAGE.TXT`,
 `READ.TXT`, `NOTICE.md`, `README.md` and `LICENSE` among them, since every
@@ -2231,26 +2240,27 @@ bytes the read hashed, is copied to `<Dir>\<relative path>` by section
 
 1. a file of that path already there - the same bytes, other bytes or
    unreadable - is left as it is and never recorded;
-2. `<full path>.~X9` is made with `CREATE_NEW`; when that fails (a file
-   of that name is in the way) the file is not copied, and nothing is
-   deleted or recorded;
-3. the line `F <hash> <full path>` is appended to the record and flushed
+2. the line `F <hash> <full path>` is appended to the record and flushed
    (`FlushFileBuffers`);
-4. the bytes are written to the temporary file, hashed as they are
-   written; when the hash is not the line's the temporary file is
-   deleted, and said;
-5. it is moved to its name with `MoveFileA`, which never replaces.
+3. the bytes are written to `<full path>.~<the run's token>`, made with
+   `CREATE_NEW`, hashed as they are written;
+4. it is moved to its name with `MoveFileA`, which never replaces, and
+   `D <full path>` is appended.
 
-A step that fails after step 2 deletes the temporary file this run made
-and leaves the rest copied. **Recovery**: a recorded file that is absent
-while its `.~X9` is there is a run cut short between steps 3 and 5, and
-that temporary file is this installer's (step 2 made it before the line
-was written): the next run, ticked or not, and the uninstall delete it. A
-run cut short between steps 2 and 3 leaves an empty `.~X9` no line names;
-it is never deleted, and the next ticked run reports it in the way. A
-file present with the recorded bytes is this installer's. The run says
-how many of the set's files are in the folder and names up to three it
-left out; a later ticked run copies what is still absent.
+When step 3 or 4 fails (the hash is not the line's, the temporary name
+is taken, a write fails) the temporary file this run made, if it made
+one, is deleted, `A <full path>` is appended, and the run goes on with
+the next file. **Recovery** (the next run, ticked or not, and the
+uninstall, before anything else of the set): for each `F` line with no
+`D` or `A` after it, the temporary file `<full path>.~<token>` of every
+token the record names is this installer's (no other program makes a
+file of that name: the token is chosen at random and recorded before the
+file is made) and is deleted, and the file is this installer's only when
+it is present with the recorded bytes; the line is then closed with `D`
+or `A`. A file present with the recorded bytes under a `D` line is this
+installer's. The run says how many of the set's files are in the folder
+and names up to three it left out; a later ticked run copies what is
+still absent.
 
 #### 6.7.6 Ticked: let Windows use them at the first plug
 
@@ -2282,30 +2292,47 @@ and said with the file that stopped it.
   run, and a recorded folder missing from `DevicePath` is appended again.
 - **2000 and later**: each INF through `SetupCopyOEMInf` (`SPOST_PATH`,
   its folder at `<Dir>` as the source), as record 23 section 5.6 stages
-  the package's own. The record is a value of the `Staged` subkey named
-  for the INF's relative path, with the data `<oem name> <the INF's
-  SHA-256>`. An INF whose value is there and whose `oem` file still holds
-  those bytes is staged already, by this installer, and is not staged
-  again. Otherwise, before the call, the value is written with the data
-  `pending` and the names of the `oem*.inf` files of `%windir%\inf` that
-  hold this INF's bytes already (usually none); after it the value's data
-  becomes the name the call returned and the INF's hash when that name is
-  not among those listed, and the value is deleted when the call failed
-  or returned a listed name. A listed name is an INF already in the store,
-  not this installer's: said ("already in the driver store as <name>, not
-  placed by this installer; Windows may use the files stored with it"),
-  and left. Whether a stored package of identical INF bytes holds other
-  driver files than this set's (record 23 section 5.7's trap, which
-  `store_matches` reads for this package's own INFs) is not read for these
-  sets: a proposal, said in the same sentence. **A `pending` value** found
-  by a later run or the uninstall is a run cut short at the call: whose
-  any new `oem*.inf` of those bytes is cannot be told, so none is adopted;
-  the value is deleted, and the run says that an interrupted run may have
-  left a copy of that INF in the driver store, with its name where one is
-  found. On 64-bit Vista and 7 the call stores an unsigned or test-signed
-  package after Windows' own publisher question, which the user answers;
-  a refusal is said and nothing recorded. Whether the driver then loads is
-  the system's signature policy, which the warning of section 6.7.4 says.
+  the package's own. **The inventory** before the call: every `*.inf` of
+  `%windir%\inf` (the `oem<n>.inf` names and the original names alike,
+  since the call may answer with either) whose bytes are this INF's. The
+  record is a value of the `Staged` subkey named for the INF's relative
+  path, written before the call with the data `pending <the inventory's
+  names>`, and after it:
+  - the call failed: the value deleted;
+  - it returned a name the inventory held: an INF already in the store,
+    not this installer's. The value's data becomes `foreign <name> <the
+    INF's SHA-256>`: the call may have pointed that stored INF's source
+    at `<Dir>` (record 23 section 5.6's flags), so its folder is kept
+    while it is there (section 6.7.8), and it is never removed. Said
+    ("already in the driver store as <name>, not placed by this
+    installer; Windows may use the files stored with it"). Whether that
+    stored package holds this set's driver files (record 23 section
+    5.7's trap, which `store_matches` reads for this package's own INFs)
+    is not read for these sets: a proposal, said in the same sentence;
+  - it returned a new name: `own <name> <the INF's SHA-256>`.
+
+  An INF whose value is `own` with its name still holding those bytes is
+  staged already and is not staged again; one whose value is `foreign`
+  is not called again either. **A `pending` value** found by a later run
+  or the uninstall is a run cut short at the call: whose any new INF of
+  those bytes is cannot be told, so none is taken as this installer's;
+  each such INF not in the recorded inventory becomes a `foreign` value
+  (its folder kept, the INF never removed), the run says an interrupted
+  run may have left it in the driver store, and with none found the value
+  is deleted. On 64-bit Vista and 7 the call stores an unsigned or
+  test-signed package after Windows' own publisher question, which the
+  user answers; a refusal is said and nothing recorded. Whether the driver
+  then loads is the system's signature policy, which the warning of
+  section 6.7.4 says.
+
+  An `own` INF is identified by its name and its bytes. Identical INF
+  bytes may come with another catalog (Microsoft's `SetupCopyOEMInf`
+  documentation): a name Windows gave this installer's INF, freed by
+  someone removing it, and given again to identical bytes from another
+  source would be taken as this installer's and removed by the uninstall
+  when no device names it. That residue is accepted (a proposal): it
+  needs another program to stage this set's own INF bytes under the name
+  this one was given.
 
 The Summary and the console's plan list what will be staged; the
 progress line says what was.
@@ -2342,18 +2369,20 @@ the records, each step only when the one before left nothing.
   device's driver names stays, said, and its value goes.
 - **The folders kept**: on 2000 and XP, Windows installs a device again
   from the source an INF in its store was staged from (record 23 section
-  4.4's reason for a permanent copy), so a folder at `<Dir>` holding an
-  INF whose bytes some `oem*.inf` of `%windir%\inf` still holds at this
-  step - this installer's kept above, or any other - is kept whole. That
-  is read again from the store by every run that reaches this step, so
-  an uninstall cut short here and run again decides the same way, and
-  nothing about it is recorded; the folder's files become the user's and
-  the run names the folder.
-- **The copies**: each line of the record file outside a kept folder,
-  its file deleted when its bytes are still the recorded ones, kept and
-  said when they have changed, nothing done when it is gone, and its
-  `.~X9` deleted when one is there; then each folder of the set bottom up
-  when empty, then the record file (only once its every line is done).
+  4.4's reason for a permanent copy), so the folder at `<Dir>` of every
+  `own` INF kept in the store above, and of every `foreign` INF whose
+  name still holds the recorded bytes, is kept whole, by the record and
+  whatever the folder's files now are; the folder's files become the
+  user's and the run names the folder; the `foreign` values then go. A
+  store that cannot be read (`%windir%\inf` not listed, a recorded name
+  not readable) keeps every folder with a staged value and leaves the
+  uninstall incomplete (said, the steps flag set), as an unreadable
+  driver key does for `s98_un_inf_nt`.
+- **The copies**: the record's recovery first (section 6.7.5); then each
+  file under a `D` line outside a kept folder, deleted when its bytes are
+  still the recorded ones, kept and said when they have changed, nothing
+  done when it is gone; then each folder of the set bottom up when empty,
+  then the record file (only once its every line is done).
 - **The records**: the set's key, then `Other` when empty.
 
 A deletion that fails, or a removal from the store that fails, keeps the
