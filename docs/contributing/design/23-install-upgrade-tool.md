@@ -1,11 +1,11 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 29, 2026-10-22 (roadmap-usb4 task 43.42, the owner:
+Status: revision 31, 2026-10-22 (roadmap-usb4 task 43.42, the owner:
 the storage row does not preselect XhciSilentInstall, section 8.4);
-revision 28, 2026-10-22 (roadmap-usb4 task 43.43, the owner: on
+revision 30, 2026-10-22 (roadmap-usb4 task 43.43, the owner: on
 8 and 8.1 a package without the connection manager warned, not refused,
-section 4.5); revision 27, 2026-10-22 (roadmap-usb4 task 43.42, option A,
-record 26 draft 22 section 6.5.12: with the 98 SE storage row the
+section 4.5); revision 29, 2026-10-22 (roadmap-usb4 task 43.42, option A,
+record 26 draft 24 section 6.5.12: with the 98 SE storage row the
 Bulk-Only SilentClasses entries added and recorded, and XhciSilentInstall
 preselected 1 machine-wide where none is set - the console's question
 replaced by that preselection, section 8.3; the uninstall removes the
@@ -791,7 +791,7 @@ tunnel brings are driven by whatever driver Windows binds to them.
 the owner's decision of 2026-10-21: every component on every system,
 the defaults as they are, a warning where one does not apply.) The table
 becomes, with `inst_usb_decide` refusing nothing but a `/cmonly` with no
-connection manager in the package and `/usb` with `/cmonly` (revision 28,
+connection manager in the package and `/usb` with `/cmonly` (revision 30,
 owner 2026-10-22: a package without the connection manager on 8 and 8.1
 is no longer refused; the run warns, record 26 section 5.3.1 case 5, and
 goes on with the USB drivers' box and the tools):

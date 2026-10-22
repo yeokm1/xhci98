@@ -1,22 +1,22 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 29, 2026-10-22 (the owner's answer of that day to 43.5's
+Status: draft 31, 2026-10-22 (the owner's answer of that day to 43.5's
 leg i3: a lone `USBSTOR.INF` found ticks the storage row, NUSB installed
-winning, and is said with a step, section 6.5.5); draft 28, 2026-10-22
+winning, and is said with a step, section 6.5.5); draft 30, 2026-10-22
 (the owner's point of that day for the
 simplified Components page: roadmap task 43.46's 98 SE and ME
-request-size driver a box under Stor98's; for roadmap 43.48's rows, one folder per driver and, on 98 SE and ME, staging by `DevicePath` entries, section 5.0); draft 27,
+request-size driver a box under Stor98's; for roadmap 43.48's rows, one folder per driver and, on 98 SE and ME, staging by `DevicePath` entries, section 5.0); draft 29,
 2026-10-22 (roadmap-usb4 task 43.5's finding, the
 owner's answer of that day: the two storage INFs all or nothing wherever
 Windows finds them, since `USBSTOR.INF` alone lets a stock 98 SE's own
 `NTMAP.INF` take the disk unit and stop Windows; the `DISKDRV.INF`
 premise and the "Disk drive" note withdrawn, sections 6.5.4, 6.5.5,
-6.5.6, 6.5.8, 6.5.11 and 14); draft 26, 2026-10-22 (the owner's simplification of that day: Welcome, Components, Summary, Progress, Steps, Finish, the settings pages replaced by one Settings dialog, room for roadmap 43.48's rows, section 5.0); draft 25, 2026-10-22 (roadmap-usb4 task 43.29, the owner: on 8 and 8.1 `xhciuas.inf` staged, never forced, section 5.3.1 case 3a); draft 24, 2026-10-22 (roadmap-usb4 task 43.42, the owner: no
+6.5.6, 6.5.8, 6.5.11 and 14); draft 28, 2026-10-22 (the owner's simplification of that day: Welcome, Components, Summary, Progress, Steps, Finish, the settings pages replaced by one Settings dialog, room for roadmap 43.48's rows, section 5.0); draft 27, 2026-10-22 (roadmap-usb4 task 43.29, the owner: on 8 and 8.1 `xhciuas.inf` staged, never forced, section 5.3.1 case 3a); draft 26, 2026-10-22 (roadmap-usb4 task 43.42, the owner: no
 preselection of XhciSilentInstall, section 6.5.12 item 2; record 23
-revision 29); draft 23, 2026-10-22 (roadmap-usb4 task 43.43, the owner's
+revision 31); draft 25, 2026-10-22 (roadmap-usb4 task 43.43, the owner's
 answers of that day: every proposal of section 5.3.1 accepted but the
 refusal of a package without the connection manager on 8 and 8.1, which
-becomes case 5's warning; record 23 revision 28); draft 22, 2026-10-22 (roadmap-usb4 task 43.42, the owner's
+becomes case 5's warning; record 23 revision 30); draft 24, 2026-10-22 (roadmap-usb4 task 43.42, the owner's
 option A of that day: with the storage row on 98 SE the Bulk-Only
 entries added to SilentClasses and XhciSilentInstall preselected,
 section 6.5.12); draft 20, 2026-10-21 (roadmap-usb4 task 43.43, the owner's
@@ -442,7 +442,7 @@ screens. The window's text follows the console's rules (record 23 sections
 7.6 and 8.3): practical guidance, no virtual machines, no emulators, no
 word on what has or has not been tested.
 
-### 5.0 The simplified flow (draft 26; the owner's decisions of 2026-10-22)
+### 5.0 The simplified flow (draft 28; the owner's decisions of 2026-10-22)
 
 The owner's simplification of 2026-10-22 replaces the pages of sections
 5.1 to 5.7 where this section differs; everything not named here (the
@@ -486,7 +486,7 @@ Tools folder: C:\XHCI98
   ticked by default, greyed and unticked while the USB drivers are
   unticked, its own state back when they are ticked again. On 8 and 8.1
   a ticked UAS box stages `xhciuas.inf` and forces it on no disk
-  (section 5.3.1 case 3a, draft 25), and a disk the user already put on
+  (section 5.3.1 case 3a, draft 27), and a disk the user already put on
   `xhciuas` in Device Manager is kept current (owner, 2026-10-22: decided,
   case 3a as it stands).
 - **The Thunderbolt box and Stor98's** (owner, 2026-10-22): the
@@ -527,7 +527,7 @@ Tools folder: C:\XHCI98
   the warning box; the alternative is to drop it with the paragraph. The USB drivers' warning on 8 and 8.1 (case
   3a) stays.
 - **The request-size driver's box under Stor98's** (owner, 2026-10-22,
-  draft 28): roadmap task 43.46's Windows 98 SE and ME request-size
+  draft 30): roadmap task 43.46's Windows 98 SE and ME request-size
   driver (a static VxD in `IOSUBSYS`; design record 30, branch
   `p43-46`) is a box of its own indented under Stor98's, a child of
   Stor98's the way Stor98's is a child of the Thunderbolt box: shown on
@@ -803,7 +803,7 @@ Check boxes, one a line, each with one sentence:
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
 | Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
-| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | ticked with a lone `USBSTOR.INF` in the INF directories when a ticked run completes the pair (draft 29, section 6.5.5); otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone until draft 20, and from draft 20 on every system, unticked by default but on 98 SE, ticked elsewhere with section 5.3.1's warning and its files then only copied to the tools folder; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
+| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | ticked with a lone `USBSTOR.INF` in the INF directories when a ticked run completes the pair (draft 31, section 6.5.5); otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone until draft 20, and from draft 20 on every system, unticked by default but on 98 SE, ticked elsewhere with section 5.3.1's warning and its files then only copied to the tools folder; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -850,7 +850,7 @@ words):
 |---|---|---|---|
 | 1 | the USB storage drivers ticked on ME, or on 2000 to 8.1 | the pack's seven files copied to `<the install directory>\NUSB33\` and nothing else: nothing in `%windir%`, the INF directory, `INF\OTHER` or `DevicePath`, no device job, no `Storage` record but the copies' own (below). A file of the seven's names already in that folder - the same bytes, other bytes or unreadable - is left as it is and never recorded; each absent one is written as `<name>.TMP` with `CREATE_NEW`, compared byte for byte with the download's, its `Tools` value written, then moved to its name with `MoveFileA`, which never replaces; a step that fails deletes the `.TMP` and the value and leaves the rest copied. The run says how many of the seven are in the folder and names any left out (a note, not a step); a later ticked run copies only those still absent. **Acceptance condition (ME):** Windows ME must not find the INFs there - the install directory is on ME's `DevicePath`, and whether ME's device search reads its subfolders is unread; if case 1's ME leg shows ME offering the pack's INF from `NUSB33` (or binding a stick from it), this placement is withdrawn before the code is released and the owner chooses another place or form for ME | "The USB storage drivers (NUSB 3.3's) are for Windows 98 SE only. On this Windows they are not installed: their seven files are copied to <dir>\NUSB33 for you to use by hand, and nothing installs them." |
 | 2 | the USB drivers unticked on 98 SE or ME | the connection manager installed alone, as on 2000 to 7 (record 23 section 4.5, amended): `xhci98.inf` and `xhciuas.inf` out of the run, the Thunderbolt support in it; on these two systems through the helper (record 27 section 6 step 5), and the local copy on `DevicePath` made without `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`, as `/nouas` already leaves the UAS pair out of it, so no hardware wizard can offer them; an `xhci98.sys` already installed stays as it is (record 23 section 4.5) | "Without the xHCI98 USB drivers, Windows 98 SE and ME have no driver of their own for a USB 3 controller: an xHCI controller with no other driver installed, a dock's included, stays without one, and the USB devices on it do not work. Only the Thunderbolt 3 / USB4 connection manager is installed; xHCI98 USB drivers already installed stay as they are. This has not been tested on Windows 98 SE or ME." |
-| 3a | the USB drivers ticked on 8 or 8.1 | `xhci98.sys` installed through the NT route of record 23 section 5 (`Xhci.Dev6`), taking roadmap task 43.29's row, and, with its box, `xhciuas.inf` staged but forced onto no device (owner, 2026-10-22, draft 25; record 13 section 6.13.9 on the `p43-29` branch: the bus answers Windows 8's own client contract, so Windows' own `uaspstor.sys` stays the default for a UAS disk): a UAS disk with no driver is left for Windows to bind (`INST_ACT_WINDOWS`, "left for Windows' own UAS driver", `inst_uas_nt6_action`), one on another driver stays foreign, and one already on `xhciuas` (the user's own pick in Device Manager) is kept current as on 2000 to 7; the staged INF is what Device Manager then offers; and, the one narrow exception to record 23 decision D3 (amended, revision 26), a controller whose service is Windows' own `USBXHCI` is not "another driver" here: with the box ticked it is planned as an install and installed with `INSTALLFLAG_FORCE` (Windows' signed in-box driver otherwise outranks this package's INF), as the user chose; every other vendor's driver on a controller stays foreign and left, as before; such a controller is this package's from then on, and the uninstall removes its devnode and rescans (record 23 section 9.2), after which Windows is expected to bind `usbxhci.sys` again (43.29's "the controller given back", unread until 43.31) | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall is meant to give the controllers back to Windows' own driver; that has not been tested either. There the UAS disk driver, when ticked, is only staged: Windows' own UAS driver stays the default, and xhciuas.sys can be chosen for a disk in Device Manager." |
+| 3a | the USB drivers ticked on 8 or 8.1 | `xhci98.sys` installed through the NT route of record 23 section 5 (`Xhci.Dev6`), taking roadmap task 43.29's row, and, with its box, `xhciuas.inf` staged but forced onto no device (owner, 2026-10-22, draft 27; record 13 section 6.13.9 on the `p43-29` branch: the bus answers Windows 8's own client contract, so Windows' own `uaspstor.sys` stays the default for a UAS disk): a UAS disk with no driver is left for Windows to bind (`INST_ACT_WINDOWS`, "left for Windows' own UAS driver", `inst_uas_nt6_action`), one on another driver stays foreign, and one already on `xhciuas` (the user's own pick in Device Manager) is kept current as on 2000 to 7; the staged INF is what Device Manager then offers; and, the one narrow exception to record 23 decision D3 (amended, revision 26), a controller whose service is Windows' own `USBXHCI` is not "another driver" here: with the box ticked it is planned as an install and installed with `INSTALLFLAG_FORCE` (Windows' signed in-box driver otherwise outranks this package's INF), as the user chose; every other vendor's driver on a controller stays foreign and left, as before; such a controller is this package's from then on, and the uninstall removes its devnode and rescans (record 23 section 9.2), after which Windows is expected to bind `usbxhci.sys` again (43.29's "the controller given back", unread until 43.31) | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall is meant to give the controllers back to Windows' own driver; that has not been tested either. There the UAS disk driver, when ticked, is only staged: Windows' own UAS driver stays the default, and xhciuas.sys can be chosen for a disk in Device Manager." |
 | 3b | Stor98 ticked on 8 or 8.1 | the bundled Stor98 on tunnel drives as on 2000 to 7 (section 6.3), taking roadmap task 43.23's installer row; the same narrow exception as 3a for Windows' own NVMe driver: on 8.1 a tunnel drive whose service is `stornvme` is installed over with `INSTALLFLAG_FORCE` when the box is ticked, and becomes Stor98's by section 6.3's record (its first binding by this installer); the replacement goes through section 6.3's reconnection rules as an update of a drive Stor98 runs does - the tunnel may be torn down and brought back when the drive's driver changes (the connection manager's child filter sees the removal whatever storage driver ran), so a drive gone after its job is "installed, awaiting reconnection", its read-back deferred to the reconnection (`s98_reconnect_nt`, which then admits a baseline of `stornvme` beside Stor98's own), and its ownership recorded when it is read back running Stor98; because that read-back may come only in a later run (a skipped or timed-out reconnection wait, a run cut short), the drive's id is written under the `Stor98` record's `Pending` subkey with the data `attempt` before its job starts, rewritten `done` once the install call returns success for it, and deleted when the call fails or is cancelled; every later install run and the uninstall resolve each pending id first: a `done` drive read back running Stor98 moves to the record's devices as this installer's (its first binding, evidenced by the call's success); a `done` drive not present stays pending, and the uninstall takes it when its `Enum` entry names Stor98; an `attempt` drive (a run cut short during the call, its outcome unknown) is never taken: read back running Stor98, its value is kept as `unknown`, a durable exclusion that the uninstall's adoption of tunnel drives (section 6.3) honours too, so that Stor98 stays as anyone's; the `attempt` value must be written before the call is made, and a write that fails leaves the drive's group unchanged; a `done` value moves to the devices only once the devices' value is written; a drive read back running another driver, or gone with no `Enum` entry, has its pending value deleted; an internal drive, and a drive another vendor's driver runs, are left as before; the uninstall removes Stor98 from it and rescans, Windows then expected to bind `stornvme` again, unread until 43.24, whose legs gain the `stornvme` replacement, its reconnection, a replug, and the wait skipped, timed out and cut short with the next run and the uninstall resolving the pending drive | "Stor98 has not been tested on Windows 8 or 8.1. If a drive behind a Thunderbolt or USB4 tunnel uses Windows' own NVMe driver, this choice replaces it." |
 | 5 | a package without the connection manager on 8 or 8.1 (owner, 2026-10-22, in place of draft 20's refusal) | the run goes on with what the package has: the USB drivers' box, tickable and unticked by default (case 3a's warning when ticked), and the tools; Stor98, a child of the Thunderbolt support, is not in the run; with nothing ticked the run installs the tools alone | "This package carries no Thunderbolt 3 / USB4 driver. On Windows 8 and 8.1 it installs only what is ticked: the xHCI98 tools, and the xHCI98 USB drivers if their box is ticked." |
 
@@ -1559,7 +1559,7 @@ draft 19 the two INFs were never copied into `INF` or `INF\OTHER` by the
 installer - the setup engine makes its `INF\OTHER` copies (record 23
 section 6.1), and from draft 19 the installer places them in `INF`
 itself after the binaries, `USBNTMAP.INF` before `USBSTOR.INF` and never
-one without the other (section 6.5.11; draft 27, section 6.5.5's pair
+one without the other (section 6.5.11; draft 29, section 6.5.5's pair
 rule). Each absent
 binary is written beside its destination as `<name>.TMP`, compared byte
 for byte with the download's, its record value written (section 6.5.6),
@@ -1661,7 +1661,7 @@ in the run it installs the storage devices present, in record 27 section
   unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom` or `USBSTOR\GenSfloppy`
   among its ids) with no driver at all is installed by the package
   directory's `USBNTMAP.INF`; a unit bound any way is left
-  (`inst_stor_unit_takes`). Until draft 27 the step also took a unit at
+  (`inst_stor_unit_takes`). Until draft 29 the step also took a unit at
   Windows' generic "Disk drive" (`DISKDRV.INF`), on the premise that
   Windows binds a first disk there before it has seen `USBNTMAP.INF`
   (`runs/run-28.md`, read on a 98 SE that still held NUSB's other files,
@@ -1693,7 +1693,7 @@ with the power cut). With `USBNTMAP.INF` findable as well, every unit
 read went to `USBNTMAP.INF`, "USB Disk". A folder handed to the wizard
 is not such a place for the unit: with all seven in one folder given to
 the Add New Hardware wizard on a stock 98 SE (the release notes' hand
-install until draft 27), the wizard copied `USBSTOR.INF` alone into
+install until draft 29), the wizard copied `USBSTOR.INF` alone into
 `INF\OTHER` (`MicrosoftUSBSTOR.INF`), the unit went to `NTMAP.INF` and
 Windows stopped the same way; with `USBNTMAP.INF` copied into
 `%windir%\INF` first, the same plug gave "USB Disk" (`Class\Storage`,
@@ -1722,7 +1722,7 @@ Windows can find them:
   not hold a copy of `USBSTOR.INF` without one of `USBNTMAP.INF`
   (`inst_stor_bulk_admit`); otherwise the devices are not installed, a
   step is left, and the run says to run the installer again.
-- **A lone `USBSTOR.INF` found before the run** (draft 29; the owner's
+- **A lone `USBSTOR.INF` found before the run** (draft 31; the owner's
   answer of 2026-10-22 to 43.5's leg i3: a hand install through the Add
   New Hardware wizard leaves `INF\OTHER\MicrosoftUSBSTOR.INF` alone, its
   bytes the download's, and the row then opened unticked, "Only some of
@@ -1785,7 +1785,7 @@ them (section 6.5.11; 43.5's legs, 2026-10-22: the wizard still opens
 there unless `XhciSilentInstall` is on, section 6.5.12). The files are
 already in place, so the engine's copy writes the same bytes, and the
 unit of a first disk lands on "USB Disk" from `USBNTMAP.INF` (the same
-legs). Until draft 27 the Finish page and the console's end said that a
+legs). Until draft 29 the Finish page and the console's end said that a
 first disk showing as "Disk drive" could be moved by running the
 installer again; with the premise gone that note is withdrawn, and a
 storage device left with no driver gets the existing step (Update
@@ -1842,7 +1842,7 @@ Driver, or the install directory given to the wizard).
   serves: the detection (section 6.5.3), a device's `InfPath` copy
   (`stor_infpath_copy`'s `recorded`), and the adoption (section 6.5.8
   step 1);
-- `Silent` (draft 22): one value per `SilentClasses` entry this installer
+- `Silent` (draft 24): one value per `SilentClasses` entry this installer
   added (section 6.5.12), its name the entry's value name and its data the
   entry's four bytes in hex, written before the entry; the uninstall
   removes exactly those;
@@ -1850,7 +1850,7 @@ Driver, or the install directory given to the wizard).
   storage drivers (data `bulk` or `unit`). Ownership goes by first
   binding, as section 6.3 has it for Stor98: a device the baseline read
   as present with no driver ("Unknown Device"), or not present at all
-  (draft 27: no longer a unit at Windows' generic "Disk drive", section
+  (draft 29: no longer a unit at Windows' generic "Disk drive", section
   6.5.5), that the helper's job
   then bound to `USBSTOR.SYS` or `USBMPHLP.PDR` is recorded on that
   evidence; one Windows bound during a settle of the run is recorded
@@ -1946,7 +1946,7 @@ nothing it does not own. In section 9.3 step 4's order:
    ones, `USB20U` absent, no driver key naming it - each deleted with its
    `.PNF`; they have no `OEM Name` value, so none is touched for them.
    Every copy of `USBSTOR.INF` goes first, then `USBNTMAP.INF`'s, each
-   only while no copy of `USBSTOR.INF` is left (draft 27, section 6.5.5's
+   only while no copy of `USBSTOR.INF` is left (draft 29, section 6.5.5's
    pair rule).
    NUSB's own uninstall deletes an INF of its from `%windir%\INF` the same
    way, by name (static: `_USB2UN.INF`'s `DelFiles` of `USB2.INF` from
@@ -2090,7 +2090,7 @@ holds, a placement that failed and left neither INF there is a note:
 the run says that the first plug of a new USB disk may still open
 Windows' wizard, which finds the driver in the install directory (not a
 step: the route through `DevicePath` stands as in draft 18). One that
-leaves a half of the pair there (draft 27, section 6.5.5) is a step
+leaves a half of the pair there (draft 29, section 6.5.5) is a step
 (exit 4): a half this installer placed, in this run or an earlier one
 (the record's `Placed`), is withdrawn under section 6.5.4's protections
 (`inst_stor_half`), and a half that is not its own is never deleted. A
@@ -2159,7 +2159,7 @@ setup engine's `GenInstall` over a section of an INF of this package's
 own that copies the two INFs to dirid 17 as `_NUSB.INF` does, and
 accepting the wizard with 43.5 amended.
 
-#### 6.5.12 The silent install with the storage row (task 43.42, option A; draft 22)
+#### 6.5.12 The silent install with the storage row (task 43.42, option A; draft 24)
 
 **What the readings showed.** 43.5's first leg taken again on draft 19's
 cut (2026-10-22) still raised the Add New Hardware wizard for a new stick,
@@ -2194,7 +2194,7 @@ reading (section 6.5.11):
    created when it is not there. The driver keeps 32 entries
    (`XHCI_SILENT_MAX`); a list already full keeps its own first 32, and
    the run says so.
-2. **The gate is the user's** (owner, 2026-10-22, in place of draft 22's
+2. **The gate is the user's** (owner, 2026-10-22, in place of draft 24's
    preselection): `XhciSilentInstall` is not turned on by the row and
    stays as it is unless the user picks it - on the USB settings page,
    by the console's question or by `/set` - and an explicit 1 still
@@ -2608,8 +2608,8 @@ which waits.
   `inst_stor_case` over every combination; `inst_stor_copy_set` (which
   binaries are copied in each case, none in complete and partial-other,
   never a present one); `inst_stor_kind` and `inst_stor_unit_takes` on
-  the ids and driver keys of section 6.5.5 (draft 27: a unit with no
-  driver taken, every bound one left); (draft 27) the pair rule of
+  the ids and driver keys of section 6.5.5 (draft 29: a unit with no
+  driver taken, every bound one left); (draft 29) the pair rule of
   section 6.5.5, `instStorCopyOrder` (`USBNTMAP.INF` before `USBSTOR.INF`),
   `inst_stor_rm_late`, `inst_stor_pair` and `inst_stor_bulk_admit`; the case with `Source` recorded (a partial-same install, then
   every file present, then an update: the route, not complete); and
@@ -2828,7 +2828,7 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   the same bytes, and what it does with a file in use; where the engine
   copies `USBSTOR.INF` and `USBNTMAP.INF` from the package directory and
   under which `OEM Name` value; which INF Windows' generic "Disk drive"
-  binding names (draft 27: on a stock 98 SE none, the stock `NTMAP.INF`
+  binding names (draft 29: on a stock 98 SE none, the stock `NTMAP.INF`
   takes a unit when `USBNTMAP.INF` is not findable, and stops Windows;
   section 6.5.5); whether a first plug after the install lands on "USB
   Disk" or "Disk drive", with and without `XhciSilentInstall`; whether the
