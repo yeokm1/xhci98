@@ -1816,7 +1816,10 @@ The tooltip's last event (section 7.1) is kept as it is.
    does nothing; 43.27's notice opens its list). The time running out
    and the close box send `NIN_BALLOONTIMEOUT` (`WM_USER + 4`), and the
    showing sends `NIN_BALLOONSHOW` (`WM_USER + 2`), as the shell does.
-   Either way the next waiting notice shows.
+   Either way the next waiting notice shows. Showing takes nothing from
+   the foreground window; a press on the pop-up takes its activation
+   (98 SE's USER, despite `MA_NOACTIVATE`), as a press on the shell's
+   own balloon does on ME (leg T.12, 2026-10-22).
 7. **Changes around it.** A display change (`WM_DISPLAYCHANGE`) or a
    work-area change (`WM_SETTINGCHANGE` with `SPI_SETWORKAREA`, which a
    taskbar moved or resized sends) places the showing pop-up again; an
