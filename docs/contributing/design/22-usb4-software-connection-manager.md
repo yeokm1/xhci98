@@ -2786,7 +2786,8 @@ vanished function, and the tools' 9x eject went to Windows directly).
 Since 2026-10-18 record 21 section 7.2's 9x half (task 42-0.7; the code is
 42-A.13) routes the tools' 9x eject through that worker step, hands a clean
 removal back to the thread for section 10.4's per-port teardown, and makes
-the 9x statement once each system's G3 ordering is read.
+the 9x statement once each system's G3 ordering is read (both read and
+admitted on 2026-10-22, task 43.18, `runs/run-43-18.md`).
 
 **Only a new tunnel moves a generation** (task 42-A.6; `stor98cm.h` as
 Stor98 revised it on 2026-10-18, entry protocol step 1 and R8b). The UP

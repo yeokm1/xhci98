@@ -234,6 +234,11 @@ rem                  (src\cm\cm_call.c, task 42-A.12): its transitions, a
 rem                  stale id, a withdrawal, a deadline passing while a call
 rem                  runs, two members' slots apart, and a next-operation
 rem                  client driven through one slot
+rem   test_cm_eject - the 9x eject transaction and statement decision
+rem                  (src\cm\cm_eject.c, task 43.18): the ask's checks,
+rem                  the result's layout, every branch through a fake
+rem                  configuration manager, R11 O6, a stopped start's
+rem                  record adopted, the decision's identity and deadline
 rem   test_cm_nvlink - the stor98 link-state channel's pure half
 rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
 rem                  table of stor98's stor98cm.h, its entry protocol read
@@ -567,12 +572,17 @@ call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
 rem test_cm_call links nothing else: the call workers' handoff word is pure
 rem (42-A.12).
 call :run test_cm_call "test_cm_call.c ..\src\cm\cm_call.c"
+rem test_cm_eject links the transaction's pure half alone (43.18).
+call :run test_cm_eject "test_cm_eject.c ..\src\cm\cm_eject.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check.
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
+rem test_ej9x links the tools' half of the 9x eject asked of xhcicm.sys
+rem (xhciinst\inst_ej9x.c, task 43.18) with the pure half it maps through.
+call :run test_ej9x "test_ej9x.c ..\xhciinst\inst_ej9x.c ..\xhciinst\inst_core.c"
 rem test_trlog links XHCITR's log readers (xhcitr\tr_log.c, design record 25
 rem sections 4.5 and 4.6) and xhcicm.sys's log builder, whose answers it
 rem reads, and holds xhcitr\tr_hcctr.h to src\xhci_counters.h.

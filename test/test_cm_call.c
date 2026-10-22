@@ -264,9 +264,10 @@ static ULONG lateWord;
 static ULONG lateKind;
 static ULONG lateOutcome;
 
-static VOID fakeLate(PVOID context, ULONG kind, ULONG id, ULONG outcome,
-                     const VOID *res, ULONG bytes)
+static VOID fakeLate(PVOID route, PVOID context, ULONG kind, ULONG id,
+                     ULONG outcome, const VOID *res, ULONG bytes)
 {
+    (void)route;
     (void)context;
     lateCalls++;
     lateId = id;
@@ -290,7 +291,7 @@ static void workerAfterStop(PCM_CALL c)
     }
     if (CmCallLateDue(c, &outcome)) {
         if (c->Late != NULL) {
-            c->Late(c->Context, c->Kind, c->Ran, outcome,
+            c->Late(NULL, c->Context, c->Kind, c->Ran, outcome,
                     outcome == CM_CALL_L_RESULT ? c->Res : NULL,
                     outcome == CM_CALL_L_RESULT ? c->ResBytes : 0);
         }
