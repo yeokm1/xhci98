@@ -1252,10 +1252,14 @@ unasked. With the box ticked:
   or keeps the mark service writes the staged copy's path to the
   service's `Parameters\Stor98Inf` (`inst_s98_auto_value`) after its
   own Stor98 jobs, and the service installs Stor98 on each such drive
-  behind a verified tunnel port; the value goes with the service key
-  (section 9.3 step 3 removes the service before Stor98's devices),
-  and the bullet below adopts those drives at the uninstall as it
-  adopts the drives Windows bound itself.
+  behind a verified tunnel port, entering each one it switched under
+  `Devices` (data `switched`), as this installer's own call would; every
+  install, update and uninstall run holds `Global\Xhci98S98Switch` from
+  its plan to its end, which pauses the service; the value goes with the
+  service key (section 9.3 step 3 stops the service, enables any drive
+  its switch left owing an enable, and removes the service before
+  Stor98's devices), and the uninstall removes the switched drives with
+  the other `Devices`.
 - **Tunnel drives Windows bound after the run** (draft 12; the owner's
   coordinator, 2026-10-19, from the Windows ME matrix leg of that day).
   The install stages Stor98 and records no device when no tunnel was up
