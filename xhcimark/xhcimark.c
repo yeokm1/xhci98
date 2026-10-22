@@ -2014,6 +2014,7 @@ static int s98SeenCount;
 static DWORD s98Walk;           /* whole walks so far                     */
 static int s98PolicyState = -1; /* the value's last logged state          */
 static int s98FirstDone;        /* the first poll's restart records read  */
+static DWORD s98Cursor;         /* the record the next recovery reads first */
 static char s98EnableLogged[MK_S98_TODO_MAX][INST_ID_CHARS];
 
 static int mk_s98_api(void)
@@ -2503,7 +2504,10 @@ static int mk_s98_enable_logged(const char *id, int mark)
 
 /* Every record outside a switch (mk_s98_recover): an enable owed is made
  * once the devnode is present, the record kept until it is seen; a
- * "restart" is decided at the first poll after the service's start. */
+ * "restart" is decided at the first poll after the service's start. At most
+ * MK_S98_TODO_MAX records a poll, from a cursor that goes on where the last
+ * poll stopped, so absent drives owing an enable never starve the others;
+ * "first" lasts until the first pass has read every record. */
 static void mk_s98_recover_all(void)
 {
     HKEY k;
@@ -2530,19 +2534,37 @@ static void mk_s98_recover_all(void)
     int nTodo = 0;
     int j;
     int first;
+    DWORD count = 0;
+    DWORD step;
+    DWORD next;
 
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_KEY_PATH, 0, KEY_READ, &k) !=
         ERROR_SUCCESS) {
         s98FirstDone = 1;
+        s98Cursor = 0;
         return;
     }
-    for (i = 0; nTodo < MK_S98_TODO_MAX; i++) {
+    if (RegQueryInfoKeyA(k, NULL, NULL, NULL, NULL, NULL, NULL, &count, NULL,
+                         NULL, NULL, NULL) != ERROR_SUCCESS) {
+        count = 0;
+    }
+    if (s98Cursor >= count) {
+        s98Cursor = 0;
+    }
+    next = 0;                   /* 0: this pass reached the list's end */
+    for (step = 0; step < count; step++) {
+        i = (s98Cursor + step) % count;
+        if (nTodo == MK_S98_TODO_MAX) {
+            next = i;
+            break;
+        }
         in = sizeof(id) - 1;
         tn = sizeof(text) - 1;
+        memset(id, 0, sizeof(id));
         memset(text, 0, sizeof(text));
         if (RegEnumValueA(k, i, id, &in, NULL, &type, (LPBYTE)text, &tn) !=
             ERROR_SUCCESS) {
-            break;
+            continue;
         }
         id[sizeof(id) - 1] = '\0';
         r = type == REG_SZ ? mk_s98_rec_parse(text) : MK_S98_FAILED;
@@ -2554,6 +2576,7 @@ static void mk_s98_recover_all(void)
     RegCloseKey(k);
     if (nTodo == 0) {
         s98FirstDone = 1;
+        s98Cursor = 0;
         return;
     }
     /* The same locks as a switch: nothing beside an installer run. The
@@ -2562,7 +2585,10 @@ static void mk_s98_recover_all(void)
         return;
     }
     first = !s98FirstDone;
-    s98FirstDone = 1;
+    if (next == 0) {
+        s98FirstDone = 1;
+    }
+    s98Cursor = next;
     for (j = 0; j < nTodo; j++) {
         r = mk_s98_rec_get(todo[j]);
         if (r == MK_S98_RESTART && !first) {

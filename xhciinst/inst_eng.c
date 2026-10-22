@@ -10367,9 +10367,71 @@ static int mk_delete_copy(void)
  * step gives it back whatever state the switch reached; and every drive a
  * switch left owing an enable ("disable", "install", "enable") is enabled
  * again, present or not, so no drive is left disabled with nobody to
- * enable it. 1 all done; 0 not (the service's key stays). The service is
- * stopped. */
+ * enable it. Every record is read, with no limit; a key or a record that
+ * cannot be read, or a drive whose driver cannot be read, leaves it
+ * unsettled. 1 all done; 0 not (the service's key stays). The service is
+ * stopped, so nothing changes the records meanwhile. */
 #define INST_MK_S98_KEY     "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Stor98"
+static int mk_s98_settle_one(HDEVINFO set, const char *id, int owed)
+{
+    SP_DEVINFO_DATA data;
+    SP_PROPCHANGE_PARAMS pcp;
+    SP_DEVINSTALL_PARAMS_A ip;
+    DWORD type;
+    char svc[64];
+    int bound;
+
+    if (!find_in_set(set, id, &data)) {
+        return 1;               /* no devnode, not even a phantom */
+    }
+    memset(svc, 0, sizeof(svc));
+    if (api.GetRegProp(set, &data, SPDRP_SERVICE, &type, (PBYTE)svc,
+                       sizeof(svc) - 1, NULL)) {
+        bound = inst_eq(svc, "stor98");
+    } else if (GetLastError() == ERROR_INVALID_DATA) {
+        bound = 0;              /* no Service value: no driver */
+    } else {
+        out("The driver of %s could not be read (error %lu): the drives the "
+            "mark service\nmoved to Stor98 are not settled.\n", id,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    if (bound && s98_rec_has("Devices", id) != 1) {
+        if (!s98_rec_text("Devices", id, "switched")) {
+            return 0;
+        }
+        out("%s, which the mark service moved to Stor98, is recorded as "
+            "this\ninstaller's.\n", id);
+    }
+    if (!owed) {
+        return 1;
+    }
+    out("Enabling %s, left disabled by the mark service's switch to "
+        "Stor98 ... ", id);
+    memset(&pcp, 0, sizeof(pcp));
+    pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+    pcp.ClassInstallHeader.InstallFunction = DIF_PROPERTYCHANGE;
+    pcp.StateChange = DICS_ENABLE;
+    pcp.Scope = DICS_FLAG_CONFIGSPECIFIC;
+    pcp.HwProfile = 0;
+    if (!api.SetCiParams(set, &data, &pcp.ClassInstallHeader, sizeof(pcp)) ||
+        !api.CallCi(DIF_PROPERTYCHANGE, set, &data)) {
+        out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (api.GetDiParams(set, &data, &ip) &&
+        (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
+        out("done, restart pending.\n");
+        flagRestart = 1;
+    } else {
+        out("done.\n");
+    }
+    flagChanged = 1;
+    return 1;
+}
+
 static int mk_s98_settle(void)
 {
     HKEY k;
@@ -10377,91 +10439,58 @@ static int mk_s98_settle(void)
     DWORD in;
     DWORD tn;
     DWORD type;
+    LONG r;
     char id[INST_ID_CHARS];
     char text[32];
-    static char todo[64][INST_ID_CHARS];
-    static int owed[64];
-    char svc[64];
-    int n = 0;
-    int j;
     int ok = 1;
-    HDEVINFO set;
-    SP_DEVINFO_DATA data;
-    SP_PROPCHANGE_PARAMS pcp;
-    SP_DEVINSTALL_PARAMS_A ip;
+    HDEVINFO set = INVALID_HANDLE_VALUE;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_S98_KEY, 0, KEY_READ, &k) !=
-        ERROR_SUCCESS) {
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_S98_KEY, 0, KEY_READ, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
         return 1;
     }
-    for (i = 0; n < 64; i++) {
-        in = sizeof(id) - 1;
-        tn = sizeof(text) - 1;
-        memset(text, 0, sizeof(text));
-        if (RegEnumValueA(k, i, id, &in, NULL, &type, (LPBYTE)text, &tn) !=
-            ERROR_SUCCESS) {
-            break;
-        }
-        id[sizeof(id) - 1] = '\0';
-        owed[n] = type != REG_SZ || inst_eq(text, "disable") ||
-                  inst_eq(text, "install") || inst_eq(text, "enable");
-        inst_copy(todo[n++], id, sizeof(todo[0]));
-    }
-    RegCloseKey(k);
-    if (n == 0) {
-        return 1;
-    }
-    set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
-    if (set == INVALID_HANDLE_VALUE) {
-        out("The device list could not be opened: the drives the mark service "
-            "moved to\nStor98 are not settled.\n");
+    if (r != ERROR_SUCCESS) {
+        out("The mark service's Stor98 records could not be read (error %ld): "
+            "they are\nnot settled.\n", (long)r);
         return 0;
     }
-    for (j = 0; j < n; j++) {
-        if (!find_in_set(set, todo[j], &data)) {
-            continue;
+    for (i = 0;; i++) {
+        in = sizeof(id) - 1;
+        tn = sizeof(text) - 1;
+        memset(id, 0, sizeof(id));
+        memset(text, 0, sizeof(text));
+        r = RegEnumValueA(k, i, id, &in, NULL, &type, (LPBYTE)text, &tn);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
         }
-        memset(svc, 0, sizeof(svc));
-        if (api.GetRegProp(set, &data, SPDRP_SERVICE, &type, (PBYTE)svc,
-                           sizeof(svc) - 1, NULL) &&
-            inst_eq(svc, "stor98") && s98_rec_has("Devices", todo[j]) != 1) {
-            if (!s98_rec_text("Devices", todo[j], "switched")) {
-                ok = 0;
-                continue;
-            }
-            out("%s, which the mark service moved to Stor98, is recorded as "
-                "this\ninstaller's.\n", todo[j]);
-        }
-        if (!owed[j]) {
-            continue;
-        }
-        out("Enabling %s, left disabled by the mark service's switch to "
-            "Stor98 ... ", todo[j]);
-        memset(&pcp, 0, sizeof(pcp));
-        pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
-        pcp.ClassInstallHeader.InstallFunction = DIF_PROPERTYCHANGE;
-        pcp.StateChange = DICS_ENABLE;
-        pcp.Scope = DICS_FLAG_CONFIGSPECIFIC;
-        pcp.HwProfile = 0;
-        if (!api.SetCiParams(set, &data, &pcp.ClassInstallHeader,
-                             sizeof(pcp)) ||
-            !api.CallCi(DIF_PROPERTYCHANGE, set, &data)) {
-            out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+        if (r != ERROR_SUCCESS) {
+            out("A mark service Stor98 record could not be read (error %ld): "
+                "the records are\nnot settled.\n", (long)r);
             ok = 0;
-            continue;
+            break;
         }
-        memset(&ip, 0, sizeof(ip));
-        ip.cbSize = sizeof(ip);
-        if (api.GetDiParams(set, &data, &ip) &&
-            (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
-            out("done, restart pending.\n");
-            flagRestart = 1;
-        } else {
-            out("done.\n");
+        if (set == INVALID_HANDLE_VALUE) {
+            set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+            if (set == INVALID_HANDLE_VALUE) {
+                out("The device list could not be opened: the drives the mark "
+                    "service moved to\nStor98 are not settled.\n");
+                ok = 0;
+                break;
+            }
         }
-        flagChanged = 1;
+        /* Anything but a final state owes an enable, an unknown text too. */
+        if (!mk_s98_settle_one(set, id,
+                               type != REG_SZ || !(inst_eq(text, "done") ||
+                                                   inst_eq(text, "failed") ||
+                                                   inst_eq(text, "busy") ||
+                                                   inst_eq(text, "restart")))) {
+            ok = 0;
+        }
     }
-    api.Destroy(set);
+    RegCloseKey(k);
+    if (set != INVALID_HANDLE_VALUE) {
+        api.Destroy(set);
+    }
     return ok;
 }
 

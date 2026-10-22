@@ -4728,11 +4728,18 @@ is logged once and tried again at each poll. Once present and not
 disabled, the record becomes `done` when the drive runs Stor98 and
 `failed` otherwise, the ownership entry first wherever it is bound to
 Stor98. A `restart` record is decided
-the same way at the first poll after the service's start. **The
+the same way at the first pass after the service's start. A poll takes at
+most 16 records, from a cursor that goes on where the last poll stopped,
+so drives that stay absent while owing an enable never keep a present one
+waiting; the first pass lasts until it has read every record. **The
 uninstall** (and a run that removes the service with safe eject off,
-`mk_remove`) enables every devnode whose record still owes an enable,
+`mk_remove`) reads every record, with no limit, after the service is
+stopped and before its key goes: it enters each drive bound to Stor98
+under `Devices` (above) and enables every devnode whose record is not
+final (`disable`, `install`, `enable`, or a text it does not know),
 present or not (`DIF_PROPERTYCHANGE`, `DICS_ENABLE`, the current
-profile), after the service is stopped and before its key goes; one that
+profile). A records key or a record that cannot be read, a drive whose
+driver cannot be read, an entry that cannot be written or a devnode that
 cannot be enabled stops that step, the service and its key left for the
 next run (`mk_s98_settle`). So no drive is left disabled with nobody to
 enable it.
