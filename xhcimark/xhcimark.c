@@ -2687,7 +2687,10 @@ static void mk_s98_prune(void)
 /* The arrival entry of `id` at this whole walk: a devnode not seen at the
  * walk before starts a new arrival. With `create` 0, only an entry already
  * there is kept (a devnode present but not a candidate at this walk, its
- * properties unreadable for one): -1 when there is none. */
+ * properties unreadable for one): -1 when there is none. A full table
+ * gives up only an entry seen at neither this walk nor the one before (a
+ * devnode gone); with none to give up, -1, and that devnode is not tried at
+ * this walk. */
 static int mk_s98_seen(const char *id, int create)
 {
     int i;
@@ -2709,7 +2712,13 @@ static int mk_s98_seen(const char *id, int create)
     if (!create) {
         return -1;
     }
-    i = s98SeenCount < MK_S98_SEEN_MAX ? s98SeenCount++ : old;
+    if (s98SeenCount < MK_S98_SEEN_MAX) {
+        i = s98SeenCount++;
+    } else if (s98Seen[old].Walk + 1 < s98Walk) {
+        i = old;
+    } else {
+        return -1;
+    }
     memset(&s98Seen[i], 0, sizeof(s98Seen[i]));
     inst_copy(s98Seen[i].Id, id, sizeof(s98Seen[i].Id));
     s98Seen[i].Walk = s98Walk;
@@ -2792,7 +2801,7 @@ static void mk_s98_poll(const int *prot)
             continue;
         }
         s = mk_s98_seen(nodes[i].Id, 1);
-        if (done) {
+        if (s < 0 || done) {
             continue;
         }
         in.PolicyOk = policy;
