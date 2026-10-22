@@ -2799,9 +2799,18 @@ and a record file whose whole first line is this set's header for this
 folder** (on 98 SE and ME a power cut after the copies began can leave
 the file and lose the registry's key, which those systems write out
 later; read on the 43.48 leg of 2026-10-23) takes the file as this
-installer's, makes the key again with `RecordMade` 1, and recovers and
-appends to it; any other file of that name is in doubt, as above. Each
-write of `RecordMade` is followed by `RegFlushKey`, and each copied file
+installer's and makes the key again - a ticked run, an unticked one
+(which then recovers it) and the uninstall alike, `/list` saying so and
+writing nothing. What the lost key's `Staged` values protected is rebuilt
+first, conservatively: on 98 SE and ME every `DevicePath` entry under the
+folder is recorded as staged; on 2000 and later every INF of the store
+holding a recorded INF's bytes is recorded as `foreign` (its folder kept,
+the INF never removed); a store or `DevicePath` that cannot be read
+leaves the file as it was found, with the steps flag. Only then is
+`RecordMade` set to 1, and the file recovered and appended to; any other
+file of that name is in doubt, as above. Each write of `RecordMade` is
+followed by `RegFlushKey` (a flush that fails stops the step, the record
+kept), and each copied file
 is flushed (`FlushFileBuffers`) before its `D` line, so a power cut
 leaves fewer records naming bytes that were never written. A record file
 whose first line is not the header, or that cannot be read, stops the

@@ -21881,7 +21881,11 @@ static int other_key_made(int set, DWORD v)
      * after the copies would otherwise lose the record of them. */
     int ok = other_key_put(set, NULL, "RecordMade", REG_DWORD, &v, sizeof(v));
 
-    RegFlushKey(HKEY_LOCAL_MACHINE);
+    if (ok && RegFlushKey(HKEY_LOCAL_MACHINE) != ERROR_SUCCESS) {
+        out("The registry could not be written out after %s's record.\n",
+            inst_other_label(set));
+        ok = 0;
+    }
     return ok;
 }
 
@@ -22258,6 +22262,166 @@ static int other_copy_file(OTHSET *o, const char *recPath, const char *dest,
 
 static int other_remove(int set, int uninstall);
 
+/* No key for the set, and at the install directory's name a record file
+ * whose whole first line is this set's header for that folder: the key
+ * was lost (on 98 SE and ME a power cut before the registry was written
+ * out; section 6.7.5), the file is this installer's, and the key is made
+ * again for it. What the lost key's Staged values protected is rebuilt
+ * conservatively first: on 98 SE and ME every DevicePath entry under the
+ * folder recorded as staged; on 2000 and later every INF of the store
+ * holding a recorded INF's bytes recorded as foreign (its folder kept,
+ * the INF never removed). 1 adopted, 0 nothing to adopt, -1 in doubt or
+ * failed (said). */
+static int other_adopt(int set)
+{
+    char dir[INST_PATH_CHARS];
+    char recPath[INST_PATH_CHARS];
+    char header[INST_PATH_CHARS + 40];
+    DWORD n = 0;
+    char *text;
+    size_t hl;
+    int e;
+
+    if (toolDir[0] == '\0') {
+        return 0;
+    }
+    e = other_key_exists(set);
+    if (e != 0) {
+        return e < 0 ? -1 : 0;
+    }
+    join(dir, sizeof(dir), toolDir, inst_other_folder(set));
+    _snprintf(recPath, sizeof(recPath) - 1, "%s\\%s.REC", toolDir,
+              inst_other_folder(set));
+    recPath[sizeof(recPath) - 1] = '\0';
+    e = file_state(recPath);
+    if (e == 0) {
+        return 0;
+    }
+    text = e > 0 ? read_file(recPath, &n) : NULL;
+    inst_rec_header(header, sizeof(header), set, dir);
+    strcat(header, "\r\n");
+    hl = strlen(header);
+    if (text == NULL || n < hl || memcmp(text, header, hl) != 0) {
+        free(text);
+        out("%s is there and is not known to be this installer's: delete it "
+            "if it is not\nwanted, then run the installer again.\n", recPath);
+        flagSteps = 1;
+        return -1;
+    }
+    free(text);
+    if (opts.List) {
+        out("(/list) %s would be taken as this installer's record of %s.\n",
+            recPath, inst_other_label(set));
+        return 0;
+    }
+    if (!other_key_str(set, NULL, "Record", recPath) ||
+        !other_key_str(set, NULL, "Dir", dir) ||
+        !other_key_str(set, NULL, "Sums", inst_other_sums(set))) {
+        flagFailed = 1;
+        return -1;
+    }
+    if (!envNow.Nt) {
+        char list[2048];
+        char entry[INST_PATH_CHARS];
+        DWORD type = REG_SZ;
+        const char *s;
+        size_t dl = strlen(dir);
+        if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
+                      sizeof(list), &type)) {
+            out("DevicePath could not be read: %s's record is kept as it "
+                "was found.\n", inst_other_label(set));
+            flagSteps = 1;
+            return -1;
+        }
+        for (s = list; *s != '\0';) {
+            const char *end = strchr(s, ';');
+            size_t len = end != NULL ? (size_t)(end - s) : strlen(s);
+            if (len < sizeof(entry)) {
+                memcpy(entry, s, len);
+                entry[len] = '\0';
+                if (len > dl && inst_eqn(entry, dir, dl) &&
+                    entry[dl] == '\\' &&
+                    !other_key_str(set, "Staged", entry, "DevicePath")) {
+                    flagFailed = 1;
+                    return -1;
+                }
+            }
+            if (end == NULL) {
+                break;
+            }
+            s = end + 1;
+        }
+    } else {
+        OTHREC *recs = NULL;
+        int count = 0;
+        int i;
+        if (other_rec_load(set, recPath, dir, &recs, &count) <= 0) {
+            flagSteps = 1;
+            return -1;
+        }
+        for (i = 0; i < count; i++) {
+            const char *pth = recs[i].Path;
+            size_t pl = strlen(pth);
+            char list[1024];
+            char rel[INST_PATH_CHARS];
+            char *c;
+            const char *q;
+            if (pl < 4 || !inst_eq(pth + pl - 4, ".inf") ||
+                strlen(pth) <= strlen(dir) + 1) {
+                continue;
+            }
+            inst_copy(rel, pth + strlen(dir) + 1, sizeof(rel));
+            for (c = rel; *c != '\0'; c++) {
+                if (*c == '\\') {
+                    *c = '/';
+                }
+            }
+            if (!other_inventory(recs[i].Hash, 0xFFFFFFFFUL, list,
+                                 sizeof(list))) {
+                out("The driver store could not be listed: %s's record is "
+                    "kept as it was found.\n", inst_other_label(set));
+                free(recs);
+                flagSteps = 1;
+                return -1;
+            }
+            q = list;
+            while (*q != '\0') {
+                const char *end = strchr(q, '|');
+                size_t len = end != NULL ? (size_t)(end - q) : strlen(q);
+                char nm[INST_PATH_CHARS];
+                char vn[INST_PATH_CHARS * 2];
+                char vd[INST_PATH_CHARS + 96];
+                if (len < sizeof(nm)) {
+                    memcpy(nm, q, len);
+                    nm[len] = '\0';
+                    _snprintf(vn, sizeof(vn) - 1, "%s|%s", rel, nm);
+                    vn[sizeof(vn) - 1] = '\0';
+                    _snprintf(vd, sizeof(vd) - 1, "foreign %s %s",
+                              recs[i].Hash, nm);
+                    vd[sizeof(vd) - 1] = '\0';
+                    if (!other_key_str(set, "Staged", vn, vd)) {
+                        free(recs);
+                        flagFailed = 1;
+                        return -1;
+                    }
+                }
+                if (end == NULL) {
+                    break;
+                }
+                q = end + 1;
+            }
+        }
+        free(recs);
+    }
+    if (!other_key_made(set, 1)) {
+        flagFailed = 1;
+        return -1;
+    }
+    out("%s: its record %s was found with no registry key, and is taken "
+        "as this\ninstaller's again.\n", inst_other_label(set), recPath);
+    return 1;
+}
+
 /* The set's key and record for this run (section 6.7.5): 1 ready, with
  * the record's path in recPath and its recovery done; 0 the set is not
  * copied this run (said). */
@@ -22357,42 +22521,17 @@ static int other_begin(int set, const char *dir, char *recPath, size_t cap)
             return 0;
         }
     }
-    /* No key, and a record file of this set and folder whose whole first
-     * line is its header: the key was lost (on 98 SE and ME a power cut
-     * before the registry was written out), the file is this installer's,
-     * and the key is made again for it (section 6.7.5). Any other file of
-     * that name is in doubt and left. */
-    if (r <= 0 && file_state(recPath) == 1) {
-        DWORD n = 0;
-        char *text = read_file(recPath, &n);
-        size_t hl;
-        inst_rec_header(header, sizeof(header), set, dir);
-        strcat(header, "\r\n");
-        hl = strlen(header);
-        if (text != NULL && n >= hl && memcmp(text, header, hl) == 0) {
-            free(text);
-            if (!other_key_str(set, NULL, "Record", recPath) ||
-                !other_key_str(set, NULL, "Dir", dir) ||
-                !other_key_str(set, NULL, "Sums", inst_other_sums(set)) ||
-                !other_key_made(set, 1)) {
-                flagFailed = 1;
-                inst_copy(o->Why, "its record could not be written",
-                          sizeof(o->Why));
-                return 0;
-            }
-            logonly("other: %s has no key and %s is its record: the key is "
-                    "made again\n", inst_other_subkey(set), recPath);
+    /* No key and this set's record file: adopted (section 6.7.5). */
+    if (r <= 0 && file_state(recPath) != 0) {
+        int ad = other_adopt(set);
+        if (ad < 0) {
+            inst_copy(o->Why, "a file of its record's name is in the way, or "
+                      "its record could not be made again", sizeof(o->Why));
+            return 0;
+        }
+        if (ad > 0) {
             r = 1;
             made = 1;
-        } else {
-            free(text);
-            out("%s is there and is not known to be this installer's: delete "
-                "it if it is not\nwanted, then run the installer again.\n",
-                recPath);
-            flagSteps = 1;
-            inst_copy(o->Why, "a file of its record's name is in the way",
-                      sizeof(o->Why));
-            return 0;
         }
     }
     if (r <= 0 || made == 0) {
@@ -22653,7 +22792,13 @@ static void other_recover_only(int set)
     OTHREC *recs = NULL;
     int count = 0;
 
-    if (opts.List || other_key_exists(set) != 1) {
+    if (opts.List) {
+        return;
+    }
+    if (other_key_exists(set) == 0 && other_adopt(set) <= 0) {
+        return;
+    }
+    if (other_key_exists(set) != 1) {
         return;
     }
     other_key(set, key, sizeof(key));
@@ -23213,7 +23358,15 @@ static int other_remove(int set, int uninstall)
     other_key(set, key, sizeof(key));
     r = other_key_exists(set);
     if (r == 0) {
-        return 1;
+        /* A record file whose key was lost (section 6.7.5). */
+        r = other_adopt(set);
+        if (r == 0) {
+            return 1;
+        }
+        if (r < 0) {
+            return 0;
+        }
+        r = other_key_exists(set);
     }
     if (r < 0) {
         out("  %s: its record cannot be read; nothing of it is removed.\n",
