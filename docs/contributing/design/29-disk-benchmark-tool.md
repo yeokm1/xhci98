@@ -1,8 +1,9 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 5, 2026-10-22, before code (roadmap-usb4 task 43.50),
-reviewed and revised four times the same day. Draft 5: the write
-generation guarded at issue, never wrapping. Draft 4: a write
+Status: draft 6, 2026-10-22, before code (roadmap-usb4 task 43.50),
+reviewed and revised five times the same day. Draft 6: the write
+generation taken by a saturating allocator under a critical section.
+Draft 5: the write generation guarded at issue, never wrapping. Draft 4: a write
 generation in every stamp and in the expected-state map, so a dropped
 repeated write is found; the random generator's zero state and its
 redraws bounded. Draft 3: every reopened handle
@@ -296,11 +297,14 @@ Every test reads and writes one file of the tool's own,
   blocks ("lower the file size, or raise the smallest write size, to
   verify"), or whose byte-budgeted tests alone could issue more than
   2^32 - 1 writes. Timed tests have no count the plan can know, so the
-  generation is also guarded where it is taken: one run-wide counter,
-  advanced with `InterlockedIncrement` at each write's issue by every
-  worker, over every test, pass and warm-up; a worker that would take
-  the value `0xFFFFFFFF` takes none, sets the run's stop event and the
-  run ends as Stop ends it (section 4.4: no new request, every request in
+  generation is also guarded where it is taken: one run-wide counter
+  over every test, pass and warm-up, read, checked and advanced in one
+  step under a critical section (`EnterCriticalSection`, every target)
+  by the pure half's allocator, which hands out 1 to `0xFFFFFFFE` and
+  then stays saturated: every later call, from any worker, gets "none",
+  whatever that worker saw of the stop event before. A worker that gets
+  "none" issues nothing, sets the run's stop event, and the run ends as
+  Stop ends it (section 4.4: no new request, every request in
   flight collected, then the verification of what completed), reported
   as "the run reached the limit of four thousand million writes for a
   verified run". The generation never wraps to 0 or to a value used
@@ -1186,8 +1190,9 @@ maps over the cap; the pattern's unit for given seeds and its check
 against the map finding a dropped write (an older generation's stamp,
 also when the same block was written earlier in the same test or pass), a
 misplaced write, another run's unit, a changed body, an untouched region
-and a block written twice; the generation guard from a counter started at `0xFFFFFFF0` with
-several workers; the in-flight exclusion at depth 32, the bounded redraw
+and a block written twice; the generation allocator from `0xFFFFFFF0`, saturating at
+`0xFFFFFFFE`, with two workers forced to interleave at exhaustion, one of
+them already past its stop check; the in-flight exclusion at depth 32, the bounded redraw
 and a part of one block; a zero seed and a derived zero state; the
 arithmetic at its bounds (frequencies of 1,193,182 Hz, 3,579,545 Hz and
 near 2^32, a 2-hour interval, a zero interval) and each rounding edge; a
