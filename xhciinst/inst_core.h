@@ -1520,6 +1520,14 @@ int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
  * is. 1 when the drive is installed over. */
 int inst_s98_over_inbox(int is8, const char *service);
 
+/* Record 21 section 7.5 (roadmap-usb4 task 43.59): whether an install or
+ * update run writes the mark service's Parameters\Stor98Inf, the staged
+ * stor98.inf the service puts on a tunnelled drive Windows gave stornvme:
+ * on the INST_OS_CMONLY kind (cmOnly), with Stor98 in the run (s98In), its
+ * INF staged by this run (staged) and the service installed or kept at the
+ * run's end (mkAction INST_MK_INSTALL). 1 to write it. */
+int inst_s98_auto_value(int cmOnly, int s98In, int staged, int mkAction);
+
 /* Record 23 section 4.4 (revision 23): a device bound to Stor98 that is a
  * known tunnel drive, for the shared-file rule. Present: behind a tunnel.
  * Not present: on NT one the install record names; on 98 SE and ME any

@@ -3760,6 +3760,14 @@ static void test_s98(void)
               "8 and 8.1, /yes: N");
         CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 1, &asked, &def) && !asked,
               "8 and 8.1, /stor98: installed unasked");
+        CHECK(inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL),
+              "43.59: 8, 8.1 and 10 with Stor98 staged and the service: the value written");
+        CHECK(!inst_s98_auto_value(0, 1, 1, INST_MK_INSTALL) &&
+              !inst_s98_auto_value(1, 0, 1, INST_MK_INSTALL) &&
+              !inst_s98_auto_value(1, 1, 0, INST_MK_INSTALL) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_LEAVE) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_REMOVE),
+              "43.59: 2000 to 7, Stor98 not in the run or not staged, or no service: not written");
         /* Task 43.23 (record 26 section 5.3.1 case 3b): 8.1's and 10's own
          * stornvme on a tunnel drive is installed over, forced; nothing
          * else is. */

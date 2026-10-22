@@ -5668,6 +5668,11 @@ int inst_s98_over_inbox(int is8, const char *service)
     return is8 && service != NULL && inst_eq(service, "stornvme");
 }
 
+int inst_s98_auto_value(int cmOnly, int s98In, int staged, int mkAction)
+{
+    return cmOnly && s98In && staged && mkAction == INST_MK_INSTALL;
+}
+
 int inst_s98_known_tunnel(int nt, int present, int place, int recorded)
 {
     if (present) {

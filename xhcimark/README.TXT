@@ -21,11 +21,11 @@ name again when the device leaves. It touches nothing else.
 Where it runs
 -------------
 
-Windows 2000, XP, Vista and 7, 32-bit and 64-bit, only when the
+Windows 2000 to 10 (below build 22000), 32-bit and 64-bit, only when the
 Thunderbolt 3 / USB4 component is installed. Never on Windows 98 SE or ME.
 
-  XHCIMARK.EXE  32-bit Windows 2000, XP, Vista and 7
-  XHCIMK64.EXE  Windows XP x64, Vista x64 and 7 x64
+  XHCIMARK.EXE  32-bit Windows 2000, XP, Vista, 7, 8, 8.1 and 10
+  XHCIMK64.EXE  Windows XP x64, Vista x64, 7 x64, 8 x64, 8.1 x64 and 10 x64
 
 The installer copies the right one into the Windows system directory
 (System32), registers it as the service "xhcimark" (display name "xHCI98
@@ -58,6 +58,23 @@ What it does
     you stopped it, the service tells the driver, which then tears its
     tunnel down (the USB4 connection manager).
 
+Stor98 on a drive plugged in later (Windows 8, 8.1 and 10)
+----------------------------------------------------------
+
+On these systems Windows has its own NVMe driver, stornvme, and it gives
+it to an NVMe drive behind a Thunderbolt or USB4 tunnel that is plugged
+in after the install, ahead of the bundled Stor98. When the installer
+installed Stor98 there, it names the staged Stor98 in the setting
+Stor98Inf below, and the service then moves each such drive to Stor98,
+once, a second or two after Windows started it: it stops the drive (as
+Device Manager's Disable does), installs Stor98 on that one device and
+starts it again. An internal NVMe drive is never touched, nor a drive
+with another maker's driver. A drive with a file open, a paging file or
+Windows itself on it refuses the stop and stays on stornvme. A drive
+moved to Stor98 is never moved again by the service, so a driver you
+choose later for it stays. While the installer runs, the service waits.
+Its records are under ...\Services\xhcimark\Stor98, one per drive.
+
 The log
 -------
 
@@ -67,12 +84,17 @@ check, write, removal and restart. Send it with a Thunderbolt report.
 Settings
 --------
 
-In HKLM\SYSTEM\CurrentControlSet\Services\xhcimark\Parameters, both
-REG_DWORD, both optional:
+In HKLM\SYSTEM\CurrentControlSet\Services\xhcimark\Parameters, all
+optional:
 
-  Restart   1 (the default): restart a first plug the rebuild overtook.
-            0: never; such a device is listed after its next start.
-  LogBytes  the log's size bound, 262144 by default.
+  Restart    REG_DWORD. 1 (the default): restart a first plug the rebuild
+             overtook. 0: never; such a device is listed after its next
+             start.
+  LogBytes   REG_DWORD. The log's size bound, 262144 by default.
+  Stor98Inf  REG_SZ. The staged Stor98 INF (%SystemRoot%\INF\oemNN.inf)
+             that drives on stornvme behind a tunnel are moved to.
+             Written by the installer on Windows 8, 8.1 and 10 when Stor98
+             is installed; absent: no drive is moved.
 
 For testing only
 ----------------
