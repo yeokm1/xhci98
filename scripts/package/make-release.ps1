@@ -7715,12 +7715,17 @@ after checkout. Restore it with:  git checkout -- LICENSE
         # One set per download (task 43.48), each staged; all of them are
         # published after the swap, or all removed when the cut fails.
         foreach ($dk in $downloadKinds) {
+            # Registered for the failure path before it is built, so a set
+            # whose assembly throws half-way is removed with the others.
+            $pendingPaths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Staged -Kind $dk
+            $stagedUploads += [pscustomobject]@{ Root = $pendingPaths.Root; Zip = $pendingPaths.Zip;
+                                                 Final = (Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Kind $dk) }
             $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
                                  -LegArches $legArches `
                                  -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
                                  -Publishable $publishable -Staged -Stor98 $stor98 -DriverPack $driverPack `
                                  -Kind $dk -Kinds $downloadKinds -WdmFreeSet $wdmFreeSet -NonFreeSet $nonFreeSet
-            $stagedUploads += $set
+            $stagedUploads[$stagedUploads.Count - 1] = $set
             if ($dk -eq "base") { $stagedUpload = $set }
         }
     }

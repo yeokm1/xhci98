@@ -20073,6 +20073,22 @@ static int other_rec_line(const char *path, char kind, const char *token,
 /* The record file read back (section 6.7.5): 1 read into *recs (the F
  * entries, each with its run's token and whether a T, D or A followed),
  * 0 absent, -1 not this set's record or unreadable. */
+/* The record file cut back to its last whole line (good bytes). */
+static int other_rec_trim(const char *path, DWORD good)
+{
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    BOOL ok;
+
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = SetFilePointer(h, (LONG)good, NULL, FILE_BEGIN) == good &&
+         SetEndOfFile(h) && FlushFileBuffers(h);
+    CloseHandle(h);
+    return ok ? 1 : 0;
+}
+
 static int other_rec_load(int set, const char *path, const char *dir,
                           OTHREC **recs, int *count)
 {
@@ -20111,7 +20127,13 @@ static int other_rec_load(int set, const char *path, const char *dir,
         INST_REC_LINE rl;
         e = strstr(p, "\r\n");
         if (e == NULL) {
-            /* A last line without its CRLF: a write cut short. */
+            /* A last line without its CRLF: a write cut short, cut off
+             * the file before anything is appended to it. */
+            if (!opts.List && !other_rec_trim(path, (DWORD)(p - text))) {
+                free(text);
+                free(r);
+                return -1;
+            }
             break;
         }
         *e = '\0';
@@ -20215,10 +20237,31 @@ static int other_rec_recover(const char *recPath, OTHREC *recs, int count)
 
 /* ---- the set's key ---- */
 
+/* 1 the set's key is there, 0 not, -1 it cannot be opened. */
+static int other_key_exists(int set)
+{
+    char key[INST_PATH_CHARS];
+    HKEY k;
+    LONG r;
+
+    other_key(set, key, sizeof(key));
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &k);
+    if (r == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return 1;
+    }
+    return (r == ERROR_FILE_NOT_FOUND || r == ERROR_PATH_NOT_FOUND) ? 0 : -1;
+}
+
 static int other_key_text(int set, const char *name, char *buf, DWORD cap)
 {
     char key[INST_PATH_CHARS];
+    int e = other_key_exists(set);
 
+    if (e <= 0) {
+        buf[0] = '\0';
+        return e;
+    }
     other_key(set, key, sizeof(key));
     return reg_text3(HKEY_LOCAL_MACHINE, key, name, buf, cap);
 }
@@ -20292,7 +20335,25 @@ static int other_key_delete(int set)
     if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
         return 0;
     }
-    RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_OTHER_KEY);
+    /* Other only when empty: on 98 SE and ME RegDeleteKey takes the
+     * subkeys with it, the other set's among them. */
+    {
+        HKEY k;
+        DWORD subKeys = 1;
+        DWORD values = 1;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_OTHER_KEY, 0, KEY_READ, &k)
+            == ERROR_SUCCESS) {
+            if (RegQueryInfoKeyA(k, NULL, NULL, NULL, &subKeys, NULL, NULL,
+                                 &values, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                subKeys = 1;
+            }
+            RegCloseKey(k);
+            if (subKeys == 0 && values == 0) {
+                RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_OTHER_KEY);
+            }
+        }
+    }
     return 1;
 }
 
@@ -20374,7 +20435,7 @@ static int other_inventory(const char *hex, DWORD size, char *list,
                 continue;
             }
             if (list[0] != '\0') {
-                strcat(list, " ");
+                strcat(list, "|");
             }
             strcat(list, fd.cFileName);
         }
@@ -20384,14 +20445,14 @@ static int other_inventory(const char *hex, DWORD size, char *list,
     return whole && e == ERROR_NO_MORE_FILES;
 }
 
-/* 1 when the word name is one of list's. */
+/* 1 when name is one of list's ('|'-separated: no file name holds one). */
 static int other_in_list(const char *list, const char *name)
 {
     const char *p = list;
     size_t n = strlen(name);
 
     while (*p != '\0') {
-        const char *e = strchr(p, ' ');
+        const char *e = strchr(p, '|');
         size_t len = e != NULL ? (size_t)(e - p) : strlen(p);
         if (len == n && inst_eqn(p, name, n)) {
             return 1;
@@ -20402,6 +20463,31 @@ static int other_in_list(const char *list, const char *name)
         p = e + 1;
     }
     return 0;
+}
+
+/* A Staged value's data "own <64 hex> <name>" or "foreign <64 hex>
+ * <name>" read: 1 (own 1 or 0), 0 not one. */
+static int other_staged_data(const char *data, int *own, char *hex,
+                             char *name, size_t cap)
+{
+    const char *p;
+
+    if (inst_starts(data, "own ")) {
+        *own = 1;
+        p = data + 4;
+    } else if (inst_starts(data, "foreign ")) {
+        *own = 0;
+        p = data + 8;
+    } else {
+        return 0;
+    }
+    if (strlen(p) < 66 || p[64] != ' ' || strlen(p + 65) >= cap) {
+        return 0;
+    }
+    memcpy(hex, p, 64);
+    hex[64] = '\0';
+    inst_copy(name, p + 65, cap);
+    return 1;
 }
 
 /* %windir%\inf\name's bytes are hex: 1, 0 not (or gone), -1 unreadable. */
@@ -20426,17 +20512,17 @@ static int other_store_holds(const char *name, const char *hex)
 
 /* NT: a pending value resolved (section 6.7.6): every INF of the store
  * holding its bytes becomes a foreign value; the pending value goes. 0 when
- * the store cannot be read. */
+ * the store cannot be read. data is "pending <64 hex> <names>". */
 static int other_pending_resolve(int set, const char *rel, const char *data)
 {
     char hex[65];
-    char list[512];
+    char list[1024];
     char name[INST_PATH_CHARS];
-    char vname[INST_PATH_CHARS];
-    char vdata[160];
+    char vname[INST_PATH_CHARS * 2];
+    char vdata[INST_PATH_CHARS + 96];
     const char *p;
+    int n;
 
-    /* "pending <hash> <names>" */
     if (strlen(data) < 8 + 64) {
         return other_key_del_value(set, "Staged", rel);
     }
@@ -20447,21 +20533,28 @@ static int other_pending_resolve(int set, const char *rel, const char *data)
     }
     p = list;
     while (*p != '\0') {
-        const char *e = strchr(p, ' ');
+        const char *e = strchr(p, '|');
         size_t len = e != NULL ? (size_t)(e - p) : strlen(p);
-        if (len < sizeof(name)) {
-            memcpy(name, p, len);
-            name[len] = '\0';
-            _snprintf(vname, sizeof(vname) - 1, "%s|%s", rel, name);
-            vname[sizeof(vname) - 1] = '\0';
-            _snprintf(vdata, sizeof(vdata) - 1, "foreign %s %s", name, hex);
-            vdata[sizeof(vdata) - 1] = '\0';
-            if (!other_key_str(set, "Staged", vname, vdata)) {
-                return 0;
-            }
-            out("An interrupted run may have left %s in the driver store as "
-                "%s; it is kept as\nit is.\n", rel, name);
+        if (len >= sizeof(name)) {
+            return 0;
         }
+        memcpy(name, p, len);
+        name[len] = '\0';
+        n = _snprintf(vname, sizeof(vname) - 1, "%s|%s", rel, name);
+        if (n < 0 || n >= (int)sizeof(vname) - 1) {
+            return 0;
+        }
+        vname[sizeof(vname) - 1] = '\0';
+        n = _snprintf(vdata, sizeof(vdata) - 1, "foreign %s %s", hex, name);
+        if (n < 0 || n >= (int)sizeof(vdata) - 1) {
+            return 0;
+        }
+        vdata[sizeof(vdata) - 1] = '\0';
+        if (!other_key_str(set, "Staged", vname, vdata)) {
+            return 0;
+        }
+        out("An interrupted run may have left %s in the driver store as "
+            "%s; it is kept as\nit is.\n", rel, name);
         if (e == NULL) {
             break;
         }
@@ -20825,9 +20918,11 @@ static int other_stage_nt(int set, const char *dir, const INST_STAGE_LINE *s,
     char path[INST_PATH_CHARS];
     char media[INST_PATH_CHARS];
     char dest[INST_PATH_CHARS];
-    char list[400];
-    char data[512];
+    char list[1024];
+    char data[INST_PATH_CHARS + 1100];
     char name[INST_PATH_CHARS];
+    char vhex[65];
+    int own;
     char *component = NULL;
     const char *nm;
     DWORD size = 0;
@@ -20840,21 +20935,15 @@ static int other_stage_nt(int set, const char *dir, const INST_STAGE_LINE *s,
         join(key, sizeof(key), key, "Staged");
         r = reg_text3(HKEY_LOCAL_MACHINE, key, s->Inf, data, sizeof(data));
     }
-    if (r > 0 && (inst_starts(data, "own ") || inst_starts(data, "foreign "))) {
-        const char *sp = strchr(data, ' ') + 1;
-        const char *e = strchr(sp, ' ');
-        if (e != NULL && (size_t)(e - sp) < sizeof(name)) {
-            memcpy(name, sp, (size_t)(e - sp));
-            name[e - sp] = '\0';
-            r = other_store_holds(name, e + 1);
-            if (r > 0) {
-                return 1;
-            }
-            if (r < 0) {
-                out("  %s: the store's %s cannot be read; it is left as it "
-                    "is.\n", s->Inf, name);
-                return 0;
-            }
+    if (r > 0 && other_staged_data(data, &own, vhex, name, sizeof(name))) {
+        r = other_store_holds(name, vhex);
+        if (r > 0) {
+            return 1;
+        }
+        if (r < 0) {
+            out("  %s: the store's %s cannot be read; it is left as it "
+                "is.\n", s->Inf, name);
+            return 0;
         }
         other_key_del_value(set, "Staged", s->Inf);
     } else if (r > 0 && inst_starts(data, "pending ")) {
@@ -20897,16 +20986,47 @@ static int other_stage_nt(int set, const char *dir, const INST_STAGE_LINE *s,
         nm = strrchr(nm, '\\') + 1;
     }
     if (other_in_list(list, nm)) {
-        _snprintf(data, sizeof(data) - 1, "foreign %s %s", nm, hash);
+        _snprintf(data, sizeof(data) - 1, "foreign %s %s", hash, nm);
         out("  %s is already in the driver store as %s, not placed by this "
             "installer;\n  Windows may use the files stored with it (whether "
             "they are this set's is\n  not read).\n", s->Inf, nm);
     } else {
-        _snprintf(data, sizeof(data) - 1, "own %s %s", nm, hash);
+        _snprintf(data, sizeof(data) - 1, "own %s %s", hash, nm);
         flagChanged = 1;
     }
     data[sizeof(data) - 1] = '\0';
     return other_key_str(set, "Staged", s->Inf, data);
+}
+
+/* An earlier run's open lines closed, for a set this run does not copy
+ * (section 6.7.5's recovery runs whether or not the row is ticked). */
+static void other_recover_only(int set)
+{
+    char key[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char recPath[INST_PATH_CHARS];
+    DWORD made = 0;
+    OTHREC *recs = NULL;
+    int count = 0;
+
+    if (opts.List || other_key_exists(set) != 1) {
+        return;
+    }
+    other_key(set, key, sizeof(key));
+    if (other_key_text(set, "Dir", dir, sizeof(dir)) <= 0 ||
+        other_key_text(set, "Record", recPath, sizeof(recPath)) <= 0 ||
+        !reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made) ||
+        made != 1) {
+        return;
+    }
+    if (other_rec_load(set, recPath, dir, &recs, &count) <= 0) {
+        out("%s cannot be read as this installer's record of %s.\n", recPath,
+            inst_other_label(set));
+        flagSteps = 1;
+        return;
+    }
+    other_rec_recover(recPath, recs, count);
+    free(recs);
 }
 
 static void other_run_set(int set)
@@ -20928,6 +21048,7 @@ static void other_run_set(int set)
     o->LeftOut[0] = '\0';
     o->Why[0] = '\0';
     if (o->State != INST_OTHER_CARRIED || !o->Include || toolDir[0] == '\0') {
+        other_recover_only(set);
         return;
     }
     join(dir, sizeof(dir), toolDir, inst_other_folder(set));
@@ -20974,7 +21095,9 @@ static void other_run_set(int set)
     out("%s: %d of its %d files are in %s.\n", inst_other_label(set),
         o->InFolder, o->Count + 1, dir);
     if (left > 0) {
-        out("Not copied: %s%s.\n", o->LeftOut, left > 3 ? " and more" : "");
+        out("Not copied: %s%s (see the log).\n", o->LeftOut,
+            left > 3 ? " and more" : "");
+        flagSteps = 1;
     }
     if (o->StageOn && othSys >= 0) {
         char done[INST_PATH_CHARS * 4];
@@ -20994,6 +21117,7 @@ static void other_run_set(int set)
             if (!other_folder_whole(o, dir, folder, why, sizeof(why))) {
                 out("  %s is not staged: %s is missing, changed or unlisted.\n",
                     s->Inf, why);
+                left++;
                 continue;
             }
             if (!envNow.Nt) {
@@ -21007,10 +21131,17 @@ static void other_run_set(int set)
                         strcat(done, folderPath);
                         strcat(done, ";");
                     }
+                } else {
+                    left++;
                 }
             } else if (other_stage_nt(set, dir, s, o->Files[k].Hash)) {
                 o->StagedNow++;
+            } else {
+                left++;
             }
+        }
+        if (left > 0) {
+            flagSteps = 1;
         }
         out("%s: %d %s for this Windows staged.\n", inst_other_label(set),
             o->StagedNow, envNow.Nt ? "INF(s)" : "folder(s)");
@@ -21052,19 +21183,30 @@ static int other_kept(const char *kept, const char *path)
     return 0;
 }
 
+static int othKeepFull;         /* a folder to keep did not fit kept   */
+
 static void other_keep(char *kept, size_t cap, const char *dir,
                        const char *rel)
 {
     char folder[INST_PATH_CHARS];
+    char probe[INST_PATH_CHARS + 1];
 
     other_path(folder, sizeof(folder), dir, rel);
     if (strrchr(folder, '\\') != NULL) {
         *strrchr(folder, '\\') = '\0';
     }
-    if (strlen(kept) + strlen(folder) + 2 < cap) {
-        strcat(kept, folder);
-        strcat(kept, ";");
+    /* Once each. */
+    inst_copy(probe, folder, sizeof(probe));
+    strncat(probe, "\\x", sizeof(probe) - strlen(probe) - 1);
+    if (other_kept(kept, probe)) {
+        return;
     }
+    if (strlen(kept) + strlen(folder) + 2 >= cap) {
+        othKeepFull = 1;
+        return;
+    }
+    strcat(kept, folder);
+    strcat(kept, ";");
 }
 
 /* An INF a devnode's driver key names: 1 named, 0 not, -1 a key unread. */
@@ -21196,25 +21338,28 @@ static int other_unstage(int set, const char *dir, char *kept, size_t cap)
             continue;
         }
         {
-            const char *sp = strchr(data, ' ');
-            const char *ep = sp != NULL ? strchr(sp + 1, ' ') : NULL;
             const char *rel = name;
             char relBuf[INST_PATH_CHARS];
-            int own = inst_starts(data, "own ");
+            char vhex[65];
+            int own = 0;
             int h;
-            if (sp == NULL || ep == NULL ||
-                (size_t)(ep - sp - 1) >= sizeof(store)) {
-                i++;
-                continue;
-            }
-            memcpy(store, sp + 1, (size_t)(ep - sp - 1));
-            store[ep - sp - 1] = '\0';
             if (strchr(name, '|') != NULL) {
                 inst_copy(relBuf, name, sizeof(relBuf));
                 *strchr(relBuf, '|') = '\0';
                 rel = relBuf;
             }
-            h = other_store_holds(store, ep + 1);
+            if (!other_staged_data(data, &own, vhex, store, sizeof(store))) {
+                /* A value this installer cannot read: its folder is kept,
+                 * and the value with it. */
+                out("  %s: its staging record cannot be read; its folder is "
+                    "kept.\n", rel);
+                flagSteps = 1;
+                ok = 0;
+                other_keep(kept, cap, dir, rel);
+                i++;
+                continue;
+            }
+            h = other_store_holds(store, vhex);
             if (h < 0) {
                 out("  The driver store's %s cannot be read: %s's folder is "
                     "kept.\n", store, rel);
@@ -21310,7 +21455,7 @@ static int other_remove(int set, int uninstall)
     char dir[INST_PATH_CHARS];
     char recPath[INST_PATH_CHARS];
     char hex[65];
-    char kept[INST_PATH_CHARS * 8];
+    char kept[INST_PATH_CHARS * 32];
     DWORD made = 1;
     OTHREC *recs = NULL;
     int count = 0;
@@ -21348,8 +21493,15 @@ static int other_remove(int set, int uninstall)
         return other_key_delete(set);
     }
     kept[0] = '\0';
+    othKeepFull = 0;
     if (made == 1) {
         if (!other_unstage(set, dir, kept, sizeof(kept))) {
+            return 0;
+        }
+        if (othKeepFull) {
+            out("  %s: too many folders to keep; its copies are left.\n",
+                inst_other_label(set));
+            flagSteps = 1;
             return 0;
         }
         r = other_rec_load(set, recPath, dir, &recs, &count);
