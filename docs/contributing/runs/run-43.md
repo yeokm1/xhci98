@@ -410,7 +410,7 @@ Owed by design record 30 (sections 2.3, 4.3 and 4.7) before its code.
 Static only (capstone over the LE images with their fixups applied,
 objects mapped at `object * 0x100000`; nothing executed), the QuickInstall
 image's `IOS.VXD`, `SCSIPORT.PDR`, `DISKTSD.VXD` and `DISKVSD.VXD`
-(`E:\xhci98-vm\spd9x\img\bin`), and the gold 98 SE CAB members for the
+(copies kept on development host A), and the gold 98 SE CAB members for the
 DRPs. Addresses are mapped addresses (object 1 at `0x100000`).
 
 **Which file is which layer**, from each file's DRP (`XXXXXXXX`, then
