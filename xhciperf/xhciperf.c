@@ -954,13 +954,54 @@ typedef struct s98_find_req {
     volatile LONG done;
 } S98_FIND_REQ;
 
-/* 9x: how many SCSI-enumerated disk instances have this model in their id */
-static int scsi_model_count(const char *want)
+typedef DWORD (WINAPI *PF_CMLOCATE)(DWORD *, char *, ULONG);
+
+/* An instance name's last part as 9x writes it for a SCSI disk of a PCI
+ * adapter, "BBDF0000" (bus, device << 3 | function, in hex): 1 and *loc
+ * (bus << 16 | device << 3 | function, Stor98's form) when it reads so */
+static int instance_location(const char *in, pf_u32 *loc)
+{
+    const char *p = strrchr(in, '&');
+    pf_u32 v = 0;
+    int i;
+
+    p = (p != NULL) ? p + 1 : in;
+    if (strlen(p) != 8) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        char c = p[i];
+
+        v <<= 4;
+        if (c >= '0' && c <= '9') {
+            v |= (pf_u32)(c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            v |= (pf_u32)(c - 'A' + 10);
+        } else if (c >= 'a' && c <= 'f') {
+            v |= (pf_u32)(c - 'a' + 10);
+        } else {
+            return 0;
+        }
+    }
+    if ((v & 0xFFFFu) != 0) {
+        return 0;
+    }
+    *loc = ((v >> 24) << 16) | ((v >> 16) & 0xFFu);
+    return 1;
+}
+
+/* 9x: how many disk instances under Enum\SCSI have this model in their id,
+ * are present now (the configuration manager, where it answers) and, where
+ * the instance name carries a PCI location, are on the adapter at pci.
+ * Devnodes of disks seen before stay in the registry, and are not counted. */
+static int scsi_model_count(const char *want, pf_u32 pci)
 {
     HKEY scsi, dev;
-    char dn[256], in[256], nd[256];
+    char dn[256], in[256], nd[256], id[600];
     DWORD i, j;
     int count = 0;
+    HMODULE cm = LoadLibraryA("CFGMGR32.DLL");
+    PF_CMLOCATE locate = (cm != NULL) ? (PF_CMLOCATE)GetProcAddress(cm, "CM_Locate_DevNodeA") : NULL;
 
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\SCSI", 0, KEY_READ, &scsi) != ERROR_SUCCESS) {
         return 0;
@@ -971,11 +1012,30 @@ static int scsi_model_count(const char *want)
             continue;
         }
         for (j = 0; RegEnumKeyA(dev, j, in, sizeof(in)) == ERROR_SUCCESS; j++) {
+            pf_u32 loc;
+
+            if (locate != NULL) {
+                DWORD dnode = 0;
+
+                sz_cpy(id, sizeof(id), "SCSI\\");
+                sz_cat(id, sizeof(id), dn);
+                sz_cat(id, sizeof(id), "\\");
+                sz_cat(id, sizeof(id), in);
+                if (locate(&dnode, id, 0) != 0) {
+                    continue;   /* not present: a disk seen before */
+                }
+            }
+            if (instance_location(in, &loc) && loc != pci) {
+                continue;       /* on another adapter */
+            }
             count++;
         }
         RegCloseKey(dev);
     }
     RegCloseKey(scsi);
+    if (cm != NULL) {
+        FreeLibrary(cm);
+    }
     return count;
 }
 
@@ -993,6 +1053,7 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
     char letter = folder[0];
 
     char found[64];
+    pf_u32 foundPci = 0;
 
     if (letter >= 'a' && letter <= 'z') {
         letter = (char)(letter - 'a' + 'A');
@@ -1066,13 +1127,14 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
                 matches++;
                 rq->ha = ha;
                 rq->target = t;
+                foundPci = pci;
                 sz_cpy(found, sizeof(found), want);
             }
         }
     }
     if (g_aspiHung) {
         rq->state = S98_ST_DEAD;
-    } else if (matches == 1 && scsi_model_count(found) == 1) {
+    } else if (matches == 1 && scsi_model_count(found, foundPci) == 1) {
         rq->state = S98_ST_OK;
     } else if (matches >= 1) {
         rq->state = S98_ST_AMBIG;
@@ -1285,6 +1347,8 @@ struct run {
     int stepIndex;
     pf_u64 region;
     volatile LONG issueEnd;
+    int timed;              /* the step ends at deadline (GetTickCount) */
+    DWORD deadline;
     HANDLE go;
     HANDLE stepEnd;
     CRITICAL_SECTION cs;
@@ -1377,6 +1441,12 @@ static int pick(WORKER *w, pf_u64 *off, int write, int depth)
     int k, tries;
 
     if (r->issueEnd || WaitForSingleObject(r->stepEnd, 0) == WAIT_OBJECT_0 || stopped()) {
+        return 0;
+    }
+    /* A timed step's end is also the workers' to see: on 98 SE and ME a
+     * synchronous request may keep the controller from running on time */
+    if (r->timed && (LONG)(GetTickCount() - r->deadline) >= 0) {
+        InterlockedExchange((LONG *)&r->issueEnd, 1);
         return 0;
     }
     if (s->budget != 0 && w->budgetLeft < s->size) {
@@ -2250,6 +2320,8 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
     if (before != NULL && gotBefore != NULL) {
         *gotBefore = s98_read(before);
     }
+    r->timed = (s->budget == 0);
+    r->deadline = GetTickCount() + (DWORD)s->timeSec * 1000u;
     k0 = GetTickCount();
     t0 = qpc_now();
     SetEvent(r->go);
