@@ -1632,8 +1632,10 @@ Only 22H2 is read here, and the release notes say so (43.36).
   revision 31). A package without one is refused on 10 x64 as measured
   above (`0xE000022F`, "Driver package does not contain a catalog file");
   with one, the package installs in test-signing mode with Secure Boot
-  off (read on the 10 x64 guest, roadmap-usb4 43.36's catalog leg, run
-  sheet 43). The x86 package stays without one: 10 x86 takes it with the
+  off, after the publisher prompt (measured on the 10 x64 and 8.1 x64
+  guests with the packager's catalogs signed by a guest-made throwaway
+  certificate, run sheet 43, "43.36 the x64 catalog"; the owner-signed
+  package's leg is owed). The x86 package stays without one: 10 x86 takes it with the
   prompt (measured above).
 - **Secure Boot on.** The refusal of a test-signed driver with Secure
   Boot on is taken from Microsoft's documented policy above ("Driver

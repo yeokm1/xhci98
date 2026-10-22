@@ -1409,3 +1409,83 @@ section carries a dated note pointing here.
 - Nothing for this driver. What ME's configuration manager does during
   its 4 to 7 s waits was not read (it happens on its own stack as well,
   and is ME's).
+
+## 43.36 the x64 catalog, read on Windows 10 and 8.1 x64 (2026-10-22)
+
+The owner's decision of 2026-10-22 on 43.33's refusal (record 13 section
+6.14.5): every x64 INF names a catalog of its own, made and signed by
+`make-package.ps1` (design record 19 section 3a; branch `p43-36s`).
+Development host A, QEMU under TCG, two virtual processors, 2048 MB,
+headless, one guest at a time; the host loaded by other agents' guests
+and builds throughout. Kit `E:\xhci98-vm\p43-36s` (ports 48800 to 48802),
+guest scripts `xfer\auto\go.cmd` and `leg.ps1`.
+
+**Verdict: with the catalogs, Windows 10 22H2 x64 and Windows 8.1 x64
+in test-signing mode take every one of the five x64 INFs into the driver
+store, after "Windows can't verify the publisher", and `xhci98.sys` and
+`xhcicm.sys` run after the restart; the same package with its catalogs
+removed is refused with `0xE000022F`, no prompt.**
+
+### The package
+
+The `release` amd64 package of this branch (gated build of `caa79889`,
+the drivers' sources as on `3.2.0.0` at `2038250e`), staged by
+`make-package.ps1 -Arch amd64` without the key, so the binaries were
+unsigned; the five catalogs made by the packager's own
+`New-PackageCatalogFile` (MakeCat, the CDF the signed path writes) and
+left unsigned (`E:\xhci98-scratch\p43-36s\stage-guest.ps1`). Each read
+back by `Read-CatalogFile` with its two members of the right types:
+`xhci98.cat` (`xhci98.inf`, `xhci98.sys`), `xhciuas.cat`, `xhcicm.cat`,
+`xhcicmf.cat` (`xhcicmf.inf`, `xhcicm.sys`) and `stor98.cat`.
+
+**The project's key was not used**: its password is the owner's and no
+agent holds it. In each guest a throwaway code-signing certificate was
+made in the guest's own store (`CN=p43-36s guest throwaway (not
+trusted)`, SHA-1, 2048 bits: `New-SelfSignedCertificate` on 10, WDK 7.1's
+`MakeCert` on 8.1, which has no `-Type`), and the four `.sys` files and
+the five `.cat` files were signed with it there (`Set-AuthenticodeSignature`
+on 10, WDK 7.1's `SignTool /fd sha1` on 8.1). Test-signing mode accepts a
+signature by any certificate, and the project's is trusted nowhere
+either, so the reading stands for it by inference; the leg with the
+owner-signed package is owed (below). Nothing was signed or installed on
+the host.
+
+### The legs (measured)
+
+| | Windows 10 22H2 x64 (19045) | Windows 8.1 x64 (9600) |
+|---|---|---|
+| Starting point | `p43-33`'s prepared `w10x64` (copied), test-signing on | the pristine image plus the runner task, test-signing on (`bcdedit`: `testsigning Yes`) |
+| Control: catalogs removed, `UpdateDriverForPlugAndPlayDevicesW` forced on `PCI\VEN_1B36&DEV_000D` | FALSE, `0xE000022F`, no prompt; "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode" | FALSE, `0xE000022F`, no prompt |
+| `pnputil` of the five INFs with their catalogs | each after "Windows can't verify the publisher of this driver software", "Install this driver software anyway": added as `oem2.inf` to `oem6.inf`, each "Installed catalog '<name>.cat' as 'oem<n>.cat'" | the same, `oem1.inf` to `oem5.inf` |
+| What the store says of each catalog | "Driver package catalog is valid", then `0x800B0109` (a root not trusted), "Driver package catalog file certificate does not belong to Trusted Root Certificates, but user wants to install anyway", "Signer Score = 0x80000000 (Unsigned)" | the same `0x800B0109` and Signer Score |
+| Forced install, `xhci98.inf` on the controller | TRUE, no restart asked | TRUE |
+| Forced install, `xhcicm.inf` on the NHI (`PCI\VEN_8086&DEV_15BF`, the emulator's Alpine Ridge) | TRUE | TRUE |
+| After the restart | `xhci98` and `xhcicm` running; the controller, root hub and hub as `xHCI98` devnodes, HID mouse and keyboard, both Bulk-Only sticks started; the NHI "xHCI98 Thunderbolt 3 Controller" started | the same |
+
+Not a reading of this package: QEMU's `usb-uas` at Code 10 under
+`uaspstor` on both, as under Windows' own driver (record 13 section
+6.14.3), so `xhciuas.sys` and `stor98.sys` were imported into the store
+and never bound (no device of theirs runs here). `Win32_PnPSignedDriver`
+reports the installed drivers `IsSigned False`, the analogue of Vista
+and 7's "Not digitally signed" for a signer no root trusts.
+
+Harness notes: on 10 the runner task started at logon by itself, on 8.1
+it did not, and the 8.1 leg's first run, from a Run box with
+Ctrl+Shift+Enter, which elevates only from 10 on, was not elevated
+(every step "Access is denied"; set aside as `w81x64-cat-noelev`); the
+second ran from Win+X, A. On both the first click on the publisher
+prompt only activates it. The Shift key sent to wake 8.1's display
+raised Sticky Keys. The output disk was not formatted on the first 8.1
+run (the readings were read off the system disk).
+
+### Owed
+
+- The same legs with the owner-signed package (`make-package.ps1
+  -TestSignPfx`, the project key): by inference identical, since the
+  store reports only an untrusted root for either signer.
+- Windows 8 x64 (43.22 read the refusal there; the catalog leg is not
+  run); XP x64, Vista x64 and 7 x64 with a catalog'd package (the INFs
+  gained one line; by inference unchanged: an untrusted signer prompts
+  as an unsigned package did).
+- Stor98's `DmaRemappingCompatible`: no machine here has Kernel DMA
+  Protection on; the value is static (Stor98 `docs/PLAN.md`).

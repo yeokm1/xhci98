@@ -4411,7 +4411,10 @@ As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
    same rule (inference). 10 x86 does not need one (it prompts, 6.14.5).
    **Decided 2026-10-22 (owner): the catalog**, one per x64 INF, made and
    signed by `make-package.ps1` alone (design record 19 section 3a); the
-   x86 package carries none.
+   x86 package carries none. Read the same day on 10 x64 and 8.1 x64
+   (run sheet 43, "43.36 the x64 catalog"): with the catalogs every INF
+   enters the store after the publisher prompt and `xhci98.sys` and
+   `xhcicm.sys` run after a restart; without them, `0xE000022F`.
 2. **XHCITR's notice on 10**: on by default under `xhci98.sys`, by
    6.14.4 (the owner's instruction of 2026-10-22 for 43.27 agrees).
 3. **The vehicle**: QEMU's `usb-uas` does not start under 10's own

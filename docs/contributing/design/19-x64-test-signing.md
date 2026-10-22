@@ -500,6 +500,21 @@ points here.
     images carry `advancedoptions` on `{current}`, removed first so that
     the starts were ordinary; Vista's activation grace needs the launcher's
     `-Rtc base=...` for the "Test Mode" text to show.
+- **The catalogs (section 3a), 2026-10-22, run sheet 43, "43.36 the x64
+  catalog"**: on Windows 10 22H2 x64 and Windows 8.1 x64 in test-signing
+  mode, QEMU guests, the packager's own catalogs (MakeCat, this record's
+  CDF) over this branch's amd64 release build, signed in each guest by a
+  throwaway certificate made there (the project key's password is the
+  owner's alone). With the catalogs removed the forced install is refused
+  with `0xE000022F`, no prompt; with them each of the five INFs enters the
+  driver store after "Windows can't verify the publisher" (the store:
+  "Driver package catalog is valid", then `0x800B0109`, a root not
+  trusted, "user wants to install anyway", Signer Score `0x80000000`), the
+  forced installs on the controller and the NHI return TRUE, and after a
+  restart `xhci98.sys` and `xhcicm.sys` run. Owed: the same with the
+  owner-signed package (by inference identical: the store reports only
+  the untrusted root, as it would for the project certificate), Windows 8
+  x64, and XP x64, Vista x64 and 7 x64 with a catalog'd package.
 - Unread, and not planned: real hardware under test-signing mode; a
   Windows 7 x64 with the SHA-2 update; Server 2003 x64 (identity with XP
   x64, which ignores signatures).
