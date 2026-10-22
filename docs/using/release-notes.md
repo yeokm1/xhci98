@@ -161,7 +161,7 @@ included.
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
   of it is in this package. An install of this package replaces it, because both are
-  called `xhci98.sys` (see "Upgrading from 1.2.0.0").
+  called `xhci98.sys`.
 
 ## What `3.1.0.0` changes
 
@@ -1871,53 +1871,6 @@ section, did not get the driver loaded in text mode, and that was not
 pursued. This package does not ship a slipstreamed CD or a recipe for
 one.
 
-### Upgrading from 1.2.0.0
-
-`2.3.0.0`, like every `2.x` release before it, replaces the `1.2.0.0`
-driver: both are called `xhci98.sys`, and the install overwrites the file.
-Going back is a reinstall of the `1.2.0.0` package from its own download.
-The steps below were measured with `2.0.0.0`; nothing `2.1.0.0`, `2.1.1.0`
-or `2.2.0.0` changed touches them.
-
-Update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device
-Manager and always pick the driver from a list (Have Disk) rather than let
-Windows search: a search can reinstall the old driver from Windows' own copy.
-Measured in virtual machines on each system below except Windows ME:
-
-- **Windows 98 SE with NUSB: never update in place.** NUSB's `usbport.sys`
-  crashes the machine (fatal exception 0E at `0028:C00312EE`) as it stops
-  the running `1.2.0.0`, before `2.0.0.0` runs. Instead open an MS-DOS
-  Prompt and type `ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV`,
-  shut down and switch on again (the controller shows a yellow mark), then
-  Update Driver, "Display a list of all the drivers in a specific location",
-  Have Disk, the `release-x86\` directory, "xHCI98 USB 3.x eXtensible Host
-  Controller"; give it the Windows 98 SE CD for `usbd.sys` and restart. Each
-  USB device is then found once more as new hardware. If you already updated
-  in place and got the blue screen, restart: `2.0.0.0` comes up on its own.
-- **Windows 98 SE with SweetLow's stack**: the same Update Driver route, in
-  place. Windows does not ask for a restart, but shut down and switch on
-  again straight away: until then USB devices stop working.
-- **Windows ME**: not tested; follow the SweetLow route.
-- **Windows 2000**: Update Driver, "Display a list of the known drivers",
-  Have Disk; pick "xHCI98 USB 3.x eXtensible Host Controller", the first of
-  three models. It starts at once; at the next restart Windows may ask for
-  one more.
-- **Windows XP**: Update Driver, "Install from a list or specific location",
-  "Don't search. I will choose the driver to install", Have Disk, Continue
-  Anyway; a second wizard follows for the root hub. No restart.
-- **Windows Vista and 7**: Update Driver Software, "Browse my computer",
-  "Let me pick from a list of device drivers on my computer", Have Disk.
-  Typing the folder into the search box keeps the old driver. No restart.
-
-The steps were tested on Windows 98 SE (NUSB and SweetLow), 2000, XP and
-32-bit Windows 7; on XP x64, Vista and 7 x64 the same steps apply, pointed
-at `release-x64\` on the 64-bit systems.
-
-The three `1.2.0.0` virtual-hub values have no effect under `2.x`; see
-"Registry settings". Every device is a new Device Manager entry after the
-upgrade, so a setting kept on a device's own entry, such as SweetLow's
-hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
-
 ### Updating from 2.y.y.y
 
 From `3.0.0.0` the installer (`SETUP.EXE` from `3.1.0.0`) does what
@@ -2323,10 +2276,9 @@ controller. hidusbf works behind a hub on XP too: its Setup reads the mouse's sp
   device's hardware key and its `Class\HID` driver key; hidusbf's Setup
   writes them. It works on a stock Windows 98 SE as well as under NUSB:
   Windows 98 SE's own `usbd.sys` has the routine `hidusbf.sys` needs.
-- **Apply the setting again after an upgrade from `1.x.x.x`**: each device
-  is a new Device Manager entry under `2.x`, and the setting is kept on the
-  entry. The same holds for a device found again once after an update from
-  `2.0.0.0` (see "Updating from 2.y.y.y").
+- **Apply the setting again after an update from `2.0.0.0`**: each device
+  is found again once as a new Device Manager entry, and the setting is
+  kept on the entry (see "Updating from 2.y.y.y").
 
 ## SuperSpeed and UAS
 
@@ -2831,10 +2783,7 @@ every value since `2.1.1.0`, which added `XhciIntelPortSwitch`. Of the
 seven before it, the
 `2.1.0.0` install wrote three, the two log values and
 `XhciImodInterval250ns`, and wrote them every time, over a value you had
-changed. A machine
-updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns`
-of `500`, not `160`; set it by hand. One that went through `2.0.0.0` or
-`2.1.0.0` already holds `160`.
+changed.
 
 Read in QEMU virtual machines on development host A, on the `release`
 flavour, before `XhciIntelPortSwitch` was added: a fresh install on Windows
@@ -4108,7 +4057,7 @@ what `2.3.0.0` adds:
 
 | `1.2.0.0` limitation | Under `2.0.0.0` |
 |---|---|
-| Windows 98 under NUSB: stopping the controller (disable, uninstall, upgrade) crashed the machine, in NUSB's `usbport.sys` | `2.0.0.0` does not use `usbport.sys`. Disable, enable, remove and rescan of the `2.0.0.0` controller completed under NUSB 3.3 and under SweetLow's stack in Windows 98 SE virtual machines. Carried on one path only: updating in place over a running `1.2.0.0` under NUSB still crashes, because NUSB stops `1.2.0.0` before `2.0.0.0` runs. "Upgrading from 1.2.0.0" has the route around it |
+| Windows 98 under NUSB: stopping the controller (disable, uninstall, upgrade) crashed the machine, in NUSB's `usbport.sys` | `2.0.0.0` does not use `usbport.sys`. Disable, enable, remove and rescan of the `2.0.0.0` controller completed under NUSB 3.3 and under SweetLow's stack in Windows 98 SE virtual machines. |
 | Windows 98: fast, repeated plug and unplug could freeze the machine | Gone in every reading: the hub churn that froze Windows 98 under `1.2.0.0` at 12 to 18 hubs ran 120 of 120 with the guest responsive, and the device matrix's hub churn passed on Windows 98 SE and 2000 on the final build |
 | Windows 7 (32-bit, on a ThinkPad E460): disabling the controller hung | Gone under `2.0.0.0`. It belonged to the miniport under Microsoft's `usbport.sys`; under `2.0.0.0` it did not occur in five disable and enable cycles each on Windows 7 x86 and x64 |
 | Windows 2000: a USB audio device unplugged during playback was never fully removed | Gone: the removal arrived within about a second, 7 times out of 7 |

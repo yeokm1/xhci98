@@ -32,13 +32,6 @@ A clause marked "record only" is an expectation this project has not
 observed on the `2.0.0.0` driver: write down what is seen, and do not fail
 the step on it.
 
-One caution for Windows 98 SE, carried from the `1.x` releases. Do not
-update to `2.0.0.0` in place over a running `1.x` driver under NUSB: NUSB's
-stack blue-screens as it stops the `1.x` driver. Follow the upgrade route of
-`readme.txt` section 4 (rename the old file and cold-boot first). The `1.x`
-freeze on cycling a device rapidly in and out of a port was not seen under
-`2.0.0.0`.
-
 ---
 
 ## Equipment
