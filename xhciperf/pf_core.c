@@ -1034,7 +1034,9 @@ void pf_shown(const PF_RESULT *pa, int n, int show, int mib, int highRes, PF_SHO
     if (nok == 0) {
         return;
     }
-    if (out->status != PF_ST_FAILED && out->status != PF_ST_DATAERR) {
+    /* a pass that failed, found a data error, was stopped or was not
+     * accepted stays the test's status beside the other passes' rate */
+    if (out->status == PF_ST_NONE) {
         out->status = PF_ST_OK;
     }
     for (i = 0; i < nok; i++) {
@@ -1218,6 +1220,21 @@ static void pf_key_put(char *out, size_t cap, const char *k, pf_u64 v)
     pf_cat(out, cap, n);
 }
 
+/* A byte-budgeted sweep's bytes per step as pf_plan makes them: the total
+ * rounded down to the largest size times the depth; 0 when timed */
+static pf_u64 pf_sweep_budget(const PF_PARAMS *p)
+{
+    pf_u64 budget, unit;
+    int depth = p->sweepDepth < 1 ? 1 : p->sweepDepth;
+
+    if (!p->sweep || p->sweepTimed || p->sweepMax == 0) {
+        return 0;
+    }
+    budget = (pf_u64)(p->sweepTotalMiB != 0 ? p->sweepTotalMiB : p->fileMiB) * 1048576u;
+    unit = (pf_u64)p->sweepMax * (pf_u64)depth;
+    return budget - budget % unit;
+}
+
 void pf_key(const PF_PARAMS *p, int highRes, char *out, size_t cap)
 {
     if (cap == 0) {
@@ -1232,6 +1249,7 @@ void pf_key(const PF_PARAMS *p, int highRes, char *out, size_t cap)
     pf_key_put(out, cap, "verify", (pf_u64)(p->verify ? (p->verifyDuring ? 2 : 1) : 0));
     pf_key_put(out, cap, "time", (pf_u64)(p->sweep ? (p->sweepTimed ? p->timeSec : 0) : p->timeSec));
     pf_key_put(out, cap, "total", (pf_u64)(p->sweep && !p->sweepTimed ? (p->sweepTotalMiB ? p->sweepTotalMiB : p->fileMiB) : 0));
+    pf_key_put(out, cap, "budget", pf_sweep_budget(p));
     pf_key_put(out, cap, "passes", (pf_u64)p->passes);
     pf_key_put(out, cap, "warmup", (pf_u64)p->warmup);
     pf_key_put(out, cap, "pause", (pf_u64)p->pauseSec);
@@ -1265,7 +1283,7 @@ static const char *pf_key_field(const char *key, const char *name, size_t *vlen)
 int pf_key_same(const char *a, const char *b, char *diff, size_t cap)
 {
     static const char *const names[] = {
-        "file", "access", "wt", "flush", "pattern", "verify", "time", "total", "passes",
+        "file", "access", "wt", "flush", "pattern", "verify", "time", "total", "budget", "passes",
         "warmup", "pause", "seed", "show", "timer"
     };
     int i, same = 1;

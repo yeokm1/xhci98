@@ -698,6 +698,9 @@ static UCHAR g_s98port, g_s98path, g_s98target, g_s98lun;
 static HMODULE g_aspi;
 static PF_SENDASPI g_sendAspi;
 static BYTE g_aspiHa, g_aspiTarget;
+/* ASPI requests sent and not yet given back: the process does not end
+ * while ASPI may still write their SRB or buffer */
+static volatile LONG g_aspiOut;
 /* Set once an ASPI request has not come back: ASPI is not asked again */
 static volatile LONG g_aspiHung;
 /* A search that timed out and has not returned */
@@ -851,6 +854,7 @@ static int aspi_exec(BYTE ha, BYTE target, const BYTE *cdb, int cdbLen, BYTE *bu
     s.CdbLen = (BYTE)cdbLen;
     s.PostProc = (void *)ev;
     memcpy(s.Cdb, cdb, cdbLen);
+    InterlockedIncrement((LONG *)&g_aspiOut);
     rc = g_sendAspi(&s);
     if (rc == PF_SS_PENDING) {
         if (WaitForSingleObject(ev, 2000) != WAIT_OBJECT_0) {
@@ -865,9 +869,11 @@ static int aspi_exec(BYTE ha, BYTE target, const BYTE *cdb, int cdbLen, BYTE *bu
             InterlockedExchange((LONG *)&g_aspiHung, 1);
             WaitForSingleObject(ev, INFINITE);
             CloseHandle(ev);
+            InterlockedDecrement((LONG *)&g_aspiOut);
             return 0;
         }
     }
+    InterlockedDecrement((LONG *)&g_aspiOut);
     CloseHandle(ev);
     if (s.Status != PF_SS_COMP || s.TargStat != 0) {
         return 0;
@@ -4389,6 +4395,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
+    }
+    /* An ASPI request not yet given back still owns its SRB and buffer on
+     * a thread of this process: the process waits for it, its window gone,
+     * rather than free them under ASPI (record 29 section 6.2) */
+    while (g_aspiOut > 0) {
+        Sleep(250);
     }
     return g_cliExit;
 }

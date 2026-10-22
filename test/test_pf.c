@@ -415,6 +415,41 @@ static void test_key_saved(void)
     CHECK(!pf_key_same(k1, k2, diff, sizeof(diff)), "seed and timer");
     CHECK(strcmp(diff, "seed, timer") == 0, "both named");
     CHECK(pf_key_same(k1, k1, diff, sizeof(diff)), "a key equals itself");
+    {
+        /* one total, two largest sizes: different bytes per step */
+        PF_PARAMS s1, s2;
+        char ka[512], kb[512];
+
+        pf_defaults(&s1, PF_OS_NT);
+        s1.sweep = 1;
+        s1.sweepTimed = 0;
+        s1.sweepTotalMiB = 63;
+        s1.sweepDepth = 4;
+        s1.sweepMax = 8388608u;
+        s2 = s1;
+        s2.sweepMax = 1048576u;
+        pf_key(&s1, 1, ka, sizeof(ka));
+        pf_key(&s2, 1, kb, sizeof(kb));
+        CHECK(!pf_key_same(ka, kb, diff, sizeof(diff)), "32 MiB and 60 MiB per step differ");
+        CHECK(strstr(diff, "budget") != NULL, "by their budget");
+    }
+    {
+        PF_RESULT m[2];
+        PF_SHOWN ms;
+
+        memset(m, 0, sizeof(m));
+        m[0].status = PF_ST_OK;
+        m[0].bytes = 1048576u;
+        m[0].us = 1000000u;
+        m[0].reqs = 1;
+        m[1].status = PF_ST_STOPPED;
+        pf_shown(m, 2, PF_SHOW_BEST, 0, 0, &ms);
+        CHECK_EQ(ms.status, PF_ST_STOPPED, "a stopped pass stays the test's status");
+        CHECK(ms.rate10 != 0, "beside the other pass's rate");
+        m[1].status = PF_ST_SKIPPED;
+        pf_shown(m, 2, PF_SHOW_BEST, 0, 0, &ms);
+        CHECK_EQ(ms.status, PF_ST_SKIPPED, "so does a pass not accepted");
+    }
 
     pf_defaults(&p, PF_OS_NT);
     CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_OK, "plan for the report");

@@ -1533,6 +1533,12 @@ a choice:
   included. A test with a failed, stopped or refused pass shows that beside
   its rate. A start whose controller thread cannot be made is refused (exit
   2).
+- **Pass status, the key, the end on 9x**: a stopped or refused pass stays the test's status
+  beside the other passes' rate. The comparison key carries a byte-budgeted
+  sweep's bytes per step (`budget`), so two largest sizes over one total
+  do not compare. On 98 SE and ME the process does not end while an ASPI
+  request is not given back: after its window closes it waits for it, so
+  that ASPI never writes freed memory (a hung ASPI keeps it waiting).
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.
