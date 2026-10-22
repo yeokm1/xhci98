@@ -1,6 +1,13 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
+Status: revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+owner's decisions of 2026-10-20: Windows 10, NT 10.0 below build 22000,
+admitted beside 8 and 8.1, Windows Server 2016 to 2022 as 10 with no
+Server check, 11 still refused; sections 4.3, 4.5 and 5.10; record 26
+draft 23 section 5.3.2); revision 27, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
+NUSB apart from the non-free driver pack: the seven storage files are read
+from the download's own `NUSB33\W98SE\`, beside the version root, no longer
+`NONFREE\STORAGE\NUSB33\W98SE\`; section 4.4, record 26 draft 22); revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
 draft 20 section 5.3.1: every component on every system, the defaults as
 they are, a warning where one does not apply; sections 4.5 and 7.1, and
 decision D18 amended); revision 25, 2026-10-21 (roadmap-usb4 task 43.42, record 26
@@ -549,7 +556,8 @@ an x64 flavour directory given to the 32-bit tool or the reverse
 (section 4.2 items 2, 5 and 6). A Windows newer than 7 or older than 2000
 or 98 SE is refused too: it is not a target of this package. The one
 exception (revision 13) is Windows 8 and 8.1, NT 6.2 and 6.3, admitted for
-the connection manager alone (section 4.5); 10 and later stay refused.
+the connection manager alone (section 4.5); 10 and later stay refused
+(until revision 28, which admits 10 below build 22000 beside them; below).
 
 On NT the version is read through `ntdll.dll`'s `RtlGetVersion`, looked
 up at run time, and `GetVersionExA` is the fallback where the routine is
@@ -562,6 +570,26 @@ admitted that reading cannot tell 8 from 11. A `GetVersionExA` answer of
 The rule is pure (`inst_os_kind`, section 10): 98 SE (4.10, build 2222
 or later) and ME (4.90) and NT 5.0 to 6.1 are full targets, NT 6.2 and 6.3
 the connection manager's alone, anything else refused.
+
+**Windows 10 (revision 28; roadmap-usb4 task 43.34, the owner's decision
+of 2026-10-20).** NT 10.0 with a build below 22000 is admitted as 8 and
+8.1 are, the same kind (`INST_OS_CMONLY`, which from this revision means
+"8, 8.1 and 10"): every client release from 1507 (build 10240) to 22H2
+(19045) and the LTSC releases. Windows 11 also reports 10.0, from build
+22000, and stays refused: it has a USB4 connection manager of its own.
+The two are told apart by the build alone, the low word of
+`RtlGetVersion`'s `dwBuildNumber` (the reading above; 10 has the
+routine, so the `GetVersionExA` answer, which stops at 6.2 for a program
+whose manifest does not name 10, never decides it). Windows Server 2016
+(14393), 2019 (17763) and 2022 (20348) report 10.0 below 22000 and are
+admitted as 10, untested: the tool makes no Server check (`wProductType`
+is not read), by the owner's decision. Any other NT 10.x version, and
+any major version above 10, is refused. The name follows the build
+(`inst_os_name`, which takes it from this revision): "Windows 10" below
+22000, a Server build included, and "Windows 11" from it. Host vectors:
+10240, 14393, 17763, 19045, 20348 and 21999 admitted; 22000 and 26100
+refused; 10.1 and 11.0 refused. Only 22H2 is to be read (roadmap-usb4
+task 43.37), and the release notes say which build was.
 
 ### 4.4 The local copy
 
@@ -746,7 +774,7 @@ selects one.
 **The USB storage drivers on 98 SE (revision 24).** When record 26
 section 6.5's row is ticked and its case admits the same-bytes route,
 the copy of 98 SE also takes the seven files of the download's
-`NONFREE\STORAGE\NUSB33\W98SE\` (`package_files`, from that folder),
+`NUSB33\W98SE\` (`package_files`, from that folder),
 listed as the package's own files are, and only once the five binaries
 are in place where their INFs send them; otherwise it takes none of
 them, and when an earlier run had put them there (the record's
@@ -854,6 +882,37 @@ Settings) - because 64-bit Windows 8 enforces kernel-mode signatures and
 the package's x64 binaries carry the project's test signature at most
 (design record 19). The installer never signs anything and never changes
 a boot setting (D6).
+
+**On Windows 10** (revision 28; roadmap-usb4 tasks 43.34 and 43.35, 43.22's
+and 43.29's work for 8 and 8.1 reused) what this section says of 8 and
+8.1 holds as it stands, the 8 and 8.1 rows of both tables included: the
+connection manager installed; the USB drivers offered unticked, Windows'
+own USB 3 driver staying the default, ticked only by the user (`/usb` or
+the window's box) with record 26 section 5.3.1's case 3a warning, a
+controller whose service is Windows' own `USBXHCI` then installed over
+and the uninstall removing its devnode and rescanning so that Windows
+binds `usbxhci.sys` again (unread until roadmap-usb4 task 43.37); the
+bundled Stor98 offered unticked under the Thunderbolt box with case 3b's
+warning, 10's own `stornvme` on a tunnel drive installed over when it is
+ticked, as on 8.1; the NUSB pack's row taking case 1; and a package
+without the connection manager handled as on 8 and 8.1. The NT route is
+8's: the INFs' `.NTx86.6.0` and `.NTamd64.6.0` models sections, the
+highest decoration not above 10.0 (`inst_models_section`, host vectors
+on 10.0), so no INF changes; the driver store and its trap (5.7); the
+filter's forced install (5.5); the mark service (9.5; `inst_mk_system`
+admits 10.0, 11 being refused before it is asked); and the signature note
+(5.10). None of it has been read on 10. Three things are 10's own and
+wait on roadmap-usb4 task 43.33's readings. (1) Intel's Thunderbolt
+driver: 10 carries no Thunderbolt or USB4 driver of its own, but
+computer makers ship Intel's on the NHI; until 43.33 (c) reads which ids
+and service it binds and the owner decides whether the installer leaves
+it alone, asks, or replaces it, an NHI it runs is what any other
+vendor's device is (decision D3): foreign and left, and the uninstall,
+having taken nothing, gives nothing back. (2) What `xhci98.sys` and its
+INFs need on 10 beyond what 8 and 8.1 get (43.33 (a)), and the box's
+note on what the user gains and loses, which until then is 8's
+sentence. (3) What SCSIport on 10 asks of Stor98, read with 43.23's
+reading for 8.1.
 
 ## 5. The NT route: Windows 2000, XP, XP x64, Vista and 7
 
@@ -1407,6 +1466,32 @@ on only with Secure Boot off in the computer's firmware setup, and that
 the other way is Advanced startup's Startup Settings, "Disable driver
 signature enforcement", at every start. The same reading of
 `SystemStartOptions` is made; it is unread on 8 and 8.1.
+
+Revision 27 (roadmap-usb4 task 43.36; the owner, 2026-10-20: test-signing,
+documented by the installer, Secure Boot off, no Microsoft attestation
+for now): on Windows 10 x64 the note is 8 and 8.1 x64's, in whichever
+run, the USB drivers' or the connection manager's alone - the x64
+drivers load only in test-signing mode, which 10 lets a user turn on
+only with Secure Boot off in the computer's firmware setup, or on a start
+with driver signature enforcement disabled (Advanced startup,
+Troubleshoot, Startup Settings, at every start); the tool never runs
+`bcdedit` and never changes a firmware setting. From 10 1607 with Secure
+Boot on, only drivers signed through Microsoft's portal load, cross-signed
+ones excepted on a machine upgraded from an earlier release or with a
+certificate issued before 2015-07-29 (Microsoft's "Driver Signing Policy"
+page, read 2026-10-20; roadmap-usb4 task 43.33 (d)); the project's test
+signature is none of these, so the project's test signature is not enough there whatever the
+boot options say: Secure Boot off is the condition, as the note says.
+The note's sentence names 10 beside 8 and 8.1, and the test-signing
+check after the install (a controller or NHI at Code 52 or 39 with
+test-signing mode not confirmed) covers 10 as it covers 6.x. Two parts
+are not decided here: whether 32-bit 10 with Secure Boot on refuses the
+unsigned x86 drivers (43.33 (d); 43.22 reads the same for 8 and 8.1, and
+if it does the x86 note 43.22 gives 8 and 8.1 covers 10 too), and
+whether memory integrity (hypervisor-protected code integrity) refuses
+these drivers when on, which the note names only if 43.33 (d) finds it
+does. Whether the tool reads Secure Boot's state to say which case
+applies is record 26 section 5.3.2's design.
 
 ### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 

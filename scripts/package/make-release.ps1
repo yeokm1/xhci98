@@ -372,13 +372,13 @@ switch).
 Cut without the driver pack. By default (roadmap-usb4 task 43.3; the owner's
 decision of 2026-10-20, docs\contributing\legal-provenance.md section 5) a
 cut that publishes x86 directories reads NUSB 3.3's seven Windows 98 SE
-storage files and the pack's NOTICE.md from the usb-wdm-nonfree checkout
+storage files and their nusb33/NOTICE.md from the usb-wdm-nonfree checkout
 (-DriverPackRoot), from its git objects at HEAD, and holds them to the
 pack's SHA256.TXT and to the allowlist of the seven (package-common.ps1),
 before anything is built. They go into the upload set alone, at its root
-as NONFREE\ (the pack's layout, storage part only, 8.3 names:
-NONFREE\NOTICE.md, NONFREE\SHA256.TXT and NONFREE\STORAGE\NUSB33\W98SE\;
-owner, 2026-10-20), where the installer takes them from; never into a
+as NUSB33\, a folder of its own beside the installer and not inside a
+NONFREE\ (owner, 2026-10-22; 8.3 names: NUSB33\NOTICE.md, NUSB33\SHA256.TXT
+and NUSB33\W98SE\), where the installer takes them from; never into a
 package of make-package.ps1's or into releases\<version>\: the cut refuses to start while any of the seven names
 is under releases\ or among the tracked files. What releases\<version>\
 does hold is drvpack.txt, a record of whether the pack was included and, if
@@ -2237,7 +2237,7 @@ function New-UploadSet {
         $Stor98 = $null,
         # The driver pack (task 43.3), Export-DriverPack's result, or $null
         # for a download without it. Its folder is added at the set's root
-        # as NONFREE\, the one thing the set holds that the published tree
+        # as NUSB33\, the one thing the set holds that the published tree
         # does not.
         $DriverPack = $null,
         # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
@@ -2301,8 +2301,8 @@ function New-UploadSet {
     # is shaped the way it is.
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
 
-    # **The driver pack, at the download's root as NONFREE\** (task 43.3;
-    # owner, 2026-10-20): the one thing the set holds that the published
+    # **The driver pack's NUSB 3.3 folder, at the download's root as
+    # NUSB33\** (task 43.3; owner, 2026-10-20 and 2026-10-22): the one thing the set holds that the published
     # tree does not, where the installer takes it from. A published tree
     # holding one is refused - the pack is never in releases\.
     $packTarget = Join-Path $uploadRoot $script:DriverPackFolder
@@ -2914,7 +2914,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
     # The one exception to "no Microsoft file in the download"
     # (docs\contributing\legal-provenance.md section 5, the owner's decision
     # of 2026-10-20): NUSB 3.3's seven storage files, from the driver pack,
-    # in the upload set's NONFREE\ only and never in releases\ (task 43.3).
+    # in the upload set's NUSB33\ only and never in releases\ (task 43.3).
     # A cut resolves the checkout's HEAD here, once, before anything is
     # built; -UploadSetOnly takes the revision drvpack.txt recorded
     # instead, below. Every generated text follows $driverPackIncluded.
@@ -4462,11 +4462,11 @@ helper (xhciinst\di\build.cmd).
         $contents += ""
     }
     if ($driverPackIncluded) {
-        $contents += "  NONFREE\        - NUSB 3.3's Windows 98 SE storage files (section 3)"
+        $contents += "  NUSB33\         - NUSB 3.3's Windows 98 SE storage files (section 3)"
         $contents += ""
         $contents += "      NOTICE.md    whose they are: not this project's"
         $contents += "      SHA256.TXT   their hashes"
-        $contents += "      STORAGE\NUSB33\W98SE\  the seven files, unmodified"
+        $contents += "      W98SE\       the seven files, unmodified"
         $contents += ""
     }
     if ($null -ne $qualtoolStaged) {

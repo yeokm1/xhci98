@@ -2844,10 +2844,11 @@ int inst_mw_reading(int found, INST_U32 type, INST_U32 bytes, INST_U32 dword,
 
 int inst_mk_system(const INST_ENV *env)
 {
-    /* 2000 to 7, and 8 and 8.1 for the connection manager alone (record 23
-     * section 4.5, revision 13). */
+    /* 2000 to 7, and 8, 8.1 and 10 (record 23 section 4.5, revisions 13
+     * and 27; 11, also 10.0, is refused before this is asked). */
     return env->Nt && (env->Major == 5UL ||
-                       (env->Major == 6UL && env->Minor <= 3UL));
+                       (env->Major == 6UL && env->Minor <= 3UL) ||
+                       (env->Major == 10UL && env->Minor == 0UL));
 }
 
 int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
@@ -3415,10 +3416,16 @@ int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build)
     if (major == 6UL && (minor == 2UL || minor == 3UL)) {
         return INST_OS_CMONLY;
     }
+    /* Revision 27: 11 reports 10.0 too, from build 22000, and has a USB4
+     * connection manager of its own. No Server check (owner, 2026-10-20). */
+    if (major == 10UL && minor == 0UL && build < INST_OS_BUILD_W11) {
+        return INST_OS_CMONLY;
+    }
     return INST_OS_REFUSED;
 }
 
-const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor)
+const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor,
+                         INST_U32 build)
 {
     if (!nt) {
         return minor >= 90UL ? "Windows ME" : "Windows 98 SE";
@@ -3431,6 +3438,9 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor)
         return minor == 0UL ? "Windows Vista" : minor == 1UL ? "Windows 7" :
                minor == 2UL ? "Windows 8" : minor == 3UL ? "Windows 8.1" :
                "Windows";
+    }
+    if (major == 10UL && minor == 0UL) {
+        return build < INST_OS_BUILD_W11 ? "Windows 10" : "Windows 11";
     }
     return "Windows";
 }
@@ -3456,7 +3466,7 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
     if (osKind == INST_OS_CMONLY) {
         if (!haveCm) {
             *refusal = "this package carries no Thunderbolt or USB4 driver: "
-                       "there is nothing to install on Windows 8 or 8.1.";
+                       "there is nothing to install on Windows 8, 8.1 or 10.";
             return -1;
         }
         *offered = 1;
@@ -3544,7 +3554,7 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
     if (set & INST_CW_USB8) {
         inst_cat_para(out, cap,
                       "The xHCI98 USB drivers have not been tested on Windows "
-                      "8 or 8.1. They replace Windows' own USB 3 driver on "
+                      "8, 8.1 or 10. They replace Windows' own USB 3 driver on "
                       "every xHCI controller, the one your keyboard and mouse "
                       "may use included. The uninstall is meant to give the "
                       "controllers back to Windows' own driver; that has not "
@@ -3552,7 +3562,7 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
     }
     if (set & INST_CW_S98_8) {
         inst_cat_para(out, cap,
-                      "Stor98 has not been tested on Windows 8 or 8.1. If a "
+                      "Stor98 has not been tested on Windows 8, 8.1 or 10. If a "
                       "drive behind a Thunderbolt or USB4 tunnel uses "
                       "Windows' own NVMe driver, this choice replaces it.");
     }
@@ -6072,11 +6082,18 @@ int inst_stor_route(int storCase)
            storCase == INST_STOR_CASE_OWN;
 }
 
-int inst_stor_default(int haveChoice, int choice,
+int inst_stor_default(int usb20u, int haveChoice, int choice,
                       const int st[INST_STOR_COUNT])
 {
     int i;
 
+    /* NUSB installed: never ticked for the user, not by a choice an
+     * earlier run recorded before NUSB came, nor with NUSB's storage
+     * files missing (owner, 2026-10-22). /storage still ticks it, and
+     * a ticked run still copies over nothing present. */
+    if (usb20u) {
+        return 0;
+    }
     if (haveChoice) {
         return choice != 0;
     }
@@ -6179,6 +6196,15 @@ void inst_stor_found_text(char *out, size_t cap,
     inst_stor_names(out, cap, st);
     strncat(out, ". Only some of the seven: USB storage is not known to be "
             "ready.", cap - strlen(out) - 1);
+}
+
+void inst_stor_note_text(char *out, size_t cap,
+                         const int st[INST_STOR_COUNT], int usb20u)
+{
+    inst_stor_found_text(out, cap, st);
+    if (usb20u && cap > 0) {
+        strncat(out, " " INST_STOR_NUSB_TEXT, cap - strlen(out) - 1);
+    }
 }
 
 int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,

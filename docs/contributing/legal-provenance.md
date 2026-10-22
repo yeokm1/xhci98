@@ -121,7 +121,7 @@ identification.
 | Windows 7, 8 and 8.1 storage files read for roadmap-usb4 task 43.23 (`scsiport.sys`, `Classpnp.sys`, `disk.sys`, `storport.sys`, `partmgr.sys`, `ntoskrnl.exe`, `hal.dll`, 8.1's `stornvme.sys`, and `stornvme.inf`, `disk.inf` and `mshdc.inf`) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Microsoft's, taken with `7z e` from `sources\install.wim` of the owner's own install media (the three named in the 43.26 row, and `en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` for 7 x64's `scsiport.sys`, `Classpnp.sys` and `disk.sys`); the version, size and SHA-256 of each file a fact rests on are in `docs/contributing/runs/run-43.md`, "43.23"; nothing executed. Section 4, the 43.23 rows |
 | Windows 10 storage files read for roadmap-usb4 task 43.23 (`scsiport.sys`, `Classpnp.sys`, `disk.sys`, `stornvme.sys`, `ntoskrnl.exe`, `hal.dll`, `stornvme.inf` and `scsidev.inf` of 10 22H2 x86 and x64) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Microsoft's, taken with `7z e` from the `Windows` tree of the powered-off pristine `w10x86` and `w10x64` VM images, which were installed from the owner's own Windows 10 22H2 media; the version, size and SHA-256 of each file a fact rests on are in `docs/contributing/runs/run-43.md`, "43.23", "Windows 10"; nothing executed. Section 4, the 43.23 rows |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
-| NUSB 3.3's Windows 98 SE storage files (`USBSTOR.INF`, `USBSTOR.SYS`, `USBNTMAP.INF`, `USBNTMAP.SYS`, `USBMPHLP.PDR`, `USBAUTH.SYS`, `USBU2A.SYS`) and the driver pack's `NOTICE.md` | No, and never; from task 43.3 a cut is refused whose `releases/` tree or tracked files hold any of the seven names | The owner's separate repository `usb-wdm-nonfree`, `non-free/storage/nusb33/w98se/`; copied at packaging time into `out/` and the upload set only, from `3.2.0.0` | Microsoft's, apart from `USBU2A.SYS` ("USB Compliance"), unmodified from NUSB 3.3; not this project's work, and no licence to redistribute them has been established. The decision, the channel and each file's evidence are in section 5, "NUSB 3.3's Windows 98 SE storage files" |
+| NUSB 3.3's Windows 98 SE storage files (`USBSTOR.INF`, `USBSTOR.SYS`, `USBNTMAP.INF`, `USBNTMAP.SYS`, `USBMPHLP.PDR`, `USBAUTH.SYS`, `USBU2A.SYS`) and their `nusb33/NOTICE.md` | No, and never; from task 43.3 a cut is refused whose `releases/` tree or tracked files hold any of the seven names | The owner's separate repository `usb-wdm-nonfree`, `nusb33/w98se/` (kept apart from its `non-free/` since 2026-10-22); copied at packaging time into `out/` and the upload set only, from `3.2.0.0` | Microsoft's, apart from `USBU2A.SYS` ("USB Compliance"), unmodified from NUSB 3.3; not this project's work, and no licence to redistribute them has been established. The decision, the channel and each file's evidence are in section 5, "NUSB 3.3's Windows 98 SE storage files" |
 | Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below. Since 2026-10-19 the release folders they are copied from are tracked, as part of `src/stor98/` (the next row); the copies in `out/` are not |
 | Stor98, its source, docs, tests and released builds (BSD-3-Clause) | Yes, from 2026-10-19 (roadmap-usb4 task 42-A.20) | `src/stor98/` | The Stor98 project's tracked files, imported as one snapshot (owner, 2026-10-19). Not this project's GPL-2.0 code: Stor98's own `LICENSE` and `NOTICE` govern every file there; see "Stor98 in this tree" below |
 | The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
@@ -1570,11 +1570,11 @@ Microsoft file" since 1.0.0.1. What is decided:
 - **The channel is the release download only.** The files are never in a
   commit of this repository, under `releases/<version>/` or anywhere else;
   they are taken at packaging time from a separate repository of the
-  owner's, `usb-wdm-nonfree` (its `non-free/storage/nusb33/w98se/`
-  folder), and staged into the upload set in `out\` alone, at the
-  download's root as `NONFREE\` (the pack's layout, storage part only:
-  `NONFREE\NOTICE.md`, `NONFREE\SHA256.TXT`,
-  `NONFREE\STORAGE\NUSB33\W98SE\`; owner, 2026-10-20), where the installer
+  owner's, `usb-wdm-nonfree` (its top-level `nusb33/w98se/` folder), and
+  staged into the upload set in `out\` alone, at the download's root as
+  `NUSB33\`, a folder of its own beside the installer (`NUSB33\NOTICE.md`,
+  `NUSB33\SHA256.TXT`, `NUSB33\W98SE\`; owner, 2026-10-20, and 2026-10-22
+  for the folder), where the installer
   takes them from; no package of `make-package.ps1`'s carries them (task
   43.3: `make-release.ps1`, reading them from the checkout's git objects at
   one revision and holding them to the pack's `SHA256.TXT` and to an
@@ -1582,9 +1582,18 @@ Microsoft file" since 1.0.0.1. What is decided:
   The reason is the one given for the 0.0.0.4 to 1.0.0.0 exception below: a
   release asset can be withdrawn, and a git blob cannot be without rewriting
   history.
+- **NUSB is kept apart from the non-free driver pack** (owner,
+  2026-10-22). In `usb-wdm-nonfree` the seven moved, unchanged, from
+  `non-free/storage/nusb33/w98se/` to a top-level `nusb33/w98se/`, with
+  their provenance in `nusb33/NOTICE.md` (`usb-wdm-nonfree` `f1e0c4e`); in
+  the download they are in `NUSB33\`, never inside a `NONFREE\`. The owner's
+  stated reasons: the seven are Microsoft's files and NUSB's `USBU2A.SYS`,
+  no licence to redistribute them has been found, the owner accepted that
+  risk for them, and the base download carries them for its installer
+  while the rest of the pack is offered apart.
 - **No licence to redistribute them has been established.** None was found
   for any of the seven, none is claimed here or in the pack, and the pack's
-  `NOTICE.md`, shipped beside the files, says whose each is and that its
+  `nusb33/NOTICE.md`, shipped beside the files, says whose each is and that its
   owner grants no licence to them. The owner took the decision with that
   stated; it is a fact about the decision, not a permission.
 - **The files are unmodified**, byte for byte as NUSB 3.3 for English
@@ -1614,8 +1623,8 @@ headers; nothing was executed. The hashes are those of the pack's
 | `USBNTMAP.INF` | 1,339 | `372d0a4829eab33cf5c6a1fca347a3be45da82d69a692e89b33d28dc02848657` | Microsoft's INF (`Provider=%Msft%`), with the two edits its own comment header lists, both Maximus Decim's |
 
 What is published, when the pack is included: the seven files, the
-pack's `NOTICE.md` and a `SHA256.TXT` of the seven, in a folder of their
-own at the upload set's root (`NONFREE\`); the
+pack's `nusb33/NOTICE.md` and a `SHA256.TXT` of the seven, in a folder of
+their own at the upload set's root (`NUSB33\`); the
 generated readme and the installer's `NOTICE.TXT` saying so in place of
 "No Microsoft file is in this download" (`make-release.ps1`, which chooses
 the text by whether the pack is in the download); and the record of which

@@ -1012,6 +1012,33 @@ On 64-bit 8 and 8.1 it loads only as on Vista x64 and 7 x64: test-signing
 mode (Secure Boot off) or a start with signature enforcement disabled
 (design record 19; record 23 section 5.10).
 
+**Windows 10** (roadmap-usb4 task 43.34, the owner's decision of
+2026-10-20; record 23 sections 4.3 and 4.5, revision 28): NT 10.0 below
+build 22000, the client releases 1507 to 22H2, the LTSC releases and
+Windows Server 2016 to 2022, gets what 8.1 gets above, by the same
+install: the connection manager alone, or beside `xhci98.sys` where the
+user ticks it (task 43.35), the PCIe tunnel and its re-enumeration, an
+NVMe drive behind it under Stor98 or 10's own `stornvme`, a dock's xHCI
+controller and the USB3 tunnel's devices under whichever USB driver runs
+them, and safe eject with the marks. It is the target this driver gives
+most to: 10 carries no Thunderbolt or USB4 driver of its own (USB4
+arrived with Windows 11, build 22000, which has its own connection
+manager and stays refused). What is 10's own, and unread until task
+43.33 (c): Intel's Thunderbolt driver, which computer makers ship for
+10 on the NHI - its ids and service, the approval it does with the
+firmware connection manager, and whether `xhcicm.inf`'s match outranks
+it (until the owner decides, an NHI it runs is another vendor's device
+and the installer leaves it, record 23 decision D3); and Kernel DMA
+Protection (10 1803 and later), whether a device behind a tunnel waits
+for the user's sign-in or is refused where the firmware turns the
+protection on. No export table of 10 is in the tree either, so the
+import surface on 10 is as unread as on 8; 10 is expected to answer the
+driver's WDM version tests as 7 does, which is unread. On 64-bit 10 the
+driver loads as on 64-bit 8 and 8.1 (record 23 section 5.10, revision
+27); from 10 1607 with Secure Boot on, only portal-signed drivers load
+(older cross-signed ones excepted, which the project's test signature is
+not), so Secure Boot off is the condition there.
+
 ## 4. The host interface: ring 0, polled
 
 ### 4.1 Registers
@@ -4022,8 +4049,14 @@ made the service look:
   5.2's second line), and the release notes' fallback; a unit disabled
   and enabled, or updated, or restarted by the service, is never read as
   ejected whatever the rebuild takes. The tools' watch for the tunnel
-  line (record 24 section 5.2, 10 s) covers the service's poll and the
-  thread's status-ask read. This ends a defect `3.0.0.0` has: a driver update or
+  line (record 24 section 5.2, 10 s) covers the thread's status-ask read
+  of a tool's own confirmation. It did not cover the service's: the
+  service writes under the eject mutex, which the tool held through its
+  watch, and an unelevated XHCITR on 7 under emulation saw the
+  confirmation 12 to 18 s after the stop (the 43.45 legs, 2026-10-22).
+  Since then XHCITR, when it has not confirmed the eject itself, lets go
+  of the mutex before its watch and waits for the service's pass
+  (record 25 section 6.2 step 7). This ends a defect `3.0.0.0` has: a driver update or
   a disable and enable of a unit under the USB4 profile, whose
   query-remove and remove today post an eject and tear its tunnel down.
   Record 22 section 10.4's clause that the tunnel is down before the

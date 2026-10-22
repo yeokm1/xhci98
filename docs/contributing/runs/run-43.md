@@ -756,3 +756,257 @@ the connection manager's legs on 10 (43.37).
    again; on 2000 to 7 the staged `stor98.inf` takes it by itself.
    Recommendation: accept it and say so in the release notes and the
    installer's warning text, rather than raise Stor98's rank.
+
+## 43.49 - Windows ME Stops After Back-to-Back Mouse Plugs and Unplugs
+Roadmap-usb4 task 43.49, opened by the owner on 2026-10-22 from 43.13's ME
+legs. Development host A, QEMU under TCG, one virtual CPU, 256 MB, headless,
+`qemu-xhci` (`p2=4,p3=4`); the host was heavily loaded by other agents'
+guests throughout (the coordinator measured 97 % CPU at about 13:45), so no
+timing below is a performance reading. Branch `p43-49` off `3.2.0.0`
+(`77384e93`); the driver source under test is that of `dd46948c`, the build
+43.13 found the stop on (the only `src\` difference between the two is
+`src\silent-on.bat`).
+
+### Method
+
+- Driver: the `qemu` flavour of `d35829cf` (gated run, 364,084 bytes), and
+  for runs `d2` and `c2` ungated rebuilds of the same flavour (c2 with one
+  experimental change, below), copied over the installed `xhci98.sys` on
+  overlays of the 43.13 bases (ME + `3.1.0.0`; 98 SE + `3.1.0.0` + NUSB 3.3).
+  Registry as 43.13's: `XhciInterruptMode` 2, `XhciPollIdleMs` 50,
+  `XhciPollFineTimer` 0, `XhciLogVerbosity` 2; cold boot after the change.
+- The trace: QEMU `isa-debugcon` at port `0xE9`, the `qemu` flavour's mirror.
+- The series: a mouse `m1` at root port 1 and a hub `h1` at root port 4
+  (ME: and a stick at port 2), an MS-DOS Prompt open; then `usb-mouse`
+  hot-plugs alternating root port 3 and hub port 4.1, each removed as soon
+  as the pointer seemed to move (43.13's `plug.py`, no gap between cycles).
+  A cycle that timed out was taken as a stop only when the tray clock did
+  not change across a further 75 s.
+- At a stop: `info registers`, and the guest's physical memory saved over
+  QMP (`pmemsave`) and read offline: driver and device objects found by
+  their type and size words, the HID stacks' extensions read through the
+  guest's page tables (kernel space, CR3 from the register dump).
+- Static reads: ME's `HIDUSB.SYS` (14,256 bytes, SHA-256 `6648b28c...2b91`),
+  ME's `HIDCLASS.SYS` (25,584 bytes, `07b5d374...59cb`) and 98 SE's
+  `HIDUSB.SYS` (9,296 bytes, `307cd8d8...0196`), copied off the base images
+  and disassembled; addresses below are image VAs at base `0x10000`.
+
+### Readings, Windows ME
+
+| Run | Build | Cycles before the stop | Last PnP the PDOs saw |
+|---|---|---|---|
+| b | gated `qemu` | 17 | a hub-port PDO's START refused (device gone), then STOP, then the hub's relations without it, then nothing |
+| c2 | `qemu` + START of a gone PDO answered success (experiment) | 4 | START succeeded, then STOP at once, then the relations without it, then nothing |
+| d2 | ungated `qemu`, unmodified | 10 | START succeeded with the device still present, then STOP, then the relations without it, then nothing |
+
+All three: the tray clock frozen at the series' last minute, no recovery, the
+processor in the VMM's idle loop (`c00138c1`/`c00138c2` most samples), as 43.13
+saw. The controller thread was still alive (a mouse removed afterwards was
+seen: its transfers cancelled, the counters emitted), but no PnP IRP ever
+reached any of the driver's devices again - neither the root hub nor the
+hub asked for relations after later plugs and removals.
+
+**Where it stops (runtime, memory read, runs c2 and d2).** The PDO the
+relations had just omitted had a `hidusb.sys` FDO above it whose
+minidriver extension read state 5 (removing), pending-request count 0,
+and a waiter on its removal event; `hidclass.sys`'s state for the same FDO
+read 6 (stopped). Every other HID stack in memory read state 2 (started).
+So the REMOVE that followed the relations answer was blocked inside
+`hidusb.sys`, before it was passed down to this driver, and the
+configuration manager, which runs one device at a time in the system VM,
+waited on it for good.
+
+**Why (static, ME's `HIDUSB.SYS`).** `hidusb.sys` counts its requests from
+0, and its removal event (a notification event, not signalled) is set when
+the count goes below 0 (`0x10b00`). Its START (`0x11df9`): state 1, the
+START passed down and waited for; on failure below, or of its own
+descriptor and configuration requests after (`0x105b0`), state 6. Its STOP
+calls the stop routine (state 3, the count decremented, the event waited
+for, `0x12090`) **only when the state is 2** (`0x11e2d`), and sets state 4
+after the STOP returns from below (`0x11fa6`). Its REMOVE (`0x12200`):
+state 5, the count decremented only when the previous state was neither 3
+nor 4, then the event waited for, then the REMOVE passed down. So a START
+that failed (state 6), then a STOP (skipped, then state 4), then a REMOVE
+(no decrement) waits on an event nothing will ever set. Windows ME sends
+exactly that STOP after a failed START (runs b, c2, d2). This is a defect of ME's `hidusb.sys`, reached
+whenever a USB HID device's start fails and its device then goes; it does
+not depend on how the start failed:
+
+- b: this driver refused the START of a PDO whose device had left
+  (`hcd_pdo.c`, `hcdPdoStarted`).
+- c2: with that START answered success instead (an experiment, not kept),
+  `hidusb.sys`'s own descriptor requests to the departed device failed, and
+  the same STOP followed.
+- d2: the device left while `hidusb.sys`'s start requests were under way.
+
+So the refusal is not the cause, and answering such a START success does
+not cure it. The 2026-10-04 ME reading in `hcd_pdo.c`'s lifecycle note ("a
+device pulled while its install was under way was started (refused),
+stopped and left ... the shell wedged") reads as the same stop: the REMOVE
+that "never came" was held in `hidusb.sys`.
+
+**98 SE's `hidusb.sys` (static) has no such gate**: its STOP calls the stop
+routine unconditionally (`0x1179b`), so the count reaches -1 and a later
+REMOVE finds the event set. Its REMOVE logic is otherwise the same. And 98
+SE's configuration manager, read at runtime, answers a failed START with
+REMOVE, not STOP (98 SE run b: START refused, then REMOVE, and the series
+went on).
+
+### Readings, Windows 98 SE
+
+98 SE did not stop. Two runs (a2: about 45 cycles; b: 60 cycles, with QEMU's
+own `usb_xhci_*` trace) showed a different failure instead:
+
+- The bus, not the system, failed: in a2 the controller was reset three
+  times inside ten minutes, the fourth request was refused by task 35-T.6's
+  window (`ctrl.window.refused`; the snapshot's verdict "LATCHED FAILED:
+  the recovery window refused a fourth recovery"), and no device was seen
+  after that. Windows stayed responsive throughout.
+- Each reset followed a request to a device that had just been removed
+  (a2: the SET_CONFIGURATION of a select; b: the first EP0 request after
+  Address Device behind the hub) that never completed within
+  5 s, which the driver treats as the controller's failure (`hcdCommand`'s
+  `HCD_COMMAND_WAIT_MS` for a command; in b QEMU's trace shows no command
+  after the Address Device, so it was the EP0 request's own wait).
+- QEMU's trace (b) shows why it never completed: QEMU's `xhci_kick_epctx`
+  returns without completing anything when the slot's device has been
+  detached (`hcd-xhci.c`, `xhci_slot_ok`, "we must NOT continue"), so a
+  transfer queued after the detach gets no event at all. Real controllers
+  end such a transfer with an error, so this path is in part an emulator
+  artefact; the driver's answer to it, a whole-controller reset, then spends
+  the recovery window.
+
+### The control: Windows ME on its own USB stack (2026-10-22)
+
+The stock ME image (no `xhci98.sys`), a QEMU `piix3-usb-uhci` controller,
+ME's own USB stack with the same 4.90 `HIDUSB.SYS`, one virtual CPU,
+256 MB, the host still saturated. The same series: a hub at port 2, an
+MS-DOS Prompt open, `usb-mouse` hot-plugs alternating port 1 and hub port
+2.1, each removed as soon as the pointer moved, no gap. A `usb-mouse` was
+first checked to move the pointer under ME's own stack.
+
+- Series a: 80 cycles (13:41 to 13:47), no timeout. Series b: 80 cycles
+  (13:53 to 14:01), plug-to-pointer 0.78 to 26.57 s, mean 5.57 s, no
+  timeout. The tray clock advanced after each (75 s and 65 s checks).
+- So ME's own stack did not stop in 160 cycles, where `xhci98.sys` stopped
+  ME within 4 to 17. The defect is in ME's `hidusb.sys`, and any stack can
+  reach it in principle (a START that fails, a STOP, then the REMOVE), but
+  this series did not reach it on ME's own stack. Under `xhci98.sys`, ME's
+  configuration manager reached a device's START many seconds after its
+  PDO was reported, when at all (run b: 4 STARTs in 17 cycles, the rest
+  removed before their START), so far more starts meet a device already
+  gone. Why the configuration manager is that much slower here was not
+  read; the log shows no request of its waiting on this driver.
+
+### Candidate fixes (none made)
+
+No fix is clear and small, so none was committed. In the order the owner
+may want to weigh them:
+
+1. **ME: let `hidusb.sys`'s start succeed for a device that leaves before
+   its stack has started** - answer the device and configuration
+   descriptors from the PDO's own copies and a SELECT_CONFIGURATION with
+   pipe handles that hold every later request until the REMOVE (the hold
+   and park of design record 13 section 10.5), on Windows 9x only. Then
+   STOP and REMOVE find state 2 and take the counted path. It changes the
+   PDO lifecycle and the select path (record 13 sections 5.2 and 10.5); it
+   needs its own design note and review.
+2. **ME: never report missing a PDO whose START failed and was then
+   stopped**, so ME never sends the REMOVE that blocks. That leaves a dead
+   devnode until restart, needs the same device's return mapped onto it (an
+   instance id may not be presented twice), and only moves the stop to the
+   parent's removal (a hub pulled, a controller disabled). Not recommended.
+3. **Record it as a Windows ME defect** in the release notes (rapid replug
+   of a HID device on ME can stop the system; `hidusb.sys` 4.90) and keep
+   the driver as it is.
+4. **98 SE (and every target): a request to a departed device that never
+   completes need not reset the controller** - before requesting the reset,
+   check whether the slot's device has left (its root port or hub port
+   reads disconnected, or a departure is pending) and complete the request
+   DEVICE_GONE instead, as `hcdCfgFault` already does for a failed command
+   on a departing device. Its trigger here is QEMU's; whether metal can
+   reach it is unread.
+
+Recommendation, revised after the control: 3 now, worded from the control
+(the defect is ME's, but this driver reaches it where ME's own stack did
+not in 160 cycles); 1 as a later task, now weighed higher; 4 as its own
+task, read on metal before it is changed.
+
+Owner, 2026-10-22: 3 taken (the release notes' "Known limitations"), 4
+opened as task 43.53 with 1 noted there as the later option for ME, and
+43.49 closed on this reading.
+
+### Owed
+
+- Why ME's configuration manager starts this driver's PDOs so much later
+  than its own stack's (not read; 43.53's ME line).
+
+## 43.52 two XHCITR defects from 43.45's legs: the code (2026-10-22)
+
+43.45's legs on 7 x86 (2026-10-22, branch `p43-45`, its run sheet
+`run-43-45.md`, its two XHCITR sections) found two XHCITR defects. This
+section records their code on branch `xhcitr-fixes`. No virtual machine
+was run for it; the legs are owed (below).
+
+### The unelevated eject's tunnel line
+
+Read from the code. Without administrator rights `ej_run`
+(`xhcitr\xhcitr.c`) does not confirm its own eject (`ej_mark_confirm`
+only when `ej_is_admin()`); the mark service does, at a pass that finds
+the unit held for eject (problem 47), and `mk_confirm`
+(`xhcimark\xhcimark.c`) writes `XhciCmEjectConfirm` under the tools'
+eject mutex, `Global\XhciinstTbAsk`, waiting 1 s for it. XHCITR held
+that mutex through its 10 s `ej_watch_tunnel` and the assessment after
+it, so the service's confirmation could only follow the tool's answer:
+43.45 read `cm.reenum.confirm` 12 to 18 s after OK. That also explains
+why waiting longer alone would not have helped.
+
+The change: `tr_eject_watch_kind` (`xhcitr\tr_core.c`) decides the
+watch. An administrator's run, and the not-removable route, keep the
+10 s watch and its line. A run without administrator rights on XP and
+later, the service not read as stopped or absent, releases the mutex
+before the watch and waits 10 s plus twice the service's idle period
+(`mk_poll_ms(0)`, 10 s; `test_tr` checks the two agree), 30 s, a budget
+rather than a bound the service promises; the watch ends at the
+installer's quit event, as 30 s outlasts the installer's 15 s wait for
+the tool to end. A tunnel still up then reads "The PCIe tunnel has not
+been seen closed yet. It closes if the xHCI98 mark service confirms the
+eject to the Thunderbolt driver, which the service does in the
+background; an eject made as an administrator is confirmed by this tool
+itself." Without administrator rights on 2000 (problem 24 is no
+confirmation), or with the service stopped or absent: 10 s, then "The
+PCIe tunnel stays up until the device is unplugged, because the eject
+was not confirmed to the Thunderbolt driver; an eject made as an
+administrator is confirmed by this tool itself." `XHCIINST` always runs
+as an administrator and is unchanged.
+
+### The balloon after a sleep
+
+`tr_diff` raised "The Thunderbolt/USB4 controller stopped answering"
+whenever an NHI's liveness left ACTIVE; `CmLiveDisarm` sets OFF ("not
+monitored") at every sleep and stop. It is now raised only for ACTIVE
+to a loss state (`tr_live_lost`: suspect, absent, configuration lost,
+recovering, recovery failed, contained, preparing), or for the record's
+stage going from active to failed, which a resume that fails leaves
+with the liveness OFF (`cm_power.c`); once an NHI either way. OFF,
+revoked and a value the tool does not know raise nothing. `test_tr`:
+ACTIVE to OFF to ACTIVE raises nothing; ACTIVE to each loss state, and
+the failed stage, raise it once.
+
+### Builds and review
+
+Host suites pass (`test_tr` 1002 checks). The gated builds, x86 `all`
+and amd64 `all`, pass at `38fc1f45`. Reviewed and revised once; the
+second reading found nothing. Commits: `650f5fc6` (the eject),
+`cded3b9b` (the balloon), `38fc1f45` (the revision).
+
+### Owed
+
+The legs, on 7 x86 in the emulator under the USB4 profile with the
+ASM2464 router, as 43.45 ran them:
+
+- an eject from XHCITR started without administrator rights: the tunnel
+  read closed within the watch (`cm.reenum.confirm` shortly after OK),
+  or the new line; and the same eject as an administrator, unchanged;
+- a sleep or hibernate and resume with XHCITR in the tray: no balloon;
+- where the vehicle allows, a resume that fails: the balloon.
