@@ -4823,6 +4823,17 @@ static void test_vsd(void)
               m.File == 0 && m.Tmp == 0, "an update cut short, then the "
               "uninstall");
     }
+    /* File=A, Pending=B, the destination B (the start did it) and a
+     * foreign .TMP: promoted, and the uninstall then removes it. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Pending = 1;
+    m.Dest = 1;
+    m.Tmp = 9;
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Tmp == 9 && m.Pending == 0 &&
+          m.File == 0, "a done update beside a foreign .TMP: promoted, then "
+          "removed; the .TMP left");
     /* A queued update whose destination another installer replaced. */
     memset(&m, 0, sizeof(m));
     m.File = 2;

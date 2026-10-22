@@ -97,7 +97,8 @@ int VsdBuild(const VSD_REQ *req, const VSD_IO *io, VSD_RUN *runs,
              VSD_U32 *scratch, VSD_U32 *nruns, VSD_U32 *total);
 
 /* VsdBuild's steps, external only because the 98 DDK's linker mislinks a
- * static one (vsd_list.h's head); not for other callers. */
+ * static one (vsd_list.h's head); not for other callers. VsdWraps: n bytes
+ * from a do not end below 2^32 (the exclusive end wraps or is 2^32). */
 int VsdWraps(VSD_U32 a, VSD_U32 n);
 int VsdWalk(const VSD_REQ *req, const VSD_IO *io, VSD_U32 *nfrag,
             VSD_U32 *sum, VSD_U32 *first);

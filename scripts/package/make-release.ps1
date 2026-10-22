@@ -3535,6 +3535,9 @@ the result in place of the marker, then cut again. The first:
             $legStor98 = @()
             if ($null -ne $stor98 -and $f -eq "release") {
                 $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+                # STOR98.VXD beside stor98.mpd (task 43.46): make-package.ps1
+                # stages it in the x86 package that carries Stor98.
+                if ($leg.PkgArch -eq "x86") { $legStor98 += "STOR98.VXD" }
             } else {
                 $pkgArgs += "-NoStor98"
             }
@@ -3621,6 +3624,12 @@ runs are what stand between a broken binary and a guest that cannot boot.
                           (Get-FileHash -LiteralPath $nvBuilt -Algorithm SHA256).Hash) {
                     throw "the $($leg.Dir)\$nvRel about to be published is not the build at '$nvBuilt'."
                 }
+            }
+            # STOR98.VXD published is the gated build's, byte for byte.
+            if ($legStor98 -contains "STOR98.VXD" -and
+                (Get-FileHash -LiteralPath (Join-Path $destDir "STOR98.VXD") -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $repo "src\vsd\obj\STOR98.VXD") -Algorithm SHA256).Hash) {
+                throw "the $($leg.Dir)\STOR98.VXD about to be published is not the build at src\vsd\obj\STOR98.VXD."
             }
             # The certificate beside a signed leg's binaries must be this key's
             # public half, byte for byte - the one a user would inspect or import.

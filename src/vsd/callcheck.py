@@ -23,8 +23,10 @@ for m in re.finditer(r'(?m)^\s*0001:([0-9a-f]{8})\s+(\S+)\s+[0-9a-f]{8}\s+\S+\.o
     pub[m.group(2)] = int(m.group(1), 16)
 n = bad = 0
 for obj in objs:
-    out = subprocess.run(['dmpobj', obj], capture_output=True, text=True).stdout
-    lines = out.splitlines()
+    res = subprocess.run(['dmpobj', obj], capture_output=True, text=True)
+    if res.returncode != 0 or 'MODEND' not in res.stdout:
+        print('callcheck: dmpobj could not read %s (exit %d)' % (obj, res.returncode)); sys.exit(1)
+    lines = res.stdout.splitlines()
     base = None; seg = None
     for l in lines:
         m = re.match(r'\s+Group: \d+, Seg: (\d+)', l)

@@ -296,6 +296,12 @@ static void test_sg(void)
     req_sg(&r, 512);
     CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_WRAP,
           "a descriptor pointer that wraps refused");
+    sg_setup(0xFFFFFFF0UL, 1);
+    desc[0][0] = 512;
+    desc[0][1] = lin(0, 0);
+    req_sg(&r, 512);
+    CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_WRAP,
+          "a terminator that would end at 2^32 refused");
     sg_setup(0x10000UL, 1);
     desc[0][0] = 8192;
     desc[0][1] = 0xFFFFF000UL;
@@ -334,18 +340,21 @@ static void test_srb(void)
     desc[1][0] = 4096;
     desc[1][1] = lin(0, 0);
     req_sg(&r, 4096);
-    CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_PRESENT,
-          "a first fragment ending at 2^32 passes the wrap checks (the fake "
-          "table has no entry there)");
+    CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_WRAP,
+          "a first fragment ending exactly at 2^32 refused");
+    CHECK(VsdWraps(0xFFFFFFF8UL, 8) && !VsdWraps(0xFFFFFFF0UL, 8) &&
+          !VsdWraps(0, 0) && VsdWraps(1, 0xFFFFFFFFUL),
+          "the exclusive end at 2^32 is a wrap");
     req_sg(&r, 8192);
     CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_WRAP,
           "the first byte plus the count wrapping refused (no SRB)");
+    desc[0][1] = 0xFFFFE000UL;
     req_sg(&r, 4096);
     r.SrbValid = 1;
-    r.SrbBuffer = 0xFFFFF000UL;
+    r.SrbBuffer = 0xFFFFE000UL;
     r.SrbLength = 8192;
     CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_WRAP,
-          "the SRB's range wrapping refused");
+          "the SRB's range ending at 2^32 refused");
 }
 
 static void test_claim(void)

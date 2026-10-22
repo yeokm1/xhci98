@@ -21,10 +21,11 @@ int VsdBytes(VSD_U32 count, int chars, unsigned shift, VSD_U32 *bytes)
     return 1;
 }
 
-/* a + n wraps past 2^32 (n bytes from a, the last at a + n - 1). */
+/* n bytes from a do not end below 2^32: their exclusive end a + n wraps
+ * or is 2^32 itself, so a pointer past them cannot be formed. */
 int VsdWraps(VSD_U32 a, VSD_U32 n)
 {
-    return n != 0 && a + (n - 1) < a;
+    return n != 0 && a + n <= a;
 }
 
 /* Walk the logical list once, checking it: *nfrag, *sum and *first out. */

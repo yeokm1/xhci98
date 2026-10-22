@@ -16383,6 +16383,8 @@ static int vsd_run(int mode)
     }
     switch (op) {
     case INST_VOP_QUEUED:
+        /* Queued by this run or an earlier one: the start still owes it. */
+        flagRestart = 1;
         step(INST_STEP_DONE, "STOR98.VXD: updated at the next start");
         return 1;
     case INST_VOP_FOREIGN:

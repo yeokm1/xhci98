@@ -5828,6 +5828,17 @@ int inst_vsd_next(const INST_VSDFACTS *f)
         }
         return INST_VOP_FOREIGN;
     }
+    /* A destination the start (or the move) made the pending bytes is
+     * promoted first, a foreign .TMP beside it left as it is. */
+    if (f->Pending && f->Dest == INST_VF_PENDING && f->Tmp == INST_VF_OTHER) {
+        if (!f->FileIsPending) {
+            return INST_VOP_SET_FILE;
+        }
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        return INST_VOP_DEL_PENDING;
+    }
     /* A .TMP that is not this installer's. */
     if (f->Tmp == INST_VF_OTHER) {
         if (f->Entry == INST_VE_EXACT) {
