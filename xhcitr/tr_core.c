@@ -1331,6 +1331,7 @@ int tr_snap_add(TR_SNAP *s, TR_U32 nhiKey, const TR_QUERY *q)
     }
     s->NhiKey[s->NhiCount] = nhiKey;
     s->Live[s->NhiCount] = q->Live;
+    s->Stage[s->NhiCount] = tr_d32(q->Rec + CM_ST_O_STAGE);
     s->EpochLo[s->NhiCount] = q->EpochLo;
     s->EpochHi[s->NhiCount] = q->EpochHi;
     s->NhiCount++;
@@ -1480,7 +1481,9 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
     for (i = 0; i < now->NhiCount; i++) {
         for (k = 0; k < old->NhiCount; k++) {
             if (old->NhiKey[k] == now->NhiKey[i] &&
-                old->Live[k] == CM_LIVE_ACTIVE && tr_live_lost(now->Live[i])) {
+                ((old->Live[k] == CM_LIVE_ACTIVE && tr_live_lost(now->Live[i])) ||
+                 (old->Stage[k] == CM_ST_STAGE_ACTIVE &&
+                  now->Stage[i] == CM_ST_STAGE_FAILED))) {
                 count = tr_ev(ev, cap, count, TR_EV_STOPPED, NULL, 0);
             }
         }
@@ -3300,15 +3303,15 @@ const char *tr_eject_open_text(int kind)
 {
     switch (kind) {
     case TR_EJW_SERVICE:
-        return "The PCIe tunnel closes when the xHCI98 mark service confirms "
-               "the eject to the Thunderbolt driver, which it does in the "
-               "background; an eject made as an administrator is confirmed "
-               "at once.";
+        return "The PCIe tunnel has not been seen closed yet. It closes if "
+               "the xHCI98 mark service confirms the eject to the Thunderbolt "
+               "driver, which the service does in the background; an eject "
+               "made as an administrator is confirmed by this tool itself.";
     case TR_EJW_UNCONFIRMED:
         return "The PCIe tunnel stays up until the device is unplugged, "
                "because the eject was not confirmed to the Thunderbolt "
-               "driver; an eject made as an administrator is confirmed at "
-               "once.";
+               "driver; an eject made as an administrator is confirmed by "
+               "this tool itself.";
     default:
         return "The Thunderbolt driver has not confirmed that the PCIe tunnel "
                "was closed.";

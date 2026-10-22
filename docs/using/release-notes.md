@@ -505,7 +505,7 @@ the logged-on user, with no administrator rights.
   warned "The Thunderbolt/USB4 controller stopped answering" after every
   sleep or hibernation with nothing wrong (read on 7 in a virtual
   machine, 2026-10-22); from `3.2.0.0` a sleep or a stop of the
-  controller raises no warning.
+  controller raises no warning, and a resume that fails still does.
 - The link rate and width of a USB4 device are read from its lane
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
@@ -647,8 +647,8 @@ not confirmed the teardown. In `3.1.0.0` the USB Tree run without
 administrator rights on XP, Vista and 7 said so after every stop, as it
 stopped waiting before the service could confirm (read on 7 in a virtual
 machine, 2026-10-22); from `3.2.0.0` it waits up to 30 seconds for the
-service and, if the tunnel is still up then, says that the tunnel closes
-when the service confirms the stop. A disable, a driver update or the service's
+service and, if the tunnel is still up then, says that it has not been
+seen closed and closes if the service confirms the stop. A disable, a driver update or the service's
 own restart of a device is never taken for a stop, so it no longer tears
 the tunnel down as it did in `3.0.0.0`.
 

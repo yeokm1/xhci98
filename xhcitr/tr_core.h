@@ -347,6 +347,7 @@ typedef struct _TR_SNAP {
     int NhiCount;
     TR_U32 NhiKey[TR_SNAP_NHI];
     TR_U32 Live[TR_SNAP_NHI];
+    TR_U32 Stage[TR_SNAP_NHI];  /* CM_ST_STAGE_* of its status record    */
     TR_U32 EpochLo[TR_SNAP_NHI];
     TR_U32 EpochHi[TR_SNAP_NHI];
     int Count;
@@ -385,8 +386,10 @@ typedef struct _TR_EVENT {
  * a change in their number is one generic event. Approval events only for
  * ICM entries (a USB4 entry's approval word folds held, failed and
  * unsupported together); a router that leaves is "disconnected", never
- * "unplugged while in use" (decision T9); the stop event when the
- * liveness goes from ACTIVE to a loss state (tr_live_lost). */
+ * "unplugged while in use" (decision T9); the stop event, once an NHI,
+ * when its liveness goes from ACTIVE to a loss state (tr_live_lost) or its
+ * stage from active to failed (a resume that failed leaves the liveness
+ * OFF, cm_power.c). */
 int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap);
 
 /* 1 for a liveness state (CM_LIVE_*) that is a loss of the controller:

@@ -3942,11 +3942,16 @@ static int ej_single(const WALK *w, int u)
 
 /* Under the USB4 profile, the query watched for the router's PCIe tunnel
  * closed after the eject (record 24 section 5.2; xhciinst.c), for as long
- * as tr_eject_watch_ms gives the watch's kind (TR_EJW_*). */
-static const char *ej_watch_tunnel(const EJREQ *q, int kind)
+ * as tr_eject_watch_ms gives the watch's kind (TR_EJW_*). The mark
+ * service's watch outlasts the installer's wait for the tool to end
+ * (INST_TRAY_CLOSE_MS), so it ends at the installer's quit event and sets
+ * *quit; the tool then shows no answer and ends at its next poll. */
+static const char *ej_watch_tunnel(const EJREQ *q, int kind, int *quit)
 {
     DWORD start = GetTickCount();
     DWORD bound = (DWORD)tr_eject_watch_ms(kind);
+
+    *quit = 0;
 
     for (;;) {
         unsigned char *b;
@@ -3973,6 +3978,10 @@ static const char *ej_watch_tunnel(const EJREQ *q, int kind)
         }
         if (GetTickCount() - start >= bound) {
             return tr_eject_open_text(kind);
+        }
+        if (kind == TR_EJW_SERVICE && quit_asked()) {
+            *quit = 1;
+            return NULL;
         }
         Sleep(250);
     }
@@ -4867,6 +4876,7 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     int got;
     int single;
     int outcome;
+    int quit = 0;
     int code = INST_EXIT_REFUSED;
     TR_TEXT t;
 
@@ -5077,7 +5087,12 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
                 ej_unlock(m);
                 m = NULL;
             }
-            tunnelNote = ej_watch_tunnel(q, kind);
+            tunnelNote = ej_watch_tunnel(q, kind, &quit);
+            if (quit) {
+                /* Windows stopped the unit; the installer ends the tool. */
+                code = INST_EXIT_DONE;
+                goto out;
+            }
         }
     } else {
         cr = api.QueryRemove(w.N[u].Dn, TR_UI_NOT_OK);
@@ -5911,7 +5926,9 @@ static void ej_unit(HWND owner, int u, int fromTray)
             code = ej_elev_run(owner, q, msg, sizeof(msg));
         }
     }
-    if (ejElevQuit) {
+    if (ejElevQuit || quit_asked()) {
+        /* An installer is waiting for the tool to end: no answer box, and
+         * the next poll ends it. */
         free(q);
         return;
     }
@@ -7717,7 +7734,9 @@ answer:
             return code;
         }
     }
-    say(msg, code != INST_EXIT_DONE);
+    if (!quit_asked()) {
+        say(msg, code != INST_EXIT_DONE);
+    }
     free(q);
     return code;
 }

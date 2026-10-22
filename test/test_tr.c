@@ -1284,6 +1284,24 @@ static void test_events(void)
     snap_of(&so, qa, n, 2UL);
     snap_of(&sn, qa, n, 3UL);
     CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: SUSPECT to ABSENT is quiet");
+    /* A resume that failed: the liveness stays OFF, the stage goes to
+     * failed (cm_power.c). Raised once, whether or not the sleep's OFF was
+     * sampled in between; a healthy resume (above) stays quiet. */
+    snap_of(&so, qa, n, 1UL);
+    CHECK_EQ(so.Stage[0], CM_ST_STAGE_ACTIVE, "snap: its stage");
+    snap_of(&sn, qa, n, 0UL);
+    sn.Stage[0] = CM_ST_STAGE_FAILED;
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "diff: ACTIVE to OFF with the stage failed is STOPPED");
+    snap_of(&s3, qa, n, 0UL);
+    k = tr_diff(&s3, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "diff: OFF (asleep) to OFF with the stage failed is STOPPED");
+    CHECK_EQ(tr_diff(&sn, &sn, ev, 8), 0, "diff: a failed stage stays quiet");
+    snap_of(&s3, qa, n, 2UL);
+    s3.Stage[0] = CM_ST_STAGE_FAILED;
+    CHECK_EQ(tr_diff(&so, &s3, ev, 8), 1, "diff: a loss and a failed stage, one event");
 
     /* A new epoch is a new set of devices. */
     n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
@@ -2751,15 +2769,16 @@ static void test_eject_watch(void)
                  "The Thunderbolt driver has not confirmed that the PCIe "
                  "tunnel was closed.") == 0, "plain text unchanged");
     CHECK(strcmp(tr_eject_open_text(TR_EJW_SERVICE),
-                 "The PCIe tunnel closes when the xHCI98 mark service "
-                 "confirms the eject to the Thunderbolt driver, which it "
-                 "does in the background; an eject made as an administrator "
-                 "is confirmed at once.") == 0, "service text");
+                 "The PCIe tunnel has not been seen closed yet. It closes "
+                 "if the xHCI98 mark service confirms the eject to the "
+                 "Thunderbolt driver, which the service does in the "
+                 "background; an eject made as an administrator is confirmed "
+                 "by this tool itself.") == 0, "service text");
     CHECK(strcmp(tr_eject_open_text(TR_EJW_UNCONFIRMED),
                  "The PCIe tunnel stays up until the device is unplugged, "
                  "because the eject was not confirmed to the Thunderbolt "
-                 "driver; an eject made as an administrator is confirmed at "
-                 "once.") == 0, "unconfirmed text");
+                 "driver; an eject made as an administrator is confirmed by "
+                 "this tool itself.") == 0, "unconfirmed text");
 }
 
 int main(void)
