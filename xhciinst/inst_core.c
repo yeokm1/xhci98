@@ -1545,6 +1545,129 @@ int inst_testsigning(const char *options)
     return 0;
 }
 
+int inst_sig_note_kind(int arch, int nt, INST_U32 major, int osKind)
+{
+    if (!nt || major < 6UL) {
+        return INST_SIG_NONE;
+    }
+    if (arch == INST_ARCH_AMD64) {
+        return INST_SIG_X64;
+    }
+    return osKind == INST_OS_CMONLY ? INST_SIG_X86_SB : INST_SIG_NONE;
+}
+
+const char *inst_sig_x86_sb_text(void)
+{
+    return "NOTE: with Secure Boot on in the computer's firmware setup, this "
+           "Windows loads\nonly signed drivers, and this package's 32-bit "
+           "drivers are not signed. With\nSecure Boot on, turn it off there, "
+           "or start with Advanced startup,\nTroubleshoot, Startup Settings, "
+           "\"Disable driver signature enforcement\",\nat every start; "
+           "test-signing mode does not help. A computer that starts\nfrom a "
+           "legacy BIOS has no Secure Boot, and the drivers load as on "
+           "Windows 7.\n";
+}
+
+int inst_cm_boot_gate(int arch, int osKind, int cmSigned, int tsOn)
+{
+    if (arch != INST_ARCH_AMD64 || osKind != INST_OS_CMONLY) {
+        return INST_CMBOOT_NONE;
+    }
+    return (cmSigned == 1 && tsOn) ? INST_CMBOOT_WARN : INST_CMBOOT_REFUSE;
+}
+
+const char *inst_cm_boot_warn_text(void)
+{
+    return "This Windows makes the connection manager a boot driver (it "
+           "filters a PCI\nbridge). Keep test-signing mode on, and Secure Boot "
+           "off, while it is installed:\nstarted without test-signing mode, "
+           "Windows stops in Automatic Repair until a\nstart with driver "
+           "signature enforcement disabled (Advanced startup,\n"
+           "Troubleshoot, Advanced options, Startup Settings, Restart, "
+           "then 7). From such a\nstart, turn test-signing mode on again or run the "
+           "uninstall.\n";
+}
+
+const char *inst_cm_boot_refuse_text(void)
+{
+    return "REFUSED: on this 64-bit Windows the connection manager is "
+           "installed only in\ntest-signing mode, from a test-signed package. "
+           "Windows makes it a boot driver,\nand a start that cannot load it "
+           "does not finish (Automatic Repair). Turn\ntest-signing mode on - "
+           "Secure Boot off in the firmware setup, then in an\nelevated "
+           "Command Prompt: bcdedit /set testsigning on  - restart, and run "
+           "this\nagain. Nothing was changed.\n";
+}
+
+const char *inst_stage_error_text(INST_U32 err, int arch, int osKind)
+{
+    if (err != INST_E_NO_CATALOG || arch != INST_ARCH_AMD64 ||
+        osKind != INST_OS_CMONLY) {
+        return NULL;
+    }
+    return "This 64-bit Windows installs a driver package only with a signed "
+           "catalog, even\nin test-signing mode, and this package's INFs have "
+           "none (its x64 drivers carry\nthe project's test signature in the "
+           "files themselves). To install it, keep\ntest-signing mode on, "
+           "start once with driver signature enforcement disabled -\n"
+           "Advanced startup, Troubleshoot, Advanced options, Startup "
+           "Settings,\nRestart, then 7 - and run the installer again. Later "
+           "starts need only\ntest-signing mode.";
+}
+
+int inst_sb_state(int found, INST_U32 type, INST_U32 value)
+{
+    if (!found || type != INST_REG_DWORD_TYPE) {
+        return INST_SB_UNKNOWN;
+    }
+    if (value == 1UL) {
+        return INST_SB_ON;
+    }
+    return value == 0UL ? INST_SB_OFF : INST_SB_UNKNOWN;
+}
+
+int inst_sb_applies(int nt, int osKind)
+{
+    return nt && osKind == INST_OS_CMONLY;
+}
+
+const char *inst_sb_text(int arch, int state)
+{
+    if (arch == INST_ARCH_AMD64) {
+        if (state == INST_SB_ON) {
+            return "Secure Boot is on: Windows does not load the test-signed "
+                   "drivers, and\ntest-signing mode cannot be turned on, until "
+                   "you turn Secure Boot off in the\ncomputer's firmware setup. "
+                   "Until then only a start with driver signature\n"
+                   "enforcement disabled loads them (Advanced startup, "
+                   "Troubleshoot, Startup\nSettings, at every start).\n";
+        }
+        if (state == INST_SB_OFF) {
+            return "Secure Boot is off: test-signing mode can be turned on (an "
+                   "elevated Command\nPrompt: bcdedit /set testsigning on, then "
+                   "restart).\n";
+        }
+        return NULL;
+    }
+    if (state == INST_SB_ON) {
+        return "Secure Boot is on: Windows refuses this package's unsigned "
+               "32-bit drivers.\nTurn Secure Boot off in the computer's "
+               "firmware setup, or start with Advanced\nstartup, Troubleshoot, "
+               "Startup Settings, \"Disable driver signature\nenforcement\", "
+               "at every start; test-signing mode does not help.\n";
+    }
+    if (state == INST_SB_OFF) {
+        return "Secure Boot is off: the unsigned 32-bit drivers load as on "
+               "Windows 7.\n";
+    }
+    return NULL;
+}
+
+int inst_ts_confirmed(int tsOption, int sbState)
+{
+    return tsOption && sbState != INST_SB_ON;
+}
+
 /* ======================================================================== */
 /* Registry values                                                           */
 /* ======================================================================== */

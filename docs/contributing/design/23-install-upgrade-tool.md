@@ -1,6 +1,12 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+Status: revision 30, 2026-10-22 (roadmap-usb4 task 43.22, section
+5.10: on 64-bit Windows 8 and 8.1 the connection manager installed only
+from a test-signed package in test-signing mode, Windows making it a
+boot driver; the catalog refusal explained; the Secure Boot note for
+32-bit 8 and 8.1; Secure Boot's state read and shown there, record 26
+section 5.3.2; keyed on the system's kind, so 10 takes them);
+revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
 owner's decisions of 2026-10-20: Windows 10, NT 10.0 below build 22000,
 admitted beside 8 and 8.1, Windows Server 2016 to 2022 as 10 with no
 Server check, 11 still refused; sections 4.3, 4.5 and 5.10; record 26
@@ -1492,6 +1498,120 @@ whether memory integrity (hypervisor-protected code integrity) refuses
 these drivers when on, which the note names only if 43.33 (d) finds it
 does. Whether the tool reads Secure Boot's state to say which case
 applies is record 26 section 5.3.2's design.
+
+Revision 30 (roadmap-usb4 task 43.22, 2026-10-22; `runs/run-43.md`,
+"43.22"). Read on a Windows 8 Pro x64 guest (QEMU, SeaBIOS, so no Secure
+Boot; test-signing mode on; the emulator's Thunderbolt 3 NHI) with the
+published `3.1.0.0` package and its `INSTALL /console /cmonly /yes`, two
+facts revision 13 did not have, both **runtime** (Windows' own setup log
+and service configuration, read in the guest):
+
+1. **No catalog, no install.** In test-signing mode `SetupCopyOEMInf`
+   refused `xhcicm.inf` with `0xE000022F` (`setupapi.dev.log`: "Driver
+   package does not contain a catalog file, and Code Integrity is in Test
+   Signing mode"), and the run ended "No changes were made", exit 2. On
+   Vista and 7 the same package installs after Windows' "can't verify the
+   publisher" prompt (record 19 section 7); Windows 8 x64 accepts a package
+   with no catalog only on a start with driver signature enforcement
+   disabled (Advanced startup, Troubleshoot, Advanced options, Startup
+   Settings, Restart, 7), where the same run showed the prompt for each of
+   the two INFs ("Driver package does not contain a catalog file, but user
+   wants to install anyway") and ended with the NHI started on `xhcicm`,
+   the tunnel port filtered and `xhcimark` running, exit 3.
+2. **The connection manager becomes a boot driver.** Installing
+   `xhcicmf.inf` on the bridge, whose function driver `pci` is boot start,
+   made the setup engine rewrite `xhcicm`'s start type
+   (`setupapi.dev.log`: "Updated service 'xhcicm' to be boot start"; `sc
+   qc xhcicm`: `BOOT_START`, the INF's `StartType=3` notwithstanding). The
+   next start, with test-signing mode turned off, did not reach the desktop:
+   Windows went to "Attempting repairs" (Automatic Repair) and stayed
+   there through two launches of the guest, over an hour; the way back
+   from there (a start with enforcement disabled) is unread. 32-bit 8 and
+   64-bit 8.1 made `xhcicm` boot start the same way (8.1 x64 then started in
+   test-signing mode with the NHI on `xhcicm`).
+
+So on 8 and 8.1 x64 the tool now, in place of revision 13's note:
+
+- **refuses the connection manager** - in a run without the USB drivers
+  and in one with them alike - unless the x64 `xhcicm.sys` carries a
+  signature and `SystemStartOptions` holds `TESTSIGNING`
+  (`inst_cm_boot_gate`, pure, host-tested): "REFUSED: on this 64-bit
+  Windows the connection manager is installed only in test-signing mode,
+  from a test-signed package ...", exit 1, nothing changed. An install
+  outside test-signing mode, the case revision 13 let through with a note,
+  leaves a machine that stops in Automatic Repair at its next start.
+  `SystemStartOptions` on a start with enforcement disabled and test-signing
+  on reads `TESTSIGNING NOEXECUTE=OPTIN DISABLE_INTEGRITY_CHECKS`, so the
+  install route of item 1 passes the gate;
+- when it goes on, **warns** that the connection manager is a boot driver
+  there: keep test-signing mode on and Secure Boot off while it is
+  installed, and from Automatic Repair the way back is a start with
+  enforcement disabled, then test-signing mode on again or the uninstall;
+- after a staging refused with `0xE000022F` on 8 or 8.1 x64, **names the
+  way through** (`inst_stage_error_text`): keep test-signing mode on,
+  start once with enforcement disabled, run the installer again; later
+  starts need only test-signing mode.
+
+The three decisions (`inst_cm_boot_gate`, `inst_stage_error_text`,
+`inst_sig_note_kind`) key on the kind `inst_os_kind` gives
+(`INST_OS_CMONLY`, the connection-manager-alone systems of section 4.3),
+not on the version, and their texts name no version ("this Windows"): a
+system admitted to that kind later - Windows 10 below build 22000, tasks
+43.34 to 43.36 - takes the gate, the catalog text and the 32-bit Secure
+Boot note with it. Whether 10 makes `xhcicm` boot start and refuses a
+package with no catalog in test-signing mode is unread here (the same
+setup engine and code integrity, so likely); 43.34's legs read it.
+
+The installer still signs nothing and changes no boot setting (D6). A
+catalog would remove item 1's detour (a test-signed catalog is accepted
+in test-signing mode); it is design record 19's decision not to ship one,
+so it is a question for the owner, not a change made here. Item 2 is not
+cured by a catalog: a boot-start driver must load at every start, so on 8
+and 8.1 x64 the connection manager needs test-signing mode for as long as
+it is installed, whatever the package carries.
+
+**32-bit Windows 8 and 8.1** (revision 30): Microsoft's "Driver Signing
+Policy" page (learn.microsoft.com, `kernel-mode-code-signing-policy--windows-vista-and-later-`,
+`ms.date` 2024-08-19, read 2026-10-22) gives, under "Signing requirements
+by version", the column "Windows 8, Windows 8.1, Windows 10, versions
+1507, 1511 with Secure Boot on" the architectures "64-bit, 32-bit", and the
+column "Windows Vista, Windows 7; Windows 8+ with Secure Boot off" "64-bit
+only, no signature required for 32-bit". The x86 drivers are never signed
+(AGENTS.md), so with Secure Boot on a 32-bit 8 or 8.1 loads none of them,
+and test-signing mode does not help an unsigned binary. The note of
+section 5.10 therefore covers the x86 package there: on 32-bit 8 and 8.1
+the tool prints the Secure Boot note (`inst_sig_note_kind`,
+`inst_sig_x86_sb_text`) - Secure Boot on refuses the unsigned drivers;
+turn it off, or start with enforcement disabled at every start; a computer
+that starts from a legacy BIOS has no Secure Boot - and after the install
+a device at Code 52 is reported as refused for that reason. Secure Boot on
+itself is unread here: every guest of this project starts from SeaBIOS.
+The same table names 10 1507 and 1511 in that column, and from 10 1607
+with Secure Boot on only portal-signed drivers load (revision 28 above),
+so 32-bit 10 below build 22000, of the same kind, gets the same note: the
+part revision 28 left to 43.33 (d) and to this reading.
+
+**Secure Boot's state** (revision 30; owner, 2026-10-22, accepting record
+26 section 5.3.2 as `p43-34` designed it). On the connection-manager-alone
+kind of system (`inst_sb_applies`: 8, 8.1 and 10 below build 22000) the
+tool reads `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State`,
+`UEFISecureBootEnabled`, logs it, and shows it in the note; it never
+changes it. `inst_sb_state`: a `REG_DWORD` 1 is on, 0 off, anything else
+or nothing not known. On x64 (`inst_sb_text`) on says the test-signed
+drivers do not load and test-signing mode cannot be turned on until
+Secure Boot is turned off in the firmware setup; off says test-signing
+mode can be turned on (`bcdedit`); not known adds nothing to the note. On
+32-bit 8 and 8.1 on and off replace the Secure Boot note above by the
+case that applies (refused until it is turned off; the drivers load as on
+7), not known keeps the note naming both. With Secure Boot read as on,
+`TESTSIGNING` in `SystemStartOptions` never counts as confirmed
+(`inst_ts_confirmed`), so on 8 and 8.1 x64 the gate above refuses the
+connection manager with the steps that begin with turning Secure Boot
+off, and after an install a Code 52 is reported as the note's case.
+Host vectors: each state on each system, and the state through the gate.
+The value is unread on any guest here (all SeaBIOS, where it is absent or
+0, both of which read as not known or off): task 43.32's OVMF guest reads
+it before the release.
 
 ### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 

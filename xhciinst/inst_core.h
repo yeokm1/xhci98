@@ -307,6 +307,72 @@ int inst_cddb_service_gone(const char *service, const char *const *gone,
 /* 1 when a SystemStartOptions value holds the word TESTSIGNING. */
 int inst_testsigning(const char *options);
 
+/* The signature note a run prints (record 23 section 5.10, revision 30):
+ * none; the x64 test-signing note (Vista and later, x64); or, on a 32-bit
+ * system of the connection-manager-alone kind (osKind INST_OS_CMONLY,
+ * inst_os_kind: 8 and 8.1, and every later Windows that kind admits), the
+ * Secure Boot note, since Microsoft's Driver Signing Policy lists 32-bit
+ * beside 64-bit for 8 and later with Secure Boot on and the x86 drivers
+ * are never signed (AGENTS.md). arch is INST_ARCH_*; nt and major as
+ * RtlGetVersion reads them. */
+#define INST_SIG_NONE       0
+#define INST_SIG_X64        1
+#define INST_SIG_X86_SB     2
+int inst_sig_note_kind(int arch, int nt, INST_U32 major, int osKind);
+/* The Secure Boot note's text, INST_SIG_X86_SB. */
+const char *inst_sig_x86_sb_text(void);
+
+/* 64-bit systems of the connection-manager-alone kind and the connection
+ * manager (record 23 section 5.10, revision 30): Windows makes xhcicm a
+ * boot-start driver when it installs the tunnel-port filter on a PCI
+ * bridge, and a start that cannot load it then goes to Automatic Repair
+ * (read on 8 x64; the boot-start rewrite on 8.1 x64 and 8 x86 too; task
+ * 43.22). So on those systems the connection manager is installed only
+ * with a test-signed package (cmSigned 1) in confirmed test-signing mode
+ * (tsOn); INST_CMBOOT_WARN goes on with the boot-driver warning,
+ * INST_CMBOOT_REFUSE refuses the run, INST_CMBOOT_NONE is every other
+ * system. Keyed on osKind, not the version, so a system inst_os_kind
+ * admits to that kind later (10, task 43.34) takes the gate with it. */
+#define INST_CMBOOT_NONE    0
+#define INST_CMBOOT_WARN    1
+#define INST_CMBOOT_REFUSE  2
+int inst_cm_boot_gate(int arch, int osKind, int cmSigned, int tsOn);
+const char *inst_cm_boot_warn_text(void);
+const char *inst_cm_boot_refuse_text(void);
+
+/* What a refused staging means (record 23 section 5.10, revision 30): for
+ * SPAPI_E_NO_CATALOG_FOR_OEM_INF on a 64-bit system of the
+ * connection-manager-alone kind, which refuses an INF with no signed
+ * catalog in test-signing mode (read on 8 and 8.1 x64, task 43.22), the
+ * way through; NULL for any other error or system. */
+#define INST_E_NO_CATALOG   0xE000022FUL
+const char *inst_stage_error_text(INST_U32 err, int arch, int osKind);
+
+/* Secure Boot's state (record 26 section 5.3.2; record 23 section 5.10,
+ * revision 30; owner, 2026-10-22): the value INST_SB_VALUE under
+ * HKLM\INST_SB_KEY, read and shown on the connection-manager-alone kind
+ * of system (8, 8.1 and 10 below build 22000), never changed. found: the
+ * value was read; type its registry type; value its data. A REG_DWORD 1
+ * is on, 0 off; absent, another type or another value is not known (a
+ * legacy-BIOS computer may have no value, or 0). */
+#define INST_SB_UNKNOWN     0
+#define INST_SB_OFF         1
+#define INST_SB_ON          2
+#define INST_SB_KEY  "SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State"
+#define INST_SB_VALUE       "UEFISecureBootEnabled"
+#define INST_REG_DWORD_TYPE 4UL
+int inst_sb_state(int found, INST_U32 type, INST_U32 value);
+/* 1 where the state is read: NT, a system of the connection-manager-alone
+ * kind (osKind INST_OS_CMONLY). */
+int inst_sb_applies(int nt, int osKind);
+/* The note's Secure Boot sentence for arch (INST_ARCH_*) and state; NULL
+ * for INST_SB_UNKNOWN, where the note keeps the sentence naming both
+ * cases. */
+const char *inst_sb_text(int arch, int state);
+/* Test-signing mode counts as confirmed only when SystemStartOptions
+ * holds TESTSIGNING (tsOption) and Secure Boot is not read as on. */
+int inst_ts_confirmed(int tsOption, int sbState);
+
 /* ---- registry values (record 23 section 8) ---------------------------------------- */
 
 #define INST_INF_XHCI       0

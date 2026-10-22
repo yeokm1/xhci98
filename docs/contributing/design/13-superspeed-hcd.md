@@ -3247,6 +3247,21 @@ package with the unsigned-driver prompt. Windows 10 22H2 does the same
 (read the same day): 10 x64 refuses with `0xE000022F`, 10 x86 takes the
 x86 package with the prompt.
 
+Read since for the connection manager (task 43.22, 2026-10-22, **runtime**,
+in QEMU guests; record 23 section 5.10 revision 30 and `runs/run-43.md`,
+"43.22"): 8 x64 and 8.1 x64 load the test-signed `xhcicm.sys` in
+test-signing mode with Secure Boot off (SHA-1 file digest, as on 7), but
+refuse to install a package with no catalog in that mode (`0xE000022F`),
+so the first install needs a start with driver signature enforcement
+disabled; 32-bit 8 installs the unsigned package after the publisher
+prompt and loads it with test-signing mode off, on SeaBIOS (no Secure
+Boot); and Microsoft's "Driver Signing Policy" table lists 32-bit beside
+64-bit for 8 and 8.1 with Secure Boot on. On both architectures the setup
+engine made `xhcicm` boot start when its filter went onto a PCI bridge.
+For `xhci98.sys` all of this is still 43.31's: whether the catalog refusal
+and a start-type change reach the controller's and the hubs' INFs is
+unread.
+
 #### 6.12.9 What only a running system settles (VM, owed to 43.24 and 43.31)
 
 1. The forced install on 8 and 8.1, x86 and x64: `Signature="$CHICAGO$"`

@@ -265,6 +265,8 @@ static int idle_filtered_port(const DEVREC *d, int inf);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
+static int sbState;          /* INST_SB_*: Secure Boot as read (43.22) */
+static int cmBootRefused;    /* CM-alone kind, x64: the CM refused (43.22) */
 static int pkgSigned = -1;  /* xhci98.sys signed: 1, unsigned: 0, unread: -1 */
 static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
 static char srcDir[INST_PATH_CHARS];
@@ -6144,10 +6146,16 @@ static int stage_nt(void)
         logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, media);
         if (!api.CopyOem(path, media, SPOST_PATH, 0, dest, sizeof(dest), NULL,
                          &component)) {
+            DWORD err = GetLastError();
+            const char *why = inst_stage_error_text(err, INST_MY_ARCH,
+                                                    osKind);
             out("%s could not be staged (error 0x%08lX).%s\n", instInfFile[k],
-                (unsigned long)GetLastError(),
+                (unsigned long)err,
                 trapOem[k][0] ? " Run INSTALL.BAT again: it stages from the "
                                 "same local copy." : "");
+            if (why != NULL) {
+                out("%s\n", why);
+            }
             return 0;
         }
         if (k == INST_INF_CM) {
@@ -7157,6 +7165,13 @@ static void check_results(void)
             out("  %s does not load: test-signing mode is needed (see the "
                 "note above).\n", d->Desc);
             flagSteps = 1;
+        } else if (inst_sig_note_kind(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                                      osKind) == INST_SIG_X86_SB &&
+                   d->Problem == 52UL) {
+            out("  %s does not load: Windows refuses the unsigned driver "
+                "while Secure Boot\n  is on (see the note above).\n",
+                d->Desc);
+            flagSteps = 1;
         } else if (changedReboot[c] && d->Problem == 0) {
             /* The old release runs until the restart its install asked for. */
         } else if (inst_tunnel_restart(win2000, tunnelChanged, changedInf[c],
@@ -7239,7 +7254,24 @@ static void testsigning_note_cm(void);
  * imported. */
 static void testsigning_note(void)
 {
+    cmBootRefused = 0;
     testsigning_note0();
+    if (usbInclude && tbInclude) {
+        /* The USB drivers ticked on 8 and 8.1 x64 (task 43.43 case 3): the
+         * connection manager in the run is a boot driver all the same. */
+        switch (inst_cm_boot_gate(INST_MY_ARCH, osKind, pkgCmSigned,
+                                  testSigningConfirmed)) {
+        case INST_CMBOOT_WARN:
+            out("%s\n", inst_cm_boot_warn_text());
+            break;
+        case INST_CMBOOT_REFUSE:
+            cmBootRefused = 1;
+            out("%s\n", inst_cm_boot_refuse_text());
+            break;
+        default:
+            break;
+        }
+    }
     if (INST_MY_ARCH == INST_ARCH_AMD64 && envNow.Major >= 6 && s98Include) {
         out("stor98.sys, the bundled Stor98, is signed (or not) with the "
             "drivers above, by\nthe same certificate: it loads as they "
@@ -7247,12 +7279,58 @@ static void testsigning_note(void)
     }
 }
 
+/* Secure Boot's state on the connection-manager-alone kind of system
+ * (record 26 section 5.3.2, record 23 section 5.10 revision 30; owner,
+ * 2026-10-22): read and shown, never changed; the raw value logged. */
+static void sb_read(void)
+{
+    DWORD v = 0;
+    int found;
+
+    sbState = INST_SB_UNKNOWN;
+    if (stScreens || !inst_sb_applies(envNow.Nt, osKind)) {
+        return;
+    }
+    found = reg_dword(HKEY_LOCAL_MACHINE, INST_SB_KEY, INST_SB_VALUE, &v);
+    sbState = inst_sb_state(found, found ? INST_REG_DWORD_TYPE : 0UL,
+                            (INST_U32)v);
+    if (found) {
+        logonly("UEFISecureBootEnabled: %lu (state %d)\n", (unsigned long)v,
+                sbState);
+    } else {
+        logonly("UEFISecureBootEnabled: not read as a REG_DWORD (state %d)\n",
+                sbState);
+    }
+}
+
+/* The x64 note's Secure Boot sentence, where the state is known. */
+static void sb_say_x64(void)
+{
+    const char *t = inst_sb_text(INST_ARCH_AMD64, sbState);
+
+    if (t != NULL) {
+        out("%s", t);
+    }
+}
+
 static void testsigning_note0(void)
 {
     char opt[512];
+    const char *sb;
 
     testSigningConfirmed = 0;
-    if (INST_MY_ARCH != INST_ARCH_AMD64 || envNow.Major < 6) {
+    sb_read();
+    switch (inst_sig_note_kind(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                               osKind)) {
+    case INST_SIG_X64:
+        break;
+    case INST_SIG_X86_SB:
+        /* The state read says which case applies; not known, the note
+         * names both. */
+        sb = inst_sb_text(INST_ARCH_X86, sbState);
+        out("%s\n", sb != NULL ? sb : inst_sig_x86_sb_text());
+        return;
+    default:
         return;
     }
     if (!usbInclude) {
@@ -7262,10 +7340,10 @@ static void testsigning_note0(void)
     if (reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
                  "SystemStartOptions", opt, sizeof(opt), NULL)) {
         logonly("SystemStartOptions: %s\n", opt);
-        if (inst_testsigning(opt)) {
-            testSigningConfirmed = 1;
-        }
+        testSigningConfirmed = inst_ts_confirmed(inst_testsigning(opt),
+                                                 sbState);
     }
+    sb_say_x64();
     if (pkgSigned < 0) {
         testSigningConfirmed = 0;
         out("NOTE: whether the x64 drivers carry a signature could not be read. "
@@ -7304,20 +7382,38 @@ static void testsigning_note0(void)
 
 /* The note for the connection manager alone (record 23 section 5.10,
  * revision 13): the binary read is xhcicm.sys, the device that shows the
- * code the NHI, and on 8, 8.1 and 10 (revision 28) the Secure Boot
- * condition. */
+ * code the NHI. On the connection-manager-alone kind of system (8, 8.1
+ * and 10 below build 22000, x64) the boot-driver gate answers instead
+ * (revision 30), and its texts carry the Secure Boot condition.
+ */
 static void testsigning_note_cm(void)
 {
     char opt[512];
-    int w8 = envNow.Major > 6 || (envNow.Major == 6 && envNow.Minor >= 2);
 
     if (!stScreens &&
         reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
                  "SystemStartOptions", opt, sizeof(opt), NULL)) {
         logonly("SystemStartOptions: %s\n", opt);
-        if (inst_testsigning(opt)) {
-            testSigningConfirmed = 1;
-        }
+        testSigningConfirmed = inst_ts_confirmed(inst_testsigning(opt),
+                                                 sbState);
+    }
+    sb_say_x64();
+    /* Task 43.22: 8 and 8.1 x64 make xhcicm a boot driver; the gate answers
+     * for every system of that kind (8, 8.1 and 10 x64), so what follows
+     * is Vista's and 7's. */
+    switch (inst_cm_boot_gate(INST_MY_ARCH, osKind, pkgCmSigned,
+                              testSigningConfirmed)) {
+    case INST_CMBOOT_WARN:
+        out("Test-signing mode is on: the test-signed x64 connection manager "
+            "loads.\n%s\n", inst_cm_boot_warn_text());
+        return;
+    case INST_CMBOOT_REFUSE:
+        testSigningConfirmed = 0;
+        cmBootRefused = 1;
+        out("%s\n", inst_cm_boot_refuse_text());
+        return;
+    default:
+        break;
     }
     if (pkgCmSigned < 0) {
         testSigningConfirmed = 0;
@@ -7343,13 +7439,6 @@ static void testsigning_note_cm(void)
             "testsigning on  then restart), or on a start\nwith driver "
             "signature enforcement disabled. This tool does not change "
             "it.\n");
-    }
-    if (w8) {
-        out("Windows 8, 8.1 and 10: test-signing mode can be turned on only "
-            "with Secure\nBoot off in the computer's firmware setup. The "
-            "start without signature\nenforcement is Advanced startup, "
-            "Troubleshoot, Startup Settings, \"Disable\ndriver signature "
-            "enforcement\", at every start.\n");
     }
     out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
         "(52 on 7).\nIf this start is one without signature enforcement, go "
@@ -7672,6 +7761,9 @@ static int plan_nt(void)
     memset(refusalSeen, 0, sizeof(refusalSeen));
     note_refusals(1);
     testsigning_note();
+    if (cmBootRefused) {
+        return INST_EXIT_REFUSED;
+    }
     return -1;
 }
 
@@ -19923,6 +20015,19 @@ static void st_screens_once(int longest)
         for (i = -1; i <= 1; i++) {
             pkgCmSigned = i;
             testsigning_note_cm();
+        }
+        if (k == 0) {
+            /* Test-signing mode confirmed, and what 32-bit 8 and 8.1 print
+             * in its place (task 43.22). */
+            pkgCmSigned = 1;
+            testSigningConfirmed = 1;
+            testsigning_note_cm();
+            out("%s\n", inst_sig_x86_sb_text());
+            /* The Secure Boot sentences, each architecture and state. */
+            for (i = INST_SB_OFF; i <= INST_SB_ON; i++) {
+                out("%s\n%s\n", inst_sb_text(INST_ARCH_AMD64, i),
+                    inst_sb_text(INST_ARCH_X86, i));
+            }
         }
         pkgCmSigned = -1;
         testSigningConfirmed = 0;
