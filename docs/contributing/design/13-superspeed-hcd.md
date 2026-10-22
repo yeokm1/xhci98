@@ -14,7 +14,8 @@ against - the function-driver contract (25.2), the Windows 98 export evidence
 (25.3), the `USBUSER` door and the two property tabs (25.4), the harness and
 the gates (25.5), and hubs and composite devices inside the bus (25.6);
 section 11 is the transfer-buffer policy (25.7) and section 12 the index of
-what Phase 25 leaves open. Appendix A is the full Windows 98 export table.
+what Phase 25 leaves open; section 14 is a cancelled TD behind the head
+(task 43.64). Appendix A is the full Windows 98 export table.
 
 **Since 2026-10-02 the successor is `xhci98.sys` and `src\` is the
 successor's** (owner, the same day, after task 25.8 had first built it as
@@ -11389,6 +11390,130 @@ the `fastpoll.*` records (QEMU paces Interval 0 at 125 us, section 13.4, and
 can show no refusal); mode 4 with an unpatched device reading as the
 release before it. 42-A.18's are `runs/run-42.md`'s and roadmap-usb4
 42-V.2's. The owner's bench reads a real controller's acceptance.
+
+## 14. A cancelled TD behind the head, and the emulator's Stop Endpoint (task 43.64, 2026-10-23)
+
+**What was seen.** `usb-wdm-free`'s `usbcom` legs (its run records,
+2026-10-22; runtime, QEMU only, not re-read for this section) found that
+when this driver cancels a bulk TD that is not at its ring's head, the TDs
+queued ahead of the cancelled one never run again in QEMU: they stay
+pending until they are cancelled in their turn, and the No Op left where
+the cancelled TD was reaches the device as a zero-length bulk IN. The
+question was whether the driver relies on something the specification does
+not promise, which would make it wrong on hardware too, or whether the
+emulator is wrong.
+
+**What the driver does** (source read, `hcdCfgCancelPipe`,
+`src\hcd_cfg.c`). The pipe is paused and the endpoint brought to rest
+(`hcdCfgQuiesce`: Stop Endpoint when it reads Running). The TD the
+controller stopped in is the engine queue's head: the Transfer Events of
+every TD that finished before the stop precede the command's completion on
+the event ring (no TRB the driver builds sets an Interrupter Target, so
+both reach the primary event ring, in order) and have been retired by the
+time the command completes, and a Stop Endpoint's own Transfer Event
+completes nothing (`hcd_dev.c`). A cancelled TD behind a surviving one is
+rewritten in place as No Ops (`XhciRingNoOpAt`, every TRB of it); the
+dequeue is not moved and no Set TR Dequeue is sent, and the doorbell
+restarts the survivors. Only when the head itself is cancelled, or the
+endpoint is in Error, does Set TR Dequeue move the controller to the oldest
+survivor's first TRB (or to the enqueue position).
+
+**What the specification promises** (xHCI 1.2c, read from the local
+transcription of the PDF, `docs/references/spec-1.2c-dump.txt`).
+
+- 4.6.9 (p.119): "While the endpoint is stopped, software may add, delete,
+  or otherwise rearrange TDs on an associated Transfer Ring", among them
+  "'abort' one or more TDs by removing them from the ring". When it stops,
+  the endpoint "saves the value of the TR Dequeue Pointer and DCS fields
+  ... so that it can pick up where it left off the next time its doorbell
+  is rung", and before the command's completion "the xHC shall write the
+  final value of the endpoint's Dequeue Pointer to the TR Dequeue Pointer
+  field".
+- 4.6.9 (p.121), option 3, modifying the order of execution: "If the xHC
+  stopped in the middle of a TD, then that TD may not be modified by
+  software, however any other TDs on the ring may be. ... it may ring the
+  doorbell to restart operation on the ring." And the note under it: "if
+  the xHC has read-ahead and cached TRBs for the Transfer Ring, it shall
+  invalidate all TRBs not associated with the current TD before continuing
+  execution of the Transfer Ring. This ensures that any TDs modified by
+  software shall be correctly executed by the xHC."
+- 4.6.10 (p.126-127): Set TR Dequeue dumps the endpoint's transfer state,
+  and "If, when the Transfer Ring was stopped a TD was only partially
+  executed, then any remaining TRBs in that TD shall not be executed".
+- 4.11.7 (p.213-214) and 6.4.1.4 (p.438): a No Op transfer TRB is a TD of
+  its own (never chained, "always preceded by a TRB whose Chain bit is
+  also set to '0'"), and a Link TRB may be neither the first nor the last
+  TRB of a multi-TRB TD; "Undefined xHC behavior may occur if the
+  requirements defined in this section are not met."
+
+The driver's placement is option 3 exactly: the stopped TD is untouched,
+every other TD may be edited, and the doorbell alone restarts the ring,
+from the saved dequeue, on TRBs the controller must fetch again. It is
+also the placement Linux takes (reference source, `xhci-ring.c`,
+`xhci_invalidate_cancelled_tds`: a cancelled TD the hardware dequeue is not
+inside is turned into No Ops by `td_to_noop` and the dequeue is not moved;
+only the TD the dequeue is in gets `xhci_move_dequeue_past_td`), the
+placement every Linux host runs on. **The driver is right on hardware**,
+on what the specification promises; no hardware has been read doing it.
+
+**What QEMU does** (emulator source, `external/qemu/hcd-xhci.c`, tag
+`v11.1.0`). `xhci_kick_epctx` fetches a TD, submits it as a `USBPacket`
+and, when the device answers asynchronously, goes on to fetch the next:
+the ring's software `dequeue` is QEMU's fetch pointer, ahead of every TD in
+flight, and it stops fetching after a TD that NAKs (`running_retry`).
+`xhci_stop_ep` then cancels every fetched transfer (`xhci_ep_nuke_xfers`,
+under its own comment "FIXME: endpoint stopped w/ xfers running, data might
+be lost") and writes that fetch pointer into the Endpoint Context
+(`xhci_set_ep_state`), so the TD the endpoint stopped in, and every TD it
+had fetched behind it, are past the saved dequeue and are never fetched
+again. That is the opposite of 4.6.9's "pick up where it left off". (Its
+halt path does it right: `xhci_stall_ep` writes the failed transfer's
+first TRB, `xfer->trbs[0].addr`.) And `xhci_submit` turns a No Op TD on a
+bulk ring into a zero-length packet to the device, since
+`xhci_xfer_create_sgl` skips the TRB and nothing tests for its type, where
+a No Op moves no data. **Both are the emulator's defects**, and together
+they are what `usbcom` saw: the live TDs lost behind the restart, and the
+No Op fetched next sent as a zero-length IN.
+
+**Why the driver does not work around it.** A Set TR Dequeue to the first
+live TD after every such cancel would make QEMU fetch the head again, and
+on hardware would discard the head's partial progress (4.6.10's note): a
+bulk OUT stopped mid-TD would send its first bytes twice and a bulk IN
+would read again into its start what the device has already delivered. A
+narrower form - Set TR Dequeue to the head only when its Stopped event
+says nothing of it moved (Stopped - Length Invalid, or a residual equal to
+the TD's length) - would be legal, but costs a command on every such
+cancel for a defect of the emulator alone, and the zero-length IN from the
+No Op would remain. Neither is taken; the fix belongs in QEMU (on Stop
+Endpoint, save the first cancelled transfer's first TRB as the dequeue, as
+its halt path does, and complete a No Op TD without a packet).
+
+**The one defect the reading found, and fixed.** The producer copies the
+Chain flag of the slot before the Link TRB onto the Link
+(`XhciRingEnqueueTdGroup`), so a TD crossing the wrap leaves the Link
+chained. Rewriting that TD's slots as No Ops left the Link chained in
+front of the No Op past the wrap: a Link as the first TRB of a two-TRB TD,
+and a No Op preceded by a chained TRB, both of which 4.11.7 forbids, on an
+edit the controller then executes. Linux unchains the Link in the same
+place (`trb_to_noop`), except on the 0.95 controllers its
+`XHCI_LINK_TRB_QUIRK` names; this driver already writes the Link unchained
+for every TD that does not cross it, so unchaining it here adds no new
+case to any controller. Since 2026-10-23, `XhciRingNoOpAtType` clears the
+Link's Chain flag when it rewrites the slot before the Link, keeping the
+Link's cycle and Toggle Cycle as they were; the producer's next crossing
+chains it again. Host vector `test_noop_unchains_link` (`test_ring.c`):
+a TD across the wrap behind a survivor, the Link chained, unchained by the
+rewrite of the slot before it and by nothing else, every other bit of it
+kept, the survivor and the No Op past the wrap each resolving as its own
+TD, and the next crossing chaining it again; the vector fails without the
+change (three checks).
+
+**What is owed.** Nothing on hardware for the placement. No leg was run
+for this task: QEMU follows a Link without reading its Chain flag
+(`xhci_ring_chain_length`, `xhci_ring_fetch`), so no emulator leg can show
+the fix, and the change is a ring edit the
+host vector covers. The QEMU patch is for the emulator a repository keeps
+(`usb-wdm-free`'s patched QEMU, or the `usb4-emu` fork), not this one.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

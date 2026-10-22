@@ -2780,6 +2780,80 @@ static void test_retire_iso_group(void)
              "a NULL ring is refused");
 }
 
+/*
+ * 43.64 (design record 13 section 14): a cancelled TD behind a survivor that
+ * crosses the wrap. The producer chained the Link TRB into it; once the TD's
+ * slots are No Ops the Link must be unchained again, or it would be the first
+ * TRB of a TD and a chained TRB in front of a No Op (4.11.7). The Link keeps
+ * its type, segment pointer, cycle and Toggle Cycle, and the next crossing
+ * chains it again.
+ */
+static void test_noop_unchains_link(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB td[3];
+    XHCI_TRB pair[2];
+    XHCI_RING ring;
+    ULONG linkBefore;
+    ULONG head;
+    ULONG tail;
+
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    build_td(td, 3);
+    build_td(pair, 2);
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK, "TD at 0-2");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, pair, 2, NULL), XHCI_RING_OK,
+             "the survivor at 3-4");
+    CHECK_EQ(XhciRingSetDequeue(&ring, XhciRingTrbPA(&ring, 3)), XHCI_RING_OK,
+             "the first TD reclaimed: the survivor is the head");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, 0UL,
+             "no TD has crossed the Link yet");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK,
+             "a TD at 5, 6 and, past the Link, 0");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, XHCI_TRB_CH,
+             "the producer chained the Link into it");
+    linkBefore = mem[7].Control;
+
+    CHECK_EQ(XhciRingNoOpAt(&ring, 5), XHCI_RING_OK, "TRB 5 rewritten");
+    CHECK_EQ(mem[7].Control, linkBefore,
+             "a slot not before the Link leaves the Link alone");
+    CHECK_EQ(XhciRingNoOpAt(&ring, 6), XHCI_RING_OK, "TRB 6 rewritten");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, 0UL, "the Link is unchained");
+    CHECK_EQ(mem[7].Control, linkBefore & ~XHCI_TRB_CH,
+             "and nothing else of it changed: type, cycle, Toggle Cycle");
+    CHECK_EQ(mem[7].Param0, RING_PA, "the segment pointer kept");
+    CHECK_EQ(XhciRingNoOpAt(&ring, 0), XHCI_RING_OK, "TRB 0 rewritten");
+    CHECK_EQ(XHCI_TRB_GET_TYPE(mem[0].Control), XHCI_TRB_TYPE_NOOP,
+             "a No Op past the Link");
+    CHECK_EQ(XhciRingTdBounds(&ring, 3, &head, &tail), XHCI_RING_OK,
+             "the survivor still resolves");
+    CHECK_EQ(head, 3UL, "with its own head");
+    CHECK_EQ(tail, 4UL, "and tail, untouched by the rewrite");
+    CHECK_EQ(XhciRingTdBounds(&ring, 0, &head, &tail), XHCI_RING_OK,
+             "the No Op past the Link resolves");
+    CHECK_EQ(head, 0UL, "as a TD of its own");
+    CHECK_EQ(tail, 0UL, "one TRB long");
+
+    /* Again idempotent, and the producer's next crossing chains it again. */
+    CHECK_EQ(XhciRingNoOpAt(&ring, 6), XHCI_RING_OK, "TRB 6 rewritten twice");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, 0UL, "the Link still unchained");
+    CHECK_EQ(XhciRingSetDequeue(&ring, XhciRingTrbPA(&ring, 1)), XHCI_RING_OK,
+             "everything up to the enqueue reclaimed");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK,
+             "a TD at 1-3");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, pair, 2, NULL), XHCI_RING_OK,
+             "a TD at 4-5");
+    CHECK_EQ(XhciRingSetDequeue(&ring, XhciRingTrbPA(&ring, 4)), XHCI_RING_OK,
+             "the first reclaimed");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK,
+             "a TD at 6 and, past the Link, 0 and 1");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, XHCI_TRB_CH,
+             "the next crossing chains the Link again");
+    CHECK_EQ(mem[6].Control & XHCI_TRB_CH, XHCI_TRB_CH,
+             "as the slot before it is chained");
+}
+
 static void test_noop_at_type_command_ring(void)
 {
     XHCI_TRB mem[8];
@@ -3281,6 +3355,7 @@ int main(void)
     test_reset_device_trb();
     test_completion_code_valid_per_kind();
     test_retire_iso_group();
+    test_noop_unchains_link();
     test_noop_at_type_command_ring();
     test_command_ring_stopped_classification();
     test_command_ring_alignment();

@@ -3396,7 +3396,9 @@ ULONG XhciRingSetDequeue(PXHCI_RING ring, ULONG dequeuePA);
  * nothing about Endpoint Contexts.
  *
  * Refuses the Link TRB and any index that is not outstanding, because both would
- * corrupt the ring rather than edit it.
+ * corrupt the ring rather than edit it. Rewriting the slot before the Link TRB
+ * also clears the Link's Chain flag, which a TD crossing the wrap had set, so
+ * the Link never chains into a No Op (4.11.7; task 43.64).
  */
 ULONG XhciRingNoOpAt(PXHCI_RING ring, ULONG index);
 
