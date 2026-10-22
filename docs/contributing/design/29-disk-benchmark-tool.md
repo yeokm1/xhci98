@@ -1593,6 +1593,20 @@ a choice:
   Stor98's counters); where it finds no SCSI instance present at all,
   the letter's only claimant, and with more than one the page and the
   report say the registry gives the letter to that many disks.
+- **The buffer's physical order on 98 SE (2026-10-23, emulator)**: a
+  second run in one boot had every aligned request double-buffered by IOS
+  and cut into 63 KiB pieces. The cause is the physical order of the
+  buffer's pages, not the tool: a probe that allocated a 128 KiB buffer
+  400 times at the same linear address, wrote 16 unbuffered requests from
+  it and freed it saw them alternate exactly, whole in one round and
+  double-buffered in the next, as the page allocator handed the same
+  pages back in reversed order (32 physical runs, over the DCB's 17
+  scatter/gather elements). After a fresh start the free list is mostly
+  ascending, so a first run's aligned buffer usually arrives whole; after
+  other programs have freed memory it often does not. With S98VSD.VXD
+  (43.46) the demand for physical scatter/gather is gone and every
+  request arrived whole in both orders. The 9x facts now say so when the
+  demand stands, and the release notes carry it as a known limitation.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

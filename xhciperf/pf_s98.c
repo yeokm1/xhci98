@@ -307,6 +307,15 @@ void s98_facts(PF_TEXT *t, const S98_ANSWER *a, int is9x)
             pf_tx_s(t, " scatter/gather elements; the system demands physical scatter/gather: ");
             pf_tx_s(t, (a->dcbDmd & S98_DCB_PHYS_SGD) ? "yes" : "no (an IOS layer above SCSIPORT removed the demand)");
             pf_tx_nl(t);
+            if (a->dcbDmd & S98_DCB_PHYS_SGD) {
+                /* 98 SE's page allocator decides it, not the buffer's mode */
+                pf_tx_s(t, "So a request reaches Stor98 whole only when its buffer lies in ");
+                pf_tx_u(t, a->dcbMaxSg);
+                pf_tx_s(t, " physical pieces or fewer, which even an aligned buffer is not sure to: it depends on "
+                           "how ordered Windows' free memory is (usually after a fresh start, often not after "
+                           "other programs have run). Each test's buffer-layout line says what reached Stor98.");
+                pf_tx_nl(t);
+            }
         } else {
             pf_tx_s(t, "IOS: not seen yet (no request since Stor98 started)");
             pf_tx_nl(t);
