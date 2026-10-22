@@ -1,6 +1,9 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 8, 2026-10-22, before code (roadmap-usb4 task 43.50),
+Status: draft 9, 2026-10-22 (roadmap-usb4 task 43.50): the owner's
+decisions of that day folded in (section 13: P3, P4, P7 and P9 are the
+owner's; Stor98's change recorded as its decision MD-8), and the code
+written against it. Draft 8, before code,
 reviewed and revised seven times the same day, converged. Draft 8: the
 volume's extents read on 2000 as well. Draft 7: the blocks of a
 write that did not complete marked unknown, the planning limit equal to
@@ -1340,9 +1343,10 @@ Each the author's, for the owner to confirm, unless it names the owner.
 - **P2** File-based only, its own file, created new with an ownership
   header and record, deleted after; never a raw disk read or write
   (sections 3.1, 4.2).
-- **P3** The names `XHCIPERF.EXE` and `XHCIPF64.EXE` (8.3 names, as
+- **P3** (owner, 2026-10-22) The names `XHCIPERF.EXE` and `XHCIPF64.EXE` (8.3 names, as
   `XHCITR64.EXE`, `XHCIWZ64.EXE`), the title "xHCI98 Disk Benchmark".
-- **P4** One carrier for Stor98's counters on every system, READ BUFFER
+- **P4** (owner, 2026-10-22, as Stor98 decision MD-8 in its
+  `docs/PLAN.md`, the 9x ASPI carrier pending P.0) One carrier for Stor98's counters on every system, READ BUFFER
   buffer ID `53h`, through pass-through on NT and ASPI on 98 SE and ME,
   sent only to an adapter first established as Stor98's (section 6.2);
   the answer read-only, typed fields, no reset.
@@ -1350,10 +1354,10 @@ Each the author's, for the owner to confirm, unless it names the owner.
   them by its own button; the benchmark never does.
 - **P6** Queue depth by overlapped I/O on NT only; fixed at 1 on 98 SE
   and ME, said in the window and the results.
-- **P7** XHCITR gains "Disk benchmark..." (section 11).
+- **P7** (owner, 2026-10-22) XHCITR gains "Disk benchmark..." (section 11).
 - **P8** Default presets per family (section 3.7): Standard on NT, the 9x
   standard on 98 SE and ME; 1 GiB and 256 MiB files.
-- **P9** Threads offered on 98 SE and ME (up to 8), with the note that the
+- **P9** (owner, 2026-10-22) Threads offered on 98 SE and ME (up to 8), with the note that the
   Stor98 page shows whether they overlapped.
 - **P10** MB/s decimal by default, MiB/s a View choice; canonical units in
   the saved file.
@@ -1397,11 +1401,9 @@ Each the author's, for the owner to confirm, unless it names the owner.
 | P.9 | 98 SE and 7 x64 | install, update with the tool running, uninstall: the file placed, "steps left", removed |
 | P.10 | the owner's hardware | 98 SE on the P14s with Stor98, before and after 43.46's VSD; Windows 10 or 7 on the same drive; the saved files compared |
 
-### 14.3 Open for the owner
+### 14.3 Decided by the owner (2026-10-22)
 
-1. The Stor98 change of section 7: approve it as a Stor98 decision (to be
-   recorded at the end of Stor98's `docs/PLAN.md`), or keep Stor98 as it is
-   and ship the tool without a Stor98 page.
-2. The 9x carrier through ASPI (section 6.2), pending P.0.
-3. Threads on 98 SE and ME (P9): offered with the note, or fixed at 1.
-4. The XHCITR entry (P7).
+Every question draft 8 left for the owner is answered: the Stor98 change
+of section 7 is approved as Stor98's decision MD-8, the 9x ASPI carrier
+included pending P.0; threads are offered on 98 SE and ME with the note;
+the names, the title and the XHCITR entry stand as section 13 says.
