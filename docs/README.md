@@ -81,6 +81,10 @@ source comments, scripts, and other docs use these same locations.
   enclosure model (the launcher reading of 40-0.3, the fabric cross-check of
   40-A.5, the U legs of 40-V on Windows 98 SE, 2000 and the NT tiers), and the
   install tool's legs (task 40.4 onward, design record 23) on every target.
+- [Task 43.49 record](contributing/runs/run-43-49.md) - Windows ME's stop after
+  back-to-back mouse plugs and unplugs, traced to ME's own `hidusb.sys` (a STOP
+  after a failed START leaves its REMOVE waiting for good), and 98 SE's bus failing
+  under the same series when requests to departed devices never complete on QEMU.
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
