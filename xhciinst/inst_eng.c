@@ -10372,6 +10372,27 @@ static int mk_delete_copy(void)
  * unsettled. 1 all done; 0 not (the service's key stays). The service is
  * stopped, so nothing changes the records meanwhile. */
 #define INST_MK_S98_KEY     "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Stor98"
+/* The devnode of `id` in `set`: 1 found; 0 none, the whole list read; -1
+ * the list or an entry's id could not be read. */
+static int mk_s98_find(HDEVINFO set, const char *id, SP_DEVINFO_DATA *data)
+{
+    DWORD i;
+    char got[INST_ID_CHARS];
+
+    for (i = 0;; i++) {
+        data->cbSize = sizeof(*data);
+        if (!api.EnumInfo(set, i, data)) {
+            return GetLastError() == ERROR_NO_MORE_ITEMS ? 0 : -1;
+        }
+        if (!api.GetInstanceId(set, data, got, sizeof(got), NULL)) {
+            return -1;
+        }
+        if (inst_eq(got, id)) {
+            return 1;
+        }
+    }
+}
+
 static int mk_s98_settle_one(HDEVINFO set, const char *id, int owed)
 {
     SP_DEVINFO_DATA data;
@@ -10380,9 +10401,17 @@ static int mk_s98_settle_one(HDEVINFO set, const char *id, int owed)
     DWORD type;
     char svc[64];
     int bound;
+    int f;
 
-    if (!find_in_set(set, id, &data)) {
+    f = mk_s98_find(set, id, &data);
+    if (f == 0) {
         return 1;               /* no devnode, not even a phantom */
+    }
+    if (f < 0) {
+        out("The device list could not be read (error %lu): the drives the "
+            "mark service\nmoved to Stor98 are not settled.\n",
+            (unsigned long)GetLastError());
+        return 0;
     }
     memset(svc, 0, sizeof(svc));
     if (api.GetRegProp(set, &data, SPDRP_SERVICE, &type, (PBYTE)svc,
