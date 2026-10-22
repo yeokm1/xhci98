@@ -2586,6 +2586,7 @@ static void mk_s98_recover_all(void)
     int r;
     int vetoed;
     int ok;
+    int disabled;
     HANDLE em;
     HANDLE sm;
     HDEVINFO set;
@@ -2649,6 +2650,8 @@ static void mk_s98_recover_all(void)
         s98FirstDone = 1;
     }
     s98Cursor = next;
+    /* The profile and global flags are read as the switch reads them. */
+    (void)mk_s98_api();
     for (j = 0; j < nTodo; j++) {
         r = mk_s98_rec_get(todo[j]);
         if (r == MK_S98_RESTART && !first) {
@@ -2656,16 +2659,32 @@ static void mk_s98_recover_all(void)
         }
         present = mk_s98_fresh(todo[j], service, sizeof(service), &st, &pr,
                                &dn);
-        a = mk_s98_recover(r, present, mk_s98_disabled(st, pr),
-                           mk_s98_runs(service, st), first);
+        disabled = mk_s98_disabled(st, pr);
+        /* An enable owed is settled only once both flags read clear: a
+         * devnode running on can still carry a disable for its next
+         * start. */
+        if (present && !disabled &&
+            (r == MK_S98_DISABLE || r == MK_S98_INSTALL ||
+             r == MK_S98_ENABLE)) {
+            set = mk_s98_open(todo[j], &data);
+            if (set == INVALID_HANDLE_VALUE) {
+                disabled = 1;
+            } else {
+                disabled = !mk_s98_profile_enabled(set, &data, todo[j]);
+                api.Destroy(set);
+            }
+        }
+        a = mk_s98_recover(r, present, disabled, mk_s98_runs(service, st),
+                           first);
         if (a == MK_S98_R_ENABLE) {
             ok = 0;
             set = mk_s98_open(todo[j], &data);
             if (set != INVALID_HANDLE_VALUE) {
                 (void)mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
-                api.Destroy(set);
                 ok = mk_s98_fresh(todo[j], service, sizeof(service), &st,
-                                  &pr, &dn) && !mk_s98_disabled(st, pr);
+                                  &pr, &dn) && !mk_s98_disabled(st, pr) &&
+                     mk_s98_profile_enabled(set, &data, todo[j]);
+                api.Destroy(set);
             }
             if (!ok) {
                 if (!mk_s98_enable_logged(todo[j], 1)) {
