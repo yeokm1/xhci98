@@ -466,6 +466,47 @@ What it changes in record 30: its section 2.3 (and the chain's names in
 2.2 and 4.7); a new open item, `SCSIPORT.PDR`'s own requests after the
 DCB is configured, release-blocking until read.
 
+### STOR98.VXD's smoke leg (2026-10-22)
+
+The tree's layer (`src/vsd`, the `qemu` flavour's image with the test-only
+`VSD_TEST_NVME2K` match, since the read-first image names Stor98's file
+`NVME2K.MPD`) and this branch's 2 MiB Stor98 (`stor98.mpd` of the gated
+build, copied over `NVME2K.MPD`) on the read-first vehicle (98 SE,
+QuickInstall IOS, one vCPU, 256 MB, the NVMe behind the emulated tunnel),
+one guest. The kit's `leg4.sh`: install, cold boot, tunnel up, then `PERF2
+file F:\P.BIN 64 <off> 1024,2048` at +0, +512 and +0 on a fragmented
+buffer (32 MiB touched and every other page given back first), each verified.
+Host at 85 to 95 % CPU.
+
+**What the first tries found.** The layer loaded (`IOS_Register` 1) and
+claimed the DCB (its entry at load group `0x11` with demand bits `0x609`,
+`SCSIPORT.PDR`'s `0xE09` below), but refused every request: the SRB's
+`DataBuffer` at this layer is not set yet - 0 on DISKVSD's own requests
+(`IOR_func` `0x0C`, flags `0x8F01`, an 8-byte buffer in DCB space) and the
+previous request's value in the reused SRB on reads (`0x00`, flags `0x8D01`)
+- while `DataTransferLength` was right. `SCSIPORT.PDR` sets `DataBuffer`
+below from the IOR. The first-byte check was removed (`5694d1a9`; record 30
+section 4.3); the length coverage stays. A try with Stor98's devnode
+pointed at `stor98.mpd` by a registry edit (`PERF2 setport`) brought no
+disk at all and was not pursued; the legs with the installer read that
+route.
+
+**Result (`sm8`)**: no refusal, every verify "mismatched dwords 0":
+
+| Buffer | KiB | write MB/s | read MB/s |
+|---|---|---|---|
+| +0 | 1,024 | 34.6 | 67.0 |
+| +0 | 2,048 | 79.7 | 91.4 |
+| +512 | 1,024 | 52.9 | 65.5 |
+| +512 | 2,048 | 82.2 | 105.9 |
+| +0, fragmented | 1,024 | 53.2 | 82.9 |
+| +0, fragmented | 2,048 | 93.9 | 96.9 |
+
+At the NVMe (QEMU's traces): 512 KiB commands only, up to four outstanding
+at 2 MiB - each 2 MiB request reached Stor98 whole and was split at the
+emulator's MDTS. (The Stor98-alone baseline of "Requests over 512 KiB" was
+28 to 38 MB/s at 1 and 2 MiB.)
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on
