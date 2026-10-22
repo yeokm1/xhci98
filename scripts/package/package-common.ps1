@@ -431,7 +431,12 @@ function Get-PeImageDigest {
     # (which, where there is one, is the end of the file - the layout the
     # linker and SignTool write). It is the same for the image before and
     # after an embedded signature, which is why a catalog made of the signed
-    # binary also covers the build, and the reverse.
+    # binary also covers the build, and the reverse. A hashed length that is
+    # not a multiple of 8 is followed by zero bytes up to the next multiple,
+    # as Windows' own image hash does (MakeCat's member digest of an x86
+    # image with its debug data after the sections, 2026-10-22): signing
+    # pads such an image with the same zeros before the table, so the
+    # digest stays the same either way.
     # -End (Get-EmbeddedSignature's): where the hashed bytes stop, the
     # table's offset as that image's entry gives it, checked by the caller.
     param([byte[]]$Bytes, [int]$End = -1)
@@ -452,7 +457,8 @@ function Get-PeImageDigest {
         [void]$sha1.TransformBlock($Bytes, 0, $ck, $null, 0)
         [void]$sha1.TransformBlock($Bytes, $ck + 4, $en - ($ck + 4), $null, 0)
         [void]$sha1.TransformBlock($Bytes, $en + 8, $stop - ($en + 8), $null, 0)
-        [void]$sha1.TransformFinalBlock($Bytes, 0, 0)
+        $pad = (8 - ($stop % 8)) % 8
+        [void]$sha1.TransformFinalBlock((New-Object byte[] $pad), 0, $pad)
         return (($sha1.Hash | ForEach-Object { $_.ToString("X2") }) -join "")
     } finally {
         $sha1.Dispose()

@@ -4655,9 +4655,9 @@ try {
     }
 
     # The image digest does not change when the image is signed, so a
-    # catalog covers the signed binary and the build alike. (A linker's
-    # image is a whole number of 512-byte file-alignment units, so there is
-    # no padding before the table.) And an explicit -End is honoured.
+    # catalog covers the signed binary and the build alike. (The synthetic
+    # image is 1024 bytes, so there is no padding before the table.) And an
+    # explicit -End is honoured.
     $catU = New-SyntheticPe -Size 1024
     $catSigned = New-SyntheticSigned -Unsigned $catU -TableLen 64
     Assert-True ((Get-PeImageDigest -Bytes $catSigned) -eq (Get-PeImageDigest -Bytes $catU)) `
@@ -4666,6 +4666,19 @@ try {
         "Get-PeImageDigest did not stop at the -End it was given."
     Assert-True ((Get-PeImageDigest -Bytes $catSigned -End 1088) -ne (Get-PeImageDigest -Bytes $catU)) `
         "Get-PeImageDigest ignored the -End it was given."
+    # An image whose length is not a multiple of 8 (an x86 build with its
+    # debug data after the sections) is hashed with zeros up to the next
+    # multiple, as MakeCat's member digest is: the same digest as the
+    # image with those zeros written, and not the digest of its bytes alone.
+    $catOdd = New-Object byte[] 1030
+    [Array]::Copy($catU, $catOdd, 1024)
+    for ($i = 1024; $i -lt 1030; $i++) { $catOdd[$i] = 0xAA }
+    $catEven = New-Object byte[] 1032
+    [Array]::Copy($catOdd, $catEven, 1030)
+    Assert-True ((Get-PeImageDigest -Bytes $catOdd) -eq (Get-PeImageDigest -Bytes $catEven)) `
+        "Get-PeImageDigest did not pad an image of 1030 bytes with zeros to 1032."
+    Assert-True ((Get-PeImageDigest -Bytes $catOdd -End 1030) -ne (Get-PeImageDigest -Bytes $catOdd -End 1029)) `
+        "Get-PeImageDigest gave two different lengths one digest."
 
     # The trust list's extensions, encoded by hand: a critical flag is
     # admitted only in DER (one byte, TRUE).
