@@ -185,26 +185,83 @@ static void test_cm_only(void)
           strcmp(inst_os_name(1, 10, 0), "Windows") == 0, "the names");
 
     /* The USB drivers (section 4.5). */
-    CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 0, &offered, &why) == 1 &&
-          !offered && why == NULL, "98 SE and ME: required, not offered");
-    CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 1, &offered, &why) == -1 &&
-          why != NULL, "98 SE and ME: /cmonly refused");
-    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 0, &offered, &why) == 1 &&
+    /* Draft 20 (task 43.43): every box on every system. */
+    CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 0, 0, &offered, &why) == 1 &&
+          offered && why == NULL,
+          "98 SE and ME: in, and offered (the connection manager alone)");
+    CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 1, 0, &offered, &why) == 0 &&
+          offered && why == NULL, "98 SE and ME: /cmonly accepted");
+    CHECK(inst_usb_decide(INST_OS_FULL, 0, 0, 0, 0, &offered, &why) == 1 &&
+          !offered, "98 SE and ME without the connection manager: required");
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 0, 0, &offered, &why) == 1 &&
           offered, "2000 to 7 with the connection manager: offered, in");
-    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 1, &offered, &why) == 0 &&
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 1, 0, &offered, &why) == 0 &&
           offered, "2000 to 7, /cmonly: out");
-    CHECK(inst_usb_decide(INST_OS_FULL, 1, 0, 0, &offered, &why) == 1 &&
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 0, 0, 0, &offered, &why) == 1 &&
           !offered, "2000 to 7 without the connection manager: required");
-    CHECK(inst_usb_decide(INST_OS_FULL, 1, 0, 1, &offered, &why) == -1 &&
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 0, 1, 0, &offered, &why) == -1 &&
           why != NULL, "/cmonly with no connection manager: refused");
-    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 0, &offered, &why) == 0 &&
-          !offered, "8 and 8.1: out, not offered");
-    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 1, &offered, &why) == 0 &&
-          !offered, "8 and 8.1, /cmonly: the same");
-    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, &offered, &why) == -1 &&
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 0, 1, &offered, &why) == 1 &&
+          offered, "/usb on 2000 to 7: changes nothing");
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 1, 1, &offered, &why) == -1 &&
+          why != NULL, "/usb with /cmonly: refused");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 0, 0, &offered, &why) == 0 &&
+          offered, "8 and 8.1: out by default, offered");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 0, 1, &offered, &why) == 1 &&
+          offered, "8 and 8.1, /usb: in");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 1, 0, &offered, &why) == 0 &&
+          offered, "8 and 8.1, /cmonly: out");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, 0, &offered, &why) == -1 &&
           why != NULL, "8 and 8.1 with no connection manager: refused");
-    CHECK(inst_usb_decide(INST_OS_REFUSED, 1, 1, 0, &offered, &why) == -1,
+    CHECK(inst_usb_decide(INST_OS_REFUSED, 1, 1, 0, 0, &offered, &why) == -1,
           "a refused system");
+
+    /* The warnings of record 26 section 5.3.1 (task 43.43). */
+    {
+        int sys;
+        int box;
+        int bad = 0;
+        char text[2048];
+        for (sys = 0; sys < 4 && !bad; sys++) {
+            /* 0 98 SE, 1 ME, 2 2000 to 7, 3 8 and 8.1 */
+            for (box = 0; box < 16 && !bad; box++) {
+                int usb = (box & 1) != 0;
+                int stor = (box & 2) != 0;
+                int s98 = (box & 4) != 0;
+                INST_U32 w = inst_comp_warnings(sys == 0, sys <= 1, sys == 3,
+                                                usb, stor, s98);
+                INST_U32 want = 0;
+                if (stor && sys != 0) {
+                    want |= INST_CW_STOR;
+                }
+                if (!usb && sys <= 1) {
+                    want |= INST_CW_CMALONE;
+                }
+                if (usb && sys == 3) {
+                    want |= INST_CW_USB8;
+                }
+                if (s98 && sys == 3) {
+                    want |= INST_CW_S98_8;
+                }
+                if (w != want) {
+                    printf("warnings: system %d boxes %d: %lu\n", sys, box,
+                           (unsigned long)w);
+                    bad = 1;
+                }
+            }
+        }
+        CHECK(!bad, "the warnings: exactly the owner's four cases");
+        inst_comp_warn_text(0, "C:\\XHCI98", text, sizeof(text));
+        CHECK(text[0] == '\0', "no warning: no text");
+        inst_comp_warn_text(INST_CW_STOR | INST_CW_CMALONE | INST_CW_USB8 |
+                            INST_CW_S98_8, "C:\\XHCI98", text, sizeof(text));
+        CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
+              strstr(text, "connection manager is installed") != NULL &&
+              strstr(text, "not been tested on Windows 8 or 8.1") != NULL &&
+              strstr(text, "Stor98 has not been tested") != NULL &&
+              strlen(text) < sizeof(text) - 1,
+              "every warning, whole, in one text");
+    }
 
     /* /cmonly belongs to an install. */
     argv[0] = "xhciinst";
@@ -220,6 +277,16 @@ static void test_cm_only(void)
     argv[2] = "/thunderbolt";
     CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 0 &&
           o.CmOnly && o.Thunderbolt, "/cmonly /thunderbolt taken");
+    /* /usb (task 43.43): an install's, and not with /cmonly. */
+    argv[1] = "/usb";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.Usb,
+          "/usb parsed");
+    argv[2] = "/cmonly";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) != 0,
+          "/usb /cmonly refused");
+    argv[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) != 0,
+          "/usb /uninstall refused");
 }
 
 static void test_reg_hex(void)
@@ -3632,22 +3699,28 @@ static void test_s98(void)
               "/nostor98 belongs to an install");
         /* Chosen with the Thunderbolt support (owner, 2026-10-19,
          * replacing "never unasked"). */
-        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 0, &asked, &def) && asked && def,
+        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 0, 0, &asked, &def) && asked && def,
               "asked, Enter gives Y");
-        CHECK(inst_s98_decide(1, 1, 1, 0, 0, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &asked, &def) && !asked,
               "/thunderbolt /yes: Y, not asked");
-        CHECK(!inst_s98_decide(1, 1, 1, 0, 1, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 1, 1, 0, 1, 0, 0, &asked, &def) && !asked,
               "/nostor98: left out unasked");
-        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 0, &asked, &def) && !asked,
               "/stor98: installed unasked");
-        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, 0, 0, &asked, &def) && !asked,
               "no Stor98 in the package: nothing");
-        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 1, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 1, 0, &asked, &def) && !asked,
               "/list asks nothing, Y shown");
-        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, 0, &asked, &def) && !asked &&
-              !inst_s98_decide(1, 0, 1, 1, 0, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, 0, 0, &asked, &def) && !asked &&
+              !inst_s98_decide(1, 0, 1, 1, 0, 0, 0, &asked, &def) && !asked,
               "no Thunderbolt support in the run: Stor98 neither asked nor "
               "installed");
+        CHECK(!inst_s98_decide(1, 1, 0, 0, 0, 0, 1, &asked, &def) && asked &&
+              !def, "8 and 8.1: asked, Enter gives N");
+        CHECK(!inst_s98_decide(1, 1, 1, 0, 0, 0, 1, &asked, &def) && !asked,
+              "8 and 8.1, /yes: N");
+        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 1, &asked, &def) && !asked,
+              "8 and 8.1, /stor98: installed unasked");
         CHECK(inst_s98_box_open(1, 1, 1) && !inst_s98_box_open(1, 1, 0) &&
               !inst_s98_box_open(1, 0, 1) && !inst_s98_box_open(0, 1, 1),
               "the window's box: open only under a ticked Thunderbolt box");
@@ -4335,6 +4408,41 @@ static void test_storage(void)
           "an InfPath that names more than one copy, or unreadable: not "
           "adopted");
     CHECK(!inst_stor_adoptable(1, 1, 0, 1, 1, 1), "USB20U present: not adopted");
+    /* The INFs placed in %windir%\INF (task 43.42, record 26 section
+     * 6.5.11): only on the route with every binary in place, only where
+     * no file of the name is there, never over one. */
+    {
+        int named[2];
+        named[0] = 0;
+        named[1] = 0;
+        CHECK(inst_stor_inf_set(1, named) ==
+              ((1UL << INST_STOR_IDX_USBSTOR_INF) |
+               (1UL << INST_STOR_IDX_USBNTMAP_INF)),
+              "placed: both INFs, neither name there");
+        CHECK(inst_stor_inf_set(0, named) == 0,
+              "placed: nothing off the route or with a binary not in place");
+        named[0] = 1;
+        CHECK(inst_stor_inf_set(1, named) ==
+              (1UL << INST_STOR_IDX_USBNTMAP_INF),
+              "placed: never over a USBSTOR.INF already there");
+        named[0] = 0;
+        named[1] = -1;
+        CHECK(inst_stor_inf_set(1, named) ==
+              (1UL << INST_STOR_IDX_USBSTOR_INF),
+              "placed: a name that cannot be read is kept out");
+        named[0] = 1;
+        named[1] = 1;
+        CHECK(inst_stor_inf_set(1, named) == 0,
+              "placed: both there (NUSB's own, or an earlier run's): none");
+        named[0] = 0;
+        named[1] = 0;
+        CHECK((inst_stor_inf_set(1, named) & 0x1FUL) == 0,
+              "placed: never a binary");
+    }
+    /* A stick bound with no wizard from the placed USBSTOR.INF: its copy
+     * is held by Placed, so recorded, and adopted. */
+    CHECK(inst_stor_adoptable(1, 1, 0, 0, 1, 1),
+          "a stick bound from the placed INF: adopted");
     /* A run whose package copy failed after its storage copies: nothing
      * published, so a hand install of the same INFs later is never
      * taken by the uninstall. */

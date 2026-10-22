@@ -37,10 +37,10 @@
  * A storage interface offering UAS gets one transport, chosen at creation
  * (31-A.3; xhci_xport.h, hcdXportDecide), and its hardware and compatible
  * ids follow it: only that transport's class ids. A device with no
- * transport it can run shows the project-owned XHCI98_NOXPORT hardware id
- * and no compatible id - but keeps the ordinary VID/PID device id, which
- * Windows 98 SE adds to the devnode's HardwareID value (xhci_xport.h;
- * design record 13 section 10.7.1) - and on a companion-paired root port
+ * transport it can run shows the project-owned XHCI98_NOXPORT hardware and
+ * device ids and no compatible id - the device id since task 43.15, as
+ * Windows 98 SE and ME match INF lines against it (xhci_xport.h, design
+ * record 13 section 10.7.1) - and on a companion-paired root port
  * is offered to 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
  *
  * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets one
@@ -210,7 +210,8 @@ static NTSTATUS hcdFunctionQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 /* The hardware or compatible ids of a PDO whose storage transport the bus
  * chose (31-A.3; xhci_xport.c): only that transport's class ids, and no
  * VID/PID-only hardware id under UAS. A refused interface answers its
- * compatible-id query with none, as an id type the PDO does not handle. */
+ * compatible-id query with none, as an id type the PDO does not handle, and
+ * its device id here too, in the USB\XHCI98_NOXPORT form (task 43.15). */
 static NTSTATUS hcdXportQueryId(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG which)
 {
     char text[160];
@@ -379,6 +380,10 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
         }
         if (type == BusQueryCompatibleIDs) {
             return hcdXportQueryId(pdo, irp, XHCI_XPORT_ID_COMPATIBLE);
+        }
+        if (type == BusQueryDeviceID &&
+            pdo->Xport.Transport == XHCI_XPORT_REFUSED) {
+            return hcdXportQueryId(pdo, irp, XHCI_XPORT_ID_DEVICE);
         }
     }
     if (pdo->Function) {
@@ -676,8 +681,8 @@ static VOID hcdSilentDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
  * companion-paired root port 29-A.5's hold is asked to send it back to USB
  * 2.0 (HcdHoldRequestUsb2); on a root port with no companion, behind a
  * SuperSpeed hub, or when the hold is not taken, it is refused in place -
- * its PDOs list with the XHCI98_NOXPORT hardware id and no compatible ids
- * (the device id stays VID/PID; xhci_xport.h, design record 13 10.7.1),
+ * its PDOs list with the XHCI98_NOXPORT hardware and device ids and no
+ * compatible ids (xhci_xport.h, design record 13 10.7.1),
  * its hub port and siblings untouched. Each place is counted. Returns
  * nonzero when the hold request was accepted - queued for the thread's next
  * pass, which reads the device's identity on the SuperSpeed port, writes PED

@@ -3987,9 +3987,17 @@ typedef struct _XHCI_TRANSFER {
  * uses for the slot and scratchpad counts, and the lever if a real USB Audio
  * device asks for more is `XHCI_POOL_RING_TRBS` rather than anything here.
  * `XHCI_EXTENSION.IsoRefusalsTooLarge` is what says whether one ever does.
+ *
+ * Design record 13 section 11.8 (task 43.39) adds the other lever: a pipe on a
+ * ring page of its own, whose ring is at most one page of TRBs and whose
+ * request is at most XHCI_XFER_MAX_ISO_PAGE_PACKETS packets. The pool
+ * ring's two values stay as they are, and so does the extension's scratch.
  */
 #define XHCI_XFER_MAX_ISO_TRBS      (XHCI_POOL_RING_TRBS - 2UL)
 #define XHCI_XFER_MAX_ISO_PACKETS   XHCI_XFER_MAX_ISO_TRBS
+#define XHCI_ISO_PAGE_MAX_RING_TRBS 256UL
+#define XHCI_XFER_MAX_ISO_PAGE_TRBS (XHCI_ISO_PAGE_MAX_RING_TRBS - 2UL)
+#define XHCI_XFER_MAX_ISO_PAGE_PACKETS 128UL
 
 /*
  * Where a built isochronous group landed. `TdLengths` is one entry per packet,
@@ -8072,6 +8080,12 @@ typedef struct _XHCI_EXTENSION {
      * makes that sound**: the build, the publish and the record all happen
      * inside one hold of it, so no second submission can be between them.
      * Nothing outside that hold may read either field.
+     *
+     * Since design record 13 section 11.8 (task 43.39) the HCD builds into the
+     * controller's larger IsoTrbs and IsoTdLengths (hcd.h) under the same
+     * lock, and IsoScratch is no longer written; it stays, as does
+     * IsoLayout's array, because the extension's size and offsets travel in
+     * the snapshot (hcd_door.c). IsoLayout's counts are still this one's.
      */
     XHCI_TRB IsoScratch[XHCI_XFER_MAX_ISO_TRBS];
     XHCI_ISO_LAYOUT IsoLayout;

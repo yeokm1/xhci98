@@ -195,9 +195,13 @@ tree had uncommitted changes, whether its import gates had their target
 evidence, and the time. This mode reads the one for -Arch and -Flavor
 before anything else and refuses unless it is for this architecture and
 flavour, every binary to be staged has exactly the SHA-256 recorded for it,
-the build ran in a clean tree, the tree is now at that same commit with no
-uncommitted change, and the build's import gates had their target evidence
-(or this run passes -NoTargetEvidence too). Each binary is read once, into
+the build ran in a clean tree, the tree is now at that same commit - or at a
+newer one of which it is an ancestor, with no file changed since a build
+input (roadmap-usb4 task 43.9; package-common.ps1, Get-GatedHeadAdvance) -
+with no uncommitted change, and the build's import gates had their target
+evidence (or this run passes -NoTargetEvidence too). A documentation commit
+after the gated build therefore does not cost a rebuild; a change to a
+source, a header, the host suite or the import gates does. Each binary is read once, into
 memory; those bytes are what is hashed, and they are written to a private
 copy that every later step reads - the flavour markers, the signing, the
 staging - so the build's file is never read again. Each copy is checked
@@ -756,8 +760,15 @@ and deletes it when that flavour's build starts. Build and gate it first:
             $bytes = $null
         }
         $tree = Get-GitTreeState -Repo $repo
+        # A HEAD newer than the build's commit is admitted when no file
+        # changed since is a build input (roadmap-usb4 task 43.9), so a
+        # documentation commit after the gated build does not cost a rebuild.
+        $advance = $null
+        if ($tree.Head -ne "none" -and $gated.Commit -ne $tree.Head.ToLowerInvariant()) {
+            $advance = Get-GatedHeadAdvance -Repo $repo -From $gated.Commit -To $tree.Head
+        }
         $why = Get-GatedManifestFault -Manifest $gated -Arch $Arch -Flavor $Flavor -Binaries $snapBinaries `
-            -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence)
+            -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence) -Advance $advance
         # A refusal names the build's file, not the private copy it was read into.
         foreach ($name in @($snapBinaries.Keys)) { $why = $why.Replace($snapBinaries[$name], $gatedBinaries[$name]) }
         if ($why -ne "") {
@@ -771,6 +782,12 @@ committed tree, or run this without -SignOnly to run every gate here.
             $GatedManifestPath, $Flavor, $Arch, $gated.Commit, $gated.Time)
         foreach ($name in ($gatedBinaries.Keys | Sort-Object)) {
             Write-Host ("  {0,-13} {1}" -f $name, $gated.Sha256[$name])
+        }
+        if ($null -ne $advance) {
+            Write-Ok ("HEAD {0} is {1} commit(s) newer than that build, and none of the {2} file(s) changed since is a build input:" -f `
+                $tree.Head, $advance.Commits, $advance.Changed.Count)
+            foreach ($c in @($advance.Changed | Select-Object -First 20)) { Write-Host ("  {0}" -f $c) }
+            if ($advance.Changed.Count -gt 20) { Write-Host ("  and {0} more" -f ($advance.Changed.Count - 20)) }
         }
         Write-Host "  REUSED from the gated build, not run here: the host test suite; the import"
         Write-Host ("  gates of {0}{1}." -f (($gatedBinaries.Keys | Sort-Object) -join ", "),
