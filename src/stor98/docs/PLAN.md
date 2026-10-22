@@ -1161,7 +1161,7 @@ isolation evidence.
   `STOR98_MAX_TRANSFER` is 512 pages (2 MiB; NumberOfPhysicalBreaks 513),
   raised from the 128 pages of "0.4.0.0 plan" item 1; NT stays at 256 KiB.
   It is xhci98's option (b) for roadmap-usb4 task 43.46 (xhci98 design
-  record 30): xhci98's own IOS layer, `STOR98.VXD` (GPL-2.0, in xhci98,
+  record 30): xhci98's own IOS layer, `S98VSD.VXD` (GPL-2.0, in xhci98,
   not in this driver; MD-5's "no VxD" stands for Stor98 itself), drops
   `DCB_dmd_phys_sgd` above `SCSIPORT.PDR` on Stor98's disks and builds the
   physical list, so IOS's hard 512 KiB and 17-run limits no longer cut a

@@ -17,7 +17,7 @@ and released as part of xhci98, with xhci98's version.
   changed.
 - Windows 98 SE / ME: the largest request the driver accepts is now
   2 MiB (512 KiB before). Requests over 512 KiB reach it only with
-  xhci98's STOR98.VXD installed, which the xhci98 installer offers on
+  xhci98's S98VSD.VXD installed, which the xhci98 installer offers on
   98 SE and ME; without it Windows still cuts them into 63 KiB pieces
   and nothing changes. StorMaxTransferKB accepts 64 to 2048 there.
 

@@ -1,11 +1,11 @@
 @echo off
-rem build.cmd [qemu] - STOR98.VXD, the Windows 98 SE and ME IOS layer that
+rem build.cmd [qemu] - S98VSD.VXD, the Windows 98 SE and ME IOS layer that
 rem lets large requests reach Stor98 whole (roadmap-usb4 task 43.46, design
 rem record 30 section 6).
 rem
-rem   (none)  the release image: obj\STOR98.VXD
+rem   (none)  the release image: obj\S98VSD.VXD
 rem   qemu    the qemu flavour's image, which writes to QEMU's debug console
-rem           (port 0E9h): obj\qemu\STOR98.VXD
+rem           (port 0E9h): obj\qemu\S98VSD.VXD
 rem
 rem Exit 0 built, 1 failed, 2 not built (no Open Watcom 2.0 or no Windows 98
 rem SE DDK on this host), as xhciinst\di\build.cmd answers.
@@ -33,9 +33,9 @@ if not "%FLAV%"=="" if /i not "%FLAV%"=="qemu" (
     exit /b 1
 )
 rem The flavour's image goes first: whatever fails below, none is left.
-if exist "%O%\STOR98.VXD" del "%O%\STOR98.VXD"
-if exist "%O%\STOR98.VXD" (
-    echo STOR98.VXD: the old %O%\STOR98.VXD could not be deleted
+if exist "%O%\S98VSD.VXD" del "%O%\S98VSD.VXD"
+if exist "%O%\S98VSD.VXD" (
+    echo S98VSD.VXD: the old %O%\S98VSD.VXD could not be deleted
     exit /b 1
 )
 if "%WATCOM%"=="" set "WATCOM=C:\WATCOM"
@@ -44,20 +44,20 @@ for %%D in (BINNT64 BINNT) do (
     if not defined WBIN if exist "%WATCOM%\%%D\wcc386.exe" set "WBIN=%WATCOM%\%%D"
 )
 if not defined WBIN (
-    echo STOR98.VXD was not built: no Open Watcom wcc386.exe under %WATCOM%.
+    echo S98VSD.VXD was not built: no Open Watcom wcc386.exe under %WATCOM%.
     exit /b 2
 )
 set "PY="
 for %%P in (python.exe) do set "PY=%%~$PATH:P"
 if not defined PY (
-    echo STOR98.VXD was not built: no Python on PATH for its link checks.
+    echo S98VSD.VXD was not built: no Python on PATH for its link checks.
     exit /b 2
 )
 if not exist obj mkdir obj
 powershell -NoProfile -ExecutionPolicy Bypass -File stage-ddk.ps1 >obj\stage.log 2>&1
 if errorlevel 1 (
     type obj\stage.log
-    echo STOR98.VXD was not built: the Windows 98 SE DDK members are missing or not the recorded ones.
+    echo S98VSD.VXD was not built: the Windows 98 SE DDK members are missing or not the recorded ones.
     exit /b 2
 )
 if not exist "%O%" mkdir "%O%"
@@ -71,7 +71,7 @@ for %%F in (vsd vsd_list vsd_data) do (
     "%PY%" -I omfpub.py %O%\%%F.obj || exit /b 1
 )
 "%PY%" -I omfcheck.py %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj || exit /b 1
-rem Linked as S98NEW.VXD and made STOR98.VXD only once every check below
+rem Linked as S98NEW.VXD and made S98VSD.VXD only once every check below
 rem has passed (the old image is deleted at the start), so a build that
 rem fails anywhere leaves no image to package.
 if exist %O%\S98NEW.VXD del %O%\S98NEW.VXD
@@ -86,20 +86,20 @@ rem (the qemu image's debug-console writes are its alone).
 if /i not "%FLAV%"=="qemu" (
     for %%F in (vsd vsd_list vsd_data) do (
         wdis %O%\%%F.obj > %O%\%%F.dis || (
-            echo STOR98.VXD: wdis could not disassemble %%F.obj
+            echo S98VSD.VXD: wdis could not disassemble %%F.obj
             exit /b 1
         )
         findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]out$" %O%\%%F.dis >nul && (
-            echo STOR98.VXD: %%F.obj has an OUT instruction in the release build
+            echo S98VSD.VXD: %%F.obj has an OUT instruction in the release build
             exit /b 1
         )
         findstr /r /c:"^0000 " %O%\%%F.dis >nul || (
-            echo STOR98.VXD: %%F.dis holds no disassembled code
+            echo S98VSD.VXD: %%F.dis holds no disassembled code
             exit /b 1
         )
     )
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File check-vsd.ps1 %O%\S98NEW.VXD %QF% || exit /b 1
-move /y %O%\S98NEW.VXD %O%\STOR98.VXD >nul || exit /b 1
-echo built %O%\STOR98.VXD
+move /y %O%\S98NEW.VXD %O%\S98VSD.VXD >nul || exit /b 1
+echo built %O%\S98VSD.VXD
 exit /b 0

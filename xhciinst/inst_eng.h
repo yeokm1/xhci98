@@ -37,7 +37,7 @@
 #define INST_Q_S98_UNUSED   12  /* 98 SE and ME: external NVMe drives
                                    disconnected? (the file update)          */
 #define INST_Q_STOR         13  /* 98 SE: the USB storage drivers?         */
-#define INST_Q_VSD          14  /* 98 SE and ME: STOR98.VXD?               */
+#define INST_Q_VSD          14  /* 98 SE and ME: S98VSD.VXD?               */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -246,7 +246,7 @@ const char *inst_eng_confirm_text(void);
  * device plan and the page's own writes and other changes. */
 const char *inst_eng_summary_head(int writes, int other);
 
-/* STOR98.VXD (design record 30 section 7): the window's box (its choice;
+/* S98VSD.VXD (design record 30 section 7): the window's box (its choice;
  * *shown where the package carries the file, *sys9x on 98 SE and ME), the
  * choice made, and the Summary's line (NULL: none). */
 int inst_eng_vsd_state(int *shown, int *sys9x);

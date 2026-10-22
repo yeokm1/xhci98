@@ -1,6 +1,9 @@
-# Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
+# Design Record 30 - S98VSD.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 11, 2026-10-22, reviewed and revised (the sense-fetch
+Status: draft 12, 2026-10-22 (the file renamed `S98VSD.VXD`: as
+`STOR98.VXD` it stopped Stor98's start, Code 10, on the owner's bench and
+in the emulator, section 3.1; owner, 2026-10-22); draft 11, 2026-10-22,
+reviewed and revised (the sense-fetch
 leg's stimulus, a test-only Stor98 build); draft 10, 2026-10-22, reviewed
 and revised (the double buffer's
 substitution order a hyp, `SCSIPORT.PDR`'s own requests compared in the
@@ -50,9 +53,14 @@ task 43.46, release `3.2.0.0`, from the task's readings
   physical list - no cutting of a request, no rewriting of an SRB or a CDB;
 - 2026-10-22: the layer is its own choice in the installer, a box under
   Stor98's box, on Windows 98 SE and ME only (section 7);
-- 2026-10-22: its file is named after Stor98, `STOR98.VXD` or `STOR98.VSD`
-  by what IOS loads (`STOR98.VXD`, section 3.1), with a device name that
-  cannot collide (`S98VSD`).
+- 2026-10-22: its file was named after Stor98, `STOR98.VXD` or `STOR98.VSD`
+  by what IOS loads (`STOR98.VXD`), with a device name that cannot
+  collide (`S98VSD`);
+- 2026-10-22, after the first bench: the file is `S98VSD.VXD`, the device
+  name's, everywhere (the installer, its switches `/s98vsd` and
+  `/nos98vsd`, the package, the cut, the documents); an update removes
+  this project's `STOR98.VXD`; a gate and a host test keep every IOSUBSYS
+  driver's base name apart from Stor98's (section 3.1).
 
 Section 10 lists the decisions taken in writing it, each the
 orchestrator's for the owner to confirm unless it names the owner;
@@ -93,7 +101,7 @@ on a fragmented buffer, 128 to 512 KiB requests reached Stor98 whole, at
 
 ### 1.2 Scope
 
-- `STOR98.VXD`, a static IOS VSD for Windows 98 SE (4.10.2222) and ME
+- `S98VSD.VXD`, a static IOS VSD for Windows 98 SE (4.10.2222) and ME
   (4.90.3000), in `src/vsd/`, built with Open Watcom 2.0 and the Windows
   98 SE DDK's `LINK.EXE` 5.12 by the gated build (section 6);
 - its claim of Stor98's disks only, its calldown entry, its physical
@@ -159,7 +167,7 @@ What it does not change goes into the release notes in those words
    file being loaded by name (object 1 `0x211F`). A `.VSD` file is never
    loaded; `.PDR` files are loaded by name from the registry and the
    devnodes (`ESDI_506.PDR`) or from IOS's own list (`scsiport.pdr`,
-   `rmm.pdr`). Hence `STOR98.VXD`.
+   `rmm.pdr`). Hence `S98VSD.VXD`.
 2. **The criteria routine** (`ILB_int_io_criteria_rtn`; QuickInstall and
    gold object 1 `0x1592`/`0x15A0`, the same instruction sequence in
    both; ME object 1 `0x19A0`, the same checks with its stack frame
@@ -282,18 +290,31 @@ addresses; in short [static, QuickInstall builds]:
 
 ### 3.1 The file, its place and its names
 
-- **File**: `STOR98.VXD` in `<system directory>\IOSUBSYS\`, where
+- **File**: `S98VSD.VXD` in `<system directory>\IOSUBSYS\`, where
   `stor98.mpd` already is (`stor98.inf`'s 98 SE and ME section, DIRID 12).
-  The two differ by extension; IOS's directory walk loads `STOR98.VXD`
-  (item 1 of section 2.2) and never treats `stor98.mpd` as a VxD, and
+  IOS's directory walk loads `S98VSD.VXD` (item 1 of section 2.2), and
   `stor98.mpd` is loaded through its devnode's `PortDriver` as today.
-  Neither replaces nor names the other.
+  **The two must differ in base name, not only in extension** [obs]:
+  named `STOR98.VXD` (drafts 1 to 11), the layer stopped Stor98's start.
+  On the owner's ThinkPad P14s (98 SE, the first bench, 2026-10-22) and in
+  the emulator with Stor98's file `stor98.mpd`, its devnode reported
+  problem 10 (Code 10) when the drive arrived, no DCB was made, and the
+  same image renamed `S98VSD.VXD` let it start (`runs/run-43.md`,
+  "Code 10: the file name"). The mechanism is a [hyp]: Windows loads an
+  IOSUBSYS driver by its base name, and with a `STOR98` already loaded
+  the miniport `stor98.mpd` is not; it is not read in `IOS.VXD` or
+  `VXDLDR.VXD`. Every earlier leg had passed because the read-first
+  image names Stor98's file `NVME2K.MPD`; one earlier run (`sm2`, with
+  `PortDriver` set to `stor98.mpd`) had shown the same problem 10 and was
+  set aside. `make-package.ps1` refuses two IOSUBSYS drivers with one base
+  name, `test_inst` holds Stor98's IOSUBSYS files against the layer's
+  name, and the installer removes this project's file under the old
+  name (section 7.3).
 - **Device name** (the DDB's `Name`, which VMM and VXDLDR know a device
   by, not the file name): `S98VSD`, padded with spaces to eight
   characters. No Windows 98 SE or ME VxD, and no file of this package,
-  uses it; it is not the file's base name, so a module named `STOR98`
-  in any loader's list cannot clash with it [hyp, the leg of section
-  9.2 item 4 loads both with Stor98 running].
+  uses it. It is now also the file's base name, which no other file of
+  the package or of Windows in IOSUBSYS has.
 - **DDB**: `Req_Device_Number` `Undefined_Device_ID` (it exports no
   service), `Init_Order` `Undefined_Init_Order`, the version fields 1.0
   (the layer's own; the package's version is the stamp below,
@@ -301,7 +322,7 @@ addresses; in short [static, QuickInstall builds]:
   control procedure of
   section 3.6, and `Reference_Data` the DRP (section 3.2), which is how
   IOS finds the registration packet of a VxD it loads [hdr: `DRP.H`].
-- **Stamp**: the image carries the string `STOR98.VXD <version>` from
+- **Stamp**: the image carries the string `S98VSD.VXD <version>` from
   `XHCI_VER_STR`, which the build's gate requires (section 6.4), as
   `XHCIDI.EXE` carries `XHCIDI <version>`.
 
@@ -736,7 +757,7 @@ request into children of the controller's MDTS (512 KiB on the emulator),
 so the disk sees the commands it saw before; on a controller whose MDTS is
 over 512 KiB the commands are larger.
 
-| Stor98's 9x maximum | Without `STOR98.VXD` | With `STOR98.VXD` |
+| Stor98's 9x maximum | Without `S98VSD.VXD` | With `S98VSD.VXD` |
 |---|---|---|
 | 512 KiB (before) | today: whole up to 512 KiB on a near-contiguous buffer, 63 KiB pieces over 17 runs or over 512 KiB | whole up to 512 KiB however fragmented; 63 KiB pieces over 512 KiB |
 | 2 MiB (option (b)) | unchanged from the row above: the phys-path limit of 512 KiB still cuts (section 2.2 item 2) | whole up to 2 MiB however fragmented; 63 KiB pieces over 2 MiB |
@@ -807,7 +828,7 @@ not read for the code.
 The image holds this project's code and data alone: no library is
 linked, and the linker adds its MS-DOS stub and its `Rich` record of tool
 identifiers, as it does for every PE driver of this package
-(`legal-provenance.md` section 2 gets a row for `STOR98.VXD` saying so).
+(`legal-provenance.md` section 2 gets a row for `S98VSD.VXD` saying so).
 
 ### 6.3 The tree
 
@@ -833,7 +854,7 @@ going on after a 2 with a line that it was not built, as it does for
 `check-vsd.ps1` holds the image to: an LE image whose one entry is the
 DDB named `S98VSD  `; every `int 20h` service dword in its code a row of
 `vsd-services.allow` (the two of section 6.2, and nothing else) and
-every row used; the stamp `STOR98.VXD <version>`; no write to port
+every row used; the stamp `S98VSD.VXD <version>`; no write to port
 `0E9h` in the release image (no `out` instruction at all). The package
 carries the image beside `stor98.mpd` in each x86 flavour directory that
 carries Stor98 (`make-package.ps1`, with `-NoStor98` leaving both out).
@@ -846,7 +867,7 @@ A Components row of its own (record 26 section 5.3), a **child of
 Stor98's box**, indented under it as Stor98's is under the Thunderbolt
 box (owner, 2026-10-22):
 
-- one line, "Large transfers for Stor98 (STOR98.VXD), up to 2 MiB",
+- one line, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB",
   indented under Stor98's sentence; the page stays 223 dialog units high
   (record 26 section 5.4, "640 by 480 on 98 SE") by setting its
   multi-line texts at whole lines (two lines 16 units, three 24), which
@@ -858,7 +879,7 @@ box (owner, 2026-10-22):
 - **on 98 SE and ME**: ticked whenever Stor98's box is ticked (ticking
   Stor98 ticks it); open only while Stor98's box is ticked; unticked and
   greyed while Stor98's box is unticked or greyed; shown only when the
-  flavour directory carries `STOR98.VXD`;
+  flavour directory carries `S98VSD.VXD`;
 - **on every other system**: shown greyed, unticked, its line
   "Large transfers for Stor98 (Windows 98 SE and ME only)", and never taken by the page
   or the engine - the convention record 26 section 5.4 gives a row of
@@ -871,15 +892,15 @@ box (owner, 2026-10-22):
 
 ### 7.2 The console and the switches
 
-`/stor98vxd` and `/nostor98vxd`, in `/stor98`'s and `/nostor98`'s style:
-`/stor98vxd` preselects the box ticked and needs Stor98 in the run
+`/s98vsd` and `/nos98vsd`, in `/stor98`'s and `/nostor98`'s style:
+`/s98vsd` preselects the box ticked and needs Stor98 in the run
 (`/stor98`, or Stor98 ticked by the Thunderbolt support), and is refused
-otherwise; `/nostor98vxd` preselects it unticked. On any system but 98 SE
+otherwise; `/nos98vsd` preselects it unticked. On any system but 98 SE
 and ME **both are refused** with the console's refusal text,
-"/stor98vxd and /nostor98vxd are for Windows 98 SE and ME only", as the
+"/s98vsd and /nos98vsd are for Windows 98 SE and ME only", as the
 owner asked; the window refuses them on its welcome page in the same
 words (record 26 section 10). The console tool asks, on 98 SE and ME when
-Stor98 is in the run and neither switch is given, "Install STOR98.VXD,
+Stor98 is in the run and neither switch is given, "Install S98VSD.VXD,
 large transfers for Stor98? (Y/n)" after Stor98's question; Enter and
 `/yes` give Y.
 
@@ -888,10 +909,20 @@ large transfers for Stor98? (Y/n)" after Stor98's question; Enter and
 The file is the installer's to place: no INF names it, and nothing in the
 setup engine copies it. On 98 SE and ME:
 
-- **Ticked, `IOSUBSYS\STOR98.VXD` absent**: the record's `Pending`
+- **First, the old name** (section 3.1), on every run, the uninstall
+  and an untick included: `IOSUBSYS\STOR98.VXD`, when it is this
+  project's (the record's `File` or `Pending` bytes, or an image with the
+  device name `S98VSD` and the stamp `STOR98.VXD `, as the test cuts and
+  the first bench placed it), is deleted, and a `WININIT.INI` line
+  `STOR98.VXD=S98VSD.TMP` (a test cut's queued update) is taken back; the
+  `.TMP` is then the table's as below. Another program's `STOR98.VXD` is
+  left, and the Summary says Stor98 cannot start while it is there. A
+  delete that fails stops the layer's part and leaves a step.
+
+- **Ticked, `IOSUBSYS\S98VSD.VXD` absent**: the record's `Pending`
   value written with the package file's hash (the intent, section 7.4),
   then `IOSUBSYS\S98VSD.TMP` written with `CREATE_NEW`, compared byte for
-  byte with the package's, then moved to `STOR98.VXD` with `MoveFileA`,
+  byte with the package's, then moved to `S98VSD.VXD` with `MoveFileA`,
   which never replaces, then `File` takes the hash and `Pending` is
   deleted (record 26 section 6.5.4's sequence, with the intent first).
   `.TMP` is not `*.vxd`, so IOS never loads the half-written file
@@ -906,7 +937,7 @@ setup engine copies it. On 98 SE and ME:
   `[rename]` entry, since the loaded copy is IOS's for the session:
   `Pending` written with the new hash first, then the `.TMP`
   (`CREATE_NEW`), compared, then the entry
-  `<system>\IOSUBSYS\STOR98.VXD=<system>\IOSUBSYS\S98VSD.TMP`; `File`
+  `<system>\IOSUBSYS\S98VSD.VXD=<system>\IOSUBSYS\S98VSD.TMP`; `File`
   keeps the hash of the file in place until the start has done the
   rename (section 7.4).
 - **Ticked, present with bytes neither value names**: another
@@ -920,12 +951,12 @@ setup engine copies it. On 98 SE and ME:
   installer again", as record 26 section 9.3 leaves a driver file in use.
   The loaded copy keeps serving the disks until the shutdown, which is
   harmless (it is the same layer that was installed).
-- **Greyed because Stor98's box is unticked**: `STOR98.VXD` follows
+- **Greyed because Stor98's box is unticked**: `S98VSD.VXD` follows
   Stor98 (owner, 2026-10-22): whatever the run does to the bundled
-  Stor98 with its box unticked, it does to `STOR98.VXD` too, so the two
+  Stor98 with its box unticked, it does to `S98VSD.VXD` too, so the two
   never disagree. Today an unticked Stor98 is "not now" and stays (record
-  26 section 5.3), so an installed `STOR98.VXD` stays with it; a rule that
-  removes Stor98 in such a run (now or later) removes `STOR98.VXD` in the
+  26 section 5.3), so an installed `S98VSD.VXD` stays with it; a rule that
+  removes Stor98 in such a run (now or later) removes `S98VSD.VXD` in the
   same run, by the deselected column of the table below. Without
   Stor98's disks it claims nothing (section 3.3).
 
@@ -988,12 +1019,12 @@ installation's file").
 A key of its own, `HKLM\Software\xhci98\Stor98Vxd`, apart from the
 bundled Stor98's record (`HKLM\Software\xhci98\Stor98`, record 26
 section 6.3), whose `PreExisting` baseline and devices it must not
-change the meaning of: a run that places only `STOR98.VXD` (Stor98 at the
+change the meaning of: a run that places only `S98VSD.VXD` (Stor98 at the
 package version already, or a Stor98 installed by hand) writes nothing
 under Stor98's key, and Stor98's own rules read that key as before.
 Values:
 
-- `File` (`REG_SZ`): the SHA-256 of the `STOR98.VXD` bytes this
+- `File` (`REG_SZ`): the SHA-256 of the `S98VSD.VXD` bytes this
   installer placed and that are in place, written once the file is in
   place (the move done, or the start's rename seen), deleted after the
   file;
@@ -1004,7 +1035,7 @@ Values:
 
 The uninstall (record 26 section 9.3 step 4, with the driver files)
 recovers by section 7.3's table, withdraws a queued update, removes a
-`STOR98.VXD` whose bytes `File` names by the delete rule of section 7.3,
+`S98VSD.VXD` whose bytes `File` names by the delete rule of section 7.3,
 whether or not Stor98 itself stays, leaves a file of other bytes and
 says so, then deletes the values and the key.
 
@@ -1022,7 +1053,7 @@ helper or the NT route changes.
 
 ## 8. The release notes
 
-To say, in these words or close: "On Windows 98 SE and ME, STOR98.VXD
+To say, in these words or close: "On Windows 98 SE and ME, S98VSD.VXD
 lets reads and writes of up to 2 MiB reach Stor98 whole, which helps
 large unbuffered transfers (disk benchmarks, some copy and imaging
 tools). It does not change copies through the file cache, whose
@@ -1061,7 +1092,7 @@ and without an SRB; a sector count whose shift overflows; a sum over
 full and one free. The installer's recovery table of section 7.3,
 every row, and every step of a placement and of an update cut short,
 an altered `.TMP`, an altered or extra `WININIT.INI` line (a line
-renaming another file onto `STOR98.VXD`, a line naming `S98VSD.TMP` as a
+renaming another file onto `S98VSD.VXD`, a line naming `S98VSD.TMP` as a
 destination), and a queued update whose destination another installer
 replaced; and the request side's admission of a no-SRB request by
 function, a function not admitted refused. And the installer's
@@ -1093,7 +1124,7 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
    request on the gold 98 SE IOS set, on ME, and on each with the disk
    present at boot (an enclosure attached at power-on) as well as plugged
    after (section 3.4).
-4. **Coexistence**: `STOR98.VXD` and `stor98.mpd` in one `IOSUBSYS`, both
+4. **Coexistence**: `S98VSD.VXD` and `stor98.mpd` in one `IOSUBSYS`, both
    loaded (the layer's init line, Stor98's disk running); a disk of
    another driver (the emulator's IDE disk) left unclaimed.
 5. **Pass-through, SMART and the requests without an SRB**: Stor98's
@@ -1110,9 +1141,9 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
    ME; an update then an untick, and an update then the uninstall, with
    no start between (the queued file must not arrive); a placement and
    an update each cut short at every step of section 7.3 (the guest
-   stopped there), then the next run; `STOR98.VXD` placed over a Stor98
+   stopped there), then the next run; `S98VSD.VXD` placed over a Stor98
    installed by hand, then updated and uninstalled, Stor98's key read
-   unchanged; `/stor98vxd` and `/nostor98vxd` refused on 2000.
+   unchanged; `/s98vsd` and `/nos98vsd` refused on 2000.
 8. **Memory pressure** (section 4.7): the 2 MiB phases while a second
    program commits and touches more memory than the guest has, on 98 SE
    and ME, data compared.
@@ -1159,9 +1190,9 @@ On the owner's real hardware: the throughput before and after
 - **D6** Room sized from the DCB at insertion, a DCB over 2 MiB left
   alone (sections 3.3 and 3.4).
 - **D7** The row greyed with "(Windows 98 SE and ME only)" rather than
-  hidden on other systems; `/stor98vxd` and `/nostor98vxd` both refused
+  hidden on other systems; `/s98vsd` and `/nos98vsd` both refused
   there (section 7.1, 7.2).
-- **D8** (owner, 2026-10-22) `STOR98.VXD` follows Stor98's rule: with
+- **D8** (owner, 2026-10-22) `S98VSD.VXD` follows Stor98's rule: with
   Stor98's box unticked, the run does to the layer what it does to Stor98,
   keeping it when Stor98 is kept and removing it when Stor98 is removed;
   with Stor98 ticked, the user's untick of the layer's box removes it
@@ -1190,7 +1221,7 @@ On the owner's real hardware: the throughput before and after
   leg corroborates it.
 - About 10 KiB in each IOP of the disk (section 3.4): IOS's allocation of
   IOPs of that size is read on the legs, not in IOS.
-- Whether `DeleteFileA` succeeds on a loaded `STOR98.VXD` (VXDLDR closing
+- Whether `DeleteFileA` succeeds on a loaded `S98VSD.VXD` (VXDLDR closing
   the file after the load) [hyp]; if not, the removal is the step of
   section 7.3 every time.
 - Real hardware: no reading on a controller whose MDTS is over 512 KiB,

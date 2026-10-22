@@ -1,5 +1,5 @@
 /*
- * vsd_list.h - the pure half of STOR98.VXD (roadmap-usb4.md task 43.46,
+ * vsd_list.h - the pure half of S98VSD.VXD (roadmap-usb4.md task 43.46,
  * design record 30 sections 3.3, 3.4 and 4.1 to 4.3): which DCB the layer
  * claims, which request carries data, and the physical list built from
  * page-table entries with every input checked.

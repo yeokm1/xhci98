@@ -112,7 +112,7 @@ in the large model, from `xhciinst\di\`:
   installer does and prints the result file, when its `END` line was read
   and when the process handle signalled. It is never packaged.
 
-The same install, with the same Windows 98 SE DDK, builds `STOR98.VXD`, the
+The same install, with the same Windows 98 SE DDK, builds `S98VSD.VXD`, the
 98 SE and ME IOS layer for Stor98's disks (roadmap-usb4 task 43.46, design
 record 30 section 6), from `src\vsd\`:
 
@@ -129,8 +129,8 @@ record 30 section 6), from `src\vsd\`:
   call in the image to the function the compiler named, and
   `check-vsd.ps1` holds the image to its DDB `S98VSD`, its two VxD
   services (`vsd-services.allow`), its stamp and, in the release image, no
-  debug-port write. Out come `src\vsd\obj\STOR98.VXD` and
-  `src\vsd\obj\qemu\STOR98.VXD`.
+  debug-port write. Out come `src\vsd\obj\S98VSD.VXD` and
+  `src\vsd\obj\qemu\S98VSD.VXD`.
 - `scripts\build-driver.cmd` runs it on the x86 run, after Stor98's
   build: the release image always, the qemu one when the run builds qemu;
   a 2 is said and passed over. `make-package.ps1` stages the image beside

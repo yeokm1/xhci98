@@ -47,7 +47,7 @@
 #define IDC_C_UAS_T             1024
 #define IDC_C_STOR              1025    /* 98 SE: the USB storage drivers */
 #define IDC_C_STOR_T            1026
-#define IDC_C_VSD               1027    /* STOR98.VXD, Stor98's child     */
+#define IDC_C_VSD               1027    /* S98VSD.VXD, Stor98's child     */
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

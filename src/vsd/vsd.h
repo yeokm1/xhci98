@@ -1,5 +1,5 @@
 /*
- * vsd.h - STOR98.VXD, shared by vsd.c (code) and vsd_data.c (data); design
+ * vsd.h - S98VSD.VXD, shared by vsd.c (code) and vsd_data.c (data); design
  * record 30. The DDK's block-device headers are the staged copies of
  * stage-ddk.ps1 (obj\inc\), compiled with -zp1: they mirror the packed
  * MASM layouts.

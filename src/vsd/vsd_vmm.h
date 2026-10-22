@@ -1,5 +1,5 @@
 /*
- * vsd_vmm.h - the layouts and values STOR98.VXD needs that no Windows 98
+ * vsd_vmm.h - the layouts and values S98VSD.VXD needs that no Windows 98
  * SE DDK header gives it in a form Open Watcom compiles (design record 30
  * section 6.2): VMM.H assumes Microsoft's compiler, and SRB.H drags in the
  * NT port's types. Each is written under a name of the layer's own and

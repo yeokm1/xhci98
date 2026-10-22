@@ -63,7 +63,7 @@ What Stor98 adds:
   drive.
 - **Requests of up to 2 MiB on Windows 98 SE / ME** (256 KiB on Windows 2000 to 10;
   a setting can lower either, see [Settings](#settings)). Above 512 KiB this needs
-  xHCI98's `STOR98.VXD`, which the xHCI98 installer offers on 98 SE and ME; without it
+  xHCI98's `S98VSD.VXD`, which the xHCI98 installer offers on 98 SE and ME; without it
   Windows still cuts every request over 512 KiB into 63 KiB pieces. Without it, and
   up to 512 KiB:
   Windows 98 SE / ME passes a request to the driver whole only if it is at most 512 KiB
@@ -181,7 +181,7 @@ shown to the user.
   (MaximumTransferLength, with as many physical breaks as pages plus one). It can only
   lower the built-in maximum, never raise it: a larger value, a value below 64, one that
   is not a multiple of 4, or a string that is not a plain decimal number is refused and
-  the default stands. On Windows 98 SE / ME without `STOR98.VXD` only aligned,
+  the default stands. On Windows 98 SE / ME without `S98VSD.VXD` only aligned,
   physically contiguous requests above 256 KiB gain from more than 256 KiB, and nothing
   gains above 512 KiB (see above); a lower value is for testing or for hardware that
   misbehaves with large requests.

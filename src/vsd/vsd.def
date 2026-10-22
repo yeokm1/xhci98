@@ -1,5 +1,5 @@
 VXD S98VSD DYNAMIC
-DESCRIPTION 'STOR98.VXD, large requests for Stor98 on Windows 98 SE and ME'
+DESCRIPTION 'S98VSD.VXD, large requests for Stor98 on Windows 98 SE and ME'
 SEGMENTS
         _TEXT           CLASS 'LCODE'   PRELOAD NONDISCARDABLE
         _DATA           CLASS 'LCODE'   PRELOAD NONDISCARDABLE

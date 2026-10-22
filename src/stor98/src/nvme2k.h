@@ -176,7 +176,7 @@ typedef UCHAR HW_INITIALIZATION_DATA_SIZE_CHECK[sizeof(HW_INITIALIZATION_DATA) =
 // MaximumTransferLength and cuts a larger one into 63 KiB SRBs at queue
 // depth 1; on SCSIPORT's physical-list path IOS's own ceiling is 512 KiB
 // and 17 runs (measured, 98 SE), so more than 512 KiB reaches this driver
-// only through xhci98's STOR98.VXD, which drops that path (xhci98 design
+// only through xhci98's S98VSD.VXD, which drops that path (xhci98 design
 // record 30). Without it the larger value changes nothing. NT: 256 KiB,
 // unchanged.
 // What it bounds: the largest child (with MDTS, LcBringupDone) and so the

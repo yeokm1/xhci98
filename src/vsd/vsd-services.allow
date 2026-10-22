@@ -1,4 +1,4 @@
-# vsd-services.allow - the VxD services STOR98.VXD may call (design record 30
+# vsd-services.allow - the VxD services S98VSD.VXD may call (design record 30
 # section 6.4; check-vsd.ps1). One row per service: its dword (device id in
 # the high word, ordinal in the low), the name, and where the value is read
 # (src\vsd\vsd_vmm.h has the citation). A service not listed fails the gate;

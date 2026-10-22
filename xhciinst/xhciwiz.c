@@ -150,7 +150,7 @@ static int compLaidOut;
  * boxes for the drives an update touches. */
 static int s98Have;
 static int s98Choice;
-/* STOR98.VXD's box (design record 30 section 7.1): Stor98's child. */
+/* S98VSD.VXD's box (design record 30 section 7.1): Stor98's child. */
 static int vsdShown;
 static int vsd9x;
 static int vsdChoice;
@@ -788,7 +788,7 @@ static void comp_s98_sync(HWND dlg)
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_S98), open);
     EnableWindow(GetDlgItem(dlg, IDC_C_S98_T), open);
-    /* STOR98.VXD, Stor98's child (record 30 section 7.1): open only while
+    /* S98VSD.VXD, Stor98's child (record 30 section 7.1): open only while
      * Stor98 is ticked, on 98 SE and ME; unticked and greyed otherwise. */
     inst_vsd_box(vsd9x, vsdShown, IsDlgButtonChecked(dlg, IDC_C_S98) ==
                  BST_CHECKED, 0, &sh, &vopen);

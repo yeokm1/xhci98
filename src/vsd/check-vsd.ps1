@@ -1,12 +1,12 @@
 #Requires -Version 2.0
 <#
-check-vsd.ps1 <STOR98.VXD> [-Qemu] - the gate over STOR98.VXD (design record
+check-vsd.ps1 <S98VSD.VXD> [-Qemu] - the gate over S98VSD.VXD (design record
 30 section 6.4), run by src\vsd\build.cmd after every link:
 
   - an LE image whose one entry point is the DDB named "S98VSD  ";
   - every VxD service it calls (an "int 20h" followed by the service's dword
     in its code object) a row of vsd-services.allow, and every row called;
-  - the stamp "STOR98.VXD <version>" at src\xhci_version.h's XHCI_VER_STR;
+  - the stamp "S98VSD.VXD <version>" at src\xhci_version.h's XHCI_VER_STR;
   - in the release image (no -Qemu), no write to port 0E9h: neither
     "out 0E9h, al" (E6 E9) nor "mov dx, 0E9h" (66 BA E9 00 / BA E9 00 00 00).
 
@@ -94,9 +94,9 @@ if ($ver -eq '') { Bad 'no XHCI_VER_STR in src\xhci_version.h' }
 # In what the loader maps, not anywhere in the file.
 $found = $false
 foreach ($o in $mem.Keys) {
-    if ([System.Text.Encoding]::ASCII.GetString($mem[$o]).IndexOf("STOR98.VXD $ver") -ge 0) { $found = $true }
+    if ([System.Text.Encoding]::ASCII.GetString($mem[$o]).IndexOf("S98VSD.VXD $ver") -ge 0) { $found = $true }
 }
-if (-not $found) { Bad "no stamp 'STOR98.VXD $ver' in the image's mapped objects" }
+if (-not $found) { Bad "no stamp 'S98VSD.VXD $ver' in the image's mapped objects" }
 
 # The release image writes to no debug port.
 if (-not $Qemu) {

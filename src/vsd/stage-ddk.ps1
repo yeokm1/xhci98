@@ -1,6 +1,6 @@
 #Requires -Version 2.0
 <#
-stage-ddk.ps1 - find the Windows 98 SE DDK members STOR98.VXD is compiled
+stage-ddk.ps1 - find the Windows 98 SE DDK members S98VSD.VXD is compiled
 against and linked with, hold each to the SHA-256 docs\references\README.md
 records for it, and copy them under the names the sources include into obj\
 beside this script (design record 30 section 6.2):
@@ -56,7 +56,7 @@ $want = @(
 function Fail([string]$why) {
     Write-Output "ERROR: $why"
     Write-Output '       The Windows 98 SE DDK is fetched and extracted as docs\references\README.md,'
-    Write-Output '       "Windows 98 DDK", says; STOR98.VXD cannot be built without it.'
+    Write-Output '       "Windows 98 DDK", says; S98VSD.VXD cannot be built without it.'
     exit 1
 }
 

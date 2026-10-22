@@ -1,5 +1,5 @@
 /*
- * vsd.c - STOR98.VXD, the Windows 98 SE and ME IOS vendor-supplied driver
+ * vsd.c - S98VSD.VXD, the Windows 98 SE and ME IOS vendor-supplied driver
  * that lets large requests reach Stor98 whole (roadmap-usb4.md task 43.46,
  * design record 30).
  *

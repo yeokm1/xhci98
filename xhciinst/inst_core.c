@@ -2033,9 +2033,9 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Stor98 = 1;
         } else if (inst_switch(a, "nostor98")) {
             opts->NoStor98 = 1;
-        } else if (inst_switch(a, "stor98vxd")) {
+        } else if (inst_switch(a, "s98vsd")) {
             opts->Stor98Vxd = 1;
-        } else if (inst_switch(a, "nostor98vxd")) {
+        } else if (inst_switch(a, "nos98vsd")) {
             opts->NoStor98Vxd = 1;
         } else if (inst_switch(a, "nouas")) {
             opts->NoUas = 1;
@@ -2236,12 +2236,12 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     if ((opts->Stor98Vxd || opts->NoStor98Vxd) &&
         (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, opts->Stor98Vxd ?
-                 "/stor98vxd belongs to an install" :
-                 "/nostor98vxd belongs to an install", NULL);
+                 "/s98vsd belongs to an install" :
+                 "/nos98vsd belongs to an install", NULL);
         return 1;
     }
     if (opts->Stor98Vxd && opts->NoStor98Vxd) {
-        inst_err(err, errCap, "/stor98vxd and /nostor98vxd contradict each "
+        inst_err(err, errCap, "/s98vsd and /nos98vsd contradict each "
                  "other", NULL);
         return 1;
     }
@@ -2249,7 +2249,7 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     if (opts->Stor98Vxd && (opts->NoStor98 ||
                             (!opts->Stor98 && !opts->Thunderbolt &&
                              !opts->CmOnly))) {
-        inst_err(err, errCap, "/stor98vxd needs Stor98 in the run (/stor98, "
+        inst_err(err, errCap, "/s98vsd needs Stor98 in the run (/stor98, "
                  "or /thunderbolt without /nostor98)", NULL);
         return 1;
     }
@@ -5175,7 +5175,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",
       260, 16 },
-    { INST_PT_VSD, "Large transfers for Stor98 (STOR98.VXD), up to 2 MiB",
+    { INST_PT_VSD, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB",
       246, 10 },
     { INST_PT_VSD_OTHER,
       "Large transfers for Stor98 (Windows 98 SE and ME only)", 246, 10 },
@@ -5746,7 +5746,7 @@ int inst_s98_box_open(int haveS98, int tbHave, int tbTicked)
     return haveS98 && tbHave && tbTicked;
 }
 
-/* ---- STOR98.VXD (design record 30 section 7) ----------------------------- */
+/* ---- S98VSD.VXD (design record 30 section 7) ----------------------------- */
 
 int inst_vsd_box(int sys9x, int haveVsd, int s98Ticked, int noSwitch,
                  int *shown, int *open)
@@ -5800,6 +5800,60 @@ static int inst_vsd_clear(const INST_VSDFACTS *f)
     return INST_VOP_DONE;
 }
 
+int inst_base_differs(const char *a, const char *b)
+{
+    const char *da = strrchr(a, '.');
+    const char *db = strrchr(b, '.');
+    size_t la = da != NULL ? (size_t)(da - a) : strlen(a);
+    size_t lb = db != NULL ? (size_t)(db - b) : strlen(b);
+    size_t i;
+
+    if (la != lb) {
+        return 1;
+    }
+    for (i = 0; i < la; i++) {
+        char ca = a[i];
+        char cb = b[i];
+
+        if (ca >= 'a' && ca <= 'z') {
+            ca = (char)(ca - 'a' + 'A');
+        }
+        if (cb >= 'a' && cb <= 'z') {
+            cb = (char)(cb - 'a' + 'A');
+        }
+        if (ca != cb) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int inst_has_bytes(const unsigned char *buf, size_t n, const char *s)
+{
+    size_t sl = strlen(s);
+    size_t i;
+
+    for (i = 0; i + sl <= n; i++) {
+        if (memcmp(buf + i, s, sl) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_vsd_old_is_own(const unsigned char *buf, size_t n, const char *hash,
+                        const char *file, const char *pend)
+{
+    if (hash != NULL && hash[0] != '\0' &&
+        ((file != NULL && file[0] != '\0' && inst_eq(hash, file)) ||
+         (pend != NULL && pend[0] != '\0' && inst_eq(hash, pend)))) {
+        return 1;
+    }
+    return buf != NULL && n >= 2 && buf[0] == 'M' && buf[1] == 'Z' &&
+           inst_has_bytes(buf, n, "S98VSD  ") &&
+           inst_has_bytes(buf, n, "STOR98.VXD ");
+}
+
 int inst_vsd_next(const INST_VSDFACTS *f)
 {
     int sel = f->Mode == INST_VSD_SELECTED;
@@ -5820,7 +5874,7 @@ int inst_vsd_next(const INST_VSDFACTS *f)
         }
         return inst_vsd_clear(f);
     }
-    /* Another installation's STOR98.VXD. */
+    /* Another installation's S98VSD.VXD. */
     if (f->Dest == INST_VF_OTHER) {
         if (f->Entry == INST_VE_EXACT) {
             return INST_VOP_DEL_ENTRY;

@@ -518,7 +518,7 @@ header's text; `legal-provenance.md` section 2 has the row.
   (`docs/contributing/legal-provenance.md` section 4, the CONFIGMG row).
   Fetched, never tracked.
 
-**`STOR98.VXD`'s build (roadmap-usb4 task 43.46; design record 30
+**`S98VSD.VXD`'s build (roadmap-usb4 task 43.46; design record 30
 section 6).** The ten headers from `inc\win98\basedef.h` to
 `src\block\inc\dcb.h` above are what the 98 SE and ME IOS layer is
 compiled against, for their structure layouts and values (`srb.h`'s row

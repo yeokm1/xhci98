@@ -507,6 +507,51 @@ at 2 MiB - each 2 MiB request reached Stor98 whole and was split at the
 emulator's MDTS. (The Stor98-alone baseline of "Requests over 512 KiB" was
 28 to 38 MB/s at 1 and 2 MiB.)
 
+### Code 10: the file name (2026-10-22)
+
+**The bench.** The first bench package (`p43-46-bench` `e4633c12`, way B
+by hand: the 2 MiB `stor98.mpd` and the layer as `STOR98.VXD`) on the
+owner's ThinkPad P14s, 98 SE 4.10.2222 A, broke the drive. After a cold
+start, an enclosure plugged in after Windows had started got no drive
+letter, and Device Manager showed Code 10 on Stor98's controller ("Stor
+NVMe"). XHCITR still showed the tunnel's PCI configuration correctly.
+With `STOR98.VXD` deleted and the 2 MiB `stor98.mpd` kept, the drive
+came back after a cold start and a plug-in (the owner).
+
+**In the emulator.** One guest at a time on the read-first vehicle (98 SE,
+the QuickInstall IOS, 256 MB, one vCPU, the tunnel brought up after the
+desktop), with the bench's exact `stor98.mpd` copied as `STOR98.MPD` and
+the devnode's `PortDriver` set to `stor98.mpd` (`PERF2 setport`). The kit's
+`rp2.sh`, Stor98's devnode state as the connection manager logs it 3 s
+after the enumeration, then `PERF2 file F:\Q.BIN 8 0 64,2048`:
+
+| Run | In IOSUBSYS beside `STOR98.MPD` | Devnode problem | F: | 2 MiB write / read MB/s |
+|---|---|---|---|---|
+| `sp1` | the bench's layer as `STOR98.VXD` | 10 (Code 10) | `open` fails (error 3) | - |
+| `sp0` | no layer | 0 | verify 0 | 46.2 / 43.2 |
+| `sp2` | the same bytes as `S98VSD.VXD` | 0 | verify 0 | 83.3 / 87.9 |
+
+The layer logged nothing for that disk in `sp1`: Stor98's start failed
+before any DCB was made. The cause is the file's base name. Windows loads
+an IOSUBSYS driver by it, and with a `STOR98` present, `stor98.mpd` does
+not start. The exact mechanism in `IOS.VXD` or `VXDLDR.VXD` is not read
+[hyp]. Nothing in the layer's code took part, and nothing in the 2 MiB
+Stor98 did. `sp2`'s 2 MiB rates, twice `sp0`'s, point to the release
+layer claiming port `stor98`; the release image writes no log, so this
+is inferred.
+
+Why the earlier legs passed: every one ran on the read-first image,
+whose Stor98 file is `NVME2K.MPD`, with the `qemu` build's `NVME2K`
+match. A run before the smoke leg (`sm2`) set `PortDriver` to
+`stor98.mpd` with the layer as `STOR98.VXD`. It showed the same devnode
+problem 10 ("no disk at all", above) and was set aside rather than read.
+
+**The fix** (owner, 2026-10-22): the file is `S98VSD.VXD`, its device
+name, everywhere. The installer removes this project's `STOR98.VXD` on
+every 98 SE and ME run. `make-package.ps1` refuses two IOSUBSYS drivers
+with one base name, and `test_inst` holds Stor98's IOSUBSYS files
+against the layer's name (record 30, sections 3.1 and 7.3).
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on

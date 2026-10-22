@@ -1,5 +1,5 @@
 /*
- * vsd_list.c - the pure half of STOR98.VXD; see vsd_list.h and design
+ * vsd_list.c - the pure half of S98VSD.VXD; see vsd_list.h and design
  * record 30 sections 3.3 and 4.1 to 4.3.
  *
  * Unsigned 32-bit arithmetic throughout; every sum of an address and a

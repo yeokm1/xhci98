@@ -1,5 +1,5 @@
 /*
- * test_vsd_list.c - STOR98.VXD's pure half (src\vsd\vsd_list.c; design
+ * test_vsd_list.c - S98VSD.VXD's pure half (src\vsd\vsd_list.c; design
  * record 30 section 9.1): the claim's tests, the function table, and the
  * physical list from page-table entries with its every refusal.
  *

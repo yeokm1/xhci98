@@ -4577,7 +4577,7 @@ static void test_storage(void)
     }
 }
 
-/* STOR98.VXD (design record 30 section 7): the box, the switches, the
+/* S98VSD.VXD (design record 30 section 7): the box, the switches, the
  * mode, and the recovery and placement table step by step. */
 static INST_VSDFACTS vf(int pend, int fileVal, int dest, int tmp, int entry,
                         int mode, int pkgPend, int pkgFile, int filePend)
@@ -4670,6 +4670,51 @@ static void vboot(VMODEL *m)
     }
 }
 
+/* The layer's file name against Stor98's in IOSUBSYS (record 30 section
+ * 3.1: Windows loads an IOSUBSYS driver by its base name; STOR98.VXD
+ * beside stor98.mpd stopped Stor98's start), and the old name's file
+ * recognised as this project's. */
+static void test_vsd_names(void)
+{
+    static const unsigned char own[] =
+        "MZ....LE....S98VSD  ....STOR98.VXD 3.2.0.0";
+    static const unsigned char other[] = "MZ....LE....OTHERVXD....STOR98.VXD";
+    static const unsigned char noMz[] = "XX....S98VSD  ....STOR98.VXD 3.2.0.0";
+    int i;
+    int ios = 0;
+
+    CHECK(!inst_base_differs("stor98.mpd", "STOR98.VXD"),
+          "stor98.mpd and STOR98.VXD share a base name");
+    CHECK(inst_base_differs("stor98.mpd", "S98VSD.VXD"),
+          "stor98.mpd and S98VSD.VXD differ");
+    CHECK(inst_base_differs("STOR98", "STOR98X.VXD"), "lengths differ");
+    CHECK(!inst_base_differs("A.B.VXD", "a.b.mpd"), "the last dot");
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (instStorFile[i].Dir != INST_STOR_DIR_IOS) {
+            continue;
+        }
+        ios++;
+        CHECK(inst_base_differs(instStorFile[i].Name, INST_VSD_FILE),
+              "an IOSUBSYS file of Stor98's and the layer differ in base name");
+        CHECK(inst_base_differs(instStorFile[i].Name, INST_VSD_TMPNAME),
+              "an IOSUBSYS file of Stor98's and the layer's .TMP differ");
+    }
+    CHECK(ios != 0, "Stor98 has an IOSUBSYS file");
+    CHECK(!inst_base_differs(INST_VSD_FILE, INST_VSD_TMPNAME),
+          "the .TMP is the layer's own name");
+    CHECK(inst_vsd_old_is_own(own, sizeof(own) - 1, "AA", "", ""),
+          "an old-name image with S98VSD and the old stamp is own");
+    CHECK(!inst_vsd_old_is_own(other, sizeof(other) - 1, "AA", "", ""),
+          "another DDB name: not own");
+    CHECK(!inst_vsd_old_is_own(noMz, sizeof(noMz) - 1, "AA", "", ""),
+          "not an image: not own");
+    CHECK(inst_vsd_old_is_own(other, sizeof(other) - 1, "AB", "AB", ""),
+          "the record's File bytes: own");
+    CHECK(inst_vsd_old_is_own(NULL, 0, "CD", "", "cd"),
+          "the record's Pending bytes, case ignored: own");
+    CHECK(!inst_vsd_old_is_own(NULL, 0, "", "", ""), "unreadable: not own");
+}
+
 static void test_vsd(void)
 {
     char *argv1[4];
@@ -4684,40 +4729,40 @@ static void test_vsd(void)
 
     /* The switches. */
     argv1[0] = "x";
-    argv1[1] = "/stor98vxd";
+    argv1[1] = "/s98vsd";
     argv1[2] = "/thunderbolt";
     CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
-          o.Stor98Vxd && !o.NoStor98Vxd, "/stor98vxd /thunderbolt");
+          o.Stor98Vxd && !o.NoStor98Vxd, "/s98vsd /thunderbolt");
     CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
           strstr(err, "Stor98 in the run") != NULL,
-          "/stor98vxd alone: refused, it needs Stor98 in the run");
-    argv1[2] = "/nostor98vxd";
+          "/s98vsd alone: refused, it needs Stor98 in the run");
+    argv1[2] = "/nos98vsd";
     CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
-          "/stor98vxd /nostor98vxd: a contradiction");
-    argv1[1] = "/nostor98vxd";
+          "/s98vsd /nos98vsd: a contradiction");
+    argv1[1] = "/nos98vsd";
     argv1[2] = "/uninstall";
     CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
-          "/nostor98vxd belongs to an install");
+          "/nos98vsd belongs to an install");
     argv1[2] = "/thunderbolt";
     CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
-          o.NoStor98Vxd, "/nostor98vxd /thunderbolt");
-    argv1[1] = "/stor98vxd";
+          o.NoStor98Vxd, "/nos98vsd /thunderbolt");
+    argv1[1] = "/s98vsd";
     argv1[2] = "/thunderbolt";
     argv1[3] = "/nostor98";
     CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 1,
-          "/stor98vxd /nostor98: refused");
+          "/s98vsd /nostor98: refused");
 
     /* The box. */
     CHECK(inst_vsd_box(1, 1, 1, 0, &shown, &open) && shown && open,
           "98 SE and ME: ticked with Stor98");
     CHECK(!inst_vsd_box(1, 1, 1, 1, &shown, &open) && shown && open,
-          "/nostor98vxd: open, unticked");
+          "/nos98vsd: open, unticked");
     CHECK(!inst_vsd_box(1, 1, 0, 0, &shown, &open) && shown && !open,
           "Stor98 unticked: greyed and unticked");
     CHECK(!inst_vsd_box(0, 1, 1, 0, &shown, &open) && shown && !open,
           "another system: shown greyed, never ticked");
     CHECK(!inst_vsd_box(1, 0, 1, 0, &shown, &open) && !shown && !open,
-          "no STOR98.VXD in the package: not shown");
+          "no S98VSD.VXD in the package: not shown");
 
     /* The mode; D8: the layer follows Stor98. */
     CHECK(inst_vsd_mode(0, 0, 1, 1, 0, 1) == INST_VSD_NONE &&
@@ -4936,6 +4981,7 @@ int main(void)
     test_marks();
     test_storage();
     test_vsd();
+    test_vsd_names();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

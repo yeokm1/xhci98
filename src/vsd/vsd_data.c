@@ -1,5 +1,5 @@
 /*
- * vsd_data.c - STOR98.VXD's data: the device descriptor block, the IOS
+ * vsd_data.c - S98VSD.VXD's data: the device descriptor block, the IOS
  * registration packet and its ILB, the counters and the stamp (design
  * record 30 sections 3.1, 3.2 and 4.9).
  *
@@ -33,4 +33,4 @@ VSD_DDB S98VSD_DDB = {
 
 VSD_COUNTS VsdCounts = { 0 };
 
-const char VsdStamp[] = "STOR98.VXD " XHCI_VER_STR;
+const char VsdStamp[] = "S98VSD.VXD " XHCI_VER_STR;
