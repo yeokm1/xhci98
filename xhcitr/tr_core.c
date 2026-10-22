@@ -2544,6 +2544,25 @@ static int tr_fast_now(int haveV2, TR_U32 flags, unsigned int exSpeed)
     return -1;
 }
 
+int tr_fast_wants_qual(const TR_FAST_IN *in)
+{
+    if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
+        !in->HaveV2 || in->Root || !in->HubKnown) {
+        return 0;
+    }
+    return tr_fast_can(in->HaveV2, in->V2Flags) < 0 &&
+           tr_fast_now(in->HaveV2, in->V2Flags, in->ExSpeed) == TR_SPEED_FULL &&
+           tr_fast_now(in->HubHaveV2, in->HubFlags, in->HubExSpeed) ==
+               TR_SPEED_FULL &&
+           in->BcdUsb >= 0x0200U;
+}
+
+int tr_qual_ok(const unsigned char *b, size_t n)
+{
+    return b != NULL && n >= TR_QUAL_BYTES && b[0] == TR_QUAL_BYTES &&
+           b[1] == 6;
+}
+
 int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f)
 {
     int hubCan;
@@ -2555,6 +2574,16 @@ int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f)
     if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
         !in->HaveV2) {
         return 0;
+    }
+    if (tr_fast_wants_qual(in)) {
+        if (in->HsQual != 1) {
+            return 0;
+        }
+        f->Now = TR_SPEED_FULL;
+        f->Can = TR_SPEED_HIGH;
+        f->Where = TR_FW_HUBFS;
+        f->HubNow = TR_SPEED_FULL;
+        return 1;
     }
     f->Can = tr_fast_can(in->HaveV2, in->V2Flags);
     f->Now = tr_fast_now(in->HaveV2, in->V2Flags, in->ExSpeed);
@@ -2617,6 +2646,8 @@ const char *tr_fast_where(int where)
         return "behind a USB 3 hub that runs slower";
     case TR_FW_LINK:
         return "on a 5 Gbit/s link";
+    case TR_FW_HUBFS:
+        return "behind a Full Speed hub";
     default:
         return "";
     }
@@ -2641,6 +2672,9 @@ const char *tr_fast_try(int where)
         return "Connect it to a port rated 10 Gbit/s or more (USB 3.1 Gen 2 "
                "or USB 3.2), with a cable rated for that speed. A 5 Gbit/s "
                "port is the most it gets there.";
+    case TR_FW_HUBFS:
+        return "Connect it to a port of this computer, or through a USB 2.0 "
+               "or USB 3 hub, rather than through this Full Speed hub.";
     default:
         return "";
     }

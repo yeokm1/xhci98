@@ -3719,10 +3719,10 @@ const char *inst_tray_list_text(int runState, int action)
 /* Record 25 section 7.6 item 7, record 23 section 9.5 item 7. */
 int inst_fast_default(int nt, INST_U32 major, INST_U32 minor)
 {
-    if (!nt) {
-        return 1;
-    }
-    return major < 6 || (major == 6 && minor <= 3);
+    (void)nt;
+    (void)major;
+    (void)minor;
+    return 1;
 }
 
 int inst_fast_on(int userHave, INST_U32 user, int machineHave,

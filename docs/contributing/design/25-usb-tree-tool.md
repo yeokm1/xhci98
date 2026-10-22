@@ -1565,12 +1565,13 @@ states, the sizing) and the tool's reader and texts of it in
 Revision 16: the "can run faster" decision (`tr_fast_check`: each speed
 against each declared speed, a hub, another controller, no `_EX_V2`, an
 unknown speed byte, 98's `_EX` bytes 3 and 4, each "Where" with a hub
-read and not read), the key and the new-key diff (`tr_fast_key`,
+read and not read, the High Speed case and its qualifier
+(`tr_fast_wants_qual`, `tr_qual_ok`)), the key and the new-key diff (`tr_fast_key`,
 `tr_fast_new`: a device moved, one gone and back, the 32 bound), the
 balloon, the box's entry and its 79 columns (`tr_fast_balloon`,
 `tr_fast_entry`) in `test\test_tr.c`; the default per system and the
-value in force (`inst_fast_default`, `inst_fast_on`: every target's
-version, 10.0 and 6.4, each source's 0, 1, another number and absent) in
+value in force (`inst_fast_default`, `inst_fast_on`: on for every
+target's version, 10.0 and 6.4 included, each source's 0, 1, another number and absent) in
 `test\test_inst.c`, with the installer's switches.
 
 ## 11. Legs

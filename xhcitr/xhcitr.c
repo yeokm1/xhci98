@@ -6110,6 +6110,11 @@ static char fastText[256];
 static int fastBalloon;         /* the last balloon shown was this notice's */
 static int fastRed;             /* the icon shown is the red one            */
 static HICON hIconFast;
+/* The High Speed case's answers (item 1), by key, the oldest replaced. */
+static char qualKey[TR_FAST_MAX][TR_FAST_KEY];
+static int qualVal[TR_FAST_MAX];
+static int qualN;
+static int qualNext;
 
 static void tray_tip(TR_NID *n);
 
@@ -6157,6 +6162,40 @@ static void fast_set(int on)
     RegCloseKey(k);
 }
 
+static void fast_key_of(int k, char *key, size_t cap)
+{
+    const UCTRL *c = &uc[up[k].Ctrl];
+
+    tr_fast_key(key, cap, c->DrvKey[0] ? c->DrvKey : c->Path, up[k].Path,
+                fast_vid(&up[k]), fast_pid(&up[k]));
+}
+
+/* A candidate's device_qualifier (section 7.6 item 1): the answer kept
+ * for its key, else asked once and kept. 1 answered, 0 refused. */
+static int fast_qual(int k)
+{
+    char key[TR_FAST_KEY];
+    unsigned char *b = NULL;
+    DWORD n;
+    int i;
+    int v;
+
+    fast_key_of(k, key, sizeof(key));
+    for (i = 0; i < qualN; i++) {
+        if (strcmp(qualKey[i], key) == 0) {
+            return qualVal[i];
+        }
+    }
+    n = usb_desc(up[k].Hub, up[k].Conn.Port, 6, 0, 0, TR_QUAL_BYTES, &b);
+    v = tr_qual_ok(b, n);
+    free(b);
+    i = qualN < TR_FAST_MAX ? qualN++ : qualNext;
+    qualNext = (i + 1) % TR_FAST_MAX;
+    tr_copy(qualKey[i], key, TR_FAST_KEY);
+    qualVal[i] = v;
+    return v;
+}
+
 /* Port k as tr_fast_check reads it; 1 when it counts, with *f. */
 static int fast_port(int k, TR_FAST *f)
 {
@@ -6178,6 +6217,8 @@ static int fast_port(int k, TR_FAST *f)
         in.HubFlags = h->V2Flags;
         in.HubExSpeed = h->Conn.Speed;
     }
+    in.BcdUsb = (unsigned int)p->Conn.Dev[2] | ((unsigned int)p->Conn.Dev[3] << 8);
+    in.HsQual = tr_fast_wants_qual(&in) ? fast_qual(k) : -1;
     return tr_fast_check(&in, f);
 }
 
@@ -6260,9 +6301,7 @@ static void fast_scan(void)
         if (n >= TR_FAST_MAX) {
             continue;
         }
-        tr_fast_key(key, sizeof(key), uc[up[k].Ctrl].DrvKey[0] ? uc[up[k].Ctrl].DrvKey
-                                                                : uc[up[k].Ctrl].Path,
-                    up[k].Path, fast_vid(&up[k]), fast_pid(&up[k]));
+        fast_key_of(k, key, sizeof(key));
         if (tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN, key)) {
             if (fresh == 0) {
                 first = k;

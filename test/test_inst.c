@@ -2400,9 +2400,9 @@ static void test_fast(void)
     CHECK_EQ(inst_fast_default(1, 6, 1), 1, "7: on");
     CHECK_EQ(inst_fast_default(1, 6, 2), 1, "8: on");
     CHECK_EQ(inst_fast_default(1, 6, 3), 1, "8.1: on");
-    CHECK_EQ(inst_fast_default(1, 6, 4), 0, "6.4: off");
-    CHECK_EQ(inst_fast_default(1, 10, 0), 0, "10: off");
-    CHECK_EQ(inst_fast_default(1, 11, 0), 0, "later: off");
+    CHECK_EQ(inst_fast_default(1, 6, 4), 1, "6.4: on");
+    CHECK_EQ(inst_fast_default(1, 10, 0), 1, "10: on (the owner, 2026-10-22)");
+    CHECK_EQ(inst_fast_default(1, 11, 0), 1, "later: on");
 
     CHECK_EQ(inst_fast_on(1, 0, 1, 1, 1), 0, "the user's 0 over the computer's 1");
     CHECK_EQ(inst_fast_on(1, 1, 1, 0, 0), 1, "the user's 1 over the computer's 0");

@@ -634,6 +634,7 @@ int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value);
 #define TR_FW_HUB1      3   /* behind a Full Speed hub declaring no SS    */
 #define TR_FW_HUB3      4   /* behind a hub declaring SS, running below   */
 #define TR_FW_LINK      5   /* a SuperSpeedPlus device at 5 Gbit/s        */
+#define TR_FW_HUBFS     6   /* a High Speed device behind a Full Speed hub */
 
 /* One port as the scan read it, and its parent hub's own connection. */
 typedef struct _TR_FAST_IN {
@@ -648,6 +649,9 @@ typedef struct _TR_FAST_IN {
     TR_U32 HubFlags;
     unsigned int HubExSpeed;
     int HubKnown;               /* the hub's own connection was read       */
+    unsigned int BcdUsb;        /* the device descriptor's bcdUSB          */
+    int HsQual;                 /* its device_qualifier: -1 not asked, 0
+                                   refused or malformed, 1 answered        */
 } TR_FAST_IN;
 
 typedef struct _TR_FAST {
@@ -662,8 +666,19 @@ typedef struct _TR_FAST {
 int tr_fast_can(int haveV2, TR_U32 flags);
 
 /* 1 when the port holds a device that runs slower than it declares (item
- * 1), with *f filled; 0 otherwise, *f zeroed but Now and Can -1. */
+ * 1), with *f filled; 0 otherwise, *f zeroed but Now and Can -1. The High
+ * Speed case counts only with HsQual 1. */
 int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f);
+
+/* 1 when the port is a High Speed candidate whose device_qualifier the tool
+ * asks for (item 1): an xhci98 port, connected, not a hub, _EX_V2 read and
+ * declaring no SuperSpeed, at Full Speed behind a hub at Full Speed, with
+ * bcdUSB 0x0200 or more. HsQual is not looked at. */
+int tr_fast_wants_qual(const TR_FAST_IN *in);
+
+/* 1 when n bytes are a device_qualifier descriptor: bLength 10, type 6. */
+#define TR_QUAL_BYTES   10
+int tr_qual_ok(const unsigned char *b, size_t n);
 
 /* A speed as the notice names it ("High Speed (480 Mbit/s)",
  * "SuperSpeedPlus (10 Gbit/s or more)"). */

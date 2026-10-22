@@ -563,8 +563,10 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
  * deleted by the uninstall with InstallDir. */
 #define INST_FAST_VALUE     "TrayFasterNotice"
 
-/* 1 when the notice is on by default on this system: 98 SE and ME (nt 0),
- * and NT up to 6.3 (2000 to 8.1); 0 on NT 6.4, 10.0 and later. */
+/* 1 when the notice is on by default on this system: on every system
+ * (the owner, 2026-10-22: under xhci98.sys Windows' own notice appears on
+ * none); the system stays an argument for a reading that says otherwise
+ * (record 25 section 7.6 item 7). */
 int inst_fast_default(int nt, INST_U32 major, INST_U32 minor);
 
 /* The setting in force: the user's DWORD when it is 0 or 1, else the

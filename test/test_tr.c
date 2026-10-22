@@ -2549,6 +2549,75 @@ static void test_fast(void)
     CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB1,
           "a hub without _EX_V2: by its speed");
 
+    /* The High Speed case (the owner, 2026-10-22): at Full Speed behind a
+     * Full Speed hub, asked for its device_qualifier. */
+    in = fast_in(0, TR_SPEED_FULL);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.BcdUsb = 0x0200;
+    in.HsQual = -1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 1, "HS case: a candidate is asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: not asked yet: no");
+    in.HsQual = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: refused: Full Speed only");
+    in.HsQual = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "HS case: answered: counts");
+    CHECK(f.Now == TR_SPEED_FULL && f.Can == TR_SPEED_HIGH &&
+              f.Where == TR_FW_HUBFS && f.HubNow == TR_SPEED_FULL,
+          "HS case: Full Speed, can High, behind a Full Speed hub");
+    in.BcdUsb = 0x0110;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: USB 1.1 is not asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: USB 1.1 never counts");
+    in.BcdUsb = 0x0200;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: behind a High Speed hub: no");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: a Full Speed device there: no");
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.Root = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a root port is never asked");
+    in.Root = 0;
+    in.HubKnown = 0;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a hub not read: not asked");
+    in.HubKnown = 1;
+    in.ExSpeed = TR_SPEED_HIGH;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: at High Speed: no");
+    in.ExSpeed = TR_SPEED_FULL;
+    in.IsHub = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a hub: no");
+    in.IsHub = 0;
+    in.Ours = 0;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: another controller: no");
+    in.Ours = 1;
+    in.V2Flags = TR_V2_F_SS_CAPABLE;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: SuperSpeed-capable: the SS case");
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPER && f.Where == TR_FW_HUB1,
+          "SS-capable at Full Speed behind a Full Speed hub: the SS case");
+    CHECK_EQ(tr_fast_wants_qual(NULL), 0, "HS case: no port");
+    {
+        static const unsigned char q[10] = { 10, 6, 0, 2, 0, 0, 0, 64, 1, 0 };
+        static const unsigned char d[10] = { 18, 1, 0, 2, 0, 0, 0, 64, 1, 0 };
+        CHECK_EQ(tr_qual_ok(q, 10), 1, "qualifier: 10 bytes, type 6");
+        CHECK_EQ(tr_qual_ok(q, 9), 0, "qualifier: short");
+        CHECK_EQ(tr_qual_ok(d, 10), 0, "qualifier: a device descriptor is not one");
+        CHECK_EQ(tr_qual_ok(NULL, 10), 0, "qualifier: none");
+    }
+    in = fast_in(0, TR_SPEED_FULL);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.BcdUsb = 0x0200;
+    in.HsQual = 1;
+    tr_fast_check(&in, &f);
+    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1);
+    CHECK(strcmp(out, "USB Flash Disk (G:) runs at Full Speed (12 Mbit/s) behind "
+                      "a Full Speed hub; it can run at High Speed (480 Mbit/s). "
+                      "Click here for what to try.") == 0, "HS case: the balloon");
+    CHECK(strstr(tr_fast_try(TR_FW_HUBFS), "rather than through this Full Speed hub")
+              != NULL, "HS case: try");
+
     /* The texts. */
     CHECK(strstr(tr_fast_try(TR_FW_PORT2), "fell back to USB 2.0") != NULL,
           "try: a USB 2.0 port");
