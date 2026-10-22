@@ -25,6 +25,7 @@
 #define CM_LIVE_RECOVERY_FAILED  6UL
 #define CM_LIVE_CONTAINED        7UL
 #define CM_LIVE_REVOKED          8UL
+#define CM_LIVE_PREPARING        9UL
 
 /* ======================================================================== */
 /* Text                                                                      */
@@ -1330,6 +1331,7 @@ int tr_snap_add(TR_SNAP *s, TR_U32 nhiKey, const TR_QUERY *q)
     }
     s->NhiKey[s->NhiCount] = nhiKey;
     s->Live[s->NhiCount] = q->Live;
+    s->Stage[s->NhiCount] = tr_d32(q->Rec + CM_ST_O_STAGE);
     s->EpochLo[s->NhiCount] = q->EpochLo;
     s->EpochHi[s->NhiCount] = q->EpochHi;
     s->NhiCount++;
@@ -1451,6 +1453,22 @@ static int tr_first_of(const TR_SNAP *s, int i)
     return 1;
 }
 
+int tr_live_lost(TR_U32 live)
+{
+    switch (live) {
+    case CM_LIVE_SUSPECT:
+    case CM_LIVE_ABSENT:
+    case CM_LIVE_CONFIG_LOST:
+    case CM_LIVE_RECOVERING:
+    case CM_LIVE_RECOVERY_FAILED:
+    case CM_LIVE_CONTAINED:
+    case CM_LIVE_PREPARING:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
 {
     int count = 0;
@@ -1463,8 +1481,9 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
     for (i = 0; i < now->NhiCount; i++) {
         for (k = 0; k < old->NhiCount; k++) {
             if (old->NhiKey[k] == now->NhiKey[i] &&
-                old->Live[k] == CM_LIVE_ACTIVE &&
-                now->Live[i] != CM_LIVE_ACTIVE) {
+                ((old->Live[k] == CM_LIVE_ACTIVE && tr_live_lost(now->Live[i])) ||
+                 (old->Stage[k] == CM_ST_STAGE_ACTIVE &&
+                  now->Stage[i] == CM_ST_STAGE_FAILED))) {
                 count = tr_ev(ev, cap, count, TR_EV_STOPPED, NULL, 0);
             }
         }
@@ -3260,5 +3279,41 @@ const char *tr_mksvc_text(int state)
         return "starting or stopping";
     default:
         return "not read";
+    }
+}
+
+int tr_eject_watch_kind(int admin, int notRemovable, int w2k, int svcState)
+{
+    if (admin || notRemovable) {
+        return TR_EJW_PLAIN;
+    }
+    if (w2k || svcState == TR_SV_ABSENT || svcState == TR_SV_STOPPED) {
+        return TR_EJW_UNCONFIRMED;
+    }
+    return TR_EJW_SERVICE;
+}
+
+TR_U32 tr_eject_watch_ms(int kind)
+{
+    return kind == TR_EJW_SERVICE ? TR_EJW_OWN_MS + 2UL * TR_EJW_MK_IDLE_MS
+                                  : TR_EJW_OWN_MS;
+}
+
+const char *tr_eject_open_text(int kind)
+{
+    switch (kind) {
+    case TR_EJW_SERVICE:
+        return "The PCIe tunnel has not been seen closed yet. It closes if "
+               "the xHCI98 mark service confirms the eject to the Thunderbolt "
+               "driver, which the service does in the background; an eject "
+               "made as an administrator is confirmed by this tool itself.";
+    case TR_EJW_UNCONFIRMED:
+        return "The PCIe tunnel stays up until the device is unplugged, "
+               "because the eject was not confirmed to the Thunderbolt "
+               "driver; an eject made as an administrator is confirmed by "
+               "this tool itself.";
+    default:
+        return "The Thunderbolt driver has not confirmed that the PCIe tunnel "
+               "was closed.";
     }
 }

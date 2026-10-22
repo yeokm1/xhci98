@@ -443,7 +443,14 @@ the USB4 profile, the tool watches the record for up to ten seconds for
 the router's PCIe tunnel to read "torn down after an eject" and says
 which it saw ("The PCIe tunnel was closed." or "The Thunderbolt driver has
 not confirmed that the PCIe tunnel was closed."). Neither changes what
-Windows answered, and neither is the unplug advice of section 5.4. A unit
+Windows answered, and neither is the unplug advice of section 5.4.
+XHCITR run without administrator rights (2026-10-22, from the 43.45
+legs, record 25 section 6.2 step 7) does not confirm its own eject, so
+on XP and later it lets go of the eject mutex, waits up to 30 s for the
+mark service's pass, and otherwise says the tunnel has not been seen
+closed and closes if the mark service confirms the eject; on 2000, or with the service stopped, it
+says the tunnel stays up until the unplug. This tool always runs as an
+administrator and keeps the ten seconds. A unit
 with no child filter reaches nothing in `xhcicm.sys`; its tunnel stays up
 until the unplug.
 

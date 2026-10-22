@@ -144,6 +144,23 @@ static void test_models_rule(void)
     e = env(1, 6, 3, INST_ARCH_AMD64);
     inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
     CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "8.1 x64: NTamd64.6.0");
+    /* Revision 27: Windows 10 reads them too, with no INF change. */
+    e = env(1, 10, 0, INST_ARCH_X86);
+    inst_models_section("CmModels,NTx86.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTx86.6.0"), "10 x86: .NTx86.6.0");
+    inst_models_section("XhciModels,NTx86.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "XhciModels.NTx86.6.0"), "10 x86: xhci98's .NTx86.6.0");
+    inst_models_section("UasModels", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "UasModels"), "10 x86: xhciuas's undecorated");
+    e = env(1, 10, 0, INST_ARCH_AMD64);
+    inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "10 x64: NTamd64.6.0");
+    inst_models_section("Stor98_Models,NTamd64", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "Stor98_Models.NTamd64"), "10 x64: Stor98's NTamd64");
+    inst_models_section("XhciModels,NTamd64,NTamd64.6.0,NTamd64.10.0", &e,
+                        out, sizeof(out));
+    CHECK(inst_eq(out, "XhciModels.NTamd64.10.0"),
+          "10 x64: a .10.0 decoration would outrank .6.0");
 }
 
 /* ---- record 23 sections 4.3 and 4.5: the system, the USB drivers -------- */
@@ -173,16 +190,38 @@ static void test_cm_only(void)
           "8.1: the connection manager alone");
     CHECK(inst_os_kind(1, 6, 4, 9841) == INST_OS_REFUSED,
           "10's previews (6.4): refused");
-    CHECK(inst_os_kind(1, 10, 0, 19045) == INST_OS_REFUSED, "10: refused");
+    /* Revision 27 (task 43.34): 10.0 below build 22000, Server 2016 to
+     * 2022 among them with no Server check; 11 refused. */
+    CHECK(inst_os_kind(1, 10, 0, 10240) == INST_OS_CMONLY, "10 1507");
+    CHECK(inst_os_kind(1, 10, 0, 14393) == INST_OS_CMONLY,
+          "10 1607 / Server 2016");
+    CHECK(inst_os_kind(1, 10, 0, 17763) == INST_OS_CMONLY,
+          "10 1809 / Server 2019");
+    CHECK(inst_os_kind(1, 10, 0, 19045) == INST_OS_CMONLY, "10 22H2");
+    CHECK(inst_os_kind(1, 10, 0, 20348) == INST_OS_CMONLY, "Server 2022");
+    CHECK(inst_os_kind(1, 10, 0, 21999) == INST_OS_CMONLY,
+          "the last build below 11");
+    CHECK(inst_os_kind(1, 10, 0, 22000) == INST_OS_REFUSED,
+          "11 (22000): refused");
     CHECK(inst_os_kind(1, 10, 0, 26100) == INST_OS_REFUSED, "11: refused");
+    CHECK(inst_os_kind(1, 10, 1, 19045) == INST_OS_REFUSED,
+          "10.1: refused");
+    CHECK(inst_os_kind(1, 11, 0, 19045) == INST_OS_REFUSED,
+          "11.0: refused");
+    CHECK(inst_os_kind(0, 10, 0, 19045) == INST_OS_REFUSED,
+          "not NT: refused");
     CHECK(inst_os_kind(1, 7, 0, 0) == INST_OS_REFUSED, "7.0: refused");
-    CHECK(strcmp(inst_os_name(1, 6, 2), "Windows 8") == 0 &&
-          strcmp(inst_os_name(1, 6, 3), "Windows 8.1") == 0 &&
-          strcmp(inst_os_name(1, 6, 1), "Windows 7") == 0 &&
-          strcmp(inst_os_name(1, 5, 2), "Windows XP x64") == 0 &&
-          strcmp(inst_os_name(0, 4, 90), "Windows ME") == 0 &&
-          strcmp(inst_os_name(0, 4, 10), "Windows 98 SE") == 0 &&
-          strcmp(inst_os_name(1, 10, 0), "Windows") == 0, "the names");
+    CHECK(strcmp(inst_os_name(1, 6, 2, 9200), "Windows 8") == 0 &&
+          strcmp(inst_os_name(1, 6, 3, 9600), "Windows 8.1") == 0 &&
+          strcmp(inst_os_name(1, 6, 1, 7601), "Windows 7") == 0 &&
+          strcmp(inst_os_name(1, 5, 2, 3790), "Windows XP x64") == 0 &&
+          strcmp(inst_os_name(0, 4, 90, 3000), "Windows ME") == 0 &&
+          strcmp(inst_os_name(0, 4, 10, 2222), "Windows 98 SE") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 19045), "Windows 10") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 20348), "Windows 10") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 21999), "Windows 10") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 22000), "Windows 11") == 0 &&
+          strcmp(inst_os_name(1, 11, 0, 0), "Windows") == 0, "the names");
 
     /* The USB drivers (section 4.5). */
     /* Draft 20 (task 43.43): every box on every system. */
@@ -257,7 +296,7 @@ static void test_cm_only(void)
                             INST_CW_S98_8, "C:\\XHCI98", text, sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
-              strstr(text, "not been tested on Windows 8 or 8.1") != NULL &&
+              strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
               strstr(text, "Stor98 has not been tested") != NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
@@ -3946,14 +3985,16 @@ static void test_marks(void)
         INST_ENV w8 = env(1, 6, 2, INST_ARCH_AMD64);
         INST_ENV w81 = env(1, 6, 3, INST_ARCH_X86);
         INST_ENV w10 = env(1, 10, 0, INST_ARCH_AMD64);
+        INST_ENV w10x86 = env(1, 10, 0, INST_ARCH_X86);
+        INST_ENV w101 = env(1, 10, 1, INST_ARCH_AMD64);
         INST_ENV w64 = env(1, 6, 4, INST_ARCH_AMD64);
         INST_ENV w98 = env(0, 4, 10, INST_ARCH_X86);
         CHECK(inst_mk_system(&w2k) && inst_mk_system(&w7) &&
               inst_mk_system(&w8) && inst_mk_system(&w81) &&
-              !inst_mk_system(&w10) && !inst_mk_system(&w64) &&
+              inst_mk_system(&w10) && inst_mk_system(&w10x86) &&
+              !inst_mk_system(&w101) && !inst_mk_system(&w64) &&
               !inst_mk_system(&w98),
-              "the mark service: Windows 2000 to 8.1 (8 and 8.1 for the "
-              "connection manager alone)");
+              "the mark service: Windows 2000 to 10 (revision 28)");
     }
     CHECK(inst_mk_end_action(1, 1, 1, 1) == INST_MK_INSTALL &&
           inst_mk_end_action(1, 0, 1, 1) == INST_MK_LEAVE &&
@@ -4162,24 +4203,45 @@ static void test_storage(void)
     stor_fill(st, INST_STOR_ABSENT);
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_NONE &&
           inst_stor_route(INST_STOR_CASE_NONE), "none: the route");
-    CHECK(inst_stor_default(0, 0, st), "none found: ticked");
-    CHECK(!inst_stor_default(1, 0, st), "a recorded No is kept");
+    CHECK(inst_stor_default(0, 0, 0, st), "none found: ticked");
+    CHECK(!inst_stor_default(0, 1, 0, st), "a recorded No is kept");
+    /* NUSB installed (its Uninstall\USB20U entry; owner, 2026-10-22):
+     * unticked with no file found, and over a recorded Yes. */
+    CHECK(!inst_stor_default(1, 0, 0, st), "NUSB installed, none found: unticked");
+    CHECK(!inst_stor_default(1, 1, 1, st),
+          "NUSB installed: a recorded Yes does not tick it");
+    CHECK(!inst_stor_default(1, 1, 0, st), "NUSB installed, a recorded No");
     CHECK(inst_stor_copy_set(1, st, 0) == 0x1FUL,
           "none: the five binaries copied, never an INF");
     CHECK(inst_stor_copy_set(0, st, 0) == 0, "unticked: nothing copied");
     inst_stor_found_text(text, sizeof(text), st);
     CHECK(strstr(text, "Not installed") != NULL, "none: the text");
+    /* The row's note: the same without NUSB; with it, the sentence that
+     * NUSB is installed and the row can be left unticked. */
+    inst_stor_note_text(text, sizeof(text), st, 0);
+    CHECK(strcmp(text, "Not installed: USB disks do not work on Windows 98 "
+                 "SE without them.") == 0, "none, no NUSB: the note");
+    inst_stor_note_text(text, sizeof(text), st, 1);
+    CHECK(strcmp(text, "Not installed: USB disks do not work on Windows 98 "
+                 "SE without them. NUSB is installed on this computer "
+                 "(found its Uninstall\\USB20U entry). It already provides "
+                 "the USB storage drivers, so you can leave this "
+                 "unticked.") == 0, "none, NUSB installed: the note");
 
     stor_fill(st, INST_STOR_SAME);
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE &&
           !inst_stor_route(INST_STOR_CASE_COMPLETE), "complete: nothing");
-    CHECK(!inst_stor_default(0, 0, st), "found: unticked");
-    CHECK(inst_stor_default(1, 1, st), "a recorded Yes is kept");
+    CHECK(!inst_stor_default(0, 0, 0, st), "found: unticked");
+    CHECK(inst_stor_default(0, 1, 1, st), "a recorded Yes is kept");
+    CHECK(!inst_stor_default(1, 0, 0, st), "found, NUSB installed: unticked");
     CHECK(inst_stor_copy_set(1, st, 0) == 0, "complete: nothing copied");
     inst_stor_found_text(text, sizeof(text), st);
     CHECK(strstr(text, "Found installed: USBSTOR.SYS,") != NULL &&
           strstr(text, "left as they are") != NULL &&
           strstr(text, "not known") == NULL, "complete: the text");
+    inst_stor_note_text(text, sizeof(text), st, 1);
+    CHECK(strstr(text, "left as they are. " INST_STOR_NUSB_TEXT) != NULL &&
+          strlen(text) < 300, "complete, NUSB installed: the note");
     st[1] = INST_STOR_OTHER;
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE,
           "complete whatever the bytes");
@@ -4193,7 +4255,7 @@ static void test_storage(void)
     st[INST_STOR_IDX_USBSTOR_INF] = INST_STOR_SAME;
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_SAME &&
           inst_stor_route(INST_STOR_CASE_SAME), "partial, the same: the route");
-    CHECK(!inst_stor_default(0, 0, st), "partial: unticked");
+    CHECK(!inst_stor_default(0, 0, 0, st), "partial: unticked");
     CHECK(inst_stor_copy_set(1, st, 0) == 0x1EUL,
           "partial, the same: only the absent binaries copied");
     inst_stor_found_text(text, sizeof(text), st);
@@ -4223,7 +4285,7 @@ static void test_storage(void)
     stor_fill(st, INST_STOR_OWN);
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_OWN &&
           inst_stor_route(INST_STOR_CASE_OWN), "this installer's: the route");
-    CHECK(inst_stor_default(0, 0, st), "this installer's are not found");
+    CHECK(inst_stor_default(0, 0, 0, st), "this installer's are not found");
     CHECK(inst_stor_copy_set(1, st, 0) == 0,
           "this installer's: nothing present replaced");
     inst_stor_found_text(text, sizeof(text), st);
@@ -4290,10 +4352,13 @@ static void test_storage(void)
                         bad = 1;
                     }
                 }
-                /* The default: ticked exactly when nothing is found. */
-                if (inst_stor_default(0, 0, st) != (found == 0) ||
-                    !inst_stor_default(1, 1, st) ||
-                    inst_stor_default(1, 0, st)) {
+                /* The default: ticked exactly when nothing is found, and
+                 * never while NUSB is installed. */
+                if (inst_stor_default(0, 0, 0, st) != (found == 0) ||
+                    !inst_stor_default(0, 1, 1, st) ||
+                    inst_stor_default(0, 1, 0, st) ||
+                    inst_stor_default(1, 0, 0, st) ||
+                    inst_stor_default(1, 1, 1, st)) {
                     bad = 1;
                 }
                 if (bad) {
@@ -4359,7 +4424,7 @@ static void test_storage(void)
           "without Source: complete");
     inst_stor_norm(st, 1);
     CHECK(st[0] == INST_STOR_OWN && inst_stor_case(st, 0) == INST_STOR_CASE_OWN &&
-          inst_stor_route(inst_stor_case(st, 1)) && inst_stor_default(0, 0, st),
+          inst_stor_route(inst_stor_case(st, 1)) && inst_stor_default(0, 0, 0, st),
           "with Source: this installer's, the route");
     stor_fill(st, INST_STOR_SAME);
     st[1] = INST_STOR_OTHER;

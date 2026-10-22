@@ -1064,6 +1064,7 @@ static void snap_of(TR_SNAP *s, const unsigned char *b, size_t n, TR_U32 live)
 
 static TR_SNAP so;
 static TR_SNAP sn;
+static TR_SNAP s3;
 
 static void test_events(void)
 {
@@ -1251,6 +1252,56 @@ static void test_events(void)
     CHECK_EQ(tr_diff(&sn, &so, ev, 8), 0, "diff: back to ACTIVE is quiet");
     snap_of(&so, qa, n, 0UL);
     CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: OFF to SUSPECT is quiet");
+
+    /* A sleep: ACTIVE, then OFF ("not monitored", CmLiveDisarm), then
+     * ACTIVE after the wake. Nothing failed, so nothing is raised. */
+    snap_of(&so, qa, n, 1UL);
+    snap_of(&sn, qa, n, 0UL);
+    snap_of(&s3, qa, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: ACTIVE to OFF (a sleep) is quiet");
+    CHECK_EQ(tr_diff(&sn, &s3, ev, 8), 0, "diff: OFF to ACTIVE (the wake) is quiet");
+    /* ACTIVE to each loss state raises it, whatever came before. */
+    {
+        static const TR_U32 lost[] = { 2UL, 3UL, 4UL, 5UL, 6UL, 7UL, 9UL };
+        size_t j;
+        for (j = 0; j < sizeof(lost) / sizeof(lost[0]); j++) {
+            snap_of(&sn, qa, n, lost[j]);
+            k = tr_diff(&s3, &sn, ev, 8);
+            CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+                  "diff: ACTIVE (after a wake) to a loss state is STOPPED");
+            CHECK_EQ(tr_live_lost(lost[j]), 1, "a loss state");
+        }
+    }
+    /* Neither a stop's revocation nor a state not known is a loss. */
+    snap_of(&sn, qa, n, 8UL);
+    CHECK_EQ(tr_diff(&s3, &sn, ev, 8), 0, "diff: ACTIVE to REVOKED is quiet");
+    snap_of(&sn, qa, n, 10UL);
+    CHECK_EQ(tr_diff(&s3, &sn, ev, 8), 0, "diff: ACTIVE to an unknown state is quiet");
+    CHECK_EQ(tr_live_lost(0UL), 0, "OFF is no loss");
+    CHECK_EQ(tr_live_lost(1UL), 0, "ACTIVE is no loss");
+    CHECK_EQ(tr_live_lost(8UL), 0, "REVOKED is no loss");
+    /* A loss that persists is raised once. */
+    snap_of(&so, qa, n, 2UL);
+    snap_of(&sn, qa, n, 3UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: SUSPECT to ABSENT is quiet");
+    /* A resume that failed: the liveness stays OFF, the stage goes to
+     * failed (cm_power.c). Raised once, whether or not the sleep's OFF was
+     * sampled in between; a healthy resume (above) stays quiet. */
+    snap_of(&so, qa, n, 1UL);
+    CHECK_EQ(so.Stage[0], CM_ST_STAGE_ACTIVE, "snap: its stage");
+    snap_of(&sn, qa, n, 0UL);
+    sn.Stage[0] = CM_ST_STAGE_FAILED;
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "diff: ACTIVE to OFF with the stage failed is STOPPED");
+    snap_of(&s3, qa, n, 0UL);
+    k = tr_diff(&s3, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "diff: OFF (asleep) to OFF with the stage failed is STOPPED");
+    CHECK_EQ(tr_diff(&sn, &sn, ev, 8), 0, "diff: a failed stage stays quiet");
+    snap_of(&s3, qa, n, 2UL);
+    s3.Stage[0] = CM_ST_STAGE_FAILED;
+    CHECK_EQ(tr_diff(&so, &s3, ev, 8), 1, "diff: a loss and a failed stage, one event");
 
     /* A new epoch is a new set of devices. */
     n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
@@ -2675,6 +2726,61 @@ static void test_marks(void)
     CHECK(strcmp(tr_mksvc_text(99), "not read") == 0, "unknown state");
 }
 
+/* The tunnel watch after an NT eject: who confirms, how long, what is said. */
+static void test_eject_watch(void)
+{
+    int s;
+
+    /* An administrator's run confirms itself: the 10 s watch, every OS and
+     * service state, as before. */
+    for (s = TR_SV_UNREAD; s <= TR_SV_OTHER; s++) {
+        CHECK_EQ(tr_eject_watch_kind(1, 0, 0, s), TR_EJW_PLAIN, "admin, XP+");
+        CHECK_EQ(tr_eject_watch_kind(1, 0, 1, s), TR_EJW_PLAIN, "admin, 2000");
+        CHECK_EQ(tr_eject_watch_kind(0, 1, 0, s), TR_EJW_PLAIN,
+                 "the not-removable route");
+    }
+    /* No administrator, XP and later: the mark service confirms unless it
+     * is known to be down. */
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_RUNNING), TR_EJW_SERVICE,
+             "service running");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_OTHER), TR_EJW_SERVICE,
+             "service starting");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_UNREAD), TR_EJW_SERVICE,
+             "service state not read");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_STOPPED), TR_EJW_UNCONFIRMED,
+             "service stopped");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_ABSENT), TR_EJW_UNCONFIRMED,
+             "service not installed");
+    /* 2000: problem 24 is no confirmation, so the service never writes one. */
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 1, TR_SV_RUNNING), TR_EJW_UNCONFIRMED,
+             "2000, no administrator");
+
+    /* The bound: a tool's own confirmation keeps 10 s; the service's adds
+     * its idle period twice, that period being the service's own. */
+    CHECK_EQ(mk_poll_ms(0), TR_EJW_MK_IDLE_MS, "the service's idle period");
+    CHECK(mk_poll_ms(1) <= TR_EJW_MK_IDLE_MS, "its busy period is shorter");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_PLAIN), 10000UL, "plain bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_UNCONFIRMED), 10000UL, "unconfirmed bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_SERVICE),
+             TR_EJW_OWN_MS + 2UL * mk_poll_ms(0), "service bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_SERVICE), 30000UL, "service bound 30 s");
+
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_PLAIN),
+                 "The Thunderbolt driver has not confirmed that the PCIe "
+                 "tunnel was closed.") == 0, "plain text unchanged");
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_SERVICE),
+                 "The PCIe tunnel has not been seen closed yet. It closes "
+                 "if the xHCI98 mark service confirms the eject to the "
+                 "Thunderbolt driver, which the service does in the "
+                 "background; an eject made as an administrator is confirmed "
+                 "by this tool itself.") == 0, "service text");
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_UNCONFIRMED),
+                 "The PCIe tunnel stays up until the device is unplugged, "
+                 "because the eject was not confirmed to the Thunderbolt "
+                 "driver; an eject made as an administrator is confirmed by "
+                 "this tool itself.") == 0, "unconfirmed text");
+}
+
 int main(void)
 {
     test_printf();
@@ -2695,6 +2801,7 @@ int main(void)
     test_labels();
     test_resources();
     test_marks();
+    test_eject_watch();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {
