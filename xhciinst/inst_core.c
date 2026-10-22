@@ -1207,6 +1207,7 @@ const char *inst_action_text(int action)
     case INST_ACT_FOREIGN: return "another driver: left";
     case INST_ACT_FILTER:  return "add the tunnel-port filter";
     case INST_ACT_UNKNOWN: return "version unreadable: left";
+    case INST_ACT_WINDOWS: return "left for Windows' own UAS driver (xhciuas staged)";
     default:               return "?";
     }
 }
@@ -1543,6 +1544,129 @@ int inst_testsigning(const char *options)
         s += n;
     }
     return 0;
+}
+
+int inst_sig_note_kind(int arch, int nt, INST_U32 major, int osKind)
+{
+    if (!nt || major < 6UL) {
+        return INST_SIG_NONE;
+    }
+    if (arch == INST_ARCH_AMD64) {
+        return INST_SIG_X64;
+    }
+    return osKind == INST_OS_CMONLY ? INST_SIG_X86_SB : INST_SIG_NONE;
+}
+
+const char *inst_sig_x86_sb_text(void)
+{
+    return "NOTE: with Secure Boot on in the computer's firmware setup, this "
+           "Windows loads\nonly signed drivers, and this package's 32-bit "
+           "drivers are not signed. With\nSecure Boot on, turn it off there, "
+           "or start with Advanced startup,\nTroubleshoot, Startup Settings, "
+           "\"Disable driver signature enforcement\",\nat every start; "
+           "test-signing mode does not help. A computer that starts\nfrom a "
+           "legacy BIOS has no Secure Boot, and the drivers load as on "
+           "Windows 7.\n";
+}
+
+int inst_cm_boot_gate(int arch, int osKind, int cmSigned, int tsOn)
+{
+    if (arch != INST_ARCH_AMD64 || osKind != INST_OS_CMONLY) {
+        return INST_CMBOOT_NONE;
+    }
+    return (cmSigned == 1 && tsOn) ? INST_CMBOOT_WARN : INST_CMBOOT_REFUSE;
+}
+
+const char *inst_cm_boot_warn_text(void)
+{
+    return "This Windows makes the connection manager a boot driver (it "
+           "filters a PCI\nbridge). Keep test-signing mode on, and Secure Boot "
+           "off, while it is installed:\nstarted without test-signing mode, "
+           "Windows stops in Automatic Repair until a\nstart with driver "
+           "signature enforcement disabled (Advanced startup,\n"
+           "Troubleshoot, Advanced options, Startup Settings, Restart, "
+           "then 7). From such a\nstart, turn test-signing mode on again or run the "
+           "uninstall.\n";
+}
+
+const char *inst_cm_boot_refuse_text(void)
+{
+    return "REFUSED: on this 64-bit Windows the connection manager is "
+           "installed only in\ntest-signing mode, from a test-signed package. "
+           "Windows makes it a boot driver,\nand a start that cannot load it "
+           "does not finish (Automatic Repair). Turn\ntest-signing mode on - "
+           "Secure Boot off in the firmware setup, then in an\nelevated "
+           "Command Prompt: bcdedit /set testsigning on  - restart, and run "
+           "this\nagain. Nothing was changed.\n";
+}
+
+const char *inst_stage_error_text(INST_U32 err, int arch, int osKind)
+{
+    if (err != INST_E_NO_CATALOG || arch != INST_ARCH_AMD64 ||
+        osKind != INST_OS_CMONLY) {
+        return NULL;
+    }
+    return "This 64-bit Windows installs a driver package only with a signed "
+           "catalog, even\nin test-signing mode, and this package's INFs have "
+           "none (its x64 drivers carry\nthe project's test signature in the "
+           "files themselves). To install it, keep\ntest-signing mode on, "
+           "start once with driver signature enforcement disabled -\n"
+           "Advanced startup, Troubleshoot, Advanced options, Startup "
+           "Settings,\nRestart, then 7 - and run the installer again. Later "
+           "starts need only\ntest-signing mode.";
+}
+
+int inst_sb_state(int found, INST_U32 type, INST_U32 value)
+{
+    if (!found || type != INST_REG_DWORD_TYPE) {
+        return INST_SB_UNKNOWN;
+    }
+    if (value == 1UL) {
+        return INST_SB_ON;
+    }
+    return value == 0UL ? INST_SB_OFF : INST_SB_UNKNOWN;
+}
+
+int inst_sb_applies(int nt, int osKind)
+{
+    return nt && osKind == INST_OS_CMONLY;
+}
+
+const char *inst_sb_text(int arch, int state)
+{
+    if (arch == INST_ARCH_AMD64) {
+        if (state == INST_SB_ON) {
+            return "Secure Boot is on: Windows does not load the test-signed "
+                   "drivers, and\ntest-signing mode cannot be turned on, until "
+                   "you turn Secure Boot off in the\ncomputer's firmware setup. "
+                   "Until then only a start with driver signature\n"
+                   "enforcement disabled loads them (Advanced startup, "
+                   "Troubleshoot, Startup\nSettings, at every start).\n";
+        }
+        if (state == INST_SB_OFF) {
+            return "Secure Boot is off: test-signing mode can be turned on (an "
+                   "elevated Command\nPrompt: bcdedit /set testsigning on, then "
+                   "restart).\n";
+        }
+        return NULL;
+    }
+    if (state == INST_SB_ON) {
+        return "Secure Boot is on: Windows refuses this package's unsigned "
+               "32-bit drivers.\nTurn Secure Boot off in the computer's "
+               "firmware setup, or start with Advanced\nstartup, Troubleshoot, "
+               "Startup Settings, \"Disable driver signature\nenforcement\", "
+               "at every start; test-signing mode does not help.\n";
+    }
+    if (state == INST_SB_OFF) {
+        return "Secure Boot is off: the unsigned 32-bit drivers load as on "
+               "Windows 7.\n";
+    }
+    return NULL;
+}
+
+int inst_ts_confirmed(int tsOption, int sbState)
+{
+    return tsOption && sbState != INST_SB_ON;
 }
 
 /* ======================================================================== */
@@ -3416,7 +3540,7 @@ int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build)
     if (major == 6UL && (minor == 2UL || minor == 3UL)) {
         return INST_OS_CMONLY;
     }
-    /* Revision 27: 11 reports 10.0 too, from build 22000, and has a USB4
+    /* Revision 28: 11 reports 10.0 too, from build 22000, and has a USB4
      * connection manager of its own. No Server check (owner, 2026-10-20). */
     if (major == 10UL && minor == 0UL && build < INST_OS_BUILD_W11) {
         return INST_OS_CMONLY;
@@ -3450,6 +3574,14 @@ int inst_uas_decide(int usbInclude, int noUas)
     return usbInclude && !noUas;
 }
 
+int inst_uas_nt6_action(int osKind, int action)
+{
+    if (osKind == INST_OS_CMONLY && action == INST_ACT_INSTALL) {
+        return INST_ACT_WINDOWS;
+    }
+    return action;
+}
+
 int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
                     int *offered, const char **refusal)
 {
@@ -3464,9 +3596,12 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
         return -1;
     }
     if (osKind == INST_OS_CMONLY) {
-        if (!haveCm) {
-            *refusal = "this package carries no Thunderbolt or USB4 driver: "
-                       "there is nothing to install on Windows 8, 8.1 or 10.";
+        /* Without the connection manager (owner, 2026-10-22, record 26
+         * section 5.3.1 case 5): warned, and the run goes on with what
+         * the package has. */
+        if (!haveCm && cmOnly) {
+            *refusal = "/cmonly: this package carries no Thunderbolt or USB4 "
+                       "driver.";
             return -1;
         }
         *offered = 1;
@@ -3488,11 +3623,14 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
     return cmOnly ? 0 : 1;
 }
 
-INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
-                            int s98)
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
+                            int usb, int stor, int s98)
 {
     INST_U32 w = 0;
 
+    if (is8 && !haveCm) {
+        w |= INST_CW_NOCM8;
+    }
     if (stor && !is98se) {
         w |= INST_CW_STOR;
     }
@@ -3558,7 +3696,17 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "every xHCI controller, the one your keyboard and mouse "
                       "may use included. The uninstall is meant to give the "
                       "controllers back to Windows' own driver; that has not "
-                      "been tested either.");
+                      "been tested either. There the UAS disk driver, when "
+                      "ticked, is only staged: Windows' own UAS driver stays "
+                      "the default, and xhciuas.sys can be chosen for a disk "
+                      "in Device Manager.");
+    }
+    if (set & INST_CW_NOCM8) {
+        inst_cat_para(out, cap,
+                      "This package carries no Thunderbolt 3 / USB4 driver. "
+                      "On Windows 8, 8.1 and 10 it installs only what is ticked: "
+                      "the xHCI98 tools, and the xHCI98 USB drivers if their "
+                      "box is ticked.");
     }
     if (set & INST_CW_S98_8) {
         inst_cat_para(out, cap,
@@ -5165,6 +5313,13 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "3 driver keeps running the USB controllers. Nothing is changed until "
       "you click Install on the Summary page. Help opens the readme.",
       284, 58 },
+    { INST_PT_WELCOME_TOOLS,
+      "This puts the xHCI98 tools in a folder you choose, and installs the "
+      "xHCI98 USB 3.x drivers only if you tick them on the next page "
+      "(untested on this Windows, where its own USB 3 driver runs the "
+      "controllers). Nothing is changed until you click Install on the "
+      "Summary page. Help opens the readme.",
+      284, 58 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "
       "replaces it (untested here).",
@@ -6127,6 +6282,69 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
     return set;
 }
 
+const unsigned char instStorSilent[INST_STOR_SILENT_COUNT][4] = {
+    { 0xC3, 0x08, 0x02, 0x50 },
+    { 0xC3, 0x08, 0x05, 0x50 },
+    { 0xC3, 0x08, 0x06, 0x50 }
+};
+
+INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
+                              const int *valid, int n)
+{
+    INST_U32 set = 0;
+    int k;
+    int i;
+    int found;
+
+    for (k = 0; k < INST_STOR_SILENT_COUNT; k++) {
+        found = 0;
+        for (i = 0; i < n && !found; i++) {
+            found = valid[i] && memcmp(have[i], instStorSilent[k], 4) == 0;
+        }
+        if (!found) {
+            set |= 1UL << k;
+        }
+    }
+    return set;
+}
+
+int inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                          void *ctx, char *out, size_t cap)
+{
+    unsigned long n = (unsigned long)k + 1UL;
+    char num[16];
+    int d;
+    int tries;
+    int r;
+    unsigned long t;
+
+    for (tries = 0; tries < 1000; tries++) {
+        /* "XHCI98S" and the number in decimal, built by hand (no stdio in
+         * the pure half). */
+        d = 0;
+        t = n;
+        do {
+            num[d++] = (char)('0' + (int)(t % 10UL));
+            t /= 10UL;
+        } while (t != 0UL && d < 15);
+        inst_copy(out, "XHCI98S", cap);
+        while (d > 0 && strlen(out) + 1 < cap) {
+            size_t l = strlen(out);
+            out[l] = num[--d];
+            out[l + 1] = '\0';
+        }
+        r = taken == NULL ? 0 : taken(out, ctx);
+        if (r < 0) {
+            return 0;
+        }
+        if (r == 0) {
+            return 1;
+        }
+        n += INST_STOR_SILENT_COUNT;
+    }
+    return 0;
+}
+
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
 {
     INST_U32 set = 0;
@@ -6141,6 +6359,85 @@ INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
         set |= 1UL << INST_STOR_IDX_USBNTMAP_INF;
     }
     return set;
+}
+
+const int instStorCopyOrder[INST_STOR_COUNT] = {
+    0, 1, 2, 3, 4, INST_STOR_IDX_USBNTMAP_INF, INST_STOR_IDX_USBSTOR_INF
+};
+
+int inst_stor_rm_late(const char *name, const char *sha256)
+{
+    const INST_STOR_FILE *f = &instStorFile[INST_STOR_IDX_USBNTMAP_INF];
+
+    if (name != NULL) {
+        return inst_eq(name, f->Name);
+    }
+    return sha256 != NULL && inst_eq(sha256, f->Sha256);
+}
+
+int inst_stor_pair(int stor, int ntmap)
+{
+    if (stor < 0 || ntmap < 0) {
+        return -1;
+    }
+    if (stor) {
+        return ntmap ? INST_STOR_PAIR_BOTH : INST_STOR_PAIR_STOR;
+    }
+    return ntmap ? INST_STOR_PAIR_NTMAP : INST_STOR_PAIR_NONE;
+}
+
+int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair)
+{
+    return copyOk && ntmapPkg == 1 && infPair >= 0 &&
+           infPair != INST_STOR_PAIR_STOR;
+}
+
+int inst_stor_half(int pair, int placed)
+{
+    if (pair == INST_STOR_PAIR_BOTH || pair == INST_STOR_PAIR_NONE) {
+        return INST_STOR_HALF_NONE;
+    }
+    if (pair < 0 || placed <= 0) {
+        return INST_STOR_HALF_STEP;
+    }
+    return INST_STOR_HALF_WITHDRAW;
+}
+
+int inst_stor_scan(int found, int unread, int incomplete)
+{
+    if (found) {
+        return 1;
+    }
+    return (unread || incomplete) ? -1 : 0;
+}
+
+int inst_stor_pair_warn(int pair)
+{
+    return pair < 0 || pair == INST_STOR_PAIR_STOR;
+}
+
+int inst_stor_half_default(int def, int usb20u, int pair, int route)
+{
+    if (usb20u) {
+        return 0;
+    }
+    if (pair == INST_STOR_PAIR_STOR && route) {
+        return 1;
+    }
+    return def != 0;
+}
+
+const char *inst_stor_half_text(int fixable)
+{
+    return fixable ?
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
+        "own NTMAP.INF would take a new USB disk and stop Windows. Installing "
+        "these drivers puts USBNTMAP.INF beside it; until then, plug in no "
+        "new USB disk." :
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
+        "own NTMAP.INF would take a new USB disk and stop Windows. This run "
+        "cannot complete the pair: remove that copy of USBSTOR.INF before "
+        "plugging in a new USB disk.";
 }
 
 static void inst_stor_names(char *out, size_t cap,
@@ -6240,20 +6537,9 @@ int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
     return INST_STOR_KIND_NONE;
 }
 
-int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
-                         const char *portDriver, const char *ntmpDriver,
-                         const char *infPath, int infInWindowsInf)
+int inst_stor_unit_takes(int hasDriver)
 {
-    if (!hasDriver) {
-        return 1;
-    }
-    if (!readable || cls == NULL || portDriver == NULL ||
-        ntmpDriver == NULL || infPath == NULL) {
-        return 0;
-    }
-    return inst_eq(cls, "DiskDrive") && portDriver[0] == '\0' &&
-           ntmpDriver[0] == '\0' && inst_eq(infPath, "DISKDRV.INF") &&
-           infInWindowsInf;
+    return !hasDriver;
 }
 
 int inst_stor_adoptable(int published, int beforeOk, int inBefore,

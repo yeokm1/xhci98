@@ -344,9 +344,9 @@ renders no banner.
 The project test certificate's .pfx (design record 19; owner, 2026-10-11).
 **Required of every cut that publishes an x64 directory**, and refused with no
 switch past it when absent: each x64 leg's make-package.ps1 run is passed it,
-signs xhci98.sys and xhciuas.sys at staging (SHA-1 file digest, no timestamp,
-no catalog, the INFs unchanged) and stages xhci98-test.cer, the certificate's
-public half, beside them. This script then holds each published x64 binary to
+signs xhci98.sys and xhciuas.sys at staging (SHA-1 file digest, no timestamp),
+makes and signs one catalog per INF (since 3.2.0.0, design record 19 section
+3a) and stages xhci98-test.cer, the certificate's public half, beside them. This script then holds each published x64 binary to
 that signature by this key's thumbprint and to the build's bytes, and the
 published certificate to this key's. The password is read from
 XHCI98_TESTSIGN_PW or, where that is unset, a prompt that does not echo, once,
@@ -1216,6 +1216,11 @@ function Assert-ReportBatchContent {
 # has none, so it is accepted where present and not required of one. Never
 # the .pfx, which holds the private key and is never staged.
 $certPublishable = @("xhci98-test.cer")
+# The x64 catalogs (design record 19 section 3a; owner, 2026-10-22): one per
+# INF of a signed x64 directory, beside it, published since 3.2.0.0, made and
+# signed by make-package.ps1 and held here to Test-CatalogOfPackage on the
+# directory that is published. A version published before 3.2.0.0 has none.
+$catPublishable = @($script:PackageCatalogs.Keys)
 
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
@@ -1525,7 +1530,10 @@ function Get-DeclaredMediaLayout {
     param(
         [Parameter(Mandatory = $true)][string]$InfPath,
         [Parameter(Mandatory = $true)][ValidateSet("x86", "amd64")][string]$Arch,
-        [Parameter(Mandatory = $true)][string]$Label
+        [Parameter(Mandatory = $true)][string]$Label,
+        # A published tree's version, for the gate's rules that changed with
+        # one (BOTH-CATALOG from 3.2.0.0); empty: this tree's INF.
+        [string]$PublishedVersion = ""
     )
 
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
@@ -1540,9 +1548,11 @@ function Get-DeclaredMediaLayout {
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $out = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
-                                      "-InfPath", $InfPath, "-Arch", $Arch,
-                                      "-EmitMediaLayout", $layoutFile) 2>&1 | Out-String
+            $pvArgs = @()
+            if ($PublishedVersion -ne "") { $pvArgs = @("-PublishedVersion", $PublishedVersion) }
+            $out = & powershell.exe (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
+                                       "-InfPath", $InfPath, "-Arch", $Arch,
+                                       "-EmitMediaLayout", $layoutFile) + $pvArgs) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
         }
@@ -2393,7 +2403,7 @@ their defaults.
         $legLayouts[$legDir] = Get-DeclaredMediaLayout `
             -InfPath (Join-Path $PublishedRoot (Join-Path $legDir $infName)) `
             -Arch $LegArches[$legDir] `
-            -Label "the published $legDir\$infName"
+            -Label "the published $legDir\$infName" -PublishedVersion $Version
     }
     $mediaLayout = $legLayouts[$Flavors[0]]
 
@@ -2444,7 +2454,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File -Filter "stor98*" | ForEach-Object { $_.Name } }))
+                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File -Filter "stor98*" | ForEach-Object { $_.Name } }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2509,7 +2519,7 @@ asset has to be assembled by the cut that publishes it.
         try {
             $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
                                           "-InfPath", $flavorInf, "-Arch", $LegArches[$f],
-                                          "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+                                          "-PackageDir", $uploadFlavorDir, "-PublishedVersion", $Version) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
         }
@@ -2527,6 +2537,17 @@ $gateOut
 
         Write-Ok ("{0}\ is complete install media, by its own INF" -f $f)
 
+        # The x64 catalogs (design record 19 section 3a), required of an x64
+        # directory published from 3.2.0.0 and judged against the pinned
+        # project certificate, since -UploadSetOnly has no key to compare.
+        if ($LegArches[$f] -eq "amd64" -and [version]$Version -ge [version]"3.2.0.0") {
+            $catWhy = Test-CatalogOfPackage -Dir $uploadFlavorDir -Thumbprint $script:TestSignThumbprint
+            if ($catWhy -ne "") {
+                throw "the assembled upload set's $f\ directory does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Do not upload it."
+            }
+            Write-Ok ("{0}\ carries a catalog per INF, signed by the project test certificate" -f $f)
+        }
+
         # The UAS pair, by its own INF and gate. Required of a directory this
         # cut built; gated where present in one -UploadSetOnly reads, since a
         # version published before 2.0.0.0 has none.
@@ -2538,7 +2559,7 @@ $gateOut
             try {
                 $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $uasGate,
                                               "-InfPath", $uasInf, "-Arch", $LegArches[$f],
-                                              "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+                                              "-PackageDir", $uploadFlavorDir, "-PublishedVersion", $Version) 2>&1 | Out-String
             } finally {
                 $ErrorActionPreference = $savedEap
             }
@@ -3562,7 +3583,10 @@ runs are what stand between a broken binary and a guest that cannot boot.
 
             $legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)
             $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $legStor98
-            if ($legSigned) { $legCopy += $certPublishable }
+            if ($legSigned) {
+                $legCopy += $certPublishable
+                $legCopy += @($catPublishable | Where-Object { $legCopy -contains $script:PackageCatalogs[$_].Inf })
+            }
             foreach ($name in $legCopy) {
                 $src = Join-Path $pkgDir $name
                 if (-not (Test-Path -LiteralPath $src)) {
@@ -3589,7 +3613,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                                -PublishedPaths $declaredPublished[$leg.Arch] `
                                                -InfName "xhci98.inf" -Flavor $leg.Id `
-                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
+                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable + $catPublishable } else { @() }) + $legStor98)
             Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
             # The published Stor98 images carry this release's version, like
             # xhci98.sys below (task 42-A.30).
@@ -3607,6 +3631,16 @@ runs are what stand between a broken binary and a guest that cannot boot.
                           (Get-FileHash -LiteralPath $nvBuilt -Algorithm SHA256).Hash) {
                     throw "the $($leg.Dir)\$nvRel about to be published is not the build at '$nvBuilt'."
                 }
+            }
+            # Each catalog of a signed leg covers its INF and that INF's files
+            # as they are published, signed by this cut's key (record 19
+            # section 3a): Windows 8 to 10 x64 install nothing without it.
+            if ($legSigned) {
+                $catWhy = Test-CatalogOfPackage -Dir $destDir -Thumbprint $testSignCert.Thumbprint
+                if ($catWhy -ne "") {
+                    throw "the $($leg.Dir)\ directory about to be published does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Re-run the cut with the key; never make or sign a catalog by hand."
+                }
+                Write-Ok ("{0}\ carries a catalog per INF, signed by the project test certificate {1}" -f $leg.Dir, $testSignCert.Thumbprint)
             }
             # The certificate beside a signed leg's binaries must be this key's
             # public half, byte for byte - the one a user would inspect or import.
@@ -4109,6 +4143,8 @@ cuts without the tool on a host that cannot build it.
             Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhcitr\xhcitr.ico")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_ejask.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
         foreach ($name in ($instExes + $rootExes)) {
@@ -4178,6 +4214,9 @@ cuts without the tool on a host that cannot build it.
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.h")) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_ej9x.c")) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_ej9x.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_ejask.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")))
@@ -4451,6 +4490,8 @@ helper (xhciinst\di\build.cmd).
         } else {
             $contents += "      xhci98-test.cer (the test certificate both .sys files are"
             $contents += "                   signed with; you need not import it; section 4)"
+            $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
+            $contents += "                   it: Windows 8, 8.1 and 10 x64 need them; section 4)"
         }
         $contents += ""
     }
@@ -4764,6 +4805,10 @@ other.
         Importing it is not needed: test-signing mode works without it,
         and it does not remove the install prompt either. It is not
         recommended.
+      - Each INF of an X64 directory has a catalog beside it (xhci98.cat
+        and the others), signed with the same certificate. Windows 8, 8.1
+        and 10 x64 install no driver package without one in test-signing
+        mode; keep the .cat files with the INFs.
       - F8 -> Disable Driver Signature Enforcement still works as before,
         for one start, without test mode.
       - 32-bit Vista and 7, and XP x64, need neither.
@@ -5118,19 +5163,27 @@ and NUSB 3.6 install:
 
   THE SEVEN FILES CAN ALSO BE INSTALLED ON THEIR OWN, without the rest of
   NUSB: point the Add New Hardware Wizard, or Update Driver on the device,
-  at a folder holding them. ON THE FIRST STORAGE DEVICE, ONE STEP IS NOT
-  OBVIOUS. Windows gives the new disk its own generic "Disk drive" before it
-  has seen USBNTMAP.INF, and no drive letter appears. Then:
+  at a folder holding them. FIRST COPY USBNTMAP.INF INTO C:\WINDOWS\INF,
+  BEFORE THE FIRST USB DISK IS PLUGGED IN. The wizard takes USBSTOR.INF
+  from the folder but not USBNTMAP.INF, and on a stock Windows 98 SE the
+  disk is then taken by Windows' own NTMAP.INF, which copies NTMAPHLP.PDR
+  from the Windows CD; Windows stops with "Invalid VxD dynamic link call
+  from NTMAPHLP" and hangs, even with all seven in the folder. The
+  installer's storage row places and removes the two together, and says
+  so if it finds USBSTOR.INF left in the INF folder without USBNTMAP.INF.
+
+  With USBNTMAP.INF in C:\WINDOWS\INF first, the storage devices tried,
+  USB sticks and UAS disks, worked with no extra step. On a Windows 98 SE
+  that still held
+  NUSB's other files (IOS.VXD, DISKTSD.VXD, NTMAP.SYS), a disk installed
+  before USBNTMAP.INF was seen went to Windows' generic "Disk drive" with
+  no drive letter instead. Then:
 
     1. Device Manager -> Disk drives -> "Disk drive" -> Driver -> Update
        Driver, pointed at the same folder. It installs "USB Disk".
     2. Unplug the device and plug it back in.
 
-  After that the storage devices tried, USB sticks and UAS disks, worked
-  with no extra step. THIS WAS READ ONLY ON A WINDOWS 98 SE THAT STILL HELD
-  NUSB'S OTHER FILES (IOS.VXD, DISKTSD.VXD, NTMAP.SYS). Whether a stock
-  Windows 98 SE installed from the CD needs any of those too is not yet
-  known; if storage does not work there, install NUSB 3.3 or 3.6.
+  If storage does not work, install NUSB 3.3 or 3.6.
 
 On Windows ME, Windows' own storage files serve USB sticks: they are copied
 from the Windows ME CABs when the first stick installs. UAS disks need the

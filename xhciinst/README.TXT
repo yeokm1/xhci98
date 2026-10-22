@@ -144,13 +144,19 @@ needs NUSB 3.3's seven storage files, which a download built with them
 carries in its NUSB33\ folder. The row for them is ticked when none of
 the seven is found, and unticked when any of them is there or NUSB is
 installed (its Uninstall\USB20U entry; whatever an earlier run chose;
-/storage still ticks it); the installer never copies over a file
+/storage still ticks it). With NUSB not installed, a USBSTOR.INF found
+in Windows' INF folders without USBNTMAP.INF ticks it, and the row says
+that such a USBSTOR.INF lets Windows' own NTMAP.INF take a new USB disk
+and stop Windows; a run that ends with it still alone says so and leaves
+a step. The installer never copies over a file
 already present, and with only some
 of the seven found, one of them not this download's, it copies nothing
 and says the storage install is not complete. It installs a stick at
-"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". It
-also puts the two INFs, USBSTOR.INF and USBNTMAP.INF, in Windows' INF
-folder where NUSB's installer puts them, never over a file of that name,
+"Unknown Device" with the two INFs in place. It also puts the two INFs,
+USBSTOR.INF and USBNTMAP.INF, in Windows' INF folder where NUSB's
+installer puts them, USBNTMAP.INF first and never one without the other
+(USBSTOR.INF alone lets Windows' own NTMAP.INF take a disk, which stops a
+stock Windows 98 SE), never over a file of that name,
 so that a USB disk plugged in later is meant to install without the New
 Hardware wizard. The uninstall removes the files it copied, the INFs it
 put in the INF folder, the copies Windows made of their INFs for it and
@@ -274,7 +280,11 @@ lets you turn on only with Secure Boot off in the computer's firmware
 setup, or on a start with driver signature enforcement disabled (as on
 Windows 8 above); with Secure Boot on, Windows 10 from 1607 loads only
 drivers Microsoft has signed (and some older cross-signed ones), and this
-package's are neither. Whether 32-bit
+package's are neither. The 64-bit package carries a catalog for each
+driver (xhci98.cat and the others, from 3.2.0.0), signed with the same
+test certificate: Windows 8, 8.1 and 10 x64 refuse a 64-bit driver
+package without one in test-signing mode (error 0xE000022F; design record
+23 section 5.12), so keep the .cat files beside the INFs. Whether 32-bit
 Windows 10 with Secure Boot on refuses this package's 32-bit drivers,
 which are not signed, has not been read.
 
@@ -310,7 +320,8 @@ On Vista x64 and 7 x64 the drivers are test-signed: they load in
 test-signing mode (bcdedit /set testsigning on, then restart) or on a
 start where F8 chose "Disable Driver Signature Enforcement"; on 8, 8.1
 and 10 x64 test-signing mode needs Secure Boot off first (above). The
-installer says whether it could confirm test-signing mode; it never changes it.
+installer says whether it could confirm test-signing mode; it never
+changes it.
 
 The options
 -----------

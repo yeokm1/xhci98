@@ -1,6 +1,25 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+Status: revision 33, 2026-10-22 (the owner's decisions of that day on
+43.33's reading: the x64 package carries a test-signed catalog per INF,
+which the tool copies with its INF, and the refusal under Secure Boot is
+taken from Microsoft's documented policy; sections 5.10 and 5.12, design
+record 19 section 3a); revision 32, 2026-10-22 (roadmap-usb4 task 43.42, the owner:
+the storage row does not preselect XhciSilentInstall, section 8.4);
+revision 31, 2026-10-22 (roadmap-usb4 task 43.43, the owner: on
+8 and 8.1 a package without the connection manager warned, not refused,
+section 4.5); revision 30, 2026-10-22 (roadmap-usb4 task 43.22, section
+5.10: on 64-bit Windows 8 and 8.1 the connection manager installed only
+from a test-signed package in test-signing mode, Windows making it a
+boot driver; the catalog refusal explained; the Secure Boot note for
+32-bit 8 and 8.1; Secure Boot's state read and shown there, record 26
+section 5.3.2; keyed on the system's kind, so 10 takes them);
+revision 29, 2026-10-22 (roadmap-usb4 task 43.42, option A,
+record 26 draft 24 section 6.5.12: with the 98 SE storage row the
+Bulk-Only SilentClasses entries added and recorded, and XhciSilentInstall
+preselected 1 machine-wide where none is set - the console's question
+replaced by that preselection, section 8.3; the uninstall removes the
+entries it added, section 9); revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
 owner's decisions of 2026-10-20: Windows 10, NT 10.0 below build 22000,
 admitted beside 8 and 8.1, Windows Server 2016 to 2022 as 10 with no
 Server check, 11 still refused; sections 4.3, 4.5 and 5.10; record 26
@@ -810,8 +829,10 @@ tunnel brings are driven by whatever driver Windows binds to them.
 the owner's decision of 2026-10-21: every component on every system,
 the defaults as they are, a warning where one does not apply.) The table
 becomes, with `inst_usb_decide` refusing nothing but a `/cmonly` with no
-connection manager in the package, `/usb` with `/cmonly`, and a package
-without the connection manager on 8 and 8.1:
+connection manager in the package and `/usb` with `/cmonly` (revision 31,
+owner 2026-10-22: a package without the connection manager on 8 and 8.1
+is no longer refused; the run warns, record 26 section 5.3.1 case 5, and
+goes on with the USB drivers' box and the tools):
 
 | System | The USB drivers | `/cmonly` |
 |---|---|---|
@@ -1467,7 +1488,7 @@ the other way is Advanced startup's Startup Settings, "Disable driver
 signature enforcement", at every start. The same reading of
 `SystemStartOptions` is made; it is unread on 8 and 8.1.
 
-Revision 27 (roadmap-usb4 task 43.36; the owner, 2026-10-20: test-signing,
+Revision 28 (roadmap-usb4 task 43.36; the owner, 2026-10-20: test-signing,
 documented by the installer, Secure Boot off, no Microsoft attestation
 for now): on Windows 10 x64 the note is 8 and 8.1 x64's, in whichever
 run, the USB drivers' or the connection manager's alone - the x64
@@ -1493,6 +1514,136 @@ these drivers when on, which the note names only if 43.33 (d) finds it
 does. Whether the tool reads Secure Boot's state to say which case
 applies is record 26 section 5.3.2's design.
 
+Revision 30 (roadmap-usb4 task 43.22, 2026-10-22; `runs/run-43.md`,
+"43.22"). Read on a Windows 8 Pro x64 guest (QEMU, SeaBIOS, so no Secure
+Boot; test-signing mode on; the emulator's Thunderbolt 3 NHI) with the
+published `3.1.0.0` package and its `INSTALL /console /cmonly /yes`, two
+facts revision 13 did not have, both **runtime** (Windows' own setup log
+and service configuration, read in the guest):
+
+1. **No catalog, no install.** In test-signing mode `SetupCopyOEMInf`
+   refused `xhcicm.inf` with `0xE000022F` (`setupapi.dev.log`: "Driver
+   package does not contain a catalog file, and Code Integrity is in Test
+   Signing mode"), and the run ended "No changes were made", exit 2. On
+   Vista and 7 the same package installs after Windows' "can't verify the
+   publisher" prompt (record 19 section 7); Windows 8 x64 accepts a package
+   with no catalog only on a start with driver signature enforcement
+   disabled (Advanced startup, Troubleshoot, Advanced options, Startup
+   Settings, Restart, 7), where the same run showed the prompt for each of
+   the two INFs ("Driver package does not contain a catalog file, but user
+   wants to install anyway") and ended with the NHI started on `xhcicm`,
+   the tunnel port filtered and `xhcimark` running, exit 3.
+2. **The connection manager becomes a boot driver.** Installing
+   `xhcicmf.inf` on the bridge, whose function driver `pci` is boot start,
+   made the setup engine rewrite `xhcicm`'s start type
+   (`setupapi.dev.log`: "Updated service 'xhcicm' to be boot start"; `sc
+   qc xhcicm`: `BOOT_START`, the INF's `StartType=3` notwithstanding). The
+   next start, with test-signing mode turned off, did not reach the desktop:
+   Windows went to "Attempting repairs" (Automatic Repair) and stayed
+   there through two launches of the guest, over an hour; the way back
+   from there (a start with enforcement disabled) is unread. 32-bit 8 and
+   64-bit 8.1 made `xhcicm` boot start the same way (8.1 x64 then started in
+   test-signing mode with the NHI on `xhcicm`).
+
+So on 8 and 8.1 x64 the tool now, in place of revision 13's note:
+
+- **refuses the connection manager** - in a run without the USB drivers
+  and in one with them alike - unless the x64 `xhcicm.sys` carries a
+  signature and `SystemStartOptions` holds `TESTSIGNING`
+  (`inst_cm_boot_gate`, pure, host-tested): "REFUSED: on this 64-bit
+  Windows the connection manager is installed only in test-signing mode,
+  from a test-signed package ...", exit 1, nothing changed. An install
+  outside test-signing mode, the case revision 13 let through with a note,
+  leaves a machine that stops in Automatic Repair at its next start.
+  `SystemStartOptions` on a start with enforcement disabled and test-signing
+  on reads `TESTSIGNING NOEXECUTE=OPTIN DISABLE_INTEGRITY_CHECKS`, so the
+  install route of item 1 passes the gate;
+- when it goes on, **warns** that the connection manager is a boot driver
+  there: keep test-signing mode on and Secure Boot off while it is
+  installed, and from Automatic Repair the way back is a start with
+  enforcement disabled, then test-signing mode on again or the uninstall;
+- after a staging refused with `0xE000022F` on 8 or 8.1 x64, **names the
+  way through** (`inst_stage_error_text`): keep test-signing mode on,
+  start once with enforcement disabled, run the installer again; later
+  starts need only test-signing mode.
+
+The three decisions (`inst_cm_boot_gate`, `inst_stage_error_text`,
+`inst_sig_note_kind`) key on the kind `inst_os_kind` gives
+(`INST_OS_CMONLY`, the connection-manager-alone systems of section 4.3),
+not on the version, and their texts name no version ("this Windows"): a
+system admitted to that kind later - Windows 10 below build 22000, tasks
+43.34 to 43.36 - takes the gate, the catalog text and the 32-bit Secure
+Boot note with it. Whether 10 makes `xhcicm` boot start and refuses a
+package with no catalog in test-signing mode is unread here (the same
+setup engine and code integrity, so likely); 43.34's legs read it.
+
+The installer still signs nothing and changes no boot setting (D6). A
+catalog would remove item 1's detour (a test-signed catalog is accepted
+in test-signing mode); it is design record 19's decision not to ship one,
+so it is a question for the owner, not a change made here (the
+owner's answer: revision 33 below). Item 2 is not
+cured by a catalog: a boot-start driver must load at every start, so on 8
+and 8.1 x64 the connection manager needs test-signing mode for as long as
+it is installed, whatever the package carries.
+
+**32-bit Windows 8 and 8.1** (revision 30): Microsoft's "Driver Signing
+Policy" page (learn.microsoft.com, `kernel-mode-code-signing-policy--windows-vista-and-later-`,
+`ms.date` 2024-08-19, read 2026-10-22) gives, under "Signing requirements
+by version", the column "Windows 8, Windows 8.1, Windows 10, versions
+1507, 1511 with Secure Boot on" the architectures "64-bit, 32-bit", and the
+column "Windows Vista, Windows 7; Windows 8+ with Secure Boot off" "64-bit
+only, no signature required for 32-bit". The x86 drivers are never signed
+(AGENTS.md), so with Secure Boot on a 32-bit 8 or 8.1 loads none of them,
+and test-signing mode does not help an unsigned binary. The note of
+section 5.10 therefore covers the x86 package there: on 32-bit 8 and 8.1
+the tool prints the Secure Boot note (`inst_sig_note_kind`,
+`inst_sig_x86_sb_text`) - Secure Boot on refuses the unsigned drivers;
+turn it off, or start with enforcement disabled at every start; a computer
+that starts from a legacy BIOS has no Secure Boot - and after the install
+a device at Code 52 is reported as refused for that reason. Secure Boot on
+itself is unread here: every guest of this project starts from SeaBIOS.
+The same table names 10 1507 and 1511 in that column, and from 10 1607
+with Secure Boot on only portal-signed drivers load (revision 28 above),
+so 32-bit 10 below build 22000, of the same kind, gets the same note: the
+part revision 28 left to 43.33 (d) and to this reading.
+
+**Secure Boot's state** (revision 30; owner, 2026-10-22, accepting record
+26 section 5.3.2 as `p43-34` designed it). On the connection-manager-alone
+kind of system (`inst_sb_applies`: 8, 8.1 and 10 below build 22000) the
+tool reads `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State`,
+`UEFISecureBootEnabled`, logs it, and shows it in the note; it never
+changes it. `inst_sb_state`: a `REG_DWORD` 1 is on, 0 off, anything else
+or nothing not known. On x64 (`inst_sb_text`) on says the test-signed
+drivers do not load and test-signing mode cannot be turned on until
+Secure Boot is turned off in the firmware setup; off says test-signing
+mode can be turned on (`bcdedit`); not known adds nothing to the note. On
+32-bit 8 and 8.1 on and off replace the Secure Boot note above by the
+case that applies (refused until it is turned off; the drivers load as on
+7), not known keeps the note naming both. With Secure Boot read as on,
+`TESTSIGNING` in `SystemStartOptions` never counts as confirmed
+(`inst_ts_confirmed`), so on 8 and 8.1 x64 the gate above refuses the
+connection manager with the steps that begin with turning Secure Boot
+off, and after an install a Code 52 is reported as the note's case.
+Host vectors: each state on each system, and the state through the gate.
+The value is unread on any guest here (all SeaBIOS, where it is absent or
+0, both of which read as not known or off): task 43.32's OVMF guest reads
+it before the release.
+
+Revision 33 (the owner, 2026-10-22, on section 5.12's measured refusal):
+from `3.2.0.0` every INF of the x64 package names a catalog of its own
+(`xhci98.cat`, `xhciuas.cat`, `xhcicm.cat`, `xhcicmf.cat`, `stor98.cat`),
+made and signed with the project test certificate by the packager alone
+(design record 19 section 3a), because Windows 8, 8.1 and 10 x64 refuse a
+package with no catalog in test-signing mode, with `0xE000022F` and no
+prompt. The tool needs no change of route for it: its local copy takes
+every file of the flavour directory but those it leaves out by component,
+so each catalog lands beside its INF, and the setup engine imports it
+with the INF into the driver store. The connection manager's two catalogs
+are left out with its INFs on a No to the Thunderbolt question, and
+`stor98.cat` with Stor98's files when it is not ticked (its name starts
+with `stor98`, `inst_bundled_file`). The x86 package carries none. The
+note's text is unchanged: test-signing mode, Secure Boot off.
+
 ### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 
 The tool never runs `XHCICLN`: no question, no switch, no call path.
@@ -1504,6 +1655,128 @@ removes them if the user wants. The line changes no exit code. The
 uninstall (section 9) does not run `XHCICLN` either: it removes the old
 bus's devnodes itself, through the same `DIF_REMOVE` route, as part of
 its set.
+
+### 5.12 Windows 10: the signature policy and the version (task 43.33 (d) and (e), 2026-10-22; a reading)
+
+A reading for roadmap-usb4 task 43.33 (d) and (e), before 43.34 to 43.36
+write the Windows 10 route; no code changed. Labels as design record 13
+section 6.14's: **measured** (in a Windows 10 22H2 guest of task 43.32,
+10.0.19045.2965, legacy BIOS, so no Secure Boot), **static**,
+**documentation** (Microsoft's pages, read 2026-10-22) and
+**inference**.
+
+**The signature policy (documentation).** Microsoft's "Driver Signing
+Policy" page (learn.microsoft.com, "Kernel-mode code signing policy
+(Windows Vista and later)", ms.date 2024-08-19):
+
+- "Starting with Windows 10, version 1607, Windows will not load any new
+  kernel-mode drivers which are not signed by the Dev Portal", with
+  cross-signed drivers still permitted where "The PC was upgraded from an
+  earlier release of Windows", "Secure Boot is off in the BIOS", or the
+  driver was signed "with an end-entity certificate issued prior to July
+  29th 2015". The page on the deprecated certificates (ms.date
+  2025-07-11): "Most cross-certificates expired in July 2021" and "All
+  cross-signed trusted root certificates are now expired", so no new
+  cross-signature can be made.
+- Its table's "Architectures" row: Vista, 7, and "Windows 8+ with Secure
+  Boot off": "64-bit only, no signature required for 32-bit"; every
+  Windows 8, 8.1 and 10 column "with Secure Boot on": "64-bit, 32-bit".
+  **So a 32-bit Windows 10 with Secure Boot on enforces kernel-mode
+  signatures as 64-bit does, and with Secure Boot off requires none.**
+  The same reading answers 43.22's question for 8 and 8.1 x86 (the page
+  puts 8, 8.1 and 10 1507 and 1511 in one column).
+- Test-signing mode: "The TESTSIGNING boot configuration option" page
+  (ms.date 2025-04-16) answers a `bcdedit /set testsigning on` refused
+  with "The value is protected by Secure Boot policy" by "disable Secure
+  Boot", as on 8 (section 5.10's revision 13 note).
+- **Memory integrity** (hypervisor-protected code integrity): the
+  Windows hypervisor "is only supported on 64-bit IA processors with
+  virtualization extensions" (OEM VBS page), so **32-bit 10 has none**
+  (inference from that page). On 64-bit it refuses drivers that are not
+  compatible - "Don't use sections that are both writable and
+  executable", executable pool, a section alignment not a multiple of
+  0x1000 (HLK "Driver compatibility with memory integrity" page, which
+  adds that an `INIT` section marked writable and executable is
+  tolerated: "In Windows 10, however, the W will automatically be
+  stripped"); and "if you have Memory Integrity / HVCI ... enabled, you
+  must test-sign the binary ... An unsigned binary isn't supported" (the
+  TESTSIGNING page). Static, this project's own `3.1.0.0` x64 binaries
+  (`xhci98.sys`, `xhcicm.sys`, `xhciuas.sys`, `stor98.sys`): section
+  alignment 0x1000; `.text` executable and not writable; `INIT` writable
+  and executable (the tolerated case); every pool allocation through
+  `ExAllocatePoolWithTag` with a pool type the code chooses, which the
+  compatibility test flags where it is the executable `NonPagedPool`.
+  Whether 10 x64 with memory integrity on loads them is unread (no guest
+  here runs the hypervisor under TCG); since memory integrity is turned
+  on only beside Secure Boot on the machines that ship it (OEM VBS page:
+  "Secure Boot must be enabled on devices leveraging VBS"), and the x64
+  drivers need test-signing mode, which needs Secure Boot off, the case
+  arises only on a machine where the user turned memory integrity on by
+  hand with Secure Boot off.
+
+**What the guests read (measured, 2026-10-22).** The installer's NT
+route by hand with the published `3.1.0.0` package (record 13 section
+6.14.5):
+
+- 10 x64 in test-signing mode: `UpdateDriverForPlugAndPlayDevicesW`
+  with `INSTALLFLAG_FORCE` returns `0xE000022F`; the setup log says
+  "Driver package does not contain a catalog file, and Code Integrity is
+  in Test Signing mode" and the package is never staged. Vista and 7 x64
+  prompted for the same package (record 19). **So on 10 x64 the package
+  needs a catalog signed with the test certificate**; the section 5.10
+  test-signing note alone is not enough.
+- 10 x86 (no Secure Boot): the same call shows "Windows can't verify the
+  publisher of this driver software", and "Install this driver software
+  anyway" goes on: the package is staged unsigned ("Signer Score =
+  0x80000000"), a restart is asked, and after it `xhci98.sys` runs the
+  controller (record 13 section 6.14.5). So 10 x86 without Secure Boot
+  takes the package as Vista and 7 x86 did, with the prompt; with Secure
+  Boot on it would refuse the unsigned x86 drivers by the policy above
+  (unread: no 32-bit UEFI guest here).
+
+**The version (documentation; static on the guests).** Windows 10 and
+Windows 11 both report NT 10.0, and `GetVersionEx` reports 6.2 to an
+application not manifested for 8.1 or 10 ("Operating system version"
+page); `RtlGetVersion` is the kernel's and is not shimmed (inference from
+its page: "the kernel-mode equivalent of the user-mode GetVersionEx"),
+which is why 43.34 tells 10 from 11 by `dwBuildNumber` below 22000
+("Version 21H2 (OS build 22000)", Windows 11 release information). The
+guests' `RtlGetVersion` reads 10.0.19045 (measured, `rtlgetversion.txt`
+of the run sheet's reading). The range the owner admitted (2026-10-20)
+and what Microsoft's lifecycle pages say of it:
+
+| Release | Build | End of support |
+|---|---|---|
+| 10 1507 (and 2015 LTSB) | 10240 | LTSB 2025-10-14 |
+| 10 1607 (2016 LTSB), Server 2016 | 14393 | LTSB 2026-10-13; Server 2027-01-12 |
+| 10 1809 (2019 LTSC), Server 2019 | 17763 | 2029-01-09 |
+| 10 21H2 (2021 LTSC) | 19044 | 2027-01-12 (IoT Enterprise 2032-01-13) |
+| 10 22H2, the last release of 10 | 19045 | 2025-10-14 ("will be the final version of Windows 10") |
+| Server 2022 | 20348 | 2031-10-14 |
+| 11 21H2 | 22000 | refused (43.34) |
+
+Only 22H2 is read here, and the release notes say so (43.36).
+
+**Settled by the owner, 2026-10-22** (revision 33):
+
+- **The catalog.** The x64 package carries a catalog per INF signed with
+  the test certificate (design record 19 section 3a; section 5.10's
+  revision 33). A package without one is refused on 10 x64 as measured
+  above (`0xE000022F`, "Driver package does not contain a catalog file");
+  with one, the package installs in test-signing mode with Secure Boot
+  off, after the publisher prompt (measured on the 10 x64 and 8.1 x64
+  guests with the packager's catalogs signed by a guest-made throwaway
+  certificate, run sheet 43, "43.36 the x64 catalog"; the owner-signed
+  package's leg is owed). The x86 package stays without one: 10 x86 takes it with the
+  prompt (measured above).
+- **Secure Boot on.** The refusal of a test-signed driver with Secure
+  Boot on is taken from Microsoft's documented policy above ("Driver
+  Signing Policy"; "The TESTSIGNING boot configuration option": test-signing
+  cannot be turned on while Secure Boot is on) rather than read on a guest:
+  the OVMF guest with Microsoft's keys enrolled (43.32's last clause) is
+  not built, and 43.32 is closed on that ground. 43.37's "on the OVMF
+  guest with Secure Boot on the note's text and the load refused as it
+  says" is therefore a documentation reading, not a leg.
 
 ## 6. The Windows 98 SE and ME route
 
@@ -2063,7 +2336,9 @@ controller's driver key, as `silent-on.bat` does; a list that cannot be
 read or does not read back leaves the switch unchanged (exit 2). Off (an
 explicit 0 when the switch is on) writes the switch at 0 and leaves the
 list, as `silent-off.bat` does. Enter keeps the state; the default answer
-is off.
+is off. (Revision 29, record 26 section 6.5.12) The 98 SE storage row
+adds its own Bulk-Only entries to the list under its record and does
+not turn the switch on: it stays the user's, as above.
 
 ### 8.5 The Thunderbolt 3 / USB4 question (owner, 2026-10-15)
 

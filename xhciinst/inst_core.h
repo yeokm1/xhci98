@@ -174,6 +174,7 @@ int inst_bus_id(const char *instanceId);
 #define INST_ACT_FOREIGN    4   /* another driver: left                    */
 #define INST_ACT_FILTER     5   /* tunnel port on pci without our filter   */
 #define INST_ACT_UNKNOWN    6   /* ours, version unreadable: refused        */
+#define INST_ACT_WINDOWS    7   /* 8, 8.1: a UAS disk left to Windows' own  */
 
 /* A driver key's DriverVersion: three answers (record 23 section 5.3). */
 #define INST_VS_ABSENT      0
@@ -306,6 +307,72 @@ int inst_cddb_service_gone(const char *service, const char *const *gone,
 
 /* 1 when a SystemStartOptions value holds the word TESTSIGNING. */
 int inst_testsigning(const char *options);
+
+/* The signature note a run prints (record 23 section 5.10, revision 30):
+ * none; the x64 test-signing note (Vista and later, x64); or, on a 32-bit
+ * system of the connection-manager-alone kind (osKind INST_OS_CMONLY,
+ * inst_os_kind: 8 and 8.1, and every later Windows that kind admits), the
+ * Secure Boot note, since Microsoft's Driver Signing Policy lists 32-bit
+ * beside 64-bit for 8 and later with Secure Boot on and the x86 drivers
+ * are never signed (AGENTS.md). arch is INST_ARCH_*; nt and major as
+ * RtlGetVersion reads them. */
+#define INST_SIG_NONE       0
+#define INST_SIG_X64        1
+#define INST_SIG_X86_SB     2
+int inst_sig_note_kind(int arch, int nt, INST_U32 major, int osKind);
+/* The Secure Boot note's text, INST_SIG_X86_SB. */
+const char *inst_sig_x86_sb_text(void);
+
+/* 64-bit systems of the connection-manager-alone kind and the connection
+ * manager (record 23 section 5.10, revision 30): Windows makes xhcicm a
+ * boot-start driver when it installs the tunnel-port filter on a PCI
+ * bridge, and a start that cannot load it then goes to Automatic Repair
+ * (read on 8 x64; the boot-start rewrite on 8.1 x64 and 8 x86 too; task
+ * 43.22). So on those systems the connection manager is installed only
+ * with a test-signed package (cmSigned 1) in confirmed test-signing mode
+ * (tsOn); INST_CMBOOT_WARN goes on with the boot-driver warning,
+ * INST_CMBOOT_REFUSE refuses the run, INST_CMBOOT_NONE is every other
+ * system. Keyed on osKind, not the version, so a system inst_os_kind
+ * admits to that kind later (10, task 43.34) takes the gate with it. */
+#define INST_CMBOOT_NONE    0
+#define INST_CMBOOT_WARN    1
+#define INST_CMBOOT_REFUSE  2
+int inst_cm_boot_gate(int arch, int osKind, int cmSigned, int tsOn);
+const char *inst_cm_boot_warn_text(void);
+const char *inst_cm_boot_refuse_text(void);
+
+/* What a refused staging means (record 23 section 5.10, revision 30): for
+ * SPAPI_E_NO_CATALOG_FOR_OEM_INF on a 64-bit system of the
+ * connection-manager-alone kind, which refuses an INF with no signed
+ * catalog in test-signing mode (read on 8 and 8.1 x64, task 43.22), the
+ * way through; NULL for any other error or system. */
+#define INST_E_NO_CATALOG   0xE000022FUL
+const char *inst_stage_error_text(INST_U32 err, int arch, int osKind);
+
+/* Secure Boot's state (record 26 section 5.3.2; record 23 section 5.10,
+ * revision 30; owner, 2026-10-22): the value INST_SB_VALUE under
+ * HKLM\INST_SB_KEY, read and shown on the connection-manager-alone kind
+ * of system (8, 8.1 and 10 below build 22000), never changed. found: the
+ * value was read; type its registry type; value its data. A REG_DWORD 1
+ * is on, 0 off; absent, another type or another value is not known (a
+ * legacy-BIOS computer may have no value, or 0). */
+#define INST_SB_UNKNOWN     0
+#define INST_SB_OFF         1
+#define INST_SB_ON          2
+#define INST_SB_KEY  "SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State"
+#define INST_SB_VALUE       "UEFISecureBootEnabled"
+#define INST_REG_DWORD_TYPE 4UL
+int inst_sb_state(int found, INST_U32 type, INST_U32 value);
+/* 1 where the state is read: NT, a system of the connection-manager-alone
+ * kind (osKind INST_OS_CMONLY). */
+int inst_sb_applies(int nt, int osKind);
+/* The note's Secure Boot sentence for arch (INST_ARCH_*) and state; NULL
+ * for INST_SB_UNKNOWN, where the note keeps the sentence naming both
+ * cases. */
+const char *inst_sb_text(int arch, int state);
+/* Test-signing mode counts as confirmed only when SystemStartOptions
+ * holds TESTSIGNING (tsOption) and Secure Boot is not read as on. */
+int inst_ts_confirmed(int tsOption, int sbState);
 
 /* ---- registry values (record 23 section 8) ---------------------------------------- */
 
@@ -976,8 +1043,9 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 #define INST_CW_CMALONE     0x02UL  /* 98 SE, ME: the CM alone           */
 #define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
 #define INST_CW_S98_8       0x08UL  /* 8, 8.1: Stor98                    */
-INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
-                            int s98);
+#define INST_CW_NOCM8       0x10UL  /* 8, 8.1: no connection manager     */
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
+                            int usb, int stor, int s98);
 /* Every warning of the set, one paragraph each in that order, separated by
  * a blank line; dir the tools folder. "" for none. */
 void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
@@ -988,6 +1056,14 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
  * unticked box leaves it out. Left out, xhciuas.inf is neither staged nor
  * installed and an xhciuas already installed stays as it is. */
 int inst_uas_decide(int usbInclude, int noUas);
+
+/* Windows 8 and 8.1 (task 43.29, owner 2026-10-22; record 26 section
+ * 5.3.1 case 3a): xhciuas.inf is staged but never forced, so Windows' own
+ * UAS driver stays the default. A UAS disk with no driver is left for
+ * Windows (INST_ACT_WINDOWS); one on another driver stays foreign; one
+ * already on xhciuas (the user's own pick) is kept current. Any other
+ * system, or kind: the action as given. */
+int inst_uas_nt6_action(int osKind, int action);
 
 /* The step when that routine is not implemented either: exit 4, nothing
  * changed. */
@@ -1365,6 +1441,8 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 /* Record 26 section 6.5 (task 43.4): the USB storage drivers, 98 SE. */
 #define INST_PT_STOR            41
 #define INST_PT_STOR_T          42
+/* Record 26 section 5.3.1 case 5: 8 and 8.1, no connection manager. */
+#define INST_PT_WELCOME_TOOLS   43
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1751,6 +1829,71 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
  * (named[0] USBSTOR.INF, named[1] USBNTMAP.INF: 1 a file of the name is
  * there, -1 unreadable, either keeping it out). */
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2]);
+/* The two INFs are all or nothing wherever Windows can find them (record
+ * 26 section 6.5.5; roadmap-usb4 task 43.5): USBSTOR.INF without
+ * USBNTMAP.INF lets 98 SE's own NTMAP.INF take the disk unit, and its
+ * NTMAPHLP.PDR stops Windows. The order the seven are copied and placed:
+ * the binaries, USBNTMAP.INF, USBSTOR.INF last; they are deleted in the
+ * reverse order of the two INFs (USBSTOR.INF first). */
+extern const int instStorCopyOrder[INST_STOR_COUNT];
+/* 1 when a file (by its name, or NULL and its recorded SHA-256) is
+ * USBNTMAP.INF, deleted only once USBSTOR.INF of the same place is gone. */
+int inst_stor_rm_late(const char *name, const char *sha256);
+/* The pair in one place: stor and ntmap 1 present, 0 absent, -1 unread. */
+#define INST_STOR_PAIR_NONE     0
+#define INST_STOR_PAIR_BOTH     1
+#define INST_STOR_PAIR_STOR     2   /* USBSTOR.INF alone: the hazard     */
+#define INST_STOR_PAIR_NTMAP    3   /* USBNTMAP.INF alone                */
+int inst_stor_pair(int stor, int ntmap);
+/* The helper's Bulk-Only step admitted: the package's copy made with the
+ * seven (copyOk), its USBNTMAP.INF of the download's bytes (ntmapPkg 1),
+ * and %windir%\INF not holding USBSTOR.INF without USBNTMAP.INF (infPair,
+ * an INST_STOR_PAIR_* or -1 unread). */
+int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair);
+/* After the placement in %windir%\INF: the pair as it stands (an
+ * INST_STOR_PAIR_* or -1 unread) and whether the record's Placed names a
+ * copy (placed 1, 0 none, -1 unread; any run's). */
+#define INST_STOR_HALF_NONE     0   /* whole, or neither: nothing to do   */
+#define INST_STOR_HALF_WITHDRAW 1   /* a half of this installer's: the
+                                       placed copies withdrawn, a step  */
+#define INST_STOR_HALF_STEP     2   /* a half that is not, or unread: a
+                                       step, nothing deleted            */
+int inst_stor_half(int pair, int placed);
+/* A presence scan of INF and INF\OTHER for one INF: found (a copy by name
+ * or text), unread (an INF whose text could not be read) and incomplete
+ * (a listing that ended in an error): 1 found, -1 unknown, 0 none. */
+int inst_stor_scan(int found, int unread, int incomplete);
+/* 1 when the INF directories' pair (an INST_STOR_PAIR_* or -1 unread),
+ * after a withdrawal or the uninstall's INF step, must be said as a step:
+ * USBSTOR.INF without USBNTMAP.INF, or not known. */
+int inst_stor_pair_warn(int pair);
+/* The row's default with the INF directories read (record 26 section
+ * 6.5.5, the owner's answer of 2026-10-22): NUSB installed (usb20u) wins,
+ * unticked; else a lone USBSTOR.INF (pair INST_STOR_PAIR_STOR) ticks the
+ * row when a ticked run can complete the pair (route: the case admits the
+ * route and the download carries the seven), over a recorded choice;
+ * else def, the default of inst_stor_default. */
+int inst_stor_half_default(int def, int usb20u, int pair, int route);
+/* The sentence said with the row (Components, Summary, console) when the
+ * INF directories hold USBSTOR.INF without USBNTMAP.INF; fixable: a ticked
+ * run completes the pair. */
+const char *inst_stor_half_text(int fixable);
+/* The SilentClasses entries the storage row adds on 98 SE (record 26
+ * section 6.5.12, task 43.42 option A): USBSTOR.INF's generic Bulk-Only
+ * lines, each a 4-byte entry of design record 13 section 6.11's form. */
+#define INST_STOR_SILENT_COUNT  3
+extern const unsigned char instStorSilent[INST_STOR_SILENT_COUNT][4];
+#define INST_STOR_SILENT_KEY    INST_MW_KEY "\\SilentClasses"
+/* The entries to add, a bit per index of instStorSilent: each one no value
+ * of the list (have[0..n), each 4 bytes; valid[i] 0 for a value of another
+ * type or length, which never counts) already holds. */
+INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
+                              const int *valid, int n);
+/* The name for added entry k: "XHCI98S<k+1>", or the next number when that
+ * name is taken (taken(name, ctx) 1; -1 it cannot be told). 1 named; 0
+ * not (a reading failed, or no free name in reach). */
+int inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                          void *ctx, char *out, size_t cap);
 /* The detection's text: none, some ("not known to be ready"), all, or
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,
@@ -1771,14 +1914,10 @@ void inst_stor_note_text(char *out, size_t cap,
 #define INST_STOR_KIND_UNIT     2   /* USBSTOR\GenDisk, GenCdRom, GenSfloppy */
 int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes);
-/* A unit's binding: 1 when the helper takes it - no driver, or Windows'
- * generic disk binding, every value read (readable): class DiskDrive, no
- * PortDriver and no NTMPDriver ("" for none), its InfPath exactly
- * DISKDRV.INF and that file in %windir%\INF itself; 0 when it is left
- * (USBMPHLP.PDR's already, or anything else, or a value unread). */
-int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
-                         const char *portDriver, const char *ntmpDriver,
-                         const char *infPath, int infInWindowsInf);
+/* A unit's binding: 1 when the helper takes it, a unit with no driver;
+ * 0 when it is left, bound any way at all (record 26 section 6.5.5: a
+ * stock 98 SE never binds a unit to DISKDRV.INF, task 43.5). */
+int inst_stor_unit_takes(int hasDriver);
 /* With the record's Source (an earlier run put the seven in the package
  * directory), a file of the download's bytes is this installer's own
  * deployment, not another installation: made own, in place, before the

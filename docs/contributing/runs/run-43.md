@@ -4,6 +4,131 @@ Phase 43 of `roadmap-usb4.md`, for release `3.2.0.0`. This sheet records
 what each task did and every reading; the roadmap's task list and
 decisions table are the current state.
 
+## 43.11 the installer's settings pages on 98 SE, XP and 7 (2026-10-22)
+
+43.10's layout (design record 26 section 5.4, "The layout") read on the
+screen: 98 SE at 640x480, XP and 7 at 96 DPI, 7 at 120 DPI. Runtime,
+development host A, QEMU, one guest at a time, 16:54 to 19:11.
+
+**Verdict: passes on every point, on all four.** Every drop-down of every
+settings page opened and closed shows its longest entry whole; the note
+shows its whole text with no scroll at all; the USB settings page, the
+one with four asked rows, is two parts, "(page 1 of 2)" and "(page 2 of
+2)", and Back and Next move between them and to the pages either side;
+a value set on a part or a page is still set after Back and Next, and
+the Summary lists it.
+
+### The vehicle
+
+- The build: the gated build of `3.2.0.0`'s HEAD `2038250e`, on branch
+  `p43-11` (`build-driver.cmd all` and `all -amd64` both passed; the
+  installer's window self-test 584 checks and `test_wizlay` 199, both
+  with no failure). Staged with `make-release.ps1 -Arch x86 -TestLabel
+  -NoDriverPack -SkipQualtool` into a scratch directory; `XHCIWIZ.EXE`
+  `16ab9fc5...`, the gated build's own file. The package still reads
+  `3.1.0.0` (the version is not yet bumped).
+- The guests, each on an overlay of its own over another kit's image
+  (kit `E:\xhci98-vm\p43-11`, not in the tree; every screen is in its
+  `shots\`):
+  - 98 SE: p43-12's pristine 98 SE (no display driver: 640x480, 16
+    colours), 1 vCPU, 256 MB; then p43-13's `w98-hcd310`, the same
+    install with `3.1.0.0`'s drivers on the controller (see below).
+  - XP SP3 32-bit: 1024x768, `LogPixels` 0x60 (96 DPI, read from the
+    registry), 2 vCPUs, 512 MB.
+  - 7 SP1 32-bit: Phase 38's matrix `f` overlay (`2.4.0.0` installed,
+    `XhciInterruptMode` 2 on the controller from 43.13's legs), 800x600,
+    2 vCPUs, 1536 MB; read at 96 DPI, then with `LogPixels` 120 written
+    under `HKCU\Control Panel\Desktop` and Windows restarted (the fonts
+    and the window larger on the screen).
+- Every guest: a `qemu-xhci` with no device on it, so no Thunderbolt
+  controller. The package was on an IDE VVFAT drive; `SETUP.EXE` was run
+  inside the guest (Start, Run), elevated through UAC on 7. Keys by QMP
+  `send-key`, screens by QMP `screendump`; no display client.
+- Each run: on Components, Thunderbolt 3 / USB4 support and then Stor98
+  ticked (the staged-only case of section 5.5, so the Thunderbolt and
+  Stor98 pages are shown); on each settings page every enabled drop-down
+  focused and opened (Alt+Down) and closed, a value changed with the
+  arrow keys; Back and Next across the parts and pages; the Summary
+  read; Back from the Summary to the USB page's first part; the wizard
+  cancelled, so nothing was installed.
+
+### Results
+
+The pages, the same on all four but for the one 98 SE row:
+
+| Page | Rows | Parts |
+|---|---|---|
+| USB settings | `XhciIntelPortSwitch` (greyed, "(Intel 7-9 series, C610 only)"), `XhciInterruptMode`; then `XhciSilentInstall` (greyed on XP and 7, "(Windows 98 SE and ME only)"; asked on 98 SE), `XhciForceBulkOnly` | two, "(page 1 of 2)" and "(page 2 of 2)" |
+| Thunderbolt settings | `XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject`, each "now: not set (default 1)" | one, no count |
+| Stor98's settings | `writethrough`, `pollmode` (`StorWriteThrough`, `StorPollMode` on 98 SE) | one, no count |
+
+- **Drop-downs.** Every closed box spans the column and its choice reads
+  whole; every open list is as wide as the closed box and every entry
+  reads whole. The longest: "3  the driver's own USB4 connection
+  manager, forced", "cacheoff - turns the drive's write cache off (fua if
+  it refuses)", "not set (the built-in default is auto (here: off))",
+  and on 7 "3  a message-signalled interrupt only". The "now" text sits
+  on the label's line at the right, whole, wrapping inside its column
+  where long (Stor98's "not set (the built-in default is auto (here:
+  off))" in two lines). The greyed rows' boxes show their value whole.
+- **The note.** The longest note, `XhciIntelPortSwitch`'s, is nine lines
+  at 96 DPI (seven at 120) in a box of about thirteen; every note read
+  whole with no scroll. Focusing a drop-down shows its row's note; a new
+  part shows its first row's.
+- **Parts, Back and Next.** Next on part 1 shows part 2 on the same
+  page; Back on part 2 shows part 1; Next on part 2 goes to the
+  Thunderbolt page; Back from the Thunderbolt page shows the USB page's
+  part 2 (entered by Back, its last part). "Advanced..." from part 2
+  (USB, 7 at 96 DPI and 98 SE) returned to part 2.
+
+**Values kept.** Set, then read after Next and Back across parts and
+pages, and after Back from the Summary:
+
+| System | USB part 1 | USB part 2 | Thunderbolt | Stor98 | Summary |
+|---|---|---|---|---|---|
+| 98 SE (update over `3.1.0.0`) | `XhciInterruptMode` 0 to 1 | `XhciSilentInstall` 0 to 1 | `XhciCmApprove` 0 | `StorPollMode` 1 | lists `XhciInterruptMode = 1`, `XhciSilentInstall = 1` (the rest under a scroll) |
+| XP, 96 DPI (fresh) | 0 to 1 | `XhciForceBulkOnly` 0 to 1 | 0 | `pollmode` 0 | `XhciInterruptMode = 1`, `XhciForceBulkOnly = 1`, `XhciCmApprove = 0` |
+| 7, 96 DPI (update over `2.4.0.0`) | 2 to 3 | 0 to 1 | 0 | `pollmode` 1 | `= 3`, `= 1`, `= 0` |
+| 7, 120 DPI | 2 to 3 | 0 to 1 | 0 | `pollmode` 0 | `= 3`, `= 1`, `= 0` |
+
+Each value was in its box on every return.
+
+- **The Advanced dialogs** (43.10's; read here once each, not a 43.11
+  point): the USB one on 7 at 96 DPI and on 98 SE, `XhciFastPollFsLs`'s
+  list whole, the dialog inside 640x480; the Thunderbolt one on 7 at 120
+  DPI, `XhciCmLogVerbosity`'s list whole.
+
+### Seen on the way, not 43.11's points
+
+- **98 SE with no controller listed has no USB settings page.** On the
+  pristine 98 SE, its Add New Hardware wizard for the controller
+  cancelled, "What was found" says no device is present and the wizard
+  goes from Components to the Thunderbolt page: a value with no
+  controller stays off the pages (section 5.4). The 98 SE leg was
+  therefore read on the same install with `3.1.0.0` on the controller,
+  as an update.
+- **7 at 120 DPI on 800x600**: the window (about 635 by 575) is taller
+  than the work area; its frame below the buttons sits under the
+  taskbar, the buttons whole. A screen size, not the pages' layout.
+- **Components**: with the keyboard, ticking Thunderbolt and then Tab,
+  Space on Stor98 left it unticked on all four; a second Space ticked
+  it. Not read further (the Components page is not 43.10's).
+- **`XhciCmLogVerbosity`'s value 4** is listed as a bare "4" in the
+  Thunderbolt Advanced dialog (the table carries four meanings, for 0 to
+  3), and the note reads "4: allowed."; its sentence is in the note's
+  NOTE. A text, not the layout.
+- **The cut's text checks refuse HEAD**: `make-release.ps1` stopped on
+  two readme lines past 78 columns, `xhciinst\README.TXT` line 313 ("...
+  it never changes it.", from the 43.34 merge) and `xhcitr\README.TXT`
+  line 90 ("... On Windows 2000 without administrator", from 43.52). The
+  test package was staged with both lines rewrapped in the working tree
+  for that run only; neither change is committed here.
+
+### Owed
+
+Nothing for 43.11. The three findings above are for the owner; the two
+readme lines must be rewrapped before the `3.2.0.0` cut.
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on
@@ -353,6 +478,303 @@ class key, off the disk after a clean shut down:
 ### Not read
 
 - A refused function of a composite device (`&MI_nn`): host vectors only.
+
+## 43.18 - The 9x Link-Down Statement's Gate-G3 Readings on 98 SE and ME
+Task 43.18 of `roadmap-usb4.md`, the third of the owner's answers of
+2026-10-22 ("What 43.18 left" in the decisions table): the gate-G3
+readings of the 9x link-down statement, one per system, on a trial build
+in emulator guests, each system that passes admitted. Read on
+2026-10-22. (A file of its own because `run-43.md` lives on another
+branch; the two are joined at the merge. Record 21 section 7.2 part 2
+names `run-42.md` for these readings; this sheet holds them instead.)
+
+**On `E:\...` paths here.** They say where a reading was kept on the host
+that took it; they are not files a clone has.
+
+### Verdict
+
+**Both systems pass; both are admitted** (`cm_eject.c`,
+`CM_EJ_QUALIFIED_98SE` and `CM_EJ_QUALIFIED_ME` set to 1). On 98 SE under
+the ICM client and on ME under the USB4 profile, at every point read, the
+statement (the entry marked `DOWN_QUIESCED`) came after the emulator's
+stage-2 reset and quiesce of the endpoint, the acknowledgement wait ended
+after the statement, and the vanished child's `CM_Query_Remove_SubTree`
+came after the wait's end. Every wait but one ended acknowledged, in 41
+to 220 ms; the one that did not is described under ME, run C2: a
+system-modal error screen Windows put up stopped every thread, the
+connection manager's included, and the answer that came after it counted
+as late. The ordering held there too.
+
+### The vehicle
+
+- Development host A, QEMU under TCG, headless, one vCPU per guest
+  (`pentium3,-apic`), 256 MB; `usb4-emu` at `660f085` (the emulator's
+  SHA-256 prefix `9dfdcf9b`), with `-device usb4-debug-port` for the
+  stage codes and `-trace usb4_tp_*`, `usb4_dbg_*`, `usb4_h_*`.
+- **98 SE**: the 3.0.0.0 image, the Alpine Ridge topology of the ICM
+  client (`profile=tb3-alpine-ridge`, the TB3 PCI bridges, an SHPC tunnel
+  bridge), updated with the published `3.1.0.0` package,
+  `INSTALL /console /yes /thunderbolt /stor98`, the enclosure plugged
+  (Windows' files the install asked for skipped or pointed at
+  `C:\XHCI98`), then restarted.
+- **ME**: the 3.1.0.0 image with the Thunderbolt driver and Stor98 of
+  the joint legs, the generic USB4 topology (`profile=usb4-generic`, two
+  tunnel ports), an ASM2464 USB4 enclosure.
+- The NVMe drive: a 128 MiB FAT image, enclosure `enc0` hot-plugged after
+  the desktop on both; a 16 MiB file of random data copied onto it as
+  `E:\BIG.BIN`. Stor98: the bundled 3.1.0.0 build on both.
+- **The trial build** (never committed): the `qemu` flavour of
+  `xhcicm.sys` from a `git archive` of `p43-18` at `e620f8bf`, with both
+  systems admitted and three stage codes written to the debug port (code
+  at `5A0h`, argument at `5A4h`): `0x1C0` an entry marked
+  `DOWN_QUIESCED` (argument generation, bus, slot), `0x1C1` an entry's
+  acknowledgement wait ended (argument `CM_NVLINK_AW_*` << 8 | entry: 1
+  acknowledged, 5 late), `0x1C2` the CONFIGMG worker's
+  `CM_Query_Remove_SubTree` of the vanished child (argument the devnode).
+  SHA-256 prefix `7901ed4d`, copied over the installed `xhcicm.sys`, then
+  a cold restart.
+- **The stage-2 event**: `usb4_tp_cutoff` ("stage 2 complete"), the
+  emulator's endpoint reset and quiesce at the tunnel down. Times below
+  are virtual time from it. The unplug is `device_del enc0`; a held read
+  is the harness's `x-faults` rule `at=fetch op=read ... act=hold`, the
+  unplug issued over QMP as soon as `x-harness-state` shows the read held
+  (`E:\xhci98-vm\p43-18g3\scripts\holdunplug.py`); the re-plug leg unplugs
+  as soon as `cm.nvlink.up=` reaches the debug console
+  (`plugunplug.py`). The load is `copy /b E:\BIG.BIN NUL` in an MS-DOS
+  Prompt, after a re-plug so that the file is not in the cache.
+- The host was shared with other guests and builds (CPU near 97 % by
+  midday): the times are the guests' virtual time and what they show is
+  the order; their sizes are noisy.
+
+### Results
+
+| System, leg | 0x1C0 statement | 0x1C1 wait end | 0x1C2 query-remove | Driver's lines |
+|---|---|---|---|---|
+| 98 SE, idle unplug | +68 ms | +171 ms, acknowledged | +178 ms | `cm.nvlink.icm-down=000B0400`, `cm.nvlink.await=0000006E` (110 ms), query and removal 0 |
+| 98 SE, unplug with the file read from the cache (no read reached the drive) | +201 ms | +257 ms, acknowledged | +267 ms | `await=00000037` (55 ms) |
+| 98 SE, the 20th read held at its fetch, unplugged 3 ms after | +116 ms | +165 ms, acknowledged | +172 ms | `await=00000029` (41 ms); the query vetoed (`0x17`, the copy holds the file open) |
+| 98 SE, every read held (`repeat=on`), unplugged 1.5 s after the first | +63 ms | +128 ms, acknowledged | +134 ms | `await=00000037` (55 ms); query vetoed |
+| 98 SE, re-plug, unplugged 3 ms after `cm.nvlink.up` (1.34 s after the plug) | +219 ms | +372 ms, acknowledged | +378 ms | `await=00000097` (151 ms); query and removal 0 |
+| ME, idle unplug | +243 ms | +458 ms, acknowledged | +463 ms | `cm.nvlink.u4-down=000B0000`, `await=000000DC` (220 ms), query and removal 0 |
+| ME, the 20th read held at its fetch, unplugged 2 ms after | +271 ms | +323 ms, acknowledged | +329 ms | `await=00000036` (54 ms); query vetoed |
+| ME, every read held, unplugged 1.5 s after the first | +107 ms | +216 ms, acknowledged | +222 ms | `await=0000006E` (110 ms); query vetoed |
+| ME, run C2: every read held, two MS-DOS Prompts reading, unplugged 6.3 s after the first | +229 ms | +72 311 ms, late | +72 317 ms | `await=000118AE`; a system-modal "Disk Write Error" screen up from the unplug until a key was pressed (below) |
+| ME, re-plug, unplugged 2 ms after `cm.nvlink.up` (3.31 s after the plug) | +222 ms | +275 ms, acknowledged | +280 ms | `await=00000037` (55 ms); query and removal 0 |
+
+Every leg: `cm.nvlink.down` once, `cm.nvlink.retired` after the wait,
+then the query; the re-plug that followed published `UP` again under a
+new generation. In each leg with a held read the copy failed with
+Windows' own "General failure reading drive E" or "The volume that was
+removed had open files" and Windows ran on.
+
+**The queue depth.** The held reads never went past one: an MS-DOS copy
+reads one request at a time, and a second MS-DOS Prompt reading another
+file on the same drive (run C2) did not add a second request at the
+drive while the first was held. "A saturated queue", as record 21 section
+7.2 part 2 asks for it, is not reachable this way on 9x; the most it
+reached is a held request with more behind it in Windows. **Owner's
+decision, 2026-10-22:** the one-request reading meets the "saturated
+queue" point on 98 SE and ME.
+
+**ME, run C2.** After the unplug Windows put up its system-modal "Disk
+Write Error" screen for drive E (what it was writing was not read). While it was up, nothing ran: the statement was made
+before it (+229 ms) but the 50 ms pass that ends the wait did not run
+until the key was pressed, 72 s later, and then found Stor98's answer
+past the 3 s bound (`CM_NVLINK_AW_LATE`). The removal still came after
+the wait's end, and the ordering held. A system-modal screen stops this
+driver's wait on 9x as it stops Windows; that is the systems' own
+behaviour, not something the driver can shorten.
+
+**Not a leg: the harness's surprise rule on the USB4 profile.** A rule
+`act=surprise` takes the tunnel down without unplugging the enclosure's
+router. On ME the USB4 connection manager saw nothing (its down comes
+from the router's hot-unplug); when the enclosure was removed 2.7 minutes
+later it found the function already gone and withheld the statement
+(`cm.nvlink.withheld=03000002`), as the condition says. Every unplug
+above is a `device_del` of the enclosure.
+
+### What it changes
+
+Both systems admitted in `cm_eject.c`; a host vector checks it
+(`test_cm_eject`), and `test_ej9x` checks that the tools' refusal for a
+drive with no Stor98 channel tells the user to shut Windows down before
+unplugging it. The statement's other conditions are unchanged: the
+emulator's bridge, one member under the ICM client, the known
+correspondence under the USB4 profile, so on hardware no statement is
+made. The admission also opens the two eject paths that needed it on 9x
+(the failed branch's isolation, the USB4 profile's clean-removal teardown
+with its `DOWN_QUIESCED`); those are read by 43.19's legs.
+
+The guests' logs: `E:\xhci98-vm\p43-18g3\keep` (`trace-*.log`,
+`debugcon-*.log`).
+
+### 43.19, first legs: `XHCIINST /eject` on 98 SE and ME (2026-10-22)
+
+After the admission's commit (`fef563af`), the same guests with that
+commit's gated `qemu` build of `xhcicm.sys` (from the `scripts\build-driver.cmd all`
+run that passed, SHA-256 prefix `e3697476`) and its `XHCIINST.EXE` copied
+in (`XHCITR.EXE` was not: the tray had it open on 98 SE), a cold restart,
+the enclosure plugged, then `XHCIINST /eject 1` and `Y`, then the unplug.
+Not 43.19's whole: XHCITR's Safely Remove, the two-port legs and 42-A.14
+are not read.
+
+| System | What the tool said | The driver's lines |
+|---|---|---|
+| 98 SE, ICM client | "Asked the Thunderbolt driver to stop the device. Windows has stopped Stor98 Storage Controller for NVMe SSDs. ... You can now unplug the device.", exit 0 | `cm.eject.accepted`, the query (`cm.eject.call=41..`), the request (`42..`, `cm.eject.request=00000100`: Stor98's `RemoveAck`), the removal (`43..`), `cm.eject.result=080291E0`: step 8 removed, outcome 2 clean; no teardown (decision V8) |
+| 98 SE, the unplug after it | - | the statement made on the tunnel down, and its wait ran to the 3 s bound (`cm.nvlink.await.end=00000400`, timeout, `await=00000BE8`): the drive's Stor98 had already been removed by the eject, so nothing could answer. Only the member's re-enumeration waited; there was no vanished child to remove |
+| ME, USB4 profile | the same words, exit 0 | the same steps, then the teardown the admission opens: `u4.eject=00000100`, the tunnel taken down (`admin-down` in the emulator's trace, its stage-2 event), `cm.eject.teardown=00002801`, `cm.nvlink.down=00000001` and `cm.eject.mark=00000001` (the entry's `DOWN_QUIESCED`), the entry retired; `cm.eject.result=0802BA4A`, clean. The unplug after it logged nothing (the tunnel was already down), and a re-plug brought the drive back with a new generation (`cm.nvlink.up=02000101`) |
+
+**Finding (98 SE, for 43.19):** after a clean eject under the ICM client,
+the unplug's statement waits the full 3 s for an acknowledgement no
+Stor98 can give, because the entry still reads `UP` after the eject
+removed the drive's Stor98 (under the USB4 profile the teardown retires
+the entry first). It delays only the member's re-enumeration, by the 3 s
+acknowledgement deadline when Windows schedules the driver's 50 ms pass
+on time; the deadline bounds what counts as an answer, not when the wait
+is next looked at, so a stalled 9x scheduler can hold it far longer (as
+run C2's 72 s shows).
+**Fixed the same day on the owner's answer** (below, "The 3 s wait after
+a clean eject").
+
+**ME between the two sessions.** The ME guest, paused over QMP for about
+an hour while the builds ran and then resumed, was found with a black
+text-mode screen and the processor in the VMM, not answering keys; it
+was quit and cold-started. Whether this is the hang task 43.49 reads (not
+the same trigger: no plug cycles were running) is not read here.
+
+### The 3 s wait after a clean eject (2026-10-22)
+
+The owner's answer to the 98 SE finding above: fix it in 43.18. A
+removal that ends clean with an entry and no teardown to follow (the
+firmware connection manager, decision V8) now takes the entry from `UP`
+to `IN_USE` alone after the removal (`CM_EJ_P_RETIRE`,
+`CmNvlinkRetireEjected`): no `DOWN_QUIESCED`, no wait, the generation
+kept. ME under the USB4 profile does not share the cause (its teardown
+retires the entry first); NT does not either (Windows ejects there, and
+the driver is not told that Stor98 left), and neither is changed. The
+same change makes the eject's own statements take the whole
+qualification: the member must read as the emulator's bridge, not only
+the systems be admitted (`CmEjStatementQualified`, logged as
+`cm.eject.emulator`).
+
+**The retake, 98 SE under the ICM client.** The same guest and overlay as
+the first leg, with the uncommitted tree's gated `qemu` build of
+`xhcicm.sys` (`scripts\build-driver.cmd all`, x86, passed; SHA-256 prefix
+`a9e38b90`) copied over the installed one and a cold restart; the host
+loaded by other agents' guests and an amd64 gated build. The enclosure
+plugged (`cm.nvlink.up=01000401`), then `XHCIINST /eject 1` and `Y`:
+the same words, exit 0. The driver's lines: `cm.eject.emulator=00020802`
+(member 02:08, read as the emulator's bridge), the query, the request and
+the removal as before, `cm.eject.retire=00000001` (entry 0 retired), then
+`cm.eject.result=08025107` (removed, clean). The unplug: the tunnel down,
+the statement decided (`cm.nvlink.9x.decided=00000200`), and then no
+`cm.nvlink.down` and no wait: the member's re-enumeration ran at once
+(`cm.reenum.held.run`), where the first leg logged
+`cm.nvlink.await.end=00000400` and `await=00000BE8`. A re-plug brought the
+drive back with a new generation (`cm.nvlink.up=02000401`) and `dir E:\`
+listed its files. Logs: `E:\xhci98-vm\p43-18g3\keep\debugcon-w98-r2.log`,
+`trace-w98-r2.log`.
+
+## 43.21 - the unexpected-removal notice, leg T.11 (2026-10-22)
+Roadmap 43.21; design record 25 section 7.6 (revision 16) and leg T.11 in
+its section 11.
+
+**Verdict: done** (2026-10-22, ticked on the owner's approval). Every leg
+that can be read on the emulator passes on 2000, XP, XP x64, Vista x86,
+7 x86, 7 x64 and 98 SE. Two parts are recorded as not readable here, as
+43.45's resumes were:
+
+- A chain's first device unplugged. The emulator's chained routers exist
+  only under the software connection manager's `usb4-generic` profile on
+  q35; on the `pc` machine every NT guest uses, one tunnel-bridge level is
+  reachable, so a unit behind a chained router never appears on the PCI
+  side (usb4-emu `docs/XHCI98-HANDOFF.md`, "Chained PCIe tunnel"). It is
+  listed for the owner's session on real hardware.
+- Sleep on 2000 and XP: those images have no standby or hibernate.
+
+One defect was found and fixed during the legs: on XP the warning balloon
+never showed, because the unit's "disconnected" balloon of the same poll
+replaced it at once. Commit `b03d4422` puts a due warning and the other
+events of that poll in one balloon under the warning title. Every leg
+after that fix ran with its XHCITR; the 2000 legs before it were retaken
+for the main case.
+
+### Build
+
+Branch `p43-21`. Gated `build-driver all` passed for x86 and amd64 at
+`b03d4422` (x86 `qemu` `xhcicm.sys` `9FE8E826...`, release `B3C59BCE...`;
+amd64 `qemu` `5A766C66...`, release `77CF75FF...`; `test_tr` host vectors
+pass). The x86 guests ran the `qemu`-flavour `xhcicm.sys` of `1b27ce1d`
+(`B463877F...`); `b03d4422` changed no driver source, only XHCITR, its
+tests and documents. XHCITR was the gated `b03d4422` build (`5B85735C...`)
+on every NT leg but the first 2000 boot and the first XP boot, which found
+the defect. The 98 SE guest ran `1b27ce1d`'s XHCITR: `b03d4422` changes only
+a poll with a warning, which 98 SE never has.
+
+### The vehicle
+
+Development host A, QEMU TCG under heavy load from other guests (CPU near
+97 %). The usb4-emu build copied from task 43.44's kit (`bin`, and `bin-icl`
+for Ice Lake). Topology as task 43.44's: `usb4-host` with a firmware
+connection manager (Titan Ridge, Alpine Ridge on 98 SE, Ice Lake on 7 x86),
+the tunnel bridge, and `enc0`, the ASM2464 device router with an NVMe
+namespace behind it, plugged with `device_add` and pulled with
+`device_del`. NVMe through nvme98 on NT. The mark service (`XHCIMARK`,
+`XHCIMK64` on x64) registered on each NT guest. Guests: 2000 (`acpi=off`,
+1 vCPU), XP (1), XP x64, Vista x86, 7 x86, 7 x64 (2 each), 98 SE (1). Kit
+`E:\xhci98-vm\p43-21` (`RUN-NOTES.md`, screenshots, debug-console logs).
+
+The count is read in two places: the driver's debug-console line
+`cm.reenum.unexpected=<member>` and the NHI's details in XHCITR,
+"Unexpected removals: N since this start; the last on tunnel port ...".
+
+### Results
+
+| Case | 2000 | XP | XP x64 | Vista | 7 x86 | 7 x64 |
+|---|---|---|---|---|---|---|
+| Unit present at boot and never marked: unplug | "disconnected" only, not counted | same | same | same | same | same |
+| Marked unit, unplug with no eject | warning, counted | warning, counted | warning, counted | warning, counted (a poll late, below) | warning, counted | warning, counted |
+| Eject from XHCITR, then unplug | "disconnected" only | same | same | same | same | same |
+| Driver update of the unit (nvme98 forced) | nothing | nothing | nothing | nothing | nothing | nothing |
+| Disable and enable of the unit | nothing | nothing | nothing | nothing | nothing | nothing |
+| Option off, unplug with no eject | no warning, counted | same | same | same | same | same |
+| Option on again, unplug | warning | - | warning | - | - | - |
+| Sleep and resume with the unit attached | no standby (`acpi=off`) | no S1-S4 on this image | hibernate: nothing, count unchanged | hibernate: nothing | hibernate: nothing | hibernate: nothing |
+
+"Warning" means one balloon titled "Thunderbolt/USB4 warning" reading "A
+Thunderbolt or USB4 device was removed unexpectedly." with "ASMedia 246x was
+disconnected." on the next line. On 2000 the first boot, before
+`b03d4422`, showed the warning and then the "disconnected" balloon; the
+retake with `b03d4422` showed the single combined balloon.
+
+On Vista the departure fell one poll before the count: "disconnected"
+first, the warning alone a poll later. Section 7.6 item 4 accepts this.
+
+A unit present at boot is counted only once it is marked: the mark
+service marks it at its first plug while the service runs, and removes the
+mark when the unit leaves. Section 7.6 item 1 and the release notes say so.
+
+On 98 SE (Alpine Ridge): the tray menu and the View menu have no "Warn
+when a device is removed unexpectedly" item; the NHI's details read
+"Unexpected removals: not watched on this system"; an unplug gives the
+tooltip "ASMedia 246x was disconnected." and nothing else.
+
+### Not read
+
+- A chain's first device unplugged: not readable on the emulator (above).
+- Sleep on 2000 and XP: those images have no standby or hibernate.
+
+### Findings outside 43.21
+
+- After a hibernate and resume on 7 x86, 7 x64 and XP x64, XHCITR showed
+  "The Thunderbolt/USB4 controller stopped answering." This is the
+  existing finding from 43.45: the liveness gate's off state across a
+  sleep. The count and the unit were unchanged.
+- On 7 x86, after a resume, an eject by a standard user with an AutoPlay
+  Explorer window open on the unit left the replugged device not started
+  until a restart. It did not recur after a cold boot.
+- On Vista and 7 x64, a guest asked to shut down at the end of its legs
+  stayed at "Shutting down..." and was stopped through QEMU.
 
 ## 43.45 - The `amd` host model: 7, 2000 and 98 SE
 
@@ -925,6 +1347,15 @@ first checked to move the pointer under ME's own stack.
   gone. Why the configuration manager is that much slower here was not
   read; the log shows no request of its waiting on this driver.
 
+Note, 2026-10-22 (task 43.54, `runs/run-43.md`): this conclusion does
+not hold. With each mouse pulled a fixed 1.0 s after its plug, this driver
+had the device addressed and started sooner than ME's own stack (medians
+0.16 and 0.30 s against 0.58 and 0.66 s), and ME's own stack stopped the
+same way, at cycles 58 and 8, with the same `hidusb.sys` state in memory.
+The 160 clean cycles above came from the series' pointer detector, which
+held most devices on ME's own stack past their START and, under this
+driver, often fired before any START could come.
+
 ### Candidate fixes (none made)
 
 No fix is clear and small, so none was committed. In the order the owner
@@ -966,12 +1397,13 @@ opened as task 43.53 with 1 noted there as the later option for ME, and
 ### Owed
 
 - Why ME's configuration manager starts this driver's PDOs so much later
-  than its own stack's (not read; 43.53's ME line).
+  than its own stack's (not read; 43.53's ME line). Read by 43.54
+  (2026-10-22): it does not; see the note above.
 
 ## 43.52 two XHCITR defects from 43.45's legs: the code (2026-10-22)
 
 43.45's legs on 7 x86 (2026-10-22, branch `p43-45`, its run sheet
-`run-43-45.md`, its two XHCITR sections) found two XHCITR defects. This
+`run-43.md`, its two XHCITR sections) found two XHCITR defects. This
 section records their code on branch `xhcitr-fixes`. No virtual machine
 was run for it; the legs are owed (below).
 
@@ -1037,6 +1469,601 @@ ASM2464 router, as 43.45 ran them:
   or the new line; and the same eject as an administrator, unchanged;
 - a sleep or hibernate and resume with XHCITR in the tray: no balloon;
 - where the vehicle allows, a resume that fails: the balloon.
+
+## 43.32 the Windows 10 virtual machines (2026-10-22)
+
+Two Windows 10 22H2 guests, x86 and x64, recorded in `build-and-test.md`,
+"Windows 10 target VMs (roadmap-usb4 43.32)". Development host A; the
+host loaded throughout (other agents' guests and builds; CPU near 97 % at
+13:45).
+
+**Verdict: the two TCG machines are set up; the OVMF guest with Secure
+Boot on is not built, so 43.32 stays open.**
+
+### What was done
+
+- **The images** (2026-10-22, 11:13 to 12:40, the Windows 8, 8.1 and 10
+  image session): `w10x64-pristine.qcow2` and `w10x86-pristine.qcow2`,
+  10.0.19045.2965, Pro, from the owner's `Win10_22H2_English_x64v1.iso`
+  and `Win10_22H2_English_x32v1.iso` by an unattended install - WinPE and
+  the image copy under WHPX (owner: WHPX for the base-image installs
+  only), specialize, OOBE and the first logon under TCG with the legs'
+  `-machine pc -cpu qemu64,+3dnowprefetch`. `SkipMachineOOBE` and
+  `SkipUserOOBE` were needed: without them 10's user OOBE stalled.
+  Test-signing on, autologon, hibernation and Windows Update off, no
+  network; a verify boot of each reached the desktop in under 7 minutes.
+- **The prepared starting points** (12:55 to 13:38): each image booted
+  once on an overlay that became `prep.qcow2` (now read-only): the
+  scheduled task `xrun` (run level highest, as `xhci`) that calls
+  `<transfer drive>\auto\go.cmd`, and a first reading of each guest. The
+  task's logon trigger did not fire at the autologon on either guest; a
+  leg starts it with `schtasks /run /tn xrun` from Win+R, which runs it
+  elevated with no consent prompt.
+- **The machine**: the usb4-emu QEMU (`vm\usb4\bin-2a893ea`), TCG
+  `thread=multi`, `-smp 2`, 2048 MB (the host's limit for 8 to 10 guests
+  that day), SeaBIOS, `qemu-xhci,p2=8,p3=4` with the tablet, two
+  `usb-storage` (a USB 3 port and a USB 2.0-only port), `usb-uas`,
+  `usb-audio`, `usb-hub` with `usb-kbd`, and the emulator's Thunderbolt 3
+  NHI with its xHCI and tunnel bridge; QMP 48660 (x86) and 48661 (x64).
+
+### The speed under TCG (read first, as the entry asks)
+
+Power-on to the autologon desktop about 4.5 minutes at `-smp 2` on both
+guests; a forced driver install 7 s (x64) to under 3 minutes with its
+prompt (x86); `msinfo32 /report` about 10 minutes, the longest step of a
+reading. **Usable for reading and install legs on TCG**; no WHPX was
+needed for any leg, so the owner's choice between a slower leg and WHPX
+does not arise for these. Timings are from a loaded host and are noisy.
+
+### Not done
+
+- **The OVMF guest with Secure Boot on** (for 43.36's refusal case).
+  The usb4-emu build carries `edk2-x86_64-secure-code.fd` (needs `q35`
+  with SMM) but no variable store with Microsoft's keys enrolled, and no
+  `EnrollDefaultKeys` application; the keys would have to be enrolled by
+  hand in the firmware's Secure Boot configuration (custom mode: a
+  platform key of the project's own, Microsoft's KEK and Windows
+  Production PCA 2011 certificates from Microsoft's download pages), and
+  10 x64 installed fresh under UEFI, since the MBR images do not boot
+  under OVMF. Not attempted in this task; an owner question in the
+  report.
+
+## 43.33 Windows 10, read first: the guest legs (2026-10-22)
+
+The measured half of 43.33; the static reading and the conclusions are
+design record 13 section 6.14 ((a) and (b)), record 21 section 3.6 ((c))
+and record 23 section 5.12 ((d) and (e)). Runtime, development host A,
+on 43.32's two guests, one at a time, host loaded (other agents' guests
+and builds). Nothing of this project's was built: the package is the
+published `3.1.0.0` (`releases\3.1.0.0`, `release-x64` and the x86
+release directory), copied to the transfer drive's `pkg\`.
+
+### The vehicle
+
+- The guests of 43.32 (`build-and-test.md`, "Windows 10 target VMs"):
+  10.0.19045.2965 Pro, legacy BIOS ("BIOS Mode Legacy", "Secure Boot
+  State Unsupported", "Kernel DMA Protection Off", "Virtualization-based
+  security Not enabled", `msinfo32`), test-signing on, `RtlGetVersion`
+  10.0.19045, platform 2, product type 1.
+- A leg overlay per guest (`w10x64-x98`, `w10x86-x98`) over the prepared
+  starting point, the full device set (`tab,ss3,ss2,uas,aud,hub,nhi`),
+  `-smp 2`, 2048 MB.
+- The leg's script `go.cmd` (started by `schtasks /run /tn xrun`): a
+  reading under Windows' own stack (`ms`); the installer's NT route by
+  hand, `UpdateDriverForPlugAndPlayDevicesW` with `INSTALLFLAG_FORCE` on
+  the `qemu-xhci` controller's first hardware id with the package's
+  `xhci98.inf` (`force.ps1`); a reading (`x98a`); a restart and a
+  reading. Each reading (`read2.ps1`): `pnputil /enum-devices /connected
+  /drivers` and `/enum-drivers`, the Enum, Class, service and USB keys,
+  the setup logs, the System, Kernel-PnP, USB and Code Integrity event
+  logs, `bcdedit`, `msinfo32 /report`, the USB scheduled tasks, written
+  to the output disk and read on the host with 7-Zip after power-off.
+
+### x64 (13:38 to 14:33)
+
+- `ms`: the devices of record 13 section 6.14.3's table: `qemu-xhci` and
+  the emulator's xHCI under `usbxhci.inf` (`00802005`), root hubs and
+  the USB 2.0 hub under `usbhub3.inf`, HID under `input.inf`, both
+  `usb-storage` under `usbstor.inf`, `usb-audio` composite with
+  `wdma_usb.inf` on `MI_00`, **`usb-uas` Code 10 under Windows' own
+  `uaspstor.inf`**, the NHI `8086:15BF` Code 28. Explorer's details pane
+  (This PC, a drive selected): F: "Connected to USB 3.0", G: no line.
+- The forced install, 14:10: **refused**, `0xE000022F`, in 7 s, no
+  prompt; the setup log: "Driver package does not contain a catalog
+  file, and Code Integrity is in Test Signing mode", "Failed to import
+  driver package into Driver Store". The controller stayed on
+  `usbxhci.sys`; the guest was powered off with no restart leg.
+
+### x86 (14:34 to 16:12)
+
+- `ms` (14:47 to 15:05): the same table as x64's, `usb-uas` Code 10 and
+  the NHI Code 28 included. (A second instance of the leg's script,
+  started twice by the previous operator, took a second reading under
+  Windows' own stack from 15:05 to 15:09, filed as `x98b`; it is a
+  duplicate of `ms`, not a post-restart reading.)
+- The forced install, 15:16 to 15:22: "Windows can't verify the
+  publisher of this driver software" (Windows Security), "Install this
+  driver software anyway" clicked; `UpdateDriverForPlugAndPlayDevicesW`
+  returned TRUE, reboot required, 349 s with the prompt. The setup log:
+  "Driver package does not contain a catalog file, but user wants to
+  install anyway", "Signer Score = 0x80000000 (Unsigned)", the package
+  imported as `oem2.inf`, `xhci98.sys` and `xhcihlpr.sys` copied, the
+  services `xhci98` and `xhcihlpr` added, `DelService=xhcimsi`, and
+  "Device required reboot: 'Reboot' in section: [Xhci.Dev6.NTx86]".
+- `x98a` (15:24 to 15:29, before the restart): the controller's devnode
+  "xHCI98 USB 3.x eXtensible Host Controller", `oem2.inf`, started, with
+  the children of the stack it had before still listed under
+  `usbhub3.inf`, `usb.inf` and `uaspstor.inf`: the restart had not yet
+  happened, so nothing of `xhci98.sys` ran yet. Explorer's details pane
+  at 15:41 showed F: "Connected to USB 3.0"; taken in that state, it is
+  not counted for either driver.
+- Restart 15:43; `x98c` (15:54 to 16:00), **`xhci98.sys` running on
+  Windows 10 for the first time in this project**:
+
+| Device | Bound | State |
+|---|---|---|
+| `qemu-xhci` `1B36:000D` | `oem2.inf` (`xhci98.inf`), "xHCI98 USB 3.x eXtensible Host Controller"; `usbxhci.inf` still listed as "Best Ranked" (`00802005`) beside it | started |
+| its root hub | `USB\XHCI98_ROOT_HUB`, `oem2.inf` (`80FF0000`) | started |
+| `usb-hub` port 8 | `USB\XHCI98_HUB&VID_0409&PID_55AA`, `oem2.inf` (`80FF0002`) | started |
+| `usb-kbd` behind it, `usb-tablet` port 5 | `input.inf` (`USB\Class_03&SubClass_01`, `USB\Class_03`) | started; the pointer and keyboard worked |
+| `usb-storage` `P4333SS3` (USB 3 port), `P4333SS2` (USB 2.0 port) | `usbstor.inf`, disks `disk.inf`, volumes F: and G: | started |
+| `usb-audio` port 7 | `USB\XHCI98_COMPOSITE&VID_46F4&PID_0002`, `oem2.inf`; `MI_00` `wdma_usb.inf` | started |
+| `usb-uas` port 2 | `uaspstor.inf` | Code 10, as under Windows' own stack |
+| the emulator's xHCI `8086:15C1` | `usbxhci.inf` (untouched: the force names only `1B36:000D`) | started |
+| the NHI `8086:15BF` | none | Code 28 |
+
+  Code Integrity event 3001: "an unsigned kernel module ...
+  `xhci98.sys` is loaded into the system"; System events 20003 for the
+  `xhci98` service on the root hub, composite and hub. The NHI's ids,
+  read from its Enum key: `HardwareID` `VEN&DEV&SUBSYS&REV`,
+  `VEN&DEV&SUBSYS`, `VEN&DEV&CC_088000`, `VEN&DEV&CC_0880`;
+  `CompatibleIDs` `VEN&DEV&REV`, **`VEN&DEV`**, `VEN&CC_088000`,
+  `VEN&CC_0880`, `VEN`, `CC_088000`, `CC_0880` - so on 10 the bare
+  `PCI\VEN_8086&DEV_15BF` that `xhcicm.inf` names is a compatible id,
+  and Intel's `&CC_0880` form a hardware id (record 21 section 3.6).
+- A second boot (16:03 to 16:12) for Explorer's details pane under
+  `xhci98.sys`: This PC, each drive selected - F: "USB Drive", **"Connected
+  to USB 3.0"**; G: "USB Drive", no line; as under Windows' own stack on
+  x64. Shut down 16:12; every guest of this kit is off (pids 65764,
+  41336, 25916 in the kit's `pids.txt`).
+
+### Not read
+
+- A restart leg on x64: the package cannot be staged there without a
+  catalog (record 13 section 6.14.5).
+- Device Manager's pages under `xhci98.sys`, a hot-plug, Sleep, an
+  update and the uninstall back to `usbxhci.sys`: 43.37's.
+- Intel's Thunderbolt driver in a guest: no image of it here; its INFs
+  were read statically (record 21 section 3.6).
+
+## 43.54 - Does Windows ME Start This Driver's Devices Late?
+Roadmap-usb4 task 43.54, opened by the owner on 2026-10-22 ("start ME
+investigation") from task 43.49's control (`runs/run-43.md` on branch
+`p43-49`): ME's own USB stack had run 160 cycles of 43.49's plug and
+unplug series without stopping. 43.49 put that down to ME's configuration
+manager starting `xhci98.sys`'s device PDOs late, so that more starts ran
+into a device already gone. This run measured plug-to-START on both
+stacks. Development host A, QEMU under TCG, one virtual CPU, 256 MB,
+headless; the host was loaded by other agents' guests throughout, so the
+absolute times below are slow, and each comparison was run close in time
+to the other.
+
+### Verdict
+
+**ME does not start this driver's devices late.** In a series that pulls
+every mouse a fixed time after its plug, `xhci98.sys` had the device
+addressed and the class driver's START selecting its configuration in
+about half the time ME's own stack took (medians 0.16 and 0.30 s, against
+0.58 and 0.66 s). **ME's own stack stopped too** in that series, at
+cycles 58 and 8, with the same `hidusb.sys` state read from the guest's
+memory as 43.49's stop. 43.49's 160 clean cycles came from how that
+series decided when to pull, not from either stack. Nothing on this
+driver's side needs a fix for this task. The release notes' known
+limitation needs rewording (below).
+
+### Method
+
+- Guests: ME + `3.1.0.0` with the `qemu` flavour of `2f46080a` copied over
+  `xhci98.sys` (`qemu-xhci`, `p2=4,p3=4`; a mouse at root port 1, a stick
+  at 2, a hub at 4, an MS-DOS Prompt open), as 43.49. Registry as 43.49:
+  `XhciInterruptMode` 2, `XhciPollIdleMs` 50, `XhciPollFineTimer` 0,
+  `XhciLogVerbosity` 2. Two binaries: the gated build, and an ungated
+  rebuild of the same source with trace lines added (each PnP IRP's PDO,
+  each URB but interrupt transfers, each request held for a departed
+  device and its cancel, each deferred refusal). Not kept.
+- The control: stock ME (no `xhci98.sys`) on a QEMU `piix3-usb-uhci`,
+  ME's own USB stack, a hub at port 2 and an MS-DOS Prompt open, as 43.49's
+  control. Run c on a fresh overlay of the stock image.
+- The timings: QEMU's own trace (`-trace usb_set_addr`, `usb_set_config`,
+  host-stamped). `usb_set_addr` is the stack addressing the new device;
+  the first `usb_set_config` after the plug is `hidusb.sys`'s START
+  selecting the configuration. The same two events on both stacks. On
+  `xhci98.sys` also the driver's debugcon trace, host-stamped as read.
+- **The fixed series**: `usb-mouse` hot-plugged alternately at a root port
+  and at a hub port (`xhci98.sys`: 3 and 4.1; UHCI: 1 and 2.1), each pulled
+  exactly 1.0 s after its plug (`device_del`), the next plugged as soon as
+  QEMU had dropped it; no pointer detector. After four cycles in a row
+  without a START, the tray clock was checked across 75 s, and a frozen
+  clock taken as a stop. At a stop the guest's memory was saved and read
+  with 43.49's parser (`devs.py`).
+- **43.49's series**, for the comparison: the same plugs, each pulled when
+  a screen detector saw the pointer move (`plug.py`'s detector), no gap.
+- **Spaced plugs**: the same plugs 6 s apart, each held until 3 s after
+  its START.
+
+### Readings
+
+#### The fixed series (pull at 1.0 s)
+
+| Stack | Run | Cycles | Addressed by 1.0 s (median) | START by 1.0 s (median) | Stop |
+|---|---|---|---|---|---|
+| `xhci98.sys`, gated `qemu` | b2 | 13 | 10 (0.17 s) | 3 (0.21 s) | at cycle 13 |
+| `xhci98.sys`, `qemu` + trace lines | c | 60 | 53 (0.16 s) | 42 (0.30 s) | none in 60 |
+| ME's own (UHCI) | b | 58 | 21 (0.58 s) | 18 (0.66 s) | at cycle 58 |
+| ME's own (UHCI), fresh overlay | c | 8 | 3 (0.66 s) | 2 (0.99 s) | at cycle 8 |
+
+Each of the three stops: the tray clock still across 75 s and 90 s,
+typed text never echoed, the processor in the VMM's idle loop
+(`c00138c1`/`c00138c2`, as 43.49's), and in the saved memory a
+`hidusb.sys` minidriver extension in state 5 with its pending count 0 and
+a waiter on its remove event - 43.49's signature: a STOP after a failed
+START, then a REMOVE waiting for ever (b2: `c15aac3c`; UHCI b: `c145d4ec`;
+UHCI c: `c153d56c`). On ME's own stack the START that preceded run b's
+stop came 0.95 s after the plug, 0.05 s before the pull.
+
+#### Spaced plugs
+
+| Stack | START after the plug, once the device was installed |
+|---|---|
+| `xhci98.sys` (gated, run a, cycles 5 to 12) | 0.21 to 0.32 s |
+| ME's own (UHCI, run a, cycles 6 to 12) | 0.42 to 0.50 s |
+
+The first plugs on either stack took 4 to 14 s (ME installing the
+device); the rows leave those out.
+
+#### 43.49's series
+
+On `xhci98.sys` (trace build, 40 cycles, no stop; the gated build's run
+of the same series stopped answering at cycle 16, its clock check not
+read), 13 of 40 devices were pulled before their
+START, 9 of them 0.01 to 0.24 s after the plug - before this driver had
+reset the port, which it does 0.16 to 0.25 s after the plug. The detector
+saw a screen change that was not the new mouse's pointer, so these pulls
+were the series', not the stack's. 43.49's UHCI control, run with the
+same detector, had a plug-to-pointer of 0.78 to 26.57 s (mean 5.57 s): it
+held most devices well past their START, and a START that has finished
+before the pull does not take `hidusb.sys`'s failing path. That, not a
+late START under `xhci98.sys`, is why that control did not stop in 160
+cycles.
+
+#### Where the configuration manager waits
+
+The trace build shows ME sometimes saying nothing for 4 to 7 s after a
+device leaves - no PnP request to any of this driver's devices - and then
+asking the gone device's relations, cancelling its two held interrupt
+reads, and sending its REMOVE (in 43.49's series 12 of 44 such answers
+came more than 2 s after a plug; in the fixed series 2 of 48). The driver
+had already reported the change; nothing of ME's waited on it. ME's own
+stack cannot be traced at that level here, but it addressed only 21 of 58
+devices within the second, against 53 of 60, which an idle configuration
+manager does not explain either.
+
+One effect of those waits is this driver's own: a port's next device is
+enumerated only once ME has removed the previous device's PDO there, so
+during such a wait the next device at that port is not addressed (all 7
+of the 60 fixed-series cycles that were not addressed came 1.6 to 4.5 s
+into such a wait). It lengthens no START that ME would otherwise have sent.
+
+### Candidate changes
+
+None to this driver: the START is not late, and the stop reaches ME's own
+stack in the same series. 43.49's candidate 1 (let `hidusb.sys`'s start
+succeed for a device that leaves first, on 9x) remains the only way to
+make ME stop less often than its own stack does. It is no longer
+justified by this driver reaching the defect more readily, so it weighs
+less than 43.49 put it.
+
+### The release notes
+
+The known limitation 43.49 added (`docs/using/release-notes.md`, on branch
+`p43-49`, not yet on `3.2.0.0`) says ME's own stack ran 160 cycles
+without stopping and that this driver "reaches it far more readily".
+These readings contradict both statements. Proposed replacement for its
+last three sentences, to apply when `p43-49` is merged (owner, 2026-10-22:
+accepted; applied after the merge, worded as below with the defect named as
+any stack's and this driver's starts no later than ME's own stack's):
+
+> It was seen in a virtual machine after 4 to 17 back-to-back plug and
+> unplug cycles; ME's own USB stack, on a UHCI controller in the same
+> virtual machine, stopped the same way after 8 and 58 cycles of a
+> series that pulled each mouse one second after its plug. Plugs a few
+> seconds apart, each left until the device worked, did not reach it.
+
+### Owner, 2026-10-22
+
+All three accepted: 43.54 closed with no driver change, the release notes'
+known limitation reworded from these readings, and 43.53's ME option (43.49's
+candidate 1) lowered to a low-priority later idea. `runs/run-43.md`'s 43.49
+section carries a dated note pointing here.
+
+### Owed
+
+- Nothing for this driver. What ME's configuration manager does during
+  its 4 to 7 s waits was not read (it happens on its own stack as well,
+  and is ME's).
+
+## 43.22 Windows 8 and 8.1, a target of the connection manager: what NT 6.2 and 6.3 need (2026-10-22)
+
+Branch `p43-22`, from `3.2.0.0` at `46e7d2af`. The roadmap entry lists what
+an install on NT 6.2 and 6.3 needs that 42-A.21 did not read; each item
+below says what was read and how. The install, update and uninstall legs,
+the emulator's tunnel legs and the NVMe legs are 43.24's; this task read
+the install alone, one per system, with the published `3.1.0.0` package
+(the installer as 42-A.21 coded it; `release-x64\xhcicm.sys` SHA-256
+`b643972abf8f940c2fd5f07ecb1b55871a8a5e5f78433a210f718e74f2444de0`, an
+embedded test signature, security directory 1,496 bytes; `release-x86`'s
+`d7202c39e01450e051b65496ad66d7e94e6a537c8a601729ae0971a4465f602b`,
+unsigned).
+
+### The vehicle
+
+Development host A, QEMU, headless, TCG: the usb4-emu QEMU
+(`vm\usb4\bin-2a893ea`, SHA-256 `6a1dfcc8...bd66`, the hash every kit
+checks), `-machine pc` (SeaBIOS: no Secure Boot), `-cpu
+qemu64,+3dnowprefetch`, smp 2, a `qemu-xhci` with a tablet, and the
+emulator's `tb3-alpine-ridge` NHI (`8086:15BF`) with its tunnel bridge
+(`1B36:0001`) and xHCI - the `p43-33` kit's topology. Overlays of the
+read-only pristine images of the `win8-10` set: Windows 8 Pro x86
+(6.2.9200), Windows 8 Pro x64 (6.2.9200) and Windows 8.1 Pro x64
+(6.3.9600, with Update); test-signing mode on in each, as built. **No
+Windows 8.1 x86 image exists** (no medium; owner, 2026-10-22: 8.1 32-bit
+is skipped for `3.2.0.0`, recorded as untested ground, covered by 8 x86
+and 8.1 x64). A guest script (`read.ps1`, kit `E:\xhci98-vm\p43-22`) read
+`SystemStartOptions`, `sc qc`, the PCI devices' problem codes and
+drivers, the `UpperFilters`, and `setupapi.dev.log` onto a second disk,
+read after power-off with 7-Zip; the guest ran `INSTALL /console /cmonly
+/yes`, elevated, from a VVFAT drive. The host was saturated (another
+agent's builds and a dozen guests): nothing here is a timing. Kit ports
+48620 to 48622.
+
+### Results
+
+| System | `INSTALL /console /cmonly /yes` in test-signing mode | On a start with signature enforcement disabled | After |
+|---|---|---|---|
+| 8 x86 | **installs**: two "Windows can't verify the publisher" prompts (`xhcicm.inf`, `xhcicmf.inf`), answered; `Cm.Dev6.NTx86` and `CmF.Dev6.NTx86`; NHI on `xhcicm`, started; bridge filtered, started; `xhcimark` running; exit 3 | - | `xhcicm` `BOOT_START` ("Updated service 'xhcicm' to be boot start"); with test-signing off and on again, each start reached the desktop with the NHI and the bridge at problem 0 and `xhcicm` running |
+| 8 x64 | **refused**: "xhcicm.inf could not be staged (error 0xE000022F)"; `setupapi.dev.log`: "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode" / "The third-party INF does not contain digital signature information"; "No changes were made", exit 2 | installs as on 8 x86 (the two prompts; "Driver package does not contain a catalog file, but user wants to install anyway"); `Cm.Dev6.NTamd64`, `CmF.Dev6.NTamd64`; NHI and bridge started, exit 3 | `xhcicm` `BOOT_START`; the next start, test-signing mode off, stopped in "Attempting repairs" (Automatic Repair) and stayed there through two launches, over an hour |
+| 8.1 x64 | **refused**, the same error and log lines; the local copy made, exit 2 | installs as on 8 x64, exit 3 | `xhcicm` `BOOT_START`; a plain start in test-signing mode (`SystemStartOptions` `TESTSIGNING NOEXECUTE=OPTIN`) reached the desktop with the NHI on `xhcicm`, started, and the bridge filtered: the test-signed SHA-1 binary loads in test-signing mode |
+
+`SystemStartOptions` on a start with enforcement disabled read
+`TESTSIGNING NOEXECUTE=OPTIN DISABLE_INTEGRITY_CHECKS` (8 x64, 8.1 x64);
+in test-signing mode `TESTSIGNING NOEXECUTE=OPTIN`; with it off
+`NOEXECUTE=OPTIN`. `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot`
+holds `AvailableUpdates` alone and `Confirm-SecureBootUEFI` answers "Cmdlet
+not supported on this platform" on these SeaBIOS guests. The installer
+named the systems "Windows 8" and "Windows 8.1" (`RtlGetVersion`), offered
+the connection manager alone and left Stor98 out, as 42-A.21 coded; its
+x64 note said "Test-signing mode is on: the test-signed x64 connection
+manager loads." and the staging then failed. The console tool waits for
+Enter at its end even with `/yes` and its output redirected; a script feeds
+it `< NUL`.
+
+### What the reading settles, item by item
+
+- **The INFs' decorations**: right as they are. 8 and 8.1 take
+  `NTx86.6.0` / `NTamd64.6.0` and the `Dev6` install sections, as the host
+  vectors of `inst_models_section` say; `Signature="$CHICAGO$"` and
+  `$Windows NT$` both accepted. No INF change.
+- **The x64 test signature with Secure Boot off and test-signing on**: the
+  binary loads (8.1 x64, a plain start; 8 x64 in the start with
+  enforcement disabled), but the package does not install in test-signing
+  mode: Windows 8 and 8.1 x64 refuse an INF with no catalog there. Record
+  19's premise that a catalog governs only the prompt holds for Vista and
+  7 and not for 8 and 8.1.
+- **Boot start**: Windows 8 and 8.1 make `xhcicm` boot start through the
+  bridge filter (32-bit too). On x64 that turns test-signing mode from
+  "needed for the driver to load" into "needed for Windows to start". Read
+  on 8 x64 only, with a hung Automatic Repair; the cause is inferred from
+  the boot-start change and the test signature, not read from a boot log.
+  64-bit 8.1 and 32-bit 8 read `BOOT_START` too.
+- **32-bit 8 and 8.1 with Secure Boot on**: Microsoft's "Driver Signing
+  Policy" page ("Signing requirements by version"; `ms.date` 2024-08-19,
+  read 2026-10-22) lists "64-bit, 32-bit" for "Windows 8, Windows 8.1,
+  Windows 10, versions 1507, 1511 with Secure Boot on", against "64-bit
+  only, no signature required for 32-bit" for "Windows Vista, Windows 7;
+  Windows 8+ with Secure Boot off". It does: so the note of record 23
+  section 5.10 covers the x86 package there (owner, 2026-10-20). With
+  Secure Boot off (SeaBIOS) 32-bit 8 loaded the unsigned driver with
+  test-signing mode on and off. Secure Boot on is unread: no guest here
+  has it.
+- **The installer's 8 and 8.1 path as 42-A.21 coded it**: version, name,
+  the connection manager alone, Stor98 left out: as designed. Wrong: on
+  8 and 8.1 x64 it went on in test-signing mode into a staging Windows
+  refuses, said nothing of why, and its note promised the driver would
+  load; and it would install outside test-signing mode with a note, which
+  on 8 and 8.1 x64 leaves a machine that does not start. Fixed, commit
+  `6c9e49f1` and the commit that closes this task (record 23 section
+  5.10, revision 30; numbered 30 because `p43-34` and `p43-27` take 27
+  and `integ` and `p43-42` take 28 and 29): `inst_cm_boot_gate` refuses the connection manager on 8 and 8.1 x64 unless the package is
+  test-signed and test-signing mode is confirmed, and warns when it goes
+  on; `inst_stage_error_text` explains `0xE000022F` there and names the
+  start without enforcement; on 32-bit 8 and 8.1 `inst_sig_note_kind`
+  prints the Secure Boot note, and a Code 52 there is reported as that
+  refusal. Host vectors in `test_inst.c`. The three decisions key on the
+  kind `inst_os_kind` gives (`INST_OS_CMONLY`), not on 6.2 and 6.3, and
+  their texts say "this Windows", so Windows 10 below build 22000, which
+  `p43-34` (task 43.34) admits to that kind, takes them on the merge;
+  whether 10 makes `xhcicm` boot start and refuses the catalog-less
+  package in test-signing mode is 43.34's to read. The note that told 8
+  and 8.1 x64 users that test-signing mode needs Secure Boot off, after
+  the test-signing note, is gone: the gate's texts say it on those
+  systems, and the branch is dead code otherwise (`p43-34` edits the same
+  lines for 10: on the merge, take the removal).
+- **8.1 with Intel's own Thunderbolt software**: not read in a guest (no
+  image of it at hand; 43.24's leg, "where an image of it is at hand").
+  Read from the code: a controller another driver holds is foreign and
+  left (decision D3), so the NHI keeps Intel's driver; the filter still
+  goes onto the bridges, where it does nothing without this driver on the
+  NHI (record 21 section 3.2) - but on 8.1 x64 it makes `xhcicm` boot
+  start all the same, so the gate applies. Intel's release notes for its
+  Thunderbolt software 16.3.61.275 (as reposted on a vendor forum, not
+  read on Intel's site) list Windows 7 32- and 64-bit, 8.1 64-bit and 10
+  64-bit, Falcon Ridge and Alpine Ridge, and call it the last package for
+  7 and 8.1; no 8 and no 8.1 32-bit.
+- **README and the release notes**: moved from "never run" to what was
+  read here (install alone), the legs still 43.24's; 8.1 32-bit in
+  "Untested ground".
+
+### Builds
+
+| Build | Result |
+|---|---|
+| `xhciinst\build.cmd`, `6c9e49f1` | passed |
+| host suites (`test\run-host-tests.cmd`), `6c9e49f1` | 0 failures (`test_inst` 1790 checks) |
+| host suites, the closing commit (the gates keyed on the kind, Secure Boot's state) | 0 failures (`test_inst` 1798 checks) |
+| host suites after merging `3.2.0.0` at `a48e8688` (Windows 10 below build 22000 now `INST_OS_CMONLY`; vectors added for 10 and 11 through every gate) | 0 failures (`test_inst` 1821 checks) |
+| `xhciinst\build.cmd`, `build-driver.cmd all`, `all -amd64` after that merge | passed (`BUILD + GATES PASSED (debug release qemu)` for x86 and amd64) |
+| `xhciinst\build.cmd`, `build-driver.cmd all`, `all -amd64`, `544cfcd4` | passed (`BUILD + GATES PASSED (debug release qemu)` for x86 and amd64; a first run failed the self-test's "every screen within 79 columns" on an 80-column line of the x86 Secure Boot note, rewrapped before the commit) |
+
+### Not read
+
+8.1 32-bit (no medium). Secure Boot on, either architecture (no UEFI
+guest). The way back from Automatic Repair on 8 x64 by a start with
+enforcement disabled: the guest stayed at "Attempting repairs" through
+two launches (13:51 to 15:04 on the second), never reaching the menu, and
+was closed; the warning's way back rests on Microsoft's documented
+Startup Settings, not on a reading. Whether 7 x64 also makes `xhcicm`
+boot start (the same filter; 42-A.21's 7 leg was 32-bit, and no x64 leg
+has read `sc qc xhcicm`): owed, and if it does, 7 x64 has the same hazard
+and the gate should cover it. Intel's own Thunderbolt software on 8.1 (no image). The update and
+uninstall on 8 and 8.1, the
+tunnels, eject and NVMe (43.24). The new installer in a guest: its
+refusal, warning and notes rest on the host vectors and the self-test's
+screens (a package with an x64 half needs the signing key, which this
+session did not have).
+
+### Secure Boot's state (owner, 2026-10-22)
+
+The owner accepted `p43-34`'s design (record 26 section 5.3.2): the
+installer reads `UEFISecureBootEnabled` (on, off, not known) and shows it
+in the signature note on 8, 8.1 and 10, never changing it; with Secure
+Boot on, test-signing mode never counts as confirmed and the user is told
+to turn Secure Boot off first. Coded here (record 23 section 5.10,
+revision 30): `inst_sb_state`, `inst_sb_applies`, `inst_sb_text`,
+`inst_ts_confirmed`, keyed on the connection-manager-alone kind so 10
+takes them; on 32-bit 8 and 8.1 a known state replaces the Secure Boot
+note by its case. Host vectors for the three states on each system and
+through the gate. The value is read on no guest here (SeaBIOS only).
+
+The owner's answers the same day: Intel's own Thunderbolt driver on a
+controller is another vendor's device and is left alone, on 8.1 and 10
+alike (as the code does: the NHI is foreign and left); the per-system
+"untested" warning is 43.37's.
+
+### Owner questions
+
+1. A signed catalog for the x64 package's INFs (record 19 decided against
+   one): with a test-signed catalog, 8 and 8.1 x64 would install in
+   test-signing mode with no start without enforcement. Recommendation:
+   yes for `xhcicm.inf` and `xhcicmf.inf` at least, signed with the same
+   test key the packaging scripts sign the x64 binaries with (no script
+   here makes a catalog yet); Vista and 7 accept a catalog-less package
+   now, so they lose nothing. It does not cure item 2 of record 23's
+   revision 30: the boot driver still needs test-signing mode. Owner,
+   2026-10-22: yes, a catalog for every x64 INF (43.36 below; record 23
+   revision 33).
+2. Whether 7 x64 also makes `xhcicm` boot start through the filter: if it
+   does, 7 x64 on starts with enforcement disabled (F8 at every start) is
+   the same hazard, and the gate should cover it. Recommendation: read it
+   in 43.24's or 43.31's 7 x64 leg (`sc qc xhcicm` after the install) and
+   widen the gate to Vista and 7 x64 if so. Owner, 2026-10-22: read in
+   43.24's or 43.31's 7 x64 leg.
+3. On a controller another driver holds (Intel's software, left alone
+   as the owner decided), the filter still goes onto its bridges, which
+   run Windows' own `pci`, where it does nothing, yet on 8 and 8.1 x64 it
+   makes the system depend on test-signing mode. Recommendation: leave
+   the filter out too where no NHI in the run is this driver's (a small
+   installer change, host-testable), as a later task. Owner, 2026-10-22:
+   a new task, 43.58, not this one.
+
+## 43.36 the x64 catalog, read on Windows 10 and 8.1 x64 (2026-10-22)
+
+The owner's decision of 2026-10-22 on 43.33's refusal (record 13 section
+6.14.5): every x64 INF names a catalog of its own, made and signed by
+`make-package.ps1` (design record 19 section 3a; branch `p43-36s`).
+Development host A, QEMU under TCG, two virtual processors, 2048 MB,
+headless, one guest at a time; the host loaded by other agents' guests
+and builds throughout. Kit `E:\xhci98-vm\p43-36s` (ports 48800 to 48802),
+guest scripts `xfer\auto\go.cmd` and `leg.ps1`.
+
+**Verdict: with the catalogs, Windows 10 22H2 x64 and Windows 8.1 x64
+in test-signing mode take every one of the five x64 INFs into the driver
+store, after "Windows can't verify the publisher", and `xhci98.sys` and
+`xhcicm.sys` run after the restart; the same package with its catalogs
+removed is refused with `0xE000022F`, no prompt.**
+
+### The package
+
+The `release` amd64 package of this branch (gated build of `caa79889`,
+the drivers' sources as on `3.2.0.0` at `2038250e`), staged by
+`make-package.ps1 -Arch amd64` without the key, so the binaries were
+unsigned; the five catalogs made by the packager's own
+`New-PackageCatalogFile` (MakeCat, the CDF the signed path writes) and
+left unsigned (`E:\xhci98-scratch\p43-36s\stage-guest.ps1`). Each read
+back by `Read-CatalogFile` with its two members of the right types:
+`xhci98.cat` (`xhci98.inf`, `xhci98.sys`), `xhciuas.cat`, `xhcicm.cat`,
+`xhcicmf.cat` (`xhcicmf.inf`, `xhcicm.sys`) and `stor98.cat`.
+
+**The project's key was not used**: its password is the owner's and no
+agent holds it. In each guest a throwaway code-signing certificate was
+made in the guest's own store (`CN=p43-36s guest throwaway (not
+trusted)`, SHA-1, 2048 bits: `New-SelfSignedCertificate` on 10, WDK 7.1's
+`MakeCert` on 8.1, which has no `-Type`), and the four `.sys` files and
+the five `.cat` files were signed with it there (`Set-AuthenticodeSignature`
+on 10, WDK 7.1's `SignTool /fd sha1` on 8.1). Test-signing mode accepts a
+signature by any certificate, and the project's is trusted nowhere
+either, so the reading stands for it by inference; the leg with the
+owner-signed package is owed (below). Nothing was signed or installed on
+the host.
+
+### The legs (measured)
+
+| | Windows 10 22H2 x64 (19045) | Windows 8.1 x64 (9600) |
+|---|---|---|
+| Starting point | `p43-33`'s prepared `w10x64` (copied), test-signing on | the pristine image plus the runner task, test-signing on (`bcdedit`: `testsigning Yes`) |
+| Control: catalogs removed, `UpdateDriverForPlugAndPlayDevicesW` forced on `PCI\VEN_1B36&DEV_000D` | FALSE, `0xE000022F`, no prompt; "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode" | FALSE, `0xE000022F`, no prompt |
+| `pnputil` of the five INFs with their catalogs | each after "Windows can't verify the publisher of this driver software", "Install this driver software anyway": added as `oem2.inf` to `oem6.inf`, each "Installed catalog '<name>.cat' as 'oem<n>.cat'" | the same, `oem1.inf` to `oem5.inf` |
+| What the store says of each catalog | "Driver package catalog is valid", then `0x800B0109` (a root not trusted), "Driver package catalog file certificate does not belong to Trusted Root Certificates, but user wants to install anyway", "Signer Score = 0x80000000 (Unsigned)" | the same `0x800B0109` and Signer Score |
+| Forced install, `xhci98.inf` on the controller | TRUE, no restart asked | TRUE |
+| Forced install, `xhcicm.inf` on the NHI (`PCI\VEN_8086&DEV_15BF`, the emulator's Alpine Ridge) | TRUE | TRUE |
+| After the restart | `xhci98` and `xhcicm` running; the controller, root hub and hub as `xHCI98` devnodes, HID mouse and keyboard, both Bulk-Only sticks started; the NHI "xHCI98 Thunderbolt 3 Controller" started | the same |
+
+Not a reading of this package: QEMU's `usb-uas` at Code 10 under
+`uaspstor` on both, as under Windows' own driver (record 13 section
+6.14.3), so `xhciuas.sys` and `stor98.sys` were imported into the store
+and never bound (no device of theirs runs here). `Win32_PnPSignedDriver`
+reports the installed drivers `IsSigned False`, the analogue of Vista
+and 7's "Not digitally signed" for a signer no root trusts.
+
+Harness notes: on 10 the runner task started at logon by itself, on 8.1
+it did not, and the 8.1 leg's first run, from a Run box with
+Ctrl+Shift+Enter, which elevates only from 10 on, was not elevated
+(every step "Access is denied"; set aside as `w81x64-cat-noelev`); the
+second ran from Win+X, A. On both the first click on the publisher
+prompt only activates it. The Shift key sent to wake 8.1's display
+raised Sticky Keys. The output disk was not formatted on the first 8.1
+run (the readings were read off the system disk).
+
+### Owed
+
+- The same legs with the owner-signed package (`make-package.ps1
+  -TestSignPfx`, the project key): by inference identical, since the
+  store reports only an untrusted root for either signer.
+- Windows 8 x64 (43.22 read the refusal there; the catalog leg is not
+  run); XP x64, Vista x64 and 7 x64 with a catalog'd package (the INFs
+  gained one line; by inference unchanged: an untrusted signer prompts
+  as an unsigned package did).
+- Stor98's `DmaRemappingCompatible`: no machine here has Kernel DMA
+  Protection on; the value is static (Stor98 `docs/PLAN.md`).
 
 ## 43.59 Stor98 wins a tunnelled NVMe drive first plugged after the install (2026-10-22)
 

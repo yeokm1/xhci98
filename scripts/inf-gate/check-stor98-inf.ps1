@@ -11,8 +11,12 @@ src\stor98\inf\stor98-x86.inf and stor98-x64.inf, which the package stages as
 stor98.inf. Each must have exactly one DriverVer line, zero-padded
 MM/DD/YYYY, equal to the header's date and version; its Signature must be
 $CHICAGO$ for the x86 INF (98 SE and ME read it) and $Windows NT$ for the x64
-one. scripts\build-driver.cmd runs it with the other INF gates, after
--SelfTest.
+one. The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
+packager makes and test-signs (design record 19, owner 2026-10-22: Windows
+8 to 10 x64 refuse a package without one in test-signing mode), and writes
+DmaRemappingCompatible=1 under its service's Parameters key (Kernel DMA
+Protection, docs/PLAN.md); the x86 INF names no catalog. scripts\build-driver.cmd
+runs it with the other INF gates, after -SelfTest.
 
 .PARAMETER Path
 One INF to check instead of both (the self-test's mutants).
@@ -51,6 +55,17 @@ function Get-InfFault {
     if ($got -cne $Want) { return "its DriverVer is '$got', and src\xhci_version.h says '$Want'" }
     $sig = [regex]::Match($t, '(?im)^[ \t]*Signature[ \t]*=[ \t]*"([^"]*)"')
     if (-not $sig.Success -or $sig.Groups[1].Value -ne $Signature) { return "its Signature is not `"$Signature`"" }
+    $cat = @([regex]::Matches($t, '(?im)^[ \t]*CatalogFile(\.[^ \t=]*)?[ \t]*=[ \t]*([^\r\n;]*?)[ \t]*(;[^\r\n]*)?\r?$'))
+    if ($Signature -eq '$Windows NT$') {
+        if ($cat.Count -ne 1 -or $cat[0].Groups[1].Value -ne "" -or $cat[0].Groups[2].Value -cne "stor98.cat") {
+            return "it does not name its catalog once as CatalogFile=stor98.cat (design record 19: the packager makes and signs it)"
+        }
+        if ([regex]::Matches($t, '(?im)^HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001\r?$').Count -ne 1) {
+            return "it does not write DmaRemappingCompatible=1 once under the service's Parameters key (docs/PLAN.md, Kernel DMA Protection)"
+        }
+    } elseif ($cat.Count -ne 0) {
+        return "it names a catalog, and the x86 package carries none (design record 19)"
+    }
     if ($Signature -eq '$Windows NT$') {
         # The 64-bit INF: no undecorated models section, empty or not, for one
         # the [Manufacturer] line names - xhci98's installer refuses such an
@@ -87,7 +102,8 @@ try {
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=" + $parts[0] + ",0.4.0.0"); Ok = $false; Why = "another version" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$unpadded," + $parts[1]); Ok = ($unpadded -eq $parts[0]); Why = "an unpadded date" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nDriverVer=$want"); Ok = $false; Why = "two DriverVer lines" },
-                @{ T = $base.Replace('"$CHICAGO$"', '"$Windows NT$"'); Ok = $false; Why = "the wrong Signature" }
+                @{ T = $base.Replace('"$CHICAGO$"', '"$Windows NT$"'); Ok = $false; Why = "the wrong Signature" },
+                @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "a catalog in the x86 INF" }
             )
             $i = 0
             foreach ($c in $cases) {
@@ -102,7 +118,13 @@ try {
         $b64 = [System.IO.File]::ReadAllText($infs[1].File)
         $c64 = @(
             @{ T = $b64; Ok = $true; Why = "the committed x64 INF" },
-            @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" }
+            @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat`r`n", ""); Ok = $false; Why = "no catalog in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=other.cat"); Ok = $false; Why = "another catalog name in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile.NTamd64=stor98.cat"); Ok = $false; Why = "a decorated catalog line in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=stor98.cat`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "two catalog lines in the x64 INF" },
+            @{ T = $b64.Replace('HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001', 'HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000002'); Ok = $false; Why = "DmaRemappingCompatible other than 1" },
+            @{ T = $b64.Replace('HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001', ''); Ok = $false; Why = "no DmaRemappingCompatible" }
         )
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("stor98-inf-" + [System.IO.Path]::GetRandomFileName())
         New-Item -ItemType Directory -Path $tmp | Out-Null

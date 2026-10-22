@@ -177,6 +177,12 @@ the x86 file has no need of: an undecorated install section and an undecorated
 [DefaultInstall] are both sections a 32-bit engine falls back to, and either
 would put an amd64 binary on a 32-bit machine (PATH-NO9X, OS-DEFAULT).
 
+.PARAMETER PublishedVersion
+The version a published tree was published at (make-release.ps1's upload
+assembly). Empty, the default, is this tree. A version before 3.2.0.0 is
+not held to BOTH-CATALOG: its x64 INF names no catalog (design record 19
+section 3a).
+
 .PARAMETER PackageDir
 Optional. A staged install-media directory: every file named in
 [SourceDisksFiles] must be present in it (honouring the per-file subdir
@@ -262,12 +268,17 @@ param(
     [string]$EmitMediaLayout = "",
     [string]$EmitFootprint = "",
     [string]$ManifestPath = "",
-    [switch]$AllowUnpaddedDriverVer
+    [switch]$AllowUnpaddedDriverVer,
+    [string]$PublishedVersion = ""
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
+# The catalog rule (BOTH-CATALOG) holds an INF of this tree and of a tree
+# published from 3.2.0.0; a published tree before 3.2.0.0 carries no catalog
+# and is not asked about one.
+$catalogRequired = ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge [version]"3.2.0.0")
 
 #
 # ---- the driver's own facts ------------------------------------------
@@ -604,6 +615,20 @@ if (-not (Test-SectionExists $inf "Version")) {
     $cls = @(Get-Directive $inf "Version" "Class")
     if ($cls.Count -ne 1 -or $cls[0].ToUpperInvariant() -ne "USB") {
         Add-Failure "BOTH-VERSION" ("[Version] Class must be USB. Found: '{0}'." -f ($cls -join ','))
+    }
+    # The catalog (design record 19, owner 2026-10-22): Windows 8 to 10 x64
+    # refuse a package without one in test-signing mode, so the amd64 INF
+    # names xhci98.cat, undecorated, once, and the packager makes and
+    # test-signs it. The x86 INF names none: the x86 package carries none,
+    # and Windows 98's engine would read the line.
+    $catEntries = @(Get-Section $inf "Version" | Where-Object { $_.Text -match '^\s*CatalogFile(\.[^=\s]*)?\s*=' })
+    if (-not $catalogRequired) {
+    } elseif ($Arch -eq "amd64") {
+        if ($catEntries.Count -ne 1 -or $catEntries[0].Text -notmatch '^\s*CatalogFile\s*=\s*xhci98\.cat\s*$') {
+            Add-Failure "BOTH-CATALOG" ("[Version] must name its catalog once, as CatalogFile=xhci98.cat: the packager makes and test-signs it (design record 19). Found: '{0}'." -f (($catEntries | ForEach-Object { $_.Text.Trim() }) -join ' | '))
+        }
+    } elseif ($catEntries.Count -ne 0) {
+        Add-Failure "BOTH-CATALOG" ("[Version] names a catalog ('{0}'), and the x86 package carries none (design record 19)." -f (($catEntries | ForEach-Object { $_.Text.Trim() }) -join ' | '))
     }
     $dv = @(Get-DirectiveRaw $inf "Version" "DriverVer")
     #
