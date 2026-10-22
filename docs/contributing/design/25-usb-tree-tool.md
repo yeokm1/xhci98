@@ -1,6 +1,8 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 15, 2026-10-19 (revision 15, Windows 2000's USB disk
+Status: revision 17, 2026-10-22 (revision 17, the 98 SE pop-up,
+roadmap-usb4 task 43.55: section 16, with sections 7.2, 11 and 12);
+revision 15, 2026-10-19 (revision 15, Windows 2000's USB disk
 class and its stopped mark, roadmap-usb4 task 42-A.28: sections 6.5 and
 14; revision 14, XHCISNAP's reading
 moved here, below; revision 13, the drivers' logging level, below;
@@ -125,7 +127,9 @@ authentication material.
 - A notification-area (tray) icon: a left click lists the units to eject,
   a double click opens the window, balloons announce plug, approval,
   disconnection and the outcome of an eject where the shell has balloons,
-  the tooltip carries the last event where it has not; it starts at
+  the tooltip carries the last event where it has not, and on 98 SE the
+  tool draws a pop-up of its own in the balloon's place (section 16,
+  revision 17); it starts at
   login (owner).
 - Runs as the logged-on user, with no administrator rights and no UAC
   prompt at start (owner); an action that needs rights asks for them then.
@@ -1155,7 +1159,8 @@ samples. So the tray says "disconnected", never "unplugged while in use"
 **Balloons.** Where `shell32.dll` is version 5.0 or later (2000, ME, XP
 and later) the tray uses the version 2 `NOTIFYICONDATAA` size with
 `NIF_INFO` balloons and `NIM_SETVERSION` 3; on 98 SE (4.72) the version 1
-size and the tooltip. The structures are declared in `tr_core.h` for the
+size and the tooltip, and since revision 17 a pop-up the tool draws
+itself for each notice that gets a balloon elsewhere (section 16). The structures are declared in `tr_core.h` for the
 MSVC 6.0 build with size checks (88 and 488 bytes, ANSI, x86); the x64
 build uses the WDK's header.
 
@@ -1399,6 +1404,7 @@ states, the sizing) and the tool's reader and texts of it in
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciCmLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 | T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
 | T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
+| T.12 | 98 SE; ME as the control | revision 17: the pop-up of section 16 for a plug of the Thunderbolt emulator's device and for the outcome of a Safely Remove from the tray, by screenshot; the focus left where it was; a click on the body and on the close box; the timeout; two notices in turn; on ME the shell's balloon and no pop-up |
 
 ## 12. Decisions
 
@@ -1510,6 +1516,13 @@ states, the sizing) and the tool's reader and texts of it in
   `-dump` and `-probe` become `/snapshot`, `/dump` and `/probe`, and Save
   Report carries the snapshot, so one file is the bug report. Its level
   switches do not move: section 7.5 already replaces them.
+
+- **T23** (owner, 2026-10-22, roadmap-usb4 43.55; revision 17) On 98
+  SE alone the tray draws its own balloon-like pop-up for each notice
+  that gets a balloon elsewhere (section 16), through the one
+  `tray_balloon` route, and a click on it is reported to the tray as
+  the shell reports a balloon's click. Every other system keeps the
+  shell's balloon. (T22 is revision 16's.)
 
 ## 13. Open
 
@@ -1698,3 +1711,129 @@ moved) stays the reference for the route and the files.
 11. **The door.** `xhci98.sys`'s USBUSER pass-through is kept unchanged
     (section 4.8): Windows' own property tabs use it, and the snapshot
     reads through it.
+
+## 16. The 98 SE pop-up (revision 17, task 43.55)
+
+Roadmap-usb4 43.55 (owner, 2026-10-22: "do this specially for 98 SE"):
+on Windows 98 SE, whose `shell32.dll` (4.72) shows no balloons, the tray
+draws a pop-up of its own for every notice that gets a balloon on ME,
+2000 and later, and looks and behaves like a balloon as far as plain
+Win32 on 98 SE allows. Only there: where `shell32.dll` is 5.0 or later
+the shell's balloon stays, unchanged, and the pop-up is never created.
+The tooltip's last event (section 7.1) is kept as it is.
+
+1. **One hook.** `tray_balloon` is already the one route of every
+   notice: the poll's events of section 7.2 (plug, approval,
+   disconnection, the controller that stops answering), the outcome of
+   an eject started from the tray (sections 6.2 and 6.5), and each later
+   notice that raises a balloon through it (43.21's unexpected-removal
+   warning, 43.27's "can run faster" notice). Where the shell has no
+   balloons it hands the title, the text and the icon kind to the pop-up
+   (`tr_pop_show`, `xhcitr\tr_popw.c`) after the tooltip; nothing else in
+   the tray changes. The outcome of an eject from the tray, which took a
+   message box on 98 SE for want of a balloon, takes the pop-up under the
+   balloon's own rule (shorter than 250 characters, else the message
+   box): the two tests read "the shell has balloons, or the pop-up is
+   ready" in place of "the shell has balloons". A pop-up whose class or
+   window cannot be made leaves 98 SE as it was before this revision:
+   the tooltip, and the message box for an eject's outcome.
+2. **The window.** A top-level `WS_POPUP` of its own class
+   (`Xhci98TrPop`), `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, owned by the
+   hidden tray window (so no taskbar button, and it goes with the tray),
+   shown with `SW_SHOWNOACTIVATE` and answering `WM_MOUSEACTIVATE` with
+   `MA_NOACTIVATE`: it never takes the focus or the keyboard. Its shape
+   is a rounded rectangle with a stem toward the notification area
+   (`SetWindowRgn` over `CreateRoundRectRgn` and `CreatePolygonRgn`).
+   Colours and font are the system's: `COLOR_INFOBK` behind,
+   `COLOR_INFOTEXT` for the text and a one-pixel border, and the tooltip
+   font (`NONCLIENTMETRICS` `lfStatusFont`, the font 98's tooltips use;
+   `DEFAULT_GUI_FONT` if that cannot be read), bold for the title. The
+   icon is the shell's for the balloon's `NIIF_*` kind - `IDI_INFORMATION`
+   for `NIIF_INFO`, `IDI_WARNING` for `NIIF_WARNING`, `IDI_ERROR` for
+   `NIIF_ERROR`, none for `NIIF_NONE` - drawn at the small-icon size
+   (`SM_CXSMICON`) beside the title; the close box is
+   `DrawFrameControl`'s caption close button, as tall as the title line,
+   at the top right. Title and text are cut where the balloon's fields
+   cut them (63 and 255 characters).
+3. **Its size** (`tr_pop_layout`, pure). Every length is from the font
+   and the system metrics, never a fixed pixel count, so Large Fonts
+   scale it: the padding is half a line, the stem a line high, the text
+   wraps (`DrawText` `DT_WORDBREAK`) at 40 average characters or the
+   screen's width less two margins and the padding, whichever is less,
+   and a pop-up taller than the screen less the taskbar is cut to it. At
+   640 x 480 with Large Fonts the longest notice (255 characters) fits.
+4. **Where** (`tr_pop_edge`, `tr_pop_place`, pure; the primary monitor
+   alone, since 98 SE's notification area is on it). The inputs are the
+   screen (`SM_CXSCREEN`, `SM_CYSCREEN`), the work area
+   (`SPI_GETWORKAREA`), the taskbar's rectangle (`FindWindowA
+   ("Shell_TrayWnd")`), the notification area's (`FindWindowExA` of
+   `TrayNotifyWnd` below it) and the pop-up's size.
+   - The edge: a taskbar wider than tall is at the top when its middle is
+     above the screen's, else at the bottom; one taller than wide at the
+     left or the right by the same test. An auto-hidden taskbar keeps its
+     rectangle mostly off the screen with a sliver on it, and the same
+     test reads its edge. A rectangle that is empty, or touches no edge of
+     the screen, counts as no taskbar; then the edge is the side where the
+     work area falls short of the screen, and the bottom when it falls
+     short of none.
+   - The anchor: the middle of the notification area, when there is one
+     and it lies in the taskbar; else the taskbar's far end (the right
+     end of a top or bottom taskbar, the bottom end of a left or right
+     one) less a margin; with no taskbar, that corner of the work area.
+     The line the pop-up stands on is the taskbar's inner edge, held
+     inside the screen (an auto-hidden taskbar's is the sliver's), or the
+     work area's edge.
+   - The place: beside that line on the screen's side, the stem at the
+     anchor, the body reaching away from the screen's near corner (to
+     the left of the anchor on a top or bottom taskbar, above it on a
+     left or right one), then moved wholly inside the screen with a
+     margin, the stem held between the body's rounded corners. It never
+     covers the taskbar.
+5. **Time, and one at a time** (`tr_popq_*`, `tr_pop_expired`, pure).
+   A pop-up shows for 10 seconds, the timeout `tray_balloon` gives the
+   shell (10 s is also the shell's least), counted from when it shows
+   with `GetTickCount` (its wrap at 49.7 days taken by the unsigned
+   difference). The shell of 2000 and ME also stops the count while the
+   user is away from the machine; 98 SE has no `GetLastInputInfo`, so
+   the pop-up does not, and the tooltip still carries the last event. A
+   notice raised while one shows waits in a queue of 8 and shows when
+   the one before closes, in the order raised, each for its full time,
+   as 2000's shell showed this icon's balloons in turn (the 43.21 legs
+   read the warning and then "disconnected" on 2000). A ninth waiting
+   notice drops the oldest waiting information notice, or, when every
+   waiting one is a warning or an error, the oldest waiting one.
+6. **The mouse.** A click on the close box closes the pop-up; so does a
+   right click anywhere on it. A left click on the body closes it and
+   does what a click on a balloon does: the tray window receives
+   `WM_TRAYICON` with `NIN_BALLOONUSERCLICK` (`WM_USER + 5`) in the low
+   word of `lParam`, which is how the shell reports a balloon's click
+   after `NIM_SETVERSION` 3, so whatever the tray does for a balloon's
+   click it does for the pop-up's, with no second path (until 43.27 it
+   does nothing; 43.27's notice opens its list). The time running out
+   and the close box send `NIN_BALLOONTIMEOUT` (`WM_USER + 4`), and the
+   showing sends `NIN_BALLOONSHOW` (`WM_USER + 2`), as the shell does.
+   Either way the next waiting notice shows.
+7. **Changes around it.** A display change (`WM_DISPLAYCHANGE`) or a
+   work-area change (`WM_SETTINGCHANGE` with `SPI_SETWORKAREA`, which a
+   taskbar moved or resized sends) places the showing pop-up again; an
+   Explorer restart needs nothing, each pop-up reading the taskbar when
+   it shows. The tray's exit destroys it with the tray window, the queue
+   with it. A full-screen program is not detected (98 SE's shell has no
+   such test either).
+8. **x64.** The pop-up's code is built into `XHCITR64.EXE` too, and never
+   runs there: every x64 Windows has `shell32.dll` 6.0.
+9. **Host vectors** (`test\test_trpop.c`, over `xhcitr\tr_pop.c`): the
+   edge from a taskbar on each side, shown and auto-hidden; no taskbar,
+   with the work area short on each side and on none; an empty taskbar
+   rectangle and one that touches no edge; the anchor with the
+   notification area, without it and outside the taskbar; the place at
+   each edge, in a corner and held inside a 640 x 480 screen; the size at
+   small and large font metrics, a 255-character text at 640 x 480, the
+   cut to the screen's height; the queue's order, its bound and the drop
+   rule; the timeout at the tick's wrap.
+10. **Leg T.12** (section 11): on 98 SE, the pop-up for a plug of the
+    Thunderbolt emulator's device and for the outcome of a Safely Remove
+    from the tray, read by screenshot (`screendump` over QMP), the
+    focus left where it was, a click on the body and on the close box,
+    the timeout, two notices in turn; ME as the control, with the shell's
+    balloon and no pop-up.
