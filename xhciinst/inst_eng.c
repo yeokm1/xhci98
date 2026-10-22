@@ -16715,6 +16715,8 @@ static int vsd_old_name(void)
                                    ini);
         if ((k & 1) != 0 &&
             !vsd_old_lines(ini, old, oldS, tmp, tmpS, &ownLines, &otherLines)) {
+            /* Unread, nothing shows the line gone: the failure below. */
+            ownLines = -1;
             break;
         }
     }
