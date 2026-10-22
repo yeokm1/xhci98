@@ -1,6 +1,11 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+Status: revision 29, 2026-10-22 (roadmap-usb4 task 43.48: the free and
+non-free driver sets a download carries, copied to the install directory
+and optionally staged for the first plug, the switches `/free`,
+`/freestage`, `/nonfree` and `/nonfreestage`, and their removal in the
+uninstall before the installer's own files; record 26 draft 24 section
+6.7); revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
 owner's decisions of 2026-10-20: Windows 10, NT 10.0 below build 22000,
 admitted beside 8 and 8.1, Windows Server 2016 to 2022 as 10 with no
 Server check, 11 still refused; sections 4.3, 4.5 and 5.10; record 26
