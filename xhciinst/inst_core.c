@@ -5128,12 +5128,12 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "A Thunderbolt 3 / USB4 controller was found. With this, a device "
       "plugged into its port can reach the computer's memory: see "
       "XhciCmApprove.",
-      272, 26 },
+      272, 24 },
     { INST_PT_TB_ABSENT,
       "No Thunderbolt 3 / USB4 controller was found (some laptops show it "
       "only with a device plugged in or a BIOS setting). Tick it only if "
       "this computer has such a port.",
-      272, 26 },
+      272, 24 },
     { INST_PT_TRAY, "xHCI98 USB Tree, started at login", 270, 10 },
     { INST_PT_TRAY_T,
       "The tray tool that lists the USB devices and removes them safely.",
@@ -5143,7 +5143,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_DIR_9X,
       "Windows 98 SE and ME: the package's drivers go there too. Each "
       "folder name 8 characters at most, no spaces.",
-      284, 18 },
+      284, 16 },
     { INST_PT_USB,
       "The USB settings. A value left as it is is not written; one you "
       "change is written machine-wide, for every controller.",
@@ -5174,7 +5174,11 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_S98_T,
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",
-      260, 18 },
+      260, 16 },
+    { INST_PT_VSD, "Large transfers for Stor98 (STOR98.VXD), up to 2 MiB",
+      246, 10 },
+    { INST_PT_VSD_OTHER,
+      "Large transfers for Stor98 (Windows 98 SE and ME only)", 246, 10 },
     { INST_PT_S98SET,
       "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
       "nothing; Stor98 keeps its built-in default.",

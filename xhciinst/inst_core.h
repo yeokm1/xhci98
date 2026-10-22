@@ -1368,6 +1368,10 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 /* Record 26 section 6.5 (task 43.4): the USB storage drivers, 98 SE. */
 #define INST_PT_STOR            41
 #define INST_PT_STOR_T          42
+/* Design record 30 section 7.1: STOR98.VXD's box, and its greyed form on
+ * every other system. */
+#define INST_PT_VSD             43
+#define INST_PT_VSD_OTHER       44
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1738,6 +1742,9 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
 #define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
 #define INST_STOR_PACK_DIR      "NUSB33\\W98SE"
 #define INST_STOR_KEY           "Software\\xhci98\\Storage"
+/* STOR98.VXD's own record (design record 30 section 7.4): File and
+ * Pending, apart from Stor98's. */
+#define INST_VSD_KEY            "Software\\xhci98\\Stor98Vxd"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
 

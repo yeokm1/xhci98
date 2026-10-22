@@ -150,6 +150,10 @@ static int compLaidOut;
  * boxes for the drives an update touches. */
 static int s98Have;
 static int s98Choice;
+/* STOR98.VXD's box (design record 30 section 7.1): Stor98's child. */
+static int vsdShown;
+static int vsd9x;
+static int vsdChoice;
 static char s98Ver[32];
 static int s98WinSet[INST_S98_COUNT];
 static char s98WinVal[INST_S98_COUNT][32];
@@ -423,6 +427,14 @@ static unsigned __stdcall job_main(void *arg)
             s98Choice = s98Have && tbChoice && !opts->NoStor98 &&
                         (!usbNotHere || opts->Stor98);
             inst_eng_s98_choose(s98Choice);
+            {
+                int sh;
+                int op;
+                inst_eng_vsd_state(&vsdShown, &vsd9x);
+                vsdChoice = inst_vsd_box(vsd9x, vsdShown, s98Choice,
+                                         opts->NoStor98Vxd, &sh, &op);
+                inst_eng_vsd_choose(vsdChoice);
+            }
             storShown = inst_eng_stor_state(&storOffered, &storChoice,
                                             storNote, sizeof(storNote));
             EnterCriticalSection(&textLock);
@@ -748,6 +760,7 @@ static void replan(void)
     inst_eng_usb_choose(usbChoice);
     inst_eng_tb_choose(tbChoice);
     inst_eng_s98_choose(s98Choice);
+    inst_eng_vsd_choose(vsdChoice);
     inst_eng_stor_choose(storChoice);
     EnterCriticalSection(&textLock);
     tb_clear(&planText);
@@ -767,11 +780,30 @@ static void comp_s98_sync(HWND dlg)
                                  IsDlgButtonChecked(dlg, IDC_C_TB) ==
                                  BST_CHECKED);
 
+    int sh;
+    int vopen;
+
     if (!open) {
         CheckDlgButton(dlg, IDC_C_S98, BST_UNCHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_S98), open);
     EnableWindow(GetDlgItem(dlg, IDC_C_S98_T), open);
+    /* STOR98.VXD, Stor98's child (record 30 section 7.1): open only while
+     * Stor98 is ticked, on 98 SE and ME; unticked and greyed otherwise. */
+    inst_vsd_box(vsd9x, vsdShown, IsDlgButtonChecked(dlg, IDC_C_S98) ==
+                 BST_CHECKED, 0, &sh, &vopen);
+    if (!vopen) {
+        CheckDlgButton(dlg, IDC_C_VSD, BST_UNCHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_C_VSD), vopen);
+}
+
+/* Ticked whenever Stor98 is ticked (owner, 2026-10-22). */
+static void comp_vsd_follow(HWND dlg)
+{
+    CheckDlgButton(dlg, IDC_C_VSD, IsDlgButtonChecked(dlg, IDC_C_S98) ==
+                   BST_CHECKED ? BST_CHECKED : BST_UNCHECKED);
+    comp_s98_sync(dlg);
 }
 
 /* The USB drivers' box and what it locks (record 26 section 5.3, draft
@@ -800,6 +832,7 @@ static void comp_usb_state(HWND dlg)
         if (IsDlgButtonChecked(dlg, IDC_C_TB) != BST_CHECKED &&
             !usbNotHere) {
             CheckDlgButton(dlg, IDC_C_S98, BST_CHECKED);
+            CheckDlgButton(dlg, IDC_C_VSD, BST_CHECKED);
         }
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
     }
@@ -826,7 +859,7 @@ static void comp_usb_click(HWND dlg)
 static void comp_layout(HWND dlg)
 {
     static const int below[] = {
-        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_TRAY,
+        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_C_TRAY,
         IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR, IDC_C_BROWSE, IDC_C_DIR_T,
         IDC_C_DIR_WHY
     };
@@ -919,6 +952,11 @@ static void comp_fill(HWND dlg)
     CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98), s98Have ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98_T), s98Have ? SW_SHOW : SW_HIDE);
+    SetDlgItemTextA(dlg, IDC_C_VSD, inst_page_text(vsd9x ? INST_PT_VSD :
+                                                   INST_PT_VSD_OTHER));
+    CheckDlgButton(dlg, IDC_C_VSD, vsdChoice ? BST_CHECKED : BST_UNCHECKED);
+    ShowWindow(GetDlgItem(dlg, IDC_C_VSD), s98Have && vsdShown ? SW_SHOW :
+                                                                 SW_HIDE);
     comp_s98_sync(dlg);
     SetDlgItemTextA(dlg, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(dlg, IDC_C_TRAY_T, inst_page_text(INST_PT_TRAY_T));
@@ -984,6 +1022,7 @@ static int comp_leave(HWND dlg)
     int usb;
     int uas;
     int stor;
+    int vsd;
 
     GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
     why = inst_eng_dir_check(typed, checked, sizeof(checked));
@@ -1009,6 +1048,12 @@ static int comp_leave(HWND dlg)
     }
     s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
           IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    {
+        int sh;
+        int vopen;
+        inst_vsd_box(vsd9x, vsdShown, s98, 0, &sh, &vopen);
+        vsd = vopen && IsDlgButtonChecked(dlg, IDC_C_VSD) == BST_CHECKED;
+    }
     uas = inst_uas_decide(usb, IsDlgButtonChecked(dlg, IDC_C_UAS) !=
                                BST_CHECKED);
     if (usb) {
@@ -1033,12 +1078,13 @@ static int comp_leave(HWND dlg)
         }
     }
     if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
-        uas != uasChoice || stor != storChoice) {
+        uas != uasChoice || stor != storChoice || vsd != vsdChoice) {
         usbChoice = usb;
         uasChoice = uas;
         tbChoice = tb;
         s98Choice = s98;
         storChoice = stor;
+        vsdChoice = vsd;
         replan();
     }
     return 1;
@@ -2487,6 +2533,14 @@ static void summary_fill(HWND dlg)
             line[sizeof(line) - 1] = '\0';
             tb_add(&t, line);
         }
+        if (vsdShown && vsd9x) {
+            const char *vl = inst_eng_vsd_plan();
+            if (vl != NULL) {
+                _snprintf(line, sizeof(line) - 1, "- %s\n", vl);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
+            }
+        }
         if (storShown) {
             char sl[400];
             inst_eng_stor_summary(sl, sizeof(sl));
@@ -2868,7 +2922,12 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                                IsDlgButtonChecked(dlg, IDC_C_TB) ==
                                BST_CHECKED && !usbNotHere ?
                                BST_CHECKED : BST_UNCHECKED);
-                comp_s98_sync(dlg);
+                comp_vsd_follow(dlg);
+            }
+            return TRUE;
+        case IDC_C_S98:
+            if (HIWORD(wp) == BN_CLICKED) {
+                comp_vsd_follow(dlg);
             }
             return TRUE;
         case IDC_C_UAS:
@@ -3314,7 +3373,7 @@ static void st_comp_layout(HWND parent)
 {
     static const int order[] = {
         IDC_C_DRIVERS, IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR, IDC_C_STOR_T,
-        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_TRAY,
+        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_C_TRAY,
         IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR, IDC_C_DIR_T
     };
     HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
@@ -3771,12 +3830,13 @@ static int selftest(void)
     static const int cIds[] = {
         IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_S98,
         IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T,
-        IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR
+        IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR, IDC_C_VSD
     };
     static const int cTexts[] = {
         INST_PT_DRIVERS, INST_PT_DRIVERS_T, INST_PT_TB, INST_PT_TB_T,
         INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_TRAY_T, INST_PT_DIR,
-        INST_PT_DIR_9X, INST_PT_UAS, INST_PT_UAS_T, INST_PT_STOR
+        INST_PT_DIR_9X, INST_PT_UAS, INST_PT_UAS_T, INST_PT_STOR,
+        INST_PT_VSD_OTHER
     };
     static const int s3Ids[] = { IDC_S_HEAD };
     static const int s3Texts[] = { INST_PT_S98SET };
@@ -3845,7 +3905,7 @@ static int selftest(void)
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
         st_page(parent, IDD_FOUND, fIds, fTexts, 1, "what was found");
-        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 13, "the components");
+        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 14, "the components");
         st_comp_layout(parent);
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "

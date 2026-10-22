@@ -324,6 +324,11 @@ static int haveS98;         /* the flavour directory carries Stor98       */
 static int s98Include;      /* ticked, or /stor98, with the Thunderbolt
                                component in the run                       */
 static int s98Want;         /* ticked, or /stor98                          */
+/* STOR98.VXD (design record 30 section 7). */
+static int haveVsd;         /* the flavour directory carries STOR98.VXD   */
+static char vsdHash[65];    /* its SHA-256 (98 SE and ME)                 */
+static int vsdChoice;       /* the box ticked, or the console's Y         */
+static int vsdDid;          /* 1 placed, 2 queued, 4 removed              */
 static int s98TopoFresh;    /* the places were read since the last scan   */
 static int s98Share;        /* INST_S98_SHARE_*, the latest plan's        */
 static int s98Shown;        /* the plan was printed: later reasons are said */
@@ -403,6 +408,11 @@ static void s98_ask_values(void);
 static void s98_ask_unused(void);
 static void s98_file_update_9x(void);
 static void s98_wininit_cancel(const char *bin);
+static int stor_hash(const char *path, char hex[65]);
+static int vsd_check_package(void);
+static int vsd_mode(int uninstall);
+static int vsd_run(int mode);
+static void vsd_question(void);
 static int s98_pre_commit(void);
 static void s98_question(void);
 static void s98_reconnect_nt(void);
@@ -2184,7 +2194,7 @@ static int check_package(void)
     join(pkgDir, sizeof(pkgDir), root, opts.Dir);
     out("Package:   %s\n", root);
     out("Directory: %s\n\n", pkgDir);
-    if (!s98_check_package()) {
+    if (!s98_check_package() || !vsd_check_package()) {
         return 0;
     }
 
@@ -9158,6 +9168,7 @@ static int run_install_9x(void)
     hashed_cleanup();
     helper_installs();
     s98_file_update_9x();
+    vsd_run(vsd_mode(0));
     write_values();
     s98_write_values();
     tray_install();
@@ -11509,6 +11520,9 @@ static int run_uninstall_9x(void)
     if (!s98_un_rest()) {
         return stop_uninstall("Stor98's INF copies or its driver could not be "
                               "removed.");
+    }
+    if (!vsd_run(INST_VSD_UNINSTALL)) {
+        return stop_uninstall("STOR98.VXD could not be removed.");
     }
     files_9x(0);
     if (!stor_un_rest()) {
@@ -15952,6 +15966,583 @@ static void s98_file_update_9x(void)
 /* The uninstall, removing the bundled Stor98 on 98 SE and ME: a file
  * update this installer queued (s98_file_update_9x) is taken back - its
  * [rename] entry for stor98.mpd and STOR98.TMP beside it. */
+/* ======================================================================== */
+/* STOR98.VXD, the 98 SE and ME IOS layer for Stor98's disks (design record */
+/* 30 section 7; owner, 2026-10-22)                                          */
+/* ======================================================================== */
+
+/* SYSTEM\IOSUBSYS\STOR98.VXD and S98VSD.TMP beside it (long and 8.3 forms:
+ * WININIT.INI is read before Windows runs). 0 when the system directory
+ * cannot be read. */
+static int vsd_paths(char *dest, char *tmp, char *destShort, char *tmpShort,
+                     size_t cap)
+{
+    char dir[INST_PATH_CHARS];
+    char dirShort[INST_PATH_CHARS];
+    DWORD n;
+
+    if (GetSystemDirectoryA(dir, sizeof(dir)) == 0) {
+        return 0;
+    }
+    join(dir, sizeof(dir), dir, "IOSUBSYS");
+    n = GetShortPathNameA(dir, dirShort, sizeof(dirShort));
+    if (n == 0 || n >= sizeof(dirShort)) {
+        inst_copy(dirShort, dir, sizeof(dirShort));
+    }
+    join(dest, cap, dir, "STOR98.VXD");
+    join(tmp, cap, dir, "S98VSD.TMP");
+    join(destShort, cap, dirShort, "STOR98.VXD");
+    join(tmpShort, cap, dirShort, "S98VSD.TMP");
+    return 1;
+}
+
+/* The record's value: 1 read, 0 absent, -1 unreadable. */
+static int vsd_rec_get(const char *name, char *buf, DWORD cap)
+{
+    HKEY k;
+    LONG r;
+    DWORD type = 0;
+    DWORD n = cap;
+
+    buf[0] = '\0';
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_VSD_KEY, 0, KEY_QUERY_VALUE,
+                      &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return -1;
+    }
+    r = RegQueryValueExA(k, name, NULL, &type, (BYTE *)buf, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        buf[0] = '\0';
+        return 0;
+    }
+    if (r != ERROR_SUCCESS || type != REG_SZ || n == 0 || n > cap ||
+        buf[n - 1] != '\0') {
+        buf[0] = '\0';
+        return -1;
+    }
+    return 1;
+}
+
+static int vsd_rec_set(const char *name, const char *text)
+{
+    HKEY k;
+    LONG w;
+
+    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_VSD_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL);
+    if (w == ERROR_SUCCESS) {
+        w = RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)text,
+                           (DWORD)strlen(text) + 1);
+        RegCloseKey(k);
+    }
+    if (w != ERROR_SUCCESS) {
+        out("STOR98.VXD's record could not be written (HKLM\\%s, %s: error "
+            "%ld).\n", INST_VSD_KEY, name, (long)w);
+        return 0;
+    }
+    logonly("stor98vxd: record %s=%s\n", name, text);
+    return 1;
+}
+
+/* The value deleted; the key with it once it holds none. */
+static int vsd_rec_del(const char *name)
+{
+    HKEY k;
+    LONG w;
+    DWORD values = 0;
+
+    w = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_VSD_KEY, 0,
+                      KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
+    if (w == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (w != ERROR_SUCCESS) {
+        return 0;
+    }
+    w = RegDeleteValueA(k, name);
+    if (w != ERROR_SUCCESS && w != ERROR_FILE_NOT_FOUND) {
+        RegCloseKey(k);
+        return 0;
+    }
+    if (RegQueryInfoKeyA(k, NULL, NULL, NULL, NULL, NULL, NULL, &values,
+                         NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+        values = 1;
+    }
+    RegCloseKey(k);
+    if (values == 0) {
+        RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_VSD_KEY);
+    }
+    logonly("stor98vxd: record %s deleted\n", name);
+    return 1;
+}
+
+/* A file against the record's two hashes: INST_VF_*. */
+static int vsd_class(const char *path, const char *file, const char *pend)
+{
+    char hex[65];
+    int s = stor_hash(path, hex);
+
+    if (s == 0) {
+        return INST_VF_ABSENT;
+    }
+    if (s < 0) {
+        return INST_VF_OTHER;
+    }
+    if (pend[0] != '\0' && inst_eq(hex, pend)) {
+        return INST_VF_PENDING;
+    }
+    if (file[0] != '\0' && inst_eq(hex, file)) {
+        return INST_VF_FILE;
+    }
+    return INST_VF_OTHER;
+}
+
+/* 1 when a [rename] side names the path, long or 8.3. */
+static int vsd_names(const char *side, const char *lng, const char *shrt)
+{
+    return inst_eq(side, lng) || inst_eq(side, shrt);
+}
+
+/* WININIT.INI's [rename] lines naming either file: INST_VE_*. */
+static int vsd_entry(const char *dest, const char *tmp, const char *destS,
+                     const char *tmpS)
+{
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char *sec;
+    char *p;
+    DWORD n;
+    int exact = 0;
+    int other = 0;
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return INST_VE_CONFLICT;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    sec = (char *)malloc(32768);
+    if (sec == NULL) {
+        return INST_VE_CONFLICT;
+    }
+    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
+    if (n >= 32768 - 2) {
+        free(sec);
+        return INST_VE_CONFLICT;
+    }
+    for (p = sec; *p != '\0'; p += strlen(p) + 1) {
+        char line[2 * INST_PATH_CHARS];
+        char *eq;
+        int namesDest;
+        int namesTmp;
+        inst_copy(line, p, sizeof(line));
+        eq = strchr(line, '=');
+        if (eq == NULL) {
+            continue;
+        }
+        *eq = '\0';
+        namesDest = vsd_names(line, dest, destS) || vsd_names(eq + 1, dest, destS);
+        namesTmp = vsd_names(line, tmp, tmpS) || vsd_names(eq + 1, tmp, tmpS);
+        if (!namesDest && !namesTmp) {
+            continue;
+        }
+        if (vsd_names(line, dest, destS) && vsd_names(eq + 1, tmp, tmpS)) {
+            exact++;
+        } else {
+            other++;
+        }
+    }
+    free(sec);
+    if (other != 0) {
+        return INST_VE_CONFLICT;
+    }
+    return exact != 0 ? INST_VE_EXACT : INST_VE_ABSENT;
+}
+
+/* The facts of record 30 section 7.3, read afresh. 0 unreadable. */
+static int vsd_facts(int mode, INST_VSDFACTS *f, char *file, char *pend,
+                     size_t cap)
+{
+    char dest[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char destS[INST_PATH_CHARS];
+    char tmpS[INST_PATH_CHARS];
+    int a;
+    int b;
+
+    if (!vsd_paths(dest, tmp, destS, tmpS, sizeof(dest))) {
+        return 0;
+    }
+    a = vsd_rec_get("File", file, (DWORD)cap);
+    b = vsd_rec_get("Pending", pend, (DWORD)cap);
+    if (a < 0 || b < 0) {
+        return 0;
+    }
+    memset(f, 0, sizeof(*f));
+    f->Pending = pend[0] != '\0';
+    f->FileVal = file[0] != '\0';
+    f->Dest = vsd_class(dest, file, pend);
+    f->Tmp = vsd_class(tmp, file, pend);
+    f->Entry = vsd_entry(dest, tmp, destS, tmpS);
+    f->Mode = mode;
+    f->PkgIsPending = haveVsd && f->Pending && inst_eq(pend, vsdHash);
+    f->PkgIsFile = haveVsd && f->FileVal && inst_eq(file, vsdHash);
+    f->FileIsPending = f->Pending && f->FileVal && inst_eq(file, pend);
+    return 1;
+}
+
+/* The package's STOR98.VXD on 98 SE and ME: present, this release's (its
+ * stamp), and hashed. Its absence is no error; a wrong one refuses. */
+static int vsd_check_package(void)
+{
+    char path[INST_PATH_CHARS];
+    char stamp[64];
+    char *buf;
+    DWORD size = 0;
+    DWORD i;
+    size_t sl;
+    int found = 0;
+
+    haveVsd = 0;
+    vsdHash[0] = '\0';
+    join(path, sizeof(path), pkgDir, "STOR98.VXD");
+    if (envNow.Nt) {
+        haveVsd = file_exists(path, NULL);
+        return 1;
+    }
+    if (!file_exists(path, NULL)) {
+        return 1;
+    }
+    buf = read_file(path, &size);
+    if (buf == NULL) {
+        return refuse("a file of the package is unreadable: ", path);
+    }
+    _snprintf(stamp, sizeof(stamp) - 1, "STOR98.VXD %s", XHCIINST_VERSION);
+    stamp[sizeof(stamp) - 1] = '\0';
+    sl = strlen(stamp);
+    for (i = 0; i + sl <= size && !found; i++) {
+        found = memcmp(buf + i, stamp, sl) == 0;
+    }
+    if (!found) {
+        free(buf);
+        return refuse("the package's STOR98.VXD is not this release's: ",
+                      path);
+    }
+    inst_sha256((const unsigned char *)buf, size, vsdHash);
+    free(buf);
+    haveVsd = 1;
+    logonly("stor98vxd: bundled, SHA-256 %s\n", vsdHash);
+    return 1;
+}
+
+/* The run's mode for the layer (inst_vsd_mode). */
+static int vsd_mode(int uninstall)
+{
+    return inst_vsd_mode(!envNow.Nt, uninstall, haveVsd, s98Include, 0,
+                         vsdChoice);
+}
+
+/* One step of the table, made. 1 done. */
+static int vsd_do(int op, const char *file, const char *pend)
+{
+    char dest[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char destS[INST_PATH_CHARS];
+    char tmpS[INST_PATH_CHARS];
+    char src[INST_PATH_CHARS];
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+
+    (void)file;
+    if (!vsd_paths(dest, tmp, destS, tmpS, sizeof(dest)) ||
+        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    switch (op) {
+    case INST_VOP_SET_FILE:
+        return vsd_rec_set("File", pend);
+    case INST_VOP_DEL_ENTRY:
+        WritePrivateProfileStringA("rename", destS, NULL, ini);
+        WritePrivateProfileStringA("rename", dest, NULL, ini);
+        logonly("stor98vxd: WININIT.INI [rename] %s taken back\n", destS);
+        return 1;
+    case INST_VOP_DEL_TMP:
+        if (!delete_file(tmp)) {
+            out("%s could not be deleted (error %lu).\n", tmp,
+                (unsigned long)GetLastError());
+            return 0;
+        }
+        logonly("stor98vxd: %s deleted\n", tmp);
+        return 1;
+    case INST_VOP_DEL_PENDING:
+        return vsd_rec_del("Pending");
+    case INST_VOP_DEL_FILEVAL:
+        return vsd_rec_del("File");
+    case INST_VOP_DEL_DEST:
+        if (!delete_file(dest)) {
+            out("%s could not be deleted (error %lu): restart Windows and run "
+                "the installer again.\n", dest, (unsigned long)GetLastError());
+            steps_add_id("STOR98.VXD", "not removed: restart Windows and run "
+                         "the installer again");
+            flagSteps = 1;
+            flagRestart = 1;
+            return 0;
+        }
+        out("%s was deleted.\n", dest);
+        vsdDid |= 4;
+        flagChanged = 1;
+        flagRestart = 1;
+        return 1;
+    case INST_VOP_START:
+        join(src, sizeof(src), pkgDir, "STOR98.VXD");
+        if (!vsd_rec_set("Pending", vsdHash)) {
+            return 0;
+        }
+        /* CREATE_NEW: CopyFile never replaces here. */
+        if (!CopyFileA(src, tmp, TRUE)) {
+            out("STOR98.VXD could not be written as %s (error %lu).\n", tmp,
+                (unsigned long)GetLastError());
+            vsd_rec_del("Pending");
+            return 0;
+        }
+        if (!same_file(src, tmp)) {
+            out("%s is not the package's STOR98.VXD once written.\n", tmp);
+            delete_file(tmp);
+            vsd_rec_del("Pending");
+            return 0;
+        }
+        logonly("stor98vxd: %s written\n", tmp);
+        return 1;
+    case INST_VOP_MOVE:
+        if (!MoveFileA(tmp, dest)) {
+            out("%s could not be moved to %s (error %lu).\n", tmp, dest,
+                (unsigned long)GetLastError());
+            return 0;
+        }
+        out("STOR98.VXD is in %s; Windows loads it at the next start.\n",
+            dest);
+        vsdDid |= 1;
+        flagChanged = 1;
+        flagRestart = 1;
+        return 1;
+    case INST_VOP_WRITE_ENTRY:
+        if (!WritePrivateProfileStringA("rename", destS, tmpS, ini)) {
+            out("The replacement of %s could not be queued in %s.\n", dest,
+                ini);
+            return 0;
+        }
+        logonly("stor98vxd: WININIT.INI [rename] %s=%s\n", destS, tmpS);
+        out("STOR98.VXD replaces %s when Windows next starts.\n", dest);
+        vsdDid |= 2;
+        flagChanged = 1;
+        flagRestart = 1;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Record 30 section 7.3: the table made step by step until it stops. 0 a
+ * step failed or the table stopped on a conflict (said, and a step left). */
+static int vsd_run(int mode)
+{
+    INST_VSDFACTS f;
+    char file[80];
+    char pend[80];
+    int i;
+    int op = INST_VOP_DONE;
+
+    if (envNow.Nt || mode == INST_VSD_NONE || opts.List) {
+        return 1;
+    }
+    step(INST_STEP_BEGIN, "STOR98.VXD, large transfers for Stor98");
+    for (i = 0; i < 24; i++) {
+        if (!vsd_facts(mode, &f, file, pend, sizeof(file))) {
+            out("STOR98.VXD's record or files could not be read: it is left "
+                "as it is.\n");
+            flagFailed = 1;
+            step(INST_STEP_FAILED, "STOR98.VXD: its record unreadable");
+            return 0;
+        }
+        op = inst_vsd_next(&f);
+        logonly("stor98vxd: mode %d pend %d file %d dest %d tmp %d entry %d "
+                "-> %d\n", mode, f.Pending, f.FileVal, f.Dest, f.Tmp, f.Entry,
+                op);
+        if (op < INST_VOP_STEPS) {
+            break;
+        }
+        if (!vsd_do(op, file, pend)) {
+            flagFailed = flagFailed || op != INST_VOP_DEL_DEST;
+            step(INST_STEP_FAILED, "STOR98.VXD: a step failed (the log has "
+                 "it)");
+            return 0;
+        }
+    }
+    switch (op) {
+    case INST_VOP_QUEUED:
+        step(INST_STEP_DONE, "STOR98.VXD: updated at the next start");
+        return 1;
+    case INST_VOP_FOREIGN:
+        out("IOSUBSYS\\STOR98.VXD is another installation's file: it is "
+            "left as it is.\n");
+        step(INST_STEP_LEFT, "STOR98.VXD: left, another installation's "
+             "file");
+        return 1;
+    case INST_VOP_BLOCK_TMP:
+        out("IOSUBSYS\\S98VSD.TMP is not this installer's: STOR98.VXD is "
+            "not placed or updated until it is removed.\n");
+        steps_add_id("STOR98.VXD", "remove IOSUBSYS\\S98VSD.TMP, then run "
+                     "the installer again");
+        flagSteps = 1;
+        step(INST_STEP_LEFT, "STOR98.VXD: left, a foreign S98VSD.TMP");
+        return 0;
+    case INST_VOP_BLOCK_INI:
+        out("WININIT.INI has another program's [rename] line for STOR98.VXD "
+            "or S98VSD.TMP: nothing of STOR98.VXD is changed until the next "
+            "start has run it.\n");
+        steps_add_id("STOR98.VXD", "restart Windows, then run the installer "
+                     "again");
+        flagSteps = 1;
+        step(INST_STEP_LEFT, "STOR98.VXD: left, another rename is queued");
+        return 0;
+    default:
+        break;
+    }
+    if (i == 24) {
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "STOR98.VXD: the steps did not settle");
+        return 0;
+    }
+    step(INST_STEP_DONE, (vsdDid & 4) ? "STOR98.VXD: removed" :
+         (vsdDid & 1) ? "STOR98.VXD: installed" : "STOR98.VXD: as it is");
+    return 1;
+}
+
+/* The console's question (record 30 section 7.2). */
+static void vsd_question(void)
+{
+    int shown;
+    int open;
+    int def;
+    int k;
+    int r;
+    char line[16];
+    char text[512];
+
+    def = inst_vsd_box(!envNow.Nt, haveVsd, s98Include, opts.NoStor98Vxd,
+                       &shown, &open);
+    if (envNow.Nt || !shown || !open) {
+        vsdChoice = 0;
+        if (!envNow.Nt && shown && !s98Include) {
+            out("STOR98.VXD, large transfers for Stor98: follows Stor98, which "
+                "is not in this run.\n\n");
+        }
+        return;
+    }
+    out("STOR98.VXD, large transfers for Stor98 (Windows 98 SE and ME)\n");
+    out("  Lets Windows 98 SE and ME send Stor98 reads and writes of up to "
+        "2 MiB whole,\n  instead of in 63 KiB pieces. Changes nothing for "
+        "copies through the file cache.\n");
+    r = def;
+    if (opts.NoStor98Vxd) {
+        out("  /nostor98vxd: left out without asking.\n");
+    } else if (opts.Stor98Vxd) {
+        out("  /stor98vxd: installed without asking.\n");
+    } else if (opts.List) {
+        out("  /list: it would be asked; Enter would give [Y].\n");
+    } else if (opts.Yes) {
+        out("  /yes: Y (/nostor98vxd leaves it out).\n");
+    } else {
+        inst_yesno_question(text, sizeof(text),
+                            "Install STOR98.VXD, large transfers for Stor98?",
+                            "install it", "leave it out", 1);
+        for (k = 0;; k++) {
+            if (!ask(INST_Q_VSD, k == 0 ? text : "  Type Y or N, or Enter "
+                     "for [Y]: ", k > 0, 0, 1, NULL, line, sizeof(line))) {
+                r = 1;
+                out("\n");
+                break;
+            }
+            r = inst_tb_answer(line, 1);
+            if (r >= 0) {
+                break;
+            }
+        }
+    }
+    out("\n");
+    vsdChoice = r ? 1 : 0;
+    logonly("stor98vxd: chosen %d\n", vsdChoice);
+}
+
+/* What the run will do, for the Summary (record 30 section 7.3): the
+ * table's first step read, nothing made. */
+const char *inst_eng_vsd_plan(void)
+{
+    INST_VSDFACTS f;
+    char file[80];
+    char pend[80];
+    int mode = vsd_mode(0);
+    int op;
+
+    if (envNow.Nt || mode == INST_VSD_NONE || !haveVsd) {
+        return NULL;
+    }
+    if (!vsd_facts(mode, &f, file, pend, sizeof(file))) {
+        return "Large transfers for Stor98 (STOR98.VXD): its record cannot be "
+               "read; left as it is";
+    }
+    op = inst_vsd_next(&f);
+    if (mode == INST_VSD_INACTIVE) {
+        return f.FileVal ? "Large transfers for Stor98 (STOR98.VXD): kept, "
+               "with Stor98" : NULL;
+    }
+    if (mode == INST_VSD_DESELECTED) {
+        return (f.FileVal || f.Pending) ? "Large transfers for Stor98 "
+               "(STOR98.VXD): removed" : NULL;
+    }
+    switch (op) {
+    case INST_VOP_DONE:
+        return "Large transfers for Stor98 (STOR98.VXD): this release's, as "
+               "it is";
+    case INST_VOP_QUEUED:
+        return "Large transfers for Stor98 (STOR98.VXD): updated at the next "
+               "start";
+    case INST_VOP_FOREIGN:
+        return "Large transfers for Stor98 (STOR98.VXD): left, another "
+               "installation's file";
+    case INST_VOP_BLOCK_TMP:
+    case INST_VOP_BLOCK_INI:
+        return "Large transfers for Stor98 (STOR98.VXD): left until the "
+               "steps the run lists are done";
+    default:
+        return f.Dest == INST_VF_FILE ? "Large transfers for Stor98 "
+               "(STOR98.VXD): updated at the next start" :
+               "Large transfers for Stor98 (STOR98.VXD): installed, loaded at "
+               "the next start";
+    }
+}
+
+/* The window's box (record 30 section 7.1). */
+int inst_eng_vsd_state(int *shown, int *sys9x)
+{
+    *shown = haveVsd;
+    *sys9x = !envNow.Nt;
+    return vsdChoice;
+}
+
+void inst_eng_vsd_choose(int ticked)
+{
+    int shown;
+    int open;
+
+    vsdChoice = ticked && inst_vsd_box(!envNow.Nt, haveVsd, s98Include, 0,
+                                       &shown, &open);
+    logonly("stor98vxd: chosen %d\n", vsdChoice);
+}
+
 static void s98_wininit_cancel(const char *bin)
 {
     char win[INST_PATH_CHARS];
@@ -20615,6 +21206,12 @@ int inst_eng_begin(int argc, char **argv)
     if (!envNow.Nt && INST_MY_ARCH != INST_ARCH_X86) {
         return INST_EXIT_REFUSED;
     }
+    /* Design record 30 section 7.2 (owner, 2026-10-22). */
+    if ((opts.Stor98Vxd || opts.NoStor98Vxd) && envNow.Nt) {
+        out("REFUSED: /stor98vxd and /nostor98vxd are for Windows 98 SE and "
+            "ME only.\n");
+        return INST_EXIT_REFUSED;
+    }
     for (i = 0; i < opts.SetCount; i++) {
         int sk = instValues[opts.SetIndex[i]].Inf;
         if ((opts.CmOnly || (osKind == INST_OS_CMONLY && !opts.Usb)) &&
@@ -20814,6 +21411,7 @@ void inst_eng_tb_question(void)
 {
     tb_question();
     s98_question();
+    vsd_question();
     stor_question();
 }
 
