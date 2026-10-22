@@ -1689,12 +1689,13 @@ asks once (`Y`, or Enter), and then:
   the USB drivers and the bundled Stor98 unticked unless you tick them
   (`/usb`, `/stor98`), each then with a warning that it is untested
   there. Windows Server 2016, 2019 and 2022 report a Windows 10 version
-  and are treated as 10, untested. On the x64 editions the drivers load
-  only in test-signing mode, which these systems let you turn on only
-  with Secure Boot off in the computer's firmware setup; the tool never
-  changes either. There it installs the connection manager only in
-  test-signing mode, and a start with driver signature enforcement
-  disabled is not enough: 64-bit 8 and 8.1 make it a boot driver, and a
+  and are treated as 10, untested. On the x64 editions the test-signed
+  drivers load in test-signing mode, which these systems let you turn on
+  only with Secure Boot off in the computer's firmware setup, or on a
+  start with driver signature enforcement disabled; the tool never
+  changes either. It installs the connection manager there only in
+  test-signing mode, and a start with enforcement disabled is not
+  enough: 64-bit 8 and 8.1 make it a boot driver, and a
   start without test-signing mode then stopped in Automatic Repair
   (roadmap-usb4 task 43.22; 10 is given the same rule, whether it too
   makes the driver boot start unread). The x64 package carries a catalog

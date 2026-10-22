@@ -257,20 +257,21 @@ Programs lists one entry either way, named for what is installed.
 
 Windows 8 and 8.1 were read in virtual machines, the install alone, on 8
 (32-bit and x64) and 8.1 x64; 8.1 32-bit has not been run. The connection
-manager installs there as on Windows 7. On 64-bit Windows 8 and 8.1 it
-loads, like every driver of this package's x64 half, only in test-signing
-mode, which those systems let you turn on only with Secure Boot off in the
-computer's firmware setup. Windows makes the connection manager a boot
-driver there (it filters a PCI bridge), and a start without test-signing
-mode then stops in Automatic Repair (read on 64-bit Windows 8). So on
-64-bit 8 and 8.1 the installer installs it only in test-signing mode; a
-start with driver signature enforcement disabled is not enough. Keep
-test-signing mode on while it is installed. From Automatic Repair the way
-back is a start with enforcement disabled (Advanced startup, Troubleshoot,
-Advanced options, Startup Settings, 7), then test-signing mode on again,
-or the uninstall. It is not Microsoft-signed. When the installer asks for
-a restart, use Restart, not Shut down: Windows 8's Shut down does not
-start the drivers afresh (nor does Windows 10's).
+manager installs there as on Windows 7. On 64-bit Windows 8 and 8.1 this
+package's x64 drivers, being test-signed, load in test-signing mode, which
+those systems let you turn on only with Secure Boot off in the computer's
+firmware setup, or on a start with driver signature enforcement disabled.
+The connection manager needs test-signing mode itself: Windows makes it a
+boot driver there (it filters a PCI bridge), and a start without
+test-signing mode then stops in Automatic Repair (read on 64-bit Windows
+8). So on 64-bit 8 and 8.1 the installer installs it only in test-signing
+mode; a start with enforcement disabled is not enough. Keep test-signing
+mode on while it is installed. From Automatic Repair the way back is a
+start with enforcement disabled (Advanced startup, Troubleshoot, Advanced
+options, Startup Settings, 7), then test-signing mode on again, or the
+uninstall. It is not Microsoft-signed. When the installer asks for a
+restart, use Restart, not Shut down: Windows 8's Shut down does not start
+the drivers afresh (nor does Windows 10's).
 
 Windows 10 is installable. Its drivers were read in virtual machines of
 22H2, each installed by a script; the installer itself has not yet run
@@ -282,10 +283,11 @@ drivers and Stor98 only when you tick them. Windows 10 has no Thunderbolt
 or USB4 driver of its own (USB4 support came with Windows 11), but many
 computers come with Intel's Thunderbolt driver: where it runs the
 Thunderbolt controller, the installer leaves it as it is. On 64-bit
-Windows 10 the drivers load only in test-signing mode, which needs Secure
-Boot off in the computer's firmware setup, and the installer installs the
-connection manager there only in test-signing mode, as on 64-bit Windows
-8 (whether 10 too makes it a boot driver has not been read). With Secure
+Windows 10 the drivers load as on 64-bit Windows 8: in test-signing mode,
+which needs Secure Boot off in the computer's firmware setup, or on a
+start with enforcement disabled; and the installer installs the
+connection manager there only in test-signing mode, as on 64-bit 8
+(whether 10 too makes it a boot driver has not been read). With Secure
 Boot on, Windows 10 from 1607 loads only drivers Microsoft has signed (and
 some older cross-signed ones), and this package's are neither. The 64-bit
 package carries a catalog for each driver (xhci98.cat and the others,

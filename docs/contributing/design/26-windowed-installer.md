@@ -1063,8 +1063,10 @@ and not as an unexplained failure. The raw value is logged. The answer
 refuses nothing by itself, but it decides the gate of record 23 section
 5.10 (revision 30): on 64-bit 8, 8.1 and 10 the connection manager is
 refused unless test-signing mode is confirmed, so with Secure Boot read
-as on it is refused there, whatever `SystemStartOptions` holds. The rest
-of the run goes on as now when the user confirms. On 7 and
+as on it is refused there, whatever `SystemStartOptions` holds, and a
+run with the connection manager in it is refused as a whole (exit 1,
+nothing changed). A run without it goes on as now when the user
+confirms. On 7 and
 earlier nothing is read (no Secure Boot); on 32-bit 8, 8.1 and 10 the
 sentence is used only where record 23 section 5.10 gives that system a
 Secure Boot note at all (task 43.22's reading for 8 and 8.1, 43.33 (d)'s
