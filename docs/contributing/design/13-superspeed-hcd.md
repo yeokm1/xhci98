@@ -5523,7 +5523,10 @@ for the length of one transfer.
   Error, another record queued - falls back to the controller recovery too,
   EP0 still paused and the scratch not reused, the rule as before. Under
   XhciTolerance a cycle mark ends the wait as for any thread transfer
-  (35-T.3/4).
+  (35-T.3/4). Since task 43.53 any thread transfer past its deadline, the
+  door's included where its withdrawal does not finish, first has EP0
+  stopped and its device's path read, and a device that has left keeps
+  no controller recovery (section 10.5.1).
 - *How long a taken request is not cancellable:* no single deadline covers
   it, and none is claimed. It is the sum of the thread path's separate
   waits, each bounded on its own and each ending in the bus's existing
@@ -6280,6 +6283,98 @@ connect change is queued behind it. The miniport's measured shape (design
 record 02, "Step 4 observed": a whole hub out with three live devices below
 it, taken leaf-first with nothing stranded) is the expected reading for
 27-V.1, now produced by the bus rather than inferred from usbhub's traffic.
+
+#### 10.5.1 A thread transfer to a departed device that never completes (task 43.53, 2026-10-22)
+
+**What was read.** Under task 43.49's plug and unplug series on Windows 98
+SE (`runs/run-43.md`, 43.49, "Readings, Windows 98 SE"; runtime, QEMU, one
+vCPU) a thread control transfer queued to a device just pulled - the
+SET_CONFIGURATION of a client's select, and the first EP0 request after
+Address Device behind a hub - never completed. Its 5 s deadline
+(`HCD_TRANSFER_WAIT_MS`, `hcdThreadControlQuiet`) took that for the
+controller's failure and requested the reset; the fourth such reset inside
+ten minutes was refused by task 35-T.6's window and the bus stayed latched
+failed until a restart. QEMU's trace showed why (runtime): its
+`xhci_kick_epctx` returns without an event once the slot's device is
+detached (`hcd-xhci.c`, `xhci_slot_ok`; static, the mirror in
+`external/qemu`). What a real controller does with such a transfer is
+**unread here**: whether metal reaches this path at all (a device pulled
+mid-enumeration at a root port and behind a hub) is task 43.53's owed
+bench reading.
+
+**The rule until now.** A thread transfer the device never ends - other
+than the door's, which `hcdEp0Withdraw` takes back where it can (section
+6, "Timeout, cancellation and surprise removal") - leaves its TD on the
+ring, marks the scratch tainted (the TD may still write it) and requests
+the controller reset, whose HCRST takes every slot. That is right for a
+device still present and wrong for one that has left: one unplug at the
+wrong moment drops every device on the controller and spends the
+recovery window. `hcdCfgFault` already draws that line for a failed
+command (record 17 section 4.2): a departed device's failure requests
+nothing, a departing one with a PDO has its location cycled, and only a
+device still present, or a hub, keeps the reset.
+
+**The design.** At the deadline, before the reset is requested
+(`hcdEp0Late`, `src\hcd_enum.c`; the two pure halves in `src\xhci_tol.c`):
+
+1. **EP0 is stopped first** (Stop Endpoint, when it reads Running), as
+   `hcdEp0Withdraw` and the teardown's `hcdDeviceStop` stop it. A stopped
+   TD is not processed again (xHCI 4.6.9), so once the command has
+   completed the scratch is no longer at risk from it - which is what lets
+   the departure be read next, since a hub port's status is read through
+   the scratch. `XhciTolLateStopped` decides from the command's code, the
+   state EP0 reads after it and the completion flag: a completion that
+   arrived before the stop is taken as the transfer's answer (as the
+   door's `HCD_EP0_COMPLETED`); a command that failed (anything but
+   Success or Context State Error, or none sent), or EP0 still Running or
+   Disabled, keeps the reset with the scratch tainted, exactly as before;
+   otherwise (Stopped, Halted or Error) the TD is inert.
+2. **The departure is read** as `hcdCfgDeviceLeft` reads it: the record
+   gone or no longer its port's, or `HcdHubPathPresent` - every hub port
+   on the path by GET_STATUS (disconnected, disabled, or a connect or
+   enable change pending; a hub already draining) and the root port's
+   PORTSC (CCS 0 or CSC set; all ones proves nothing). A hub that does not
+   answer confirms nothing.
+3. **`XhciTolLateVerdict`** then decides, in `hcdCfgFault`'s order: a
+   record already gone or off its port - nothing more, its teardown is in
+   hand; a path that reads present - the reset, as before; a hub - the
+   reset, as `hcdCfgFault` keeps it, since a hub's devnode is presentation
+   only and its departure is its upstream port's to see; a device with a
+   PDO - its location cycled (`HcdEnumCycle` with its group's serial,
+   charged as `hcdCfgCycle` charges a departing device's failed command,
+   35-T.5's hold if refused), so a latched enable change the port service
+   would find enabled and leave alone cannot strand the paused pipe; a
+   device with no PDO yet - nothing more: it is the enumeration's, whose
+   failed step runs its own DISABLE_SLOT and retries only where the port
+   still reads connected (section 10.2 step 7).
+4. **What is left behind** where no reset is requested: EP0 Stopped with
+   the thread's record still queued and `Ep0Stuck` set, so nothing more
+   is sent to the device and its pipe stays paused; the scratch is not
+   tainted. The teardown that follows (section 10.5, steps 3 and 4) finds
+   EP0 not Running, drains the record with the rest (`HcdIoDeviceDrain`)
+   and disables the slot. The caller gets `HCD_CTL_NOT_SENT`, as for any
+   timeout, and every caller already reads `Ep0Stuck` as "the device is
+   being taken"; a select then answers DEVICE_GONE (`hcdCfgSelectAnswer`).
+   Counted (`EnumTransfersDeparted`, beside `EnumTransfersTimedOut`) and
+   logged (`enum.xfer.departed`, the slot and the verdict).
+
+A device behind a TT is stopped too, unlike the door's withdrawal: that
+withdrawal keeps using EP0 and so must clear the TT buffer the stopped
+split may hold, where here EP0 is never used again and the device is torn
+down, as the teardown's own Stop Endpoint does with a split that may be in
+flight. The door's transfer takes the same path when its withdrawal does
+not finish.
+
+**Host vectors** (`test\test_tol.c`, `test_late`): every row of both
+halves, and the composition - a completion before the stop wins, a failed
+stop keeps the reset whatever the path reads, a present path keeps it, a
+hub keeps it, a published device cycles and a pre-PDO one is left to its
+enumeration.
+
+**Unread, and owed.** Metal: whether a real controller ever leaves such a
+transfer without an event (the bench reading above). The 43.49 series
+re-run on 98 SE with no controller reset is the runtime check of this
+change.
 
 ### 10.6 The ids the targets' INFs match
 
