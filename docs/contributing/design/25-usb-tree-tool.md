@@ -1349,8 +1349,8 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    door forwards to the device) **once per candidate**: only for a port
    `tr_fast_wants_qual` admits (the conditions above but the answer), and
    only when its key (item 4) has no settled answer kept from earlier
-   refreshes (`TR_QUAL_CACHE`, 32 at most, `TR_FAST_MAX`, the oldest
-   dropped first; `tr_qual_get`, `tr_qual_put`, `tr_qual_begin`,
+   refreshes (`TR_QUAL_CACHE`, room for one per port of the tool's model,
+   1024, `TR_QUAL_MAX`, so a candidate still connected is never dropped; `tr_qual_get`, `tr_qual_put`, `tr_qual_begin`,
    `tr_qual_end`, host-tested). A short or malformed answer is "Full Speed
    only" and is settled at once. No answer at all is not: the hub request
    gives one result for a STALL (a Full Speed-only device's answer) and

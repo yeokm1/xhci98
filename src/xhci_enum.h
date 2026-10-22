@@ -175,12 +175,13 @@ ULONG XhciEnumWantsBos(ULONG speed, ULONG bcdUsb, ULONG on, ULONG skip);
  * not answered by the deadline, or failed other than by a STALL (task
  * 43.27, design record 13 section 8.4.1): kept by VID:PID for the
  * controller's started life, so neither a retry nor the re-enumeration
- * after a controller recovery asks one of them again. The oldest is
- * replaced when it is full. */
-#define XHCI_ENUM_BOS_MEMO_SLOTS 8UL
+ * after a controller recovery asks one of them again. Nothing is ever
+ * dropped: a device that finds it full sets Saturated, and from then on
+ * no device is read at High or Full Speed until the next start. */
+#define XHCI_ENUM_BOS_MEMO_SLOTS 16UL
 typedef struct _XHCI_ENUM_BOS_MEMO {
     ULONG Count;
-    ULONG Next;
+    ULONG Saturated;
     ULONG VidPid[XHCI_ENUM_BOS_MEMO_SLOTS];
 } XHCI_ENUM_BOS_MEMO, *PXHCI_ENUM_BOS_MEMO;
 
@@ -190,6 +191,7 @@ VOID XhciEnumBosMemoAdd(PXHCI_ENUM_BOS_MEMO memo, ULONG vidPid);
  * device in the memo (record 13 section 8.4.1, rule 3): this attempt made
  * the High or Full Speed read and has not reached its PDO. */
 ULONG XhciEnumBosHaltMemo(const XHCI_ENUM_PORT *port);
+/* 1 when the device is not to be read: in the memo, or the memo full. */
 ULONG XhciEnumBosMemoHas(const XHCI_ENUM_BOS_MEMO *memo, ULONG vidPid);
 
 /* Put a port in XHCI_ENUM_EMPTY with nothing owned. */

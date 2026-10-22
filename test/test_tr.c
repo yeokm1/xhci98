@@ -2497,15 +2497,43 @@ static void test_qual_cache(void)
     tr_qual_put(&c, "e", NULL, 0);
     CHECK(tr_qual_get(&c, "e") == 0, "qual: e settled across scans");
 
+    /* More candidates than the balloon keeps (TR_FAST_MAX): repeated
+     * scans keep every answer and every unsettled try. */
+    memset(&c, 0, sizeof(c));
+    for (i = 0; i < 3; i++) {
+        int j;
+        int ok = 1;
+        tr_qual_begin(&c);
+        for (j = 0; j < TR_FAST_MAX + 8; j++) {
+            sprintf(key, "m%d", j);
+            if (tr_qual_get(&c, key) < 0) {
+                if (j % 2) {
+                    tr_qual_put(&c, key, hs, 10);
+                } else {
+                    tr_qual_put(&c, key, NULL, 0);
+                }
+            }
+        }
+        tr_qual_end(&c);
+        CHECK_EQ(c.N, TR_FAST_MAX + 8, "qual: every candidate kept");
+        for (j = 0; j < TR_FAST_MAX + 8; j++) {
+            sprintf(key, "m%d", j);
+            if (tr_qual_get(&c, key) != (j % 2 ? 1 : (i < 2 ? -1 : 0))) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "qual: answers kept, tries counted across scans");
+    }
+
     /* Full: the oldest replaced. */
     memset(&c, 0, sizeof(c));
-    for (i = 0; i < TR_FAST_MAX; i++) {
+    for (i = 0; i < TR_QUAL_MAX; i++) {
         sprintf(key, "k%d", i);
         tr_qual_put(&c, key, hs, 10);
     }
-    CHECK_EQ(c.N, TR_FAST_MAX, "qual: full");
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: full");
     tr_qual_put(&c, "new", hs, 10);
-    CHECK_EQ(c.N, TR_FAST_MAX, "qual: no more than full");
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: no more than full");
     CHECK(tr_qual_get(&c, "new") == 1, "qual: the newest kept");
     CHECK(tr_qual_get(&c, "k0") == -1, "qual: the oldest dropped");
     CHECK(tr_qual_get(&c, "k1") == 1, "qual: the next kept");

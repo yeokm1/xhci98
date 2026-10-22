@@ -939,15 +939,22 @@ static void test_usb2_bos_memo(void)
         XhciEnumBosMemoAdd(&m, 0x1000 + i);
     }
     CHECK_EQ(m.Count, XHCI_ENUM_BOS_MEMO_SLOTS, "memo: full");
+    CHECK_EQ(m.Saturated, 0, "memo: full is not saturated");
     CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345678), 1, "memo: the first kept");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x3000), 0, "memo: a new device read");
+    /* One more: nothing is dropped, and no device is read from then on,
+     * so a recovery that revisits every earlier one asks none of them. */
     XhciEnumBosMemoAdd(&m, 0x2000);
     CHECK_EQ(m.Count, XHCI_ENUM_BOS_MEMO_SLOTS, "memo: no more than full");
-    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x2000), 1, "memo: the ninth kept");
-    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345678), 0,
-             "memo: the oldest replaced");
-    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x1001), 1, "memo: the second kept");
-    XhciEnumBosMemoAdd(&m, 0x2001);
-    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x1001), 0, "memo: then the second");
+    CHECK_EQ(m.Saturated, 1, "memo: saturated");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x2000), 1, "memo: the extra not read");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345678), 1, "memo: the first kept");
+    for (i = 1; i < XHCI_ENUM_BOS_MEMO_SLOTS; i++) {
+        CHECK_EQ(XhciEnumBosMemoHas(&m, 0x1000 + i), 1,
+                 "memo: every earlier one still not read");
+    }
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x3000), 1,
+             "memo: saturated: no device read");
     CHECK_EQ(XhciEnumBosMemoHas(NULL, 1), 0, "memo: NULL has nothing");
     XhciEnumBosMemoAdd(NULL, 1);
 

@@ -6113,6 +6113,8 @@ static int fastTipN = -1;       /* the count its tooltip says, -1 none      */
 static HICON hIconFast;
 /* The High Speed case's answers (item 1), by key, the oldest replaced. */
 static TR_QUAL_CACHE qualCache;
+/* Every port of the model has room for its answer (tr_core.h). */
+typedef char tr_qual_fits[(TR_QUAL_MAX >= TR_MAX_UPORTS) ? 1 : -1];
 static HWND hFastWnd;           /* the list's window, while it is open      */
 static HWND hFastEdit;
 static HWND hFastOk;

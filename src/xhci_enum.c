@@ -102,19 +102,21 @@ VOID XhciEnumBosMemoAdd(PXHCI_ENUM_BOS_MEMO memo, ULONG vidPid)
     if (memo == NULL || XhciEnumBosMemoHas(memo, vidPid)) {
         return;
     }
-    if (memo->Count < XHCI_ENUM_BOS_MEMO_SLOTS) {
-        i = memo->Count++;
-    } else {
-        i = memo->Next % XHCI_ENUM_BOS_MEMO_SLOTS;
+    if (memo->Count >= XHCI_ENUM_BOS_MEMO_SLOTS) {
+        memo->Saturated = 1;
+        return;
     }
+    i = memo->Count++;
     memo->VidPid[i] = vidPid;
-    memo->Next = (i + 1) % XHCI_ENUM_BOS_MEMO_SLOTS;
 }
 
 ULONG XhciEnumBosMemoHas(const XHCI_ENUM_BOS_MEMO *memo, ULONG vidPid)
 {
     ULONG i;
 
+    if (memo != NULL && memo->Saturated) {
+        return 1;
+    }
     for (i = 0; memo != NULL && i < memo->Count && i < XHCI_ENUM_BOS_MEMO_SLOTS;
          i++) {
         if (memo->VidPid[i] == vidPid) {

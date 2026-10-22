@@ -708,11 +708,15 @@ int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
  * 0 Full Speed only, -1 not settled yet, Tries the requests that got no
  * answer. Zeroed is empty. */
 #define TR_QUAL_TRIES   3
+/* Room for a key per port of XHCITR's model (TR_MAX_UPORTS, checked where
+ * the model is), so a candidate still connected is never dropped: a scan
+ * keeps only the keys it saw. The oldest is replaced only past that. */
+#define TR_QUAL_MAX     1024
 typedef struct _TR_QUAL_CACHE {
-    char Key[TR_FAST_MAX][TR_FAST_KEY];
-    int Val[TR_FAST_MAX];
-    int Tries[TR_FAST_MAX];
-    int Seen[TR_FAST_MAX];
+    char Key[TR_QUAL_MAX][TR_FAST_KEY];
+    int Val[TR_QUAL_MAX];
+    int Tries[TR_QUAL_MAX];
+    int Seen[TR_QUAL_MAX];
     int N;
     int Next;
 } TR_QUAL_CACHE;

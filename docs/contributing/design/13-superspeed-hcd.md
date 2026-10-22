@@ -4834,7 +4834,10 @@ that:
    stalled or abandoned for a device cycle (`HCD_CTL_FAILED`,
    `HCD_CTL_NOT_SENT`: an error other than a STALL, or no answer by the
    deadline) records the device's VID:PID in the controller's
-   `Usb2BosMemo` (`XHCI_ENUM_BOS_MEMO`, 8 entries, the oldest replaced;
+   `Usb2BosMemo` (`XHCI_ENUM_BOS_MEMO`, 16 entries, none ever dropped: a
+   device that finds it full saturates it, and then no device is read at
+   High or Full Speed until the next start, so a recovery that revisits
+   every earlier device asks none of them;
    `XhciEnumBosMemoAdd` and `XhciEnumBosMemoHas`, pure, host vectors in
    `test_enum.c`). It is recorded in `hcdPerform`, as soon as the read
    returns, before the run looks for a halt. A device in the memo is not

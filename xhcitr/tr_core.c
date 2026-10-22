@@ -2567,7 +2567,7 @@ static int tr_qual_find(const TR_QUAL_CACHE *c, const char *key)
 {
     int i;
 
-    for (i = 0; i < c->N && i < TR_FAST_MAX; i++) {
+    for (i = 0; i < c->N && i < TR_QUAL_MAX; i++) {
         if (strcmp(c->Key[i], key) == 0) {
             return i;
         }
@@ -2597,11 +2597,11 @@ int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
     }
     i = tr_qual_find(c, key);
     if (i < 0) {
-        if (c->N < TR_FAST_MAX) {
+        if (c->N < TR_QUAL_MAX) {
             i = c->N++;
         } else {
-            i = c->Next % TR_FAST_MAX;
-            c->Next = (i + 1) % TR_FAST_MAX;
+            i = c->Next % TR_QUAL_MAX;
+            c->Next = (i + 1) % TR_QUAL_MAX;
         }
         tr_copy(c->Key[i], key, TR_FAST_KEY);
         c->Val[i] = -1;
@@ -2623,7 +2623,7 @@ void tr_qual_begin(TR_QUAL_CACHE *c)
 {
     int i;
 
-    for (i = 0; c != NULL && i < TR_FAST_MAX; i++) {
+    for (i = 0; c != NULL && i < TR_QUAL_MAX; i++) {
         c->Seen[i] = 0;
     }
 }
@@ -2636,7 +2636,7 @@ void tr_qual_end(TR_QUAL_CACHE *c)
     if (c == NULL) {
         return;
     }
-    for (i = 0; i < c->N && i < TR_FAST_MAX; i++) {
+    for (i = 0; i < c->N && i < TR_QUAL_MAX; i++) {
         if (!c->Seen[i]) {
             continue;
         }
