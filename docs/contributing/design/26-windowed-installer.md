@@ -590,9 +590,11 @@ entries the installer added, recorded at the time, and never another.
 Two rules follow for 43.48 from the code as it stands: the package's own
 `DevicePath` update (`devicepath_write`), which drops every entry under
 the `%windir%\XHCI98` install directory (record 23 section 6.2) before it
-adds its own, leaves the recorded entries alone and removes them only
-through their record, and an entry already on `DevicePath` before the
-run is never recorded as the installer's; and the whole resulting value
+adds its own, removes only the package's own copy entries there: it
+leaves every per-driver entry under `Drivers\` alone, recorded or
+already present before the run, removes a recorded one only through its
+record, and never records an entry already on `DevicePath` before the
+run as the installer's; and the whole resulting value
 is checked before it is written (`devicepath_write` holds 2,048 bytes):
 if it does not fit, the value is left as it was, the staging is reported
 not done, and the Finish page and the readme give the copied folders as
