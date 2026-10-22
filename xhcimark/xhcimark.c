@@ -1984,6 +1984,8 @@ static void mk_inventory(int quiet)
 typedef BOOL (WINAPI *PFN_SETDIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
                                        PSP_DEVINSTALL_PARAMS_A);
 typedef BOOL (WINAPI *PFN_DRVLIST)(HDEVINFO, PSP_DEVINFO_DATA, DWORD);
+typedef DWORD (WINAPI *PFN_HWPROFFLAGS)(LPSTR, ULONG, PULONG, ULONG);
+#define MK_CSCONFIGFLAG_DISABLED 0x00000001UL
 typedef BOOL (WINAPI *PFN_GETSELDRVW)(HDEVINFO, PSP_DEVINFO_DATA,
                                       PSP_DRVINFO_DATA_W);
 typedef BOOL (WINAPI *PFN_DIINSTALL)(HWND, HDEVINFO, PSP_DEVINFO_DATA,
@@ -2000,6 +2002,7 @@ static struct {
     PFN_DRVLIST DestroyDrv;
     PFN_GETSELDRVW GetSelected;
     PFN_DIINSTALL Install;
+    PFN_HWPROFFLAGS HwProfFlags;    /* optional: CM_Get_HW_Prof_FlagsA */
 } s98api;
 
 /* The devnodes on stornvme seen at whole walks: their arrival. */
@@ -2036,6 +2039,8 @@ static int mk_s98_api(void)
                              "SetupDiGetSelectedDriverW", &missing);
     s98api.Install = (PFN_DIINSTALL)mk_proc(s98api.NewDev, "DiInstallDevice",
                                             &missing);
+    s98api.HwProfFlags = (PFN_HWPROFFLAGS)GetProcAddress(api.SetupApi,
+                             "CM_Get_HW_Prof_FlagsA");
     s98api.Ok = missing == 0;
     if (!s98api.Ok) {
         mk_log("Stor98: the switch's routines are missing; no drive is "
@@ -2262,6 +2267,24 @@ static int mk_s98_propchange(HDEVINFO set, SP_DEVINFO_DATA *data,
     return 1;
 }
 
+/* 1 when the current hardware profile's flags of `id` read and do not
+ * disable it: what a DICS_ENABLE with DICS_FLAG_CONFIGSPECIFIC writes. 0
+ * when they disable it or cannot be read. */
+static int mk_s98_profile_enabled(const char *id)
+{
+    char buf[INST_ID_CHARS];
+    ULONG flags = 0;
+
+    if (s98api.HwProfFlags == NULL) {
+        return 0;
+    }
+    inst_copy(buf, id, sizeof(buf));
+    if (s98api.HwProfFlags(buf, 0, &flags, 0) != MK_CR_SUCCESS) {
+        return 0;
+    }
+    return (flags & MK_CSCONFIGFLAG_DISABLED) == 0;
+}
+
 /* Opens the one devnode into a set of its own; INVALID_HANDLE_VALUE when
  * it cannot. */
 static HDEVINFO mk_s98_open(const char *id, SP_DEVINFO_DATA *data)
@@ -2374,6 +2397,7 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
     int built = 0;
     int installed = 0;
     int enabled;
+    int fresh;
     DWORD err = 0;
 
     /* An installer run keeps its pause event open from its plan to its
@@ -2403,12 +2427,19 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
     if (!mk_s98_propchange(set, &data, MK_DICS_DISABLE, &vetoed)) {
         int refused = vetoed;
         err = GetLastError();
-        /* A refused stop asked for a restart; the enable withdraws it. */
+        /* A refused stop asked for a restart; the enable withdraws it. Its
+         * own answer is a restart too while the devnode runs on (Windows 10
+         * x86, 2026-10-22): then the profile's flag the enable clears is
+         * what shows it held. */
         st = 0;
         pr = 0;
         enabled = mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
-        if (!enabled || !mk_s98_fresh(id, service, sizeof(service), &st, &pr,
-                                      &dn) || mk_s98_disabled(st, pr)) {
+        fresh = mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn);
+        if (!enabled && vetoed && fresh && (st & MK_DN_STARTED) != 0 &&
+            !mk_s98_disabled(st, pr) && mk_s98_profile_enabled(id)) {
+            enabled = 1;
+        }
+        if (!enabled || !fresh || mk_s98_disabled(st, pr)) {
             mk_log("Stor98: %s: the stop was %s (error %lu), and its enable "
                    "is not seen (it answered %s; status %08lX problem %lu); "
                    "it is owed", id, refused ? "refused" : "not made", err,
