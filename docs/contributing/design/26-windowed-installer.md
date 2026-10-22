@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 31, 2026-10-22 (the owner's answer of that day to 43.5's
+Status: draft 32, 2026-10-22 (section 5.3.2 squared with record 23
+revisions 30 and 33: the Secure Boot answer feeds the x64 connection
+manager's refusal, and its guest reading is owed, the policy resting on
+Microsoft's documentation); draft 31, 2026-10-22 (the owner's answer of that day to 43.5's
 leg i3: a lone `USBSTOR.INF` found ticks the storage row, NUSB installed
 winning, and is said with a step, section 6.5.5); draft 30, 2026-10-22
 (the owner's point of that day for the
@@ -1036,9 +1039,10 @@ record 26 before its code"). Proposed: yes, on 8, 8.1 and 10 only, read
 and shown, never changed. The value is
 `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State`,
 `UEFISecureBootEnabled`, a `REG_DWORD` that Microsoft documents as 1
-with Secure Boot on and 0 with it off (not read here on any guest; read
-first on roadmap-usb4 task 43.32's legacy-BIOS guests and its OVMF guest
-with Secure Boot on, before the code is released). The pure half,
+with Secure Boot on and 0 with it off (not read here on any guest; its
+reading with Secure Boot on is owed, since task 43.32's OVMF guest was
+not built, and record 23 revision 33 takes the refusal with Secure Boot
+on from Microsoft's documented policy instead). The pure half,
 `inst_sb_state(found, type, value)`, gives three answers:
 
 | Read | Answer | The note's Secure Boot sentence |
@@ -1050,11 +1054,17 @@ with Secure Boot on, before the code is released). The pure half,
 With the answer "on", test-signing mode never counts as confirmed, even
 when `SystemStartOptions` holds `TESTSIGNING`: Microsoft's documentation
 of the option has Secure Boot turned off before test signing can be
-enabled (not read here on any guest; read on 43.37's OVMF guest), so the
+enabled (not read here on any guest; record 23 revision 33 takes it from
+that documentation, and 43.37's check of it is a documentation reading,
+not a leg), so the
 post-install check (record 23 section
 5.10) reports the controller's or the NHI's Code 52 as the note's case
-and not as an unexplained failure. The raw value is logged. Nothing is
-refused and the run goes on as now when the user confirms. On 7 and
+and not as an unexplained failure. The raw value is logged. The answer
+refuses nothing by itself, but it decides the gate of record 23 section
+5.10 (revision 30): on 64-bit 8, 8.1 and 10 the connection manager is
+refused unless test-signing mode is confirmed, so with Secure Boot read
+as on it is refused there, whatever `SystemStartOptions` holds. The rest
+of the run goes on as now when the user confirms. On 7 and
 earlier nothing is read (no Secure Boot); on 32-bit 8, 8.1 and 10 the
 sentence is used only where record 23 section 5.10 gives that system a
 Secure Boot note at all (task 43.22's reading for 8 and 8.1, 43.33 (d)'s

@@ -1,6 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 33, 2026-10-22 (the owner's decisions of that day on
+Status: revision 34, 2026-10-22 (the catalog refusal's text asks for the
+complete package with its `.cat` files, no longer a start with
+enforcement disabled, and a guest reading of Secure Boot's state is owed,
+not promised before the release; section 5.10); revision 33, 2026-10-22 (the owner's decisions of that day on
 43.33's reading: the x64 package carries a test-signed catalog per INF,
 which the tool copies with its INF, and the refusal under Secure Boot is
 taken from Microsoft's documented policy; sections 5.10 and 5.12, design
@@ -1562,10 +1565,16 @@ So on 8 and 8.1 x64 the tool now, in place of revision 13's note:
   there: keep test-signing mode on and Secure Boot off while it is
   installed, and from Automatic Repair the way back is a start with
   enforcement disabled, then test-signing mode on again or the uninstall;
-- after a staging refused with `0xE000022F` on 8 or 8.1 x64, **names the
-  way through** (`inst_stage_error_text`): keep test-signing mode on,
-  start once with enforcement disabled, run the installer again; later
-  starts need only test-signing mode.
+- after a staging refused with `0xE000022F` on 8 or 8.1 x64, **says what
+  it means** (`inst_stage_error_text`). Revision 30's text named item 1's
+  route for the catalog-less package of the time: keep test-signing mode
+  on, start once with enforcement disabled, run the installer again.
+  Since revision 33 the package carries a catalog per INF, so revision
+  34's text says that Windows found no signed catalog for the INF and
+  asks for the complete package, with its `.cat` files, to be restored
+  and the installer run again; the start with enforcement disabled is
+  gone from it, since the tool installs its own package, which carries
+  the catalogs.
 
 The three decisions (`inst_cm_boot_gate`, `inst_stage_error_text`,
 `inst_sig_note_kind`) key on the kind `inst_os_kind` gives
@@ -1574,8 +1583,10 @@ not on the version, and their texts name no version ("this Windows"): a
 system admitted to that kind later - Windows 10 below build 22000, tasks
 43.34 to 43.36 - takes the gate, the catalog text and the 32-bit Secure
 Boot note with it. Whether 10 makes `xhcicm` boot start and refuses a
-package with no catalog in test-signing mode is unread here (the same
-setup engine and code integrity, so likely); 43.34's legs read it.
+package with no catalog in test-signing mode was unread here (the same
+setup engine and code integrity, so likely); 10 x64's refusal of the
+catalog-less package was read since (section 5.12), and whether 10 makes
+`xhcicm` boot start is still unread.
 
 The installer still signs nothing and changes no boot setting (D6). A
 catalog would remove item 1's detour (a test-signed catalog is accepted
@@ -1626,8 +1637,10 @@ connection manager with the steps that begin with turning Secure Boot
 off, and after an install a Code 52 is reported as the note's case.
 Host vectors: each state on each system, and the state through the gate.
 The value is unread on any guest here (all SeaBIOS, where it is absent or
-0, both of which read as not known or off): task 43.32's OVMF guest reads
-it before the release.
+0, both of which read as not known or off), and its reading with Secure
+Boot on is owed: task 43.32's OVMF guest was not built. The refusal with
+Secure Boot on does not wait on that reading: since revision 33 it is
+taken from Microsoft's documented policy (section 5.12, "Settled").
 
 Revision 33 (the owner, 2026-10-22, on section 5.12's measured refusal):
 from `3.2.0.0` every INF of the x64 package names a catalog of its own
