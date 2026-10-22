@@ -2232,6 +2232,16 @@ static int mk_s98_propchange(HDEVINFO set, SP_DEVINFO_DATA *data,
     SP_DEVINSTALL_PARAMS_A ip;
 
     *vetoed = 0;
+    /* The restart flags stay in the element's install parameters from an
+     * earlier call (a refused stop's): cleared first, so only this call's
+     * own answer is read. */
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (s98api.SetDiParams != NULL && api.GetDiParams(set, data, &ip) &&
+        (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
+        ip.Flags &= ~(DWORD)(MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART);
+        (void)s98api.SetDiParams(set, data, &ip);
+    }
     memset(&pcp, 0, sizeof(pcp));
     pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
     pcp.ClassInstallHeader.InstallFunction = MK_DIF_PROPERTYCHANGE;
@@ -2394,11 +2404,16 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
         int refused = vetoed;
         err = GetLastError();
         /* A refused stop asked for a restart; the enable withdraws it. */
+        st = 0;
+        pr = 0;
         enabled = mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
         if (!enabled || !mk_s98_fresh(id, service, sizeof(service), &st, &pr,
                                       &dn) || mk_s98_disabled(st, pr)) {
-            mk_log("Stor98: %s: the stop was not made, and its enable is not "
-                   "seen; it is owed", id);
+            mk_log("Stor98: %s: the stop was %s (error %lu), and its enable "
+                   "is not seen (it answered %s; status %08lX problem %lu); "
+                   "it is owed", id, refused ? "refused" : "not made", err,
+                   enabled ? "done" : vetoed ? "a restart" : "a failure", st,
+                   pr);
             result = MK_S98_ENABLE;
         } else {
             result = refused ? MK_S98_BUSY : MK_S98_FAILED;
