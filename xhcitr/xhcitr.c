@@ -6525,10 +6525,6 @@ static void fast_announce(void)
 static int balloonAnswers;      /* the shell has sent a NIN_BALLOON* message */
 static void fast_balloon_event(int ev)
 {
-    if (ev == TR_BE_SHOW || ev == TR_BE_HIDE || ev == TR_BE_TIMEOUT ||
-        ev == TR_BE_CLICK) {
-        balloonAnswers = 1;
-    }
     if (tr_bsend_step(&fastSend, ev, GetTickCount(), balloonAnswers)) {
         if (iconAdded && fastOn && fastCount > 0) {
             (void)tray_balloon_send(TR_FAST_TITLE, fastText, 0, 1);
@@ -6584,11 +6580,12 @@ static void fast_scan(void)
     }
     memcpy(fastKeys, keys, sizeof(keys));
     fastKeyN = n;
-    /* A balloon still owed (item 9) that names a device gone, or with the
-     * notice off, is not sent again. */
+    /* A balloon still owed (item 9), or not yet sent for want of the icon,
+     * that names a device gone, or with the notice off, is not sent. */
     if (!fastOn ||
         tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN,
                     fastTextKey)) {
+        fastPending = 0;
         fast_balloon_event(TR_BE_DROP);
     }
     if (fresh > 0 && first >= 0) {
@@ -7932,21 +7929,25 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             break;
         case WM_USER + 2:       /* NIN_BALLOONSHOW */
             if (shellV5) {
+                balloonAnswers = 1;
                 fast_balloon_event(fastBalloon ? TR_BE_SHOW : TR_BE_OTHER);
             }
             break;
         case WM_USER + 3:       /* NIN_BALLOONHIDE */
             if (shellV5) {
+                balloonAnswers = 1;
                 fast_balloon_event(TR_BE_HIDE);
             }
             break;
         case WM_USER + 4:       /* NIN_BALLOONTIMEOUT */
             if (shellV5) {
+                balloonAnswers = 1;
                 fast_balloon_event(TR_BE_TIMEOUT);
             }
             break;
         case WM_USER + 5:       /* NIN_BALLOONUSERCLICK */
             if (shellV5) {
+                balloonAnswers = 1;
                 fast_balloon_event(TR_BE_CLICK);
             }
             if (shellV5 ? fastBalloon : wp == TRAY_POP_FAST) {

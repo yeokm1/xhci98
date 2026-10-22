@@ -2910,6 +2910,18 @@ static void test_bsend(void)
     (void)tr_bsend_step(&s, TR_BE_HIDE, 200UL, 1);
     CHECK_EQ(s.State, TR_BS_LOST, "bsend: hide unshown: lost");
 
+    /* An older balloon's timeout delivered after this one was sent, then
+     * this one shown: never sent again. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_bsend_step(&s, TR_BE_SENT, 100UL, 1);
+    (void)tr_bsend_step(&s, TR_BE_TIMEOUT, 101UL, 1);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_SHOW, 3000UL, 1), 0,
+             "bsend: shown after a stale timeout");
+    CHECK_EQ(s.State, TR_BS_SHOWN, "bsend: lost then shown: shown");
+    (void)tr_bsend_step(&s, TR_BE_TIMEOUT, 13000UL, 1);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 101UL + 2UL * TR_BS_WAIT_MS, 1), 0,
+             "bsend: shown after a stale timeout: not sent again");
+
     /* XP's case: shown, so never sent again. */
     memset(&s, 0, sizeof(s));
     (void)tr_bsend_step(&s, TR_BE_SENT, 100UL, 1);

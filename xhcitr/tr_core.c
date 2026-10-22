@@ -2958,7 +2958,9 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports)
         s->Since = nowMs;
         return 0;
     case TR_BE_SHOW:
-        if (s->State == TR_BS_SENT) {
+        /* Lost too can be shown after all: the gone it saw may have been
+         * an older balloon's, posted before this one was sent. */
+        if (s->State == TR_BS_SENT || s->State == TR_BS_LOST) {
             s->State = TR_BS_SHOWN;
             s->Since = nowMs;
         }
