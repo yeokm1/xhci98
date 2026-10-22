@@ -64,6 +64,9 @@
 #include "inst_eng.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/cm/cm_ejask.h"
+#include "inst_ej9x.h"
+#include "../src/cm/cm_query.h"
 
 /* The driver's own switchover gate (src\xhci_psw.c), declared here rather
  * than through xhci_psw.h, whose compatibility header is the driver's. */
@@ -12873,8 +12876,234 @@ static int eject_confirm(void)
            inst_tb_answer(line, 0) == 1;
 }
 
+/*
+ * 98 SE and ME: a unit's eject asked of xhcicm.sys (record 24 section 7.1,
+ * revision 6; record 21 section 7.2 part 1; task 43.18). The tool makes
+ * neither CONFIGMG call for a unit: it writes XhciCmEjectAsk to the NHI's
+ * driver key and reads XhciCmEjectReply and XhciCmEjectResult from its
+ * hardware key.
+ */
+
+/* The query device's token for NHI k: its name from the NHI's hardware
+ * key (XhciCmQueryName), one IOCTL_XHCICM_QUERY, the header checked and
+ * the record's NHI ids compared with the devnode's. 1 when read. */
+static int tb_token(int k, INST_EJ_TOKEN *tok)
+{
+    char path[INST_PATH_CHARS];
+    char name[32];
+    char dev[48];
+    unsigned char *buf;
+    HKEY key;
+    HANDLE h;
+    DWORD type;
+    DWORD n;
+    DWORD got;
+    DWORD size;
+    INST_U32 vd;
+    INST_U32 rec;
+    int ok;
+    int tries;
+
+    memset(tok, 0, sizeof(*tok));
+    if (tbh[k].Node < 0) {
+        return 0;
+    }
+    join(path, sizeof(path), "Enum", tbn[tbh[k].Node].R.Id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    n = sizeof(name) - 1;
+    ok = RegQueryValueExA(key, CM_Q_NAME_VALUE, NULL, &type,
+                          (LPBYTE)name, &n) == ERROR_SUCCESS &&
+         type == REG_SZ && n > 1;
+    RegCloseKey(key);
+    if (!ok) {
+        return 0;
+    }
+    name[n < sizeof(name) ? n : sizeof(name) - 1] = '\0';
+    _snprintf(dev, sizeof(dev) - 1, "\\\\.\\%s", name);
+    dev[sizeof(dev) - 1] = '\0';
+    h = CreateFileA(dev, GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                    0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        h = CreateFileA(dev, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        OPEN_EXISTING, 0, NULL);
+    }
+    if (h == INVALID_HANDLE_VALUE) {
+        logonly("query device %s: not opened (%lu)\n", dev,
+                (unsigned long)GetLastError());
+        return 0;
+    }
+    ok = 0;
+    buf = NULL;
+    size = CM_Q_ASK_BYTES;
+    for (tries = 0; tries < 3 && !ok; tries++) {
+        unsigned char *b = (unsigned char *)realloc(buf, size);
+        if (b == NULL) {
+            break;
+        }
+        buf = b;
+        got = 0;
+        if (!DeviceIoControl(h, CM_Q_IOCTL, NULL, 0, buf, size, &got,
+                             NULL) ||
+            got < CM_Q_HDR_BYTES || got > size) {
+            break;
+        }
+        if (inst_get32(buf, CM_Q_O_BYTES) > got) {
+            size = inst_get32(buf, CM_Q_O_BYTES);
+            if (size > CM_Q_MAX_BYTES) {
+                break;
+            }
+            continue;
+        }
+        if (!inst_ej_token(buf, got, tok)) {
+            break;
+        }
+        /* The answer is this NHI's: the record's ids are the devnode's. */
+        rec = inst_get32(buf, CM_Q_O_REC_OFFSET);
+        ok = rec + CM_ST_HDR_BYTES <= got &&
+             inst_pci_vendev(tbn[tbh[k].Node].R.Id, &vd) &&
+             inst_get32(buf + rec, CM_ST_O_NHI_ID) == vd;
+    }
+    CloseHandle(h);
+    free(buf);
+    logonly("query token %s: %s epoch %08lX%08lX generation %lu%s\n", dev,
+            ok ? "read" : "refused", (unsigned long)tok->EpochHi,
+            (unsigned long)tok->EpochLo, (unsigned long)tok->ContentGen,
+            tok->Eligible ? "" : " (not eligible)");
+    return ok;
+}
+
+/* A REG_BINARY of exactly `want` bytes from NHI k's hardware key. */
+static int tb_hw_binary(int k, const char *value, unsigned char *b,
+                        DWORD want)
+{
+    char path[INST_PATH_CHARS];
+    HKEY key;
+    DWORD type;
+    DWORD n;
+    int ok;
+
+    if (tbh[k].Node < 0) {
+        return 0;
+    }
+    join(path, sizeof(path), "Enum", tbn[tbh[k].Node].R.Id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    n = want;
+    ok = RegQueryValueExA(key, value, NULL, &type, b, &n) == ERROR_SUCCESS &&
+         type == REG_BINARY && n == want;
+    RegCloseKey(key);
+    return ok;
+}
+
+static void tb_eject_unask(int k)
+{
+    HKEY key;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[k].DrvPath, 0, KEY_SET_VALUE,
+                      &key) == ERROR_SUCCESS) {
+        RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+        RegCloseKey(key);
+    }
+}
+
+/*
+ * The ask and its wait. Returns the outcome (INST_EJ_*) with its text, or
+ * -1 for the uncertain end; *notClean as inst_ej_outcome's.
+ */
+static int tb_eject9x(int k, INST_U32 member, INST_U32 unit,
+                      const INST_EJ_TOKEN *tok, const char **text,
+                      int *notClean)
+{
+    unsigned char ask[CM_EJ_ASK_BYTES];
+    unsigned char res[CM_EJ_RESULT_BYTES];
+    unsigned char rep[CM_EJ_REPLY_BYTES];
+    INST_EJ_RESULT r;
+    INST_EJ_WAIT w;
+    INST_U32 nonce;
+    INST_U32 reason;
+    INST_U32 lastStep;
+    HKEY key;
+    int got;
+    int end;
+    int written;
+    static INST_U32 lastNonce;
+
+    *notClean = 0;
+    *text = "";
+    nonce = inst_ej_nonce(GetTickCount() ^ (GetCurrentProcessId() << 8),
+                          lastNonce);
+    lastNonce = nonce;
+    inst_ej_ask(ask, nonce, member, unit, tok);
+    driver_key_path(&tbn[tbh[k].Node].R, tbh[k].DrvPath,
+                    sizeof(tbh[k].DrvPath));
+    written = 0;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[k].DrvPath, 0, KEY_SET_VALUE,
+                      &key) == ERROR_SUCCESS) {
+        written = RegSetValueExA(key, CM_EJ_ASK_VALUE, 0, REG_BINARY, ask,
+                                 sizeof(ask)) == ERROR_SUCCESS;
+        RegCloseKey(key);
+    }
+    logonly("eject ask 0x%08lX (port %04lX, unit %04lX) to %s: %s\n",
+            (unsigned long)nonce, (unsigned long)member, (unsigned long)unit,
+            tbh[k].DrvPath, written ? "written" : "refused");
+    if (!written) {
+        *text = "The Thunderbolt driver could not be asked (its registry key "
+                "is not writable).";
+        return INST_EJ_UNSUPPORTED;
+    }
+    out("Asked the Thunderbolt driver to stop the device.\n");
+    inst_ej_wait_init(&w, GetTickCount());
+    lastStep = 0;
+    end = INST_EJ_W_WAIT;
+    while (end == INST_EJ_W_WAIT || end == INST_EJ_W_DELETE) {
+        Sleep(CM_EJ_POLL_MS);
+        reason = tb_hw_binary(k, CM_EJ_REPLY_VALUE, rep, sizeof(rep))
+                     ? inst_ej_reply(rep, sizeof(rep), nonce)
+                     : 0;
+        got = tb_hw_binary(k, CM_EJ_RESULT_VALUE, res, sizeof(res)) &&
+              inst_ej_result(res, sizeof(res), nonce, &r);
+        if (got && r.Step != lastStep) {
+            lastStep = r.Step;
+            logonly("eject step %lu outcome %lu query 0x%lX remove 0x%lX "
+                    "answer 0x%08lX clock %lu\n",
+                    (unsigned long)r.Step, (unsigned long)r.Outcome,
+                    (unsigned long)r.QueryCr, (unsigned long)r.RemoveCr,
+                    (unsigned long)r.Answer, (unsigned long)r.Clock);
+        }
+        end = inst_ej_wait_step(&w, GetTickCount(), reason,
+                                got ? &r : NULL);
+        if (end == INST_EJ_W_DELETE) {
+            tb_eject_unask(k);
+            logonly("eject ask unanswered after %lu ms: deleted\n",
+                    (unsigned long)CM_EJ_ANSWER_MS);
+        }
+        if (end == INST_EJ_W_REJECTED) {
+            logonly("eject ask rejected: reason %lu\n",
+                    (unsigned long)reason);
+        }
+    }
+    tb_eject_unask(k);
+    if (end == INST_EJ_W_REJECTED) {
+        return inst_ej_rejected(reason, text);
+    }
+    if (end == INST_EJ_W_UNCERTAIN) {
+        *text = inst_ej_uncertain_text();
+        return -1;
+    }
+    return inst_ej_outcome(&r, text, notClean);
+}
+
 static int run_eject(void)
 {
+    INST_EJ_TOKEN tok1;
+    INST_EJ_TOKEN tok2;
+    int haveTok;
     char id[INST_ID_CHARS];
     char portId[INST_ID_CHARS];
     char desc[128];
@@ -12971,6 +13200,9 @@ static int run_eject(void)
             return INST_EXIT_REFUSED;
         }
     }
+    /* 98 SE and ME: the topology the unit is chosen under, before the
+     * revalidation (record 21 section 7.2 part 1, the freshness token). */
+    haveTok = !envNow.Nt && tb_token(nhiK, &tok1);
     /* Revalidation (record 24 section 7.3), immediately before the call:
      * a fresh ask answered, then the tree read again at that generation. */
     if (!tb_reconfirm() || !tb_scan(0) || tbnBad != 0 || tbChanging) {
@@ -13056,28 +13288,39 @@ static int run_eject(void)
         }
         tb_watch_tunnel(nhiK, portBdf);
     } else {
-        cr = tbQueryRemove(tbn[u].Dn, INST_UI_NOT_OK);
-        logonly("CM_Query_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
-        outcome = inst_eject9x_query(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            out("%s\n", text);
-            if (cr != INST_CR_REMOVE_VETOED && outcome == INST_EJ_VETO) {
-                out("(code 0x%08lX)\n", (unsigned long)cr);
-            }
+        INST_U32 unit;
+        int notClean;
+
+        /* Asked of the Thunderbolt driver (task 43.18): the unit chosen
+         * under the same start and content of the query answer before and
+         * after the revalidation, then the ask and its result. */
+        unit = inst_ej_unit_loc(id);
+        if (!haveTok || !tb_token(nhiK, &tok2) || !tok2.Eligible ||
+            !inst_ej_same_token(&tok1, &tok2) || unit == INST_EJ_NO_LOC) {
+            out("The device list changed, or the Thunderbolt driver's own "
+                "list could not be read;\nnothing was ejected.\n");
             tb_unask();
-            return inst_eject_code(outcome);
+            return INST_EXIT_REFUSED;
         }
-        /* Accepted: the removal always follows (record 24 section 7.1). */
-        cr = tbRemove(tbn[u].Dn, INST_UI_NOT_OK);
-        logonly("CM_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
-        outcome = inst_eject9x_remove(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            out("%s\n(code 0x%08lX)\n", text, (unsigned long)cr);
+        outcome = tb_eject9x(nhiK, portBdf, unit, &tok2, &text, &notClean);
+        if (outcome < 0) {
+            out("%s\n", text);
             tb_unask();
             devLast = text;
+            return INST_EXIT_FAILED;
+        }
+        if (outcome != INST_EJ_DONE) {
+            out("%s\n", text);
+            tb_unask();
+            if (outcome == INST_EJ_FAILED) {
+                devLast = text;
+            }
             return inst_eject_code(outcome);
         }
         out("Windows has stopped %s.\n", desc);
+        if (notClean) {
+            out("%s\n", inst_ej_not_clean_text());
+        }
         out("Until you unplug it, Device Manager's Refresh, or the "
             "Thunderbolt driver\nlooking at the port again, can start it "
             "again.\n");

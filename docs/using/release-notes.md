@@ -502,11 +502,25 @@ the logged-on user, with no administrator rights.
 - **Balloons** say when a device connects, waits for approval or
   disconnects, on Windows 2000, ME and later; on 98 SE the icon's tooltip
   shows the last event. A balloon never says how a device left: only a
-  removal the tool made reports its outcome. In `3.1.0.0` the tray
+  removal the tool made reports its outcome, and, from `3.2.0.0`, the
+  unexpected-removal warning below. In `3.1.0.0` the tray
   warned "The Thunderbolt/USB4 controller stopped answering" after every
   sleep or hibernation with nothing wrong (read on 7 in a virtual
   machine, 2026-10-22); from `3.2.0.0` a sleep or a stop of the
   controller raises no warning, and a resume that fails still does.
+- **From `3.2.0.0`, on Windows 2000 and later only**, a warning balloon
+  says "A Thunderbolt or USB4 device was removed unexpectedly." when
+  Windows removed a running device behind a Thunderbolt or USB4 tunnel
+  that had not been stopped first: unplugged without Safely Remove, its
+  link lost, or its own driver failed. It does not say whether any data
+  was lost. The controller's details count these since it started, with
+  the tunnel port of the last. A device that was already plugged in when
+  the package was installed is watched from its next plug: until then
+  Windows starts it without the driver's filter. Each user can turn the
+  balloon off with
+  "Warn when a device is removed unexpectedly" in the icon's right-click
+  menu or the View menu; the count is kept either way. On Windows 98 SE
+  and ME such a device is shown as disconnected, as before.
 - The link rate and width of a USB4 device are read from its lane
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
@@ -565,12 +579,30 @@ every system `INSTALL /devices` shows what is connected and
 - **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /eject`;
   these systems have no other way, since the "Unplug or Eject Hardware" applet NUSB installs
   does not list a device behind a Thunderbolt port. The tool lists the
-  devices, asks which one, and asks Windows to query the device's
-  removal (a volume with a file open on it refuses, and the tool says so
-  and changes nothing) and, once Windows has agreed, to remove it; then it
-  says whether the device can be unplugged. Until it is unplugged, Device
-  Manager's Refresh, or the Thunderbolt driver looking at the port again,
-  can start the device again.
+  devices, asks which one, and then (from `3.2.0.0`) asks the Thunderbolt
+  driver, `xhcicm.sys`, to remove it; before, the tool asked Windows
+  itself. The driver asks Windows to query the device's removal (a volume
+  with a file open on it refuses, and the tool says so and nothing is
+  changed); once Windows has agreed, for an NVMe drive bound to the
+  bundled Stor98 it asks Stor98 to stop the drive cleanly (flush and shut
+  down) and waits up to about 14 seconds for its answer, then removes the
+  device; the tool then says whether it can be unplugged. An NVMe drive
+  that the bundled Stor98 is not running is not ejected from here, since
+  it cannot be asked to stop cleanly: the tool says so, nothing changes
+  (exit 1), and the tool tells you to shut Windows down before you
+  unplug it. A drive that
+  does not confirm its stop is not removed: it stays stopped until it is
+  unplugged, the tool says "Blocked: the drive did not stop; shut down
+  Windows before you unplug it" (exit 2), and the USB Tree shows the port
+  as blocked. So does a removal Windows keeps refusing for 30 seconds
+  (the driver keeps trying until it succeeds or the device is unplugged).
+  A tool that hears no answer from the driver says so (exit 2) and does
+  not claim that nothing changed. Under the USB4 connection manager the
+  port's tunnel is closed after a clean removal when no other device
+  behind it is running; under the Thunderbolt 3 firmware connection
+  manager the tunnel stays up until the unplug. Until it is unplugged,
+  Device Manager's Refresh, or the Thunderbolt driver looking at the port
+  again, can start the device again.
 - **Windows 2000:** "Unplug or Eject Hardware" lists the device; stop it,
   then unplug it. Unplugged without a stop, the device is removed all the
   same and Windows 2000 shows its "Unsafe Removal of Device" dialog.
@@ -672,19 +704,22 @@ beside a key that proves it belongs to the current boot,
 `HKEY_DYN_DATA\Stor98LinkState`, which `xhcicm.sys` answers for as long
 as Windows runs. The bundled Stor98 reads it on every target:
 
-- On Windows 2000 and XP x64, where `xhcicm.sys` can prove that the
-  drive's link went down and the drive was reset (today only in its
-  emulator), it says so on the channel, Stor98 acknowledges, and the
+- On Windows 2000, XP x64, 98 SE and ME, where `xhcicm.sys` can prove
+  that the drive's link went down and the drive was reset (today only in
+  its emulator), it says so on the channel, Stor98 acknowledges, and the
   drive is removed at once rather than after Stor98's own deadline of
   about 5 seconds.
 - Everywhere else nothing is stated: Stor98 detects a removed drive by
   itself, at that deadline.
 - On Windows 98 SE and ME Stor98 finds the channel, also for a drive
   plugged in after Windows started (it looks for its drive's entry again
-  after it starts). This release makes no link-down statement there and
-  no clean-eject handshake: an eject with the install or tray tool is
-  Windows' own (flush and stop), and for an unplugged drive Stor98
-  relies on its own deadline.
+  after it starts). From `3.2.0.0` an eject with the install or tray tool
+  goes through `xhcicm.sys`, which asks Stor98 for a clean stop and waits
+  for its answer before Windows removes the drive ("Removing a Thunderbolt
+  or USB4 device safely"). From `3.2.0.0` the link-down statement is made
+  there too, as on 2000 and XP x64 above: each of 98 SE and ME was
+  admitted on its own reading of the statement's ordering in the
+  emulator.
 
 ### The connection manager's registry values
 
@@ -3871,12 +3906,14 @@ or says it was found by reading the code.
   `hidusb.sys` (4.90): when a HID device's start fails because the device
   has already been pulled, ME stops it, and the removal that follows waits
   for ever inside `hidusb.sys`, before this driver is asked anything.
-  Windows 98 SE's `hidusb.sys` does not have this flaw. It was seen in a
-  virtual machine after 4 to 17 back-to-back plug and unplug cycles at a
-  few seconds each; ME's own USB stack, on a UHCI controller in the same
-  virtual machine, ran 160 such cycles without stopping, so this driver
-  reaches it far more readily. Plugs a few seconds apart, each left until
-  the device worked, did not reach it.
+  Windows 98 SE's `hidusb.sys` does not have this flaw. Any USB stack
+  can reach it, ME's own included: it was seen in a virtual machine after
+  4 to 17 back-to-back plug and unplug cycles under this driver, and ME's
+  own USB stack, on a UHCI controller in the same virtual machine, stopped
+  the same way after 8 and 58 cycles of a series that pulled each mouse
+  one second after its plug. This driver starts a new device no later
+  than ME's own stack does - sooner, in those readings. Plugs a few
+  seconds apart, each left until the device worked, did not reach it.
 - **Windows 98 SE: a USB audio device can wedge the machine as it loads,
   and it is not this driver's doing.** After a cold boot, attaching a USB
   audio device wedges the guest often, with the taskbar clock stopped and

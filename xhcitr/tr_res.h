@@ -37,6 +37,7 @@
 #define IDM_V_AUTO              40026
 #define IDM_LOGIN               40027
 #define IDM_LEVEL               40028
+#define IDM_RMWARN              40029
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031
 #define IDM_ABOUT               40040

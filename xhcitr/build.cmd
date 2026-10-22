@@ -19,7 +19,9 @@ rem
 rem The sources: xhcitr.c (the system half), tr_core.c (the pure half the
 rem host suite test\test_tr.c also links), tr_pci.c (the PCI configuration
 rem nodes' pure half, test\test_trpci.c's), tr_log.c (the driver logs' pure
-rem half, test\test_trlog.c's), tr_snap.c (XHCISNAP's reading, moved here
+rem half, test\test_trlog.c's), tr_pop.c and tr_popw.c (the 98 SE pop-up in
+rem the balloon's place, task 43.55: its pure half, test\test_trpop.c's, and
+rem its window), tr_snap.c (XHCISNAP's reading, moved here
 rem by roadmap-usb4 task 42-A.4: /snapshot, /dump and /probe) and
 rem ..\xhciinst\inst_core.c, record 24's
 rem unit rules and eject texts.
@@ -63,11 +65,11 @@ set "INCLUDE=%MSVC6%\VC98\Include"
 set "LIB=%MSVC6%\VC98\Lib"
 rc /fo xhcitr.res xhcitr.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c tr_log.c tr_pci.c tr_snap.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
+cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c tr_log.c tr_pci.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
 if errorlevel 1 exit /b 1
 if not exist XHCITR.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj tr_log.obj tr_pci.obj tr_snap.obj inst_core.obj mark_core.obj xhcitr.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_log.obj tr_pci.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_ej9x.obj mark_core.obj xhcitr.res 2>nul
 echo Built XHCITR.EXE
 
 if "%WANT64%"=="0" goto done
@@ -79,11 +81,11 @@ set "INCLUDE=%WDK71%\inc\api;%WDK71%\inc\crt"
 set "LIB=%WDK71%\lib\wnet\amd64;%WDK71%\lib\crt\amd64"
 rc /i "%WDK71%\inc\api" /fo xhcitr64.res xhcitr.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c tr_log.c tr_pci.c tr_snap.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c tr_log.c tr_pci.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCITR64.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj tr_log.obj tr_pci.obj tr_snap.obj inst_core.obj mark_core.obj xhcitr64.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_log.obj tr_pci.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_ej9x.obj mark_core.obj xhcitr64.res 2>nul
 echo Built XHCITR64.EXE
 
 :done

@@ -4143,6 +4143,8 @@ cuts without the tool on a host that cannot build it.
             Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhcitr\xhcitr.ico")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_ejask.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
         foreach ($name in ($instExes + $rootExes)) {
@@ -4212,6 +4214,9 @@ cuts without the tool on a host that cannot build it.
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.h")) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_ej9x.c")) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_ej9x.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_ejask.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")))

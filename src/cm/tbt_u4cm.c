@@ -3782,6 +3782,8 @@ static VOID tbtU4LinkDownUpcall(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN closed,
     }
     if (r == TBT_U4_STMT_SENT) {
         cm->Counters.StatementsSent++;
+    } else if (r == TBT_U4_STMT_PENDING) {
+        cm->Counters.StatementsPending++;
     } else {
         cm->Counters.StatementsWithheld++;
     }

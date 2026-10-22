@@ -32,6 +32,12 @@
  * written empty, so each one is acted on once. The driver key is opened
  * with KEY_SET_VALUE beside KEY_READ on NT for that alone.
  *
+ * THE 9x EJECT (record 21 section 7.2 part 1, task 43.18). On 98 SE and ME
+ * the same read takes XhciCmEjectAsk (cm_ejask.h) from the driver key and
+ * hands it to cm_ejectos.c whether or not it is there; the reply and the
+ * result go to the hardware key beside the record (CmStatusEjectWrite).
+ * The driver never writes the tool's ask.
+ *
  * A failed write is counted and tried again at the next pass; it never
  * touches the connection manager. The import allowlists hold
  * ZwSetValueKey, RtlInitUnicodeString and KeQuerySystemTime to this file
@@ -153,6 +159,65 @@ static VOID cmStReadConfirm(PCM_NHI nhi)
                         (PVOID)&none, 0);
 }
 
+/* 98 SE and ME: XhciCmEjectAsk (cm_ejask.h), a REG_BINARY of
+ * CM_EJ_ASK_BYTES; anything else is read as no ask. */
+static NTSTATUS NTAPI cmStTakeEject(PWSTR ValueName, ULONG ValueType,
+                                    PVOID ValueData, ULONG ValueLength,
+                                    PVOID Context, PVOID EntryContext)
+{
+    PUCHAR from;
+    PUCHAR to;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+    if (ValueType != REG_BINARY || ValueLength != CM_EJ_ASK_BYTES) {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    from = (PUCHAR)ValueData;
+    to = (PUCHAR)EntryContext;
+    for (i = 0; i < CM_EJ_ASK_BYTES; i++) {
+        to[i] = from[i];
+    }
+    return STATUS_SUCCESS;
+}
+
+/* The eject ask, read with the status ask and handed over whether or not
+ * it is there (its absence after a terminal step is the tool's
+ * consumption). The driver never writes the tool's value. */
+static VOID cmStReadEject(PCM_NHI nhi)
+{
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    UCHAR v[CM_EJ_ASK_BYTES];
+    BOOLEAN present;
+
+    CmZero(table, sizeof(table));
+    CmZero(v, sizeof(v));
+    table[0].QueryRoutine = cmStTakeEject;
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = L"XhciCmEjectAsk";
+    table[0].EntryContext = v;
+    present = (BOOLEAN)NT_SUCCESS(RtlQueryRegistryValues(
+        RTL_REGISTRY_HANDLE, (PWSTR)nhi->StatusPub.DrvKey, table, NULL,
+        NULL));
+    CmEjectAsk(nhi, present, v, CM_EJ_ASK_BYTES);
+}
+
+BOOLEAN CmStatusEjectWrite(PCM_NHI nhi, BOOLEAN result, const UCHAR *bytes,
+                           ULONG length)
+{
+    UNICODE_STRING name;
+
+    if (nhi->StatusPub.DevKey == NULL) {
+        return FALSE;
+    }
+    RtlInitUnicodeString(&name, result ? L"XhciCmEjectResult"
+                                       : L"XhciCmEjectReply");
+    return (BOOLEAN)NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey,
+                                             &name, 0, REG_BINARY,
+                                             (PVOID)bytes, length));
+}
+
 static VOID cmStReadAsk(PCM_NHI nhi)
 {
     CM_STATUS_PUB *s;
@@ -177,6 +242,8 @@ static VOID cmStReadAsk(PCM_NHI nhi)
     }
     if (cmStNt()) {
         cmStReadConfirm(nhi);
+    } else {
+        cmStReadEject(nhi);
     }
 }
 
@@ -261,6 +328,7 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
         n = CM_ST_MAX_PORTS;
     }
     in->PortCount = n;
+    in->Blocked = CmEjectBlockedMask(nhi);
     for (i = 0; i < n; i++) {
         in->PortBdf[i] = nhi->Reenum.Port[i].Bdf;
         if (nhi->Reenum.Port[i].Flags & CM_PORT_ACTIVE) {

@@ -144,7 +144,7 @@ static void test_models_rule(void)
     e = env(1, 6, 3, INST_ARCH_AMD64);
     inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
     CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "8.1 x64: NTamd64.6.0");
-    /* Revision 27: Windows 10 reads them too, with no INF change. */
+    /* Revision 28: Windows 10 reads them too, with no INF change. */
     e = env(1, 10, 0, INST_ARCH_X86);
     inst_models_section("CmModels,NTx86.6.0", &e, out, sizeof(out));
     CHECK(inst_eq(out, "CmModels.NTx86.6.0"), "10 x86: .NTx86.6.0");
@@ -190,7 +190,7 @@ static void test_cm_only(void)
           "8.1: the connection manager alone");
     CHECK(inst_os_kind(1, 6, 4, 9841) == INST_OS_REFUSED,
           "10's previews (6.4): refused");
-    /* Revision 27 (task 43.34): 10.0 below build 22000, Server 2016 to
+    /* Revision 28 (task 43.34): 10.0 below build 22000, Server 2016 to
      * 2022 among them with no Server check; 11 refused. */
     CHECK(inst_os_kind(1, 10, 0, 10240) == INST_OS_CMONLY, "10 1507");
     CHECK(inst_os_kind(1, 10, 0, 14393) == INST_OS_CMONLY,

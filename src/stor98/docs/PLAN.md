@@ -1174,6 +1174,19 @@ isolation evidence.
   reused memory). A future NT DMA pool (the MD-3 option (b) of the open entries, with
   `MmGetPhysicalAddress`) would take addresses around the adapter and must not ship with
   this value.
+- **R11 O6 under a CM with no per-port teardown, decided 2026-10-22 (maintainer, the
+  owner).** O6 asks the CM to tear the tunnel down once `Remove_SubTree` has kept failing
+  for 30 s, so that `DOWN_QUIESCED` releases what the terminal instance holds. Under the
+  Thunderbolt 3 firmware CM xhci98 has no teardown of one port (the firmware's only one
+  drops every tunnel of the host), so it tears nothing down: it keeps the devnode and the
+  request in place, reports the eject failed, keeps retrying the removal every 2 s
+  (vetoes honoured) and publishes no `UP` on that port until the removal succeeds or the
+  devnode is gone (xhci98 design record 21 section 7.2, its decision V8). Accepted as an
+  exception to O6: the instance stays terminal (R9d) with nothing outstanding after a
+  CLEAN or ISOLATED_NOT_CLEAN acknowledgement, the pool is kept, and the unplug's link
+  down is R12's (`DOWN_QUIESCED` where xhci98 states it, otherwise the MD-1 deadline).
+  Nothing changes in the receiver. Option not chosen: a receiver-side handling of a
+  request left in place past O6. Contract text: `include/stor98cm.h` R11 O6.
 
 ### Open (undecided)
 
