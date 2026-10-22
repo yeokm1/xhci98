@@ -1544,6 +1544,20 @@ a choice:
   smallest and largest sizes on the command line and make the run a sweep;
   added for 43.46's bench (the 9x study from 128 KiB to 2 MiB, with
   Stor98's 2 MiB maximum).
+- **The 98 SE smoke runs (2026-10-22, emulator, kit `E:\xhci98-vm\p43-50`)**:
+  the generic benchmark ran on C: (IDE) and on the NVMe drive Stor98
+  drives, verified, and saved its reports. They changed two things. A
+  timed step's deadline is also checked by the workers: a 2 s random
+  write had run 22 s while synchronous IDE requests kept the controller
+  from running. The 9x attribution (section 6.2) found `Enum\SCSI`
+  holding the disk under two ids (an earlier driver's spelling) and an
+  instance name whose PCI part (`08280000`) is not Stor98's bus and slot
+  (the identity page said bus 1, device 1); it now counts instances in
+  tiers - the id as the INQUIRY vendor and product spell it on the
+  adapter's location, the id as spelt, the model - the first that finds
+  any deciding, and only those the configuration manager finds present
+  where it answers. With that the Stor98 page read Stor98's counters
+  through ASPI on 98 SE. An ambiguity names its counts on the page.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.
