@@ -2063,6 +2063,40 @@ static int leftover_offer(HWND owner, const char *path, int quiet)
     return 1;
 }
 
+/* 1 when path is surely not there: the system says the file is not found
+ * and its folder answers. A drive that is gone, not ready or answering
+ * nothing (a disk unplugged during a run, a letter not there after a
+ * restart) leaves it unknown, and the record is kept for the next start. */
+static int file_surely_gone(const char *path)
+{
+    char dir[MAX_PATH];
+    char *slash;
+    DWORD err;
+
+    if (GetFileAttributesA(path) != 0xFFFFFFFF) {
+        return 0;
+    }
+    err = GetLastError();
+    if (err != ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    sz_cpy(dir, sizeof(dir), path);
+    slash = strrchr(dir, '\\');
+    if (slash == NULL) {
+        return 0;
+    }
+    if (slash == dir + 2 && dir[1] == ':') {
+        /* the drive's root: its volume answers */
+        char vol[32];
+        DWORD serial, maxc, fl;
+
+        slash[1] = 0;
+        return GetVolumeInformationA(dir, vol, sizeof(vol), &serial, &maxc, &fl, NULL, 0) != 0;
+    }
+    *slash = 0;
+    return GetFileAttributesA(dir) != 0xFFFFFFFF;
+}
+
 /* Only a file this run created is deleted, and never by its name alone:
  * on NT the anchor's FILE_FLAG_DELETE_ON_CLOSE deletes it as the last
  * handle closes; on 9x, which has no handle-bound deletion, the name is
@@ -2086,6 +2120,8 @@ static void cleanup_file(RUN *r)
             /* still there and still ours: another program holds it open */
             gone = !handle_is_ours(r, h, 0);
             CloseHandle(h);
+        } else if (!file_surely_gone(r->path)) {
+            gone = 0;       /* the drive does not answer: not known to be deleted */
         }
     } else {
         h = CreateFileA(r->path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
@@ -2097,7 +2133,7 @@ static void cleanup_file(RUN *r)
             if (!ours || !DeleteFileA(r->path)) {
                 gone = 0;
             }
-        } else if (GetFileAttributesA(r->path) != 0xFFFFFFFF) {
+        } else if (!file_surely_gone(r->path)) {
             gone = 0;
         }
     }
@@ -4630,7 +4666,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
         rp[0] = 0;
         if (!g_cl.run && record_get(&rec, rp, sizeof(rp)) && GetFileAttributesA(rp) != 0xFFFFFFFF) {
             leftover_offer(w, rp, 0);
-        } else if (!g_cl.run && rec.present && GetFileAttributesA(rp) == 0xFFFFFFFF) {
+        } else if (!g_cl.run && rec.present && rp[0] != 0 && file_surely_gone(rp)) {
             record_clear();
         }
     }
