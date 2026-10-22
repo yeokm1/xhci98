@@ -509,8 +509,10 @@ Tools folder: C:\XHCI98
   this choice replaces it." (case 3b's replacement, which stands).
   Proposal, the owner's call: that sentence kept, on 8, 8.1 and 10 only,
   as the second sentence of Stor98's row under its box and in the
-  Summary's Stor98 line, never in the warning box; the alternative is to
-  drop it with the paragraph. The USB drivers' warning on 8 and 8.1 (case
+  Summary's Stor98 line, and in the console as a line of Stor98's
+  description before its question (printed under `/yes` and
+  `/defaults` too, as the rest of that description is), never in
+  the warning box; the alternative is to drop it with the paragraph. The USB drivers' warning on 8 and 8.1 (case
   3a) stays.
 - **The USB storage drivers' row on Windows 98 SE only** (owner,
   2026-10-22), in place of draft 20's "every system": on ME and 2000 to
@@ -603,7 +605,7 @@ writes nothing):
 | Tab | Main | Advanced |
 |---|---|---|
 | USB | `XhciIntelPortSwitch` (live only on a controller `XhciPswGate` admits; greyed otherwise, as now), `XhciSilentInstall` (98 SE and ME, as its "Asked when" has it; default off, no preselection, section 6.5.12) | `XhciInterruptMode`, `XhciForceBulkOnly`, `XhciPollFineTimer`, `XhciSelectiveSuspend`, `XhciFastPollFsLs` |
-| Thunderbolt | `XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject` | the ten of section 5.5's Advanced, `XhciCmNoIrqStart` (98 SE and ME) and the mark service's `Restart` (2000 to 7) |
+| Thunderbolt | `XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject` | the ten of section 5.5's Advanced, `XhciCmNoIrqStart` (98 SE and ME) and the mark service's `Restart` (2000 to 8.1, where the mark service runs) |
 | Stor98 | `StorWriteThrough`, `StorPollMode` | the six of section 5.6's Advanced |
 
 `XhciCmNoIrqStart` and `Restart` are designed in section 5.5 and not in
@@ -618,12 +620,23 @@ section 7.4; record 23 decision D16), not under `Services\USB`, so its
 row carries a location of its own in the value table (a flag the
 writer, the reader of "now" and the uninstall's loop test). `REG_DWORD`,
 default 1 (0: the service never restarts a unit's stack, it only lists
-it), 2000 to 7 only (shown greyed elsewhere, as another system's row),
-and shown open only when the mark service is in the run or already
-registered (the Thunderbolt component ticked, record 23 D16's
-conditions); "now" is read from that key, a missing value reading as the
-default; a change is written there after the service is installed (the
-key exists only then), never before; and the uninstall's machine-wide
+it), on the systems the mark service runs on, 2000 to 7 and 8 and 8.1
+(`inst_mk_system`; record 23 decision D19), shown greyed elsewhere as
+another system's row, and shown open only when the mark service is in
+the run or already registered (the Thunderbolt component ticked, record
+23 D16's conditions); "now" is read from that key, a missing value
+reading as the default. The service reads `Restart` once, at its start
+(`xhcimark.c`, `mk_prepare` and `mk_params`), so a change is written in
+the mark service's step of the run (`mk_install`) after the service is
+registered or its configuration updated and before it is started: the
+`Parameters` key created and the chosen value written there, then the
+start. On an update that finds the service already current and running,
+a changed value is written and the service stopped and started again
+(`mk_stop`, then the start), so the value is in force when the run ends.
+A value that cannot be written is said ("Restart could not be set:
+<error>"), the service is still started with what the key holds, and
+the run counts it failed (exit 2), as a service that does not start is;
+a service that cannot be registered writes nothing. And the uninstall's machine-wide
 loop over `Services\USB` skips it, so no `Restart` value is ever written
 to or deleted from `Services\USB`: the value goes with the service's key
 when the uninstall deletes the service (record 23 section 9). Record 23
