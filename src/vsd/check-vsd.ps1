@@ -46,8 +46,9 @@ for ($o = 0; $o -lt $nobj; $o++) {
         if ($d[$e + 3] -ne 0) { Bad ('object {0} page {1}: page type {2}, not a file page' -f ($o + 1), $k, $d[$e + 3]); continue }
         if ($pn -lt 1 -or $pn -gt $npages) { Bad ('object {0} page {1}: page number {2} outside 1..{3}' -f ($o + 1), $k, $pn, $npages); continue }
         $src = $dp + ($pn - 1) * $ps
-        if ($src -ge $d.Length) { Bad ('object {0} page {1}: its data lies past the file end' -f ($o + 1), $k); continue }
-        $len = [Math]::Min($ps, $d.Length - $src)
+        # A whole page, but the module's last, whose size the header gives.
+        $len = $(if ($pn -eq $npages) { [int](U32 ($le + 0x2C)) } else { $ps })
+        if ($src + $len -gt $d.Length) { Bad ('object {0} page {1}: its {2} bytes run past the file end' -f ($o + 1), $k, $len); continue }
         [Array]::Copy($d, $src, $buf, $k * $ps, $len)
     }
     $mem[$o + 1] = $buf

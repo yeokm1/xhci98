@@ -18,8 +18,9 @@ npages = U(0x14)
 for k in range(npe):
     e = d[om + 4 * (pti + k - 1): om + 4 * (pti + k)]; pn = (e[0] << 16) | (e[1] << 8) | e[2]
     # only ordinary file pages: what the loader maps for another type is not these bytes
-    if e[3] != 0 or pn < 1 or pn > npages or dp + (pn - 1) * ps >= len(d):
-        print('callcheck: code page %d: type %d, number %d: not a file page this check can read' % (k, e[3], pn)); sys.exit(1)
+    need = U(0x2c) if pn == npages else ps   # a whole page, but the module's last
+    if e[3] != 0 or pn < 1 or pn > npages or dp + (pn - 1) * ps + need > len(d):
+        print('callcheck: code page %d: type %d, number %d: not a whole file page this check can read' % (k, e[3], pn)); sys.exit(1)
     src = d[dp + (pn - 1) * ps: dp + pn * ps]; img[k * ps:k * ps + len(src)] = src
 pub = {}
 mt = open(mp, encoding='latin-1').read()
