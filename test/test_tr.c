@@ -3259,6 +3259,38 @@ int main(void)
         tr_join_lines(s);
         CHECK(strcmp(s, "a b ") == 0, "join: indentation after a break dropped");
         {
+            /* Task 43.63: the after-eject box. ej_run lays out its answer
+             * as below and every caller joins it before the box or the
+             * balloon, so inst_unplug_text's console wrap is a space
+             * there; the console keeps its wrap. */
+            char a[512];
+            TR_TEXT tt;
+            int k;
+            static const int kinds[2] = { INST_UNPLUG_OTHERS,
+                                          INST_UNPLUG_RESTARTED };
+            static const char *const want[2] = {
+                "Windows has stopped QEMU NVMe Ctrl (E:).\r\n\r\n"
+                "Other devices behind the same Thunderbolt port are still "
+                "running: eject them too before you unplug it.",
+                "Windows has stopped QEMU NVMe Ctrl (E:).\r\n\r\n"
+                "The device has started again, so it is not safe to unplug. "
+                "Close the programs using it and stop it again in the xHCI98 "
+                "USB Tree."
+            };
+            for (k = 0; k < 2; k++) {
+                CHECK(strchr(inst_unplug_text(kinds[k], INST_TOOL_TREE), '\n')
+                          != NULL, "after: the console's text is wrapped");
+                tr_text_init(&tt, a, sizeof(a));
+                tr_printf(&tt, "Windows has stopped %s.\n",
+                          "QEMU NVMe Ctrl (E:)");
+                tr_printf(&tt, "\n%s",
+                          inst_unplug_text(kinds[k], INST_TOOL_TREE));
+                tr_join_lines(a);
+                CHECK(strcmp(a, want[k]) == 0,
+                      "after: one paragraph in the box, the break a space");
+            }
+        }
+        {
             /* Exact-sized buffers: the join never writes past the input. */
             char e1[6];
             char e2[3];

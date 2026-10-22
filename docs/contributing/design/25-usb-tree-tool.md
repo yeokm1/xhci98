@@ -828,7 +828,11 @@ record.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
    5.4 with every fact it needs), captured as text; on a veto, the vetoing
-   device and the reason. The tunnel watch (2026-10-22, from the 43.45
+   device and the reason. The text is shown with its wrapped lines
+   joined (`tr_join_lines`, paragraph breaks kept), so the advice laid
+   out for the console ("Other devices behind the same Thunderbolt port
+   ...", "The device has started again ...") is one paragraph in the box
+   or balloon (held by a host vector, task 43.63). The tunnel watch (2026-10-22, from the 43.45
    legs; `tr_eject_watch_kind` in `tr_core.c`) depends on who confirms
    the eject to the connection manager (record 21 section 7.4). An
    administrator's run confirms it itself and watches 10 s, as XHCIINST
