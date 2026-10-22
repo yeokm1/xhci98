@@ -2685,8 +2685,10 @@ static void mk_s98_prune(void)
 }
 
 /* The arrival entry of `id` at this whole walk: a devnode not seen at the
- * walk before starts a new arrival. */
-static int mk_s98_seen(const char *id)
+ * walk before starts a new arrival. With `create` 0, only an entry already
+ * there is kept (a devnode present but not a candidate at this walk, its
+ * properties unreadable for one): -1 when there is none. */
+static int mk_s98_seen(const char *id, int create)
 {
     int i;
     int old = 0;
@@ -2703,6 +2705,9 @@ static int mk_s98_seen(const char *id)
         if (s98Seen[i].Walk < s98Seen[old].Walk) {
             old = i;
         }
+    }
+    if (!create) {
+        return -1;
     }
     i = s98SeenCount < MK_S98_SEEN_MAX ? s98SeenCount++ : old;
     memset(&s98Seen[i], 0, sizeof(s98Seen[i]));
@@ -2782,9 +2787,11 @@ static void mk_s98_poll(const int *prot)
         in.Service = nodes[i].ServiceBad ? NULL : nodes[i].Service;
         w = mk_s98_wanted(&in);
         if (w == MK_S98_W_CLASS || w == MK_S98_W_SERVICE) {
+            /* Present: an arrival already under way goes on. */
+            (void)mk_s98_seen(nodes[i].Id, 0);
             continue;
         }
-        s = mk_s98_seen(nodes[i].Id);
+        s = mk_s98_seen(nodes[i].Id, 1);
         if (done) {
             continue;
         }
