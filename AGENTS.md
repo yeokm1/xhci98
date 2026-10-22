@@ -785,8 +785,9 @@ rules that bind day-to-day work, and none of them is optional.
   43.48) and recorded there: download 3, `xhci98-<version>-nonfree.zip`,
   carries the `non-free/` folder of `usb-wdm-nonfree` at a pinned tag as
   `NONFREE\`, other makers' drivers among which are two Microsoft KMDF
-  co-installers, unmodified, with no licence to redistribute them
-  established; download 2, `-free.zip`, carries the qualifying
+  co-installers, unmodified, with no licence to redistribute them found
+  beyond the few makers' statements the pack's `NOTICE.md` quotes;
+  download 2, `-free.zip`, carries the qualifying
   `usb-wdm-free` drivers (GPL-2.0) as `WDMFREE\`. Both in the release
   downloads only, never in a commit; the installer copies them only when
   ticked and never installs them.

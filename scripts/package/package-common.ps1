@@ -2256,9 +2256,10 @@ function Get-ReadmeDownloadText {
         $L += ""
         $L += "NONFREE\ holds other makers' drivers (USB Ethernet, serial and game pad"
         $L += "drivers), unmodified, as their makers released them. They are not this"
-        $L += "project's work and have not been tested by this project on any Windows;"
-        $L += "no licence to redistribute them has been established, and NONFREE\"
-        $L += "NOTICE.md says whose each one is."
+        $L += "project's work and have not been tested by this project on any Windows."
+        $L += "NONFREE\NOTICE.md says whose each one is, and quotes what some of their"
+        $L += "makers said about passing them on; apart from that, no licence to"
+        $L += "redistribute them has been found."
     }
     return ($L -join "`r`n")
 }

@@ -1680,11 +1680,18 @@ repository's sources or build depend on another's. What is decided:
   `ethernet/ax88772/w2k-xp/WdfCoInstaller01007.dll` (KMDF 1.7, 1.7.6001.0)
   and `ethernet/ax88179/wxpvis/WdfCoInstaller01009.dll` with its
   `wxpvis64/` twin (KMDF 1.9, 1.9.7600.16385) (static: the pack's
-  `NOTICE.md` lines 29 and 31, read 2026-10-22). No licence to redistribute
-  any of the folder's files has been established (the pack's `NOTICE.md`,
-  "The driver files are not this repository's to license"), none is
-  claimed here, and the owner took the decision with that stated; it is a
-  fact about the decision, not a permission. The pack says its drivers are
+  `NOTICE.md` lines 29 and 31, read 2026-10-22). The pack's `NOTICE.md`
+  quotes the statements some makers made about passing their files on -
+  FTDI's ("The driver may be distributed in any form as long as our
+  license information is not modified", in its INFs and on its driver page
+  as archived on 2011-10-20) and Masahiko Morii's (on his home page as
+  archived on 2011-11-23, that those who need to repost his files may do
+  so on their own responsibility) - and records that, apart from those
+  statements, no licence permitting the files' redistribution has been
+  found for any of them (its "The driver files are not this repository's
+  to license"). Nothing here assesses those statements, none is claimed
+  for this project, and the owner took the decision with that stated; it
+  is a fact about the decision, not a permission. The pack says its drivers are
   untested by its maintainer (owner, 2026-10-22: no VM checks of them), and
   the installer and the readme say they are not tested by this project.
 - **`WDMFREE\` is the qualifying drivers of a tagged `usb-wdm-free`

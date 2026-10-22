@@ -2155,8 +2155,11 @@ top:
   says why): it is not offered. Get <what it is> from <the zip> or
   <address>." The issues address is in the free row's sentence.
 
-The words are proposals for the owner. The page fits 640 by 480 with
-both rows and both lines (the host suite renders it at its longest).
+The words are proposals for the owner. The page is laid out to fit 640
+by 480 with both rows and both lines (a dialog of the Components page's
+height); that it does, with the longest install directory, is not yet
+read: no host check renders it, and a 98 SE leg reads it (section
+6.7.9).
 
 **Defaults**: every box unticked on every run, whatever an earlier run
 chose (owner, 2026-10-22: "default off"); no choice is recorded. The
@@ -2331,11 +2334,14 @@ and said with the file that stopped it.
   `s98_oem_before` leaves Stor98's unrecorded on the same failure. The
   record is a value of the `Staged` subkey named for the INF's relative
   path, written before the call with the data `pending <the INF's
-  SHA-256> <the inventory's names>`, and after it:
+  SHA-256> <the inventory's names, separated by '|', which no file name
+  holds>`, and after it:
   - the call failed: the value deleted;
   - it returned a name the inventory held: an INF already in the store,
-    not this installer's. The value's data becomes `foreign <name> <the
-    INF's SHA-256>`: the call may have pointed that stored INF's source
+    not this installer's. The value's data becomes `foreign <the INF's
+    SHA-256> <name>` (the hash first, being of a fixed length, and the
+    name last, since a stored INF's original name may hold a space): the
+    call may have pointed that stored INF's source
     at `<Dir>` (record 23 section 5.6's flags), so its folder is kept
     while it is there (section 6.7.8), and it is never removed. Said
     ("already in the driver store as <name>, not placed by this
@@ -2343,7 +2349,7 @@ and said with the file that stopped it.
     stored package holds this set's driver files (record 23 section
     5.7's trap, which `store_matches` reads for this package's own INFs)
     is not read for these sets: a proposal, said in the same sentence;
-  - it returned a new name: `own <name> <the INF's SHA-256>`.
+  - it returned a new name: `own <the INF's SHA-256> <name>`.
 
   An INF whose value is `own` or `foreign` with its name still holding
   those bytes is staged already and is not staged again; one whose name
