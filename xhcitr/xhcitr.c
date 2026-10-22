@@ -53,6 +53,7 @@
 #include "tr_core.h"
 #include "tr_log.h"
 #include "tr_pci.h"
+#include "tr_popw.h"
 #include "tr_res.h"
 #include "../src/xhci_qry.h"
 
@@ -5896,7 +5897,7 @@ static void usb_eject_ui(HWND owner, int d, int fromTray)
                         MB_YESNO | MB_ICONWARNING) == IDYES) {
             ej_elevated(owner, q->Id);
         }
-    } else if (fromTray && shellV5 && strlen(msg) < 250) {
+    } else if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -6070,7 +6071,7 @@ static void ej_unit(HWND owner, int u, int fromTray)
         return;
     }
     tr_join_lines(msg);
-    if (fromTray && shellV5 && strlen(msg) < 250) {
+    if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -6995,6 +6996,10 @@ static void tray_balloon(const char *title, const char *text, int warn)
     }
     if (!shellV5) {
         tray_update();
+        /* 98 SE: the tool's own pop-up in the balloon's place (record 25
+         * section 16). */
+        tr_pop_show(hTray, WM_TRAYICON, 1, title, text,
+                    warn ? TR_POP_WARNING : TR_POP_INFO);
         return;
     }
     memset(&n, 0, sizeof(n));
