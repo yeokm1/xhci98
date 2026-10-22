@@ -20046,6 +20046,7 @@ static int other_rec_append(const char *path, const char *line)
     BOOL ok;
 
     if (h == INVALID_HANDLE_VALUE) {
+        othRecBroken = 1;
         return 0;
     }
     SetFilePointer(h, 0, NULL, FILE_END);
@@ -20825,6 +20826,11 @@ static int other_begin(int set, const char *dir, char *recPath, size_t cap)
     }
     other_rec_recover(recPath, recs, count);
     free(recs);
+    if (othRecBroken) {
+        inst_copy(o->Why, "its record file could not be written",
+                  sizeof(o->Why));
+        return 0;
+    }
     return 1;
 }
 
@@ -20876,6 +20882,11 @@ static int other_folder_whole(OTHSET *o, const char *dir, const char *folder,
             return 0;
         }
     } while (FindNextFileA(f, &fd));
+    if (GetLastError() != ERROR_NO_MORE_FILES) {
+        FindClose(f);
+        other_path(why, cap, dir, folder);
+        return 0;
+    }
     FindClose(f);
     return 1;
 }
@@ -21035,8 +21046,65 @@ static void other_recover_only(int set)
         flagSteps = 1;
         return;
     }
-    other_rec_recover(recPath, recs, count);
+    othRecBroken = 0;
+    if (!other_rec_recover(recPath, recs, count) && othRecBroken) {
+        out("%s could not be written.\n", recPath);
+        flagSteps = 1;
+    }
     free(recs);
+}
+
+/* 98 SE and ME: each folder the Staged record names put back on
+ * DevicePath where this run's own cleanup of the legacy %windir%\XHCI98
+ * took it out (devicepath_update): unticking leaves staging as it is. */
+static void other_restore_devicepath(int set)
+{
+    char name[INST_PATH_CHARS * 2];
+    char data[INST_PATH_CHARS + 1100];
+    char list[2048];
+    char newList[2048];
+    DWORD type = REG_SZ;
+    DWORD i;
+    int e;
+
+    if (envNow.Nt || opts.List || other_key_exists(set) != 1) {
+        return;
+    }
+    for (i = 0;; i++) {
+        e = other_staged_enum(set, i, name, sizeof(name), data, sizeof(data));
+        if (e <= 0) {
+            return;
+        }
+        if (!inst_eq(data, "DevicePath")) {
+            continue;
+        }
+        if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
+                      sizeof(list), &type) ||
+            inst_path_append(list, name, newList, sizeof(newList)) < 0) {
+            out("DevicePath could not be read or has no room: %s is not on "
+                "it.\n", name);
+            flagSteps = 1;
+            continue;
+        }
+        if (strcmp(list, newList) != 0) {
+            HKEY k;
+            LONG w = ERROR_ACCESS_DENIED;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_REG_CV, 0, KEY_SET_VALUE,
+                              &k) == ERROR_SUCCESS) {
+                w = RegSetValueExA(k, "DevicePath", 0, type,
+                                   (const BYTE *)newList,
+                                   (DWORD)strlen(newList) + 1);
+                RegCloseKey(k);
+            }
+            if (w != ERROR_SUCCESS) {
+                out("DevicePath could not be written: %s is not on it.\n",
+                    name);
+                flagSteps = 1;
+                continue;
+            }
+            logonly("other: %s put back on DevicePath\n", name);
+        }
+    }
 }
 
 static void other_run_set(int set)
@@ -21057,6 +21125,10 @@ static void other_run_set(int set)
     o->StagedNow = 0;
     o->LeftOut[0] = '\0';
     o->Why[0] = '\0';
+    if (!go_on()) {
+        return;
+    }
+    other_restore_devicepath(set);
     if (o->State != INST_OTHER_CARRIED || !o->Include || toolDir[0] == '\0') {
         other_recover_only(set);
         return;
@@ -21084,10 +21156,13 @@ static void other_run_set(int set)
            ((DWORD)rand() << 16) ^ (DWORD)rand()) & 0xFFFFFFFFUL;
     _snprintf(token, sizeof(token), "%08lX", (unsigned long)rnd);
     token[8] = '\0';
-    othRecBroken = 0;
     for (i = 0; i <= o->Count && !othRecBroken; i++) {
         const char *rel = i < o->Count ? o->Files[i].Rel : "SHA256.TXT";
         char hex[65];
+        if (!go_on()) {
+            left++;
+            break;
+        }
         if (i == o->Count) {
             inst_sha256((const unsigned char *)o->Sums, o->SumsLen, hex);
         }
@@ -21132,6 +21207,10 @@ static void other_run_set(int set)
             int k = other_find(o, s->Inf);
             if (!s->Stage || !(s->Systems & ((INST_U32)1 << othSys)) || k < 0) {
                 continue;
+            }
+            if (!go_on()) {
+                left++;
+                break;
             }
             inst_copy(folder, s->Inf, sizeof(folder));
             if (strrchr(folder, '/') != NULL) {
@@ -21562,6 +21641,7 @@ static int other_remove(int set, int uninstall)
             flagSteps = 1;
             return 0;
         }
+        othRecBroken = 0;
         if (!opts.List && !other_rec_recover(recPath, recs, count)) {
             free(recs);
             return 0;
@@ -21621,8 +21701,9 @@ static int other_remove(int set, int uninstall)
             return 0;
         }
     }
-    if (file_state(recPath) > 0 && !delete_file(recPath)) {
-        out("  %s could not be deleted.\n", recPath);
+    r = file_state(recPath);
+    if (r < 0 || (r > 0 && !delete_file(recPath))) {
+        out("  %s could not be %s.\n", recPath, r < 0 ? "read" : "deleted");
         flagSteps = 1;
         return 0;
     }

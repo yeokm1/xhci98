@@ -2316,7 +2316,11 @@ and said with the file that stopped it.
   accepted (proposal). `DevicePath` is held to the length the engine
   already writes (2048 bytes); a folder that would pass it is not added,
   and said. The set's staging runs after `devicepath_update` in the same
-  run, and a recorded folder missing from `DevicePath` is appended again.
+  run, and a recorded folder missing from `DevicePath` (that function
+  takes out every entry under the legacy `%windir%\XHCI98`) is appended
+  again, whether or not the row is ticked this run. The copy and the
+  staging stop at a cancel (`go_on`) between two files or two INFs,
+  the record left whole for the next run.
 - **2000 and later**: each INF through `SetupCopyOEMInf` (`SPOST_PATH`,
   its folder at `<Dir>` as the source), as record 23 section 5.6 stages
   the package's own. **The inventory** before the call: every `*.inf` of
