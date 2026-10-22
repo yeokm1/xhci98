@@ -1050,7 +1050,8 @@ protection on. No export table of 10 is in the tree either, so the
 import surface on 10 is as unread as on 8; 10 is expected to answer the
 driver's WDM version tests as 7 does, which is unread. On 64-bit 10 the
 driver loads as on 64-bit 8 and 8.1 (record 23 section 5.10, revision
-28); from 10 1607 with Secure Boot on, only portal-signed drivers load
+28; from `3.2.0.0` with a test-signed catalog per INF, record 19 section
+3a, without which 10 x64 refuses the package); from 10 1607 with Secure Boot on, only portal-signed drivers load
 (older cross-signed ones excepted, which the project's test signature is
 not), so Secure Boot off is the condition there.
 
@@ -1109,7 +1110,11 @@ hardware id against a compatible one, and its package is signed by Microsoft
 (signature score 0), where this project's carries no catalog and ranks
 `0xFF` in the signer byte (record 13 section 6.14.1 measured
 `0x80FF2005` for `xhci98.inf` on the controller) - on 10 x64 it is not
-staged at all without a catalog (record 13 section 6.14.5). **So Windows
+staged at all without a catalog (record 13 section 6.14.5). *(From
+3.2.0.0 the x64 package carries a test-signed catalog per INF, record 19
+section 3a; what signer score 10 gives a catalog by an untrusted
+certificate in test-signing mode is unread, and Intel's Microsoft
+signature outranks it either way.)* **So Windows
 never picks `xhcicm.inf` over Intel's driver by itself**: the installer's
 forced install (`UpdateDriverForPlugAndPlayDevices` with
 `INSTALLFLAG_FORCE`, record 23 section 5.5) is the only way the NHI
@@ -1168,7 +1173,14 @@ machine with the protection on, an NVMe drive behind a tunnel under
 Stor98 is held until the user signs in, and never started under policy 0;
 the same for any device whose driver has no value. Whether Stor98 should
 write 1 (it maps its buffers through the DMA adapter) is a question for
-43.34 (record 13 section 6.14.8). The protection is a feature of the
+43.34 (record 13 section 6.14.8). *(Settled 2026-10-22, the owner: a
+static read of Stor98's NT path found every bus address it gives the
+controller produced by SCSIport's DMA path - the uncached extension and
+the SRB's own buffer, `ScsiPortGetPhysicalAddress` - and none taken around
+it, so from `3.2.0.0` its x64 INF writes `DmaRemappingCompatible` 1, the
+per-driver value Microsoft documents for releases up to Windows 11 23H2;
+`src\stor98\docs\PLAN.md`, "Kernel DMA Protection". Unread on a machine
+with the protection on.)* The protection is a feature of the
 firmware and of 64-bit 10 only; it is unread on any machine here.
 Linux's documentation adds that such machines usually ship with the
 Thunderbolt security level set to "none", the IOMMU doing the gating

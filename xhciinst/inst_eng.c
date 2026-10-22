@@ -4863,11 +4863,16 @@ static int package_files(PKG_EACH each, void *ctx)
                 continue;
             }
             /* A No to the Thunderbolt question: none of its files in the
-             * copy, so no wizard and no store offers them (section 8.5). */
+             * copy, so no wizard and no store offers them (section 8.5);
+             * the x64 package's two catalogs go with their INFs (design
+             * record 19 section 3a). The other catalogs ride along with
+             * the rest of the flavour directory, beside their INFs. */
             if (!tbInclude && !tbTagAll &&
                 (inst_eq(fd.cFileName, "xhcicm.inf") ||
                                inst_eq(fd.cFileName, "xhcicmf.inf") ||
-                               inst_eq(fd.cFileName, "xhcicm.sys"))) {
+                               inst_eq(fd.cFileName, "xhcicm.sys") ||
+                               inst_eq(fd.cFileName, "xhcicm.cat") ||
+                               inst_eq(fd.cFileName, "xhcicmf.cat"))) {
                 continue;
             }
             inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));

@@ -1,6 +1,10 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 32, 2026-10-22 (roadmap-usb4 task 43.42, the owner:
+Status: revision 33, 2026-10-22 (the owner's decisions of that day on
+43.33's reading: the x64 package carries a test-signed catalog per INF,
+which the tool copies with its INF, and the refusal under Secure Boot is
+taken from Microsoft's documented policy; sections 5.10 and 5.12, design
+record 19 section 3a); revision 32, 2026-10-22 (roadmap-usb4 task 43.42, the owner:
 the storage row does not preselect XhciSilentInstall, section 8.4);
 revision 31, 2026-10-22 (roadmap-usb4 task 43.43, the owner: on
 8 and 8.1 a package without the connection manager warned, not refused,
@@ -1576,7 +1580,8 @@ setup engine and code integrity, so likely); 43.34's legs read it.
 The installer still signs nothing and changes no boot setting (D6). A
 catalog would remove item 1's detour (a test-signed catalog is accepted
 in test-signing mode); it is design record 19's decision not to ship one,
-so it is a question for the owner, not a change made here. Item 2 is not
+so it is a question for the owner, not a change made here (the
+owner's answer: revision 33 below). Item 2 is not
 cured by a catalog: a boot-start driver must load at every start, so on 8
 and 8.1 x64 the connection manager needs test-signing mode for as long as
 it is installed, whatever the package carries.
@@ -1623,6 +1628,21 @@ Host vectors: each state on each system, and the state through the gate.
 The value is unread on any guest here (all SeaBIOS, where it is absent or
 0, both of which read as not known or off): task 43.32's OVMF guest reads
 it before the release.
+
+Revision 33 (the owner, 2026-10-22, on section 5.12's measured refusal):
+from `3.2.0.0` every INF of the x64 package names a catalog of its own
+(`xhci98.cat`, `xhciuas.cat`, `xhcicm.cat`, `xhcicmf.cat`, `stor98.cat`),
+made and signed with the project test certificate by the packager alone
+(design record 19 section 3a), because Windows 8, 8.1 and 10 x64 refuse a
+package with no catalog in test-signing mode, with `0xE000022F` and no
+prompt. The tool needs no change of route for it: its local copy takes
+every file of the flavour directory but those it leaves out by component,
+so each catalog lands beside its INF, and the setup engine imports it
+with the INF into the driver store. The connection manager's two catalogs
+are left out with its INFs on a No to the Thunderbolt question, and
+`stor98.cat` with Stor98's files when it is not ticked (its name starts
+with `stor98`, `inst_bundled_file`). The x86 package carries none. The
+note's text is unchanged: test-signing mode, Secure Boot off.
 
 ### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 
@@ -1736,6 +1756,27 @@ and what Microsoft's lifecycle pages say of it:
 | 11 21H2 | 22000 | refused (43.34) |
 
 Only 22H2 is read here, and the release notes say so (43.36).
+
+**Settled by the owner, 2026-10-22** (revision 33):
+
+- **The catalog.** The x64 package carries a catalog per INF signed with
+  the test certificate (design record 19 section 3a; section 5.10's
+  revision 33). A package without one is refused on 10 x64 as measured
+  above (`0xE000022F`, "Driver package does not contain a catalog file");
+  with one, the package installs in test-signing mode with Secure Boot
+  off, after the publisher prompt (measured on the 10 x64 and 8.1 x64
+  guests with the packager's catalogs signed by a guest-made throwaway
+  certificate, run sheet 43, "43.36 the x64 catalog"; the owner-signed
+  package's leg is owed). The x86 package stays without one: 10 x86 takes it with the
+  prompt (measured above).
+- **Secure Boot on.** The refusal of a test-signed driver with Secure
+  Boot on is taken from Microsoft's documented policy above ("Driver
+  Signing Policy"; "The TESTSIGNING boot configuration option": test-signing
+  cannot be turned on while Secure Boot is on) rather than read on a guest:
+  the OVMF guest with Microsoft's keys enrolled (43.32's last clause) is
+  not built, and 43.32 is closed on that ground. 43.37's "on the OVMF
+  guest with Secure Boot on the note's text and the load refused as it
+  says" is therefore a documentation reading, not a leg.
 
 ## 6. The Windows 98 SE and ME route
 

@@ -10,11 +10,20 @@ and released as part of xhci98, with xhci98's version.
   offers Stor98 there (unticked) for NVMe drives behind a Thunderbolt
   or USB4 tunnel; on 8.1 and 10 it replaces Windows' own NVMe driver on
   such a drive. The 32-bit driver ran on Windows 8 and Windows 10 22H2
-  (32-bit) in the emulator unchanged. The 64-bit package does not
-  install on 8 x64, 8.1 x64 or 10 x64: it has no catalog file, which
-  those systems require. 32-bit Windows 8.1 is untested.
+  (32-bit) in the emulator unchanged. The 64-bit package installs
+  there from this release, with its catalog (below). 32-bit Windows
+  8.1 is untested.
 - The INFs' comments name Windows 8, 8.1 and 10; nothing they install
   changed.
+- 64-bit Windows 8, 8.1 and 10: stor98.inf names a catalog,
+  stor98.cat, signed with the same test certificate as the driver.
+  Those systems install no driver package without one in
+  test-signing mode.
+- Kernel DMA Protection (64-bit Windows 10 1803 and later): stor98.inf
+  declares the driver compatible with DMA remapping, so on a machine
+  with the protection on, an NVMe drive behind a Thunderbolt or USB4
+  tunnel need not wait for a user to sign in. Not yet tried on such
+  a machine.
 
 ## 3.1.0.0 - 2026-10-19
 

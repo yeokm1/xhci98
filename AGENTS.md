@@ -168,8 +168,10 @@ was the only route). Read on the Vista x64 and Windows 7 x64 guests on
 2026-10-11 (task 36.50's rehearsal): with `bcdedit /set testsigning on` the
 driver loads at every start with no F8; without either the controller sits at
 Code 39 on Vista and Code 52 on 7 with nothing loaded. The install still asks
-about the publisher and the Driver tab says "Not digitally signed" - there is
-no catalog. It is not Microsoft signing. 32-bit Vista and Windows 7 do not
+about the publisher and the Driver tab says "Not digitally signed" - there was
+no catalog until 3.2.0.0, whose x64 package carries one per INF, signed by the
+same test certificate, because Windows 8 to 10 x64 refuse a package without
+one (design record 19 section 3a). It is not Microsoft signing. 32-bit Vista and Windows 7 do not
 enforce kernel-mode signing. The release notes carry that requirement beside the
 tier, not in a footnote. **And it rests on five cycles a guest**, which is
 what issue 7 section 6 says five cycles are: not a proof that the enable
@@ -635,9 +637,13 @@ have no `nt\`), and from `3.1.0.0` the bundled `stor98.sys` of
 `release-x64` (one key signs every driver, owner 2026-10-19; Stor98's own
 certificate is retired), carry an embedded Authenticode
 signature by the project test certificate - SHA-1 file digest, no
-timestamp, no catalog, the INFs unchanged - applied at staging by
-`make-package.ps1 -TestSignPfx` and never by hand, with the certificate's
-public half beside them as `xhci98-test.cer`; `make-release.ps1` refuses a
+timestamp - and from `3.2.0.0` each INF of an x64 directory a catalog of its
+own (`CatalogFile=`, the INF gates' `BOTH-CATALOG`), made with WDK 7.1's
+MakeCat and signed by the same certificate the same way (owner, 2026-10-22:
+Windows 8 to 10 x64 refuse a package without one; record 19 section 3a), all
+applied at staging by `make-package.ps1 -TestSignPfx` and never by hand, with
+the certificate's public half beside them as `xhci98-test.cer`; the x86
+package carries no catalog; `make-release.ps1` refuses a
 cut that would publish an x64 directory without it, with no switch past
 the refusal. The private key (`.pfx`) is held only on the maintainer's
 disk in the git-ignored `scripts\local\testsign\` or a folder outside the

@@ -1141,6 +1141,39 @@ isolation evidence.
   PlatCmLinkPoll, P9EvidenceE1, P9Work; contract text: `include/stor98cm.h` R7, R8d.
   Tests: TESTING.md "Two drives in one ICM domain (9x)" and "Quarantined block after a
   surprise removal (9x)".
+- **Kernel DMA Protection: `DmaRemappingCompatible` 1 in the x64 INF, decided 2026-10-22
+  (owner, on xhci98's roadmap-usb4 task 43.33's reading).** On a 64-bit Windows 10 (1803
+  and later) whose firmware turns Kernel DMA Protection on, a device behind an external
+  port whose driver has not opted in to DMA remapping is held until a user signs in, and
+  never started under the DMAGuard policy "block all" (xhci98's design record 21 section
+  3.6), so a tunnelled NVMe drive under Stor98 waited for sign-in. A static read of the NT
+  build (2026-10-22, read only, nothing run): it is a SCSIport miniport (`scsiport.lib`,
+  `ScsiPortInitialize`; no Storport call); HwFindAdapter sets `Master`, `ScatterGather`,
+  `NeedPhysicalAddresses`, `MapBuffers`, `Dma32BitAddresses` and
+  `Dma64BitAddresses = SCSI_DMA64_MINIPORT_SUPPORTED`; every bus address written to the
+  controller - ASQ and ACQ, the I/O queues' creation PRP1, the identify and log buffers,
+  the PRP list pages, the bounce pages and every direct PRP entry of a READ or WRITE -
+  comes from `ScsiPortGetUncachedExtension` memory translated by
+  `ScsiPortGetPhysicalAddress(DevExt, NULL, va)` inside that extension
+  (`src/platform.c` `PlatPortPagePa`, `src/lifecycle.c` `LcCarve`) or from the SRB's own
+  data buffer by `ScsiPortGetPhysicalAddress(DevExt, Srb, ...)` (`src/engine.c`); the NT
+  import allowlist admits no `MmGetPhysicalAddress`, contiguous allocation or
+  `MmMapIoSpace`, and the 9x pool (`pool9x.c`, `_PageAllocate`) is compiled out of the NT
+  build. So the driver's DMA goes through the port's DMA adapter, and
+  `inf/stor98-x64.inf` writes `HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,1`
+  in the service's AddReg, Microsoft's per-driver opt-in ("Enable DMA Remapping for Device
+  Drivers", read 2026-10-22: for releases up to Windows 11 23H2; 24H2 and later read the
+  per-device `DMA Management\RemappingSupported`, and Windows 11 is not a target).
+  xhci98's `check-stor98-inf.ps1` holds the line. Options not chosen: 2 (opt in only for
+  an external device), which the owner's instruction did not take; no value. Unread, and
+  owed to a machine with the protection on (no emulator here exposes it): that 10's own
+  `scsiport.sys` maps the uncached extension and the SRB buffers through the remapped
+  adapter so the drive starts before sign-in and runs; whether its page offsets survive
+  remapping (else every direct child bounces, correct but slower); and how a late DMA
+  after the MD-1 gone deadline shows under an IOMMU (a fault rather than a write into
+  reused memory). A future NT DMA pool (the MD-3 option (b) of the open entries, with
+  `MmGetPhysicalAddress`) would take addresses around the adapter and must not ship with
+  this value.
 - **R11 O6 under a CM with no per-port teardown, decided 2026-10-22 (maintainer, the
   owner).** O6 asks the CM to tear the tunnel down once `Remove_SubTree` has kept failing
   for 30 s, so that `DOWN_QUIESCED` releases what the terminal instance holds. Under the

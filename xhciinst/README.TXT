@@ -280,7 +280,11 @@ lets you turn on only with Secure Boot off in the computer's firmware
 setup, or on a start with driver signature enforcement disabled (as on
 Windows 8 above); with Secure Boot on, Windows 10 from 1607 loads only
 drivers Microsoft has signed (and some older cross-signed ones), and this
-package's are neither. Whether 32-bit
+package's are neither. The 64-bit package carries a catalog for each
+driver (xhci98.cat and the others, from 3.2.0.0), signed with the same
+test certificate: Windows 8, 8.1 and 10 x64 refuse a 64-bit driver
+package without one in test-signing mode (error 0xE000022F; design record
+23 section 5.12), so keep the .cat files beside the INFs. Whether 32-bit
 Windows 10 with Secure Boot on refuses this package's 32-bit drivers,
 which are not signed, has not been read.
 
