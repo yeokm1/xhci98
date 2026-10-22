@@ -1769,7 +1769,8 @@ static void plan(void)
          * on a drive, are installed over; every other driver stays. */
         if (osKind == INST_OS_CMONLY && dv.HasService &&
             ((d->Inf == INST_INF_XHCI && inst_eq(d->Service, "USBXHCI")) ||
-             (d->Inf == INST_INF_S98 && inst_eq(d->Service, "stornvme")))) {
+             (d->Inf == INST_INF_S98 &&
+              inst_s98_over_inbox(1, d->Service)))) {
             dv.HasService = 0;
         }
         dv.OwnService = inst_eq(d->Service, instInfService[d->Inf]);
@@ -6282,9 +6283,10 @@ static DWORD call_flags(const DEVREC *x, int inf)
      * (record 26 section 6.3); an update of a Stor98 it runs, or /force's
      * reinstall, takes record 23's forced route. */
     if (inf == INST_INF_S98) {
-        /* Over Windows' own stornvme (8.1, record 26 section 5.3.1 case
-         * 3b): its signed in-box INF outranks Stor98's, so forced. */
-        if (x->Action == INST_ACT_INSTALL && inst_eq(x->Service, "stornvme")) {
+        /* Over Windows' own stornvme (8.1 and 10, record 26 section 5.3.1
+         * case 3b): its signed in-box INF outranks Stor98's, so forced. */
+        if (x->Action == INST_ACT_INSTALL &&
+            inst_s98_over_inbox(osKind == INST_OS_CMONLY, x->Service)) {
             return INST_INSTALLFLAG_FORCE;
         }
         return x->Action == INST_ACT_INSTALL ? 0 : INST_INSTALLFLAG_FORCE;
@@ -6510,7 +6512,8 @@ static int install_inf(int inf, int controllers)
                 } else {
                     callIdx[n++] = c;
                     if (inf == INST_INF_S98 &&
-                        inst_eq(devs[j].Service, "stornvme") &&
+                        inst_s98_over_inbox(osKind == INST_OS_CMONLY,
+                                            devs[j].Service) &&
                         !s98_pending_mark(devs[j].Id, "attempt")) {
                         /* Its ownership survives a reconnection that comes
                          * only in a later run (record 26 section 5.3.1 case

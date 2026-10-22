@@ -8,8 +8,13 @@ storage driver for NVMe SSDs that xhci98's connection manager brings up behind a
 | Family | Targets | Binary |
 |---|---|---|
 | Windows 9x | Windows 98 SE, ME | SCSI miniport (`.mpd`); no helper VxD ([PLAN.md](docs/PLAN.md) 0.12, MD-5) |
-| NT, 32-bit | Windows 2000 SP4, XP, Vista, 7 | SCSIport miniport (`.sys`) |
-| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64 | SCSIport miniport (`.sys`, amd64) |
+| NT, 32-bit | Windows 2000 SP4, XP, Vista, 7, 8, 8.1, 10 (below build 22000) | SCSIport miniport (`.sys`) |
+| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8 x64, 8.1 x64 and 10 x64 not yet (the package does not install there) | SCSIport miniport (`.sys`, amd64) |
+
+Windows 8, 8.1 and 10 since xhci98 3.2.0.0 (xhci98's roadmap 43.23; 10 below build 22000,
+which xhci98's installer admits beside 8 and 8.1 from its roadmap 43.34): see
+[Windows 8, 8.1 and 10](#windows-8-81-and-10) for what was read there and what was not, the
+64-bit package's install among them.
 
 Windows NT4 is outside the product scope. The NT4 build path inherited from nvme9x/nvment
 is kept only while it costs nothing to maintain; it is not tested or shipped.
@@ -56,7 +61,7 @@ What Stor98 adds:
   completed exactly once with the right status; a controller that stops answering is reset
   within bounded time; shutdown, stop and resume flush, shut down and re-initialise the
   drive.
-- **Requests of up to 512 KiB on Windows 98 SE / ME** (256 KiB on Windows 2000 to 7;
+- **Requests of up to 512 KiB on Windows 98 SE / ME** (256 KiB on Windows 2000 to 10;
   a setting can lower either, see [Settings](#settings)):
   Windows 98 SE / ME passes a request to the driver whole only if it is at most 512 KiB
   and its buffer is page-aligned and physically contiguous enough. Only such requests
@@ -73,6 +78,46 @@ What Stor98 adds:
 
 The work and the evidence behind each change are in [docs/PLAN.md](docs/PLAN.md).
 
+## Windows 8, 8.1 and 10
+
+Since xhci98 3.2.0.0 (its roadmap 43.23, owner 2026-10-20) xhci98's installer offers
+Stor98 on Windows 8 and 8.1 as on 2000 to 7: on NVMe drives behind a Thunderbolt or USB4
+tunnel only, its box unticked by default there and marked untested until xhci98's
+Windows 8 legs (its roadmap 43.24) pass. Windows 8 has no NVMe driver of its own;
+Windows 8.1 binds its own `stornvme` to every NVMe controller, and the installer installs
+Stor98 over it, forced, on a tunnel drive it finds at install time. Read in the emulator
+on 2026-10-22 ([docs/TESTING.md](docs/TESTING.md), "Windows 8 and 8.1" and "Windows 10"):
+
+- **Windows 8, 32-bit:** the x86 package installs through the `.NTx86` sections, SCSIport
+  loads and starts Stor98 as on 2000 to 7, and a disk behind the tunnel reads and writes.
+  Unplugged during writes with no notice from Windows, the requests failed at once, the
+  disk was removed at the 5-second deadline and the copy failed at 5.4 s. Windows 8's disk
+  class driver retries a failed write whichever terminal status Stor98 uses (PLAN 2.2).
+- **Windows 8 x64 and 8.1 x64: the 64-bit package does not install.** It carries no
+  catalog file, and these systems' driver store refuses such a package in test-signing
+  mode ("The third-party INF does not contain digital signature information",
+  `0xE000022F`) before the driver is ever loaded. Until the package carries a catalog
+  (xhci98 is adding a test-signed one, the owner's decision of 2026-10-22), Stor98 does
+  not run on 64-bit 8 and 8.1, and on 8.1 x64 the drive stays with `stornvme`.
+- **Windows 8.1, 32-bit:** not run (no install medium); its SCSIport and `stornvme` are
+  taken to be 8.1 x64's and 8 x86's, untested.
+- **Windows 10, 32-bit** (22H2, build 19045; xhci98's roadmap 43.34 admits 10 below build
+  22000 as it admits 8 and 8.1): Windows 10 binds its own `stornvme` to every NVMe
+  controller, as 8.1 does. The x86 package installed over it, forced, with the unsigned-driver
+  prompt, and SCSIport started Stor98 on both controllers as on 8. Unplugged during writes
+  with no notice from Windows, the copy failed at about 6 s, the disk was removed ("Disk 2
+  has been surprise removed") at the deadline, and Windows showed "Delayed Write Failed"
+  for the lazy writes in flight. Earlier and later 10 builds were not run.
+- **Windows 10 x64:** the 64-bit package is refused at the driver store as on 8 x64 and
+  8.1 x64 (`0xE000022F`, the same `setupapi` lines); the drive stays with `stornvme`.
+- **Windows 11** is not a target (xhci98's installer refuses it; it has its own USB4
+  support).
+- **Under 8.1's own `stornvme`** (no Stor98), a drive unplugged during a write with no
+  notice from Windows held the write for minutes, `stornvme` resetting the controller every
+  35 s, and finished it when the drive came back.
+
+The settings below apply on 8, 8.1 and 10 as on 2000 to 7: the same key, the same defaults.
+
 ## Updating the driver
 
 - **Windows 98 SE / ME (known issue).** Update Stor98 (or switch to it from another NVMe
@@ -83,7 +128,7 @@ The work and the evidence behind each change are in [docs/PLAN.md](docs/PLAN.md)
   stopped at restart with a VCACHE error and then hung in ScanDisk (xhci98's tests, 0.3.0.0
   to 0.3.0.1), or the volume came back "not ready" (Stor98's test). Whether the update
   itself or the warm restart of Windows 98 SE / ME causes it was not separated.
-- **With xhci98's own USB4 connection manager (Windows 2000 to 7).** On a USB4 host run
+- **With xhci98's own USB4 connection manager (Windows 2000 to 7; on 8, 8.1 and 10 not yet read).** On a USB4 host run
   by xhci98's connection manager, changing the driver of a tunnelled NVMe drive stops the
   device, which the connection manager takes as an eject: it tears the tunnel down.
   Unplug the drive and plug it in again after the update. Under a Thunderbolt 3 host's
@@ -108,21 +153,21 @@ Where they are set:
   `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98`, as a string (REG_SZ;
   numbers in decimal) or, for the numeric ones, a DWORD. They are read whenever the
   controller starts: at boot, or when it is plugged in.
-- **Windows 2000 to 7:** one string value, `DriverParameter` (REG_SZ), in
+- **Windows 2000 to 10:** one string value, `DriverParameter` (REG_SZ), in
   `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\stor98\Parameters\Device`, holding
   lower-case `key=value` pairs separated by semicolons, for example
   `maxtransferkb=128;pollmode=1;pollbusyus=20000`. It is read when the controller starts:
   at boot, or after disabling and enabling it in Device Manager (not at a resume from
   standby or hibernation, which keeps what was read at the start).
 
-| Setting | Windows 98 SE / ME value | Windows 2000 to 7 key | Unit | Default | Range | Outside the range |
+| Setting | Windows 98 SE / ME value | Windows 2000 to 10 key | Unit | Default | Range | Outside the range |
 |---|---|---|---|---|---|---|
-| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `maxtransferkb=` | KiB | 512 on 98 SE / ME, 256 on 2000 to 7 | 64 to the default, in multiples of 4 | refused: the default stands |
-| Write-through | `StorWriteThrough` (string only) | `writethrough=` | - | `auto`: `cacheoff` on ME, `off` on 98 SE and on 2000 to 7 | `auto`, `off`, `cacheoff`, `fua` | an unknown word means `auto` |
+| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `maxtransferkb=` | KiB | 512 on 98 SE / ME, 256 on 2000 to 10 | 64 to the default, in multiples of 4 | refused: the default stands |
+| Write-through | `StorWriteThrough` (string only) | `writethrough=` | - | `auto`: `cacheoff` on ME, `off` on 98 SE and on 2000 to 10 | `auto`, `off`, `cacheoff`, `fua` | an unknown word means `auto` |
 | Polling mode | `StorPollMode` (DWORD or string) | `pollmode=` | - | 0 | 0-1 | clamped to the nearer end |
-| Polling period while busy | `StorPollBusyUs` (DWORD or string) | `pollbusyus=` | microseconds | 1000 (1 ms); on 2000 to 7 in effect at least 10 ms | 1000-100000; 0 = the default | clamped to the nearer end |
+| Polling period while busy | `StorPollBusyUs` (DWORD or string) | `pollbusyus=` | microseconds | 1000 (1 ms); on 2000 to 10 in effect at least 10 ms | 1000-100000; 0 = the default | clamped to the nearer end |
 | Polling period when idle | `StorPollIdleMs` (DWORD or string) | `pollidlems=` | milliseconds | 1000 (1 s) | 100-60000; 0 = no polling when idle | clamped to the nearer end |
-| Completion spin after a request | `StorPollSpinUs` (DWORD or string) | `pollspinus=` | microseconds | 500 on 2000 to 7, 0 on 98 SE / ME | 0-500; 0 = no spin | clamped to the nearer end |
+| Completion spin after a request | `StorPollSpinUs` (DWORD or string) | `pollspinus=` | microseconds | 500 on 2000 to 10, 0 on 98 SE / ME | 0-500; 0 = no spin | clamped to the nearer end |
 | Gone deadline (advanced: leave at the default) | - (not settable) | `gone=` | milliseconds | 5000 (5 s) | 1-600000 | 0 or above the range: the default |
 | Write-idle time before a flush | - (not settable) | `idle=` | milliseconds | 1000 (1 s) | 10 and up | below 10: 10 |
 
@@ -167,7 +212,7 @@ it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 - **StorPollMode** (`pollmode=`): 0 polls only when there is no usable interrupt; 1
   always polls.
 - **StorPollBusyUs** (`pollbusyus=`) is the polling period while requests are
-  outstanding. It only takes full effect on Windows 98 SE and ME. On Windows 2000 to 7
+  outstanding. It only takes full effect on Windows 98 SE and ME. On Windows 2000 to 10
   the port rounds every timer period up to the OS clock tick (10-15.6 ms), so Stor98
   uses at least 10 ms there and a value below that changes nothing. A shorter period
   completes requests sooner, at a higher CPU cost while busy.
@@ -177,7 +222,7 @@ it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 - **StorPollSpinUs** (`pollspinus=`) lets the driver keep checking for a completion for
   that long right after sending a request, which helps short requests at a CPU cost (a
   busy-wait of at most that long per request while one is outstanding, only in the
-  polling mode). The defaults differ by family: on Windows 2000 to 7 the timer cannot run
+  polling mode). The defaults differ by family: on Windows 2000 to 10 the timer cannot run
   faster than the OS clock tick, so the spin is what keeps polling close to interrupt
   throughput; on 98 SE and ME the 1 ms timer works and the CPU is scarcer.
 
@@ -220,9 +265,9 @@ from its PCI configuration space, and whether it has the MSI and MSI-X capabilit
 (reported only; Stor98 uses neither). `port` is the interrupt level and vector Windows
 handed the driver. The last part is the outcome: `interrupt`, or `polling` with its
 reason (`forced by StorPollMode` on Windows 98 SE / ME, `forced by pollmode` on Windows
-2000 to 7, when polling was forced). Open it with Regedit, or export it with
+2000 to 10, when polling was forced). Open it with Regedit, or export it with
 `regedit /e report.reg "HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98"`.
-On Windows 2000 to 7 it is not rewritten when the system resumes from hibernation.
+On Windows 2000 to 10 it is not rewritten when the system resumes from hibernation.
 
 ## Why the name has no "NVMe"
 
