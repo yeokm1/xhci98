@@ -2476,26 +2476,84 @@ static void test_qual_cache(void)
     CHECK(tr_qual_put(&c, "d", hs, 5) == 0, "qual: short is 0");
     CHECK(tr_qual_get(&c, "d") == 0, "qual: settled at once");
 
-    /* A scan that sees a and c only drops b and d: b, gone and back, is
-     * asked again. */
+    /* A scan that sees a and c only: d, settled by its answer, is dropped
+     * and asked again when it is back; b, settled by unanswered requests,
+     * is kept. */
     tr_qual_begin(&c);
     CHECK(tr_qual_get(&c, "a") == 1, "qual: a seen");
     CHECK(tr_qual_get(&c, "c") == 0, "qual: c seen");
     tr_qual_end(&c);
-    CHECK_EQ(c.N, 2, "qual: two kept");
-    CHECK(tr_qual_get(&c, "b") == -1, "qual: b gone, asked again");
-    CHECK(tr_qual_get(&c, "d") == -1, "qual: d gone");
+    CHECK_EQ(c.N, 3, "qual: three kept");
+    CHECK(tr_qual_get(&c, "d") == -1, "qual: d gone, asked again");
+    CHECK(tr_qual_get(&c, "b") == 0, "qual: b kept, not asked");
     CHECK(tr_qual_get(&c, "a") == 1, "qual: a kept");
     CHECK(tr_qual_get(&c, "c") == 0, "qual: c kept");
-    /* An entry asked in the scan (put) is seen too. */
+    /* An entry asked in the scan (put) is seen too, and keeps its tries. */
     tr_qual_begin(&c);
     tr_qual_put(&c, "e", NULL, 0);
     tr_qual_end(&c);
-    CHECK_EQ(c.N, 1, "qual: only e kept");
+    CHECK_EQ(c.N, 2, "qual: b and e kept");
     CHECK(tr_qual_get(&c, "e") == -1, "qual: e unsettled, kept");
     tr_qual_put(&c, "e", NULL, 0);
     tr_qual_put(&c, "e", NULL, 0);
     CHECK(tr_qual_get(&c, "e") == 0, "qual: e settled across scans");
+    /* An unanswered request, then a scan without the device (gone, perhaps
+     * with the recovery the request caused): settled, never asked again. */
+    tr_qual_begin(&c);
+    tr_qual_put(&c, "f", NULL, 0);
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == -1, "qual: f one try");
+    tr_qual_begin(&c);
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f gone after a try: settled");
+    tr_qual_begin(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f back: not asked");
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f still settled");
+
+    /* Turnover in a full cache: the keys of the scan under way are never
+     * replaced by its new ones; the stale ones are. */
+    memset(&c, 0, sizeof(c));
+    tr_qual_begin(&c);
+    for (i = 0; i < TR_QUAL_MAX; i++) {
+        sprintf(key, "t%d", i);
+        tr_qual_put(&c, key, (i % 2) ? hs : NULL, (i % 2) ? 10 : 0);
+    }
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: turnover: full");
+    tr_qual_begin(&c);
+    {
+        int j;
+        int ok = 1;
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            if (tr_qual_get(&c, key) == ((j % 2) ? 1 : -1)) {
+                if (j % 2 == 0) {
+                    tr_qual_put(&c, key, NULL, 0);
+                }
+            } else {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 500; j++) {
+            sprintf(key, "n%d", j);
+            tr_qual_put(&c, key, hs, 10);
+        }
+        tr_qual_end(&c);
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            if (tr_qual_get(&c, key) != ((j % 2) ? 1 : -1)) {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 500; j++) {
+            sprintf(key, "n%d", j);
+            if (tr_qual_get(&c, key) != 1) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "qual: turnover keeps the scan's keys, answers and tries");
+    }
 
     /* More candidates than the balloon keeps (TR_FAST_MAX): repeated
      * scans keep every answer and every unsettled try. */

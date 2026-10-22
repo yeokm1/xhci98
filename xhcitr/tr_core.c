@@ -2600,8 +2600,12 @@ int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
         if (c->N < TR_QUAL_MAX) {
             i = c->N++;
         } else {
-            i = c->Next % TR_QUAL_MAX;
-            c->Next = (i + 1) % TR_QUAL_MAX;
+            for (i = 0; i < TR_QUAL_MAX && c->Seen[i]; i++) {
+            }
+            if (i >= TR_QUAL_MAX) {
+                i = c->Next % TR_QUAL_MAX;
+                c->Next = (i + 1) % TR_QUAL_MAX;
+            }
         }
         tr_copy(c->Key[i], key, TR_FAST_KEY);
         c->Val[i] = -1;
@@ -2638,13 +2642,16 @@ void tr_qual_end(TR_QUAL_CACHE *c)
     }
     for (i = 0; i < c->N && i < TR_QUAL_MAX; i++) {
         if (!c->Seen[i]) {
-            continue;
+            if (c->Tries[i] == 0) {
+                continue;
+            }
+            c->Val[i] = 0;
         }
         if (n != i) {
             tr_copy(c->Key[n], c->Key[i], TR_FAST_KEY);
             c->Val[n] = c->Val[i];
             c->Tries[n] = c->Tries[i];
-            c->Seen[n] = 1;
+            c->Seen[n] = c->Seen[i];
         }
         n++;
     }

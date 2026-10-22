@@ -1359,8 +1359,14 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    refreshes and settled as "Full Speed only" after the third such
    failure (`TR_QUAL_TRIES`); until then it is not counted. An answer of
    10 bytes of type 6 settles "High Speed capable". Each refresh's scan
-   keeps only the answers of the candidates it saw, so a device that is
-   gone at a refresh is asked again when it comes back (43.27, reviewed and
+   drops the answers of the candidates it did not see that a device's
+   answer settled, so such a device is asked again when it comes back;
+   one that had a request go unanswered is kept, and settled as "Full
+   Speed only" if it was not yet, so a device that went away after an
+   unanswered request (perhaps with a controller recovery that request
+   caused, if `xhci98.sys` could not withdraw it) is not asked again for
+   as long as the tool runs. A full store reuses a key the scan under way
+   has not seen before it drops the oldest (43.27, reviewed and
    revised 2026-10-22).
    On a root port a High Speed device runs at High Speed (every USB 2.0
    root port of an xHCI controller is High Speed), so a root port is

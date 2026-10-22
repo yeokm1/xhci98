@@ -730,8 +730,13 @@ int tr_qual_get(TR_QUAL_CACHE *c, const char *key);
 int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
                 size_t n);
 
-/* A scan's start and end: the end drops the keys not seen since the
- * start. */
+/* A scan's start and end. The end drops the keys not seen since the start
+ * that a device's answer settled; a key not seen that had a request go
+ * unanswered is kept, and settled as 0 if it was not yet: the device went
+ * away after an unanswered request (perhaps with a controller recovery
+ * that request caused), so it is not asked again when it comes back. A
+ * full cache reuses a key not seen in the scan under way before it
+ * replaces the oldest. */
 void tr_qual_begin(TR_QUAL_CACHE *c);
 void tr_qual_end(TR_QUAL_CACHE *c);
 
