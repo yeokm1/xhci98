@@ -1182,8 +1182,14 @@ function Get-GatedManifestFault {
     # -> path of the bytes to be staged), else the reason it does not. The
     # order decides only which reason is given: the build it describes, then
     # each binary's bytes, then the tree the package is staged from.
+    #
+    # A HEAD other than the recorded commit is admitted only through
+    # $Advance, Get-GatedHeadAdvance's answer for that commit and $Head
+    # (roadmap-usb4 task 43.9): the recorded commit an ancestor of HEAD, and
+    # no file changed between them a build input. Without it any other
+    # commit is refused, as it always was.
     param($Manifest, [string]$Arch, [string]$Flavor, [hashtable]$Binaries,
-          [string]$Head, [bool]$Dirty, [bool]$NoTargetEvidence)
+          [string]$Head, [bool]$Dirty, [bool]$NoTargetEvidence, $Advance = $null)
     if ($Manifest.Arch -ne $Arch -or $Manifest.Flavor -ne $Flavor) {
         return ("it records the {0} {1} build, and this is the {2} {3} package" -f $Manifest.Flavor, $Manifest.Arch, $Flavor, $Arch)
     }
@@ -1204,7 +1210,12 @@ function Get-GatedManifestFault {
         return "the build ran in a tree with uncommitted changes, so no commit says what it was built from"
     }
     if ($Manifest.Commit -ne $Head.ToLowerInvariant()) {
-        return ("it was built at commit {0}, and the tree is at {1}: the INFs and scripts this package would be staged with are not the ones the build was gated beside" -f $Manifest.Commit, $Head)
+        if ($null -eq $Advance -or $Advance.From -ne $Manifest.Commit -or $Advance.To -ne $Head.ToLowerInvariant()) {
+            return ("it was built at commit {0}, and the tree is at {1}: the INFs and scripts this package would be staged with are not the ones the build was gated beside" -f $Manifest.Commit, $Head)
+        }
+        if ($Advance.Fault -ne "") {
+            return ("it was built at commit {0}, and the tree is at {1}: {2}" -f $Manifest.Commit, $Head, $Advance.Fault)
+        }
     }
     if ($Dirty) {
         return "the tree has uncommitted changes since that commit"
@@ -1242,6 +1253,148 @@ function Get-GitTreeState {
     }
     if (-not $ok) { return @{ Head = "none"; Dirty = $true } }
     return @{ Head = $head; Dirty = ($status -ne "" -or $hidden.Count -gt 0) }
+}
+
+# ------------------------------------------------------------------
+# A HEAD newer than the gated build's commit (roadmap-usb4 task 43.9)
+# ------------------------------------------------------------------
+#
+# The record names the commit the gated build ran at, and -SignOnly refused
+# any other HEAD, so a documentation commit after the build cost a rebuild
+# (owner, 2026-10-20, after the 3.1.0.0 cut). A newer HEAD is admitted when
+# the recorded commit is its ancestor and no file changed between the two is
+# a build input: a file any of the six source stamps lists (scripts\
+# source-stamp.ps1 -List, the stamp's own list); a file of the kinds a build
+# reads (Get-BuildInputRules) in those files' directories, since a file added
+# or removed since is not in today's list; a file the host test suite
+# compiles (test\run-host-tests.cmd) and the same kinds in its directory;
+# test\ itself; the import gates' scripts\import-gate\; Stor98's sources,
+# build scripts and unit tests; and the scripts that build the binaries and
+# judge them for the record, with scripts\common.ps1, which they dot-source.
+# Over-covering is the safe side: a file wrongly
+# counted costs a rebuild, one wrongly left out lets the host suite's and the
+# import gates' old verdict stand for a tree they never read. What the
+# record's commit also stood for - the INFs and the packaging scripts the
+# package is staged with - is read again by every run that stages: the INF
+# gates and the package's own gate run under -SignOnly too.
+$script:BuildInputExtensions = @(".c", ".h", ".rc", ".asm", ".def", ".mc", ".inc")
+$script:BuildInputNames = @("sources", "makefile", "makefile.inc", "dirs")
+$script:BuildInputPrefixes = @(
+    "test\",
+    "scripts\import-gate\",
+    "src\stor98\src\",
+    "src\stor98\include\",
+    "src\stor98\scripts\",
+    "src\stor98\tests\",
+    "src\stor98\third_party\"
+)
+$script:BuildInputScripts = @(
+    "scripts\build-driver.cmd",
+    "scripts\build-all.cmd",
+    "scripts\source-stamp.ps1",
+    "scripts\check-flavour-marker.ps1",
+    "scripts\check-helper-build.ps1",
+    "scripts\check-stor98-build.ps1",
+    "scripts\check-stor98-header.ps1",
+    "scripts\common.ps1"
+)
+$script:StampDrivers = @("xhci98", "xhciuas", "xhcicm", "xhcihlpr", "stor98", "stor98mpd")
+
+function Get-BuildInputRules {
+    # The rules Test-BuildInputPath applies, read from the tree at $Repo:
+    # Exact (repository-relative paths, backslashed), Dirs (the directories
+    # whose build-kind files count whatever their name) and Prefixes.
+    param([string]$Repo)
+    $exact = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $dirs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $stamp = Join-Path $Repo "scripts\source-stamp.ps1"
+    foreach ($d in $script:StampDrivers) {
+        $list = @(& $stamp -Driver $d -List)
+        if ($list.Count -eq 0) { throw "scripts\source-stamp.ps1 -Driver $d -List named no file." }
+        foreach ($p in $list) {
+            [void]$exact.Add([string]$p)
+            [void]$dirs.Add((Split-Path -Parent ([string]$p)))
+        }
+    }
+    $root = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\') + '\'
+    $hostSuite = Join-Path $Repo "test\run-host-tests.cmd"
+    foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText($hostSuite), '\.\.\\[^\s"]+')) {
+        $full = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $Repo "test") $m.Value))
+        if (-not $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $rel = $full.Substring($root.Length)
+        [void]$exact.Add($rel)
+        [void]$dirs.Add((Split-Path -Parent $rel))
+    }
+    foreach ($s in $script:BuildInputScripts) { [void]$exact.Add($s) }
+    return @{ Exact = $exact; Dirs = $dirs; Prefixes = $script:BuildInputPrefixes }
+}
+
+function Test-BuildInputPath {
+    # Whether one repository-relative path (either separator) is a build
+    # input under $Rules (Get-BuildInputRules).
+    param($Rules, [string]$Path)
+    $p = $Path.Replace('/', '\')
+    if ($Rules.Exact.Contains($p)) { return $true }
+    foreach ($pre in $Rules.Prefixes) {
+        if ($p.StartsWith($pre, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    $leaf = Split-Path -Leaf $p
+    if ($Rules.Dirs.Contains((Split-Path -Parent $p)) -and
+        ($script:BuildInputExtensions -contains [System.IO.Path]::GetExtension($leaf).ToLowerInvariant() -or
+         $script:BuildInputNames -contains $leaf.ToLowerInvariant())) {
+        return $true
+    }
+    return $false
+}
+
+function Get-GatedHeadAdvance {
+    # Whether HEAD ($To) may stand in for the commit a gated build recorded
+    # ($From): Fault is "" when $From is an ancestor of $To and no file
+    # changed between them is a build input, else why not. Also returns
+    # From, To, Commits (how many $To is ahead) and Changed (every file the
+    # two differ in, for the caller to print). It reads the commits alone; a
+    # tree with uncommitted changes is the caller's to refuse. -Rules is the
+    # self-tests', whose fixture repository has no tree to read them from.
+    param([string]$Repo, [string]$From, [string]$To, $Rules = $null)
+    $r = @{ From = $From.ToLowerInvariant(); To = $To.ToLowerInvariant(); Fault = ""; Commits = 0; Changed = @() }
+    $ancestorRc = -1
+    $diffRc = -1
+    $countRc = -1
+    $count = ""
+    $names = @()
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $Repo merge-base --is-ancestor $From $To 2>$null | Out-Null
+        $ancestorRc = $LASTEXITCODE
+        if ($ancestorRc -eq 0) {
+            $names = @(& git -C $Repo -c core.quotePath=false diff --name-only --no-renames $From $To 2>$null)
+            $diffRc = $LASTEXITCODE
+            $count = (& git -C $Repo rev-list --count "$From..$To" 2>$null | Out-String).Trim()
+            $countRc = $LASTEXITCODE
+        }
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($ancestorRc -eq 1) {
+        $r.Fault = "commit $From is not an ancestor of $To, so no diff between them says what changed since the build"
+        return $r
+    }
+    if ($ancestorRc -ne 0 -or $diffRc -ne 0 -or $countRc -ne 0 -or $count -notmatch '^\d+$') {
+        $r.Fault = "git could not say whether commit $From is an ancestor of $To and what changed between them"
+        return $r
+    }
+    $r.Commits = [int]$count
+    $r.Changed = @($names | Where-Object { $_ -ne "" })
+    if ($null -eq $Rules) { $Rules = Get-BuildInputRules -Repo $Repo }
+    $hits = @($r.Changed | Where-Object { Test-BuildInputPath -Rules $Rules -Path $_ })
+    if ($hits.Count -gt 0) {
+        $shown = @($hits | Select-Object -First 8) -join ", "
+        if ($hits.Count -gt 8) { $shown += (", and {0} more" -f ($hits.Count - 8)) }
+        $r.Fault = ("{0} of the {1} file(s) changed in the {2} commit(s) since are build inputs ({3}), so the build's gates did not read the tree as it is" -f `
+                    $hits.Count, $r.Changed.Count, $r.Commits, $shown)
+    }
+    return $r
 }
 
 # --- NUSB 3.3's 98 SE storage files, from the driver pack (task 43.3) -----

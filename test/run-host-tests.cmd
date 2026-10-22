@@ -51,6 +51,9 @@ rem                  Stream ID, the doorbell value and the event's stream
 rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
 rem                  31-A.3): Bulk-Only or UAS for an interface offering
 rem                  either, and the hardware and compatible ids that follow
+rem   test_usbdx   - Windows 8's client contract (src\xhci_usbdx.c, task
+rem                  43.29): the V1 interface and capability checks, the
+rem                  answers, the URB sizes, the stream URB checks
 rem   test_silent  - the Windows 98 SE and ME silent install (src\xhci_silent.c,
 rem                  task 38.2, design record 13 section 6.11): the gate, the
 rem                  SilentClasses admission and cap, a failed enumeration,
@@ -167,6 +170,10 @@ rem                  40.6, design record 23): the INF reader over src\'s INFs,
 rem                  the models section per system, versions, ids, the action
 rem                  per device, the uninstall order, the registry value
 rem                  table and its applicability, the switches, exit codes
+rem   test_wizlay  - the installer window's settings-page layout arithmetic
+rem                  (xhciinst\wiz_lay.c, task 43.10, design record 26
+rem                  section 5.4): the "now" column, the split into parts of
+rem                  at most three rows, the open list's width, the note
 rem   test_tr      - the device viewer and tray's pure half (xhcitr\tr_core.c,
 rem                  task 41-A.2, design record 25 section 10): the bounded
 rem                  printf, the USB IOCTL answers, the descriptor decoders
@@ -452,6 +459,12 @@ call :run test_stream "test_stream.c ..\src\xhci_stream.c"
 rem test_xport links nothing else: the transport choice and its ids are pure
 rem computations over descriptor bytes and three flags (task 31-A.3).
 call :run test_xport "test_xport.c ..\src\xhci_xport.c"
+rem test_usbdx links the stream plan (xhci_stream.c) beside its own file:
+rem Windows 8's client contract served by the bus - the interface's and
+rem the capability block's checks, the capability answers, the URB sizes
+rem and fills, the stream URBs' checks and the exact grant against the
+rem plan - is pure computation over sizes, speeds and bytes (task 43.29).
+call :run test_usbdx "test_usbdx.c ..\src\xhci_usbdx.c ..\src\xhci_stream.c"
 rem test_silent links nothing else: the gate, the list's admission and the
 rem descriptor walk are pure computations over registry values and bytes
 rem (task 38.2).
@@ -600,6 +613,9 @@ rem test_di links XHCIDI.EXE's pure part (xhciinst\di\di_core.c, design
 rem record 27 section 11) and reads setupx.h from tools\win98ddk-extracted\
 rem where it is there, a recorded copy of its values where it is not.
 call :run test_di "test_di.c ..\xhciinst\di\di_core.c"
+rem test_wizlay links the installer window's layout arithmetic alone
+rem (xhciinst\wiz_lay.c, task 43.10, design record 26 section 5.4).
+call :run test_wizlay "test_wizlay.c ..\xhciinst\wiz_lay.c"
 rem test_dijob links both pure halves, the installer's and the helper's:
 rem each reads what the other writes (record 27 sections 4.1 and 4.2).
 call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_core.c"

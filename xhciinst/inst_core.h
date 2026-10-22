@@ -571,6 +571,8 @@ typedef struct _INST_OPTS {
     int Thunderbolt;        /* /thunderbolt: the Thunderbolt support, unasked */
     int CmOnly;             /* /cmonly: the connection manager alone (record
                                23 section 4.5)                           */
+    int Usb;                /* /usb: the USB drivers in the run on 8 and
+                               8.1 (record 23 section 7.1, revision 26)  */
     int Stor98;             /* /stor98: the bundled Stor98, unasked      */
     int NoStor98;           /* /nostor98: Stor98 left out of a run that
                                has the Thunderbolt support (record 23
@@ -794,8 +796,8 @@ extern const char instCmOffText[];
 int inst_own_service(const char *service);
 
 /* 1 when a file of the flavour directory is the bundled Stor98 driver's
- * (a separate project: every name of its files there starts with "stor98",
- * package-common.ps1). The tool installs none of them and copies none into
+ * (every name of its files there starts with "stor98", package-common.ps1).
+ * The tool installs none of them and copies none into
  * its local copy, which is on the hardware wizard's search path. */
 int inst_bundled_file(const char *name);
 
@@ -960,8 +962,22 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor);
 /* The USB drivers (xhci98.sys, xhciuas.sys; record 23 section 4.5): 1 in
  * the run, 0 left out, -1 refused (why in *refusal). *offered: the window's
  * box can be unticked. */
-int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
-                    const char **refusal);
+int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
+                    int *offered, const char **refusal);
+
+/* The Components page's warnings (record 26 section 5.3.1, task 43.43): a
+ * box ticked, or the USB drivers unticked, where it does not apply. is98se,
+ * is9x (98 SE or ME), is8 (8 or 8.1); usb, stor, s98 the boxes as ticked. */
+#define INST_CW_STOR        0x01UL  /* the 98 SE storage pack elsewhere  */
+#define INST_CW_CMALONE     0x02UL  /* 98 SE, ME: the CM alone           */
+#define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
+#define INST_CW_S98_8       0x08UL  /* 8, 8.1: Stor98                    */
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
+                            int s98);
+/* Every warning of the set, one paragraph each in that order, separated by
+ * a blank line; dir the tools folder. "" for none. */
+void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
+                         size_t cap);
 
 /* The UAS disk driver, xhciuas.sys (owner, 2026-10-19): a child of the
  * USB drivers, in the run only with them and unless /nouas or its
@@ -989,7 +1005,22 @@ int inst_eject9x_remove(INST_U32 cr, const char **text);
 #define INST_UNPLUG_RESTARTED 3 /* the ejected unit started again: exit 4 */
 int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
                      INST_U32 usb3);
-const char *inst_unplug_text(int kind);
+/* The text of a kind, for the tool the user is in (roadmap 43.8): only
+ * INST_UNPLUG_RESTARTED's differs, naming how to eject again. */
+#define INST_TOOL_CONSOLE   0   /* XHCIINST /eject */
+#define INST_TOOL_TREE      1   /* the xHCI98 USB Tree */
+const char *inst_unplug_text(int kind, int tool);
+
+/* The USB3 tunnel of the one router behind an active port of a checked
+ * status record (inst_st_check): CM_ST_TUN_*, 5 when the port is not an
+ * active member or not exactly one router is behind it. */
+INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf);
+
+/* Before the eject (roadmap 43.8): 1 when the confirmation carries
+ * inst_eject_remind_text, i.e. when the unit as it is now would not get
+ * INST_UNPLUG_NOW after it. */
+int inst_eject_remind(int singleFunction, INST_U32 usb3);
+const char *inst_eject_remind_text(void);
 
 /* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
 
@@ -1469,9 +1500,11 @@ void inst_sha256(const unsigned char *data, size_t len, char *hex65);
  * (that support in the run) 0, neither asked nor installed; with it,
  * Enter and /yes give Y, /stor98 installs it without asking, /nostor98
  * leaves it out without asking, /list asks nothing. Returns the decision
- * when it is not asked; *asked whether it is, *def what Enter gives. */
+ * when it is not asked; *asked whether it is, *def what Enter gives.
+ * is8 (Windows 8 and 8.1, record 26 section 5.3.1 case 3b, draft 20):
+ * Enter and /yes give N, only /stor98 installs it unasked. */
 int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
-                    int noStor98, int list, int *asked, int *def);
+                    int noStor98, int list, int is8, int *asked, int *def);
 
 /* Record 23 section 4.4 (revision 23): a device bound to Stor98 that is a
  * known tunnel drive, for the shared-file rule. Present: behind a tunnel.
@@ -1688,6 +1721,12 @@ int inst_stor_default(int haveChoice, int choice,
  * absent one; never a present one, never an INF. */
 INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
                             int source);
+/* The INFs a run places in %windir%\INF (record 26 section 6.5.11), a bit
+ * per index (INST_STOR_IDX_*): only when the run's route put every binary
+ * in place (copyOk), and only an INF with no file of its own name there
+ * (named[0] USBSTOR.INF, named[1] USBNTMAP.INF: 1 a file of the name is
+ * there, -1 unreadable, either keeping it out). */
+INST_U32 inst_stor_inf_set(int copyOk, const int named[2]);
 /* The detection's text: none, some ("not known to be ready"), all, or
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,

@@ -161,7 +161,7 @@ included.
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
   of it is in this package. An install of this package replaces it, because both are
-  called `xhci98.sys` (see "Upgrading from 1.2.0.0").
+  called `xhci98.sys`.
 
 ## What `3.1.0.0` changes
 
@@ -970,11 +970,9 @@ binds the Thunderbolt host interface, logs it and touches nothing.
   `tools\silent\` directory carries the list, `SILENT.REG` (hubs, boot
   keyboards and mice, Bulk-Only storage; UAS is not in it), `SILENT.VBS`,
   and `silent-on.bat` and `silent-off.bat`, which turn it on and off in one
-  double-click; restart Windows after either. Run `silent-on.bat` only once
-  each listed class's drivers have been installed at least once: with no
-  wizard, 98 SE asks for a missing driver file from its CD (read for a
-  mouse and a keyboard), and a device whose driver is not on the machine
-  depends on that CD being at hand. Never on 2000 and later. SweetLow
+  double-click; restart Windows after either. With no wizard, 98 SE asks
+  for a missing driver file from its CD (read for a mouse and a
+  keyboard). Never on 2000 and later. SweetLow
   provided the information on how the silent install is decided and the
   list. Read in QEMU virtual machines: on 98 SE a mouse, keyboard, stick
   and hub, each a device of its own, installed with no wizard and worked
@@ -1643,8 +1641,7 @@ each only where the hardware or the Windows it affects is present:
 `XhciInterruptMode`, `XhciForceBulkOnly`, `XhciSilentInstall` (Windows 98
 SE and ME only, off by default; on does exactly what
 `tools\silent\silent-on.bat` does, off what `silent-off.bat` does, and the
-question first says to turn it on only once each listed class's drivers
-have been installed at least once, and to restart after), and
+question says to restart after), and
 `XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` (only with a
 Thunderbolt or USB4 controller). Each shows the value now, the default
 and the values allowed, with a warning where the setting has one; Enter
@@ -1744,6 +1741,15 @@ Limits:
 
 - Pressing F6 needs the firmware's own USB keyboard support.
 - The floppy must be drive A: as the firmware sees it.
+- **A USB floppy drive works as the F6 drive only if it is one of the
+  three text-mode Setup knows.** Windows 2000 SP4's and XP SP3's
+  `I386\TXTSETUP.SIF` name the same three USB floppy drives: the Mitsumi
+  (`USB\VID_03EE&PID_6901`), the Y-E Data (`USB\VID_057B&PID_0000`) and
+  the TEAC (`USB\VID_0644&PID_0000`). XP's `usbstor.inf` names more
+  floppy drives, but text mode reads only `TXTSETUP.SIF`, and no INF,
+  this package's included, can add a drive to it. With any other USB
+  floppy drive the driver cannot be loaded from it: use one of those
+  three, or a floppy drive on the machine's own floppy controller.
 - A disk that offers only UAS is not usable until GUI-mode Setup. Since
   `2.3.1.0` a disk that offers Bulk-Only as well as UAS, as most USB 3
   enclosures, SSDs and sticks do, runs as Bulk-Only in text mode and is
@@ -1864,53 +1870,6 @@ adding the driver as an `[InputDevicesSupport]` entry with its own file
 section, did not get the driver loaded in text mode, and that was not
 pursued. This package does not ship a slipstreamed CD or a recipe for
 one.
-
-### Upgrading from 1.2.0.0
-
-`2.3.0.0`, like every `2.x` release before it, replaces the `1.2.0.0`
-driver: both are called `xhci98.sys`, and the install overwrites the file.
-Going back is a reinstall of the `1.2.0.0` package from its own download.
-The steps below were measured with `2.0.0.0`; nothing `2.1.0.0`, `2.1.1.0`
-or `2.2.0.0` changed touches them.
-
-Update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device
-Manager and always pick the driver from a list (Have Disk) rather than let
-Windows search: a search can reinstall the old driver from Windows' own copy.
-Measured in virtual machines on each system below except Windows ME:
-
-- **Windows 98 SE with NUSB: never update in place.** NUSB's `usbport.sys`
-  crashes the machine (fatal exception 0E at `0028:C00312EE`) as it stops
-  the running `1.2.0.0`, before `2.0.0.0` runs. Instead open an MS-DOS
-  Prompt and type `ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV`,
-  shut down and switch on again (the controller shows a yellow mark), then
-  Update Driver, "Display a list of all the drivers in a specific location",
-  Have Disk, the `release-x86\` directory, "xHCI98 USB 3.x eXtensible Host
-  Controller"; give it the Windows 98 SE CD for `usbd.sys` and restart. Each
-  USB device is then found once more as new hardware. If you already updated
-  in place and got the blue screen, restart: `2.0.0.0` comes up on its own.
-- **Windows 98 SE with SweetLow's stack**: the same Update Driver route, in
-  place. Windows does not ask for a restart, but shut down and switch on
-  again straight away: until then USB devices stop working.
-- **Windows ME**: not tested; follow the SweetLow route.
-- **Windows 2000**: Update Driver, "Display a list of the known drivers",
-  Have Disk; pick "xHCI98 USB 3.x eXtensible Host Controller", the first of
-  three models. It starts at once; at the next restart Windows may ask for
-  one more.
-- **Windows XP**: Update Driver, "Install from a list or specific location",
-  "Don't search. I will choose the driver to install", Have Disk, Continue
-  Anyway; a second wizard follows for the root hub. No restart.
-- **Windows Vista and 7**: Update Driver Software, "Browse my computer",
-  "Let me pick from a list of device drivers on my computer", Have Disk.
-  Typing the folder into the search box keeps the old driver. No restart.
-
-The steps were tested on Windows 98 SE (NUSB and SweetLow), 2000, XP and
-32-bit Windows 7; on XP x64, Vista and 7 x64 the same steps apply, pointed
-at `release-x64\` on the 64-bit systems.
-
-The three `1.2.0.0` virtual-hub values have no effect under `2.x`; see
-"Registry settings". Every device is a new Device Manager entry after the
-upgrade, so a setting kept on a device's own entry, such as SweetLow's
-hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
 
 ### Updating from 2.y.y.y
 
@@ -2317,10 +2276,9 @@ controller. hidusbf works behind a hub on XP too: its Setup reads the mouse's sp
   device's hardware key and its `Class\HID` driver key; hidusbf's Setup
   writes them. It works on a stock Windows 98 SE as well as under NUSB:
   Windows 98 SE's own `usbd.sys` has the routine `hidusbf.sys` needs.
-- **Apply the setting again after an upgrade from `1.x.x.x`**: each device
-  is a new Device Manager entry under `2.x`, and the setting is kept on the
-  entry. The same holds for a device found again once after an update from
-  `2.0.0.0` (see "Updating from 2.y.y.y").
+- **Apply the setting again after an update from `2.0.0.0`**: each device
+  is found again once as a new Device Manager entry, and the setting is
+  kept on the entry (see "Updating from 2.y.y.y").
 
 ## SuperSpeed and UAS
 
@@ -2825,10 +2783,7 @@ every value since `2.1.1.0`, which added `XhciIntelPortSwitch`. Of the
 seven before it, the
 `2.1.0.0` install wrote three, the two log values and
 `XhciImodInterval250ns`, and wrote them every time, over a value you had
-changed. A machine
-updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns`
-of `500`, not `160`; set it by hand. One that went through `2.0.0.0` or
-`2.1.0.0` already holds `160`.
+changed.
 
 Read in QEMU virtual machines on development host A, on the `release`
 flavour, before `XhciIntelPortSwitch` was added: a fresh install on Windows
@@ -4102,7 +4057,7 @@ what `2.3.0.0` adds:
 
 | `1.2.0.0` limitation | Under `2.0.0.0` |
 |---|---|
-| Windows 98 under NUSB: stopping the controller (disable, uninstall, upgrade) crashed the machine, in NUSB's `usbport.sys` | `2.0.0.0` does not use `usbport.sys`. Disable, enable, remove and rescan of the `2.0.0.0` controller completed under NUSB 3.3 and under SweetLow's stack in Windows 98 SE virtual machines. Carried on one path only: updating in place over a running `1.2.0.0` under NUSB still crashes, because NUSB stops `1.2.0.0` before `2.0.0.0` runs. "Upgrading from 1.2.0.0" has the route around it |
+| Windows 98 under NUSB: stopping the controller (disable, uninstall, upgrade) crashed the machine, in NUSB's `usbport.sys` | `2.0.0.0` does not use `usbport.sys`. Disable, enable, remove and rescan of the `2.0.0.0` controller completed under NUSB 3.3 and under SweetLow's stack in Windows 98 SE virtual machines. |
 | Windows 98: fast, repeated plug and unplug could freeze the machine | Gone in every reading: the hub churn that froze Windows 98 under `1.2.0.0` at 12 to 18 hubs ran 120 of 120 with the guest responsive, and the device matrix's hub churn passed on Windows 98 SE and 2000 on the final build |
 | Windows 7 (32-bit, on a ThinkPad E460): disabling the controller hung | Gone under `2.0.0.0`. It belonged to the miniport under Microsoft's `usbport.sys`; under `2.0.0.0` it did not occur in five disable and enable cycles each on Windows 7 x86 and x64 |
 | Windows 2000: a USB audio device unplugged during playback was never fully removed | Gone: the removal arrived within about a second, 7 times out of 7 |
@@ -4122,6 +4077,7 @@ information.
 | Area | State |
 |---|---|
 | SuperSpeed isochronous transfers | Built from the specification against host tests. No SuperSpeed isochronous device has been held and QEMU models none |
+| High Speed isochronous transfers, and the isochronous ring page | No High Speed isochronous device (a camera, USB Audio 2.0) has been read on any vehicle; QEMU's audio device is Full Speed. Since the planned isochronous ring work (design record 13 section 11.8, not yet in a release), an isochronous endpoint serviced more than once a frame gets a ring of its own when the event ring has room: 120 TRBs and up to 120 packets a request with the 256-entry event ring, against 62 on the shared pool ring, so a 3 x 1024-byte camera endpoint holds about 7.5 to 10 ms in flight and a stream of small packets 15 ms. A client keeps a stream continuous with at least two requests in flight, each at most half of that. An isochronous stream also interrupts at most every eighth packet and at each request's end (BEI), from xHCI 1.0; whether that saving shows on real hardware is unread |
 | SuperSpeedPlus links, by mode | Accepted at the trained rate, built from the specification against host tests. Each mode is untested: Gen 2x1 (10 Gbit/s on one lane), Gen 1x2 (10 Gbit/s on two lanes, the same rate as Gen 2x1 and a different mode), and Gen 2x2 (20 Gbit/s). No Gen 2 device was read on any hardware; no 20 Gbit/s port is held |
 | SuperSpeedPlus isochronous transfers | Built from the specification against host tests; no vehicle |
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
@@ -4138,6 +4094,7 @@ information.
 | Linux's controller quirks (`XhciMsiAvoid` and the thirteen others, and `XhciIntervalCap` on `1002:7316`) | Built from Linux's handling and the xHCI specification against host tests. None has been read on a controller it lists, though the project's E460 (`9D2F`), B490 (`1E31`) and E7250 (`9CB1`) and a user's VL805 are listed for some ("Linux's controller quirks"). QEMU's controller is on no list. What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is visible only in an external capture of that shutdown |
 | hidusbf on a composite device's own entry (`USB\XHCI98_COMPOSITE`) | New in `2.4.0.0`, built against host tests. QEMU offers no keyboard-and-mouse composite device, so the rate set there reaching a function is owed to a real composite device, by passthrough or on a machine, after the release (the composite entry's own selection was read in QEMU with USB audio devices, "What `2.4.0.0` adds"); whether hidusbf's Setup offers the entry is unread ("SweetLow's hidusbf: a mouse's polling rate") |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, installs to the desktop on 32-bit XP and XP x64, and Windows 2000 with its own entry and the three files from its CD to the desktop and one restart. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
+| AMD USB4 hosts (`1022:1668`, `1022:1669`) under the software connection manager | Read on no AMD hardware, and the INF's match on these two ids has never run. Read in QEMU only, on the emulator's `amd` host model: the emulator's host interface with AMD's router identity (vendor `0438`, device `0208` to `020B`), on Windows 7, 2000 and 98 SE with an ASMedia ASM2464 enclosure behind it (task 43.45, 2026-10-22). The driver read the AMD router's identity and applied its quirk-table row (CLx left off). It tunnelled PCIe to the NVMe disk under Stor98, ejected from XHCITR, and handled unplug, replug and surprise removal; the disk compared clean on every target. Resume read on Windows 7 (hibernate) only. Windows 2000 cannot sleep in that virtual machine. Stand by and resume with a USB4 or Thunderbolt disk on Windows 98 SE is untested on every host. In QEMU the connection manager resumed and set the tunnel up again, but Windows 98 SE's own post-standby fault stopped the disk from being read; the real machine at hand cannot put Windows 98 SE in Stand by |
 
 ## Licensing
 

@@ -27,6 +27,7 @@ The rule that organises the directory: files in the pure core **decide** (they e
 | `xhci_sshub.c` | The SuperSpeed hub class's decisions: the 0x2A descriptor, the SuperSpeed port decision, hot or warm hub-port reset, the extended port status and a downstream SuperSpeedPlus rate's speed ID. | `test_sshub` |
 | `xhci_stream.c` | Bulk streams: the plan, the block layout (and the big layout of 36.25), Stream Contexts, the command encoders and an event's stream. | `test_stream` |
 | `xhci_xport.c` | The mass-storage transport policy: Bulk-Only or UAS for an interface that offers both, and the ids that follow; applied in `hcd_pdo.c`. | `test_xport` |
+| `xhci_usbdx.c` | Windows 8's client contract served by the bus (task 43.29, design record 13 section 6.13): the `GUID_USBD_INTERFACE_V1` and capability-request checks, the capability answers, the select and isochronous URB sizes and fills, the stream URBs' checks, the exact grant, and `0x220FB3` as `RESET_PORT`; applied in `hcd_urb.c` and `hcd_cfg.c`. | `test_usbdx` |
 | `xhci_psw.c` | The Intel EHCI-to-xHCI port switchover: the device-id gate, the board exemption, the `XhciIntelPortSwitch` rule, the start decision and the route and release sequences over caller-supplied configuration-space accessors ([design record 16](design/16-intel-port-switchover.md)); also compiled into `XHCIINST`. | `test_psw` |
 | `xhci_pirq.c` | The Intel PCH interrupt routing quirk: the `XhciIntelIrqRoute` rule, the listed xHCI and LPC pairs, the PIRQ that delivers the assigned IRQ in APIC and PIC mode, and `XhciPirqRun` over caller-supplied accessors (issue 12 section 5.1); also built into `XHCIQUAL`'s routing report. | `test_pirq` |
 | `xhci_tol.c` | Controller tolerance: each tolerant behaviour's decision, the `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` rules, the tolerance clock's arithmetic, the budgets and the terminal reasons ([design record 17](design/17-controller-tolerance.md)). | `test_tol`, `test_xfer`, `test_iso`, `test_td` |
@@ -110,6 +111,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `xhci_sshub.h` | The SuperSpeed hub class's pure half (`xhci_sshub.c`). | yes |
 | `xhci_stream.h` | Bulk streams' pure half (`xhci_stream.c`). | yes |
 | `xhci_xport.h` | The transport policy (`xhci_xport.c`). | yes |
+| `xhci_usbdx.h` | Windows 8's client contract, the pure half (`xhci_usbdx.c`). | yes |
 | `xhci_psw.h` | The port switchover (`xhci_psw.c`). | yes |
 | `xhci_pirq.h` | The interrupt routing quirk (`xhci_pirq.c`). | yes |
 | `xhci_tol.h` | Controller tolerance (`xhci_tol.c`), its constants and the state kept in the extension. | yes |
@@ -265,6 +267,7 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `u4_fakefab.c` / `u4_fakefab.h` | `test_u4cm`'s C89 fake USB4 fabric, one domain per instance, written from the specification and `usb4-emu`'s documented host models, independently of `tbt_u4cm.c` (decision U11). |
 | `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23); its Stor98 rows held to `stor98-settings.txt` (record 26 section 5.6). |
 | `stor98-settings.txt` | The bundled Stor98 readme's SETTINGS table, as the installer's Stor98 rows were checked against it; `make-release.ps1` compares the bundled readme, `src\stor98\docs\package-readme.txt`, with it. |
+| `test_wizlay.c` | `xhciinst\wiz_lay.c`, the installer window's settings-page layout arithmetic: the "now" column, a part's height, the split into parts of at most three rows, the open list's width, the note's top (design record 26 section 5.4, "The layout"). |
 | `test_dijob.c` | `xhciinst\inst_core.c` with `xhciinst\di\di_core.c`: the installer's job files read by the helper's parser, the helper's result files by the installer's (design record 27 sections 4.1 and 4.2). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
@@ -312,6 +315,7 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | `test_sshub.c` | `xhci_sshub.c`: the SuperSpeed hub decisions as tables. |
 | `test_stream.c` | `xhci_stream.c`: array sizes, contexts, layouts and encoders. |
 | `test_xport.c` | `xhci_xport.c` over constructed device shapes. |
+| `test_usbdx.c` | `xhci_usbdx.c`, with `xhci_stream.c`'s plan for the exact grant: both pointer widths' sizes and fills, every capability at every speed. |
 | `test_silent.c` | `xhci_silent.c` over constructed configurations. |
 | `test_regsrc.c` | `xhci_regsrc.c`: absent, per-device only, machine-wide only, both, and another type in either key. |
 | `test_psw.c` | `xhci_psw.c` over a modelled configuration space. |
@@ -381,6 +385,7 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `inst_eng.c` / `inst_eng.h` | The engine (design record 26 section 3): the system half of the tool - install, update, uninstall, `/devices` and `/eject`, and on 98 SE and ME the helper `XHCIDI.EXE`'s jobs - behind the front-end table both front ends fill. |
 | `xhciinst.c` | The console front end, `XHCIINST.EXE` and `XHCIIN64.EXE`: the 79-column wrap, the keyboard, the pause. |
 | `xhciwiz.c` | The window, `XHCIWIZ.EXE` and `XHCIWZ64.EXE` (design record 26): the wizard's pages, the worker thread, the start of the x64 window under WOW64, the restart, the window's `/selftest`. |
+| `wiz_lay.c` / `wiz_lay.h` | The window's settings pages' layout arithmetic (design record 26 section 5.4, "The layout"; task 43.10), pure and apart from `inst_core.c`, which other tools compile too (host suite `test_wizlay`). |
 | `inst_core.c` / `inst_core.h` | The pure half: the INF reader, the models section per system, the action per device and per service group, the registry value table and its applicability, record 24's unit rules, the switches and exit codes, the helper's command line and result file, the uninstall entry and route, the window's texts (host suite `test_inst`). |
 | `xhciinst.rc`, `xhciinst.manifest` | The console tool's version resource and elevation request. |
 | `xhciwiz.rc`, `xhciwiz_res.h`, `xhciwiz.manifest` | The window's icon (`xhcitr\xhcitr.ico`, XHCITR's), version, page templates, elevation and Common Controls 6 requests. |

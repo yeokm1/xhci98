@@ -221,6 +221,7 @@ For a machine whose keyboard or install medium is on the xHCI controller:
 - **Windows 2000:** with a USB keyboard, mouse or stick used during Setup, the first entry leads to `STOP c000026c` at the first start; the second entry without the three files stops Setup asking for them in drive A: (F3 quits). Plug the USB keyboard and stick in before Setup starts.
 - **XP and XP x64: have a PS/2 or built-in laptop keyboard at hand.** Later in Setup the USB keyboard does not work until a step that first asks about this unsigned driver.
 - Pressing F6 needs the BIOS's own USB keyboard support.
+- A USB floppy drive works for F6 only if it is one Setup knows: Mitsumi `03EE:6901`, Y-E Data `057B:0000` or TEAC `0644:0000` (VID:PID). No INF can add another; otherwise use a floppy drive on the floppy controller.
 - A UAS-only disk is not usable until GUI-mode Setup; a flash stick, or a UAS disk that also offers Bulk-Only (most do), is.
 - A USB drive present at the partition screen takes `C:`. Unplug the USB drives you do not need.
 - **Recovery Console** (2000 and XP): the same floppy and F6, then R at the Welcome screen (on 2000, then C). The USB keyboard works throughout.
@@ -445,3 +446,8 @@ The release download's `release-x86\` and `release-x64\` carry Stor98, built fro
 This repository carries no Microsoft file. `usbd.sys` and `usbui.dll` are the OS's own, copied by Windows Setup from its own install source. Up to `3.1.0.0` the release download carried no Microsoft file either. From `3.2.0.0` it may carry one set, by the owner's decision of 2026-10-20: NUSB 3.3's seven Windows 98 SE storage files (Microsoft's, apart from `USBU2A.SYS`), unmodified, from the separate driver-pack repository `usb-wdm-nonfree`, in a folder of their own with that pack's `NOTICE.md`, never committed here. They are not this project's work and no licence to redistribute them has been established; a download built without them says so in its `readme.txt`. On Windows 98 SE, `xhciuas.inf` names `USBNTMAP.SYS` as a filter on the UAS device.
 
 The full inventory, provenance methods and redistribution boundaries are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md), which states facts, not legal conclusions.
+
+## Contributions
+
+- **Stor98**, the bundled NVMe driver, is a fork of SweetLow's [nvme9x / nvment](https://github.com/LordOfMice/Tools), SweetLow's port to Windows 9x and NT4 of [nvme2k](https://github.com/techomancer/nvme2k) by Dominik Behr (techomancer). Its [README](src/stor98/README.md) and [NOTICE](src/stor98/NOTICE) give the lineage and the licence.
+- **The Windows 98 SE USB storage files** in the release download are taken unmodified from the [NUSB](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) (Native USB) project's 3.3 release by Maximus Decim; the files themselves are Microsoft's, apart from `USBU2A.SYS` (see "Licensing and provenance").

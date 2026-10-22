@@ -32,16 +32,20 @@ completes.
 It uses only routines Windows documents for this. It is not devcon, and
 this package carries no Microsoft file.
 
-The connection manager alone: on Windows 2000 to 7 you can leave the USB
-drivers (xhci98.sys, xhciuas.sys) out and install only the Thunderbolt 3 /
-USB4 connection manager, for a computer whose USB 3 controllers already
-run another maker's driver - untick the USB drivers on the Components
-page, or INSTALL /console /cmonly. On Windows 8 and 8.1 that is all this
-package installs: Windows' own USB 3 driver runs the USB controllers
-there, and the USB drivers are not offered. Windows 10 and later are
-refused. On Windows 98 SE and ME the USB drivers are always installed:
-those systems have no USB 3 driver of their own. See "The connection
-manager alone" below.
+The connection manager alone: you can leave the USB drivers (xhci98.sys,
+xhciuas.sys) out and install only the Thunderbolt 3 / USB4 connection
+manager, for a computer whose USB 3 controllers already run another
+maker's driver - untick the USB drivers on the Components page, or
+INSTALL /console /cmonly. On Windows 98 SE and ME the installer warns
+first: those systems have no USB 3 driver of their own, and this has not
+been tested there. On Windows 8 and 8.1 the USB drivers and Stor98 are
+unticked by default, Windows' own drivers running the controllers and
+NVMe drives; ticking them (or /usb, /stor98) replaces Windows' own, with
+a warning that they are untested there. Windows 10 and later are
+refused. Every box of the Components page is shown on every system; one
+that does not apply there gets a warning when you click Next, and Cancel
+on it takes you back to the page. See "The connection manager alone"
+below.
 
 Which file
 ----------
@@ -83,11 +87,12 @@ The window walks you through:
   Welcome          the system found, the log's place
   What was found   each device of the package, what runs it now and what
                    will be done, and any warning
-  Components       the USB drivers (always on 98 SE and ME; a box you
-                   can untick on 2000 to 7; never on 8 and 8.1),
-                   Thunderbolt 3 / USB4 support,
-                   Stor98 (where the package carries it), the xHCI98 USB
-                   Tree started at login, and the tools folder
+  Components       the USB drivers, Thunderbolt 3 / USB4 support,
+                   Stor98 (where the package carries it), the USB storage
+                   drivers for 98 SE (where the download carries them),
+                   the xHCI98 USB Tree started at login, and the tools
+                   folder; every box on every system, with a warning on
+                   Next for one that does not apply there
   USB settings     the options below that apply to this machine
   Thunderbolt      the connection manager's options, when it is ticked
   Stor98 settings  Stor98's own options, when it is ticked
@@ -112,8 +117,8 @@ Thunderbolt settings page; devices then get no connection unless the BIOS
 already gave them one. Unticked, a Thunderbolt driver already installed
 stays as it is, and this package's is kept out of Windows' reach.
 
-Stor98, the bundled NVMe driver (a separate project, with its own
-stor98-readme.txt): ticked with the Thunderbolt 3 / USB4 box, and you
+Stor98, the bundled NVMe driver (its guide is stor98-readme.txt):
+ticked with the Thunderbolt 3 / USB4 box, and you
 can untick it. Ticked, it is installed on every NVMe drive behind a
 Thunderbolt or USB4 tunnel that has no driver - never on one another
 driver runs, nor on an internal drive - and an older Stor98 is
@@ -139,15 +144,20 @@ the seven is found, and unticked when any of them is there; the
 installer never copies over a file already present, and with only some
 of the seven found, one of them not this download's, it copies nothing
 and says the storage install is not complete. It installs a stick at
-"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". The
-uninstall removes the files it copied, the copies Windows made of their
-INFs for it and the devices installed from them (a stick first plugged in
-after the install included), never while NUSB is installed.
+"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". It
+also puts the two INFs, USBSTOR.INF and USBNTMAP.INF, in Windows' INF
+folder where NUSB's installer puts them, never over a file of that name,
+so that a USB disk plugged in later is meant to install without the New
+Hardware wizard. The uninstall removes the files it copied, the INFs it
+put in the INF folder, the copies Windows made of their INFs for it and
+the devices installed from them (a stick first plugged in after the
+install included), never while NUSB is installed.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
 /thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /notray,
-/nouas, /storage, /nostorage and /cmonly (the components, preselected),
+/nouas, /storage, /nostorage, /cmonly and /usb (the components,
+preselected),
 /set Name=Value
 (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
@@ -172,26 +182,30 @@ The console tool
                                 /yes leaves it out
   INSTALL /console /cmonly      installs the Thunderbolt 3 / USB4
                                 connection manager alone, without the
-                                USB drivers (2000 to 7; on 8 and 8.1 every
-                                install is this)
+                                USB drivers (with a warning on 98 SE and
+                                ME; on 8 and 8.1 the default)
+  INSTALL /console /usb         Windows 8 and 8.1: installs the USB drivers
+                                too, over Windows' own (untested there)
   INSTALL /console /thunderbolt /stor98
                                 installs the bundled Stor98 without asking;
                                 it is part of the Thunderbolt 3 / USB4
                                 support, so /stor98 needs /thunderbolt (or
-                                /cmonly); never offered on 8 and 8.1
-                                (without /stor98 the console asks, Enter
-                                for Y, and /yes installs it: Stor98 comes
-                                with the Thunderbolt support)
+                                /cmonly); without /stor98 the console asks,
+                                Enter for Y, and /yes installs it: Stor98
+                                comes with the Thunderbolt support (on 8
+                                and 8.1 Enter and /yes give N)
   INSTALL /console /thunderbolt /nostor98
                                 the Thunderbolt support without Stor98
   INSTALL /console /nouas       installs without the UAS disk driver
                                 (xhciuas.sys); one already installed
                                 stays as it is
   INSTALL /console /storage     Windows 98 SE: installs the USB storage
-                                drivers without asking (refused on any
-                                other system); /nostorage leaves them out
-                                on any system; without either the console
-                                asks, and /yes takes the row's default
+                                drivers without asking; on any other
+                                system it only copies their files to
+                                NUSB33 in the tools folder, with a
+                                warning; /nostorage leaves them out on any
+                                system; without either the console asks
+                                on 98 SE, and /yes takes the row's default
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that
@@ -213,8 +227,9 @@ own on 8 and 8.1): the Thunderbolt 3 and USB4 controllers are driven by
 this package's connection manager - the devices are approved (see
 XhciCmApprove), connected and disconnected - and what a device brings is
 driven by whatever driver Windows has for it: an NVMe drive by an NVMe
-driver (Windows 8.1 has its own; Windows 8 has none, and the bundled
-Stor98 is not offered on 8 and 8.1), the USB controller inside a dock by
+driver (Windows 8.1 has its own; Windows 8 has none; the bundled Stor98
+is unticked there by default and untested), the USB controller inside a
+dock by
 Windows' own USB 3 driver on 8 and 8.1 (on 2000 to 7 by another maker's
 driver only where it supports that controller), and the USB devices of a
 USB4 port's USB 3 connection on the computer's own USB controller.

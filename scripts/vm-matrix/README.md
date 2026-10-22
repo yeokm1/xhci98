@@ -61,6 +61,13 @@ Useful narrowings:
 | `lib/counters.ps1` | Reading the driver's counters out of a live guest: the HCD's counter block, or the miniport extension. |
 | `lib/verdict.ps1` | Parsing and evaluating expectations; deciding a row's outcome. |
 | `lib/fresh.ps1` | The post-release run's own rules: the image stamp and its refusals, the replug verdict, `ExpectNoDriver`, the report header. Every refusal in it has a self-test case. |
+| `release-matrix.ps1` | The release matrix (roadmap-usb4 43.12; build-and-test.md, "Faster emulator legs"): every standard leg of `release-legs.psd1` started in parallel within the vCPU budget, one results table (`results.md`, `results.csv`). |
+| `run-leg.ps1` | One release leg: the guest restored from its starting point, the package installed from a CD by the guest's own leg script (`INSTALL /console ... /yes`), the results read over COM1; `-Cold` for the same leg from a cold start; the `*-window` legs for the installer's window with an operator at VNC. |
+| `make-start.ps1` | A guest's starting point: the poller set up from a CD, then the machine state saved at the desktop after a shut down and a cold start. |
+| `release-legs.psd1` | The standard legs, their allowed exit codes and the host's steps (the 98 SE wizards). |
+| `release.config.sample.psd1` | Per-host settings of the three above; copy to `release.config.psd1` (git-ignored). |
+| `leg/` | The guest side of the release legs: the pollers and their setup (`XHPOLL`, `XHSETUP`), the leg scripts (`LEG9X.BAT`, `LEGNT.CMD`) and the 9x helpers. CRLF, ASCII. |
+| `lib/legvm.ps1`, `lib/leghost.ps1`, `lib/qmp.ps1`, `lib/iso.ps1` | The release legs' machine, starting points and serial protocol; the host's steps; QMP; the CD image (Windows' IMAPI2, ISO 9660 and Joliet). |
 | `guest/` | The load scripts that run inside the guest for the concurrent-load stage, in two non-interchangeable pairs (Windows 2000 `cmd.exe`, Windows 98 `COMMAND.COM`). `guest/README.md` says which pair is which and why running the wrong one fails silently. |
 
 The matrix harness itself (`run-matrix.ps1`, `prepare-image.ps1`,

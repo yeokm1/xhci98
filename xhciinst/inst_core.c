@@ -1582,8 +1582,6 @@ const INST_VALUE instValues[] = {
     { "XhciSilentInstall", INST_INF_XHCI, INST_APPLY_9X_XHCI, 0x3UL, 0x3UL,
       "install hubs, boot keyboards and mice and Bulk-Only storage with no "
       "Add New Hardware wizard",
-      "turn it on only once each listed class's drivers have been installed "
-      "at least once: otherwise 98 SE asks for its CD, with no wizard. "
       "Restart Windows after changing it.", 0,
       { "off", "on", NULL, NULL } },
     { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3UL, 0x3UL,
@@ -2029,6 +2027,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Thunderbolt = 1;
         } else if (inst_switch(a, "cmonly")) {
             opts->CmOnly = 1;
+        } else if (inst_switch(a, "usb")) {
+            opts->Usb = 1;
         } else if (inst_switch(a, "stor98")) {
             opts->Stor98 = 1;
         } else if (inst_switch(a, "nostor98")) {
@@ -2201,6 +2201,14 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->CmOnly && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/cmonly belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Usb && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/usb belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Usb && opts->CmOnly) {
+        inst_err(err, errCap, "/usb and /cmonly contradict each other", NULL);
         return 1;
     }
     if (opts->Stor98 && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -3324,22 +3332,65 @@ int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
     return INST_UNPLUG_CHECK;
 }
 
-const char *inst_unplug_text(int kind)
+/* Roadmap 43.8 (owner, 2026-10-20): once Windows has stopped the device
+ * it is too late to stop its other devices first, so the text after a
+ * successful eject says only what to do now, and the reminder is asked
+ * before the eject (inst_eject_remind). */
+const char *inst_unplug_text(int kind, int tool)
 {
     switch (kind) {
-    case INST_UNPLUG_NOW:
-        return "You can now unplug the device.";
     case INST_UNPLUG_OTHERS:
         return "Other devices behind the same Thunderbolt port are still "
                "running: eject them\ntoo before you unplug it.";
     case INST_UNPLUG_RESTARTED:
-        return "The device has started again, so it is not safe to unplug. "
-               "Close the programs\nusing it and run INSTALL /console /eject again.";
+        return tool == INST_TOOL_TREE
+                   ? "The device has started again, so it is not safe to "
+                     "unplug. Close the programs\nusing it and stop it again "
+                     "in the xHCI98 USB Tree."
+                   : "The device has started again, so it is not safe to "
+                     "unplug. Close the programs\nusing it and run INSTALL "
+                     "/console /eject again.";
     default:
-        return "Before you unplug it, make sure none of its other devices "
-               "(USB ports, card\nreaders, network) is in use; stop them in "
-               "Windows first.";
+        return "You can now unplug the device.";
     }
+}
+
+INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf)
+{
+    INST_U32 count = inst_get32(rec, 48);       /* CM_ST_O_PORT_COUNT   */
+    INST_U32 active = inst_get32(rec, 52);      /* CM_ST_O_PORT_ACTIVE  */
+    INST_U32 n = inst_get32(rec, 72);           /* CM_ST_O_ROUTER_COUNT */
+    INST_U32 usb3 = 5UL;                        /* CM_ST_TUN_UNKNOWN    */
+    INST_U32 j;
+    int portKnown = 0;
+    int routers = 0;
+
+    for (j = 0; j < count && j < 4UL; j++) {    /* CM_ST_MAX_PORTS      */
+        if ((active & (1UL << j)) != 0 &&
+            inst_get32(rec, 56 + 4 * j) == portBdf) {   /* CM_ST_O_PORTS */
+            portKnown = 1;
+        }
+    }
+    for (j = 0; portKnown && j < n && j < INST_ST_MAX_ROUTERS; j++) {
+        const unsigned char *e = rec + INST_ST_HDR + j * INST_ST_ENTRY;
+        if (inst_get32(e, 40) == portBdf) {     /* CM_ST_E_BRIDGE       */
+            routers++;
+            usb3 = (inst_get32(e, 36) >> 4) & 0xFUL;    /* CM_ST_E_TUNNELS */
+        }
+    }
+    return routers == 1 ? usb3 : 5UL;
+}
+
+int inst_eject_remind(int singleFunction, INST_U32 usb3)
+{
+    return inst_unplug_kind(1, 0, singleFunction, usb3) != INST_UNPLUG_NOW;
+}
+
+const char *inst_eject_remind_text(void)
+{
+    return "Before you eject it, make sure none of its other devices (USB "
+           "ports, card\nreaders, network) is in use; stop them in Windows "
+           "first.";
 }
 
 /* ======================================================================== */
@@ -3389,30 +3440,31 @@ int inst_uas_decide(int usbInclude, int noUas)
     return usbInclude && !noUas;
 }
 
-int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
-                    const char **refusal)
+int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
+                    int *offered, const char **refusal)
 {
+    /* Draft 20 (task 43.43): no system refuses a choice of the user's; 98
+     * SE and ME take the connection manager alone, 8 and 8.1 the USB
+     * drivers, each with its warning (inst_comp_warnings). */
+    (void)nt;
     *offered = 0;
     *refusal = NULL;
+    if (cmOnly && usbOpt) {
+        *refusal = "/usb and /cmonly: choose one.";
+        return -1;
+    }
     if (osKind == INST_OS_CMONLY) {
         if (!haveCm) {
             *refusal = "this package carries no Thunderbolt or USB4 driver: "
                        "there is nothing to install on Windows 8 or 8.1.";
             return -1;
         }
-        return 0;
+        *offered = 1;
+        return usbOpt ? 1 : 0;
     }
     if (osKind != INST_OS_FULL) {
         *refusal = "this Windows is not one this package supports.";
         return -1;
-    }
-    if (!nt) {
-        if (cmOnly) {
-            *refusal = "/cmonly: the connection manager alone is not offered "
-                       "on Windows 98 SE and ME.";
-            return -1;
-        }
-        return 1;
     }
     if (!haveCm) {
         if (cmOnly) {
@@ -3424,6 +3476,86 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
     }
     *offered = 1;
     return cmOnly ? 0 : 1;
+}
+
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
+                            int s98)
+{
+    INST_U32 w = 0;
+
+    if (stor && !is98se) {
+        w |= INST_CW_STOR;
+    }
+    if (!usb && is9x) {
+        w |= INST_CW_CMALONE;
+    }
+    if (usb && is8) {
+        w |= INST_CW_USB8;
+    }
+    if (s98 && is8) {
+        w |= INST_CW_S98_8;
+    }
+    return w;
+}
+
+/* text appended to out as a paragraph of its own, cut at cap. */
+static void inst_cat_para(char *out, size_t cap, const char *text)
+{
+    size_t n = strlen(out);
+
+    if (n > 0 && n + 2 < cap) {
+        strcat(out, "\n\n");
+        n += 2;
+    }
+    if (n + 1 < cap) {
+        strncat(out, text, cap - n - 1);
+    }
+}
+
+void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
+                         size_t cap)
+{
+    char one[512];
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (set & INST_CW_STOR) {
+        inst_copy(one, "The USB storage drivers (NUSB 3.3's) are for Windows "
+                  "98 SE only. On this Windows they are not installed: their "
+                  "seven files are copied to ", sizeof(one));
+        strncat(one, dir, sizeof(one) - strlen(one) - 1);
+        strncat(one, "\\NUSB33 for you to use by hand, and nothing installs "
+                "them.", sizeof(one) - strlen(one) - 1);
+        inst_cat_para(out, cap, one);
+    }
+    if (set & INST_CW_CMALONE) {
+        inst_cat_para(out, cap,
+                      "Without the xHCI98 USB drivers, Windows 98 SE and ME "
+                      "have no driver of their own for a USB 3 controller: an "
+                      "xHCI controller with no other driver installed, a "
+                      "dock's included, stays without one, and the USB devices "
+                      "on it do not work. Only the Thunderbolt 3 / USB4 "
+                      "connection manager is installed; xHCI98 USB drivers "
+                      "already installed stay as they are. This has not been "
+                      "tested on Windows 98 SE or ME.");
+    }
+    if (set & INST_CW_USB8) {
+        inst_cat_para(out, cap,
+                      "The xHCI98 USB drivers have not been tested on Windows "
+                      "8 or 8.1. They replace Windows' own USB 3 driver on "
+                      "every xHCI controller, the one your keyboard and mouse "
+                      "may use included. The uninstall is meant to give the "
+                      "controllers back to Windows' own driver; that has not "
+                      "been tested either.");
+    }
+    if (set & INST_CW_S98_8) {
+        inst_cat_para(out, cap,
+                      "Stor98 has not been tested on Windows 8 or 8.1. If a "
+                      "drive behind a Thunderbolt or USB4 tunnel uses "
+                      "Windows' own NVMe driver, this choice replaces it.");
+    }
 }
 
 /* ======================================================================== */
@@ -5004,8 +5136,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       284, 20 },
     { INST_PT_NOW, "Restart Windows now", 284, 10 },
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
-    { INST_PT_S98, "Stor98, the bundled NVMe driver (a separate project)",
-      258, 10 },
+    { INST_PT_S98, "Stor98, the bundled NVMe driver", 258, 10 },
     { INST_PT_S98_T,
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",
@@ -5025,8 +5156,8 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "you click Install on the Summary page. Help opens the readme.",
       284, 58 },
     { INST_PT_DRIVERS_T8,
-      "Not offered on Windows 8 and 8.1: Windows' own USB 3 driver runs the "
-      "USB controllers there.",
+      "Windows' own USB 3 driver runs the controllers here; ticked, this "
+      "replaces it (untested here).",
       272, 16 },
     { INST_PT_DRIVERS_OFF,
       "Left out: the connection manager alone. USB drivers already "
@@ -5512,10 +5643,13 @@ int inst_s98_cold_start(int nt)
 }
 
 int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
-                    int noStor98, int list, int *asked, int *def)
+                    int noStor98, int list, int is8, int *asked, int *def)
 {
-    *def = 1;
+    *def = is8 ? 0 : 1;
     *asked = haveS98 && tb && !yes && !stor98Switch && !noStor98 && !list;
+    if (is8) {
+        return haveS98 && tb && stor98Switch;
+    }
     return haveS98 && tb && !noStor98;
 }
 
@@ -5962,6 +6096,22 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
         if (st[i] == INST_STOR_ABSENT) {
             set |= 1UL << i;
         }
+    }
+    return set;
+}
+
+INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
+{
+    INST_U32 set = 0;
+
+    if (!copyOk) {
+        return 0;
+    }
+    if (named[0] == 0) {
+        set |= 1UL << INST_STOR_IDX_USBSTOR_INF;
+    }
+    if (named[1] == 0) {
+        set |= 1UL << INST_STOR_IDX_USBNTMAP_INF;
     }
     return set;
 }

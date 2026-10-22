@@ -68,10 +68,12 @@ typedef struct _TD_SG {
     USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
 } TD_SG;
 
-/* hcd.h HCD_ISO_BLOCK. */
+/* hcd.h HCD_ISO_BLOCK, at a ring page's packet bound (record 13 section
+ * 11.8): hcd_cfg.c allocates a pipe's blocks at its own bound, a stride
+ * apart, and the largest is this. */
 typedef struct _TD_ISO_BLOCK {
     USBPORT_ISO_TRANSFER Block;
-    USBPORT_ISO_PACKET More[XHCI_XFER_MAX_ISO_PACKETS - 1];
+    USBPORT_ISO_PACKET More[XHCI_XFER_MAX_ISO_PAGE_PACKETS - 1];
 } TD_ISO_BLOCK;
 
 static const char *layout_name;
@@ -827,7 +829,8 @@ static void test_submit_and_short(void)
 /* ------------------------------------------------------------------ */
 
 static TD_ISO_BLOCK iso_block;
-static XHCI_TRB iso_out[XHCI_XFER_MAX_ISO_TRBS];
+static XHCI_TRB iso_out[XHCI_XFER_MAX_ISO_PAGE_TRBS];
+static ULONG iso_lengths[XHCI_XFER_MAX_ISO_PAGE_PACKETS];
 static XHCI_ISO_LAYOUT iso_layout;
 
 /* hcdIsoFill over a URB table of `n` packets, all `size` bytes but packet
@@ -836,7 +839,7 @@ static ULONG iso_fill(ULONG vo, ULONG n, ULONG size, ULONG empty,
                       ULONG start, ULONG interval, TD_SG *sg,
                       ULONG *bufferLength)
 {
-    XHCI_PIPE_ISO_PACKET urb[XHCI_XFER_MAX_ISO_PACKETS];
+    XHCI_PIPE_ISO_PACKET urb[XHCI_XFER_MAX_ISO_PAGE_PACKETS];
     USBPORT_ISO_PACKET *p;
     ULONG lengths[2];
     ULONG off;
@@ -852,7 +855,7 @@ static ULONG iso_fill(ULONG vo, ULONG n, ULONG size, ULONG empty,
         off += (i == empty) ? 0 : size;
     }
     *bufferLength = off;
-    if (XhciPipeIsoCheck(urb, n, off, XHCI_XFER_MAX_ISO_PACKETS, size) !=
+    if (XhciPipeIsoCheck(urb, n, off, XHCI_XFER_MAX_ISO_PAGE_PACKETS, size) !=
             XHCI_PIPE_OK ||
         !map_chunk(vo, off, sg)) {
         return 0;
@@ -897,6 +900,13 @@ static ULONG iso_fill(ULONG vo, ULONG n, ULONG size, ULONG empty,
 static void iso_request(XHCI_ISO_REQUEST *req, ULONG interval, ULONG mps,
                         ULONG allowed, ULONG now)
 {
+    ULONG b;
+
+    /* Whole, as hcdIsoPublish does: the fields record 13 section 11.8
+     * added start 0, today's behaviour. */
+    for (b = 0; b < sizeof(*req); b++) {
+        ((unsigned char *)req)[b] = 0;
+    }
     req->Iso = &iso_block.Block;
     req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req->DirectionIn = 0;
@@ -1390,6 +1400,78 @@ static void test_iso_start_plan(void)
 }
 
 /*
+ * Record 13 section 11.8, point 4: a pipe's four request blocks allocated
+ * at its own packet bound, a stride apart, and addressed as hcd_io.c's
+ * hcdIsoBlock does (XhciXferIsoBlockAt). Each record's block is filled
+ * whole and built; its neighbours, and the bytes past the last, keep their
+ * sentinel - so a block sized or addressed at another bound than the
+ * stride's shows here.
+ */
+#define STRIDE_SENTINEL 0x5AUL
+static UCHAR stride_mem[4 * 7184 + 64];
+
+static void test_iso_stride(void)
+{
+    static const ULONG bounds[] = { 62, 120, 128 };
+    PUSBPORT_ISO_TRANSFER blk;
+    XHCI_ISO_REQUEST req;
+    ULONG stride;
+    ULONG c;
+    ULONG r;
+    ULONG o;
+    ULONG i;
+    ULONG bad;
+
+    /* By hand: 16 + n x 56, rounded to 8. */
+    CHECK_EQ(XhciXferIsoBlockBytes(62), 3488, "62 packets: 3,488 bytes");
+    CHECK_EQ(XhciXferIsoBlockBytes(120), 6736, "120 packets: 6,736 bytes");
+    CHECK_EQ(XhciXferIsoBlockBytes(128), 7184, "128 packets: 7,184 bytes");
+    CHECK_EQ(XhciXferIsoBlockBytes(0), 0, "0 packets: refused");
+    CHECK_EQ(XhciXferIsoBlockBytes(129), 0, "129 packets: refused");
+    for (c = 0; c < 3; c++) {
+        stride = XhciXferIsoBlockBytes(bounds[c]);
+        for (r = 0; r < 4; r++) {
+            for (i = 0; i < sizeof(stride_mem); i++) {
+                stride_mem[i] = (UCHAR)STRIDE_SENTINEL;
+            }
+            blk = XhciXferIsoBlockAt(stride_mem, r, stride);
+            CHECK((UCHAR *)blk == stride_mem + r * stride, "addressed");
+            /* Filled whole at the bound, as hcdIsoFill writes it. */
+            for (i = 0; i < stride; i++) {
+                ((UCHAR *)blk)[i] = 0;
+            }
+            blk->Signature = USBPORT_ISO_SIGNATURE;
+            blk->NumberOfPackets = bounds[c];
+            for (i = 0; i < bounds[c]; i++) {
+                blk->Packet[i].Length = 32;
+                blk->Packet[i].FrameNumber = 1003 + i;
+                blk->Packet[i].FragmentCount = 1;
+                blk->Packet[i].Fragment0Length = 32;
+                blk->Packet[i].Fragment0AddressLo = 0x00300000UL + i * 32;
+            }
+            iso_request(&req, 3, 32, 0, 1000);
+            req.Iso = blk;
+            req.MaxPackets = bounds[c];
+            req.TdLengths = (bounds[c] > XHCI_XFER_MAX_ISO_PACKETS)
+                                ? iso_lengths : NULL;
+            CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out,
+                                      XHCI_XFER_MAX_ISO_PAGE_TRBS,
+                                      &iso_layout), XHCI_XFER_OK,
+                     "each record's block builds at the bound");
+            CHECK_EQ(iso_layout.TdCount, bounds[c], "every packet read");
+            bad = 0;
+            for (o = 0; o < sizeof(stride_mem); o++) {
+                if ((o < r * stride || o >= (r + 1) * stride) &&
+                    stride_mem[o] != (UCHAR)STRIDE_SENTINEL) {
+                    bad++;
+                }
+            }
+            CHECK_EQ(bad, 0, "the neighbours untouched");
+        }
+    }
+}
+
+/*
  * The block's ceiling. hcd_io.c admits up to XHCI_XFER_MAX_ISO_PACKETS
  * packets and builds into XHCI_XFER_MAX_ISO_TRBS TRBs of scratch, the same
  * number, so a URB at the packet cap fits only while no packet crosses a
@@ -1425,6 +1507,31 @@ static void test_iso_ceiling(void)
                               &iso_layout), XHCI_XFER_ISO_TOO_LARGE,
              "62 FS audio packets that cross two pages: refused as too "
              "large, not truncated");
+
+    /* Record 13 section 11.8: a page's request, 120 packets at the
+     * allowance's bound with the controller's length array, through the
+     * same fill. 120 x 192 = 23040 bytes from page offset 0: four page
+     * crossings (12288 is a packet edge), so 124 TRBs - built; the ring
+     * capacity (120) is what refuses it at the submit, not the build. */
+    CHECK_EQ(iso_fill(0, 120, 192, 120, 1003, 3, &sg, &length), 1,
+             "120 packets filled");
+    iso_request(&req, 3, 192, 0, 1000);
+    req.MaxPackets = 120;
+    req.TdLengths = iso_lengths;
+    CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out, XHCI_XFER_MAX_ISO_PAGE_TRBS,
+                              &iso_layout), XHCI_XFER_OK,
+             "120 packets built at the page bound");
+    CHECK_EQ(iso_layout.TdCount, 120, "120 TDs");
+    CHECK_EQ(iso_layout.TrbCount, 124, "120 TRBs and four crossings");
+    /* 120 x 32 = 3840 bytes in one page: 120 TRBs, a full allowance. */
+    CHECK_EQ(iso_fill(0, 120, 32, 120, 1003, 3, &sg, &length), 1, "filled");
+    iso_request(&req, 3, 32, 0, 1000);
+    req.MaxPackets = 120;
+    req.TdLengths = iso_lengths;
+    CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out, XHCI_XFER_MAX_ISO_PAGE_TRBS,
+                              &iso_layout), XHCI_XFER_OK, "built");
+    CHECK_EQ(iso_layout.TrbCount, 120, "120 TRBs exactly");
+    test_iso_stride();
 }
 
 /*

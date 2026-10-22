@@ -44,6 +44,8 @@
 #define MODE_MISSING    3   /* topology: packet 5 never sent */
 #define MODE_REVERSE    4   /* topology: the last packet first */
 #define MODE_SPLIT      5   /* topology: half the packets per request */
+#define MODE_NOTIFY     6   /* router read: an ERR_CONN notification */
+#define MODE_WRONG      7   /* router read: a header not the route's */
 
 static const unsigned long kUuid[4] = {
     0xa0211100UL, 0x003d0efcUL, 0xffffffffUL, 0xffffffffUL  /* ICM 4.4 [obs] */
@@ -75,6 +77,13 @@ typedef struct FW {
     unsigned long LastApprove[8];
     unsigned long LastApproveWords;
     unsigned long StopClockAtReady; /* the clock stops at this driver ready */
+    int VerMode;                /* a device router's header read */
+    unsigned long VerByte;      /* its ROUTER_CS_4 31:24 */
+    unsigned long DevReads;     /* reads at a route other than 0 */
+    unsigned long DevReadRouteLo;
+    unsigned long DevReadDw3;
+    unsigned long DisconnectInReadUs;   /* the device leaves during the read */
+    const unsigned long *AnnounceUuid;  /* NULL: kUuid */
 } FW;
 
 static FW g_fw;
@@ -165,10 +174,13 @@ static void trDisconnected(unsigned long routeLo, unsigned long delayUs)
 
 static void fwAnnounce(unsigned long delayUs)
 {
+    const unsigned long *uuid = g_fw.AnnounceUuid != NULL ? g_fw.AnnounceUuid
+                                                          : kUuid;
+
     if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
-        trConnected(g_fw.ConnId, g_fw.Approved, 1, kUuid, delayUs, 0);
+        trConnected(g_fw.ConnId, g_fw.Approved, 1, uuid, delayUs, 0);
     } else {
-        arConnected(g_fw.ConnId, g_fw.Approved, 1, 1, kUuid, delayUs);
+        arConnected(g_fw.ConnId, g_fw.Approved, 1, 1, uuid, delayUs);
     }
 }
 
@@ -216,6 +228,42 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
     unsigned long code;
 
     (void)fk;
+    if (pdf == TBT_PDF_READ && words >= 3 &&
+        ((dw[0] & TBT_ROUTE_HI_TOPOLOGY) != 0 || dw[1] != 0)) {
+        /* A device router's header (ICM-PROTOCOL 13.3 [obs], the ORICO
+         * behind Alpine Ridge: 0x2463174c 0x001101c0 0x00000001
+         * 0x80000000 0x200000fe), with the test's version byte at the
+         * route asked. */
+        g_fw.DevReads++;
+        g_fw.DevReadRouteLo = dw[1];
+        g_fw.DevReadDw3 = dw[2];
+        if (g_fw.DisconnectInReadUs != 0) {
+            trDisconnected(dw[1], g_fw.DisconnectInReadUs);
+            g_fw.DisconnectInReadUs = 0;
+            g_fw.Present = 0;
+            return;
+        }
+        if (g_fw.VerMode == MODE_NEVER) {
+            return;
+        }
+        if (g_fw.VerMode == MODE_NOTIFY) {
+            r[0] = dw[0];
+            r[1] = dw[1];
+            r[2] = TBT_EV_ERR_CONN;
+            fakeQueue(TBT_PDF_NOTIFY, r, 3, 100, 0);
+            return;
+        }
+        r[0] = dw[0];
+        r[1] = dw[1];
+        r[2] = dw[2] | (1UL << 19);
+        r[3] = 0x2463174cUL;
+        r[4] = 0x001101c0UL;
+        r[5] = dw[1] + (g_fw.VerMode == MODE_WRONG ? 1UL : 0);
+        r[6] = 0x80000000UL | (dw[0] & 0x00FFFFFFUL);
+        r[7] = (g_fw.VerByte << 24) | 0xfeUL;
+        fakeQueue(TBT_PDF_READ, r, 8, 100, 0);
+        return;
+    }
     if (pdf == TBT_PDF_READ) {
         g_fw.Reads++;
         if (g_fake.NowUs >= g_fw.HoldUntil) {
@@ -2030,6 +2078,355 @@ static void test_resume_budget(void)
     CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 0, "within its budget");
 }
 
+/* Record 21 section 5.3: the generation of an announced router, read
+ * from its ROUTER_CS_4 once per occupancy at the next idle poll. */
+static TBT_ICM_DEVICE *firstDev(void)
+{
+    unsigned long i;
+
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (g_icm.Devices[i].InUse) {
+            return &g_icm.Devices[i];
+        }
+    }
+    return NULL;
+}
+
+static void versionCase(unsigned long byte, unsigned long state,
+                        const char *what)
+{
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = byte;
+    CHECK_EQ(start(), TBT_OK, what);
+    idle(200);
+    CHECK(firstDev() != NULL && firstDev()->VersionState == state, what);
+    CHECK(firstDev() != NULL && firstDev()->Usb4Version == byte, what);
+}
+
+static void test_router_version(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long t0;
+    unsigned long serial;
+    unsigned long k;
+
+    /* Left off (TbtIcmInit's default): nothing is read. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "AR bind, not asked");
+    idle(1000);
+    CHECK_EQ(g_fw.DevReads, 0, "no router read unless asked");
+    setup(GEN_ICL, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "ICL bind, not asked");
+    idle(1000);
+    CHECK_EQ(g_fw.DevReads, 0, "no read unless the driver asks");
+
+    /* Every row reads when asked (the owner, 2026-10-22): the ORICO
+     * behind Alpine Ridge reads 20h [obs], at the route get route gave. */
+    setup(GEN_AR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "AR bind");
+    CHECK_EQ(g_fw.Routes, 1, "get route at the announcement");
+    CHECK_EQ(g_fw.DevReads, 0, "the read not in the event's path");
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 1, "AR: read at the next idle poll");
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "at get route's route");
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_USB4 &&
+              firstDev()->Usb4Version == 0x20,
+          "AR: the ORICO is USB4 1.0");
+    setup(GEN_AR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x02;
+    CHECK_EQ(start(), TBT_OK, "AR bind, the TS3 Plus");
+    idle(200);
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_TBT3,
+          "AR: 02h, the TS3 Plus [obs], Thunderbolt 3");
+    setup(GEN_TR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "TR bind");
+    idle(200);
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "TR: at the event's route");
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_USB4,
+          "TR: USB4");
+    setup(GEN_FR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x02;
+    CHECK_EQ(start(), TBT_OK, "FR bind");
+    idle(200);
+    CHECK_EQ(g_fw.Topos, 1, "FR: the route from the topology query");
+    CHECK_EQ(g_fw.DevReads, 1, "FR: read");
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "FR: at the walked route");
+    CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_TBT3,
+          "FR: major 0");
+    /* FR at depth 2: the read goes to the whole walked route. */
+    g_fw.VerByte = 0x20;
+    arConnected(9, 1, 1, 2, kUuid2, 0);
+    idle(200);
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 2, "FR depth 2: read");
+    CHECK_EQ(g_fw.DevReadRouteLo, 0x0301, "FR depth 2: at route 0x0301");
+    CHECK(TbtIcmDevice(&g_icm, 1) != NULL &&
+              TbtIcmDevice(&g_icm, 1)->VersionState == TBT_ICM_VER_USB4,
+          "FR depth 2: USB4");
+
+    /* AR unrouted (get route never answered): owed, nothing sent, until
+     * the next announcement routes it - the same occupancy. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "AR bind, nothing attached");
+    g_fw.RouteMode = MODE_NEVER;
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(200);
+    idle(1000);
+    CHECK(firstDev() != NULL && !firstDev()->RouteValid, "unrouted");
+    CHECK_EQ(g_fw.DevReads, 0, "no read without a route");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_OWED, "owed");
+    serial = firstDev()->Serial;
+    g_fw.RouteMode = MODE_ANSWER;
+    arConnected(6, 1, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK(firstDev() != NULL && firstDev()->RouteValid &&
+              firstDev()->Serial == serial,
+          "routed by the refresh, the same occupancy");
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 1, "read once routed");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_USB4, "USB4");
+
+    /* AR re-announced through the port's other link: the route is asked
+     * again, the occupancy and its value stand, nothing is read again. */
+    arConnected(7, 1, 2, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.Refreshes, 2, "a refresh");
+    CHECK(firstDev() != NULL && firstDev()->Serial == serial &&
+              firstDev()->Route.Lo == 2,
+          "the same occupancy, re-routed");
+    CHECK_EQ(g_fw.DevReads, 1, "not read again");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_USB4, "the value stands");
+
+    /* The same move while the read is still owed: read at the new route. */
+    setup(GEN_AR, 0, 0);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "AR bind, reads off for now");
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(200);
+    arConnected(6, 1, 2, 1, kUuid, 0);
+    idle(200);
+    CHECK(firstDev() != NULL && firstDev()->RouteValid &&
+              firstDev()->Route.Lo == 2 &&
+              firstDev()->VersionState == TBT_ICM_VER_OWED,
+          "re-routed, still owed");
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 1, "read");
+    CHECK_EQ(g_fw.DevReadRouteLo, 2, "at the route asked again");
+
+    /* USB4 1.0, as the ORICO reads (ICM-PROTOCOL 13.3 [obs]). */
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_fw.DevReads, 0, "never in the event's path: nothing at bind");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_OWED, "owed");
+    CHECK_EQ(actions(act, 8), 1, "the tunnel-up drained first");
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 1, "read at the next idle poll");
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "at the entry's route");
+    CHECK_EQ(g_fw.DevReadDw3 & 0x1FFFUL, 0, "ROUTER_CS_0");
+    CHECK_EQ((g_fw.DevReadDw3 >> TBT_CTL_SIZE_SHIFT) & TBT_CTL_SIZE_MASK, 5,
+             "five DWs");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_USB4, "USB4");
+    CHECK_EQ(firstDev()->Usb4Version, 0x20, "version 20h kept");
+    CHECK_EQ(g_icm.Counters.VersionReads, 1, "counted");
+    CHECK_EQ(g_icm.Counters.VersionFailures, 0, "no failure");
+    idle(1000);
+    CHECK_EQ(g_fw.DevReads, 1, "once per occupancy");
+
+    /* A resume's refresh keeps it (ICM 6.5 [obs]: no reads on that path). */
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(g_icm.Counters.Refreshes, 1, "refreshed");
+    idle(1000);
+    CHECK_EQ(g_fw.DevReads, 1, "nothing read again after the resume");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_USB4, "kept");
+
+    /* Unplug and re-plug: a new occupancy, read afresh. */
+    trDisconnected(1, 0);
+    idle(200);
+    CHECK(firstDev() == NULL, "gone");
+    g_fw.VerByte = 0x02;
+    g_fw.ConnId++;
+    trConnected(g_fw.ConnId, 1, 1, kUuid, 0, 0);
+    idle(200);
+    CHECK(firstDev() != NULL &&
+              firstDev()->VersionState == TBT_ICM_VER_OWED,
+          "the poll that took the announcement read nothing for it");
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 2, "the new occupancy read");
+    CHECK(firstDev() != NULL &&
+              firstDev()->VersionState == TBT_ICM_VER_TBT3,
+          "02h: major 0, a Thunderbolt 3 router");
+
+    versionCase(0x40, TBT_ICM_VER_USB4, "40h: USB4 2.0");
+    versionCase(0x21, TBT_ICM_VER_USB4, "21h: USB4 1.1");
+    versionCase(0x10, TBT_ICM_VER_TBT3, "10h: major 0");
+    versionCase(0x60, TBT_ICM_VER_UNKNOWN, "60h: a reserved major");
+    CHECK_EQ(g_icm.Counters.VersionFailures, 1, "a reserved major counted");
+
+    /* An unapproved router is read as well (ICM 6.4 [obs]). */
+    setup(GEN_ICL, 1, 0);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "bind, unapproved");
+    idle(200);
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_USB4, "read unapproved");
+    CHECK(!firstDev()->Approved, "and left unapproved");
+
+    /* A header that is not the route's: not known. */
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    g_fw.VerMode = MODE_WRONG;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    idle(200);
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_UNKNOWN, "not the route's");
+    CHECK_EQ(g_icm.Counters.VersionFailures, 1, "counted");
+
+    /* No answer: one attempt of 1 s, not known; then no read until the
+     * rings restart, so a late answer can never pass for a replacement's
+     * at the same route. */
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerMode = MODE_NEVER;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    t0 = g_fake.NowUs;
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_fw.DevReads, 1, "one attempt, no retry");
+    CHECK(g_fake.NowUs - t0 >= 1000000UL && g_fake.NowUs - t0 < 1500000UL,
+          "bounded by its own 1 s, not the command timeout");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_UNKNOWN, "not known");
+    CHECK(g_icm.VersionStopped, "the reads stopped");
+    idle(1000);
+    CHECK_EQ(g_fw.DevReads, 1, "not retried for this occupancy");
+    g_fw.VerMode = MODE_ANSWER;
+    g_fw.VerByte = 0x20;
+    trDisconnected(1, 0);
+    g_fw.ConnId++;
+    trConnected(g_fw.ConnId, 1, 1, kUuid2, 10, 0);
+    idle(1000);
+    CHECK(firstDev() != NULL && firstDev()->Uuid[0] == kUuid2[0],
+          "replaced at the same route");
+    CHECK_EQ(g_fw.DevReads, 1, "no read while an answer may be late");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_OWED,
+             "the replacement not known meanwhile");
+    serial = firstDev()->Serial;
+    TbtIcmSuspend(&g_icm);
+    g_fw.Present = 1;
+    g_fw.AnnounceUuid = kUuid2;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume: the rings restart");
+    CHECK(!g_icm.VersionStopped, "a restarted ring ends the stop");
+    CHECK(firstDev() != NULL && firstDev()->Serial == serial,
+          "the same occupancy, refreshed");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_OWED,
+             "still owed through the resume");
+    CHECK_EQ(g_fw.DevReads, 1, "nothing read inside the resume");
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 2, "read after the restart");
+    CHECK(firstDev() != NULL && firstDev()->Serial == serial &&
+              firstDev()->VersionState == TBT_ICM_VER_USB4,
+          "that occupancy now known");
+
+    /* A driver ready whose host-router poll was never answered: one of
+     * its requests may still draw a notification, so no router read. */
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    g_fw.HoldUs = 60000000UL;
+    CHECK_EQ(start(), TBT_OK, "bind, the poll unanswered");
+    CHECK(!g_icm.HostPollOk, "recorded");
+    idle(70000);
+    CHECK(firstDev() != NULL, "the device announced after the hold");
+    CHECK_EQ(g_fw.DevReads, 0, "and not read");
+
+    /* Maple Ridge (the Titan Ridge row, reading): an unapproved device
+     * announced during an unanswered read is approved after it, the read
+     * costing at most its 1 s. */
+    setup(GEN_TR, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerMode = MODE_NEVER;
+    CHECK_EQ(start(), TBT_OK, "TR bind");
+    actions(act, 8);
+    trConnected(9, 0, 3, kUuid2, 100000, 0);
+    t0 = g_fake.NowUs;
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 1, "the approve sent in the same poll");
+    CHECK(g_fake.NowUs - t0 < 1000000UL + 2 * 358000UL + 100000UL,
+          "behind a read of at most 1 s");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "both in the table");
+
+    /* A request-error notification: not known at once. */
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerMode = MODE_NOTIFY;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    t0 = g_fake.NowUs;
+    TbtIcmPoll(&g_icm);
+    CHECK(g_fake.NowUs - t0 < 100000UL, "ended by the notification");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_UNKNOWN, "not known");
+
+    /* The device leaves during the read: the disconnect acts at once and
+     * no answer is kept. */
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.DisconnectInReadUs = 1000;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    TbtIcmPoll(&g_icm);
+    CHECK(firstDev() == NULL, "the disconnect acted inside the read");
+    CHECK_EQ(actions(act, 8), 1, "its tunnel-down");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "tunnel down");
+
+    /* Two routers: the oldest first, one read a poll; an announcement
+     * arriving during the read is queued and handled after it. */
+    setup(GEN_ICL, 1, 1);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    trConnected(9, 1, 3, kUuid2, 50, 0);
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_fw.DevReads, 1, "one read a poll");
+    CHECK_EQ(g_fw.DevReadRouteLo, 1, "the older entry first");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "the announcement in the read handled");
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_fw.DevReads, 2, "the next poll");
+    CHECK_EQ(g_fw.DevReadRouteLo, 3, "the newer entry");
+
+    /* Two owed at once, the older in the higher slot, before and across
+     * the serial's wrap (0xFFFFFFFF, then 1: 0 is never a serial). */
+    for (k = 0; k < 2; k++) {
+        setup(GEN_ICL, 1, 1);
+        g_fw.VerByte = 0x20;
+        CHECK_EQ(start(), TBT_OK, "bind, reads not yet asked");
+        trConnected(9, 1, 3, kUuid2, 0, 0);
+        idle(200);
+        CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "two entries, both owed");
+        CHECK(g_icm.Devices[1].InUse && g_icm.Devices[1].Route.Lo == 3,
+              "route 3 in slot 1");
+        g_icm.Devices[1].Serial = k == 0 ? 5UL : 0xFFFFFFFFUL;
+        g_icm.Devices[0].Serial = k == 0 ? 6UL : 1UL;
+        TbtIcmSetReadVersion(&g_icm, TRUE);
+        TbtIcmPoll(&g_icm);
+        CHECK_EQ(g_fw.DevReadRouteLo, 3,
+                 k == 0 ? "the older, in the higher slot, first"
+                        : "the older across the wrap first");
+        TbtIcmPoll(&g_icm);
+        CHECK_EQ(g_fw.DevReadRouteLo, 1, "then the newer");
+        CHECK_EQ(g_fw.DevReads, 2, "one a poll");
+    }
+}
+
 int main(void)
 {
     test_frames_ar();
@@ -2059,6 +2456,7 @@ int main(void)
     test_resume_budget();
     test_lost_and_recover();
     test_unsent_and_stalled();
+    test_router_version();
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

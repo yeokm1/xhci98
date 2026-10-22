@@ -21,17 +21,18 @@
  * UAS the VID/PID hardware ids stay, so a device usbstor.inf lists by hand
  * still binds usbstor.sys - the residual case roadmap 31-A.3 records rather
  * than fights. A REFUSED interface (no transport it can run) shows no
- * VID/PID-derived hardware id: its one hardware id is
- * USB\XHCI98_NOXPORT&VID_v&PID_p&REV_r[&MI_nn], a project-owned form no
- * INF names, and it has no compatible ids. Its device id is still the
- * ordinary USB\VID_v&PID_p[&MI_nn] (hcd_pdo.c answers BusQueryDeviceID
- * outside this policy), and Windows 98 SE puts that into the devnode's
- * HardwareID value beside the NOXPORT id (read 2026-10-13, task 38.2,
- * under NUSB 3.3; the wizard found no driver). Whether a VID/PID-only INF
- * line binds a refused device through it, whether a serial-number device
- * returns to the devnode its working form installed (same device and
- * instance id), and NT's behaviour are unread: design record 13 section
- * 10.7.1, roadmap task NOX.1 (deferred).
+ * VID/PID-derived id at all: its hardware ids are
+ * USB\XHCI98_NOXPORT&VID_v&PID_p&REV_r[&MI_nn] and
+ * USB\XHCI98_NOXPORT&VID_v&PID_p[&MI_nn], a project-owned form no INF
+ * names, it has no compatible ids, and its device id is the second of those
+ * (roadmap-usb4 task 43.15). Until 43.15 the device id kept the ordinary
+ * USB\VID_v&PID_p[&MI_nn] form, and Windows 98 SE and ME add the device id
+ * to the devnode's HardwareID value and match INF lines against it: an INF
+ * whose only line was USB\VID_v&PID_p bound a refused device on 98 SE, with
+ * and without NUSB 3.3, and on ME, silently once that INF was installed
+ * (runtime, 2026-10-22, task 43.14; design record 13 section 10.7.1). A
+ * different device id also gives the refused form a devnode of its own, apart
+ * from the one a serial-number device's working form installed.
  *
  * The decision:
  *   - no UAS alternate on the interface: XHCI_XPORT_NONE, the ids as
@@ -130,19 +131,24 @@ ULONG XhciXportChoose(const UCHAR *config, ULONG length, ULONG iface,
 
 #define XHCI_XPORT_ID_HARDWARE   1UL
 #define XHCI_XPORT_ID_COMPATIBLE 2UL
+#define XHCI_XPORT_ID_DEVICE     3UL
 
 /*
- * A hardware- or compatible-id answer under `x` for the device with the
- * 18-byte descriptor `device`; `mi` is the function's first interface, or
- * XHCI_XPORT_NO_MI for a device PDO. ASCII multi-string, upper-case hex,
- * section 10.7's forms: hardware USB\VID_v&PID_p&REV_r[&MI_nn] and, when
- * x->ShortHardwareId, USB\VID_v&PID_p[&MI_nn]; compatible
- * USB\Class_cc&SubClass_ss&Prot_pp, USB\Class_cc&SubClass_ss, USB\Class_cc.
- * A refused interface: the one hardware id
- * XHCI_XPORT_REFUSED_PREFIX "VID_v&PID_p&REV_r[&MI_nn]", and
- * XHCI_XPORT_NO_IDS (*used 0) for its compatible ids - the PDO answers that
- * query with none. *used is the whole answer's length even when it did not
- * fit.
+ * A hardware-, compatible- or device-id answer under `x` for the device with
+ * the 18-byte descriptor `device`; `mi` is the function's first interface,
+ * or XHCI_XPORT_NO_MI for a device PDO. Upper-case hex, section 10.7's
+ * forms. Hardware and compatible ids are an ASCII multi-string: hardware
+ * USB\VID_v&PID_p&REV_r[&MI_nn] and, when x->ShortHardwareId,
+ * USB\VID_v&PID_p[&MI_nn]; compatible USB\Class_cc&SubClass_ss&Prot_pp,
+ * USB\Class_cc&SubClass_ss, USB\Class_cc. A refused interface: the hardware
+ * ids XHCI_XPORT_REFUSED_PREFIX "VID_v&PID_p&REV_r[&MI_nn]" and
+ * XHCI_XPORT_REFUSED_PREFIX "VID_v&PID_p[&MI_nn]", and XHCI_XPORT_NO_IDS
+ * (*used 0) for its compatible ids - the PDO answers that query with none.
+ * The device id is one NUL-terminated string, and only a refused interface
+ * has one here: XHCI_XPORT_REFUSED_PREFIX "VID_v&PID_p[&MI_nn]" (task
+ * 43.15); any other transport gets XHCI_XPORT_NO_IDS (*used 0), its device
+ * id being the PDO's ordinary one. *used is the whole answer's length even
+ * when it did not fit.
  */
 #define XHCI_XPORT_REFUSED_PREFIX "USB\\XHCI98_NOXPORT&"
 

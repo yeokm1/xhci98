@@ -3821,6 +3821,8 @@ static const char *ej_why_not(int u)
     return NULL;
 }
 
+static int ej_single(const WALK *w, int u);
+
 /* Every devnode the request holds is listed; a list that does not fit is
  * refused, never shortened (nothing is stopped that was not shown). */
 static int ej_confirm(HWND owner, const EJREQ *q)
@@ -3855,6 +3857,18 @@ static int ej_confirm(HWND owner, const EJREQ *q)
         tr_printf(&t, "    %s\n", n >= 0 ? dn_name(&gw.N[n]) : q->Devs[i]);
     }
     tr_put(&t, "\nClose any program that uses them first.");
+    {
+        /* Roadmap 43.8: the reminder before the stop, not after it. */
+        int u = walk_find_id(&gw, q->UnitId);
+        int k = u >= 0 && gw.N[u].Parent >= 0 ? gw.N[gw.N[u].Parent].PortNhi
+                                              : -1;
+        if (inst_eject_remind(u >= 0 && ej_single(&gw, u),
+                              k >= 0 && nhi[k].HaveQ
+                                  ? inst_port_usb3(nhi[k].Q.Rec, q->PortBdf)
+                                  : CM_ST_TUN_UNKNOWN)) {
+            tr_printf(&t, "\n%s", inst_eject_remind_text());
+        }
+    }
     if (t.Overflow) {
         MessageBoxA(owner, "The list of devices to stop is too long to show, so "
                     "nothing is stopped from here.", "Stop a Thunderbolt device",
@@ -5078,7 +5092,7 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         tr_printf(&t, "%s\n", tunnelNote);
     }
     u = ej_after(q, single);
-    tr_printf(&t, "\n%s", inst_unplug_text(u));
+    tr_printf(&t, "\n%s", inst_unplug_text(u, INST_TOOL_TREE));
     code = u == INST_UNPLUG_RESTARTED ? INST_EXIT_STEPS : INST_EXIT_DONE;
 out:
     ej_unlock(m);

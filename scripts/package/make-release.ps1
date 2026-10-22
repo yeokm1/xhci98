@@ -397,8 +397,41 @@ long as that revision is in it.
 A SHA256.TXT-form file standing in for the allowlist of the seven, for
 test-package.ps1's stand-ins. Refused with the repository's own releases\.
 
+.PARAMETER CheckOnly
+Run the cut's text, readme and staleness checks and nothing else (roadmap-usb4
+task 43.9; owner, 2026-10-20, after the 3.1.0.0 cut stopped twice on text
+that only its last steps read). Nothing is built, packaged, signed or
+published, no key is asked for, and nothing is written under releases\ or
+-UploadDir: the readmes and notices are rendered into a private temporary
+directory, which is removed at the end. The binaries are read where the build
+left them (src\obj*, the tools' directories, src\stor98\out), so run it after
+the builds and before the cut, with the cut's own arguments but -TestSignPfx.
+
+What it runs is the cut's own code, in the cut's order: the changelog entry,
+the draft markers and the Stor98 declaration of the release notes; each
+INF's media layout; for each flavour and architecture, each driver's version,
+flavour marker and source stamp, and whether the gated build's record admits
+the binaries and the tree's HEAD (a warning: a cut does not read that record,
+make-package.ps1 -SignOnly does); the bundled Stor98 and the driver pack; each
+tool's freshness against its sources, its version and its other checks; and
+every generated text - the readme, each tool's readme and NOTICE.TXT - at 78
+columns in printable ASCII, with no placeholder or draft marker left. Where
+the cut stops at its first refusal, this notes each refusal and goes on, so
+one run lists them all; a missing build or tool still ends the run, saying
+what to build. What it does not run is what needs a package or the key: the
+host test suite and the import gates (make-package.ps1's), the staged
+package's checks, the test signatures and the upload set. The sizes the
+readme prints are the unsigned builds', so an x64 line can be a few bytes
+shorter there than in the cut.
+
+Exit 0 when every check passed, 1 when any refused. Refused with
+-UploadSetOnly and with -TestSignPfx.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
+
+.EXAMPLE
+powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -CheckOnly
 
 .EXAMPLE
 powershell -File scripts\package\make-release.ps1 -Version 1.0.0.0 -Force
@@ -438,7 +471,8 @@ param(
     [switch]$NoStor98,
     [switch]$NoDriverPack,
     [string]$DriverPackRoot = "",
-    [string]$DriverPackAllowlist = ""
+    [string]$DriverPackAllowlist = "",
+    [switch]$CheckOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -499,6 +533,25 @@ $versionHeader = Join-Path $repo "src\xhci_version.h"
 if ($PackageRoot -eq "") { $PackageRoot = Join-Path $repo "out" }
 if ($UploadDir -eq "") { $UploadDir = Join-Path $repo "out" }
 
+# Each refusal -CheckOnly notes rather than stops on, in the order met; and
+# the tree's state and each recorded commit's advance to it, read once
+# (Write-GatedRecordState).
+$script:cutCheckFaults = New-Object System.Collections.ArrayList
+$script:checkOnlyTree = $null
+$script:checkOnlyAdvance = @{}
+$checkOnlyRoot = ""
+
+function Stop-CutCheck {
+    # A refusal whose failure leaves nothing later in the run unusable: a
+    # stale binary, a text that breaks a rule. A cut throws it, as it always
+    # has; -CheckOnly notes it, prints it and goes on, so one run lists every
+    # one (task 43.9). The caller returns or skips what depends on it.
+    param([string]$Message)
+    if (-not $CheckOnly) { throw $Message }
+    [void]$script:cutCheckFaults.Add($Message)
+    Write-Err $Message
+}
+
 function Write-GeneratedText {
     <#
     Every plain-text file this script generates goes through here, and there
@@ -529,20 +582,26 @@ function Write-GeneratedText {
 
     $name = Split-Path -Leaf $Path
 
+    # Its path in the release, since every tool's readme is called readme.txt
+    # and a -CheckOnly run reports them all.
+    if ($null -ne $destRoot -and $Path.StartsWith($destRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $name = $Path.Substring($destRoot.Length + 1)
+    }
     $overLong = @($Lines | Where-Object { $_.Length -gt 78 })
     if ($overLong.Count -gt 0) {
-        throw ("{0} has {1} line(s) past 78 columns, the first being:`n{2}" -f `
-               $name, $overLong.Count, $overLong[0])
+        Stop-CutCheck ("{0} has {1} line(s) past 78 columns, the first being:`n{2}" -f `
+                       $name, $overLong.Count, $overLong[0])
     }
 
-    for ($i = 0; $i -lt $Lines.Count; $i++) {
+    :lines for ($i = 0; $i -lt $Lines.Count; $i++) {
         $line = $Lines[$i]
         for ($c = 0; $c -lt $line.Length; $c++) {
             $code = [int][char]$line[$c]
             if ($code -lt 0x20 -or $code -gt 0x7E) {
                 if ($code -eq 9) { continue }
-                throw ("{0} line {1} column {2} is not printable ASCII (U+{3:X4}); Write-AsciiFile would replace it with a question mark. The line reads:`n{4}" -f `
-                       $name, ($i + 1), ($c + 1), $code, $line)
+                Stop-CutCheck ("{0} line {1} column {2} is not printable ASCII (U+{3:X4}); Write-AsciiFile would replace it with a question mark. The line reads:`n{4}" -f `
+                               $name, ($i + 1), ($c + 1), $code, $line)
+                break lines
             }
         }
     }
@@ -1393,10 +1452,11 @@ function Assert-TakesSharedVersion {
     $line = (Get-Content -LiteralPath $Path) |
         Where-Object { $_ -match ('^\s*#define\s+' + [regex]::Escape($Macro) + '\s') } | Select-Object -First 1
     if ($null -eq $line) {
-        throw "'$Path' has no $Macro at all; the tool's version cannot be checked against the release version."
+        Stop-CutCheck "'$Path' has no $Macro at all; the tool's version cannot be checked against the release version."
+        return
     }
     if ($line -notmatch 'XHCI_VER_STR') {
-        throw @"
+        Stop-CutCheck @"
 '$Path' declares $Macro as its own value:
   $($line.Trim())
 Since task 14.1.10 the version is edited in src\xhci_version.h and nowhere else,
@@ -1419,7 +1479,7 @@ function Assert-ToolFileVersion {
     $v = [version]$Version
     $want = "{0}.{1}.{2}.{3}" -f $v.Major, $v.Minor, [math]::Max($v.Build, 0), [math]::Max($v.Revision, 0)
     if ($got -ne $want) {
-        throw @"
+        Stop-CutCheck @"
 '$Path' carries the file version $got in its version resource, but this release is $want.
 XHCIINST installs the tool over an installed one only when this number is newer,
 so the two must agree. Rebuild the tool against src\xhci_version.h.
@@ -1908,15 +1968,15 @@ function Assert-UasPublished {
     }
     $info = (Get-Item -LiteralPath $Sys).VersionInfo
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
-        throw "the UAS binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+        Stop-CutCheck "the UAS binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
     if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        throw "the UAS binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        throw "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhciuas.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -1926,7 +1986,7 @@ function Assert-UasPublished {
         Assert-TestSigned -Sys $Sys -BuiltSys $builtSys -Label "$($Leg.Dir)\xhciuas.sys"
     } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
-        throw "the UAS binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
     }
     $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
     $savedEap = $ErrorActionPreference
@@ -1939,7 +1999,7 @@ function Assert-UasPublished {
         $ErrorActionPreference = $savedEap
     }
     if ($stampCode -eq 1) {
-        throw @"
+        Stop-CutCheck @"
 the UAS binary about to be published as $($Leg.Dir)\ was built from sources this
 tree no longer holds:
 $($stampOut -join "`n")
@@ -1947,16 +2007,17 @@ Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
 "@
     } elseif ($stampCode -eq 2) {
         if (-not $AllowUnstampedDriver) {
-            throw @"
+            Stop-CutCheck @"
 no source stamp beside the $Flavor UAS binary in $ObjRoot, so this script
 cannot tell whether src\uas still reproduces it. Rebuild it ($rebuild), which
 writes the stamp as it goes; or, for a binary that must ship unstamped, pass
 -AllowUnstampedDriver, as for xhci98.sys.
 "@
+        } else {
+            Write-Warn "no source stamp beside the $Flavor UAS binary, and -AllowUnstampedDriver was passed."
         }
-        Write-Warn "no source stamp beside the $Flavor UAS binary, and -AllowUnstampedDriver was passed."
     } elseif ($stampCode -ne 0) {
-        throw "scripts\source-stamp.ps1 -Driver xhciuas -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+        Stop-CutCheck "scripts\source-stamp.ps1 -Driver xhciuas -Check '$ObjRoot' failed: $($stampOut -join "`n")"
     } else {
         Write-Ok "$($Leg.Id) UAS binary matches the sources in src\uas"
     }
@@ -1978,15 +2039,15 @@ function Assert-CmPublished {
     }
     $info = (Get-Item -LiteralPath $Sys).VersionInfo
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
-        throw "the connection manager binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+        Stop-CutCheck "the connection manager binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
     if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        throw "the connection manager binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        throw "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcicm.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -1996,7 +2057,7 @@ function Assert-CmPublished {
         Assert-TestSigned -Sys $Sys -BuiltSys $builtSys -Label "$($Leg.Dir)\xhcicm.sys"
     } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
-        throw "the connection manager binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
     }
     $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
     $savedEap = $ErrorActionPreference
@@ -2009,7 +2070,7 @@ function Assert-CmPublished {
         $ErrorActionPreference = $savedEap
     }
     if ($stampCode -eq 1) {
-        throw @"
+        Stop-CutCheck @"
 the connection manager binary about to be published as $($Leg.Dir)\ was built from sources this
 tree no longer holds:
 $($stampOut -join "`n")
@@ -2017,16 +2078,17 @@ Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
 "@
     } elseif ($stampCode -eq 2) {
         if (-not $AllowUnstampedDriver) {
-            throw @"
+            Stop-CutCheck @"
 no source stamp beside the $Flavor connection manager binary in $ObjRoot, so this script
 cannot tell whether src\cm still reproduces it. Rebuild it ($rebuild), which
 writes the stamp as it goes; or, for a binary that must ship unstamped, pass
 -AllowUnstampedDriver, as for xhci98.sys.
 "@
+        } else {
+            Write-Warn "no source stamp beside the $Flavor connection manager binary, and -AllowUnstampedDriver was passed."
         }
-        Write-Warn "no source stamp beside the $Flavor connection manager binary, and -AllowUnstampedDriver was passed."
     } elseif ($stampCode -ne 0) {
-        throw "scripts\source-stamp.ps1 -Driver xhcicm -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+        Stop-CutCheck "scripts\source-stamp.ps1 -Driver xhcicm -Check '$ObjRoot' failed: $($stampOut -join "`n")"
     } else {
         Write-Ok "$($Leg.Id) connection manager binary matches the sources in src\cm"
     }
@@ -2048,15 +2110,15 @@ function Assert-HelperPublished {
     }
     $info = (Get-Item -LiteralPath $Sys).VersionInfo
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
-        throw "the x86 helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+        Stop-CutCheck "the x86 helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
     if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        throw "the x86 helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        throw "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcihlpr.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2064,7 +2126,7 @@ function Assert-HelperPublished {
     }
     if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
-        throw "the x86 helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
     }
     $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
     $savedEap = $ErrorActionPreference
@@ -2077,7 +2139,7 @@ function Assert-HelperPublished {
         $ErrorActionPreference = $savedEap
     }
     if ($stampCode -eq 1) {
-        throw @"
+        Stop-CutCheck @"
 the x86 helper about to be published as $($Leg.Dir)\ was built from sources this
 tree no longer holds:
 $($stampOut -join "`n")
@@ -2085,18 +2147,61 @@ Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
 "@
     } elseif ($stampCode -eq 2) {
         if (-not $AllowUnstampedDriver) {
-            throw @"
+            Stop-CutCheck @"
 no source stamp beside the $Flavor x86 helper in $ObjRoot, so this script
 cannot tell whether src\hlpr still reproduces it. Rebuild it ($rebuild), which
 writes the stamp as it goes; or, for a binary that must ship unstamped, pass
 -AllowUnstampedDriver, as for xhci98.sys.
 "@
+        } else {
+            Write-Warn "no source stamp beside the $Flavor x86 helper, and -AllowUnstampedDriver was passed."
         }
-        Write-Warn "no source stamp beside the $Flavor x86 helper, and -AllowUnstampedDriver was passed."
     } elseif ($stampCode -ne 0) {
-        throw "scripts\source-stamp.ps1 -Driver xhcihlpr -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+        Stop-CutCheck "scripts\source-stamp.ps1 -Driver xhcihlpr -Check '$ObjRoot' failed: $($stampOut -join "`n")"
     } else {
         Write-Ok "$($Leg.Id) x86 helper matches the sources in src\hlpr"
+    }
+}
+
+function Write-GatedRecordState {
+    # -CheckOnly: whether the gated build's record of one leg admits its
+    # binaries and the tree as it is (make-package.ps1 -SignOnly's test,
+    # with task 43.9's newer HEAD), said as a warning or an OK and never a
+    # refusal: a cut runs every gate itself and does not read the record.
+    # What it tells the person about to cut is whether the build in place is
+    # the gated build of this tree, so that -SignOnly would sign it as is.
+    param([object]$Leg, [hashtable]$Binaries)
+    $path = Get-GatedManifestPath -Repo $repo -Arch $Leg.PkgArch -Flavor $Leg.Flavor
+    $rebuild = "scripts\build-driver.cmd $($Leg.Flavor)" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Warn ("{0}: no gated build record at '{1}' ({2} writes it)" -f $Leg.Id, $path, $rebuild)
+        return
+    }
+    try {
+        $m = ConvertFrom-GatedManifest -Text ([System.IO.File]::ReadAllText($path))
+    } catch {
+        Write-Warn ("{0}: '{1}' is not a gated build record this script can read: {2}" -f $Leg.Id, $path, $_.Exception.Message)
+        return
+    }
+    if ($null -eq $script:checkOnlyTree) { $script:checkOnlyTree = Get-GitTreeState -Repo $repo }
+    $tree = $script:checkOnlyTree
+    $advance = $null
+    if ($tree.Head -ne "none" -and $m.Commit -ne $tree.Head.ToLowerInvariant()) {
+        if (-not $script:checkOnlyAdvance.ContainsKey($m.Commit)) {
+            $script:checkOnlyAdvance[$m.Commit] = Get-GatedHeadAdvance -Repo $repo -From $m.Commit -To $tree.Head
+        }
+        $advance = $script:checkOnlyAdvance[$m.Commit]
+    }
+    $why = Get-GatedManifestFault -Manifest $m -Arch $Leg.PkgArch -Flavor $Leg.Flavor -Binaries $Binaries `
+        -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence) -Advance $advance
+    if ($why -ne "") {
+        Write-Warn ("{0}: the gated build record does not admit this build and tree: {1}. A cut runs every gate and does not need it; make-package.ps1 -SignOnly would refuse until {2} runs again." -f `
+            $Leg.Id, $why, $rebuild)
+    } elseif ($null -ne $advance) {
+        Write-Ok ("{0}: the gated build record admits these binaries; HEAD is {1} commit(s) past its commit {2}, none touching a build input" -f `
+            $Leg.Id, $advance.Commits, $m.Commit.Substring(0, 8))
+    } else {
+        Write-Ok ("{0}: the gated build record admits these binaries at HEAD {1}" -f $Leg.Id, $m.Commit.Substring(0, 8))
     }
 }
 
@@ -2690,6 +2795,15 @@ does not write to releases\ at all, so there is nothing for -Force to overwrite.
 If what you want really is to re-cut the published version, drop -UploadSetOnly.
 "@
     }
+    if ($CheckOnly -and $UploadSetOnly) {
+        throw "-CheckOnly runs a cut's checks without the cut, and -UploadSetOnly rebuilds an already published release's download: give one."
+    }
+    if ($CheckOnly -and $TestSignPfx -ne "") {
+        throw "-CheckOnly signs nothing and asks for no key: drop -TestSignPfx. The test signatures are checked by the cut itself."
+    }
+    if ($CheckOnly) {
+        Write-Step "-CheckOnly: the cut's text, readme and staleness checks; nothing is built, signed or published"
+    }
 
     # --- a TEST build: labelled in the readme, never under releases\ --------
     #
@@ -2751,6 +2865,8 @@ under the git-ignored out\, holding a history.md that carries the build's entry.
         $testSignPassword = Get-TestSignPassword
         $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
         Write-Ok ("x64 binaries will be signed by the project test certificate {0}" -f $testSignCert.Thumbprint)
+    } elseif ($CheckOnly -and $Arch -contains "x64") {
+        Write-Warn "-CheckOnly: no key, so the x64 test signatures are not checked here; the cut checks them"
     } elseif (-not $UploadSetOnly -and $Arch -contains "x64") {
         throw @"
 this cut publishes x64 directories and was given no test-signing key.
@@ -2771,14 +2887,26 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
     # project's drivers (task 42-A.30). make-package.ps1 verifies it again
     # for each release leg; this run verifies it once up front for every
     # architecture it publishes, so a missing or stale build costs nothing.
+    # -CheckOnly notes a Stor98 refusal and goes on without it; the release
+    # notes' declaration is then not checked against a build it could not see.
+    $stor98Refused = $false
     if (-not $NoStor98 -and -not $UploadSetOnly -and $Flavor -contains "release") {
         $s98Arches = @($Arch | ForEach-Object { if ($_ -eq "x64") { "amd64" } else { "x86" } })
-        $stor98 = Resolve-Stor98Build -Repo $repo -Arch $s98Arches -HeaderPath (Join-Path $repo "src\cm\stor98cm.h")
-        Assert-Stor98SettingsTable -ReadmePath (Join-Path $stor98.Dir "docs\package-readme.txt") -Version $stor98.Version
-        Write-Ok ("Stor98 {0}: its readme's SETTINGS table is the one the installer's Stor98 rows were checked against" -f `
-            $stor98.Version)
-        Write-Ok ("Stor98 {0} built from src\stor98 for {1}: version, flavour marker, imports, source stamp and INFs checked" -f `
-            $stor98.Version, ($s98Arches -join " and "))
+        try {
+            $stor98 = Resolve-Stor98Build -Repo $repo -Arch $s98Arches -HeaderPath (Join-Path $repo "src\cm\stor98cm.h")
+            Assert-Stor98SettingsTable -ReadmePath (Join-Path $stor98.Dir "docs\package-readme.txt") -Version $stor98.Version
+        } catch {
+            if (-not $CheckOnly) { throw }
+            Stop-CutCheck $_.Exception.Message
+            $stor98 = $null
+            $stor98Refused = $true
+        }
+        if ($null -ne $stor98) {
+            Write-Ok ("Stor98 {0}: its readme's SETTINGS table is the one the installer's Stor98 rows were checked against" -f `
+                $stor98.Version)
+            Write-Ok ("Stor98 {0} built from src\stor98 for {1}: version, flavour marker, imports, source stamp and INFs checked" -f `
+                $stor98.Version, ($s98Arches -join " and "))
+        }
     }
 
     # --- NUSB's 98 SE storage files, from the driver pack -------------------
@@ -2804,10 +2932,18 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
     if ($DriverPackRoot -eq "") { $DriverPackRoot = Get-DefaultDriverPackRoot }
     if (-not $NoDriverPack -and -not $UploadSetOnly -and $Arch -contains "x86") {
         $driverPackDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-drvpack-" + [System.IO.Path]::GetRandomFileName())
-        $driverPack = Export-DriverPack -Root $DriverPackRoot -Revision "HEAD" -Dest $driverPackDir -Allowlist $driverPackAllow
-        $driverPackIncluded = $true
-        Write-Ok ("driver pack: usb-wdm-nonfree {0}, its seven storage files the allowlisted bytes, for the download's {1}\" -f `
-            $driverPack.Revision, $script:DriverPackFolder)
+        try {
+            $driverPack = Export-DriverPack -Root $DriverPackRoot -Revision "HEAD" -Dest $driverPackDir -Allowlist $driverPackAllow
+        } catch {
+            if (-not $CheckOnly) { throw }
+            Stop-CutCheck $_.Exception.Message
+            $driverPack = $null
+        }
+        if ($null -ne $driverPack) {
+            $driverPackIncluded = $true
+            Write-Ok ("driver pack: usb-wdm-nonfree {0}, its seven storage files the allowlisted bytes, for the download's {1}\" -f `
+                $driverPack.Revision, $script:DriverPackFolder)
+        }
     }
     # **None of the seven is ever tracked.** A cut refuses while any of their
     # names is under releases\ or among this repository's tracked files,
@@ -2826,7 +2962,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             }
         }
         if ($trackedHits.Count -gt 0) {
-            throw @"
+            Stop-CutCheck @"
 NUSB 3.3's storage files are in the download only, never in this repository
 (docs\contributing\legal-provenance.md section 5), and these carry their names:
   - $(@($trackedHits | Sort-Object -Unique) -join "`n  - ")
@@ -3049,7 +3185,7 @@ Name a checkout holding that revision with -DriverPackRoot.
     Write-Step ("Release {0} -> {1}" -f $Version, $finalRoot)
 
     if ((Test-Path -LiteralPath $finalRoot) -and -not $Force) {
-        throw @"
+        Stop-CutCheck @"
 '$finalRoot' already exists.
 A published version is meant to be immutable: re-cutting one is how two
 different binaries end up both having been called $Version. Bump the version, or
@@ -3072,10 +3208,20 @@ pass -Force if this version was never published.
     # So the run assembles into a sibling staging directory and the destination
     # is replaced only after every gate has passed. A crash leaves the staging
     # directory behind and the published one untouched; the next run clears it.
-    $destRoot = Join-Path $ReleasesDir (".staging-" + $Version)
-    if (Test-Path -LiteralPath $destRoot) {
-        Write-Warn ("clearing a leftover staging directory: {0}" -f $destRoot)
-        Remove-Item -LiteralPath $destRoot -Recurse -Force
+    #
+    # -CheckOnly renders into a private directory of its own instead and
+    # never writes under -ReleasesDir; the finally block removes it.
+    if ($CheckOnly) {
+        $destRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-checkonly-" + [System.IO.Path]::GetRandomFileName())
+        $checkOnlyRoot = $destRoot
+        Ensure-Directory $destRoot
+        Write-Ok ("the release's texts are rendered into {0}, which is removed at the end" -f $destRoot)
+    } else {
+        $destRoot = Join-Path $ReleasesDir (".staging-" + $Version)
+        if (Test-Path -LiteralPath $destRoot) {
+            Write-Warn ("clearing a leftover staging directory: {0}" -f $destRoot)
+            Remove-Item -LiteralPath $destRoot -Recurse -Force
+        }
     }
 
     # **A leftover `.replaced-<version>` with no `releases\<version>\` beside it
@@ -3100,7 +3246,7 @@ pass -Force if this version was never published.
     $asideCheck = Join-Path $ReleasesDir (".replaced-" + $Version)
     if (Test-Path -LiteralPath $asideCheck) {
         if (-not (Test-Path -LiteralPath $finalRoot)) {
-            throw @"
+            Stop-CutCheck @"
 '$asideCheck' exists and '$finalRoot' does not, so a previous run was
 interrupted while publishing $Version. That directory is the release that was
 moved aside to make room, and it may be the only copy of it here. Resolve it by
@@ -3109,18 +3255,21 @@ hand before cutting again:
   - otherwise delete it.
 This script will not choose between two copies of a published version.
 "@
-        }
-        Write-Warn ("'{0}' is left over from a previous -Force cut of {1} whose publish completed but whose cleanup did not; it is superseded by '{2}' and is removed now" -f `
-            $asideCheck, $Version, $finalRoot)
-        Remove-Item -LiteralPath $asideCheck -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path -LiteralPath $asideCheck) {
-            throw @"
+        } elseif ($CheckOnly) {
+            Write-Warn ("'{0}' is left over from a previous -Force cut of {1}; the cut removes it, -CheckOnly leaves it" -f $asideCheck, $Version)
+        } else {
+            Write-Warn ("'{0}' is left over from a previous -Force cut of {1} whose publish completed but whose cleanup did not; it is superseded by '{2}' and is removed now" -f `
+                $asideCheck, $Version, $finalRoot)
+            Remove-Item -LiteralPath $asideCheck -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $asideCheck) {
+                throw @"
 '$asideCheck' could not be removed. It is the release '$finalRoot' replaced on a
 previous -Force cut of $Version, not a copy this run needs, but the publish
 swap at the end of this run moves the current tree aside under that same name.
 Something - a sync client, an open Explorer window - is holding it; delete it by
 hand and re-run.
 "@
+            }
         }
     }
 
@@ -3140,14 +3289,16 @@ hand and re-run.
     $versionPattern = '^##\s+' + [regex]::Escape($Version) + '(\s|$)'
     $releaseDate = Get-InfDriverDate -Path $infPath
     $headings = @($historyLines | Where-Object { $_ -match $versionPattern })
+    # Each refusal below is one a -CheckOnly run notes and goes on from; what
+    # follows a refused heading is checked only where it can be.
+    $headingOk = $false
     if ($headings.Count -eq 0) {
-        throw @"
+        Stop-CutCheck @"
 '$historyPath' has no entry for $Version.
 Add one - a '## $Version - $releaseDate' heading and what changed for the
 person installing it - then cut the release again. A published version nobody
 wrote a changelog entry for is one no user can tell apart from its predecessor.
 "@
-    }
     # **Exactly one, and dated, and dated the same as the INF.** All three parts
     # were missing until a later review. The heading match alone accepted a bare
     # "## 0.0.0.2" with no date at all, so the cross-check below silently did
@@ -3156,18 +3307,17 @@ wrote a changelog entry for is one no user can tell apart from its predecessor.
     # in this script, so it is the authority for the date - the readme prints
     # that date beside this very entry, and the two disagreeing is what this
     # replaced. Checked here, before anything is built or staged.
-    if ($headings.Count -gt 1) {
-        throw "'$historyPath' has $($headings.Count) headings for $Version; a version has one changelog entry."
-    }
-    $headingDate = [datetime]::MinValue
-    if ($headings[0] -match '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\S+)\s*$' -and
-        -not [datetime]::TryParseExact($Matches[1], 'yyyy-MM-dd',
-                [Globalization.CultureInfo]::InvariantCulture,
-                [Globalization.DateTimeStyles]::None, [ref]$headingDate)) {
-        throw "'$historyPath' dates $Version as '$($Matches[1])', which is not a calendar date in yyyy-mm-dd form."
-    }
-    if ($headings[0] -notmatch '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\d{4}-\d{2}-\d{2})\s*$') {
-        throw @"
+    } elseif ($headings.Count -gt 1) {
+        Stop-CutCheck "'$historyPath' has $($headings.Count) headings for $Version; a version has one changelog entry."
+    } else {
+        $headingDate = [datetime]::MinValue
+        if ($headings[0] -match '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\S+)\s*$' -and
+            -not [datetime]::TryParseExact($Matches[1], 'yyyy-MM-dd',
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::None, [ref]$headingDate)) {
+            Stop-CutCheck "'$historyPath' dates $Version as '$($Matches[1])', which is not a calendar date in yyyy-mm-dd form."
+        } elseif ($headings[0] -notmatch '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\d{4}-\d{2}-\d{2})\s*$') {
+            Stop-CutCheck @"
 '$historyPath' heading for $Version is not a dated entry:
   $($headings[0])
 Write it as '## $Version - $releaseDate'. The generated readme.txt prints the
@@ -3175,15 +3325,19 @@ release date beside this entry, so an undated or differently shaped heading
 leaves that date unchecked - which is how a release came to date itself two
 different ways in one file.
 "@
-    }
-    if ($Matches[1] -ne $releaseDate) {
-        throw @"
+        } elseif ($Matches[1] -ne $releaseDate) {
+            Stop-CutCheck @"
 releases\history.md dates $Version as $($Matches[1]), but src\xhci98.inf's
 DriverVer dates it $releaseDate. A release has one date; the generated
 readme.txt prints it beside the history entry, so the two cannot disagree.
 "@
+        } else {
+            $headingOk = $true
+        }
     }
-    Write-Ok ("changelog entry for {0} found in releases\history.md, dated {1} in agreement with the INF" -f $Version, $releaseDate)
+    if ($headingOk) {
+        Write-Ok ("changelog entry for {0} found in releases\history.md, dated {1} in agreement with the INF" -f $Version, $releaseDate)
+    }
     # --- no draft marker in what the user reads -----------------------------
     #
     # Roadmap task 32.3. The 2.0.0.0 documents were drafted ahead of their
@@ -3194,34 +3348,43 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
     # readme embeds verbatim, and docs\using\release-notes.md, which the readme
     # is transcribed from and which is the user-facing record of it. The
     # rendered readme is checked again after substitution, below, because the
-    # template lives in this script and is not in scope yet.
-    $entryStart = [Array]::IndexOf($historyLines, $headings[0])
-    $entryEnd = $historyLines.Count
-    for ($i = $entryStart + 1; $i -lt $historyLines.Count; $i++) {
-        if ($historyLines[$i] -match '^##\s') { $entryEnd = $i; break }
+    # template lives in this script and is not in scope yet. With no single
+    # heading for the version (a -CheckOnly run goes on past that refusal),
+    # the entry has no bounds and only the release notes are read.
+    $draftHits = @()
+    if ($headings.Count -eq 1) {
+        $entryStart = [Array]::IndexOf($historyLines, $headings[0])
+        $entryEnd = $historyLines.Count
+        for ($i = $entryStart + 1; $i -lt $historyLines.Count; $i++) {
+            if ($historyLines[$i] -match '^##\s') { $entryEnd = $i; break }
+        }
+        $draftHits = @(Find-DraftMarkers -Lines $historyLines[$entryStart..($entryEnd - 1)] -Label "releases\history.md ($Version entry, from its heading)")
     }
-    $draftHits = @(Find-DraftMarkers -Lines $historyLines[$entryStart..($entryEnd - 1)] -Label "releases\history.md ($Version entry, from its heading)")
     $notesPath = Join-Path $repo "docs\using\release-notes.md"
     if (Test-Path -LiteralPath $notesPath) {
         $draftHits += @(Find-DraftMarkers -Lines @(Get-Content -LiteralPath $notesPath) -Label "docs\using\release-notes.md")
     }
     if ($draftHits.Count -gt 0) {
-        throw @"
+        Stop-CutCheck @"
 $Version is still a draft: $($draftHits.Count) TODO(...) or TBD marker(s) remain
 in what this cut would publish. Each is a reading still owed; take it, write
 the result in place of the marker, then cut again. The first:
   $(($draftHits | Select-Object -First 10) -join "`n  ")
 "@
+    } else {
+        Write-Ok "no TODO(...) or TBD in the $Version history entry or the release notes"
     }
-    Write-Ok "no TODO(...) or TBD in the $Version history entry or the release notes"
     # The bundled Stor98 version is recorded in the release notes (Stor98's
     # maintainers), in one declaration line the cut fills in: the version
     # bundled, or that there is none (Get-Stor98NotesFault). A disagreement
-    # or the unfilled placeholder is refused; a TEST cut is warned.
+    # or the unfilled placeholder is refused; a TEST cut is warned. Not
+    # checked by a -CheckOnly run whose Stor98 build was refused above.
     $notesText = if (Test-Path -LiteralPath $notesPath) { [System.IO.File]::ReadAllText($notesPath) } else { "" }
     $why = Get-Stor98NotesFault -Text $notesText -Version $(if ($null -ne $stor98) { $stor98.Version } else { "" })
-    if ($why -ne "") {
-        if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
+    if ($stor98Refused) {
+        Write-Warn "the release notes' Stor98 declaration is not checked: the Stor98 build was refused above"
+    } elseif ($why -ne "") {
+        if ($TestLabel -ne "") { Write-Warn $why } else { Stop-CutCheck $why }
     } else {
         Write-Ok "the release notes' Stor98 declaration matches this cut"
     }
@@ -3298,151 +3461,174 @@ the result in place of the marker, then cut again. The first:
     $legs = New-ReleaseLegs -Flavors $Flavor -Arches $Arch
     foreach ($leg in $legs) {
         $f = $leg.Flavor
-        Write-Step ("make-package.ps1 -Flavor {0} -Arch {1}" -f $f, $leg.PkgArch)
-
-        # **-OutDir is passed, not left to default.** The package this script
-        # publishes from is read at $PackageRoot, so the package it *builds*
-        # has to be written there too. Letting make-package.ps1 use its own
-        # default while reading somewhere else means the gated package and the
-        # published package can be two different things: a stale
-        # out\pkg-release at the same version with the right VS_FF_DEBUG flag
-        # passes every check this script makes, while the build that actually
-        # ran is discarded.
-        $pkgDirForBuild = Join-Path $PackageRoot ("pkg-" + $f + "-" + $leg.PkgArch)
-        $pkgArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                     $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
-                     "-OutDir", $pkgDirForBuild)
-        if ($NoTargetEvidence) {
-            # The x86 helper is never packaged on its allowlist alone (design
-            # record 18 section 15.11); make-package.ps1 refuses it too.
-            if ($leg.Arch -eq "x86") {
-                throw "-NoTargetEvidence: an x86 leg carries xhcihlpr.sys, whose hlprx86 import gate needs the Windows 2000, XP, Vista and 7 x86 kernels and HALs staged (design record 18 section 15.11). Stage them and cut without -NoTargetEvidence."
+        $objRoot = Join-Path $repo $leg.ObjDir
+        if ($CheckOnly) {
+            # -CheckOnly: the build where it is, not packaged. What follows
+            # this block reads it in place: the version, the debug flag, the
+            # flavour marker and the source stamp of each driver.
+            Write-Step ("{0}: the build in {1} (-CheckOnly: not packaged)" -f $leg.Id, $leg.ObjDir)
+            $legSigned = $false
+            $pkgDir = $null
+            $destDir = $objRoot
+            $sys = Join-Path $objRoot "xhci98.sys"
+            if (-not (Test-Path -LiteralPath $sys -PathType Leaf)) {
+                Stop-CutCheck ("the {0} leg has no build at {1}. Build it: scripts\build-driver.cmd {2}{3}" -f `
+                    $leg.Id, $sys, $f, $(if ($leg.Arch -eq "x64") { " -amd64" } else { "" }))
+                continue
             }
-            $pkgArgs += "-NoTargetEvidence"
-        }
-        # The x64 legs are signed at staging (design record 19); the password
-        # reaches the child through XHCI98_TESTSIGN_PW, set above.
-        $legSigned = ($leg.Arch -eq "x64")
-        if ($legSigned) {
-            if ($null -eq $testSignCert) {
-                # Not reachable: an x64 cut without a key is refused before
-                # anything is built. Checked so that no edit above can make
-                # an unsigned x64 leg publishable by omission.
-                throw "the $($leg.Id) leg would be published unsigned; every x64 directory is signed (design record 19)."
-            }
-            $pkgArgs += @("-TestSignPfx", $TestSignPfx)
-        }
-        # The bundled Stor98 build, in the release legs only (make-package.ps1
-        # bundles it by default; the debug legs pass -NoStor98); its files
-        # are accepted beside the declared set by exactly the paths it lands
-        # at, and published with this project's own (task 42-A.30).
-        $legStor98 = @()
-        if ($null -ne $stor98 -and $f -eq "release") {
-            $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+            $uasSys = Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch] + "\xhciuas.sys")
+            $cmSys = Join-Path $repo ("src\cm\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch] + "\xhcicm.sys")
+            $hlprSys = Join-Path $repo ("src\hlpr\" + $objDirName[$f] + "\i386\xhcihlpr.sys")
         } else {
-            $pkgArgs += "-NoStor98"
-        }
-        # ErrorActionPreference relaxed across the call, as every other native
-        # call in this script does and this one did not until the audit of
-        # 2026-09-07. In Windows PowerShell 5.1 a native command's stderr line
-        # becomes an ErrorRecord, so under "Stop" a single warning from the
-        # packager aborts the cut here with an empty message instead of
-        # reaching the exit-code test below. It only bites when the child's
-        # stderr is redirected, which is why it survived: an interactive run
-        # never showed it.
-        $savedEap = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        $savedPw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
-        try {
-            if ($legSigned) {
-                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")
+            Write-Step ("make-package.ps1 -Flavor {0} -Arch {1}" -f $f, $leg.PkgArch)
+
+            # **-OutDir is passed, not left to default.** The package this script
+            # publishes from is read at $PackageRoot, so the package it *builds*
+            # has to be written there too. Letting make-package.ps1 use its own
+            # default while reading somewhere else means the gated package and the
+            # published package can be two different things: a stale
+            # out\pkg-release at the same version with the right VS_FF_DEBUG flag
+            # passes every check this script makes, while the build that actually
+            # ran is discarded.
+            $pkgDirForBuild = Join-Path $PackageRoot ("pkg-" + $f + "-" + $leg.PkgArch)
+            $pkgArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                         $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
+                         "-OutDir", $pkgDirForBuild)
+            if ($NoTargetEvidence) {
+                # The x86 helper is never packaged on its allowlist alone (design
+                # record 18 section 15.11); make-package.ps1 refuses it too.
+                if ($leg.Arch -eq "x86") {
+                    throw "-NoTargetEvidence: an x86 leg carries xhcihlpr.sys, whose hlprx86 import gate needs the Windows 2000, XP, Vista and 7 x86 kernels and HALs staged (design record 18 section 15.11). Stage them and cut without -NoTargetEvidence."
+                }
+                $pkgArgs += "-NoTargetEvidence"
             }
-            & powershell.exe @pkgArgs
-        } finally {
+            # The x64 legs are signed at staging (design record 19); the password
+            # reaches the child through XHCI98_TESTSIGN_PW, set above.
+            $legSigned = ($leg.Arch -eq "x64")
             if ($legSigned) {
-                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $savedPw, "Process")
+                if ($null -eq $testSignCert) {
+                    # Not reachable: an x64 cut without a key is refused before
+                    # anything is built. Checked so that no edit above can make
+                    # an unsigned x64 leg publishable by omission.
+                    throw "the $($leg.Id) leg would be published unsigned; every x64 directory is signed (design record 19)."
+                }
+                $pkgArgs += @("-TestSignPfx", $TestSignPfx)
             }
-            $ErrorActionPreference = $savedEap
-        }
-        if ($LASTEXITCODE -ne 0) {
-            throw @"
+            # The bundled Stor98 build, in the release legs only (make-package.ps1
+            # bundles it by default; the debug legs pass -NoStor98); its files
+            # are accepted beside the declared set by exactly the paths it lands
+            # at, and published with this project's own (task 42-A.30).
+            $legStor98 = @()
+            if ($null -ne $stor98 -and $f -eq "release") {
+                $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+            } else {
+                $pkgArgs += "-NoStor98"
+            }
+            # ErrorActionPreference relaxed across the call, as every other native
+            # call in this script does and this one did not until the audit of
+            # 2026-09-07. In Windows PowerShell 5.1 a native command's stderr line
+            # becomes an ErrorRecord, so under "Stop" a single warning from the
+            # packager aborts the cut here with an empty message instead of
+            # reaching the exit-code test below. It only bites when the child's
+            # stderr is redirected, which is why it survived: an interactive run
+            # never showed it.
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $savedPw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
+            try {
+                if ($legSigned) {
+                    [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")
+                }
+                & powershell.exe @pkgArgs
+            } finally {
+                if ($legSigned) {
+                    [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $savedPw, "Process")
+                }
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw @"
 make-package.ps1 failed for the $($leg.Id) leg, so there is nothing to release.
 Do not work around this by copying $($leg.ObjDir)\xhci98.sys by hand: the gates it
 runs are what stand between a broken binary and a guest that cannot boot.
 "@
-        }
-
-        $pkgDir = $pkgDirForBuild
-        $destDir = Join-Path $destRoot $leg.Dir
-        Ensure-Directory $ReleasesDir
-        Ensure-Directory $destRoot
-        Ensure-Directory $destDir
-
-        $legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)
-        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $legStor98
-        if ($legSigned) { $legCopy += $certPublishable }
-        foreach ($name in $legCopy) {
-            $src = Join-Path $pkgDir $name
-            if (-not (Test-Path -LiteralPath $src)) {
-                throw "make-package.ps1 produced no '$name' in '$pkgDir'."
             }
-            Ensure-Directory (Split-Path -Parent (Join-Path $destDir $name))
-            Copy-Item -LiteralPath $src -Destination (Join-Path $destDir $name) -Force
-        }
-        # The filter INF's own copy of the connection manager, where the
-        # leg has one (x86: nt\xhcicm.sys), is the published binary itself,
-        # byte for byte (signed before the copy).
-        if ($legCmPublishable -contains "nt\xhcicm.sys" -and
-            (Get-FileHash -LiteralPath (Join-Path $destDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
-            (Get-FileHash -LiteralPath (Join-Path $destDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
-            throw "the $($leg.Id) leg's nt\xhcicm.sys is not the same bytes as its xhcicm.sys; make-package.ps1 copies the one binary to both places."
-        }
 
-        # **Held to the INF's declared media set here, not at the assembly.**
-        # A package is fully known the moment make-package.ps1 returns, which
-        # is before the publish swap; the same check inside the upload assembly
-        # runs after it, and a refusal there leaves a written-once version
-        # directory published with no asset, the second instance of that shape
-        # in this loop.
-        Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
-                                           -PublishedPaths $declaredPublished[$leg.Arch] `
-                                           -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
-        Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
-        # The published Stor98 images carry this release's version, like
-        # xhci98.sys below (task 42-A.30).
-        foreach ($nvRel in @($legStor98 | Where-Object { $_ -match '^stor98\.(sys|mpd)$' })) {
-            $nvVer = (Get-Item -LiteralPath (Join-Path $destDir $nvRel)).VersionInfo.FileVersion
-            if (-not (Test-DriverVersionMatches -Reported $nvVer -Declared $Version)) {
-                throw "the $($leg.Dir)\$nvRel reports FileVersion '$nvVer', not $Version."
-            }
-            # And the bytes are the build's (signed, on a signed leg, by this
-            # cut's key like the other x64 drivers: one signature for all).
-            $nvBuilt = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | Where-Object { $_.Dest -eq $nvRel })[0].FullPath
-            if ($legSigned -and $nvRel -eq "stor98.sys") {
-                Assert-TestSigned -Sys (Join-Path $destDir $nvRel) -BuiltSys $nvBuilt -Label "$($leg.Dir)\$nvRel"
-            } elseif ((Get-FileHash -LiteralPath (Join-Path $destDir $nvRel) -Algorithm SHA256).Hash -ne
-                      (Get-FileHash -LiteralPath $nvBuilt -Algorithm SHA256).Hash) {
-                throw "the $($leg.Dir)\$nvRel about to be published is not the build at '$nvBuilt'."
-            }
-        }
-        # The certificate beside a signed leg's binaries must be this key's
-        # public half, byte for byte - the one a user would inspect or import.
-        if ($legSigned) {
-            $pubCer = [System.IO.File]::ReadAllBytes((Join-Path $destDir $certPublishable[0]))
-            if ([Convert]::ToBase64String($pubCer) -ne [Convert]::ToBase64String($testSignCert.CerBytes)) {
-                throw "the $($certPublishable[0]) staged for $($leg.Dir)\ is not the public half of the key given by -TestSignPfx."
-            }
-        }
+            $pkgDir = $pkgDirForBuild
+            $destDir = Join-Path $destRoot $leg.Dir
+            Ensure-Directory $ReleasesDir
+            Ensure-Directory $destRoot
+            Ensure-Directory $destDir
 
-        $sys = Join-Path $destDir "xhci98.sys"
+            $legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)
+            $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $legStor98
+            if ($legSigned) { $legCopy += $certPublishable }
+            foreach ($name in $legCopy) {
+                $src = Join-Path $pkgDir $name
+                if (-not (Test-Path -LiteralPath $src)) {
+                    throw "make-package.ps1 produced no '$name' in '$pkgDir'."
+                }
+                Ensure-Directory (Split-Path -Parent (Join-Path $destDir $name))
+                Copy-Item -LiteralPath $src -Destination (Join-Path $destDir $name) -Force
+            }
+            # The filter INF's own copy of the connection manager, where the
+            # leg has one (x86: nt\xhcicm.sys), is the published binary itself,
+            # byte for byte (signed before the copy).
+            if ($legCmPublishable -contains "nt\xhcicm.sys" -and
+                (Get-FileHash -LiteralPath (Join-Path $destDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $destDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
+                throw "the $($leg.Id) leg's nt\xhcicm.sys is not the same bytes as its xhcicm.sys; make-package.ps1 copies the one binary to both places."
+            }
+
+            # **Held to the INF's declared media set here, not at the assembly.**
+            # A package is fully known the moment make-package.ps1 returns, which
+            # is before the publish swap; the same check inside the upload assembly
+            # runs after it, and a refusal there leaves a written-once version
+            # directory published with no asset, the second instance of that shape
+            # in this loop.
+            Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
+                                               -PublishedPaths $declaredPublished[$leg.Arch] `
+                                               -InfName "xhci98.inf" -Flavor $leg.Id `
+                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
+            Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
+            # The published Stor98 images carry this release's version, like
+            # xhci98.sys below (task 42-A.30).
+            foreach ($nvRel in @($legStor98 | Where-Object { $_ -match '^stor98\.(sys|mpd)$' })) {
+                $nvVer = (Get-Item -LiteralPath (Join-Path $destDir $nvRel)).VersionInfo.FileVersion
+                if (-not (Test-DriverVersionMatches -Reported $nvVer -Declared $Version)) {
+                    throw "the $($leg.Dir)\$nvRel reports FileVersion '$nvVer', not $Version."
+                }
+                # And the bytes are the build's (signed, on a signed leg, by this
+                # cut's key like the other x64 drivers: one signature for all).
+                $nvBuilt = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | Where-Object { $_.Dest -eq $nvRel })[0].FullPath
+                if ($legSigned -and $nvRel -eq "stor98.sys") {
+                    Assert-TestSigned -Sys (Join-Path $destDir $nvRel) -BuiltSys $nvBuilt -Label "$($leg.Dir)\$nvRel"
+                } elseif ((Get-FileHash -LiteralPath (Join-Path $destDir $nvRel) -Algorithm SHA256).Hash -ne
+                          (Get-FileHash -LiteralPath $nvBuilt -Algorithm SHA256).Hash) {
+                    throw "the $($leg.Dir)\$nvRel about to be published is not the build at '$nvBuilt'."
+                }
+            }
+            # The certificate beside a signed leg's binaries must be this key's
+            # public half, byte for byte - the one a user would inspect or import.
+            if ($legSigned) {
+                $pubCer = [System.IO.File]::ReadAllBytes((Join-Path $destDir $certPublishable[0]))
+                if ([Convert]::ToBase64String($pubCer) -ne [Convert]::ToBase64String($testSignCert.CerBytes)) {
+                    throw "the $($certPublishable[0]) staged for $($leg.Dir)\ is not the public half of the key given by -TestSignPfx."
+                }
+            }
+
+            $sys = Join-Path $destDir "xhci98.sys"
+            $uasSys = Join-Path $destDir "xhciuas.sys"
+            $cmSys = Join-Path $destDir "xhcicm.sys"
+            $hlprSys = Join-Path $destDir "xhcihlpr.sys"
+        }
         $info = (Get-Item -LiteralPath $sys).VersionInfo
 
         # make-package.ps1 already tied this binary to the INF beside it. Re-check
         # against the *release* version so a stale out\pkg-* left by an earlier
         # build cannot be published under a version it was never built as.
         if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
-            throw @"
+            Stop-CutCheck @"
 the binary for $($leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version.
 Rebuild with scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" }) before releasing.
 "@
@@ -3456,7 +3642,7 @@ Rebuild with scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" }
         # trace would get silence and blame the machine.
         $expectDebug = ($f -eq "debug")
         if ($info.IsDebug -ne $expectDebug) {
-            throw @"
+            Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug), expected $expectDebug.
 That is the wrong obj directory: src\objchk\$($archDirName[$leg.Arch]) is the debug build and
 src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour you meant.
@@ -3476,13 +3662,13 @@ src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour yo
         # 9.3, task 26-A.1), so a binary staged by any other route is caught.
         $sysText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($sys))
         if ($sysText.Contains("XHCI98_SCAFFOLD_DO_NOT_STAGE")) {
-            throw "the binary about to be published as $($leg.Dir)\ is the HCD's build scaffold (XHCI98_SCAFFOLD_DO_NOT_STAGE, roadmap task 25.8): it registers nothing and is never published."
+            Stop-CutCheck "the binary about to be published as $($leg.Dir)\ is the HCD's build scaffold (XHCI98_SCAFFOLD_DO_NOT_STAGE, roadmap task 25.8): it registers nothing and is never published."
         }
 
         $publishedFlavour = Get-ImageFlavourMarker -Path $sys
         if ($publishedFlavour -ne $f) {
             $found = if ($publishedFlavour -eq "") { "none" } else { $publishedFlavour }
-            throw @"
+            Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ carries the '$found' flavour marker.
 Only release and debug may be published; qemu carries the port-0xE9 mirror
 (HAL.dll!WRITE_PORT_UCHAR), the sole import delta of the build that gave the
@@ -3527,7 +3713,6 @@ meant: scripts\build-driver.cmd $f
         # this check took the "no stamp" path on every ordinary release, and
         # would have gone on taking it with the sources changed underneath.
         $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
-        $objRoot = Join-Path $repo $leg.ObjDir
         $builtSys = Join-Path $objRoot "xhci98.sys"
 
         # And a stamp only speaks for the binary it sits beside, so the staged
@@ -3548,7 +3733,7 @@ meant: scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" })
             # project certificate's by this cut's key.
             Assert-TestSigned -Sys $sys -BuiltSys $builtSys -Label "$($leg.Dir)\xhci98.sys"
         } elseif ($builtHash -ne $stagedHash) {
-            throw @"
+            Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ is not the one in
 $builtSys ($stagedHash vs $builtHash), so the source stamp beside that build
 says nothing about the bytes being shipped. Re-run the packager against the
@@ -3571,7 +3756,7 @@ build you mean: scripts\build-driver.cmd $f
                 $ErrorActionPreference = $savedEap
             }
             if ($stampCode -eq 1) {
-                throw @"
+                Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ was built from sources this tree no
 longer holds:
 $($stampOut -join "`n")
@@ -3582,7 +3767,7 @@ old ones. A release nobody can rebuild is a release nobody can debug.
 "@
             } elseif ($stampCode -eq 2) {
                 if (-not $AllowUnstampedDriver) {
-                    throw @"
+                    Stop-CutCheck @"
 no source stamp beside the $f binary in
 $objRoot, so this script cannot tell whether src\ still reproduces it - which
 is the one case where nothing at all is known about the published bytes.
@@ -3592,27 +3777,26 @@ scripts\source-stamp.ps1 and a rebuild would move its PE link timestamp and
 invalidate readings already taken on these exact bytes - say so:
       scripts\package\make-release.ps1 ... -AllowUnstampedDriver
 "@
+                } else {
+                    Write-Warn ("no source stamp beside the $f binary, so this script " +
+                                "cannot tell whether src\ still reproduces it, and " +
+                                "-AllowUnstampedDriver was passed. Nothing here has " +
+                                "checked the published bytes against src\.")
                 }
-                Write-Warn ("no source stamp beside the $f binary, so this script " +
-                            "cannot tell whether src\ still reproduces it, and " +
-                            "-AllowUnstampedDriver was passed. Nothing here has " +
-                            "checked the published bytes against src\.")
             } elseif ($stampCode -ne 0) {
-                throw "scripts\source-stamp.ps1 -Check '$objRoot' failed: $($stampOut -join "`n")"
+                Stop-CutCheck "scripts\source-stamp.ps1 -Check '$objRoot' failed: $($stampOut -join "`n")"
             } else {
                 Write-Ok "$($leg.Id) binary matches the sources in src\"
             }
         }
 
         # The UAS class driver beside it, held to the same refusals.
-        $uasSys = Join-Path $destDir "xhciuas.sys"
         Assert-UasPublished -Sys $uasSys -Leg $leg -Flavor $f -Version $Version `
                             -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                             -Signed:$legSigned
 
         # The Thunderbolt 3 connection manager beside them, held to the same
         # refusals (roadmap-usb4.md task 39-A.1).
-        $cmSys = Join-Path $destDir "xhcicm.sys"
         Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version `
                            -ObjRoot (Join-Path $repo ("src\cm\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                            -Signed:$legSigned
@@ -3621,11 +3805,21 @@ invalidate readings already taken on these exact bytes - say so:
         # 18), held to the same refusals; and the 2.3.x helper's name never
         # published (section 15.11).
         if ($declaredPublishable[$leg.Arch] -contains "xhcihlpr.sys") {
-            Assert-HelperPublished -Sys (Join-Path $destDir "xhcihlpr.sys") -Leg $leg -Flavor $f -Version $Version `
+            Assert-HelperPublished -Sys $hlprSys -Leg $leg -Flavor $f -Version $Version `
                                    -ObjRoot (Join-Path $repo ("src\hlpr\" + $objDirName[$f] + "\i386"))
         }
         if (Test-Path -LiteralPath (Join-Path $destDir $retiredHelper)) {
             throw "the $($leg.Id) leg holds $retiredHelper, the 2.3.x helper this release retires (design record 18 section 15.11). Rebuild the package: scripts\package\make-package.ps1 -Flavor $f"
+        }
+        if ($CheckOnly) {
+            $gatedBins = @{ "xhci98.sys" = $sys; "xhciuas.sys" = $uasSys; "xhcicm.sys" = $cmSys }
+            if ($declaredPublishable[$leg.Arch] -contains "xhcihlpr.sys") { $gatedBins["xhcihlpr.sys"] = $hlprSys }
+            if ($null -ne $stor98 -and $f -eq "release") {
+                foreach ($nf in @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch)) {
+                    if ($nf.Dest -match '^stor98\.(sys|mpd)$') { $gatedBins[$nf.Dest] = $nf.FullPath }
+                }
+            }
+            Write-GatedRecordState -Leg $leg -Binaries $gatedBins
         }
 
         $staged[$leg.Id] = [pscustomobject]@{
@@ -3688,7 +3882,7 @@ say so in the release notes - the published directory is incomplete without it.
             @(Get-Item -LiteralPath $versionHeader) |
             Where-Object { $_.LastWriteTimeUtc -gt $exeTime })
         if ($newer.Count -gt 0) {
-            throw @"
+            Stop-CutCheck @"
 '$exePath' is older than $($newer.Count) of its own source file(s):
   - $(($newer | ForEach-Object { $_.Name }) -join "`n  - ")
 Rebuild it (xhciqual\SETENV.BAT then xhciqual\build.cmd) before releasing. A
@@ -3713,7 +3907,7 @@ qualifier that predates its sources answers for a tool nobody can rebuild.
         $mapPath = Join-Path $QualtoolDir "xhciqual.map"
         $mapTime = (Get-Item -LiteralPath $mapPath).LastWriteTimeUtc
         if ($mapTime -lt $exeTime) {
-            throw @"
+            Stop-CutCheck @"
 '$mapPath' is older than '$exePath'.
 The .MAP only decodes addresses for the build of the EXE it was linked with, and
 the release readme tells the user exactly that. Rebuild the qualifier
@@ -3734,7 +3928,7 @@ the release readme tells the user exactly that. Rebuild the qualifier
         Assert-TakesSharedVersion -Path $qualHeader -Macro "TOOL_VERSION"
         $toolVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $toolVersion -Declared $Version)) {
-            throw @"
+            Stop-CutCheck @"
 '$versionHeader' declares the version as "$toolVersion", but this release is $Version.
 The qualifier is published inside releases\$Version\tools\xhciqual\ and prints that
 string into every log a user saves, so the two must agree. Bump the version in
@@ -3798,7 +3992,7 @@ cuts without the tool on a host that cannot build it.
             $cleanTime = (Get-Item -LiteralPath (Join-Path $CleanToolDir $name)).LastWriteTimeUtc
             $cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })
             if ($cleanNewer.Count -gt 0) {
-                throw @"
+                Stop-CutCheck @"
 '$(Join-Path $CleanToolDir $name)' is older than $($cleanNewer.Count) of its own source file(s):
   - $(($cleanNewer | ForEach-Object { $_.Name }) -join "`n  - ")
 Rebuild it (xhcicln\build.cmd) before releasing: a stale copy prints a version
@@ -3810,7 +4004,7 @@ that is not this release's, or decides with rules the source no longer has.
         Assert-TakesSharedVersion -Path $cleanSource -Macro "XHCICLN_VERSION"
         $cleanVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $cleanVersion -Declared $Version)) {
-            throw @"
+            Stop-CutCheck @"
 '$versionHeader' declares the version as "$cleanVersion", but this release is $Version.
 XHCICLN prints that string first on every run, so the two must agree. Bump the
 version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
@@ -3859,7 +4053,7 @@ cuts without the service on a host that cannot build it.
             $markTime = (Get-Item -LiteralPath (Join-Path $MarkToolDir $name)).LastWriteTimeUtc
             $markNewer = @($markSources | Where-Object { $_.LastWriteTimeUtc -gt $markTime })
             if ($markNewer.Count -gt 0) {
-                throw @"
+                Stop-CutCheck @"
 '$(Join-Path $MarkToolDir $name)' is older than $($markNewer.Count) of its own source file(s):
   - $(($markNewer | ForEach-Object { $_.Name }) -join "`n  - ")
 Rebuild it (xhcimark\build.cmd) before releasing: a stale copy reads the
@@ -3870,7 +4064,7 @@ driver's answers with a layout the source no longer has.
         Assert-TakesSharedVersion -Path (Join-Path $MarkToolDir "xhcimark.c") -Macro "XHCIMARK_VERSION"
         $markVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $markVersion -Declared $Version)) {
-            throw @"
+            Stop-CutCheck @"
 '$versionHeader' declares the version as "$markVersion", but this release is $Version.
 XHCIMARK logs that string at every start, so the two must agree. Bump the
 version in src\xhci_version.h and rebuild the service (xhcimark\build.cmd).
@@ -3921,7 +4115,7 @@ cuts without the tool on a host that cannot build it.
             $instTime = (Get-Item -LiteralPath (Join-Path $InstallToolDir $name)).LastWriteTimeUtc
             $instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })
             if ($instNewer.Count -gt 0) {
-                throw @"
+                Stop-CutCheck @"
 '$(Join-Path $InstallToolDir $name)' is older than $($instNewer.Count) of its own source file(s):
   - $(($instNewer | ForEach-Object { $_.Name }) -join "`n  - ")
 Rebuild it (xhciinst\build.cmd) before releasing: a stale copy refuses this
@@ -3932,7 +4126,7 @@ release's package, or decides with rules the source no longer has.
         Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"
         $instVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $instVersion -Declared $Version)) {
-            throw @"
+            Stop-CutCheck @"
 '$versionHeader' declares the version as "$instVersion", but this release is $Version.
 XHCIINST refuses a package whose INFs' DriverVer is not its own version, so the
 two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
@@ -3941,7 +4135,8 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
         $batBytes = [System.IO.File]::ReadAllBytes((Join-Path $InstallToolDir "INSTALL.BAT"))
         for ($bi = 0; $bi -lt $batBytes.Length; $bi++) {
             if ($batBytes[$bi] -eq 10 -and ($bi -eq 0 -or $batBytes[$bi - 1] -ne 13)) {
-                throw "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."
+                Stop-CutCheck "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."
+                break
             }
         }
         $instDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciinst")
@@ -3990,7 +4185,7 @@ cuts without the tool on a host that cannot build it.
             $trayTime = (Get-Item -LiteralPath (Join-Path $TrayToolDir $name)).LastWriteTimeUtc
             $trayNewer = @($traySources | Where-Object { $_.LastWriteTimeUtc -gt $trayTime })
             if ($trayNewer.Count -gt 0) {
-                throw @"
+                Stop-CutCheck @"
 '$(Join-Path $TrayToolDir $name)' is older than $($trayNewer.Count) of its own source file(s):
   - $(($trayNewer | ForEach-Object { $_.Name }) -join "`n  - ")
 Rebuild it (xhcitr\build.cmd) before releasing: a stale copy reads the
@@ -4008,7 +4203,7 @@ drivers' answers with a layout or rules the source no longer has.
         $snapSchemaTool = Get-SnapSchema -Path (Join-Path $TrayToolDir "tr_snap.c") -Macro "SNAP_SCHEMA"
         $snapSchemaDrv = Get-SnapSchema -Path (Join-Path $repo "src\xhci.h") -Macro "XHCI_SNAPSHOT_SCHEMA"
         if ($snapSchemaTool -ne $snapSchemaDrv) {
-            throw @"
+            Stop-CutCheck @"
 xhcitr\tr_snap.c declares SNAP_SCHEMA $snapSchemaTool and src\xhci.h declares
 XHCI_SNAPSHOT_SCHEMA $snapSchemaDrv. The tool duplicates the wire format rather
 than including a kernel header, and refuses at run time any driver whose schema
@@ -4020,7 +4215,7 @@ read the driver beside it.
         Assert-TakesSharedVersion -Path (Join-Path $TrayToolDir "tr_snap.c") -Macro "XHCISNAP_VERSION"
         $trayVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $trayVersion -Declared $Version)) {
-            throw @"
+            Stop-CutCheck @"
 '$versionHeader' declares the version as "$trayVersion", but this release is $Version.
 XHCIINST replaces an installed XHCITR only with a newer version, so the tool must
 carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
@@ -4068,7 +4263,7 @@ installs on 98 SE and ME through the printed Update Driver steps only.
         }
         & (Join-Path $diDir "stage-ddk.ps1") -VerifyOnly
         if ($LASTEXITCODE -ne 0) {
-            throw @"
+            Stop-CutCheck @"
 The Windows 98 SE DDK files XHCIDI.EXE is built against are missing or not at
 the SHA-256s docs\references\README.md records (see the lines above). Fetch
 and extract the DDK as that README's "Windows 98 DDK" section says, rebuild
@@ -4082,7 +4277,7 @@ the helper (xhciinst\di\build.cmd), and cut again.
             @(Get-Item -LiteralPath $versionHeader))
         $diNewer = @($diSources | Where-Object { $_.LastWriteTimeUtc -gt $diTime })
         if ($diNewer.Count -gt 0) {
-            throw @"
+            Stop-CutCheck @"
 '$diExe' is older than $($diNewer.Count) of its own source file(s):
   - $(($diNewer | ForEach-Object { $_.Name }) -join "`n  - ")
 Rebuild it (xhciinst\di\build.cmd) before releasing: a stale helper refuses
@@ -4090,17 +4285,17 @@ this release's install tool, or installs with calls the source no longer makes.
 "@
         }
         if ((Get-Item -LiteralPath (Join-Path $diDir "xhcidi.map")).LastWriteTimeUtc -lt $diTime) {
-            throw "'$(Join-Path $diDir "xhcidi.map")' is older than '$diExe'; rebuild the helper (xhciinst\di\build.cmd) so the pair comes from one link."
+            Stop-CutCheck "'$(Join-Path $diDir "xhcidi.map")' is older than '$diExe'; rebuild the helper (xhciinst\di\build.cmd) so the pair comes from one link."
         }
         & (Join-Path $diDir "check-imports.ps1") -Path $diExe
         if ($LASTEXITCODE -ne 0) {
-            throw "XHCIDI.EXE's imports are not its allowlist's (xhciinst\di\check-imports.ps1, above): a Windows 98 SE or ME system would refuse to load it, or it calls what design record 27 does not."
+            Stop-CutCheck "XHCIDI.EXE's imports are not its allowlist's (xhciinst\di\check-imports.ps1, above): a Windows 98 SE or ME system would refuse to load it, or it calls what design record 27 does not."
         }
         $diVersion = Get-DeclaredVersion -Path $versionHeader
         $diStamp = "XHCIDI " + $Version + [char]0
         if (-not (Test-DriverVersionMatches -Reported $diVersion -Declared $Version) -or
             -not ([System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($diExe)).Contains($diStamp))) {
-            throw @"
+            Stop-CutCheck @"
 '$diExe' does not carry the stamp "XHCIDI $Version", or '$versionHeader'
 declares "$diVersion". The helper refuses an installer of another version
 before any call, so the two must agree. Bump the version and rebuild the
@@ -4153,7 +4348,7 @@ helper (xhciinst\di\build.cmd).
         $dbg = "debug-$a"
         if ($staged.ContainsKey($rel) -and $staged.ContainsKey($dbg) -and
             $staged[$rel].Sha256 -eq $staged[$dbg].Sha256) {
-            throw "the release and debug $a binaries are identical - one build was packaged twice."
+            Stop-CutCheck "the release and debug $a binaries are identical - one build was packaged twice."
         }
     }
 
@@ -6283,7 +6478,7 @@ repository rather than here.
                           ForEach-Object { $_.Value } | Sort-Object -Unique)
     $unlisted = @($templateVersions | Where-Object { -not $allowedTemplateVersions.ContainsKey($_) })
     if ($unlisted.Count -gt 0) {
-        throw @"
+        Stop-CutCheck @"
 the readme template names version(s) $($unlisted -join ', ') by hand, and
 nothing in this script says why. Everything version-specific in that template
 is substituted from {VERSION}; a literal is release-specific prose in a
@@ -6302,7 +6497,7 @@ are in it.
     $driverSchema = Get-SnapSchema -Path (Join-Path $repo "src\xhci.h") -Macro "XHCI_SNAPSHOT_SCHEMA"
     $staleSchemas = @($templateSchemas | Where-Object { $_ -ne $driverSchema })
     if ($staleSchemas.Count -gt 0) {
-        throw @"
+        Stop-CutCheck @"
 the readme template names snapshot schema $($staleSchemas -join ', '), and
 src\xhci.h declares XHCI_SNAPSHOT_SCHEMA $driverSchema. Section 6 tells the user
 which XHCITR matches this driver by that number; correct the sentence.
@@ -6432,7 +6627,7 @@ file is named, never shipped.
     # readme legitimately carries lower-case braces, such as bcdedit's
     # {current} in the x64 test-signing text; -match ignores case.
     if ($readme -cmatch '\{[A-Z]+\}') {
-        throw "readme template left an unsubstituted placeholder: $($Matches[0])"
+        Stop-CutCheck "readme template left an unsubstituted placeholder: $($Matches[0])"
     }
 
     # The rendered readme, after substitution: the template's own TODO(...)
@@ -6440,7 +6635,7 @@ file is named, never shipped.
     # history entry and the release notes were checked before the build.
     $readmeDraft = @(Find-DraftMarkers -Lines ($readme -split "`r?`n") -Label "readme.txt (rendered)")
     if ($readmeDraft.Count -gt 0) {
-        throw @"
+        Stop-CutCheck @"
 the rendered readme.txt still carries $($readmeDraft.Count) TODO(...) or TBD
 marker(s); the template near the end of make-release.ps1 is a draft until each
 is replaced by its reading. The first:
@@ -7082,7 +7277,7 @@ sufficient.
         $diMapLines = @([System.IO.File]::ReadAllLines((Join-Path (Join-Path $InstallToolDir "di") "xhcidi.map")) |
             Where-Object { $_ -match '^(Portions )?Copyright ' })
         if ($diMapLines.Count -eq 0) {
-            throw "xhciinst\di\xhcidi.map carries no linker copyright line for NOTICE.TXT; rebuild the helper (xhciinst\di\build.cmd)."
+            Stop-CutCheck "xhciinst\di\xhcidi.map carries no linker copyright line for NOTICE.TXT; rebuild the helper (xhciinst\di\build.cmd)."
         }
         $diNotice = @"
 
@@ -7149,7 +7344,7 @@ directory is meant to stand on its own, so it cannot be published without it.
         }
     }
     if ($bareLf -gt 0) {
-        throw @"
+        Stop-CutCheck @"
 '$licenseSrc' has $bareLf line ending(s) that are a bare LF, not CRLF.
 A release directory is read on the target machine, where Windows 98's Notepad
 and DOS EDIT show an LF-only file as one line - so this would publish the
@@ -7203,7 +7398,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
     $uploadRoot = $null
     $uploadZip = $null
     $uploadPublishError = ""
-    if (-not $SkipUploadSet) {
+    # -CheckOnly has no package to assemble one from.
+    if (-not $SkipUploadSet -and -not $CheckOnly) {
         # Keyed by published directory name, which is what New-UploadSet walks:
         # to it a "flavour" is the name of a directory in the published tree,
         # and since this task that name carries the architecture too.
@@ -7257,6 +7453,23 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # And what they say: the shared checker, and the repository's own bytes.
     Assert-ReportBatchContent -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'" -Reference $repo
     Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
+
+    # -CheckOnly ends here, before anything is published: every refusal it
+    # noted, or that there was none.
+    if ($CheckOnly) {
+        Write-Step "-CheckOnly: done"
+        if ($script:cutCheckFaults.Count -gt 0) {
+            Write-Err ("{0} check(s) of the cut refused; each is above, and the first lines of each are:" -f $script:cutCheckFaults.Count)
+            foreach ($fault in $script:cutCheckFaults) {
+                Write-Host ("  - " + (@($fault -split "`r?`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 2) -join " "))
+            }
+            exit 1
+        }
+        Write-Ok "every text, readme and staleness check of the cut passed; nothing was built, signed or published"
+        Write-Host "            Not run here: the host test suite and the import gates, the staged"
+        Write-Host "            packages' checks, the x64 test signatures and the upload set."
+        exit 0
+    }
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {
         Write-Warn ("-Force: replacing the existing {0}" -f $finalRoot)
@@ -7384,6 +7597,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
 } catch {
     Write-Err $_.Exception.Message
+    if ($CheckOnly) {
+        Write-Err ("-CheckOnly stopped at that, which it cannot go on past; it had noted {0} other refusal(s) before it, above." -f $script:cutCheckFaults.Count)
+    }
     if ($null -ne $stagedUpload -and -not $swapDone) {
         # The cut did not publish, so the set built for it goes, and the
         # asset that was there before the run stays what it was. Only before
@@ -7396,6 +7612,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     exit 1
 } finally {
+    if ($checkOnlyRoot -ne "" -and (Test-Path -LiteralPath $checkOnlyRoot)) {
+        Remove-Item -LiteralPath $checkOnlyRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($driverPackDir -ne "" -and (Test-Path -LiteralPath $driverPackDir)) {
         Remove-Item -LiteralPath $driverPackDir -Recurse -Force -ErrorAction SilentlyContinue
     }

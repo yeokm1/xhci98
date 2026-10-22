@@ -136,7 +136,7 @@ static const char *const cmIcmCounterNames[] = {
     "cm.icm.mailbox.errors", "cm.icm.mailbox.timeouts",
     "cm.icm.hostpoll.tries", "cm.icm.hostpoll.answered", "cm.icm.idle-polls",
     "cm.icm.rediscoveries", "cm.icm.resume-budget-expired", "cm.icm.lost",
-    "cm.icm.recoveries"
+    "cm.icm.recoveries", "cm.icm.version.reads", "cm.icm.version.failures"
 };
 
 static const char *const cmRingCounterNames[] = {
@@ -211,6 +211,9 @@ static VOID cmLogTable(PCM_NHI nhi)
                       (d->RouteValid ? 0x10UL : 0) |
                       ((d->Link & 0xFUL) << 8) | ((d->Depth & 0xFUL) << 12));
         CmLogNote(nhi, "cm.dev.route.lo", d->Route.Lo);
+        CmLogNote(nhi, "cm.dev.version",
+                  ((d->VersionState & 0xFFUL) << 8) |
+                      (d->Usb4Version & 0xFFUL));
     }
 }
 
@@ -2576,6 +2579,10 @@ VOID CmNhiStartWork(PCM_NHI nhi)
                            (BOOLEAN)(nhi->Values.Value[CM_VAL_APPROVE] != 0));
     TbtIcmSetTimeouts(&nhi->Icm, nhi->Values.Value[CM_VAL_CMD_TIMEOUT_MS],
                       nhi->Values.Value[CM_VAL_APPROVE_TIMEOUT_MS]);
+    /* Record 21 section 5.3: on every row, each announced router's USB4
+     * Version is read - the generation is the router's, whatever the
+     * host (the ORICO behind Alpine Ridge reads 20h). */
+    TbtIcmSetReadVersion(&nhi->Icm, TRUE);
     CmLogNote(nhi, "cm.icm.row", nhi->Hw->Icm->Generation);
     CmReenumStart(nhi);
     nhi->ReenumOn = 1;

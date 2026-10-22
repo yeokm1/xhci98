@@ -182,6 +182,63 @@ static void test_icm(void)
     CHECK(CmStatusChanged(rec, n, rec2, n), "one field is a change");
 }
 
+/* Record 21 section 5.3: an ICM entry's generation where the client reads
+ * the router's USB4 Version (every row, as the driver runs it), and
+ * Thunderbolt 3 where no read was asked. */
+static void test_icm_gen(void)
+{
+    CM_STATUS_IN in;
+    TBT_ICM_DEVICE *d;
+    UCHAR before[CM_ST_MAX_BYTES];
+    ULONG n;
+
+    memset(&icm, 0, sizeof(icm));
+    d = &icm.Devices[0];
+    d->InUse = TRUE;
+    d->Approved = TRUE;
+    d->RouteValid = TRUE;
+    d->Route.Lo = 1;
+    d->VersionState = TBT_ICM_VER_USB4;
+    d->Usb4Version = 0x20;
+    base_in(&in, CM_ST_CM_ICM);
+
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_TBT3,
+             "no read asked: Thunderbolt 3, whatever the entry holds");
+
+    icm.ReadVersion = TRUE;
+    n = CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_USB4 | 0x2000UL,
+             "USB4 1.0, the version in 15:8");
+    memcpy(before, rec, n);
+    d->Usb4Version = 0x40;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_USB4 | 0x4000UL,
+             "USB4 2.0");
+    d->VersionState = TBT_ICM_VER_TBT3;
+    d->Usb4Version = 0x02;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_TBT3,
+             "major 0: Thunderbolt 3, as the software CM writes it");
+    d->VersionState = TBT_ICM_VER_OWED;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_UNKNOWN,
+             "not read yet: not known, never Thunderbolt 3");
+    CHECK(CmStatusChanged(before, n, rec, n), "the read landing is a change");
+    d->VersionState = TBT_ICM_VER_UNKNOWN;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_UNKNOWN,
+             "a failed read: not known");
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_TUNNELS), 0x551UL,
+             "a USB4 host's USB3 tunnel stays unknown, read or not");
+    in.IcmNoUsb3 = 1;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_TUNNELS), 0x501UL,
+             "a Thunderbolt 3 host: no USB3 tunnel, whatever the router");
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_UNKNOWN,
+             "and its generation still the router's");
+}
+
 static void test_limit(void)
 {
     CM_STATUS_IN in;
@@ -427,6 +484,7 @@ static void test_path(void)
 int main(void)
 {
     test_icm();
+    test_icm_gen();
     test_limit();
     test_u4();
     test_path();

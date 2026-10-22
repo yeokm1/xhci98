@@ -238,8 +238,13 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
         } else if (nhi->Icm.Ring != NULL) {
             in->Cm = CM_ST_CM_ICM;
             /* The running row's generation (the AddDevice profile is
-             * not read on 98 SE and ME). */
+             * not read on 98 SE and ME); Maple Ridge runs the Titan Ridge
+             * row but is a USB4 host, told apart by its hardware row's
+             * ownership predicate (record 21 section 5.3). */
             in->IcmNoUsb3 = (ULONG)(nhi->Icm.Profile != NULL &&
+                                    !(nhi->Hw != NULL &&
+                                      nhi->Hw->Ownership ==
+                                          TBT_HW_OWN_AUTH_DONE) &&
                                     (nhi->Icm.Profile->Generation ==
                                          TBT_ICM_GEN_FALCON_RIDGE ||
                                      nhi->Icm.Profile->Generation ==
