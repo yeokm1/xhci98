@@ -16371,6 +16371,14 @@ static int vsd_run(int mode)
     }
     step(INST_STEP_BEGIN, "STOR98.VXD, large transfers for Stor98");
     for (i = 0; i < 24; i++) {
+        /* Cancelled: stop between steps; the record keeps what is in
+         * flight, which the next run recovers (record 30 section 7.3). */
+        if (!go_on()) {
+            steps_add_id("STOR98.VXD", "not changed: the run was cancelled; "
+                         "run the installer again");
+            step(INST_STEP_LEFT, "STOR98.VXD: left, the run cancelled");
+            return 0;
+        }
         if (!vsd_facts(mode, &f, file, pend, sizeof(file))) {
             out("STOR98.VXD's record or files could not be read: it is left "
                 "as it is.\n");

@@ -32,6 +32,12 @@ if not "%FLAV%"=="" if /i not "%FLAV%"=="qemu" (
     echo usage: build.cmd [qemu]
     exit /b 1
 )
+rem The flavour's image goes first: whatever fails below, none is left.
+if exist "%O%\STOR98.VXD" del "%O%\STOR98.VXD"
+if exist "%O%\STOR98.VXD" (
+    echo STOR98.VXD: the old %O%\STOR98.VXD could not be deleted
+    exit /b 1
+)
 if "%WATCOM%"=="" set "WATCOM=C:\WATCOM"
 set "WBIN="
 for %%D in (BINNT64 BINNT) do (
@@ -66,8 +72,8 @@ for %%F in (vsd vsd_list vsd_data) do (
 )
 "%PY%" -I omfcheck.py %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj || exit /b 1
 rem Linked as S98NEW.VXD and made STOR98.VXD only once every check below
-rem has passed, so a build that fails a check leaves no image to package.
-if exist %O%\STOR98.VXD del %O%\STOR98.VXD
+rem has passed (the old image is deleted at the start), so a build that
+rem fails anywhere leaves no image to package.
 if exist %O%\S98NEW.VXD del %O%\S98NEW.VXD
 obj\bin\link.exe /VXD /NOD /NOLOGO /IGNORE:4033 /IGNORE:4078 /IGNORE:4039 /IGNORE:4070 /IMPLIB:%O%\stor98.lib /OUT:%O%\S98NEW.VXD /MAP:%O%\stor98.map /DEF:vsd.def %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj
 if errorlevel 1 exit /b 1
