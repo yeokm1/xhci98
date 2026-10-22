@@ -534,6 +534,14 @@ typedef struct _STOR98CM_MSG {
 //        instance holds), report the eject failed, keep retrying the removal
 //        (vetoes honoured), and publish no UP on that port until it succeeds
 //        (R8c); the returning tunnel then gets a new generation.
+//        A CM with no per-port teardown (the Thunderbolt 3 firmware CM,
+//        whose only teardown drops every tunnel of the host) tears nothing
+//        down: after the deadline it keeps the devnode and the request in
+//        place (the instance stays terminal, R9d), reports the eject
+//        failed, keeps retrying the removal every 2 s (vetoes honoured) and
+//        publishes no UP on that port until the removal succeeds or the
+//        devnode is gone; the unplug's link down is then R12's (maintainer,
+//        2026-10-22).
 //     Late acknowledgements (after T_ack) are logged and never change the
 //     verdict: the CM checks its deadline before it reads the
 //     acknowledgement, so one first seen after T_ack is late (also when the

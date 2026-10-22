@@ -48,9 +48,12 @@
 #include "../xhciinst/inst_core.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/cm/cm_ejask.h"
+#include "../xhciinst/inst_ej9x.h"
 #include "tr_core.h"
 #include "tr_log.h"
 #include "tr_pci.h"
+#include "tr_popw.h"
 #include "tr_res.h"
 #include "../src/xhci_qry.h"
 
@@ -2866,6 +2869,11 @@ static void details_nhi(TR_TEXT *t, int k)
         }
         tr_printf(t, "  Start epoch:         %08lX%08lX\n",
                   (unsigned long)h->Q.EpochHi, (unsigned long)h->Q.EpochLo);
+        {
+            char rmText[160];
+            tr_removal_text(&h->Q, rmText, sizeof(rmText));
+            tr_printf(t, "  Unexpected removals: %s\n", rmText);
+        }
         if (h->Q.Flags & CM_Q_F_STOPPING) {
             tr_put(t, "  The controller is stopping.\n");
         }
@@ -3469,6 +3477,20 @@ static void details_of(TR_TEXT *t, int i, int fetch)
     case K_PORT:
         tr_printf(t, "Thunderbolt tunnel port %d of %s\n", n->B + 1,
                   dn_name(&gw.N[nhi[n->A].Node]));
+        if (nhi[n->A].R != NULL && n->B >= 0 && n->B < 4 &&
+            ((inst_get32(nhi[n->A].R, CM_ST_O_FLAGS) >>
+              CM_ST_F_BLOCKED_SHIFT) & (1UL << n->B)) != 0) {
+            /* Record 21 section 7.2 part 1 (task 43.18): a 98 SE or ME
+             * eject on this port left its device stopped and not removed,
+             * or its removal keeps failing. */
+            tr_put(t, "  Blocked: a device on this port was stopped and not "
+                      "removed. Shut down\n  Windows before you unplug it.\n");
+        } else if (nhi[n->A].R != NULL && n->B >= 0 && n->B < 4 &&
+                   ((inst_get32(nhi[n->A].R, CM_ST_O_FLAGS) >>
+                     CM_ST_F_EJECTING_SHIFT) & (1UL << n->B)) != 0) {
+            tr_put(t, "  A removal is in progress on this port. Wait for it "
+                      "before you unplug\n  its device.\n");
+        }
         if (n->Dn >= 0) {
             details_devnode(t, n->Dn);
         } else {
@@ -4851,6 +4873,114 @@ static int run_setlevel(void)
     return code;
 }
 
+/*
+ * 98 SE and ME: a unit's eject asked of xhcicm.sys (record 21 section 7.2
+ * part 1; record 24 section 7.1, revision 6; task 43.18), under the mutex
+ * ej_run holds: XhciCmEjectAsk written to the NHI's driver key, the reply
+ * and the result read from its hardware key every CM_EJ_POLL_MS. Returns
+ * the outcome (INST_EJ_*) with its text, -1 for the uncertain end;
+ * *notClean as inst_ej_outcome's.
+ */
+static int ej_ask9x(const EJREQ *q, const WALK *w, const TR_QUERY *tok,
+                    TR_U32 unit, const char **text, int *notClean)
+{
+    char drv[520];
+    char hw[520];
+    unsigned char ask[CM_EJ_ASK_BYTES];
+    unsigned char res[CM_EJ_RESULT_BYTES];
+    unsigned char rep[CM_EJ_REPLY_BYTES];
+    INST_EJ_TOKEN tk;
+    INST_EJ_RESULT r;
+    INST_EJ_WAIT wt;
+    INST_U32 nonce;
+    INST_U32 reason;
+    HKEY key;
+    DWORD type;
+    DWORD n;
+    int i;
+    int got;
+    int end;
+    int written;
+    static INST_U32 lastNonce;
+
+    *notClean = 0;
+    *text = "";
+    drv[0] = '\0';
+    for (i = 0; i < w->Count; i++) {
+        if (tr_eq(w->N[i].Id, q->NhiId) && w->N[i].Driver[0] != '\0') {
+            driver_key_path(&w->N[i], drv, sizeof(drv));
+        }
+    }
+    if (drv[0] == '\0') {
+        *text = "The Thunderbolt controller's registry key was not found; "
+                "nothing was stopped.";
+        return INST_EJ_CHANGED;
+    }
+    nhi_hw_key(q->NhiId, hw, sizeof(hw));
+    tk.EpochLo = tok->EpochLo;
+    tk.EpochHi = tok->EpochHi;
+    tk.ContentGen = tok->ContentGen;
+    tk.Eligible = 1;
+    nonce = inst_ej_nonce(GetTickCount() ^ (GetCurrentProcessId() << 8),
+                          lastNonce);
+    lastNonce = nonce;
+    inst_ej_ask(ask, nonce, q->PortBdf, unit, &tk);
+    written = 0;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+        ERROR_SUCCESS) {
+        written = RegSetValueExA(key, CM_EJ_ASK_VALUE, 0, REG_BINARY, ask,
+                                 sizeof(ask)) == ERROR_SUCCESS;
+        RegCloseKey(key);
+    }
+    if (!written) {
+        *text = "The Thunderbolt driver could not be asked (its registry key "
+                "is not writable); nothing was stopped.";
+        return INST_EJ_UNSUPPORTED;
+    }
+    inst_ej_wait_init(&wt, GetTickCount());
+    end = INST_EJ_W_WAIT;
+    while (end == INST_EJ_W_WAIT || end == INST_EJ_W_DELETE) {
+        Sleep(CM_EJ_POLL_MS);
+        reason = 0;
+        got = 0;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, hw, 0, KEY_READ, &key) ==
+            ERROR_SUCCESS) {
+            n = sizeof(rep);
+            if (RegQueryValueExA(key, CM_EJ_REPLY_VALUE, NULL, &type, rep,
+                                 &n) == ERROR_SUCCESS &&
+                type == REG_BINARY) {
+                reason = inst_ej_reply(rep, n, nonce);
+            }
+            n = sizeof(res);
+            got = RegQueryValueExA(key, CM_EJ_RESULT_VALUE, NULL, &type, res,
+                                   &n) == ERROR_SUCCESS &&
+                  type == REG_BINARY && inst_ej_result(res, n, nonce, &r);
+            RegCloseKey(key);
+        }
+        end = inst_ej_wait_step(&wt, GetTickCount(), reason,
+                                got ? &r : NULL);
+        if (end == INST_EJ_W_DELETE &&
+            RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+                ERROR_SUCCESS) {
+            RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+            RegCloseKey(key);
+        }
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+        ERROR_SUCCESS) {
+        RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+        RegCloseKey(key);
+    }
+    if (end == INST_EJ_W_REJECTED) {
+        return inst_ej_rejected(reason, text);
+    }
+    if (end == INST_EJ_W_UNCERTAIN) {
+        *text = inst_ej_uncertain_text();
+        return -1;
+    }
+    return inst_ej_outcome(&r, text, notClean);
+}
+
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
  * XHCIINST's exit code; msg the answer; *rights set for a rights failure
  * Windows answered (the elevated retry is the caller's, after this has
@@ -4883,7 +5013,7 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     *rights = 0;
     tr_text_init(&t, msg, cap);
     memset(&w, 0, sizeof(w));
-    if (envNt ? api.Eject == NULL : (api.QueryRemove == NULL || api.Remove == NULL)) {
+    if (envNt && api.Eject == NULL) {
         tr_put(&t, "This Windows does not offer the call that stops a device.");
         return INST_EXIT_REFUSED;
     }
@@ -5095,25 +5225,33 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
             }
         }
     } else {
-        cr = api.QueryRemove(w.N[u].Dn, TR_UI_NOT_OK);
-        outcome = inst_eject9x_query(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            tr_put(&t, text);
-            if (cr != INST_CR_REMOVE_VETOED && outcome == INST_EJ_VETO) {
-                tr_printf(&t, "\n(code 0x%08lX)", (unsigned long)cr);
-            }
-            code = inst_eject_code(outcome);
+        int notClean;
+        TR_U32 unit;
+
+        /* Asked of the Thunderbolt driver (task 43.18), under Q3's start
+         * epoch and content generation, which the last query just now
+         * still carried. */
+        unit = inst_ej_unit_loc(w.N[u].Id);
+        if (unit == INST_EJ_NO_LOC) {
+            tr_put(&t, "The device's place below the port could not be read; "
+                       "nothing was stopped.");
             goto out;
         }
-        /* Accepted: the removal always follows (record 24 section 7.1). */
-        cr = api.Remove(w.N[u].Dn, TR_UI_NOT_OK);
-        outcome = inst_eject9x_remove(cr, &text);
+        outcome = ej_ask9x(q, &w, &q3, unit, &text, &notClean);
+        if (outcome < 0) {
+            tr_put(&t, text);
+            code = INST_EXIT_FAILED;
+            goto out;
+        }
         if (outcome != INST_EJ_DONE) {
-            tr_printf(&t, "%s\n(code 0x%08lX)", text, (unsigned long)cr);
+            tr_put(&t, text);
             code = inst_eject_code(outcome);
             goto out;
         }
         tr_printf(&t, "Windows has stopped %s.\n", q->Desc);
+        if (notClean) {
+            tr_printf(&t, "%s\n", inst_ej_not_clean_text());
+        }
         tr_put(&t, "Until you unplug it, Device Manager's Refresh, or the "
                    "Thunderbolt driver looking at the port again, can start it "
                    "again.\n");
@@ -5759,7 +5897,7 @@ static void usb_eject_ui(HWND owner, int d, int fromTray)
                         MB_YESNO | MB_ICONWARNING) == IDYES) {
             ej_elevated(owner, q->Id);
         }
-    } else if (fromTray && shellV5 && strlen(msg) < 250) {
+    } else if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -5933,7 +6071,7 @@ static void ej_unit(HWND owner, int u, int fromTray)
         return;
     }
     tr_join_lines(msg);
-    if (fromTray && shellV5 && strlen(msg) < 250) {
+    if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -6061,6 +6199,59 @@ static void login_item(HMENU m, int append)
         AppendMenuA(m, flags, IDM_LOGIN, text);
     } else {
         ModifyMenuA(m, IDM_LOGIN, MF_BYCOMMAND | flags, IDM_LOGIN, text);
+    }
+}
+
+/* The unexpected-removal warning, per user (record 25 section 7.6 item 8):
+ * a DWORD beside TrayAtLogin, read at each use, so a change reaches every
+ * running copy of the user's tray at its next poll. */
+static int warn_on(void)
+{
+    HKEY k;
+    DWORD t;
+    DWORD v = 1;
+    DWORD n = sizeof(v);
+    int have = 0;
+
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        have = RegQueryValueExA(k, TR_WARN_VALUE, NULL, &t, (LPBYTE)&v, &n) ==
+                   ERROR_SUCCESS && t == REG_DWORD && n == sizeof(v);
+        RegCloseKey(k);
+    }
+    return tr_warn_removed(have, (TR_U32)v);
+}
+
+static void warn_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_WARN_VALUE, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
+/* The item in a menu: NT only (98 SE and ME never warn). */
+static void warn_item(HMENU m, int append)
+{
+    UINT flags = MF_STRING | (warn_on() ? MF_CHECKED : MF_UNCHECKED);
+    const char *text = "&Warn when a device is removed unexpectedly";
+
+    if (!envNt) {
+        if (!append) {
+            DeleteMenu(m, IDM_RMWARN, MF_BYCOMMAND);
+        }
+        return;
+    }
+    if (append) {
+        AppendMenuA(m, flags, IDM_RMWARN, text);
+    } else {
+        ModifyMenuA(m, IDM_RMWARN, MF_BYCOMMAND | flags, IDM_RMWARN, text);
     }
 }
 
@@ -6472,6 +6663,9 @@ static void init_menu(HMENU m)
     if (GetMenuState(m, IDM_LOGIN, MF_BYCOMMAND) != (UINT)-1) {
         login_item(m, 0);
     }
+    if (GetMenuState(m, IDM_RMWARN, MF_BYCOMMAND) != (UINT)-1) {
+        warn_item(m, 0);
+    }
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
                                           ? MF_ENABLED : MF_GRAYED));
@@ -6502,6 +6696,9 @@ static int command(HWND w, UINT id)
         return 1;
     case IDM_LOGIN:
         login_set(!login_on());
+        return 1;
+    case IDM_RMWARN:
+        warn_set(!warn_on());
         return 1;
     case IDM_LEVEL:
         level_dialog(w, lv_driver_of_node(tree_selected()));
@@ -6799,6 +6996,10 @@ static void tray_balloon(const char *title, const char *text, int warn)
     }
     if (!shellV5) {
         tray_update();
+        /* 98 SE: the tool's own pop-up in the balloon's place (record 25
+         * section 16). */
+        tr_pop_show(hTray, WM_TRAYICON, 1, title, text,
+                    warn ? TR_POP_WARNING : TR_POP_INFO);
         return;
     }
     memset(&n, 0, sizeof(n));
@@ -6868,8 +7069,28 @@ static void poll(void)
         tr_copy(pollId[k], nhi[k].Id, sizeof(pollId[k]));
     }
     count = tr_diff(&snapOld, now, ev, 8);
+    /* A warning due in this poll takes the poll's other events into its own
+     * balloon, under its title: on XP and later a second balloon from this
+     * icon replaces the first at once, so the departure that names the unit
+     * would hide the warning (record 25 section 7.6 item 4, read by T.11). */
+    for (i = 0; i < count; i++) {
+        if (ev[i].Kind == TR_EV_REMOVED) {
+            break;
+        }
+    }
+    if (i < count && warn_on()) {
+        char text[256];
+        (void)tr_events_text(ev, count, text, sizeof(text));
+        tray_balloon(tr_event_title(TR_EV_REMOVED), text, 1);
+        count = 0;
+    }
     for (i = 0; i < count; i++) {
         char text[256];
+        /* The user's option skips the warning's balloon alone (record 25
+         * section 7.6 item 8); the count still shows in the details. */
+        if (ev[i].Kind == TR_EV_REMOVED) {
+            continue;
+        }
         tr_event_text(&ev[i], text, sizeof(text));
         tray_balloon(tr_event_title(ev[i].Kind), text,
                      ev[i].Kind == TR_EV_STOPPED || ev[i].Kind == TR_EV_FAILED);
@@ -6987,6 +7208,7 @@ static void tray_context_menu(void)
     AppendMenuA(m, MF_STRING, IDM_REFRESH, "&Refresh");
     AppendMenuA(m, MF_STRING, IDM_ABOUT, "&About");
     login_item(m, 1);
+    warn_item(m, 1);
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_EXIT, "E&xit");
     SetMenuDefaultItem(m, IDM_OPEN, FALSE);
@@ -7009,6 +7231,9 @@ static void tray_context_menu(void)
         break;
     case IDM_LOGIN:
         login_set(!login_on());
+        break;
+    case IDM_RMWARN:
+        warn_set(!warn_on());
         break;
     case IDM_EXIT:
         quit_all();

@@ -1517,6 +1517,16 @@ void inst_sha256(const unsigned char *data, size_t len, char *hex65);
 int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
                     int noStor98, int list, int is8, int *asked, int *def);
 
+/* Record 26 section 5.3.1 case 3b (roadmap-usb4 task 43.23): on Windows 8
+ * and 8.1 (is8: the INST_OS_CMONLY kind, which takes in 10 below build
+ * 22000 too once 43.34 admits it), Stor98's box ticked, a drive whose
+ * service is stornvme (8.1's and 10's in-box NVMe driver; 8 has none)
+ * counts as having no driver, and
+ * its install is forced (the signed in-box INF outranks Stor98's); any
+ * other service, and stornvme on another system, is a driver left as it
+ * is. 1 when the drive is installed over. */
+int inst_s98_over_inbox(int is8, const char *service);
+
 /* Record 23 section 4.4 (revision 23): a device bound to Stor98 that is a
  * known tunnel drive, for the shared-file rule. Present: behind a tunnel.
  * Not present: on NT one the install record names; on 98 SE and ME any

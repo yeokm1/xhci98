@@ -144,7 +144,7 @@ static void test_models_rule(void)
     e = env(1, 6, 3, INST_ARCH_AMD64);
     inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
     CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "8.1 x64: NTamd64.6.0");
-    /* Revision 27: Windows 10 reads them too, with no INF change. */
+    /* Revision 28: Windows 10 reads them too, with no INF change. */
     e = env(1, 10, 0, INST_ARCH_X86);
     inst_models_section("CmModels,NTx86.6.0", &e, out, sizeof(out));
     CHECK(inst_eq(out, "CmModels.NTx86.6.0"), "10 x86: .NTx86.6.0");
@@ -190,7 +190,7 @@ static void test_cm_only(void)
           "8.1: the connection manager alone");
     CHECK(inst_os_kind(1, 6, 4, 9841) == INST_OS_REFUSED,
           "10's previews (6.4): refused");
-    /* Revision 27 (task 43.34): 10.0 below build 22000, Server 2016 to
+    /* Revision 28 (task 43.34): 10.0 below build 22000, Server 2016 to
      * 2022 among them with no Server check; 11 refused. */
     CHECK(inst_os_kind(1, 10, 0, 10240) == INST_OS_CMONLY, "10 1507");
     CHECK(inst_os_kind(1, 10, 0, 14393) == INST_OS_CMONLY,
@@ -3764,6 +3764,45 @@ static void test_s98(void)
               "8 and 8.1, /yes: N");
         CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 1, &asked, &def) && !asked,
               "8 and 8.1, /stor98: installed unasked");
+        /* Task 43.23 (record 26 section 5.3.1 case 3b): 8.1's and 10's own
+         * stornvme on a tunnel drive is installed over, forced; nothing
+         * else is. */
+        CHECK(inst_s98_over_inbox(1, "stornvme") &&
+              inst_s98_over_inbox(1, "StorNVMe"),
+              "8 and 8.1: a drive under stornvme is installed over");
+        CHECK(!inst_s98_over_inbox(0, "stornvme"),
+              "2000 to 7: stornvme is another driver, left");
+        CHECK(!inst_s98_over_inbox(1, "stor98") &&
+              !inst_s98_over_inbox(1, "secnvme") &&
+              !inst_s98_over_inbox(1, "iaStorAC") &&
+              !inst_s98_over_inbox(1, "stornvme2") &&
+              !inst_s98_over_inbox(1, "") &&
+              !inst_s98_over_inbox(1, NULL),
+              "8 and 8.1: Stor98 itself, a vendor's NVMe driver, no service: "
+              "not installed over");
+        /* Windows 10 below build 22000 (task 43.34) takes Stor98's row as 8
+         * and 8.1 do: the engine passes osKind == INST_OS_CMONLY to both
+         * calls; 11 (build 22000 and later) never reaches them. */
+        {
+            int k10 = inst_os_kind(1, 10, 0, 19045) == INST_OS_CMONLY;
+            int k1507 = inst_os_kind(1, 10, 0, 10240) == INST_OS_CMONLY;
+            int k11 = inst_os_kind(1, 10, 0, 22000) == INST_OS_CMONLY;
+
+            CHECK(k10 && k1507 && !k11 &&
+                  !inst_s98_decide(1, 1, 0, 0, 0, 0, k10, &asked, &def) &&
+                  asked && !def,
+                  "10 (1507, 22H2): Stor98 asked, Enter gives N, as on 8");
+            CHECK(!inst_s98_decide(1, 1, 1, 0, 0, 0, k10, &asked, &def) &&
+                  !asked &&
+                  inst_s98_decide(1, 1, 1, 1, 0, 0, k10, &asked, &def) &&
+                  !asked,
+                  "10: /yes gives N, /stor98 installs unasked");
+            CHECK(inst_s98_over_inbox(k10, "stornvme") &&
+                  !inst_s98_over_inbox(k10, "secnvme") &&
+                  !inst_s98_over_inbox(k10, "stor98"),
+                  "10: a drive under 10's own stornvme is installed over, "
+                  "forced; a vendor's driver is left");
+        }
         CHECK(inst_s98_box_open(1, 1, 1) && !inst_s98_box_open(1, 1, 0) &&
               !inst_s98_box_open(1, 0, 1) && !inst_s98_box_open(0, 1, 1),
               "the window's box: open only under a ticked Thunderbolt box");

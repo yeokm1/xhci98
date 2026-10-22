@@ -922,9 +922,11 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
 
     memset(q, 0, sizeof(*q));
     if (n < CM_Q_HDR_BYTES || tr_d32(b + CM_Q_O_MAGIC) != CM_Q_MAGIC ||
-        tr_d32(b + CM_Q_O_VERSION) != CM_Q_VERSION) {
+        (tr_d32(b + CM_Q_O_VERSION) != CM_Q_VERSION &&
+         tr_d32(b + CM_Q_O_VERSION) != CM_Q_VERSION_1)) {
         return 0;
     }
+    q->Version = tr_d32(b + CM_Q_O_VERSION);
     q->Base = b;
     q->Bytes = tr_d32(b + CM_Q_O_BYTES);
     q->Pass = tr_d32(b + CM_Q_O_PASS);
@@ -953,6 +955,18 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
     if (recOff < CM_Q_HDR_BYTES || recOff > q->Bytes ||
         q->Bytes - recOff < CM_ST_HDR_BYTES) {
         return 0;
+    }
+    if (q->Version != CM_Q_VERSION_1) {
+        /* The block sits between the header and the record. */
+        if (recOff < CM_Q_HDR_BYTES + CM_Q_RM_BYTES) {
+            return 0;
+        }
+        q->RmFlags = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_FLAGS);
+        q->RmCount = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_COUNT);
+        q->RmMember = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_MEMBER);
+        q->RmLost = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_LOST);
+    } else {
+        q->RmMember = CM_Q_UNKNOWN;
     }
     q->Rec = b + recOff;
     q->RecBytes = tr_d32(q->Rec + CM_ST_O_BYTES);
@@ -1320,6 +1334,27 @@ void tr_snap_init(TR_SNAP *s)
     memset(s, 0, sizeof(*s));
 }
 
+/* A record entry as the snapshot keeps it. */
+static void tr_srouter(TR_SROUTER *x, const unsigned char *e, TR_U32 nhiKey,
+                       TR_U32 epochLo, TR_U32 epochHi)
+{
+    memset(x, 0, sizeof(*x));
+    x->Nhi = nhiKey;
+    x->EpochLo = epochLo;
+    x->EpochHi = epochHi;
+    x->Kind = tr_d32(e + CM_ST_E_KIND);
+    x->RouteLo = tr_d32(e + CM_ST_E_ROUTE_LO);
+    x->RouteHi = tr_d32(e + CM_ST_E_ROUTE_HI);
+    x->Place = tr_d32(e + CM_ST_E_PLACE);
+    x->Ids = tr_d32(e + CM_ST_E_IDS);
+    x->ShortId = tr_d32(e + CM_ST_E_SHORT_ID);
+    x->Approval = tr_d32(e + CM_ST_E_APPROVAL);
+    x->Tunnels = tr_d32(e + CM_ST_E_TUNNELS);
+    x->Bridge = tr_d32(e + CM_ST_E_BRIDGE);
+    x->Gen = tr_d32(e + CM_ST_E_GEN);
+    tr_router_name(e, x->Name, sizeof(x->Name));
+}
+
 int tr_snap_add(TR_SNAP *s, TR_U32 nhiKey, const TR_QUERY *q)
 {
     TR_U32 n = tr_d32(q->Rec + CM_ST_O_ROUTER_COUNT);
@@ -1334,30 +1369,16 @@ int tr_snap_add(TR_SNAP *s, TR_U32 nhiKey, const TR_QUERY *q)
     s->Stage[s->NhiCount] = tr_d32(q->Rec + CM_ST_O_STAGE);
     s->EpochLo[s->NhiCount] = q->EpochLo;
     s->EpochHi[s->NhiCount] = q->EpochHi;
+    s->RmFlags[s->NhiCount] = q->RmFlags;
+    s->RmCount[s->NhiCount] = q->RmCount;
     s->NhiCount++;
     for (r = 0; r < n; r++) {
         const unsigned char *e = q->Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
-        TR_SROUTER *x;
         if (s->Count >= TR_SNAP_ROUTERS) {
             s->Truncated = 1;
             return 0;
         }
-        x = &s->R[s->Count++];
-        memset(x, 0, sizeof(*x));
-        x->Nhi = nhiKey;
-        x->EpochLo = q->EpochLo;
-        x->EpochHi = q->EpochHi;
-        x->Kind = tr_d32(e + CM_ST_E_KIND);
-        x->RouteLo = tr_d32(e + CM_ST_E_ROUTE_LO);
-        x->RouteHi = tr_d32(e + CM_ST_E_ROUTE_HI);
-        x->Place = tr_d32(e + CM_ST_E_PLACE);
-        x->Ids = tr_d32(e + CM_ST_E_IDS);
-        x->ShortId = tr_d32(e + CM_ST_E_SHORT_ID);
-        x->Approval = tr_d32(e + CM_ST_E_APPROVAL);
-        x->Tunnels = tr_d32(e + CM_ST_E_TUNNELS);
-        x->Bridge = tr_d32(e + CM_ST_E_BRIDGE);
-        x->Gen = tr_d32(e + CM_ST_E_GEN);
-        tr_router_name(e, x->Name, sizeof(x->Name));
+        tr_srouter(&s->R[s->Count++], e, nhiKey, q->EpochLo, q->EpochHi);
     }
     return 1;
 }
@@ -1469,6 +1490,28 @@ int tr_live_lost(TR_U32 live)
     }
 }
 
+/* Revision 16 (record 25 section 7.6): whether NHI i of `now` has an
+ * unexpected removal against `old` - the same NHI at the same epoch, both
+ * watched and ACTIVE, the count moved. */
+static int tr_removed(const TR_SNAP *old, const TR_SNAP *now, int i)
+{
+    int k;
+
+    for (k = 0; k < old->NhiCount; k++) {
+        if (old->NhiKey[k] != now->NhiKey[i]) {
+            continue;
+        }
+        return old->EpochLo[k] == now->EpochLo[i] &&
+               old->EpochHi[k] == now->EpochHi[i] &&
+               (old->RmFlags[k] & CM_Q_RF_WATCHED) != 0 &&
+               (now->RmFlags[i] & CM_Q_RF_WATCHED) != 0 &&
+               old->Live[k] == CM_LIVE_ACTIVE &&
+               now->Live[i] == CM_LIVE_ACTIVE &&
+               old->RmCount[k] != now->RmCount[i];
+    }
+    return 0;
+}
+
 int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
 {
     int count = 0;
@@ -1486,6 +1529,15 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
                   now->Stage[i] == CM_ST_STAGE_FAILED))) {
                 count = tr_ev(ev, cap, count, TR_EV_STOPPED, NULL, 0);
             }
+        }
+    }
+    /* The warnings before the ordinary events, so a full buffer never
+     * drops one (the caller moves on to the next sample either way). */
+    for (i = 0; i < now->NhiCount && i < TR_SNAP_NHI; i++) {
+        if (tr_removed(old, now, i) && count < cap) {
+            memset(&ev[count], 0, sizeof(ev[count]));
+            ev[count].Kind = TR_EV_REMOVED;
+            count++;
         }
     }
     for (i = 0; i < now->Count; i++) {
@@ -1536,6 +1588,35 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
     return count;
 }
 
+void tr_removal_text(const TR_QUERY *q, char *out, size_t cap)
+{
+    char lost[48];
+
+    lost[0] = '\0';
+    if (q->Version != CM_Q_VERSION_1 && q->RmLost != 0) {
+        tr_sprintf(lost, sizeof(lost), "; %lu in a loss of the controller",
+                   (unsigned long)q->RmLost);
+    }
+    if (q->Version == CM_Q_VERSION_1) {
+        tr_copy(out, "not reported by this driver", cap);
+    } else if ((q->RmFlags & CM_Q_RF_WATCHED) == 0) {
+        tr_copy(out, "not watched on this system", cap);
+    } else if (q->RmCount == 0) {
+        tr_sprintf(out, cap, "none since this start%s", lost);
+    } else if (q->RmMember == CM_Q_UNKNOWN) {
+        tr_sprintf(out, cap, "%lu since this start%s",
+                   (unsigned long)q->RmCount, lost);
+    } else {
+        tr_sprintf(out, cap,
+                   "%lu since this start; the last on tunnel port "
+                   "%02lX:%02lX.%lu%s",
+                   (unsigned long)q->RmCount,
+                   (unsigned long)CM_ST_BDF_BUS(q->RmMember),
+                   (unsigned long)CM_ST_BDF_DEV(q->RmMember),
+                   (unsigned long)CM_ST_BDF_FN(q->RmMember), lost);
+    }
+}
+
 void tr_event_text(const TR_EVENT *e, char *out, size_t cap)
 {
     char gen[32];
@@ -1561,10 +1642,46 @@ void tr_event_text(const TR_EVENT *e, char *out, size_t cap)
     case TR_EV_LEFT:
         tr_sprintf(out, cap, "%s was disconnected.", e->Name);
         break;
+    case TR_EV_REMOVED:
+        tr_copy(out, "A Thunderbolt or USB4 device was removed unexpectedly.",
+                cap);
+        break;
     default:
         tr_copy(out, "", cap);
         break;
     }
+}
+
+int tr_events_text(const TR_EVENT *ev, int count, char *out, size_t cap)
+{
+    char line[256];
+    size_t used = 0;
+    size_t len;
+    int lines = 0;
+    int i;
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    for (i = 0; i < count; i++) {
+        tr_event_text(&ev[i], line, sizeof(line));
+        len = strlen(line);
+        if (len == 0) {
+            continue;
+        }
+        /* The line, its separator before it, and the terminator. */
+        if (used + (lines > 0 ? 1 : 0) + len + 1 > cap) {
+            continue;
+        }
+        if (lines > 0) {
+            out[used++] = '\n';
+        }
+        memcpy(out + used, line, len + 1);
+        used += len;
+        lines++;
+    }
+    return lines;
 }
 
 const char *tr_event_title(int kind)
@@ -1572,6 +1689,7 @@ const char *tr_event_title(int kind)
     switch (kind) {
     case TR_EV_STOPPED:
     case TR_EV_FAILED:
+    case TR_EV_REMOVED:
         return "Thunderbolt/USB4 warning";
     default:
         return "Thunderbolt/USB4";
@@ -2527,6 +2645,11 @@ const char *tr_elev_question(void)
 int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value)
 {
     return !(trayMode && haveValue && value == 0);
+}
+
+int tr_warn_removed(int haveValue, TR_U32 value)
+{
+    return !(haveValue && value == 0);
 }
 
 /* ---- the drivers' logging levels (section 7.5) ---------------------------- */

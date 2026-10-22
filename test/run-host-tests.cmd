@@ -174,6 +174,10 @@ rem   test_wizlay  - the installer window's settings-page layout arithmetic
 rem                  (xhciinst\wiz_lay.c, task 43.10, design record 26
 rem                  section 5.4): the "now" column, the split into parts of
 rem                  at most three rows, the open list's width, the note
+rem   test_trpop   - XHCITR's 98 SE pop-up, its pure half (xhcitr\tr_pop.c,
+rem                  task 43.55, design record 25 section 16): the taskbar's
+rem                  edge, the anchor, the place, the size, the timeout,
+rem                  the queue
 rem   test_tr      - the device viewer and tray's pure half (xhcitr\tr_core.c,
 rem                  task 41-A.2, design record 25 section 10): the bounded
 rem                  printf, the USB IOCTL answers, the descriptor decoders
@@ -237,6 +241,11 @@ rem                  (src\cm\cm_call.c, task 42-A.12): its transitions, a
 rem                  stale id, a withdrawal, a deadline passing while a call
 rem                  runs, two members' slots apart, and a next-operation
 rem                  client driven through one slot
+rem   test_cm_eject - the 9x eject transaction and statement decision
+rem                  (src\cm\cm_eject.c, task 43.18): the ask's checks,
+rem                  the result's layout, every branch through a fake
+rem                  configuration manager, R11 O6, a stopped start's
+rem                  record adopted, the decision's identity and deadline
 rem   test_cm_nvlink - the stor98 link-state channel's pure half
 rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
 rem                  table of stor98's stor98cm.h, its entry protocol read
@@ -570,12 +579,17 @@ call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
 rem test_cm_call links nothing else: the call workers' handoff word is pure
 rem (42-A.12).
 call :run test_cm_call "test_cm_call.c ..\src\cm\cm_call.c"
+rem test_cm_eject links the transaction's pure half alone (43.18).
+call :run test_cm_eject "test_cm_eject.c ..\src\cm\cm_eject.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check.
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
+rem test_ej9x links the tools' half of the 9x eject asked of xhcicm.sys
+rem (xhciinst\inst_ej9x.c, task 43.18) with the pure half it maps through.
+call :run test_ej9x "test_ej9x.c ..\xhciinst\inst_ej9x.c ..\xhciinst\inst_core.c"
 rem test_trlog links XHCITR's log readers (xhcitr\tr_log.c, design record 25
 rem sections 4.5 and 4.6) and xhcicm.sys's log builder, whose answers it
 rem reads, and holds xhcitr\tr_hcctr.h to src\xhci_counters.h.
@@ -619,6 +633,9 @@ call :run test_di "test_di.c ..\xhciinst\di\di_core.c"
 rem test_wizlay links the installer window's layout arithmetic alone
 rem (xhciinst\wiz_lay.c, task 43.10, design record 26 section 5.4).
 call :run test_wizlay "test_wizlay.c ..\xhciinst\wiz_lay.c"
+rem test_trpop links the 98 SE pop-up's pure half alone (xhcitr\tr_pop.c,
+rem task 43.55, design record 25 section 16).
+call :run test_trpop "test_trpop.c ..\xhcitr\tr_pop.c"
 rem test_dijob links both pure halves, the installer's and the helper's:
 rem each reads what the other writes (record 27 sections 4.1 and 4.2).
 call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_core.c"

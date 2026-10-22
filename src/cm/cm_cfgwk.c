@@ -508,6 +508,17 @@ static BOOLEAN cmWkIdNames(const char *id, ULONG bdf, const ULONG *want,
     return TRUE;
 }
 
+BOOLEAN CmCfgwkPciPath(ULONG bdf, PULONG path, PULONG count)
+{
+    return cmWkPciPath(bdf, path, count);
+}
+
+BOOLEAN CmCfgwkIdNames(const char *id, ULONG bdf, const ULONG *want,
+                       ULONG wantCount)
+{
+    return cmWkIdNames(id, bdf, want, wantCount);
+}
+
 /* TRUE while member i's lookups read no configuration space: its
  * CONTROLLER_UNAVAILABLE removal is owed, or the re-enumeration after it
  * is (read now, under the lock). */

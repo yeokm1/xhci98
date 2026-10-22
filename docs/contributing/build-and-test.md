@@ -3390,6 +3390,41 @@ guest:
 7z l <scratch>\1.ntfs
 ```
 
+### Windows 10 target VMs (roadmap-usb4 43.32)
+
+Two Windows 10 22H2 guests, x86 and x64, for the Windows 10 tasks 43.33
+to 43.37 (run sheet `runs/run-43.md`, "43.32"). They are set up as the
+Vista and 7 machines above are - TCG, the legacy BIOS, test-signing on,
+the transfer drive, a prepared starting point under every leg - and they
+live, like the Windows 8 and 8.1 images they were built beside, on the
+VM disk of development host A, outside the tree:
+
+| | value |
+|---|---|
+| Media | the owner's `Win10_22H2_English_x64v1.iso` and `Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965 (the GVLK selects Pro; the guests are never activated) |
+| Pristine images | `E:\xhci98-vm\win8-10\w10x64\w10x64-pristine.qcow2` (SHA-256 `770f2795...6fdb636`) and `...\w10x86\w10x86-pristine.qcow2` (`10bfd472...135c92d`), read-only, 64 GiB, one NTFS partition on MBR; built 2026-10-22 by `E:\xhci98-vm\win8-10\scripts\install2.sh` (`RECIPE.txt` there has the recipe and the full hashes): WinPE and the image copy under WHPX, specialize, OOBE and the first logon under TCG. Local administrator `xhci` / `xhci98` with autologon; `bcdedit /set testsigning on` (the desktop shows "Test Mode"); hibernation and Windows Update off; no network |
+| Prepared starting points | `E:\xhci98-vm\p43-33\<g>\prep.qcow2` (read-only) over each pristine image: a scheduled task `xrun` (highest privileges, as `xhci`) that runs `<transfer drive>\auto\go.cmd`. A leg starts it with Win+R `schtasks /run /tn xrun`, elevated without a consent prompt; its logon trigger does not fire on these images |
+| Leg overlays | `E:\xhci98-vm\p43-33\<g>-<set>\disk.qcow2` over `prep.qcow2`, one directory per leg, never reused across legs; a fresh `out.qcow2` (1 GiB, formatted `OUT` as O: by the leg's script, read after power-off with 7-Zip) |
+| Launcher | `E:\xhci98-vm\p43-33\scripts\launch.ps1 -Guest w10x86\|w10x64 -Set <leg> [-Out] [-Devs ...]`; `q.ps1` (screendump, keys, typing, Win+R, the CD) and `stop.ps1` (ACPI power-off of only the pid the kit started) beside it |
+| QEMU | the usb4-emu build `vm\usb4\bin-2a893ea\qemu-system-x86_64.exe` (hash checked by the launcher), `-machine pc` (SeaBIOS), `-accel tcg,thread=multi`, `-cpu qemu64,+3dnowprefetch` (8.1 and 10 x64 need PrefetchW), `-smp 2`, 2048 MB, `-vga std`, `-display none`, `-nic none` |
+| Ports | QMP **48660** (`w10x86`) and **48661** (`w10x64`), from the block 48660-48689 |
+| USB | `qemu-xhci,p2=8,p3=4` at 00:03 (QEMU ports 1-4 USB 3 and 2.0, 5-8 USB 2.0 only): `usb-tablet` port 5, `usb-storage` on a USB 3 port (1) and a USB 2.0-only port (6), `usb-uas` port 2, `usb-audio` port 7, `usb-hub` port 8 with `usb-kbd` behind it; the emulator's Thunderbolt 3 NHI (`tb3-alpine-ridge`, 00:04), its xHCI (00:07) and tunnel bridge (00:05) |
+| Transfer | `E:\xhci98-vm\p43-33\xfer` as an IDE VVFAT drive (read at launch only): `auto\` the leg scripts, `pkg\` the package under test |
+| Secure Boot | none: SeaBIOS has none, which is why test-signing mode needs no firmware change. The OVMF guest with Secure Boot on that 43.32 asks for (for 43.36's refusal case) is **not built** (run sheet 43.32) |
+
+**The speed under TCG** (2026-10-22, host loaded): from power-on to the
+autologon desktop about 4.5 minutes at `-smp 2`, both guests; a
+`pnputil` or registry reading a few seconds; `msinfo32 /report` about ten
+minutes; `Get-PnpDeviceProperty` one key at a time far too slow (one
+pipeline per reading instead). Usable for the reading and install legs;
+no WHPX for the legs (43.12 keeps every guest on TCG). The display
+sleeps after about ten minutes: send a key before a screendump.
+
+**The vehicle's limits on 10** (record 13 section 6.14.3): QEMU's
+`usb-uas` does not start under 10's own `uaspstor` (Code 10), and QEMU's
+`usb-storage` reports `bcdUSB` 0x0200 at High Speed, so it cannot raise
+the "can perform faster" condition; the NHI has no driver on 10 (Code 28).
+
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
 A third VM, separate from the 2b differential VM: Windows 2000 SP4 with two

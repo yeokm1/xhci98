@@ -275,6 +275,7 @@ Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in t
 - Windows 98 SE and Windows 2000 SP4 are the primary targets.
 - Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1, and the Intel port switchover under Windows 98 SE on the Lenovo B490; Windows XP x64 and 7 x64 on the Dell Latitude E7250.
 - Every other target, Windows 2000 included, has run in QEMU virtual machines only.
+- The free USB class drivers a download may carry are tested in their own project: which of their tests used an emulated device, a real device through a virtual machine, or a real PC is in [usb-wdm-free's "Tested by the author"](https://github.com/yeokm1/usb-wdm-free#tested-by-the-author).
 - Per-system detail: the release notes' [Targets and their standing](docs/using/release-notes.md#targets-and-their-standing). The test devices: [test-equipment.md](docs/contributing/test-equipment.md).
 
 | Machine | Controller | Tested by |
@@ -312,6 +313,8 @@ Each driver directory holds:
 - `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives))
 
 ## Reporting a bug
+
+Bugs in the free USB class drivers that a download may carry (the [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) drivers, in beta) go to [that project's issues](https://github.com/yeokm1/usb-wdm-free/issues), not here. The non-free drivers (the [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) pack) are their vendors' drivers as released and are not tested or changed by this project. Everything else goes here:
 
 Open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
 

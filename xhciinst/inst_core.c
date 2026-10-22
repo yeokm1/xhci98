@@ -3440,7 +3440,7 @@ int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build)
     if (major == 6UL && (minor == 2UL || minor == 3UL)) {
         return INST_OS_CMONLY;
     }
-    /* Revision 27: 11 reports 10.0 too, from build 22000, and has a USB4
+    /* Revision 28: 11 reports 10.0 too, from build 22000, and has a USB4
      * connection manager of its own. No Server check (owner, 2026-10-20). */
     if (major == 10UL && minor == 0UL && build < INST_OS_BUILD_W11) {
         return INST_OS_CMONLY;
@@ -5689,6 +5689,11 @@ int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
         return haveS98 && tb && stor98Switch;
     }
     return haveS98 && tb && !noStor98;
+}
+
+int inst_s98_over_inbox(int is8, const char *service)
+{
+    return is8 && service != NULL && inst_eq(service, "stornvme");
 }
 
 int inst_s98_known_tunnel(int nt, int present, int place, int recorded)
