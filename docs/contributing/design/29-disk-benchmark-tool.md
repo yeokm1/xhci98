@@ -1,7 +1,8 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 4, 2026-10-22, before code (roadmap-usb4 task 43.50),
-reviewed and revised three times the same day. Draft 4: a write
+Status: draft 5, 2026-10-22, before code (roadmap-usb4 task 43.50),
+reviewed and revised four times the same day. Draft 5: the write
+generation guarded at issue, never wrapping. Draft 4: a write
 generation in every stamp and in the expected-state map, so a dropped
 repeated write is found; the random generator's zero state and its
 redraws bounded. Draft 3: every reopened handle
@@ -293,7 +294,17 @@ Every test reads and writes one file of the tool's own,
   together, the map is the block's exact expected content. The plan
   refuses a verifiable run whose map would exceed 16 MiB, four million
   blocks ("lower the file size, or raise the smallest write size, to
-  verify"), or that could issue more than 2^32 - 1 writes.
+  verify"), or whose byte-budgeted tests alone could issue more than
+  2^32 - 1 writes. Timed tests have no count the plan can know, so the
+  generation is also guarded where it is taken: one run-wide counter,
+  advanced with `InterlockedIncrement` at each write's issue by every
+  worker, over every test, pass and warm-up; a worker that would take
+  the value `0xFFFFFFFF` takes none, sets the run's stop event and the
+  run ends as Stop ends it (section 4.4: no new request, every request in
+  flight collected, then the verification of what completed), reported
+  as "the run reached the limit of four thousand million writes for a
+  verified run". The generation never wraps to 0 or to a value used
+  before.
 - **No overlapping writes in flight.** Before any write is issued the
   worker checks its block against that thread's requests still in flight
   (at most 32, by a scan): a random write draws its offset again, a
@@ -1175,7 +1186,8 @@ maps over the cap; the pattern's unit for given seeds and its check
 against the map finding a dropped write (an older generation's stamp,
 also when the same block was written earlier in the same test or pass), a
 misplaced write, another run's unit, a changed body, an untouched region
-and a block written twice; the in-flight exclusion at depth 32, the bounded redraw
+and a block written twice; the generation guard from a counter started at `0xFFFFFFF0` with
+several workers; the in-flight exclusion at depth 32, the bounded redraw
 and a part of one block; a zero seed and a derived zero state; the
 arithmetic at its bounds (frequencies of 1,193,182 Hz, 3,579,545 Hz and
 near 2^32, a 2-hour interval, a zero interval) and each rounding edge; a
