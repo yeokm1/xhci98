@@ -3545,7 +3545,7 @@ static void test_s98(void)
         }
     }
     free(table);
-    CHECK(strcmp(INST_S98_TABLE_VERSION, "0.4.0.0") == 0,
+    CHECK(strcmp(INST_S98_TABLE_VERSION, "3.2.0.0") == 0,
           "the table is the bundled Stor98's");
 
     /* Which system each row is for. */
@@ -3554,7 +3554,7 @@ static void test_s98(void)
           !inst_s98_applies(INST_S98_IDLE, 0) &&
           inst_s98_applies(INST_S98_WRITETHROUGH, 0),
           "gone and idle are 2000-to-7 only");
-    CHECK(strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 0), "512") == 0 &&
+    CHECK(strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 0), "2048") == 0 &&
           strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 1), "256") == 0 &&
           strcmp(inst_s98_default(INST_S98_POLLSPINUS, 0), "0") == 0 &&
           strcmp(inst_s98_default(INST_S98_POLLSPINUS, 1), "500") == 0,
@@ -3586,6 +3586,10 @@ static void test_s98(void)
                           &why) && why != NULL, "an unknown word refused");
     CHECK(inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "512", w, sizeof(w),
                          &why) &&
+          inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "2048", w, sizeof(w),
+                         &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "2052", w, sizeof(w),
+                          &why) &&
           !inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "512", w, sizeof(w),
                           &why) &&
           inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "128", w, sizeof(w),

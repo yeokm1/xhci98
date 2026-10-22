@@ -5286,7 +5286,7 @@ const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
       { "poll only without an interrupt", "always poll", NULL, NULL },
       "when the driver polls the controller for completed requests" },
     { "StorMaxTransferKB", "maxtransferkb", INST_S98_NUMBER, 0, "KiB",
-      "512", "256", 64UL, 512UL, 4UL, 0, NULL,
+      "2048", "256", 64UL, 2048UL, 4UL, 0, NULL,
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "the largest request Windows sends the driver" },
     { "StorPollBusyUs", "pollbusyus", INST_S98_NUMBER, 0, "us",
@@ -5370,7 +5370,7 @@ void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap)
 static INST_U32 inst_s98_hi(int i, int nt)
 {
     if (i == INST_S98_MAXTRANSFERKB) {
-        return nt ? 256UL : 512UL;
+        return nt ? 256UL : 2048UL;
     }
     return instS98Values[i].Hi;
 }
