@@ -4346,6 +4346,24 @@ static void test_storage(void)
           "bulk: no package copy of the seven refuses");
     CHECK(!inst_stor_bulk_admit(1, 1, -1),
           "bulk: the INF directory unread refuses");
+    CHECK(inst_stor_half(INST_STOR_PAIR_BOTH, 1) == INST_STOR_HALF_NONE &&
+          inst_stor_half(INST_STOR_PAIR_NONE, 1) == INST_STOR_HALF_NONE &&
+          inst_stor_half(INST_STOR_PAIR_NONE, 0) == INST_STOR_HALF_NONE,
+          "half: a whole pair or neither, nothing to do");
+    CHECK(inst_stor_half(INST_STOR_PAIR_STOR, 1) == INST_STOR_HALF_WITHDRAW &&
+          inst_stor_half(INST_STOR_PAIR_NTMAP, 1) == INST_STOR_HALF_WITHDRAW,
+          "half: a half with a placed copy recorded (any run) is withdrawn");
+    CHECK(inst_stor_half(INST_STOR_PAIR_STOR, 0) == INST_STOR_HALF_STEP &&
+          inst_stor_half(INST_STOR_PAIR_NTMAP, 0) == INST_STOR_HALF_STEP,
+          "half: another's half is never deleted, a step");
+    CHECK(inst_stor_half(INST_STOR_PAIR_STOR, -1) == INST_STOR_HALF_STEP &&
+          inst_stor_half(-1, 1) == INST_STOR_HALF_STEP,
+          "half: the record or the pair unread, a step");
+    CHECK(inst_stor_scan(1, 1, 1) == 1 && inst_stor_scan(1, 0, 0) == 1,
+          "scan: a copy found is found");
+    CHECK(inst_stor_scan(0, 0, 0) == 0, "scan: none, every INF read");
+    CHECK(inst_stor_scan(0, 1, 0) == -1 && inst_stor_scan(0, 0, 1) == -1,
+          "scan: an unread INF or a listing cut short is unknown");
 
     /* An update with Source recorded: the engine's later copies, and a
      * file of the download's bytes the first run found and kept, are this

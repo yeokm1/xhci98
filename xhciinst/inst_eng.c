@@ -5282,6 +5282,7 @@ static int flat_drop_work(const char *dir)
     }
     join(lst, sizeof(lst), dir, INST_FLAT_LIST);
     if (GetFileAttributesA(lst) == 0xFFFFFFFFUL) {
+        int late = 0;
         join(lst, sizeof(lst), work, INST_FLAT_LIST);
         text = read_file(lst, NULL);
         for (p = text; p != NULL && *p != '\0'; p = nl) {
@@ -5300,6 +5301,12 @@ static int flat_drop_work(const char *dir)
                 inst_eq(p, inst_tray_file(INST_MY_ARCH))) {
                 continue;
             }
+            /* USBNTMAP.INF last, once USBSTOR.INF is gone (record 26
+             * section 6.5.5). */
+            if (inst_stor_rm_late(p, NULL)) {
+                late = 1;
+                continue;
+            }
             join(file, sizeof(file), dir, p);
             SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
             if (DeleteFileA(file)) {
@@ -5312,6 +5319,25 @@ static int flat_drop_work(const char *dir)
             }
         }
         free(text);
+        if (late) {
+            join(file, sizeof(file), dir,
+                 instStorFile[INST_STOR_IDX_USBSTOR_INF].Name);
+            if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+                left = 1;
+            } else {
+                join(file, sizeof(file), dir,
+                     instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name);
+                SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+                if (DeleteFileA(file)) {
+                    flagChanged = 1;
+                }
+                if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+                    out("%s could not be deleted (error %lu).\n", file,
+                        (unsigned long)GetLastError());
+                    left = 1;
+                }
+            }
+        }
     }
     /* A file that stayed keeps the staging list that names it. */
     if (left) {
@@ -17800,7 +17826,6 @@ static void stor_place_infs(void)
     INST_U32 set;
     int i;
     int k;
-    int ours = 0;
     int pair;
     int st[INST_STOR_COUNT];
 
@@ -17826,26 +17851,28 @@ static void stor_place_infs(void)
                 stor_rec_dword("Published", 1);
             }
             storInfPlaced = 1;
-            ours = 1;
         } else {
             storInfMissed = 1;
         }
     }
-    /* The pair in %windir%\INF whole or not there: a half this run made is
-     * withdrawn, and a step is left. */
+    /* The pair in %windir%\INF whole or not there: a half this installer
+     * placed, in this run or an earlier one, is withdrawn, and a step is
+     * left. */
     pair = inst_stor_pair(stor_inf_here(INST_STOR_IDX_USBSTOR_INF),
                           stor_inf_here(INST_STOR_IDX_USBNTMAP_INF));
-    if (ours && pair != INST_STOR_PAIR_BOTH) {
-        out("The USB storage drivers' two INFs could not both be put in the "
-            "INF directory:\nneither is left there.\n");
+    k = inst_stor_half(pair, pair == INST_STOR_PAIR_BOTH ||
+                             pair == INST_STOR_PAIR_NONE ? 0 :
+                             stor_placed_any());
+    if (k == INST_STOR_HALF_WITHDRAW) {
+        out("The USB storage drivers' two INFs are not both in the INF "
+            "directory: the one\nthis installer placed is taken out "
+            "again.\n");
         if (!stor_unplace()) {
-            out("The one placed could not be withdrawn. Run the installer "
-                "again.\n");
+            out("It could not be taken out. Run the installer again.\n");
         }
         storInfPlaced = 0;
-        storInfMissed = 1;
-        storStepsLeft = 1;
-    } else if (pair != INST_STOR_PAIR_BOTH && pair != INST_STOR_PAIR_NONE) {
+    }
+    if (k != INST_STOR_HALF_NONE) {
         logonly("storage: the INFs in the INF directory are not a pair "
                 "(%d)\n", pair);
         storInfMissed = 1;
@@ -17898,15 +17925,64 @@ static int stor_takes_unit(const DEVREC *d)
 }
 
 /* 1 when a copy of the INF at index i is in INF or INF\OTHER, by its name
- * or its text; 0 none; -1 the directories could not be read. */
+ * or its text; 0 none; -1 unknown: a listing that failed or ended early,
+ * or an INF whose text could not be read, which may be a renamed copy. */
 static int stor_inf_found(int i)
 {
-    int s;
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    char *text;
+    DWORD bytes;
+    DWORD e;
+    int pass;
+    int found = 0;
+    int unread = 0;
+    int incomplete = 0;
 
-    if (!stor_inf_states(i, &s)) {
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return -1;
     }
-    return s != INST_STOR_ABSENT;
+    for (pass = 0; pass < 2 && !found; pass++) {
+        const char *sub = pass == 0 ? "INF" : "INF\\OTHER";
+        join(pattern, sizeof(pattern), win, sub);
+        join(pattern, sizeof(pattern), pattern, "*.INF");
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            e = GetLastError();
+            if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND &&
+                e != ERROR_NO_MORE_FILES) {
+                incomplete = 1;
+            }
+            continue;
+        }
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                continue;
+            }
+            if (inst_eq(fd.cFileName, instStorFile[i].Name)) {
+                found = 1;
+                break;
+            }
+            join(path, sizeof(path), win, sub);
+            join(path, sizeof(path), path, fd.cFileName);
+            bytes = 0;
+            text = read_file(path, &bytes);
+            if (text == NULL) {
+                unread = 1;
+                continue;
+            }
+            found = inst_stor_inf_is(text, bytes, i);
+            free(text);
+        } while (!found && FindNextFileA(h, &fd));
+        if (!found && GetLastError() != ERROR_NO_MORE_FILES) {
+            incomplete = 1;
+        }
+        FindClose(h);
+    }
+    return inst_stor_scan(found, unread, incomplete);
 }
 
 /* The helper's Bulk-Only step admitted (record 26 section 6.5.5): the

@@ -6202,6 +6202,25 @@ int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair)
            infPair != INST_STOR_PAIR_STOR;
 }
 
+int inst_stor_half(int pair, int placed)
+{
+    if (pair == INST_STOR_PAIR_BOTH || pair == INST_STOR_PAIR_NONE) {
+        return INST_STOR_HALF_NONE;
+    }
+    if (pair < 0 || placed <= 0) {
+        return INST_STOR_HALF_STEP;
+    }
+    return INST_STOR_HALF_WITHDRAW;
+}
+
+int inst_stor_scan(int found, int unread, int incomplete)
+{
+    if (found) {
+        return 1;
+    }
+    return (unread || incomplete) ? -1 : 0;
+}
+
 static void inst_stor_names(char *out, size_t cap,
                             const int st[INST_STOR_COUNT])
 {

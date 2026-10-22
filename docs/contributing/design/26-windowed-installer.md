@@ -1646,8 +1646,18 @@ taken silently by the stock `NTMAP.INF` ("1394/USB Disk", `DevLoader`
 dynamic link call from NTMAPHLP(02) + 00000002 to device "004F", service
 1" and hangs (runtime, the guest's screen; the unit's devnode was lost
 with the power cut). With `USBNTMAP.INF` findable as well, every unit
-read went to `USBNTMAP.INF`, "USB Disk". So the two INFs are all or
-nothing wherever Windows can find them:
+read went to `USBNTMAP.INF`, "USB Disk". A folder handed to the wizard
+is not such a place for the unit: with all seven in one folder given to
+the Add New Hardware wizard on a stock 98 SE (the release notes' hand
+install until draft 27), the wizard copied `USBSTOR.INF` alone into
+`INF\OTHER` (`MicrosoftUSBSTOR.INF`), the unit went to `NTMAP.INF` and
+Windows stopped the same way; with `USBNTMAP.INF` copied into
+`%windir%\INF` first, the same plug gave "USB Disk" (`Class\Storage`,
+`InfPath` `USBNTMAP.INF`, `PortDriver` `USBMPHLP.PDR`) and a drive
+letter with no restart and no `NTMAPHLP.PDR` copied (43.5's legs on a
+stock image with 3.1.0.0's driver, 2026-10-22; runtime). The release
+notes' hand install says so. So the two INFs are all or nothing wherever
+Windows can find them:
 
 - **`%windir%\INF`** (section 6.5.11): `USBNTMAP.INF` placed first and
   `USBSTOR.INF` only once a `USBNTMAP.INF` is in place there
@@ -1989,10 +1999,14 @@ the storage part as the partial-other case: `storCopyOk` is cleared, so
 the withdrawal of section 6.5.4 runs before the package's copy (the
 placed INFs deleted under its protections, the directory off
 `DevicePath`), and a step is left (exit 4). While the route still
-holds, a placement that failed is a note: the run says that the first
-plug of a new USB disk may still open Windows' wizard, which finds the
-driver in the install directory (not a step: the route through
-`DevicePath` stands as in draft 18). A
+holds, a placement that failed and left neither INF there is a note:
+the run says that the first plug of a new USB disk may still open
+Windows' wizard, which finds the driver in the install directory (not a
+step: the route through `DevicePath` stands as in draft 18). One that
+leaves a half of the pair there (draft 27, section 6.5.5) is a step
+(exit 4): a half this installer placed, in this run or an earlier one
+(the record's `Placed`), is withdrawn under section 6.5.4's protections
+(`inst_stor_half`), and a half that is not its own is never deleted. A
 file of the INF's name already in `%windir%\INF` is never written over,
 and on this route it is the download's bytes or this installer's (any
 other bytes make the case partial-other, section 6.5.3), so it is

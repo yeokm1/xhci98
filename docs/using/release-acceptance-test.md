@@ -306,10 +306,11 @@ device at a time, and do not cycle a device rapidly.
 | 5.8 | A SuperSpeed device | On a USB 3.x connector: plug in, round-trip a file. Keep it plugged in for step 8 | It works, with matching contents. Its SuperSpeed is read at 8.8 from the driver's snapshot, not from Device Manager, which shows `High` at most |
 
 On Windows 98 SE, NUSB's seven mass-storage files installed by hand, rather
-than from an NUSB install or the installer's storage row, are kept together
-in one folder: `USBSTOR.INF` without `USBNTMAP.INF` lets a stock Windows 98
-SE's own `NTMAP.INF` take the disk, and Windows stops with "Invalid VxD
-dynamic link call from NTMAPHLP" (the release notes). On a Windows 98 SE that
+than from an NUSB install or the installer's storage row, need
+`USBNTMAP.INF` copied into `C:\WINDOWS\INF` before the first disk is
+plugged in: otherwise a stock Windows 98 SE's own `NTMAP.INF` takes the
+disk, and Windows stops with "Invalid VxD dynamic link call from NTMAPHLP"
+(the release notes). On a Windows 98 SE that
 still holds NUSB's other files, the first storage device installed before
 `USBNTMAP.INF` was seen takes one step more: Windows binds the new disk to its
 generic "Disk drive" and no drive letter appears until that entry is updated

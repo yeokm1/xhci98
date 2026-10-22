@@ -1745,6 +1745,19 @@ int inst_stor_pair(int stor, int ntmap);
  * and %windir%\INF not holding USBSTOR.INF without USBNTMAP.INF (infPair,
  * an INST_STOR_PAIR_* or -1 unread). */
 int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair);
+/* After the placement in %windir%\INF: the pair as it stands (an
+ * INST_STOR_PAIR_* or -1 unread) and whether the record's Placed names a
+ * copy (placed 1, 0 none, -1 unread; any run's). */
+#define INST_STOR_HALF_NONE     0   /* whole, or neither: nothing to do   */
+#define INST_STOR_HALF_WITHDRAW 1   /* a half of this installer's: the
+                                       placed copies withdrawn, a step  */
+#define INST_STOR_HALF_STEP     2   /* a half that is not, or unread: a
+                                       step, nothing deleted            */
+int inst_stor_half(int pair, int placed);
+/* A presence scan of INF and INF\OTHER for one INF: found (a copy by name
+ * or text), unread (an INF whose text could not be read) and incomplete
+ * (a listing that ended in an error): 1 found, -1 unknown, 0 none. */
+int inst_stor_scan(int found, int unread, int incomplete);
 /* The SilentClasses entries the storage row adds on 98 SE (record 26
  * section 6.5.12, task 43.42 option A): USBSTOR.INF's generic Bulk-Only
  * lines, each a 4-byte entry of design record 13 section 6.11's form. */
