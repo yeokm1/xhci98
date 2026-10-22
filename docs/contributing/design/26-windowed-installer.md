@@ -619,8 +619,9 @@ loop as the other `XhciCm*` values are (record 28 section 7, N5).
 section 7.4; record 23 decision D16), not under `Services\USB`, so its
 row carries a location of its own in the value table (a flag the
 writer, the reader of "now" and the uninstall's loop test). `REG_DWORD`,
-default 1 (0: the service never restarts a unit's stack, it only lists
-it), on the systems the mark service runs on, 2000 to 7 and 8 and 8.1
+default 1 (0: the service keeps writing its safe-removal marks but
+never restarts a unit's stack, so a mark takes effect at that stack's
+next rebuild), on the systems the mark service runs on, 2000 to 7 and 8 and 8.1
 (`inst_mk_system`; record 23 decision D19), shown greyed elsewhere as
 another system's row, and shown open only when the mark service is in
 the run or already registered (the Thunderbolt component ticked, record
