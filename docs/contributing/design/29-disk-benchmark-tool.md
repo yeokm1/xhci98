@@ -1,7 +1,14 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 2, 2026-10-22, before code (roadmap-usb4 task 43.50),
-reviewed and revised from draft 1 (`67f69523`) the same day: the counter
+Status: draft 3, 2026-10-22, before code (roadmap-usb4 task 43.50),
+reviewed and revised twice the same day. Draft 3: every reopened handle
+bound to the created file, a partly prepared leftover recognised, writes
+in flight never overlapping in sequential tests either, the preparation
+flushed before the first measurement, one byte budget for the whole
+sweep, compressed and encrypted folders refused, every counter a 64-bit
+pair counted at `HwStartIo`, the physical layout counted per request
+before Stor98 splits it, the inherited driver name no longer accepted as
+Stor98's. Draft 2 (from draft 1, `67f69523`): the counter
 read sent only to an adapter established as Stor98's, with its requests
 owned until they complete; the test file's volume identified by the file
 itself; an ownership header and a cleanup handle from creation; an
@@ -145,13 +152,18 @@ Every test reads and writes one file of the tool's own,
   pattern leaves a recognisable file too.
 - **The ownership record.** Before the header is written, the tool records
   the run under `HKCU\Software\xHCI98\XHCIPERF\Leftover`: the full path,
-  the run's identity, the planned size, the volume serial number and, on
-  NT, the file index from `GetFileInformationByHandle` once the file
-  exists. The record is deleted only after the file is.
+  the run's identity, the planned size, the bytes prepared so far
+  (rewritten after each 64 MiB step of the preparation), the volume
+  serial number and, on NT, the file index from
+  `GetFileInformationByHandle` once the file exists. The record is deleted
+  only after the file is.
 - **Created new, never reused blindly.** The tool opens the file with
   `CREATE_NEW`. If the name exists, the tool opens it with no sharing,
   reads its first sector and compares it, its size and (on NT) its file
-  index with the ownership record: all matching, it is a leftover of a
+  index with the ownership record - the header's run identity equal to
+  the record's, and the size at least the header's 1 MiB and at most the
+  planned size, so a file left half prepared is recognised too: all
+  matching, it is a leftover of a
   run that did not finish, and the tool offers to delete it ("A test file
   from an earlier run, 1,024 MB, created 2026-10-22 12:40, is still on F:.
   Delete it?"). A header of the tool's own with no matching record (the
@@ -169,13 +181,26 @@ Every test reads and writes one file of the tool's own,
   replaced, stated here rather than closed.
 - **The cleanup handle (NT).** The file is created with
   `FILE_FLAG_DELETE_ON_CLOSE` and sharing `FILE_SHARE_READ |
-  FILE_SHARE_WRITE | FILE_SHARE_DELETE`; that first handle is held for the
-  whole run, and every other handle (the workers', the verification's) is
-  opened with the same three sharing flags, so the file disappears when
-  the last handle closes, also when the tool is killed during preparation
-  or a test. On 98 SE and ME whether the flag does anything is to be read
-  (P.1); the design does not rely on it there, and the ownership record
-  covers both.
+  FILE_SHARE_WRITE` only - no `FILE_SHARE_DELETE` - and that first handle
+  is held for the whole run. Because it withholds delete sharing, no other
+  process can open the file for deletion or renaming while the run lasts,
+  so its name cannot be moved and replaced; every other handle of the
+  tool's own (the workers', the verification's) is opened with access
+  for reading and writing only and sharing `FILE_SHARE_READ |
+  FILE_SHARE_WRITE | FILE_SHARE_DELETE` (the last because the first handle
+  holds delete access). The file disappears when the last handle closes,
+  also when the tool is killed during preparation or a test. On 98 SE and
+  ME whether the flag does anything is to be read (P.1); the design does
+  not rely on it there, and the ownership record covers both.
+- **Every reopened handle is checked** before its first write: on NT its
+  volume serial number and file index (`GetFileInformationByHandle`) must
+  equal the first handle's; on every system its first sector, read
+  through it, must carry this run's identity. A handle that fails the
+  check is closed, nothing is written through it, and the run is refused
+  ("the test file was changed by another program"). On 98 SE and ME a
+  file open by the tool cannot be renamed or deleted by another program
+  (its sharing refuses it), which the check confirms rather than
+  assumes.
 - **Prepared before it is measured.** The test region is written once from
   start to end with the pattern before the first measured test (the status
   bar: "Preparing the test file"), in 64 MiB steps with the free-space rule
@@ -183,8 +208,14 @@ Every test reads and writes one file of the tool's own,
   measures nothing on NT, where NTFS answers reads past a file's valid data
   length with zeros, and an extending write is synchronous there whatever
   the queue depth; preparing the whole region removes both. The
-  preparation is not timed and not reported, except its duration in the
-  log.
+  preparation ends with `FlushFileBuffers` on every handle that wrote, and
+  only then are the first counter answer (section 6.2) and the first T0
+  taken, so no dirty preparation data is paid for inside a measurement or
+  counted in its delta. On a cached run the file's pages may still be in
+  the system cache after the preparation; the result says "cache warm
+  from the preparation" for the first test, which is a different thing
+  from the warm-up of section 3.6. The preparation is not timed and not
+  reported, except its duration in the log.
 - **Deleted after.** At the end of a run, on Stop, on a refusal after
   creation and on the window's close, the tool closes every handle (on
   NT the cleanup handle last) and, where the file still exists, deletes
@@ -193,10 +224,16 @@ Every test reads and writes one file of the tool's own,
 - **Size.** 16, 32, 64, 128, 256 and 512 MiB, 1, 2, 4, 8 and 16 GiB, plus
   the 1 MiB header; the default 1 GiB on NT and 256 MiB on 98 SE and ME
   (43.46's file was 256 MiB). On a FAT or FAT32 volume the largest offered
-  is 2 GiB, which keeps every offset below 2^31 on the 9x file APIs; on
-  NTFS any size the free-space rule allows.
+  is 1 GiB of region, so the whole file, header included, stays below
+  2^31 bytes and every offset is a positive 32-bit value on the 9x file
+  APIs; on NTFS any size the free-space rule allows, with 64-bit offsets.
 - **Attributes.** Normal; not hidden, so a user can see and delete it by
-  hand if everything else fails.
+  hand if everything else fails. Right after creation the tool reads the
+  file's attributes back: a file the folder made compressed, encrypted or
+  sparse (NTFS inheritance) is deleted and the run refused ("this folder
+  compresses or encrypts new files, which changes what is measured;
+  choose another folder"), and the result's header records the attributes
+  of every run.
 
 ### 3.2 Access modes
 
@@ -249,10 +286,11 @@ Every test reads and writes one file of the tool's own,
   refuses a verifiable run whose map would exceed 16 MiB ("lower the file
   size, or raise the smallest write size, to verify"), and a run of more
   than 254 write tests.
-- **No overlapping writes in flight.** A random write test draws its next
-  offset again while the drawn block is one of that thread's requests
-  still in flight (at most 32, checked by a scan); threads own disjoint
-  parts of the region (section 3.5). So no two outstanding writes ever
+- **No overlapping writes in flight.** Before any write is issued the
+  worker checks its block against that thread's requests still in flight
+  (at most 32, by a scan): a random write draws its offset again, a
+  sequential write that has wrapped waits for the block's request to
+  complete; threads own disjoint parts of the region (section 3.5). So no two outstanding writes ever
   cover the same unit, and the completed writes alone decide each unit's
   final content.
 - **Verification**, a box (default on for the 9x presets, off otherwise):
@@ -305,7 +343,13 @@ The buffer choices:
   label says ("offset 512: not aligned to the page or to this disk's
   4,096-byte physical sector"). A logical sector of 4,096 bytes makes the
   offset a page, the same as Aligned, which the plan says. An offset that
-  breaks the adapter's alignment mask is refused.
+  breaks the adapter's alignment mask is refused. Aligned is the supported
+  configuration; Offset is a deliberately misaligned diagnostic, which a
+  disk or driver may refuse: a request refused with
+  `ERROR_INVALID_PARAMETER` or `ERROR_NOT_SUPPORTED` in this mode is
+  reported as "this disk does not accept misaligned buffers", the test
+  skipped, and the run goes on; it is not a disk failure (P.8 reads it on
+  a 512e or 4Kn disk).
 - **Scattered (attempted)**: an attempt to make the buffer's pages
   physically non-adjacent. A program cannot choose physical pages; it can
   choose the order in which they are first touched. The tool reserves the
@@ -314,15 +358,18 @@ The buffer choices:
   page 0, buffer page 1, ...), so that a system handing out free frames in
   order gives the buffer every other frame, and frees the second region
   afterwards. Nothing in the tool can see the result, so the label never
-  claims it: the Stor98 panel's physical-runs histogram (section 6.3)
-  shows the layout of the requests as they reached Stor98, after IOS, and
-  the result states one of three conclusions for the test: "scattered, as
-  seen by Stor98" (requests of the test's size arrived whole with more
-  than one physical run each), "not seen: requests were cut or
-  double-buffered before Stor98" (they arrived as pieces, or IOS marked
-  them double-buffered, so the original layout is hidden), or "not known"
-  (no Stor98). If P.2 finds that the first touch does not scatter on a
-  system, the choice is withdrawn there rather than kept as a label.
+  claims it. Stor98's answer (section 6.3 item 4) counts the physical runs
+  of each data request's caller buffer as it received it, before its own
+  splitting or bouncing, per request-size class; the result states one of
+  four conclusions for the test: "scattered, as seen by Stor98" (in the
+  test's size class, requests arrived whole and most had more than one
+  run per 64 KiB), "not scattered, as seen by Stor98", "not seen:
+  requests were cut or double-buffered before Stor98" (they arrived as
+  pieces, or IOS marked them double-buffered, so the original layout is
+  hidden), or "not known" (no Stor98). The counts are the adapter's, so
+  the conclusion carries "if no other program used this disk during the
+  test". If P.2 finds that the first touch does not scatter on a system,
+  the choice is withdrawn there rather than kept as a label.
 - 43.46's reading found that "+512" and "fragmented" were different things
   that happened together (`runs/run-43.md`: the +512 pass's buffers had up
   to 129 runs, a run a page; the +0 pass's no more than 8). The tool keeps
@@ -343,7 +390,10 @@ The buffer choices:
   has its own handle on the file, its own part and its own queue, so two
   threads never touch the same unit.
 - **Sequential**: requests of the test's size, one after another from the
-  start of the thread's part, wrapping at its end.
+  start of the thread's part, wrapping at its end; a write that wraps onto
+  a block still in flight waits for that block's request to complete
+  before it is issued (section 3.3), so a part smaller than the depth
+  costs depth, which the plan warns of.
 - **Random**: requests of the test's size at block-aligned offsets in the
   thread's part, chosen uniformly by a xorshift generator whose seed is in
   the result ("seed 0x1A2B3C4D"; each thread's seed derived from it), so a
@@ -381,10 +431,13 @@ The buffer choices:
   60).
 - **The sweep** runs each size over a fixed amount of data instead
   ("Total per size", by default the region's size), so its chart compares
-  sizes over the same bytes: the total is rounded down to whole requests
-  of that size, at least one per thread and per queue slot, and shared
-  equally among the threads with the remainder to the first; a "Time per
-  size" choice makes it time-based too.
+  sizes over the same bytes: one budget for the whole sweep, the total
+  rounded down to a multiple of the largest size times the depth times the
+  threads, so every size moves exactly that many bytes in whole requests
+  and every thread an equal share; a total below that unit is refused by
+  the plan ("raise the total per size to at least 32 MB"). A "Time per
+  size" choice makes the sweep time-based instead, with each size's
+  actual bytes shown.
 - **Passes**: 1 to 9 (default 3 for fixed tests, 1 for the sweep). Each
   pass repeats every test. The result shown is the best pass by default,
   with a choice of the mean or the median ("Show: best / mean / median");
@@ -534,11 +587,15 @@ never produce any other target.
 
 - Free space comes from `GetDiskFreeSpaceExA` (looked up at run time; 98
   SE has it): the bytes available to this user decide whether the file
-  fits, the volume's total free bytes decide the reserve; on a system
-  without it, `GetDiskFreeSpaceA` with its 2 GiB cap gives both.
+  fits, the volume's total free bytes (not limited by a quota) decide the
+  reserve; on a system without it, `GetDiskFreeSpaceA` with its 2 GiB cap
+  gives both.
 - A run needs the file's size and must leave a reserve: 64 MiB on a volume
   that is not the Windows volume or the swap file's; on those, the larger
-  of 512 MiB and 10% of the volume, because a full Windows drive stops 98
+  of 512 MiB and 10% of the volume's size as `GetDiskFreeSpaceExA` reports
+  it to this user (which a disk quota can make smaller than the volume;
+  the reserve is then smaller too, and never below 512 MiB), because a
+  full Windows drive stops 98
   SE and ME (the swap file grows into it) and starves other programs'
   writes on NT. The refusal names the numbers ("F: has 900 MB free; this
   run needs 1,024 MB and leaves 64 MB").
@@ -826,8 +883,10 @@ driver, share them).
   The adapter is established as Stor98's by ASPI itself before any READ
   BUFFER: `SC_HA_INQUIRY`'s adapter identifier string, which for a
   `SCSIPORT.PDR` adapter is expected to name the miniport, must name
-  `stor98` (or `nvme2k` where a devnode still names the inherited file,
-  as the 43.46 image does). Whether stock 98 SE and ME install
+  `stor98`. The inherited name `nvme2k` is never accepted: it is also the
+  upstream driver's, so it proves nothing (a laboratory image whose
+  devnode names `NVME2K.MPD`, as 43.46's does, is changed to name
+  `stor98.mpd` for the legs). Whether stock 98 SE and ME install
   `WNASPI32.DLL` and `APIX.VXD`, whether APIX lists Stor98's adapter, and
   what its identifier string holds are to be read first (P.0); if no ASPI
   field identifies the adapter's driver, the 9x Stor98 page is not built
@@ -872,24 +931,27 @@ the tool checks as a second guard.
 ### 6.3 What a benchmark needs from the answer
 
 Grouped as `stor98pf.h` would lay them out (section 7.2). Every field has
-one of four kinds, written in the header: a **total** (a counter that only
-rises, 32 bits, wrapping; the tool subtracts two answers modulo 2^32, and
-since a test lasts at most 2 hours no total can wrap twice between two
-reads of it), a **wide total** (sectors, a 32-bit low and high pair carried
-with no 64-bit arithmetic in the driver), a **gauge or maximum** (shown as
-read, never subtracted) and a **fact**. Nothing resets; an **epoch** (a
-value that changes at every adapter start) tells the tool when two
-answers cannot be subtracted.
+one of three kinds, written in the header: a **total** (a counter that
+only rises, kept as a 32-bit low and high pair that the driver carries by
+hand with no 64-bit arithmetic, so it cannot wrap in the life of a
+machine and the tool subtracts two answers exactly), a **gauge or limit**
+(shown as read, never subtracted) and a **fact**. Nothing resets; an
+**epoch** (a value that changes at every adapter start) tells the tool
+when two answers cannot be subtracted.
 
 1. **Identity** (facts): signature `S98P`, the interface version, the
    answer's length, Stor98's file version, the build (9x or NT, x86 or
    amd64), the adapter's PCI bus, device and function, the namespace's
    logical block size and its size in blocks, the epoch.
-2. **Requests received** (the SRBs, "parents"; totals): read and write
-   data SRBs, each counted once when it is first admitted and not again
-   when a held SRB is replayed (the engine marks the replay,
-   `ReplayAdmitTime`, `engine.c` `EngDispatchEx`); their sectors per
-   direction (wide totals); a size histogram per direction in 13 buckets
+2. **Requests received** (the SRBs; totals): read and write data SRBs
+   (the six READ and WRITE CDBs), each counted once where the port hands
+   it to the driver - at `HwStartIo`'s entry (`nvme2k.c`), before
+   `EngStartIo` decides to dispatch, hold or refuse it - whatever happens
+   to it after, so a held SRB later replayed through `ScsiDispatch` is
+   not counted again and one that fails while held is still counted once;
+   the engine's own admission counters (`ParentsAdmitted` and the rest)
+   keep their meaning unchanged. Their sectors per direction; a size
+   histogram per direction in 13 buckets
    (below 4 KiB, 4 KiB, to 8, to 16, to 32, below 63 KiB, exactly 63 KiB =
    64,512 bytes - IOS's piece -, to 64 KiB, to 128, to 256, to 512 KiB, to
    1 MiB, above).
@@ -899,17 +961,28 @@ answers cannot be subtracted.
    4,096-byte namespace; flushes; and an outstanding-commands histogram
    taken at each child's issue (1, 2, 3-4, 5-8, 9-16, 17-32, above), which
    shows the depth that reached the drive and whether two 9x threads ever
-   overlapped. `ChildrenIo` as a gauge, `MaxChildBytes` as a maximum.
-4. **Physical layout** (totals): the physical runs of each data child's
-   buffer as Stor98 maps it (1, 2, 3-4, 5-8, 9-16, 17, 18-32, 33-64,
-   above). It describes the requests as they reached Stor98, after any
-   cut or double buffer above it (section 3.4).
+   overlapped. `ChildrenIo` as a gauge.
+4. **Physical layout** (totals): for each data SRB admitted, the physical
+   runs of the caller's buffer as the port describes it to Stor98, counted
+   over the whole SRB before Stor98 cuts it into children or bounces any
+   (the pages are walked once, as the children's mapping walks them
+   already: runs are counted where two consecutive pages are not
+   physically adjacent, across child boundaries, and an SRB of which a
+   page could not be resolved is counted as "layout not seen"), in a
+   histogram per request-size class: the classes 64 KiB, 128 KiB, 256 KiB,
+   512 KiB and 1 MiB of item 2's buckets, each with the buckets 1, 2, 3-4,
+   5-8, 9-16, 17, 18-32, 33-64, above, and "not seen". It describes the
+   requests as they reached Stor98, after any cut or double buffer above
+   it (section 3.4).
 5. **Errors** (totals): data SRBs completed with an error, fast fails,
    busy returns, resets, gone episodes, gone deadlines taken, stale and
    late completions (section 6.1's counters, carried as they are).
 6. **Limits and modes** (facts): `MaximumTransferLength` and
    `NumberOfPhysicalBreaks` as the port granted them, the controller's
-   MDTS in bytes, the children allowed at once (`ChildLimitIo`), the
+   MDTS in bytes, the largest child Stor98 permits itself
+   (`MaxChildBytes`, computed from those limits at bring-up, `lifecycle.c`;
+   a limit, not an observed size), the children allowed at once
+   (`ChildLimitIo`), the
    write-through mode as resolved (off, cache off or FUA) and whether a
    volatile write cache is present, polling or interrupts and why.
 7. **On 98 SE and ME, what IOS hands Stor98**: of the data SRBs, how many
@@ -962,8 +1035,9 @@ that is not marked decided").
   allocation length and the SRB's `DataTransferLength`, whichever is less,
   and a short copy is reported as a data underrun with the bytes moved.
 - Counters added on the existing paths: section 6.3's totals, each a
-  `ULONG` increment (a pair for the wide totals) at one named update site
-  per field - data SRBs at their first admission in `EngSubmitReadWrite`,
+  low and high `ULONG` pair incremented with a hand carry, at one named
+  update site per field - data SRBs received at `HwStartIo`'s entry, the
+  physical layout where `EngSubmitReadWrite` maps an admitted SRB,
   children at issue, completions where the parent completes - under the
   serialisation those paths already have (`engine.h`'s contract: the port
   calls `HwStartIo`, the interrupt and the timer callbacks, polling
@@ -1008,8 +1082,9 @@ definitions.
   a device extension's fields: every section, a short allocation length,
   a short `DataTransferLength`, mode `03h`, a short CDB, a wrong buffer ID,
   mode or offset, the histogram edges at each bucket boundary and at 63 KiB
-  exactly, a wide total's carry, a total's wrap), a replayed held SRB
-  counted once, and the 9x DCB accessor on a linear and a scatter/gather
+  exactly, a total's hand carry), a held SRB counted once whether it is
+  replayed or fails while held, the physical layout across child
+  boundaries and with a page not resolved, and the 9x DCB accessor on a linear and a scatter/gather
   request with a good, a foreign and an out-of-arena IOP and DCB.
 - Emulator tests as its `AGENTS.md` requires ("Every fix gets a test in the
   emulator", including the 4 KiB sector, surprise-removal-during-I/O and
@@ -1053,7 +1128,7 @@ names no driver it does not know, guesses no request size it cannot see,
 and its texts never suggest that a result without Stor98's counters says
 what reached the disk. A USB stick under 98 SE's `USBSTOR.SYS`, a UAS disk
 under `xhciuas.sys`, an IDE disk under `ESDI_506.PDR` and an NVMe drive
-under Windows' own `stornvme` on 8 and 10 are each a generic disk.
+under Windows' own `stornvme` on 8.1 and 10 are each a generic disk.
 
 ## 9. The pure half
 
@@ -1069,8 +1144,8 @@ canonical path checks and the free-space and reserve rule; every text of
 the window, the copied result and the saved file, at 79 columns; the
 workload key, the saved file's reader and the compare; Stor98's answer
 checked (every offset bounded by the bytes returned, the signature, the
-versions, the length), two answers subtracted (wrap, wide totals, a
-changed epoch refused, gauges not subtracted), the scattered conclusion
+versions, the length), two answers subtracted (64-bit pairs, a
+changed epoch refused, gauges and limits not subtracted), the scattered conclusion
 of section 3.4, and the panel's text.
 
 `test\test_pf.c` covers each with golden vectors: a plan per preset per
@@ -1086,8 +1161,7 @@ backwards and an implausible timer reading; percentiles of a histogram;
 the reports at their longest; a saved file read back, with a bad line, a
 missing test, and a workload key differing in each field. `test\test_pfs98.c`
 covers the answer as the tool reads it: truncated, a longer answer of
-version 1, a wrong signature, a wrap between two answers, a wide total's
-carry, a changed epoch, the 63 KiB bucket, and the panel's sentences for
+version 1, a wrong signature, a low word's carry between two answers, a changed epoch, the 63 KiB bucket, and the panel's sentences for
 98 SE with and without `phys_sgd` and for each scattered conclusion.
 
 ## 10. Build, imports and runtime
@@ -1266,7 +1340,7 @@ Each the author's, for the owner to confirm, unless it names the owner.
 | P.5 | 98 SE and ME, Stor98's disk behind the emulated tunnel | the 9x study preset with 43.46's VSD absent and present, each saved, then compared: the Stor98 page shows 63 KiB pieces without it and whole requests with it on the scattered buffer, `phys_sgd` demanded and not; every verification clean |
 | P.6 | 2000, 7 x64, 10 x64 with Stor98 | Standard at depth 8: the outstanding-commands histogram above 1; the Stor98 page as administrator, its refusal and button as a standard user; on 7 x64 and 10 x64 the 32-bit tool's own pass-through with the x64 image removed |
 | P.7 | 98 SE and 7 x86 | the tunnel dropped during a write test: the run stops with the error, the window responds, the file deleted or its record kept and offered at the next start; Safely Remove refused while running; the tool killed during preparation on 7 (the file gone) and on 98 SE (offered at the next start) |
-| P.8 | 98 SE and 7 x86 | refusals: free space, the Windows drive's reserve, the Windows directory, a junction into it (7), a SUBST drive, a CD drive, a foreign `XHCIPERF.TMP` kept, a header without a record asked about |
+| P.8 | 98 SE and 7 x86 | refusals: free space, the Windows drive's reserve, the Windows directory, a junction into it (7), a SUBST drive, a CD drive, a foreign `XHCIPERF.TMP` kept, a header without a record asked about, a half-prepared leftover recognised, a compressing folder (7); the Offset mode on a 512e or 4Kn disk (7) |
 | P.9 | 98 SE and 7 x64 | install, update with the tool running, uninstall: the file placed, "steps left", removed |
 | P.10 | the owner's hardware | 98 SE on the P14s with Stor98, before and after 43.46's VSD; Windows 10 or 7 on the same drive; the saved files compared |
 
