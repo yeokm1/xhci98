@@ -4696,9 +4696,16 @@ and the switch mutex (1 s), with the pause event absent:
    paging file, a hibernation file or the system volume refuses it.
    Windows reports a refusal as `DI_NEEDREBOOT` or `DI_NEEDRESTART`.
    - On a refusal: `DICS_ENABLE` at once, which withdraws the pending
-     disable, so nothing waits for a restart. Then `busy` once the
-     devnode reads not disabled, and the reason is logged; `enable` if
-     it does not.
+     disable, so nothing waits for a restart. Each property change
+     clears both restart flags first, so it reads only its own answer.
+     That enable answers a restart too while the devnode runs on
+     (Windows 10 x86, read 2026-10-22); it counts as held when the
+     devnode reads started, not disabled, and both disable flags read
+     clear: the current profile's `CSCONFIGFLAG_DISABLED`
+     (`CM_Get_HW_Prof_FlagsA`, the flag the config-specific change
+     writes) and the global `CONFIGFLAG_DISABLED` (`SPDRP_CONFIGFLAGS`).
+     Then `busy`, and the reason is logged; `enable` if not. The
+     recovery settles an owed enable by the same reading.
    - Not refused, but the devnode is not left disabled (problem 22) and
      stopped: no install, and on to step 4.
 3. **`install` written.** `SetupDiSetDeviceInstallParams` with
