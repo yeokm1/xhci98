@@ -3456,6 +3456,55 @@ unticked and its note, on a real NUSB setup. Shots in
 `E:\xhci98-vm\p43-62\shots\` (`n-*`, `hcdwiz-n-*`); the package in
 `E:\xhci98-vm\p43-62\pkg32`. Guest closed.
 
+## 43.65 Windows ME's first shutdown after xhcicm.sys was started (2026-10-23)
+
+Found by 43.46's legs (2026-10-23, its ME leg): the first shutdown right
+after the installer had started `xhcicm.sys`, before any restart, hung
+in VMM (EIP `c005255a`, steady); later shutdowns were clean.
+
+**Vehicle.** Development host A, QEMU from `usb4-emu` (`bin-2a893ea`),
+`pc`, TCG, `pentium3,-apic`, one vCPU, 256 MB; the emulator's
+`usb4-generic` USB4 host at 00:04 and its tunnel bridge at 00:05, no
+device on the fabric, `qemu-xhci` with a tablet; ME 4.90.3000, the
+`me-hcd310` image (copied, an overlay per run), with the ME CD. Kit
+`E:\xhci98-vm\p43-6x` (git-ignored).
+
+**Readings.**
+
+| Run | How `xhcicm.sys` was started | Flavour | First shutdown |
+|---|---|---|---|
+| me1 b | `INSTALL /console /yes` (the Thunderbolt component left out: `xhcicm.sys` not started) | release | clean, about 5 s |
+| me1 c | `INSTALL /console /yes /thunderbolt` on the same disk ("xhcicm 3.1.0.0 started") | release (43.46's package) | **hung**, EIP `c005255a` |
+| me2 | the Add New Hardware wizard at first boot, pointed at the `qemu` package | `qemu` | **hung**, EIP `c005255a` |
+| me3, me4 | the same | `qemu` with a mark at each shutdown step | clean |
+| me5 | the same | the same | **hung**, EIP `c005255a` |
+
+Each hang: EIP `c005255a` in VMM (code there reads the PIT counter,
+`xor eax,eax; cli; out 43h,al; in al,40h ...`, called again and again),
+`EFL` 3046 (interrupts off), no `HLT`; the stack a short VMM one, every
+thread blocked. `xhcicm.sys`'s debug-console output stopped at the
+start's last lines (its thread emits the log ring after each pass). The
+log ring was read out of the guest's memory instead (QMP `memsave`, page
+by page over the kernel's linear range; the ring's text found by its
+record names): on me2 it ended `cm.shutdown=00000002`, the reenumeration
+counters, `u4.stop`; on me5, with a mark after each step of the
+shutdown quiescence and of the D3 work, `u4.stop`, `dbg.q1.unbound`,
+`dbg.q2.drained`, `dbg.q3.busmaster`, `dbg.q4.released`,
+`dbg.q5.d3set` - the mark before `PoCallDriver` of the D3 to the bus -
+and no `dbg.q6.d3down` after it. The emulator's trace agrees: the host
+interface's rings were stopped (`TX_RING_CTRL`, `RX_RING_CTRL` written
+0) as the last thing the driver did. So the D3 `IRP_MN_SET_POWER` that
+the connection-manager thread passes down after its quiescence never
+came back from the bus driver below. Why the bus blocks there was not
+read (NTKERN's and CONFIGMG's; no static reading taken); `xhci98.sys`
+passes its D3 down from its own dispatch routine and its shutdown is
+clean in every run.
+
+**The change** (`2d65409a`, design record 21 section 5.6): on Windows
+98 SE and ME a system shutdown takes the direct route, the quiescence on
+the thread and then the system IRP completed, with no D3 requested
+(`cm_pwrr.c`, host suite `test_cm_pwrr`).
+
 ## 43.53 - A Request to a Departed Device That Never Completes
 
 Roadmap-usb4 task 43.53, opened by the owner on 2026-10-22 from 43.49's

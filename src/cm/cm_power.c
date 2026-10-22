@@ -571,7 +571,7 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                          (BOOLEAN)(nhi->Started != 0),
                          (ULONG)nhi->SystemPower, (ULONG)nhi->DevicePower,
                          (BOOLEAN)(nhi->Suspended != 0),
-                         IoIsWdmVersionAvailable(1, 0x10), &w);
+                         nhi->PowerOnNt, &w);
     want = (DEVICE_POWER_STATE)w;
     if (route == CM_PWR_PASS) {
         return cmSystemPass(nhi, Irp);
@@ -632,6 +632,9 @@ NTSTATUS CmNhiPower(PCM_NHI nhi, PIRP irp)
         return status;
     }
     if (stack->Parameters.Power.Type == SystemPowerState) {
+        /* Read here, at PASSIVE_LEVEL, for cmSystemDone, which may run at
+         * DISPATCH_LEVEL. */
+        nhi->PowerOnNt = IoIsWdmVersionAvailable(1, 0x10);
         IoMarkIrpPending(irp);
         IoCopyCurrentIrpStackLocationToNext(irp);
         CM_SET_COMPLETION_ALWAYS(irp, cmSystemDone, nhi);

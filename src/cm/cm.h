@@ -397,6 +397,9 @@ typedef struct _CM_NHI {
     ULONG Removing;         /* CmPowerDrain closed power admission        */
     /* CM_WORK_DIRECT's target: D0, or a sleep state's D3. */
     DEVICE_POWER_STATE DirectWant;
+    /* IoIsWdmVersionAvailable(1, 0x10), read by the power dispatch at
+     * PASSIVE_LEVEL for its completion routine (cm_pwrr.h, task 43.65). */
+    BOOLEAN PowerOnNt;
 
     CM_COUNTERS Counters;
 
