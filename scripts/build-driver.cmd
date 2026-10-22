@@ -551,6 +551,10 @@ if /i "%ARCH%"=="x86" (
     if errorlevel 1 goto toolbuildfail
     call "%REPO%\xhcitr\build.cmd"
     if errorlevel 1 goto toolbuildfail
+    rem The disk benchmark (task 43.50, design record 29 section 10), which
+    rem compiles Stor98's interface header stor98pf.h.
+    call "%REPO%\xhciperf\build.cmd"
+    if errorlevel 1 goto toolbuildfail
 )
 
 rem Stor98's interface header is in this tree twice since task 42-A.20:
@@ -600,6 +604,17 @@ if exist "%REPO%\xhcitr\XHCITR.EXE" (
     echo === xhcitr snapshot self-test ===
     call "%REPO%\xhcitr\snaptest.cmd"
     if errorlevel 1 goto snaptestfail
+)
+
+rem The disk benchmark (task 43.50, design record 29 section 10.3), when its
+rem EXE has been built: its import table (the seven of XHCITR), the source
+rem rule that it opens no physical drive, and its /selftest, which touches no
+rem disk and opens no window (xhciperf\selftest.cmd).
+if exist "%REPO%\xhciperf\XHCIPERF.EXE" (
+    echo.
+    echo === xhciperf self-test ===
+    call "%REPO%\xhciperf\selftest.cmd"
+    if errorlevel 1 goto perftestfail
 )
 
 rem The safe-removal mark service (task 42-A.5, design record 21 section
@@ -1381,6 +1396,13 @@ echo its version stamp cannot be trusted (xhciinst\di\selftest.cmd).
 endlocal
 exit /b 1
 
+:perftestfail
+echo.
+echo ERROR: xhciperf's self-test failed: its import table, its source rule or
+echo its pure half cannot be trusted (xhciperf\selftest.cmd).
+endlocal
+exit /b 1
+
 :trtestfail
 echo.
 echo ERROR: xhcitr's self-test failed: its switches, its pure half or its
@@ -1397,7 +1419,7 @@ exit /b 1
 
 :toolbuildfail
 echo.
-echo ERROR: xhcicln\build.cmd or xhcitr\build.cmd failed: the tools that
+echo ERROR: xhcicln\build.cmd, xhcitr\build.cmd or xhciperf\build.cmd failed: the tools that
 echo compile the installer's pure half are not current.
 endlocal
 exit /b 1

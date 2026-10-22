@@ -19936,9 +19936,18 @@ static int selftest_screens(void)
 /* The installer's own files and the uninstall entry (record 26 6.2, 9.1)   */
 /* ======================================================================== */
 
+/* The disk benchmark of this architecture (design record 29 section 11,
+ * task 43.50), from the package's tools\xhciperf\: put in place and
+ * removed with the installer's own files, by their route. */
+#if INST_MY_ARCH == INST_ARCH_AMD64
+#define INST_PERF_NAME      "XHCIPF64.EXE"
+#else
+#define INST_PERF_NAME      "XHCIPERF.EXE"
+#endif
+
 /* The installer's files of this architecture, from the package's
  * tools\xhciinst\: the window, the console tool, and on 98 SE and ME the
- * helper. */
+ * helper; then the disk benchmark, from tools\xhciperf\ (own_src). */
 static int own_names(const char **names)
 {
     int n = 0;
@@ -19948,7 +19957,14 @@ static int own_names(const char **names)
     if (!envNow.Nt) {
         names[n++] = INST_DI_NAME;
     }
+    names[n++] = INST_PERF_NAME;
     return n;
+}
+
+/* The package folder a file of own_names comes from */
+static const char *own_src(const char *name)
+{
+    return strcmp(name, INST_PERF_NAME) == 0 ? "tools\\xhciperf" : "tools\\xhciinst";
 }
 
 /* One file put in place by the USB tree tool's route (record 23 section
@@ -20012,7 +20028,7 @@ static int own_put(const char *from, const char *to)
  * the package's bytes, never left for a restart. */
 static void own_install(void)
 {
-    const char *names[3];
+    const char *names[6];
     char from[INST_PATH_CHARS];
     char to[INST_PATH_CHARS];
     int n;
@@ -20024,7 +20040,7 @@ static void own_install(void)
     }
     n = own_names(names);
     for (i = 0; i < n; i++) {
-        join(from, sizeof(from), root, "tools\\xhciinst");
+        join(from, sizeof(from), root, own_src(names[i]));
         join(from, sizeof(from), from, names[i]);
         join(to, sizeof(to), toolDir, names[i]);
         if (!file_exists(from, NULL)) {
@@ -20183,7 +20199,7 @@ static int job_file_for(const char *dir, char *out, size_t cap)
 
 static int own_remove_in(const char *dir, int window)
 {
-    const char *names[4];
+    const char *names[6];
     char path[INST_PATH_CHARS];
     int n;
     int i;
@@ -20239,7 +20255,7 @@ static void helper_files_gone(void)
 static int own_any_in(const char *dir)
 {
     static const char *const ext[3] = { ".TMP", ".BAK", ".DEL" };
-    const char *names[3];
+    const char *names[6];
     char path[INST_PATH_CHARS];
     char v[INST_PATH_CHARS];
     int n;

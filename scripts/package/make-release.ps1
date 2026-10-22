@@ -239,6 +239,17 @@ Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
 then says in one line that the package has none, and the release says so on
 the console and in its readme.
 
+.PARAMETER PerfToolDir
+Where `XHCIPERF.EXE` and `XHCIPF64.EXE` are built. Defaults to `xhciperf\` in
+the repository. Both are staged into `releases\<version>\tools\xhciperf\` with
+a readme.txt and a NOTICE.TXT: the xHCI98 Disk Benchmark, which the installer
+copies into the install directory with its own files (roadmap-usb4.md task
+43.50, design record 29 section 11).
+
+.PARAMETER SkipPerfTool
+Do not stage the disk benchmark. For a host that cannot build it; the release
+says so on the console and in its readme.
+
 .PARAMETER MarkToolDir
 Where `XHCIMARK.EXE` and `XHCIMK64.EXE` are built. Defaults to `xhcimark\` in
 the repository. Both are staged into `releases\<version>\tools\xhcimark\` with
@@ -458,6 +469,8 @@ param(
     [switch]$SkipInstallTool,
     [string]$TrayToolDir = "",
     [switch]$SkipTrayTool,
+    [string]$PerfToolDir = "",
+    [switch]$SkipPerfTool,
     [switch]$SkipDiHelper,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
@@ -526,6 +539,7 @@ if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
 if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo "xhcimark" }
 if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
 if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo "xhcitr" }
+if ($PerfToolDir -eq "") { $PerfToolDir = Join-Path $repo "xhciperf" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -682,6 +696,7 @@ $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $MarkToolDir = Resolve-DirectoryArgument $MarkToolDir
 $InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
 $TrayToolDir = Resolve-DirectoryArgument $TrayToolDir
+$PerfToolDir = Resolve-DirectoryArgument $PerfToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
 $UploadDir   = Resolve-DirectoryArgument $UploadDir
 
@@ -825,9 +840,10 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # (task 42-A.4, into XHCITR): $retiredToolNames admits it in a tree the
 # upload assembly reads at a version that published it, and never in a cut.
 # xhcimark\, the mark service of task 42-A.5, is first published in 3.1.0.0.
+# xhciperf\, the disk benchmark of task 43.50, is first published in 3.2.0.0.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")
+$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark", "xhciperf")
 $retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0" }
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
@@ -4233,6 +4249,55 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}, snapshot schema {1}, matching src\xhci.h") -f $trayVersion, $snapSchemaTool)
     }
 
+    # --- the disk benchmark (task 43.50) -------------------------------------
+    #
+    # XHCIPERF.EXE (MSVC 6.0) and XHCIPF64.EXE (WDK 7.1 amd64), built from
+    # xhciperf\ (design record 29 section 10), which the installer copies from
+    # tools\xhciperf\ into the install directory with its own files (section
+    # 11). XHCITR's staleness and version rules; its sources include Stor98's
+    # interface header it reads. Not drivers: no test signature.
+    $perftoolStaged = $null
+    if (-not $SkipPerfTool) {
+        Write-Step "Disk benchmark"
+        $perfExes = @("XHCIPERF.EXE", "XHCIPF64.EXE")
+        foreach ($name in ($perfExes + @("README.TXT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $PerfToolDir $name) -PathType Leaf)) {
+                throw @"
+'$PerfToolDir' has no $name.
+Build the tool first:  xhciperf\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipPerfTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $perfSources = @(@(Get-ChildItem -LiteralPath $PerfToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\stor98\include\stor98pf.h")))
+        foreach ($name in $perfExes) {
+            $perfTime = (Get-Item -LiteralPath (Join-Path $PerfToolDir $name)).LastWriteTimeUtc
+            $perfNewer = @($perfSources | Where-Object { $_.LastWriteTimeUtc -gt $perfTime })
+            if ($perfNewer.Count -gt 0) {
+                Stop-CutCheck @"
+'$(Join-Path $PerfToolDir $name)' is older than $($perfNewer.Count) of its own source file(s):
+  - $(($perfNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhciperf\build.cmd) before releasing.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $PerfToolDir "xhciperf.c") -Macro "XHCIPERF_VERSION"
+        foreach ($name in $perfExes) {
+            Assert-ToolFileVersion -Path (Join-Path $PerfToolDir $name) -Version $Version
+        }
+        $perfDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciperf")
+        Ensure-Directory $perfDir
+        foreach ($name in $perfExes) {
+            Copy-Item -LiteralPath (Join-Path $PerfToolDir $name) -Destination (Join-Path $perfDir $name) -Force
+        }
+        $perftoolStaged = $perfDir
+        Write-Ok "XHCIPERF.EXE and XHCIPF64.EXE staged"
+    }
+
     # --- the 98 SE and ME device install helper (task 42-A.1) ----------------
     #
     # XHCIDI.EXE, a Win16 program built with Open Watcom against the Windows 98
@@ -4561,6 +4626,20 @@ helper (xhciinst\di\build.cmd).
         $contents += "      choose another) and starts it at each login"
         $contents += "      (section 4). Its File > Save Report writes what a"
         $contents += "      bug report asks for (section 6)."
+        $contents += ""
+    }
+    if ($null -ne $perftoolStaged) {
+        $p32 = Get-Item -LiteralPath (Join-Path $perftoolStaged "XHCIPERF.EXE")
+        $p64 = Get-Item -LiteralPath (Join-Path $perftoolStaged "XHCIPF64.EXE")
+        $contents += "  TOOLS\XHCIPERF\ - the xHCI98 Disk Benchmark"
+        $contents += ""
+        $contents += ("      XHCIPERF.EXE {0:N0} bytes, for 32-bit Windows" -f $p32.Length)
+        $contents += ("      XHCIPF64.EXE {0:N0} bytes, for 64-bit Windows" -f $p64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      SETUP.EXE copies the one for your Windows into the"
+        $contents += "      install directory with the USB Tree."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -6529,6 +6608,7 @@ which XHCITR matches this driver by that number; correct the sentence.
     if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal mark service of section 4)" }
     if ($null -eq $insttoolStaged) { $missingTools += "SETUP.EXE, INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
     if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
+    if ($null -eq $perftoolStaged) { $missingTools += "TOOLS\XHCIPERF\ (the xHCI98 Disk Benchmark)" }
     if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
@@ -7265,6 +7345,57 @@ sufficient.
         Write-Ok "NOTICE.TXT written beside XHCITR.EXE and XHCITR64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
+    # --- the disk benchmark's readme and notices (task 43.50) ----------------
+    if ($null -ne $perftoolStaged) {
+        $perfReadme = @([System.IO.File]::ReadAllText((Join-Path $PerfToolDir "README.TXT")) -split "`r?`n")
+        while ($perfReadme.Count -gt 0 -and $perfReadme[$perfReadme.Count - 1] -eq "") {
+            $perfReadme = @($perfReadme | Select-Object -First ($perfReadme.Count - 1))
+        }
+        $perfFooter = @"
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIPERF.EXE and XHCIPF64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+"@
+        $perfLines = @($perfReadme) + @($perfFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $perftoolStaged "readme.txt") -Lines $perfLines
+        $perfNotice = @"
+==============================================================================
+                          x h c i 9 8   {VERSION}
+          THIRD-PARTY NOTICES FOR XHCIPERF.EXE AND XHCIPF64.EXE
+==============================================================================
+
+XHCIPERF.EXE and XHCIPF64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+Their icon was drawn for this project. They include Stor98's interface
+header stor98pf.h, which is under the BSD-3-Clause licence it carries.
+
+They are not only this project's code. XHCIPERF.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCIPF64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs. Its import tables name only Windows' own system DLLs and
+no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+"@
+        $perfNotice = $perfNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $perftoolStaged "NOTICE.TXT") `
+                            -Lines ($perfNotice -split "`r?`n")
+        Write-Ok "readme.txt and NOTICE.TXT written beside XHCIPERF.EXE and XHCIPF64.EXE"
+    }
+
     # --- the 98 SE and ME device install helper's notices (task 42-A.1) ------
     #
     # XHCIDI.EXE shares tools\xhciinst\ and its NOTICE.TXT with the install
@@ -7565,6 +7696,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $traytoolStaged) {
         Write-Warn "no tools\xhcitr\ in this release (-SkipTrayTool) - SETUP.EXE installs no USB tree tool from it."
+    }
+    if ($null -eq $perftoolStaged) {
+        Write-Warn "no tools\xhciperf\ in this release (-SkipPerfTool) - SETUP.EXE installs no disk benchmark from it."
     }
 
     Write-Step "Done"
