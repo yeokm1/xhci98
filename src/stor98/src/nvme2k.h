@@ -408,6 +408,9 @@ typedef struct _HW_DEVICE_EXTENSION {
     ULONG PollTicks;                                // timer callbacks while polling
     ULONG PollStartIoHits;                          // HwStartIo calls (spin included) that consumed a completion
     ULONG PollIsrCalls;                             // HwInterrupt calls while polling (the port, a shared line or the dump port)
+#ifdef STOR98_TEST_NOAUTOSENSE
+    ULONG TestNoAsReads;                            // READ(10)s seen by the test build
+#endif
     ENG_CLOCK Clock;
     ENG_TUNABLES Tun;
     ENG_BUSY Busy[ENG_BUSY_TRACK];
