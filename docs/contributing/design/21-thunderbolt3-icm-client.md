@@ -996,8 +996,9 @@ hosts of section 3.3's lists, the PCIe tunnel and its re-enumeration, an
 NVMe drive behind it (Stor98 is not offered there; record 23 section
 4.5), a dock's xHCI controller and its devices under Windows' own USB
 driver, the USB3 tunnel's devices on the host's controller under the same
-driver, and safe eject with the marks. None of it has been read on 8 or
-8.1, where no guest exists here. The import gate holds the x86 driver to
+driver, and safe eject with the marks. Of it, the install and the driver's start on
+the NHI are read on 8 and 8.1 (below); the tunnels, eject and the marks
+are task 43.24's. The import gate holds the x86 driver to
 Windows 98's evidence and Windows 2000's export tables, and the amd64
 driver to NT 5.2's (`build-driver.cmd`'s gate for `xhcicm.sys`,
 `check-imports.ps1`); Vista and 7 are read in guests, not by the gate;
@@ -1011,6 +1012,18 @@ and later), which 8 and 8.1 answer as 7 does, so it takes 7's paths there.
 On 64-bit 8 and 8.1 it loads only as on Vista x64 and 7 x64: test-signing
 mode (Secure Boot off) or a start with signature enforcement disabled
 (design record 19; record 23 section 5.10).
+
+Read since (task 43.22, 2026-10-22, in QEMU guests of 8 x86, 8 x64 and
+8.1 x64 with the emulator's Thunderbolt 3 controller, the `3.1.0.0`
+package; `runs/run-43.md`, "43.22"): the install takes the
+`.NTx86.6.0` and `.NTamd64.6.0` models sections and the `Cm.Dev6` and
+`CmF.Dev6` install sections, as on Vista and 7; the NHI starts on
+`xhcicm` and the tunnel port carries the filter; so the driver loads on
+8's and 8.1's kernels (no import refused). Two things differ from 7, both
+record 23 section 5.10 revision 30's: 64-bit 8 and 8.1 refuse a package
+with no catalog in test-signing mode, and on every 8 and 8.1 the setup
+engine makes `xhcicm` a boot-start driver when its filter goes onto the
+bridge, so on x64 a start without test-signing mode does not finish.
 
 ## 4. The host interface: ring 0, polled
 
