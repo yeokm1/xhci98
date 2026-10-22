@@ -5,6 +5,7 @@
  */
 
 #include <string.h>
+#include <stdarg.h>
 #include "inst_core.h"
 
 /* ======================================================================== */
@@ -2039,6 +2040,16 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Storage = 1;
         } else if (inst_switch(a, "nostorage")) {
             opts->NoStorage = 1;
+        } else if (inst_switch(a, "free")) {
+            opts->Free = 1;
+        } else if (inst_switch(a, "freestage")) {
+            opts->Free = 1;
+            opts->FreeStage = 1;
+        } else if (inst_switch(a, "nonfree")) {
+            opts->NonFree = 1;
+        } else if (inst_switch(a, "nonfreestage")) {
+            opts->NonFree = 1;
+            opts->NonFreeStage = 1;
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
         } else if (inst_switch(a, "devices")) {
@@ -2237,6 +2248,13 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, opts->Storage ? "/storage belongs to an install"
                  : "/nostorage belongs to an install", NULL);
+        return 1;
+    }
+    if ((opts->Free || opts->NonFree) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->Free ? "/free and /freestage belong to an "
+                 "install" : "/nonfree and /nonfreestage belong to an install",
+                 NULL);
         return 1;
     }
     if (opts->Storage && opts->NoStorage) {
@@ -6305,5 +6323,525 @@ const char *inst_stor_remove_text(int why)
         return "already gone";
     default:
         return "";
+    }
+}
+
+/* ---- the other USB drivers: usb-wdm-free and usb-wdm-nonfree (record 26
+ * section 6.7; roadmap-usb4 task 43.48) --------------------------------- */
+
+/* out = the n strings after it, joined, cut at cap. */
+static void inst_catv(char *out, size_t cap, int n, ...)
+{
+    va_list ap;
+    int i;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    va_start(ap, n);
+    for (i = 0; i < n; i++) {
+        const char *s = va_arg(ap, const char *);
+        strncat(out, s, cap - strlen(out) - 1);
+    }
+    va_end(ap);
+}
+
+static const char *const instSysNames[INST_SYS_COUNT] = {
+    "W98SE", "WME", "W2K", "WXP", "WXP64", "WVISTA", "WVISTA64", "W7",
+    "W7X64", "W8", "W8X64", "W10", "W10X64"
+};
+
+const char *inst_other_folder(int set)
+{
+    return set == INST_SET_FREE ? INST_WDMFREE_DIR : INST_NONFREE_DIR;
+}
+
+const char *inst_other_sums(int set)
+{
+    return set == INST_SET_FREE ? INST_WDMFREE_SUMS : INST_NONFREE_SUMS;
+}
+
+const char *inst_other_prefix(int set)
+{
+    return set == INST_SET_FREE ? "free" : "non-free";
+}
+
+const char *inst_other_address(int set)
+{
+    return set == INST_SET_FREE ? "https://github.com/yeokm1/usb-wdm-free"
+                                : "https://github.com/yeokm1/usb-wdm-nonfree";
+}
+
+const char *inst_other_subkey(int set)
+{
+    return set == INST_SET_FREE ? "Free" : "NonFree";
+}
+
+int inst_other_rel_ok(const char *rel)
+{
+    size_t n = strlen(rel);
+    size_t i;
+    size_t start = 0;
+
+    if (n == 0 || n > INST_OTHER_REL_CHARS - 1) {
+        return 0;
+    }
+    for (i = 0; i <= n; i++) {
+        unsigned char c = (unsigned char)rel[i];
+        if (i == n || c == '/') {
+            size_t len = i - start;
+            if (len == 0 || (len == 1 && rel[start] == '.') ||
+                (len == 2 && rel[start] == '.' && rel[start + 1] == '.') ||
+                rel[start] == ' ' || rel[i - 1] == ' ' || rel[i - 1] == '.') {
+                return 0;
+            }
+            start = i + 1;
+            continue;
+        }
+        if (c < 0x20 || c > 0x7E || c == '\\' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|' ||
+            c == ';') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_sys_token(int nt, unsigned long major, unsigned long minor,
+                   unsigned long build, int is64)
+{
+    if (!nt) {
+        if (major == 4 && minor == 10 && build == 2222) {
+            return 0;
+        }
+        if (major == 4 && minor == 90) {
+            return 1;
+        }
+        return -1;
+    }
+    if (major == 5 && minor == 0) {
+        return is64 ? -1 : 2;
+    }
+    if (major == 5 && minor == 1) {
+        return is64 ? -1 : 3;
+    }
+    if (major == 5 && minor == 2) {
+        return is64 ? 4 : -1;
+    }
+    if (major == 6 && minor == 0) {
+        return is64 ? 6 : 5;
+    }
+    if (major == 6 && minor == 1) {
+        return is64 ? 8 : 7;
+    }
+    if (major == 6 && (minor == 2 || minor == 3)) {
+        return is64 ? 10 : 9;
+    }
+    if (major == 10 && minor == 0 && build < 22000UL) {
+        return is64 ? 12 : 11;
+    }
+    return -1;
+}
+
+const char *inst_sys_name(int tok)
+{
+    return tok >= 0 && tok < INST_SYS_COUNT ? instSysNames[tok] : "";
+}
+
+int inst_sys_mask(const char *list, INST_U32 *mask)
+{
+    char word[16];
+    const char *p = list;
+    int any = 0;
+    int i;
+    size_t n;
+
+    *mask = 0;
+    for (;;) {
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        n = 0;
+        while (p[n] != '\0' && p[n] != ' ' && p[n] != '\t') {
+            n++;
+        }
+        if (n >= sizeof(word)) {
+            return 0;
+        }
+        memcpy(word, p, n);
+        word[n] = '\0';
+        p += n;
+        for (i = 0; i < INST_SYS_COUNT; i++) {
+            if (strcmp(word, instSysNames[i]) == 0) {
+                break;
+            }
+        }
+        if (i == INST_SYS_COUNT) {
+            return 0;
+        }
+        *mask |= (INST_U32)1 << i;
+        any = 1;
+    }
+    return any;
+}
+
+/* field i (0-based) of a '|'-separated line, trimmed of spaces and tabs;
+ * 0 when the line has fewer fields or the field does not fit. */
+static int inst_field(const char *line, int i, char *out, size_t cap)
+{
+    const char *p = line;
+    const char *e;
+    size_t n;
+
+    while (i > 0) {
+        p = strchr(p, '|');
+        if (p == NULL) {
+            return 0;
+        }
+        p++;
+        i--;
+    }
+    e = strchr(p, '|');
+    if (e == NULL) {
+        e = p + strlen(p);
+    }
+    while (p < e && (*p == ' ' || *p == '\t')) {
+        p++;
+    }
+    while (e > p && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' ||
+                     e[-1] == '\n')) {
+        e--;
+    }
+    n = (size_t)(e - p);
+    if (n >= cap) {
+        return 0;
+    }
+    memcpy(out, p, n);
+    out[n] = '\0';
+    return 1;
+}
+
+static int inst_blank_or_comment(const char *line)
+{
+    while (*line == ' ' || *line == '\t') {
+        line++;
+    }
+    return *line == '\0' || *line == '\r' || *line == '\n' || *line == '#';
+}
+
+static int inst_count_char(const char *s, char c)
+{
+    int n = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == c) {
+            n++;
+        }
+    }
+    return n;
+}
+
+int inst_stage_parse(const char *line, const char *prefix,
+                     INST_STAGE_LINE *out)
+{
+    char f[INST_OTHER_REL_CHARS + 32];
+    size_t pl = strlen(prefix);
+
+    memset(out, 0, sizeof(*out));
+    if (inst_blank_or_comment(line)) {
+        return 0;
+    }
+    if (inst_count_char(line, '|') != 3) {
+        return -1;
+    }
+    if (!inst_field(line, 0, f, sizeof(f))) {
+        return -1;
+    }
+    if (strcmp(f, "STAGE") == 0) {
+        out->Stage = 1;
+    } else if (strcmp(f, "COPY") != 0) {
+        return -1;
+    }
+    if (!inst_field(line, 1, f, sizeof(f)) ||
+        !inst_sys_mask(f, &out->Systems)) {
+        return -1;
+    }
+    if (!inst_field(line, 2, f, sizeof(f)) || strncmp(f, prefix, pl) != 0 ||
+        f[pl] != '/' || !inst_other_rel_ok(f + pl + 1)) {
+        return -1;
+    }
+    inst_copy(out->Inf, f + pl + 1, sizeof(out->Inf));
+    return 1;
+}
+
+static int inst_is_hex64(const char *s)
+{
+    int i;
+
+    for (i = 0; i < 64; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void inst_upper64(char *dst, const char *src)
+{
+    int i;
+
+    for (i = 0; i < 64; i++) {
+        char c = src[i];
+        dst[i] = (c >= 'a' && c <= 'f') ? (char)(c - 'a' + 'A') : c;
+    }
+    dst[64] = '\0';
+}
+
+int inst_sums_parse(const char *line, char hex65[65], char *rel, size_t cap)
+{
+    size_t n = strlen(line);
+
+    while (n > 0 && (line[n - 1] == '\r' || line[n - 1] == '\n')) {
+        n--;
+    }
+    if (n == 0) {
+        return 0;
+    }
+    if (n < 67 || !inst_is_hex64(line) || line[64] != ' ' ||
+        line[65] != ' ' || n - 66 >= cap) {
+        return -1;
+    }
+    memcpy(rel, line + 66, n - 66);
+    rel[n - 66] = '\0';
+    if (!inst_other_rel_ok(rel)) {
+        return -1;
+    }
+    inst_upper64(hex65, line);
+    return 1;
+}
+
+int inst_read_parse(const char *line, char *pkg, size_t cap, INST_U32 *mask)
+{
+    char f[160];
+
+    *mask = 0;
+    if (inst_blank_or_comment(line)) {
+        return 0;
+    }
+    if (inst_count_char(line, '|') != 1 || !inst_field(line, 0, pkg, cap) ||
+        pkg[0] == '\0' || inst_count_char(pkg, '/') != 1 ||
+        !inst_other_rel_ok(pkg) || !inst_field(line, 1, f, sizeof(f)) ||
+        !inst_sys_mask(f, mask)) {
+        return -1;
+    }
+    return 1;
+}
+
+void inst_rec_header(char *out, size_t cap, int set, const char *dir)
+{
+    if (cap == 0) {
+        return;
+    }
+    inst_catv(out, cap, 4, "XHCI98 SET RECORD 1 ", inst_other_subkey(set), " ",
+              dir);
+}
+
+int inst_rec_parse(const char *line, INST_REC_LINE *out)
+{
+    const char *p;
+    size_t n = strlen(line);
+    int i;
+
+    memset(out, 0, sizeof(*out));
+    if (n < 3 || line[1] != ' ') {
+        return -1;
+    }
+    out->Kind = line[0];
+    p = line + 2;
+    n -= 2;
+    if (out->Kind != 'F' && out->Kind != 'T' && out->Kind != 'D' &&
+        out->Kind != 'A') {
+        return -1;
+    }
+    if (n < 10 || p[8] != ' ') {
+        return -1;
+    }
+    for (i = 0; i < 8; i++) {
+        char c = p[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            return -1;
+        }
+    }
+    memcpy(out->Token, p, 8);
+    out->Token[8] = '\0';
+    p += 9;
+    n -= 9;
+    switch (out->Kind) {
+    case 'F':
+        if (n < 67 || !inst_is_hex64(p) || p[64] != ' ') {
+            return -1;
+        }
+        inst_upper64(out->Hash, p);
+        p += 65;
+        n -= 65;
+        break;
+    case 'T':
+    case 'D':
+    case 'A':
+        break;
+    default:
+        return -1;
+    }
+    if (n < 3 || n >= sizeof(out->Path) || strchr(p, '\r') != NULL ||
+        strchr(p, '\n') != NULL || p[1] != ':' || p[2] != '\\') {
+        return -1;
+    }
+    inst_copy(out->Path, p, sizeof(out->Path));
+    return 1;
+}
+
+const char *inst_other_label(int set)
+{
+    return set == INST_SET_FREE ?
+        "Free USB class drivers (usb-wdm-free, beta)" :
+        "Non-free driver pack (usb-wdm-nonfree)";
+}
+
+void inst_other_sentence(char *out, size_t cap, int set, const char *dir)
+{
+    if (cap == 0) {
+        return;
+    }
+    if (set == INST_SET_FREE) {
+        inst_catv(out, cap, 6, "Copies the free USB class drivers to ", dir,
+                  "\\" INST_WDMFREE_DIR ". Nothing is installed: Windows uses "
+                  "them only for a device you point it at, or with the box "
+                  "below. They are at a beta stage: report a problem with them "
+                  "at ", inst_other_address(INST_SET_FREE), "/issues, not to ",
+                  "xHCI98.");
+    } else {
+        inst_catv(out, cap, 3, "Copies other makers' drivers (USB Ethernet, "
+                  "serial and game pads) to ", dir,
+                  "\\" INST_NONFREE_DIR ". They are their makers' work, not "
+                  "this project's, and have not been tested by this project on "
+                  "any Windows. Nothing is installed: Windows uses them only "
+                  "for a device you point it at, or with the box below.");
+    }
+}
+
+const char *inst_other_stage_label(void)
+{
+    return "Let Windows use these automatically when a device is plugged in";
+}
+
+void inst_other_stage_text(char *out, size_t cap, int n)
+{
+    char num[12];
+    int i = (int)sizeof(num) - 1;
+
+    if (cap == 0) {
+        return;
+    }
+    if (n <= 0) {
+        inst_copy(out, "None of them is for this Windows.", cap);
+        return;
+    }
+    num[i] = '\0';
+    do {
+        num[--i] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n > 0 && i > 0);
+    inst_catv(out, cap, 3, "Stages ", num + i,
+              " of their INFs for this Windows.");
+}
+
+void inst_other_line(char *out, size_t cap, int set, int state,
+                     int releaseHas, const char *version)
+{
+    const char *what = set == INST_SET_FREE ? "the free USB class drivers"
+                                            : "the non-free driver pack";
+    const char *What = set == INST_SET_FREE ? "The free USB class drivers"
+                                            : "The non-free driver pack";
+    const char *verb = set == INST_SET_FREE ? " are" : " is";
+    const char *addr = inst_other_address(set);
+    const char *suffix = set == INST_SET_FREE ? "-free.zip" : "-nonfree.zip";
+
+    if (cap == 0) {
+        return;
+    }
+    if (state == INST_OTHER_CARRIED) {
+        inst_catv(out, cap, 3, "Up to date: ", addr, ".");
+    } else if (state == INST_OTHER_NOTOURS && releaseHas) {
+        inst_catv(out, cap, 11, "The ", inst_other_folder(set), " folder "
+                  "beside this installer is not this release's (the log says "
+                  "why): it is not offered. Get ", what, " from xhci98-",
+                  version, suffix, " or ", addr, ".", "");
+    } else if (state == INST_OTHER_NOTOURS) {
+        inst_catv(out, cap, 7, "The ", inst_other_folder(set), " folder "
+                  "beside this installer is not this release's (the log says "
+                  "why): it is not offered. Get ", what, " from ", addr, ".");
+    } else if (releaseHas) {
+        inst_catv(out, cap, 9, "Not in this download: ", what, verb,
+                  " in xhci98-", version, suffix, " and at ", addr, ".");
+    } else {
+        inst_catv(out, cap, 5, What, verb, " not in any download of this "
+                  "release yet: see ", addr, ".");
+    }
+}
+
+INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
+                             int freeStage, int nonfreeTicked,
+                             int nonfreeStage, int x64nt6)
+{
+    INST_U32 w = 0;
+
+    if (freeTicked && freeUnread != NULL && freeUnread[0] != '\0') {
+        w |= INST_OW_FREE_UNREAD;
+    }
+    if (nonfreeTicked) {
+        w |= INST_OW_NONFREE;
+    }
+    if (x64nt6 && ((freeTicked && freeStage) ||
+                   (nonfreeTicked && nonfreeStage))) {
+        w |= INST_OW_X64SIG;
+    }
+    return w;
+}
+
+void inst_other_warn_text(INST_U32 set, const char *freeUnread,
+                          int freeStage, char *out, size_t cap)
+{
+    char one[768];
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (set & INST_OW_FREE_UNREAD) {
+        inst_catv(one, sizeof(one), 4, "Some of the free USB class drivers "
+                  "have not been tested on this Windows: ", freeUnread,
+                  ". They are copied all the same",
+                  freeStage ? " and staged." : ".");
+        inst_cat_para(out, cap, one);
+    }
+    if (set & INST_OW_NONFREE) {
+        inst_cat_para(out, cap,
+                      "The non-free drivers have not been tested by this "
+                      "project on any Windows. They are copied as their makers "
+                      "released them; if a device misbehaves with one, remove "
+                      "the device in Device Manager and run the uninstall.");
+    }
+    if (set & INST_OW_X64SIG) {
+        inst_cat_para(out, cap,
+                      "On 64-bit Windows a staged driver loads only if Windows "
+                      "accepts its signature: an unsigned one only on a start "
+                      "with driver signature enforcement disabled (F8), a "
+                      "test-signed one also in test-signing mode.");
     }
 }

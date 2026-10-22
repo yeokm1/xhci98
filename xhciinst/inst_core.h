@@ -582,6 +582,11 @@ typedef struct _INST_OPTS {
     int Storage;            /* /storage: the USB storage drivers, 98 SE
                                only (record 26 section 6.5.9)          */
     int NoStorage;          /* /nostorage: left out, on any system      */
+    int Free;               /* /free: the free USB class drivers copied
+                               (record 26 section 6.7.4)                */
+    int FreeStage;          /* /freestage: and staged (implies /free)   */
+    int NonFree;            /* /nonfree: the non-free pack copied       */
+    int NonFreeStage;       /* /nonfreestage: and staged                */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -1663,6 +1668,103 @@ int inst_mk_safe_eject(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
                   INST_U32 bus, INST_U32 address, unsigned char *out,
                   INST_U32 *need);
+
+/* ---- the other USB drivers: usb-wdm-free and usb-wdm-nonfree (record 26
+ * section 6.7; roadmap-usb4 task 43.48) --------------------------------- */
+
+/* The SHA-256 of each set's SHA256.TXT in this release's downloads, as
+ * make-release.ps1 writes it for package-common.ps1's pins (the cut and
+ * test-package.ps1 hold the two equal): the installer's record of what the
+ * folder must hold. "" for a release with no such set. */
+#define INST_WDMFREE_SUMS       ""
+#define INST_NONFREE_SUMS     "E3EA38F94C0C30E1804FE1CA6D89F5E0EB671EE4DBFA31A71FBD151AA12845C1"
+#define INST_WDMFREE_DIR        "WDMFREE"
+#define INST_NONFREE_DIR        "NONFREE"
+#define INST_SET_FREE           0   /* usb-wdm-free, WDMFREE\                */
+#define INST_SET_NONFREE        1   /* usb-wdm-nonfree's non-free/, NONFREE\ */
+#define INST_SET_COUNT          2
+/* A set's state in the download (section 6.7.3). */
+#define INST_OTHER_ABSENT       0   /* no folder                             */
+#define INST_OTHER_CARRIED      1   /* the folder holds what the record names */
+#define INST_OTHER_NOTOURS      2   /* a folder, not this release's          */
+/* The longest path under a set's folder (section 6.7.2), and a nul. */
+#define INST_OTHER_REL_CHARS    141
+#define INST_OTHER_KEY          "Software\\xhci98\\Other"
+
+/* The folder, the compiled hash, the prefix STAGE.TXT's INF paths carry,
+ * the up-to-date address and the registry subkey of a set. */
+const char *inst_other_folder(int set);
+const char *inst_other_sums(int set);
+const char *inst_other_prefix(int set);
+const char *inst_other_address(int set);
+const char *inst_other_subkey(int set);
+/* 1 when rel is a path under a set's folder the installer accepts:
+ * '/'-separated, relative, printable ASCII without \ : * ? " < > | ;, no
+ * empty, "." or ".." part, no part starting with a space or ending with a
+ * space or a dot, at most 140 characters (package-common.ps1's
+ * Test-OtherSetRelPath). */
+int inst_other_rel_ok(const char *rel);
+
+/* The systems of STAGE.TXT and READ.TXT, by token (W98SE ... W10X64). */
+#define INST_SYS_COUNT          13
+/* The running system's token: nt 0 for 98 SE (4.10.2222) and ME (4.90);
+ * -1 for a system with none (98 FE, Server 2003 x86, 11). */
+int inst_sys_token(int nt, unsigned long major, unsigned long minor,
+                   unsigned long build, int is64);
+const char *inst_sys_name(int tok);
+/* The tokens of list, separated by spaces, as bits (1 << token): 1, or 0
+ * for an unknown token or none. */
+int inst_sys_mask(const char *list, INST_U32 *mask);
+
+/* One line of STAGE.TXT: 1 a data line read into out (the INF's path with
+ * prefix and its '/' stripped, checked by inst_other_rel_ok), 0 a comment
+ * or a blank line, -1 a line it cannot read. */
+typedef struct _INST_STAGE_LINE {
+    int Stage;              /* STAGE 1, COPY 0                            */
+    INST_U32 Systems;       /* inst_sys_mask                              */
+    char Inf[INST_OTHER_REL_CHARS];
+} INST_STAGE_LINE;
+int inst_stage_parse(const char *line, const char *prefix,
+                     INST_STAGE_LINE *out);
+/* One line of a SHA256.TXT, "<64 hex>  <path>": 1 read (hex upper case),
+ * 0 blank, -1 not so or a path inst_other_rel_ok refuses. */
+int inst_sums_parse(const char *line, char hex65[65], char *rel, size_t cap);
+/* One line of READ.TXT, "<class>/<package> | <systems>": as above. */
+int inst_read_parse(const char *line, char *pkg, size_t cap, INST_U32 *mask);
+
+/* The record file (section 6.7.5): its header line, and one later line
+ * read: 1 (Kind 'F' with Token, Hash and Path; 'T', 'D' or 'A' with Token
+ * and Path), -1 a line it cannot read. */
+typedef struct _INST_REC_LINE {
+    char Kind;
+    char Token[9];          /* 8 hex digits, upper case                   */
+    char Hash[65];
+    char Path[520];
+} INST_REC_LINE;
+void inst_rec_header(char *out, size_t cap, int set, const char *dir);
+int inst_rec_parse(const char *line, INST_REC_LINE *out);
+
+/* The page's texts (section 6.7.4; proposals for the owner): the box, its
+ * sentence (dir the tools folder), the stage box and its line for n INFs,
+ * and the line under the row or in its place for the set's state; version
+ * the release's, releaseHas 0 when the release has no such set. */
+const char *inst_other_label(int set);
+void inst_other_sentence(char *out, size_t cap, int set, const char *dir);
+const char *inst_other_stage_label(void);
+void inst_other_stage_text(char *out, size_t cap, int n);
+void inst_other_line(char *out, size_t cap, int set, int state,
+                     int releaseHas, const char *version);
+/* The page's warnings on Next (section 6.7.4): freeUnread the free
+ * packages with an INF for this system that READ.TXT does not read on it
+ * ("" for none), the boxes as ticked, x64nt6 64-bit Vista or 7. */
+#define INST_OW_FREE_UNREAD     0x01UL
+#define INST_OW_NONFREE         0x02UL
+#define INST_OW_X64SIG          0x04UL
+INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
+                             int freeStage, int nonfreeTicked,
+                             int nonfreeStage, int x64nt6);
+void inst_other_warn_text(INST_U32 set, const char *freeUnread,
+                          int freeStage, char *out, size_t cap);
 
 /* ---- the USB storage drivers on Windows 98 SE (record 26 section 6.5;
  * roadmap-usb4 task 43.4) ----------------------------------------------- */

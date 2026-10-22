@@ -37,6 +37,7 @@
 #define INST_Q_S98_UNUSED   12  /* 98 SE and ME: external NVMe drives
                                    disconnected? (the file update)          */
 #define INST_Q_STOR         13  /* 98 SE: the USB storage drivers?         */
+#define INST_Q_OTHER        14  /* a free or non-free set: copy it, stage it? */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -267,6 +268,20 @@ INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, const char *dir,
                             char *text, size_t cap);
 /* The Summary's line for it, "" when it is not shown. */
 void inst_eng_stor_summary(char *out, size_t cap);
+
+/* The other USB drivers (record 26 section 6.7): a set's state in the
+ * download (INST_OTHER_*), its STAGE lines for this system, and the boxes;
+ * 0 before the read. Its sentence for dir and the line under its row; the
+ * choice; the page's warnings on Next ("" for none); the Summary's lines;
+ * the Finish page's paragraph. */
+int inst_eng_other_state(int set, int *state, int *forThis, int *include,
+                         int *stage);
+void inst_eng_other_texts(int set, const char *dir, char *sentence,
+                          size_t sCap, char *line, size_t lCap);
+void inst_eng_other_choose(int set, int include, int stage);
+void inst_eng_other_warnings(char *text, size_t cap);
+void inst_eng_other_summary(char *text, size_t cap);
+void inst_eng_other_finish(char *text, size_t cap);
 void inst_eng_s98_choose(int include);
 
 /* One of its settings (section 5.6): its name on this system, on the page
