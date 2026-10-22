@@ -3262,3 +3262,39 @@ const char *tr_mksvc_text(int state)
         return "not read";
     }
 }
+
+int tr_eject_watch_kind(int admin, int notRemovable, int w2k, int svcState)
+{
+    if (admin || notRemovable) {
+        return TR_EJW_PLAIN;
+    }
+    if (w2k || svcState == TR_SV_ABSENT || svcState == TR_SV_STOPPED) {
+        return TR_EJW_UNCONFIRMED;
+    }
+    return TR_EJW_SERVICE;
+}
+
+TR_U32 tr_eject_watch_ms(int kind)
+{
+    return kind == TR_EJW_SERVICE ? TR_EJW_OWN_MS + 2UL * TR_EJW_MK_IDLE_MS
+                                  : TR_EJW_OWN_MS;
+}
+
+const char *tr_eject_open_text(int kind)
+{
+    switch (kind) {
+    case TR_EJW_SERVICE:
+        return "The PCIe tunnel closes when the xHCI98 mark service confirms "
+               "the eject to the Thunderbolt driver, which it does in the "
+               "background; an eject made as an administrator is confirmed "
+               "at once.";
+    case TR_EJW_UNCONFIRMED:
+        return "The PCIe tunnel stays up until the device is unplugged, "
+               "because the eject was not confirmed to the Thunderbolt "
+               "driver; an eject made as an administrator is confirmed at "
+               "once.";
+    default:
+        return "The Thunderbolt driver has not confirmed that the PCIe tunnel "
+               "was closed.";
+    }
+}

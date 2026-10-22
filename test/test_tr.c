@@ -2675,6 +2675,60 @@ static void test_marks(void)
     CHECK(strcmp(tr_mksvc_text(99), "not read") == 0, "unknown state");
 }
 
+/* The tunnel watch after an NT eject: who confirms, how long, what is said. */
+static void test_eject_watch(void)
+{
+    int s;
+
+    /* An administrator's run confirms itself: the 10 s watch, every OS and
+     * service state, as before. */
+    for (s = TR_SV_UNREAD; s <= TR_SV_OTHER; s++) {
+        CHECK_EQ(tr_eject_watch_kind(1, 0, 0, s), TR_EJW_PLAIN, "admin, XP+");
+        CHECK_EQ(tr_eject_watch_kind(1, 0, 1, s), TR_EJW_PLAIN, "admin, 2000");
+        CHECK_EQ(tr_eject_watch_kind(0, 1, 0, s), TR_EJW_PLAIN,
+                 "the not-removable route");
+    }
+    /* No administrator, XP and later: the mark service confirms unless it
+     * is known to be down. */
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_RUNNING), TR_EJW_SERVICE,
+             "service running");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_OTHER), TR_EJW_SERVICE,
+             "service starting");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_UNREAD), TR_EJW_SERVICE,
+             "service state not read");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_STOPPED), TR_EJW_UNCONFIRMED,
+             "service stopped");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_ABSENT), TR_EJW_UNCONFIRMED,
+             "service not installed");
+    /* 2000: problem 24 is no confirmation, so the service never writes one. */
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 1, TR_SV_RUNNING), TR_EJW_UNCONFIRMED,
+             "2000, no administrator");
+
+    /* The bound: a tool's own confirmation keeps 10 s; the service's adds
+     * its idle period twice, that period being the service's own. */
+    CHECK_EQ(mk_poll_ms(0), TR_EJW_MK_IDLE_MS, "the service's idle period");
+    CHECK(mk_poll_ms(1) <= TR_EJW_MK_IDLE_MS, "its busy period is shorter");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_PLAIN), 10000UL, "plain bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_UNCONFIRMED), 10000UL, "unconfirmed bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_SERVICE),
+             TR_EJW_OWN_MS + 2UL * mk_poll_ms(0), "service bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_SERVICE), 30000UL, "service bound 30 s");
+
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_PLAIN),
+                 "The Thunderbolt driver has not confirmed that the PCIe "
+                 "tunnel was closed.") == 0, "plain text unchanged");
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_SERVICE),
+                 "The PCIe tunnel closes when the xHCI98 mark service "
+                 "confirms the eject to the Thunderbolt driver, which it "
+                 "does in the background; an eject made as an administrator "
+                 "is confirmed at once.") == 0, "service text");
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_UNCONFIRMED),
+                 "The PCIe tunnel stays up until the device is unplugged, "
+                 "because the eject was not confirmed to the Thunderbolt "
+                 "driver; an eject made as an administrator is confirmed at "
+                 "once.") == 0, "unconfirmed text");
+}
+
 int main(void)
 {
     test_printf();
@@ -2695,6 +2749,7 @@ int main(void)
     test_labels();
     test_resources();
     test_marks();
+    test_eject_watch();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

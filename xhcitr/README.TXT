@@ -81,6 +81,16 @@ using the device, Windows refuses and the tool tells you which.
 Close the programs and windows that use the device first, as with
 Windows' own Safely Remove Hardware.
 
+Under the USB4 connection manager on Windows 2000 to 7, the stop also
+closes the device's PCIe tunnel once the Thunderbolt driver has the stop
+confirmed. Run as an administrator, the tool confirms it at once. Without
+administrator rights on XP, Vista and 7 the xHCI98 mark service
+confirms it in the background: the tool waits up to 30 seconds for that,
+and if the tunnel is still up then it says the tunnel closes when the
+mark service confirms the eject. On Windows 2000 without administrator
+rights, or with the mark service stopped, nothing confirms it and the
+tunnel stays up until you unplug the device.
+
 Stopping a USB stick or disk
 ----------------------------
 

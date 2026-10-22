@@ -3941,10 +3941,12 @@ static int ej_single(const WALK *w, int u)
 }
 
 /* Under the USB4 profile, the query watched for the router's PCIe tunnel
- * closed after the eject (record 24 section 5.2; xhciinst.c). */
-static const char *ej_watch_tunnel(const EJREQ *q)
+ * closed after the eject (record 24 section 5.2; xhciinst.c), for as long
+ * as tr_eject_watch_ms gives the watch's kind (TR_EJW_*). */
+static const char *ej_watch_tunnel(const EJREQ *q, int kind)
 {
     DWORD start = GetTickCount();
+    DWORD bound = (DWORD)tr_eject_watch_ms(kind);
 
     for (;;) {
         unsigned char *b;
@@ -3969,9 +3971,8 @@ static const char *ej_watch_tunnel(const EJREQ *q)
                 return "The PCIe tunnel was closed.";
             }
         }
-        if (GetTickCount() - start >= 10000) {
-            return "The Thunderbolt driver has not confirmed that the PCIe tunnel "
-                   "was closed.";
+        if (GetTickCount() - start >= bound) {
+            return tr_eject_open_text(kind);
         }
         Sleep(250);
     }
@@ -5063,7 +5064,21 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
                 tr_printf(&t, "%s\n", c);
             }
         }
-        tunnelNote = ej_watch_tunnel(q);
+        {
+            int kind = tr_eject_watch_kind(admin, notRemovable, env_w2k(),
+                                           admin || notRemovable
+                                               ? TR_SV_UNREAD
+                                               : mksvc_state());
+            if (kind == TR_EJW_SERVICE) {
+                /* The mark service writes its confirmation under this
+                 * mutex (xhcimark.c's mk_confirm), so a watch that held
+                 * it would wait for nothing. Windows has answered; the
+                 * rest only reads. */
+                ej_unlock(m);
+                m = NULL;
+            }
+            tunnelNote = ej_watch_tunnel(q, kind);
+        }
     } else {
         cr = api.QueryRemove(w.N[u].Dn, TR_UI_NOT_OK);
         outcome = inst_eject9x_query(cr, &text);

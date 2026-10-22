@@ -885,4 +885,31 @@ const char *tr_mark_text(int state);
 #define TR_SV_OTHER     4   /* starting, stopping, paused                  */
 const char *tr_mksvc_text(int state);
 
+/* The watch for the PCIe tunnel after an NT eject under the USB4 profile
+ * (record 24 section 5.2; record 25 section 6.2 step 7), by who is to
+ * confirm the eject to the connection manager (record 21 section 7.4).
+ * PLAIN: an administrator's run, which confirms itself, and the
+ * not-removable route, which nothing confirms. SERVICE: a run without
+ * administrator rights on XP and later, the mark service not known to be
+ * down: its next pass confirms, so the tool lets go of the eject mutex
+ * (the service takes it to write) and waits for that pass. UNCONFIRMED:
+ * a run without administrator rights on 2000, or with the service not
+ * installed or stopped: nothing confirms it. */
+#define TR_EJW_PLAIN        0
+#define TR_EJW_SERVICE      1
+#define TR_EJW_UNCONFIRMED  2
+int tr_eject_watch_kind(int admin, int notRemovable, int w2k, int svcState);
+
+/* The watch's bound in ms. PLAIN and UNCONFIRMED: TR_EJW_OWN_MS, which
+ * covers the driver's read of a written confirmation and the teardown.
+ * SERVICE: that, plus the mark service's idle period (mk_poll_ms(0),
+ * checked by test_tr.c) for a pass that began just before the stop, plus
+ * one more period for the next pass's device walk, slow under emulation. */
+#define TR_EJW_OWN_MS       10000UL
+#define TR_EJW_MK_IDLE_MS   10000UL
+TR_U32 tr_eject_watch_ms(int kind);
+
+/* The line when the bound passed with the tunnel not closed. */
+const char *tr_eject_open_text(int kind);
+
 #endif /* TR_CORE_H */

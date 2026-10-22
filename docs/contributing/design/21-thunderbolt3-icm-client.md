@@ -4022,8 +4022,14 @@ made the service look:
   5.2's second line), and the release notes' fallback; a unit disabled
   and enabled, or updated, or restarted by the service, is never read as
   ejected whatever the rebuild takes. The tools' watch for the tunnel
-  line (record 24 section 5.2, 10 s) covers the service's poll and the
-  thread's status-ask read. This ends a defect `3.0.0.0` has: a driver update or
+  line (record 24 section 5.2, 10 s) covers the thread's status-ask read
+  of a tool's own confirmation. It did not cover the service's: the
+  service writes under the eject mutex, which the tool held through its
+  watch, and an unelevated XHCITR on 7 under emulation saw the
+  confirmation 12 to 18 s after the stop (the 43.45 legs, 2026-10-22).
+  Since then XHCITR, when it has not confirmed the eject itself, lets go
+  of the mutex before its watch and waits for the service's pass
+  (record 25 section 6.2 step 7). This ends a defect `3.0.0.0` has: a driver update or
   a disable and enable of a unit under the USB4 profile, whose
   query-remove and remove today post an eject and tear its tunnel down.
   Record 22 section 10.4's clause that the tunnel is down before the

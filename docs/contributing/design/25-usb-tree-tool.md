@@ -791,8 +791,25 @@ record.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
    5.4 with every fact it needs), captured as text; on a veto, the vetoing
-   device and the reason.
-8. Release the mutex, then show the result: a message box from the
+   device and the reason. The tunnel watch (2026-10-22, from the 43.45
+   legs; `tr_eject_watch_kind` in `tr_core.c`) depends on who confirms
+   the eject to the connection manager (record 21 section 7.4). An
+   administrator's run confirms it itself and watches 10 s, as XHCIINST
+   does; so does the not-removable route, which nothing confirms. A run
+   without administrator rights on XP and later, the mark service not
+   read as stopped or absent, leaves the confirmation to the service's
+   next pass: the service writes it under this mutex, so the tool
+   releases the mutex here, before the watch, and watches 10 s plus
+   twice the service's idle period (`mk_poll_ms(0)`, 10 s), 30 s; if the
+   tunnel is still up it says "The PCIe tunnel closes when the xHCI98
+   mark service confirms the eject to the Thunderbolt driver, which it
+   does in the background; an eject made as an administrator is
+   confirmed at once." Without administrator rights on 2000, or with the
+   service stopped or absent, nothing confirms it: 10 s, then "The PCIe
+   tunnel stays up until the device is unplugged, because the eject was
+   not confirmed to the Thunderbolt driver; an eject made as an
+   administrator is confirmed at once."
+8. Release the mutex (if step 7 has not), then show the result: a message box from the
    window or a balloon (tooltip on 98 SE) from the tray.
 
 ### 6.3 The shared mutex
@@ -805,7 +822,8 @@ access to SYSTEM and Administrators, so an unelevated tray and an
 elevated XHCIINST can both take it. An abandoned mutex counts as taken
 (the transaction revalidates everything anyway). A wait longer than 10 s
 refuses ("another program is removing a device"). It is held only for
-one transaction, never while waiting for elevation.
+one transaction, never while waiting for elevation, and not through a
+tunnel watch that waits for the mark service (section 6.2 step 7).
 
 ### 6.4 Rights
 
