@@ -309,8 +309,15 @@ static void test_cm_only(void)
               inst_stage_error_text(5UL, INST_ARCH_AMD64, k81) == NULL,
               "other systems and errors: nothing added");
         CHECK(strstr(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64,
-                                           k8), "Startup Settings") != NULL,
-              "the way through is named");
+                                           k8), "complete package") != NULL &&
+              strstr(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64,
+                                           k8), ".cat files") != NULL &&
+              strstr(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64,
+                                           k8), "Startup Settings") == NULL &&
+              inst_text_width(inst_stage_error_text(INST_E_NO_CATALOG,
+                                                    INST_ARCH_AMD64, k8)) <=
+              INST_COLUMNS,
+              "no catalog: restore the package with its .cat files");
         /* 8 and 8.1 x64 make xhcicm a boot driver (task 43.22). */
         CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1, 1) == INST_CMBOOT_WARN &&
               inst_cm_boot_gate(INST_ARCH_AMD64, k81, 1, 1) ==

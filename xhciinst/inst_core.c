@@ -1606,14 +1606,11 @@ const char *inst_stage_error_text(INST_U32 err, int arch, int osKind)
         osKind != INST_OS_CMONLY) {
         return NULL;
     }
-    return "This 64-bit Windows installs a driver package only with a signed "
-           "catalog, even\nin test-signing mode, and this package's INFs have "
-           "none (its x64 drivers carry\nthe project's test signature in the "
-           "files themselves). To install it, keep\ntest-signing mode on, "
-           "start once with driver signature enforcement disabled -\n"
-           "Advanced startup, Troubleshoot, Advanced options, Startup "
-           "Settings,\nRestart, then 7 - and run the installer again. Later "
-           "starts need only\ntest-signing mode.";
+    return "This 64-bit Windows installs a driver package only with its signed "
+           "catalog,\neven in test-signing mode, and Windows found none for "
+           "this INF. The package\ncarries a .cat file beside each of its INFs "
+           "(xhci98.cat, xhcicm.cat and the\nothers): restore the complete "
+           "package, with its .cat files, and run the\ninstaller again.";
 }
 
 int inst_sb_state(int found, INST_U32 type, INST_U32 value)

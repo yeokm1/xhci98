@@ -344,8 +344,9 @@ const char *inst_cm_boot_refuse_text(void);
 /* What a refused staging means (record 23 section 5.10, revision 30): for
  * SPAPI_E_NO_CATALOG_FOR_OEM_INF on a 64-bit system of the
  * connection-manager-alone kind, which refuses an INF with no signed
- * catalog in test-signing mode (read on 8 and 8.1 x64, task 43.22), the
- * way through; NULL for any other error or system. */
+ * catalog in test-signing mode (read on 8 and 8.1 x64, task 43.22), what
+ * to do: restore the package with its .cat files (revision 34); NULL for
+ * any other error or system. */
 #define INST_E_NO_CATALOG   0xE000022FUL
 const char *inst_stage_error_text(INST_U32 err, int arch, int osKind);
 
