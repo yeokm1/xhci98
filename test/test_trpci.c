@@ -1122,7 +1122,7 @@ static void test_empty_port(void)
 
     /* Two members, the first using up the answer's 32 functions below:
      * the second's function is not listed, and its port is not called
-     * empty (Codex round 1, P2). */
+     * empty (task 43.63). */
     reset();
     add_fn(BDF(5, 0, 0), 0x15BF8086UL, 0x088000UL);
     add_bridge(BDF(4, 1, 0), 0x15C08086UL, 4, 6, 6);
