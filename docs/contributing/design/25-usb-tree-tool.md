@@ -1364,7 +1364,16 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    revised 2026-10-22).
    On a root port a High Speed device runs at High Speed (every USB 2.0
    root port of an xHCI controller is High Speed), so a root port is
-   never asked.
+   never asked. Nor is a device whose Full Speed hub is itself behind a
+   hub at High Speed or faster, or behind one whose connection was not
+   read (`UnderTt`): it is behind a TT, where `xhci98.sys` cannot withdraw
+   a request that is never answered from EP0 (`hcdEp0Withdraw`, record 13
+   section 8.4.1) and resets the controller instead, so the tool's own
+   request could cost every device on it. Such a device is not counted;
+   the cost is the notice for a High Speed device behind a Full Speed hub
+   behind a High Speed hub. Only the refresh's scan asks; the details
+   pane and item 6's list read the answers it settled, so drawing them
+   neither sends a request nor uses up a try.
 2. **Where it is, and what to try** (`TR_FW_*`, `tr_fast_where`,
    `tr_fast_try`):
 
@@ -1410,7 +1419,8 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    pixel unchanged. The usual icon again once the set is empty: each
    counted device reconnected at its speed (the refresh after the plug
    reads it so) or removed. The tooltip while red: "xHCI98 USB Tree: <n>
-   USB device(s) can run faster". An Explorer restart re-adds the icon in
+   USB device(s) can run faster", set again whenever a refresh changes the
+   count while the icon stays red. An Explorer restart re-adds the icon in
    the state it was in.
 6. **Clicking.** The balloon's click (`NIN_BALLOONUSERCLICK`, which the
    shell sends after `NIM_SETVERSION` 3; only for a balloon of this

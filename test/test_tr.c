@@ -2650,6 +2650,13 @@ static void test_fast(void)
     in.HubKnown = 0;
     CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a hub not read: not asked");
     in.HubKnown = 1;
+    in.UnderTt = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0,
+             "HS case: the Full Speed hub behind a High Speed one: not asked");
+    in.HsQual = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: behind a TT never counts");
+    in.HsQual = -1;
+    in.UnderTt = 0;
     in.ExSpeed = TR_SPEED_HIGH;
     CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: at High Speed: no");
     in.ExSpeed = TR_SPEED_FULL;

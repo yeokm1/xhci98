@@ -4843,7 +4843,9 @@ that:
    restart (a PnP stop and start, a reboot) clears it.
 3. **A halt after the read.** A run that stops at a controller halt after
    this attempt made the read (`Usb2BosTried`) records the device in the
-   memo too, so a later step's timeout after a successful BOS read (the
+   memo too, by the VID:PID the read kept on the port (`Usb2BosVidPid`:
+   the attempt's teardown, `hcdDeviceGo` before Disable Slot, frees the
+   device object before a halt it causes is seen), so a later step's timeout after a successful BOS read (the
    configuration read, say) does not repeat with the read either. The
    cost is that a device enumerating when an unrelated recovery or a stop
    halts the controller loses the read until the next start; it then has

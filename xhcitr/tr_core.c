@@ -2547,7 +2547,7 @@ static int tr_fast_now(int haveV2, TR_U32 flags, unsigned int exSpeed)
 int tr_fast_wants_qual(const TR_FAST_IN *in)
 {
     if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
-        !in->HaveV2 || in->Root || !in->HubKnown) {
+        !in->HaveV2 || in->Root || !in->HubKnown || in->UnderTt) {
         return 0;
     }
     return tr_fast_can(in->HaveV2, in->V2Flags) < 0 &&

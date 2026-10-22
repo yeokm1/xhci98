@@ -652,6 +652,9 @@ typedef struct _TR_FAST_IN {
     unsigned int BcdUsb;        /* the device descriptor's bcdUSB          */
     int HsQual;                 /* its device_qualifier: -1 not asked, 0
                                    refused or malformed, 1 answered        */
+    int UnderTt;                /* a hub further up runs at High Speed or
+                                   faster, or was not read: the device is
+                                   behind a TT, so it is not asked         */
 } TR_FAST_IN;
 
 typedef struct _TR_FAST {
@@ -672,8 +675,9 @@ int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f);
 
 /* 1 when the port is a High Speed candidate whose device_qualifier the tool
  * asks for (item 1): an xhci98 port, connected, not a hub, _EX_V2 read and
- * declaring no SuperSpeed, at Full Speed behind a hub at Full Speed, with
- * bcdUSB 0x0200 or more. HsQual is not looked at. */
+ * declaring no SuperSpeed, at Full Speed behind a hub at Full Speed that is
+ * not itself behind a TT (UnderTt clear), with bcdUSB 0x0200 or more.
+ * HsQual is not looked at. */
 int tr_fast_wants_qual(const TR_FAST_IN *in);
 
 /* 1 when n bytes are a device_qualifier descriptor: bLength 10, type 6. */

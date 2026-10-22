@@ -554,7 +554,8 @@ the logged-on user, with no administrator rights.
   runs slower than it can on a controller `xhci98.sys` drives - on a USB
   2.0 port, behind a USB 2.0 hub, fallen back to USB 2.0 in a USB 3 port,
   or a 10 Gbit/s device at 5 Gbit/s - or a High Speed device runs at Full
-  Speed behind a Full Speed hub, a balloon names it ("A USB device can run
+  Speed behind a Full Speed hub (one not itself behind a High Speed hub),
+  a balloon names it ("A USB device can run
   faster"; the tooltip on 98 SE) and the icon turns red until every such
   device is reconnected at its speed or removed. Clicking the balloon, or
   the first item of the icon's menu while it is red, lists each device

@@ -1072,6 +1072,11 @@ typedef struct _HCD_PORT {
     /* Task 35.3: a root port's enumeration notes and their budget
      * (xhci_enum.h), cleared by the start. Thread only. */
     XHCI_ENUM_NOTES Notes;
+    /* Task 43.27 (record 13 section 8.4.1, rule 3): the VID:PID of the
+     * device this attempt read the BOS of at High or Full Speed, kept here
+     * because the attempt's teardown frees the device before a halt it
+     * causes is seen. Thread only. */
+    ULONG Usb2BosVidPid;
 } HCD_PORT, *PHCD_PORT;
 
 /*

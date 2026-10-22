@@ -411,7 +411,7 @@ static void log_node_add(int parentT, int which, int index, const char *id);
 static void pci_node_add(int parentT, int which, int index, const char *id);
 static void say(const char *text, int warn);
 static void fast_scan(void);
-static int fast_port(int k, TR_FAST *f);
+static int fast_port(int k, TR_FAST *f, int ask);
 static void fast_name(int k, char *out, size_t cap);
 static unsigned int fast_vid(const UPORT *p);
 static unsigned int fast_pid(const UPORT *p);
@@ -3044,7 +3044,7 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
     }
     {
         TR_FAST f;
-        if (fast_port(i, &f)) {
+        if (fast_port(i, &f, 0)) {
             char name[160];
             char port[TR_NAME_CHARS + 96];
             char hub[200];
@@ -6109,6 +6109,7 @@ static int fastPending;         /* a balloon owed until the icon is there   */
 static char fastText[256];
 static int fastBalloon;         /* the last balloon shown was this notice's */
 static int fastRed;             /* the icon shown is the red one            */
+static int fastTipN = -1;       /* the count its tooltip says, -1 none      */
 static HICON hIconFast;
 /* The High Speed case's answers (item 1), by key, the oldest replaced. */
 static TR_QUAL_CACHE qualCache;
@@ -6171,9 +6172,9 @@ static void fast_key_of(int k, char *key, size_t cap)
 }
 
 /* A candidate's device_qualifier (section 7.6 item 1): the answer settled
- * for its key, else asked (tr_qual_put). 1 High Speed capable, 0 not, or
- * not yet known. */
-static int fast_qual(int k)
+ * for its key, else, when ask is set (the refresh's scan only), asked
+ * (tr_qual_put). 1 High Speed capable, 0 not, or not yet known. */
+static int fast_qual(int k, int ask)
 {
     char key[TR_FAST_KEY];
     unsigned char *b = NULL;
@@ -6182,8 +6183,8 @@ static int fast_qual(int k)
 
     fast_key_of(k, key, sizeof(key));
     v = tr_qual_get(&qualCache, key);
-    if (v >= 0) {
-        return v;
+    if (v >= 0 || !ask) {
+        return v > 0 ? 1 : 0;
     }
     n = usb_desc(up[k].Hub, up[k].Conn.Port, 6, 0, 0, TR_QUAL_BYTES, &b);
     v = tr_qual_put(&qualCache, key, b, n);
@@ -6191,11 +6192,14 @@ static int fast_qual(int k)
     return v;
 }
 
-/* Port k as tr_fast_check reads it; 1 when it counts, with *f. */
-static int fast_port(int k, TR_FAST *f)
+/* Port k as tr_fast_check reads it; 1 when it counts, with *f. Only the
+ * scan (ask set) sends a device_qualifier request; the details pane and the
+ * list read the answers it settled. */
+static int fast_port(int k, TR_FAST *f, int ask)
 {
     const UPORT *p = &up[k];
     TR_FAST_IN in;
+    int a;
 
     memset(&in, 0, sizeof(in));
     in.Ours = uc[p->Ctrl].Ours;
@@ -6211,9 +6215,17 @@ static int fast_port(int k, TR_FAST *f)
         in.HubHaveV2 = h->HaveV2;
         in.HubFlags = h->V2Flags;
         in.HubExSpeed = h->Conn.Speed;
+        /* Behind a TT: a hub further up at High Speed or faster, or one
+         * not read (record 25 section 7.6 item 1). */
+        for (a = h->ParentUp; a >= 0; a = up[a].ParentUp) {
+            if (!up[a].HaveConn || up[a].Conn.Speed >= TR_SPEED_HIGH) {
+                in.UnderTt = 1;
+                break;
+            }
+        }
     }
     in.BcdUsb = (unsigned int)p->Conn.Dev[2] | ((unsigned int)p->Conn.Dev[3] << 8);
-    in.HsQual = tr_fast_wants_qual(&in) ? fast_qual(k) : -1;
+    in.HsQual = tr_fast_wants_qual(&in) ? fast_qual(k, ask) : -1;
     return tr_fast_check(&in, f);
 }
 
@@ -6238,22 +6250,25 @@ static void fast_name(int k, char *out, size_t cap)
     }
 }
 
-/* The icon as the notice wants it: red while on and a device counts. */
+/* The icon as the notice wants it: red while on and a device counts; its
+ * tooltip again whenever the count it says changes. */
 static void fast_icon(void)
 {
     TR_NID n;
     int red = fastOn && fastCount > 0 && hIconFast != NULL;
+    int tipN = red ? fastCount : -1;
 
-    if (!iconAdded || red == fastRed) {
+    if (!iconAdded || (red == fastRed && tipN == fastTipN)) {
         return;
     }
     memset(&n, 0, sizeof(n));
     n.cbSize = shellV5 ? TR_NID_V2 : TR_NID_V1;
     n.hWnd = hTray;
     n.uID = 1;
-    n.uFlags = NIF_ICON | NIF_TIP;
+    n.uFlags = NIF_TIP | (red != fastRed ? NIF_ICON : 0);
     n.hIcon = red ? hIconFast : hIconSmall;
     fastRed = red;
+    fastTipN = tipN;
     tray_tip(&n);
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
 }
@@ -6290,7 +6305,7 @@ static void fast_scan(void)
     for (k = 0; k < upCount; k++) {
         TR_FAST f;
         char key[TR_FAST_KEY];
-        if (!fast_port(k, &f)) {
+        if (!fast_port(k, &f, 1)) {
             continue;
         }
         fastCount++;
@@ -6338,7 +6353,7 @@ static int fast_list(TR_TEXT *t)
         char hub[200];
         const UCTRL *c;
         size_t mark;
-        if (!fast_port(k, &f)) {
+        if (!fast_port(k, &f, 0)) {
             continue;
         }
         if (left > 0) {

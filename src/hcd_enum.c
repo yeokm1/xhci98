@@ -2449,9 +2449,8 @@ static ULONG hcdVidPid(const UCHAR *d)
  * it again this start. */
 static VOID hcdBosHalt(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
-    if (p->Device != NULL && XhciEnumBosHaltMemo(&p->Enum)) {
-        XhciEnumBosMemoAdd(&hc->Usb2BosMemo,
-                           hcdVidPid(p->Device->DeviceDesc));
+    if (XhciEnumBosHaltMemo(&p->Enum)) {
+        XhciEnumBosMemoAdd(&hc->Usb2BosMemo, p->Usb2BosVidPid);
     }
 }
 
@@ -2669,6 +2668,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
                                   &bytes);
             outcome = ok ? HCD_CTL_DONE : HCD_CTL_FAILED;
         } else {
+            p->Usb2BosVidPid = hcdVidPid(p->Device->DeviceDesc);
             outcome = HcdThreadControlDoor(hc, p->Device,
                                            (USHORT)(HCD_DESC_BOS << 8), 0,
                                            act->Length, &bytes);
@@ -2683,8 +2683,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             XhciLogNote(&hc->Hc, "enum.bos.usb2", (bytes << 8) | outcome);
             if (outcome != HCD_CTL_DONE && outcome != HCD_CTL_STALLED &&
                 outcome != HCD_CTL_ABANDONED) {
-                XhciEnumBosMemoAdd(&hc->Usb2BosMemo,
-                                   hcdVidPid(p->Device->DeviceDesc));
+                XhciEnumBosMemoAdd(&hc->Usb2BosMemo, p->Usb2BosVidPid);
             }
         }
         if (act->Length == XHCI_ENUM_BOS_HEAD_BYTES) {
