@@ -215,6 +215,63 @@ out of room for a list (overflow 0).
    source (`docs/references/README.md` records that none of the DDK's
    declarations or sample code is reproduced today).
 
+### The C port (2026-10-22)
+
+Owner, 2026-10-22: the VSD is written in C as far as C can do it, with
+assembly only where C cannot, each such line saying why; Open Watcom first,
+and MSVC 6.0 with the DDK's `VXDWRAPS` and `LINK /VXD` if Watcom still fails
+once the images are compared byte for byte.
+
+`S98VSDC.VXD` is `S98VSDP`'s C port: the same behaviour, counters and
+prints, from the 98 SE DDK's C headers (`all\BLCK_DDK` `SRC_BLOCK_INC_*.H`
+for the IOP, DCB and DDB, `incs` `INC_WIN98_*.H` for the IOR, ISP, ILB, AEP,
+DRP, SGD and IOS), compiled by Open Watcom 2.0 `wcc386` with `-zp1` (the
+headers mirror the packed `.INC` layouts; 42 offsets compared equal to
+MASM's) and linked by the DDK's `LINK.EXE` 5.12 `/VXD`, which reads
+Watcom's OMF objects. Its only assembly is three lines in the control
+procedure (call the C handler, `neg eax` to turn its result into the carry
+flag VMM reads, `ret`); the two VMM and IOS services it calls
+(`_CopyPageTable`, `IOS_Register`) are `#pragma aux` byte sequences, `int
+20h` and the service's dword. Like the prototype it stays on development
+host A, outside the tree.
+
+**Why no Watcom-built VSD loaded at first.** `wlink`'s own `format windows
+vxd` image was never loaded by 98 SE; through `LINK /VXD`, a minimal VxD
+loaded, but the full VSD either did not load or stopped 98 SE at "While
+initializing device IOS: Windows protection error", and none of its code
+ever ran. Page size, pages without fixups, object size, where the DRP sat
+and the `int 20h` bytes were each ruled out. The byte comparison of two
+minimal images, one that loaded (W3) and one that did not (W5, the same
+plus an `IOS_Register` call), found the cause in the linker, not the
+loader: in W5 the control procedure's `call ctrl_c` was linked to the
+address of another static function (the AER, which writes through its
+argument, so the first control message wrote into VMM's stack), and the
+DRP's ILB pointer to `ctrl_c`. `LINK` 5.12 mislinks two shapes of OMF
+record Watcom writes:
+
+- a static symbol's records (`LEXTDEF` `B4h`, `LPUBDEF` `B7h`): a
+  reference can be resolved to a different static symbol of the object
+  (W3 loaded only because its order happened to come out right);
+- an `EXTDEF` naming a symbol the same object already defined in an
+  earlier `PUBDEF`: `LNK2005` "already defined". Watcom writes its public
+  definitions in batches as it goes, so a reference to a symbol whose batch
+  is already written takes this shape.
+
+A reference written before its definition links correctly. The build
+therefore has no file-scope `static`, keeps the data in an object of its
+own, and moves every `PUBDEF` of an object to just before its `MODEND`
+(a record may sit anywhere after the segment and group definitions it
+names, and each keeps its own checksum); two checks fail the build if
+either shape is left, or if any call the linker resolved in the image
+lands anywhere but the function the compiler's fixup names (the check
+flags W5). Also fixed in the copied headers: `AEP.H` declares three
+pointer types as `} AEP_x; *PAEP_x;`, which defines an implicit-`int`
+global in every object (`} AEP_x, *PAEP_x;`).
+
+With that, the Watcom-built VSD loads and registers on 98 SE
+(`IOS_Register` result 1, `DRP_REMAIN_RESIDENT`) and configures Stor98's
+DCB as the MASM prototype did; MSVC 6.0 was not needed.
+
 Legs owed by this reading: ME; 98 SE with the gold IOS set; a boot with the
 disk present at boot; real hardware (the owner's).
 
