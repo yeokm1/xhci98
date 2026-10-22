@@ -362,9 +362,14 @@ branch, marked "(behind <router name>)".
   there, indented by bridge depth; on 98 SE and ME "Not read on this
   system" stands for them (section 4.7) where the driver does not read
   below the port (`CM_QP_F_BELOW_OS`, with its reason), and since
-  roadmap-usb4 task 43.63 a port the driver read with nothing below it
+  roadmap-usb4 task 43.63 a port the driver walked with nothing below it
   is "None found." there as on NT (a 98 SE or ME driver has read below
-  the port since task 42-A.14). **An xhci98 controller's node**
+  the port since task 42-A.14): the answer says so by
+  `CM_QP_F_UNWALKED_SAID`, under which a member whose own bus numbers the
+  walk did not admit has its own entry ("Not walked: PCI.VXD does not
+  read the port's bus numbers ..."); from an older driver that walks,
+  an empty port is "None listed", and in a cut-short answer
+  (`CM_QP_F_TRUNCATED`) too, on every system. **An xhci98 controller's node**
   shows the controller.
 - **Text.** Every line within 79 columns; the host suite holds it on a
   worst case. The constants are `tr_pci.c`'s own, each cited to the PCI
@@ -668,8 +673,12 @@ header type and bus numbers its walk needs.
   and touches nothing of the device. Where the walk is not made, each
   member keeps one `CM_QP_S_NOT_READ_OS` entry with its reason in
   `CM_QP_E_INFO` (`CM_QP_NR_*`: no worker, the worker busy, `PCI.VXD`'s
-  guard refused, the controller lost; 0 from a driver before it), and
-  the tool says which.
+  guard refused, the controller lost, and since roadmap-usb4 task 43.63
+  the member's own bus numbers not admitted by the rule above; 0 from a
+  driver before it), and the tool says which. Where the walk is made and
+  finds nothing, the port is "None found." as on NT; where the answer
+  was cut short (`CM_QP_F_TRUNCATED`) a port with nothing listed is said
+  as "None listed" rather than empty (task 43.63, on every system).
 - **No kernel address.** The answer holds configuration space and the
   driver's own counts. The BARs and bridge windows are bus addresses,
   shown by the owner's request; they are the ranges Device Manager's

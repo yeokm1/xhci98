@@ -119,6 +119,8 @@ static UCHAR built[CM_QP_MAX_BYTES];
 static unsigned char outb[CM_QP_MAX_BYTES + 64];
 static char text[65536];
 
+static size_t widest(const char *s);
+
 static void in_one_port(CM_QPCI_IN *in, unsigned long port)
 {
     memset(in, 0, sizeof(*in));
@@ -173,7 +175,7 @@ static void test_chain(void)
     CHECK_EQ(n, CM_QP_HDR_BYTES + 5 * CM_QP_ENT_BYTES, "five entries");
     CHECK_EQ(get32(built, CM_QP_O_MAGIC), CM_QP_MAGIC, "magic");
     CHECK_EQ(get32(built, CM_QP_O_BYTES), n, "size");
-    CHECK_EQ(get32(built, CM_QP_O_FLAGS), 0, "no flag");
+    CHECK_EQ(get32(built, CM_QP_O_FLAGS), CM_QP_F_UNWALKED_SAID, "no flag");
     CHECK_EQ(get32(built, CM_QP_O_ENT_SHAPE), 5 | (288UL << 16), "shape");
     CHECK_EQ(get32(built, CM_QP_O_EPOCH_LO), 0x11111111UL, "epoch");
     CHECK_EQ(get32(built, CM_QP_O_PORTS), 1, "ports");
@@ -211,7 +213,7 @@ static void test_bounds(void)
     in_one_port(&in, BDF(4, 1, 0));
     n = CmQpciBuild(built, sizeof(built), &in);
     CHECK_EQ(n, CM_QP_HDR_BYTES + 4 * CM_QP_ENT_BYTES, "a loop is not followed");
-    CHECK_EQ(get32(built, CM_QP_O_FLAGS), 0, "and is no bound");
+    CHECK_EQ(get32(built, CM_QP_O_FLAGS), CM_QP_F_UNWALKED_SAID, "and is no bound");
 
     /* A bridge naming a bus outside the port's range. */
     p14s();
@@ -340,7 +342,31 @@ static void test_below_9x(void)
     in.Admit = model_admit;
     admitRefuse = BDF(4, 1, 0);
     n = CmQpciBuild(built, sizeof(built), &in);
-    CHECK_EQ(n, CM_QP_HDR_BYTES + 2 * CM_QP_ENT_BYTES, "nothing below");
+    /* Task 43.63: said, in an entry of its own, not left looking empty. */
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 3 * CM_QP_ENT_BYTES, "nothing read below");
+    CHECK_EQ(ent(built, 2, CM_QP_E_ROLE), CM_QP_R_BELOW, "refused: below");
+    CHECK_EQ(ent(built, 2, CM_QP_E_STATE), CM_QP_S_NOT_READ_OS,
+             "refused: not read");
+    CHECK_EQ(ent(built, 2, CM_QP_E_INFO), CM_QP_NR_UNADMITTED,
+             "refused: its reason");
+    CHECK_EQ(ent(built, 2, CM_QP_E_PORT), BDF(4, 1, 0), "refused: its port");
+    CHECK(get32(built, CM_QP_O_FLAGS) & CM_QP_F_UNWALKED_SAID, "said flag");
+    CHECK_EQ(get32(built, CM_QP_O_FLAGS) & CM_QP_F_BELOW_OS, 0,
+             "refused: still a walk");
+    {
+        ULONG info;
+        TR_QPCI q;
+        TR_TEXT t;
+
+        (void)CmQpciAnswer(outb, sizeof(outb), built, n, &info);
+        CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "refused: parsed");
+        tr_text_init(&t, text, sizeof(text));
+        tr_qpci_text(&t, &q, 0);
+        CHECK(strstr(text, "Not walked: PCI.VXD does not read the port's bus")
+                  != NULL, "refused: said");
+        CHECK(strstr(text, "None found") == NULL, "refused: not empty");
+        CHECK(widest(text) <= 79, "refused: 79 columns");
+    }
     admitRefuse = 0xFFFFFFFFUL;
 
     /* A held member (its controller lost): one entry, HELD, no read. */
@@ -783,7 +809,7 @@ static void test_node_text(void)
     CHECK(widest(text) <= 79, "79 columns, 9x");
 
     /* Each reason a 98 SE or ME driver gives (task 42-A.14). */
-    for (n = CM_QP_NR_NO_WORKER; n <= CM_QP_NR_HELD; n++) {
+    for (n = CM_QP_NR_NO_WORKER; n <= CM_QP_NR_UNADMITTED; n++) {
         in.Reason = n;
         info = CmQpciBuild(built, sizeof(built), &in);
         (void)CmQpciAnswer(outb, sizeof(outb), built, info, &info);
@@ -794,6 +820,7 @@ static void test_node_text(void)
         CHECK(strstr(text, n == CM_QP_NR_BUSY ? "Refresh later" :
                            n == CM_QP_NR_GUARD ? "PCI.VXD" :
                            n == CM_QP_NR_HELD ? "controller was lost" :
+                           n == CM_QP_NR_UNADMITTED ? "Not walked: PCI.VXD" :
                            "no configuration-manager") != NULL, "its text");
         CHECK(widest(text) <= 79, "79 columns, each reason");
     }
@@ -1051,6 +1078,21 @@ static void test_empty_port(void)
     tr_qpci_text(&t, &q, 1);
     CHECK(strstr(text, "    None found.\r\n") != NULL, "NT: none found");
 
+    /* An older 9x driver walks but does not say which members it did not
+     * enter (no CM_QP_F_UNWALKED_SAID): not called empty. */
+    q.Flags &= ~CM_QP_F_UNWALKED_SAID;
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 0);
+    CHECK(strstr(text, "None listed: this xhcicm.sys does not say whether "
+                       "it walked the port.") != NULL, "9x, older: said");
+    CHECK(strstr(text, "None found") == NULL, "9x, older: not none found");
+    CHECK(strstr(text, "Not read on this system") == NULL,
+          "9x, older: not 'not read'");
+    CHECK(widest(text) <= 79, "9x, older: 79 columns");
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 1);
+    CHECK(strstr(text, "    None found.\r\n") != NULL, "NT, older: none found");
+
     /* The same port from a driver that does not read below it. */
     in.ReadBelow = 0;
     n = CmQpciBuild(built, sizeof(built), &in);
@@ -1077,6 +1119,44 @@ static void test_empty_port(void)
     CHECK(strstr(text, "Not walked: its bus numbers could not be read")
               != NULL, "9x, short port: not walked");
     CHECK(strstr(text, "None found") == NULL, "9x, short port: not empty");
+
+    /* Two members, the first using up the answer's 32 functions below:
+     * the second's function is not listed, and its port is not called
+     * empty (Codex round 1, P2). */
+    reset();
+    add_fn(BDF(5, 0, 0), 0x15BF8086UL, 0x088000UL);
+    add_bridge(BDF(4, 1, 0), 0x15C08086UL, 4, 6, 6);
+    add_bridge(BDF(4, 2, 0), 0x15C08086UL, 4, 7, 7);
+    {
+        unsigned long d;
+        for (d = 0; d < 32; d++) {
+            add_fn(BDF(6, d, 0), 0x00011234UL, 0x020000UL);
+        }
+    }
+    add_fn(BDF(7, 0, 0), 0x174A1C5CUL, 0x010802UL);
+    in_one_port(&in, BDF(4, 1, 0));
+    in.PortCount = 2;
+    in.Ports[1].Bdf = BDF(4, 2, 0);
+    in.Ports[1].Source = 1;
+    in.Ports[1].Flags = 3;
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK(get32(built, CM_QP_O_FLAGS) & CM_QP_F_TRUNCATED, "full: truncated");
+    (void)CmQpciAnswer(outb, sizeof(outb), built, n, &info);
+    CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "full: parsed");
+    for (n = 0; n < 2; n++) {
+        const char *p2;
+        tr_text_init(&t, text, sizeof(text));
+        tr_qpci_text(&t, &q, (int)n);
+        CHECK(!t.Overflow, "full: fits");
+        p2 = strstr(text, "Tunnel port, PCI 04:02.0");
+        CHECK(p2 != NULL, "full: the second port");
+        if (p2 != NULL) {
+            CHECK(strstr(p2, "None listed: the walk stopped at its bounds")
+                      != NULL, "full: the second port not called empty");
+            CHECK(strstr(p2, "None found") == NULL, "full: not none found");
+            CHECK(strstr(p2, "PCI 07:00.0") == NULL, "full: not listed");
+        }
+    }
 }
 
 int main(void)

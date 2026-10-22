@@ -851,6 +851,11 @@ static void not_read_text(TR_TEXT *t, TR_U32 reason)
         tr_put(t, "    Not read: the controller was lost, and nothing "
                   "below the port is read\n    until it is back.\n");
         break;
+    case CM_QP_NR_UNADMITTED:
+        tr_put(t, "    Not walked: PCI.VXD does not read the port's bus "
+                  "numbers as the driver\n    does, and xhcicm.sys did not "
+                  "give them.\n");
+        break;
     default:
         tr_put(t, "    Not read on this system: this driver does not "
                   "read below the port\n    on Windows 98 SE and ME.\n");
@@ -988,17 +993,28 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
                 state_text(t, 8, b.State);
             }
         }
-        /* Task 43.63: a 98 SE or ME driver that reads below the port
-         * (task 42-A.14) leaves CM_QP_F_BELOW_OS clear, so an empty port
-         * there is "None found." as on NT; one that does not read below
-         * sets it and lists a CM_QP_S_NOT_READ_OS entry per member, whose
-         * reason is said above. */
-        walked = nt || (q->Flags & CM_QP_F_BELOW_OS) == 0;
-        if (below == 0 && walked && e.Valid < 0x1C) {
+        /* Task 43.63: on 98 SE and ME a port with nothing listed below it
+         * is "None found." only where the driver says it walked it: the
+         * walk made (CM_QP_F_BELOW_OS clear) and every member it did not
+         * enter given its own entry, with the reason said above
+         * (CM_QP_F_UNWALKED_SAID). A cut-short answer says no port is
+         * empty, on any system. */
+        walked = nt || ((q->Flags & CM_QP_F_BELOW_OS) == 0 &&
+                        (q->Flags & CM_QP_F_UNWALKED_SAID) != 0);
+        if (below != 0) {
+            /* Listed above. */
+        } else if (walked && e.Valid < 0x1C) {
             tr_put(t, "    Not walked: its bus numbers could not be read.\n");
-        } else if (below == 0) {
-            tr_put(t, walked ? "    None found.\n"
-                             : "    Not read on this system.\n");
+        } else if (walked && (q->Flags & CM_QP_F_TRUNCATED) != 0) {
+            tr_put(t, "    None listed: the walk stopped at its bounds "
+                      "(below).\n");
+        } else if (walked) {
+            tr_put(t, "    None found.\n");
+        } else if ((q->Flags & CM_QP_F_BELOW_OS) == 0) {
+            tr_put(t, "    None listed: this xhcicm.sys does not say whether "
+                      "it walked the port.\n");
+        } else {
+            tr_put(t, "    Not read on this system.\n");
         }
     }
     if (q->Flags & CM_QP_F_NO_SET) {
