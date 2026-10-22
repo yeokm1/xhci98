@@ -1142,6 +1142,31 @@ isolation evidence.
   Tests: TESTING.md "Two drives in one ICM domain (9x)" and "Quarantined block after a
   surprise removal (9x)".
 
+### Decided 2026-10-22 (owner, Yeo Kheng Meng)
+
+- **9x maximum transfer of 2 MiB.** On Windows 98 SE and ME,
+  `STOR98_MAX_TRANSFER` is 512 pages (2 MiB; NumberOfPhysicalBreaks 513),
+  raised from the 128 pages of "0.4.0.0 plan" item 1; NT stays at 256 KiB.
+  It is xhci98's option (b) for roadmap-usb4 task 43.46 (xhci98 design
+  record 30): xhci98's own IOS layer, `STOR98.VXD` (GPL-2.0, in xhci98,
+  not in this driver; MD-5's "no VxD" stands for Stor98 itself), drops
+  `DCB_dmd_phys_sgd` above `SCSIPORT.PDR` on Stor98's disks and builds the
+  physical list, so IOS's hard 512 KiB and 17-run limits no longer cut a
+  request; this driver's part is only the larger maximum. Without that
+  layer nothing changes: on the physical-list path IOS still cuts a request
+  over 512 KiB into 63 KiB pieces. What holds at 512 pages: one PRP list
+  page (512 entries) covers a 512-page child at any offset (513 pages,
+  512 list entries), and 4,096 blocks of 512 bytes fit the 16-bit NLB,
+  both checked at compile time in `nvme2k.h`; the PRP list pages, bounce
+  pages and the DMA block are counted per child and are unchanged; a
+  child is still capped at MDTS, so a 2 MiB request becomes children of
+  the controller's limit (512 KiB on the emulator, measured with a test
+  build in xhci98's `runs/run-43.md`, "Requests over 512 KiB": every
+  compare clean at 512 KiB to 2 MiB, aligned and at +512). The setting
+  `StorMaxTransferKB` accepts 64 to 2048 KiB on 9x
+  (`tests/unit/xfer_ut.c`). Legs: xhci98 record 30 section 9.2, with the
+  layer.
+
 ### Open (undecided)
 
 The entries below record the options and evidence behind the decisions above (MD-7's are
@@ -1391,7 +1416,8 @@ review loop and a 9x/NT requalification before the release.
    the MD-1 gone deadline applies as before. Refusal cases are tested with the stand-in
    `tests/cmnt`; the joint legs with xhci98 3.0.0.0 are in TESTING.md ("CM notification").
 
-1. **9x maximum transfer of 512 KiB. Done (branch `xfer512`, 2026-10-16).** On Windows 9x
+1. **9x maximum transfer of 512 KiB. Done (branch `xfer512`, 2026-10-16); raised to 2 MiB
+   on 2026-10-22 ("Decided 2026-10-22").** On Windows 9x
    only, MaximumTransferLength is 512 KiB (`STOR98_MAX_TRANSFER` 128 pages,
    NumberOfPhysicalBreaks 129); NT stays at 256 KiB and its images are byte-identical to
    the previous build apart from the PE timestamp, checksum and PDB identity. The PRP list

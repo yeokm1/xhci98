@@ -15,7 +15,7 @@
 //       HKLM\System\CurrentControlSet\Services\stor98.
 //
 // The value, in KiB, can only lower the build's maximum (STOR98_MAX_TRANSFER:
-// 512 KiB on 9x, 256 KiB on NT), never raise it: the PRP list and NLB checks
+// 2 MiB on 9x, 256 KiB on NT), never raise it: the PRP list and NLB checks
 // of nvme2k.h cover the build's maximum only. Accepted: XFER_KB_MIN to the
 // build's maximum, in multiples of XFER_KB_STEP (one page). Anything else,
 // including a value that is present but not a number, is refused: the

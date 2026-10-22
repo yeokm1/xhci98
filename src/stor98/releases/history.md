@@ -4,6 +4,14 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.2.0.0 - not released yet
+
+- Windows 98 SE / ME: the largest request the driver accepts is now
+  2 MiB (512 KiB before). Requests over 512 KiB reach it only with
+  xhci98's STOR98.VXD installed, which the xhci98 installer offers on
+  98 SE and ME; without it Windows still cuts them into 63 KiB pieces
+  and nothing changes. StorMaxTransferKB accepts 64 to 2048 there.
+
 ## 3.1.0.0 - 2026-10-19
 
 The first Stor98 built with xhci98 and released in its package, at the
