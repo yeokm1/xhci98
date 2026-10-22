@@ -858,7 +858,11 @@ button says to run the tool as an administrator).
 [/depth <n>] [/threads <n>] [/report <file>] [/exit]` starts the run at
 once with those parameters over the defaults, writes the report if asked
 and exits with 0 (every test passed), 1 (a test failed or a data error),
-2 (refused) or 3 (stopped). The window shows the run; `/exit` closes it at
+2 (refused) or 3 (stopped). A run that ends before its plan does gives
+the reason in its report's header (`Stopped:`), and a run refused before
+it begins still writes a report of three lines with the folder and the
+refusal (`Refused:`), so a batch file's report always says what
+happened. The window shows the run; `/exit` closes it at
 the end. This is what the emulator legs drive (43.12's unattended route)
 and what a user pastes into a batch file. `/selftest` renders every text
 of the pure half at its longest to a file and exits, for section 10.3.

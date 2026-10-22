@@ -687,6 +687,8 @@ static void disk_facts(const char *folder, PF_ENV *e)
 /* ------------------------------------------------------------------------ */
 
 static int g_s98state;
+/* why the last run ended before its plan did, for its report */
+static char g_runWhy[400];
 /* The run's search state, as its report states it: set as the run starts
  * and changed only by the run's own counter reads */
 static int g_runS98state, g_runS98matches, g_runS98ids;
@@ -2931,6 +2933,7 @@ static char *build_report(size_t *lenOut)
     ri.attributes = g_attributes;
     ri.stor98 = pages;
     ri.endVerify = (int)g_endVerify;
+    ri.stopped = g_runWhy;
     pf_tx_init(&t, buf, cap);
     {
         /* the run's workload; only how values are shown follows the window */
@@ -3651,6 +3654,18 @@ static void controls_enable(int on)
 
 static void refuse(const char *why)
 {
+    if (g_cl.report[0] != 0 && g_cl.run) {
+        /* a command-line run refused before it began still leaves its report */
+        char buf[1024];
+        PF_TEXT t;
+
+        pf_tx_init(&t, buf, sizeof(buf));
+        pf_tx_s(&t, "xHCI98 Disk Benchmark " XHCIPERF_VERSION);
+        pf_tx_nl(&t);
+        pf_tx_wrapped(&t, "Folder:      ", g_folder);
+        pf_tx_wrapped(&t, "Refused:     ", why);
+        write_file(g_cl.report, buf, t.len);
+    }
     if (g_cl.exitAtEnd) {
         log_add(why);
         g_cliExit = 2;
@@ -3670,6 +3685,7 @@ static void start_run(void)
     if (g_running) {
         return;
     }
+    g_runWhy[0] = 0;
     params_from_ui();
     if (check_folder(g_folder, canon, sizeof(canon), why, sizeof(why)) != 0) {
         refuse(why);
@@ -4297,6 +4313,7 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         SetWindowTextA(g_status, "Ready");
         log_add("Run ended.");
         InvalidateRect(g_view, NULL, TRUE);
+        sz_cpy(g_runWhy, sizeof(g_runWhy), lp != 0 ? (const char *)lp : "");
         if (g_cl.report[0] != 0) {
             size_t n;
             char *r = build_report(&n);

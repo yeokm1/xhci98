@@ -174,6 +174,47 @@ void pf_tx_nl(PF_TEXT *t)
     pf_tx_s(t, "\r\n");
 }
 
+void pf_tx_wrapped(PF_TEXT *t, const char *label, const char *text)
+{
+    size_t ind = strlen(label), col, i;
+    const char *p = text;
+
+    pf_tx_s(t, label);
+    col = ind;
+    while (*p != 0) {
+        const char *e = p;
+        size_t n;
+
+        while (*e != 0 && *e != ' ') {
+            e++;
+        }
+        n = (size_t)(e - p);
+        if (col > ind && col + 1 + n > 79) {
+            pf_tx_nl(t);
+            for (i = 0; i < ind; i++) {
+                pf_tx_s(t, " ");
+            }
+            col = ind;
+        } else if (col > ind) {
+            pf_tx_s(t, " ");
+            col++;
+        }
+        for (i = 0; i < n; i++) {
+            char c[2];
+
+            c[0] = p[i];
+            c[1] = 0;
+            pf_tx_s(t, c);
+        }
+        col += n;
+        p = e;
+        while (*p == ' ') {
+            p++;
+        }
+    }
+    pf_tx_nl(t);
+}
+
 /* ------------------------------------------------------------------------ */
 /* Labels                                                                    */
 /* ------------------------------------------------------------------------ */
@@ -1561,6 +1602,9 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
     pf_tx_s(t, p->unitMiB ? "MiB/s (1,048,576 bytes)" : "MB/s (1,000,000 bytes)");
     pf_tx_s(t, "; latency is the mean");
     pf_tx_nl(t);
+    if (ri->stopped != NULL && ri->stopped[0] != 0) {
+        pf_tx_wrapped(t, "Stopped:     ", ri->stopped);
+    }
     pf_tx_nl(t);
     for (i = 0; i < plan->nsteps; i++) {
         pf_shown(&res[i * PF_MAX_PASSES], npasses, p->show, p->unitMiB, highRes, &sh);
