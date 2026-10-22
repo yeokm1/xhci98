@@ -271,7 +271,8 @@ Windows 10 the drivers load only in test-signing mode, which Windows 10
 lets you turn on only with Secure Boot off in the computer's firmware
 setup, or on a start with driver signature enforcement disabled (as on
 Windows 8 above); with Secure Boot on, Windows 10 from 1607 loads only
-drivers Microsoft has signed, which this package's are not. Whether 32-bit
+drivers Microsoft has signed (and some older cross-signed ones), and this
+package's are neither. Whether 32-bit
 Windows 10 with Secure Boot on refuses this package's 32-bit drivers,
 which are not signed, has not been read.
 

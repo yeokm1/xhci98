@@ -1035,8 +1035,9 @@ protection on. No export table of 10 is in the tree either, so the
 import surface on 10 is as unread as on 8; 10 is expected to answer the
 driver's WDM version tests as 7 does, which is unread. On 64-bit 10 the
 driver loads as on 64-bit 8 and 8.1 (record 23 section 5.10, revision
-27); from 10 1607 with Secure Boot on, only portal-signed drivers load,
-so Secure Boot off is the condition there.
+27); from 10 1607 with Secure Boot on, only portal-signed drivers load
+(older cross-signed ones excepted, which the project's test signature is
+not), so Secure Boot off is the condition there.
 
 ## 4. The host interface: ring 0, polled
 

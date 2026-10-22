@@ -1473,9 +1473,11 @@ only with Secure Boot off in the computer's firmware setup, or on a start
 with driver signature enforcement disabled (Advanced startup,
 Troubleshoot, Startup Settings, at every start); the tool never runs
 `bcdedit` and never changes a firmware setting. From 10 1607 with Secure
-Boot on, only drivers signed through Microsoft's portal load (Microsoft's
-"Driver Signing Policy" page, read 2026-10-20; roadmap-usb4 task 43.33
-(d)), so the project's test signature is not enough there whatever the
+Boot on, only drivers signed through Microsoft's portal load, cross-signed
+ones excepted on a machine upgraded from an earlier release or with a
+certificate issued before 2015-07-29 (Microsoft's "Driver Signing Policy"
+page, read 2026-10-20; roadmap-usb4 task 43.33 (d)); the project's test
+signature is none of these, so the project's test signature is not enough there whatever the
 boot options say: Secure Boot off is the condition, as the note says.
 The note's sentence names 10 beside 8 and 8.1, and the test-signing
 check after the install (a controller or NHI at Code 52 or 39 with
