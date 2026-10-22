@@ -603,7 +603,12 @@ function ConvertFrom-CatNameValue {
     $name = Read-DerTlv -B $B -At $seq.ValueAt -Limit $seq.End
     if ($name.Tag -ne 0x1E -or $name.Length % 2 -ne 0) { throw "a catalog name-value's name is not a BMPString" }
     $flags = Read-DerTlv -B $B -At $name.End -Limit $seq.End
-    if ($flags.Tag -ne 0x02) { throw "a catalog name-value has no flags INTEGER" }
+    # The flags this project's CDF writes for every name-value,
+    # 0x10010001 (authenticated, name and value ASCII), and nothing else.
+    if ($flags.Tag -ne 0x02 -or $flags.Length -ne 4 -or $B[$flags.ValueAt] -ne 0x10 -or $B[$flags.ValueAt + 1] -ne 0x01 -or
+        $B[$flags.ValueAt + 2] -ne 0x00 -or $B[$flags.ValueAt + 3] -ne 0x01) {
+        throw "a catalog name-value's flags are not the INTEGER 0x10010001"
+    }
     $val = Read-DerTlv -B $B -At $flags.End -Limit $seq.End
     if ($val.Tag -ne 0x04 -or $val.End -ne $seq.End) { throw "a catalog name-value's value is not its last OCTET STRING" }
     if ($seq.End -ne $End) { throw "a catalog name-value is followed by something else" }

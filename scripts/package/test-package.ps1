@@ -4677,9 +4677,13 @@ try {
     }
     function New-CatOid { param([byte[]]$Body) return ,(New-Der -Tag 0x06 -Body $Body) }
     $ctlNvOid = New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x02, 0x01))
-    $ctlNv = New-Der -Tag 0x30 -Body ([byte[]]((New-Der -Tag 0x1E -Body ([System.Text.Encoding]::BigEndianUnicode.GetBytes("OSAttr"))) +
-                                               [byte[]](0x02, 0x04, 0x10, 0x01, 0x00, 0x01) +
-                                               (New-Der -Tag 0x04 -Body ([System.Text.Encoding]::Unicode.GetBytes($script:CatalogOsAttr + [char]0)))))
+    function New-TestNv {
+        param([byte[]]$Flags)
+        return ,(New-Der -Tag 0x30 -Body ([byte[]]((New-Der -Tag 0x1E -Body ([System.Text.Encoding]::BigEndianUnicode.GetBytes("OSAttr"))) +
+                                                   $Flags +
+                                                   (New-Der -Tag 0x04 -Body ([System.Text.Encoding]::Unicode.GetBytes($script:CatalogOsAttr + [char]0))))))
+    }
+    $ctlNv = New-TestNv -Flags ([byte[]](0x02, 0x04, 0x10, 0x01, 0x00, 0x01))
     function New-TestCtl {
         param([byte[]]$Critical)
         $usage = New-Der -Tag 0x30 -Body (New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x01, 0x01)))
@@ -4700,6 +4704,15 @@ try {
         try { [void](ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical $badBool.B)) } catch { $threw = $true }
         Assert-True $threw ("ConvertFrom-CatalogTrustList accepted the '{0}' critical flag, which is not DER." -f $badBool.Name)
     }
+    $ctlNvGood = $ctlNv
+    foreach ($badFlags in @(@{ Name = "empty"; B = [byte[]](0x02, 0x00) }, @{ Name = "other"; B = [byte[]](0x02, 0x04, 0x00, 0x00, 0x00, 0x01) },
+                            @{ Name = "five bytes"; B = [byte[]](0x02, 0x05, 0x00, 0x10, 0x01, 0x00, 0x01) })) {
+        $ctlNv = New-TestNv -Flags $badFlags.B
+        $threw = $false
+        try { [void](ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical ([byte[]]@()))) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-CatalogTrustList accepted the '{0}' name-value flags." -f $badFlags.Name)
+    }
+    $ctlNv = $ctlNvGood
 
     $makeCatExe = Join-Path $repo "tools\WinDDK71\bin\x86\MakeCat.exe"
     if (Test-Path -LiteralPath $makeCatExe) {
