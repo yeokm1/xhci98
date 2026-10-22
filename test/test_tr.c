@@ -2417,6 +2417,235 @@ static void test_login(void)
     CHECK(tr_tray_login_start(0, 1, 0) == 1, "login: a plain start always opens");
 }
 
+/* The "can run faster" notice (record 25 section 7.6, revision 16). */
+static TR_FAST_IN fast_in(TR_U32 flags, unsigned int ex)
+{
+    TR_FAST_IN in;
+
+    memset(&in, 0, sizeof(in));
+    in.Ours = 1;
+    in.Connected = 1;
+    in.HaveV2 = 1;
+    in.V2Flags = flags;
+    in.ExSpeed = ex;
+    in.Root = 1;
+    return in;
+}
+
+static int fast_lines_fit(const char *s)
+{
+    int col = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\r' || *s == '\n') {
+            col = 0;
+        } else if (++col > 79) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void test_fast(void)
+{
+    TR_FAST_IN in;
+    TR_FAST f;
+    char keys[3][TR_FAST_KEY];
+    char key[TR_FAST_KEY];
+    char out[400];
+    char box[2048];
+    TR_TEXT t;
+
+    /* Declared and running speeds. */
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_CAPABLE), TR_SPEED_SUPER, "can: SS");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE),
+             TR_SPEED_SUPERPLUS, "can: SSP");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SSP_CAPABLE), TR_SPEED_SUPERPLUS,
+             "can: SSP alone");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_NOW), -1, "can: operating is not declaring");
+    CHECK_EQ(tr_fast_can(0, TR_V2_F_SS_CAPABLE), -1, "can: no _EX_V2");
+
+    /* A USB 3 stick on a USB 2.0 root port. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "SS at HS on a root port counts");
+    CHECK_EQ(f.Now, TR_SPEED_HIGH, "runs at High Speed");
+    CHECK_EQ(f.Can, TR_SPEED_SUPER, "can SuperSpeed");
+    CHECK_EQ(f.Where, TR_FW_PORT2, "on a USB 2.0 port");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_FULL);
+    CHECK(tr_fast_check(&in, &f) && f.Now == TR_SPEED_FULL, "SS at FS counts");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH);
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPERPLUS &&
+              f.Where == TR_FW_PORT2, "SSP at HS: can SuperSpeedPlus");
+
+    /* At its speed, or declaring nothing: never. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "SS at SS: no");
+    CHECK_EQ(f.Now, -1, "nothing filled");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE |
+                 TR_V2_F_SSP_NOW, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "SSP at SSP: no");
+    in = fast_in(0, TR_SPEED_HIGH);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a High Speed-only device: never");
+    in = fast_in(0, TR_SPEED_LOW);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a Low Speed device: never");
+
+    /* A SuperSpeedPlus device at 5 Gbit/s. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "SSP at 5 Gbit/s counts");
+    CHECK_EQ(f.Now, TR_SPEED_SUPER, "runs at SuperSpeed");
+    CHECK_EQ(f.Where, TR_FW_LINK, "a 5 Gbit/s link");
+    /* 98 SE and ME: the _EX byte 3 or 4 with the operating flags. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 3);
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_LINK, "98: byte 3, SSP capable");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE |
+                 TR_V2_F_SSP_NOW, 4);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "98: byte 4 at SSP: no");
+    /* A byte the decision does not trust, with no operating flag. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, 3);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "byte 3, no operating flag: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, 0xFF);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "an unknown byte: no");
+
+    /* What never counts. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.IsHub = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a hub never counts itself");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Ours = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "another driver's controller: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Connected = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "not connected: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.HaveV2 = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "no _EX_V2: no");
+    CHECK_EQ(tr_fast_check(NULL, &f), 0, "no port: no");
+
+    /* Behind hubs. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubFlags = 0;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB2 &&
+              f.HubNow == TR_SPEED_HIGH, "behind a USB 2.0 hub");
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB1 &&
+              f.HubNow == TR_SPEED_FULL, "behind a Full Speed hub");
+    in.HubExSpeed = TR_SPEED_HIGH;
+    in.HubFlags = TR_V2_F_SS_CAPABLE;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB3,
+          "behind a USB 3 hub at High Speed");
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB3,
+          "behind a USB 3 hub at Full Speed");
+    in.HubKnown = 0;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB2 && f.HubNow == -1,
+          "a hub not read: by default a USB 2.0 hub");
+    in.HubKnown = 1;
+    in.HubHaveV2 = 0;
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB1,
+          "a hub without _EX_V2: by its speed");
+
+    /* The texts. */
+    CHECK(strstr(tr_fast_try(TR_FW_PORT2), "fell back to USB 2.0") != NULL,
+          "try: a USB 2.0 port");
+    CHECK(strstr(tr_fast_try(TR_FW_HUB2), "USB 3 hub") != NULL, "try: a hub");
+    CHECK(strcmp(tr_fast_try(TR_FW_HUB1), tr_fast_try(TR_FW_HUB2)) == 0,
+          "try: a Full Speed hub as a USB 2.0 one");
+    CHECK(strstr(tr_fast_try(TR_FW_HUB3), "Connect the hub") != NULL,
+          "try: the hub to a USB 3 port");
+    CHECK(strstr(tr_fast_try(TR_FW_LINK), "10 Gbit/s or more") != NULL,
+          "try: a faster port");
+    CHECK(tr_fast_try(TR_FW_NONE)[0] == '\0', "try: nothing for none");
+    CHECK(strcmp(tr_fast_speed(TR_SPEED_HIGH), "High Speed (480 Mbit/s)") == 0,
+          "speed: High");
+    CHECK(strcmp(tr_fast_speed(TR_SPEED_SUPERPLUS),
+                 "SuperSpeedPlus (10 Gbit/s or more)") == 0, "speed: SSP");
+    CHECK(strcmp(tr_fast_speed(-1), "a speed not reported") == 0, "speed: none");
+
+    /* Keys, and which are new. */
+    tr_fast_key(key, sizeof(key), "{36fc9e60}\\0003", "3.2", 0x0781, 0x5581);
+    CHECK(strcmp(key, "{36fc9e60}\\0003|3.2|0781:5581") == 0, "the key");
+    tr_fast_key(keys[0], TR_FAST_KEY, "{36fc9e60}\\0003", "3.2", 0x0781, 0x5581);
+    tr_fast_key(keys[1], TR_FAST_KEY, "{36fc9e60}\\0003", "4", 0x0781, 0x5581);
+    tr_fast_key(keys[2], TR_FAST_KEY, NULL, NULL, 0x10000, 0x1);
+    CHECK(strcmp(keys[2], "||0000:0001") == 0, "a key of nothing");
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 2, key), 0,
+             "the same device again: not new");
+    tr_fast_key(key, sizeof(key), "{36fc9e60}\\0003", "3.1", 0x0781, 0x5581);
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 2, key), 1,
+             "moved to another port: new");
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 1, keys[1]), 1,
+             "past the count: new");
+    CHECK_EQ(tr_fast_new(NULL, 0, key), 1, "no last set: new");
+
+    /* The balloon. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    tr_fast_check(&in, &f);
+    tr_fast_balloon(out, sizeof(out), "USB Mass Storage Device (F:)", &f, 1);
+    CHECK(strcmp(out, "USB Mass Storage Device (F:) runs at High Speed "
+                      "(480 Mbit/s) on a USB 2.0 port; it can run at SuperSpeed "
+                      "(5 Gbit/s). Click here for what to try.") == 0,
+          "balloon: one");
+    CHECK(strlen(out) < 256, "balloon: fits szInfo");
+    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3);
+    CHECK(strcmp(out, "3 USB devices run slower than they can: Stick and 2 "
+                      "more. Click here for what to try.") == 0, "balloon: three");
+    CHECK(strlen(TR_FAST_TITLE) < 64, "the title fits szInfoTitle");
+
+    /* The box's entry. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    tr_fast_check(&in, &f);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "USB Mass Storage Device (F:)", 0x0781, 0x5581,
+                  "Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller",
+                  "Generic USB Hub", &f);
+    CHECK(strstr(box, "USB Mass Storage Device (F:) (0781:5581)\r\n") == box,
+          "entry: the name first");
+    CHECK(strstr(box, "  Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller\r\n")
+              != NULL, "entry: the port");
+    CHECK(strstr(box, "  Behind Generic USB Hub (High Speed (480 Mbit/s))\r\n") != NULL,
+          "entry: the hub");
+    CHECK(strstr(box, "  Runs at:    High Speed (480 Mbit/s)\r\n") != NULL,
+          "entry: runs at");
+    CHECK(strstr(box, "  Can run at: SuperSpeed (5 Gbit/s)\r\n") != NULL,
+          "entry: can run at");
+    CHECK(strstr(box, "  Try: Connect it to a USB 3 port of this computer, or through a "
+                      "USB 3 hub.\r\n") != NULL, "entry: try, on one line");
+    CHECK(fast_lines_fit(box), "entry: 79 columns");
+    CHECK(!t.Overflow, "entry: no overflow");
+    /* No hub line on a root port; a long port line wrapped. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    tr_fast_check(&in, &f);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "A device with a rather long name that goes on", 1, 2,
+                  "Port 15 of AMD USB 3.10 eXtensible Host Controller - 1.10 "
+                  "(Microsoft) - AMD 1022:15B6 (behind PCI bridge 00:08.1)", NULL, &f);
+    CHECK(strstr(box, "Behind") == NULL, "entry: no hub line on a root port");
+    CHECK(fast_lines_fit(box), "entry: a long port line in 79 columns");
+    CHECK(strstr(box, "fell back to USB 2.0") != NULL, "entry: the root port's try");
+    CHECK(strstr(box, "  Try: Connect it to a USB 3 port of this computer (often blue, or "
+                      "marked SS).\r\n       If it is already in one,") != NULL,
+          "entry: try wrapped and indented");
+
+    /* The menu line and the tooltip. */
+    tr_fast_menu(out, sizeof(out), 1);
+    CHECK(strcmp(out, "1 USB device can run faster...") == 0, "menu: one");
+    tr_fast_menu(out, sizeof(out), 2);
+    CHECK(strcmp(out, "2 USB devices can run faster...") == 0, "menu: two");
+    tr_fast_tip(out, sizeof(out), 12);
+    CHECK(strcmp(out, "xHCI98 USB Tree: 12 USB devices can run faster") == 0 &&
+              strlen(out) < 64, "tooltip: within 98 SE's 64");
+    CHECK(strcmp(TR_FAST_VALUE, "FasterNotice") == 0, "the user's value");
+}
+
 static void test_labels(void)
 {
     unsigned int ven;
@@ -2691,6 +2920,7 @@ int main(void)
     test_usb_eject();
     test_elevated_stop();
     test_login();
+    test_fast();
     test_levels();
     test_labels();
     test_resources();

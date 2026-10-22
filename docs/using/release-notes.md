@@ -549,6 +549,29 @@ the logged-on user, with no administrator rights.
   system". The drivers read configuration space and never change it. An
   older driver's item reads "not served by this xhci98.sys" (or
   xhcicm.sys).
+- **"Can run faster" (new in `3.2.0.0`, roadmap task 43.27).** When a
+  USB device that declares SuperSpeed or SuperSpeedPlus runs slower than
+  it can on a controller `xhci98.sys` drives - on a USB 2.0 port, behind
+  a USB 2.0 hub, fallen back to USB 2.0 in a USB 3 port, or a 10 Gbit/s
+  device at 5 Gbit/s - a balloon names it ("A USB device can run
+  faster"; the tooltip on 98 SE) and the icon turns red until every such
+  device is reconnected at its speed or removed. Clicking the balloon, or
+  the first item of the icon's menu while it is red, lists each device
+  with its port and hub, the speed it runs at and the speed it can, and
+  what to try. The device's details, Save Report and `XHCITR /report`
+  carry the same lines. A hub never counts itself (the USB 2.0 half of a
+  USB 3 hub always runs at High Speed); a device behind a slow hub counts,
+  and its text names the hub. "Tell me when a device can run faster" in
+  the View menu and the icon's right-click menu turns it on or off for
+  you; the installer's box of the same name on the Components page, or
+  `INSTALL /faster` and `INSTALL /nofaster`, sets it for the computer,
+  which your own choice overrides. It is on by default on 98 SE to 8.1
+  (Windows' own "can perform faster" notices do not appear under this
+  driver there) and off on Windows 10 and later. It reads what
+  `xhci98.sys` answers; from `3.2.0.0` the driver asks a USB 3 device at
+  High or Full Speed for its BOS descriptor to know it is one
+  (`XhciUsb2Bos` below). Read on no virtual machine or computer yet
+  (roadmap task 43.28).
 
 ### Removing a Thunderbolt or USB4 device safely
 
@@ -3384,6 +3407,23 @@ as before. `XHCISNAP`'s report says whether it is on, how many devices it
 gave an ID and which slots hold one, and on the VL805 the card's firmware
 version (`pci.vl805.fw`). If a Low- or Full-Speed device behind such a hub
 misbehaves with it on, set `0`, restart and report whether that changed it.
+
+### XhciUsb2Bos: a USB 3 device's capabilities at High Speed (new in `3.2.0.0`)
+
+A device whose device descriptor declares USB 2.1 or later (`bcdUSB`
+0x0210, which every USB 3 device declares when it runs at High or Full
+Speed) is asked for its BOS descriptor when it is enumerated at High or
+Full Speed, as every device at SuperSpeed already is. The answer tells
+the hub request `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2` that
+the device can run at SuperSpeed, which the xHCI98 USB Tree's "can run
+faster" notice reads. A device that refuses the request, answers it
+badly or does not answer at all within 5 seconds is enumerated without
+it; one whose enumeration then fails anyway is tried once more without
+the request. Set `XhciUsb2Bos` to `0` (a `DWORD`, in the controller's
+key or machine-wide) to stop the request for every device; absent or
+any other value, the request is made. No INF writes it; the driver reads
+it at each start. The driver's log notes each such request
+(`enum.bos.usb2`) and the switch (`enum.bos.usb2.on`).
 
 ### XhciAccept096: controllers below xHCI 1.0
 

@@ -1913,6 +1913,10 @@ typedef struct _HCD_CONTROLLER {
      * thread's), bounded by HCD_HUB_SPEED_NOTE_BUDGET. */
     ULONG HubSpeedFallback;
     ULONG HubSpeedNotes;
+    /* Task 43.27 (design record 13 section 8.4.1): XhciUsb2Bos as the
+     * start latched it, 1 when a High or Full Speed device declaring
+     * bcdUSB 0210h or more is asked for its BOS. */
+    ULONG Usb2Bos;
     /* The thread's claimed IRPs, completed by a pool of parked workers
      * (hcd_susp.c, hcdSuspDefer; record 14 section 3.12): the workers'
      * contexts and the pending IRPs, under SuspDoneLock; provisioned by

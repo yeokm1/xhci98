@@ -1351,7 +1351,10 @@ with this task).
    every counted device as new, since the reporter's case is a stick left
    in at login. The name is the device's as the tree labels it (its drive
    letters first where it has some, section 6.5). Where the shell has no
-   balloons (98 SE) the text is the tooltip's last event (section 7.1).
+   balloons (98 SE) the red icon's tooltip says it (item 5; its 63
+   characters hold the count, not the balloon's text), and the menu's
+   first item opens the list (item 6). A balloon owed before the icon is
+   added (the start's first refresh comes before it) is shown once it is.
 5. **The icon.** Red while the notice is on and the set holds a device:
    `xhcitr-f.ico` (`IDI_FAST`), which is `xhcitr.ico` with the
    controller's blue - VGA colour 12, 0000FF, in each 4-bit image, and

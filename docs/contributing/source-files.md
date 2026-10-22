@@ -369,7 +369,7 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `tr_snap.c` | `XHCISNAP`'s engine, moved from `xhcisnap\xhcisnap.c` (roadmap-usb4 task 42-A.4, record 25 section 15), its `main` renamed `tr_snap_main`: reads the extension, the PORTSC array, the enabled slots and the HCD region through the door's pass-through and writes the `.DEV` device report and the `.TXT`, `.BIN` and `.PSC` dump. `docs\contributing\snapshot-reader.md` is its reference. |
 | `tr_hcctr.h` | The names of `XHCIHC_COUNTERS`, one line per word in field order; `test_trlog` holds each line to the field of the same name by offset. |
 | `tr_res.h` | The resource and command numbers shared by `xhcitr.rc` and `xhcitr.c`. |
-| `xhcitr.rc`, `xhcitr.manifest`, `xhcitr.ico` | The icon, the version (from `src\xhci_version.h`), the menus and the About dialog; the manifest runs it as the invoker with Common Controls 6. |
+| `xhcitr.rc`, `xhcitr.manifest`, `xhcitr.ico`, `xhcitr-f.ico` | The icon and its red form for the "can run faster" notice (record 25 section 7.6), the version (from `src\xhci_version.h`), the menus and the About dialog; the manifest runs it as the invoker with Common Controls 6. |
 | `build.cmd` | `XHCITR.EXE` with MSVC 6.0 and `XHCITR64.EXE` with WDK 7.1 amd64. |
 | `selftest.cmd` | The import tables, the `/selftest` and the switch refusals, which `build-driver.cmd` runs. |
 | `snaptest.cmd` | The snapshot path driven with no controller (`XHCITR /snaptest`, the canned decodes and the report's write faults), then the user's spellings `/snapshot`, `/dump` and `/probe`; moved from `xhcisnap\selftest.cmd`, run by `build-driver.cmd`. |
@@ -807,7 +807,8 @@ texts, the tray's router keys and event diff, the command line, the
 report; host suite `test_tr`, which also links `xhciinst\inst_core.c`
 for record 24's unit rules and eject texts), `tr_res.h` (the resource
 and command numbers), `xhcitr.rc` and `xhcitr.manifest` (the icon
-`xhcitr.ico`, the version, the menus, the About dialog; as the invoker,
+`xhcitr.ico` and its red form `xhcitr-f.ico`, the version, the menus,
+the About dialog; as the invoker,
 with Common Controls 6), `build.cmd` (`XHCITR.EXE` with MSVC 6.0,
 `XHCITR64.EXE` with WDK 7.1 amd64), `selftest.cmd` (the `/selftest`, the
 switch refusals and the import-table check `build-driver.cmd` runs,

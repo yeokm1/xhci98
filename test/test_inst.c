@@ -2376,6 +2376,71 @@ static void test_cmf_place(void)
     }
 }
 
+/* XHCITR's "can run faster" notice (record 25 section 7.6 item 7; record 23
+ * section 9.5 item 7): the default per system, the setting in force, the
+ * switches and /list's line. */
+static void test_fast(void)
+{
+    INST_OPTS o;
+    char err[256];
+    const char *a1[] = { "x", "/faster" };
+    const char *a2[] = { "x", "/nofaster", "/yes" };
+    const char *a3[] = { "x", "/faster", "/nofaster" };
+    const char *a4[] = { "x", "/faster", "/uninstall" };
+    const char *a5[] = { "x", "/nofaster", "/devices" };
+    const char *a6[] = { "x", "/eject", "/faster" };
+
+    CHECK(strcmp(INST_FAST_VALUE, "TrayFasterNotice") == 0, "the value's name");
+    CHECK_EQ(inst_fast_default(0, 4, 10), 1, "98 SE: on");
+    CHECK_EQ(inst_fast_default(0, 4, 90), 1, "ME: on");
+    CHECK_EQ(inst_fast_default(1, 5, 0), 1, "2000: on");
+    CHECK_EQ(inst_fast_default(1, 5, 1), 1, "XP: on");
+    CHECK_EQ(inst_fast_default(1, 5, 2), 1, "XP x64: on");
+    CHECK_EQ(inst_fast_default(1, 6, 0), 1, "Vista: on");
+    CHECK_EQ(inst_fast_default(1, 6, 1), 1, "7: on");
+    CHECK_EQ(inst_fast_default(1, 6, 2), 1, "8: on");
+    CHECK_EQ(inst_fast_default(1, 6, 3), 1, "8.1: on");
+    CHECK_EQ(inst_fast_default(1, 6, 4), 0, "6.4: off");
+    CHECK_EQ(inst_fast_default(1, 10, 0), 0, "10: off");
+    CHECK_EQ(inst_fast_default(1, 11, 0), 0, "later: off");
+
+    CHECK_EQ(inst_fast_on(1, 0, 1, 1, 1), 0, "the user's 0 over the computer's 1");
+    CHECK_EQ(inst_fast_on(1, 1, 1, 0, 0), 1, "the user's 1 over the computer's 0");
+    CHECK_EQ(inst_fast_on(0, 0, 1, 0, 1), 0, "no user value: the computer's 0");
+    CHECK_EQ(inst_fast_on(0, 0, 1, 1, 0), 1, "no user value: the computer's 1");
+    CHECK_EQ(inst_fast_on(0, 0, 0, 0, 1), 1, "neither: the default on");
+    CHECK_EQ(inst_fast_on(0, 0, 0, 0, 0), 0, "neither: the default off");
+    CHECK_EQ(inst_fast_on(1, 2, 1, 0, 1), 0, "the user's 2 is absent: the computer's");
+    CHECK_EQ(inst_fast_on(1, 7, 1, 9, 1), 1, "both out of range: the default");
+    CHECK_EQ(inst_fast_on(1, 0xFFFFFFFFUL, 0, 0, 0), 0, "-1 is absent");
+
+    CHECK(inst_parse_args(2, (char **)a1, &o, err, sizeof(err)) == 0 && o.Faster &&
+              !o.NoFaster, "/faster");
+    CHECK(inst_parse_args(3, (char **)a2, &o, err, sizeof(err)) == 0 && o.NoFaster &&
+              !o.Faster, "/nofaster");
+    CHECK(inst_parse_args(3, (char **)a3, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "contradict") != NULL, "both: refused");
+    CHECK(inst_parse_args(3, (char **)a4, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "/faster belongs to an install") != NULL,
+          "with /uninstall: refused");
+    CHECK(inst_parse_args(3, (char **)a5, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "/nofaster belongs to an install") != NULL,
+          "with /devices: refused");
+    CHECK(inst_parse_args(3, (char **)a6, &o, err, sizeof(err)) != 0,
+          "with /eject: refused");
+
+    CHECK(strstr(inst_fast_list_text(1, 0, 0), "would be turned on") != NULL,
+          "/list /faster, none: turned on");
+    CHECK(strstr(inst_fast_list_text(1, 1, 0), "would be turned on") != NULL,
+          "/list /faster, 0: turned on");
+    CHECK(strstr(inst_fast_list_text(1, 1, 1), "nothing to write") != NULL,
+          "/list /faster, 1: nothing");
+    CHECK(strstr(inst_fast_list_text(0, 1, 0), "nothing to write") != NULL,
+          "/list /nofaster, 0: nothing");
+    CHECK(strstr(inst_fast_list_text(0, 1, 5), "would be turned off") != NULL,
+          "/list /nofaster, 5: turned off");
+}
+
 /* The USB tree tool (record 23 section 9.5, record 25 section 8): its name
  * per architecture, the Run value's data, when it is copied, the leftover
  * .BAK, what becomes of the Run value, and /notray. */
@@ -4494,6 +4559,7 @@ int main(void)
     test_tb_question();
     test_cmf_place();
     test_tray();
+    test_fast();
     test_wrap();
     test_questions();
     test_dir_check();

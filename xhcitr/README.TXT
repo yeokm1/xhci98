@@ -224,7 +224,8 @@ The notification-area icon
   Click            a list of the devices you can stop: USB devices,
                    then Thunderbolt and USB4 devices
   Double-click     opens the window
-  Right-click      Open, Refresh, About, Start at login and Exit
+  Right-click      Open, Refresh, About, Start at login, Tell me when a
+                   device can run faster, and Exit
 
 Start at login
 --------------
@@ -240,6 +241,25 @@ The icon says when a Thunderbolt or USB4 device is connected, is waiting
 to be approved, could not be approved or was disconnected, and when the
 controller stops answering: in a balloon on Windows ME, 2000 and later,
 and in the icon's tooltip on Windows 98 SE.
+
+Can run faster
+--------------
+
+When a USB 3 device runs slower than it can on a controller xhci98.sys
+drives - on a USB 2.0 port, behind a USB 2.0 hub, fallen back to USB 2.0
+in a USB 3 port, or a 10 Gbit/s device at 5 Gbit/s - a balloon names it
+(the tooltip on Windows 98 SE) and the icon turns red until every such
+device is reconnected at its speed or removed. Click the balloon, or the
+first item of the icon's menu while it is red, for each device's port and
+hub, the speed it runs at and the speed it can, and what to try. A hub is
+never listed itself: the USB 2.0 half of a USB 3 hub always runs at High
+Speed.
+
+"Tell me when a device can run faster" in the View menu and the icon's
+right-click menu turns this on or off for you. The installer's box of the
+same name (or INSTALL /faster and /nofaster) sets it for the computer;
+your own choice overrides that. It is on by default on Windows 98 SE to
+8.1 and off on Windows 10 and later.
 
 From a command line
 -------------------

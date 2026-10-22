@@ -3962,6 +3962,18 @@ static int forget_dir(void)
         RegCloseKey(k);
         return 0;
     }
+    /* Task 43.27: the computer's choice of the tool's notice. */
+    r = RegDeleteValueA(k, INST_FAST_VALUE);
+    if (r == ERROR_SUCCESS) {
+        flagChanged = 1;
+        logonly("deleted HKLM\\%s\\%s\n", INST_DIR_KEY, INST_FAST_VALUE);
+    } else if (r != ERROR_FILE_NOT_FOUND) {
+        out("The USB Tree's \"can run faster\" choice could not be deleted "
+            "(error %ld).\n", (long)r);
+        flagFailed = 1;
+        RegCloseKey(k);
+        return 0;
+    }
     r = RegDeleteValueA(k, INST_DIR_VALUE);
     if (r == ERROR_SUCCESS) {
         flagChanged = 1;
@@ -4266,6 +4278,37 @@ static void old_dir_cleanup(void)
     movefrom_set(toolLeft ? oldToolDir : NULL);
 }
 
+/* Record 23 section 9.5 item 7: TrayFasterNotice written as 1 or 0 unless
+ * it already is; a failure fails the run. */
+static void fast_write(int on)
+{
+    DWORD v = on ? 1UL : 0UL;
+    DWORD now = 0;
+    HKEY k = NULL;
+
+    if (reg_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_FAST_VALUE, &now) &&
+        now == v) {
+        return;
+    }
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) == ERROR_SUCCESS &&
+        RegSetValueExA(k, INST_FAST_VALUE, 0, REG_DWORD, (const BYTE *)&v,
+                       sizeof(v)) == ERROR_SUCCESS) {
+        flagChanged = 1;
+        out("Its \"can run faster\" notice is %s for this computer "
+            "(INSTALL /%s: %s).\n", on ? "on" : "off",
+            on ? "nofaster" : "faster", on ? "off" : "on");
+        logonly("wrote HKLM\\%s\\%s = %lu\n", INST_DIR_KEY, INST_FAST_VALUE,
+                (unsigned long)v);
+    } else {
+        out("Its \"can run faster\" notice could not be written.\n");
+        flagFailed = 1;
+    }
+    if (k != NULL) {
+        RegCloseKey(k);
+    }
+}
+
 /* Record 23 section 9.5: the tool for this machine's architecture into the
  * install directory (section 9.6), and the Run value that starts it at
  * login (none with /notray), under the maintenance lock; after a move, the
@@ -4350,6 +4393,12 @@ static void tray_install(void)
         out("The xHCI98 USB Tree: %s\n  %s%s\n",
             copy ? "would be copied to" : "is current at", t.Exe,
             inst_tray_list_text(runState, action));
+        if (opts.Faster || opts.NoFaster) {
+            DWORD v = 0;
+            int have = reg_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY,
+                                 INST_FAST_VALUE, &v);
+            out("  %s\n", inst_fast_list_text(opts.Faster, have, v));
+        }
         if (moving()) {
             out("  The copy in %s would be removed.\n", oldToolDir);
         }
@@ -4398,6 +4447,11 @@ static void tray_install(void)
         }
     } else if (action == INST_TRAY_RUN_DELETE && tray_run_delete() < 0) {
         flagFailed = 1;
+    }
+    /* Task 43.27 (record 23 section 9.5 item 7): the computer's choice
+     * of the tool's "can run faster" notice, with the tool in place. */
+    if ((opts.Faster || opts.NoFaster) && file_exists(t.Exe, NULL)) {
+        fast_write(opts.Faster);
     }
     /* In place: the directory is recorded, and after a move the old copy
      * goes - the Run value names the new one already (or none, /notray). */
@@ -19424,6 +19478,8 @@ void inst_eng_usage(void)
 "                elsewhere copy their files to the tools folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
+"  /faster       turn the USB Tree's \"can run faster\" notice on for this\n"
+"                computer (/nofaster: off)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
 "  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
@@ -21248,6 +21304,16 @@ const char *inst_eng_confirm_text(void)
 const char *inst_eng_summary_head(int writes, int other)
 {
     return inst_summary_head(planned_runs(), writes, other, envNow.Nt);
+}
+
+int inst_eng_fast_state(void)
+{
+    DWORD v = 0;
+    int have = reg_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_FAST_VALUE, &v);
+
+    return inst_fast_on(0, 0, have, v,
+                        inst_fast_default(envNow.Nt, envNow.Major,
+                                          envNow.Minor));
 }
 
 int inst_eng_tray_started(void)

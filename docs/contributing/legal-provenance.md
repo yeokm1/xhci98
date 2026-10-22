@@ -351,7 +351,9 @@ xHCI98 USB Tree of `3.0.0.0` (roadmap-usb4 Phase 41, design record 25),
 built by `xhcitr/build.cmd` from `xhcitr/xhcitr.c`, `tr_core.c`,
 `tr_log.c`, `tr_pci.c` and `xhciinst/inst_core.c`, with `xhcitr/xhcitr.rc`
 embedding `xhcitr/xhcitr.manifest` and `xhcitr/xhcitr.ico`, an icon drawn
-for this project - all this project's own. Each is not only that, in
+for this project, and from `3.2.0.0` `xhcitr/xhcitr-f.ico`, the same icon
+with its controller's blue painted red (record 25 section 7.6) - all this
+project's own. Each is not only that, in
 exactly `XHCIINST`'s way:
 
 - `XHCITR.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked

@@ -15,6 +15,8 @@
  *   Evaluate   --ok-->               Desc18     [GET_DESCRIPTOR(DEVICE, 18)]
  *   Desc18     --18 bytes-->         Config9    [GET_DESCRIPTOR(CONFIG, 9)]
  *              --18 bytes, SS-->     Bos5       [GET_DESCRIPTOR(BOS, 5)]
+ *              --18 bytes, HS/FS,
+ *                bcdUSB >= 0210h-->  Bos5       (task 43.27)
  *   Bos5       --wTotalLength-->     BosFull    [GET_DESCRIPTOR(BOS, all)]
  *              --failed-->           Config9    (BosMissing)
  *   BosFull    --all of it, or not-> Config9
@@ -41,6 +43,13 @@
  * it (U1/U2 are never enabled, so the exit latencies it carries go unused),
  * and a device that answers everything else is served without it, with
  * BosMissing saying so.
+ *
+ * Task 43.27 (design record 13 section 8.4.1) reads it at High and Full
+ * Speed too, for a device declaring bcdUSB 0210h or more, so the door's
+ * capable flags hold for a USB 3 device on a USB 2.0 connection. Every
+ * failure is tolerated the same way, and an attempt that made the read and
+ * then failed anywhere has its retries made without it (Usb2BosSkip), so a
+ * device the request upsets enumerates as it did before.
  *
  * C89, pure: IRQL any.
  */
@@ -81,6 +90,20 @@ VOID XhciEnumReset(PXHCI_ENUM_PORT port)
     port->PdoExists = 0;
     port->BosLength = 0;
     port->BosMissing = 0;
+    port->Usb2Bos = 0;
+    port->Usb2BosTried = 0;
+    port->Usb2BosSkip = 0;
+}
+
+ULONG XhciEnumWantsBos(ULONG speed, ULONG bcdUsb, ULONG on, ULONG skip)
+{
+    if (speed == XHCI_ENUM_SPEED_SUPER) {
+        return 1;
+    }
+    if (speed != XHCI_ENUM_SPEED_HIGH && speed != XHCI_ENUM_SPEED_FULL) {
+        return 0;
+    }
+    return (bcdUsb >= XHCI_ENUM_USB2_BOS_BCD && on && !skip) ? 1UL : 0UL;
 }
 
 /* bMaxPacketSize0 as a size: at SuperSpeed the field is an exponent, and 9
@@ -119,6 +142,9 @@ static VOID xhciEnumAct(PXHCI_ENUM_ACTION action, ULONG kind, ULONG length,
 static ULONG xhciEnumFail(PXHCI_ENUM_PORT port, ULONG cause,
                           PXHCI_ENUM_ACTION action)
 {
+    if (port->Usb2BosTried) {
+        port->Usb2BosSkip = 1;
+    }
     port->FailCause = cause;
     port->State = XHCI_ENUM_FAILED;
     if (port->SlotId != 0) {
@@ -181,6 +207,8 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
             port->FailCause = XHCI_ENUM_FAIL_NONE;
             port->BosLength = 0;
             port->BosMissing = 0;
+            port->Usb2BosTried = 0;
+            port->Usb2BosSkip = 0;
             port->State = XHCI_ENUM_DEBOUNCE;
             xhciEnumAct(action, XHCI_ENUM_ACT_DEBOUNCE, 0, 0);
         } else if (event->Kind == XHCI_ENUM_EV_RETRY_INTERNAL &&
@@ -189,6 +217,7 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
             port->Retries++;
             port->BosLength = 0;
             port->BosMissing = 0;
+            port->Usb2BosTried = 0;
             port->State = XHCI_ENUM_RESET;
             xhciEnumAct(action, XHCI_ENUM_ACT_RESET, 0, 0);
         }
@@ -277,7 +306,9 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
             if (!ok || event->Bytes != XHCI_ENUM_DEVICE_DESC_BYTES) {
                 return xhciEnumFail(port, XHCI_ENUM_FAIL_DESCRIPTOR, action);
             }
-            if (port->Speed == XHCI_ENUM_SPEED_SUPER) {
+            if (XhciEnumWantsBos(port->Speed, event->Value, port->Usb2Bos,
+                                 port->Usb2BosSkip)) {
+                port->Usb2BosTried = port->Speed != XHCI_ENUM_SPEED_SUPER;
                 port->State = XHCI_ENUM_BOS5;
                 xhciEnumAct(action, XHCI_ENUM_ACT_GET_BOS,
                             XHCI_ENUM_BOS_HEAD_BYTES, 0);

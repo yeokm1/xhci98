@@ -2041,6 +2041,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->NoStorage = 1;
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
+        } else if (inst_switch(a, "faster")) {
+            opts->Faster = 1;
+        } else if (inst_switch(a, "nofaster")) {
+            opts->NoFaster = 1;
         } else if (inst_switch(a, "devices")) {
             opts->Devices = 1;
         } else if (inst_switch(a, "eject")) {
@@ -2246,6 +2250,17 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/notray belongs to an install", NULL);
+        return 1;
+    }
+    if ((opts->Faster || opts->NoFaster) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->Faster ? "/faster belongs to an install"
+                 : "/nofaster belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Faster && opts->NoFaster) {
+        inst_err(err, errCap, "/faster and /nofaster contradict each other",
+                 NULL);
         return 1;
     }
     if (opts->To[0] != '\0' && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -3701,6 +3716,41 @@ const char *inst_tray_list_text(int runState, int action)
            "; its start at login holds other data, or could not be read.";
 }
 
+/* Record 25 section 7.6 item 7, record 23 section 9.5 item 7. */
+int inst_fast_default(int nt, INST_U32 major, INST_U32 minor)
+{
+    if (!nt) {
+        return 1;
+    }
+    return major < 6 || (major == 6 && minor <= 3);
+}
+
+int inst_fast_on(int userHave, INST_U32 user, int machineHave,
+                 INST_U32 machine, int def)
+{
+    if (userHave && user <= 1) {
+        return (int)user;
+    }
+    if (machineHave && machine <= 1) {
+        return (int)machine;
+    }
+    return def ? 1 : 0;
+}
+
+const char *inst_fast_list_text(int want, int have, INST_U32 now)
+{
+    if (have && now == (INST_U32)(want ? 1 : 0)) {
+        return want ? "The USB Tree's \"can run faster\" notice is on for this "
+                      "computer (/faster): nothing to write."
+                    : "The USB Tree's \"can run faster\" notice is off for this "
+                      "computer (/nofaster): nothing to write.";
+    }
+    return want ? "The USB Tree's \"can run faster\" notice would be turned on "
+                  "for this computer (/faster)."
+                : "The USB Tree's \"can run faster\" notice would be turned off "
+                  "for this computer (/nofaster).";
+}
+
 int inst_oem_name_ours(const char *valueName, const char *path,
                        const char *shortPath)
 {
@@ -5100,10 +5150,11 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "only with a device plugged in or a BIOS setting). Tick it only if "
       "this computer has such a port.",
       272, 26 },
-    { INST_PT_TRAY, "xHCI98 USB Tree, started at login", 270, 10 },
-    { INST_PT_TRAY_T,
-      "The tray tool that lists the USB devices and removes them safely.",
-      272, 10 },
+    { INST_PT_TRAY, "xHCI98 USB Tree, the tray tool, started at login", 270,
+      10 },
+    /* Task 43.27: a box of its own in the place of the tray box's
+     * sentence (record 26 section 5.3, draft 22). */
+    { INST_PT_FAST, "Tell me when a USB device can run faster", 258, 10 },
     { INST_PT_DIR, "The folder for the xHCI98 tools and this installer:",
       284, 10 },
     { INST_PT_DIR_9X,

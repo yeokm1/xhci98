@@ -625,6 +625,87 @@ void tr_wrap(const char *in, char *out, size_t cap, int width);
  * read as a DWORD. */
 int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value);
 
+/* ---- the "can run faster" notice (record 25 section 7.6, revision 16) ---- */
+
+/* Where a counted device is (section 7.6 item 2). */
+#define TR_FW_NONE      0
+#define TR_FW_PORT2     1   /* a root port below SuperSpeed: USB 2.0      */
+#define TR_FW_HUB2      2   /* behind a High Speed hub declaring no SS    */
+#define TR_FW_HUB1      3   /* behind a Full Speed hub declaring no SS    */
+#define TR_FW_HUB3      4   /* behind a hub declaring SS, running below   */
+#define TR_FW_LINK      5   /* a SuperSpeedPlus device at 5 Gbit/s        */
+
+/* One port as the scan read it, and its parent hub's own connection. */
+typedef struct _TR_FAST_IN {
+    int Ours;                   /* the controller is xhci98's              */
+    int Connected;              /* USB_CONNECTION_STATUS DeviceConnected   */
+    int IsHub;
+    int HaveV2;                 /* _EX_V2 answered                         */
+    TR_U32 V2Flags;
+    unsigned int ExSpeed;       /* the _EX Speed byte                      */
+    int Root;                   /* a root hub's port                       */
+    int HubHaveV2;              /* behind a hub: its own connection's      */
+    TR_U32 HubFlags;
+    unsigned int HubExSpeed;
+    int HubKnown;               /* the hub's own connection was read       */
+} TR_FAST_IN;
+
+typedef struct _TR_FAST {
+    int Now;                    /* TR_SPEED_* it runs at                   */
+    int Can;                    /* TR_SPEED_SUPER or TR_SPEED_SUPERPLUS    */
+    int Where;                  /* TR_FW_*                                 */
+    int HubNow;                 /* behind a hub: the hub's speed, or -1    */
+} TR_FAST;
+
+/* The speed a connection declares from its _EX_V2 flags: SuperSpeedPlus
+ * (bit 3), SuperSpeed (bit 1), or -1. */
+int tr_fast_can(int haveV2, TR_U32 flags);
+
+/* 1 when the port holds a device that runs slower than it declares (item
+ * 1), with *f filled; 0 otherwise, *f zeroed but Now and Can -1. */
+int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f);
+
+/* A speed as the notice names it ("High Speed (480 Mbit/s)",
+ * "SuperSpeedPlus (10 Gbit/s or more)"). */
+const char *tr_fast_speed(int speed);
+
+/* "on a USB 2.0 port", "behind a USB 2.0 hub", ... for the balloon. */
+const char *tr_fast_where(int where);
+
+/* What to try (item 2's table). */
+const char *tr_fast_try(int where);
+
+/* The key of a counted device: the controller's driver key, the port path
+ * and the VID:PID, joined. */
+#define TR_FAST_KEY     200
+#define TR_FAST_MAX     32
+void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
+                 unsigned int vid, unsigned int pid);
+
+/* 1 when key is not among the n keys of old (each TR_FAST_KEY wide). */
+int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
+
+/* The balloon's text for `count` new devices, the first named `name` with
+ * *f (item 4). */
+#define TR_FAST_TITLE   "A USB device can run faster"
+void tr_fast_balloon(char *out, size_t cap, const char *name,
+                     const TR_FAST *f, int count);
+
+/* The box's entry for one device (item 6): its name and VID:PID, the port
+ * line, the hub line when hubName is not NULL, the speeds and what to
+ * try; lines of 79 columns at most. */
+void tr_fast_entry(TR_TEXT *t, const char *name, unsigned int vid,
+                   unsigned int pid, const char *portLine,
+                   const char *hubName, const TR_FAST *f);
+
+/* The menu line and the tooltip while the icon is red. */
+void tr_fast_menu(char *out, size_t cap, int count);
+void tr_fast_tip(char *out, size_t cap, int count);
+
+/* The per-user value under HKCU\Software\xHCI98\XHCITR (item 7); the
+ * computer's is INST_FAST_VALUE under INST_DIR_KEY (inst_core.h). */
+#define TR_FAST_VALUE   "FasterNotice"
+
 /* ---- the tree's labels (record 25 revision 10 addendum) ------------------ */
 
 /* VEN_ and DEV_ of a PCI id or instance id ("PCI\VEN_8086&DEV_02ED&..."),

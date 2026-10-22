@@ -718,6 +718,206 @@ static void test_superspeed(void)
              "High Speed: no BOS");
 }
 
+/*
+ * Task 43.27 (design record 13 section 8.4.1): the BOS read at High and
+ * Full Speed for a device declaring bcdUSB 0210h or more, the switch, every
+ * failure tolerated, and the retry of an attempt that made the read made
+ * without it.
+ */
+static void usb2_to_desc18(PXHCI_ENUM_PORT p, PXHCI_ENUM_ACTION a,
+                           ULONG speed, ULONG on, int fresh)
+{
+    XHCI_ENUM_EVENT e;
+
+    if (fresh) {
+        XhciEnumReset(p);
+        step(p, ev(XHCI_ENUM_EV_CONNECT, 1), a);
+        step(p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), a);
+    }
+    e = ev(XHCI_ENUM_EV_RESET_DONE, 1);
+    e.Speed = speed;
+    step(p, e, a);
+    e = ev(XHCI_ENUM_EV_COMMAND_DONE, 1);
+    e.SlotId = 4;
+    step(p, e, a);
+    step(p, ev(XHCI_ENUM_EV_COMMAND_DONE, 1), a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 8;
+    e.Value = XhciEnumInitialMps0(speed);
+    step(p, e, a);
+    CHECK_EQ(a->Kind, XHCI_ENUM_ACT_GET_DEVICE, "USB 2.0: the whole descriptor");
+    p->Usb2Bos = on;
+}
+
+static void desc18(PXHCI_ENUM_PORT p, PXHCI_ENUM_ACTION a, ULONG bcd)
+{
+    XHCI_ENUM_EVENT e;
+
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 18;
+    e.Value = bcd;
+    step(p, e, a);
+}
+
+static void test_usb2_bos(void)
+{
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    XHCI_ENUM_EVENT e;
+
+    /* The decision alone. */
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_SUPER, 0x0300, 0, 1), 1,
+             "SuperSpeed: always, switch and skip aside");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_SUPER, 0, 0, 0), 1,
+             "SuperSpeed whatever bcdUSB says");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_HIGH, 0x0210, 1, 0), 1,
+             "High Speed at 2.1");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_HIGH, 0x0320, 1, 0), 1,
+             "High Speed declaring 3.2");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_FULL, 0x0210, 1, 0), 1,
+             "Full Speed at 2.1");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_HIGH, 0x0201, 1, 0), 0,
+             "2.01 (the LPM addendum) is not read");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_HIGH, 0x0200, 1, 0), 0,
+             "2.0 is not read");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_HIGH, 0x0110, 1, 0), 0,
+             "1.1 is not read");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_LOW, 0x0210, 1, 0), 0,
+             "never at Low Speed");
+    CHECK_EQ(XhciEnumWantsBos(0, 0x0210, 1, 0), 0, "nor an unknown speed");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_HIGH, 0x0210, 0, 0), 0,
+             "the switch off");
+    CHECK_EQ(XhciEnumWantsBos(XHCI_ENUM_SPEED_HIGH, 0x0210, 1, 1), 0,
+             "an earlier attempt's failure");
+
+    /* XhciEnumReset leaves the switch off: a caller that never sets it
+     * reads no BOS at High Speed. */
+    XhciEnumReset(&p);
+    CHECK_EQ(p.Usb2Bos, 0, "reset: the switch off");
+    CHECK_EQ(p.Usb2BosTried, 0, "reset: not tried");
+    CHECK_EQ(p.Usb2BosSkip, 0, "reset: no skip");
+
+    /* A USB 3 device at High Speed: the head, the whole, then the
+     * configuration, as at SuperSpeed. */
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_BOS, "HS 2.1: the BOS head");
+    CHECK_EQ(a.Length, 5, "5 bytes");
+    CHECK_EQ(p.Usb2BosTried, 1, "the attempt tried it");
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 5;
+    e.Value = 22;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_BOS, "then all of it");
+    CHECK_EQ(a.Length, 22, "22 bytes");
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 22;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "then the configuration");
+    CHECK_EQ(p.BosMissing, 0, "read");
+
+    /* Full Speed the same. */
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_FULL, 1, 1);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_BOS, "FS 2.1: the BOS head");
+
+    /* No read below 2.1, with the switch off, or at Low Speed. */
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0200);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "HS 2.0: no BOS");
+    CHECK_EQ(p.Usb2BosTried, 0, "not tried");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 0, 1);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "the switch off: no BOS");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_LOW, 1, 1);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "Low Speed: no BOS");
+
+    /* A STALL of the head, a short whole and a wTotalLength below the
+     * header each go on to the configuration with BosMissing. */
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0210);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "HS: a stalled BOS: go on");
+    CHECK_EQ(p.BosMissing, 1, "BosMissing");
+    CHECK_EQ(p.State, XHCI_ENUM_CONFIG9, "Config9");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0210);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 5;
+    e.Value = 22;
+    step(&p, e, &a);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 12;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "HS: a short BOS: go on");
+    CHECK_EQ(p.BosMissing, 1, "BosMissing");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0210);
+    e = ev(XHCI_ENUM_EV_TRANSFER_DONE, 1);
+    e.Bytes = 5;
+    e.Value = 3;
+    step(&p, e, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "HS: wTotalLength 3: go on");
+    CHECK_EQ(p.BosMissing, 1, "BosMissing");
+
+    /* An attempt that tried it and then failed: the retry does not read
+     * it, and finishes as before the task. */
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0210);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "the configuration head failed too");
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_DISABLE_SLOT, "its slot given back");
+    CHECK_EQ(p.Usb2BosSkip, 1, "the retries skip the read");
+    XhciEnumRetry(&p, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_RESET, "the retry from Reset");
+    CHECK_EQ(p.Usb2BosTried, 0, "the retry has not tried it");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 0);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "the retry: no BOS");
+    CHECK_EQ(p.Usb2BosSkip, 1, "still skipped");
+    /* A new connection asks again. */
+    step(&p, ev(XHCI_ENUM_EV_DISCONNECT, 1), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_EMPTY, "a disconnect leaves Empty");
+    step(&p, ev(XHCI_ENUM_EV_CONNECT, 1), &a);
+    CHECK_EQ(p.Usb2BosSkip, 0, "a new connection clears the skip");
+    step(&p, ev(XHCI_ENUM_EV_DEBOUNCED, 1), &a);
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 0);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_BOS, "and the read is made again");
+
+    /* A failure in an attempt that did not try it sets no skip. */
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0200);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "a 2.0 device's configuration failed");
+    CHECK_EQ(p.Usb2BosSkip, 0, "no skip for it");
+
+    /* A SuperSpeed attempt that fails never sets the skip either. */
+    ss_to_desc18(&p, &a);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "SS: the configuration failed");
+    CHECK_EQ(p.Usb2BosSkip, 0, "SS: no skip");
+
+    /* A hub port's attempts keep the skip across every retry. */
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0210);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    XhciEnumRetryUpTo(&p, 2, &a);
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 0);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "hub retry 1: no BOS");
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    XhciEnumRetryUpTo(&p, 2, &a);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_RESET, "hub retry 2");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 0);
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "hub retry 2: no BOS");
+}
+
 /* Task 33.3: the first answer's settle, its pure half. */
 static void test_settle(void)
 {
@@ -1076,6 +1276,7 @@ int main(void)
     test_retry_to_bound();
     test_hub_port_attempts();
     test_superspeed();
+    test_usb2_bos();
     test_abandoned();
     test_settle();
     test_hub_let_go();
