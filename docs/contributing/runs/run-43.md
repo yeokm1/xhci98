@@ -2577,3 +2577,252 @@ Kit `E:\xhci98-vm\p43-60\` (not tracked): `cam.sh`, `ctx.sh`, `rate.py`,
 `fd\<run>\M1CAP.TXT` and the frames; `shots\<run>-*.png`. Bases
 `ovl\s2k.qcow2` and `ovl\s98.qcow2` (read-only) over the copies
 `ovl\m2kcopy.qcow2` and `ovl\m98copy.qcow2`.
+
+## 43.62 "Unplug or Eject Hardware" on 98 SE and ME (2026-10-22)
+
+Roadmap-usb4 task 43.62, an investigation (owner, 2026-10-22): does the
+"Unplug or Eject Hardware" tray icon and dialog of Windows 98 SE and ME list,
+and stop, a USB stick under the bundled USBSTOR, a UAS disk, and an NVMe drive
+behind a USB4 or Thunderbolt tunnel under Stor98, with `xhci98.sys`? Nothing
+in the tree changes here; the owner decides on any change (the end of this
+sheet).
+
+### Verdict
+
+| System, applet | Device | Icon | Listed | Stop, idle | Stop, a file open |
+|---|---|---|---|---|---|
+| 98 SE as shipped (no `HOTPLUG.DLL`, `SYSTRAY.EXE` 4.10.2222) | any | no | - (there is no dialog) | - | - |
+| 98 SE, NUSB 3.3's 4.10.2224 (KB 242975), throwaway overlay | USB stick (USBSTOR) | yes | yes, "USB Disk" | "Safe To Remove Hardware", then unplugged: no dialog | refused: "Problem Stopping Device ... cannot be stopped right now"; the stick kept working |
+| the same | UAS disk | yes | yes, "USB Disk" | "Safe To Remove Hardware", then unplugged: no dialog | not read (the stick's reading is the same code path) |
+| the same | NVMe behind a TB3 tunnel, Stor98 | no | no, also with "Display device components" | - | - |
+| ME (its own `HOTPLUG.DLL`, `SYSTRAY.EXE` 4.90.3000) | USB stick | yes | yes, "USB Disk" | "Safe To Remove Hardware", then unplugged: no dialog, the icon gone | refused, the same message; the stick kept working |
+| the same | UAS disk | yes | yes, "USB Disk" | "Safe To Remove Hardware", then unplugged: no dialog | not read |
+| the same | NVMe behind a USB4 tunnel, Stor98 | no | no, also with "Display device components" | - | - |
+
+An unplug without a stop: ME showed "Unsafe Removal of Device"; 98 SE with
+2224 showed no dialog in the 12 s read. A re-plug after either was listed
+again.
+
+**Why 98 SE as shipped has no icon.** 98 SE's CD and its installed image
+carry no `HOTPLUG.DLL` (7-Zip listings of every CAB of `Win98SE.iso` and of
+the pristine image); its `SYSTRAY.EXE` 4.10.2222 holds only the PC Card
+strings ("Stop %1", `mspcic.dll,EjectSocket`) and no `hotplug.dll` or
+`HotPlugEjectDevice` string. The applet came to 98 SE with hotfix KB 242975
+(`HOTPLUG.DLL` and `SYSTRAY.EXE` 4.10.2224, both in NUSB 3.3; NUSB's
+`_NUSB.INF` copies them and lists them under 242975). The owner's "98 SE's own
+are 4.10.2222" holds for `SYSTRAY.EXE` alone. So with this release, which
+copies only NUSB's seven storage files, a 98 SE user has no "Unplug or Eject
+Hardware" for any device; XHCITR's Safely Remove and `INSTALL /eject` are the
+route there, as the release notes say.
+
+**Why the NVMe is not listed (static, from disassembly; Codex below).** On 9x
+the applet's listing does not come from the device's capabilities. Both 9x
+`HOTPLUG.DLL`s (2224 and ME's) offer a devnode only when a predicate holds
+(2224 `0x411AD2`, ME `0x7BE91CBC`): its problem is not 0x18, and either a
+present device interface of class `{40EF6CF0-2DB6-11D3-9F78-00C04F6D5135}`
+belongs to the devnode's parent (`SetupDiGetClassDevs(..., DIGCF_PRESENT |
+DIGCF_DEVICEINTERFACE)`, `SetupDiEnumDeviceInterfaces`, then `CM_Get_Parent`
+of the candidate compared with the interface's `DevInst`), or the devnode is
+in the table `\\.\PCCARD` returns (PC Card sockets). The tree walk (ME near
+`0x7BE930F6`) shows no node for which the predicate is false while its
+filtering flag is set (who sets it is not read). That interface
+is registered by NUSB's (and ME's) `USBNTMAP.SYS` 4.90.3000 on the PDO it
+filters (`0x10452`: `IoRegisterDeviceInterface` with that GUID, then
+`IoSetDeviceInterfaceState` TRUE; FALSE on the other path). `USBNTMAP.SYS` is
+the upper filter of the USB mass-storage device's devnode (NUSB's and ME's
+`usbstor.inf`) and of the UAS device's (`src/uas/xhciuas.inf`,
+`[Uas.HW.AddReg]`), so the child unit, "USB Disk", is offered: the stick and
+the UAS disk are listed through NUSB's own filter, not through anything
+`xhci98.sys` answers. `xhci98.sys`'s PDO answers `Removable` TRUE and
+`SurpriseRemovalOK` FALSE (`src/hcd_pdo.c`), and on 98 SE and ME `xhcicm.sys`
+adds `DN_REMOVABLE` to each new devnode below a tunnel (`src/cm/cm_cfgwk.c`;
+read set in `runs/run-39.md`); neither is read by the 9x predicate, which is
+why the NVMe is not listed though `DN_REMOVABLE` is set. Stor98 on 98 SE and
+ME is an IOS SCSI miniport (`stor98.mpd`, `DevLoader *IOS`,
+`src/stor98/inf/stor98-x86.inf`) on a devnode 9x's PCI bus enumerates: no
+WDM device object of this repository sits on the NVMe controller's devnode
+or on the tunnel's bridges, so nothing here can call
+`IoRegisterDeviceInterface` for them. Nothing in the removability code
+changed since `v3.1.0.0` (`git diff v3.1.0.0 b7e58ca1` over
+`src/hcd_pdo.c`, `src/uas/`, `src/cm/cm_filt.c`: no `Removable`,
+`SurpriseRemoval` or `caps->` line), so the 3.1.0.0-based tunnel images below
+read the same as 3.2.0.0.
+
+### The vehicle
+
+- Development host A, QEMU under TCG, headless, 1 vCPU and 256 MB per 9x
+  guest, one guest at a time; the host loaded throughout (other agents'
+  guests and gated builds). No timing is read here.
+- Kit `E:\xhci98-vm\p43-62` (QMP 49140 98 SE, 49142 ME; `u4\` 49144 98 SE,
+  49146 ME), scripts adapted from `p43-14` and `p43-18g3`. Every disk an
+  overlay; no base written.
+- USB legs: `qemu-xhci` (p2=4, p3=4), `usb-storage` and `usb-uas`
+  over `usbfat128.qcow2` overlays. 98 SE: `p43-5\base\w98-dp.qcow2`
+  (pristine 98 SE with the 43.4 cut of `3.2.0.0` installed, its USB storage
+  row ticked, i.e. NUSB 3.3's seven `W98SE` files), overlay `w98\a.qcow2`
+  for the stock reading, then `w98\b24.qcow2` over it with 2224's two files
+  copied in from `D:\N24` (extracted by 7-Zip from `tools\nusb33e.exe`;
+  `SYSTRAY.EXE` replaced through `WININIT.INI`) and a cold restart. ME:
+  `p43-14\base\me-hcd310.qcow2` with `xhci98.sys` of the `3.2.0.0` package
+  `e61538ae` staged over it (`WININIT.INI`), the UAS INF of that package
+  given to the first-plug wizard.
+- Tunnel legs: the `usb4-emu` emulator of `p43-18g3` (sha256 `9dfdcf9b...`),
+  NVMe `nvme-fat.qcow2` overlay in an enclosure hot-plugged after the
+  desktop: 98 SE on `p43-18g3\w98\inst.qcow2` (the Alpine Ridge ICM
+  topology; `3.1.0.0` with Thunderbolt and Stor98, a `p43-18` `xhcicm.sys`;
+  NUSB 3.3 installed whole, so `HOTPLUG.DLL` 71,680 bytes and `SYSTRAY.EXE`
+  31,232 bytes, the 2224 files, already there), overlay `u4\w98\b24.qcow2`;
+  ME on `p43-18g3\me\g3.qcow2` (`usb4-generic`, the ASM2464 model),
+  overlay `u4\me\m1.qcow2`. Both mounted the drive (`ORICO (E:)`) within a
+  minute of the plug.
+- The applet was opened with `rundll32 shell32.dll,Control_RunDLL
+  hotplug.dll`; a file was held open with `type con > F:\HOLD.TXT` in an
+  MS-DOS Prompt.
+- The ME USB leg was retaken on a fresh overlay (`me\b.qcow2`, stick
+  `me\stick2.qcow2`) after the first session's guest was stopped mid-leg by
+  a host interruption; the first session's ME UAS readings stand (shots
+  `mea-*`).
+
+Screenshots: `E:\xhci98-vm\p43-62\shots\` (98 SE stock `w98a-*`, 98 SE 2224
+`w98b-*`, ME `mea-*` and `meb-*`) and `E:\xhci98-vm\p43-62\u4\shots\`
+(`uw-*` 98 SE, `um-*` ME). The ones each row rests on:
+
+| Reading | Shots |
+|---|---|
+| 98 SE stock: stick and UAS mounted, no icon; the applet command opens nothing | `w98a-after-uas`, `w98a-run-typed`, `w98a-run-hotplug` |
+| 98 SE 2224: icon on plug, both listed | `w98b-boot-noplug`, `w98b-stick`, `w98b-applet-both` |
+| 98 SE 2224: UAS stop, unplug | `w98b-uas-stop1` to `-stop3`, `w98b-uas-unplugged` |
+| 98 SE 2224: stick with a file open | `w98b-hold`, `w98b-hold-stop1`, `-stop2`, `w98b-hold-after` |
+| 98 SE 2224: stick stop, unplug, re-plug, unplug unstopped | `w98b-st-stop2`, `w98b-st-unplugged`, `w98b-replug`, `w98b-surprise` |
+| ME: icon, stick listed; UAS stop | `meb-stick`, `mea-applet-stick`, `mea-uas-stop1`, `mea-uas-stop2`, `mea-uas-unplugged` |
+| ME: stick with a file open | `meb-hold`, `meb-hold-stop1`, `meb-hold-stop2`, `meb-hold-after` |
+| ME: stick stop, unplug, re-plug, unplug unstopped | `meb-st-stop2`, `meb-st-unplugged`, `meb-replug`, `meb-surprise` |
+| tunnel NVMe, 98 SE 2224 and ME: mounted, not listed | `uw-files`, `uw-plug`, `uw-applet`, `uw-applet-comp`; `um-plug2`, `um-applet`, `um-applet-comp` |
+
+The binaries read (outside the tree, `E:\xhci98-scratch\p43-62`, nothing
+executed; capstone listings `me-hotplug-lin.txt`, `hotplug2224-lin.txt`,
+`usbntmap-lin.txt`):
+
+| File | Version | Size | SHA-256 |
+|---|---|---|---|
+| 98 SE `SYSTRAY.EXE` | 4.10.0.2222 | 32,768 | `5f475b7100287a5a497303935d86a73927ee177970c7d15622bcb0eb6fbc9088` |
+| NUSB 3.3 `HOTPLUG.DLL` | 4.10.0.2224 | 71,680 | `3b655411b48f5a33ff0f64658cb361244bd8d753a201e702dcd1fb4f60e7d4af` |
+| NUSB 3.3 `SYSTRAY.EXE` | 4.10.0.2224 | 31,232 | `45c94ee53ad6697f328b7d57fb57c24a20d6b12c873220e62905b8ef79c8357d` |
+| ME `HOTPLUG.DLL` | no version resource | 81,920 | `3ecc9094b27faf6aee2b9809ada8c1b5b21822cec2b7b86925a55aa559cd6b5d` |
+| ME `SYSTRAY.EXE` | 4.90.0.3000 | 36,864 | `6aa2f6eb85bcc5e9846dc64ecff90006d7cd30bffa57b9bc2f3083ced9250694` |
+| NUSB 3.3 `USBNTMAP.SYS` | 4.90.0.3000 | 7,136 | `d1595cdbfdc22925c4e47d1720f117fe6c9beda36417ba41a1fd7398878cc6e4` |
+
+### Options for the owner (none taken)
+
+1. **No change (recommended).** The stick and the UAS disk are already
+   listed and stop cleanly wherever the applet exists (ME; 98 SE with
+   2224), refusing correctly with a file open. On 98 SE as this release
+   installs it there is no applet, and on both systems a tunnelled NVMe is
+   never listed; XHCITR's Safely Remove and `INSTALL /eject` cover both, and
+   only they take the tunnel down (`xhcicm.sys`'s eject, `src/cm/cm_eject.c`).
+2. **Ship 2224's `HOTPLUG.DLL` and `SYSTRAY.EXE` on 98 SE** (the NUSB 3.3
+   copy). Small in the installer (two more files in the `NUSB33\W98SE`
+   component and `SYSTRAY.EXE` replaced in use, through `WININIT.INI`), but
+   they are Microsoft hotfix files that replace a system file: a
+   redistribution question first (43.1's decision,
+   `legal-provenance.md` section 5, names the seven storage files only), and an uninstall must put
+   2222 back. It gives USB storage the icon; it does nothing for the
+   tunnel.
+3. **List the tunnelled NVMe.** It would need a device interface of class
+   `40EF6CF0` on the parent of the node to be offered - the NVMe
+   controller's devnode for its disk, or the tunnel's downstream bridge for
+   the controller. No component of this repository owns a WDM device object
+   on either devnode on 9x (Stor98 is an IOS miniport, the bridges are 9x's
+   PCI bus's), so it means a new ring-0 WDM component on that devnode, or
+   writing the interface's `DeviceClasses` registry entries by hand, an
+   undocumented 9x path. Large, with a high risk, and even then the
+   applet's Stop is `CM_Query_Remove_SubTree` / `CM_Remove_SubTree` of that
+   node: it would not take the tunnel down, unlike `INSTALL /eject`, and a
+   Stop of the disk node alone would not establish the DMA isolation
+   Stor98's rules require before a pull. Not recommended.
+
+### Codex
+
+Round 1 (`task-mvjltrl7-3lf32i`, session `01a163e6`, read only, against the
+three disassembly listings and the tree): every claim confirmed, with these
+qualifications, taken into the text above where they change it.
+
+- The predicate rejects a devnode only when the status query succeeds and
+  reports problem 0x18; a failed query goes on to the interface test. The
+  tree walk's skip applies only while its filtering flag is set (ME `+0x45`,
+  2224 `+0x41`; who sets it is not in the listing) and is bypassed for a
+  node below a listed one with "Display device components" ticked;
+  children are walked either way.
+- `USBNTMAP.SYS` as the stick's upper filter: confirmed from NUSB 3.3's
+  `USBSTOR.INF` (line 349, `HKR,,upperfilters,0,"USBNTMAP.SYS"`), read after
+  the round.
+- Stop: ME calls `CM_Query_Remove_SubTree` and `CM_Remove_SubTree` on the
+  selected node (`0x7BE93656` to `0x7BE936D1`), also querying its parent
+  for some enumerators; 2224 queries the node and its parent
+  (`0x41347F` to `0x4134BB`). Neither reaches `xhcicm.sys`'s eject.
+- Option 3 is weaker than stated: a Stop of the NVMe's disk node alone need
+  not stop the controller, drain its requests or establish DMA isolation,
+  which Stor98's ground rules require before buffers are released
+  (`src/stor98/AGENTS.md`); so even a listed NVMe could not be called safe
+  to pull from that Stop. Hand-written `DeviceClasses` entries are not
+  decidable from these sources (registration contract and lifetime on 9x
+  unread).
+- The only device-interface registrations in `src/` are `hcd_door.c`'s
+  (USB, controller and hub objects) and `cm_qryos.c`'s own class on the NHI
+  PDO, never enabled; none covers a bridge or an NVMe function.
+- Docs: nothing claims 98 SE's own applet lists devices (`README.md` says
+  "No such dialog"; the release notes give the applet to NUSB), but the
+  release notes' "lists nothing, as on 98 SE" (the ME tunnel item) hides
+  that stock 98 SE has no applet, and the `XhciCmSafeEject` row ("offers
+  devices behind a tunnel for safe removal") reads as if 98 SE's and ME's
+  applet offered them. A wording question for the owner; not changed here.
+
+### The owner's decision and the NUSB 3.3 leg (2026-10-22, evening)
+
+Owner, 2026-10-22: keep carrying NUSB's seven storage files and tell 98 SE
+users that the "Unplug or Eject Hardware" icon comes from installing NUSB
+3.3 itself; the release notes' 9x removal wording qualified as proposed
+(`123e443e`), and `README.md`, the release notes' storage section and
+`tuning.md` saying so (the commit after this sheet's). Asked the same day:
+SweetLow's package (`tools\usb20_win9x.zip`, every one of its 27 entries)
+carries no `HOTPLUG.DLL`, `SYSTRAY.EXE`, `USBNTMAP.SYS` or storage INF and
+names no install order, so it brings neither the applet nor the interface.
+
+**The leg: PASS.** 98 SE, one guest, from the pristine image
+(`p43-14\base\w98se-pristine.qcow2`, overlay `w98\n1.qcow2`):
+
+1. NUSB 3.3 by its own setup: `NUSB33E.EXE` (`tools\nusb33e.exe`, SHA-256
+   `F1F30A800CF6013EB6F18DB775D88E777DDC3924622E6560EDD2DCD7B53698D3`)
+   run from the share, its
+   licence accepted, its restart taken. Afterwards `HOTPLUG.DLL` 71,680
+   bytes, `SYSTRAY.EXE` 31,232 bytes (the 2224 pair) and `USBNTMAP.SYS`
+   7,136 bytes were in place (`n-files`).
+2. The xHCI98 installer, `SETUP.EXE`, from a test package assembled for the
+   leg: `SETUP.EXE`, `XHCIINST.EXE` and `XHCIWIZ.EXE` built at `b7e58ca1`
+   (`xhciinst\build.cmd x86`; they call themselves 3.1.0.0, the version
+   not being bumped before the cut), `INSTALL.BAT` of `b7e58ca1`, the
+   drivers and the other tools of the `3.2.0.0` test package `e61538ae`
+   (the drivers' removability code and every INF but Stor98's unchanged
+   since), and the seven files in `NUSB33\W98SE\` as `d64db54b` lays them
+   out. The Components page left "USB storage drivers for Windows 98 SE
+   (NUSB 3.3's)" unticked, and the Summary gave the 43.51 note: "Found
+   installed: USBSTOR.SYS, USBNTMAP.SYS, USBAUTH.SYS, USBU2A.SYS,
+   USBMPHLP.PDR, USBSTOR.INF, USBNTMAP.INF. They are left as they are. NUSB
+   is installed on this computer (found its Uninstall\USB20U entry). It
+   already provides the USB storage drivers, so you can leave this
+   unticked." (`n-setup3`, `n-setup4`). Installed, restarted, the
+   controller's wizard walked (`hcdwiz-n-*`), restarted.
+3. A stick (the 43.42 wizard, then `F:`) and a UAS disk (its first-plug
+   wizard, then `G:`): the tray icon appeared with the stick; both listed
+   as "USB Disk" (`n-applet`). UAS: Stop, "Safe To Remove Hardware",
+   unplugged with no dialog (`n-uas-stop1`, `n-uas-stop2`,
+   `n-uas-unplugged`). The stick with `F:\HOLD.TXT` held open: "Problem
+   Stopping Device ... cannot be stopped right now", the stick still
+   working after (`n-hold-stop2`, `n-hold-after`); then Stop, "Safe To
+   Remove Hardware", unplugged with no dialog and the icon gone
+   (`n-st-stop2`, `n-st-unplugged`).
+
+This is also 43.51's owed 98 SE reading with NUSB installed: the row
+unticked and its note, on a real NUSB setup. Shots in
+`E:\xhci98-vm\p43-62\shots\` (`n-*`, `hcdwiz-n-*`); the package in
+`E:\xhci98-vm\p43-62\pkg32`. Guest closed.

@@ -612,8 +612,10 @@ every system `INSTALL /devices` shows what is connected and
 64-bit Windows, in `tools\xhciinst\` takes the same switches).
 
 - **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /eject`;
-  these systems have no other way, since the "Unplug or Eject Hardware" applet NUSB installs
-  does not list a device behind a Thunderbolt port. The tool lists the
+  only these offer a device behind a Thunderbolt or USB4 port there.
+  Windows 98 SE as shipped has no "Unplug or Eject Hardware" applet, and
+  the one ME has (or NUSB adds to 98 SE) does not list such a device,
+  though it lists USB sticks and UAS disks. The tool lists the
   devices, asks which one, and then (from `3.2.0.0`) asks the Thunderbolt
   driver, `xhcicm.sys`, to remove it; before, the tool asked Windows
   itself. The driver asks Windows to query the device's removal (a volume
@@ -778,7 +780,7 @@ Restart Windows, or disable and enable the controller, after a change.
 |---|---|---|
 | `XhciCmMode` | `1` | `0` off: the driver binds the controller, logs it and touches nothing. `1` automatic: the firmware's connection manager's client where it runs, `xhcicm.sys`'s own on a USB4 host whose firmware runs none, and nothing where neither is certain. `2`: an Intel controller the table above does not list, driven as an Alpine Ridge, at your own risk, after adding its id to a copy of `xhcicm.inf`. `3`: force `xhcicm.sys`'s own USB4 connection manager, at your own risk; refused on Falcon, Alpine and Titan Ridge and Ice Lake, and wherever the firmware's runs |
 | `XhciCmApprove` | `1` | `1` approves every device (see "Thunderbolt 3: which devices get a tunnel"); `0` approves none |
-| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal; `0` does not |
+| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal (on 98 SE and ME only through the USB Tree and `INSTALL /eject`: 98 SE as shipped has no "Unplug or Eject Hardware", and ME's does not list them); `0` does not |
 | `XhciCmReenum` | `1` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh, for a machine where that misbehaves |
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
@@ -835,7 +837,9 @@ have every leg.
 - **Windows ME:** the install through `INSTALL.BAT`, and under both
   connection managers a plug, unplug and re-plug with the NVMe drive
   found with no Refresh and its data intact; Stand by and resume under
-  both. "Unplug or Eject Hardware" lists nothing, as on 98 SE.
+  both. ME's "Unplug or Eject Hardware" does not list the drive (98 SE
+  as shipped has no such applet): the USB Tree and `INSTALL /eject` remove
+  it.
 - **Windows 2000:** the firmware connection manager's legs read on 98 SE,
   the open wizard aside, and the Titan Ridge model,
   safe removal through "Unplug or Eject Hardware", the USB4 connection
@@ -1433,6 +1437,17 @@ package does not replace. The component is seven files, which NUSB 3.3 and
 
 They are Microsoft's, apart from `USBU2A.SYS`, a third party's. SweetLow's
 stack alone has no storage part.
+
+**For the "Unplug or Eject Hardware" icon on Windows 98 SE, install NUSB
+3.3.** Windows 98 SE has no such icon of its own (its `SYSTRAY.EXE` stops
+PC Cards only). The applet is Microsoft's hotfix KB 242975, which NUSB 3.3's
+own setup installs; the seven files above do not include it, and neither
+does SweetLow's stack. With NUSB 3.3 installed, the icon lists USB sticks
+and UAS disks under `xhci98.sys`, as Windows ME's own does: Stop gives "Safe
+To Remove Hardware", and a disk with a file open is refused until the file
+is closed. Neither lists an NVMe drive behind a Thunderbolt or USB4 tunnel:
+remove that with the xHCI98 USB Tree or `INSTALL /eject`. The USB Tree's
+Safely Remove also stops USB storage on both systems.
 
 **Planned for `3.2.0.0`, not yet built: the download is to carry them,
 and the installer to offer them on Windows 98 SE** (roadmap-usb4 tasks 43.3
