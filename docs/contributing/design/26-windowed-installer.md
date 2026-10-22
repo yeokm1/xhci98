@@ -2197,8 +2197,15 @@ folder the copies go to) and `Sums` (the hash of the `SHA256.TXT` they
 are made from); a write that fails stops the set's copy (said, the failed
 flag set). A set whose key is there is an earlier run's: its values are
 kept, and with `RecordMade` 1 its record file is opened, held to its
-header, recovered (below) and appended to. The uninstall finds a set by
-this key.
+header, recovered (below) and appended to; with `RecordMade` 2 (an
+uninstall or a withdrawal cut short after the copies went) the run first
+finishes that removal (section 6.7.8), and the set is then made afresh,
+or, when the removal cannot finish, not copied this run. A key whose
+`RecordMade` is 0 or missing, or that lacks one of the four values, is a
+making of the key cut short: with no file at its `Record` path (or, with
+no `Record`, at this run's) the key is deleted and made afresh; with one,
+the file's owner cannot be told, and the case below applies. The
+uninstall finds a set by this key.
 
 **An earlier copy elsewhere or of another release.** When the key names
 another `Dir` (the install directory moved, record 23 section 9.6) or
@@ -2230,13 +2237,15 @@ line is not the header, or that cannot be read, stops the set's copy and
 the uninstall's deletion by it the same way. Each later line ends with
 CRLF and is one of:
 
-- `R <8 hex digits>`: a run's token, chosen at random by each run that
-  copies, written before its first temporary file; every line after it,
-  up to the next `R`, is that run's;
-- `F <sha256, lower case> <full path>`: a file this run is about to make;
-- `T <full path>`: its temporary file made by this run (below);
-- `D <full path>`: that file made, with its recorded bytes;
-- `A <full path>`: that file not made.
+- `F <token> <sha256, lower case> <full path>`: a file a run is about to
+  make, the token 8 hex digits chosen at random by each run that copies;
+- `T <token> <full path>`: its temporary file made (below);
+- `D <token> <full path>`: that file made, with its recorded bytes;
+- `A <token> <full path>`: that file not made.
+
+A `T`, `D` or `A` line belongs to the `F` line of the same token and
+path; a later run appends its own lines, and closes an earlier run's open
+line with that line's own token.
 
 A last line without its CRLF is a write cut short and is dropped; any
 other line that does not read so makes the record unreadable, which stops
@@ -2251,21 +2260,21 @@ bytes the read hashed, is copied to `<Dir>\<relative path>` by section
 
 1. a file of that path already there - the same bytes, other bytes or
    unreadable - is left as it is and never recorded;
-2. the line `F <hash> <full path>` is appended to the record and flushed
+2. the line `F <token> <hash> <full path>` is appended to the record and flushed
    (`FlushFileBuffers`);
 3. `<full path>.~<the run's token>` is made with `CREATE_NEW`; when that
-   fails (the name is taken) `A <full path>` is appended and nothing is
-   deleted; otherwise `T <full path>` is appended and flushed;
+   fails (the name is taken) its `A` line is appended and nothing is
+   deleted; otherwise its `T` line is appended and flushed;
 4. the bytes are written to it, hashed as they are written;
 5. it is moved to its name with `MoveFileA`, which never replaces, and
-   `D <full path>` is appended.
+   its `D` line is appended.
 
 When step 4 or 5 fails (the hash is not the line's, a write fails) the
-temporary file is deleted and then `A <full path>` appended; when the
+temporary file is deleted and then its `A` line appended; when the
 deletion fails the line is left open, for the recovery, and the run goes
 on with the next file. **Recovery** (the next run, ticked or not, and the
 uninstall, before anything else of the set), for each `F` line with no
-`D` or `A` after it, by its own run's token alone: with a `T` line, the
+`D` or `A` line of its own, by its own token alone: with a `T` line, the
 temporary file `<full path>.~<token>` is this installer's and is deleted;
 without one, a file of that name is not known to be this installer's (a
 run cut short between steps 2 and 3, or between the `CREATE_NEW` and its
