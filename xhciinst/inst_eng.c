@@ -6283,8 +6283,8 @@ static DWORD call_flags(const DEVREC *x, int inf)
      * (record 26 section 6.3); an update of a Stor98 it runs, or /force's
      * reinstall, takes record 23's forced route. */
     if (inf == INST_INF_S98) {
-        /* Over Windows' own stornvme (8.1, record 26 section 5.3.1 case
-         * 3b): its signed in-box INF outranks Stor98's, so forced. */
+        /* Over Windows' own stornvme (8.1 and 10, record 26 section 5.3.1
+         * case 3b): its signed in-box INF outranks Stor98's, so forced. */
         if (x->Action == INST_ACT_INSTALL &&
             inst_s98_over_inbox(osKind == INST_OS_CMONLY, x->Service)) {
             return INST_INSTALLFLAG_FORCE;

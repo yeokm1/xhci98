@@ -6,13 +6,14 @@ and released as part of xhci98, with xhci98's version.
 
 ## 3.2.0.0 - not yet released
 
-- Windows 8 and 8.1: xhci98's installer offers Stor98 there (unticked)
-  for NVMe drives behind a Thunderbolt or USB4 tunnel; on 8.1 it
-  replaces Windows' own NVMe driver on such a drive. The 32-bit driver
-  ran on Windows 8 (32-bit) in the emulator unchanged. The 64-bit
-  package does not install on 8 x64 or 8.1 x64: it has no catalog
-  file, which those systems require. 32-bit Windows 8.1 is untested.
-- The INFs' comments name Windows 8 and 8.1; nothing they install
+- Windows 8, 8.1 and 10 (below build 22000): xhci98's installer
+  offers Stor98 there (unticked) for NVMe drives behind a Thunderbolt
+  or USB4 tunnel; on 8.1 and 10 it replaces Windows' own NVMe driver on
+  such a drive. The 32-bit driver ran on Windows 8 and Windows 10 22H2
+  (32-bit) in the emulator unchanged. The 64-bit package does not
+  install on 8 x64, 8.1 x64 or 10 x64: it has no catalog file, which
+  those systems require. 32-bit Windows 8.1 is untested.
+- The INFs' comments name Windows 8, 8.1 and 10; nothing they install
   changed.
 
 ## 3.1.0.0 - 2026-10-19

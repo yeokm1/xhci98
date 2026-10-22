@@ -4,9 +4,9 @@
 ; stor98-x64.inf - the 64-bit stor98 package, shipped as x64\stor98.inf next
 ; to the amd64 stor98.sys. Installs the SCSIport miniport on Windows XP x64,
 ; Server 2003 x64, Vista x64 and 7 x64, for any PCI NVMe controller (class
-; 01, subclass 08, interface 02). Windows 8 x64 and 8.1 x64 refuse it as
-; it stands: with no CatalogFile, their driver store will not import it
-; in test-signing mode (0xE000022F, read 2026-10-22, xhci98 roadmap
+; 01, subclass 08, interface 02). Windows 8 x64, 8.1 x64 and 10 x64 refuse
+; it as it stands: with no CatalogFile, their driver store will not import
+; it in test-signing mode (0xE000022F, read 2026-10-22, xhci98 roadmap
 ; 43.23). Derived from upstream nvme2k 1.2.0.0
 ; WDM\NVMe2K.inf.
 ;

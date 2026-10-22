@@ -659,6 +659,60 @@ the debug-port builds' stage lines went to `isa-debugcon` with
 | 8.1 x64, forced install over `stornvme` | the same `3.1.0.0` x64 pair | the same `0xE000022F` and the same `setupapi` lines |
 | 8.1 x64, unplug during writes under `stornvme` | Windows' own | the copy in flight blocked; `stornvme` events 129 ("Reset to device ... was issued") and 11 ("controller error") every 35 s, the disk never removed; with the tunnel brought back after 4.6 min the copy completed with success 23 s later |
 
+### Windows 10 (after 43.34)
+
+43.34 (branch `p43-34`, finished, not yet merged here) makes Windows 10
+below build 22000 the same kind of system as 8 and 8.1 (`INST_OS_CMONLY`),
+and with it Stor98's row: its case 3b warning already reads "Windows 8,
+8.1 or 10". `inst_s98_over_inbox` is called with that kind, so a tunnel
+drive under 10's own `stornvme` is installed over, forced, as on 8.1, with
+no change here beyond its comments. Read on 2026-10-22 after the 8 and 8.1
+legs, on xhci98's pristine `w10x86` and `w10x64` images (Windows 10 Pro
+22H2, 19045.2965), the same vehicle and guest scripts, QMP 48643 and 48644,
+one guest at a time.
+
+Static, from the same two images' `Windows` trees, read with `7z e`
+through the powered-off qcow2 (the images were installed from the owner's
+media; nothing executed); the export and import comparison against 8's by
+WDK 7.1's `link -dump`:
+
+| Build | File | Version | Bytes | SHA-256 |
+|---|---|---|---|---|
+| 10 x86 | `scsiport.sys` | 10.0.19041.1288 | 145,232 | `fcefde990f6ca548a1f6f1f606bb2d5e9a2c01d33fc8ebf78e043c78f26d4484` |
+| 10 x86 | `Classpnp.sys` | 10.0.19041.2673 | 385,072 | `8e5c4bef0939f4db8cce846dea5235f0c2cd1a91c5cda6777971e58d44240ea4` |
+| 10 x86 | `ntoskrnl.exe` | 10.0.19041.2965 | 7,204,688 | `f57145f91a3b6527afd0b386151c4c769b52f18c00ceb2cc7a5d405b931a2827` |
+| 10 x86 | `stornvme.sys` | 10.0.19041.2075 | 126,816 | `87ec028b500bd24b4c4cc61c53f7562a3628a4333f2ab69feb2dce169b318e6d` |
+| 10 x86 | `stornvme.inf` | - | 18,144 | `9ec0a307119914983e32429ee73bd7bc2cb08883822270a80ed590ee340b174f` |
+| 10 x64 | `scsiport.sys` | 10.0.19041.1288 | 188,232 | `2a72c9c5cb02e03ced6a6f52000d92485bf2453374cc47e32541b5def1144b2f` |
+| 10 x64 | `Classpnp.sys` | 10.0.19041.2673 | 452,656 | `5f3b2144c8b118a2666abcfc4ee30d4900fee48719ddfbb2b9c6ae8e9a5c4de9` |
+| 10 x64 | `ntoskrnl.exe` | 10.0.19041.2965 | 10,865,536 | `eace65a06bab6b67461ed29783cde9367c3ddd2a31b2594c59d22d77460d4f4b` |
+| 10 x64 | `stornvme.inf` | - | 18,152 | `2729d9ef07aecd2036f55ea51009ccc26f766537859dd1ea6c6b34d6bb5cfab6` |
+
+- Every NT import of Stor98 (the 19 x86 and 18 amd64 lines of
+  `stor98-imports.allow`) is exported by 10's `scsiport.sys` and
+  `ntoskrnl.exe`. `scsiport.sys` exports exactly 8's names (47 x86, 50
+  x64); its imports add `IoGetCurrentProcess`, `IoGetRequestorProcess`,
+  `KeFlushIoBuffers`, `KeStackAttachProcess` and `KeUnstackDetachProcess`
+  and drop `NlsMbCodePageTag` (and `_allmul` on x86). `Classpnp.sys` adds
+  `ClassModeSenseTranslate` and `DllInitialize` to 8.1's names.
+- `stornvme.inf` (`DriverVer=06/21/2006,10.0.19041.2075`) binds
+  `PCI\CC_010802` with `ExcludeFromSelect = *`, as 8.1's does.
+
+| Leg | Driver | Result |
+|---|---|---|
+| 10 x86, before | - | `stornvme` on both controllers, the tunnel volume F: |
+| 10 x86, forced install over `stornvme` | the free x86 of the 8 legs (`2fd7005b...29bfd`) | the unsigned-driver prompt, "Install this driver software anyway"; `ok=True`; both controllers Stor98, `stor98` running, `stornvme` stopped, both disks and F: present, `PnpInterface\5` = 1 |
+| 10 x86, unplug during writes | the same | the 56th copy failed about 5.9 s after the `qom-set` ("The system cannot find the path specified"); fastfat event 50 with the "Delayed Write Failed" popup (event 26) at about 2.4, 3.8 and 5.1 s, 37 disk event 51 (paging-operation errors) at 5.1 s, disk event 157 ("Disk 2 has been surprise removed") at 5.4 s; no event 153; the controller started; the SHPC removal again never acknowledged (`awaiting_ack=1`); the disk did not come back when the tunnel did |
+| 10 x64, install | `releases\3.1.0.0\release-x64` | **refused**: `0xE000022F`, `setupapi.dev.log` "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode", "Failed to import driver package into Driver Store. Error = 0xE000022F" |
+
+Decided: Stor98's x86 NT path runs on Windows 10 22H2 as it is, over 10's
+own `stornvme` by the installer's forced call, and its docs and INF
+comments now say 2000 to 10; the x64 package's refusal is the same as on
+8 and 8.1 (Q1 covers 10 x64 too). Owed on 10: PLAN 2.2's terminal-status
+question (only `NO_DEVICE` ran, with no stage-code build, and 10 logged no
+retry event, so its retry count is unread); 10 builds other than 22H2;
+the connection manager's legs on 10 (43.37).
+
 ### What it decides
 
 - Stor98's NT path runs on Windows 8 (32-bit) as it is: no source change.
@@ -687,17 +741,17 @@ the debug-port builds' stage lines went to `isa-debugcon` with
 
 ### Questions for the owner
 
-1. **A catalog for the x64 package.** Windows 8 x64 and 8.1 x64 refuse
-   every catalog-less package in test-signing mode, so Stor98, and by the
+1. **A catalog for the x64 package.** Windows 8 x64, 8.1 x64 and 10 x64
+   refuse every catalog-less package in test-signing mode, so Stor98, and by the
    same rule `xhcicm.inf` and the USB drivers' x64 INFs, cannot install
    there as the package stands. Recommendation: the packager makes one
    catalog per x64 INF (WDK 7.1's `inf2cat` or `makecat`) and signs it with
    the same test key at the same step, each x64 INF gaining
    `CatalogFile=`; record 19 amended; read on 7 x64 again (a catalog the
    test certificate signs must not change what 7 x64 does) and on 8 x64.
-   Until then the release notes say the x64 drivers do not install on 8
-   and 8.1.
-2. **A tunnel drive first plugged after the install, on 8.1.** It gets
+   Until then the release notes say the x64 drivers do not install on 8,
+   8.1 and 10.
+2. **A tunnel drive first plugged after the install, on 8.1 and 10.** It gets
    `stornvme` (Windows' ranking), not Stor98, until the installer runs
    again; on 2000 to 7 the staged `stor98.inf` takes it by itself.
    Recommendation: accept it and say so in the release notes and the

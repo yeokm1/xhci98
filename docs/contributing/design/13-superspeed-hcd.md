@@ -3243,7 +3243,9 @@ store refuses a package with no catalog file** in test-signing mode -
 Integrity is in Test Signing mode" - so none of this package's x64 INFs,
 which name no `CatalogFile`, installs there as they stand (read with
 Stor98's `3.1.0.0` x64 pair); 8 x86 took the uncatalogued x86 Stor98
-package with the unsigned-driver prompt.
+package with the unsigned-driver prompt. Windows 10 22H2 does the same
+(read the same day): 10 x64 refuses with `0xE000022F`, 10 x86 takes the
+x86 package with the prompt.
 
 #### 6.12.9 What only a running system settles (VM, owed to 43.24 and 43.31)
 

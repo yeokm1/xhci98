@@ -5,7 +5,8 @@ Thunderbolt host. Its tunnel bridges put QEMU's `nvme` device behind a PCIe brid
 link can be raised, torn down cleanly or surprise-removed, which is the situation Stor98
 must survive. Its `docs/XHCI98-HANDOFF.md` describes the test VMs (Windows 98 SE on
 i440FX; Windows 2000, XP x64 and Windows 7 x64 setups) and the launch scripts; Windows 8
-and 8.1 ran on xhci98's own images ("Windows 8 and 8.1", below).
+and 8.1 ran on xhci98's own images ("Windows 8 and 8.1", below), and Windows 10 the same way
+("Windows 10", below).
 
 Each case below cites the [PLAN.md](PLAN.md) item or feasibility gate (G1-G9, PLAN 0.0) it
 validates. Thresholds are initial targets; if a measurement shows one is wrong for a given
@@ -123,6 +124,9 @@ roots (until 0.4.0.0, the folders of a release stage):
   call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refuse the
   `x64\` package at the driver store because it has no catalog (`0xE000022F`, with
   test-signing on; off not read); 8.1 x86 not run.
+- **10 (below build 22000)**: 10 x86 installs from `x86\` over Windows' own `stornvme`
+  (the installer's own call, forced); 10 x64 refuses `x64\` at the driver store as 8 x64
+  does ("Windows 10", below).
 - Pass: the controller shows "Stor98 Storage Controller for NVMe SSDs" working, its test volume is
   readable, and each OS has only its own image: `dir C:\stor98.* /s` finds only
   `SYSTEM\IOSUBSYS\STOR98.MPD` on 9x (and the class key's `PortDriver` is `stor98.mpd`),
@@ -190,6 +194,33 @@ controller) and xhci98's connection manager's link-down statement on 8 and 8.1 (
 | Windows 8.1, 32-bit | Not run: no install medium (owner, 2026-10-22: skipped for xhci98 `3.2.0.0`, covered by 8 x86 and 8.1 x64). The x86 package is the one 8 x86 ran; 8.1 x86's `stornvme` and SCSIport are unread |
 | Stor98 x64 on 8 and 8.1 | Not loaded: the package is refused at the driver store (no catalog, above) |
 | Removal with a platform notification, and xhci98's link-down statement, on 8 and 8.1 | Not read; xhci98's roadmap 43.24 |
+
+## Windows 10 (xhci98 roadmap 43.23 and 43.34, 2026-10-22)
+
+xhci98's installer admits Windows 10 below build 22000 as the same kind of system as 8 and
+8.1 (its roadmap 43.34), Stor98's row with it. Read the same way as "Windows 8 and 8.1"
+above, on xhci98's pristine `w10x86` and `w10x64` images (Windows 10 Pro 22H2, build
+19045.2965), the same vehicle, kit and guest scripts, 2 vCPUs, 2 GB, one guest at a time.
+Statically, from the same images (read with 7-Zip, nothing executed): `scsiport.sys`
+10.0.19041.1288 exports the same names as 8's (47 on x86, 50 on x64), so every NT import of
+Stor98 is there; its imports differ from 8's by five names (`IoGetCurrentProcess`,
+`IoGetRequestorProcess`, `KeFlushIoBuffers`, `KeStackAttachProcess`,
+`KeUnstackDetachProcess` added; `NlsMbCodePageTag` dropped, and `_allmul` on x86);
+`Classpnp.sys` exports 8.1's 62 names plus `ClassModeSenseTranslate` and `DllInitialize`;
+`stornvme.inf` (`DriverVer=06/21/2006,10.0.19041.2075`) binds `PCI\CC_010802` with
+`ExcludeFromSelect = *`, as 8.1's does.
+
+| Leg | Build | What was read |
+|---|---|---|
+| 10 x86, before | - | Windows' own `stornvme` on both controllers ("Standard NVM Express Controller"), the tunnel volume F: |
+| 10 x86, forced install over `stornvme` | the free x86 of "Windows 8 and 8.1" (`2fd7005b...29bfd`) | the unsigned-driver prompt ("Windows can't verify the publisher of this driver software"), answered "Install anyway"; `ok=True` after 2.5 min (TCG); both controllers "Stor98 Storage Controller for NVMe SSDs", service `stor98` running, demand-start, `SCSI Miniport`, `PnpInterface` = 1, `stornvme` stopped; both disks "QEMU NVMe Ctrl SCSI Disk Device", the tunnel volume F:; `StorInterrupt` "msix yes ... interrupt" on both |
+| 10 x86, unplug during writes | the same | the 56th 4 MB copy failed about 5.9 s after the link loss ("The system cannot find the path specified"); fastfat event 50 and the "Windows - Delayed Write Failed" popup (event 26) at about 2.4, 3.8 and 5.1 s; 37 disk event 51 ("An error was detected ... during a paging operation") at 5.1 s; disk event 157 ("Disk 2 has been surprise removed") at 5.4 s, the gone deadline's removal; the controller still started. No disk event 153 was logged, so whether classpnp retried, and how often, was not read (no stage-code build on 10). As on 8, Windows 10 did not acknowledge the bridge's SHPC removal (the emulator's `awaiting_ack=1`), so this too was a link loss with no platform notification; with the tunnel brought back the disk did not return (no notification and no connection manager in the guest) |
+| 10 x64, install | xhci98 `3.1.0.0` `release-x64` | **refused**: `0xE000022F`; `setupapi.dev.log` "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode", "Failed to import driver package into Driver Store"; both controllers stay with `stornvme` |
+
+What it leaves unread on 10: the terminal status question of PLAN 2.2 (only `NO_DEVICE`
+ran, without stage codes); Stor98 x64 (refused, as on 8 and 8.1); 10 builds other than
+22H2 (1507 to 21H2, the LTSC releases, Server 2016 to 2022); the removal with a platform
+notification and xhci98's connection manager on 10 (its roadmap 43.37).
 
 ## Harness work needed
 

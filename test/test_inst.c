@@ -3721,8 +3721,9 @@ static void test_s98(void)
               "8 and 8.1, /yes: N");
         CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 1, &asked, &def) && !asked,
               "8 and 8.1, /stor98: installed unasked");
-        /* Task 43.23 (record 26 section 5.3.1 case 3b): 8.1's own stornvme
-         * on a tunnel drive is installed over, forced; nothing else is. */
+        /* Task 43.23 (record 26 section 5.3.1 case 3b): 8.1's and 10's own
+         * stornvme on a tunnel drive is installed over, forced; nothing
+         * else is. */
         CHECK(inst_s98_over_inbox(1, "stornvme") &&
               inst_s98_over_inbox(1, "StorNVMe"),
               "8 and 8.1: a drive under stornvme is installed over");
