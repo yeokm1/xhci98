@@ -1465,6 +1465,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG EnumCommandsTimedOut;
     ULONG EnumDisableFailures;
     ULONG EnumTransfersTimedOut;
+    /* Of those, the ones whose device had left: no reset (task 43.53). */
+    ULONG EnumTransfersDeparted;
     /* Task 36.4's busy retry (hcd_enum.c, hcdCommandBusy): commands that
      * read the engine not idle before their first submit or were answered
      * XHCI_CMD_BUSY, those then submitted, and the drains it queued.
@@ -2214,7 +2216,8 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 #define HCD_CTL_STALLED     1UL /* the device answered with a STALL      */
 #define HCD_CTL_FAILED      2UL /* it completed with another error       */
 #define HCD_CTL_NOT_SENT    3UL /* it never went out, or it timed out
-                                 * (dev->Ep0Stuck, the reset requested)  */
+                                 * (dev->Ep0Stuck, the reset requested,
+                                 * or the device left: task 43.53)      */
 #define HCD_CTL_ABANDONED   4UL /* abandoned for a device cycle (35-T.3):
                                  * dev->CycleAbandon, and nothing more is
                                  * sent to the device                     */
@@ -2348,6 +2351,11 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ULONG interfaceMask);
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* A departing device's fallback cycle of its location, charged to the
+ * location's budget (hcd_cfg.c, beside hcdCfgFault; task 43.53's late
+ * thread transfer too). The caller has checked dev->Location and the PDO.
+ * Thread only. */
+VOID HcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* The shutdown latch's flush of the queued commands (37.3, record 13
  * section 5.8); returns how many it completed. IRQL: PASSIVE_LEVEL, the
  * power gate held. */

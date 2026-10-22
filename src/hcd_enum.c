@@ -781,6 +781,139 @@ static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
+ * The thread's stopped record taken off EP0 for good (task 43.53): off the
+ * engine's queue if it is still there - the door's withdrawal may have
+ * taken it off already and then failed at Set TR Dequeue, having moved the
+ * software dequeue - and the controller's dequeue moved to the enqueue
+ * position (Set TR Dequeue), so no later doorbell - a cancel's or an
+ * abort's restart of survivors (hcdCfgCancelPipe), which reads neither the
+ * pause nor Ep0Stuck - can run the TD again into the scratch. As
+ * hcdEp0Withdraw does, but for a device behind a TT too: EP0 is not used
+ * again, the device is going. The caller has EP0 Stopped or in Error,
+ * where Set TR Dequeue is legal; any other record queued, or the command
+ * failing, returns 0 and the caller keeps the reset. Thread only,
+ * powered, EP0 paused.
+ */
+static ULONG hcdEp0Retire(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG pa;
+    ULONG dcs;
+    ULONG ok;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Ep0Queue.Head == &dev->Ep0Xfer) {
+        ok = dev->Ep0Xfer.Next == NULL &&
+             XhciXferQueueRemove(&dev->Ep0Queue, &dev->Ep0Xfer) &&
+             XhciRingSetDequeue(&dev->Ep0,
+                                XhciRingTrbPA(&dev->Ep0, dev->Ep0.Enqueue)) ==
+                 XHCI_RING_OK;
+    } else {
+        ok = dev->Ep0Queue.Count == 0;
+    }
+    pa = XhciRingDequeuePA(&dev->Ep0);
+    dcs = XhciRingDequeueCycle(&dev->Ep0);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!ok) {
+        return 0;
+    }
+    return (XhciTrbSetTrDequeue(&trb, dev->SlotId, 1, pa, dcs) ==
+                XHCI_RING_OK &&
+            hcdCommand(hc, &trb, &control) == XHCI_CC_SUCCESS)
+               ? 1UL
+               : 0UL;
+}
+
+/*
+ * Task 43.53 (design record 13 section 10.5.1): a thread transfer past its
+ * deadline, before the controller reset is requested for it. Under QEMU a
+ * transfer queued to a slot whose device was just detached gets no event
+ * at all (runs/run-43.md, 43.49), and the reset that answered it spent the
+ * recovery window on an ordinary unplug. EP0 is stopped first, so the
+ * scratch is safe from the TD before the departure is read through it
+ * (a hub port's GET_STATUS, HcdHubPathPresent); then XhciTolLateVerdict
+ * decides in hcdCfgFault's order. A device found leaving has its record
+ * retired from EP0 (hcdEp0Retire, XhciTolLateRetired) and, published, its
+ * location cycled. Returns XHCI_TOL_LATE_DONE (it completed before the
+ * stop), _RESET (the caller's recovery, as before), _LEFT or _CYCLE (no
+ * reset: EP0 Stopped, empty and paused, for the teardown). Thread only,
+ * powered, EP0 paused, the thread's wait over (ThreadEp0Dev cleared).
+ */
+static ULONG hcdEp0Late(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG code;
+    ULONG state;
+    ULONG done;
+    ULONG left;
+    ULONG present;
+    ULONG verdict;
+
+    code = XHCI_CC_SUCCESS;
+    state = hcdEp0State(hc, dev);
+    if (state == XHCI_EP_STATE_RUNNING) {
+        code = 0;
+        if (XhciTrbStopEndpoint(&trb, dev->SlotId, 1, 0) == XHCI_RING_OK) {
+            code = hcdCommand(hc, &trb, &control);
+        }
+        state = hcdEp0State(hc, dev);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    done = dev->Ep0Done;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    verdict = XhciTolLateStopped(code, state, done);
+    if (verdict != XHCI_TOL_LATE_INERT) {
+        return verdict;
+    }
+    left = (dev->Gone || dev->Location == 0 ||
+            dev->Location > HCD_PORT_COUNT ||
+            hc->Ports[dev->Location - 1].Device != dev) ? 1UL : 0UL;
+    present = left ? 1UL
+                   : HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1]);
+    verdict = XhciTolLateVerdict(left, present, dev->Hub != NULL ? 1UL : 0UL,
+                                 (dev->Pdo != NULL && dev->PdoGroup != 0)
+                                     ? 1UL
+                                     : 0UL);
+    if (verdict == XHCI_TOL_LATE_RESET) {
+        return verdict;
+    }
+    verdict = XhciTolLateRetired(verdict, hcdEp0Retire(hc, dev));
+    if (verdict == XHCI_TOL_LATE_CYCLE) {
+        HcdCfgCycle(hc, dev);
+    }
+    return verdict;
+}
+
+/*
+ * After CREATE_PDO succeeded: a late transfer during it that found a
+ * device with no PDO yet leaving (hcdEp0Late's LEFT, Ep0Stuck and no reset)
+ * relied on a failed step for its teardown, and not every read there
+ * fails the creation - selective suspend's optional reads at the end of
+ * the composite configuration (HcdSuspCfgExit) among them. So the device,
+ * now published, is cycled as hcdEp0Late would have cycled it; a hub, or
+ * a device with no PDO group to cycle by, gets the reset hcdCfgFault keeps
+ * for them. Not for a reset already asked (hcdHalted) or a 35-T.3 abandon,
+ * whose own cycle is owed. Thread only.
+ */
+static VOID hcdCreateLate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          ULONG created)
+{
+    if (!created || dev == NULL || !dev->Ep0Stuck || dev->CycleAbandon ||
+        hcdHalted(hc)) {
+        return;
+    }
+    if (dev->Hub == NULL && dev->Pdo != NULL && dev->PdoGroup != 0) {
+        HcdCfgCycle(hc, dev);
+        return;
+    }
+    HcdSvcRequestReset(&hc->Hc);
+}
+
+/*
  * The records an unpowered root-hub detach left Abandoned - off their
  * ports, their slots still enabled - get their Disable Slot at the first
  * powered pass, so a restore that kept the slots does not strand them
@@ -1216,8 +1349,9 @@ static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_CTL_ABANDONED;
     }
     if (dev->Ep0Stuck || hc->ScratchHeld != 0) {
-        /* Its record is still queued from a timeout: reusing it would
-         * relink the engine's queue. Or another
+        /* A timeout: its record may still be queued, and reusing it would
+         * relink the engine's queue; or the device was found leaving and
+         * its teardown is owed (task 43.53). Or another
          * device's abandoned TD may still write the scratch until that
          * slot is taken back (35-T.3). */
         return HCD_CTL_NOT_SENT;
@@ -1263,7 +1397,8 @@ static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     outcome = hcdThreadControlQuiet(hc, dev, requestType, request, value,
                                     index, length, soft, bytes);
     if (!dev->Ep0Stuck) {
-        /* A timed-out one leaves EP0 paused for the reset it requested. */
+        /* A timed-out one leaves EP0 paused for the reset it requested,
+         * or for the teardown of a device found leaving (task 43.53). */
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
     }
     return outcome;
@@ -1292,6 +1427,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG step;
     ULONG reason;
     ULONG abandoned;
+    ULONG late;
     ULONG padded;
     ULONG i;
 
@@ -1461,6 +1597,21 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             break;
         default:
             break;
+        }
+    }
+    if (!done) {
+        late = hcdEp0Late(hc, dev);
+        if (late == XHCI_TOL_LATE_DONE) {
+            done = 1;
+        } else if (late != XHCI_TOL_LATE_RESET) {
+            /* The device has left: its teardown, or the cycle just asked
+             * for, takes the stopped record and the slot. */
+            hc->EnumTransfersTimedOut++;
+            hc->EnumTransfersDeparted++;
+            dev->Ep0Stuck = 1;
+            XhciLogNote(&hc->Hc, "enum.xfer.gone",
+                        (dev->SlotId << 8) | late);
+            return HCD_CTL_NOT_SENT;
         }
     }
     if (!done) {
@@ -2135,8 +2286,9 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * its location: a device whose read fails at one plug and not at the next
  * changes devnode, and three fails in a row is what it takes. (The other
  * way is a duplicate: a serial id a present PDO already carries leaves
- * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it left EP0's record queued
- * (dev->Ep0Stuck) and requested the controller reset, which takes the
+ * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it
+ * set dev->Ep0Stuck and either requested the controller reset or found the
+ * device leaving (task 43.53), and the reset or the departure takes the
  * device; 0 is returned and no PDO is made from it, so no location id is
  * ever given for want of a read the reset will repeat. Every other return
  * is 1. The reads use the scratch, which the caller has done with. Thread
@@ -2735,6 +2887,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
                 XHCI_DBG_VALUE("hcd: hub PDO not created, location",
                                p->PortId);
             }
+            hcdCreateLate(hc, p->Device, 1);
             /* The port enumerated: a later give-up of it starts its re-arm
              * waits from the first (hcd_hub.c; the Phase 28-31
              * integration). */
@@ -2747,6 +2900,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         }
         hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED,
                      NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device)));
+        hcdCreateLate(hc, p->Device, next->Ok);
         XHCI_DBG_VALUE("hcd: device enumerated at location", p->PortId);
         if (next->Ok) {
             p->HubSsRearms = 0;
