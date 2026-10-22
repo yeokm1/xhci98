@@ -6111,10 +6111,10 @@ static int fastBalloon;         /* the last balloon shown was this notice's */
 static int fastRed;             /* the icon shown is the red one            */
 static HICON hIconFast;
 /* The High Speed case's answers (item 1), by key, the oldest replaced. */
-static char qualKey[TR_FAST_MAX][TR_FAST_KEY];
-static int qualVal[TR_FAST_MAX];
-static int qualN;
-static int qualNext;
+static TR_QUAL_CACHE qualCache;
+static HWND hFastWnd;           /* the list's window, while it is open      */
+static HWND hFastEdit;
+static HWND hFastOk;
 
 static void tray_tip(TR_NID *n);
 
@@ -6170,29 +6170,24 @@ static void fast_key_of(int k, char *key, size_t cap)
                 fast_vid(&up[k]), fast_pid(&up[k]));
 }
 
-/* A candidate's device_qualifier (section 7.6 item 1): the answer kept
- * for its key, else asked once and kept. 1 answered, 0 refused. */
+/* A candidate's device_qualifier (section 7.6 item 1): the answer settled
+ * for its key, else asked (tr_qual_put). 1 High Speed capable, 0 not, or
+ * not yet known. */
 static int fast_qual(int k)
 {
     char key[TR_FAST_KEY];
     unsigned char *b = NULL;
     DWORD n;
-    int i;
     int v;
 
     fast_key_of(k, key, sizeof(key));
-    for (i = 0; i < qualN; i++) {
-        if (strcmp(qualKey[i], key) == 0) {
-            return qualVal[i];
-        }
+    v = tr_qual_get(&qualCache, key);
+    if (v >= 0) {
+        return v;
     }
     n = usb_desc(up[k].Hub, up[k].Conn.Port, 6, 0, 0, TR_QUAL_BYTES, &b);
-    v = tr_qual_ok(b, n);
+    v = tr_qual_put(&qualCache, key, b, n);
     free(b);
-    i = qualN < TR_FAST_MAX ? qualN++ : qualNext;
-    qualNext = (i + 1) % TR_FAST_MAX;
-    tr_copy(qualKey[i], key, TR_FAST_KEY);
-    qualVal[i] = v;
     return v;
 }
 
@@ -6291,6 +6286,7 @@ static void fast_scan(void)
     fastOn = fast_setting();
     fastCount = 0;
     memset(&firstF, 0, sizeof(firstF));
+    tr_qual_begin(&qualCache);
     for (k = 0; k < upCount; k++) {
         TR_FAST f;
         char key[TR_FAST_KEY];
@@ -6312,6 +6308,7 @@ static void fast_scan(void)
         tr_copy(keys[n], key, TR_FAST_KEY);
         n++;
     }
+    tr_qual_end(&qualCache);
     memcpy(fastKeys, keys, sizeof(keys));
     fastKeyN = n;
     if (fresh > 0 && first >= 0) {
@@ -6324,29 +6321,31 @@ static void fast_scan(void)
     fast_announce();
 }
 
-/* The box of section 7.6 item 6. */
-static void fast_box(HWND owner)
+/* The list of section 7.6 item 6 into t, an entry whole or not at all,
+ * with room kept for the closing line; returns the devices left out. */
+static int fast_list(TR_TEXT *t)
 {
-    char *buf;
-    TR_TEXT t;
     int k;
     int shown = 0;
-    const size_t cap = 16384;
+    int left = 0;
+    size_t cap = t->Cap;
 
-    buf = (char *)malloc(cap);
-    if (buf == NULL) {
-        return;
-    }
-    tr_text_init(&t, buf, cap);
+    t->Cap = cap > 256 ? cap - 256 : cap;
     for (k = 0; k < upCount; k++) {
         TR_FAST f;
         char name[160];
         char port[TR_NAME_CHARS + 96];
         char hub[200];
         const UCTRL *c;
+        size_t mark;
         if (!fast_port(k, &f)) {
             continue;
         }
+        if (left > 0) {
+            left++;
+            continue;
+        }
+        mark = t->Len;
         c = &uc[up[k].Ctrl];
         fast_name(k, name, sizeof(name));
         tr_sprintf(port, sizeof(port), "Port %s of %s", up[k].Path,
@@ -6355,17 +6354,169 @@ static void fast_box(HWND owner)
             fast_name(up[k].ParentUp, hub, sizeof(hub));
         }
         if (shown > 0) {
-            tr_put(&t, "\n");
+            tr_put(t, "\n");
         }
-        tr_fast_entry(&t, name, fast_vid(&up[k]), fast_pid(&up[k]), port,
+        tr_fast_entry(t, name, fast_vid(&up[k]), fast_pid(&up[k]), port,
                       up[k].ParentUp >= 0 ? hub : NULL, &f);
+        if (t->Overflow) {
+            t->Len = mark;
+            t->Buf[mark] = '\0';
+            t->Overflow = 0;
+            left = 1;
+            continue;
+        }
         shown++;
     }
-    if (shown == 0) {
-        tr_put(&t, "Every USB device runs at the speed it declares.\n");
+    t->Cap = cap;
+    if (shown == 0 && left == 0) {
+        tr_put(t, "Every USB device runs at the speed it declares.\n");
     }
-    MessageBoxA(owner, buf, TR_FAST_TITLE, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+    return left;
+}
+
+static void fast_layout(HWND w)
+{
+    RECT r;
+    const int m = 8;
+    const int bw = 88;
+    const int bh = 26;
+
+    GetClientRect(w, &r);
+    MoveWindow(hFastEdit, m, m, r.right - 2 * m,
+               r.bottom - 3 * m - bh > 0 ? r.bottom - 3 * m - bh : 0, TRUE);
+    MoveWindow(hFastOk, r.right - m - bw, r.bottom - m - bh, bw, bh, TRUE);
+}
+
+static LRESULT CALLBACK fast_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_SIZE:
+        fast_layout(w);
+        return 0;
+    case WM_SETFOCUS:
+        SetFocus(hFastOk);
+        return 0;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+            DestroyWindow(w);
+            return 0;
+        }
+        break;
+    case WM_DESTROY:
+        hFastWnd = NULL;
+        hFastEdit = NULL;
+        hFastOk = NULL;
+        return 0;
+    }
+    return DefWindowProcA(w, msg, wp, lp);
+}
+
+/* The window's size: 80 columns of the fixed font, two thirds of the work
+ * area's height, neither past the work area. */
+static void fast_size(int *cx, int *cy)
+{
+    RECT wa;
+    HDC dc;
+    TEXTMETRICA tm;
+    int col = 8;
+
+    dc = GetDC(NULL);
+    if (dc != NULL) {
+        HGDIOBJ old = SelectObject(dc, hFixed != NULL
+                                           ? (HGDIOBJ)hFixed
+                                           : GetStockObject(ANSI_FIXED_FONT));
+        if (GetTextMetricsA(dc, &tm) && tm.tmAveCharWidth > 0) {
+            col = tm.tmAveCharWidth;
+        }
+        SelectObject(dc, old);
+        ReleaseDC(NULL, dc);
+    }
+    *cx = 80 * col + GetSystemMetrics(SM_CXVSCROLL) + 16 +
+          2 * GetSystemMetrics(SM_CXSIZEFRAME) + 8;
+    *cy = 400;
+    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+        *cy = (wa.bottom - wa.top) * 2 / 3;
+        if (*cx > wa.right - wa.left) {
+            *cx = wa.right - wa.left;
+        }
+    }
+}
+
+/* The window of section 7.6 item 6: the list in a text box that scrolls,
+ * built in a buffer that grows until it fits (60 KiB at most on 98 SE and
+ * ME, whose edit control holds 64 KiB; 1 MiB elsewhere). */
+static void fast_box(HWND owner)
+{
+    char *buf = NULL;
+    TR_TEXT t;
+    size_t cap;
+    size_t most = envNt ? 1048576UL : 61440UL;
+    int left = 0;
+    int cx;
+    int cy;
+
+    for (cap = 16384;; cap *= 2) {
+        if (cap > most) {
+            cap = most;
+        }
+        buf = (char *)malloc(cap);
+        if (buf == NULL) {
+            MessageBoxA(owner, "There is not enough memory to list the devices.",
+                        TR_FAST_TITLE, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+            return;
+        }
+        tr_text_init(&t, buf, cap);
+        left = fast_list(&t);
+        if (left == 0 || cap >= most) {
+            break;
+        }
+        free(buf);
+    }
+    if (left > 0) {
+        tr_printf(&t, "\n%d more device%s not listed.\n", left,
+                  left == 1 ? " is" : "s are");
+    }
+    if (hFastWnd == NULL) {
+        fast_size(&cx, &cy);
+        hFastWnd = CreateWindowExA(0, "Xhci98TrFast", TR_FAST_TITLE,
+                                   WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, cx, cy, owner,
+                                   NULL, hInst, NULL);
+        if (hFastWnd == NULL) {
+            free(buf);
+            return;
+        }
+        hFastEdit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                        WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
+                                        ES_READONLY | ES_AUTOVSCROLL |
+                                        ES_AUTOHSCROLL,
+                                    0, 0, 10, 10, hFastWnd, (HMENU)3, hInst,
+                                    NULL);
+        hFastOk = CreateWindowExA(0, "BUTTON", "Close",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                      BS_DEFPUSHBUTTON,
+                                  0, 0, 10, 10, hFastWnd, (HMENU)IDOK, hInst,
+                                  NULL);
+        if (hFastEdit == NULL || hFastOk == NULL) {
+            DestroyWindow(hFastWnd);
+            free(buf);
+            return;
+        }
+        SendMessageA(hFastEdit, WM_SETFONT,
+                     (WPARAM)(hFixed != NULL ? (HGDIOBJ)hFixed
+                                             : GetStockObject(ANSI_FIXED_FONT)),
+                     0);
+        SendMessageA(hFastEdit, EM_LIMITTEXT, 0, 0);
+        SendMessageA(hFastOk, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT),
+                     0);
+        fast_layout(hFastWnd);
+    }
+    SetWindowTextA(hFastEdit, buf);
     free(buf);
+    ShowWindow(hFastWnd, IsIconic(hFastWnd) ? SW_RESTORE : SW_SHOWNORMAL);
+    SetForegroundWindow(hFastWnd);
+    SetFocus(hFastOk);
 }
 
 /* The item in a menu, checked as the setting in force. */
@@ -8168,6 +8319,16 @@ static int register_classes(void)
         return 0;
     }
     memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = fast_proc;
+    wc.hInstance = hInst;
+    wc.hIcon = hIconBig;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+    wc.lpszClassName = "Xhci98TrFast";
+    if (!RegisterClassA(&wc)) {
+        return 0;
+    }
+    memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = main_proc;
     wc.hInstance = hInst;
     wc.hIcon = hIconBig;
@@ -8320,6 +8481,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
             if (hMain != NULL && hAccel != NULL &&
                 (msg.hwnd == hMain || IsChild(hMain, msg.hwnd)) &&
                 TranslateAcceleratorA(hMain, hAccel, &msg)) {
+                continue;
+            }
+            if (hFastWnd != NULL && IsDialogMessageA(hFastWnd, &msg)) {
                 continue;
             }
             TranslateMessage(&msg);

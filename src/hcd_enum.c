@@ -2437,6 +2437,24 @@ static VOID hcdNoteFail(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG cause,
     }
 }
 
+/* idVendor and idProduct of a device descriptor, as one word. */
+static ULONG hcdVidPid(const UCHAR *d)
+{
+    return ((ULONG)d[9] << 24) | ((ULONG)d[8] << 16) | ((ULONG)d[11] << 8) |
+           (ULONG)d[10];
+}
+
+/* Record 13 section 8.4.1, rule 3: the run stops at a controller halt;
+ * an attempt that made the High or Full Speed BOS read is not made with
+ * it again this start. */
+static VOID hcdBosHalt(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    if (p->Device != NULL && XhciEnumBosHaltMemo(&p->Enum)) {
+        XhciEnumBosMemoAdd(&hc->Usb2BosMemo,
+                           hcdVidPid(p->Device->DeviceDesc));
+    }
+}
+
 /*
  * Carry out one action and describe its outcome as the next event.
  * Returns 0 when the action has no outcome to feed back.
@@ -2583,7 +2601,13 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             /* bcdUSB, for the BOS decision (task 43.27). */
             next->Value = (ULONG)s[2] | ((ULONG)s[3] << 8);
         }
-        p->Enum.Usb2Bos = hc->Usb2Bos;
+        /* Task 43.27: not behind a TT, whose EP0 cannot be withdrawn at a
+         * deadline (hcdEp0Withdraw), and not a device whose read did not
+         * end cleanly before (the memo). */
+        p->Enum.Usb2Bos = hc->Usb2Bos && p->Device->TtSlot == 0 &&
+                          !(ok && bytes == XHCI_ENUM_DEVICE_DESC_BYTES &&
+                            XhciEnumBosMemoHas(&hc->Usb2BosMemo,
+                                               hcdVidPid(s)));
         if (ok && bytes == XHCI_ENUM_DEVICE_DESC_BYTES) {
             hcdCopy(p->Device->DeviceDesc, s,
                          XHCI_ENUM_DEVICE_DESC_BYTES);
@@ -2657,6 +2681,11 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         }
         if (p->Enum.Speed != XHCI_ENUM_SPEED_SUPER) {
             XhciLogNote(&hc->Hc, "enum.bos.usb2", (bytes << 8) | outcome);
+            if (outcome != HCD_CTL_DONE && outcome != HCD_CTL_STALLED &&
+                outcome != HCD_CTL_ABANDONED) {
+                XhciEnumBosMemoAdd(&hc->Usb2BosMemo,
+                                   hcdVidPid(p->Device->DeviceDesc));
+            }
         }
         if (act->Length == XHCI_ENUM_BOS_HEAD_BYTES) {
             if ((!ok || bytes < XHCI_ENUM_BOS_HEAD_BYTES ||
@@ -2888,6 +2917,7 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
          * (batch (b)). */
         (VOID)XhciEnumStep(&p->Enum, &event, &act);
         if (act.Kind != XHCI_ENUM_ACT_NONE && hcdHalted(hc)) {
+            hcdBosHalt(hc, p);
             break;
         }
         if (!deferring && act.Kind != XHCI_ENUM_ACT_NONE &&
@@ -2914,6 +2944,9 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
             cause = p->Enum.FailCause;
             attempt = p->Enum.Retries;
             if (hcdHalted(hc) || !hcdPortConnected(hc, p)) {
+                if (hcdHalted(hc)) {
+                    hcdBosHalt(hc, p);
+                }
                 hcdNoteFail(hc, p, cause, attempt, 1);
                 break;
             }

@@ -1360,8 +1360,8 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    failure (`TR_QUAL_TRIES`); until then it is not counted. An answer of
    10 bytes of type 6 settles "High Speed capable". Each refresh's scan
    keeps only the answers of the candidates it saw, so a device that is
-   gone at a refresh is asked again when it comes back (43.27's Codex
-   round 1, 2026-10-22).
+   gone at a refresh is asked again when it comes back (43.27, reviewed and
+   revised 2026-10-22).
    On a root port a High Speed device runs at High Speed (every USB 2.0
    root port of an xHCI controller is High Speed), so a root port is
    never asked.
@@ -1418,13 +1418,15 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    of the left-click menu, "<n> USB device(s) can run faster...", open one
    window, "A USB device can run faster", listing every counted device
    (`tr_fast_entry`) in a read-only text box that scrolls, with a Close
-   button (Escape and Enter close it too): sized to two thirds of the
-   work area at most, so it fits a 640 by 480 screen, and resizable; one
+   button (Escape and Enter close it too): 80 columns of its fixed font
+   wide and two thirds of the work area high, never wider than the work
+   area, so it fits a 640 by 480 screen, and resizable; one
    such window at a time, its text read again when it is asked for again.
-   The text is built in a buffer that doubles from 16 KiB to 1 MiB until
-   it fits; past that it ends with "<n> more devices are not listed." (A
-   message box was the first build; Codex round 1 found that it neither
-   scrolls nor fits several devices on a 640 by 480 screen.) Each entry: its name
+   The text is built in a buffer that doubles from 16 KiB to 1 MiB (60
+   KiB on 98 SE and ME, whose edit control holds 64 KiB) until it fits,
+   each entry whole or not at all; past that it ends with "<n> more devices are not listed." (A
+   message box was the first build; it neither scrolls nor fits several
+   devices on a 640 by 480 screen.) Each entry: its name
    and VID:PID; "Port <path> of <controller>"; "Behind <hub> (<its
    speed>)" when it is behind a hub; "Runs at <speed>"; "Can run at
    <speed>"; "Try: <section 2's text>". The window's details of the

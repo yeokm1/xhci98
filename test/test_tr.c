@@ -2446,6 +2446,75 @@ static int fast_lines_fit(const char *s)
     return 1;
 }
 
+/* Section 7.6 item 1: the qualifier answers settle on a
+ * device's answer or the third request without one, and a scan drops the
+ * keys it did not see. */
+static void test_qual_cache(void)
+{
+    static TR_QUAL_CACHE c;
+    static const unsigned char hs[10] = {10, 6, 0, 2, 0, 0, 0, 64, 1, 0};
+    static const unsigned char bad[10] = {9, 6, 0, 2, 0, 0, 0, 64, 1, 0};
+    char key[TR_FAST_KEY];
+    int i;
+
+    memset(&c, 0, sizeof(c));
+    CHECK(tr_qual_get(&c, "a") == -1, "qual: unknown key asks");
+    CHECK(tr_qual_put(&c, "a", NULL, 0) == 0, "qual: no answer counts 0 now");
+    CHECK(tr_qual_get(&c, "a") == -1, "qual: one failure asks again");
+    CHECK(tr_qual_put(&c, "a", hs, 10) == 1, "qual: then the answer");
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: settled High Speed capable");
+    CHECK_EQ(c.N, 1, "qual: one entry");
+
+    tr_qual_put(&c, "b", NULL, 0);
+    tr_qual_put(&c, "b", NULL, 0);
+    CHECK(tr_qual_get(&c, "b") == -1, "qual: two failures still ask");
+    tr_qual_put(&c, "b", NULL, 0);
+    CHECK(tr_qual_get(&c, "b") == 0, "qual: the third settles Full Speed");
+
+    CHECK(tr_qual_put(&c, "c", bad, 10) == 0, "qual: malformed is 0");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: and settled at once");
+    CHECK(tr_qual_put(&c, "d", hs, 5) == 0, "qual: short is 0");
+    CHECK(tr_qual_get(&c, "d") == 0, "qual: settled at once");
+
+    /* A scan that sees a and c only drops b and d: b, gone and back, is
+     * asked again. */
+    tr_qual_begin(&c);
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: a seen");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: c seen");
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, 2, "qual: two kept");
+    CHECK(tr_qual_get(&c, "b") == -1, "qual: b gone, asked again");
+    CHECK(tr_qual_get(&c, "d") == -1, "qual: d gone");
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: a kept");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: c kept");
+    /* An entry asked in the scan (put) is seen too. */
+    tr_qual_begin(&c);
+    tr_qual_put(&c, "e", NULL, 0);
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, 1, "qual: only e kept");
+    CHECK(tr_qual_get(&c, "e") == -1, "qual: e unsettled, kept");
+    tr_qual_put(&c, "e", NULL, 0);
+    tr_qual_put(&c, "e", NULL, 0);
+    CHECK(tr_qual_get(&c, "e") == 0, "qual: e settled across scans");
+
+    /* Full: the oldest replaced. */
+    memset(&c, 0, sizeof(c));
+    for (i = 0; i < TR_FAST_MAX; i++) {
+        sprintf(key, "k%d", i);
+        tr_qual_put(&c, key, hs, 10);
+    }
+    CHECK_EQ(c.N, TR_FAST_MAX, "qual: full");
+    tr_qual_put(&c, "new", hs, 10);
+    CHECK_EQ(c.N, TR_FAST_MAX, "qual: no more than full");
+    CHECK(tr_qual_get(&c, "new") == 1, "qual: the newest kept");
+    CHECK(tr_qual_get(&c, "k0") == -1, "qual: the oldest dropped");
+    CHECK(tr_qual_get(&c, "k1") == 1, "qual: the next kept");
+    CHECK(tr_qual_get(NULL, "a") == -1, "qual: NULL asks");
+    CHECK(tr_qual_put(NULL, "a", hs, 10) == 1, "qual: NULL still answers");
+    tr_qual_begin(NULL);
+    tr_qual_end(NULL);
+}
+
 static void test_fast(void)
 {
     TR_FAST_IN in;
@@ -2989,6 +3058,7 @@ int main(void)
     test_usb_eject();
     test_elevated_stop();
     test_login();
+    test_qual_cache();
     test_fast();
     test_levels();
     test_labels();

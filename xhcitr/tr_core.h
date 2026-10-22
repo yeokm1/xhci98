@@ -700,6 +700,33 @@ void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
 /* 1 when key is not among the n keys of old (each TR_FAST_KEY wide). */
 int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
 
+/* The device_qualifier answers by key (item 1): Val 1 High Speed capable,
+ * 0 Full Speed only, -1 not settled yet, Tries the requests that got no
+ * answer. Zeroed is empty. */
+#define TR_QUAL_TRIES   3
+typedef struct _TR_QUAL_CACHE {
+    char Key[TR_FAST_MAX][TR_FAST_KEY];
+    int Val[TR_FAST_MAX];
+    int Tries[TR_FAST_MAX];
+    int Seen[TR_FAST_MAX];
+    int N;
+    int Next;
+} TR_QUAL_CACHE;
+
+/* The settled answer for key (1 or 0), marking it seen; -1 to ask. */
+int tr_qual_get(TR_QUAL_CACHE *c, const char *key);
+
+/* A request's n bytes for key: any bytes settle it (tr_qual_ok); none is a
+ * try, settled as 0 at the TR_QUAL_TRIES'th. Returns the answer to use
+ * now, 1 or 0. */
+int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
+                size_t n);
+
+/* A scan's start and end: the end drops the keys not seen since the
+ * start. */
+void tr_qual_begin(TR_QUAL_CACHE *c);
+void tr_qual_end(TR_QUAL_CACHE *c);
+
 /* The balloon's text for `count` new devices, the first named `name` with
  * *f (item 4). */
 #define TR_FAST_TITLE   "A USB device can run faster"

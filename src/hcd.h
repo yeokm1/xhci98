@@ -1917,6 +1917,9 @@ typedef struct _HCD_CONTROLLER {
      * start latched it, 1 when a High or Full Speed device declaring
      * bcdUSB 0210h or more is asked for its BOS. */
     ULONG Usb2Bos;
+    /* The devices whose read did not end cleanly (xhci_enum.h), kept for
+     * this start: a controller recovery does not clear it. */
+    XHCI_ENUM_BOS_MEMO Usb2BosMemo;
     /* The thread's claimed IRPs, completed by a pool of parked workers
      * (hcd_susp.c, hcdSuspDefer; record 14 section 3.12): the workers'
      * contexts and the pending IRPs, under SuspDoneLock; provisioned by

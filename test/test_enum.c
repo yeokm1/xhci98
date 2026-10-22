@@ -10,6 +10,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "../src/xhci.h"
 #include "../src/xhci_enum.h"
 #include "../src/xhci_hub.h"
@@ -918,6 +919,65 @@ static void test_usb2_bos(void)
     CHECK_EQ(a.Kind, XHCI_ENUM_ACT_GET_CONFIG, "hub retry 2: no BOS");
 }
 
+/* Task 43.27 (record 13 section 8.4.1's three rules): the
+ * memo of devices whose read must not be made again, and the halt rule. */
+static void test_usb2_bos_memo(void)
+{
+    XHCI_ENUM_BOS_MEMO m;
+    XHCI_ENUM_PORT p;
+    XHCI_ENUM_ACTION a;
+    ULONG i;
+
+    memset(&m, 0, sizeof(m));
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345678), 0, "memo: empty");
+    XhciEnumBosMemoAdd(&m, 0x12345678);
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345678), 1, "memo: added");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345679), 0, "memo: another not");
+    XhciEnumBosMemoAdd(&m, 0x12345678);
+    CHECK_EQ(m.Count, 1, "memo: a device once");
+    for (i = 1; i < XHCI_ENUM_BOS_MEMO_SLOTS; i++) {
+        XhciEnumBosMemoAdd(&m, 0x1000 + i);
+    }
+    CHECK_EQ(m.Count, XHCI_ENUM_BOS_MEMO_SLOTS, "memo: full");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345678), 1, "memo: the first kept");
+    XhciEnumBosMemoAdd(&m, 0x2000);
+    CHECK_EQ(m.Count, XHCI_ENUM_BOS_MEMO_SLOTS, "memo: no more than full");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x2000), 1, "memo: the ninth kept");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x12345678), 0,
+             "memo: the oldest replaced");
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x1001), 1, "memo: the second kept");
+    XhciEnumBosMemoAdd(&m, 0x2001);
+    CHECK_EQ(XhciEnumBosMemoHas(&m, 0x1001), 0, "memo: then the second");
+    CHECK_EQ(XhciEnumBosMemoHas(NULL, 1), 0, "memo: NULL has nothing");
+    XhciEnumBosMemoAdd(NULL, 1);
+
+    /* The halt rule: only an attempt that made the read, before its PDO. */
+    XhciEnumReset(&p);
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 0, "halt: an empty port");
+    CHECK_EQ(XhciEnumBosHaltMemo(NULL), 0, "halt: NULL");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 0, "halt: before the read");
+    desc18(&p, &a, 0x0210);
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 1, "halt: the read under way");
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_CONFIG9, "halt: on to the configuration");
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 1,
+             "halt: the configuration's timeout after the read");
+    step(&p, ev(XHCI_ENUM_EV_TRANSFER_DONE, 0), &a);
+    CHECK_EQ(p.State, XHCI_ENUM_FAILED, "halt: the configuration failed");
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 1, "halt: failed after the read");
+    XhciEnumRetry(&p, &a);
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 0, "halt: the retry has not read it");
+    usb2_to_desc18(&p, &a, XHCI_ENUM_SPEED_HIGH, 1, 1);
+    desc18(&p, &a, 0x0200);
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 0, "halt: a 2.0 device, no read");
+    ss_to_desc18(&p, &a);
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 0, "halt: SuperSpeed never");
+    drive_to_present(&p, XHCI_ENUM_SPEED_HIGH, 64);
+    p.Usb2BosTried = 1;
+    CHECK_EQ(XhciEnumBosHaltMemo(&p), 0, "halt: not once it is present");
+}
+
 /* Task 33.3: the first answer's settle, its pure half. */
 static void test_settle(void)
 {
@@ -1277,6 +1337,7 @@ int main(void)
     test_hub_port_attempts();
     test_superspeed();
     test_usb2_bos();
+    test_usb2_bos_memo();
     test_abandoned();
     test_settle();
     test_hub_let_go();

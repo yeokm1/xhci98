@@ -4817,7 +4817,7 @@ changed. Each such read leaves a log note instead, `enum.bos.usb2`, the
 bytes received shifted left 8 or'd with the `HCD_CTL_*` outcome.
 
 **A read that could cost the controller a reset is not made again**
-(43.27's Codex round 1, 2026-10-22). Item 3's retry does not cover the
+(43.27, reviewed and revised 2026-10-22). Item 3's retry does not cover the
 cases where the attempt ends in a controller recovery: `hcdRun` stops at
 the halt before `xhciEnumFail` can set `Usb2BosSkip`, and the recovery
 takes the attachment through disconnect and connect, which clears it. So

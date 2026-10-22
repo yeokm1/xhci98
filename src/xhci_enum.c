@@ -95,6 +95,52 @@ VOID XhciEnumReset(PXHCI_ENUM_PORT port)
     port->Usb2BosSkip = 0;
 }
 
+VOID XhciEnumBosMemoAdd(PXHCI_ENUM_BOS_MEMO memo, ULONG vidPid)
+{
+    ULONG i;
+
+    if (memo == NULL || XhciEnumBosMemoHas(memo, vidPid)) {
+        return;
+    }
+    if (memo->Count < XHCI_ENUM_BOS_MEMO_SLOTS) {
+        i = memo->Count++;
+    } else {
+        i = memo->Next % XHCI_ENUM_BOS_MEMO_SLOTS;
+    }
+    memo->VidPid[i] = vidPid;
+    memo->Next = (i + 1) % XHCI_ENUM_BOS_MEMO_SLOTS;
+}
+
+ULONG XhciEnumBosMemoHas(const XHCI_ENUM_BOS_MEMO *memo, ULONG vidPid)
+{
+    ULONG i;
+
+    for (i = 0; memo != NULL && i < memo->Count && i < XHCI_ENUM_BOS_MEMO_SLOTS;
+         i++) {
+        if (memo->VidPid[i] == vidPid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+ULONG XhciEnumBosHaltMemo(const XHCI_ENUM_PORT *port)
+{
+    if (port == NULL || !port->Usb2BosTried) {
+        return 0;
+    }
+    switch (port->State) {
+    case XHCI_ENUM_BOS5:
+    case XHCI_ENUM_BOS_FULL:
+    case XHCI_ENUM_CONFIG9:
+    case XHCI_ENUM_CONFIG_FULL:
+    case XHCI_ENUM_FAILED:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 ULONG XhciEnumWantsBos(ULONG speed, ULONG bcdUsb, ULONG on, ULONG skip)
 {
     if (speed == XHCI_ENUM_SPEED_SUPER) {
