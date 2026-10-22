@@ -1788,7 +1788,11 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    balloon, nothing more. It matters only to the no-answer case (a
    balloon gone unshown cannot be shown twice); 43.66's leg reads which
    messages 7 sends, and if 7 answers the dropped balloon with a timeout
-   the no-answer re-send can be removed. Where it was shown nothing changes:
+   the no-answer re-send can be removed. One race is left as it is: a
+   show still queued for another balloon of the tool's sent just before
+   the notice's (both in one poll) is taken as the notice's, and the notice
+   is then not sent again if it was in fact lost - the behaviour before
+   this item, never a second notice (reviewed 2026-10-23). Where it was shown nothing changes:
    XP showed ours after its "Found New Hardware" balloon (43.28), and a
    shown balloon is never sent again. 98 SE has no balloon (section 16)
    and nothing changes there. The text sent again is the one first sent,
