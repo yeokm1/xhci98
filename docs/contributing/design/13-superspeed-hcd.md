@@ -6346,9 +6346,16 @@ device still present, or a hub, keeps the reset.
    would find enabled and leave alone cannot strand the paused pipe; a
    device with no PDO yet - nothing more: it is the enumeration's, whose
    failed step runs its own DISABLE_SLOT and retries only where the port
-   still reads connected (section 10.2 step 7).
+   still reads connected (section 10.2 step 7). Not every read during
+   CREATE_PDO fails the creation (selective suspend's optional reads at
+   the end of a composite configuration, `HcdSuspCfgExit`, do not), so a
+   creation that succeeds with `Ep0Stuck` set and no reset asked has the
+   now-published device cycled (`hcdCreateLate`), or, for a hub or a
+   device with no PDO group, the reset `hcdCfgFault` keeps for them.
 4. **What is left behind** where no reset is requested: EP0 Stopped with
-   the thread's record still queued and `Ep0Stuck` set, so nothing more
+   the thread's record still queued (or already off the queue, where the
+   door's withdrawal took it off and then failed at Set TR Dequeue) and
+   `Ep0Stuck` set, so nothing more
    is sent to the device and its pipe stays paused; the scratch is not
    tainted. The teardown that follows (section 10.5, steps 3 and 4) finds
    EP0 not Running, drains the record with the rest (`HcdIoDeviceDrain`)

@@ -791,8 +791,9 @@ static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * decides in hcdCfgFault's order, and a published device leaving has its
  * location cycled here. Returns XHCI_TOL_LATE_DONE (it completed before
  * the stop), _RESET (the caller's recovery, as before), _LEFT or _CYCLE
- * (no reset: EP0 stays Stopped and paused with the record queued, for the
- * teardown to drain). Thread only, powered, EP0 paused, the thread's wait
+ * (no reset: EP0 stays Stopped and paused with the record queued - or
+ * already off the queue, a door withdrawal's Set TR Dequeue having failed -
+ * for the teardown to drain). Thread only, powered, EP0 paused, the thread's wait
  * over (ThreadEp0Dev cleared).
  */
 static ULONG hcdEp0Late(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
@@ -836,6 +837,31 @@ static ULONG hcdEp0Late(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         HcdCfgCycle(hc, dev);
     }
     return verdict;
+}
+
+/*
+ * After CREATE_PDO succeeded: a late transfer during it that found a
+ * device with no PDO yet leaving (hcdEp0Late's LEFT, Ep0Stuck and no reset)
+ * relied on a failed step for its teardown, and not every read there
+ * fails the creation - selective suspend's optional reads at the end of
+ * the composite configuration (HcdSuspCfgExit) among them. So the device,
+ * now published, is cycled as hcdEp0Late would have cycled it; a hub, or
+ * a device with no PDO group to cycle by, gets the reset hcdCfgFault keeps
+ * for them. Not for a reset already asked (hcdHalted) or a 35-T.3 abandon,
+ * whose own cycle is owed. Thread only.
+ */
+static VOID hcdCreateLate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          ULONG created)
+{
+    if (!created || dev == NULL || !dev->Ep0Stuck || dev->CycleAbandon ||
+        hcdHalted(hc)) {
+        return;
+    }
+    if (dev->Hub == NULL && dev->Pdo != NULL && dev->PdoGroup != 0) {
+        HcdCfgCycle(hc, dev);
+        return;
+    }
+    HcdSvcRequestReset(&hc->Hc);
 }
 
 /*
@@ -2756,6 +2782,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
                 XHCI_DBG_VALUE("hcd: hub PDO not created, location",
                                p->PortId);
             }
+            hcdCreateLate(hc, p->Device, 1);
             /* The port enumerated: a later give-up of it starts its re-arm
              * waits from the first (hcd_hub.c; the Phase 28-31
              * integration). */
@@ -2768,6 +2795,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         }
         hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED,
                      NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device)));
+        hcdCreateLate(hc, p->Device, next->Ok);
         XHCI_DBG_VALUE("hcd: device enumerated at location", p->PortId);
         if (next->Ok) {
             p->HubSsRearms = 0;
