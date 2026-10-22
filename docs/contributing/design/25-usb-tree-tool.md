@@ -1348,10 +1348,20 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    (`IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`, which `xhci98.sys`'s
    door forwards to the device) **once per candidate**: only for a port
    `tr_fast_wants_qual` admits (the conditions above but the answer), and
-   only when its key (item 4) is not among the answers kept from earlier
-   refreshes (32 at most, `TR_FAST_MAX`, the oldest dropped first). A
-   refused, short or malformed answer is "Full Speed only" and is kept as
-   such, so the device is never asked again while it stays on that port.
+   only when its key (item 4) has no settled answer kept from earlier
+   refreshes (`TR_QUAL_CACHE`, 32 at most, `TR_FAST_MAX`, the oldest
+   dropped first; `tr_qual_get`, `tr_qual_put`, `tr_qual_begin`,
+   `tr_qual_end`, host-tested). A short or malformed answer is "Full Speed
+   only" and is settled at once. No answer at all is not: the hub request
+   gives one result for a STALL (a Full Speed-only device's answer) and
+   for a transient failure (a suspended device, a request cancelled, an
+   allocation or open that failed), so it is asked again at the next
+   refreshes and settled as "Full Speed only" after the third such
+   failure (`TR_QUAL_TRIES`); until then it is not counted. An answer of
+   10 bytes of type 6 settles "High Speed capable". Each refresh's scan
+   keeps only the answers of the candidates it saw, so a device that is
+   gone at a refresh is asked again when it comes back (43.27's Codex
+   round 1, 2026-10-22).
    On a root port a High Speed device runs at High Speed (every USB 2.0
    root port of an xHCI controller is High Speed), so a root port is
    never asked.
@@ -1371,8 +1381,9 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
 3. **When it is read.** At every model refresh (`refresh_model`): the
    start, F5 and the window's automatic refresh, and the tray's refresh
    500 ms after each `DBT_DEVNODES_CHANGED`. Nothing new is polled. No
-   device is asked anything but item 1's High Speed candidate, once for
-   as long as it stays on its port; otherwise the scan's `_EX` and
+   device is asked anything but item 1's High Speed candidate, until its
+   answer is settled (three requests at most while it stays on its port);
+   otherwise the scan's `_EX` and
    `_EX_V2` requests are all it reads.
 4. **The set and its balloons.** Each counted device is keyed by its
    controller's driver key, its port path and its VID:PID (`tr_fast_key`);
@@ -1405,7 +1416,15 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    shell sends after `NIM_SETVERSION` 3; only for a balloon of this
    notice, the last one shown) and, while the icon is red, a first item
    of the left-click menu, "<n> USB device(s) can run faster...", open one
-   message box listing every counted device (`tr_fast_entry`): its name
+   window, "A USB device can run faster", listing every counted device
+   (`tr_fast_entry`) in a read-only text box that scrolls, with a Close
+   button (Escape and Enter close it too): sized to two thirds of the
+   work area at most, so it fits a 640 by 480 screen, and resizable; one
+   such window at a time, its text read again when it is asked for again.
+   The text is built in a buffer that doubles from 16 KiB to 1 MiB until
+   it fits; past that it ends with "<n> more devices are not listed." (A
+   message box was the first build; Codex round 1 found that it neither
+   scrolls nor fits several devices on a 640 by 480 screen.) Each entry: its name
    and VID:PID; "Port <path> of <controller>"; "Behind <hub> (<its
    speed>)" when it is behind a hub; "Runs at <speed>"; "Can run at
    <speed>"; "Try: <section 2's text>". The window's details of the

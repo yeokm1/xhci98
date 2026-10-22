@@ -4816,6 +4816,39 @@ counter block (word count 246, read by the matrix and by XHCITR) is not
 changed. Each such read leaves a log note instead, `enum.bos.usb2`, the
 bytes received shifted left 8 or'd with the `HCD_CTL_*` outcome.
 
+**A read that could cost the controller a reset is not made again**
+(43.27's Codex round 1, 2026-10-22). Item 3's retry does not cover the
+cases where the attempt ends in a controller recovery: `hcdRun` stops at
+the halt before `xhciEnumFail` can set `Usb2BosSkip`, and the recovery
+takes the attachment through disconnect and connect, which clears it. So
+the same device could time out again on the re-enumeration and reset the
+controller again, disturbing every other device on it. Three rules close
+that:
+
+1. **Not behind a TT.** A Full Speed device behind a High Speed hub
+   (`TtSlot` not 0) is not read: `hcdEp0Withdraw` refuses to withdraw
+   EP0 behind a TT, so its read's timeout is a controller reset. Nothing
+   is lost to the notice: a USB 3 device behind a High Speed hub connects
+   at High Speed, not Full.
+2. **The memo.** A read at High or Full Speed that ends other than done,
+   stalled or abandoned for a device cycle (`HCD_CTL_FAILED`,
+   `HCD_CTL_NOT_SENT`: an error other than a STALL, or no answer by the
+   deadline) records the device's VID:PID in the controller's
+   `Usb2BosMemo` (`XHCI_ENUM_BOS_MEMO`, 8 entries, the oldest replaced;
+   `XhciEnumBosMemoAdd` and `XhciEnumBosMemoHas`, pure, host vectors in
+   `test_enum.c`). It is recorded in `hcdPerform`, as soon as the read
+   returns, before the run looks for a halt. A device in the memo is not
+   read again for the controller's started life: the extension is zeroed
+   at start and not by a recovery, so a recovery keeps the memo and a
+   restart (a PnP stop and start, a reboot) clears it.
+3. **A halt after the read.** A run that stops at a controller halt after
+   this attempt made the read (`Usb2BosTried`) records the device in the
+   memo too, so a later step's timeout after a successful BOS read (the
+   configuration read, say) does not repeat with the read either. The
+   cost is that a device enumerating when an unrelated recovery or a stop
+   halts the controller loses the read until the next start; it then has
+   `_EX_V2`'s capable bits clear, as before this task.
+
 **The switch.** `XhciUsb2Bos`, a DWORD read at every start, machine-wide
 first as the other values are (`hcdReadDword`): only 0 turns the read off;
 absent, another number or another type is on. No INF writes it. The start
