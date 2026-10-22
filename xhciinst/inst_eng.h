@@ -293,7 +293,7 @@ void inst_eng_other_texts(int set, const char *dir, char *sentence,
                           size_t sCap, char *line, size_t lCap);
 void inst_eng_other_choose(int set, int include, int stage);
 void inst_eng_other_warnings(char *text, size_t cap);
-void inst_eng_other_summary(char *text, size_t cap);
+void inst_eng_other_summary(const char *dir, char *text, size_t cap);
 void inst_eng_other_finish(char *text, size_t cap);
 void inst_eng_s98_choose(int include);
 

@@ -21592,7 +21592,8 @@ static void other_print_plan(void)
         if (!o->Include) {
             out("%s: left out.\n", inst_other_label(set));
         } else {
-            out("%s: copied to %s\\%s%s.\n", inst_other_label(set), toolDir,
+            out("%s: copied to %s\\%s%s.\n", inst_other_label(set),
+                toolDir[0] ? toolDir : "the tools folder",
                 inst_other_folder(set), o->StageOn ?
                 ", and the INFs for this Windows staged" : " only");
         }
@@ -21876,7 +21877,12 @@ static int other_key_str(int set, const char *sub, const char *name,
 
 static int other_key_made(int set, DWORD v)
 {
-    return other_key_put(set, NULL, "RecordMade", REG_DWORD, &v, sizeof(v));
+    /* Flushed: 98 SE and ME keep the registry in memory, and a power cut
+     * after the copies would otherwise lose the record of them. */
+    int ok = other_key_put(set, NULL, "RecordMade", REG_DWORD, &v, sizeof(v));
+
+    RegFlushKey(HKEY_LOCAL_MACHINE);
+    return ok;
 }
 
 static int other_key_del_value(int set, const char *sub, const char *name)
@@ -22225,7 +22231,10 @@ static int other_copy_file(OTHSET *o, const char *recPath, const char *dest,
         free(buf);
         return 0;
     }
-    ok = WriteFile(h, bytes, n, &put, NULL) && put == n;
+    /* Flushed before its D line: a power cut on 98 SE and ME otherwise
+     * leaves a file the record calls whole with bytes never written. */
+    ok = WriteFile(h, bytes, n, &put, NULL) && put == n &&
+         FlushFileBuffers(h);
     CloseHandle(h);
     free(buf);
     if (ok) {
@@ -22345,6 +22354,44 @@ static int other_begin(int set, const char *dir, char *recPath, size_t cap)
                 recPath);
             flagSteps = 1;
             inst_copy(o->Why, "its record file is in doubt", sizeof(o->Why));
+            return 0;
+        }
+    }
+    /* No key, and a record file of this set and folder whose whole first
+     * line is its header: the key was lost (on 98 SE and ME a power cut
+     * before the registry was written out), the file is this installer's,
+     * and the key is made again for it (section 6.7.5). Any other file of
+     * that name is in doubt and left. */
+    if (r <= 0 && file_state(recPath) == 1) {
+        DWORD n = 0;
+        char *text = read_file(recPath, &n);
+        size_t hl;
+        inst_rec_header(header, sizeof(header), set, dir);
+        strcat(header, "\r\n");
+        hl = strlen(header);
+        if (text != NULL && n >= hl && memcmp(text, header, hl) == 0) {
+            free(text);
+            if (!other_key_str(set, NULL, "Record", recPath) ||
+                !other_key_str(set, NULL, "Dir", dir) ||
+                !other_key_str(set, NULL, "Sums", inst_other_sums(set)) ||
+                !other_key_made(set, 1)) {
+                flagFailed = 1;
+                inst_copy(o->Why, "its record could not be written",
+                          sizeof(o->Why));
+                return 0;
+            }
+            logonly("other: %s has no key and %s is its record: the key is "
+                    "made again\n", inst_other_subkey(set), recPath);
+            r = 1;
+            made = 1;
+        } else {
+            free(text);
+            out("%s is there and is not known to be this installer's: delete "
+                "it if it is not\nwanted, then run the installer again.\n",
+                recPath);
+            flagSteps = 1;
+            inst_copy(o->Why, "a file of its record's name is in the way",
+                      sizeof(o->Why));
             return 0;
         }
     }
@@ -23366,9 +23413,10 @@ void inst_eng_other_warnings(char *text, size_t cap)
                          oth[INST_SET_FREE].StageOn, text, cap);
 }
 
-void inst_eng_other_summary(char *text, size_t cap)
+void inst_eng_other_summary(const char *dir, char *text, size_t cap)
 {
     int set;
+    const char *d = dir != NULL && dir[0] ? dir : toolDir;
 
     if (cap == 0) {
         return;
@@ -23384,7 +23432,7 @@ void inst_eng_other_summary(char *text, size_t cap)
                       inst_other_label(set));
         } else {
             _snprintf(one, sizeof(one) - 1, "%s: copied to %s\\%s%s.",
-                      inst_other_label(set), toolDir, inst_other_folder(set),
+                      inst_other_label(set), d, inst_other_folder(set),
                       oth[set].StageOn ? ", its INFs for this Windows staged"
                                        : "; nothing installs them");
         }

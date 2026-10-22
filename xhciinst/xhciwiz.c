@@ -2700,7 +2700,7 @@ static void summary_fill(HWND dlg)
         }
         {
             char ol[900];
-            inst_eng_other_summary(ol, sizeof(ol));
+            inst_eng_other_summary(dirChoice, ol, sizeof(ol));
             if (ol[0] != '\0') {
                 char *p = ol;
                 while (*p != '\0') {

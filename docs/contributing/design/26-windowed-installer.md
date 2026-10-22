@@ -2794,9 +2794,19 @@ never writes to or deletes that file. A later run that finds
 present it cannot tell whose the file is, leaves it alone, and stops the
 set's copy with a step for the user (delete the file if it is not
 wanted, then run the installer again; the steps flag set), and the
-uninstall leaves it and the key the same way. A record file whose first
-line is not the header, or that cannot be read, stops the set's copy and
-the uninstall's deletion by it the same way. Each later line ends with
+uninstall leaves it and the key the same way. **A run that finds no key
+and a record file whose whole first line is this set's header for this
+folder** (on 98 SE and ME a power cut after the copies began can leave
+the file and lose the registry's key, which those systems write out
+later; read on the 43.48 leg of 2026-10-23) takes the file as this
+installer's, makes the key again with `RecordMade` 1, and recovers and
+appends to it; any other file of that name is in doubt, as above. Each
+write of `RecordMade` is followed by `RegFlushKey`, and each copied file
+is flushed (`FlushFileBuffers`) before its `D` line, so a power cut
+leaves fewer records naming bytes that were never written. A record file
+whose first line is not the header, or that cannot be read, stops the
+set's copy and the uninstall's deletion by it the same way. Each later
+line ends with
 CRLF and is one of:
 
 - `F <token> <sha256, lower case> <full path>`: a file a run is about to
@@ -3005,6 +3015,13 @@ the install, and nothing here removes a driver Windows installed (record
 
 #### 6.7.9 Not done, and owed
 
+- (Read on the 43.48 legs, 2026-10-23, `runs/run-43.md`.) On 98 SE a
+  device whose driver is in a staged folder installs with no wizard, but
+  the setup engine asks for the vendor's disk for each file, offering its
+  own source path (the Windows CD's), not the folder it found the INF in:
+  the user types the folder, which the Finish page lists. Whether a
+  `SourcePath` the installer sets could spare that, and at what cost to
+  the other installs, is owed.
 - The free set's rows cannot be read until a usb-wdm-free release with a
   `STAGE.TXT` qualifies; until then they are read only with stand-ins
   (`test-package.ps1`).
