@@ -1,7 +1,8 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 7, 2026-10-22, before code (roadmap-usb4 task 43.50),
-reviewed and revised six times the same day. Draft 7: the blocks of a
+Status: draft 8, 2026-10-22, before code (roadmap-usb4 task 43.50),
+reviewed and revised seven times the same day, converged. Draft 8: the
+volume's extents read on 2000 as well. Draft 7: the blocks of a
 write that did not complete marked unknown, the planning limit equal to
 the allocator's. Draft 6: the write
 generation taken by a saturating allocator under a critical section.
@@ -606,10 +607,11 @@ min").
   `GetFileInformationByHandle` on the open file (98 SE and later), checked
   against the serial numbers of the Windows directory's volume and the
   9x swap file's. On NT the volume must lie on one disk:
-  `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` (XP and later) on the volume, and
+  `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS` on the volume (2000 and later;
+  on 2000 for removable media from SP4, the target's service pack), and
   more than one extent gives a generic run with no Stor98 page ("this
-  volume spans several disks"); on 2000, where the volume is basic it is
-  one disk, and a dynamic volume is reported as "not known".
+  volume spans several disks"); a query that fails gives "not known" and
+  no Stor98 page.
 - Allowed with a note: the Windows drive ("the drive Windows runs from:
   other programs' activity will show in the results") and the drive of the
   98 SE or ME swap file.
