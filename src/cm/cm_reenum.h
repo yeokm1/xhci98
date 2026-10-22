@@ -341,6 +341,8 @@ typedef struct _CM_REENUM {
                                (cm_callwk.c, task 42-A.12)               */
     ULONG WkOpenSeen;       /* its opening read back                      */
     ULONG WkActive;         /* the owned-member mask it was last given    */
+    ULONG CallUsable;       /* members whose call worker opened its route,
+                               as last given to the worker (task 43.47)   */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
     ULONG DebtPending;      /* a tunnel change came while it was empty    */
     ULONG RediscoverAt;     /* NowMs of the last                          */

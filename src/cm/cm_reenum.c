@@ -2376,17 +2376,11 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
      * section 7.2 part 0): one per member, each opening its own route.
      * The route does not depend on them. */
     r->Callwk = CmCallwkStart(nhi, r->Members);
-    if (r->Callwk != NULL) {
-        /* Task 43.47: the members whose CONFIGMG worker claims may become
-         * vanished transactions, the ones with a live call worker. */
-        mask = 0;
-        for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
-            if (CmCallwkLive(r->Callwk, i)) {
-                mask |= 1UL << i;
-            }
-        }
-        CmCfgwkTakeover(r->Wk, mask);
-    }
+    /* Task 43.47: no member's CONFIGMG worker claim becomes a vanished
+     * transaction until that member's call worker has opened its route
+     * (CmReenumService posts the mask as the openings are read back). */
+    r->CallUsable = 0;
+    CmCfgwkTakeover(r->Wk, 0);
 }
 
 /*
@@ -2849,6 +2843,20 @@ VOID CmReenumService(PCM_NHI nhi)
     }
     cmCfgmgOpened(nhi);
     CmCallwkService(nhi, r->Callwk);
+    if (r->Wk != NULL && r->Callwk != NULL) {
+        /* Task 43.47: the members whose call worker opened its route, the
+         * ones a claim may be handed to. */
+        mask = 0;
+        for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+            if (CmCallwkUsable(r->Callwk, i)) {
+                mask |= 1UL << i;
+            }
+        }
+        if (mask != r->CallUsable) {
+            r->CallUsable = mask;
+            CmCfgwkTakeover(r->Wk, mask);
+        }
+    }
 }
 
 VOID CmReenumSuspend(PCM_NHI nhi)

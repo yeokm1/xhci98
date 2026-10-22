@@ -1629,7 +1629,7 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
             KeAcquireSpinLock(&cmEjLock, &irql);
             if (member != XHCI_TBT_NO_MEMBER &&
                 member < XHCI_TBT_MAX_TUNNELS &&
-                CmCallwkLive(nhi->Reenum.Callwk, member) &&
+                CmCallwkUsable(nhi->Reenum.Callwk, member) &&
                 CmEjClaimAdopt(&rec->Tx, cmEjClockMs)) {
                 rec->Nhi = NULL;
                 rec->LateRunning = 0;
@@ -2191,7 +2191,9 @@ BOOLEAN CmEjectSweep(PCM_NHI nhi, ULONG member)
 
     if (!cmEj9x(nhi) || member >= nhi->Reenum.Members ||
         member >= XHCI_TBT_MAX_TUNNELS ||
-        !CmCallwkLive(nhi->Reenum.Callwk, member)) {
+        !CmCallwkUsable(nhi->Reenum.Callwk, member)) {
+        /* No call worker with an open route: the CONFIGMG worker's own
+         * removal, as before. */
         return FALSE;
     }
     bridge = nhi->Reenum.Port[member].Bdf;

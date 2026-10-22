@@ -1684,12 +1684,14 @@ static VOID cmWkParked(PCM_CFGWK w, ULONG i)
         cr = CMG_CR_NO_SUCH_DEVNODE;
     }
     if (cr == CMG_CR_NO_SUCH_DEVNODE) {
-        (VOID)CmEjectClaimEnd(claim, CMG_CR_SUCCESS, CMG_CR_NO_SUCH_DEVNODE,
-                              now, now, 1, CM_EJ_NONE, 0, 0, TRUE, takeover);
+        /* Verified gone: its request withdrawn and the prune posted while
+         * the claim still holds the gate, then the claim ended. */
         if (entry != CM_EJ_NONE) {
             CmNvlinkWkWithdraw(entry, seq);
         }
         CmCfgwkPrune(w);
+        (VOID)CmEjectClaimEnd(claim, CMG_CR_SUCCESS, CMG_CR_NO_SUCH_DEVNODE,
+                              now, now, 1, CM_EJ_NONE, 0, 0, TRUE, takeover);
         cmWkLog(w, "cm.vanish.parked.gone", w->Port[i].Bdf);
         return;
     }
@@ -1706,6 +1708,12 @@ static VOID cmWkParked(PCM_CFGWK w, ULONG i)
     if (what == CM_EJ_DO_QUERY) {
         cr = CmCfgmgQueryRemove(&w->Cfgmg, devnode);
         cmWkLog(w, "cm.vanish.parked.query", (w->Port[i].Bdf << 8) | cr);
+        if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+            if (entry != CM_EJ_NONE) {
+                CmNvlinkWkWithdraw(entry, seq);
+            }
+            CmCfgwkPrune(w);
+        }
         if (cr != CMG_CR_SUCCESS) {
             (VOID)CmEjectClaimEnd(claim, cr, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE,
                                   0, 0, TRUE, takeover);

@@ -54,6 +54,7 @@ typedef struct _CM_CALLWK_M {
     ULONG Live;             /* its thread was made                        */
     ULONG OpenId;           /* the opening's operation id                 */
     ULONG OpenSeen;         /* ... read back                              */
+    ULONG Opened;           /* ... and it opened the route                */
     CM_CFGMG Cfgmg;         /* this worker's own route                    */
 } CM_CALLWK_M;
 
@@ -296,6 +297,12 @@ BOOLEAN CmCallwkLive(PCM_CALLWK b, ULONG member)
                      b->M[member].Live != 0);
 }
 
+BOOLEAN CmCallwkUsable(PCM_CALLWK b, ULONG member)
+{
+    return (BOOLEAN)(b != NULL && member < b->Members &&
+                     b->M[member].Live != 0 && b->M[member].Opened != 0);
+}
+
 VOID CmCallwkService(struct _CM_NHI *nhi, PCM_CALLWK b)
 {
     CM_CALLWK_M *m;
@@ -320,6 +327,8 @@ VOID CmCallwkService(struct _CM_NHI *nhi, PCM_CALLWK b)
             continue;
         }
         m->OpenSeen = 1;
+        m->Opened = (r == CM_CALL_T_TAKEN && got >= 4 && out[0] != 0) ? 1UL
+                                                                       : 0UL;
         CmLogNote(nhi, "cm.callwk.open",
                   (i << 24) | ((out[1] & 0xFFUL) << 16) |
                       (out[0] != 0 ? 0x00800000UL : 0) |

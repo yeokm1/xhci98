@@ -3733,7 +3733,9 @@ revised:
 - **The sweep: which children vanished, read at the down.** Wherever the
   domain asks a member's re-enumeration with its vanished children
   removed (a tunnel down's and a RESYNC's, an owed change's, a held
-  one's) and the member has a call worker with the host interface live,
+  one's) and the member has a call worker that has opened its own
+  CONFIGMG route (read back, not merely started) with the host interface
+  live,
   the thread no longer posts the removal to the domain's CONFIGMG worker:
   it enters the member's **sweep** at once, before its gates are looked
   at, and the re-enumeration it asked is held behind the member's gate
@@ -3885,7 +3887,8 @@ revised:
   makes a vanished child's claim - the worker's own vanished-child
   removal, or a claim a sweep marked - the vanished transaction in its
   query phase, its retries owed. A takeover is made only for a member
-  whose call worker is live (the thread tells the CONFIGMG worker which):
+  whose call worker has opened its route (the thread tells the CONFIGMG
+  worker which, as the openings are read back):
   otherwise nothing could make the transaction's calls, and the claim
   **parks** instead (still `CM_EJ_P_CLAIMED`, the member's gate and the
   barrier up, its state kept: a vanished child's refused query, or an
@@ -3895,8 +3898,9 @@ revised:
   count: each is taken up again 2 s after its last attempt - its devnode's
   instance id read back first (gone: freed; not read: parked again) - and
   makes its query again where it was refused, or its removal alone where
-  it was accepted (never a second query), its request withdrawn on
-  success; it parks again on a refusal or a failure. A start whose
+  it was accepted (never a second query), its request withdrawn and the
+  prune walk posted on success or on the devnode found gone, before the
+  claim lets the gate fall; it parks again on a refusal or a failure. A start whose
   member has a live call worker takes a parked claim over as the
   transaction. The record a takeover makes belongs to no start and is
   adopted by the running one as a stopped start's is.
