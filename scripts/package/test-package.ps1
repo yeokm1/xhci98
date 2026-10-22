@@ -4667,6 +4667,40 @@ try {
     Assert-True ((Get-PeImageDigest -Bytes $catSigned -End 1088) -ne (Get-PeImageDigest -Bytes $catU)) `
         "Get-PeImageDigest ignored the -End it was given."
 
+    # The trust list's extensions, encoded by hand: a critical flag is
+    # admitted only in DER (one byte, TRUE).
+    function New-Der {
+        param([int]$Tag, [byte[]]$Body)
+        $n = $Body.Length
+        $len = if ($n -lt 0x80) { @($n) } elseif ($n -lt 0x100) { @(0x81, $n) } else { @(0x82, ($n -shr 8), ($n -band 0xFF)) }
+        return ,[byte[]](@($Tag) + $len + $Body)
+    }
+    function New-CatOid { param([byte[]]$Body) return ,(New-Der -Tag 0x06 -Body $Body) }
+    $ctlNvOid = New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x02, 0x01))
+    $ctlNv = New-Der -Tag 0x30 -Body ([byte[]]((New-Der -Tag 0x1E -Body ([System.Text.Encoding]::BigEndianUnicode.GetBytes("OSAttr"))) +
+                                               [byte[]](0x02, 0x04, 0x10, 0x01, 0x00, 0x01) +
+                                               (New-Der -Tag 0x04 -Body ([System.Text.Encoding]::Unicode.GetBytes($script:CatalogOsAttr + [char]0)))))
+    function New-TestCtl {
+        param([byte[]]$Critical)
+        $usage = New-Der -Tag 0x30 -Body (New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x01, 0x01)))
+        $time = New-Der -Tag 0x17 -Body ([System.Text.Encoding]::ASCII.GetBytes("261022000000Z"))
+        $alg = New-Der -Tag 0x30 -Body ([byte[]]((New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x01, 0x02))) + [byte[]](0x05, 0x00)))
+        $ext = New-Der -Tag 0x30 -Body ([byte[]]($ctlNvOid + $Critical + (New-Der -Tag 0x04 -Body $ctlNv)))
+        $exts = New-Der -Tag 0xA0 -Body (New-Der -Tag 0x30 -Body $ext)
+        return ,(New-Der -Tag 0x30 -Body ([byte[]]($usage + $time + $alg + $exts)))
+    }
+    $ctlOk = ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical ([byte[]]@()))
+    Assert-True (@($ctlOk.OsAttr).Count -eq 1 -and @($ctlOk.OsAttr)[0] -eq $script:CatalogOsAttr -and @($ctlOk.Members).Count -eq 0) `
+        ("ConvertFrom-CatalogTrustList misread a hand-encoded list: OSAttr '{0}', {1} members." -f (@($ctlOk.OsAttr) -join '|'), @($ctlOk.Members).Count)
+    $ctlTrue = ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical ([byte[]](0x01, 0x01, 0xFF)))
+    Assert-True (@($ctlTrue.OsAttr)[0] -eq $script:CatalogOsAttr) "ConvertFrom-CatalogTrustList refused an extension marked critical in DER."
+    foreach ($badBool in @(@{ Name = "empty"; B = [byte[]](0x01, 0x00) }, @{ Name = "FALSE"; B = [byte[]](0x01, 0x01, 0x00) },
+                           @{ Name = "not FF"; B = [byte[]](0x01, 0x01, 0x01) }, @{ Name = "two bytes"; B = [byte[]](0x01, 0x02, 0x00, 0xFF) })) {
+        $threw = $false
+        try { [void](ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical $badBool.B)) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-CatalogTrustList accepted the '{0}' critical flag, which is not DER." -f $badBool.Name)
+    }
+
     $makeCatExe = Join-Path $repo "tools\WinDDK71\bin\x86\MakeCat.exe"
     if (Test-Path -LiteralPath $makeCatExe) {
         Write-Step "x64 catalogs: the parser, on a catalog MakeCat makes of stand-ins"

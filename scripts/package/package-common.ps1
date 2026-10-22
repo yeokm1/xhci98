@@ -653,10 +653,32 @@ function Read-CatalogFile {
         $stamped = ($signer.UnsignedAttributes.Count -gt 0)
     }
     $contentType = $cms.ContentInfo.ContentType.Value
-    $c = $cms.ContentInfo.Content
     if ($contentType -ne $script:CtlOid) {
         throw ("the catalog's content is {0}, not a certificate trust list ({1})" -f $contentType, $script:CtlOid)
     }
+    $list = ConvertFrom-CatalogTrustList -Content $cms.ContentInfo.Content
+    return [pscustomobject]@{
+        SignerCount    = $signerCount
+        Thumbprint     = $thumb
+        Subject        = $subject
+        DigestOid      = $digestOid
+        SignatureValid = $valid
+        Timestamped    = $stamped
+        ContentType    = $contentType
+        Usage          = $list.Usage
+        MemberAlgOid   = $list.MemberAlgOid
+        OsAttr         = $list.OsAttr
+        Members        = $list.Members
+    }
+}
+
+function ConvertFrom-CatalogTrustList {
+    # A catalog's certificate trust list (the signed content), parsed: its
+    # usage, member algorithm, OSAttr and members, as Read-CatalogFile
+    # reports them. Separate so test-package.ps1 can drive it with encoded
+    # lists that no signer has signed.
+    param([byte[]]$Content)
+    $c = $Content
     # CertificateTrustList ::= SEQUENCE { version INTEGER OPTIONAL,
     #   subjectUsage SEQUENCE OF OID, listIdentifier OCTET STRING OPTIONAL,
     #   sequenceNumber INTEGER OPTIONAL, thisUpdate Time, nextUpdate Time
@@ -754,7 +776,12 @@ function Read-CatalogFile {
             $xOid = Read-DerTlv -B $c -At $x.ValueAt -Limit $x.End
             if ($xOid.Tag -ne 0x06) { throw "a catalog extension has no OID" }
             $xVal = Read-DerTlv -B $c -At $xOid.End -Limit $x.End
-            if ($xVal.Tag -eq 0x01) { $xVal = Read-DerTlv -B $c -At $xVal.End -Limit $x.End }
+            if ($xVal.Tag -eq 0x01) {
+                if ($xVal.Length -ne 1 -or $c[$xVal.ValueAt] -ne 0xFF) {
+                    throw "a catalog extension's critical flag is not DER (one byte, TRUE; FALSE is the default and is not encoded)"
+                }
+                $xVal = Read-DerTlv -B $c -At $xVal.End -Limit $x.End
+            }
             if ($xVal.Tag -ne 0x04 -or $xVal.End -ne $x.End) { throw "a catalog extension's value is not its last OCTET STRING" }
             if ((ConvertFrom-DerOid -B $c -At $xOid.ValueAt -Length $xOid.Length) -eq $script:CatNameValueOid) {
                 $nv = ConvertFrom-CatNameValue -B $c -At $xVal.ValueAt -End $xVal.End
@@ -763,19 +790,7 @@ function Read-CatalogFile {
             $q = $x.End
         }
     }
-    return [pscustomobject]@{
-        SignerCount    = $signerCount
-        Thumbprint     = $thumb
-        Subject        = $subject
-        DigestOid      = $digestOid
-        SignatureValid = $valid
-        Timestamped    = $stamped
-        ContentType    = $contentType
-        Usage          = $usage
-        MemberAlgOid   = $memberAlg
-        OsAttr         = @($osAttr)
-        Members        = @($members)
-    }
+    return @{ Usage = $usage; MemberAlgOid = $memberAlg; OsAttr = @($osAttr); Members = @($members) }
 }
 
 function New-PackageCatalogFile {
@@ -791,7 +806,6 @@ function New-PackageCatalogFile {
     $cdf = New-Object System.Collections.ArrayList
     [void]$cdf.Add("[CatalogHeader]")
     [void]$cdf.Add("Name=$CatName")
-    [void]$cdf.Add("ResultDir=$catDir")
     [void]$cdf.Add("PublicVersion=0x0000001")
     [void]$cdf.Add("EncodingType=0x00010001")
     [void]$cdf.Add("CATATTR1=0x10010001:OSAttr:$($script:CatalogOsAttr)")
@@ -801,11 +815,11 @@ function New-PackageCatalogFile {
         if (-not (Test-Path -LiteralPath $fp -PathType Leaf)) {
             throw "$CatName covers '$f', which the package does not hold."
         }
-        # MakeCat reads the copy in its work folder, so a path it cannot
-        # take (a space, an equals sign) in the caller's -OutDir never
-        # reaches the CDF.
+        # MakeCat reads the copy in its work folder, by a name relative to
+        # it, so no path - one with a space, an equals sign or a character
+        # the ASCII CDF cannot carry - ever reaches the CDF.
         Copy-Item -LiteralPath $fp -Destination (Join-Path $catDir $f) -Force
-        [void]$cdf.Add("<HASH>$f=$(Join-Path $catDir $f)")
+        [void]$cdf.Add("<HASH>$f=$f")
         [void]$cdf.Add("<HASH>${f}ATTR1=0x10010001:File:$f")
     }
     $cdfPath = Join-Path $catDir "catalog.cdf"
@@ -814,10 +828,16 @@ function New-PackageCatalogFile {
     if (Test-Path -LiteralPath $catPath) { Remove-Item -LiteralPath $catPath -Force }
     $savedEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+    Push-Location -LiteralPath $catDir
+    $savedCwd = [System.IO.Directory]::GetCurrentDirectory()
     try {
-        $mkOut = & $MakeCat $cdfPath 2>&1 | Out-String
+        # The process's own directory too, which a native child inherits.
+        [System.IO.Directory]::SetCurrentDirectory($catDir)
+        $mkOut = & $MakeCat "catalog.cdf" 2>&1 | Out-String
         $mkRc = $LASTEXITCODE
     } finally {
+        [System.IO.Directory]::SetCurrentDirectory($savedCwd)
+        Pop-Location
         $ErrorActionPreference = $savedEap
     }
     if ($mkRc -ne 0 -or -not (Test-Path -LiteralPath $catPath)) {
