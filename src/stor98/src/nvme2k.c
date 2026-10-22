@@ -844,8 +844,13 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
     if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && Srb->Cdb[0] == SCSIOP_READ &&
         ++DevExt->TestNoAsReads % STOR98_TEST_NOAUTOSENSE == 0) {
         UCHAR senseLen = Srb->SenseInfoBufferLength;
+        BOOLEAN tagged = (BOOLEAN)((Srb->SrbFlags & SRB_FLAGS_QUEUE_ACTION_ENABLE) &&
+                                   Srb->QueueTag != SP_UNTAGGED);
 
         DBGSTAGE(STG_TEST_NOAS, (ULONG)(ULONG_PTR)Srb->DataBuffer);
+        // A new READ ends the sense kept for earlier commands (sense.c), as
+        // EngStartIo would have done.
+        ScsiSenseNewCommand(DevExt, Srb);
         Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
         // No room for autosense: the kept path of ScsiSetSense.
         Srb->SenseInfoBufferLength = 0;
@@ -853,7 +858,9 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         Srb->SenseInfoBufferLength = senseLen;
         Srb->DataTransferLength = 0;
         ScsiError(DevExt, Srb, SRB_STATUS_ERROR);
-        ScsiPortNotification(NextRequest, DeviceExtension, NULL);
+        // The engine's own queue-readiness accounting (NextRequest, or the
+        // NextLuRequest a tagged request owes).
+        EngStartIoTail(DevExt, tagged);
         return TRUE;
     }
 #endif
