@@ -2192,10 +2192,10 @@ them under "WARNING:".
 
 **The set's key first.** Before the first file is touched,
 `HKLM\Software\xhci98\Other\Free` (or `\NonFree`) holds `Record` (the
-record file's path), `Dir` (the folder the copies go to) and `Sums` (the
-hash of the `SHA256.TXT` they are made from); a write that fails stops
-the set's copy (said, the failed flag set). The uninstall finds a set by
-this key.
+record file's path), `RecordMade` (0), `Dir` (the folder the copies go
+to) and `Sums` (the hash of the `SHA256.TXT` they are made from); a write
+that fails stops the set's copy (said, the failed flag set). The
+uninstall finds a set by this key.
 
 **An earlier copy elsewhere or of another release.** When the key names
 another `Dir` (the install directory moved, record 23 section 9.6) or
@@ -2213,19 +2213,27 @@ for every component), wherever they are.
 `\NONFREE.REC`, ASCII, CRLF, a file and not registry values because on 98
 SE and ME a registry key holds at most 64 KB of values and `NONFREE\`'s
 457 files would pass that. Its first line is `XHCI98 SET RECORD 1 <Free or
-NonFree> <Dir>`. It is made with `CREATE_NEW` and its header written and
-flushed before the key's `Record` names it; a file of that name the key
-does not name is taken over only when its bytes are that exact header or
-a beginning of it (a run cut short while making it), and is otherwise
-left alone and stops the set's copy, as does one whose first line is not
-the header or that cannot be read (said, with the steps flag). Each later
-line ends with CRLF and is one of:
+NonFree> <Dir>`. With the key written, it is made with `CREATE_NEW`, its
+header written and flushed, and only then `RecordMade` set to 1. When
+`CREATE_NEW` fails (a file of that name is there) the run takes the
+values it just wrote out of the key and stops the set's copy, said, and
+never writes to or deletes that file. A later run that finds
+`RecordMade` 0 with the file absent starts it afresh; with the file
+present it cannot tell whose the file is, leaves it alone, and stops the
+set's copy with a step for the user (delete the file if it is not
+wanted, then run the installer again; the steps flag set), and the
+uninstall leaves it and the key the same way. A record file whose first
+line is not the header, or that cannot be read, stops the set's copy and
+the uninstall's deletion by it the same way. Each later line ends with
+CRLF and is one of:
 
 - `R <8 hex digits>`: a run's token, chosen at random by each run that
-  copies, written before its first temporary file;
+  copies, written before its first temporary file; every line after it,
+  up to the next `R`, is that run's;
 - `F <sha256, lower case> <full path>`: a file this run is about to make;
+- `T <full path>`: its temporary file made by this run (below);
 - `D <full path>`: that file made, with its recorded bytes;
-- `A <full path>`: that file not made (its temporary file deleted).
+- `A <full path>`: that file not made.
 
 A last line without its CRLF is a write cut short and is dropped; any
 other line that does not read so makes the record unreadable, which stops
@@ -2242,25 +2250,28 @@ bytes the read hashed, is copied to `<Dir>\<relative path>` by section
    unreadable - is left as it is and never recorded;
 2. the line `F <hash> <full path>` is appended to the record and flushed
    (`FlushFileBuffers`);
-3. the bytes are written to `<full path>.~<the run's token>`, made with
-   `CREATE_NEW`, hashed as they are written;
-4. it is moved to its name with `MoveFileA`, which never replaces, and
+3. `<full path>.~<the run's token>` is made with `CREATE_NEW`; when that
+   fails (the name is taken) `A <full path>` is appended and nothing is
+   deleted; otherwise `T <full path>` is appended and flushed;
+4. the bytes are written to it, hashed as they are written;
+5. it is moved to its name with `MoveFileA`, which never replaces, and
    `D <full path>` is appended.
 
-When step 3 or 4 fails (the hash is not the line's, the temporary name
-is taken, a write fails) the temporary file this run made, if it made
-one, is deleted, `A <full path>` is appended, and the run goes on with
-the next file. **Recovery** (the next run, ticked or not, and the
-uninstall, before anything else of the set): for each `F` line with no
-`D` or `A` after it, the temporary file `<full path>.~<token>` of every
-token the record names is this installer's (no other program makes a
-file of that name: the token is chosen at random and recorded before the
-file is made) and is deleted, and the file is this installer's only when
-it is present with the recorded bytes; the line is then closed with `D`
-or `A`. A file present with the recorded bytes under a `D` line is this
-installer's. The run says how many of the set's files are in the folder
-and names up to three it left out; a later ticked run copies what is
-still absent.
+When step 4 or 5 fails (the hash is not the line's, a write fails) the
+temporary file is deleted, `A <full path>` is appended, and the run goes
+on with the next file. **Recovery** (the next run, ticked or not, and the
+uninstall, before anything else of the set), for each `F` line with no
+`D` or `A` after it, by its own run's token alone: with a `T` line, the
+temporary file `<full path>.~<token>` is this installer's and is deleted;
+without one, a file of that name is not known to be this installer's (a
+run cut short between steps 2 and 3, or between the `CREATE_NEW` and its
+`T` line): it is left, named in a step for the user (delete it if it is
+not wanted), with the steps flag. The file itself is this installer's
+only when it is present with the recorded bytes, and the line is then
+closed with `D`, or else with `A`. A file present with the recorded
+bytes under a `D` line is this installer's. The run says how many of the
+set's files are in the folder and names up to three it left out; a later
+ticked run copies what is still absent.
 
 #### 6.7.6 Ticked: let Windows use them at the first plug
 
@@ -2296,8 +2307,8 @@ and said with the file that stopped it.
   `%windir%\inf` (the `oem<n>.inf` names and the original names alike,
   since the call may answer with either) whose bytes are this INF's. The
   record is a value of the `Staged` subkey named for the INF's relative
-  path, written before the call with the data `pending <the inventory's
-  names>`, and after it:
+  path, written before the call with the data `pending <the INF's
+  SHA-256> <the inventory's names>`, and after it:
   - the call failed: the value deleted;
   - it returned a name the inventory held: an INF already in the store,
     not this installer's. The value's data becomes `foreign <name> <the
@@ -2311,15 +2322,18 @@ and said with the file that stopped it.
     is not read for these sets: a proposal, said in the same sentence;
   - it returned a new name: `own <name> <the INF's SHA-256>`.
 
-  An INF whose value is `own` with its name still holding those bytes is
-  staged already and is not staged again; one whose value is `foreign`
-  is not called again either. **A `pending` value** found by a later run
-  or the uninstall is a run cut short at the call: whose any new INF of
-  those bytes is cannot be told, so none is taken as this installer's;
-  each such INF not in the recorded inventory becomes a `foreign` value
-  (its folder kept, the INF never removed), the run says an interrupted
-  run may have left it in the driver store, and with none found the value
-  is deleted. On 64-bit Vista and 7 the call stores an unsigned or
+  An INF whose value is `own` or `foreign` with its name still holding
+  those bytes is staged already and is not staged again; one whose name
+  no longer does has its value deleted and is staged as any other, and
+  one whose name cannot be read is left as it is (said). **A `pending`
+  value** found by a later run or the uninstall is a run cut short at the
+  call: which INF the call answered with cannot be told, and it may have
+  pointed an inventoried INF's source at `<Dir>`, so none is taken as
+  this installer's and every INF of `%windir%\inf` holding those bytes,
+  inventoried or new, becomes a `foreign` value of its own (named for the
+  INF's relative path and the stored name; its folder kept, the INF never
+  removed); the run says an interrupted run may have left a copy in the
+  driver store, and with none found the value is deleted. On 64-bit Vista and 7 the call stores an unsigned or
   test-signed package after Windows' own publisher question, which the
   user answers; a refusal is said and nothing recorded. Whether the driver
   then loads is the system's signature policy, which the warning of
@@ -2365,15 +2379,18 @@ the records, each step only when the one before left nothing.
   INF is not this installer's: its value goes and the file stays) and no
   devnode's driver key names it as its `InfPath` (`s98_un_inf_nt`'s
   rule), with `SetupUninstallOEMInf` where Windows has it and on 2000 the
-  `.pnf` and then the `.inf` deleted (KB 813449's order). An INF a
-  device's driver names stays, said, and its value goes.
+  `.pnf` and then the `.inf` deleted (KB 813449's order), and its value
+  then deleted. An INF a device's driver names, or that cannot be
+  removed, stays, said, and its value is kept until the set's key goes.
 - **The folders kept**: on 2000 and XP, Windows installs a device again
   from the source an INF in its store was staged from (record 23 section
   4.4's reason for a permanent copy), so the folder at `<Dir>` of every
   `own` INF kept in the store above, and of every `foreign` INF whose
   name still holds the recorded bytes, is kept whole, by the record and
   whatever the folder's files now are; the folder's files become the
-  user's and the run names the folder; the `foreign` values then go. A
+  user's and the run names the folder. The values that keep a folder go
+  only with the set's key, after the copies' step has finished, so an
+  uninstall cut short anywhere before decides the same way again. A
   store that cannot be read (`%windir%\inf` not listed, a recorded name
   not readable) keeps every folder with a staged value and leaves the
   uninstall incomplete (said, the steps flag set), as an unreadable
