@@ -241,6 +241,13 @@ to be approved, could not be approved or was disconnected, and when the
 controller stops answering: in a balloon on Windows ME, 2000 and later,
 and in the icon's tooltip on Windows 98 SE.
 
+Windows 98 SE has no balloons, so there the tool also shows a pop-up of
+its own beside the icon in their place, for each event a balloon
+reports elsewhere and for the outcome of a removal started from the
+icon. The pop-up takes no focus; it closes after 10 seconds, or by its
+close box or a right click; a click on it does what a click on a
+balloon does; several wait their turn.
+
 From a command line
 -------------------
 
