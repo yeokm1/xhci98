@@ -3453,6 +3453,16 @@ and 1 set, no `usbxhci` test on that branch) but no status in Devices and
 Printers (the provider tests `usbxhci` first). Both predictions are
 static, for the Windows 8 VM (6.12.9).
 
+**A computer with both drivers.** The `usbxhci` test asks for *any*
+`GUID_DEVINTERFACE_USB_HOST_CONTROLLER` devnode whose service is
+`usbxhci` or `usbxhci_dsf` with problem 0, not the stick's own
+controller. On a computer where one xHCI controller runs `xhci98.sys` and
+another runs Windows' own driver, the test passes, and once bit 1 is
+answered at High Speed (8.4.1) the details pane would show "can perform
+faster" for a stick on the `xhci98.sys` controller too, and Devices and
+Printers its status. So "no line under `xhci98.sys`" holds only where no
+controller runs `usbxhci` (static; not read on a VM with both).
+
 **Windows 7's High-Speed notice (measured, 2026-10-22).** One Windows 7
 SP1 x86 guest: an overlay of `w7x86-p38f.qcow2` (the Phase 38 matrix
 overlay of `mtx-w7x86-f`, `xhci98.sys` from the 2.4.0.0 dry cut on
@@ -3470,8 +3480,9 @@ port 1, hot-plugged at the desktop; QEMU's
 
 The balloon's text is 7's `usbui.dll` strings 83 and 82. Its trigger,
 `usbhub.sys`'s notification (the `USB_NOTIFICATION` route roadmap 43.25
-names), was not read here; `src\` registers no WMI provider (no
-`IoWMIRegistrationControl`), so this bus raises no such notification.
+names), was not read here, so how it reaches the shell is unverified;
+what is read is that `src\` registers no WMI provider (no
+`IoWMIRegistrationControl`) and raises nothing that route could carry.
 Vista was not run.
 
 **Options for 43.30** (the owner to pick; none is taken here):
@@ -3481,8 +3492,15 @@ Vista was not run.
    every connection. It is what 43.27's tray notice needs on every target,
    and Explorer's capable test on 8 and 8.1. Alone it does not bring
    Explorer's "can perform faster" under `xhci98.sys` (the `usbxhci`
-   test); it changes every such device's enumeration by two requests, the
-   risk 8.4 named. Designed in 8.4.1 as 43.27's prerequisite, shared
+   test), except on a computer where another controller runs `usbxhci`
+   (above); it changes every such device's enumeration by two requests, the
+   risk 8.4 named. Its compatibility requirement: a device may stall the
+   request, time out or answer a malformed BOS, and a `bcdUSB` of 0x0210
+   does not promise usable flags, so every failure must leave the
+   enumeration going on (the SuperSpeed path's continue-on-failure,
+   `xhci_enum.c` states Bos5 and BosFull), EP0 recovered before the
+   configuration reads, and the capability "not known" (no flag) rather
+   than "not capable" when the BOS cannot be read. Designed in 8.4.1 as 43.27's prerequisite, shared
    with 43.30 (2026-10-22).
 2. **Answer `_EX` `Speed` 3 for SuperSpeed on NT 6.2 and later** (8.4 keeps
    2 because Vista's and 7's pages test for exactly 2): Explorer already
@@ -3490,20 +3508,31 @@ Vista was not run.
    listed only because the details pane reads it. What 8's `usbui.dll`
    pages do with a 3 is not read.
 3. **XHCITR's own notice (43.27) on by default on 8 and 8.1 under
-   `xhci98.sys`**, since by this reading Windows' line cannot appear there
-   (its rule: on by default where Windows shows no notice of its own under
-   this driver); with option 1 for its input.
+   `xhci98.sys`**, since by this reading Windows' line does not appear
+   there unless another controller runs `usbxhci` (above; on such a
+   computer both could show for one stick); its rule: on by default where
+   Windows shows no notice of its own under this driver; with option 1
+   for its input.
 4. **The release notes and 43.29's install note** say that under
    `xhci98.sys` on 8 and 8.1 the details pane shows "Connected to USB 3.0"
-   but never "can perform faster", and on Vista and 7 that the High-Speed
-   balloon is not raised (measured on 7).
+   but no "can perform faster" while no controller runs Windows' own
+   driver, and on Vista and 7 that the High-Speed balloon is not raised
+   (measured on 7).
 5. **A High-Speed notice under this bus on Vista and 7** (the balloon
-   Microsoft's stack raises, measured above): only through XHCITR (43.27
-   widened to a High-Speed device behind a Full-Speed hub), since the
-   balloon's route is `usbhub.sys`'s WMI notification.
+   Microsoft's stack raises, measured above): through XHCITR (43.27
+   widened to a High-Speed device behind a Full-Speed hub). The balloon's
+   own route is taken to be `usbhub.sys`'s `USB_NOTIFICATION` through WMI,
+   unverified (above); serving that native contract from the bus, so that
+   7's own balloon appears, is an alternative not explored here.
 
-Not offered: answering the `usbxhci` test (it reads the controller's
-service name, which only Windows' own driver has).
+Not offered: answering the `usbxhci` test. It reads the controller's
+service name, and naming this driver's service `usbxhci` would collide
+with Windows' own service of that name on 8 and later (and with
+`usbxhci.inf`'s install), and would break what this package's installer
+owns by that name: its update and uninstall find `xhci98.sys`'s
+devices by the service `xhci98` (`inst_own_service` in
+`xhciinst\inst_core.c`; the uninstall's device removal in
+`inst_eng.c`).
 
 **Owed to the Windows 8 VM (6.12.9):** under Microsoft's stack, the line
 for a SuperSpeed stick on a USB 2.0 port and "Connected to USB 3.0" on a
