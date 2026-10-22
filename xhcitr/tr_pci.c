@@ -925,6 +925,7 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
     TR_U32 j;
     TR_U32 below;
     TR_U32 shown;
+    int walked;
     char loc[48];
 
     tr_put(t, "PCI configuration, read through xhcicm.sys\n");
@@ -987,11 +988,17 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
                 state_text(t, 8, b.State);
             }
         }
-        if (below == 0 && nt && e.Valid < 0x1C) {
+        /* Task 43.63: a 98 SE or ME driver that reads below the port
+         * (task 42-A.14) leaves CM_QP_F_BELOW_OS clear, so an empty port
+         * there is "None found." as on NT; one that does not read below
+         * sets it and lists a CM_QP_S_NOT_READ_OS entry per member, whose
+         * reason is said above. */
+        walked = nt || (q->Flags & CM_QP_F_BELOW_OS) == 0;
+        if (below == 0 && walked && e.Valid < 0x1C) {
             tr_put(t, "    Not walked: its bus numbers could not be read.\n");
         } else if (below == 0) {
-            tr_put(t, nt ? "    None found.\n"
-                         : "    Not read on this system.\n");
+            tr_put(t, walked ? "    None found.\n"
+                             : "    Not read on this system.\n");
         }
     }
     if (q->Flags & CM_QP_F_NO_SET) {

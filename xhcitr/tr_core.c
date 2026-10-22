@@ -69,6 +69,13 @@ void tr_put(TR_TEXT *t, const char *s)
     }
 }
 
+void tr_put_box(TR_TEXT *t, const char *s)
+{
+    for (; *s != '\0'; s++) {
+        tr_ch(t, (char)(*s == '\n' ? ' ' : *s));
+    }
+}
+
 static void tr_num(TR_TEXT *t, unsigned long v, int neg, unsigned int base,
                    int upper, int width, int zero, int left)
 {

@@ -360,7 +360,11 @@ branch, marked "(behind <router name>)".
 - **The NHI's node** lists the NHI, each tunnel port (with its source
   and whether it is active), and below each port the functions found
   there, indented by bridge depth; on 98 SE and ME "Not read on this
-  system" stands for them (section 4.7). **An xhci98 controller's node**
+  system" stands for them (section 4.7) where the driver does not read
+  below the port (`CM_QP_F_BELOW_OS`, with its reason), and since
+  roadmap-usb4 task 43.63 a port the driver read with nothing below it
+  is "None found." there as on NT (a 98 SE or ME driver has read below
+  the port since task 42-A.14). **An xhci98 controller's node**
   shows the controller.
 - **Text.** Every line within 79 columns; the host suite holds it on a
   worst case. The constants are `tr_pci.c`'s own, each cited to the PCI
@@ -773,7 +777,9 @@ record.
    device", the unit and the devnodes that will stop as the tree last
    showed them, OK / Cancel (from the tray menu the selection is the
    request and the dialog follows it), with record 24 section 5.4's
-   reminder where it gives one (its revision 8, roadmap-usb4 task 43.8).
+   reminder where it gives one (its revision 8, roadmap-usb4 task 43.8),
+   as one paragraph the box wraps: the console's line break in the
+   shared text is a space there (`tr_put_box`, task 43.63).
    Nothing below waits on the user.
 2. Take the shared eject mutex (section 6.3). Query (Q1). An answer is
    eligible when the record's stage is active, the inert and stopping

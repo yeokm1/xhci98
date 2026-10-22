@@ -1019,8 +1019,69 @@ static void test_partial(void)
     CHECK_EQ(ent(built, 5, CM_QP_E_BDF), BDF(8, 0, 1), "function 1");
 }
 
+/* Task 43.63: an empty tunnel port. A 98 SE or ME driver that reads below
+ * the port (task 42-A.14) says "None found." as NT does; "Not read on
+ * this system" only where the driver did not read below it. */
+static void test_empty_port(void)
+{
+    CM_QPCI_IN in;
+    ULONG n;
+    ULONG info;
+    TR_QPCI q;
+    TR_TEXT t;
+
+    reset();
+    add_fn(BDF(5, 0, 0), 0x15BF8086UL, 0x088000UL);
+    add_bridge(BDF(4, 1, 0), 0x15C08086UL, 4, 6, 6);
+    in_one_port(&in, BDF(4, 1, 0));
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(CmQpciAnswer(outb, sizeof(outb), built, n, &info),
+             CM_Q_ANS_WHOLE, "empty port: whole");
+    CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "empty port: parsed");
+    CHECK((q.Flags & CM_QP_F_BELOW_OS) == 0, "empty port: read below");
+
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 0);
+    CHECK(strstr(text, "  Functions below this port:\r\n    None found.\r\n")
+              != NULL, "9x, read below: none found");
+    CHECK(strstr(text, "Not read on this system") == NULL,
+          "9x, read below: not 'not read'");
+
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 1);
+    CHECK(strstr(text, "    None found.\r\n") != NULL, "NT: none found");
+
+    /* The same port from a driver that does not read below it. */
+    in.ReadBelow = 0;
+    n = CmQpciBuild(built, sizeof(built), &in);
+    (void)CmQpciAnswer(outb, sizeof(outb), built, n, &info);
+    CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "not read: parsed");
+    CHECK((q.Flags & CM_QP_F_BELOW_OS) != 0, "not read: flagged");
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 0);
+    CHECK(strstr(text, "Not read on this system") != NULL,
+          "9x, not read below: said so");
+    CHECK(strstr(text, "None found") == NULL, "9x, not read: not none found");
+
+    /* A 9x port whose bus numbers could not be read is not called empty. */
+    reset();
+    add_fn(BDF(5, 0, 0), 0x15BF8086UL, 0x088000UL);
+    add_bridge(BDF(4, 1, 0), 0x15C08086UL, 4, 6, 6);
+    fn[1].Valid = 0x18;
+    in_one_port(&in, BDF(4, 1, 0));
+    n = CmQpciBuild(built, sizeof(built), &in);
+    (void)CmQpciAnswer(outb, sizeof(outb), built, n, &info);
+    CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "short port: parsed");
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 0);
+    CHECK(strstr(text, "Not walked: its bus numbers could not be read")
+              != NULL, "9x, short port: not walked");
+    CHECK(strstr(text, "None found") == NULL, "9x, short port: not empty");
+}
+
 int main(void)
 {
+    test_empty_port();
     test_partial();
     test_by_dword();
     test_branch();

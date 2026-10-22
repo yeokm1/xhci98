@@ -3888,7 +3888,10 @@ static int ej_confirm(HWND owner, const EJREQ *q)
                               k >= 0 && nhi[k].HaveQ
                                   ? inst_port_usb3(nhi[k].Q.Rec, q->PortBdf)
                                   : CM_ST_TUN_UNKNOWN)) {
-            tr_printf(&t, "\n%s", inst_eject_remind_text());
+            /* One paragraph in the box (task 43.63); the console keeps
+             * the text's own wrap. */
+            tr_put(&t, "\n");
+            tr_put_box(&t, inst_eject_remind_text());
         }
     }
     if (t.Overflow) {

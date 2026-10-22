@@ -3135,6 +3135,21 @@ int main(void)
         tr_confirm_lead(&t, "USB xHCI Controller", "USB xHCI Controller", NULL, 0);
         CHECK(strcmp(buf, "Stop USB xHCI Controller?\r\n\r\nThese devices will stop:\r\n") == 0,
               "confirm: no disk");
+        /* Task 43.63: the reminder in the box is one paragraph; the
+         * console's text keeps its own wrap. */
+        CHECK(strchr(inst_eject_remind_text(), '\n') != NULL,
+              "reminder: the console's text is wrapped");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_put(&t, "Close any program that uses them first.\n");
+        tr_put_box(&t, inst_eject_remind_text());
+        CHECK(strcmp(buf, "Close any program that uses them first.\r\n"
+                          "Before you eject it, make sure none of its other "
+                          "devices (USB ports, card readers, network) is in "
+                          "use; stop them in Windows first.") == 0,
+              "reminder: one paragraph in the box, the break a space");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_put_box(&t, "a\nb\n");
+        CHECK(strcmp(buf, "a b ") == 0, "box text: every break a space, no CR");
         memset(e, 0, sizeof(e));
         memcpy(e + CM_ST_E_VENDOR, "Acme\tCorp", 9);
         memcpy(e + CM_ST_E_MODEL, " Dock\r\n  X1 ", 12);
