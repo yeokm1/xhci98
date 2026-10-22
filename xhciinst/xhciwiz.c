@@ -553,7 +553,8 @@ static const char *system_name(char *out, size_t cap)
 
     os_version(&v);
     name = inst_os_name(v.dwPlatformId == VER_PLATFORM_WIN32_NT,
-                        v.dwMajorVersion, v.dwMinorVersion);
+                        v.dwMajorVersion, v.dwMinorVersion,
+                        v.dwBuildNumber & 0xFFFFUL);
     _snprintf(out, cap - 1, "This computer: %s (%lu.%lu.%lu %s), %s.", name,
               (unsigned long)v.dwMajorVersion, (unsigned long)v.dwMinorVersion,
               (unsigned long)(v.dwBuildNumber & 0xFFFFUL), v.szCSDVersion,

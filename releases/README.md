@@ -238,7 +238,7 @@ an INF or a package that names one of those Microsoft files (`OS-MEDIA`,
 `PKG-MSFILE`), so the download cannot drift back. From `3.2.0.0` one other
 exception is decided, and kept out of this tracked tree: NUSB 3.3's seven
 Windows 98 SE storage files, unmodified, from the driver pack, in the upload
-set only, at the download's root as `NONFREE\` (roadmap-usb4
+set only, at the download's root as `NUSB33\` (roadmap-usb4
 task 43.3; legal-provenance.md section 5). What this tree holds of it is
 `<version>\drvpack.txt`: whether the download carries the pack, and if it
 does, the pack's revision and each file's hash, from which `-UploadSetOnly`
