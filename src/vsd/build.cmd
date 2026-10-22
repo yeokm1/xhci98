@@ -70,6 +70,17 @@ if errorlevel 1 exit /b 1
 "%PY%" -I callcheck.py %O%\STOR98.VXD %O%\stor98.map %O%\vsd.obj %O%\vsd_list.obj || exit /b 1
 set "QF="
 if /i "%FLAV%"=="qemu" set "QF=-Qemu"
+rem The release image writes to no I/O port: Open Watcom's disassembler
+rem lists every object's code, and no IN/OUT-family instruction may be in it
+rem (the qemu image's debug-console writes are its alone).
+if /i not "%FLAV%"=="qemu" (
+    for %%F in (vsd vsd_list vsd_data) do (
+        wdis %O%\%%F.obj | findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]out$" >nul && (
+            echo STOR98.VXD: %%F.obj has an OUT instruction in the release build
+            exit /b 1
+        )
+    )
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File check-vsd.ps1 %O%\STOR98.VXD %QF% || exit /b 1
 echo built %O%\STOR98.VXD
 exit /b 0

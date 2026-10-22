@@ -54,8 +54,11 @@ for ($o = 0; $o -lt $nobj; $o++) {
     $mem[$o + 1] = $buf
 }
 
-# The entry table: one bundle of one 32-bit entry, the DDB.
+# The entry table: one bundle of one 32-bit entry, the DDB, then the end
+# of the table (a zero count) - no other export.
 $et = $le + [int](U32 ($le + 0x5C))
+if ($et + 10 -ge $d.Length) { Bad 'the entry table lies past the file end'; exit 1 }
+if ($d[$et + 9] -ne 0) { Bad 'the entry table has more than the one entry' }
 if ($d[$et] -ne 1 -or $d[$et + 1] -ne 3) { Bad ('the entry table is not one 32-bit entry (count {0}, type {1})' -f $d[$et], $d[$et + 1]) }
 else {
     $eobj = [int](U16 ($et + 2)); $eoff = [int](U32 ($et + 5))
@@ -94,7 +97,9 @@ if ($text.IndexOf("STOR98.VXD $ver") -lt 0) { Bad "no stamp 'STOR98.VXD $ver' in
 # The release image writes to no debug port.
 if (-not $Qemu) {
     for ($i = 0; $i -lt $d.Length - 5; $i++) {
-        if (($d[$i] -eq 0xE6 -and $d[$i + 1] -eq 0xE9) -or
+        # Byte patterns only; src\vsd\build.cmd also disassembles every
+        # release object and refuses any OUT-family instruction.
+        if (($d[$i] -eq 0xE6 -and $d[$i + 1] -eq 0xE9) -or ($d[$i] -eq 0xE7 -and $d[$i + 1] -eq 0xE9) -or
             ($d[$i] -eq 0x66 -and $d[$i + 1] -eq 0xBA -and $d[$i + 2] -eq 0xE9 -and $d[$i + 3] -eq 0) -or
             ($d[$i] -eq 0xBA -and $d[$i + 1] -eq 0xE9 -and $d[$i + 2] -eq 0 -and $d[$i + 3] -eq 0 -and $d[$i + 4] -eq 0)) {
             Bad ('file offset 0x{0:X}: a write to port 0E9h in the release image' -f $i)
