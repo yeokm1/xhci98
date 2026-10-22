@@ -296,7 +296,7 @@ static void test_cm_only(void)
                             INST_CW_S98_8, "C:\\XHCI98", text, sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
-              strstr(text, "not been tested on Windows 8 or 8.1") != NULL &&
+              strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
               strstr(text, "Stor98 has not been tested") != NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
