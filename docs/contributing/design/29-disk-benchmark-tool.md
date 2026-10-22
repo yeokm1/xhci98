@@ -821,7 +821,15 @@ button says to run the tool as an administrator).
   where known, every parameter, the timer and its frequency, the seed),
   the Summary as a table, the Sweep as a table, the Stor98 page's
   differences per test when it was read, and every pass's value. The same
-  text is the saved file (`.TXT`, `GetSaveFileNameA`).
+  text is the saved file (`.TXT`, `GetSaveFileNameA`). When no test
+  carries a Stor98 page, the text has one line in its place, `Stor98: `
+  and the sentence the Stor98 page gives for what the run's search found
+  (not Stor98's disk, administrator rights needed, no ASPI layer, the
+  adapter not told apart with its two counts, no answer in time), or
+  that Stor98 drives the disk but no test's counters were taken; so a
+  report read away from the window still says why it has no counters.
+  The state is the one the search found as the run started, changed only
+  by the run's own counter reads.
 - The saved file also carries machine-readable lines after the human
   text: one `XPRF-RUN 1` line with the **workload key** - every parameter
   that changes a measurement (file size, access mode, write-through,
@@ -1428,8 +1436,9 @@ a choice:
   `C9h`, in page `00h` and answers it with its signature, version and PCI
   location (`stor98pf.h`, "The identity page"; Stor98 MD-8's P.0 note).
   The 9x reader sends READ BUFFER only to a target that answered page
-  `C9h`, and matches the disk to it by the `Enum\SCSI` devnode holding the
-  drive letter (`CurrentDriveLetterAssignment`) whose device id contains
+  `C9h`, and matches the disk to it by the present `Enum\SCSI` devnode
+  holding the drive letter (`CurrentDriveLetterAssignment`; section 15's
+  bench note) whose device id contains
   the target's INQUIRY vendor and product; two matches give "could not be
   told apart". INQUIRY and its pages are what the system itself sends
   every target, so asking them is safe. Live on P.5.
@@ -1566,6 +1575,24 @@ a choice:
   (Codex round 9: a second disk of the same id on another adapter,
   excluded by the first tier, would otherwise have been given Stor98's
   counters); otherwise the page says the adapter could not be told apart.
+- **The owner's 98 SE bench (2026-10-22, c36c4752)** saved a report with
+  no Stor98 page and nothing to say why: the search had not ended in
+  Stor98's disk, and only the window's Stor98 tab named the state. The
+  report now carries the `Stor98:` line of section 5.6 (host vectors for
+  every state in `test/test_pfs98.c`). The cause, from the owner's
+  `Enum\SCSI` export: five instances claimed `D` (USB sticks and a UAS
+  disk seen before, each keeping the letter it last had), listed before
+  the Stor98 disk in the order 9x keeps keys, and the search took the
+  first claimant, a stale USB stick's, whose id names no Stor98 target:
+  "not reported by this disk's driver". Reproduced on the 98 SE
+  emulator (a stale claimant of `F` added before the Stor98 disk's key):
+  c36c4752's tab gave that sentence and its report no page. The letter
+  now goes to the one claimant the configuration manager finds present
+  (`CM_Locate_DevNodeA` on `SCSI\<id>\<instance>`, which answers a
+  32-bit program on 98 SE: with six claimants of `F` the same run read
+  Stor98's counters); where it finds no SCSI instance present at all,
+  the letter's only claimant, and with more than one the page and the
+  report say the registry gives the letter to that many disks.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

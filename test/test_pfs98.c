@@ -234,12 +234,48 @@ static void test_buckets_page(void)
     CHECK(strstr(buf, "at once: none") != NULL, "an empty depth histogram says none");
 }
 
+/* The report's line for a run whose tests carry no Stor98 page: one per
+ * state, each a single line beginning "Stor98: " */
+static void test_report_line(void)
+{
+    static const struct {
+        int state;
+        const char *want;
+    } v[] = {
+        { S98_ST_NONE, "Stor98: Stor98's counters are not reported by this disk's driver: it is not Stor98, or a Stor98 without the counter answer.\r\n" },
+        { S98_ST_OK, "Stor98: Stor98 drives this disk, but no test's counters were taken.\r\n" },
+        { S98_ST_ADMIN, "Stor98: This disk is driven by Stor98. Reading its counters needs administrator rights.\r\n" },
+        { S98_ST_NOASPI, "Stor98: Windows' ASPI layer (WNASPI32.DLL) is not here, so Stor98's counters cannot be read.\r\n" },
+        { S98_ST_AMBIG, "Stor98: This disk's Stor98 adapter could not be told apart from another one (Stor98 targets of its model: 1; present disks of its id: 3).\r\n" },
+        { S98_ST_DEAD, "Stor98: Stor98 did not answer in time; its counters are not read for the rest of this run.\r\n" },
+        { S98_ST_LETTER, "Stor98: Windows' registry gives this drive letter to 3 disks and does not say which is present, so Stor98's counters cannot be matched to it.\r\n" },
+        { 99, "Stor98: Stor98's counters are not reported by this disk's driver: it is not Stor98, or a Stor98 without the counter answer.\r\n" }
+    };
+    char buf[512];
+    PF_TEXT t;
+    size_t i;
+
+    for (i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
+        pf_tx_init(&t, buf, sizeof(buf));
+        s98_report_line(&t, v[i].state, 1, 3);
+        CHECK(!t.overflow && strcmp(buf, v[i].want) == 0, "the report's Stor98 line for each state");
+    }
+    /* the page's sentence: empty for OK, the line's text otherwise */
+    pf_tx_init(&t, buf, sizeof(buf));
+    s98_state_sentence(&t, S98_ST_OK, 0, 0);
+    CHECK_EQ((int)strlen(buf), 0, "no sentence when the search found Stor98");
+    pf_tx_init(&t, buf, sizeof(buf));
+    s98_state_sentence(&t, S98_ST_AMBIG, 2, 0);
+    CHECK(strstr(buf, "model: 2; present disks of its id: 0).") != NULL, "an ambiguity gives its counts");
+}
+
 int main(void)
 {
     test_parse();
     test_diff();
     test_identity();
     test_buckets_page();
+    test_report_line();
     printf("test_pfs98: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

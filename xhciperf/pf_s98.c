@@ -395,3 +395,47 @@ void s98_page(PF_TEXT *t, const S98_ANSWER *a, const S98_DELTA *d, int is9x, pf_
     }
     s98_facts(t, a, is9x);
 }
+
+void s98_state_sentence(PF_TEXT *t, int state, int matches, int ids)
+{
+    switch (state) {
+    case S98_ST_OK:
+        break;
+    case S98_ST_ADMIN:
+        pf_tx_s(t, "This disk is driven by Stor98. Reading its counters needs administrator rights.");
+        break;
+    case S98_ST_NOASPI:
+        pf_tx_s(t, "Windows' ASPI layer (WNASPI32.DLL) is not here, so Stor98's counters cannot be read.");
+        break;
+    case S98_ST_AMBIG:
+        pf_tx_s(t, "This disk's Stor98 adapter could not be told apart from another one (Stor98 targets of its model: ");
+        pf_tx_u(t, (pf_u64)(matches < 0 ? 0 : matches));
+        pf_tx_s(t, "; present disks of its id: ");
+        pf_tx_u(t, (pf_u64)(ids < 0 ? 0 : ids));
+        pf_tx_s(t, ").");
+        break;
+    case S98_ST_DEAD:
+        pf_tx_s(t, "Stor98 did not answer in time; its counters are not read for the rest of this run.");
+        break;
+    case S98_ST_LETTER:
+        pf_tx_s(t, "Windows' registry gives this drive letter to ");
+        pf_tx_u(t, (pf_u64)(ids < 0 ? 0 : ids));
+        pf_tx_s(t, " disks and does not say which is present, so Stor98's counters cannot be matched to it.");
+        break;
+    default:
+        pf_tx_s(t, "Stor98's counters are not reported by this disk's driver: it is not Stor98, "
+                   "or a Stor98 without the counter answer.");
+        break;
+    }
+}
+
+void s98_report_line(PF_TEXT *t, int state, int matches, int ids)
+{
+    pf_tx_s(t, "Stor98: ");
+    if (state == S98_ST_OK) {
+        pf_tx_s(t, "Stor98 drives this disk, but no test's counters were taken.");
+    } else {
+        s98_state_sentence(t, state, matches, ids);
+    }
+    pf_tx_nl(t);
+}

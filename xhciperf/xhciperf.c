@@ -686,14 +686,10 @@ static void disk_facts(const char *folder, PF_ENV *e)
 /* Stor98's counters (record 29 section 6.2)                                 */
 /* ------------------------------------------------------------------------ */
 
-#define S98_ST_NONE     0   /* not Stor98's disk */
-#define S98_ST_OK       1
-#define S98_ST_ADMIN    2   /* NT: needs administrator rights */
-#define S98_ST_NOASPI   3   /* 9x: no ASPI layer */
-#define S98_ST_AMBIG    4   /* 9x: the disk's adapter could not be told apart */
-#define S98_ST_DEAD     5   /* did not answer in time */
-
 static int g_s98state;
+/* The run's search state, as its report states it: set as the run starts
+ * and changed only by the run's own counter reads */
+static int g_runS98state, g_runS98matches, g_runS98ids;
 static char g_s98drive;
 static UCHAR g_s98port, g_s98path, g_s98target, g_s98lun;
 static HMODULE g_aspi;
@@ -910,41 +906,6 @@ static void norm(const char *in, size_t n, char *out, size_t cap)
     out[j] = 0;
 }
 
-/* 9x: the Enum\SCSI device id whose instance holds the drive letter */
-static int devnode_of_letter(char letter, char *id, size_t cap)
-{
-    HKEY scsi, dev, inst;
-    char dn[256], in[256], v[32];
-    DWORD i, j, n, type;
-    int found = 0;
-
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\SCSI", 0, KEY_READ, &scsi) != ERROR_SUCCESS) {
-        return 0;
-    }
-    for (i = 0; !found && RegEnumKeyA(scsi, i, dn, sizeof(dn)) == ERROR_SUCCESS; i++) {
-        if (RegOpenKeyExA(scsi, dn, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
-            continue;
-        }
-        for (j = 0; !found && RegEnumKeyA(dev, j, in, sizeof(in)) == ERROR_SUCCESS; j++) {
-            if (RegOpenKeyExA(dev, in, 0, KEY_READ, &inst) != ERROR_SUCCESS) {
-                continue;
-            }
-            n = sizeof(v);
-            if (RegQueryValueExA(inst, "CurrentDriveLetterAssignment", NULL, &type, (LPBYTE)v, &n) == ERROR_SUCCESS &&
-                type == REG_SZ) {
-                v[sizeof(v) - 1] = 0;
-                if (strchr(v, letter) != NULL || strchr(v, (char)(letter - 'A' + 'a')) != NULL) {
-                    sz_cpy(id, cap, dn);
-                    found = 1;
-                }
-            }
-            RegCloseKey(inst);
-        }
-        RegCloseKey(dev);
-    }
-    RegCloseKey(scsi);
-    return found;
-}
 
 /* A 9x search's request: its findings stay here until the caller, still
  * waiting, publishes them; whichever of the two finishes second frees it */
@@ -957,6 +918,89 @@ typedef struct s98_find_req {
 } S98_FIND_REQ;
 
 typedef DWORD (WINAPI *PF_CMLOCATE)(DWORD *, char *, ULONG);
+
+/* 9x: the Enum\SCSI device id of the present disk holding the drive
+ * letter. Enum\SCSI keeps the instances of disks seen before, and each
+ * keeps the letter it last had, so several may claim one letter; only an
+ * instance the configuration manager finds present counts. Where it finds
+ * none present at all (it does not answer this program), the letter's
+ * only claimant counts. 1 and id; 0 when no disk of Enum\SCSI holds it;
+ * -1 and *claims when more than one does and none can be told present. */
+static int devnode_of_letter(char letter, char *id, size_t cap, int *claims)
+{
+    HKEY scsi, dev, inst;
+    char dn[256], in[256], v[32], full[600], one[256], live[256];
+    DWORD i, j, n, type;
+    int total = 0, present = 0, answers = 0;
+    HMODULE cm = LoadLibraryA("CFGMGR32.DLL");
+    PF_CMLOCATE locate = (cm != NULL) ? (PF_CMLOCATE)GetProcAddress(cm, "CM_Locate_DevNodeA") : NULL;
+
+    *claims = 0;
+    one[0] = 0;
+    live[0] = 0;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\SCSI", 0, KEY_READ, &scsi) != ERROR_SUCCESS) {
+        if (cm != NULL) {
+            FreeLibrary(cm);
+        }
+        return 0;
+    }
+    for (i = 0; RegEnumKeyA(scsi, i, dn, sizeof(dn)) == ERROR_SUCCESS; i++) {
+        if (RegOpenKeyExA(scsi, dn, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            continue;
+        }
+        for (j = 0; RegEnumKeyA(dev, j, in, sizeof(in)) == ERROR_SUCCESS; j++) {
+            int holds = 0, here = 0;
+
+            if (RegOpenKeyExA(dev, in, 0, KEY_READ, &inst) != ERROR_SUCCESS) {
+                continue;
+            }
+            n = sizeof(v);
+            if (RegQueryValueExA(inst, "CurrentDriveLetterAssignment", NULL, &type, (LPBYTE)v, &n) == ERROR_SUCCESS &&
+                type == REG_SZ) {
+                v[sizeof(v) - 1] = 0;
+                holds = strchr(v, letter) != NULL || strchr(v, (char)(letter - 'A' + 'a')) != NULL;
+            }
+            RegCloseKey(inst);
+            if (locate != NULL) {
+                DWORD dnode = 0;
+
+                sz_cpy(full, sizeof(full), "SCSI\\");
+                sz_cat(full, sizeof(full), dn);
+                sz_cat(full, sizeof(full), "\\");
+                sz_cat(full, sizeof(full), in);
+                here = locate(&dnode, full, 0) == 0;
+                answers |= here;
+            }
+            if (holds) {
+                total++;
+                sz_cpy(one, sizeof(one), dn);
+                if (here) {
+                    present++;
+                    sz_cpy(live, sizeof(live), dn);
+                }
+            }
+        }
+        RegCloseKey(dev);
+    }
+    RegCloseKey(scsi);
+    if (cm != NULL) {
+        FreeLibrary(cm);
+    }
+    if (answers) {
+        if (present == 1) {
+            sz_cpy(id, cap, live);
+            return 1;
+        }
+        *claims = present;
+        return present == 0 ? 0 : -1;
+    }
+    if (total == 1) {
+        sz_cpy(id, cap, one);
+        return 1;
+    }
+    *claims = total;
+    return total == 0 ? 0 : -1;
+}
 
 /* An instance name's last part as 9x writes it for a SCSI disk of a PCI
  * adapter, "BBDF0000" (bus, device << 3 | function, in hex): 1 and *loc
@@ -1109,8 +1153,17 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
     }
     rq->state = S98_ST_NONE;
     found[0] = 0;
-    if (!devnode_of_letter(letter, devid, sizeof(devid))) {
-        return;
+    {
+        int claims = 0;
+        int r = devnode_of_letter(letter, devid, sizeof(devid), &claims);
+
+        if (r < 0) {
+            rq->state = S98_ST_LETTER;
+            rq->idCount = claims;
+        }
+        if (r != 1) {
+            return;
+        }
     }
     norm(devid, strlen(devid), ndev, sizeof(ndev));
     if (g_aspi == NULL) {
@@ -1277,12 +1330,18 @@ static int s98_read(S98_ANSWER *a)
     }
     if (WaitForSingleObject(th, 3000) != WAIT_OBJECT_0) {
         g_s98state = S98_ST_DEAD;
+        if (g_running) {
+            g_runS98state = g_s98state;
+        }
         CloseHandle(th);
         return 0;
     }
     CloseHandle(th);
     if (rq->newState != 0) {
         g_s98state = rq->newState;
+        if (g_running) {
+            g_runS98state = g_s98state;
+        }
     }
     if (rq->ok && s98_parse(rq->data, rq->len, a)) {
         ok = 1;
@@ -1359,29 +1418,12 @@ static void s98_find(const char *folder)
 
 static const char *s98_state_text(void)
 {
-    switch (g_s98state) {
-    case S98_ST_ADMIN:
-        return "This disk is driven by Stor98. Reading its counters needs administrator rights.";
-    case S98_ST_NOASPI:
-        return "Windows' ASPI layer (WNASPI32.DLL) is not here, so Stor98's counters cannot be read.";
-    case S98_ST_AMBIG: {
-        static char t[200];
+    static char b[256];
+    PF_TEXT t;
 
-        sz_cpy(t, sizeof(t), "This disk's Stor98 adapter could not be told apart from another one (Stor98 targets of its model: ");
-        sz_u(t, sizeof(t), (pf_u64)g_s98matches);
-        sz_cat(t, sizeof(t), "; present disks of its id: ");
-        sz_u(t, sizeof(t), (pf_u64)g_s98ids);
-        sz_cat(t, sizeof(t), ").");
-        return t;
-    }
-    case S98_ST_DEAD:
-        return "Stor98 did not answer in time; its counters are not read for the rest of this run.";
-    case S98_ST_OK:
-        return "";
-    default:
-        return "Stor98's counters are not reported by this disk's driver: it is not Stor98, "
-               "or a Stor98 without the counter answer.";
-    }
+    pf_tx_init(&t, b, sizeof(b));
+    s98_state_sentence(&t, g_s98state, g_s98matches, g_s98ids);
+    return b;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -2839,7 +2881,7 @@ static char *build_report(size_t *lenOut)
 {
     /* room for every step's Stor98 page and its heading, and the report
      * around them */
-    size_t pcap = (size_t)g_plan.nsteps * (sizeof(g_s98steps[0]) + 160u) + 1u;
+    size_t pcap = (size_t)g_plan.nsteps * (sizeof(g_s98steps[0]) + 160u) + 512u;
     size_t cap = 512u * 1024u + pcap;
     char *buf = (char *)HeapAlloc(GetProcessHeap(), 0, cap);
     char *pages = (char *)HeapAlloc(GetProcessHeap(), 0, pcap);
@@ -2868,6 +2910,13 @@ static char *build_report(size_t *lenOut)
             sz_cat(pages, pcap, g_s98steps[i]);
             sz_cat(pages, pcap, "\r\n");
         }
+    }
+    if (pages[0] == 0) {
+        /* no test's page: the report says what the search found */
+        PF_TEXT lt;
+
+        pf_tx_init(&lt, pages, pcap);
+        s98_report_line(&lt, g_runS98state, g_runS98matches, g_runS98ids);
     }
     memset(&ri, 0, sizeof(ri));
     ri.toolVersion = XHCIPERF_VERSION;
@@ -3648,6 +3697,9 @@ static void start_run(void)
         LeaveCriticalSection(&g_resCs);
     }
     s98_find(g_folder);
+    g_runS98state = g_s98state;
+    g_runS98matches = g_s98matches;
+    g_runS98ids = g_s98ids;
     memset(g_res, 0, sizeof(g_res));
     memset(g_s98steps, 0, sizeof(g_s98steps));
     g_runP = g_p;

@@ -128,4 +128,21 @@ void s98_page(PF_TEXT *t, const S98_ANSWER *after, const S98_DELTA *d, int is9x,
 /* The facts alone (no test chosen) */
 void s98_facts(PF_TEXT *t, const S98_ANSWER *a, int is9x);
 
+/* What the search for the disk's Stor98 adapter found (record 29
+ * section 6.2) */
+#define S98_ST_NONE     0   /* not Stor98's disk */
+#define S98_ST_OK       1
+#define S98_ST_ADMIN    2   /* NT: needs administrator rights */
+#define S98_ST_NOASPI   3   /* 9x: no ASPI layer */
+#define S98_ST_AMBIG    4   /* 9x: the disk's adapter could not be told apart */
+#define S98_ST_DEAD     5   /* did not answer in time */
+#define S98_ST_LETTER   6   /* 9x: several disks claim the letter, none told present */
+/* The Stor98 page's sentence for a state that is not OK (OK: empty);
+ * matches and ids are a 9x search's counts, for an ambiguity (for
+ * S98_ST_LETTER, ids is how many disks claim the letter) */
+void s98_state_sentence(PF_TEXT *t, int state, int matches, int ids);
+/* The report's line when it carries no test's Stor98 page: "Stor98: "
+ * and the state's sentence, or for OK that no test's counters were taken */
+void s98_report_line(PF_TEXT *t, int state, int matches, int ids);
+
 #endif /* XHCIPERF_PF_S98_H */
