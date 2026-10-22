@@ -2553,9 +2553,12 @@ double-click and at a 98 SE or ME prompt under their long names. **Decided
   switch (`XhciSilentInstall`, off unless it is 1). `silent-on.bat` does
   both; a list merged by hand, or by another stack, does nothing while the
   switch is off.
-- **Run `silent-on.bat` only once each listed class's drivers have been
-  installed at least once on this machine**, by plugging such a device with
-  the switch off and finishing its wizard: with no wizard, a silent install
+- **A device whose driver is not yet on the machine** (the user turns the
+  switch on knowing what will be plugged in: roadmap-usb4 task 43.6, the
+  owner, 2026-10-19, in place of the earlier "run `silent-on.bat` only
+  once each listed class's drivers have been installed at least once",
+  by plugging such a device with the switch off and finishing its wizard):
+  with no wizard, a silent install
   on 98 SE asks for a missing driver file from the CD (38.2's legs:
   `hidusb.sys` and `kbdhid.vxd` asked for, 6.11.11), so a device whose
   driver is not yet on the machine depends on the CD being at hand; the
