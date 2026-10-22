@@ -586,7 +586,17 @@ decided) by adding each staged driver's copied folder to
 storage row already does for its package directory (section 6.5.11,
 record 23 section 9.6), so a device plugged in later finds its driver
 with no browsing; the uninstall removes exactly the `DevicePath`
-entries the installer added, recorded at the time, and never another. The non-free row's sentence
+entries the installer added, recorded at the time, and never another.
+Two rules follow for 43.48 from the code as it stands: the package's own
+`DevicePath` update (`devicepath_write`), which drops every entry under
+the `%windir%\XHCI98` install directory (record 23 section 6.2) before it
+adds its own, leaves the recorded entries alone and removes them only
+through their record, and an entry already on `DevicePath` before the
+run is never recorded as the installer's; and the whole resulting value
+is checked before it is written (`devicepath_write` holds 2,048 bytes):
+if it does not fit, the value is left as it was, the staging is reported
+not done, and the Finish page and the readme give the copied folders as
+for a driver not staged. The non-free row's sentence
 and its sub-box carry a firmer warning ("not tested by this project;
 the vendors' drivers as released"): the pack's vendors' own setups are
 the user's to run, this package carrying the pack and not being its
@@ -618,7 +628,8 @@ are, is two entries more; the rows above the buttons may exceed a 640
 by 480 page once 43.48's are added, and then the list scrolls in a
 frame (proposal) with the buttons and the folder line kept below it;
 one line of text under the list is kept for the addresses; the Finish
-page keeps a line for the copied folder's path; the Settings dialog
+page keeps room for the list of kinds of device and their folders (in
+its text box, which scrolls), the readme carrying the same list; the Settings dialog
 gains no tab for them; the Summary lists them as it lists every
 component, the copy and the staging as separate lines; the same warning
 box takes their warnings; the uninstall's order (section 9.3) gains a
