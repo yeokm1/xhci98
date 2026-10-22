@@ -690,6 +690,30 @@ for %%T in (%S98IMAGES%) do if exist "%REPO%\src\stor98\out\free\%%T" del "%REPO
 call "%REPO%\src\stor98\scripts\build.cmd" "%S98TARGETS%" free
 if errorlevel 1 goto stor98fail
 
+rem S98VSD.VXD (task 43.46, design record 30 section 6.4), the Windows 98
+rem SE and ME IOS layer for Stor98's disks, on the x86 run: the release
+rem image always, the qemu flavour's (its debug-console writes) when this
+rem run builds qemu. Each link is gated by src\vsd\check-vsd.ps1 inside
+rem src\vsd\build.cmd; a 2 is "not built" (no Open Watcom or no 98 SE DDK
+rem on this host), said and passed over as for XHCIDI.EXE, and
+rem make-release.ps1 refuses a cut without the image.
+if /i "%ARCH%"=="amd64" goto skipvsd
+echo.
+echo === build S98VSD.VXD ===
+for %%V in (obj\S98VSD.VXD obj\qemu\S98VSD.VXD) do if exist "%REPO%\src\vsd\%%V" del "%REPO%\src\vsd\%%V"
+call "%REPO%\src\vsd\build.cmd"
+if errorlevel 2 goto vsdnotbuilt
+if errorlevel 1 goto vsdfail
+set "VSDQ="
+for %%F in (%FLAVORS%) do if /i "%%F"=="qemu" set "VSDQ=1"
+if not defined VSDQ goto skipvsd
+call "%REPO%\src\vsd\build.cmd" qemu
+if errorlevel 1 goto vsdfail
+goto skipvsd
+:vsdnotbuilt
+echo S98VSD.VXD was not built on this host (see above); the package goes without it.
+:skipvsd
+
 rem `if errorlevel` inside the block is evaluated per iteration, so a first
 rem flavor that fails cannot be masked by a second one that succeeds.
 for %%F in (%FLAVORS%) do (
@@ -972,6 +996,12 @@ if errorlevel 1 exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\source-stamp.ps1" -Driver %~3 -Write "%REPO%\src\stor98\out\free\%~1"
 exit /b %errorlevel%
+
+:vsdfail
+echo.
+echo ERROR: S98VSD.VXD (src\vsd) failed to build or its gate failed - see above.
+endlocal
+exit /b 1
 
 :stor98fail
 echo.

@@ -141,7 +141,7 @@ Windows 8, 8.1 and 10 as well.
 
   9x name / NT key        Unit  Default            Range
   ----------------------  ----  -----------------  ------------------------
-  StorMaxTransferKB       KiB   512 on 98 SE / ME  64 to the default, in
+  StorMaxTransferKB       KiB   2048 on 98 SE / ME 64 to the default, in
   maxtransferkb=                256 on 2000 to 7   multiples of 4; anything
                                                    else is refused and the
                                                    default stands

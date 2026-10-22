@@ -112,6 +112,33 @@ in the large model, from `xhciinst\di\`:
   installer does and prints the result file, when its `END` line was read
   and when the process handle signalled. It is never packaged.
 
+The same install, with the same Windows 98 SE DDK, builds `S98VSD.VXD`, the
+98 SE and ME IOS layer for Stor98's disks (roadmap-usb4 task 43.46, design
+record 30 section 6), from `src\vsd\`:
+
+- `src\vsd\build.cmd` (`qemu` for the qemu flavour's image, which writes
+  to QEMU's debug console) finds `wcc386.exe` under `%WATCOM%` in `BINNT64`
+  or `BINNT` and Python on `PATH`, and answers exit 2 ("not built") on a
+  host without either or without the DDK. `src\vsd\stage-ddk.ps1` holds
+  ten DDK headers and the DDK's `LINK.EXE` 5.12 with its `MSPDB50.DLL` to
+  `docs\references\README.md`'s hashes and copies them into the
+  git-ignored `src\vsd\obj\`, mending the staged headers (a trailing
+  Ctrl-Z cut, `AEP.H`'s three typedef tails); nothing of the DDK is
+  tracked. Open Watcom compiles, `omfpub.py` and `omfcheck.py` guard the
+  objects, the DDK's linker links with `/VXD`, `callcheck.py` holds every
+  call in the image to the function the compiler named, and
+  `check-vsd.ps1` holds the image to its DDB `S98VSD`, its two VxD
+  services (`vsd-services.allow`), its stamp and, in the release image, no
+  debug-port write. Out come `src\vsd\obj\S98VSD.VXD` and
+  `src\vsd\obj\qemu\S98VSD.VXD`.
+- `scripts\build-driver.cmd` runs it on the x86 run, after Stor98's
+  build: the release image always, the qemu one when the run builds qemu;
+  a 2 is said and passed over. `make-package.ps1` stages the image beside
+  `stor98.mpd` in an x86 package that carries Stor98 (the qemu image in the
+  qemu package), and `make-release.ps1` refuses a cut without it. Its host
+  suite is `test\test_vsd_list.c`; the VxD itself runs only in a 98 SE or
+  ME guest.
+
 Two consequences worth knowing before they bite:
 
 - A repository path containing a space is a problem for the DDK half only.

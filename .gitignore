@@ -75,6 +75,7 @@ objfre/
 !test/pmclient/build.cmd
 !xhciinst/di/build.cmd
 !xhciinst/di/selftest.cmd
+!src/vsd/build.cmd
 !xhciinst/di/test/build.cmd
 !xhciqual/test/*.cmd
 !scripts/**/*.cmd

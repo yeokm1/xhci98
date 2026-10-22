@@ -75,8 +75,8 @@ static void test_apply(ULONG maxKb, const char *name)
     check(why == XFER_REFUSED && kb == maxKb, "0 refused, the maximum stands");
     why = XferTunApply(TRUE, TRUE, maxKb + 4, maxKb, &kb);
     check(why == XFER_REFUSED && kb == maxKb, "the maximum plus 4 refused (never raised)");
-    why = XferTunApply(TRUE, TRUE, 1000, maxKb, &kb);
-    check(why == XFER_REFUSED && kb == maxKb, "1000 refused");
+    why = XferTunApply(TRUE, TRUE, maxKb * 2, maxKb, &kb);
+    check(why == XFER_REFUSED && kb == maxKb, "twice the maximum refused");
     why = XferTunApply(TRUE, TRUE, 130, maxKb, &kb);
     check(why == XFER_REFUSED && kb == maxKb, "130 (not a multiple of 4) refused");
     why = XferTunApply(TRUE, TRUE, 66, maxKb, &kb);
@@ -141,7 +141,8 @@ static void test_keys(void)
 
 int main(void)
 {
-    test_apply(512, "9x");
+    test_apply(2048, "9x");
+    test_apply(512, "9x before 2026-10-22");
     test_apply(256, "NT");
     test_text();
     test_keys();

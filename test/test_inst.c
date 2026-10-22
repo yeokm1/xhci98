@@ -3868,7 +3868,7 @@ static void test_s98(void)
         }
     }
     free(table);
-    CHECK(strcmp(INST_S98_TABLE_VERSION, "0.4.0.0") == 0,
+    CHECK(strcmp(INST_S98_TABLE_VERSION, "3.2.0.0") == 0,
           "the table is the bundled Stor98's");
 
     /* Which system each row is for. */
@@ -3877,7 +3877,7 @@ static void test_s98(void)
           !inst_s98_applies(INST_S98_IDLE, 0) &&
           inst_s98_applies(INST_S98_WRITETHROUGH, 0),
           "gone and idle are 2000-to-7 only");
-    CHECK(strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 0), "512") == 0 &&
+    CHECK(strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 0), "2048") == 0 &&
           strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 1), "256") == 0 &&
           strcmp(inst_s98_default(INST_S98_POLLSPINUS, 0), "0") == 0 &&
           strcmp(inst_s98_default(INST_S98_POLLSPINUS, 1), "500") == 0,
@@ -3909,6 +3909,10 @@ static void test_s98(void)
                           &why) && why != NULL, "an unknown word refused");
     CHECK(inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "512", w, sizeof(w),
                          &why) &&
+          inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "2048", w, sizeof(w),
+                         &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "2052", w, sizeof(w),
+                          &why) &&
           !inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "512", w, sizeof(w),
                           &why) &&
           inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "128", w, sizeof(w),
@@ -5009,6 +5013,467 @@ static void test_storage(void)
     }
 }
 
+/* S98VSD.VXD (design record 30 section 7): the box, the switches, the
+ * mode, and the recovery and placement table step by step. */
+static INST_VSDFACTS vf(int pend, int fileVal, int dest, int tmp, int entry,
+                        int mode, int pkgPend, int pkgFile, int filePend)
+{
+    INST_VSDFACTS f;
+    f.Pending = pend;
+    f.FileVal = fileVal;
+    f.Dest = dest;
+    f.Tmp = tmp;
+    f.Entry = entry;
+    f.Mode = mode;
+    f.PkgIsPending = pkgPend;
+    f.PkgIsFile = pkgFile;
+    f.FileIsPending = filePend;
+    return f;
+}
+
+/* Runs the table against a model of the disk, the registry and
+ * WININIT.INI as the engine would, from a state, until it stops; returns
+ * the final op and the model's state. Hashes: 1 the package's (H), 2 the
+ * installed file's (an older release), 9 foreign. */
+typedef struct VMODEL {
+    int Pending, File;      /* 0 unset, else the hash             */
+    int Dest, Tmp;          /* 0 absent, else the hash            */
+    int Entry;              /* INST_VE_*                          */
+    int Cut;                /* the op number at which to stop     */
+    int Steps;
+} VMODEL;
+
+static int vclass(int bytes, const VMODEL *m)
+{
+    if (bytes == 0) {
+        return INST_VF_ABSENT;
+    }
+    if (m->Pending != 0 && bytes == m->Pending) {
+        return INST_VF_PENDING;
+    }
+    if (m->File != 0 && bytes == m->File) {
+        return INST_VF_FILE;
+    }
+    return INST_VF_OTHER;
+}
+
+static int vrun(VMODEL *m, int mode, int pkg)
+{
+    int i;
+    for (i = 0; i < 20; i++) {
+        INST_VSDFACTS f;
+        int op;
+        f.Pending = m->Pending != 0;
+        f.FileVal = m->File != 0;
+        f.Dest = vclass(m->Dest, m);
+        f.Tmp = vclass(m->Tmp, m);
+        f.Entry = m->Entry;
+        f.Mode = mode;
+        f.PkgIsPending = m->Pending != 0 && m->Pending == pkg;
+        f.PkgIsFile = m->File != 0 && m->File == pkg;
+        f.FileIsPending = m->Pending != 0 && m->File == m->Pending;
+        op = inst_vsd_next(&f);
+        if (op < INST_VOP_STEPS) {
+            return op;
+        }
+        if (m->Cut != 0 && m->Steps + 1 == m->Cut) {
+            return -1;      /* the run is cut short before this step */
+        }
+        m->Steps++;
+        switch (op) {
+        case INST_VOP_SET_FILE: m->File = m->Pending; break;
+        case INST_VOP_DEL_ENTRY: m->Entry = INST_VE_ABSENT; break;
+        case INST_VOP_DEL_TMP: m->Tmp = 0; break;
+        case INST_VOP_DEL_PENDING: m->Pending = 0; break;
+        case INST_VOP_DEL_FILEVAL: m->File = 0; break;
+        case INST_VOP_DEL_DEST: m->Dest = 0; break;
+        case INST_VOP_START: m->Pending = pkg; m->Tmp = pkg; break;
+        case INST_VOP_MOVE: m->Dest = m->Tmp; m->Tmp = 0; break;
+        case INST_VOP_WRITE_ENTRY: m->Entry = INST_VE_EXACT; break;
+        default: return -2;
+        }
+    }
+    return -3;
+}
+
+/* The start's rename, as Windows makes it. */
+static void vboot(VMODEL *m)
+{
+    if (m->Entry == INST_VE_EXACT && m->Tmp != 0) {
+        m->Dest = m->Tmp;
+        m->Tmp = 0;
+        m->Entry = INST_VE_ABSENT;
+    }
+}
+
+/* The layer's file name against Stor98's in IOSUBSYS (record 30 section
+ * 3.1: Windows loads an IOSUBSYS driver by its base name; STOR98.VXD
+ * beside stor98.mpd stopped Stor98's start), and the old name's file
+ * recognised as this project's. */
+/* A minimal LE image: MZ at 0, LE at 0x40, one object of one page, the
+ * entry table's first bundle naming the DDB at offset ddbOff of that
+ * object, the page at file offset 0x200 (page size 0x100). */
+static unsigned char leImg[0x400];
+
+static void le_put32(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+static size_t le_make(const char *ddbName, unsigned long ddbOff,
+                      const char *text)
+{
+    unsigned char *le = leImg + 0x40;
+    unsigned char *ot = le + 0x100;
+    unsigned char *pm = le + 0x120;
+    unsigned char *et = le + 0x130;
+
+    memset(leImg, 0, sizeof(leImg));
+    leImg[0] = 'M';
+    leImg[1] = 'Z';
+    le_put32(leImg + 0x3C, 0x40);
+    le[0] = 'L';
+    le[1] = 'E';
+    le_put32(le + 0x14, 1);          /* pages */
+    le_put32(le + 0x28, 0x100);      /* page size */
+    le_put32(le + 0x2C, 0x100);      /* bytes on the last page */
+    le_put32(le + 0x40, 0x100);      /* object table */
+    le_put32(le + 0x44, 1);          /* objects */
+    le_put32(le + 0x48, 0x120);      /* object page table */
+    le_put32(le + 0x5C, 0x130);      /* entry table */
+    le_put32(le + 0x80, 0x200);      /* data pages (file offset) */
+    le_put32(ot, 0x100);             /* virtual size */
+    le_put32(ot + 12, 1);            /* first page */
+    le_put32(ot + 16, 1);            /* page count */
+    pm[2] = 1;                       /* page 1 */
+    et[0] = 1;
+    et[1] = 3;
+    et[2] = 1;                       /* object 1 */
+    le_put32(et + 5, ddbOff);
+    if (ddbOff + 0x14 <= 0x100) {
+        memcpy(leImg + 0x200 + ddbOff + 0x0C, ddbName, 8);
+    }
+    memcpy(leImg + 0x300, text, strlen(text));
+    return sizeof(leImg);
+}
+
+static void test_vsd_names(void)
+{
+    char name[9];
+    size_t n;
+    int i;
+    int ios = 0;
+
+    CHECK(!inst_base_differs("stor98.mpd", "STOR98.VXD"),
+          "stor98.mpd and STOR98.VXD share a base name");
+    CHECK(inst_base_differs("stor98.mpd", "S98VSD.VXD"),
+          "stor98.mpd and S98VSD.VXD differ");
+    CHECK(inst_base_differs("STOR98", "STOR98X.VXD"), "lengths differ");
+    CHECK(!inst_base_differs("A.B.VXD", "a.b.mpd"), "the last dot");
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (instStorFile[i].Dir != INST_STOR_DIR_IOS) {
+            continue;
+        }
+        ios++;
+        CHECK(inst_base_differs(instStorFile[i].Name, INST_VSD_FILE),
+              "an IOSUBSYS file of Stor98's and the layer differ in base name");
+        CHECK(inst_base_differs(instStorFile[i].Name, INST_VSD_TMPNAME),
+              "an IOSUBSYS file of Stor98's and the layer's .TMP differ");
+    }
+    CHECK(ios != 0, "Stor98 has an IOSUBSYS file");
+    CHECK(!inst_base_differs(INST_VSD_FILE, INST_VSD_TMPNAME),
+          "the .TMP is the layer's own name");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    CHECK(inst_le_ddb_name(leImg, n, name) && strcmp(name, "S98VSD  ") == 0,
+          "the DDB name read through the entry and page tables");
+    CHECK(inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "an old-name image: DDB S98VSD and the old stamp: own");
+    n = le_make("S98VSD  ", 0x10, "S98VSD.VXD 3.2.0.0");
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "DDB S98VSD without the old stamp: not own");
+    n = le_make("OTHERVXD", 0x10, "S98VSD   STOR98.VXD 3.2.0.0");
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "both strings in the text, another DDB name: not own");
+    n = le_make("S98VSD  ", 0x1000, "STOR98.VXD 3.2.0.0");
+    CHECK(!inst_le_ddb_name(leImg, n, name) &&
+          !inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "the DDB outside its object: not read, not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    leImg[0x40 + 0x130 + 1] = 2;
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "an entry bundle not 32-bit: not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    leImg[0x41] = 'X';
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "no LE header: not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    CHECK(!inst_vsd_old_is_own(leImg, 0x250, "AA", "", ""),
+          "the image cut short before the stamp: not own");
+    CHECK(!inst_le_ddb_name(leImg, 0x80, name), "cut short in the header");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    leImg[0x40 + 0x120 + 3] = 3;
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "the DDB's page zero-filled (type 3): not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x2C, 0x10);
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "the DDB past the last page's declared bytes: not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x5C, 0xFFFFFFBCUL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "an entry table offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x40, 0xFFFFFFF0UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "an object table offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x48, 0xFFFFFFF0UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "a page table offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x80, 0xFFFFFF00UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "a data page offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x3C, 0xFFFFFFF0UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name), "an LE offset that wraps");
+    n = le_make("OTHERVXD", 0x10, "");
+    CHECK(inst_vsd_old_is_own(leImg, n, "AB", "AB", ""),
+          "the record's File bytes: own");
+    CHECK(inst_vsd_old_is_own(NULL, 0, "CD", "", "cd"),
+          "the record's Pending bytes, case ignored: own");
+    CHECK(!inst_vsd_old_is_own(NULL, 0, "", "", ""), "unreadable: not own");
+}
+
+static void test_vsd(void)
+{
+    char *argv1[4];
+    char err[256];
+    INST_OPTS o;
+    INST_VSDFACTS f;
+    VMODEL m;
+    int shown;
+    int open;
+    int cut;
+    int r;
+
+    /* The switches. */
+    argv1[0] = "x";
+    argv1[1] = "/s98vsd";
+    argv1[2] = "/thunderbolt";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+          o.Stor98Vxd && !o.NoStor98Vxd, "/s98vsd /thunderbolt");
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
+          strstr(err, "Stor98 in the run") != NULL,
+          "/s98vsd alone: refused, it needs Stor98 in the run");
+    argv1[2] = "/nos98vsd";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+          "/s98vsd /nos98vsd: a contradiction");
+    argv1[1] = "/nos98vsd";
+    argv1[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+          "/nos98vsd belongs to an install");
+    argv1[2] = "/thunderbolt";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+          o.NoStor98Vxd, "/nos98vsd /thunderbolt");
+    argv1[1] = "/s98vsd";
+    argv1[2] = "/thunderbolt";
+    argv1[3] = "/nostor98";
+    CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 1,
+          "/s98vsd /nostor98: refused");
+
+    /* The box. */
+    CHECK(inst_vsd_box(1, 1, 1, 0, &shown, &open) && shown && open,
+          "98 SE and ME: ticked with Stor98");
+    CHECK(!inst_vsd_box(1, 1, 1, 1, &shown, &open) && shown && open,
+          "/nos98vsd: open, unticked");
+    CHECK(!inst_vsd_box(1, 1, 0, 0, &shown, &open) && shown && !open,
+          "Stor98 unticked: greyed and unticked");
+    CHECK(!inst_vsd_box(0, 1, 1, 0, &shown, &open) && shown && !open,
+          "another system: shown greyed, never ticked");
+    CHECK(!inst_vsd_box(1, 0, 1, 0, &shown, &open) && !shown && !open,
+          "no S98VSD.VXD in the package: not shown");
+
+    /* The mode; D8: the layer follows Stor98. */
+    CHECK(inst_vsd_mode(0, 0, 1, 1, 0, 1) == INST_VSD_NONE &&
+          inst_vsd_mode(0, 1, 1, 1, 0, 1) == INST_VSD_NONE,
+          "not 98 SE or ME: nothing");
+    CHECK(inst_vsd_mode(1, 1, 0, 0, 0, 0) == INST_VSD_UNINSTALL, "uninstall");
+    CHECK(inst_vsd_mode(1, 0, 1, 1, 0, 1) == INST_VSD_SELECTED &&
+          inst_vsd_mode(1, 0, 1, 1, 0, 0) == INST_VSD_DESELECTED,
+          "ticked, unticked");
+    CHECK(inst_vsd_mode(1, 0, 1, 0, 0, 0) == INST_VSD_INACTIVE &&
+          inst_vsd_mode(1, 0, 1, 0, 1, 0) == INST_VSD_DESELECTED,
+          "Stor98 unticked: kept with it, removed with it");
+
+    /* The rows, one fact set each. */
+    f = vf(0, 0, INST_VF_ABSENT, INST_VF_ABSENT, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_START, "nothing there: start");
+    f.Mode = INST_VSD_INACTIVE;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "inactive: nothing");
+    f = vf(0, 1, INST_VF_FILE, INST_VF_ABSENT, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 1, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "the package's bytes in place");
+    f.PkgIsFile = 0;
+    CHECK(inst_vsd_next(&f) == INST_VOP_START, "an older release: update");
+    f.Mode = INST_VSD_DESELECTED;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DEL_DEST, "unticked: removed");
+    f.Mode = INST_VSD_INACTIVE;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "greyed, Stor98 kept: kept");
+    f = vf(0, 0, INST_VF_OTHER, INST_VF_ABSENT, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_FOREIGN, "another's file left");
+    f.Mode = INST_VSD_UNINSTALL;
+    CHECK(inst_vsd_next(&f) == INST_VOP_FOREIGN,
+          "the uninstall leaves another's file");
+    f = vf(0, 0, INST_VF_ABSENT, INST_VF_ABSENT, INST_VE_CONFLICT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_BLOCK_INI,
+          "another program's rename line: blocked");
+    f.Mode = INST_VSD_INACTIVE;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "conflict, inactive: nothing");
+    f = vf(0, 1, INST_VF_FILE, INST_VF_ABSENT, INST_VE_CONFLICT,
+           INST_VSD_UNINSTALL, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_DEL_DEST,
+          "conflict, uninstall: its own file removed, the line left");
+    f = vf(0, 0, INST_VF_ABSENT, INST_VF_OTHER, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_BLOCK_TMP,
+          "a foreign S98VSD.TMP, nothing in flight: blocked");
+    f = vf(0, 1, INST_VF_FILE, INST_VF_OTHER, INST_VE_ABSENT,
+           INST_VSD_DESELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_DEL_DEST,
+          "a foreign .TMP, unticked: its own file removed");
+
+    /* Whole runs, the model applying each step. */
+    memset(&m, 0, sizeof(m));
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_DONE && m.Dest == 1 && m.File == 1 && m.Pending == 0 &&
+          m.Tmp == 0 && m.Entry == INST_VE_ABSENT, "a first placement");
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_QUEUED && m.Dest == 2 && m.Tmp == 1 && m.Pending == 1 &&
+          m.Entry == INST_VE_EXACT, "an update queued for the start");
+    vboot(&m);
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_DONE && m.Dest == 1 && m.File == 1 && m.Pending == 0 &&
+          m.Tmp == 0, "after the start: promoted, nothing left");
+    /* Update, then untick with no start between: the queued file never
+     * arrives. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    r = vrun(&m, INST_VSD_DESELECTED, 1);
+    vboot(&m);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Tmp == 0 && m.Pending == 0 &&
+          m.File == 0 && m.Entry == INST_VE_ABSENT,
+          "update then untick: all withdrawn, nothing arrives");
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    vboot(&m);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Pending == 0 && m.File == 0,
+          "update then uninstall: all withdrawn");
+    /* A later package over a queued older one. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 3);
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_QUEUED && m.Pending == 1 && m.Tmp == 1,
+          "a later package replaces the queued one");
+    /* Inactive over a queued update: it stays queued. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    r = vrun(&m, INST_VSD_INACTIVE, 0);
+    CHECK(r == INST_VOP_DONE && m.Pending == 1 && m.Tmp == 1 &&
+          m.Entry == INST_VE_EXACT, "inactive: the queue stays");
+    /* Every step of a placement and of an update cut short, then the next
+     * run (ticked, and the uninstall) recovers. */
+    for (cut = 1; cut <= 6; cut++) {
+        memset(&m, 0, sizeof(m));
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_SELECTED, 1);
+        CHECK(r == INST_VOP_DONE && m.Dest == 1 && m.File == 1 &&
+              m.Pending == 0 && m.Tmp == 0,
+              "a placement cut short, then a ticked run");
+        memset(&m, 0, sizeof(m));
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_UNINSTALL, 0);
+        CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.File == 0 &&
+              m.Pending == 0 && m.Tmp == 0 && m.Entry == INST_VE_ABSENT,
+              "a placement cut short, then the uninstall");
+        memset(&m, 0, sizeof(m));
+        m.File = 2;
+        m.Dest = 2;
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_SELECTED, 1);
+        CHECK(r == INST_VOP_QUEUED && m.Pending == 1 && m.Tmp == 1 &&
+              m.Entry == INST_VE_EXACT, "an update cut short, then a ticked "
+              "run: queued");
+        memset(&m, 0, sizeof(m));
+        m.File = 2;
+        m.Dest = 2;
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_UNINSTALL, 0);
+        vboot(&m);
+        CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Pending == 0 &&
+              m.File == 0 && m.Tmp == 0, "an update cut short, then the "
+              "uninstall");
+    }
+    /* File=A, Pending=B, the destination B (the start did it) and a
+     * foreign .TMP: promoted, and the uninstall then removes it. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Pending = 1;
+    m.Dest = 1;
+    m.Tmp = 9;
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Tmp == 9 && m.Pending == 0 &&
+          m.File == 0, "a done update beside a foreign .TMP: promoted, then "
+          "removed; the .TMP left");
+    /* Moved into place, then cut short before File (Pending=B, the
+     * destination B, no .TMP), and another program's rename line naming
+     * S98VSD.TMP: the uninstall removes the installer's destination. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Pending = 1;
+    m.Dest = 1;
+    m.Entry = INST_VE_CONFLICT;
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Pending == 0 && m.File == 0,
+          "a moved-but-unpromoted file under a foreign line: removed");
+    /* A queued update whose destination another installer replaced. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    m.Dest = 9;
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    CHECK(r == INST_VOP_FOREIGN && m.Dest == 9 && m.Tmp == 0 &&
+          m.Pending == 0 && m.File == 0 && m.Entry == INST_VE_ABSENT,
+          "a foreign destination: its file left, the owned queue withdrawn");
+}
+
 int main(void)
 {
     test_versions();
@@ -5049,6 +5514,8 @@ int main(void)
     test_s98();
     test_marks();
     test_storage();
+    test_vsd();
+    test_vsd_names();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

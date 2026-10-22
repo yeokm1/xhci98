@@ -2857,6 +2857,35 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             Write-Ok ("Stor98 {0} built from src\stor98 for {1}: version, flavour marker, imports, source stamp and INFs checked" -f `
                 $stor98.Version, ($s98Arches -join " and "))
         }
+        # S98VSD.VXD (task 43.46, design record 30 section 6.4): a cut whose
+        # x86 package carries Stor98 carries it too; make-package.ps1 stages
+        # it and holds it to src\vsd\check-vsd.ps1, and goes without it only
+        # on a host that could not build it, which a cut is not.
+        if ($null -ne $stor98 -and $s98Arches -contains "x86") {
+            $vsdImage = Join-Path $repo "src\vsd\obj\S98VSD.VXD"
+            if (-not (Test-Path -LiteralPath $vsdImage -PathType Leaf)) {
+                Stop-CutCheck "no S98VSD.VXD at '$vsdImage': build it (scripts\build-driver.cmd builds src\vsd on the x86 run; it needs Open Watcom 2.0 and the Windows 98 SE DDK)."
+            } else {
+                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\vsd\check-vsd.ps1") $vsdImage 2>&1
+                if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("S98VSD.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+                else {
+                    # Not older than any of its inputs: the sources, the
+                    # build's scripts and the version header (as XHCIDI.EXE
+                    # is held below), so an image built before a source change
+                    # cannot be cut.
+                    $vsdTime = (Get-Item -LiteralPath $vsdImage).LastWriteTimeUtc
+                    $vsdInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\vsd") -File |
+                                   Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".py", ".allow") }) +
+                                 @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
+                    $vsdNewer = @($vsdInputs | Where-Object { $_.LastWriteTimeUtc -gt $vsdTime })
+                    if ($vsdNewer.Count -gt 0) {
+                        Stop-CutCheck ("S98VSD.VXD is older than {0}: rebuild it (src\vsd\build.cmd, or scripts\build-driver.cmd)." -f (($vsdNewer | ForEach-Object { $_.Name }) -join ", "))
+                    } else {
+                        Write-Ok "S98VSD.VXD built from src\vsd: its DDB, services, stamp and no debug-port write checked, newer than its sources"
+                    }
+                }
+            }
+        }
     }
 
     # --- NUSB's 98 SE storage files, from the driver pack -------------------
@@ -3471,6 +3500,9 @@ the result in place of the marker, then cut again. The first:
             $legStor98 = @()
             if ($null -ne $stor98 -and $f -eq "release") {
                 $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+                # S98VSD.VXD beside stor98.mpd (task 43.46): make-package.ps1
+                # stages it in the x86 package that carries Stor98.
+                if ($leg.PkgArch -eq "x86") { $legStor98 += "S98VSD.VXD" }
             } else {
                 $pkgArgs += "-NoStor98"
             }
@@ -3570,6 +3602,12 @@ runs are what stand between a broken binary and a guest that cannot boot.
                     throw "the $($leg.Dir)\ directory about to be published does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Re-run the cut with the key; never make or sign a catalog by hand."
                 }
                 Write-Ok ("{0}\ carries a catalog per INF, signed by the project test certificate {1}" -f $leg.Dir, $testSignCert.Thumbprint)
+            }
+            # S98VSD.VXD published is the gated build's, byte for byte.
+            if ($legStor98 -contains "S98VSD.VXD" -and
+                (Get-FileHash -LiteralPath (Join-Path $destDir "S98VSD.VXD") -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $repo "src\vsd\obj\S98VSD.VXD") -Algorithm SHA256).Hash) {
+                throw "the $($leg.Dir)\S98VSD.VXD about to be published is not the build at src\vsd\obj\S98VSD.VXD."
             }
             # The certificate beside a signed leg's binaries must be this key's
             # public half, byte for byte - the one a user would inspect or import.

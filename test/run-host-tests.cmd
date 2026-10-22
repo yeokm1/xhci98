@@ -202,6 +202,9 @@ rem   test_xhq     - xhci98.sys's query answer (src\xhci_qry.c, design
 rem                  record 13 section 8.12): what each log level serves,
 rem                  the ring's text and cut, the PCI states, the sizing,
 rem                  XHCITR's reader and texts, the default level 2
+rem   test_vsd_list - S98VSD.VXD's pure half (src\vsd\vsd_list.c, task
+rem                  43.46, design record 30 section 9.1): the claim, the
+rem                  function table, the physical list and its refusals
 rem   test_di      - XHCIDI.EXE's pure part (xhciinst\di\di_core.c, task
 rem                  42-A.1, design record 27 section 11): the command line
 rem                  and its refusals, the result file's lines, the verdicts,
@@ -645,6 +648,9 @@ call :run test_pfs98 "test_pfs98.c ..\xhciperf\pf_s98.c ..\xhciperf\pf_core.c"
 rem test_dijob links both pure halves, the installer's and the helper's:
 rem each reads what the other writes (record 27 sections 4.1 and 4.2).
 call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_core.c"
+rem test_vsd_list links S98VSD.VXD's pure half (src\vsd\vsd_list.c, task
+rem 43.46, design record 30 section 9.1).
+call :run test_vsd_list "test_vsd_list.c ..\src\vsd\vsd_list.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

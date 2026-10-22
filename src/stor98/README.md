@@ -61,8 +61,11 @@ What Stor98 adds:
   completed exactly once with the right status; a controller that stops answering is reset
   within bounded time; shutdown, stop and resume flush, shut down and re-initialise the
   drive.
-- **Requests of up to 512 KiB on Windows 98 SE / ME** (256 KiB on Windows 2000 to 10;
-  a setting can lower either, see [Settings](#settings)):
+- **Requests of up to 2 MiB on Windows 98 SE / ME** (256 KiB on Windows 2000 to 10;
+  a setting can lower either, see [Settings](#settings)). Above 512 KiB this needs
+  xHCI98's `S98VSD.VXD`, which the xHCI98 installer offers on 98 SE and ME; without it
+  Windows still cuts every request over 512 KiB into 63 KiB pieces. Without it, and
+  up to 512 KiB:
   Windows 98 SE / ME passes a request to the driver whole only if it is at most 512 KiB
   and its buffer is page-aligned and physically contiguous enough. Only such requests
   larger than 256 KiB gain from the higher limit: in the emulator, aligned 512 KiB reads
@@ -166,7 +169,7 @@ Where they are set:
 
 | Setting | Windows 98 SE / ME value | Windows 2000 to 10 key | Unit | Default | Range | Outside the range |
 |---|---|---|---|---|---|---|
-| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `maxtransferkb=` | KiB | 512 on 98 SE / ME, 256 on 2000 to 10 | 64 to the default, in multiples of 4 | refused: the default stands |
+| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `maxtransferkb=` | KiB | 2048 on 98 SE / ME, 256 on 2000 to 10 | 64 to the default, in multiples of 4 | refused: the default stands |
 | Write-through | `StorWriteThrough` (string only) | `writethrough=` | - | `auto`: `cacheoff` on ME, `off` on 98 SE and on 2000 to 10 | `auto`, `off`, `cacheoff`, `fua` | an unknown word means `auto` |
 | Polling mode | `StorPollMode` (DWORD or string) | `pollmode=` | - | 0 | 0-1 | clamped to the nearer end |
 | Polling period while busy | `StorPollBusyUs` (DWORD or string) | `pollbusyus=` | microseconds | 1000 (1 ms); on 2000 to 10 in effect at least 10 ms | 1000-100000; 0 = the default | clamped to the nearer end |
@@ -182,9 +185,10 @@ shown to the user.
   (MaximumTransferLength, with as many physical breaks as pages plus one). It can only
   lower the built-in maximum, never raise it: a larger value, a value below 64, one that
   is not a multiple of 4, or a string that is not a plain decimal number is refused and
-  the default stands. On Windows 98 SE / ME only aligned, physically contiguous requests
-  above 256 KiB gain from 512 KiB (see above); a lower value is for testing or for
-  hardware that misbehaves with large requests.
+  the default stands. On Windows 98 SE / ME without `S98VSD.VXD` only aligned,
+  physically contiguous requests above 256 KiB gain from more than 256 KiB, and nothing
+  gains above 512 KiB (see above); a lower value is for testing or for hardware that
+  misbehaves with large requests.
 - **Write-through** turns the drive's volatile write cache off (`cacheoff`, checked
   after setting it, with `fua` used if the drive refuses), or marks every write
   Force Unit Access (`fua`), or leaves the drive as it is (`off`). `auto` is `cacheoff`

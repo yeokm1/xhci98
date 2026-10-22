@@ -676,6 +676,9 @@ typedef struct _INST_OPTS {
                                on for this computer (record 23 section
                                9.5 item 7)                              */
     int NoFaster;           /* /nofaster: off for this computer         */
+    int Stor98Vxd;          /* /s98vsd: S98VSD.VXD ticked, 98 SE and
+                               ME only (design record 30 section 7.2)  */
+    int NoStor98Vxd;        /* /nos98vsd: S98VSD.VXD unticked        */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -1470,6 +1473,10 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_STOR_T          42
 /* Record 26 section 5.3.1 case 5: 8 and 8.1, no connection manager. */
 #define INST_PT_WELCOME_TOOLS   43
+/* Design record 30 section 7.1: S98VSD.VXD's box, and its greyed form on
+ * every other system. */
+#define INST_PT_VSD             44
+#define INST_PT_VSD_OTHER       45
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1500,7 +1507,7 @@ INST_U32 inst_page_rows(INST_U32 heightDlu);
  * (test\stor98-settings.txt, a copy make-release.ps1 compares with the
  * bundled readme), so a Stor98 release that renames or retypes a value
  * fails the build rather than the user. */
-#define INST_S98_TABLE_VERSION  "0.4.0.0"
+#define INST_S98_TABLE_VERSION  "3.2.0.0"
 
 #define INST_S98_WORDS      0   /* a word of a list (StorWriteThrough)       */
 #define INST_S98_NUMBER     1   /* a decimal number in a range               */
@@ -1649,6 +1656,91 @@ extern const char instS98DisconnectText[];
 /* The window's Stor98 box (owner, 2026-10-19): under the Thunderbolt 3 /
  * USB4 box, and open only while that box can be and is ticked. */
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked);
+
+/* ---- S98VSD.VXD, the 98 SE and ME IOS layer for Stor98's disks (design
+ * record 30 section 7; owner, 2026-10-22) ---------------------------------- */
+
+/* The box, a child of Stor98's: shown where the package carries the file;
+ * open on 98 SE and ME (sys9x) while Stor98's box is ticked; ticked then
+ * unless /nos98vsd. On every other system shown greyed and unticked.
+ * Returns whether it is ticked. */
+int inst_vsd_box(int sys9x, int haveVsd, int s98Ticked, int noSwitch,
+                 int *shown, int *open);
+
+/* The run's mode for the layer. */
+#define INST_VSD_NONE       0   /* not 98 SE or ME: nothing of it          */
+#define INST_VSD_SELECTED   1   /* the box ticked                          */
+#define INST_VSD_DESELECTED 2   /* unticked by the user, or Stor98 removed */
+#define INST_VSD_INACTIVE   3   /* greyed by Stor98, which the run keeps  */
+#define INST_VSD_UNINSTALL  4
+/* s98Removed: the run removes the bundled Stor98 (record 30 decision D8,
+ * owner 2026-10-22: the layer follows Stor98). */
+int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
+                  int s98Removed, int vsdTicked);
+
+/* What a file is, by its SHA-256 against the record's two values. */
+#define INST_VF_ABSENT      0
+#define INST_VF_FILE        1   /* the bytes File names                    */
+#define INST_VF_PENDING     2   /* the bytes Pending names                 */
+#define INST_VF_OTHER       3   /* any other bytes, or unreadable          */
+/* WININIT.INI's [rename] lines naming either file. */
+#define INST_VE_ABSENT      0
+#define INST_VE_EXACT       1   /* this installer's one line, and no other */
+#define INST_VE_CONFLICT    2   /* any other line naming either file       */
+
+typedef struct _INST_VSDFACTS {
+    int Pending;            /* the record's Pending value is set          */
+    int FileVal;            /* the record's File value is set             */
+    int Dest;               /* IOSUBSYS\S98VSD.VXD: INST_VF_*             */
+    int Tmp;                /* IOSUBSYS\S98VSD.TMP: INST_VF_*             */
+    int Entry;              /* INST_VE_*                                  */
+    int Mode;               /* INST_VSD_*                                 */
+    int PkgIsPending;       /* the package's file is Pending's bytes      */
+    int PkgIsFile;          /* ... is File's bytes                        */
+    int FileIsPending;      /* File and Pending name the same bytes       */
+} INST_VSDFACTS;
+
+/* The next step of record 30 section 7.3's recovery and placement table,
+ * one at a time: the engine makes it, reads the facts again and asks
+ * again, until a value below INST_VOP_STEPS. */
+#define INST_VOP_DONE       0   /* nothing (more) to do                    */
+#define INST_VOP_QUEUED     1   /* done: an update is queued for the start */
+#define INST_VOP_FOREIGN    2   /* done: another installation's file left  */
+#define INST_VOP_BLOCK_TMP  3   /* stop: a S98VSD.TMP not this installer's */
+#define INST_VOP_BLOCK_INI  4   /* stop: another program's rename line     */
+#define INST_VOP_STEPS      10
+#define INST_VOP_SET_FILE   10  /* File := Pending's hash                  */
+#define INST_VOP_DEL_ENTRY  11  /* remove this installer's exact line      */
+#define INST_VOP_DEL_TMP    12  /* delete S98VSD.TMP                       */
+#define INST_VOP_DEL_PENDING 13 /* delete the Pending value                */
+#define INST_VOP_DEL_FILEVAL 14 /* delete the File value                   */
+#define INST_VOP_DEL_DEST   15  /* delete S98VSD.VXD (File's bytes)        */
+#define INST_VOP_START      16  /* Pending := the package's hash, then the
+                                   .TMP written CREATE_NEW and compared   */
+#define INST_VOP_MOVE       17  /* move the .TMP into an absent S98VSD.VXD */
+#define INST_VOP_WRITE_ENTRY 18 /* write this installer's exact line       */
+int inst_vsd_next(const INST_VSDFACTS *f);
+
+/* The layer's file names in IOSUBSYS. Windows loads an IOSUBSYS driver by
+ * its base name, so the layer's must differ from Stor98's (stor98.mpd):
+ * the test cuts' STOR98.VXD stopped Stor98's start (Code 10, record 30
+ * section 3.1). INST_VSD_OLD is that name, removed when it is this
+ * project's file. */
+#define INST_VSD_FILE       "S98VSD.VXD"
+#define INST_VSD_TMPNAME    "S98VSD.TMP"
+#define INST_VSD_OLD        "STOR98.VXD"
+/* 1 when two file names' base names (before the last dot) differ, case
+ * ignored. */
+int inst_base_differs(const char *a, const char *b);
+/* 1 when the bytes are this project's layer under its old name: an LE
+ * image whose DDB is named S98VSD and which holds the stamp "STOR98.VXD ",
+ * or the bytes the
+ * record's File or Pending hash names (hex, either may be empty). */
+/* The DDB name (eight characters) of an LE image's first entry, through
+ * its object page table. 0 when the bytes are no such image. */
+int inst_le_ddb_name(const unsigned char *buf, size_t n, char name[9]);
+int inst_vsd_old_is_own(const unsigned char *buf, size_t n, const char *hash,
+                        const char *file, const char *pend);
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel);
 
@@ -1786,6 +1878,9 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
 #define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
 #define INST_STOR_PACK_DIR      "NUSB33\\W98SE"
 #define INST_STOR_KEY           "Software\\xhci98\\Storage"
+/* S98VSD.VXD's own record (design record 30 section 7.4): File and
+ * Pending, apart from Stor98's. */
+#define INST_VSD_KEY            "Software\\xhci98\\Stor98Vxd"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
 
