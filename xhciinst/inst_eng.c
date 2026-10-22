@@ -16364,6 +16364,7 @@ static int vsd_run(int mode)
     char pend[80];
     int i;
     int op = INST_VOP_DONE;
+    int conflict = 0;
 
     if (envNow.Nt || mode == INST_VSD_NONE || opts.List) {
         return 1;
@@ -16377,6 +16378,7 @@ static int vsd_run(int mode)
             step(INST_STEP_FAILED, "STOR98.VXD: its record unreadable");
             return 0;
         }
+        conflict = conflict || f.Entry == INST_VE_CONFLICT;
         op = inst_vsd_next(&f);
         logonly("stor98vxd: mode %d pend %d file %d dest %d tmp %d entry %d "
                 "-> %d\n", mode, f.Pending, f.FileVal, f.Dest, f.Tmp, f.Entry,
@@ -16427,6 +16429,17 @@ static int vsd_run(int mode)
         flagFailed = 1;
         step(INST_STEP_FAILED, "STOR98.VXD: the steps did not settle");
         return 0;
+    }
+    if (conflict) {
+        /* Another program's [rename] line is left as it is (record 30
+         * section 7.3): it may put a file at IOSUBSYS\STOR98.VXD at the
+         * next start, whatever this run removed. */
+        out("WININIT.INI holds another program's [rename] line for "
+            "IOSUBSYS\\STOR98.VXD or S98VSD.TMP; it is left as it is and "
+            "may put a file there at the next start.\n");
+        steps_add_id("STOR98.VXD", "another program's WININIT.INI line names "
+                     "it: after the next start, check IOSUBSYS\\STOR98.VXD");
+        flagSteps = 1;
     }
     step(INST_STEP_DONE, (vsdDid & 4) ? "STOR98.VXD: removed" :
          (vsdDid & 1) ? "STOR98.VXD: installed" : "STOR98.VXD: as it is");

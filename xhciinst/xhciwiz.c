@@ -955,8 +955,10 @@ static void comp_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_VSD, inst_page_text(vsd9x ? INST_PT_VSD :
                                                    INST_PT_VSD_OTHER));
     CheckDlgButton(dlg, IDC_C_VSD, vsdChoice ? BST_CHECKED : BST_UNCHECKED);
-    ShowWindow(GetDlgItem(dlg, IDC_C_VSD), s98Have && vsdShown ? SW_SHOW :
-                                                                 SW_HIDE);
+    /* On 98 SE and ME where the package carries the file; greyed on every
+     * other system whatever the package carries (record 30 section 7.1). */
+    ShowWindow(GetDlgItem(dlg, IDC_C_VSD),
+               s98Have && (vsdShown || !vsd9x) ? SW_SHOW : SW_HIDE);
     comp_s98_sync(dlg);
     SetDlgItemTextA(dlg, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(dlg, IDC_C_TRAY_T, inst_page_text(INST_PT_TRAY_T));

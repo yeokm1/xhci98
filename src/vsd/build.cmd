@@ -75,8 +75,16 @@ rem lists every object's code, and no IN/OUT-family instruction may be in it
 rem (the qemu image's debug-console writes are its alone).
 if /i not "%FLAV%"=="qemu" (
     for %%F in (vsd vsd_list vsd_data) do (
-        wdis %O%\%%F.obj | findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]out$" >nul && (
+        wdis %O%\%%F.obj > %O%\%%F.dis || (
+            echo STOR98.VXD: wdis could not disassemble %%F.obj
+            exit /b 1
+        )
+        findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]out$" %O%\%%F.dis >nul && (
             echo STOR98.VXD: %%F.obj has an OUT instruction in the release build
+            exit /b 1
+        )
+        findstr /r /c:"^0000 " %O%\%%F.dis >nul || (
+            echo STOR98.VXD: %%F.dis holds no disassembled code
             exit /b 1
         )
     )
