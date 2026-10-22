@@ -818,9 +818,11 @@ void tr_fast_tip(char *out, size_t cap, int count);
  * One that goes without being shown was lost (7 drops it behind its own
  * "device ready" balloon) and is sent again, once, TR_BS_WAIT_MS after it
  * went. One the shell does not answer at all within TR_BS_NOSHOW_MS is
- * sent again at once, but only where the shell has been seen to answer
- * (reports): a shell that never sends these messages would otherwise get
- * every balloon twice. A re-send is NIM_MODIFY on the same icon, taken to
+ * sent again at once, but only where the shell answers (reports: heard
+ * from in this session, or Vista and later, whose shell was read
+ * answering - 7 drops a balloon queued behind its own without a word): a
+ * shell that never sends these messages would otherwise get every
+ * balloon twice. A re-send is NIM_MODIFY on the same icon, taken to
  * replace a balloon the shell still queues (record 25 section 7.7 item 9).
  * A show after a "gone" still ends it: the messages name no balloon. */
 #define TR_BS_IDLE      0   /* nothing owed                               */
@@ -846,8 +848,9 @@ typedef struct _TR_BSEND {
     TR_U32 Since;               /* GetTickCount of the last change         */
 } TR_BSEND;
 
-/* One event at nowMs (GetTickCount, wrapping); reports: the shell has sent
- * a NIN_BALLOON* message in this session. Returns 1 when the balloon is to be sent
+/* One event at nowMs (GetTickCount, wrapping); reports: the shell answers
+ * (a NIN_BALLOON* message heard in this session, or NT 6.0 and later).
+ * Returns 1 when the balloon is to be sent
  * again now: the state is then already TR_BS_SENT with Resent set, and the
  * caller sends it with no TR_BE_SENT. Zeroed is TR_BS_IDLE. */
 int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports);

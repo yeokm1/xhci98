@@ -1772,7 +1772,9 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
      have been an older balloon's, posted before this one was sent);
    - no answer at all within 60 s (`TR_BS_NOSHOW_MS`): sent again at
      once, but **only where the shell has sent one of the four messages
-     in this session**, for any balloon of the tool's, so a shell that never sends
+     in this session**, for any balloon of the tool's, **or the system
+     is Vista or later** (NT 6.0 and up), whose shell was read answering
+     and dropping a queued balloon without a word (below), so a shell that never sends
      them is never sent a balloon twice;
    - the re-send gone unshown or unanswered too: given up;
    - another balloon of the tool's sent meanwhile (a removal's, an
@@ -1788,7 +1790,19 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    balloon, nothing more. It matters only to the no-answer case (a
    balloon gone unshown cannot be shown twice); 43.66's leg reads which
    messages 7 sends, and if 7 answers the dropped balloon with a timeout
-   the no-answer re-send can be removed. One race is left as it is: a
+   the no-answer re-send can be removed. **Read on 7 x86 (QEMU,
+   2026-10-23, `runs/run-43.md`, "43.66"; a build that logged each
+   message):** a balloon sent while Windows' own "Your device is ready
+   to use" holds the area gets no message at all - no show, no timeout
+   - for as long as Windows' stays (it stays while the user is idle,
+   minutes on end); with the user active, ours is shown about 10 s after
+   it was sent and timed out 8 s later when Windows' replaced it, so a
+   shown balloon is reported as shown. The silence is why the no-answer
+   case exists, and why Vista and later count as answering from the
+   start: the first balloon of a session (43.28's case) has no earlier
+   answer to learn from. On 7 the re-send at 60 s then waited in the
+   shell's queue and was shown once Windows' had gone, once, the
+   original not shown beside it. One race is left as it is: a
    show still queued for another balloon of the tool's sent just before
    the notice's (both in one poll) is taken as the notice's, and the notice
    is then not sent again if it was in fact lost - the behaviour before

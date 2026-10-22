@@ -6525,12 +6525,17 @@ static void fast_announce(void)
 static int balloonAnswers;      /* the shell has sent a NIN_BALLOON* message */
 static void fast_balloon_event(int ev)
 {
-    if (tr_bsend_step(&fastSend, ev, GetTickCount(), balloonAnswers)) {
+    /* A shell that answers: one heard from in this session, or Vista and
+     * later, whose shell was read answering (7, task 43.66) and drops a
+     * balloon queued behind its own without a word. */
+    int answers = balloonAnswers || (envNt && envMajor >= 6);
+
+    if (tr_bsend_step(&fastSend, ev, GetTickCount(), answers)) {
         if (iconAdded && fastOn && fastCount > 0) {
             (void)tray_balloon_send(TR_FAST_TITLE, fastText, 0, 1);
         } else {
             (void)tr_bsend_step(&fastSend, TR_BE_DROP, GetTickCount(),
-                                balloonAnswers);
+                                answers);
         }
     }
 }
