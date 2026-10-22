@@ -319,7 +319,7 @@ it `< NUL`.
 | `xhciinst\build.cmd`, `6c9e49f1` | passed |
 | host suites (`test\run-host-tests.cmd`), `6c9e49f1` | 0 failures (`test_inst` 1790 checks) |
 | host suites, the closing commit (the gates keyed on the kind, Secure Boot's state) | 0 failures (`test_inst` 1798 checks) |
-| `xhciinst\build.cmd`, `build-driver.cmd all`, `all -amd64`, the closing commit | GATED_RESULT |
+| `xhciinst\build.cmd`, `build-driver.cmd all`, `all -amd64`, `544cfcd4` | passed (`BUILD + GATES PASSED (debug release qemu)` for x86 and amd64; a first run failed the self-test's "every screen within 79 columns" on an 80-column line of the x86 Secure Boot note, rewrapped before the commit) |
 
 ### Not read
 
