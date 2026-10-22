@@ -15291,7 +15291,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [%s].\n", def ? "Y" : "N");
     } else if (!def) {
-        out("  /yes: N on Windows 8 and 8.1 (/stor98 installs it).\n");
+        out("  /yes: N on Windows 8, 8.1 and 10 (/stor98 installs it).\n");
     } else {
         out("  /yes: Y, with the Thunderbolt support (/nostor98 leaves it "
             "out).\n");
@@ -19415,7 +19415,7 @@ void inst_eng_usage(void)
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (on 98 SE and ME with a warning)\n"
-"  /usb          Windows 8 and 8.1: install the USB drivers too (untested)\n"
+"  /usb          Windows 8, 8.1 and 10: install the USB drivers too (untested)\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
@@ -20587,8 +20587,8 @@ int inst_eng_begin(int argc, char **argv)
         envNow.Nt = 1;
         if (osKind == INST_OS_REFUSED) {
             out("This Windows is not one this package supports (2000, XP, "
-                "XP x64, Vista, 7;\n8 and 8.1 for the Thunderbolt 3 / USB4 "
-                "connection manager alone).\n");
+                "XP x64, Vista, 7;\n8, 8.1 and 10 below build 22000 for the "
+                "Thunderbolt 3 / USB4\nconnection manager).\n");
             return INST_EXIT_REFUSED;
         }
         isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
@@ -20622,7 +20622,7 @@ int inst_eng_begin(int argc, char **argv)
         if ((opts.CmOnly || (osKind == INST_OS_CMONLY && !opts.Usb)) &&
             (sk == INST_INF_XHCI || sk == INST_INF_UAS)) {
             out("REFUSED: /set %s:\nthe USB drivers are not in this run "
-                "(/cmonly, or Windows 8 and 8.1).\n",
+                "(/cmonly, or Windows 8, 8.1 and 10).\n",
                 instValues[opts.SetIndex[i]].Name);
             return INST_EXIT_REFUSED;
         }
@@ -20745,7 +20745,7 @@ static int usb_decide(void)
         out("%s: this package installs the Thunderbolt 3 / USB4 connection "
             "manager\nhere; Windows' own USB 3 driver keeps running the USB "
             "controllers unless\n/usb puts the xHCI98 USB drivers in the run "
-            "(untested on Windows 8 and 8.1).\n\n",
+            "(untested on Windows 8, 8.1\nand 10).\n\n",
             inst_os_name(1, envNow.Major, envNow.Minor,
                          osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY) {

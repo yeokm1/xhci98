@@ -3466,7 +3466,7 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
     if (osKind == INST_OS_CMONLY) {
         if (!haveCm) {
             *refusal = "this package carries no Thunderbolt or USB4 driver: "
-                       "there is nothing to install on Windows 8 or 8.1.";
+                       "there is nothing to install on Windows 8, 8.1 or 10.";
             return -1;
         }
         *offered = 1;
@@ -3554,7 +3554,7 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
     if (set & INST_CW_USB8) {
         inst_cat_para(out, cap,
                       "The xHCI98 USB drivers have not been tested on Windows "
-                      "8 or 8.1. They replace Windows' own USB 3 driver on "
+                      "8, 8.1 or 10. They replace Windows' own USB 3 driver on "
                       "every xHCI controller, the one your keyboard and mouse "
                       "may use included. The uninstall is meant to give the "
                       "controllers back to Windows' own driver; that has not "
@@ -3562,7 +3562,7 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
     }
     if (set & INST_CW_S98_8) {
         inst_cat_para(out, cap,
-                      "Stor98 has not been tested on Windows 8 or 8.1. If a "
+                      "Stor98 has not been tested on Windows 8, 8.1 or 10. If a "
                       "drive behind a Thunderbolt or USB4 tunnel uses "
                       "Windows' own NVMe driver, this choice replaces it.");
     }
