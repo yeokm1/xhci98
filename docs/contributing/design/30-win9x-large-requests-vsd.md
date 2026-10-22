@@ -617,6 +617,10 @@ section 3.4 is part of what is measured. If a loss of more
 than the run-to-run spread remains on the near-contiguous phases, the
 record says so and the owner decides whether it ships (section 11).
 
+The cost leg is dropped for 3.2.0.0 (owner, 2026-10-22): on the owner's
+P14s the layer gained 4 to 5 times at 1 and 2 MiB and twice at 128 KiB
+(section 9.2).
+
 ### 4.5 Refusals
 
 A refusal sets `IOR_status` to `IORS_INVALID_COMMAND` ("command not
@@ -1120,6 +1124,10 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
    directions) repeats the 2 MiB phases.
 2. **The cost**: the same phases, Stor98 alone against Stor98 with the
    layer, back to back with the host load recorded (section 4.4).
+   Dropped for 3.2.0.0 (owner, 2026-10-22): the first real-hardware
+   reading below settles that the layer ships. A cost or speed task opens
+   after 3.2.0.0 only if Windows 7 reads the same drive much faster at one
+   request (Q1T1).
 3. **Insertion order**: the chain and `DCB_dmd_flags` at the first
    request on the gold 98 SE IOS set, on ME, and on each with the disk
    present at boot (an enclosure attached at power-on) as well as plugged

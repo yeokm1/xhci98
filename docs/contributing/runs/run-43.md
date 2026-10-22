@@ -619,6 +619,12 @@ follows the file's creation. A fair second run deletes `P.BIN`, cold
 starts, runs `PERF2` twice per boot and keeps the second run, and
 alternates the arms.
 
+The cost table (Stor98 alone against Stor98 with the layer, near-contiguous
+and fragmented, back to back in the emulator; record 30 section 9.2 item 2)
+is dropped for 3.2.0.0 (owner, 2026-10-22). A cost or speed task opens
+after 3.2.0.0 only if Windows 7's Q1T1 reading on the same drive is much
+faster.
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on

@@ -5841,16 +5841,110 @@ static int inst_has_bytes(const unsigned char *buf, size_t n, const char *s)
     return 0;
 }
 
+/* A byte of an LE object at an offset, through the object page table:
+ * -1 outside the image. */
+static int inst_le_byte(const unsigned char *buf, size_t n, unsigned long le,
+                        unsigned long obj, unsigned long off)
+{
+    unsigned long ps = inst_le32(buf + le + 0x28);
+    unsigned long ot = le + inst_le32(buf + le + 0x40);
+    unsigned long pm = le + inst_le32(buf + le + 0x48);
+    unsigned long dp = inst_le32(buf + le + 0x80);
+    unsigned long npages = inst_le32(buf + le + 0x14);
+    unsigned long oe = ot + 24 * (obj - 1);
+    unsigned long vsize;
+    unsigned long first;
+    unsigned long count;
+    unsigned long page;
+    unsigned long e;
+    unsigned long pnum;
+    unsigned long at;
+
+    if (ps == 0 || ps > 0x10000 || ot < le || pm < le || obj > 0x10000 ||
+        oe < ot || oe + 24 > n) {
+        return -1;
+    }
+    vsize = inst_le32(buf + oe);
+    first = inst_le32(buf + oe + 12);
+    count = inst_le32(buf + oe + 16);
+    if (off >= vsize || off / ps >= count) {
+        return -1;
+    }
+    page = first + off / ps;
+    if (page == 0 || page > npages) {
+        return -1;
+    }
+    e = pm + 4 * (page - 1);
+    if (e + 4 > n) {
+        return -1;
+    }
+    pnum = ((unsigned long)buf[e] << 16) | ((unsigned long)buf[e + 1] << 8) |
+           (unsigned long)buf[e + 2];
+    if (pnum == 0) {
+        return -1;
+    }
+    if (pnum - 1 > (unsigned long)n / ps) {
+        return -1;
+    }
+    at = dp + (pnum - 1) * ps + off % ps;
+    if (at < dp || at >= n) {
+        return -1;
+    }
+    return buf[at];
+}
+
+int inst_le_ddb_name(const unsigned char *buf, size_t n, char name[9])
+{
+    unsigned long le;
+    unsigned long et;
+    unsigned long obj;
+    unsigned long off;
+    int i;
+
+    name[0] = '\0';
+    if (buf == NULL || n < 0x40 || buf[0] != 'M' || buf[1] != 'Z') {
+        return 0;
+    }
+    le = inst_le32(buf + 0x3C);
+    if (le > n || n - le < 0x84 || buf[le] != 'L' || buf[le + 1] != 'E') {
+        return 0;
+    }
+    et = le + inst_le32(buf + le + 0x5C);
+    /* The first bundle: its count, type 3 (32-bit entries), the object;
+     * entry 1 is the flags byte and the offset of the DDB. */
+    if (et < le || et + 9 > n || buf[et] == 0 || buf[et + 1] != 3) {
+        return 0;
+    }
+    obj = (unsigned long)buf[et + 2] | ((unsigned long)buf[et + 3] << 8);
+    off = inst_le32(buf + et + 5);
+    if (obj == 0 || obj > inst_le32(buf + le + 0x44) || off > 0xFFFFFFF0UL) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        int c = inst_le_byte(buf, n, le, obj, off + 0x0C + (unsigned long)i);
+
+        if (c < 0) {
+            name[0] = '\0';
+            return 0;
+        }
+        name[i] = (char)c;
+    }
+    name[8] = '\0';
+    return 1;
+}
+
 int inst_vsd_old_is_own(const unsigned char *buf, size_t n, const char *hash,
                         const char *file, const char *pend)
 {
+    char name[9];
+
     if (hash != NULL && hash[0] != '\0' &&
         ((file != NULL && file[0] != '\0' && inst_eq(hash, file)) ||
          (pend != NULL && pend[0] != '\0' && inst_eq(hash, pend)))) {
         return 1;
     }
-    return buf != NULL && n >= 2 && buf[0] == 'M' && buf[1] == 'Z' &&
-           inst_has_bytes(buf, n, "S98VSD  ") &&
+    return inst_le_ddb_name(buf, n, name) &&
+           memcmp(name, "S98VSD  ", 8) == 0 &&
            inst_has_bytes(buf, n, "STOR98.VXD ");
 }
 

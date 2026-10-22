@@ -16642,17 +16642,33 @@ static int vsd_old_name(void)
     join(tmp, sizeof(tmp), dir, INST_VSD_TMPNAME);
     join(tmpS, sizeof(tmpS), dirS, INST_VSD_TMPNAME);
     join(ini, sizeof(ini), win, "WININIT.INI");
-    /* The test cut's queued update to the old name: its line only. */
-    for (k = 0; k < 2; k++) {
-        const char *key = k == 0 ? oldS : old;
+    /* The test cut's queued update to the old name: its lines only, one
+     * at a time (a profile read sees the first of equal keys). */
+    for (k = 0; k < 8; k++) {
+        const char *key = (k & 1) == 0 ? oldS : old;
 
         val[0] = '\0';
         GetPrivateProfileStringA("rename", key, "", val, sizeof(val), ini);
         if (val[0] != '\0' && vsd_names(val, tmp, tmpS)) {
-            if (WritePrivateProfileStringA("rename", key, NULL, ini)) {
-                logonly("s98vsd: WININIT.INI [rename] %s (the old name) "
-                        "taken back\n", key);
+            int gone = WritePrivateProfileStringA("rename", key, NULL, ini);
+
+            val[0] = '\0';
+            GetPrivateProfileStringA("rename", key, "", val, sizeof(val), ini);
+            if (!gone || val[0] != '\0') {
+                /* Left, it would put the old name back at the next start
+                 * whatever is deleted now. */
+                out("The [rename] line for %s in %s could not be taken back "
+                    "(error %lu): restart Windows, then run the installer "
+                    "again.\n", key, ini, (unsigned long)GetLastError());
+                steps_add_id(INST_VSD_OLD, "a queued update to the old name "
+                             "remains: restart Windows, then run the installer "
+                             "again");
+                flagSteps = 1;
+                flagRestart = 1;
+                return 0;
             }
+            logonly("s98vsd: WININIT.INI [rename] %s (the old name) "
+                    "taken back\n", key);
         }
     }
     if (!file_exists(old, NULL)) {

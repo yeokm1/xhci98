@@ -1627,9 +1627,13 @@ int inst_vsd_next(const INST_VSDFACTS *f);
 /* 1 when two file names' base names (before the last dot) differ, case
  * ignored. */
 int inst_base_differs(const char *a, const char *b);
-/* 1 when the bytes are this project's layer under its old name: an image
- * with the DDB name S98VSD and the stamp "STOR98.VXD ", or the bytes the
+/* 1 when the bytes are this project's layer under its old name: an LE
+ * image whose DDB is named S98VSD and which holds the stamp "STOR98.VXD ",
+ * or the bytes the
  * record's File or Pending hash names (hex, either may be empty). */
+/* The DDB name (eight characters) of an LE image's first entry, through
+ * its object page table. 0 when the bytes are no such image. */
+int inst_le_ddb_name(const unsigned char *buf, size_t n, char name[9]);
 int inst_vsd_old_is_own(const unsigned char *buf, size_t n, const char *hash,
                         const char *file, const char *pend);
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,

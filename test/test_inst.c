@@ -4674,12 +4674,59 @@ static void vboot(VMODEL *m)
  * 3.1: Windows loads an IOSUBSYS driver by its base name; STOR98.VXD
  * beside stor98.mpd stopped Stor98's start), and the old name's file
  * recognised as this project's. */
+/* A minimal LE image: MZ at 0, LE at 0x40, one object of one page, the
+ * entry table's first bundle naming the DDB at offset ddbOff of that
+ * object, the page at file offset 0x200 (page size 0x100). */
+static unsigned char leImg[0x400];
+
+static void le_put32(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+static size_t le_make(const char *ddbName, unsigned long ddbOff,
+                      const char *text)
+{
+    unsigned char *le = leImg + 0x40;
+    unsigned char *ot = le + 0x100;
+    unsigned char *pm = le + 0x120;
+    unsigned char *et = le + 0x130;
+
+    memset(leImg, 0, sizeof(leImg));
+    leImg[0] = 'M';
+    leImg[1] = 'Z';
+    le_put32(leImg + 0x3C, 0x40);
+    le[0] = 'L';
+    le[1] = 'E';
+    le_put32(le + 0x14, 1);          /* pages */
+    le_put32(le + 0x28, 0x100);      /* page size */
+    le_put32(le + 0x40, 0x100);      /* object table */
+    le_put32(le + 0x44, 1);          /* objects */
+    le_put32(le + 0x48, 0x120);      /* object page table */
+    le_put32(le + 0x5C, 0x130);      /* entry table */
+    le_put32(le + 0x80, 0x200);      /* data pages (file offset) */
+    le_put32(ot, 0x100);             /* virtual size */
+    le_put32(ot + 12, 1);            /* first page */
+    le_put32(ot + 16, 1);            /* page count */
+    pm[2] = 1;                       /* page 1 */
+    et[0] = 1;
+    et[1] = 3;
+    et[2] = 1;                       /* object 1 */
+    le_put32(et + 5, ddbOff);
+    if (ddbOff + 0x14 <= 0x100) {
+        memcpy(leImg + 0x200 + ddbOff + 0x0C, ddbName, 8);
+    }
+    memcpy(leImg + 0x300, text, strlen(text));
+    return sizeof(leImg);
+}
+
 static void test_vsd_names(void)
 {
-    static const unsigned char own[] =
-        "MZ....LE....S98VSD  ....STOR98.VXD 3.2.0.0";
-    static const unsigned char other[] = "MZ....LE....OTHERVXD....STOR98.VXD";
-    static const unsigned char noMz[] = "XX....S98VSD  ....STOR98.VXD 3.2.0.0";
+    char name[9];
+    size_t n;
     int i;
     int ios = 0;
 
@@ -4702,13 +4749,35 @@ static void test_vsd_names(void)
     CHECK(ios != 0, "Stor98 has an IOSUBSYS file");
     CHECK(!inst_base_differs(INST_VSD_FILE, INST_VSD_TMPNAME),
           "the .TMP is the layer's own name");
-    CHECK(inst_vsd_old_is_own(own, sizeof(own) - 1, "AA", "", ""),
-          "an old-name image with S98VSD and the old stamp is own");
-    CHECK(!inst_vsd_old_is_own(other, sizeof(other) - 1, "AA", "", ""),
-          "another DDB name: not own");
-    CHECK(!inst_vsd_old_is_own(noMz, sizeof(noMz) - 1, "AA", "", ""),
-          "not an image: not own");
-    CHECK(inst_vsd_old_is_own(other, sizeof(other) - 1, "AB", "AB", ""),
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    CHECK(inst_le_ddb_name(leImg, n, name) && strcmp(name, "S98VSD  ") == 0,
+          "the DDB name read through the entry and page tables");
+    CHECK(inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "an old-name image: DDB S98VSD and the old stamp: own");
+    n = le_make("S98VSD  ", 0x10, "S98VSD.VXD 3.2.0.0");
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "DDB S98VSD without the old stamp: not own");
+    n = le_make("OTHERVXD", 0x10, "S98VSD   STOR98.VXD 3.2.0.0");
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "both strings in the text, another DDB name: not own");
+    n = le_make("S98VSD  ", 0x1000, "STOR98.VXD 3.2.0.0");
+    CHECK(!inst_le_ddb_name(leImg, n, name) &&
+          !inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "the DDB outside its object: not read, not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    leImg[0x40 + 0x130 + 1] = 2;
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "an entry bundle not 32-bit: not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    leImg[0x41] = 'X';
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "no LE header: not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    CHECK(!inst_vsd_old_is_own(leImg, 0x250, "AA", "", ""),
+          "the image cut short before the stamp: not own");
+    CHECK(!inst_le_ddb_name(leImg, 0x80, name), "cut short in the header");
+    n = le_make("OTHERVXD", 0x10, "");
+    CHECK(inst_vsd_old_is_own(leImg, n, "AB", "AB", ""),
           "the record's File bytes: own");
     CHECK(inst_vsd_old_is_own(NULL, 0, "CD", "", "cd"),
           "the record's Pending bytes, case ignored: own");
