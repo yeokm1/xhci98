@@ -790,3 +790,169 @@ ASM2464 router, as 43.45 ran them:
   or the new line; and the same eject as an administrator, unchanged;
 - a sleep or hibernate and resume with XHCITR in the tray: no balloon;
 - where the vehicle allows, a resume that fails: the balloon.
+
+## 43.32 the Windows 10 virtual machines (2026-10-22)
+
+Two Windows 10 22H2 guests, x86 and x64, recorded in `build-and-test.md`,
+"Windows 10 target VMs (roadmap-usb4 43.32)". Development host A; the
+host loaded throughout (other agents' guests and builds; CPU near 97 % at
+13:45).
+
+**Verdict: the two TCG machines are set up; the OVMF guest with Secure
+Boot on is not built, so 43.32 stays open.**
+
+### What was done
+
+- **The images** (2026-10-22, 11:13 to 12:40, the Windows 8, 8.1 and 10
+  image session): `w10x64-pristine.qcow2` and `w10x86-pristine.qcow2`,
+  10.0.19045.2965, Pro, from the owner's `Win10_22H2_English_x64v1.iso`
+  and `Win10_22H2_English_x32v1.iso` by an unattended install - WinPE and
+  the image copy under WHPX (owner: WHPX for the base-image installs
+  only), specialize, OOBE and the first logon under TCG with the legs'
+  `-machine pc -cpu qemu64,+3dnowprefetch`. `SkipMachineOOBE` and
+  `SkipUserOOBE` were needed: without them 10's user OOBE stalled.
+  Test-signing on, autologon, hibernation and Windows Update off, no
+  network; a verify boot of each reached the desktop in under 7 minutes.
+- **The prepared starting points** (12:55 to 13:38): each image booted
+  once on an overlay that became `prep.qcow2` (now read-only): the
+  scheduled task `xrun` (run level highest, as `xhci`) that calls
+  `<transfer drive>\auto\go.cmd`, and a first reading of each guest. The
+  task's logon trigger did not fire at the autologon on either guest; a
+  leg starts it with `schtasks /run /tn xrun` from Win+R, which runs it
+  elevated with no consent prompt.
+- **The machine**: the usb4-emu QEMU (`vm\usb4\bin-2a893ea`), TCG
+  `thread=multi`, `-smp 2`, 2048 MB (the host's limit for 8 to 10 guests
+  that day), SeaBIOS, `qemu-xhci,p2=8,p3=4` with the tablet, two
+  `usb-storage` (a USB 3 port and a USB 2.0-only port), `usb-uas`,
+  `usb-audio`, `usb-hub` with `usb-kbd`, and the emulator's Thunderbolt 3
+  NHI with its xHCI and tunnel bridge; QMP 48660 (x86) and 48661 (x64).
+
+### The speed under TCG (read first, as the entry asks)
+
+Power-on to the autologon desktop about 4.5 minutes at `-smp 2` on both
+guests; a forced driver install 7 s (x64) to under 3 minutes with its
+prompt (x86); `msinfo32 /report` about 10 minutes, the longest step of a
+reading. **Usable for reading and install legs on TCG**; no WHPX was
+needed for any leg, so the owner's choice between a slower leg and WHPX
+does not arise for these. Timings are from a loaded host and are noisy.
+
+### Not done
+
+- **The OVMF guest with Secure Boot on** (for 43.36's refusal case).
+  The usb4-emu build carries `edk2-x86_64-secure-code.fd` (needs `q35`
+  with SMM) but no variable store with Microsoft's keys enrolled, and no
+  `EnrollDefaultKeys` application; the keys would have to be enrolled by
+  hand in the firmware's Secure Boot configuration (custom mode: a
+  platform key of the project's own, Microsoft's KEK and Windows
+  Production PCA 2011 certificates from Microsoft's download pages), and
+  10 x64 installed fresh under UEFI, since the MBR images do not boot
+  under OVMF. Not attempted in this task; an owner question in the
+  report.
+
+## 43.33 Windows 10, read first: the guest legs (2026-10-22)
+
+The measured half of 43.33; the static reading and the conclusions are
+design record 13 section 6.14 ((a) and (b)), record 21 section 3.6 ((c))
+and record 23 section 5.12 ((d) and (e)). Runtime, development host A,
+on 43.32's two guests, one at a time, host loaded (other agents' guests
+and builds). Nothing of this project's was built: the package is the
+published `3.1.0.0` (`releases\3.1.0.0`, `release-x64` and the x86
+release directory), copied to the transfer drive's `pkg\`.
+
+### The vehicle
+
+- The guests of 43.32 (`build-and-test.md`, "Windows 10 target VMs"):
+  10.0.19045.2965 Pro, legacy BIOS ("BIOS Mode Legacy", "Secure Boot
+  State Unsupported", "Kernel DMA Protection Off", "Virtualization-based
+  security Not enabled", `msinfo32`), test-signing on, `RtlGetVersion`
+  10.0.19045, platform 2, product type 1.
+- A leg overlay per guest (`w10x64-x98`, `w10x86-x98`) over the prepared
+  starting point, the full device set (`tab,ss3,ss2,uas,aud,hub,nhi`),
+  `-smp 2`, 2048 MB.
+- The leg's script `go.cmd` (started by `schtasks /run /tn xrun`): a
+  reading under Windows' own stack (`ms`); the installer's NT route by
+  hand, `UpdateDriverForPlugAndPlayDevicesW` with `INSTALLFLAG_FORCE` on
+  the `qemu-xhci` controller's first hardware id with the package's
+  `xhci98.inf` (`force.ps1`); a reading (`x98a`); a restart and a
+  reading. Each reading (`read2.ps1`): `pnputil /enum-devices /connected
+  /drivers` and `/enum-drivers`, the Enum, Class, service and USB keys,
+  the setup logs, the System, Kernel-PnP, USB and Code Integrity event
+  logs, `bcdedit`, `msinfo32 /report`, the USB scheduled tasks, written
+  to the output disk and read on the host with 7-Zip after power-off.
+
+### x64 (13:38 to 14:33)
+
+- `ms`: the devices of record 13 section 6.14.3's table: `qemu-xhci` and
+  the emulator's xHCI under `usbxhci.inf` (`00802005`), root hubs and
+  the USB 2.0 hub under `usbhub3.inf`, HID under `input.inf`, both
+  `usb-storage` under `usbstor.inf`, `usb-audio` composite with
+  `wdma_usb.inf` on `MI_00`, **`usb-uas` Code 10 under Windows' own
+  `uaspstor.inf`**, the NHI `8086:15BF` Code 28. Explorer's details pane
+  (This PC, a drive selected): F: "Connected to USB 3.0", G: no line.
+- The forced install, 14:10: **refused**, `0xE000022F`, in 7 s, no
+  prompt; the setup log: "Driver package does not contain a catalog
+  file, and Code Integrity is in Test Signing mode", "Failed to import
+  driver package into Driver Store". The controller stayed on
+  `usbxhci.sys`; the guest was powered off with no restart leg.
+
+### x86 (14:34 to 16:12)
+
+- `ms` (14:47 to 15:05): the same table as x64's, `usb-uas` Code 10 and
+  the NHI Code 28 included. (A second instance of the leg's script,
+  started twice by the previous operator, took a second reading under
+  Windows' own stack from 15:05 to 15:09, filed as `x98b`; it is a
+  duplicate of `ms`, not a post-restart reading.)
+- The forced install, 15:16 to 15:22: "Windows can't verify the
+  publisher of this driver software" (Windows Security), "Install this
+  driver software anyway" clicked; `UpdateDriverForPlugAndPlayDevicesW`
+  returned TRUE, reboot required, 349 s with the prompt. The setup log:
+  "Driver package does not contain a catalog file, but user wants to
+  install anyway", "Signer Score = 0x80000000 (Unsigned)", the package
+  imported as `oem2.inf`, `xhci98.sys` and `xhcihlpr.sys` copied, the
+  services `xhci98` and `xhcihlpr` added, `DelService=xhcimsi`, and
+  "Device required reboot: 'Reboot' in section: [Xhci.Dev6.NTx86]".
+- `x98a` (15:24 to 15:29, before the restart): the controller's devnode
+  "xHCI98 USB 3.x eXtensible Host Controller", `oem2.inf`, started, with
+  the children of the stack it had before still listed under
+  `usbhub3.inf`, `usb.inf` and `uaspstor.inf`: the restart had not yet
+  happened, so nothing of `xhci98.sys` ran yet. Explorer's details pane
+  at 15:41 showed F: "Connected to USB 3.0"; taken in that state, it is
+  not counted for either driver.
+- Restart 15:43; `x98c` (15:54 to 16:00), **`xhci98.sys` running on
+  Windows 10 for the first time in this project**:
+
+| Device | Bound | State |
+|---|---|---|
+| `qemu-xhci` `1B36:000D` | `oem2.inf` (`xhci98.inf`), "xHCI98 USB 3.x eXtensible Host Controller"; `usbxhci.inf` still listed as "Best Ranked" (`00802005`) beside it | started |
+| its root hub | `USB\XHCI98_ROOT_HUB`, `oem2.inf` (`80FF0000`) | started |
+| `usb-hub` port 8 | `USB\XHCI98_HUB&VID_0409&PID_55AA`, `oem2.inf` (`80FF0002`) | started |
+| `usb-kbd` behind it, `usb-tablet` port 5 | `input.inf` (`USB\Class_03&SubClass_01`, `USB\Class_03`) | started; the pointer and keyboard worked |
+| `usb-storage` `P4333SS3` (USB 3 port), `P4333SS2` (USB 2.0 port) | `usbstor.inf`, disks `disk.inf`, volumes F: and G: | started |
+| `usb-audio` port 7 | `USB\XHCI98_COMPOSITE&VID_46F4&PID_0002`, `oem2.inf`; `MI_00` `wdma_usb.inf` | started |
+| `usb-uas` port 2 | `uaspstor.inf` | Code 10, as under Windows' own stack |
+| the emulator's xHCI `8086:15C1` | `usbxhci.inf` (untouched: the force names only `1B36:000D`) | started |
+| the NHI `8086:15BF` | none | Code 28 |
+
+  Code Integrity event 3001: "an unsigned kernel module ...
+  `xhci98.sys` is loaded into the system"; System events 20003 for the
+  `xhci98` service on the root hub, composite and hub. The NHI's ids,
+  read from its Enum key: `HardwareID` `VEN&DEV&SUBSYS&REV`,
+  `VEN&DEV&SUBSYS`, `VEN&DEV&CC_088000`, `VEN&DEV&CC_0880`;
+  `CompatibleIDs` `VEN&DEV&REV`, **`VEN&DEV`**, `VEN&CC_088000`,
+  `VEN&CC_0880`, `VEN`, `CC_088000`, `CC_0880` - so on 10 the bare
+  `PCI\VEN_8086&DEV_15BF` that `xhcicm.inf` names is a compatible id,
+  and Intel's `&CC_0880` form a hardware id (record 21 section 3.6).
+- A second boot (16:03 to 16:12) for Explorer's details pane under
+  `xhci98.sys`: This PC, each drive selected - F: "USB Drive", **"Connected
+  to USB 3.0"**; G: "USB Drive", no line; as under Windows' own stack on
+  x64. Shut down 16:12; every guest of this kit is off (pids 65764,
+  41336, 25916 in the kit's `pids.txt`).
+
+### Not read
+
+- A restart leg on x64: the package cannot be staged there without a
+  catalog (record 13 section 6.14.5).
+- Device Manager's pages under `xhci98.sys`, a hot-plug, Sleep, an
+  update and the uninstall back to `usbxhci.sys`: 43.37's.
+- Intel's Thunderbolt driver in a guest: no image of it here; its INFs
+  were read statically (record 21 section 3.6).
