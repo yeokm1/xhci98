@@ -40,6 +40,9 @@ typedef struct _TR_TEXT {
 
 void tr_text_init(TR_TEXT *t, char *buf, size_t cap);
 void tr_put(TR_TEXT *t, const char *s);
+/* tr_put for a message box (task 43.63): each line break of a text laid
+ * out for the 80-column console becomes a space, and the box wraps it. */
+void tr_put_box(TR_TEXT *t, const char *s);
 
 /* A small printf: %s %c %d %u %x %X, each with an optional '-' or '0' flag,
  * a width and an 'l' size; %% a percent sign. Nothing else. */

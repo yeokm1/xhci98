@@ -364,7 +364,16 @@ branch, marked "(behind <router name>)".
 - **The NHI's node** lists the NHI, each tunnel port (with its source
   and whether it is active), and below each port the functions found
   there, indented by bridge depth; on 98 SE and ME "Not read on this
-  system" stands for them (section 4.7). **An xhci98 controller's node**
+  system" stands for them (section 4.7) where the driver does not read
+  below the port (`CM_QP_F_BELOW_OS`, with its reason), and since
+  roadmap-usb4 task 43.63 a port the driver walked with nothing below it
+  is "None found." there as on NT (a 98 SE or ME driver has read below
+  the port since task 42-A.14): the answer says so by
+  `CM_QP_F_UNWALKED_SAID`, under which a member whose own bus numbers the
+  walk did not admit has its own entry ("Not walked: PCI.VXD does not
+  read the port's bus numbers ..."); from an older driver that walks,
+  an empty port is "None listed", and in a cut-short answer
+  (`CM_QP_F_TRUNCATED`) too, on every system. **An xhci98 controller's node**
   shows the controller.
 - **Text.** Every line within 79 columns; the host suite holds it on a
   worst case. The constants are `tr_pci.c`'s own, each cited to the PCI
@@ -668,8 +677,12 @@ header type and bus numbers its walk needs.
   and touches nothing of the device. Where the walk is not made, each
   member keeps one `CM_QP_S_NOT_READ_OS` entry with its reason in
   `CM_QP_E_INFO` (`CM_QP_NR_*`: no worker, the worker busy, `PCI.VXD`'s
-  guard refused, the controller lost; 0 from a driver before it), and
-  the tool says which.
+  guard refused, the controller lost, and since roadmap-usb4 task 43.63
+  the member's own bus numbers not admitted by the rule above; 0 from a
+  driver before it), and the tool says which. Where the walk is made and
+  finds nothing, the port is "None found." as on NT; where the answer
+  was cut short (`CM_QP_F_TRUNCATED`) a port with nothing listed is said
+  as "None listed" rather than empty (task 43.63, on every system).
 - **No kernel address.** The answer holds configuration space and the
   driver's own counts. The BARs and bridge windows are bus addresses,
   shown by the owner's request; they are the ranges Device Manager's
@@ -777,7 +790,9 @@ record.
    device", the unit and the devnodes that will stop as the tree last
    showed them, OK / Cancel (from the tray menu the selection is the
    request and the dialog follows it), with record 24 section 5.4's
-   reminder where it gives one (its revision 8, roadmap-usb4 task 43.8).
+   reminder where it gives one (its revision 8, roadmap-usb4 task 43.8),
+   as one paragraph the box wraps: the console's line break in the
+   shared text is a space there (`tr_put_box`, task 43.63).
    Nothing below waits on the user.
 2. Take the shared eject mutex (section 6.3). Query (Q1). An answer is
    eligible when the record's stage is active, the inert and stopping
@@ -817,7 +832,11 @@ record.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
    5.4 with every fact it needs), captured as text; on a veto, the vetoing
-   device and the reason. The tunnel watch (2026-10-22, from the 43.45
+   device and the reason. The text is shown with its wrapped lines
+   joined (`tr_join_lines`, paragraph breaks kept), so the advice laid
+   out for the console ("Other devices behind the same Thunderbolt port
+   ...", "The device has started again ...") is one paragraph in the box
+   or balloon (held by a host vector, task 43.63). The tunnel watch (2026-10-22, from the 43.45
    legs; `tr_eject_watch_kind` in `tr_core.c`) depends on who confirms
    the eject to the connection manager (record 21 section 7.4). An
    administrator's run confirms it itself and watches 10 s, as XHCIINST
