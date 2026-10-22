@@ -87,9 +87,10 @@ confirmed. Run as an administrator, the tool confirms it at once. Without
 administrator rights on XP, Vista and 7 the xHCI98 mark service
 confirms it in the background: the tool waits up to 30 seconds for that,
 and if the tunnel is still up then it says the tunnel has not been seen
-closed and closes if the mark service confirms the eject. On Windows 2000 without administrator
-rights, or with the mark service stopped, nothing confirms it and the
-tunnel stays up until you unplug the device.
+closed and closes if the mark service confirms the eject. On Windows
+2000 without administrator rights, or with the mark service stopped,
+nothing confirms it and the tunnel stays up until you unplug the
+device.
 
 Stopping a USB stick or disk
 ----------------------------
