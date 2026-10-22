@@ -50,7 +50,9 @@
 #include "xhci_xfer.h"
 #include "xhci_pipe.h"
 #include "xhci_stream.h"
+#include "xhci_usbdx.h"
 #include "xhci98_streams.h"
+#include "xhci98_xfer.h"
 #include "xhci_own.h"
 #include "xhci_dbg.h"
 
@@ -102,6 +104,11 @@ static PVOID hcdCfgHeldHandle(PURB urb)
     case URB_FUNCTION_RESET_PIPE:
     case XHCI_PIPE_URB_SYNC_RESET_PIPE:
     case XHCI_PIPE_URB_SYNC_CLEAR_STALL:
+        return urb->UrbPipeRequest.PipeHandle;
+    case HCD_URB_OPEN_STATIC_STREAMS:
+    case HCD_URB_CLOSE_STATIC_STREAMS:
+        /* The endpoint's own handle, where a pipe request carries it
+         * (hcd.h); the dispatch checked the length (hcd_urb.c). */
         return urb->UrbPipeRequest.PipeHandle;
     default:
         return NULL;
@@ -5115,7 +5122,7 @@ static ULONG hcdCfgStreamsSequence(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  */
 static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                PHCD_DEVICE_PDO pdo,
-                               PXHCI98_STREAMS_REQUEST rq)
+                               PXHCI98_STREAMS_REQUEST rq, ULONG exact)
 {
     XHCI_STREAM_PLAN plan;
     PHCD_STREAMS st;
@@ -5177,6 +5184,15 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return answer == XHCI_STREAM_BAD_PARAM
                    ? XHCI98_STREAMS_INVALID_REQUEST
                    : XHCI98_STREAMS_NO_ENDPOINT;
+    }
+    /* Windows 8's OPEN_STATIC_STREAMS has no granted field: it is served
+     * exactly or not at all, before anything is built (task 43.29, design
+     * record 13 section 6.13.2); the private request takes the plan's. */
+    if (XhciUsbdxGrantCheck(rq->StreamsRequested, plan.Streams, exact) !=
+        XHCI_USBDX_OK) {
+        XHCI_DBG_VALUE("hcd: streams refused, short grant, planned",
+                       plan.Streams);
+        return XHCI98_STREAMS_INVALID_REQUEST;
     }
     st = hcdCfgStreamsBuild(hc, dev, pipe, &plan);
     if (st == NULL) {
@@ -5330,6 +5346,104 @@ static ULONG hcdCfgStreamsClose(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return XHCI98_STREAMS_SUCCESS;
 }
 
+/* CLOSE_STREAMS on `handle`, the endpoint's own: refused for a handle that
+ * is not an open pipe of this PDO's, or with no streams open; else
+ * hcdCfgStreamsClose. Thread only, powered. */
+static ULONG hcdCfgStreamsCloseHandle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                      PHCD_DEVICE_PDO pdo, PVOID handle)
+{
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe = hcdCfgEndpointPipe(dev, handle);
+    if (pipe != NULL && !HcdPdoOwnsPipe(pdo, dev, pipe)) {
+        pipe = NULL;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (pipe == NULL) {
+        return XHCI98_STREAMS_INVALID_PIPE;
+    }
+    if (pipe->Streams == NULL) {
+        return XHCI98_STREAMS_NOT_OPEN;
+    }
+    return hcdCfgStreamsClose(hc, dev, pipe);
+}
+
+/*
+ * Windows 8's URB_FUNCTION_OPEN_STATIC_STREAMS and _CLOSE_STATIC_STREAMS
+ * (task 43.29, design record 13 section 6.13.2), pended by hcd_urb.c with
+ * a device reference and its fields checked there: the private open with
+ * the grant required exact, or the private close, and the URB status the
+ * answer maps to. An open granted fills the caller's Streams: entry i
+ * stream i + 1's handle, StreamID i + 1, MaximumTransferSize the command
+ * size this controller's start latched (as IOCTL_XHCI98_TRANSFER_POLICY
+ * reports it), PipeFlags 0; nothing else of the URB is written. Thread
+ * only, powered.
+ */
+static LONG hcdCfgStaticStreams(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                PHCD_DEVICE_PDO pdo, PURB urb)
+{
+    XHCI98_STREAMS_REQUEST rq;
+    PHCD_URB_OPEN_STREAMS os;
+    PHCD_STREAM_INFO info;
+    KIRQL oldIrql;
+    ULONG answer;
+    ULONG bytes;
+    ULONG i;
+
+    if (urb->UrbHeader.Function == HCD_URB_CLOSE_STATIC_STREAMS) {
+        answer = hcdCfgStreamsCloseHandle(hc, dev, pdo,
+                                          urb->UrbPipeRequest.PipeHandle);
+        if (answer == XHCI98_STREAMS_SUCCESS) {
+            hc->UsbdxStreamCloses++;
+        }
+    } else {
+        os = (PHCD_URB_OPEN_STREAMS)urb;
+        rq.Signature = XHCI98_STREAMS_SIGNATURE;
+        rq.Version = XHCI98_STREAMS_VERSION;
+        rq.Size = sizeof(rq);
+        rq.PipeHandle = os->PipeHandle;
+        rq.StreamsRequested = os->NumberOfStreams;
+        rq.StreamsGranted = 0;
+        rq.Status = XHCI98_STREAMS_FAILED;
+        rq.Reserved = 0;
+        for (i = 0; i <= XHCI98_STREAMS_MAX; i++) {
+            rq.StreamPipeHandle[i] = NULL;
+        }
+        answer = hcdCfgStreamsOpen(hc, dev, pdo, &rq, 1);
+        if (answer == XHCI98_STREAMS_SUCCESS) {
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            bytes = hc->Xstat.CommandBytes;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            if (bytes == 0) {
+                bytes = XHCI98_POLICY_DEFAULT_BYTES;
+            }
+            info = os->Streams;
+            for (i = 0; i < rq.StreamsGranted; i++) {
+                info[i].PipeHandle = rq.StreamPipeHandle[i + 1];
+                info[i].StreamID = i + 1;
+                info[i].MaximumTransferSize = bytes;
+                info[i].PipeFlags = 0;
+            }
+            hc->UsbdxStreamOpens++;
+        }
+    }
+    if (answer != XHCI98_STREAMS_SUCCESS) {
+        /* Interlocked: the dispatch counts its refusals here too. */
+        (VOID)InterlockedIncrement((PLONG)&hc->UsbdxStreamRefused);
+        XhciLogNote(&hc->Hc, "usbdx.streams",
+                    ((ULONG)urb->UrbHeader.Function << 24) |
+                        ((answer & 0xFFUL) << 16) |
+                        (urb->UrbHeader.Function ==
+                                 HCD_URB_OPEN_STATIC_STREAMS
+                             ? (((PHCD_URB_OPEN_STREAMS)urb)->NumberOfStreams &
+                                0xFFFFUL)
+                             : 0UL));
+    }
+    return (LONG)XhciUsbdxStreamsUsbd(answer, dev->Gone);
+}
+
 /* One OPEN_STREAMS or CLOSE_STREAMS, pended by hcd_urb.c with a device
  * reference, served and completed here; the request's Status says what
  * happened and the IRP's status mirrors it (xhci98_streams.h). Thread
@@ -5338,29 +5452,15 @@ static VOID hcdCfgStreamsRequest(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                  PHCD_DEVICE_PDO pdo, PIRP irp, ULONG code)
 {
     PXHCI98_STREAMS_REQUEST rq;
-    PHCD_PIPE pipe;
-    KIRQL oldIrql;
     NTSTATUS status;
     ULONG answer;
 
     rq = (PXHCI98_STREAMS_REQUEST)
              IoGetCurrentIrpStackLocation(irp)->Parameters.Others.Argument1;
     if (code == IOCTL_XHCI98_OPEN_STREAMS) {
-        answer = hcdCfgStreamsOpen(hc, dev, pdo, rq);
+        answer = hcdCfgStreamsOpen(hc, dev, pdo, rq, 0);
     } else {
-        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        pipe = hcdCfgEndpointPipe(dev, rq->PipeHandle);
-        if (pipe != NULL && !HcdPdoOwnsPipe(pdo, dev, pipe)) {
-            pipe = NULL;
-        }
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
-        if (pipe == NULL) {
-            answer = XHCI98_STREAMS_INVALID_PIPE;
-        } else if (pipe->Streams == NULL) {
-            answer = XHCI98_STREAMS_NOT_OPEN;
-        } else {
-            answer = hcdCfgStreamsClose(hc, dev, pipe);
-        }
+        answer = hcdCfgStreamsCloseHandle(hc, dev, pdo, rq->PipeHandle);
     }
     rq->Status = answer;
     switch (answer) {
@@ -5884,6 +5984,10 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
                 hcdCfgReleaseSettled(dev, 1UL << number);
             }
             usbd = hcdCfgSelectAnswer(hc, dev, usbd);
+            break;
+        case HCD_URB_OPEN_STATIC_STREAMS:
+        case HCD_URB_CLOSE_STATIC_STREAMS:
+            usbd = hcdCfgStaticStreams(hc, dev, pdo, urb);
             break;
         case HCD_URB_ABORT_PIPE:
         case HCD_URB_RESET_PIPE:

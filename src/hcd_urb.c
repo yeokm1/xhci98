@@ -37,6 +37,7 @@
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
 #include "xhci_pipe.h"
+#include "xhci_usbdx.h"
 #include "xhci98_streams.h"
 
 /* The amd64 build's WDK carries usbbusif.h, and the structures below are
@@ -671,6 +672,15 @@ static ULONG hcdUnreadable(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         handle = urb->UrbPipeRequest.PipeHandle;
         break;
 
+    case HCD_URB_OPEN_STATIC_STREAMS:
+    case HCD_URB_CLOSE_STATIC_STREAMS:
+        /* Both name the endpoint's own handle where a pipe request does
+         * (hcd.h); a URB too short to hold it names none. */
+        if (urb->UrbHeader.Length >= sizeof(struct _URB_PIPE_REQUEST)) {
+            handle = urb->UrbPipeRequest.PipeHandle;
+        }
+        break;
+
     case URB_FUNCTION_SELECT_CONFIGURATION:
     case URB_FUNCTION_SELECT_INTERFACE:
         break;
@@ -691,6 +701,9 @@ static ULONG hcdUnreadable(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                   hcdHeldEndpoint(pdo, hc, handle));
     return 1;
 }
+
+static NTSTATUS hcdStaticStreamsUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                    PIRP irp, PURB urb, ULONG function);
 
 static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp, PURB urb)
@@ -805,6 +818,12 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         }
         return HcdCfgQueue(hc, dev, pdo, irp);
 
+    case HCD_URB_OPEN_STATIC_STREAMS:
+    case HCD_URB_CLOSE_STATIC_STREAMS:
+        /* Windows 8's stream URBs (task 43.29, design record 13 section
+         * 6.13.2), served on the private streams machinery. */
+        return hcdStaticStreamsUrb(pdo, hc, irp, urb, function);
+
     case HCD_URB_GET_MS_FEATURE_DESCRIPTOR:
         /* XP onward's hidusb asks for a HID device's Genre descriptor
          * (design record 13 section 6.4). It needs the device's MS OS
@@ -818,10 +837,11 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     default:
         /* Among them CONTROL_TRANSFER_EX (0x32, Vista) and Windows 8's
-         * OPEN_STATIC_STREAMS / CLOSE_STATIC_STREAMS and
          * GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS: no class driver on any
-         * target sends one (section 6.5), and the stock usbport of XP and
-         * of 2000 refuses them all as an unknown function. */
+         * target sends one (section 6.5; Windows 8's usbccgp sends 0x32
+         * only after a FUNCTION_SUSPEND capability this bus refuses,
+         * section 6.13.2), and the stock usbport of XP and of 2000
+         * refuses them all as an unknown function. */
         break;
     }
     return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_URB_FUNCTION,
@@ -1163,10 +1183,13 @@ typedef struct _HCD_BUSIF_SLOT {
 static HCD_BUSIF_SLOT hcdBusifSlots[HCD_BUSIF_SLOTS];
 static KSPIN_LOCK hcdBusifLock;
 
+static VOID hcdUsbdxInit(VOID);
+
 /* DriverEntry. IRQL: PASSIVE_LEVEL. */
 VOID HcdUrbInit(VOID)
 {
     KeInitializeSpinLock(&hcdBusifLock);
+    hcdUsbdxInit();
 }
 
 /* The PDO's slot, claimed at its first query. NULL when the table is full
@@ -1513,6 +1536,642 @@ NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp)
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
+/* ----------------------------------------------------------------------- */
+/* Windows 8's client contract (task 43.29, design record 13 section 6.13)  */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * GUID_USBD_INTERFACE_V1 at version 0x602, as usbdex and ucx01000.sys use it
+ * (section 6.13.1; read statically, no public header defines it): the
+ * INTERFACE header, the client's fields, the bus's context for the handle,
+ * and six __stdcall routines. Field names are this driver's.
+ */
+typedef struct _HCD_USBDX_LIST {
+    PVOID InterfaceDescriptor;      /* USBD_INTERFACE_LIST_ENTRY (usbdlib.h) */
+    PUSBD_INTERFACE_INFORMATION Interface;
+} HCD_USBDX_LIST, *PHCD_USBDX_LIST;
+
+typedef VOID (HCD_BUSIFFN *HCD_USBDX_UNREGISTER)(PVOID);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_USBDX_ALLOCATE)(PVOID, PURB *);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_USBDX_ISOCH_ALLOCATE)(PVOID, ULONG,
+                                                         PURB *);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_USBDX_SELECT_CONFIG)(
+    PVOID, PUSB_CONFIGURATION_DESCRIPTOR, PHCD_USBDX_LIST, PURB *);
+typedef NTSTATUS (HCD_BUSIFFN *HCD_USBDX_SELECT_INTERFACE)(
+    PVOID, USBD_CONFIGURATION_HANDLE, PHCD_USBDX_LIST, PURB *);
+typedef VOID (HCD_BUSIFFN *HCD_USBDX_FREE)(PURB);
+
+typedef struct _HCD_USBDX_V1 {
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    ULONG ClientContract;           /* in: 0x602                           */
+    PVOID BusHandleContext;         /* out                                 */
+    PVOID ClientDeviceObject;       /* in                                  */
+    ULONG ClientPoolTag;            /* in                                  */
+    PVOID ClientHandle;             /* in                                  */
+    ULONG VerifierOn;               /* in                                  */
+    ULONG Verifier[5];              /* in                                  */
+    PVOID Reserved;
+    HCD_USBDX_UNREGISTER Unregister;
+    HCD_USBDX_ALLOCATE UrbAllocate;
+    HCD_USBDX_ISOCH_ALLOCATE IsochUrbAllocate;
+    HCD_USBDX_SELECT_CONFIG SelectConfigUrbAllocateAndBuild;
+    HCD_USBDX_SELECT_INTERFACE SelectInterfaceUrbAllocateAndBuild;
+    HCD_USBDX_FREE UrbFree;
+} HCD_USBDX_V1, *PHCD_USBDX_V1;
+
+/* The capability request's block (0x49104B, Argument1). */
+typedef struct _HCD_USBDX_CAP_BLOCK {
+    USHORT Version;
+    USHORT Size;
+    PVOID Context;
+    UCHAR CapabilityType[16];
+    ULONG OutputLength;
+    ULONG ResultLength;
+} HCD_USBDX_CAP_BLOCK, *PHCD_USBDX_CAP_BLOCK;
+
+#ifdef _WIN64
+#define HCD_USBDX_PTR 8UL
+XHCI_C_ASSERT(usbdx_v1_size, sizeof(HCD_USBDX_V1) == XHCI_USBDX_V1_BYTES_64);
+XHCI_C_ASSERT(usbdx_v1_offsets,
+              FIELD_OFFSET(HCD_USBDX_V1, ClientContract) == 0x20 &&
+              FIELD_OFFSET(HCD_USBDX_V1, BusHandleContext) == 0x28 &&
+              FIELD_OFFSET(HCD_USBDX_V1, ClientDeviceObject) == 0x30 &&
+              FIELD_OFFSET(HCD_USBDX_V1, ClientPoolTag) == 0x38 &&
+              FIELD_OFFSET(HCD_USBDX_V1, VerifierOn) == 0x48 &&
+              FIELD_OFFSET(HCD_USBDX_V1, Unregister) == 0x68 &&
+              FIELD_OFFSET(HCD_USBDX_V1, UrbAllocate) == 0x70 &&
+              FIELD_OFFSET(HCD_USBDX_V1, UrbFree) == 0x90);
+XHCI_C_ASSERT(usbdx_cap_size,
+              sizeof(HCD_USBDX_CAP_BLOCK) == XHCI_USBDX_CAP_BYTES_64 &&
+              FIELD_OFFSET(HCD_USBDX_CAP_BLOCK, CapabilityType) == 0x10 &&
+              FIELD_OFFSET(HCD_USBDX_CAP_BLOCK, ResultLength) == 0x24);
+XHCI_C_ASSERT(usbdx_streams_urb,
+              sizeof(HCD_URB_OPEN_STREAMS) == 0x30 &&
+              sizeof(HCD_STREAM_INFO) == 0x18);
+XHCI_C_ASSERT(usbdx_select_shapes,
+              sizeof(USBD_PIPE_INFORMATION) == XHCI_USBDX_PIPE_BYTES_64 &&
+              FIELD_OFFSET(USBD_PIPE_INFORMATION, MaximumTransferSize) ==
+                  XHCI_USBDX_PIPE_MAXXFER_64 &&
+              sizeof(USBD_INTERFACE_INFORMATION) ==
+                  XHCI_USBDX_IFINFO_BYTES_64 &&
+              FIELD_OFFSET(USBD_INTERFACE_INFORMATION, NumberOfPipes) ==
+                  XHCI_USBDX_IFINFO_PIPES_64 &&
+              FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes) ==
+                  XHCI_USBDX_IFINFO_PIPE0_64 &&
+              FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface) ==
+                  XHCI_USBDX_SELCFG_IFACE_64 &&
+              FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) ==
+                  XHCI_USBDX_SELIF_IFACE_64);
+/* The clients' own fallback size for a URB (USBD_UrbAllocate, 6.13.1),
+ * which a URB from the bus is never shorter than. */
+#define HCD_USBDX_URB_BYTES     0x98UL
+/* The block's header, rounded so the URB keeps the pool's alignment. */
+#define HCD_USBDX_HEADER_BYTES  32UL
+#else
+#define HCD_USBDX_PTR 4UL
+XHCI_C_ASSERT(usbdx_v1_size, sizeof(HCD_USBDX_V1) == XHCI_USBDX_V1_BYTES_32);
+XHCI_C_ASSERT(usbdx_v1_offsets,
+              FIELD_OFFSET(HCD_USBDX_V1, ClientContract) == 0x10 &&
+              FIELD_OFFSET(HCD_USBDX_V1, BusHandleContext) == 0x14 &&
+              FIELD_OFFSET(HCD_USBDX_V1, ClientDeviceObject) == 0x18 &&
+              FIELD_OFFSET(HCD_USBDX_V1, ClientPoolTag) == 0x1C &&
+              FIELD_OFFSET(HCD_USBDX_V1, VerifierOn) == 0x24 &&
+              FIELD_OFFSET(HCD_USBDX_V1, Unregister) == 0x40 &&
+              FIELD_OFFSET(HCD_USBDX_V1, UrbAllocate) == 0x44 &&
+              FIELD_OFFSET(HCD_USBDX_V1, UrbFree) == 0x54);
+XHCI_C_ASSERT(usbdx_cap_size,
+              sizeof(HCD_USBDX_CAP_BLOCK) == XHCI_USBDX_CAP_BYTES_32 &&
+              FIELD_OFFSET(HCD_USBDX_CAP_BLOCK, CapabilityType) == 0x08 &&
+              FIELD_OFFSET(HCD_USBDX_CAP_BLOCK, ResultLength) == 0x1C);
+XHCI_C_ASSERT(usbdx_streams_urb,
+              sizeof(HCD_URB_OPEN_STREAMS) == 0x20 &&
+              sizeof(HCD_STREAM_INFO) == 0x10);
+XHCI_C_ASSERT(usbdx_select_shapes,
+              sizeof(USBD_PIPE_INFORMATION) == XHCI_USBDX_PIPE_BYTES_32 &&
+              FIELD_OFFSET(USBD_PIPE_INFORMATION, MaximumTransferSize) ==
+                  XHCI_USBDX_PIPE_MAXXFER_32 &&
+              sizeof(USBD_INTERFACE_INFORMATION) ==
+                  XHCI_USBDX_IFINFO_BYTES_32 &&
+              FIELD_OFFSET(USBD_INTERFACE_INFORMATION, NumberOfPipes) ==
+                  XHCI_USBDX_IFINFO_PIPES_32 &&
+              FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes) ==
+                  XHCI_USBDX_IFINFO_PIPE0_32 &&
+              FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface) ==
+                  XHCI_USBDX_SELCFG_IFACE_32 &&
+              FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) ==
+                  XHCI_USBDX_SELIF_IFACE_32);
+#define HCD_USBDX_URB_BYTES     0x60UL
+#define HCD_USBDX_HEADER_BYTES  24UL
+#endif
+
+XHCI_C_ASSERT(usbdx_urb_room, sizeof(URB) <= HCD_USBDX_URB_BYTES);
+XHCI_C_ASSERT(usbdx_header_room,
+              sizeof(LIST_ENTRY) + 3 * sizeof(ULONG) <=
+                  HCD_USBDX_HEADER_BYTES);
+XHCI_C_ASSERT(usbdx_streams_header,
+              FIELD_OFFSET(HCD_URB_OPEN_STREAMS, Function) ==
+                  FIELD_OFFSET(struct _URB_HEADER, Function) &&
+              FIELD_OFFSET(HCD_URB_OPEN_STREAMS, Status) ==
+                  FIELD_OFFSET(struct _URB_HEADER, Status) &&
+              FIELD_OFFSET(HCD_URB_OPEN_STREAMS, PipeHandle) ==
+                  FIELD_OFFSET(struct _URB_PIPE_REQUEST, PipeHandle));
+XHCI_C_ASSERT(usbdx_streams_values,
+              XHCI98_STREAMS_MAX == XHCI_USBDX_MAX_STREAMS &&
+              XHCI98_STREAMS_SUCCESS == XHCI_USBDX_SA_SUCCESS &&
+              XHCI98_STREAMS_NO_CONTROLLER == XHCI_USBDX_SA_NO_CONTROLLER &&
+              XHCI98_STREAMS_NO_ENDPOINT == XHCI_USBDX_SA_NO_ENDPOINT &&
+              XHCI98_STREAMS_INVALID_PIPE == XHCI_USBDX_SA_INVALID_PIPE &&
+              XHCI98_STREAMS_INVALID_REQUEST ==
+                  XHCI_USBDX_SA_INVALID_REQUEST &&
+              XHCI98_STREAMS_ALREADY_OPEN == XHCI_USBDX_SA_ALREADY_OPEN &&
+              XHCI98_STREAMS_NOT_OPEN == XHCI_USBDX_SA_NOT_OPEN &&
+              XHCI98_STREAMS_NO_RESOURCES == XHCI_USBDX_SA_NO_RESOURCES &&
+              XHCI98_STREAMS_FAILED == XHCI_USBDX_SA_FAILED);
+XHCI_C_ASSERT(usbdx_reset_port,
+              IOCTL_INTERNAL_USB_RESET_PORT == XHCI_USBDX_IOCTL_RESET_PORT);
+
+/* {deee98ea-c0a1-42c3-9738-a04606c84e93}, the PDB-named symbol of Windows
+ * 8's usbdex and ucx01000.sys (section 6.12.3). */
+static const GUID hcdUsbdxGuid = {
+    0xdeee98ea, 0xc0a1, 0x42c3,
+    { 0x97, 0x38, 0xa0, 0x46, 0x06, 0xc8, 0x4e, 0x93 }
+};
+
+/* 'X98U', the URB blocks' signature (hcd_pool.c tags them the same). */
+#define HCD_USBDX_SIGNATURE     0x55383958UL
+#define HCD_USBDX_KIND_URB      1UL
+#define HCD_USBDX_KIND_ISOCH    2UL
+#define HCD_USBDX_KIND_CONFIG   3UL
+#define HCD_USBDX_KIND_IFACE    4UL
+
+typedef struct _HCD_USBDX_BLOCK {
+    LIST_ENTRY Link;                /* hcdUsbdxBlocks, hcdUsbdxLock        */
+    ULONG Signature;
+    ULONG Kind;
+    ULONG Bytes;                    /* the URB's, after the header         */
+} HCD_USBDX_BLOCK, *PHCD_USBDX_BLOCK;
+
+/*
+ * Every URB block the bus has handed a client and the client has not freed
+ * (section 6.13.2): image-wide, since UrbFree gets the URB alone and may
+ * run after the PDO and its controller are gone. hcdUsbdxLock is a leaf:
+ * held for an insert, or a walk and an unlink, never across pool calls,
+ * and no other lock is taken under it or holds it.
+ */
+static LIST_ENTRY hcdUsbdxBlocks;
+static KSPIN_LOCK hcdUsbdxLock;
+static LONG hcdUsbdxRegistered;
+static LONG hcdUsbdxCapabilities;
+static LONG hcdUsbdxForeignFrees;
+
+/* Called from HcdUrbInit. IRQL: PASSIVE_LEVEL. */
+static VOID hcdUsbdxInit(VOID)
+{
+    InitializeListHead(&hcdUsbdxBlocks);
+    KeInitializeSpinLock(&hcdUsbdxLock);
+}
+
+/* Whether a QUERY_INTERFACE names GUID_USBD_INTERFACE_V1, compared field by
+ * field as HcdUrbIsUsbdiQuery does. IRQL: any. */
+ULONG HcdUrbIsUsbdxQuery(const GUID *guid)
+{
+    ULONG i;
+
+    if (guid == NULL || guid->Data1 != hcdUsbdxGuid.Data1 ||
+        guid->Data2 != hcdUsbdxGuid.Data2 ||
+        guid->Data3 != hcdUsbdxGuid.Data3) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        if (guid->Data4[i] != hcdUsbdxGuid.Data4[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A block of `bytes` of URB after the header, zeroed, not yet listed. NULL
+ * when the pool has none. IRQL: <= DISPATCH_LEVEL. */
+static PUCHAR hcdUsbdxRaw(ULONG bytes)
+{
+    PUCHAR p;
+    ULONG total;
+    ULONG i;
+
+    total = HCD_USBDX_HEADER_BYTES + bytes;
+    p = (PUCHAR)HcdPoolAllocClient(total);
+    if (p != NULL) {
+        for (i = 0; i < total; i++) {
+            p[i] = 0;
+        }
+    }
+    return p;
+}
+
+/* The block made the client's: stamped and listed; returns its URB. IRQL:
+ * <= DISPATCH_LEVEL. */
+static PURB hcdUsbdxList(PUCHAR p, ULONG kind, ULONG bytes)
+{
+    PHCD_USBDX_BLOCK blk;
+    KIRQL oldIrql;
+
+    blk = (PHCD_USBDX_BLOCK)p;
+    blk->Signature = HCD_USBDX_SIGNATURE;
+    blk->Kind = kind;
+    blk->Bytes = bytes;
+    KeAcquireSpinLock(&hcdUsbdxLock, &oldIrql);
+    InsertTailList(&hcdUsbdxBlocks, &blk->Link);
+    KeReleaseSpinLock(&hcdUsbdxLock, oldIrql);
+    return (PURB)(p + HCD_USBDX_HEADER_BYTES);
+}
+
+/* The INTERFACE header's references: none, as UCX's. Unregister is what a
+ * usbdex client calls to let go (section 6.13.2). */
+static VOID hcdUsbdxNoReference(PVOID context)
+{
+    UNREFERENCED_PARAMETER(context);
+}
+
+/* The last reference of a usbdex handle: the slot's reference the query
+ * took is released. The slot is static, so this is safe after the PDO is
+ * gone. IRQL: <= DISPATCH_LEVEL. */
+static VOID HCD_BUSIFFN hcdUsbdxUnregister(PVOID context)
+{
+    if (context != NULL) {
+        hcdBusifDereference(context);
+    }
+}
+
+/* USBD_UrbAllocate's half: a zeroed URB of the clients' URB size. IRQL:
+ * <= DISPATCH_LEVEL. */
+static NTSTATUS HCD_BUSIFFN hcdUsbdxUrbAllocate(PVOID context, PURB *urb)
+{
+    PUCHAR p;
+
+    UNREFERENCED_PARAMETER(context);
+    if (urb == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *urb = NULL;
+    p = hcdUsbdxRaw(HCD_USBDX_URB_BYTES);
+    if (p == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    *urb = hcdUsbdxList(p, HCD_USBDX_KIND_URB, HCD_USBDX_URB_BYTES);
+    return STATUS_SUCCESS;
+}
+
+/* USBD_IsochUrbAllocate's half: GET_ISO_URB_SIZE(packets), zeroed. IRQL:
+ * <= DISPATCH_LEVEL. */
+static NTSTATUS HCD_BUSIFFN hcdUsbdxIsochAllocate(PVOID context,
+                                                  ULONG packets, PURB *urb)
+{
+    PUCHAR p;
+    ULONG bytes;
+
+    UNREFERENCED_PARAMETER(context);
+    if (urb == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *urb = NULL;
+    if (XhciUsbdxIsochBytes(packets, sizeof(struct _URB_ISOCH_TRANSFER),
+                            sizeof(USBD_ISO_PACKET_DESCRIPTOR),
+                            &bytes) != XHCI_USBDX_OK) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    p = hcdUsbdxRaw(bytes);
+    if (p == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    *urb = hcdUsbdxList(p, HCD_USBDX_KIND_ISOCH, bytes);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The interface descriptors a select names, read as usbd.sys's
+ * USBD_CreateConfigurationRequestEx reads them: the list up to its NULL
+ * descriptor, at most XHCI_USBDX_MAX_INTERFACES entries, each an interface
+ * descriptor (bDescriptorType 4) whose number, alternate setting and
+ * endpoint count are taken. 0 when the list is refused.
+ */
+static ULONG hcdUsbdxListRead(PHCD_USBDX_LIST list, ULONG limit,
+                              PULONG pipes, PUCHAR numbers,
+                              PUCHAR alternates, PULONG count)
+{
+    PUCHAR d;
+    ULONG n;
+
+    for (n = 0; list[n].InterfaceDescriptor != NULL; n++) {
+        if (n == limit) {
+            return 0;
+        }
+        d = (PUCHAR)list[n].InterfaceDescriptor;
+        if (d[0] < 9 || d[1] != USB_INTERFACE_DESCRIPTOR_TYPE) {
+            return 0;
+        }
+        numbers[n] = d[2];
+        alternates[n] = d[3];
+        pipes[n] = d[4];
+    }
+    *count = n;
+    return n != 0;
+}
+
+/*
+ * USBD_SelectConfigUrbAllocateAndBuild's half: a SELECT_CONFIGURATION URB
+ * sized and filled as HcdCompositeSelectDown builds one (XhciUsbdxSelectFill),
+ * the caller's descriptor in it, and each list entry's Interface pointed at
+ * its USBD_INTERFACE_INFORMATION. IRQL: <= DISPATCH_LEVEL; the caller's
+ * descriptors and list resident.
+ */
+static NTSTATUS HCD_BUSIFFN hcdUsbdxSelectConfig(
+    PVOID context, PUSB_CONFIGURATION_DESCRIPTOR config, PHCD_USBDX_LIST list,
+    PURB *urb)
+{
+    ULONG pipes[XHCI_USBDX_MAX_INTERFACES];
+    UCHAR numbers[XHCI_USBDX_MAX_INTERFACES];
+    UCHAR alternates[XHCI_USBDX_MAX_INTERFACES];
+    ULONG offsets[XHCI_USBDX_MAX_INTERFACES];
+    ULONG count;
+    ULONG bytes;
+    PUCHAR p;
+    PURB built;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(context);
+    if (urb == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *urb = NULL;
+    if (config == NULL || list == NULL ||
+        !hcdUsbdxListRead(list, XHCI_USBDX_MAX_INTERFACES, pipes, numbers,
+                          alternates, &count) ||
+        XhciUsbdxSelectBytes(XHCI_USBDX_URB_SELECT_CONFIG, HCD_USBDX_PTR,
+                             pipes, count, &bytes) != XHCI_USBDX_OK) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    p = hcdUsbdxRaw(bytes);
+    if (p == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    p += HCD_USBDX_HEADER_BYTES;
+    (VOID)XhciUsbdxSelectFill(p, bytes, XHCI_USBDX_URB_SELECT_CONFIG,
+                              HCD_USBDX_PTR, pipes, numbers, alternates,
+                              count, USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE,
+                              offsets);
+    p -= HCD_USBDX_HEADER_BYTES;
+    built = hcdUsbdxList(p, HCD_USBDX_KIND_CONFIG, bytes);
+    built->UrbSelectConfiguration.ConfigurationDescriptor = config;
+    for (i = 0; i < count; i++) {
+        list[i].Interface =
+            (PUSBD_INTERFACE_INFORMATION)((PUCHAR)built + offsets[i]);
+    }
+    *urb = built;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * USBD_SelectInterfaceUrbAllocateAndBuild's half: one interface, the
+ * caller's configuration handle, the entry's Interface pointed at it. IRQL:
+ * <= DISPATCH_LEVEL.
+ */
+static NTSTATUS HCD_BUSIFFN hcdUsbdxSelectInterface(
+    PVOID context, USBD_CONFIGURATION_HANDLE handle, PHCD_USBDX_LIST entry,
+    PURB *urb)
+{
+    HCD_USBDX_LIST one[2];
+    ULONG pipes[1];
+    UCHAR numbers[1];
+    UCHAR alternates[1];
+    ULONG offsets[1];
+    ULONG count;
+    ULONG bytes;
+    PUCHAR p;
+    PURB built;
+
+    UNREFERENCED_PARAMETER(context);
+    if (urb == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *urb = NULL;
+    if (handle == NULL || entry == NULL ||
+        entry->InterfaceDescriptor == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    one[0].InterfaceDescriptor = entry->InterfaceDescriptor;
+    one[0].Interface = NULL;
+    one[1].InterfaceDescriptor = NULL;
+    one[1].Interface = NULL;
+    if (!hcdUsbdxListRead(one, 1, pipes, numbers, alternates, &count) ||
+        XhciUsbdxSelectBytes(XHCI_USBDX_URB_SELECT_IFACE, HCD_USBDX_PTR,
+                             pipes, count, &bytes) != XHCI_USBDX_OK) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    p = hcdUsbdxRaw(bytes);
+    if (p == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    p += HCD_USBDX_HEADER_BYTES;
+    (VOID)XhciUsbdxSelectFill(p, bytes, XHCI_USBDX_URB_SELECT_IFACE,
+                              HCD_USBDX_PTR, pipes, numbers, alternates,
+                              count, USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE,
+                              offsets);
+    p -= HCD_USBDX_HEADER_BYTES;
+    built = hcdUsbdxList(p, HCD_USBDX_KIND_IFACE, bytes);
+    built->UrbSelectInterface.ConfigurationHandle = handle;
+    entry->Interface =
+        (PUSBD_INTERFACE_INFORMATION)((PUCHAR)built + offsets[0]);
+    *urb = built;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * USBD_UrbFree's half, which gets the URB alone (section 6.13.1): the
+ * block whose URB it is, found on the list by address - pointers compared,
+ * nothing of the caller's read - is unlinked and freed after the lock; a
+ * URB not on the list is left alone and counted. IRQL: <= DISPATCH_LEVEL.
+ */
+static VOID HCD_BUSIFFN hcdUsbdxUrbFree(PURB urb)
+{
+    PLIST_ENTRY want;
+    PLIST_ENTRY entry;
+    KIRQL oldIrql;
+    ULONG found;
+
+    if (urb == NULL) {
+        return;
+    }
+    want = (PLIST_ENTRY)((PUCHAR)urb - HCD_USBDX_HEADER_BYTES);
+    found = 0;
+    KeAcquireSpinLock(&hcdUsbdxLock, &oldIrql);
+    for (entry = hcdUsbdxBlocks.Flink; entry != &hcdUsbdxBlocks;
+         entry = entry->Flink) {
+        if (entry == want) {
+            RemoveEntryList(entry);
+            found = 1;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&hcdUsbdxLock, oldIrql);
+    if (!found) {
+        (VOID)InterlockedIncrement(&hcdUsbdxForeignFrees);
+        XHCI_DBG_VALUE("hcd: usbdx free of a URB not the bus's, count",
+                       (ULONG)hcdUsbdxForeignFrees);
+        return;
+    }
+    HcdPoolFreeClient(want);
+}
+
+/*
+ * IRP_MN_QUERY_INTERFACE for GUID_USBD_INTERFACE_V1 (the caller has checked
+ * the GUID; section 6.13.2): this build's size and version 0x602 answered,
+ * anything else completed as it came, so the client runs its 0x600 path.
+ * The context is the PDO's bus-interface slot, shared with USBDI's; the
+ * query takes one slot reference, which Unregister releases. IRQL:
+ * PASSIVE_LEVEL.
+ */
+NTSTATUS HcdUrbQueryUsbdx(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PHCD_USBDX_V1 out;
+    PHCD_BUSIF_SLOT slot;
+    ULONG size;
+    ULONG version;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    size = stack->Parameters.QueryInterface.Size;
+    version = stack->Parameters.QueryInterface.Version;
+    out = (PHCD_USBDX_V1)stack->Parameters.QueryInterface.Interface;
+    XHCI_DBG_VALUE("hcd: USBD V1 interface asked, version/size",
+                   (version << 16) | size);
+    if (XhciUsbdxV1Check(size, version, HCD_USBDX_PTR, 1, 1) ==
+        XHCI_USBDX_NOT_OURS) {
+        return HcdCompleteIrp(irp, irp->IoStatus.Status,
+                              irp->IoStatus.Information);
+    }
+    if (out == NULL ||
+        XhciUsbdxV1Check(size, version, HCD_USBDX_PTR,
+                         out->ClientDeviceObject != NULL,
+                         out->ClientPoolTag) != XHCI_USBDX_OK) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (pdo->Controller == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    slot = hcdBusifClaim(pdo);
+    if (slot == NULL) {
+        XHCI_DBG_TEXT("hcd: USBD V1 interface refused, no context slot");
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    out->Context = NULL;
+    out->InterfaceReference = hcdUsbdxNoReference;
+    out->InterfaceDereference = hcdUsbdxNoReference;
+    out->BusHandleContext = slot;
+    out->Unregister = hcdUsbdxUnregister;
+    out->UrbAllocate = hcdUsbdxUrbAllocate;
+    out->IsochUrbAllocate = hcdUsbdxIsochAllocate;
+    out->SelectConfigUrbAllocateAndBuild = hcdUsbdxSelectConfig;
+    out->SelectInterfaceUrbAllocateAndBuild = hcdUsbdxSelectInterface;
+    out->UrbFree = hcdUsbdxUrbFree;
+    hcdBusifReference(slot);
+    if (InterlockedIncrement(&hcdUsbdxRegistered) == 1) {
+        XHCI_DBG_TEXT("hcd: USBD V1 interface answered, contract 0x602");
+    }
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/*
+ * 0x49104B, the capability request (section 6.13.2): the block checked as
+ * UCX checks it, its result length cleared, and the answer from the PDO's
+ * own fields - no register, no lock - completed here. METHOD_NEITHER: the
+ * block is Argument1, the output Irp->AssociatedIrp.SystemBuffer. IRQL:
+ * <= DISPATCH_LEVEL (usbdex sends it at PASSIVE_LEVEL).
+ */
+static NTSTATUS hcdCapabilityIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                   PIRP irp, PHCD_USBDX_CAP_BLOCK blk)
+{
+    PVOID out;
+    ULONG answer;
+    ULONG count;
+    ULONG bytes;
+
+    out = irp->AssociatedIrp.SystemBuffer;
+    if (blk == NULL ||
+        XhciUsbdxCapBlockCheck(blk->Version, blk->Size, HCD_USBDX_PTR,
+                               blk->Context != NULL, blk->OutputLength,
+                               out != NULL) != XHCI_USBDX_OK) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    blk->ResultLength = 0;
+    if (hc == NULL || !pdo->Listed) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    answer = XhciUsbdxCapability(XhciUsbdxCapabilityId(blk->CapabilityType),
+                                 pdo->SpeedClass, pdo->UsbdxStreams,
+                                 blk->OutputLength, &count, &bytes);
+    (VOID)InterlockedIncrement(&hcdUsbdxCapabilities);
+    XHCI_DBG_VALUE("hcd: usbdx capability, GUID Data1 / answer",
+                   ((ULONG)blk->CapabilityType[3] << 24) |
+                       ((ULONG)blk->CapabilityType[2] << 16) |
+                       ((ULONG)blk->CapabilityType[1] << 8) | answer);
+    if (answer == XHCI_USBDX_OK) {
+        if (bytes == sizeof(USHORT)) {
+            *(PUSHORT)out = (USHORT)count;
+            blk->ResultLength = bytes;
+        }
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
+    return HcdCompleteIrp(irp, answer == XHCI_USBDX_INVALID
+                                   ? STATUS_INVALID_PARAMETER
+                                   : STATUS_NOT_SUPPORTED,
+                          0);
+}
+
+/*
+ * URB_FUNCTION_OPEN_STATIC_STREAMS and _CLOSE_STATIC_STREAMS at dispatch
+ * (section 6.13.2): the URB's length checked before any field past the
+ * header is read, the open's fields checked, and the URB pended for the
+ * thread with a device reference (hcd_cfg.c, hcdCfgStaticStreams). IRQL:
+ * <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdStaticStreamsUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                    PIRP irp, PURB urb, ULONG function)
+{
+    PHCD_URB_OPEN_STREAMS os;
+    PHCD_USB_DEVICE dev;
+    ULONG usbd;
+
+    if (function == HCD_URB_OPEN_STATIC_STREAMS) {
+        os = (PHCD_URB_OPEN_STREAMS)urb;
+        usbd = urb->UrbHeader.Length < sizeof(HCD_URB_OPEN_STREAMS)
+                   ? XHCI_USBDX_USBD_INVALID_PARAMETER
+                   : XhciUsbdxOpenCheck(urb->UrbHeader.Length,
+                                        sizeof(HCD_URB_OPEN_STREAMS),
+                                        os->StreamInfoVersion,
+                                        os->StreamInfoSize,
+                                        sizeof(HCD_STREAM_INFO),
+                                        os->NumberOfStreams,
+                                        os->Streams != NULL);
+    } else {
+        usbd = XhciUsbdxCloseCheck(urb->UrbHeader.Length,
+                                   sizeof(struct _URB_PIPE_REQUEST));
+    }
+    if (usbd != XHCI_USBDX_USBD_SUCCESS) {
+        hcdCount(&hc->UsbdxStreamRefused);
+        return hcdUrbComplete(irp, urb, (USBD_STATUS)usbd,
+                              STATUS_INVALID_PARAMETER);
+    }
+    dev = hcdDeviceRef(hc, pdo);
+    if (dev == NULL) {
+        return hcdGoneLater(pdo, irp, urb);
+    }
+    return HcdCfgQueue(hc, dev, pdo, irp);
+}
+
 /*
  * IOCTL_XHCI98_OPEN_STREAMS and IOCTL_XHCI98_CLOSE_STREAMS (xhci98_streams.h,
  * 31-A.1): the request's header checked, its outputs set to "failed" so a
@@ -1746,7 +2405,20 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
     }
     hc = pdo->Controller;
     stack = IoGetCurrentIrpStackLocation(irp);
-    code = stack->Parameters.DeviceIoControl.IoControlCode;
+    code = XhciUsbdxIoctlAlias(stack->Parameters.DeviceIoControl.IoControlCode);
+    if (code != stack->Parameters.DeviceIoControl.IoControlCode) {
+        /* 0x220FB3, Windows 8's storage drivers' reset on the paging path,
+         * served as RESET_PORT (task 43.29, design record 13 section
+         * 6.13.2) - and named so in this, the bus's own stack location,
+         * so the thread's queue and its tests by code (hcd_cfg.c) read it
+         * as the reset it is. */
+        if (InterlockedIncrement(&hcdIoctlSeen[hcdIoctlSlot(
+                stack->Parameters.DeviceIoControl.IoControlCode)]) == 1) {
+            XHCI_DBG_VALUE("hcd: internal IOCTL served as RESET_PORT",
+                           stack->Parameters.DeviceIoControl.IoControlCode);
+        }
+        stack->Parameters.DeviceIoControl.IoControlCode = code;
+    }
     switch (code) {
     case IOCTL_INTERNAL_USB_SUBMIT_URB:
         status = hcdSubmitUrb(pdo, hc, irp,
@@ -1815,6 +2487,12 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         status = hcdTelemetryIoctl(pdo, hc, irp,
                                    (PXHCI98_TELEMETRY)
                                        stack->Parameters.Others.Argument1);
+        break;
+
+    case XHCI_USBDX_IOCTL_CAPABILITY:
+        status = hcdCapabilityIoctl(pdo, hc, irp,
+                                    (PHCD_USBDX_CAP_BLOCK)
+                                        stack->Parameters.Others.Argument1);
         break;
 
     default:
