@@ -249,6 +249,11 @@ const char *inst_eng_summary_head(int writes, int other);
  * there). */
 int inst_eng_tray_started(void);
 
+/* The computer's choice of XHCITR's "can run faster" notice in force (task
+ * 43.27): TrayFasterNotice when it is a DWORD 0 or 1, else this system's
+ * default (inst_fast_default). 1 on, 0 off. */
+int inst_eng_fast_state(void);
+
 /* ---- Stor98, the bundled NVMe driver (record 26 sections 5.3, 5.6, 6.3) -- */
 
 /* Whether the flavour directory carries it (and its version), and whether

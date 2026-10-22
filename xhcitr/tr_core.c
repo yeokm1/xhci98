@@ -2652,6 +2652,380 @@ int tr_warn_removed(int haveValue, TR_U32 value)
     return !(haveValue && value == 0);
 }
 
+/* ---- the "can run faster" notice (record 25 section 7.7) ------------------ */
+
+int tr_fast_can(int haveV2, TR_U32 flags)
+{
+    if (!haveV2) {
+        return -1;
+    }
+    if (flags & TR_V2_F_SSP_CAPABLE) {
+        return TR_SPEED_SUPERPLUS;
+    }
+    if (flags & TR_V2_F_SS_CAPABLE) {
+        return TR_SPEED_SUPER;
+    }
+    return -1;
+}
+
+/* The speed a connection runs at: the _EX_V2 operating flags, else the _EX
+ * byte when it names Low, Full or High Speed; -1 otherwise. A byte of 3 or
+ * 4 (98 SE's and ME's SuperSpeed and SuperSpeedPlus) with no operating
+ * flag is not a speed this decision trusts. */
+static int tr_fast_now(int haveV2, TR_U32 flags, unsigned int exSpeed)
+{
+    if (haveV2 && (flags & TR_V2_F_SSP_NOW)) {
+        return TR_SPEED_SUPERPLUS;
+    }
+    if (haveV2 && (flags & TR_V2_F_SS_NOW)) {
+        return TR_SPEED_SUPER;
+    }
+    if (exSpeed <= TR_SPEED_HIGH) {
+        return (int)exSpeed;
+    }
+    return -1;
+}
+
+int tr_fast_wants_qual(const TR_FAST_IN *in)
+{
+    if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
+        !in->HaveV2 || in->Root || !in->HubKnown || in->UnderTt) {
+        return 0;
+    }
+    return tr_fast_can(in->HaveV2, in->V2Flags) < 0 &&
+           tr_fast_now(in->HaveV2, in->V2Flags, in->ExSpeed) == TR_SPEED_FULL &&
+           tr_fast_now(in->HubHaveV2, in->HubFlags, in->HubExSpeed) ==
+               TR_SPEED_FULL &&
+           in->BcdUsb >= 0x0200U;
+}
+
+int tr_qual_ok(const unsigned char *b, size_t n)
+{
+    return b != NULL && n >= TR_QUAL_BYTES && b[0] == TR_QUAL_BYTES &&
+           b[1] == 6;
+}
+
+static int tr_qual_find(const TR_QUAL_CACHE *c, const char *key)
+{
+    int i;
+
+    for (i = 0; i < c->N && i < TR_QUAL_MAX; i++) {
+        if (strcmp(c->Key[i], key) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int tr_qual_get(TR_QUAL_CACHE *c, const char *key)
+{
+    int i;
+
+    if (c == NULL || key == NULL || (i = tr_qual_find(c, key)) < 0) {
+        return -1;
+    }
+    c->Seen[i] = 1;
+    return c->Val[i];
+}
+
+int tr_qual_room(const TR_QUAL_CACHE *c, const char *key)
+{
+    return c == NULL || key == NULL || c->N < TR_QUAL_MAX ||
+           tr_qual_find(c, key) >= 0;
+}
+
+int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
+                size_t n)
+{
+    int i;
+    int v = (n > 0) ? tr_qual_ok(b, n) : 0;
+
+    if (c == NULL || key == NULL) {
+        return v;
+    }
+    i = tr_qual_find(c, key);
+    if (i < 0) {
+        if (c->N >= TR_QUAL_MAX) {
+            return v;
+        }
+        i = c->N++;
+        tr_copy(c->Key[i], key, TR_FAST_KEY);
+        c->Val[i] = -1;
+        c->Tries[i] = 0;
+    }
+    c->Seen[i] = 1;
+    if (n > 0) {
+        c->Val[i] = v;
+        c->Tries[i] = 0;
+    } else if (++c->Tries[i] >= TR_QUAL_TRIES) {
+        c->Val[i] = 0;
+    } else {
+        c->Val[i] = -1;
+    }
+    return v;
+}
+
+void tr_qual_begin(TR_QUAL_CACHE *c)
+{
+    int i;
+
+    for (i = 0; c != NULL && i < TR_QUAL_MAX; i++) {
+        c->Seen[i] = 0;
+    }
+}
+
+void tr_qual_end(TR_QUAL_CACHE *c)
+{
+    int i;
+    int n = 0;
+
+    if (c == NULL) {
+        return;
+    }
+    for (i = 0; i < c->N && i < TR_QUAL_MAX; i++) {
+        if (!c->Seen[i]) {
+            if (c->Tries[i] == 0) {
+                continue;
+            }
+            c->Val[i] = 0;
+        }
+        if (n != i) {
+            tr_copy(c->Key[n], c->Key[i], TR_FAST_KEY);
+            c->Val[n] = c->Val[i];
+            c->Tries[n] = c->Tries[i];
+            c->Seen[n] = c->Seen[i];
+        }
+        n++;
+    }
+    c->N = n;
+}
+
+int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f)
+{
+    int hubCan;
+
+    f->Now = -1;
+    f->Can = -1;
+    f->Where = TR_FW_NONE;
+    f->HubNow = -1;
+    if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
+        !in->HaveV2) {
+        return 0;
+    }
+    if (tr_fast_wants_qual(in)) {
+        if (in->HsQual != 1) {
+            return 0;
+        }
+        f->Now = TR_SPEED_FULL;
+        f->Can = TR_SPEED_HIGH;
+        f->Where = TR_FW_HUBFS;
+        f->HubNow = TR_SPEED_FULL;
+        return 1;
+    }
+    f->Can = tr_fast_can(in->HaveV2, in->V2Flags);
+    f->Now = tr_fast_now(in->HaveV2, in->V2Flags, in->ExSpeed);
+    if (f->Can < 0 || f->Now < 0 || f->Now >= f->Can) {
+        f->Now = -1;
+        f->Can = -1;
+        return 0;
+    }
+    if (f->Now == TR_SPEED_SUPER) {
+        f->Where = TR_FW_LINK;
+        return 1;
+    }
+    if (in->Root) {
+        f->Where = TR_FW_PORT2;
+        return 1;
+    }
+    if (in->HubKnown) {
+        f->HubNow = tr_fast_now(in->HubHaveV2, in->HubFlags, in->HubExSpeed);
+    }
+    hubCan = in->HubKnown ? tr_fast_can(in->HubHaveV2, in->HubFlags) : -1;
+    if (hubCan >= TR_SPEED_SUPER && f->HubNow >= 0 &&
+        f->HubNow < TR_SPEED_SUPER) {
+        f->Where = TR_FW_HUB3;
+    } else if (f->HubNow == TR_SPEED_FULL || f->HubNow == TR_SPEED_LOW) {
+        f->Where = TR_FW_HUB1;
+    } else {
+        f->Where = TR_FW_HUB2;
+    }
+    return 1;
+}
+
+const char *tr_fast_speed(int speed)
+{
+    switch (speed) {
+    case TR_SPEED_LOW:
+        return "Low Speed (1.5 Mbit/s)";
+    case TR_SPEED_FULL:
+        return "Full Speed (12 Mbit/s)";
+    case TR_SPEED_HIGH:
+        return "High Speed (480 Mbit/s)";
+    case TR_SPEED_SUPER:
+        return "SuperSpeed (5 Gbit/s)";
+    case TR_SPEED_SUPERPLUS:
+        return "SuperSpeedPlus (10 Gbit/s or more)";
+    default:
+        return "a speed not reported";
+    }
+}
+
+const char *tr_fast_where(int where)
+{
+    switch (where) {
+    case TR_FW_PORT2:
+        return "on a USB 2.0 port";
+    case TR_FW_HUB2:
+        return "behind a USB 2.0 hub";
+    case TR_FW_HUB1:
+        return "behind a Full Speed hub";
+    case TR_FW_HUB3:
+        return "behind a USB 3 hub that runs slower";
+    case TR_FW_LINK:
+        return "on a 5 Gbit/s link";
+    case TR_FW_HUBFS:
+        return "behind a Full Speed hub";
+    default:
+        return "";
+    }
+}
+
+const char *tr_fast_try(int where)
+{
+    switch (where) {
+    case TR_FW_PORT2:
+        return "Connect it to a USB 3 port of this computer (often blue, or "
+               "marked SS). If it is already in one, it fell back to USB 2.0 "
+               "there: try another cable or another port.";
+    case TR_FW_HUB2:
+    case TR_FW_HUB1:
+        return "Connect it to a USB 3 port of this computer, or through a "
+               "USB 3 hub.";
+    case TR_FW_HUB3:
+        return "Connect the hub to a USB 3 port of this computer with a USB 3 "
+               "cable. If it already is, try another cable for the hub, then "
+               "for the device.";
+    case TR_FW_LINK:
+        return "Connect it to a port rated 10 Gbit/s or more (USB 3.1 Gen 2 "
+               "or USB 3.2), with a cable rated for that speed. A 5 Gbit/s "
+               "port is the most it gets there.";
+    case TR_FW_HUBFS:
+        return "Connect it to a port of this computer, or through a USB 2.0 "
+               "or USB 3 hub, rather than through this Full Speed hub.";
+    default:
+        return "";
+    }
+}
+
+void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
+                 unsigned int vid, unsigned int pid)
+{
+    tr_sprintf(out, cap, "%s|%s|%04X:%04X", ctrlKey != NULL ? ctrlKey : "",
+               path != NULL ? path : "", vid & 0xFFFFU, pid & 0xFFFFU);
+}
+
+int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key)
+{
+    int i;
+
+    for (i = 0; old != NULL && i < n; i++) {
+        if (strcmp(old[i], key) == 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void tr_fast_balloon(char *out, size_t cap, const char *name,
+                     const TR_FAST *f, int count)
+{
+    if (count > 1) {
+        tr_sprintf(out, cap, "%d USB devices run slower than they can: %s and "
+                             "%d more. Click here for what to try.",
+                   count, name, count - 1);
+        return;
+    }
+    tr_sprintf(out, cap, "%s runs at %s %s; it can run at %s. Click here for "
+                         "what to try.",
+               name, tr_fast_speed(f->Now), tr_fast_where(f->Where),
+               tr_fast_speed(f->Can));
+}
+
+/* `lead`, then `text` broken at its spaces so that a line passes 79
+ * columns only for a word longer than that, the continuation lines
+ * indented by `indent` spaces. */
+static void tr_fast_wrapped(TR_TEXT *t, const char *lead, const char *text,
+                            int indent)
+{
+    char line[96];
+    size_t len;
+    int sep;
+    const char *w = text;
+
+    tr_copy(line, lead, sizeof(line));
+    len = strlen(line);
+    sep = len > 0 && line[len - 1] != ' ';
+    while (*w != '\0') {
+        const char *e = w;
+        while (*e != '\0' && *e != ' ') {
+            e++;
+        }
+        if (len > (size_t)indent && len + (sep ? 1 : 0) + (size_t)(e - w) > 79) {
+            line[len] = '\0';
+            tr_printf(t, "%s\n", line);
+            memset(line, ' ', (size_t)indent);
+            len = (size_t)indent;
+            sep = 0;
+        }
+        if (sep && len < sizeof(line) - 1) {
+            line[len++] = ' ';
+        }
+        for (; w < e; w++) {
+            if (len < sizeof(line) - 1) {
+                line[len++] = *w;
+            }
+        }
+        sep = 1;
+        while (*w == ' ') {
+            w++;
+        }
+    }
+    line[len] = '\0';
+    tr_printf(t, "%s\n", line);
+}
+
+void tr_fast_entry(TR_TEXT *t, const char *name, unsigned int vid,
+                   unsigned int pid, const char *portLine,
+                   const char *hubName, const TR_FAST *f)
+{
+    char lead[160];
+
+    tr_sprintf(lead, sizeof(lead), "%s (%04X:%04X)", name, vid & 0xFFFFU,
+               pid & 0xFFFFU);
+    tr_fast_wrapped(t, "", lead, 2);
+    tr_fast_wrapped(t, "  ", portLine, 4);
+    if (hubName != NULL) {
+        tr_sprintf(lead, sizeof(lead), "Behind %s (%s)", hubName,
+                   tr_fast_speed(f->HubNow));
+        tr_fast_wrapped(t, "  ", lead, 4);
+    }
+    tr_printf(t, "  Runs at:    %s\n", tr_fast_speed(f->Now));
+    tr_printf(t, "  Can run at: %s\n", tr_fast_speed(f->Can));
+    tr_fast_wrapped(t, "  Try:", tr_fast_try(f->Where), 7);
+}
+
+void tr_fast_menu(char *out, size_t cap, int count)
+{
+    tr_sprintf(out, cap, "%d USB device%s can run faster...", count,
+               tr_plural(count));
+}
+
+void tr_fast_tip(char *out, size_t cap, int count)
+{
+    tr_sprintf(out, cap, "xHCI98 USB Tree: %d USB device%s can run faster",
+               count, tr_plural(count));
+}
+
 /* ---- the drivers' logging levels (section 7.5) ---------------------------- */
 
 const char *tr_level_driver(int driver)

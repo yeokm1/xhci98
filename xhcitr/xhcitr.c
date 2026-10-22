@@ -413,6 +413,11 @@ static void usb_derive(void);
 static void log_node_add(int parentT, int which, int index, const char *id);
 static void pci_node_add(int parentT, int which, int index, const char *id);
 static void say(const char *text, int warn);
+static void fast_scan(void);
+static int fast_port(int k, TR_FAST *f, int ask);
+static void fast_name(int k, char *out, size_t cap);
+static unsigned int fast_vid(const UPORT *p);
+static unsigned int fast_pid(const UPORT *p);
 
 /* Windows 2000, whose devnode held for eject reads Code 24. */
 static int env_w2k(void)
@@ -2601,6 +2606,7 @@ static void refresh_model(int withUsb)
             tbDevices += (int)inst_get32(nhi[root].R, CM_ST_O_ROUTER_COUNT);
         }
     }
+    fast_scan();
     if (!withUsb) {
         return;
     }
@@ -3043,6 +3049,43 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
     if (p->Bos != NULL && tr_bos_ssp_text(p->Bos, p->BosN, ssp, sizeof(ssp))) {
         tr_printf(t, "  Supported:     %s (the negotiated lane rate and count "
                      "are not reported)\n", ssp);
+    }
+    {
+        TR_FAST f;
+        if (fast_port(i, &f, 0)) {
+            char name[160];
+            char port[TR_NAME_CHARS + 96];
+            char hub[200];
+            TR_TEXT e;
+            char eb[1024];
+            fast_name(i, name, sizeof(name));
+            tr_sprintf(port, sizeof(port), "Port %s of %s", p->Path,
+                       c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "a USB host controller");
+            if (p->ParentUp >= 0) {
+                fast_name(p->ParentUp, hub, sizeof(hub));
+            }
+            tr_text_init(&e, eb, sizeof(eb));
+            tr_fast_entry(&e, name, fast_vid(p), fast_pid(p), port,
+                          p->ParentUp >= 0 ? hub : NULL, &f);
+            tr_put(t, "  Can run faster (record 25 section 7.7):\n");
+            tr_put(t, "  ");
+            {
+                /* The entry's lines, each indented two more. */
+                const char *s = eb;
+                char line[2];
+                line[1] = '\0';
+                for (; *s != '\0'; s++) {
+                    if (*s == '\r') {
+                        continue;
+                    }
+                    line[0] = *s;
+                    tr_put(t, line);
+                    if (*s == '\n' && s[1] != '\0') {
+                        tr_put(t, "  ");
+                    }
+                }
+            }
+        }
     }
     tr_printf(t, "  Address:       %u\n", p->Conn.Address);
     tr_printf(t, "  VID:PID:       %04X:%04X\n",
@@ -6276,6 +6319,474 @@ static void settings_save(void)
     RegCloseKey(k);
 }
 
+
+/* ======================================================================== */
+/* The "can run faster" notice (record 25 section 7.7)                       */
+/* ======================================================================== */
+
+static char fastKeys[TR_FAST_MAX][TR_FAST_KEY];
+static int fastKeyN;
+static int fastCount;           /* the devices counted at the last scan     */
+static int fastOn;              /* the setting in force at the last scan    */
+static int fastPending;         /* a balloon owed until the icon is there   */
+static char fastText[256];
+static int fastBalloon;         /* the last balloon shown was this notice's */
+static int fastRed;             /* the icon shown is the red one            */
+static int fastTipN = -1;       /* the count its tooltip says, -1 none      */
+static HICON hIconFast;
+/* The High Speed case's answers (item 1), by key, the oldest replaced. */
+static TR_QUAL_CACHE qualCache;
+/* Every port of the model has room for its answer (tr_core.h). */
+typedef char tr_qual_fits[(TR_QUAL_MAX >= TR_MAX_UPORTS) ? 1 : -1];
+static HWND hFastWnd;           /* the list's window, while it is open      */
+static HWND hFastEdit;
+static HWND hFastOk;
+
+static void tray_tip(TR_NID *n);
+
+/* The DWORD `name` under `key` of root, 1 when it reads as one. */
+static int fast_dword(HKEY root, const char *key, const char *name, DWORD *v)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = sizeof(*v);
+    int ok;
+
+    *v = 0;
+    if (RegOpenKeyExA(root, key, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    ok = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)v, &n) == ERROR_SUCCESS &&
+         t == REG_DWORD && n == sizeof(*v);
+    RegCloseKey(k);
+    return ok;
+}
+
+/* The setting in force (section 7.7 item 7). */
+static int fast_setting(void)
+{
+    DWORD u;
+    DWORD m;
+    int haveU = fast_dword(HKEY_CURRENT_USER, TR_SETTINGS_KEY, TR_FAST_VALUE, &u);
+    int haveM = fast_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_FAST_VALUE, &m);
+
+    return inst_fast_on(haveU, u, haveM, m,
+                        inst_fast_default(envNt, envMajor, envMinor));
+}
+
+static void fast_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_FAST_VALUE, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
+static void fast_key_of(int k, char *key, size_t cap)
+{
+    const UCTRL *c = &uc[up[k].Ctrl];
+
+    tr_fast_key(key, cap, c->DrvKey[0] ? c->DrvKey : c->Path, up[k].Path,
+                fast_vid(&up[k]), fast_pid(&up[k]));
+}
+
+/* A candidate's device_qualifier (section 7.7 item 1): the answer settled
+ * for its key, else, when ask is set (the refresh's scan only), asked
+ * (tr_qual_put). 1 High Speed capable, 0 not, or not yet known. */
+static int fast_qual(int k, int ask)
+{
+    char key[TR_FAST_KEY];
+    unsigned char *b = NULL;
+    DWORD n;
+    int v;
+
+    fast_key_of(k, key, sizeof(key));
+    v = tr_qual_get(&qualCache, key);
+    if (v >= 0 || !ask || !tr_qual_room(&qualCache, key)) {
+        return v > 0 ? 1 : 0;
+    }
+    n = usb_desc(up[k].Hub, up[k].Conn.Port, 6, 0, 0, TR_QUAL_BYTES, &b);
+    v = tr_qual_put(&qualCache, key, b, n);
+    free(b);
+    return v;
+}
+
+/* Port k as tr_fast_check reads it; 1 when it counts, with *f. Only the
+ * scan (ask set) sends a device_qualifier request; the details pane and the
+ * list read the answers it settled. */
+static int fast_port(int k, TR_FAST *f, int ask)
+{
+    const UPORT *p = &up[k];
+    TR_FAST_IN in;
+    int a;
+
+    memset(&in, 0, sizeof(in));
+    in.Ours = uc[p->Ctrl].Ours;
+    in.Connected = p->HaveConn && p->Conn.Status == TR_CS_CONNECTED;
+    in.IsHub = p->Conn.IsHub;
+    in.HaveV2 = p->HaveV2;
+    in.V2Flags = p->V2Flags;
+    in.ExSpeed = p->Conn.Speed;
+    in.Root = p->ParentUp < 0;
+    if (p->ParentUp >= 0) {
+        const UPORT *h = &up[p->ParentUp];
+        in.HubKnown = h->HaveConn;
+        in.HubHaveV2 = h->HaveV2;
+        in.HubFlags = h->V2Flags;
+        in.HubExSpeed = h->Conn.Speed;
+        /* Behind a TT: a hub further up at High Speed or faster, or one
+         * not read (record 25 section 7.7 item 1). */
+        for (a = h->ParentUp; a >= 0; a = up[a].ParentUp) {
+            if (!up[a].HaveConn || up[a].Conn.Speed >= TR_SPEED_HIGH) {
+                in.UnderTt = 1;
+                break;
+            }
+        }
+    }
+    in.BcdUsb = (unsigned int)p->Conn.Dev[2] | ((unsigned int)p->Conn.Dev[3] << 8);
+    in.HsQual = tr_fast_wants_qual(&in) ? fast_qual(k, ask) : -1;
+    return tr_fast_check(&in, f);
+}
+
+static unsigned int fast_vid(const UPORT *p)
+{
+    return (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8);
+}
+
+static unsigned int fast_pid(const UPORT *p)
+{
+    return (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8);
+}
+
+/* A device's name as the tree labels it, or its VID:PID. */
+static void fast_name(int k, char *out, size_t cap)
+{
+    const UPORT *p = &up[k];
+
+    tr_sprintf(out, cap, "USB device %04X:%04X", fast_vid(p), fast_pid(p));
+    if (p->Dn >= 0) {
+        usb_label(p->Dn, out, cap);
+    }
+}
+
+/* The icon as the notice wants it: red while on and a device counts; its
+ * tooltip again whenever the count it says changes. */
+static void fast_icon(void)
+{
+    TR_NID n;
+    int red = fastOn && fastCount > 0 && hIconFast != NULL;
+    int tipN = red ? fastCount : -1;
+
+    if (!iconAdded || (red == fastRed && tipN == fastTipN)) {
+        return;
+    }
+    memset(&n, 0, sizeof(n));
+    n.cbSize = shellV5 ? TR_NID_V2 : TR_NID_V1;
+    n.hWnd = hTray;
+    n.uID = 1;
+    n.uFlags = NIF_TIP | (red != fastRed ? NIF_ICON : 0);
+    n.hIcon = red ? hIconFast : hIconSmall;
+    fastRed = red;
+    fastTipN = tipN;
+    tray_tip(&n);
+    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+}
+
+/* The owed balloon, once the icon is there. */
+static void fast_announce(void)
+{
+    if (!fastPending || !iconAdded) {
+        return;
+    }
+    fastPending = 0;
+    if (!fastOn) {
+        return;
+    }
+    tray_balloon(TR_FAST_TITLE, fastText, 0);
+    fastBalloon = 1;
+}
+
+/* After every model refresh (section 7.7 items 3 and 4): the counted set,
+ * the balloon for the devices new to it, and the icon. */
+static void fast_scan(void)
+{
+    char keys[TR_FAST_MAX][TR_FAST_KEY];
+    int n = 0;
+    int fresh = 0;
+    int first = -1;
+    TR_FAST firstF;
+    int k;
+
+    fastOn = fast_setting();
+    fastCount = 0;
+    memset(&firstF, 0, sizeof(firstF));
+    /* The candidates present marked first, so the answers of those gone
+     * are dropped before any new one is asked (section 7.7 item 1). */
+    tr_qual_begin(&qualCache);
+    for (k = 0; k < upCount; k++) {
+        TR_FAST f;
+        (void)fast_port(k, &f, 0);
+    }
+    tr_qual_end(&qualCache);
+    for (k = 0; k < upCount; k++) {
+        TR_FAST f;
+        char key[TR_FAST_KEY];
+        if (!fast_port(k, &f, 1)) {
+            continue;
+        }
+        fastCount++;
+        if (n >= TR_FAST_MAX) {
+            continue;
+        }
+        fast_key_of(k, key, sizeof(key));
+        if (tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN, key)) {
+            if (fresh == 0) {
+                first = k;
+                firstF = f;
+            }
+            fresh++;
+        }
+        tr_copy(keys[n], key, TR_FAST_KEY);
+        n++;
+    }
+    memcpy(fastKeys, keys, sizeof(keys));
+    fastKeyN = n;
+    if (fresh > 0 && first >= 0) {
+        char name[160];
+        fast_name(first, name, sizeof(name));
+        tr_fast_balloon(fastText, sizeof(fastText), name, &firstF, fresh);
+        fastPending = 1;
+    }
+    fast_icon();
+    fast_announce();
+}
+
+/* The list of section 7.7 item 6 into t, an entry whole or not at all,
+ * with room kept for the closing line; returns the devices left out. */
+static int fast_list(TR_TEXT *t)
+{
+    int k;
+    int shown = 0;
+    int left = 0;
+    size_t cap = t->Cap;
+
+    t->Cap = cap > 256 ? cap - 256 : cap;
+    for (k = 0; k < upCount; k++) {
+        TR_FAST f;
+        char name[160];
+        char port[TR_NAME_CHARS + 96];
+        char hub[200];
+        const UCTRL *c;
+        size_t mark;
+        if (!fast_port(k, &f, 0)) {
+            continue;
+        }
+        if (left > 0) {
+            left++;
+            continue;
+        }
+        mark = t->Len;
+        c = &uc[up[k].Ctrl];
+        fast_name(k, name, sizeof(name));
+        tr_sprintf(port, sizeof(port), "Port %s of %s", up[k].Path,
+                   c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "a USB host controller");
+        if (up[k].ParentUp >= 0) {
+            fast_name(up[k].ParentUp, hub, sizeof(hub));
+        }
+        if (shown > 0) {
+            tr_put(t, "\n");
+        }
+        tr_fast_entry(t, name, fast_vid(&up[k]), fast_pid(&up[k]), port,
+                      up[k].ParentUp >= 0 ? hub : NULL, &f);
+        if (t->Overflow) {
+            t->Len = mark;
+            t->Buf[mark] = '\0';
+            t->Overflow = 0;
+            left = 1;
+            continue;
+        }
+        shown++;
+    }
+    t->Cap = cap;
+    if (shown == 0 && left == 0) {
+        tr_put(t, "Every USB device runs at the speed it declares.\n");
+    }
+    return left;
+}
+
+static void fast_layout(HWND w)
+{
+    RECT r;
+    const int m = 8;
+    const int bw = 88;
+    const int bh = 26;
+
+    GetClientRect(w, &r);
+    MoveWindow(hFastEdit, m, m, r.right - 2 * m,
+               r.bottom - 3 * m - bh > 0 ? r.bottom - 3 * m - bh : 0, TRUE);
+    MoveWindow(hFastOk, r.right - m - bw, r.bottom - m - bh, bw, bh, TRUE);
+}
+
+static LRESULT CALLBACK fast_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_SIZE:
+        fast_layout(w);
+        return 0;
+    case WM_SETFOCUS:
+        SetFocus(hFastOk);
+        return 0;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+            DestroyWindow(w);
+            return 0;
+        }
+        break;
+    case WM_DESTROY:
+        hFastWnd = NULL;
+        hFastEdit = NULL;
+        hFastOk = NULL;
+        return 0;
+    }
+    return DefWindowProcA(w, msg, wp, lp);
+}
+
+/* The window's size: 80 columns of the fixed font, two thirds of the work
+ * area's height, neither past the work area. */
+static void fast_size(int *cx, int *cy)
+{
+    RECT wa;
+    HDC dc;
+    TEXTMETRICA tm;
+    int col = 8;
+
+    dc = GetDC(NULL);
+    if (dc != NULL) {
+        HGDIOBJ old = SelectObject(dc, hFixed != NULL
+                                           ? (HGDIOBJ)hFixed
+                                           : GetStockObject(ANSI_FIXED_FONT));
+        if (GetTextMetricsA(dc, &tm) && tm.tmAveCharWidth > 0) {
+            col = tm.tmAveCharWidth;
+        }
+        SelectObject(dc, old);
+        ReleaseDC(NULL, dc);
+    }
+    *cx = 80 * col + GetSystemMetrics(SM_CXVSCROLL) + 16 +
+          2 * GetSystemMetrics(SM_CXSIZEFRAME) + 8;
+    *cy = 400;
+    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+        *cy = (wa.bottom - wa.top) * 2 / 3;
+        if (*cx > wa.right - wa.left) {
+            *cx = wa.right - wa.left;
+        }
+    }
+}
+
+/* The window of section 7.7 item 6: the list in a text box that scrolls,
+ * built in a buffer that grows until it fits (60 KiB at most on 98 SE and
+ * ME, whose edit control holds 64 KiB; 1 MiB elsewhere). */
+static void fast_box(HWND owner)
+{
+    char *buf = NULL;
+    TR_TEXT t;
+    size_t cap;
+    size_t most = envNt ? 1048576UL : 61440UL;
+    int left = 0;
+    int cx;
+    int cy;
+
+    for (cap = 16384;; cap *= 2) {
+        if (cap > most) {
+            cap = most;
+        }
+        buf = (char *)malloc(cap);
+        if (buf == NULL) {
+            MessageBoxA(owner, "There is not enough memory to list the devices.",
+                        TR_FAST_TITLE, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+            return;
+        }
+        tr_text_init(&t, buf, cap);
+        left = fast_list(&t);
+        if (left == 0 || cap >= most) {
+            break;
+        }
+        free(buf);
+    }
+    if (left > 0) {
+        tr_printf(&t, "\n%d more device%s not listed.\n", left,
+                  left == 1 ? " is" : "s are");
+    }
+    if (hFastWnd == NULL) {
+        fast_size(&cx, &cy);
+        hFastWnd = CreateWindowExA(0, "Xhci98TrFast", TR_FAST_TITLE,
+                                   WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, cx, cy, owner,
+                                   NULL, hInst, NULL);
+        if (hFastWnd == NULL) {
+            free(buf);
+            return;
+        }
+        hFastEdit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                        WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
+                                        ES_READONLY | ES_AUTOVSCROLL |
+                                        ES_AUTOHSCROLL,
+                                    0, 0, 10, 10, hFastWnd, (HMENU)3, hInst,
+                                    NULL);
+        hFastOk = CreateWindowExA(0, "BUTTON", "Close",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                      BS_DEFPUSHBUTTON,
+                                  0, 0, 10, 10, hFastWnd, (HMENU)IDOK, hInst,
+                                  NULL);
+        if (hFastEdit == NULL || hFastOk == NULL) {
+            DestroyWindow(hFastWnd);
+            free(buf);
+            return;
+        }
+        SendMessageA(hFastEdit, WM_SETFONT,
+                     (WPARAM)(hFixed != NULL ? (HGDIOBJ)hFixed
+                                             : GetStockObject(ANSI_FIXED_FONT)),
+                     0);
+        SendMessageA(hFastEdit, EM_LIMITTEXT, 0, 0);
+        SendMessageA(hFastOk, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT),
+                     0);
+        fast_layout(hFastWnd);
+    }
+    SetWindowTextA(hFastEdit, buf);
+    free(buf);
+    ShowWindow(hFastWnd, IsIconic(hFastWnd) ? SW_RESTORE : SW_SHOWNORMAL);
+    SetForegroundWindow(hFastWnd);
+    SetFocus(hFastOk);
+}
+
+/* The item in a menu, checked as the setting in force. */
+static void fast_item(HMENU m, int append)
+{
+    UINT flags = MF_STRING | (fast_setting() ? MF_CHECKED : MF_UNCHECKED);
+    const char *text = "Tell me when a device can run &faster";
+
+    if (append) {
+        AppendMenuA(m, flags, IDM_FAST, text);
+    } else {
+        ModifyMenuA(m, IDM_FAST, MF_BYCOMMAND | flags, IDM_FAST, text);
+    }
+}
+
+/* The menu item chosen: the user's value turned over, the icon at once. */
+static void fast_toggle(void)
+{
+    fast_set(!fast_setting());
+    fastOn = fast_setting();
+    fastPending = 0;
+    fast_icon();
+}
+
 /* ======================================================================== */
 /* The window (record 25 section 3)                                          */
 /* ======================================================================== */
@@ -6666,6 +7177,9 @@ static void init_menu(HMENU m)
     if (GetMenuState(m, IDM_RMWARN, MF_BYCOMMAND) != (UINT)-1) {
         warn_item(m, 0);
     }
+    if (GetMenuState(m, IDM_FAST, MF_BYCOMMAND) != (UINT)-1) {
+        fast_item(m, 0);
+    }
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
                                           ? MF_ENABLED : MF_GRAYED));
@@ -6699,6 +7213,9 @@ static int command(HWND w, UINT id)
         return 1;
     case IDM_RMWARN:
         warn_set(!warn_on());
+        return 1;
+    case IDM_FAST:
+        fast_toggle();
         return 1;
     case IDM_LEVEL:
         level_dialog(w, lv_driver_of_node(tree_selected()));
@@ -6926,7 +7443,9 @@ static void tray_tip(TR_NID *n)
 {
     char tip[128];
 
-    if (!shellV5 && lastEvent[0] != '\0') {
+    if (fastOn && fastCount > 0) {
+        tr_fast_tip(tip, sizeof(tip), fastCount);
+    } else if (!shellV5 && lastEvent[0] != '\0') {
         tr_sprintf(tip, sizeof(tip), "xHCI98 USB Tree: %d TB/USB4 - %s",
                    tbDevices, lastEvent);
     } else {
@@ -6946,7 +7465,8 @@ static void tray_add(void)
     n.uID = 1;
     n.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     n.uCallbackMessage = WM_TRAYICON;
-    n.hIcon = hIconSmall;
+    fastRed = fastOn && fastCount > 0 && hIconFast != NULL;
+    n.hIcon = fastRed ? hIconFast : hIconSmall;
     tray_tip(&n);
     iconAdded = Shell_NotifyIconA(NIM_ADD, (PNOTIFYICONDATAA)&n) != 0;
     if (iconAdded && shellV5) {
@@ -6991,6 +7511,7 @@ static void tray_balloon(const char *title, const char *text, int warn)
     TR_NID n;
 
     tr_copy(lastEvent, text, sizeof(lastEvent));
+    fastBalloon = 0;
     if (!iconAdded) {
         return;
     }
@@ -7128,6 +7649,12 @@ static void tray_unit_menu(void)
         refresh_model(0);
     }
     trayUnitCount = 0;
+    if (fastOn && fastCount > 0) {
+        char text[64];
+        tr_fast_menu(text, sizeof(text), fastCount);
+        AppendMenuA(m, MF_STRING, IDM_FAST_SHOW, text);
+        AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    }
     /* Two groups, each under a grey heading and only when it has an entry
      * (record 25 section 6.5): USB devices, then the Thunderbolt units. */
     for (g = 0; g < 2; g++) {
@@ -7183,6 +7710,8 @@ static void tray_unit_menu(void)
     DestroyMenu(m);
     if (cmd == IDM_OPEN) {
         open_window();
+    } else if (cmd == IDM_FAST_SHOW) {
+        fast_box(NULL);
     } else if (cmd >= IDM_UNIT0 && cmd < (UINT)(IDM_UNIT0 + trayUnitCount)) {
         /* The tree may have been read again while the menu was open: the
          * unit is found again by its instance ID. */
@@ -7209,6 +7738,7 @@ static void tray_context_menu(void)
     AppendMenuA(m, MF_STRING, IDM_ABOUT, "&About");
     login_item(m, 1);
     warn_item(m, 1);
+    fast_item(m, 1);
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_EXIT, "E&xit");
     SetMenuDefaultItem(m, IDM_OPEN, FALSE);
@@ -7234,6 +7764,9 @@ static void tray_context_menu(void)
         break;
     case IDM_RMWARN:
         warn_set(!warn_on());
+        break;
+    case IDM_FAST:
+        fast_toggle();
         break;
     case IDM_EXIT:
         quit_all();
@@ -7286,6 +7819,12 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             break;
         case WM_USER + 1:       /* NIN_KEYSELECT: the keyboard's click */
             tray_unit_menu();
+            break;
+        case WM_USER + 5:       /* NIN_BALLOONUSERCLICK */
+            if (fastBalloon) {
+                fastBalloon = 0;
+                fast_box(NULL);
+            }
             break;
         case WM_RBUTTONUP:
             if (!trayV3) {
@@ -8062,6 +8601,16 @@ static int register_classes(void)
         return 0;
     }
     memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = fast_proc;
+    wc.hInstance = hInst;
+    wc.hIcon = hIconBig;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+    wc.lpszClassName = "Xhci98TrFast";
+    if (!RegisterClassA(&wc)) {
+        return 0;
+    }
+    memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = main_proc;
     wc.hInstance = hInst;
     wc.hIcon = hIconBig;
@@ -8176,6 +8725,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     if (hIconSmall == NULL) {
         hIconSmall = hIconBig;
     }
+    hIconFast = (HICON)LoadImageA(inst, MAKEINTRESOURCEA(IDI_FAST), IMAGE_ICON,
+                                  GetSystemMetrics(SM_CXSMICON),
+                                  GetSystemMetrics(SM_CYSMICON), 0);
     hFixed = CreateFontA(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                          ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                          DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Courier New");
@@ -8194,6 +8746,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     refresh_model(0);
     tray_add();
+    fast_announce();
     poll();
     SetTimer(hTray, TIMER_POLL, 1000, NULL);
     if (!opts.Tray) {
@@ -8210,6 +8763,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
             if (hMain != NULL && hAccel != NULL &&
                 (msg.hwnd == hMain || IsChild(hMain, msg.hwnd)) &&
                 TranslateAcceleratorA(hMain, hAccel, &msg)) {
+                continue;
+            }
+            if (hFastWnd != NULL && IsDialogMessageA(hFastWnd, &msg)) {
                 continue;
             }
             TranslateMessage(&msg);

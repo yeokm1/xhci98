@@ -625,6 +625,28 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
 #define INST_DIR_VALUE      "InstallDir"
 #define INST_DIR_MOVEFROM   "MoveFrom"
 
+/* The computer's choice of XHCITR's "can run faster" notice (record 25
+ * section 7.7; record 23 section 9.5 item 7): a DWORD under INST_DIR_KEY,
+ * 0 off and 1 on, written by /faster, /nofaster and the Components page,
+ * deleted by the uninstall with InstallDir. */
+#define INST_FAST_VALUE     "TrayFasterNotice"
+
+/* 1 when the notice is on by default on this system: on every system
+ * (the owner, 2026-10-22: under xhci98.sys Windows' own notice appears on
+ * none); the system stays an argument for a reading that says otherwise
+ * (record 25 section 7.7 item 7). */
+int inst_fast_default(int nt, INST_U32 major, INST_U32 minor);
+
+/* The setting in force: the user's DWORD when it is 0 or 1, else the
+ * computer's when it is 0 or 1, else def. userHave and machineHave: the
+ * value was read as a DWORD. 1 on, 0 off. */
+int inst_fast_on(int userHave, INST_U32 user, int machineHave,
+                 INST_U32 machine, int def);
+
+/* /list's line for the computer's choice: want 1 (/faster) or 0
+ * (/nofaster), and the value now (have: read as a DWORD). */
+const char *inst_fast_list_text(int want, int have, INST_U32 now);
+
 /* ---- switches and exit codes (record 23 section 7) ----------------------------------- */
 
 #define INST_MAX_SET        16
@@ -650,6 +672,10 @@ typedef struct _INST_OPTS {
     int Storage;            /* /storage: the USB storage drivers, 98 SE
                                only (record 26 section 6.5.9)          */
     int NoStorage;          /* /nostorage: left out, on any system      */
+    int Faster;             /* /faster: XHCITR's "can run faster" notice
+                               on for this computer (record 23 section
+                               9.5 item 7)                              */
+    int NoFaster;           /* /nofaster: off for this computer         */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -1407,7 +1433,7 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_TB_T            7
 #define INST_PT_TB_ABSENT       8
 #define INST_PT_TRAY            9
-#define INST_PT_TRAY_T          10
+#define INST_PT_FAST            10  /* was the tray box's sentence */
 #define INST_PT_DIR             11
 #define INST_PT_DIR_9X          12
 #define INST_PT_USB             13
