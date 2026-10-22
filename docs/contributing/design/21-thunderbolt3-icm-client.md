@@ -3940,6 +3940,15 @@ veto retried, no re-enumeration, the re-plugged drive appearing only once
 the file is closed and the old devnode removed); the same with the DOS
 box Stor98's Q-9x reading used; the two-port leg.
 
+*Read* (2026-10-23, `runs/run-43.md`, "43.47"): on 98 SE under the ICM
+client and under the USB4 profile, and on ME under the USB4 profile,
+each leg as above, the veto (17h) asked again every 2 s, the re-plugged
+drive held until the old devnode was retired, the other port's work
+going on. After an accepted query the removal's identity read-back found
+the devnode gone every time (no `Remove_SubTree` was needed); an open
+file of an MS-DOS Prompt's `copy con` and an Explorer window on the drive
+did not veto on 98 SE, only a copy whose read had failed.
+
 ### 7.3 What this driver never claims
 
 It never reports a link down it has not seen the firmware report; an

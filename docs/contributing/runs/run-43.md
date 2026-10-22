@@ -1666,3 +1666,137 @@ section carries a dated note pointing here.
 - Nothing for this driver. What ME's configuration manager does during
   its 4 to 7 s waits was not read (it happens on its own stack as well,
   and is ME's).
+
+## 43.47 - The Vanished-Child Transaction's Legs on 98 SE and ME
+
+Task 43.47 of `roadmap-usb4.md`: the functions a tunnel down took away,
+removed as transactions of 43.18's kind on the member's call worker,
+the veto retried every 2 s, the member held until every one is retired
+(record 21 section 7.2, "The vanished-child transaction"). Read on
+2026-10-23.
+
+**On `E:\...` paths here.** They say where a reading was kept on the host
+that took it; they are not files a clone has.
+
+### Verdict
+
+**Every leg passes, on 98 SE and on ME.** With a file held open on the
+drive at the unplug, the vanished child's `CM_Query_Remove_SubTree` was
+refused (`CR_REMOVE_VETOED`, 17h) and asked again every 2 s, never
+forced; the drive plugged back in meanwhile was neither exposed (no
+`UP`) nor enumerated; once the file was let go the next query was
+accepted, the removal followed, the record retired, and only then did
+the held exposure and re-enumeration run: the returning drive came up
+under a new generation and its files listed. With two tunnel ports the
+other port's plug, unplug, statement and removal ran while the first
+port was held.
+
+### The vehicle
+
+- Development host A, QEMU under TCG, headless, one vCPU per guest
+  (`pentium3,-apic`), 256 MB, one guest at a time; `usb4-emu` at
+  `660f085` (the emulator binary 43.18 and 43.19 used, SHA-256 prefix
+  `9dfdcf9b`). The host was shared with other agents' guests and builds.
+- **98 SE**: 43.18's 98 SE image (3.1.0.0 installed, the Alpine Ridge
+  topology of the ICM client, one SHPC tunnel bridge at 00:06 below the
+  TB3 switch, member 02:08), and the same image under the generic USB4
+  topology (`-Usb4`, two tunnel ports 00:05 and 00:06).
+- **ME**: 43.18's ME image, the generic USB4 topology (two tunnel ports,
+  members 00:05 and 00:06), an ASM2464 USB4 enclosure.
+- The drive: the 128 MiB FAT image of 43.18 (`E:`, `BIG.BIN` 16 MiB,
+  `TESTDATA.BIN`), enclosure `enc0` on port 1 (`enc1` on port 2 for the
+  two-port leg). Stor98: the bundled 3.1.0.0 build as installed.
+- `xhcicm.sys`: the `qemu` flavour, copied over the installed one by
+  `D:\N\UPD.BAT`, then a cold restart. The legs below are of the build
+  of `ff50ddb3` (this task's last commit of code; `scripts\build-driver.cmd all`, x86
+  and amd64, passed; the `qemu` image's SHA-256 prefix `92dcbfd0`),
+  but where a row says otherwise: the ME rows marked *earlier* are of
+  `4a0d143a`'s build, two review rounds before, whose changes since are
+  races the legs do not reach (the stop's ordering, an adoption's
+  revalidation, a usable route, a fallback with no free record).
+- **The holder.** A copy from the drive with its 20th read held by the
+  harness's `x-faults` rule `at=fetch op=read nth=20 act=hold` on `tb0`,
+  and the enclosure unplugged while the read is held: (L1) Explorer's
+  copy of `E:\BIG.BIN` to the desktop, which after the unplug shows
+  "Cannot copy BIG: ..." and keeps the file open until OK is pressed;
+  (L2) an MS-DOS Prompt's `copy /b E:\BIG.BIN NUL`, which shows "General
+  failure reading drive E / Abort, Retry, Fail?" and keeps the file open
+  until it is aborted and the prompt exited - the DOS box of Stor98's
+  Q-9x reading. The rule is cleared after the unplug.
+- The driver's lines are the `qemu` flavour's log on the debug console:
+  `cm.vanish.sweep` (the sweep entered), `cm.vanish.reading` (bridge
+  31:16, complete 8000h, records made 7:0), `cm.eject.call=42..` and
+  `43..` (a record's query and removal submitted), `cm.vanish.cr`
+  (bridge 31:16, the record's phase 15:8, the call's `CONFIGRET`),
+  `cm.vanish.retired`, `cm.nvlink.up.held` (an exposure held behind the
+  gate), `cm.reenum.held.run`, `cm.reenum.9x.reenumerate`,
+  `cm.nvlink.up`.
+
+### Results
+
+| System, profile, leg | At the unplug | While vetoed | Re-plug meanwhile | Released |
+|---|---|---|---|---|
+| 98 SE, ICM, L1 (Explorer's copy) | statement, ack 206 ms, sweep: one record | query refused 17h, 15 times in 30 s (every 2 s) | `cm.nvlink.up.held`, no `UP`, no re-enumeration | OK pressed: query accepted, removal, `cm.vanish.retired`, held run, `cm.nvlink.up=02000401`, re-enumeration, `E:` listed |
+| 98 SE, ICM, L2 (DOS box) | the same, ack 55 ms | 17h, 13 then 15 times | held, as L1 | Abort, `exit`: accepted on the third query after, removed, `UP` at the new generation, `E:` back |
+| 98 SE, USB4, L1 | both members swept: 00:06 had nothing (its held work ran at once), 00:05 one record | 17h, 15 times | held for 00:05; 00:06's re-enumeration ran | as on the ICM, `UP=02000101` |
+| 98 SE, USB4, L2 with the two-port leg | as L1 | 17h throughout | port 2's drive plugged: its `UP=02000201` and re-enumeration ran while port 1 stayed held; unplugged: its own statement, sweep, record, query accepted and removal ran, and port 1's retries went on | Abort, `exit`: removed, `UP`, `E:` back |
+| ME, USB4, L1, *earlier* | as on 98 SE under USB4 | 17h, 15 times | held; the other member's re-enumeration ran | OK: removed, `UP=02000101`, `E:` back |
+| ME, USB4, L2 with the two-port leg, *earlier* and again on the last build | as above | 17h throughout | port 2 as on 98 SE (its `UP=01000201`, then its removal) | removed, `UP=02000101`, `E:` back |
+| ME, USB4, no holder (the last build; the copy did not start) | the query accepted at once, removal, retired | - | the re-plug enumerated and exposed at once | - |
+
+Every removal of a vanished child after its accepted query ended in the
+identity read-back before `Remove_SubTree` answering
+`CR_NO_SUCH_DEVNODE` (0Dh): the devnode was gone (or its handle named
+another id) by then, so the record retired as a verified-gone one and no
+`Remove_SubTree` was called; in every leg the returning drive then came
+up as a fresh device and listed its files. Which of the two it was is
+not read.
+
+The guests' logs: `E:\xhci98-vm\p43-47\keep` (`debugcon-*.log`,
+`trace-*.log`, `leg-*.txt`).
+
+### Findings
+
+- **A wizard holds the query, and the member waits.** On 98 SE under
+  the USB4 profile, the first plug of the drive on the new topology
+  opened Windows' Add New Hardware wizard for Stor98; the unplug's
+  query was submitted and did not return while the wizard was open (the
+  configuration manager busy, record 21 section 6.1's reading), the
+  member stayed held, the other member's work went on, and the query,
+  the removal and the re-plug's `UP` followed as soon as the wizard was
+  finished.
+- **What holds the volume on 9x.** Only a copy whose read had failed
+  vetoed the query: Explorer's copy with its error box up, and the DOS
+  box's copy at its Abort, Retry, Fail prompt (and, after Abort, until
+  the prompt was exited). A file kept open by `copy con E:\HOLD.TXT` in
+  an MS-DOS Prompt, and an Explorer window open on `E:\`, did not: the
+  query was accepted at once.
+- **A system-modal screen stops everything**, as 43.18's ME run C2
+  found: Windows' "Disk Write Error" screen came up after some unplugs
+  with a held read (98 SE and ME), and nothing ran - the driver's
+  retries included - until a key was pressed; then the retries went on.
+- **One stall, on a trial build, not reproduced.** On 98 SE under the
+  ICM client, with the first build of the code (uncommitted then,
+  SHA-256 prefix `6ad15224`), after the DOS box's copy was aborted and an
+  Explorer window on `E:` was closed, one query never returned and the
+  connection-manager thread logged nothing more (a later unplug was not
+  logged); the guest was quit. The same sequence, the Explorer window
+  included, ran through when tried again on that build, and no later
+  leg stalled. The cause is not read; a system-modal screen up at that
+  moment, which the screenshots taken may have missed, is the
+  likeliest, and is not established.
+- **ME at boot.** One fresh ME overlay faulted at boot with
+  `0E : 0197 : BFF62170` before anything of this task was copied in
+  (43.19 saw the same on an older overlay); the next fresh overlay
+  booted and was used.
+
+### Not read
+
+- A removal that keeps failing past 30 s (the blocked bit, O6): no
+  holder made `Remove_SubTree` fail here (every removal ended verified
+  gone); the host vectors carry it.
+- The NHI stopped mid-retry and the record adopted by the next start,
+  the takeovers by `CONTROLLER_UNAVAILABLE` and by the removal-only
+  request, and the parked claims: host vectors only.
+- The ICM client with two members (Titan Ridge) on 98 SE.
+- A deeper queue, and real hardware.
