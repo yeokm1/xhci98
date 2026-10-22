@@ -2918,7 +2918,22 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             } else {
                 $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\vsd\check-vsd.ps1") $vsdImage 2>&1
                 if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("STOR98.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
-                else { Write-Ok "STOR98.VXD built from src\vsd: its DDB, services, stamp and no debug-port write checked" }
+                else {
+                    # Not older than any of its inputs: the sources, the
+                    # build's scripts and the version header (as XHCIDI.EXE
+                    # is held below), so an image built before a source change
+                    # cannot be cut.
+                    $vsdTime = (Get-Item -LiteralPath $vsdImage).LastWriteTimeUtc
+                    $vsdInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\vsd") -File |
+                                   Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".py", ".allow") }) +
+                                 @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
+                    $vsdNewer = @($vsdInputs | Where-Object { $_.LastWriteTimeUtc -gt $vsdTime })
+                    if ($vsdNewer.Count -gt 0) {
+                        Stop-CutCheck ("STOR98.VXD is older than {0}: rebuild it (src\vsd\build.cmd, or scripts\build-driver.cmd)." -f (($vsdNewer | ForEach-Object { $_.Name }) -join ", "))
+                    } else {
+                        Write-Ok "STOR98.VXD built from src\vsd: its DDB, services, stamp and no debug-port write checked, newer than its sources"
+                    }
+                }
             }
         }
     }
