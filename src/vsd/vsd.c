@@ -105,6 +105,9 @@ void VsdConfig(AEP_dcb_config *aep, DCB *dcb)
                        dcb->DCB_cmn.DCB_dmd_flags, dcb->DCB_max_xfer_len);
     if (why != VSD_CLAIM) {
         VsdCounts.Left[why]++;
+        VSD_LINE("left dcb/why", dcb, why);
+        VSD_LINE("left port", *(ULONG *)&dcb->DCB_port_name[0],
+                 *(ULONG *)&dcb->DCB_port_name[4]);
         return;
     }
     if (VsdClaimed(dcb)) {
@@ -217,6 +220,7 @@ void __cdecl VsdRequest(IOP *iop)
     }
     if (ior->IOR_xfer_count == 0 || VsdNoDataFunc(ior->IOR_func)) {
         if (srbLen != 0) {
+            VSD_LINE("refusal: SRB data, no list; srb len", srbLen, ior->IOR_xfer_count);
             VsdRefuse(iop, &VsdCounts.SrbNoData);
             return;
         }
@@ -227,11 +231,13 @@ void __cdecl VsdRequest(IOP *iop)
     /* No SRB construction for an incoming request without one is read
      * (section 4.3), so none is admitted. */
     if (srb == 0) {
+        VSD_LINE("refusal: no SRB; count", ior->IOR_xfer_count, 0);
         VsdRefuse(iop, &VsdCounts.NoSrb);
         return;
     }
     cb = (IOP_callback_entry *)iop->IOP_callback_ptr;
     if (cb >= &iop->IOP_callback_table[IOP_CALLBACK_TABLE_DEPTH]) {
+        VSD_LINE("refusal: callback table full", cb, iop);
         VsdRefuse(iop, &VsdCounts.CbFull);
         return;
     }
@@ -252,6 +258,9 @@ void __cdecl VsdRequest(IOP *iop)
     io.Ctx = 0;
     r = VsdBuild(&rq, &io, a->List, a->Scratch, &n, &total);
     if (r != VSD_OK) {
+        VSD_LINE("refusal: build r/count", r, ior->IOR_xfer_count);
+        VSD_LINE("refusal: buf/srbbuf", rq.BufferPtr, rq.SrbBuffer);
+        VSD_LINE("refusal: srblen/flags", rq.SrbLength, ior->IOR_flags);
         VsdRefuse(iop, &VsdCounts.Refused[r]);
         return;
     }

@@ -330,8 +330,15 @@ static void test_srb(void)
     CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_OK,
           "an SRB shorter than the list");
     r.SrbBuffer = lin(0, 4);
-    CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_SRB_FIRST,
-          "an SRB whose DataBuffer is not the first byte refused");
+    CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_OK,
+          "an SRB's DataBuffer (set by SCSIPORT below) is not read");
+    r.SrbBuffer = 0;
+    r.SrbLength = 4096;
+    CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_OK,
+          "an SRB whose DataBuffer SCSIPORT has yet to set (0)");
+    r.SrbLength = 4097;
+    CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_R_SRB_COVER,
+          "... still held to the list's length");
 
     /* Fragments each whole while DataBuffer + DataTransferLength wraps. */
     sg_setup(0x10000UL, 2);

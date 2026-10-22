@@ -165,10 +165,12 @@ int VsdBuild(const VSD_REQ *req, const VSD_IO *io, VSD_RUN *runs,
         if (sum < req->SrbLength) {
             return VSD_R_SRB_COVER;
         }
-        if (req->SrbBuffer != first) {
-            return VSD_R_SRB_FIRST;
-        }
-        if (VsdWraps(req->SrbBuffer, req->SrbLength)) {
+        /* The SRB's DataBuffer is not read: at this layer it is not set
+         * yet (0, or the last request's value in a reused SRB, seen on the
+         * 98 SE emulator); SCSIPORT.PDR sets it below from the IOR, the
+         * linear buffer or the first fragment, which is the list's first
+         * byte by construction (Stor98's investigation, section 7). */
+        if (VsdWraps(first, req->SrbLength)) {
             return VSD_R_WRAP;
         }
     }
@@ -213,6 +215,15 @@ int VsdClaimTest(const unsigned char *port, VSD_U32 devflags, VSD_U32 dmd,
     if (devflags & (VSD_DCB_DEV_LOGICAL | VSD_DCB_DEV_RMM)) {
         return VSD_C_LOGICAL;
     }
+#ifdef VSD_TEST_NVME2K
+    /* Emulator test builds only (never packaged): the read-first image
+     * names Stor98's file NVME2K.MPD, so its port is nvme2k. */
+    if ((port[0] | 0x20) == 'n' && (port[1] | 0x20) == 'v' &&
+        (port[2] | 0x20) == 'm' && (port[3] | 0x20) == 'e' && port[4] == '2' &&
+        (port[5] | 0x20) == 'k' && port[6] == 0) {
+        want = "nvme2k";
+    }
+#endif
     for (i = 0; i < 6; i++) {
         c = port[i];
         if (c >= 'A' && c <= 'Z') {

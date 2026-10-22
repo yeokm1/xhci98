@@ -26,7 +26,7 @@ set "O=obj"
 set "DEF="
 if /i "%FLAV%"=="qemu" (
     set "O=obj\qemu"
-    set "DEF=-dVSD_DEBUGCON"
+    set "DEF=-dVSD_DEBUGCON %VSD_TEST_DEFS%"
 )
 if not "%FLAV%"=="" if /i not "%FLAV%"=="qemu" (
     echo usage: build.cmd [qemu]
