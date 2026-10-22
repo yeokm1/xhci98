@@ -2209,10 +2209,13 @@ static void summary_fill(HWND dlg)
             char sl[400];
             inst_eng_stor_summary(sl, sizeof(sl));
             if (sl[0] != '\0') {
-                _snprintf(line, sizeof(line) - 1, "- %s\n  %s\n", sl,
-                          storNote);
-                line[sizeof(line) - 1] = '\0';
-                tb_add(&t, line);
+                /* Each part added whole: the note may carry the lone
+                 * USBSTOR.INF's sentence (record 26 section 6.5.5). */
+                tb_add(&t, "- ");
+                tb_add(&t, sl);
+                tb_add(&t, "\n  ");
+                tb_add(&t, storNote);
+                tb_add(&t, "\n");
             }
         }
         if (trayHere) {

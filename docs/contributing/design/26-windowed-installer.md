@@ -1741,9 +1741,11 @@ Windows can find them:
   `NTMAP.INF` would take a new disk and stop Windows, and either
   installing these drivers puts `USBNTMAP.INF` beside it, or, with no
   route, this run cannot complete the pair and that copy is to be
-  removed before a new disk is plugged in. At the end of every install
-  run on 98 SE the INF directories are read again unless a withdrawal
-  already said it: a `USBSTOR.INF` still alone (the row left unticked, or
+  removed before a new disk is plugged in; the Summary keeps that note
+  when the download does not offer the row. At the end of every install
+  run on 98 SE, whatever its way out (`inst_eng_run`'s epilogue, with the
+  run ended by a withdrawal of `DevicePath`), the INF directories are
+  read again unless the run already said it: a `USBSTOR.INF` still alone (the row left unticked, or
   no route), or a reading that fails, is said with `stor_pair_left`'s
   advice on the Finish page and the console, and a step is left (exit
   4). A ticked run that completes the pair says nothing more.

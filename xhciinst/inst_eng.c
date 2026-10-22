@@ -18504,16 +18504,6 @@ static void stor_run_end(void)
 {
     int i;
 
-    /* Neither half alone left where Windows finds it at the end of the
-     * run, whatever the row (section 6.5.5): said once, a step. */
-    if (storHere && !opts.List && !storPairSaid &&
-        inst_stor_pair_warn(inst_stor_pair(
-            stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
-            stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)))) {
-        out("\n");
-        stor_pair_left();
-        flagSteps = 1;
-    }
     if (!storHere || storPack <= 0) {
         return;
     }
@@ -19847,6 +19837,13 @@ void inst_eng_stor_summary(char *out, size_t cap)
                   "files copied to %s\\NUSB33 only; nothing installs them "
                   "here.", toolDir);
         out[cap - 1] = '\0';
+        return;
+    }
+    if (storHere && storPack <= 0 && storHalf) {
+        /* The Summary still carries the row's note, with the lone
+         * USBSTOR.INF's sentence (record 26 section 6.5.5). */
+        inst_copy(out, "USB storage drivers for Windows 98 SE: not offered "
+                  "by this download.", cap);
         return;
     }
     if (!storHere || storPack <= 0) {
@@ -21521,12 +21518,17 @@ int inst_eng_run(void)
     f = flagFailed;
     r = flagRestart;
     s = flagSteps;
-    /* A run that ends with DevicePath withdrawn, whatever its way out:
-     * a USBSTOR.INF left alone in the INF directories is said, a step
-     * (record 26 section 6.5.5). */
-    if (storDpOff && !opts.List) {
+    /* A run that ends with DevicePath withdrawn, and every install run on
+     * 98 SE, whatever its way out: a USBSTOR.INF left alone in the INF
+     * directories is said once, a step (record 26 section 6.5.5). */
+    if ((storDpOff || storHere) && !opts.List) {
         storDpOff = 0;
-        if (stor_pair_left()) {
+        if (!storPairSaid &&
+            inst_stor_pair_warn(inst_stor_pair(
+                stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)))) {
+            out("\n");
+            stor_pair_left();
             flagSteps = 1;
         }
     }
