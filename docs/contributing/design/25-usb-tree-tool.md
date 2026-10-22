@@ -1,6 +1,9 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 15, 2026-10-19 (revision 15, Windows 2000's USB disk
+Status: revision 18, 2026-10-22 (revision 18, the red tray icon,
+roadmap-usb4 task 43.57: section 7.2.1, with sections 7.1, 9, 10, 11
+and 12, and record 13 section 8.12's failed flag); revision 15,
+2026-10-19 (revision 15, Windows 2000's USB disk
 class and its stopped mark, roadmap-usb4 task 42-A.28: sections 6.5 and
 14; revision 14, XHCISNAP's reading
 moved here, below; revision 13, the drivers' logging level, below;
@@ -1104,6 +1107,8 @@ XHCIINST needs nothing new: it runs as an administrator (record 24 section
   About, Exit.
 - **Tooltip**: "xHCI98 USB Tree: N Thunderbolt/USB4 devices" and, where
   the shell has no balloons, the last event (at most 63 characters).
+  While the icon is red (revision 18), what is wrong instead (section
+  7.2.1), and the left-click menu and the double click lead to it.
 - A hidden top-level window (class `Xhci98TrTray`) owns the icon, so the
   `TaskbarCreated` broadcast reaches it and the icon is re-added after an
   Explorer restart; `WM_CLOSE` to it ends the program cleanly.
@@ -1158,6 +1163,205 @@ and later) the tray uses the version 2 `NOTIFYICONDATAA` size with
 size and the tooltip. The structures are declared in `tr_core.h` for the
 MSVC 6.0 build with size checks (88 and 488 bytes, ANSI, x86); the x64
 build uses the WDK's header.
+
+### 7.2.1 The red icon (revision 18, task 43.57)
+
+Roadmap-usb4 43.57 (owner, 2026-10-22): the tray's icon turns red while
+any of four conditions holds, and returns to its usual icon when none
+does. **The rule** (the owner's, for these four and for every condition
+added later): red means a condition that is still present and that the
+user can put right - move the device to a USB 3 port, take the slow hub
+away, approve the device, deal with the failed controller. The
+unsafe-unplug warning (43.21) is not one: it has already happened, there
+is nothing left to put right, and its balloon is enough; nor are a plug,
+a disconnection or an eject.
+
+1. **The four conditions**, in the order the tooltip ranks them (item 4):
+
+   | Kind | Holds while | Read from |
+   |---|---|---|
+   | `TR_RED_HC` | a controller has stopped answering: an NHI whose liveness is a loss state or whose record's stage is failed; an `xhci98.sys` controller failed for good | the poll's snapshot (section 7.2); the controller's query answer (item 3) |
+   | `TR_RED_WAIT` | a Thunderbolt or USB4 device is waiting to be approved | the poll's snapshot |
+   | `TR_RED_SLOW3` | a USB 3 (SuperSpeed-capable) device runs at High, Full or Low Speed | 43.27's set (section 7.6), item 2 |
+   | `TR_RED_SLOW2` | a High Speed-capable device runs at Full Speed because the hub it is behind is a Full Speed hub | the same, item 2 |
+
+   **A controller.** For an NHI the test is the one the "stopped
+   answering" balloon makes since 2026-10-22 (`tr_live_lost`, section
+   7.2): suspect, absent, configuration lost, recovering, recovery
+   failed, contained or preparing, or the record's stage failed (a resume
+   that failed, `cm_power.c`; the connection manager's latched failure).
+   OFF ("not monitored", which every sleep and stop sets,
+   `CmLiveDisarm`) and revoked are not: a sleep never turns the icon red.
+   For an `xhci98.sys` controller it is the new flag of item 3, set when
+   the bus is latched failed (three recoveries failed in a row, or the
+   recovery window refused a fourth) or contained (`XhciTolTerminal` 2
+   to 5, record 13 section 8.12); a failure with a recovery still owed
+   (`XhciTolTerminal` 1) is not, because the driver is still putting it
+   right itself.
+   **Waiting.** An ICM entry whose approval is pending or unanswered, the
+   entries `TR_EV_WAITING` announces (section 7.2). A USB4 entry's
+   approval word folds held, failed and unsupported together, so a USB4
+   entry never counts. An entry whose approval failed or was rejected
+   does not count either: nothing the user does in the tool approves it.
+
+2. **Conditions 1 and 2 are 43.27's reading, consumed, not made again.**
+   43.27's `tr_fast_check` (section 7.6 item 1) already decides which
+   ports hold a USB 3 device running below SuperSpeed; the red icon takes
+   its set as it stands. Its kinds map as follows: `TR_FW_PORT2`,
+   `TR_FW_HUB2`, `TR_FW_HUB1` and `TR_FW_HUB3` are `TR_RED_SLOW3`;
+   `TR_FW_LINK` (a SuperSpeedPlus device at 5 Gbit/s) is **not** red - it
+   runs at USB 3 speed, which the owner's condition names, and section
+   7.6 item 8 shows it may have no faster port to go to - and it keeps
+   43.27's balloon and list.
+   Condition 2 is not in 43.27's set, and is added to it as a sixth kind,
+   `TR_FW_FSHUB`: a port of an `xhci98.sys` controller holding a
+   connected device that is not a hub, running at Full Speed, behind a
+   hub that itself runs at Full Speed, whose device descriptor's `bcdUSB`
+   is 0x0200 or more, and that answers a request for its device
+   qualifier descriptor (`GET_DESCRIPTOR_FROM_NODE_CONNECTION`, `wValue`
+   0600h, 10 bytes; the door forwards it to the device, record 13 section
+   8.11) with 10 bytes whose type byte is 6. USB 2.0 section 9.6.2: a
+   High Speed-capable device has a device qualifier, and a Full
+   Speed-only device answers the request with a request error, so a
+   `bcdUSB` of 2.00 alone, which many Full Speed devices declare, is not
+   taken as proof. The request is the one device request this section
+   adds: made once per connection (the key of 43.27's item 4) and only
+   for a device that passes every other clause, kept with the key, and
+   never repeated at a refresh. Its "Try" text is section 7.6 item 2's
+   for `TR_FW_HUB1`. A device behind a Full Speed hub at a USB 2.0 hub is
+   the same case; a Full Speed device at a root port is not (it is not
+   slowed by a hub).
+   The red icon reads that set only while 43.27's notice is in force
+   (section 7.6 item 7): turned off, conditions 1 and 2 do not hold, as
+   43.27 already says of its red icon. **Until 43.27 is merged** the
+   tool's half that hands the set over (`red_slow`, `xhcitr.c`) is a stub
+   that hands over none, so conditions 1 and 2 never hold; the merge
+   fills it from 43.27's keys and adds `TR_FW_FSHUB`.
+
+3. **`xhci98.sys`'s failed flag.** The query answer (record 13 section
+   8.12) gains one flag, `XHQ_F_FAILED` (`0x80`): set when
+   `XhciTolTerminal` is 2 or more, read under the controller lock as the
+   HCD region reads it. The layout, the version and every other field
+   are unchanged; a driver from before this flag never sets it, so the
+   icon never turns red for an older driver's controller. The tray asks
+   every listed `xhci98.sys` controller (`UCTRL.Ours`) for the answer's
+   header alone (64 bytes) every 5 s, from the 1 s poll - not every
+   second, because each answer reads the controller's 256 bytes of
+   configuration space - and once after each model refresh. A controller
+   that cannot be opened, or refuses the request, is not counted failed:
+   the icon says what it knows, not what it cannot read.
+
+4. **The decision is one pure function** (`xhcitr\tr_red.c`,
+   `tr_red_state`, host-tested in `test\test_trred.c`). Its inputs are
+   the poll's snapshot (`TR_SNAP`: each NHI's liveness and stage, each
+   router entry's kind and approval), the `xhci98.sys` controllers' last
+   flags (`TR_RED_HC`: failed, a name) and 43.27's handed-over set
+   (`TR_RED_DEV`: the kind, a name); its answer is how many conditions
+   hold and which is first, by kind and index. **The first** is the first
+   in the table's order - a controller, then a device waiting for
+   approval, then the slow devices - because a failed controller makes
+   every other reading of its devices doubtful and a device waiting for
+   approval does not work at all, where a slow one does; within a kind,
+   the order of the inputs. Each NHI and each controller counts once,
+   however many of its clauses hold; each router entry and each device
+   counts once.
+
+5. **The one place that applies it** (`tray_red`, `xhcitr.c`), called at
+   the end of every poll and after every model refresh. It calls
+   `tr_red_state`, composes the tooltip (item 6), and when the colour or
+   the tooltip differ from what the icon shows, sends one `NIM_MODIFY`
+   with `NIF_ICON | NIF_TIP`; when neither changed it sends nothing.
+   `tray_add`, which the start and the `TaskbarCreated` broadcast (an
+   Explorer restart) both call, adds the icon in the colour and with the
+   tooltip `tray_red` last chose, so a restarted Explorer shows the state
+   at once. The icon is always shown while the tool runs; there is no
+   option to hide it, and nothing but the colour of the glyph changes:
+   no speed, count or text is drawn in it.
+
+6. **The tooltip.** While the icon is red, the tooltip names what is wrong
+   in place of the device count (and on 98 SE in place of the last event,
+   which the 98 SE pop-up, section 16, still shows): the first condition,
+   with " and N more" when N others hold (`tr_red_tip`, pure). Its room is
+   the `szTip` field the shell takes - 64 bytes with `shell32.dll` below
+   5.0 (98 SE), 128 from 5.0 - less the terminating zero; the prefix
+   "xHCI98 USB Tree: " is written only in the 128-byte field. The texts:
+
+   | Kind | Text |
+   |---|---|
+   | `TR_RED_HC`, an NHI | "The Thunderbolt/USB4 controller stopped answering" |
+   | `TR_RED_HC`, an `xhci98.sys` controller | "<controller> stopped answering" |
+   | `TR_RED_WAIT` | "<device> is waiting to be approved" |
+   | `TR_RED_SLOW3` | "<device> runs below USB 3 speed" |
+   | `TR_RED_SLOW2` | "<device> is slowed by a USB 1.1 hub" |
+
+   The name is the one the tree shows (for a router, its vendor and
+   model; for a USB device, its label with its drive letters first; for
+   a controller, its devnode's name). The fixed words and " and N more"
+   are always kept; the name is cut to the room left, ending "...", and
+   a room of fewer than 4 characters writes "A device" (or "A USB
+   controller") in its place. When the icon is its usual colour the
+   tooltip is exactly what it was before this revision (owner,
+   2026-10-22).
+
+7. **A click.** While the icon is red, the left-click menu (section 7.1)
+   begins with one item, the tooltip's text without the prefix, followed
+   by "...", and a separator; choosing it, or a double click on the icon,
+   opens the window on the concerned item - the first condition's - as
+   the tree's own keys find it (section 3.4: the USB port's node for
+   conditions 1 and 2, the router's for a waiting device, the NHI's or
+   the controller's for a controller), refreshing the tree once when the
+   window's model does not hold it, and the window's top node when even
+   the refreshed tree does not (a view setting may hide that branch).
+   When the icon is its usual colour the menu and the double click are
+   unchanged. A balloon's click keeps whatever its own notice gives it
+   (43.27's opens its list; section 16 item 6). This item replaces
+   43.27's own first menu line, "<n> USB device(s) can run faster..."
+   (section 7.6 item 6), so the menu carries one such line, and 43.27's
+   tooltip while red (section 7.6 item 5) is this item's tooltip.
+
+8. **The red icon** (`xhcitr-r.ico`, `IDI_RED`), drawn as `xhcitr.ico`
+   is (section 9): the same glyph, the same sizes (16, 32 and 48 pixels)
+   and the same depths (4 bits per pixel in the 16 VGA colours, and 32
+   bits per pixel), with the controller box's blue - VGA colour 12,
+   0000FF, in each 4-bit image, and the same colour in each 32-bit one -
+   painted red, VGA colour 9, FF0000, and every other pixel, the masks
+   and the white highlight unchanged. VGA colour 9 is one of the 16
+   colours every display mode of 98 SE draws without dithering, and red
+   on the taskbar's grey (C0C0C0) and on XP's blue and 7's dark taskbar
+   reads as clearly as the blue it replaces. It is loaded as the usual
+   icon is, at the small-icon size (`SM_CXSMICON`), so the shell picks
+   the depth the display has. This is the icon 43.27 named
+   `xhcitr-f.ico` (section 7.6 item 5): one red icon serves every
+   condition, and 43.27 adds none of its own.
+
+9. **High contrast.** Notification-area icons are drawn with their own
+   colours in every high-contrast scheme, so the icon stays red there;
+   the scheme is not read and no third icon is drawn. The colour is never
+   the only carrier of the state: the tooltip names it and the menu's
+   first item names it, both in the system's text colours, and both are
+   read by a screen reader as any tooltip and menu are. A user who cannot
+   tell red from blue loses nothing the tooltip does not give.
+
+10. **Host vectors** (`test\test_trred.c`, over `xhcitr\tr_red.c`): each
+    condition alone, holding and then clearing (a liveness back to
+    active, a stage back to active, a device approved, a controller's
+    flag cleared, the set emptied); OFF, revoked and an unknown liveness
+    never counting, so a sleep does not turn the icon red; a USB4 entry's
+    held approval and an ICM entry's failed approval not counting; an NHI
+    lost and failed at once counted once; the ranking across kinds and
+    within one; the count with every kind at once; and the tooltip at 64
+    and 128 bytes - each text, a name cut, the " and N more" suffix up to
+    a four-digit N, a name too long for any room, an empty name - never
+    longer than its room. `xhci98.sys`'s flag in `test\test_xhq.c`: each
+    terminal value 0 to 5 and its flag, and the flag at every level.
+
+11. **Not done.** A condition on a controller that is not this package's
+    (Windows' own USB stacks answer none of these readings); the
+    Container ID pairing of a USB 3 hub's halves (section 7.6 item 1);
+    and a red icon for a device whose approval failed, which no action
+    of the tool's can put right.
+
+The legs are with 43.28 (section 11, T.13).
 
 ### 7.3 Command line
 
@@ -1348,7 +1552,9 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
   tree line to two devices and an eject arrow, in the 16 VGA colours with
   no partial transparency, at 16, 32 and 48 pixels, 4 and 32 bits per
   pixel, so it reads the same on 98 SE's grey taskbar, XP's blue and 7's
-  dark one.
+  dark one. Since revision 18 its red twin `xhcitr-r.ico` (section 7.2.1
+  item 8), the controller's blue painted red, is the tray's icon while
+  a condition holds.
 - Version resource from `src\xhci_version.h`.
 
 ## 10. The pure half and its host tests
@@ -1385,6 +1591,10 @@ what each level serves, the ring's text and cut, the configuration read's
 states, the sizing) and the tool's reader and texts of it in
 `test\test_xhq.c`, with the default level.
 
+Revision 18: the red icon's decision and tooltip (`tr_red_state`,
+`tr_red_tip`, section 7.2.1 item 10) in `test\test_trred.c`, over
+`xhcitr\tr_red.c`; `xhci98.sys`'s failed flag in `test\test_xhq.c`.
+
 ## 11. Legs
 
 | Leg | Systems | What it reads |
@@ -1399,6 +1609,7 @@ states, the sizing) and the tool's reader and texts of it in
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciCmLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 | T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
 | T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
+| T.13 | 98 SE, ME, 2000, XP, 7 x86 and x64 (with 43.28) | revision 18, by screenshot: the icon red and its tooltip for a SuperSpeed stick on a USB 2.0 port, a High Speed stick behind a Full Speed hub, the Thunderbolt emulator's device left unapproved, and two at once ("and 1 more"; 98 SE's 63 characters); each put right and the icon back; a sleep and resume leaving it as it was; an Explorer restart while red; the menu's first item and the double click opening the window on the device; the notice turned off clearing conditions 1 and 2; 98 SE at 16 colours |
 
 ## 12. Decisions
 
@@ -1510,6 +1721,23 @@ states, the sizing) and the tool's reader and texts of it in
   `-dump` and `-probe` become `/snapshot`, `/dump` and `/probe`, and Save
   Report carries the snapshot, so one file is the bug report. Its level
   switches do not move: section 7.5 already replaces them.
+
+- **T24** (owner, 2026-10-22, roadmap-usb4 43.57; revision 18) The
+  tray's icon is red while a condition holds that is still present and
+  that the user can put right: a USB 3 device below USB 3 speed, a High
+  Speed device slowed by a Full Speed hub, a Thunderbolt or USB4 device
+  waiting for approval, a controller that stopped answering (a real
+  failure; not the "not monitored" state a sleep leaves); later
+  conditions follow the same rule. The unsafe-unplug warning, plugs
+  and ejects never turn it red. The icon is always shown while the
+  tool runs, with no speed or text drawn in it; while red its tooltip
+  names the first condition, with "and N more", within 63 characters
+  on 98 SE and 127 from `shell32.dll` 5.0; when it is not red the
+  tooltip is as before. A click leads to the window on the device
+  concerned (section 7.2.1). The ranking of the conditions, the
+  double click and menu item as "a click", condition 2's device
+  qualifier request, `TR_FW_LINK` left out and `xhci98.sys`'s failed
+  flag are orchestrator decisions for the owner to confirm.
 
 ## 13. Open
 
