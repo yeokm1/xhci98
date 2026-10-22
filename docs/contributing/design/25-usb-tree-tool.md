@@ -791,8 +791,31 @@ record.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
    5.4 with every fact it needs), captured as text; on a veto, the vetoing
-   device and the reason.
-8. Release the mutex, then show the result: a message box from the
+   device and the reason. The tunnel watch (2026-10-22, from the 43.45
+   legs; `tr_eject_watch_kind` in `tr_core.c`) depends on who confirms
+   the eject to the connection manager (record 21 section 7.4). An
+   administrator's run confirms it itself and watches 10 s, as XHCIINST
+   does; so does the not-removable route, which nothing confirms. A run
+   without administrator rights on XP and later, the mark service not
+   read as stopped or absent, leaves the confirmation to the service's
+   next pass: the service writes it under this mutex, so the tool
+   releases the mutex here, before the watch, and watches 10 s plus
+   twice the service's idle period (`mk_poll_ms(0)`, 10 s), 30 s. That
+   is a budget, not a bound the service promises: its pass needs the NHI
+   verifiable, the unit's departure pending and Windows holding it for
+   eject (problem 47), and a walk has no time limit. If the tunnel is
+   still up it says "The PCIe tunnel has not been seen closed yet. It
+   closes if the xHCI98 mark service confirms the eject to the
+   Thunderbolt driver, which the service does in the background; an
+   eject made as an administrator is confirmed by this tool itself."
+   The watch ends early at the installer's quit event (section 7.1), as
+   30 s outlasts the installer's 15 s wait for the tool to end; no
+   answer is shown then. Without administrator rights on 2000, or with
+   the service stopped or absent, nothing confirms it: 10 s, then "The
+   PCIe tunnel stays up until the device is unplugged, because the eject
+   was not confirmed to the Thunderbolt driver; an eject made as an
+   administrator is confirmed by this tool itself."
+8. Release the mutex (if step 7 has not), then show the result: a message box from the
    window or a balloon (tooltip on 98 SE) from the tray.
 
 ### 6.3 The shared mutex
@@ -805,7 +828,8 @@ access to SYSTEM and Administrators, so an unelevated tray and an
 elevated XHCIINST can both take it. An abandoned mutex counts as taken
 (the transaction revalidates everything anyway). A wait longer than 10 s
 refuses ("another program is removing a device"). It is held only for
-one transaction, never while waiting for elevation.
+one transaction, never while waiting for elevation, and not through a
+tunnel watch that waits for the mark service (section 6.2 step 7).
 
 ### 6.4 Rights
 
@@ -1136,7 +1160,18 @@ A new epoch is a new set of devices.
 | an ICM device's approval becomes pending or unanswered | "<name> is waiting to be approved." |
 | an ICM device's approval becomes failed | "<name> could not be approved." |
 | a router entry leaves | "<name> was disconnected." |
-| the liveness state leaves ACTIVE | "The Thunderbolt/USB4 controller stopped answering." |
+| the liveness state goes from ACTIVE to a loss state, or the record's stage from active to failed | "The Thunderbolt/USB4 controller stopped answering." |
+
+A loss state (`tr_live_lost`) is suspect, absent, configuration lost,
+recovering, recovery failed, contained or preparing. OFF ("not
+monitored") is not one: the connection manager disarms the monitor at
+every sleep and stop (`CmLiveDisarm`), so until 2026-10-22 the tray
+raised this balloon after every sleep and hibernate with nothing failed
+(the 43.45 legs, 7 x86). Revoked (a PnP stop or removal) and a value
+the tool does not know are not loss states either. A resume that fails
+(`cm_power.c`) leaves the liveness OFF and sets the stage failed, so the
+stage's move from active to failed raises the same balloon, once for the
+NHI however many of the two changes one sample shows.
 
 The approval events read the ICM's approval states only: a USB4 entry's
 approval word folds held, failed and unsupported together and an eject
