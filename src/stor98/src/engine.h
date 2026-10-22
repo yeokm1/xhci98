@@ -230,6 +230,10 @@ typedef struct _ENG_PARENT {
     ULONG BlocksLeft;       // blocks not yet dispatched
     ULONG NextOffset;       // byte offset of the next fragment
     ULONG Bytes;            // bytes the request transfers
+    ULONGLONG PfNextPa;     // counter answer: the physical address the previous span ended at
+    UCHAR PfRuns;           // physical runs seen so far, at most STOR98PF_RUN_WALK_MAX
+    UCHAR PfNotSeen;        // a span was not translated (bounced): the layout is not known
+    USHORT PfReserved;
 } ENG_PARENT, *PENG_PARENT;
 
 typedef struct _ENG_BUSY {
@@ -309,6 +313,12 @@ VOID EngStop(IN struct _HW_DEVICE_EXTENSION *DevExt);
 
 // Request submission from the SCSI handlers
 BOOLEAN EngSubmitReadWrite(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
+// Counter answer (docs/PLAN.md MD-8): a data SRB at HwStartIo's entry, and a
+// software answer copied to the SRB's data (fragment by fragment on 9x;
+// FALSE, nothing copied, when its buffer cannot be resolved).
+VOID EngPfSrbIn(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
+BOOLEAN EngCopyToCaller(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN const UCHAR *Src,
+                        IN ULONG Bytes);
 BOOLEAN EngSubmitFlush(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 #if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
 VOID EngProbeSg9x(IN PSCSI_REQUEST_BLOCK Srb);

@@ -1188,6 +1188,36 @@ isolation evidence.
   Nothing changes in the receiver. Option not chosen: a receiver-side handling of a
   request left in place past O6. Contract text: `include/stor98cm.h` R11 O6.
 
+- **MD-8: a read-only counter answer for xhci98's disk benchmark. Decided 2026-10-22
+  (owner, Yeo Kheng Meng).** xhci98's XHCIPERF (its design record 29, section 7) reads
+  Stor98's request counters to show what reached the drive. Stor98 answers READ BUFFER
+  (3Ch) mode 02h (data) and 03h (descriptor) with buffer ID 53h from its device
+  extension, with no NVMe command and no access to the medium; any other mode, buffer ID
+  or offset is refused with INVALID FIELD IN CDB. The answer's layout is
+  `include/stor98pf.h` (BSD-3-Clause, an interface definition licensed on its own like
+  `stor98cm.h`; signature 'S98P', `STOR98PF_VERSION` 1, a protocol version). It carries
+  totals that only rise (each a 32-bit low and high pair carried by hand), facts, limits
+  and an epoch that changes at each adapter start; nothing resets and nothing is written.
+  Data SRBs are counted once at `HwStartIo`'s entry, before dispatch, hold or refusal;
+  the engine's own admission counters keep their meaning. On 98 SE and ME the DCB's
+  `DCB_max_xfer_len`, `DCB_max_sg_elements` and `DCB_dmd_flags` are copied through a
+  checked accessor of their own (IOP in the arena and pointing back at the SRB, the DCB
+  pointer in the arena). Carriers (xhci98's side): `IOCTL_SCSI_PASS_THROUGH` on NT, ASPI
+  (`SC_EXEC_SCSI_CMD`) on 98 SE and ME, the latter pending xhci98's reading P.0 of ASPI on
+  stock 98 SE and ME. Nothing of xhci98's GPL-2.0 code comes into Stor98. Options not
+  chosen: `IOCTL_SCSI_MINIPORT` (NT only), a registry value written from the timer, a
+  table in the 9x system arena read from ring 3, a vendor LOG SENSE page (kept as the
+  fallback if a layer refuses READ BUFFER). Tests: `tests/unit/` (the answer's builder,
+  the DCB accessor); TESTING.md "Counter answer (READ BUFFER)".
+  **P.0 (xhci98, 2026-10-22, static):** stock 98 SE and ME install `WNASPI32.DLL` and
+  `APIX.VXD` (their setup's `subase.inf`, section `[winbase]`), but the ASPI adapter
+  identity a program reads is not shown to name the miniport (`APIX.VXD`, 29,497 bytes, the same
+  file on both CDs, SHA-256 d98f340a..., carries the fixed string "OEM SCSI HBA" at file offset
+  0x5864), so the adapter is proved Stor98's by the target
+  itself: INQUIRY lists a vendor page C9h (`include/stor98pf.h`, the identity page,
+  signature 'S98P' and the PCI location), which a reader asks before any READ BUFFER.
+  INQUIRY and its EVPD pages are answered by every SCSI target, so asking them is safe.
+
 ### Open (undecided)
 
 The entries below record the options and evidence behind the decisions above (MD-7's are

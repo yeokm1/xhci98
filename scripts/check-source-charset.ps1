@@ -61,7 +61,7 @@ $repo = Split-Path -Parent $scriptDir
 # The trees that hold source. src\ is the one that ships; the other four were
 # measured clean on 2026-09-12 under all three rules, so including them costs
 # nothing today and puts the guard where a future edit would land.
-$trees = @("src", "test", "scripts", "xhcitr", "xhciqual")
+$trees = @("src", "test", "scripts", "xhcitr", "xhciqual", "xhciperf")
 
 # File kinds the 1998-era toolchain reads. All three rules apply to these.
 # `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3); `.vbs` is

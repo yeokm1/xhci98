@@ -7191,6 +7191,51 @@ static void init_menu(HMENU m)
 static void open_window(void);
 static void quit_all(void);
 
+/* Action, Disk benchmark... (design record 29 section 11, task 43.50): the
+ * benchmark beside this tool, on the selected disk's first drive letter
+ * when it has one. */
+static void bench(HWND w, int sel)
+{
+    char exe[MAX_PATH], line[MAX_PATH + 32], *s;
+    const char *letters = "";
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+
+    if (sel >= 0 && tn[sel].Dn >= 0) {
+        letters = gw.N[tn[sel].Dn].Letters;
+    }
+    GetModuleFileNameA(NULL, exe, sizeof(exe));
+    exe[sizeof(exe) - 1] = '\0';
+    s = strrchr(exe, '\\');
+    if (s == NULL) {
+        return;
+    }
+#ifdef _WIN64
+    tr_copy(s + 1, "XHCIPF64.EXE", sizeof(exe) - (size_t)(s + 1 - exe));
+#else
+    tr_copy(s + 1, "XHCIPERF.EXE", sizeof(exe) - (size_t)(s + 1 - exe));
+#endif
+    tr_copy(line, "\"", sizeof(line));
+    tr_copy(line + 1, exe, sizeof(line) - 1);
+    tr_copy(line + strlen(line), "\"", sizeof(line) - strlen(line));
+    if (letters[0] >= 'A' && letters[0] <= 'Z') {
+        char f[16];
+
+        tr_copy(f, " /folder X:\\", sizeof(f));
+        f[9] = letters[0];
+        tr_copy(line + strlen(line), f, sizeof(line) - strlen(line));
+    }
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    if (!CreateProcessA(exe, line, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        MessageBoxA(w, "The xHCI98 Disk Benchmark is not installed beside this tool.", "xHCI98 USB Tree",
+                    MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+}
+
 static int command(HWND w, UINT id)
 {
     int i;
@@ -7249,6 +7294,9 @@ static int command(HWND w, UINT id)
     }
     case IDM_PROPS:
         properties(tree_selected());
+        return 1;
+    case IDM_BENCH:
+        bench(w, tree_selected());
         return 1;
     case IDM_ABOUT:
         about(w);

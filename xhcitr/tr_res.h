@@ -41,6 +41,7 @@
 #define IDM_RMWARN              40029
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031
+#define IDM_BENCH               40032   /* the disk benchmark (record 29 section 11) */
 #define IDM_ABOUT               40040
 #define IDM_OPEN                40050
 #define IDM_FAST                40051   /* the notice on or off          */

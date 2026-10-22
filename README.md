@@ -15,7 +15,7 @@ It is built to Intel's xHCI specification and tested mainly on Intel machines. O
 
 This is a solo human's project with AI assistance, so bugs are not unexpected. Please [report them](https://github.com/yeokm1/xhci98/issues/new/choose).
 
-**Contents:** [Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [Installation Steps](#installation-steps) ([SETUP.EXE](#install-with-setupexe), [by hand](#install-by-hand)) - [Tuning](#tuning) - [What is tested](#what-is-tested-and-what-is-not) - [The package](#the-package) - [Reporting a bug](#reporting-a-bug) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
+**Contents:** [Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [The xHCI98 Disk Benchmark](#the-xhci98-disk-benchmark) - [Installation Steps](#installation-steps) ([SETUP.EXE](#install-with-setupexe), [by hand](#install-by-hand)) - [Tuning](#tuning) - [What is tested](#what-is-tested-and-what-is-not) - [The package](#the-package) - [Reporting a bug](#reporting-a-bug) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
 
 <img src="images/xhci98-p14s-superspeed-setup.jpg" width="800">
 
@@ -125,6 +125,10 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 - **Snapshot:** Save Report ends with the driver's snapshot (its device report and decoded state). File > Save Snapshot..., `XHCITR /snapshot`, `/dump` and `/probe` write the snapshot's files themselves, for when a maintainer asks for them.
 
 Details: [the release notes' USB Tree section](docs/using/release-notes.md#the-xhci98-usb-tree).
+
+## The xHCI98 Disk Benchmark
+
+`XHCIPERF.EXE` (`XHCIPF64.EXE` on 64-bit Windows), new in `3.2.0.0`, measures any local disk through a test file of its own, on every system the package supports: sequential and random tests, a size sweep, unbuffered or cached, aligned, offset or scattered buffers, a verified pattern, and queue depth and threads on Windows 2000 and later (on 98 SE and ME file I/O waits for each request). Where the bundled Stor98 drives the disk, its Stor98 page shows the request sizes that reached the drive, so a before and after (a saved run compared with a new one) shows what a change did. The install copies it into the install directory; it is also in `tools\xhciperf\`, and XHCITR's Action > Disk benchmark... starts it. Laid out after the familiar disk benchmarks; nothing of theirs is used.
 
 ## Installation Steps
 

@@ -116,8 +116,9 @@ int main(void)
 
         memset(v, 0xCC, sizeof(v));
         n = InqVpdPage(0x00, sn, m, v);
-        expect(n == 7 && v[0] == 0 && v[1] == 0x00 && v[2] == 0 && v[3] == 3 && v[4] == 0x00 &&
-               v[5] == 0x80 && v[6] == 0x83, "VPD 00h lists 00h, 80h, 83h");
+        expect(n == 8 && v[0] == 0 && v[1] == 0x00 && v[2] == 0 && v[3] == 4 && v[4] == 0x00 &&
+               v[5] == 0x80 && v[6] == 0x83 && v[7] == 0xC9, "VPD 00h lists 00h, 80h, 83h, C9h");
+        expect(InqVpdPage(0xC9, sn, m, v) == 0, "VPD C9h is not built by inqid.c (ScsiHandleInquiry)");
 
         n = InqVpdPage(0x80, sn, m, v);
         expect(n == 24 && v[1] == 0x80 && v[2] == 0 && v[3] == 20 && memcmp(v + 4, "S4EWNX0R123456      ", 20) == 0,
@@ -165,7 +166,7 @@ int main(void)
         CDB(0x00, 0x00, 0, 0);
         expect(InqResponse(cdb, sn, m, fr, r) == 0, "standard INQUIRY, allocation 0 -> no data");
         CDB(0x01, 0x00, 0, 0xFF);
-        expect(InqResponse(cdb, sn, m, fr, r) == 7 && r[1] == 0x00 && r[5] == 0x80, "EVPD page 00h");
+        expect(InqResponse(cdb, sn, m, fr, r) == 8 && r[1] == 0x00 && r[5] == 0x80 && r[7] == 0xC9, "EVPD page 00h");
         CDB(0x01, 0x80, 0, 0xFF);
         expect(InqResponse(cdb, sn, m, fr, r) == 24 && r[1] == 0x80 && memcmp(r + 4, "deadbeef", 8) == 0,
                "EVPD page 80h");
