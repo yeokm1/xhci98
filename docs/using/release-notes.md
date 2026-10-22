@@ -1691,12 +1691,20 @@ asks once (`Y`, or Enter), and then:
   there. Windows Server 2016, 2019 and 2022 report a Windows 10 version
   and are treated as 10, untested. On the x64 editions the drivers load
   only in test-signing mode, which these systems let you turn on only
-  with Secure Boot off in the computer's firmware setup, or on a start
-  with driver signature enforcement disabled; the tool never changes
-  either. The x64 package carries a catalog for each driver (from
-  `3.2.0.0`), signed with the same test certificate: these systems
-  refuse a 64-bit driver package without one in test-signing mode
-  (error `0xE000022F`; design record 23 section 5.12). Windows 10 has never been run with this package.
+  with Secure Boot off in the computer's firmware setup; the tool never
+  changes either. There it installs the connection manager only in
+  test-signing mode, and a start with driver signature enforcement
+  disabled is not enough: 64-bit 8 and 8.1 make it a boot driver, and a
+  start without test-signing mode then stopped in Automatic Repair
+  (roadmap-usb4 task 43.22; 10 is given the same rule, whether it too
+  makes the driver boot start unread). The x64 package carries a catalog
+  for each driver (from `3.2.0.0`), signed with the same test
+  certificate: these systems refuse a 64-bit driver package without one
+  in test-signing mode (error `0xE000022F`; design record 23 section
+  5.12), so keep the `.cat` files beside the INFs. On Windows 10 the
+  drivers were read in virtual machines of 22H2, each installed by a
+  script; the tool itself has not yet run there (roadmap-usb4 tasks
+  43.23, 43.33 and 43.36).
 
 It never runs `XHCICLN`. At the end, if an update from `2.3.x` or earlier
 left old `XHCI98\` entries, it says so in one line: nothing needs them
@@ -4158,7 +4166,7 @@ information.
 
 | Area | State |
 |---|---|
-| Stor98 on 32-bit Windows 8.1, and Stor98 x64 on 8, 8.1 and 10 | 32-bit Windows 8.1 has not been run (no install medium; owner, 2026-10-22: covered by 32-bit Windows 8, where Stor98 ran, and 8.1 x64); 32-bit Windows 10 was run on 22H2 only. On 8 x64, 8.1 x64 and 10 x64 the x64 package does not install: Windows refuses an INF with no catalog file there ("The third-party INF does not contain digital signature information"; read in test-signing mode), so Stor98 x64 has not run on them (roadmap-usb4 task 43.23, `runs/run-43.md`) |
+| Stor98 on 32-bit Windows 8.1, and Stor98 x64 on 8, 8.1 and 10 | 32-bit Windows 8.1 has not been run (no install medium; owner, 2026-10-22: covered by 32-bit Windows 8, where Stor98 ran, and 8.1 x64); 32-bit Windows 10 was run on 22H2 only. On 8 x64, 8.1 x64 and 10 x64 the `3.1.0.0` x64 package, which has no catalogs, was refused ("The third-party INF does not contain digital signature information"; read in test-signing mode; roadmap-usb4 task 43.23, `runs/run-43.md`). From `3.2.0.0` `stor98.inf` names `stor98.cat`, and on 8.1 x64 and 10 x64 in test-signing mode the package with it was taken into the driver store after the publisher prompt (task 43.36, the catalogs signed in the guest with a certificate of its own); no drive was bound to it there, so Stor98 x64 has bound and run no drive on 8 x64, 8.1 x64 or 10 x64, and 8 x64 with the catalogs was not run |
 | SuperSpeed isochronous transfers | Built from the specification against host tests. No SuperSpeed isochronous device has been held and QEMU models none |
 | High Speed isochronous transfers, and the isochronous ring page | No High Speed isochronous device (a camera, USB Audio 2.0) has been read on any vehicle; QEMU's audio device is Full Speed. Since the planned isochronous ring work (design record 13 section 11.8, not yet in a release), an isochronous endpoint serviced more than once a frame gets a ring of its own when the event ring has room: 120 TRBs and up to 120 packets a request with the 256-entry event ring, against 62 on the shared pool ring, so a 3 x 1024-byte camera endpoint holds about 7.5 to 10 ms in flight and a stream of small packets 15 ms. A client keeps a stream continuous with at least two requests in flight, each at most half of that. An isochronous stream also interrupts at most every eighth packet and at each request's end (BEI), from xHCI 1.0; whether that saving shows on real hardware is unread |
 | SuperSpeedPlus links, by mode | Accepted at the trained rate, built from the specification against host tests. Each mode is untested: Gen 2x1 (10 Gbit/s on one lane), Gen 1x2 (10 Gbit/s on two lanes, the same rate as Gen 2x1 and a different mode), and Gen 2x2 (20 Gbit/s). No Gen 2 device was read on any hardware; no 20 Gbit/s port is held |

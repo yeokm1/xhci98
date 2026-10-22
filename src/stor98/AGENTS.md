@@ -8,8 +8,10 @@ Guidance for AI agents and contributors working in this repository.
 
 Stor98 (service and file names `stor98`): a SCSI(port) miniport for NVMe SSDs on Windows
 98 SE through Windows 10 below build 22000 (32- and 64-bit; 8, 8.1 and 10 since xhci98
-3.2.0.0, xhci98's roadmap 43.23 and 43.34, README "Windows 8, 8.1 and 10"; the 64-bit package
-does not yet install on 8, 8.1 or 10), robust against surprise removal behind USB4 /
+3.2.0.0, xhci98's roadmap 43.23 and 43.34, README "Windows 8, 8.1 and 10"; with its catalog
+the 64-bit package installs into the driver store on 8.1 x64 and 10 x64, xhci98's roadmap
+43.36, and has bound and run no drive on 8, 8.1 or 10 x64), robust against surprise removal
+behind USB4 /
 Thunderbolt PCIe tunnels. Stor98 is meant to be used with xhci98 only; it is not meant to
 be used standalone, and docs must not present it as a standalone driver. Read
 [README.md](README.md), then [docs/PLAN.md](docs/PLAN.md), then

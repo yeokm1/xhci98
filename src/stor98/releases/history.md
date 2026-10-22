@@ -10,9 +10,10 @@ and released as part of xhci98, with xhci98's version.
   offers Stor98 there (unticked) for NVMe drives behind a Thunderbolt
   or USB4 tunnel; on 8.1 and 10 it replaces Windows' own NVMe driver on
   such a drive. The 32-bit driver ran on Windows 8 and Windows 10 22H2
-  (32-bit) in the emulator unchanged. The 64-bit package installs
-  there from this release, with its catalog (below). 32-bit Windows
-  8.1 is untested.
+  (32-bit) in the emulator unchanged. From this release the 64-bit
+  package, with its catalog (below), installs into the driver store
+  on 8.1 x64 and 10 x64; it has not yet run a drive there, nor on 8
+  x64. 32-bit Windows 8.1 is untested.
 - The INFs' comments name Windows 8, 8.1 and 10; nothing they install
   changed.
 - 64-bit Windows 8, 8.1 and 10: stor98.inf names a catalog,

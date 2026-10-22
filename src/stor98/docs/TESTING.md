@@ -121,12 +121,15 @@ roots (until 0.4.0.0, the folders of a release stage):
   folder. **XP x64, Vista x64, 7 x64**: the same with `x64\`; Vista x64 and 7 x64 need
   test-signing on and a signed image (Code 52 otherwise).
 - **8 and 8.1**: 8 x86 installs from `x86\` (read 2026-10-22 through the installer's own
-  call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refuse the
-  `x64\` package at the driver store because it has no catalog (`0xE000022F`, with
-  test-signing on; off not read); 8.1 x86 not run.
+  call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refused xhci98
+  3.1.0.0's `x64\` package at the driver store because it has no catalog (`0xE000022F`,
+  with test-signing on; off not read); with `stor98.cat` (xhci98 3.2.0.0) 8.1 x64 took it
+  into the store (xhci98's roadmap 43.36), no drive bound; 8 x64 with it, and 8.1 x86, not
+  run.
 - **10 (below build 22000)**: 10 x86 installs from `x86\` over Windows' own `stornvme`
-  (the installer's own call, forced); 10 x64 refuses `x64\` at the driver store as 8 x64
-  does ("Windows 10", below).
+  (the installer's own call, forced); 10 x64 refused the catalog-less `x64\` as 8 x64 did
+  ("Windows 10", below), and took the package with `stor98.cat` into the store as 8.1 x64
+  did, no drive bound.
 - Pass: the controller shows "Stor98 Storage Controller for NVMe SSDs" working, its test volume is
   readable, and each OS has only its own image: `dir C:\stor98.* /s` finds only
   `SYSTEM\IOSUBSYS\STOR98.MPD` on 9x (and the class key's `PortDriver` is `stor98.mpd`),
@@ -184,15 +187,16 @@ the debug-port builds' stage lines to `isa-debugcon` with `usb4-debug-port`.
 | 8.1 x64, unplug during writes under `stornvme` (no Stor98) | - | the copy in flight blocked for five minutes: `stornvme` logged event 129 ("Reset to device, \Device\RaidPort0, was issued") and event 11 ("controller error") every 35 s, the disk never removed; with the tunnel brought back after 4.6 min the reset succeeded 23 s later and the copy completed with success. For xhci98's release notes (its roadmap 43.24 owes the leg under its own connection manager) |
 
 What it leaves unread: 32-bit Windows 8.1 (no medium); Stor98 x64 running on 8 and 8.1 at
-all (refused at the driver store; the kernel's acceptance of the SHA-1 test signature there
-is unread behind that); a removal with a platform notification (pci.sys removing the
+all (refused at the driver store without a catalog; with one, taken into the store on 8.1
+x64 by xhci98's roadmap 43.36 and bound to no drive, so the kernel's acceptance of its
+SHA-1 test signature there is unread); a removal with a platform notification (pci.sys removing the
 controller) and xhci98's connection manager's link-down statement on 8 and 8.1 (roadmap
 43.24); the xhci98 installer's own run on 8 and 8.1 (43.24).
 
 | Untested ground on 8 and 8.1 | State |
 |---|---|
 | Windows 8.1, 32-bit | Not run: no install medium (owner, 2026-10-22: skipped for xhci98 `3.2.0.0`, covered by 8 x86 and 8.1 x64). The x86 package is the one 8 x86 ran; 8.1 x86's `stornvme` and SCSIport are unread |
-| Stor98 x64 on 8, 8.1 and 10 | Not loaded: the package is refused at the driver store (no catalog, above). Waiting on the test-signed catalog xhci98 is adding to its x64 packages (owner, 2026-10-22); with it, the install, the load and a removal under Stor98 on 8 x64 and 8.1 x64 |
+| Stor98 x64 on 8, 8.1 and 10 | Not loaded. Without a catalog the package is refused at the driver store (above); with the test-signed `stor98.cat` of xhci98 3.2.0.0 (owner, 2026-10-22) it was taken into the store on 8.1 x64 and 10 x64 (xhci98's roadmap 43.36, the catalog signed in the guest with a certificate of its own) and bound to no drive. Owed: the forced install over `stornvme`, the load and a removal under Stor98 on 8 x64, 8.1 x64 and 10 x64 |
 | Removal with a platform notification, and xhci98's link-down statement, on 8 and 8.1 | Not read; xhci98's roadmap 43.24 |
 
 ## Windows 10 (xhci98 roadmap 43.23 and 43.34, 2026-10-22)
@@ -218,7 +222,8 @@ Stor98 is there; its imports differ from 8's by five names (`IoGetCurrentProcess
 | 10 x64, install | xhci98 `3.1.0.0` `release-x64` | **refused**: `0xE000022F`; `setupapi.dev.log` "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode", "Failed to import driver package into Driver Store"; both controllers stay with `stornvme` |
 
 What it leaves unread on 10: the terminal status question of PLAN 2.2 (only `NO_DEVICE`
-ran, without stage codes); Stor98 x64 (refused, as on 8 and 8.1); 10 builds other than
+ran, without stage codes); Stor98 x64 running (refused without a catalog, as on 8 and 8.1;
+with one taken into the store and bound to no drive, xhci98's roadmap 43.36); 10 builds other than
 22H2 (1507 to 21H2, the LTSC releases, Server 2016 to 2022); the removal with a platform
 notification and xhci98's connection manager on 10 (its roadmap 43.37).
 
