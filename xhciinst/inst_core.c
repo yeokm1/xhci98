@@ -5653,6 +5653,11 @@ int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
     return haveS98 && tb && !noStor98;
 }
 
+int inst_s98_over_inbox(int is8, const char *service)
+{
+    return is8 && service != NULL && inst_eq(service, "stornvme");
+}
+
 int inst_s98_known_tunnel(int nt, int present, int place, int recorded)
 {
     if (present) {
