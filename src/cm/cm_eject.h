@@ -389,7 +389,7 @@ BOOLEAN CmEjByteWrite(CM_EJ_READ32 read, CM_EJ_WRITE32 write, PVOID context,
 
 /* Record 21 section 7.2 part 2, decision V4: the systems admitted to the
  * 9x statement, each on its own gate-G3 reading. `me` TRUE for Windows
- * ME. Both are admitted (runs/run-43-18.md, 2026-10-22). */
+ * ME. Both are admitted (runs/run-43.md, 2026-10-22). */
 BOOLEAN CmEjQualified9x(BOOLEAN me);
 /* The 9x eject's own statements (the failed branch's isolation, the clean
  * removal's and O6's teardown under the USB4 profile) take the whole

@@ -237,7 +237,7 @@ static VOID cmEjAfterRemoval(CM_EJ_TX *t, const CM_EJ_IN *in)
          * drive's Stor98 went with the devnode, so its entry leaves UP
          * now, with no statement. Left UP, the unplug's statement would
          * wait its whole bound for an answer nobody can give (task 43.18,
-         * runs/run-43-18.md). */
+         * runs/run-43.md). */
         t->Phase = CM_EJ_P_RETIRE;
     } else {
         t->Phase = CM_EJ_P_DONE;
@@ -857,7 +857,7 @@ BOOLEAN CmEjByteWrite(CM_EJ_READ32 read, CM_EJ_WRITE32 write, PVOID context,
 
 /* Each system admitted on its own gate-G3 reading (decision V4), both read
  * on 2026-10-22 in the emulator with this driver's qemu flavour (task
- * 43.18, runs/run-43-18.md): 98 SE under the ICM client, ME under the USB4
+ * 43.18, runs/run-43.md): 98 SE under the ICM client, ME under the USB4
  * profile; at every point read the statement came after the stage-2 reset
  * and quiesce, and the removal after the wait's end. */
 #define CM_EJ_QUALIFIED_98SE    1
