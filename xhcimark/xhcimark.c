@@ -2728,7 +2728,9 @@ static int mk_s98_member_node(int node, const int *member)
 }
 
 /* One poll's switch: records settled first, then at most one devnode
- * switched. */
+ * switched; every candidate's arrival entry is kept at every walk, the
+ * ones after the switched one too, so no retry budget or delay restarts
+ * for a drive that stayed. */
 static void mk_s98_poll(const int *prot)
 {
     static int parent[MK_MAX_NODES];
@@ -2768,7 +2770,7 @@ static void mk_s98_poll(const int *prot)
             }
         }
     }
-    for (i = 0; i < nodeCount && !done; i++) {
+    for (i = 0; i < nodeCount; i++) {
         MK_S98_IN in;
         int s;
         int w;
@@ -2783,6 +2785,9 @@ static void mk_s98_poll(const int *prot)
             continue;
         }
         s = mk_s98_seen(nodes[i].Id);
+        if (done) {
+            continue;
+        }
         in.PolicyOk = policy;
         in.WalkWhole = walkBad == 0;
         in.StatusOk = nodes[i].StatusOk;
