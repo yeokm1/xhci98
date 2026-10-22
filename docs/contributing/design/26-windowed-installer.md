@@ -2802,7 +2802,9 @@ later; read on the 43.48 leg of 2026-10-23) takes the file as this
 installer's and makes the key again - a ticked run, an unticked one
 (which then recovers it) and the uninstall alike, `/list` saying so and
 writing nothing. The key is marked `Adopted` (written first, `RecordMade`
-1 last, so a run cut short in between resumes the adoption): what the
+1 last, so a run cut short in between resumes the adoption; a key with
+no value and no subkey, its making stopped before the first, is taken as
+no key): what the
 lost `Staged` values recorded is not known, so nothing of it is removed
 on their account - the uninstall of an adopted set keeps, on 98 SE and
 ME, every folder a `DevicePath` entry names under the set's folder and

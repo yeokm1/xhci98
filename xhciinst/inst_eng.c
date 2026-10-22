@@ -22272,8 +22272,36 @@ static int other_adopted(int set)
     return reg_dword(HKEY_LOCAL_MACHINE, key, "Adopted", &v) && v == 1;
 }
 
-/* No key for the set (or one this function began and did not finish:
- * Adopted 1 with RecordMade not yet 1), and at the install directory's
+/* The set's key is there with no value and no subkey: a making of it
+ * (other_adopt's or a run's) stopped before its first value was written;
+ * it is taken as no key. */
+static int other_key_bare(int set)
+{
+    char key[INST_PATH_CHARS];
+    HKEY k;
+    DWORD subs = 0;
+    DWORD vals = 0;
+    LONG r;
+
+    other_key(set, key, sizeof(key));
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegQueryInfoKeyA(k, NULL, NULL, NULL, &subs, NULL, NULL, &vals, NULL,
+                         NULL, NULL, NULL);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS && subs == 0 && vals == 0;
+}
+
+/* An adoption may be made or resumed: the key Adopted, or bare. */
+static int other_adoptable(int set)
+{
+    return other_adopted(set) || other_key_bare(set);
+}
+
+/* No key for the set (or a bare one, or one this function began and did
+ * not finish: Adopted 1 with RecordMade not yet 1), and at the install directory's
  * name a record file whose whole first line is this set's header for that
  * folder: the key was lost (on 98 SE and ME a power cut before the
  * registry was written out; section 6.7.5), the file is this installer's,
@@ -22303,7 +22331,7 @@ static int other_adopt(int set)
     if (e < 0) {
         return -1;
     }
-    if (e > 0 && (!other_adopted(set) ||
+    if (e > 0 && (!other_adoptable(set) ||
                   (reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made) &&
                    made != 0))) {
         /* Not an adoption cut short: RecordMade 1 is a whole record, 2 an
@@ -22527,7 +22555,7 @@ static int other_begin(int set, const char *dir, char *recPath, size_t cap)
                     other_key_text(set, "Dir", v, sizeof(v)) > 0 &&
                     other_key_text(set, "Sums", sums, sizeof(sums)) > 0 &&
                     reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &md);
-            if ((!whole || md == 0) && other_adopted(set)) {
+            if ((!whole || md == 0) && other_adoptable(set)) {
                 if (other_adopt(set) < 0) {
                     inst_copy(o->Why, "its record could not be made again",
                               sizeof(o->Why));
@@ -22870,7 +22898,7 @@ static void other_recover_only(int set)
     if (opts.List) {
         return;
     }
-    if (other_key_exists(set) == 0 || other_adopted(set)) {
+    if (other_key_exists(set) == 0 || other_adoptable(set)) {
         int ad = other_adopt(set);
         if (ad < 0) {
             out("%s: its record could not be taken up again; it is left as "
@@ -22878,7 +22906,7 @@ static void other_recover_only(int set)
             flagSteps = 1;
             return;
         }
-        if (ad == 0 && other_key_exists(set) != 1) {
+        if (ad == 0 && (other_key_exists(set) != 1 || other_key_bare(set))) {
             return;
         }
     }
@@ -23440,10 +23468,14 @@ static int other_remove(int set, int uninstall)
     (void)uninstall;
     other_key(set, key, sizeof(key));
     r = other_key_exists(set);
-    if (r == 0 || (r > 0 && other_adopted(set))) {
+    if (r == 0 || (r > 0 && other_adoptable(set))) {
         /* A record file whose key was lost (section 6.7.5). */
         r = other_adopt(set);
         if (r == 0 && other_key_exists(set) == 1) {
+            if (other_key_bare(set)) {
+                /* A bare key and no record file: nothing was copied. */
+                return other_key_delete(set);
+            }
             r = 1;
         }
         if (r == 0) {
