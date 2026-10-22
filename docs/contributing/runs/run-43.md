@@ -3578,10 +3578,11 @@ guest's serial port.
   first line is this set's header is taken as this installer's and its
   key made again. The run after the fix copied the rest (a second run
   token, 224 entries), 457 distinct files in the record. Fifteen files
-  whose long names the cut had lost from the directory were copied again
-  (the record named them D with the file absent); a few others survived
-  the cut with other bytes. Fixed for later runs: each copy is flushed
-  before its D line, and `RecordMade` with `RegFlushKey`.
+  the first run had recorded D were absent at the second and were copied
+  again, and three (in `rtl815x\wxp`) were present with other bytes at
+  the uninstall; that the cut lost their writes is the likely reading,
+  not taken further. Fixed for later runs: each copy is flushed before
+  its D line, and `RecordMade` with `RegFlushKey`.
 - **The stage.** `DevicePath` after the run:
   `C:\WINDOWS\INF;C:\XHCI98;` and the five 98 SE folders of `STAGE.TXT`
   (ax88772, ftdi, ft2232d, ch341, x360c), each recorded under
