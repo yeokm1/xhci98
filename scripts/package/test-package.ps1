@@ -4677,8 +4677,26 @@ try {
     [Array]::Copy($catOdd, $catEven, 1030)
     Assert-True ((Get-PeImageDigest -Bytes $catOdd) -eq (Get-PeImageDigest -Bytes $catEven)) `
         "Get-PeImageDigest did not pad an image of 1030 bytes with zeros to 1032."
-    Assert-True ((Get-PeImageDigest -Bytes $catOdd -End 1030) -ne (Get-PeImageDigest -Bytes $catOdd -End 1029)) `
-        "Get-PeImageDigest gave two different lengths one digest."
+    # Signed, the same image carries those zeros before its table at 1032:
+    # the signed and the unsigned digest agree, by the table and by -End.
+    $catOddS = New-SyntheticSigned -Unsigned $catOdd -TableLen 64
+    Assert-True ((Get-PeImageDigest -Bytes $catOddS) -eq (Get-PeImageDigest -Bytes $catOdd)) `
+        "Get-PeImageDigest gave an odd-length image signed a digest other than its unsigned build's."
+    Assert-True ((Get-PeImageDigest -Bytes $catOddS -End 1032) -eq (Get-PeImageDigest -Bytes $catOdd)) `
+        "Get-PeImageDigest gave an odd-length image signed, by -End, a digest other than its unsigned build's."
+    # Malformed: the two zeros removed and the table moved up to 1030, its
+    # entry pointing there. The padding must not recreate the missing zeros:
+    # a table, or an -End, off a multiple of 8 is refused.
+    $catMis = New-Object byte[] (1030 + 64)
+    [Array]::Copy($catOddS, $catMis, 1030)
+    [Array]::Copy($catOddS, 1032, $catMis, 1030, 64)
+    [BitConverter]::GetBytes([uint32]1030).CopyTo($catMis, 0x80 + 24 + 112 + 32)
+    $threw = $false
+    try { [void](Get-PeImageDigest -Bytes $catMis) } catch { $threw = $true }
+    Assert-True $threw "Get-PeImageDigest hashed an image whose certificate table is not on a multiple of 8."
+    $threw = $false
+    try { [void](Get-PeImageDigest -Bytes $catMis -End 1030) } catch { $threw = $true }
+    Assert-True $threw "Get-PeImageDigest took an -End that is not a multiple of 8."
 
     # The trust list's extensions, encoded by hand: a critical flag is
     # admitted only in DER (one byte, TRUE).

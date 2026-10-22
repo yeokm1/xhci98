@@ -440,13 +440,24 @@ function Get-PeImageDigest {
     # -End (Get-EmbeddedSignature's): where the hashed bytes stop, the
     # table's offset as that image's entry gives it, checked by the caller.
     param([byte[]]$Bytes, [int]$End = -1)
+    # A certificate table starts on a multiple of 8 (the PE format's
+    # attribute certificate table), so the padding is only ever added after
+    # the last byte of an unsigned image: a table, or an -End, that is not
+    # aligned is refused, or the padding would stand in for zeros missing
+    # from the file before it.
     $layout = Get-PeSecurityLayout -Bytes $Bytes
     $stop = $Bytes.Length
     if ($End -ge 0) {
+        if ($End % 8 -ne 0) {
+            throw ("the certificate table's offset {0} is not a multiple of 8" -f $End)
+        }
         $stop = $End
     } elseif ($layout.TableOffset -ne 0 -or $layout.TableSize -ne 0) {
         if ([int64]$layout.TableOffset + [int64]$layout.TableSize -ne [int64]$Bytes.Length) {
             throw "the certificate table is not the end of the image"
+        }
+        if ($layout.TableOffset % 8 -ne 0) {
+            throw ("the certificate table's offset {0} is not a multiple of 8" -f $layout.TableOffset)
         }
         $stop = [int]$layout.TableOffset
     }
@@ -945,7 +956,8 @@ function Test-CatalogOfPackage {
         foreach ($f in $spec.Files) {
             $fp = Join-Path $Dir $f
             if (-not (Test-Path -LiteralPath $fp)) { return "$catName covers '$f', which is not in the package" }
-            $expected[$f] = Get-CatalogMemberDigest -Path $fp
+            try { $expected[$f] = Get-CatalogMemberDigest -Path $fp }
+            catch { return "${catName}: '$f' cannot be hashed: $($_.Exception.Message)" }
         }
         $why = ""
         try { $why = Test-PackageCatalog -Catalog (Read-CatalogFile -Path $catPath) -Expected $expected -Thumbprint $Thumbprint }
