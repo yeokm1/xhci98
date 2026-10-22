@@ -1,6 +1,12 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 1, 2026-10-22, before code. Written for `roadmap-usb4.md`
+Status: draft 2, 2026-10-22, reviewed and revised (the page-table
+service's result checked, the list's room bounded by two partial pages a
+fragment, checked arithmetic and a fragment limit on the logical list, the
+SRB's data covered before every call down, the callback table's depth,
+the dynamic exit refused, page locking as a section of its own, the
+installer's record of a pending update, the legs widened); draft 1,
+2026-10-22, before code. Written for `roadmap-usb4.md`
 task 43.46, release `3.2.0.0`, from the task's readings
 (`runs/run-43.md`, "43.46 read first", "The C port" and "Requests over
 512 KiB", 2026-10-21 and 2026-10-22) and the owner's decisions:
@@ -75,9 +81,12 @@ on a fragmented buffer, 128 to 512 KiB requests reached Stor98 whole, at
 
 ### 1.3 Not in scope
 
-- **Queue depth 1.** Win32 file I/O on 9x is synchronous, so a single
-  program issues one request at a time with or without this layer; the
-  owner's Windows 10 figure at Q8T1 has no 9x counterpart.
+- **Queue depth.** This layer does not change queueing. Win32 file I/O
+  on 9x is synchronous, so a single-threaded program issues one request
+  at a time with or without it, which is what every reading measured; a
+  queue depth above 1 needs several threads and is unmeasured (Stor98's
+  investigation, section 3). The owner's Windows 10 figure at Q8T1 has no
+  measured 9x counterpart.
 - **I/O through VCACHE** (ordinary buffered file copies): VCACHE issues
   reads of 64 KiB and writes of 32 and 64 KiB [obs], so this layer
   changes nothing for them, and the readings saw no change (copy rates
@@ -248,7 +257,7 @@ all of these hold, read from the DCB at that call:
 5. no entry of the DCB's calldown chain already has this layer's request
    routine (IOS may configure a DCB more than once [hyp]; the chain
    itself says whether it is claimed, so the layer keeps no table of
-   DCBs, and nothing of it can outlive a DCB, section 4.7).
+   DCBs, and nothing of it can outlive a DCB, section 4.8).
 
 A DCB that fails a condition is left untouched and counted by the
 condition. Matching the DDB of the port driver, or the INQUIRY data, was
@@ -266,21 +275,28 @@ the INQUIRY vendor field is the drive's, not the driver's.
 - `ISP_i_cd_lgn`: the load group the AEP names;
 - `ISP_i_cd_expan_len`: the layer's area in every IOP of the DCB:
   a 16-byte header (the saved `IOR_sgd_lin_phys`, `IOR_num_sgds` and
-  flags), the list, room for `P + G + 1` runs of 8 bytes, and the page
-  scratch, `P + 2` dwords, where `P = DCB_max_xfer_len / 4096` and `G =
-  DCB_max_sg_elements`. `P + 1` runs bound a linear buffer of
-  `DCB_max_xfer_len` bytes at any offset; each further fragment of a
-  logical list can add one run, and IOS refuses a logical list of more
-  than `G` fragments before this layer sees it (section 2.2 item 2).
-  At Stor98's 2 MiB and `G` 17: 531 runs, about 6.3 KiB a request
-  [obs: a 520-run area worked at 2 MiB in the BG arm; 200 overflowed].
+  flags), the list, room for `P + 2F` runs of 8 bytes, and the page
+  scratch, `P + 2` dwords, where `P = DCB_max_xfer_len / 4096` and `F` is
+  the layer's own limit on the fragments of a logical list,
+  `VSD_MAX_FRAGS` = 255 (the most a byte-wide count of IOS's could name;
+  section 4.2 refuses more). The bound: a fragment of `n` bytes touches
+  at most `ceil(n / 4096) + 1` pages (one partial page at each end), the
+  fragments' bytes sum to at most `DCB_max_xfer_len` (section 4.2), so
+  the pages touched, and so the runs, number at most
+  `sum(ceil(n_i / 4096)) + F <= P + F + F`. A fragment's own pages are at
+  most `P + 1`, which the scratch holds with one to spare. The bound does
+  not rest on IOS's own logical-list check (section 2.2 item 2), which
+  is read only for some callers. At Stor98's 2 MiB: 1,022 runs and 514
+  dwords, about 10 KiB in each IOP of the disk [obs: a 520-run area
+  worked at 2 MiB in the BG arm; 200 overflowed; no larger area was
+  tried, so the IOP size is read again on the legs].
 
 After the insertion the AER reads `DCB_dmd_flags` again. If
 `phys_sgd` is still there (an entry above this one inserted earlier
 kept it), the layer edits nothing: IOS then builds every list itself,
 each request arrives with `IORF_PHYS_SGDS`, and the layer passes it down
 untouched (section 4.1), which is today's behaviour; the case is counted
-and printed in the `qemu` build (section 4.8). The prototype's fallback,
+and printed in the `qemu` build (section 4.9). The prototype's fallback,
 clearing `phys_sgd` from other layers' entries, is not carried: it
 writes into structures other drivers own, it was never needed in four
 boots [obs], and the legs of section 9.2 item 3 read whether it is
@@ -303,7 +319,13 @@ in, result out in `EAX`; Watcom's register calling convention with a
 `#pragma aux` for that one function), `neg eax` (the carry flag from a
 non-zero result: C has no access to the flags), and `ret` (a naked
 function has no epilogue). `Sys_Dynamic_Device_Init` registers (section
-3.2); every other message is success. The two services it calls,
+3.2). `Sys_Dynamic_Device_Exit` is answered with failure once the
+registration has succeeded: IOS holds the AER, the request routine and
+the callbacks of a registered layer, and there is no call that takes
+them back, so the image must never be unloaded [hdr: `VMM.H`, a dynamic
+device may fail its exit; hyp: VXDLDR then keeps it, and IOS never asks
+- a leg cannot provoke it, so the code's answer is the guard]. Every
+other message is success. The two services it calls,
 `_CopyPageTable` (VMM) and `IOS_Register` (IOS), are reached through
 `#pragma aux` byte sequences: `int 20h` and the service's dword, which
 VMM patches into a direct call on first use [hdr: `VMM.H`'s
@@ -324,7 +346,13 @@ The request routine looks at each IOP in this order:
    `IOR_LOCK_MEDIA`, `IOR_UNLOCK_MEDIA`, `IOR_CLEAR_QUEUE`,
    `IOR_DOS_RESET`, `IOR_RESTART_QUEUE`, `IOR_ABORT_QUEUE`,
    `IOR_SPIN_DOWN`, `IOR_SPIN_UP`, `IOR_FLUSH_DRIVE`,
-   `IOR_FLUSH_DRIVE_AND_DISCARD`: passed down untouched.
+   `IOR_FLUSH_DRIVE_AND_DISCARD`: passed down untouched, **unless**
+   `IORF_SRB_VALID` is set and the SRB's `DataTransferLength` is not zero:
+   such a request carries data `SCSIPORT.PDR` would translate through no
+   list the IOR can describe, and is refused (section 4.5). Section 4.3's
+   invariant is therefore held before every call down, items 1 and 2
+   included: a request goes down either with no SRB data, or with a list
+   that covers it.
 3. Every other request: a list is built from the fields IOS's own
    builder reads (section 2.2 item 2) - `IOR_buffer_ptr` and
    `IOR_xfer_count`, as a logical scatter/gather list when
@@ -344,14 +372,35 @@ item 4).
 
 ### 4.2 Building the list
 
-For each fragment (the one linear buffer, or each entry of the logical
-list up to its zero-count terminator):
+The input first, every step checked, a failure being a refusal:
+
+- the count to bytes: a sector count is shifted by
+  `DCB_apparent_blk_shift` only after checking it is below
+  `2^(32 - shift)`; a byte count is taken as it is;
+- a logical list is walked one 8-byte descriptor at a time to its
+  zero-count terminator, which must come within `VSD_MAX_FRAGS` (255)
+  descriptors; the descriptor pointer is advanced only after checking
+  the advance does not wrap; a zero-length fragment before the
+  terminator, a terminator not found, and more descriptors are refusals;
+- the fragments' bytes are summed with a check against wrap, and the sum
+  (or the one linear buffer's count) must be at most `DCB_max_xfer_len`
+  (IOS checks it too, section 2.2 item 2; the layer does not rely on it);
+- each fragment's address plus its length must not wrap.
+
+The relation between the logical list and `IOR_xfer_count` is the one
+IOS's builder takes: the list is the data, to its terminator (section
+2.2 item 2), and the count is not compared with it; what `SCSIPORT.PDR`
+translates is bounded by section 4.3.
+
+Then for each fragment:
 
 1. one `_CopyPageTable` call for all the pages the fragment touches
    (`(offset + bytes + 4095) / 4096` of them from the fragment's first
    page) into the page scratch, as IOS's builder makes one call per
-   fragment; a fragment of more pages than the scratch holds is a
-   refusal (it cannot happen within `DCB_max_xfer_len`);
+   fragment; the scratch is zeroed for those pages first, and **the
+   service's result must be non-zero** (success; Stor98's own reader,
+   `src/stor98/src/pool9x.c`, takes it so) or the request is refused
+   before any entry is read;
 2. each page table entry must have its present bit set; one that does
    not is a refusal (section 4.5), never a physical address made from a
    zero frame;
@@ -365,6 +414,13 @@ list up to its zero-count terminator):
    its PRPs from `ScsiPortGetPhysicalAddress`'s lengths, whatever they
    are [obs: runs of up to 2 MiB in the BG arm];
 4. more runs than the room is a refusal (it cannot happen, section 3.4).
+
+Before any field of the IOR is changed, the callback table must have a
+free entry: `IOP_callback_ptr` below the end of `IOP_callback_table`,
+`IOP_CALLBACK_TABLE_DEPTH` (6) entries [hdr: `IOP.H`]; with none free the
+request is refused. [obs: the prototype's entry was pushed on every
+request of every arm; how many entries the layers above use is printed
+by the `qemu` build at the first request.]
 
 Then `IOR_sgd_lin_phys` points at the list, `IOR_num_sgds` is the run
 count capped at 255 (the field is a byte; `SCSIPORT.PDR` does not read
@@ -382,7 +438,8 @@ refusal.
 `SCSIPORT.PDR` walks the list by the offset of an address from the
 SRB's `DataBuffer`, up to `DataTransferLength` (section 2.2 item 4). So
 when `IORF_SRB_VALID` is set and the SRB's `DataTransferLength` is not
-zero, two reads of `IOP_srb` hold before the request goes down:
+zero, two reads of `IOP_srb` hold before the request goes down (and
+section 4.1 item 2 refuses such an SRB on a request that has no list):
 
 - the list's total bytes are at least `DataTransferLength`; and
 - `DataBuffer` is the first byte the list describes: `IOR_buffer_ptr`
@@ -395,8 +452,12 @@ the same IOR fields without these checks, so a request that fails one
 was one whose SRB `SCSIPORT.PDR` already translated through an
 inadequate list; refusing it is stricter than today, never looser
 [hyp: no requester sends one; the pass-through and SMART legs of section
-9.2 read it]. Without `IORF_SRB_VALID` (no SRB yet; `SCSIPORT.PDR`
-builds its own from the IOR [hyp]) the list is built and sent as it is.
+9.2 read it]. Without `IORF_SRB_VALID` the list is built and sent as it
+is: `SCSIPORT.PDR` then builds the SRB itself from the IOR [hyp], with
+`DataBuffer` the IOR's buffer and its length the IOR's count, which the
+list covers by construction. Which functions arrive without an SRB is
+counted per function in the `qemu` build, and section 9.2 item 5 runs
+the paths that do.
 
 ### 4.4 The list's cost
 
@@ -416,7 +477,8 @@ fragment too, so on a contiguous linear buffer this layer's work is one
 call, a pass over the scratch and one callback, against IOS's one call
 and pass. Whether that removes the measured loss is read on the legs
 (section 9.2 item 2, the same `PERF2` phases as `runs/run-43.md`, Stor98
-alone against Stor98 with this layer, back to back); if a loss of more
+alone against Stor98 with this layer, back to back); the larger area of
+section 3.4 is part of what is measured. If a loss of more
 than the run-to-run spread remains on the near-contiguous phases, the
 record says so and the owner decides whether it ships (section 11).
 
@@ -426,9 +488,13 @@ A refusal sets `IOR_status` to `IORS_INVALID_COMMAND` ("command not
 supported or invalid" [hdr: `IOR.H`]), puts the IOR's
 fields back as they came, and completes the request through the callback
 above this layer at once; nothing goes down. Each kind is counted (the
-present bit, the room, the scratch, a wrap, the SRB's coverage, the SRB's
-first byte). None was seen in any reading [obs: overflow 0 in every arm
-but the first BG try, whose 200-run room was too small]. A refusal is a
+page-table service, the present bit, the room, the scratch, the
+fragment limit, a wrap, the maximum, the SRB's coverage, the SRB's first
+byte, SRB data on a no-data request, the callback table). The readings
+measured only the room [obs: overflow 0 in every arm but the first BG
+try, whose 200-run room was too small]; the prototype did not have the
+other checks, so that none of them fires is a [hyp] the legs of
+section 9.2 read. A refusal is a
 failed read or write for the requester, which the file system reports
 as it reports a disk error, so section 9.2's legs require every counter
 to stay 0.
@@ -436,9 +502,11 @@ to stay 0.
 ### 4.6 Pass-through, SMART and `IORF_DOUBLE_BUFFER`
 
 - **Pass-through** (`IOR_SCSI_PASS_THROUGH`, ASPI and the like) and
-  **`IOR_SCSI_REQUEST`**: item 3 of section 4.1. They carry their SRB
-  from the requester, with a linear buffer [obs, Stor98 PLAN 0.4], so
-  the list is the buffer's runs and section 4.3's checks hold it to the
+  **`IOR_SCSI_REQUEST`**: item 3 of section 4.1. Pass-through requests
+  carry their SRB from the requester, with a linear buffer [obs, Stor98
+  PLAN 0.4, for function `0x0F`]; `IOR_SCSI_REQUEST`'s buffer is not read
+  [hyp: linear too, IOS layers' own internal requests]. Either way the
+  list is the buffer's runs and section 4.3's checks hold it to the
   SRB. Stor98's SMART answers on 9x go through pass-through SRBs to the
   same path (Stor98 `docs/TESTING.md`, `tests/scsichk` and
   `tests/logsense`); section 9.2 item 5 runs both through this layer.
@@ -450,7 +518,34 @@ to stay 0.
   IOS substitutes the buffer above the calldown chain; the odd-offset
   leg of section 9.2 item 1 reads it with data compared].
 
-### 4.7 Surprise removal, link-down and `AEP_UNCONFIG_DCB`
+### 4.7 Page locking
+
+The layer locks nothing, as IOS's own builder locks nothing (section 2.2
+item 2) [static]: on the `phys_sgd` path every request on Stor98's disk
+already reached `SCSIPORT.PDR` with a physical list read from the page
+tables by IOS at that moment and no lock taken there, so the pages'
+residency until the transfer ends was already the requester's
+responsibility, not the translator's. This layer admits the same
+requests (section 4.1 item 3) and translates them at the same point of
+their path (just above `SCSIPORT.PDR`, where IOS's criteria routine ran
+for the topmost entry's demands), so it inherits that contract and
+widens it to no new requester. Who locks for each family:
+
+- unbuffered Win32 file I/O and VCACHE's own buffers: the file system
+  and VCACHE, before the request enters IOS [hyp: the DDK names the
+  locking as the requester's (`IOR.H`'s request notes do not say a layer
+  locks); not read in `VFAT.VXD` or `VCACHE.VXD`];
+- IOS's double buffer: IOS's own buffer, allocated locked [hyp];
+- pass-through: the requester's (ASPI's `WNASPI32` layer locks its
+  buffers [hyp: not read]).
+
+The present-bit check of section 4.2 refuses a page that is not present
+at translation; it is a guard, not evidence of residency later. Because
+the contract is inherited rather than read, it stays a [hyp] that blocks
+the release until the legs of section 9.2 item 8 (a transfer under
+memory pressure, with data compared) pass on 98 SE and ME.
+
+### 4.8 Surprise removal, link-down and `AEP_UNCONFIG_DCB`
 
 The layer holds no state for a request outside that request's IOP (its
 area, section 3.4) and the stack of the call that builds the list. It
@@ -474,7 +569,7 @@ The legs of section 9.2 item 6 pull the tunnel during a 2 MiB transfer
 and require the machine to stay up, the requester to get an error, and
 the disk to come back and compare clean after it is plugged in again.
 
-### 4.8 Counters and the `qemu` build
+### 4.9 Counters and the `qemu` build
 
 The counters (lists built; passed with `IORF_PHYS_SGDS`; passed with no
 data; refused by kind; the most runs and bytes in one list; DCBs claimed
@@ -657,8 +752,10 @@ setup engine copies it. On 98 SE and ME:
 - **Ticked, present with other bytes, recorded as this installer's** (an
   older release): updated as Stor98's own file is (record 26 section 6.3,
   record 23 revision 23): `S98VSD.TMP` beside it and a `WININIT.INI`
-  `[rename]` entry, since the loaded copy is IOS's for the session; the
-  record's value takes the new hash once the entry is written.
+  `[rename]` entry, since the loaded copy is IOS's for the session. `Vsd`
+  keeps the hash of the file in place; `VsdPending` takes the new hash
+  once the `.TMP` is compared, before the entry is written (section
+  7.4).
 - **Ticked, present with other bytes, not recorded**: another
   installation's file of that name. Left as it is, said on the Summary
   and in the log, and never recorded; the row's note says so.
@@ -676,6 +773,20 @@ setup engine copies it. On 98 SE and ME:
   (record 26 section 5.3). Without Stor98's disks it claims nothing
   (section 3.3).
 
+**Every run first reconciles a pending update** (before it classifies
+the file): with `VsdPending` set, a `STOR98.VXD` of the pending hash and
+no `[rename]` entry or `.TMP` left means the start did the update, so
+`Vsd` takes that hash and `VsdPending` is deleted; a `[rename]` entry and
+a `.TMP` of the pending hash still there mean the update is still queued,
+and the run treats the file as this installer's under either hash; any
+other combination (an entry with no `.TMP`, a `.TMP` of other bytes, a
+file of neither hash) withdraws what is queued - the entry and the `.TMP`
+removed - and leaves the file classified by `Vsd` alone. An untick or an
+uninstall over a queued update removes the entry and the `.TMP` first,
+then the file if its bytes are `Vsd`'s, so the queued file can never
+arrive after the user removed the layer; and it does so also when the
+destination is absent.
+
 Any run that places, updates or removes the file ends with the shutdown
 or restart flag Stor98's file update uses: the layer is loaded at boot
 only. The Summary lists it as its own line ("Large transfers for Stor98:
@@ -685,9 +796,12 @@ installation's file").
 ### 7.4 The record and the uninstall
 
 Under `HKLM\Software\xhci98\Stor98`, the bundled Stor98's record (record
-26 section 6.3), one value: `Vsd` (`REG_SZ`), the SHA-256 of the
-`STOR98.VXD` bytes this installer placed, written before the move into
-place and deleted after the file. The key may then exist for this value
+26 section 6.3), two values: `Vsd` (`REG_SZ`), the SHA-256 of the
+`STOR98.VXD` bytes this installer placed and that are in place, written
+before the move into place and deleted after the file; and
+`VsdPending` (`REG_SZ`), the SHA-256 of a queued update's `S98VSD.TMP`,
+present only between the queueing run and the start or run that
+reconciles it (section 7.3). The key may then exist for this value
 alone (a run that placed the layer and changed nothing of Stor98). The
 uninstall (record 26 section 9.3 step 4, with the driver files) removes a
 `STOR98.VXD` whose bytes the value names, with its pending `[rename]`
@@ -712,9 +826,10 @@ To say, in these words or close: "On Windows 98 SE and ME, STOR98.VXD
 lets reads and writes of up to 2 MiB reach Stor98 whole, which helps
 large unbuffered transfers (disk benchmarks, some copy and imaging
 tools). It does not change copies through the file cache, which Windows
-98 SE and ME make in 64 KiB pieces, or the queue depth, which is one
-request at a time on these systems. Requests over 2 MiB are still cut
-into 63 KiB pieces." And what no vehicle has read (section 11).
+98 SE and ME make in 64 KiB pieces, and it does not change queueing: a
+single program's file I/O on these systems is one request at a time, as
+it was. Requests over 2 MiB are still cut into 63 KiB pieces." And what
+no vehicle has read (section 11).
 
 ## 9. Verification
 
@@ -730,7 +845,16 @@ address plus length; the SRB checks (total below, equal to and above
 `DataTransferLength`, `DataBuffer` equal and unequal to the first byte);
 the claim's tests on DCB bytes (`stor98`, `STOR98`, `stor98x`, `nvme2k`,
 a full eight-character name, a logical DCB, no `phys_sgd`, a maximum over
-2 MiB, already claimed); section 4.1's function table. The installer's
+2 MiB, already claimed); section 4.1's function table, with SRB data on
+a no-data function and on a zero count refused. The checks of section
+4.2: the page-table service failing with the scratch prefilled with
+present, wrong entries (refused, no entry read); sixteen 512-byte
+fragments and one of 2 MiB - 8 KiB, each starting at page offset 4092,
+on discontiguous frames (543 pages, within the room of 1,022); 255
+fragments and 256; a list with no terminator within 255; a zero-length
+fragment; a sector count whose shift overflows; a sum over
+`DCB_max_xfer_len`; a descriptor pointer that wraps; the callback table
+full and one free. The installer's
 decision (`inst_vsd_decide`) in the installer's host suite: every system
 by every state of Stor98's box and both switches.
 
@@ -740,10 +864,19 @@ On the emulator (`usb4-emu`'s QEMU under TCG, one guest at a time,
 256 MB, the NVMe behind the emulated tunnel), Stor98 installed by the
 installer so that its file is `stor98.mpd` and its port name `stor98`:
 
-1. **Data at every size up to the maximum**: `PERF2` file phases at 64 KiB
-   to 2 MiB, aligned, at +512 and at an odd offset (+1, the double
-   buffer), on 98 SE (QuickInstall IOS) and ME, every verify clean and
-   every refusal counter 0.
+1. **Data at every size up to the maximum and over it**: `PERF2` file
+   phases at 64 KiB to 2 MiB and at 4 MiB (IOS's cut of a request over
+   the maximum, with the IOP reused for each piece), aligned, at +512
+   and at an odd offset (+1, the double buffer), on 98 SE (QuickInstall
+   IOS) and ME, every verify clean and every refusal counter 0. The
+   buffers' fragmentation is verified, not assumed (an offset and a
+   fragmentation are different properties, `runs/run-43.md`): the
+   `qemu` build's most-runs counter must read over 17 and over 255 runs
+   in the phases that claim them, with a test-tool mode that fragments
+   its buffer on purpose (pages allocated and freed in a pattern before
+   the buffer) where the default buffer does not reach it. A run with
+   Stor98's `STOR98_TEST_BOUNCE` build (every data child bounced, both
+   directions) repeats the 2 MiB phases.
 2. **The cost**: the same phases, Stor98 alone against Stor98 with the
    layer, back to back with the host load recorded (section 4.4).
 3. **Insertion order**: the chain and `DCB_dmd_flags` at the first
@@ -753,14 +886,24 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
 4. **Coexistence**: `STOR98.VXD` and `stor98.mpd` in one `IOSUBSYS`, both
    loaded (the layer's init line, Stor98's disk running); a disk of
    another driver (the emulator's IDE disk) left unclaimed.
-5. **Pass-through and SMART**: Stor98's `tests/scsichk` and
-   `tests/logsense` through the layer on 98 SE.
+5. **Pass-through, SMART and the requests without an SRB**: Stor98's
+   `tests/scsichk` and `tests/logsense` through the layer on 98 SE and
+   ME; the `qemu` build's per-function counts of requests that arrived
+   without `IORF_SRB_VALID`, and of `IOR_SCSI_REQUEST`, read after a boot,
+   a format of the disk and the file phases, each such path then run
+   with data compared where it carries data.
 6. **Surprise removal**: the tunnel pulled during a 2 MiB write, then a
-   2 MiB read, on 98 SE and ME (section 4.7).
+   2 MiB read, on 98 SE and ME (section 4.8).
 7. **Install and uninstall**: a first install ticked; an update over it
    (same bytes, older bytes); unticked on an update; the uninstall; each
    read back from `IOSUBSYS`, `WININIT.INI` and the record, on 98 SE and
-   ME; `/stor98vxd` and `/nostor98vxd` refused on 2000.
+   ME; an update then an untick, and an update then the uninstall, with
+   no start between (the queued file must not arrive); an update cut
+   short after the `.TMP`; `/stor98vxd` and `/nostor98vxd` refused on
+   2000.
+8. **Memory pressure** (section 4.7): the 2 MiB phases while a second
+   program commits and touches more memory than the guest has, on 98 SE
+   and ME, data compared.
 
 On the owner's real hardware: the throughput before and after
 (roadmap 43.46's last clause), the owner's.
@@ -787,7 +930,9 @@ On the owner's real hardware: the throughput before and after
 - **D9** An update of an installer-placed file through `WININIT.INI`, as
   Stor98's file; a removal by a direct delete (section 7.3).
 - **D10** The release image carries no debug-port writes; the `qemu`
-  flavour's image does (section 4.8).
+  flavour's image does (section 4.9).
+- **D11** The list's room bounded by the layer's own fragment limit, not
+  by IOS's check (section 3.4); the dynamic exit refused (section 3.6).
 
 ## 11. Open, and the risks
 
@@ -798,10 +943,11 @@ On the owner's real hardware: the throughput before and after
   (section 9.2 item 3); if `phys_sgd` stays demanded, the layer is inert
   there (D2) and the owner decides whether to edit the entries above.
 - `IORF_DOUBLE_BUFFER`'s buffer at this layer (section 4.6) [hyp].
-- The room's bound of `G` fragments (section 3.4) rests on IOS's logical
-  list check (section 2.2 item 2) [hyp for every caller]; a list over the
-  room is a counted refusal, and the legs' VCACHE copies and file phases
-  read that counter at 0.
+- Page locking is inherited from IOS's own builder, not read in the
+  requesters (section 4.7): release-blocking until section 9.2 item 8
+  passes.
+- About 10 KiB in each IOP of the disk (section 3.4): IOS's allocation of
+  IOPs of that size is read on the legs, not in IOS.
 - Whether `DeleteFileA` succeeds on a loaded `STOR98.VXD` (VXDLDR closing
   the file after the load) [hyp]; if not, the removal is the step of
   section 7.3 every time.
