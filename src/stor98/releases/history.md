@@ -4,6 +4,18 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.2.0.0 - not yet released
+
+- 64-bit Windows 8, 8.1 and 10: stor98.inf names a catalog,
+  stor98.cat, signed with the same test certificate as the driver.
+  Those systems install no driver package without one in
+  test-signing mode.
+- Kernel DMA Protection (64-bit Windows 10 1803 and later): stor98.inf
+  declares the driver compatible with DMA remapping, so on a machine
+  with the protection on, an NVMe drive behind a Thunderbolt or USB4
+  tunnel need not wait for a user to sign in. Not yet tried on such
+  a machine.
+
 ## 3.1.0.0 - 2026-10-19
 
 The first Stor98 built with xhci98 and released in its package, at the

@@ -97,8 +97,9 @@ gated build builds and checks it from this source, it carries the xhci98 package
 and date (`src\stor98ver.h` includes xhci98's `src\xhci_version.h`; the INFs' `DriverVer`
 literals are held to it by xhci98's `scripts\inf-gate\check-stor98-inf.ps1`), and xhci98's
 packager bundles it and signs the amd64 image with xhci98's key, in the same step as
-xhci98's own drivers: SHA-1, no timestamp, no catalog, INFs unchanged (docs/BUILD.md,
-"Releases" and "Test signing"). Stor98 has no certificate or signing script of its own any
+xhci98's own drivers: SHA-1, no timestamp; and since 3.2.0.0 (owner, 2026-10-22) the
+x64 INF names `stor98.cat`, which xhci98's packager makes and signs with the same key
+(xhci98's design record 19 section 3a; docs/BUILD.md, "Releases" and "Test signing"). Stor98 has no certificate or signing script of its own any
 more. The interface versions in `include/stor98cm.h` are protocol versions; never tie them
 to the package version. `releases/0.3.0.1/` and `0.4.0.0/` are write-once history; add no
 folder there ([releases/README.md](releases/README.md)); `releases/history.md` gets the

@@ -1,6 +1,10 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+Status: revision 31, 2026-10-22 (the owner's decisions of that day on
+43.33's reading: the x64 package carries a test-signed catalog per INF,
+which the tool copies with its INF, and the refusal under Secure Boot is
+taken from Microsoft's documented policy; sections 5.10 and 5.12, design
+record 19 section 3a); revision 28, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
 owner's decisions of 2026-10-20: Windows 10, NT 10.0 below build 22000,
 admitted beside 8 and 8.1, Windows Server 2016 to 2022 as 10 with no
 Server check, 11 still refused; sections 4.3, 4.5 and 5.10; record 26
@@ -1467,7 +1471,7 @@ the other way is Advanced startup's Startup Settings, "Disable driver
 signature enforcement", at every start. The same reading of
 `SystemStartOptions` is made; it is unread on 8 and 8.1.
 
-Revision 27 (roadmap-usb4 task 43.36; the owner, 2026-10-20: test-signing,
+Revision 28 (roadmap-usb4 task 43.36; the owner, 2026-10-20: test-signing,
 documented by the installer, Secure Boot off, no Microsoft attestation
 for now): on Windows 10 x64 the note is 8 and 8.1 x64's, in whichever
 run, the USB drivers' or the connection manager's alone - the x64
@@ -1492,6 +1496,21 @@ whether memory integrity (hypervisor-protected code integrity) refuses
 these drivers when on, which the note names only if 43.33 (d) finds it
 does. Whether the tool reads Secure Boot's state to say which case
 applies is record 26 section 5.3.2's design.
+
+Revision 31 (the owner, 2026-10-22, on section 5.12's measured refusal):
+from `3.2.0.0` every INF of the x64 package names a catalog of its own
+(`xhci98.cat`, `xhciuas.cat`, `xhcicm.cat`, `xhcicmf.cat`, `stor98.cat`),
+made and signed with the project test certificate by the packager alone
+(design record 19 section 3a), because Windows 8, 8.1 and 10 x64 refuse a
+package with no catalog in test-signing mode, with `0xE000022F` and no
+prompt. The tool needs no change of route for it: its local copy takes
+every file of the flavour directory but those it leaves out by component,
+so each catalog lands beside its INF, and the setup engine imports it
+with the INF into the driver store. The connection manager's two catalogs
+are left out with its INFs on a No to the Thunderbolt question, and
+`stor98.cat` with Stor98's files when it is not ticked (its name starts
+with `stor98`, `inst_bundled_file`). The x86 package carries none. The
+note's text is unchanged: test-signing mode, Secure Boot off.
 
 ### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 
@@ -1605,6 +1624,25 @@ and what Microsoft's lifecycle pages say of it:
 | 11 21H2 | 22000 | refused (43.34) |
 
 Only 22H2 is read here, and the release notes say so (43.36).
+
+**Settled by the owner, 2026-10-22** (revision 31):
+
+- **The catalog.** The x64 package carries a catalog per INF signed with
+  the test certificate (design record 19 section 3a; section 5.10's
+  revision 31). A package without one is refused on 10 x64 as measured
+  above (`0xE000022F`, "Driver package does not contain a catalog file");
+  with one, the package installs in test-signing mode with Secure Boot
+  off (read on the 10 x64 guest, roadmap-usb4 43.36's catalog leg, run
+  sheet 43). The x86 package stays without one: 10 x86 takes it with the
+  prompt (measured above).
+- **Secure Boot on.** The refusal of a test-signed driver with Secure
+  Boot on is taken from Microsoft's documented policy above ("Driver
+  Signing Policy"; "The TESTSIGNING boot configuration option": test-signing
+  cannot be turned on while Secure Boot is on) rather than read on a guest:
+  the OVMF guest with Microsoft's keys enrolled (43.32's last clause) is
+  not built, and 43.32 is closed on that ground. 43.37's "on the OVMF
+  guest with Secure Boot on the note's text and the load refused as it
+  says" is therefore a documentation reading, not a leg.
 
 ## 6. The Windows 98 SE and ME route
 

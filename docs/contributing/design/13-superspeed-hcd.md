@@ -4409,6 +4409,9 @@ As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
    question. The catalog applies to the connection manager's x64
    package too (`xhcicm.inf`, 43.34), which the same store refuses by the
    same rule (inference). 10 x86 does not need one (it prompts, 6.14.5).
+   **Decided 2026-10-22 (owner): the catalog**, one per x64 INF, made and
+   signed by `make-package.ps1` alone (design record 19 section 3a); the
+   x86 package carries none.
 2. **XHCITR's notice on 10**: on by default under `xhci98.sys`, by
    6.14.4 (the owner's instruction of 2026-10-22 for 43.27 agrees).
 3. **The vehicle**: QEMU's `usb-uas` does not start under 10's own
@@ -4423,12 +4426,20 @@ As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
    Recommendation: 43.34 reads whether Stor98's DMA goes only through
    its DMA adapter and, if so, writes 1 in Stor98's INF on 10 x64,
    read on a machine with the protection on before it ships.
+   **Decided 2026-10-22 (owner)**: read statically, every bus address
+   Stor98's NT build gives the controller comes from SCSIport's DMA path
+   (record 21 section 3.6), so `stor98-x64.inf` writes
+   `DmaRemappingCompatible` 1 from `3.2.0.0` (`src\stor98\docs\PLAN.md`,
+   "Kernel DMA Protection"); no machine here has the protection on, so
+   the run-time reading stays owed.
 5. **The OVMF guest with Secure Boot** (43.32, not built): needed only
    for 43.36's refusal case. Recommendation: build it in 43.37, with
    Microsoft's KEK and DB certificates enrolled by hand in the
    firmware's custom mode and a fresh UEFI install of 10 x64, or accept
    the refusal from Microsoft's documented policy (record 23 section
-   5.12) without a guest.
+   5.12) without a guest. **Decided 2026-10-22 (owner): the documented
+   policy is accepted**, the guest is not built, and 43.32 is closed with
+   its two TCG machines (record 23 section 5.12, "Settled").
 
 ## 7. The Windows 98 export evidence (task 25.3)
 

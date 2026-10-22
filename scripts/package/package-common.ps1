@@ -175,7 +175,9 @@ function Test-DriverVersionMatches {
 #
 # Every published x64 directory carries xhci98.sys and xhciuas.sys with an
 # embedded Authenticode signature by the project test certificate: SHA-1
-# file digest, no timestamp, no catalog. make-package.ps1 -TestSignPfx
+# file digest, no timestamp; and since 3.2.0.0 (owner, 2026-10-22) one
+# catalog per INF, made and signed the same way (Read-CatalogFile and
+# Test-PackageCatalog below). make-package.ps1 -TestSignPfx
 # applies it at staging and make-release.ps1 refuses an x64 cut without it.
 # What follows is the part both scripts and test-package.ps1 share: reading
 # a PE image's certificate table, deciding whether a signed image is exactly
@@ -318,10 +320,17 @@ function ConvertFrom-SpcIndirectData {
     if ($data.Tag -ne 0x30) { throw "SpcIndirectDataContent.data is not a SEQUENCE" }
     $dataType = Read-DerTlv -B $Content -At $data.ValueAt -Limit $data.End
     if ($dataType.Tag -ne 0x06) { throw "SpcIndirectDataContent.data.type is not an OID" }
+    $dataOid = ConvertFrom-DerOid -B $Content -At $dataType.ValueAt -Length $dataType.Length
     if ($dataType.End -lt $data.End) {
         $value = Read-DerTlv -B $Content -At $dataType.End -Limit $data.End
         if ($value.End -ne $data.End) { throw "SpcIndirectDataContent.data has more than a type and a value" }
-        Assert-SpcPeImageData -B $Content -At $dataType.End -End $data.End
+        # A PE image's value by its schema. A catalog's flat-file member
+        # (an INF) carries another type, whose value is read as one element
+        # and no further; Test-ProjectTestSignature and Test-PackageCatalog
+        # refuse whichever type does not belong where they read it.
+        if ($dataOid -eq $script:SpcPeImageDataOid) {
+            Assert-SpcPeImageData -B $Content -At $dataType.End -End $data.End
+        }
     }
     $digestInfo = Read-DerTlv -B $Content -At $data.End -Limit $outer.End
     if ($digestInfo.Tag -ne 0x30 -or $digestInfo.End -ne $outer.End) { throw "SpcIndirectDataContent.messageDigest is not the last SEQUENCE" }
@@ -342,7 +351,7 @@ function ConvertFrom-SpcIndirectData {
         $hex = (($Content[$octets.ValueAt..($octets.End - 1)] | ForEach-Object { $_.ToString("X2") }) -join "")
     }
     return [pscustomobject]@{
-        DataOid   = ConvertFrom-DerOid -B $Content -At $dataType.ValueAt -Length $dataType.Length
+        DataOid   = $dataOid
         DigestOid = ConvertFrom-DerOid -B $Content -At $algOid.ValueAt -Length $algOid.Length
         Digest    = $hex
     }
@@ -416,6 +425,40 @@ function Test-SignedImageOf {
     return $true
 }
 
+function Get-PeImageDigest {
+    # A PE image's Authenticode SHA-1 digest, as hex: the whole file in
+    # order, less the checksum, the certificate-table entry and the table
+    # (which, where there is one, is the end of the file - the layout the
+    # linker and SignTool write). It is the same for the image before and
+    # after an embedded signature, which is why a catalog made of the signed
+    # binary also covers the build, and the reverse.
+    # -End (Get-EmbeddedSignature's): where the hashed bytes stop, the
+    # table's offset as that image's entry gives it, checked by the caller.
+    param([byte[]]$Bytes, [int]$End = -1)
+    $layout = Get-PeSecurityLayout -Bytes $Bytes
+    $stop = $Bytes.Length
+    if ($End -ge 0) {
+        $stop = $End
+    } elseif ($layout.TableOffset -ne 0 -or $layout.TableSize -ne 0) {
+        if ([int64]$layout.TableOffset + [int64]$layout.TableSize -ne [int64]$Bytes.Length) {
+            throw "the certificate table is not the end of the image"
+        }
+        $stop = [int]$layout.TableOffset
+    }
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    try {
+        $ck = [int]$layout.ChecksumOffset
+        $en = [int]$layout.EntryOffset
+        [void]$sha1.TransformBlock($Bytes, 0, $ck, $null, 0)
+        [void]$sha1.TransformBlock($Bytes, $ck + 4, $en - ($ck + 4), $null, 0)
+        [void]$sha1.TransformBlock($Bytes, $en + 8, $stop - ($en + 8), $null, 0)
+        [void]$sha1.TransformFinalBlock($Bytes, 0, 0)
+        return (($sha1.Hash | ForEach-Object { $_.ToString("X2") }) -join "")
+    } finally {
+        $sha1.Dispose()
+    }
+}
+
 function Get-EmbeddedSignature {
     # The embedded Authenticode signature of a PE image, parsed: $null when
     # the image carries none, otherwise the signer's thumbprint and subject,
@@ -465,18 +508,7 @@ function Get-EmbeddedSignature {
     # bytes.
     $indirect = ConvertFrom-SpcIndirectData -Content $cms.ContentInfo.Content
 
-    $sha1 = [System.Security.Cryptography.SHA1]::Create()
-    try {
-        $ck = [int]$layout.ChecksumOffset
-        $en = [int]$layout.EntryOffset
-        [void]$sha1.TransformBlock($bytes, 0, $ck, $null, 0)
-        [void]$sha1.TransformBlock($bytes, $ck + 4, $en - ($ck + 4), $null, 0)
-        [void]$sha1.TransformBlock($bytes, $en + 8, $off - ($en + 8), $null, 0)
-        [void]$sha1.TransformFinalBlock($bytes, 0, 0)
-        $actual = (($sha1.Hash | ForEach-Object { $_.ToString("X2") }) -join "")
-    } finally {
-        $sha1.Dispose()
-    }
+    $actual = Get-PeImageDigest -Bytes $bytes -End $off
 
     return [pscustomobject]@{
         Thumbprint     = $(if ($null -ne $signer.Certificate) { $signer.Certificate.Thumbprint } else { "" })
@@ -514,6 +546,381 @@ function Test-ProjectTestSignature {
         return ("the digest it vouches for ({0}) is not the image's ({1})" -f $Signature.VouchedDigest, $Signature.ImageDigest)
     }
     if ($Signature.Timestamped) { return "it carries a countersignature (timestamp), which record 19 does not take" }
+    return ""
+}
+
+# ------------------------------------------------------------------
+# The x64 catalogs (design record 19 section 3a; owner, 2026-10-22)
+# ------------------------------------------------------------------
+#
+# Windows 8, 8.1 and 10 x64 refuse a driver package with no catalog in
+# test-signing mode, before any prompt (record 13 section 6.14.5: "Driver
+# package does not contain a catalog file, and Code Integrity is in Test
+# Signing mode", 0xE000022F). So every INF of a signed amd64 package names a
+# catalog of its own (CatalogFile=, held by the INF gates' BOTH-CATALOG), and
+# make-package.ps1 makes each one with WDK 7.1's MakeCat from the staged
+# files and signs it with the key that signs the binaries: SHA-1, no
+# timestamp. A catalog lists each member by its SHA-1 digest - an INF's over
+# the whole file, a driver's the Authenticode image digest, which the
+# embedded signature does not change - so the staged bytes are what it
+# vouches for. The x86 package carries none.
+#
+# Which files each catalog covers: the INF and every file its
+# [SourceDisksFiles] names, which is exactly this table (make-package.ps1
+# refuses a staged INF that names a file outside it). One table, read by the
+# packager, make-release.ps1 and test-package.ps1.
+$script:PackageCatalogs = [ordered]@{
+    "xhci98.cat"  = @{ Inf = "xhci98.inf";  Files = @("xhci98.inf", "xhci98.sys") }
+    "xhciuas.cat" = @{ Inf = "xhciuas.inf"; Files = @("xhciuas.inf", "xhciuas.sys") }
+    "xhcicm.cat"  = @{ Inf = "xhcicm.inf";  Files = @("xhcicm.inf", "xhcicm.sys") }
+    "xhcicmf.cat" = @{ Inf = "xhcicmf.inf"; Files = @("xhcicmf.inf", "xhcicm.sys") }
+    "stor98.cat"  = @{ Inf = "stor98.inf";  Files = @("stor98.inf", "stor98.sys") }
+}
+# The systems the catalogs are made for, as the catalog's OSAttr attribute
+# (major version 2 = NT; 5.2 XP x64 and Server 2003 x64, 6.0 Vista, 6.1 7,
+# 6.2 8, 6.3 8.1, 10.0 Windows 10), the form Inf2Cat writes.
+$script:CatalogOsAttr = "2:5.2,2:6.0,2:6.1,2:6.2,2:6.3,2:10.0"
+$script:CtlOid = "1.3.6.1.4.1.311.10.1"
+$script:CatalogListOid = "1.3.6.1.4.1.311.12.1.1"
+$script:CatalogMemberOid = "1.3.6.1.4.1.311.12.1.2"
+$script:CatNameValueOid = "1.3.6.1.4.1.311.12.2.1"
+$script:CatMemberInfoOid = "1.3.6.1.4.1.311.12.2.2"
+# What MakeCat writes for each member (read 2026-10-22 from a catalog it made
+# of the 3.1.0.0 release-x64 xhci98.inf and xhci98.sys): the indirect data
+# type and the subject interface package's GUID in the member info, for a
+# flat file (an INF) and for a PE image, and the member info's version.
+$script:CatFlatDataOid = "1.3.6.1.4.1.311.2.1.25"
+$script:CatFlatSipGuid = "{DE351A42-8E59-11D0-8C47-00C04FC295EE}"
+$script:CatPeSipGuid = "{C689AAB8-8E78-11D0-8C47-00C04FC295EE}"
+$script:CatMemberInfoVersion = 512
+
+function ConvertFrom-CatNameValue {
+    # CAT_NAMEVALUE ::= SEQUENCE { tag BMPString, flags INTEGER, value
+    # OCTET STRING (UTF-16LE, NUL-terminated) }: the name and the value.
+    param([byte[]]$B, [int]$At, [int]$End)
+    $seq = Read-DerTlv -B $B -At $At -Limit $End
+    if ($seq.Tag -ne 0x30) { throw "a catalog name-value is not a SEQUENCE" }
+    $name = Read-DerTlv -B $B -At $seq.ValueAt -Limit $seq.End
+    if ($name.Tag -ne 0x1E -or $name.Length % 2 -ne 0) { throw "a catalog name-value's name is not a BMPString" }
+    $flags = Read-DerTlv -B $B -At $name.End -Limit $seq.End
+    if ($flags.Tag -ne 0x02) { throw "a catalog name-value has no flags INTEGER" }
+    $val = Read-DerTlv -B $B -At $flags.End -Limit $seq.End
+    if ($val.Tag -ne 0x04 -or $val.End -ne $seq.End) { throw "a catalog name-value's value is not its last OCTET STRING" }
+    if ($seq.End -ne $End) { throw "a catalog name-value is followed by something else" }
+    $nameText = [System.Text.Encoding]::BigEndianUnicode.GetString($B, $name.ValueAt, $name.Length)
+    $valText = [System.Text.Encoding]::Unicode.GetString($B, $val.ValueAt, $val.Length).TrimEnd([char]0)
+    return @{ Name = $nameText; Value = $valText }
+}
+
+function ConvertFrom-CatMemberInfo {
+    # CAT_MEMBERINFO ::= SEQUENCE { subjGuid BMPString, certVersion INTEGER }:
+    # the subject interface package's GUID and the version.
+    param([byte[]]$B, [int]$At, [int]$End)
+    $seq = Read-DerTlv -B $B -At $At -Limit $End
+    if ($seq.Tag -ne 0x30 -or $seq.End -ne $End) { throw "a catalog member info is not one SEQUENCE" }
+    $guid = Read-DerTlv -B $B -At $seq.ValueAt -Limit $seq.End
+    if ($guid.Tag -ne 0x1E -or $guid.Length % 2 -ne 0) { throw "a catalog member info's subject is not a BMPString" }
+    $ver = Read-DerTlv -B $B -At $guid.End -Limit $seq.End
+    if ($ver.Tag -ne 0x02 -or $ver.End -ne $seq.End -or $ver.Length -lt 1 -or $ver.Length -gt 3) { throw "a catalog member info's version is not its last small INTEGER" }
+    $v = 0
+    for ($i = $ver.ValueAt; $i -lt $ver.End; $i++) { $v = ($v -shl 8) -bor [int]$B[$i] }
+    return @{ Guid = [System.Text.Encoding]::BigEndianUnicode.GetString($B, $guid.ValueAt, $guid.Length); Version = $v }
+}
+
+function Read-CatalogFile {
+    # A catalog file, parsed: its signer (as Get-EmbeddedSignature reports
+    # one: thumbprint, digest algorithm, whether the PKCS #7 signature
+    # verifies over its content, whether it is timestamped; empty when the
+    # catalog is unsigned), the certificate trust list's usage and member
+    # algorithm, its OSAttr, and each member: its tag, its File name-value,
+    # its indirect data type and its digest. The structure is read strictly
+    # where this project depends on it and no further. No chain is built,
+    # for the reason Get-EmbeddedSignature gives.
+    param([string]$Path)
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    Add-Type -AssemblyName System.Security
+    $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms
+    $cms.Decode($bytes)
+    $signerCount = $cms.SignerInfos.Count
+    $thumb = ""; $subject = ""; $digestOid = ""; $valid = $false; $stamped = $false
+    if ($signerCount -ge 1) {
+        $signer = $cms.SignerInfos[0]
+        if ($null -ne $signer.Certificate) { $thumb = $signer.Certificate.Thumbprint; $subject = $signer.Certificate.Subject }
+        $digestOid = $signer.DigestAlgorithm.Value
+        $valid = $true
+        try { $cms.CheckSignature($true) } catch { $valid = $false }
+        $stamped = ($signer.UnsignedAttributes.Count -gt 0)
+    }
+    $contentType = $cms.ContentInfo.ContentType.Value
+    $c = $cms.ContentInfo.Content
+    if ($contentType -ne $script:CtlOid) {
+        throw ("the catalog's content is {0}, not a certificate trust list ({1})" -f $contentType, $script:CtlOid)
+    }
+    # CertificateTrustList ::= SEQUENCE { version INTEGER OPTIONAL,
+    #   subjectUsage SEQUENCE OF OID, listIdentifier OCTET STRING OPTIONAL,
+    #   sequenceNumber INTEGER OPTIONAL, thisUpdate Time, nextUpdate Time
+    #   OPTIONAL, subjectAlgorithm AlgorithmIdentifier, trustedSubjects
+    #   SEQUENCE OF TrustedSubject OPTIONAL, extensions [0] OPTIONAL }
+    $ctl = Read-DerTlv -B $c -At 0 -Limit $c.Length
+    if ($ctl.Tag -ne 0x30 -or $ctl.End -ne $c.Length) { throw "the catalog's trust list is not one SEQUENCE" }
+    $p = $ctl.ValueAt
+    $el = Read-DerTlv -B $c -At $p -Limit $ctl.End
+    if ($el.Tag -eq 0x02) { $p = $el.End; $el = Read-DerTlv -B $c -At $p -Limit $ctl.End }
+    if ($el.Tag -ne 0x30) { throw "the catalog's trust list has no subjectUsage" }
+    $usage = @()
+    $q = $el.ValueAt
+    while ($q -lt $el.End) {
+        $o = Read-DerTlv -B $c -At $q -Limit $el.End
+        if ($o.Tag -ne 0x06) { throw "the catalog's subjectUsage holds something other than an OID" }
+        $usage += ConvertFrom-DerOid -B $c -At $o.ValueAt -Length $o.Length
+        $q = $o.End
+    }
+    $p = $el.End
+    $el = Read-DerTlv -B $c -At $p -Limit $ctl.End
+    if ($el.Tag -eq 0x04) { $p = $el.End; $el = Read-DerTlv -B $c -At $p -Limit $ctl.End }
+    if ($el.Tag -eq 0x02) { $p = $el.End; $el = Read-DerTlv -B $c -At $p -Limit $ctl.End }
+    if ($el.Tag -ne 0x17 -and $el.Tag -ne 0x18) { throw "the catalog's trust list has no thisUpdate" }
+    $p = $el.End
+    $el = Read-DerTlv -B $c -At $p -Limit $ctl.End
+    if ($el.Tag -eq 0x17 -or $el.Tag -eq 0x18) { $p = $el.End; $el = Read-DerTlv -B $c -At $p -Limit $ctl.End }
+    if ($el.Tag -ne 0x30) { throw "the catalog's trust list has no subjectAlgorithm" }
+    $algOid = Read-DerTlv -B $c -At $el.ValueAt -Limit $el.End
+    if ($algOid.Tag -ne 0x06) { throw "the catalog's subjectAlgorithm is not an OID" }
+    $memberAlg = ConvertFrom-DerOid -B $c -At $algOid.ValueAt -Length $algOid.Length
+    $p = $el.End
+
+    $members = New-Object System.Collections.ArrayList
+    $osAttr = New-Object System.Collections.ArrayList
+    if ($p -lt $ctl.End -and $c[$p] -eq 0x30) {
+        $subjects = Read-DerTlv -B $c -At $p -Limit $ctl.End
+        $q = $subjects.ValueAt
+        while ($q -lt $subjects.End) {
+            $ts = Read-DerTlv -B $c -At $q -Limit $subjects.End
+            if ($ts.Tag -ne 0x30) { throw "a catalog member is not a SEQUENCE" }
+            $id = Read-DerTlv -B $c -At $ts.ValueAt -Limit $ts.End
+            if ($id.Tag -ne 0x04 -or $id.Length % 2 -ne 0) { throw "a catalog member's identifier is not a UTF-16 OCTET STRING" }
+            $tag = [System.Text.Encoding]::Unicode.GetString($c, $id.ValueAt, $id.Length).TrimEnd([char]0)
+            $m = [pscustomobject]@{ Tag = $tag; File = ""; DataOid = ""; DigestOid = ""; Digest = ""; Indirect = 0; Names = 0;
+                                    SipGuid = ""; InfoVersion = -1; Infos = 0 }
+            if ($id.End -lt $ts.End) {
+                $attrs = Read-DerTlv -B $c -At $id.End -Limit $ts.End
+                if ($attrs.Tag -ne 0x31 -or $attrs.End -ne $ts.End) { throw "catalog member '$tag' has something other than one attribute SET after its identifier" }
+                $r = $attrs.ValueAt
+                while ($r -lt $attrs.End) {
+                    $a = Read-DerTlv -B $c -At $r -Limit $attrs.End
+                    if ($a.Tag -ne 0x30) { throw "catalog member '$tag' has an attribute that is not a SEQUENCE" }
+                    $aOid = Read-DerTlv -B $c -At $a.ValueAt -Limit $a.End
+                    if ($aOid.Tag -ne 0x06) { throw "catalog member '$tag' has an attribute with no OID" }
+                    $aType = ConvertFrom-DerOid -B $c -At $aOid.ValueAt -Length $aOid.Length
+                    $vals = Read-DerTlv -B $c -At $aOid.End -Limit $a.End
+                    if ($vals.Tag -ne 0x31 -or $vals.End -ne $a.End) { throw "catalog member '$tag' has an attribute with no value SET" }
+                    $first = Read-DerTlv -B $c -At $vals.ValueAt -Limit $vals.End
+                    if ($first.End -ne $vals.End) { throw "catalog member '$tag' has an attribute with more than one value" }
+                    if ($aType -eq $script:SpcIndirectDataOid) {
+                        $sub = New-Object byte[] ($first.End - $vals.ValueAt)
+                        [Array]::Copy($c, $vals.ValueAt, $sub, 0, $sub.Length)
+                        $ind = ConvertFrom-SpcIndirectData -Content $sub
+                        $m.DataOid = $ind.DataOid; $m.DigestOid = $ind.DigestOid; $m.Digest = $ind.Digest
+                        $m.Indirect++
+                    } elseif ($aType -eq $script:CatNameValueOid) {
+                        $nv = ConvertFrom-CatNameValue -B $c -At $vals.ValueAt -End $vals.End
+                        if ($nv.Name -eq "File") { $m.File = $nv.Value; $m.Names++ }
+                    } elseif ($aType -eq $script:CatMemberInfoOid) {
+                        $mi = ConvertFrom-CatMemberInfo -B $c -At $vals.ValueAt -End $vals.End
+                        $m.SipGuid = $mi.Guid; $m.InfoVersion = $mi.Version; $m.Infos++
+                    }
+                    $r = $a.End
+                }
+            }
+            [void]$members.Add($m)
+            $q = $ts.End
+        }
+        $p = $subjects.End
+    }
+    if ($p -lt $ctl.End) {
+        # extensions [0] EXPLICIT SEQUENCE OF Extension; the catalog's own
+        # name-values (OSAttr) are extensions of the name-value OID.
+        $ext = Read-DerTlv -B $c -At $p -Limit $ctl.End
+        if ($ext.Tag -ne 0xA0 -or $ext.End -ne $ctl.End) { throw "the catalog's trust list has something other than extensions after its members" }
+        $exts = Read-DerTlv -B $c -At $ext.ValueAt -Limit $ext.End
+        if ($exts.Tag -ne 0x30 -or $exts.End -ne $ext.End) { throw "the catalog's extensions are not one SEQUENCE filling their [0]" }
+        $q = $exts.ValueAt
+        while ($q -lt $exts.End) {
+            # Extension ::= SEQUENCE { extnID OID, critical BOOLEAN DEFAULT
+            # FALSE, extnValue OCTET STRING }, consumed exactly.
+            $x = Read-DerTlv -B $c -At $q -Limit $exts.End
+            if ($x.Tag -ne 0x30) { throw "a catalog extension is not a SEQUENCE" }
+            $xOid = Read-DerTlv -B $c -At $x.ValueAt -Limit $x.End
+            if ($xOid.Tag -ne 0x06) { throw "a catalog extension has no OID" }
+            $xVal = Read-DerTlv -B $c -At $xOid.End -Limit $x.End
+            if ($xVal.Tag -eq 0x01) { $xVal = Read-DerTlv -B $c -At $xVal.End -Limit $x.End }
+            if ($xVal.Tag -ne 0x04 -or $xVal.End -ne $x.End) { throw "a catalog extension's value is not its last OCTET STRING" }
+            if ((ConvertFrom-DerOid -B $c -At $xOid.ValueAt -Length $xOid.Length) -eq $script:CatNameValueOid) {
+                $nv = ConvertFrom-CatNameValue -B $c -At $xVal.ValueAt -End $xVal.End
+                if ($nv.Name -eq "OSAttr") { [void]$osAttr.Add($nv.Value) }
+            }
+            $q = $x.End
+        }
+    }
+    return [pscustomobject]@{
+        SignerCount    = $signerCount
+        Thumbprint     = $thumb
+        Subject        = $subject
+        DigestOid      = $digestOid
+        SignatureValid = $valid
+        Timestamped    = $stamped
+        ContentType    = $contentType
+        Usage          = $usage
+        MemberAlgOid   = $memberAlg
+        OsAttr         = @($osAttr)
+        Members        = @($members)
+    }
+}
+
+function New-PackageCatalogFile {
+    # Makes $CatName, unsigned, for the files $Files of $StageDir with WDK
+    # 7.1's MakeCat in a folder of its own under $WorkDir, and returns its
+    # path: each member tagged by its digest, with its File name-value, and
+    # the catalog's OSAttr. make-package.ps1's Invoke-TestSignCatalog signs
+    # what this makes; test-package.ps1 reads it unsigned. Every failure
+    # throws.
+    param([string]$StageDir, [string]$CatName, [string[]]$Files, [string]$WorkDir, [string]$MakeCat)
+    $catDir = Join-Path $WorkDir ([System.IO.Path]::GetFileNameWithoutExtension($CatName) + "-cat")
+    if (-not (Test-Path -LiteralPath $catDir)) { New-Item -ItemType Directory -Path $catDir | Out-Null }
+    $cdf = New-Object System.Collections.ArrayList
+    [void]$cdf.Add("[CatalogHeader]")
+    [void]$cdf.Add("Name=$CatName")
+    [void]$cdf.Add("ResultDir=$catDir")
+    [void]$cdf.Add("PublicVersion=0x0000001")
+    [void]$cdf.Add("EncodingType=0x00010001")
+    [void]$cdf.Add("CATATTR1=0x10010001:OSAttr:$($script:CatalogOsAttr)")
+    [void]$cdf.Add("[CatalogFiles]")
+    foreach ($f in $Files) {
+        $fp = Join-Path $StageDir $f
+        if (-not (Test-Path -LiteralPath $fp -PathType Leaf)) {
+            throw "$CatName covers '$f', which the package does not hold."
+        }
+        # MakeCat reads the copy in its work folder, so a path it cannot
+        # take (a space, an equals sign) in the caller's -OutDir never
+        # reaches the CDF.
+        Copy-Item -LiteralPath $fp -Destination (Join-Path $catDir $f) -Force
+        [void]$cdf.Add("<HASH>$f=$(Join-Path $catDir $f)")
+        [void]$cdf.Add("<HASH>${f}ATTR1=0x10010001:File:$f")
+    }
+    $cdfPath = Join-Path $catDir "catalog.cdf"
+    [System.IO.File]::WriteAllLines($cdfPath, [string[]]$cdf, (New-Object System.Text.ASCIIEncoding))
+    $catPath = Join-Path $catDir $CatName
+    if (Test-Path -LiteralPath $catPath) { Remove-Item -LiteralPath $catPath -Force }
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $mkOut = & $MakeCat $cdfPath 2>&1 | Out-String
+        $mkRc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($mkRc -ne 0 -or -not (Test-Path -LiteralPath $catPath)) {
+        throw "MakeCat could not make $CatName (exit $mkRc):`n$mkOut"
+    }
+    return $catPath
+}
+
+function Get-CatalogMemberDigest {
+    # What a catalog member's digest must be for the file at $Path: the
+    # Authenticode image digest for a PE image, SHA-1 over the file for any
+    # other (an INF, or the self-tests' text stand-ins). Returns the digest
+    # and whether the file is a PE image.
+    param([string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $isPe = $true
+    try { [void](Get-PeSecurityLayout -Bytes $bytes) } catch { $isPe = $false }
+    if ($isPe) { return @{ Digest = (Get-PeImageDigest -Bytes $bytes); Pe = $true } }
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    try { return @{ Digest = (($sha1.ComputeHash($bytes) | ForEach-Object { $_.ToString("X2") }) -join ""); Pe = $false } }
+    finally { $sha1.Dispose() }
+}
+
+function Test-PackageCatalog {
+    # The verdict on a parsed catalog (Read-CatalogFile's object, or a mock
+    # of one): "" when it is the catalog section 3a of record 19 prescribes
+    # for the files given - signed once by the certificate whose thumbprint
+    # is given, SHA-1, verifying, no timestamp, a catalog list of SHA-1
+    # members carrying $script:CatalogOsAttr, and exactly one member per
+    # file, by name, with that file's digest (Get-CatalogMemberDigest) as its
+    # tag and its indirect data, of the PE type for a PE image and of another
+    # for any other file, and no member more - otherwise the reason it is not.
+    # $Expected maps each file name to Get-CatalogMemberDigest's result.
+    param($Catalog, [hashtable]$Expected, [string]$Thumbprint)
+
+    if ($null -eq $Catalog) { return "there is no catalog" }
+    if ($Catalog.SignerCount -eq 0) { return "the catalog is not signed" }
+    if ($Catalog.SignerCount -ne 1) { return ("the catalog has {0} signers, not one" -f $Catalog.SignerCount) }
+    if ($Catalog.Thumbprint -ne $Thumbprint) {
+        return ("the catalog is signed by certificate {0}, not by the project test certificate {1}" -f $Catalog.Thumbprint, $Thumbprint)
+    }
+    if ($Catalog.DigestOid -ne $script:Sha1Oid) { return ("the catalog's signature digest is {0}, not SHA-1 ({1})" -f $Catalog.DigestOid, $script:Sha1Oid) }
+    if (-not $Catalog.SignatureValid) { return "the catalog's PKCS #7 signature does not verify" }
+    if ($Catalog.Timestamped) { return "the catalog carries a countersignature (timestamp), which record 19 does not take" }
+    if ($Catalog.ContentType -ne $script:CtlOid -or @($Catalog.Usage) -notcontains $script:CatalogListOid -or
+        $Catalog.MemberAlgOid -ne $script:CatalogMemberOid) {
+        return "it is not a catalog list (content, usage or member algorithm)"
+    }
+    if (@($Catalog.OsAttr).Count -ne 1 -or @($Catalog.OsAttr)[0] -ne $script:CatalogOsAttr) {
+        return ("its OSAttr is '{0}', not '{1}'" -f (@($Catalog.OsAttr) -join ' | '), $script:CatalogOsAttr)
+    }
+    $seen = @{}
+    foreach ($m in @($Catalog.Members)) {
+        $name = [string]$m.File
+        if ($name -eq "" -or $m.Names -ne 1) { return ("member '{0}' does not carry one File name" -f $m.Tag) }
+        $key = $name.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { return "it lists '$name' twice" }
+        $seen[$key] = $true
+        if (-not $Expected.ContainsKey($name)) { return "it lists '$name', which is not one of its package files" }
+        $want = $Expected[$name]
+        if ($m.Indirect -ne 1) { return "member '$name' does not carry one indirect data attribute" }
+        if ($m.DigestOid -ne $script:Sha1Oid) { return ("member '{0}' is hashed with {1}, not SHA-1" -f $name, $m.DigestOid) }
+        if ($m.Digest -ne $want.Digest) { return ("member '{0}' vouches for digest {1}, and the file's is {2}" -f $name, $m.Digest, $want.Digest) }
+        if ($m.Tag -ne $want.Digest) { return ("member '{0}' is tagged '{1}', not by its digest" -f $name, $m.Tag) }
+        $wantOid = if ($want.Pe) { $script:SpcPeImageDataOid } else { $script:CatFlatDataOid }
+        $wantSip = if ($want.Pe) { $script:CatPeSipGuid } else { $script:CatFlatSipGuid }
+        if ($m.DataOid -ne $wantOid) {
+            return ("member '{0}' has the indirect data type {1}, not {2}, the one for a{3} PE image" -f $name, $m.DataOid, $wantOid, $(if ($want.Pe) { "" } else { " file that is not a" }))
+        }
+        if ($m.Infos -ne 1 -or $m.SipGuid -ne $wantSip -or $m.InfoVersion -ne $script:CatMemberInfoVersion) {
+            return ("member '{0}' does not carry one member info naming the subject interface package {1}, version {2} (it carries {3}: '{4}', {5})" -f `
+                $name, $wantSip, $script:CatMemberInfoVersion, $m.Infos, $m.SipGuid, $m.InfoVersion)
+        }
+    }
+    foreach ($name in $Expected.Keys) {
+        if (-not $seen.ContainsKey($name.ToLowerInvariant())) { return "it does not list '$name'" }
+    }
+    return ""
+}
+
+function Test-CatalogOfPackage {
+    # Every catalog of $script:PackageCatalogs whose INF is in $Dir, read
+    # and judged against the files beside it: "" when each is present and
+    # passes Test-PackageCatalog, otherwise the first reason one does not.
+    # make-package.ps1 runs it on the staged package and make-release.ps1
+    # on the published directory.
+    param([string]$Dir, [string]$Thumbprint)
+    foreach ($catName in $script:PackageCatalogs.Keys) {
+        $spec = $script:PackageCatalogs[$catName]
+        if (-not (Test-Path -LiteralPath (Join-Path $Dir $spec.Inf))) { continue }
+        $catPath = Join-Path $Dir $catName
+        if (-not (Test-Path -LiteralPath $catPath)) { return "$($spec.Inf) has no $catName beside it" }
+        $expected = @{}
+        foreach ($f in $spec.Files) {
+            $fp = Join-Path $Dir $f
+            if (-not (Test-Path -LiteralPath $fp)) { return "$catName covers '$f', which is not in the package" }
+            $expected[$f] = Get-CatalogMemberDigest -Path $fp
+        }
+        $why = ""
+        try { $why = Test-PackageCatalog -Catalog (Read-CatalogFile -Path $catPath) -Expected $expected -Thumbprint $Thumbprint }
+        catch { $why = "it cannot be read: $($_.Exception.Message)" }
+        if ($why -ne "") { return "${catName}: $why" }
+    }
     return ""
 }
 

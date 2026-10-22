@@ -92,7 +92,8 @@ enforcement had to be disabled at every start. Once:
 4. Install the driver as usual. Windows still says it cannot verify the
    publisher; choose "Install this driver software anyway". Afterwards the
    Driver tab says "Not digitally signed". Both are expected: the driver is
-   test-signed, not signed by Microsoft, and the package has no catalog.
+   test-signed, not signed by Microsoft, and its catalog (from 3.2.0.0) is
+   signed by the same test certificate, which Windows does not trust.
 
 Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off:
 `bcdedit /set testsigning off` and restart; the driver then needs F8 again,
