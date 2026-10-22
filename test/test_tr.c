@@ -1064,6 +1064,7 @@ static void snap_of(TR_SNAP *s, const unsigned char *b, size_t n, TR_U32 live)
 
 static TR_SNAP so;
 static TR_SNAP sn;
+static TR_SNAP s3;
 
 static void test_events(void)
 {
@@ -1251,6 +1252,38 @@ static void test_events(void)
     CHECK_EQ(tr_diff(&sn, &so, ev, 8), 0, "diff: back to ACTIVE is quiet");
     snap_of(&so, qa, n, 0UL);
     CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: OFF to SUSPECT is quiet");
+
+    /* A sleep: ACTIVE, then OFF ("not monitored", CmLiveDisarm), then
+     * ACTIVE after the wake. Nothing failed, so nothing is raised. */
+    snap_of(&so, qa, n, 1UL);
+    snap_of(&sn, qa, n, 0UL);
+    snap_of(&s3, qa, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: ACTIVE to OFF (a sleep) is quiet");
+    CHECK_EQ(tr_diff(&sn, &s3, ev, 8), 0, "diff: OFF to ACTIVE (the wake) is quiet");
+    /* ACTIVE to each loss state raises it, whatever came before. */
+    {
+        static const TR_U32 lost[] = { 2UL, 3UL, 4UL, 5UL, 6UL, 7UL, 9UL };
+        size_t j;
+        for (j = 0; j < sizeof(lost) / sizeof(lost[0]); j++) {
+            snap_of(&sn, qa, n, lost[j]);
+            k = tr_diff(&s3, &sn, ev, 8);
+            CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+                  "diff: ACTIVE (after a wake) to a loss state is STOPPED");
+            CHECK_EQ(tr_live_lost(lost[j]), 1, "a loss state");
+        }
+    }
+    /* Neither a stop's revocation nor a state not known is a loss. */
+    snap_of(&sn, qa, n, 8UL);
+    CHECK_EQ(tr_diff(&s3, &sn, ev, 8), 0, "diff: ACTIVE to REVOKED is quiet");
+    snap_of(&sn, qa, n, 10UL);
+    CHECK_EQ(tr_diff(&s3, &sn, ev, 8), 0, "diff: ACTIVE to an unknown state is quiet");
+    CHECK_EQ(tr_live_lost(0UL), 0, "OFF is no loss");
+    CHECK_EQ(tr_live_lost(1UL), 0, "ACTIVE is no loss");
+    CHECK_EQ(tr_live_lost(8UL), 0, "REVOKED is no loss");
+    /* A loss that persists is raised once. */
+    snap_of(&so, qa, n, 2UL);
+    snap_of(&sn, qa, n, 3UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: SUSPECT to ABSENT is quiet");
 
     /* A new epoch is a new set of devices. */
     n = qb_build(qa, 1UL, 0x11111111UL, 5UL);

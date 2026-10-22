@@ -1154,7 +1154,15 @@ A new epoch is a new set of devices.
 | an ICM device's approval becomes pending or unanswered | "<name> is waiting to be approved." |
 | an ICM device's approval becomes failed | "<name> could not be approved." |
 | a router entry leaves | "<name> was disconnected." |
-| the liveness state leaves ACTIVE | "The Thunderbolt/USB4 controller stopped answering." |
+| the liveness state goes from ACTIVE to a loss state | "The Thunderbolt/USB4 controller stopped answering." |
+
+A loss state (`tr_live_lost`) is suspect, absent, configuration lost,
+recovering, recovery failed, contained or preparing. OFF ("not
+monitored") is not one: the connection manager disarms the monitor at
+every sleep and stop (`CmLiveDisarm`), so until 2026-10-22 the tray
+raised this balloon after every sleep and hibernate with nothing failed
+(the 43.45 legs, 7 x86). Revoked (a PnP stop or removal) and a value
+the tool does not know are not loss states either.
 
 The approval events read the ICM's approval states only: a USB4 entry's
 approval word folds held, failed and unsupported together and an eject

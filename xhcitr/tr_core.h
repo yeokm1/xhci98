@@ -386,8 +386,15 @@ typedef struct _TR_EVENT {
  * ICM entries (a USB4 entry's approval word folds held, failed and
  * unsupported together); a router that leaves is "disconnected", never
  * "unplugged while in use" (decision T9); the stop event when the
- * liveness leaves ACTIVE. */
+ * liveness goes from ACTIVE to a loss state (tr_live_lost). */
 int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap);
+
+/* 1 for a liveness state (CM_LIVE_*) that is a loss of the controller:
+ * suspect, absent, configuration lost, recovering, recovery failed,
+ * contained, preparing. 0 for active, for OFF ("not monitored": before
+ * the start, a stop, and every sleep, CmLiveDisarm), for revoked (a PnP
+ * stop or removal) and for a value this tool does not know. */
+int tr_live_lost(TR_U32 live);
 
 /* The balloon's text and title for an event. */
 void tr_event_text(const TR_EVENT *e, char *out, size_t cap);

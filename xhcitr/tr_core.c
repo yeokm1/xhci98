@@ -25,6 +25,7 @@
 #define CM_LIVE_RECOVERY_FAILED  6UL
 #define CM_LIVE_CONTAINED        7UL
 #define CM_LIVE_REVOKED          8UL
+#define CM_LIVE_PREPARING        9UL
 
 /* ======================================================================== */
 /* Text                                                                      */
@@ -1451,6 +1452,22 @@ static int tr_first_of(const TR_SNAP *s, int i)
     return 1;
 }
 
+int tr_live_lost(TR_U32 live)
+{
+    switch (live) {
+    case CM_LIVE_SUSPECT:
+    case CM_LIVE_ABSENT:
+    case CM_LIVE_CONFIG_LOST:
+    case CM_LIVE_RECOVERING:
+    case CM_LIVE_RECOVERY_FAILED:
+    case CM_LIVE_CONTAINED:
+    case CM_LIVE_PREPARING:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
 {
     int count = 0;
@@ -1463,8 +1480,7 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
     for (i = 0; i < now->NhiCount; i++) {
         for (k = 0; k < old->NhiCount; k++) {
             if (old->NhiKey[k] == now->NhiKey[i] &&
-                old->Live[k] == CM_LIVE_ACTIVE &&
-                now->Live[i] != CM_LIVE_ACTIVE) {
+                old->Live[k] == CM_LIVE_ACTIVE && tr_live_lost(now->Live[i])) {
                 count = tr_ev(ev, cap, count, TR_EV_STOPPED, NULL, 0);
             }
         }

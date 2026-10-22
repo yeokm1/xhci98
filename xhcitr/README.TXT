@@ -249,7 +249,8 @@ INSTALL /notray, so it starts for nobody; run INSTALL again without
 The icon says when a Thunderbolt or USB4 device is connected, is waiting
 to be approved, could not be approved or was disconnected, and when the
 controller stops answering: in a balloon on Windows ME, 2000 and later,
-and in the icon's tooltip on Windows 98 SE.
+and in the icon's tooltip on Windows 98 SE. Sleep, hibernation and a
+stop of the controller are not reported as the controller not answering.
 
 From a command line
 -------------------
