@@ -1771,6 +1771,13 @@ function Get-UploadSetRepairCommand {
 function Remove-StagedUploadSet {
     param([Parameter(Mandatory = $true)]$Set)
     foreach ($p in @($Set.Root, $Set.Zip)) {
+        # Never anything at or under -ReleasesDir, whatever the set says.
+        $rd = $ReleasesDir.TrimEnd('\')
+        if ($p.TrimEnd('\') -eq $rd -or $p.StartsWith($rd + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $rd.StartsWith($p.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Warn ("'{0}' is at, under or around the releases directory; it is not removed" -f $p)
+            continue
+        }
         if (Test-Path -LiteralPath $p) {
             Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -7718,6 +7725,10 @@ after checkout. Restore it with:  git checkout -- LICENSE
             # Registered for the failure path before it is built, so a set
             # whose assembly throws half-way is removed with the others.
             $pendingPaths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Staged -Kind $dk
+            # Held to the containment rule before the failure path is told
+            # it may delete them.
+            Assert-UploadSetOutsideRelease -UploadRoot $pendingPaths.Root -UploadZip $pendingPaths.Zip `
+                                           -PublishedRoot $destRoot -ReleasesRoot $ReleasesDir
             $stagedUploads += [pscustomobject]@{ Root = $pendingPaths.Root; Zip = $pendingPaths.Zip;
                                                  Final = (Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Kind $dk) }
             $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `

@@ -19559,9 +19559,7 @@ static void other_sys(void)
 {
     OSVERSIONINFOA v;
 
-    memset(&v, 0, sizeof(v));
-    v.dwOSVersionInfoSize = sizeof(v);
-    if (!GetVersionExA(&v)) {
+    if (!inst_eng_os_read(&v)) {
         othSys = -1;
         return;
     }
@@ -20037,6 +20035,8 @@ static void other_print_plan(void)
 
 /* ---- the record file (section 6.7.5) ---- */
 
+static int othRecBroken;        /* a record write failed this run       */
+
 static int other_rec_append(const char *path, const char *line)
 {
     HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
@@ -20053,6 +20053,9 @@ static int other_rec_append(const char *path, const char *line)
          WriteFile(h, "\r\n", 2, &put, NULL) && put == 2 &&
          FlushFileBuffers(h);
     CloseHandle(h);
+    if (!ok) {
+        othRecBroken = 1;
+    }
     return ok ? 1 : 0;
 }
 
@@ -20061,6 +20064,9 @@ static int other_rec_line(const char *path, char kind, const char *token,
 {
     char line[INST_PATH_CHARS + 96];
 
+    if (othRecBroken) {
+        return 0;
+    }
     if (hash != NULL) {
         _snprintf(line, sizeof(line) - 1, "%c %s %s %s", kind, token, hash, p);
     } else {
@@ -20128,8 +20134,10 @@ static int other_rec_load(int set, const char *path, const char *dir,
         e = strstr(p, "\r\n");
         if (e == NULL) {
             /* A last line without its CRLF: a write cut short, cut off
-             * the file before anything is appended to it. */
-            if (!opts.List && !other_rec_trim(path, (DWORD)(p - text))) {
+             * the file before anything is appended to it - but only after
+             * the header was read whole and is this set's. */
+            if (first || (!opts.List &&
+                          !other_rec_trim(path, (DWORD)(p - text)))) {
                 free(text);
                 free(r);
                 return -1;
@@ -20658,7 +20666,9 @@ static int other_copy_file(OTHSET *o, const char *recPath, const char *dest,
         }
         return 0;
     }
-    other_rec_line(recPath, 'D', token, NULL, dest);
+    if (!other_rec_line(recPath, 'D', token, NULL, dest)) {
+        return 0;
+    }
     *made = 1;
     flagChanged = 1;
     return 1;
@@ -21058,8 +21068,14 @@ static void other_run_set(int set)
         return;
     }
     step(INST_STEP_BEGIN, "Copying %s to %s", inst_other_label(set), dir);
+    othRecBroken = 0;
     if (!other_begin(set, dir, recPath, sizeof(recPath))) {
         out("%s is not copied: %s.\n", inst_other_label(set), o->Why);
+        flagSteps = 1;
+        if (othRecBroken || strstr(o->Why, "written") != NULL ||
+            strstr(o->Why, "made") != NULL) {
+            flagFailed = 1;
+        }
         step(INST_STEP_FAILED, "%s", inst_other_label(set));
         return;
     }
@@ -21068,7 +21084,8 @@ static void other_run_set(int set)
            ((DWORD)rand() << 16) ^ (DWORD)rand()) & 0xFFFFFFFFUL;
     _snprintf(token, sizeof(token), "%08lX", (unsigned long)rnd);
     token[8] = '\0';
-    for (i = 0; i <= o->Count; i++) {
+    othRecBroken = 0;
+    for (i = 0; i <= o->Count && !othRecBroken; i++) {
         const char *rel = i < o->Count ? o->Files[i].Rel : "SHA256.TXT";
         char hex[65];
         if (i == o->Count) {
@@ -21091,6 +21108,12 @@ static void other_run_set(int set)
                         strlen(o->LeftOut) - 1);
             }
         }
+    }
+    if (othRecBroken) {
+        out("%s: its record file %s could not be written; the copy stops "
+            "here.\n", inst_other_label(set), recPath);
+        flagFailed = 1;
+        left++;
     }
     out("%s: %d of its %d files are in %s.\n", inst_other_label(set),
         o->InFolder, o->Count + 1, dir);
@@ -21257,8 +21280,8 @@ static int other_store_remove(const char *name)
  * (their folders in kept), 0 something stays for a later run. */
 static int other_unstage(int set, const char *dir, char *kept, size_t cap)
 {
-    char name[INST_PATH_CHARS];
-    char data[512];
+    char name[INST_PATH_CHARS * 2];
+    char data[INST_PATH_CHARS + 1100];
     char store[INST_PATH_CHARS];
     char list[2048];
     char newList[2048];
@@ -21391,6 +21414,10 @@ static int other_unstage(int set, const char *dir, char *kept, size_t cap)
                     "with it.\n", store, e > 0 ? "is named by a device" :
                     "may be named by a device (a driver key cannot be read)",
                     rel);
+                if (e < 0) {
+                    flagSteps = 1;
+                    ok = 0;
+                }
                 other_keep(kept, cap, dir, rel);
                 i++;
                 continue;
@@ -21465,20 +21492,43 @@ static int other_remove(int set, int uninstall)
 
     (void)uninstall;
     other_key(set, key, sizeof(key));
-    r = other_key_text(set, "Dir", dir, sizeof(dir));
+    r = other_key_exists(set);
     if (r == 0) {
         return 1;
     }
-    if (r < 0 || other_key_text(set, "Record", recPath, sizeof(recPath)) <= 0) {
+    if (r < 0) {
         out("  %s: its record cannot be read; nothing of it is removed.\n",
             inst_other_label(set));
         flagSteps = 1;
         return 0;
     }
-    if (!reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made)) {
-        made = 0;
+    recPath[0] = '\0';
+    dir[0] = '\0';
+    {
+        char sums[80];
+        if (other_key_text(set, "Record", recPath, sizeof(recPath)) <= 0) {
+            recPath[0] = '\0';
+        }
+        if (recPath[0] == '\0' ||
+            other_key_text(set, "Dir", dir, sizeof(dir)) <= 0 ||
+            other_key_text(set, "Sums", sums, sizeof(sums)) <= 0 ||
+            !reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made)) {
+            /* A making of the key cut short (section 6.7.5). */
+            made = 0;
+        }
     }
     if (made == 0) {
+        if (recPath[0] == '\0') {
+            if (toolDir[0] == '\0') {
+                out("  %s: its record is incomplete and names no record "
+                    "file; it is left.\n", inst_other_label(set));
+                flagSteps = 1;
+                return 0;
+            }
+            _snprintf(recPath, sizeof(recPath) - 1, "%s\\%s.REC", toolDir,
+                      inst_other_folder(set));
+            recPath[sizeof(recPath) - 1] = '\0';
+        }
         if (file_state(recPath) != 0) {
             out("  %s is not known to be this installer's: it is left. Delete "
                 "it if it is not\n  wanted, then run the uninstall again.\n",
@@ -21692,9 +21742,10 @@ static void other_finish(char *text, size_t cap, const char *nl)
         strncat(text, nl, cap - strlen(text) - 1);
         if (o->State == INST_OTHER_CARRIED && o->Ran) {
             char dir[INST_PATH_CHARS];
-            char folders[700];
+            char folders[INST_PATH_CHARS * 7];
             int i;
             int n = 0;
+            int shown = 0;
             INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
             join(dir, sizeof(dir), toolDir, inst_other_folder(set));
             folders[0] = '\0';
@@ -21710,11 +21761,12 @@ static void other_finish(char *text, size_t cap, const char *nl)
                 if (strstr(folders, f) != NULL) {
                     continue;
                 }
-                if (n < 6 && strlen(folders) + strlen(f) + 8 <
+                if (shown < 6 && strlen(folders) + strlen(f) + 8 <
                     sizeof(folders)) {
                     strcat(folders, nl);
                     strcat(folders, "  ");
                     strcat(folders, f);
+                    shown++;
                 }
                 n++;
             }
@@ -21730,9 +21782,9 @@ static void other_finish(char *text, size_t cap, const char *nl)
                         "Hardware Wizard (or Update Driver) at one of:",
                         cap - strlen(text) - 1);
                 strncat(text, folders, cap - strlen(text) - 1);
-                if (n > 6) {
+                if (n > shown) {
                     _snprintf(one, sizeof(one) - 1, "%sand %d more: see "
-                              "%s\\STAGE.TXT", nl, n - 6, dir);
+                              "%s\\STAGE.TXT", nl, n - shown, dir);
                     one[sizeof(one) - 1] = '\0';
                     strncat(text, one, cap - strlen(text) - 1);
                 }

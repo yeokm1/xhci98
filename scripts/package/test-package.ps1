@@ -3163,6 +3163,20 @@ try {
             "{MSFILES} for a download WITH the driver pack says it carries no Microsoft file, or no longer points at the pack's NOTICE.md."
         Assert-True ($msText[$false][1] -match "No Microsoft file is in this download") `
             "{MSFILES} for a download without the driver pack no longer says it carries no Microsoft file."
+        # The rendered readme takes {MSFILES} from Get-ReadmeMsFilesText,
+        # the function each download's readme is rendered with (task
+        # 43.48): download 1's is the same text, download 3's says where
+        # its other Microsoft files are.
+        foreach ($included in @($true, $false)) {
+            Assert-True ((Get-ReadmeMsFilesText -DriverPackIncluded $included -Kind "base") -ceq $msText[$included][1].TrimEnd()) `
+                "Get-ReadmeMsFilesText for download 1 (pack included: $included) is not the {MSFILES} text the renderer chooses."
+        }
+        $nfMs = Get-ReadmeMsFilesText -DriverPackIncluded $true -Kind "nonfree"
+        Assert-True ($nfMs -match "two places" -and $nfMs -match "NONFREE" -and $nfMs -match "WdfCoInstaller01007\.dll") `
+            "{MSFILES} for download 3 does not say where its other Microsoft files are."
+        foreach ($line in ($nfMs -split "`r?`n")) {
+            Assert-True ($line.Length -le 78) "download 3's Microsoft-file text has a line over 78 columns: '$line'"
+        }
         foreach ($included in @($true, $false)) {
             foreach ($t in $msText[$included]) {
                 foreach ($line in ($t -split "`r?`n")) {
@@ -3176,13 +3190,17 @@ try {
     if ($instChoice.Success) {
         $instText = @{}
         foreach ($included in @($true, $false)) {
-            $sb = [scriptblock]::Create("`$driverPackIncluded = `$$included`r`n" + $instChoice.Value + "`r`n`$instMsFiles")
+            $sb = [scriptblock]::Create("`$driverPackIncluded = `$$included`r`n`$nonFreeSet = `$null`r`n" + $instChoice.Value + "`r`n`$instMsFiles")
             $instText[$included] = (& $sb)
         }
         Assert-True ($instText[$true] -match "NUSB 3\.3" -and $instText[$true] -notmatch "no Microsoft file") `
             "the installer NOTICE.TXT's line for a download WITH the driver pack says it carries no Microsoft file."
         Assert-True ($instText[$false] -match "carries no Microsoft file") `
             "the installer NOTICE.TXT's line for a download without the driver pack no longer says it carries no Microsoft file."
+        $sb = [scriptblock]::Create("`$driverPackIncluded = `$true`r`n`$nonFreeSet = [pscustomobject]@{ Tag = 'v0' }`r`n" + $instChoice.Value + "`r`n`$instMsFiles")
+        $instNf = (& $sb)
+        Assert-True ($instNf -match "NUSB 3\.3" -and $instNf -match "NONFREE") `
+            "the installer NOTICE.TXT's line for a release with download 3 does not name NONFREE\."
     }
 
     # And the third claim, which a fix after the audit of 2026-09-07 put IN
