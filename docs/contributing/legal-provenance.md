@@ -1648,6 +1648,65 @@ pack claims it.
 Status: decided, not yet in any cut. `3.1.0.0` and every earlier download
 carry none of the seven.
 
+### The other USB drivers: downloads 2 and 3 (task 43.48)
+
+Decided by the owner on 2026-10-22 (roadmap-usb4 task 43.48; design record
+26 section 6.7). From `3.2.0.0` a release may have three downloads, each
+holding the one before: `xhci98-<version>.zip` (the package and `NUSB33\`,
+above), `xhci98-<version>-free.zip` (adds `WDMFREE\`) and
+`xhci98-<version>-nonfree.zip` (adds `NONFREE\`). This widens 43.1's
+decision, which admitted NUSB 3.3's seven storage files alone, and relaxes
+the owner's rule of 2026-10-20 that the repositories are independent, for
+the release downloads only: the copies are made at packaging time, and no
+repository's sources or build depend on another's. What is decided:
+
+- **The channel is the release download only**, as for the seven: never a
+  commit of this repository, never `releases/<version>/`, never a package
+  of `make-package.ps1`'s; `make-release.ps1` reads each set from its
+  repository's git objects at a pinned tag and refuses a published tree
+  holding either folder.
+- **`NONFREE\` is the `non-free/` folder of the owner's `usb-wdm-nonfree`
+  at tag `v1.0.0`** (commit `128106f786d462024eda08d117154b21cb01b57b`),
+  every file held to that commit's `SHA256.TXT`, whose own SHA-256
+  (`d48c086301074793d6f0ed26798425ebd70345c977f11fade9c47531956d070e`) is
+  pinned in `package-common.ps1`; with the pack's `NOTICE.md`, `README.md`
+  and `STAGE.TXT` unchanged, and a `SHA256.TXT` the cut writes. The pack's
+  `nusb33/` is not in it: NUSB 3.3's files are in `NUSB33\` alone, in
+  every download. The folder's files are other makers' drivers (ASIX,
+  Realtek, FTDI, WCH and Masahiko Morii's Xbox 360 controller drivers,
+  among others; the pack's `NOTICE.md` says whose each is), unmodified, as
+  their makers released them. **Among them are two Microsoft files**, the
+  KMDF co-installers ASIX ships with its drivers:
+  `ethernet/ax88772/w2k-xp/WdfCoInstaller01007.dll` (KMDF 1.7, 1.7.6001.0)
+  and `ethernet/ax88179/wxpvis/WdfCoInstaller01009.dll` with its
+  `wxpvis64/` twin (KMDF 1.9, 1.9.7600.16385) (static: the pack's
+  `NOTICE.md` lines 29 and 31, read 2026-10-22). No licence to redistribute
+  any of the folder's files has been established (the pack's `NOTICE.md`,
+  "The driver files are not this repository's to license"), none is
+  claimed here, and the owner took the decision with that stated; it is a
+  fact about the decision, not a permission. The pack says its drivers are
+  untested by its maintainer (owner, 2026-10-22: no VM checks of them), and
+  the installer and the readme say they are not tested by this project.
+- **`WDMFREE\` is the qualifying drivers of a tagged `usb-wdm-free`
+  release** (the owner's own GPL-2.0 project), every file held to a SHA-256
+  in `scripts/package/wdmfree-pin.txt`, with that release's `LICENSE` and
+  `NOTICE.md`. A driver qualifies only once its legs have passed on its
+  systems (roadmap 43.48). No release qualifies yet (2026-10-22: usb-wdm-free
+  has no release), so the pin names none and no cut makes download 2.
+- **The installer copies a set only when the user ticks it, and never
+  installs it** (owner, 2026-10-22); the uninstall removes what it placed.
+- **The generated readme of each download says which download it is** and,
+  for download 3, that it carries other makers' files, Microsoft's two
+  among them, with no licence to redistribute them established.
+
+What this tree holds of it: the pins, and per release
+`releases/<version>/downloads.txt` (which downloads were cut, each set's
+tag, commit and the hash of the `SHA256.TXT` the cut wrote) and, with the
+free set, a copy of the pin it was cut with, from which `-UploadSetOnly`
+rebuilds the downloads.
+
+Status: decided, not yet in any cut.
+
 ### The GitHub release download carried three of them, until 1.0.0.1
 
 Decided by the maintainer for the two `usbd.sys` builds, extended to
