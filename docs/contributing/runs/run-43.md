@@ -536,6 +536,13 @@ from the owner's install media and runtime readings in QEMU on development
 host A; Stor98's own record of the runtime legs is its `docs/TESTING.md`,
 "Windows 8 and 8.1", and its `docs/PLAN.md` item 2.2.
 
+**Verdict: open** (Codex round 1, 2026-10-22). The x86 half is read; the
+x64 half cannot be until the x64 packages carry a test-signed catalog,
+which branch `p43-36s` is adding (owner's decision). Waiting on it:
+Stor98 x64's install and load on 8 x64, 8.1 x64 and 10 x64, and so a
+removal under Stor98 on 8.1 at all (8.1 was read on x64 only, under its own
+`stornvme`). The owner may instead defer them past `3.2.0.0`.
+
 ### The installer row
 
 43.43 (merged into `3.2.0.0` at `22ec1372`) already took 43.23's row, as
@@ -553,8 +560,9 @@ itself, a vendor's NVMe service (`secnvme`, `iaStorAC`), a longer name
 (`stornvme2`), an empty service and no service are never installed over.
 `call_flags` and the pending mark now test the system as the plan always
 did (they had tested the service name alone, which on 2000 to 7 can reach
-neither, since the plan leaves such a drive). `test_inst`: 1780 checks,
-0 failures.
+neither, since the plan leaves such a drive). `test_inst`: 1805 checks,
+0 failures, with the Windows 10 vectors ("Windows 10" below) after the merge of `3.2.0.0`
+at `2038250e`; the gated `all` builds, x86 and amd64, passed.
 
 ### Static: what SCSIport and the class driver on NT 6.2 and 6.3 are
 
@@ -590,7 +598,7 @@ script kept outside the tree; nothing executed.
   against 8 x64 and 8.1 x64): the 19 x86 names (11 `SCSIPORT.SYS`, 8
   `NTOSKRNL.EXE`) and the 18 amd64 names (9 and 9) are all present in
   those builds' export tables. 8 x86's `scsiport.sys` exports 47 names, 8 x64's and 8.1 x64's 50.
-- **SCSIport on 6.2 and 6.3 is 7's.** 7 x64, 8 x64 and 8.1 x64 export the
+- **SCSIport on 6.2 and 6.3 against 7's, by its interface only.** 7 x64, 8 x64 and 8.1 x64 export the
   same 50 names. Their imports differ by five names in all: 8 adds
   `KeInitializeSpinLock`, `KeLowerIrql`, `KfRaiseIrql` and
   `MmAllocateContiguousNodeMemory` and drops
@@ -600,10 +608,20 @@ script kept outside the tree; nothing executed.
   (`PnpInterface`, `MaximumSGList`, `NumberOfRequests`,
   `DisableTaggedQueuing`, `TimeoutValue` and the rest); 8 adds the
   `RtlQueryRegistryValuesEx` lookup, 8.1 a read of
-  `Control\MiniNT` (Windows PE). Nothing read asks more of the miniport
-  than 7 did: `HwInitializationData`, the callbacks and the INF's
-  `PnpInterface\5` are taken as Stor98's NT path gives them, which the
-  runtime leg below then showed.
+  `Control\MiniNT` (Windows PE). That is all the static read covers:
+  exports, imports and registry value names. The miniport contract itself
+  was **not** compared with 7's: `ScsiPortInitialize`'s checks of
+  `HW_INITIALIZATION_DATA` (size, fields, the PnP path), the
+  `PORT_CONFIGURATION_INFORMATION` it fills, how it calls `HwFindAdapter`,
+  `HwInitialize`, `HwStartIo`, `HwInterrupt`, `HwResetBus` and
+  `HwAdapterControl`, and which PnP and power SRBs and adapter-control
+  types it sends. What stands in for that read is the runtime one: on 8
+  x86 (and 10 x86) SCSIport took Stor98's `HW_INITIALIZATION_DATA` and the
+  INF's `PnpInterface\5`, found and started both adapters, ran I/O and
+  the removal path. Unread, statically and at runtime: the x64 SCSIport
+  (behind the catalog), a PnP stop and restart (Device Manager's disable
+  and enable), a hibernate or sleep and resume, and
+  `ScsiStopAdapter` / `ScsiRestartAdapter` on 6.2 and later.
 - **The class driver.** `Classpnp.sys` exports the same 60 names on 7 x64
   and 8 x64; 8.1 adds `ClassModeSelect` and `ClassModeSenseEx`. Its retry
   policy was not read statically; the runtime legs read it.
@@ -666,7 +684,11 @@ below build 22000 the same kind of system as 8 and 8.1 (`INST_OS_CMONLY`),
 and with it Stor98's row: its case 3b warning already reads "Windows 8,
 8.1 or 10". `inst_s98_over_inbox` is called with that kind, so a tunnel
 drive under 10's own `stornvme` is installed over, forced, as on 8.1, with
-no change here beyond its comments. Read on 2026-10-22 after the 8 and 8.1
+no change here beyond its comments. Host vectors in `test_inst.c` hold it
+through `inst_os_kind`: on 10 1507 and 22H2 Stor98 is asked with Enter
+giving N, `/yes` gives N, `/stor98` installs it unasked, and a drive under
+`stornvme` is installed over while a vendor's driver is left; 11 (build
+22000) is not that kind. Read on 2026-10-22 after the 8 and 8.1
 legs, on xhci98's pristine `w10x86` and `w10x64` images (Windows 10 Pro
 22H2, 19045.2965), the same vehicle and guest scripts, QMP 48643 and 48644,
 one guest at a time.
@@ -715,7 +737,9 @@ the connection manager's legs on 10 (43.37).
 
 ### What it decides
 
-- Stor98's NT path runs on Windows 8 (32-bit) as it is: no source change.
+- Stor98's NT path runs on Windows 8 (32-bit) as it is, for start, I/O
+  and a removal: no source change (the contract comparison and the PnP
+  and power paths are unread, above).
   Its INFs need no new decoration; their comments, Stor98's `AGENTS.md`,
   `README.md`, `docs/TESTING.md`, `docs/PLAN.md` 2.2 and the package
   readme now say 2000 to 8.1.
@@ -734,7 +758,10 @@ the connection manager's legs on 10 (43.37).
   untested ground, covered by 8 x86 and 8.1 x64; the release notes'
   untested row).
 - Stor98 x64 running on 8 and 8.1 (refused at the driver store), and so
-  the kernel's acceptance of its SHA-1 test signature there.
+  the kernel's acceptance of its SHA-1 test signature there, and a
+  removal under Stor98 on 8.1: waiting on `p43-36s`'s catalog.
+- SCSIport's miniport contract on 6.2 and 6.3 compared with 7's, and the
+  PnP stop, restart and power paths (above).
 - A removal Windows is told of (pci.sys removing the controller), and
   xhci98's link-down statement on 8 and 8.1: 43.24, with the installer's
   own run there.

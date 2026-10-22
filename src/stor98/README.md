@@ -97,8 +97,8 @@ on 2026-10-22 ([docs/TESTING.md](docs/TESTING.md), "Windows 8 and 8.1" and "Wind
   catalog file, and these systems' driver store refuses such a package in test-signing
   mode ("The third-party INF does not contain digital signature information",
   `0xE000022F`) before the driver is ever loaded. Until the package carries a catalog
-  (a decision for xhci98's owner), Stor98 does not run on 64-bit 8 and 8.1, and on 8.1 x64
-  the drive stays with `stornvme`.
+  (xhci98 is adding a test-signed one, the owner's decision of 2026-10-22), Stor98 does
+  not run on 64-bit 8 and 8.1, and on 8.1 x64 the drive stays with `stornvme`.
 - **Windows 8.1, 32-bit:** not run (no install medium); its SCSIport and `stornvme` are
   taken to be 8.1 x64's and 8 x86's, untested.
 - **Windows 10, 32-bit** (22H2, build 19045; xhci98's roadmap 43.34 admits 10 below build

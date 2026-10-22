@@ -192,7 +192,7 @@ controller) and xhci98's connection manager's link-down statement on 8 and 8.1 (
 | Untested ground on 8 and 8.1 | State |
 |---|---|
 | Windows 8.1, 32-bit | Not run: no install medium (owner, 2026-10-22: skipped for xhci98 `3.2.0.0`, covered by 8 x86 and 8.1 x64). The x86 package is the one 8 x86 ran; 8.1 x86's `stornvme` and SCSIport are unread |
-| Stor98 x64 on 8 and 8.1 | Not loaded: the package is refused at the driver store (no catalog, above) |
+| Stor98 x64 on 8, 8.1 and 10 | Not loaded: the package is refused at the driver store (no catalog, above). Waiting on the test-signed catalog xhci98 is adding to its x64 packages (owner, 2026-10-22); with it, the install, the load and a removal under Stor98 on 8 x64 and 8.1 x64 |
 | Removal with a platform notification, and xhci98's link-down statement, on 8 and 8.1 | Not read; xhci98's roadmap 43.24 |
 
 ## Windows 10 (xhci98 roadmap 43.23 and 43.34, 2026-10-22)
