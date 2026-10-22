@@ -3767,12 +3767,23 @@ revised:
   already names that devnode with that instance id; the record exists
   before anything irreversible is called, so the obligation an accepted
   query creates always has its record. The records become sixteen. Who
-  names a child: a vanished record or an eject whose query was accepted
-  owns it (the sweep leaves it to that record, which retires it by its
-  own removal); a CONFIGMG worker's claim (below) or an eject whose query
-  is not yet accepted holds it for now - the sweep does not end while
-  such a child is held, and reads again 2 s later, so a child whose
-  claimed or ejected query was refused gets its record and its retries.
+  names a child: a vanished record owns it; an eject whose query was
+  accepted owns it too, and the sweep gives that eject the child's
+  disappearance (as a tunnel down on its member would: its own removal
+  then follows, after the statement's decision and acknowledgement and
+  its unit read gone, part 1's rule), which also retires an eject a later
+  start adopted after an unplug made while it was stopped; a CONFIGMG
+  worker's claim (below) or an eject whose query is not yet accepted
+  holds it for now. A child held for now is kept in the sweep by its
+  devnode and instance id (four a sweep; more are read again), and the
+  sweep does not end while one is kept: once its holder lets it go
+  without owning it (a claim freed after a refusal, an eject that ended
+  refused) it is made a vanished record at once, without being read
+  again, so a re-plug meanwhile cannot lose it; once its holder owns it
+  it is that holder's. An eject that finds its unit's devnode already
+  named by a record, a sweep or a claim when its devnode is found is
+  answered as not found, nothing called, under the records' lock, so an
+  eject and a claim never both query one devnode.
 - **Its course.** `Query_Remove_SubTree` (a call on the member's worker,
   its instance id read back first as every call of a record is), made
   only while the member's removal gate is down (no decision pending, no
@@ -3851,10 +3862,15 @@ revised:
   claim the vanished transaction in its query phase, its retries owed. A
   takeover is made only for a member whose call worker is live (the
   thread tells the CONFIGMG worker which): otherwise nothing could make
-  the transaction's calls, and the worker keeps its own behaviour (a
-  refusal settled, a failed removal undecided). The record so made
-  belongs to no start and is adopted by the running one as a stopped
-  start's is.
+  the transaction's calls, so a refusal is settled as before, and an
+  accepted query whose removal failed **parks** its claim (still
+  `CM_EJ_P_CLAIMED`, the query recorded accepted, its first attempt and
+  its request kept, the member's gate up): the worker, coming back to the
+  devnode, takes its own parked claim up again and makes the removal
+  alone - never a second query - and a start whose member has a live call
+  worker takes a parked claim over as the transaction. The record a
+  takeover makes belongs to no start and is adopted by the running one as
+  a stopped start's is.
 - **Not built.** A function that answers again at its location before
   the sweep's first reading - a re-plug within the down's own poll - is
   taken as present, as before this task, and its old devnode is left to
@@ -3868,11 +3884,12 @@ after the retirement); the NHI stopped mid-retry and the record adopted
 by the detached worker, never asked again); a removal that keeps failing
 past 30 s (blocked, no teardown, still retried, the block lifted by its
 success); the takeovers (a claim refused, removed, and failed into the
-transaction, never queried again; a vanished child's refused claim made
-the transaction); two members, one held while the other's work goes on;
-the sweep's reading, its retries with no deadline, a found child kept
-while no record is free, and a child under a claim or an unaccepted
-eject keeping the sweep.
+transaction, never queried again; a vanished child's refused claim
+made the transaction; a parked claim resumed for its removal alone and
+taken over by a start); two members, one held while the other's work
+goes on; the sweep's reading, its retries with no deadline, a found child
+kept while no record is free, and a child under a claim or an unaccepted
+eject kept and made a record when its holder lets go.
 
 *Legs* (on 98 SE and ME with the bundled Stor98, under the ICM client and
 under the USB4 profile): an unplug with a file open on the drive (the
