@@ -4162,24 +4162,45 @@ static void test_storage(void)
     stor_fill(st, INST_STOR_ABSENT);
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_NONE &&
           inst_stor_route(INST_STOR_CASE_NONE), "none: the route");
-    CHECK(inst_stor_default(0, 0, st), "none found: ticked");
-    CHECK(!inst_stor_default(1, 0, st), "a recorded No is kept");
+    CHECK(inst_stor_default(0, 0, 0, st), "none found: ticked");
+    CHECK(!inst_stor_default(0, 1, 0, st), "a recorded No is kept");
+    /* NUSB installed (its Uninstall\USB20U entry; owner, 2026-10-22):
+     * unticked with no file found, and over a recorded Yes. */
+    CHECK(!inst_stor_default(1, 0, 0, st), "NUSB installed, none found: unticked");
+    CHECK(!inst_stor_default(1, 1, 1, st),
+          "NUSB installed: a recorded Yes does not tick it");
+    CHECK(!inst_stor_default(1, 1, 0, st), "NUSB installed, a recorded No");
     CHECK(inst_stor_copy_set(1, st, 0) == 0x1FUL,
           "none: the five binaries copied, never an INF");
     CHECK(inst_stor_copy_set(0, st, 0) == 0, "unticked: nothing copied");
     inst_stor_found_text(text, sizeof(text), st);
     CHECK(strstr(text, "Not installed") != NULL, "none: the text");
+    /* The row's note: the same without NUSB; with it, the sentence that
+     * NUSB is installed and the row can be left unticked. */
+    inst_stor_note_text(text, sizeof(text), st, 0);
+    CHECK(strcmp(text, "Not installed: USB disks do not work on Windows 98 "
+                 "SE without them.") == 0, "none, no NUSB: the note");
+    inst_stor_note_text(text, sizeof(text), st, 1);
+    CHECK(strcmp(text, "Not installed: USB disks do not work on Windows 98 "
+                 "SE without them. NUSB is installed on this computer "
+                 "(found its Uninstall\\USB20U entry). It already provides "
+                 "the USB storage drivers, so you can leave this "
+                 "unticked.") == 0, "none, NUSB installed: the note");
 
     stor_fill(st, INST_STOR_SAME);
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE &&
           !inst_stor_route(INST_STOR_CASE_COMPLETE), "complete: nothing");
-    CHECK(!inst_stor_default(0, 0, st), "found: unticked");
-    CHECK(inst_stor_default(1, 1, st), "a recorded Yes is kept");
+    CHECK(!inst_stor_default(0, 0, 0, st), "found: unticked");
+    CHECK(inst_stor_default(0, 1, 1, st), "a recorded Yes is kept");
+    CHECK(!inst_stor_default(1, 0, 0, st), "found, NUSB installed: unticked");
     CHECK(inst_stor_copy_set(1, st, 0) == 0, "complete: nothing copied");
     inst_stor_found_text(text, sizeof(text), st);
     CHECK(strstr(text, "Found installed: USBSTOR.SYS,") != NULL &&
           strstr(text, "left as they are") != NULL &&
           strstr(text, "not known") == NULL, "complete: the text");
+    inst_stor_note_text(text, sizeof(text), st, 1);
+    CHECK(strstr(text, "left as they are. " INST_STOR_NUSB_TEXT) != NULL &&
+          strlen(text) < 300, "complete, NUSB installed: the note");
     st[1] = INST_STOR_OTHER;
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE,
           "complete whatever the bytes");
@@ -4193,7 +4214,7 @@ static void test_storage(void)
     st[INST_STOR_IDX_USBSTOR_INF] = INST_STOR_SAME;
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_SAME &&
           inst_stor_route(INST_STOR_CASE_SAME), "partial, the same: the route");
-    CHECK(!inst_stor_default(0, 0, st), "partial: unticked");
+    CHECK(!inst_stor_default(0, 0, 0, st), "partial: unticked");
     CHECK(inst_stor_copy_set(1, st, 0) == 0x1EUL,
           "partial, the same: only the absent binaries copied");
     inst_stor_found_text(text, sizeof(text), st);
@@ -4223,7 +4244,7 @@ static void test_storage(void)
     stor_fill(st, INST_STOR_OWN);
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_OWN &&
           inst_stor_route(INST_STOR_CASE_OWN), "this installer's: the route");
-    CHECK(inst_stor_default(0, 0, st), "this installer's are not found");
+    CHECK(inst_stor_default(0, 0, 0, st), "this installer's are not found");
     CHECK(inst_stor_copy_set(1, st, 0) == 0,
           "this installer's: nothing present replaced");
     inst_stor_found_text(text, sizeof(text), st);
@@ -4290,10 +4311,13 @@ static void test_storage(void)
                         bad = 1;
                     }
                 }
-                /* The default: ticked exactly when nothing is found. */
-                if (inst_stor_default(0, 0, st) != (found == 0) ||
-                    !inst_stor_default(1, 1, st) ||
-                    inst_stor_default(1, 0, st)) {
+                /* The default: ticked exactly when nothing is found, and
+                 * never while NUSB is installed. */
+                if (inst_stor_default(0, 0, 0, st) != (found == 0) ||
+                    !inst_stor_default(0, 1, 1, st) ||
+                    inst_stor_default(0, 1, 0, st) ||
+                    inst_stor_default(1, 0, 0, st) ||
+                    inst_stor_default(1, 1, 1, st)) {
                     bad = 1;
                 }
                 if (bad) {
@@ -4359,7 +4383,7 @@ static void test_storage(void)
           "without Source: complete");
     inst_stor_norm(st, 1);
     CHECK(st[0] == INST_STOR_OWN && inst_stor_case(st, 0) == INST_STOR_CASE_OWN &&
-          inst_stor_route(inst_stor_case(st, 1)) && inst_stor_default(0, 0, st),
+          inst_stor_route(inst_stor_case(st, 1)) && inst_stor_default(0, 0, 0, st),
           "with Source: this installer's, the route");
     stor_fill(st, INST_STOR_SAME);
     st[1] = INST_STOR_OTHER;

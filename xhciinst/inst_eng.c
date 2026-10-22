@@ -4864,7 +4864,7 @@ static int package_files(PKG_EACH each, void *ctx)
         }
         FindClose(h);
     }
-    /* 98 SE: the USB storage drivers' seven, from the download's NONFREE\
+    /* 98 SE: the USB storage drivers' seven, from the download's NUSB33\
      * folder, once their files are in place (record 26 section 6.5.4). */
     if (!envNow.Nt && storCopyOk) {
         int i;
@@ -16927,7 +16927,8 @@ static void stor_read(void)
     storPack = stor_pack_check();
     stor_read_states(storSt);
     storPlanCase = inst_stor_case(storSt, storSource);
-    storDefault = inst_stor_default(storHaveChoice, (int)storChoice, storSt);
+    storDefault = inst_stor_default(storUsb20u, storHaveChoice,
+                                    (int)storChoice, storSt);
     if (storPack <= 0) {
         storInclude = 0;
     } else if (opts.Storage) {
@@ -16946,7 +16947,7 @@ static void stor_note(char *out, size_t cap)
 {
     if (storPack == 0) {
         inst_copy(out, "This download does not carry the USB storage drivers "
-                  "(NONFREE\\STORAGE\\NUSB33\\W98SE).", cap);
+                  "(NUSB33\\W98SE).", cap);
         return;
     }
     if (storPack < 0) {
@@ -16954,11 +16955,7 @@ static void stor_note(char *out, size_t cap)
                   "this release carries (the log names them).", cap);
         return;
     }
-    inst_stor_found_text(out, cap, storSt);
-    if (storUsb20u) {
-        strncat(out, " NUSB is installed (its Uninstall\\USB20U entry is "
-                "there).", cap - strlen(out) - 1);
-    }
+    inst_stor_note_text(out, cap, storSt, storUsb20u);
 }
 
 /* What a ticked run does, one sentence (the plan, the Summary). */
@@ -19614,7 +19611,7 @@ static void st_screens_once(int longest)
         storUsb20u = 1;
         storSource = 0;
         storPlanCase = inst_stor_case(storSt, 0);
-        storDefault = inst_stor_default(0, 0, storSt);
+        storDefault = inst_stor_default(storUsb20u, 0, 0, storSt);
         storInclude = storDefault;
 
         /* /list */

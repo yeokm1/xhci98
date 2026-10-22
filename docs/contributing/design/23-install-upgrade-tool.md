@@ -1,6 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
+Status: revision 27, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
+NUSB apart from the non-free driver pack: the seven storage files are read
+from the download's own `NUSB33\W98SE\`, beside the version root, no longer
+`NONFREE\STORAGE\NUSB33\W98SE\`; section 4.4, record 26 draft 22); revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
 draft 20 section 5.3.1: every component on every system, the defaults as
 they are, a warning where one does not apply; sections 4.5 and 7.1, and
 decision D18 amended); revision 25, 2026-10-21 (roadmap-usb4 task 43.42, record 26
@@ -746,7 +749,7 @@ selects one.
 **The USB storage drivers on 98 SE (revision 24).** When record 26
 section 6.5's row is ticked and its case admits the same-bytes route,
 the copy of 98 SE also takes the seven files of the download's
-`NONFREE\STORAGE\NUSB33\W98SE\` (`package_files`, from that folder),
+`NUSB33\W98SE\` (`package_files`, from that folder),
 listed as the package's own files are, and only once the five binaries
 are in place where their INFs send them; otherwise it takes none of
 them, and when an earlier run had put them there (the record's

@@ -1,6 +1,12 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 21, 2026-10-21 (roadmap-usb4 task 43.10, the owner's
+Status: draft 22, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
+NUSB apart from the non-free driver pack: the seven are read from the
+download's own `NUSB33\W98SE\` beside the version root, no longer
+`NONFREE\STORAGE\NUSB33\W98SE\`, sections 6.5 and 6.5.1; record 23
+revision 27; and, the owner's requirement of the same day, the row's
+default unticked while NUSB is installed, ahead of a recorded choice,
+sections 6.5.2 and 6.5.3); draft 21, 2026-10-21 (roadmap-usb4 task 43.10, the owner's
 request of 2026-10-20: the settings pages laid out from their own font
 and size, the open lists as wide as their longest entry, three rows a
 part and more parts where needed, the note six lines at least; section
@@ -472,7 +478,7 @@ Check boxes, one a line, each with one sentence:
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
 | Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
-| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone until draft 20, and from draft 20 on every system, unticked by default but on 98 SE, ticked elsewhere with section 5.3.1's warning and its files then only copied to the tools folder; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
+| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | no while NUSB is installed (its `Uninstall\USB20U` entry; task 43.51, owner, 2026-10-22), ahead of an earlier run's recorded choice, and the note says the user can leave it unticked; otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone, never on ME, 2000 or later; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -1214,7 +1220,8 @@ Code 2, because `xhciuas.inf` names `USBNTMAP.SYS` as an upper filter and
 NTKERN fails a devnode whose named filter is missing (`runs/run-28.md`,
 "Windows 98 SE with no USB 2.0 stack, and with SweetLow's alone"). From `3.2.0.0` the release
 download carries NUSB 3.3's seven storage files at its root as
-`NONFREE\` (task 43.3; `legal-provenance.md` section 5, "NUSB 3.3's
+`NUSB33\`, a folder of its own and never inside a `NONFREE\` (task 43.3;
+owner, 2026-10-22; `legal-provenance.md` section 5, "NUSB 3.3's
 Windows 98 SE storage files"), and the installer offers them. The owner's
 decisions of 2026-10-20: selectable, so a user who already has NUSB need
 not install them; on 98 SE only, ME and later using their own drivers;
@@ -1232,9 +1239,9 @@ text; nothing here edits them):
 
 #### 6.5.1 Where the files come from
 
-From the download's `NONFREE\STORAGE\NUSB33\W98SE\` beside the version
-root, the package root of record 23 section 4.2 (owner, 2026-10-20; task
-43.3), read by those seven names alone and each held to its SHA-256 in a
+From the download's `NUSB33\W98SE\` beside the version root, the
+package root of record 23 section 4.2 (owner, 2026-10-20, and 2026-10-22
+for the folder; task 43.3), read by those seven names alone and each held to its SHA-256 in a
 table the installer carries (`instStorFile`, `inst_core.c`: the seven
 names, their destinations and the hashes of `legal-provenance.md`
 section 5's table, which `scripts\package\test-package.ps1` holds equal
@@ -1245,7 +1252,7 @@ carries the pack), the row is shown on 98 SE greyed, its note saying that
 this download does not carry the USB storage drivers; where a file is
 missing or its bytes differ, greyed with "the storage files in this
 download are not the ones this release carries", the log naming each.
-Nothing in `NONFREE\` but the seven is read.
+Nothing in `NUSB33\` but the seven is read, and nothing in a `NONFREE\`.
 
 #### 6.5.2 The row
 
@@ -1259,7 +1266,12 @@ needs these files for every USB disk: Bulk-Only disks, and UAS disks
 under xhciuas.sys too (its INF names USBNTMAP.SYS as a filter; without
 it a UAS disk stays at Code 2). Install them unless NUSB is installed."
 Under it the detection's line (section 6.5.3) and, when NUSB's uninstall
-entry is there, a second line saying so. The default is section 6.5.3's;
+entry is there, a sentence after it (`inst_stor_note_text`,
+host-tested; owner, 2026-10-22): "NUSB is installed on this computer
+(found its Uninstall\USB20U entry). It already provides the USB storage
+drivers, so you can leave this unticked." The same note is on the
+Components row, the Summary and the console's plan and question. The
+default is section 6.5.3's;
 the box can be ticked or unticked whatever was found, and ticked it never
 copies over a file already present (section 6.5.4).
 
@@ -1297,13 +1309,18 @@ CurrentVersion\Uninstall\USB20U` (static: NUSB 3.3's `_NUSB.INF` line
 129 and 3.6's line 145 write it; NUSB's `_USB2UN.INF` deletes it with
 the USB 2.0 stack's three files and leaves the storage files), is read
 and recorded apart from the files: it is said under the row and in the
-log, it decides neither the default nor what is copied, and while it is
-present the uninstall deletes none of the seven (section 6.5.8).
+log, it unticks the default (below) but does not decide what is copied,
+and while it is present the uninstall deletes none of the seven (section
+6.5.8).
 
-**The default** (`inst_stor_default`): an earlier run's recorded choice
-when there is one (section 6.5.7); otherwise ticked when none of the
-seven is found (every file absent or this installer's), and unticked
-when any is.
+**The default** (`inst_stor_default`): unticked while NUSB's
+`Uninstall\USB20U` entry is there, ahead of everything else (owner,
+2026-10-22: a choice an earlier run recorded before NUSB was installed,
+or NUSB with its storage files missing or removed, no longer ticks it;
+`/storage` still does, and a ticked run still copies over no file
+present); otherwise an earlier run's recorded choice when there is one
+(section 6.5.7); otherwise ticked when none of the seven is found (every
+file absent or this installer's), and unticked when any is.
 
 **The text** (`inst_stor_found_text`, host-tested), on the row, the
 Found page and the Summary, and in the console's question: none found -
@@ -2191,7 +2208,9 @@ which waits.
 - (draft 17) the USB storage drivers of section 6.5: the seven's table
   (names, destinations, SHA-256s) against `legal-provenance.md` section
   5's; `inst_stor_state` for each state; `inst_stor_default` (none found
-  ticked, any found unticked, a recorded choice kept either way);
+  ticked, any found unticked, a recorded choice kept either way, and
+  from draft 22 unticked whenever NUSB is installed: none found, a
+  recorded Yes, the files the same);
   `inst_stor_found_text` for none, some (the "not known to be ready"
   sentence, and never "ready"), all and this installer's;
   `inst_stor_case` over every combination; `inst_stor_copy_set` (which

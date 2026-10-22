@@ -1665,7 +1665,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
 #define INST_STOR_DIR_DRIVERS   0   /* %windir%\SYSTEM32\DRIVERS (dirid 10) */
 #define INST_STOR_DIR_IOS       1   /* the system directory's IOSUBSYS (12) */
 #define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
-#define INST_STOR_PACK_DIR      "NONFREE\\STORAGE\\NUSB33\\W98SE"
+#define INST_STOR_PACK_DIR      "NUSB33\\W98SE"
 #define INST_STOR_KEY           "Software\\xhci98\\Storage"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
@@ -1713,9 +1713,11 @@ int inst_stor_case(const int st[INST_STOR_COUNT], int source);
 /* 1 when the case admits the same-bytes route (copies, the package's copy
  * of the seven, the device jobs). */
 int inst_stor_route(int storCase);
-/* The row's default: a recorded choice when there is one, else ticked only
+/* The row's default: unticked while NUSB is installed (usb20u, its
+ * Uninstall\USB20U entry), whatever was recorded or found (owner,
+ * 2026-10-22); else a recorded choice when there is one, else ticked only
  * when none of the seven is found (absent or this installer's). */
-int inst_stor_default(int haveChoice, int choice,
+int inst_stor_default(int usb20u, int haveChoice, int choice,
                       const int st[INST_STOR_COUNT]);
 /* The binaries a ticked run copies, a bit per index: on the route, each
  * absent one; never a present one, never an INF. */
@@ -1731,6 +1733,15 @@ INST_U32 inst_stor_inf_set(int copyOk, const int named[2]);
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,
                           const int st[INST_STOR_COUNT]);
+/* The row's note on every page and in the console: the detection's text,
+ * and with usb20u (NUSB's Uninstall\USB20U entry) a sentence saying NUSB
+ * is installed and the row can be left unticked (owner, 2026-10-22). */
+#define INST_STOR_NUSB_TEXT \
+    "NUSB is installed on this computer (found its Uninstall\\USB20U " \
+    "entry). It already provides the USB storage drivers, so you can " \
+    "leave this unticked."
+void inst_stor_note_text(char *out, size_t cap,
+                         const int st[INST_STOR_COUNT], int usb20u);
 
 /* A device's storage kind by its ids (record 26 section 6.5.5). */
 #define INST_STOR_KIND_NONE     0

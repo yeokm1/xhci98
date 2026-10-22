@@ -598,9 +598,12 @@ Windows 2000 CD to the floppy - the media still carries none of them
 `legal-provenance.md` section 5 records why. **One exception is decided for
 `3.2.0.0`** (owner, 2026-10-20): NUSB 3.3's seven Windows 98 SE storage
 files, unmodified, from the separate driver-pack repository
-`usb-wdm-nonfree`, staged by task 43.3 with the pack's `NOTICE.md` into
-the upload set alone, at the download's root as `NONFREE\` (owner,
-2026-10-20), and never into a package, a commit or
+`usb-wdm-nonfree` (its top-level `nusb33/`, kept apart from the pack's
+`non-free/`), staged by task 43.3 with their `nusb33/NOTICE.md` into
+the upload set alone, at the download's root as `NUSB33\`, a folder of its
+own beside the installer and never inside a `NONFREE\` (owner, 2026-10-20;
+the folder 2026-10-22: NUSB is kept apart from the non-free pack, in the
+pack's repository and in the download), and never into a package, a commit or
 `releases\<version>\`. The `OS-*` and `PKG-MSFILE` rules stay as they are
 for this project's own files; they name none of the seven
 (roadmap-usb4 tasks 43.1 to 43.3;
@@ -774,8 +777,9 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. The one exception
   since is decided for `3.2.0.0` (owner, 2026-10-20) and recorded there:
   NUSB 3.3's seven Windows 98 SE storage files, unmodified, in the release
-  download only, from the driver pack `usb-wdm-nonfree` with its
-  `NOTICE.md`, never in a commit, and with no licence to redistribute them
+  download only, in its own `NUSB33\` folder, from `usb-wdm-nonfree`'s
+  `nusb33/` (kept apart from its `non-free/` pack, owner 2026-10-22) with
+  their `NOTICE.md`, never in a commit, and with no licence to redistribute them
   established; the generated readme says which kind of download it is.
   **Do not put any other Microsoft file onto the media or the download,
   under any name, without a decision recorded there**, and do not write
