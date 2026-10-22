@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 26, 2026-10-22 (the owner's simplification of that day: Welcome, Components, Summary, Progress, Steps, Finish, the settings pages replaced by one Settings dialog, room for roadmap 43.48's rows, section 5.0); draft 25, 2026-10-22 (roadmap-usb4 task 43.29, the owner: on 8 and 8.1 `xhciuas.inf` staged, never forced, section 5.3.1 case 3a); draft 24, 2026-10-22 (roadmap-usb4 task 43.42, the owner: no
+Status: draft 27, 2026-10-22 (roadmap-usb4 task 43.5's finding, the
+owner's answer of that day: the two storage INFs all or nothing wherever
+Windows finds them, since `USBSTOR.INF` alone lets a stock 98 SE's own
+`NTMAP.INF` take the disk unit and stop Windows; the `DISKDRV.INF`
+premise and the "Disk drive" note withdrawn, sections 6.5.4, 6.5.5,
+6.5.6, 6.5.8, 6.5.11 and 14); draft 26, 2026-10-22 (the owner's simplification of that day: Welcome, Components, Summary, Progress, Steps, Finish, the settings pages replaced by one Settings dialog, room for roadmap 43.48's rows, section 5.0); draft 25, 2026-10-22 (roadmap-usb4 task 43.29, the owner: on 8 and 8.1 `xhciuas.inf` staged, never forced, section 5.3.1 case 3a); draft 24, 2026-10-22 (roadmap-usb4 task 43.42, the owner: no
 preselection of XhciSilentInstall, section 6.5.12 item 2; record 23
 revision 29); draft 23, 2026-10-22 (roadmap-usb4 task 43.43, the owner's
 answers of that day: every proposal of section 5.3.1 accepted but the
@@ -1509,7 +1514,9 @@ route and only for the binaries (`inst_stor_copy_set`, host-tested); until
 draft 19 the two INFs were never copied into `INF` or `INF\OTHER` by the
 installer - the setup engine makes its `INF\OTHER` copies (record 23
 section 6.1), and from draft 19 the installer places them in `INF`
-itself after the binaries (section 6.5.11). Each absent
+itself after the binaries, `USBNTMAP.INF` before `USBSTOR.INF` and never
+one without the other (section 6.5.11; draft 27, section 6.5.5's pair
+rule). Each absent
 binary is written beside its destination as `<name>.TMP`, compared byte
 for byte with the download's, its record value written (section 6.5.6),
 and only then renamed to its name with `MoveFileA`, which fails when the
@@ -1608,30 +1615,67 @@ in the run it installs the storage devices present, in record 27 section
 - **Units, the settle and the rebind**: after the UAS step a settle
   (record 23 section 5.8's, as each pass has), and then each present
   unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom` or `USBSTOR\GenSfloppy`
-  among its ids) not bound to `USBMPHLP.PDR` that has no driver or
-  Windows' own generic binding is installed by the package directory's
-  `USBNTMAP.INF`. Windows binds a first disk to its generic "Disk drive"
-  before it has seen `USBNTMAP.INF` (the release notes and
-  `runs/run-28.md`: no drive letter until Update Driver moves it to "USB
-  Disk", then a replug), so that binding is the case this step exists
-  for. It is read, every value readable, as the driver key of class
-  `DiskDrive` with no `PortDriver` and no `NTMPDriver`, its `InfPath`
-  exactly `DISKDRV.INF` and that file in `%windir%\INF` itself (98 SE's
-  own disk-drive INF; `inst_stor_unit_takes`). That INF's name is
-  expected, not yet read; 43.5's legs read it, and until they do a unit
-  bound any other way - another INF, another loader, a value that cannot
-  be read - is left, so a wrong guess leaves the disk at "Disk drive"
-  (the release notes' hand step) rather than rebinding another driver's
-  device. The helper's job moves it to "USB Disk"; then a settle, and the
-  unit is read back: `PortDriver` `USBMPHLP.PDR`, started, no problem
-  code. A unit read back bound but not started gets one step, "unplug
-  the disk and plug it in again" (the replug of run-28's reading), exit
-  4. Units appear only once their parent's driver has started, so this
-  step follows the Bulk-Only and UAS steps and their settle; a unit that
-  appears in a later settle of the run is taken in the same way before
-  the run ends.
+  among its ids) with no driver at all is installed by the package
+  directory's `USBNTMAP.INF`; a unit bound any way is left
+  (`inst_stor_unit_takes`). Until draft 27 the step also took a unit at
+  Windows' generic "Disk drive" (`DISKDRV.INF`), on the premise that
+  Windows binds a first disk there before it has seen `USBNTMAP.INF`
+  (`runs/run-28.md`, read on a 98 SE that still held NUSB's other files,
+  whose `NTMAP.INF` is gone). On a stock 98 SE that premise is wrong
+  (43.5's legs, 2026-10-22, below), so the branch is retired: with the
+  pair rule below no unit of this installer's ever appears before
+  `USBNTMAP.INF` is findable, and a unit someone else bound is not this
+  installer's to rebind. The helper's job moves a unit with no driver to
+  "USB Disk"; then a settle, and the unit is read back: `PortDriver`
+  `USBMPHLP.PDR`, started, no problem code. A unit read back bound but
+  not started gets one step, "unplug the disk and plug it in again" (the
+  replug of run-28's reading), exit 4. Units appear only once their
+  parent's driver has started, so this step follows the Bulk-Only and UAS
+  steps and their settle; a unit that appears in a later settle of the
+  run is taken in the same way before the run ends.
 - **CBI and CB devices** (floppy drives, `Prot_00` and `Prot_01`) are not
   installed by the helper: they bind at their plug from `DevicePath`.
+
+**The hazard, and the pair all or nothing** (roadmap-usb4 task 43.5's
+legs, 2026-10-22, on a stock 98 SE image; the owner's answer the same
+day). With `USBSTOR.INF` findable and no `USBNTMAP.INF`, a Bulk-Only
+stick installs from `USBSTOR.INF` and its unit, `USBSTOR\GenDisk`, is
+taken silently by the stock `NTMAP.INF` ("1394/USB Disk", `DevLoader`
+`*IOS`, `PortDriver` `NTMAPHLP.PDR`), which copies `NTMAPHLP.PDR`
+4.10.2222 from the Windows CD; Windows then stops with "Invalid VxD
+dynamic link call from NTMAPHLP(02) + 00000002 to device "004F", service
+1" and hangs (runtime, the guest's screen; the unit's devnode was lost
+with the power cut). With `USBNTMAP.INF` findable as well, every unit
+read went to `USBNTMAP.INF`, "USB Disk". So the two INFs are all or
+nothing wherever Windows can find them:
+
+- **`%windir%\INF`** (section 6.5.11): `USBNTMAP.INF` placed first and
+  `USBSTOR.INF` only once a `USBNTMAP.INF` is in place there
+  (`instStorCopyOrder`); when the run ends its placement with one of the
+  two there and this run placed it, the one placed is withdrawn under
+  section 6.5.4's protections, the package directory on `DevicePath`
+  stays the route, and a step is left (exit 4); a half that is not this
+  installer's (another's `USBSTOR.INF` alone) is never deleted, and also
+  leaves a step.
+- **The package directory on `DevicePath`** (record 23 section 9.6): the
+  directory is named only once its copy is whole, and its list copies
+  `USBNTMAP.INF` before `USBSTOR.INF` and deletes `USBSTOR.INF` first,
+  `USBNTMAP.INF` only once `USBSTOR.INF` is gone (`flat_remove_list`), so
+  a copy or a removal cut short never holds `USBSTOR.INF` alone.
+- **The helper's Bulk-Only step** runs only when the package's copy
+  holds `USBNTMAP.INF` of the download's bytes and the INF directories do
+  not hold a copy of `USBSTOR.INF` without one of `USBNTMAP.INF`
+  (`inst_stor_bulk_admit`); otherwise the devices are not installed, a
+  step is left, and the run says to run the installer again.
+- **The withdrawal and the uninstall** remove in the reverse order: every
+  copy of `USBSTOR.INF` first (the placed ones and the setup engine's
+  `INF\OTHER` copies, sections 6.5.4 and 6.5.8), then `USBNTMAP.INF`'s,
+  each only while no copy of `USBSTOR.INF` is left in `INF` or
+  `INF\OTHER` (by name or by its text, section 6.5.3; `inst_stor_rm_late`).
+  One that stays beside a `USBSTOR.INF` is said; in a run it stays
+  recorded for the next, and in the uninstall its record goes (it is
+  left as another's would be). A reading that fails stops the
+  withdrawal as before, and leaves the uninstall's copy for its next run.
 
 **Absent devices** bind at their first plug through Windows' own
 detection. Until draft 19 that was from the package directory on
@@ -1640,18 +1684,15 @@ detection. Until draft 19 that was from the package directory on
 `C:\XHCI98\USBSTOR.INF` without a prompt), or the silent install where
 `XhciSilentInstall` is on (record 23 section 8.1). From draft 19 the
 two INFs are in `%windir%\INF` as well, where NUSB's installer puts
-them, so that Windows finds the driver as it does under NUSB, with no
-wizard (section 6.5.11; that it does is the reading of 43.5's first
-leg taken again). The files are already in place, so the engine's copy
-writes the same bytes. Whether a first disk then
-lands on "USB Disk" or on "Disk drive" is a reading of 43.5's legs; when
-no unit of this run was bound to `USBMPHLP.PDR` (so the setup engine has
-not yet installed `USBNTMAP.INF` from the package directory), the Finish
-page and the console's end say once that if the first USB disk plugged
-in later shows as "Disk drive" with no drive letter, running the
-installer again moves it to "USB Disk" (the unit step above, on an
-update over this install), or Update Driver on it pointed at the install
-directory does, then a replug. This is a note, not a step.
+them (section 6.5.11; 43.5's legs, 2026-10-22: the wizard still opens
+there unless `XhciSilentInstall` is on, section 6.5.12). The files are
+already in place, so the engine's copy writes the same bytes, and the
+unit of a first disk lands on "USB Disk" from `USBNTMAP.INF` (the same
+legs). Until draft 27 the Finish page and the console's end said that a
+first disk showing as "Disk drive" could be moved by running the
+installer again; with the premise gone that note is withdrawn, and a
+storage device left with no driver gets the existing step (Update
+Driver, or the install directory given to the wizard).
 
 #### 6.5.6 The record
 
@@ -1711,8 +1752,9 @@ directory does, then a replug. This is a note, not a step.
 - `Devices`: one value per devnode the installer first bound to the
   storage drivers (data `bulk` or `unit`). Ownership goes by first
   binding, as section 6.3 has it for Stor98: a device the baseline read
-  as present with no driver ("Unknown Device"), or a unit at Windows'
-  generic "Disk drive", or not present at all, that the helper's job
+  as present with no driver ("Unknown Device"), or not present at all
+  (draft 27: no longer a unit at Windows' generic "Disk drive", section
+  6.5.5), that the helper's job
   then bound to `USBSTOR.SYS` or `USBMPHLP.PDR` is recorded on that
   evidence; one Windows bound during a settle of the run is recorded
   when the reading after the settle shows it newly bound and its
@@ -1806,6 +1848,9 @@ nothing it does not own. In section 9.3 step 4's order:
    follow the same rules in the same step - its bytes still the recorded
    ones, `USB20U` absent, no driver key naming it - each deleted with its
    `.PNF`; they have no `OEM Name` value, so none is touched for them.
+   Every copy of `USBSTOR.INF` goes first, then `USBNTMAP.INF`'s, each
+   only while no copy of `USBSTOR.INF` is left (draft 27, section 6.5.5's
+   pair rule).
    NUSB's own uninstall deletes an INF of its from `%windir%\INF` the same
    way, by name (static: `_USB2UN.INF`'s `DelFiles` of `USB2.INF` from
    dirid 17); what the setup engine's index holds after such a deletion
@@ -2462,8 +2507,10 @@ which waits.
   `inst_stor_case` over every combination; `inst_stor_copy_set` (which
   binaries are copied in each case, none in complete and partial-other,
   never a present one); `inst_stor_kind` and `inst_stor_unit_takes` on
-  the ids and driver keys of section 6.5.5 (a foreign `DiskDrive` binding
-  left); the case with `Source` recorded (a partial-same install, then
+  the ids and driver keys of section 6.5.5 (draft 27: a unit with no
+  driver taken, every bound one left); (draft 27) the pair rule of
+  section 6.5.5, `instStorCopyOrder` (`USBNTMAP.INF` before `USBSTOR.INF`),
+  `inst_stor_rm_late`, `inst_stor_pair` and `inst_stor_bulk_admit`; the case with `Source` recorded (a partial-same install, then
   every file present, then an update: the route, not complete); and
   `inst_stor_remove` (which files are removed: a recorded file with its
   hash, no user and no `USB20U`, and each reason one is kept); the row's
@@ -2680,7 +2727,9 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   the same bytes, and what it does with a file in use; where the engine
   copies `USBSTOR.INF` and `USBNTMAP.INF` from the package directory and
   under which `OEM Name` value; which INF Windows' generic "Disk drive"
-  binding names; whether a first plug after the install lands on "USB
+  binding names (draft 27: on a stock 98 SE none, the stock `NTMAP.INF`
+  takes a unit when `USBNTMAP.INF` is not findable, and stops Windows;
+  section 6.5.5); whether a first plug after the install lands on "USB
   Disk" or "Disk drive", with and without `XhciSilentInstall`; whether the
   unit rebind starts the unit or needs the replug; that a UAS devnode at
   Code 2 starts after the shut down; and whether a stock 98 SE needs any

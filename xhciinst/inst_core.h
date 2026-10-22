@@ -1724,6 +1724,27 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
  * (named[0] USBSTOR.INF, named[1] USBNTMAP.INF: 1 a file of the name is
  * there, -1 unreadable, either keeping it out). */
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2]);
+/* The two INFs are all or nothing wherever Windows can find them (record
+ * 26 section 6.5.5; roadmap-usb4 task 43.5): USBSTOR.INF without
+ * USBNTMAP.INF lets 98 SE's own NTMAP.INF take the disk unit, and its
+ * NTMAPHLP.PDR stops Windows. The order the seven are copied and placed:
+ * the binaries, USBNTMAP.INF, USBSTOR.INF last; they are deleted in the
+ * reverse order of the two INFs (USBSTOR.INF first). */
+extern const int instStorCopyOrder[INST_STOR_COUNT];
+/* 1 when a file (by its name, or NULL and its recorded SHA-256) is
+ * USBNTMAP.INF, deleted only once USBSTOR.INF of the same place is gone. */
+int inst_stor_rm_late(const char *name, const char *sha256);
+/* The pair in one place: stor and ntmap 1 present, 0 absent, -1 unread. */
+#define INST_STOR_PAIR_NONE     0
+#define INST_STOR_PAIR_BOTH     1
+#define INST_STOR_PAIR_STOR     2   /* USBSTOR.INF alone: the hazard     */
+#define INST_STOR_PAIR_NTMAP    3   /* USBNTMAP.INF alone                */
+int inst_stor_pair(int stor, int ntmap);
+/* The helper's Bulk-Only step admitted: the package's copy made with the
+ * seven (copyOk), its USBNTMAP.INF of the download's bytes (ntmapPkg 1),
+ * and %windir%\INF not holding USBSTOR.INF without USBNTMAP.INF (infPair,
+ * an INST_STOR_PAIR_* or -1 unread). */
+int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair);
 /* The SilentClasses entries the storage row adds on 98 SE (record 26
  * section 6.5.12, task 43.42 option A): USBSTOR.INF's generic Bulk-Only
  * lines, each a 4-byte entry of design record 13 section 6.11's form. */
@@ -1751,14 +1772,10 @@ void inst_stor_found_text(char *out, size_t cap,
 #define INST_STOR_KIND_UNIT     2   /* USBSTOR\GenDisk, GenCdRom, GenSfloppy */
 int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes);
-/* A unit's binding: 1 when the helper takes it - no driver, or Windows'
- * generic disk binding, every value read (readable): class DiskDrive, no
- * PortDriver and no NTMPDriver ("" for none), its InfPath exactly
- * DISKDRV.INF and that file in %windir%\INF itself; 0 when it is left
- * (USBMPHLP.PDR's already, or anything else, or a value unread). */
-int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
-                         const char *portDriver, const char *ntmpDriver,
-                         const char *infPath, int infInWindowsInf);
+/* A unit's binding: 1 when the helper takes it, a unit with no driver;
+ * 0 when it is left, bound any way at all (record 26 section 6.5.5: a
+ * stock 98 SE never binds a unit to DISKDRV.INF, task 43.5). */
+int inst_stor_unit_takes(int hasDriver);
 /* With the record's Source (an earlier run put the seven in the package
  * directory), a file of the download's bytes is this installer's own
  * deployment, not another installation: made own, in place, before the

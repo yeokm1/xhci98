@@ -4877,8 +4877,10 @@ static int package_files(PKG_EACH each, void *ctx)
      * folder, once their files are in place (record 26 section 6.5.4). */
     if (!envNow.Nt && storCopyOk) {
         int i;
+        /* USBNTMAP.INF before USBSTOR.INF, so a copy cut short never holds
+         * USBSTOR.INF alone (record 26 section 6.5.5). */
         for (i = 0; i < INST_STOR_COUNT; i++) {
-            if (!each(instStorFile[i].Name, ctx)) {
+            if (!each(instStorFile[instStorCopyOrder[i]].Name, ctx)) {
                 return 0;
             }
         }
@@ -5160,6 +5162,33 @@ static int flat_listed(const char *dir, const char *lst, const char *name)
     return found;
 }
 
+/* One file of a list deleted, an .inf with its .PNF. 1 gone; 0 it stayed
+ * (said). */
+static int flat_delete(char *file)
+{
+    size_t n;
+    int gone;
+
+    SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+    if (DeleteFileA(file)) {
+        flagChanged = 1;
+    }
+    gone = GetFileAttributesA(file) == 0xFFFFFFFFUL;
+    if (!gone) {
+        out("%s could not be deleted (error %lu).\n", file,
+            (unsigned long)GetLastError());
+    }
+    n = strlen(file);
+    if (n > 4 && inst_eq(file + n - 4, ".inf")) {
+        strcpy(file + n - 4, ".PNF");
+        SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+        if (DeleteFileA(file)) {
+            flagChanged = 1;
+        }
+    }
+    return gone;
+}
+
 /* The files dir\lst names (each .inf with its .PNF) deleted, then lst -
  * only when every one of them is gone, so a file that would not go stays
  * named for the next run. Only plain names: a list never reaches outside
@@ -5172,8 +5201,8 @@ static int flat_remove_list(const char *dir, const char *lst)
     char *text;
     char *p;
     char *nl;
-    size_t n;
     int left = 0;
+    int late = 0;
 
     join(path, sizeof(path), dir, lst);
     text = read_file(path, NULL);
@@ -5196,26 +5225,33 @@ static int flat_remove_list(const char *dir, const char *lst)
             inst_eq(p, inst_tray_file(INST_MY_ARCH))) {
             continue;
         }
+        /* USBNTMAP.INF after the rest, once USBSTOR.INF is gone (record
+         * 26 section 6.5.5). */
+        if (inst_stor_rm_late(p, NULL)) {
+            late = 1;
+            continue;
+        }
         join(file, sizeof(file), dir, p);
-        SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
-        if (DeleteFileA(file)) {
-            flagChanged = 1;
-        }
-        if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
-            out("%s could not be deleted (error %lu).\n", file,
-                (unsigned long)GetLastError());
+        if (!flat_delete(file)) {
             left = 1;
-        }
-        n = strlen(file);
-        if (n > 4 && inst_eq(file + n - 4, ".inf")) {
-            strcpy(file + n - 4, ".PNF");
-            SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
-            if (DeleteFileA(file)) {
-                flagChanged = 1;
-            }
         }
     }
     free(text);
+    if (late) {
+        join(file, sizeof(file), dir,
+             instStorFile[INST_STOR_IDX_USBSTOR_INF].Name);
+        if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+            out("%s stays while %s is there.\n",
+                instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name, file);
+            left = 1;
+        } else {
+            join(file, sizeof(file), dir,
+                 instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name);
+            if (!flat_delete(file)) {
+                left = 1;
+            }
+        }
+    }
     if (left) {
         flagSteps = 1;
         return 0;
@@ -17410,6 +17446,7 @@ static int stor_before_write(void)
 static void stor_run_begin_body(void);
 static void stor_place_infs(void);
 static void stor_inf_named(int which[2]);
+static int stor_inf_found(int i);
 
 /* The INFs this installer placed in %windir%\INF (the record's Placed),
  * withdrawn under section 6.5.8 step 3's protections (sections 6.5.4 and
@@ -17432,6 +17469,8 @@ static int stor_unplace(void)
     int named;
     int e;
     int h;
+    int pass;
+    int found = 0;
 
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_USB20U_KEY, 0, KEY_READ,
                       &u);
@@ -17439,53 +17478,78 @@ static int stor_unplace(void)
         RegCloseKey(u);
     }
     usb20u = r != ERROR_FILE_NOT_FOUND;
-    for (;;) {
-        e = stor_rec_enum("Placed", i, name, sizeof(name), data, sizeof(data));
-        if (e < 0) {
-            return 0;
-        }
-        if (e == 0) {
-            return 1;
-        }
-        h = stor_hash(name, hex);
-        if (h < 0) {
-            out("%s cannot be read.\n", name);
-            return 0;
-        }
-        if (h > 0 && inst_eq(hex, data) && !usb20u) {
-            base = strrchr(name, '\\');
-            base = base != NULL ? base + 1 : name;
-            named = s98_inf_named_9x(base);
-            if (named < 0) {
-                out("%s: whether a device names it cannot be read.\n", name);
+    /* USBSTOR.INF first; USBNTMAP.INF only once no copy of USBSTOR.INF is
+     * left where Windows finds it (record 26 section 6.5.5). */
+    for (pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            found = stor_inf_found(INST_STOR_IDX_USBSTOR_INF);
+            if (found < 0) {
+                out("Whether USBSTOR.INF is still in the INF directory cannot be "
+                    "read.\n");
                 return 0;
             }
-            if (named > 0) {
-                logonly("storage: %s stays placed: a device names it\n", name);
-                out("%s stays: a device names it (the uninstall removes it "
-                    "after the device).\n", name);
+        }
+        for (i = 0;;) {
+            e = stor_rec_enum("Placed", i, name, sizeof(name), data, sizeof(data));
+            if (e < 0) {
+                return 0;
+            }
+            if (e == 0) {
+                break;
+            }
+            if (inst_stor_rm_late(NULL, data) != pass) {
                 i++;
                 continue;
             }
-            own_variant(name, ".PNF", pnf, sizeof(pnf));
-            if (file_state(pnf) < 0 ||
-                (file_state(pnf) > 0 && !delete_file(pnf)) ||
-                !delete_file(name)) {
-                out("%s could not be deleted (error %lu).\n", name,
-                    (unsigned long)GetLastError());
+            h = stor_hash(name, hex);
+            if (h < 0) {
+                out("%s cannot be read.\n", name);
                 return 0;
             }
-            flagChanged = 1;
-            out("Deleted %s.\n", name);
-        } else if (h > 0) {
-            out("%s stays: %s.\n", name, usb20u ?
-                "NUSB is installed (Uninstall\\USB20U)" :
-                "it has changed since this installer placed it");
-        }
-        if (!stor_rec_del("Placed", name)) {
-            return 0;
+            if (h > 0 && found) {
+                logonly("storage: %s stays placed: USBSTOR.INF is still there\n",
+                        name);
+                out("%s stays while USBSTOR.INF is in the INF directory.\n",
+                    name);
+                i++;
+                continue;
+            }
+            if (h > 0 && inst_eq(hex, data) && !usb20u) {
+                base = strrchr(name, '\\');
+                base = base != NULL ? base + 1 : name;
+                named = s98_inf_named_9x(base);
+                if (named < 0) {
+                    out("%s: whether a device names it cannot be read.\n", name);
+                    return 0;
+                }
+                if (named > 0) {
+                    logonly("storage: %s stays placed: a device names it\n", name);
+                    out("%s stays: a device names it (the uninstall removes it "
+                        "after the device).\n", name);
+                    i++;
+                    continue;
+                }
+                own_variant(name, ".PNF", pnf, sizeof(pnf));
+                if (file_state(pnf) < 0 ||
+                    (file_state(pnf) > 0 && !delete_file(pnf)) ||
+                    !delete_file(name)) {
+                    out("%s could not be deleted (error %lu).\n", name,
+                        (unsigned long)GetLastError());
+                    return 0;
+                }
+                flagChanged = 1;
+                out("Deleted %s.\n", name);
+            } else if (h > 0) {
+                out("%s stays: %s.\n", name, usb20u ?
+                    "NUSB is installed (Uninstall\\USB20U)" :
+                    "it has changed since this installer placed it");
+            }
+            if (!stor_rec_del("Placed", name)) {
+                return 0;
+            }
         }
     }
+    return 1;
 }
 
 /* 0 when the run must stop before the package's copy: an earlier
@@ -17717,18 +17781,42 @@ static void stor_inf_named(int which[2])
     }
 }
 
+/* The INF at index i in %windir%\INF under its own name: 1, 0, -1. */
+static int stor_inf_here(int i)
+{
+    char path[INST_PATH_CHARS];
+    int s;
+
+    if (!stor_dest(i, path, sizeof(path))) {
+        return -1;
+    }
+    s = file_state(path);
+    return s > 0 ? 1 : s;
+}
+
 static void stor_place_infs(void)
 {
     int named[2];
     INST_U32 set;
     int i;
-
+    int k;
+    int ours = 0;
+    int pair;
     int st[INST_STOR_COUNT];
 
     stor_inf_named(named);
     set = inst_stor_inf_set(storCopyOk, named);
-    for (i = INST_STOR_BINARIES; i < INST_STOR_COUNT; i++) {
+    /* USBNTMAP.INF first, and USBSTOR.INF only once it is there: never
+     * USBSTOR.INF alone, which lets 98 SE's own NTMAP.INF take the disk
+     * unit (record 26 section 6.5.5). */
+    for (k = INST_STOR_BINARIES; k < INST_STOR_COUNT; k++) {
+        i = instStorCopyOrder[k];
         if ((set & (1UL << i)) == 0) {
+            continue;
+        }
+        if (i == INST_STOR_IDX_USBSTOR_INF &&
+            stor_inf_here(INST_STOR_IDX_USBNTMAP_INF) != 1) {
+            storInfMissed = 1;
             continue;
         }
         if (stor_place(i)) {
@@ -17738,9 +17826,30 @@ static void stor_place_infs(void)
                 stor_rec_dword("Published", 1);
             }
             storInfPlaced = 1;
+            ours = 1;
         } else {
             storInfMissed = 1;
         }
+    }
+    /* The pair in %windir%\INF whole or not there: a half this run made is
+     * withdrawn, and a step is left. */
+    pair = inst_stor_pair(stor_inf_here(INST_STOR_IDX_USBSTOR_INF),
+                          stor_inf_here(INST_STOR_IDX_USBNTMAP_INF));
+    if (ours && pair != INST_STOR_PAIR_BOTH) {
+        out("The USB storage drivers' two INFs could not both be put in the "
+            "INF directory:\nneither is left there.\n");
+        if (!stor_unplace()) {
+            out("The one placed could not be withdrawn. Run the installer "
+                "again.\n");
+        }
+        storInfPlaced = 0;
+        storInfMissed = 1;
+        storStepsLeft = 1;
+    } else if (pair != INST_STOR_PAIR_BOTH && pair != INST_STOR_PAIR_NONE) {
+        logonly("storage: the INFs in the INF directory are not a pair "
+                "(%d)\n", pair);
+        storInfMissed = 1;
+        storStepsLeft = 1;
     }
     /* The route read again after the moves, and when nothing was moved:
      * a file of other bytes that appeared meanwhile makes it
@@ -17783,50 +17892,38 @@ static void stor_copy_made(void)
 
 static int stor_takes_unit(const DEVREC *d)
 {
-    char path[INST_PATH_CHARS];
-    char cls[64];
-    char port[64];
-    char ntmp[64];
-    char inf[INST_PATH_CHARS];
-    char win[INST_PATH_CHARS];
-    char *slash;
-    int readable = 1;
-    int inWin = 0;
-    int r;
+    return inst_stor_unit_takes(!(d->Driver[0] == '\0' ||
+                                  (d->Problem == 28UL &&
+                                   d->Service[0] == '\0')));
+}
 
-    if (d->Driver[0] == '\0' || (d->Problem == 28UL && d->Service[0] == '\0')) {
-        return inst_stor_unit_takes(0, 0, NULL, NULL, NULL, NULL, 0);
+/* 1 when a copy of the INF at index i is in INF or INF\OTHER, by its name
+ * or its text; 0 none; -1 the directories could not be read. */
+static int stor_inf_found(int i)
+{
+    int s;
+
+    if (!stor_inf_states(i, &s)) {
+        return -1;
     }
-    inst_copy(cls, d->Driver, sizeof(cls));
-    slash = strchr(cls, '\\');
-    if (slash == NULL) {
-        readable = 0;
-    } else {
-        *slash = '\0';
-    }
-    driver_key_path(d, path, sizeof(path));
-    r = reg_text3(HKEY_LOCAL_MACHINE, path, "PortDriver", port, sizeof(port));
-    if (r == 0) {
-        port[0] = '\0';
-    } else if (r < 0) {
-        readable = 0;
-    }
-    r = reg_text3(HKEY_LOCAL_MACHINE, path, "NTMPDriver", ntmp, sizeof(ntmp));
-    if (r == 0) {
-        ntmp[0] = '\0';
-    } else if (r < 0) {
-        readable = 0;
-    }
-    if (d->InfPathState <= 0) {
-        readable = 0;
-    } else if (strchr(d->InfPath, '\\') == NULL &&
-               GetWindowsDirectoryA(win, sizeof(win)) != 0) {
-        join(inf, sizeof(inf), win, "INF");
-        join(inf, sizeof(inf), inf, d->InfPath);
-        inWin = file_state(inf) > 0;
-    }
-    return inst_stor_unit_takes(1, readable, cls, port, ntmp, d->InfPath,
-                                inWin);
+    return s != INST_STOR_ABSENT;
+}
+
+/* The helper's Bulk-Only step admitted (record 26 section 6.5.5): the
+ * package's copy holds USBNTMAP.INF of the download's bytes, and the INF
+ * directories do not hold USBSTOR.INF without it. */
+static int stor_bulk_ok(void)
+{
+    char from[INST_PATH_CHARS];
+    char to[INST_PATH_CHARS];
+    const char *n = instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name;
+
+    join(from, sizeof(from), storPackDir, n);
+    join(to, sizeof(to), srcDir, n);
+    return inst_stor_bulk_admit(storCopyOk, same_file(from, to) ? 1 : 0,
+                                inst_stor_pair(
+                                    stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                                    stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)));
 }
 
 static int stor_job_index(const char *id)
@@ -17957,6 +18054,14 @@ static int stor_stage(int kind, int *first)
         stor_record();
     }
     if (!stor_any(kind)) {
+        return 1;
+    }
+    if (kind == INST_STOR_KIND_BULK && !stor_bulk_ok()) {
+        out("The USB storage devices are not installed now: USBNTMAP.INF is "
+            "not where Windows\nfinds USBSTOR.INF. Run the installer "
+            "again.\n");
+        logonly("storage: the Bulk-Only step not admitted\n");
+        storStepsLeft = 1;
         return 1;
     }
     if (!gate_9x(1)) {
@@ -18238,7 +18343,6 @@ static void stor_record(void)
 static void stor_run_end(void)
 {
     int i;
-    int unitBound = 0;
 
     if (!storHere || storPack <= 0) {
         return;
@@ -18251,24 +18355,10 @@ static void stor_run_end(void)
                 stor_bound(d, INST_STOR_KIND_UNIT) != 1) {
                 continue;
             }
-            unitBound = 1;
             if ((d->Status & INST_DN_STARTED) == 0 || d->Problem != 0) {
                 out("\n%s\n  Unplug the disk and plug it in again: it starts "
                     "as \"USB Disk\" then.\n", d->Desc[0] ? d->Desc : d->Id);
                 storStepsLeft = 1;
-            }
-        }
-        if (!unitBound) {
-            /* A copy of USBNTMAP.INF the setup engine made for this
-             * installer: a unit was bound from it, and later ones are. */
-            char vn[INST_PATH_CHARS];
-            char vd[96];
-            DWORD vi;
-            for (vi = 0; stor_rec_enum("Infs", vi, vn, sizeof(vn), vd,
-                                       sizeof(vd)) > 0; vi++) {
-                if (inst_eq(vd, instStorFile[INST_STOR_IDX_USBNTMAP_INF].Sha256)) {
-                    unitBound = 1;
-                }
             }
         }
         /* Every storage device still without its driver (the helper not
@@ -18281,26 +18371,11 @@ static void stor_run_end(void)
                 stor_bound(d, k) != 0) {
                 continue;
             }
-            if (k == INST_STOR_KIND_UNIT && d->Driver[0] != '\0') {
-                out("\n%s\n  Still \"Disk drive\": in Device Manager, Disk "
-                    "drives, open it, Driver, Update\n  Driver, \"Display a "
-                    "list of all the drivers\", Have Disk, type %s,\n  choose "
-                    "\"USB Disk\"; then unplug the disk and plug it in "
-                    "again.\n", d->Desc[0] ? d->Desc : d->Id, toolDir);
-            } else {
-                out("\n%s\n  No driver yet: in Device Manager open it, "
-                    "Driver, Update Driver, and let\n  the wizard search, or "
-                    "give it the folder %s.\n",
-                    d->Desc[0] ? d->Desc : d->Id, toolDir);
-            }
+            out("\n%s\n  No driver yet: in Device Manager open it, "
+                "Driver, Update Driver, and let\n  the wizard search, or "
+                "give it the folder %s.\n",
+                d->Desc[0] ? d->Desc : d->Id, toolDir);
             storStepsLeft = 1;
-        }
-        if (!unitBound && !opts.List) {
-            out("\nUSB storage: if the first USB disk you plug in shows as "
-                "\"Disk drive\" with no\ndrive letter, run the installer "
-                "again (it moves it to \"USB Disk\"), or use\nUpdate Driver on "
-                "it with %s, then unplug it and plug it in again.\n",
-                toolDir);
         }
     }
     if (storCopyOk && !opts.List && !silent_gate_on()) {
@@ -18900,6 +18975,8 @@ static int stor_un_rest(void)
     int e;
     int left = 0;
     int sub;
+    int pass;
+    int found = 0;
     HKEY u;
     LONG r;
 
@@ -18913,34 +18990,144 @@ static int stor_un_rest(void)
         return 0;
     }
     /* The INF copies, each with its .PNF and its one OEM Name value; then
-     * the INFs placed in %windir%\INF (Placed, no OEM Name value). */
-    for (sub = 0; sub < 2; sub++) {
-        const char *key = sub == 0 ? "Infs" : "Placed";
-        for (i = 0;;) {
-            int named;
-            int h;
-            e = stor_rec_enum(key, i, name, sizeof(name), data, sizeof(data));
-            if (e < 0) {
-                flagFailed = 1;
-                return 0;
-            }
-            if (e == 0) {
-                break;
-            }
-            h = stor_hash(name, hex);
-            if (h == 0) {
-                /* The copy is gone (an earlier run deleted it, or by hand):
-                 * its exact OEM Name value goes, then the record's. */
-                if (opts.List) {
-                    out("(/list) %s is gone; %s.\n", name, sub == 0 ?
-                        "its OEM Name value would be removed" :
-                        "it would be forgotten");
+     * the INFs placed in %windir%\INF (Placed, no OEM Name value). Every
+     * copy of USBSTOR.INF first, then USBNTMAP.INF's, each only once no
+     * copy of USBSTOR.INF is left where Windows finds it (record 26 section
+     * 6.5.5). */
+    for (pass = 0; pass < 2; pass++) {
+        if (pass == 1 && !opts.List) {
+            found = stor_inf_found(INST_STOR_IDX_USBSTOR_INF);
+        }
+        for (sub = 0; sub < 2; sub++) {
+            const char *key = sub == 0 ? "Infs" : "Placed";
+            for (i = 0;;) {
+                int named;
+                int h;
+                e = stor_rec_enum(key, i, name, sizeof(name), data, sizeof(data));
+                if (e < 0) {
+                    flagFailed = 1;
+                    return 0;
+                }
+                if (e == 0) {
+                    break;
+                }
+                if (inst_stor_rm_late(NULL, data) != pass) {
                     i++;
                     continue;
                 }
+                h = stor_hash(name, hex);
+                if (h > 0 && found != 0) {
+                    if (found < 0) {
+                        out("  %s: whether USBSTOR.INF is still in the INF "
+                            "directory cannot be read; it\n  stays for now.\n",
+                            name);
+                        flagFailed = 1;
+                        left = 1;
+                        i++;
+                        continue;
+                    }
+                    out("  %s stays: USBSTOR.INF is still in the INF "
+                        "directory.\n", name);
+                    if (!stor_rec_del(key, name)) {
+                        return 0;
+                    }
+                    continue;
+                }
+                if (h == 0) {
+                    /* The copy is gone (an earlier run deleted it, or by hand):
+                     * its exact OEM Name value goes, then the record's. */
+                    if (opts.List) {
+                        out("(/list) %s is gone; %s.\n", name, sub == 0 ?
+                            "its OEM Name value would be removed" :
+                            "it would be forgotten");
+                        i++;
+                        continue;
+                    }
+                    if (sub == 0 && !stor_oem_forget(name)) {
+                        out("  The setup engine's record of %s could not be "
+                            "removed.\n", name);
+                        flagFailed = 1;
+                        left = 1;
+                        i++;
+                        continue;
+                    }
+                    if (!stor_rec_del(key, name)) {
+                        return 0;
+                    }
+                    continue;
+                }
+                inst_copy(rel, name, sizeof(rel));
+                {
+                    char base[INST_PATH_CHARS];
+                    WIN32_FIND_DATAA fd;
+                    HANDLE fh;
+                    join(base, sizeof(base), win, "INF\\");
+                    if (inst_eqn(name, base, strlen(base))) {
+                        inst_copy(rel, name + strlen(base), sizeof(rel));
+                    }
+                    fh = FindFirstFileA(name, &fd);
+                    if (fh != INVALID_HANDLE_VALUE) {
+                        char *s = strrchr(rel, '\\');
+                        FindClose(fh);
+                        if (s != NULL) {
+                            s[1] = '\0';
+                        } else {
+                            rel[0] = '\0';
+                        }
+                        strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
+                    }
+                }
+                named = h > 0 ? s98_inf_named_9x(rel) : -1;
+                if (h < 0 || named < 0) {
+                    out("  %s: whether a device names it cannot be read; it stays "
+                        "for now.\n", name);
+                    flagFailed = 1;
+                    left = 1;
+                    i++;
+                    continue;
+                }
+                if (!inst_eq(hex, data) || storUsb20u || named > 0) {
+                    out("  %s stays: %s.\n", name, !inst_eq(hex, data) ?
+                        "its bytes changed" : storUsb20u ?
+                        "NUSB is installed (Uninstall\\USB20U)" :
+                        "a device still names it");
+                    if (opts.List) {
+                        i++;
+                        continue;
+                    }
+                    if (!stor_rec_del(key, name)) {
+                        return 0;
+                    }
+                    continue;
+                }
+                if (opts.List) {
+                    out("(/list) %s would be deleted.\n", name);
+                    i++;
+                    continue;
+                }
+                inst_copy(pnf, name, sizeof(pnf));
+                if (strlen(pnf) > 4) {
+                    strcpy(pnf + strlen(pnf) - 4, ".PNF");
+                }
+                if (file_state(pnf) < 0 ||
+                    (file_state(pnf) > 0 && !delete_file(pnf)) ||
+                    !delete_file(name)) {
+                    out("  %s could not be deleted (error %lu): restart Windows, "
+                        "then run the uninstall\n  again.\n", name,
+                        (unsigned long)GetLastError());
+                    flagRestart = 1;
+                    flagSteps = 1;
+                    left = 1;
+                    i++;
+                    continue;
+                }
+                out("Deleted %s.\n", name);
+                flagChanged = 1;
                 if (sub == 0 && !stor_oem_forget(name)) {
-                    out("  The setup engine's record of %s could not be "
-                        "removed.\n", name);
+                    /* The record stays: the next run finds the copy gone and
+                     * removes the value then. */
+                    out("  The setup engine's record of it could not be removed "
+                        "now.\n");
                     flagFailed = 1;
                     left = 1;
                     i++;
@@ -18949,87 +19136,6 @@ static int stor_un_rest(void)
                 if (!stor_rec_del(key, name)) {
                     return 0;
                 }
-                continue;
-            }
-            inst_copy(rel, name, sizeof(rel));
-            {
-                char base[INST_PATH_CHARS];
-                WIN32_FIND_DATAA fd;
-                HANDLE fh;
-                join(base, sizeof(base), win, "INF\\");
-                if (inst_eqn(name, base, strlen(base))) {
-                    inst_copy(rel, name + strlen(base), sizeof(rel));
-                }
-                fh = FindFirstFileA(name, &fd);
-                if (fh != INVALID_HANDLE_VALUE) {
-                    char *s = strrchr(rel, '\\');
-                    FindClose(fh);
-                    if (s != NULL) {
-                        s[1] = '\0';
-                    } else {
-                        rel[0] = '\0';
-                    }
-                    strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
-                }
-            }
-            named = h > 0 ? s98_inf_named_9x(rel) : -1;
-            if (h < 0 || named < 0) {
-                out("  %s: whether a device names it cannot be read; it stays "
-                    "for now.\n", name);
-                flagFailed = 1;
-                left = 1;
-                i++;
-                continue;
-            }
-            if (!inst_eq(hex, data) || storUsb20u || named > 0) {
-                out("  %s stays: %s.\n", name, !inst_eq(hex, data) ?
-                    "its bytes changed" : storUsb20u ?
-                    "NUSB is installed (Uninstall\\USB20U)" :
-                    "a device still names it");
-                if (opts.List) {
-                    i++;
-                    continue;
-                }
-                if (!stor_rec_del(key, name)) {
-                    return 0;
-                }
-                continue;
-            }
-            if (opts.List) {
-                out("(/list) %s would be deleted.\n", name);
-                i++;
-                continue;
-            }
-            inst_copy(pnf, name, sizeof(pnf));
-            if (strlen(pnf) > 4) {
-                strcpy(pnf + strlen(pnf) - 4, ".PNF");
-            }
-            if (file_state(pnf) < 0 ||
-                (file_state(pnf) > 0 && !delete_file(pnf)) ||
-                !delete_file(name)) {
-                out("  %s could not be deleted (error %lu): restart Windows, "
-                    "then run the uninstall\n  again.\n", name,
-                    (unsigned long)GetLastError());
-                flagRestart = 1;
-                flagSteps = 1;
-                left = 1;
-                i++;
-                continue;
-            }
-            out("Deleted %s.\n", name);
-            flagChanged = 1;
-            if (sub == 0 && !stor_oem_forget(name)) {
-                /* The record stays: the next run finds the copy gone and
-                 * removes the value then. */
-                out("  The setup engine's record of it could not be removed "
-                    "now.\n");
-                flagFailed = 1;
-                left = 1;
-                i++;
-                continue;
-            }
-            if (!stor_rec_del(key, name)) {
-                return 0;
             }
         }
     }

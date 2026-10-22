@@ -4923,19 +4923,24 @@ and NUSB 3.6 install:
 
   THE SEVEN FILES CAN ALSO BE INSTALLED ON THEIR OWN, without the rest of
   NUSB: point the Add New Hardware Wizard, or Update Driver on the device,
-  at a folder holding them. ON THE FIRST STORAGE DEVICE, ONE STEP IS NOT
-  OBVIOUS. Windows gives the new disk its own generic "Disk drive" before it
-  has seen USBNTMAP.INF, and no drive letter appears. Then:
+  at a folder holding them. KEEP ALL SEVEN IN THAT ONE FOLDER, AND NEVER
+  USBSTOR.INF WITHOUT USBNTMAP.INF: on a stock Windows 98 SE, a disk
+  installed from USBSTOR.INF alone is taken by Windows' own NTMAP.INF,
+  which copies NTMAPHLP.PDR from the Windows CD, and Windows then stops
+  with "Invalid VxD dynamic link call from NTMAPHLP" and hangs. The
+  installer's storage row never leaves one INF without the other.
+
+  With both INFs in the folder, the storage devices tried, USB sticks and
+  UAS disks, worked with no extra step. On a Windows 98 SE that still held
+  NUSB's other files (IOS.VXD, DISKTSD.VXD, NTMAP.SYS), a disk installed
+  before USBNTMAP.INF was seen went to Windows' generic "Disk drive" with
+  no drive letter instead. Then:
 
     1. Device Manager -> Disk drives -> "Disk drive" -> Driver -> Update
        Driver, pointed at the same folder. It installs "USB Disk".
     2. Unplug the device and plug it back in.
 
-  After that the storage devices tried, USB sticks and UAS disks, worked
-  with no extra step. THIS WAS READ ONLY ON A WINDOWS 98 SE THAT STILL HELD
-  NUSB'S OTHER FILES (IOS.VXD, DISKTSD.VXD, NTMAP.SYS). Whether a stock
-  Windows 98 SE installed from the CD needs any of those too is not yet
-  known; if storage does not work there, install NUSB 3.3 or 3.6.
+  If storage does not work, install NUSB 3.3 or 3.6.
 
 On Windows ME, Windows' own storage files serve USB sticks: they are copied
 from the Windows ME CABs when the first stick installs. UAS disks need the

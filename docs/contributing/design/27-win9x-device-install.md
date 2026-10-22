@@ -1,6 +1,10 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 11, 2026-10-21 (roadmap-usb4 task 43.42: the installer,
+Status: draft 12, 2026-10-22 (roadmap-usb4 task 43.5's finding: a
+storage unit is taken only with no driver, the "Disk drive" rebind
+retired, and the Bulk-Only step admitted only with `USBNTMAP.INF`
+findable beside `USBSTOR.INF`, record 26 section 6.5.5; steps 3a and 4a);
+draft 11, 2026-10-21 (roadmap-usb4 task 43.42: the installer,
 not the helper, places the pack's two storage INFs in `%windir%\INF`
 on 98 SE, record 26 section 6.5.11; sections 2 and 8 say where that
 stands against the driver index; the helper unchanged); draft 10, 2026-10-20 (roadmap-usb4 task 43.4: on Windows 98 SE
@@ -82,9 +86,9 @@ steps", and this record says how, with what, and what it may not do.
   interface (`xhcicm.inf`), and, when the user ticks it, the bundled
   Stor98's NVMe devices (record 26 section 6.3); on Windows 98 SE, when
   the user ticks the USB storage drivers (record 26 section 6.5, draft
-  10), a Bulk-Only device with no driver and a storage unit with none or
-  with Windows' generic "Disk drive", by the pack's own INFs from the
-  install directory; each a present devnode (section 6).
+  10), a Bulk-Only device with no driver and a storage unit with none
+  (draft 12: no longer one at Windows' generic "Disk drive"), by the
+  pack's own INFs from the install directory; each a present devnode (section 6).
 - The removal of a devnode, present or not, for the uninstall (section 9).
 - The toolchain and its place in the build and the cut (section 3), its
   provenance rows (section 3.4), the helper's interface to the installer
@@ -757,7 +761,10 @@ plan goes on.
    run is waited for, the tree settled, and the job made once more before
    it is a step (record 23 section 5.8, revision 14).
 3a. **Bulk-Only devices** (draft 10; on 98 SE, only when record 26
-   section 6.5's row is ticked and its case allows a copy): each present
+   section 6.5's row is ticked and its case allows a copy, and (draft 12)
+   only while the install directory holds `USBNTMAP.INF` and the INF
+   directories hold no `USBSTOR.INF` without it, record 26 section
+   6.5.5): each present
    devnode with a Bulk-Only id (`USB\Class_08&SubClass_02&Prot_50`,
    `SubClass_05`, `SubClass_06`) that no INF of this package matches and
    that has no driver, by `USBSTOR.INF` from the install directory, after
@@ -771,10 +778,9 @@ plan goes on.
    step, so a UAS disk installed here starts with its filter.
 4a. **Storage units** (draft 10; on 98 SE, as step 3a): after a settle,
    each present unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom` or
-   `USBSTOR\GenSfloppy` among its ids) not bound to `USBMPHLP.PDR` that
-   has no driver or Windows' generic "Disk drive" binding, by
-   `USBNTMAP.INF` from the install directory: the move of a first disk
-   from "Disk drive" to "USB Disk" (record 26 section 6.5.5); then a
+   `USBSTOR\GenSfloppy` among its ids) with no driver, by
+   `USBNTMAP.INF` from the install directory, "USB Disk" (draft 12: a
+   unit bound any way is left; record 26 section 6.5.5); then a
    settle and the read-back, a unit bound but not started given the
    replug step. A unit that appears in a later settle of the run is
    taken the same way.

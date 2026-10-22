@@ -305,12 +305,17 @@ device at a time, and do not cycle a device rapidly.
 | 5.7 | A UAS storage device | On a USB 3.x connector: plug in; on its first arrival a New Hardware wizard asks for its driver - point it at the same `release` directory. Vista's wizard names the device by its own product string, and it becomes "xHCI98 USB Attached SCSI Storage" once installed. Windows 7 shows no wizard: it searches Windows Update and reports the device was not installed; install it from Device Manager on the device's entry (Update Driver Software, Browse my computer for driver software, the same directory). Round-trip a file, unplug, plug it back in | It installs with no restart, a drive letter appears, and the file reads back with matching contents. On Windows 98 SE without NUSB's mass-storage component it sits at Code 2; that is the missing prerequisite (`readme.txt` section 3), so record it and SKIP. If the device offers both transports, also record which driver Device Manager shows; `XhciForceBulkOnly` is `readme.txt` section 9 and is not this clause |
 | 5.8 | A SuperSpeed device | On a USB 3.x connector: plug in, round-trip a file. Keep it plugged in for step 8 | It works, with matching contents. Its SuperSpeed is read at 8.8 from the driver's snapshot, not from Device Manager, which shows `High` at most |
 
-On Windows 98 SE, the first storage device installed from NUSB's five
-mass-storage files on their own, rather than from an NUSB install, takes one
-step more: Windows binds the new disk to its generic "Disk drive" and no drive
-letter appears until that entry is updated to "USB Disk" and the device
-replugged (`readme.txt` section 3). That is a reading of the prerequisite and
-not a failure of 5.2 or 5.7; record that it was needed.
+On Windows 98 SE, NUSB's seven mass-storage files installed by hand, rather
+than from an NUSB install or the installer's storage row, are kept together
+in one folder: `USBSTOR.INF` without `USBNTMAP.INF` lets a stock Windows 98
+SE's own `NTMAP.INF` take the disk, and Windows stops with "Invalid VxD
+dynamic link call from NTMAPHLP" (the release notes). On a Windows 98 SE that
+still holds NUSB's other files, the first storage device installed before
+`USBNTMAP.INF` was seen takes one step more: Windows binds the new disk to its
+generic "Disk drive" and no drive letter appears until that entry is updated
+to "USB Disk" and the device replugged (`readme.txt` section 3). That is a
+reading of the prerequisite and not a failure of 5.2 or 5.7; record that it
+was needed.
 
 If a device is only noticed after pressing Refresh in Device Manager: record
 it, take step 7's idle hot-plug check now, and say in the record that it was

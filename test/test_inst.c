@@ -4290,25 +4290,62 @@ static void test_storage(void)
     strcpy(ids, "USBSTOR\\GenDisk");
     CHECK(inst_stor_kind(ids, strlen(ids) + 2, NULL, 0) ==
           INST_STOR_KIND_UNIT, "a unit");
-    CHECK(inst_stor_unit_takes(0, 0, NULL, NULL, NULL, NULL, 0),
-          "a unit with no driver");
-    CHECK(inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "diskdrv.inf", 1),
-          "Windows' generic Disk drive");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "DISKDRV.INF", 0),
-          "a DISKDRV.INF not in INF itself: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "OEMDISK.INF", 1),
-          "a foreign DiskDrive binding: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "VENDOR.SYS",
-                                "DISKDRV.INF", 1),
-          "a DiskDrive binding with a WDM driver: left");
-    CHECK(!inst_stor_unit_takes(1, 0, "DiskDrive", "", "", "DISKDRV.INF", 1),
-          "a value unread: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "Storage", "USBMPHLP.PDR", "",
-                                "OTHER\\MICROS~1.INF", 0),
-          "USB Disk already: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "OTHER.PDR", "",
-                                "DISKDRV.INF", 1),
-          "another port driver: left");
+    CHECK(inst_stor_unit_takes(0), "a unit with no driver");
+    CHECK(!inst_stor_unit_takes(1),
+          "a unit bound any way (DISKDRV.INF included): left");
+
+    /* The pair all or nothing (record 26 section 6.5.5, task 43.5): the
+     * order, the late removal, the pair and the Bulk-Only gate. */
+    {
+        int k;
+        int ntmap = -1;
+        int usbstor = -1;
+        for (k = 0; k < INST_STOR_COUNT; k++) {
+            if (instStorCopyOrder[k] == INST_STOR_IDX_USBNTMAP_INF) {
+                ntmap = k;
+            } else if (instStorCopyOrder[k] == INST_STOR_IDX_USBSTOR_INF) {
+                usbstor = k;
+            } else {
+                CHECK(instStorCopyOrder[k] == k && k < INST_STOR_BINARIES,
+                      "order: the binaries first, in their order");
+            }
+        }
+        CHECK(ntmap == INST_STOR_BINARIES && usbstor == INST_STOR_COUNT - 1,
+              "order: USBNTMAP.INF before USBSTOR.INF, USBSTOR.INF last");
+    }
+    CHECK(inst_stor_rm_late("USBNTMAP.INF", NULL) &&
+          inst_stor_rm_late("usbntmap.inf", NULL),
+          "late: USBNTMAP.INF by name, any case");
+    CHECK(!inst_stor_rm_late("USBSTOR.INF", NULL) &&
+          !inst_stor_rm_late("USBMPHLP.PDR", NULL),
+          "late: USBSTOR.INF and the binaries first");
+    CHECK(inst_stor_rm_late(NULL,
+              instStorFile[INST_STOR_IDX_USBNTMAP_INF].Sha256),
+          "late: a copy of USBNTMAP.INF's bytes");
+    CHECK(!inst_stor_rm_late(NULL,
+              instStorFile[INST_STOR_IDX_USBSTOR_INF].Sha256) &&
+          !inst_stor_rm_late(NULL, NULL) && !inst_stor_rm_late(NULL, ""),
+          "late: USBSTOR.INF's bytes, or nothing recorded: first");
+    CHECK(inst_stor_pair(0, 0) == INST_STOR_PAIR_NONE &&
+          inst_stor_pair(1, 1) == INST_STOR_PAIR_BOTH &&
+          inst_stor_pair(1, 0) == INST_STOR_PAIR_STOR &&
+          inst_stor_pair(0, 1) == INST_STOR_PAIR_NTMAP,
+          "pair: none, both, USBSTOR.INF alone, USBNTMAP.INF alone");
+    CHECK(inst_stor_pair(-1, 1) == -1 && inst_stor_pair(1, -1) == -1,
+          "pair: a side unread is unread");
+    CHECK(inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_BOTH) &&
+          inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_NONE) &&
+          inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_NTMAP),
+          "bulk: the package's USBNTMAP.INF, the INF directory no hazard");
+    CHECK(!inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_STOR),
+          "bulk: USBSTOR.INF alone in the INF directory refuses");
+    CHECK(!inst_stor_bulk_admit(1, 0, INST_STOR_PAIR_BOTH) &&
+          !inst_stor_bulk_admit(1, -1, INST_STOR_PAIR_BOTH),
+          "bulk: the package's USBNTMAP.INF missing or unread refuses");
+    CHECK(!inst_stor_bulk_admit(0, 1, INST_STOR_PAIR_BOTH),
+          "bulk: no package copy of the seven refuses");
+    CHECK(!inst_stor_bulk_admit(1, 1, -1),
+          "bulk: the INF directory unread refuses");
 
     /* An update with Source recorded: the engine's later copies, and a
      * file of the download's bytes the first run found and kept, are this

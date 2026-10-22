@@ -6171,6 +6171,37 @@ INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
     return set;
 }
 
+const int instStorCopyOrder[INST_STOR_COUNT] = {
+    0, 1, 2, 3, 4, INST_STOR_IDX_USBNTMAP_INF, INST_STOR_IDX_USBSTOR_INF
+};
+
+int inst_stor_rm_late(const char *name, const char *sha256)
+{
+    const INST_STOR_FILE *f = &instStorFile[INST_STOR_IDX_USBNTMAP_INF];
+
+    if (name != NULL) {
+        return inst_eq(name, f->Name);
+    }
+    return sha256 != NULL && inst_eq(sha256, f->Sha256);
+}
+
+int inst_stor_pair(int stor, int ntmap)
+{
+    if (stor < 0 || ntmap < 0) {
+        return -1;
+    }
+    if (stor) {
+        return ntmap ? INST_STOR_PAIR_BOTH : INST_STOR_PAIR_STOR;
+    }
+    return ntmap ? INST_STOR_PAIR_NTMAP : INST_STOR_PAIR_NONE;
+}
+
+int inst_stor_bulk_admit(int copyOk, int ntmapPkg, int infPair)
+{
+    return copyOk && ntmapPkg == 1 && infPair >= 0 &&
+           infPair != INST_STOR_PAIR_STOR;
+}
+
 static void inst_stor_names(char *out, size_t cap,
                             const int st[INST_STOR_COUNT])
 {
@@ -6259,20 +6290,9 @@ int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
     return INST_STOR_KIND_NONE;
 }
 
-int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
-                         const char *portDriver, const char *ntmpDriver,
-                         const char *infPath, int infInWindowsInf)
+int inst_stor_unit_takes(int hasDriver)
 {
-    if (!hasDriver) {
-        return 1;
-    }
-    if (!readable || cls == NULL || portDriver == NULL ||
-        ntmpDriver == NULL || infPath == NULL) {
-        return 0;
-    }
-    return inst_eq(cls, "DiskDrive") && portDriver[0] == '\0' &&
-           ntmpDriver[0] == '\0' && inst_eq(infPath, "DISKDRV.INF") &&
-           infInWindowsInf;
+    return !hasDriver;
 }
 
 int inst_stor_adoptable(int published, int beforeOk, int inBefore,

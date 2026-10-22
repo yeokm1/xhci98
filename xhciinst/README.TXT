@@ -144,9 +144,11 @@ the seven is found, and unticked when any of them is there; the
 installer never copies over a file already present, and with only some
 of the seven found, one of them not this download's, it copies nothing
 and says the storage install is not complete. It installs a stick at
-"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". It
-also puts the two INFs, USBSTOR.INF and USBNTMAP.INF, in Windows' INF
-folder where NUSB's installer puts them, never over a file of that name,
+"Unknown Device" with the two INFs in place. It also puts the two INFs,
+USBSTOR.INF and USBNTMAP.INF, in Windows' INF folder where NUSB's
+installer puts them, USBNTMAP.INF first and never one without the other
+(USBSTOR.INF alone lets Windows' own NTMAP.INF take a disk, which stops a
+stock Windows 98 SE), never over a file of that name,
 so that a USB disk plugged in later is meant to install without the New
 Hardware wizard. The uninstall removes the files it copied, the INFs it
 put in the INF folder, the copies Windows made of their INFs for it and
