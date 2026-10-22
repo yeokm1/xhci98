@@ -50,6 +50,9 @@ typedef struct VSD_COUNTS {
     ULONG InsertFailed;
     ULONG Registered;           /* IOS_Register succeeded           */
     ULONG Stamp;                /* VsdStamp's address: keeps it linked */
+#ifdef VSD_TEST_REFUSE
+    ULONG TestSeen;             /* the fault-injection build's count */
+#endif
 } VSD_COUNTS;
 
 void __cdecl VsdAer(AEP *aep);

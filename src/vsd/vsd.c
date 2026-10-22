@@ -236,6 +236,26 @@ void __cdecl VsdRequest(IOP *iop)
         return;
     }
     cb = (IOP_callback_entry *)iop->IOP_callback_ptr;
+#ifdef VSD_TEST_REFUSE
+    /* The fault-injection build (record 30 section 9.2 item 9; the qemu
+     * flavour only, never packaged): every VSD_TEST_REFUSE-th request with
+     * data refused before anything of the IOR changes - kind 2 as if the
+     * callback table were full, any other kind as a list that could not be
+     * built. */
+    VsdCounts.TestSeen++;
+    if (VsdCounts.TestSeen % VSD_TEST_REFUSE == 0) {
+#if defined(VSD_TEST_REFUSE_KIND) && VSD_TEST_REFUSE_KIND == 2
+        VSD_LINE("test refusal: callback table full", VsdCounts.TestSeen,
+                 ior->IOR_xfer_count);
+        VsdRefuse(iop, &VsdCounts.CbFull);
+#else
+        VSD_LINE("test refusal: no list", VsdCounts.TestSeen,
+                 ior->IOR_xfer_count);
+        VsdRefuse(iop, &VsdCounts.Refused[0]);
+#endif
+        return;
+    }
+#endif
     if (cb >= &iop->IOP_callback_table[IOP_CALLBACK_TABLE_DEPTH]) {
         VSD_LINE("refusal: callback table full", cb, iop);
         VsdRefuse(iop, &VsdCounts.CbFull);
@@ -277,9 +297,13 @@ void __cdecl VsdRequest(IOP *iop)
     VsdCounts.Built++;
     if (n > VsdCounts.MaxRuns) {
         VsdCounts.MaxRuns = n;
+        /* The qemu build: each new most-runs list, with its bytes (the
+         * fragmented-buffer legs of section 9.2 read it). */
+        VSD_LINE("most runs/bytes", n, total);
     }
     if (total > VsdCounts.MaxBytes) {
         VsdCounts.MaxBytes = total;
+        VSD_LINE("most bytes/runs", total, n);
     }
 #ifdef VSD_DEBUGCON
     if ((VsdCounts.Built & 0xFFF) == 1) {
