@@ -1666,3 +1666,88 @@ section carries a dated note pointing here.
 - Nothing for this driver. What ME's configuration manager does during
   its 4 to 7 s waits was not read (it happens on its own stack as well,
   and is ME's).
+
+## 43.53 - A Request to a Departed Device That Never Completes
+
+Roadmap-usb4 task 43.53, opened by the owner on 2026-10-22 from 43.49's
+Windows 98 SE legs (above): a thread control transfer queued to a mouse
+just pulled never completed under QEMU, its 5 s deadline requested the
+controller reset, and the fourth reset inside ten minutes latched the bus
+failed. Development host A, 2026-10-22 and 23. Design record 13 section
+10.5.1 is the design; this section is the run.
+
+### The change
+
+At a thread transfer's deadline (`hcdThreadControlQuiet`), before the
+reset: EP0 is stopped, the completion taken if it came first, the
+device's path read (`HcdHubPathPresent`), and `XhciTolLateStopped`,
+`XhciTolLateVerdict` and `XhciTolLateRetired` (`src\xhci_tol.c`) decide.
+A device that has left has its record retired from EP0 (Set TR Dequeue)
+and, published, its location cycled; a device present, a hub, or a
+record that cannot be retired keeps the reset. Host vectors: `test_tol`'s
+`test_late` (3397 checks before the retirement step, 3406 after, 0
+failures). Commits on branch `p43-53`: `27b641c3` (the design),
+`be9111b0` (the code), `a0f516da`, `f3e42494`, `cdfc8afd` and `0a2188f5`
+(reviewed and revised: a trace name; a CREATE_PDO that succeeds after a
+late read; the retirement, since a cancel's restart of EP0's survivors
+could otherwise run the stopped TD again; comments).
+
+### Method
+
+- Guest: 98 SE + `3.1.0.0` + NUSB 3.3, a standalone copy of 43.49's own
+  98 SE overlay (its HID devnodes for the serials `P4349C3` and
+  `P4349C41` already installed), a fresh overlay per run; `qemu-xhci`
+  `p2=4,p3=4`, TCG, one vCPU, 256 MB, headless. `XhciInterruptMode` 2,
+  `XhciPollIdleMs` 50 (43.49's `M2I50`). A mouse at root port 1 and a
+  hub at root port 4. 43.49's stick at root port 2 was left out: its
+  serial raised the Add New Hardware wizard on this copy, which hid the
+  pointer from the detector, so it was removed (run b) or never plugged
+  (runs c2, c3).
+- 43.49's series unchanged (`churn.ps1`): a `usb-mouse` hot-plugged
+  alternately at root port 3 and hub port 4.1, pulled as soon as the
+  pointer moved, no gap; a 60 s timeout followed by a 75 s tray-clock
+  check.
+- Binaries: the `qemu` flavour of `be9111b0` (run b) and of `0a2188f5`
+  (runs c2 and c3, one boot), the driver's debugcon log read after each.
+
+### Readings (runtime, QEMU)
+
+| Run | Binary | Cycles | Late transfers to a departed device | Controller resets requested |
+|---|---|---|---|---|
+| b | `be9111b0` | 60 | 3 (a select's SET_CONFIGURATION) | 0 |
+| c2 + c3 | `0a2188f5` | 69 + 60 | 8 (a select's SET_CONFIGURATION: 6 behind the hub, 2 at root port 3) | 0 |
+
+- Each late transfer read in the log as 43.49's a2 did - the select, then
+  `select configuration failed, USBD status=80000800` - with no
+  `controller reset requested` before it (43.49's a2 had one before each,
+  and `ctrl.window.refused` after the third); the select was answered
+  DEVICE_GONE (`thread URB done, function/status=00007000`) and the
+  location cycled (`hcd: cycling port`). No first-EP0-request-after-
+  Address-Device case (43.49's run b) came up in these runs, so that path
+  of the change was not read at run time.
+- 189 cycles in all, the bus serving plugs at the end of each run, no
+  controller reset, the recovery window untouched.
+- Pointer timeouts: 1 in run b (the wizard), 9 in runs c2 and c3. Seven
+  had `hub port never stable` on hub port 4.1 (the debounce, section
+  10.2; 43.49's own logs have it too, 5 times in a2 and b); the others a
+  mouse at root port 3 enumerated and its PDO created with no START seen
+  within 60 s, as 43.49's a2 cycle 7 shows before any reset. Each was
+  followed by a tray-clock check that read the guest alive, except c2's
+  last: there `frozen.py` read FROZEN, the screen was a blank text-mode
+  frame, and one key brought the desktop back with the clock right - the
+  guest's screen blanking after the two idle minutes, not a stop. The
+  series then went on (c3) on the same boot.
+
+### Verdict
+
+On QEMU, 43.49's 98 SE series no longer resets the controller: every late
+select to a departed device ended DEVICE_GONE with its location cycled,
+and none of the 189 cycles spent the recovery window. What a real
+controller does with such a transfer is still unread.
+
+### Owed
+
+- The bench reading the roadmap line asks for first: on real hardware,
+  a device pulled mid-enumeration (and mid-select) at a root port and
+  behind a hub - whether metal ever leaves the transfer without an event.
+- The first-EP0-request-after-Address-Device case at run time.
