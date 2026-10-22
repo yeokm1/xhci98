@@ -353,16 +353,18 @@ void s98_page(PF_TEXT *t, const S98_ANSWER *a, const S98_DELTA *d, int is9x, pf_
     pf_tx_s(t, "; failed: ");
     pf_tx_u(t, d->tot[S98_T_SRBERRORS]);
     pf_tx_nl(t);
-    for (i = 0; i < S98_DEPTHS; i++) {
-        if (d->tot[S98_T_DEPTH + i] != 0) {
-            depthMax = (pf_u64)i;
-        }
-    }
     {
         static const char *const dn[S98_DEPTHS] = { "1", "2", "3-4", "5-8", "9-16", "17-32", "above 32" };
+        int seen = 0;
 
+        for (i = 0; i < S98_DEPTHS; i++) {
+            if (d->tot[S98_T_DEPTH + i] != 0) {
+                depthMax = (pf_u64)i;
+                seen = 1;
+            }
+        }
         pf_tx_s(t, "Most commands at the drive at once: ");
-        pf_tx_s(t, dn[depthMax]);
+        pf_tx_s(t, seen ? dn[depthMax] : "none (no data command reached the drive)");
         pf_tx_nl(t);
     }
     pf_tx_s(t, "Buffer layout: ");

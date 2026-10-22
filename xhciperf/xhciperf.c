@@ -1103,6 +1103,10 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
             g.Cmd = PF_SC_GET_DEV_TYPE;
             g.HaId = ha;
             g.Target = t;
+            /* nothing more once a request hung or the process is ending */
+            if (g_aspiHung || g_aspiClosing) {
+                break;
+            }
             if (g_sendAspi(&g) != PF_SS_COMP || g.Status != PF_SS_COMP || g.DeviceType != 0) {
                 continue;
             }
@@ -1285,6 +1289,8 @@ static void s98_find(const char *folder)
         return;
     }
     if (WaitForSingleObject(th, 5000) != WAIT_OBJECT_0) {
+        /* a search that does not return retires ASPI for the session */
+        InterlockedExchange((LONG *)&g_aspiHung, 1);
         InterlockedExchange((LONG *)&g_findOut, 1);
         if (InterlockedExchange((LONG *)&rq->done, 1) != 0) {
             /* it finished just now: it is not used, and is freed here */

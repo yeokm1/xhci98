@@ -224,6 +224,14 @@ static void test_buckets_page(void)
     s98_parse(ans, S98_ANSWER_BYTES, &a);
     s98_diff(&b, &a, &d);
     CHECK_EQ(s98_scattered(&d, 524288u, 1), S98_SCAT_YES, "eleven whole, ten cut: scattered");
+    /* nothing reached the drive (a read from the cache): no depth claimed */
+    build(9);
+    s98_parse(ans, S98_ANSWER_BYTES, &b);
+    s98_parse(ans, S98_ANSWER_BYTES, &a);
+    s98_diff(&b, &a, &d);
+    pf_tx_init(&t, buf, sizeof(buf));
+    s98_page(&t, &a, &d, 1, 0, 524288u, 0);
+    CHECK(strstr(buf, "at once: none") != NULL, "an empty depth histogram says none");
 }
 
 int main(void)
