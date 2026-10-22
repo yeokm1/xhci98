@@ -1,6 +1,9 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 3, 2026-10-22, reviewed and revised (the list held to the
+Status: draft 4, 2026-10-22, reviewed and revised (the installer's
+recovery by the run's mode and the selected package, `Pending` deleted
+last, the leftovers of a finished step; the refusal path given a
+fault-injection leg); draft 3, 2026-10-22, reviewed and revised (the list held to the
 IOR's count on every request, an SRB or none; page residency argued from
 the translation window and the layers between, with the reading it rests
 on owed before the code; the installer's own key and a recovery table for
@@ -505,8 +508,12 @@ record says so and the owner decides whether it ships (section 11).
 
 A refusal sets `IOR_status` to `IORS_INVALID_COMMAND` ("command not
 supported or invalid" [hdr: `IOR.H`]), puts the IOR's
-fields back as they came, and completes the request through the callback
-above this layer at once; nothing goes down. Each kind is counted (the
+fields back as they came, and completes the request at once through the
+callback above this layer, the entry `IOP_callback_ptr` points below
+(the layer pushes none on that path, so a full table does not stop the
+completion); nothing goes down [hyp: completing from the request routine
+is how IOS's own layers fail a request (the prototype did it on an
+overflow, and requests completed); section 9.2 item 9 reads it]. Each kind is counted (the
 page-table service, the present bit, the room, the scratch, the
 fragment limit, a wrap, the maximum, the SRB's coverage, the SRB's first
 byte, SRB data on a no-data request, the callback table). The readings
@@ -812,31 +819,45 @@ setup engine copies it. On 98 SE and ME:
   (record 26 section 5.3). Without Stor98's disks it claims nothing
   (section 3.3).
 
-**Every run first recovers** (before it classifies the file), from
-four facts: the destination's bytes (absent, `File`'s hash, `Pending`'s
-hash, other), the `.TMP`'s (absent, `Pending`'s hash, other), whether
-`WININIT.INI` holds this installer's exact entry (the one line above,
-both paths compared without regard to case, and nothing else naming
-either file), and the record's values. Only a file whose bytes a value
-names, and only that exact entry, are ever this installer's; anything
-else is left, said and logged.
+**Every run first recovers** (before it classifies the file), from five
+facts: the destination's bytes (absent, `File`'s hash, `Pending`'s hash,
+other), the `.TMP`'s (absent, `Pending`'s or `File`'s hash, other),
+whether `WININIT.INI` holds this installer's exact entry (the one line
+above, both paths compared without regard to case, and nothing else
+naming either file), the record's values, and the run's **mode** for the
+layer:
 
-| `Pending` | Destination | `.TMP` | Entry | Meaning | The run does |
-|---|---|---|---|---|---|
-| absent | - | absent | absent | nothing in flight | classifies the destination by `File` |
-| set | `Pending`'s hash | any | any | the start (or the move) did it | `File` takes the hash, `Pending` deleted; a `.TMP` of `Pending`'s hash and the exact entry, if left, removed |
-| set | absent or `File`'s hash | `Pending`'s hash | present | an update queued | treats both files as its own: a ticked run leaves it queued, an untick or uninstall withdraws it (entry, then `.TMP`, then the value) |
-| set | absent or `File`'s hash | `Pending`'s hash | absent | cut short before the entry (an update) or before the move (a first placement) | finishes the step (writes the entry, or moves the `.TMP` into an absent destination) on a ticked run; withdraws it otherwise |
-| set | absent or `File`'s hash | absent | any | cut short before the `.TMP` was whole, or the `.TMP` gone | the exact entry, if any, removed; `Pending` deleted; a ticked run starts the step again |
-| set | any | other bytes | any | a `.TMP` that is not this installer's | left; the exact entry, if any, removed (it would rename a foreign file); no placement or update until the user removes the file, a step that says so |
-| any | other bytes, not `Pending`'s | - | - | another installation's file | left and said; the exact entry, if any, removed; the values deleted when they name neither file present |
+- **selected**: the box ticked, its target the package's file (hash `H`);
+- **deselected**: the box unticked by the user while Stor98's box is
+  ticked;
+- **inactive**: the box greyed because Stor98's box is unticked or greyed
+  (D8: nothing of the layer is changed);
+- **uninstall**.
 
-An untick or an uninstall over a queued update withdraws it (entry, then
-`.TMP`, then `Pending`) before it removes the destination of `File`'s
-hash, and does so also when the destination is absent, so a queued file
-can never arrive after the user removed the layer. Each step's failure
-leaves the state as one row of the table, which the next run recovers;
-section 9.1 holds the table, every row and every step cut short.
+Only a file whose bytes a value names, and only that exact entry, are
+ever this installer's; anything else is left, said and logged. Every
+multi-step change runs in one order and stops at the first failure:
+`Pending` is written first and deleted last, `File` is written before
+the leftovers are removed.
+
+| `Pending` | Destination | `.TMP` | Entry | Meaning | selected | deselected, uninstall | inactive |
+|---|---|---|---|---|---|---|---|
+| absent | - | absent | absent | nothing in flight | classify the destination by `File`, then place or update as above | remove a destination of `File`'s bytes | nothing |
+| absent | `File`'s hash | `File`'s hash, or absent | present, or absent with a `.TMP` | the leftovers of a finished step | remove the entry, then the `.TMP`; then as the first row | the same, then as the first row | the same (only leftovers this installer's values name, of a step already finished) |
+| set | `Pending`'s hash | any | any | the start (or the move) did it | `File` takes the hash; then the entry and a `.TMP` of that hash removed; then `Pending` deleted; then as the first row | the same, then as the first row | the same, then nothing |
+| set | absent or `File`'s hash | `Pending`'s hash | present | an update queued | kept when `Pending` is `H`; otherwise withdrawn (entry, `.TMP`, `Pending`) and `H` placed or queued afresh | withdrawn, then as the first row | nothing: it stays queued |
+| set | absent or `File`'s hash | `Pending`'s hash | absent | cut short before the entry (an update) or the move (a first placement) | when `Pending` is `H`, finished (the entry written, or the `.TMP` moved into an absent destination); otherwise withdrawn and `H` placed afresh | withdrawn, then as the first row | nothing |
+| set | absent or `File`'s hash | absent | any | cut short before the `.TMP` was whole, or the `.TMP` gone | the exact entry removed; `Pending` deleted; the step started again with `H` | the same, then as the first row | the same (nothing of the layer is left in flight to keep) |
+| set | any | other bytes | any | a `.TMP` that is not this installer's | left; the exact entry removed (it would rename a foreign file); no placement or update until the user removes it, a step that says so | the same, then as the first row for the destination | the exact entry removed only |
+| any | other bytes, not `Pending`'s | - | - | another installation's file | left and said; the exact entry removed; the values deleted when they name no file present | the same | the same |
+
+The table's every row is a state some step cut short can leave, and each
+of its actions, cut short in turn, leaves another row of it; section 9.1
+holds the table and every cut. So an untick or an uninstall over a queued
+update withdraws it before it removes the destination of `File`'s hash,
+also when the destination is absent, and a queued file can never arrive
+after the user removed the layer; a later package (`H` not `Pending`)
+replaces a queued one rather than letting the start install the older.
 
 Any run that places, updates or removes the file ends with the shutdown
 or restart flag Stor98's file update uses: the layer is loaded at boot
@@ -971,6 +992,14 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
 8. **Memory pressure** (section 4.7): the 2 MiB phases while a second
    program commits and touches more memory than the guest has, on 98 SE
    and ME, data compared.
+9. **The refusal path**: a fault-injection build of the `qemu` flavour
+   (`VSD_TEST_REFUSE`, never packaged: each kind of refusal forced on
+   every N-th request of a chosen function, and the callback table
+   treated as full) on 98 SE and ME, with requests with and without
+   `IORF_SRB_VALID`: the requester gets an error, nothing reaches
+   Stor98 for that request (its counters), no hang and no second
+   completion, the IOR's fields as they came, and the next request
+   compares clean.
 
 On the owner's real hardware: the throughput before and after
 (roadmap 43.46's last clause), the owner's.
