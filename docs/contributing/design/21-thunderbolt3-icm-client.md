@@ -1039,6 +1039,127 @@ driver loads as on 64-bit 8 and 8.1 (record 23 section 5.10, revision
 (older cross-signed ones excepted, which the project's test signature is
 not), so Secure Boot off is the condition there.
 
+### 3.6 Thunderbolt on Windows 10: Intel's driver, the ranking and Kernel DMA Protection (task 43.33 (c), 2026-10-22; a reading)
+
+A reading for roadmap-usb4 task 43.33 (c), before 43.34 widens the
+connection manager to Windows 10; no code changed. Each fact is labelled
+as design record 13 section 6.14 labels them: **static** (read out of a
+file, nothing from it executed), **measured** (seen in a Windows 10 22H2
+guest of task 43.32 through Windows' own tools), **documentation**
+(a page read on 2026-10-22, cited by URL and a short phrase) or
+**inference**. `legal-provenance.md` section 4 has the rows.
+
+**Windows 10 has no Thunderbolt driver of its own** (static, both 22H2
+images, 10.0.19045.2965): none of the 679 (x64) and 636 (x86)
+`Windows\INF\*.inf` names an Intel NHI id of section 3.3's list, the
+class `PCI\CC_0880`, or `PCI\CC_0C0340`; the word "Thunderbolt" occurs
+only in two device descriptions (an LSI SAS adapter, two Lenovo dock
+Ethernet chips). Measured on the x64 guest with the emulator's
+`tb3-alpine-ridge` profile: the NHI `PCI\VEN_8086&DEV_15BF&SUBSYS_22B017AA&REV_01`
+stays "Base System Device", Code 28 (`CM_PROB_FAILED_INSTALL`, problem
+status `0xC0000490`), and the emulator's Alpine Ridge xHCI (`8086:15C1`)
+is bound by `usbxhci.inf` (record 13 section 6.14.3). So on a 10 machine
+the NHI runs whatever the computer maker installed, Intel's driver, or
+nothing.
+
+**Intel's driver as makers ship it** (static: three packages taken from
+the Microsoft Update Catalog as `.cab` files, unpacked with 7-Zip, only
+their INF text read; nothing executed):
+
+| Package | INF and service | NHI ids it names | Signature, other |
+|---|---|---|---|
+| Older package with the Thunderbolt Software tray application, 17.4.77.13 (Catalog "Windows 10 version 1803 and Later Servicing Drivers") | `tbt100x.inf`, `DriverVer=05/16/2018,17.4.77.13`, `Class=System`, `[Manufacturer] ... NTamd64.10.0.1`; `AddService = nhi`, binary `tbt100x.sys`, demand start, KMDF 1.15; a co-installer `tbtcoinx_17_4_77_13.dll`; copies `setup.msi` (the tray application `Thunderbolt.exe` and the service `tbtsvc.exe`) | `PCI\VEN_8086&DEV_<id>&CC_0880` for 1575, 1577, 15BF, 15D2, 15D9, 15DC, 15DD, 15DE, 15E8, 15EB | Microsoft "Windows Hardware Compatibility Publisher" catalog `tbt100x.cat`; no `DmaRemappingCompatible`; x64 only |
+| DCH driver 1.41.1379.0 (Catalog "Windows 10, version 1809 and later") | `TbtHostController.inf`, `DriverVer = 07/27/2023,1.41.1379.0`, decorations `NTamd64.10.0...16299` and `...19041`; `AddService = nhi`, binary `TbtBusDrv.sys`; a UMDF upper filter (`TbtFilterDrv`, `WUDFRd`) | the same ten Alpine Ridge and Titan Ridge ids with `&CC_0880`; `PCI\VEN_8086&DEV_1137` and `&DEV_1134` bare; Ice Lake 8A17, 8A0D, 8AA3, 8AA0, 8AB3, 8AB0 with `&CC_0880`; Tiger Lake and later (9A1B ... A834) with `&CC_0C03` | the same publisher; `HKR, Parameters, DmaRemappingCompatible, 0x00010001, 1` (one Tiger Lake A0 section writes 0); x64 only |
+| DCH driver 1.41.1423.0 (Catalog "Windows 10, version 1903 and later") | as 1.41.1379.0, decorations adding `...22000` | **no Alpine Ridge id any more** (1575, 1577, 15BF, 15D2, 15D9, 15DC to 15DE gone); 15E8, 15EB, 1137, 1134, 8A17, 8A0D and the later ids kept | as above; the DCH tie to the Store application is a software component, `TbtHostControllerHsaComponent.inf` (`SoftwareID = pfn://AppUp.ThunderboltControlCenter_8j3eq9eme6ctt`, the Thunderbolt Control Center) |
+
+No package has an x86 INF, so **on 10 x86 the NHI has no Intel driver to
+meet** (static). No INF of the three carries a `FeatureScore`. Files,
+hashes and the Catalog's update ids are in `legal-provenance.md`
+section 4's row.
+
+**Whether `xhcicm.inf`'s match outranks it** (static and documentation,
+then inference). `xhcicm-amd64.inf` names the NHIs by `PCI\VEN_8086&DEV_<id>`
+alone. Microsoft's page on PCI identifiers
+(learn.microsoft.com, "Identifiers for PCI devices") lists as hardware ids
+`VEN&DEV&SUBSYS&REV`, `VEN&DEV&SUBSYS`, `VEN&DEV&REV`, `VEN&DEV`,
+`VEN&DEV&CC_ccsspp` and `VEN&DEV&CC_ccss`, and says "In Windows 10, some
+IDs that previously appeared in the Hardware IDs list now appear in the
+list of Compatible IDs". Measured on the x86 guest (the emulator's NHI,
+its Enum key): `HardwareID` is `VEN&DEV&SUBSYS&REV`, `VEN&DEV&SUBSYS`,
+`VEN&DEV&CC_088000`, `VEN&DEV&CC_0880`, and `CompatibleIDs` begins
+`VEN&DEV&REV`, `VEN&DEV` - **so on 10 the bare `PCI\VEN_8086&DEV_15BF`
+that `xhcicm.inf` names is a compatible id**, and Intel's `&CC_0880`
+form is a hardware id. Intel's match is the better one twice over: a
+hardware id against a compatible one, and its package is signed by Microsoft
+(signature score 0), where this project's carries no catalog and ranks
+`0xFF` in the signer byte (record 13 section 6.14.1 measured
+`0x80FF2005` for `xhci98.inf` on the controller) - on 10 x64 it is not
+staged at all without a catalog (record 13 section 6.14.5). **So Windows
+never picks `xhcicm.inf` over Intel's driver by itself**: the installer's
+forced install (`UpdateDriverForPlugAndPlayDevices` with
+`INSTALLFLAG_FORCE`, record 23 section 5.5) is the only way the NHI
+comes to `xhcicm.sys` on a machine with Intel's driver, and a later
+driver search (Windows Update offers the Intel DCH package by these ids)
+can take it back. What an install, update and uninstall of ours do to
+Intel's driver is 43.37's leg "where an image of it is at hand"
+(none has run here): by inference from record 23 section 9, the
+uninstall's rescan gives the NHI back to the best-ranked driver in the
+store, Intel's where it is still staged.
+
+**The approval it does** (documentation; Intel publishes no Windows
+interface of its driver). The firmware connection manager's security
+levels are SL0 none, SL1 user, SL2 secure, SL3 DisplayPort and USB only
+(docs.kernel.org, "USB4 and Thunderbolt": "User is asked whether the
+device is allowed to be connected"); on SL1 Intel's software asks at the
+first connection "Do Not Connect", "Connect Only Once", "Always Connect"
+(the tray application's "Approve Attached Devices" on the older package,
+the Control Center's "Approve Thunderbolt devices" on the DCH one;
+Seagate's support article 007783en), "Always Connect" being kept by the
+firmware's access list. The messages are the ICM's that section 5 sends
+(`ICM_APPROVE_DEVICE`, `ICM_CHALLENGE_DEVICE`, `ICM_PREBOOT_ACL`; Linux
+`icm.c`, the same mirror section 1.4.1 reads), so the approval policy of
+section 5.4 replaces Intel's dialog when `xhcicm.sys` runs the NHI, and
+the firmware's access list is shared between the two.
+
+**Kernel DMA Protection** (documentation: Microsoft's "Kernel DMA
+Protection" page, ms.date 2025-08-15, and "Enabling DMA remapping for
+device drivers", ms.date 2025-08-25):
+
+- Windows 10 1803 and later, 64-bit only, on firmware that sets
+  `DMA_CTRL_PLATFORM_OPT_IN_FLAG` in the DMAR table (Intel) or the IVRS
+  "DMA remap support" bit (AMD) and tags its external ports
+  (`ExternalFacingPort` `_DSD`): "peripherals with DMA Remapping
+  incompatible drivers are blocked from starting and performing DMA
+  until an authorized user signs into the system or unlocks the screen";
+  after that they run until a restart or an unplug. The
+  `DmaGuard/DeviceEnumerationPolicy` policy (10 1809 and later) makes it
+  0 block all, 1 (default) after sign-in or unlock, 2 allow all.
+- A driver opts in with `HKR,Parameters,DmaRemappingCompatible,0x00010001,<v>`
+  in its service key: 0 incompatible, 1 compatible, 2 compatible "only
+  when ... the device is an external device (for example, Thunderbolt)"
+  or DMA verification is on; no value lets the system decide.
+  Windows' own `usbxhci.inf` writes 2 on 10 (record 13 section 6.14.1,
+  static), Intel's DCH `TbtHostController.inf` writes 1 (static).
+- msinfo32's "Kernel DMA Protection" line reads **Off** on both guests'
+  QEMU firmware (measured: no DMAR table), so nothing of this is read on
+  the vehicle.
+
+What that means here (inference): the NHI is an internal device, not
+behind an external port, so `xhcicm.sys` on the NHI is not itself held.
+What the tunnel adds - a dock's xHCI controller (bound by `usbxhci.sys`,
+opted in), an NVMe drive (Windows' `stornvme` opts in; **Stor98 writes no
+`DmaRemappingCompatible`**) - sits behind an external-facing port, so on a
+machine with the protection on, an NVMe drive behind a tunnel under
+Stor98 is held until the user signs in, and never started under policy 0;
+the same for any device whose driver has no value. Whether Stor98 should
+write 1 (it maps its buffers through the DMA adapter) is a question for
+43.34 (record 13 section 6.14.8). The protection is a feature of the
+firmware and of 64-bit 10 only; it is unread on any machine here.
+Linux's documentation adds that such machines usually ship with the
+Thunderbolt security level set to "none", the IOMMU doing the gating
+(docs.kernel.org, "security levels (if set) are redundant"), in which
+case section 5.4's approval has nothing to approve.
+
 ## 4. The host interface: ring 0, polled
 
 ### 4.1 Registers
