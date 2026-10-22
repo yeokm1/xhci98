@@ -16602,7 +16602,8 @@ static void stor_read(void)
     storPack = stor_pack_check();
     stor_read_states(storSt);
     storPlanCase = inst_stor_case(storSt, storSource);
-    storDefault = inst_stor_default(storHaveChoice, (int)storChoice, storSt);
+    storDefault = inst_stor_default(storUsb20u, storHaveChoice,
+                                    (int)storChoice, storSt);
     if (storPack <= 0) {
         storInclude = 0;
     } else if (opts.Storage) {
@@ -16629,11 +16630,7 @@ static void stor_note(char *out, size_t cap)
                   "this release carries (the log names them).", cap);
         return;
     }
-    inst_stor_found_text(out, cap, storSt);
-    if (storUsb20u) {
-        strncat(out, " NUSB is installed (its Uninstall\\USB20U entry is "
-                "there).", cap - strlen(out) - 1);
-    }
+    inst_stor_note_text(out, cap, storSt, storUsb20u);
 }
 
 /* What a ticked run does, one sentence (the plan, the Summary). */
@@ -18926,7 +18923,7 @@ static void st_screens_once(int longest)
         storUsb20u = 1;
         storSource = 0;
         storPlanCase = inst_stor_case(storSt, 0);
-        storDefault = inst_stor_default(0, 0, storSt);
+        storDefault = inst_stor_default(storUsb20u, 0, 0, storSt);
         storInclude = storDefault;
 
         /* /list */

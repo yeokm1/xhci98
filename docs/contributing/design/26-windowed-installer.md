@@ -1,10 +1,12 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 19, 2026-10-22 (the owner's decision of that day to keep
+Status: draft 19, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
 NUSB apart from the non-free driver pack: the seven are read from the
 download's own `NUSB33\W98SE\` beside the version root, no longer
 `NONFREE\STORAGE\NUSB33\W98SE\`, sections 6.5 and 6.5.1; record 23
-revision 25); draft 18, 2026-10-20 (the owner's answers to draft 17's open
+revision 25; and, the owner's requirement of the same day, the row's
+default unticked while NUSB is installed, ahead of a recorded choice,
+sections 6.5.2 and 6.5.3); draft 18, 2026-10-20 (the owner's answers to draft 17's open
 questions: the uninstall adopts the storage devices bound from this
 installer's copy after the run, section 6.5.8, and the rest accepted as
 designed, section 14); draft 17, 2026-10-20 (roadmap-usb4 task 43.4, the owner's
@@ -985,7 +987,12 @@ needs these files for every USB disk: Bulk-Only disks, and UAS disks
 under xhciuas.sys too (its INF names USBNTMAP.SYS as a filter; without
 it a UAS disk stays at Code 2). Install them unless NUSB is installed."
 Under it the detection's line (section 6.5.3) and, when NUSB's uninstall
-entry is there, a second line saying so. The default is section 6.5.3's;
+entry is there, a sentence after it (`inst_stor_note_text`,
+host-tested; owner, 2026-10-22): "NUSB is installed on this computer
+(found its Uninstall\USB20U entry). It already provides the USB storage
+drivers, so you can leave this unticked." The same note is on the
+Components row, the Summary and the console's plan and question. The
+default is section 6.5.3's;
 the box can be ticked or unticked whatever was found, and ticked it never
 copies over a file already present (section 6.5.4).
 
@@ -1023,13 +1030,18 @@ CurrentVersion\Uninstall\USB20U` (static: NUSB 3.3's `_NUSB.INF` line
 129 and 3.6's line 145 write it; NUSB's `_USB2UN.INF` deletes it with
 the USB 2.0 stack's three files and leaves the storage files), is read
 and recorded apart from the files: it is said under the row and in the
-log, it decides neither the default nor what is copied, and while it is
-present the uninstall deletes none of the seven (section 6.5.8).
+log, it unticks the default (below) but does not decide what is copied,
+and while it is present the uninstall deletes none of the seven (section
+6.5.8).
 
-**The default** (`inst_stor_default`): an earlier run's recorded choice
-when there is one (section 6.5.7); otherwise ticked when none of the
-seven is found (every file absent or this installer's), and unticked
-when any is.
+**The default** (`inst_stor_default`): unticked while NUSB's
+`Uninstall\USB20U` entry is there, ahead of everything else (owner,
+2026-10-22: a choice an earlier run recorded before NUSB was installed,
+or NUSB with its storage files missing or removed, no longer ticks it;
+`/storage` still does, and a ticked run still copies over no file
+present); otherwise an earlier run's recorded choice when there is one
+(section 6.5.7); otherwise ticked when none of the seven is found (every
+file absent or this installer's), and unticked when any is.
 
 **The text** (`inst_stor_found_text`, host-tested), on the row, the
 Found page and the Summary, and in the console's question: none found -
@@ -1693,7 +1705,9 @@ which waits.
 - (draft 17) the USB storage drivers of section 6.5: the seven's table
   (names, destinations, SHA-256s) against `legal-provenance.md` section
   5's; `inst_stor_state` for each state; `inst_stor_default` (none found
-  ticked, any found unticked, a recorded choice kept either way);
+  ticked, any found unticked, a recorded choice kept either way, and
+  from draft 19 unticked whenever NUSB is installed: none found, a
+  recorded Yes, the files the same);
   `inst_stor_found_text` for none, some (the "not known to be ready"
   sentence, and never "ready"), all and this installer's;
   `inst_stor_case` over every combination; `inst_stor_copy_set` (which

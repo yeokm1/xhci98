@@ -1,6 +1,6 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 25, 2026-10-22 (the owner's decision of that day to keep
+Status: revision 25, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
 NUSB apart from the non-free driver pack: the seven storage files are read
 from the download's own `NUSB33\W98SE\`, beside the version root, no longer
 `NONFREE\STORAGE\NUSB33\W98SE\`; section 4.4, record 26 draft 19);

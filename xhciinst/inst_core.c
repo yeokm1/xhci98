@@ -5973,11 +5973,18 @@ int inst_stor_route(int storCase)
            storCase == INST_STOR_CASE_OWN;
 }
 
-int inst_stor_default(int haveChoice, int choice,
+int inst_stor_default(int usb20u, int haveChoice, int choice,
                       const int st[INST_STOR_COUNT])
 {
     int i;
 
+    /* NUSB installed: never ticked for the user, not by a choice an
+     * earlier run recorded before NUSB came, nor with NUSB's storage
+     * files missing (owner, 2026-10-22). /storage still ticks it, and
+     * a ticked run still copies over nothing present. */
+    if (usb20u) {
+        return 0;
+    }
     if (haveChoice) {
         return choice != 0;
     }
@@ -6064,6 +6071,15 @@ void inst_stor_found_text(char *out, size_t cap,
     inst_stor_names(out, cap, st);
     strncat(out, ". Only some of the seven: USB storage is not known to be "
             "ready.", cap - strlen(out) - 1);
+}
+
+void inst_stor_note_text(char *out, size_t cap,
+                         const int st[INST_STOR_COUNT], int usb20u)
+{
+    inst_stor_found_text(out, cap, st);
+    if (usb20u && cap > 0) {
+        strncat(out, " " INST_STOR_NUSB_TEXT, cap - strlen(out) - 1);
+    }
 }
 
 int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
