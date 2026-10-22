@@ -35,7 +35,7 @@
 #define IDC_C_TB                1012
 #define IDC_C_TB_T              1013
 #define IDC_C_TRAY              1014
-#define IDC_C_TRAY_T            1015
+#define IDC_C_FAST              1015   /* was IDC_C_TRAY_T (43.27) */
 #define IDC_C_DIR               1016
 #define IDC_C_BROWSE            1017
 #define IDC_C_DIR_T             1018

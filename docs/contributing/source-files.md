@@ -274,6 +274,8 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `stor98-settings.txt` | The bundled Stor98 readme's SETTINGS table, as the installer's Stor98 rows were checked against it; `make-release.ps1` compares the bundled readme, `src\stor98\docs\package-readme.txt`, with it. |
 | `test_wizlay.c` | `xhciinst\wiz_lay.c`, the installer window's settings-page layout arithmetic: the "now" column, a part's height, the split into parts of at most three rows, the open list's width, the note's top (design record 26 section 5.4, "The layout"). |
 | `test_dijob.c` | `xhciinst\inst_core.c` with `xhciinst\di\di_core.c`: the installer's job files read by the helper's parser, the helper's result files by the installer's (design record 27 sections 4.1 and 4.2). |
+| `test_pf.c` | `xhciperf\pf_core.c`, the disk benchmark's pure half (design record 29 section 9). |
+| `test_pfs98.c` | `xhciperf\pf_s98.c`, its reader of Stor98's counter answer (record 29 section 6). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
 | `test_trpop.c` | `xhcitr\tr_pop.c`, the 98 SE pop-up's pure half (record 25 section 16): the taskbar's edge shown and auto-hidden on each side and with none, the anchor, the room, the place at each edge and in a corner of 640 x 480, the size at small and large fonts and its cut, the timeout at the wrap, the queue's order, bound and drop rule. |
@@ -395,13 +397,27 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `tr_snap.c` | `XHCISNAP`'s engine, moved from `xhcisnap\xhcisnap.c` (roadmap-usb4 task 42-A.4, record 25 section 15), its `main` renamed `tr_snap_main`: reads the extension, the PORTSC array, the enabled slots and the HCD region through the door's pass-through and writes the `.DEV` device report and the `.TXT`, `.BIN` and `.PSC` dump. `docs\contributing\snapshot-reader.md` is its reference. |
 | `tr_hcctr.h` | The names of `XHCIHC_COUNTERS`, one line per word in field order; `test_trlog` holds each line to the field of the same name by offset. |
 | `tr_res.h` | The resource and command numbers shared by `xhcitr.rc` and `xhcitr.c`. |
-| `xhcitr.rc`, `xhcitr.manifest`, `xhcitr.ico` | The icon, the version (from `src\xhci_version.h`), the menus and the About dialog; the manifest runs it as the invoker with Common Controls 6. |
+| `xhcitr.rc`, `xhcitr.manifest`, `xhcitr.ico`, `xhcitr-f.ico` | The icon and its red form for the "can run faster" notice (record 25 section 7.7), the version (from `src\xhci_version.h`), the menus and the About dialog; the manifest runs it as the invoker with Common Controls 6. |
 | `build.cmd` | `XHCITR.EXE` with MSVC 6.0 and `XHCITR64.EXE` with WDK 7.1 amd64. |
 | `selftest.cmd` | The import tables, the `/selftest` and the switch refusals, which `build-driver.cmd` runs. |
 | `snaptest.cmd` | The snapshot path driven with no controller (`XHCITR /snaptest`, the canned decodes and the report's write faults), then the user's spellings `/snapshot`, `/dump` and `/probe`; moved from `xhcisnap\selftest.cmd`, run by `build-driver.cmd`. |
 | `scripts\check-counter-names.ps1` | Checks the counter names `XHCITR /snaptest -selftest-counters` prints against `src\xhci_counters.h` word by word; part of the gated build (moved from `xhcisnap\`). |
 | `docs\contributing\snapshot-reader.md` | The snapshot route's and its files' reference (XHCISNAP's guide, moved from `xhcisnap\README.md`). |
 | `check-imports.ps1` | The import gate `selftest.cmd` runs: reads the PE import directory and requires exactly KERNEL32, USER32, GDI32, ADVAPI32, SHELL32, COMCTL32 and COMDLG32 and no delay-load imports. |
+| `README.TXT` | The text of the published `readme.txt`. |
+
+### `xhciperf\` - the disk benchmark (design record 29)
+
+| File | What it is |
+|---|---|
+| `xhciperf.c` | The system half of `XHCIPERF.EXE` and `XHCIPF64.EXE`: the window, the run (a controlling thread and a worker per test thread, overlapped I/O on NT), the test file and its cleanup, verification, the Stor98 counter read (pass-through on NT, ASPI on 98 SE and ME), the command line, `/selftest`; holds `pf_s98.h`'s offsets to `src\stor98\include\stor98pf.h` with compile-time checks. |
+| `pf_core.c` / `pf_core.h` | The pure half: presets and the plan, the free-space rule, the generator and the verifiable pattern, the generation allocator, statistics, the latency histogram, the ownership header and leftover rule, paths, the workload key, the report and saved-file reader, the command line (host suite `test_pf`). |
+| `pf_s98.c` / `pf_s98.h` | Stor98's counter answer and identity page read as bytes, two answers subtracted, the scattered conclusion and the Stor98 page's text (host suite `test_pfs98`). |
+| `pf_res.h` | The resource and command numbers shared by `xhciperf.rc` and `xhciperf.c`. |
+| `xhciperf.rc`, `xhciperf.manifest`, `xhciperf.ico` | The icon (drawn for this project), the version (from `src\xhci_version.h`), the menu and the More and About dialogs; the manifest runs it as the invoker with Common Controls 6. |
+| `build.cmd` | `XHCIPERF.EXE` with MSVC 6.0 and `XHCIPF64.EXE` with WDK 7.1 amd64. |
+| `selftest.cmd` | The import tables, the source rule (no physical drive opened), the `/selftest` and the switch refusal, which `build-driver.cmd` runs. |
+| `check-imports.ps1` | The import gate: exactly KERNEL32, USER32, GDI32, ADVAPI32, SHELL32, COMCTL32 and COMDLG32, no delay-load imports. |
 | `README.TXT` | The text of the published `readme.txt`. |
 
 ### `xhciinst\` - the install tool (design record 23)
@@ -834,7 +850,8 @@ texts, the tray's router keys and event diff, the command line, the
 report; host suite `test_tr`, which also links `xhciinst\inst_core.c`
 for record 24's unit rules and eject texts), `tr_res.h` (the resource
 and command numbers), `xhcitr.rc` and `xhcitr.manifest` (the icon
-`xhcitr.ico`, the version, the menus, the About dialog; as the invoker,
+`xhcitr.ico` and its red form `xhcitr-f.ico`, the version, the menus,
+the About dialog; as the invoker,
 with Common Controls 6), `build.cmd` (`XHCITR.EXE` with MSVC 6.0,
 `XHCITR64.EXE` with WDK 7.1 amd64), `selftest.cmd` (the `/selftest`, the
 switch refusals and the import-table check `build-driver.cmd` runs,

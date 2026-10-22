@@ -123,6 +123,10 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+# The catalog rule (BOTH-CATALOG) holds an INF of this tree and of a tree
+# published from 3.2.0.0; a published tree before 3.2.0.0 carries no catalog
+# and is not asked about one.
+$catalogRequired = ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge [version]"3.2.0.0")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
 
 $repo = Get-RepoRoot
@@ -315,6 +319,19 @@ function Test-CmInfText {
         } else { & $add "BOTH-VERSION" "src\xhci_version.h has no XHCI_DRIVERVER_DATE." }
     }
     if (@(& $directive $ver "LayoutFile").Count -ne 0) { & $add "CM-LAYOUT" "LayoutFile: this driver needs no OS-supplied file." }
+    # The catalog (design record 19, owner 2026-10-22): each amd64 INF names
+    # its own, which the packager makes and test-signs, undecorated, once;
+    # the x86 INFs name none, since the x86 package carries none.
+    $catWant = [System.IO.Path]::ChangeExtension($infName, ".cat")
+    $catLines = @($ver.Lines | Where-Object { $_.Key -match '^(?i)CatalogFile(\..*)?$' })
+    if (-not $catalogRequired) {
+    } elseif ($Profile -eq "amd64") {
+        if ($catLines.Count -ne 1 -or $catLines[0].Key -ine "CatalogFile" -or $catLines[0].Value -cne $catWant) {
+            & $add "BOTH-CATALOG" "[Version] must name its catalog once, as CatalogFile=$($catWant): the packager makes and test-signs it (design record 19)."
+        }
+    } elseif ($catLines.Count -ne 0) {
+        & $add "BOTH-CATALOG" "[Version] names a catalog, and the x86 package carries none (design record 19)."
+    }
 
     # [DestinationDirs].
     $dest = & $get "DestinationDirs"
@@ -800,7 +817,8 @@ if ($SelfTest) {
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_1134", "%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1134") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%U4Desc%=Cm.Dev6,PCI\CC_0C0340", "%NhiDesc%=Cm.Dev6,PCI\CC_0C0340") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('U4Desc="xHCI98 USB4 Host Router"', 'U4Desc="xHCI98 USB4 Host Interface"') },
-                    @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4', 'CmSvcDesc="xHCI98 Thunderbolt 3 and USB4') }
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4', 'CmSvcDesc="xHCI98 Thunderbolt 3 and USB4') },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile=xhcicm.cat") }
                 )
             }
             "nhi-amd64" {
@@ -815,7 +833,10 @@ if ($SelfTest) {
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace("[CmModels.NTamd64]`r`n", "[CmModels.NTamd64]`r`n%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D3`r`n") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%Tb2Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C", "%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('Tb2Desc="xHCI98 Thunderbolt 2 Controller"', 'Tb2Desc="xHCI98 Thunderbolt Controller"') },
-                    @{ Rule = "BOTH-VERSION";   Text = ($t -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') }
+                    @{ Rule = "BOTH-VERSION";   Text = ($t -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicm.cat`r`n", "") },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicm.cat", "CatalogFile=xhcicmf.cat") },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicm.cat", "CatalogFile.NTamd64=xhcicm.cat") }
                 )
             }
             "filter-x86" {
@@ -850,7 +871,8 @@ if ($SelfTest) {
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133", "%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001", "%TbBridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%U4BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423", "%BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423") },
-                    @{ Rule = "CM-DESC";        Text = $t.Replace('BridgeDesc="xHCI98 PCI Bridge"', 'BridgeDesc="xHCI98 Thunderbolt 3 Tunnel Port Filter"') }
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('BridgeDesc="xHCI98 PCI Bridge"', 'BridgeDesc="xHCI98 Thunderbolt 3 Tunnel Port Filter"') },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile.NTx86=xhcicmf.cat") }
                 )
             }
             "filter-amd64" {
@@ -860,7 +882,10 @@ if ($SelfTest) {
                     @{ Rule = "PATH-MFGDEC";    Text = $t.Replace("%Mfg%=CmFilterModels,NTamd64,NTamd64.6.0", "%Mfg%=CmFilterModels,NTamd64") },
                     @{ Rule = "CM-FILTER";      Text = $t.Replace('UpperFilters,0x00010008,"xhcicm"', 'UpperFilters,0x00010008,"other"') },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23", "%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23") },
-                    @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"', 'CmSvcDesc="xHCI98 Thunderbolt 3 Connection Manager (xhcicm)"') }
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"', 'CmSvcDesc="xHCI98 Thunderbolt 3 Connection Manager (xhcicm)"') },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicmf.cat`r`n", "") },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicmf.cat", "CatalogFile=xhcicm.cat") },
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicmf.cat", "CatalogFile=xhcicmf.cat`r`nCatalogFile=xhcicmf.cat") }
                 )
             }
         }

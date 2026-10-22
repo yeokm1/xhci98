@@ -25,7 +25,11 @@ rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
 rem      pass makes every later FAIL and NODRIVER word untrustworthy
 rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
 rem      fail on an LF-only .BAT, and the field wrappers are .BAT files -
-rem      then the source charset, and the two copies of Stor98's interface
+rem      then the source charset, the tool readmes and the release history
+rem      the release cut publishes held to its 78-column printable-ASCII
+rem      rule (task 43.61,
+rem      scripts\check-readme-text.ps1, self-tested first), and the two
+rem      copies of Stor98's interface
 rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1),
 rem      and on the x86 run XHCICLN and XHCITR rebuilt (xhcicln\build.cmd,
 rem      xhcitr\build.cmd), the two tools that compile xhciinst\inst_core.c
@@ -539,6 +543,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-source-charset.ps1"
 if errorlevel 1 goto charsetfail
 
+rem The tool readmes make-release.ps1 publishes, and releases\history.md as
+rem rendered into the release readme (task 43.61): a line past 78
+rem columns or a character that is not printable ASCII stops a cut, and until
+rem this gate nothing met it before one - 43.11's test cut found two such
+rem lines that two merges had left. The rule and the list are
+rem package-common.ps1's, which the cut reads too.
+echo.
+echo === tool readme text ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-readme-text.ps1" -SelfTest
+if errorlevel 1 goto readmetextfail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-readme-text.ps1"
+if errorlevel 1 goto readmetextfail
+
 rem XHCICLN and XHCITR compile the installer's pure half
 rem (xhciinst\inst_core.c), so a change there makes both stale and
 rem make-release.ps1 refuses them; the x86 run rebuilds both, the x64 halves
@@ -550,6 +569,10 @@ if /i "%ARCH%"=="x86" (
     call "%REPO%\xhcicln\build.cmd"
     if errorlevel 1 goto toolbuildfail
     call "%REPO%\xhcitr\build.cmd"
+    if errorlevel 1 goto toolbuildfail
+    rem The disk benchmark (task 43.50, design record 29 section 10), which
+    rem compiles Stor98's interface header stor98pf.h.
+    call "%REPO%\xhciperf\build.cmd"
     if errorlevel 1 goto toolbuildfail
 )
 
@@ -600,6 +623,17 @@ if exist "%REPO%\xhcitr\XHCITR.EXE" (
     echo === xhcitr snapshot self-test ===
     call "%REPO%\xhcitr\snaptest.cmd"
     if errorlevel 1 goto snaptestfail
+)
+
+rem The disk benchmark (task 43.50, design record 29 section 10.3), when its
+rem EXE has been built: its import table (the seven of XHCITR), the source
+rem rule that it opens no physical drive, and its /selftest, which touches no
+rem disk and opens no window (xhciperf\selftest.cmd).
+if exist "%REPO%\xhciperf\XHCIPERF.EXE" (
+    echo.
+    echo === xhciperf self-test ===
+    call "%REPO%\xhciperf\selftest.cmd"
+    if errorlevel 1 goto perftestfail
 )
 
 rem The safe-removal mark service (task 42-A.5, design record 21 section
@@ -1390,6 +1424,14 @@ echo 1998-era toolchain cannot read one. See the check's output above.
 endlocal
 exit /b 1
 
+:readmetextfail
+echo.
+echo ERROR: a tool readme or the release history the release cut publishes has
+echo a line past 78 columns or a character that is not printable ASCII, and make-release.ps1 would
+echo refuse it - see the check's output above.
+endlocal
+exit /b 1
+
 :mktestfail
 echo.
 echo ERROR: xhcimark's self-test failed: its pure half, its switches or its
@@ -1411,6 +1453,13 @@ echo its version stamp cannot be trusted (xhciinst\di\selftest.cmd).
 endlocal
 exit /b 1
 
+:perftestfail
+echo.
+echo ERROR: xhciperf's self-test failed: its import table, its source rule or
+echo its pure half cannot be trusted (xhciperf\selftest.cmd).
+endlocal
+exit /b 1
+
 :trtestfail
 echo.
 echo ERROR: xhcitr's self-test failed: its switches, its pure half or its
@@ -1427,7 +1476,7 @@ exit /b 1
 
 :toolbuildfail
 echo.
-echo ERROR: xhcicln\build.cmd or xhcitr\build.cmd failed: the tools that
+echo ERROR: xhcicln\build.cmd, xhcitr\build.cmd or xhciperf\build.cmd failed: the tools that
 echo compile the installer's pure half are not current.
 endlocal
 exit /b 1

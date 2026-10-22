@@ -170,6 +170,11 @@ rem                  40.6, design record 23): the INF reader over src\'s INFs,
 rem                  the models section per system, versions, ids, the action
 rem                  per device, the uninstall order, the registry value
 rem                  table and its applicability, the switches, exit codes
+rem   test_pf      - the disk benchmark's pure half (xhciperf\pf_core.c, task
+rem                  43.50, design record 29 section 9): presets and the plan,
+rem                  the pattern and its map, the generation limit, statistics,
+rem                  the header, paths, the key, saved results, the command line
+rem   test_pfs98   - its reader of Stor98's counter answer (xhciperf\pf_s98.c)
 rem   test_wizlay  - the installer window's settings-page layout arithmetic
 rem                  (xhciinst\wiz_lay.c, task 43.10, design record 26
 rem                  section 5.4): the "now" column, the split into parts of
@@ -636,6 +641,10 @@ call :run test_wizlay "test_wizlay.c ..\xhciinst\wiz_lay.c"
 rem test_trpop links the 98 SE pop-up's pure half alone (xhcitr\tr_pop.c,
 rem task 43.55, design record 25 section 16).
 call :run test_trpop "test_trpop.c ..\xhcitr\tr_pop.c"
+rem test_pf and test_pfs98 link the disk benchmark's two pure halves
+rem (xhciperf\pf_core.c and pf_s98.c, task 43.50, design record 29 section 9).
+call :run test_pf "test_pf.c ..\xhciperf\pf_core.c"
+call :run test_pfs98 "test_pfs98.c ..\xhciperf\pf_s98.c ..\xhciperf\pf_core.c"
 rem test_dijob links both pure halves, the installer's and the helper's:
 rem each reads what the other writes (record 27 sections 4.1 and 4.2).
 call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_core.c"

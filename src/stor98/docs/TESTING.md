@@ -121,12 +121,15 @@ roots (until 0.4.0.0, the folders of a release stage):
   folder. **XP x64, Vista x64, 7 x64**: the same with `x64\`; Vista x64 and 7 x64 need
   test-signing on and a signed image (Code 52 otherwise).
 - **8 and 8.1**: 8 x86 installs from `x86\` (read 2026-10-22 through the installer's own
-  call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refuse the
-  `x64\` package at the driver store because it has no catalog (`0xE000022F`, with
-  test-signing on; off not read); 8.1 x86 not run.
+  call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refused xhci98
+  3.1.0.0's `x64\` package at the driver store because it has no catalog (`0xE000022F`,
+  with test-signing on; off not read); with `stor98.cat` (xhci98 3.2.0.0) 8.1 x64 took it
+  into the store (xhci98's roadmap 43.36), no drive bound; 8 x64 with it, and 8.1 x86, not
+  run.
 - **10 (below build 22000)**: 10 x86 installs from `x86\` over Windows' own `stornvme`
-  (the installer's own call, forced); 10 x64 refuses `x64\` at the driver store as 8 x64
-  does ("Windows 10", below).
+  (the installer's own call, forced); 10 x64 refused the catalog-less `x64\` as 8 x64 did
+  ("Windows 10", below), and took the package with `stor98.cat` into the store as 8.1 x64
+  did, no drive bound.
 - Pass: the controller shows "Stor98 Storage Controller for NVMe SSDs" working, its test volume is
   readable, and each OS has only its own image: `dir C:\stor98.* /s` finds only
   `SYSTEM\IOSUBSYS\STOR98.MPD` on 9x (and the class key's `PortDriver` is `stor98.mpd`),
@@ -184,15 +187,16 @@ the debug-port builds' stage lines to `isa-debugcon` with `usb4-debug-port`.
 | 8.1 x64, unplug during writes under `stornvme` (no Stor98) | - | the copy in flight blocked for five minutes: `stornvme` logged event 129 ("Reset to device, \Device\RaidPort0, was issued") and event 11 ("controller error") every 35 s, the disk never removed; with the tunnel brought back after 4.6 min the reset succeeded 23 s later and the copy completed with success. For xhci98's release notes (its roadmap 43.24 owes the leg under its own connection manager) |
 
 What it leaves unread: 32-bit Windows 8.1 (no medium); Stor98 x64 running on 8 and 8.1 at
-all (refused at the driver store; the kernel's acceptance of the SHA-1 test signature there
-is unread behind that); a removal with a platform notification (pci.sys removing the
+all (refused at the driver store without a catalog; with one, taken into the store on 8.1
+x64 by xhci98's roadmap 43.36 and bound to no drive, so the kernel's acceptance of its
+SHA-1 test signature there is unread); a removal with a platform notification (pci.sys removing the
 controller) and xhci98's connection manager's link-down statement on 8 and 8.1 (roadmap
 43.24); the xhci98 installer's own run on 8 and 8.1 (43.24).
 
 | Untested ground on 8 and 8.1 | State |
 |---|---|
 | Windows 8.1, 32-bit | Not run: no install medium (owner, 2026-10-22: skipped for xhci98 `3.2.0.0`, covered by 8 x86 and 8.1 x64). The x86 package is the one 8 x86 ran; 8.1 x86's `stornvme` and SCSIport are unread |
-| Stor98 x64 on 8, 8.1 and 10 | Not loaded: the package is refused at the driver store (no catalog, above). Waiting on the test-signed catalog xhci98 is adding to its x64 packages (owner, 2026-10-22); with it, the install, the load and a removal under Stor98 on 8 x64 and 8.1 x64 |
+| Stor98 x64 on 8, 8.1 and 10 | Not loaded. Without a catalog the package is refused at the driver store (above); with the test-signed `stor98.cat` of xhci98 3.2.0.0 (owner, 2026-10-22) it was taken into the store on 8.1 x64 and 10 x64 (xhci98's roadmap 43.36, the catalog signed in the guest with a certificate of its own) and bound to no drive. Owed: the forced install over `stornvme`, the load and a removal under Stor98 on 8 x64, 8.1 x64 and 10 x64 |
 | Removal with a platform notification, and xhci98's link-down statement, on 8 and 8.1 | Not read; xhci98's roadmap 43.24 |
 
 ## Windows 10 (xhci98 roadmap 43.23 and 43.34, 2026-10-22)
@@ -218,7 +222,8 @@ Stor98 is there; its imports differ from 8's by five names (`IoGetCurrentProcess
 | 10 x64, install | xhci98 `3.1.0.0` `release-x64` | **refused**: `0xE000022F`; `setupapi.dev.log` "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode", "Failed to import driver package into Driver Store"; both controllers stay with `stornvme` |
 
 What it leaves unread on 10: the terminal status question of PLAN 2.2 (only `NO_DEVICE`
-ran, without stage codes); Stor98 x64 (refused, as on 8 and 8.1); 10 builds other than
+ran, without stage codes); Stor98 x64 running (refused without a catalog, as on 8 and 8.1;
+with one taken into the store and bound to no drive, xhci98's roadmap 43.36); 10 builds other than
 22H2 (1507 to 21H2, the LTSC releases, Server 2016 to 2022); the removal with a platform
 notification and xhci98's connection manager on 10 (its roadmap 43.37).
 
@@ -486,6 +491,30 @@ are the dated notes in the rows.
 | Interrupt modes (PLAN 2.3) | each data-path case under INTx, INTx with lost interrupts, and polling only | same results; every command completes within the watchdog period plus 1 s |
 | Polling mode (PLAN "Polling mode (0.4.0.0)") | polling forced (`StorPollMode` = 1 on 98 SE, `pollmode=1` on 2000, XP x64 and 7 x86; run before the `Stor` prefix, as `PollMode`): install, the interrupt report value (`regedit /e` of `Services\stor98`), I/O with data compare (9x: absw through VWIN32 7305h; NT: raw `PhysicalDrive` write-back and compare at QD1 and QD8, on 7 reads only and a file copy with `fc /b`), surprise removal during I/O, shutdown; the rate check with `StorPollBusyUs` 1000, 10000 and 50000 on 98 SE; polling against interrupts at the defaults; plus the 9x interrupt-mode regression against 0.3.0.1 (98 SE and ME) for the timer re-arm finding | data compares pass; removal reaches gone (and the MD-1 deadline or evidence 2) as with an interrupt; SHUTDOWN or the stop path completes; the time per request follows `StorPollBusyUs`; `HwInterrupt` is not called (stage 0x156 absent). Run 2026-10-16 on the merged tree: pass (numbers in PLAN) |
 | 9x caller buffer (PLAN 0.4 "9x caller buffer", 42-A.33) | 98 SE (perf/98 base, SCSIPORT 4.10.2223) and ME on the emulator, the NVMe test disk F: on a fresh overlay, cm9x stand-in, one image per run: the install batch copies `D:\<name>.MPD` over the miniport and writes the name to the log; the MD5s of the copies on D: were recorded (N 8dd6ae72, D be2b6009, B afdee19c, F f176c567, O b3f7444a); stage 0xCC was checked for D, B and F (frag and bounce), and F also showed its 0xBD reason-5 stages; N and O write no debug output and are told apart only by the file the batch copied; the installed file was not hashed in the guest. Images: N (free), D (debug port), B (`STOR98_TEST_BOUNCE=1`: every data child bounces), F (B plus `STOR98_TEST_FRAG_KB=16` and `STOR98_TEST_SG9X_FAIL`: every n-th bounce copy reported unresolved) and O (the engine before the fix, as the baseline). **Copy suite** (N, D, B, O): copy C:\WINDOWS\SYSTEM to F:\T1 through VCACHE; then, in the same boot, `t9x aspi` (INQUIRY, VPD 80h, READ CAPACITY, LOG SENSE, SMART IDENTIFY and READ DATA by pass-through, then READ/WRITE(10) of 1, 7, 8, 9, 64, 128 and 255 sectors at buffer offsets 0, 4, 512, 2052 and 4092, each compared, and the scratch area restored), `t9x abs` (VWIN32 absolute reads and writes, compared) and `t9x file`; cold boot; copy F:\T1 to F:\T2; shut down; compare T1 and T2 with their sources on the host. **Fault suite** (F): one boot, `t9x abs`, `t9x file` and `t9x aspi` (or `aspi` first), shut down | every file of T1 and T2 byte-identical; 0 failures in `aspi`, `abs` and `file`; the SMART and identify data correct. F: each injected failure is a stage 0xBD reason 5 and ends the request as HARDWARE ERROR, ASC 44h; no compare mismatch, ever; shutdown clean. **Run 2026-10-19 (images of 6f945f20, cold boots only):** 98 SE N, D, B and O: 501 of 501 files (75.1 MiB) identical in T1 and T2, `aspi`, `abs` and `file` 0 failures. ME N, D, B and O: 614 of 614 files (103.6 MiB) identical, 0 failures. F, fault suite: 98 SE 28 injected failures (15 on writes, 13 on reads), ME 28 (14 and 14); the failed requests were retried above the driver, and `abs` and `file` reported 0 failures; shutdown clean. F with `aspi` first (98 SE): 30 injected failures; `aspi` reported 3 failures: a 128-sector pair ERROR and the restore WRITE(10), each ASPI status 04 with sense 04/44/00, and the restore check that followed (the restore write had not happened); no MISMATCH; `abs` and `file` 0 failures. Not from this fix, and not explained: when `t9x aspi` runs after `abs` and `file` in the same boot, its first 255-sector READ(10) is still pending after 20 s (ASPI status 00). With the debug-port images (F on 98 SE and ME, B without injection) no StartIo appeared in the log in the 20 minutes up to shutdown, and the admitted and completed counts were equal when it stalled. O, the engine before the fix, which writes no debug output, shows the same pending-ASPI symptom |
+
+### Counter answer (READ BUFFER)
+
+The read-only counter answer (docs/PLAN.md MD-8, include/stor98pf.h).
+Host: tests/unit/pfstat_ut.c (buckets, totals, the CDB's checks and cut,
+the identity page) and tests/unit/sg9x_ut.c (the DCB facts on linear and
+scatter/gather requests, a foreign and an out-of-arena IOP and DCB);
+tests/unit/inqid_ut.c (page 00h lists C9h). Emulator, through xhci98's
+XHCIPERF or a SCSI pass-through client, on 98 SE (ASPI) and on 2000 or 7
+(IOCTL_SCSI_PASS_THROUGH):
+
+- the answer read idle and between large transfers: the totals rise by
+  what was moved, a resume keeps the epoch, a re-plug changes it;
+- the same under interrupts and in polling mode, on a 512-byte and a
+  4,096-byte namespace;
+- a read sent during bring-up is held and answered in order once
+  running; one in the gone state is refused;
+- reads with I/O completing around them;
+- a surprise removal and a reconnect with reads between tests;
+- the emulator's NVMe trace shows no command for any READ BUFFER or
+  INQUIRY C9h;
+- on 98 SE, the DCB facts (DCB_max_xfer_len 80000h, DCB_max_sg_elements
+  17, DCB_dmd_flags with 800h) and, with xhci98's VSD (task 43.46), the
+  flags without 800h and requests of 128 to 512 KiB whole.
 
 ### Lifecycle and recovery
 

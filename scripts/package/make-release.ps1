@@ -239,6 +239,17 @@ Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
 then says in one line that the package has none, and the release says so on
 the console and in its readme.
 
+.PARAMETER PerfToolDir
+Where `XHCIPERF.EXE` and `XHCIPF64.EXE` are built. Defaults to `xhciperf\` in
+the repository. Both are staged into `releases\<version>\tools\xhciperf\` with
+a readme.txt and a NOTICE.TXT: the xHCI98 Disk Benchmark, which the installer
+copies into the install directory with its own files (roadmap-usb4.md task
+43.50, design record 29 section 11).
+
+.PARAMETER SkipPerfTool
+Do not stage the disk benchmark. For a host that cannot build it; the release
+says so on the console and in its readme.
+
 .PARAMETER MarkToolDir
 Where `XHCIMARK.EXE` and `XHCIMK64.EXE` are built. Defaults to `xhcimark\` in
 the repository. Both are staged into `releases\<version>\tools\xhcimark\` with
@@ -344,9 +355,9 @@ renders no banner.
 The project test certificate's .pfx (design record 19; owner, 2026-10-11).
 **Required of every cut that publishes an x64 directory**, and refused with no
 switch past it when absent: each x64 leg's make-package.ps1 run is passed it,
-signs xhci98.sys and xhciuas.sys at staging (SHA-1 file digest, no timestamp,
-no catalog, the INFs unchanged) and stages xhci98-test.cer, the certificate's
-public half, beside them. This script then holds each published x64 binary to
+signs xhci98.sys and xhciuas.sys at staging (SHA-1 file digest, no timestamp),
+makes and signs one catalog per INF (since 3.2.0.0, design record 19 section
+3a) and stages xhci98-test.cer, the certificate's public half, beside them. This script then holds each published x64 binary to
 that signature by this key's thumbprint and to the build's bytes, and the
 published certificate to this key's. The password is read from
 XHCI98_TESTSIGN_PW or, where that is unset, a prompt that does not echo, once,
@@ -458,6 +469,8 @@ param(
     [switch]$SkipInstallTool,
     [string]$TrayToolDir = "",
     [switch]$SkipTrayTool,
+    [string]$PerfToolDir = "",
+    [switch]$SkipPerfTool,
     [switch]$SkipDiHelper,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
@@ -522,10 +535,13 @@ was asked for, and nothing else.
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
-if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
-if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo "xhcimark" }
-if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
-if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo "xhcitr" }
+# The five tools whose README.TXT the cut reads, from package-common.ps1's
+# table, which the gated build's readme check reads too (task 43.61).
+if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo $script:ToolReadmeDirs.Clean }
+if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo $script:ToolReadmeDirs.Mark }
+if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo $script:ToolReadmeDirs.Install }
+if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo $script:ToolReadmeDirs.Tray }
+if ($PerfToolDir -eq "") { $PerfToolDir = Join-Path $repo $script:ToolReadmeDirs.Perf }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -587,23 +603,11 @@ function Write-GeneratedText {
     if ($null -ne $destRoot -and $Path.StartsWith($destRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
         $name = $Path.Substring($destRoot.Length + 1)
     }
-    $overLong = @($Lines | Where-Object { $_.Length -gt 78 })
-    if ($overLong.Count -gt 0) {
-        Stop-CutCheck ("{0} has {1} line(s) past 78 columns, the first being:`n{2}" -f `
-                       $name, $overLong.Count, $overLong[0])
-    }
-
-    :lines for ($i = 0; $i -lt $Lines.Count; $i++) {
-        $line = $Lines[$i]
-        for ($c = 0; $c -lt $line.Length; $c++) {
-            $code = [int][char]$line[$c]
-            if ($code -lt 0x20 -or $code -gt 0x7E) {
-                if ($code -eq 9) { continue }
-                Stop-CutCheck ("{0} line {1} column {2} is not printable ASCII (U+{3:X4}); Write-AsciiFile would replace it with a question mark. The line reads:`n{4}" -f `
-                               $name, ($i + 1), ($c + 1), $code, $line)
-                break lines
-            }
-        }
+    # The rule is package-common.ps1's Get-PlainTextFaults, which the gated
+    # build's scripts\check-readme-text.ps1 also holds the tracked tool
+    # readmes to (task 43.61).
+    foreach ($fault in @(Get-PlainTextFaults -Name $name -Lines $Lines)) {
+        Stop-CutCheck $fault
     }
 
     Write-AsciiFile -Path $Path -Lines $Lines
@@ -682,6 +686,7 @@ $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $MarkToolDir = Resolve-DirectoryArgument $MarkToolDir
 $InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
 $TrayToolDir = Resolve-DirectoryArgument $TrayToolDir
+$PerfToolDir = Resolve-DirectoryArgument $PerfToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
 $UploadDir   = Resolve-DirectoryArgument $UploadDir
 
@@ -825,9 +830,10 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # (task 42-A.4, into XHCITR): $retiredToolNames admits it in a tree the
 # upload assembly reads at a version that published it, and never in a cut.
 # xhcimark\, the mark service of task 42-A.5, is first published in 3.1.0.0.
+# xhciperf\, the disk benchmark of task 43.50, is first published in 3.2.0.0.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")
+$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark", "xhciperf")
 $retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0" }
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
@@ -1216,6 +1222,11 @@ function Assert-ReportBatchContent {
 # has none, so it is accepted where present and not required of one. Never
 # the .pfx, which holds the private key and is never staged.
 $certPublishable = @("xhci98-test.cer")
+# The x64 catalogs (design record 19 section 3a; owner, 2026-10-22): one per
+# INF of a signed x64 directory, beside it, published since 3.2.0.0, made and
+# signed by make-package.ps1 and held here to Test-CatalogOfPackage on the
+# directory that is published. A version published before 3.2.0.0 has none.
+$catPublishable = @($script:PackageCatalogs.Keys)
 
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
@@ -1253,86 +1264,9 @@ function New-ReleaseLegs {
     return @($out)
 }
 
-function Format-Wrapped {
-    # Greedy word wrap with a separate first-line and continuation prefix, so a
-    # bullet hangs under its own text rather than under the marker.
-    param(
-        [string]$Text,
-        [int]$Width,
-        [string]$FirstPrefix = "",
-        [string]$RestPrefix = ""
-    )
-
-    $words = @($Text -split '\s+' | Where-Object { $_ -ne "" })
-    if ($words.Count -eq 0) { return @() }
-
-    $out = @()
-    $line = $FirstPrefix + $words[0]
-    for ($i = 1; $i -lt $words.Count; $i++) {
-        if (($line + " " + $words[$i]).Length -gt $Width) {
-            $out += $line
-            $line = $RestPrefix + $words[$i]
-        } else {
-            $line = $line + " " + $words[$i]
-        }
-    }
-    # @() or a single-line block returns a bare string, and Set-StrictMode 2.0
-    # then makes .Count on it a runtime error at the call site.
-    return @($out + $line)
-}
-
-function ConvertFrom-MarkdownBlocks {
-    # The narrow subset releases\history.md actually uses: '###' headings,
-    # '-' bullets that may continue on indented lines, and plain paragraphs.
-    # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
-    # rendered - there is nothing to render them with in a .txt file.
-    param([string[]]$Lines, [int]$Width = 78)
-
-    $out = @()
-    $pending = ""          # text of the block being accumulated
-    $kind = "none"         # none | bullet | para
-
-    function Flush {
-        param([string]$Text, [string]$Kind, [int]$W, [object[]]$Acc)
-        if ($Text -eq "") { return @($Acc) }
-        if ($Kind -eq "bullet") {
-            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
-        }
-        return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
-    }
-
-    foreach ($raw in $Lines) {
-        $line = $raw -replace '\*\*', '' -replace '`', ''
-        # Single-asterisk emphasis, but only around a word - never a bullet
-        # marker, which lives at the start of the line and is handled below.
-        $line = $line -replace '(?<=\S)\*(\S[^*]*?)\*', '$1' -replace '(?<=\s)\*(\S[^*]*?)\*', '$1'
-
-        if ($line.Trim() -eq "") {
-            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-            $pending = ""; $kind = "none"
-            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
-            continue
-        }
-        if ($line -match '^###\s+(.*)$') {
-            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-            $pending = ""; $kind = "none"
-            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
-            $out += ("  " + $Matches[1].Trim())
-            $out += ""
-            continue
-        }
-        if ($line -match '^\s*-\s+(.*)$') {
-            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-            $pending = $Matches[1].Trim(); $kind = "bullet"
-            continue
-        }
-        # A continuation of whatever block is open, or the start of a paragraph.
-        if ($kind -eq "none") { $kind = "para" }
-        $pending = if ($pending -eq "") { $line.Trim() } else { $pending + " " + $line.Trim() }
-    }
-    $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
-    return $out
-}
+# Format-Wrapped and ConvertFrom-MarkdownBlocks, which render the embedded
+# release history, are package-common.ps1's since task 43.61, so the gated
+# build's readme check renders history.md exactly as the cut does.
 
 function Get-InfDriverVersion {
     param([string]$Path)
@@ -1525,7 +1459,10 @@ function Get-DeclaredMediaLayout {
     param(
         [Parameter(Mandatory = $true)][string]$InfPath,
         [Parameter(Mandatory = $true)][ValidateSet("x86", "amd64")][string]$Arch,
-        [Parameter(Mandatory = $true)][string]$Label
+        [Parameter(Mandatory = $true)][string]$Label,
+        # A published tree's version, for the gate's rules that changed with
+        # one (BOTH-CATALOG from 3.2.0.0); empty: this tree's INF.
+        [string]$PublishedVersion = ""
     )
 
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
@@ -1540,9 +1477,11 @@ function Get-DeclaredMediaLayout {
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $out = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
-                                      "-InfPath", $InfPath, "-Arch", $Arch,
-                                      "-EmitMediaLayout", $layoutFile) 2>&1 | Out-String
+            $pvArgs = @()
+            if ($PublishedVersion -ne "") { $pvArgs = @("-PublishedVersion", $PublishedVersion) }
+            $out = & powershell.exe (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
+                                       "-InfPath", $InfPath, "-Arch", $Arch,
+                                       "-EmitMediaLayout", $layoutFile) + $pvArgs) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
         }
@@ -2393,7 +2332,7 @@ their defaults.
         $legLayouts[$legDir] = Get-DeclaredMediaLayout `
             -InfPath (Join-Path $PublishedRoot (Join-Path $legDir $infName)) `
             -Arch $LegArches[$legDir] `
-            -Label "the published $legDir\$infName"
+            -Label "the published $legDir\$infName" -PublishedVersion $Version
     }
     $mediaLayout = $legLayouts[$Flavors[0]]
 
@@ -2444,7 +2383,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }))
+                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2509,7 +2448,7 @@ asset has to be assembled by the cut that publishes it.
         try {
             $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
                                           "-InfPath", $flavorInf, "-Arch", $LegArches[$f],
-                                          "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+                                          "-PackageDir", $uploadFlavorDir, "-PublishedVersion", $Version) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
         }
@@ -2527,6 +2466,17 @@ $gateOut
 
         Write-Ok ("{0}\ is complete install media, by its own INF" -f $f)
 
+        # The x64 catalogs (design record 19 section 3a), required of an x64
+        # directory published from 3.2.0.0 and judged against the pinned
+        # project certificate, since -UploadSetOnly has no key to compare.
+        if ($LegArches[$f] -eq "amd64" -and [version]$Version -ge [version]"3.2.0.0") {
+            $catWhy = Test-CatalogOfPackage -Dir $uploadFlavorDir -Thumbprint $script:TestSignThumbprint
+            if ($catWhy -ne "") {
+                throw "the assembled upload set's $f\ directory does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Do not upload it."
+            }
+            Write-Ok ("{0}\ carries a catalog per INF, signed by the project test certificate" -f $f)
+        }
+
         # The UAS pair, by its own INF and gate. Required of a directory this
         # cut built; gated where present in one -UploadSetOnly reads, since a
         # version published before 2.0.0.0 has none.
@@ -2538,7 +2488,7 @@ $gateOut
             try {
                 $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $uasGate,
                                               "-InfPath", $uasInf, "-Arch", $LegArches[$f],
-                                              "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+                                              "-PackageDir", $uploadFlavorDir, "-PublishedVersion", $Version) 2>&1 | Out-String
             } finally {
                 $ErrorActionPreference = $savedEap
             }
@@ -3594,7 +3544,10 @@ runs are what stand between a broken binary and a guest that cannot boot.
 
             $legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)
             $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $legStor98
-            if ($legSigned) { $legCopy += $certPublishable }
+            if ($legSigned) {
+                $legCopy += $certPublishable
+                $legCopy += @($catPublishable | Where-Object { $legCopy -contains $script:PackageCatalogs[$_].Inf })
+            }
             foreach ($name in $legCopy) {
                 $src = Join-Path $pkgDir $name
                 if (-not (Test-Path -LiteralPath $src)) {
@@ -3621,7 +3574,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                                -PublishedPaths $declaredPublished[$leg.Arch] `
                                                -InfName "xhci98.inf" -Flavor $leg.Id `
-                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
+                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable + $catPublishable } else { @() }) + $legStor98)
             Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
             # The published Stor98 images carry this release's version, like
             # xhci98.sys below (task 42-A.30).
@@ -3639,6 +3592,16 @@ runs are what stand between a broken binary and a guest that cannot boot.
                           (Get-FileHash -LiteralPath $nvBuilt -Algorithm SHA256).Hash) {
                     throw "the $($leg.Dir)\$nvRel about to be published is not the build at '$nvBuilt'."
                 }
+            }
+            # Each catalog of a signed leg covers its INF and that INF's files
+            # as they are published, signed by this cut's key (record 19
+            # section 3a): Windows 8 to 10 x64 install nothing without it.
+            if ($legSigned) {
+                $catWhy = Test-CatalogOfPackage -Dir $destDir -Thumbprint $testSignCert.Thumbprint
+                if ($catWhy -ne "") {
+                    throw "the $($leg.Dir)\ directory about to be published does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Re-run the cut with the key; never make or sign a catalog by hand."
+                }
+                Write-Ok ("{0}\ carries a catalog per INF, signed by the project test certificate {1}" -f $leg.Dir, $testSignCert.Thumbprint)
             }
             # S98VSD.VXD published is the gated build's, byte for byte.
             if ($legStor98 -contains "S98VSD.VXD" -and
@@ -4276,6 +4239,55 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}, snapshot schema {1}, matching src\xhci.h") -f $trayVersion, $snapSchemaTool)
     }
 
+    # --- the disk benchmark (task 43.50) -------------------------------------
+    #
+    # XHCIPERF.EXE (MSVC 6.0) and XHCIPF64.EXE (WDK 7.1 amd64), built from
+    # xhciperf\ (design record 29 section 10), which the installer copies from
+    # tools\xhciperf\ into the install directory with its own files (section
+    # 11). XHCITR's staleness and version rules; its sources include Stor98's
+    # interface header it reads. Not drivers: no test signature.
+    $perftoolStaged = $null
+    if (-not $SkipPerfTool) {
+        Write-Step "Disk benchmark"
+        $perfExes = @("XHCIPERF.EXE", "XHCIPF64.EXE")
+        foreach ($name in ($perfExes + @("README.TXT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $PerfToolDir $name) -PathType Leaf)) {
+                throw @"
+'$PerfToolDir' has no $name.
+Build the tool first:  xhciperf\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipPerfTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $perfSources = @(@(Get-ChildItem -LiteralPath $PerfToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\stor98\include\stor98pf.h")))
+        foreach ($name in $perfExes) {
+            $perfTime = (Get-Item -LiteralPath (Join-Path $PerfToolDir $name)).LastWriteTimeUtc
+            $perfNewer = @($perfSources | Where-Object { $_.LastWriteTimeUtc -gt $perfTime })
+            if ($perfNewer.Count -gt 0) {
+                Stop-CutCheck @"
+'$(Join-Path $PerfToolDir $name)' is older than $($perfNewer.Count) of its own source file(s):
+  - $(($perfNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhciperf\build.cmd) before releasing.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $PerfToolDir "xhciperf.c") -Macro "XHCIPERF_VERSION"
+        foreach ($name in $perfExes) {
+            Assert-ToolFileVersion -Path (Join-Path $PerfToolDir $name) -Version $Version
+        }
+        $perfDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciperf")
+        Ensure-Directory $perfDir
+        foreach ($name in $perfExes) {
+            Copy-Item -LiteralPath (Join-Path $PerfToolDir $name) -Destination (Join-Path $perfDir $name) -Force
+        }
+        $perftoolStaged = $perfDir
+        Write-Ok "XHCIPERF.EXE and XHCIPF64.EXE staged"
+    }
+
     # --- the 98 SE and ME device install helper (task 42-A.1) ----------------
     #
     # XHCIDI.EXE, a Win16 program built with Open Watcom against the Windows 98
@@ -4424,13 +4436,7 @@ helper (xhciinst\di\build.cmd).
     # maintenance note stay out of the user-facing file, and demote each entry
     # heading by one level to sit under this README's "Release history" section.
     # The *check* that an entry exists ran before anything was built.
-    $firstHeading = 0
-    for ($i = 0; $i -lt $historyLines.Count; $i++) {
-        if ($historyLines[$i] -match '^##\s') { $firstHeading = $i; break }
-    }
-    $history = @($historyLines[$firstHeading..($historyLines.Count - 1)] | ForEach-Object {
-        if ($_ -match '^##\s') { "#" + $_ } else { $_ }
-    })
+    $history = @(Get-HistoryEmbedLines -Lines $historyLines)
 
     #
     # One block per published directory, in leg order. The architecture is named
@@ -4494,6 +4500,8 @@ helper (xhciinst\di\build.cmd).
         } else {
             $contents += "      xhci98-test.cer (the test certificate both .sys files are"
             $contents += "                   signed with; you need not import it; section 4)"
+            $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
+            $contents += "                   it: Windows 8, 8.1 and 10 x64 need them; section 4)"
         }
         $contents += ""
     }
@@ -4606,6 +4614,20 @@ helper (xhciinst\di\build.cmd).
         $contents += "      bug report asks for (section 6)."
         $contents += ""
     }
+    if ($null -ne $perftoolStaged) {
+        $p32 = Get-Item -LiteralPath (Join-Path $perftoolStaged "XHCIPERF.EXE")
+        $p64 = Get-Item -LiteralPath (Join-Path $perftoolStaged "XHCIPF64.EXE")
+        $contents += "  TOOLS\XHCIPERF\ - the xHCI98 Disk Benchmark"
+        $contents += ""
+        $contents += ("      XHCIPERF.EXE {0:N0} bytes, for 32-bit Windows" -f $p32.Length)
+        $contents += ("      XHCIPF64.EXE {0:N0} bytes, for 64-bit Windows" -f $p64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      SETUP.EXE copies the one for your Windows into the"
+        $contents += "      install directory with the USB Tree."
+        $contents += ""
+    }
     if ($null -ne $pswStaged) {
         $contents += "  TOOLS\PORTSW\  - the Intel port switchover's switch (section 9)"
         $contents += ""
@@ -4638,11 +4660,9 @@ helper (xhciinst\di\build.cmd).
         $contents += "      USB storage. UAS is not in it: its driver is this"
         $contents += "      package's own, and its first install is the wizard's."
         $contents += ""
-        $contents += "      RUN silent-on.bat ONLY ONCE EACH LISTED CLASS'S DRIVERS"
-        $contents += "      HAVE BEEN INSTALLED AT LEAST ONCE on this machine. With"
-        $contents += "      no wizard, 98 SE asks for a missing file from its CD (a"
-        $contents += "      keyboard needs KBDHID.VXD), so a device whose driver is"
-        $contents += "      not on the machine yet needs the CD at hand."
+        $contents += "      With no wizard, 98 SE asks for a missing file from its"
+        $contents += "      CD (a keyboard needs KBDHID.VXD), so a device whose"
+        $contents += "      driver is not on the machine yet needs the CD at hand."
         $contents += ""
         $contents += "      Double-click silent-on.bat or silent-off.bat here, or run"
         $contents += "      it at a prompt in this directory, then RESTART WINDOWS."
@@ -4807,6 +4827,10 @@ other.
         Importing it is not needed: test-signing mode works without it,
         and it does not remove the install prompt either. It is not
         recommended.
+      - Each INF of an X64 directory has a catalog beside it (xhci98.cat
+        and the others), signed with the same certificate. Windows 8, 8.1
+        and 10 x64 install no driver package without one in test-signing
+        mode; keep the .cat files with the INFs.
       - F8 -> Disable Driver Signature Enforcement still works as before,
         for one start, without test mode.
       - 32-bit Vista and 7, and XP x64, need neither.
@@ -5161,19 +5185,27 @@ and NUSB 3.6 install:
 
   THE SEVEN FILES CAN ALSO BE INSTALLED ON THEIR OWN, without the rest of
   NUSB: point the Add New Hardware Wizard, or Update Driver on the device,
-  at a folder holding them. ON THE FIRST STORAGE DEVICE, ONE STEP IS NOT
-  OBVIOUS. Windows gives the new disk its own generic "Disk drive" before it
-  has seen USBNTMAP.INF, and no drive letter appears. Then:
+  at a folder holding them. FIRST COPY USBNTMAP.INF INTO C:\WINDOWS\INF,
+  BEFORE THE FIRST USB DISK IS PLUGGED IN. The wizard takes USBSTOR.INF
+  from the folder but not USBNTMAP.INF, and on a stock Windows 98 SE the
+  disk is then taken by Windows' own NTMAP.INF, which copies NTMAPHLP.PDR
+  from the Windows CD; Windows stops with "Invalid VxD dynamic link call
+  from NTMAPHLP" and hangs, even with all seven in the folder. The
+  installer's storage row places and removes the two together, and says
+  so if it finds USBSTOR.INF left in the INF folder without USBNTMAP.INF.
+
+  With USBNTMAP.INF in C:\WINDOWS\INF first, the storage devices tried,
+  USB sticks and UAS disks, worked with no extra step. On a Windows 98 SE
+  that still held
+  NUSB's other files (IOS.VXD, DISKTSD.VXD, NTMAP.SYS), a disk installed
+  before USBNTMAP.INF was seen went to Windows' generic "Disk drive" with
+  no drive letter instead. Then:
 
     1. Device Manager -> Disk drives -> "Disk drive" -> Driver -> Update
        Driver, pointed at the same folder. It installs "USB Disk".
     2. Unplug the device and plug it back in.
 
-  After that the storage devices tried, USB sticks and UAS disks, worked
-  with no extra step. THIS WAS READ ONLY ON A WINDOWS 98 SE THAT STILL HELD
-  NUSB'S OTHER FILES (IOS.VXD, DISKTSD.VXD, NTMAP.SYS). Whether a stock
-  Windows 98 SE installed from the CD needs any of those too is not yet
-  known; if storage does not work there, install NUSB 3.3 or 3.6.
+  If storage does not work, install NUSB 3.3 or 3.6.
 
 On Windows ME, Windows' own storage files serve USB sticks: they are copied
 from the Windows ME CABs when the first stick installs. UAS disks need the
@@ -6555,7 +6587,7 @@ which XHCITR matches this driver by that number; correct the sentence.
     # breaking lines in the wrong places. So each block is joined back into one
     # string, stripped of inline markup, and wrapped to fit with a hanging
     # indent - the paragraph shape survives, the width is enforced.
-    $historyText = @(ConvertFrom-MarkdownBlocks -Lines $history -Width 78)
+    $historyText = @(ConvertFrom-MarkdownBlocks -Lines $history -Width $script:PlainTextColumns)
 
     #
     # **An incomplete cut has to say so IN THE FILE**, which is the audit of
@@ -6572,6 +6604,7 @@ which XHCITR matches this driver by that number; correct the sentence.
     if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal mark service of section 4)" }
     if ($null -eq $insttoolStaged) { $missingTools += "SETUP.EXE, INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
     if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
+    if ($null -eq $perftoolStaged) { $missingTools += "TOOLS\XHCIPERF\ (the xHCI98 Disk Benchmark)" }
     if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
@@ -7082,10 +7115,7 @@ provenance record is docs\contributing\legal-provenance.md, section 2a.
     # as XHCISNAP's recorded its one, for the same reason and on the same terms
     # (legal-provenance.md section 2a).
     if ($null -ne $cleantoolStaged) {
-        $cleanReadme = @([System.IO.File]::ReadAllText((Join-Path $CleanToolDir "README.TXT")) -split "`r?`n")
-        while ($cleanReadme.Count -gt 0 -and $cleanReadme[$cleanReadme.Count - 1] -eq "") {
-            $cleanReadme = @($cleanReadme | Select-Object -First ($cleanReadme.Count - 1))
-        }
+        $cleanReadme = @(Read-ToolReadmeLines (Join-Path $CleanToolDir $script:ToolReadmeName))
         $cleanFooter = @'
 
 ------------------------------------------------------------------------------
@@ -7137,10 +7167,7 @@ sufficient.
     # As the cleanup tool's: xhcimark\README.TXT with the release's footer,
     # and NOTICE.TXT recording the two statically linked runtimes.
     if ($null -ne $marktoolStaged) {
-        $markReadme = @([System.IO.File]::ReadAllText((Join-Path $MarkToolDir "README.TXT")) -split "`r?`n")
-        while ($markReadme.Count -gt 0 -and $markReadme[$markReadme.Count - 1] -eq "") {
-            $markReadme = @($markReadme | Select-Object -First ($markReadme.Count - 1))
-        }
+        $markReadme = @(Read-ToolReadmeLines (Join-Path $MarkToolDir $script:ToolReadmeName))
         $markFooter = @'
 
 ------------------------------------------------------------------------------
@@ -7192,10 +7219,7 @@ sufficient.
     # footer, and NOTICE.TXT recording the two statically linked runtimes
     # (legal-provenance.md section 2a).
     if ($null -ne $insttoolStaged) {
-        $instReadme = @([System.IO.File]::ReadAllText((Join-Path $InstallToolDir "README.TXT")) -split "`r?`n")
-        while ($instReadme.Count -gt 0 -and $instReadme[$instReadme.Count - 1] -eq "") {
-            $instReadme = @($instReadme | Select-Object -First ($instReadme.Count - 1))
-        }
+        $instReadme = @(Read-ToolReadmeLines (Join-Path $InstallToolDir $script:ToolReadmeName))
         $instFooter = @"
 
 ------------------------------------------------------------------------------
@@ -7258,10 +7282,7 @@ $instMsFiles
     # footer, and NOTICE.TXT recording the two statically linked runtimes
     # (legal-provenance.md section 2a).
     if ($null -ne $traytoolStaged) {
-        $trayReadme = @([System.IO.File]::ReadAllText((Join-Path $TrayToolDir "README.TXT")) -split "`r?`n")
-        while ($trayReadme.Count -gt 0 -and $trayReadme[$trayReadme.Count - 1] -eq "") {
-            $trayReadme = @($trayReadme | Select-Object -First ($trayReadme.Count - 1))
-        }
+        $trayReadme = @(Read-ToolReadmeLines (Join-Path $TrayToolDir $script:ToolReadmeName))
         $trayFooter = @"
 
 ------------------------------------------------------------------------------
@@ -7306,6 +7327,57 @@ sufficient.
         Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT") `
                             -Lines ($trayNotice -split "`r?`n")
         Write-Ok "NOTICE.TXT written beside XHCITR.EXE and XHCITR64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
+    # --- the disk benchmark's readme and notices (task 43.50) ----------------
+    if ($null -ne $perftoolStaged) {
+        $perfReadme = @(Read-ToolReadmeLines (Join-Path $PerfToolDir $script:ToolReadmeName))
+        $perfFooter = @"
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIPERF.EXE and XHCIPF64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+"@
+        $perfLines = @($perfReadme) + @($perfFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $perftoolStaged "readme.txt") -Lines $perfLines
+        # The same text under the tool's own name, which the installer copies
+        # beside the tool in the install directory and its Help opens.
+        Write-GeneratedText -Path (Join-Path $perftoolStaged "XHCIPERF.TXT") -Lines $perfLines
+        $perfNotice = @"
+==============================================================================
+                          x h c i 9 8   {VERSION}
+          THIRD-PARTY NOTICES FOR XHCIPERF.EXE AND XHCIPF64.EXE
+==============================================================================
+
+XHCIPERF.EXE and XHCIPF64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+Their icon was drawn for this project. They include Stor98's interface
+header stor98pf.h, which is under the BSD-3-Clause licence it carries.
+
+They are not only this project's code. XHCIPERF.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCIPF64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs. Its import tables name only Windows' own system DLLs and
+no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+"@
+        $perfNotice = $perfNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $perftoolStaged "NOTICE.TXT") `
+                            -Lines ($perfNotice -split "`r?`n")
+        Write-Ok "readme.txt and NOTICE.TXT written beside XHCIPERF.EXE and XHCIPF64.EXE"
     }
 
     # --- the 98 SE and ME device install helper's notices (task 42-A.1) ------
@@ -7608,6 +7680,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $traytoolStaged) {
         Write-Warn "no tools\xhcitr\ in this release (-SkipTrayTool) - SETUP.EXE installs no USB tree tool from it."
+    }
+    if ($null -eq $perftoolStaged) {
+        Write-Warn "no tools\xhciperf\ in this release (-SkipPerfTool) - SETUP.EXE installs no disk benchmark from it."
     }
 
     Write-Step "Done"

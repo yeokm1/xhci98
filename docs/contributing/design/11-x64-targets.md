@@ -2122,7 +2122,11 @@ publishes:
    every start; test-signing mode removes that cost for a user who turns it
    on once. The second half stands: no catalog, no `CatalogFile.NTamd64`
    line, `src\xhci98-amd64.inf` byte-identical, exactly the embedded-only
-   route analysed above. The x86 package stays unsigned. Record 19 carries
+   route analysed above. *(The second half reversed too, by the owner on
+   2026-10-22, for the x64 package from `3.2.0.0`: Windows 8 to 10 x64
+   refuse a package with no catalog in test-signing mode, so each x64 INF
+   names a catalog the packager makes and signs (`CatalogFile=xhci98.cat`
+   and the others; design record 19 section 3a).)* The x86 package stays unsigned. Record 19 carries
    the procedure, the key's custody, the checks and the readings.
 10. ~~Whether the amd64 build passes the NT 6.x fourth argument to
     `USBPORT_RegisterUSBPortDriver` unconditionally, or selects the arity at

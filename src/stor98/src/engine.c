@@ -163,6 +163,15 @@ static BOOLEAN EngCallerCopy(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BL
     return TRUE;
 }
 
+BOOLEAN EngCopyToCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN const UCHAR *Src,
+                        IN ULONG Bytes)
+{
+    if (Bytes == 0) {
+        return TRUE;
+    }
+    return EngCallerCopy(DevExt, Srb, 0, (PUCHAR)Src, Bytes, TRUE);
+}
+
 static ULONG EngNow(IN PHW_DEVICE_EXTENSION DevExt)
 {
     return ClockNow(&DevExt->Clock);
@@ -200,6 +209,24 @@ VOID EngCompleteSrb(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
         }
     }
     DevExt->SrbsCompleted++;
+    // Counter answer (MD-8): a data SRB that ends in an error, on every
+    // path (refused before admission, fast-failed, failed by the drive); a
+    // BUSY is a retry, not an end.
+    if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && SRB_STATUS(Srb->SrbStatus) != SRB_STATUS_SUCCESS &&
+        SRB_STATUS(Srb->SrbStatus) != SRB_STATUS_BUSY) {
+        switch (Srb->Cdb[0]) {
+        case SCSIOP_READ6:
+        case SCSIOP_READ:
+        case SCSIOP_READ16:
+        case SCSIOP_WRITE6:
+        case SCSIOP_WRITE:
+        case SCSIOP_WRITE16:
+            PfAdd(&DevExt->Pf.SrbErrors, 1);
+            break;
+        default:
+            break;
+        }
+    }
     DBGSTAGE(STG_SRB_COMPLETE, ((ULONG)Srb->SrbStatus << 24) | ((ULONG)Srb->Cdb[0] << 8) | Srb->Function);
     ScsiPortNotification(RequestComplete, DevExt, Srb);
 }
@@ -647,6 +674,11 @@ VOID EngFinishParent(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
     }
     srb = p->Srb;
     EngParentStatus(DevExt, p, srb);
+    if (p->Kind == ENG_K_RW) {
+        if (SRB_STATUS(srb->SrbStatus) == SRB_STATUS_SUCCESS && PfRunClass(p->Bytes) < STOR98PF_RUN_CLASSES) {
+            PfAdd(&DevExt->Pf.Runs[PfRunClass(p->Bytes)][PfRunBucket(p->PfRuns, (BOOLEAN)(p->PfNotSeen != 0))], 1);
+        }
+    }
     DBGSTAGE(STG_ENG_PARENT_DONE, Index | ((ULONG)(p->Issued & 0xFF) << 8) |
              ((ULONG)srb->SrbStatus << 16) | ((ULONG)p->Cancel << 24));
     if (SRB_STATUS(srb->SrbStatus) != SRB_STATUS_SUCCESS) {
@@ -792,6 +824,22 @@ static BOOLEAN EngSpanOk(IN PHYSICAL_ADDRESS Pa, IN ULONG Len, IN ULONG Need)
     return (BOOLEAN)(Pa.QuadPart != 0 && Len >= Need);
 }
 
+// Counter answer (MD-8): one translated span of a data request's caller
+// buffer. Spans arrive in buffer order (children are issued in offset order,
+// each span after the previous one), so a span that does not start where the
+// previous one ended starts a new physical run.
+static VOID EngPfSpan(IN PHW_DEVICE_EXTENSION DevExt, IN PENG_CHILD c, IN PHYSICAL_ADDRESS Pa, IN ULONG Len)
+{
+    PENG_PARENT p = &DevExt->Parents[c->Parent];
+
+    if (p->PfRuns == 0 || (ULONGLONG)Pa.QuadPart != p->PfNextPa) {
+        if (p->PfRuns < STOR98PF_RUN_WALK_MAX) {
+            p->PfRuns++;
+        }
+    }
+    p->PfNextPa = (ULONGLONG)Pa.QuadPart + Len;
+}
+
 static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN PENG_CHILD c,
                           IN PNVME_COMMAND Cmd)
 {
@@ -822,6 +870,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     if (!EngSpanOk(pa, len, need)) {
         return 4;
     }
+    EngPfSpan(DevExt, c, pa, need);
     Cmd->PRP1 = (ULONGLONG)pa.QuadPart;
     if (c->Bytes <= firstBytes) {
         Cmd->PRP2 = 0;
@@ -841,6 +890,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
         if (!EngSpanOk(pa, len, need)) {
             return 4;
         }
+        EngPfSpan(DevExt, c, pa, need);
         Cmd->PRP2 = (ULONGLONG)pa.QuadPart;
         return 0;
     }
@@ -878,6 +928,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
             c->PrpPage = ENG_NONE;
             return why;
         }
+        EngPfSpan(DevExt, c, pa, need);
         list[i - 1] = (ULONGLONG)pa.QuadPart;
     }
     Cmd->PRP2 = EngPrpPa(DevExt, c->PrpPage);
@@ -948,8 +999,14 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
     cmd.CDW0.Fields.Flags = NVME_CMD_PRP;
 
     if (!bounce) {
+        ULONGLONG pfNext = p->PfNextPa;
+        UCHAR pfRuns = p->PfRuns;
+
         why = EngMapCaller(DevExt, srb, c, &cmd);
         if (why == 0xFF) {
+            // Retried later from the same offset: its spans are counted then.
+            p->PfNextPa = pfNext;
+            p->PfRuns = pfRuns;
             c->State = ENG_CH_FREE;
             return ENG_WAIT_PRP;
         }
@@ -962,6 +1019,7 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
         ULONG maxBytes = ENG_BOUNCE_PAGES * PAGE_SIZE;
         ULONG pages;
 
+        p->PfNotSeen = 1;
         if (bytes > maxBytes) {
             bytes = (maxBytes / bs) * bs;
             c->Bytes = bytes;
@@ -1019,6 +1077,14 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
     if (!EngSubmitChild(DevExt, c, &cmd)) {
         return ENG_WAIT_CHILDREN;
     }
+    PfAdd(&DevExt->Pf.CmdSize[c->Opcode == NVME_CMD_WRITE ? STOR98PF_WRITE : STOR98PF_READ][PfSizeBucket(bytes)], 1);
+    PfAdd(&DevExt->Pf.Depth[PfDepthBucket(DevExt->ChildrenIo)], 1);
+    if (bounce) {
+        PfAdd(&DevExt->Pf.Bounced, 1);
+    }
+    if (p->Issued == 1) {
+        PfAdd(&DevExt->Pf.Splits, 1);
+    }
     p->Flags |= ENG_PF_STARTED;
     p->Outstanding++;
     p->Issued++;
@@ -1051,6 +1117,7 @@ static ULONG EngIssueFlushChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Parent,
     if (!EngSubmitChild(DevExt, c, &cmd)) {
         return ENG_WAIT_CHILDREN;
     }
+    PfAdd(&DevExt->Pf.Flushes, 1);
     if (Parent != ENG_NONE) {
         PENG_PARENT p = &DevExt->Parents[Parent];
 
@@ -1406,6 +1473,59 @@ static BOOLEAN EngAdmitOrBusy(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_B
     return TRUE;
 }
 
+//
+// Counter answer (MD-8): a data SRB as the port hands it to the driver, at
+// HwStartIo's entry, before EngStartIo dispatches, holds or refuses it, so
+// each is counted once whatever happens to it after (a held SRB replayed
+// through ScsiDispatch is not counted again). On 9x also how IOS handed it
+// over and what its DCB says (sg9x.h).
+//
+VOID EngPfSrbIn(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
+{
+    ULONG dir;
+
+    if (Srb->Function != SRB_FUNCTION_EXECUTE_SCSI) {
+        return;
+    }
+    switch (Srb->Cdb[0]) {
+    case SCSIOP_READ6:
+    case SCSIOP_READ:
+    case SCSIOP_READ16:
+        dir = STOR98PF_READ;
+        break;
+    case SCSIOP_WRITE6:
+    case SCSIOP_WRITE:
+    case SCSIOP_WRITE16:
+        dir = STOR98PF_WRITE;
+        break;
+    default:
+        return;
+    }
+    PfAdd(&DevExt->Pf.Srbs[dir], 1);
+    PfAdd(&DevExt->Pf.Sectors[dir], Srb->DataTransferLength >> 9);
+    PfAdd(&DevExt->Pf.SrbSize[dir][PfSizeBucket(Srb->DataTransferLength)], 1);
+#ifdef NVME2K_W9X
+    {
+        const STOR98_SGD9X *sgd;
+        UCHAR shift;
+        ULONG kind, mx, sg, dmd, fl;
+
+        kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+        PfAdd(&DevExt->Pf.Sg9x[kind == SG9X_LINEAR ? STOR98PF_SG9X_LINEAR :
+                               (kind == SG9X_SG ? STOR98PF_SG9X_LIST : STOR98PF_SG9X_UNKNOWN)], 1);
+        if (Sg9xDcbFacts(Srb, &mx, &sg, &dmd, &fl)) {
+            DevExt->PfDcbMaxXfer = mx;
+            DevExt->PfDcbMaxSg = sg;
+            DevExt->PfDcbDmd = dmd;
+            DevExt->PfDcbSeen = STOR98PF_DCB_SEEN;
+            if (fl & SG9X_IORF_DBLBUF) {
+                PfAdd(&DevExt->Pf.DoubleBuffered, 1);
+            }
+        }
+    }
+#endif
+}
+
 BOOLEAN EngSubmitReadWrite(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 {
     PCDB cdb = (PCDB)Srb->Cdb;
@@ -1483,6 +1603,9 @@ BOOLEAN EngSubmitReadWrite(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOC
     p->BlocksLeft = blocks;
     p->NextOffset = 0;
     p->Bytes = (ULONG)bytes;
+    p->PfNextPa = 0;
+    p->PfRuns = 0;
+    p->PfNotSeen = 0;
     EngDispatch(DevExt);
     EngTimerEnsure(DevExt, ENG_TICK_WATCH_US);
     return TRUE;

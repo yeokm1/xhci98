@@ -10,6 +10,12 @@ signed cut. Revision 2, 2026-10-19 (roadmap-usb4 task 42-A.30, owner): the
 bundled Stor98's x64 `stor98.sys` is signed in the same step with the same
 key, so one signature covers every driver of the package, and Stor98's own
 test certificate (`stor98-test.cer`) and signing scripts are retired.
+Revision 3, 2026-10-22 (roadmap-usb4 tasks 43.33 to 43.36, owner): **the
+x64 package carries a catalog per INF**, made and signed by the packager
+with the same key (section 3a), because Windows 8, 8.1 and 10 x64 refuse a
+driver package with no catalog in test-signing mode (design record 13
+section 6.14.5). It reverses this record's "no catalog, the INFs
+unchanged" for the x64 package; the x86 package is unchanged.
 
 ## 1. Context
 
@@ -58,6 +64,8 @@ service, and **not** the catalog, whose `CatalogFile.NTamd64` line decision
 9 declined and which stays declined (section 3). The second half of
 decision 9 - `src\xhci98-amd64.inf` byte-identical, the INF gate asked for
 no opinion - is kept whole. Record 11 decision 9 now points here.
+*(Both halves on the catalog reversed for the x64 package by the owner on
+2026-10-22, section 3a: Windows 8 to 10 x64 install nothing without one.)*
 
 ## 3. What is signed, and how
 
@@ -99,11 +107,13 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
 - **No page hashes** (`/nph`): nothing here needs per-page verification,
   and leaving them out keeps the appended table small and the result
   independent of the host's `wintrust.dll` default.
-- **No catalog, and the INFs byte-identical.** Both services are
+- ~~**No catalog, and the INFs byte-identical.**~~ *(Until 3.1.0.0;
+  reversed for the x64 package on 2026-10-22, section 3a.)* Both services are
   `StartType=3`, demand-start, so the loader checks the embedded signature
-  on its own; a catalog governs only the install-time "Windows can't verify
-  the publisher" prompt (record 11 decision 9's analysis). The prompt
-  therefore stays, and costs one click.
+  on its own; on Vista and 7 x64 a catalog governs only the install-time
+  "Windows can't verify the publisher" prompt (record 11 decision 9's
+  analysis), so the prompt stayed and cost one click. Windows 8 to 10 x64
+  do not prompt: their driver store refuses the package (section 3a).
 - **What signing changes in the file:** the optional header's checksum,
   the certificate-table directory entry, up to seven bytes of zero padding
   to an 8-byte boundary, and the appended `WIN_CERTIFICATE` holding the
@@ -111,6 +121,76 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
   is the property the packager checks (section 5), and it is why every
   reading taken on the unsigned bytes - every matrix reading on the same
   build - speaks for the signed ones.
+
+## 3a. The catalogs (owner, 2026-10-22; from 3.2.0.0)
+
+**Why.** Measured on Windows 10 22H2 x64 in test-signing mode (record 13
+section 6.14.5, 2026-10-22): the `3.1.0.0` x64 package, its binaries
+signed as section 3 prescribes, was refused by the driver store with
+`0xE000022F` and no prompt, the setup log reading "Driver package does not
+contain a catalog file, and Code Integrity is in Test Signing mode". 8 and
+8.1 x64 run the same driver store (by inference until a leg reads them).
+The owner's decision the same day: a test-signed catalog in the x64
+package, made and signed by the packager alone.
+
+**What.** Every INF of a signed amd64 package names a catalog of its own,
+undecorated, in `[Version]`:
+
+| INF | Catalog | Covers |
+|---|---|---|
+| `xhci98.inf` | `xhci98.cat` | `xhci98.inf`, `xhci98.sys` |
+| `xhciuas.inf` | `xhciuas.cat` | `xhciuas.inf`, `xhciuas.sys` |
+| `xhcicm.inf` | `xhcicm.cat` | `xhcicm.inf`, `xhcicm.sys` |
+| `xhcicmf.inf` | `xhcicmf.cat` | `xhcicmf.inf`, `xhcicm.sys` |
+| `stor98.inf` (`release-x64`) | `stor98.cat` | `stor98.inf`, `stor98.sys` |
+
+Each covers its INF and every file the INF's `[SourceDisksFiles]` names
+(`$script:PackageCatalogs` in `package-common.ps1`; the packager refuses a
+staged INF that names a file outside its row). The OS-supplied files
+`xhci98.inf`'s NT 5.2 path fetches through `LayoutFile=layout.inf` are not
+members: they come from the OS's own source.
+
+- **Made by** WDK 7.1's `MakeCat` (`tools\WinDDK71\bin\x86\MakeCat.exe`)
+  from a CDF the packager writes, each member tagged by its digest
+  (`<HASH>`), with a `File` name-value and the catalog's `OSAttr`
+  `2:5.2,2:6.0,2:6.1,2:6.2,2:6.3,2:10.0` (the form Inf2Cat writes; WDK
+  7.1's Inf2Cat knows no system after 7, so it is not used). Members are
+  SHA-1: an INF's over the file, a driver's the Authenticode image digest,
+  which the embedded signature leaves unchanged.
+- **Signed by** the project key, as the binaries are: `SignTool sign /fd
+  sha1`, no timestamp, the key-container check of section 5.
+- **Held to** `Test-PackageCatalog`: one signer, the project certificate by
+  thumbprint, SHA-1, a PKCS #7 signature that verifies, no countersignature,
+  a catalog list with that `OSAttr`, and exactly one member per covered
+  file, by name, whose digest and tag are that file's and whose indirect
+  data type is the PE one for a driver and another for an INF.
+  `make-package.ps1` checks each as it is made and the staged package as a
+  whole (`Test-CatalogOfPackage`); `make-release.ps1` checks each published
+  x64 directory and the upload set's (from 3.2.0.0).
+- **The INFs change by one line each** (`CatalogFile=`), held by the INF
+  gates' `BOTH-CATALOG` (amd64: exactly that name, once; x86: none), and
+  Stor98's `check-stor98-inf.ps1`. A published tree before 3.2.0.0 is not
+  asked about the line (`-PublishedVersion`).
+- **Not reproducible byte for byte**: a catalog carries the time it was
+  made, so two cuts of the same build differ in their `.cat` files, unlike
+  the binaries (section 3). What a catalog vouches for is checked, not its
+  bytes.
+- **Never the x86 package.** 32-bit 8, 8.1 and 10 take the unsigned
+  package after "Windows can't verify the publisher" (measured on 10 x86,
+  record 13 section 6.14.5); a catalog signed by a certificate no machine
+  trusts would not remove that prompt; the x86 `xhci98.inf` is read by
+  Windows 98's 16-bit engine, whose handling of a `CatalogFile` line is
+  unmeasured and would cost every 9x install leg again; and the x86
+  binaries are never signed (section 3), which a catalog would only half
+  undo. The x86 INFs therefore name no catalog, and the gates hold that.
+- **An unsigned amd64 package** (a clone without the key) names catalogs it
+  does not carry, and the packager warns: Windows 8 to 10 x64 refuse it;
+  Vista and 7 x64 treat it as unsigned (by inference).
+- **What it does not change.** On Vista and 7 x64 the prompt stays ("Windows
+  can't verify the publisher": the signer is trusted nowhere); test-signing
+  mode is still needed for the loader; Secure Boot on still refuses a
+  test-signed driver on 8 to 10 (record 23 section 5.12). It is not
+  Microsoft signing (section 8).
 
 ## 4. The certificate and the key
 
@@ -299,9 +379,12 @@ recovery key. Secure Boot does not arise: Vista and 7 do not support it.
 **Importing `xhci98-test.cer` is not needed and not recommended.** Test-
 signing mode loads the driver without it, and it does not quiet the install
 prompt either: Plug and Play judges the driver package by its catalog, and
-this package deliberately has none (section 3), so trusting the binaries'
-signer does not sign the package (this corrects an earlier draft of
-this record). Imported into a trusted store it would only
+until 3.1.0.0 this package deliberately had none (section 3), so trusting
+the binaries' signer did not sign the package (this corrects an earlier
+draft of this record). From 3.2.0.0 the catalogs are signed by the same
+certificate (section 3a); importing it into the trusted stores would then
+make the machine trust this project's packages outright, which is still
+the user's decision and still advised against. Imported into a trusted store it would only
 make the machine trust a certificate this project made - which is the
 user's decision, and the docs advise against it. The `.cer` is shipped so
 that anyone can compare a signed binary's signer with the thumbprint of
@@ -324,10 +407,11 @@ Every published x64 package directory carries `xhci98.sys`, `xhciuas.sys`
 and `xhcicm.sys` (and, in `3.0.0.0`, its `nt\xhcicm.sys` copy), and a
 `release-x64` directory from `3.1.0.0` also the bundled `stor98.sys`, with an embedded
 Authenticode signature by the project test
-certificate - SHA-1 file digest, no timestamp, no catalog, the INFs
-unchanged - applied by `make-package.ps1 -TestSignPfx` at staging and
-never by hand, and `make-release.ps1` refuses a cut that would publish an
-x64 directory otherwise. The private key is held only on the maintainer's
+certificate - SHA-1 file digest, no timestamp - and, from `3.2.0.0`, a
+catalog per INF signed by the same certificate the same way (section 3a),
+applied by `make-package.ps1 -TestSignPfx` at staging and never by hand,
+and `make-release.ps1` refuses a cut that would publish an x64 directory
+otherwise. The private key is held only on the maintainer's
 disk in a git-ignored or out-of-tree folder and is never tracked,
 packaged, printed or copied into notes. x86 binaries are never signed. A
 clone without the key stages unsigned packages for its own use and cannot
@@ -416,6 +500,21 @@ points here.
     images carry `advancedoptions` on `{current}`, removed first so that
     the starts were ordinary; Vista's activation grace needs the launcher's
     `-Rtc base=...` for the "Test Mode" text to show.
+- **The catalogs (section 3a), 2026-10-22, run sheet 43, "43.36 the x64
+  catalog"**: on Windows 10 22H2 x64 and Windows 8.1 x64 in test-signing
+  mode, QEMU guests, the packager's own catalogs (MakeCat, this record's
+  CDF) over this branch's amd64 release build, signed in each guest by a
+  throwaway certificate made there (the project key's password is the
+  owner's alone). With the catalogs removed the forced install is refused
+  with `0xE000022F`, no prompt; with them each of the five INFs enters the
+  driver store after "Windows can't verify the publisher" (the store:
+  "Driver package catalog is valid", then `0x800B0109`, a root not
+  trusted, "user wants to install anyway", Signer Score `0x80000000`), the
+  forced installs on the controller and the NHI return TRUE, and after a
+  restart `xhci98.sys` and `xhcicm.sys` run. Owed: the same with the
+  owner-signed package (by inference identical: the store reports only
+  the untrusted root, as it would for the project certificate), Windows 8
+  x64, and XP x64, Vista x64 and 7 x64 with a catalog'd package.
 - Unread, and not planned: real hardware under test-signing mode; a
   Windows 7 x64 with the SHA-2 update; Server 2003 x64 (identity with XP
   x64, which ignores signatures).
@@ -423,11 +522,15 @@ points here.
 ## 11. Files
 
 - `scripts\package\package-common.ps1`: `Get-PeSecurityLayout`,
-  `Test-SignedImageOf`, `Get-EmbeddedSignature`,
+  `Test-SignedImageOf`, `Get-PeImageDigest`, `Get-EmbeddedSignature`,
   `Test-ProjectTestSignature`, `Get-TestSignPassword`,
-  `Get-TestSignCertificate`.
+  `Get-TestSignCertificate`; the catalogs' `$script:PackageCatalogs`,
+  `Read-CatalogFile`, `Get-CatalogMemberDigest`, `Test-PackageCatalog` and
+  `Test-CatalogOfPackage` (section 3a).
 - `scripts\package\make-package.ps1`: `-TestSignPfx`, `Invoke-TestSign`,
-  the staged `xhci98-test.cer`.
+  `Invoke-TestSignCatalog`, the staged `xhci98-test.cer` and catalogs.
+- The INF gates' `BOTH-CATALOG` (`check-inf.ps1`, `check-uas-inf.ps1`,
+  `check-cm-inf.ps1`) and `check-stor98-inf.ps1`.
 - `scripts\package\make-release.ps1`: `-TestSignPfx`, the x64 refusal,
   `Assert-TestSigned`, the published `xhci98-test.cer`, the readme text.
 - `scripts\package\make-testcert.ps1`: the certificate's creation (the one

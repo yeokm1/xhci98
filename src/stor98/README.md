@@ -9,7 +9,7 @@ storage driver for NVMe SSDs that xhci98's connection manager brings up behind a
 |---|---|---|
 | Windows 9x | Windows 98 SE, ME | SCSI miniport (`.mpd`); no helper VxD ([PLAN.md](docs/PLAN.md) 0.12, MD-5) |
 | NT, 32-bit | Windows 2000 SP4, XP, Vista, 7, 8, 8.1, 10 (below build 22000) | SCSIport miniport (`.sys`) |
-| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8 x64, 8.1 x64 and 10 x64 not yet (the package does not install there) | SCSIport miniport (`.sys`, amd64) |
+| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8 x64, 8.1 x64 and 10 x64 untested (from xhci98 3.2.0.0 the package installs there with its catalog; the driver has not run there) | SCSIport miniport (`.sys`, amd64) |
 
 Windows 8, 8.1 and 10 since xhci98 3.2.0.0 (xhci98's roadmap 43.23; 10 below build 22000,
 which xhci98's installer admits beside 8 and 8.1 from its roadmap 43.34): see
@@ -96,12 +96,14 @@ on 2026-10-22 ([docs/TESTING.md](docs/TESTING.md), "Windows 8 and 8.1" and "Wind
   Unplugged during writes with no notice from Windows, the requests failed at once, the
   disk was removed at the 5-second deadline and the copy failed at 5.4 s. Windows 8's disk
   class driver retries a failed write whichever terminal status Stor98 uses (PLAN 2.2).
-- **Windows 8 x64 and 8.1 x64: the 64-bit package does not install.** It carries no
-  catalog file, and these systems' driver store refuses such a package in test-signing
-  mode ("The third-party INF does not contain digital signature information",
-  `0xE000022F`) before the driver is ever loaded. Until the package carries a catalog
-  (xhci98 is adding a test-signed one, the owner's decision of 2026-10-22), Stor98 does
-  not run on 64-bit 8 and 8.1, and on 8.1 x64 the drive stays with `stornvme`.
+- **Windows 8 x64 and 8.1 x64: the 64-bit package installs; Stor98 x64 has not run.**
+  Without a catalog file (xhci98 3.1.0.0's package) these systems' driver store refused
+  it in test-signing mode ("The third-party INF does not contain digital signature
+  information", `0xE000022F`) before the driver was ever loaded. From xhci98 3.2.0.0
+  `stor98.inf` names `stor98.cat`, and on 8.1 x64 in test-signing mode the package with
+  it was taken into the driver store after the publisher prompt (xhci98's roadmap
+  43.36). No drive was bound to it there, so Stor98 x64 has run no drive on 64-bit 8
+  and 8.1; 8 x64 with the catalog was not run.
 - **Windows 8.1, 32-bit:** not run (no install medium); its SCSIport and `stornvme` are
   taken to be 8.1 x64's and 8 x86's, untested.
 - **Windows 10, 32-bit** (22H2, build 19045; xhci98's roadmap 43.34 admits 10 below build
@@ -111,8 +113,10 @@ on 2026-10-22 ([docs/TESTING.md](docs/TESTING.md), "Windows 8 and 8.1" and "Wind
   with no notice from Windows, the copy failed at about 6 s, the disk was removed ("Disk 2
   has been surprise removed") at the deadline, and Windows showed "Delayed Write Failed"
   for the lazy writes in flight. Earlier and later 10 builds were not run.
-- **Windows 10 x64:** the 64-bit package is refused at the driver store as on 8 x64 and
-  8.1 x64 (`0xE000022F`, the same `setupapi` lines); the drive stays with `stornvme`.
+- **Windows 10 x64:** without a catalog the 64-bit package was refused at the driver
+  store as on 8 x64 and 8.1 x64 (`0xE000022F`, the same `setupapi` lines), the drive
+  staying with `stornvme`; with `stor98.cat` (xhci98 3.2.0.0) it was taken into the
+  driver store as on 8.1 x64 (xhci98's roadmap 43.36), and has bound no drive there.
 - **Windows 11** is not a target (xhci98's installer refuses it; it has its own USB4
   support).
 - **Under 8.1's own `stornvme`** (no Stor98), a drive unplugged during a write with no

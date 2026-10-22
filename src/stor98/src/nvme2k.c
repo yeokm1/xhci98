@@ -168,6 +168,8 @@ static VOID NegotiateDma(IN PHW_DEVICE_EXTENSION DevExt, IN OUT PPORT_CONFIGURAT
         breaks = ConfigInfo->NumberOfPhysicalBreaks;
     }
     ConfigInfo->NumberOfPhysicalBreaks = breaks;
+    DevExt->PfMaxTransfer = maxTransfer;
+    DevExt->PfBreaks = breaks;
     if (ConfigInfo->AlignmentMask < 0x3) {
         ConfigInfo->AlignmentMask = 0x3;        // PRP entries are DWORD aligned
     }
@@ -548,6 +550,16 @@ ULONG HwFindAdapter(
     // extension (G7, Q-NT), with no ArgumentString.
     DevExt->Resumed = (BOOLEAN)(DevExt->Magic == STOR98_DEVEXT_MAGIC);
     DevExt->Magic = STOR98_DEVEXT_MAGIC;
+    // The counter answer's totals live as long as this epoch (MD-8): a
+    // resume keeps them, every other start begins a new one.
+    if (!DevExt->Resumed) {
+        ULONG lo, hi;
+
+        RtlZeroMemory(&DevExt->Pf, sizeof(DevExt->Pf));
+        DevExt->PfDcbSeen = 0;
+        ClockReadTsc(&lo, &hi);
+        DevExt->PfEpoch = (lo ^ hi) | 1;
+    }
     // No sense kept before a stop or power transition survives it.
     ScsiSenseReset(DevExt);
     EngParseTunables(DevExt, ArgumentString);
@@ -681,6 +693,7 @@ BOOLEAN ScsiCompletesInSoftware(IN PSCSI_REQUEST_BLOCK Srb)
     case SCSIOP_MODE_SENSE:
     case SCSIOP_MODE_SENSE10:
     case SCSIOP_READ_DEFECT_DATA10:
+    case STOR98PF_OPCODE:
         return TRUE;
     case SCSI_SRV_ACT_IN:
         return (BOOLEAN)(Srb->Cdb[1] == SCSI_RD_CAPAC16);
@@ -748,6 +761,10 @@ BOOLEAN ScsiDispatch(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 
                 case SCSIOP_READ_DEFECT_DATA10:
                     return ScsiHandleReadDefectData10(DevExt, Srb);
+
+                case STOR98PF_OPCODE:
+                    // READ BUFFER: the counter answer (MD-8), from memory
+                    return ScsiHandleReadBuffer(DevExt, Srb);
 
                 default:
                     // Not implemented (READ/WRITE(12), REPORT LUNS, MODE
@@ -830,6 +847,7 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
 #if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
     EngProbeSg9x(Srb);
 #endif
+    EngPfSrbIn(DevExt, Srb);
 #ifdef STOR98_TEST_NOAUTOSENSE
 #ifndef STOR98_DBGPORT
 #error STOR98_TEST_NOAUTOSENSE is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)

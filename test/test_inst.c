@@ -223,6 +223,189 @@ static void test_cm_only(void)
           strcmp(inst_os_name(1, 10, 0, 22000), "Windows 11") == 0 &&
           strcmp(inst_os_name(1, 11, 0, 0), "Windows") == 0, "the names");
 
+    /* The signature note (section 5.10, revision 30; task 43.22). The
+     * gates take the kind inst_os_kind gives, so a system admitted to the
+     * connection-manager-alone kind later (10, task 43.34) takes them. */
+    {
+        int k98 = inst_os_kind(0, 4, 10, 2222);
+        int kXp = inst_os_kind(1, 5, 1, 2600);
+        int kXp64 = inst_os_kind(1, 5, 2, 3790);
+        int kVista = inst_os_kind(1, 6, 0, 6002);
+        int k7 = inst_os_kind(1, 6, 1, 7601);
+        int k8 = inst_os_kind(1, 6, 2, 9200);
+        int k81 = inst_os_kind(1, 6, 3, 9600);
+        int k10 = inst_os_kind(1, 10, 0, 19045);
+        int k11 = inst_os_kind(1, 10, 0, 22631);
+
+        CHECK(k8 == INST_OS_CMONLY && k81 == INST_OS_CMONLY &&
+              k10 == INST_OS_CMONLY && k11 == INST_OS_REFUSED &&
+              k7 == INST_OS_FULL && kVista == INST_OS_FULL,
+              "the kinds the gates key on");
+        /* Windows 10 below build 22000 (task 43.34) takes every gate. */
+        CHECK(inst_sig_note_kind(INST_ARCH_X86, 1, 10, k10) ==
+              INST_SIG_X86_SB &&
+              inst_sig_note_kind(INST_ARCH_AMD64, 1, 10, k10) ==
+              INST_SIG_X64 &&
+              inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, k10)
+              != NULL &&
+              inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_X86, k10)
+              == NULL &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k10, 1, 1) ==
+              INST_CMBOOT_WARN &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k10, 1,
+                                inst_ts_confirmed(1, INST_SB_ON)) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k10, 0, 1) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_X86, k10, 0, 0) ==
+              INST_CMBOOT_NONE &&
+              inst_sb_applies(1, k10) && !inst_sb_applies(1, k11) &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k11, 0, 0) ==
+              INST_CMBOOT_NONE &&
+              inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, k11)
+              == NULL,
+              "10 below 22000 gated as 8 and 8.1; 11 refused, not gated");
+        CHECK(inst_sig_note_kind(INST_ARCH_X86, 0, 4, k98) == INST_SIG_NONE &&
+              inst_sig_note_kind(INST_ARCH_X86, 1, 5, kXp) == INST_SIG_NONE &&
+              inst_sig_note_kind(INST_ARCH_X86, 1, 6, kVista) ==
+              INST_SIG_NONE &&
+              inst_sig_note_kind(INST_ARCH_X86, 1, 6, k7) == INST_SIG_NONE,
+              "x86 98 SE to 7: no signature note");
+        CHECK(inst_sig_note_kind(INST_ARCH_X86, 1, 6, k8) == INST_SIG_X86_SB &&
+              inst_sig_note_kind(INST_ARCH_X86, 1, 6, k81) == INST_SIG_X86_SB,
+              "x86 8 and 8.1: the Secure Boot note");
+        CHECK(inst_sig_note_kind(INST_ARCH_X86, 1, 10, INST_OS_CMONLY) ==
+              INST_SIG_X86_SB &&
+              inst_sig_note_kind(INST_ARCH_X86, 1, 10, INST_OS_REFUSED) ==
+              INST_SIG_NONE, "x86 10: as its kind says");
+        CHECK(inst_sig_note_kind(INST_ARCH_AMD64, 1, 5, kXp64) ==
+              INST_SIG_NONE, "XP x64: no note");
+        CHECK(inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, kVista) ==
+              INST_SIG_X64 &&
+              inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k7) == INST_SIG_X64 &&
+              inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k8) == INST_SIG_X64 &&
+              inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k81) == INST_SIG_X64 &&
+              inst_sig_note_kind(INST_ARCH_AMD64, 1, 10, INST_OS_CMONLY) ==
+              INST_SIG_X64, "x64 Vista and later: the test-signing note");
+        CHECK(strstr(inst_sig_x86_sb_text(), "Secure Boot") != NULL &&
+              strstr(inst_sig_x86_sb_text(), "test-signing mode does not help")
+              != NULL && strstr(inst_sig_x86_sb_text(), "Windows 8") == NULL,
+              "the Secure Boot note's words, no version named");
+        CHECK(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, k8)
+              != NULL &&
+              inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, k81)
+              != NULL &&
+              inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64,
+                                    INST_OS_CMONLY) != NULL,
+              "8 and 8.1 x64, and the kind: no catalog explained");
+        CHECK(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, k7)
+              == NULL &&
+              inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, kXp64)
+              == NULL &&
+              inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_X86, k8)
+              == NULL &&
+              inst_stage_error_text(0xE0000203UL, INST_ARCH_AMD64, k8)
+              == NULL &&
+              inst_stage_error_text(5UL, INST_ARCH_AMD64, k81) == NULL,
+              "other systems and errors: nothing added");
+        CHECK(strstr(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64,
+                                           k8), "complete package") != NULL &&
+              strstr(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64,
+                                           k8), ".cat files") != NULL &&
+              strstr(inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64,
+                                           k8), "Startup Settings") == NULL &&
+              inst_text_width(inst_stage_error_text(INST_E_NO_CATALOG,
+                                                    INST_ARCH_AMD64, k8)) <=
+              INST_COLUMNS,
+              "no catalog: restore the package with its .cat files");
+        /* 8 and 8.1 x64 make xhcicm a boot driver (task 43.22). */
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1, 1) == INST_CMBOOT_WARN &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 1, 1) ==
+              INST_CMBOOT_WARN,
+              "8 and 8.1 x64, test-signed, test-signing on: the warning");
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1, 0) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 0, 1) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k8, -1, 1) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 0, 0) ==
+              INST_CMBOOT_REFUSE,
+              "8 and 8.1 x64: refused without test-signing or a test signature");
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_CMONLY, 1, 1) ==
+              INST_CMBOOT_WARN &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_CMONLY, 1, 0) ==
+              INST_CMBOOT_REFUSE, "any system of the kind: gated alike");
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k7, 0, 0) == INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, kVista, 1, 0) ==
+              INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, kXp64, 0, 0) ==
+              INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_REFUSED, 0, 0) ==
+              INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_X86, k8, 0, 0) == INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_X86, k81, 0, 0) == INST_CMBOOT_NONE,
+              "Vista, 7, XP x64 and 32-bit 8 and 8.1: not gated");
+        CHECK(strstr(inst_cm_boot_refuse_text(), "bcdedit /set testsigning on")
+              != NULL &&
+              strstr(inst_cm_boot_warn_text(), "Automatic Repair") != NULL &&
+              strstr(inst_cm_boot_refuse_text(), "Windows 8") == NULL &&
+              strstr(inst_cm_boot_warn_text(), "Windows 8") == NULL,
+              "the gate's words, no version named");
+
+        /* Secure Boot's state (record 26 section 5.3.2; owner,
+         * 2026-10-22): three answers, read on 8, 8.1 and 10 alone. */
+        CHECK(inst_sb_state(1, INST_REG_DWORD_TYPE, 1UL) == INST_SB_ON &&
+              inst_sb_state(1, INST_REG_DWORD_TYPE, 0UL) == INST_SB_OFF &&
+              inst_sb_state(1, INST_REG_DWORD_TYPE, 2UL) == INST_SB_UNKNOWN &&
+              inst_sb_state(1, 1UL, 1UL) == INST_SB_UNKNOWN &&
+              inst_sb_state(0, INST_REG_DWORD_TYPE, 1UL) == INST_SB_UNKNOWN &&
+              inst_sb_state(0, 0UL, 0UL) == INST_SB_UNKNOWN,
+              "the state: on, off, not known");
+        CHECK(inst_sb_applies(1, k8) && inst_sb_applies(1, k81) &&
+              inst_sb_applies(1, INST_OS_CMONLY) &&
+              !inst_sb_applies(1, k7) && !inst_sb_applies(1, kVista) &&
+              !inst_sb_applies(1, kXp64) && !inst_sb_applies(0, k98) &&
+              !inst_sb_applies(1, INST_OS_REFUSED),
+              "read on 8, 8.1 and the kind (10) only");
+        CHECK(strstr(inst_sb_text(INST_ARCH_AMD64, INST_SB_ON),
+                     "turn Secure Boot off") != NULL &&
+              strstr(inst_sb_text(INST_ARCH_AMD64, INST_SB_OFF),
+                     "bcdedit /set testsigning on") != NULL &&
+              inst_sb_text(INST_ARCH_AMD64, INST_SB_UNKNOWN) == NULL,
+              "x64: the three sentences");
+        CHECK(strstr(inst_sb_text(INST_ARCH_X86, INST_SB_ON),
+                     "unsigned 32-bit drivers") != NULL &&
+              strstr(inst_sb_text(INST_ARCH_X86, INST_SB_OFF),
+                     "load as on Windows 7") != NULL &&
+              inst_sb_text(INST_ARCH_X86, INST_SB_UNKNOWN) == NULL,
+              "x86: the three sentences");
+        CHECK(inst_ts_confirmed(1, INST_SB_OFF) &&
+              inst_ts_confirmed(1, INST_SB_UNKNOWN) &&
+              !inst_ts_confirmed(1, INST_SB_ON) &&
+              !inst_ts_confirmed(0, INST_SB_OFF) &&
+              !inst_ts_confirmed(0, INST_SB_ON),
+              "Secure Boot on: TESTSIGNING never confirmed");
+        /* Secure Boot on, TESTSIGNING in the options, 8, 8.1 and the kind
+         * x64: not confirmed, so the connection manager is refused. */
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1,
+                                inst_ts_confirmed(1, INST_SB_ON)) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 1,
+                                inst_ts_confirmed(1, INST_SB_ON)) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_CMONLY, 1,
+                                inst_ts_confirmed(1, INST_SB_ON)) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 1,
+                                inst_ts_confirmed(1, INST_SB_OFF)) ==
+              INST_CMBOOT_WARN &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1,
+                                inst_ts_confirmed(1, INST_SB_UNKNOWN)) ==
+              INST_CMBOOT_WARN,
+              "the state through the gate, each system");
+    }
+
     /* The USB drivers (section 4.5). */
     /* Draft 20 (task 43.43): every box on every system. */
     CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 0, 0, &offered, &why) == 1 &&
@@ -250,8 +433,13 @@ static void test_cm_only(void)
           offered, "8 and 8.1, /usb: in");
     CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 1, 0, &offered, &why) == 0 &&
           offered, "8 and 8.1, /cmonly: out");
-    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, 0, &offered, &why) == -1 &&
-          why != NULL, "8 and 8.1 with no connection manager: refused");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, 0, &offered, &why) == 0 &&
+          offered && why == NULL,
+          "8 and 8.1 with no connection manager: not refused (case 5)");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, 1, &offered, &why) == 1,
+          "8 and 8.1 with no connection manager, /usb: the USB drivers");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 1, 0, &offered, &why) == -1,
+          "8 and 8.1 with no connection manager, /cmonly: refused");
     CHECK(inst_usb_decide(INST_OS_REFUSED, 1, 1, 0, 0, &offered, &why) == -1,
           "a refused system");
 
@@ -268,7 +456,7 @@ static void test_cm_only(void)
                 int stor = (box & 2) != 0;
                 int s98 = (box & 4) != 0;
                 INST_U32 w = inst_comp_warnings(sys == 0, sys <= 1, sys == 3,
-                                                usb, stor, s98);
+                                                1, usb, stor, s98);
                 INST_U32 want = 0;
                 if (stor && sys != 0) {
                     want |= INST_CW_STOR;
@@ -290,13 +478,19 @@ static void test_cm_only(void)
             }
         }
         CHECK(!bad, "the warnings: exactly the owner's four cases");
+        CHECK(inst_comp_warnings(0, 0, 1, 0, 0, 0, 0) == INST_CW_NOCM8 &&
+              inst_comp_warnings(0, 0, 0, 0, 1, 0, 0) == 0,
+              "8 and 8.1 without the connection manager: warned (case 5)");
         inst_comp_warn_text(0, "C:\\XHCI98", text, sizeof(text));
         CHECK(text[0] == '\0', "no warning: no text");
         inst_comp_warn_text(INST_CW_STOR | INST_CW_CMALONE | INST_CW_USB8 |
-                            INST_CW_S98_8, "C:\\XHCI98", text, sizeof(text));
+                            INST_CW_S98_8 | INST_CW_NOCM8, "C:\\XHCI98", text,
+                            sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
               strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
+              strstr(text, "UAS disk driver, when ticked, is only staged") !=
+                  NULL &&
               strstr(text, "Stor98 has not been tested") != NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
@@ -2415,6 +2609,71 @@ static void test_cmf_place(void)
     }
 }
 
+/* XHCITR's "can run faster" notice (record 25 section 7.7 item 7; record 23
+ * section 9.5 item 7): the default per system, the setting in force, the
+ * switches and /list's line. */
+static void test_fast(void)
+{
+    INST_OPTS o;
+    char err[256];
+    const char *a1[] = { "x", "/faster" };
+    const char *a2[] = { "x", "/nofaster", "/yes" };
+    const char *a3[] = { "x", "/faster", "/nofaster" };
+    const char *a4[] = { "x", "/faster", "/uninstall" };
+    const char *a5[] = { "x", "/nofaster", "/devices" };
+    const char *a6[] = { "x", "/eject", "/faster" };
+
+    CHECK(strcmp(INST_FAST_VALUE, "TrayFasterNotice") == 0, "the value's name");
+    CHECK_EQ(inst_fast_default(0, 4, 10), 1, "98 SE: on");
+    CHECK_EQ(inst_fast_default(0, 4, 90), 1, "ME: on");
+    CHECK_EQ(inst_fast_default(1, 5, 0), 1, "2000: on");
+    CHECK_EQ(inst_fast_default(1, 5, 1), 1, "XP: on");
+    CHECK_EQ(inst_fast_default(1, 5, 2), 1, "XP x64: on");
+    CHECK_EQ(inst_fast_default(1, 6, 0), 1, "Vista: on");
+    CHECK_EQ(inst_fast_default(1, 6, 1), 1, "7: on");
+    CHECK_EQ(inst_fast_default(1, 6, 2), 1, "8: on");
+    CHECK_EQ(inst_fast_default(1, 6, 3), 1, "8.1: on");
+    CHECK_EQ(inst_fast_default(1, 6, 4), 1, "6.4: on");
+    CHECK_EQ(inst_fast_default(1, 10, 0), 1, "10: on (the owner, 2026-10-22)");
+    CHECK_EQ(inst_fast_default(1, 11, 0), 1, "later: on");
+
+    CHECK_EQ(inst_fast_on(1, 0, 1, 1, 1), 0, "the user's 0 over the computer's 1");
+    CHECK_EQ(inst_fast_on(1, 1, 1, 0, 0), 1, "the user's 1 over the computer's 0");
+    CHECK_EQ(inst_fast_on(0, 0, 1, 0, 1), 0, "no user value: the computer's 0");
+    CHECK_EQ(inst_fast_on(0, 0, 1, 1, 0), 1, "no user value: the computer's 1");
+    CHECK_EQ(inst_fast_on(0, 0, 0, 0, 1), 1, "neither: the default on");
+    CHECK_EQ(inst_fast_on(0, 0, 0, 0, 0), 0, "neither: the default off");
+    CHECK_EQ(inst_fast_on(1, 2, 1, 0, 1), 0, "the user's 2 is absent: the computer's");
+    CHECK_EQ(inst_fast_on(1, 7, 1, 9, 1), 1, "both out of range: the default");
+    CHECK_EQ(inst_fast_on(1, 0xFFFFFFFFUL, 0, 0, 0), 0, "-1 is absent");
+
+    CHECK(inst_parse_args(2, (char **)a1, &o, err, sizeof(err)) == 0 && o.Faster &&
+              !o.NoFaster, "/faster");
+    CHECK(inst_parse_args(3, (char **)a2, &o, err, sizeof(err)) == 0 && o.NoFaster &&
+              !o.Faster, "/nofaster");
+    CHECK(inst_parse_args(3, (char **)a3, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "contradict") != NULL, "both: refused");
+    CHECK(inst_parse_args(3, (char **)a4, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "/faster belongs to an install") != NULL,
+          "with /uninstall: refused");
+    CHECK(inst_parse_args(3, (char **)a5, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "/nofaster belongs to an install") != NULL,
+          "with /devices: refused");
+    CHECK(inst_parse_args(3, (char **)a6, &o, err, sizeof(err)) != 0,
+          "with /eject: refused");
+
+    CHECK(strstr(inst_fast_list_text(1, 0, 0), "would be turned on") != NULL,
+          "/list /faster, none: turned on");
+    CHECK(strstr(inst_fast_list_text(1, 1, 0), "would be turned on") != NULL,
+          "/list /faster, 0: turned on");
+    CHECK(strstr(inst_fast_list_text(1, 1, 1), "nothing to write") != NULL,
+          "/list /faster, 1: nothing");
+    CHECK(strstr(inst_fast_list_text(0, 1, 0), "nothing to write") != NULL,
+          "/list /nofaster, 0: nothing");
+    CHECK(strstr(inst_fast_list_text(0, 1, 5), "would be turned off") != NULL,
+          "/list /nofaster, 5: turned off");
+}
+
 /* The USB tree tool (record 23 section 9.5, record 25 section 8): its name
  * per architecture, the Run value's data, when it is copied, the leftover
  * .BAK, what becomes of the Run value, and /notray. */
@@ -3333,6 +3592,31 @@ static void test_uas(void)
     CHECK(inst_uas_decide(1, 0) && !inst_uas_decide(1, 1) &&
           !inst_uas_decide(0, 0) && !inst_uas_decide(0, 1),
           "UAS in the run only with the USB drivers and without /nouas");
+    /* Windows 8 and 8.1 (task 43.29, owner 2026-10-22): xhciuas.inf
+     * staged, never forced; Windows' own UAS driver stays the default. */
+    CHECK(inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_INSTALL) ==
+              INST_ACT_WINDOWS &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_FOREIGN) ==
+              INST_ACT_FOREIGN &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_UPDATE) ==
+              INST_ACT_UPDATE &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_CURRENT) ==
+              INST_ACT_CURRENT &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_NEWER) ==
+              INST_ACT_NEWER,
+          "8 and 8.1: a UAS disk with no driver left for Windows' own, xhciuas "
+          "kept current where it runs");
+    CHECK(inst_uas_nt6_action(INST_OS_FULL, INST_ACT_INSTALL) ==
+              INST_ACT_INSTALL &&
+          inst_uas_nt6_action(INST_OS_REFUSED, INST_ACT_INSTALL) ==
+              INST_ACT_INSTALL,
+          "2000 to 7, 98 SE and ME: a UAS disk with no driver installed");
+    CHECK(!inst_action_runs(INST_ACT_WINDOWS, 0) &&
+          !inst_action_runs(INST_ACT_WINDOWS, 1),
+          "left for Windows: never run, /force neither");
+    CHECK(strstr(inst_action_text(INST_ACT_WINDOWS),
+                 "Windows' own UAS driver") != NULL,
+          "left for Windows: said so");
     argv[0] = "x";
     argv[1] = "/nouas";
     CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.NoUas,
@@ -4159,6 +4443,21 @@ static void test_marks(void)
 
 /* ---- record 26 section 6.5: the USB storage drivers on Windows 98 SE ---- */
 
+/* Every name unreadable. */
+static int silent_taken_err(const char *name, void *ctx)
+{
+    (void)name;
+    (void)ctx;
+    return -1;
+}
+
+/* A name taken: XHCI98S2 alone. */
+static int silent_taken_s2(const char *name, void *ctx)
+{
+    (void)ctx;
+    return strcmp(name, "XHCI98S2") == 0;
+}
+
 static void stor_fill(int *st, int v)
 {
     int i;
@@ -4435,25 +4734,120 @@ static void test_storage(void)
     strcpy(ids, "USBSTOR\\GenDisk");
     CHECK(inst_stor_kind(ids, strlen(ids) + 2, NULL, 0) ==
           INST_STOR_KIND_UNIT, "a unit");
-    CHECK(inst_stor_unit_takes(0, 0, NULL, NULL, NULL, NULL, 0),
-          "a unit with no driver");
-    CHECK(inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "diskdrv.inf", 1),
-          "Windows' generic Disk drive");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "DISKDRV.INF", 0),
-          "a DISKDRV.INF not in INF itself: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "OEMDISK.INF", 1),
-          "a foreign DiskDrive binding: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "VENDOR.SYS",
-                                "DISKDRV.INF", 1),
-          "a DiskDrive binding with a WDM driver: left");
-    CHECK(!inst_stor_unit_takes(1, 0, "DiskDrive", "", "", "DISKDRV.INF", 1),
-          "a value unread: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "Storage", "USBMPHLP.PDR", "",
-                                "OTHER\\MICROS~1.INF", 0),
-          "USB Disk already: left");
-    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "OTHER.PDR", "",
-                                "DISKDRV.INF", 1),
-          "another port driver: left");
+    CHECK(inst_stor_unit_takes(0), "a unit with no driver");
+    CHECK(!inst_stor_unit_takes(1),
+          "a unit bound any way (DISKDRV.INF included): left");
+
+    /* The pair all or nothing (record 26 section 6.5.5, task 43.5): the
+     * order, the late removal, the pair and the Bulk-Only gate. */
+    {
+        int k;
+        int ntmap = -1;
+        int usbstor = -1;
+        for (k = 0; k < INST_STOR_COUNT; k++) {
+            if (instStorCopyOrder[k] == INST_STOR_IDX_USBNTMAP_INF) {
+                ntmap = k;
+            } else if (instStorCopyOrder[k] == INST_STOR_IDX_USBSTOR_INF) {
+                usbstor = k;
+            } else {
+                CHECK(instStorCopyOrder[k] == k && k < INST_STOR_BINARIES,
+                      "order: the binaries first, in their order");
+            }
+        }
+        CHECK(ntmap == INST_STOR_BINARIES && usbstor == INST_STOR_COUNT - 1,
+              "order: USBNTMAP.INF before USBSTOR.INF, USBSTOR.INF last");
+    }
+    CHECK(inst_stor_rm_late("USBNTMAP.INF", NULL) &&
+          inst_stor_rm_late("usbntmap.inf", NULL),
+          "late: USBNTMAP.INF by name, any case");
+    CHECK(!inst_stor_rm_late("USBSTOR.INF", NULL) &&
+          !inst_stor_rm_late("USBMPHLP.PDR", NULL),
+          "late: USBSTOR.INF and the binaries first");
+    CHECK(inst_stor_rm_late(NULL,
+              instStorFile[INST_STOR_IDX_USBNTMAP_INF].Sha256),
+          "late: a copy of USBNTMAP.INF's bytes");
+    CHECK(!inst_stor_rm_late(NULL,
+              instStorFile[INST_STOR_IDX_USBSTOR_INF].Sha256) &&
+          !inst_stor_rm_late(NULL, NULL) && !inst_stor_rm_late(NULL, ""),
+          "late: USBSTOR.INF's bytes, or nothing recorded: first");
+    CHECK(inst_stor_pair(0, 0) == INST_STOR_PAIR_NONE &&
+          inst_stor_pair(1, 1) == INST_STOR_PAIR_BOTH &&
+          inst_stor_pair(1, 0) == INST_STOR_PAIR_STOR &&
+          inst_stor_pair(0, 1) == INST_STOR_PAIR_NTMAP,
+          "pair: none, both, USBSTOR.INF alone, USBNTMAP.INF alone");
+    CHECK(inst_stor_pair(-1, 1) == -1 && inst_stor_pair(1, -1) == -1,
+          "pair: a side unread is unread");
+    CHECK(inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_BOTH) &&
+          inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_NONE) &&
+          inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_NTMAP),
+          "bulk: the package's USBNTMAP.INF, the INF directory no hazard");
+    CHECK(!inst_stor_bulk_admit(1, 1, INST_STOR_PAIR_STOR),
+          "bulk: USBSTOR.INF alone in the INF directory refuses");
+    CHECK(!inst_stor_bulk_admit(1, 0, INST_STOR_PAIR_BOTH) &&
+          !inst_stor_bulk_admit(1, -1, INST_STOR_PAIR_BOTH),
+          "bulk: the package's USBNTMAP.INF missing or unread refuses");
+    CHECK(!inst_stor_bulk_admit(0, 1, INST_STOR_PAIR_BOTH),
+          "bulk: no package copy of the seven refuses");
+    CHECK(!inst_stor_bulk_admit(1, 1, -1),
+          "bulk: the INF directory unread refuses");
+    CHECK(inst_stor_half(INST_STOR_PAIR_BOTH, 1) == INST_STOR_HALF_NONE &&
+          inst_stor_half(INST_STOR_PAIR_NONE, 1) == INST_STOR_HALF_NONE &&
+          inst_stor_half(INST_STOR_PAIR_NONE, 0) == INST_STOR_HALF_NONE,
+          "half: a whole pair or neither, nothing to do");
+    CHECK(inst_stor_half(INST_STOR_PAIR_STOR, 1) == INST_STOR_HALF_WITHDRAW &&
+          inst_stor_half(INST_STOR_PAIR_NTMAP, 1) == INST_STOR_HALF_WITHDRAW,
+          "half: a half with a placed copy recorded (any run) is withdrawn");
+    CHECK(inst_stor_half(INST_STOR_PAIR_STOR, 0) == INST_STOR_HALF_STEP &&
+          inst_stor_half(INST_STOR_PAIR_NTMAP, 0) == INST_STOR_HALF_STEP,
+          "half: another's half is never deleted, a step");
+    CHECK(inst_stor_half(INST_STOR_PAIR_STOR, -1) == INST_STOR_HALF_STEP &&
+          inst_stor_half(-1, 1) == INST_STOR_HALF_STEP,
+          "half: the record or the pair unread, a step");
+    CHECK(inst_stor_scan(1, 1, 1) == 1 && inst_stor_scan(1, 0, 0) == 1,
+          "scan: a copy found is found");
+    CHECK(inst_stor_scan(0, 0, 0) == 0, "scan: none, every INF read");
+    CHECK(inst_stor_scan(0, 1, 0) == -1 && inst_stor_scan(0, 0, 1) == -1,
+          "scan: an unread INF or a listing cut short is unknown");
+    CHECK(inst_stor_pair_warn(INST_STOR_PAIR_STOR) && inst_stor_pair_warn(-1),
+          "pair left: USBSTOR.INF alone, or unread, is a step");
+    CHECK(!inst_stor_pair_warn(INST_STOR_PAIR_BOTH) &&
+          !inst_stor_pair_warn(INST_STOR_PAIR_NONE) &&
+          !inst_stor_pair_warn(INST_STOR_PAIR_NTMAP),
+          "pair left: both, neither or USBNTMAP.INF alone is not");
+    /* The row's default with a lone USBSTOR.INF: NUSB installed wins
+     * (unticked), then the lone half ticks it when a ticked run completes
+     * the pair, over a recorded "no" and over found files. */
+    CHECK(inst_stor_half_default(0, 0, INST_STOR_PAIR_STOR, 1) == 1 &&
+          inst_stor_half_default(1, 0, INST_STOR_PAIR_STOR, 1) == 1,
+          "lone USBSTOR.INF: the row ticked when the run completes the pair");
+    CHECK(inst_stor_half_default(1, 1, INST_STOR_PAIR_STOR, 1) == 0 &&
+          inst_stor_half_default(0, 1, INST_STOR_PAIR_STOR, 1) == 0 &&
+          inst_stor_half_default(1, 1, INST_STOR_PAIR_NONE, 1) == 0,
+          "lone USBSTOR.INF: NUSB installed wins, unticked");
+    CHECK(inst_stor_half_default(0, 0, INST_STOR_PAIR_STOR, 0) == 0 &&
+          inst_stor_half_default(1, 0, INST_STOR_PAIR_STOR, 0) == 1,
+          "lone USBSTOR.INF: no route, the default as it was");
+    CHECK(inst_stor_half_default(0, 0, INST_STOR_PAIR_BOTH, 1) == 0 &&
+          inst_stor_half_default(1, 0, INST_STOR_PAIR_NONE, 1) == 1 &&
+          inst_stor_half_default(0, 0, INST_STOR_PAIR_NTMAP, 1) == 0 &&
+          inst_stor_half_default(0, 0, -1, 1) == 0 &&
+          inst_stor_half_default(2, 0, INST_STOR_PAIR_NONE, 1) == 1,
+          "no lone USBSTOR.INF: the default as it was");
+    {
+        const char *t1 = inst_stor_half_text(1);
+        const char *t0 = inst_stor_half_text(0);
+        CHECK(strstr(t1, "USBSTOR.INF is in the INF directory without "
+                     "USBNTMAP.INF") == t1 && strstr(t1, "stop Windows") &&
+              strstr(t1, "puts USBNTMAP.INF beside it") &&
+              strstr(t1, "plug in no new USB disk") != NULL,
+              "lone USBSTOR.INF: the fixable sentence");
+        CHECK(strstr(t0, "stop Windows") && strstr(t0, "cannot complete") &&
+              strstr(t0, "remove that copy of USBSTOR.INF") != NULL &&
+              strstr(t0, "beside it") == NULL,
+              "lone USBSTOR.INF: the sentence when the run cannot fix it");
+        CHECK(strlen(t1) < 300 && strlen(t0) < 300,
+              "lone USBSTOR.INF: the sentences fit the row's note");
+    }
 
     /* An update with Source recorded: the engine's later copies, and a
      * file of the download's bytes the first run found and kept, are this
@@ -4551,6 +4945,48 @@ static void test_storage(void)
      * is held by Placed, so recorded, and adopted. */
     CHECK(inst_stor_adoptable(1, 1, 0, 0, 1, 1),
           "a stick bound from the placed INF: adopted");
+    /* The SilentClasses entries with the storage row (task 43.42 option A,
+     * record 26 section 6.5.12). */
+    {
+        unsigned char have[4][4];
+        int valid[4];
+        char nm[32];
+        CHECK(instStorSilent[2][0] == 0xC3 && instStorSilent[2][1] == 0x08 &&
+              instStorSilent[2][2] == 0x06 && instStorSilent[2][3] == 0x50 &&
+              instStorSilent[0][2] == 0x02 && instStorSilent[1][2] == 0x05,
+              "silent: the three Bulk-Only entries, silent.reg's among them");
+        CHECK(inst_stor_silent_add((const unsigned char (*)[4])have, valid,
+                                   0) == 0x7UL,
+              "silent: an empty list takes all three");
+        memcpy(have[0], instStorSilent[2], 4);
+        valid[0] = 1;
+        memcpy(have[1], instStorSilent[0], 4);
+        valid[1] = 0;
+        have[2][0] = 0x83;
+        have[2][1] = 0x03;
+        have[2][2] = 0x01;
+        have[2][3] = 0x01;
+        valid[2] = 1;
+        CHECK(inst_stor_silent_add((const unsigned char (*)[4])have, valid,
+                                   3) == 0x3UL,
+              "silent: an entry already there is not added again; a value of "
+              "another type or length does not count");
+        memcpy(have[1], instStorSilent[0], 4);
+        valid[1] = 1;
+        memcpy(have[3], instStorSilent[1], 4);
+        valid[3] = 1;
+        CHECK(inst_stor_silent_add((const unsigned char (*)[4])have, valid,
+                                   4) == 0,
+              "silent: all three there (silent-on.bat and more): none added");
+        CHECK(inst_stor_silent_name(0, NULL, NULL, nm, sizeof(nm)) &&
+              strcmp(nm, "XHCI98S1") == 0, "silent: the first name");
+        CHECK(inst_stor_silent_name(1, silent_taken_s2, NULL, nm, sizeof(nm)) &&
+              strcmp(nm, "XHCI98S5") == 0,
+              "silent: a name in use is never written over");
+        CHECK(!inst_stor_silent_name(0, silent_taken_err, NULL, nm,
+                                     sizeof(nm)),
+              "silent: a name that cannot be read stops the merge");
+    }
     /* A run whose package copy failed after its storage copies: nothing
      * published, so a hand install of the same INFs later is never
      * taken by the uninstall. */
@@ -5098,6 +5534,7 @@ int main(void)
     test_tb_question();
     test_cmf_place();
     test_tray();
+    test_fast();
     test_wrap();
     test_questions();
     test_dir_check();

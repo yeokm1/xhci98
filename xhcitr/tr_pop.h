@@ -138,6 +138,8 @@ typedef struct _TR_POP_NOTE {
     char Title[TR_POP_TITLE];
     char Text[TR_POP_TEXT];
     int Icon;               /* TR_POP_NONE to TR_POP_ERROR */
+    unsigned int Id;        /* the caller's id, posted with this notice's
+                               events (tr_pop_show); 0 from the push */
 } TR_POP_NOTE;
 
 typedef struct _TR_POP_QUEUE {

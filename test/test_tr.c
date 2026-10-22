@@ -2664,6 +2664,491 @@ static void test_login(void)
     CHECK(tr_tray_login_start(0, 1, 0) == 1, "login: a plain start always opens");
 }
 
+/* The "can run faster" notice (record 25 section 7.7, revision 18). */
+static TR_FAST_IN fast_in(TR_U32 flags, unsigned int ex)
+{
+    TR_FAST_IN in;
+
+    memset(&in, 0, sizeof(in));
+    in.Ours = 1;
+    in.Connected = 1;
+    in.HaveV2 = 1;
+    in.V2Flags = flags;
+    in.ExSpeed = ex;
+    in.Root = 1;
+    return in;
+}
+
+static int fast_lines_fit(const char *s)
+{
+    int col = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\r' || *s == '\n') {
+            col = 0;
+        } else if (++col > 79) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Section 7.7 item 1: the qualifier answers settle on a
+ * device's answer or the third request without one, and a scan drops the
+ * keys it did not see. */
+static void test_qual_cache(void)
+{
+    static TR_QUAL_CACHE c;
+    static const unsigned char hs[10] = {10, 6, 0, 2, 0, 0, 0, 64, 1, 0};
+    static const unsigned char bad[10] = {9, 6, 0, 2, 0, 0, 0, 64, 1, 0};
+    char key[TR_FAST_KEY];
+    int i;
+
+    memset(&c, 0, sizeof(c));
+    CHECK(tr_qual_get(&c, "a") == -1, "qual: unknown key asks");
+    CHECK(tr_qual_put(&c, "a", NULL, 0) == 0, "qual: no answer counts 0 now");
+    CHECK(tr_qual_get(&c, "a") == -1, "qual: one failure asks again");
+    CHECK(tr_qual_put(&c, "a", hs, 10) == 1, "qual: then the answer");
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: settled High Speed capable");
+    CHECK_EQ(c.N, 1, "qual: one entry");
+
+    tr_qual_put(&c, "b", NULL, 0);
+    tr_qual_put(&c, "b", NULL, 0);
+    CHECK(tr_qual_get(&c, "b") == -1, "qual: two failures still ask");
+    tr_qual_put(&c, "b", NULL, 0);
+    CHECK(tr_qual_get(&c, "b") == 0, "qual: the third settles Full Speed");
+
+    CHECK(tr_qual_put(&c, "c", bad, 10) == 0, "qual: malformed is 0");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: and settled at once");
+    CHECK(tr_qual_put(&c, "d", hs, 5) == 0, "qual: short is 0");
+    CHECK(tr_qual_get(&c, "d") == 0, "qual: settled at once");
+
+    /* A scan that sees a and c only: d, settled by its answer, is dropped
+     * and asked again when it is back; b, settled by unanswered requests,
+     * is kept. */
+    tr_qual_begin(&c);
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: a seen");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: c seen");
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, 3, "qual: three kept");
+    CHECK(tr_qual_get(&c, "d") == -1, "qual: d gone, asked again");
+    CHECK(tr_qual_get(&c, "b") == 0, "qual: b kept, not asked");
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: a kept");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: c kept");
+    /* An entry asked in the scan (put) is seen too, and keeps its tries. */
+    tr_qual_begin(&c);
+    tr_qual_put(&c, "e", NULL, 0);
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, 2, "qual: b and e kept");
+    CHECK(tr_qual_get(&c, "e") == -1, "qual: e unsettled, kept");
+    tr_qual_put(&c, "e", NULL, 0);
+    tr_qual_put(&c, "e", NULL, 0);
+    CHECK(tr_qual_get(&c, "e") == 0, "qual: e settled across scans");
+    /* An unanswered request, then a scan without the device (gone, perhaps
+     * with the recovery the request caused): settled, never asked again. */
+    tr_qual_begin(&c);
+    tr_qual_put(&c, "f", NULL, 0);
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == -1, "qual: f one try");
+    tr_qual_begin(&c);
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f gone after a try: settled");
+    tr_qual_begin(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f back: not asked");
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f still settled");
+
+    /* Turnover in a full cache, as the scan does it: every candidate
+     * present marked first (new ones before retained ones), then the end,
+     * then the requests. No retained key is lost. */
+    memset(&c, 0, sizeof(c));
+    tr_qual_begin(&c);
+    for (i = 0; i < TR_QUAL_MAX; i++) {
+        sprintf(key, "t%d", i);
+        tr_qual_put(&c, key, (i % 2) ? hs : NULL, (i % 2) ? 10 : 0);
+    }
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: turnover: full");
+    CHECK_EQ(tr_qual_room(&c, "x"), 0, "qual: full: a new key not asked");
+    CHECK_EQ(tr_qual_room(&c, "t3"), 1, "qual: full: a kept key may be");
+    tr_qual_put(&c, "x", hs, 10);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: full: nothing replaced");
+    CHECK(tr_qual_get(&c, "x") == -1, "qual: full: the new key not kept");
+    CHECK(tr_qual_get(&c, "t0") == -1, "qual: full: the first kept");
+    {
+        int j;
+        int ok = 1;
+        tr_qual_begin(&c);
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (tr_qual_get(&c, key) != -1) {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            (void)tr_qual_get(&c, key);
+        }
+        tr_qual_end(&c);
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (!tr_qual_room(&c, key)) {
+                ok = 0;
+            }
+            tr_qual_put(&c, key, hs, 10);
+        }
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            if (tr_qual_get(&c, key) == ((j % 2) ? 1 : -1)) {
+                if (j % 2 == 0) {
+                    tr_qual_put(&c, key, NULL, 0);
+                }
+            } else {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            if (tr_qual_get(&c, key) != ((j % 2) ? 1 : -1)) {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (tr_qual_get(&c, key) != 1) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "qual: turnover keeps the scan's keys, answers and tries");
+    }
+
+    /* More candidates than the balloon keeps (TR_FAST_MAX): repeated
+     * scans keep every answer and every unsettled try. */
+    memset(&c, 0, sizeof(c));
+    for (i = 0; i < 3; i++) {
+        int j;
+        int ok = 1;
+        tr_qual_begin(&c);
+        for (j = 0; j < TR_FAST_MAX + 8; j++) {
+            sprintf(key, "m%d", j);
+            if (tr_qual_get(&c, key) < 0) {
+                if (j % 2) {
+                    tr_qual_put(&c, key, hs, 10);
+                } else {
+                    tr_qual_put(&c, key, NULL, 0);
+                }
+            }
+        }
+        tr_qual_end(&c);
+        CHECK_EQ(c.N, TR_FAST_MAX + 8, "qual: every candidate kept");
+        for (j = 0; j < TR_FAST_MAX + 8; j++) {
+            sprintf(key, "m%d", j);
+            if (tr_qual_get(&c, key) != (j % 2 ? 1 : (i < 2 ? -1 : 0))) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "qual: answers kept, tries counted across scans");
+    }
+
+    /* Full of keys whose requests went unanswered and whose devices went
+     * away: every one kept, so none is asked again; a new key is not
+     * asked at all. */
+    memset(&c, 0, sizeof(c));
+    tr_qual_begin(&c);
+    for (i = 0; i < TR_QUAL_MAX; i++) {
+        sprintf(key, "k%d", i);
+        tr_qual_put(&c, key, NULL, 0);
+    }
+    tr_qual_end(&c);
+    tr_qual_begin(&c);
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: failure keys all kept");
+    CHECK(tr_qual_get(&c, "k0") == 0 && tr_qual_get(&c, "k1023") == 0,
+          "qual: failure keys settled, not asked again");
+    CHECK_EQ(tr_qual_room(&c, "new"), 0, "qual: no room: the new key not asked");
+    CHECK_EQ(tr_qual_room(NULL, "a"), 1, "qual: NULL: room");
+    CHECK(tr_qual_get(NULL, "a") == -1, "qual: NULL asks");
+    CHECK(tr_qual_put(NULL, "a", hs, 10) == 1, "qual: NULL still answers");
+    tr_qual_begin(NULL);
+    tr_qual_end(NULL);
+}
+
+static void test_fast(void)
+{
+    TR_FAST_IN in;
+    TR_FAST f;
+    char keys[3][TR_FAST_KEY];
+    char key[TR_FAST_KEY];
+    char out[400];
+    char box[2048];
+    TR_TEXT t;
+
+    /* Declared and running speeds. */
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_CAPABLE), TR_SPEED_SUPER, "can: SS");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE),
+             TR_SPEED_SUPERPLUS, "can: SSP");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SSP_CAPABLE), TR_SPEED_SUPERPLUS,
+             "can: SSP alone");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_NOW), -1, "can: operating is not declaring");
+    CHECK_EQ(tr_fast_can(0, TR_V2_F_SS_CAPABLE), -1, "can: no _EX_V2");
+
+    /* A USB 3 stick on a USB 2.0 root port. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "SS at HS on a root port counts");
+    CHECK_EQ(f.Now, TR_SPEED_HIGH, "runs at High Speed");
+    CHECK_EQ(f.Can, TR_SPEED_SUPER, "can SuperSpeed");
+    CHECK_EQ(f.Where, TR_FW_PORT2, "on a USB 2.0 port");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_FULL);
+    CHECK(tr_fast_check(&in, &f) && f.Now == TR_SPEED_FULL, "SS at FS counts");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH);
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPERPLUS &&
+              f.Where == TR_FW_PORT2, "SSP at HS: can SuperSpeedPlus");
+
+    /* At its speed, or declaring nothing: never. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "SS at SS: no");
+    CHECK_EQ(f.Now, -1, "nothing filled");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE |
+                 TR_V2_F_SSP_NOW, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "SSP at SSP: no");
+    in = fast_in(0, TR_SPEED_HIGH);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a High Speed-only device: never");
+    in = fast_in(0, TR_SPEED_LOW);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a Low Speed device: never");
+
+    /* A SuperSpeedPlus device at 5 Gbit/s. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "SSP at 5 Gbit/s counts");
+    CHECK_EQ(f.Now, TR_SPEED_SUPER, "runs at SuperSpeed");
+    CHECK_EQ(f.Where, TR_FW_LINK, "a 5 Gbit/s link");
+    /* 98 SE and ME: the _EX byte 3 or 4 with the operating flags. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 3);
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_LINK, "98: byte 3, SSP capable");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE |
+                 TR_V2_F_SSP_NOW, 4);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "98: byte 4 at SSP: no");
+    /* A byte the decision does not trust, with no operating flag. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, 3);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "byte 3, no operating flag: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, 0xFF);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "an unknown byte: no");
+
+    /* What never counts. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.IsHub = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a hub never counts itself");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Ours = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "another driver's controller: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Connected = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "not connected: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.HaveV2 = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "no _EX_V2: no");
+    CHECK_EQ(tr_fast_check(NULL, &f), 0, "no port: no");
+
+    /* Behind hubs. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubFlags = 0;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB2 &&
+              f.HubNow == TR_SPEED_HIGH, "behind a USB 2.0 hub");
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB1 &&
+              f.HubNow == TR_SPEED_FULL, "behind a Full Speed hub");
+    in.HubExSpeed = TR_SPEED_HIGH;
+    in.HubFlags = TR_V2_F_SS_CAPABLE;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB3,
+          "behind a USB 3 hub at High Speed");
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB3,
+          "behind a USB 3 hub at Full Speed");
+    in.HubKnown = 0;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB2 && f.HubNow == -1,
+          "a hub not read: by default a USB 2.0 hub");
+    in.HubKnown = 1;
+    in.HubHaveV2 = 0;
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB1,
+          "a hub without _EX_V2: by its speed");
+
+    /* The High Speed case (the owner, 2026-10-22): at Full Speed behind a
+     * Full Speed hub, asked for its device_qualifier. */
+    in = fast_in(0, TR_SPEED_FULL);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.BcdUsb = 0x0200;
+    in.HsQual = -1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 1, "HS case: a candidate is asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: not asked yet: no");
+    in.HsQual = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: refused: Full Speed only");
+    in.HsQual = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "HS case: answered: counts");
+    CHECK(f.Now == TR_SPEED_FULL && f.Can == TR_SPEED_HIGH &&
+              f.Where == TR_FW_HUBFS && f.HubNow == TR_SPEED_FULL,
+          "HS case: Full Speed, can High, behind a Full Speed hub");
+    in.BcdUsb = 0x0110;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: USB 1.1 is not asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: USB 1.1 never counts");
+    in.BcdUsb = 0x0200;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: behind a High Speed hub: no");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: a Full Speed device there: no");
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.Root = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a root port is never asked");
+    in.Root = 0;
+    in.HubKnown = 0;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a hub not read: not asked");
+    in.HubKnown = 1;
+    in.UnderTt = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0,
+             "HS case: the Full Speed hub behind a High Speed one: not asked");
+    in.HsQual = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: behind a TT never counts");
+    in.HsQual = -1;
+    in.UnderTt = 0;
+    in.ExSpeed = TR_SPEED_HIGH;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: at High Speed: no");
+    in.ExSpeed = TR_SPEED_FULL;
+    in.IsHub = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a hub: no");
+    in.IsHub = 0;
+    in.Ours = 0;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: another controller: no");
+    in.Ours = 1;
+    in.V2Flags = TR_V2_F_SS_CAPABLE;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: SuperSpeed-capable: the SS case");
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPER && f.Where == TR_FW_HUB1,
+          "SS-capable at Full Speed behind a Full Speed hub: the SS case");
+    CHECK_EQ(tr_fast_wants_qual(NULL), 0, "HS case: no port");
+    {
+        static const unsigned char q[10] = { 10, 6, 0, 2, 0, 0, 0, 64, 1, 0 };
+        static const unsigned char d[10] = { 18, 1, 0, 2, 0, 0, 0, 64, 1, 0 };
+        CHECK_EQ(tr_qual_ok(q, 10), 1, "qualifier: 10 bytes, type 6");
+        CHECK_EQ(tr_qual_ok(q, 9), 0, "qualifier: short");
+        CHECK_EQ(tr_qual_ok(d, 10), 0, "qualifier: a device descriptor is not one");
+        CHECK_EQ(tr_qual_ok(NULL, 10), 0, "qualifier: none");
+    }
+    in = fast_in(0, TR_SPEED_FULL);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.BcdUsb = 0x0200;
+    in.HsQual = 1;
+    tr_fast_check(&in, &f);
+    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1);
+    CHECK(strcmp(out, "USB Flash Disk (G:) runs at Full Speed (12 Mbit/s) behind "
+                      "a Full Speed hub; it can run at High Speed (480 Mbit/s). "
+                      "Click here for what to try.") == 0, "HS case: the balloon");
+    CHECK(strstr(tr_fast_try(TR_FW_HUBFS), "rather than through this Full Speed hub")
+              != NULL, "HS case: try");
+
+    /* The texts. */
+    CHECK(strstr(tr_fast_try(TR_FW_PORT2), "fell back to USB 2.0") != NULL,
+          "try: a USB 2.0 port");
+    CHECK(strstr(tr_fast_try(TR_FW_HUB2), "USB 3 hub") != NULL, "try: a hub");
+    CHECK(strcmp(tr_fast_try(TR_FW_HUB1), tr_fast_try(TR_FW_HUB2)) == 0,
+          "try: a Full Speed hub as a USB 2.0 one");
+    CHECK(strstr(tr_fast_try(TR_FW_HUB3), "Connect the hub") != NULL,
+          "try: the hub to a USB 3 port");
+    CHECK(strstr(tr_fast_try(TR_FW_LINK), "10 Gbit/s or more") != NULL,
+          "try: a faster port");
+    CHECK(tr_fast_try(TR_FW_NONE)[0] == '\0', "try: nothing for none");
+    CHECK(strcmp(tr_fast_speed(TR_SPEED_HIGH), "High Speed (480 Mbit/s)") == 0,
+          "speed: High");
+    CHECK(strcmp(tr_fast_speed(TR_SPEED_SUPERPLUS),
+                 "SuperSpeedPlus (10 Gbit/s or more)") == 0, "speed: SSP");
+    CHECK(strcmp(tr_fast_speed(-1), "a speed not reported") == 0, "speed: none");
+
+    /* Keys, and which are new. */
+    tr_fast_key(key, sizeof(key), "{36fc9e60}\\0003", "3.2", 0x0781, 0x5581);
+    CHECK(strcmp(key, "{36fc9e60}\\0003|3.2|0781:5581") == 0, "the key");
+    tr_fast_key(keys[0], TR_FAST_KEY, "{36fc9e60}\\0003", "3.2", 0x0781, 0x5581);
+    tr_fast_key(keys[1], TR_FAST_KEY, "{36fc9e60}\\0003", "4", 0x0781, 0x5581);
+    tr_fast_key(keys[2], TR_FAST_KEY, NULL, NULL, 0x10000, 0x1);
+    CHECK(strcmp(keys[2], "||0000:0001") == 0, "a key of nothing");
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 2, key), 0,
+             "the same device again: not new");
+    tr_fast_key(key, sizeof(key), "{36fc9e60}\\0003", "3.1", 0x0781, 0x5581);
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 2, key), 1,
+             "moved to another port: new");
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 1, keys[1]), 1,
+             "past the count: new");
+    CHECK_EQ(tr_fast_new(NULL, 0, key), 1, "no last set: new");
+
+    /* The balloon. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    tr_fast_check(&in, &f);
+    tr_fast_balloon(out, sizeof(out), "USB Mass Storage Device (F:)", &f, 1);
+    CHECK(strcmp(out, "USB Mass Storage Device (F:) runs at High Speed "
+                      "(480 Mbit/s) on a USB 2.0 port; it can run at SuperSpeed "
+                      "(5 Gbit/s). Click here for what to try.") == 0,
+          "balloon: one");
+    CHECK(strlen(out) < 256, "balloon: fits szInfo");
+    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3);
+    CHECK(strcmp(out, "3 USB devices run slower than they can: Stick and 2 "
+                      "more. Click here for what to try.") == 0, "balloon: three");
+    CHECK(strlen(TR_FAST_TITLE) < 64, "the title fits szInfoTitle");
+
+    /* The box's entry. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    tr_fast_check(&in, &f);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "USB Mass Storage Device (F:)", 0x0781, 0x5581,
+                  "Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller",
+                  "Generic USB Hub", &f);
+    CHECK(strstr(box, "USB Mass Storage Device (F:) (0781:5581)\r\n") == box,
+          "entry: the name first");
+    CHECK(strstr(box, "  Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller\r\n")
+              != NULL, "entry: the port");
+    CHECK(strstr(box, "  Behind Generic USB Hub (High Speed (480 Mbit/s))\r\n") != NULL,
+          "entry: the hub");
+    CHECK(strstr(box, "  Runs at:    High Speed (480 Mbit/s)\r\n") != NULL,
+          "entry: runs at");
+    CHECK(strstr(box, "  Can run at: SuperSpeed (5 Gbit/s)\r\n") != NULL,
+          "entry: can run at");
+    CHECK(strstr(box, "  Try: Connect it to a USB 3 port of this computer, or through a "
+                      "USB 3 hub.\r\n") != NULL, "entry: try, on one line");
+    CHECK(fast_lines_fit(box), "entry: 79 columns");
+    CHECK(!t.Overflow, "entry: no overflow");
+    /* No hub line on a root port; a long port line wrapped. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    tr_fast_check(&in, &f);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "A device with a rather long name that goes on", 1, 2,
+                  "Port 15 of AMD USB 3.10 eXtensible Host Controller - 1.10 "
+                  "(Microsoft) - AMD 1022:15B6 (behind PCI bridge 00:08.1)", NULL, &f);
+    CHECK(strstr(box, "Behind") == NULL, "entry: no hub line on a root port");
+    CHECK(fast_lines_fit(box), "entry: a long port line in 79 columns");
+    CHECK(strstr(box, "fell back to USB 2.0") != NULL, "entry: the root port's try");
+    CHECK(strstr(box, "  Try: Connect it to a USB 3 port of this computer (often blue, or "
+                      "marked SS).\r\n       If it is already in one,") != NULL,
+          "entry: try wrapped and indented");
+
+    /* The menu line and the tooltip. */
+    tr_fast_menu(out, sizeof(out), 1);
+    CHECK(strcmp(out, "1 USB device can run faster...") == 0, "menu: one");
+    tr_fast_menu(out, sizeof(out), 2);
+    CHECK(strcmp(out, "2 USB devices can run faster...") == 0, "menu: two");
+    tr_fast_tip(out, sizeof(out), 12);
+    CHECK(strcmp(out, "xHCI98 USB Tree: 12 USB devices can run faster") == 0 &&
+              strlen(out) < 64, "tooltip: within 98 SE's 64");
+    CHECK(strcmp(TR_FAST_VALUE, "FasterNotice") == 0, "the user's value");
+}
+
 static void test_labels(void)
 {
     unsigned int ven;
@@ -2994,6 +3479,8 @@ int main(void)
     test_usb_eject();
     test_elevated_stop();
     test_login();
+    test_qual_cache();
+    test_fast();
     test_levels();
     test_labels();
     test_resources();
@@ -3135,6 +3622,21 @@ int main(void)
         tr_confirm_lead(&t, "USB xHCI Controller", "USB xHCI Controller", NULL, 0);
         CHECK(strcmp(buf, "Stop USB xHCI Controller?\r\n\r\nThese devices will stop:\r\n") == 0,
               "confirm: no disk");
+        /* Task 43.63: the reminder in the box is one paragraph; the
+         * console's text keeps its own wrap. */
+        CHECK(strchr(inst_eject_remind_text(), '\n') != NULL,
+              "reminder: the console's text is wrapped");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_put(&t, "Close any program that uses them first.\n");
+        tr_put_box(&t, inst_eject_remind_text());
+        CHECK(strcmp(buf, "Close any program that uses them first.\r\n"
+                          "Before you eject it, make sure none of its other "
+                          "devices (USB ports, card readers, network) is in "
+                          "use; stop them in Windows first.") == 0,
+              "reminder: one paragraph in the box, the break a space");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_put_box(&t, "a\nb\n");
+        CHECK(strcmp(buf, "a b ") == 0, "box text: every break a space, no CR");
         memset(e, 0, sizeof(e));
         memcpy(e + CM_ST_E_VENDOR, "Acme\tCorp", 9);
         memcpy(e + CM_ST_E_MODEL, " Dock\r\n  X1 ", 12);
@@ -3243,6 +3745,38 @@ int main(void)
         strcpy(s, "a\n   b\r\n");
         tr_join_lines(s);
         CHECK(strcmp(s, "a b ") == 0, "join: indentation after a break dropped");
+        {
+            /* Task 43.63: the after-eject box. ej_run lays out its answer
+             * as below and every caller joins it before the box or the
+             * balloon, so inst_unplug_text's console wrap is a space
+             * there; the console keeps its wrap. */
+            char a[512];
+            TR_TEXT tt;
+            int k;
+            static const int kinds[2] = { INST_UNPLUG_OTHERS,
+                                          INST_UNPLUG_RESTARTED };
+            static const char *const want[2] = {
+                "Windows has stopped QEMU NVMe Ctrl (E:).\r\n\r\n"
+                "Other devices behind the same Thunderbolt port are still "
+                "running: eject them too before you unplug it.",
+                "Windows has stopped QEMU NVMe Ctrl (E:).\r\n\r\n"
+                "The device has started again, so it is not safe to unplug. "
+                "Close the programs using it and stop it again in the xHCI98 "
+                "USB Tree."
+            };
+            for (k = 0; k < 2; k++) {
+                CHECK(strchr(inst_unplug_text(kinds[k], INST_TOOL_TREE), '\n')
+                          != NULL, "after: the console's text is wrapped");
+                tr_text_init(&tt, a, sizeof(a));
+                tr_printf(&tt, "Windows has stopped %s.\n",
+                          "QEMU NVMe Ctrl (E:)");
+                tr_printf(&tt, "\n%s",
+                          inst_unplug_text(kinds[k], INST_TOOL_TREE));
+                tr_join_lines(a);
+                CHECK(strcmp(a, want[k]) == 0,
+                      "after: one paragraph in the box, the break a space");
+            }
+        }
         {
             /* Exact-sized buffers: the join never writes past the input. */
             char e1[6];
