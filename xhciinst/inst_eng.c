@@ -20746,10 +20746,12 @@ static int usb_decide(void)
             "manager\nhere; Windows' own USB 3 driver keeps running the USB "
             "controllers unless\n/usb puts the xHCI98 USB drivers in the run "
             "(untested on Windows 8 and 8.1).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY) {
         out("/usb: the xHCI98 USB drivers are in this run (untested on %s).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (r == 0) {
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");
