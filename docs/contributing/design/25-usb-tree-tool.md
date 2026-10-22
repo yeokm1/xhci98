@@ -1767,20 +1767,28 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    - shown (`NIN_BALLOONSHOW`): done; nothing is ever sent again for it;
    - gone without being shown (a timeout or a hide before any show):
      lost, and sent again, once, 40 s later (`TR_BS_WAIT_MS`), long
-     enough for a balloon of Windows' own to have gone;
+     enough for a balloon of Windows' own to have gone; a show in those
+     40 s still ends it (the messages name no balloon, so the "gone" may
+     have been an older balloon's, posted before this one was sent);
    - no answer at all within 60 s (`TR_BS_NOSHOW_MS`): sent again at
-     once, but **only where the shell has answered some balloon of this
-     session** with one of the four messages, so a shell that never sends
+     once, but **only where the shell has sent one of the four messages
+     in this session**, for any balloon of the tool's, so a shell that never sends
      them is never sent a balloon twice;
    - the re-send gone unshown or unanswered too: given up;
    - another balloon of the tool's sent meanwhile (a removal's, an
      eject's), the balloon clicked, the device it names no longer
-     counted, or the notice turned off: no longer owed.
-   A re-send is the same `NIM_MODIFY` with `NIF_INFO` on the same icon,
-   which replaces whatever balloon of the tool's the shell still holds
-   (the shell keeps one per icon, the last replacing the one before, as
-   item 6's click already relies on), so a balloon the shell had only
-   queued is replaced, not doubled. Where it was shown nothing changes:
+     counted, or the notice turned off: no longer owed (nor, then, a
+     balloon still waiting for the icon to be added).
+   A re-send is the same `NIM_MODIFY` with `NIF_INFO` on the same icon.
+   That the shell then keeps one balloon for the icon, replacing one it
+   had only queued rather than showing both, is item 6's assumption too
+   (the last balloon's flag serves its click) and is not a documented
+   promise: Microsoft's `NOTIFYICONDATA` page says a notification may be
+   queued and that an empty `szInfo` with `NIF_INFO` removes the icon's
+   balloon, nothing more. It matters only to the no-answer case (a
+   balloon gone unshown cannot be shown twice); 43.66's leg reads which
+   messages 7 sends, and if 7 answers the dropped balloon with a timeout
+   the no-answer re-send can be removed. Where it was shown nothing changes:
    XP showed ours after its "Found New Hardware" balloon (43.28), and a
    shown balloon is never sent again. 98 SE has no balloon (section 16)
    and nothing changes there. The text sent again is the one first sent,

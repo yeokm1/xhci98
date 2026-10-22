@@ -820,8 +820,9 @@ void tr_fast_tip(char *out, size_t cap, int count);
  * went. One the shell does not answer at all within TR_BS_NOSHOW_MS is
  * sent again at once, but only where the shell has been seen to answer
  * (reports): a shell that never sends these messages would otherwise get
- * every balloon twice. A re-send replaces whatever balloon of the tool's
- * the shell still holds, so it cannot show twice. */
+ * every balloon twice. A re-send is NIM_MODIFY on the same icon, taken to
+ * replace a balloon the shell still queues (record 25 section 7.7 item 9).
+ * A show after a "gone" still ends it: the messages name no balloon. */
 #define TR_BS_IDLE      0   /* nothing owed                               */
 #define TR_BS_SENT      1   /* sent, not shown yet                        */
 #define TR_BS_SHOWN     2   /* the shell showed it                        */
