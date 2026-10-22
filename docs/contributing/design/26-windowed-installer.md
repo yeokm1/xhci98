@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 22, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
+Status: draft 23, 2026-10-22 (roadmap-usb4 tasks 43.34 to 43.36, the
+owner's decisions of 2026-10-20 and 2026-10-21: Windows 10 below build
+22000 takes 8 and 8.1's pages, every box shown and tickable, the USB
+drivers and Stor98 unticked with case 3's warning until the Windows 10
+legs pass; and the Secure Boot state read for the signature note,
+section 5.3.2; record 23 revision 28); draft 22, 2026-10-22 (roadmap-usb4 task 43.51; the owner's decision of that day to keep
 NUSB apart from the non-free driver pack: the seven are read from the
 download's own `NUSB33\W98SE\` beside the version root, no longer
 `NONFREE\STORAGE\NUSB33\W98SE\`, sections 6.5 and 6.5.1; record 23
@@ -445,7 +450,8 @@ Thunderbolt 3 / USB4 connection manager and the xHCI98 tools on this
 computer, that Windows' own USB 3 driver keeps running the USB
 controllers, and that it asks for a restart at the end; the system line
 names 8 or 8.1 by the version `RtlGetVersion` reads (record 23 section
-4.3). A refusal of record 23
+4.3); from draft 23 Windows 10 below build 22000 takes the same
+paragraph, named "Windows 10" by its build (section 5.3.2). A refusal of record 23
 section 4 (the ZIP folder, a mixed architecture, a wrong flavour, a stale
 `.sys`, a wrong Windows, rights) ends here: the page shows the refusal's
 text and Next is disabled; Cancel closes with exit 1. Under `/uninstall`
@@ -632,6 +638,96 @@ driver key's `InfPath` and version read, whether ME's search reaches
 connection manager alone with the helper, the emulator's host interface
 bound, the warning, the uninstall); case 3 on 8 with 43.24's VMs; the
 console's warnings and `/yes` on each.
+
+#### 5.3.2 Windows 10 (tasks 43.34 to 43.36; draft 23)
+
+The owner, 2026-10-20: Windows 10, x86 and x64, a target of the
+connection manager and of `xhci98.sys` as an opt-in install, as planned
+for 8 and 8.1, the x64 drivers loading in test-signing mode, which the
+installer documents with Secure Boot off; and 2026-10-21, for the
+Components page: every box shown and tickable on 10 as section 5.3.1
+makes it on 8.1, the USB drivers' and Stor98's untested warning on 10
+lifted once roadmap-usb4 task 43.37's emulator legs pass ("Technically
+can be tested if we run in the emulator").
+
+**Which systems.** Record 23 section 4.3, revision 28: NT 10.0 below build
+22000 - the client releases 1507 to 22H2, the LTSC releases, and Windows
+Server 2016 to 2022 with no Server check - is the kind 8 and 8.1 are;
+build 22000 and later (Windows 11) is refused at the Welcome page with
+record 23's refusal text, which names "8, 8.1 and 10 (below build 22000)"
+among the systems admitted. So every rule this record gives 8 and 8.1 by
+that kind holds on 10 with no code of its own, and the words that name
+the systems say "8, 8.1 and 10" where they said "8 and 8.1".
+
+**The pages on 10:**
+
+- Welcome (section 5.1): the connection manager's paragraph and title;
+  the system line "Windows 10 (10.0.<build> <CSD>), x64." (or 32-bit),
+  a Server build named "Windows 10" too, since the tool makes no Server
+  check.
+- Components (sections 5.3 and 5.3.1), as on 8.1: the USB drivers' box
+  unticked, 8's sentence under it ("Windows' own USB 3 driver runs the
+  controllers here; ticked, this replaces it (untested here)"), until
+  roadmap-usb4 task 43.33 (a) gives the note on what the user gains and
+  loses (task 43.35); ticked, case 3a, with its warning; the UAS box under
+  it; the Thunderbolt box unticked; Stor98 under it, unticked whatever the
+  Thunderbolt box does, ticked, case 3b, with its warning (10's own
+  `stornvme` on a tunnel drive installed over, as on 8.1); the NUSB
+  pack's storage row shown, unticked, ticked, case 1 - its warning, then
+  the seven files copied to `<the install directory>\NUSB33\` only,
+  nothing put in `%windir%`, the INF directory or `DevicePath`; and the
+  tray box, as everywhere.
+- The warnings' words name 10 beside 8 and 8.1: case 3a "The xHCI98 USB
+  drivers have not been tested on Windows 8, 8.1 or 10. ..." and case 3b
+  "Stor98 has not been tested on Windows 8, 8.1 or 10. ...", the rest of
+  each as section 5.3.1 has it. When task 43.37's emulator legs pass for
+  the USB drivers' box and Stor98's on 10, 10 leaves those two sentences
+  (no blanket "untested" for those two boxes on 10 after, owner
+  2026-10-21) and they name 8 and 8.1 alone until 43.31 and 43.24 pass;
+  the pure half then takes 10 as a flag of its own (`inst_comp_warnings`
+  gains it), with host vectors, which is that task's change, not this
+  one's. Case 1's words are unchanged: they name no system but 98 SE.
+- The console (section 6.4, record 23 section 7.1): `/usb` on 10 as on 8
+  and 8.1, its help line "Windows 8, 8.1 and 10: install the USB drivers
+  too (untested)"; the Stor98 question with Enter for N and `/yes`'s N,
+  "N on Windows 8, 8.1 and 10"; a `/set` of a USB value refused when the
+  USB drivers are not in the run, "(/cmonly, or Windows 8, 8.1 and 10)".
+- The uninstall (section 9) as on 8 and 8.1: the controllers given back
+  to `usbxhci.sys` by removal and rescan, Stor98 by its record, the
+  pack's copies by case 1's `Tools` record.
+
+**The signature note's Secure Boot state** (task 43.36: "whether the
+installer reads Secure Boot's state to say which applies, designed in
+record 26 before its code"). Proposed: yes, on 8, 8.1 and 10 only, read
+and shown, never changed. The value is
+`HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State`,
+`UEFISecureBootEnabled`, a `REG_DWORD` that Microsoft documents as 1
+with Secure Boot on and 0 with it off (not read here on any guest; read
+first on roadmap-usb4 task 43.32's legacy-BIOS guests and its OVMF guest
+with Secure Boot on, before the code is released). The pure half,
+`inst_sb_state(found, type, value)`, gives three answers:
+
+| Read | Answer | The note's Secure Boot sentence |
+|---|---|---|
+| `REG_DWORD` 1 | on | "Secure Boot is on: Windows does not load the test-signed drivers, and test-signing mode cannot be turned on, until you turn Secure Boot off in the computer's firmware setup. Until then only a start with driver signature enforcement disabled loads them (Advanced startup, Troubleshoot, Startup Settings, at every start)." |
+| `REG_DWORD` 0 | off | "Secure Boot is off: test-signing mode can be turned on (an elevated Command Prompt: bcdedit /set testsigning on, then restart)." |
+| absent, another type or value, unreadable | not known | the sentence of record 23 section 5.10 as it stands, naming both cases (a computer that starts from a legacy BIOS has no Secure Boot, and its key may be absent or read 0, which is why absent is not taken for off) |
+
+With the answer "on", test-signing mode never counts as confirmed, even
+when `SystemStartOptions` holds `TESTSIGNING`: Microsoft's documentation
+of the option has Secure Boot turned off before test signing can be
+enabled (not read here on any guest; read on 43.37's OVMF guest), so the
+post-install check (record 23 section
+5.10) reports the controller's or the NHI's Code 52 as the note's case
+and not as an unexplained failure. The raw value is logged. Nothing is
+refused and the run goes on as now when the user confirms. On 7 and
+earlier nothing is read (no Secure Boot); on 32-bit 8, 8.1 and 10 the
+sentence is used only where record 23 section 5.10 gives that system a
+Secure Boot note at all (task 43.22's reading for 8 and 8.1, 43.33 (d)'s
+for 10). Host vectors for `inst_sb_state` (each row, and "on" with
+`TESTSIGNING` not confirmed). The code waits on task 43.22's note for 8
+and 8.1, whose text it changes; memory integrity enters the note only if
+43.33 (d) finds it refuses these drivers.
 
 ### 5.4 The USB settings
 

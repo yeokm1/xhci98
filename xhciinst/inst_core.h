@@ -949,15 +949,19 @@ int inst_removal_retry(INST_U32 cr, INST_U32 flags);
  * a re-plug. */
 const char *inst_admin_text(void);
 
-/* The system's kind (record 23 sections 4.3 and 4.5, revision 13): a full
- * target, Windows 8 and 8.1 for the connection manager alone, or refused.
+/* The system's kind (record 23 sections 4.3 and 4.5, revisions 13 and
+ * 27): a full target; Windows 8, 8.1 and 10 below build 22000 (Server
+ * 2016 to 2022 among them) for the connection manager, the USB drivers
+ * opt-in; or refused, Windows 11 (10.0 from build 22000) among them.
  * nt and the version as RtlGetVersion (or GetVersionEx before 8) reads
  * them; build is the build number's low word. */
 #define INST_OS_REFUSED     0
 #define INST_OS_FULL        1
 #define INST_OS_CMONLY      2
+#define INST_OS_BUILD_W11   22000UL
 int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build);
-const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor);
+const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor,
+                         INST_U32 build);
 
 /* The USB drivers (xhci98.sys, xhciuas.sys; record 23 section 4.5): 1 in
  * the run, 0 left out, -1 refused (why in *refusal). *offered: the window's

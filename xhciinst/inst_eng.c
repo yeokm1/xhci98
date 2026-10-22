@@ -7140,12 +7140,12 @@ static void check_results(void)
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
                    changedReboot[c]) {
             /* 32-bit Vista and 7 hold the controller until the helper's
              * restart (release notes, "Installing", step 3). */
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
                    (d->Problem == 52UL || d->Problem == 39UL) &&
                    !testSigningConfirmed) {
             out("  %s does not load: test-signing mode is needed (see the "
@@ -7298,11 +7298,12 @@ static void testsigning_note0(void)
 
 /* The note for the connection manager alone (record 23 section 5.10,
  * revision 13): the binary read is xhcicm.sys, the device that shows the
- * code the NHI, and on 8 and 8.1 the Secure Boot condition. */
+ * code the NHI, and on 8, 8.1 and 10 (revision 28) the Secure Boot
+ * condition. */
 static void testsigning_note_cm(void)
 {
     char opt[512];
-    int w8 = envNow.Major == 6 && envNow.Minor >= 2;
+    int w8 = envNow.Major > 6 || (envNow.Major == 6 && envNow.Minor >= 2);
 
     if (!stScreens &&
         reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
@@ -7338,11 +7339,11 @@ static void testsigning_note_cm(void)
             "it.\n");
     }
     if (w8) {
-        out("Windows 8 and 8.1: test-signing mode can be turned on only with "
-            "Secure Boot\noff in the computer's firmware setup. The start "
-            "without signature enforcement\nis Advanced startup, Troubleshoot, "
-            "Startup Settings, \"Disable driver\nsignature enforcement\", at "
-            "every start.\n");
+        out("Windows 8, 8.1 and 10: test-signing mode can be turned on only "
+            "with Secure\nBoot off in the computer's firmware setup. The "
+            "start without signature\nenforcement is Advanced startup, "
+            "Troubleshoot, Startup Settings, \"Disable\ndriver signature "
+            "enforcement\", at every start.\n");
     }
     out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
         "(52 on 7).\nIf this start is one without signature enforcement, go "
@@ -15291,7 +15292,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [%s].\n", def ? "Y" : "N");
     } else if (!def) {
-        out("  /yes: N on Windows 8 and 8.1 (/stor98 installs it).\n");
+        out("  /yes: N on Windows 8, 8.1 and 10 (/stor98 installs it).\n");
     } else {
         out("  /yes: Y, with the Thunderbolt support (/nostor98 leaves it "
             "out).\n");
@@ -19412,7 +19413,7 @@ void inst_eng_usage(void)
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (on 98 SE and ME with a warning)\n"
-"  /usb          Windows 8 and 8.1: install the USB drivers too (untested)\n"
+"  /usb          Windows 8, 8.1 and 10: install the USB drivers too (untested)\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
@@ -20584,8 +20585,8 @@ int inst_eng_begin(int argc, char **argv)
         envNow.Nt = 1;
         if (osKind == INST_OS_REFUSED) {
             out("This Windows is not one this package supports (2000, XP, "
-                "XP x64, Vista, 7;\n8 and 8.1 for the Thunderbolt 3 / USB4 "
-                "connection manager alone).\n");
+                "XP x64, Vista, 7;\n8, 8.1 and 10 below build 22000 for the "
+                "Thunderbolt 3 / USB4\nconnection manager).\n");
             return INST_EXIT_REFUSED;
         }
         isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
@@ -20619,7 +20620,7 @@ int inst_eng_begin(int argc, char **argv)
         if ((opts.CmOnly || (osKind == INST_OS_CMONLY && !opts.Usb)) &&
             (sk == INST_INF_XHCI || sk == INST_INF_UAS)) {
             out("REFUSED: /set %s:\nthe USB drivers are not in this run "
-                "(/cmonly, or Windows 8 and 8.1).\n",
+                "(/cmonly, or Windows 8, 8.1 and 10).\n",
                 instValues[opts.SetIndex[i]].Name);
             return INST_EXIT_REFUSED;
         }
@@ -20742,11 +20743,13 @@ static int usb_decide(void)
         out("%s: this package installs the Thunderbolt 3 / USB4 connection "
             "manager\nhere; Windows' own USB 3 driver keeps running the USB "
             "controllers unless\n/usb puts the xHCI98 USB drivers in the run "
-            "(untested on Windows 8 and 8.1).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            "(untested on Windows 8, 8.1\nand 10).\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY) {
         out("/usb: the xHCI98 USB drivers are in this run (untested on %s).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (r == 0) {
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");

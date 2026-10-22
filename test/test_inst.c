@@ -144,6 +144,23 @@ static void test_models_rule(void)
     e = env(1, 6, 3, INST_ARCH_AMD64);
     inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
     CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "8.1 x64: NTamd64.6.0");
+    /* Revision 27: Windows 10 reads them too, with no INF change. */
+    e = env(1, 10, 0, INST_ARCH_X86);
+    inst_models_section("CmModels,NTx86.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTx86.6.0"), "10 x86: .NTx86.6.0");
+    inst_models_section("XhciModels,NTx86.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "XhciModels.NTx86.6.0"), "10 x86: xhci98's .NTx86.6.0");
+    inst_models_section("UasModels", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "UasModels"), "10 x86: xhciuas's undecorated");
+    e = env(1, 10, 0, INST_ARCH_AMD64);
+    inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "10 x64: NTamd64.6.0");
+    inst_models_section("Stor98_Models,NTamd64", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "Stor98_Models.NTamd64"), "10 x64: Stor98's NTamd64");
+    inst_models_section("XhciModels,NTamd64,NTamd64.6.0,NTamd64.10.0", &e,
+                        out, sizeof(out));
+    CHECK(inst_eq(out, "XhciModels.NTamd64.10.0"),
+          "10 x64: a .10.0 decoration would outrank .6.0");
 }
 
 /* ---- record 23 sections 4.3 and 4.5: the system, the USB drivers -------- */
@@ -173,16 +190,38 @@ static void test_cm_only(void)
           "8.1: the connection manager alone");
     CHECK(inst_os_kind(1, 6, 4, 9841) == INST_OS_REFUSED,
           "10's previews (6.4): refused");
-    CHECK(inst_os_kind(1, 10, 0, 19045) == INST_OS_REFUSED, "10: refused");
+    /* Revision 27 (task 43.34): 10.0 below build 22000, Server 2016 to
+     * 2022 among them with no Server check; 11 refused. */
+    CHECK(inst_os_kind(1, 10, 0, 10240) == INST_OS_CMONLY, "10 1507");
+    CHECK(inst_os_kind(1, 10, 0, 14393) == INST_OS_CMONLY,
+          "10 1607 / Server 2016");
+    CHECK(inst_os_kind(1, 10, 0, 17763) == INST_OS_CMONLY,
+          "10 1809 / Server 2019");
+    CHECK(inst_os_kind(1, 10, 0, 19045) == INST_OS_CMONLY, "10 22H2");
+    CHECK(inst_os_kind(1, 10, 0, 20348) == INST_OS_CMONLY, "Server 2022");
+    CHECK(inst_os_kind(1, 10, 0, 21999) == INST_OS_CMONLY,
+          "the last build below 11");
+    CHECK(inst_os_kind(1, 10, 0, 22000) == INST_OS_REFUSED,
+          "11 (22000): refused");
     CHECK(inst_os_kind(1, 10, 0, 26100) == INST_OS_REFUSED, "11: refused");
+    CHECK(inst_os_kind(1, 10, 1, 19045) == INST_OS_REFUSED,
+          "10.1: refused");
+    CHECK(inst_os_kind(1, 11, 0, 19045) == INST_OS_REFUSED,
+          "11.0: refused");
+    CHECK(inst_os_kind(0, 10, 0, 19045) == INST_OS_REFUSED,
+          "not NT: refused");
     CHECK(inst_os_kind(1, 7, 0, 0) == INST_OS_REFUSED, "7.0: refused");
-    CHECK(strcmp(inst_os_name(1, 6, 2), "Windows 8") == 0 &&
-          strcmp(inst_os_name(1, 6, 3), "Windows 8.1") == 0 &&
-          strcmp(inst_os_name(1, 6, 1), "Windows 7") == 0 &&
-          strcmp(inst_os_name(1, 5, 2), "Windows XP x64") == 0 &&
-          strcmp(inst_os_name(0, 4, 90), "Windows ME") == 0 &&
-          strcmp(inst_os_name(0, 4, 10), "Windows 98 SE") == 0 &&
-          strcmp(inst_os_name(1, 10, 0), "Windows") == 0, "the names");
+    CHECK(strcmp(inst_os_name(1, 6, 2, 9200), "Windows 8") == 0 &&
+          strcmp(inst_os_name(1, 6, 3, 9600), "Windows 8.1") == 0 &&
+          strcmp(inst_os_name(1, 6, 1, 7601), "Windows 7") == 0 &&
+          strcmp(inst_os_name(1, 5, 2, 3790), "Windows XP x64") == 0 &&
+          strcmp(inst_os_name(0, 4, 90, 3000), "Windows ME") == 0 &&
+          strcmp(inst_os_name(0, 4, 10, 2222), "Windows 98 SE") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 19045), "Windows 10") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 20348), "Windows 10") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 21999), "Windows 10") == 0 &&
+          strcmp(inst_os_name(1, 10, 0, 22000), "Windows 11") == 0 &&
+          strcmp(inst_os_name(1, 11, 0, 0), "Windows") == 0, "the names");
 
     /* The USB drivers (section 4.5). */
     /* Draft 20 (task 43.43): every box on every system. */
@@ -257,7 +296,7 @@ static void test_cm_only(void)
                             INST_CW_S98_8, "C:\\XHCI98", text, sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
-              strstr(text, "not been tested on Windows 8 or 8.1") != NULL &&
+              strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
               strstr(text, "Stor98 has not been tested") != NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
@@ -3946,14 +3985,16 @@ static void test_marks(void)
         INST_ENV w8 = env(1, 6, 2, INST_ARCH_AMD64);
         INST_ENV w81 = env(1, 6, 3, INST_ARCH_X86);
         INST_ENV w10 = env(1, 10, 0, INST_ARCH_AMD64);
+        INST_ENV w10x86 = env(1, 10, 0, INST_ARCH_X86);
+        INST_ENV w101 = env(1, 10, 1, INST_ARCH_AMD64);
         INST_ENV w64 = env(1, 6, 4, INST_ARCH_AMD64);
         INST_ENV w98 = env(0, 4, 10, INST_ARCH_X86);
         CHECK(inst_mk_system(&w2k) && inst_mk_system(&w7) &&
               inst_mk_system(&w8) && inst_mk_system(&w81) &&
-              !inst_mk_system(&w10) && !inst_mk_system(&w64) &&
+              inst_mk_system(&w10) && inst_mk_system(&w10x86) &&
+              !inst_mk_system(&w101) && !inst_mk_system(&w64) &&
               !inst_mk_system(&w98),
-              "the mark service: Windows 2000 to 8.1 (8 and 8.1 for the "
-              "connection manager alone)");
+              "the mark service: Windows 2000 to 10 (revision 28)");
     }
     CHECK(inst_mk_end_action(1, 1, 1, 1) == INST_MK_INSTALL &&
           inst_mk_end_action(1, 0, 1, 1) == INST_MK_LEAVE &&
