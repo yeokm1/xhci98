@@ -4703,6 +4703,7 @@ static size_t le_make(const char *ddbName, unsigned long ddbOff,
     le[1] = 'E';
     le_put32(le + 0x14, 1);          /* pages */
     le_put32(le + 0x28, 0x100);      /* page size */
+    le_put32(le + 0x2C, 0x100);      /* bytes on the last page */
     le_put32(le + 0x40, 0x100);      /* object table */
     le_put32(le + 0x44, 1);          /* objects */
     le_put32(le + 0x48, 0x120);      /* object page table */
@@ -4776,6 +4777,33 @@ static void test_vsd_names(void)
     CHECK(!inst_vsd_old_is_own(leImg, 0x250, "AA", "", ""),
           "the image cut short before the stamp: not own");
     CHECK(!inst_le_ddb_name(leImg, 0x80, name), "cut short in the header");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    leImg[0x40 + 0x120 + 3] = 3;
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "the DDB's page zero-filled (type 3): not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x2C, 0x10);
+    CHECK(!inst_vsd_old_is_own(leImg, n, "AA", "", ""),
+          "the DDB past the last page's declared bytes: not own");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x5C, 0xFFFFFFBCUL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "an entry table offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x40, 0xFFFFFFF0UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "an object table offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x48, 0xFFFFFFF0UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "a page table offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x40 + 0x80, 0xFFFFFF00UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name),
+          "a data page offset that wraps: not read");
+    n = le_make("S98VSD  ", 0x10, "STOR98.VXD 3.2.0.0");
+    le_put32(leImg + 0x3C, 0xFFFFFFF0UL);
+    CHECK(!inst_le_ddb_name(leImg, n, name), "an LE offset that wraps");
     n = le_make("OTHERVXD", 0x10, "");
     CHECK(inst_vsd_old_is_own(leImg, n, "AB", "AB", ""),
           "the record's File bytes: own");

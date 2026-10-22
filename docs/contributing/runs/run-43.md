@@ -599,6 +599,14 @@ The layer claiming port `stor98` is inferred from the rates; the
 release image writes no log. XHCIPERF's Stor98 page (43.50's counters)
 would show the request sizes reaching Stor98.
 
+This run counts as the layer's pass on real hardware (owner, 2026-10-22);
+no confirming run with the second bench package is needed. The run's file
+was the first package's image renamed (SHA-256
+`1b04c554fb4524d53cf91c715075ae9c3a5d5d5cf51771662e77c5addcb60e47`). The
+image built from `7bff66a2` and shipped differs from it only in the 10-byte
+stamp, `S98VSD.VXD` where it read `STOR98.VXD` (SHA-256
+`85c2ac4b7488ca745e53d0293441a83389c9341189e6cfa08d5af7fda583b9f3`).
+
 Why 128 KiB gains as well: on the physical-list path
 `SCSIPORT.PDR` sets the DCB's `DCB_max_sg_elements` to
 `min(NumberOfPhysicalBreaks, 17)`. This is read in the gold build

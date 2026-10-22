@@ -5841,17 +5841,36 @@ static int inst_has_bytes(const unsigned char *buf, size_t n, const char *s)
     return 0;
 }
 
+/* 1 when len bytes at file offset a lie inside n, with no wrap. */
+static int inst_fits(size_t n, unsigned long a, unsigned long len)
+{
+    return (size_t)a <= n && n - (size_t)a >= (size_t)len;
+}
+
+/* base + rel, 0 when it would leave the file (n) or wrap. */
+static int inst_add(size_t n, unsigned long base, unsigned long rel,
+                    unsigned long *out)
+{
+    if ((size_t)base > n || (size_t)rel > n - (size_t)base) {
+        return 0;
+    }
+    *out = base + rel;
+    return 1;
+}
+
 /* A byte of an LE object at an offset, through the object page table:
- * -1 outside the image. */
+ * -1 outside the image, or on a page that is not an ordinary one in the
+ * file (an iterated, invalid or zero-filled page: its type byte not 0). */
 static int inst_le_byte(const unsigned char *buf, size_t n, unsigned long le,
                         unsigned long obj, unsigned long off)
 {
     unsigned long ps = inst_le32(buf + le + 0x28);
-    unsigned long ot = le + inst_le32(buf + le + 0x40);
-    unsigned long pm = le + inst_le32(buf + le + 0x48);
-    unsigned long dp = inst_le32(buf + le + 0x80);
+    unsigned long last = inst_le32(buf + le + 0x2C);
     unsigned long npages = inst_le32(buf + le + 0x14);
-    unsigned long oe = ot + 24 * (obj - 1);
+    unsigned long dp = inst_le32(buf + le + 0x80);
+    unsigned long ot;
+    unsigned long pm;
+    unsigned long oe;
     unsigned long vsize;
     unsigned long first;
     unsigned long count;
@@ -5860,34 +5879,37 @@ static int inst_le_byte(const unsigned char *buf, size_t n, unsigned long le,
     unsigned long pnum;
     unsigned long at;
 
-    if (ps == 0 || ps > 0x10000 || ot < le || pm < le || obj > 0x10000 ||
-        oe < ot || oe + 24 > n) {
+    if (ps == 0 || ps > 0x10000 || obj == 0 || obj > 0x10000 ||
+        npages == 0 || npages > 0x100000 ||
+        !inst_add(n, le, inst_le32(buf + le + 0x40), &ot) ||
+        !inst_add(n, le, inst_le32(buf + le + 0x48), &pm) ||
+        !inst_add(n, ot, 24 * (obj - 1), &oe) || !inst_fits(n, oe, 24)) {
         return -1;
     }
     vsize = inst_le32(buf + oe);
     first = inst_le32(buf + oe + 12);
     count = inst_le32(buf + oe + 16);
-    if (off >= vsize || off / ps >= count) {
+    if (off >= vsize || off / ps >= count || first == 0 || first > npages ||
+        off / ps > npages - first) {
         return -1;
     }
     page = first + off / ps;
-    if (page == 0 || page > npages) {
-        return -1;
-    }
-    e = pm + 4 * (page - 1);
-    if (e + 4 > n) {
+    if (!inst_add(n, pm, 4 * (page - 1), &e) || !inst_fits(n, e, 4) ||
+        buf[e + 3] != 0) {
         return -1;
     }
     pnum = ((unsigned long)buf[e] << 16) | ((unsigned long)buf[e + 1] << 8) |
            (unsigned long)buf[e + 2];
-    if (pnum == 0) {
+    if (pnum == 0 || pnum > npages) {
         return -1;
     }
-    if (pnum - 1 > (unsigned long)n / ps) {
+    /* The last page holds only its declared bytes. */
+    if (pnum == npages && (last == 0 || off % ps >= last)) {
         return -1;
     }
-    at = dp + (pnum - 1) * ps + off % ps;
-    if (at < dp || at >= n) {
+    if ((size_t)(pnum - 1) > n / ps ||
+        !inst_add(n, dp, (pnum - 1) * ps, &at) ||
+        !inst_add(n, at, off % ps, &at) || !inst_fits(n, at, 1)) {
         return -1;
     }
     return buf[at];
@@ -5906,13 +5928,13 @@ int inst_le_ddb_name(const unsigned char *buf, size_t n, char name[9])
         return 0;
     }
     le = inst_le32(buf + 0x3C);
-    if (le > n || n - le < 0x84 || buf[le] != 'L' || buf[le + 1] != 'E') {
+    if (!inst_fits(n, le, 0x84) || buf[le] != 'L' || buf[le + 1] != 'E') {
         return 0;
     }
-    et = le + inst_le32(buf + le + 0x5C);
     /* The first bundle: its count, type 3 (32-bit entries), the object;
      * entry 1 is the flags byte and the offset of the DDB. */
-    if (et < le || et + 9 > n || buf[et] == 0 || buf[et + 1] != 3) {
+    if (!inst_add(n, le, inst_le32(buf + le + 0x5C), &et) ||
+        !inst_fits(n, et, 9) || buf[et] == 0 || buf[et + 1] != 3) {
         return 0;
     }
     obj = (unsigned long)buf[et + 2] | ((unsigned long)buf[et + 3] << 8);

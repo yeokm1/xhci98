@@ -16601,6 +16601,51 @@ static int vsd_do(int op, const char *file, const char *pend)
     }
 }
 
+/* WININIT.INI's [rename] lines whose destination is the old name: own
+ * when the source is this installer's S98VSD.TMP, other otherwise. 0 when
+ * the section cannot be read whole. */
+static int vsd_old_lines(const char *ini, const char *old, const char *oldS,
+                         const char *tmp, const char *tmpS, int *own,
+                         int *other)
+{
+    char *sec;
+    char *p;
+    DWORD n;
+
+    *own = 0;
+    *other = 0;
+    sec = (char *)malloc(32768);
+    if (sec == NULL) {
+        return 0;
+    }
+    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
+    if (n >= 32768 - 2) {
+        free(sec);
+        return 0;
+    }
+    for (p = sec; n != 0 && *p != '\0'; p += strlen(p) + 1) {
+        char line[2 * INST_PATH_CHARS];
+        char *eq;
+
+        inst_copy(line, p, sizeof(line));
+        eq = strchr(line, '=');
+        if (eq == NULL) {
+            continue;
+        }
+        *eq = '\0';
+        if (!vsd_names(line, old, oldS)) {
+            continue;
+        }
+        if (vsd_names(eq + 1, tmp, tmpS)) {
+            (*own)++;
+        } else {
+            (*other)++;
+        }
+    }
+    free(sec);
+    return 1;
+}
+
 /* The layer's old name, IOSUBSYS\STOR98.VXD, from the test cuts and the
  * first bench (record 30 section 3.1): Windows loads it in the place of
  * stor98.mpd, which then does not start (Code 10). This project's file
@@ -16618,10 +16663,11 @@ static int vsd_old_name(void)
     char tmpS[INST_PATH_CHARS];
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
-    char val[INST_PATH_CHARS];
     char file[80];
     char pend[80];
     char hex[65];
+    int ownLines = 0;
+    int otherLines = 0;
     char *buf;
     DWORD size = 0;
     DWORD n;
@@ -16642,34 +16688,53 @@ static int vsd_old_name(void)
     join(tmp, sizeof(tmp), dir, INST_VSD_TMPNAME);
     join(tmpS, sizeof(tmpS), dirS, INST_VSD_TMPNAME);
     join(ini, sizeof(ini), win, "WININIT.INI");
-    /* The test cut's queued update to the old name: its lines only, one
-     * at a time (a profile read sees the first of equal keys). */
-    for (k = 0; k < 8; k++) {
-        const char *key = (k & 1) == 0 ? oldS : old;
-
-        val[0] = '\0';
-        GetPrivateProfileStringA("rename", key, "", val, sizeof(val), ini);
-        if (val[0] != '\0' && vsd_names(val, tmp, tmpS)) {
-            int gone = WritePrivateProfileStringA("rename", key, NULL, ini);
-
-            val[0] = '\0';
-            GetPrivateProfileStringA("rename", key, "", val, sizeof(val), ini);
-            if (!gone || val[0] != '\0') {
-                /* Left, it would put the old name back at the next start
-                 * whatever is deleted now. */
-                out("The [rename] line for %s in %s could not be taken back "
-                    "(error %lu): restart Windows, then run the installer "
-                    "again.\n", key, ini, (unsigned long)GetLastError());
-                steps_add_id(INST_VSD_OLD, "a queued update to the old name "
-                             "remains: restart Windows, then run the installer "
-                             "again");
-                flagSteps = 1;
-                flagRestart = 1;
-                return 0;
-            }
-            logonly("s98vsd: WININIT.INI [rename] %s (the old name) "
-                    "taken back\n", key);
+    /* WININIT.INI's lines that put a file at the old name: the test cut's
+     * own (STOR98.VXD=S98VSD.TMP) and any other. Read whole, as the
+     * profile calls see only the first of equal keys. */
+    if (!vsd_old_lines(ini, old, oldS, tmp, tmpS, &ownLines, &otherLines)) {
+        out("WININIT.INI could not be read: %s is left as it is.\n", old);
+        steps_add_id(INST_VSD_OLD, "WININIT.INI unreadable: run the installer "
+                     "again");
+        flagSteps = 1;
+        return 0;
+    }
+    if (ownLines != 0 && otherLines != 0) {
+        /* The installer's line cannot be taken back alone (one key), and
+         * left, it puts the old name back at the next start. */
+        out("WININIT.INI holds this installer's [rename] line for %s and "
+            "another program's: nothing is changed. Remove the line that "
+            "names S98VSD.TMP from WININIT.INI, then run the installer "
+            "again.\n", old);
+        steps_add_id(INST_VSD_OLD, "WININIT.INI: remove the [rename] line that "
+                     "names S98VSD.TMP, then run the installer again");
+        flagSteps = 1;
+        return 0;
+    }
+    for (k = 0; ownLines != 0 && k < 16; k++) {
+        WritePrivateProfileStringA("rename", (k & 1) == 0 ? oldS : old, NULL,
+                                   ini);
+        if ((k & 1) != 0 &&
+            !vsd_old_lines(ini, old, oldS, tmp, tmpS, &ownLines, &otherLines)) {
+            break;
         }
+    }
+    if (ownLines != 0) {
+        out("The [rename] line for %s in %s could not be taken back (error "
+            "%lu): restart Windows, then run the installer again.\n", old, ini,
+            (unsigned long)GetLastError());
+        steps_add_id(INST_VSD_OLD, "a queued update to the old name remains: "
+                     "restart Windows, then run the installer again");
+        flagSteps = 1;
+        flagRestart = 1;
+        return 0;
+    }
+    if (otherLines != 0) {
+        out("WININIT.INI has another program's [rename] line that puts a file "
+            "at %s at the next start: it is left as it is. While that file is "
+            "there, Stor98 does not start.\n", old);
+        steps_add_id(INST_VSD_OLD, "another program's WININIT.INI line puts a "
+                     "file there: Stor98 does not start while it is there");
+        flagSteps = 1;
     }
     if (!file_exists(old, NULL)) {
         return 1;
