@@ -3585,24 +3585,16 @@ this, reviewed and revised:
   raises the member's existing gate (`CmNvlinkHeld`, task 42-A.12), which
   holds that member's removal calls, exposures and re-enumerations
   together.
-- **Vanished children are not moved (open).** Part 3's transaction for
-  the functions a tunnel down took away - a veto retried every 2 s, the
-  member's exposure and re-enumeration held until every one is retired,
-  the obligation kept across the NHI's stop, an accepted query never
-  issued twice, a Stor98 request left in place through the retries - is
-  not built: those removals stay on the domain's CONFIGMG worker
-  (`cm_cfgwk.c`) as 42-A.12 left them, where a vanished child's vetoed
-  query is not retried and the member's re-enumeration goes ahead (the
-  behaviour since `3.0.0.0`; R8c and R12 S4 and S5 are not met for that
-  case). A barrier added to the worker alone was tried and set aside
-  while 43.18 was built: done properly it needs the transaction's whole
-  lifetime discipline (a call owner and operation identity per obligation
-  across the stop, the takeovers by `CONTROLLER_UNAVAILABLE` and record
-  22 section 7.7's removal-only request sharing the same accepted-query
-  state, capacity reserved before an irreversible query), which is
-  this record's part 0 machinery applied to those removals: a task of its
-  own, which the owner placed on 2026-10-22 as roadmap-usb4.md task
-  43.47, built on these transaction records.
+- **Vanished children** (task 43.47, below). Until 43.47, part 3's
+  transaction for the functions a tunnel down took away was not built:
+  those removals stayed on the domain's CONFIGMG worker (`cm_cfgwk.c`)
+  as 42-A.12 left them, where a vanished child's vetoed query was not
+  retried and the member's re-enumeration went ahead (the behaviour
+  since `3.0.0.0`; R8c and R12 S4 and S5 not met for that case). A
+  barrier added to the worker alone was tried and set aside while 43.18
+  was built: done properly it needs the transaction's whole lifetime
+  discipline, which is this record's part 0 machinery applied to those
+  removals, a task of its own (the owner, 2026-10-22).
 - **The unit's own disappearance.** The transaction cannot wait on its
   own gate, so it removes its own unit itself, and only on evidence the
   rest of the channel accepts: a tunnel down on its member
@@ -3727,6 +3719,140 @@ this, reviewed and revised:
 - **Not built.** XHCITR's tray does not poll a result after the tool's
   wait has ended; the port's two lines, read from the record's masks, are
   what show a transaction that outlived it.
+
+*The vanished-child transaction (roadmap-usb4.md task 43.47, 2026-10-22).*
+Part 3's transaction for the functions a tunnel down took away, on 98 SE
+and ME, built on 43.18's records above. NT is not concerned: the PnP
+manager removes a vanished child there. What it does, reviewed and
+revised:
+
+- **The sweep: which children vanished, read at the down.** Wherever the
+  domain asks a member's re-enumeration with its vanished children
+  removed (a tunnel down's and a RESYNC's, an owed change's, a held
+  one's) and the member has a call worker with the host interface live,
+  the thread no longer posts the removal to the
+  domain's CONFIGMG worker: it enters the member's **sweep** at once,
+  before its gates are looked at, and the re-enumeration it asked is
+  held behind the member's gate without the removal (it is the sweep's
+  now), its publication mode and marking window kept with it. The sweep
+  is a read, made on the member's call worker as one operation: the
+  identities answering on the member's secondary bus (the reading the
+  worker's removal made, a Retry Status or an unread function leaving it
+  incomplete), the member's devnode found by its path, and its children
+  walked; a child whose instance id names a vendor and device that no
+  longer answer is vanished. One vanished child is reported per reading,
+  with its devnode and instance id, and the next reading follows at
+  once, until a complete reading finds none that is not already a
+  record's. A reading that is not complete is made again every 2 s for
+  up to 10 s, and the sweep then ends with what it found (logged; the
+  behaviour before this task for that case: nothing taken for vanished).
+  A decision pending on the member has its worker first (the slot
+  reading), and the removal gate does not hold the sweep: it calls
+  nothing that removes, so the children are read as close to the down as
+  the worker allows, and only their removals wait for the statement's
+  decision and its acknowledgement.
+- **One record per vanished child, before its query.** A vanished child
+  becomes a record of 43.18's kind (`CM_EJ_F_VANISH`: no tool, no result
+  slot, no request) the moment its reading is taken, under the records'
+  lock, and only if no record already names that devnode with that
+  instance id (an eject's unit, another sweep's child, or a claim below);
+  the record exists before anything irreversible is called, so the
+  obligation an accepted query creates always has its record. No free
+  record: the sweep waits (its gate up) and reads again 2 s later. The
+  records become sixteen.
+- **Its course.** `Query_Remove_SubTree` (a call on the member's worker,
+  its instance id read back first as every call of a record is), made
+  only while the member's removal gate is down (no decision pending, no
+  acknowledgement awaited behind it). Vetoed (or any other refusal): kept
+  in its phase and asked again every 2 s, never forced, with no deadline
+  (R12 S4); the member shows "a removal is in progress". Accepted: the
+  removal is authorised (nothing behind it to isolate, assumption A1),
+  and `Remove_SubTree` is made, retried every 2 s while it fails; 30 s
+  after its first attempt the member is blocked (the status record's
+  blocked bit), with no teardown and no statement under either connection
+  manager (O6 without the request, under decision V8: the function is
+  already gone with its tunnel), and the retries go on until one succeeds
+  or the devnode is verified gone. An accepted query is never asked
+  again. `CR_NO_SUCH_DEVNODE`, or the instance id read back from the
+  handle no longer the record's, is the devnode verified gone and retires
+  the record like a removal that succeeded.
+- **The gate.** The member's one gate (`CmNvlinkHeld`, through
+  `CmEjectHeld`) is up while its sweep runs and while any record of its
+  is not retired, so no `UP` is published on the member and no
+  re-enumeration of it is posted (R8c, S5); the up and resync posts for
+  it queue behind it, collapsed as today, and the held re-enumeration
+  runs - its exposure first - from the first pass that finds the gate
+  down. A re-plug of the member during the retries is such a post: the
+  returning drive is exposed and enumerated only after the old devnode
+  is removed, never served by it. The domain's CONFIGMG worker holds the
+  same barrier on its own side: no re-enumeration of a member with a
+  record not retired is made from any request (the loss's own
+  re-enumeration included), and one refused for it is retried as a
+  failed one is. Another member's work goes on (decision V5).
+- **Its retirement, and the worker's sets.** A record retired by its
+  removal asks the CONFIGMG worker for a prune walk (`CmCfgwkPrune`),
+  paid before any re-enumeration it makes, so its known and retained
+  sets forget the handle before the re-plug's devnode can come back
+  under it (the old removal forgot it itself).
+- **The NHI's stop.** As 43.18's records: detached at the stop; one whose
+  query was accepted is handed to its worker, which retries
+  `Remove_SubTree` every 2 s until 30 s after its first attempt; any
+  other (a query vetoed and still retried, a removal blocked, a call out
+  whose late taker keeps its outcome) is kept for a later start, which
+  adopts it before any exposure or re-enumeration of that member: the
+  devnode looked up again by its instance id over the whole tree - gone,
+  the record retired; present, the record resumed where it stood, a
+  vetoed query asked again (a refusal owes the vanished child its
+  retries, unlike an eject's), an accepted one never. A sweep in progress
+  at the stop is not carried over; the records it made are.
+- **The takeovers.** `CONTROLLER_UNAVAILABLE`'s removal of retained
+  children (section 5.5), record 22 section 7.7's removal-only request
+  and the worker's own vanished-child removal where no sweep can be made
+  (no call worker, the host interface lost) stay on the domain's CONFIGMG
+  worker, and share the records' state instead of starting their own:
+  before its `Query_Remove_SubTree` of a devnode, the worker **claims**
+  it in the same records, under the same lock. A devnode a record already
+  names is not called: the record's transaction owns it, and the worker
+  counts it undecided until the record is retired (its next complete
+  walk then finds it gone). No free record: not called, undecided. The
+  claim is a record in a phase of its own (`CM_EJ_P_CLAIMED`) that the
+  thread does not step and that raises the member's gate while the
+  worker's call runs. The worker then ends it: a refused query frees it
+  (the loss's rule: settled, the child kept retained); an accepted query
+  whose removal succeeded frees it; an accepted query whose removal
+  failed becomes the transaction - phase `REMOVE`, the query recorded
+  accepted, its first attempt's time kept for O6, any Stor98 request the
+  worker made left in place for the record to withdraw on success - and
+  is never asked again; the worker's own stale-request rescan is then
+  not made (the re-enumeration it owed waits for the retirement). The
+  record so made belongs to no start and is adopted by the running one
+  as a stopped start's is. A sweep's reading that finds a vanished child
+  under a claim waits for the claim to end before it ends, so a child
+  whose claimed query was refused gets its record and its retries.
+- **The eject's unit.** A tool's eject whose unit's devnode a record
+  already names when its devnode is found is answered as not found
+  (nothing called), and a sweep that finds the unit an eject already owns
+  leaves it to that eject, which retires it by its own removal (above).
+- **Not built.** A function that answers again at its location before
+  the sweep reads it - a re-plug within the down's own poll - is taken as
+  present, as before this task, and its old devnode is left to Windows.
+
+*Host vectors* (`test_cm_eject`): a vetoed vanished child retried every
+2 s with the gate up, and released at its removal; a re-plug of the
+member during the retries (the held exposure and re-enumeration run only
+after the retirement); the NHI stopped mid-retry and the record adopted
+(present: the query asked again; gone: retired; an accepted query owed
+by the detached worker, never asked again); a removal that keeps failing
+past 30 s (blocked, no teardown, still retried, the block lifted by its
+success); the takeovers (a claim refused, removed, and failed into the
+transaction, never queried again); two members, one held while the
+other's work goes on; the sweep's reading, its retries and its end.
+
+*Legs* (on 98 SE and ME with the bundled Stor98, under the ICM client and
+under the USB4 profile): an unplug with a file open on the drive (the
+veto retried, no re-enumeration, the re-plugged drive appearing only once
+the file is closed and the old devnode removed); the same with the DOS
+box Stor98's Q-9x reading used; the two-port leg.
 
 ### 7.3 What this driver never claims
 
