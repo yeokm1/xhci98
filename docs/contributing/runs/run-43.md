@@ -404,6 +404,58 @@ disk present at boot; real hardware (the owner's).
 Binary-derived facts used here: `legal-provenance.md` section 4, the row
 "Task 43.46 read-first".
 
+### Static readings before the code (2026-10-22)
+
+Owed by design record 30 (sections 2.3, 4.3 and 4.7) before its code.
+Static only (capstone over the LE images with their fixups applied,
+objects mapped at `object * 0x100000`; nothing executed), the QuickInstall
+image's `IOS.VXD`, `SCSIPORT.PDR`, `DISKTSD.VXD` and `DISKVSD.VXD`
+(`E:\xhci98-vm\spd9x\img\bin`), and the gold 98 SE CAB members for the
+DRPs. Addresses are mapped addresses (object 1 at `0x100000`).
+
+**Which file is which layer**, from each file's DRP (`XXXXXXXX`, then
+`DRP_LGN`): `DISKTSD.VXD` "Fixed Disk TSD" bit 7; `DISKVSD.VXD` "SCSI Disk
+VSD" bit 16 (`0x10`); `APIX.VXD` "SCSI API XLATOR" bit 11 (`0x0B`);
+`SCSIPORT.PDR` bit 21; `VOLTRACK.VXD` bit 5. So the chain the prototype
+printed on Stor98's DCB (7, `0x10`, `0x11`, `0x14`, `0x1F`) is DISKTSD,
+DISKVSD (the disk SCSI'izer, which builds the SRB), this layer,
+`SCSIPORT.PDR`'s miniport entry and a last entry; the "SCSI'izer, load
+group `0x0B`" of "Requests over 512 KiB" above is DISKVSD at `0x10`.
+
+**Stores at `IOR_buffer_ptr`** (`[reg + 0x80]` from an IOP): DISKTSD
+`0x30161F`, `0x30165E` (a request it builds, `IOR_flags` written whole at
+`0x301603`), `0x301EC8` (after `ISP_CREATE_IOP` at `0x301E79`); DISKVSD
+`0x10063A`, `0x100884`-`0x1008E8` (its own SCSI requests, the buffer from
+`_HeapAllocate` or its own structure), `0x1009E7` (after `ISP_CREATE_IOP`
+at `0x10099C`, `IOR_flags` `0x8F09`, a one-entry list slot at
+`IOR_sgd_lin_phys`, then the criteria routine through the ILB at
+`0x1009F4`); VOLTRACK `0x400778` (after `ISP_CREATE_IOP`). None in a path
+passing a request from above. A sweep of `[reg + disp]` stores only: an
+IOR addressed through another base is not covered.
+
+**IOS's double buffer.** `IOS_SendCommand` is IOS service 4 (the
+service table at `0x1039CC`: `0x100B20`). At `0x100BD3` it tests
+`IOR_flags` for `0x08000040` (`IORF_IO_TOO_BIG | IORF_DOUBLE_BUFFER`) and
+goes to `0x100D0F`, which allocates pages (`0x100DD3`) before the first
+calldown is called at `0x100BED`. The fields it then rewrites are not
+read.
+
+**`SCSIPORT.PDR`'s own requests.** `0x100C34`-`0x100D3E` builds a request
+of its own: `ISP_CREATE_IOP` through the ILB (`0x100C61`), `IOR_sgd_lin_phys`
+set to a slot in the IOP (`0x100C7A`), `IOR_flags` `0x8F09`, the buffer and
+count at `0x100CAA`/`0x100CB0`, the criteria routine called (`0x100CBA`, the
+only call of it in the image, `IORF_DOUBLE_BUFFER` set on a non-zero
+result at `0x100CC7`), then the SRB inside the IOP at `+0xBC`
+(`0x100CDA`), `SrbIopPointer` (`0x100CE3`) and `DataTransferLength` from
+`IOR_xfer_count` (`0x100CEE`). Its callers and the route the request takes
+were not found (no direct call; capstone's linear sweep loses sync around
+it). No construction of an SRB for an incoming IOR that has none was
+found.
+
+What it changes in record 30: its section 2.3 (and the chain's names in
+2.2 and 4.7); a new open item, `SCSIPORT.PDR`'s own requests after the
+DCB is configured, release-blocking until read.
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on

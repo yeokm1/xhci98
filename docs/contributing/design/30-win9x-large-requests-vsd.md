@@ -1,6 +1,9 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 6, 2026-10-22, reviewed and revised (a request with no
+Status: draft 7, 2026-10-22 (section 2.3: the first pass of the
+readings owed before the code, the disk SCSI'izer named, and
+`SCSIPORT.PDR`'s own requests an open item); draft 6, 2026-10-22,
+reviewed and revised (a request with no
 SRB admitted only for functions whose SRB construction is read before the
 code; `WININIT.INI`'s lines absent, exact or conflicting; an owned
 `.TMP` withdrawn under a foreign destination); draft 5, 2026-10-22,
@@ -199,7 +202,9 @@ What it does not change goes into the release notes in those words
    SRB's data, from whoever drops it**; a request without one makes
    `SCSIPORT.PDR` walk whatever that field holds.
 5. **The SRB at this layer** [obs]: a read or write arrives with
-   `IORF_SRB_VALID`, the SCSI'izer (load group `0x0B`, above this layer)
+   `IORF_SRB_VALID`, the disk SCSI'izer (`DISKVSD.VXD`, "SCSI Disk VSD",
+   load group `0x10`, above this layer [static: its DRP; the read-first
+   sheet's `0x0B` is `APIX.VXD`'s, "SCSI API XLATOR"])
    having built the SRB `SCSIPORT.PDR` executes at `IOP_srb` (function 0,
    a 10-byte `READ(10)`/`WRITE(10)` CDB, `DataTransferLength` the whole
    request, `DataBuffer` the linear buffer or, with
@@ -211,6 +216,43 @@ What it does not change goes into the release notes in those words
    tables. The C port was 12 to 29 % slower than Stor98 alone on a
    near-contiguous buffer at 64 to 512 KiB; it built its list with one
    `_CopyPageTable` call a page (section 4.4).
+
+### 2.3 The readings owed before the code, first pass (2026-10-22)
+
+`runs/run-43.md`, "Static readings before the code", has them with their
+addresses; in short [static, QuickInstall builds]:
+
+1. **The layers above.** Every store at `IOR_buffer_ptr`'s place in
+   `DISKTSD.VXD` and `DISKVSD.VXD` (a sweep of their code) is in code that
+   builds a request of the layer's own (an IOP from `ISP_CREATE_IOP`, or
+   the layer's own, its `IOR_flags` written whole), none in the path that
+   passes a request from above down. DISKVSD's own requests (`READ
+   CAPACITY`, `START STOP UNIT` and the like) take buffers from
+   `_HeapAllocate` or its own structures and pass down through this layer,
+   which builds their list like any other (section 4.1). Item 2 of
+   section 4.7 holds for these two layers on this reading; a pass over
+   every register-relative form is the code step's first task.
+2. **IOS's double buffer.** `IOS_SendCommand` (service 4) sends a request
+   flagged `IORF_IO_TOO_BIG` or `IORF_DOUBLE_BUFFER` to its splitting and
+   double-buffering branch before the first calldown is made, the branch
+   allocating its pages there; so the substitution precedes the chain and
+   both translations see the same buffer. Which IOR fields it rewrites is
+   not read yet (owed with item 3).
+3. **`SCSIPORT.PDR`'s own requests.** The one SRB construction found is
+   for `SCSIPORT.PDR`'s own internal requests: an IOP from
+   `ISP_CREATE_IOP`, its SRB inside the IOP, `DataTransferLength` the
+   IOR's count, a one-entry list slot set at `IOR_sgd_lin_phys`, and a
+   call of the criteria routine, the only one in the image. **New
+   finding for this design:** with `phys_sgd` gone from the DCB, the
+   criteria routine builds no list for such a request [hyp: it reads the
+   DCB's demand]; a request of `SCSIPORT.PDR`'s own that carries data and
+   does not pass through this layer would then be translated through an
+   unfilled slot. Which events make `SCSIPORT.PDR` issue such a request
+   after the DCB is configured, and whether any carries data and by which
+   route it is sent, is read before the code; if one does and bypasses
+   this layer, the design is revised (section 11). No construction for an
+   incoming IOR without an SRB was found, so the code admits no
+   no-SRB function (section 4.3) until one is.
 
 ## 3. The layer
 
@@ -595,13 +637,15 @@ and what it rests on:
    buffer, which of `IOR_buffer_ptr`, `IORF_SCATTER_GATHER` and the list
    it changes, and where that buffer's physical list was built under
    `phys_sgd`. For the layers above
-   this one on Stor98's disk (load groups 7, `DISKTSD`; `0x0B`, the
-   SCSI'izer; `0x10`; and VOLTRACK's) it is a [hyp], **read before the
-   code is written** (a static reading of each layer's request routine,
-   whether it writes `IOR_buffer_ptr`, `IOR_flags`' `IORF_SCATTER_GATHER`
-   or the list it points at, recorded with its provenance row); a layer
-   that does replaces the argument for its requests, and the design is
-   revised before the code.
+   this one on Stor98's disk (load group 7, `DISKTSD.VXD`; `0x10`,
+   `DISKVSD.VXD`; the chain the prototype printed) it is a [hyp], **read
+   before the code is written** (a static reading of each layer's request
+   routine, whether it writes `IOR_buffer_ptr`, `IOR_flags`'
+   `IORF_SCATTER_GATHER` or the list it points at, recorded with its
+   provenance row); a layer that does replaces the argument for its
+   requests, and the design is revised before the code. The first pass of
+   that reading (`runs/run-43.md`, "Static readings before the code") is
+   section 2.3.
 3. **What follows.** Where 1 and 2 hold, a request whose pages this
    layer translates had pages resident over a longer window under
    today's builder, whoever locked them (the file system and VCACHE for
@@ -1078,6 +1122,8 @@ On the owner's real hardware: the throughput before and after
   (section 9.2 item 3); if `phys_sgd` stays demanded, the layer is inert
   there (D2) and the owner decides whether to edit the entries above.
 - `IORF_DOUBLE_BUFFER`'s buffer at this layer (section 4.6) [hyp].
+- `SCSIPORT.PDR`'s own requests after configuration (section 2.3 item 3):
+  whether any carries data past this layer's reach. Release-blocking.
 - Page residency (section 4.7): the static reading of the layers above
   this one on Stor98's disk is owed before the code; the memory-pressure
   leg corroborates it.
