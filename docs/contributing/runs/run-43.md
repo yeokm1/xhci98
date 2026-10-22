@@ -550,6 +550,118 @@ drive back with a new generation (`cm.nvlink.up=02000401`) and `dir E:\`
 listed its files. Logs: `E:\xhci98-vm\p43-18g3\keep\debugcon-w98-r2.log`,
 `trace-w98-r2.log`.
 
+### 43.19, the remaining legs: XHCITR, two ports, 42-A.14 (2026-10-22)
+
+**Verdict: pass.** Every leg 43.19's entry names that the first legs
+above left: XHCITR's Safely Remove clean with Stor98's `RemoveAck` on
+both systems, the two-port legs under the USB4 profile with known
+correspondence (98 SE and ME) and under the ICM client with two members
+(98 SE), and 42-A.14 with the TB3 enclosure and a bridge chain on both.
+Three findings, none a failed leg, are at the end.
+
+**The vehicle.** As the G3 readings above (the same emulator, SHA-256
+prefix `9dfdcf9b`, one vCPU, 256 MB, TCG, the bundled Stor98), on branch
+`p43-19` at `6776fd69` (`3.2.0.0` at `a48e8688` and roadmap text): its
+gated `scripts\build-driver.cmd qemu` build (passed) gave `xhcicm.sys`
+(SHA-256 prefix `ae8700b2`) and `STOR98.MPD` (`8dd65321`), copied with
+that tree's `XHCITR.EXE` (`0dc4e522`) and `XHCIINST.EXE` (`9abd298b`)
+over the installed ones (the tray's XHCITR closed from its menu first),
+then a cold restart. `xhci98.sys` stayed the installed one. Overlays over
+copies of the G3 guests (`E:\xhci98-vm\p43-19\img`); a hot-added chain
+is `device_add usb4-asm-pci-usp` at the tunnel bridge's slot 3, a
+`pci-bridge-seat` below it and an NVMe below that (the recipe of
+`E:\xhci98-vm\p42-9x\RECIPE.txt` (c2)), with `bus-reserve=8` and
+`mem-reserve=32M` on the tunnel bridge; the two-port unplugs are one QMP
+session's `device_del`s a set time apart (`scripts\twoport.py`). Times
+are the drivers' own readings; the host was shared with other agents'
+guests and builds, so their sizes are noisy.
+
+**XHCITR's Safely Remove.** The enclosure's drive selected, Action >
+Safely Remove: the box named the drive, the devices that stop with it
+and "Close any program that uses them first.", and after OK said
+"Windows has stopped QEMU NVMe Ctrl (E:). Until you unplug it, Device
+Manager's Refresh, or the Thunderbolt driver looking at the port again,
+can start it again." and "You can now unplug the device." (43.8's words).
+
+| System, leg | The driver's lines | After it |
+|---|---|---|
+| 98 SE, ICM client (Alpine Ridge), one enclosure | `cm.eject.accepted`, `cm.eject.emulator=00020802`, the query (`41..`), the request (`42..`, `cm.eject.request=00000100`: `RemoveAck`), the removal (`43..`), `cm.eject.retire=00000001`, `cm.eject.result=080290E5` (removed, clean) | the unplug: `cm.nvlink.9x.decided=00000200`, no `cm.nvlink.down`, no wait, `cm.reenum.held.run` at once; the re-plug `UP` (`cm.nvlink.up=02000401`), E: listed |
+| ME, USB4 profile (ASM2464), port 1 | the same steps, then `cm.eject.call=44..`, `u4.eject=00000100`, `cm.eject.teardown=00002801`, `cm.nvlink.down=00000001`, `cm.eject.mark=00000001`, `cm.nvlink.retired=00002801`, `cm.eject.result=0802A40D` | the unplug logged nothing (the tunnel was down); the re-plug `UP` (`02000101`) |
+| ME, USB4 profile, port 2's drive with port 1's up | member `0030`'s steps alone (`cm.eject.request=00000201`, `u4.eject=00000200`, `cm.eject.teardown=00003001`, `cm.eject.mark=00000101`), `cm.eject.result=08024385` | port 1's drive F: still listed |
+| 98 SE, USB4 profile, port 2's drive with port 1 empty | as ME's (`cm.eject.request=00000101`, `cm.eject.teardown=00003001`), `cm.eject.result=0802DE08` | - |
+| 98 SE, ICM client with two members (Titan Ridge 4C), port 1's drive | member `0208`'s steps, `cm.eject.retire=00000001`, `cm.eject.result=0802E07E`; no teardown (decision V8) | port 2's drive F: still listed; port 1's unplug `cm.nvlink.withheld=02010002` (two members), no wait; the re-plug `UP` |
+
+**The two-port legs, USB4 profile.** Both enclosures plugged (ME: one
+`UP` each, `cm.nvlink.up=..000101` and `..000A01`, port 2 behind bus
+`0Ah` beside port 1's reserve; 98 SE `..000101` and `..000201`), both
+drives listed, then:
+
+| Leg | ME | 98 SE |
+|---|---|---|
+| port 1 then port 2 unplugged 1 s apart | each member's own statement (`cm.nvlink.down=00000002`, `00010001`), its own hold (`cm.nvlink.up.held=00000028`, `00000030`) and its own end: port 1 acknowledged after 219 ms (`cm.nvlink.await=000000DB`), port 2 after 55 ms; while port 1 was held, port 2's member's re-enumeration ran (`cm.brnum.9x.held=00003001`, then `cm.reenum.9x.reenumerate=00003000`) | port 1 110 ms, port 2 96 ms, each held and released by its own end |
+| both unplugged 20 ms apart (both statements in one pass) | both marked before either ended (`down=00000003`, `00010002`); port 2 acknowledged first (96 ms) and its held work ran (`cm.reenum.held.run=03040030`) while port 1 still waited, which ended at 151 ms | both marked in one pass; port 1 55 ms, port 2 110 ms |
+| port 1 unplugged and port 2 plugged in the same instant | port 1's statement (`down=00000004`), port 2's tunnel up (`u4.pcie.up=00020809`) during the wait, port 1 acknowledged at 110 ms, then port 2's `UP` published (`02000A01`) and E: listed | the same: port 1 55 ms, port 2's `UP` (`02000201`) after it |
+
+Every statement was followed by the vanished child's query and removal
+(`cm.reenum.9x.query-remove=00000000`, `remove=00000000`) after the wait's
+end; the re-plugs brought the drives back.
+
+**The two-port legs, ICM client with two members** (98 SE,
+`profile=tb3-titan-ridge,ports=2`, a TB3 tunnel bridge per port, a TB3
+enclosure on each, E: and F:): port 2 unplugged, `cm.nvlink.icm-down=00020400`
+(two members) and `cm.nvlink.withheld=02000001`, `02010001`
+(`CM_NVLINK_SEVERAL`: no statement, as the condition says), the vanished
+child queried and removed, F: back after the re-plug; port 1's eject and
+unplug as in the table above. XHCITR shows each drive under its port and
+the two enclosures beside them (the device's port is not known under the
+ICM, record 21 section 6.3).
+
+**42-A.14 with the TB3 enclosure and a bridge chain.** The chain added
+beside the enclosure, the enclosure unplugged and plugged again so that
+`xhcicm.sys` numbered the chain (98 SE `cm.brnum.9x.port-buses=00040402`;
+ME `00090100`, the chain's buses 02-03, its windows and IRQ written,
+`cm.brnum.9x.irq=00010A01`), Windows' wizards for the two bridges, then
+Stor98's for the chain's NVMe from `C:\XHCI98\STOR98.INF`: the chain's
+drive started (F:, its files listed), which 3.1.0.0's 42-A.14 leg could
+not reach. The Thunderbolt controller's PCI page in XHCITR:
+
+| System | Functions below the port | The count |
+|---|---|---|
+| 98 SE, ICM client, tunnel port 02:01.0 (buses 04-06) | the enclosure's NVMe 04:01.0 (1B36:0010, class 010802, pin INTA, line 10, its 64-bit BAR, PCI Express v2 and power management), the switch's upstream port 04:03.0 (1B21:2421, buses 05-06, window 10100000-102FFFFF), its downstream port 05:01.0 (1B36:000A, bus 06), the chain's NVMe 06:01.0 (line 10) | "102 configuration reads, 0 refused." |
+| ME, USB4 profile, the TB3 enclosure on tunnel port 00:05.0 (buses 01-09) | 01:01.0 the enclosure's NVMe, 01:03.0 the upstream port (buses 02-03, window FE600000-FE7FFFFF), 02:01.0 the downstream port (bus 03), 03:01.0 the chain's NVMe (line 10); tunnel port 00:06.0, empty: "Not read on this system." (finding 2) | "135 configuration reads, 0 refused." |
+
+**Findings.**
+
+1. *Not a defect.* With the chain on the tunnel bridge beside the
+   enclosure (the emulator puts it at the bridge's slot 3, not behind the
+   enclosure's router), the enclosure's unplug made no statement on
+   either system: `cm.nvlink.9x.decided=04000100`,
+   `cm.nvlink.withheld=04000002` (98 SE), `04000006` (ME), verdict
+   `CM_NVLINK_NOT_DOWN`, because the bridge still has a function present
+   and its reading does not reach `DOWN`. The withheld statement is the
+   safe outcome; the vanished child was removed.
+2. *XHCITR's 9x PCI page, an empty tunnel port.* "Functions below this
+   port: Not read on this system." (`tr_pci.c`, `below == 0` and not NT),
+   the 3.0.0.0 text for a driver that does not read below the port; the
+   driver since 42-A.14 does read it, and an empty port gives the same
+   answer as no walk. `test_trpci` checks the text for the old driver's
+   answer. Not changed here.
+3. *XHCITR's eject box under the ICM with two members* shows 43.8's
+   reminder ("Before you eject it, make sure none of its other devices
+   ...") with the console's hard line break after "card", so the box
+   wraps the line raggedly (`inst_eject_remind_text`). Not changed here.
+
+**Not chased.** An ME overlay of the predecessor's session (the 43.18
+trial binaries, a chain's devnodes installed) stopped at its next boot
+with "Error: 0E : 0197 : BFF62170" and then a grey screen; it was quit
+and the ME legs above were taken on a fresh overlay from the same image.
+
+The guests' logs: `E:\xhci98-vm\p43-19\keep` (`debugcon-w98-c2.log`
+XHCITR and 42-A.14 on 98 SE, `debugcon-me-c2.log` ME's XHCITR, two-port
+and 42-A.14, `debugcon-w98-t3.log` the ICM with two members,
+`debugcon-w98-u3.log` 98 SE's USB4 two-port; `trace-*.log` beside each);
+the pages in `E:\xhci98-vm\p43-19\shots`.
+
 ## 43.21 - the unexpected-removal notice, leg T.11 (2026-10-22)
 Roadmap 43.21; design record 25 section 7.6 (revision 16) and leg T.11 in
 its section 11.
