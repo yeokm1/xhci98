@@ -2190,12 +2190,15 @@ them under "WARNING:".
 
 #### 6.7.5 Ticked: the copy
 
-**The set's key first.** Before the first file is touched,
-`HKLM\Software\xhci98\Other\Free` (or `\NonFree`) holds `Record` (the
-record file's path), `RecordMade` (0), `Dir` (the folder the copies go
-to) and `Sums` (the hash of the `SHA256.TXT` they are made from); a write
-that fails stops the set's copy (said, the failed flag set). The
-uninstall finds a set by this key.
+**The set's key first.** For a set with no key, before the first file
+is touched, `HKLM\Software\xhci98\Other\Free` (or `\NonFree`) is made
+with `Record` (the record file's path), `RecordMade` (0), `Dir` (the
+folder the copies go to) and `Sums` (the hash of the `SHA256.TXT` they
+are made from); a write that fails stops the set's copy (said, the failed
+flag set). A set whose key is there is an earlier run's: its values are
+kept, and with `RecordMade` 1 its record file is opened, held to its
+header, recovered (below) and appended to. The uninstall finds a set by
+this key.
 
 **An earlier copy elsewhere or of another release.** When the key names
 another `Dir` (the install directory moved, record 23 section 9.6) or
@@ -2218,7 +2221,7 @@ header written and flushed, and only then `RecordMade` set to 1. When
 `CREATE_NEW` fails (a file of that name is there) the run takes the
 values it just wrote out of the key and stops the set's copy, said, and
 never writes to or deletes that file. A later run that finds
-`RecordMade` 0 with the file absent starts it afresh; with the file
+`RecordMade` 0 with the file absent makes it afresh; with the file
 present it cannot tell whose the file is, leaves it alone, and stops the
 set's copy with a step for the user (delete the file if it is not
 wanted, then run the installer again; the steps flag set), and the
@@ -2258,7 +2261,8 @@ bytes the read hashed, is copied to `<Dir>\<relative path>` by section
    `D <full path>` is appended.
 
 When step 4 or 5 fails (the hash is not the line's, a write fails) the
-temporary file is deleted, `A <full path>` is appended, and the run goes
+temporary file is deleted and then `A <full path>` appended; when the
+deletion fails the line is left open, for the recovery, and the run goes
 on with the next file. **Recovery** (the next run, ticked or not, and the
 uninstall, before anything else of the set), for each `F` line with no
 `D` or `A` after it, by its own run's token alone: with a `T` line, the
@@ -2266,9 +2270,12 @@ temporary file `<full path>.~<token>` is this installer's and is deleted;
 without one, a file of that name is not known to be this installer's (a
 run cut short between steps 2 and 3, or between the `CREATE_NEW` and its
 `T` line): it is left, named in a step for the user (delete it if it is
-not wanted), with the steps flag. The file itself is this installer's
-only when it is present with the recorded bytes, and the line is then
-closed with `D`, or else with `A`. A file present with the recorded
+not wanted), with the steps flag. The line is closed only once no
+temporary file of it is left - with `D` when the file is present with the
+recorded bytes, else with `A` - so a temporary file whose deletion failed,
+or that waits for the user, keeps its line open, and the uninstall that
+meets an open line it cannot close keeps the record file and the key and
+ends incomplete. A file present with the recorded
 bytes under a `D` line is this installer's. The run says how many of the
 set's files are in the folder and names up to three it left out; a later
 ticked run copies what is still absent.
@@ -2305,7 +2312,10 @@ and said with the file that stopped it.
   its folder at `<Dir>` as the source), as record 23 section 5.6 stages
   the package's own. **The inventory** before the call: every `*.inf` of
   `%windir%\inf` (the `oem<n>.inf` names and the original names alike,
-  since the call may answer with either) whose bytes are this INF's. The
+  since the call may answer with either) whose bytes are this INF's. An
+  inventory that is not whole (the folder not listed, an INF of the same
+  size not readable) stages nothing: that INF stays copy-only, said, as
+  `s98_oem_before` leaves Stor98's unrecorded on the same failure. The
   record is a value of the `Staged` subkey named for the INF's relative
   path, written before the call with the data `pending <the INF's
   SHA-256> <the inventory's names>`, and after it:
@@ -2399,8 +2409,13 @@ the records, each step only when the one before left nothing.
   file under a `D` line outside a kept folder, deleted when its bytes are
   still the recorded ones, kept and said when they have changed, nothing
   done when it is gone; then each folder of the set bottom up when empty,
-  then the record file (only once its every line is done).
-- **The records**: the set's key, then `Other` when empty.
+  then `RecordMade` set to 2 (the copies done) and the record file
+  deleted (only once its every line is closed).
+- **The records**: the set's key, then `Other` when empty. A run that
+  finds `RecordMade` 2 has only these steps left: it deletes the record
+  file if it is still there, then the key; a record file missing with
+  `RecordMade` 1 is an error that keeps the key and ends the uninstall
+  incomplete.
 
 A deletion that fails, or a removal from the store that fails, keeps the
 record file and the key, sets the restart and steps flags and leaves the
