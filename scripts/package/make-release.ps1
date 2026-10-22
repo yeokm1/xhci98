@@ -522,10 +522,12 @@ was asked for, and nothing else.
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
-if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
-if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo "xhcimark" }
-if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
-if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo "xhcitr" }
+# The four tools whose README.TXT the cut reads, from package-common.ps1's
+# table, which the gated build's readme check reads too (task 43.61).
+if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo $script:ToolReadmeDirs.Clean }
+if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo $script:ToolReadmeDirs.Mark }
+if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo $script:ToolReadmeDirs.Install }
+if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo $script:ToolReadmeDirs.Tray }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -587,23 +589,11 @@ function Write-GeneratedText {
     if ($null -ne $destRoot -and $Path.StartsWith($destRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
         $name = $Path.Substring($destRoot.Length + 1)
     }
-    $overLong = @($Lines | Where-Object { $_.Length -gt 78 })
-    if ($overLong.Count -gt 0) {
-        Stop-CutCheck ("{0} has {1} line(s) past 78 columns, the first being:`n{2}" -f `
-                       $name, $overLong.Count, $overLong[0])
-    }
-
-    :lines for ($i = 0; $i -lt $Lines.Count; $i++) {
-        $line = $Lines[$i]
-        for ($c = 0; $c -lt $line.Length; $c++) {
-            $code = [int][char]$line[$c]
-            if ($code -lt 0x20 -or $code -gt 0x7E) {
-                if ($code -eq 9) { continue }
-                Stop-CutCheck ("{0} line {1} column {2} is not printable ASCII (U+{3:X4}); Write-AsciiFile would replace it with a question mark. The line reads:`n{4}" -f `
-                               $name, ($i + 1), ($c + 1), $code, $line)
-                break lines
-            }
-        }
+    # The rule is package-common.ps1's Get-PlainTextFaults, which the gated
+    # build's scripts\check-readme-text.ps1 also holds the tracked tool
+    # readmes to (task 43.61).
+    foreach ($fault in @(Get-PlainTextFaults -Name $name -Lines $Lines)) {
+        Stop-CutCheck $fault
     }
 
     Write-AsciiFile -Path $Path -Lines $Lines
@@ -7044,10 +7034,7 @@ provenance record is docs\contributing\legal-provenance.md, section 2a.
     # as XHCISNAP's recorded its one, for the same reason and on the same terms
     # (legal-provenance.md section 2a).
     if ($null -ne $cleantoolStaged) {
-        $cleanReadme = @([System.IO.File]::ReadAllText((Join-Path $CleanToolDir "README.TXT")) -split "`r?`n")
-        while ($cleanReadme.Count -gt 0 -and $cleanReadme[$cleanReadme.Count - 1] -eq "") {
-            $cleanReadme = @($cleanReadme | Select-Object -First ($cleanReadme.Count - 1))
-        }
+        $cleanReadme = @(Read-ToolReadmeLines (Join-Path $CleanToolDir $script:ToolReadmeName))
         $cleanFooter = @'
 
 ------------------------------------------------------------------------------
@@ -7099,10 +7086,7 @@ sufficient.
     # As the cleanup tool's: xhcimark\README.TXT with the release's footer,
     # and NOTICE.TXT recording the two statically linked runtimes.
     if ($null -ne $marktoolStaged) {
-        $markReadme = @([System.IO.File]::ReadAllText((Join-Path $MarkToolDir "README.TXT")) -split "`r?`n")
-        while ($markReadme.Count -gt 0 -and $markReadme[$markReadme.Count - 1] -eq "") {
-            $markReadme = @($markReadme | Select-Object -First ($markReadme.Count - 1))
-        }
+        $markReadme = @(Read-ToolReadmeLines (Join-Path $MarkToolDir $script:ToolReadmeName))
         $markFooter = @'
 
 ------------------------------------------------------------------------------
@@ -7154,10 +7138,7 @@ sufficient.
     # footer, and NOTICE.TXT recording the two statically linked runtimes
     # (legal-provenance.md section 2a).
     if ($null -ne $insttoolStaged) {
-        $instReadme = @([System.IO.File]::ReadAllText((Join-Path $InstallToolDir "README.TXT")) -split "`r?`n")
-        while ($instReadme.Count -gt 0 -and $instReadme[$instReadme.Count - 1] -eq "") {
-            $instReadme = @($instReadme | Select-Object -First ($instReadme.Count - 1))
-        }
+        $instReadme = @(Read-ToolReadmeLines (Join-Path $InstallToolDir $script:ToolReadmeName))
         $instFooter = @"
 
 ------------------------------------------------------------------------------
@@ -7220,10 +7201,7 @@ $instMsFiles
     # footer, and NOTICE.TXT recording the two statically linked runtimes
     # (legal-provenance.md section 2a).
     if ($null -ne $traytoolStaged) {
-        $trayReadme = @([System.IO.File]::ReadAllText((Join-Path $TrayToolDir "README.TXT")) -split "`r?`n")
-        while ($trayReadme.Count -gt 0 -and $trayReadme[$trayReadme.Count - 1] -eq "") {
-            $trayReadme = @($trayReadme | Select-Object -First ($trayReadme.Count - 1))
-        }
+        $trayReadme = @(Read-ToolReadmeLines (Join-Path $TrayToolDir $script:ToolReadmeName))
         $trayFooter = @"
 
 ------------------------------------------------------------------------------

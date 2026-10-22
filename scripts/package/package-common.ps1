@@ -1695,3 +1695,74 @@ function ConvertFrom-DriverPackRecord {
     }
     return [pscustomobject]@{ Included = $included; Revision = $revision; Files = $files }
 }
+
+# --- a packaged plain-text file's rule (task 43.61) --------------------------
+#
+# **One rule, read by the cut and by the gated build.** make-release.ps1's
+# Write-GeneratedText refuses a generated text with a line past 78 columns or
+# a character that is not printable ASCII (TAB allowed), since
+# Write-AsciiFile turns such a character into a question mark silently.
+# Until task 43.61 that refusal was met only at a cut: on 2026-10-22 43.11's
+# test cut stopped on a line in xhciinst\README.TXT and one in
+# xhcitr\README.TXT that two merges had left, each passing every gate. The
+# rule is here so that scripts\check-readme-text.ps1, which build-driver.cmd
+# runs, holds the tracked readmes the cut reads to the same function.
+#
+# The tool readmes the cut reads, by the tool's directory under the
+# repository: make-release.ps1 takes its default -CleanToolDir,
+# -MarkToolDir, -InstallToolDir and -TrayToolDir from this table and reads
+# README.TXT in each, and the gate reads the same four. A fifth tool's
+# readme is added here, or the gate does not see it.
+$script:PlainTextColumns = 78
+$script:ToolReadmeName = "README.TXT"
+$script:ToolReadmeDirs = [ordered]@{
+    Clean   = "xhcicln"
+    Mark    = "xhcimark"
+    Install = "xhciinst"
+    Tray    = "xhcitr"
+}
+
+function Get-PlainTextFaults {
+    # What a packaged plain-text file breaks of the rule above, as the
+    # messages the cut prints: none, or the first line past 78 columns (with
+    # how many there are) and then the first character that is not printable
+    # ASCII. $Name is how the file is named in them.
+    param(
+        [string]$Name,
+        [string[]]$Lines
+    )
+
+    $faults = @()
+    if ($null -eq $Lines) { $Lines = @() }
+    $overLong = @($Lines | Where-Object { $_.Length -gt $script:PlainTextColumns })
+    if ($overLong.Count -gt 0) {
+        $faults += ("{0} has {1} line(s) past {2} columns, the first being:`n{3}" -f `
+                    $Name, $overLong.Count, $script:PlainTextColumns, $overLong[0])
+    }
+
+    :lines for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $line = $Lines[$i]
+        for ($c = 0; $c -lt $line.Length; $c++) {
+            $code = [int][char]$line[$c]
+            if ($code -lt 0x20 -or $code -gt 0x7E) {
+                if ($code -eq 9) { continue }
+                $faults += ("{0} line {1} column {2} is not printable ASCII (U+{3:X4}); Write-AsciiFile would replace it with a question mark. The line reads:`n{4}" -f `
+                            $Name, ($i + 1), ($c + 1), $code, $line)
+                break lines
+            }
+        }
+    }
+    return $faults
+}
+
+function Read-ToolReadmeLines {
+    # A tool's README.TXT as the cut reads it before adding the release's
+    # footer: split on CRLF or LF, trailing empty lines dropped.
+    param([string]$Path)
+
+    $lines = @([System.IO.File]::ReadAllText($Path) -split "`r?`n")
+    while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq "") {
+        $lines = @($lines | Select-Object -First ($lines.Count - 1))
+    }
+    return $lines
+}
