@@ -1337,6 +1337,35 @@ BOOLEAN CmNvlinkMarkEntry(PCM_NHI nhi, ULONG bridge, ULONG index,
     return marked;
 }
 
+BOOLEAN CmNvlinkEmulatorMember(PCM_NHI nhi, ULONG bridge)
+{
+    BOOLEAN emulator;
+
+    emulator = FALSE;
+    /* A budget of 0: one read, whatever it says of the slot. */
+    (VOID)cmNvRead(nhi, bridge, XHCI_TBT_PORT_DOWN, 0, &emulator);
+    return emulator;
+}
+
+BOOLEAN CmNvlinkRetireEjected(PCM_NHI nhi, ULONG bridge, ULONG index)
+{
+    BOOLEAN retired;
+    KIRQL irql;
+
+    if (cmNvTable == NULL || index >= STOR98LS_ENTRIES) {
+        return FALSE;
+    }
+    retired = FALSE;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    if (cmNvShadow[index].Owner == nhi &&
+        cmNvShadow[index].Bridge == bridge &&
+        CmNvlinkSetDown(cmNvTable, index, FALSE)) {
+        retired = TRUE;
+    }
+    KeReleaseSpinLock(&cmNvLock, irql);
+    return retired;
+}
+
 VOID CmNvlinkDecided(PCM_NHI nhi, const CM_EJ_DECISION *d)
 {
     PCM_REENUM r;

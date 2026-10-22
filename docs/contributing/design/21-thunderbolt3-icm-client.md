@@ -3014,7 +3014,10 @@ The qualification: 98 SE and ME join the pairs the ordering is qualified
 on (`cmNvOsQualified`) only once gate G3's ordering check has passed on
 each - the statement's marker later than the stage-2 reset and quiesce
 event in the emulator's host trace, with the disconnect injected at every
-point section 7.2's budget names and under a saturated queue - read by
+point section 7.2's budget names and under a saturated queue (on 9x, by
+the owner's decision of 2026-10-22, a held request with more behind it
+in Windows: an MS-DOS copy keeps one request at the drive, so no deeper
+queue was read) - read by
 42-V.6 on each system separately (ME is not 98 SE: its port never calls a
 stop, Stor98's MD-5, so its receiver's behaviour is its own). Until a
 system's reading is in `runs/run-42.md`, the verdict there stays
@@ -3026,7 +3029,10 @@ the ICM client and on ME under the USB4 profile, the statement came
 after the stage-2 reset and quiesce at every point read - an idle unplug,
 a read held at its fetch, every read held, an unplug at the `UP` of a
 re-plug - and the removal after the acknowledgement; both systems are
-admitted. The other prerequisites of the
+admitted. The queue never held more than one request at the drive (an
+MS-DOS copy reads one at a time), and the owner decided the same day
+that this one-request reading meets the saturated-queue point on 98 SE
+and ME; a deeper queue on 9x is not read. The other prerequisites of the
 condition (the emulator's SHPC bridge, the single member under the ICM,
 the known correspondence under USB4) are unchanged.
 
@@ -3355,6 +3361,31 @@ this, reviewed and revised:
   2000 and XP x64, the failed branch's isolation is available where the
   condition holds, and the USB4 profile's clean-removal teardown carries
   its `DOWN_QUIESCED`. Those two eject paths are read by 43.19's legs.
+  The eject's own statements (the isolation's, the clean removal's and
+  O6's teardown) take the whole qualification, not the systems' admission
+  alone (`CmEjStatementQualified`, reviewed and revised 2026-10-22): the
+  member must also read as the emulator's bridge (QEMU's vendor id on it
+  or the bus-0 bridge above it, an SHPC capability, no PCI Express
+  capability), read once per transaction. A teardown read back closed
+  proves isolation, not that the endpoint's reset completed (record 22),
+  so on a real host no eject path makes a statement: the clean removal is
+  torn down without `DOWN_QUIESCED`, a failed stop blocks, O6 retries.
+- **The entry after a clean eject with no teardown** (owner, 2026-10-22,
+  on 43.19's first leg on 98 SE). A removal that ends clean (or plain)
+  with an entry and no teardown to follow - the firmware connection
+  manager, which has none (V8) - moves the transaction to a last phase,
+  `CM_EJ_P_RETIRE`, whose action (`CmNvlinkRetireEjected`) takes the
+  entry from `UP` to `IN_USE` alone: no `DOWN_QUIESCED`, no wait, the
+  generation unchanged, as the drive's Stor98 went with the devnode.
+  Left `UP`, the unplug that followed made its statement and waited the
+  whole 3 s for an answer nobody could give. Not from a servicing point
+  inside a wait; an adopting start does not carry it over (the entry then
+  stays `UP`, as before). A drive started again by Device Manager's
+  Refresh before the unplug runs without the channel until its next `UP`
+  (a new tunnel). Not changed, because not read: the USB4 profile's clean
+  removal with a sibling running (no teardown, so no mark), and the NT
+  side, where Windows ejects and nothing tells this driver that Stor98
+  left.
 - **Not built.** XHCITR's tray does not poll a result after the tool's
   wait has ended; the port's two lines, read from the record's masks, are
   what show a transaction that outlived it.

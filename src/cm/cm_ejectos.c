@@ -93,6 +93,8 @@ typedef struct _CM_EJ_REC {
                                teardown waits there): a servicing point
                                reached from it steps the others alone      */
     ULONG MemberDevnode;
+    ULONG Emulator;         /* the member read as the emulator's bridge: 0
+                               not read yet, 1 no, 2 yes                   */
     char Id[CM_EJ_ID_CHARS];
 } CM_EJ_REC;
 
@@ -725,12 +727,24 @@ static BOOLEAN cmEj9x(PCM_NHI nhi)
                      nhi->Reenum.Callwk != NULL);
 }
 
-/* A 9x statement needs both systems admitted. Decision V4 admits them one
- * at a time; both are, each on its own reading, so no version read has to
- * tell them apart here. */
-static BOOLEAN cmEjQualified(VOID)
+/* The eject's statements: the systems' admission and the member the
+ * emulator's bridge (CmEjStatementQualified). Decision V4 admits the
+ * systems one at a time; both are, each on its own reading, so no version
+ * read has to tell them apart here. The member is read once per record,
+ * only once the systems are admitted (on the thread, configuration reads
+ * alone). */
+static BOOLEAN cmEjQualified(PCM_NHI nhi, CM_EJ_REC *rec)
 {
-    return (BOOLEAN)(CmEjQualified9x(FALSE) && CmEjQualified9x(TRUE));
+    if (!CmEjStatementQualified(TRUE)) {
+        return FALSE;
+    }
+    if (rec->Emulator == 0) {
+        rec->Emulator = CmNvlinkEmulatorMember(nhi, rec->Tx.Bridge) ? 2UL
+                                                                    : 1UL;
+        CmLogNote(nhi, "cm.eject.emulator",
+                  (rec->Tx.Bridge << 8) | rec->Emulator);
+    }
+    return CmEjStatementQualified((BOOLEAN)(rec->Emulator == 2));
 }
 
 VOID CmEjectReset(PCM_NHI nhi)
@@ -961,7 +975,7 @@ static VOID cmEjStepRec(PCM_NHI nhi, CM_EJ_REC *rec, BOOLEAN nested)
         in.NowMs = cmEjNow();
         in.Nested = nested;
         in.U4Known = (BOOLEAN)(port != 0);
-        in.Qualified = cmEjQualified();
+        in.Qualified = cmEjQualified(nhi, rec);
         busy = CmCallwkBusy(nhi->Reenum.Callwk, rec->Member);
         in.SlotIdle = (BOOLEAN)(!busy && !cmEjDecPosted(nhi, rec->Member));
         in.AckHeld = CmNvlinkAckHeld(nhi, rec->Tx.Bridge);
@@ -1032,6 +1046,16 @@ static VOID cmEjStepRec(PCM_NHI nhi, CM_EJ_REC *rec, BOOLEAN nested)
             KeAcquireSpinLock(&cmEjLock, &irql);
             CmEjFeed(&rec->Tx, CM_EJ_FED_MARK, marked ? 1UL : 0UL, 0,
                      t);
+            KeReleaseSpinLock(&cmEjLock, irql);
+            continue;
+        case CM_EJ_DO_RETIRE:
+            marked = CmNvlinkRetireEjected(nhi, rec->Tx.Bridge,
+                                           rec->Tx.Entry);
+            CmLogNote(nhi, "cm.eject.retire",
+                      (rec->Tx.Entry << 8) | (marked ? 1UL : 0UL));
+            t = cmEjNow();
+            KeAcquireSpinLock(&cmEjLock, &irql);
+            CmEjFeed(&rec->Tx, CM_EJ_FED_RETIRE, marked ? 1UL : 0UL, 0, t);
             KeReleaseSpinLock(&cmEjLock, irql);
             continue;
         case CM_EJ_DO_REENUM:

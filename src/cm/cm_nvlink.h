@@ -730,6 +730,17 @@ BOOLEAN CmNvlinkPending(VOID);
 BOOLEAN CmNvlinkAckHeld(struct _CM_NHI *nhi, ULONG bridge);
 BOOLEAN CmNvlinkMarkEntry(struct _CM_NHI *nhi, ULONG bridge, ULONG index,
                           BOOLEAN wait);
+/* After a clean 9x eject with no teardown (the firmware connection
+ * manager): entry `index` this domain published behind `bridge` leaves UP
+ * for IN_USE alone - no DOWN_QUIESCED, no wait, generation unchanged - as
+ * its Stor98 instance was removed with the devnode; TRUE when written. */
+BOOLEAN CmNvlinkRetireEjected(struct _CM_NHI *nhi, ULONG bridge,
+                              ULONG index);
+/* Whether member `bridge` reads as the emulator's bridge, as the
+ * statement's condition reads it (an SHPC capability, no PCI Express
+ * capability, and QEMU's vendor id on it or the bus-0 bridge above it):
+ * one reading, configuration reads alone. */
+BOOLEAN CmNvlinkEmulatorMember(struct _CM_NHI *nhi, ULONG bridge);
 struct _CM_EJ_DECISION;
 VOID CmNvlinkDecided(struct _CM_NHI *nhi,
                      const struct _CM_EJ_DECISION *d);

@@ -230,6 +230,15 @@ static VOID cmEjAfterRemoval(CM_EJ_TX *t, const CM_EJ_IN *in)
          * check before it. */
         t->Flags |= CM_EJ_F_POST;
         t->Phase = CM_EJ_P_POPULATION;
+    } else if ((t->Outcome == CM_EJ_OUT_CLEAN ||
+                t->Outcome == CM_EJ_OUT_PLAIN) &&
+               t->Entry != CM_EJ_NONE && (t->Flags & CM_EJ_F_TORN) == 0) {
+        /* No teardown follows (the firmware connection manager, V8): the
+         * drive's Stor98 went with the devnode, so its entry leaves UP
+         * now, with no statement. Left UP, the unplug's statement would
+         * wait its whole bound for an answer nobody can give (task 43.18,
+         * runs/run-43-18.md). */
+        t->Phase = CM_EJ_P_RETIRE;
     } else {
         t->Phase = CM_EJ_P_DONE;
     }
@@ -403,6 +412,11 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
                 return CM_EJ_DO_NONE;
             }
             return CM_EJ_DO_REENUM;
+        case CM_EJ_P_RETIRE:
+            if (in->Nested) {
+                return CM_EJ_DO_NONE;
+            }
+            return CM_EJ_DO_RETIRE;
         default:
             /* FREE, HELD (waiting for the unplug), DONE. */
             return CM_EJ_DO_NONE;
@@ -598,6 +612,13 @@ VOID CmEjFeed(CM_EJ_TX *t, ULONG kind, ULONG value, ULONG aux, ULONG nowMs)
             t->Phase = CM_EJ_P_DONE;
         }
         return;
+    case CM_EJ_FED_RETIRE:
+        /* Written or not (the entry no longer UP, or another start's),
+         * nothing more is owed. */
+        if (t->Phase == CM_EJ_P_RETIRE) {
+            t->Phase = CM_EJ_P_DONE;
+        }
+        return;
     case CM_EJ_FED_ADOPT:
         if (t->Pending != CM_EJ_DO_ADOPT) {
             return;
@@ -725,7 +746,9 @@ VOID CmEjAdopt(CM_EJ_TX *t, ULONG nowMs)
              * adopting start makes it when it knows the port. */
             t->Phase = CM_EJ_P_REMOVE;
         }
-    } else if (t->Phase == CM_EJ_P_REENUM) {
+    } else if (t->Phase == CM_EJ_P_REENUM || t->Phase == CM_EJ_P_RETIRE) {
+        /* The new start's entries are its own: an entry left UP keeps the
+         * behaviour before task 43.18's retirement. */
         t->Phase = CM_EJ_P_DONE;
     }
 }
@@ -844,4 +867,10 @@ BOOLEAN CmEjQualified9x(BOOLEAN me)
 {
     return (BOOLEAN)(me ? CM_EJ_QUALIFIED_ME != 0
                         : CM_EJ_QUALIFIED_98SE != 0);
+}
+
+BOOLEAN CmEjStatementQualified(BOOLEAN emulator)
+{
+    return (BOOLEAN)(emulator && CmEjQualified9x(FALSE) &&
+                     CmEjQualified9x(TRUE));
 }

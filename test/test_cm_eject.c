@@ -104,6 +104,9 @@ static VOID drive(CM_EJ_TX *t, FAKE *f, CM_EJ_IN *in)
         case CM_EJ_DO_REENUM:
             CmEjFeed(t, CM_EJ_FED_REENUM, 0, 0, in->NowMs);
             break;
+        case CM_EJ_DO_RETIRE:
+            CmEjFeed(t, CM_EJ_FED_RETIRE, 1, 0, in->NowMs);
+            break;
         default:
             return;
         }
@@ -260,6 +263,9 @@ static VOID test_clean(VOID)
     CHECK_EQ(t.Outcome, CM_EJ_OUT_CLEAN, "clean");
     CHECK((t.Flags & CM_EJ_F_WITHDRAWN) != 0, "the request withdrawn (O5)");
     CHECK_EQ(f.Calls[CM_EJ_DO_TEARDOWN], 0, "no teardown under the ICM");
+    CHECK_EQ(f.Calls[CM_EJ_DO_RETIRE], 1,
+             "the entry retired after the removal (no teardown follows)");
+    CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 0, "no statement for it");
     CHECK(!CmEjGate(&t), "the gate down");
     CmEjResultEncode(&t, r, 400);
     CHECK_EQ(get32(r, CM_EJ_S_ANSWER), (0x123456UL << 8) | CM_EJ_ANS_CLEAN,
@@ -294,8 +300,36 @@ static VOID test_clean(VOID)
     in.Nested = FALSE;
     drive(&t, &f, &in);
     CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 1, "DOWN_QUIESCED, no wait");
+    CHECK_EQ(f.Calls[CM_EJ_DO_RETIRE], 0, "the mark retires it, not this");
     CHECK_EQ(t.Phase, CM_EJ_P_DONE, "done");
     CHECK_EQ(t.Outcome, CM_EJ_OUT_CLEAN, "still clean");
+
+    /* The ICM's retirement waits for a servicing point to end, holding
+     * the gate; an adopting start drops it. */
+    fakeInit(&f);
+    begin(&t, TRUE, 0);
+    in = mkIn(10);
+    drive(&t, &f, &in);
+    in.Answer = CM_EJ_ANS_CLEAN;
+    in.Nested = TRUE;
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Phase, CM_EJ_P_RETIRE, "no retirement from a servicing point");
+    CHECK_EQ(t.Step, CM_EJ_STEP_REMOVED, "removed already");
+    CHECK(CmEjGate(&t), "the gate up until it is made");
+    in.Nested = FALSE;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_RETIRE], 1, "retired once");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "then done");
+    fakeInit(&f);
+    begin(&t, TRUE, 0);
+    in.Nested = TRUE;
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Phase, CM_EJ_P_RETIRE, "retirement owed");
+    CmEjAdopt(&t, 20);
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "a retirement not carried over");
+    in.Nested = FALSE;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_RETIRE], 0, "not made by the new start");
 
     /* A sibling running: removed all the same, no teardown, exit 0. */
     fakeInit(&f);
@@ -359,6 +393,8 @@ static VOID test_not_clean(VOID)
     CHECK_EQ(t.Outcome, CM_EJ_OUT_NOT_CLEAN, "not clean");
     CHECK_EQ(t.Step, CM_EJ_STEP_REMOVED, "removed");
     CHECK_EQ(f.Calls[CM_EJ_DO_REENUM], 1, "re-enumerated on the same tunnel");
+    CHECK_EQ(f.Calls[CM_EJ_DO_RETIRE], 0,
+             "the entry kept UP for the re-enumerated drive");
     CHECK_EQ(t.Phase, CM_EJ_P_DONE, "done");
 }
 
@@ -884,8 +920,65 @@ static VOID test_bytewrite(VOID)
     CHECK(CmEjQualified9x(TRUE), "ME admitted (its G3 reading)");
 }
 
+/* The eject's statements take the whole qualification: the systems'
+ * admission and the emulator's bridge. On a real USB4 host (not the
+ * emulator's bridge) a closed path proves isolation, not the endpoint's
+ * reset, so no eject path makes a statement there. */
+static VOID test_qualification(VOID)
+{
+    CM_EJ_TX t;
+    FAKE f;
+    CM_EJ_IN in;
+
+    CHECK(CmEjStatementQualified(TRUE), "the emulator's bridge: qualified");
+    CHECK(!CmEjStatementQualified(FALSE),
+          "any other bridge: not, the systems admitted or not");
+
+    /* Clean removal under the USB4 profile on a real host: torn down,
+     * no DOWN_QUIESCED. */
+    fakeInit(&f);
+    begin(&t, TRUE, 0);
+    in = mkIn(10);
+    in.U4Known = TRUE;
+    in.Qualified = CmEjStatementQualified(FALSE);
+    drive(&t, &f, &in);
+    in.Answer = CM_EJ_ANS_CLEAN;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_TEARDOWN], 1, "real host: the teardown");
+    CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 0, "real host: no statement");
+    CHECK_EQ(t.Outcome, CM_EJ_OUT_CLEAN, "real host: clean");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "real host: done");
+
+    /* ... and on the emulator's bridge the statement is made. */
+    fakeInit(&f);
+    begin(&t, TRUE, 0);
+    in = mkIn(10);
+    in.U4Known = TRUE;
+    in.Qualified = CmEjStatementQualified(TRUE);
+    drive(&t, &f, &in);
+    in.Answer = CM_EJ_ANS_CLEAN;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 1, "emulator: DOWN_QUIESCED");
+
+    /* A failed stop on a real host: no isolation (it would need the
+     * statement), the block. */
+    fakeInit(&f);
+    begin(&t, TRUE, 0);
+    in = mkIn(10);
+    in.U4Known = TRUE;
+    in.Qualified = CmEjStatementQualified(FALSE);
+    drive(&t, &f, &in);
+    in.Answer = CM_EJ_ANS_FAILED;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_POPULATION], 0, "real host: no isolation");
+    CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 0, "real host: no statement");
+    CHECK_EQ(t.Phase, CM_EJ_P_HELD, "real host: blocked");
+    CHECK(!CmEjOwesRemoval(&t), "real host: nothing authorised");
+}
+
 int main(void)
 {
+    test_qualification();
     test_accept();
     test_clean();
     test_refused_plain();

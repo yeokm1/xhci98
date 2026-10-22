@@ -106,6 +106,9 @@
 #define CM_EJ_P_HELD            12UL    /* blocked, nothing to call: until
                                            the unplug                       */
 #define CM_EJ_P_DONE            13UL    /* retired                          */
+#define CM_EJ_P_RETIRE          14UL    /* a clean removal with no teardown:
+                                           the entry leaves UP, no
+                                           statement (task 43.18)           */
 
 /* What the driver is to do next (CmEjNext). */
 #define CM_EJ_DO_NONE           0UL
@@ -119,6 +122,8 @@
 #define CM_EJ_DO_TEARDOWN       8UL     /* the port's PCIe teardown         */
 #define CM_EJ_DO_MARK           9UL     /* DOWN_QUIESCED on the entry       */
 #define CM_EJ_DO_REENUM         10UL    /* owe the member's re-enumeration  */
+#define CM_EJ_DO_RETIRE         11UL    /* the entry's UP cleared, no
+                                           DOWN_QUIESCED                    */
 
 /* CmEjFeed's kinds: what came back. */
 #define CM_EJ_FED_FIND          1UL     /* value: devnode, 0 none           */
@@ -135,6 +140,7 @@
                                            aux 1: the system qualified      */
 #define CM_EJ_FED_MARK          9UL     /* value: 1 DOWN_QUIESCED written   */
 #define CM_EJ_FED_REENUM        10UL
+#define CM_EJ_FED_RETIRE        11UL    /* value: 1 the entry left UP       */
 
 /* The population check (record 24 section 5.4; the NT path's
  * cmEjectReady). */
@@ -385,6 +391,16 @@ BOOLEAN CmEjByteWrite(CM_EJ_READ32 read, CM_EJ_WRITE32 write, PVOID context,
  * 9x statement, each on its own gate-G3 reading. `me` TRUE for Windows
  * ME. Both are admitted (runs/run-43-18.md, 2026-10-22). */
 BOOLEAN CmEjQualified9x(BOOLEAN me);
+/* The 9x eject's own statements (the failed branch's isolation, the clean
+ * removal's and O6's teardown under the USB4 profile) take the whole
+ * statement qualification, not the systems' admission alone: both systems
+ * admitted (until the driver tells them apart) and the member the
+ * emulator's bridge (`emulator`: its QEMU vendor id, or the bus-0 bridge
+ * above it, an SHPC capability and no PCI Express capability), the one
+ * platform whose teardown is followed by the endpoint's reset (record 21
+ * section 7.2, record 22: a closed path proves isolation, not the reset).
+ * CM_EJ_IN.Qualified is this. */
+BOOLEAN CmEjStatementQualified(BOOLEAN emulator);
 
 /* ---- the driver (cm_ejectos.c) ---------------------------------------- */
 
