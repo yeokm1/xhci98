@@ -11405,13 +11405,14 @@ emulator is wrong.
 
 **What the driver does** (source read, `hcdCfgCancelPipe`,
 `src\hcd_cfg.c`). The pipe is paused and the endpoint brought to rest
-(`hcdCfgQuiesce`: Stop Endpoint when it reads Running). The TD the
-controller stopped in is the engine queue's head: the Transfer Events of
-every TD that finished before the stop precede the command's completion on
-the event ring (no TRB the driver builds sets an Interrupter Target, so
-both reach the primary event ring, in order) and have been retired by the
-time the command completes, and a Stop Endpoint's own Transfer Event
-completes nothing (`hcd_dev.c`). A cancelled TD behind a surviving one is
+(`hcdCfgQuiesce`: Stop Endpoint when it reads Running). The driver takes
+the engine queue's head to be the TD the controller stopped in: the
+Transfer Events of every TD that finished before the stop precede the
+command's completion on the event ring (every TRB the driver builds names
+Interrupter Target 0, so both reach the primary event ring, in order) and
+have been retired by the time the command completes, and a Stop
+Endpoint's own Transfer Event completes nothing (`hcd_dev.c`). (One case
+rests on more than ordering; see "The residue" below.) A cancelled TD behind a surviving one is
 rewritten in place as No Ops (`XhciRingNoOpAt`, every TRB of it); the
 dequeue is not moved and no Set TR Dequeue is sent, and the doorbell
 restarts the survivors. Only when the head itself is cancelled, or the
@@ -11481,8 +11482,11 @@ on hardware would discard the head's partial progress (4.6.10's note): a
 bulk OUT stopped mid-TD would send its first bytes twice and a bulk IN
 would read again into its start what the device has already delivered. A
 narrower form - Set TR Dequeue to the head only when its Stopped event
-says nothing of it moved (Stopped - Length Invalid, or a residual equal to
-the TD's length) - would be legal, but costs a command on every such
+says nothing of it moved (on the TD's first TRB, with Stopped - Length
+Invalid or a residual equal to that TRB's length; Stopped - Length Invalid
+further in only says the reported length is not valid, and the TRBs before
+it may have moved data, as `hcd_dev.c`'s stopped-length reading takes it)
+- would be legal, but costs a command on every such
 cancel for a defect of the emulator alone, and the zero-length IN from the
 No Op would remain. Neither is taken; the fix belongs in QEMU (on Stop
 Endpoint, save the first cancelled transfer's first TRB as the dequeue, as
@@ -11495,8 +11499,9 @@ chained. Rewriting that TD's slots as No Ops left the Link chained in
 front of the No Op past the wrap: a Link as the first TRB of a two-TRB TD,
 and a No Op preceded by a chained TRB, both of which 4.11.7 forbids, on an
 edit the controller then executes. Linux unchains the Link in the same
-place (`trb_to_noop`), except on the 0.95 controllers its
-`XHCI_LINK_TRB_QUIRK` names; this driver already writes the Link unchained
+place (`trb_to_noop`), except where `xhci_link_chain_quirk` keeps Links
+chained: the 0.95 controllers its `XHCI_LINK_TRB_QUIRK` names, and
+isochronous rings on AMD and NEC 0.96 hosts; this driver already writes the Link unchained
 for every TD that does not cross it, so unchaining it here adds no new
 case to any controller. Since 2026-10-23, `XhciRingNoOpAtType` clears the
 Link's Chain flag when it rewrites the slot before the Link, keeping the
@@ -11507,6 +11512,28 @@ rewrite of the slot before it and by nothing else, every other bit of it
 kept, the survivor and the No Op past the wrap each resolving as its own
 TD, and the next crossing chaining it again; the vector fails without the
 change (three checks).
+
+**The residue (reviewed 2026-10-23; not changed).** The head is the
+stopped TD only when every TD before the stop has been retired by the
+command's completion. One TD is not: a bulk IN TD whose Short Packet
+event named a TRB before its last is held on the queue
+(`XHCI_XFER_FLAG_SHORT_DEFERRED`, `src\xhci_xfer.c`) until the second
+event 4.10.1.1.2 promises on its last TRB, or until a drain pass reads the
+event ring empty (`XhciSlotDrainSettled`). A conforming controller writes
+that second event before the Stop Endpoint's completion, so the TD has
+been retired by then. A controller that writes only the first - QEMU does,
+which is why the settle exists - can leave it at the head while the
+controller has moved on and stopped inside the next TD; a cancel of that
+next TD then takes the "behind a survivor" path, rewrites the TD the
+controller stopped in and moves nothing, which 4.6.9 forbids. On QEMU it
+changes nothing (the emulator has already dropped every TD it fetched);
+on hardware it needs both a controller that breaks 4.10.1.1.2 and a cancel
+in that window. The remedy, if wanted, is Linux's: take the stopped TD
+from the Endpoint Context's TR Dequeue Pointer, which 4.6.9 promises is
+written before the completion (`xhci_get_hw_deq`, `trb_in_td`), not from
+the queue's head, and move the dequeue past it when it is cancelled. That
+touches the deferral's ownership of its TRBs and is not done here; it is
+an owner's question (task 43.64's report).
 
 **What is owed.** Nothing on hardware for the placement. No leg was run
 for this task: QEMU follows a Link without reading its Chain flag
