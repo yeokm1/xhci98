@@ -2586,6 +2586,12 @@ int tr_qual_get(TR_QUAL_CACHE *c, const char *key)
     return c->Val[i];
 }
 
+int tr_qual_room(const TR_QUAL_CACHE *c, const char *key)
+{
+    return c == NULL || key == NULL || c->N < TR_QUAL_MAX ||
+           tr_qual_find(c, key) >= 0;
+}
+
 int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
                 size_t n)
 {
@@ -2597,16 +2603,10 @@ int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
     }
     i = tr_qual_find(c, key);
     if (i < 0) {
-        if (c->N < TR_QUAL_MAX) {
-            i = c->N++;
-        } else {
-            for (i = 0; i < TR_QUAL_MAX && c->Seen[i]; i++) {
-            }
-            if (i >= TR_QUAL_MAX) {
-                i = c->Next % TR_QUAL_MAX;
-                c->Next = (i + 1) % TR_QUAL_MAX;
-            }
+        if (c->N >= TR_QUAL_MAX) {
+            return v;
         }
+        i = c->N++;
         tr_copy(c->Key[i], key, TR_FAST_KEY);
         c->Val[i] = -1;
         c->Tries[i] = 0;
@@ -2656,7 +2656,6 @@ void tr_qual_end(TR_QUAL_CACHE *c)
         n++;
     }
     c->N = n;
-    c->Next = 0;
 }
 
 int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f)

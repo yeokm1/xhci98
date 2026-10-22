@@ -2511,8 +2511,9 @@ static void test_qual_cache(void)
     tr_qual_end(&c);
     CHECK(tr_qual_get(&c, "f") == 0, "qual: f still settled");
 
-    /* Turnover in a full cache: the keys of the scan under way are never
-     * replaced by its new ones; the stale ones are. */
+    /* Turnover in a full cache, as the scan does it: every candidate
+     * present marked first (new ones before retained ones), then the end,
+     * then the requests. No retained key is lost. */
     memset(&c, 0, sizeof(c));
     tr_qual_begin(&c);
     for (i = 0; i < TR_QUAL_MAX; i++) {
@@ -2521,10 +2522,34 @@ static void test_qual_cache(void)
     }
     tr_qual_end(&c);
     CHECK_EQ(c.N, TR_QUAL_MAX, "qual: turnover: full");
-    tr_qual_begin(&c);
+    CHECK_EQ(tr_qual_room(&c, "x"), 0, "qual: full: a new key not asked");
+    CHECK_EQ(tr_qual_room(&c, "t3"), 1, "qual: full: a kept key may be");
+    tr_qual_put(&c, "x", hs, 10);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: full: nothing replaced");
+    CHECK(tr_qual_get(&c, "x") == -1, "qual: full: the new key not kept");
+    CHECK(tr_qual_get(&c, "t0") == -1, "qual: full: the first kept");
     {
         int j;
         int ok = 1;
+        tr_qual_begin(&c);
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (tr_qual_get(&c, key) != -1) {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            (void)tr_qual_get(&c, key);
+        }
+        tr_qual_end(&c);
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (!tr_qual_room(&c, key)) {
+                ok = 0;
+            }
+            tr_qual_put(&c, key, hs, 10);
+        }
         for (j = 0; j < 100; j++) {
             sprintf(key, "t%d", j);
             if (tr_qual_get(&c, key) == ((j % 2) ? 1 : -1)) {
@@ -2535,18 +2560,13 @@ static void test_qual_cache(void)
                 ok = 0;
             }
         }
-        for (j = 0; j < 500; j++) {
-            sprintf(key, "n%d", j);
-            tr_qual_put(&c, key, hs, 10);
-        }
-        tr_qual_end(&c);
         for (j = 0; j < 100; j++) {
             sprintf(key, "t%d", j);
             if (tr_qual_get(&c, key) != ((j % 2) ? 1 : -1)) {
                 ok = 0;
             }
         }
-        for (j = 0; j < 500; j++) {
+        for (j = 0; j < 400; j++) {
             sprintf(key, "n%d", j);
             if (tr_qual_get(&c, key) != 1) {
                 ok = 0;
@@ -2583,18 +2603,23 @@ static void test_qual_cache(void)
         CHECK(ok, "qual: answers kept, tries counted across scans");
     }
 
-    /* Full: the oldest replaced. */
+    /* Full of keys whose requests went unanswered and whose devices went
+     * away: every one kept, so none is asked again; a new key is not
+     * asked at all. */
     memset(&c, 0, sizeof(c));
+    tr_qual_begin(&c);
     for (i = 0; i < TR_QUAL_MAX; i++) {
         sprintf(key, "k%d", i);
-        tr_qual_put(&c, key, hs, 10);
+        tr_qual_put(&c, key, NULL, 0);
     }
-    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: full");
-    tr_qual_put(&c, "new", hs, 10);
-    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: no more than full");
-    CHECK(tr_qual_get(&c, "new") == 1, "qual: the newest kept");
-    CHECK(tr_qual_get(&c, "k0") == -1, "qual: the oldest dropped");
-    CHECK(tr_qual_get(&c, "k1") == 1, "qual: the next kept");
+    tr_qual_end(&c);
+    tr_qual_begin(&c);
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: failure keys all kept");
+    CHECK(tr_qual_get(&c, "k0") == 0 && tr_qual_get(&c, "k1023") == 0,
+          "qual: failure keys settled, not asked again");
+    CHECK_EQ(tr_qual_room(&c, "new"), 0, "qual: no room: the new key not asked");
+    CHECK_EQ(tr_qual_room(NULL, "a"), 1, "qual: NULL: room");
     CHECK(tr_qual_get(NULL, "a") == -1, "qual: NULL asks");
     CHECK(tr_qual_put(NULL, "a", hs, 10) == 1, "qual: NULL still answers");
     tr_qual_begin(NULL);

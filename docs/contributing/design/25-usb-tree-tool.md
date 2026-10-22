@@ -1350,7 +1350,8 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    `tr_fast_wants_qual` admits (the conditions above but the answer), and
    only when its key (item 4) has no settled answer kept from earlier
    refreshes (`TR_QUAL_CACHE`, room for one per port of the tool's model,
-   1024, `TR_QUAL_MAX`, so a candidate still connected is never dropped; `tr_qual_get`, `tr_qual_put`, `tr_qual_begin`,
+   1024, `TR_QUAL_MAX`; nothing in it is ever replaced, and a new key that
+   finds no room is not asked, `tr_qual_room`; `tr_qual_get`, `tr_qual_put`, `tr_qual_begin`,
    `tr_qual_end`, host-tested). A short or malformed answer is "Full Speed
    only" and is settled at once. No answer at all is not: the hub request
    gives one result for a STALL (a Full Speed-only device's answer) and
@@ -1365,8 +1366,9 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    Speed only" if it was not yet, so a device that went away after an
    unanswered request (perhaps with a controller recovery that request
    caused, if `xhci98.sys` could not withdraw it) is not asked again for
-   as long as the tool runs. A full store reuses a key the scan under way
-   has not seen before it drops the oldest (43.27, reviewed and
+   as long as the tool runs. The scan marks every candidate present before
+   it sends any request, so that dropping happens before a new key is
+   added (43.27, reviewed and
    revised 2026-10-22).
    On a root port a High Speed device runs at High Speed (every USB 2.0
    root port of an xHCI controller is High Speed), so a root port is

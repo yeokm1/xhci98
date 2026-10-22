@@ -6185,7 +6185,7 @@ static int fast_qual(int k, int ask)
 
     fast_key_of(k, key, sizeof(key));
     v = tr_qual_get(&qualCache, key);
-    if (v >= 0 || !ask) {
+    if (v >= 0 || !ask || !tr_qual_room(&qualCache, key)) {
         return v > 0 ? 1 : 0;
     }
     n = usb_desc(up[k].Hub, up[k].Conn.Port, 6, 0, 0, TR_QUAL_BYTES, &b);
@@ -6303,7 +6303,14 @@ static void fast_scan(void)
     fastOn = fast_setting();
     fastCount = 0;
     memset(&firstF, 0, sizeof(firstF));
+    /* The candidates present marked first, so the answers of those gone
+     * are dropped before any new one is asked (section 7.6 item 1). */
     tr_qual_begin(&qualCache);
+    for (k = 0; k < upCount; k++) {
+        TR_FAST f;
+        (void)fast_port(k, &f, 0);
+    }
+    tr_qual_end(&qualCache);
     for (k = 0; k < upCount; k++) {
         TR_FAST f;
         char key[TR_FAST_KEY];
@@ -6325,7 +6332,6 @@ static void fast_scan(void)
         tr_copy(keys[n], key, TR_FAST_KEY);
         n++;
     }
-    tr_qual_end(&qualCache);
     memcpy(fastKeys, keys, sizeof(keys));
     fastKeyN = n;
     if (fresh > 0 && first >= 0) {

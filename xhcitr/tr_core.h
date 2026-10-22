@@ -709,8 +709,9 @@ int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
  * answer. Zeroed is empty. */
 #define TR_QUAL_TRIES   3
 /* Room for a key per port of XHCITR's model (TR_MAX_UPORTS, checked where
- * the model is), so a candidate still connected is never dropped: a scan
- * keeps only the keys it saw. The oldest is replaced only past that. */
+ * the model is). Nothing is ever replaced: a key is dropped only by
+ * tr_qual_end, and a new key that finds no room is not asked
+ * (tr_qual_room). */
 #define TR_QUAL_MAX     1024
 typedef struct _TR_QUAL_CACHE {
     char Key[TR_QUAL_MAX][TR_FAST_KEY];
@@ -718,25 +719,27 @@ typedef struct _TR_QUAL_CACHE {
     int Tries[TR_QUAL_MAX];
     int Seen[TR_QUAL_MAX];
     int N;
-    int Next;
 } TR_QUAL_CACHE;
 
 /* The settled answer for key (1 or 0), marking it seen; -1 to ask. */
 int tr_qual_get(TR_QUAL_CACHE *c, const char *key);
 
+/* 1 when key has an entry or there is room for one: a request may be sent
+ * for it. */
+int tr_qual_room(const TR_QUAL_CACHE *c, const char *key);
+
 /* A request's n bytes for key: any bytes settle it (tr_qual_ok); none is a
- * try, settled as 0 at the TR_QUAL_TRIES'th. Returns the answer to use
- * now, 1 or 0. */
+ * try, settled as 0 at the TR_QUAL_TRIES'th. Kept only where
+ * tr_qual_room allows. Returns the answer to use now, 1 or 0. */
 int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
                 size_t n);
 
-/* A scan's start and end. The end drops the keys not seen since the start
- * that a device's answer settled; a key not seen that had a request go
+/* A scan's marking, before it sends any request: begin, tr_qual_get for
+ * every candidate present, end. The end drops the keys not marked that a
+ * device's answer settled; a key not marked that had a request go
  * unanswered is kept, and settled as 0 if it was not yet: the device went
  * away after an unanswered request (perhaps with a controller recovery
- * that request caused), so it is not asked again when it comes back. A
- * full cache reuses a key not seen in the scan under way before it
- * replaces the oldest. */
+ * that request caused), so it is not asked again when it comes back. */
 void tr_qual_begin(TR_QUAL_CACHE *c);
 void tr_qual_end(TR_QUAL_CACHE *c);
 
