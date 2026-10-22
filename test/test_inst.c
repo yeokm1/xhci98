@@ -4858,6 +4858,41 @@ static void test_vsd(void)
           "Stor98 unticked: greyed and unticked");
     CHECK(!inst_vsd_box(0, 1, 1, 0, &shown, &open) && shown && !open,
           "another system: shown greyed, never ticked");
+    /* The default on every route (owner, 2026-10-22): ticked whenever
+     * Stor98 is, unticked with it, a fresh install and an update alike
+     * (neither the box nor the mode reads what is installed). Stor98's
+     * decision on 98 SE (tb in the run): the window and Enter give Y,
+     * /yes Y, /stor98 Y, /nostor98 N; the layer follows. */
+    {
+        int askedS;
+        int defS;
+        int s98;
+
+        s98 = inst_s98_decide(1, 1, 0, 0, 0, 0, 0, &askedS, &defS);
+        CHECK(askedS && defS && inst_vsd_box(1, 1, defS, 0, &shown, &open),
+              "window/console: Stor98 [Y], the layer ticked with it");
+        s98 = inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &askedS, &defS);
+        CHECK(!askedS && s98 && inst_vsd_box(1, 1, s98, 0, &shown, &open),
+              "/yes: Stor98 Y, the layer ticked");
+        s98 = inst_s98_decide(1, 1, 0, 1, 0, 0, 0, &askedS, &defS);
+        CHECK(!askedS && s98 && inst_vsd_box(1, 1, s98, 0, &shown, &open),
+              "/stor98: Stor98 Y, the layer ticked");
+        s98 = inst_s98_decide(1, 1, 1, 0, 1, 0, 0, &askedS, &defS);
+        CHECK(!s98 && !inst_vsd_box(1, 1, s98, 0, &shown, &open) && !open,
+              "/yes /nostor98: Stor98 N, the layer unticked and greyed");
+        s98 = inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &askedS, &defS);
+        CHECK(s98 && !inst_vsd_box(1, 1, s98, 1, &shown, &open) && open,
+              "/yes /nos98vsd: Stor98 Y, the layer unticked, open");
+        s98 = inst_s98_decide(1, 0, 1, 0, 0, 0, 0, &askedS, &defS);
+        CHECK(!s98 && !inst_vsd_box(1, 1, s98, 0, &shown, &open),
+              "/yes without the Thunderbolt support: neither");
+        CHECK(inst_vsd_mode(1, 0, 1, 1, 0, 1) == INST_VSD_SELECTED,
+              "an update with Stor98 installed and ticked: selected");
+        CHECK(inst_vsd_mode(1, 0, 1, 0, 1, 0) == INST_VSD_DESELECTED,
+              "Stor98 unticked and removed: the layer removed with it");
+        CHECK(inst_vsd_mode(1, 0, 1, 0, 0, 0) == INST_VSD_INACTIVE,
+              "Stor98 unticked and kept: the layer kept with it");
+    }
     CHECK(!inst_vsd_box(1, 0, 1, 0, &shown, &open) && !shown && !open,
           "no S98VSD.VXD in the package: not shown");
 
