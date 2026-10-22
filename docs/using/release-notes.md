@@ -163,6 +163,44 @@ included.
   of it is in this package. An install of this package replaces it, because both are
   called `xhci98.sys`.
 
+## The xHCI98 Disk Benchmark (new in `3.2.0.0`)
+
+`XHCIPERF.EXE`, and `XHCIPF64.EXE` on 64-bit Windows, in `tools\xhciperf\`
+and, after an install, in the install directory beside the USB Tree
+(roadmap-usb4 task 43.50, design record 29). It measures a local disk
+through a test file of its own, `XHCIPERF.TMP` in the folder you choose,
+which it deletes afterwards; it never writes to a disk any other way and
+refuses network, CD and DVD drives and the Windows folder. It keeps a
+reserve of free space (64 MB, or on the drive Windows runs from the larger
+of 512 MB and a tenth of the drive).
+
+- **Tests:** presets (Standard; Standard for Windows 98 and ME; a
+  request-size study for 98 and ME; a size sweep; Quick) and every
+  parameter of its own: file size, passes, time, read or write or both,
+  unbuffered or cached, write-through, aligned, offset or scattered
+  buffers, a verifiable pattern checked after each write, depth and
+  threads.
+- **Windows 98 SE and ME:** queue depth is 1 there (Win32 file I/O waits
+  for each request); threads are offered and the Stor98 page shows whether
+  their requests overlapped. A 1 MiB unbuffered request is cut by the
+  system into 63 KiB pieces before Stor98 sees it, and a 128 to 512 KiB
+  one too when its buffer is physically fragmented; the Stor98 page shows
+  it.
+- **Stor98:** where the bundled Stor98 drives the disk, the Stor98 page
+  shows what reached the drive during each test - the sizes of the
+  requests Stor98 received and of the commands it sent, its splits, the
+  depth reached, and on 98 SE and ME what the system's disk layer handed
+  over. It counts everything on that disk, from any program. On Windows
+  2000 and later it needs administrator rights; on 98 SE and ME Windows'
+  ASPI layer, which they install. No other driver is changed.
+- **Results:** a summary grid and a per-size chart in MB/s (or MiB/s),
+  requests per second and the mean time per request; copied as text,
+  saved to a file, and a saved file compared with a new run measured the
+  same way.
+- **Not read yet:** the virtual-machine legs and the owner's hardware
+  (record 29 section 14); the tool has been built and its pure half
+  host-tested only.
+
 ## What `3.1.0.0` changes
 
 This section collects the changes made for the next release, `3.1.0.0`,

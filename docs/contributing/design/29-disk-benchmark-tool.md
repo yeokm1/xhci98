@@ -1407,3 +1407,59 @@ Every question draft 8 left for the owner is answered: the Stor98 change
 of section 7 is approved as Stor98's decision MD-8, the 9x ASPI carrier
 included pending P.0; threads are offered on 98 SE and ME with the note;
 the names, the title and the XHCITR entry stand as section 13 says.
+
+## 15. As built (2026-10-22)
+
+The code of task 43.50 on branch `p43-50`, written against draft 9. What
+it built differently from the sections above, or settled where they left
+a choice:
+
+- **P.0, read statically.** Stock 98 SE and ME install `WNASPI32.DLL` and
+  `APIX.VXD` (their Setup's `subase.inf`, `[winbase]`), but `APIX.VXD`
+  carries the fixed string "OEM SCSI HBA", so the ASPI adapter identity of
+  section 6.2 is not shown to name the miniport (`legal-provenance.md`
+  section 4, the row for this reading). The adapter is therefore proved
+  Stor98's by the target itself: Stor98 lists a vendor INQUIRY page,
+  `C9h`, in page `00h` and answers it with its signature, version and PCI
+  location (`stor98pf.h`, "The identity page"; Stor98 MD-8's P.0 note).
+  The 9x reader sends READ BUFFER only to a target that answered page
+  `C9h`, and matches the disk to it by the `Enum\SCSI` devnode holding the
+  drive letter (`CurrentDriveLetterAssignment`) whose device id contains
+  the target's INQUIRY vendor and product; two matches give "could not be
+  told apart". INQUIRY and its pages are what the system itself sends
+  every target, so asking them is safe. Live on P.5.
+- **Stor98** (`cf223a2f`): as section 7, with the totals counted where
+  section 6.3 says - data SRBs at `HwStartIo`'s entry (`EngPfSrbIn`), the
+  physical runs of each request from the spans `EngMapCaller` already
+  translates (no extra walk; a bounced child marks the request "not
+  seen"), commands at issue, errors and run classes where the parent
+  finishes - the 9x DCB facts through `Sg9xDcbFacts`, the epoch from the
+  time-stamp counter at a `HwFindAdapter` that is not a resume, and the
+  answer built into the device extension (`PfAnswer`) in `HwStartIo`.
+  Host tests `pfstat_ut`, `sg9x_ut` and `inqid_ut`; Stor98's own build of
+  every target; the amd64 warning count unchanged.
+- **The pure half** (`30e5e0ed`): the latency histogram's 64 buckets
+  each four thirds of the one before, from 1 us; the FAT limit 1 GiB of
+  region (section 3.1); exit code 2 for a bad command line as for a
+  refused run.
+- **The window**: Depth and Threads offer "Preset" (each test's own) or
+  one value for every test; the custom test list of section 3.7 and named
+  presets are not built - File > Keep these settings keeps one set for
+  the next start; the preparation shows its progress in the status bar and
+  there is no progress bar; the `DBT_DEVICEQUERYREMOVE` notice of section
+  4.4 is not built (the open file still makes Windows refuse the
+  removal); `CancelIo` from the issuing worker is the only cancel used.
+- **XHCITR**: Action > Disk benchmark... starts the benchmark beside it
+  (the install directory) with `/folder` and the selected disk's first
+  drive letter (`xhcitr\xhcitr.c` `bench`).
+- **The installer**: the benchmark of the machine's architecture is one
+  of the installer's own files (`own_names`, `inst_eng.c`), copied from
+  `tools\xhciperf\` by their route and removed by the uninstall with them;
+  the Components page's text is unchanged.
+- **Packaging**: `make-release.ps1` stages `tools\xhciperf\` (`-PerfToolDir`,
+  `-SkipPerfTool`) with the freshness, shared-version and file-version
+  checks, a readme and a `NOTICE.TXT`; `test-package.ps1`'s tools list and
+  `build-driver.cmd`'s rebuild and self-test follow.
+- **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
+  virtual machines or the owner's hardware; until then the tool is built,
+  gated and host-tested only.

@@ -255,6 +255,11 @@ xhcitr/         The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`), the
                 engine, moved; `docs/contributing/snapshot-reader.md` is
                 the route's reference); `xhcitr/README.TXT` is its guide.
                 Tracked.
+xhciperf/       The xHCI98 Disk Benchmark (`XHCIPERF.EXE`, `XHCIPF64.EXE`),
+                a file-based disk benchmark with a window that also reads
+                Stor98's counters, from `3.2.0.0` (roadmap-usb4 task
+                43.50, design record 29); `xhciperf/README.TXT` is its
+                guide. Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -782,8 +787,9 @@ rules that bind day-to-day work, and none of them is optional.
   "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP` up to
   `3.0.0.0`, from `2.4.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0`
-  `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, and from `3.1.0.0`
-  `XHCIWIZ` and `XHCIWZ64`) carry statically linked runtimes (section 2a).
+  `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, from `3.1.0.0`
+  `XHCIWIZ` and `XHCIWZ64`, and from `3.2.0.0` `XHCIPERF` and `XHCIPF64`)
+  carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh
