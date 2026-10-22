@@ -4364,6 +4364,12 @@ static void test_storage(void)
     CHECK(inst_stor_scan(0, 0, 0) == 0, "scan: none, every INF read");
     CHECK(inst_stor_scan(0, 1, 0) == -1 && inst_stor_scan(0, 0, 1) == -1,
           "scan: an unread INF or a listing cut short is unknown");
+    CHECK(inst_stor_pair_warn(INST_STOR_PAIR_STOR) && inst_stor_pair_warn(-1),
+          "pair left: USBSTOR.INF alone, or unread, is a step");
+    CHECK(!inst_stor_pair_warn(INST_STOR_PAIR_BOTH) &&
+          !inst_stor_pair_warn(INST_STOR_PAIR_NONE) &&
+          !inst_stor_pair_warn(INST_STOR_PAIR_NTMAP),
+          "pair left: both, neither or USBNTMAP.INF alone is not");
 
     /* An update with Source recorded: the engine's later copies, and a
      * file of the download's bytes the first run found and kept, are this

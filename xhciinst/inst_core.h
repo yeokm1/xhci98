@@ -1758,6 +1758,10 @@ int inst_stor_half(int pair, int placed);
  * or text), unread (an INF whose text could not be read) and incomplete
  * (a listing that ended in an error): 1 found, -1 unknown, 0 none. */
 int inst_stor_scan(int found, int unread, int incomplete);
+/* 1 when the INF directories' pair (an INST_STOR_PAIR_* or -1 unread),
+ * after a withdrawal or the uninstall's INF step, must be said as a step:
+ * USBSTOR.INF without USBNTMAP.INF, or not known. */
+int inst_stor_pair_warn(int pair);
 /* The SilentClasses entries the storage row adds on 98 SE (record 26
  * section 6.5.12, task 43.42 option A): USBSTOR.INF's generic Bulk-Only
  * lines, each a 4-byte entry of design record 13 section 6.11's form. */

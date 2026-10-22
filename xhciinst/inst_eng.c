@@ -5240,7 +5240,7 @@ static int flat_remove_list(const char *dir, const char *lst)
     if (late) {
         join(file, sizeof(file), dir,
              instStorFile[INST_STOR_IDX_USBSTOR_INF].Name);
-        if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+        if (file_state(file) != 0) {
             out("%s stays while %s is there.\n",
                 instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name, file);
             left = 1;
@@ -5322,7 +5322,7 @@ static int flat_drop_work(const char *dir)
         if (late) {
             join(file, sizeof(file), dir,
                  instStorFile[INST_STOR_IDX_USBSTOR_INF].Name);
-            if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+            if (file_state(file) != 0) {
                 left = 1;
             } else {
                 join(file, sizeof(file), dir,
@@ -17578,6 +17578,25 @@ static int stor_unplace(void)
     return 1;
 }
 
+/* 1 when the INF directories hold USBSTOR.INF without USBNTMAP.INF, or
+ * cannot be read: said (record 26 section 6.5.5). */
+static int stor_pair_left(void)
+{
+    int pair = inst_stor_pair(stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                              stor_inf_found(INST_STOR_IDX_USBNTMAP_INF));
+
+    if (!inst_stor_pair_warn(pair)) {
+        return 0;
+    }
+    logonly("storage: the INF directories' pair is %d\n", pair);
+    out("USBSTOR.INF is still in the INF directory without USBNTMAP.INF%s.\n"
+        "Plug in no new USB disk until both or neither are there: Windows' "
+        "own NTMAP.INF\nwould take it and stop Windows. Run the installer "
+        "again, or remove that copy\nof USBSTOR.INF.\n",
+        pair < 0 ? " (the directory could not be read whole)" : "");
+    return 1;
+}
+
 /* 0 when the run must stop before the package's copy: an earlier
  * deployment could not be withdrawn from DevicePath. */
 
@@ -17625,6 +17644,12 @@ static int stor_run_begin(void)
             "again.\n");
         flagFailed = 1;
         return 0;
+    }
+    /* With the package directory off DevicePath, a copy of USBSTOR.INF
+     * the setup engine made in INF\OTHER may be left with no USBNTMAP.INF
+     * findable (record 26 section 6.5.5): said, a step. */
+    if (storWithdrawn && !opts.List && stor_pair_left()) {
+        storStepsLeft = 1;
     }
     storSourceOff = storSource && !storCopyOk;
     return 1;
@@ -19177,7 +19202,8 @@ static int stor_un_rest(void)
                     continue;
                 }
                 if (opts.List) {
-                    out("(/list) %s would be deleted.\n", name);
+                    out("(/list) %s would be deleted%s.\n", name, pass == 1 ?
+                        ", once no copy of USBSTOR.INF is left" : "");
                     i++;
                     continue;
                 }
@@ -19214,6 +19240,10 @@ static int stor_un_rest(void)
                 }
             }
         }
+    }
+    /* Neither half alone left where Windows finds it (section 6.5.5). */
+    if (!opts.List && stor_pair_left()) {
+        flagSteps = 1;
     }
     /* The files, last. */
     for (i = 0;;) {

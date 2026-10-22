@@ -6221,6 +6221,11 @@ int inst_stor_scan(int found, int unread, int incomplete)
     return (unread || incomplete) ? -1 : 0;
 }
 
+int inst_stor_pair_warn(int pair)
+{
+    return pair < 0 || pair == INST_STOR_PAIR_STOR;
+}
+
 static void inst_stor_names(char *out, size_t cap,
                             const int st[INST_STOR_COUNT])
 {

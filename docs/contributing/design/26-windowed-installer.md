@@ -1662,7 +1662,8 @@ Windows can find them:
 - **`%windir%\INF`** (section 6.5.11): `USBNTMAP.INF` placed first and
   `USBSTOR.INF` only once a `USBNTMAP.INF` is in place there
   (`instStorCopyOrder`); when the run ends its placement with one of the
-  two there and this run placed it, the one placed is withdrawn under
+  two there and the record's `Placed` names it (this run's placement or
+  an earlier one's; `inst_stor_half`), the one placed is withdrawn under
   section 6.5.4's protections, the package directory on `DevicePath`
   stays the route, and a step is left (exit 4); a half that is not this
   installer's (another's `USBSTOR.INF` alone) is never deleted, and also
@@ -1686,6 +1687,16 @@ Windows can find them:
   recorded for the next, and in the uninstall its record goes (it is
   left as another's would be). A reading that fails stops the
   withdrawal as before, and leaves the uninstall's copy for its next run.
+  The presence scan is strict (`inst_stor_scan`): an INF whose text
+  cannot be read, or a listing cut short, reads as unknown and keeps
+  `USBNTMAP.INF`. After a withdrawal that took the package directory off
+  `DevicePath`, and at the end of the uninstall's INF step, the INF
+  directories are read once more: a copy of `USBSTOR.INF` left there with
+  no `USBNTMAP.INF` (the setup engine's `INF\OTHER` copy of an earlier
+  deployment, which then had `USBNTMAP.INF` only through `DevicePath`),
+  or a reading that fails, is said with the advice to plug in no new USB
+  disk until both or neither are there, and a step is left
+  (`inst_stor_pair_warn`); nothing more is deleted for it.
 
 **Absent devices** bind at their first plug through Windows' own
 detection. Until draft 19 that was from the package directory on
