@@ -1,6 +1,8 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 10, 2026-10-22, reviewed and revised (the double buffer's
+Status: draft 11, 2026-10-22, reviewed and revised (the sense-fetch
+leg's stimulus, a test-only Stor98 build); draft 10, 2026-10-22, reviewed
+and revised (the double buffer's
 substitution order a hyp, `SCSIPORT.PDR`'s own requests compared in the
 three builds with a leg provoking the sense fetch, the provenance row for
 the new readings); draft 9, 2026-10-22 (D8 the owner's: the layer follows Stor98's
@@ -1111,13 +1113,22 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
    Stor98 for that request (its counters), no hang and no second
    completion, the IOR's fields as they came, and the next request
    compares clean.
-10. **`SCSIPORT.PDR`'s own sense fetch** (section 2.3 item 3): a
-   check condition returned without autosense (a pass-through request with
-   `SRB_FLAGS_DISABLE_AUTOSENSE` set and a failing CDB, through Stor98's
-   test client), on 98 SE with the gold and the QuickInstall `SCSIPORT.PDR`
-   and on ME: the fetch completes with the kept sense, the `qemu` build of
-   Stor98 logs it answered in software, and no physical translation is
-   made for it.
+10. **`SCSIPORT.PDR`'s own sense fetch** (section 2.3 item 3). Stor98's
+   pass-through clients cannot set SRB flags on 9x (Stor98
+   `docs/TESTING.md`), so the stimulus is a test-only Stor98 build in the
+   pattern of its `STOR98_TEST_BOUNCE`: `STOR98_TEST_NOAUTOSENSE=N`
+   completes every N-th read with `SRB_STATUS_ERROR`, check-condition
+   status, the sense kept and `SRB_STATUS_AUTOSENSE_VALID` clear, the
+   condition on which `SCSIPORT.PDR` fetches the sense itself [hyp: the
+   trigger is read in `SCSIPORT.PDR`'s completion path, before the leg,
+   and recorded with the provenance row]. On 98 SE with the gold and the
+   QuickInstall `SCSIPORT.PDR` and on ME, with this layer installed: the
+   build's debug-port log shows a `REQUEST SENSE` arriving with its
+   `DataBuffer` inside an IOP of `SCSIPORT.PDR`'s (the evidence that the
+   port made it), answered in software, and no `ScsiPortGetPhysicalAddress`
+   call for it (the build logs each call's SRB), and the read is retried
+   and the file compares clean. The test build is part of the code step's
+   scope, under Stor98's `AGENTS.md`; it is never packaged.
 
 On the owner's real hardware: the throughput before and after
 (roadmap 43.46's last clause), the owner's.
