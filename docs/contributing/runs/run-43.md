@@ -354,6 +354,303 @@ class key, off the disk after a clean shut down:
 
 - A refused function of a composite device (`&MI_nn`): host vectors only.
 
+## 43.18 - The 9x Link-Down Statement's Gate-G3 Readings on 98 SE and ME
+Task 43.18 of `roadmap-usb4.md`, the third of the owner's answers of
+2026-10-22 ("What 43.18 left" in the decisions table): the gate-G3
+readings of the 9x link-down statement, one per system, on a trial build
+in emulator guests, each system that passes admitted. Read on
+2026-10-22. (A file of its own because `run-43.md` lives on another
+branch; the two are joined at the merge. Record 21 section 7.2 part 2
+names `run-42.md` for these readings; this sheet holds them instead.)
+
+**On `E:\...` paths here.** They say where a reading was kept on the host
+that took it; they are not files a clone has.
+
+### Verdict
+
+**Both systems pass; both are admitted** (`cm_eject.c`,
+`CM_EJ_QUALIFIED_98SE` and `CM_EJ_QUALIFIED_ME` set to 1). On 98 SE under
+the ICM client and on ME under the USB4 profile, at every point read, the
+statement (the entry marked `DOWN_QUIESCED`) came after the emulator's
+stage-2 reset and quiesce of the endpoint, the acknowledgement wait ended
+after the statement, and the vanished child's `CM_Query_Remove_SubTree`
+came after the wait's end. Every wait but one ended acknowledged, in 41
+to 220 ms; the one that did not is described under ME, run C2: a
+system-modal error screen Windows put up stopped every thread, the
+connection manager's included, and the answer that came after it counted
+as late. The ordering held there too.
+
+### The vehicle
+
+- Development host A, QEMU under TCG, headless, one vCPU per guest
+  (`pentium3,-apic`), 256 MB; `usb4-emu` at `660f085` (the emulator's
+  SHA-256 prefix `9dfdcf9b`), with `-device usb4-debug-port` for the
+  stage codes and `-trace usb4_tp_*`, `usb4_dbg_*`, `usb4_h_*`.
+- **98 SE**: the 3.0.0.0 image, the Alpine Ridge topology of the ICM
+  client (`profile=tb3-alpine-ridge`, the TB3 PCI bridges, an SHPC tunnel
+  bridge), updated with the published `3.1.0.0` package,
+  `INSTALL /console /yes /thunderbolt /stor98`, the enclosure plugged
+  (Windows' files the install asked for skipped or pointed at
+  `C:\XHCI98`), then restarted.
+- **ME**: the 3.1.0.0 image with the Thunderbolt driver and Stor98 of
+  the joint legs, the generic USB4 topology (`profile=usb4-generic`, two
+  tunnel ports), an ASM2464 USB4 enclosure.
+- The NVMe drive: a 128 MiB FAT image, enclosure `enc0` hot-plugged after
+  the desktop on both; a 16 MiB file of random data copied onto it as
+  `E:\BIG.BIN`. Stor98: the bundled 3.1.0.0 build on both.
+- **The trial build** (never committed): the `qemu` flavour of
+  `xhcicm.sys` from a `git archive` of `p43-18` at `e620f8bf`, with both
+  systems admitted and three stage codes written to the debug port (code
+  at `5A0h`, argument at `5A4h`): `0x1C0` an entry marked
+  `DOWN_QUIESCED` (argument generation, bus, slot), `0x1C1` an entry's
+  acknowledgement wait ended (argument `CM_NVLINK_AW_*` << 8 | entry: 1
+  acknowledged, 5 late), `0x1C2` the CONFIGMG worker's
+  `CM_Query_Remove_SubTree` of the vanished child (argument the devnode).
+  SHA-256 prefix `7901ed4d`, copied over the installed `xhcicm.sys`, then
+  a cold restart.
+- **The stage-2 event**: `usb4_tp_cutoff` ("stage 2 complete"), the
+  emulator's endpoint reset and quiesce at the tunnel down. Times below
+  are virtual time from it. The unplug is `device_del enc0`; a held read
+  is the harness's `x-faults` rule `at=fetch op=read ... act=hold`, the
+  unplug issued over QMP as soon as `x-harness-state` shows the read held
+  (`E:\xhci98-vm\p43-18g3\scripts\holdunplug.py`); the re-plug leg unplugs
+  as soon as `cm.nvlink.up=` reaches the debug console
+  (`plugunplug.py`). The load is `copy /b E:\BIG.BIN NUL` in an MS-DOS
+  Prompt, after a re-plug so that the file is not in the cache.
+- The host was shared with other guests and builds (CPU near 97 % by
+  midday): the times are the guests' virtual time and what they show is
+  the order; their sizes are noisy.
+
+### Results
+
+| System, leg | 0x1C0 statement | 0x1C1 wait end | 0x1C2 query-remove | Driver's lines |
+|---|---|---|---|---|
+| 98 SE, idle unplug | +68 ms | +171 ms, acknowledged | +178 ms | `cm.nvlink.icm-down=000B0400`, `cm.nvlink.await=0000006E` (110 ms), query and removal 0 |
+| 98 SE, unplug with the file read from the cache (no read reached the drive) | +201 ms | +257 ms, acknowledged | +267 ms | `await=00000037` (55 ms) |
+| 98 SE, the 20th read held at its fetch, unplugged 3 ms after | +116 ms | +165 ms, acknowledged | +172 ms | `await=00000029` (41 ms); the query vetoed (`0x17`, the copy holds the file open) |
+| 98 SE, every read held (`repeat=on`), unplugged 1.5 s after the first | +63 ms | +128 ms, acknowledged | +134 ms | `await=00000037` (55 ms); query vetoed |
+| 98 SE, re-plug, unplugged 3 ms after `cm.nvlink.up` (1.34 s after the plug) | +219 ms | +372 ms, acknowledged | +378 ms | `await=00000097` (151 ms); query and removal 0 |
+| ME, idle unplug | +243 ms | +458 ms, acknowledged | +463 ms | `cm.nvlink.u4-down=000B0000`, `await=000000DC` (220 ms), query and removal 0 |
+| ME, the 20th read held at its fetch, unplugged 2 ms after | +271 ms | +323 ms, acknowledged | +329 ms | `await=00000036` (54 ms); query vetoed |
+| ME, every read held, unplugged 1.5 s after the first | +107 ms | +216 ms, acknowledged | +222 ms | `await=0000006E` (110 ms); query vetoed |
+| ME, run C2: every read held, two MS-DOS Prompts reading, unplugged 6.3 s after the first | +229 ms | +72 311 ms, late | +72 317 ms | `await=000118AE`; a system-modal "Disk Write Error" screen up from the unplug until a key was pressed (below) |
+| ME, re-plug, unplugged 2 ms after `cm.nvlink.up` (3.31 s after the plug) | +222 ms | +275 ms, acknowledged | +280 ms | `await=00000037` (55 ms); query and removal 0 |
+
+Every leg: `cm.nvlink.down` once, `cm.nvlink.retired` after the wait,
+then the query; the re-plug that followed published `UP` again under a
+new generation. In each leg with a held read the copy failed with
+Windows' own "General failure reading drive E" or "The volume that was
+removed had open files" and Windows ran on.
+
+**The queue depth.** The held reads never went past one: an MS-DOS copy
+reads one request at a time, and a second MS-DOS Prompt reading another
+file on the same drive (run C2) did not add a second request at the
+drive while the first was held. "A saturated queue", as record 21 section
+7.2 part 2 asks for it, is not reachable this way on 9x; the most it
+reached is a held request with more behind it in Windows. **Owner's
+decision, 2026-10-22:** the one-request reading meets the "saturated
+queue" point on 98 SE and ME.
+
+**ME, run C2.** After the unplug Windows put up its system-modal "Disk
+Write Error" screen for drive E (what it was writing was not read). While it was up, nothing ran: the statement was made
+before it (+229 ms) but the 50 ms pass that ends the wait did not run
+until the key was pressed, 72 s later, and then found Stor98's answer
+past the 3 s bound (`CM_NVLINK_AW_LATE`). The removal still came after
+the wait's end, and the ordering held. A system-modal screen stops this
+driver's wait on 9x as it stops Windows; that is the systems' own
+behaviour, not something the driver can shorten.
+
+**Not a leg: the harness's surprise rule on the USB4 profile.** A rule
+`act=surprise` takes the tunnel down without unplugging the enclosure's
+router. On ME the USB4 connection manager saw nothing (its down comes
+from the router's hot-unplug); when the enclosure was removed 2.7 minutes
+later it found the function already gone and withheld the statement
+(`cm.nvlink.withheld=03000002`), as the condition says. Every unplug
+above is a `device_del` of the enclosure.
+
+### What it changes
+
+Both systems admitted in `cm_eject.c`; a host vector checks it
+(`test_cm_eject`), and `test_ej9x` checks that the tools' refusal for a
+drive with no Stor98 channel tells the user to shut Windows down before
+unplugging it. The statement's other conditions are unchanged: the
+emulator's bridge, one member under the ICM client, the known
+correspondence under the USB4 profile, so on hardware no statement is
+made. The admission also opens the two eject paths that needed it on 9x
+(the failed branch's isolation, the USB4 profile's clean-removal teardown
+with its `DOWN_QUIESCED`); those are read by 43.19's legs.
+
+The guests' logs: `E:\xhci98-vm\p43-18g3\keep` (`trace-*.log`,
+`debugcon-*.log`).
+
+### 43.19, first legs: `XHCIINST /eject` on 98 SE and ME (2026-10-22)
+
+After the admission's commit (`fef563af`), the same guests with that
+commit's gated `qemu` build of `xhcicm.sys` (from the `scripts\build-driver.cmd all`
+run that passed, SHA-256 prefix `e3697476`) and its `XHCIINST.EXE` copied
+in (`XHCITR.EXE` was not: the tray had it open on 98 SE), a cold restart,
+the enclosure plugged, then `XHCIINST /eject 1` and `Y`, then the unplug.
+Not 43.19's whole: XHCITR's Safely Remove, the two-port legs and 42-A.14
+are not read.
+
+| System | What the tool said | The driver's lines |
+|---|---|---|
+| 98 SE, ICM client | "Asked the Thunderbolt driver to stop the device. Windows has stopped Stor98 Storage Controller for NVMe SSDs. ... You can now unplug the device.", exit 0 | `cm.eject.accepted`, the query (`cm.eject.call=41..`), the request (`42..`, `cm.eject.request=00000100`: Stor98's `RemoveAck`), the removal (`43..`), `cm.eject.result=080291E0`: step 8 removed, outcome 2 clean; no teardown (decision V8) |
+| 98 SE, the unplug after it | - | the statement made on the tunnel down, and its wait ran to the 3 s bound (`cm.nvlink.await.end=00000400`, timeout, `await=00000BE8`): the drive's Stor98 had already been removed by the eject, so nothing could answer. Only the member's re-enumeration waited; there was no vanished child to remove |
+| ME, USB4 profile | the same words, exit 0 | the same steps, then the teardown the admission opens: `u4.eject=00000100`, the tunnel taken down (`admin-down` in the emulator's trace, its stage-2 event), `cm.eject.teardown=00002801`, `cm.nvlink.down=00000001` and `cm.eject.mark=00000001` (the entry's `DOWN_QUIESCED`), the entry retired; `cm.eject.result=0802BA4A`, clean. The unplug after it logged nothing (the tunnel was already down), and a re-plug brought the drive back with a new generation (`cm.nvlink.up=02000101`) |
+
+**Finding (98 SE, for 43.19):** after a clean eject under the ICM client,
+the unplug's statement waits the full 3 s for an acknowledgement no
+Stor98 can give, because the entry still reads `UP` after the eject
+removed the drive's Stor98 (under the USB4 profile the teardown retires
+the entry first). It delays only the member's re-enumeration, by the 3 s
+acknowledgement deadline when Windows schedules the driver's 50 ms pass
+on time; the deadline bounds what counts as an answer, not when the wait
+is next looked at, so a stalled 9x scheduler can hold it far longer (as
+run C2's 72 s shows).
+**Fixed the same day on the owner's answer** (below, "The 3 s wait after
+a clean eject").
+
+**ME between the two sessions.** The ME guest, paused over QMP for about
+an hour while the builds ran and then resumed, was found with a black
+text-mode screen and the processor in the VMM, not answering keys; it
+was quit and cold-started. Whether this is the hang task 43.49 reads (not
+the same trigger: no plug cycles were running) is not read here.
+
+### The 3 s wait after a clean eject (2026-10-22)
+
+The owner's answer to the 98 SE finding above: fix it in 43.18. A
+removal that ends clean with an entry and no teardown to follow (the
+firmware connection manager, decision V8) now takes the entry from `UP`
+to `IN_USE` alone after the removal (`CM_EJ_P_RETIRE`,
+`CmNvlinkRetireEjected`): no `DOWN_QUIESCED`, no wait, the generation
+kept. ME under the USB4 profile does not share the cause (its teardown
+retires the entry first); NT does not either (Windows ejects there, and
+the driver is not told that Stor98 left), and neither is changed. The
+same change makes the eject's own statements take the whole
+qualification: the member must read as the emulator's bridge, not only
+the systems be admitted (`CmEjStatementQualified`, logged as
+`cm.eject.emulator`).
+
+**The retake, 98 SE under the ICM client.** The same guest and overlay as
+the first leg, with the uncommitted tree's gated `qemu` build of
+`xhcicm.sys` (`scripts\build-driver.cmd all`, x86, passed; SHA-256 prefix
+`a9e38b90`) copied over the installed one and a cold restart; the host
+loaded by other agents' guests and an amd64 gated build. The enclosure
+plugged (`cm.nvlink.up=01000401`), then `XHCIINST /eject 1` and `Y`:
+the same words, exit 0. The driver's lines: `cm.eject.emulator=00020802`
+(member 02:08, read as the emulator's bridge), the query, the request and
+the removal as before, `cm.eject.retire=00000001` (entry 0 retired), then
+`cm.eject.result=08025107` (removed, clean). The unplug: the tunnel down,
+the statement decided (`cm.nvlink.9x.decided=00000200`), and then no
+`cm.nvlink.down` and no wait: the member's re-enumeration ran at once
+(`cm.reenum.held.run`), where the first leg logged
+`cm.nvlink.await.end=00000400` and `await=00000BE8`. A re-plug brought the
+drive back with a new generation (`cm.nvlink.up=02000401`) and `dir E:\`
+listed its files. Logs: `E:\xhci98-vm\p43-18g3\keep\debugcon-w98-r2.log`,
+`trace-w98-r2.log`.
+
+## 43.21 - the unexpected-removal notice, leg T.11 (2026-10-22)
+Roadmap 43.21; design record 25 section 7.6 (revision 16) and leg T.11 in
+its section 11.
+
+**Verdict: done** (2026-10-22, ticked on the owner's approval). Every leg
+that can be read on the emulator passes on 2000, XP, XP x64, Vista x86,
+7 x86, 7 x64 and 98 SE. Two parts are recorded as not readable here, as
+43.45's resumes were:
+
+- A chain's first device unplugged. The emulator's chained routers exist
+  only under the software connection manager's `usb4-generic` profile on
+  q35; on the `pc` machine every NT guest uses, one tunnel-bridge level is
+  reachable, so a unit behind a chained router never appears on the PCI
+  side (usb4-emu `docs/XHCI98-HANDOFF.md`, "Chained PCIe tunnel"). It is
+  listed for the owner's session on real hardware.
+- Sleep on 2000 and XP: those images have no standby or hibernate.
+
+One defect was found and fixed during the legs: on XP the warning balloon
+never showed, because the unit's "disconnected" balloon of the same poll
+replaced it at once. Commit `b03d4422` puts a due warning and the other
+events of that poll in one balloon under the warning title. Every leg
+after that fix ran with its XHCITR; the 2000 legs before it were retaken
+for the main case.
+
+### Build
+
+Branch `p43-21`. Gated `build-driver all` passed for x86 and amd64 at
+`b03d4422` (x86 `qemu` `xhcicm.sys` `9FE8E826...`, release `B3C59BCE...`;
+amd64 `qemu` `5A766C66...`, release `77CF75FF...`; `test_tr` host vectors
+pass). The x86 guests ran the `qemu`-flavour `xhcicm.sys` of `1b27ce1d`
+(`B463877F...`); `b03d4422` changed no driver source, only XHCITR, its
+tests and documents. XHCITR was the gated `b03d4422` build (`5B85735C...`)
+on every NT leg but the first 2000 boot and the first XP boot, which found
+the defect. The 98 SE guest ran `1b27ce1d`'s XHCITR: `b03d4422` changes only
+a poll with a warning, which 98 SE never has.
+
+### The vehicle
+
+Development host A, QEMU TCG under heavy load from other guests (CPU near
+97 %). The usb4-emu build copied from task 43.44's kit (`bin`, and `bin-icl`
+for Ice Lake). Topology as task 43.44's: `usb4-host` with a firmware
+connection manager (Titan Ridge, Alpine Ridge on 98 SE, Ice Lake on 7 x86),
+the tunnel bridge, and `enc0`, the ASM2464 device router with an NVMe
+namespace behind it, plugged with `device_add` and pulled with
+`device_del`. NVMe through nvme98 on NT. The mark service (`XHCIMARK`,
+`XHCIMK64` on x64) registered on each NT guest. Guests: 2000 (`acpi=off`,
+1 vCPU), XP (1), XP x64, Vista x86, 7 x86, 7 x64 (2 each), 98 SE (1). Kit
+`E:\xhci98-vm\p43-21` (`RUN-NOTES.md`, screenshots, debug-console logs).
+
+The count is read in two places: the driver's debug-console line
+`cm.reenum.unexpected=<member>` and the NHI's details in XHCITR,
+"Unexpected removals: N since this start; the last on tunnel port ...".
+
+### Results
+
+| Case | 2000 | XP | XP x64 | Vista | 7 x86 | 7 x64 |
+|---|---|---|---|---|---|---|
+| Unit present at boot and never marked: unplug | "disconnected" only, not counted | same | same | same | same | same |
+| Marked unit, unplug with no eject | warning, counted | warning, counted | warning, counted | warning, counted (a poll late, below) | warning, counted | warning, counted |
+| Eject from XHCITR, then unplug | "disconnected" only | same | same | same | same | same |
+| Driver update of the unit (nvme98 forced) | nothing | nothing | nothing | nothing | nothing | nothing |
+| Disable and enable of the unit | nothing | nothing | nothing | nothing | nothing | nothing |
+| Option off, unplug with no eject | no warning, counted | same | same | same | same | same |
+| Option on again, unplug | warning | - | warning | - | - | - |
+| Sleep and resume with the unit attached | no standby (`acpi=off`) | no S1-S4 on this image | hibernate: nothing, count unchanged | hibernate: nothing | hibernate: nothing | hibernate: nothing |
+
+"Warning" means one balloon titled "Thunderbolt/USB4 warning" reading "A
+Thunderbolt or USB4 device was removed unexpectedly." with "ASMedia 246x was
+disconnected." on the next line. On 2000 the first boot, before
+`b03d4422`, showed the warning and then the "disconnected" balloon; the
+retake with `b03d4422` showed the single combined balloon.
+
+On Vista the departure fell one poll before the count: "disconnected"
+first, the warning alone a poll later. Section 7.6 item 4 accepts this.
+
+A unit present at boot is counted only once it is marked: the mark
+service marks it at its first plug while the service runs, and removes the
+mark when the unit leaves. Section 7.6 item 1 and the release notes say so.
+
+On 98 SE (Alpine Ridge): the tray menu and the View menu have no "Warn
+when a device is removed unexpectedly" item; the NHI's details read
+"Unexpected removals: not watched on this system"; an unplug gives the
+tooltip "ASMedia 246x was disconnected." and nothing else.
+
+### Not read
+
+- A chain's first device unplugged: not readable on the emulator (above).
+- Sleep on 2000 and XP: those images have no standby or hibernate.
+
+### Findings outside 43.21
+
+- After a hibernate and resume on 7 x86, 7 x64 and XP x64, XHCITR showed
+  "The Thunderbolt/USB4 controller stopped answering." This is the
+  existing finding from 43.45: the liveness gate's off state across a
+  sleep. The count and the unit were unchanged.
+- On 7 x86, after a resume, an eject by a standard user with an AutoPlay
+  Explorer window open on the unit left the replugged device not started
+  until a restart. It did not recur after a cold boot.
+- On Vista and 7 x64, a guest asked to shut down at the end of its legs
+  stayed at "Shutting down..." and was stopped through QEMU.
+
 ## 43.45 - The `amd` host model: 7, 2000 and 98 SE
 
 **Verdict: done** (2026-10-22, ticked on the owner's approval). Every leg
@@ -668,7 +965,7 @@ first checked to move the pointer under ME's own stack.
   gone. Why the configuration manager is that much slower here was not
   read; the log shows no request of its waiting on this driver.
 
-Note, 2026-10-22 (task 43.54, `runs/run-43-54.md`): this conclusion does
+Note, 2026-10-22 (task 43.54, `runs/run-43.md`): this conclusion does
 not hold. With each mouse pulled a fixed 1.0 s after its plug, this driver
 had the device addressed and started sooner than ME's own stack (medians
 0.16 and 0.30 s against 0.58 and 0.66 s), and ME's own stack stopped the
@@ -724,7 +1021,7 @@ opened as task 43.53 with 1 noted there as the later option for ME, and
 ## 43.52 two XHCITR defects from 43.45's legs: the code (2026-10-22)
 
 43.45's legs on 7 x86 (2026-10-22, branch `p43-45`, its run sheet
-`run-43-45.md`, its two XHCITR sections) found two XHCITR defects. This
+`run-43.md`, its two XHCITR sections) found two XHCITR defects. This
 section records their code on branch `xhcitr-fixes`. No virtual machine
 was run for it; the legs are owed (below).
 
@@ -956,3 +1253,159 @@ release directory), copied to the transfer drive's `pkg\`.
   update and the uninstall back to `usbxhci.sys`: 43.37's.
 - Intel's Thunderbolt driver in a guest: no image of it here; its INFs
   were read statically (record 21 section 3.6).
+
+## 43.54 - Does Windows ME Start This Driver's Devices Late?
+Roadmap-usb4 task 43.54, opened by the owner on 2026-10-22 ("start ME
+investigation") from task 43.49's control (`runs/run-43.md` on branch
+`p43-49`): ME's own USB stack had run 160 cycles of 43.49's plug and
+unplug series without stopping. 43.49 put that down to ME's configuration
+manager starting `xhci98.sys`'s device PDOs late, so that more starts ran
+into a device already gone. This run measured plug-to-START on both
+stacks. Development host A, QEMU under TCG, one virtual CPU, 256 MB,
+headless; the host was loaded by other agents' guests throughout, so the
+absolute times below are slow, and each comparison was run close in time
+to the other.
+
+### Verdict
+
+**ME does not start this driver's devices late.** In a series that pulls
+every mouse a fixed time after its plug, `xhci98.sys` had the device
+addressed and the class driver's START selecting its configuration in
+about half the time ME's own stack took (medians 0.16 and 0.30 s, against
+0.58 and 0.66 s). **ME's own stack stopped too** in that series, at
+cycles 58 and 8, with the same `hidusb.sys` state read from the guest's
+memory as 43.49's stop. 43.49's 160 clean cycles came from how that
+series decided when to pull, not from either stack. Nothing on this
+driver's side needs a fix for this task. The release notes' known
+limitation needs rewording (below).
+
+### Method
+
+- Guests: ME + `3.1.0.0` with the `qemu` flavour of `2f46080a` copied over
+  `xhci98.sys` (`qemu-xhci`, `p2=4,p3=4`; a mouse at root port 1, a stick
+  at 2, a hub at 4, an MS-DOS Prompt open), as 43.49. Registry as 43.49:
+  `XhciInterruptMode` 2, `XhciPollIdleMs` 50, `XhciPollFineTimer` 0,
+  `XhciLogVerbosity` 2. Two binaries: the gated build, and an ungated
+  rebuild of the same source with trace lines added (each PnP IRP's PDO,
+  each URB but interrupt transfers, each request held for a departed
+  device and its cancel, each deferred refusal). Not kept.
+- The control: stock ME (no `xhci98.sys`) on a QEMU `piix3-usb-uhci`,
+  ME's own USB stack, a hub at port 2 and an MS-DOS Prompt open, as 43.49's
+  control. Run c on a fresh overlay of the stock image.
+- The timings: QEMU's own trace (`-trace usb_set_addr`, `usb_set_config`,
+  host-stamped). `usb_set_addr` is the stack addressing the new device;
+  the first `usb_set_config` after the plug is `hidusb.sys`'s START
+  selecting the configuration. The same two events on both stacks. On
+  `xhci98.sys` also the driver's debugcon trace, host-stamped as read.
+- **The fixed series**: `usb-mouse` hot-plugged alternately at a root port
+  and at a hub port (`xhci98.sys`: 3 and 4.1; UHCI: 1 and 2.1), each pulled
+  exactly 1.0 s after its plug (`device_del`), the next plugged as soon as
+  QEMU had dropped it; no pointer detector. After four cycles in a row
+  without a START, the tray clock was checked across 75 s, and a frozen
+  clock taken as a stop. At a stop the guest's memory was saved and read
+  with 43.49's parser (`devs.py`).
+- **43.49's series**, for the comparison: the same plugs, each pulled when
+  a screen detector saw the pointer move (`plug.py`'s detector), no gap.
+- **Spaced plugs**: the same plugs 6 s apart, each held until 3 s after
+  its START.
+
+### Readings
+
+#### The fixed series (pull at 1.0 s)
+
+| Stack | Run | Cycles | Addressed by 1.0 s (median) | START by 1.0 s (median) | Stop |
+|---|---|---|---|---|---|
+| `xhci98.sys`, gated `qemu` | b2 | 13 | 10 (0.17 s) | 3 (0.21 s) | at cycle 13 |
+| `xhci98.sys`, `qemu` + trace lines | c | 60 | 53 (0.16 s) | 42 (0.30 s) | none in 60 |
+| ME's own (UHCI) | b | 58 | 21 (0.58 s) | 18 (0.66 s) | at cycle 58 |
+| ME's own (UHCI), fresh overlay | c | 8 | 3 (0.66 s) | 2 (0.99 s) | at cycle 8 |
+
+Each of the three stops: the tray clock still across 75 s and 90 s,
+typed text never echoed, the processor in the VMM's idle loop
+(`c00138c1`/`c00138c2`, as 43.49's), and in the saved memory a
+`hidusb.sys` minidriver extension in state 5 with its pending count 0 and
+a waiter on its remove event - 43.49's signature: a STOP after a failed
+START, then a REMOVE waiting for ever (b2: `c15aac3c`; UHCI b: `c145d4ec`;
+UHCI c: `c153d56c`). On ME's own stack the START that preceded run b's
+stop came 0.95 s after the plug, 0.05 s before the pull.
+
+#### Spaced plugs
+
+| Stack | START after the plug, once the device was installed |
+|---|---|
+| `xhci98.sys` (gated, run a, cycles 5 to 12) | 0.21 to 0.32 s |
+| ME's own (UHCI, run a, cycles 6 to 12) | 0.42 to 0.50 s |
+
+The first plugs on either stack took 4 to 14 s (ME installing the
+device); the rows leave those out.
+
+#### 43.49's series
+
+On `xhci98.sys` (trace build, 40 cycles, no stop; the gated build's run
+of the same series stopped answering at cycle 16, its clock check not
+read), 13 of 40 devices were pulled before their
+START, 9 of them 0.01 to 0.24 s after the plug - before this driver had
+reset the port, which it does 0.16 to 0.25 s after the plug. The detector
+saw a screen change that was not the new mouse's pointer, so these pulls
+were the series', not the stack's. 43.49's UHCI control, run with the
+same detector, had a plug-to-pointer of 0.78 to 26.57 s (mean 5.57 s): it
+held most devices well past their START, and a START that has finished
+before the pull does not take `hidusb.sys`'s failing path. That, not a
+late START under `xhci98.sys`, is why that control did not stop in 160
+cycles.
+
+#### Where the configuration manager waits
+
+The trace build shows ME sometimes saying nothing for 4 to 7 s after a
+device leaves - no PnP request to any of this driver's devices - and then
+asking the gone device's relations, cancelling its two held interrupt
+reads, and sending its REMOVE (in 43.49's series 12 of 44 such answers
+came more than 2 s after a plug; in the fixed series 2 of 48). The driver
+had already reported the change; nothing of ME's waited on it. ME's own
+stack cannot be traced at that level here, but it addressed only 21 of 58
+devices within the second, against 53 of 60, which an idle configuration
+manager does not explain either.
+
+One effect of those waits is this driver's own: a port's next device is
+enumerated only once ME has removed the previous device's PDO there, so
+during such a wait the next device at that port is not addressed (all 7
+of the 60 fixed-series cycles that were not addressed came 1.6 to 4.5 s
+into such a wait). It lengthens no START that ME would otherwise have sent.
+
+### Candidate changes
+
+None to this driver: the START is not late, and the stop reaches ME's own
+stack in the same series. 43.49's candidate 1 (let `hidusb.sys`'s start
+succeed for a device that leaves first, on 9x) remains the only way to
+make ME stop less often than its own stack does. It is no longer
+justified by this driver reaching the defect more readily, so it weighs
+less than 43.49 put it.
+
+### The release notes
+
+The known limitation 43.49 added (`docs/using/release-notes.md`, on branch
+`p43-49`, not yet on `3.2.0.0`) says ME's own stack ran 160 cycles
+without stopping and that this driver "reaches it far more readily".
+These readings contradict both statements. Proposed replacement for its
+last three sentences, to apply when `p43-49` is merged (owner, 2026-10-22:
+accepted; applied after the merge, worded as below with the defect named as
+any stack's and this driver's starts no later than ME's own stack's):
+
+> It was seen in a virtual machine after 4 to 17 back-to-back plug and
+> unplug cycles; ME's own USB stack, on a UHCI controller in the same
+> virtual machine, stopped the same way after 8 and 58 cycles of a
+> series that pulled each mouse one second after its plug. Plugs a few
+> seconds apart, each left until the device worked, did not reach it.
+
+### Owner, 2026-10-22
+
+All three accepted: 43.54 closed with no driver change, the release notes'
+known limitation reworded from these readings, and 43.53's ME option (43.49's
+candidate 1) lowered to a low-priority later idea. `runs/run-43.md`'s 43.49
+section carries a dated note pointing here.
+
+### Owed
+
+- Nothing for this driver. What ME's configuration manager does during
+  its 4 to 7 s waits was not read (it happens on its own stack as well,
+  and is ME's).

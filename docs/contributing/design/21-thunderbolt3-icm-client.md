@@ -3362,7 +3362,7 @@ system's reading is in `runs/run-42.md`, the verdict there stays
 `CM_NVLINK_UNQUALIFIED` (9) as today, and the release notes say which
 systems make the statement (decision V4). Both readings were taken on
 2026-10-22 by task 43.18 on the owner's answer of that day, in
-`runs/run-43-18.md` (Phase 43's sheet, not `run-42.md`): on 98 SE under
+`runs/run-43.md` (Phase 43's sheet, not `run-42.md`): on 98 SE under
 the ICM client and on ME under the USB4 profile, the statement came
 after the stage-2 reset and quiesce at every point read - an idle unplug,
 a read held at its fetch, every read held, an unplug at the `UP` of a
@@ -3694,7 +3694,7 @@ this, reviewed and revised:
   isolation is never available on 9x (so it blocks under both connection
   managers), and a clean removal's teardown under the USB4 profile is made
   without its `DOWN_QUIESCED`. *Since 2026-10-22* both systems are
-  admitted, each on its own G3 reading (`runs/run-43-18.md`), so no
+  admitted, each on its own G3 reading (`runs/run-43.md`), so no
   version read was needed: a 9x decision now follows the condition as on
   2000 and XP x64, the failed branch's isolation is available where the
   condition holds, and the USB4 profile's clean-removal teardown carries
