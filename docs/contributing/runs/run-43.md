@@ -2136,3 +2136,332 @@ before it, or the gated build fails on the two lines.
 
 Codex: round 1 found the embedded release history unchecked (fixed in
 `96c44b47`); round 2 clean.
+
+## 43.60 isochronous transfers and the Logitech Brio 100 (2026-10-22)
+
+Task 43.60 (`roadmap-usb4.md`) has three parts, from the `usb-wdm-free` legs of
+2026-10-22 (`usb-wdm-free` `docs/testing/2026-10-22-98se-legs.md`):
+
+1. plugging the Brio 100 freezes Windows 98 SE under `xhci98.sys`, and does
+   not with 98 SE's `USBAUDIO.SYS` renamed away;
+2. on Windows 2000 under `xhci98.sys`, `uvc98` reads an almost all-empty
+   isochronous stream, and SELECT_INTERFACE to alternate 0 at the stop
+   fails `C0000004`;
+3. `uvc98` at 320x240 on 98 SE: every frame carries the camera's error bit.
+
+Parts 1, 2 and 3 are all decided below. None of them is this driver's, and
+nothing in the tree changes.
+
+### 43.60 part 1 - the freeze at plug-in is 98 SE's audio-load wedge (2026-10-22)
+
+Runtime, development host A, QEMU, one vCPU, on a loaded host (13 guests
+and two gated builds, CPU about 97 %; nothing here is a timing reading).
+
+**Verdict: not this driver's.** The Brio 100's freeze is the Windows 98 SE
+audio-load wedge that 36.41 measured (`runs/run-36.md`, "36.41") and the
+release notes already carry ("Known limitations", "Windows 98 SE: a USB
+audio device can wedge the machine as it loads"). It reproduced with
+QEMU's emulated Full-Speed `usb-audio` on 98 SE's own UHCI stack, with
+`xhci98.sys` not loaded at all, with the same Close Program list
+("Msgsrv32 [Not responding]") and the same VMM addresses. In every wedge
+read here, no isochronous transfer had been given to the driver.
+
+#### The vehicle
+
+- **QEMU**: `usb-wdm-free`'s pinned `qemu-system-orphan.exe` (11.1.0 with
+  the ISO tracing patches, `E:\usb-wdm-free\host-qemu\run-orphan\`), TCG,
+  `-machine pc,smm=off -cpu pentium3 -smp 1 -m 256`, `-display none`,
+  `-audiodev none`. The Brio 100 (`046D:094C`) passed through with
+  `usb-host` exactly as `usb-wdm-free`'s xhci-legs rig does.
+- **Guest**: Windows 98 SE under NUSB 3.3 (`vm\t26\win98-gold.qcow2`,
+  read-only, overlays only), its `AUTOEXEC.BAT` copying the transfer
+  drive's `XHCI98.SYS` over the installed driver at each boot.
+- **Driver**: the `qemu` x86 flavour of the `isoch-ring` branch (43.38 to
+  43.40's ring; the tree of `ed1b4eca`), 367,256 bytes, SHA-256
+  `480d5b749412eabb5b0103a8bf6adfecbadbff66e71ccfbdc69253b10294aba9`.
+- **Three bases**, each installed once from a fresh overlay and then kept
+  read-only:
+  - `x2`: `qemu-xhci` (`p2=4,p3=4`), the Brio 100 installed, its
+    microphone function on 98 SE's own `usbaudio.sys`;
+  - `qp`, over `x2`: QEMU's `usb-audio` at `xhci.0` port 2 installed
+    ("USB Audio Device", 98 SE's own driver);
+  - `up`, over `qp`: no `qemu-xhci`; a `piix3-usb-uhci` driven by
+    Windows 98 SE's own `uhcd.sys`, the `usb-audio` at `uhci.0` port 1
+    installed (`xhci98.sys` is on the disk but has no controller to load
+    on).
+- **One repetition** (kit `E:\xhci98-vm\p43-60\rep.sh`): a fresh overlay
+  of the base, a cold boot, 110 s to the desktop, the device hot-added from
+  the monitor, then read at attach plus 60, 130 and 200 s: a screenshot,
+  Ctrl+Esc, a screenshot, Esc. **A wedge** is the Start menu not opening at
+  any read (the two screenshots of each read byte-identical in size, the
+  frame unchanged through 200 s). Then eight `info registers` samples, and
+  Ctrl+Alt+Del for the Close Program list.
+
+#### The readings
+
+| Device | Bus | Wedged | Repetitions |
+|---|---|---|---|
+| Brio 100 (`usb-host`, High Speed) | `xhci98.sys` on `qemu-xhci` | 3 of 5 | `xr1`, `xr3`, `xr4` |
+| QEMU `usb-audio` (Full Speed, UAC 1.0) | `xhci98.sys` on `qemu-xhci` | 1 of 5 | `qr2` |
+| QEMU `usb-audio` (Full Speed, UAC 1.0) | 98 SE's own `uhcd.sys`, no `xhci98.sys` | 2 of 5 | `ur3`, `ur4` |
+
+A sixth UHCI repetition was not run (the session stopped at 20:57).
+The counts are small; with 36.41's (UHCI 14 of 30, `xhci98.sys` 27 of 50)
+they say the rate on 98 SE's own stack is not lower than under this driver.
+
+- **The same state on all three rows.** Every wedge's Close Program list
+  reads Explorer, Systray, "Msgsrv32 [Not responding]" (`shots\xr1-cad.png`,
+  `qr2-cad.png`, `ur3-cad.png`); every live one reads Explorer and Systray
+  only (`qr1-cad.png`). The register samples of every wedge are in the
+  VMM (`C000A881`, `C000A882`, `C00036xx`, `C005340E`, `C0051551`), the
+  addresses 36.41 and 36.44 read, on the UHCI control as well; live idle
+  guests sample mostly `FF0270ED`.
+- **The driver's view, wedged against live** (`ev\xr1-debug.txt` against
+  `ev\xr2-debug.txt`, the `qemu` flavour's debug port): the same sequence
+  in both - the microphone function's SELECT_INTERFACE to interface 3
+  alternate 0 (endpoint mask 0), its first URB, QUERY_CAPABILITIES
+  answered, transfers submitted 6 and completed 6, `iso packets answered`
+  and `iso pages built` 0. The live run goes on to QUERY_DEVICE_RELATIONS;
+  the wedged run asks the driver nothing more. That is where 36.41's
+  wedge stopped too (`runs/run-36.md`).
+- **No isochronous transfer before the wedge.** The microphone's streaming
+  interface is at alternate 0 and no isochronous packet was ever on a ring
+  when the guest stopped asking. Whatever the wedge is, it is not in how
+  this driver schedules isochronous transfers.
+
+#### The NUSB comparison: not makeable for the microphone
+
+Under NUSB 3.3's EHCI (an overlay of a copy of `usb-wdm-free`'s
+`net9x\base\w98-nusb`, `-cpu pentium3,-apic`; `n98a`, and the uac2 agent's
+reading): no freeze, but not like for like. NUSB does not split the
+Brio's composite, which uses interface association descriptors (class
+`EF`); there is one devnode, `USB\VID_046D&PID_094C\...`, with the
+compatible ID `CLASS_0E`, the microphone never gets a devnode, and
+`usbaudio.sys` never loads. NUSB cannot decide this question.
+
+#### The Brio 100's microphone
+
+From `uvc98`'s captured configuration descriptor
+(`usb-wdm-free` `src\video\uvc98\testdata\brio100\CONFIG.BIN`): the
+microphone is a second association (interfaces 2 and 3, class `01`), its
+streaming interface 3 with alternates 1 to 3, isochronous IN endpoint
+`0x86`, 36, 68 and 100 bytes, one transaction, `bInterval` 4. At High
+Speed that is one packet every eight microframes: one per millisecond, the
+same rate as a Full-Speed device's one packet per frame.
+
+#### What the owner asked: a UAC 1.0 route
+
+The owner asked whether this needs our own UAC 1.0 driver, and named three
+routes, none to be built yet. What the readings say about each:
+
+1. **A compatibility shim in `xhci98.sys`**, mapping `usbaudio.sys`'s
+   Full-Speed 1 ms requests onto a High Speed endpoint's microframes or
+   `bInterval`. **Not supported by the evidence.** The wedge comes before
+   any isochronous request reaches the driver, it happens on 98 SE's own
+   UHCI stack with a Full-Speed device, and the Brio's microphone needs no
+   mapping anyway (`bInterval` 4 at High Speed is already one packet a
+   millisecond). Rough size: a few hundred lines in the 98 SE isochronous
+   submit path and its host vectors. Risk: high. It would change what a
+   client's request means in an engine every system shares, and it would
+   not touch the freeze.
+2. **UAC 1.0 inside `usb-wdm-free`'s `uac2`**, so 98 SE's `usbaudio.sys`
+   never loads. **Not supported yet.** The wedge's wait is in MSGSRV32,
+   the process that loads the multimedia drivers for a newly arrived sound
+   device (36.41's reading; that this is what MSGSRV32 does is not read
+   here). A PortCls driver arrives through the same path, so a new class
+   driver might wedge in the same place. No reading says it would not:
+   `uac2` on 98 SE has one start, on the X4 simulator, with no count of
+   plug repetitions. `uac2` on 98 SE does not yet expose a wave device
+   either (`waveOut devices=0`, open in `usb-wdm-free`), so this route
+   would rest on unfinished ground. Rough size: large. It needs the UAC 1.0
+   descriptor model (class-specific AC header, terminals and feature units
+   as 1.0 lays them out, Type I formats with discrete rate tables), the
+   sampling-frequency control on the endpoint, Full-Speed packet sizing at
+   44.1 kHz, 1.0's synch endpoints, and an INF that outranks
+   `WDMA_USB.INF`; then the 98 SE legs. Risk: high, for an unproven gain.
+3. **A known issue.** **Supported, and already published**: the release
+   notes' "Known limitations" entry above covers it ("a USB audio device
+   can wedge the machine as it loads ... not this driver's doing", with
+   the UHCI control). The Brio's microphone is one more audio device of
+   that entry. Rough size: one sentence naming a camera's microphone as an
+   audio device, in the release notes and `releases/history.md` at
+   43.final. Risk: low. The cost is that the Brio's microphone stays
+   unreliable to plug on 98 SE in a virtual machine. Renaming
+   `USBAUDIO.SYS`, `uvc98`'s workaround, gives up every USB audio device.
+
+**Recommendation: route 3, with one reading still owed: the Brio 100 on
+real hardware under 98 SE.** Every count of this wedge, in 36.41, 36.44
+and here, was taken under QEMU TCG. On the E460 bench a Full-Speed audio
+device played under 98 SE's own driver at a root port and behind a hub,
+and nothing records a wedge there (`runs/run-13e.md`, Finding X; that
+session did not count plug repetitions). If the Brio wedges on metal too,
+the next step before route 2 is to show that a PortCls driver from
+`usb-wdm-free` arrives on 98 SE without MSGSRV32 stopping, over counted
+repetitions. Route 1 is ruled out by these readings whatever the metal
+shows.
+
+**The owner's decision (2026-10-22): route 3.** The freeze stays a known
+issue. At 43.final, one sentence in the release notes' entry names a
+camera's microphone among the affected audio devices. The owner will try
+the Brio 100 under 98 SE on real hardware. UAC 1.0 support in `uac2` is
+not started, and no shim is built in `xhci98.sys`.
+
+#### Evidence
+
+Kit `E:\xhci98-vm\p43-60\` (not tracked): `rep.sh`, `launch.ps1`,
+`pids.txt`; `ev\<rep>-rep.txt` (reads, EIP samples, `info usb`),
+`ev\<rep>-debug.txt` (the driver's debug port), `ev\<rep>-qtrace.log`;
+`shots\<rep>-a<t>*.png` and `shots\<rep>-cad.png`. Bases `ovl\x2.qcow2`,
+`ovl\qp.qcow2`, `ovl\up.qcow2` (read-only).
+
+### 43.60 parts 2 and 3 - the empty stream, `C0000004` and the 320x240 error bit (2026-10-22)
+
+Runtime, development host A, QEMU, one vCPU, on a loaded host (as part 1).
+
+**Verdict, part 2: not this driver's.** The almost all-empty stream on
+Windows 2000 comes from the QEMU build. The `usb-wdm-free` leg ran on the
+stock Scoop QEMU. On `usb-wdm-free`'s patched QEMU (the ISO accounting
+patches, `run-orphan`), the same driver on the same guest captured three
+complete frames at 160x120, twice. Back on the stock QEMU, the same
+guest reproduced the reported failure exactly. `C0000004` is
+`USBD_STATUS_STALL_PID`, not an NTSTATUS. `uvc98`'s `UVU_SELECT_USBD`
+prints the URB's USBD status (`src\video\uvc98\uvcusb.c`, `SelectAlt`).
+It is QEMU `usb-host`'s answer when the host's
+`libusb_set_interface_alt_setting` fails. Each such failure printed
+`libusb_set_interface_alt_setting: -1 [IO]` on QEMU's stderr, one for one
+with `C0000004`: two in the `usb-wdm-free` leg's two runs, and here once
+in each run that logged it, never in a run that did not. The driver
+passed the stall up faithfully.
+
+**Verdict, part 3: not this driver's, and not 98 SE's.** 320x240 fails
+the same way on Windows 2000 as on 98 SE under this driver, and the
+Endpoint Context is right. The limit is how fast QEMU's emulated xHCI
+consumes High Speed isochronous TDs: about 2.2 to 3.1 a millisecond
+against the camera's 8. QEMU's `usb-host` resubmits a host transfer only
+once the guest has consumed it, so the host's stream to the camera stops
+and restarts about 60 times a second. The camera flags the payload after
+each gap with its error bit. At 320x240 every frame has a gap in it; at
+160x120 a few frames fit between gaps.
+
+#### The vehicle
+
+- **QEMU**: `usb-wdm-free`'s patched `qemu-system-orphan.exe` (as part 1),
+  and for run `k3` the stock Scoop QEMU 11.1.0 (`qemu-system-i386.exe`),
+  which is what the `usb-wdm-free` 2000 leg ran. `qemu-xhci,p2=8,p3=0` as
+  in that leg. The Brio 100 passed through with `usb-host`. Trace events
+  in kit `cam.events`: the `usb_host_iso_*` events of the patched build,
+  `usb_host_set_interface`, and the xHCI endpoint, slot and
+  `usb_xhci_queue_event` events.
+- **Driver**: the same `qemu` x86 flavour as part 1 (SHA-256
+  `480d5b74...aba9`), on both guests.
+- **Guests**: copies of `usb-wdm-free`'s own leg overlays, where `uvc98`
+  was installed and had run (`E:\usb-wdm-free\xhci-legs\m2k1.qcow2` and
+  `m98a.qcow2`, copied into the kit, never written). In each, this build
+  replaced the installed 3.1.0.0 `xhci98.sys`: on 2000 by `SWQ.BAT`
+  (`fc /b` clean), on 98 SE by a copy (367,256 bytes read back). Then the
+  guest was shut down cleanly and kept read-only (`ovl\s2k.qcow2`,
+  `ovl\s98.qcow2`). 98 SE's `USBAUDIO.SYS` stays renamed in `m98a`, as
+  `usb-wdm-free` left it (part 1's wedge). Part 1's `x2` base turned out
+  never to have loaded `uvcm2.sys` (no `uvc98` line in any of its debug
+  logs; M1CAP: "exact synthetic filter absent", run `e1`), so it was not
+  used.
+- **One run** (`cam.sh`): a fresh overlay, a cold boot, the Brio
+  hot-added, then `M1CAP <hardware ID> <size>`, the report written to a
+  floppy (`fd\<run>\M1CAP.TXT`). With the guest stopped about 45 s into the
+  capture, the Brio's device context was read from guest memory
+  (`ctx.sh`: DCBAA from the trace's register writes, then HMP `xp`). The
+  rate below is from `rate.py`: Transfer Events for the video endpoint
+  (DCI 3) against the host's `usb_host_iso_callback` real-time
+  timestamps.
+
+#### The readings
+
+| Run | Guest | QEMU | Size | M1CAP | Guest TDs per ms of host time | Host stream restarts | Alternate-0 select at stop |
+|---|---|---|---|---|---|---|---|
+| `k1` | 2000 | patched | 160x120 | **PASS**, 3 frames | 2.36 | 75 in 1.39 s | `C0000004`, one `libusb ... -1 [IO]` |
+| `k4` | 2000 | patched | 160x120 | **PASS**, 3 frames | 2.22 | 73 in 1.65 s | 0, no libusb error |
+| `k3` | 2000 | stock | 160x120 | FAIL, error 1784 | not traced (stock has no ISO events) | - | `C0000004`, one `libusb ... -1 [IO]` |
+| `k2` | 2000 | patched | 320x240 | FAIL, error 1784 | 2.90 | 289 in 5.09 s | `C0000004`, one `libusb ... -1 [IO]` |
+| `e2` | 98 SE | patched | 320x240 | FAIL, error 1784 | 3.07 | 333 in 6.14 s | 0, no libusb error |
+
+- **`k3` is the reported failure.** 9,528 packets, 9,317 of them empty
+  (`USB_PACKETS 2538`, `USB_EMPTY 2465`, hex), against the `usb-wdm-free`
+  leg's 9,672 and 9,464. 11,727 of 11,981 TDs completed short. Same
+  guest and driver as `k1` and `k4`; only the QEMU build differs. The
+  `usb-wdm-free` EHCI record (`docs/testing/2026-10-22-uvc-m2.md`, "Stock
+  vs patched QEMU") found the same on Windows' own EHCI: no frames on the
+  stock build, frames on the patched one.
+- **The Endpoint Context is right**, read from the controller's copy while
+  streaming (DCI 3, `ev\k1-cam.txt`, `k2-cam.txt`, `e2-cam.txt`). EP Type
+  5 (Isoch IN), Interval 0 (every microframe: `bInterval` 1 at High Speed,
+  "2^(bInterval-1)" microframes, 6.2.3.6), Max Burst 0 and Mult 0 (one
+  transaction, Table 6-8), and Max Packet Size and Max ESIT Payload 192 at
+  alternate 1 and 640 at alternate 4 (`0x00C00028`/`0x00C00C00`,
+  `0x02800028`/`0x02800C00`). 98 SE and 2000 program the same values.
+  `usb-wdm-free`'s 98 SE record read alternate 4 for 320x240, not a
+  high-bandwidth alternate, and so do these runs (`USB_ALT 4`), so
+  Mult/Max Burst/ESIT for a 3x1020 endpoint are not in play.
+- **The ring was not the limit.** Every TD completed as Success or Short
+  Packet, except 5 to 10 Ring Overrun events per run (the ring empty when
+  the controller came to it) and the stop's one Stopped. No Missed Service
+  and no Transaction Error. `uvc98` counted 2 to 4 resubmission gaps in its
+  own frame numbering (`USB_GAPS`). TDs were waiting on the ring; the
+  controller took them at about 3 a millisecond.
+- **Why the controller takes them that slowly** (QEMU's source, `qemu-11.1.0\hw\usb\hcd-xhci.c`,
+  `xhci_calc_iso_kick` and `xhci_check_intr_iso_kick`, read not run).
+  On a controller with CFC 0 (QEMU's), this driver sends every TD after a
+  request's first with SIA, as the spec asks (the TRBs themselves were not
+  traced here). QEMU schedules each such TD at the previous TD's
+  microframe plus one interval and arms a timer for it. So it services one
+  TD per timer expiry, never more than one per microframe, and never
+  catches up after a late timer. The rate is about the same at 192 and at
+  640 bytes (2.2 to 2.4 against 2.9 to 3.1), which fits a per-TD pace
+  rather than a byte limit. Whether the pace comes from the host's timer
+  resolution or from TCG's speed was not separated.
+- **Why that becomes the error bit** (the patched `host-libusb.c`,
+  `usb_host_iso_data_in` and the callback, read not run). `usb-host` takes
+  32-packet host transfers, and puts one back on the bus only after the
+  guest has copied all of it out. With the guest at about 3 packets a
+  millisecond, every host transfer completes before the guest frees the
+  next. The ring drains (`usb_host_iso_stop` is traced when nothing is in
+  flight) and restarts: 289 times in 5.09 s in `k2`. The camera's payload
+  headers carry the error bit after those gaps (`USB_ERRPKTS` 972 in `k2`,
+  954 in `e2`, hex `3CC` and `3BA`), and every 320x240 frame was dropped
+  (`USB_DROPPED` 108 and 111, `USB_FRAMES` 0). At 160x120 there were
+  error-bit packets too (203 and 261) and 11 to 13 dropped frames, but
+  three frames came through whole.
+- **The EHCI pass, for comparison** (`usb-wdm-free`'s
+  `E:\usb-wdm-free\wave2\w2km2-iso.log`, the 2000 EHCI 320x240 run on the
+  patched QEMU): 504 host callbacks over 3.25 s with 21 restarts, against
+  289 in 5.09 s here. QEMU's EHCI model works frame by frame, eight
+  microframes at a time, and its host stream gaps are rare enough for
+  frames to come through. That is the vehicle difference between the
+  EHCI pass and the xHCI failure.
+
+#### What is owed
+
+- A High Speed isochronous camera stream on real xHCI hardware under
+  98 SE and 2000. It is already in the release notes' "Untested ground"
+  (43.40: "a High Speed isochronous stream, a camera"). No VM leg on
+  `qemu-xhci` can stand in for it above the rate read here.
+- For `usb-wdm-free` (not this repository's work): `uvc98` legs above
+  160x120 belong on QEMU's EHCI, or on a QEMU whose xHCI model catches up
+  on late SIA TDs; and `uvc98`'s alternate-0 select on a `usb-host`
+  passthrough can fail through the host's libusb, which its stop path
+  already survives (`UVU_ALT0 C0000001`, then unplug clean).
+- No change to this driver. A driver workaround for QEMU's pace was
+  considered and rejected: explicit Frame IDs on every TD, which QEMU would
+  service in batches of eight. The spec asks a controller with CFC 0 for
+  SIA on every TD after the first (`xhci.h`, the Frame ID policy of 36.57
+  and 38.11), and the change would serve the vehicle, not a real
+  controller.
+
+#### Evidence
+
+Kit `E:\xhci98-vm\p43-60\` (not tracked): `cam.sh`, `ctx.sh`, `rate.py`,
+`cam.events`; `ev\<run>-cam.txt` (timeline and the device context),
+`ev\<run>-debug.txt` (the driver's and `uvc98`'s debug port),
+`ev\<run>-qtrace.log`, `ev\<run>.err` (QEMU stderr, the libusb errors);
+`fd\<run>\M1CAP.TXT` and the frames; `shots\<run>-*.png`. Bases
+`ovl\s2k.qcow2` and `ovl\s98.qcow2` (read-only) over the copies
+`ovl\m2kcopy.qcow2` and `ovl\m98copy.qcow2`.
