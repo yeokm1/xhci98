@@ -190,3 +190,73 @@ class key, off the disk after a clean shut down:
 ### Not read
 
 - A refused function of a composite device (`&MI_nn`): host vectors only.
+
+## 43.52 two XHCITR defects from 43.45's legs: the code (2026-10-22)
+
+43.45's legs on 7 x86 (2026-10-22, branch `p43-45`, its run sheet
+`run-43-45.md`, its two XHCITR sections) found two XHCITR defects. This
+section records their code on branch `xhcitr-fixes`. No virtual machine
+was run for it; the legs are owed (below).
+
+### The unelevated eject's tunnel line
+
+Read from the code. Without administrator rights `ej_run`
+(`xhcitr\xhcitr.c`) does not confirm its own eject (`ej_mark_confirm`
+only when `ej_is_admin()`); the mark service does, at a pass that finds
+the unit held for eject (problem 47), and `mk_confirm`
+(`xhcimark\xhcimark.c`) writes `XhciCmEjectConfirm` under the tools'
+eject mutex, `Global\XhciinstTbAsk`, waiting 1 s for it. XHCITR held
+that mutex through its 10 s `ej_watch_tunnel` and the assessment after
+it, so the service's confirmation could only follow the tool's answer:
+43.45 read `cm.reenum.confirm` 12 to 18 s after OK. That also explains
+why waiting longer alone would not have helped.
+
+The change: `tr_eject_watch_kind` (`xhcitr\tr_core.c`) decides the
+watch. An administrator's run, and the not-removable route, keep the
+10 s watch and its line. A run without administrator rights on XP and
+later, the service not read as stopped or absent, releases the mutex
+before the watch and waits 10 s plus twice the service's idle period
+(`mk_poll_ms(0)`, 10 s; `test_tr` checks the two agree), 30 s, a budget
+rather than a bound the service promises; the watch ends at the
+installer's quit event, as 30 s outlasts the installer's 15 s wait for
+the tool to end. A tunnel still up then reads "The PCIe tunnel has not
+been seen closed yet. It closes if the xHCI98 mark service confirms the
+eject to the Thunderbolt driver, which the service does in the
+background; an eject made as an administrator is confirmed by this tool
+itself." Without administrator rights on 2000 (problem 24 is no
+confirmation), or with the service stopped or absent: 10 s, then "The
+PCIe tunnel stays up until the device is unplugged, because the eject
+was not confirmed to the Thunderbolt driver; an eject made as an
+administrator is confirmed by this tool itself." `XHCIINST` always runs
+as an administrator and is unchanged.
+
+### The balloon after a sleep
+
+`tr_diff` raised "The Thunderbolt/USB4 controller stopped answering"
+whenever an NHI's liveness left ACTIVE; `CmLiveDisarm` sets OFF ("not
+monitored") at every sleep and stop. It is now raised only for ACTIVE
+to a loss state (`tr_live_lost`: suspect, absent, configuration lost,
+recovering, recovery failed, contained, preparing), or for the record's
+stage going from active to failed, which a resume that fails leaves
+with the liveness OFF (`cm_power.c`); once an NHI either way. OFF,
+revoked and a value the tool does not know raise nothing. `test_tr`:
+ACTIVE to OFF to ACTIVE raises nothing; ACTIVE to each loss state, and
+the failed stage, raise it once.
+
+### Builds and review
+
+Host suites pass (`test_tr` 1002 checks). The gated builds, x86 `all`
+and amd64 `all`, pass at `38fc1f45`. Reviewed and revised once; the
+second reading found nothing. Commits: `650f5fc6` (the eject),
+`cded3b9b` (the balloon), `38fc1f45` (the revision).
+
+### Owed
+
+The legs, on 7 x86 in the emulator under the USB4 profile with the
+ASM2464 router, as 43.45 ran them:
+
+- an eject from XHCITR started without administrator rights: the tunnel
+  read closed within the watch (`cm.reenum.confirm` shortly after OK),
+  or the new line; and the same eject as an administrator, unchanged;
+- a sleep or hibernate and resume with XHCITR in the tray: no balloon;
+- where the vehicle allows, a resume that fails: the balloon.
