@@ -996,12 +996,32 @@ static int instance_location(const char *in, pf_u32 *loc)
  * are present now (the configuration manager, where it answers) and, where
  * the instance name carries a PCI location, are on the adapter at pci.
  * Devnodes of disks seen before stay in the registry, and are not counted. */
-static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier)
+static int letter_held(HKEY dev, const char *in, char letter)
+{
+    HKEY k;
+    char v[32];
+    DWORD n = sizeof(v), type;
+    int held = 0;
+
+    if (RegOpenKeyExA(dev, in, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    if (RegQueryValueExA(k, "CurrentDriveLetterAssignment", NULL, &type, (LPBYTE)v, &n) == ERROR_SUCCESS &&
+        type == REG_SZ) {
+        v[sizeof(v) - 1] = 0;
+        held = strchr(v, letter) != NULL || strchr(v, (char)(letter - 'A' + 'a')) != NULL;
+    }
+    RegCloseKey(k);
+    return held;
+}
+
+/* *held: the instances counted include one holding the drive letter */
+static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier, char letter, int *held)
 {
     HKEY scsi, dev;
     char dn[256], in[256], nd[256], id[600];
     DWORD i, j;
-    int count = 0, all = 0;
+    int count = 0, all = 0, heldAll = 0, heldLive = 0;
     HMODULE cm = LoadLibraryA("CFGMGR32.DLL");
     PF_CMLOCATE locate = (cm != NULL) ? (PF_CMLOCATE)GetProcAddress(cm, "CM_Locate_DevNodeA") : NULL;
 
@@ -1024,6 +1044,7 @@ static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier)
                 continue;       /* on another adapter */
             }
             all++;
+            heldAll |= letter_held(dev, in, letter);
             if (locate != NULL) {
                 DWORD dnode = 0;
 
@@ -1035,6 +1056,7 @@ static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier)
                     continue;   /* not present: a disk seen before */
                 }
                 count++;
+                heldLive |= letter_held(dev, in, letter);
             }
         }
         RegCloseKey(dev);
@@ -1045,6 +1067,7 @@ static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier)
     }
     /* where the configuration manager found none present (it may not
      * answer a 32-bit program), every instance of the id counts */
+    *held = count != 0 ? heldLive : heldAll;
     return count != 0 ? count : all;
 }
 
@@ -1052,12 +1075,13 @@ static int scsi_count(const char *want, const char *model, pf_u32 pci, int tier)
  * id as spelt on the identity page's adapter; the id as spelt; the model.
  * (How 9x writes the instance's PCI location and the id is read from the
  * emulator; on a system that writes them otherwise a later tier decides.) */
-static int scsi_model_count(const char *want, const char *model, pf_u32 pci)
+static int scsi_model_count(const char *want, const char *model, pf_u32 pci, char letter, int *held)
 {
     int tier, n = 0;
 
+    *held = 0;
     for (tier = 0; tier < 3 && n == 0; tier++) {
-        n = scsi_count(want, model, pci, tier);
+        n = scsi_count(want, model, pci, tier, letter, held);
     }
     return n;
 }
@@ -1078,6 +1102,7 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
     char found[64];
     pf_u32 foundPci = 0;
     char foundModel[64];
+    int held = 0;
 
     if (letter >= 'a' && letter <= 'z') {
         letter = (char)(letter - 'a' + 'A');
@@ -1170,10 +1195,12 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
         }
     }
     rq->matches = matches;
-    rq->idCount = matches == 1 ? scsi_model_count(found, foundModel, foundPci) : 0;
+    /* Stor98's counters are this drive's only when exactly one present disk
+     * fits and it is the one holding the drive letter */
+    rq->idCount = matches == 1 ? scsi_model_count(found, foundModel, foundPci, letter, &held) : 0;
     if (g_aspiHung) {
         rq->state = S98_ST_DEAD;
-    } else if (matches == 1 && rq->idCount == 1) {
+    } else if (matches == 1 && rq->idCount == 1 && held) {
         rq->state = S98_ST_OK;
     } else if (matches >= 1) {
         rq->state = S98_ST_AMBIG;
@@ -2315,7 +2342,7 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
         w->index = t;
         w->partStart = PF_HEADER_BYTES + part * (pf_u64)t;
         w->partBytes = part;
-        w->rnd = pf_thread_seed(g_p.seed ^ (pf_u32)i, t);
+        w->rnd = pf_thread_seed(pf_step_seed(&g_plan, i, g_p.seed), t);
         w->budgetLeft = s->budget != 0 ? s->budget / (pf_u64)nt - (s->budget / (pf_u64)nt) % s->size : 0;
         if (t == 0 && s->budget != 0) {
             w->budgetLeft += (s->budget - (s->budget / (pf_u64)nt) * (pf_u64)nt) / s->size * s->size;

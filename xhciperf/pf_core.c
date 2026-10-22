@@ -742,6 +742,29 @@ pf_u32 pf_xs_mix(pf_u32 a, pf_u32 b, pf_u32 c)
     return pf_xs_seed(s & 0xFFFFFFFFu);
 }
 
+pf_u32 pf_step_seed(const PF_PLAN *pl, int step, pf_u32 seed)
+{
+    const PF_STEP *s = &pl->steps[step];
+    pf_u32 h = 2166136261u ^ seed;
+    const char *c;
+    int i, occ = 0;
+
+    for (i = 0; i < step; i++) {
+        const PF_STEP *o = &pl->steps[i];
+
+        if (strcmp(o->label, s->label) == 0 && o->op == s->op && o->buffer == s->buffer) {
+            occ++;
+        }
+    }
+    for (c = s->label; *c != 0; c++) {
+        h = (h ^ (pf_u32)(unsigned char)*c) * 16777619u;
+    }
+    h = (h ^ (pf_u32)s->op) * 16777619u;
+    h = (h ^ (pf_u32)s->buffer) * 16777619u;
+    h = (h ^ (pf_u32)occ) * 16777619u;
+    return h;
+}
+
 pf_u32 pf_thread_seed(pf_u32 seed, int thread)
 {
     pf_u32 s = pf_xs_seed(seed) ^ ((((pf_u32)thread + 1u) * PF_GOLDEN) & 0xFFFFFFFFu);

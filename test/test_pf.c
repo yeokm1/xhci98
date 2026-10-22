@@ -530,6 +530,32 @@ static void test_key_saved(void)
         CHECK_EQ(sv.endVerify, PF_EV_BAD, "the end verification's outcome");
     }
     {
+        /* one random read test, alone or after its write: the same seed */
+        PF_PARAMS q1;
+        PF_PLAN pa, pb;
+        int ia = -1, ib = -1, k;
+
+        pf_defaults(&q1, PF_OS_NT);
+        q1.ops = PF_OP_BOTH;
+        CHECK_EQ(pf_plan(&q1, &e, &pa, why, sizeof(why)), PF_OK, "read and write planned");
+        q1.ops = PF_OP_READ;
+        CHECK_EQ(pf_plan(&q1, &e, &pb, why, sizeof(why)), PF_OK, "read alone planned");
+        for (k = 0; k < pa.nsteps; k++) {
+            if (ia < 0 && pa.steps[k].op == PF_OP_READ && strncmp(pa.steps[k].label, "Rnd", 3) == 0) {
+                ia = k;
+            }
+        }
+        for (k = 0; k < pb.nsteps; k++) {
+            if (ib < 0 && pb.steps[k].op == PF_OP_READ && strncmp(pb.steps[k].label, "Rnd", 3) == 0) {
+                ib = k;
+            }
+        }
+        CHECK(ia >= 0 && ib >= 0 && ia != ib, "the random read sits at two positions");
+        if (ia >= 0 && ib >= 0) {
+            CHECK_EQ(pf_step_seed(&pa, ia, 7u), pf_step_seed(&pb, ib, 7u), "and draws the same offsets");
+        }
+    }
+    {
         PF_SAVED_ROW row;
 
         memset(&row, 0, sizeof(row));

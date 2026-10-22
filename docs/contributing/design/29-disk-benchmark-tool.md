@@ -438,7 +438,11 @@ The buffer choices:
 - **The generator** (offsets, and the patterns' bodies): Marsaglia's
   32-bit xorshift (shifts 13, 17, 5) on a nonzero state. The run's seed
   is in the result ("seed 0x1A2B3C4D"), the user may set it, and a seed of
-  0 is replaced by `0x9E3779B9`; thread n's state is the seed XOR
+  0 is replaced by `0x9E3779B9`; a test's seed is the run's seed mixed
+  (FNV-1a) with what the test is - its label, operation, buffer and which
+  test of those it is - not its place in the plan, so one test draws the
+  same offsets whatever else the run holds and a saved comparison
+  compares like with like; thread n's state is that seed XOR
   `(n + 1) * 0x9E3779B9`, and the pattern's per-unit state the three stamp
   values mixed the same way, each replaced by `0x9E3779B9` whenever it
   comes out 0. An offset is the state modulo the part's block count (the
@@ -1558,6 +1562,10 @@ a choice:
   any deciding, and only those the configuration manager finds present
   where it answers. With that the Stor98 page read Stor98's counters
   through ASPI on 98 SE. An ambiguity names its counts on the page.
+  The counted instances must include the one holding the drive letter
+  (Codex round 9: a second disk of the same id on another adapter,
+  excluded by the first tier, would otherwise have been given Stor98's
+  counters); otherwise the page says the adapter could not be told apart.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

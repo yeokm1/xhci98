@@ -172,6 +172,10 @@ pf_u32 pf_xs_seed(pf_u32 seed);
 pf_u32 pf_xs_mix(pf_u32 a, pf_u32 b, pf_u32 c);
 pf_u32 pf_xs_next(pf_u32 *state);
 pf_u32 pf_thread_seed(pf_u32 seed, int thread);
+/* A step's seed from the run's seed and what the step is (its label,
+ * operation, buffer and which occurrence of them), not its position, so
+ * one test draws the same offsets whatever else the run holds */
+pf_u32 pf_step_seed(const PF_PLAN *pl, int step, pf_u32 seed);
 
 /* The verifiable pattern (section 3.3): Bytes (a multiple of PF_UNIT) at
  * unit Unit of the file. */
