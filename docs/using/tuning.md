@@ -102,7 +102,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmMode` | `0` off (the controller is bound, logged and left alone); `1` automatic; `2` an unlisted Intel controller driven as an Alpine Ridge and `3` the driver's own USB4 connection manager forced, both **at your own risk** | `0` | `3` | `1` | `1` |
 | `XhciCmApprove` | `1` approves every device, `0` none | `0` | `1` | `1` | `1` |
 | `XhciCmReenum` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh | `0` | `1` | `1` | `1` |
-| `XhciCmSafeEject` | `1` offers devices behind a tunnel for safe removal | `0` | `1` | `1` | `1` |
+| `XhciCmSafeEject` | `1` offers devices behind a tunnel for safe removal (98 SE and ME: in the USB Tree and `INSTALL /eject` only, no Windows dialog lists them) | `0` | `1` | `1` | `1` |
 | `XhciCmPollIdleMs` | How often, in ms, the driver looks at the controller with nothing happening | `50` | `5000` | `200` | `200` |
 | `XhciCmCmdTimeoutMs` | Firmware connection manager: the wait for a command's answer, in ms | `1000` | `60000` | `5000` | `5000` |
 | `XhciCmApproveTimeoutMs` | Firmware connection manager: the wait for an approval's answer, in ms | `1000` | `60000` | `10000` | `10000` |

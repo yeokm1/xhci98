@@ -1402,6 +1402,17 @@ package does not replace. The component is seven files, which NUSB 3.3 and
 They are Microsoft's, apart from `USBU2A.SYS`, a third party's. SweetLow's
 stack alone has no storage part.
 
+**For the "Unplug or Eject Hardware" icon on Windows 98 SE, install NUSB
+3.3.** Windows 98 SE has no such icon of its own (its `SYSTRAY.EXE` stops
+PC Cards only). The applet is Microsoft's hotfix KB 242975, which NUSB 3.3's
+own setup installs; the seven files above do not include it, and neither
+does SweetLow's stack. With NUSB 3.3 installed, the icon lists USB sticks
+and UAS disks under `xhci98.sys`, as Windows ME's own does: Stop gives "Safe
+To Remove Hardware", and a disk with a file open is refused until the file
+is closed. Neither lists an NVMe drive behind a Thunderbolt or USB4 tunnel:
+remove that with the xHCI98 USB Tree or `INSTALL /eject`. The USB Tree's
+Safely Remove also stops USB storage on both systems.
+
 **Planned for `3.2.0.0`, not yet built: the download is to carry them,
 and the installer to offer them on Windows 98 SE** (roadmap-usb4 tasks 43.3
 and 43.4). They are to be NUSB 3.3's copies, unmodified, in a folder of
