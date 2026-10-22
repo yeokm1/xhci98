@@ -32,6 +32,7 @@ static UINT popId;
 static TR_POP_QUEUE popQ;
 static TR_POP_NOTE popCur;
 static int popShowing;
+static int popTimed;            /* the showing one's timer is running */
 static DWORD popShown;
 static HFONT popFont;
 static HFONT popBold;
@@ -43,21 +44,31 @@ static int popRadius;
 
 static LRESULT CALLBACK pop_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp);
 
-int tr_pop_ready(void)
+int tr_pop_ready(HWND tray)
 {
     WNDCLASSA wc;
 
-    if (popState != 0) {
-        return popState > 0;
+    if (popState == 0) {
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = pop_proc;
+        wc.hInstance = GetModuleHandleA(NULL);
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.lpszClassName = POP_CLASS;
+        popState = RegisterClassA(&wc) != 0 ? 1 : -1;
+        tr_popq_init(&popQ);
     }
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc = pop_proc;
-    wc.hInstance = GetModuleHandleA(NULL);
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = POP_CLASS;
-    popState = RegisterClassA(&wc) != 0 ? 1 : -1;
-    tr_popq_init(&popQ);
-    return popState > 0;
+    if (popState < 0) {
+        return 0;
+    }
+    /* The window is made here, hidden, so that "ready" means a notice
+     * handed over can be shown (section 16 item 1): an eject's outcome
+     * takes the message box when it cannot. */
+    if (popWnd == NULL || !IsWindow(popWnd)) {
+        popWnd = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, POP_CLASS, "",
+                                 WS_POPUP, 0, 0, 1, 1, tray, NULL,
+                                 GetModuleHandleA(NULL), NULL);
+    }
+    return popWnd != NULL;
 }
 
 static void pop_tell(UINT code)
@@ -263,13 +274,8 @@ static void pop_next(void)
         return;
     }
     if (popWnd == NULL || !IsWindow(popWnd)) {
-        popWnd = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, POP_CLASS, "",
-                                 WS_POPUP, 0, 0, 1, 1, popTray, NULL,
-                                 GetModuleHandleA(NULL), NULL);
-        if (popWnd == NULL) {
-            tr_popq_init(&popQ);
-            return;
-        }
+        tr_popq_init(&popQ);
+        return;
     }
     popPress = 0;
     pop_place();
@@ -279,7 +285,10 @@ static void pop_next(void)
     UpdateWindow(popWnd);
     popShowing = 1;
     popShown = GetTickCount();
-    SetTimer(popWnd, POP_TIMER, POP_TICK_MS, NULL);
+    /* With no timer (USER's are exhausted) the pop-up still closes by its
+     * close box, a click, or the next notice once its time is out
+     * (tr_pop_show); it never holds the queue for good. */
+    popTimed = SetTimer(popWnd, POP_TIMER, POP_TICK_MS, NULL) != 0;
     pop_tell(TR_POP_NIN_SHOW);
 }
 
@@ -302,14 +311,17 @@ static void pop_close(UINT code)
 void tr_pop_show(HWND tray, UINT msg, UINT id, const char *title,
                  const char *text, int icon)
 {
-    if (!tr_pop_ready()) {
+    if (!tr_pop_ready(tray)) {
         return;
     }
     popTray = tray;
     popMsg = msg;
     popId = id;
     tr_popq_push(&popQ, title, text, icon);
-    if (!popShowing) {
+    if (popShowing && !popTimed &&
+        tr_pop_expired(popShown, GetTickCount(), TR_POP_TIMEOUT_MS)) {
+        pop_close(TR_POP_NIN_TIMEOUT);     /* shows the next one */
+    } else if (!popShowing) {
         pop_next();
     }
 }

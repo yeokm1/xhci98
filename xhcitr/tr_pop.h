@@ -118,8 +118,9 @@ typedef struct _TR_POP_LAYOUT {
 } TR_POP_LAYOUT;
 
 /* The body: a title row (icon, title, close box) over the text, the
- * padding round both; no wider than wrapW plus the padding, the title cut
- * to fit, and no higher than roomH, the text cut to fit. */
+ * padding round both; never wider than wrapW plus the padding, the title
+ * cut to fit (to nothing where the icon and close box fill the wrap), and
+ * never higher than roomH, the text cut to fit and then the title row. */
 void tr_pop_layout(const TR_POP_METRICS *m, int wrapW, int roomH,
                    TR_POP_LAYOUT *out);
 

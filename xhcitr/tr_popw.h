@@ -11,8 +11,9 @@
 #include "tr_pop.h"
 
 /* 1 when the pop-up can be shown: its class is registered (at the first
- * call). */
-int tr_pop_ready(void);
+ * call) and its window, owned by tray and hidden until a notice, is made
+ * (made again if it was destroyed). */
+int tr_pop_ready(HWND tray);
 
 /* A notice in the balloon's place: shown now, or queued behind the one
  * showing (section 16 item 5). tray is the icon's window, which receives

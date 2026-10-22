@@ -245,20 +245,24 @@ void tr_pop_layout(const TR_POP_METRICS *m, int wrapW, int roomH,
     int iconPart = m->Icon > 0 ? m->Icon + gap : 0;
     int rowH = pop_max(pop_max(m->TitleH, m->Icon), m->Close);
     int fixed = iconPart + gap + m->Close;
-    int titleW = pop_max(pop_min(m->TitleW, wrapW - fixed), 1);
+    int titleW = pop_max(pop_min(m->TitleW, wrapW - fixed), 0);
     int textW = pop_min(m->TextW, wrapW);
-    int inner = pop_max(fixed + titleW, textW);
+    /* Never wider than the wrap: a room too narrow for the icon and the
+     * close box loses the title, not the screen's edge. */
+    int inner = pop_max(pop_min(pop_max(fixed + titleW, textW), wrapW), 1);
     int textTop = pad + rowH + gap;
     int textH = m->TextH > 0 ? m->TextH : 0;
     int least = pad + rowH + pad;
     int w = inner + 2 * pad;
     int h = textH > 0 ? textTop + textH + pad : least;
 
+    /* Never higher than the room: the text is cut first, then the title
+     * row itself (a room lower than one row is a degenerate screen). */
     if (h > roomH) {
-        h = pop_max(roomH, least);
+        h = pop_max(roomH, 1);
         textH = pop_max(h - textTop - pad, 0);
         if (textH == 0) {
-            h = least;
+            h = pop_min(least, h);
         }
     }
     out->W = w;

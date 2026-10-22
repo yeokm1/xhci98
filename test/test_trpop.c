@@ -329,9 +329,22 @@ static void test_layout(void)
     tr_pop_layout(&m, 320, 60, &l);
     CHECK_EQ(l.H, 60, "cut: the room's height");
     CHECK_EQ(l.Text.Bottom - l.Text.Top, 24, "cut: the text's share");
-    tr_pop_layout(&m, 320, 30, &l);
-    CHECK_EQ(l.H, 32, "no room for text: the title row stands");
+    tr_pop_layout(&m, 320, 36, &l);
+    CHECK_EQ(l.H, 32, "no room for text: the title row alone");
     CHECK_EQ(l.Text.Bottom - l.Text.Top, 0, "no room for text: none");
+    tr_pop_layout(&m, 320, 30, &l);
+    CHECK_EQ(l.H, 30, "lower than the title row: cut to the room");
+    CHECK_EQ(l.Text.Bottom - l.Text.Top, 0, "lower than the title row: no text");
+
+    /* Narrower than the icon and the close box: the title goes, the body
+     * stays at the wrap width. */
+    m.TextW = 20;
+    m.TextH = 16;
+    tr_pop_layout(&m, 20, 422, &l);
+    CHECK_EQ(l.W, 20 + 2 * 8, "narrow: the wrap width");
+    CHECK_EQ(l.Title.Right - l.Title.Left, 0, "narrow: no title");
+    m.TextW = 320;
+    m.TextH = 7 * 16;
 
     /* A word wider than the wrap: the body stays at the wrap width. */
     m.TextW = 900;

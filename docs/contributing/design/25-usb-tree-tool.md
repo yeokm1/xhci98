@@ -1760,7 +1760,9 @@ The tooltip's last event (section 7.1) is kept as it is.
    scale it: the padding is half a line, the stem a line high, the text
    wraps (`DrawText` `DT_WORDBREAK`) at 40 average characters or the
    screen's width less two margins and the padding, whichever is less,
-   and a pop-up taller than the screen less the taskbar is cut to it. At
+   and a pop-up taller than the screen less the taskbar is cut to it (the
+   text first, then the title row); a room too narrow for the icon and
+   the close box loses the title, never the screen's edge. At
    640 x 480 with Large Fonts the longest notice (255 characters) fits.
 4. **Where** (`tr_pop_edge`, `tr_pop_place`, pure; the primary monitor
    alone, since 98 SE's notification area is on it). The inputs are the
@@ -1801,7 +1803,9 @@ The tooltip's last event (section 7.1) is kept as it is.
    as 2000's shell showed this icon's balloons in turn (the 43.21 legs
    read the warning and then "disconnected" on 2000). A ninth waiting
    notice drops the oldest waiting information notice, or, when every
-   waiting one is a warning or an error, the oldest waiting one.
+   waiting one is a warning or an error, the oldest waiting one. Should
+   USER give no timer, the pop-up still closes by its close box or a
+   click, or when the next notice is raised after its 10 seconds.
 6. **The mouse.** A click on the close box closes the pop-up; so does a
    right click anywhere on it. A left click on the body closes it and
    does what a click on a balloon does: the tray window receives

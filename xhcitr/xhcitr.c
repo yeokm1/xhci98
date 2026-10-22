@@ -5730,7 +5730,7 @@ static void usb_eject_ui(HWND owner, int d, int fromTray)
                         MB_YESNO | MB_ICONWARNING) == IDYES) {
             ej_elevated(owner, q->Id);
         }
-    } else if (fromTray && (shellV5 || tr_pop_ready()) && strlen(msg) < 250) {
+    } else if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -5902,7 +5902,7 @@ static void ej_unit(HWND owner, int u, int fromTray)
         return;
     }
     tr_join_lines(msg);
-    if (fromTray && (shellV5 || tr_pop_ready()) && strlen(msg) < 250) {
+    if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
