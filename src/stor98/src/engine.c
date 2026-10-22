@@ -209,6 +209,24 @@ VOID EngCompleteSrb(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
         }
     }
     DevExt->SrbsCompleted++;
+    // Counter answer (MD-8): a data SRB that ends in an error, on every
+    // path (refused before admission, fast-failed, failed by the drive); a
+    // BUSY is a retry, not an end.
+    if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && SRB_STATUS(Srb->SrbStatus) != SRB_STATUS_SUCCESS &&
+        SRB_STATUS(Srb->SrbStatus) != SRB_STATUS_BUSY) {
+        switch (Srb->Cdb[0]) {
+        case SCSIOP_READ6:
+        case SCSIOP_READ:
+        case SCSIOP_READ16:
+        case SCSIOP_WRITE6:
+        case SCSIOP_WRITE:
+        case SCSIOP_WRITE16:
+            PfAdd(&DevExt->Pf.SrbErrors, 1);
+            break;
+        default:
+            break;
+        }
+    }
     DBGSTAGE(STG_SRB_COMPLETE, ((ULONG)Srb->SrbStatus << 24) | ((ULONG)Srb->Cdb[0] << 8) | Srb->Function);
     ScsiPortNotification(RequestComplete, DevExt, Srb);
 }
@@ -657,9 +675,7 @@ VOID EngFinishParent(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
     srb = p->Srb;
     EngParentStatus(DevExt, p, srb);
     if (p->Kind == ENG_K_RW) {
-        if (SRB_STATUS(srb->SrbStatus) != SRB_STATUS_SUCCESS) {
-            PfAdd(&DevExt->Pf.SrbErrors, 1);
-        } else if (PfRunClass(p->Bytes) < STOR98PF_RUN_CLASSES) {
+        if (SRB_STATUS(srb->SrbStatus) == SRB_STATUS_SUCCESS && PfRunClass(p->Bytes) < STOR98PF_RUN_CLASSES) {
             PfAdd(&DevExt->Pf.Runs[PfRunClass(p->Bytes)][PfRunBucket(p->PfRuns, (BOOLEAN)(p->PfNotSeen != 0))], 1);
         }
     }
