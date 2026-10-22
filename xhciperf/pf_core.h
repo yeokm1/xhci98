@@ -312,7 +312,14 @@ typedef struct pf_runinfo {
     pf_u64 timerFreq;       /* 0: milliseconds */
     pf_u32 attributes;
     const char *stor98;     /* the Stor98 page's text, or "" */
+    int endVerify;          /* PF_EV_: the whole file's verification at the end */
 } PF_RUNINFO;
+/* The whole file's verification at a run's end */
+#define PF_EV_NONE          0   /* not asked, or no verification */
+#define PF_EV_CLEAN         1
+#define PF_EV_BAD           2   /* data errors */
+#define PF_EV_UNREAD        3   /* the file could not be read */
+#define PF_EV_STOPPED       4   /* stopped before it ended, or before it began */
 void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RESULT *res,
                int npasses, const PF_RUNINFO *ri);
 void pf_summary_line(PF_TEXT *t, const PF_STEP *s, const PF_SHOWN *sh, int mib);
@@ -323,6 +330,8 @@ typedef struct pf_saved_row {
     char label[40];
     int op;
     int buffer;
+    int occ;                /* which test of this label, operation and buffer, from 0 */
+    pf_u64 lastPass;        /* the last pass number read for it */
     int npass;
     pf_u64 bytes[PF_MAX_PASSES];
     pf_u64 us[PF_MAX_PASSES];
@@ -330,11 +339,15 @@ typedef struct pf_saved_row {
 } PF_SAVED_ROW;
 typedef struct pf_saved {
     char key[512];
+    int endVerify;          /* PF_EV_ of the saved run */
     int nrows;
     PF_SAVED_ROW rows[PF_SAVED_MAX];
 } PF_SAVED;
 /* 0 and *s filled, or the 1-based line number of the first bad line */
 long pf_saved_parse(const char *text, size_t len, PF_SAVED *s);
+/* The saved row of a plan's step: its label, operation and buffer, and
+ * which occurrence of them it is in the plan; NULL when none has a pass */
+const PF_SAVED_ROW *pf_saved_find(const PF_SAVED *sv, const PF_PLAN *plan, int step);
 /* A saved row's value aggregated as Show says, as pf_shown does */
 pf_u64 pf_saved_value(const PF_SAVED_ROW *row, int show, int mib);
 /* change in percent tenths of cur against old; 0 when old is 0 */

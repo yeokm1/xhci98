@@ -513,6 +513,23 @@ static void test_key_saved(void)
         CHECK(pf_saved_parse(none, sizeof(none) - 1, &sv) != 0, "a file with no run line is refused");
     }
     {
+        /* two tests of one label, operation and buffer stay two rows; the
+         * end verification is read back */
+        static char two[] =
+            "XPRF-RUN 1 file=1\r\n"
+            "XPRF-VERIFY 1 2\r\n"
+            "XPRF-RESULT 1 Seq 1M d1 t1|read|aligned|1|1|100000000|100|1000000000|1\r\n"
+            "XPRF-RESULT 1 Seq 1M d1 t1|read|aligned|2|1|100000000|100|1000000000|1\r\n"
+            "XPRF-RESULT 1 Seq 1M d1 t1|read|aligned|1|1|300000000|300|1000000000|1\r\n";
+
+        CHECK_EQ(pf_saved_parse(two, sizeof(two) - 1, &sv), 0, "two tests of one label read back");
+        CHECK_EQ(sv.nrows, 2, "as two rows");
+        CHECK_EQ(sv.rows[0].npass, 2, "the first with its two passes");
+        CHECK_EQ(sv.rows[1].occ, 1, "the second is the second occurrence");
+        CHECK_EQ(pf_saved_value(&sv.rows[1], PF_SHOW_BEST, 0), 3000, "with its own value");
+        CHECK_EQ(sv.endVerify, PF_EV_BAD, "the end verification's outcome");
+    }
+    {
         PF_SAVED_ROW row;
 
         memset(&row, 0, sizeof(row));
@@ -583,6 +600,8 @@ static void test_cmdline(void)
     char *a1[] = { "x", "/run", "/preset", "quick", "/folder", "F:\\T", "/depth", "4", "/report", "r.txt", "/exit" };
     char *a2[] = { "x", "/frobnicate" };
     char *a3[] = { "x", "/size", "8" };
+    char *a5[] = { "x", "/preset", "study9x", "/min", "128", "/max", "2048" };
+    char *a6[] = { "x", "/max", "3000" };
     char *a4[] = { "x", "/buffer", "scattered", "/pattern", "zeros" };
 
     pf_defaults(&p, PF_OS_NT);
@@ -598,6 +617,11 @@ static void test_cmdline(void)
     CHECK_EQ(p.bufMask, 1 << PF_BUF_SCATTER, "scattered");
     CHECK_EQ(p.pattern, PF_PAT_ZEROS, "zeros");
     CHECK(!p.verify, "zeros cannot be verified");
+    pf_defaults(&p, PF_OS_9X);
+    CHECK_EQ(pf_cmdline(7, a5, &p, &c, why, sizeof(why)), 0, "the study with its sizes");
+    CHECK(p.sweep && p.sweepMin == 131072u && p.sweepMax == 2097152u, "128 KiB to 2 MiB");
+    CHECK(p.verify && p.bufMask == 7, "verified, three layouts");
+    CHECK_EQ(pf_cmdline(3, a6, &p, &c, why, sizeof(why)), 1, "not a power of two");
 }
 
 static void test_labels(void)

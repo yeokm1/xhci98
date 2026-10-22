@@ -840,7 +840,8 @@ button says to run the tool as an administrator).
 ### 5.7 The command line
 
 `XHCIPERF /run [/preset <name>] [/folder <path>] [/size <MiB>]
-[/passes <n>] [/time <s>] [/buffer aligned|offset|scattered]
+[/passes <n>] [/time <s>] [/buffer aligned|offset|scattered] [/min <KiB>]
+[/max <KiB>]
 [/pattern verifiable|random|zeros] [/cached] [/writethrough] [/verify]
 [/depth <n>] [/threads <n>] [/report <file>] [/exit]` starts the run at
 once with those parameters over the defaults, writes the report if asked
@@ -1539,6 +1540,10 @@ a choice:
   do not compare. On 98 SE and ME the process does not end while an ASPI
   request is not given back: after its window closes it waits for it, so
   that ASPI never writes freed memory (a hung ASPI keeps it waiting).
+- **`/min` and `/max`** (KiB, powers of two, 1 to 8192) set a sweep's
+  smallest and largest sizes on the command line and make the run a sweep;
+  added for 43.46's bench (the 9x study from 128 KiB to 2 MiB, with
+  Stor98's 2 MiB maximum).
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

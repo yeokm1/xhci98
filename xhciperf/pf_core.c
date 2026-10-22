@@ -1309,6 +1309,28 @@ int pf_key_same(const char *a, const char *b, char *diff, size_t cap)
     return same;
 }
 
+const PF_SAVED_ROW *pf_saved_find(const PF_SAVED *sv, const PF_PLAN *plan, int step)
+{
+    const PF_STEP *s = &plan->steps[step];
+    int i, occ = 0;
+
+    for (i = 0; i < step; i++) {
+        const PF_STEP *o = &plan->steps[i];
+
+        if (strcmp(o->label, s->label) == 0 && o->op == s->op && o->buffer == s->buffer) {
+            occ++;
+        }
+    }
+    for (i = 0; i < sv->nrows; i++) {
+        const PF_SAVED_ROW *r = &sv->rows[i];
+
+        if (r->occ == occ && strcmp(r->label, s->label) == 0 && r->op == s->op && r->buffer == s->buffer) {
+            return r->npass != 0 ? r : NULL;
+        }
+    }
+    return NULL;
+}
+
 pf_u64 pf_saved_value(const PF_SAVED_ROW *row, int show, int mib)
 {
     PF_RESULT r[PF_MAX_PASSES];
@@ -1482,6 +1504,15 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
         pf_tx_s(t, p->verifyDuring ? ", checked during the read" : ", verified");
     }
     pf_tx_nl(t);
+    if (ri->endVerify != PF_EV_NONE) {
+        static const char *const ev[] = {
+            "", "clean", "DATA ERRORS FOUND", "the file could not be read", "stopped before its end: not known to be clean"
+        };
+
+        pf_tx_s(t, "Whole file:  ");
+        pf_tx_s(t, (ri->endVerify > 0 && ri->endVerify <= PF_EV_STOPPED) ? ev[ri->endVerify] : "?");
+        pf_tx_nl(t);
+    }
     pf_tx_s(t, "Passes:      ");
     pf_tx_u(t, (pf_u64)p->passes);
     if (!p->sweep || p->sweepTimed) {
@@ -1549,6 +1580,11 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
     pf_tx_s(t, "XPRF-RUN 1 ");
     pf_tx_s(t, key);
     pf_tx_nl(t);
+    if (ri->endVerify != PF_EV_NONE) {
+        pf_tx_s(t, "XPRF-VERIFY 1 ");
+        pf_tx_u(t, (pf_u64)ri->endVerify);
+        pf_tx_nl(t);
+    }
     for (i = 0; i < plan->nsteps; i++) {
         for (k = 0; k < npasses; k++) {
             const PF_RESULT *r = &res[i * PF_MAX_PASSES + k];
@@ -1669,28 +1705,40 @@ long pf_saved_parse(const char *text, size_t len, PF_SAVED *sv)
                 !((fl[1] == 4 && memcmp(f[1], "read", 4) == 0) || (fl[1] == 5 && memcmp(f[1], "write", 5) == 0))) {
                 return line;
             }
+            /* The latest row of this label, operation and buffer; a pass
+             * number that does not rise begins the next test of them (the
+             * lines are written test by test, passes rising) */
+            {
+                int occ = 0;
+
+                for (r = 0; r < sv->nrows; r++) {
+                    PF_SAVED_ROW *x = &sv->rows[r];
+
+                    if (strlen(x->label) == fl[0] && memcmp(x->label, f[0], fl[0]) == 0 &&
+                        x->op == (fl[1] == 5 ? PF_OP_WRITE : PF_OP_READ) && x->buffer == pf_buf_by_name(f[2], fl[2])) {
+                        row = x;
+                        occ = x->occ + 1;
+                    }
+                }
+                if (row != NULL && pass <= row->lastPass) {
+                    row = NULL;
+                }
+                if (row == NULL) {
+                    if (sv->nrows >= PF_SAVED_MAX) {
+                        return line;
+                    }
+                    row = &sv->rows[sv->nrows++];
+                    memcpy(row->label, f[0], fl[0]);
+                    row->label[fl[0]] = 0;
+                    row->op = (fl[1] == 5) ? PF_OP_WRITE : PF_OP_READ;
+                    row->buffer = pf_buf_by_name(f[2], fl[2]);
+                    row->occ = occ;
+                }
+                row->lastPass = pass;
+            }
             if (status != PF_ST_OK || ns == 0) {
                 pos = e + 1;
                 continue;
-            }
-            for (r = 0; r < sv->nrows; r++) {
-                PF_SAVED_ROW *x = &sv->rows[r];
-
-                if (strlen(x->label) == fl[0] && memcmp(x->label, f[0], fl[0]) == 0 &&
-                    x->op == (fl[1] == 5 ? PF_OP_WRITE : PF_OP_READ) && x->buffer == pf_buf_by_name(f[2], fl[2])) {
-                    row = x;
-                    break;
-                }
-            }
-            if (row == NULL) {
-                if (sv->nrows >= PF_SAVED_MAX) {
-                    return line;
-                }
-                row = &sv->rows[sv->nrows++];
-                memcpy(row->label, f[0], fl[0]);
-                row->label[fl[0]] = 0;
-                row->op = (fl[1] == 5) ? PF_OP_WRITE : PF_OP_READ;
-                row->buffer = pf_buf_by_name(f[2], fl[2]);
             }
             if (row->npass < PF_MAX_PASSES) {
                 row->bytes[row->npass] = bytes;
@@ -1698,8 +1746,14 @@ long pf_saved_parse(const char *text, size_t len, PF_SAVED *sv)
                 row->reqs[row->npass] = reqs;
                 row->npass++;
             }
-            (void)pass;
             (void)lat;
+        } else if (n >= 14 && memcmp(s, "XPRF-VERIFY 1 ", 14) == 0) {
+            pf_u64 v;
+
+            if (!pf_parse_u64(s + 14, n - 14, &v) || v > PF_EV_STOPPED) {
+                return line;
+            }
+            sv->endVerify = (int)v;
         }
         pos = e + 1;
     }
@@ -1779,6 +1833,20 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
                 return 1;
             }
             p->fileMiB = v;
+            p->preset = PF_PRESET_CUSTOM;
+            i++;
+        } else if (pf_ieq(a, "min") || pf_ieq(a, "max")) {
+            /* the sweep's smallest or largest size, in KiB */
+            if (!pf_num(nx, 1, 8192, &v) || !pf_pow2(v)) {
+                pf_cpy(why, whyCap, "/min and /max take a power of two from 1 to 8192 (KiB).");
+                return 1;
+            }
+            if (pf_ieq(a, "min")) {
+                p->sweepMin = v * 1024u;
+            } else {
+                p->sweepMax = v * 1024u;
+            }
+            p->sweep = 1;
             p->preset = PF_PRESET_CUSTOM;
             i++;
         } else if (pf_ieq(a, "passes")) {

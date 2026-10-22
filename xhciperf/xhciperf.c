@@ -196,7 +196,8 @@ static PF_PARAMS g_runP;                /* the workload of the results shown (st
 static PF_PLAN g_plan;
 static PF_RESULT g_res[PF_MAX_STEPS * PF_MAX_PASSES];
 static CRITICAL_SECTION g_resCs;        /* g_res and g_s98steps: the controller writes, the window reads */
-static volatile LONG g_runBad;          /* a verification failed or could not read: the run's exit is 1 */
+static volatile LONG g_runBad;
+static volatile LONG g_endVerify;       /* PF_EV_ of the run's whole-file verification */          /* a verification failed or could not read: the run's exit is 1 */
 static int g_haveResults;
 static int g_npasses;
 static volatile LONG g_running;
@@ -701,6 +702,10 @@ static BYTE g_aspiHa, g_aspiTarget;
 /* ASPI requests sent and not yet given back: the process does not end
  * while ASPI may still write their SRB or buffer */
 static volatile LONG g_aspiOut;
+/* Threads that may send to ASPI (counter reads, searches), alive */
+static volatile LONG g_aspiThreads;
+/* Set as the process ends: no ASPI request is sent after it */
+static volatile LONG g_aspiClosing;
 /* Set once an ASPI request has not come back: ASPI is not asked again */
 static volatile LONG g_aspiHung;
 /* A search that timed out and has not returned */
@@ -840,6 +845,11 @@ static int aspi_exec(BYTE ha, BYTE target, const BYTE *cdb, int cdbLen, BYTE *bu
 
     *got = 0;
     if (ev == NULL) {
+        return 0;
+    }
+    /* nothing more once a request hung or the process is ending */
+    if (g_aspiHung || g_aspiClosing) {
+        CloseHandle(ev);
         return 0;
     }
     memset(&s, 0, sizeof(s));
@@ -1103,6 +1113,7 @@ static unsigned __stdcall s98_thread(void *arg)
     S98_REQ *rq = (S98_REQ *)arg;
 
     rq->ok = (g_os == PF_OS_9X) ? aspi_read(rq) : nt_read(rq);
+    InterlockedDecrement((LONG *)&g_aspiThreads);
     return 0;
 }
 
@@ -1129,8 +1140,10 @@ static int s98_read(S98_ANSWER *a)
     rq->lun = g_s98lun;
     rq->ha = g_aspiHa;
     rq->aspiTarget = g_aspiTarget;
+    InterlockedIncrement((LONG *)&g_aspiThreads);
     th = (HANDLE)_beginthreadex(NULL, 0, s98_thread, rq, 0, &id);
     if (th == NULL) {
+        InterlockedDecrement((LONG *)&g_aspiThreads);
         HeapFree(GetProcessHeap(), 0, rq);
         return 0;
     }
@@ -1160,6 +1173,7 @@ static unsigned __stdcall s98_find_thread(void *arg)
         HeapFree(GetProcessHeap(), 0, rq);
         InterlockedExchange((LONG *)&g_findOut, 0);
     }
+    InterlockedDecrement((LONG *)&g_aspiThreads);
     return 0;
 }
 
@@ -1186,8 +1200,10 @@ static void s98_find(const char *folder)
         return;
     }
     sz_cpy(rq->folder, sizeof(rq->folder), folder);
+    InterlockedIncrement((LONG *)&g_aspiThreads);
     th = (HANDLE)_beginthreadex(NULL, 0, s98_find_thread, rq, 0, &id);
     if (th == NULL) {
+        InterlockedDecrement((LONG *)&g_aspiThreads);
         HeapFree(GetProcessHeap(), 0, rq);
         return;
     }
@@ -2580,17 +2596,22 @@ static unsigned __stdcall run_main(void *arg)
     }
     /* The whole file at the end: when asked, and always for a verified run
      * that wrote nothing (its reads are checked against the preparation) */
-    if (g_p.verify && r->map != NULL && !stopped() && (g_p.verifyEnd || g_plan.minWrite == 0)) {
+    if (g_p.verify && r->map != NULL && stopped() && (g_p.verifyEnd || g_plan.minWrite == 0)) {
+        InterlockedExchange((LONG *)&g_endVerify, PF_EV_STOPPED);
+    } else if (g_p.verify && r->map != NULL && (g_p.verifyEnd || g_plan.minWrite == 0)) {
         pf_u32 fb;
         pf_u32 bad;
 
         post_status("Verifying the whole file");
         bad = verify_since(r, 0, 1, &fb);
         if (bad == 0 && r->verifyCut) {
+            InterlockedExchange((LONG *)&g_endVerify, PF_EV_STOPPED);
             post_log("The whole file's verification was stopped before its end; it is not known to be clean.");
         } else if (bad == 0) {
+            InterlockedExchange((LONG *)&g_endVerify, PF_EV_CLEAN);
             post_log("The whole file verified clean.");
         } else {
+            InterlockedExchange((LONG *)&g_endVerify, bad == 0xFFFFFFFFu ? PF_EV_UNREAD : PF_EV_BAD);
             InterlockedExchange((LONG *)&g_runBad, 1);
             post_log(bad == 0xFFFFFFFFu ? "The whole file's verification could not read the file." :
                      "The whole file's verification found data errors.");
@@ -2709,6 +2730,7 @@ static char *build_report(size_t *lenOut)
     ri.timerFreq = g_highRes ? g_freq : 0;
     ri.attributes = g_attributes;
     ri.stor98 = pages;
+    ri.endVerify = (int)g_endVerify;
     pf_tx_init(&t, buf, cap);
     {
         /* the run's workload; only how values are shown follows the window */
@@ -2762,21 +2784,12 @@ static int write_file(const char *path, const char *s, size_t n)
 /* The view: Summary and Sweep (record 29 sections 5.2 and 5.3)              */
 /* ------------------------------------------------------------------------ */
 
-static const PF_SAVED_ROW *saved_row(const PF_STEP *s)
+static const PF_SAVED_ROW *saved_row(int step)
 {
-    int i;
-
     if (!g_haveSaved) {
         return NULL;
     }
-    for (i = 0; i < g_saved.nrows; i++) {
-        const PF_SAVED_ROW *r = &g_saved.rows[i];
-
-        if (strcmp(r->label, s->label) == 0 && r->op == s->op && r->buffer == s->buffer) {
-            return r;
-        }
-    }
-    return NULL;
+    return pf_saved_find(&g_saved, &g_plan, step);
 }
 
 static void cell_text(int step, char *big, size_t bcap, char *sub, size_t scap)
@@ -2820,7 +2833,7 @@ static void cell_text(int step, char *big, size_t bcap, char *sub, size_t scap)
     if (sh.cpuLimited) {
         sz_cat(sub, scap, ", cpu");
     }
-    sv = saved_row(&g_plan.steps[step]);
+    sv = saved_row(step);
     if (sv != NULL) {
         pf_u64 old = pf_saved_value(sv, g_p.show, g_p.unitMiB);
         long ch = pf_change10(sh.rate10, old);
@@ -2984,7 +2997,17 @@ static void paint_sweep(HDC dc, RECT *rc)
         FillRect(dc, &b, s->op == PF_OP_WRITE ? wb : rb);
         FrameRect(dc, &b, GetSysColorBrush(COLOR_WINDOWTEXT));
         if (sh.status != PF_ST_NONE) {
-            pf_fmt_tenths(sh.rate10, v, sizeof(v));
+            const char *w = sh.status == PF_ST_FAILED ? "failed" : sh.status == PF_ST_DATAERR ? "data error" :
+                            sh.status == PF_ST_STOPPED ? "stopped" : sh.status == PF_ST_SKIPPED ? "not accepted" : "";
+
+            v[0] = 0;
+            if (sh.rate10 != 0 || sh.status == PF_ST_OK) {
+                pf_fmt_tenths(sh.rate10, v, sizeof(v));
+            }
+            if (w[0] != 0) {
+                sz_cat(v, sizeof(v), v[0] != 0 ? " " : "");
+                sz_cat(v, sizeof(v), w);
+            }
             TextOutA(dc, x0 + len + 4, b.top - 3, v, (int)strlen(v));
         }
         if (sweep_first(i + 1)) {
@@ -3510,6 +3533,7 @@ static void start_run(void)
     ResetEvent(g_stopEvent);
     InterlockedExchange((LONG *)&g_running, 1);
     InterlockedExchange((LONG *)&g_runBad, 0);
+    InterlockedExchange((LONG *)&g_endVerify, PF_EV_NONE);
     controls_enable(0);
     EnableWindow(ctl(IDC_START), FALSE);
     EnableWindow(ctl(IDC_STOP), TRUE);
@@ -4399,7 +4423,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     /* An ASPI request not yet given back still owns its SRB and buffer on
      * a thread of this process: the process waits for it, its window gone,
      * rather than free them under ASPI (record 29 section 6.2) */
-    while (g_aspiOut > 0) {
+    InterlockedExchange((LONG *)&g_aspiClosing, 1);
+    while (g_aspiOut > 0 || g_aspiThreads > 0) {
         Sleep(250);
     }
     return g_cliExit;

@@ -69,7 +69,7 @@ Command line
 
   XHCIPERF /run [/preset standard|standard9x|study9x|sweep|quick]
            [/folder <path>] [/size <MiB>] [/passes <n>] [/time <s>]
-           [/buffer aligned|offset|scattered]
+           [/buffer aligned|offset|scattered] [/min <KiB>] [/max <KiB>]
            [/pattern verifiable|random|zeros] [/cached] [/writethrough]
            [/verify] [/depth <n>] [/threads <n>] [/report <file>] [/exit]
 
