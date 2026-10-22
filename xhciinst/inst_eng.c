@@ -452,6 +452,7 @@ static int storDpOff;       /* 98 SE: DevicePath withdrawn by this run and
                                not named again (record 26 section 6.5.5) */
 static int stor_98se(void);
 static int stor_pair_left(void);
+static int stor_inf_found(int i);
 static char storPackDir[INST_PATH_CHARS];
 static int storPlanCase;      /* the case the plan showed (defined below) */
 static void pkg_src(const char *rel, char *path, size_t cap);
@@ -16566,6 +16567,8 @@ static DWORD storChoice;
 static int storSource;
 static int storDefault;
 static int storPlanCase = -1;   /* the case the plan showed */
+static int storHalf;    /* READ: the INF directories hold USBSTOR.INF alone */
+static int storPairSaid;        /* the pair's step already said this run */
 static int storRunCase = -1;    /* the case read again before the copies */
 static int storPre;
 static int storPreOwed;
@@ -17033,6 +17036,18 @@ static void stor_read(void)
     stor_read_states(storSt);
     storPlanCase = inst_stor_case(storSt, storSource);
     storDefault = inst_stor_default(storHaveChoice, (int)storChoice, storSt);
+    /* A lone USBSTOR.INF (record 26 section 6.5.5): the row ticked when a
+     * ticked run completes the pair, NUSB installed winning (unticked);
+     * the row says so either way. */
+    storHalf = inst_stor_pair(stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                              stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)) ==
+               INST_STOR_PAIR_STOR;
+    storDefault = inst_stor_half_default(storDefault, storUsb20u,
+                                         storHalf ? INST_STOR_PAIR_STOR :
+                                         INST_STOR_PAIR_NONE,
+                                         storPack > 0 &&
+                                         inst_stor_route(storPlanCase));
+    logonly("storage: lone USBSTOR.INF %d\n", storHalf);
     if (storPack <= 0) {
         storInclude = 0;
     } else if (opts.Storage) {
@@ -17046,17 +17061,31 @@ static void stor_read(void)
             storDefault, storInclude);
 }
 
+/* The lone USBSTOR.INF's sentence, after the row's lines. */
+static void stor_note_half(char *out, size_t cap)
+{
+    if (!storHalf) {
+        return;
+    }
+    strncat(out, " ", cap - strlen(out) - 1);
+    strncat(out, inst_stor_half_text(storPack > 0 &&
+                                     inst_stor_route(storPlanCase)),
+            cap - strlen(out) - 1);
+}
+
 /* The row's lines: the detection's text, and NUSB's entry. */
 static void stor_note(char *out, size_t cap)
 {
     if (storPack == 0) {
         inst_copy(out, "This download does not carry the USB storage drivers "
                   "(NONFREE\\STORAGE\\NUSB33\\W98SE).", cap);
+        stor_note_half(out, cap);
         return;
     }
     if (storPack < 0) {
         inst_copy(out, "The storage files in this download are not the ones "
                   "this release carries (the log names them).", cap);
+        stor_note_half(out, cap);
         return;
     }
     inst_stor_found_text(out, cap, storSt);
@@ -17064,6 +17093,7 @@ static void stor_note(char *out, size_t cap)
         strncat(out, " NUSB is installed (its Uninstall\\USB20U entry is "
                 "there).", cap - strlen(out) - 1);
     }
+    stor_note_half(out, cap);
 }
 
 /* What a ticked run does, one sentence (the plan, the Summary). */
@@ -17615,6 +17645,7 @@ static int stor_pair_left(void)
         return 0;
     }
     logonly("storage: the INF directories' pair is %d\n", pair);
+    storPairSaid = 1;
     out("USBSTOR.INF is still in the INF directory without USBNTMAP.INF%s.\n"
         "Plug in no new USB disk until both or neither are there: Windows' "
         "own NTMAP.INF\nwould take it and stop Windows. Run the installer "
@@ -18473,6 +18504,16 @@ static void stor_run_end(void)
 {
     int i;
 
+    /* Neither half alone left where Windows finds it at the end of the
+     * run, whatever the row (section 6.5.5): said once, a step. */
+    if (storHere && !opts.List && !storPairSaid &&
+        inst_stor_pair_warn(inst_stor_pair(
+            stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+            stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)))) {
+        out("\n");
+        stor_pair_left();
+        flagSteps = 1;
+    }
     if (!storHere || storPack <= 0) {
         return;
     }

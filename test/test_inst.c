@@ -4370,6 +4370,40 @@ static void test_storage(void)
           !inst_stor_pair_warn(INST_STOR_PAIR_NONE) &&
           !inst_stor_pair_warn(INST_STOR_PAIR_NTMAP),
           "pair left: both, neither or USBNTMAP.INF alone is not");
+    /* The row's default with a lone USBSTOR.INF: NUSB installed wins
+     * (unticked), then the lone half ticks it when a ticked run completes
+     * the pair, over a recorded "no" and over found files. */
+    CHECK(inst_stor_half_default(0, 0, INST_STOR_PAIR_STOR, 1) == 1 &&
+          inst_stor_half_default(1, 0, INST_STOR_PAIR_STOR, 1) == 1,
+          "lone USBSTOR.INF: the row ticked when the run completes the pair");
+    CHECK(inst_stor_half_default(1, 1, INST_STOR_PAIR_STOR, 1) == 0 &&
+          inst_stor_half_default(0, 1, INST_STOR_PAIR_STOR, 1) == 0 &&
+          inst_stor_half_default(1, 1, INST_STOR_PAIR_NONE, 1) == 0,
+          "lone USBSTOR.INF: NUSB installed wins, unticked");
+    CHECK(inst_stor_half_default(0, 0, INST_STOR_PAIR_STOR, 0) == 0 &&
+          inst_stor_half_default(1, 0, INST_STOR_PAIR_STOR, 0) == 1,
+          "lone USBSTOR.INF: no route, the default as it was");
+    CHECK(inst_stor_half_default(0, 0, INST_STOR_PAIR_BOTH, 1) == 0 &&
+          inst_stor_half_default(1, 0, INST_STOR_PAIR_NONE, 1) == 1 &&
+          inst_stor_half_default(0, 0, INST_STOR_PAIR_NTMAP, 1) == 0 &&
+          inst_stor_half_default(0, 0, -1, 1) == 0 &&
+          inst_stor_half_default(2, 0, INST_STOR_PAIR_NONE, 1) == 1,
+          "no lone USBSTOR.INF: the default as it was");
+    {
+        const char *t1 = inst_stor_half_text(1);
+        const char *t0 = inst_stor_half_text(0);
+        CHECK(strstr(t1, "USBSTOR.INF is in the INF directory without "
+                     "USBNTMAP.INF") == t1 && strstr(t1, "stop Windows") &&
+              strstr(t1, "puts USBNTMAP.INF beside it") &&
+              strstr(t1, "plug in no new USB disk") != NULL,
+              "lone USBSTOR.INF: the fixable sentence");
+        CHECK(strstr(t0, "stop Windows") && strstr(t0, "cannot complete") &&
+              strstr(t0, "remove that copy of USBSTOR.INF") != NULL &&
+              strstr(t0, "beside it") == NULL,
+              "lone USBSTOR.INF: the sentence when the run cannot fix it");
+        CHECK(strlen(t1) < 300 && strlen(t0) < 300,
+              "lone USBSTOR.INF: the sentences fit the row's note");
+    }
 
     /* An update with Source recorded: the engine's later copies, and a
      * file of the download's bytes the first run found and kept, are this

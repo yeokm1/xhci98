@@ -1762,6 +1762,17 @@ int inst_stor_scan(int found, int unread, int incomplete);
  * after a withdrawal or the uninstall's INF step, must be said as a step:
  * USBSTOR.INF without USBNTMAP.INF, or not known. */
 int inst_stor_pair_warn(int pair);
+/* The row's default with the INF directories read (record 26 section
+ * 6.5.5, the owner's answer of 2026-10-22): NUSB installed (usb20u) wins,
+ * unticked; else a lone USBSTOR.INF (pair INST_STOR_PAIR_STOR) ticks the
+ * row when a ticked run can complete the pair (route: the case admits the
+ * route and the download carries the seven), over a recorded choice;
+ * else def, the default of inst_stor_default. */
+int inst_stor_half_default(int def, int usb20u, int pair, int route);
+/* The sentence said with the row (Components, Summary, console) when the
+ * INF directories hold USBSTOR.INF without USBNTMAP.INF; fixable: a ticked
+ * run completes the pair. */
+const char *inst_stor_half_text(int fixable);
 /* The SilentClasses entries the storage row adds on 98 SE (record 26
  * section 6.5.12, task 43.42 option A): USBSTOR.INF's generic Bulk-Only
  * lines, each a 4-byte entry of design record 13 section 6.11's form. */

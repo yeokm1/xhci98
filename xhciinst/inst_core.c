@@ -6226,6 +6226,30 @@ int inst_stor_pair_warn(int pair)
     return pair < 0 || pair == INST_STOR_PAIR_STOR;
 }
 
+int inst_stor_half_default(int def, int usb20u, int pair, int route)
+{
+    if (usb20u) {
+        return 0;
+    }
+    if (pair == INST_STOR_PAIR_STOR && route) {
+        return 1;
+    }
+    return def != 0;
+}
+
+const char *inst_stor_half_text(int fixable)
+{
+    return fixable ?
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
+        "own NTMAP.INF would take a new USB disk and stop Windows. Installing "
+        "these drivers puts USBNTMAP.INF beside it; until then, plug in no "
+        "new USB disk." :
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
+        "own NTMAP.INF would take a new USB disk and stop Windows. This run "
+        "cannot complete the pair: remove that copy of USBSTOR.INF before "
+        "plugging in a new USB disk.";
+}
+
 static void inst_stor_names(char *out, size_t cap,
                             const int st[INST_STOR_COUNT])
 {

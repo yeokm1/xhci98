@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 28, 2026-10-22 (the owner's point of that day for the
+Status: draft 29, 2026-10-22 (the owner's answer of that day to 43.5's
+leg i3: a lone `USBSTOR.INF` found ticks the storage row, NUSB installed
+winning, and is said with a step, section 6.5.5); draft 28, 2026-10-22
+(the owner's point of that day for the
 simplified Components page: roadmap task 43.46's 98 SE and ME
 request-size driver a box under Stor98's; for roadmap 43.48's rows, one folder per driver and, on 98 SE and ME, staging by `DevicePath` entries, section 5.0); draft 27,
 2026-10-22 (roadmap-usb4 task 43.5's finding, the
@@ -800,7 +803,7 @@ Check boxes, one a line, each with one sentence:
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
 | Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
-| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone until draft 20, and from draft 20 on every system, unticked by default but on 98 SE, ticked elsewhere with section 5.3.1's warning and its files then only copied to the tools folder; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
+| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | ticked with a lone `USBSTOR.INF` in the INF directories when a ticked run completes the pair (draft 29, section 6.5.5); otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone until draft 20, and from draft 20 on every system, unticked by default but on 98 SE, ticked elsewhere with section 5.3.1's warning and its files then only copied to the tools folder; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -1719,6 +1722,31 @@ Windows can find them:
   not hold a copy of `USBSTOR.INF` without one of `USBNTMAP.INF`
   (`inst_stor_bulk_admit`); otherwise the devices are not installed, a
   step is left, and the run says to run the installer again.
+- **A lone `USBSTOR.INF` found before the run** (draft 29; the owner's
+  answer of 2026-10-22 to 43.5's leg i3: a hand install through the Add
+  New Hardware wizard leaves `INF\OTHER\MicrosoftUSBSTOR.INF` alone, its
+  bytes the download's, and the row then opened unticked, "Only some of
+  the seven", with no word of the hazard). `READ` reads the INF
+  directories once (`stor_inf_found`, both INFs); with `USBSTOR.INF`
+  there and no `USBNTMAP.INF` the row's default is ticked when a ticked
+  run can complete the pair (the download carries the seven and the
+  case admits the route), over a recorded choice and over the files
+  found (`inst_stor_half_default`). The two rules are ordered so: NUSB
+  installed (its `Uninstall\USB20U` entry) comes first and wins, the row
+  unticked (roadmap 43.51's rule on branch 3.2.0.0); the lone half
+  comes second; `inst_stor_default` (the recorded choice, then the
+  files found) last. `/storage` and `/nostorage` still decide over all
+  three. The row's note (the Components page, the Summary, the console's
+  question and plan) adds `inst_stor_half_text`: Windows' own
+  `NTMAP.INF` would take a new disk and stop Windows, and either
+  installing these drivers puts `USBNTMAP.INF` beside it, or, with no
+  route, this run cannot complete the pair and that copy is to be
+  removed before a new disk is plugged in. At the end of every install
+  run on 98 SE the INF directories are read again unless a withdrawal
+  already said it: a `USBSTOR.INF` still alone (the row left unticked, or
+  no route), or a reading that fails, is said with `stor_pair_left`'s
+  advice on the Finish page and the console, and a step is left (exit
+  4). A ticked run that completes the pair says nothing more.
 - **The withdrawal and the uninstall** remove in the reverse order: every
   copy of `USBSTOR.INF` first (the placed ones and the setup engine's
   `INF\OTHER` copies, sections 6.5.4 and 6.5.8), then `USBNTMAP.INF`'s,
