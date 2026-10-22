@@ -1,7 +1,9 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 6, 2026-10-22, before code (roadmap-usb4 task 43.50),
-reviewed and revised five times the same day. Draft 6: the write
+Status: draft 7, 2026-10-22, before code (roadmap-usb4 task 43.50),
+reviewed and revised six times the same day. Draft 7: the blocks of a
+write that did not complete marked unknown, the planning limit equal to
+the allocator's. Draft 6: the write
 generation taken by a saturating allocator under a critical section.
 Draft 5: the write generation guarded at issue, never wrapping. Draft 4: a write
 generation in every stamp and in the expected-state map, so a dropped
@@ -292,11 +294,19 @@ Every test reads and writes one file of the tool's own,
   region: the generation of the last write that completed on the block (0
   for the preparation). A write is recorded in the map when it completes
   successfully; since no two writes to a block are ever in flight
-  together, the map is the block's exact expected content. The plan
+  together, the map is the block's exact expected content. A write that
+  fails, is cancelled or completes short may still have changed some of
+  its units (Stor98, for one, lets the commands it already issued finish
+  before it reports an aborted request with no bytes moved, `engine.c`),
+  so its blocks are marked unknown (`0xFFFFFFFF`, which no write ever
+  takes): verification skips them, checks every other block as usual, and
+  reports itself "incomplete: 3 blocks written by a request that did not
+  complete were not checked". The plan
   refuses a verifiable run whose map would exceed 16 MiB, four million
   blocks ("lower the file size, or raise the smallest write size, to
-  verify"), or whose byte-budgeted tests alone could issue more than
-  2^32 - 1 writes. Timed tests have no count the plan can know, so the
+  verify"), or whose byte-budgeted tests, warm-ups and passes counted
+  together could issue more than `0xFFFFFFFE` writes, the allocator's
+  limit below. Timed tests have no count the plan can know, so the
   generation is also guarded where it is taken: one run-wide counter
   over every test, pass and warm-up, read, checked and advanced in one
   step under a critical section (`EnterCriticalSection`, every target)
@@ -1192,7 +1202,9 @@ also when the same block was written earlier in the same test or pass), a
 misplaced write, another run's unit, a changed body, an untouched region
 and a block written twice; the generation allocator from `0xFFFFFFF0`, saturating at
 `0xFFFFFFFE`, with two workers forced to interleave at exhaustion, one of
-them already past its stop check; the in-flight exclusion at depth 32, the bounded redraw
+them already past its stop check; plans of exactly `0xFFFFFFFE` and
+`0xFFFFFFFF` budgeted writes (accepted, refused); a cancelled overwrite
+whose first child completed, its blocks unknown and the rest checked; the in-flight exclusion at depth 32, the bounded redraw
 and a part of one block; a zero seed and a derived zero state; the
 arithmetic at its bounds (frequencies of 1,193,182 Hz, 3,579,545 Hz and
 near 2^32, a 2-hour interval, a zero interval) and each rounding edge; a
