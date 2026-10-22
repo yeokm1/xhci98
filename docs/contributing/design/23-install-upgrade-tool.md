@@ -1,6 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 35, 2026-10-22 (roadmap-usb4 task 43.27, record 25
+Status: revision 36, 2026-10-23 (roadmap-usb4 task 43.46, design record
+30 section 7.2: `/s98vsd` and `/nos98vsd`, `S98VSD.VXD` with Stor98 on
+98 SE and ME, the switch table; recorded at the batch 7 merge);
+revision 35, 2026-10-22 (roadmap-usb4 task 43.27, record 25
 section 7.7: `/faster` and `/nofaster`, the computer's choice of
 XHCITR's "can run faster" notice, section 9.5 and the switch table);
 revision 34, 2026-10-22 (the catalog refusal's text asks for the
@@ -2040,6 +2043,7 @@ these systems.
 | `/storage`, `/nostorage` | (revision 24) Windows 98 SE: install the USB storage drivers of record 26 section 6.5 without asking, or leave them out; `/storage` refused on any other system, where the download does not carry them or carries other bytes, and with `/nostorage`; both refused with `/uninstall`, `/devices` and `/eject`; `/nostorage` changes nothing on another system |
 | `/usb` | (revision 26, proposal) Windows 8 and 8.1: put the USB drivers in the run, which there are otherwise left out, with record 26 section 5.3.1 case 3a's warning; elsewhere it changes nothing; refused with `/cmonly`, `/uninstall`, `/devices` and `/eject`. Revision 26 also lifts `/cmonly`'s refusal on 98 SE and ME (case 2's warning), `/storage`'s on any system but 98 SE (case 1: the copy to the tools folder), and `/stor98`'s "never offered on 8 and 8.1" (case 3b), each warning printed before the go-ahead question and printed and logged under `/yes` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
+| `/s98vsd`, `/nos98vsd` | (revision 36) preselect `S98VSD.VXD`, Stor98's large-transfer layer on 98 SE and ME, ticked or unticked (design record 30 section 7.2); without either it follows Stor98 (ticked whenever Stor98 is, the owner, 2026-10-22), and the console asks after Stor98's question, Enter and `/yes` giving Y. `/s98vsd` needs Stor98 in the run (`/stor98`, or `/thunderbolt` or `/cmonly` without `/nostor98`); refused together, with `/uninstall`, `/devices` and `/eject`, and both on every system but 98 SE and ME |
 | `/faster`, `/nofaster` | (revision 35) the computer's choice of XHCITR's "can run faster" notice, on or off (section 9.5 item 7; record 25 section 7.7); refused together, and with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |

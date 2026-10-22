@@ -183,10 +183,11 @@ of 512 MB and a tenth of the drive).
   threads.
 - **Windows 98 SE and ME:** queue depth is 1 there (Win32 file I/O waits
   for each request); threads are offered and the Stor98 page shows whether
-  their requests overlapped. A 1 MiB unbuffered request is cut by the
+  their requests overlapped. Without `S98VSD.VXD` ("NVMe drives behind
+  Thunderbolt or USB4", below), a 1 MiB unbuffered request is cut by the
   system into 63 KiB pieces before Stor98 sees it, and a 128 to 512 KiB
-  one too when its buffer is physically fragmented; the Stor98 page shows
-  it.
+  one too when its buffer is physically fragmented; with it, requests of
+  up to 2 MiB reach Stor98 whole. The Stor98 page shows which.
 - **Stor98:** where the bundled Stor98 drives the disk, the Stor98 page
   shows what reached the drive during each test - the sizes of the
   requests Stor98 received and of the commands it sent, its splits, the
@@ -198,9 +199,10 @@ of 512 MB and a tenth of the drive).
   requests per second and the mean time per request; copied as text,
   saved to a file, and a saved file compared with a new run measured the
   same way.
-- **Not read yet:** the virtual-machine legs and the owner's hardware
-  (record 29 section 14); the tool has been built and its pure half
-  host-tested only.
+- **Read so far:** smoke runs on the Windows 98 SE emulator and a run on
+  the owner's 98 SE machine (record 29 section 15). The acceptance legs
+  on the other systems and on hardware (record 29 section 14) are still
+  owed.
 
 ## What `3.1.0.0` changes
 
@@ -2288,6 +2290,23 @@ and ME as a file, at the next start, after a shut down). Stor98 is not for
 internal NVMe drives: do not install it on one. Its INF matches every NVMe
 controller, so Windows may still offer it for an internal NVMe drive that
 has no driver: decline it there.
+
+On Windows 98 SE and ME, `release-x86\` also carries `S98VSD.VXD` (new in
+`3.2.0.0`, roadmap-usb4 task 43.46, design record 30), this package's own
+disk-layer driver for Stor98's drives. Without it Windows cuts a read or
+write over 512 KiB, or one whose buffer is in more than 17 physical
+pieces, into 63 KiB pieces before Stor98 sees it; with it, reads and
+writes of up to 2 MiB reach Stor98 whole. Copies through the file cache
+are unchanged. `SETUP.EXE` places it in `SYSTEM\IOSUBSYS\` with Stor98:
+its box, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB", sits
+under Stor98's and is ticked whenever Stor98's is. `/nos98vsd` leaves it
+out and `/s98vsd` asks for it (it needs Stor98 in the run); on every other
+system the box is greyed and both switches are refused. Unticked, Stor98
+works as before. An install also removes a `STOR98.VXD` that a test build
+of this release placed (that name stopped Stor98 from starting). Read so
+far on the 98 SE emulator and on the owner's 98 SE machine, where 2 MiB
+unbuffered writes ran about four times and reads about five times as
+fast as without it; its Windows ME legs are still owed.
 
 When a tunnel drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:

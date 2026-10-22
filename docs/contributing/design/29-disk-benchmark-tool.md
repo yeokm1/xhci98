@@ -1594,5 +1594,6 @@ a choice:
   the letter's only claimant, and with more than one the page and the
   report say the registry gives the letter to that many disks.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
-  virtual machines or the owner's hardware; until then the tool is built,
-  gated and host-tested only.
+  virtual machines or the owner's hardware; until then its readings are
+  the 98 SE smoke runs and the owner's 98 SE bench above, not the
+  acceptance matrix.

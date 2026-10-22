@@ -165,7 +165,11 @@ install included), never while NUSB is installed.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
-/thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /notray,
+/thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and
+/nos98vsd (98 SE and ME: S98VSD.VXD, Stor98's large transfers, ticked or
+unticked; /s98vsd needs Stor98 in the run), /faster and /nofaster
+(the USB Tree's "can run faster" notice on or off for this computer),
+/notray,
 /nouas, /storage, /nostorage, /cmonly and /usb (the components,
 preselected),
 /set Name=Value
