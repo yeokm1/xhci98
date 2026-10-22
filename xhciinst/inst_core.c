@@ -1207,6 +1207,7 @@ const char *inst_action_text(int action)
     case INST_ACT_FOREIGN: return "another driver: left";
     case INST_ACT_FILTER:  return "add the tunnel-port filter";
     case INST_ACT_UNKNOWN: return "version unreadable: left";
+    case INST_ACT_WINDOWS: return "left for Windows' own UAS driver (xhciuas staged)";
     default:               return "?";
     }
 }
@@ -3399,6 +3400,14 @@ int inst_uas_decide(int usbInclude, int noUas)
     return usbInclude && !noUas;
 }
 
+int inst_uas_nt6_action(int osKind, int action)
+{
+    if (osKind == INST_OS_CMONLY && action == INST_ACT_INSTALL) {
+        return INST_ACT_WINDOWS;
+    }
+    return action;
+}
+
 int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
                     int *offered, const char **refusal)
 {
@@ -3513,7 +3522,10 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "every xHCI controller, the one your keyboard and mouse "
                       "may use included. The uninstall is meant to give the "
                       "controllers back to Windows' own driver; that has not "
-                      "been tested either.");
+                      "been tested either. There the UAS disk driver, when "
+                      "ticked, is only staged: Windows' own UAS driver stays "
+                      "the default, and xhciuas.sys can be chosen for a disk "
+                      "in Device Manager.");
     }
     if (set & INST_CW_NOCM8) {
         inst_cat_para(out, cap,

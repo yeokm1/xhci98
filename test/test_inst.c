@@ -267,6 +267,8 @@ static void test_cm_only(void)
         CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
               strstr(text, "not been tested on Windows 8 or 8.1") != NULL &&
+              strstr(text, "UAS disk driver, when ticked, is only staged") !=
+                  NULL &&
               strstr(text, "Stor98 has not been tested") != NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
@@ -3219,6 +3221,31 @@ static void test_uas(void)
     CHECK(inst_uas_decide(1, 0) && !inst_uas_decide(1, 1) &&
           !inst_uas_decide(0, 0) && !inst_uas_decide(0, 1),
           "UAS in the run only with the USB drivers and without /nouas");
+    /* Windows 8 and 8.1 (task 43.29, owner 2026-10-22): xhciuas.inf
+     * staged, never forced; Windows' own UAS driver stays the default. */
+    CHECK(inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_INSTALL) ==
+              INST_ACT_WINDOWS &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_FOREIGN) ==
+              INST_ACT_FOREIGN &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_UPDATE) ==
+              INST_ACT_UPDATE &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_CURRENT) ==
+              INST_ACT_CURRENT &&
+          inst_uas_nt6_action(INST_OS_CMONLY, INST_ACT_NEWER) ==
+              INST_ACT_NEWER,
+          "8 and 8.1: a UAS disk with no driver left for Windows' own, xhciuas "
+          "kept current where it runs");
+    CHECK(inst_uas_nt6_action(INST_OS_FULL, INST_ACT_INSTALL) ==
+              INST_ACT_INSTALL &&
+          inst_uas_nt6_action(INST_OS_REFUSED, INST_ACT_INSTALL) ==
+              INST_ACT_INSTALL,
+          "2000 to 7, 98 SE and ME: a UAS disk with no driver installed");
+    CHECK(!inst_action_runs(INST_ACT_WINDOWS, 0) &&
+          !inst_action_runs(INST_ACT_WINDOWS, 1),
+          "left for Windows: never run, /force neither");
+    CHECK(strstr(inst_action_text(INST_ACT_WINDOWS),
+                 "Windows' own UAS driver") != NULL,
+          "left for Windows: said so");
     argv[0] = "x";
     argv[1] = "/nouas";
     CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.NoUas,

@@ -174,6 +174,7 @@ int inst_bus_id(const char *instanceId);
 #define INST_ACT_FOREIGN    4   /* another driver: left                    */
 #define INST_ACT_FILTER     5   /* tunnel port on pci without our filter   */
 #define INST_ACT_UNKNOWN    6   /* ours, version unreadable: refused        */
+#define INST_ACT_WINDOWS    7   /* 8, 8.1: a UAS disk left to Windows' own  */
 
 /* A driver key's DriverVersion: three answers (record 23 section 5.3). */
 #define INST_VS_ABSENT      0
@@ -985,6 +986,14 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
  * unticked box leaves it out. Left out, xhciuas.inf is neither staged nor
  * installed and an xhciuas already installed stays as it is. */
 int inst_uas_decide(int usbInclude, int noUas);
+
+/* Windows 8 and 8.1 (task 43.29, owner 2026-10-22; record 26 section
+ * 5.3.1 case 3a): xhciuas.inf is staged but never forced, so Windows' own
+ * UAS driver stays the default. A UAS disk with no driver is left for
+ * Windows (INST_ACT_WINDOWS); one on another driver stays foreign; one
+ * already on xhciuas (the user's own pick) is kept current. Any other
+ * system, or kind: the action as given. */
+int inst_uas_nt6_action(int osKind, int action);
 
 /* The step when that routine is not implemented either: exit 4, nothing
  * changed. */

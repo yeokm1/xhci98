@@ -1689,7 +1689,8 @@ static void group_verdicts(void)
                 continue;
             }
             d->Refused = 0;
-            if (groupVerdict[g] != INST_GROUP_OK && d->Action != INST_ACT_FOREIGN) {
+            if (groupVerdict[g] != INST_GROUP_OK && d->Action != INST_ACT_FOREIGN &&
+                d->Action != INST_ACT_WINDOWS) {
                 d->Refused = 1;
                 d->Runs = 0;
             } else if (repair && envNow.Nt && d->Present &&
@@ -1792,6 +1793,9 @@ static void plan(void)
             }
         }
         d->Action = inst_action(&dv, inf_version(d->Inf));
+        if (d->Inf == INST_INF_UAS) {
+            d->Action = inst_uas_nt6_action(osKind, d->Action);
+        }
         d->Runs = inst_action_runs(d->Action, opts.Force);
         /* /restage: a confirmed binary mismatch reinstalls the INF's devices,
          * whatever their DriverVersion says (record 23 section 5.7). */
