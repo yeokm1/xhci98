@@ -6355,8 +6355,9 @@ device still present, or a hub, keeps the reset.
    and disables the slot. The caller gets `HCD_CTL_NOT_SENT`, as for any
    timeout, and every caller already reads `Ep0Stuck` as "the device is
    being taken"; a select then answers DEVICE_GONE (`hcdCfgSelectAnswer`).
-   Counted (`EnumTransfersDeparted`, beside `EnumTransfersTimedOut`) and
-   logged (`enum.xfer.departed`, the slot and the verdict).
+   Counted (`EnumTransfersDeparted`, beside `EnumTransfersTimedOut`; the
+   stop dump's `enum.xfer.departed`) and noted per transfer
+   (`enum.xfer.gone`, the slot in bits 15:8 and the verdict below).
 
 A device behind a TT is stopped too, unlike the door's withdrawal: that
 withdrawal keeps using EP0 and so must clear the TT buffer the stopped
