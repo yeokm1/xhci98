@@ -20049,7 +20049,13 @@ static int other_rec_append(const char *path, const char *line)
         othRecBroken = 1;
         return 0;
     }
-    SetFilePointer(h, 0, NULL, FILE_END);
+    SetLastError(NO_ERROR);
+    if (SetFilePointer(h, 0, NULL, FILE_END) == 0xFFFFFFFFUL &&
+        GetLastError() != NO_ERROR) {
+        CloseHandle(h);
+        othRecBroken = 1;
+        return 0;
+    }
     ok = WriteFile(h, line, n, &put, NULL) && put == n &&
          WriteFile(h, "\r\n", 2, &put, NULL) && put == 2 &&
          FlushFileBuffers(h);
@@ -20667,11 +20673,11 @@ static int other_copy_file(OTHSET *o, const char *recPath, const char *dest,
         }
         return 0;
     }
+    flagChanged = 1;
     if (!other_rec_line(recPath, 'D', token, NULL, dest)) {
         return 0;
     }
     *made = 1;
-    flagChanged = 1;
     return 1;
 }
 
@@ -20978,6 +20984,10 @@ static int other_stage_nt(int set, const char *dir, const INST_STAGE_LINE *s,
     }
     other_path(path, sizeof(path), dir, s->Inf);
     buf = read_file(path, &size);
+    if (buf == NULL) {
+        out("  %s is not staged: its copy cannot be read.\n", s->Inf);
+        return 0;
+    }
     free(buf);
     if (!other_inventory(hash, size, list, sizeof(list))) {
         out("  %s is not staged: the driver store could not be listed whole.\n",
@@ -21067,12 +21077,28 @@ static void other_restore_devicepath(int set)
     DWORD i;
     int e;
 
-    if (envNow.Nt || opts.List || other_key_exists(set) != 1) {
+    if (envNow.Nt || opts.List) {
+        return;
+    }
+    e = other_key_exists(set);
+    if (e < 0) {
+        out("%s: its record cannot be read; its DevicePath entries are not "
+            "checked.\n", inst_other_label(set));
+        flagSteps = 1;
+        return;
+    }
+    if (e == 0) {
         return;
     }
     for (i = 0;; i++) {
         e = other_staged_enum(set, i, name, sizeof(name), data, sizeof(data));
-        if (e <= 0) {
+        if (e < 0) {
+            out("%s: its staging record cannot be read; its DevicePath "
+                "entries are not checked.\n", inst_other_label(set));
+            flagSteps = 1;
+            return;
+        }
+        if (e == 0) {
             return;
         }
         if (!inst_eq(data, "DevicePath")) {
@@ -21103,6 +21129,7 @@ static void other_restore_devicepath(int set)
                 continue;
             }
             logonly("other: %s put back on DevicePath\n", name);
+            flagChanged = 1;
         }
     }
 }
