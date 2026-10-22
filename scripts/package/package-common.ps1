@@ -2160,9 +2160,9 @@ function ConvertFrom-DriverPackRecord {
 #
 # The tool readmes the cut reads, by the tool's directory under the
 # repository: make-release.ps1 takes its default -CleanToolDir,
-# -MarkToolDir, -InstallToolDir and -TrayToolDir from this table and reads
-# README.TXT in each, and the gate reads the same four. A fifth tool's
-# readme is added here, or the gate does not see it.
+# -MarkToolDir, -InstallToolDir, -TrayToolDir and -PerfToolDir from this
+# table and reads README.TXT in each, and the gate reads the same five. A
+# sixth tool's readme is added here, or the gate does not see it.
 $script:PlainTextColumns = 78
 $script:ToolReadmeName = "README.TXT"
 $script:ToolReadmeDirs = [ordered]@{
@@ -2170,6 +2170,7 @@ $script:ToolReadmeDirs = [ordered]@{
     Mark    = "xhcimark"
     Install = "xhciinst"
     Tray    = "xhcitr"
+    Perf    = "xhciperf"
 }
 
 function Get-PlainTextFaults {

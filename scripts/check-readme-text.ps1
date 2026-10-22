@@ -14,7 +14,7 @@
 # Nothing here is a second copy of the rule or the list. Both are
 # scripts\package\package-common.ps1's, which make-release.ps1 reads too:
 # Get-PlainTextFaults (the rule, and the messages the cut prints),
-# $script:ToolReadmeDirs and $script:ToolReadmeName (the four tools and the
+# $script:ToolReadmeDirs and $script:ToolReadmeName (the five tools and the
 # file the cut reads in each), and Read-ToolReadmeLines (how it reads one).
 # The footer the cut appends is make-release.ps1's own text and is checked
 # there; what a merge changes is the tracked readme.
@@ -26,7 +26,7 @@
 # non-ASCII character through. The rest of that readme is make-release.ps1's
 # template, met at a cut.
 #
-#   check-readme-text.ps1             check the four tracked readmes and
+#   check-readme-text.ps1             check the five tracked readmes and
 #                                     the rendered release history
 #   check-readme-text.ps1 -SelfTest   the rule's own refusals, in memory
 #
@@ -90,8 +90,8 @@ if ($SelfTest) {
         $failed++
     }
 
-    if ($script:ToolReadmeDirs.Count -lt 4) {
-        Write-Host "SELFTEST FAIL: package-common.ps1 lists fewer than the four tool readmes" -ForegroundColor Red
+    if ($script:ToolReadmeDirs.Count -lt 5) {
+        Write-Host "SELFTEST FAIL: package-common.ps1 lists fewer than the five tool readmes" -ForegroundColor Red
         $failed++
     }
     if ($failed -gt 0) { exit 1 }

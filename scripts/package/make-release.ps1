@@ -535,13 +535,13 @@ was asked for, and nothing else.
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
-# The four tools whose README.TXT the cut reads, from package-common.ps1's
+# The five tools whose README.TXT the cut reads, from package-common.ps1's
 # table, which the gated build's readme check reads too (task 43.61).
 if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo $script:ToolReadmeDirs.Clean }
 if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo $script:ToolReadmeDirs.Mark }
 if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo $script:ToolReadmeDirs.Install }
 if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo $script:ToolReadmeDirs.Tray }
-if ($PerfToolDir -eq "") { $PerfToolDir = Join-Path $repo "xhciperf" }
+if ($PerfToolDir -eq "") { $PerfToolDir = Join-Path $repo $script:ToolReadmeDirs.Perf }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -7331,10 +7331,7 @@ sufficient.
 
     # --- the disk benchmark's readme and notices (task 43.50) ----------------
     if ($null -ne $perftoolStaged) {
-        $perfReadme = @([System.IO.File]::ReadAllText((Join-Path $PerfToolDir "README.TXT")) -split "`r?`n")
-        while ($perfReadme.Count -gt 0 -and $perfReadme[$perfReadme.Count - 1] -eq "") {
-            $perfReadme = @($perfReadme | Select-Object -First ($perfReadme.Count - 1))
-        }
+        $perfReadme = @(Read-ToolReadmeLines (Join-Path $PerfToolDir $script:ToolReadmeName))
         $perfFooter = @"
 
 ------------------------------------------------------------------------------
