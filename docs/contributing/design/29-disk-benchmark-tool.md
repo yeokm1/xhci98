@@ -1418,6 +1418,21 @@ Each the author's, for the owner to confirm, unless it names the owner.
 | P.9 | 98 SE and 7 x64 | install, update with the tool running, uninstall: the file placed, "steps left", removed |
 | P.10 | the owner's hardware | 98 SE on the P14s with Stor98, before and after 43.46's VSD; Windows 10 or 7 on the same drive; the saved files compared |
 
+**Narrowed (the coordinator's overnight decision, 2026-10-23, pending the
+owner's review).** 98 SE: every leg of the table but P.6 and P.10. ME: the
+9x set again (P.1, P.2, P.5 with and without S98VSD.VXD, P.7, P.8). NT:
+P.3, P.4 and P.6 on 2000, XP, 7 and 10, x86 (10 x64 only where cheap); on
+8 and 8.1 one P.4 smoke run (Quick) each. The other cells of P.4, P.7 to
+P.9 on 7, and XP x64, Vista and 8 x64 stay owed.
+
+**On the owner's real-check list.** On real 98 SE hardware, whether the
+Quick preset's 2 s timed steps on the IDE system disk end near 2 s. On the
+emulator under heavy PIO the guest's tick count (the deadline's clock) lagged
+the performance counter (the measurement's) about fourteen times: a 2 s
+step ran 28 s by the counter. The figures stay right, since they use the
+counter; only the step's length is in question, and the clock is not
+changed until the reading.
+
 ### 14.3 Decided by the owner (2026-10-22)
 
 Every question draft 8 left for the owner is answered: the Stor98 change

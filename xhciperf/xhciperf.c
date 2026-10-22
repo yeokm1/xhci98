@@ -1951,6 +1951,11 @@ static void record_put(RUN *r, pf_u64 planned, pf_u64 prepared)
     memcpy(rec + 36, &r->indexHi, 4);
     RegSetValueExA(k, "Leftover", 0, REG_BINARY, rec, sizeof(rec));
     RegSetValueExA(k, "LeftoverPath", 0, REG_SZ, (const BYTE *)r->path, (DWORD)strlen(r->path) + 1);
+    if (prepared == 0 || prepared == planned) {
+        /* 98 SE and ME write the registry lazily: without this a crash during
+         * the preparation loses the record of the file it leaves behind */
+        RegFlushKey(k);
+    }
     RegCloseKey(k);
 }
 
