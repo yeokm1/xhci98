@@ -1349,8 +1349,9 @@ static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_CTL_ABANDONED;
     }
     if (dev->Ep0Stuck || hc->ScratchHeld != 0) {
-        /* Its record is still queued from a timeout: reusing it would
-         * relink the engine's queue. Or another
+        /* A timeout: its record may still be queued, and reusing it would
+         * relink the engine's queue; or the device was found leaving and
+         * its teardown is owed (task 43.53). Or another
          * device's abandoned TD may still write the scratch until that
          * slot is taken back (35-T.3). */
         return HCD_CTL_NOT_SENT;
@@ -1396,7 +1397,8 @@ static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     outcome = hcdThreadControlQuiet(hc, dev, requestType, request, value,
                                     index, length, soft, bytes);
     if (!dev->Ep0Stuck) {
-        /* A timed-out one leaves EP0 paused for the reset it requested. */
+        /* A timed-out one leaves EP0 paused for the reset it requested,
+         * or for the teardown of a device found leaving (task 43.53). */
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
     }
     return outcome;
@@ -2284,8 +2286,9 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * its location: a device whose read fails at one plug and not at the next
  * changes devnode, and three fails in a row is what it takes. (The other
  * way is a duplicate: a serial id a present PDO already carries leaves
- * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it left EP0's record queued
- * (dev->Ep0Stuck) and requested the controller reset, which takes the
+ * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it
+ * set dev->Ep0Stuck and either requested the controller reset or found the
+ * device leaving (task 43.53), and the reset or the departure takes the
  * device; 0 is returned and no PDO is made from it, so no location id is
  * ever given for want of a read the reset will repeat. Every other return
  * is 1. The reads use the scratch, which the caller has done with. Thread
