@@ -727,6 +727,11 @@ so record 30's "no translation for it" is not read. The i98 kit needed
 `-device usb4-debug-port` for Stor98's debug-port lines; without it the
 test build injected without logging.
 
+After review the test build was revised (`b5008f40`): the injected
+failure ends earlier kept sense and finishes through `EngStartIoTail`.
+The QuickInstall row was run again with it: 330 injected, 330 REQUEST
+SENSE, and 64 KiB, 1 and 2 MiB with `t9x file` all verified 0.
+
 **43.50's free-memory finding.** These readings were each a new boot's
 first runs, apart from the fragmented phases and the second runs noted
 above. The P14s "no layer" arm ran after an XHCIPERF run in the same boot.
