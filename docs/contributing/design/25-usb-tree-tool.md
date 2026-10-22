@@ -1255,8 +1255,8 @@ a disconnection or an eject.
    `tr_red_state`, host-tested in `test\test_trred.c`). Its inputs are
    the poll's snapshot (`TR_SNAP`: each NHI's liveness and stage, each
    router entry's kind and approval), the `xhci98.sys` controllers' last
-   flags (`TR_RED_HC`: failed, a name) and 43.27's handed-over set
-   (`TR_RED_DEV`: the kind, a name); its answer is how many conditions
+   flags (`TR_REDHC`: failed, a name) and 43.27's handed-over set
+   (`TR_REDDEV`: the kind, a name); its answer is how many conditions
    hold and which is first, by kind and index. **The first** is the first
    in the table's order - a controller, then a device waiting for
    approval, then the slow devices - because a failed controller makes
@@ -1288,7 +1288,7 @@ a disconnection or an eject.
 
    | Kind | Text |
    |---|---|
-   | `TR_RED_HC`, an NHI | "The Thunderbolt/USB4 controller stopped answering" |
+   | `TR_RED_HC`, an NHI | "Thunderbolt/USB4 controller stopped answering" |
    | `TR_RED_HC`, an `xhci98.sys` controller | "<controller> stopped answering" |
    | `TR_RED_WAIT` | "<device> is waiting to be approved" |
    | `TR_RED_SLOW3` | "<device> runs below USB 3 speed" |

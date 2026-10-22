@@ -180,6 +180,10 @@ rem                  printf, the USB IOCTL answers, the descriptor decoders
 rem                  over whole, truncated and malformed input, xhcicm.sys's
 rem                  query answer and its refusals, the status texts, the
 rem                  tray's event diff, the switches and the report layout
+rem   test_trred   - the red tray icon's decision and tooltip (xhcitr\tr_red.c,
+rem                  task 43.57, design record 25 section 7.2.1): each
+rem                  condition and its clearing, the ranking, the tooltip
+rem                  at 64 and 128 bytes
 rem   test_trlog   - XHCITR's driver-log readers (xhcitr\tr_log.c, design
 rem                  record 25 sections 4.5 and 4.6): xhcicm.sys's log
 rem                  answer as its builder makes it, xhci98.sys's door
@@ -573,6 +577,9 @@ call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check.
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
+rem test_trred links the red tray icon's decision and tooltip (xhcitr\tr_red.c,
+rem task 43.57, design record 25 section 7.2.1) over XHCITR's pure half.
+call :run test_trred "test_trred.c ..\xhcitr\tr_red.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_trlog links XHCITR's log readers (xhcitr\tr_log.c, design record 25
 rem sections 4.5 and 4.6) and xhcicm.sys's log builder, whose answers it
 rem reads, and holds xhcitr\tr_hcctr.h to src\xhci_counters.h.

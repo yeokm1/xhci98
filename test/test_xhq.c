@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include "../src/xhci_qryb.h"
 #include "../src/xhci_log.h"
+#include "../src/xhci_tol.h"
 #include "../xhcitr/tr_log.h"
 #include "../xhcitr/tr_pci.h"
 #include "test_harness.h"
@@ -294,9 +295,51 @@ static void test_reader(void)
     CHECK_EQ(tr_xhq_parse(NULL, 0, &x), 0, "nothing");
 }
 
+/* Roadmap-usb4 43.57: the failed flag from the terminal reason, at every
+ * level, the rest of the answer unchanged. */
+static void test_failed(void)
+{
+    XHCI_QRY_IN in;
+    UCHAR out[XHQ_MAX_BYTES];
+    ULONG info;
+    ULONG term;
+    ULONG lv;
+    ULONG plain;
+
+    CHECK_EQ(XHQ_TERMINAL_LATCHED, XHCI_TOL_TERMINAL_FAILURES, "the shared value");
+    CHECK_EQ(XHCI_TOL_TERMINAL_DMA_UNPROVEN, 5, "the last terminal");
+    for (lv = 0; lv <= 4; lv++) {
+        for (term = 0; term <= 5; term++) {
+            in_base(&in, lv, "a=1\r\n", 0);
+            CHECK_EQ(XhciQryAnswer(out, sizeof(out), &in, &info), XHQ_ANS_WHOLE,
+                     "answers");
+            plain = get32(out, XHQ_O_FLAGS);
+            CHECK(!(plain & XHQ_F_FAILED), "not failed at none");
+            in.Terminal = term;
+            CHECK_EQ(XhciQryAnswer(out, sizeof(out), &in, &info), XHQ_ANS_WHOLE,
+                     "answers failed");
+            CHECK_EQ(get32(out, XHQ_O_FLAGS),
+                     plain | (term >= XHCI_TOL_TERMINAL_FAILURES ? XHQ_F_FAILED : 0),
+                     "the flag by the terminal");
+            CHECK_EQ(get32(out, XHQ_O_VERSION), 1, "the version kept");
+        }
+    }
+    /* The header alone carries it too: the tray asks for 64 bytes. */
+    in_base(&in, 2, "a=1\r\n", 0);
+    in.Terminal = XHCI_TOL_TERMINAL_UNREADABLE;
+    CHECK_EQ(XhciQryAnswer(out, XHQ_HDR_BYTES, &in, &info), XHQ_ANS_HEADER,
+             "header alone");
+    CHECK(get32(out, XHQ_O_FLAGS) & XHQ_F_FAILED, "flag in the header");
+    in.Terminal = XHCI_TOL_TERMINAL_OWED;
+    CHECK_EQ(XhciQryAnswer(out, XHQ_HDR_BYTES, &in, &info), XHQ_ANS_HEADER,
+             "header alone, owed");
+    CHECK(!(get32(out, XHQ_O_FLAGS) & XHQ_F_FAILED), "a recovery owed is not failed");
+}
+
 int main(void)
 {
     test_layout();
+    test_failed();
     test_levels();
     test_ring();
     test_pci_sizing();

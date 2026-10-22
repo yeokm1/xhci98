@@ -1370,6 +1370,12 @@ static NTSTATUS hcdDoorQuery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
         in.Used = ext->Log.Used;
         in.Dropped = ext->Log.BytesDropped;
         in.Appends = ext->Log.Appends;
+        /* As the HCD region's terminal word, under the same lock. */
+        in.Terminal = XhciTolTerminal(ext->ControllerFailed,
+                                      ext->Tol.Unreadable,
+                                      ext->Tol.Window.Refused,
+                                      ext->RecoveryFailuresConsecutive,
+                                      XHCI_RECOVERY_MAX_ATTEMPTS);
     }
     rc = XhciQryAnswer(buf, outLen, &in, &written);
     /* The one counter word the door computes, as the HCD region does. */

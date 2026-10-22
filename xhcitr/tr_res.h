@@ -7,6 +7,7 @@
 #define TR_RES_H
 
 #define IDI_APP                 1
+#define IDI_RED                 2       /* record 25 section 7.2.1 */
 #define IDR_MENU                100
 #define IDR_ACCEL               101
 #define IDD_ABOUT               102
@@ -41,6 +42,7 @@
 #define IDM_PROPS               40031
 #define IDM_ABOUT               40040
 #define IDM_OPEN                40050
+#define IDM_RED                 40051   /* the tray menu's red item */
 #define IDM_UNIT0               41000   /* 41000..41063: the tray's units */
 
 #endif /* TR_RES_H */

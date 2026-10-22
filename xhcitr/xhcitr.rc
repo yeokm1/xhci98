@@ -10,6 +10,7 @@
 #include "tr_res.h"
 
 IDI_APP ICON "xhcitr.ico"
+IDI_RED ICON "xhcitr-r.ico"
 
 1 24 "xhcitr.manifest"
 
