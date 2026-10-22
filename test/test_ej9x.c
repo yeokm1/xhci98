@@ -68,8 +68,11 @@ static void test_token(void)
     (void)inst_ej_token(answer, sizeof(answer), &b);
     CHECK(!b.Eligible, "not live: not eligible");
     mkAnswer(6);
-    put(answer, CM_Q_O_VERSION, 2);
+    put(answer, CM_Q_O_VERSION, CM_Q_VERSION + 1);
     CHECK(!inst_ej_token(answer, sizeof(answer), &b), "unknown version");
+    mkAnswer(6);
+    put(answer, CM_Q_O_VERSION, CM_Q_VERSION_1);
+    CHECK(inst_ej_token(answer, sizeof(answer), &b), "version 1 still read");
     CHECK(!inst_ej_token(answer, CM_Q_HDR_BYTES - 1, &b), "short");
 
     CHECK_EQ(inst_ej_loc(4, 1, 2), 0x040AUL, "location word");

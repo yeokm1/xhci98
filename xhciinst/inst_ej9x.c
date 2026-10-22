@@ -43,7 +43,9 @@ int inst_ej_token(const unsigned char *answer, unsigned long bytes,
         return 0;
     }
     version = ejGet(answer, CM_Q_O_VERSION);
-    if (version != CM_Q_VERSION) {
+    /* cm_query.h: a reader of version 2 takes version 1 too; the record
+     * is found through CM_Q_O_REC_OFFSET in both. */
+    if (version != CM_Q_VERSION && version != CM_Q_VERSION_1) {
         return 0;
     }
     tok->EpochLo = ejGet(answer, CM_Q_O_EPOCH_LO);
