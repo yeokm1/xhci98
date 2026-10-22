@@ -414,6 +414,13 @@ void tr_removal_text(const TR_QUERY *q, char *out, size_t cap);
 void tr_event_text(const TR_EVENT *e, char *out, size_t cap);
 const char *tr_event_title(int kind);
 
+/* Revision 16 (section 7.6, item 4, as read by leg T.11 on 2026-10-22): a
+ * poll's warning and its other events as one balloon's text, since a
+ * second balloon from the same icon replaces the first at once on XP and
+ * later. Each event's text on a line of its own, in the order given; a
+ * line that does not fit whole is left out. The number of lines written. */
+int tr_events_text(const TR_EVENT *ev, int count, char *out, size_t cap);
+
 /* ---- the tree's keys --------------------------------------------------------- */
 
 /* "<prefix>:<a>:<b>", bounded: the selection and expanded nodes are found

@@ -1368,7 +1368,14 @@ shown as disconnected, as before.
    own, or a start refused while its tunnel is torn down for an eject,
    `CmRegStartAllowed`); a function deeper than a member's direct
    children, which has no marks entry (the devices of a chain's second
-   router); anything on 98 SE and ME, where there is no filter. Windows
+   router); a device no attachment of this driver sits on - a unit
+   present at boot that was never marked, because the mark service is not
+   installed or not running, or because the unit was never plugged in
+   while it ran (the bridge filter attaches to a child at a plug, the
+   mark's `LowerFilters` at every start; read by leg T.11 on 2000 and XP,
+   2026-10-22: such a unit's unplug gives Windows 2000's Unsafe Removal
+   dialog and the "disconnected" balloon, and no count); anything on 98
+   SE and ME, where there is no filter. Windows
    surprise-removes more than an unplugged unit: a device whose driver
    reports itself failed (`PNP_DEVICE_FAILED`), a function its tunnel lost
    to a link fault, a unit gone across a sleep. That is why the notice
@@ -1432,7 +1439,13 @@ shown as disconnected, as before.
    record, its own "<name> was disconnected." comes too, in the same poll
    or another, and names it. Balloons are 2000 and later anyway, and 98
    SE and ME never set `CM_Q_RF_WATCHED`. Item 8's option can turn the
-   warning off.
+   warning off. Where the departure falls in the warning's own poll, the
+   warning's balloon carries it as a second line ("A Thunderbolt or USB4
+   device was removed unexpectedly." then "<name> was disconnected."), and
+   so every other event of that poll, each on its own line, a line that
+   does not fit left out (`tr_events_text`): leg T.11 read on XP, on
+   2026-10-22, that a second balloon from the same icon replaces the first
+   at once, so the departure shown after the warning hid it.
 5. **The window and the report.** The NHI's details carry
    "Unexpected removals:" with the count since this start and, after
    the first, the last one's tunnel port, and the count in a loss when

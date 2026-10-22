@@ -1633,6 +1633,38 @@ void tr_event_text(const TR_EVENT *e, char *out, size_t cap)
     }
 }
 
+int tr_events_text(const TR_EVENT *ev, int count, char *out, size_t cap)
+{
+    char line[256];
+    size_t used = 0;
+    size_t len;
+    int lines = 0;
+    int i;
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    for (i = 0; i < count; i++) {
+        tr_event_text(&ev[i], line, sizeof(line));
+        len = strlen(line);
+        if (len == 0) {
+            continue;
+        }
+        /* The line, its separator before it, and the terminator. */
+        if (used + (lines > 0 ? 1 : 0) + len + 1 > cap) {
+            continue;
+        }
+        if (lines > 0) {
+            out[used++] = '\n';
+        }
+        memcpy(out + used, line, len + 1);
+        used += len;
+        lines++;
+    }
+    return lines;
+}
+
 const char *tr_event_title(int kind)
 {
     switch (kind) {

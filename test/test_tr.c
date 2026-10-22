@@ -1231,6 +1231,23 @@ static void test_removals(void)
     CHECK_EQ(ev[0].Kind, TR_EV_REMOVED, "the removal first");
     CHECK(ev[1].Kind == TR_EV_LEFT && strcmp(ev[1].Name, "Acme Dock") == 0,
           "the unit's disconnected, named");
+    /* One balloon for both (T.11, 2026-10-22: on XP the second balloon
+     * replaced the warning at once). */
+    {
+        char all[256];
+        char small[80];
+        CHECK_EQ(tr_events_text(ev, k, all, sizeof(all)), 2, "one balloon: two lines");
+        CHECK(strcmp(all, "A Thunderbolt or USB4 device was removed unexpectedly.\n"
+                          "Acme Dock was disconnected.") == 0,
+              "one balloon: the warning first, the departure below it");
+        CHECK_EQ(tr_events_text(ev, k, small, sizeof(small)), 1,
+                 "one balloon: a line that does not fit is left out");
+        CHECK(strcmp(small, "A Thunderbolt or USB4 device was removed unexpectedly.") == 0,
+              "one balloon: the warning whole");
+        CHECK_EQ(tr_events_text(ev, k, small, 10), 0, "one balloon: nothing fits");
+        CHECK(small[0] == '\0', "one balloon: nothing fits - empty");
+        CHECK_EQ(tr_events_text(ev, 0, all, sizeof(all)), 0, "one balloon: no events");
+    }
 
     /* The option: only a DWORD 0 turns the warning off. */
     CHECK(tr_warn_removed(0, 0UL), "option: no value - on");

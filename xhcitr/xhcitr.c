@@ -6886,17 +6886,31 @@ static void poll(void)
         tr_copy(pollId[k], nhi[k].Id, sizeof(pollId[k]));
     }
     count = tr_diff(&snapOld, now, ev, 8);
+    /* A warning due in this poll takes the poll's other events into its own
+     * balloon, under its title: on XP and later a second balloon from this
+     * icon replaces the first at once, so the departure that names the unit
+     * would hide the warning (record 25 section 7.6 item 4, read by T.11). */
+    for (i = 0; i < count; i++) {
+        if (ev[i].Kind == TR_EV_REMOVED) {
+            break;
+        }
+    }
+    if (i < count && warn_on()) {
+        char text[256];
+        (void)tr_events_text(ev, count, text, sizeof(text));
+        tray_balloon(tr_event_title(TR_EV_REMOVED), text, 1);
+        count = 0;
+    }
     for (i = 0; i < count; i++) {
         char text[256];
         /* The user's option skips the warning's balloon alone (record 25
          * section 7.6 item 8); the count still shows in the details. */
-        if (ev[i].Kind == TR_EV_REMOVED && !warn_on()) {
+        if (ev[i].Kind == TR_EV_REMOVED) {
             continue;
         }
         tr_event_text(&ev[i], text, sizeof(text));
         tray_balloon(tr_event_title(ev[i].Kind), text,
-                     ev[i].Kind == TR_EV_STOPPED || ev[i].Kind == TR_EV_FAILED ||
-                         ev[i].Kind == TR_EV_REMOVED);
+                     ev[i].Kind == TR_EV_STOPPED || ev[i].Kind == TR_EV_FAILED);
     }
     memcpy(&snapOld, now, sizeof(*now));
     free(now);
