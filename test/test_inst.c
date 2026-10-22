@@ -4538,6 +4538,303 @@ static void test_storage(void)
     }
 }
 
+/* STOR98.VXD (design record 30 section 7): the box, the switches, the
+ * mode, and the recovery and placement table step by step. */
+static INST_VSDFACTS vf(int pend, int fileVal, int dest, int tmp, int entry,
+                        int mode, int pkgPend, int pkgFile, int filePend)
+{
+    INST_VSDFACTS f;
+    f.Pending = pend;
+    f.FileVal = fileVal;
+    f.Dest = dest;
+    f.Tmp = tmp;
+    f.Entry = entry;
+    f.Mode = mode;
+    f.PkgIsPending = pkgPend;
+    f.PkgIsFile = pkgFile;
+    f.FileIsPending = filePend;
+    return f;
+}
+
+/* Runs the table against a model of the disk, the registry and
+ * WININIT.INI as the engine would, from a state, until it stops; returns
+ * the final op and the model's state. Hashes: 1 the package's (H), 2 the
+ * installed file's (an older release), 9 foreign. */
+typedef struct VMODEL {
+    int Pending, File;      /* 0 unset, else the hash             */
+    int Dest, Tmp;          /* 0 absent, else the hash            */
+    int Entry;              /* INST_VE_*                          */
+    int Cut;                /* the op number at which to stop     */
+    int Steps;
+} VMODEL;
+
+static int vclass(int bytes, const VMODEL *m)
+{
+    if (bytes == 0) {
+        return INST_VF_ABSENT;
+    }
+    if (m->Pending != 0 && bytes == m->Pending) {
+        return INST_VF_PENDING;
+    }
+    if (m->File != 0 && bytes == m->File) {
+        return INST_VF_FILE;
+    }
+    return INST_VF_OTHER;
+}
+
+static int vrun(VMODEL *m, int mode, int pkg)
+{
+    int i;
+    for (i = 0; i < 20; i++) {
+        INST_VSDFACTS f;
+        int op;
+        f.Pending = m->Pending != 0;
+        f.FileVal = m->File != 0;
+        f.Dest = vclass(m->Dest, m);
+        f.Tmp = vclass(m->Tmp, m);
+        f.Entry = m->Entry;
+        f.Mode = mode;
+        f.PkgIsPending = m->Pending != 0 && m->Pending == pkg;
+        f.PkgIsFile = m->File != 0 && m->File == pkg;
+        f.FileIsPending = m->Pending != 0 && m->File == m->Pending;
+        op = inst_vsd_next(&f);
+        if (op < INST_VOP_STEPS) {
+            return op;
+        }
+        if (m->Cut != 0 && m->Steps + 1 == m->Cut) {
+            return -1;      /* the run is cut short before this step */
+        }
+        m->Steps++;
+        switch (op) {
+        case INST_VOP_SET_FILE: m->File = m->Pending; break;
+        case INST_VOP_DEL_ENTRY: m->Entry = INST_VE_ABSENT; break;
+        case INST_VOP_DEL_TMP: m->Tmp = 0; break;
+        case INST_VOP_DEL_PENDING: m->Pending = 0; break;
+        case INST_VOP_DEL_FILEVAL: m->File = 0; break;
+        case INST_VOP_DEL_DEST: m->Dest = 0; break;
+        case INST_VOP_START: m->Pending = pkg; m->Tmp = pkg; break;
+        case INST_VOP_MOVE: m->Dest = m->Tmp; m->Tmp = 0; break;
+        case INST_VOP_WRITE_ENTRY: m->Entry = INST_VE_EXACT; break;
+        default: return -2;
+        }
+    }
+    return -3;
+}
+
+/* The start's rename, as Windows makes it. */
+static void vboot(VMODEL *m)
+{
+    if (m->Entry == INST_VE_EXACT && m->Tmp != 0) {
+        m->Dest = m->Tmp;
+        m->Tmp = 0;
+        m->Entry = INST_VE_ABSENT;
+    }
+}
+
+static void test_vsd(void)
+{
+    char *argv1[4];
+    char err[256];
+    INST_OPTS o;
+    INST_VSDFACTS f;
+    VMODEL m;
+    int shown;
+    int open;
+    int cut;
+    int r;
+
+    /* The switches. */
+    argv1[0] = "x";
+    argv1[1] = "/stor98vxd";
+    argv1[2] = "/thunderbolt";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+          o.Stor98Vxd && !o.NoStor98Vxd, "/stor98vxd /thunderbolt");
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
+          strstr(err, "Stor98 in the run") != NULL,
+          "/stor98vxd alone: refused, it needs Stor98 in the run");
+    argv1[2] = "/nostor98vxd";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+          "/stor98vxd /nostor98vxd: a contradiction");
+    argv1[1] = "/nostor98vxd";
+    argv1[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+          "/nostor98vxd belongs to an install");
+    argv1[2] = "/thunderbolt";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+          o.NoStor98Vxd, "/nostor98vxd /thunderbolt");
+    argv1[1] = "/stor98vxd";
+    argv1[2] = "/thunderbolt";
+    argv1[3] = "/nostor98";
+    CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 1,
+          "/stor98vxd /nostor98: refused");
+
+    /* The box. */
+    CHECK(inst_vsd_box(1, 1, 1, 0, &shown, &open) && shown && open,
+          "98 SE and ME: ticked with Stor98");
+    CHECK(!inst_vsd_box(1, 1, 1, 1, &shown, &open) && shown && open,
+          "/nostor98vxd: open, unticked");
+    CHECK(!inst_vsd_box(1, 1, 0, 0, &shown, &open) && shown && !open,
+          "Stor98 unticked: greyed and unticked");
+    CHECK(!inst_vsd_box(0, 1, 1, 0, &shown, &open) && shown && !open,
+          "another system: shown greyed, never ticked");
+    CHECK(!inst_vsd_box(1, 0, 1, 0, &shown, &open) && !shown && !open,
+          "no STOR98.VXD in the package: not shown");
+
+    /* The mode; D8: the layer follows Stor98. */
+    CHECK(inst_vsd_mode(0, 0, 1, 1, 0, 1) == INST_VSD_NONE &&
+          inst_vsd_mode(0, 1, 1, 1, 0, 1) == INST_VSD_NONE,
+          "not 98 SE or ME: nothing");
+    CHECK(inst_vsd_mode(1, 1, 0, 0, 0, 0) == INST_VSD_UNINSTALL, "uninstall");
+    CHECK(inst_vsd_mode(1, 0, 1, 1, 0, 1) == INST_VSD_SELECTED &&
+          inst_vsd_mode(1, 0, 1, 1, 0, 0) == INST_VSD_DESELECTED,
+          "ticked, unticked");
+    CHECK(inst_vsd_mode(1, 0, 1, 0, 0, 0) == INST_VSD_INACTIVE &&
+          inst_vsd_mode(1, 0, 1, 0, 1, 0) == INST_VSD_DESELECTED,
+          "Stor98 unticked: kept with it, removed with it");
+
+    /* The rows, one fact set each. */
+    f = vf(0, 0, INST_VF_ABSENT, INST_VF_ABSENT, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_START, "nothing there: start");
+    f.Mode = INST_VSD_INACTIVE;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "inactive: nothing");
+    f = vf(0, 1, INST_VF_FILE, INST_VF_ABSENT, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 1, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "the package's bytes in place");
+    f.PkgIsFile = 0;
+    CHECK(inst_vsd_next(&f) == INST_VOP_START, "an older release: update");
+    f.Mode = INST_VSD_DESELECTED;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DEL_DEST, "unticked: removed");
+    f.Mode = INST_VSD_INACTIVE;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "greyed, Stor98 kept: kept");
+    f = vf(0, 0, INST_VF_OTHER, INST_VF_ABSENT, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_FOREIGN, "another's file left");
+    f.Mode = INST_VSD_UNINSTALL;
+    CHECK(inst_vsd_next(&f) == INST_VOP_FOREIGN,
+          "the uninstall leaves another's file");
+    f = vf(0, 0, INST_VF_ABSENT, INST_VF_ABSENT, INST_VE_CONFLICT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_BLOCK_INI,
+          "another program's rename line: blocked");
+    f.Mode = INST_VSD_INACTIVE;
+    CHECK(inst_vsd_next(&f) == INST_VOP_DONE, "conflict, inactive: nothing");
+    f = vf(0, 1, INST_VF_FILE, INST_VF_ABSENT, INST_VE_CONFLICT,
+           INST_VSD_UNINSTALL, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_DEL_DEST,
+          "conflict, uninstall: its own file removed, the line left");
+    f = vf(0, 0, INST_VF_ABSENT, INST_VF_OTHER, INST_VE_ABSENT,
+           INST_VSD_SELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_BLOCK_TMP,
+          "a foreign S98VSD.TMP, nothing in flight: blocked");
+    f = vf(0, 1, INST_VF_FILE, INST_VF_OTHER, INST_VE_ABSENT,
+           INST_VSD_DESELECTED, 0, 0, 0);
+    CHECK(inst_vsd_next(&f) == INST_VOP_DEL_DEST,
+          "a foreign .TMP, unticked: its own file removed");
+
+    /* Whole runs, the model applying each step. */
+    memset(&m, 0, sizeof(m));
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_DONE && m.Dest == 1 && m.File == 1 && m.Pending == 0 &&
+          m.Tmp == 0 && m.Entry == INST_VE_ABSENT, "a first placement");
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_QUEUED && m.Dest == 2 && m.Tmp == 1 && m.Pending == 1 &&
+          m.Entry == INST_VE_EXACT, "an update queued for the start");
+    vboot(&m);
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_DONE && m.Dest == 1 && m.File == 1 && m.Pending == 0 &&
+          m.Tmp == 0, "after the start: promoted, nothing left");
+    /* Update, then untick with no start between: the queued file never
+     * arrives. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    r = vrun(&m, INST_VSD_DESELECTED, 1);
+    vboot(&m);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Tmp == 0 && m.Pending == 0 &&
+          m.File == 0 && m.Entry == INST_VE_ABSENT,
+          "update then untick: all withdrawn, nothing arrives");
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    vboot(&m);
+    CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Pending == 0 && m.File == 0,
+          "update then uninstall: all withdrawn");
+    /* A later package over a queued older one. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 3);
+    r = vrun(&m, INST_VSD_SELECTED, 1);
+    CHECK(r == INST_VOP_QUEUED && m.Pending == 1 && m.Tmp == 1,
+          "a later package replaces the queued one");
+    /* Inactive over a queued update: it stays queued. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    r = vrun(&m, INST_VSD_INACTIVE, 0);
+    CHECK(r == INST_VOP_DONE && m.Pending == 1 && m.Tmp == 1 &&
+          m.Entry == INST_VE_EXACT, "inactive: the queue stays");
+    /* Every step of a placement and of an update cut short, then the next
+     * run (ticked, and the uninstall) recovers. */
+    for (cut = 1; cut <= 6; cut++) {
+        memset(&m, 0, sizeof(m));
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_SELECTED, 1);
+        CHECK(r == INST_VOP_DONE && m.Dest == 1 && m.File == 1 &&
+              m.Pending == 0 && m.Tmp == 0,
+              "a placement cut short, then a ticked run");
+        memset(&m, 0, sizeof(m));
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_UNINSTALL, 0);
+        CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.File == 0 &&
+              m.Pending == 0 && m.Tmp == 0 && m.Entry == INST_VE_ABSENT,
+              "a placement cut short, then the uninstall");
+        memset(&m, 0, sizeof(m));
+        m.File = 2;
+        m.Dest = 2;
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_SELECTED, 1);
+        CHECK(r == INST_VOP_QUEUED && m.Pending == 1 && m.Tmp == 1 &&
+              m.Entry == INST_VE_EXACT, "an update cut short, then a ticked "
+              "run: queued");
+        memset(&m, 0, sizeof(m));
+        m.File = 2;
+        m.Dest = 2;
+        m.Cut = cut;
+        vrun(&m, INST_VSD_SELECTED, 1);
+        m.Cut = 0;
+        r = vrun(&m, INST_VSD_UNINSTALL, 0);
+        vboot(&m);
+        CHECK(r == INST_VOP_DONE && m.Dest == 0 && m.Pending == 0 &&
+              m.File == 0 && m.Tmp == 0, "an update cut short, then the "
+              "uninstall");
+    }
+    /* A queued update whose destination another installer replaced. */
+    memset(&m, 0, sizeof(m));
+    m.File = 2;
+    m.Dest = 2;
+    vrun(&m, INST_VSD_SELECTED, 1);
+    m.Dest = 9;
+    r = vrun(&m, INST_VSD_UNINSTALL, 0);
+    CHECK(r == INST_VOP_FOREIGN && m.Dest == 9 && m.Tmp == 0 &&
+          m.Pending == 0 && m.File == 0 && m.Entry == INST_VE_ABSENT,
+          "a foreign destination: its file left, the owned queue withdrawn");
+}
+
 int main(void)
 {
     test_versions();
@@ -4577,6 +4874,7 @@ int main(void)
     test_s98();
     test_marks();
     test_storage();
+    test_vsd();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

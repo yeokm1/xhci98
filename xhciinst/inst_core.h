@@ -582,6 +582,9 @@ typedef struct _INST_OPTS {
     int Storage;            /* /storage: the USB storage drivers, 98 SE
                                only (record 26 section 6.5.9)          */
     int NoStorage;          /* /nostorage: left out, on any system      */
+    int Stor98Vxd;          /* /stor98vxd: STOR98.VXD ticked, 98 SE and
+                               ME only (design record 30 section 7.2)  */
+    int NoStor98Vxd;        /* /nostor98vxd: STOR98.VXD unticked        */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -1534,6 +1537,70 @@ extern const char instS98DisconnectText[];
 /* The window's Stor98 box (owner, 2026-10-19): under the Thunderbolt 3 /
  * USB4 box, and open only while that box can be and is ticked. */
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked);
+
+/* ---- STOR98.VXD, the 98 SE and ME IOS layer for Stor98's disks (design
+ * record 30 section 7; owner, 2026-10-22) ---------------------------------- */
+
+/* The box, a child of Stor98's: shown where the package carries the file;
+ * open on 98 SE and ME (sys9x) while Stor98's box is ticked; ticked then
+ * unless /nostor98vxd. On every other system shown greyed and unticked.
+ * Returns whether it is ticked. */
+int inst_vsd_box(int sys9x, int haveVsd, int s98Ticked, int noSwitch,
+                 int *shown, int *open);
+
+/* The run's mode for the layer. */
+#define INST_VSD_NONE       0   /* not 98 SE or ME: nothing of it          */
+#define INST_VSD_SELECTED   1   /* the box ticked                          */
+#define INST_VSD_DESELECTED 2   /* unticked by the user, or Stor98 removed */
+#define INST_VSD_INACTIVE   3   /* greyed by Stor98, which the run keeps  */
+#define INST_VSD_UNINSTALL  4
+/* s98Removed: the run removes the bundled Stor98 (record 30 decision D8,
+ * owner 2026-10-22: the layer follows Stor98). */
+int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
+                  int s98Removed, int vsdTicked);
+
+/* What a file is, by its SHA-256 against the record's two values. */
+#define INST_VF_ABSENT      0
+#define INST_VF_FILE        1   /* the bytes File names                    */
+#define INST_VF_PENDING     2   /* the bytes Pending names                 */
+#define INST_VF_OTHER       3   /* any other bytes, or unreadable          */
+/* WININIT.INI's [rename] lines naming either file. */
+#define INST_VE_ABSENT      0
+#define INST_VE_EXACT       1   /* this installer's one line, and no other */
+#define INST_VE_CONFLICT    2   /* any other line naming either file       */
+
+typedef struct _INST_VSDFACTS {
+    int Pending;            /* the record's Pending value is set          */
+    int FileVal;            /* the record's File value is set             */
+    int Dest;               /* IOSUBSYS\STOR98.VXD: INST_VF_*             */
+    int Tmp;                /* IOSUBSYS\S98VSD.TMP: INST_VF_*             */
+    int Entry;              /* INST_VE_*                                  */
+    int Mode;               /* INST_VSD_*                                 */
+    int PkgIsPending;       /* the package's file is Pending's bytes      */
+    int PkgIsFile;          /* ... is File's bytes                        */
+    int FileIsPending;      /* File and Pending name the same bytes       */
+} INST_VSDFACTS;
+
+/* The next step of record 30 section 7.3's recovery and placement table,
+ * one at a time: the engine makes it, reads the facts again and asks
+ * again, until a value below INST_VOP_STEPS. */
+#define INST_VOP_DONE       0   /* nothing (more) to do                    */
+#define INST_VOP_QUEUED     1   /* done: an update is queued for the start */
+#define INST_VOP_FOREIGN    2   /* done: another installation's file left  */
+#define INST_VOP_BLOCK_TMP  3   /* stop: a S98VSD.TMP not this installer's */
+#define INST_VOP_BLOCK_INI  4   /* stop: another program's rename line     */
+#define INST_VOP_STEPS      10
+#define INST_VOP_SET_FILE   10  /* File := Pending's hash                  */
+#define INST_VOP_DEL_ENTRY  11  /* remove this installer's exact line      */
+#define INST_VOP_DEL_TMP    12  /* delete S98VSD.TMP                       */
+#define INST_VOP_DEL_PENDING 13 /* delete the Pending value                */
+#define INST_VOP_DEL_FILEVAL 14 /* delete the File value                   */
+#define INST_VOP_DEL_DEST   15  /* delete STOR98.VXD (File's bytes)        */
+#define INST_VOP_START      16  /* Pending := the package's hash, then the
+                                   .TMP written CREATE_NEW and compared   */
+#define INST_VOP_MOVE       17  /* move the .TMP into an absent STOR98.VXD */
+#define INST_VOP_WRITE_ENTRY 18 /* write this installer's exact line       */
+int inst_vsd_next(const INST_VSDFACTS *f);
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel);
 

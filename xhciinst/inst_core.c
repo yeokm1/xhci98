@@ -2033,6 +2033,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Stor98 = 1;
         } else if (inst_switch(a, "nostor98")) {
             opts->NoStor98 = 1;
+        } else if (inst_switch(a, "stor98vxd")) {
+            opts->Stor98Vxd = 1;
+        } else if (inst_switch(a, "nostor98vxd")) {
+            opts->NoStor98Vxd = 1;
         } else if (inst_switch(a, "nouas")) {
             opts->NoUas = 1;
         } else if (inst_switch(a, "storage")) {
@@ -2227,6 +2231,26 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     if (opts->NoStor98 && opts->Stor98) {
         inst_err(err, errCap, "/stor98 and /nostor98 contradict each other",
                  NULL);
+        return 1;
+    }
+    if ((opts->Stor98Vxd || opts->NoStor98Vxd) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->Stor98Vxd ?
+                 "/stor98vxd belongs to an install" :
+                 "/nostor98vxd belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Stor98Vxd && opts->NoStor98Vxd) {
+        inst_err(err, errCap, "/stor98vxd and /nostor98vxd contradict each "
+                 "other", NULL);
+        return 1;
+    }
+    /* Design record 30 section 7.2: a child of Stor98's box. */
+    if (opts->Stor98Vxd && (opts->NoStor98 ||
+                            (!opts->Stor98 && !opts->Thunderbolt &&
+                             !opts->CmOnly))) {
+        inst_err(err, errCap, "/stor98vxd needs Stor98 in the run (/stor98, "
+                 "or /thunderbolt without /nostor98)", NULL);
         return 1;
     }
     if (opts->NoUas && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -5711,6 +5735,181 @@ void inst_tb_found_text(char *out, size_t cap, const char *name)
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked)
 {
     return haveS98 && tbHave && tbTicked;
+}
+
+/* ---- STOR98.VXD (design record 30 section 7) ----------------------------- */
+
+int inst_vsd_box(int sys9x, int haveVsd, int s98Ticked, int noSwitch,
+                 int *shown, int *open)
+{
+    *shown = haveVsd ? 1 : 0;
+    *open = (sys9x && haveVsd && s98Ticked) ? 1 : 0;
+    return *open && !noSwitch;
+}
+
+int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
+                  int s98Removed, int vsdTicked)
+{
+    if (!sys9x) {
+        return INST_VSD_NONE;
+    }
+    if (uninstall) {
+        return INST_VSD_UNINSTALL;
+    }
+    if (!s98Ticked) {
+        return s98Removed ? INST_VSD_DESELECTED : INST_VSD_INACTIVE;
+    }
+    if (!haveVsd) {
+        /* Nothing to place: an installed one stays, as greyed. */
+        return INST_VSD_INACTIVE;
+    }
+    return vsdTicked ? INST_VSD_SELECTED : INST_VSD_DESELECTED;
+}
+
+/* Removing what the record names, for the deselected and uninstall modes:
+ * the destination of File's bytes, then the values. */
+static int inst_vsd_clear(const INST_VSDFACTS *f)
+{
+    if (f->Dest == INST_VF_FILE) {
+        return INST_VOP_DEL_DEST;
+    }
+    if (f->Tmp == INST_VF_PENDING) {
+        return INST_VOP_DEL_TMP;
+    }
+    if (f->Pending) {
+        return INST_VOP_DEL_PENDING;
+    }
+    if (f->FileVal) {
+        return INST_VOP_DEL_FILEVAL;
+    }
+    return INST_VOP_DONE;
+}
+
+int inst_vsd_next(const INST_VSDFACTS *f)
+{
+    int sel = f->Mode == INST_VSD_SELECTED;
+    int rm = f->Mode == INST_VSD_DESELECTED || f->Mode == INST_VSD_UNINSTALL;
+    int off = f->Mode == INST_VSD_INACTIVE;
+
+    if (f->Mode == INST_VSD_NONE) {
+        return INST_VOP_DONE;
+    }
+    /* Another program's rename line names one of the files: every line
+     * is left; no placement, update or queue change. */
+    if (f->Entry == INST_VE_CONFLICT) {
+        if (sel) {
+            return INST_VOP_BLOCK_INI;
+        }
+        if (off) {
+            return INST_VOP_DONE;
+        }
+        return inst_vsd_clear(f);
+    }
+    /* Another installation's STOR98.VXD. */
+    if (f->Dest == INST_VF_OTHER) {
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        if (off) {
+            return INST_VOP_DONE;
+        }
+        if (f->Pending && f->Tmp == INST_VF_PENDING) {
+            return INST_VOP_DEL_TMP;
+        }
+        if (f->Pending) {
+            return INST_VOP_DEL_PENDING;
+        }
+        if (f->FileVal) {
+            return INST_VOP_DEL_FILEVAL;
+        }
+        return INST_VOP_FOREIGN;
+    }
+    /* A .TMP that is not this installer's. */
+    if (f->Tmp == INST_VF_OTHER) {
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        if (off) {
+            return INST_VOP_DONE;
+        }
+        if (rm) {
+            if (f->Dest == INST_VF_FILE) {
+                return INST_VOP_DEL_DEST;
+            }
+            if (f->Pending) {
+                return INST_VOP_DEL_PENDING;
+            }
+            if (f->FileVal) {
+                return INST_VOP_DEL_FILEVAL;
+            }
+            return INST_VOP_DONE;
+        }
+        if (!f->Pending && f->Dest == INST_VF_FILE && f->PkgIsFile) {
+            return INST_VOP_DONE;
+        }
+        return INST_VOP_BLOCK_TMP;
+    }
+    if (f->Pending) {
+        /* The start (or the move) did it. */
+        if (f->Dest == INST_VF_PENDING) {
+            /* File first, then the leftovers, Pending last. */
+            if (!f->FileIsPending) {
+                return INST_VOP_SET_FILE;
+            }
+            if (f->Entry == INST_VE_EXACT) {
+                return INST_VOP_DEL_ENTRY;
+            }
+            if (f->Tmp == INST_VF_PENDING) {
+                return INST_VOP_DEL_TMP;
+            }
+            return INST_VOP_DEL_PENDING;
+        }
+        /* Dest absent or File's bytes. */
+        if (f->Tmp == INST_VF_PENDING) {
+            if (f->Entry == INST_VE_EXACT) {
+                if (sel && f->PkgIsPending) {
+                    return INST_VOP_QUEUED;
+                }
+                if (off) {
+                    return INST_VOP_DONE;
+                }
+                return INST_VOP_DEL_ENTRY;
+            }
+            if (sel && f->PkgIsPending) {
+                return f->Dest == INST_VF_ABSENT ? INST_VOP_MOVE :
+                       INST_VOP_WRITE_ENTRY;
+            }
+            if (off) {
+                return INST_VOP_DONE;
+            }
+            return INST_VOP_DEL_TMP;
+        }
+        /* Cut short before the .TMP was whole, or the .TMP gone. */
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        return INST_VOP_DEL_PENDING;
+    }
+    /* Nothing of the installer's in flight. */
+    if (f->Entry == INST_VE_EXACT) {
+        return INST_VOP_DEL_ENTRY;
+    }
+    if (f->Tmp == INST_VF_FILE) {
+        return INST_VOP_DEL_TMP;
+    }
+    if (off) {
+        return INST_VOP_DONE;
+    }
+    if (rm) {
+        return inst_vsd_clear(f);
+    }
+    if (f->FileVal && f->Dest == INST_VF_ABSENT) {
+        return INST_VOP_DEL_FILEVAL;
+    }
+    if (f->Dest == INST_VF_FILE && f->PkgIsFile) {
+        return INST_VOP_DONE;
+    }
+    return INST_VOP_START;
 }
 
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
