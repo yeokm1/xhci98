@@ -2179,3 +2179,35 @@ ran on `4a846846`'s source).
   switching);
 - a recurrence of the PowerShell fault above, read with the guest's
   memory.
+
+### The x64 legs: 10 x64 and 8.1 x64 with the owner-signed package (2026-10-23)
+
+The owner-signed amd64 package of integ6b `5ad53f7d` (every `.sys` and
+`.cat` signed with the project test certificate), its drivers unchanged,
+with this branch's user-mode tools after merging that same commit
+(`abb70446`: this branch's `src\` is then `5ad53f7d`'s, so the signed
+binaries are this branch's drivers; 43.59 changes no driver). The
+certificate was added to Root and TrustedPublisher in each guest; no
+publisher prompt appeared. Fresh overlays of the pristine images, two
+virtual CPUs, 2048 MB, the same devices as the x86 legs (`-Chain`); the
+console install `/cmonly /yes /stor98` with nothing plugged, a restart,
+then the mark service stopped before the plug, so that what Windows does
+on its own is read first.
+
+| | 10 x64 (19045) | 8.1 x64 (9600) |
+|---|---|---|
+| Driver Windows selects at the tunnelled drives' first plug, the service stopped | Stor98, both drives: equal rank `00FF2005` (both match `PCI\CC_010802`), Stor98 "Authenticode" against `stornvme` "Inbox", Stor98 `Selected`, `stornvme` `Outranked` (setupapi.dev.log) | Stor98, both drives, the same ranks and signer scores |
+| An internal NVMe first plugged after the install (hot-added on the root bus) | Stor98 | Stor98 |
+| Stor98 starts | No, on any of the three: problem status `0xC00000C2`; System event 4 from `stor98` ("internal error in its data structures", final status `0xC00000C2`) | Yes, on all three; a copy to the tunnelled drive compared equal |
+| The internal drive present at the install | `stornvme`, untouched | `stornvme`, untouched |
+| The mark service | Never needed: no drive was on `stornvme` below the tunnel | The same: nothing to switch |
+| The uninstall | Leaves Stor98 on all three (none is in its `Devices` record; the internal one "not this package's to remove"), so on 10 x64 the drives stay failed | Leaves Stor98 on all three, running |
+
+So with a trusted signature the design's premise is reversed: section
+7.5 rests on `stornvme` outranking an uncatalogued Stor98, and that holds
+only while Stor98 is unsigned (x86, read above). Signed and trusted, Stor98
+wins every new NVMe drive on its own, tunnelled or internal, on both
+systems (by its newer date, the ranks and signer classes being otherwise
+as above), which breaks the owner's rule for internal drives, and on 10
+x64 Stor98 x64 does not start at all in this vehicle. Not read: why
+Stor98 x64 fails on 10 x64 (a debug build's stage codes would show it).
