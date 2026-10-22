@@ -2187,6 +2187,28 @@ file is named, never shipped.
 '@.TrimEnd()
 }
 
+function Format-ReadmeWrap {
+    # A paragraph's words in lines of at most -Width columns, -Lead before
+    # the first and -Rest before every other.
+    param([string]$Text, [int]$Width = 76, [string]$Lead = "", [string]$Rest = "")
+    $lines = @()
+    $line = $Lead
+    $fresh = $true
+    foreach ($w in @($Text -split ' ' | Where-Object { $_ -ne "" })) {
+        if (-not $fresh -and ($line.Length + 1 + $w.Length) -gt $Width) {
+            $lines += $line
+            $line = $Rest + $w
+        } elseif ($fresh) {
+            $line = $line + $w
+        } else {
+            $line = $line + " " + $w
+        }
+        $fresh = $false
+    }
+    if (-not $fresh) { $lines += $line }
+    return $lines
+}
+
 function Get-ReadmeDownloadText {
     # The readme's "THIS DOWNLOAD" body for download -Kind of a release
     # whose downloads are -Kinds; -FreeTag and -NonFreeTag the sets' tags,
@@ -2209,19 +2231,18 @@ function Get-ReadmeDownloadText {
             }
         }
         "free" {
-            $L += "This is ${z2}: the base download, $z1, with"
-            $L += "the free USB class drivers of usb-wdm-free $FreeTag added in WDMFREE\."
+            $L += Format-ReadmeWrap -Text ("This is ${z2}: the base download, $z1, with the free USB " +
+                                          "class drivers of usb-wdm-free $FreeTag added in WDMFREE\.")
         }
         "nonfree" {
             if ($FreeTag -ne "") {
-                $L += "This is ${z3}: $z2 (the base"
-                $L += "download with the free USB class drivers of usb-wdm-free $FreeTag in"
-                $L += "WDMFREE\), with the non-free driver pack of usb-wdm-nonfree $NonFreeTag"
-                $L += "added in NONFREE\."
+                $L += Format-ReadmeWrap -Text ("This is ${z3}: $z2 (the base download with the free USB " +
+                                              "class drivers of usb-wdm-free $FreeTag in WDMFREE\), with " +
+                                              "the non-free driver pack of usb-wdm-nonfree $NonFreeTag " +
+                                              "added in NONFREE\.")
             } else {
-                $L += "This is ${z3}: the base download, $z1,"
-                $L += "with the non-free driver pack of usb-wdm-nonfree $NonFreeTag added in"
-                $L += "NONFREE\."
+                $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the non-free " +
+                                              "driver pack of usb-wdm-nonfree $NonFreeTag added in NONFREE\.")
             }
         }
         default { throw "no download '$Kind'." }
@@ -2274,7 +2295,8 @@ function Get-ReadmeOtherContentsText {
             return ($L -join "`r`n")
         }
     } else {
-        $L += "  WDMFREE\        - the free USB class drivers, usb-wdm-free $FreeTag (beta)"
+        $L += Format-ReadmeWrap -Lead "  WDMFREE\        - " -Rest "                    " `
+                  -Text "the free USB class drivers (beta), from usb-wdm-free $FreeTag"
         $L += ""
         $L += "      LICENSE      their licence, the GNU GPL v2"
         $L += "      NOTICE.md    the code in them adapted from other projects"
@@ -2284,8 +2306,8 @@ function Get-ReadmeOtherContentsText {
     }
     if ($Kind -eq "nonfree") {
         if ($L.Count -gt 0) { $L += "" }
-        $L += "  NONFREE\        - other makers' drivers, usb-wdm-nonfree ${NonFreeTag}: not"
-        $L += "                    this project's, not tested by it"
+        $L += Format-ReadmeWrap -Lead "  NONFREE\        - " -Rest "                    " `
+                  -Text "other makers' drivers, not this project's and not tested by it, from usb-wdm-nonfree $NonFreeTag"
         $L += ""
         $L += "      NOTICE.md    whose each one is"
         $L += "      README.md    which folder serves which Windows"
