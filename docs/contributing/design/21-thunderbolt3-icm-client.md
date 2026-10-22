@@ -4656,7 +4656,10 @@ Windows Update gives a vendor's driver, stays as chosen; the installer's
 next run still applies case 3b. `busy` allows another attempt only at a
 new arrival: the devnode absent at one whole walk and present at the
 next, or the service's start. Within one arrival it allows two more
-attempts, 10 s apart (`mk_s98_retry`). A record whose devnode no longer
+attempts, 10 s apart (`mk_s98_retry`). The service follows arrivals for
+up to 256 devnodes on `stornvme` at once (each present devnode keeps its
+entry at every walk; only a gone one's entry is given up); past that a
+drive is not tried until another goes. A record whose devnode no longer
 exists even as a phantom is deleted at the inventory (each minute),
 unless it still owes an enable.
 

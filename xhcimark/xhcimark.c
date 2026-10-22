@@ -1970,7 +1970,7 @@ static void mk_inventory(int quiet)
 #define MK_S98_OWN_KEY      "Software\\xhci98\\Stor98"
 #define MK_S98_SWITCH_MUTEX "Global\\Xhci98S98Switch"
 #define MK_S98_PAUSE_EVENT  "Global\\Xhci98S98Pause"
-#define MK_S98_SEEN_MAX     64
+#define MK_S98_SEEN_MAX     256
 #define MK_S98_TODO_MAX     16
 #define MK_PROB_DISABLED    0x00000016UL
 #define MK_DICS_ENABLE      0x00000001UL
@@ -2686,11 +2686,11 @@ static void mk_s98_prune(void)
 
 /* The arrival entry of `id` at this whole walk: a devnode not seen at the
  * walk before starts a new arrival. With `create` 0, only an entry already
- * there is kept (a devnode present but not a candidate at this walk, its
- * properties unreadable for one): -1 when there is none. A full table
- * gives up only an entry seen at neither this walk nor the one before (a
- * devnode gone); with none to give up, -1, and that devnode is not tried at
- * this walk. */
+ * there is kept: mk_s98_poll does that for every devnode present before it
+ * looks at the candidates, so an entry not seen at this walk is a devnode
+ * gone, the one a full table gives up. With none to give up (more than
+ * MK_S98_SEEN_MAX devnodes on stornvme at once), -1, and that devnode is
+ * not tried at this walk. -1 too with `create` 0 and no entry. */
 static int mk_s98_seen(const char *id, int create)
 {
     int i;
@@ -2698,7 +2698,7 @@ static int mk_s98_seen(const char *id, int create)
 
     for (i = 0; i < s98SeenCount; i++) {
         if (inst_eq(s98Seen[i].Id, id)) {
-            if (s98Seen[i].Walk + 1 != s98Walk) {
+            if (s98Seen[i].Walk != s98Walk && s98Seen[i].Walk + 1 != s98Walk) {
                 s98Seen[i].Attempts = 0;
                 s98Seen[i].Why = -1;
             }
@@ -2714,7 +2714,7 @@ static int mk_s98_seen(const char *id, int create)
     }
     if (s98SeenCount < MK_S98_SEEN_MAX) {
         i = s98SeenCount++;
-    } else if (s98Seen[old].Walk + 1 < s98Walk) {
+    } else if (s98Seen[old].Walk != s98Walk) {
         i = old;
     } else {
         return -1;
@@ -2784,6 +2784,11 @@ static void mk_s98_poll(const int *prot)
             }
         }
     }
+    /* Every devnode present keeps its arrival, a candidate or not (its
+     * properties unreadable at this walk, say). */
+    for (i = 0; i < nodeCount && s98SeenCount > 0; i++) {
+        (void)mk_s98_seen(nodes[i].Id, 0);
+    }
     for (i = 0; i < nodeCount; i++) {
         MK_S98_IN in;
         int s;
@@ -2796,8 +2801,6 @@ static void mk_s98_poll(const int *prot)
         in.Service = nodes[i].ServiceBad ? NULL : nodes[i].Service;
         w = mk_s98_wanted(&in);
         if (w == MK_S98_W_CLASS || w == MK_S98_W_SERVICE) {
-            /* Present: an arrival already under way goes on. */
-            (void)mk_s98_seen(nodes[i].Id, 0);
             continue;
         }
         s = mk_s98_seen(nodes[i].Id, 1);
