@@ -1175,6 +1175,33 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
 On the owner's real hardware: the throughput before and after
 (roadmap 43.46's last clause), the owner's.
 
+**The first real-hardware reading** (owner, 2026-10-22; `runs/run-43.md`,
+"The first real-hardware reading") [obs]. The machine is a ThinkPad P14s
+running 98 SE 4.10.2222 A, 32 GB under R. Loew's PATCHMEM, with the IOS of
+2001-01-09, the gold `SCSIPORT.PDR` and a 2007 `DISKTSD.VXD` (ME's by its
+size). The drive is an NVMe drive behind the USB4 tunnel, FAT32.
+
+With the 2 MiB `stor98.mpd` in both arms, the layer as `S98VSD.VXD`
+started cleanly. `PERF2` (unbuffered, write-through, 256 MiB, +0) read
+every verify 0 and every bad count 0, in MB/s:
+
+| Request | write, no layer | write, layer | read, no layer | read, layer |
+|---|---|---|---|---|
+| 128 KiB | 104.0 | 220.1 | 142.4 | 350.6 |
+| 256 KiB | 190.1 | 533.3 | 170.5 | 541.2 |
+| 512 KiB | 210.8 | 682.6 | 187.8 | 785.2 |
+| 1 MiB | 222.4 | 800.0 | 200.0 | 996.1 |
+| 2 MiB | 229.3 | 876.7 | 209.1 | 1,122.8 |
+
+At +512 the rates were within 5 % of these (2 MiB: 836.6 write, 1,075.6
+read). Requests under 512 KiB gain too. On the physical-list path
+`SCSIPORT.PDR` caps the DCB's `DCB_max_sg_elements` at 17 [static: the
+gold build, object 2 offset `0x1A1D`, `min(breaks, 0x11)`], so IOS cuts
+any buffer of more than 17 physical runs. On a 32 GB machine a 128 KiB
+buffer's 32 pages are seldom that contiguous; in the 256 MB emulator
+they mostly are, and the emulator gained less. That the layer claimed is
+inferred from these rates: the release image writes no log.
+
 ## 10. Decisions taken in writing this (the orchestrator's, owner to confirm)
 
 - **D1** `nvme2k` is not matched; the legs install Stor98 under its own

@@ -552,6 +552,73 @@ every 98 SE and ME run. `make-package.ps1` refuses two IOSUBSYS drivers
 with one base name, and `test_inst` holds Stor98's IOSUBSYS files
 against the layer's name (record 30, sections 3.1 and 7.3).
 
+**After the rename, in the emulator** (`cl.sh`, the same vehicle and
+`stor98.mpd` setup). `cq1` ran the `qemu` image of `7bff66a2` (no
+`NVME2K` match) as `S98VSD.VXD`: devnode problem 0, and the layer logged
+`claimed dcb/dmd ... 00000609`, its entry at load group `0x11` above
+`SCSIPORT.PDR`'s `0x14`. `PERF2 file F:\P.BIN 64 <off> 1024,2048` at +0,
++512 and +0 fragmented then verified clean, with no refusal line; at
++0, 2 MiB wrote at 117.0 and read at 126.4 MB/s. `cn1` ran the
+release image of `7bff66a2`, which differs from the first bench's image
+only in its 10-byte stamp: devnode problem 0, and the 2 MiB phases at +0,
++512 and fragmented verified clean.
+
+### The first real-hardware reading (2026-10-22)
+
+The owner's bench. The machine is a ThinkPad P14s running 98 SE
+4.10.2222 A, with 32 GB under R. Loew's PATCHMEM (its patched `VMM.VXD`
+and `VCACHE.VXD`). `IOS.VXD` is 69,594 bytes of 2001-01-09.
+`SCSIPORT.PDR` is the gold one (23,650 bytes, 1999-04-23).
+`DISKTSD.VXD` is 18,663 bytes of 2007-10-27, the size of ME's. The
+drive is an NVMe drive behind the USB4 tunnel, FAT32 as d:.
+
+Both arms ran the first bench package's 2 MiB `stor98.mpd`. "Layer" is
+that package's layer image renamed `S98VSD.VXD`, with `STOR98.VXD`
+deleted; "no layer" is the same `stor98.mpd` alone. Each arm was
+measured with `PERF2 file d:\P.BIN 256 <off> 128,...,2048` (unbuffered,
+write-through). Every verify was 0 and every bad count 0. In MB/s at +0:
+
+| Request | write, no layer | write, layer | read, no layer | read, layer |
+|---|---|---|---|---|
+| 128 KiB | 104.0 | 220.1 | 142.4 | 350.6 |
+| 256 KiB | 190.1 | 533.3 | 170.5 | 541.2 |
+| 512 KiB | 210.8 | 682.6 | 187.8 | 785.2 |
+| 1 MiB | 222.4 | 800.0 | 200.0 | 996.1 |
+| 2 MiB | 229.3 | 876.7 | 209.1 | 1,122.8 |
+
+At +512 the rates were within 5 % of these (2 MiB: 836.6 write, 1,075.6
+read).
+
+These are not cache effects. The tool is the same in both arms, and its
+file is opened with `FILE_FLAG_NO_BUFFERING` (and
+`FILE_FLAG_WRITE_THROUGH` for the writes). Each read compares data the
+write put there. 1,122.8 MB/s is below the 1,396 MB/s Windows 10 read on
+the same drive at Q1T1 (roadmap 43.46).
+
+The layer claiming port `stor98` is inferred from the rates; the
+release image writes no log. XHCIPERF's Stor98 page (43.50's counters)
+would show the request sizes reaching Stor98.
+
+Why 128 KiB gains as well: on the physical-list path
+`SCSIPORT.PDR` sets the DCB's `DCB_max_sg_elements` to
+`min(NumberOfPhysicalBreaks, 17)`. This is read in the gold build
+[static], object 2 offset `0x1A1D`. IOS therefore cuts any buffer of
+more than 17 physical runs, whatever its length. On a 32 GB machine a
+128 KiB buffer's 32 pages are seldom that contiguous. In the 256 MB
+emulator they mostly are, which is why the emulator gained less.
+
+No layer against 3.1.0.0's Stor98 (the owner's before and after files,
+same machine): writes were 2 to 3 % slower from 256 KiB up, and 15 %
+slower at 128 KiB; reads were within 1.5 %. The write deficit is about
+30 ms per 256 MiB phase at every size from 256 KiB, whatever the request
+count. A per-request cost such as 43.50's counter hook (`EngPfSrbIn`, a
+few loads per SRB) would grow with the count and would show in the
+reads, which are equal. The more likely cause is the drive's or the
+file's state between the runs: the 128 KiB write is the phase that
+follows the file's creation. A fair second run deletes `P.BIN`, cold
+starts, runs `PERF2` twice per boot and keeps the second run, and
+alternates the arms.
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on
