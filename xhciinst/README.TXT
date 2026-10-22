@@ -134,7 +134,7 @@ there: a Stor98 installed before, by hand or by an earlier tool, stays.
 USB storage drivers (Windows 98 SE only). Windows 98 SE has no USB
 mass-storage driver: every USB disk, Bulk-Only or UAS under xhciuas.sys,
 needs NUSB 3.3's seven storage files, which a download built with them
-carries in its NONFREE\ folder. The row for them is ticked when none of
+carries in its NUSB33\ folder. The row for them is ticked when none of
 the seven is found, and unticked when any of them is there; the
 installer never copies over a file already present, and with only some
 of the seven found, one of them not this download's, it copies nothing

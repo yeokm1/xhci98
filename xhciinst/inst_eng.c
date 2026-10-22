@@ -4826,7 +4826,7 @@ static int package_files(PKG_EACH each, void *ctx)
         }
         FindClose(h);
     }
-    /* 98 SE: the USB storage drivers' seven, from the download's NONFREE\
+    /* 98 SE: the USB storage drivers' seven, from the download's NUSB33\
      * folder, once their files are in place (record 26 section 6.5.4). */
     if (!envNow.Nt && storCopyOk) {
         int i;
@@ -16621,7 +16621,7 @@ static void stor_note(char *out, size_t cap)
 {
     if (storPack == 0) {
         inst_copy(out, "This download does not carry the USB storage drivers "
-                  "(NONFREE\\STORAGE\\NUSB33\\W98SE).", cap);
+                  "(NUSB33\\W98SE).", cap);
         return;
     }
     if (storPack < 0) {

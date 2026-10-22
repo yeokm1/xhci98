@@ -1603,7 +1603,7 @@ try {
         # wrong hash.
         Write-Step "the driver pack: one revision's bytes, held to SHA256.TXT and the allowlist"
         $packRepo = Join-Path $script:work "usb-wdm-nonfree"
-        $packSub = "non-free/storage/nusb33/w98se"
+        $packSub = "nusb33/w98se"
         $packDirFx = Join-Path $packRepo ($packSub.Replace('/', '\'))
         Ensure-Directory $packDirFx
         function Invoke-PackGit {
@@ -1644,14 +1644,18 @@ try {
         }
         Invoke-PackGit @("init", "-q") | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $packRepo ".gitattributes"), "* -text`n")
-        [System.IO.File]::WriteAllText((Join-Path $packRepo "NOTICE.md"), "# Notice`n`nStand-in.`n")
+        # The pack's own NOTICE.md and NUSB 3.3's nusb33/NOTICE.md differ, so
+        # the export is seen to take the second (owner, 2026-10-22: NUSB is
+        # kept apart from the non-free pack).
+        [System.IO.File]::WriteAllText((Join-Path $packRepo "NOTICE.md"), "# Notice`n`nThe pack's stand-in.`n")
+        [System.IO.File]::WriteAllText((Join-Path $packRepo "nusb33\NOTICE.md"), "# Notice`n`nNUSB 3.3's stand-in.`n")
         Write-PackFixture -Map $packText
         $allowPath = Join-Path $script:work "drvpack-allow.txt"
         [System.IO.File]::WriteAllText($allowPath, ((@($packText.Keys | ForEach-Object {
             (Get-FileSha256 -Path (Join-Path $packDirFx $_)) + "  " + $_ }) -join "`r`n") + "`r`n"))
         $packGood = [ordered]@{}
         foreach ($name in $packText.Keys) { $packGood[$name] = Get-FileSha256 -Path (Join-Path $packDirFx $name) }
-        $packGood["NOTICE.md"] = Get-FileSha256 -Path (Join-Path $packRepo "NOTICE.md")
+        $packGood["NOTICE.md"] = Get-FileSha256 -Path (Join-Path $packRepo "nusb33\NOTICE.md")
         Invoke-PackGit @("add", "-A") | Out-Null
         Invoke-PackGit @("commit", "-q", "-m", "c1") | Out-Null
         $c1 = Invoke-PackGit @("rev-parse", "HEAD")
@@ -1676,7 +1680,7 @@ try {
         # revision refused with its reason. A package of make-package.ps1's
         # never carries the pack.
         $packDl = [ordered]@{}
-        foreach ($name in $packText.Keys) { $packDl["STORAGE\NUSB33\W98SE\$name"] = $packGood[$name] }
+        foreach ($name in $packText.Keys) { $packDl["W98SE\$name"] = $packGood[$name] }
         $packDl["NOTICE.md"] = $packGood["NOTICE.md"]
         $packAllow = Read-DriverPackAllowlist -Path $allowPath
         $exp = Export-DriverPack -Root $packRepo -Revision $c1 -Dest (Join-Path $script:work "drvpack-c1") -Allowlist $packAllow
@@ -1686,9 +1690,11 @@ try {
         }
         Assert-True ($exp.Files.Count -eq 9 -and $exp.Files.Contains("SHA256.TXT")) "the export does not hold the seven, NOTICE.md and its own SHA256.TXT."
         $sumsDl = Read-DriverPackHashList -Text ([System.IO.File]::ReadAllText((Join-Path $exp.Dir "SHA256.TXT"))) -Label "the download's SHA256.TXT"
-        Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["STORAGE/NUSB33/W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NONFREE\ paths."
+        Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NUSB33\ paths."
         Assert-True ((Get-DriverPackFolderFault -Dir $exp.Dir -Files $exp.Files) -eq "") "the export does not pass its own folder check."
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "NONFREE"))) "a package of make-package.ps1's carries NONFREE\."
+        foreach ($dlDir in @("NUSB33", "NONFREE")) {
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $dlDir))) "a package of make-package.ps1's carries $dlDir\."
+        }
         foreach ($bad in @(
                 @{ Rev = $c2; Want = "not the allowlisted file"; Why = "changed bytes under a matching SHA256.TXT" },
                 @{ Rev = $c3; Want = "not the allowlisted folder"; Why = "an eighth file" },
@@ -1725,20 +1731,24 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
         $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
         foreach ($fl in @("release", "debug")) {
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NONFREE"))) "the upload set's $fl\ holds NONFREE\; it belongs at the root."
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
         }
-        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NONFREE") -Files $exp.Files
-        Assert-True ($fault -eq "") "the upload set's NONFREE\ is not the recorded folder: $fault."
+        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NUSB33") -Files $exp.Files
+        Assert-True ($fault -eq "") "the upload set's NUSB33\ is not the recorded folder: $fault."
+        # NUSB 3.3's folder stands beside the installer, never inside a
+        # NONFREE\ (owner, 2026-10-22).
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "the upload set holds a NONFREE\; NUSB 3.3's files belong in NUSB33\."
         foreach ($inf in @("USBSTOR.INF", "USBNTMAP.INF")) {
-            $p = Join-Path $uploadDir "NONFREE\STORAGE\NUSB33\W98SE\$inf"
+            $p = Join-Path $uploadDir "NUSB33\W98SE\$inf"
             Assert-True ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).LastWriteTime -eq $projStamp) "the upload set's $inf is not dated by this project's INFs."
         }
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NONFREE"))) "-UploadSetOnly put the driver pack under releases\."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NUSB33"))) "-UploadSetOnly put the driver pack under releases\."
         $zip = [System.IO.Compression.ZipFile]::OpenRead($uploadZip)
         try { $entries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
-        foreach ($want in @("NONFREE/STORAGE/NUSB33/W98SE/USBSTOR.INF", "NONFREE/NOTICE.md", "NONFREE/SHA256.TXT")) {
+        foreach ($want in @("NUSB33/W98SE/USBSTOR.INF", "NUSB33/NOTICE.md", "NUSB33/SHA256.TXT")) {
             Assert-True ($entries -contains $want) "the archive has no '$want' entry."
         }
+        Assert-True (@($entries | Where-Object { $_ -like "NONFREE/*" }).Count -eq 0) "the archive has a NONFREE/ entry."
         $pubAfter = @{}
         foreach ($f in (Get-ChildItem -LiteralPath $pubRoot -File -Recurse)) { $pubAfter[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash }
         Assert-True ($pubAfter.Count -eq $pubBefore.Count -and @($pubBefore.Keys | Where-Object { $pubAfter[$_] -ne $pubBefore[$_] }).Count -eq 0) `
@@ -1767,17 +1777,17 @@ try {
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", (Join-Path $script:work "no-such-pack")))
         Assert-True ($r.ExitCode -eq 0) ("a release recorded without the driver pack was not assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "a release recorded without the driver pack got NONFREE\ in its download."
-        # A published tree holding NONFREE\ is refused: the pack is never
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NUSB33"))) "a release recorded without the driver pack got NUSB33\ in its download."
+        # A published tree holding NUSB33\ is refused: the pack is never
         # in releases\.
-        Ensure-Directory (Join-Path $pubRoot "NONFREE")
-        Set-Content -LiteralPath (Join-Path $pubRoot "NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        Ensure-Directory (Join-Path $pubRoot "NUSB33")
+        Set-Content -LiteralPath (Join-Path $pubRoot "NUSB33\NOTICE.md") -Value "committed by hand" -Encoding ASCII
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
         $r = Invoke-Releaser $packRelArgs
-        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NONFREE\ was assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NONFREE\."
-        Remove-Item -LiteralPath (Join-Path $pubRoot "NONFREE") -Recurse -Force
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NUSB33\ was assembled:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NUSB33\."
+        Remove-Item -LiteralPath (Join-Path $pubRoot "NUSB33") -Recurse -Force
         Write-AsciiFile -Path $recPath -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
 
         # The record is required from 3.2.0.0 (an older release may lack
@@ -1805,8 +1815,15 @@ try {
         # The installer's own table of the seven (xhciinst\inst_core.c,
         # instStorFile; design record 26 section 6.5.1) is this allowlist:
         # the same names and the same hashes, so the installer verifies the
-        # download's NONFREE\ folder by what the cut put there.
+        # download's NUSB33\ folder by what the cut put there.
         $coreText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhciinst\inst_core.c"))
+        # And the installer reads them from the folder the cut writes them
+        # to: inst_core.h's INST_STOR_PACK_DIR is NUSB33\W98SE.
+        $coreHText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhciinst\inst_core.h"))
+        $packDirM = [regex]::Match($coreHText, '#define\s+INST_STOR_PACK_DIR\s+"([^"]+)"')
+        $packDirWant = "$($script:DriverPackFolder)\$($script:DriverPackStorageDir)"
+        Assert-True ($packDirM.Success -and $packDirM.Groups[1].Value.Replace('\\', '\') -eq $packDirWant) `
+            ("the installer's INST_STOR_PACK_DIR is '{0}', not the download's {1}." -f $packDirM.Groups[1].Value, $packDirWant)
         $instSeven = [ordered]@{}
         foreach ($m in [regex]::Matches($coreText, '\{\s*"([A-Za-z0-9.]+)",\s*INST_STOR_DIR_\w+,\s*"([0-9A-Fa-f]{64})"')) {
             $instSeven[$m.Groups[1].Value.ToUpperInvariant()] = $m.Groups[2].Value.ToUpperInvariant()

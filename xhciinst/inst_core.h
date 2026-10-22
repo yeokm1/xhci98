@@ -1647,7 +1647,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
 #define INST_STOR_DIR_DRIVERS   0   /* %windir%\SYSTEM32\DRIVERS (dirid 10) */
 #define INST_STOR_DIR_IOS       1   /* the system directory's IOSUBSYS (12) */
 #define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
-#define INST_STOR_PACK_DIR      "NONFREE\\STORAGE\\NUSB33\\W98SE"
+#define INST_STOR_PACK_DIR      "NUSB33\\W98SE"
 #define INST_STOR_KEY           "Software\\xhci98\\Storage"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"

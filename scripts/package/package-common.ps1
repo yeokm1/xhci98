@@ -1248,13 +1248,14 @@ function Get-GitTreeState {
 #
 # The one exception to "no Microsoft file in the download"
 # (docs\contributing\legal-provenance.md section 5, the owner's decision of
-# 2026-10-20): the seven files of the driver pack's
-# non-free/storage/nusb33/w98se/ folder, with the pack's NOTICE.md, in the
-# upload set alone, at its root as NONFREE\ - the pack's own layout, its
-# storage part only, in 8.3 names (owner, 2026-10-20): NONFREE\NOTICE.md,
-# NONFREE\SHA256.TXT (the seven's lines) and NONFREE\STORAGE\NUSB33\W98SE\,
-# where the installer takes them from (task 43.4). Never in a package of
-# make-package.ps1's and never in releases\. The pack is the owner's
+# 2026-10-20): the seven files of the driver pack's nusb33/w98se/ folder,
+# with that folder's nusb33/NOTICE.md, in the upload set alone, at its root
+# as NUSB33\, a folder of its own beside the installer and never inside a
+# NONFREE\ (owner, 2026-10-22: NUSB is kept apart from the non-free pack,
+# in the pack's repository and in the download), in 8.3 names:
+# NUSB33\NOTICE.md, NUSB33\SHA256.TXT (the seven's lines) and
+# NUSB33\W98SE\, where the installer takes them from (task 43.4). Never in
+# a package of make-package.ps1's and never in releases\. The pack is the owner's
 # usb-wdm-nonfree repository, a git
 # checkout, and its files are read from the checkout's object store at one
 # revision rather than from its working tree, so what is staged is exactly
@@ -1262,11 +1263,13 @@ function Get-GitTreeState {
 # to the pack's SHA256.TXT at that revision and to this allowlist, which is
 # legal-provenance.md section 5's table: changing it is a decision recorded
 # there first.
-$script:DriverPackFolder = "NONFREE"
-$script:DriverPackStorageRel = "non-free/storage/nusb33/w98se"
-# Where the seven sit under NONFREE\ in the download.
-$script:DriverPackStorageDir = "STORAGE\NUSB33\W98SE"
+$script:DriverPackFolder = "NUSB33"
+$script:DriverPackStorageRel = "nusb33/w98se"
+# Where the seven sit under NUSB33\ in the download.
+$script:DriverPackStorageDir = "W98SE"
+# The notice, under NUSB33\ in the download, and in the pack.
 $script:DriverPackNotice = "NOTICE.md"
+$script:DriverPackNoticeRel = "nusb33/NOTICE.md"
 $script:DriverPackSums = "SHA256.TXT"
 $script:DriverPackRecordName = "drvpack.txt"
 $script:DriverPackSeven = [ordered]@{
@@ -1350,10 +1353,10 @@ function Invoke-DriverPackGit {
 }
 
 function Export-DriverPack {
-    # Writes the download's NONFREE\ folder into -Dest (a new directory): the
+    # Writes the download's NUSB33\ folder into -Dest (a new directory): the
     # pack's seven storage files as they are at -Revision in the checkout at
-    # -Root, under STORAGE\NUSB33\W98SE\, its NOTICE.md, and a SHA256.TXT of
-    # the seven. The pack's folder is held to the allowlist exactly - the
+    # -Root, under W98SE\, the pack's nusb33/NOTICE.md as NOTICE.md, and a
+    # SHA256.TXT of the seven. The pack's folder is held to the allowlist exactly - the
     # seven names, nothing else, each a plain file - and each file to the
     # pack's SHA256.TXT at that revision and to its allowlisted hash. Returns
     # the revision and an ordered map of each written file's path under
@@ -1425,10 +1428,10 @@ docs\contributing\legal-provenance.md section 5 before the allowlist changes.
         $sumLines += ("{0}  {1}/{2}" -f $hash.ToLowerInvariant(), $script:DriverPackStorageDir.Replace('\', '/'), $name)
     }
     $noticeOut = Join-Path $Dest $script:DriverPackNotice
-    Invoke-DriverPackGit -Root $Root -Arguments @("cat-file", "blob", "${rev}:$($script:DriverPackNotice)") -OutFile $noticeOut | Out-Null
+    Invoke-DriverPackGit -Root $Root -Arguments @("cat-file", "blob", "${rev}:$($script:DriverPackNoticeRel)") -OutFile $noticeOut | Out-Null
     $files[$script:DriverPackNotice] = Get-FileSha256 -Path $noticeOut
     # The download's own SHA256.TXT: the seven's hashes at their paths
-    # under NONFREE\ (the pack's lists its other folders too).
+    # under NUSB33\ (the pack's lists its other folders too).
     $sumsOut = Join-Path $Dest $script:DriverPackSums
     [System.IO.File]::WriteAllText($sumsOut, (($sumLines -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
     $files[$script:DriverPackSums] = Get-FileSha256 -Path $sumsOut

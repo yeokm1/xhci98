@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 18, 2026-10-20 (the owner's answers to draft 17's open
+Status: draft 19, 2026-10-22 (the owner's decision of that day to keep
+NUSB apart from the non-free driver pack: the seven are read from the
+download's own `NUSB33\W98SE\` beside the version root, no longer
+`NONFREE\STORAGE\NUSB33\W98SE\`, sections 6.5 and 6.5.1; record 23
+revision 25); draft 18, 2026-10-20 (the owner's answers to draft 17's open
 questions: the uninstall adopts the storage devices bound from this
 installer's copy after the run, section 6.5.8, and the rest accepted as
 designed, section 14); draft 17, 2026-10-20 (roadmap-usb4 task 43.4, the owner's
@@ -937,7 +941,8 @@ Code 2, because `xhciuas.inf` names `USBNTMAP.SYS` as an upper filter and
 NTKERN fails a devnode whose named filter is missing (`runs/run-28.md`,
 "Windows 98 SE with no USB 2.0 stack, and with SweetLow's alone"). From `3.2.0.0` the release
 download carries NUSB 3.3's seven storage files at its root as
-`NONFREE\` (task 43.3; `legal-provenance.md` section 5, "NUSB 3.3's
+`NUSB33\`, a folder of its own and never inside a `NONFREE\` (task 43.3;
+owner, 2026-10-22; `legal-provenance.md` section 5, "NUSB 3.3's
 Windows 98 SE storage files"), and the installer offers them. The owner's
 decisions of 2026-10-20: selectable, so a user who already has NUSB need
 not install them; on 98 SE only, ME and later using their own drivers;
@@ -955,9 +960,9 @@ text; nothing here edits them):
 
 #### 6.5.1 Where the files come from
 
-From the download's `NONFREE\STORAGE\NUSB33\W98SE\` beside the version
-root, the package root of record 23 section 4.2 (owner, 2026-10-20; task
-43.3), read by those seven names alone and each held to its SHA-256 in a
+From the download's `NUSB33\W98SE\` beside the version root, the
+package root of record 23 section 4.2 (owner, 2026-10-20, and 2026-10-22
+for the folder; task 43.3), read by those seven names alone and each held to its SHA-256 in a
 table the installer carries (`instStorFile`, `inst_core.c`: the seven
 names, their destinations and the hashes of `legal-provenance.md`
 section 5's table, which `scripts\package\test-package.ps1` holds equal
@@ -968,7 +973,7 @@ carries the pack), the row is shown on 98 SE greyed, its note saying that
 this download does not carry the USB storage drivers; where a file is
 missing or its bytes differ, greyed with "the storage files in this
 download are not the ones this release carries", the log naming each.
-Nothing in `NONFREE\` but the seven is read.
+Nothing in `NUSB33\` but the seven is read, and nothing in a `NONFREE\`.
 
 #### 6.5.2 The row
 
