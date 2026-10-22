@@ -812,6 +812,45 @@ void tr_fast_tip(char *out, size_t cap, int count);
  * computer's is INST_FAST_VALUE under INST_DIR_KEY (inst_core.h). */
 #define TR_FAST_VALUE   "FasterNotice"
 
+/* A balloon the shell did not show (item 9, task 43.66). After
+ * NIM_SETVERSION 3 the shell sends NIN_BALLOONSHOW when it shows the
+ * notice's balloon and NIN_BALLOONTIMEOUT or NIN_BALLOONHIDE when it goes.
+ * One that goes without being shown was lost (7 drops it behind its own
+ * "device ready" balloon) and is sent again, once, TR_BS_WAIT_MS after it
+ * went. One the shell does not answer at all within TR_BS_NOSHOW_MS is
+ * sent again at once, but only where the shell has been seen to answer
+ * (reports): a shell that never sends these messages would otherwise get
+ * every balloon twice. A re-send replaces whatever balloon of the tool's
+ * the shell still holds, so it cannot show twice. */
+#define TR_BS_IDLE      0   /* nothing owed                               */
+#define TR_BS_SENT      1   /* sent, not shown yet                        */
+#define TR_BS_SHOWN     2   /* the shell showed it                        */
+#define TR_BS_LOST      3   /* gone unshown: the re-send waits            */
+
+#define TR_BE_SENT      1   /* the notice's balloon sent (new text)       */
+#define TR_BE_OTHER     2   /* another balloon of the tool's replaced it  */
+#define TR_BE_SHOW      3   /* NIN_BALLOONSHOW                            */
+#define TR_BE_HIDE      4   /* NIN_BALLOONHIDE                            */
+#define TR_BE_TIMEOUT   5   /* NIN_BALLOONTIMEOUT                         */
+#define TR_BE_CLICK     6   /* NIN_BALLOONUSERCLICK                       */
+#define TR_BE_TICK      7   /* the tray's one-second poll                 */
+#define TR_BE_DROP      8   /* nothing to say: no device counted, or off  */
+
+#define TR_BS_NOSHOW_MS 60000UL
+#define TR_BS_WAIT_MS   40000UL
+
+typedef struct _TR_BSEND {
+    int State;                  /* TR_BS_*                                 */
+    int Resent;                 /* this text has been sent again           */
+    TR_U32 Since;               /* GetTickCount of the last change         */
+} TR_BSEND;
+
+/* One event at nowMs (GetTickCount, wrapping); reports: the shell has sent
+ * a NIN_BALLOON* message in this session. Returns 1 when the balloon is to be sent
+ * again now: the state is then already TR_BS_SENT with Resent set, and the
+ * caller sends it with no TR_BE_SENT. Zeroed is TR_BS_IDLE. */
+int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports);
+
 /* ---- the tree's labels (record 25 revision 10 addendum) ------------------ */
 
 /* VEN_ and DEV_ of a PCI id or instance id ("PCI\VEN_8086&DEV_02ED&..."),

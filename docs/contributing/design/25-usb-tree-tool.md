@@ -99,6 +99,9 @@ unit was removed unexpectedly, never that data was lost. 98 SE and ME
 have no child filter and show such a unit as disconnected, as before.
 Sections 4.3, 4.4, 7.2, 10, 11 and 12 change with it.
 
+Task 43.66, 2026-10-23 (43.28's finding 1): the "can run faster"
+balloon the shell did not show is sent again once (section 7.7 item 9).
+
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
 authentication material.
@@ -1748,7 +1751,44 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    Gbit/s keeps the icon red until the notice is turned off, as 43.27's
    text counts it.
 
-The legs are roadmap-usb4 43.28 (section 11, T.13).
+9. **A balloon the shell did not show** (task 43.66, 2026-10-23;
+   `tr_bsend_step`, host-tested). Item 4 gives each new key one balloon,
+   and 43.28's legs found 7 dropping that balloon on a stick's first
+   plug: Windows' own "Your device is ready to use" balloon held the area
+   for about 35 s and ours never followed (`runs/run-43-28.md`, finding
+   1), so on 7, whose new icon sits in the overflow, the user saw
+   nothing. After `NIM_SETVERSION` 3 the shell answers a balloon with
+   `NIN_BALLOONSHOW` (`WM_USER` + 2) when it shows it,
+   `NIN_BALLOONTIMEOUT` (+ 4) or `NIN_BALLOONHIDE` (+ 3) when it goes,
+   and `NIN_BALLOONUSERCLICK` (+ 5) for a click (Windows SDK
+   `shellapi.h`, documentation; which of them 7 sends for the dropped
+   balloon is read in 43.66's leg). The notice's balloon is watched from
+   the moment it is sent:
+   - shown (`NIN_BALLOONSHOW`): done; nothing is ever sent again for it;
+   - gone without being shown (a timeout or a hide before any show):
+     lost, and sent again, once, 40 s later (`TR_BS_WAIT_MS`), long
+     enough for a balloon of Windows' own to have gone;
+   - no answer at all within 60 s (`TR_BS_NOSHOW_MS`): sent again at
+     once, but **only where the shell has answered some balloon of this
+     session** with one of the four messages, so a shell that never sends
+     them is never sent a balloon twice;
+   - the re-send gone unshown or unanswered too: given up;
+   - another balloon of the tool's sent meanwhile (a removal's, an
+     eject's), the balloon clicked, the device it names no longer
+     counted, or the notice turned off: no longer owed.
+   A re-send is the same `NIM_MODIFY` with `NIF_INFO` on the same icon,
+   which replaces whatever balloon of the tool's the shell still holds
+   (the shell keeps one per icon, the last replacing the one before, as
+   item 6's click already relies on), so a balloon the shell had only
+   queued is replaced, not doubled. Where it was shown nothing changes:
+   XP showed ours after its "Found New Hardware" balloon (43.28), and a
+   shown balloon is never sent again. 98 SE has no balloon (section 16)
+   and nothing changes there. The text sent again is the one first sent,
+   naming the device it named; the 60 s and 40 s are judgements, not
+   readings, to be read again against 7's timing in the leg.
+
+The legs are roadmap-usb4 43.28 (section 11, T.13), and 43.66's for
+item 9.
 
 ## 8. Install, upgrade and uninstall
 
@@ -1878,6 +1918,14 @@ balloon, the box's entry and its 79 columns (`tr_fast_balloon`,
 value in force (`inst_fast_default`, `inst_fast_on`: on for every
 target's version, 10.0 and 6.4 included, each source's 0, 1, another number and absent) in
 `test\test_inst.c`, with the installer's switches.
+
+Task 43.66: the balloon the shell did not show (`tr_bsend_step`: 7's
+case, a timeout or a hide before any show, sent again once after the wait
+and across `GetTickCount`'s wrap; XP's case, shown and never sent again;
+no answer at all, sent again at the deadline only from a shell heard
+from; the re-send lost or unanswered, given up; a new text, another
+balloon, a click, the device gone and the notice off) in
+`test\test_tr.c`.
 
 ## 11. Legs
 
