@@ -313,6 +313,8 @@ Each driver directory holds:
 
 ## Reporting a bug
 
+Bugs in the free USB class drivers that a download may carry (the [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) drivers, in beta) go to [that project's issues](https://github.com/yeokm1/usb-wdm-free/issues), not here. The non-free drivers (the [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) pack) are their vendors' drivers as released and are not tested or changed by this project. Everything else goes here:
+
 Open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
 
 - **The DOS report:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names. It is read-only (`XHCIQUAL --probe-only --no-page --log-stamp`) and never overwrites an earlier log. If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **takes over the controller and resets it and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.

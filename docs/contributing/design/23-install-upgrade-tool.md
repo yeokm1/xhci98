@@ -1467,7 +1467,7 @@ the other way is Advanced startup's Startup Settings, "Disable driver
 signature enforcement", at every start. The same reading of
 `SystemStartOptions` is made; it is unread on 8 and 8.1.
 
-Revision 27 (roadmap-usb4 task 43.36; the owner, 2026-10-20: test-signing,
+Revision 28 (roadmap-usb4 task 43.36; the owner, 2026-10-20: test-signing,
 documented by the installer, Secure Boot off, no Microsoft attestation
 for now): on Windows 10 x64 the note is 8 and 8.1 x64's, in whichever
 run, the USB drivers' or the connection manager's alone - the x64

@@ -501,7 +501,8 @@ the logged-on user, with no administrator rights.
 - **Balloons** say when a device connects, waits for approval or
   disconnects, on Windows 2000, ME and later; on 98 SE the icon's tooltip
   shows the last event. A balloon never says how a device left: only a
-  removal the tool made reports its outcome. In `3.1.0.0` the tray
+  removal the tool made reports its outcome, and, from `3.2.0.0`, the
+  unexpected-removal warning below. In `3.1.0.0` the tray
   warned "The Thunderbolt/USB4 controller stopped answering" after every
   sleep or hibernation with nothing wrong (read on 7 in a virtual
   machine, 2026-10-22); from `3.2.0.0` a sleep or a stop of the
