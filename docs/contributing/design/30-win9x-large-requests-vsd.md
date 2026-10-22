@@ -1,6 +1,9 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 4, 2026-10-22, reviewed and revised (the installer's
+Status: draft 5, 2026-10-22, reviewed and revised (the SRB's data range
+checked for wrap, the double buffer's substitution part of the reading
+owed before the code, a foreign `.TMP` with nothing in flight a row of
+the recovery table); draft 4, 2026-10-22, reviewed and revised (the installer's
 recovery by the run's mode and the selected package, `Pending` deleted
 last, the leftovers of a finished step; the refusal path given a
 fault-injection leg); draft 3, 2026-10-22, reviewed and revised (the list held to the
@@ -398,7 +401,17 @@ The input first, every step checked, a failure being a refusal:
 - the fragments' bytes are summed with a check against wrap, and the sum
   (or the one linear buffer's count) must be at most `DCB_max_xfer_len`
   (IOS checks it too, section 2.2 item 2; the layer does not rely on it);
-- each fragment's address plus its length must not wrap.
+- each fragment's address plus its length must not wrap; and the range
+  `SCSIPORT.PDR` treats as the SRB's data, the first byte plus the
+  request's length, must not wrap either: `DataBuffer +
+  DataTransferLength` when `IORF_SRB_VALID` is set, the linear buffer or
+  first fragment plus `IOR_xfer_count`'s bytes always (the SRB
+  `SCSIPORT.PDR` builds for a request without one, section 4.3). Stor98
+  translates `DataBuffer + offset` past the first fragment
+  (`EngMapCaller`), and an address that wrapped would fall outside the
+  SRB's range and be translated from the page tables directly (section
+  2.2 item 4), so a wrapping range is a refusal even where every fragment
+  is whole.
 
 - the list must cover the request: its bytes are at least
   `IOR_xfer_count`'s (as bytes), on every request, an SRB or none;
@@ -567,7 +580,12 @@ and what it rests on:
    between `IOS_SendCommand` and this layer replaces `IOR_buffer_ptr` or
    the logical list with other memory. IOS's own double buffer is
    substituted at `IOS_SendCommand` (section 4.6), before either
-   translation, so it is the same buffer in both. For the layers above
+   translation, so it is the same buffer in both - **if** IOS substitutes
+   it there, which is itself a [hyp] (section 4.6) and part of the same
+   reading owed before the code: where IOS substitutes the double
+   buffer, which of `IOR_buffer_ptr`, `IORF_SCATTER_GATHER` and the list
+   it changes, and where that buffer's physical list was built under
+   `phys_sgd`. For the layers above
    this one on Stor98's disk (load groups 7, `DISKTSD`; `0x0B`, the
    SCSI'izer; `0x10`; and VOLTRACK's) it is a [hyp], **read before the
    code is written** (a static reading of each layer's request routine,
@@ -844,7 +862,8 @@ the leftovers are removed.
 |---|---|---|---|---|---|---|---|
 | absent | - | absent | absent | nothing in flight | classify the destination by `File`, then place or update as above | remove a destination of `File`'s bytes | nothing |
 | absent | `File`'s hash | `File`'s hash, or absent | present, or absent with a `.TMP` | the leftovers of a finished step | remove the entry, then the `.TMP`; then as the first row | the same, then as the first row | the same (only leftovers this installer's values name, of a step already finished) |
-| set | `Pending`'s hash | any | any | the start (or the move) did it | `File` takes the hash; then the entry and a `.TMP` of that hash removed; then `Pending` deleted; then as the first row | the same, then as the first row | the same, then nothing |
+| absent | any | other bytes | any | a `.TMP` that is not this installer's, nothing of its own in flight | left and said; the exact entry removed; a placement or an update blocked (a step: the user removes the file) | the destination of `File`'s bytes removed as the first row says; the `.TMP` left | the exact entry removed only |
+| set | `Pending`'s hash | absent, `Pending`'s hash or other | any | the start (or the move) did it | `File` takes the hash; then the entry and a `.TMP` of that hash removed (a `.TMP` of other bytes left, the row above then applying); then `Pending` deleted; then as the first row | the same, then as the first row | the same, then nothing |
 | set | absent or `File`'s hash | `Pending`'s hash | present | an update queued | kept when `Pending` is `H`; otherwise withdrawn (entry, `.TMP`, `Pending`) and `H` placed or queued afresh | withdrawn, then as the first row | nothing: it stays queued |
 | set | absent or `File`'s hash | `Pending`'s hash | absent | cut short before the entry (an update) or the move (a first placement) | when `Pending` is `H`, finished (the entry written, or the `.TMP` moved into an absent destination); otherwise withdrawn and `H` placed afresh | withdrawn, then as the first row | nothing |
 | set | absent or `File`'s hash | absent | any | cut short before the `.TMP` was whole, or the `.TMP` gone | the exact entry removed; `Pending` deleted; the step started again with `H` | the same, then as the first row | the same (nothing of the layer is left in flight to keep) |
@@ -934,7 +953,9 @@ present, wrong entries (refused, no entry read); sixteen 512-byte
 fragments and one of 2 MiB - 8 KiB, each starting at page offset 4092,
 on discontiguous frames (543 pages, within the room of 1,022); 255
 fragments and a terminator, 255 and a 256th non-zero descriptor; a
-fragment count of 0 as the first descriptor under a non-zero count; a
+fragment count of 0 as the first descriptor under a non-zero count;
+fragments each whole while `DataBuffer + DataTransferLength`, or the first
+byte plus the count, wraps (with and without an SRB); a
 list covering fewer, as many and more bytes than `IOR_xfer_count`, with
 and without an SRB; a sector count whose shift overflows; a sum over
 `DCB_max_xfer_len`; a descriptor pointer that wraps; the callback table
