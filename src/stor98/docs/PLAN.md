@@ -1163,6 +1163,14 @@ isolation evidence.
   table in the 9x system arena read from ring 3, a vendor LOG SENSE page (kept as the
   fallback if a layer refuses READ BUFFER). Tests: `tests/unit/` (the answer's builder,
   the DCB accessor); TESTING.md "Counter answer (READ BUFFER)".
+  **P.0 (xhci98, 2026-10-22, static):** stock 98 SE and ME install `WNASPI32.DLL` and
+  `APIX.VXD` (their setup's `subase.inf`, section `[winbase]`), but the ASPI adapter
+  identity a program reads is not shown to name the miniport (`APIX.VXD`, 29,497 bytes, the same
+  file on both CDs, SHA-256 d98f340a..., carries the fixed string "OEM SCSI HBA" at file offset
+  0x5864), so the adapter is proved Stor98's by the target
+  itself: INQUIRY lists a vendor page C9h (`include/stor98pf.h`, the identity page,
+  signature 'S98P' and the PCI location), which a reader asks before any READ BUFFER.
+  INQUIRY and its EVPD pages are answered by every SCSI target, so asking them is safe.
 
 ### Open (undecided)
 

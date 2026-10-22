@@ -4,6 +4,17 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.2.0.0 - unreleased
+
+- A read-only counter answer for xhci98's disk benchmark (XHCIPERF):
+  Stor98 answers READ BUFFER (buffer ID 53h) from memory with the sizes
+  of the requests it received and of the commands it sent to the drive,
+  the splits, the physical layout of each request's buffer, the queue
+  depth reached, the errors, its limits and, on Windows 98 SE and ME,
+  what the system's disk layer hands it. INQUIRY lists a vendor page,
+  C9h, that identifies the adapter. No NVMe command is sent for either,
+  nothing is written, and nothing else changes (docs/PLAN.md MD-8).
+
 ## 3.1.0.0 - 2026-10-19
 
 The first Stor98 built with xhci98 and released in its package, at the

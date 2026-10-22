@@ -52,6 +52,7 @@
 #include "cmlink.h"
 #endif
 #include "dbgport.h"
+#include "pfstat.h"
 
 //#define NVME2K_W9X
 
@@ -404,6 +405,18 @@ typedef struct _HW_DEVICE_EXTENSION {
     ULONG PollTicks;                                // timer callbacks while polling
     ULONG PollStartIoHits;                          // HwStartIo calls (spin included) that consumed a completion
     ULONG PollIsrCalls;                             // HwInterrupt calls while polling (the port, a shared line or the dump port)
+    // Counter answer (docs/PLAN.md MD-8, include/stor98pf.h): totals since
+    // PfEpoch began (HwFindAdapter that is not a resume), and the facts
+    // only stor98 sees.
+    ULONG PfEpoch;
+    ULONG PfMaxTransfer;                            // as NegotiateDma left them
+    ULONG PfBreaks;
+    ULONG PfDcbSeen;                                // STOR98PF_DCB_SEEN (9x)
+    ULONG PfDcbMaxXfer;
+    ULONG PfDcbMaxSg;
+    ULONG PfDcbDmd;
+    STOR98PF_TOTALS Pf;
+    STOR98PF_ANSWER PfAnswer;                       // built in HwStartIo for READ BUFFER, then copied
     ENG_CLOCK Clock;
     ENG_TUNABLES Tun;
     ENG_BUSY Busy[ENG_BUSY_TRACK];
@@ -493,6 +506,7 @@ BOOLEAN NvmeVwcFeature(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Set);
 BOOLEAN HandleIO_NVME2KDB(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN HandleIO_SCSIDISK(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleInquiry(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
+BOOLEAN ScsiHandleReadBuffer(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleReadCapacity(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleReadCapacity64(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleLogSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
