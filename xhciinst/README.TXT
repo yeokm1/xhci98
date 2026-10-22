@@ -156,6 +156,7 @@ install included), never while NUSB is installed.
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
 /thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /notray,
+/faster and /nofaster (the "can run faster" box ticked or unticked),
 /nouas, /storage, /nostorage, /cmonly and /usb (the components,
 preselected),
 /set Name=Value
@@ -208,6 +209,10 @@ The console tool
                                 on 98 SE, and /yes takes the row's default
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
+  INSTALL /console /faster      turns the xHCI98 USB Tree's "can run
+                                faster" notice on for this computer;
+                                /nofaster turns it off (each user's own
+                                choice in the USB Tree overrides it)
   INSTALL /console /to path     installs the xHCI98 tools in that
                                 directory without asking
 
