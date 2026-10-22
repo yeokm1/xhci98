@@ -1333,8 +1333,9 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
     }
     /* Read by step 6 while every binding stood (cmU4Revalidate); step 6's
      * withdrawal of the learned bindings follows it here. */
-    nhi->RecBarred |= nhi->RecDebtMask;
-    nhi->RecDebtMask = 0;
+    /* Under the registration list's lock: a surprise removal reads both
+     * (design record 25 section 7.6). */
+    CmReenumLossMove(nhi);
     cmU4Unlearn(nhi, nhi->RecChanged);
     nhi->RecChanged = 0;
     /* R8a's old entries, owed once each member's retirement is observed

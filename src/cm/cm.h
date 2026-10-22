@@ -603,6 +603,13 @@ typedef struct _CM_FILTER {
     ULONG LocBus;
     ULONG LocAddress;       /* DevicePropertyAddress                        */
     ULONG Answered;         /* Removable answered set                      */
+    /* The marks entry of its PDO this attachment was last bound to (design
+     * record 25 section 7.6): its domain, that domain's start count and
+     * the entry's serial; MarkDom NULL before any. Compared, never
+     * dereferenced unless the domain is still listed. */
+    struct _CM_NHI *MarkDom;
+    ULONG MarkStarts;
+    ULONG MarkSerial;
     ULONG Stray;            /* counted once as cm.reenum.child.stray       */
     /* Set while this object asks IoGetDeviceProperty for its PDO's
      * location: the PnP manager answers DevicePropertyAddress with an
