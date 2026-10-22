@@ -455,6 +455,13 @@ no buffer, IOR function `0x0F`). Stor98 answers `REQUEST SENSE` in software
 is never walked. No construction of an SRB for an incoming IOR that has none was
 found.
 
+The builder is the same instruction sequence, with two callers and one
+`REQUEST SENSE` CDB set-up, in the gold 98 SE (`0x100BDF`; callers
+`0x100707`, `0x201B8D`) and ME (`0x100C7F`; `0x1007A7`, `0x301B25`)
+`SCSIPORT.PDR`. The files, sizes and hashes are `legal-provenance.md`
+section 4's row "Task 43.46 design: the layers above Stor98's disk and
+`SCSIPORT.PDR`'s own requests".
+
 What it changes in record 30: its section 2.3 (and the chain's names in
 2.2 and 4.7); a new open item, `SCSIPORT.PDR`'s own requests after the
 DCB is configured, release-blocking until read.

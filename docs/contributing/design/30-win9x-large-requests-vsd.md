@@ -1,6 +1,9 @@
 # Design Record 30 - STOR98.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 9, 2026-10-22 (D8 the owner's: the layer follows Stor98's
+Status: draft 10, 2026-10-22, reviewed and revised (the double buffer's
+substitution order a hyp, `SCSIPORT.PDR`'s own requests compared in the
+three builds with a leg provoking the sense fetch, the provenance row for
+the new readings); draft 9, 2026-10-22 (D8 the owner's: the layer follows Stor98's
 rule when Stor98's box is unticked, the recovery table's modes with it);
 draft 8, 2026-10-22 (section 2.3 item 3: `SCSIPORT.PDR`'s own
 requests read, the one with data a `REQUEST SENSE` that Stor98 answers
@@ -239,9 +242,11 @@ addresses; in short [static, QuickInstall builds]:
 2. **IOS's double buffer.** `IOS_SendCommand` (service 4) sends a request
    flagged `IORF_IO_TOO_BIG` or `IORF_DOUBLE_BUFFER` to its splitting and
    double-buffering branch before the first calldown is made, the branch
-   allocating its pages there; so the substitution precedes the chain and
-   both translations see the same buffer. Which IOR fields it rewrites is
-   not read yet (owed with item 3).
+   allocating its pages there [static]; that the substitution itself
+   precedes the chain, so that both translations see the same buffer, is
+   a [hyp] until the fields that branch rewrites and the order of its
+   dispatch are read, which section 4.7 item 2 keeps as a condition for
+   the code.
 3. **`SCSIPORT.PDR`'s own requests.** The one SRB construction found is
    for `SCSIPORT.PDR`'s own internal requests: an IOP from
    `ISP_CREATE_IOP`, its SRB inside the IOP, `DataTransferLength` the
@@ -254,13 +259,18 @@ addresses; in short [static, QuickInstall builds]:
    unfilled slot. The builder has two callers [static]: a `REQUEST
    SENSE` of its own (`SCSIPORT.PDR`'s sense fetch after a check
    condition without autosense; a 0x40-byte buffer in the IOP), and a
-   request with no buffer from its initialisation object. The `REQUEST
+   request with no buffer from its initialisation object; the builder is
+   the same instruction sequence, with the same two callers and the one
+   `REQUEST SENSE` CDB set-up, in the gold 98 SE, QuickInstall and ME
+   `SCSIPORT.PDR` [static]. The `REQUEST
    SENSE` carries data, but Stor98 answers `REQUEST SENSE` in software
    from its kept sense (`ScsiCompletesInSoftware`, `nvme2k.c`: "no child,
    no DMA"; Stor98 calls `ScsiPortGetPhysicalAddress` only in its
    engine's mapping of read and write children, `engine.c`, and for its
    own uncached extension), so the slot is never walked. The hazard is
-   therefore closed by a property of Stor98's, which the code's comment
+   therefore closed, in those three builds, by a property of Stor98's
+   [static, with the leg of section 9.2 item 10 provoking the sense fetch],
+   which the code's comment
    and Stor98's `docs/PLAN.md` record as a condition: a Stor98 that ever
    moved `REQUEST SENSE` to a DMA path would reopen it. No construction
    for an incoming IOR without an SRB was found, so the code admits no
@@ -1101,6 +1111,13 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
    Stor98 for that request (its counters), no hang and no second
    completion, the IOR's fields as they came, and the next request
    compares clean.
+10. **`SCSIPORT.PDR`'s own sense fetch** (section 2.3 item 3): a
+   check condition returned without autosense (a pass-through request with
+   `SRB_FLAGS_DISABLE_AUTOSENSE` set and a failing CDB, through Stor98's
+   test client), on 98 SE with the gold and the QuickInstall `SCSIPORT.PDR`
+   and on ME: the fetch completes with the kept sense, the `qemu` build of
+   Stor98 logs it answered in software, and no physical translation is
+   made for it.
 
 On the owner's real hardware: the throughput before and after
 (roadmap 43.46's last clause), the owner's.
@@ -1182,7 +1199,9 @@ On the owner's real hardware: the throughput before and after
 - The Windows 98 SE DDK's `IOR.H`, `IOP.H`, `DCB.H`, `ISP.H`, `AEP.H`,
   `ILB.H`, `DRP.H`, `SGD.H`, `BLOCKDEV.H`, `SRB.H` and `VMM.H`
   (`docs/references/README.md`, "Windows 98 DDK").
-- `legal-provenance.md` section 4: "Task 43.46 read-first" and "Task 43.46
-  design: what IOS loads from `IOSUBSYS`, in three IOS builds".
+- `legal-provenance.md` section 4: "Task 43.46 read-first", "Task 43.46
+  design: what IOS loads from `IOSUBSYS`, in three IOS builds" and "Task
+  43.46 design: the layers above Stor98's disk and `SCSIPORT.PDR`'s own
+  requests".
 - Design records 08 (flavours), 23 (the console tool), 26 (the window,
   sections 5.3, 5.4, 6.3, 6.5.4 and 9.3) and 27 (the 9x device install).
