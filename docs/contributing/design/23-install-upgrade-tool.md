@@ -1420,6 +1420,107 @@ uninstall (section 9) does not run `XHCICLN` either: it removes the old
 bus's devnodes itself, through the same `DIF_REMOVE` route, as part of
 its set.
 
+### 5.12 Windows 10: the signature policy and the version (task 43.33 (d) and (e), 2026-10-22; a reading)
+
+A reading for roadmap-usb4 task 43.33 (d) and (e), before 43.34 to 43.36
+write the Windows 10 route; no code changed. Labels as design record 13
+section 6.14's: **measured** (in a Windows 10 22H2 guest of task 43.32,
+10.0.19045.2965, legacy BIOS, so no Secure Boot), **static**,
+**documentation** (Microsoft's pages, read 2026-10-22) and
+**inference**.
+
+**The signature policy (documentation).** Microsoft's "Driver Signing
+Policy" page (learn.microsoft.com, "Kernel-mode code signing policy
+(Windows Vista and later)", ms.date 2024-08-19):
+
+- "Starting with Windows 10, version 1607, Windows will not load any new
+  kernel-mode drivers which are not signed by the Dev Portal", with
+  cross-signed drivers still permitted where "The PC was upgraded from an
+  earlier release of Windows", "Secure Boot is off in the BIOS", or the
+  driver was signed "with an end-entity certificate issued prior to July
+  29th 2015". The page on the deprecated certificates (ms.date
+  2025-07-11): "Most cross-certificates expired in July 2021" and "All
+  cross-signed trusted root certificates are now expired", so no new
+  cross-signature can be made.
+- Its table's "Architectures" row: Vista, 7, and "Windows 8+ with Secure
+  Boot off": "64-bit only, no signature required for 32-bit"; every
+  Windows 8, 8.1 and 10 column "with Secure Boot on": "64-bit, 32-bit".
+  **So a 32-bit Windows 10 with Secure Boot on enforces kernel-mode
+  signatures as 64-bit does, and with Secure Boot off requires none.**
+  The same reading answers 43.22's question for 8 and 8.1 x86 (the page
+  puts 8, 8.1 and 10 1507 and 1511 in one column).
+- Test-signing mode: "The TESTSIGNING boot configuration option" page
+  (ms.date 2025-04-16) answers a `bcdedit /set testsigning on` refused
+  with "The value is protected by Secure Boot policy" by "disable Secure
+  Boot", as on 8 (section 5.10's revision 13 note).
+- **Memory integrity** (hypervisor-protected code integrity): the
+  Windows hypervisor "is only supported on 64-bit IA processors with
+  virtualization extensions" (OEM VBS page), so **32-bit 10 has none**
+  (inference from that page). On 64-bit it refuses drivers that are not
+  compatible - "Don't use sections that are both writable and
+  executable", executable pool, a section alignment not a multiple of
+  0x1000 (HLK "Driver compatibility with memory integrity" page, which
+  adds that an `INIT` section marked writable and executable is
+  tolerated: "In Windows 10, however, the W will automatically be
+  stripped"); and "if you have Memory Integrity / HVCI ... enabled, you
+  must test-sign the binary ... An unsigned binary isn't supported" (the
+  TESTSIGNING page). Static, this project's own `3.1.0.0` x64 binaries
+  (`xhci98.sys`, `xhcicm.sys`, `xhciuas.sys`, `stor98.sys`): section
+  alignment 0x1000; `.text` executable and not writable; `INIT` writable
+  and executable (the tolerated case); every pool allocation through
+  `ExAllocatePoolWithTag` with a pool type the code chooses, which the
+  compatibility test flags where it is the executable `NonPagedPool`.
+  Whether 10 x64 with memory integrity on loads them is unread (no guest
+  here runs the hypervisor under TCG); since memory integrity is turned
+  on only beside Secure Boot on the machines that ship it (OEM VBS page:
+  "Secure Boot must be enabled on devices leveraging VBS"), and the x64
+  drivers need test-signing mode, which needs Secure Boot off, the case
+  arises only on a machine where the user turned memory integrity on by
+  hand with Secure Boot off.
+
+**What the guests read (measured, 2026-10-22).** The installer's NT
+route by hand with the published `3.1.0.0` package (record 13 section
+6.14.5):
+
+- 10 x64 in test-signing mode: `UpdateDriverForPlugAndPlayDevicesW`
+  with `INSTALLFLAG_FORCE` returns `0xE000022F`; the setup log says
+  "Driver package does not contain a catalog file, and Code Integrity is
+  in Test Signing mode" and the package is never staged. Vista and 7 x64
+  prompted for the same package (record 19). **So on 10 x64 the package
+  needs a catalog signed with the test certificate**; the section 5.10
+  test-signing note alone is not enough.
+- 10 x86 (no Secure Boot): the same call shows "Windows can't verify the
+  publisher of this driver software", and "Install this driver software
+  anyway" goes on: the package is staged unsigned ("Signer Score =
+  0x80000000"), a restart is asked, and after it `xhci98.sys` runs the
+  controller (record 13 section 6.14.5). So 10 x86 without Secure Boot
+  takes the package as Vista and 7 x86 did, with the prompt; with Secure
+  Boot on it would refuse the unsigned x86 drivers by the policy above
+  (unread: no 32-bit UEFI guest here).
+
+**The version (documentation; static on the guests).** Windows 10 and
+Windows 11 both report NT 10.0, and `GetVersionEx` reports 6.2 to an
+application not manifested for 8.1 or 10 ("Operating system version"
+page); `RtlGetVersion` is the kernel's and is not shimmed (inference from
+its page: "the kernel-mode equivalent of the user-mode GetVersionEx"),
+which is why 43.34 tells 10 from 11 by `dwBuildNumber` below 22000
+("Version 21H2 (OS build 22000)", Windows 11 release information). The
+guests' `RtlGetVersion` reads 10.0.19045 (measured, `rtlgetversion.txt`
+of the run sheet's reading). The range the owner admitted (2026-10-20)
+and what Microsoft's lifecycle pages say of it:
+
+| Release | Build | End of support |
+|---|---|---|
+| 10 1507 (and 2015 LTSB) | 10240 | LTSB 2025-10-14 |
+| 10 1607 (2016 LTSB), Server 2016 | 14393 | LTSB 2026-10-13; Server 2027-01-12 |
+| 10 1809 (2019 LTSC), Server 2019 | 17763 | 2029-01-09 |
+| 10 21H2 (2021 LTSC) | 19044 | 2027-01-12 (IoT Enterprise 2032-01-13) |
+| 10 22H2, the last release of 10 | 19045 | 2025-10-14 ("will be the final version of Windows 10") |
+| Server 2022 | 20348 | 2031-10-14 |
+| 11 21H2 | 22000 | refused (43.34) |
+
+Only 22H2 is read here, and the release notes say so (43.36).
+
 ## 6. The Windows 98 SE and ME route
 
 ### 6.1 What exists on these systems, and what is not used
