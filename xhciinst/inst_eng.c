@@ -448,6 +448,10 @@ static int storPack;        /* 1 the download's seven verified, 0 absent,
                                -1 not this release's                    */
 static int storInclude;     /* the row ticked                            */
 static int storCopyOk;      /* the seven go into this run's package copy */
+static int storDpOff;       /* 98 SE: DevicePath withdrawn by this run and
+                               not named again (record 26 section 6.5.5) */
+static int stor_98se(void);
+static int stor_pair_left(void);
 static char storPackDir[INST_PATH_CHARS];
 static int storPlanCase;      /* the case the plan showed (defined below) */
 static void pkg_src(const char *rel, char *path, size_t cap);
@@ -7898,7 +7902,22 @@ stopped:
  * this run's or the earlier install directory taken out, then addDir
  * appended when it is not NULL. No other entry is touched, and the value
  * keeps its type. */
+static int devicepath_write(const char *addDir);
+
+/* devicepath_write, and on 98 SE whether this run left DevicePath without
+ * the install directory: every way out of the run then reads the INF
+ * directories for a USBSTOR.INF left alone (record 26 section 6.5.5). */
 static int devicepath_update(const char *addDir)
+{
+    int r = devicepath_write(addDir);
+
+    if (r) {
+        storDpOff = addDir == NULL && stor_98se();
+    }
+    return r;
+}
+
+static int devicepath_write(const char *addDir)
 {
     char list[2048];
     char mid[2048];
@@ -10816,17 +10835,13 @@ static void mk_end_of_run(void)
  * installer's own files, the records and the Add/Remove Programs entry
  * stay, the entry's name saying so, so the next run has its entry point
  * once the package is gone. */
-static int storUnAudit;      /* the uninstall withdrew DevicePath (98 SE) */
-static int stor_pair_left(void);
-static int stor_98se(void);
-
 static int stop_uninstall(const char *why)
 {
     /* DevicePath withdrawn and the run stopping before its storage INF
      * step: the INF directories read for a USBSTOR.INF left alone (record
      * 26 section 6.5.5). */
-    if (storUnAudit && !opts.List) {
-        storUnAudit = 0;
+    if (storDpOff && !opts.List) {
+        storDpOff = 0;
         stor_pair_left();
     }
     out("\nSTOPPED: %s\nNothing after this step was done. Restart Windows if "
@@ -11583,7 +11598,6 @@ static int run_uninstall_9x(void)
         return stop_uninstall("DevicePath could not be updated.");
     }
     flagChanged = 1;
-    storUnAudit = stor_98se();
     if (!copies_remove_all()) {
         flagSteps = 1;
         return stop_uninstall("the package copy could not be removed whole.");
@@ -17655,9 +17669,6 @@ static int stor_run_begin(void)
             "be withdrawn:\nnothing else is changed. Run the installer "
             "again.\n");
         flagFailed = 1;
-        if (storWithdrawn) {
-            stor_pair_left();
-        }
         return 0;
     }
     /* With the package directory off DevicePath, a copy of USBSTOR.INF
@@ -17666,6 +17677,7 @@ static int stor_run_begin(void)
     if (storWithdrawn && !opts.List && stor_pair_left()) {
         storStepsLeft = 1;
         flagSteps = 1;
+        storDpOff = 0;
     }
     storSourceOff = storSource && !storCopyOk;
     return 1;
@@ -19258,7 +19270,7 @@ static int stor_un_rest(void)
         }
     }
     /* Neither half alone left where Windows finds it (section 6.5.5). */
-    storUnAudit = 0;
+    storDpOff = 0;
     if (!opts.List && stor_pair_left()) {
         flagSteps = 1;
     }
@@ -21461,9 +21473,22 @@ int inst_eng_ask(void)
 int inst_eng_run(void)
 {
     int code = envNow.Nt ? run_install_nt() : run_install_9x();
-    int f = flagFailed;
-    int r = flagRestart;
-    int s = flagSteps;
+    int f;
+    int r;
+    int s;
+
+    f = flagFailed;
+    r = flagRestart;
+    s = flagSteps;
+    /* A run that ends with DevicePath withdrawn, whatever its way out:
+     * a USBSTOR.INF left alone in the INF directories is said, a step
+     * (record 26 section 6.5.5). */
+    if (storDpOff && !opts.List) {
+        storDpOff = 0;
+        if (stor_pair_left()) {
+            flagSteps = 1;
+        }
+    }
 
     /* Whatever the run's verdict, the invariant of record 21 section 7.4
      * holds at its end (decision M13). */

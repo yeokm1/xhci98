@@ -1697,9 +1697,11 @@ Windows can find them:
   or a reading that fails, is said with the advice to plug in no new USB
   disk until both or neither are there, and a step is left
   (`inst_stor_pair_warn`); nothing more is deleted for it. The same
-  reading is taken on every way out of the run after `DevicePath` was
-  withdrawn: a withdrawal whose INF deletion fails, and an uninstall
-  stopped before its INF step.
+  reading is taken on every way out of a 98 SE run that leaves
+  `DevicePath` without the install directory (`devicepath_update`
+  records it): an install or update that stops after the package
+  directory was taken off it, and an uninstall stopped before its INF
+  step.
 
 **Absent devices** bind at their first plug through Windows' own
 detection. Until draft 19 that was from the package directory on
