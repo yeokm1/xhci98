@@ -295,8 +295,10 @@ addresses; in short [static, QuickInstall builds]:
   in any loader's list cannot clash with it [hyp, the leg of section
   9.2 item 4 loads both with Stor98 running].
 - **DDB**: `Req_Device_Number` `Undefined_Device_ID` (it exports no
-  service), `Init_Order` `Undefined_Init_Order`, the version fields from
-  `src/xhci_version.h`'s major and minor, the control procedure of
+  service), `Init_Order` `Undefined_Init_Order`, the version fields 1.0
+  (the layer's own; the package's version is the stamp below,
+  `src/xhci_version.h` carrying no separate major and minor), the
+  control procedure of
   section 3.6, and `Reference_Data` the DRP (section 3.2), which is how
   IOS finds the registration packet of a VxD it loads [hdr: `DRP.H`].
 - **Stamp**: the image carries the string `STOR98.VXD <version>` from
@@ -358,7 +360,9 @@ the INQUIRY vendor field is the drive's, not the driver's.
 - `ISP_i_cd_expan_len`: the layer's area in every IOP of the DCB:
   a 16-byte header (the saved `IOR_sgd_lin_phys`, `IOR_num_sgds` and
   flags), the list, room for `P + 2F` runs of 8 bytes, and the page
-  scratch, `P + 2` dwords, where `P = DCB_max_xfer_len / 4096` and `F` is
+  scratch, `P + 2` dwords, where `P = VSD_MAX_XFER / 4096` (the area is
+  sized for 2 MiB whatever the DCB's maximum, which section 3.3 holds at
+  or below it, so no per-DCB size need be kept) and `F` is
   the layer's own limit on the fragments of a logical list,
   `VSD_MAX_FRAGS` = 255 (the most a byte-wide count of IOS's could name;
   section 4.2 refuses more). The bound: a fragment of `n` bytes touches
@@ -774,7 +778,7 @@ maximum it finds (section 3.4), up to the 2 MiB it is built for.
 
 The DDK's C headers the layer is compiled against - `BASEDEF.H`,
 `SGD.H`, `BLOCKDEV.H`, `IOR.H`, `ISP.H`, `AEP.H`, `ILB.H`, `DRP.H` (the
-`incs\` members `INC_WIN98_*.H`), `IOP.H`, `DCB.H` and `SRB.H` (the
+`incs\` members `INC_WIN98_*.H`), `IOP.H` and `DCB.H` (the
 `BLCK_DDK` members `SRC_BLOCK_INC_*.H`) - and the linker pair are staged
 at build time by `src\vsd\stage-ddk.ps1`, on `xhciinst\di\stage-ddk.ps1`'s
 pattern: each member held to the SHA-256 the row naming it in
@@ -787,10 +791,12 @@ an implicit-`int` global in every object, are made `} AEP_x, *PAEP_x;`
 (each edit named and counted by the script, which fails if it matches
 other than three times).
 
-Two layouts the layer needs have no Watcom-compilable header: VMM's
-`VxD_Desc_Block` (`VMM.H` assumes Microsoft's compiler) and the two
+Three things the layer needs have no Watcom-compilable header: VMM's
+`VxD_Desc_Block` (`VMM.H` assumes Microsoft's compiler), the two
 service numbers (`_CopyPageTable`, VMM `0x0001`/`0x0061`; `IOS_Register`,
-IOS `0x0010`/`0x0007`). They are written in `src/vsd/vsd_vmm.h` under
+IOS `0x0010`/`0x0007`), and the two SRB fields section 4.3 reads by
+offset (`DataTransferLength` `0x10`, `DataBuffer` `0x18`; `SRB.H` brings
+the NT port's types with it). They are written in `src/vsd/vsd_vmm.h` under
 names of the layer's own, each field and value cited by header and line,
 as `src/cm/cm_cfgmg.h` cites `CONFIGMG.H` and `VMM.H` (`legal-provenance.md`
 section 4, the CONFIGMG row's practice). No declaration, macro body,
@@ -840,16 +846,21 @@ A Components row of its own (record 26 section 5.3), a **child of
 Stor98's box**, indented under it as Stor98's is under the Thunderbolt
 box (owner, 2026-10-22):
 
-- label "Large transfers for Stor98 (STOR98.VXD)", sentence "Lets
-  Windows 98 SE and ME send Stor98 reads and writes of up to 2 MiB
-  whole, instead of in 63 KiB pieces. Changes nothing for copies through
-  the file cache.";
+- one line, "Large transfers for Stor98 (STOR98.VXD), up to 2 MiB",
+  indented under Stor98's sentence; the page stays 223 dialog units high
+  (record 26 section 5.4, "640 by 480 on 98 SE") by setting its
+  multi-line texts at whole lines (two lines 16 units, three 24), which
+  frees the row. The longer sentence ("Lets Windows 98 SE and ME send
+  Stor98 reads and writes of up to 2 MiB whole, instead of in 63 KiB
+  pieces. Changes nothing for copies through the file cache.") is the
+  console's, and the Summary's line says what the run does with the
+  file;
 - **on 98 SE and ME**: ticked whenever Stor98's box is ticked (ticking
   Stor98 ticks it); open only while Stor98's box is ticked; unticked and
   greyed while Stor98's box is unticked or greyed; shown only when the
   flavour directory carries `STOR98.VXD`;
-- **on every other system**: shown greyed, unticked, its sentence
-  replaced by "(Windows 98 SE and ME only)", and never taken by the page
+- **on every other system**: shown greyed, unticked, its line
+  "Large transfers for Stor98 (Windows 98 SE and ME only)", and never taken by the page
   or the engine - the convention record 26 section 5.4 gives a row of
   another system (owner, 2026-10-19, "grey out if system does not
   support that option"; `inst_value_greyed`, `inst_value_only`). This
@@ -1208,7 +1219,8 @@ On the owner's real hardware: the throughput before and after
   and the cut), `docs/PLAN.md` 0.4 ("9x caller buffer"),
   `docs/gates/G9.md` (`NVMEVSD.VXD`, the IOS sets).
 - The Windows 98 SE DDK's `IOR.H`, `IOP.H`, `DCB.H`, `ISP.H`, `AEP.H`,
-  `ILB.H`, `DRP.H`, `SGD.H`, `BLOCKDEV.H`, `SRB.H` and `VMM.H`
+  `ILB.H`, `DRP.H`, `SGD.H`, `BLOCKDEV.H`, `SRB.H` and `VMM.H` (`SRB.H`
+  and `VMM.H` for the values `src/vsd/vsd_vmm.h` cites)
   (`docs/references/README.md`, "Windows 98 DDK").
 - `legal-provenance.md` section 4: "Task 43.46 read-first", "Task 43.46
   design: what IOS loads from `IOSUBSYS`, in three IOS builds" and "Task

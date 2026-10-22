@@ -519,9 +519,11 @@ header's text; `legal-provenance.md` section 2 has the row.
   Fetched, never tracked.
 
 **`STOR98.VXD`'s build (roadmap-usb4 task 43.46; design record 30
-section 6).** The eleven headers from `inc\win98\basedef.h` to
-`src\block\inc\srb.h` above are what the 98 SE and ME IOS layer is
-compiled against, for their structure layouts and values, and the DDK's
+section 6).** The ten headers from `inc\win98\basedef.h` to
+`src\block\inc\dcb.h` above are what the 98 SE and ME IOS layer is
+compiled against, for their structure layouts and values (`srb.h`'s row
+records the copy two of `src\vsd\vsd_vmm.h`'s cited offsets were read
+from; it is not compiled against), and the DDK's
 linker and its library (`bin\link.exe`, `bin\mspdb50.dll`) link it
 (`/VXD`); `src\vsd\stage-ddk.ps1` holds each to its hash in this table
 and copies it into the git-ignored `src\vsd\obj\`, with a trailing

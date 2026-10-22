@@ -293,6 +293,7 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 
 | File | What it is |
 |---|---|
+| `test_vsd_list.c` | STOR98.VXD's pure half (`src\vsd\vsd_list.c`, design record 30 section 9.1). |
 | `run-host-tests.cmd` | The host test runner: every suite compiled with the in-repo MSVC 6.0 under `XHCI_HOST_TEST` into its own output directory and run; `scripts\build-driver.cmd` runs it before any DDK build. |
 | `test_harness.h` | The one copy of the check helpers every host suite includes (`CHECK`, `CHECK_EQ`, the counts and the failure format); header-only, with no expectations of its own (design record 03). |
 | `test_membuf.c` | `xhci_mem.c` and the common-buffer constants of `xhci.h`; also built for amd64 (`test_membuf_amd64`). |
@@ -353,6 +354,23 @@ Stor98, the SCSI miniport for NVMe SSDs that the release packages bundle, in thi
 | `scripts\import-gate\stor98-imports.allow` | The `<target> DLL!function` pairs Stor98's images may import, per target (`win9x`, `x86`, `amd64`); a new import fails the gate until it is added here. |
 | `scripts\inf-gate\check-stor98-inf.ps1` | Stor98's two INFs held to the package's `DriverVer` (`XHCI_DRIVERVER_DATE`, `XHCI_VER_STR`) and their `Signature`, with its self-test (`-SelfTest`). |
 | `scripts\build-all.cmd` | One command for both architectures: `build-driver.cmd` for x86 and amd64 with every gate, Stor98 included. |
+
+## STOR98.VXD - `src\vsd\`
+
+The Windows 98 SE and ME IOS vendor-supplied driver that lets large requests reach Stor98 whole (roadmap-usb4 task 43.46, design record 30): this project's own, GPL-2.0, a static VxD loaded by IOS from `SYSTEM\IOSUBSYS` beside `stor98.mpd`, built with Open Watcom 2.0 and the Windows 98 SE DDK's `LINK.EXE` 5.12 (record 30 section 6). C throughout; the control procedure's three lines of assembly each say why.
+
+| File | Role |
+|---|---|
+| `src\vsd\vsd.c` | The AER (the claim of a `stor98` DCB and the calldown entry without `DCB_dmd_phys_sgd`), the request routine (a physical list for every request that carries data, refusals completed at once), the callback that puts the IOR back, and the control procedure (registration; `Sys_Dynamic_Device_Exit` refused once registered). The `qemu` build's debug-console lines (`VSD_DEBUGCON`). |
+| `src\vsd\vsd_data.c` | The DDB `S98VSD`, the DRP and its ILB, the counters and the stamp `STOR98.VXD <version>`, in an object of their own (record 30 section 6.1). |
+| `src\vsd\vsd_list.c` / `vsd_list.h` | The pure half, DDK-free: the claim's tests, the function table, and the physical list from page-table entries with every input checked (host suite `test\test_vsd_list.c`). |
+| `src\vsd\vsd.h` | The area in each IOP, the counters, the declarations shared by the two objects. |
+| `src\vsd\vsd_vmm.h` | The DDB layout, the two service numbers and two SRB offsets no Watcom-compilable DDK header gives, each cited by header and line. |
+| `src\vsd\vsd.def` | The LE image: `VXD S98VSD DYNAMIC`, its segments, the DDB export. |
+| `src\vsd\build.cmd` | `build.cmd [qemu]`: stages the DDK, compiles, guards the linker (`omfpub.py`, `omfcheck.py`, `callcheck.py`), links, and runs the gate; exit 2 "not built" without Open Watcom or the DDK. `scripts\build-driver.cmd` runs it on the x86 run. |
+| `src\vsd\stage-ddk.ps1` | The DDK's ten headers and its linker pair, held to `docs\references\README.md`'s hashes and copied into the ignored `src\vsd\obj\`, the staged headers mended (a Ctrl-Z cut, `AEP.H`'s three typedef tails). |
+| `src\vsd\omfpub.py`, `omfcheck.py`, `callcheck.py` | The three link guards against the DDK linker's two mislinks of Watcom's OMF (record 30 section 6.1). |
+| `src\vsd\check-vsd.ps1`, `vsd-services.allow` | The gate on the image: its DDB, its VxD services against the allowlist, its stamp, and no debug-port write in the release image. |
 
 ## The user-mode tools
 
