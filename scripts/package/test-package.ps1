@@ -239,8 +239,8 @@ try {
 
     # A caller naming -DriverPath without -Stor98Root gets no Stor98 (the
     # flat package above), and -NoStor98 says the same for a default one.
-    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "stor98*" }).Count -eq 0) `
-        "a package built without Stor98 carries Stor98 files."
+    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "stor98*" -or $_.Name -like "S98VSD*" }).Count -eq 0) `
+        "a package built without Stor98 carries Stor98 files or its layer."
 
     # Refusals, before anything is staged.
     $nvNoAmd64 = New-Stor98Tree -Name "nv-noamd64" -Omit @("out\free\amd64\stor98.sys")

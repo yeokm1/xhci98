@@ -2444,7 +2444,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File -Filter "stor98*" | ForEach-Object { $_.Name } }))
+                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
