@@ -1601,6 +1601,7 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
     BOOLEAN present;
     BOOLEAN consumed;
     BOOLEAN retired;
+    ULONG bridge;
     UCHAR zero[CM_EJ_RESULT_BYTES];
 
     if (!cmEj9x(nhi)) {
@@ -1623,12 +1624,16 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
         if (rec->Tx.Phase == CM_EJ_P_CLAIMED &&
             (rec->Tx.Flags & CM_EJ_F_PARKED) != 0) {
             /* A parked claim (task 43.47): taken over where this start
-             * has the member's call worker. */
+             * has the member's call worker - the same claim, its bridge
+             * read again after the lookup (the slot may have been reused
+             * meanwhile). */
+            bridge = rec->Tx.Bridge;
             KeReleaseSpinLock(&cmEjLock, irql);
-            member = cmEjMemberOf(nhi, rec->Tx.Bridge, FALSE);
+            member = cmEjMemberOf(nhi, bridge, FALSE);
             KeAcquireSpinLock(&cmEjLock, &irql);
             if (member != XHCI_TBT_NO_MEMBER &&
                 member < XHCI_TBT_MAX_TUNNELS &&
+                rec->Tx.Bridge == bridge &&
                 CmCallwkUsable(nhi->Reenum.Callwk, member) &&
                 CmEjClaimAdopt(&rec->Tx, cmEjClockMs)) {
                 rec->Nhi = NULL;
@@ -1638,12 +1643,14 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
         if (rec->Tx.Phase != CM_EJ_P_FREE &&
             rec->Tx.Phase != CM_EJ_P_CLAIMED && rec->Nhi == NULL &&
             rec->LateRunning == 0) {
+            bridge = rec->Tx.Bridge;
             KeReleaseSpinLock(&cmEjLock, irql);
-            member = cmEjMemberOf(nhi, rec->Tx.Bridge, FALSE);
+            member = cmEjMemberOf(nhi, bridge, FALSE);
             KeAcquireSpinLock(&cmEjLock, &irql);
             if (member != XHCI_TBT_NO_MEMBER && rec->Nhi == NULL &&
                 rec->LateRunning == 0 && rec->Tx.Phase != CM_EJ_P_FREE &&
-                rec->Tx.Phase != CM_EJ_P_CLAIMED) {
+                rec->Tx.Phase != CM_EJ_P_CLAIMED &&
+                rec->Tx.Bridge == bridge) {
                 rec->Nhi = nhi;
                 rec->Member = member;
                 rec->Tool = 0;
