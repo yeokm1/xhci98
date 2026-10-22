@@ -5345,6 +5345,7 @@ static void tray_balloon_as(const char *title, const char *text, int warn,
                             int fast);
 static int tray_balloon_send(const char *title, const char *text, int warn,
                              int fast);
+static void tray_balloon_clear(void);
 
 /* ======================================================================== */
 /* Plain USB devices (record 25 section 6.5, revision 7)                     */
@@ -6532,6 +6533,10 @@ static void fast_balloon_event(int ev)
 
     if (tr_bsend_step(&fastSend, ev, GetTickCount(), answers)) {
         if (iconAdded && fastOn && fastCount > 0) {
+            /* The one still queued, if any, taken away first: an empty
+             * szInfo with NIF_INFO removes the icon's balloon (the
+             * documented way), so the re-send cannot show beside it. */
+            tray_balloon_clear();
             (void)tray_balloon_send(TR_FAST_TITLE, fastText, 0, 1);
         } else {
             (void)tr_bsend_step(&fastSend, TR_BE_DROP, GetTickCount(),
@@ -7629,6 +7634,23 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
     fastBalloon = fast;
     return 1;
+}
+
+/* The icon's balloon taken away, shown or queued (NIF_INFO, empty szInfo;
+ * Shell_NotifyIcon's documented removal). Shell 5.0 and later only. */
+static void tray_balloon_clear(void)
+{
+    TR_NID n;
+
+    if (!iconAdded || !shellV5) {
+        return;
+    }
+    memset(&n, 0, sizeof(n));
+    n.cbSize = TR_NID_V2;
+    n.hWnd = hTray;
+    n.uID = 1;
+    n.uFlags = NIF_INFO;
+    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
 }
 
 /* A balloon with new text: the notice's is watched until the shell shows

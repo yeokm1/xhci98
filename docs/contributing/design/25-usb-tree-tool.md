@@ -1781,16 +1781,11 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
      eject's), the balloon clicked, the device it names no longer
      counted, or the notice turned off: no longer owed (nor, then, a
      balloon still waiting for the icon to be added).
-   A re-send is the same `NIM_MODIFY` with `NIF_INFO` on the same icon.
-   That the shell then keeps one balloon for the icon, replacing one it
-   had only queued rather than showing both, is item 6's assumption too
-   (the last balloon's flag serves its click) and is not a documented
-   promise: Microsoft's `NOTIFYICONDATA` page says a notification may be
-   queued and that an empty `szInfo` with `NIF_INFO` removes the icon's
-   balloon, nothing more. It matters only to the no-answer case (a
-   balloon gone unshown cannot be shown twice); 43.66's leg reads which
-   messages 7 sends, and if 7 answers the dropped balloon with a timeout
-   the no-answer re-send can be removed. **Read on 7 x86 (QEMU,
+   A re-send first takes away the icon's balloon, shown or queued, the
+   documented way (`NIM_MODIFY` with `NIF_INFO` and an empty `szInfo`,
+   Microsoft's `NOTIFYICONDATA` page), then sends it again, so a balloon
+   the shell had only queued cannot be shown beside its re-send; that a
+   new `NIF_INFO` alone replaces a queued one is not promised there. **Read on 7 x86 (QEMU,
    2026-10-23, `runs/run-43.md`, "43.66"; a build that logged each
    message):** a balloon sent while Windows' own "Your device is ready
    to use" holds the area gets no message at all - no show, no timeout

@@ -822,9 +822,10 @@ void tr_fast_tip(char *out, size_t cap, int count);
  * from in this session, or Vista and later, whose shell was read
  * answering - 7 drops a balloon queued behind its own without a word): a
  * shell that never sends these messages would otherwise get every
- * balloon twice. A re-send is NIM_MODIFY on the same icon, taken to
- * replace a balloon the shell still queues (record 25 section 7.7 item 9).
- * A show after a "gone" still ends it: the messages name no balloon. */
+ * balloon twice. A re-send first removes the icon's balloon, shown or
+ * queued (NIF_INFO with an empty szInfo), so it is never shown beside it
+ * (record 25 section 7.7 item 9). A show after a "gone" still ends it: the
+ * messages name no balloon. */
 #define TR_BS_IDLE      0   /* nothing owed                               */
 #define TR_BS_SENT      1   /* sent, not shown yet                        */
 #define TR_BS_SHOWN     2   /* the shell showed it                        */
