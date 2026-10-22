@@ -16510,7 +16510,6 @@ const char *inst_eng_vsd_plan(void)
     char file[80];
     char pend[80];
     int mode = vsd_mode(0);
-    int op;
 
     if (envNow.Nt || mode == INST_VSD_NONE || !haveVsd) {
         return NULL;
@@ -16519,35 +16518,35 @@ const char *inst_eng_vsd_plan(void)
         return "Large transfers for Stor98 (STOR98.VXD): its record cannot be "
                "read; left as it is";
     }
-    op = inst_vsd_next(&f);
-    if (mode == INST_VSD_INACTIVE) {
-        return f.FileVal ? "Large transfers for Stor98 (STOR98.VXD): kept, "
-               "with Stor98" : NULL;
-    }
-    if (mode == INST_VSD_DESELECTED) {
-        return (f.FileVal || f.Pending) ? "Large transfers for Stor98 "
-               "(STOR98.VXD): removed" : NULL;
-    }
-    switch (op) {
-    case INST_VOP_DONE:
-        return "Large transfers for Stor98 (STOR98.VXD): this release's, as "
-               "it is";
-    case INST_VOP_QUEUED:
-        return "Large transfers for Stor98 (STOR98.VXD): updated at the next "
-               "start";
-    case INST_VOP_FOREIGN:
+    /* The outcome, not the first step: what is there decides it. */
+    if (f.Dest == INST_VF_OTHER) {
         return "Large transfers for Stor98 (STOR98.VXD): left, another "
                "installation's file";
-    case INST_VOP_BLOCK_TMP:
-    case INST_VOP_BLOCK_INI:
+    }
+    if (mode == INST_VSD_INACTIVE) {
+        return f.Dest != INST_VF_ABSENT ? "Large transfers for Stor98 "
+               "(STOR98.VXD): kept, with Stor98" : NULL;
+    }
+    if (mode == INST_VSD_DESELECTED) {
+        return (f.Dest != INST_VF_ABSENT ||
+                (f.Pending && f.Tmp == INST_VF_PENDING)) ?
+               "Large transfers for Stor98 (STOR98.VXD): removed" : NULL;
+    }
+    if (f.Entry == INST_VE_CONFLICT || f.Tmp == INST_VF_OTHER) {
         return "Large transfers for Stor98 (STOR98.VXD): left until the "
                "steps the run lists are done";
-    default:
-        return f.Dest == INST_VF_FILE ? "Large transfers for Stor98 "
-               "(STOR98.VXD): updated at the next start" :
-               "Large transfers for Stor98 (STOR98.VXD): installed, loaded at "
+    }
+    if ((f.Dest == INST_VF_FILE && f.PkgIsFile) ||
+        (f.Dest == INST_VF_PENDING && f.PkgIsPending)) {
+        return "Large transfers for Stor98 (STOR98.VXD): this release's, as "
+               "it is";
+    }
+    if (f.Dest == INST_VF_ABSENT) {
+        return "Large transfers for Stor98 (STOR98.VXD): installed, loaded at "
                "the next start";
     }
+    return "Large transfers for Stor98 (STOR98.VXD): updated at the next "
+           "start";
 }
 
 /* The window's box (record 30 section 7.1). */

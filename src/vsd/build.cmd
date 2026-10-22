@@ -65,9 +65,13 @@ for %%F in (vsd vsd_list vsd_data) do (
     "%PY%" -I omfpub.py %O%\%%F.obj || exit /b 1
 )
 "%PY%" -I omfcheck.py %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj || exit /b 1
-obj\bin\link.exe /VXD /NOD /NOLOGO /IGNORE:4033 /IGNORE:4078 /IGNORE:4039 /IGNORE:4070 /IMPLIB:%O%\stor98.lib /OUT:%O%\STOR98.VXD /MAP:%O%\stor98.map /DEF:vsd.def %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj
+rem Linked as S98NEW.VXD and made STOR98.VXD only once every check below
+rem has passed, so a build that fails a check leaves no image to package.
+if exist %O%\STOR98.VXD del %O%\STOR98.VXD
+if exist %O%\S98NEW.VXD del %O%\S98NEW.VXD
+obj\bin\link.exe /VXD /NOD /NOLOGO /IGNORE:4033 /IGNORE:4078 /IGNORE:4039 /IGNORE:4070 /IMPLIB:%O%\stor98.lib /OUT:%O%\S98NEW.VXD /MAP:%O%\stor98.map /DEF:vsd.def %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj
 if errorlevel 1 exit /b 1
-"%PY%" -I callcheck.py %O%\STOR98.VXD %O%\stor98.map %O%\vsd.obj %O%\vsd_list.obj || exit /b 1
+"%PY%" -I callcheck.py %O%\S98NEW.VXD %O%\stor98.map %O%\vsd.obj %O%\vsd_list.obj || exit /b 1
 set "QF="
 if /i "%FLAV%"=="qemu" set "QF=-Qemu"
 rem The release image writes to no I/O port: Open Watcom's disassembler
@@ -89,6 +93,7 @@ if /i not "%FLAV%"=="qemu" (
         )
     )
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File check-vsd.ps1 %O%\STOR98.VXD %QF% || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File check-vsd.ps1 %O%\S98NEW.VXD %QF% || exit /b 1
+move /y %O%\S98NEW.VXD %O%\STOR98.VXD >nul || exit /b 1
 echo built %O%\STOR98.VXD
 exit /b 0
