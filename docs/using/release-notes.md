@@ -622,7 +622,11 @@ the logged-on user, with no administrator rights.
   Speed behind a Full Speed hub (one not itself behind a High Speed hub),
   a balloon names it ("A USB device can run
   faster"; the tooltip on 98 SE) and the icon turns red until every such
-  device is reconnected at its speed or removed. Clicking the balloon, or
+  device is reconnected at its speed or removed. On Vista and later a
+  balloon the shell did not show (on 7, a device's first plug, behind
+  Windows' own "ready to use" balloon) is sent once more, so it shows
+  after Windows' own has gone (read on 7 x86 in QEMU, roadmap task
+  43.66). Clicking the balloon, or
   the first item of the icon's menu while it is red, lists each device
   with its port and hub, the speed it runs at and the speed it can, and
   what to try. The device's details, Save Report and `XHCITR /report`
@@ -930,6 +934,13 @@ have every leg.
   `2.3.1.0`.
 
 ### Thunderbolt and USB4: known limitations
+
+- **Windows ME: the first shutdown after an install no longer hangs**
+  (from `3.2.0.0`, roadmap-usb4 task 43.65). On 98 SE and ME a shutdown
+  now quiesces the connection manager on its own thread and completes
+  without asking the controller to power down. Read on the ME emulator:
+  five first shutdowns after the installer had started `xhcicm.sys`, all
+  clean, where three of five had hung before.
 
 - **The BIOS must leave the controller on.** A controller the BIOS
   switched off is not switched on: with "Thunderbolt BIOS Assist" on and
@@ -2682,6 +2693,12 @@ tests of the sequence and on the virtual-machine reading in "Targets and
 their standing".
 
 ## Controller faults: what the driver does about them
+
+From `3.2.0.0` (roadmap-usb4 task 43.64), a cancelled transfer that sits
+behind another on the same endpoint and crosses the end of its ring no
+longer leaves the ring's Link TRB chained into the cancelled transfer's
+place, which the xHCI specification forbids. Read in the specification
+and the sources, with a host test; not run on a controller.
 
 New in `2.2.0.0`. A tester on an AMD AM5 board reported that a USB mouse
 stops working at random: "basically unusable" under the `1.x.x.x` releases,

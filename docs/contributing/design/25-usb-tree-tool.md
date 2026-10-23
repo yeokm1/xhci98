@@ -1770,7 +1770,7 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    `tr_bsend_step`, host-tested). Item 4 gives each new key one balloon,
    and 43.28's legs found 7 dropping that balloon on a stick's first
    plug: Windows' own "Your device is ready to use" balloon held the area
-   for about 35 s and ours never followed (`runs/run-43-28.md`, finding
+   for about 35 s and ours never followed (`runs/run-43.md`, "43.28", finding
    1), so on 7, whose new icon sits in the overflow, the user saw
    nothing. After `NIM_SETVERSION` 3 the shell answers a balloon with
    `NIN_BALLOONSHOW` (`WM_USER` + 2) when it shows it,
