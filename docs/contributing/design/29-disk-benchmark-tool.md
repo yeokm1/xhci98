@@ -862,7 +862,9 @@ and exits with 0 (every test passed), 1 (a test failed or a data error),
 the reason in its report's header (`Stopped:`), and a run refused before
 it begins still writes a report of three lines with the folder and the
 refusal (`Refused:`), so a batch file's report always says what
-happened. The window shows the run; `/exit` closes it at
+happened; a stop by the user or by closing the window says so too. A
+report is never written to a file named `XHCIPERF.TMP`, the test file's
+name, which may be a kept file of another program's. The window shows the run; `/exit` closes it at
 the end. This is what the emulator legs drive (43.12's unattended route)
 and what a user pastes into a batch file. `/selftest` renders every text
 of the pure half at its longest to a file and exits, for section 10.3.

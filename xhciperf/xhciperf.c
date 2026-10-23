@@ -3693,6 +3693,23 @@ static void controls_enable(int on)
     EnableMenuItem(m, IDM_SAVEPRESET, MF_BYCOMMAND | (on ? MF_ENABLED : MF_GRAYED));
 }
 
+/* The report's file, unless it would be a file named like the test file
+ * (this run's, or one kept because it is not recognisably ours) */
+static int report_write(const char *s, size_t n)
+{
+    const char *base = strrchr(g_cl.report, '\\');
+
+    base = (base != NULL) ? base + 1 : g_cl.report;
+    if (strchr(base, ':') != NULL) {
+        base = strchr(base, ':') + 1;
+    }
+    if (lstrcmpiA(base, "XHCIPERF.TMP") == 0) {
+        log_add("The report is not written to a file named XHCIPERF.TMP, the test file's name.");
+        return 0;
+    }
+    return write_file(g_cl.report, s, n);
+}
+
 static void refuse(const char *why)
 {
     if (g_cl.report[0] != 0 && g_cl.run) {
@@ -3705,7 +3722,7 @@ static void refuse(const char *why)
         pf_tx_nl(&t);
         pf_tx_wrapped(&t, "Folder:      ", g_folder);
         pf_tx_wrapped(&t, "Refused:     ", why);
-        write_file(g_cl.report, buf, t.len);
+        report_write(buf, t.len);
     }
     if (g_cl.exitAtEnd) {
         log_add(why);
@@ -3726,7 +3743,6 @@ static void start_run(void)
     if (g_running) {
         return;
     }
-    g_runWhy[0] = 0;
     params_from_ui();
     if (check_folder(g_folder, canon, sizeof(canon), why, sizeof(why)) != 0) {
         refuse(why);
@@ -3758,6 +3774,7 @@ static void start_run(void)
     g_runS98matches = g_s98matches;
     g_runS98ids = g_s98ids;
     memset(g_res, 0, sizeof(g_res));
+    g_runWhy[0] = 0;
     memset(g_s98steps, 0, sizeof(g_s98steps));
     g_runP = g_p;
     if (g_haveSaved) {
@@ -4354,12 +4371,13 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         SetWindowTextA(g_status, "Ready");
         log_add("Run ended.");
         InvalidateRect(g_view, NULL, TRUE);
-        sz_cpy(g_runWhy, sizeof(g_runWhy), lp != 0 ? (const char *)lp : "");
+        sz_cpy(g_runWhy, sizeof(g_runWhy), lp != 0 ? (const char *)lp :
+               (wp == 3 ? "Stopped before the plan ended (Stop pressed, or the window closed)." : ""));
         if (g_cl.report[0] != 0) {
             size_t n;
             char *r = build_report(&n);
 
-            if (r == NULL || !write_file(g_cl.report, r, n)) {
+            if (r == NULL || !report_write(r, n)) {
                 log_add("The report could not be written.");
                 InterlockedExchange((LONG *)&g_runBad, 1);
             }
