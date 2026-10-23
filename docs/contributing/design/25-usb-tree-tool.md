@@ -1919,8 +1919,10 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    and nothing the tool can do makes the balloon's click open the list
    there. So on 2000 (NT 5.0, `tr_fast_click_balloon`) the balloon ends
    "Click the icon for what to try." instead of "Click here for what to
-   try.": the icon's left click opens the menu whose first line opens
-   the list (item 6), as 43.28 read on 2000. Every other system keeps
+   try.": the icon's left click opens the menu, whose first line opens
+   the tree on the device while the icon is red, or the list while only
+   a `TR_FW_LINK` device is counted (item 6; 43.28 read the list on 2000
+   before revision 19). Every other system keeps
    "Click here". (Item 9's watch learns nothing on 2000 either, and so
    never re-sends there.)
 

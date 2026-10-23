@@ -621,15 +621,18 @@ the logged-on user, with no administrator rights.
   or a 10 Gbit/s device at 5 Gbit/s - or a High Speed device runs at Full
   Speed behind a Full Speed hub (one not itself behind a High Speed hub),
   a balloon names it ("A USB device can run
-  faster"; the tooltip on 98 SE) and the icon turns red until every such
-  device is reconnected at its speed or removed. On Vista and later a
+  faster"; the tooltip on 98 SE) and, but for a 10 Gbit/s device at 5
+  Gbit/s, the icon turns red (below) until every such device is
+  reconnected at its speed or removed. On Vista and later a
   balloon the shell did not show (on 7, a device's first plug, behind
   Windows' own "ready to use" balloon) is sent once more, so it shows
   after Windows' own has gone (read on 7 x86 in QEMU, roadmap task
-  43.66). Clicking the balloon, or
-  the first item of the icon's menu while it is red, lists each device
+  43.66). Clicking the balloon lists each device
   with its port and hub, the speed it runs at and the speed it can, and
-  what to try. The device's details, Save Report and `XHCITR /report`
+  what to try; so does the first item of the icon's menu when only a
+  10 Gbit/s device at 5 Gbit/s is counted (while the icon is red that
+  item opens the window on the device instead). The device's details,
+  Save Report and `XHCITR /report`
   carry the same lines. A hub never counts itself (the USB 2.0 half of a
   USB 3 hub always runs at High Speed); a device behind a slow hub counts,
   and its text names the hub. "Tell me when a device can run faster" in
@@ -657,7 +660,19 @@ the logged-on user, with no administrator rights.
   High Speed. Not yet read on a computer, behind a High Speed hub, for a
   faster device at 5 Gbit/s, or on 8 and 8.1. Windows 2000's shell does
   not report a click on a balloon, so there the balloon says to click the
-  icon, whose menu opens the list (roadmap task 43.68).
+  icon, whose menu's first item opens the window on the device (roadmap
+  task 43.68).
+- **The red icon (new in `3.2.0.0`, roadmap task 43.57).** The icon turns
+  red while something is wrong that you can put right: a device of the
+  "can run faster" notice above, a Thunderbolt or USB4 device waiting
+  for approval, or a controller that stopped answering (a Thunderbolt or
+  USB4 controller lost or failed, or `xhci98.sys` stopped on a
+  controller fault). An unexpected unplug, a plug, an eject or a sleep
+  does not turn it red. While red its tooltip names the first such
+  thing ("and N more" for the rest), and the menu's first item or a
+  double click opens the window on it. Read in QEMU on 7 x86 and 98 SE
+  for the two speed cases; the approval and controller cases, ME, 2000,
+  XP and 7 x64 are not yet read.
 
 ### Removing a Thunderbolt or USB4 device safely
 
@@ -2708,6 +2723,14 @@ behind another on the same endpoint and crosses the end of its ring no
 longer leaves the ring's Link TRB chained into the cancelled transfer's
 place, which the xHCI specification forbids. Read in the specification
 and the sources, with a host test; not run on a controller.
+
+Also from `3.2.0.0` (roadmap-usb4 task 43.67), a device whose
+configuration has more than four endpoints is no longer refused
+(`USBD_STATUS_NO_MEMORY`, as the wired Xbox 360 pad's four interfaces and
+seven endpoints were): a device may now hold up to 16 of the
+controller's 32 transfer rings. Read in QEMU on 98 SE with an emulated
+pad (7 endpoints) and wireless receiver (16 endpoints), both configured
+whole.
 
 New in `2.2.0.0`. A tester on an AMD AM5 board reported that a USB mouse
 stops working at random: "basically unusable" under the `1.x.x.x` releases,
