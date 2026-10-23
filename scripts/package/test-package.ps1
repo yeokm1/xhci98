@@ -1695,7 +1695,7 @@ try {
         $sumsDl = Read-DriverPackHashList -Text ([System.IO.File]::ReadAllText((Join-Path $exp.Dir "SHA256.TXT"))) -Label "the download's SHA256.TXT"
         Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NUSB33\ paths."
         Assert-True ((Get-DriverPackFolderFault -Dir $exp.Dir -Files $exp.Files) -eq "") "the export does not pass its own folder check."
-        foreach ($dlDir in @("NUSB33", "NONFREE")) {
+        foreach ($dlDir in @("USBDRV\NUSB33", "USBDRV\NONFREE")) {
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $dlDir))) "a package of make-package.ps1's carries $dlDir\."
         }
         foreach ($bad in @(
@@ -1734,24 +1734,24 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
         $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
         foreach ($fl in @("release", "debug")) {
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\USBDRV\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
         }
-        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NUSB33") -Files $exp.Files
+        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "USBDRV\NUSB33") -Files $exp.Files
         Assert-True ($fault -eq "") "the upload set's NUSB33\ is not the recorded folder: $fault."
         # NUSB 3.3's folder stands beside the installer, never inside a
         # NONFREE\ (owner, 2026-10-22).
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "the upload set holds a NONFREE\; NUSB 3.3's files belong in NUSB33\."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "USBDRV\NONFREE"))) "the upload set holds a NONFREE\; NUSB 3.3's files belong in NUSB33\."
         foreach ($inf in @("USBSTOR.INF", "USBNTMAP.INF")) {
-            $p = Join-Path $uploadDir "NUSB33\W98SE\$inf"
+            $p = Join-Path $uploadDir "USBDRV\NUSB33\W98SE\$inf"
             Assert-True ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).LastWriteTime -eq $projStamp) "the upload set's $inf is not dated by this project's INFs."
         }
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NUSB33"))) "-UploadSetOnly put the driver pack under releases\."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "USBDRV\NUSB33"))) "-UploadSetOnly put the driver pack under releases\."
         $zip = [System.IO.Compression.ZipFile]::OpenRead($uploadZip)
         try { $entries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
-        foreach ($want in @("NUSB33/W98SE/USBSTOR.INF", "NUSB33/NOTICE.md", "NUSB33/SHA256.TXT")) {
+        foreach ($want in @("USBDRV/NUSB33/W98SE/USBSTOR.INF", "USBDRV/NUSB33/NOTICE.md", "USBDRV/NUSB33/SHA256.TXT")) {
             Assert-True ($entries -contains $want) "the archive has no '$want' entry."
         }
-        Assert-True (@($entries | Where-Object { $_ -like "NONFREE/*" }).Count -eq 0) "the archive has a NONFREE/ entry."
+        Assert-True (@($entries | Where-Object { $_ -like "USBDRV/NONFREE/*" }).Count -eq 0) "the archive has a NONFREE/ entry."
         $pubAfter = @{}
         foreach ($f in (Get-ChildItem -LiteralPath $pubRoot -File -Recurse)) { $pubAfter[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash }
         Assert-True ($pubAfter.Count -eq $pubBefore.Count -and @($pubBefore.Keys | Where-Object { $pubAfter[$_] -ne $pubBefore[$_] }).Count -eq 0) `
@@ -1780,17 +1780,17 @@ try {
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", (Join-Path $script:work "no-such-pack")))
         Assert-True ($r.ExitCode -eq 0) ("a release recorded without the driver pack was not assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NUSB33"))) "a release recorded without the driver pack got NUSB33\ in its download."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "USBDRV\NUSB33"))) "a release recorded without the driver pack got NUSB33\ in its download."
         # A published tree holding NUSB33\ is refused: the pack is never
         # in releases\.
-        Ensure-Directory (Join-Path $pubRoot "NUSB33")
-        Set-Content -LiteralPath (Join-Path $pubRoot "NUSB33\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        Ensure-Directory (Join-Path $pubRoot "USBDRV\NUSB33")
+        Set-Content -LiteralPath (Join-Path $pubRoot "USBDRV\NUSB33\NOTICE.md") -Value "committed by hand" -Encoding ASCII
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
         $r = Invoke-Releaser $packRelArgs
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NUSB33\ was assembled:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NUSB33\."
-        Remove-Item -LiteralPath (Join-Path $pubRoot "NUSB33") -Recurse -Force
+        Remove-Item -LiteralPath (Join-Path $pubRoot "USBDRV") -Recurse -Force
         Write-AsciiFile -Path $recPath -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
 
         # The record is required from 3.2.0.0 (an older release may lack
@@ -1933,13 +1933,28 @@ try {
             "free/video/camx/w98se/CAMX.INF"  = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=07/08/2026,0.1`r`n"
             "LICENSE"                         = "stand-in GPL-2.0"
             "NOTICE.md"                       = "# stand-in free notice`n"
-            "STAGE.TXT"                       = "STAGE | W98SE WME | free/net/cdcx/w98se-me/CDCX.INF | a`nSTAGE | W2K WXP W7X64 | free/net/cdcx/w2k-8/CDCX.INF | b`nSTAGE | W98SE | free/video/camx/w98se/CAMX.INF | c`n"
+            "STAGE.TXT"                       = "STAGE | W98SE WME | free/net/cdcx/w98se-me/CDCX.INF | a`nSTAGE | W2K WXP W7X64 | free/net/cdcx/w2k-8/CDCX.INF | b`nSTAGE | W98SE | free/video/camx/w98se/CAMX.INF | c`nPACKAGE | net/cdcx | DEVICE | USB Ethernet (cdcx): stand-in adapters`nPACKAGE | video/camx | CLASS | Webcams (camx): stand-in cameras`nEXCLUDES | free:net/cdcx | nonfree:serial/none | W98SE | a stand-in line`n"
         }
         foreach ($k in $freeFiles.Keys) {
             $fp = Join-Path $freeRepo $k.Replace('/', '\')
             Ensure-Directory (Split-Path -Parent $fp)
             [System.IO.File]::WriteAllBytes($fp, [System.Text.Encoding]::ASCII.GetBytes($freeFiles[$k]))
         }
+        # The certificate's public half: a throwaway one made here in memory
+        # for this run (never the owner's, never added to any store; only
+        # its DER public half is written), at the release's top.
+        $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+        try {
+            $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest("CN=xhci98 test-package throwaway", $rsa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            $tmpCert = $req.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+            $cerBytes = $tmpCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+            $cerThumb = $tmpCert.Thumbprint.ToUpperInvariant()
+            $tmpCert.Reset()
+        } finally {
+            $rsa.Dispose()
+        }
+        [System.IO.File]::WriteAllBytes((Join-Path $freeRepo "usb-wdm-free-test.cer"), $cerBytes)
+        [System.IO.File]::WriteAllBytes((Join-Path $freeRepo "notacert.cer"), [System.Text.Encoding]::ASCII.GetBytes("0 not a certificate, padded to more than sixty-four bytes of text"))
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
@@ -1956,21 +1971,211 @@ try {
         foreach ($k in @($freeFiles.Keys | Where-Object { $_ -notlike "free/video/*" })) {
             $freePinLines += ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo $k.Replace('/', '\'))) + " " + $k)
         }
+        $cerPinLines = @("Certificate: $cerThumb", ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo "usb-wdm-free-test.cer")) + " usb-wdm-free-test.cer"))
         $freePinPath = Join-Path $script:work "wdmfree-pin.txt"
-        [System.IO.File]::WriteAllText($freePinPath, (($freePinLines -join "`r`n") + "`r`n"))
+        [System.IO.File]::WriteAllText($freePinPath, ((($freePinLines + $cerPinLines) -join "`r`n") + "`r`n"))
         $freePin = Read-WdmFreePin -Path $freePinPath
         $fr = Export-WdmFreeSet -Root $freeRepo -Pin $freePin -Dest (Join-Path $script:work "wdmfree-exp")
+        Assert-True ($fr.Files.Contains("usb-wdm-free-test.cer") -and (Get-FileSha256 -Path (Join-Path $fr.Dir "usb-wdm-free-test.cer")) -eq $fr.Files["usb-wdm-free-test.cer"]) "the free export does not carry the pinned certificate at its top."
+        Assert-True ([System.IO.File]::ReadAllText((Join-Path $fr.Dir "SHA256.TXT")).Contains(" usb-wdm-free-test.cer")) "FREE\SHA256.TXT does not hash the certificate."
+        $cerCases = @(
+            @{ Lines = @($freePinLines + @($cerPinLines[1])); Want = "go together"; Why = "the certificate's file with no Certificate line"; Read = $true },
+            @{ Lines = @($freePinLines + @($cerPinLines[0])); Want = "go together"; Why = "a Certificate line with no file pinned"; Read = $true },
+            @{ Lines = @($freePinLines + @($cerPinLines[0], $cerPinLines[0])); Want = "two certificates"; Why = "two Certificate lines"; Read = $true },
+            @{ Lines = @($freePinLines + @(("Certificate: " + ("0" * 40)), $cerPinLines[1])); Want = "not the pinned"; Why = "another thumbprint"; Read = $false },
+            @{ Lines = @($freePinLines + @($cerPinLines[0], ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo "notacert.cer")) + " usb-wdm-free-test.cer"))); Want = "not the pinned"; Why = "the certificate at other bytes"; Read = $false })
+        foreach ($cc in $cerCases) {
+            $cp = Join-Path $script:work ("wdmfree-pin-cer-" + [System.IO.Path]::GetRandomFileName() + ".txt")
+            [System.IO.File]::WriteAllText($cp, (($cc.Lines -join "`r`n") + "`r`n"))
+            $msg = ""
+            try {
+                $pp = Read-WdmFreePin -Path $cp
+                if (-not $cc.Read) { Export-WdmFreeSet -Root $freeRepo -Pin $pp -Dest (Join-Path $script:work ("wdmfree-cer-" + [System.IO.Path]::GetRandomFileName())) | Out-Null }
+            } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($cc.Want)) ("the free pin with " + $cc.Why + " did not refuse with '" + $cc.Want + "': '" + $msg + "'")
+        }
+        $msg = ""
+        try { Test-WdmFreeCer -Path (Join-Path $freeRepo "notacert.cer") -Thumbprint $cerThumb -Label "x" } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("not a DER certificate")) ("a file that is no certificate was accepted as the free set's: '" + $msg + "'")
+        $tailCer = Join-Path $script:work "cer-tail.cer"
+        [System.IO.File]::WriteAllBytes($tailCer, [byte[]]($cerBytes + [System.Text.Encoding]::ASCII.GetBytes("appended")))
+        $msg = ""
+        try { Test-WdmFreeCer -Path $tailCer -Thumbprint $cerThumb -Label "x" } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("not one DER certificate alone") -or $msg.Contains("not a")) ("a certificate with bytes appended was accepted as the free set's: '" + $msg + "'")
+        $msg = ""
+        try { Test-WdmFreeCer -Path (Join-Path $fr.Dir "usb-wdm-free-test.cer") -Thumbprint ("F" * 40) -Label "x" } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("not the pinned")) ("the free set's certificate at another thumbprint was accepted: '" + $msg + "'")
+        $noTagPin = Join-Path $script:work "wdmfree-pin-notag.txt"
+        [System.IO.File]::WriteAllText($noTagPin, "# no release yet`r`n$($cerPinLines[0])`r`n")
+        Assert-True ($null -eq (Read-WdmFreePin -Path $noTagPin)) "a pin of a Certificate line alone did not read as no release."
         Assert-True ($fr.Files.Contains("net\cdcx\w98se-me\CDCX.SYS") -and -not $fr.Files.Contains("video\camx\w98se\CAMX.INF")) "the free export does not hold the pinned package alone."
         $frStage = [System.IO.File]::ReadAllText((Join-Path $fr.Dir "STAGE.TXT"))
         Assert-True ($frStage.Contains("free/net/cdcx/w2k-8/CDCX.INF") -and -not $frStage.Contains("CAMX")) "WDMFREE\STAGE.TXT is not the pinned package's lines."
         Assert-True ([System.IO.File]::ReadAllText((Join-Path $fr.Dir "READ.TXT")).Contains("net/cdcx | W98SE W2K")) "WDMFREE\READ.TXT does not carry the pinned package's systems."
         foreach ($x in @("LICENSE", "NOTICE.md", "READ.TXT", "SHA256.TXT", "STAGE.TXT")) { Assert-True ($fr.Files.Contains($x)) "the free export has no $x." }
         Assert-True ($null -eq (Read-WdmFreePin -Path (Join-Path $repo "scripts\package\wdmfree-pin.txt")) -or $true) "the repository's pin does not read."
+        $repoPinText = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\package\wdmfree-pin.txt"))
+        Assert-True ($repoPinText -match '(?m)^Certificate: 814CF778B45159EC2659C39C16C7E75EB3C37145\r?$') "the repository's pin does not name the owner's usb-wdm-free certificate (design record 26 section 6.7.11)."
         $badPin = Join-Path $script:work "wdmfree-pin-bad.txt"
         [System.IO.File]::WriteAllText($badPin, (($freePinLines | Where-Object { $_ -notlike "*CDCX.SYS" }) -join "`r`n") + "`r`n")
         $msg = ""
         try { Export-WdmFreeSet -Root $freeRepo -Pin (Read-WdmFreePin -Path $badPin) -Dest (Join-Path $script:work "wdmfree-bad") | Out-Null } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("not the files the pin lists")) ("a free release holding a file the pin does not list was exported: '" + $msg + "'")
+
+        # The other sets' cut-side checks (design record 26 section 6.7.11).
+        $frStageAll = [System.IO.File]::ReadAllText((Join-Path $fr.Dir "STAGE.TXT"))
+        Assert-True ($frStageAll.Contains("PACKAGE | net/cdcx | DEVICE") -and -not $frStageAll.Contains("PACKAGE | video/camx") -and $frStageAll.Contains("EXCLUDES | free:net/cdcx | nonfree:serial/none")) "WDMFREE\STAGE.TXT does not keep the qualifying package's PACKAGE line and every EXCLUDES line, or keeps another package's PACKAGE line."
+        Assert-True (@(Read-StageText -Text $frStageAll -Label "s").Count -eq 2) "Read-StageText did not skip the metadata lines."
+        $brands = Read-BrandWords
+        $tbl = Get-InstOtherTable -Repo $repo
+        Assert-True ((@($brands | Where-Object { $tbl.Brands -cnotcontains $_ }).Count -eq 0) -and (@($tbl.Brands | Where-Object { $brands -cnotcontains $_ }).Count -eq 0)) "xhciinst\inst_core.c's instBrandWords and scripts\package\brand-words.txt differ."
+        $instC = [System.IO.File]::ReadAllText((Join-Path $repo "xhciinst\inst_core.c"))
+        Assert-True (@(Read-OtherStageMeta -Text ("COEXISTS | free:a/b | free:c/d | W98SE | " + ("w" * 172)) -Label "s" -Brands $brands).Count -eq 1) "a relationship line whose why is 172 characters was refused."
+        Assert-True ($tbl.Pkgs.Count -gt 0 -and $tbl.Pkgs.Count -eq @([regex]::Matches(([regex]::Match($instC, 'instOtherPkgs\[\]\s*=\s*\{(.*?)\n\};', 'Singleline').Groups[1].Value), '\{\s*INST_SET_')).Count -and $tbl.Rels.Count -gt 0) "the installer's package table was not read whole."
+        $hm = [regex]::Match($instC, 'instOtherHeadings\[\]\s*=\s*\{([^}]*)\}')
+        $heads = @([regex]::Matches($hm.Groups[1].Value, '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+        Test-OtherPkgTable -Table $tbl -Sets @() -Meta @() -Brands $brands -Headings $heads
+        Assert-True ((Find-BrandWord -Text "USB Audio Class 1.0 (sony): x" -Words $brands) -eq "Sony" -and (Find-BrandWord -Text "Sonyx 1.0" -Words $brands) -eq "") "the brand match is not whole-word and case-blind."
+        foreach ($bad in @(
+                @{ T = "PACKAGE | net/x | CLASS | USB Ethernet (x): Realtek adapters"; Want = "a brand" },
+                @{ T = "PACKAGE | net/X | DEVICE | d"; Want = "is not 'PACKAGE" },
+                @{ T = "NEEDS | free:a/b | free:c/d"; Want = "NEEDS" },
+                @{ T = "EXCLUDES | free:a/b | other:c/d | W98SE | w"; Want = "which is not free:" },
+                @{ T = "COEXISTS | free:a/b | free:c/d | W95 | w"; Want = "cannot read" },
+                @{ T = ("EXCLUDES | free:a/b | free:c/d | W98SE | " + ("w" * 173)); Want = "at most 172" })) {
+            $msg = ""
+            try { Read-OtherStageMeta -Text $bad.T -Label "s" -Brands $brands | Out-Null } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the metadata line '" + $bad.T + "' did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # Folders and self-containment over a stand-in set.
+        $osp = Join-Path $script:work "osp"
+        $ospFiles = [ordered]@{
+            "net/a/w98/A.INF" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[SourceDisksNames]`r`n1=d,,,`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n[Manufacturer]`r`n%M%=Mo`r`n[Mo]`r`n%D%=I,USB\VID_1234&PID_0001`r`n[I]`r`nCopyFiles=C`r`n[C]`r`nA.SYS`r`n[Strings]`r`nM=m`r`nD=d`r`n"
+            "net/a/w98/A.SYS" = "a"
+            "net/a/w98/B.INF" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`n[Manufacturer]`r`nM=Mo`r`n[Mo]`r`nD=I,USB\VID_1234&PID_0002`r`n"
+            "net/b/w98/C.INF" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[SourceDisksNames]`r`n1=d,,,..\..\..\a\w98`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n[Manufacturer]`r`nM=Mo`r`n[Mo]`r`nD=I,USB\VID_1234&PID_0001`r`n"
+            "net/c/w98/D.INF" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[I]`r`nInclude=a.inf`r`n[Manufacturer]`r`nM=Mo`r`n[Mo]`r`nD=I,USB\VID_1234&PID_0003`r`n"
+        }
+        foreach ($k in $ospFiles.Keys) {
+            $fp = Join-Path $osp $k.Replace('/', '\')
+            Ensure-Directory (Split-Path -Parent $fp)
+            [System.IO.File]::WriteAllBytes($fp, [System.Text.Encoding]::ASCII.GetBytes($ospFiles[$k]))
+        }
+        $ospOk = @(Read-StageText -Text "STAGE | W98SE WME | free/net/a/w98/A.INF | a`nCOPY | W2K | free/net/a/w98/B.INF | b" -Label "s")
+        Test-OtherStagePackages -Lines $ospOk -Dir $osp -Prefix "free" -Label "s" -AllInfs @("a.inf", "b.inf")
+        foreach ($bad in @(
+                @{ L = "STAGE | W98SE | free/net/a/w98/A.INF | a`nSTAGE | W2K | free/net/a/w98/B.INF | b"; Want = "does not name W98SE"; Why = "a STAGE INF beside a 98 SE one that is not staged there" },
+                @{ L = "STAGE | W98SE | free/net/b/w98/C.INF | c"; Want = "outside its package's folder"; Why = "a source disk in another package's folder" },
+                @{ L = "STAGE | W98SE | free/net/c/w98/D.INF | d"; Want = "includes a.inf"; Why = "an Include of another package's INF" },
+                @{ L = "STAGE | W98SE | free/net/z/w98/Z.INF | z"; Want = "does not hold"; Why = "a STAGE INF the set does not hold" })) {
+            $msg = ""
+            try { Test-OtherStagePackages -Lines @(Read-StageText -Text $bad.L -Label "s") -Dir $osp -Prefix "free" -Label "s" -AllInfs @("a.inf", "b.inf", "c.inf", "d.inf") } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the folder check with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # One id a system over both sets: A.INF and C.INF both match PID_0001.
+        $idSets = @([pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/a/w98/A.INF | a" -Label "s") },
+                    [pscustomobject]@{ Name = "nonfree"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | WME | free/net/b/w98/C.INF | c" -Label "s") })
+        Test-OtherStageIds -Sets $idSets
+        $idSets[1].Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/b/w98/C.INF | c" -Label "s")
+        $msg = ""
+        try { Test-OtherStageIds -Sets $idSets } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("USB\VID_1234&PID_0001") -and $msg.Contains("W98SE")) ("two INFs of the union matching one id on one system were not refused: '" + $msg + "'")
+        $xpInf = Join-Path $osp "net\a\w98\X.INF"
+        [System.IO.File]::WriteAllText($xpInf, "[Manufacturer]`r`nM=Mo,NTx86,NTamd64.6.0,NTx86.6.1`r`n[Mo]`r`nD=I,ID\UNDEC`r`n[Mo.NTx86]`r`nD=I,ID\X86`r`n[Mo.NTamd64.6.0]`r`nD=I,ID\AMD64`r`n[Mo.NTx86.6.1]`r`nD=I,ID\SEVEN`r`n")
+        $xi = Read-InfText -Path $xpInf
+        Assert-True ((Get-InfModelIds -Inf $xi -Sys "W98SE") -join "," -eq "ID\UNDEC" -and (Get-InfModelIds -Inf $xi -Sys "W2K") -join "," -eq "ID\UNDEC" -and (Get-InfModelIds -Inf $xi -Sys "WXP") -join "," -eq "ID\X86" -and (Get-InfModelIds -Inf $xi -Sys "W7") -join "," -eq "ID\SEVEN" -and @(Get-InfModelIds -Inf $xi -Sys "WXP64").Count -eq 0 -and (Get-InfModelIds -Inf $xi -Sys "W7X64") -join "," -eq "ID\AMD64") "the models section each system's engine takes was not chosen as it would choose it."
+        # The table against the sets, and the relationship lines.
+        $tblT = [pscustomobject]@{
+            Pkgs = @([pscustomobject]@{ Set = "free"; Id = "net/a"; Kind = "CLASS"; Heading = "Network"; Desc = "USB Ethernet (a): CDC adapters"; Withdrawn = $false },
+                     [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): adapters"; Withdrawn = $false })
+            Rels = @([pscustomobject]@{ Kind = "EXCLUDES"; A = "free:net/a"; B = "free:net/b"; Systems = @("W98SE"); Desc = "t" })
+            Brands = $brands }
+        $setA = @([pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/a/w98/A.INF | a`nSTAGE | W98SE WME | free/net/b/w98/C.INF | c" -Label "s") })
+        Test-OtherPkgTable -Table $tblT -Sets $setA -Meta @() -Brands $brands -Headings $heads
+        $ov = @(Get-OtherOverlaps -Table $tblT -Sets $setA -Meta @())
+        Assert-True ($ov.Count -eq 0) "an overlap a line names was listed."
+        $setA[0].Lines = @(Read-StageText -Text "STAGE | WME | free/net/a/w98/A.INF | a`nSTAGE | W98SE WME | free/net/b/w98/C.INF | c" -Label "s")
+        $ov = @(Get-OtherOverlaps -Table $tblT -Sets $setA -Meta @())
+        Assert-True ($ov.Count -eq 1 -and $ov[0].Contains("free:net/a and free:net/b") -and $ov[0].Contains("WME")) ("the CLASS package's unstated overlap was not listed: '" + ($ov -join '; ') + "'")
+        foreach ($bad in @(
+                @{ M = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/b"; B = "free:net/a"; Systems = @("W98SE", "WME"); Desc = "m"; Set = "free" }); P = $tblT.Pkgs; Want = "one line a pair a system"; Why = "both kinds on a common system" },
+                @{ M = @([pscustomobject]@{ Kind = "EXCLUDES"; A = "free:net/a"; B = "nonfree:x/y"; Systems = @("W2K"); Desc = "m"; Set = "free" }); P = $tblT.Pkgs; Want = "has ever had"; Why = "an unknown id" },
+                @{ M = @(); P = @($tblT.Pkgs[0]); Want = "current rows for it"; Why = "a carried package with no row" },
+                @{ M = @(); P = @($tblT.Pkgs + @([pscustomobject]@{ Set = "free"; Id = "net/gone"; Kind = "DEVICE"; Heading = "Network"; Desc = "g"; Withdrawn = $false })); Want = "mark it withdrawn"; Why = "a current row the set does not have" },
+                @{ M = @(); P = @($tblT.Pkgs[0], [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "CLASS"; Heading = "Network"; Desc = "USB Ethernet (b): ASIX adapters"; Withdrawn = $false }); Want = "a brand"; Why = "a CLASS row naming a brand" })) {
+            $t2 = [pscustomobject]@{ Pkgs = $bad.P; Rels = $tblT.Rels; Brands = $brands }
+            $msg = ""
+            try { Test-OtherPkgTable -Table $t2 -Sets $setA -Meta $bad.M -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the package table with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # The history: a row or a line is never dropped.
+        $recA = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n") -Label "a"
+        Assert-True ($recA.Rows.Count -eq 2 -and $recA.Rels.Count -eq 1 -and $recA.Version -eq "3.2.0.0") "otherpkgs.txt does not read back as written."
+        Test-OtherPkgsTransition -Prev $recA -Now $recA
+        $tblW = [pscustomobject]@{ Pkgs = @($tblT.Pkgs[0], [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): adapters"; Withdrawn = $true }); Rels = $tblT.Rels; Brands = $brands }
+        $recW = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.3.0.0" -Table $tblW -Meta @()) -join "`r`n") -Label "w"
+        Test-OtherPkgsTransition -Prev $recA -Now $recW
+        foreach ($bad in @(
+                @{ Now = [pscustomobject]@{ Version = "x"; Rows = @($recA.Rows[0]); Rels = $recA.Rels }; Want = "drops free:net/b"; Why = "a row dropped" },
+                @{ Now = [pscustomobject]@{ Version = "x"; Rows = $recA.Rows; Rels = @() }; Want = "drops the EXCLUDES line"; Why = "a line dropped" },
+                @{ Now = [pscustomobject]@{ Version = "x"; Rows = @($recA.Rows[0], [pscustomobject]@{ Id = "free:net/b"; Kind = "CLASS"; Heading = "Network"; Desc = "d"; State = "current" }); Rels = $recA.Rels }; Want = "makes free:net/b a CLASS"; Why = "a kind changed" })) {
+            $msg = ""
+            try { Test-OtherPkgsTransition -Prev $recA -Now $bad.Now } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the history with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $recW -Now $recA } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("stays withdrawn")) ("a withdrawn row made current again was not refused: '" + $msg + "'")
+        Assert-True ((Get-InfModelDecoScore -Deco "NTx86.6.1.3" -Arch "x86" -Ver @(6, 1, 7601)) -lt 0 -and (Get-InfModelDecoScore -Deco "NT.6.0" -Arch "amd64" -Ver @(6, 1, 7601)) -lt 0 -and (Get-InfModelDecoScore -Deco "NTx86.6.1.1" -Arch "x86" -Ver @(6, 1, 7601)) -gt (Get-InfModelDecoScore -Deco "NTx86.6.1" -Arch "x86" -Ver @(6, 1, 7601)) -and (Get-InfModelDecoScore -Deco "NTamd64.10.0...16299" -Arch "amd64" -Ver @(10, 0, 19045)) -gt 0 -and (Get-InfModelDecoScore -Deco "NTamd64.10.0...22000" -Arch "amd64" -Ver @(10, 0, 19045)) -lt 0) "a decoration's product type, architecture or build was not read as the engine reads it."
+        Assert-True ((Split-InfFields -Text '"Disk, one",,,..\x') -join "|" -eq '"Disk, one"|||..\x') "a quoted comma split an INF field."
+        $osp2 = Join-Path $osp "net\e\w98"
+        Ensure-Directory $osp2
+        [System.IO.File]::WriteAllText((Join-Path $osp2 "E.INF"), "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[SourceDisksNames]`r`n1=`"Disk, one`",,,..\..\..\a\w98`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $osp2 "F.INF"), "[Version]`r`nSignature=`"`$Windows NT`$`"`r`n[SourceDisksNames]`r`n1=d,,,`r`n[SourceDisksNames.x86]`r`n1=d,,,..\..\..\a\w98`r`n[SourceDisksNames.amd64]`r`n1=d,,,`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n")
+        foreach ($bad in @(@{ I = "E.INF"; Why = "a quoted disk description before an outside path" }, @{ I = "F.INF"; Why = "an x86 disk path outside, the amd64 one inside" })) {
+            $msg = ""
+            try { Test-OtherStagePackages -Lines @(Read-StageText -Text ("STAGE | WXP | free/net/e/w98/" + $bad.I + " | e") -Label "s") -Dir $osp -Prefix "free" -Label "s" } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains("outside its package's folder")) ("the folder check with " + $bad.Why + " did not refuse: '" + $msg + "'")
+        }
+        # A package of COPY lines alone is a package of the set.
+        $setC = @([pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/a/w98/A.INF | a`nCOPY | W98SE | free/net/b/w98/C.INF | c" -Label "s") })
+        Test-OtherPkgTable -Table $tblT -Sets $setC -Meta @() -Brands $brands -Headings $heads
+        $msg = ""
+        try { Test-OtherPkgTable -Table ([pscustomobject]@{ Pkgs = @($tblT.Pkgs[0]); Rels = @(); Brands = $brands }) -Sets $setC -Meta @() -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("free:net/b is a package of the carried free set")) ("a package of COPY lines alone with no row was accepted: '" + $msg + "'")
+        # PACKAGE lines: two for one package refused; one wins over the row in
+        # the record; one of a package the set does not ship is known.
+        $mP = @([pscustomobject]@{ Kind = "PACKAGE"; A = "net/b"; B = "CLASS"; Systems = @(); Desc = "USB Ethernet (b): CDC adapters"; Set = "free"; Shipped = $true },
+                [pscustomobject]@{ Kind = "PACKAGE"; A = "net/q"; B = "DEVICE"; Systems = @(); Desc = "USB Ethernet (q): q adapters"; Set = "free"; Shipped = $false })
+        Test-OtherPkgTable -Table $tblT -Sets $setA -Meta $mP -Brands $brands -Headings $heads
+        $msg = ""
+        try { Test-OtherPkgTable -Table $tblT -Sets $setA -Meta @($mP + @($mP[0])) -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("two PACKAGE lines for net/b")) ("two PACKAGE lines for one package were accepted: '" + $msg + "'")
+        $recP = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.3.0.0" -Table $tblT -Meta $mP) -join "`r`n") -Label "p"
+        $rb = @($recP.Rows | Where-Object { $_.Id -ceq "free:net/b" })
+        $rq = @($recP.Rows | Where-Object { $_.Id -ceq "free:net/q" })
+        Assert-True ($recP.Rows.Count -eq 3 -and $rb.Count -eq 1 -and $rb[0].Kind -ceq "CLASS" -and $rb[0].Desc -ceq "USB Ethernet (b): CDC adapters" -and $rq.Count -eq 1 -and $rq[0].State -ceq "known") "the record does not hold one row a package, the PACKAGE line's words winning and a package not shipped known."
+        # A row withdrawn with new words is refused.
+        $tblW2 = [pscustomobject]@{ Pkgs = @($tblT.Pkgs[0], [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): other words"; Withdrawn = $true }); Rels = $tblT.Rels; Brands = $brands }
+        $recW2 = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.3.0.0" -Table $tblW2 -Meta @()) -join "`r`n") -Label "w2"
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $recA -Now $recW2 } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("keeps its words")) ("a row withdrawn with new words was accepted: '" + $msg + "'")
+        $recK = [pscustomobject]@{ Version = "3.4.0.0"; Rows = @($recA.Rows[0], [pscustomobject]@{ Id = "free:net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): adapters"; State = "known" }); Rels = $recA.Rels }
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $recA -Now $recK } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("only known, not shipped")) ("a shipped package made known only was accepted: '" + $msg + "'")
+        $xq = Join-Path $osp "net\a\w98\Q.INF"
+        [System.IO.File]::WriteAllText($xq, "[Manufacturer]`r`nM=Mo,`"NTamd64`"`r`n[Mo.NTamd64]`r`nD=I,ID\Q64`r`n")
+        Assert-True ((Get-InfModelIds -Inf (Read-InfText -Path $xq) -Sys "W7X64") -join "," -eq "ID\Q64") "a quoted decoration was not read."
+        Assert-True (@($recP.Rows | Where-Object { $_.Id -ceq "free:net/q" })[0].Heading -ceq "Other") "a package the table does not know is not recorded under the installer's fallback heading."
+        $relDir = Join-Path $script:work "oth-releases"
+        foreach ($v in @("3.1.0.0", "3.2.0.0", "3.10.0.0")) { Ensure-Directory (Join-Path $relDir $v) }
+        [System.IO.File]::WriteAllText((Join-Path $relDir "3.2.0.0\otherpkgs.txt"), ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n"))
+        [System.IO.File]::WriteAllText((Join-Path $relDir "3.10.0.0\otherpkgs.txt"), ((ConvertTo-OtherPkgsRecord -Version "3.10.0.0" -Table $tblT -Meta @()) -join "`r`n"))
+        $pv = Find-PreviousOtherPkgs -ReleasesDir $relDir -Version "3.3.0.0"
+        Assert-True ($null -ne $pv -and $pv.V -eq [version]"3.2.0.0") "the previous release's otherpkgs.txt was not the newest below this version."
+        Assert-True ($null -eq (Find-PreviousOtherPkgs -ReleasesDir $relDir -Version "3.1.0.0")) "a release with no earlier otherpkgs.txt found one."
 
         # The record of the downloads, read back strictly.
         $dlRec = (ConvertTo-DownloadsRecord -Version $relVersion -Kinds @("base", "free", "nonfree") -Free $fr -NonFree $nf) -join "`r`n"
@@ -2014,13 +2219,13 @@ try {
                 try { $rdText = $sr.ReadToEnd() } finally { $sr.Dispose() }
             } finally { $zip.Dispose() }
             $e = $zipEntries[$dk]
-            Assert-True ($e -contains "NUSB33/W98SE/USBSTOR.INF" -and $e -contains "release/xhci98.sys") "$dk's zip does not hold the package and NUSB33\."
-            Assert-True (($e -contains "WDMFREE/net/cdcx/w98se-me/CDCX.SYS") -eq ($dk -ne "base")) "$dk's zip has the wrong WDMFREE\."
-            Assert-True (($e -contains "NONFREE/ethernet/axs/w98se-me/AXS.INF" -and $e -contains "NONFREE/STAGE.TXT") -eq ($dk -eq "nonfree")) "$dk's zip has the wrong NONFREE\."
-            Assert-True (@($e | Where-Object { $_ -like "WDMFREE/video/*" -or $_ -like "NONFREE/nusb33/*" -or $_ -like "*/NUSB33/*" }).Count -eq 0) "$dk's zip holds an unpinned package or a second NUSB33\."
+            Assert-True ($e -contains "USBDRV/NUSB33/W98SE/USBSTOR.INF" -and $e -contains "release/xhci98.sys") "$dk's zip does not hold the package and NUSB33\."
+            Assert-True (($e -contains "USBDRV/FREE/net/cdcx/w98se-me/CDCX.SYS") -eq ($dk -ne "base")) "$dk's zip has the wrong WDMFREE\."
+            Assert-True (($e -contains "USBDRV/NONFREE/ethernet/axs/w98se-me/AXS.INF" -and $e -contains "USBDRV/NONFREE/STAGE.TXT") -eq ($dk -eq "nonfree")) "$dk's zip has the wrong NONFREE\."
+            Assert-True (@($e | Where-Object { $_ -like "USBDRV/FREE/video/*" -or $_ -like "USBDRV/NONFREE/nusb33/*" -or ($_ -like "*/NUSB33/*" -and $_ -notlike "USBDRV/NUSB33/*") }).Count -eq 0) "$dk's zip holds an unpinned package or a second NUSB33\."
             $zn = Get-DownloadZipName -Version $relVersion -Kind $dk
             Assert-True ($rdText.Contains("This is $zn")) "$dk's readme does not say it is $zn."
-            Assert-True (($rdText.Contains("usb-wdm-free/issues")) -eq ($dk -ne "base")) "$dk's readme has the wrong word on the free drivers' issues page."
+            Assert-True (($rdText.Contains("These drivers are experimental.")) -eq ($dk -ne "base")) "$dk's readme has the wrong word on the free drivers (the owner's experimental sentence)."
             Assert-True ($rdText.Contains("https://github.com/yeokm1/usb-wdm-free") -and $rdText.Contains("https://github.com/yeokm1/usb-wdm-nonfree")) "$dk's readme does not give both addresses."
             Assert-True (($rdText.Contains("in two places")) -eq ($dk -eq "nonfree")) "$dk's readme says the wrong thing of Microsoft's files."
         }
@@ -2028,15 +2233,15 @@ try {
             Assert-True (@($zipEntries["base"] | Where-Object { $zipEntries["free"] -notcontains $_ }).Count -eq 0) "download 2 does not hold every entry of download 1."
             Assert-True (@($zipEntries["free"] | Where-Object { $zipEntries["nonfree"] -notcontains $_ }).Count -eq 0) "download 3 does not hold every entry of download 2."
         }
-        foreach ($nm in @("WDMFREE", "NONFREE")) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot $nm))) "-UploadSetOnly put $nm\ under releases\." }
+        foreach ($nm in @("USBDRV\FREE", "USBDRV\NONFREE", "USBDRV")) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot $nm))) "-UploadSetOnly put $nm\ under releases\." }
 
         # Refusals, each leaving no zip: a published NONFREE\, a recorded
         # hash the tag does not give, a stand-in pin in this mode.
-        Ensure-Directory (Join-Path $pubRoot "NONFREE")
-        Set-Content -LiteralPath (Join-Path $pubRoot "NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        Ensure-Directory (Join-Path $pubRoot "USBDRV\NONFREE")
+        Set-Content -LiteralPath (Join-Path $pubRoot "USBDRV\NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
         $r = Invoke-Releaser $dlArgs
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NONFREE\ was assembled:`n" + $r.Output)
-        Remove-Item -LiteralPath (Join-Path $pubRoot "NONFREE") -Recurse -Force
+        Remove-Item -LiteralPath (Join-Path $pubRoot "USBDRV") -Recurse -Force
         [System.IO.File]::WriteAllText((Join-Path $pubRoot "downloads.txt"), $dlRec.Replace($nf.Sums, ("B" * 64)) + "`r`n")
         $z3 = (Get-DownloadPaths -UploadDir $upRoot -Version $relVersion -Kind "nonfree").Zip
         Remove-Item -LiteralPath $z3 -Force
@@ -2063,7 +2268,7 @@ try {
         $instHText = [System.IO.File]::ReadAllText((Join-Path $repo "xhciinst\inst_core.h"))
         foreach ($pair in @(@("INST_WDMFREE_DIR", $script:WdmFreeFolder), @("INST_NONFREE_DIR", $script:NonFreeFolder))) {
             $m = [regex]::Match($instHText, '#define\s+' + $pair[0] + '\s+"([^"]+)"')
-            Assert-True ($m.Success -and $m.Groups[1].Value -ceq $pair[1]) ("the installer's {0} is not the download's {1}\." -f $pair[0], $pair[1])
+            Assert-True ($m.Success -and $m.Groups[1].Value.Replace('\\', '\') -ceq $pair[1]) ("the installer's {0} is not the download's {1}\." -f $pair[0], $pair[1])
         }
         $repoPin = Read-WdmFreePin -Path (Join-Path $repo "scripts\package\wdmfree-pin.txt")
         Assert-True (($null -eq $repoPin) -eq ($instSums.Free -eq "")) "INST_WDMFREE_SUMS and wdmfree-pin.txt disagree on whether the release has a free set."
@@ -2071,6 +2276,9 @@ try {
         if (Test-Path -LiteralPath $realPack) {
             $realNf = Export-NonFreeSet -Root $realPack -Dest (Join-Path $script:work "nonfree-real")
             Assert-True ($realNf.Sums -eq $instSums.NonFree) ("NONFREE\SHA256.TXT for the pinned usb-wdm-nonfree is {0}; the installer carries {1}." -f $realNf.Sums, $instSums.NonFree)
+            # The cut's checks of record 26 section 6.7.11 over the pinned pack.
+            $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
+            Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
         } else {
             Write-Host "  (no usb-wdm-nonfree checkout at ${realPack}: INST_NONFREE_SUMS is not checked against the pinned tag here)"
         }

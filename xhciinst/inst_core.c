@@ -2194,16 +2194,50 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Storage = 1;
         } else if (inst_switch(a, "nostorage")) {
             opts->NoStorage = 1;
-        } else if (inst_switch(a, "free")) {
+        } else if (inst_switch(a, "free") || inst_switch(a, "wdmfree:copy")) {
             opts->Free = 1;
-        } else if (inst_switch(a, "freestage")) {
+        } else if (inst_switch(a, "nonfree") ||
+                   inst_switch(a, "wdmnonfree:copy")) {
+            opts->NonFree = 1;
+        } else if (inst_switch(a, "wdmfree:trust")) {
+            opts->FreeTrust = 1;
             opts->Free = 1;
-            opts->FreeStage = 1;
-        } else if (inst_switch(a, "nonfree")) {
-            opts->NonFree = 1;
-        } else if (inst_switch(a, "nonfreestage")) {
-            opts->NonFree = 1;
-            opts->NonFreeStage = 1;
+        } else if (inst_switch(a, "freestage") ||
+                   inst_switch(a, "nonfreestage")) {
+            /* Record 26 section 6.7.11: never read as a subset. */
+            inst_err(err, errCap, inst_eq(a + 1, "freestage") ?
+                     "/freestage staged a whole set; name the packages: "
+                     "/wdmfree:stage=<class/package>,... (INSTALL /list "
+                     "lists them)" :
+                     "/nonfreestage staged a whole set; name the packages: "
+                     "/wdmnonfree:stage=<class/package>,... (INSTALL "
+                     "/list lists them)", NULL);
+            return 1;
+        } else if ((a[0] == '/' || a[0] == '-') &&
+                   (inst_starts(a + 1, "wdmfree:stage=") ||
+                    inst_starts(a + 1, "wdmnonfree:stage="))) {
+            int set = inst_starts(a + 1, "wdmfree:") ? INST_SET_FREE
+                                                     : INST_SET_NONFREE;
+            const char *list = strchr(a, '=') + 1;
+            int n;
+            if (opts->StageCount[set] != 0) {
+                inst_err(err, errCap, set == INST_SET_FREE ?
+                         "/wdmfree:stage= given twice" :
+                         "/wdmnonfree:stage= given twice", NULL);
+                return 1;
+            }
+            n = inst_other_id_list(list, opts->StageIds[set], INST_PKG_MAX);
+            if (n <= 0) {
+                inst_err(err, errCap, "not a package list (<class>/<package>"
+                         ",...): ", list);
+                return 1;
+            }
+            opts->StageCount[set] = n;
+            if (set == INST_SET_FREE) {
+                opts->Free = 1;
+            } else {
+                opts->NonFree = 1;
+            }
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
         } else if (inst_switch(a, "faster")) {
@@ -2430,8 +2464,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if ((opts->Free || opts->NonFree) &&
         (opts->Uninstall || opts->Devices || opts->Eject)) {
-        inst_err(err, errCap, opts->Free ? "/free and /freestage belong to an "
-                 "install" : "/nonfree and /nonfreestage belong to an install",
+        inst_err(err, errCap, opts->Free ? "/wdmfree: and /free belong to an "
+                 "install" : "/wdmnonfree: and /nonfree belong to an install",
                  NULL);
         return 1;
     }
@@ -3755,7 +3789,8 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                   "98 SE only. On this Windows they are not installed: their "
                   "seven files are copied to ", sizeof(one));
         strncat(one, dir, sizeof(one) - strlen(one) - 1);
-        strncat(one, "\\NUSB33 for you to use by hand, and nothing installs "
+        strncat(one, "\\USBDRV\\NUSB33 for you to use by hand, and nothing "
+                "installs "
                 "them.", sizeof(one) - strlen(one) - 1);
         inst_cat_para(out, cap, one);
     }
@@ -4872,6 +4907,34 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet)
 {
+    return inst_di_jobfile_sec(out, cap, job, result, hwnd, devId, inf, NULL,
+                               force, quiet);
+}
+
+/* 1 when s is a section name the job may carry: 1 to 32 characters, each
+ * a letter, a digit, '.' or '_' (the helper's own test, di_core.c). */
+static int inst_di_section(const char *s)
+{
+    size_t i;
+
+    if (s == NULL || s[0] == '\0' || strlen(s) > 32) {
+        return 0;
+    }
+    for (i = 0; s[i] != '\0'; i++) {
+        char ch = s[i];
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+              (ch >= '0' && ch <= '9') || ch == '.' || ch == '_')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_di_jobfile_sec(char *out, size_t cap, int job, const char *result,
+                        unsigned long hwnd, const char *devId,
+                        const char *inf, const char *section, int force,
+                        int quiet)
+{
     char t[INST_DI_JOB_BYTES + 64];
     size_t n;
 
@@ -4892,6 +4955,10 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
          (n = strlen(inf)) < 4 || !inst_eq(inf + n - 4, ".INF"))) {
         return 0;
     }
+    if (section != NULL && section[0] != '\0' &&
+        (job != INST_DI_INSTALL || !inst_di_section(section))) {
+        return 0;
+    }
     t[0] = '\0';
     inst_cat(t, sizeof(t), "XHCIDI-JOB 1\r\nJOB ");
     inst_cat(t, sizeof(t), inst_di_job_word(job));
@@ -4909,6 +4976,11 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
         inst_cat(t, sizeof(t), "INF ");
         inst_cat(t, sizeof(t), inf);
         inst_cat(t, sizeof(t), "\r\n");
+        if (section != NULL && section[0] != '\0') {
+            inst_cat(t, sizeof(t), "SECTION ");
+            inst_cat(t, sizeof(t), section);
+            inst_cat(t, sizeof(t), "\r\n");
+        }
         if (force || quiet) {
             inst_cat(t, sizeof(t), "FLAGS");
             if (force) {
@@ -5405,7 +5477,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       284, 20 },
     { INST_PT_NOW, "Restart Windows now", 284, 10 },
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
-    { INST_PT_S98, "Stor98, the bundled NVMe driver", 258, 10 },
+    { INST_PT_S98, "Stor98 (hot-pluggable NVMe driver)", 258, 10 },
     { INST_PT_S98_T,
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",
@@ -7526,10 +7598,14 @@ int inst_stage_parse(const char *line, const char *prefix,
     if (inst_blank_or_comment(line)) {
         return 0;
     }
-    if (inst_count_char(line, '|') != 3) {
+    if (!inst_field(line, 0, f, sizeof(f))) {
         return -1;
     }
-    if (!inst_field(line, 0, f, sizeof(f))) {
+    if (strcmp(f, "PACKAGE") == 0 || strcmp(f, "EXCLUDES") == 0 ||
+        strcmp(f, "COEXISTS") == 0) {
+        return 0;   /* metadata: inst_stage_meta's (section 6.7.11) */
+    }
+    if (inst_count_char(line, '|') != 3) {
         return -1;
     }
     if (strcmp(f, "STAGE") == 0) {
@@ -7680,7 +7756,7 @@ int inst_rec_parse(const char *line, INST_REC_LINE *out)
 const char *inst_other_label(int set)
 {
     return set == INST_SET_FREE ?
-        "Free USB class drivers (usb-wdm-free, beta)" :
+        "Free USB class drivers (usb-wdm-free, experimental)" :
         "Non-free driver pack (usb-wdm-nonfree)";
 }
 
@@ -7690,19 +7766,17 @@ void inst_other_sentence(char *out, size_t cap, int set, const char *dir)
         return;
     }
     if (set == INST_SET_FREE) {
-        inst_catv(out, cap, 6, "Copies the free USB class drivers to ", dir,
-                  "\\" INST_WDMFREE_DIR ". Nothing is installed: Windows uses "
-                  "them only for a device you point it at, or with the box "
-                  "below. They are at a beta stage: report a problem with them "
-                  "at ", inst_other_address(INST_SET_FREE), "/issues, not to ",
-                  "xHCI98.");
+        /* The owner's sentence of 2026-10-23, verbatim (experimental,
+         * not beta). */
+        inst_catv(out, cap, 4, "Copied to ", dir,
+                  "\\" INST_WDMFREE_DIR ". ", INST_FREE_NOTICE);
     } else {
         inst_catv(out, cap, 3, "Copies other makers' drivers (USB Ethernet, "
                   "serial and game pads) to ", dir,
                   "\\" INST_NONFREE_DIR ". They are their makers' work, not "
                   "this project's, and have not been tested by this project on "
                   "any Windows. Nothing is installed: Windows uses them only "
-                  "for a device you point it at, or with the box below.");
+                  "for a device you point it at, or with the boxes below.");
     }
 }
 
@@ -7780,7 +7854,7 @@ INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
     }
     if (x64nt6 && ((freeTicked && freeStage) ||
                    (nonfreeTicked && nonfreeStage))) {
-        w |= INST_OW_X64SIG;
+        w |= x64nt6 == 2 ? INST_OW_X64STORE : INST_OW_X64SIG;
     }
     return w;
 }
@@ -7815,6 +7889,321 @@ void inst_other_warn_text(INST_U32 set, const char *freeUnread,
                       "with driver signature enforcement disabled (F8), a "
                       "test-signed one also in test-signing mode.");
     }
+    if (set & INST_OW_X64STORE) {
+        inst_cat_para(out, cap,
+                      "On 64-bit Windows 8 to 10 Windows stores a staged "
+                      "driver only if its signature is valid: a package "
+                      "without a valid signature may be refused, and is then "
+                      "copied only.");
+    }
+}
+
+/* ======================================================================== */
+/* Driver packages of the other sets (record 26 section 6.7.11, draft 37)    */
+/* ======================================================================== */
+
+const char *const instOtherHeadings[] = {
+    "Audio", "Video", "HID", "Network", "Storage", "Serial", "Other"
+};
+const int instOtherHeadingCount =
+    (int)(sizeof(instOtherHeadings) / sizeof(instOtherHeadings[0]));
+
+/* The words are proposals for the packs' maintainer (the owner); a class
+ * driver's names its class and version and no brand (owner, 2026-10-23).
+ * xpad98's is the owner's compatibility wording of 2026-10-23, a DEVICE
+ * row, with the trademark notice in the release notes. */
+const INST_OTHER_PKG instOtherPkgs[] = {
+    { INST_SET_FREE, "audio/uac1", INST_PKG_CLASS, "Audio",
+      "USB audio (uac1): USB Audio Class 1.0 speakers, headsets and "
+      "microphones", 0 },
+    { INST_SET_FREE, "audio/uac2", INST_PKG_CLASS, "Audio",
+      "USB audio (uac2): USB Audio Class 2.0 sound cards and DACs", 0 },
+    { INST_SET_FREE, "audio/usbmidi", INST_PKG_CLASS, "Audio",
+      "MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces", 0 },
+    { INST_SET_FREE, "video/uvc98", INST_PKG_CLASS, "Video",
+      "Webcams (uvc98): USB Video Class 1.0 to 1.5 cameras", 0 },
+    { INST_SET_FREE, "hid/xpad98", INST_PKG_DEVICE, "HID",
+      "Game pads (xpad98): for Xbox 360 and Xbox One controllers", 0 },
+    { INST_SET_FREE, "net/cdcnet", INST_PKG_CLASS, "Network",
+      "USB Ethernet (cdcnet): CDC ECM, CDC NCM and RNDIS adapters", 0 },
+    { INST_SET_FREE, "net/ax88179", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88179): adapters with an ASIX AX88179 chip", 0 },
+    { INST_SET_FREE, "net/rtl815x", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or "
+      "RTL8153 chip", 0 },
+    { INST_SET_FREE, "serial/usbcom", INST_PKG_CLASS, "Serial",
+      "USB serial (usbcom): CDC ACM serial ports and modems", 0 },
+    { INST_SET_FREE, "storage/usbflop", INST_PKG_CLASS, "Storage",
+      "USB floppy (usbflop): UFI floppy drives", 0 },
+    { INST_SET_FREE, "generic/libusb0", INST_PKG_CLASS, "Other",
+      "libusb (libusb0): libusb-win32 0.1, for programs that talk to a "
+      "device", 0 },
+    { INST_SET_NONFREE, "ethernet/ax88179", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A "
+      "chip", 0 },
+    { INST_SET_NONFREE, "ethernet/ax88772", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88772): adapters with an ASIX AX88772 chip", 0 },
+    { INST_SET_NONFREE, "ethernet/rtl815x", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or "
+      "RTL8153 chip", 0 },
+    { INST_SET_NONFREE, "hid/x360c", INST_PKG_DEVICE, "HID",
+      "Game pads (x360c): for Xbox 360 controllers", 0 },
+    { INST_SET_NONFREE, "hid/x360wc", INST_PKG_DEVICE, "HID",
+      "Game pads (x360wc): for the Xbox 360 wireless receiver", 0 },
+    { INST_SET_NONFREE, "serial/ch341", INST_PKG_DEVICE, "Serial",
+      "USB serial (ch341): adapters with a WCH CH340 or CH341 chip", 0 },
+    { INST_SET_NONFREE, "serial/ft2232d", INST_PKG_DEVICE, "Serial",
+      "USB serial (ft2232d): adapters with an FTDI FT2232D chip", 0 },
+    { INST_SET_NONFREE, "serial/ftdi", INST_PKG_DEVICE, "Serial",
+      "USB serial (ftdi): adapters with an FTDI FT232 family chip", 0 }
+};
+const int instOtherPkgCount =
+    (int)(sizeof(instOtherPkgs) / sizeof(instOtherPkgs[0]));
+
+/* Proposals for the maintainer: the generic and the specific driver of one
+ * device, or two drivers of one device, not staged together. */
+const INST_OTHER_REL instOtherRels[] = {
+    { INST_SET_FREE, "audio/uac1", INST_SET_FREE, "audio/usbmidi",
+      INST_SYS_ALL, 1 },
+    { INST_SET_FREE, "net/ax88179", INST_SET_NONFREE, "ethernet/ax88179",
+      INST_SYS_ALL, 1 },
+    { INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE, "ethernet/rtl815x",
+      INST_SYS_ALL, 1 },
+    { INST_SET_FREE, "hid/xpad98", INST_SET_NONFREE, "hid/x360wc",
+      INST_SYS_ALL, 1 },
+    { INST_SET_FREE, "hid/xpad98", INST_SET_NONFREE, "hid/x360c",
+      INST_SYS_ALL, 0 }
+};
+const int instOtherRelCount =
+    (int)(sizeof(instOtherRels) / sizeof(instOtherRels[0]));
+
+/* Matched as whole words, case-insensitively: the cut's list,
+ * scripts\package\brand-words.txt, word for word (make-release.ps1 refuses
+ * the two apart; record 26 section 6.7.11). */
+static const char *const instBrandWords[] = {
+    "Microsoft", "Xbox", "Creative", "Logitech", "Sony", "Realtek", "ASIX",
+    "FTDI", "WCH", "Qinheng", "Morii", "Prolific", "Apple", "Samsung",
+    "Intel", "Brio", "Blaster", "Mitsumi", "Orico", "8BitDo"
+};
+
+int inst_other_heading_index(const char *heading)
+{
+    int i;
+
+    for (i = 0; i < instOtherHeadingCount; i++) {
+        if (heading != NULL && inst_eq(heading, instOtherHeadings[i])) {
+            return i;
+        }
+    }
+    return instOtherHeadingCount - 1;
+}
+
+void inst_other_pkg_of(const char *rel, char *pkg, size_t cap)
+{
+    const char *s = strchr(rel, '/');
+
+    inst_copy(pkg, rel, cap);
+    if (s != NULL) {
+        s = strchr(s + 1, '/');
+    }
+    if (s != NULL && (size_t)(s - rel) < cap) {
+        pkg[s - rel] = '\0';
+    }
+}
+
+const INST_OTHER_PKG *inst_other_pkg(int set, const char *id)
+{
+    int i;
+
+    for (i = 0; i < instOtherPkgCount; i++) {
+        if (instOtherPkgs[i].Set == set && inst_eq(instOtherPkgs[i].Id, id)) {
+            return &instOtherPkgs[i];
+        }
+    }
+    return NULL;
+}
+
+int inst_other_excludes(int setA, const char *a, int setB, const char *b,
+                        int tok)
+{
+    INST_U32 bit = tok >= 0 && tok < 32 ? ((INST_U32)1 << tok) : 0;
+    int i;
+
+    for (i = 0; i < instOtherRelCount; i++) {
+        const INST_OTHER_REL *r = &instOtherRels[i];
+        if (!r->Excludes || !(r->Systems & bit)) {
+            continue;
+        }
+        if ((r->SetA == setA && inst_eq(r->A, a) && r->SetB == setB &&
+             inst_eq(r->B, b)) ||
+            (r->SetA == setB && inst_eq(r->A, b) && r->SetB == setA &&
+             inst_eq(r->B, a))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int inst_word_char(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9');
+}
+
+const char *inst_other_brand_word(const char *desc)
+{
+    size_t i;
+    size_t k;
+
+    for (k = 0; k < sizeof(instBrandWords) / sizeof(instBrandWords[0]); k++) {
+        size_t n = strlen(instBrandWords[k]);
+        for (i = 0; desc[i] != '\0'; i++) {
+            if ((i == 0 || !inst_word_char(desc[i - 1])) &&
+                inst_eqn(desc + i, instBrandWords[k], n) &&
+                !inst_word_char(desc[i + n])) {
+                return instBrandWords[k];
+            }
+        }
+    }
+    return NULL;
+}
+
+int inst_other_desc_ok(int kind, const char *desc)
+{
+    size_t i;
+
+    if (desc == NULL || desc[0] == '\0' || strlen(desc) > INST_PKG_DESC_MAX) {
+        return 0;
+    }
+    for (i = 0; desc[i] != '\0'; i++) {
+        if (desc[i] < 0x20 || desc[i] > 0x7E || desc[i] == '|') {
+            return 0;
+        }
+    }
+    return kind != INST_PKG_CLASS || inst_other_brand_word(desc) == NULL;
+}
+
+/* "<class>/<package>": two parts, lower-case letters, digits, '-', '_'. */
+static int inst_pkg_id_ok(const char *id)
+{
+    int slash = 0;
+    size_t i;
+    size_t n = strlen(id);
+
+    if (n == 0 || n >= INST_PKG_ID_CHARS || id[0] == '/' || id[n - 1] == '/') {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char c = id[i];
+        if (c == '/') {
+            if (id[i + 1] == '/') {
+                return 0;
+            }
+            slash++;
+        } else if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                     c == '-' || c == '_')) {
+            return 0;
+        }
+    }
+    return slash == 1;
+}
+
+int inst_other_id_list(const char *list, char *ids, int cap)
+{
+    int n = 0;
+    const char *p = list;
+
+    if (list == NULL || list[0] == '\0') {
+        return -1;
+    }
+    for (;;) {
+        const char *e = strchr(p, ',');
+        size_t len = e != NULL ? (size_t)(e - p) : strlen(p);
+        char one[INST_PKG_ID_CHARS];
+        int i;
+        if (len == 0 || len >= sizeof(one) || n >= cap) {
+            return -1;
+        }
+        memcpy(one, p, len);
+        one[len] = '\0';
+        for (i = 0; one[i] != '\0'; i++) {
+            if (one[i] >= 'A' && one[i] <= 'Z') {
+                one[i] = (char)(one[i] - 'A' + 'a');
+            }
+        }
+        if (!inst_pkg_id_ok(one)) {
+            return -1;
+        }
+        for (i = 0; i < n; i++) {
+            if (inst_eq(ids + (size_t)i * INST_PKG_ID_CHARS, one)) {
+                break;
+            }
+        }
+        if (i == n) {
+            inst_copy(ids + (size_t)n * INST_PKG_ID_CHARS, one,
+                      INST_PKG_ID_CHARS);
+            n++;
+        }
+        if (e == NULL) {
+            return n;
+        }
+        p = e + 1;
+    }
+}
+
+/* "free:<id>" or "nonfree:<id>" checked. */
+static int inst_meta_qualified(const char *f)
+{
+    if (inst_starts(f, "free:")) {
+        return inst_pkg_id_ok(f + 5);
+    }
+    if (inst_starts(f, "nonfree:")) {
+        return inst_pkg_id_ok(f + 8);
+    }
+    return 0;
+}
+
+int inst_stage_meta(const char *line, INST_STAGE_META *out)
+{
+    char f[INST_OTHER_REL_CHARS + 32];
+    int bars = inst_count_char(line, '|');
+
+    memset(out, 0, sizeof(*out));
+    if (inst_blank_or_comment(line) || !inst_field(line, 0, f, sizeof(f))) {
+        return 0;
+    }
+    if (strcmp(f, "NEEDS") == 0) {
+        return -1;
+    }
+    if (strcmp(f, "PACKAGE") == 0) {
+        out->Kind = 'P';
+        if (bars != 3 || !inst_field(line, 1, out->A, sizeof(out->A)) ||
+            !inst_pkg_id_ok(out->A) ||
+            !inst_field(line, 2, out->B, sizeof(out->B)) ||
+            (strcmp(out->B, "CLASS") != 0 && strcmp(out->B, "DEVICE") != 0) ||
+            !inst_field(line, 3, f, sizeof(f)) ||
+            !inst_other_desc_ok(strcmp(out->B, "CLASS") == 0 ?
+                                INST_PKG_CLASS : INST_PKG_DEVICE, f)) {
+            return -1;
+        }
+        inst_copy(out->Desc, f, sizeof(out->Desc));
+        return 1;
+    }
+    if (strcmp(f, "EXCLUDES") == 0 || strcmp(f, "COEXISTS") == 0) {
+        out->Kind = f[0] == 'E' ? 'E' : 'C';
+        if (bars != 4 || !inst_field(line, 1, out->A, sizeof(out->A)) ||
+            !inst_meta_qualified(out->A) ||
+            !inst_field(line, 2, out->B, sizeof(out->B)) ||
+            !inst_meta_qualified(out->B) ||
+            !inst_field(line, 3, f, sizeof(f)) ||
+            !inst_sys_mask(f, &out->Systems) ||
+            !inst_field(line, 4, f, sizeof(f))) {
+            return -1;
+        }
+        inst_copy(out->Desc, f, sizeof(out->Desc));
+        return 1;
+    }
+    return 0;
 }
 
 static const INST_NAMEROW *name_row(const INST_NAMEROW *t, int n, INST_U32 ven,

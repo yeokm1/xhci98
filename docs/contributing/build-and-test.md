@@ -5919,7 +5919,7 @@ memory. Shape:
 | Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0); the same `Xhci.AddReg.Global` history as the row above |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
-| Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
+| Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers`. Since 3.2.0.0 the Windows 98 SE and ME wizard's `[Xhci.Dev]` copies `[Xhci.CopyPrep]` instead, `xhci98.sys,,,16`, which keeps a file already there, and `[Xhci.Upd]`, which no model names and the installer's helper installs by name, keeps this row (design record 26 section 5.0, draft 39; the gate's W98-PREPROW and W98-PREPSECT) |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
 | Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
 | All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name, and since roadmap task 23.2 the controller's too on every NT path; on 9x `sysclass.dll` draws the controller's tab and `usbui.dll` the dialogs behind its buttons (the `EnumPropPages` bullet below); `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
@@ -6043,7 +6043,12 @@ what it omits:
   had an EHCI (the Windows XP guest of 2026-09-03: Code 39). `usbhub20.sys`
   is the OS's to place: Windows 2000's own `USB.INF` copies it when usbport
   creates the `USB\ROOT_HUB20` PDO, and Windows XP has no such file.
-- The `CopyFiles` third field is set (`xhci98.sys,,xhci98.tmp`).
+- The `CopyFiles` third field is set (`xhci98.sys,,xhci98.tmp`), on the NT
+  paths and, since 3.2.0.0, on Windows 98 SE and ME in `[Xhci.Upd]` alone,
+  the update section the installer's helper names; the wizard's
+  `[Xhci.Dev]` keeps a file already there instead (`xhci98.sys,,,16`), so
+  a controller found after the installer placed it asks for no disk
+  (design record 26 section 5.0, draft 39).
   Reinstalling over a loaded `xhci98.sys` is the normal case in the deploy
   loop, and without a temporary name Win98 has no way to replace a file in use;
   it can leave the previous binary in place, which reads as a code change that

@@ -146,8 +146,6 @@ static int fastForced;
 /* The USB storage drivers' box, Windows 98 SE alone (record 26 section
  * 6.5): shown, offered (the download's seven verified), ticked, the
  * detection's line. */
-static int othChoice[INST_SET_COUNT];
-static int othStage[INST_SET_COUNT];
 static int storShown;
 static int storOffered;
 static int storChoice;
@@ -458,18 +456,8 @@ static unsigned __stdcall job_main(void *arg)
             storShown = inst_eng_stor_state(&storOffered, &storChoice,
                                             storNote, sizeof(storNote));
             /* The other USB drivers' boxes: unticked, but by /free,
-             * /freestage, /nonfree and /nonfreestage (record 26 section
-             * 6.7.4), which the read applied. */
-            {
-                int set;
-                for (set = 0; set < INST_SET_COUNT; set++) {
-                    int state;
-                    int forThis;
-                    othChoice[set] = othStage[set] = 0;
-                    inst_eng_other_state(set, &state, &forThis,
-                                         &othChoice[set], &othStage[set]);
-                }
-            }
+             * /nonfree and the /wdm...: switches (record 26 sections 6.7.4
+             * and 6.7.11), which the read applied to the engine's choices. */
             EnterCriticalSection(&textLock);
             sink = &planText;
             LeaveCriticalSection(&textLock);
@@ -1276,32 +1264,407 @@ static int comp_leave(HWND dlg)
     return 1;
 }
 
-/* ---- the other USB drivers' page (record 26 section 6.7.4) --------------- */
+/* ---- the other USB drivers' page (record 26 sections 6.7.4, 6.7.11) ------ */
+
+static int dlu_x(HWND dlg, int x);
+static HWND make_px(HWND dlg, const char *cls, const char *text, DWORD style,
+                    int x, int y, int w, int h, int id, HFONT font);
+static int text_h(HDC dc, const char *text, int w, int *wide);
 
 static int oth_id(int set, int what)
 {
     return IDC_O_BASE + IDC_O_STRIDE * set + what;
 }
 
-/* The stage box open only while its set's box is ticked. */
-static void oth_sync(HWND dlg, int set)
-{
-    int state;
-    int forThis;
-    int inc;
-    int st;
-    int open;
+/* The packages' list: a child dialog in IDC_O_AREA's place, with a heading
+ * per set and class and one plain check box per package for this system,
+ * scrolled by its own bar (not a list view: section 6.7.11). */
+static HWND othList;
+static int othListH;            /* the contents' height, pixels             */
+static int othListPos;          /* the scroll position, pixels              */
+static int othBoxH;             /* one line's height                        */
 
-    if (!inst_eng_other_state(set, &state, &forThis, &inc, &st)) {
+static int othlist_id(int set, int i)
+{
+    return IDC_OL_BASE + 100 * set + i;
+}
+
+static void othlist_detail(int set, int i)
+{
+    INST_OTHPKG_VIEW v;
+    char text[1100];
+    HWND page = othList != NULL ? GetParent(othList) : NULL;
+
+    if (page == NULL || !inst_eng_other_pkg(set, i, &v)) {
         return;
     }
-    open = state == INST_OTHER_CARRIED && forThis > 0 &&
-           IsDlgButtonChecked(dlg, oth_id(set, IDC_O_BOX)) == BST_CHECKED;
-    if (!open) {
-        CheckDlgButton(dlg, oth_id(set, IDC_O_STAGE), BST_UNCHECKED);
+    {
+        char scope[600];
+        inst_eng_other_pkg_scope(set, i, dirChoice, scope, sizeof(scope));
+        _snprintf(text, sizeof(text) - 1, "%s:%s. %s%s%s%s",
+                  set == INST_SET_FREE ? "free" : "nonfree", v.Id,
+                  v.Blocked ? "Not available: " : "", v.Blocked ? v.Why : "",
+                  v.Blocked ? " " : "", scope);
+        if (v.Earlier) {
+            strncat(text, " Staged by an earlier run.", sizeof(text) -
+                    strlen(text) - 1);
+        }
     }
-    EnableWindow(GetDlgItem(dlg, oth_id(set, IDC_O_STAGE)), open);
-    EnableWindow(GetDlgItem(dlg, oth_id(set, IDC_O_STAGE_T)), open);
+    text[sizeof(text) - 1] = '\0';
+    SetDlgItemTextA(page, IDC_O_DETAIL, text);
+}
+
+/* Each box's tick, label and enabled state from the engine. */
+static void othlist_sync(void)
+{
+    int set;
+    int i;
+    int first = 1;
+
+    if (othList == NULL) {
+        return;
+    }
+    {
+        HWND tb = GetDlgItem(othList, othlist_id(INST_SET_FREE, 99));
+        int offered = 0;
+        int on = inst_eng_other_trust(&offered);
+        if (tb != NULL) {
+            CheckDlgButton(othList, othlist_id(INST_SET_FREE, 99),
+                           on ? BST_CHECKED : BST_UNCHECKED);
+            EnableWindow(tb, offered);
+        }
+    }
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        int open = IsDlgButtonChecked(GetParent(othList), oth_id(set,
+                                      IDC_O_BOX)) == BST_CHECKED;
+        INST_OTHPKG_VIEW v;
+        (void)first;
+        for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
+            HWND b = GetDlgItem(othList, othlist_id(set, i));
+            char label[INST_PKG_DESC_MAX + 40];
+            if (b == NULL) {
+                continue;
+            }
+            _snprintf(label, sizeof(label) - 1, "%s%s", v.Desc, v.Blocked ?
+                      " (not available: see below)" : "");
+            label[sizeof(label) - 1] = '\0';
+            SetWindowTextA(b, label);
+            CheckDlgButton(othList, othlist_id(set, i), v.Tick ? BST_CHECKED
+                                                               : BST_UNCHECKED);
+            EnableWindow(b, open);
+        }
+    }
+    {
+        /* The tab stop and the group on the first open box in the list's
+         * own order: Tab enters the list there, the arrows move within it,
+         * and no other control starts a group. */
+        HWND c = GetWindow(othList, GW_CHILD);
+        for (; c != NULL; c = GetWindow(c, GW_HWNDNEXT)) {
+            int id = GetDlgCtrlID(c);
+            LONG st = GetWindowLongA(c, GWL_STYLE) &
+                      ~(LONG)(WS_TABSTOP | WS_GROUP);
+            if (first && IsWindowEnabled(c) && id >= IDC_OL_BASE &&
+                id < IDC_OL_BASE + 100 * INST_SET_COUNT) {
+                st |= WS_TABSTOP | WS_GROUP;
+                first = 0;
+            }
+            SetWindowLongA(c, GWL_STYLE, st);
+        }
+    }
+}
+
+static WNDPROC othBoxProc;
+
+/* The next (dir 1) or previous (-1) open box of the list after box, in
+ * the list's own order; NULL at either end. */
+static HWND othlist_step(HWND box, int dir)
+{
+    HWND c = box;
+
+    for (;;) {
+        int id;
+        c = GetWindow(c, dir > 0 ? GW_HWNDNEXT : GW_HWNDPREV);
+        if (c == NULL) {
+            return NULL;
+        }
+        id = GetDlgCtrlID(c);
+        if (id >= IDC_OL_BASE && id < IDC_OL_BASE + 100 * INST_SET_COUNT &&
+            IsWindowEnabled(c)) {
+            return c;
+        }
+    }
+}
+
+static LRESULT CALLBACK othbox_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_GETDLGCODE) {
+        return CallWindowProcA(othBoxProc, h, msg, wp, lp) | DLGC_WANTARROWS;
+    }
+    if (msg == WM_KEYDOWN && (wp == VK_DOWN || wp == VK_UP)) {
+        HWND n = othlist_step(h, wp == VK_DOWN ? 1 : -1);
+        if (n != NULL) {
+            SetFocus(n);
+        }
+        return 0;
+    }
+    return CallWindowProcA(othBoxProc, h, msg, wp, lp);
+}
+
+static void othlist_scroll(int to)
+{
+    SCROLLINFO si;
+    RECT r;
+    int page;
+    int max;
+
+    GetClientRect(othList, &r);
+    page = r.bottom;
+    max = othListH > page ? othListH - page : 0;
+    if (to < 0) {
+        to = 0;
+    }
+    if (to > max) {
+        to = max;
+    }
+    if (to != othListPos) {
+        ScrollWindowEx(othList, 0, othListPos - to, NULL, NULL, NULL, NULL,
+                       SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE);
+        othListPos = to;
+    }
+    memset(&si, 0, sizeof(si));
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = othListH > 0 ? othListH - 1 : 0;
+    si.nPage = (UINT)page;
+    si.nPos = othListPos;
+    SetScrollInfo(othList, SB_VERT, &si, TRUE);
+}
+
+/* The focused box kept in view. */
+static void othlist_show(HWND box)
+{
+    RECT r;
+    RECT c;
+    POINT pt;
+
+    GetWindowRect(box, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(othList, &pt);
+    GetClientRect(othList, &c);
+    if (pt.y < 0) {
+        othlist_scroll(othListPos + pt.y);
+    } else if (pt.y + (r.bottom - r.top) > c.bottom) {
+        othlist_scroll(othListPos + pt.y + (r.bottom - r.top) - c.bottom);
+    }
+}
+
+static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
+                                        LPARAM lp)
+{
+    int id;
+    int set;
+    int i;
+
+    (void)lp;
+    switch (msg) {
+    case WM_INITDIALOG:
+        return FALSE;
+    case WM_VSCROLL:
+        switch (LOWORD(wp)) {
+        case SB_LINEUP:
+            othlist_scroll(othListPos - othBoxH);
+            break;
+        case SB_LINEDOWN:
+            othlist_scroll(othListPos + othBoxH);
+            break;
+        case SB_PAGEUP:
+            othlist_scroll(othListPos - 3 * othBoxH);
+            break;
+        case SB_PAGEDOWN:
+            othlist_scroll(othListPos + 3 * othBoxH);
+            break;
+        case SB_THUMBTRACK:
+        case SB_THUMBPOSITION:
+            othlist_scroll((int)(short)HIWORD(wp));
+            break;
+        default:
+            break;
+        }
+        return TRUE;
+    case WM_COMMAND:
+        id = LOWORD(wp);
+        if (id < IDC_OL_BASE || id >= IDC_OL_BASE + 100 * INST_SET_COUNT) {
+            break;
+        }
+        set = (id - IDC_OL_BASE) / 100;
+        i = (id - IDC_OL_BASE) % 100;
+        if (i == 99) {
+            /* The free set's certificate (record 26 section 6.7.11). */
+            if (HIWORD(wp) == BN_CLICKED) {
+                inst_eng_other_trust_choose(IsDlgButtonChecked(dlg, id) ==
+                                            BST_CHECKED);
+                othlist_sync();
+            } else if (HIWORD(wp) == BN_SETFOCUS) {
+                othlist_show((HWND)lp);
+                SetDlgItemTextA(GetParent(dlg), IDC_O_DETAIL, "usb-wdm-free "
+                                "signs its 64-bit drivers with its own test "
+                                "certificate. Ticked, the run adds it to this "
+                                "computer's trusted roots and publishers, and "
+                                "the uninstall removes what it added. No trust "
+                                "is ever added for the non-free drivers.");
+            }
+            return TRUE;
+        }
+        if (HIWORD(wp) == BN_SETFOCUS) {
+            othlist_show((HWND)lp);
+            othlist_detail(set, i);
+        } else if (HIWORD(wp) == BN_CLICKED) {
+            int tick = IsDlgButtonChecked(dlg, id) == BST_CHECKED;
+            /* A barred box takes no tick: its reason said again. */
+            inst_eng_other_pkg_tick(set, i, tick);
+            othlist_sync();
+            othlist_detail(set, i);
+        }
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/* The list made again from the engine's packages, in IDC_O_AREA's place. */
+static void othlist_build(HWND page)
+{
+    HFONT font = (HFONT)SendMessageA(page, WM_GETFONT, 0, 0);
+    RECT area;
+    RECT c;
+    POINT pt;
+    HDC dc;
+    HFONT old;
+    int y = 0;
+    int first = 1;
+    int w;
+    int set;
+    int h;
+    int i;
+
+    if (othList != NULL) {
+        DestroyWindow(othList);
+        othList = NULL;
+    }
+    GetWindowRect(GetDlgItem(page, IDC_O_AREA), &area);
+    pt.x = area.left;
+    pt.y = area.top;
+    ScreenToClient(page, &pt);
+    othList = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHERLIST), page,
+                                 othlist_proc, 0);
+    if (othList == NULL) {
+        return;
+    }
+    SetWindowPos(othList, GetDlgItem(page, IDC_O_HEAD), pt.x, pt.y,
+                 area.right - area.left, area.bottom - area.top,
+                 SWP_NOACTIVATE);
+    GetClientRect(othList, &c);
+    w = c.right - dlu_x(page, 4);
+    dc = GetDC(othList);
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    othBoxH = text_h(dc, "Xg", w, NULL) + 2;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (h = 0; h < instOtherHeadingCount; h++) {
+            INST_OTHPKG_VIEW v;
+            int any = 0;
+            for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
+                char head[96];
+                char label[INST_PKG_DESC_MAX + 40];
+                int lh;
+                HWND b;
+                if (!v.Eligible || v.Heading != h) {
+                    continue;
+                }
+                if (!any) {
+                    _snprintf(head, sizeof(head) - 1, "%s: %s", set ==
+                              INST_SET_FREE ? "Free drivers" :
+                              "Non-free drivers", instOtherHeadings[h]);
+                    head[sizeof(head) - 1] = '\0';
+                    make_px(othList, "STATIC", head, SS_LEFT | SS_NOPREFIX,
+                            dlu_x(page, 2), y, w, othBoxH, -1, font);
+                    y += othBoxH;
+                    any = 1;
+                }
+                _snprintf(label, sizeof(label) - 1, "%s (not available: see "
+                          "below)", v.Desc);
+                label[sizeof(label) - 1] = '\0';
+                lh = text_h(dc, label, w - dlu_x(page, 22), NULL);
+                if (lh < othBoxH) {
+                    lh = othBoxH;
+                }
+                b = make_px(othList, "BUTTON", v.Desc, BS_AUTOCHECKBOX |
+                            BS_MULTILINE | BS_TOP | BS_NOTIFY |
+                            (first ? WS_TABSTOP | WS_GROUP : 0),
+                            dlu_x(page, 10), y, w - dlu_x(page, 10), lh + 2,
+                            othlist_id(set, i), font);
+                if (b != NULL) {
+                    othBoxProc = GET_PROC(b);
+                    SET_PROC(b, othbox_sub);
+                }
+                first = 0;
+                y += lh + 3;
+            }
+        }
+        if (set == INST_SET_FREE && inst_eng_other_trust_possible()) {
+            const char *t = "Trust usb-wdm-free's test certificate on this "
+                            "computer (its 64-bit drivers are signed with it; "
+                            "they load only in test-signing mode)";
+            int th = text_h(dc, t, w - dlu_x(page, 22), NULL);
+            if (th < othBoxH) {
+                th = othBoxH;
+            }
+            {
+                HWND tb = make_px(othList, "BUTTON", t, BS_AUTOCHECKBOX |
+                                  BS_MULTILINE | BS_TOP | BS_NOTIFY,
+                                  dlu_x(page, 10), y, w - dlu_x(page, 10),
+                                  th + 2, othlist_id(set, 99), font);
+                if (tb != NULL) {
+                    othBoxProc = GET_PROC(tb);
+                    SET_PROC(tb, othbox_sub);
+                }
+            }
+            y += th + 3;
+        }
+        {
+            const char *e = inst_eng_other_earlier(set);
+            if (e[0] != '\0') {
+                int eh = text_h(dc, e, w, NULL) + 2;
+                make_px(othList, "STATIC", e, SS_LEFT | SS_NOPREFIX,
+                        dlu_x(page, 2), y, w, eh, -1, font);
+                y += eh + 2;
+            }
+        }
+    }
+    if (y == 0) {
+        make_px(othList, "STATIC", "None of the drivers carried has one for "
+                "this Windows.", SS_LEFT | SS_NOPREFIX, dlu_x(page, 2), 0, w,
+                othBoxH, -1, font);
+        y = othBoxH;
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(othList, dc);
+    othListH = y;
+    othListPos = 0;
+    othlist_scroll(0);
+    othlist_sync();
+}
+
+/* A set's copy box: its packages open only while it is ticked. */
+static void oth_sync(HWND dlg, int set)
+{
+    inst_eng_other_choose(set, IsDlgButtonChecked(dlg, oth_id(set,
+                          IDC_O_BOX)) == BST_CHECKED, 0);
+    othlist_sync();
 }
 
 static void oth_fill(HWND dlg)
@@ -1311,7 +1674,6 @@ static void oth_fill(HWND dlg)
     for (set = 0; set < INST_SET_COUNT; set++) {
         char sentence[800];
         char line[512];
-        char st[96];
         int state = INST_OTHER_ABSENT;
         int forThis = 0;
         int inc = 0;
@@ -1327,65 +1689,36 @@ static void oth_fill(HWND dlg)
         shown = state == INST_OTHER_CARRIED;
         SetDlgItemTextA(dlg, oth_id(set, IDC_O_BOX), inst_other_label(set));
         SetDlgItemTextA(dlg, oth_id(set, IDC_O_TEXT), sentence);
-        SetDlgItemTextA(dlg, oth_id(set, IDC_O_STAGE),
-                        inst_other_stage_label());
-        inst_other_stage_text(st, sizeof(st), forThis);
-        SetDlgItemTextA(dlg, oth_id(set, IDC_O_STAGE_T), st);
         SetDlgItemTextA(dlg, oth_id(set, IDC_O_LINE), line);
-        for (w = IDC_O_BOX; w <= IDC_O_STAGE_T; w++) {
+        for (w = IDC_O_BOX; w <= IDC_O_TEXT; w++) {
             ShowWindow(GetDlgItem(dlg, oth_id(set, w)), shown ? SW_SHOW
                                                               : SW_HIDE);
         }
         /* Absent or not this release's, the line takes the row's place. */
         r.left = 8;
-        r.top = set == INST_SET_FREE ? (shown ? 78 : 4) : (shown ? 186 : 112);
+        r.top = set == INST_SET_FREE ? (shown ? 46 : 2) : (shown ? 107 : 63);
         r.right = 8 + 284;
-        r.bottom = r.top + 26;
+        r.bottom = r.top + 16;
         top = r;
         MapDialogRect(dlg, &top);
         SetWindowPos(GetDlgItem(dlg, oth_id(set, IDC_O_LINE)), NULL, top.left,
                      top.top, top.right - top.left, top.bottom - top.top,
                      SWP_NOZORDER);
-        CheckDlgButton(dlg, oth_id(set, IDC_O_BOX), shown && othChoice[set] ?
+        CheckDlgButton(dlg, oth_id(set, IDC_O_BOX), shown && inc ?
                        BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(dlg, oth_id(set, IDC_O_STAGE),
-                       shown && othChoice[set] && othStage[set] ? BST_CHECKED
-                                                                : BST_UNCHECKED);
-        oth_sync(dlg, set);
     }
+    SetDlgItemTextA(dlg, IDC_O_DETAIL, "");
+    othlist_build(dlg);
 }
 
-/* Next from the page: the choices, and section 6.7.4's warnings, once per
- * Next; Cancel in the box stays on the page. */
-/* The page's boxes taken into othChoice and othStage and the engine, on
- * Next and on Back alike (so a Back to Components and Next again keeps
- * them); 1 when a choice changed. */
-static int oth_capture(HWND dlg)
-{
-    int set;
-    int changed = 0;
-
-    for (set = 0; set < INST_SET_COUNT; set++) {
-        int inc = IsDlgButtonChecked(dlg, oth_id(set, IDC_O_BOX)) ==
-                  BST_CHECKED;
-        int st = inc && IsDlgButtonChecked(dlg, oth_id(set, IDC_O_STAGE)) ==
-                 BST_CHECKED;
-        if (inc != othChoice[set] || st != othStage[set]) {
-            changed = 1;
-        }
-        othChoice[set] = inc;
-        othStage[set] = st;
-        inst_eng_other_choose(set, inc, st);
-    }
-    return changed;
-}
-
+/* Next from the page: section 6.7.4's warnings, once per Next; Cancel in
+ * the box stays on the page. The choices are the engine's already. */
 static int oth_leave(HWND dlg)
 {
-    int changed = oth_capture(dlg);
     char warn[2048];
     char box[2200];
 
+    (void)dlg;
     inst_eng_other_warnings(warn, sizeof(warn));
     if (warn[0] != '\0') {
         _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays on "
@@ -1396,9 +1729,7 @@ static int oth_leave(HWND dlg)
             return 0;
         }
     }
-    if (changed) {
-        replan();
-    }
+    replan();
     return 1;
 }
 
@@ -3018,7 +3349,7 @@ static void summary_fill(HWND dlg)
             int inc = 0;
             int stage = 0;
             inst_eng_other_state(i, &state, &forThis, &inc, &stage);
-            other |= state == INST_OTHER_CARRIED && othChoice[i];
+            other |= state == INST_OTHER_CARRIED && inc;
         }
         _snprintf(line, sizeof(line) - 1, "%s.\n\n",
                   inst_eng_summary_head(writes, other));
@@ -3098,7 +3429,8 @@ static void summary_fill(HWND dlg)
                     if (e != NULL) {
                         *e = '\0';
                     }
-                    _snprintf(line, sizeof(line) - 1, "- %s\n", p);
+                    _snprintf(line, sizeof(line) - 1, p[0] == ' ' ?
+                              "%s\n" : "- %s\n", p);
                     line[sizeof(line) - 1] = '\0';
                     tb_add(&t, line);
                     if (e == NULL) {
@@ -3695,9 +4027,6 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case PSN_WIZBACK:
             if (page == P_S98) {
                 s98_page_leave(dlg);
-            }
-            if (page == P_OTHER && oth_capture(dlg)) {
-                replan();       /* the warnings stay Next's (oth_leave) */
             }
             if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
                 SET_RESULT(dlg, -1);
@@ -4496,6 +4825,95 @@ static void st_settings_layout(HWND parent)
     DestroyWindow(d);
 }
 
+/* The Other USB drivers page's list with every row of both tables, current
+ * and withdrawn (record 26 section 6.7.11): the list made in IDC_O_AREA's
+ * place as othlist_build makes it, each package's longest label (its "not
+ * available" form) in its box's text width with no word wider than it and
+ * no taller than the list's window, so every row can be scrolled into view
+ * whole; each "<set>: <heading>" one line in the list's width; the trust
+ * box's words likewise. */
+static void st_other_layout(HWND parent)
+{
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHER), parent,
+                                st_proc, 0);
+    HWND l;
+    HFONT font;
+    HFONT old;
+    HDC dc;
+    RECT area;
+    RECT c;
+    POINT pt;
+    char msg[200];
+    char label[INST_PKG_DESC_MAX + 40];
+    int w;
+    int boxH;
+    int set;
+    int i;
+    int lh;
+    int wide;
+
+    st(d != NULL, "the other USB drivers page");
+    if (d == NULL) {
+        return;
+    }
+    font = (HFONT)SendMessageA(d, WM_GETFONT, 0, 0);
+    GetWindowRect(GetDlgItem(d, IDC_O_AREA), &area);
+    pt.x = area.left;
+    pt.y = area.top;
+    ScreenToClient(d, &pt);
+    l = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHERLIST), d, st_proc,
+                           0);
+    st(l != NULL, "the other USB drivers' list");
+    if (l == NULL) {
+        DestroyWindow(d);
+        return;
+    }
+    SetWindowPos(l, NULL, pt.x, pt.y, area.right - area.left,
+                 area.bottom - area.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    GetClientRect(l, &c);
+    w = c.right - dlu_x(d, 4);
+    dc = GetDC(l);
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    boxH = text_h(dc, "Xg", w, NULL) + 2;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < instOtherHeadingCount; i++) {
+            _snprintf(label, sizeof(label) - 1, "%s: %s", set ==
+                      INST_SET_FREE ? "Free drivers" : "Non-free drivers",
+                      instOtherHeadings[i]);
+            label[sizeof(label) - 1] = '\0';
+            text_h(dc, label, 0, &wide);
+            _snprintf(msg, sizeof(msg) - 1, "the heading \"%s\" fits one "
+                      "line of the list", label);
+            msg[sizeof(msg) - 1] = '\0';
+            st(wide <= w - dlu_x(d, 2), msg);
+        }
+    }
+    for (i = 0; i < instOtherPkgCount; i++) {
+        const INST_OTHER_PKG *p = &instOtherPkgs[i];
+        _snprintf(label, sizeof(label) - 1, "%s (not available: see below)",
+                  p->Desc);
+        label[sizeof(label) - 1] = '\0';
+        lh = text_h(dc, label, w - dlu_x(d, 22), &wide);
+        _snprintf(msg, sizeof(msg) - 1, "%s:%s's box: no word wider than "
+                  "it, and whole in the list's window", p->Set ==
+                  INST_SET_FREE ? "free" : "nonfree", p->Id);
+        msg[sizeof(msg) - 1] = '\0';
+        st(wide <= w - dlu_x(d, 22) && lh > 0 &&
+           (lh < boxH ? boxH : lh) + 2 <= c.bottom, msg);
+    }
+    lh = text_h(dc, "Trust usb-wdm-free's test certificate on this computer "
+                "(its 64-bit drivers are signed with it; they load only in "
+                "test-signing mode)", w - dlu_x(d, 22), &wide);
+    st(wide <= w - dlu_x(d, 22) && lh + 2 <= c.bottom, "the trust box: whole "
+       "in the list's window");
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(l, dc);
+    DestroyWindow(l);
+    DestroyWindow(d);
+}
+
 static int selftest(void)
 {
     static const int wIds[] = { IDC_TEXT };
@@ -4584,6 +5002,7 @@ static int selftest(void)
         st_page(parent, IDD_FOLDER, fIds, fTexts, 2, "the tools folder");
         st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
         st_comp_layout(parent);
+        st_other_layout(parent);
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
                 "shutdown");

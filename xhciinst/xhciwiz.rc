@@ -130,21 +130,29 @@ BEGIN
     PUSHBUTTON      "Cancel", IDCANCEL, 242, 70, 50, 14
 END
 
-IDD_OTHER DIALOG 0, 0, 300, 223
+IDD_OTHER DIALOG 0, 0, 300, 210
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Other USB drivers"
 FONT 8, "MS Sans Serif"
 BEGIN
-    AUTOCHECKBOX    "", 1090, 8, 4, 284, 10, WS_TABSTOP
-    LTEXT           "", 1091, 20, 15, 272, 40
-    AUTOCHECKBOX    "", 1092, 20, 56, 272, 10, WS_TABSTOP
-    LTEXT           "", 1093, 32, 67, 260, 9
-    LTEXT           "", 1094, 8, 78, 284, 26
-    AUTOCHECKBOX    "", 1095, 8, 112, 284, 10, WS_TABSTOP
-    LTEXT           "", 1096, 20, 123, 272, 40
-    AUTOCHECKBOX    "", 1097, 20, 164, 272, 10, WS_TABSTOP
-    LTEXT           "", 1098, 32, 175, 260, 9
-    LTEXT           "", 1099, 8, 186, 284, 26
+    AUTOCHECKBOX    "", 1090, 8, 2, 284, 10, WS_TABSTOP
+    LTEXT           "", 1091, 20, 12, 272, 34
+    LTEXT           "", 1094, 8, 46, 284, 16
+    AUTOCHECKBOX    "", 1095, 8, 63, 284, 10, WS_TABSTOP
+    LTEXT           "", 1096, 20, 73, 272, 34
+    LTEXT           "", 1099, 8, 107, 284, 16
+    LTEXT           "Let Windows choose these drivers automatically for matching devices:",
+                    IDC_O_HEAD, 8, 124, 284, 10
+    LTEXT           "", IDC_O_AREA, 8, 134, 284, 42, NOT WS_VISIBLE
+    EDITTEXT        IDC_O_DETAIL, 8, 178, 284, 29, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL | NOT WS_TABSTOP
+END
+
+IDD_OTHERLIST DIALOG 0, 0, 284, 52
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_VISIBLE | WS_VSCROLL |
+      WS_BORDER
+FONT 8, "MS Sans Serif"
+BEGIN
 END
 
 IDD_SETTINGS DIALOG 0, 0, 300, 200

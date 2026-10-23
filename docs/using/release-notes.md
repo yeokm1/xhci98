@@ -246,7 +246,8 @@ as they are made; the head of this file is rewritten when it is cut.
   over an install that has the Thunderbolt driver leaves that driver as
   it is unless you tick the box.
 - **Stor98 comes with the Thunderbolt 3 / USB4 support.** Ticking the
-  Thunderbolt box ticks the Stor98 box under it, which you can untick;
+  Thunderbolt box ticks the "Stor98 (hot-pluggable NVMe driver)" box under
+  it, which you can untick;
   in the console `/thunderbolt` includes Stor98 too (asked, Enter for Y;
   unasked with `/yes`), and `/nostor98` leaves it out.
 - **Windows 98 SE and ME: Stor98 is updated as a file.** An older
@@ -1582,8 +1583,9 @@ Safely Remove also stops USB storage on both systems.
 **Planned for `3.2.0.0`, not yet built: the download is to carry them,
 and the installer to offer them on Windows 98 SE** (roadmap-usb4 tasks 43.3
 and 43.4). They are to be NUSB 3.3's copies, unmodified, in a folder of
-their own at the download's root, `NUSB33\` (the files in
-`NUSB33\W98SE\`), with a `NOTICE.md` saying whose they
+their own, `USBDRV\NUSB33\` (the files in
+`USBDRV\NUSB33\W98SE\`; `USBDRV\` also holds the other USB
+drivers' sets, `FREE\` and `NONFREE\`), with a `NOTICE.md` saying whose they
 are; they are not this
 project's work, and no licence to redistribute them has been established.
 The installer's row is planned for Windows 98 SE only, to install them
@@ -4238,6 +4240,13 @@ or says it was found by reading the code.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
+- **Windows 98 SE and ME: update with `INSTALL.BAT`, not with Update
+  Driver** (from `3.2.0.0`). The controller's install that Windows' own
+  wizard and Update Driver take keeps an `xhci98.sys` already in
+  `SYSTEM32\DRIVERS`, so that a controller found after the installer ran
+  asks for no disk; an Update Driver over an earlier xhci98 therefore
+  keeps the earlier file. The installer replaces it. A controller with no
+  driver yet installs through Update Driver as before.
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.
@@ -4483,3 +4492,9 @@ folder and nothing is installed, and a second box lets Windows use the
 copied drivers at a device's first plug; for a set the download does not
 carry, the page names the download and the address that have it. The
 uninstall removes what it placed.
+## Trademarks
+
+Xbox is a trademark of Microsoft Corporation. It names the controllers the
+free driver set's `xpad98` game pad driver is for; neither this project
+nor that driver is Microsoft's, and no Microsoft name or logo is part of
+any product name here.

@@ -4788,6 +4788,196 @@ with NUSB), 74216 (ME), 81112 (2000), 83296 (7), 78672 (XP x64); the
 Insert Disk reading's 6036, 72536, 65796, 65632, 52680, 67296, 74712,
 68900.
 
+### Branch p43-42t: the other drivers' per-package staging (2026-10-23, 14:40 to 16:30)
+
+Record 26 draft 37 section 6.7.11 and draft 38 (section 5.0), on branch
+`p43-42t` (`p43-42s` with `p43-48b` merged). The vehicle: `p43-48b`'s
+non-free download tree (`out\dry-e\upload\upload-3.1.0.0-nonfree`, the
+pinned `usb-wdm-nonfree` `v1.0.0`, its `SHA256.TXT` the installer's
+`E3EA38F9...`) re-laid under `USBDRV\` (`USBDRV\NONFREE`,
+`USBDRV\NUSB33`), with the installer's programs of this branch, built
+by `xhciinst\build.cmd`. No free set is carried by any download yet, so
+every leg reads the non-free set; the free set's certificate is not read
+(no free set carries one).
+
+#### 98 SE, pristine, no controller present (draft 38 and the page)
+
+- Install with the USB drivers, Thunderbolt ticked and the non-free set
+  copied with `nonfree:ethernet/ax88772` staged: the log "Copied
+  xhci98.sys / xhciuas.sys / xhcicm.sys to
+  C:\WINDOWS\SYSTEM32\DRIVERS\...", each recorded ("placed9x:
+  recorded"); "nonfree:ethernet/ax88772 staged", one folder on
+  `DevicePath`.
+- **The controller's wizard after a cold start with `qemu-xhci` added:
+  FAIL.** It finds `C:\XHCI98\XHCI98.INF`, then asks "Insert Disk
+  'xhci98 xHCI Host Controller Disk'", copies Windows' `usbd.sys`, then
+  "The file 'xhci98.sys' ... cannot be found", Copy files from
+  `C:\WIN98`; typing `C:\XHCI98` finishes it. So placing `xhci98.sys`
+  does not spare the controller's prompt as placing `xhciuas.sys` spares
+  the UAS disk's. The likely reason (read in the INF, not traced):
+  `xhci98.inf`'s `Xhci.CopyFiles` names `xhci98.sys,,xhci98.tmp` (a
+  temporary-name copy, always made), where `xhciuas.inf`'s names the file
+  alone. Not changed: an owner question. The Thunderbolt model's leg
+  (the `usb4-emu` emulator) was not run.
+- The page at 640x480: the non-free row, its line, the package list
+  under its headings, the details of the focused package
+  ("nonfree:ethernet/ax88772. Stages for this Windows: Ax88772.inf.
+  Windows may ask for the folder of the files the first time ... Another
+  maker's driver, not tested by this project."). Seen and fixed after
+  the leg: the row's sentence cut at its third line, and the arrow keys
+  stopping at the first box (`9b70cd1c`).
+
+#### XP SP3 32-bit (p43-12's image)
+
+- Two packages ticked by keyboard, `nonfree:hid/x360c` and
+  `nonfree:hid/x360wc`; Install: the set's 457 files in
+  `C:\XHCI98\USBDRV\NONFREE`, `SetupCopyOEMInf` for exactly
+  `hid\x360c\wxp\x360c.inf` and `hid\x360wc\wxp\x360wc.inf` (Windows'
+  unsigned-driver question answered Continue Anyway), "nonfree:hid/x360c
+  staged.", "nonfree:hid/x360wc staged."
+- A second run: the package's details say "Staged by an earlier run."
+  (the record read and the stored INF verified).
+- The uninstall: "oem2.inf was removed from the driver store.", "oem3.inf
+  was removed from the driver store.", "Non-free driver pack
+  (usb-wdm-nonfree)'s copies in C:\XHCI98\USBDRV\NONFREE were removed."
+- Seen and fixed after the leg (`3da5f9fb`): the arrow keys stopped at
+  a heading between two boxes.
+
+#### 7 SP1 32-bit at 120 DPI on 800x600
+
+- The Other USB drivers page whole inside the work area; Tab into the
+  list and Down three times crosses the "Network" heading, the list
+  scrolling the focused box into view ("USB Ethernet (rtl815x):
+  adapters with a Realtek RTL8152 or RTL8153 chip"), Space ticks it, the
+  details follow. Not installed.
+
+#### Owed on p43-42t
+
+The controller's prompt (above); the Thunderbolt model's leg; the free
+set's legs and its certificate (no free set yet); 98 SE's own
+`DevicePath` limit; the cut's checks of section 6.7.11 (listed there).
+Guests: 84024, 87632 (98 SE), 75956, 66336 (XP), 82872 (7), all closed.
+
+### Branch p43-42t, batch 10: the controller's prompt and the certificate (2026-10-23, 20:30 to 22:00)
+
+The owner's decisions of 2026-10-23: the controller's wizard on 98 SE
+asks for no disk after a placement, fixed before the cut; the free
+set's certificate packaged (record 26 draft 39). Tools of the branch
+(`XHCIWIZ.EXE`, `XHCIINST.EXE`, `XHCIDI.EXE` built from the work tree)
+on the p43-48b leg tree, its `xhci98.inf` the branch's, its
+`xhci98.sys` the `3.1.0.0`-numbered build of that tree. Headless QEMU,
+overlays only.
+
+#### 98 SE, pristine, no controller present, then the controller added: PASS (after one variant)
+
+- The install with no controller present: "Copied xhci98.sys" and
+  `xhciuas.sys` to `SYSTEM32\DRIVERS`, placed9x recorded.
+- Cold start with `qemu-xhci` added, the INF's wizard row the plain
+  `xhci98.sys`: the wizard named `C:\XHCI98\XHCI98.INF`, then "Insert
+  Disk 'xhci98 xHCI Host Controller Disk'", then "The file 'xhci98.sys'
+  ... cannot be found", Details: source `C:\WIN98\xhci98.sys`,
+  destination `...\xhci98.sys=xhci98.sys`, error 2. **FAIL**: a plain
+  row asks as the temporary-name row did. Cancelled.
+- The INF in `C:\XHCI98` replaced (from a controller-less start) by one
+  whose wizard row is `xhci98.sys,,,16`; cold start with the
+  controller: the wizard named the same INF and finished, "Windows has
+  finished installing the software", **no disk asked for**; the root
+  hub installed with no wizard. Driver key: `InfSection = Xhci.Dev`.
+  That row is the branch's INF.
+
+#### 98 SE over an installed 3.1.0.0, the controller present (`w98-hcd310`): PASS
+
+- The windowed run: "Nothing to do: this release runs it" (the leg
+  tree's `xhci98.sys` carries `3.1.0.0`'s number); its placement
+  replaced the loaded `xhci98.sys` with the tree's (309,184 bytes).
+- `INSTALL /console /force /yes`: "current (this release) - /force:
+  reinstall"; the helper's job carried `SECTION Xhci.Upd`, its result
+  `DRIVER xhci98.inf Xhci.Dev ...`, `CALL DiCreateDriverNode Xhci.Upd 0`,
+  `DRIVER xhci98.inf Xhci.Upd ...`, `RESULT installed`; the root hub's
+  job had no `SECTION` line and installed `RootHub.Dev`. Before the
+  restart `XHCI98.SYS` and `XHCI98.TMP` (309,184 each) and
+  `WININIT.INI`'s `[rename]` `...\xhci98.sys=...\xhci98.tmp`: the
+  temporary-name path. After it `XHCI98.SYS` alone, `WININIT.BAK`
+  written; the next run "current (this release)", no changes. Driver
+  key: `InfSection = Xhci.Upd`, and `InfPath`, `ProviderName`,
+  `DriverDesc`, `MatchingDeviceId` and `DriverDate` as `Xhci.Dev`'s
+  install writes them.
+- Again after the review's fix (the created node put back on the
+  compatible list before the device info is destroyed): the same
+  `/force`, `CALL DiCreateDriverNode Xhci.Upd 0`, `RESULT installed`,
+  the helper's exit code 0, the controller and root hub "started".
+
+#### ME over an installed 3.1.0.0 (`me-310u4`): PASS
+
+- `INSTALL /console /force /yes`: the probe "probed" (ME's `SETUPX.DLL`
+  binds `DiCreateDriverNode`, ordinal 309), the controller's job with
+  `SECTION Xhci.Upd` installed (`CALL DiCreateDriverNode Xhci.Upd 0`),
+  the controller and root hub "started"; `InfSection = Xhci.Upd`.
+- The placement ran after the helper in that run and took the engine's
+  `XHCI98.TMP` (`own_put` writes the same name): before the restart
+  `XHCI98.SYS` alone, `WININIT.INI` naming the gone `.tmp`. After the
+  restart `xhci98.sys` (309,184) in place, `WININIT.INI` processed
+  (record 26 section 14).
+- The next run's exit code 4 is the base image's registry-only "PCI
+  Universal Serial Bus" at another slot, as before this change.
+
+#### The certificate
+
+The owner's `usb-wdm-free-test.cer` (its public half only) read on the
+host: thumbprint `814CF778B45159EC2659C39C16C7E75EB3C37145`, subject
+"CN=usb-wdm-free project test signing (not trusted)", sha1RSA 2048,
+2000-01-01 to 2039-12-31, DER, no private key, 896 bytes. The pin names
+it; the packager self-tests use a throwaway certificate made in memory.
+No free set carries one yet: its install-side legs are owed.
+
+#### Guests
+
+47984, 91396, 73548, 99276 (98 SE `r1`), 102004, 96004, 61796 (98 SE
+`u10`; 16324 after the fix), 107264, 74976 (ME `m10`), all closed.
+
+### Branch p43-42t, batch 10 continued: the copy flags and the placement's name (2026-10-24, 02:25 to 03:10)
+
+The owner's points of 2026-10-23: try `COPYFLG` 64 (and 96) on the
+wizard's row; give the placement its own temporary name. A scratch
+`xhci98.sys` with its version resource set to 3.2.0.0 (the leg tree's
+bytes otherwise, the PE checksum redone; not committed) for the Update
+Driver legs; the installer refuses it in its package ("a driver is not
+this release's"), so the installs use the tree's 3.1.0.0-numbered file.
+
+| Leg | Flag | Result |
+|---|---|---|
+| (a) 98 SE fresh, no controller, then added | 64 | **FAIL**: Insert Disk, "The file 'xhci98.sys' ... cannot be found", `C:\WIN98` |
+| (a) the same | 96 | **FAIL**: the same prompt |
+| (a) the same (draft 39's leg) | 16 | PASS: no prompt |
+| (b) 98 SE over 3.1.0.0, Update Driver, list, Have Disk | 16 | no prompt, "finished installing"; the file stays 3.1.0.0's (300,171 bytes, File version 3.1.0.0), no `WININIT.INI` |
+| (b) the same, again on that system | 64 | Update Driver Warning (Yes), Insert Disk, `C:\WIN98` offered; the folder typed: the file replaced at once by the 3.2.0.0-stamped one (309,184), no `.tmp`, no `WININIT.INI`; restart asked |
+
+No flag passes (a) and (b): 16 stays, and (c) was not run for another
+flag. 1 and 2 only add to a prompt.
+
+#### ME over 3.1.0.0, the placement's own temporary name: PASS
+
+`INSTALL /console /force /yes` with the branch's tools: the helper
+installed `Xhci.Upd`, then "Copied xhci98.sys" through `XHCI98.IN$`.
+Before the restart `XHCI98.TMP` and `xhci98.sys` (309,184 each) and
+`WININIT.INI` `[rename]` naming the `.tmp`; after it `XHCI98.SYS` alone,
+no `WININIT.INI`.
+
+Guests: 31556, 81868, 107388, 93944 (stuck at a text screen, killed),
+95316, 88040, 73676, 109856 (98 SE `r2`), 97084 (98 SE `u11`), 92500,
+74412 (ME `m11`), all closed.
+
+#### 98 SE: an uninstall with the update's rename pending (after the review): PASS
+
+On `u10`, `INSTALL /console /force /yes` (the helper's `Xhci.Upd`,
+`WININIT.INI` `[rename]` naming `xhci98.tmp`), then without a restart
+`INSTALL /console /uninstall /yes`: "Windows replaces xhci98.sys at the
+next start (WININIT.INI): restart Windows first.", "STOPPED: a driver
+file of this package is replaced at the next start." (since worded
+"may be replaced", the review making an unreadable section stop it
+too), exit code 4, nothing removed. Guest 105900, closed.
+
+
 ## 43.5 - the storage drivers on 98 SE in QEMU, and 43.17's VM legs
 
 Roadmap-usb4 tasks 43.5 and 43.17, read on branch `p43-5` (off

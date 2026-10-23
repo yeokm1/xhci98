@@ -292,6 +292,31 @@ int inst_eng_other_state(int set, int *state, int *forThis, int *include,
 void inst_eng_other_texts(int set, const char *dir, char *sentence,
                           size_t sCap, char *line, size_t lCap);
 void inst_eng_other_choose(int set, int include, int stage);
+/* Record 26 section 6.7.11: the i-th package of a set (0 past the last),
+ * its box ticked (0 when it cannot be: not eligible, barred, or the set
+ * not copied), and the set's earlier staging in words ("" for none). */
+typedef struct _INST_OTHPKG_VIEW {
+    char Id[INST_PKG_ID_CHARS];
+    char Desc[INST_PKG_DESC_MAX + 1];
+    char Why[200];
+    int Heading;
+    int Eligible;
+    int Infs;
+    int Tick;
+    int Blocked;
+    int Earlier;
+} INST_OTHPKG_VIEW;
+int inst_eng_other_pkg(int set, int i, INST_OTHPKG_VIEW *v);
+int inst_eng_other_pkg_tick(int set, int i, int tick);
+const char *inst_eng_other_earlier(int set);
+/* The package's scope on this system in words, for its details. */
+void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
+                              size_t cap);
+/* The free set's certificate (section 6.7.11): ticked, and *offered the
+ * box shown; and its choice. */
+int inst_eng_other_trust(int *offered);
+int inst_eng_other_trust_possible(void);
+void inst_eng_other_trust_choose(int on);
 void inst_eng_other_warnings(char *text, size_t cap);
 void inst_eng_other_summary(const char *dir, char *text, size_t cap);
 void inst_eng_other_finish(char *text, size_t cap);

@@ -1,6 +1,10 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 12, 2026-10-22 (roadmap-usb4 task 43.5's finding: a
+Status: draft 13, 2026-10-23 (the owner's decision of that day, record
+26 section 5.0's draft 39: the job file's optional `SECTION` line, with
+which the helper installs `xhci98.inf`'s update section, one no model
+names, through a driver node `DiCreateDriverNode` makes, sections 4.1 and
+5.2; one import more, section 7); draft 12, 2026-10-22 (roadmap-usb4 task 43.5's finding: a
 storage unit is taken only with no driver, the "Disk drive" rebind
 retired, and the Bulk-Only step admitted only with `USBNTMAP.INF`
 findable beside `USBSTOR.INF`, record 26 section 6.5.5; steps 3a and 4a);
@@ -143,7 +147,8 @@ reference, which documented the same interface in prose, is not at hand
    the helper calls: `DiCreateDeviceInfo`, `DiGetClassDevs`,
    `DiGetClassDevsEx`, `DiGetINFClass`, `DiBuildCompatDrvList`,
    `DiSelectBestCompatDrv` (ordinal 524), `DiInstallDevice`,
-   `DiRemoveDevice`, `DiCallClassInstaller`, `DiDestroyDeviceInfoList`,
+   `DiRemoveDevice`, `DiCallClassInstaller`, `DiCreateDriverNode`
+   (ordinal 309, from draft 13), `DiDestroyDeviceInfoList`,
    `DiDestroyDriverNodeList`, `DiOpenDevRegKey`, the `SUReg*` registry
    routines, `CtlSetLddPath` and `CtlGetLddPath` (most recorded in upper
    case by the 16-bit librarian, `DiSelectBestCompatDrv` and
@@ -336,6 +341,7 @@ RESULT <result file>
 HWND <hwnd>
 DEVICE <device id>          install and remove only
 INF <inf path>              install only
+SECTION <install section>   install only, and optional (draft 13)
 FLAGS <flag> [<flag>]       install only, and optional
 END
 ```
@@ -414,6 +420,16 @@ The operands:
   install directory holds when record 26 section 6.5's row is ticked
   (`C:\XHCI98\USBSTOR.INF`, `C:\XHCI98\USBNTMAP.INF`), unmodified, in
   the same form: the helper treats every INF alike.
+- `SECTION <install section>` (draft 13; record 26 section 5.0's draft
+  39): the install section to install instead of the one the chosen
+  node's model names, from the same INF; 1 to 32 characters, each a
+  letter, a digit, `.` or `_`. The installer writes it for the controller
+  of `xhci98.inf` alone (`INST_XHCI_UPD_SECTION`, `Xhci.Upd`, the
+  Windows 98 SE and ME install with the temporary-name copy row, which no
+  model names, so that Windows' own wizard takes `Xhci.Dev`, whose row
+  keeps a file already there); the root hub, the hubs, the composite
+  parents and every other INF's devices get no `SECTION` line. Section
+  5.2 says what the helper does with it.
 - `FLAGS`: one or both of `force` (reinstall a current driver: record
   23's `/force` and the Have Disk cases of its section 6.4) and `quiet`
   (section 5.2), lower case, each at most once; the line is left out for
@@ -655,6 +671,25 @@ record 23 section 6.4's steps.
   error, and whether `DiInstallDevice` returns it for a same-version
   install without the wizard's "better driver" test is a reading of the
   legs, with the Have Disk steps the fallback).
+- **The job's `SECTION`** (draft 13). With a `SECTION` line whose name is
+  not the chosen node's `lpszSectionName` (compared without case), the
+  helper makes a node for it with `DiCreateDriverNode` (the header's
+  declaration: rank, INF type, INF date, the device and driver
+  descriptions, the provider and manufacturer names, the INF file and
+  the section, and the private data), every field the chosen node's but
+  the section, the provider and manufacturer read from the node's atoms;
+  sets the new node's `Flags` and `DriverDate` to the chosen node's;
+  makes it `lpSelectedDriver`; writes a `CALL DiCreateDriverNode
+  <section> <err>` line and a second `DRIVER` line from the new node, and
+  checks its INF is the job's again. After the install the chosen node
+  is selected again and the new one put at the head of
+  `lpCompatDrvList`, so `DiDestroyDeviceInfoList` frees it with the
+  list's own nodes. A failure of the call is `failed` with its error; no node with no
+  error is `failed XHCIDI_NO_SECTION_NODE 0`. Read on 98 SE (2026-10-23):
+  the controller's update over 3.1.0.0 installed `Xhci.Upd`, and its
+  driver key reads `InfSection = Xhci.Upd`, `InfPath`, `ProviderName`,
+  `DriverDesc`, `MatchingDeviceId` and `DriverDate` as an install of
+  `Xhci.Dev` writes them.
 
 ### 5.3 Installing
 
@@ -816,7 +851,9 @@ exports the same ordinals with the same behaviour is a hypothesis, not a
 reading and not anything the 98 SE DDK says (it is the only DDK at hand
 and says nothing about ME; ME's own is not here): the `probe` job's
 clean run on ME is the first check, and the ME leg reads every row of
-section 12 again before the record claims it. The differences record 23 recorded are the wizard's
+section 12 again before the record claims it. `DiCreateDriverNode` (ordinal 309, draft 13) is one more
+such ordinal: the `probe` job's clean run on ME proves ME's `SETUPX.DLL`
+exports it, and the ME leg of the update section reads its install. The differences record 23 recorded are the wizard's
 (the "Select Other Driver" list naming a driver twice, `INF\OTHER`),
 which the helper does not open. ME's digital-signature prompt for an
 unsigned driver, where ME shows one, is Windows' own dialog owned by the

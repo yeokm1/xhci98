@@ -659,6 +659,10 @@ const char *inst_fast_list_text(int want, int have, INST_U32 now);
 
 #define INST_MAX_SET        16
 
+/* Record 26 section 6.7.11: a package id, and the packages of a set. */
+#define INST_PKG_ID_CHARS       64  /* "<class>/<package>"                  */
+#define INST_PKG_MAX            48  /* packages of one set                   */
+
 typedef struct _INST_OPTS {
     int List;
     int Yes;
@@ -682,9 +686,12 @@ typedef struct _INST_OPTS {
     int NoStorage;          /* /nostorage: left out, on any system      */
     int Free;               /* /free: the free USB class drivers copied
                                (record 26 section 6.7.4)                */
-    int FreeStage;          /* /freestage: and staged (implies /free)   */
     int NonFree;            /* /nonfree: the non-free pack copied       */
-    int NonFreeStage;       /* /nonfreestage: and staged                */
+    /* Record 26 section 6.7.11: /wdmfree:stage= and /wdmnonfree:stage=,
+     * the packages of a set to stage (each implies its set's copy). */
+    int StageCount[2];
+    int FreeTrust;          /* /wdmfree:trust (section 6.7.11)          */
+    char StageIds[2][INST_PKG_MAX * INST_PKG_ID_CHARS];
     int Faster;             /* /faster: XHCITR's "can run faster" notice
                                on for this computer (record 23 section
                                9.5 item 7)                              */
@@ -1316,6 +1323,25 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet);
 
+/* The same with a SECTION line after INF, for an install only: the
+ * install section the helper installs instead of the one the model names
+ * (record 27 section 4.1; record 26 section 6.7.12). NULL or "" writes
+ * none, as inst_di_jobfile; otherwise 1 to 32 characters, each a letter,
+ * a digit, '.' or '_'. */
+int inst_di_jobfile_sec(char *out, size_t cap, int job, const char *result,
+                        unsigned long hwnd, const char *devId,
+                        const char *inf, const char *section, int force,
+                        int quiet);
+
+/* xhci98.inf's Windows 98 SE and ME install section with the temporary
+ * name (record 26 section 6.7.12): no model names it, so Windows' own
+ * wizard takes [Xhci.Dev], whose copy row is plain and asks for no disk
+ * when the installer placed xhci98.sys, and the helper installs this one
+ * by name for a controller that is there, so an update over a loaded
+ * xhci98.sys is renamed into place at the restart. The INF gate holds the
+ * INF's section to this name (W98-PREPSECT). */
+#define INST_XHCI_UPD_SECTION "Xhci.Upd"
+
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another
  * version or job, an unknown word). */
@@ -1920,11 +1946,20 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * folder must hold. "" for a release with no such set. */
 #define INST_WDMFREE_SUMS       ""
 #define INST_NONFREE_SUMS     "E3EA38F94C0C30E1804FE1CA6D89F5E0EB671EE4DBFA31A71FBD151AA12845C1"
-#define INST_WDMFREE_DIR        "WDMFREE"
-#define INST_NONFREE_DIR        "NONFREE"
-#define INST_SET_FREE           0   /* usb-wdm-free, WDMFREE\                */
-#define INST_SET_NONFREE        1   /* usb-wdm-nonfree's non-free/, NONFREE\ */
+/* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
+ * in the download and in the install directory, every level 8.3. */
+#define INST_USBDRV_DIR         "USBDRV"
+#define INST_WDMFREE_DIR        "USBDRV\\FREE"
+#define INST_NONFREE_DIR        "USBDRV\\NONFREE"
+#define INST_SET_FREE           0   /* usb-wdm-free, USBDRV\FREE\          */
+#define INST_SET_NONFREE        1   /* usb-wdm-nonfree's non-free/, USBDRV\NONFREE\ */
 #define INST_SET_COUNT          2
+/* The free set's certificate's public half (record 26 section 6.7.11). */
+#define INST_WDMFREE_CER        "usb-wdm-free-test.cer"
+/* The owner's sentence for the free set (2026-10-23), verbatim. */
+#define INST_FREE_NOTICE "These drivers are experimental. They may not work " \
+    "with every device and can make Windows unstable. Report problems at " \
+    "https://github.com/yeokm1/usb-wdm-free."
 /* A set's state in the download (section 6.7.3). */
 #define INST_OTHER_ABSENT       0   /* no folder                             */
 #define INST_OTHER_CARRIED      1   /* the folder holds what the record names */
@@ -1974,6 +2009,71 @@ int inst_sums_parse(const char *line, char hex65[65], char *rel, size_t cap);
 /* One line of READ.TXT, "<class>/<package> | <systems>": as above. */
 int inst_read_parse(const char *line, char *pkg, size_t cap, INST_U32 *mask);
 
+/* ---- Driver packages of the other sets (record 26 section 6.7.11, draft
+ * 37): staging one box per package ------------------------------------ */
+
+#define INST_PKG_CLASS          0   /* a USB class driver: no brand words   */
+#define INST_PKG_DEVICE         1   /* a device driver: its chip family     */
+#define INST_PKG_DESC_MAX       80
+#define INST_SYS_ALL            0x1FFFUL    /* every STAGE.TXT token        */
+
+typedef struct _INST_OTHER_PKG {
+    int Set;                /* INST_SET_*                                 */
+    const char *Id;         /* "<class>/<package>", as STAGE.TXT's paths  */
+    int Kind;               /* INST_PKG_*                                 */
+    const char *Heading;    /* Audio, Video, HID, Network, Storage, ...   */
+    const char *Desc;
+    int Withdrawn;          /* a package no release carries any more      */
+} INST_OTHER_PKG;
+extern const INST_OTHER_PKG instOtherPkgs[];
+extern const int instOtherPkgCount;
+
+/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems. */
+typedef struct _INST_OTHER_REL {
+    int SetA;
+    const char *A;
+    int SetB;
+    const char *B;
+    INST_U32 Systems;
+    int Excludes;
+} INST_OTHER_REL;
+extern const INST_OTHER_REL instOtherRels[];
+extern const int instOtherRelCount;
+
+/* The headings, in the page's order; and the index of a heading (the last,
+ * "Other", for one the list does not hold). */
+extern const char *const instOtherHeadings[];
+extern const int instOtherHeadingCount;
+int inst_other_heading_index(const char *heading);
+
+/* The package of a path under a set's folder: its first two parts. */
+void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
+/* The table's row of a package, or NULL. */
+const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
+/* 1 when the table's relations exclude the pair on system token tok. */
+int inst_other_excludes(int setA, const char *a, int setB, const char *b,
+                        int tok);
+/* 1 when a description keeps the rules: printable ASCII, no '|', at most
+ * INST_PKG_DESC_MAX characters, and for a CLASS row no brand word. */
+int inst_other_desc_ok(int kind, const char *desc);
+/* The brand word a description holds (whole word, any case), or NULL. */
+const char *inst_other_brand_word(const char *desc);
+/* A /wdmfree:stage= list, "<class>/<package>[,...]": the count of ids put
+ * into ids (each INST_PKG_ID_CHARS), -1 when an id is not of that form or
+ * there are more than cap. */
+int inst_other_id_list(const char *list, char *ids, int cap);
+/* A metadata line of STAGE.TXT (PACKAGE, EXCLUDES, COEXISTS): 1 the
+ * line is one (kind 'P', 'E' or 'C', the fields copied), 0 not a metadata
+ * line, -1 a metadata line it cannot read, or a NEEDS line (unsupported). */
+typedef struct _INST_STAGE_META {
+    char Kind;
+    char A[INST_PKG_ID_CHARS + 16];   /* PACKAGE: the id; else "set:id"  */
+    char B[INST_PKG_ID_CHARS + 16];   /* PACKAGE: CLASS or DEVICE        */
+    char Desc[INST_PKG_DESC_MAX + 1];  /* PACKAGE's words; else the why */
+    INST_U32 Systems;
+} INST_STAGE_META;
+int inst_stage_meta(const char *line, INST_STAGE_META *out);
+
 /* The record file (section 6.7.5): its header line, and one later line
  * read: 1 (Kind 'F' with Token, Hash and Path; 'T', 'D' or 'A' with Token
  * and Path), -1 a line it cannot read. */
@@ -2002,6 +2102,7 @@ void inst_other_line(char *out, size_t cap, int set, int state,
 #define INST_OW_FREE_UNREAD     0x01UL
 #define INST_OW_NONFREE         0x02UL
 #define INST_OW_X64SIG          0x04UL
+#define INST_OW_X64STORE        0x08UL  /* 64-bit 8 to 10 (section 6.7.11) */
 INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
                              int freeStage, int nonfreeTicked,
                              int nonfreeStage, int x64nt6);
@@ -2023,7 +2124,7 @@ void inst_other_warn_text(INST_U32 set, const char *freeUnread,
 #define INST_STOR_DIR_DRIVERS   0   /* %windir%\SYSTEM32\DRIVERS (dirid 10) */
 #define INST_STOR_DIR_IOS       1   /* the system directory's IOSUBSYS (12) */
 #define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
-#define INST_STOR_PACK_DIR      "NUSB33\\W98SE"
+#define INST_STOR_PACK_DIR      "USBDRV\\NUSB33\\W98SE"
 #define INST_STOR_KEY           "Software\\xhci98\\Storage"
 /* S98VSD.VXD's own record (design record 30 section 7.4): File and
  * Pending, apart from Stor98's. */

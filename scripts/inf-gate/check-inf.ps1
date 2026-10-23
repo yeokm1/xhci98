@@ -309,6 +309,11 @@ $catalogRequired = ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge 
 #                          model with it is a COMPOSITE install, which copies
 #                          nothing either (HCD-HUBCOPY) and registers no
 #                          property page (HCD-COMPPAGE).
+#   UpdSection             the Windows 98 SE and ME install section with the
+#                          temporary name, which no model names and the
+#                          installer's helper installs by name for a
+#                          controller that is there (W98-PREPSECT, since
+#                          3.2.0.0; design record 26 section 6.7.12).
 #   IdHeader / IdMacros    the pure header beside the INF that spells the four
 #                          ids above once for the C (task 38.8; design record
 #                          13 section 10.13.1), and the #define each id is
@@ -321,6 +326,7 @@ $catalogRequired = ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge 
 #
 $prod = @{ VerHeader = "xhci_version.h"; VerPrefix = "XHCI"; RcName = "xhci98.rc";
            Binary = "xhci98.sys"; RootHubId = "USB\XHCI98_ROOT_HUB";
+           UpdSection = "Xhci.Upd";
            HubIds = @("USB\XHCI98_HUB", "USB\XHCI98_HUB30");
            CompositeId = "USB\XHCI98_COMPOSITE";
            IdHeader = "xhci_hub.h";
@@ -434,6 +440,17 @@ function Get-Directive {
         }
     }
     return @($out)
+}
+
+function Convert-InfFlags {
+    # A CopyFiles row's flags field as a number: "" is 0, decimal or 0x hex;
+    # $null for anything else.
+    param([string]$Text)
+    $s = $Text.Trim()
+    if ($s -eq "") { return 0 }
+    if ($s -match '^0[xX]([0-9A-Fa-f]{1,8})$') { return [Convert]::ToInt64($Matches[1], 16) }
+    if ($s -match '^[0-9]{1,10}$') { return [int64]$s }
+    return $null
 }
 
 function Get-DirectiveRaw {
@@ -1278,19 +1295,19 @@ foreach ($m in $models) {
                 }
 
                 #
-                # **The temporary name on the driver's own copy row**, which the
-                # audit of 2026-09-07 found: a documented Windows 98 trap with no rule
-                # behind it. Removing the third field passed the whole gate, and
-                # only the tracked footprint diff noticed - a diff whose likely
-                # answer is to regenerate the footprint.
-                #
-                # Windows 98's 16-bit engine copies a file that is already loaded
-                # by writing it under a temporary name and renaming at the next
-                # boot. Without the third field the replace over the running
-                # binary fails outright, which is the update-over-install path
-                # every user with an earlier release takes. The cost of having it
-                # is cosmetic and is published: the .tmp is left in
-                # System32\Drivers and listed in Driver File Details.
+                # **The wizard's copy row keeps a file already there**
+                # (W98-PREPROW, since 3.2.0.0; design record 26 section
+                # 6.7.12). The section a model names is the one Windows' own
+                # wizard runs, and on 98 SE it looks for the file at
+                # Windows' setup source (the SourcePath of
+                # CurrentVersion\Setup, the CD's folder), not beside the INF.
+                # So the row is COPYFLG_NO_OVERWRITE (16) with no temporary
+                # name: a controller found after the installer placed the
+                # file installs with no disk asked for. Both other forms
+                # asked for one with the file in place (the 98 SE legs of
+                # 2026-10-23: the temporary-name row, then a plain row). The
+                # temporary name lives in the update section instead, which
+                # W98-PREPSECT below holds.
                 #
                 foreach ($cf in $w98Copy) {
                     if ($cf.StartsWith('@')) { continue }
@@ -1300,8 +1317,11 @@ foreach ($m in $models) {
                         if ($dst -eq "" -or -not ($ntmpFiles -contains $dst)) { continue }
                         $temp = ""
                         if ($fields.Count -ge 3) { $temp = $fields[2] }
-                        if ($temp -eq "") {
-                            Add-Failure "W98-TEMPNAME" ("[{0}] line {1} copies '{2}' with no temporary-name field. On Windows 98 that is the file NTMPDriver names, so an update over an install where it is already loaded cannot replace it and fails; the third field ('{2},,xhci98.tmp') is what makes the replace work. Its cost is the cosmetic .tmp left behind, which the release notes publish." -f $cf, $e.Line, $dst)
+                        $flagText = ""
+                        if ($fields.Count -ge 4) { $flagText = $fields[3] }
+                        $flagVal = Convert-InfFlags $flagText
+                        if ($temp -ne "" -or $null -eq $flagVal -or ($flagVal -band 0x10) -eq 0) {
+                            Add-Failure "W98-PREPROW" ("[{0}] line {1} copies '{2}' as '{3}'. [{4}] is the section Windows 98's own wizard runs, and it looks for the file at Windows' setup source, so a controller found after the installer placed '{2}' asks for a disk unless the row keeps a file already there: '{2},,,16' (COPYFLG_NO_OVERWRITE), no temporary name. The temporary name belongs in [{5}], the update section the installer's helper names." -f $cf, $e.Line, $dst, $e.Text.Trim(), $base, $prod.UpdSection)
                         }
                     }
                 }
@@ -1410,6 +1430,146 @@ foreach ($m in $models) {
             } elseif ($value[0] -notmatch ("^(0x0*{0}|{0})$" -f $req.Expected)) {
                 Add-Failure "PATH-NT" ("[{0}] {1} must be {2} ({3}); found '{4}'." -f $svcInstall, $req.Name, $req.Expected, $req.Meaning, $value[0])
             }
+        }
+    }
+}
+
+
+# ---- W98-PREPSECT / W98-TEMPNAME: the update section (since 3.2.0.0) ------
+#
+# **The temporary name on the driver's own copy row**, which the audit of
+# 2026-09-07 found: a documented Windows 98 trap with no rule behind it.
+# Windows 98's 16-bit engine copies a file that is already loaded by writing
+# it under a temporary name and renaming at the next boot. Without the third
+# field the replace over the running binary fails outright, which is the
+# update-over-install path every user with an earlier release takes. The cost
+# of having it is cosmetic and is published: the .tmp is left in
+# System32\Drivers and listed in Driver File Details.
+#
+# Since 3.2.0.0 the row lives in its own install section, [Xhci.Upd], which
+# no model names (design record 26 section 6.7.12): the wizard's section
+# must be plain (W98-PREPROW above), so a controller found after the
+# installer placed the file asks for no disk, and XHCIINST's helper installs
+# the update section by name for a controller that is there (its job file's
+# SECTION line, design record 27 section 4.1). The two must be one install
+# but for that row, or the helper's update and the wizard's install would
+# write different things: every directive equal, the CopyFiles lists equal
+# but for the one section that copies the NTMPDriver file, and that
+# section's rows equal to the wizard's but for the temporary name, which
+# the update section's row must carry. No model may name the update section
+# (the engines would then offer two drivers for one controller, and the
+# first of equals is the one each takes), and the installer's name for it,
+# INST_XHCI_UPD_SECTION in xhciinst\inst_core.h, must be this table's.
+#
+if ($Arch -ne "amd64") {
+    $prepModels = @($models | Where-Object { $_.Role -eq "controller" -and $_.Decoration -eq "" })
+    $upd = $prod.UpdSection
+    foreach ($m in $models) {
+        if ($m.Section -ieq $upd) {
+            Add-Failure "W98-PREPSECT" ("models line {0} names [{1}], the update section. No model may: the setup engines would offer two drivers for one controller, and the wizard's would no longer be the plain one." -f $m.Line, $upd)
+        }
+    }
+    if (-not (Test-SectionExists $inf $upd)) {
+        Add-Failure "W98-PREPSECT" ("there is no [{0}] section. It is the Windows 98 SE and ME install with the temporary name, which the installer's helper runs for a controller that is there; without it an update over a loaded {1} cannot replace it." -f $upd, $prod.Binary)
+    } else {
+        foreach ($m in $prepModels) {
+            $prep = $m.Section
+            if (-not (Test-SectionExists $inf $prep)) { continue }   # PATH-W98 said so
+            $pe = @(Get-Section $inf $prep | Where-Object { $_.Text -notmatch '^\s*CopyFiles\s*=' } | ForEach-Object { ($_.Text -replace '\s+', '').ToLowerInvariant() })
+            $ue = @(Get-Section $inf $upd | Where-Object { $_.Text -notmatch '^\s*CopyFiles\s*=' } | ForEach-Object { ($_.Text -replace '\s+', '').ToLowerInvariant() })
+            if (($pe -join '|') -ne ($ue -join '|')) {
+                Add-Failure "W98-PREPSECT" ("[{0}] and [{1}] differ in a directive other than CopyFiles ([{0}]: {2}; [{1}]: {3}). They are one install but for the temporary name." -f $prep, $upd, ($pe -join '; '), ($ue -join '; '))
+            }
+            $pc = @(Get-Directive $inf $prep "CopyFiles")
+            $uc = @(Get-Directive $inf $upd "CopyFiles")
+            if ($pc.Count -ne $uc.Count) {
+                Add-Failure "W98-PREPSECT" ("[{0}] copies {1} and [{2}] copies {3}: the lists must pair one to one." -f $prep, ($pc -join ','), $upd, ($uc -join ','))
+                continue
+            }
+            $ntmp9x = @()
+            foreach ($ar in @(Get-Directive $inf $prep "AddReg")) {
+                foreach ($e in (Get-Section $inf $ar)) {
+                    if ($e.Text -match '^\s*HKR\s*,\s*,\s*NTMPDriver\s*,[^,]*,\s*(.+)$') {
+                        $ntmp9x += @($matches[1].Trim().Trim('"') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+                    }
+                }
+            }
+            # The pair that may differ is the one whose wizard section copies
+            # the NTMPDriver file; every other position names the same section.
+            $pairs = 0
+            for ($i = 0; $i -lt $pc.Count; $i++) {
+                $binSec = @(Get-Section $inf $pc[$i] | Where-Object { $ntmp9x -contains (($_.Text -split ',')[0].Trim()) }).Count -gt 0
+                if (-not $binSec) {
+                    if ($pc[$i] -ine $uc[$i]) {
+                        Add-Failure "W98-PREPSECT" ("[{0}] copies [{1}] where [{2}] copies [{3}]. Only the section copying {4} may differ between the two." -f $upd, $uc[$i], $prep, $pc[$i], $prod.Binary)
+                    }
+                    continue
+                }
+                $pairs++
+                if ($pc[$i] -ieq $uc[$i]) {
+                    Add-Failure "W98-PREPSECT" ("[{0}] and [{1}] both copy [{2}], the section copying {3}: the update section needs its own, with the temporary name." -f $prep, $upd, $pc[$i], $prod.Binary)
+                    continue
+                }
+                $pr = @(Get-Section $inf $pc[$i] | ForEach-Object { , @($_.Text -split ',' | ForEach-Object { $_.Trim() }) })
+                $ur = @(Get-Section $inf $uc[$i])
+                if ($pr.Count -ne $ur.Count) {
+                    Add-Failure "W98-PREPSECT" ("[{0}] has {1} row(s) and [{2}] {3}: the update's copy section must be the wizard's rows with the temporary name." -f $pc[$i], $pr.Count, $uc[$i], $ur.Count)
+                    continue
+                }
+                for ($j = 0; $j -lt $ur.Count; $j++) {
+                    $uf = @($ur[$j].Text -split ',' | ForEach-Object { $_.Trim() })
+                    $pf = $pr[$j]
+                    $same = ($uf[0] -ieq $pf[0])
+                    $a = ""; if ($uf.Count -ge 2) { $a = $uf[1] }
+                    $b = ""; if ($pf.Count -ge 2) { $b = $pf[1] }
+                    if ($a -ine $b -or $uf.Count -gt 4) { $same = $false }
+                    if (-not $same) {
+                        Add-Failure "W98-PREPSECT" ("[{0}] line {1} ('{2}') is not [{3}]'s row '{4}' with a temporary name." -f $uc[$i], $ur[$j].Line, $ur[$j].Text.Trim(), $pc[$i], ($pf -join ','))
+                    }
+                }
+            }
+            if ($pairs -ne 1) {
+                Add-Failure "W98-PREPSECT" ("[{0}] has {1} CopyFiles section(s) copying {2}. Exactly one: its row keeps a file already there, and the update section's counterpart carries the temporary name." -f $prep, $pairs, $prod.Binary)
+            }
+            # Every row of the update section's copy sections that copies the
+            # NTMPDriver file, on its own: the temporary name and no flag at
+            # all, so the update replaces the file there whatever its version
+            # (COPYFLG_NO_OVERWRITE 16 would keep it, and
+            # COPYFLG_OVERWRITE_OLDER_ONLY 64 or COPYFLG_REPLACEONLY 1024
+            # make the copy conditional; a /force reinstall needs it plain).
+            $updBin = 0
+            foreach ($cs in $uc) {
+                foreach ($e in @(Get-Section $inf $cs)) {
+                    $uf = @($e.Text -split ',' | ForEach-Object { $_.Trim() })
+                    if (-not ($ntmp9x -contains $uf[0])) { continue }
+                    $updBin++
+                    $temp = ""
+                    if ($uf.Count -ge 3) { $temp = $uf[2] }
+                    $uFlag = ""
+                    if ($uf.Count -ge 4) { $uFlag = $uf[3] }
+                    $uVal = Convert-InfFlags $uFlag
+                    if ($null -eq $uVal -or $uVal -ne 0) {
+                        Add-Failure "W98-PREPSECT" ("[{0}] line {1} copies '{2}' with flags '{3}'. The update section must replace the file there unconditionally: no flag (not COPYFLG_NO_OVERWRITE 16, COPYFLG_OVERWRITE_OLDER_ONLY 64 or COPYFLG_REPLACEONLY 1024)." -f $cs, $e.Line, $uf[0], $uFlag)
+                    }
+                    if ($temp -eq "") {
+                        Add-Failure "W98-TEMPNAME" ("[{0}] line {1} copies '{2}' with no temporary-name field. On Windows 98 that is the file NTMPDriver names, so an update over an install where it is already loaded cannot replace it and fails; the third field ('{2},,xhci98.tmp') is what makes the replace work. Its cost is the cosmetic .tmp left behind, which the release notes publish." -f $cs, $e.Line, $uf[0])
+                    }
+                }
+            }
+            if ($updBin -ne 1) {
+                Add-Failure "W98-PREPSECT" ("[{0}]'s copy sections copy {1} {2} time(s), not once." -f $upd, $prod.Binary, $updBin)
+            }
+        }
+    }
+    $instHdr = Join-Path (Split-Path -Parent (Split-Path -Parent $InfPath)) "xhciinst\inst_core.h"
+    if (-not (Test-Path -LiteralPath $instHdr)) {
+        Write-Host "  (no xhciinst\inst_core.h beside the tree - update section name check skipped)" -ForegroundColor DarkGray
+    } else {
+        $hits = @([regex]::Matches([System.IO.File]::ReadAllText($instHdr), '(?m)^\s*#define\s+INST_XHCI_UPD_SECTION\s+"([^"]*)"\s*$'))
+        if ($hits.Count -ne 1) {
+            Add-Failure "W98-PREPSECT" ("xhciinst\inst_core.h defines INST_XHCI_UPD_SECTION {0} times, not once. It is the name the installer's helper installs for an update over a loaded {1}." -f $hits.Count, $prod.Binary)
+        } elseif ($hits[0].Groups[1].Value -cne $upd) {
+            Add-Failure "W98-PREPSECT" ("xhciinst\inst_core.h names the update section '{0}', but this INF's is [{1}]. The helper would install a section that is not there." -f $hits[0].Groups[1].Value, $upd)
         }
     }
 }

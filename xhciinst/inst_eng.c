@@ -450,6 +450,7 @@ static int s98_pending_resolve(int uninstall);
 static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
 static int own_put(const char *from, const char *to);
+static int own_put_as(const char *from, const char *to, const char *tmpExt);
 
 static int haveCm;
 /* The connection manager alone (record 23 section 4.5, revision 13): the
@@ -8517,8 +8518,8 @@ static int steps_9x(const char *dir)
             "disk asked for.\n");
     }
     if (haveCm && tbInclude) {
-        out("A Thunderbolt controller found later finds its driver in the "
-            "same folder\nby itself.\n");
+        out("A Thunderbolt controller found later opens the New Hardware "
+            "wizard; Next\nuntil Finish installs it, no disk asked for.\n");
     }
     if (stor_advice()) {
         stor_advice_out();
@@ -8670,8 +8671,17 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     if (owner > 65535UL) {
         owner = 0;
     }
-    if (!inst_di_jobfile(jobText, sizeof(jobText), job, helperResult, owner,
-                         id, inf, force, 1) ||
+    /* The controller's install names xhci98.inf's update section, the one
+     * with the temporary name, which no model names (record 26 section
+     * 6.7.12): the wizard's [Xhci.Dev] copies plainly, so that a controller
+     * found after a placement asks for no disk, and over a loaded
+     * xhci98.sys the 9x engine needs the temporary name. The root hub, the hubs and the composite
+     * parents copy nothing and take the model's section. */
+    if (!inst_di_jobfile_sec(jobText, sizeof(jobText), job, helperResult,
+                             owner, id, inf,
+                             (job == INST_DI_INSTALL && d != NULL &&
+                              d->Inf == INST_INF_XHCI && is_controller(d)) ?
+                             INST_XHCI_UPD_SECTION : NULL, force, 1) ||
         !inst_di_cmdline(tail, sizeof(tail), XHCIINST_VERSION,
                          helperJobFile)) {
         logonly("helper: the job cannot be written (%s %s, result %s, job "
@@ -9093,45 +9103,84 @@ static int pass_any(int inf, int controllers)
  * driver, at most four passes; the UAS devices; the host interface. Each
  * pass behind the gate. Every device of the plan that is left goes to the
  * steps. */
-/* Record 26 section 5.0 (draft 35): on 98 SE and ME the UAS driver's
- * file where the New Hardware wizard looks for it, so a UAS disk plugged
- * in later installs from the copy on DevicePath with no Insert Disk prompt
- * (the wizard asks at Windows' own SourcePath for a file not yet at its
- * destination). The 9x uninstall's file list removes it. */
-static void uas_sys_9x(void)
+/* Record 26 section 5.0 (drafts 35 and 38): on 98 SE and ME a driver file
+ * where the New Hardware wizard looks for it, so a device plugged in later
+ * installs from the copy on DevicePath with no Insert Disk prompt (the
+ * wizard asks at Windows' own SourcePath for a file not yet at its
+ * destination): xhciuas.sys with the UAS driver, xhci98.sys with the USB
+ * drivers, xhcicm.sys with the Thunderbolt support. Each placement is
+ * recorded under INST_PLACED9X_KEY; the 9x uninstall's file list removes
+ * the package's driver files whoever put them there. */
+#define INST_PLACED9X_KEY INST_DIR_KEY "\\Placed9x"
+
+static void sys_9x(int inf, const char *file, int include, const char *later)
 {
     char src[INST_PATH_CHARS];
     char dst[INST_PATH_CHARS];
+    char hex[65];
+    HKEY k;
 
-    if (envNow.Nt || opts.List || !usbInclude || !uasInclude) {
+    if (envNow.Nt || opts.List || !include) {
         return;
     }
-    if (groupVerdict[group_of_inf(INST_INF_UAS)] != INST_GROUP_OK) {
-        /* A newer or unreadable xhciuas.sys there is refused as its
-         * group is (record 23 section 5.3): never replaced from here. */
-        logonly("uas: the UAS group is refused; SYSTEM32\\DRIVERS left\n");
+    if (groupVerdict[group_of_inf(inf)] != INST_GROUP_OK) {
+        /* A newer or unreadable file there is refused as its group is
+         * (record 23 section 5.3): never replaced from here. */
+        logonly("placed9x: %s's group is refused; SYSTEM32\\DRIVERS left\n",
+                file);
         return;
     }
-    join(src, sizeof(src), srcDir, "xhciuas.sys");
+    join(src, sizeof(src), srcDir, file);
     if (GetWindowsDirectoryA(dst, sizeof(dst)) == 0) {
-        out("xhciuas.sys could not be put in SYSTEM32\\DRIVERS: no Windows "
-            "directory.\n");
+        out("%s could not be put in SYSTEM32\\DRIVERS: no Windows "
+            "directory.\n", file);
         flagFailed = 1;
         return;
     }
-    join(dst, sizeof(dst), dst, "SYSTEM32\\DRIVERS\\xhciuas.sys");
+    join(dst, sizeof(dst), dst, "SYSTEM32\\DRIVERS");
+    join(dst, sizeof(dst), dst, file);
     if (same_file(src, dst)) {
-        logonly("uas: %s is the package's\n", dst);
+        logonly("placed9x: %s is the package's\n", dst);
         return;
     }
-    if (own_put(src, dst) != 1) {
-        out("xhciuas.sys could not be put in %s: a UAS disk plugged in later "
-            "asks for the\ndriver disk (type %s).\n", dst, srcDir);
+    /* Its own temporary name, .IN$: the setup engine's pending copy of
+     * the same file is <name>.TMP (xhci98.inf's [Xhci.Upd] row, renamed
+     * into place by WININIT.INI at the restart), and writing through it
+     * would take that copy and leave the rename naming a gone file (the
+     * ME leg of 2026-10-23; record 26 section 5.0, draft 39). */
+    if (own_put_as(src, dst, ".IN$") != 1) {
+        out("%s could not be put in %s: %s plugged in later asks for the\n"
+            "driver disk (type %s).\n", file, dst, later, srcDir);
         flagFailed = 1;
         return;
     }
     flagChanged = 1;
-    out("Copied xhciuas.sys to %s.\n", dst);
+    out("Copied %s to %s.\n", file, dst);
+    hex[0] = '\0';
+    if (stor_hash(dst, hex) != 1 ||
+        RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        out("%s's placement could not be recorded: the uninstall still "
+            "removes it.\n", file);
+        return;
+    }
+    if (RegSetValueExA(k, file, 0, REG_SZ, (const BYTE *)hex,
+                       (DWORD)strlen(hex) + 1) != ERROR_SUCCESS) {
+        out("%s's placement could not be recorded: the uninstall still "
+            "removes it.\n", file);
+    } else {
+        logonly("placed9x: recorded %s %s\n", file, hex);
+    }
+    RegCloseKey(k);
+}
+
+static void drivers_9x(void)
+{
+    sys_9x(INST_INF_XHCI, "xhci98.sys", usbInclude, "a controller");
+    sys_9x(INST_INF_UAS, "xhciuas.sys", usbInclude && uasInclude,
+           "a UAS disk");
+    sys_9x(INST_INF_CM, "xhcicm.sys", haveCm && tbInclude,
+           "a Thunderbolt controller");
 }
 
 static void helper_installs(void)
@@ -9557,7 +9606,7 @@ static int run_install_9x(void)
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
     hashed_cleanup();
     helper_installs();
-    uas_sys_9x();
+    drivers_9x();
     s98_file_update_9x();
     vsd_run(vsd_mode(0));
     write_values();
@@ -12548,8 +12597,21 @@ static void files_9x(int list)
         }
         SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
         if (DeleteFileA(path)) {
+            char rec[80];
+            DWORD t;
+            int placed = reg_text(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY,
+                                  instFiles[i], rec, sizeof(rec), &t);
             flagChanged = 1;
-            out("Deleted %s.\n", path);
+            out("Deleted %s%s.\n", path,
+                placed ? " (placed there by this installer)" : "");
+            if (placed) {
+                HKEY pk;
+                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY, 0,
+                                  KEY_SET_VALUE, &pk) == ERROR_SUCCESS) {
+                    RegDeleteValueA(pk, instFiles[i]);
+                    RegCloseKey(pk);
+                }
+            }
         } else {
             out("%s is still in use: restart Windows, then run the uninstall "
                 "again to delete it.\n", path);
@@ -12559,10 +12621,78 @@ static void files_9x(int list)
     }
 }
 
+/* A WININIT.INI [rename] line that puts a file over one of this package's
+ * driver files in SYSTEM32\DRIVERS at the next start (the setup engine's
+ * pending copy, xhci98.inf's [Xhci.Upd] row: xhci98.sys=...\xhci98.tmp):
+ * its file name into what, 1; 0 for none; -1 when the section cannot be
+ * read whole (no memory, or longer than the buffer), which the caller
+ * takes as a pending one. An uninstall before that restart would delete
+ * the file and the restart put it back. */
+static int rename_pending_9x(char *what, size_t cap)
+{
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char drv[INST_PATH_CHARS];
+    char full[INST_PATH_CHARS];
+    char sf[INST_PATH_CHARS];
+    char st[INST_PATH_CHARS];
+    char *sec;
+    char *p;
+    DWORD n;
+    size_t i;
+    int hit = 0;
+
+    what[0] = '\0';
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    join(drv, sizeof(drv), win, "SYSTEM32\\DRIVERS");
+    sec = (char *)calloc(1, 32768);
+    if (sec == NULL) {
+        inst_copy(what, "WININIT.INI's [rename] (no memory to read it)", cap);
+        return -1;
+    }
+    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
+    if (n >= 32768 - 2) {
+        free(sec);
+        inst_copy(what, "WININIT.INI's [rename] (too long to read whole)",
+                  cap);
+        return -1;
+    }
+    for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
+        char *eq = strchr(p, '=');
+        if (eq == NULL || eq == p) {
+            continue;
+        }
+        *eq = '\0';
+        n = GetShortPathNameA(p, st, sizeof(st));
+        if (n == 0 || n >= sizeof(st)) {
+            inst_copy(st, p, sizeof(st));
+        }
+        for (i = 0; i < sizeof(instFiles) / sizeof(instFiles[0]) && !hit;
+             i++) {
+            join(full, sizeof(full), drv, instFiles[i]);
+            n = GetShortPathNameA(full, sf, sizeof(sf));
+            if (n == 0 || n >= sizeof(sf)) {
+                inst_copy(sf, full, sizeof(sf));
+            }
+            if (inst_eq(p, full) || inst_eq(st, sf)) {
+                inst_copy(what, instFiles[i], cap);
+                hit = 1;
+            }
+        }
+        *eq = '=';
+    }
+    free(sec);
+    return hit;
+}
+
 static int run_uninstall_9x(void)
 {
     char dir[INST_PATH_CHARS];
     char win[INST_PATH_CHARS];
+    char pend[80];
     int r;
 
     if (!warn_uninstall()) {
@@ -12571,6 +12701,21 @@ static int run_uninstall_9x(void)
     if (!local_dir(dir, sizeof(dir)) ||
         GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return INST_EXIT_REFUSED;
+    }
+    /* Before anything is removed (record 26 section 5.0, draft 39): a
+     * driver file the next start replaces would come back after it. */
+    r = rename_pending_9x(pend, sizeof(pend));
+    if (r > 0) {
+        out("Windows replaces %s at the next start (WININIT.INI): restart "
+            "Windows first.\n", pend);
+    } else if (r < 0) {
+        out("%s could not be read, so whether Windows replaces a driver "
+            "file of this package at the next start is not known: restart "
+            "Windows first.\n", pend);
+    }
+    if (r != 0 && !opts.List) {
+        return stop_uninstall("a driver file of this package may be "
+                              "replaced at the next start.");
     }
     r = remove_9x_devnodes();
     if (opts.List) {
@@ -12635,6 +12780,26 @@ static int run_uninstall_9x(void)
         return stop_uninstall("S98VSD.VXD could not be removed.");
     }
     files_9x(0);
+    {
+        /* The record goes when its every file has gone (a file still in
+         * use keeps its value for the next uninstall). */
+        HKEY pk;
+        DWORD values = 1;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY, 0, KEY_READ,
+                          &pk) == ERROR_SUCCESS) {
+            if (RegQueryInfoKeyA(pk, NULL, NULL, NULL, NULL, NULL, NULL,
+                                 &values, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                values = 1;
+            }
+            RegCloseKey(pk);
+            if (values == 0 &&
+                RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY) ==
+                ERROR_SUCCESS) {
+                logonly("placed9x: record deleted\n");
+            }
+        }
+    }
     if (!stor_un_rest()) {
         return stop_uninstall("a USB storage file is still in use, or its "
                               "record could not be read.");
@@ -16635,13 +16800,13 @@ static void s98_question(void)
         return;
     }
     if (!haveCm || !tbInclude) {
-        out("Stor98 %s, the bundled NVMe driver: left out, it comes with "
-            "the\nThunderbolt 3 / USB4 support.\n\n", s98VersionText);
+        out("Stor98 %s (hot-pluggable NVMe driver): left out, it comes with the "
+            "Thunderbolt 3 /\nUSB4 support.\n\n", s98VersionText);
         logonly("stor98: left out with the Thunderbolt support\n");
         s98_apply(0);
         return;
     }
-    out("Stor98 %s, the bundled NVMe driver\n", s98VersionText);
+    out("Stor98 %s (hot-pluggable NVMe driver)\n", s98VersionText);
     out("  For NVMe drives behind a Thunderbolt or USB4 tunnel; the "
         "installer selects tunnel drives only. On such a drive it installs "
         "where no driver is, and updates an older Stor98. An internal NVMe "
@@ -16649,7 +16814,7 @@ static void s98_question(void)
         "readme).\n");
     if (asked) {
         inst_yesno_question(text, sizeof(text),
-                            "Install Stor98, the bundled NVMe driver?",
+                            "Install Stor98 (hot-pluggable NVMe driver)?",
                             "install it", "leave it out", def);
         for (k = 0;; k++) {
             if (!ask(INST_Q_S98, k == 0 ? text : def ? "  Type Y or N, or "
@@ -19198,7 +19363,7 @@ static void stor_note(char *out, size_t cap)
 {
     if (storPack == 0) {
         inst_copy(out, "This download does not carry the USB storage drivers "
-                  "(NUSB33\\W98SE).", cap);
+                  "(USBDRV\\NUSB33\\W98SE).", cap);
         stor_note_half(out, cap);
         return;
     }
@@ -21549,11 +21714,17 @@ static void stor_tools_copy(void)
         toolDir[0] == '\0') {
         return;
     }
-    join(dir, sizeof(dir), toolDir, "NUSB33");
+    join(dir, sizeof(dir), toolDir, INST_USBDRV_DIR);
+    join(dir, sizeof(dir), dir, "NUSB33");
     if (opts.List) {
         out("(/list) the USB storage drivers' seven files would be copied to "
             "%s.\n", dir);
         return;
+    }
+    {
+        char up[INST_PATH_CHARS];
+        join(up, sizeof(up), toolDir, INST_USBDRV_DIR);
+        CreateDirectoryA(up, NULL);
     }
     if (!CreateDirectoryA(dir, NULL) && file_state(dir) != -1) {
         out("%s could not be made: the USB storage drivers' files are not "
@@ -21645,9 +21816,15 @@ static int stor_tools_remove(void)
         if (!stor_rec_del("Tools", name)) {
             return 0;
         }
-        /* The folder goes with its last file, whichever folder it is. */
+        /* The folder goes with its last file, whichever folder it is, and
+         * USBDRV with its last folder. */
         if (RemoveDirectoryA(dir)) {
             out("%s removed.\n", dir);
+            s = strrchr(dir, '\\');
+            if (s != NULL) {
+                *s = '\0';
+                RemoveDirectoryA(dir);
+            }
         }
     }
     return !left;
@@ -21930,6 +22107,22 @@ typedef struct _OTHREAD {
     INST_U32 Mask;
 } OTHREAD;
 
+/* A driver package of a set (record 26 section 6.7.11). */
+typedef struct _OTHPKG {
+    char Id[INST_PKG_ID_CHARS];
+    char Desc[INST_PKG_DESC_MAX + 1];
+    int Kind;
+    int Heading;                /* index into instOtherHeadings            */
+    int Eligible;               /* a STAGE line naming this system         */
+    int Infs;                   /* those lines                             */
+    int Tick;                   /* its box ticked                          */
+    int Earlier;                /* staged by an earlier run (its record)   */
+    int Blocked;                /* EXCLUDES bars it, or an unknown staging */
+    char Why[200];
+    int Staged;                 /* the run: INFs or folders staged         */
+    int Failed;
+} OTHPKG;
+
 typedef struct _OTHSET {
     int State;                  /* INST_OTHER_*                            */
     char Src[INST_PATH_CHARS];  /* the download's folder                   */
@@ -21942,7 +22135,15 @@ typedef struct _OTHSET {
     OTHREAD *Read;
     int ReadCount;
     int Include;                /* the row ticked                          */
-    int StageOn;                /* its stage box ticked                    */
+    int StageOn;                /* a package of it ticked (section 6.7.11) */
+    OTHPKG *Pkg;
+    int PkgCount;
+    INST_STAGE_META *Meta;      /* its STAGE.TXT's metadata lines          */
+    int MetaCount;
+    char Earlier[600];          /* the earlier staging's words             */
+    char EarlierIds[INST_PKG_MAX * 4][INST_PKG_ID_CHARS + 16];
+    int EarlierCount;           /* "set:id" of every package recorded      */
+    int EarlierUnknown;         /* a record no package explains            */
     int ForThis;                /* STAGE lines naming this system          */
     char Unread[256];           /* free: packages not read on this system  */
     /* the run's outcome, for the Finish page */
@@ -21954,6 +22155,25 @@ typedef struct _OTHSET {
 } OTHSET;
 
 static OTHSET oth[INST_SET_COUNT];
+static char othSwitchErr[400];  /* a /wdm...:stage= id refused at the read */
+static int other_pkgs_build(OTHSET *o, int set);
+static const char *other_set_tag(int set);
+static int othTrust;            /* the trust box ticked (or /wdmfree:trust) */
+static int other_trust_offered(void);
+static int other_key_str(int set, const char *sub, const char *name,
+                         const char *text);
+static int other_key_del_value(int set, const char *sub, const char *name);
+static int other_sig_kind(void);
+static int other_staged_data(const char *data, int *own, char *hex,
+                             char *name, size_t cap);
+static int other_store_holds(const char *name, const char *hex);
+static int other_pkg_index(const OTHSET *o, const char *id);
+static void other_earlier(int set);
+static int other_ticks(void);
+static void other_block(void);
+static int other_key_text(int set, const char *name, char *buf, DWORD cap);
+static int other_staged_enum(int set, DWORD i, char *name, DWORD nameCap,
+                             char *data, DWORD dataCap);
 static int othRead;             /* other_read ran (an install run)          */
 static int othSys = -1;         /* inst_sys_token for this system           */
 static int othKeepFull;         /* a folder to keep did not fit kept        */
@@ -22046,6 +22266,12 @@ static void other_free(OTHSET *o)
     free(o->Files);
     free(o->Stage);
     free(o->Read);
+    free(o->Pkg);
+    free(o->Meta);
+    o->Pkg = NULL;
+    o->PkgCount = 0;
+    o->Meta = NULL;
+    o->MetaCount = 0;
     o->Sums = NULL;
     o->Files = NULL;
     o->Stage = NULL;
@@ -22130,9 +22356,26 @@ static int other_sums_line(OTHSET *o, int set, const char *line)
 static int other_stage_line(OTHSET *o, int set, const char *line)
 {
     INST_STAGE_LINE s;
-    int r = inst_stage_parse(line, inst_other_prefix(set), &s);
+    INST_STAGE_META m;
+    int r = inst_stage_meta(line, &m);
     INST_STAGE_LINE *grow;
 
+    if (r < 0) {
+        logonly("other: %s\\STAGE.TXT metadata line not read: %s\n",
+                o->Src, line);
+        return 0;
+    }
+    if (r > 0) {
+        INST_STAGE_META *g = (INST_STAGE_META *)realloc(o->Meta,
+            sizeof(*g) * (size_t)(o->MetaCount + 1));
+        if (g == NULL) {
+            return 0;
+        }
+        o->Meta = g;
+        o->Meta[o->MetaCount++] = m;
+        return 1;
+    }
+    r = inst_stage_parse(line, inst_other_prefix(set), &s);
     if (r == 0) {
         return 1;
     }
@@ -22265,9 +22508,12 @@ static void other_read_set(int set)
         }
         free(text);
     }
+    if (!other_pkgs_build(o, set)) {
+        return;
+    }
     o->State = INST_OTHER_CARRIED;
-    logonly("other: %s carried, %d files, %d STAGE.TXT lines\n", o->Src,
-            o->Count, o->StageCount);
+    logonly("other: %s carried, %d files, %d STAGE.TXT lines, %d packages\n",
+            o->Src, o->Count, o->StageCount, o->PkgCount);
 }
 
 /* The STAGE lines for this system, and (free) the packages with a line for
@@ -22288,7 +22534,14 @@ static void other_count(int set)
             continue;
         }
         if (o->Stage[i].Stage) {
+            int k;
             o->ForThis++;
+            other_pkg_of(o->Stage[i].Inf, pkg, sizeof(pkg));
+            k = other_pkg_index(o, pkg);
+            if (k >= 0) {
+                o->Pkg[k].Eligible = 1;
+                o->Pkg[k].Infs++;
+            }
         }
         if (set != INST_SET_FREE) {
             continue;
@@ -22317,24 +22570,107 @@ static void other_read(void)
     for (set = 0; set < INST_SET_COUNT; set++) {
         other_read_set(set);
         other_count(set);
+        other_earlier(set);
         oth[set].Include = 0;
         oth[set].StageOn = 0;
-        if (oth[set].State == INST_OTHER_CARRIED) {
-            if (set == INST_SET_FREE ? opts.Free : opts.NonFree) {
-                oth[set].Include = 1;
-            }
-            if (set == INST_SET_FREE ? opts.FreeStage : opts.NonFreeStage) {
-                oth[set].StageOn = oth[set].ForThis > 0;
-            }
+        if (oth[set].State == INST_OTHER_CARRIED &&
+            (set == INST_SET_FREE ? opts.Free : opts.NonFree)) {
+            oth[set].Include = 1;
         }
     }
     othRead = 1;
+    other_ticks();
+}
+
+/* inst_eng_read's check (section 6.7.11): an id a switch named refused
+ * before any change. 1 go on. */
+static int other_switch_ok(void)
+{
+    if (othSwitchErr[0] == '\0') {
+        return 1;
+    }
+    out("REFUSED: %s. Nothing was changed.\n", othSwitchErr);
+    return 0;
 }
 
 /* The release's version, for the texts. */
 static const char *other_version(void)
 {
     return XHCIINST_VERSION;
+}
+
+/* The console's packages of a set (section 6.7.11): listed, then "Stage
+ * which?", ids separated by commas, a wrong id asked again. */
+static void other_ask_pkgs(int set)
+{
+    OTHSET *o = &oth[set];
+    char line[512];
+    char ids[INST_PKG_MAX * INST_PKG_ID_CHARS];
+    int i;
+    int k;
+
+    out("  Let Windows choose these drivers automatically for matching "
+        "devices:\n");
+    for (i = 0; i < o->PkgCount; i++) {
+        const OTHPKG *p = &o->Pkg[i];
+        if (!p->Eligible) {
+            continue;
+        }
+        out("    %-22s %s%s\n", p->Id, p->Desc, p->Blocked ?
+            " (not available)" : "");
+        if (p->Blocked) {
+            out("      %s\n", p->Why);
+        }
+    }
+    if (o->Earlier[0] != '\0') {
+        stor_out_wrapped("  ", o->Earlier);
+    }
+    for (k = 0;; k++) {
+        int n;
+        int bad = 0;
+        if (!ask(INST_Q_OTHER, k == 0 ? "  Stage which? (ids separated by "
+                 "commas, Enter for none): " : "  Stage which? (Enter for "
+                 "none): ", k > 0, 0, 0, NULL, line, sizeof(line))) {
+            break;
+        }
+        if (line[0] == '\0') {
+            break;
+        }
+        n = inst_other_id_list(line, ids, INST_PKG_MAX);
+        if (n <= 0) {
+            out("  Not a list of the ids above.\n");
+            continue;
+        }
+        for (i = 0; i < o->PkgCount; i++) {
+            o->Pkg[i].Tick = 0;
+        }
+        for (i = 0; i < n && !bad; i++) {
+            int j = other_pkg_index(o, ids + (size_t)i * INST_PKG_ID_CHARS);
+            if (j < 0 || !o->Pkg[j].Eligible) {
+                out("  %s is not one of the ids above.\n",
+                    ids + (size_t)i * INST_PKG_ID_CHARS);
+                bad = 1;
+            } else {
+                o->Pkg[j].Tick = 1;
+            }
+        }
+        if (!bad) {
+            other_block();
+            for (i = 0; i < o->PkgCount && !bad; i++) {
+                if (o->Pkg[i].Tick && o->Pkg[i].Blocked) {
+                    out("  %s: %s\n", o->Pkg[i].Id, o->Pkg[i].Why);
+                    bad = 1;
+                }
+            }
+        }
+        if (!bad) {
+            break;
+        }
+        for (i = 0; i < o->PkgCount; i++) {
+            o->Pkg[i].Tick = 0;
+        }
+    }
+    other_block();
 }
 
 static void other_question(void)
@@ -22367,13 +22703,35 @@ static void other_question(void)
         stor_out_wrapped("  ", sentence);
         stor_out_wrapped("  ", under);
         if (o->Include) {
-            out("  %s: copied without asking%s.\n\n", sw,
-                o->StageOn ? ", and staged" : "");
+            int i;
+            out("  %s: copied without asking%s.\n", sw,
+                o->StageOn ? ", these packages staged:" : "");
+            for (i = 0; i < o->PkgCount; i++) {
+                if (o->Pkg[i].Tick) {
+                    out("    %s %s\n", o->Pkg[i].Id, o->Pkg[i].Desc);
+                }
+            }
+            if (o->Earlier[0] != '\0') {
+                stor_out_wrapped("  ", o->Earlier);
+            }
+            out("\n");
             continue;
         }
         if (opts.List || opts.Yes || opts.Defaults) {
-            out("  %s: N, the default (only %s copies them).\n\n",
+            int i;
+            out("  %s: N, the default (only %s copies them).\n",
                 opts.List ? "/list" : opts.Yes ? "/yes" : "/defaults", sw);
+            for (i = 0; opts.List && i < o->PkgCount; i++) {
+                if (o->Pkg[i].Eligible) {
+                    out("    %s:%s  %s%s\n", other_set_tag(set),
+                        o->Pkg[i].Id, o->Pkg[i].Desc, o->Pkg[i].Blocked ?
+                        " (not available)" : "");
+                }
+            }
+            if (o->Earlier[0] != '\0') {
+                stor_out_wrapped("  ", o->Earlier);
+            }
+            out("\n");
             continue;
         }
         inst_yesno_question(text, sizeof(text), set == INST_SET_FREE ?
@@ -22393,12 +22751,14 @@ static void other_question(void)
         }
         o->Include = r > 0;
         if (o->Include && o->ForThis > 0) {
-            char st[96];
-            inst_other_stage_text(st, sizeof(st), o->ForThis);
-            stor_out_wrapped("  ", st);
-            inst_yesno_question(text, sizeof(text), "Let Windows use them "
-                                "automatically when a device is plugged in?",
-                                "stage them", "copy only", 0);
+            other_ask_pkgs(set);
+        }
+        if (set == INST_SET_FREE && other_trust_offered() && !othTrust) {
+            inst_yesno_question(text, sizeof(text), "Trust usb-wdm-free's "
+                                "test certificate on this computer (its "
+                                "64-bit drivers are signed with it; they load "
+                                "only in test-signing mode)?", "trust it",
+                                "leave it", 0);
             r = 0;
             for (k = 0;; k++) {
                 if (!ask(INST_Q_OTHER, k == 0 ? text :
@@ -22411,7 +22771,7 @@ static void other_question(void)
                     break;
                 }
             }
-            o->StageOn = r > 0;
+            othTrust = r > 0;
         }
         out("\n");
         logonly("other: %s asked, include %d, stage %d\n",
@@ -22423,7 +22783,7 @@ static void other_question(void)
             oth[INST_SET_FREE].Include, oth[INST_SET_FREE].Unread,
             oth[INST_SET_FREE].StageOn, oth[INST_SET_NONFREE].Include,
             oth[INST_SET_NONFREE].StageOn,
-            other_is64() && envNow.Major == 6);
+            other_sig_kind());
         if (w != 0) {
             inst_other_warn_text(w, oth[INST_SET_FREE].Unread,
                                  oth[INST_SET_FREE].StageOn, warn,
@@ -22453,9 +22813,754 @@ static void other_print_plan(void)
             out("%s: copied to %s\\%s%s.\n", inst_other_label(set),
                 toolDir[0] ? toolDir : "the tools folder",
                 inst_other_folder(set), o->StageOn ?
-                ", and the INFs for this Windows staged" : " only");
+                ", and its ticked packages' INFs for this Windows staged" :
+                " only");
         }
     }
+}
+
+
+/* ---- driver packages (record 26 section 6.7.11) ---- */
+
+
+static const char *other_set_tag(int set)
+{
+    return set == INST_SET_FREE ? "free" : "nonfree";
+}
+
+static int other_pkg_index(const OTHSET *o, const char *id)
+{
+    int i;
+
+    for (i = 0; i < o->PkgCount; i++) {
+        if (inst_eq(o->Pkg[i].Id, id)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* The metadata lines of a set, or of both: 1 when an EXCLUDES line, or the
+ * installer's table, bars the pair on this system. */
+static const char *othPairWhy;  /* the last barring relation's why */
+
+static int other_pair_excluded(int setA, const char *a, int setB,
+                               const char *b)
+{
+    char qa[INST_PKG_ID_CHARS + 16];
+    char qb[INST_PKG_ID_CHARS + 16];
+    INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
+    int set;
+    int i;
+
+    othPairWhy = NULL;
+    _snprintf(qa, sizeof(qa) - 1, "%s:%s", other_set_tag(setA), a);
+    qa[sizeof(qa) - 1] = '\0';
+    _snprintf(qb, sizeof(qb) - 1, "%s:%s", other_set_tag(setB), b);
+    qb[sizeof(qb) - 1] = '\0';
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < oth[set].MetaCount; i++) {
+            const INST_STAGE_META *m = &oth[set].Meta[i];
+            if (m->Kind != 'E' || !(m->Systems & bit)) {
+                continue;
+            }
+            if ((inst_eq(m->A, qa) && inst_eq(m->B, qb)) ||
+                (inst_eq(m->A, qb) && inst_eq(m->B, qa))) {
+                othPairWhy = m->Desc[0] != '\0' ? m->Desc : NULL;
+                return 1;
+            }
+        }
+    }
+    return inst_other_excludes(setA, a, setB, b, othSys);
+}
+
+/* The packages of a set from its STAGE lines, their words from its
+ * PACKAGE lines or the installer's table; and the 98 SE and ME rule that a
+ * staged folder shows no other package's INF and no STAGE INF of another
+ * system. 0 when the set breaks the rule (it is then not this release's). */
+static int other_pkgs_build(OTHSET *o, int set)
+{
+    int i;
+    int j;
+    int k;
+
+    free(o->Pkg);
+    o->Pkg = (OTHPKG *)calloc(INST_PKG_MAX, sizeof(OTHPKG));
+    o->PkgCount = 0;
+    if (o->Pkg == NULL) {
+        return 0;
+    }
+    for (i = 0; i < o->StageCount; i++) {
+        char id[INST_PKG_ID_CHARS];
+        OTHPKG *p;
+        const INST_OTHER_PKG *row;
+        inst_other_pkg_of(o->Stage[i].Inf, id, sizeof(id));
+        if (other_pkg_index(o, id) >= 0) {
+            continue;
+        }
+        if (o->PkgCount >= INST_PKG_MAX) {
+            logonly("other: %s has more than %d packages\n", o->Src,
+                    INST_PKG_MAX);
+            return 0;
+        }
+        p = &o->Pkg[o->PkgCount++];
+        inst_copy(p->Id, id, sizeof(p->Id));
+        row = inst_other_pkg(set, id);
+        if (row != NULL) {
+            inst_copy(p->Desc, row->Desc, sizeof(p->Desc));
+            p->Kind = row->Kind;
+            p->Heading = inst_other_heading_index(row->Heading);
+        } else {
+            _snprintf(p->Desc, sizeof(p->Desc) - 1, "%s (no description in "
+                      "this release)", id);
+            p->Desc[sizeof(p->Desc) - 1] = '\0';
+            p->Kind = INST_PKG_DEVICE;
+            p->Heading = instOtherHeadingCount - 1;
+        }
+        for (k = 0; k < o->MetaCount; k++) {
+            if (o->Meta[k].Kind == 'P' && inst_eq(o->Meta[k].A, id)) {
+                inst_copy(p->Desc, o->Meta[k].Desc, sizeof(p->Desc));
+                p->Kind = strcmp(o->Meta[k].B, "CLASS") == 0 ?
+                          INST_PKG_CLASS : INST_PKG_DEVICE;
+            }
+        }
+    }
+    /* 98 SE (token 0) and ME (token 1): the folders of their STAGE lines. */
+    for (k = 0; k < 2; k++) {
+        INST_U32 bit = (INST_U32)1 << k;
+        for (i = 0; i < o->StageCount; i++) {
+            char fi[INST_OTHER_REL_CHARS];
+            char pi[INST_PKG_ID_CHARS];
+            if (!o->Stage[i].Stage || !(o->Stage[i].Systems & bit)) {
+                continue;
+            }
+            inst_copy(fi, o->Stage[i].Inf, sizeof(fi));
+            if (strrchr(fi, '/') != NULL) {
+                *strrchr(fi, '/') = '\0';
+            }
+            inst_other_pkg_of(o->Stage[i].Inf, pi, sizeof(pi));
+            for (j = 0; j < o->StageCount; j++) {
+                char fj[INST_OTHER_REL_CHARS];
+                char pj[INST_PKG_ID_CHARS];
+                inst_copy(fj, o->Stage[j].Inf, sizeof(fj));
+                if (strrchr(fj, '/') != NULL) {
+                    *strrchr(fj, '/') = '\0';
+                }
+                if (j == i || !inst_eq(fi, fj)) {
+                    continue;
+                }
+                inst_other_pkg_of(o->Stage[j].Inf, pj, sizeof(pj));
+                if (!inst_eq(pi, pj) ||
+                    (o->Stage[j].Stage && !(o->Stage[j].Systems & bit))) {
+                    logonly("other: %s: %s shares its folder with %s, which "
+                            "the wizard would see\n", o->Src,
+                            o->Stage[i].Inf, o->Stage[j].Inf);
+                    return 0;
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+/* Section 6.7.11's earlier staging: the record's packages, by kind. */
+static void other_earlier(int set)
+{
+    OTHSET *o = &oth[set];
+    char name[INST_PATH_CHARS * 2];
+    char data[INST_PATH_CHARS + 128];
+    char dir[INST_PATH_CHARS];
+    char rec[300];
+    char forn[300];
+    char pend[300];
+    char again[300];
+    char unread[300];
+    DWORD i;
+    int r;
+    int haveDir;
+
+    o->Earlier[0] = '\0';
+    o->EarlierCount = 0;
+    o->EarlierUnknown = 0;
+    rec[0] = forn[0] = pend[0] = again[0] = unread[0] = '\0';
+    haveDir = other_key_text(set, "Dir", dir, sizeof(dir)) > 0;
+    for (i = 0;; i++) {
+        char rel[INST_PATH_CHARS];
+        char id[INST_PKG_ID_CHARS];
+        char q[INST_PKG_ID_CHARS + 16];
+        char *list;
+        int k;
+        r = other_staged_enum(set, i, name, sizeof(name), data, sizeof(data));
+        if (r == 0) {
+            break;
+        }
+        if (r < 0) {
+            o->EarlierUnknown = 1;
+            break;
+        }
+        rel[0] = '\0';
+        if (inst_eq(data, "DevicePath")) {
+            size_t n = haveDir ? strlen(dir) : 0;
+            char dp[2048];
+            char tmp[2048];
+            DWORD t;
+            if (n > 0 && inst_eqn(name, dir, n) && name[n] == '\\') {
+                inst_copy(rel, name + n + 1, sizeof(rel));
+                for (k = 0; rel[k] != '\0'; k++) {
+                    if (rel[k] == '\\') {
+                        rel[k] = '/';
+                    }
+                }
+            }
+            /* Present on DevicePath now, or to be appended again by the
+             * run's staging step (section 6.7.6). */
+            list = reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", dp,
+                            sizeof(dp), &t) &&
+                   inst_path_append(dp, name, tmp, sizeof(tmp)) == 0 ? rec :
+                   again;
+        } else {
+            int own = 0;
+            char hex[65];
+            char sname[INST_PATH_CHARS];
+            inst_copy(rel, name, sizeof(rel));
+            if (strchr(rel, '|') != NULL) {
+                *strchr(rel, '|') = '\0';
+            }
+            if (inst_starts(data, "pending ")) {
+                list = pend;
+            } else if (!other_staged_data(data, &own, hex, sname,
+                                          sizeof(sname))) {
+                list = unread;
+            } else {
+                int h = other_store_holds(sname, hex);
+                if (h == 0) {
+                    /* Gone from the store: tidied by the run's staging
+                     * step, nothing shown and nothing barred. */
+                    continue;
+                }
+                list = h < 0 ? unread : own ? rec : forn;
+            }
+        }
+        inst_other_pkg_of(rel, id, sizeof(id));
+        if (rel[0] == '\0' || strchr(id, '/') == NULL) {
+            o->EarlierUnknown = 1;
+            logonly("other: an earlier staging not read into a package: "
+                    "%s\n", name);
+            continue;
+        }
+        k = other_pkg_index(o, id);
+        if (k >= 0) {
+            o->Pkg[k].Earlier = 1;
+        } else if (inst_other_pkg(set, id) == NULL) {
+            o->EarlierUnknown = 1;
+            logonly("other: an earlier staging of a package this release "
+                    "does not know: %s:%s\n", other_set_tag(set), id);
+        }
+        _snprintf(q, sizeof(q) - 1, "%s:%s", other_set_tag(set), id);
+        q[sizeof(q) - 1] = '\0';
+        for (k = 0; k < o->EarlierCount; k++) {
+            if (inst_eq(o->EarlierIds[k], q)) {
+                break;
+            }
+        }
+        if (k == o->EarlierCount &&
+            o->EarlierCount < (int)(sizeof(o->EarlierIds) /
+                                    sizeof(o->EarlierIds[0]))) {
+            inst_copy(o->EarlierIds[o->EarlierCount++], q,
+                      sizeof(o->EarlierIds[0]));
+        }
+        if (strstr(list, q) == NULL && strlen(list) + strlen(q) + 3 < 300) {
+            if (list[0] != '\0') {
+                strcat(list, ", ");
+            }
+            strcat(list, q);
+        }
+    }
+    if (rec[0] == '\0' && forn[0] == '\0' && pend[0] == '\0' &&
+        again[0] == '\0' && unread[0] == '\0' && !o->EarlierUnknown) {
+        return;
+    }
+    inst_copy(o->Earlier, "Staged by an earlier run:", sizeof(o->Earlier));
+    if (rec[0] != '\0') {
+        strncat(o->Earlier, " ", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, rec, sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, " (still offered to Windows);", sizeof(o->Earlier) -
+                strlen(o->Earlier) - 1);
+    }
+    if (again[0] != '\0') {
+        strncat(o->Earlier, " ", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, again, sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, " (recorded, to be offered again at Install);",
+                sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+    }
+    if (unread[0] != '\0') {
+        strncat(o->Earlier, " ", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, unread, sizeof(o->Earlier) - strlen(o->Earlier) -
+                1);
+        strncat(o->Earlier, " (could not be read);", sizeof(o->Earlier) -
+                strlen(o->Earlier) - 1);
+    }
+    if (forn[0] != '\0') {
+        strncat(o->Earlier, " ", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, forn, sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, " (in the driver store from another source);",
+                sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+    }
+    if (pend[0] != '\0') {
+        strncat(o->Earlier, " ", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, pend, sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+        strncat(o->Earlier, " (an interrupted run: may be in the driver "
+                "store);", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+    }
+    if (o->EarlierUnknown) {
+        strncat(o->Earlier, " something this release does not know (see the "
+                "log);", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+    }
+    strncat(o->Earlier, " leaving a box unticked does not undo any of it; "
+            "the uninstall removes what this installer placed and no device "
+            "uses.", sizeof(o->Earlier) - strlen(o->Earlier) - 1);
+}
+
+/* A ticked package's outcome of the run (section 6.7.11). */
+static const char *other_pkg_outcome(const OTHPKG *p)
+{
+    if (p->Staged > 0 && p->Failed == 0) {
+        return "staged";
+    }
+    if (p->Staged > 0) {
+        return "partly staged (see above)";
+    }
+    return p->Failed > 0 ? "not staged (see above)" :
+           "not staged (the run stopped first)";
+}
+
+/* The kind of the signature words (section 6.7.11): 1 64-bit Vista and 7,
+ * 2 64-bit 8 to 10, 0 none. */
+static int other_sig_kind(void)
+{
+    if (!other_is64()) {
+        return 0;
+    }
+    if (envNow.Major == 6 && envNow.Minor <= 1) {
+        return 1;
+    }
+    return (envNow.Major == 6 || envNow.Major == 10) ? 2 : 0;
+}
+
+/* Every package's Blocked and Why from the ticks and the earlier staging
+ * of both sets (section 6.7.11). */
+static void other_block(void)
+{
+    int unknown = oth[INST_SET_FREE].EarlierUnknown ||
+                  oth[INST_SET_NONFREE].EarlierUnknown;
+    int set;
+    int i;
+    int s2;
+    int j;
+
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        OTHSET *o = &oth[set];
+        for (i = 0; i < o->PkgCount; i++) {
+            OTHPKG *p = &o->Pkg[i];
+            p->Blocked = 0;
+            p->Why[0] = '\0';
+            if (!p->Eligible) {
+                continue;
+            }
+            if (unknown) {
+                p->Blocked = 1;
+                inst_copy(p->Why, "Something staged by an earlier run is not "
+                          "known to this release: uninstall the other drivers "
+                          "first to choose new ones.", sizeof(p->Why));
+                continue;
+            }
+            for (s2 = 0; s2 < INST_SET_COUNT && !p->Blocked; s2++) {
+                const OTHSET *q = &oth[s2];
+                for (j = 0; j < q->PkgCount && !p->Blocked; j++) {
+                    if (s2 == set && j == i) {
+                        continue;
+                    }
+                    if (q->Pkg[j].Tick &&
+                        other_pair_excluded(set, p->Id, s2, q->Pkg[j].Id)) {
+                        p->Blocked = 1;
+                        _snprintf(p->Why, sizeof(p->Why) - 1, "Not with "
+                                  "%s:%s, ticked: the two are not staged "
+                                  "together (%s).", other_set_tag(s2),
+                                  q->Pkg[j].Id, othPairWhy != NULL ?
+                                  othPairWhy : "they would claim one device");
+                    }
+                }
+                for (j = 0; j < q->EarlierCount && !p->Blocked; j++) {
+                    const char *e = strchr(q->EarlierIds[j], ':') + 1;
+                    if (s2 == set && inst_eq(e, p->Id)) {
+                        continue;
+                    }
+                    if (other_pair_excluded(set, p->Id, s2, e)) {
+                        p->Blocked = 1;
+                        _snprintf(p->Why, sizeof(p->Why) - 1, "Not with "
+                                  "%s, staged by an earlier run (%s): "
+                                  "uninstall the other drivers first.",
+                                  q->EarlierIds[j], othPairWhy != NULL ?
+                                  othPairWhy : "they would claim one device");
+                    }
+                }
+            }
+            p->Why[sizeof(p->Why) - 1] = '\0';
+        }
+        o->StageOn = 0;
+        for (i = 0; i < o->PkgCount; i++) {
+            o->StageOn |= o->Pkg[i].Tick;
+        }
+    }
+}
+
+/* The read's ticks from /wdmfree:stage= and /wdmnonfree:stage=, every id
+ * checked before any change; 0 with othSwitchErr said. */
+static int other_ticks(void)
+{
+    int set;
+    int i;
+
+    othSwitchErr[0] = '\0';
+    othTrust = opts.FreeTrust;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        OTHSET *o = &oth[set];
+        for (i = 0; i < opts.StageCount[set]; i++) {
+            const char *id = opts.StageIds[set] + (size_t)i * INST_PKG_ID_CHARS;
+            int k = o->State == INST_OTHER_CARRIED ? other_pkg_index(o, id)
+                                                   : -1;
+            if (k < 0 || !o->Pkg[k].Eligible) {
+                _snprintf(othSwitchErr, sizeof(othSwitchErr) - 1, "%s:%s: %s",
+                          other_set_tag(set), id, o->State !=
+                          INST_OTHER_CARRIED ? "this download does not carry "
+                          "its set" : k < 0 ? "no such package in the set" :
+                          "it has nothing to stage on this Windows");
+                othSwitchErr[sizeof(othSwitchErr) - 1] = '\0';
+                return 0;
+            }
+            o->Pkg[k].Tick = 1;
+        }
+    }
+    other_block();
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < oth[set].PkgCount; i++) {
+            if (oth[set].Pkg[i].Tick && oth[set].Pkg[i].Blocked) {
+                _snprintf(othSwitchErr, sizeof(othSwitchErr) - 1, "%s:%s: %s",
+                          other_set_tag(set), oth[set].Pkg[i].Id,
+                          oth[set].Pkg[i].Why);
+                othSwitchErr[sizeof(othSwitchErr) - 1] = '\0';
+                return 0;
+            }
+        }
+    }
+    if (opts.FreeTrust && !other_trust_offered()) {
+        inst_copy(othSwitchErr, "/wdmfree:trust: the offer is made only on "
+                  "64-bit Vista and later, with a free package staged and "
+                  "the set carrying its certificate", sizeof(othSwitchErr));
+        return 0;
+    }
+    return 1;
+}
+
+
+/* ---- the free set's certificate on 64-bit Windows (section 6.7.11) ---- */
+
+/* crypt32, looked up at run time (no image imports it), with its types as
+ * opaque pointers. */
+typedef void *(WINAPI *PFN_CERTOPENSTORE)(LPCSTR, DWORD, void *, DWORD,
+                                          const void *);
+typedef BOOL (WINAPI *PFN_CERTCLOSESTORE)(void *, DWORD);
+typedef BOOL (WINAPI *PFN_CERTADDENC)(void *, DWORD, const BYTE *, DWORD,
+                                      DWORD, const void **);
+typedef BOOL (WINAPI *PFN_CERTGETPROP)(const void *, DWORD, void *, DWORD *);
+typedef BOOL (WINAPI *PFN_CERTFREECTX)(const void *);
+typedef const void *(WINAPI *PFN_CERTFIND)(void *, DWORD, DWORD, DWORD,
+                                           const void *, const void *);
+typedef BOOL (WINAPI *PFN_CERTDELETE)(const void *);
+
+#define OTH_STORE_PROV_SYSTEM_A     ((LPCSTR)9)
+#define OTH_SYSTEM_STORE_LM         0x00020000UL
+#define OTH_ENCODING                0x00010001UL   /* X509 | PKCS7 */
+#define OTH_ADD_NEW                 1UL
+#define OTH_SHA1_PROP               3UL
+#define OTH_FIND_SHA1               0x00010000UL
+#define OTH_E_EXISTS                0x80092005UL
+#define OTH_E_NOT_FOUND             0x80092004UL
+
+typedef struct _OTHBLOB {
+    DWORD Size;
+    BYTE *Data;
+} OTHBLOB;
+
+
+typedef struct _OTHCRYPT {
+    PFN_CERTOPENSTORE Open;
+    PFN_CERTCLOSESTORE Close;
+    PFN_CERTADDENC Add;
+    PFN_CERTGETPROP Prop;
+    PFN_CERTFREECTX Free;
+    PFN_CERTFIND Find;
+    PFN_CERTDELETE Delete;
+} OTHCRYPT;
+
+static int other_crypt(OTHCRYPT *c)
+{
+    HMODULE m = LoadLibraryA("crypt32.dll");
+
+    memset(c, 0, sizeof(*c));
+    if (m == NULL) {
+        return 0;
+    }
+    c->Open = (PFN_CERTOPENSTORE)GetProcAddress(m, "CertOpenStore");
+    c->Close = (PFN_CERTCLOSESTORE)GetProcAddress(m, "CertCloseStore");
+    c->Add = (PFN_CERTADDENC)GetProcAddress(m,
+                                            "CertAddEncodedCertificateToStore");
+    c->Prop = (PFN_CERTGETPROP)GetProcAddress(m,
+                                     "CertGetCertificateContextProperty");
+    c->Free = (PFN_CERTFREECTX)GetProcAddress(m,
+                                              "CertFreeCertificateContext");
+    c->Find = (PFN_CERTFIND)GetProcAddress(m, "CertFindCertificateInStore");
+    c->Delete = (PFN_CERTDELETE)GetProcAddress(m,
+                                       "CertDeleteCertificateFromStore");
+    return c->Open != NULL && c->Close != NULL && c->Add != NULL &&
+           c->Prop != NULL && c->Free != NULL && c->Find != NULL &&
+           c->Delete != NULL;
+}
+
+/* 1 when the offer is made: 64-bit Vista and later, the free set carried
+ * with its certificate, a free package ticked. */
+static int other_trust_offered(void)
+{
+    const OTHSET *o = &oth[INST_SET_FREE];
+
+    return othRead && envNow.Nt && envNow.Major >= 6 && other_is64() &&
+           o->State == INST_OTHER_CARRIED && o->Include && o->StageOn &&
+           other_find(o, INST_WDMFREE_CER) >= 0;
+}
+
+static const char *const othStores[2] = { "Root", "TrustedPublisher" };
+
+/* The certificate added to each store that does not hold it, each add
+ * recorded by its thumbprint (section 6.7.11). */
+static void other_trust_add(void)
+{
+    OTHSET *o = &oth[INST_SET_FREE];
+    OTHCRYPT c;
+    char path[INST_PATH_CHARS];
+    char hex[65];
+    char *buf;
+    DWORD n = 0;
+    int k = other_find(o, INST_WDMFREE_CER);
+    int s;
+
+    if (!othTrust || !other_trust_offered() || k < 0) {
+        return;
+    }
+    other_path(path, sizeof(path), o->Src, INST_WDMFREE_CER);
+    buf = read_file(path, &n);
+    if (buf != NULL) {
+        inst_sha256((const unsigned char *)buf, n, hex);
+    }
+    if (buf == NULL || !inst_eq(hex, o->Files[k].Hash) || !other_crypt(&c)) {
+        out("usb-wdm-free's certificate could not be added: %s.\n",
+            buf == NULL ? "its file could not be read" :
+            !inst_eq(hex, o->Files[k].Hash) ? "its file is not the set's" :
+            "the certificate routines are missing");
+        free(buf);
+        flagSteps = 1;
+        return;
+    }
+    for (s = 0; s < 2 && go_on(); s++) {
+        void *st = c.Open(OTH_STORE_PROV_SYSTEM_A, 0, NULL,
+                          OTH_SYSTEM_STORE_LM, othStores[s]);
+        const void *ctx = NULL;
+        BYTE sha[20];
+        DWORD sn = sizeof(sha);
+        char name[32];
+        char thumb[41];
+        int i;
+        if (st == NULL) {
+            out("The %s store could not be opened (error %lu): usb-wdm-free's "
+                "certificate is not added there.\n", othStores[s],
+                (unsigned long)GetLastError());
+            flagSteps = 1;
+            continue;
+        }
+        if (!c.Add(st, OTH_ENCODING, (const BYTE *)buf, n, OTH_ADD_NEW,
+                   &ctx)) {
+            DWORD e = GetLastError();
+            if (e == OTH_E_EXISTS) {
+                out("usb-wdm-free's certificate is in the %s store already; "
+                    "left as it is.\n", othStores[s]);
+            } else {
+                out("usb-wdm-free's certificate could not be added to the %s "
+                    "store (error 0x%08lX).\n", othStores[s],
+                    (unsigned long)e);
+                flagSteps = 1;
+            }
+            c.Close(st, 0);
+            continue;
+        }
+        if (!c.Prop(ctx, OTH_SHA1_PROP, sha, &sn) || sn != sizeof(sha)) {
+            /* Not recorded: taken out again (CertDelete frees ctx). */
+            if (c.Delete(ctx)) {
+                out("usb-wdm-free's certificate's thumbprint could not be "
+                    "read: it is not left in the %s store.\n", othStores[s]);
+            } else {
+                out("usb-wdm-free's certificate was added to the %s store and "
+                    "could not be read or taken out again: remove it there by "
+                    "hand (mmc, the Certificates snap-in for the Computer "
+                    "account).\n", othStores[s]);
+            }
+            ctx = NULL;
+            flagSteps = 1;
+        } else {
+            for (i = 0; i < 20; i++) {
+                _snprintf(thumb + 2 * i, 3, "%02X", (unsigned)sha[i]);
+            }
+            thumb[40] = '\0';
+            _snprintf(name, sizeof(name) - 1, "Trust%s", othStores[s]);
+            name[sizeof(name) - 1] = '\0';
+            if (!other_key_str(INST_SET_FREE, NULL, name, thumb)) {
+                if (c.Delete(ctx)) {
+                    out("usb-wdm-free's certificate could not be recorded: it "
+                        "is not left in the %s store.\n", othStores[s]);
+                } else {
+                    out("usb-wdm-free's certificate (%s) was added to the %s "
+                        "store and could be neither recorded nor taken out "
+                        "again: remove it there by hand (mmc, the "
+                        "Certificates snap-in for the Computer account).\n",
+                        thumb, othStores[s]);
+                }
+                ctx = NULL;
+                flagSteps = 1;
+            } else {
+                flagChanged = 1;
+                out("usb-wdm-free's certificate (%s) added to the %s store.\n",
+                    thumb, othStores[s]);
+            }
+        }
+        if (ctx != NULL) {
+            c.Free(ctx);
+        }
+        c.Close(st, 0);
+    }
+    free(buf);
+}
+
+/* The uninstall's: each recorded certificate removed from its store. 1
+ * nothing recorded is left. */
+static int other_trust_remove(int set)
+{
+    OTHCRYPT c;
+    int s;
+    int ok = 1;
+    int crypt = -1;
+
+    for (s = 0; s < 2; s++) {
+        char name[32];
+        char thumb[48];
+        BYTE sha[20];
+        OTHBLOB blob;
+        void *st;
+        const void *ctx;
+        int i;
+        _snprintf(name, sizeof(name) - 1, "Trust%s", othStores[s]);
+        name[sizeof(name) - 1] = '\0';
+        i = other_key_text(set, name, thumb, sizeof(thumb));
+        if (i < 0) {
+            out("The record of usb-wdm-free's certificate in the %s store "
+                "could not be read: kept for the next uninstall.\n",
+                othStores[s]);
+            ok = 0;
+            continue;
+        }
+        if (i == 0) {
+            continue;
+        }
+        if (opts.List) {
+            out("(/list) the certificate %s would be removed from the %s "
+                "store.\n", thumb, othStores[s]);
+            continue;
+        }
+        if (crypt < 0) {
+            crypt = other_crypt(&c);
+        }
+        for (i = 0; i < 20 && strlen(thumb) == 40; i++) {
+            char two[3];
+            two[0] = thumb[2 * i];
+            two[1] = thumb[2 * i + 1];
+            two[2] = '\0';
+            sha[i] = (BYTE)strtoul(two, NULL, 16);
+        }
+        if (!crypt || strlen(thumb) != 40) {
+            out("The certificate %s could not be removed from the %s store.\n",
+                thumb, othStores[s]);
+            ok = 0;
+            continue;
+        }
+        st = c.Open(OTH_STORE_PROV_SYSTEM_A, 0, NULL, OTH_SYSTEM_STORE_LM,
+                    othStores[s]);
+        if (st == NULL) {
+            out("The %s store could not be opened (error %lu).\n",
+                othStores[s], (unsigned long)GetLastError());
+            ok = 0;
+            continue;
+        }
+        blob.Size = sizeof(sha);
+        blob.Data = sha;
+        ctx = c.Find(st, OTH_ENCODING, 0, OTH_FIND_SHA1, &blob, NULL);
+        if (ctx == NULL && GetLastError() != OTH_E_NOT_FOUND) {
+            out("The %s store could not be searched for the certificate %s "
+                "(error 0x%08lX): its record is kept.\n", othStores[s], thumb,
+                (unsigned long)GetLastError());
+            ok = 0;
+            c.Close(st, 0);
+            continue;
+        }
+        if (ctx != NULL && !c.Delete(ctx)) {
+            out("The certificate %s could not be removed from the %s store "
+                "(error %lu).\n", thumb, othStores[s],
+                (unsigned long)GetLastError());
+            ok = 0;
+            c.Close(st, 0);
+            continue;
+        }
+        c.Close(st, 0);
+        if (ctx != NULL) {
+            flagChanged = 1;
+            out("Removed usb-wdm-free's certificate (%s) from the %s store.\n",
+                thumb, othStores[s]);
+        }
+        if (!other_key_del_value(set, NULL, name)) {
+            ok = 0;
+        }
+    }
+    if (!ok) {
+        flagSteps = 1;
+    }
+    return ok;
+}
+
+int inst_eng_other_trust_possible(void)
+{
+    const OTHSET *o = &oth[INST_SET_FREE];
+
+    return othRead && envNow.Nt && envNow.Major >= 6 && other_is64() &&
+           o->State == INST_OTHER_CARRIED &&
+           other_find(o, INST_WDMFREE_CER) >= 0;
+}
+
+int inst_eng_other_trust(int *offered)
+{
+    *offered = other_trust_offered();
+    return othTrust && *offered;
+}
+
+void inst_eng_other_trust_choose(int on)
+{
+    othTrust = on ? 1 : 0;
+    logonly("other: trust chosen %d\n", othTrust);
 }
 
 /* ---- the record file (section 6.7.5) ---- */
@@ -23591,6 +24696,7 @@ static int other_begin(int set, const char *dir, char *recPath, size_t cap)
             return 0;
         }
         CreateDirectoryA(toolDir, NULL);
+        other_mkdirs(recPath);
         h = CreateFileA(recPath, GENERIC_WRITE, 0, NULL, CREATE_NEW,
                         FILE_ATTRIBUTE_NORMAL, NULL);
         if (h == INVALID_HANDLE_VALUE) {
@@ -24037,6 +25143,9 @@ static void other_run_set(int set)
             left > 3 ? " and more" : "");
         flagSteps = 1;
     }
+    if (set == INST_SET_FREE && go_on()) {
+        other_trust_add();
+    }
     if (o->StageOn && othSys >= 0) {
         char done[INST_PATH_CHARS * 4];
         done[0] = '\0';
@@ -24045,11 +25154,22 @@ static void other_run_set(int set)
             char folder[INST_OTHER_REL_CHARS];
             char folderPath[INST_PATH_CHARS];
             int k = other_find(o, s->Inf);
+            char pid[INST_PKG_ID_CHARS];
+            int pk;
+            int before = o->StagedNow;
+            int failedBefore = left;
             if (!s->Stage || !(s->Systems & ((INST_U32)1 << othSys)) || k < 0) {
+                continue;
+            }
+            /* Only the ticked packages' INFs (section 6.7.11). */
+            inst_other_pkg_of(s->Inf, pid, sizeof(pid));
+            pk = other_pkg_index(o, pid);
+            if (pk < 0 || !o->Pkg[pk].Tick) {
                 continue;
             }
             if (!go_on()) {
                 left++;
+                o->Pkg[pk].Failed++;
                 break;
             }
             inst_copy(folder, s->Inf, sizeof(folder));
@@ -24060,11 +25180,13 @@ static void other_run_set(int set)
                 out("  %s is not staged: %s is missing, changed or unlisted.\n",
                     s->Inf, why);
                 left++;
+                o->Pkg[pk].Failed++;
                 continue;
             }
             if (!envNow.Nt) {
                 other_path(folderPath, sizeof(folderPath), dir, folder);
                 if (strstr(done, folderPath) != NULL) {
+                    o->Pkg[pk].Staged++;    /* its folder staged already */
                     continue;
                 }
                 if (other_stage_9x(set, folderPath)) {
@@ -24081,12 +25203,26 @@ static void other_run_set(int set)
             } else {
                 left++;
             }
+            if (o->StagedNow > before) {
+                o->Pkg[pk].Staged++;
+            }
+            if (left > failedBefore) {
+                o->Pkg[pk].Failed++;
+            }
         }
         if (left > 0) {
             flagSteps = 1;
         }
         out("%s: %d %s for this Windows staged.\n", inst_other_label(set),
             o->StagedNow, envNow.Nt ? "INF(s)" : "folder(s)");
+        for (i = 0; i < o->PkgCount; i++) {
+            const OTHPKG *p = &o->Pkg[i];
+            if (!p->Tick) {
+                continue;
+            }
+            out("  %s:%s %s.\n", other_set_tag(set), p->Id,
+                other_pkg_outcome(p));
+        }
     }
     step(left > 0 ? INST_STEP_LEFT : INST_STEP_DONE, "%s", inst_other_label(set));
 }
@@ -24410,6 +25546,9 @@ static int other_remove(int set, int uninstall)
 
     (void)uninstall;
     other_key(set, key, sizeof(key));
+    if (!other_trust_remove(set)) {
+        return 0;       /* the record kept for the next uninstall */
+    }
     r = other_key_exists(set);
     if (r == 0 || (r > 0 && other_adoptable(set))) {
         /* A record file whose key was lost (section 6.7.5). */
@@ -24585,6 +25724,18 @@ static int other_remove(int set, int uninstall)
         flagSteps = 1;
         return 0;
     }
+    {
+        /* USBDRV with its last folder and journal (fails while not
+         * empty). */
+        char up[INST_PATH_CHARS];
+        char *s2;
+        inst_copy(up, recPath, sizeof(up));
+        s2 = strrchr(up, '\\');
+        if (s2 != NULL) {
+            *s2 = '\0';
+            RemoveDirectoryA(up);
+        }
+    }
     return other_key_delete(set);
 }
 
@@ -24629,13 +25780,166 @@ void inst_eng_other_texts(int set, const char *dir, char *sentence,
                     other_version());
 }
 
+int inst_eng_other_pkg(int set, int i, INST_OTHPKG_VIEW *v)
+{
+    const OTHPKG *p;
+
+    memset(v, 0, sizeof(*v));
+    if (set < 0 || set >= INST_SET_COUNT || !othRead || i < 0 ||
+        i >= oth[set].PkgCount) {
+        return 0;
+    }
+    p = &oth[set].Pkg[i];
+    inst_copy(v->Id, p->Id, sizeof(v->Id));
+    inst_copy(v->Desc, p->Desc, sizeof(v->Desc));
+    inst_copy(v->Why, p->Why, sizeof(v->Why));
+    v->Heading = p->Heading;
+    v->Eligible = p->Eligible;
+    v->Infs = p->Infs;
+    v->Tick = p->Tick;
+    v->Blocked = p->Blocked;
+    v->Earlier = p->Earlier;
+    return 1;
+}
+
+int inst_eng_other_pkg_tick(int set, int i, int tick)
+{
+    OTHPKG *p;
+
+    if (set < 0 || set >= INST_SET_COUNT || !othRead || i < 0 ||
+        i >= oth[set].PkgCount) {
+        return 0;
+    }
+    p = &oth[set].Pkg[i];
+    if (tick && (!p->Eligible || p->Blocked || !oth[set].Include)) {
+        return 0;
+    }
+    p->Tick = tick ? 1 : 0;
+    other_block();
+    logonly("other: %s:%s ticked %d\n", other_set_tag(set), p->Id, p->Tick);
+    return 1;
+}
+
+void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
+                              size_t cap)
+{
+    const OTHSET *o;
+    const OTHPKG *p;
+    INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
+    char copyInfs[300];
+    char folders[600];
+    char folder[INST_OTHER_REL_CHARS];
+    const char *base = dir != NULL && dir[0] ? dir : toolDir[0] ? toolDir
+                                                                : "C:\\XHCI98";
+    int k;
+    int j;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    copyInfs[0] = '\0';
+    folders[0] = '\0';
+    folder[0] = '\0';
+    if (set < 0 || set >= INST_SET_COUNT || !othRead || i < 0 ||
+        i >= oth[set].PkgCount) {
+        return;
+    }
+    o = &oth[set];
+    p = &o->Pkg[i];
+    inst_copy(out, "Stages for this Windows:", cap);
+    for (k = 0; k < o->StageCount; k++) {
+        char id[INST_PKG_ID_CHARS];
+        const char *slash;
+        inst_other_pkg_of(o->Stage[k].Inf, id, sizeof(id));
+        if (!inst_eq(id, p->Id) || !o->Stage[k].Stage ||
+            !(o->Stage[k].Systems & bit)) {
+            continue;
+        }
+        slash = strrchr(o->Stage[k].Inf, '/');
+        strncat(out, " ", cap - strlen(out) - 1);
+        strncat(out, slash != NULL ? slash + 1 : o->Stage[k].Inf,
+                cap - strlen(out) - 1);
+        inst_copy(folder, o->Stage[k].Inf, sizeof(folder));
+        if (strrchr(folder, '/') != NULL) {
+            *strrchr(folder, '/') = '\0';
+        }
+        {
+            char one[INST_PATH_CHARS];
+            char d[INST_PATH_CHARS];
+            join(d, sizeof(d), base, inst_other_folder(set));
+            other_path(one, sizeof(one), d, folder);
+            if (strstr(folders, one) == NULL &&
+                strlen(folders) + strlen(one) + 3 < sizeof(folders)) {
+                if (folders[0] != '\0') {
+                    strcat(folders, ", ");
+                }
+                strcat(folders, one);
+            }
+        }
+        /* 98 SE and ME: the copy-only INFs a staged folder shows too. */
+        for (j = 0; !envNow.Nt && j < o->StageCount; j++) {
+            char fj[INST_OTHER_REL_CHARS];
+            inst_copy(fj, o->Stage[j].Inf, sizeof(fj));
+            if (strrchr(fj, '/') != NULL) {
+                *strrchr(fj, '/') = '\0';
+            }
+            if (!o->Stage[j].Stage && inst_eq(fj, folder) &&
+                strstr(copyInfs, strrchr(o->Stage[j].Inf, '/') + 1) == NULL &&
+                strlen(copyInfs) + strlen(o->Stage[j].Inf) + 3 <
+                sizeof(copyInfs)) {
+                strcat(copyInfs, " ");
+                strcat(copyInfs, strrchr(o->Stage[j].Inf, '/') + 1);
+            }
+        }
+    }
+    strncat(out, ".", cap - strlen(out) - 1);
+    if (copyInfs[0] != '\0') {
+        strncat(out, " Staging also lets Windows see the INF(s) this package "
+                "marks copy-only:", cap - strlen(out) - 1);
+        strncat(out, copyInfs, cap - strlen(out) - 1);
+        strncat(out, ".", cap - strlen(out) - 1);
+    }
+    if (!envNow.Nt && folders[0] != '\0') {
+        strncat(out, " Windows may ask for the folder of the files the first "
+                "time: ", cap - strlen(out) - 1);
+        strncat(out, folders, cap - strlen(out) - 1);
+        strncat(out, ".", cap - strlen(out) - 1);
+    }
+    if (other_sig_kind() == 2) {
+        strncat(out, " On 64-bit Windows 8 to 10 Windows stores this driver "
+                "only if its signature is valid; it may be refused.",
+                cap - strlen(out) - 1);
+    }
+    if (set == INST_SET_NONFREE) {
+        strncat(out, " Another maker's driver, not tested by this project.",
+                cap - strlen(out) - 1);
+    }
+}
+
+const char *inst_eng_other_earlier(int set)
+{
+    if (set < 0 || set >= INST_SET_COUNT || !othRead) {
+        return "";
+    }
+    return oth[set].Earlier;
+}
+
 void inst_eng_other_choose(int set, int include, int stage)
 {
+    int i;
+
+    (void)stage;
     if (set < 0 || set >= INST_SET_COUNT || !othRead) {
         return;
     }
     oth[set].Include = include && oth[set].State == INST_OTHER_CARRIED;
-    oth[set].StageOn = oth[set].Include && stage && oth[set].ForThis > 0;
+    if (!oth[set].Include) {
+        for (i = 0; i < oth[set].PkgCount; i++) {
+            oth[set].Pkg[i].Tick = 0;
+        }
+    }
+    other_block();
     logonly("other: %s chosen %d, stage %d\n", inst_other_subkey(set),
             oth[set].Include, oth[set].StageOn);
 }
@@ -24645,7 +25949,7 @@ void inst_eng_other_warnings(char *text, size_t cap)
     INST_U32 w = inst_other_warnings(
         oth[INST_SET_FREE].Include, oth[INST_SET_FREE].Unread,
         oth[INST_SET_FREE].StageOn, oth[INST_SET_NONFREE].Include,
-        oth[INST_SET_NONFREE].StageOn, other_is64() && envNow.Major == 6);
+        oth[INST_SET_NONFREE].StageOn, other_sig_kind());
 
     inst_other_warn_text(w, oth[INST_SET_FREE].Unread,
                          oth[INST_SET_FREE].StageOn, text, cap);
@@ -24671,14 +25975,31 @@ void inst_eng_other_summary(const char *dir, char *text, size_t cap)
         } else {
             _snprintf(one, sizeof(one) - 1, "%s: copied to %s\\%s%s.",
                       inst_other_label(set), d, inst_other_folder(set),
-                      oth[set].StageOn ? ", its INFs for this Windows staged"
-                                       : "; nothing installs them");
+                      oth[set].StageOn ? "; Windows may choose the "
+                      "packages below for matching devices" :
+                      "; nothing installs them");
         }
         one[sizeof(one) - 1] = '\0';
         if (text[0] != '\0') {
             strncat(text, "\r\n", cap - strlen(text) - 1);
         }
         strncat(text, one, cap - strlen(text) - 1);
+        {
+            int i;
+            for (i = 0; oth[set].Include && i < oth[set].PkgCount; i++) {
+                if (oth[set].Pkg[i].Tick) {
+                    _snprintf(one, sizeof(one) - 1, "\r\n  %s:%s, %s",
+                              other_set_tag(set), oth[set].Pkg[i].Id,
+                              oth[set].Pkg[i].Desc);
+                    one[sizeof(one) - 1] = '\0';
+                    strncat(text, one, cap - strlen(text) - 1);
+                }
+            }
+            if (oth[set].Earlier[0] != '\0') {
+                strncat(text, "\r\n  ", cap - strlen(text) - 1);
+                strncat(text, oth[set].Earlier, cap - strlen(text) - 1);
+            }
+        }
     }
 }
 
@@ -24730,12 +26051,27 @@ static void other_finish(char *text, size_t cap, const char *nl)
                 }
                 n++;
             }
-            _snprintf(one, sizeof(one) - 1, "%s: in %s%s. Up to date: %s.",
-                      inst_other_label(set), dir, o->StagedNow > 0 ?
-                      ", its INFs for this Windows staged" : "",
-                      inst_other_address(set));
+            _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.%s%s",
+                      inst_other_label(set), dir, inst_other_address(set),
+                      set == INST_SET_FREE ? nl : "",
+                      set == INST_SET_FREE ? INST_FREE_NOTICE : "");
             one[sizeof(one) - 1] = '\0';
             strncat(text, one, cap - strlen(text) - 1);
+            for (i = 0; i < o->PkgCount; i++) {
+                if (!o->Pkg[i].Tick) {
+                    continue;
+                }
+                _snprintf(one, sizeof(one) - 1, "%s  %s:%s %s.", nl,
+                          other_set_tag(set), o->Pkg[i].Id,
+                          other_pkg_outcome(&o->Pkg[i]));
+                one[sizeof(one) - 1] = '\0';
+                strncat(text, one, cap - strlen(text) - 1);
+            }
+            if (o->Earlier[0] != '\0') {
+                strncat(text, nl, cap - strlen(text) - 1);
+                strncat(text, "  ", cap - strlen(text) - 1);
+                strncat(text, o->Earlier, cap - strlen(text) - 1);
+            }
             if (n > 0) {
                 strncat(text, nl, cap - strlen(text) - 1);
                 strncat(text, "To install one by hand, point the Add New "
@@ -24828,7 +26164,8 @@ void inst_eng_stor_summary(char *out, size_t cap)
     out[0] = '\0';
     if (storTools && storToolsInclude) {
         _snprintf(out, cap - 1, "USB storage drivers for Windows 98 SE: their "
-                  "files copied to %s\\NUSB33 only; nothing installs them "
+                  "files copied to %s\\USBDRV\\NUSB33 only; nothing "
+                  "installs them "
                   "here.", toolDir);
         out[cap - 1] = '\0';
         return;
@@ -25029,10 +26366,14 @@ void inst_eng_usage(void)
 "  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's);\n"
 "                elsewhere copy their files to the tools folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
-"  /free         copy the free USB class drivers (beta) to the tools folder;\n"
-"  /freestage    and let Windows use them when a device is plugged in\n"
-"  /nonfree      copy the non-free driver pack to the tools folder;\n"
-"  /nonfreestage and let Windows use it when a device is plugged in\n"
+"  /wdmfree:copy copy the free USB class drivers (experimental) to the tools\n"
+"                folder\n"
+"                (/free is the same)\n"
+"  /wdmfree:stage=<class/package>,...  and let Windows choose those packages\n"
+"                automatically for matching devices (INSTALL /list lists\n"
+"                the packages for this Windows)\n"
+"  /wdmnonfree:copy, /wdmnonfree:stage=...  the same for the non-free pack\n"
+"                (/nonfree is /wdmnonfree:copy)\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /faster       turn the USB Tree's \"can run faster\" notice on for this\n"
 "                computer (/nofaster: off)\n"
@@ -25599,6 +26940,13 @@ static const char *own_src(const char *name)
  * .BAK dance on 98 SE and ME. 1 done, 0 failed (said), 2 in use (said). */
 static int own_put(const char *from, const char *to)
 {
+    return own_put_as(from, to, ".TMP");
+}
+
+/* own_put with the temporary copy's extension given (four characters,
+ * the dot included). */
+static int own_put_as(const char *from, const char *to, const char *tmpExt)
+{
     char tmp[INST_PATH_CHARS];
     char bak[INST_PATH_CHARS];
     size_t n;
@@ -25611,7 +26959,7 @@ static int own_put(const char *from, const char *to)
     if (n < 4) {
         return 0;
     }
-    strcpy(tmp + n - 4, ".TMP");
+    strcpy(tmp + n - 4, tmpExt);
     strcpy(bak + n - 4, ".BAK");
     SetFileAttributesA(tmp, FILE_ATTRIBUTE_NORMAL);
     if (!CopyFileA(from, tmp, FALSE) || !same_file(from, tmp)) {
@@ -26387,6 +27735,9 @@ int inst_eng_read(void)
      * task 43.43) /storage copies the files to the tools folder only. */
     stor_read();
     other_read();
+    if (!other_switch_ok()) {
+        return INST_EXIT_REFUSED;
+    }
     if (opts.Storage && storPack <= 0) {
         out("REFUSED: /storage: %s\n", storPack == 0 ?
             "this download does not carry the USB storage drivers." :

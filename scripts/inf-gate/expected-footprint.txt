@@ -87,7 +87,7 @@
 # what is derived here. So does an engine-implied sub-section other than
 # .Services (.HW, .CoInstallers, .Interfaces, .LogConfigOverride).
 path|Windows 98|device install|Xhci.Dev
-file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+file|Windows 98|Xhci.CopyPrep|10|System32\Drivers|xhci98.sys|xhci98.sys||16|keep
 file|Windows 98|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 98|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 98|Xhci.AddReg|HKR||DevLoader||*NTKERN|remove

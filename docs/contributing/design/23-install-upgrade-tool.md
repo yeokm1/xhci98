@@ -1,6 +1,20 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 39, 2026-10-23 (roadmap-usb4 task 43.73, the owner: the
+Status: revision 42, 2026-10-23 (record 26 draft 39: on 98 SE and ME
+the controller's install through the helper names `xhci98.inf`'s update
+section, `Xhci.Upd`, by the job file's `SECTION` line, record 27 section
+4.1, and the wizard's `Xhci.Dev` keeps a placed `xhci98.sys`; an update
+by hand through Update Driver there keeps the file, `INSTALL.BAT` being
+the update path; a 9x uninstall stops, before any change, while a
+`WININIT.INI` rename puts one of the package's driver files in place at
+the next start); revision 41, 2026-10-23 (record 26 draft 38: D20 (d) extended
+to `xhci98.sys` and `xhcicm.sys`, recorded under `Placed9x`);
+revision 40, 2026-10-23 (roadmap-usb4 task 43.48, record 26
+draft 37 section 6.7.11: `/wdmfree:copy`, `/wdmfree:stage=<ids>` and
+the same for `/wdmnonfree:`, checked before any change; `/free` and
+`/nonfree` kept as the copies, `/freestage` and `/nonfreestage` refused
+with the new form named; the console's package question);
+revision 39, 2026-10-23 (roadmap-usb4 task 43.73, the owner: the
 controllers named with maker and product, the xHCI controllers through
 the FriendlyName this tool writes and clears, the NHIs through their INF
 lines, 98 SE's 46 characters; section 5.13; recorded at the batch 10 merge);
@@ -3398,7 +3412,10 @@ the user.
   after the helper's installs, so the New Hardware wizard of a UAS disk
   plugged in later finds it and asks for no disk (the 98 SE reading of
   2026-10-23, record 26 section 5.0); the uninstall's 9x file list
-  already removes it.
+  already removes it. Revision 41: `xhci98.sys` with the USB drivers and
+  `xhcicm.sys` with the Thunderbolt support too, each placement recorded
+  under `HKLM\Software\xhci98\Placed9x` and the record deleted by the
+  9x uninstall.
 
 ## 14. Open, and the risks
 

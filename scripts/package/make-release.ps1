@@ -2293,10 +2293,14 @@ function New-UploadSet {
     # tree does not, where the installer takes it from. A published tree
     # holding one is refused - the pack is never in releases\.
     $packTarget = Join-Path $uploadRoot $script:DriverPackFolder
+    if (Test-Path -LiteralPath (Join-Path $uploadRoot $script:UsbDrvFolder)) {
+        throw "'$PublishedRoot' holds a $($script:UsbDrvFolder)\; the driver pack and the downloads' driver sets are never in releases\ (docs\contributing\legal-provenance.md section 5)."
+    }
     if (Test-Path -LiteralPath $packTarget) {
         throw "'$PublishedRoot' holds a $($script:DriverPackFolder)\; the driver pack is never in releases\ (docs\contributing\legal-provenance.md section 5)."
     }
     if ($null -ne $DriverPack) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $packTarget) | Out-Null
         Copy-Item -LiteralPath $DriverPack.Dir -Destination $packTarget -Recurse
         $packFault = Get-DriverPackFolderFault -Dir $packTarget -Files $DriverPack.Files
         if ($packFault -ne "") { throw "the upload set's driver pack is not the folder that was verified: $packFault." }
@@ -2313,6 +2317,7 @@ function New-UploadSet {
             throw "'$PublishedRoot' holds a $($sp[0])\; the downloads' driver sets are never in releases\ (design record 26 section 6.7.2)."
         }
         if ($null -ne $sp[1] -and $sp[2] -contains $Kind) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
             Copy-Item -LiteralPath $sp[1].Dir -Destination $target -Recurse
             $setFault = Get-DriverPackFolderFault -Dir $target -Files $sp[1].Files
             if ($setFault -ne "") { throw "the upload set's $($sp[0])\ is not the folder that was verified: $setFault." }
@@ -2825,6 +2830,7 @@ $driverPackAllow = $null
 # the downloads this run makes or rebuilds.
 $wdmFreeSet = $null
 $nonFreeSet = $null
+$otherCheck = $null
 $wdmFreeDir = ""
 $nonFreeDir = ""
 $downloadKinds = @("base")
@@ -3102,6 +3108,24 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
         $downloadKinds = @("base")
         if ($null -ne $wdmFreeSet) { $downloadKinds += "free"; $readmeFreeTag = $wdmFreeSet.Tag }
         if ($null -ne $nonFreeSet) { $downloadKinds += "nonfree"; $readmeNonFreeTag = $nonFreeSet.Tag }
+
+        # The other sets' checks (design record 26 section 6.7.11): the 98 SE
+        # and ME one-package-a-folder rule and each STAGE INF's
+        # self-containment, one hardware id a system over both sets, the
+        # installer's package table and the sets' metadata against the sets
+        # and scripts\package\brand-words.txt, and the table's history
+        # against the previous release's otherpkgs.txt; then, for the
+        # maintainer, the overlaps no line states.
+        $otherCheck = $null
+        try {
+            $otherCheck = Invoke-OtherSetChecks -Repo $repo -ReleasesDir $ReleasesDir -Version $Version -Free $wdmFreeSet -NonFree $nonFreeSet
+        } catch {
+            Stop-CutCheck ("the other USB drivers' sets: " + $_.Exception.Message)
+        }
+        if ($null -ne $otherCheck) {
+            Write-Ok ("the other USB drivers' sets: folders, self-containment, hardware ids and the package table hold{0}" -f $(if ($null -ne $otherCheck.Previous) { ", against $($otherCheck.Previous.V)'s $($script:OtherPkgsRecordName)" } else { " (no earlier $($script:OtherPkgsRecordName))" }))
+            foreach ($ov in $otherCheck.Overlaps) { Write-Host ("  overlap, for the maintainer: " + $ov) }
+        }
     }
 
     # **None of the seven is ever tracked.** A cut refuses while any of their
@@ -4703,7 +4727,7 @@ helper (xhciinst\di\build.cmd).
         $contents += ""
     }
     if ($driverPackIncluded) {
-        $contents += "  NUSB33\         - NUSB 3.3's Windows 98 SE storage files (section 3)"
+        $contents += "  USBDRV\NUSB33\  - NUSB 3.3's Windows 98 SE storage files (section 3)"
         $contents += ""
         $contents += "      NOTICE.md    whose they are: not this project's"
         $contents += "      SHA256.TXT   their hashes"
@@ -7658,6 +7682,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
                     -Lines (ConvertTo-DownloadsRecord -Version $Version -Kinds $downloadKinds -Free $wdmFreeSet -NonFree $nonFreeSet)
     if ($null -ne $wdmFreeSet) {
         Copy-Item -LiteralPath $wdmFreeSet.PinPath -Destination (Join-Path $destRoot "wdmfree-pin.txt")
+    }
+    # The other USB drivers' package table this release was cut with
+    # (design record 26 section 6.7.11): tracked, and what the next cut
+    # holds its own table to.
+    if ($null -ne $otherCheck) {
+        Write-AsciiFile -Path (Join-Path $destRoot $script:OtherPkgsRecordName) -Lines $otherCheck.Record
+        Write-Ok ("{0} records the package table and its relationship lines" -f $script:OtherPkgsRecordName)
     }
     Write-Ok ("{0} records the downloads {1}" -f $script:DownloadsRecordName, (@($downloadKinds | ForEach-Object { Get-DownloadZipName -Version $Version -Kind $_ }) -join ", "))
 
