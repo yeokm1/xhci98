@@ -651,8 +651,9 @@ the logged-on user, with no administrator rights.
   XP and 7 (32- and 64-bit), roadmap task 43.28: the High Speed case,
   and the USB 3 case with a QEMU built so its stick declares USB 3 at
   High Speed. Not yet read on a computer, behind a High Speed hub, for a
-  faster device at 5 Gbit/s, or on 8 and 8.1. On 2000 a click on the
-  balloon opens no window (the menu's line does).
+  faster device at 5 Gbit/s, or on 8 and 8.1. Windows 2000's shell does
+  not report a click on a balloon, so there the balloon says to click the
+  icon, whose menu opens the list (roadmap task 43.68).
 
 ### Removing a Thunderbolt or USB4 device safely
 
