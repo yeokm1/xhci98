@@ -978,6 +978,19 @@ have every leg.
   before using it again.** Windows' stop closes the switch's memory windows;
   Scan for hardware changes without an unplug leaves the drive at Code 29
   until it is unplugged and plugged in again, or Windows restarts.
+- **Windows 98 SE and ME: close every file on a Thunderbolt or USB4 drive,
+  and every window showing it, before you unplug it** - or use Safely
+  Remove first, which refuses while a file is open. A drive unplugged while
+  a program still has a file open on it is left to Windows to remove once
+  the file is closed (above); closing that program afterwards (an MS-DOS
+  Prompt whose copy failed, an Explorer window on the drive) can stop the
+  Thunderbolt driver: it then sees no further plug or unplug, the drive
+  does not come back, and on Windows 98 SE the whole desktop can freeze
+  (the pointer still moves). Only a restart recovers. Read on the
+  emulator, in a loop built to provoke it: 4 stops in about 110 such
+  unplugs on the two systems before the retries were spaced out, and 1 in
+  56 after (1 in 16 on ME, none in 40 on 98 SE). The cause is not
+  established; it was not seen on an unplug with no file open.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
