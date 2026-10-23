@@ -5887,6 +5887,14 @@ the USBUSER pass-through of section 8.8, which stays byte-compatible for
 - **An older driver** answers `STATUS_INVALID_DEVICE_REQUEST` (the
   dispatch's default); `XHCITR` then reads the log through the
   pass-through as before and says the configuration space is not served.
+- **The failed flag** (roadmap-usb4 43.57, 2026-10-22; design record 25
+  section 7.2.1): `XHQ_F_FAILED` (`0x80`) is set when `XhciTolTerminal`
+  is 2 or more - latched failed (three recoveries failed in a row, or
+  the recovery window refused a fourth) or contained - read under the
+  controller lock as the HCD region's terminal word is, at every level.
+  A failure with a recovery still owed (1) does not set it. The layout
+  and `XHQ_VERSION` do not change: a driver from before it leaves the
+  bit clear, which `XHCITR` reads as not failed.
 
 ## 9. The harness and the gates (task 25.5)
 
