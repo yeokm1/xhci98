@@ -161,7 +161,9 @@ asks for the restart.
 - The window shows a wizard: welcome, what was found, the components, the
   USB settings, the Thunderbolt settings and Stor98's settings when their
   components are ticked, the summary, the progress, and the finish with
-  "Restart now" and "Restart later" (section 5). The values record 23
+  "Restart now" and "Restart later" (section 5). Under section 5.0's
+  flow: Welcome (with what was found), Components, Summary, Progress,
+  Steps and Finish, the settings in one Settings dialog. The values record 23
   never asks sit behind an "Advanced..." button on each settings page.
 - It installs `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and, only when the
   user ticks it, the bundled Stor98 (section 6), and on Windows 98 SE,
@@ -382,7 +384,8 @@ component choices while the welcome page shows "Please wait", builds the
 Found page from that plan, and runs `PLAN` again whenever the Components
 page changes a choice, so the Found page, the settings pages and their
 questions follow the choices as they stand (a Back to the Found page shows
-the plan for the current choices). The plan the Summary shows is frozen
+the plan for the current choices; under section 5.0's flow the Welcome
+page shows what was found and the Settings dialog the settings). The plan the Summary shows is frozen
 there for `ASK` and `RUN`, which the Install button starts; the engine's
 own second reading before any change (record 23 section 5.1 step 5)
 compares against that frozen plan, with "the plan changed; go back to see
@@ -1135,7 +1138,8 @@ the systems say "8, 8.1 and 10" where they said "8 and 8.1".
   loses (task 43.35); ticked, case 3a, with its warning; the UAS box under
   it; the Thunderbolt box unticked; Stor98 under it, unticked whatever the
   Thunderbolt box does, ticked, case 3b, with its warning (10's own
-  `stornvme` on a tunnel drive installed over, as on 8.1); the NUSB
+  `stornvme` on a tunnel drive installed over, as on 8.1; superseded by
+  section 5.0, draft 35: ticked with the Thunderbolt box, no warning); the NUSB
   pack's storage row shown, unticked, ticked, case 1 - its warning, then
   the seven files copied to `<the install directory>\NUSB33\` only,
   nothing put in `%windir%`, the INF directory or `DevicePath`; and the
@@ -1614,7 +1618,9 @@ unasked. With the box ticked:
   those two systems, when the run replaces Stor98's file, the Summary
   page carries one check box, "Please disconnect all external NVMe
   drives before proceeding" (draft 16, owner 2026-10-19; until then one
-  box per drive, "nothing is using this drive", that Install required):
+  box per drive, "nothing is using this drive", that Install required;
+  under section 5.0's flow an OK/Cancel box at Install instead, Cancel
+  staying on the Summary page):
   ticked, the file update goes ahead; unticked, Install still runs and
   Stor98 is left for a later run, out of this run whole (no copy of its
   files, no job, no setting, no record; a step, exit 4). The finish page offers

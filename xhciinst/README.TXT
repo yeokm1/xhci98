@@ -252,8 +252,8 @@ this package's connection manager - the devices are approved (see
 XhciCmApprove), connected and disconnected - and what a device brings is
 driven by whatever driver Windows has for it: an NVMe drive by an NVMe
 driver (Windows 8.1 and 10 have their own; Windows 8 has none; the
-bundled Stor98 is unticked there by default and untested), the USB
-controller inside a dock by
+bundled Stor98 is ticked with the Thunderbolt support there as on every
+system), the USB controller inside a dock by
 Windows' own USB 3 driver on 8, 8.1 and 10 (on 2000 to 7 by another maker's
 driver only where it supports that controller), and the USB devices of a
 USB4 port's USB 3 connection on the computer's own USB controller.

@@ -1832,9 +1832,10 @@ asks once (`Y`, or Enter), and then:
 - **Windows 8, 8.1 and 10** (10 from `3.2.0.0`, every build below 22000;
   Windows 11 is refused, having a USB4 connection manager of its own):
   the connection manager through the same route as on Vista and 7, with
-  the USB drivers and the bundled Stor98 unticked unless you tick them
-  (`/usb`, `/stor98`), each then with a warning that it is untested
-  there. Windows Server 2016, 2019 and 2022 report a Windows 10 version
+  the USB drivers unticked unless you tick them (`/usb`), then with a
+  warning that they are untested there, and the bundled Stor98 ticked
+  with the Thunderbolt support as on every system (`/nostor98` leaves it
+  out). Windows Server 2016, 2019 and 2022 report a Windows 10 version
   and are treated as 10, untested. On the x64 editions the test-signed
   drivers load in test-signing mode, which these systems let you turn on
   only with Secure Boot off in the computer's firmware setup, or on a

@@ -788,7 +788,8 @@ down and a start, not a restart. A drive first plugged after that start
 binds to the new file by itself. The update waits for the user's word,
 one box on the Summary page and one question in the console, both
 "Please disconnect all external NVMe drives before proceeding" (Enter
-and `/yes` give N); without it Stor98 is left for a later run, out of
+and `/yes` give N; under record 26 section 5.0's flow the window asks
+it as an OK/Cancel box at Install, Cancel staying on the Summary page); without it Stor98 is left for a later run, out of
 this one whole - no copy of its files, no job, no setting, no record
 (exit 4). A Stor98 drive no helper job touches may be unplugged between
 the plan and Install, as the confirmation asks: the comparison of the
@@ -931,7 +932,8 @@ and the uninstall removing its devnode and rescanning so that Windows
 binds `usbxhci.sys` again (unread until roadmap-usb4 task 43.37); the
 bundled Stor98 offered unticked under the Thunderbolt box with case 3b's
 warning, 10's own `stornvme` on a tunnel drive installed over when it is
-ticked, as on 8.1; the NUSB pack's row taking case 1; and a package
+ticked, as on 8.1 (superseded by record 26 section 5.0, draft 35: Stor98
+ticked with the Thunderbolt box on every system, the warning removed); the NUSB pack's row taking case 1; and a package
 without the connection manager handled as on 8 and 8.1. The NT route is
 8's: the INFs' `.NTx86.6.0` and `.NTamd64.6.0` models sections, the
 highest decoration not above 10.0 (`inst_models_section`, host vectors
