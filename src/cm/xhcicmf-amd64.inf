@@ -27,7 +27,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/19/2026,3.1.0.0
+DriverVer=10/24/2026,3.2.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhcicmf.cat
 

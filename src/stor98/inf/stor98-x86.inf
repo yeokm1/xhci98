@@ -45,7 +45,7 @@ Signature="$CHICAGO$"
 Class=SCSIAdapter
 ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/19/2026,3.1.0.0
+DriverVer=10/24/2026,3.2.0.0
 
 [DestinationDirs]
 ; DIRID 12: Windows\System\IoSubsys on Windows 9x, system32\drivers on NT.
