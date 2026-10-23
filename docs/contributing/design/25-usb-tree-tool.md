@@ -1873,7 +1873,7 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    two of its conditions (a `TR_FW_LINK` device is not one, section 7.2.1
    item 2); what follows is this revision's own text. Red while the
    notice is on and the set holds a device:
-   `xhcitr-f.ico` (`IDI_FAST`), which is `xhcitr.ico` with the
+   `xhcitr-f.ico` (since revision 19 loaded as `IDI_RED`), which is `xhcitr.ico` with the
    controller's blue - VGA colour 12, 0000FF, in each 4-bit image, and
    the same colour in each 32-bit one - painted red FF0000, every other
    pixel unchanged. The usual icon again once the set is empty: each
@@ -1885,7 +1885,10 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
 6. **Clicking.** The balloon's click (`NIN_BALLOONUSERCLICK`, which the
    shell sends after `NIM_SETVERSION` 3; only for a balloon of this
    notice, the last one shown) and, while the icon is red, a first item
-   of the left-click menu, "<n> USB device(s) can run faster...", open one
+   of the left-click menu, "<n> USB device(s) can run faster..." (since
+   revision 19 shown only while the icon is not red and the set holds a
+   device, `TR_FW_LINK` alone; while red the menu's first item is
+   section 7.2.1 item 7's, which opens the tree on the device), open one
    window, "A USB device can run faster", listing every counted device
    (`tr_fast_entry`) in a read-only text box that scrolls, with a Close
    button (Escape and Enter close it too): 80 columns of its fixed font
@@ -1937,13 +1940,17 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
      notice tells the user nothing wrong. 43.28 reads such a computer.
    - Off: no balloon, no red icon, no menu line. Turned on, the icon
      turns red at once when the set holds a device, with no balloon;
-     turned off, it goes back.
+     turned off, it goes back. (Since revision 19: off, this set turns
+     nothing red; a condition of section 7.2.1 outside it, a controller
+     or a device waiting for approval, still does. On, a `TR_FW_LINK`
+     device alone does not.)
 8. **Not done.** Windows' own controllers' devices; the pairing of a USB
    3 hub's two halves (item 1); and the top rate of a port, which no
    request the tool sends reads (the root hub answers no speed table), so
    a SuperSpeedPlus device on a computer whose every port runs at 5
-   Gbit/s keeps the icon red until the notice is turned off, as 43.27's
-   text counts it.
+   Gbit/s stays counted (balloon, list) until the notice is turned off,
+   as 43.27's text counts it; since revision 19 it does not turn the
+   icon red (section 7.2.1 item 2).
 
 The legs are roadmap-usb4 43.28 (section 11, T.13).
 

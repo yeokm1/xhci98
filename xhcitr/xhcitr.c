@@ -382,7 +382,10 @@ static int trayNoClick;     /* the button-up after a double click */
 static int trayV3;          /* NIM_SETVERSION 3 took: WM_CONTEXTMENU comes */
 /* The red icon (record 25 section 7.2.1): what tray_red last chose. */
 #define TR_RED_HC_MAX   TR_MAX_CTRL
-#define TR_RED_DEV_MAX  32
+/* Room for every port of the model: red_slow hands over each counted
+ * device, so the count, the first kind and the click's destination are
+ * whole however many there are. */
+#define TR_RED_DEV_MAX  TR_MAX_UPORTS
 #define TR_RED_KEY      280     /* TNODE.Key's size: the same cut */
 static HICON hIconRedSmall;
 static int trayRedOn;
