@@ -51,20 +51,20 @@ stor98.sys=1
 
 [Manufacturer]
 ; Windows 8.1 and 10 (NT 6.3 and later) have their own NVMe driver, stornvme,
-; and keep it (owner, 2026-10-23, roadmap-usb4 43.59): there the models
-; match only PCI\CC_0108, the controller's last and least specific
-; compatible id, so Windows' own ranking always prefers stornvme's
-; PCI\CC_010802 match, signed or not, and Stor98 binds only where the
+; and keep it (owner, 2026-10-23, roadmap-usb4 43.59): there the models give
+; PCI\CC_010802 as this INF's compatible id, its hardware id empty, so the
+; match ranks as compatible-to-compatible, below stornvme's hardware-id
+; match on the same id, signed or not, and Stor98 binds only where the
 ; installer puts it on one drive (case 3b, UpdateDriverForPlugAndPlayDevices
-; with this INF). Windows 8, which has no stornvme, and every earlier system
-; keep the class match.
+; with this INF) or a user does. Windows 8, which has no stornvme, and every
+; earlier system keep PCI\CC_010802 as the hardware id.
 %Mfg%=Stor98_Models,NTamd64,NTamd64.6.3
 
 [Stor98_Models.NTamd64]
 %Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802
 
 [Stor98_Models.NTamd64.6.3]
-%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_0108
+%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802
 
 [Stor98_Inst.NTamd64]
 CopyFiles=Stor98_CopyFiles

@@ -4706,7 +4706,7 @@ helper (xhciinst\di\build.cmd).
             " and stor98-readme.txt is its guide. SETUP.EXE installs it with the Thunderbolt 3 / USB4 support (its box under that one on the installer's Components page, ticked with it; untick it to leave Stor98 out)," +
             " and only on NVMe drives behind a Thunderbolt or USB4 tunnel: the installer selects tunnel drives only" +
             " and leaves an internal NVMe drive as it is. On 2000 to 8 its INF matches every NVMe controller (PCI\CC_010802), so Windows may still offer it for an" +
-            " internal NVMe drive that has no driver: decline it there, as Stor98 is not for internal NVMe drives. On 8.1 and 10 it matches only PCI\CC_0108," +
+            " internal NVMe drive that has no driver: decline it there, as Stor98 is not for internal NVMe drives. On 8.1 and 10 it names PCI\CC_010802 as a compatible id only," +
             " which Windows' own NVMe driver (stornvme) outranks, so there Stor98 goes only on a drive the installer or you put it on. To install it by hand on a tunnel drive, in the hardware" +
             " wizard (Have Disk), point at " +
             $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `

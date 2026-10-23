@@ -280,9 +280,13 @@ as they are made; the head of this file is rewritten when it is cut.
   reports them; the installer selects tunnel drives only. An internal NVMe
   drive is left as it is, and so is one whose place cannot be read; the
   installer says which and why. Stor98 is not for internal NVMe drives:
-  do not install it on one. Stor98's INF matches every NVMe controller
-  (`PCI\CC_010802`), so Windows may still offer Stor98 for an internal
-  NVMe drive that has no driver, later: decline it there. Where a
+  do not install it on one. On 2000 to 8 Stor98's INF matches every
+  NVMe controller (`PCI\CC_010802`), so Windows may still offer Stor98
+  for an internal NVMe drive that has no driver, later: decline it there.
+  On 8.1 and 10 it names that id as a compatible id only, which Windows'
+  own NVMe driver (`stornvme`) outranks, so there Windows never chooses
+  Stor98 by itself: it goes only on a drive the installer or you put it
+  on. Where a
   Stor98 the installer did not put on a tunnel drive is installed (by
   hand, on an internal drive), the installer changes none of its
   settings, and when that Stor98 is another release than the bundled one

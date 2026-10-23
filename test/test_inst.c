@@ -703,11 +703,30 @@ static void test_real_infs(void)
 }
 
 /* Stor98's two INFs (roadmap-usb4 43.59, owner 2026-10-23): on 2000 to 8
- * and 98 SE and ME the models match every NVMe controller by
- * PCI\CC_010802; on 8.1 and 10 (NT 6.3 and later) only PCI\CC_0108, which
- * Windows' own stornvme (PCI\CC_010802) outranks, so Stor98 goes only where
- * the installer puts it - and the installer, reading the same models,
- * still finds an NVMe controller by its compatible ids. */
+ * and 98 SE and ME the models match every NVMe controller with
+ * PCI\CC_010802 as the INF's hardware id; on 8.1 and 10 (NT 6.3 and later)
+ * the same id as its compatible id, the hardware id empty, which Windows'
+ * own stornvme (the same id as its hardware id) outranks, so Stor98 goes
+ * only where the installer puts it - and the installer, reading the same
+ * models, still finds an NVMe controller (and no other 01:08 device). */
+static int s98_model_fields(const char *inf, const char *section, char *hw,
+                            char *compat)
+{
+    char line[512];
+    char key[512];
+    char value[512];
+    const char *p = inst_inf_section(inf, section);
+
+    if (p == NULL || (p = inst_inf_line(p, line, sizeof(line))) == NULL ||
+        !inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) ||
+        !inst_inf_field(value, 1, hw, 128)) {
+        return 0;
+    }
+    compat[0] = '\0';
+    (void)inst_inf_field(value, 2, compat, 128);
+    return 1;
+}
+
 static void test_stor98_infs(void)
 {
     static const char nvmeHw[] =
@@ -744,25 +763,45 @@ static void test_stor98_infs(void)
           has_id(&ids, "PCI\\CC_010802"), "8 x64: the class match");
     e = env(1, 6, 3, INST_ARCH_X86);
     CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_0108") && !has_id(&ids, "PCI\\CC_010802"),
-          "8.1 x86: PCI\\CC_0108 alone");
+          has_id(&ids, "PCI\\CC_010802"), "8.1 x86: the class id");
     CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
                          sizeof(nvmeCompat), &ids) >= 0,
           "8.1 x86: the installer still finds an NVMe controller");
     e = env(1, 6, 3, INST_ARCH_AMD64);
     CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_0108") && !has_id(&ids, "PCI\\CC_010802"),
-          "8.1 x64: PCI\\CC_0108 alone");
+          has_id(&ids, "PCI\\CC_010802"), "8.1 x64: the class id");
     e = env(1, 10, 0, INST_ARCH_AMD64);
     CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_0108") && !has_id(&ids, "PCI\\CC_010802"),
-          "10 x64: PCI\\CC_0108 alone");
+          has_id(&ids, "PCI\\CC_010802"), "10 x64: the class id");
     CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
                          sizeof(nvmeCompat), &ids) >= 0,
           "10 x64: the installer still finds an NVMe controller");
     e = env(1, 10, 0, INST_ARCH_X86);
     CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_0108"), "10 x86: PCI\\CC_0108 alone");
+          has_id(&ids, "PCI\\CC_010802"), "10 x86: the class id");
+    {
+        char hw[128];
+        char cp[128];
+        static const char vmd[] =
+            "PCI\\VEN_8086&DEV_0B60\0\0";
+        static const char vmdCompat[] =
+            "PCI\\VEN_8086&CC_010803\0PCI\\CC_010803\0PCI\\CC_0108\0\0";
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.6.3", hw, cp) &&
+              hw[0] == '\0' && inst_eq(cp, "PCI\\CC_010802"),
+              "x64 NT 6.3 models: no hardware id, the class id compatible");
+        CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.6.3", hw, cp) &&
+              hw[0] == '\0' && inst_eq(cp, "PCI\\CC_010802"),
+              "x86 NT 6.3 models: no hardware id, the class id compatible");
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64", hw, cp) &&
+              inst_eq(hw, "PCI\\CC_010802"), "x64 models before 6.3: the hardware id");
+        CHECK(s98_model_fields(x86, "Stor98_Models", hw, cp) &&
+              inst_eq(hw, "PCI\\CC_010802"), "x86 models before 6.3: the hardware id");
+        e = env(1, 10, 0, INST_ARCH_AMD64);
+        CHECK(inst_inf_models(a64, &e, &ids) &&
+              inst_ids_match(vmd, sizeof(vmd), vmdCompat, sizeof(vmdCompat),
+                             &ids) < 0,
+              "10 x64: an 01:08 device of another interface is no candidate");
+    }
     free(x86);
     free(a64);
 }
