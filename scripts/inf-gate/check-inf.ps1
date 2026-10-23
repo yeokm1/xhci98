@@ -1494,10 +1494,22 @@ if ($Arch -ne "amd64") {
                     }
                 }
             }
+            # The pair that may differ is the one whose wizard section copies
+            # the NTMPDriver file; every other position names the same section.
             $pairs = 0
             for ($i = 0; $i -lt $pc.Count; $i++) {
-                if ($pc[$i] -ieq $uc[$i]) { continue }
+                $binSec = @(Get-Section $inf $pc[$i] | Where-Object { $ntmp9x -contains (($_.Text -split ',')[0].Trim()) }).Count -gt 0
+                if (-not $binSec) {
+                    if ($pc[$i] -ine $uc[$i]) {
+                        Add-Failure "W98-PREPSECT" ("[{0}] copies [{1}] where [{2}] copies [{3}]. Only the section copying {4} may differ between the two." -f $upd, $uc[$i], $prep, $pc[$i], $prod.Binary)
+                    }
+                    continue
+                }
                 $pairs++
+                if ($pc[$i] -ieq $uc[$i]) {
+                    Add-Failure "W98-PREPSECT" ("[{0}] and [{1}] both copy [{2}], the section copying {3}: the update section needs its own, with the temporary name." -f $prep, $upd, $pc[$i], $prod.Binary)
+                    continue
+                }
                 $pr = @(Get-Section $inf $pc[$i] | ForEach-Object { , @($_.Text -split ',' | ForEach-Object { $_.Trim() }) })
                 $ur = @(Get-Section $inf $uc[$i])
                 if ($pr.Count -ne $ur.Count) {
@@ -1513,23 +1525,39 @@ if ($Arch -ne "amd64") {
                     if ($a -ine $b -or $uf.Count -gt 4) { $same = $false }
                     if (-not $same) {
                         Add-Failure "W98-PREPSECT" ("[{0}] line {1} ('{2}') is not [{3}]'s row '{4}' with a temporary name." -f $uc[$i], $ur[$j].Line, $ur[$j].Text.Trim(), $pc[$i], ($pf -join ','))
-                        continue
                     }
+                }
+            }
+            if ($pairs -ne 1) {
+                Add-Failure "W98-PREPSECT" ("[{0}] has {1} CopyFiles section(s) copying {2}. Exactly one: its row keeps a file already there, and the update section's counterpart carries the temporary name." -f $prep, $pairs, $prod.Binary)
+            }
+            # Every row of the update section's copy sections that copies the
+            # NTMPDriver file, on its own: the temporary name and no flag at
+            # all, so the update replaces the file there whatever its version
+            # (COPYFLG_NO_OVERWRITE 16 would keep it, and
+            # COPYFLG_OVERWRITE_OLDER_ONLY 64 or COPYFLG_REPLACEONLY 1024
+            # make the copy conditional; a /force reinstall needs it plain).
+            $updBin = 0
+            foreach ($cs in $uc) {
+                foreach ($e in @(Get-Section $inf $cs)) {
+                    $uf = @($e.Text -split ',' | ForEach-Object { $_.Trim() })
+                    if (-not ($ntmp9x -contains $uf[0])) { continue }
+                    $updBin++
                     $temp = ""
                     if ($uf.Count -ge 3) { $temp = $uf[2] }
                     $uFlag = ""
                     if ($uf.Count -ge 4) { $uFlag = $uf[3] }
                     $uVal = Convert-InfFlags $uFlag
-                    if ($ntmp9x -contains $uf[0] -and ($null -eq $uVal -or ($uVal -band 0x10) -ne 0)) {
-                        Add-Failure "W98-PREPSECT" ("[{0}] line {1} copies '{2}' with flags '{3}'. The update section must replace the file there: no COPYFLG_NO_OVERWRITE (16)." -f $uc[$i], $ur[$j].Line, $uf[0], $uFlag)
+                    if ($null -eq $uVal -or $uVal -ne 0) {
+                        Add-Failure "W98-PREPSECT" ("[{0}] line {1} copies '{2}' with flags '{3}'. The update section must replace the file there unconditionally: no flag (not COPYFLG_NO_OVERWRITE 16, COPYFLG_OVERWRITE_OLDER_ONLY 64 or COPYFLG_REPLACEONLY 1024)." -f $cs, $e.Line, $uf[0], $uFlag)
                     }
-                    if ($ntmp9x -contains $uf[0] -and $temp -eq "") {
-                        Add-Failure "W98-TEMPNAME" ("[{0}] line {1} copies '{2}' with no temporary-name field. On Windows 98 that is the file NTMPDriver names, so an update over an install where it is already loaded cannot replace it and fails; the third field ('{2},,xhci98.tmp') is what makes the replace work. Its cost is the cosmetic .tmp left behind, which the release notes publish." -f $uc[$i], $ur[$j].Line, $uf[0])
+                    if ($temp -eq "") {
+                        Add-Failure "W98-TEMPNAME" ("[{0}] line {1} copies '{2}' with no temporary-name field. On Windows 98 that is the file NTMPDriver names, so an update over an install where it is already loaded cannot replace it and fails; the third field ('{2},,xhci98.tmp') is what makes the replace work. Its cost is the cosmetic .tmp left behind, which the release notes publish." -f $cs, $e.Line, $uf[0])
                     }
                 }
             }
-            if ($pairs -ne 1) {
-                Add-Failure "W98-PREPSECT" ("[{0}] and [{1}] differ in {2} CopyFiles section(s). Exactly one may differ: the one copying {3}, plain in the first and with the temporary name in the second." -f $prep, $upd, $pairs, $prod.Binary)
+            if ($updBin -ne 1) {
+                Add-Failure "W98-PREPSECT" ("[{0}]'s copy sections copy {1} {2} time(s), not once." -f $upd, $prod.Binary, $updBin)
             }
         }
     }

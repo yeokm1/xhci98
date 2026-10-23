@@ -1997,6 +1997,11 @@ try {
         $msg = ""
         try { Test-WdmFreeCer -Path (Join-Path $freeRepo "notacert.cer") -Thumbprint $cerThumb -Label "x" } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("not a DER certificate")) ("a file that is no certificate was accepted as the free set's: '" + $msg + "'")
+        $tailCer = Join-Path $script:work "cer-tail.cer"
+        [System.IO.File]::WriteAllBytes($tailCer, [byte[]]($cerBytes + [System.Text.Encoding]::ASCII.GetBytes("appended")))
+        $msg = ""
+        try { Test-WdmFreeCer -Path $tailCer -Thumbprint $cerThumb -Label "x" } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("not one DER certificate alone") -or $msg.Contains("not a")) ("a certificate with bytes appended was accepted as the free set's: '" + $msg + "'")
         $msg = ""
         try { Test-WdmFreeCer -Path (Join-Path $fr.Dir "usb-wdm-free-test.cer") -Thumbprint ("F" * 40) -Label "x" } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("not the pinned")) ("the free set's certificate at another thumbprint was accepted: '" + $msg + "'")

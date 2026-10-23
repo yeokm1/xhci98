@@ -2629,6 +2629,10 @@ function Test-WdmFreeCer {
     if ($ct -ne [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert) { throw "$Label is a $ct, not a certificate." }
     $x = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $b)
     try {
+        $raw = $x.RawData
+        $whole = ($raw.Length -eq $b.Length)
+        for ($i = 0; $whole -and $i -lt $b.Length; $i++) { if ($raw[$i] -ne $b[$i]) { $whole = $false } }
+        if (-not $whole) { throw "$Label is not one DER certificate alone ($($b.Length) bytes, the certificate in it $($raw.Length))." }
         if ($x.HasPrivateKey) { throw "$Label carries a private key." }
         if ($x.Thumbprint.ToUpperInvariant() -ne $Thumbprint) { throw "$Label's thumbprint is $($x.Thumbprint), not the pinned $Thumbprint." }
     } finally {

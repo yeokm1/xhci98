@@ -681,9 +681,10 @@ record 23 section 6.4's steps.
   sets the new node's `Flags` and `DriverDate` to the chosen node's;
   makes it `lpSelectedDriver`; writes a `CALL DiCreateDriverNode
   <section> <err>` line and a second `DRIVER` line from the new node, and
-  checks its INF is the job's again. The node is on no list, so the
-  device info's destruction does not free it; the helper ends after the
-  job. A failure of the call is `failed` with its error; no node with no
+  checks its INF is the job's again. After the install the chosen node
+  is selected again and the new one put at the head of
+  `lpCompatDrvList`, so `DiDestroyDeviceInfoList` frees it with the
+  list's own nodes. A failure of the call is `failed` with its error; no node with no
   error is `failed XHCIDI_NO_SECTION_NODE 0`. Read on 98 SE (2026-10-23):
   the controller's update over 3.1.0.0 installed `Xhci.Upd`, and its
   driver key reads `InfSection = Xhci.Upd`, `InfPath`, `ProviderName`,

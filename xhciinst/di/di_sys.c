@@ -162,6 +162,8 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     LPDEVICE_INFO lpdi = NULL;
     LPDEVICE_INFO e;
     LPDRIVER_NODE dn;
+    LPDRIVER_NODE made = NULL;
+    LPDRIVER_NODE chosen = NULL;
     ATOM atom = 0;
     int ldd_saved = 0;
     unsigned long flags;
@@ -293,9 +295,11 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
      * DiCreateDriverNode makes one (setupx.h) from the chosen node's own
      * rank, type, date, descriptions, provider, manufacturer and INF, with
      * the section the job names; its flags, driver date and private data
-     * are the chosen node's too. The new node is the selected driver and is
-     * on no list, so the list's destruction never frees it; the helper ends
-     * after this one job, and the node is the engine's memory for that long.
+     * are the chosen node's too. The new node is the selected driver for
+     * the install; at the end the chosen node is selected again and the new
+     * one put at the head of the compatible list, so the device info's
+     * destruction frees it with the list's own nodes (DiDestroyDeviceInfoList
+     * destroys a device info's driver lists).
      */
     if (cmd->section[0] != '\0' &&
         (dn->lpszSectionName == NULL ||
@@ -327,6 +331,8 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
         }
         nn->Flags = dn->Flags;
         nn->DriverDate = dn->DriverDate;
+        made = nn;
+        chosen = dn;
         lpdi->lpSelectedDriver = nn;
         dn = nn;
         infname[0] = '\0';
@@ -374,6 +380,11 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     }
 
 cleanup:
+    if (lpdi != NULL && made != NULL) {
+        lpdi->lpSelectedDriver = chosen;
+        made->lpNextDN = lpdi->lpCompatDrvList;
+        lpdi->lpCompatDrvList = made;
+    }
     if (lpdi != NULL) {
         DiDestroyDeviceInfoList(lpdi);
     }

@@ -1467,6 +1467,14 @@ try {
     Assert-RuleFires "w98-upd-copylist" "W98-PREPSECT" {
         param($t) $t.Replace("[Xhci.Upd]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI", "[Xhci.Upd]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
     }
+    Assert-RuleFires "w98-upd-older-only" "W98-PREPSECT" {
+        param($t) $t.Replace("[Xhci.CopyFiles]`r`nxhci98.sys,,xhci98.tmp", "[Xhci.CopyFiles]`r`nxhci98.sys,,xhci98.tmp,64")
+    }
+    # The update section copying the wizard's own row, the one differing
+    # position an alias of the OS files' section (the review of batch 10).
+    Assert-RuleFires "w98-upd-alias" "W98-PREPSECT" {
+        param($t) $t.Replace("[Xhci.Upd]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI", "[Xhci.Upd]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOSA,Xhci.CopyUI").Replace("[Xhci.CopyOS]`r`n", "[Xhci.CopyOSA]`r`nusbd.sys,,,16`r`n`r`n[Xhci.CopyOS]`r`n").Replace("Xhci.CopyOS=10,System32\Drivers`r`n", "Xhci.CopyOS=10,System32\Drivers`r`nXhci.CopyOSA=10,System32\Drivers`r`n")
+    }
     Assert-RuleFires "w98-upd-noflag" "W98-PREPSECT" {
         param($t) $t.Replace("[Xhci.CopyFiles]`r`nxhci98.sys,,xhci98.tmp", "[Xhci.CopyFiles]`r`nxhci98.sys,,xhci98.tmp,16")
     }

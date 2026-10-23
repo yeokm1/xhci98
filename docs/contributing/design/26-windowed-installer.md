@@ -889,8 +889,10 @@ The INF gate holds the pair (W98-PREPROW: the wizard's row is
 `COPYFLG_NO_OVERWRITE` with no temporary name; W98-PREPSECT: the update
 section exists, no model names it, its directives equal the wizard
 section's but for the one copy section, whose rows equal the wizard's
-but for the temporary name and the flag, and `inst_core.h`'s name for it
-is the INF's; W98-TEMPNAME now on the update section's row). **The cost**:
+but for the temporary name and the flag, the one differing pair being the
+one that copies `xhci98.sys`, the update's row for it unconditional (no
+flag), and `inst_core.h`'s name for it is the INF's; W98-TEMPNAME now on
+the update section's row). **The cost**:
 an update by hand through Windows' Update Driver on 98 SE and ME takes
 `[Xhci.Dev]` and so keeps the `xhci98.sys` that is there, older or not;
 `INSTALL.BAT` is the update path there (the release notes say so).
@@ -3760,7 +3762,8 @@ before a release qualifies. With a `Tag:` line, the `Certificate:` line
 and the `SHA256:` line of `usb-wdm-free-test.cer` at the release's top go
 together (`Read-WdmFreePin` refuses either alone), and
 `Export-WdmFreeSet` copies the file into `USBDRV\FREE\`, held to the
-pinned hash and refused unless it is one DER certificate with no private
+pinned hash and refused unless the whole file is one DER certificate
+(its bytes the parsed certificate's, nothing appended) with no private
 key and the pinned thumbprint (`Test-WdmFreeCer`), and hashes it in the
 set's `SHA256.TXT`, where the installer's `INST_WDMFREE_CER` reads it.
 The public half is the usb-wdm-free release's file, as `xhci98-test.cer`
