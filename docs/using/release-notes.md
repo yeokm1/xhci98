@@ -245,9 +245,13 @@ as they are made; the head of this file is rewritten when it is cut.
   reports them; the installer selects tunnel drives only. An internal NVMe
   drive is left as it is, and so is one whose place cannot be read; the
   installer says which and why. Stor98 is not for internal NVMe drives:
-  do not install it on one. Stor98's INF matches every NVMe controller
-  (`PCI\CC_010802`), so Windows may still offer Stor98 for an internal
-  NVMe drive that has no driver, later: decline it there. Where a
+  do not install it on one. On 2000 to 8 Stor98's INF matches every
+  NVMe controller (`PCI\CC_010802`), so Windows may still offer Stor98
+  for an internal NVMe drive that has no driver, later: decline it there.
+  On 8.1 and 10 it names that id as a compatible id only, which Windows'
+  own NVMe driver (`stornvme`) outranks, so there Windows never chooses
+  Stor98 by itself: it goes only on a drive the installer or you put it
+  on. Where a
   Stor98 the installer did not put on a tunnel drive is installed (by
   hand, on an internal drive), the installer changes none of its
   settings, and when that Stor98 is another release than the bundled one
@@ -766,9 +770,21 @@ the tunnel down as it did in `3.0.0.0`.
 
 ### NVMe drives behind a tunnel
 
-An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
-which none of these systems has. Stor98, built with this package at its
-version, is that driver for Windows 98 SE to 7, and the download carries
+An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver.
+From `3.2.0.0` a tunnelled drive gets this one on each system (roadmap-usb4
+43.59, the owner's decision of 2026-10-23):
+
+| Windows | The driver of a tunnelled NVMe drive | Why |
+|---|---|---|
+| 98 SE, ME, 2000, XP, Vista | Stor98 | no in-box NVMe driver |
+| 7 | Stor98 | 7 has an NVMe driver (`stornvme`) only with Microsoft's update KB2990941, untested behind a tunnel here |
+| 8 | Stor98 | 8 has no in-box NVMe driver (none in its install image) |
+| 8.1 | Stor98, put on the drive by the installer or, for a drive plugged in later, by the safe-removal mark service | 8.1's own `stornvme` (6.3.9600) holds a write for good when the drive is unplugged without Safely Remove; Stor98 fails it at once. An internal NVMe drive keeps `stornvme` |
+| 10 | Windows' own `stornvme` | it ends a surprise unplug cleanly (read on 10 x86 and x64); Stor98 is opt-in per drive |
+
+Safely Remove first is still the recommended way to unplug a drive, on
+every system. Stor98, built with this package at its version, is the
+driver for Windows 98 SE to 8.1 in that table, and the download carries
 it with its own licence and notes (which version, and where it is: "NVMe drives behind
 Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the

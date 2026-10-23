@@ -811,7 +811,11 @@ staged on NT and in the install directory on 98 SE and ME so that a
 tunnel drive that appears later - the usual case, since the tunnel may
 come up only after the restart - installs, so Windows may still offer
 Stor98 for an internal NVMe drive that has no driver. The tool never
-selects one.
+selects one. On 8.1 and 10 (from 2026-10-23, roadmap-usb4 43.59) the INF
+names `PCI\CC_010802` there as a compatible id only, so Windows' own
+`stornvme` outranks it and a tunnel drive that appears later keeps
+`stornvme` until the installer runs again (case 3b) or the user installs
+Stor98 on it.
 
 **The USB storage drivers on 98 SE (revision 24).** When record 26
 section 6.5's row is ticked and its case admits the same-bytes route,

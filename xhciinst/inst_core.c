@@ -5950,10 +5950,11 @@ int inst_s98_sys_index(int nt, INST_U32 major, INST_U32 minor)
 
 int inst_s98_box_default(int sys)
 {
-    /* One line a system (owner, 2026-10-22): ticked everywhere for now.
-     * On 8.1 and 10 a line becomes 0 only once Windows' own stornvme is
-     * shown to hot-plug behind this package's tunnel (roadmap 43.24 for
-     * 8.1, 43.33 and 43.37 for 10); 8 has no in-box NVMe driver. */
+    /* One line a system (owner, 2026-10-22: ticked everywhere). Task
+     * 43.59 (owner, 2026-10-23): on 10 Windows' own stornvme ends a
+     * surprise unplug cleanly, so Stor98 there is opt-in per drive (0);
+     * on 8.1, whose stornvme holds a write for good, and on 8, which has
+     * no in-box NVMe driver, Stor98 stays the default. */
     static const unsigned char table[INST_S98SYS_COUNT] = {
         1,  /* 98 SE */
         1,  /* ME */
@@ -5963,7 +5964,7 @@ int inst_s98_box_default(int sys)
         1,  /* 7 */
         1,  /* 8 */
         1,  /* 8.1 */
-        1   /* 10 */
+        0   /* 10 (task 43.59) */
     };
 
     if (sys < 0 || sys >= INST_S98SYS_COUNT) {
@@ -5985,6 +5986,18 @@ const char *inst_cm_cat_refusal(int arch, int haveCm, int cat)
 int inst_s98_over_inbox(int is8, const char *service)
 {
     return is8 && service != NULL && inst_eq(service, "stornvme");
+}
+
+int inst_s98_auto_value(int cmOnly, int s98In, int staged, int mkAction,
+                        int os81)
+{
+    return cmOnly && os81 && s98In && staged && mkAction == INST_MK_INSTALL;
+}
+
+int inst_s98_switch_os(int nt, INST_U32 major, INST_U32 minor,
+                       INST_U32 build)
+{
+    return nt && major == 6UL && minor == 3UL && build < 10000UL;
 }
 
 int inst_s98_known_tunnel(int nt, int present, int place, int recorded)

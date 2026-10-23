@@ -699,6 +699,110 @@ static void test_real_infs(void)
     free(u64);
 }
 
+/* Stor98's two INFs (roadmap-usb4 43.59, owner 2026-10-23): on 2000 to 8
+ * and 98 SE and ME the models match every NVMe controller with
+ * PCI\CC_010802 as the INF's hardware id; on 8.1 and 10 (NT 6.3 and later)
+ * the same id as its compatible id, the hardware id empty, which Windows'
+ * own stornvme (the same id as its hardware id) outranks, so Stor98 goes
+ * only where the installer puts it - and the installer, reading the same
+ * models, still finds an NVMe controller (and no other 01:08 device). */
+static int s98_model_fields(const char *inf, const char *section, char *hw,
+                            char *compat)
+{
+    char line[512];
+    char key[512];
+    char value[512];
+    const char *p = inst_inf_section(inf, section);
+
+    if (p == NULL || (p = inst_inf_line(p, line, sizeof(line))) == NULL ||
+        !inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) ||
+        !inst_inf_field(value, 1, hw, 128)) {
+        return 0;
+    }
+    compat[0] = '\0';
+    (void)inst_inf_field(value, 2, compat, 128);
+    return 1;
+}
+
+static void test_stor98_infs(void)
+{
+    static const char nvmeHw[] =
+        "PCI\\VEN_1B36&DEV_0010&SUBSYS_11001AF4&REV_02\0"
+        "PCI\\VEN_1B36&DEV_0010&SUBSYS_11001AF4\0\0";
+    static const char nvmeCompat[] =
+        "PCI\\VEN_1B36&DEV_0010&REV_02\0PCI\\VEN_1B36&DEV_0010\0"
+        "PCI\\VEN_1B36&CC_010802\0PCI\\VEN_1B36&CC_0108\0PCI\\VEN_1B36\0"
+        "PCI\\CC_010802\0PCI\\CC_0108\0\0";
+    char *x86 = load("..\\src\\stor98\\inf\\stor98-x86.inf");
+    char *a64 = load("..\\src\\stor98\\inf\\stor98-x64.inf");
+    INST_ENV e;
+    INST_IDLIST ids;
+
+    CHECK(x86 != NULL && a64 != NULL, "Stor98's two INFs read");
+    if (x86 == NULL || a64 == NULL) {
+        free(x86);
+        free(a64);
+        return;
+    }
+    CHECK(inst_inf_arch_ok(x86, INST_ARCH_X86), "stor98-x86.inf is x86");
+    CHECK(inst_inf_arch_ok(a64, INST_ARCH_AMD64), "stor98-x64.inf is amd64");
+    e = env(0, 4, 10, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "98 SE: the class match");
+    e = env(1, 5, 0, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "2000: the class match");
+    e = env(1, 6, 2, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "8 x86: the class match");
+    e = env(1, 6, 2, INST_ARCH_AMD64);
+    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "8 x64: the class match");
+    e = env(1, 6, 3, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "8.1 x86: the class id");
+    CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
+                         sizeof(nvmeCompat), &ids) >= 0,
+          "8.1 x86: the installer still finds an NVMe controller");
+    e = env(1, 6, 3, INST_ARCH_AMD64);
+    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "8.1 x64: the class id");
+    e = env(1, 10, 0, INST_ARCH_AMD64);
+    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "10 x64: the class id");
+    CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
+                         sizeof(nvmeCompat), &ids) >= 0,
+          "10 x64: the installer still finds an NVMe controller");
+    e = env(1, 10, 0, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "10 x86: the class id");
+    {
+        char hw[128];
+        char cp[128];
+        static const char vmd[] =
+            "PCI\\VEN_8086&DEV_0B60\0\0";
+        static const char vmdCompat[] =
+            "PCI\\VEN_8086&CC_010803\0PCI\\CC_010803\0PCI\\CC_0108\0\0";
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.6.3", hw, cp) &&
+              hw[0] == '\0' && inst_eq(cp, "PCI\\CC_010802"),
+              "x64 NT 6.3 models: no hardware id, the class id compatible");
+        CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.6.3", hw, cp) &&
+              hw[0] == '\0' && inst_eq(cp, "PCI\\CC_010802"),
+              "x86 NT 6.3 models: no hardware id, the class id compatible");
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64", hw, cp) &&
+              inst_eq(hw, "PCI\\CC_010802"), "x64 models before 6.3: the hardware id");
+        CHECK(s98_model_fields(x86, "Stor98_Models", hw, cp) &&
+              inst_eq(hw, "PCI\\CC_010802"), "x86 models before 6.3: the hardware id");
+        e = env(1, 10, 0, INST_ARCH_AMD64);
+        CHECK(inst_inf_models(a64, &e, &ids) &&
+              inst_ids_match(vmd, sizeof(vmd), vmdCompat, sizeof(vmdCompat),
+                             &ids) < 0,
+              "10 x64: an 01:08 device of another interface is no candidate");
+    }
+    free(x86);
+    free(a64);
+}
+
 /* The Thunderbolt INFs in src\cm\ (task 39-A.1). A missing one is a
  * failure, as a missing INF of src\ is above: the tree carries them. */
 static void test_cm_infs(void)
@@ -4085,12 +4189,45 @@ static void test_s98(void)
               !inst_s98_decide(1, 0, 1, 1, 0, 0, 1, &asked, &def) && !asked,
               "no Thunderbolt support in the run: Stor98 neither asked nor "
               "installed");
+        CHECK(inst_s98_box_default(INST_S98SYS_7) &&
+              inst_s98_box_default(INST_S98SYS_8) &&
+              inst_s98_box_default(INST_S98SYS_81) &&
+              !inst_s98_box_default(INST_S98SYS_10),
+              "43.59: Stor98's table ticks 7, 8 and 8.1, not 10");
         CHECK(!inst_s98_decide(1, 1, 0, 0, 0, 0, 0, &asked, &def) && asked &&
               !def, "a system whose table line is 0: asked, Enter gives N");
         CHECK(!inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &asked, &def) && !asked,
               "table line 0, /yes: N");
         CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 0, &asked, &def) && !asked,
               "table line 0, /stor98: installed unasked");
+        CHECK(inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL, 1),
+              "43.59: 8, 8.1 and 10 with Stor98 staged and the service: the value written");
+        CHECK(!inst_s98_auto_value(0, 1, 1, INST_MK_INSTALL, 1) &&
+              !inst_s98_auto_value(1, 0, 1, INST_MK_INSTALL, 1) &&
+              !inst_s98_auto_value(1, 1, 0, INST_MK_INSTALL, 1) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_LEAVE, 1) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_REMOVE, 1),
+              "43.59: 2000 to 7, Stor98 not in the run or not staged, or no service: not written");
+        /* Task 43.59, owner 2026-10-23: the switch on 8.1 alone. */
+        CHECK(!inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL, 0),
+              "not 8.1: no Stor98Inf");
+        CHECK(inst_s98_switch_os(1, 6, 3, 9600), "8.1 (6.3.9600)");
+        CHECK(inst_s98_switch_os(1, 6, 3, 9601), "an 8.1 build past 9600");
+        CHECK(!inst_s98_switch_os(1, 6, 2, 9200), "8 (6.2.9200)");
+        CHECK(!inst_s98_switch_os(1, 10, 0, 10240), "10 (10.0.10240)");
+        CHECK(!inst_s98_switch_os(1, 10, 0, 19045), "10 22H2");
+        CHECK(!inst_s98_switch_os(1, 10, 0, 22000), "11");
+        CHECK(!inst_s98_switch_os(1, 6, 3, 10240),
+              "6.3 with a build of 10 (an unmanifested answer on 10)");
+        CHECK(!inst_s98_switch_os(1, 6, 3, 19045),
+              "6.3 with a build of 10 22H2: a stale 8.1 value refused");
+        CHECK(!inst_s98_switch_os(1, 6, 1, 7601) &&
+              !inst_s98_switch_os(1, 6, 0, 6002) &&
+              !inst_s98_switch_os(1, 5, 1, 2600) &&
+              !inst_s98_switch_os(1, 5, 0, 2195), "7, Vista, XP, 2000");
+        CHECK(!inst_s98_switch_os(0, 4, 10, 2222) &&
+              !inst_s98_switch_os(0, 4, 90, 3000) &&
+              !inst_s98_switch_os(0, 6, 3, 9600), "98 SE, ME, not NT");
         /* Task 43.23 (record 26 section 5.3.1 case 3b): 8.1's and 10's own
          * stornvme on a tunnel drive is installed over, forced; nothing
          * else is. */
@@ -4134,12 +4271,13 @@ static void test_s98(void)
             int t;
             int all = 1;
             for (t = 0; t < INST_S98SYS_COUNT; t++) {
-                all = all && inst_s98_box_default(t) == 1;
+                all = all && inst_s98_box_default(t) ==
+                      (t == INST_S98SYS_10 ? 0 : 1);
             }
             CHECK(all && inst_s98_box_default(-1) == 1 &&
                   inst_s98_box_default(INST_S98SYS_COUNT) == 1,
-                  "Stor98's table: ticked on every system for now (owner, "
-                  "2026-10-22)");
+                  "Stor98's table: ticked on every system but 10 (owner, "
+                  "2026-10-22; task 43.59, 2026-10-23)");
             CHECK(inst_s98_sys_index(0, 4, 10) == INST_S98SYS_98SE &&
                   inst_s98_sys_index(0, 4, 90) == INST_S98SYS_ME &&
                   inst_s98_sys_index(1, 5, 0) == INST_S98SYS_2000 &&
@@ -5809,6 +5947,7 @@ int main(void)
     test_reg_hex();
     test_real_infs();
     test_cm_infs();
+    test_stor98_infs();
     test_parser();
     test_ids();
     test_actions();

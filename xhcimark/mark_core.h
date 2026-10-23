@@ -188,6 +188,88 @@ void mk_confirm_build(unsigned char *out, const MK_MARKS *m,
  * none did (record 25 section 3.4's cadence). */
 INST_U32 mk_poll_ms(int anyAnswered);
 
+/* ---- Stor98 on a tunnelled drive (record 21 section 7.5, task 43.59) ----- */
+
+#define MK_S98_VALUE        "Stor98Inf" /* Parameters: the staged INF   */
+#define MK_S98_KEY          "Stor98"    /* the records, one per devnode */
+#define MK_S98_CC           "PCI\\CC_010802"
+#define MK_S98_RETRY_MS     10000UL     /* between attempts in one arrival */
+#define MK_S98_ATTEMPTS     3           /* the first and two retries      */
+
+/* 1 when `inf` is <windir>\INF\oem<digits>.inf (case ignored; windir with
+ * or without its trailing backslash): the only form the switch acts on. */
+int mk_s98_inf_ok(const char *inf, const char *windir);
+
+/* A devnode's record (the value's text). */
+#define MK_S98_NONE         0   /* no record                               */
+#define MK_S98_DISABLE      1   /* "disable": about to be stopped           */
+#define MK_S98_INSTALL      2   /* "install": stopped, Stor98 going on      */
+#define MK_S98_DONE         3   /* "done": read back running Stor98, final  */
+#define MK_S98_BUSY         4   /* "busy": Windows refused the stop         */
+#define MK_S98_FAILED       5   /* "failed": anything else, final           */
+#define MK_S98_ENABLE       6   /* "enable": its enable owed (not verified) */
+#define MK_S98_RESTART      7   /* "restart": the install asked for one     */
+/* The text of a state; NULL for MK_S98_NONE or an unknown state. */
+const char *mk_s98_rec_text(int state);
+/* The state a record's text holds: MK_S98_NONE for NULL; an unknown text
+ * reads as MK_S98_FAILED, so a record nobody can read stops the switch. */
+int mk_s98_rec_parse(const char *text);
+
+/* Whether one more attempt is allowed now, in the devnode's current
+ * arrival: with no record, the first; after "busy", up to MK_S98_ATTEMPTS
+ * in the arrival, MK_S98_RETRY_MS apart; a new arrival starts again at 0.
+ * Never for "done", "failed", or a switch's own states. */
+int mk_s98_retry(int record, int attempts, INST_U32 sinceMs);
+
+/* 1 when an ancestor of `node` (its parent and up, at most 64 steps) is
+ * marked in member[]: parent[] the walk's parent indices (-1 the root). */
+int mk_s98_below(const int *parent, int n, int node, const int *member);
+
+/* One devnode against section 7.5.3's rules; MK_S98_GO or the first
+ * reason that refuses (mk_s98_why_text). */
+typedef struct _MK_S98_IN {
+    int PolicyOk;           /* mk_s98_inf_ok of the value               */
+    int WalkWhole;          /* this poll's walk had no failure          */
+    int IsPci;              /* its id starts PCI\                       */
+    int Nvme;               /* its compatible ids carry MK_S98_CC       */
+    const char *Service;    /* its Service value, or NULL               */
+    int StatusOk;           /* its status read                          */
+    int Started;            /* DN_STARTED                               */
+    int Problem;            /* DN_HAS_PROBLEM                           */
+    int Below;              /* below an active member, domain verifiable */
+    int Protected;          /* mk_protect's node                        */
+    int InstallPending;     /* a Windows installation pending or unknown */
+    int Record;             /* MK_S98_*                                 */
+    int Attempts;           /* attempts in this arrival                 */
+    INST_U32 SinceMs;       /* since the last of them                   */
+} MK_S98_IN;
+#define MK_S98_GO           0
+#define MK_S98_W_CLASS      1
+#define MK_S98_W_SERVICE    2
+#define MK_S98_W_POLICY     3
+#define MK_S98_W_WALK       4
+#define MK_S98_W_TUNNEL     5
+#define MK_S98_W_PROTECTED  6
+#define MK_S98_W_STATE      7
+#define MK_S98_W_RECORD     8
+#define MK_S98_W_PENDING    9
+int mk_s98_wanted(const MK_S98_IN *in);
+const char *mk_s98_why_text(int why);
+
+/* What a record asks for outside a switch. "disable", "install" and
+ * "enable" (a switch cut short, or an enable that did not hold): nothing
+ * while the devnode is absent (it may come back disabled); its enable when
+ * it is present and disabled, the record kept until the enable is seen;
+ * once present and not disabled, "done" when it runs Stor98 (s98Started)
+ * and "failed" otherwise. "restart": decided at the service's first poll
+ * (firstPoll) once present, the same way. Anything else: nothing. */
+#define MK_S98_R_NOTHING    0
+#define MK_S98_R_ENABLE     1   /* enable it; the record stays           */
+#define MK_S98_R_FAIL       2   /* record "failed"                       */
+#define MK_S98_R_DONE       3   /* record "done"                         */
+int mk_s98_recover(int record, int present, int disabled, int s98Started,
+                   int firstPoll);
+
 /* ---- the self-test -------------------------------------------------------- */
 
 int mk_selftest(void (*report)(int ok, const char *what));

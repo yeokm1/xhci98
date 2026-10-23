@@ -44,8 +44,9 @@ been tested there. On Windows 8, 8.1 and 10 the USB drivers are
 unticked by default, Windows' own driver running the controllers;
 ticking them (or /usb) replaces Windows' own, with a warning that they
 are untested there. Stor98 is ticked with the Thunderbolt support on
-every system, 8, 8.1 and 10 included; there, if a drive behind a tunnel
-uses Windows' own NVMe driver, Stor98 replaces it. Windows 11 (build
+every system but 10, where Windows' own NVMe driver (stornvme) stays the
+tunnelled drive's driver and Stor98 is yours to tick (task 43.59); on
+8.1 it replaces stornvme on a drive behind a tunnel. Windows 11 (build
 22000 and later) is refused: it has a USB4 connection manager of its
 own. Every
 box of the Components page is shown on every system; one that does not
@@ -127,11 +128,12 @@ already gave them one. Unticked, a Thunderbolt driver already installed
 stays as it is, and this package's is kept out of Windows' reach.
 
 Stor98, the bundled NVMe driver (its guide is stor98-readme.txt):
-ticked with the Thunderbolt 3 / USB4 box, and you
+ticked with the Thunderbolt 3 / USB4 box (on Windows 10 unticked), and you
 can untick it. Ticked, it is installed on every NVMe drive behind a
 Thunderbolt or USB4 tunnel that has no driver - never on one another
-driver runs (but on 8.1 and 10 on a tunnel drive that Windows' own
-stornvme runs, which it replaces), nor on an internal drive - and an
+driver runs (but on 8.1, and on 10 when you tick it, on a tunnel drive
+that Windows' own stornvme runs, which it replaces), nor on an internal
+drive - and an
 older Stor98 is
 updated. Its tab in the Settings dialog shows
 each of Stor98's options as it is now ("not set" means Stor98's built-in
@@ -285,8 +287,8 @@ this package's connection manager - the devices are approved (see
 XhciCmApprove), connected and disconnected - and what a device brings is
 driven by whatever driver Windows has for it: an NVMe drive by an NVMe
 driver (Windows 8.1 and 10 have their own; Windows 8 has none; the
-bundled Stor98 is ticked with the Thunderbolt support there as on every
-system), the USB controller inside a dock by
+bundled Stor98 is ticked with the Thunderbolt support on 8 and 8.1 and
+unticked on 10), the USB controller inside a dock by
 Windows' own USB 3 driver on 8, 8.1 and 10 (on 2000 to 7 by another maker's
 driver only where it supports that controller), and the USB devices of a
 USB4 port's USB 3 connection on the computer's own USB controller.
@@ -324,8 +326,9 @@ Windows 10 is installable. Its drivers were read in virtual machines of
 there. It admits every build below 22000 - the releases 1507 to 22H2 and
 the LTSC releases - and Windows Server 2016, 2019 and 2022, which it
 treats as Windows 10 and which are untested; only 22H2 is to be tested.
-It installs there as on Windows 8.1: the connection manager with Stor98
-(ticked with it, /nostor98 leaves it out), and the USB drivers only when
+It installs there as on Windows 8.1: the connection manager, with
+Stor98 unticked (Windows' own stornvme stays; /stor98 asks for Stor98),
+and the USB drivers only when
 you tick them. Windows 10 has no Thunderbolt
 or USB4 driver of its own (USB4 support came with Windows 11), but many
 computers come with Intel's Thunderbolt driver: where it runs the

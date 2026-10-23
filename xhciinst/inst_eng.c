@@ -326,6 +326,8 @@ static INST_U32 pkgVersion[4];
  * version. */
 static char *s98Text;       /* stor98.inf, read when the package has it   */
 static int haveS98;         /* the flavour directory carries Stor98       */
+static char s98StagedInf[INST_PATH_CHARS]; /* NT: the staged stor98.inf,
+                            * for the mark service (record 21 s. 7.5) */
 static int s98Include;      /* ticked, or /stor98, with the Thunderbolt
                                component in the run                       */
 static int s98Want;         /* ticked, or /stor98                          */
@@ -451,6 +453,7 @@ static int haveCm;
 /* The connection manager alone (record 23 section 4.5, revision 13): the
  * system's kind, and the USB drivers in this run or out of it. */
 static int osKind = INST_OS_FULL;
+static int osIs81;  /* inst_s98_switch_os: Windows 8.1 (task 43.59) */
 static int usbInclude = 1;
 static int usbOffered;
 static int uasInclude = 1;  /* xhciuas.inf in the run, with the USB drivers */
@@ -6334,6 +6337,9 @@ static int stage_nt(void)
         if (k == INST_INF_CM) {
             tbStaged = 1;
         }
+        if (k == INST_INF_S98) {
+            inst_copy(s98StagedInf, dest, sizeof(s98StagedInf));
+        }
         if (inst_staged_again(had, copiedNow, before,
                               component ? component : dest)) {
             out("%s is staged already, as %s.\n", instInfFile[k], before);
@@ -6400,6 +6406,16 @@ static int hwid_clear(const char *hwid, int inf)
             d->S98Why != INST_S98_ELIGIBLE) {
             /* NT's call reaches every device with the id: a drive the
              * installer leaves keeps the tunnel drive from it too. */
+            if (osIs81) {
+                /* Task 43.59: on 8.1 the mark service puts Stor98 on the
+                 * tunnel drive alone, seconds after this run. */
+                out("  %s is shared with %s, which this run leaves (%s);\n"
+                    "  this run changes neither: the safe-removal mark "
+                    "service puts Stor98 on\n  the tunnel drive alone "
+                    "once this run ends.\n", hwid, d->Id,
+                    inst_s98_skip_text(d->S98Why, 1));
+                return 0;
+            }
             out("  %s is shared with %s, which this run leaves (%s);\n"
                 "  neither is changed. Install Stor98 on the tunnel drive "
                 "in Device Manager\n  (Update Driver, Have Disk, this "
@@ -10257,6 +10273,7 @@ static void remove_services_and_files(void)
 #define INST_MK_SERVICE     "xhcimark"
 #define INST_MK_DISPLAY     "xHCI98 Thunderbolt safe-removal mark service"
 #define INST_MK_MARKS_KEY   "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Marks"
+#define INST_MK_PARAMS_KEY  "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Parameters"
 #define INST_MK_MUTEX       "Global\\Xhci98MarkWrite"
 #define INST_MK_NAME        "xhcicm"
 #define INST_MK_STOP_MS     30000UL
@@ -10689,6 +10706,193 @@ static int mk_delete_copy(void)
     return 0;
 }
 
+/* Record 21 section 7.5 (task 43.59): before the service and its key go,
+ * every drive its records name that Windows has bound to Stor98 (its
+ * Service value, present or not) is entered under Stor98's Devices, as
+ * the service enters the drives it switched, so the uninstall's Stor98
+ * step gives it back whatever state the switch reached; and every drive a
+ * switch left owing an enable ("disable", "install", "enable") is enabled
+ * again, present or not, so no drive is left disabled with nobody to
+ * enable it. Every record is read, with no limit; a key or a record that
+ * cannot be read, or a drive whose driver cannot be read, leaves it
+ * unsettled. 1 all done; 0 not (the service's key stays). The service is
+ * stopped, so nothing changes the records meanwhile. */
+#define INST_MK_S98_KEY     "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Stor98"
+/* The devnode of `id` in `set`: 1 found; 0 none, the whole list read; -1
+ * the list or an entry's id could not be read. */
+static int mk_s98_find(HDEVINFO set, const char *id, SP_DEVINFO_DATA *data)
+{
+    DWORD i;
+    char got[INST_ID_CHARS];
+
+    for (i = 0;; i++) {
+        data->cbSize = sizeof(*data);
+        if (!api.EnumInfo(set, i, data)) {
+            return GetLastError() == ERROR_NO_MORE_ITEMS ? 0 : -1;
+        }
+        if (!api.GetInstanceId(set, data, got, sizeof(got), NULL)) {
+            return -1;
+        }
+        if (inst_eq(got, id)) {
+            return 1;
+        }
+    }
+}
+
+static int mk_s98_settle_one(HDEVINFO set, const char *id, int owed)
+{
+    SP_DEVINFO_DATA data;
+    SP_PROPCHANGE_PARAMS pcp;
+    SP_DEVINSTALL_PARAMS_A ip;
+    DWORD type;
+    char svc[64];
+    int bound;
+    int f;
+
+    f = mk_s98_find(set, id, &data);
+    if (f == 0) {
+        return 1;               /* no devnode, not even a phantom */
+    }
+    if (f < 0) {
+        out("The device list could not be read (error %lu): the drives the "
+            "mark service\nmoved to Stor98 are not settled.\n",
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    memset(svc, 0, sizeof(svc));
+    if (api.GetRegProp(set, &data, SPDRP_SERVICE, &type, (PBYTE)svc,
+                       sizeof(svc) - 1, NULL)) {
+        bound = inst_eq(svc, "stor98");
+    } else if (GetLastError() == ERROR_INVALID_DATA) {
+        bound = 0;              /* no Service value: no driver */
+    } else {
+        out("The driver of %s could not be read (error %lu): the drives the "
+            "mark service\nmoved to Stor98 are not settled.\n", id,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    if (bound && s98_rec_has("Devices", id) != 1) {
+        if (!s98_rec_text("Devices", id, "switched")) {
+            return 0;
+        }
+        out("%s, which the mark service moved to Stor98, is recorded as "
+            "this\ninstaller's.\n", id);
+    }
+    if (!owed) {
+        return 1;
+    }
+    out("Enabling %s, left disabled by the mark service's switch to "
+        "Stor98 ... ", id);
+    memset(&pcp, 0, sizeof(pcp));
+    pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+    pcp.ClassInstallHeader.InstallFunction = DIF_PROPERTYCHANGE;
+    pcp.StateChange = DICS_ENABLE;
+    pcp.Scope = DICS_FLAG_CONFIGSPECIFIC;
+    pcp.HwProfile = 0;
+    if (!api.SetCiParams(set, &data, &pcp.ClassInstallHeader, sizeof(pcp)) ||
+        !api.CallCi(DIF_PROPERTYCHANGE, set, &data)) {
+        out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    flagChanged = 1;
+    /* Held only once both disable flags read clear: the current profile's
+     * CSCONFIGFLAG_DISABLED, which the enable clears, and the global
+     * CONFIGFLAG_DISABLED (record 21 section 7.5, as the service reads
+     * them); otherwise the service and its records stay for the next run. */
+    {
+        typedef DWORD (WINAPI *PFN_HWPROF)(LPSTR, ULONG, PULONG, ULONG);
+        HMODULE sa = GetModuleHandleA("setupapi.dll");
+        PFN_HWPROF prof = sa != NULL
+            ? (PFN_HWPROF)GetProcAddress(sa, "CM_Get_HW_Prof_FlagsA") : NULL;
+        char buf[INST_ID_CHARS];
+        ULONG pf = 0;
+        DWORD cfg = 0;
+        DWORD type = 0;
+
+        inst_copy(buf, id, sizeof(buf));
+        if (prof == NULL || prof(buf, 0, &pf, 0) != 0 || (pf & 1UL) != 0 ||
+            !api.GetRegProp(set, &data, SPDRP_CONFIGFLAGS, &type,
+                            (PBYTE)&cfg, sizeof(cfg), NULL) ||
+            type != REG_DWORD || (cfg & 1UL) != 0) {
+            out("not seen to hold (its disable flags); the service stays "
+                "for the next run.\n");
+            return 0;
+        }
+    }
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (api.GetDiParams(set, &data, &ip) &&
+        (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
+        out("done, restart pending.\n");
+        flagRestart = 1;
+    } else {
+        out("done.\n");
+    }
+    return 1;
+}
+
+static int mk_s98_settle(void)
+{
+    HKEY k;
+    DWORD i;
+    DWORD in;
+    DWORD tn;
+    DWORD type;
+    LONG r;
+    char id[INST_ID_CHARS];
+    char text[32];
+    int ok = 1;
+    HDEVINFO set = INVALID_HANDLE_VALUE;
+
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_S98_KEY, 0, KEY_READ, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        out("The mark service's Stor98 records could not be read (error %ld): "
+            "they are\nnot settled.\n", (long)r);
+        return 0;
+    }
+    for (i = 0;; i++) {
+        in = sizeof(id) - 1;
+        tn = sizeof(text) - 1;
+        memset(id, 0, sizeof(id));
+        memset(text, 0, sizeof(text));
+        r = RegEnumValueA(k, i, id, &in, NULL, &type, (LPBYTE)text, &tn);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            out("A mark service Stor98 record could not be read (error %ld): "
+                "the records are\nnot settled.\n", (long)r);
+            ok = 0;
+            break;
+        }
+        if (set == INVALID_HANDLE_VALUE) {
+            set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+            if (set == INVALID_HANDLE_VALUE) {
+                out("The device list could not be opened: the drives the mark "
+                    "service moved to\nStor98 are not settled.\n");
+                ok = 0;
+                break;
+            }
+        }
+        /* Anything but a final state owes an enable, an unknown text too. */
+        if (!mk_s98_settle_one(set, id,
+                               type != REG_SZ || !(inst_eq(text, "done") ||
+                                                   inst_eq(text, "failed") ||
+                                                   inst_eq(text, "busy") ||
+                                                   inst_eq(text, "restart")))) {
+            ok = 0;
+        }
+    }
+    RegCloseKey(k);
+    if (set != INVALID_HANDLE_VALUE) {
+        api.Destroy(set);
+    }
+    return ok;
+}
+
 /* Step 0 of the uninstall (decision M14), and the end of any run that
  * leaves no xhcicm service (decision M13): the mark service stopped, the
  * write mutex taken, every mark removed and read back, then the service's
@@ -10752,6 +10956,11 @@ static int mk_remove(void)
             out("A Thunderbolt safe-removal mark (xhcicm) is still named after "
                 "its removal.\n");
         }
+    }
+    if (ok && !mk_s98_settle()) {
+        out("A drive the mark service was switching to Stor98 could not be "
+            "enabled again:\nthe service is left for the next run.\n");
+        ok = 0;
     }
     if (ok) {
         LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_MK_MARKS_KEY);
@@ -11081,6 +11290,59 @@ static int mk_safe_eject_now(void)
     return safe;
 }
 
+/* Record 21 section 7.5 (task 43.59, owner 2026-10-23): on 8.1 only a
+ * tunnelled drive Windows gave stornvme gets the staged Stor98 from the
+ * mark service, when its Parameters\Stor98Inf names that INF. Written
+ * after the run's own Stor98 jobs, so the service never races them; a run
+ * without Stor98 leaves the value as it is. On any other system a run that
+ * keeps the service deletes a value an earlier build or an 8.1 install
+ * left (an upgrade to 10), so no switch is asked for there. */
+static void mk_s98_value(int mkAction)
+{
+    HKEY k;
+    DWORD disp;
+    LONG w;
+
+    if (!osIs81 && (mkAction == INST_MK_INSTALL ||
+                    mkAction == INST_MK_LEAVE) && envNow.Nt) {
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0,
+                          KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+            w = RegDeleteValueA(k, "Stor98Inf");
+            RegCloseKey(k);
+            if (w == ERROR_SUCCESS) {
+                logonly("mark service: Stor98Inf deleted (not Windows 8.1)\n");
+            } else if (w != ERROR_FILE_NOT_FOUND) {
+                logonly("mark service: Stor98Inf could not be deleted "
+                        "(error %ld)\n", (long)w);
+            }
+        }
+        return;
+    }
+    if (!inst_s98_auto_value(osKind == INST_OS_CMONLY, s98Include,
+                             s98StagedInf[0] != '\0', mkAction, osIs81)) {
+        return;
+    }
+    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL,
+                        REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, NULL, &k,
+                        &disp);
+    if (w == ERROR_SUCCESS) {
+        w = RegSetValueExA(k, "Stor98Inf", 0, REG_SZ,
+                           (const BYTE *)s98StagedInf,
+                           (DWORD)strlen(s98StagedInf) + 1);
+        RegCloseKey(k);
+    }
+    if (w != ERROR_SUCCESS) {
+        out("The mark service's Stor98Inf value could not be written (error "
+            "%ld): a tunnel\ndrive plugged in later keeps Windows' own NVMe "
+            "driver until INSTALL.BAT runs\nagain.\n", (long)w);
+        flagFailed = 1;
+        return;
+    }
+    logonly("mark service: Stor98Inf = %s\n", s98StagedInf);
+    out("A drive behind a Thunderbolt or USB4 tunnel plugged in later gets "
+        "Stor98 from\nthe safe-removal mark service.\n");
+}
+
 /* The end of an install or update run (decision M13): with xhcicm
  * registered and the Thunderbolt component in the run, the service
  * installed or updated; with no xhcicm service, every mark removed, a
@@ -11107,6 +11369,10 @@ static void mk_end_of_run(void)
     }
     if (a == INST_MK_INSTALL) {
         mk_install();
+        mk_s98_value(a);
+    } else if (a == INST_MK_LEAVE) {
+        /* The service stays as it is: a stale Stor98Inf still goes off 8.1. */
+        mk_s98_value(a);
     } else if (a == INST_MK_REMOVE && !mk_remove_safe_off(safe, cm)) {
         out("A Thunderbolt safe-removal mark could not be removed%s. "
             "Restart Windows and\nrun INSTALL.BAT again.\n",
@@ -15893,6 +16159,8 @@ static void s98_question(void)
     char line[16];
     char text[1024];
 
+    /* On 8.1 Stor98 is the tunnelled drives' default (task 43.59, owner
+     * 2026-10-23): chosen as on 98 SE to 7. On 8 and 10 only /stor98. */
     r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
                         opts.NoStor98, opts.List, inst_eng_s98_default(),
                         &asked, &def);
@@ -24186,6 +24454,11 @@ void inst_eng_restage_choose(int on)
     logonly("restage: chosen %d\n", opts.Restage);
 }
 
+int inst_eng_os_is81(void)
+{
+    return osIs81;
+}
+
 void inst_eng_s98_choose(int include)
 {
     /* Part of the Thunderbolt support (owner, 2026-10-19). */
@@ -25478,6 +25751,16 @@ int inst_eng_begin(int argc, char **argv)
     osKind = inst_os_kind(osv.dwPlatformId == VER_PLATFORM_WIN32_NT,
                           osv.dwMajorVersion, osv.dwMinorVersion,
                           osv.dwBuildNumber & 0xFFFFUL);
+    /* The 8.1 gate (record 21 section 7.5): RtlGetVersion's answer and the
+     * major and minor version the kernel keeps in the shared user data page
+     * (KUSER_SHARED_DATA, 0x7FFE026C and 0x7FFE0270 on every NT), which no
+     * compatibility mode shims, must both say 8.1. */
+    osIs81 = osv.dwPlatformId == VER_PLATFORM_WIN32_NT &&
+             inst_s98_switch_os(1, osv.dwMajorVersion, osv.dwMinorVersion,
+                                osv.dwBuildNumber & 0xFFFFUL) &&
+             inst_s98_switch_os(1, *(const volatile ULONG *)0x7FFE026CUL,
+                                *(const volatile ULONG *)0x7FFE0270UL,
+                                osv.dwBuildNumber & 0xFFFFUL);
     out("Windows %lu.%lu.%lu %s\n\n", (unsigned long)osv.dwMajorVersion,
         (unsigned long)osv.dwMinorVersion,
         (unsigned long)(osv.dwBuildNumber & 0xFFFFUL), osv.szCSDVersion);
@@ -25771,8 +26054,57 @@ void inst_eng_tb_choose(int include)
 
 static int planResult = -1;
 
+/* Record 21 section 7.5 (task 43.59): the mark service switches no drive
+ * to Stor98 while an install or an uninstall runs. The run creates the
+ * pause event and keeps it open to its process's end (an event is not a
+ * thread's, so any thread of the window may run the engine), then waits
+ * for a switch already under way: the service holds the switch mutex
+ * through each switch and checks the event inside it. 1 paused; 0 not
+ * (the run is refused). Once per process. */
+#define INST_S98_PAUSE_EVENT "Global\\Xhci98S98Pause"
+#define INST_S98_SWITCH_MUTEX "Global\\Xhci98S98Switch"
+static HANDLE s98Pause;
+
+static int s98_pause(void)
+{
+    SHARED_SD s;
+    HANDLE m;
+    DWORD w;
+
+    if (!envNow.Nt || s98Pause != NULL) {
+        return 1;
+    }
+    s98Pause = CreateEventA(shared_sd(&s, SYNCHRONIZE, EVENT_ALL_ACCESS), TRUE,
+                            FALSE, INST_S98_PAUSE_EVENT);
+    if (s98Pause == NULL) {
+        out("The mark service's Stor98 pause could not be made (error %lu): "
+            "nothing is\nchanged.\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    m = shared_mutex(INST_S98_SWITCH_MUTEX);
+    w = m != NULL ? WaitForSingleObject(m, 60000) : WAIT_FAILED;
+    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        out("The mark service is moving a drive to Stor98 and did not finish "
+            "within 60 s:\nnothing is changed. Run INSTALL.BAT again.\n");
+        if (m != NULL) {
+            CloseHandle(m);
+        }
+        CloseHandle(s98Pause);
+        s98Pause = NULL;
+        return 0;
+    }
+    ReleaseMutex(m);
+    CloseHandle(m);
+    logonly("stor98: the mark service's switch paused\n");
+    return 1;
+}
+
 int inst_eng_plan(void)
 {
+    if (!s98_pause()) {
+        planResult = INST_EXIT_REFUSED;
+        return planResult;
+    }
     planResult = envNow.Nt ? plan_nt() : plan_9x();
     return planResult;
 }
@@ -25874,11 +26206,15 @@ int inst_eng_ask(void)
 
 int inst_eng_run(void)
 {
-    int code = envNow.Nt ? run_install_nt() : run_install_9x();
+    int code;
     int f;
     int r;
     int s;
 
+    if (!s98_pause()) {
+        return INST_EXIT_REFUSED;
+    }
+    code = envNow.Nt ? run_install_nt() : run_install_9x();
     f = flagFailed;
     r = flagRestart;
     s = flagSteps;
@@ -26021,10 +26357,14 @@ int inst_eng_un_route(void)
 
 int inst_eng_uninstall(void)
 {
-    int code = envNow.Nt ? run_uninstall_nt() : run_uninstall_9x();
+    int code;
     PFN_MOVEEX moveEx = move_ex();
     char path[INST_PATH_CHARS];
 
+    if (!s98_pause()) {
+        return INST_EXIT_REFUSED;
+    }
+    code = envNow.Nt ? run_uninstall_nt() : run_uninstall_9x();
     helper_files_gone();
     if (tempCopyDir[0] != '\0' && !opts.List) {
         /* This run is the temporary copy (record 26 section 9.2): on NT

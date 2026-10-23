@@ -304,6 +304,10 @@ int inst_eng_s98_default(void);
 int inst_eng_restage_state(void);
 void inst_eng_restage_choose(int on);
 
+/* 1 on Windows 8.1 (inst_s98_switch_os, task 43.59): Stor98 is ticked there
+ * as on 98 SE to 7, for the tunnelled drives (owner, 2026-10-23). */
+int inst_eng_os_is81(void);
+
 /* One of its settings (section 5.6): its name on this system, on the page
  * (Asked) or behind Advanced, what is set now (State 1 set, 0 not, -1
  * unreadable; Now the value), the page's text for it, the default. 0 when

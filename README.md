@@ -99,7 +99,17 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 ### NVMe drives
 
-An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](src/stor98/)**, built with this package at the same version, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
+An NVMe drive in an enclosure needs an NVMe driver. **[Stor98](src/stor98/)**, built with this package at the same version, is that driver where Windows has none or its own one fails behind a tunnel: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive. Which driver a tunnelled drive gets:
+
+| Windows | The driver of a tunnelled NVMe drive | Why |
+|---|---|---|
+| 98 SE, ME, 2000, XP, Vista | Stor98 | no in-box NVMe driver |
+| 7 | Stor98 | 7 has an NVMe driver (`stornvme`) only with Microsoft's update KB2990941, untested behind a tunnel here |
+| 8 | Stor98 | 8 has no in-box NVMe driver (none in its install image) |
+| 8.1 | Stor98, put on the drive by the installer or, for a drive plugged in later, by the safe-removal mark service | 8.1's own `stornvme` (6.3.9600) holds a write for good when the drive is unplugged without Safely Remove; Stor98 fails it at once. An internal NVMe drive keeps `stornvme` |
+| 10 | Windows' own `stornvme` | it ends a surprise unplug cleanly (read on 10 x86 and x64); Stor98 is opt-in per drive |
+
+Safely Remove first is still the recommended way to unplug a drive, on every system.
 
 **Stor98 is only for hot-pluggable NVMe drives behind a Thunderbolt or USB4 port. Do not use it for internal NVMe drives.**
 
