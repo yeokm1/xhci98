@@ -10823,6 +10823,16 @@ static void mk_restart_value(void)
         return;
     }
     val = (DWORD)answerValue[v];
+    {
+        /* Written only when it changes what the service reads: the value
+         * there already, or absent with the default chosen. */
+        DWORD cur = 0;
+        int st = mw_value(v, &cur);
+        if ((st == 1 && cur == val) || (st == 0 && val == instValues[v].Def)) {
+            logonly("mark service: Restart stays %lu\n", (unsigned long)val);
+            return;
+        }
+    }
     r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &k, NULL);
     if (r == ERROR_SUCCESS) {
@@ -21809,11 +21819,11 @@ static int selftest_screens(void)
 {
     static const int order[] = {
         /* NT /list: nothing asked; NT install: the Thunderbolt question,
-         * the port switchover, the interrupt mode, the forced Bulk-Only,
-         * the connection manager's three, the directory, the confirmation,
-         * the word. */
+         * the port switchover, the connection manager's three (the
+         * interrupt mode and the forced Bulk-Only Advanced since record 26
+         * draft 35), the directory, the confirmation, the word. */
         INST_Q_TB, INST_Q_VALUE, INST_Q_VALUE, INST_Q_VALUE, INST_Q_VALUE,
-        INST_Q_VALUE, INST_Q_VALUE, INST_Q_DIR, INST_Q_CONFIRM, INST_Q_REMOVE
+        INST_Q_DIR, INST_Q_CONFIRM, INST_Q_REMOVE
     };
     INST_ENV saved = envNow;
     INST_FRONT savedFront = front;
