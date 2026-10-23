@@ -1829,21 +1829,33 @@ static void worker_async(WORKER *w)
             continue;
         }
         if (rc >= WAIT_OBJECT_0 && rc < WAIT_OBJECT_0 + (DWORD)npend) {
-            DWORD got = 0;
-            BOOL ok;
+            int first = wk[rc - WAIT_OBJECT_0], m;
 
-            k = wk[rc - WAIT_OBJECT_0];
-            ok = GetOverlappedResult(w->h, &ov[k], &got, TRUE);
-            w->busy[k] = 0;
-            complete_one(w, slot_buf(r, w->index, k, s->buffer, depth), w->inflight[k], gens[k], write, issued[k],
-                         ok, got);
-            if (!ok || got != s->size) {
-                DWORD e = ok ? ERROR_HANDLE_EOF : GetLastError();
+            /* Every completion already in is collected before a slot is
+             * refilled, from the signalled slot on: the wait favours the
+             * lowest slot, and a request that completes at once would
+             * otherwise overtake the others, shrinking the depth and
+             * lengthening their measured latency */
+            for (m = 0; m < depth; m++) {
+                DWORD got = 0;
+                BOOL ok;
 
-                if (e != ERROR_OPERATION_ABORTED) {
-                    worker_fail(w, e);
+                k = (first + m) % depth;
+                if (!w->busy[k] || (m != 0 && WaitForSingleObject(ov[k].hEvent, 0) != WAIT_OBJECT_0)) {
+                    continue;
                 }
-                stopping = 1;
+                ok = GetOverlappedResult(w->h, &ov[k], &got, TRUE);
+                w->busy[k] = 0;
+                complete_one(w, slot_buf(r, w->index, k, s->buffer, depth), w->inflight[k], gens[k], write,
+                             issued[k], ok, got);
+                if (!ok || got != s->size) {
+                    DWORD e = ok ? ERROR_HANDLE_EOF : GetLastError();
+
+                    if (e != ERROR_OPERATION_ABORTED && !w->failed) {
+                        worker_fail(w, e);
+                    }
+                    stopping = 1;
+                }
             }
         } else {
             /* the wait itself failed: the step fails; cancel, then collect
@@ -3697,17 +3709,27 @@ static void controls_enable(int on)
  * (this run's, or one kept because it is not recognisably ours) */
 static int report_write(const char *s, size_t n)
 {
-    const char *base = strrchr(g_cl.report, '\\');
+    char full[MAX_PATH], base[MAX_PATH];
+    char *fp = NULL, *b;
+    size_t len;
 
-    base = (base != NULL) ? base + 1 : g_cl.report;
-    if (strchr(base, ':') != NULL) {
-        base = strchr(base, ':') + 1;
-    }
-    if (lstrcmpiA(base, "XHCIPERF.TMP") == 0) {
-        log_add("The report is not written to a file named XHCIPERF.TMP, the test file's name.");
+    /* the name as the system resolves it: either separator, a relative
+     * path, the trailing dots and spaces Win32 drops; a stream refused */
+    if (GetFullPathNameA(g_cl.report, sizeof(full), full, &fp) == 0 || fp == NULL) {
+        log_add("The report's path cannot be resolved; it is not written.");
         return 0;
     }
-    return write_file(g_cl.report, s, n);
+    sz_cpy(base, sizeof(base), fp);
+    len = strlen(base);
+    while (len > 0 && (base[len - 1] == '.' || base[len - 1] == ' ')) {
+        base[--len] = 0;
+    }
+    b = base;
+    if (strchr(b, ':') != NULL || lstrcmpiA(b, "XHCIPERF.TMP") == 0) {
+        log_add("The report is not written to a file named XHCIPERF.TMP, the test file's name, or to a stream.");
+        return 0;
+    }
+    return write_file(full, s, n);
 }
 
 static void refuse(const char *why)
