@@ -3791,10 +3791,13 @@ refusal being a cut check (noted by `-CheckOnly`, thrown by a cut):
   package with its kind, heading, description and state (`current`,
   `withdrawn`, or `known` for a `PACKAGE` line of a package the release
   does not ship; a carried set's `PACKAGE` line winning over the table's
-  row, with the table's heading), and every relationship line, written
+  row, with the table's heading, and a package the table does not know
+  under the installer's fallback heading, "Other"), and every
+  relationship line, written
   beside `downloads.txt`; the newest earlier release's record read back
   and the transition refused if it drops a row, changes a row's kind,
-  revives a withdrawn row, withdraws a row with words or a heading other
+  revives a withdrawn row, makes a row a release carried only known
+  (it is withdrawn instead), withdraws a row with words or a heading other
   than the earlier record's, or drops a relationship line or narrows its
   systems. A first record (3.1.0.0 has none) is accepted.
 - The overlap listing, in the cut's log for the maintainer and not a

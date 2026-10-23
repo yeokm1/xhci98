@@ -2159,6 +2159,14 @@ try {
         $msg = ""
         try { Test-OtherPkgsTransition -Prev $recA -Now $recW2 } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("keeps its words")) ("a row withdrawn with new words was accepted: '" + $msg + "'")
+        $recK = [pscustomobject]@{ Version = "3.4.0.0"; Rows = @($recA.Rows[0], [pscustomobject]@{ Id = "free:net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): adapters"; State = "known" }); Rels = $recA.Rels }
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $recA -Now $recK } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("only known, not shipped")) ("a shipped package made known only was accepted: '" + $msg + "'")
+        $xq = Join-Path $osp "net\a\w98\Q.INF"
+        [System.IO.File]::WriteAllText($xq, "[Manufacturer]`r`nM=Mo,`"NTamd64`"`r`n[Mo.NTamd64]`r`nD=I,ID\Q64`r`n")
+        Assert-True ((Get-InfModelIds -Inf (Read-InfText -Path $xq) -Sys "W7X64") -join "," -eq "ID\Q64") "a quoted decoration was not read."
+        Assert-True (@($recP.Rows | Where-Object { $_.Id -ceq "free:net/q" })[0].Heading -ceq "Other") "a package the table does not know is not recorded under the installer's fallback heading."
         $relDir = Join-Path $script:work "oth-releases"
         foreach ($v in @("3.1.0.0", "3.2.0.0", "3.10.0.0")) { Ensure-Directory (Join-Path $relDir $v) }
         [System.IO.File]::WriteAllText((Join-Path $relDir "3.2.0.0\otherpkgs.txt"), ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n"))

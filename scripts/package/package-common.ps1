@@ -3169,7 +3169,7 @@ function Get-InfModelIds {
         } else {
             foreach ($ver in $si.Vers) {
                 $best = $null; $bestScore = -1
-                foreach ($d in @($f | Select-Object -Skip 1)) {
+                foreach ($d in @($f | Select-Object -Skip 1 | ForEach-Object { Expand-InfValue -Inf $Inf -Text $_ })) {
                     $sc = Get-InfModelDecoScore -Deco $d -Arch $si.Arch -Ver $ver
                     if ($sc -gt $bestScore) { $best = $d; $bestScore = $sc }
                 }
@@ -3258,7 +3258,9 @@ function Get-OtherEffectiveRows {
     foreach ($m in @($Meta | Where-Object { $_.Kind -ceq "PACKAGE" })) {
         $q = $m.Set + ":" + $m.A
         if (@($rows | Where-Object { $_.Id -ceq $q }).Count -gt 0) { continue }
-        $rows += [pscustomobject]@{ Id = $q; Kind = $m.B; Heading = "-"; Desc = $m.Desc; State = $(if ($m.Shipped) { "current" } else { "known" }) }
+        # The heading the installer gives a package its table does not
+        # know (inst_other_heading_index's last, "Other").
+        $rows += [pscustomobject]@{ Id = $q; Kind = $m.B; Heading = "Other"; Desc = $m.Desc; State = $(if ($m.Shipped) { "current" } else { "known" }) }
     }
     return $rows
 }
@@ -3403,6 +3405,9 @@ function Test-OtherPkgsTransition {
         $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
         if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
         if ($n[0].Kind -cne $r.Kind) { throw "the package table makes $($r.Id) a $($n[0].Kind) package; $($Prev.Version) had it $($r.Kind)." }
+        if ($r.State -cne "known" -and $n[0].State -ceq "known") {
+            throw "$($r.Id) was $($r.State) in $($Prev.Version), and this cut has it only known, not shipped: a package a release carried is withdrawn, with its words."
+        }
         if ($r.State -ceq "withdrawn" -and $n[0].State -cne "withdrawn") {
             throw "$($r.Id) was withdrawn in $($Prev.Version), and this table makes it $($n[0].State): a withdrawn row stays withdrawn and keeps its words."
         }
