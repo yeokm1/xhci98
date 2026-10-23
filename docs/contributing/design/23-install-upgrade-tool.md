@@ -1,6 +1,13 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 36, 2026-10-23 (roadmap-usb4 task 43.46, design record
+Status: revision 37, 2026-10-23 (roadmap-usb4 task 43.42's
+simplification, record 26 draft 35: the x64 package refused without
+`xhcicm.cat` beside the connection manager, section 5.10; the console
+no longer asks `XhciInterruptMode` and `XhciForceBulkOnly`, section 8;
+Stor98's Enter default from one per-system table, section 8.5; on 98 SE
+and ME `xhciuas.sys` put in `SYSTEM32\DRIVERS` with the UAS driver,
+section 6; decision D20);
+revision 36, 2026-10-23 (roadmap-usb4 task 43.46, design record
 30 section 7.2: `/s98vsd` and `/nos98vsd`, `S98VSD.VXD` with Stor98 on
 98 SE and ME, the switch table; recorded at the batch 7 merge);
 revision 35, 2026-10-22 (roadmap-usb4 task 43.27, record 25
@@ -3112,6 +3119,23 @@ the user.
   tasks 43.29's and 43.23's installer rows.
 - **D19** (revision 13) The mark service on 8 and 8.1 as on 2000 to 7
   (section 9.5).
+- **D20** (revision 37; the owner, 2026-10-22 and 2026-10-23; record 26
+  section 5.0, draft 35) Four changes of the tool with the window's
+  simplification. (a) The 64-bit tool refuses, before any change, a
+  package carrying the connection manager's three files without
+  `xhcicm.cat` beside them (`inst_cm_cat_refusal`); a package without
+  the connection manager needs no catalog of it, and the x86 tool is
+  unchanged. (b) `XhciInterruptMode` and `XhciForceBulkOnly` are no
+  longer asked (their `Asked` mask 0: Advanced rows of the window);
+  `/set` sets them as before. (c) Stor98's question takes its Enter
+  default from `inst_s98_default`, one line per system, [Y] on every
+  system for now, 8 and 8.1 included (the `is8` exception and its
+  warning removed). (d) On 98 SE and ME, with the USB drivers and the UAS
+  driver in the run, `xhciuas.sys` is put in `%windir%\SYSTEM32\DRIVERS`
+  after the helper's installs, so the New Hardware wizard of a UAS disk
+  plugged in later finds it and asks for no disk (the 98 SE reading of
+  2026-10-23, record 26 section 5.0); the uninstall's 9x file list
+  already removes it.
 
 ## 14. Open, and the risks
 

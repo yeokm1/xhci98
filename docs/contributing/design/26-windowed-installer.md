@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 34, 2026-10-23 (roadmap-usb4 task 43.46, design record 30
+Status: draft 35, 2026-10-23 (roadmap-usb4 task 43.42, the
+simplification built, with the owner's points of 2026-10-22 and
+2026-10-23: the silent install no longer to cover `xhciuas.inf`, the
+wizard's Insert Disk prompt read and fixed by the installer, the x64
+package refused without `xhcicm.cat`, section 5.0; record 23 revision
+37); draft 34, 2026-10-23 (roadmap-usb4 task 43.46, design record 30
 section 7.1: the `S98VSD.VXD` box under Stor98's on the Components page,
 one line, section 5.3; recorded at the batch 7 merge); draft 33,
 2026-10-22 (roadmap-usb4 task 43.27: the "can run
@@ -749,24 +754,132 @@ and Cancel, shown on Install only when Stor98's file would be replaced
 (`inst_eng_s98_file_update`); Cancel stays on the Summary and nothing is
 written.
 
-**The silent install covers `xhciuas.inf` too** (owner, 2026-10-22, from
-the 43.5 legs: a UAS disk's first plug on 98 SE raises the wizard and an
-"Insert Disk" prompt for `C:\XHCI98`, and a replug at another port the
-wizard again): with `XhciSilentInstall` on, a UAS device is to install
-with no wizard and no prompt. Two things stand in the way and are this
-task's design points, read first: the driver's silent decision bars a
-device it presents as UAS (design record 13 section 6.11,
-`XHCI_SILENT_BARRED`, decision O2), which a change of the bus lifts only
-with record 13 amended; and the "Insert Disk" prompt for `C:\XHCI98`,
-which is the observation. Its cause is not read: the hypothesis is that
-Windows' device installer at that plug takes `xhciuas.inf` from a place
-other than the install directory (an INF copy whose source path no
-longer holds `xhciuas.sys`), and the legs read what establishes or
-refutes it (the bound devnode's `InfPath`, the `OEM Name` and source
-path records, the prompt's path and the file it asks for) before any
-design rests on it. The design of that part is a separate, later
-step of this task (proposal), after the Components page and the Settings
-dialog.
+**The silent install does not cover `xhciuas.inf`; the wizard finds
+its files** (owner, 2026-10-23 08:20, reversing the ruling of 2026-10-22
+that it should; draft 35). A UAS disk's first plug on 98 SE and ME
+raises the Add New Hardware wizard, as it did: the driver's silent
+decision keeps barring a device it presents as UAS (design record 13
+section 6.11, `XHCI_SILENT_BARRED`, decision O2, which stands and is not
+amended), and `XhciSilentInstall` is off by default and stays the
+user's (section 6.5.12). What the owner rules out is the "Insert Disk"
+prompt that came with the wizard on 98 SE in the 43.5 legs: the wizard
+must find its files by itself. The cause was read in a 98 SE guest on
+2026-10-23 (`docs/contributing/runs/run-43-42s.md`, the update of a
+3.1.0.0 install to the `p43-46` leg cut, the choices left as they
+were): after the run `xhciuas.inf` is in the install directory, which is
+on `DevicePath`, and `xhciuas.sys` is beside it there but not in
+`%windir%\SYSTEM32\DRIVERS`; at the first plug the wizard names
+`C:\XHCI98\XHCIUAS.INF`, then asks for the "xhci98 xHCI Host Controller
+Disk", its copy dialog giving `C:\WIN98\xhciuas.sys` as the source and
+`C:\WINDOWS\SYSTEM32\DRIVERS\xhciuas.sys` as the destination (error 2):
+`C:\WIN98` is `SourcePath` under
+`HKLM\Software\Microsoft\Windows\CurrentVersion\Setup`, Windows' own
+setup source, not the INF's folder (observed). The INF copied to
+`INF\OTHER` is the package's byte for byte and `SetupX\INF\OEM Name`
+maps it to `xhciuas.inf` (observed); neither the `[SourceDisksNames]`
+fields nor the disk's number change the source asked for (two variants
+of the INF, both still prompting, observed); with `xhciuas.sys` already
+in `SYSTEM32\DRIVERS` (the package's bytes, nothing else changed) the
+first plug raises the wizard, installs with no prompt and the disk
+mounts (observed, on a fresh update). So on 98 SE the wizard, installing
+from an INF it found on `DevicePath`, takes a file that is already at
+its destination and asks for one that is not at Windows' own source
+(inferred from those readings; why NUSB's `USBSTOR.INF` never prompted
+fits it, its files being in place already). **The fix is the
+installer's, and the INF and the driver are unchanged**: on 98 SE and
+ME, with the USB drivers and the UAS box ticked, the run puts the
+package's `xhciuas.sys` in `%windir%\SYSTEM32\DRIVERS` after the
+helper's installs (`uas_sys_9x`, by `own_put`: copied as `.TMP`, its
+bytes checked, an older file there replaced through `.BAK`, nothing
+done when the bytes there are already the package's), and says so in
+the progress; a failure is said and counts the run failed (exit 2), the
+wizard then asking for the disk as before. The uninstall already
+removes `xhciuas.sys` from `SYSTEM32\DRIVERS` (record 23 section 9, the
+9x file list); the UAS box unticked puts nothing there, as it copies
+neither the INF nor the file to the install directory (section 5.3).
+The Steps text of a run with no device present no longer says a UAS
+disk "finds its driver in the same folder by itself": it says the disk
+raises Windows' New Hardware wizard and installs with Next to Finish,
+no disk asked for. **A replug at another port** raises the wizard again
+(observed at a second port in the same session and after a cold boot,
+no prompt either time, the disk mounted): Windows 98 makes a new
+devnode for a device at a new port, its instance id carrying the port,
+and that is its normal behaviour, recorded here and not changed. The
+same cause very likely stands behind the controller's own wizard asking
+for the disk after an install with no controller present (`xhci98.sys`
+and `xhcicm.sys` not in `SYSTEM32\DRIVERS` yet; inferred, not read):
+not changed by this draft, an owner question (section 14).
+
+**What draft 35 builds, and the owner's points of 2026-10-23** (roadmap
+task 43.42's simplification, its code). The design above is built as it
+stands, with these points:
+
+- **Stor98's per-OS table** is `inst_s98_default` in the pure half, one
+  line per system (98 SE, ME, 2000, XP, Vista, 7, 8, 8.1, 10): ticked on
+  every system, 8, 8.1 and 10 included (the owner's interim of
+  2026-10-22). Roadmap 43.59 (the owner, 2026-10-23 06:10: Windows'
+  `stornvme` kept for the internal drive on 8.1 and 10, the mark service
+  putting the staged Stor98 on a tunnelled drive) changes no line of
+  it. The table applies only while the Thunderbolt box is ticked; the
+  console's Stor98 question takes its Enter default from the same table
+  (`inst_s98_decide` with the system's kind, `is8` dropped), and
+  `INST_CW_S98_8`, its paragraph, the console's counterpart and its host
+  check are removed, with no "untested" mark on the row. The proposal
+  of keeping the second sentence ("If a drive behind a Thunderbolt or
+  USB4 tunnel uses Windows' own NVMe driver, this choice replaces it.")
+  is taken as Stor98's row sentence on 8, 8.1 and 10 only.
+- **The keyboard defect of the 43.11 legs** (`run-43.md`, "Seen on the
+  way"): with Thunderbolt ticked by Space, Tab and Space on Stor98 left
+  it unticked until a second Space. Its cause is not read: the
+  Thunderbolt box's click ticks Stor98 by `CheckDlgButton`, so the first
+  Space may have unticked a box already ticked. The page now keeps
+  Stor98's own state (`s98Own`: ticked by the table, the user's untick
+  kept while the Thunderbolt box is ticked) and sets the box from it
+  on every change of its parent, and the 7 x86 leg reads, keyboard
+  only, the tick shown after each Space.
+- **The window fits the work area** (the 43.11 finding on 7 at 120 DPI,
+  800 by 600: about 635 by 575, taller than the work area). The
+  Components page, the tallest at 223 dialog units, becomes 210 (the
+  folder's edit box and its two lines of text leave it for the Change
+  folder dialog), and once the sheet is
+  made it is moved, never resized, so that its frame lies inside the
+  work area of its monitor (`SystemParametersInfo(SPI_GETWORKAREA)`),
+  its top left kept inside where it cannot all fit.
+- **The Components page** carries the folder as one line of text and two
+  buttons, `Settings...` and `Change folder...`; the folder's check and
+  its refusal, the Browse button and the 98 SE and ME line move into the
+  Change folder dialog, OK staying in it until the folder passes. The
+  "Replace the stored build" box is shown where the reading found the
+  store trap (Vista to 10, `inst_eng_restage_state`), unticked unless
+  `/restage`; ticked, it is `/restage` for the run.
+- **The Settings dialog** is a property sheet of its own, not a wizard:
+  a tab per component in the run (USB with the USB drivers ticked and a
+  row to show, Thunderbolt with its box ticked, Stor98 with its box
+  ticked), each tab one part of the main rows (at most three, laid out
+  by `wiz_lay.c`) and its Advanced button; OK takes every tab's choices,
+  Cancel restores them as they stood when the dialog opened. The tabs of
+  the components unticked are left out (the proposal of a greyed tab
+  not taken: a property sheet's tab cannot be greyed).
+- **`XhciInterruptMode` and `XhciForceBulkOnly`** become Advanced rows:
+  their `Asked` mask 0, so the console no longer asks them and `/set`
+  still sets them.
+- **`XhciCmNoIrqStart`**, a row of the value table (98 SE and ME, default
+  1, the driver's, no INF line), Advanced on the Thunderbolt tab.
+  **`Restart`** (the mark service's) is built as designed above: a
+  value of the table with its own location (`INST_LOC_MARK`), written in
+  the mark service's step and never under `Services\USB`.
+- **The Summary** repeats each component warning's first sentence, and
+  on 98 SE and ME the Stor98 file update's box becomes the message box
+  on Install, as designed above.
+- **The x64 package without `xhcicm.cat`** (the owner, 2026-10-22): the
+  64-bit installer refuses, at the package's reading and before any
+  change, a package that carries the connection manager (`xhcicm.inf`,
+  `xhcicmf.inf`, `xhcicm.sys`) without `xhcicm.cat` beside them, saying
+  so: "this 64-bit package carries the Thunderbolt driver without its
+  catalog, xhcicm.cat: restore the complete package, with its .cat
+  files, and run the installer again. Nothing was changed." (record 23
+  revision 37, `inst_cm_cat_refusal`). A package with no connection
+  manager needs none; the x86 package is not affected.
 
 **Host vectors**: the Stor98 default table on every system; the
 Thunderbolt and Stor98 boxes' rule (ticked with the parent, unticked and
@@ -3077,6 +3190,13 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 
 ## 14. Open, and the risks
 
+- (draft 35) The controller's own New Hardware wizard after an install
+  with no controller present (98 SE and ME) asks for the driver disk,
+  and the Steps text tells the user to type the install directory: by
+  the UAS reading of section 5.0 its cause is very likely the same
+  (`xhci98.sys`, and `xhcicm.sys` for a Thunderbolt controller, not in
+  `SYSTEM32\DRIVERS` yet; inferred, not read). Putting them there too
+  is the owner's call; this draft does not.
 - How Windows' own hardware wizards on 98 SE and ME and the helper's
   installs meet after the controller's restart is designed as a wait and
   a retry (section 7) and read on the 42-V.1 legs; record 27 section 12
