@@ -38,11 +38,14 @@ manager, for a computer whose USB 3 controllers already run another
 maker's driver - untick the USB drivers on the Components page, or
 INSTALL /console /cmonly. On Windows 98 SE and ME the installer warns
 first: those systems have no USB 3 driver of their own, and this has not
-been tested there. On Windows 8, 8.1 and 10 the USB drivers and Stor98
-are unticked by default, Windows' own drivers running the controllers and
-NVMe drives; ticking them (or /usb, /stor98) replaces Windows' own, with
-a warning that they are untested there. Windows 11 (build 22000 and
-later) is refused: it has a USB4 connection manager of its own. Every
+been tested there. On Windows 8, 8.1 and 10 the USB drivers are
+unticked by default, Windows' own driver running the controllers;
+ticking them (or /usb) replaces Windows' own, with a warning that they
+are untested there. Stor98 is ticked with the Thunderbolt support on
+every system, 8, 8.1 and 10 included; there, if a drive behind a tunnel
+uses Windows' own NVMe driver, Stor98 replaces it. Windows 11 (build
+22000 and later) is refused: it has a USB4 connection manager of its
+own. Every
 box of the Components page is shown on every system; one that does not
 apply there gets a warning when you click Next, and Cancel
 on it takes you back to the page. See "The connection manager alone"
@@ -209,8 +212,8 @@ The console tool
                                 support, so /stor98 needs /thunderbolt (or
                                 /cmonly); without /stor98 the console asks,
                                 Enter for Y, and /yes installs it: Stor98
-                                comes with the Thunderbolt support (on 8,
-                                8.1 and 10 Enter and /yes give N)
+                                comes with the Thunderbolt support, on
+                                every system
   INSTALL /console /thunderbolt /nostor98
                                 the Thunderbolt support without Stor98
   INSTALL /console /nouas       installs without the UAS disk driver

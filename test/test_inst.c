@@ -5389,23 +5389,24 @@ static void test_vsd(void)
         int askedS;
         int defS;
         int s98;
+        int def98 = inst_s98_box_default(INST_S98SYS_98SE);
 
-        s98 = inst_s98_decide(1, 1, 0, 0, 0, 0, 0, &askedS, &defS);
+        s98 = inst_s98_decide(1, 1, 0, 0, 0, 0, def98, &askedS, &defS);
         CHECK(askedS && defS && inst_vsd_box(1, 1, defS, 0, &shown, &open),
               "window/console: Stor98 [Y], the layer ticked with it");
-        s98 = inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &askedS, &defS);
+        s98 = inst_s98_decide(1, 1, 1, 0, 0, 0, def98, &askedS, &defS);
         CHECK(!askedS && s98 && inst_vsd_box(1, 1, s98, 0, &shown, &open),
               "/yes: Stor98 Y, the layer ticked");
-        s98 = inst_s98_decide(1, 1, 0, 1, 0, 0, 0, &askedS, &defS);
+        s98 = inst_s98_decide(1, 1, 0, 1, 0, 0, def98, &askedS, &defS);
         CHECK(!askedS && s98 && inst_vsd_box(1, 1, s98, 0, &shown, &open),
               "/stor98: Stor98 Y, the layer ticked");
-        s98 = inst_s98_decide(1, 1, 1, 0, 1, 0, 0, &askedS, &defS);
+        s98 = inst_s98_decide(1, 1, 1, 0, 1, 0, def98, &askedS, &defS);
         CHECK(!s98 && !inst_vsd_box(1, 1, s98, 0, &shown, &open) && !open,
               "/yes /nostor98: Stor98 N, the layer unticked and greyed");
-        s98 = inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &askedS, &defS);
+        s98 = inst_s98_decide(1, 1, 1, 0, 0, 0, def98, &askedS, &defS);
         CHECK(s98 && !inst_vsd_box(1, 1, s98, 1, &shown, &open) && open,
               "/yes /nos98vsd: Stor98 Y, the layer unticked, open");
-        s98 = inst_s98_decide(1, 0, 1, 0, 0, 0, 0, &askedS, &defS);
+        s98 = inst_s98_decide(1, 0, 1, 0, 0, 0, def98, &askedS, &defS);
         CHECK(!s98 && !inst_vsd_box(1, 1, s98, 0, &shown, &open),
               "/yes without the Thunderbolt support: neither");
         CHECK(inst_vsd_mode(1, 0, 1, 1, 0, 1) == INST_VSD_SELECTED,
