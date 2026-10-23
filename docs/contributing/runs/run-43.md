@@ -3560,8 +3560,26 @@ hot-added on the root bus, failing as above:
 | `Services\stor98\Parameters\DmaRemappingCompatible` deleted, `pnputil /restart-device` | started |
 | the value written back as 1, `pnputil /restart-device` | Code 10 (`CM_PROB_FAILED_START`) |
 
-So the opt-in written from `3.2.0.0` (Stor98 `docs/PLAN.md`, "Kernel DMA
-Protection", 2026-10-22) is what stops it. The x64 INF writes no value
+Where it stops, from the debug-port build's stage codes (Stor98 amd64 of
+`5ad53f7d`'s source with `STOR98_DBGPORT=1`, signed in the guest with a
+throwaway certificate, the guest started with `usb4-debug-port`; codes
+from `src/stor98/src/dbgport.h`), the same device restarted each way:
+
+| Stage | Value 1 | Value deleted |
+|---|---|---|
+| `01` DriverEntry, `04` options, `cc`, `150`, `160`, `de`, `d4`, `ca` clock | as the right-hand column | the same |
+| `02` HwFindAdapter (bus 0, slot 10) | `0000000a` | `0000000a` |
+| `05` the BAR | `0004000d` | `0004000d` |
+| `153` / `152` interrupt and polling decision | `000a000a` / `0b000a01` | `000b000b` / `0b000b01` |
+| `cb` DMA negotiated | `00410100` | `00410100` |
+| **`d2` the uncached extension** | **`FFFFFFFF`: none** | **`00000017`: 23 contiguous pages** |
+| `03` HwFindAdapter's result | **2, `SP_RETURN_ERROR`** | 1, found |
+| after it | nothing; Code 10 | `154`, `140`, `30`-`33` HwInitialize, `40`/`41`/`47` bring-up, `10` and `b5` I/O |
+
+So with the value SCSIport gives Stor98 no uncached extension, the common
+buffer every queue lives in, and Stor98 refuses the adapter; the opt-in
+written from `3.2.0.0` (Stor98 `docs/PLAN.md`, "Kernel DMA Protection",
+2026-10-22) is what stops it. The x64 INF writes no value
 again and `check-stor98-inf.ps1` now refuses one; why 10's SCSIport
 refuses a miniport that opts in is not read. Owed: the fixed package
 signed (the owner) and Stor98 read starting on 10 x64 from it; on a
