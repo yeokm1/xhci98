@@ -10719,6 +10719,31 @@ static int mk_s98_settle_one(HDEVINFO set, const char *id, int owed)
         out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
         return 0;
     }
+    flagChanged = 1;
+    /* Held only once both disable flags read clear: the current profile's
+     * CSCONFIGFLAG_DISABLED, which the enable clears, and the global
+     * CONFIGFLAG_DISABLED (record 21 section 7.5, as the service reads
+     * them); otherwise the service and its records stay for the next run. */
+    {
+        typedef DWORD (WINAPI *PFN_HWPROF)(LPSTR, ULONG, PULONG, ULONG);
+        HMODULE sa = GetModuleHandleA("setupapi.dll");
+        PFN_HWPROF prof = sa != NULL
+            ? (PFN_HWPROF)GetProcAddress(sa, "CM_Get_HW_Prof_FlagsA") : NULL;
+        char buf[INST_ID_CHARS];
+        ULONG pf = 0;
+        DWORD cfg = 0;
+        DWORD type = 0;
+
+        inst_copy(buf, id, sizeof(buf));
+        if (prof == NULL || prof(buf, 0, &pf, 0) != 0 || (pf & 1UL) != 0 ||
+            !api.GetRegProp(set, &data, SPDRP_CONFIGFLAGS, &type,
+                            (PBYTE)&cfg, sizeof(cfg), NULL) ||
+            type != REG_DWORD || (cfg & 1UL) != 0) {
+            out("not seen to hold (its disable flags); the service stays "
+                "for the next run.\n");
+            return 0;
+        }
+    }
     memset(&ip, 0, sizeof(ip));
     ip.cbSize = sizeof(ip);
     if (api.GetDiParams(set, &data, &ip) &&
@@ -10728,7 +10753,6 @@ static int mk_s98_settle_one(HDEVINFO set, const char *id, int owed)
     } else {
         out("done.\n");
     }
-    flagChanged = 1;
     return 1;
 }
 
@@ -11163,7 +11187,8 @@ static void mk_s98_value(int mkAction)
     DWORD disp;
     LONG w;
 
-    if (!osIs81 && mkAction == INST_MK_INSTALL && envNow.Nt) {
+    if (!osIs81 && (mkAction == INST_MK_INSTALL ||
+                    mkAction == INST_MK_LEAVE) && envNow.Nt) {
         if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0,
                           KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
             w = RegDeleteValueA(k, "Stor98Inf");
@@ -11228,6 +11253,9 @@ static void mk_end_of_run(void)
     }
     if (a == INST_MK_INSTALL) {
         mk_install();
+        mk_s98_value(a);
+    } else if (a == INST_MK_LEAVE) {
+        /* The service stays as it is: a stale Stor98Inf still goes off 8.1. */
         mk_s98_value(a);
     } else if (a == INST_MK_REMOVE && !mk_remove_safe_off(safe, cm)) {
         out("A Thunderbolt safe-removal mark could not be removed%s. "
@@ -22662,8 +22690,15 @@ int inst_eng_begin(int argc, char **argv)
     osKind = inst_os_kind(osv.dwPlatformId == VER_PLATFORM_WIN32_NT,
                           osv.dwMajorVersion, osv.dwMinorVersion,
                           osv.dwBuildNumber & 0xFFFFUL);
-    osIs81 = inst_s98_switch_os(osv.dwPlatformId == VER_PLATFORM_WIN32_NT,
-                                osv.dwMajorVersion, osv.dwMinorVersion,
+    /* The 8.1 gate (record 21 section 7.5): RtlGetVersion's answer and the
+     * major and minor version the kernel keeps in the shared user data page
+     * (KUSER_SHARED_DATA, 0x7FFE026C and 0x7FFE0270 on every NT), which no
+     * compatibility mode shims, must both say 8.1. */
+    osIs81 = osv.dwPlatformId == VER_PLATFORM_WIN32_NT &&
+             inst_s98_switch_os(1, osv.dwMajorVersion, osv.dwMinorVersion,
+                                osv.dwBuildNumber & 0xFFFFUL) &&
+             inst_s98_switch_os(1, *(const volatile ULONG *)0x7FFE026CUL,
+                                *(const volatile ULONG *)0x7FFE0270UL,
                                 osv.dwBuildNumber & 0xFFFFUL);
     out("Windows %lu.%lu.%lu %s\n\n", (unsigned long)osv.dwMajorVersion,
         (unsigned long)osv.dwMinorVersion,

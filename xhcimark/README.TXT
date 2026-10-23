@@ -58,13 +58,16 @@ What it does
     you stopped it, the service tells the driver, which then tears its
     tunnel down (the USB4 connection manager).
 
-Stor98 on a drive plugged in later (Windows 8, 8.1 and 10)
-----------------------------------------------------------
+Stor98 on a drive plugged in later (Windows 8.1)
+------------------------------------------------
 
-On these systems Windows has its own NVMe driver, stornvme, and it gives
-it to an NVMe drive behind a Thunderbolt or USB4 tunnel that is plugged
-in after the install, ahead of the bundled Stor98. When the installer
-installed Stor98 there, it names the staged Stor98 in the setting
+Windows 8.1 has its own NVMe driver, stornvme, and gives it to an NVMe
+drive behind a Thunderbolt or USB4 tunnel that is plugged in after the
+install; but 8.1's stornvme holds a write for good when such a drive is
+unplugged without Safely Remove, so on 8.1 the tunnelled drive gets the
+bundled Stor98 (Windows 10 keeps its own stornvme, which does not, and
+the service moves nothing there). When the installer installed Stor98 on
+8.1, it names the staged Stor98 in the setting
 Stor98Inf below, and the service then moves each such drive to Stor98,
 once, a second or two after Windows started it: it stops the drive (as
 Device Manager's Disable does), installs Stor98 on that one device and
@@ -93,8 +96,9 @@ optional:
   LogBytes   REG_DWORD. The log's size bound, 262144 by default.
   Stor98Inf  REG_SZ. The staged Stor98 INF (%SystemRoot%\INF\oemNN.inf)
              that drives on stornvme behind a tunnel are moved to.
-             Written by the installer on Windows 8, 8.1 and 10 when Stor98
-             is installed; absent: no drive is moved.
+             Written by the installer on Windows 8.1 when Stor98 is
+             installed, and deleted on any other system; absent, or on
+             any Windows but 8.1: no drive is moved.
 
 For testing only
 ----------------

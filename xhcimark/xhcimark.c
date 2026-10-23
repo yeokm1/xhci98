@@ -2567,7 +2567,7 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
                vetoed ? "a restart" : "a failure", GetLastError());
     }
     if (!mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn) ||
-        mk_s98_disabled(st, pr)) {
+        mk_s98_disabled(st, pr) || !mk_s98_profile_enabled(set, &data, id)) {
         mk_log("Stor98: %s: its enable is not seen; it is owed", id);
         result = MK_S98_ENABLE;
     } else if (mk_s98_runs(service, st)) {
