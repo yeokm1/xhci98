@@ -2876,6 +2876,118 @@ static void test_qual_cache(void)
 /* 43.66 (record 25 section 7.7 item 9): the notice's balloon the shell did
  * not show, sent again once; never twice where the shell showed it or says
  * nothing. */
+/* Task 43.72: 98 SE's icon tooltip after a long hover. */
+static void test_hover(void)
+{
+    TR_HOVER h;
+    TR_U32 t0 = 0xFFFFF000UL;   /* across GetTickCount's wrap */
+
+    memset(&h, 0, sizeof(h));
+    CHECK_EQ(tr_hover_poll(&h, t0, 1, 500UL, 1000UL), 0, "hover: none yet");
+    CHECK_EQ(tr_hover_poll(NULL, t0, 1, 500UL, 1000UL), 0, "hover: no state");
+    tr_hover_move(NULL, t0);
+
+    /* A short hover: the tooltip still up when the pointer left. */
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 1000UL, 0, 500UL, 1000UL), 0,
+             "hover: still on the icon");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 3000UL, 1, 500UL, 1000UL), 0,
+             "hover: left after 3 s: nothing");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 9000UL, 1, 500UL, 1000UL), 0,
+             "hover: once ended, never again");
+
+    /* A long one: 500 ms initial delay + 5000 ms autopop, less the poll. */
+    tr_hover_move(&h, t0);
+    tr_hover_move(&h, t0 + 400UL);      /* the last move counts */
+    CHECK_EQ(tr_hover_poll(&h, t0 + 400UL + 4499UL, 1, 500UL, 1000UL), 0,
+             "hover: just short of the tooltip's time");
+    tr_hover_move(&h, t0 + 400UL);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 400UL + 4500UL, 1, 500UL, 1000UL), 1,
+             "hover: the tooltip timed out: add the icon again");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 20000UL, 1, 500UL, 1000UL), 0,
+             "hover: once per hover");
+    /* Still on the icon however long: nothing until it leaves. */
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 60000UL, 0, 500UL, 1000UL), 0,
+             "hover: resting on the icon");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 61000UL, 1, 500UL, 1000UL), 1,
+             "hover: then away");
+    /* A slower double-click setting lengthens the tooltip's time. */
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 8000UL, 1, 900UL, 1000UL), 0,
+             "hover: 900 ms double click: 9.9 s");
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 8900UL, 1, 900UL, 1000UL), 1,
+             "hover: 900 ms double click: past it");
+}
+
+/* Task 43.72: which balloon a click is on. */
+static void test_bkind(void)
+{
+    TR_BKIND b;
+
+    memset(&b, 0, sizeof(b));
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: nothing sent");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 0, "bkind: nothing sent, silent shell");
+    CHECK_EQ(tr_bkind_fast(NULL, 1), 0, "bkind: no state");
+    tr_bkind_step(NULL, TR_BE_SHOW);
+
+    /* The notice shown, then another balloon sent that waits behind it
+     * (no show yet): a click is still on the notice's. */
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the notice shown");
+    tr_bkind_step(&b, TR_BE_OTHER);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1,
+             "bkind: another queued behind the notice: the click is the notice's");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 0,
+             "bkind: a silent shell can only go by the last one sent");
+    /* The notice goes, the other is shown: its click is not the notice's. */
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: gone, nothing up");
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: the other shown");
+
+    /* The reverse: another shown, the notice queued behind it. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_SENT);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0,
+             "bkind: the notice queued behind another: the click is the other's");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 1, "bkind: silent shell: the last sent");
+    tr_bkind_step(&b, TR_BE_CLICK);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: clicked away");
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: then the notice shown");
+
+    /* A balloon that replaces the one up at once: the shell's show for it
+     * says which. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_HIDE);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: replaced by another");
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: replaced by the notice");
+
+    /* Taken away (the re-send's removal), then sent again. */
+    tr_bkind_step(&b, TR_BE_DROP);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: removed: nothing up");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 0, "bkind: removed: nothing sent");
+    tr_bkind_step(&b, TR_BE_SENT);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: re-sent, not shown yet");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 1, "bkind: re-sent, silent shell");
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: re-sent and shown");
+    /* Ticks change nothing. */
+    tr_bkind_step(&b, TR_BE_TICK);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: a tick changes nothing");
+}
+
 static void test_bsend(void)
 {
     TR_BSEND s;
@@ -3591,6 +3703,8 @@ int main(void)
     test_login();
     test_qual_cache();
     test_bsend();
+    test_bkind();
+    test_hover();
     test_fast();
     test_levels();
     test_labels();

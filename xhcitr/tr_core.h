@@ -859,6 +859,65 @@ typedef struct _TR_BSEND {
  * caller sends it with no TR_BE_SENT. Zeroed is TR_BS_IDLE. */
 int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports);
 
+/* Which of the tool's balloons a click is on (record 25 section 7.7 item
+ * 6, task 43.72). The shell's messages name no balloon, and a balloon
+ * sent while another is up may replace it at once (a NIN_BALLOONSHOW then
+ * follows) or wait behind it (no show until it goes), so the kind of the
+ * last one sent is not the kind on the screen. Where the shell answers
+ * (reports, as tr_bsend_step's) the kind is the one the last
+ * NIN_BALLOONSHOW saw sent, and none once a hide, a timeout, a click or a
+ * removal ended it; where it does not, the kind of the last one sent (the
+ * only reading there is; 2000 reports no click at all, task 43.68).
+ * Zeroed is nothing sent. */
+#define TR_BK_NONE      0
+#define TR_BK_OTHER     1
+#define TR_BK_FAST      2   /* the "can run faster" notice's */
+
+typedef struct _TR_BKIND {
+    int Sent;                   /* TR_BK_* of the last balloon sent        */
+    int Shown;                  /* TR_BK_* the last NIN_BALLOONSHOW saw    */
+} TR_BKIND;
+
+/* ev: TR_BE_SENT (the notice's), TR_BE_OTHER (another balloon sent),
+ * TR_BE_SHOW, TR_BE_HIDE, TR_BE_TIMEOUT, TR_BE_CLICK, or TR_BE_DROP for
+ * the icon's balloon taken away (NIF_INFO with an empty szInfo); any other
+ * changes nothing. */
+void tr_bkind_step(TR_BKIND *b, int ev);
+
+/* 1 when the balloon the shell reports now is the notice's: what a click
+ * (call before stepping TR_BE_CLICK) or a show (after stepping TR_BE_SHOW)
+ * is on. */
+int tr_bkind_fast(const TR_BKIND *b, int reports);
+
+/* 98 SE's tooltip for the icon after a long hover (record 25 section 7.1,
+ * task 43.72). Its shell (shell32.dll 4.72) shows the icon's tooltip once
+ * per entry; a pointer that stays on the icon until the tooltip times out
+ * and then leaves it without a move over the notification area beside it
+ * (read in QEMU, whose pointer jumps; a real mouse can do it moving fast)
+ * leaves the tooltip "popped" for good: it never shows again for that
+ * icon, while every other tooltip still does. Removing the icon and adding
+ * it again gives it a new one (read: shows again; a NIF_TIP with no text
+ * and then the text does not). The tool cannot see the tooltip, so it goes
+ * by time: the shell's tooltip shows the initial delay after the last
+ * move and stays for the autopop time, both from the double-click time
+ * (comctl32's defaults: 1 and 10 times it); a hover whose last move is
+ * longer ago than that, less the poll's period, when the pointer is found
+ * away from the icon, is one whose tooltip timed out. */
+typedef struct _TR_HOVER {
+    int On;                     /* a move over the icon since it left      */
+    TR_U32 Last;                /* GetTickCount of its last move           */
+} TR_HOVER;
+
+/* A WM_MOUSEMOVE over the icon at nowMs. */
+void tr_hover_move(TR_HOVER *h, TR_U32 nowMs);
+
+/* The poll at nowMs; away: the pointer is off the icon (the caller's test:
+ * moved from the last move's point). Returns 1 once per hover, when it has
+ * ended and its tooltip timed out: the icon is then to be added again.
+ * dblClickMs: GetDoubleClickTime(); pollMs: the poll's period. */
+int tr_hover_poll(TR_HOVER *h, TR_U32 nowMs, int away, TR_U32 dblClickMs,
+                  TR_U32 pollMs);
+
 /* ---- the tree's labels (record 25 revision 10 addendum) ------------------ */
 
 /* VEN_ and DEV_ of a PCI id or instance id ("PCI\VEN_8086&DEV_02ED&..."),

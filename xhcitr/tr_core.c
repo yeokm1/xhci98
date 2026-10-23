@@ -2997,6 +2997,69 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports)
     }
 }
 
+void tr_bkind_step(TR_BKIND *b, int ev)
+{
+    if (b == NULL) {
+        return;
+    }
+    switch (ev) {
+    case TR_BE_SENT:
+        b->Sent = TR_BK_FAST;
+        break;
+    case TR_BE_OTHER:
+        b->Sent = TR_BK_OTHER;
+        break;
+    case TR_BE_SHOW:
+        b->Shown = b->Sent;
+        break;
+    case TR_BE_HIDE:
+    case TR_BE_TIMEOUT:
+    case TR_BE_CLICK:
+        b->Shown = TR_BK_NONE;
+        break;
+    case TR_BE_DROP:
+        /* Taken away, shown or queued: nothing of it is up or to come. */
+        b->Sent = TR_BK_NONE;
+        b->Shown = TR_BK_NONE;
+        break;
+    default:
+        break;
+    }
+}
+
+void tr_hover_move(TR_HOVER *h, TR_U32 nowMs)
+{
+    if (h == NULL) {
+        return;
+    }
+    h->On = 1;
+    h->Last = nowMs;
+}
+
+int tr_hover_poll(TR_HOVER *h, TR_U32 nowMs, int away, TR_U32 dblClickMs,
+                  TR_U32 pollMs)
+{
+    TR_U32 shown;               /* the initial delay and the autopop time  */
+
+    if (h == NULL || !h->On || !away) {
+        return 0;
+    }
+    h->On = 0;
+    shown = 11UL * dblClickMs;
+    /* The pointer left at most one poll ago, so a hover that may have
+     * outlasted the tooltip counts: a needless re-add only draws the icon
+     * again (on 98 SE perhaps at another place among the area's icons). */
+    return nowMs - h->Last + pollMs >= shown;
+}
+
+int tr_bkind_fast(const TR_BKIND *b, int reports)
+{
+    if (b == NULL) {
+        return 0;
+    }
+    return (reports ? b->Shown : b->Sent) == TR_BK_FAST;
+}
+
 void tr_fast_balloon(char *out, size_t cap, const char *name,
                      const TR_FAST *f, int count, int clickBalloon)
 {

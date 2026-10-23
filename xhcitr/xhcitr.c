@@ -127,6 +127,7 @@ typedef TR_NIDA TR_NID;
 
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_POLL      1
+#define TRAY_POLL_MS    1000    /* TIMER_POLL's period                    */
 #define TIMER_CHANGE    2
 #define TIMER_CLICK     3
 
@@ -6362,7 +6363,7 @@ static int fastCount;           /* the devices counted at the last scan     */
 static int fastOn;              /* the setting in force at the last scan    */
 static int fastPending;         /* a balloon owed until the icon is there   */
 static char fastText[256];
-static int fastBalloon;         /* the last balloon shown was this notice's */
+static TR_BKIND fastKind;       /* which balloon is up (task 43.72)         */
 static TR_BSEND fastSend;       /* whether the shell showed it (item 9)     */
 static char fastTextKey[TR_FAST_KEY];   /* the device fastText names        */
 /* The High Speed case's answers (item 1), by key, the oldest replaced. */
@@ -6522,12 +6523,17 @@ static void fast_announce(void)
 /* Item 9 (task 43.66): what the shell said of the notice's balloon, or the
  * second's tick; a balloon it did not show is sent again, once. */
 static int balloonAnswers;      /* the shell has sent a NIN_BALLOON* message */
+/* A shell that answers: one heard from in this session, or Vista and
+ * later, whose shell was read answering (7, task 43.66) and drops a
+ * balloon queued behind its own without a word. */
+static int balloon_answers(void)
+{
+    return balloonAnswers || (envNt && envMajor >= 6);
+}
+
 static void fast_balloon_event(int ev)
 {
-    /* A shell that answers: one heard from in this session, or Vista and
-     * later, whose shell was read answering (7, task 43.66) and drops a
-     * balloon queued behind its own without a word. */
-    int answers = balloonAnswers || (envNt && envMajor >= 6);
+    int answers = balloon_answers();
 
     if (tr_bsend_step(&fastSend, ev, GetTickCount(), answers)) {
         if (iconAdded && fastOn && fastCount > 0) {
@@ -7587,6 +7593,38 @@ static void tray_update(void)
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
 }
 
+/* 98 SE: the icon's tooltip after a long hover (task 43.72, tr_hover_poll):
+ * the hover, the point of its last move, and whether one of the tray's
+ * menus is up (its modal loop runs the poll's timer). */
+static TR_HOVER trayHover;
+static POINT trayHoverPt;
+static int trayInMenu;
+
+static void tray_remove(void);
+
+/* The poll's half: the pointer away from the icon after a hover whose
+ * tooltip timed out, and the icon added again so that its tooltip shows
+ * again. Shell 5.0 and later (ME, 2000 and later) are not touched. */
+static void tray_hover_poll(void)
+{
+    POINT p;
+    int away;
+
+    if (shellV5 || !iconAdded || trayInMenu || !trayHover.On) {
+        return;
+    }
+    GetCursorPos(&p);
+    away = p.x - trayHoverPt.x > GetSystemMetrics(SM_CXSMICON) ||
+           trayHoverPt.x - p.x > GetSystemMetrics(SM_CXSMICON) ||
+           p.y - trayHoverPt.y > GetSystemMetrics(SM_CYSMICON) ||
+           trayHoverPt.y - p.y > GetSystemMetrics(SM_CYSMICON);
+    if (tr_hover_poll(&trayHover, GetTickCount(), away, GetDoubleClickTime(),
+                      TRAY_POLL_MS)) {
+        tray_remove();
+        tray_add();
+    }
+}
+
 static void tray_remove(void)
 {
     TR_NID n;
@@ -7603,10 +7641,11 @@ static void tray_remove(void)
 }
 
 /* fast: the "can run faster" notice, whose click opens the list. The
- * shell shows one balloon, the last replacing the one before, so a flag
- * of the last balloon serves it; 98 SE's pop-up queues its notices, so
- * there the notice carries its own id (TRAY_POP_FAST), which its click
- * reports. */
+ * shell's messages name no balloon, and one sent while another is up may
+ * replace it or wait behind it, so the kind on the screen is the one the
+ * last NIN_BALLOONSHOW saw sent (fastKind, tr_bkind_step; task 43.72);
+ * 98 SE's pop-up queues its notices, so there the notice carries its own
+ * id (TRAY_POP_FAST), which its click reports. */
 #define TRAY_POP_FAST   2
 /* The balloon itself; 1 when the shell's was asked for. */
 static int tray_balloon_send(const char *title, const char *text, int warn,
@@ -7615,7 +7654,6 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     TR_NID n;
 
     tr_copy(lastEvent, text, sizeof(lastEvent));
-    fastBalloon = 0;
     if (!iconAdded) {
         return 0;
     }
@@ -7637,7 +7675,7 @@ static int tray_balloon_send(const char *title, const char *text, int warn,
     TR_NID_VERSION(n) = 10000;
     n.dwInfoFlags = warn ? NIIF_WARNING : NIIF_INFO;
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
-    fastBalloon = fast;
+    tr_bkind_step(&fastKind, fast ? TR_BE_SENT : TR_BE_OTHER);
     return 1;
 }
 
@@ -7656,6 +7694,7 @@ static void tray_balloon_clear(void)
     n.uID = 1;
     n.uFlags = NIF_INFO;
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+    tr_bkind_step(&fastKind, TR_BE_DROP);
 }
 
 /* A balloon with new text: the notice's is watched until the shell shows
@@ -8053,8 +8092,10 @@ static void tray_unit_menu(void)
     AppendMenuA(m, MF_STRING, IDM_OPEN, "Open xHCI98 USB Tree");
     GetCursorPos(&p);
     SetForegroundWindow(hTray);
+    trayInMenu = 1;
     cmd = (UINT)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0,
                                hTray, NULL);
+    trayInMenu = 0;
     PostMessageA(hTray, WM_NULL, 0, 0);
     DestroyMenu(m);
     if (cmd == IDM_OPEN) {
@@ -8095,8 +8136,10 @@ static void tray_context_menu(void)
     SetMenuDefaultItem(m, IDM_OPEN, FALSE);
     GetCursorPos(&p);
     SetForegroundWindow(hTray);
+    trayInMenu = 1;
     cmd = (UINT)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0,
                                hTray, NULL);
+    trayInMenu = 0;
     PostMessageA(hTray, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {
@@ -8154,6 +8197,10 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     }
     switch (msg) {
     case WM_TRAYICON:
+        if (LOWORD(lp) == WM_MOUSEMOVE) {
+            tr_hover_move(&trayHover, GetTickCount());
+            GetCursorPos(&trayHoverPt);
+        }
         switch (LOWORD(lp)) {
         case WM_LBUTTONUP:
             if (trayNoClick) {
@@ -8178,31 +8225,40 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         case WM_USER + 2:       /* NIN_BALLOONSHOW */
             if (shellV5) {
                 balloonAnswers = 1;
-                fast_balloon_event(fastBalloon ? TR_BE_SHOW : TR_BE_OTHER);
+                tr_bkind_step(&fastKind, TR_BE_SHOW);
+                fast_balloon_event(tr_bkind_fast(&fastKind, 1) ? TR_BE_SHOW
+                                                               : TR_BE_OTHER);
             }
             break;
         case WM_USER + 3:       /* NIN_BALLOONHIDE */
             if (shellV5) {
                 balloonAnswers = 1;
+                tr_bkind_step(&fastKind, TR_BE_HIDE);
                 fast_balloon_event(TR_BE_HIDE);
             }
             break;
         case WM_USER + 4:       /* NIN_BALLOONTIMEOUT */
             if (shellV5) {
                 balloonAnswers = 1;
+                tr_bkind_step(&fastKind, TR_BE_TIMEOUT);
                 fast_balloon_event(TR_BE_TIMEOUT);
             }
             break;
-        case WM_USER + 5:       /* NIN_BALLOONUSERCLICK */
+        case WM_USER + 5: {     /* NIN_BALLOONUSERCLICK */
+            /* The balloon clicked: the one on the screen, which is not
+             * always the last one sent (task 43.72). */
+            int onFast = shellV5 ? tr_bkind_fast(&fastKind, balloon_answers())
+                                 : wp == TRAY_POP_FAST;
             if (shellV5) {
                 balloonAnswers = 1;
+                tr_bkind_step(&fastKind, TR_BE_CLICK);
                 fast_balloon_event(TR_BE_CLICK);
             }
-            if (shellV5 ? fastBalloon : wp == TRAY_POP_FAST) {
-                fastBalloon = 0;
+            if (onFast) {
                 fast_box(NULL);
             }
             break;
+        }
         case WM_RBUTTONUP:
             if (!trayV3) {
                 tray_context_menu();
@@ -8225,6 +8281,7 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             }
             poll();
             fast_balloon_event(TR_BE_TICK);
+            tray_hover_poll();
         } else if (wp == TIMER_CHANGE) {
             KillTimer(w, TIMER_CHANGE);
             refresh_window();
@@ -9126,7 +9183,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     tray_add();
     fast_announce();
     poll();
-    SetTimer(hTray, TIMER_POLL, 1000, NULL);
+    SetTimer(hTray, TIMER_POLL, TRAY_POLL_MS, NULL);
     if (!opts.Tray) {
         open_window();
     }
