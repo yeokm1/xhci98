@@ -1909,6 +1909,8 @@ static BOOLEAN cmTransport(PCM_NHI nhi)
  * post (with a marking window when `mark`); with `expose` FALSE the call
  * alone (publication mode none, record 22 section 7.7). Only for a member
  * whose stor98 gate is down (cmHeld). */
+static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i);
+
 static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
                         BOOLEAN fresh, ULONG tunnel, BOOLEAN mark,
                         BOOLEAN expose)
@@ -1916,6 +1918,17 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
     PCM_REENUM r;
 
     r = &nhi->Reenum;
+    if (removeVanished && cmVanishSweep(nhi, i)) {
+        /* Task 43.47: the removal is the member's sweep's now, and its
+         * gate is up: the exposure and re-enumeration held behind it,
+         * with their publication mode and marking window, run once every
+         * vanished child is retired. */
+        r->Port[i].Held |= CM_HELD_REENUM | (fresh ? CM_HELD_FRESH : 0UL);
+        r->Port[i].HeldExpose |= expose ? 1UL : 0UL;
+        r->Port[i].HeldMark |= mark ? 1UL : 0UL;
+        CmLogNote(nhi, "cm.reenum.vanish-held", r->Port[i].Bdf);
+        return;
+    }
     if (expose) {
         (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh, tunnel);
     }
@@ -1932,6 +1945,21 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
         cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, mark);
         r->Calls++;
     }
+}
+
+/*
+ * Task 43.47: member i's vanished children are its sweep's (cm_eject.h),
+ * entered where the CONFIGMG route has call workers and the host interface
+ * is live; TRUE when it was. Otherwise the worker's removal, as before.
+ */
+static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    return (BOOLEAN)(r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
+                     r->Callwk != NULL && cmTransport(nhi) &&
+                     CmEjectSweep(nhi, i));
 }
 
 /*
@@ -2064,6 +2092,12 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
          * by this call. */
         expose = (BOOLEAN)(!none || (r->Port[i].MissedExpose != 0 &&
                                      cmTransport(nhi)));
+        if (vanish && cmVanishSweep(nhi, i)) {
+            /* Task 43.47: the vanished children are read now, at the
+             * down, whatever the member's gates; the call below is held
+             * behind the sweep's gate without its removal. */
+            vanish = FALSE;
+        }
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
         if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark, &expose)) {
@@ -2306,6 +2340,7 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
     KIRQL irql;
     ULONG bdf[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
+    ULONG mask;
 
     r = &nhi->Reenum;
     if (!r->CfgmgOwed) {
@@ -2341,6 +2376,11 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
      * section 7.2 part 0): one per member, each opening its own route.
      * The route does not depend on them. */
     r->Callwk = CmCallwkStart(nhi, r->Members);
+    /* Task 43.47: no member's CONFIGMG worker claim becomes a vanished
+     * transaction until that member's call worker has opened its route
+     * (CmReenumService posts the mask as the openings are read back). */
+    r->CallUsable = 0;
+    CmCfgwkTakeover(r->Wk, 0);
 }
 
 /*
@@ -2720,8 +2760,10 @@ VOID CmReenumService(PCM_NHI nhi)
                                    (r->Port[i].Missed && !missed &&
                                     r->Port[i].MissedExpose != 0));
             r->Port[i].HeldExpose = 0;
-            mark = (BOOLEAN)(r->Port[i].Missed && !missed &&
-                             r->SafeEject != 0);
+            mark = (BOOLEAN)((r->Port[i].Missed && !missed &&
+                              r->SafeEject != 0) ||
+                             r->Port[i].HeldMark != 0);
+            r->Port[i].HeldMark = 0;
             if (r->Port[i].Missed && !missed) {
                 r->Port[i].MissedAt = cmNow(nhi);
                 CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
@@ -2752,6 +2794,7 @@ VOID CmReenumService(PCM_NHI nhi)
         if ((r->Port[i].Held & CM_HELD_REENUM) == 0) {
             /* Run, owed or discarded: the held work's mode goes with it. */
             r->Port[i].HeldExpose = 0;
+            r->Port[i].HeldMark = 0;
         }
     }
     /* A change skipped while a member was not active, now that it is;
@@ -2763,6 +2806,18 @@ VOID CmReenumService(PCM_NHI nhi)
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS &&
             !CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
             r->Port[i].MissedAt = cmNow(nhi);
+            if (cmVanishSweep(nhi, i)) {
+                /* Task 43.47: its vanished children the sweep's; the owed
+                 * call held behind its gate, exposure and marking window
+                 * with it. */
+                r->Port[i].Held |= CM_HELD_REENUM | CM_HELD_FRESH;
+                r->Port[i].HeldExpose |= r->Port[i].MissedExpose;
+                r->Port[i].HeldMark |= (r->SafeEject != 0) ? 1UL : 0UL;
+                r->Port[i].Missed = 0;
+                r->Port[i].MissedExpose = 0;
+                CmLogNote(nhi, "cm.reenum.vanish-held", r->Port[i].Bdf);
+                continue;
+            }
             if (r->Port[i].MissedExpose) {
                 (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
                                      CM_NVLINK_TUNNEL_NONE);
@@ -2788,6 +2843,20 @@ VOID CmReenumService(PCM_NHI nhi)
     }
     cmCfgmgOpened(nhi);
     CmCallwkService(nhi, r->Callwk);
+    if (r->Wk != NULL && r->Callwk != NULL) {
+        /* Task 43.47: the members whose call worker opened its route, the
+         * ones a claim may be handed to. */
+        mask = 0;
+        for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+            if (CmCallwkUsable(r->Callwk, i)) {
+                mask |= 1UL << i;
+            }
+        }
+        if (mask != r->CallUsable) {
+            r->CallUsable = mask;
+            CmCfgwkTakeover(r->Wk, mask);
+        }
+    }
 }
 
 VOID CmReenumSuspend(PCM_NHI nhi)

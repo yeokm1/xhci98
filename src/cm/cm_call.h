@@ -215,6 +215,11 @@ BOOLEAN CmCallwkBusy(struct _CM_CALLWK *b, ULONG member);
 /* Whether member `member` has a worker (its thread was made). Any IRQL. */
 BOOLEAN CmCallwkLive(struct _CM_CALLWK *b, ULONG member);
 
+/* Whether member `member`'s worker opened its own CONFIGMG route (read back
+ * by CmCallwkService): only then can it make a transaction's calls (task
+ * 43.47's sweeps and takeovers). Any IRQL. */
+BOOLEAN CmCallwkUsable(struct _CM_CALLWK *b, ULONG member);
+
 /* Once per pass: each worker's opening, taken and logged once
  * (cm.callwk.open: member 31:24, bit 23 opened, CM_CFGMG_WHY_* 22:16,
  * Get_Version's AX 15:0, or FFFFh for a stale result). PASSIVE_LEVEL. */

@@ -9,7 +9,12 @@
  * proven, failed and with a sibling running, R11 O6 with a call still
  * running and its late success, the unit vanishing), the gate, the
  * result's stamps and consumption, a stopped start's record adopted, and
- * the statement decision's identity and deadline.
+ * the statement decision's identity and deadline. Task 43.47: the
+ * vanished child's transaction (its veto retried with the gate up and a
+ * re-plug held until its removal, the stop and the adoption, R11 O6 with
+ * no teardown, the CONFIGMG worker's claims taken over, refused, parked
+ * and resumed, two members), and the sweep (its readings, no deadline, a
+ * kept child, a held child, the verdict); with cm_nvlink.c's hold.
  */
 
 #include <stdio.h>
@@ -976,6 +981,502 @@ static VOID test_qualification(VOID)
     CHECK(!CmEjOwesRemoval(&t), "real host: nothing authorised");
 }
 
+/* ---- the vanished child (task 43.47) ----------------------------------- */
+
+#define VBRIDGE     0x0208UL
+#define VBRIDGE2    0x0308UL
+#define VNODE       0xC0DE0001UL
+#define VETOED      0x17UL
+
+/* A vanished child's record, its query vetoed: asked again every 2 s,
+ * never forced, its member held all the while; the held exposure and
+ * re-enumeration run only once it is removed. */
+static VOID test_vanished_veto(VOID)
+{
+    CM_EJ_TX t;
+    FAKE f;
+    CM_EJ_IN in;
+    ULONG held;
+    ULONG act;
+    ULONG now;
+    BOOLEAN missed;
+    BOOLEAN vanish;
+    BOOLEAN fresh;
+
+    fakeInit(&f);
+    f.QueryCr = VETOED;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY, "vanished: the query owed at once");
+    CHECK(CmEjGate(&t), "vanished: the member's gate up");
+    CHECK(!CmEjResultDue(&t, 0), "vanished: no tool's result slot");
+    CHECK_EQ(t.Entry, CM_EJ_NONE, "vanished: no request");
+
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "vetoed: one query");
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY, "vetoed: still owed");
+    in.NowMs = 1999;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "vetoed: not before 2 s");
+    in.NowMs = 2000;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 2, "vetoed: asked again at 2 s");
+
+    /* A tunnel up's exposure and re-enumeration posted meanwhile (the
+     * re-plug): held behind the gate. */
+    held = 0;
+    missed = FALSE;
+    vanish = FALSE;
+    fresh = TRUE;
+    CHECK(CmNvlinkHoldReenum(&held, CmEjGate(&t), TRUE, &missed, &vanish,
+                             &fresh),
+          "re-plug during the retries: held");
+    for (now = 4000; now <= 60000; now += 1000) {
+        in.NowMs = now;
+        drive(&t, &f, &in);
+        act = CmNvlinkHoldRun(&held, CmEjGate(&t), TRUE, TRUE, TRUE, TRUE,
+                              &missed, &vanish, &fresh);
+        CHECK_EQ(act, 0, "while vetoed: nothing exposed or re-enumerated");
+    }
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 31, "vetoed: every 2 s for a minute");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "vetoed: never forced");
+    CHECK((t.Flags & CM_EJ_F_BLOCKED) == 0, "vetoed: no deadline, no block");
+    CHECK(CmEjBusy(&t), "vetoed: the passes' cadence kept");
+
+    /* The file closed: accepted, removed, retired. */
+    f.QueryCr = CM_EJ_CR_SUCCESS;
+    in.NowMs = 62000;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 32, "closed: the query accepted");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 1, "closed: the removal");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "closed: retired");
+    CHECK((t.Flags & CM_EJ_F_REMOVED) != 0, "closed: removed");
+    CHECK(!CmEjGate(&t), "closed: the gate down");
+    act = CmNvlinkHoldRun(&held, CmEjGate(&t), TRUE, TRUE, TRUE, TRUE,
+                          &missed, &vanish, &fresh);
+    CHECK((act & CM_HELD_DO_REENUM) != 0,
+          "after the retirement: the held re-enumeration runs");
+    CHECK(fresh, "... a fresh exposure first (the re-plug's UP)");
+    CHECK(!vanish, "... with no second removal");
+
+    /* Verified gone instead (CR_NO_SUCH_DEVNODE from the instance id read
+     * back): retired too. */
+    fakeInit(&f);
+    f.QueryCr = CM_EJ_CR_NO_SUCH_DEVNODE;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "gone: retired by its disappearance");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "gone: nothing to remove");
+}
+
+/* The NHI stopped mid-retry: the record kept and adopted by the next
+ * start, resumed where it stood; an accepted query never asked again. */
+static VOID test_vanished_stop(VOID)
+{
+    CM_EJ_TX t;
+    FAKE f;
+    CM_EJ_IN in;
+
+    /* Vetoed, then the stop: nothing authorised, kept. */
+    fakeInit(&f);
+    f.QueryCr = VETOED;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CHECK(!CmEjOwesRemoval(&t), "stop, vetoed: not the detached worker's");
+    CmEjAdopt(&t, 5000);
+    CHECK((t.Flags & CM_EJ_F_ADOPT) != 0, "adopted: looked up first");
+    in.NowMs = 5000;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_ADOPT], 1, "adopted: the lookup by id");
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY,
+             "adopted, present: a vetoed query still owed (not 'nothing')");
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 2, "adopted: asked again");
+    CHECK(CmEjGate(&t), "adopted: the gate up");
+
+    /* ... gone at the next start: retired. */
+    fakeInit(&f);
+    f.QueryCr = VETOED;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CmEjAdopt(&t, 5000);
+    f.Devnode = 0;
+    in.NowMs = 5000;
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "adopted, gone: retired");
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "adopted, gone: no query");
+
+    /* Accepted, the removal failing, then the stop: the detached worker's;
+     * adopted later, the removal resumed, never a second query. */
+    fakeInit(&f);
+    f.RemoveCr = VETOED;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "accepted: one query");
+    CHECK(CmEjOwesRemoval(&t), "stop, accepted: the detached worker's");
+    CmEjAdopt(&t, 40000);
+    in.NowMs = 40000;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "adopted: the query never again");
+    CHECK_EQ(t.Phase, CM_EJ_P_REMOVE, "adopted: removing");
+    CHECK((t.Flags & CM_EJ_F_BLOCKED) != 0,
+          "adopted past 30 s from the first attempt: blocked");
+
+    /* The stop during the query; its late result an acceptance (the late
+     * taker's feed): the removal owed, the query not asked again. */
+    fakeInit(&f);
+    f.Hold = TRUE;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Pending, CM_EJ_DO_QUERY, "the query out at the stop");
+    CmEjFeed(&t, CM_EJ_FED_QUERY, CM_EJ_CR_SUCCESS, 0, 300);
+    CHECK(CmEjOwesRemoval(&t), "its late acceptance: the removal owed");
+    CmEjAdopt(&t, 900);
+    f.Hold = FALSE;
+    f.RemoveCr = CM_EJ_CR_SUCCESS;
+    in.NowMs = 900;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "late acceptance: no second query");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "late acceptance: removed");
+
+    /* The stop during the query; its late result a refusal: still owed,
+     * asked again after the adoption. */
+    fakeInit(&f);
+    f.Hold = TRUE;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    in = mkIn(0);
+    drive(&t, &f, &in);
+    CmEjFeed(&t, CM_EJ_FED_QUERY, VETOED, 0, 300);
+    CHECK(!CmEjOwesRemoval(&t), "late refusal: nothing authorised");
+    CmEjAdopt(&t, 3000);
+    f.Hold = FALSE;
+    f.QueryCr = VETOED;
+    in.NowMs = 3000;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 2, "late refusal: asked again");
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY, "late refusal: still owed");
+
+    /* A taken-over record keeping a Stor98 request, adopted and found
+     * gone: the request withdrawn before it retires. */
+    fakeInit(&f);
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CmEjClaimProgress(&t, 0);
+    CHECK(CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, VETOED, 0, 0, 1, 5, 0x42, 3,
+                       TRUE, TRUE, 10),
+          "a failed removal with a request: taken over");
+    CmEjAdopt(&t, 100);
+    f.Devnode = 0;
+    in = mkIn(100);
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_WITHDRAW], 1, "adopted, gone: request withdrawn");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "adopted, gone: then retired");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "adopted, gone: no removal call");
+}
+
+/* A removal that keeps failing past 30 s: blocked, no teardown under
+ * either connection manager (V8), still retried, the block lifted by its
+ * success. */
+static VOID test_vanished_o6(VOID)
+{
+    CM_EJ_TX t;
+    FAKE f;
+    CM_EJ_IN in;
+    ULONG now;
+
+    fakeInit(&f);
+    f.RemoveCr = VETOED;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    for (now = 0; now <= 40000; now += 500) {
+        in = mkIn(now);
+        in.U4Known = TRUE;
+        in.Qualified = TRUE;
+        drive(&t, &f, &in);
+        if (now < 30000) {
+            CHECK((t.Flags & CM_EJ_F_BLOCKED) == 0, "O6: not before 30 s");
+        }
+    }
+    CHECK((t.Flags & CM_EJ_F_BLOCKED) != 0, "O6: blocked after 30 s");
+    CHECK((t.Flags & CM_EJ_F_O6TEAR) == 0, "O6: no teardown owed");
+    CHECK_EQ(f.Calls[CM_EJ_DO_POPULATION], 0, "O6: no population check");
+    CHECK_EQ(f.Calls[CM_EJ_DO_TEARDOWN], 0, "O6: no teardown");
+    CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 0, "O6: no statement");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 21, "O6: every 2 s, past 30 s too");
+    CHECK(CmEjGate(&t), "O6: the member held");
+    f.RemoveCr = CM_EJ_CR_SUCCESS;
+    in.NowMs = 42000;
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "O6: its success retires it");
+    CHECK(!CmEjGate(&t), "O6: the block lifted");
+}
+
+/* The takeovers: the CONFIGMG worker's claims (the loss, the removal-only
+ * request, its own vanished-child removal). */
+static VOID test_vanished_claims(VOID)
+{
+    CM_EJ_TX t;
+    FAKE f;
+    CM_EJ_IN in;
+
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK_EQ(t.Phase, CM_EJ_P_CLAIMED, "claim: its phase");
+    CHECK(CmEjGate(&t), "claim: the member's gate up while it runs");
+    CHECK(!CmEjBusy(&t), "claim: nothing for the passes");
+    in = mkIn(0);
+    CHECK_EQ(CmEjNext(&t, &in), CM_EJ_DO_NONE, "claim: never stepped");
+    CHECK(!CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                        FALSE, TRUE, 10),
+          "a loss's refused claim: freed");
+    CHECK_EQ(t.Phase, CM_EJ_P_FREE, "... settled, the loss's rule");
+
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(!CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, CM_EJ_CR_SUCCESS, 5, 5, 1,
+                        CM_EJ_NONE, 0, 0, FALSE, TRUE, 10),
+          "accepted and removed: freed");
+    CHECK_EQ(t.Phase, CM_EJ_P_FREE, "... nothing owed");
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(!CmEjClaimEnd(&t, CM_EJ_NO_CR, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE,
+                        0, 0, FALSE, TRUE, 10),
+          "a loss's claim, no query made: freed");
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(CmEjClaimEnd(&t, CM_EJ_NO_CR, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0,
+                       0, TRUE, TRUE, 10),
+          "a vanished child's claim, no query made: its transaction");
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY, "... its query owed");
+    CHECK_EQ(t.QueryAttempts, 0, "... at once");
+
+    /* Accepted, its removal failed: the transaction, the query never
+     * asked again, its request kept for it to withdraw. */
+    fakeInit(&f);
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CmEjClaimProgress(&t, 100);
+    CHECK(!CmEjClaimBlocked(&t, 30099), "running: not blocked before 30 s");
+    CHECK(CmEjClaimBlocked(&t, 30100),
+          "running: blocked at 30 s with the call still out");
+    CHECK(CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, VETOED, 9999, 30500, 15, 3,
+                       0x123456UL, 7, FALSE, TRUE, 30600),
+          "accepted, failed: taken over");
+    CHECK_EQ(t.Phase, CM_EJ_P_REMOVE, "taken over: removing");
+    CHECK_EQ(t.FirstRemoveAt, 100, "taken over: O6 from the first attempt");
+    CHECK((t.Flags & CM_EJ_F_BLOCKED) != 0, "taken over: already blocked");
+    CHECK((t.Flags & (CM_EJ_F_QUERIED | CM_EJ_F_AUTH)) ==
+              (CM_EJ_F_QUERIED | CM_EJ_F_AUTH),
+          "taken over: accepted and authorised");
+    in = mkIn(31000);
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 0, "taken over: never a second query");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "taken over: 2 s after the last");
+    in.NowMs = 32500;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 1, "taken over: the removal");
+    CHECK_EQ(f.Calls[CM_EJ_DO_WITHDRAW], 1, "taken over: the request withdrawn");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "taken over: retired");
+
+    /* A vanished child's refused claim: the transaction, its retries
+     * owed. */
+    fakeInit(&f);
+    f.QueryCr = VETOED;
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                       TRUE, TRUE, 1000),
+          "a vanished child's refused claim: taken over");
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY, "... its query owed again");
+    in = mkIn(2999);
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 0, "... not before 2 s after it");
+    in.NowMs = 3000;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 1, "... asked again at 2 s");
+
+    /* No call worker: a vanished child's refusal parked for the worker's
+     * own retries, a failed removal parked for its removal alone, or a
+     * start that can take either over. */
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(!CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                        TRUE, FALSE, 1000),
+          "no worker, a vanished child refused: not taken over");
+    CHECK_EQ(t.Phase, CM_EJ_P_CLAIMED, "... parked");
+    CHECK((t.Flags & CM_EJ_F_PARKED) != 0, "... its retries owed");
+    CHECK(CmEjGate(&t), "... the member held");
+    CHECK(!CmEjClaimResume(&t), "... not a removal to resume");
+    CHECK_EQ(CmEjClaimRetry(&t, 2999), CM_EJ_DO_NONE, "... not before 2 s");
+    CHECK_EQ(CmEjClaimRetry(&t, 3000), CM_EJ_DO_QUERY,
+             "... its query asked again by the worker at 2 s");
+    CHECK_EQ(CmEjClaimRetry(&t, 3000), CM_EJ_DO_NONE, "... in use: once");
+    CHECK(!CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                        TRUE, FALSE, 3000),
+          "... refused again: parked again");
+    CmEjClaimProgress(&t, 5000);
+    CHECK(!CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, VETOED, 5000, 5000, 1,
+                        CM_EJ_NONE, 0, 0, TRUE, FALSE, 5000),
+          "... accepted, its removal failed: parked for the removal");
+    CHECK_EQ(CmEjClaimRetry(&t, 7000), CM_EJ_DO_REMOVE,
+             "... the removal alone at 2 s, never a second query");
+    CHECK(!CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, CM_EJ_CR_SUCCESS, 7000, 7000,
+                        1, CM_EJ_NONE, 0, 0, TRUE, FALSE, 7000),
+          "... removed: freed");
+    CHECK_EQ(t.Phase, CM_EJ_P_FREE, "... retired");
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(!CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                        TRUE, FALSE, 10),
+          "a parked query ...");
+    CHECK(CmEjClaimAdopt(&t, 20), "... taken over by a start with a worker");
+    CHECK_EQ(t.Phase, CM_EJ_P_QUERY, "... its query owed there");
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(!CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                        FALSE, FALSE, 10),
+          "no worker, a loss's refusal: freed (settled)");
+    CHECK_EQ(t.Phase, CM_EJ_P_FREE, "... settled");
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CmEjClaimProgress(&t, 50);
+    CHECK(!CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, VETOED, 50, 60, 1, 2, 9, 4,
+                        TRUE, FALSE, 70),
+          "no worker, failed: not taken over");
+    CHECK_EQ(t.Phase, CM_EJ_P_CLAIMED, "... parked, still a claim");
+    CHECK((t.Flags & CM_EJ_F_PARKED) != 0, "... parked");
+    CHECK(CmEjGate(&t), "... the member held");
+    CHECK_EQ(t.Entry, 2, "... its request kept");
+    CHECK(CmEjClaimBlocked(&t, 30050), "... blocked after O6's 30 s");
+    CHECK(CmEjClaimResume(&t), "the worker back at the devnode: resumed");
+    CHECK(!CmEjClaimResume(&t), "... once (in use)");
+    CHECK((t.Flags & CM_EJ_F_QUERIED) != 0, "... its query accepted already");
+    CHECK(!CmEjClaimEnd(&t, CM_EJ_CR_SUCCESS, VETOED, 9000, 9000, 1, 2, 9, 4,
+                        TRUE, FALSE, 9100),
+          "failed again: parked again");
+    CHECK_EQ(t.FirstRemoveAt, 50, "... O6 from its first attempt");
+    CHECK(CmEjClaimAdopt(&t, 9200), "a start with a live worker: taken over");
+    CHECK_EQ(t.Phase, CM_EJ_P_REMOVE, "... the transaction");
+    CHECK(!CmEjClaimAdopt(&t, 9300), "... once");
+}
+
+/* Two members: one held by its vanished child, the other's work goes
+ * on. */
+static VOID test_vanished_two(VOID)
+{
+    CM_EJ_TX a;
+    CM_EJ_TX b;
+    FAKE fa;
+    FAKE fb;
+    CM_EJ_IN in;
+    ULONG heldA;
+    ULONG heldB;
+    ULONG act;
+    BOOLEAN missed;
+    BOOLEAN vanish;
+    BOOLEAN fresh;
+
+    fakeInit(&fa);
+    fakeInit(&fb);
+    fa.QueryCr = VETOED;
+    CmEjBeginVanished(&a, VBRIDGE, VNODE, 0);
+    CmEjBeginVanished(&b, VBRIDGE2, VNODE + 1, 0);
+    in = mkIn(0);
+    drive(&a, &fa, &in);
+    drive(&b, &fb, &in);
+    CHECK(CmEjGate(&a) && a.Bridge == VBRIDGE, "member A held (vetoed)");
+    CHECK(!CmEjGate(&b) && b.Bridge == VBRIDGE2, "member B retired");
+    heldA = CM_HELD_REENUM;
+    heldB = CM_HELD_REENUM;
+    missed = FALSE;
+    act = CmNvlinkHoldRun(&heldA, CmEjGate(&a), TRUE, TRUE, TRUE, TRUE,
+                          &missed, &vanish, &fresh);
+    CHECK_EQ(act, 0, "member A's work held");
+    act = CmNvlinkHoldRun(&heldB, CmEjGate(&b), TRUE, TRUE, TRUE, TRUE,
+                          &missed, &vanish, &fresh);
+    CHECK((act & CM_HELD_DO_REENUM) != 0, "member B's work runs meanwhile");
+}
+
+/* The sweep: its readings, their retries with no deadline, a found child
+ * kept, a held child keeping it, and the reading's verdict. */
+static VOID test_vanished_sweep(VOID)
+{
+    CM_EJ_SWEEP s;
+    ULONG ids[2];
+    ULONG child[4];
+    ULONG owner[4];
+    ULONG claims;
+    ULONG now;
+
+    memset(&s, 0, sizeof(s));
+    CHECK(!CmEjSweepHeld(&s), "sweep: idle");
+    CmEjSweepBegin(&s, 100);
+    CHECK(CmEjSweepHeld(&s), "sweep: the gate up from its entry");
+    CHECK(!CmEjSweepNext(&s, FALSE, 100), "sweep: waits for the worker");
+    CHECK(CmEjSweepNext(&s, TRUE, 100), "sweep: a reading at once");
+    CmEjSweepSubmitted(&s, TRUE);
+    CHECK(!CmEjSweepNext(&s, TRUE, 100), "sweep: one reading at a time");
+    CHECK_EQ(CmEjSweepTake(&s, TRUE, TRUE, TRUE, 0, 150), CM_EJ_SW_END_NONE,
+             "a child found, its record made: not ended");
+    CHECK(CmEjSweepNext(&s, TRUE, 150), "... the next reading at once");
+    CmEjSweepSubmitted(&s, TRUE);
+    CHECK_EQ(CmEjSweepTake(&s, TRUE, FALSE, FALSE, 0, 200),
+             CM_EJ_SW_END_DONE, "a complete reading with none left: ended");
+    CHECK(!CmEjSweepHeld(&s), "... the sweep's gate down");
+    CHECK_EQ(s.Records, 1, "... one record");
+
+    /* Incomplete readings: again every 2 s, with no deadline. */
+    CmEjSweepBegin(&s, 0);
+    for (now = 0; now <= 120000; now += 2000) {
+        CHECK(CmEjSweepNext(&s, TRUE, now), "incomplete: read again");
+        CmEjSweepSubmitted(&s, TRUE);
+        CHECK_EQ(CmEjSweepTake(&s, FALSE, FALSE, FALSE, 0, now),
+                 CM_EJ_SW_END_NONE, "incomplete: never ended by time");
+        CHECK(!CmEjSweepNext(&s, TRUE, now + 1999), "incomplete: 2 s apart");
+    }
+    CHECK(CmEjSweepHeld(&s), "incomplete after two minutes: still held");
+
+    /* No free record: the child kept (by the driver), made later. */
+    CmEjSweepSubmitted(&s, TRUE);
+    CHECK_EQ(CmEjSweepTake(&s, TRUE, TRUE, FALSE, 0, 130000),
+             CM_EJ_SW_END_NONE, "no record free: not ended");
+    CmEjSweepMade(&s);
+    CHECK(CmEjSweepNext(&s, TRUE, 130000),
+          "its record made: the next reading at once");
+
+    /* A child held by a claim or an eject not accepted: not ended. */
+    CmEjSweepSubmitted(&s, TRUE);
+    CHECK_EQ(CmEjSweepTake(&s, TRUE, FALSE, FALSE, 1, 131000),
+             CM_EJ_SW_END_NONE, "a held child: not ended");
+    CHECK(CmEjSweepNext(&s, TRUE, 133000), "... read again 2 s later");
+
+    /* A request while a reading is out: one more reading after it. */
+    CmEjSweepSubmitted(&s, TRUE);
+    CmEjSweepBegin(&s, 133500);
+    CHECK_EQ(CmEjSweepTake(&s, TRUE, FALSE, FALSE, 0, 134000),
+             CM_EJ_SW_END_NONE, "asked while out: read again");
+    CmEjSweepSubmitted(&s, TRUE);
+    CmEjSweepLost(&s);
+    CHECK(CmEjSweepNext(&s, TRUE, 134000), "a reading lost: read again");
+    CmEjSweepSubmitted(&s, TRUE);
+    CHECK_EQ(CmEjSweepTake(&s, TRUE, FALSE, FALSE, 0, 135000),
+             CM_EJ_SW_END_DONE, "then ended");
+
+    /* The verdict. */
+    ids[0] = 0x00108086UL;
+    ids[1] = 0x15EF8086UL;
+    child[0] = 0x00108086UL;       /* answers                            */
+    child[1] = 0x0A548086UL;       /* vanished, a record's               */
+    child[2] = 0x0A558086UL;       /* vanished, claimed                  */
+    child[3] = 0x0A568086UL;       /* vanished, nobody's                 */
+    owner[0] = CM_EJ_OWN_NONE;
+    owner[1] = CM_EJ_OWN_RECORD;
+    owner[2] = CM_EJ_OWN_CLAIM;
+    owner[3] = CM_EJ_OWN_NONE;
+    CHECK_EQ(CmEjSweepPick(ids, 2, child, owner, 4, &claims), 3,
+             "pick: the vanished child nobody names");
+    CHECK_EQ(claims, 1, "pick: the claimed one counted");
+    child[3] = 0;
+    CHECK_EQ(CmEjSweepPick(ids, 2, child, owner, 4, &claims), CM_EJ_NONE,
+             "pick: ids not read are never vanished");
+    child[1] = 0x00108086UL;
+    owner[1] = CM_EJ_OWN_NONE;
+    CHECK_EQ(CmEjSweepPick(ids, 2, child, owner, 2, &claims), CM_EJ_NONE,
+             "pick: a function answering again is present");
+}
+
 int main(void)
 {
     test_qualification();
@@ -991,6 +1492,12 @@ int main(void)
     test_adopt();
     test_decision();
     test_bytewrite();
+    test_vanished_veto();
+    test_vanished_stop();
+    test_vanished_o6();
+    test_vanished_claims();
+    test_vanished_two();
+    test_vanished_sweep();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

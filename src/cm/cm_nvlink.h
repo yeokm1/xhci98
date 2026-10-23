@@ -134,8 +134,12 @@
  * isolate the endpoint before Remove_SubTree) and after O6's 30 s (keep
  * retrying, no UP on that port until the removal succeeds); neither is
  * done here (roadmap-usb4.md NV9X.2, design record 21 section 7.2). The
- * children the worker removes for a tunnel down are functions that
- * vanished, which get no request (nothing to flush); a present one does.
+ * children a tunnel down took away get no request (nothing to flush); a
+ * present one does. Since task 43.47 they are no longer the worker's
+ * where the member has a call worker: each is a vanished child's
+ * transaction of cm_eject.h, its veto retried every 2 s and its member
+ * held until it is retired, and the worker's own removals claim the
+ * devnode in the same records first.
  *
  * DDK-FREE PART. The functions under "pure" below use nothing but the
  * table and their arguments; test\test_cm_nvlink.c runs them on the host
