@@ -724,9 +724,11 @@ static void welcome_state(HWND dlg)
     LeaveCriticalSection(&textLock);
     if (!uninstallMode) {
         /* What was found, on the Welcome page (record 26 section 5.0): the
-         * devices and the plan's text once the reading has ended. */
-        ShowWindow(GetDlgItem(dlg, IDC_LIST), readDone ? SW_SHOW : SW_HIDE);
-        if (readDone && planCode < 0) {
+         * devices and the plan's text once the reading has ended; a
+         * refusal shows its text alone. */
+        int list = readDone && readCode < 0 && planCode < 0;
+        ShowWindow(GetDlgItem(dlg, IDC_LIST), list ? SW_SHOW : SW_HIDE);
+        if (list) {
             found_fill(dlg);
             EnterCriticalSection(&textLock);
             if (planText.Buf != NULL && planText.Buf[0] != '\0') {
