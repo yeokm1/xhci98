@@ -2940,8 +2940,9 @@ static ULONG xhciXferFromDequeue(const XHCI_RING *ring, ULONG index)
 /*
  * Task 43.69. The controller's saved dequeue against the queue. A reading
  * that does not fit what 4.6.9 describes is UNREAD, and the caller keeps the
- * head rule it had before: QEMU saves its fetch pointer, past every TD it
- * fetched, and that is the controller this keeps as it was.
+ * head rule it had before. QEMU saves its fetch pointer, past every TD it
+ * fetched: a reading past a fetched TD that is not held is UNREAD, and one
+ * with only held TDs before it settles them, which QEMU has finished.
  */
 ULONG XhciXferStopPlace(const XHCI_TRANSFER_QUEUE *queue,
                         const XHCI_RING *ring,
