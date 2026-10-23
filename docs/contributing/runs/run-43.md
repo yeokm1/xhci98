@@ -2250,7 +2250,8 @@ opened as task 43.53 with 1 noted there as the later option for ME, and
 43.45's legs on 7 x86 (2026-10-22, branch `p43-45`, its run sheet
 `run-43.md`, its two XHCITR sections) found two XHCITR defects. This
 section records their code on branch `xhcitr-fixes`. No virtual machine
-was run for it; the legs are owed (below).
+was run for it; the legs were owed at the code review (below), and
+"43.52 the legs", after this section, records them.
 
 ### The unelevated eject's tunnel line
 
@@ -2304,10 +2305,11 @@ and amd64 `all`, pass at `38fc1f45`. Reviewed and revised once; the
 second reading found nothing. Commits: `650f5fc6` (the eject),
 `cded3b9b` (the balloon), `38fc1f45` (the revision).
 
-### Owed
+### Owed at the code review
 
 The legs, on 7 x86 in the emulator under the USB4 profile with the
-ASM2464 router, as 43.45 ran them:
+ASM2464 router, as 43.45 ran them (run 2026-10-23: "43.52 the legs",
+below):
 
 - an eject from XHCITR started without administrator rights: the tunnel
   read closed within the watch (`cm.reenum.confirm` shortly after OK),

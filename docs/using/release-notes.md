@@ -939,8 +939,8 @@ have every leg.
   (from `3.2.0.0`, roadmap-usb4 task 43.65). On 98 SE and ME a shutdown
   now quiesces the connection manager on its own thread and completes
   without asking the controller to power down. Read on the ME emulator:
-  five first shutdowns after the installer had started `xhcicm.sys`, all
-  clean, where three of five had hung before.
+  five first shutdowns after the Add New Hardware wizard had started
+  `xhcicm.sys`, all clean, where three of five had hung before.
 
 - **The BIOS must leave the controller on.** A controller the BIOS
   switched off is not switched on: with "Thunderbolt BIOS Assist" on and
@@ -1038,8 +1038,11 @@ have every leg.
   Where the tunnel port is a native PCIe hot-plug port (the integrated
   USB4 root ports, and the emulator's q35 port), Windows finds the port
   empty at the resume, before the tunnel is back, and reports the drive
-  missing: files written shortly before the hibernation are lost, and
-  the drive comes back only when it is plugged in again. Always use Safely
+  missing: files written shortly before the hibernation can be lost
+  (those whose directory entries were still in Windows' cache), and the
+  drive comes back only when it is plugged in again (read on the
+  emulator; on the integrated root ports it is expected from the same
+  mechanism, not yet read). Always use Safely
   Remove before standby or hibernation.
 - **Windows 98 SE and ME: a device plugged in after the start needs an
   interrupt line from the BIOS.** On the ThinkPad P14s Gen 1 the BIOS's
