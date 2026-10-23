@@ -4117,8 +4117,10 @@ or says it was found by reading the code.
   or a webcam with a microphone), whatever its driver: seen with
   Windows' own `usbaudio.sys` and with usb-wdm-free's `uac2`, under
   Windows' own UHCI driver, NUSB and `xhci98.sys` alike (QEMU readings,
-  2026-10-23); once one device had come through in a boot, later
-  arrivals in that boot did not freeze. For `3.2.0.0` it is documented,
+  2026-10-23); once a first plug after the boot had come through, later
+  plugs in that boot did not freeze, but a device that came up with
+  Windows at the start does not protect the next plug (unplugged and
+  plugged back, it froze 5 times in 7). For `3.2.0.0` it is documented,
   not fixed (the owner's decision). What helps: **plug the device in
   before switching on and leave it plugged in until shutdown** (a device
   present when Windows started came up with it in every boot read); if
