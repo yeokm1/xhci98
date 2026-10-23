@@ -939,7 +939,15 @@ through its own temporary name, `XHCI98.IN$` (`own_put_as`), never the
 engine's `XHCI98.TMP`. Read again on ME (2026-10-24, the same `/force`):
 before the restart `XHCI98.TMP` (the engine's) and `xhci98.sys` (the
 placement's) side by side, `WININIT.INI`'s line naming the `.tmp`; after
-it `xhci98.sys` alone, the package's, `WININIT.INI` processed.
+it `xhci98.sys` alone, the package's, `WININIT.INI` processed. **The
+uninstall before that restart** (the review of 2026-10-24): it deleted
+the driver files, and the restart would then have put the pending copy
+back. The 9x uninstall now looks first, before any change, for a
+`WININIT.INI` `[rename]` line whose destination is one of the package's
+driver files in `SYSTEM32\DRIVERS` (`rename_pending_9x`), and with one
+stops ("Windows replaces xhci98.sys at the next start (WININIT.INI):
+restart Windows first.", exit 4), nothing removed; read on 98 SE after a
+`/force` update (2026-10-24).
 
 **What draft 35 builds, and the owner's points of 2026-10-23** (roadmap
 task 43.42's simplification, its code). The design above is built as it

@@ -5,7 +5,9 @@ the controller's install through the helper names `xhci98.inf`'s update
 section, `Xhci.Upd`, by the job file's `SECTION` line, record 27 section
 4.1, and the wizard's `Xhci.Dev` keeps a placed `xhci98.sys`; an update
 by hand through Update Driver there keeps the file, `INSTALL.BAT` being
-the update path); revision 40, 2026-10-23 (record 26 draft 38: D20 (d) extended
+the update path; a 9x uninstall stops, before any change, while a
+`WININIT.INI` rename puts one of the package's driver files in place at
+the next start); revision 40, 2026-10-23 (record 26 draft 38: D20 (d) extended
 to `xhci98.sys` and `xhcicm.sys`, recorded under `Placed9x`);
 revision 39, 2026-10-23 (roadmap-usb4 task 43.48, record 26
 draft 37 section 6.7.11: `/wdmfree:copy`, `/wdmfree:stage=<ids>` and

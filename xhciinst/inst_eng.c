@@ -11894,10 +11894,69 @@ static void files_9x(int list)
     }
 }
 
+/* A WININIT.INI [rename] line that puts a file over one of this package's
+ * driver files in SYSTEM32\DRIVERS at the next start (the setup engine's
+ * pending copy, xhci98.inf's [Xhci.Upd] row: xhci98.sys=...\xhci98.tmp):
+ * its file name into what, 1; 0 for none. An uninstall before that
+ * restart would delete the file and the restart put it back. */
+static int rename_pending_9x(char *what, size_t cap)
+{
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char drv[INST_PATH_CHARS];
+    char full[INST_PATH_CHARS];
+    char sf[INST_PATH_CHARS];
+    char st[INST_PATH_CHARS];
+    char *sec;
+    char *p;
+    DWORD n;
+    size_t i;
+    int hit = 0;
+
+    what[0] = '\0';
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    join(drv, sizeof(drv), win, "SYSTEM32\\DRIVERS");
+    sec = (char *)calloc(1, 32768);
+    if (sec == NULL) {
+        return 0;
+    }
+    GetPrivateProfileSectionA("rename", sec, 32766, ini);
+    for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
+        char *eq = strchr(p, '=');
+        if (eq == NULL || eq == p) {
+            continue;
+        }
+        *eq = '\0';
+        n = GetShortPathNameA(p, st, sizeof(st));
+        if (n == 0 || n >= sizeof(st)) {
+            inst_copy(st, p, sizeof(st));
+        }
+        for (i = 0; i < sizeof(instFiles) / sizeof(instFiles[0]) && !hit;
+             i++) {
+            join(full, sizeof(full), drv, instFiles[i]);
+            n = GetShortPathNameA(full, sf, sizeof(sf));
+            if (n == 0 || n >= sizeof(sf)) {
+                inst_copy(sf, full, sizeof(sf));
+            }
+            if (inst_eq(p, full) || inst_eq(st, sf)) {
+                inst_copy(what, instFiles[i], cap);
+                hit = 1;
+            }
+        }
+        *eq = '=';
+    }
+    free(sec);
+    return hit;
+}
+
 static int run_uninstall_9x(void)
 {
     char dir[INST_PATH_CHARS];
     char win[INST_PATH_CHARS];
+    char pend[64];
     int r;
 
     if (!warn_uninstall()) {
@@ -11906,6 +11965,16 @@ static int run_uninstall_9x(void)
     if (!local_dir(dir, sizeof(dir)) ||
         GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return INST_EXIT_REFUSED;
+    }
+    /* Before anything is removed (record 26 section 5.0, draft 39): a
+     * driver file the next start replaces would come back after it. */
+    if (rename_pending_9x(pend, sizeof(pend))) {
+        out("Windows replaces %s at the next start (WININIT.INI): restart "
+            "Windows first.\n", pend);
+        if (!opts.List) {
+            return stop_uninstall("a driver file of this package is "
+                                  "replaced at the next start.");
+        }
     }
     r = remove_9x_devnodes();
     if (opts.List) {
