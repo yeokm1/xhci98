@@ -65,6 +65,15 @@
 #define XHQ_F_WITHHELD          0x20UL  /* level 4: the ring holds kernel
                                            addresses and is not served */
 #define XHQ_F_STARTED           0x40UL  /* the controller is started */
+#define XHQ_F_FAILED            0x80UL  /* failed with no recovery coming:
+                                           latched or contained, a
+                                           terminal of XHQ_TERMINAL_LATCHED
+                                           or more (roadmap-usb4 43.57) */
+
+/* XHCI_TOL_TERMINAL_FAILURES (xhci_tol.h), which this header cannot
+ * include for a tool; test_xhq holds the two equal. 1, a failure with a
+ * recovery still owed, is the driver putting it right itself. */
+#define XHQ_TERMINAL_LATCHED    2UL
 
 #define XHQ_PCI_READ            1UL     /* the 256 bytes as read */
 #define XHQ_PCI_FAILED          3UL     /* a read was refused */

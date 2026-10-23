@@ -20,6 +20,7 @@ typedef struct _XHCI_QRY_IN {
     ULONG Refused;          /* the value read was refused                  */
     ULONG Emitted;          /* XhciLogDebugView drains the ring            */
     ULONG Started;
+    ULONG Terminal;         /* XhciTolTerminal's reason (XHCI_TOL_TERMINAL_*) */
     ULONG Flavour;          /* XHCI_SNAPSHOT_FLAVOUR_*                     */
     const UCHAR *Ring;      /* the ring as XHCI_LOG holds it: RingBytes,   */
     ULONG RingBytes;        /* a power of two at most XHQ_LOG_MAX; any     */
@@ -43,7 +44,8 @@ typedef struct _XHCI_QRY_IN {
  * 2 to 3 (at level 4 it can hold kernel addresses and is withheld,
  * XHQ_F_WITHHELD), the PCI configuration at every level. The ring is
  * written as text, oldest byte first, a byte outside 0x20..0x7E, CR and LF
- * as '.'; when the oldest bytes may be a record's tail (Dropped != 0, or
+ * as '.'; XHQ_F_FAILED at every level from Terminal; when the oldest
+ * bytes may be a record's tail (Dropped != 0, or
  * Emitted) it starts after the first LF (XHQ_F_LOG_CUT). Returns
  * XHQ_ANS_*; *info the bytes written.
  */

@@ -44,6 +44,9 @@ ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
     if (in->Started) {
         flags |= XHQ_F_STARTED;
     }
+    if (in->Terminal >= XHQ_TERMINAL_LATCHED) {
+        flags |= XHQ_F_FAILED;
+    }
     ctr = 0;
     if (in->Verbosity >= 1 && in->Counters != NULL &&
         in->CounterWords <= XHQ_CTR_MAX / 4) {

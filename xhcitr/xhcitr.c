@@ -53,6 +53,7 @@
 #include "tr_core.h"
 #include "tr_log.h"
 #include "tr_pci.h"
+#include "tr_red.h"
 #include "tr_popw.h"
 #include "tr_res.h"
 #include "../src/xhci_qry.h"
@@ -379,6 +380,23 @@ static int shellV5;
 static int iconAdded;
 static int trayNoClick;     /* the button-up after a double click */
 static int trayV3;          /* NIM_SETVERSION 3 took: WM_CONTEXTMENU comes */
+/* The red icon (record 25 section 7.2.1): what tray_red last chose. */
+#define TR_RED_HC_MAX   TR_MAX_CTRL
+/* Room for every port of the model: red_slow hands over each counted
+ * device, so the count, the first kind and the click's destination are
+ * whole however many there are. */
+#define TR_RED_DEV_MAX  TR_MAX_UPORTS
+#define TR_RED_KEY      280     /* TNODE.Key's size: the same cut */
+static HICON hIconRedSmall;
+static int trayRedOn;
+static char trayRedTip[128];
+static char trayRedMenu[260];   /* 127 characters, each '&' doubled */
+static char trayRedKey[TR_RED_KEY];
+static TR_REDHC redHc[TR_RED_HC_MAX];
+static char redHcKey[TR_RED_HC_MAX][TR_RED_KEY];
+static int redHcCount;
+static void red_hc_read(void);
+static void tray_red(void);
 static TR_SNAP snapOld;
 /* The poll's last answer per NHI, kept apart from the model the tree and
  * the details were built from (they change only with a refresh). */
@@ -2607,6 +2625,12 @@ static void refresh_model(int withUsb)
         }
     }
     fast_scan();
+    if (hTray != NULL) {
+        /* Every model refresh, by whichever path: the controllers listed
+         * may have changed (record 25 section 7.2.1 items 3 and 5). */
+        red_hc_read();
+        tray_red();
+    }
     if (!withUsb) {
         return;
     }
@@ -6341,9 +6365,6 @@ static char fastText[256];
 static int fastBalloon;         /* the last balloon shown was this notice's */
 static TR_BSEND fastSend;       /* whether the shell showed it (item 9)     */
 static char fastTextKey[TR_FAST_KEY];   /* the device fastText names        */
-static int fastRed;            /* the icon shown is the red one            */
-static int fastTipN = -1;       /* the count its tooltip says, -1 none      */
-static HICON hIconFast;
 /* The High Speed case's answers (item 1), by key, the oldest replaced. */
 static TR_QUAL_CACHE qualCache;
 /* Every port of the model has room for its answer (tr_core.h). */
@@ -6485,29 +6506,6 @@ static void fast_name(int k, char *out, size_t cap)
     }
 }
 
-/* The icon as the notice wants it: red while on and a device counts; its
- * tooltip again whenever the count it says changes. */
-static void fast_icon(void)
-{
-    TR_NID n;
-    int red = fastOn && fastCount > 0 && hIconFast != NULL;
-    int tipN = red ? fastCount : -1;
-
-    if (!iconAdded || (red == fastRed && tipN == fastTipN)) {
-        return;
-    }
-    memset(&n, 0, sizeof(n));
-    n.cbSize = shellV5 ? TR_NID_V2 : TR_NID_V1;
-    n.hWnd = hTray;
-    n.uID = 1;
-    n.uFlags = NIF_TIP | (red != fastRed ? NIF_ICON : 0);
-    n.hIcon = red ? hIconFast : hIconSmall;
-    fastRed = red;
-    fastTipN = tipN;
-    tray_tip(&n);
-    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
-}
-
 /* The owed balloon, once the icon is there. */
 static void fast_announce(void)
 {
@@ -6606,7 +6604,8 @@ static void fast_scan(void)
         fast_key_of(first, fastTextKey, sizeof(fastTextKey));
         fastPending = 1;
     }
-    fast_icon();
+    /* The icon follows in refresh_model's tray_red, which reads this set
+     * (section 7.2.1 items 2 and 5). */
     fast_announce();
 }
 
@@ -6828,7 +6827,9 @@ static void fast_toggle(void)
     fastOn = fast_setting();
     fastPending = 0;
     fast_balloon_event(TR_BE_DROP);
-    fast_icon();
+    if (hTray != NULL) {
+        tray_red();             /* the icon at once (section 7.2.1 item 2) */
+    }
 }
 
 /* ======================================================================== */
@@ -7535,9 +7536,11 @@ static void tray_tip(TR_NID *n)
 {
     char tip[128];
 
-    if (fastOn && fastCount > 0) {
-        tr_fast_tip(tip, sizeof(tip), fastCount);
-    } else if (!shellV5 && lastEvent[0] != '\0') {
+    if (trayRedOn) {
+        tr_copy(n->szTip, trayRedTip, shellV5 ? sizeof(n->szTip) : 64);
+        return;
+    }
+    if (!shellV5 && lastEvent[0] != '\0') {
         tr_sprintf(tip, sizeof(tip), "xHCI98 USB Tree: %d TB/USB4 - %s",
                    tbDevices, lastEvent);
     } else {
@@ -7557,8 +7560,9 @@ static void tray_add(void)
     n.uID = 1;
     n.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     n.uCallbackMessage = WM_TRAYICON;
-    fastRed = fastOn && fastCount > 0 && hIconFast != NULL;
-    n.hIcon = fastRed ? hIconFast : hIconSmall;
+    /* In the colour tray_red last chose: an Explorer restart re-adds it
+     * as it was (record 25 section 7.2.1 item 5). */
+    n.hIcon = (trayRedOn && hIconRedSmall != NULL) ? hIconRedSmall : hIconSmall;
     tray_tip(&n);
     iconAdded = Shell_NotifyIconA(NIM_ADD, (PNOTIFYICONDATAA)&n) != 0;
     if (iconAdded && shellV5) {
@@ -7670,6 +7674,203 @@ static void tray_balloon(const char *title, const char *text, int warn)
     tray_balloon_as(title, text, warn, 0);
 }
 
+/* ---- the red icon (record 25 section 7.2.1, task 43.57) ------------------ */
+
+/* 43.27's set, handed over (section 7.2.1 item 2): each device of it that
+ * is red - TR_RED_SLOW3 for TR_FW_PORT2, HUB2, HUB1 and HUB3, TR_RED_SLOW2
+ * for TR_FW_HUBFS, never TR_FW_LINK - with its name and its port's tree
+ * key, and only while 43.27's notice is in force. The model's ports read
+ * as fast_scan read them, with no request sent (the device_qualifier
+ * answers are the ones the scan settled). */
+static int red_slow(TR_REDDEV *dev, char (*keys)[TR_RED_KEY], int cap)
+{
+    int n = 0;
+    int k;
+
+    if (!fastOn) {
+        return 0;
+    }
+    for (k = 0; k < upCount && n < cap; k++) {
+        TR_FAST f;
+        if (!fast_port(k, &f, 0)) {
+            continue;
+        }
+        if (f.Where == TR_FW_HUBFS) {
+            dev[n].Kind = TR_RED_SLOW2;
+        } else if (f.Where == TR_FW_PORT2 || f.Where == TR_FW_HUB2 ||
+                   f.Where == TR_FW_HUB1 || f.Where == TR_FW_HUB3) {
+            dev[n].Kind = TR_RED_SLOW3;
+        } else {
+            continue;
+        }
+        fast_name(k, dev[n].Name, sizeof(dev[n].Name));
+        /* build_usb's key for the port's node. */
+        tr_key(keys[n], TR_RED_KEY, "U", uc[up[k].Ctrl].DrvKey, up[k].Path);
+        n++;
+    }
+    return n;
+}
+
+/* Every listed xhci98 controller's failed flag (section 7.2.1 item 3): the
+ * query answer's header alone. One that cannot be opened or refuses the
+ * request is not failed. */
+static void red_hc_read(void)
+{
+    int c;
+
+    redHcCount = 0;
+    for (c = 0; c < ucCount && redHcCount < TR_RED_HC_MAX; c++) {
+        unsigned char b[XHQ_HDR_BYTES];
+        DWORD got = 0;
+        HANDLE h;
+        TR_REDHC *r;
+        if (!uc[c].Ours) {
+            continue;
+        }
+        r = &redHc[redHcCount];
+        memset(r, 0, sizeof(*r));
+        tr_copy(r->Name, uc[c].Dn >= 0 && uc[c].Dn < gw.Count
+                             ? dn_name(&gw.N[uc[c].Dn]) : "",
+                sizeof(r->Name));
+        tr_key(redHcKey[redHcCount], sizeof(redHcKey[0]), "C", uc[c].DrvKey,
+               uc[c].Path);
+        h = open_device(uc[c].Path);
+        if (h != INVALID_HANDLE_VALUE) {
+            memset(b, 0, sizeof(b));
+            if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, sizeof(b), &got, NULL) &&
+                got >= XHQ_HDR_BYTES && inst_get32(b, XHQ_O_MAGIC) == XHQ_MAGIC) {
+                r->Failed = (inst_get32(b, XHQ_O_FLAGS) & XHQ_F_FAILED) != 0;
+            }
+            CloseHandle(h);
+        }
+        redHcCount++;
+    }
+}
+
+/* The window opened on the tree node of key (section 7.2.1 item 7): read
+ * again once when its model does not hold it; the top node when even that
+ * one does not. */
+static void open_window_at(const char *want)
+{
+    char key[TR_RED_KEY];
+    int pass;
+    int i;
+
+    /* A copy: opening the window refreshes the model, and tray_red with
+     * it, which may rewrite trayRedKey. */
+    tr_copy(key, want != NULL ? want : "", sizeof(key));
+    open_window();
+    if (hMain == NULL) {
+        return;
+    }
+    for (pass = 0; pass < 2 && key[0] != '\0'; pass++) {
+        for (i = 0; i < tnCount; i++) {
+            if (tn[i].Item != NULL && strcmp(tn[i].Key, key) == 0) {
+                TreeView_SelectItem(hTree, tn[i].Item);
+                TreeView_EnsureVisible(hTree, tn[i].Item);
+                return;
+            }
+        }
+        if (pass == 0) {
+            refresh_window();
+        }
+    }
+    /* Not in the tree (a view setting may hide its branch): the top node,
+     * rather than whatever the refresh kept selected. */
+    for (i = 0; i < tnCount; i++) {
+        if (tn[i].Item != NULL && strcmp(tn[i].Key, "R:root") == 0) {
+            TreeView_SelectItem(hTree, tn[i].Item);
+            TreeView_EnsureVisible(hTree, tn[i].Item);
+            return;
+        }
+    }
+}
+
+/* The one place the red state is applied (section 7.2.1 item 5): decided
+ * by tr_red_state over the poll's last snapshot, the controllers' flags
+ * and 43.27's set; one NIM_MODIFY when the colour or the tooltip changed. */
+static void tray_red(void)
+{
+    static TR_REDDEV dev[TR_RED_DEV_MAX];
+    static char devKey[TR_RED_DEV_MAX][TR_RED_KEY];
+    TR_RED_IN in;
+    TR_RED r;
+    TR_NID n;
+    char tip[128];
+    char item[128];
+    char key[TR_RED_KEY];
+    int on;
+    int k;
+    int i;
+
+    memset(&in, 0, sizeof(in));
+    in.Snap = &snapOld;
+    in.Stage = snapOld.Stage;
+    in.Hc = redHc;
+    in.HcCount = redHcCount;
+    in.Dev = dev;
+    in.DevCount = red_slow(dev, devKey, TR_RED_DEV_MAX);
+    tr_red_state(&in, &r);
+    on = r.Count > 0;
+    tip[0] = '\0';
+    item[0] = '\0';
+    key[0] = '\0';
+    if (on) {
+        tr_red_tip(&in, &r, shellV5, tip, shellV5 ? sizeof(tip) : 64);
+        tr_red_tip(&in, &r, 0, item, sizeof(item));
+        if (r.Kind == TR_RED_HC && r.Nhi) {
+            for (k = 0; k < nhiCount; k++) {
+                if (inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
+                               strlen(nhi[k].Id)) == snapOld.NhiKey[r.Index]) {
+                    tr_key(key, sizeof(key), "N", nhi[k].Id, NULL);
+                }
+            }
+        } else if (r.Kind == TR_RED_HC) {
+            tr_copy(key, redHcKey[r.Index], sizeof(key));
+        } else if (r.Kind == TR_RED_WAIT) {
+            const TR_SROUTER *e = &snapOld.R[r.Index];
+            for (k = 0; k < nhiCount; k++) {
+                if (inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
+                               strlen(nhi[k].Id)) == e->Nhi) {
+                    /* router_key's form for an ICM entry. */
+                    tr_sprintf(key, sizeof(key), "T:%s:%08lX:i%08lX.%08lX.%08lX",
+                               nhi[k].Id, (unsigned long)e->EpochLo,
+                               (unsigned long)e->Place, (unsigned long)e->Ids,
+                               (unsigned long)e->ShortId);
+                }
+            }
+        } else {
+            tr_copy(key, devKey[r.Index], sizeof(key));
+        }
+    }
+    tr_copy(trayRedKey, key, sizeof(trayRedKey));
+    /* A name's '&' doubled, so the menu shows it rather than underlining
+     * the next letter. */
+    for (k = 0, i = 0; item[k] != '\0' && i + 2 < (int)sizeof(trayRedMenu) - 3; k++) {
+        if (item[k] == '&') {
+            trayRedMenu[i++] = '&';
+        }
+        trayRedMenu[i++] = item[k];
+    }
+    tr_copy(trayRedMenu + i, "...", sizeof(trayRedMenu) - i);
+    if (on == trayRedOn && strcmp(tip, trayRedTip) == 0) {
+        return;
+    }
+    trayRedOn = on;
+    tr_copy(trayRedTip, tip, sizeof(trayRedTip));
+    if (!iconAdded) {
+        return;
+    }
+    memset(&n, 0, sizeof(n));
+    n.cbSize = shellV5 ? TR_NID_V2 : TR_NID_V1;
+    n.hWnd = hTray;
+    n.uID = 1;
+    n.uFlags = NIF_ICON | NIF_TIP;
+    n.hIcon = (on && hIconRedSmall != NULL) ? hIconRedSmall : hIconSmall;
+    tray_tip(&n);
+    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+}
+
 /* One second's poll: every NHI's query, the snapshot and its events
  * (record 25 section 7.2). */
 static void poll(void)
@@ -7767,6 +7968,10 @@ static void poll(void)
         (void)routers;
         tray_update();
     }
+    if (changed || pollCount % 5 == 0) {
+        red_hc_read();
+    }
+    tray_red();
 }
 
 static void tray_unit_menu(void)
@@ -7776,6 +7981,7 @@ static void tray_unit_menu(void)
     int i;
     int g;
     UINT cmd;
+    char redKey[TR_RED_KEY];
 
     if (m == NULL) {
         return;
@@ -7784,7 +7990,15 @@ static void tray_unit_menu(void)
         refresh_model(0);
     }
     trayUnitCount = 0;
-    if (fastOn && fastCount > 0) {
+    /* The item's destination as shown: a poll while the menu is open may
+     * change trayRedKey. */
+    tr_copy(redKey, trayRedKey, sizeof(redKey));
+    if (trayRedOn) {
+        /* What turned the icon red, first (record 25 section 7.2.1 item 7). */
+        AppendMenuA(m, MF_STRING, IDM_RED, trayRedMenu);
+    } else if (fastOn && fastCount > 0) {
+        /* Counted but not red (only TR_FW_LINK devices, section 7.2.1
+         * item 2): 43.27's own line keeps its list reachable. */
         char text[64];
         tr_fast_menu(text, sizeof(text), fastCount);
         AppendMenuA(m, MF_STRING, IDM_FAST_SHOW, text);
@@ -7845,6 +8059,8 @@ static void tray_unit_menu(void)
     DestroyMenu(m);
     if (cmd == IDM_OPEN) {
         open_window();
+    } else if (cmd == IDM_RED) {
+        open_window_at(redKey);
     } else if (cmd == IDM_FAST_SHOW) {
         fast_box(NULL);
     } else if (cmd >= IDM_UNIT0 && cmd < (UINT)(IDM_UNIT0 + trayUnitCount)) {
@@ -7950,7 +8166,11 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         case WM_LBUTTONDBLCLK:
             KillTimer(w, TIMER_CLICK);
             trayNoClick = 1;
-            open_window();
+            if (trayRedOn) {
+                open_window_at(trayRedKey);
+            } else {
+                open_window();
+            }
             break;
         case WM_USER + 1:       /* NIN_KEYSELECT: the keyboard's click */
             tray_unit_menu();
@@ -8883,9 +9103,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     if (hIconSmall == NULL) {
         hIconSmall = hIconBig;
     }
-    hIconFast = (HICON)LoadImageA(inst, MAKEINTRESOURCEA(IDI_FAST), IMAGE_ICON,
-                                  GetSystemMetrics(SM_CXSMICON),
-                                  GetSystemMetrics(SM_CYSMICON), 0);
+    hIconRedSmall = (HICON)LoadImageA(inst, MAKEINTRESOURCEA(IDI_RED), IMAGE_ICON,
+                                      GetSystemMetrics(SM_CXSMICON),
+                                      GetSystemMetrics(SM_CYSMICON), 0);
     hFixed = CreateFontA(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                          ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                          DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Courier New");

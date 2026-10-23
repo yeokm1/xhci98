@@ -3090,12 +3090,6 @@ void tr_fast_menu(char *out, size_t cap, int count)
                tr_plural(count));
 }
 
-void tr_fast_tip(char *out, size_t cap, int count)
-{
-    tr_sprintf(out, cap, "xHCI98 USB Tree: %d USB device%s can run faster",
-               count, tr_plural(count));
-}
-
 /* ---- the drivers' logging levels (section 7.5) ---------------------------- */
 
 const char *tr_level_driver(int driver)

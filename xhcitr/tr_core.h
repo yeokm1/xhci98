@@ -808,9 +808,8 @@ void tr_fast_entry(TR_TEXT *t, const char *name, unsigned int vid,
                    unsigned int pid, const char *portLine,
                    const char *hubName, const TR_FAST *f);
 
-/* The menu line and the tooltip while the icon is red. */
+/* The menu line (the tooltip while red is tr_red.h's, section 7.2.1). */
 void tr_fast_menu(char *out, size_t cap, int count);
-void tr_fast_tip(char *out, size_t cap, int count);
 
 /* The per-user value under HKCU\Software\xHCI98\XHCITR (item 7); the
  * computer's is INST_FAST_VALUE under INST_DIR_KEY (inst_core.h). */

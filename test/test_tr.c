@@ -3251,14 +3251,11 @@ static void test_fast(void)
                       "marked SS).\r\n       If it is already in one,") != NULL,
           "entry: try wrapped and indented");
 
-    /* The menu line and the tooltip. */
+    /* The menu line. */
     tr_fast_menu(out, sizeof(out), 1);
     CHECK(strcmp(out, "1 USB device can run faster...") == 0, "menu: one");
     tr_fast_menu(out, sizeof(out), 2);
     CHECK(strcmp(out, "2 USB devices can run faster...") == 0, "menu: two");
-    tr_fast_tip(out, sizeof(out), 12);
-    CHECK(strcmp(out, "xHCI98 USB Tree: 12 USB devices can run faster") == 0 &&
-              strlen(out) < 64, "tooltip: within 98 SE's 64");
     CHECK(strcmp(TR_FAST_VALUE, "FasterNotice") == 0, "the user's value");
 }
 
