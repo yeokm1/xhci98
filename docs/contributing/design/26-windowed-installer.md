@@ -3262,8 +3262,10 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
   interface by different ids). `COEXISTS`: two packages whose overlap the
   maintainer has considered and allows. **The policy**: declaring every
   overlap is the maintainer's duty, and the gate enforces only what it
-  can see: it refuses a pair named by both kinds of line, a pair named
-  twice, and a line naming an id that no package of either set's known
+  can see: it refuses, per unordered pair of ids and per system, a pair
+  named by both kinds of line on a common system, or by two lines of one
+  kind whose systems overlap (an `EXCLUDES` on `W98SE` and a `COEXISTS`
+  on `WXP` for one pair is valid), and a line naming an id that no package of either set's known
   metadata (the current rows and the withdrawn ones, below) has ever
   had; it lists, for the maintainer and not as a refusal, the candidate
   pairs it can see that no line names (below). A line whose other
@@ -3287,7 +3289,8 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
   every other ticked one and against each package the records of either
   set name as staged in any state (confirmed, partial, pending or
   unknown, below). The installer refuses the combination before any
-  change: the window greys the box with the reason in its details ("Not
+  change: the window marks the box unavailable with the reason in its
+  details (below; "Not
   with free:audio/uac1, staged earlier: uninstall first, or ..."), and
   the console refuses the switch with the same reason, exit 1. **The
   relationships of a package no longer shipped**: the installer's table
@@ -3309,9 +3312,16 @@ exclusions), and the cut holds the table to the pinned `STAGE.TXT`:
 every package there has exactly one current row and no current row names
 a package not there; a withdrawn row (a package an earlier release
 carried) is held only to its own form (an id, a kind, a heading, a
-description by the same rules) and to never having been removed (the
-table's withdrawn rows are compared with the previous release's, which
-the cut reads from `releases\<version>\`), the descriptions keep the length and character rules, and a
+description by the same rules). **The table's history**: each cut
+writes the whole metadata it used, the table's rows (current and
+withdrawn) and every `EXCLUDES` and `COEXISTS` line of both sets, to
+`releases\<version>\otherpkgs.txt` (tracked, beside `downloads.txt`,
+section 6.7.2), and the next cut reads the previous release's and
+refuses a transition that drops anything: a current row that leaves the
+pinned `STAGE.TXT` becomes a withdrawn row with its words, and every
+relationship line naming it is kept in the table (so an earlier
+staging's exclusions are still enforced, above); a row or a line is
+never removed, only marked withdrawn, the descriptions keep the length and character rules, and a
 `CLASS` row's description holds no word of the brand list
 (`scripts\package\brand-words.txt`, proposal: the makers named in either
 set's `NOTICE.md` and a fixed list of consumer brands, matched as whole
@@ -3321,8 +3331,10 @@ same checks apply to them. **The format's integration**: the metadata
 lines are a separate kind, read by a parser of their own
 (`inst_stage_meta`, and `Read-OtherStageMeta` at the cut), never by the
 `STAGE`/`COPY` parsers (`inst_stage_line`, `package-common.ps1`'s line
-reader), which skip a line whose first field is `PACKAGE`, `EXCLUDES`,
-`COEXISTS` or `NEEDS` and refuse every other unknown first field as now;
+reader), which skip a line whose first field is `PACKAGE`, `EXCLUDES`
+or `COEXISTS` and refuse every other unknown first field as now (a
+`NEEDS` line, or any other, is unsupported metadata: the set is not this
+release's, and the cut refuses it first);
 `Assert-StageCovers`' one-line-per-INF accounting counts `STAGE` and
 `COPY` lines alone. The free set's exporter keeps a `PACKAGE` line of a
 qualifying package and drops one of a package that does not qualify, as
@@ -3383,8 +3395,13 @@ description differ, the README wins and the row is corrected.
   are all `COPY` has nothing to stage and is not listed), unticked, with its description as its label
   and its id in the details. The package boxes are open only while the
   set's copy box is ticked (a package can be staged only from a copy of
-  this run or an earlier one, section 6.7.6), and greyed with the
-  reason in the details where `EXCLUDES` bars them. A package with no
+  this run or an earlier one, section 6.7.6). A box `EXCLUDES` bars is
+  not greyed (a disabled box cannot take the keyboard's focus, and its
+  reason would be out of a keyboard user's reach): it stays focusable,
+  its label ends "(not available: see below)", the details show the
+  reason when it has the focus, and Space on it does not tick it but says
+  the reason in the details again; the console says the same reason for
+  the id. A package with no
   `STAGE` line for this system is not listed (the details area of the
   set says "<n> more packages are for other Windows versions or copy-only
   here; they are copied, not offered here.").
@@ -3499,9 +3516,8 @@ owed (section 6.7.9).
   set's prefix implied by the switch, so `free:` is not typed), and imply
   its copy (the plan says so).
 - Every named package is checked before any change: one the set does not
-  carry, one with no `STAGE` line for this system, one whose `NEEDS`
-  cannot be met, and a pair `EXCLUDES` bars (this run's or against
-  earlier staging) are refused with the reason, exit 1, nothing changed.
+  carry, one with no `STAGE` line for this system, and a pair
+  `EXCLUDES` bars (this run's or against earlier staging) are refused with the reason, exit 1, nothing changed.
 - `/yes` and `/defaults` stage nothing, as now.
 - **The old switches** (decision, proposal): `/free` and `/nonfree` stay,
   the same as `/wdmfree:copy` and `/wdmnonfree:copy`; `/freestage` and
