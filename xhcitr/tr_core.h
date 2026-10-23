@@ -795,7 +795,11 @@ void tr_qual_end(TR_QUAL_CACHE *c);
  * *f (item 4). */
 #define TR_FAST_TITLE   "A USB device can run faster"
 void tr_fast_balloon(char *out, size_t cap, const char *name,
-                     const TR_FAST *f, int count);
+                     const TR_FAST *f, int count, int clickBalloon);
+/* clickBalloon: a click on the balloon reaches the tool (every shell with
+ * balloons but 2000's, whose shell sends no NIN_BALLOON* message at all,
+ * read 2026-10-23, task 43.68); 0 asks for the icon instead. */
+int tr_fast_click_balloon(int nt, unsigned long major, unsigned long minor);
 
 /* The box's entry for one device (item 6): its name and VID:PID, the port
  * line, the hub line when hubName is not NULL, the speeds and what to

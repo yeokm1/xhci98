@@ -3146,7 +3146,7 @@ static void test_fast(void)
     in.BcdUsb = 0x0200;
     in.HsQual = 1;
     tr_fast_check(&in, &f);
-    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1);
+    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1, 1);
     CHECK(strcmp(out, "USB Flash Disk (G:) runs at Full Speed (12 Mbit/s) behind "
                       "a Full Speed hub; it can run at High Speed (480 Mbit/s). "
                       "Click here for what to try.") == 0, "HS case: the balloon");
@@ -3189,16 +3189,28 @@ static void test_fast(void)
     /* The balloon. */
     in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
     tr_fast_check(&in, &f);
-    tr_fast_balloon(out, sizeof(out), "USB Mass Storage Device (F:)", &f, 1);
+    tr_fast_balloon(out, sizeof(out), "USB Mass Storage Device (F:)", &f, 1, 1);
     CHECK(strcmp(out, "USB Mass Storage Device (F:) runs at High Speed "
                       "(480 Mbit/s) on a USB 2.0 port; it can run at SuperSpeed "
                       "(5 Gbit/s). Click here for what to try.") == 0,
           "balloon: one");
     CHECK(strlen(out) < 256, "balloon: fits szInfo");
-    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3);
+    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3, 1);
     CHECK(strcmp(out, "3 USB devices run slower than they can: Stick and 2 "
                       "more. Click here for what to try.") == 0, "balloon: three");
     CHECK(strlen(TR_FAST_TITLE) < 64, "the title fits szInfoTitle");
+
+    /* 43.68: 2000's shell sends no click, so its balloon points at the icon. */
+    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3, 0);
+    CHECK(strcmp(out, "3 USB devices run slower than they can: Stick and 2 "
+                      "more. Click the icon for what to try.") == 0,
+          "balloon: three, 2000's text");
+    CHECK(strlen(out) < 256, "2000's text fits szInfo");
+    CHECK_EQ(tr_fast_click_balloon(1, 5UL, 0UL), 0, "2000: the icon");
+    CHECK_EQ(tr_fast_click_balloon(1, 5UL, 1UL), 1, "XP: the balloon");
+    CHECK_EQ(tr_fast_click_balloon(1, 5UL, 2UL), 1, "XP x64: the balloon");
+    CHECK_EQ(tr_fast_click_balloon(1, 6UL, 1UL), 1, "7: the balloon");
+    CHECK_EQ(tr_fast_click_balloon(0, 4UL, 90UL), 1, "ME: the balloon");
 
     /* The box's entry. */
     in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);

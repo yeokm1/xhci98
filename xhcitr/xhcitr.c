@@ -6601,7 +6601,8 @@ static void fast_scan(void)
     if (fresh > 0 && first >= 0) {
         char name[160];
         fast_name(first, name, sizeof(name));
-        tr_fast_balloon(fastText, sizeof(fastText), name, &firstF, fresh);
+        tr_fast_balloon(fastText, sizeof(fastText), name, &firstF, fresh,
+                        tr_fast_click_balloon(envNt, envMajor, envMinor));
         fast_key_of(first, fastTextKey, sizeof(fastTextKey));
         fastPending = 1;
     }

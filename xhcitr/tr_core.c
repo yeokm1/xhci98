@@ -2998,18 +2998,27 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports)
 }
 
 void tr_fast_balloon(char *out, size_t cap, const char *name,
-                     const TR_FAST *f, int count)
+                     const TR_FAST *f, int count, int clickBalloon)
 {
+    /* Where a click on the balloon reaches the tool it opens the list;
+     * where it does not (2000, task 43.68) the icon's menu does. */
+    const char *click = clickBalloon ? "Click here for what to try."
+                                     : "Click the icon for what to try.";
+
     if (count > 1) {
         tr_sprintf(out, cap, "%d USB devices run slower than they can: %s and "
-                             "%d more. Click here for what to try.",
-                   count, name, count - 1);
+                             "%d more. %s",
+                   count, name, count - 1, click);
         return;
     }
-    tr_sprintf(out, cap, "%s runs at %s %s; it can run at %s. Click here for "
-                         "what to try.",
+    tr_sprintf(out, cap, "%s runs at %s %s; it can run at %s. %s",
                name, tr_fast_speed(f->Now), tr_fast_where(f->Where),
-               tr_fast_speed(f->Can));
+               tr_fast_speed(f->Can), click);
+}
+
+int tr_fast_click_balloon(int nt, unsigned long major, unsigned long minor)
+{
+    return !(nt && major == 5UL && minor == 0UL);
 }
 
 /* `lead`, then `text` broken at its spaces so that a line passes 79

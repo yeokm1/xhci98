@@ -1690,7 +1690,7 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    the state it was in.
 6. **Clicking.** The balloon's click (`NIN_BALLOONUSERCLICK`, which the
    shell sends after `NIM_SETVERSION` 3; only for a balloon of this
-   notice, the last one shown) and, while the icon is red, a first item
+   notice, the last one shown; not on 2000, below) and, while the icon is red, a first item
    of the left-click menu, "<n> USB device(s) can run faster...", open one
    window, "A USB device can run faster", listing every counted device
    (`tr_fast_entry`) in a read-only text box that scrolls, with a Close
@@ -1709,6 +1709,21 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    device carry the same lines under "Can run faster", and so do Save
    Report and `/report`, whether the notice is on or off: they are a
    reading, not a notice.
+   **Windows 2000 (task 43.68, 2026-10-23).** Read on 2000 SP4 in QEMU
+   with a build that logged every `WM_TRAYICON` message (`runs/run-43.md`,
+   "43.68"): the notice's balloon was shown and a click on it closed it,
+   and the tool received no message at all - no `NIN_BALLOONSHOW`, no
+   `NIN_BALLOONUSERCLICK` - while the icon's own right click arrived as
+   `WM_RBUTTONDOWN`, `WM_RBUTTONUP` and `WM_CONTEXTMENU` (so
+   `NIM_SETVERSION` 3 had taken). 2000's shell does not report balloons,
+   and nothing the tool can do makes the balloon's click open the list
+   there. So on 2000 (NT 5.0, `tr_fast_click_balloon`) the balloon ends
+   "Click the icon for what to try." instead of "Click here for what to
+   try.": the icon's left click opens the menu whose first line opens
+   the list (item 6), as 43.28 read on 2000. Every other system keeps
+   "Click here". (Item 9's watch learns nothing on 2000 either, and so
+   never re-sends there.)
+
 7. **On or off** (`inst_fast_default`, `inst_fast_on` in
    `xhciinst\inst_core.c`, which both tools link; host-tested).
    - The user's choice: "Tell me when a device can run faster", a
