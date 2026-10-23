@@ -1967,10 +1967,11 @@ Left out, for the owner (the controller keeps the plain name meanwhile):
 source here), `1022:43FC` and `43FD` (Promontory 21, record 20; the 600 or
 800 series is not established here), `17CD:0200` (Cadence, no product in
 any source), and the non-x86 `1DB7:DC27`, `14E4:9026`, `177D:9026`. Two
-rows of build-and-test's Tier 3 carry ids that are not PCI controllers'
+rows of build-and-test's Tier 3 carried ids that are not PCI controllers'
 (`1D5C:1000` for the FL1000, whose vendor is `1B73`; `2109:0812` and
 `0813`, VIA Labs' USB hub ids, for the VL805/VL806, whose PCI id is
-`1106:3483`), and are not taken.
+`1106:3483`), and were not taken; those rows were corrected at the
+batch 10 merge (`6bc0ea27`).
 
 #### 5.13.3 The NHI names
 

@@ -199,7 +199,11 @@ the Driver tab, and in the xHCI98 USB Tree):
 Every name is at most 46 characters: the longest that Windows 98 SE's
 Device Manager showed whole at 640x480, in the list and in the
 Properties window's title and General tab (the word "Properties" after a
-long name can still be cut in the title). Read in virtual machines only.
+long name can still be cut in the title), read with test names. On an
+installed 98 SE the controller's list entry and General tab show the
+name the installer wrote, but its Properties title keeps the plain
+"xHCI98 USB 3 Controller": 98 SE's title does not take that name. Read
+in virtual machines only.
 
 ## What `3.1.0.0` changes
 
