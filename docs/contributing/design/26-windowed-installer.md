@@ -3246,7 +3246,6 @@ explicit lines the pack's maintainer owns, added to the pack's format
 PACKAGE  | <class>/<package> | CLASS or DEVICE | <description>
 EXCLUDES | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
 COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
-NEEDS    | <class>/<package> | <set>:<class>/<package> | <why>
 ```
 
 - `PACKAGE`: one per package. `CLASS` for a driver of a USB class
@@ -3269,11 +3268,12 @@ NEEDS    | <class>/<package> | <set>:<class>/<package> | <why>
   download does not carry still binds: a package excluded by an absent
   one is offered, and one excluded by a package staged by an earlier run
   is not (below).
-- `NEEDS`: a package that is staged only with another (a filter or a
-  library its INF names): the box of the first ticks the second and keeps
-  it ticked and greyed while it is ticked; the console adds the second
-  and says so. A `NEEDS` naming a package with no `STAGE` line on this
-  system makes the first not offered here (said in its set's details).
+- **No dependencies between packages.** A package is self-contained:
+  every file a `STAGE` INF of it names is under its own folder (the cut
+  refuses one that names a file elsewhere, `Test-OtherStagePackages`), so
+  no package needs another staged with it, and the format has no line
+  for one. A pack that ever needs a dependency changes this section
+  first.
 - **The exclusions hold against what is staged already**, not only this
   run's ticks: before any change, every ticked package is checked against
   every other ticked one and against each package the records of either
@@ -3281,7 +3281,15 @@ NEEDS    | <class>/<package> | <set>:<class>/<package> | <why>
   unknown, below). The installer refuses the combination before any
   change: the window greys the box with the reason in its details ("Not
   with free:audio/uac1, staged earlier: uninstall first, or ..."), and
-  the console refuses the switch with the same reason, exit 1.
+  the console refuses the switch with the same reason, exit 1. **The
+  relationships of a package no longer shipped**: the installer's table
+  keeps a row for every package any release of either set carried (a
+  row is marked withdrawn, never removed), so an earlier staging's
+  exclusions are known when its set is absent from this download or has
+  dropped the package; an earlier-staged id no row and no carried line
+  knows is refused against every tick of its class heading's packages
+  (conservative: "staged earlier, not known to this release: uninstall
+  first, or leave <heading> unticked").
 
 Until a set's pinned release carries `PACKAGE` lines (neither does today:
 `usb-wdm-nonfree` `v1.0.0` is pinned by its hash, and `usb-wdm-free` has
@@ -3302,11 +3310,13 @@ lines are a separate kind, read by a parser of their own
 reader), which skip a line whose first field is `PACKAGE`, `EXCLUDES`,
 `COEXISTS` or `NEEDS` and refuse every other unknown first field as now;
 `Assert-StageCovers`' one-line-per-INF accounting counts `STAGE` and
-`COPY` lines alone. The free set's exporter keeps a metadata line when
-every package it names (the set-qualified endpoints of the free set) is a
-qualifying package, and drops it otherwise, as it filters the INF lines
-by qualifying package; the generated `STAGE.TXT` keeps the kept lines
-verbatim after the INF lines. **The literal-id rule is not enough**: the
+`COPY` lines alone. The free set's exporter keeps a `PACKAGE` line of a
+qualifying package and drops one of a package that does not qualify, as
+it filters the INF lines; it keeps every `EXCLUDES` and `COEXISTS` line
+whatever its endpoints (a line naming a package the download does not
+carry binds as above and costs nothing), so filtering can never drop a
+constraint; the generated `STAGE.TXT` keeps the kept lines verbatim
+after the INF lines. **The literal-id rule is not enough**: the
 pack's rule that no two `STAGE` lines match one hardware id on a system
 (section 6.7.2) is checked by the cut over the union of both sets,
 per system (proposal: `Test-OtherStageIds`, reading each `STAGE` INF's
@@ -3314,9 +3324,13 @@ per system (proposal: `Test-OtherStageIds`, reading each `STAGE` INF's
 settle a generic driver and a specific one matching one device by
 different ids (a compatible id against a hardware id): that is what
 `EXCLUDES` and `COEXISTS` state, and only the pack's maintainer decides
-it. The cut reports every pair whose scopes can match one device (one
-package's hardware ids against the other's class-wide compatible ids,
-per system) and refuses a pair no line names.
+it. An INF alone cannot show which class a device of a
+`USB\VID_xxxx&PID_yyyy` line reports (its compatible ids come from the
+device's descriptors), so the cut cannot find every overlap: it lists,
+in its log and for the maintainer, every pair of a `CLASS` package with
+another package that stage on a common system and that no line names
+(information, not a refusal), and the record and both readmes say that
+an overlap no line states is not checked by anything.
 
 **The words** (proposals; the table's first rows, for the packages the
 free set's README lists and the non-free pack's folders):
@@ -3363,15 +3377,28 @@ description differ, the README wins and the row is corrected.
 - The non-free set: the same, its sentence as now.
 - **Earlier staging**, under each set's packages, one static line per
   state when the set's record names staged INFs or folders (section
-  6.7.6's `Staged` values), the ids taken from the record's paths (their
-  first two parts), never from this release's table, and each value read
+  6.7.6's `Staged` values), the ids taken from the record's paths,
+  never from this release's table: on 98 SE and ME the value's name is
+  an absolute folder, which must lie under the record's `Dir` and the
+  set's folder there (`<Dir>\WDMFREE\` or `<Dir>\NONFREE\`, compared
+  case-insensitively, part by part), and the id is the set's prefix and
+  the next two parts; on 2000 and later the value's name is the INF's
+  path under the set's folder (section 6.7.6), its first two parts, and
+  a `foreign` value named for a path and a stored name (a `pending`
+  value's resolution) is read for its path part, which the record writes
+  before its name and its separator; a name that fits neither form is
+  shown under "could not be read", and each value read
   as section 6.7.6 reads it at a run: **confirmed** (a `DevicePath`
   entry still there; an `own` INF whose name still holds its bytes),
   **foreign** (a `foreign` value: in the store, not this installer's),
-  **pending** (a run cut short at the call), **gone** (a `DevicePath`
-  entry or a stored name no longer there or no longer those bytes: the
-  value is tidied as section 6.7.6 says and nothing shown), and
-  **unknown** (the store or `DevicePath` unreadable). The line: "Staged
+  **pending** (a run cut short at the call), **gone** (on 2000 and later a stored
+  name no longer there or no longer those bytes: nothing shown; the
+  value is tidied by the run's staging step as section 6.7.6 says, never
+  by the page or the console's checks, which change nothing), and
+  **unknown** (the store or `DevicePath` unreadable). On 98 SE and ME a
+  recorded entry missing from `DevicePath` is not gone: the run's staging
+  step appends it again whether or not its box is ticked (section 6.7.6),
+  and it is shown as confirmed. The line: "Staged
   by an earlier run: <ids> (still offered to Windows); <ids> (in the
   driver store from another source); <ids> (an interrupted run: may be in
   the driver store); <ids> (could not be read). Leaving a box unticked
