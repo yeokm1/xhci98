@@ -4883,7 +4883,7 @@ helper (xhciinst\di\build.cmd).
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
             " stor98.inf and the files beside it whose names start with stor98. It carries this release's version" +
             " and date, and its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
-            " and stor98-readme.txt is its guide. SETUP.EXE installs it with the Thunderbolt 3 / USB4 support (its box under that one on the installer's Components page, ticked with it; untick it to leave Stor98 out)," +
+            " and stor98-readme.txt is its guide. SETUP.EXE installs it with the Thunderbolt 3 / USB4 support (its box under that one on the installer's Components page, ticked with it but on Windows 10, where Windows' own stornvme stays and Stor98 is yours to tick; untick it to leave Stor98 out)," +
             " and only on NVMe drives behind a Thunderbolt or USB4 tunnel: the installer selects tunnel drives only" +
             " and leaves an internal NVMe drive as it is. On 2000 to 8 its INF matches every NVMe controller (PCI\CC_010802), so Windows may still offer it for an" +
             " internal NVMe drive that has no driver: decline it there, as Stor98 is not for internal NVMe drives. On 8.1 and 10 it names PCI\CC_010802 as a compatible id only," +

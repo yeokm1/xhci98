@@ -1059,7 +1059,7 @@ console's choices:
 - case 3b: the Stor98 question is asked on 8 and 8.1 with Enter for N
   (Y elsewhere, draft 16), `/stor98` ticks it and `/yes` takes the N.
   (Draft 35: replaced by section 5.0's table, Enter and `/yes` taking
-  its line, [Y] on every system now.)
+  its line: [Y] on every system but 10 since task 43.59.)
 
 **What the uninstall removes** (proposals for the owner):
 
@@ -1741,8 +1741,9 @@ unasked. With the box ticked:
   2026-10-22; 8.1 alone from the owner's decision of 2026-10-23; record
   21 section 7.5): Windows gives them `stornvme`, which outranks the
   staged INF and on 8.1 holds a write for good at a surprise unplug, so
-  the Stor98 box is ticked by default on 8.1 (as on 98 SE to 7; on 8 and
-  10 it stays unticked unless asked), and a run on 8.1 (the 8.1 gate:
+  the Stor98 box is ticked by default on 8.1 (as on 98 SE to 8; on 10
+  it stays unticked unless asked: section 5.0's table, its line for 10
+  0 since the batch 10 merge), and a run on 8.1 (the 8.1 gate:
   `RtlGetVersion` and the shared user data page both 6.3, build below
   10000) that ticks the box, staged `stor98.inf` and installs or keeps
   the mark service writes the staged copy's path to the

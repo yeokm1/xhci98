@@ -16206,7 +16206,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [%s].\n", def ? "Y" : "N");
     } else if (!def) {
-        out("  /yes: N on Windows 8, 8.1 and 10 (/stor98 installs it).\n");
+        out("  /yes: N on this Windows (/stor98 installs it).\n");
     } else {
         out("  /yes: Y, with the Thunderbolt support (/nostor98 leaves it "
             "out).\n");
