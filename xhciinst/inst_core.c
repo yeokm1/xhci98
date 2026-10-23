@@ -1606,14 +1606,11 @@ const char *inst_stage_error_text(INST_U32 err, int arch, int osKind)
         osKind != INST_OS_CMONLY) {
         return NULL;
     }
-    return "This 64-bit Windows installs a driver package only with a signed "
-           "catalog, even\nin test-signing mode, and this package's INFs have "
-           "none (its x64 drivers carry\nthe project's test signature in the "
-           "files themselves). To install it, keep\ntest-signing mode on, "
-           "start once with driver signature enforcement disabled -\n"
-           "Advanced startup, Troubleshoot, Advanced options, Startup "
-           "Settings,\nRestart, then 7 - and run the installer again. Later "
-           "starts need only\ntest-signing mode.";
+    return "This 64-bit Windows installs a driver package only with its signed "
+           "catalog,\neven in test-signing mode, and Windows found none for "
+           "this INF. The package\ncarries a .cat file beside each of its INFs "
+           "(xhci98.cat, xhcicm.cat and the\nothers): restore the complete "
+           "package, with its .cat files, and run the\ninstaller again.";
 }
 
 int inst_sb_state(int found, INST_U32 type, INST_U32 value)
@@ -2157,6 +2154,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Stor98 = 1;
         } else if (inst_switch(a, "nostor98")) {
             opts->NoStor98 = 1;
+        } else if (inst_switch(a, "s98vsd")) {
+            opts->Stor98Vxd = 1;
+        } else if (inst_switch(a, "nos98vsd")) {
+            opts->NoStor98Vxd = 1;
         } else if (inst_switch(a, "nouas")) {
             opts->NoUas = 1;
         } else if (inst_switch(a, "storage")) {
@@ -2165,6 +2166,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->NoStorage = 1;
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
+        } else if (inst_switch(a, "faster")) {
+            opts->Faster = 1;
+        } else if (inst_switch(a, "nofaster")) {
+            opts->NoFaster = 1;
         } else if (inst_switch(a, "devices")) {
             opts->Devices = 1;
         } else if (inst_switch(a, "eject")) {
@@ -2353,6 +2358,26 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                  NULL);
         return 1;
     }
+    if ((opts->Stor98Vxd || opts->NoStor98Vxd) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->Stor98Vxd ?
+                 "/s98vsd belongs to an install" :
+                 "/nos98vsd belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Stor98Vxd && opts->NoStor98Vxd) {
+        inst_err(err, errCap, "/s98vsd and /nos98vsd contradict each "
+                 "other", NULL);
+        return 1;
+    }
+    /* Design record 30 section 7.2: a child of Stor98's box. */
+    if (opts->Stor98Vxd && (opts->NoStor98 ||
+                            (!opts->Stor98 && !opts->Thunderbolt &&
+                             !opts->CmOnly))) {
+        inst_err(err, errCap, "/s98vsd needs Stor98 in the run (/stor98, "
+                 "or /thunderbolt without /nostor98)", NULL);
+        return 1;
+    }
     if (opts->NoUas && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/nouas belongs to an install", NULL);
         return 1;
@@ -2370,6 +2395,17 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/notray belongs to an install", NULL);
+        return 1;
+    }
+    if ((opts->Faster || opts->NoFaster) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->Faster ? "/faster belongs to an install"
+                 : "/nofaster belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Faster && opts->NoFaster) {
+        inst_err(err, errCap, "/faster and /nofaster contradict each other",
+                 NULL);
         return 1;
     }
     if (opts->To[0] != '\0' && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -3859,6 +3895,41 @@ const char *inst_tray_list_text(int runState, int action)
            "; its start at login holds other data, or could not be read.";
 }
 
+/* Record 25 section 7.7 item 7, record 23 section 9.5 item 7. */
+int inst_fast_default(int nt, INST_U32 major, INST_U32 minor)
+{
+    (void)nt;
+    (void)major;
+    (void)minor;
+    return 1;
+}
+
+int inst_fast_on(int userHave, INST_U32 user, int machineHave,
+                 INST_U32 machine, int def)
+{
+    if (userHave && user <= 1) {
+        return (int)user;
+    }
+    if (machineHave && machine <= 1) {
+        return (int)machine;
+    }
+    return def ? 1 : 0;
+}
+
+const char *inst_fast_list_text(int want, int have, INST_U32 now)
+{
+    if (have && now == (INST_U32)(want ? 1 : 0)) {
+        return want ? "The USB Tree's \"can run faster\" notice is on for this "
+                      "computer (/faster): nothing to write."
+                    : "The USB Tree's \"can run faster\" notice is off for this "
+                      "computer (/nofaster): nothing to write.";
+    }
+    return want ? "The USB Tree's \"can run faster\" notice would be turned on "
+                  "for this computer (/faster)."
+                : "The USB Tree's \"can run faster\" notice would be turned off "
+                  "for this computer (/nofaster).";
+}
+
 int inst_oem_name_ours(const char *valueName, const char *path,
                        const char *shortPath)
 {
@@ -5252,22 +5323,23 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "A Thunderbolt 3 / USB4 controller was found. With this, a device "
       "plugged into its port can reach the computer's memory: see "
       "XhciCmApprove.",
-      272, 26 },
+      272, 24 },
     { INST_PT_TB_ABSENT,
       "No Thunderbolt 3 / USB4 controller was found (some laptops show it "
       "only with a device plugged in or a BIOS setting). Tick it only if "
       "this computer has such a port.",
-      272, 26 },
-    { INST_PT_TRAY, "xHCI98 USB Tree, started at login", 270, 10 },
-    { INST_PT_TRAY_T,
-      "The tray tool that lists the USB devices and removes them safely.",
-      272, 10 },
+      272, 24 },
+    { INST_PT_TRAY, "xHCI98 USB Tree, the tray tool, started at login", 270,
+      10 },
+    /* Task 43.27: a box of its own in the place of the tray box's
+     * sentence (record 26 section 5.3, draft 33). */
+    { INST_PT_FAST, "Tell me when a USB device can run faster", 258, 10 },
     { INST_PT_DIR, "The folder for the xHCI98 tools and this installer:",
       284, 10 },
     { INST_PT_DIR_9X,
       "Windows 98 SE and ME: the package's drivers go there too. Each "
       "folder name 8 characters at most, no spaces.",
-      284, 18 },
+      284, 16 },
     { INST_PT_USB,
       "The USB settings. A value left as it is is not written; one you "
       "change is written machine-wide, for every controller.",
@@ -5298,7 +5370,11 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_S98_T,
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",
-      260, 18 },
+      260, 16 },
+    { INST_PT_VSD, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB",
+      246, 10 },
+    { INST_PT_VSD_OTHER,
+      "Large transfers for Stor98 (Windows 98 SE and ME only)", 246, 10 },
     { INST_PT_S98SET,
       "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
       "nothing; Stor98 keeps its built-in default.",
@@ -5451,7 +5527,7 @@ const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
       { "poll only without an interrupt", "always poll", NULL, NULL },
       "when the driver polls the controller for completed requests" },
     { "StorMaxTransferKB", "maxtransferkb", INST_S98_NUMBER, 0, "KiB",
-      "512", "256", 64UL, 512UL, 4UL, 0, NULL,
+      "2048", "256", 64UL, 2048UL, 4UL, 0, NULL,
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "the largest request Windows sends the driver" },
     { "StorPollBusyUs", "pollbusyus", INST_S98_NUMBER, 0, "us",
@@ -5535,7 +5611,7 @@ void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap)
 static INST_U32 inst_s98_hi(int i, int nt)
 {
     if (i == INST_S98_MAXTRANSFERKB) {
-        return nt ? 256UL : 512UL;
+        return nt ? 256UL : 2048UL;
     }
     return instS98Values[i].Hi;
 }
@@ -5871,6 +5947,368 @@ void inst_tb_found_text(char *out, size_t cap, const char *name)
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked)
 {
     return haveS98 && tbHave && tbTicked;
+}
+
+/* ---- S98VSD.VXD (design record 30 section 7) ----------------------------- */
+
+int inst_vsd_box(int sys9x, int haveVsd, int s98Ticked, int noSwitch,
+                 int *shown, int *open)
+{
+    *shown = haveVsd ? 1 : 0;
+    *open = (sys9x && haveVsd && s98Ticked) ? 1 : 0;
+    return *open && !noSwitch;
+}
+
+int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
+                  int s98Removed, int vsdTicked)
+{
+    if (!sys9x) {
+        return INST_VSD_NONE;
+    }
+    if (uninstall) {
+        return INST_VSD_UNINSTALL;
+    }
+    if (!s98Ticked) {
+        return s98Removed ? INST_VSD_DESELECTED : INST_VSD_INACTIVE;
+    }
+    if (!haveVsd) {
+        /* Nothing to place: an installed one stays, as greyed. */
+        return INST_VSD_INACTIVE;
+    }
+    return vsdTicked ? INST_VSD_SELECTED : INST_VSD_DESELECTED;
+}
+
+/* Removing what the record names, for the deselected and uninstall modes:
+ * the destination of File's bytes, then the values. */
+static int inst_vsd_clear(const INST_VSDFACTS *f)
+{
+    /* A destination the start (or the move) made the pending bytes is the
+     * installer's: File first, then it is removed with the rest. */
+    if (f->Pending && f->Dest == INST_VF_PENDING && !f->FileIsPending) {
+        return INST_VOP_SET_FILE;
+    }
+    if (f->Dest == INST_VF_FILE ||
+        (f->Dest == INST_VF_PENDING && f->FileIsPending)) {
+        return INST_VOP_DEL_DEST;
+    }
+    if (f->Tmp == INST_VF_PENDING) {
+        return INST_VOP_DEL_TMP;
+    }
+    if (f->Pending) {
+        return INST_VOP_DEL_PENDING;
+    }
+    if (f->FileVal) {
+        return INST_VOP_DEL_FILEVAL;
+    }
+    return INST_VOP_DONE;
+}
+
+int inst_base_differs(const char *a, const char *b)
+{
+    const char *da = strrchr(a, '.');
+    const char *db = strrchr(b, '.');
+    size_t la = da != NULL ? (size_t)(da - a) : strlen(a);
+    size_t lb = db != NULL ? (size_t)(db - b) : strlen(b);
+    size_t i;
+
+    if (la != lb) {
+        return 1;
+    }
+    for (i = 0; i < la; i++) {
+        char ca = a[i];
+        char cb = b[i];
+
+        if (ca >= 'a' && ca <= 'z') {
+            ca = (char)(ca - 'a' + 'A');
+        }
+        if (cb >= 'a' && cb <= 'z') {
+            cb = (char)(cb - 'a' + 'A');
+        }
+        if (ca != cb) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int inst_has_bytes(const unsigned char *buf, size_t n, const char *s)
+{
+    size_t sl = strlen(s);
+    size_t i;
+
+    for (i = 0; i + sl <= n; i++) {
+        if (memcmp(buf + i, s, sl) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 1 when len bytes at file offset a lie inside n, with no wrap. */
+static int inst_fits(size_t n, unsigned long a, unsigned long len)
+{
+    return (size_t)a <= n && n - (size_t)a >= (size_t)len;
+}
+
+/* base + rel, 0 when it would leave the file (n) or wrap. */
+static int inst_add(size_t n, unsigned long base, unsigned long rel,
+                    unsigned long *out)
+{
+    if ((size_t)base > n || (size_t)rel > n - (size_t)base) {
+        return 0;
+    }
+    *out = base + rel;
+    return 1;
+}
+
+/* A byte of an LE object at an offset, through the object page table:
+ * -1 outside the image, or on a page that is not an ordinary one in the
+ * file (an iterated, invalid or zero-filled page: its type byte not 0). */
+static int inst_le_byte(const unsigned char *buf, size_t n, unsigned long le,
+                        unsigned long obj, unsigned long off)
+{
+    unsigned long ps = inst_le32(buf + le + 0x28);
+    unsigned long last = inst_le32(buf + le + 0x2C);
+    unsigned long npages = inst_le32(buf + le + 0x14);
+    unsigned long dp = inst_le32(buf + le + 0x80);
+    unsigned long ot;
+    unsigned long pm;
+    unsigned long oe;
+    unsigned long vsize;
+    unsigned long first;
+    unsigned long count;
+    unsigned long page;
+    unsigned long e;
+    unsigned long pnum;
+    unsigned long at;
+
+    if (ps == 0 || ps > 0x10000 || obj == 0 || obj > 0x10000 ||
+        npages == 0 || npages > 0x100000 ||
+        !inst_add(n, le, inst_le32(buf + le + 0x40), &ot) ||
+        !inst_add(n, le, inst_le32(buf + le + 0x48), &pm) ||
+        !inst_add(n, ot, 24 * (obj - 1), &oe) || !inst_fits(n, oe, 24)) {
+        return -1;
+    }
+    vsize = inst_le32(buf + oe);
+    first = inst_le32(buf + oe + 12);
+    count = inst_le32(buf + oe + 16);
+    if (off >= vsize || off / ps >= count || first == 0 || first > npages ||
+        off / ps > npages - first) {
+        return -1;
+    }
+    page = first + off / ps;
+    if (!inst_add(n, pm, 4 * (page - 1), &e) || !inst_fits(n, e, 4) ||
+        buf[e + 3] != 0) {
+        return -1;
+    }
+    pnum = ((unsigned long)buf[e] << 16) | ((unsigned long)buf[e + 1] << 8) |
+           (unsigned long)buf[e + 2];
+    if (pnum == 0 || pnum > npages) {
+        return -1;
+    }
+    /* The last page holds only its declared bytes. */
+    if (pnum == npages && (last == 0 || off % ps >= last)) {
+        return -1;
+    }
+    if ((size_t)(pnum - 1) > n / ps ||
+        !inst_add(n, dp, (pnum - 1) * ps, &at) ||
+        !inst_add(n, at, off % ps, &at) || !inst_fits(n, at, 1)) {
+        return -1;
+    }
+    return buf[at];
+}
+
+int inst_le_ddb_name(const unsigned char *buf, size_t n, char name[9])
+{
+    unsigned long le;
+    unsigned long et;
+    unsigned long obj;
+    unsigned long off;
+    int i;
+
+    name[0] = '\0';
+    if (buf == NULL || n < 0x40 || buf[0] != 'M' || buf[1] != 'Z') {
+        return 0;
+    }
+    le = inst_le32(buf + 0x3C);
+    if (!inst_fits(n, le, 0x84) || buf[le] != 'L' || buf[le + 1] != 'E') {
+        return 0;
+    }
+    /* The first bundle: its count, type 3 (32-bit entries), the object;
+     * entry 1 is the flags byte and the offset of the DDB. */
+    if (!inst_add(n, le, inst_le32(buf + le + 0x5C), &et) ||
+        !inst_fits(n, et, 9) || buf[et] == 0 || buf[et + 1] != 3) {
+        return 0;
+    }
+    obj = (unsigned long)buf[et + 2] | ((unsigned long)buf[et + 3] << 8);
+    off = inst_le32(buf + et + 5);
+    if (obj == 0 || obj > inst_le32(buf + le + 0x44) || off > 0xFFFFFFF0UL) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        int c = inst_le_byte(buf, n, le, obj, off + 0x0C + (unsigned long)i);
+
+        if (c < 0) {
+            name[0] = '\0';
+            return 0;
+        }
+        name[i] = (char)c;
+    }
+    name[8] = '\0';
+    return 1;
+}
+
+int inst_vsd_old_is_own(const unsigned char *buf, size_t n, const char *hash,
+                        const char *file, const char *pend)
+{
+    char name[9];
+
+    if (hash != NULL && hash[0] != '\0' &&
+        ((file != NULL && file[0] != '\0' && inst_eq(hash, file)) ||
+         (pend != NULL && pend[0] != '\0' && inst_eq(hash, pend)))) {
+        return 1;
+    }
+    return inst_le_ddb_name(buf, n, name) &&
+           memcmp(name, "S98VSD  ", 8) == 0 &&
+           inst_has_bytes(buf, n, "STOR98.VXD ");
+}
+
+int inst_vsd_next(const INST_VSDFACTS *f)
+{
+    int sel = f->Mode == INST_VSD_SELECTED;
+    int rm = f->Mode == INST_VSD_DESELECTED || f->Mode == INST_VSD_UNINSTALL;
+    int off = f->Mode == INST_VSD_INACTIVE;
+
+    if (f->Mode == INST_VSD_NONE) {
+        return INST_VOP_DONE;
+    }
+    /* Another program's rename line names one of the files: every line
+     * is left; no placement, update or queue change. */
+    if (f->Entry == INST_VE_CONFLICT) {
+        if (sel) {
+            return INST_VOP_BLOCK_INI;
+        }
+        if (off) {
+            return INST_VOP_DONE;
+        }
+        return inst_vsd_clear(f);
+    }
+    /* Another installation's S98VSD.VXD. */
+    if (f->Dest == INST_VF_OTHER) {
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        if (off) {
+            return INST_VOP_DONE;
+        }
+        if (f->Pending && f->Tmp == INST_VF_PENDING) {
+            return INST_VOP_DEL_TMP;
+        }
+        if (f->Pending) {
+            return INST_VOP_DEL_PENDING;
+        }
+        if (f->FileVal) {
+            return INST_VOP_DEL_FILEVAL;
+        }
+        return INST_VOP_FOREIGN;
+    }
+    /* A destination the start (or the move) made the pending bytes is
+     * promoted first, a foreign .TMP beside it left as it is. */
+    if (f->Pending && f->Dest == INST_VF_PENDING && f->Tmp == INST_VF_OTHER) {
+        if (!f->FileIsPending) {
+            return INST_VOP_SET_FILE;
+        }
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        return INST_VOP_DEL_PENDING;
+    }
+    /* A .TMP that is not this installer's. */
+    if (f->Tmp == INST_VF_OTHER) {
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        if (off) {
+            return INST_VOP_DONE;
+        }
+        if (rm) {
+            if (f->Dest == INST_VF_FILE) {
+                return INST_VOP_DEL_DEST;
+            }
+            if (f->Pending) {
+                return INST_VOP_DEL_PENDING;
+            }
+            if (f->FileVal) {
+                return INST_VOP_DEL_FILEVAL;
+            }
+            return INST_VOP_DONE;
+        }
+        if (!f->Pending && f->Dest == INST_VF_FILE && f->PkgIsFile) {
+            return INST_VOP_DONE;
+        }
+        return INST_VOP_BLOCK_TMP;
+    }
+    if (f->Pending) {
+        /* The start (or the move) did it. */
+        if (f->Dest == INST_VF_PENDING) {
+            /* File first, then the leftovers, Pending last. */
+            if (!f->FileIsPending) {
+                return INST_VOP_SET_FILE;
+            }
+            if (f->Entry == INST_VE_EXACT) {
+                return INST_VOP_DEL_ENTRY;
+            }
+            if (f->Tmp == INST_VF_PENDING) {
+                return INST_VOP_DEL_TMP;
+            }
+            return INST_VOP_DEL_PENDING;
+        }
+        /* Dest absent or File's bytes. */
+        if (f->Tmp == INST_VF_PENDING) {
+            if (f->Entry == INST_VE_EXACT) {
+                if (sel && f->PkgIsPending) {
+                    return INST_VOP_QUEUED;
+                }
+                if (off) {
+                    return INST_VOP_DONE;
+                }
+                return INST_VOP_DEL_ENTRY;
+            }
+            if (sel && f->PkgIsPending) {
+                return f->Dest == INST_VF_ABSENT ? INST_VOP_MOVE :
+                       INST_VOP_WRITE_ENTRY;
+            }
+            if (off) {
+                return INST_VOP_DONE;
+            }
+            return INST_VOP_DEL_TMP;
+        }
+        /* Cut short before the .TMP was whole, or the .TMP gone. */
+        if (f->Entry == INST_VE_EXACT) {
+            return INST_VOP_DEL_ENTRY;
+        }
+        return INST_VOP_DEL_PENDING;
+    }
+    /* Nothing of the installer's in flight. */
+    if (f->Entry == INST_VE_EXACT) {
+        return INST_VOP_DEL_ENTRY;
+    }
+    if (f->Tmp == INST_VF_FILE) {
+        return INST_VOP_DEL_TMP;
+    }
+    if (off) {
+        return INST_VOP_DONE;
+    }
+    if (rm) {
+        return inst_vsd_clear(f);
+    }
+    if (f->FileVal && f->Dest == INST_VF_ABSENT) {
+        return INST_VOP_DEL_FILEVAL;
+    }
+    if (f->Dest == INST_VF_FILE && f->PkgIsFile) {
+        return INST_VOP_DONE;
+    }
+    return INST_VOP_START;
 }
 
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,

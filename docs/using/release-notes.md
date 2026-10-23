@@ -164,6 +164,46 @@ included.
   of it is in this package. An install of this package replaces it, because both are
   called `xhci98.sys`.
 
+## The xHCI98 Disk Benchmark (new in `3.2.0.0`)
+
+`XHCIPERF.EXE`, and `XHCIPF64.EXE` on 64-bit Windows, in `tools\xhciperf\`
+and, after an install, in the install directory beside the USB Tree
+(roadmap-usb4 task 43.50, design record 29). It measures a local disk
+through a test file of its own, `XHCIPERF.TMP` in the folder you choose,
+which it deletes afterwards; it never writes to a disk any other way and
+refuses network, CD and DVD drives and the Windows folder. It keeps a
+reserve of free space (64 MB, or on the drive Windows runs from the larger
+of 512 MB and a tenth of the drive).
+
+- **Tests:** presets (Standard; Standard for Windows 98 and ME; a
+  request-size study for 98 and ME; a size sweep; Quick) and every
+  parameter of its own: file size, passes, time, read or write or both,
+  unbuffered or cached, write-through, aligned, offset or scattered
+  buffers, a verifiable pattern checked after each write, depth and
+  threads.
+- **Windows 98 SE and ME:** queue depth is 1 there (Win32 file I/O waits
+  for each request); threads are offered and the Stor98 page shows whether
+  their requests overlapped. Without `S98VSD.VXD` ("NVMe drives behind
+  Thunderbolt or USB4", below), a 1 MiB unbuffered request is cut by the
+  system into 63 KiB pieces before Stor98 sees it, and a 128 to 512 KiB
+  one too when its buffer is physically fragmented; with it, requests of
+  up to 2 MiB reach Stor98 whole. The Stor98 page shows which.
+- **Stor98:** where the bundled Stor98 drives the disk, the Stor98 page
+  shows what reached the drive during each test - the sizes of the
+  requests Stor98 received and of the commands it sent, its splits, the
+  depth reached, and on 98 SE and ME what the system's disk layer handed
+  over. It counts everything on that disk, from any program. On Windows
+  2000 and later it needs administrator rights; on 98 SE and ME Windows'
+  ASPI layer, which they install. No other driver is changed.
+- **Results:** a summary grid and a per-size chart in MB/s (or MiB/s),
+  requests per second and the mean time per request; copied as text,
+  saved to a file, and a saved file compared with a new run measured the
+  same way.
+- **Read so far:** smoke runs on the Windows 98 SE emulator and a run on
+  the owner's 98 SE machine (record 29 section 15). The acceptance legs
+  on the other systems and on hardware (record 29 section 14) are still
+  owed.
+
 ## What `3.1.0.0` changes
 
 This section collects the changes made for the next release, `3.1.0.0`,
@@ -568,6 +608,41 @@ the logged-on user, with no administrator rights.
   system". The drivers read configuration space and never change it. An
   older driver's item reads "not served by this xhci98.sys" (or
   xhcicm.sys).
+- **"Can run faster" (new in `3.2.0.0`, roadmap tasks 43.27 and
+  43.30).** When a USB device that declares SuperSpeed or SuperSpeedPlus
+  runs slower than it can on a controller `xhci98.sys` drives - on a USB
+  2.0 port, behind a USB 2.0 hub, fallen back to USB 2.0 in a USB 3 port,
+  or a 10 Gbit/s device at 5 Gbit/s - or a High Speed device runs at Full
+  Speed behind a Full Speed hub (one not itself behind a High Speed hub),
+  a balloon names it ("A USB device can run
+  faster"; the tooltip on 98 SE) and the icon turns red until every such
+  device is reconnected at its speed or removed. Clicking the balloon, or
+  the first item of the icon's menu while it is red, lists each device
+  with its port and hub, the speed it runs at and the speed it can, and
+  what to try. The device's details, Save Report and `XHCITR /report`
+  carry the same lines. A hub never counts itself (the USB 2.0 half of a
+  USB 3 hub always runs at High Speed); a device behind a slow hub counts,
+  and its text names the hub. "Tell me when a device can run faster" in
+  the View menu and the icon's right-click menu turns it on or off for
+  you; the installer's box of the same name on the Components page, or
+  `INSTALL /faster` and `INSTALL /nofaster`, sets it for the computer,
+  which your own choice overrides. It is on by default on every
+  Windows this package runs on. **Windows' own notices do not appear
+  under `xhci98.sys`**: Explorer's "Device can perform faster when
+  connected to USB 3.0" on 8, 8.1 and 10 needs Windows' own USB 3 driver
+  running a controller (read in Windows 8's and 8.1's files; 10 not yet
+  read), and Windows 7's "This device can perform faster" balloon for a
+  High Speed device behind a Full Speed hub comes from Windows' own hub
+  driver, which this package replaces (measured on 7: not raised). For
+  the High Speed case the tool asks such a device once for its
+  device_qualifier descriptor, which only a High Speed-capable device
+  has. On a Windows 8, 8.1 or 10 computer where another USB 3 controller
+  runs Windows' own driver, Explorer's line may show for the stick too.
+  It reads what
+  `xhci98.sys` answers; from `3.2.0.0` the driver asks a USB 3 device at
+  High or Full Speed for its BOS descriptor to know it is one
+  (`XhciUsb2Bos` below). Read on no virtual machine or computer yet
+  (roadmap task 43.28).
 
 ### Removing a Thunderbolt or USB4 device safely
 
@@ -577,8 +652,10 @@ every system `INSTALL /devices` shows what is connected and
 64-bit Windows, in `tools\xhciinst\` takes the same switches).
 
 - **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /eject`;
-  these systems have no other way, since the "Unplug or Eject Hardware" applet NUSB installs
-  does not list a device behind a Thunderbolt port. The tool lists the
+  only these offer a device behind a Thunderbolt or USB4 port there.
+  Windows 98 SE as shipped has no "Unplug or Eject Hardware" applet, and
+  the one ME has (or NUSB adds to 98 SE) does not list such a device,
+  though it lists USB sticks and UAS disks. The tool lists the
   devices, asks which one, and then (from `3.2.0.0`) asks the Thunderbolt
   driver, `xhcicm.sys`, to remove it; before, the tool asked Windows
   itself. The driver asks Windows to query the device's removal (a volume
@@ -743,7 +820,7 @@ Restart Windows, or disable and enable the controller, after a change.
 |---|---|---|
 | `XhciCmMode` | `1` | `0` off: the driver binds the controller, logs it and touches nothing. `1` automatic: the firmware's connection manager's client where it runs, `xhcicm.sys`'s own on a USB4 host whose firmware runs none, and nothing where neither is certain. `2`: an Intel controller the table above does not list, driven as an Alpine Ridge, at your own risk, after adding its id to a copy of `xhcicm.inf`. `3`: force `xhcicm.sys`'s own USB4 connection manager, at your own risk; refused on Falcon, Alpine and Titan Ridge and Ice Lake, and wherever the firmware's runs |
 | `XhciCmApprove` | `1` | `1` approves every device (see "Thunderbolt 3: which devices get a tunnel"); `0` approves none |
-| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal; `0` does not |
+| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal (on 98 SE and ME only through the USB Tree and `INSTALL /eject`: 98 SE as shipped has no "Unplug or Eject Hardware", and ME's does not list them); `0` does not |
 | `XhciCmReenum` | `1` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh, for a machine where that misbehaves |
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
@@ -800,7 +877,9 @@ have every leg.
 - **Windows ME:** the install through `INSTALL.BAT`, and under both
   connection managers a plug, unplug and re-plug with the NVMe drive
   found with no Refresh and its data intact; Stand by and resume under
-  both. "Unplug or Eject Hardware" lists nothing, as on 98 SE.
+  both. ME's "Unplug or Eject Hardware" does not list the drive (98 SE
+  as shipped has no such applet): the USB Tree and `INSTALL /eject` remove
+  it.
 - **Windows 2000:** the firmware connection manager's legs read on 98 SE,
   the open wizard aside, and the Titan Ridge model,
   safe removal through "Unplug or Eject Hardware", the USB4 connection
@@ -1399,6 +1478,17 @@ package does not replace. The component is seven files, which NUSB 3.3 and
 They are Microsoft's, apart from `USBU2A.SYS`, a third party's. SweetLow's
 stack alone has no storage part.
 
+**For the "Unplug or Eject Hardware" icon on Windows 98 SE, install NUSB
+3.3.** Windows 98 SE has no such icon of its own (its `SYSTRAY.EXE` stops
+PC Cards only). The applet is Microsoft's hotfix KB 242975, which NUSB 3.3's
+own setup installs; the seven files above do not include it, and neither
+does SweetLow's stack. With NUSB 3.3 installed, the icon lists USB sticks
+and UAS disks under `xhci98.sys`, as Windows ME's own does: Stop gives "Safe
+To Remove Hardware", and a disk with a file open is refused until the file
+is closed. Neither lists an NVMe drive behind a Thunderbolt or USB4 tunnel:
+remove that with the xHCI98 USB Tree or `INSTALL /eject`. The USB Tree's
+Safely Remove also stops USB storage on both systems.
+
 **Planned for `3.2.0.0`, not yet built: the download is to carry them,
 and the installer to offer them on Windows 98 SE** (roadmap-usb4 tasks 43.3
 and 43.4). They are to be NUSB 3.3's copies, unmodified, in a folder of
@@ -1689,14 +1779,23 @@ asks once (`Y`, or Enter), and then:
   the USB drivers and the bundled Stor98 unticked unless you tick them
   (`/usb`, `/stor98`), each then with a warning that it is untested
   there. Windows Server 2016, 2019 and 2022 report a Windows 10 version
-  and are treated as 10, untested. On the x64 editions the drivers load
-  only in test-signing mode, which these systems let you turn on only
-  with Secure Boot off in the computer's firmware setup, or on a start
-  with driver signature enforcement disabled; the tool never changes
-  either. The x64 package carries a catalog for each driver (from
-  `3.2.0.0`), signed with the same test certificate: these systems
-  refuse a 64-bit driver package without one in test-signing mode
-  (error `0xE000022F`; design record 23 section 5.12). Windows 10 has never been run with this package.
+  and are treated as 10, untested. On the x64 editions the test-signed
+  drivers load in test-signing mode, which these systems let you turn on
+  only with Secure Boot off in the computer's firmware setup, or on a
+  start with driver signature enforcement disabled; the tool never
+  changes either. It installs the connection manager there only in
+  test-signing mode, and a start with enforcement disabled is not
+  enough: 64-bit 8 and 8.1 make it a boot driver, and a
+  start without test-signing mode then stopped in Automatic Repair
+  (roadmap-usb4 task 43.22; 10 is given the same rule, whether it too
+  makes the driver boot start unread). The x64 package carries a catalog
+  for each driver (from `3.2.0.0`), signed with the same test
+  certificate: these systems refuse a 64-bit driver package without one
+  in test-signing mode (error `0xE000022F`; design record 23 section
+  5.12), so keep the `.cat` files beside the INFs. On Windows 10 the
+  drivers were read in virtual machines of 22H2, each installed by a
+  script; the tool itself has not yet run there (roadmap-usb4 tasks
+  43.23, 43.33 and 43.36).
 
 It never runs `XHCICLN`. At the end, if an update from `2.3.x` or earlier
 left old `XHCI98\` entries, it says so in one line: nothing needs them
@@ -2191,6 +2290,23 @@ and ME as a file, at the next start, after a shut down). Stor98 is not for
 internal NVMe drives: do not install it on one. Its INF matches every NVMe
 controller, so Windows may still offer it for an internal NVMe drive that
 has no driver: decline it there.
+
+On Windows 98 SE and ME, `release-x86\` also carries `S98VSD.VXD` (new in
+`3.2.0.0`, roadmap-usb4 task 43.46, design record 30), this package's own
+disk-layer driver for Stor98's drives. Without it Windows cuts a read or
+write over 512 KiB, or one whose buffer is in more than 17 physical
+pieces, into 63 KiB pieces before Stor98 sees it; with it, reads and
+writes of up to 2 MiB reach Stor98 whole. Copies through the file cache
+are unchanged. `SETUP.EXE` places it in `SYSTEM\IOSUBSYS\` with Stor98:
+its box, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB", sits
+under Stor98's and is ticked whenever Stor98's is. `/nos98vsd` leaves it
+out and `/s98vsd` asks for it (it needs Stor98 in the run); on every other
+system the box is greyed and both switches are refused. Unticked, Stor98
+works as before. An install also removes a `STOR98.VXD` that a test build
+of this release placed (that name stopped Stor98 from starting). Read so
+far on the 98 SE emulator and on the owner's 98 SE machine, where 2 MiB
+unbuffered writes ran about four times and reads about five times as
+fast as without it; its Windows ME legs are still owed.
 
 When a tunnel drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:
@@ -3453,6 +3569,23 @@ gave an ID and which slots hold one, and on the VL805 the card's firmware
 version (`pci.vl805.fw`). If a Low- or Full-Speed device behind such a hub
 misbehaves with it on, set `0`, restart and report whether that changed it.
 
+### XhciUsb2Bos: a USB 3 device's capabilities at High Speed (new in `3.2.0.0`)
+
+A device whose device descriptor declares USB 2.1 or later (`bcdUSB`
+0x0210, which every USB 3 device declares when it runs at High or Full
+Speed) is asked for its BOS descriptor when it is enumerated at High or
+Full Speed, as every device at SuperSpeed already is. The answer tells
+the hub request `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2` that
+the device can run at SuperSpeed, which the xHCI98 USB Tree's "can run
+faster" notice reads. A device that refuses the request, answers it
+badly or does not answer at all within 5 seconds is enumerated without
+it; one whose enumeration then fails anyway is tried once more without
+the request. Set `XhciUsb2Bos` to `0` (a `DWORD`, in the controller's
+key or machine-wide) to stop the request for every device; absent or
+any other value, the request is made. No INF writes it; the driver reads
+it at each start. The driver's log notes each such request
+(`enum.bos.usb2`) and the switch (`enum.bos.usb2.on`).
+
 ### XhciAccept096: controllers below xHCI 1.0
 
 New in `2.4.0.0`, and **on unless you set it to `0`**. A controller says
@@ -4158,7 +4291,7 @@ information.
 
 | Area | State |
 |---|---|
-| Stor98 on 32-bit Windows 8.1, and Stor98 x64 on 8, 8.1 and 10 | 32-bit Windows 8.1 has not been run (no install medium; owner, 2026-10-22: covered by 32-bit Windows 8, where Stor98 ran, and 8.1 x64); 32-bit Windows 10 was run on 22H2 only. On 8 x64, 8.1 x64 and 10 x64 the x64 package does not install: Windows refuses an INF with no catalog file there ("The third-party INF does not contain digital signature information"; read in test-signing mode), so Stor98 x64 has not run on them (roadmap-usb4 task 43.23, `runs/run-43.md`) |
+| Stor98 on 32-bit Windows 8.1, and Stor98 x64 on 8, 8.1 and 10 | 32-bit Windows 8.1 has not been run (no install medium; owner, 2026-10-22: covered by 32-bit Windows 8, where Stor98 ran, and 8.1 x64); 32-bit Windows 10 was run on 22H2 only. On 8 x64, 8.1 x64 and 10 x64 the `3.1.0.0` x64 package, which has no catalogs, was refused ("The third-party INF does not contain digital signature information"; read in test-signing mode; roadmap-usb4 task 43.23, `runs/run-43.md`). From `3.2.0.0` `stor98.inf` names `stor98.cat`, and on 8.1 x64 and 10 x64 in test-signing mode the package with it was taken into the driver store after the publisher prompt (task 43.36, the catalogs signed in the guest with a certificate of its own); no drive was bound to it there, so Stor98 x64 has bound and run no drive on 8 x64, 8.1 x64 or 10 x64, and 8 x64 with the catalogs was not run |
 | SuperSpeed isochronous transfers | Built from the specification against host tests. No SuperSpeed isochronous device has been held and QEMU models none |
 | High Speed isochronous transfers, and the isochronous ring page | No High Speed isochronous device (a camera, USB Audio 2.0) has been read on any vehicle; QEMU's audio device is Full Speed. Since the planned isochronous ring work (design record 13 section 11.8, not yet in a release), an isochronous endpoint serviced more than once a frame gets a ring of its own when the event ring has room: 120 TRBs and up to 120 packets a request with the 256-entry event ring, against 62 on the shared pool ring, so a 3 x 1024-byte camera endpoint holds about 7.5 to 10 ms in flight and a stream of small packets 15 ms. A client keeps a stream continuous with at least two requests in flight, each at most half of that. An isochronous stream also interrupts at most every eighth packet and at each request's end (BEI), from xHCI 1.0; whether that saving shows on real hardware is unread |
 | SuperSpeedPlus links, by mode | Accepted at the trained rate, built from the specification against host tests. Each mode is untested: Gen 2x1 (10 Gbit/s on one lane), Gen 1x2 (10 Gbit/s on two lanes, the same rate as Gen 2x1 and a different mode), and Gen 2x2 (20 Gbit/s). No Gen 2 device was read on any hardware; no 20 Gbit/s port is held |

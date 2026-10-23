@@ -40,6 +40,9 @@ typedef struct _TR_TEXT {
 
 void tr_text_init(TR_TEXT *t, char *buf, size_t cap);
 void tr_put(TR_TEXT *t, const char *s);
+/* tr_put for a message box (task 43.63): each line break of a text laid
+ * out for the 80-column console becomes a space, and the box wraps it. */
+void tr_put_box(TR_TEXT *t, const char *s);
 
 /* A small printf: %s %c %d %u %x %X, each with an optional '-' or '0' flag,
  * a width and an 'l' size; %% a percent sign. Nothing else. */
@@ -669,6 +672,145 @@ int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value);
  * number leaves it on. haveValue: the value was read as a DWORD. */
 #define TR_WARN_VALUE           "WarnRemoved"
 int tr_warn_removed(int haveValue, TR_U32 value);
+
+/* ---- the "can run faster" notice (record 25 section 7.7, revision 18) ---- */
+
+/* Where a counted device is (section 7.7 item 2). */
+#define TR_FW_NONE      0
+#define TR_FW_PORT2     1   /* a root port below SuperSpeed: USB 2.0      */
+#define TR_FW_HUB2      2   /* behind a High Speed hub declaring no SS    */
+#define TR_FW_HUB1      3   /* behind a Full Speed hub declaring no SS    */
+#define TR_FW_HUB3      4   /* behind a hub declaring SS, running below   */
+#define TR_FW_LINK      5   /* a SuperSpeedPlus device at 5 Gbit/s        */
+#define TR_FW_HUBFS     6   /* a High Speed device behind a Full Speed hub */
+
+/* One port as the scan read it, and its parent hub's own connection. */
+typedef struct _TR_FAST_IN {
+    int Ours;                   /* the controller is xhci98's              */
+    int Connected;              /* USB_CONNECTION_STATUS DeviceConnected   */
+    int IsHub;
+    int HaveV2;                 /* _EX_V2 answered                         */
+    TR_U32 V2Flags;
+    unsigned int ExSpeed;       /* the _EX Speed byte                      */
+    int Root;                   /* a root hub's port                       */
+    int HubHaveV2;              /* behind a hub: its own connection's      */
+    TR_U32 HubFlags;
+    unsigned int HubExSpeed;
+    int HubKnown;               /* the hub's own connection was read       */
+    unsigned int BcdUsb;        /* the device descriptor's bcdUSB          */
+    int HsQual;                 /* its device_qualifier: -1 not asked, 0
+                                   refused or malformed, 1 answered        */
+    int UnderTt;                /* a hub further up runs at High Speed or
+                                   faster, or was not read: the device is
+                                   behind a TT, so it is not asked         */
+} TR_FAST_IN;
+
+typedef struct _TR_FAST {
+    int Now;                    /* TR_SPEED_* it runs at                   */
+    int Can;                    /* TR_SPEED_SUPER or TR_SPEED_SUPERPLUS    */
+    int Where;                  /* TR_FW_*                                 */
+    int HubNow;                 /* behind a hub: the hub's speed, or -1    */
+} TR_FAST;
+
+/* The speed a connection declares from its _EX_V2 flags: SuperSpeedPlus
+ * (bit 3), SuperSpeed (bit 1), or -1. */
+int tr_fast_can(int haveV2, TR_U32 flags);
+
+/* 1 when the port holds a device that runs slower than it declares (item
+ * 1), with *f filled; 0 otherwise, *f zeroed but Now and Can -1. The High
+ * Speed case counts only with HsQual 1. */
+int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f);
+
+/* 1 when the port is a High Speed candidate whose device_qualifier the tool
+ * asks for (item 1): an xhci98 port, connected, not a hub, _EX_V2 read and
+ * declaring no SuperSpeed, at Full Speed behind a hub at Full Speed that is
+ * not itself behind a TT (UnderTt clear), with bcdUSB 0x0200 or more.
+ * HsQual is not looked at. */
+int tr_fast_wants_qual(const TR_FAST_IN *in);
+
+/* 1 when n bytes are a device_qualifier descriptor: bLength 10, type 6. */
+#define TR_QUAL_BYTES   10
+int tr_qual_ok(const unsigned char *b, size_t n);
+
+/* A speed as the notice names it ("High Speed (480 Mbit/s)",
+ * "SuperSpeedPlus (10 Gbit/s or more)"). */
+const char *tr_fast_speed(int speed);
+
+/* "on a USB 2.0 port", "behind a USB 2.0 hub", ... for the balloon. */
+const char *tr_fast_where(int where);
+
+/* What to try (item 2's table). */
+const char *tr_fast_try(int where);
+
+/* The key of a counted device: the controller's driver key, the port path
+ * and the VID:PID, joined. */
+#define TR_FAST_KEY     200
+#define TR_FAST_MAX     32
+void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
+                 unsigned int vid, unsigned int pid);
+
+/* 1 when key is not among the n keys of old (each TR_FAST_KEY wide). */
+int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
+
+/* The device_qualifier answers by key (item 1): Val 1 High Speed capable,
+ * 0 Full Speed only, -1 not settled yet, Tries the requests that got no
+ * answer. Zeroed is empty. */
+#define TR_QUAL_TRIES   3
+/* Room for a key per port of XHCITR's model (TR_MAX_UPORTS, checked where
+ * the model is). Nothing is ever replaced: a key is dropped only by
+ * tr_qual_end, and a new key that finds no room is not asked
+ * (tr_qual_room). */
+#define TR_QUAL_MAX     1024
+typedef struct _TR_QUAL_CACHE {
+    char Key[TR_QUAL_MAX][TR_FAST_KEY];
+    int Val[TR_QUAL_MAX];
+    int Tries[TR_QUAL_MAX];
+    int Seen[TR_QUAL_MAX];
+    int N;
+} TR_QUAL_CACHE;
+
+/* The settled answer for key (1 or 0), marking it seen; -1 to ask. */
+int tr_qual_get(TR_QUAL_CACHE *c, const char *key);
+
+/* 1 when key has an entry or there is room for one: a request may be sent
+ * for it. */
+int tr_qual_room(const TR_QUAL_CACHE *c, const char *key);
+
+/* A request's n bytes for key: any bytes settle it (tr_qual_ok); none is a
+ * try, settled as 0 at the TR_QUAL_TRIES'th. Kept only where
+ * tr_qual_room allows. Returns the answer to use now, 1 or 0. */
+int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
+                size_t n);
+
+/* A scan's marking, before it sends any request: begin, tr_qual_get for
+ * every candidate present, end. The end drops the keys not marked that a
+ * device's answer settled; a key not marked that had a request go
+ * unanswered is kept, and settled as 0 if it was not yet: the device went
+ * away after an unanswered request (perhaps with a controller recovery
+ * that request caused), so it is not asked again when it comes back. */
+void tr_qual_begin(TR_QUAL_CACHE *c);
+void tr_qual_end(TR_QUAL_CACHE *c);
+
+/* The balloon's text for `count` new devices, the first named `name` with
+ * *f (item 4). */
+#define TR_FAST_TITLE   "A USB device can run faster"
+void tr_fast_balloon(char *out, size_t cap, const char *name,
+                     const TR_FAST *f, int count);
+
+/* The box's entry for one device (item 6): its name and VID:PID, the port
+ * line, the hub line when hubName is not NULL, the speeds and what to
+ * try; lines of 79 columns at most. */
+void tr_fast_entry(TR_TEXT *t, const char *name, unsigned int vid,
+                   unsigned int pid, const char *portLine,
+                   const char *hubName, const TR_FAST *f);
+
+/* The menu line and the tooltip while the icon is red. */
+void tr_fast_menu(char *out, size_t cap, int count);
+void tr_fast_tip(char *out, size_t cap, int count);
+
+/* The per-user value under HKCU\Software\xHCI98\XHCITR (item 7); the
+ * computer's is INST_FAST_VALUE under INST_DIR_KEY (inst_core.h). */
+#define TR_FAST_VALUE   "FasterNotice"
 
 /* ---- the tree's labels (record 25 revision 10 addendum) ------------------ */
 

@@ -165,7 +165,11 @@ install included), never while NUSB is installed.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
-/thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /notray,
+/thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and
+/nos98vsd (98 SE and ME: S98VSD.VXD, Stor98's large transfers, ticked or
+unticked; /s98vsd needs Stor98 in the run), /faster and /nofaster
+(the USB Tree's "can run faster" notice on or off for this computer),
+/notray,
 /nouas, /storage, /nostorage, /cmonly and /usb (the components,
 preselected),
 /set Name=Value
@@ -255,19 +259,27 @@ the connection manager alone, uninstall (Add/Remove Programs, or INSTALL
 go the other way, run the installer again with them ticked. Add/Remove
 Programs lists one entry either way, named for what is installed.
 
-Windows 8 and 8.1 have never been run with this package: the connection
-manager installs there as on Windows 7, untested. On 64-bit Windows 8 and
-8.1 the connection manager, like every driver of this package's x64 half,
-loads only in test-signing mode, which those systems let you turn on only
-with Secure Boot off in the computer's firmware setup, or on a start with
-driver signature enforcement disabled (Advanced startup, Troubleshoot,
-Startup Settings, "Disable driver signature enforcement", at every start).
-It is not Microsoft-signed. When the installer asks for a restart, use
-Restart, not Shut down: Windows 8's Shut down does not start the drivers
-afresh (nor does Windows 10's).
+Windows 8 and 8.1 were read in virtual machines, the install alone, on 8
+(32-bit and x64) and 8.1 x64; 8.1 32-bit has not been run. The connection
+manager installs there as on Windows 7. On 64-bit Windows 8 and 8.1 this
+package's x64 drivers, being test-signed, load in test-signing mode, which
+those systems let you turn on only with Secure Boot off in the computer's
+firmware setup, or on a start with driver signature enforcement disabled.
+The connection manager needs test-signing mode itself: Windows makes it a
+boot driver there (it filters a PCI bridge), and a start without
+test-signing mode then stops in Automatic Repair (read on 64-bit Windows
+8). So on 64-bit 8 and 8.1 the installer installs it only in test-signing
+mode; a start with enforcement disabled is not enough. Keep test-signing
+mode on while it is installed. From Automatic Repair the way back is a
+start with enforcement disabled (Advanced startup, Troubleshoot, Advanced
+options, Startup Settings, 7), then test-signing mode on again, or the
+uninstall. It is not Microsoft-signed. When the installer asks for a
+restart, use Restart, not Shut down: Windows 8's Shut down does not start
+the drivers afresh (nor does Windows 10's).
 
-Windows 10 is installable and has never been run with this package: the
-installer admits every build below 22000 - the releases 1507 to 22H2 and
+Windows 10 is installable. Its drivers were read in virtual machines of
+22H2, each installed by a script; the installer itself has not yet run
+there. It admits every build below 22000 - the releases 1507 to 22H2 and
 the LTSC releases - and Windows Server 2016, 2019 and 2022, which it
 treats as Windows 10 and which are untested; only 22H2 is to be tested.
 It installs there as on Windows 8.1: the connection manager, and the USB
@@ -275,18 +287,19 @@ drivers and Stor98 only when you tick them. Windows 10 has no Thunderbolt
 or USB4 driver of its own (USB4 support came with Windows 11), but many
 computers come with Intel's Thunderbolt driver: where it runs the
 Thunderbolt controller, the installer leaves it as it is. On 64-bit
-Windows 10 the drivers load only in test-signing mode, which Windows 10
-lets you turn on only with Secure Boot off in the computer's firmware
-setup, or on a start with driver signature enforcement disabled (as on
-Windows 8 above); with Secure Boot on, Windows 10 from 1607 loads only
-drivers Microsoft has signed (and some older cross-signed ones), and this
-package's are neither. The 64-bit package carries a catalog for each
-driver (xhci98.cat and the others, from 3.2.0.0), signed with the same
-test certificate: Windows 8, 8.1 and 10 x64 refuse a 64-bit driver
-package without one in test-signing mode (error 0xE000022F; design record
-23 section 5.12), so keep the .cat files beside the INFs. Whether 32-bit
-Windows 10 with Secure Boot on refuses this package's 32-bit drivers,
-which are not signed, has not been read.
+Windows 10 the drivers load as on 64-bit Windows 8: in test-signing mode,
+which needs Secure Boot off in the computer's firmware setup, or on a
+start with enforcement disabled; and the installer installs the
+connection manager there only in test-signing mode, as on 64-bit 8
+(whether 10 too makes it a boot driver has not been read). With Secure
+Boot on, Windows 10 from 1607 loads only drivers Microsoft has signed (and
+some older cross-signed ones), and this package's are neither. The 64-bit
+package carries a catalog for each driver (xhci98.cat and the others,
+from 3.2.0.0), signed with the same test certificate: Windows 8, 8.1 and
+10 x64 refuse a 64-bit driver package without one in test-signing mode
+(error 0xE000022F; design record 23 section 5.12), so keep the .cat files
+beside the INFs. Whether 32-bit Windows 10 with Secure Boot on refuses
+this package's 32-bit drivers, which are not signed, has not been read.
 
 Neither ever runs XHCICLN. After an update from 2.3.x or earlier they say,
 in one line, when old XHCI98\ entries are still recorded; nothing needs

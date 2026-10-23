@@ -262,6 +262,13 @@
                                            a member are not read */
 #define CM_QP_F_NO_SET          0x08UL  /* the domain has no tunnel-port set
                                            (none found, or no route) */
+#define CM_QP_F_UNWALKED_SAID   0x10UL  /* every member read whose secondary
+                                           bus was not entered, but for one
+                                           with no bus numbers (nothing can
+                                           be below it), has its
+                                           CM_QP_S_NOT_READ_OS entry with a
+                                           reason (task 43.63); clear from
+                                           an older driver */
 
 /* One entry: the head, then the configuration space. */
 #define CM_QP_CFG_BYTES         256UL
@@ -313,6 +320,10 @@
                                            guard                           */
 #define CM_QP_NR_HELD           4UL     /* ... the member's controller lost:
                                            no bridge below it is read       */
+#define CM_QP_NR_UNADMITTED     5UL     /* ... the member's own bus numbers
+                                           not admitted by the walk's rule
+                                           (CM_QP_ADMIT, task 43.63): its
+                                           secondary bus not entered       */
 
 #define CM_QP_MAX_PORTS         4UL     /* XHCI_TBT_MAX_TUNNELS */
 #define CM_QP_MAX_BELOW         32UL    /* functions below, all members */

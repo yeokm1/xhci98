@@ -239,8 +239,8 @@ try {
 
     # A caller naming -DriverPath without -Stor98Root gets no Stor98 (the
     # flat package above), and -NoStor98 says the same for a default one.
-    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "stor98*" }).Count -eq 0) `
-        "a package built without Stor98 carries Stor98 files."
+    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "stor98*" -or $_.Name -like "S98VSD*" }).Count -eq 0) `
+        "a package built without Stor98 carries Stor98 files or its layer."
 
     # Refusals, before anything is staged.
     $nvNoAmd64 = New-Stor98Tree -Name "nv-noamd64" -Omit @("out\free\amd64\stor98.sys")
@@ -3335,8 +3335,8 @@ try {
            Why  = "a cut no longer stages the DOS qualifier into tools\xhciqual\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")';
-           Why  = "tools\ no longer holds exactly the qualifier, the port switchover, the silent install, the cleanup tool, the install tool, the USB tree tool and the mark service (tasks 38.9, 38.2, 38.8, 40.6, 41-A.6, 42-A.4 and 42-A.5)" },
+        @{ Find = '$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark", "xhciperf")';
+           Why  = "tools\ no longer holds exactly the qualifier, the port switchover, the silent install, the cleanup tool, the install tool, the USB tree tool, the mark service and the disk benchmark (tasks 38.9, 38.2, 38.8, 40.6, 41-A.6, 42-A.4, 42-A.5 and 43.50)" },
         @{ Find = '$retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0" }';
            Why  = "the upload assembly no longer admits tools\xhcisnap\ in a release that published it, or admits it in a later one (task 42-A.4)" },
         @{ Find = '$snapSchemaTool = Get-SnapSchema -Path (Join-Path $TrayToolDir "tr_snap.c") -Macro "SNAP_SCHEMA"';
@@ -3663,7 +3663,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "$d\xhci98.inf"), "; stand-in")
         }
-        foreach ($name in @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")) {
+        foreach ($name in @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark", "xhciperf")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut "tools\$name") | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "tools\$name\readme.txt"), "stand-in")
         }
@@ -4677,8 +4677,26 @@ try {
     [Array]::Copy($catOdd, $catEven, 1030)
     Assert-True ((Get-PeImageDigest -Bytes $catOdd) -eq (Get-PeImageDigest -Bytes $catEven)) `
         "Get-PeImageDigest did not pad an image of 1030 bytes with zeros to 1032."
-    Assert-True ((Get-PeImageDigest -Bytes $catOdd -End 1030) -ne (Get-PeImageDigest -Bytes $catOdd -End 1029)) `
-        "Get-PeImageDigest gave two different lengths one digest."
+    # Signed, the same image carries those zeros before its table at 1032:
+    # the signed and the unsigned digest agree, by the table and by -End.
+    $catOddS = New-SyntheticSigned -Unsigned $catOdd -TableLen 64
+    Assert-True ((Get-PeImageDigest -Bytes $catOddS) -eq (Get-PeImageDigest -Bytes $catOdd)) `
+        "Get-PeImageDigest gave an odd-length image signed a digest other than its unsigned build's."
+    Assert-True ((Get-PeImageDigest -Bytes $catOddS -End 1032) -eq (Get-PeImageDigest -Bytes $catOdd)) `
+        "Get-PeImageDigest gave an odd-length image signed, by -End, a digest other than its unsigned build's."
+    # Malformed: the two zeros removed and the table moved up to 1030, its
+    # entry pointing there. The padding must not recreate the missing zeros:
+    # a table, or an -End, off a multiple of 8 is refused.
+    $catMis = New-Object byte[] (1030 + 64)
+    [Array]::Copy($catOddS, $catMis, 1030)
+    [Array]::Copy($catOddS, 1032, $catMis, 1030, 64)
+    [BitConverter]::GetBytes([uint32]1030).CopyTo($catMis, 0x80 + 24 + 112 + 32)
+    $threw = $false
+    try { [void](Get-PeImageDigest -Bytes $catMis) } catch { $threw = $true }
+    Assert-True $threw "Get-PeImageDigest hashed an image whose certificate table is not on a multiple of 8."
+    $threw = $false
+    try { [void](Get-PeImageDigest -Bytes $catMis -End 1030) } catch { $threw = $true }
+    Assert-True $threw "Get-PeImageDigest took an -End that is not a multiple of 8."
 
     # The trust list's extensions, encoded by hand: a critical flag is
     # admitted only in DER (one byte, TRUE).

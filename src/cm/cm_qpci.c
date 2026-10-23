@@ -196,6 +196,12 @@ static VOID cmQpBelow(CM_QP_WALK *w, ULONG port, const UCHAR *pcfg)
     }
     if (w->In->Admit != NULL &&
         !w->In->Admit(w->In->AdmitContext, port, cmQpGet(pcfg, 0x18UL))) {
+        /* Said, not left as an empty port (task 43.63). */
+        e = cmQpEntry(w, CM_Q_UNKNOWN, CM_QP_R_BELOW, port, CM_Q_UNKNOWN, 0,
+                      CM_QP_NR_UNADMITTED);
+        if (e != NULL) {
+            cmQpPut(e, CM_QP_E_STATE, CM_QP_S_NOT_READ_OS);
+        }
         return;
     }
     for (i = 0; i < 8; i++) {
@@ -295,7 +301,7 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in)
     w.In = in;
     w.Count = 0;
     w.Below = 0;
-    w.Flags = in->Flags & CM_QP_F_STOPPING;
+    w.Flags = (in->Flags & CM_QP_F_STOPPING) | CM_QP_F_UNWALKED_SAID;
     w.Reads = 0;
     w.Fails = 0;
     w.Read = in->Read;

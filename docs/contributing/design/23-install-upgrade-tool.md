@@ -1,6 +1,15 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 33, 2026-10-22 (the owner's decisions of that day on
+Status: revision 36, 2026-10-23 (roadmap-usb4 task 43.46, design record
+30 section 7.2: `/s98vsd` and `/nos98vsd`, `S98VSD.VXD` with Stor98 on
+98 SE and ME, the switch table; recorded at the batch 7 merge);
+revision 35, 2026-10-22 (roadmap-usb4 task 43.27, record 25
+section 7.7: `/faster` and `/nofaster`, the computer's choice of
+XHCITR's "can run faster" notice, section 9.5 and the switch table);
+revision 34, 2026-10-22 (the catalog refusal's text asks for the
+complete package with its `.cat` files, no longer a start with
+enforcement disabled, and a guest reading of Secure Boot's state is owed,
+not promised before the release; section 5.10); revision 33, 2026-10-22 (the owner's decisions of that day on
 43.33's reading: the x64 package carries a test-signed catalog per INF,
 which the tool copies with its INF, and the refusal under Secure Boot is
 taken from Microsoft's documented policy; sections 5.10 and 5.12, design
@@ -1562,10 +1571,16 @@ So on 8 and 8.1 x64 the tool now, in place of revision 13's note:
   there: keep test-signing mode on and Secure Boot off while it is
   installed, and from Automatic Repair the way back is a start with
   enforcement disabled, then test-signing mode on again or the uninstall;
-- after a staging refused with `0xE000022F` on 8 or 8.1 x64, **names the
-  way through** (`inst_stage_error_text`): keep test-signing mode on,
-  start once with enforcement disabled, run the installer again; later
-  starts need only test-signing mode.
+- after a staging refused with `0xE000022F` on 8 or 8.1 x64, **says what
+  it means** (`inst_stage_error_text`). Revision 30's text named item 1's
+  route for the catalog-less package of the time: keep test-signing mode
+  on, start once with enforcement disabled, run the installer again.
+  Since revision 33 the package carries a catalog per INF, so revision
+  34's text says that Windows found no signed catalog for the INF and
+  asks for the complete package, with its `.cat` files, to be restored
+  and the installer run again; the start with enforcement disabled is
+  gone from it, since the tool installs its own package, which carries
+  the catalogs.
 
 The three decisions (`inst_cm_boot_gate`, `inst_stage_error_text`,
 `inst_sig_note_kind`) key on the kind `inst_os_kind` gives
@@ -1574,8 +1589,10 @@ not on the version, and their texts name no version ("this Windows"): a
 system admitted to that kind later - Windows 10 below build 22000, tasks
 43.34 to 43.36 - takes the gate, the catalog text and the 32-bit Secure
 Boot note with it. Whether 10 makes `xhcicm` boot start and refuses a
-package with no catalog in test-signing mode is unread here (the same
-setup engine and code integrity, so likely); 43.34's legs read it.
+package with no catalog in test-signing mode was unread here (the same
+setup engine and code integrity, so likely); 10 x64's refusal of the
+catalog-less package was read since (section 5.12), and whether 10 makes
+`xhcicm` boot start is still unread.
 
 The installer still signs nothing and changes no boot setting (D6). A
 catalog would remove item 1's detour (a test-signed catalog is accepted
@@ -1626,8 +1643,10 @@ connection manager with the steps that begin with turning Secure Boot
 off, and after an install a Code 52 is reported as the note's case.
 Host vectors: each state on each system, and the state through the gate.
 The value is unread on any guest here (all SeaBIOS, where it is absent or
-0, both of which read as not known or off): task 43.32's OVMF guest reads
-it before the release.
+0, both of which read as not known or off), and its reading with Secure
+Boot on is owed: task 43.32's OVMF guest was not built. The refusal with
+Secure Boot on does not wait on that reading: since revision 33 it is
+taken from Microsoft's documented policy (section 5.12, "Settled").
 
 Revision 33 (the owner, 2026-10-22, on section 5.12's measured refusal):
 from `3.2.0.0` every INF of the x64 package names a catalog of its own
@@ -2024,6 +2043,8 @@ these systems.
 | `/storage`, `/nostorage` | (revision 24) Windows 98 SE: install the USB storage drivers of record 26 section 6.5 without asking, or leave them out; `/storage` refused on any other system, where the download does not carry them or carries other bytes, and with `/nostorage`; both refused with `/uninstall`, `/devices` and `/eject`; `/nostorage` changes nothing on another system |
 | `/usb` | (revision 26, proposal) Windows 8 and 8.1: put the USB drivers in the run, which there are otherwise left out, with record 26 section 5.3.1 case 3a's warning; elsewhere it changes nothing; refused with `/cmonly`, `/uninstall`, `/devices` and `/eject`. Revision 26 also lifts `/cmonly`'s refusal on 98 SE and ME (case 2's warning), `/storage`'s on any system but 98 SE (case 1: the copy to the tools folder), and `/stor98`'s "never offered on 8 and 8.1" (case 3b), each warning printed before the go-ahead question and printed and logged under `/yes` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
+| `/s98vsd`, `/nos98vsd` | (revision 36) preselect `S98VSD.VXD`, Stor98's large-transfer layer on 98 SE and ME, ticked or unticked (design record 30 section 7.2); without either it follows Stor98 (ticked whenever Stor98 is, the owner, 2026-10-22), and the console asks after Stor98's question, Enter and `/yes` giving Y. `/s98vsd` needs Stor98 in the run (`/stor98`, or `/thunderbolt` or `/cmonly` without `/nostor98`); refused together, with `/uninstall`, `/devices` and `/eject`, and both on every system but 98 SE and ME |
+| `/faster`, `/nofaster` | (revision 35) the computer's choice of XHCITR's "can run faster" notice, on or off (section 9.5 item 7; record 25 section 7.7); refused together, and with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
 | `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
@@ -2724,6 +2745,15 @@ deferred on NT, and `WININIT.INI` is never edited.
      existing one (`inst_tray_run_action`). A deletion that fails, as
      against a value that is not there, is reported and fails the run
      (exit 2).
+  7. (Revision 35) `/faster` and `/nofaster` write the DWORD
+     `TrayFasterNotice` under `HKLM\Software\xhci98` (the install
+     directory's key, section 9.6) as 1 and 0: the computer's choice of
+     XHCITR's "can run faster" notice (record 25 section 7.7), which a
+     user's own choice in XHCITR overrides. Neither switch writes
+     nothing, and the value stays as it is; the console asks no question
+     for it. Written when the tool's file is in place, whatever the Run
+     value; a write that fails is reported and fails the run (exit 2);
+     `/list` says what would be written (`inst_fast_list_text`).
 - **Uninstall.** As the first step of the removal of the install
   directory and `%windir%\XHCI98` (both routes, after everything else;
   under `/list` one line each; section 9.6),
@@ -2735,7 +2765,9 @@ deferred on NT, and `WININIT.INI` is never edited.
   delay until reboot), and the then-empty `%windir%\XHCI98` is scheduled
   for removal too; the next install or uninstall deletes a leftover
   `.DEL`. On 98 SE and ME it is left and reported, with steps left: it no
-  longer starts at login, and the next uninstall deletes it.
+  longer starts at login, and the next uninstall deletes it. (Revision
+  35) `TrayFasterNotice` goes with the install directory's record
+  (section 9.6), its deletion checked as `InstallDir`'s is.
 - **Exit codes.** The tool's steps left and failures join the run's: on
   98 SE and ME an install ends with steps left when a device or the tool
   leaves one, and an uninstall, whose manual steps are always left, ends

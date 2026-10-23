@@ -15,7 +15,7 @@ It is built to Intel's xHCI specification and tested mainly on Intel machines. O
 
 This is a solo human's project with AI assistance, so bugs are not unexpected. Please [report them](https://github.com/yeokm1/xhci98/issues/new/choose).
 
-**Contents:** [Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [Installation Steps](#installation-steps) ([SETUP.EXE](#install-with-setupexe), [by hand](#install-by-hand)) - [Tuning](#tuning) - [What is tested](#what-is-tested-and-what-is-not) - [The package](#the-package) - [Reporting a bug](#reporting-a-bug) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
+**Contents:** [Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [The xHCI98 Disk Benchmark](#the-xhci98-disk-benchmark) - [Installation Steps](#installation-steps) ([SETUP.EXE](#install-with-setupexe), [by hand](#install-by-hand)) - [Tuning](#tuning) - [What is tested](#what-is-tested-and-what-is-not) - [The package](#the-package) - [Reporting a bug](#reporting-a-bug) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
 
 <img src="images/xhci98-p14s-superspeed-setup.jpg" width="800">
 
@@ -91,7 +91,7 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 |---|---|
 | 2000 | Stop it in "Unplug or Eject Hardware", then unplug. Without the stop, Windows 2000 shows "Unsafe Removal of Device". |
 | XP, Vista, 7 | Stop it in "Safely Remove Hardware", then unplug. |
-| 98 SE, ME | No such dialog: use the [xHCI98 USB Tree](#the-xhci98-usb-tree). Until you unplug, Device Manager's Refresh can start the device again. |
+| 98 SE, ME | No such dialog lists them (ME's "Unplug or Eject Hardware", and NUSB 3.3's on 98 SE, list USB storage only): use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /eject`. Until you unplug, Device Manager's Refresh can start the device again. |
 
 - A **dock** is listed under a generic PCI bridge name (its own switch); stopping it stops everything in the dock.
 - A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree stops it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
@@ -126,6 +126,10 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 
 Details: [the release notes' USB Tree section](docs/using/release-notes.md#the-xhci98-usb-tree).
 
+## The xHCI98 Disk Benchmark
+
+`XHCIPERF.EXE` (`XHCIPF64.EXE` on 64-bit Windows), new in `3.2.0.0`, measures any local disk through a test file of its own, on every system the package supports: sequential and random tests, a size sweep, unbuffered or cached, aligned, offset or scattered buffers, a verified pattern, and queue depth and threads on Windows 2000 and later (on 98 SE and ME file I/O waits for each request). Where the bundled Stor98 drives the disk, its Stor98 page shows the request sizes that reached the drive, so a before and after (a saved run compared with a new one) shows what a change did. The install copies it into the install directory; it is also in `tools\xhciperf\`, and XHCITR's Action > Disk benchmark... starts it. Laid out after the familiar disk benchmarks; nothing of theirs is used.
+
 ## Installation Steps
 
 ### Requirements
@@ -137,6 +141,7 @@ Details: [the release notes' USB Tree section](docs/using/release-notes.md#the-x
 | 2000 SP4, XP SP3 | Nothing. |
 | XP x64 SP2, Vista SP2, 7 SP1 (x86/x64) | Nothing. **Vista x64 and 7 x64** need [test-signing mode](#windows-vista-x64-and-7-x64-test-signing-mode) (or F8 at every boot). |
 
+- **The eject icon on 98 SE:** 98 SE has no "Unplug or Eject Hardware" icon of its own. For it, install NUSB 3.3 itself (its own setup; the seven storage files this download carries do not include it). It then lists USB sticks and UAS disks, as ME's own icon does. An NVMe drive behind a Thunderbolt or USB4 tunnel is never listed there: remove it with the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /eject`.
 - Windows 98 SE storage of any kind needs NUSB's mass-storage component: `USBSTOR.INF`/`USBSTOR.SYS`, `USBNTMAP.INF`/`USBNTMAP.SYS` and `USBMPHLP.PDR` ([details](docs/using/release-notes.md#windows-98-se-and-me-the-stock-install-and-storage)).
 - On an xHCI-only Windows 98 SE or ME machine, **have the Windows CD at hand** (or its files on disk): Windows may ask for files while installing the driver or later USB devices.
 
@@ -263,7 +268,7 @@ Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in t
 | `XhciIntelPortSwitch` | Intel 7/8/9-series port switchover: `1` on, `2` any Intel controller **at your own risk** (`tools\portsw\`) | `0` |
 | `XhciCmMode` | Thunderbolt/USB4: `0` off, `1` automatic (`2` and `3` are at your own risk) | `1` |
 | `XhciCmApprove` | `1` approves every device, `0` none (see [approval](#approving-and-removing)) | `1` |
-| `XhciCmSafeEject` | `1` offers tunnelled devices for safe removal | `1` |
+| `XhciCmSafeEject` | `1` offers tunnelled devices for safe removal (98 SE and ME: in the USB Tree and `INSTALL /eject` only) | `1` |
 | `XhciCmBridgeNumbering` | 98 SE and ME: `1` sets up PCI bridges behind a tunnel plugged in after start (else Code 29 until restart) | `1` |
 | `XhciCmLogVerbosity` | The Thunderbolt driver's log level, read by the USB Tree (`0` to `4`) | `2` |
 | `XhciCmLogDebugView` | The Thunderbolt driver's log sent to DebugView as well | `0` |

@@ -112,6 +112,33 @@ in the large model, from `xhciinst\di\`:
   installer does and prints the result file, when its `END` line was read
   and when the process handle signalled. It is never packaged.
 
+The same install, with the same Windows 98 SE DDK, builds `S98VSD.VXD`, the
+98 SE and ME IOS layer for Stor98's disks (roadmap-usb4 task 43.46, design
+record 30 section 6), from `src\vsd\`:
+
+- `src\vsd\build.cmd` (`qemu` for the qemu flavour's image, which writes
+  to QEMU's debug console) finds `wcc386.exe` under `%WATCOM%` in `BINNT64`
+  or `BINNT` and Python on `PATH`, and answers exit 2 ("not built") on a
+  host without either or without the DDK. `src\vsd\stage-ddk.ps1` holds
+  ten DDK headers and the DDK's `LINK.EXE` 5.12 with its `MSPDB50.DLL` to
+  `docs\references\README.md`'s hashes and copies them into the
+  git-ignored `src\vsd\obj\`, mending the staged headers (a trailing
+  Ctrl-Z cut, `AEP.H`'s three typedef tails); nothing of the DDK is
+  tracked. Open Watcom compiles, `omfpub.py` and `omfcheck.py` guard the
+  objects, the DDK's linker links with `/VXD`, `callcheck.py` holds every
+  call in the image to the function the compiler named, and
+  `check-vsd.ps1` holds the image to its DDB `S98VSD`, its two VxD
+  services (`vsd-services.allow`), its stamp and, in the release image, no
+  debug-port write. Out come `src\vsd\obj\S98VSD.VXD` and
+  `src\vsd\obj\qemu\S98VSD.VXD`.
+- `scripts\build-driver.cmd` runs it on the x86 run, after Stor98's
+  build: the release image always, the qemu one when the run builds qemu;
+  a 2 is said and passed over. `make-package.ps1` stages the image beside
+  `stor98.mpd` in an x86 package that carries Stor98 (the qemu image in the
+  qemu package), and `make-release.ps1` refuses a cut without it. Its host
+  suite is `test\test_vsd_list.c`; the VxD itself runs only in a 98 SE or
+  ME guest.
+
 Two consequences worth knowing before they bite:
 
 - A repository path containing a space is a problem for the DDK half only.
@@ -179,6 +206,7 @@ Setup scripts:
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
 | `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers `src\`, `test\`, `scripts\`, `xhcisnap\` and `xhciqual\` through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
+| `scripts\check-readme-text.ps1` | Holds the five tool readmes `make-release.ps1` publishes (`xhcicln`, `xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut embeds it in the top-level `readme.txt` (`Get-HistoryEmbedLines` and `ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `build-driver.cmd` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text and are met only at a cut. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
 | `scripts\test-qemu-launchers.ps1` | Generates all eleven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP, Windows XP x64, Windows Vista, Windows 7, and - since roadmap task 21.8's generators were written on 2026-09-10 - Windows Vista x64 and Windows 7 x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that each of the four 6.x generators and the XP x64 one refuses `pentium3` **and names the feature that guest is missing** - long mode for the three 64-bit guests, the NX bit for the two 32-bit 6.x ones, so that nobody "fixes" a 64-bit refusal by reaching for a model with NX and no long mode - that no two launchers share a QEMU monitor port, that task 21.8's two guests still hold 55563 and 55564 (the assertion that replaced the one holding those ports for guests which did not exist yet), and that every launcher's run-time QEMU resolver announces which rung answered. Those last four read the preamble's **real output** rather than its source, because an `echo` that does not survive `cmd`'s parsing is worth nothing; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |

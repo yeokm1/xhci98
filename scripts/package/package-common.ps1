@@ -440,13 +440,24 @@ function Get-PeImageDigest {
     # -End (Get-EmbeddedSignature's): where the hashed bytes stop, the
     # table's offset as that image's entry gives it, checked by the caller.
     param([byte[]]$Bytes, [int]$End = -1)
+    # A certificate table starts on a multiple of 8 (the PE format's
+    # attribute certificate table), so the padding is only ever added after
+    # the last byte of an unsigned image: a table, or an -End, that is not
+    # aligned is refused, or the padding would stand in for zeros missing
+    # from the file before it.
     $layout = Get-PeSecurityLayout -Bytes $Bytes
     $stop = $Bytes.Length
     if ($End -ge 0) {
+        if ($End % 8 -ne 0) {
+            throw ("the certificate table's offset {0} is not a multiple of 8" -f $End)
+        }
         $stop = $End
     } elseif ($layout.TableOffset -ne 0 -or $layout.TableSize -ne 0) {
         if ([int64]$layout.TableOffset + [int64]$layout.TableSize -ne [int64]$Bytes.Length) {
             throw "the certificate table is not the end of the image"
+        }
+        if ($layout.TableOffset % 8 -ne 0) {
+            throw ("the certificate table's offset {0} is not a multiple of 8" -f $layout.TableOffset)
         }
         $stop = [int]$layout.TableOffset
     }
@@ -945,7 +956,8 @@ function Test-CatalogOfPackage {
         foreach ($f in $spec.Files) {
             $fp = Join-Path $Dir $f
             if (-not (Test-Path -LiteralPath $fp)) { return "$catName covers '$f', which is not in the package" }
-            $expected[$f] = Get-CatalogMemberDigest -Path $fp
+            try { $expected[$f] = Get-CatalogMemberDigest -Path $fp }
+            catch { return "${catName}: '$f' cannot be hashed: $($_.Exception.Message)" }
         }
         $why = ""
         try { $why = Test-PackageCatalog -Catalog (Read-CatalogFile -Path $catPath) -Expected $expected -Thumbprint $Thumbprint }
@@ -2132,4 +2144,182 @@ function ConvertFrom-DriverPackRecord {
         throw "$Label says 'Included: no' and still names a revision or files."
     }
     return [pscustomobject]@{ Included = $included; Revision = $revision; Files = $files }
+}
+
+# --- a packaged plain-text file's rule (task 43.61) --------------------------
+#
+# **One rule, read by the cut and by the gated build.** make-release.ps1's
+# Write-GeneratedText refuses a generated text with a line past 78 columns or
+# a character that is not printable ASCII (TAB allowed), since
+# Write-AsciiFile turns such a character into a question mark silently.
+# Until task 43.61 that refusal was met only at a cut: on 2026-10-22 43.11's
+# test cut stopped on a line in xhciinst\README.TXT and one in
+# xhcitr\README.TXT that two merges had left, each passing every gate. The
+# rule is here so that scripts\check-readme-text.ps1, which build-driver.cmd
+# runs, holds the tracked readmes the cut reads to the same function.
+#
+# The tool readmes the cut reads, by the tool's directory under the
+# repository: make-release.ps1 takes its default -CleanToolDir,
+# -MarkToolDir, -InstallToolDir, -TrayToolDir and -PerfToolDir from this
+# table and reads README.TXT in each, and the gate reads the same five. A
+# sixth tool's readme is added here, or the gate does not see it.
+$script:PlainTextColumns = 78
+$script:ToolReadmeName = "README.TXT"
+$script:ToolReadmeDirs = [ordered]@{
+    Clean   = "xhcicln"
+    Mark    = "xhcimark"
+    Install = "xhciinst"
+    Tray    = "xhcitr"
+    Perf    = "xhciperf"
+}
+
+function Get-PlainTextFaults {
+    # What a packaged plain-text file breaks of the rule above, as the
+    # messages the cut prints: none, or the first line past 78 columns (with
+    # how many there are) and then the first character that is not printable
+    # ASCII. $Name is how the file is named in them.
+    param(
+        [string]$Name,
+        [string[]]$Lines
+    )
+
+    $faults = @()
+    if ($null -eq $Lines) { $Lines = @() }
+    $overLong = @($Lines | Where-Object { $_.Length -gt $script:PlainTextColumns })
+    if ($overLong.Count -gt 0) {
+        $faults += ("{0} has {1} line(s) past {2} columns, the first being:`n{3}" -f `
+                    $Name, $overLong.Count, $script:PlainTextColumns, $overLong[0])
+    }
+
+    :lines for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $line = $Lines[$i]
+        for ($c = 0; $c -lt $line.Length; $c++) {
+            $code = [int][char]$line[$c]
+            if ($code -lt 0x20 -or $code -gt 0x7E) {
+                if ($code -eq 9) { continue }
+                $faults += ("{0} line {1} column {2} is not printable ASCII (U+{3:X4}); Write-AsciiFile would replace it with a question mark. The line reads:`n{4}" -f `
+                            $Name, ($i + 1), ($c + 1), $code, $line)
+                break lines
+            }
+        }
+    }
+    return $faults
+}
+
+function Read-ToolReadmeLines {
+    # A tool's README.TXT as the cut reads it before adding the release's
+    # footer: split on CRLF or LF, trailing empty lines dropped.
+    param([string]$Path)
+
+    $lines = @([System.IO.File]::ReadAllText($Path) -split "`r?`n")
+    while ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq "") {
+        $lines = @($lines | Select-Object -First ($lines.Count - 1))
+    }
+    return $lines
+}
+
+# --- the release history the top-level readme embeds (task 43.61) -----------
+#
+# make-release.ps1 embeds releases\history.md in the release's readme.txt,
+# from its first '##' heading down, each entry heading demoted one level,
+# rendered to plain text by ConvertFrom-MarkdownBlocks at the rule's width.
+# The three are here so scripts\check-readme-text.ps1 renders it the same
+# way: a word too long to wrap or a non-ASCII character in a history entry
+# stops a cut as a readme line does.
+
+function Get-HistoryEmbedLines {
+    # history.md's lines from its first '##' heading down, each '##' heading
+    # made '###' to sit under the readme's "Release history" section, so the
+    # file's own title and maintenance note stay out of the readme.
+    param([string[]]$Lines)
+
+    if ($null -eq $Lines -or $Lines.Count -eq 0) { return @() }
+    $firstHeading = 0
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^##\s') { $firstHeading = $i; break }
+    }
+    return @($Lines[$firstHeading..($Lines.Count - 1)] | ForEach-Object {
+        if ($_ -match '^##\s') { "#" + $_ } else { $_ }
+    })
+}
+
+function Format-Wrapped {
+    # Greedy word wrap with a separate first-line and continuation prefix, so a
+    # bullet hangs under its own text rather than under the marker.
+    param(
+        [string]$Text,
+        [int]$Width,
+        [string]$FirstPrefix = "",
+        [string]$RestPrefix = ""
+    )
+
+    $words = @($Text -split '\s+' | Where-Object { $_ -ne "" })
+    if ($words.Count -eq 0) { return @() }
+
+    $out = @()
+    $line = $FirstPrefix + $words[0]
+    for ($i = 1; $i -lt $words.Count; $i++) {
+        if (($line + " " + $words[$i]).Length -gt $Width) {
+            $out += $line
+            $line = $RestPrefix + $words[$i]
+        } else {
+            $line = $line + " " + $words[$i]
+        }
+    }
+    # @() or a single-line block returns a bare string, and Set-StrictMode 2.0
+    # then makes .Count on it a runtime error at the call site.
+    return @($out + $line)
+}
+
+function ConvertFrom-MarkdownBlocks {
+    # The narrow subset releases\history.md actually uses: '###' headings,
+    # '-' bullets that may continue on indented lines, and plain paragraphs.
+    # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
+    # rendered - there is nothing to render them with in a .txt file.
+    param([string[]]$Lines, [int]$Width = 78)
+
+    $out = @()
+    $pending = ""          # text of the block being accumulated
+    $kind = "none"         # none | bullet | para
+
+    function Flush {
+        param([string]$Text, [string]$Kind, [int]$W, [object[]]$Acc)
+        if ($Text -eq "") { return @($Acc) }
+        if ($Kind -eq "bullet") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
+        }
+        return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
+    }
+
+    foreach ($raw in $Lines) {
+        $line = $raw -replace '\*\*', '' -replace '`', ''
+        # Single-asterisk emphasis, but only around a word - never a bullet
+        # marker, which lives at the start of the line and is handled below.
+        $line = $line -replace '(?<=\S)\*(\S[^*]*?)\*', '$1' -replace '(?<=\s)\*(\S[^*]*?)\*', '$1'
+
+        if ($line.Trim() -eq "") {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = ""; $kind = "none"
+            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
+            continue
+        }
+        if ($line -match '^###\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = ""; $kind = "none"
+            if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
+            $out += ("  " + $Matches[1].Trim())
+            $out += ""
+            continue
+        }
+        if ($line -match '^\s*-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "bullet"
+            continue
+        }
+        # A continuation of whatever block is open, or the start of a paragraph.
+        if ($kind -eq "none") { $kind = "para" }
+        $pending = if ($pending -eq "") { $line.Trim() } else { $pending + " " + $line.Trim() }
+    }
+    $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+    return $out
 }

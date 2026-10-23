@@ -194,6 +194,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "enum.cmd.busy.drains", hc->EnumCommandBusyDrains, 1);
     XhciLogAppend(log, "enum.wait.drains", hc->EnumWaitDrains, 1);
     XhciLogAppend(log, "enum.xfer.timedout", hc->EnumTransfersTimedOut, 1);
+    XhciLogAppend(log, "enum.xfer.departed", hc->EnumTransfersDeparted, 1);
     XhciLogAppend(log, "serial.ids", hc->SerialIdsTaken, 1);
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
     XhciLogAppend(log, "serial.readfailed", hc->SerialReadsFailed, 1);

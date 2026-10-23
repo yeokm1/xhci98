@@ -111,6 +111,14 @@ cl /nologo /W3 /WX /O2 /Fo"%OUT%\sg9x.obj" /Fe"%OUT%\sg9x_ut.exe" "%~dp0sg9x_ut.
 if not defined FAILED "%OUT%\sg9x_ut.exe" || set "FAILED=1"
 if defined SGFAILED set "FAILED=1"
 
+rem The counter answer's pure half (src/pfstat.c; docs/PLAN.md MD-8)
+set "PFFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%DDKINC%\ddk;%DDKINC%;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /D_X86_=1 /D_WIN32_WINNT=0x0500 /Fo"%OUT%\pfstat.obj" /Fe"%OUT%\pfstat_ut.exe" "%~dp0pfstat_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\pfstat_ut.exe" || set "FAILED=1"
+if defined PFFAILED set "FAILED=1"
+
 if defined FAILED (
     echo *** UNIT TESTS FAILED ***
     exit /b 1

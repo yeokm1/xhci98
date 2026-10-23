@@ -1072,6 +1072,11 @@ typedef struct _HCD_PORT {
     /* Task 35.3: a root port's enumeration notes and their budget
      * (xhci_enum.h), cleared by the start. Thread only. */
     XHCI_ENUM_NOTES Notes;
+    /* Task 43.27 (record 13 section 8.4.1, rule 3): the VID:PID of the
+     * device this attempt read the BOS of at High or Full Speed, kept here
+     * because the attempt's teardown frees the device before a halt it
+     * causes is seen. Thread only. */
+    ULONG Usb2BosVidPid;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -1460,6 +1465,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG EnumCommandsTimedOut;
     ULONG EnumDisableFailures;
     ULONG EnumTransfersTimedOut;
+    /* Of those, the ones whose device had left: no reset (task 43.53). */
+    ULONG EnumTransfersDeparted;
     /* Task 36.4's busy retry (hcd_enum.c, hcdCommandBusy): commands that
      * read the engine not idle before their first submit or were answered
      * XHCI_CMD_BUSY, those then submitted, and the drains it queued.
@@ -1913,6 +1920,13 @@ typedef struct _HCD_CONTROLLER {
      * thread's), bounded by HCD_HUB_SPEED_NOTE_BUDGET. */
     ULONG HubSpeedFallback;
     ULONG HubSpeedNotes;
+    /* Task 43.27 (design record 13 section 8.4.1): XhciUsb2Bos as the
+     * start latched it, 1 when a High or Full Speed device declaring
+     * bcdUSB 0210h or more is asked for its BOS. */
+    ULONG Usb2Bos;
+    /* The devices whose read did not end cleanly (xhci_enum.h), kept for
+     * this start: a controller recovery does not clear it. */
+    XHCI_ENUM_BOS_MEMO Usb2BosMemo;
     /* The thread's claimed IRPs, completed by a pool of parked workers
      * (hcd_susp.c, hcdSuspDefer; record 14 section 3.12): the workers'
      * contexts and the pending IRPs, under SuspDoneLock; provisioned by
@@ -2202,7 +2216,8 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 #define HCD_CTL_STALLED     1UL /* the device answered with a STALL      */
 #define HCD_CTL_FAILED      2UL /* it completed with another error       */
 #define HCD_CTL_NOT_SENT    3UL /* it never went out, or it timed out
-                                 * (dev->Ep0Stuck, the reset requested)  */
+                                 * (dev->Ep0Stuck, the reset requested,
+                                 * or the device left: task 43.53)      */
 #define HCD_CTL_ABANDONED   4UL /* abandoned for a device cycle (35-T.3):
                                  * dev->CycleAbandon, and nothing more is
                                  * sent to the device                     */
@@ -2336,6 +2351,11 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ULONG interfaceMask);
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* A departing device's fallback cycle of its location, charged to the
+ * location's budget (hcd_cfg.c, beside hcdCfgFault; task 43.53's late
+ * thread transfer too). The caller has checked dev->Location and the PDO.
+ * Thread only. */
+VOID HcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* The shutdown latch's flush of the queued commands (37.3, record 13
  * section 5.8); returns how many it completed. IRQL: PASSIVE_LEVEL, the
  * power gate held. */

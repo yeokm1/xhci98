@@ -1,6 +1,15 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 31, 2026-10-22 (the owner's answer of that day to 43.5's
+Status: draft 34, 2026-10-23 (roadmap-usb4 task 43.46, design record 30
+section 7.1: the `S98VSD.VXD` box under Stor98's on the Components page,
+one line, section 5.3; recorded at the batch 7 merge); draft 33,
+2026-10-22 (roadmap-usb4 task 43.27: the "can run
+faster" box under the tray tool's on the Components page, section 5.3,
+and `/faster` and `/nofaster`, section 10; record 25 section 7.7, record
+23 revision 35); draft 32, 2026-10-22 (section 5.3.2 squared with record 23
+revisions 30 and 33: the Secure Boot answer feeds the x64 connection
+manager's refusal, and its guest reading is owed, the policy resting on
+Microsoft's documentation); draft 31, 2026-10-22 (the owner's answer of that day to 43.5's
 leg i3: a lone `USBSTOR.INF` found ticks the storage row, NUSB installed
 winning, and is said with a step, section 6.5.5); draft 30, 2026-10-22
 (the owner's point of that day for the
@@ -819,8 +828,10 @@ Check boxes, one a line, each with one sentence:
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
 | Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
+| Large transfers for Stor98 (`S98VSD.VXD`) (draft 34; owner, 2026-10-22; design record 30 section 7) | on 98 SE and ME, whenever Stor98's box is ticked: ticking Stor98 ticks it; `/nos98vsd` preselects it unticked, `/s98vsd` ticked | yes, while Stor98's box is ticked | a child of Stor98's box, indented under it as Stor98's is under the Thunderbolt box: open only while Stor98's box is ticked, unticked and greyed while it is unticked or greyed; shown only when the flavour directory carries `S98VSD.VXD`; one line, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB", and no sentence under it (the page stays 223 units high); the longer sentence "Lets Windows 98 SE and ME send Stor98 reads and writes of up to 2 MiB whole, instead of in 63 KiB pieces. Changes nothing for copies through the file cache." is the console's, and the Summary's line says what the run does with the file. On every other system shown greyed and unticked, its line "Large transfers for Stor98 (Windows 98 SE and ME only)", never taken by the page or the engine (the convention of section 5.4 for a row of another system; the owner's exception, 2026-10-22, to section 5.3.1). Ticked, the run places `SYSTEM\IOSUBSYS\S98VSD.VXD`, never over a file of that name it did not place, and updates its own through `WININIT.INI` as Stor98's file; unticked by the user over the file it placed, the run removes it (owner, 2026-10-22); greyed by an unticked Stor98, it follows Stor98: kept when the run keeps Stor98, removed when it removes Stor98 (owner, 2026-10-22); the uninstall removes the one it placed (record 30 sections 7.3 and 7.4) |
 | USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | no while NUSB is installed (its `Uninstall\USB20U` entry; task 43.51, owner, 2026-10-22), ahead of an earlier run's recorded choice, and the note says the user can leave it unticked; otherwise ticked with a lone `USBSTOR.INF` in the INF directories when a ticked run completes the pair (draft 31, section 6.5.5); otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone, never on ME, 2000 or later; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
-| xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
+| xHCI98 USB Tree, the tray tool, started at login (draft 33: the label carries what was the sentence under it) | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
+| Tell me when a USB device can run faster (draft 33, task 43.27) | the computer's choice in force: `TrayFasterNotice` under `HKLM\Software\xhci98` when it is a DWORD 0 or 1, else the default, on on every system (the owner, 2026-10-22; `inst_fast_default`, record 25 section 7.7); `/faster` and `/nofaster` preselect it | yes | XHCITR's balloon and red icon for a device running slower than it can; a box of its own, in the place of the tray box's sentence, indented under it and not tied to it (the notice also shows when the tool is opened by hand); shown when the tray box is (the package carries the tool); written only when its tick is changed from the one in force (record 23 section 9.5 item 7) |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
 The component page is not shown under `/uninstall`. Unticking Thunderbolt
@@ -1036,9 +1047,10 @@ record 26 before its code"). Proposed: yes, on 8, 8.1 and 10 only, read
 and shown, never changed. The value is
 `HKLM\SYSTEM\CurrentControlSet\Control\SecureBoot\State`,
 `UEFISecureBootEnabled`, a `REG_DWORD` that Microsoft documents as 1
-with Secure Boot on and 0 with it off (not read here on any guest; read
-first on roadmap-usb4 task 43.32's legacy-BIOS guests and its OVMF guest
-with Secure Boot on, before the code is released). The pure half,
+with Secure Boot on and 0 with it off (not read here on any guest; its
+reading with Secure Boot on is owed, since task 43.32's OVMF guest was
+not built, and record 23 revision 33 takes the refusal with Secure Boot
+on from Microsoft's documented policy instead). The pure half,
 `inst_sb_state(found, type, value)`, gives three answers:
 
 | Read | Answer | The note's Secure Boot sentence |
@@ -1050,11 +1062,19 @@ with Secure Boot on, before the code is released). The pure half,
 With the answer "on", test-signing mode never counts as confirmed, even
 when `SystemStartOptions` holds `TESTSIGNING`: Microsoft's documentation
 of the option has Secure Boot turned off before test signing can be
-enabled (not read here on any guest; read on 43.37's OVMF guest), so the
+enabled (not read here on any guest; record 23 revision 33 takes it from
+that documentation, and 43.37's check of it is a documentation reading,
+not a leg), so the
 post-install check (record 23 section
 5.10) reports the controller's or the NHI's Code 52 as the note's case
-and not as an unexplained failure. The raw value is logged. Nothing is
-refused and the run goes on as now when the user confirms. On 7 and
+and not as an unexplained failure. The raw value is logged. The answer
+refuses nothing by itself, but it decides the gate of record 23 section
+5.10 (revision 30): on 64-bit 8, 8.1 and 10 the connection manager is
+refused unless test-signing mode is confirmed, so with Secure Boot read
+as on it is refused there, whatever `SystemStartOptions` holds, and a
+run with the connection manager in it is refused as a whole (exit 1,
+nothing changed). A run without it goes on as now when the user
+confirms. On 7 and
 earlier nothing is read (no Secure Boot); on 32-bit 8, 8.1 and 10 the
 sentence is used only where record 23 section 5.10 gives that system a
 Secure Boot note at all (task 43.22's reading for 8 and 8.1, 43.33 (d)'s
@@ -2794,8 +2814,10 @@ page:
 | `/from <dir>` | the relaunch of section 9.2; refused from a package directory |
 | `/to <path>` | preselects the tools folder; the page still shows it |
 | `/thunderbolt`, `/stor98`, `/notray`, `/nouas` | preselect the components; the page still shows them (`/stor98` needs `/thunderbolt` or `/cmonly`, section 6.4) |
+| `/faster`, `/nofaster` | (draft 33) preselect the "can run faster" box ticked or unticked, and make it changed, so it is written; the page still shows it |
 | `/cmonly` | (draft 8) preselects the USB drivers unticked on 2000 to 7; refused on 98 SE and ME with the console's text; on 8 and 8.1 changes nothing |
 | `/storage`, `/nostorage` | (draft 17) preselect the USB storage drivers' box on 98 SE; `/storage` refused on any other system with the console's text, `/nostorage` changing nothing there (section 6.5.9) |
+| `/s98vsd`, `/nos98vsd` | (design record 30 section 7.2; owner, 2026-10-22) preselect the `S98VSD.VXD` box on 98 SE and ME (`/s98vsd` needs Stor98 in the run); both refused on any other system with the console's text, "/s98vsd and /nos98vsd are for Windows 98 SE and ME only" |
 | `/set Name=Value` | preselects a setting (and makes it "changed", so it is written); the page still shows it |
 | `/defaults` | as record 23 section 7.1: every current value kept and no value question asked, which in the window means the settings pages are shown with the values in force and nothing marked changed (a page left alone writes nothing) |
 | `/force`, `/restage` | as record 23; the Found page shows what they add |
