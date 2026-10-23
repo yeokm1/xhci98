@@ -2052,6 +2052,50 @@ static int mk_s98_api(void)
 }
 
 /* The value, when it names a staged INF that exists: 1 with inf filled. */
+/* 1 on Windows 8.1 (inst_s98_switch_os), 0 elsewhere or where it cannot
+ * be read: RtlGetVersion's answer (the service has no compatibility
+ * manifest, so GetVersionEx says 6.2 build 9200 on 8.1 and 10 alike), and
+ * the major and minor version the kernel keeps in the shared user data
+ * page (KUSER_SHARED_DATA NtMajorVersion, NtMinorVersion at 0x7FFE026C and
+ * 0x7FFE0270 on every NT), which no compatibility shim reaches, must both
+ * pass (record 21 section 7.5, the 8.1 gate). Read once; *major, *minor
+ * and *build for the log, the shared page's major and minor. */
+#define MK_KUSD_NT_MAJOR ((const volatile ULONG *)0x7FFE026CUL)
+#define MK_KUSD_NT_MINOR ((const volatile ULONG *)0x7FFE0270UL)
+typedef LONG (WINAPI *PFN_RTLGETVERSION)(OSVERSIONINFOW *);
+static int mk_s98_os81(DWORD *major, DWORD *minor, DWORD *build)
+{
+    static int done;
+    static int is81;
+    static DWORD ma;
+    static DWORD mi;
+    static DWORD bu;
+
+    if (!done) {
+        HMODULE nt = GetModuleHandleA("ntdll.dll");
+        PFN_RTLGETVERSION rtl =
+            nt != NULL ? (PFN_RTLGETVERSION)GetProcAddress(nt, "RtlGetVersion")
+                       : NULL;
+        OSVERSIONINFOW w;
+
+        done = 1;
+        memset(&w, 0, sizeof(w));
+        w.dwOSVersionInfoSize = sizeof(w);
+        ma = *MK_KUSD_NT_MAJOR;
+        mi = *MK_KUSD_NT_MINOR;
+        if (rtl != NULL && rtl(&w) == 0) {
+            bu = w.dwBuildNumber & 0xFFFFUL;
+            is81 = inst_s98_switch_os(1, w.dwMajorVersion, w.dwMinorVersion,
+                                      bu) &&
+                   inst_s98_switch_os(1, ma, mi, bu);
+        }
+    }
+    *major = ma;
+    *minor = mi;
+    *build = bu;
+    return is81;
+}
+
 static int mk_s98_policy(char *inf, size_t cap)
 {
     HKEY k;
@@ -2060,6 +2104,9 @@ static int mk_s98_policy(char *inf, size_t cap)
     char windir[MAX_PATH];
     int state = 0;
     DWORD a;
+    DWORD ma;
+    DWORD mi;
+    DWORD bu;
 
     memset(inf, 0, cap);
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_PARAMS_KEY, 0, KEY_READ, &k) ==
@@ -2072,6 +2119,11 @@ static int mk_s98_policy(char *inf, size_t cap)
             memset(inf, 0, cap);
         }
         RegCloseKey(k);
+    }
+    /* Record 21 section 7.5: the switch on Windows 8.1 alone, whatever the
+     * value says (a stale one after an upgrade to 10). */
+    if (state == 1 && !mk_s98_os81(&ma, &mi, &bu)) {
+        state = 4;
     }
     if (state == 1) {
         if (GetWindowsDirectoryA(windir, sizeof(windir)) == 0 ||
@@ -2089,6 +2141,10 @@ static int mk_s98_policy(char *inf, size_t cap)
         if (state == 1) {
             mk_log("Stor98: tunnelled drives on stornvme are switched to %s",
                    inf);
+        } else if (state == 4) {
+            mk_log("Stor98: %s names %s, and Windows is %lu.%lu build %lu, "
+                   "not 8.1; no drive is switched", MK_S98_VALUE, inf,
+                   (unsigned long)ma, (unsigned long)mi, (unsigned long)bu);
         } else if (state != 0) {
             mk_log("Stor98: %s names %s, %s; no drive is switched",
                    MK_S98_VALUE, inf, state == 2 ? "not a staged INF"

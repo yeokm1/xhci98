@@ -4152,14 +4152,34 @@ static void test_s98(void)
               "8 and 8.1, /yes: N");
         CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 1, &asked, &def) && !asked,
               "8 and 8.1, /stor98: installed unasked");
-        CHECK(inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL),
+        CHECK(inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL, 1),
               "43.59: 8, 8.1 and 10 with Stor98 staged and the service: the value written");
-        CHECK(!inst_s98_auto_value(0, 1, 1, INST_MK_INSTALL) &&
-              !inst_s98_auto_value(1, 0, 1, INST_MK_INSTALL) &&
-              !inst_s98_auto_value(1, 1, 0, INST_MK_INSTALL) &&
-              !inst_s98_auto_value(1, 1, 1, INST_MK_LEAVE) &&
-              !inst_s98_auto_value(1, 1, 1, INST_MK_REMOVE),
+        CHECK(!inst_s98_auto_value(0, 1, 1, INST_MK_INSTALL, 1) &&
+              !inst_s98_auto_value(1, 0, 1, INST_MK_INSTALL, 1) &&
+              !inst_s98_auto_value(1, 1, 0, INST_MK_INSTALL, 1) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_LEAVE, 1) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_REMOVE, 1),
               "43.59: 2000 to 7, Stor98 not in the run or not staged, or no service: not written");
+        /* Task 43.59, owner 2026-10-23: the switch on 8.1 alone. */
+        CHECK(!inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL, 0),
+              "not 8.1: no Stor98Inf");
+        CHECK(inst_s98_switch_os(1, 6, 3, 9600), "8.1 (6.3.9600)");
+        CHECK(inst_s98_switch_os(1, 6, 3, 9601), "an 8.1 build past 9600");
+        CHECK(!inst_s98_switch_os(1, 6, 2, 9200), "8 (6.2.9200)");
+        CHECK(!inst_s98_switch_os(1, 10, 0, 10240), "10 (10.0.10240)");
+        CHECK(!inst_s98_switch_os(1, 10, 0, 19045), "10 22H2");
+        CHECK(!inst_s98_switch_os(1, 10, 0, 22000), "11");
+        CHECK(!inst_s98_switch_os(1, 6, 3, 10240),
+              "6.3 with a build of 10 (an unmanifested answer on 10)");
+        CHECK(!inst_s98_switch_os(1, 6, 3, 19045),
+              "6.3 with a build of 10 22H2: a stale 8.1 value refused");
+        CHECK(!inst_s98_switch_os(1, 6, 1, 7601) &&
+              !inst_s98_switch_os(1, 6, 0, 6002) &&
+              !inst_s98_switch_os(1, 5, 1, 2600) &&
+              !inst_s98_switch_os(1, 5, 0, 2195), "7, Vista, XP, 2000");
+        CHECK(!inst_s98_switch_os(0, 4, 10, 2222) &&
+              !inst_s98_switch_os(0, 4, 90, 3000) &&
+              !inst_s98_switch_os(0, 6, 3, 9600), "98 SE, ME, not NT");
         /* Task 43.23 (record 26 section 5.3.1 case 3b): 8.1's and 10's own
          * stornvme on a tunnel drive is installed over, forced; nothing
          * else is. */

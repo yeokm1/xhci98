@@ -452,6 +452,7 @@ static int haveCm;
 /* The connection manager alone (record 23 section 4.5, revision 13): the
  * system's kind, and the USB drivers in this run or out of it. */
 static int osKind = INST_OS_FULL;
+static int osIs81;  /* inst_s98_switch_os: Windows 8.1 (task 43.59) */
 static int usbInclude = 1;
 static int usbOffered;
 static int uasInclude = 1;  /* xhciuas.inf in the run, with the USB drivers */
@@ -6377,6 +6378,16 @@ static int hwid_clear(const char *hwid, int inf)
             d->S98Why != INST_S98_ELIGIBLE) {
             /* NT's call reaches every device with the id: a drive the
              * installer leaves keeps the tunnel drive from it too. */
+            if (osIs81) {
+                /* Task 43.59: on 8.1 the mark service puts Stor98 on the
+                 * tunnel drive alone, seconds after this run. */
+                out("  %s is shared with %s, which this run leaves (%s);\n"
+                    "  this run changes neither: the safe-removal mark "
+                    "service puts Stor98 on\n  the tunnel drive alone "
+                    "once this run ends.\n", hwid, d->Id,
+                    inst_s98_skip_text(d->S98Why, 1));
+                return 0;
+            }
             out("  %s is shared with %s, which this run leaves (%s);\n"
                 "  neither is changed. Install Stor98 on the tunnel drive "
                 "in Device Manager\n  (Update Driver, Have Disk, this "
@@ -11139,19 +11150,35 @@ static int mk_safe_eject_now(void)
     return safe;
 }
 
-/* Record 21 section 7.5 (task 43.59): on 8, 8.1 and 10 a tunnelled drive
- * first plugged after this run gets Windows' stornvme; the mark service
- * puts the staged Stor98 on it when its Parameters\Stor98Inf names that
- * INF. Written after the run's own Stor98 jobs, so the service never races
- * them; a run without Stor98 leaves the value as it is. */
+/* Record 21 section 7.5 (task 43.59, owner 2026-10-23): on 8.1 only a
+ * tunnelled drive Windows gave stornvme gets the staged Stor98 from the
+ * mark service, when its Parameters\Stor98Inf names that INF. Written
+ * after the run's own Stor98 jobs, so the service never races them; a run
+ * without Stor98 leaves the value as it is. On any other system a run that
+ * keeps the service deletes a value an earlier build or an 8.1 install
+ * left (an upgrade to 10), so no switch is asked for there. */
 static void mk_s98_value(int mkAction)
 {
     HKEY k;
     DWORD disp;
     LONG w;
 
+    if (!osIs81 && mkAction == INST_MK_INSTALL && envNow.Nt) {
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0,
+                          KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+            w = RegDeleteValueA(k, "Stor98Inf");
+            RegCloseKey(k);
+            if (w == ERROR_SUCCESS) {
+                logonly("mark service: Stor98Inf deleted (not Windows 8.1)\n");
+            } else if (w != ERROR_FILE_NOT_FOUND) {
+                logonly("mark service: Stor98Inf could not be deleted "
+                        "(error %ld)\n", (long)w);
+            }
+        }
+        return;
+    }
     if (!inst_s98_auto_value(osKind == INST_OS_CMONLY, s98Include,
-                             s98StagedInf[0] != '\0', mkAction)) {
+                             s98StagedInf[0] != '\0', mkAction, osIs81)) {
         return;
     }
     w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL,
@@ -15978,9 +16005,11 @@ static void s98_question(void)
     char line[16];
     char text[1024];
 
+    /* On 8.1 Stor98 is the tunnelled drives' default (task 43.59, owner
+     * 2026-10-23): chosen as on 98 SE to 7. On 8 and 10 only /stor98. */
     r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
-                        opts.NoStor98, opts.List, osKind == INST_OS_CMONLY,
-                        &asked, &def);
+                        opts.NoStor98, opts.List,
+                        osKind == INST_OS_CMONLY && !osIs81, &asked, &def);
     if (!haveS98) {
         s98_apply(0);
         return;
@@ -21347,6 +21376,11 @@ int inst_eng_s98_state(int *have, char *version, size_t cap)
     return s98Include;
 }
 
+int inst_eng_os_is81(void)
+{
+    return osIs81;
+}
+
 void inst_eng_s98_choose(int include)
 {
     /* Part of the Thunderbolt support (owner, 2026-10-19). */
@@ -22628,6 +22662,9 @@ int inst_eng_begin(int argc, char **argv)
     osKind = inst_os_kind(osv.dwPlatformId == VER_PLATFORM_WIN32_NT,
                           osv.dwMajorVersion, osv.dwMinorVersion,
                           osv.dwBuildNumber & 0xFFFFUL);
+    osIs81 = inst_s98_switch_os(osv.dwPlatformId == VER_PLATFORM_WIN32_NT,
+                                osv.dwMajorVersion, osv.dwMinorVersion,
+                                osv.dwBuildNumber & 0xFFFFUL);
     out("Windows %lu.%lu.%lu %s\n\n", (unsigned long)osv.dwMajorVersion,
         (unsigned long)osv.dwMinorVersion,
         (unsigned long)(osv.dwBuildNumber & 0xFFFFUL), osv.szCSDVersion);

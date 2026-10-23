@@ -4779,11 +4779,12 @@ before. Why 8.1 (`runs/run-43.md` "43.59"): under this connection manager
 a surprise unplug during a write left 8.1's `stornvme` (6.3.9600.16421,
 8.1's own) holding the write for good - the disks removed (event 157)
 1 to 3 s after the pull, one reset (129) and one controller error (11),
-then the copy blocked for 50 minutes and more, the controller's devnode
-not started and never removed, `diskpart` wedged, and a re-plug no help.
-Our side did its part: the connection manager's re-enumeration ran
-(`cm.reenum.downs` 1), the bridge had no function below it, and Windows
-began the surprise removal (the devnode's started bit cleared). The same
+then the copy blocked for as long as it was watched (2 h 50 min), the
+controller's devnode not started and never removed, `diskpart` wedged,
+and a re-plug 50 minutes on no help. What was read of our side: the
+connection manager's re-enumeration ran (`cm.reenum.downs` 1), the
+bridge had no function below it, and Windows began the surprise removal
+(the devnode's started bit cleared); that it began is all this shows. The same
 pull failed the write promptly under Stor98 on 8.1 x64, and under
 `stornvme` and Stor98 on 10 x86 and 10 x64 (10's `stornvme` removed the
 controller at once). With no connection manager (43.23) 8.1's `stornvme`
@@ -4792,15 +4793,23 @@ came back with the tunnel. Unread: whether a later 8.1 update's
 `stornvme` mends it (the images carry none).
 
 *The 8.1 gate* (`inst_s98_switch_os`, inst_core.c, host vectors): NT
-6.3 with a build below 10000 (8.1 is 6.3.9600; 10 reports 10.0 and builds
-from 10240, and an unmanifested program on 10 is told 6.2 or 6.3, never a
-build of 10000 and up from `RtlGetVersion`). The version is
-`RtlGetVersion`'s, in the installer as now and in the mark service, which
-has no compatibility manifest (its `GetVersionEx` says 6.2 build 9200 on
-8.1 and 10 alike).
+6.3 with a build below 10000 (8.1 is 6.3.9600, with Update and later
+servicing too; 10 reports 10.0 and builds from 10240). The installer reads
+`RtlGetVersion` as now. The mark service, which decides, reads the
+version where no compatibility shim reaches: the major and minor version
+the kernel keeps in the shared user data page (`KUSER_SHARED_DATA`
+`NtMajorVersion` and `NtMinorVersion`, at 0x7FFE026C and 0x7FFE0270, the
+same on every NT), and requires both those and `RtlGetVersion`'s to be
+6.3 with a build below 10000. So an installer run in a compatibility mode
+on 10 that writes the value is still refused by the service, which runs
+under no compatibility layer. Windows Server 2012 R2 (also 6.3.9600, the
+same `stornvme`) counts as 8.1, as the package's other version rules
+take no account of a server (owner, 2026-10-20); it is untested.
 
-- **The installer** writes `Parameters\Stor98Inf` only where the gate
-  passes, and on any other system deletes a value an earlier build or an
+- **The installer** ticks Stor98 by default on 8.1 (`inst_s98_decide`, as
+  on 98 SE to 7; on 8 and 10 only `/stor98` or a tick includes it), and
+  writes `Parameters\Stor98Inf` only where the gate passes, the staging
+  succeeded and the service stays (safe eject on), and on any other system deletes a value an earlier build or an
   8.1 install left (an install, update or the end of any run that keeps
   the service).
 - **The mark service** switches nothing where the gate fails, whatever
@@ -4809,7 +4818,8 @@ has no compatibility manifest (its `GetVersionEx` says 6.2 build 9200 on
 - **Drives present at the install** (8.1): case 3b installs Stor98 where
   the drive's hardware id is its own; where an internal drive shares the
   id (`hwid_clear`) the run leaves it, says the service puts Stor98 on it,
-  and the service does, seconds after the run (read on 10 x86: 11 s).
+  and the service does, seconds after the run (read on 10 x86: 11 s),
+  where the value was written (Stor98 staged, safe eject on).
 - **Drives first seen later** (8.1): the switch below.
 - **Internal drives**: never a candidate (the verified tunnel port), and
   on 6.3 and later the INF names `PCI\CC_010802` as a compatible id only
@@ -4822,6 +4832,11 @@ has no compatibility manifest (its `GetVersionEx` says 6.2 build 9200 on
   stale value. The uninstall on 10 still gives every switched drive back:
   the drives are under Stor98's `Devices` record and `mk_s98_settle`
   enters any bound drive the records name, whatever the system.
+
+The text from here to the end of 7.5 is the switch as built and read for
+8.1 and 10 on 2026-10-22, kept as its contract; where it says 8, 8.1 and
+10, `INST_OS_CMONLY` or Windows 10, read 8.1 alone (the gate above), and
+the value's writing rule is the one above.
 
 **The problem** (roadmap-usb4.md 43.23, `runs/run-43.md` "43.23",
 question 2). On Windows 8.1 and 10 an NVMe controller behind a Thunderbolt
@@ -4981,9 +4996,8 @@ store published it (`%SystemRoot%\INF\oemNN.inf`, the name
 `SetupCopyOEMInf` returned, record 26 section 6.3).
 
 - **Written** by an install or update run whose Stor98 box was ticked,
-  on the systems where Windows has its own NVMe driver. That is
-  `INST_OS_CMONLY` (8, 8.1 and 10 below build 22000: record 23 section
-  4.5), and only once the staging succeeded and the run installs or keeps
+  on Windows 8.1 alone (the 8.1 gate above; until 2026-10-23 every
+  `INST_OS_CMONLY` system), and only once the staging succeeded and the run installs or keeps
   the service (`inst_mk_end_action` `INST_MK_INSTALL`), after the run's
   own Stor98 jobs (`mk_end_of_run`).
 - **Left as it is** by a run with the box unticked, as record 26 section
@@ -5170,7 +5184,7 @@ own key is the ownership entry above.
 
 | Case | What happens |
 |---|---|
-| A tunnelled drive first plugged after the install (8.1, 10) | Windows installs and starts `stornvme`; within a poll of the install's end the service switches the devnode to Stor98 (`done`); the volume is dismounted once and comes back under Stor98 |
+| A tunnelled drive first plugged after the install (8.1; on 10 nothing is switched) | Windows installs and starts `stornvme`; within a poll of the install's end the service switches the devnode to Stor98 (`done`); the volume is dismounted once and comes back under Stor98 |
 | The same drive plugged again at the same tunnel port | the same devnode, Stor98 already: not a candidate |
 | An internal NVMe drive | below no verified tunnel port: never a candidate, `stornvme` stays |
 | The drive moved from the tunnel to an internal M.2 slot | a new devnode at the internal location (a PCI instance id follows the location), not below a tunnel port: `stornvme`, untouched |
@@ -5207,7 +5221,9 @@ The installer's half is `inst_s98_auto_value`, in `inst_core.c`, held
 by `test_inst`: whether the run writes the value, from the system's kind,
 the box, the staging and the service's end action.
 
-The legs are on the Windows 10 x86 guest, in the emulator with the
+The legs were first run on the Windows 10 x86 guest (2026-10-22), and
+from 2026-10-23 they are owed on 8.1 x64, with a 10 x64 check that
+nothing switches (`runs/run-43.md` "43.59"), in the emulator with the
 Thunderbolt 3 (ICM) profile, after the package's install with the box
 ticked:
 

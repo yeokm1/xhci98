@@ -3688,6 +3688,50 @@ as above), which breaks the owner's rule for internal drives, and on 10
 x64 Stor98 x64 does not start at all in this vehicle. Not read: why
 Stor98 x64 fails on 10 x64 (a debug build's stage codes would show it).
 
+### The surprise-unplug check under `stornvme` and Stor98, 8.1 x64 and 10 x64 (2026-10-23)
+
+The owner's request after the x64 legs: does Windows' own `stornvme`
+handle a surprise unplug, and transfers, with this connection manager?
+The owner-signed amd64 package of integ6b `5ad53f7d` (the connection
+manager alone, its test certificate trusted in the guest), fresh
+overlays, two virtual CPUs, 2048 MB, an 8 GB blank qcow2 as the tunnelled
+drive (formatted NTFS as T:) behind the ASM2464 router, an internal
+`nvme` on the root bus. Loads: `seq.ps1` (four files of 256 MB written
+write-through in 4 MiB chunks, read back and compared by MD5, stalls over
+2 s logged) and `rnd.ps1` (200 files of 4 KiB to 1 MiB a round, written
+write-through, read and compared), each 10 minutes; `copy.ps1` (a 4 MB
+file copied in a loop). The host was at 97 % CPU throughout (ten guests
+of other agents), so no throughput below is a performance reading.
+
+| Run | Driver | Reading |
+|---|---|---|
+| 8.1 x64, sequential 10 min | `stornvme` | 31 passes, 31.7 GB written and compared, 0 mismatches, 0 chunks over 2 s; 95 to 134 MB/s writing, 85 to 112 MB/s reading and comparing |
+| 8.1 x64, random 10 min | `stornvme`, tunnelled | 7000 files, 3.5 GB, 0 mismatches; 8 writes over 2 s (2.0 to 11.6 s); no storage event |
+| 8.1 x64, random 10 min, control | `stornvme`, the internal drive | 5000 files, 2.5 GB, 0 mismatches; 6 writes over 2 s (2.0 to 12.6 s) at the same files: the host, not the tunnel |
+| 8.1 x64, surprise unplug during `copy.ps1` (11:27:40) | `stornvme` | disk event 157 for every disk on the controller 1 to 3 s after; `stornvme` 129 (reset) at +12 s and 11 (controller error) at +19 s, once each; the copy blocked, the process alive, for as long as it was watched (2 h 50 min); the controller's devnode present, status `0x01806002` (not started, no problem), never removed; `diskpart` wedged for 25 minutes and more, and a new PowerShell did not start; a re-plug 50 minutes on brought the tunnel up and changed nothing |
+| the same, what our side did (XHCITR /report on the hung guest) | | `tbt.icm.device-gone`, `cm.action.tunnel-down=00000003`, `cm.reenum.downs` 1, `cm.reenum.calls` 2, `cm.nvlink.withheld`; the tunnel port listed no function below it; the emulator's `tunnel down (surprise)`, `awaiting_ack=1` as on 10 x86 |
+| 8.1 x64, surprise unplug during `seq.ps1` | Stor98 (put on the drive by the mark service of `p43-59`) | the read in flight failed at once ("The device is not ready"), the script ended, nothing hung |
+| 10 x64, surprise unplug during `seq.ps1` | `stornvme` 10.0.19041 | the read failed at once ("The device is not ready"); 157 at once, no 129; the controller "Disconnected" (removed) |
+| 10 x64, surprise unplug during `seq.ps1` | Stor98 (the signed `5ad53f7d` binary, `DmaRemappingCompatible` deleted, as `p43-59s` installs it) | started on both controllers; the read failed at once ("A device which does not exist was specified"); nothing hung |
+
+43.23's 8.1 x64 leg with no connection manager also blocked under
+`stornvme`, but differently: Windows never learned of the removal (8.1
+ignored the bridge's SHPC), the resets repeated every 35 s, and the copy
+completed once the tunnel came back. With the connection manager Windows
+learns of it, begins the surprise removal, and 8.1's `stornvme`
+(6.3.9600.16421, the 8.1 image's own; whether a later 8.1 update changes
+it is unread) never completes the write it holds. The owner's decision
+(2026-10-23): on 8.1 a tunnelled drive gets Stor98 by default (record 21
+section 7.5, branch `p43-59k`).
+
+The two investigations before these readings, for the record: the
+07:44 sequential run that overran was the test script (PowerShell 4
+copied every `[byte[]]` argument of a function element by element, 18 s
+for 4 MiB under the emulator), fixed by inlining; the some 500 "Online
+0 B" disks DiskPart listed on 8.1 are 8.1's `stornvme` listing all 256
+namespace ids QEMU's NVMe controller reports, on the internal controller
+as on the tunnelled one (10 lists only namespace 1).
+
 ## 43.59s Stor98 x64 does not start on Windows 10 x64 with DmaRemappingCompatible (2026-10-23)
 
 Found by 43.59's x64 legs (branch `p43-59`, its run notes there): with the

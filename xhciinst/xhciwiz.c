@@ -428,10 +428,11 @@ static unsigned __stdcall job_main(void *arg)
             /* Ticked with the Thunderbolt box (owner, 2026-10-19,
              * replacing "never unasked"); /nostor98 unticks it. */
             inst_eng_s98_state(&s98Have, s98Ver, sizeof(s98Ver));
-            /* On 8 and 8.1 never ticked unasked (record 26 section 5.3.1
-             * case 3b). */
+            /* On 8 and 10 never ticked unasked (record 26 section 5.3.1
+             * case 3b); on 8.1 ticked, the tunnelled drives' default
+             * (task 43.59, owner 2026-10-23). */
             s98Choice = s98Have && tbChoice && !opts->NoStor98 &&
-                        (!usbNotHere || opts->Stor98);
+                        (!usbNotHere || inst_eng_os_is81() || opts->Stor98);
             inst_eng_s98_choose(s98Choice);
             {
                 int sh;
