@@ -420,7 +420,13 @@ Everything is under [docs/](docs/), indexed by [docs/README.md](docs/README.md).
 
 ## AI usage
 
-This project was developed with substantial help from AI coding agents, Claude Code (Claude Fable 5, Claude Opus 5 and Claude Opus 5.5) and OpenAI Codex (GPT 5.6 Sol). The agents wrote and revised code, tests and documentation under the guidance in [AGENTS.md](AGENTS.md).
+This project was developed with substantial help from AI coding agents:
+
+- Claude Fable 5.1 for planning
+- Claude Opus 5.5 for coding
+- Codex GPT 6 Astra as an adversarial reviewer
+
+The agents wrote and revised code, tests and documentation under the guidance in [AGENTS.md](AGENTS.md).
 
 Kheng Meng directed the work, ran the hardware validation on real machines and reviewed what went in.
 
