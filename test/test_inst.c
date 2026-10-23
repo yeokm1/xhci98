@@ -1121,19 +1121,33 @@ static void test_actions(void)
              "98 SE and ME keep the root hub before the controller");
 
     /* The driver-store check (run-43-24, Finding 3). */
-    CHECK_EQ(inst_store_verdict(1, 1, 1), INST_STORE_EQUAL, "store: equal");
-    CHECK_EQ(inst_store_verdict(0, 1, 1), INST_STORE_DIFFERS, "store: differs");
-    CHECK_EQ(inst_store_verdict(-1, 1, 0), INST_STORE_SKIP,
-             "store: a file the stored package lacks (stor98.mpd on NT)");
-    CHECK_EQ(inst_store_verdict(-1, 1, -1), INST_STORE_UNREAD,
+    CHECK_EQ(inst_store_verdict("stor98.sys", 1, 1, 1), INST_STORE_EQUAL,
+             "store: equal");
+    CHECK_EQ(inst_store_verdict("stor98.sys", 0, 1, 1), INST_STORE_DIFFERS,
+             "store: differs");
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, 1, 0), INST_STORE_SKIP,
+             "store: stor98.mpd the stored package lacks (NT)");
+    CHECK_EQ(inst_store_verdict("S98VSD.VXD", -1, 1, 0), INST_STORE_SKIP,
+             "store: a VxD the stored package lacks (NT)");
+    CHECK_EQ(inst_store_verdict("stor98.sys", -1, 1, 0), INST_STORE_UNREAD,
+             "store: an NT file the stored package lacks blocks");
+    CHECK_EQ(inst_store_verdict("xhci98.cat", -1, 1, 0), INST_STORE_UNREAD,
+             "store: a catalog the stored package lacks blocks");
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, 1, -1), INST_STORE_UNREAD,
              "store: a stored file not readable");
-    CHECK_EQ(inst_store_verdict(-1, 0, 1), INST_STORE_UNREAD,
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, 0, 1), INST_STORE_UNREAD,
              "store: the package's own file missing");
-    CHECK_EQ(inst_store_verdict(-1, -1, 0), INST_STORE_UNREAD,
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, -1, 0), INST_STORE_UNREAD,
              "store: the package's file not readable");
+    CHECK_EQ(inst_store_verdict(NULL, -1, 1, 0), INST_STORE_UNREAD,
+             "store: no name");
     /* A tunnel port at the uninstall (run-43-24, Finding 9). */
-    CHECK_EQ(inst_port_step(1), INST_PORT_GIVE_BACK, "port present: given back");
-    CHECK_EQ(inst_port_step(0), INST_PORT_REMOVE, "port absent: its entry removed");
+    CHECK_EQ(inst_port_step(1, 0), INST_PORT_GIVE_BACK, "port present: given back");
+    CHECK_EQ(inst_port_step(1, 1), INST_PORT_GIVE_BACK,
+             "port present, other filters: given back");
+    CHECK_EQ(inst_port_step(0, 0), INST_PORT_REMOVE, "port absent: its entry removed");
+    CHECK_EQ(inst_port_step(0, 1), INST_PORT_WAIT,
+             "port absent with another filter: the run waits for it");
 }
 
 static void test_helpers(void)

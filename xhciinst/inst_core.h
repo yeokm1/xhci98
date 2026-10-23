@@ -936,21 +936,28 @@ int inst_remove_rank_nt(const char *instanceId, const char *service);
 /* The driver-store check's reading of one source file (record 23 section
  * 5.7): same is same_file3's answer (1 equal, 0 different, -1 a side not
  * read), pkgState and storeState file_state's (1 there, 0 absent, -1 not
- * readable). A file the package holds and the stored package lacks is
- * skipped: the store holds only what this system's install copies
- * (run-43-24, Finding 3). */
+ * readable), name the file's. A file the package holds and the stored
+ * package lacks is skipped only when no NT install can stage it - a 98 SE
+ * and ME port driver or VxD, .mpd or .vxd (stor98.inf's stor98.mpd,
+ * run-43-24, Finding 3); any other file the store lacks is unread, and
+ * blocks as one. */
 #define INST_STORE_EQUAL   0
 #define INST_STORE_DIFFERS 1
 #define INST_STORE_UNREAD  2
 #define INST_STORE_SKIP    3
-int inst_store_verdict(int same, int pkgState, int storeState);
+int inst_store_verdict(const char *name, int same, int pkgState,
+                       int storeState);
 
 /* The uninstall's step for a tunnel port it filtered (record 23 section
  * 9.2 step 1): present, it is given back to Windows' own driver; not
- * present, its entry is removed (revision 42, run-43-24 Finding 9). */
+ * present with no other filter left once xhcicm is off, its entry is
+ * removed (revision 42, run-43-24 Finding 9); not present with another
+ * filter left, the run stops as before, since removing the entry would
+ * drop that filter with it. */
 #define INST_PORT_GIVE_BACK 1
 #define INST_PORT_REMOVE    2
-int inst_port_step(int present);
+#define INST_PORT_WAIT      3
+int inst_port_step(int present, int otherFilters);
 
 /* ---- the Thunderbolt and USB4 device viewer and eject (record 24) ------------- */
 

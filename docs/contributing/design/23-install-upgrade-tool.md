@@ -1267,12 +1267,13 @@ too, without changing anything:
 2. `SetupGetInfDriverStoreLocationA` (Vista onward) on it gives the stored
    INF's full path, and the directory part is the stored package;
 3. each file of the INF's `[SourceDisksFiles]` is compared byte for byte
-   with the package's. A file the package holds and the stored package
-   does not is not compared (revision 42): the store holds only what this
-   system's install copies, and the x86 package's `stor98.inf` names
-   `stor98.mpd` for 98 SE and ME, which no NT install stages, so its
-   absence read as "cannot be read" and left Stor98's devices on 8 x86 and
-   10 x86 (`runs/run-43-24.md`, Finding 3).
+   with the package's. A `.mpd` or `.vxd` file the package holds and the
+   stored package does not is not compared (revision 42): the store holds
+   only what this system's install copies, and the x86 package's
+   `stor98.inf` names `stor98.mpd` for 98 SE and ME, which no NT install
+   stages, so its absence read as "cannot be read" and left Stor98's
+   devices on 8 x86 and 10 x86 (`runs/run-43-24.md`, Finding 3). Any other
+   file the stored package lacks still counts as unread.
 
 All equal: nothing to do, the store holds this package. Any difference is
 the trap. "No trap" is a verified answer only: a store that cannot be
@@ -2595,13 +2596,15 @@ after it, reports what was done, and tells the user to restart and run
    (`runs/run-43-24.md`, Finding 9: on 10 x64 two tunnel bridges of two
    machines on one disk, each absent on the other, stopped seven runs).
    Since revision 42 (the owner, 2026-10-24) its filter name is removed
-   and then its devnode, not present, with `DIF_REMOVE` as in step 2 and
-   a warning ("the port is not connected, so its driver cannot be given
+   and, when no other filter is left in its `UpperFilters`, its devnode,
+   not present, with `DIF_REMOVE` as in step 2 and a warning ("the port is not connected, so its driver cannot be given
    back now. Its entry is removed instead: Windows sets the port up again
    with its own driver when the dock is next connected."); the run goes
    on. At its next connection Windows makes a new devnode and, this
    package's INFs being gone from the store by step 4, installs its own
-   bridge driver.
+   bridge driver. A port not present with another vendor's filter left
+   keeps its entry and the run stops as before (removing it would drop
+   that filter too, which nothing would put back).
 2. **The devnodes**, children before parents (UAS devices, composite and
    hub entries, root hubs, NHIs, controllers last; on NT since revision
    42 the root hubs after the controllers, `inst_remove_rank_nt`: on 8.1

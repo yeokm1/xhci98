@@ -6115,14 +6115,14 @@ static void trap_scan(void)
                         inst_inf_source_path(infText[k], i, rel, sizeof(rel));
                         join(b, sizeof(b), store, rel);
                         s = same_file3(a, b);
-                        if (inst_store_verdict(s, s < 0 ? file_state(a) : 1,
+                        if (inst_store_verdict(rel, s,
+                                               s < 0 ? file_state(a) : 1,
                                                s < 0 ? file_state(b) : 1) ==
                             INST_STORE_SKIP) {
                             /* The store holds only what this system's
                              * install copies: the x86 package's stor98.inf
                              * names stor98.mpd for 98 SE and ME, which no
-                             * NT install stages (run-43-24, Finding 3). A
-                             * file it lacks is no other build of it. */
+                             * NT install stages (run-43-24, Finding 3). */
                             logonly("%s is not in the stored package (%s): "
                                     "not compared\n", rel, store);
                             continue;
@@ -9879,7 +9879,7 @@ static int unfilter_nt(HDEVINFO set, const DEVREC *d)
     }
     flagChanged = 1;
     out(removed ? "done.\n" : "not in its filters.\n");
-    if (inst_port_step(d->Present) == INST_PORT_REMOVE) {
+    if (inst_port_step(d->Present, n > 0) == INST_PORT_REMOVE) {
         /* A port that is gone for good (a dock sold, a USB4 port's
          * controller replaced) would block the uninstall forever (run-43-24,
          * Finding 9; the owner, 2026-10-24): its entry is removed instead,
