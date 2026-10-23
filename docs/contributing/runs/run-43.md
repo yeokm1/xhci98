@@ -5615,3 +5615,21 @@ it is no worse, and ticked it. The difference between `3.1.0.0` and the
 - The 98 SE IOS fault on real hardware, under NUSB 3.3 and a real stick.
 - `qemu-system-x86_64` (stock and the `qemu-cancel` build) exiting at a
   `device_del` of a `usb-storage` stick, for the emulator's keepers.
+
+## 43.57 the red tray icon's legs on 7 x86 and 98 SE (2026-10-23)
+
+Recorded at the batch 10 merge from the roadmap line, which carried these readings alone (`roadmap-usb4.md`, 43.57); the branch's own words follow.
+
+Read 2026-10-23 (runtime, QEMU, the branch's XHCITR.EXE on 43.28's installed guests, a QEMU with `usb-storage` declaring bcdUSB 0x0210 at High Speed): on 7 x86, a stick behind QEMU's Full Speed hub turns the icon red, tooltip "xHCI98 USB Tree: <device> (F:) is slowed by a USB 1.1 hub"; a SuperSpeed stick at a USB 2.0-only port with it ranks first, "... (G:) runs below USB 3 speed and 1 more"; the menu's first item opens the tree on that port; the balloon's click still opens 43.27's list; both put right, the usual icon and tooltip. On 98 SE the same, the tooltip "USB device 46F4:0001 runs below USB 3 speed and 1 more" (no prefix, within 63) and the pop-up of 43.55 at the tray's start; but after a plug that raises 98 SE's Add New Hardware wizard (that guest has no storage driver) the icon's tooltip is not shown and that plug's pop-up is not seen, with `3.2.0.0`'s own XHCITR alike, so not this task's. Open for T.14: ME, 2000, XP, 7 x64, the waiting and failed-controller conditions, a sleep, an Explorer restart, 16 colours
+
+## 43.67 more than four endpoints, read on 98 SE (2026-10-23)
+
+Recorded at the batch 10 merge from the roadmap line, which carried these readings alone (`roadmap-usb4.md`, 43.67); the branch's own words follow.
+
+Read in QEMU on 98 SE with the gated `qemu` build and xpad98's trace build (`usb-wdm-free` `wdm-sweep` `5758369`, its `xpademu.py` over usb-redir): at `062e02d7` the full select failed `80000100` with one ring-pool refusal and nobody else holding or wanting a ring (so only the cap could refuse); with the fix the x360 profile's full select configured DCIs 2-7 and 9 at once, no fallback, and input flowed, and the receiver profile's 8 interfaces and 16 endpoints configured (DCIs 2-17) and started.
+
+## 43.72 two tray defects: 98 SE's tooltip and the balloon a click is on (2026-10-23)
+
+Recorded at the batch 10 merge from the roadmap line, which carried these readings alone (`roadmap-usb4.md`, 43.72); the branch's own words follow.
+
+Read 2026-10-23 in QEMU with a build tracing every `Shell_NotifyIcon` call and tray message to the debug port (record 25 sections 7.1 and 16 item 11): (A) `shell32.dll` 4.72 shows an icon's tooltip once per entry and, after a pointer rests on the icon until the tooltip times out and leaves without a move beside it, never again (the clock's still shows); removing and adding the icon brings it back, a `NIF_TIP` cleared and set does not; the pop-up was not missing: 98 SE announces a device that needs a driver only when its wizard ends, and the pop-up shows then. Fixed on branch `p43-72` (from `integ8` at `afdaca10`, with `p43-57` at `47dbf436` merged): on 98 SE the poll adds the icon again after a hover that outlasted the tooltip (`tr_hover_poll`); the balloon a click is on is the kind the last `NIN_BALLOONSHOW` saw (`tr_bkind_step`, `tr_bkind_fast`); host vectors in `test_tr.c`; record 25 revision 20. Reviewed in five rounds (a show after balloons of two kinds, an older balloon's end, the re-send's removal and more waiting than kept all leave the show in doubt, a click on it then opening nothing). Legs read 2026-10-23 (record 25 T.15, by screenshot): 98 SE, the tooltip again after each long hover (never again with `3.2.0.0`'s XHCITR) and the pop-up when a stick's wizard finished; 2000, the balloon's text and clicks opening nothing, the menu leading on; XP, the notice's balloon click opening the list and an eject's opening nothing. Built with every gate, `scripts\build-driver.cmd all` and `all -amd64`.
