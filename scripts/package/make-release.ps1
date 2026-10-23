@@ -432,6 +432,16 @@ test-package.ps1's stand-ins. Refused with the repository's own releases\.
 With either stand-in the cut does not hold the set's SHA256.TXT to the hash
 the installer carries (a warning says so).
 
+.PARAMETER SelfTestCatalogThumbprint
+For test-package.ps1 alone: the thumbprint the x64 catalogs of an
+-UploadSetOnly run are judged against, in place of the project test
+certificate's, so its stand-in trees can carry catalogs signed by a
+throwaway certificate made in memory. Refused unless the run is
+-UploadSetOnly, XHCI98_PACKAGER_SELFTEST is 1 in its environment, and
+-ReleasesDir is a directory under the system temporary directory that is
+not the repository's releases\; never the project certificate's own. A real
+cut has no use for it and cannot take it.
+
 .PARAMETER CheckOnly
 Run the cut's text, readme and staleness checks and nothing else (roadmap-usb4
 task 43.9; owner, 2026-10-20, after the 3.1.0.0 cut stopped twice on text
@@ -512,7 +522,8 @@ param(
     [string]$WdmFreeRoot = "",
     [string]$WdmFreePin = "",
     [string]$NonFreePinFile = "",
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [string]$SelfTestCatalogThumbprint = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -561,6 +572,26 @@ was asked for, and nothing else.
 #
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
+# The upload set's catalog check judges against the project certificate; only
+# the packager's self-test, on a stand-in tree under the temporary directory,
+# may name another (its throwaway one).
+$catThumbForUpload = $script:TestSignThumbprint
+if ($SelfTestCatalogThumbprint -ne "") {
+    $stRepoReleases = [System.IO.Path]::GetFullPath((Join-Path $repo "releases")).TrimEnd('\')
+    $stRd = [System.IO.Path]::GetFullPath($ReleasesDir).TrimEnd('\')
+    $stTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
+    if (-not $UploadSetOnly -or
+        [Environment]::GetEnvironmentVariable("XHCI98_PACKAGER_SELFTEST", "Process") -ne "1" -or
+        $stRd -eq $stRepoReleases -or
+        $stRd.StartsWith($stRepoReleases + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $stRd.StartsWith($stTemp + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $SelfTestCatalogThumbprint -notmatch '^[0-9A-Fa-f]{40}$' -or
+        $SelfTestCatalogThumbprint -eq $script:TestSignThumbprint) {
+        throw "-SelfTestCatalogThumbprint is test-package.ps1's alone: only with -UploadSetOnly, XHCI98_PACKAGER_SELFTEST=1 and a -ReleasesDir under the temporary directory that is not the repository's releases\, and never the project certificate's thumbprint. A real cut cannot take it."
+    }
+    $catThumbForUpload = $SelfTestCatalogThumbprint.ToUpperInvariant()
+    Write-Warn "-SelfTestCatalogThumbprint: the upload set's x64 catalogs are judged against a self-test certificate; this run is the packager's self-test, not a cut"
+}
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 # The five tools whose README.TXT the cut reads, from package-common.ps1's
 # table, which the gated build's readme check reads too (task 43.61).
@@ -2550,7 +2581,7 @@ $gateOut
         # directory published from 3.2.0.0 and judged against the pinned
         # project certificate, since -UploadSetOnly has no key to compare.
         if ($LegArches[$f] -eq "amd64" -and [version]$Version -ge [version]"3.2.0.0") {
-            $catWhy = Test-CatalogOfPackage -Dir $uploadFlavorDir -Thumbprint $script:TestSignThumbprint
+            $catWhy = Test-CatalogOfPackage -Dir $uploadFlavorDir -Thumbprint $catThumbForUpload
             if ($catWhy -ne "") {
                 throw "the assembled upload set's $f\ directory does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Do not upload it."
             }

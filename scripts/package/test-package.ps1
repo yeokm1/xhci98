@@ -100,20 +100,74 @@ function Invoke-Packager {
 function Invoke-Releaser {
     # make-release.ps1 -UploadSetOnly, driven the same way and relaxed for the
     # same reason as Invoke-Packager above.
-    param([string[]]$Arguments)
+    param([string[]]$Arguments, [switch]$SelfTest)
     $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $releaser) + $Arguments
     $saved = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+    # -SelfTest: the child sees XHCI98_PACKAGER_SELFTEST=1, for this call alone.
+    if ($SelfTest) { $env:XHCI98_PACKAGER_SELFTEST = "1" }
     try {
         $out = & powershell.exe @psArgs 2>&1 | Out-String
     } finally {
         $ErrorActionPreference = $saved
+        if ($SelfTest) { Remove-Item Env:\XHCI98_PACKAGER_SELFTEST -ErrorAction SilentlyContinue }
     }
     # Whitespace collapsed: Windows PowerShell wraps a native command's stderr
     # ErrorRecord at the console width, so on a long repository path a refusal
     # such as "volume or repository root" arrived split across lines and its
     # phrase match failed (F6 legs, 2026-10-04: a 41-character worktree path).
     return @{ Output = ($out -replace '\s+', ' '); ExitCode = $LASTEXITCODE }
+}
+
+# --- x64 catalogs for the stand-in trees, signed by a throwaway certificate --
+#
+# From 3.2.0.0 an -UploadSetOnly run requires a catalog per INF in each x64
+# directory, signed by the project test certificate (design record 19 section
+# 3a). The stand-in trees below are made at the tracked INF's version, so they
+# meet that rule; they carry catalogs this self-test makes with the
+# packager's own MakeCat step (New-PackageCatalogFile) and signs with a
+# certificate made in memory for this run: an ephemeral CNG key, no
+# certificate store and no key container touched, nothing left when the run
+# ends, and never the owner's .pfx. make-release.ps1 is told its thumbprint
+# through -SelfTestCatalogThumbprint, which it takes only from this self-test
+# (XHCI98_PACKAGER_SELFTEST=1, -UploadSetOnly, a -ReleasesDir under the
+# temporary directory).
+$script:selfTestCert = $null
+function Get-SelfTestCatalogCert {
+    if ($null -eq $script:selfTestCert) {
+        Add-Type -AssemblyName System.Security
+        $rsa = New-Object System.Security.Cryptography.RSACng 2048
+        $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest(
+            "CN=xhci98 packager self-test throwaway", $rsa,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $script:selfTestCert = $req.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+    }
+    return $script:selfTestCert
+}
+
+function Add-SelfTestCatalogs {
+    # Every catalog of $script:PackageCatalogs whose INF is at $Dir's root,
+    # made over the files beside it and signed SHA-1 by the throwaway
+    # certificate; an earlier one is replaced.
+    param([string]$Dir)
+    $makeCat = Join-Path $repo "tools\WinDDK71\bin\x86\MakeCat.exe"
+    if (-not (Test-Path -LiteralPath $makeCat)) { throw "the stand-in trees' x64 catalogs need WDK 7.1's MakeCat at '$makeCat'." }
+    $cert = Get-SelfTestCatalogCert
+    foreach ($catName in $script:PackageCatalogs.Keys) {
+        $spec = $script:PackageCatalogs[$catName]
+        if (-not (Test-Path -LiteralPath (Join-Path $Dir $spec.Inf))) { continue }
+        $work = Join-Path $script:work ("selftest-cat-" + [System.IO.Path]::GetRandomFileName())
+        $cat = New-PackageCatalogFile -StageDir $Dir -CatName $catName -Files $spec.Files -WorkDir $work -MakeCat $makeCat
+        $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms
+        $cms.Decode([System.IO.File]::ReadAllBytes($cat))
+        $signer = New-Object System.Security.Cryptography.Pkcs.CmsSigner($cert)
+        $signer.DigestAlgorithm = New-Object System.Security.Cryptography.Oid($script:Sha1Oid)
+        $signer.IncludeOption = [System.Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
+        $cms.ComputeSignature($signer, $true)
+        [System.IO.File]::WriteAllBytes((Join-Path $Dir $catName), $cms.Encode())
+        Remove-Item -LiteralPath $work -Recurse -Force
+    }
 }
 
 $tempBase = [System.IO.Path]::GetFullPath($env:TEMP)
@@ -1840,7 +1894,7 @@ try {
         # anything: c4's wrong SHA256.TXT stops it there.
         $cutRel = Join-Path $script:work "releases-cut"
         Ensure-Directory $cutRel
-        $r = Invoke-Releaser @("-Arch", "x86", "-NoStor98", "-ReleasesDir", $cutRel, "-PackageRoot", $noOut, "-UploadDir", $upRoot,
+        $r = Invoke-Releaser @("-Arch", "x86", "-NoStor98", "-NoWdmFree", "-ReleasesDir", $cutRel, "-PackageRoot", $noOut, "-UploadDir", $upRoot,
                                "-DriverPackRoot", $packRepo, "-DriverPackAllowlist", $allowPath)
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("SHA256.TXT")) ("a cut started with a pack whose SHA256.TXT is wrong:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath $noOut)) "the cut refused for its pack built something."
@@ -1852,7 +1906,7 @@ try {
         $badRel = Join-Path $script:work "releases-seven"
         Ensure-Directory (Join-Path $badRel "0.0.0.1\release")
         Set-Content -LiteralPath (Join-Path $badRel "0.0.0.1\release\USBSTOR.SYS") -Value "a copy committed by hand" -Encoding ASCII
-        $r = Invoke-Releaser @("-Arch", "x86", "-NoStor98", "-NoDriverPack", "-ReleasesDir", $badRel, "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        $r = Invoke-Releaser @("-Arch", "x86", "-NoStor98", "-NoDriverPack", "-NoWdmFree", "-ReleasesDir", $badRel, "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("in the download only")) ("a cut started with USBSTOR.SYS under releases\:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath $noOut)) "the refused cut built something."
 
@@ -2375,8 +2429,23 @@ try {
 
         $up4 = Join-Path $script:work "upload-4dir"
         Ensure-Directory $up4
-        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
-                               "-PackageRoot", $noOut, "-UploadDir", $up4)
+        $st4 = @("-SelfTestCatalogThumbprint", (Get-SelfTestCatalogCert).Thumbprint)
+        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
+        # The thumbprint is the self-test's alone: refused without the marker,
+        # and with the repository's own releases\.
+        $r = Invoke-Releaser (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                                "-PackageRoot", $noOut, "-UploadDir", $up4) + $st4)
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("-SelfTestCatalogThumbprint is test-package.ps1's alone")) `
+            ("-SelfTestCatalogThumbprint was taken without XHCI98_PACKAGER_SELFTEST:`n" + $r.Output)
+        $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-UploadDir", $up4) + $st4)
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("-SelfTestCatalogThumbprint is test-package.ps1's alone")) `
+            ("-SelfTestCatalogThumbprint was taken with the repository's own releases\:`n" + $r.Output)
+        $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                                          "-PackageRoot", $noOut, "-UploadDir", $up4, "-SelfTestCatalogThumbprint", $script:TestSignThumbprint))
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("-SelfTestCatalogThumbprint is test-package.ps1's alone")) `
+            ("-SelfTestCatalogThumbprint was taken naming the project certificate:`n" + $r.Output)
+        $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                                          "-PackageRoot", $noOut, "-UploadDir", $up4) + $st4)
         Assert-True ($r.ExitCode -eq 0) `
             ("-UploadSetOnly refused a published tree holding both architectures - the likeliest cause is the INF gate being run on the amd64 file under its default x86 profile:`n" + $r.Output)
         $uploadDir4 = Join-Path $up4 ("upload-" + $relVersion)
@@ -2439,10 +2508,11 @@ try {
             }
         }
         & $putCm4 $false
+        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
         if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
-        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
-                               "-PackageRoot", $noOut, "-UploadDir", $up4)
+        $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                                          "-PackageRoot", $noOut, "-UploadDir", $up4) + $st4)
         Assert-True ($r.ExitCode -eq 0) `
             ("-UploadSetOnly refused a four-directory tree with the filter INF in nt\ for x86 and at the root for x64:`n" + $r.Output)
         Assert-True ($r.Output -match "release-x64\\ carries the connection manager's xhcicmf\.inf" -and
@@ -2461,10 +2531,11 @@ try {
         }
         # The x86 layout in an x64 directory of this version is refused.
         & $putCm4 $true
+        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
         if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
-        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
-                               "-PackageRoot", $noOut, "-UploadDir", $up4)
+        $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                                          "-PackageRoot", $noOut, "-UploadDir", $up4) + $st4)
         Assert-True ($r.ExitCode -ne 0) "an x64 directory of $relVersion with its filter INF in nt\ was assembled into the asset."
         Assert-True ($r.Output -match "CM-NO9XBRIDGE") ("expected the refusal to name CM-NO9XBRIDGE. Output:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")))) `
@@ -3424,6 +3495,10 @@ try {
         foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
             Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $newPubRoot ("tools\silent\" + $pair[1])) -Force
         }
+        # The driver pack's and the downloads' records, required from 3.2.0.0
+        # (tasks 43.3 and 43.48), as the four-directory tree above has them.
+        Write-AsciiFile -Path (Join-Path $newPubRoot "drvpack.txt") -Lines (ConvertTo-DriverPackRecord -Version $newVersion -Pack $null)
+        Write-AsciiFile -Path (Join-Path $newPubRoot "downloads.txt") -Lines (ConvertTo-DownloadsRecord -Version $newVersion -Kinds @("base") -Free $null -NonFree $null)
 
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $newVersion,
                                "-ReleasesDir", $newRelRoot, "-UploadDir", $newUpRoot)
@@ -5069,7 +5144,8 @@ try {
         "make-package.ps1 no longer makes the catalogs after the last file is staged."
     foreach ($anchor in @(
         @{ Find = 'Test-CatalogOfPackage -Dir $destDir -Thumbprint $testSignCert.Thumbprint'; Why = "the published x64 catalogs are no longer checked" },
-        @{ Find = 'Test-CatalogOfPackage -Dir $uploadFlavorDir -Thumbprint $script:TestSignThumbprint'; Why = "the upload set's x64 catalogs are no longer checked" }
+        @{ Find = 'Test-CatalogOfPackage -Dir $uploadFlavorDir -Thumbprint $catThumbForUpload'; Why = "the upload set's x64 catalogs are no longer checked" },
+        @{ Find = '$catThumbForUpload = $script:TestSignThumbprint'; Why = "the upload set's catalogs are no longer judged against the project certificate by default" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
