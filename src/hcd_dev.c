@@ -700,6 +700,54 @@ static VOID hcdSettlePipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG dci)
     }
 }
 
+/*
+ * Task 43.69 (design record 13 section 14): on a Stopped endpoint, the held
+ * short-deferred TDs the controller's saved dequeue (`deqLow`, `deqHigh`,
+ * read by the caller) shows it has passed settle as the drain's settle would,
+ * oldest first, so the queue's head is then the TD the controller stopped in
+ * or one it has not entered. A reading XhciXferStopPlace calls UNREAD settles
+ * nothing. Returns the verdict. Thread, the pipe paused, controller lock held.
+ */
+ULONG HcdDevStopSettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG deqLow,
+                       ULONG deqHigh)
+{
+    XHCI_XFER_STOP_PLACE place;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG settled;
+
+    if (XhciXferStopPlace(pipe->Queue, pipe->Ring, deqLow, deqHigh,
+                          &place) != XHCI_XFER_OK) {
+        return XHCI_XFER_STOP_UNREAD;
+    }
+    if (place.Verdict == XHCI_XFER_STOP_UNREAD) {
+        XHCI_DBG_VALUE("hcd: stopped dequeue not read, slot << 8 | dci",
+                       (pipe->Device->SlotId << 8) | pipe->Dci);
+        return place.Verdict;
+    }
+    for (settled = 0; settled < place.Passed; settled++) {
+        if (XhciXferDrainSettled(pipe->Queue, pipe->Ring, &result) !=
+            XHCI_XFER_OK) {
+            break;
+        }
+        if (result.Action != XHCI_XFER_ACTION_COMPLETE) {
+            /* The ring refused the retire: the TD stays queued, now the
+             * head and not held, for the drain that refusal asks for. */
+            if (result.NeedsRecovery || result.RefusedRetire) {
+                pipe->DrainPending = 1;
+                hc->CancelWork = 1;
+                HcdThreadWake(hc);
+            }
+            break;
+        }
+        (VOID)hcdPipeResult(hc, pipe, &result);
+    }
+    if (settled != 0) {
+        XHCI_DBG_VALUE("hcd: stopped past held TDs, settled << 16 | dci",
+                       (settled << 16) | pipe->Dci);
+    }
+    return place.Verdict;
+}
+
 /* The drain saw the event ring empty: a short packet's promised tail that
  * never came settles now (XhciXferDrainSettled's gate), on every open pipe
  * and every open stream. IRQL: DISPATCH_LEVEL, controller lock held. */
