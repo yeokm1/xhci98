@@ -5295,7 +5295,7 @@ static void test_stop_place_held_head_next_cancelled(void)
              "the stopped TD cancelled: Set TR Dequeue past it, to TD 2");
     for (i = 0; i < 3; i++) {
         CHECK_EQ(fix.mem[3 + i].Control, before[i],
-                 "and the TD the controller stopped in is not rewritten");
+                 "and neither the placement nor the settle touched its TRBs");
     }
     CHECK_EQ(XhciXferQueueRemove(&fix.queue, &fix.transfers[1]), 1,
              "TD 1 off the queue");

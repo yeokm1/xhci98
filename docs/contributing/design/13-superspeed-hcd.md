@@ -11551,9 +11551,12 @@ stopped TD is the one that holds the controller's own saved dequeue.**
   `XhciRingResyncOwed` take it. Every queued TD wholly before it must be a
   held short-deferred TD: any other TD there would have had its own event
   before the completion. A reading that fails any of these is UNREAD, and
-  the cancel keeps the pre-43.69 head rule unchanged. QEMU is the
-  controller that fails it: it saves its fetch pointer, past every TD it
-  has fetched (above), so its cancels behave as they did. Otherwise the
+  the cancel keeps the pre-43.69 head rule unchanged. QEMU usually fails
+  it: it saves its fetch pointer, past every TD it has fetched (above), so
+  a reading that passes a fetched TD that is not held is UNREAD and the
+  cancel behaves as it did. When every TD before QEMU's pointer is held
+  (it sends one event for a mid-TD short), the reading passes and those
+  TDs, which QEMU has finished, are settled. Otherwise the
   position is IN_TD (a TRB of a queued TD: the stopped TD) or BETWEEN (in
   no queued TD: on the No Ops of a TD an earlier cancel removed, or at the
   enqueue position, which is the ring empty or the position just past the
@@ -11605,9 +11608,8 @@ stopped TD is the one that holds the controller's own saved dequeue.**
 
 Host vectors (`test_xfer.c`, `test_stop_place_*`): the head as the stopped
 TD; a held head with the controller inside the next TD, cancelled (the move
-past it, its TRBs not rewritten, and the head rule alone shown choosing No
-Ops for it) and not cancelled (left as the head, the TD behind it the No
-Ops); a stream's reading with its SCT bits; the stopped TD past the ring's
+past it, and the head rule alone shown choosing No Ops for it) and not
+cancelled (left as the head, the TD behind it the No Ops); a stream's reading with its SCT bits; the stopped TD past the ring's
 wrap, read on TRB 0 with the new lap's DCS and on the Link TRB, refused
 with the old lap's DCS, and moved past with the new lap's cycle; a held TD
 the controller stopped inside, which is not settled, with the TD behind it
@@ -11616,7 +11618,9 @@ every TD (an empty ring, just past two held TDs, on the No Ops of a removed
 TD), with each reading that is not acted on (a high dword, off the ring,
 past the enqueue, behind the dequeue, the wrong DCS, a TD before it that
 is not held, QEMU's fetch pointer); and several cancelled TDs around a
-survivor.
+survivor. They check the decisions, the placement and the settle; the
+rewrite and the commands that act on them are `hcdCfgCancelPipe`'s, which
+no host suite runs.
 
 **What is owed.** Nothing on hardware for the placement. No leg was run
 for this task: QEMU follows a Link without reading its Chain flag
