@@ -4068,8 +4068,7 @@ Roadmap-usb4 task 43.28: XHCITR's "can run faster" notice (43.27, design
 record 25 section 7.6; the driver's BOS read at High and Full Speed,
 record 13 section 8.4.1) read in guests. Runtime, development host A,
 2026-10-22 23:00 to 2026-10-23 03:30, on branch `p43-28` (= `p43-27` at
-`71e6c270`). This sheet is merged into `run-43.md` by whoever merges the
-branch.
+`71e6c270`).
 
 **Verdict: ticked (2026-10-23), the legs moved to other checks excepted.**
 The first session (below, "Readings") read the notice's High Speed case

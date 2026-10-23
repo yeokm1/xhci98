@@ -647,8 +647,12 @@ the logged-on user, with no administrator rights.
   It reads what
   `xhci98.sys` answers; from `3.2.0.0` the driver asks a USB 3 device at
   High or Full Speed for its BOS descriptor to know it is one
-  (`XhciUsb2Bos` below). Read on no virtual machine or computer yet
-  (roadmap task 43.28).
+  (`XhciUsb2Bos` below). Read in virtual machines on 98 SE, ME, 2000,
+  XP and 7 (32- and 64-bit), roadmap task 43.28: the High Speed case,
+  and the USB 3 case with a QEMU built so its stick declares USB 3 at
+  High Speed. Not yet read on a computer, behind a High Speed hub, for a
+  faster device at 5 Gbit/s, or on 8 and 8.1. On 2000 a click on the
+  balloon opens no window (the menu's line does).
 
 ### Removing a Thunderbolt or USB4 device safely
 
@@ -2321,7 +2325,10 @@ works as before. An install also removes a `STOR98.VXD` that a test build
 of this release placed (that name stopped Stor98 from starting). Read so
 far on the 98 SE emulator and on the owner's 98 SE machine, where 2 MiB
 unbuffered writes ran about four times and reads about five times as
-fast as without it; its Windows ME legs are still owed.
+fast as without it, and on the ME emulator: the install, 1 and 2 MiB
+transfers verified with the drive plugged after the desktop, and two
+surprise removals mid-transfer that reported errors and hung nothing. Its
+remaining legs (roadmap-usb4 task 43.46) are still owed.
 
 When a tunnel drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:
