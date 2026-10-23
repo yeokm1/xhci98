@@ -2999,6 +2999,62 @@ static void test_bkind(void)
     tr_bkind_step(&b, TR_BE_OTHER);
     tr_bkind_step(&b, TR_BE_SHOW);
     CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: the reverse order too");
+    /* Round 2's case: one shown, two of different kinds sent behind it,
+     * its end, then a show: in doubt, and so are three waiting; the doubt
+     * clears as the shows take them away. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: an end between: still in doubt");
+    tr_bkind_step(&b, TR_BE_CLICK);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the last one waiting shown");
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: three waiting, mixed");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: two waiting, mixed");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: one waiting, the notice's");
+    /* A balloon the shell dropped unshown keeps only the next show in
+     * doubt. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);         /* dropped, never shown */
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: after a dropped one: in doubt");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: then sure again");
+    /* More waiting than kept: the oldest go. */
+    memset(&b, 0, sizeof(b));
+    {
+        int i;
+        tr_bkind_step(&b, TR_BE_OTHER);
+        for (i = 0; i < TR_BK_PENDING; i++) {
+            tr_bkind_step(&b, TR_BE_SENT);
+        }
+        CHECK_EQ(b.N, TR_BK_PENDING, "bkind: bounded");
+        tr_bkind_step(&b, TR_BE_SHOW);
+        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the oldest dropped from the doubt");
+    }
+    /* A show with none waiting: the last one sent. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: a show with none waiting");
     /* The same kind twice (the 43.66 re-send) is no doubt. */
     memset(&b, 0, sizeof(b));
     tr_bkind_step(&b, TR_BE_SENT);

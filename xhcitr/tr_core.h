@@ -867,21 +867,26 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports);
  * (reports, as tr_bsend_step's) the kind is the one the last
  * NIN_BALLOONSHOW saw sent, and none once a hide, a timeout, a click or a
  * removal ended it; where it does not, the kind of the last one sent (the
- * only reading there is; 2000 reports no click at all, task 43.68). A
- * show that follows two balloons of different kinds sent since the last
- * show or end cannot be told apart - it may be the first's, posted before
- * the second went - so it counts as another balloon's: a click on it opens
- * nothing (the menu still does) rather than the list for a notice that
- * is not the user's. Zeroed is nothing sent. */
+ * only reading there is; 2000 reports no click at all, task 43.68). The
+ * balloons sent and not yet shown are kept in order (the last
+ * TR_BK_PENDING): a show is the oldest's where the shell queues them and
+ * the newest's where it replaces them, so it is that kind when they are
+ * all of one kind, and counts as another balloon's when they are not - a
+ * click on it then opens nothing (the menu still leads there) rather
+ * than the list for a notice that is not the one clicked. Each show takes
+ * the oldest away; one the shell dropped unshown only keeps the next show
+ * in doubt. A hide, a timeout or a click ends the one shown and leaves
+ * those waiting. Zeroed is nothing sent. */
 #define TR_BK_NONE      0
 #define TR_BK_OTHER     1
 #define TR_BK_FAST      2   /* the "can run faster" notice's */
 
+#define TR_BK_PENDING   8
 typedef struct _TR_BKIND {
     int Sent;                   /* TR_BK_* of the last balloon sent        */
     int Shown;                  /* TR_BK_* the last NIN_BALLOONSHOW saw    */
-    int Pending;                /* sent since the last show or end         */
-    int Mixed;                  /* ... and of two kinds                    */
+    int Wait[TR_BK_PENDING];    /* sent, not shown yet, oldest first       */
+    int N;
 } TR_BKIND;
 
 /* ev: TR_BE_SENT (the notice's), TR_BE_OTHER (another balloon sent),

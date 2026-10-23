@@ -3002,36 +3002,49 @@ void tr_bkind_step(TR_BKIND *b, int ev)
     if (b == NULL) {
         return;
     }
+    if (b->N < 0 || b->N > TR_BK_PENDING) {
+        b->N = 0;
+    }
     switch (ev) {
     case TR_BE_SENT:
     case TR_BE_OTHER: {
         int kind = ev == TR_BE_SENT ? TR_BK_FAST : TR_BK_OTHER;
-        if (b->Pending && b->Sent != kind) {
-            b->Mixed = 1;
+        if (b->N == TR_BK_PENDING) {
+            /* Full: the oldest goes (only the doubt it carried is lost). */
+            memmove(&b->Wait[0], &b->Wait[1], (TR_BK_PENDING - 1) * sizeof(b->Wait[0]));
+            b->N--;
         }
+        b->Wait[b->N++] = kind;
         b->Sent = kind;
-        b->Pending = 1;
         break;
     }
     case TR_BE_SHOW:
-        /* Two kinds sent since the last show: this show may be either's. */
-        b->Shown = b->Mixed ? TR_BK_OTHER : b->Sent;
-        b->Pending = 0;
-        b->Mixed = 0;
+        if (b->N == 0) {
+            b->Shown = b->Sent;         /* none waiting: the last one sent */
+        } else {
+            int i;
+            int kind = b->Wait[0];
+            for (i = 1; i < b->N; i++) {
+                if (b->Wait[i] != kind) {
+                    kind = TR_BK_OTHER; /* the oldest's or the newest's */
+                    break;
+                }
+            }
+            b->Shown = kind;
+            memmove(&b->Wait[0], &b->Wait[1], (b->N - 1) * sizeof(b->Wait[0]));
+            b->N--;
+        }
         break;
     case TR_BE_HIDE:
     case TR_BE_TIMEOUT:
     case TR_BE_CLICK:
         b->Shown = TR_BK_NONE;
-        b->Pending = 0;
-        b->Mixed = 0;
         break;
     case TR_BE_DROP:
         /* Taken away, shown or queued: nothing of it is up or to come. */
         b->Sent = TR_BK_NONE;
         b->Shown = TR_BK_NONE;
-        b->Pending = 0;
-        b->Mixed = 0;
+        b->N = 0;
         break;
     default:
         break;
