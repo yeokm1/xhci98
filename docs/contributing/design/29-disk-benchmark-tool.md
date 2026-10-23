@@ -1598,7 +1598,7 @@ a choice:
   where it answers. With that the Stor98 page read Stor98's counters
   through ASPI on 98 SE. An ambiguity names its counts on the page.
   The counted instances must include the one holding the drive letter
-  (Codex round 9: a second disk of the same id on another adapter,
+  (reviewed and revised: a second disk of the same id on another adapter,
   excluded by the first tier, would otherwise have been given Stor98's
   counters); otherwise the page says the adapter could not be told apart.
 - **The owner's 98 SE bench (2026-10-22, c36c4752)** saved a report with
