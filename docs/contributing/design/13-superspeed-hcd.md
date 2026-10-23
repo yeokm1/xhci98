@@ -11642,9 +11642,13 @@ storage driver): a stick pulled mid-copy raises 98's own exception 0E in
 IOS called from `voltrack` with this build and, as a control, with the
 `3.1.0.0` release driver alike; the driver re-enumerated the stick and its
 transfer counters balanced. After the replug the control's `fc /b` found no
-differences. With this build the first run showed 98's Disk Write Error
-instead and then a black display, the second the exception and then no
-shell, so neither run's `fc /b` was read: a leg owed on 98 SE. Nothing on hardware: the defect needs a
+differences. The owner then asked for a comparison (`runs/run-43.md`,
+"43.69"): 80 counted pulls on fresh overlays, stock QEMU and `usb-wdm-free`'s
+`qemu-cancel` build. Every surviving run's `fc /b` was clean for every
+driver. The IOS fault came in 15 of 30 pulls with `3.1.0.0`, 26 of 40 with
+this branch, and 7 of 10 with the branch before 43.69. None of these
+differences is significant, and against its own base, side by side, this
+build faulted 5 times to 7. Nothing on hardware: the defect needs a
 controller that breaks 4.10.1.1.2 and a cancel in the window.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)

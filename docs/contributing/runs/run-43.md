@@ -3540,3 +3540,93 @@ controller does with such a transfer is still unread.
   a device pulled mid-enumeration (and mid-select) at a root port and
   behind a hub - whether metal ever leaves the transfer without an event.
 - The first-EP0-request-after-Address-Device case at run time.
+
+## 43.69 - 98 SE's IOS fault on a stick pulled mid-copy, and the comparison leg (2026-10-23)
+
+Roadmap-usb4 task 43.69 (design record 13 section 14, "The stopped TD,
+read from the controller"). The owner held the task until 98 SE's
+mid-copy pull was read as a comparison, because 98 SE's own IOS faults on
+that pull with the `3.1.0.0` release driver too. Development host A,
+2026-10-23. This section is the run and the finding.
+
+### Finding: 98 SE faults in IOS on a stick pulled mid-copy
+
+With a stick under NUSB 3.3's mass-storage driver (`USBSTOR.INF`) on 98 SE,
+pulling it about 6 s into a 4 MB `copy` to it raises a Windows protection
+screen: "An exception 0E has occurred at 0028:C003C413 in VxD IOS(01) +
+0000156B. This was called from ... in VxD voltrack(01) + 00000267" (the
+caller's address varies with voltrack's load address). The faulting address and
+both offsets were the same in every run, whichever driver ran. The exception is in 98's own
+storage stack (IOS, called from `voltrack`); `xhci98.sys` is not in the
+frame. One key brings the desktop back in most runs, and after a replug
+a fresh copy compares clean. It happens with the `3.1.0.0` release driver
+(15 of 30 pulls), so it is not this task's. Some runs leave the guest
+unusable after the pull (a black display, no shell, or a dialog nothing
+answers): 4 of 30 with `3.1.0.0`. The
+coordinator decides on a release note.
+
+### Method
+
+- Guest: 98 SE + NUSB 3.3 + xHCI98 `3.1.0.0` (43.13's `w98-nusb` chain,
+  copied), a fresh overlay per series. TCG, one vCPU, 256 MB, headless,
+  `qemu-xhci` `p2=4,p3=4`. Stick: a 128 MB FAT qcow2 (43.13's
+  `usbfat128`, an overlay per series), `usb-storage` at root port 2, its
+  devnode installed by the wizard once per overlay.
+- Per run (`pullrun.ps1`): plug; `copy D:\RAND4.BIN F:\R.BIN` (4 MB);
+  pull 6 s in; screendump 15 s later, classified by its mode and the
+  title box (640x480 = desktop, 720x400 with the "Windows" box = the
+  exception); keys to dismiss; replug; `copy` again and `fc /b | find
+  "no differences"`, whose result DEBUG writes to port E9 (`#OK`, `#BD`).
+  No marker within 150 s = the run did not survive, and the guest was
+  restarted cold.
+- QEMU 11.1.0 stock, and the `qemu-cancel` build from `usb-wdm-free`
+  (`E:\usb-wdm-free-vm\qemu-cancel`, SHA-256 `390b66f1...`: Stop
+  Endpoint saves the oldest fetched TD; a No Op TD sends no packet).
+  Either QEMU sometimes exits at a `device_del` of the stick (both
+  builds; 22 times in 88 attempts). The 8 times it exited during a run
+  made that attempt invalid, and the attempt was repeated; none is counted below.
+- Drivers: `3.1.0.0` release (the base's); branch `p43-69`'s `qemu`
+  flavour (`3e4805f6...`) and `release` flavour (`dfec6f72...`); and as
+  the like-for-like control the `release` flavour of the branch before
+  43.69 (`p43-64` at `ee1434f4`, `637cd109...`, the gated build's hash).
+
+### Readings (runtime, QEMU)
+
+| Series | QEMU | Driver | Valid pulls | 0E faults | Survived | `fc /b` clean of survivors |
+|---|---|---|---|---|---|---|
+| rp | qemu-cancel | `3.1.0.0` release | 10 | 6 | 9 | 9/9 |
+| mp | qemu-cancel | p43-69 qemu | 10 | 6 | 10 | 10/10 |
+| rs | stock | `3.1.0.0` release | 10 | 5 | 9 | 9/9 |
+| rs2 | stock | `3.1.0.0` release | 10 | 4 | 8 | 8/8 |
+| ms | stock | p43-69 qemu | 10 | 8 | 8 | 8/8 |
+| mr | stock | p43-69 release | 10 | 7 | 10 | 10/10 |
+| mb | stock | ee1434f4 release (before 43.69) | 10 | 7 | 9 | 9/9 |
+| mr2 | stock | p43-69 release | 10 | 5 | 10 | 10/10 |
+
+The two series of each pair ran at the same time (rp with mp, rs with ms,
+rs2 with mr, mb with mr2). Totals: `3.1.0.0` 15 faults in 30 pulls, 26
+survived; p43-69, both flavours, 26 in 40 pulls, 38 survived; the
+branch before 43.69, 7 in 10, 9 survived. Every survivor's `fc /b` was clean
+for every driver. No difference in the fault counts is significant (Fisher
+exact, two-sided: p43-69 against `3.1.0.0` p = 0.23 over all pulls, 0.53
+for the release flavour; p43-69 against its own base p = 0.65).
+
+### Verdict
+
+43.69 is no worse than the branch it is built on: in the like-for-like
+pair, the release flavour faulted 5 times and its base 7, and the
+branch's release flavour survived every pull in two series. Against
+`3.1.0.0` the branch faulted more often on stock QEMU (12 and 8 of 20,
+the release and qemu flavours, against 9 of 20). On the patched QEMU the
+two drivers faulted equally often (6 and 6). None of these differences is
+significant, and the fault itself is IOS's. Every surviving run's
+`fc /b` after the replug was clean.
+
+### Owed
+
+- The owner's reading of the criterion: "no worse than the release
+  driver" holds against the task's own base and on the patched QEMU, not
+  in the raw stock-QEMU count against `3.1.0.0`.
+- The 98 SE IOS fault on real hardware, under NUSB 3.3 and a real stick.
+- `qemu-system-x86_64` (stock and the `qemu-cancel` build) exiting at a
+  `device_del` of a `usb-storage` stick, for the emulator's keepers.
