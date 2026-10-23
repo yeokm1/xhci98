@@ -22,6 +22,7 @@
 #include "hcd.h"
 #include "xhci_hw.h"
 #include "xhci_xfer.h"
+#include "xhci_dbg.h"
 
 /* ----------------------------------------------------------------------- */
 /* Slots and commands                                                       */
