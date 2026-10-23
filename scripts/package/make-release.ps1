@@ -2844,6 +2844,7 @@ $driverPackAllow = $null
 # the downloads this run makes or rebuilds.
 $wdmFreeSet = $null
 $nonFreeSet = $null
+$otherCheck = $null
 $wdmFreeDir = ""
 $nonFreeDir = ""
 $downloadKinds = @("base")
@@ -3121,6 +3122,24 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
         $downloadKinds = @("base")
         if ($null -ne $wdmFreeSet) { $downloadKinds += "free"; $readmeFreeTag = $wdmFreeSet.Tag }
         if ($null -ne $nonFreeSet) { $downloadKinds += "nonfree"; $readmeNonFreeTag = $nonFreeSet.Tag }
+
+        # The other sets' checks (design record 26 section 6.7.11): the 98 SE
+        # and ME one-package-a-folder rule and each STAGE INF's
+        # self-containment, one hardware id a system over both sets, the
+        # installer's package table and the sets' metadata against the sets
+        # and scripts\package\brand-words.txt, and the table's history
+        # against the previous release's otherpkgs.txt; then, for the
+        # maintainer, the overlaps no line states.
+        $otherCheck = $null
+        try {
+            $otherCheck = Invoke-OtherSetChecks -Repo $repo -ReleasesDir $ReleasesDir -Version $Version -Free $wdmFreeSet -NonFree $nonFreeSet
+        } catch {
+            Stop-CutCheck ("the other USB drivers' sets: " + $_.Exception.Message)
+        }
+        if ($null -ne $otherCheck) {
+            Write-Ok ("the other USB drivers' sets: folders, self-containment, hardware ids and the package table hold{0}" -f $(if ($null -ne $otherCheck.Previous) { ", against $($otherCheck.Previous.V)'s $($script:OtherPkgsRecordName)" } else { " (no earlier $($script:OtherPkgsRecordName))" }))
+            foreach ($ov in $otherCheck.Overlaps) { Write-Host ("  overlap, for the maintainer: " + $ov) }
+        }
     }
 
     # **None of the seven is ever tracked.** A cut refuses while any of their
@@ -7789,6 +7808,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
                     -Lines (ConvertTo-DownloadsRecord -Version $Version -Kinds $downloadKinds -Free $wdmFreeSet -NonFree $nonFreeSet)
     if ($null -ne $wdmFreeSet) {
         Copy-Item -LiteralPath $wdmFreeSet.PinPath -Destination (Join-Path $destRoot "wdmfree-pin.txt")
+    }
+    # The other USB drivers' package table this release was cut with
+    # (design record 26 section 6.7.11): tracked, and what the next cut
+    # holds its own table to.
+    if ($null -ne $otherCheck) {
+        Write-AsciiFile -Path (Join-Path $destRoot $script:OtherPkgsRecordName) -Lines $otherCheck.Record
+        Write-Ok ("{0} records the package table and its relationship lines" -f $script:OtherPkgsRecordName)
     }
     Write-Ok ("{0} records the downloads {1}" -f $script:DownloadsRecordName, (@($downloadKinds | ForEach-Object { Get-DownloadZipName -Version $Version -Kind $_ }) -join ", "))
 

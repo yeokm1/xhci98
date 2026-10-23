@@ -1,0 +1,31 @@
+# brand-words.txt - words a CLASS package's description may not hold
+#
+# Read by scripts\package\make-release.ps1 (design record 26 section 6.7.11):
+# a CLASS driver's description names its USB class and version, and no
+# brand, maker or product (the owner, 2026-10-23). One word a line, letters
+# and digits only, matched as a whole word without case. The list is the
+# makers the driver sets' NOTICE.md files name (ASIX, Realtek, FTDI, WCH and
+# Qinheng, Morii, Microsoft) and a fixed list of consumer brands; the
+# installer's own copy, instBrandWords in xhciinst\inst_core.c, must equal
+# it (the cut refuses the two apart).
+
+Microsoft
+Xbox
+Creative
+Logitech
+Sony
+Realtek
+ASIX
+FTDI
+WCH
+Qinheng
+Morii
+Prolific
+Apple
+Samsung
+Intel
+Brio
+Blaster
+Mitsumi
+Orico
+8BitDo

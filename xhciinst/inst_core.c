@@ -7800,11 +7800,13 @@ const INST_OTHER_REL instOtherRels[] = {
 const int instOtherRelCount =
     (int)(sizeof(instOtherRels) / sizeof(instOtherRels[0]));
 
-/* Matched as whole words, case-insensitively (the cut's list is owed). */
+/* Matched as whole words, case-insensitively: the cut's list,
+ * scripts\package\brand-words.txt, word for word (make-release.ps1 refuses
+ * the two apart; record 26 section 6.7.11). */
 static const char *const instBrandWords[] = {
     "Microsoft", "Xbox", "Creative", "Logitech", "Sony", "Realtek", "ASIX",
-    "FTDI", "WCH", "Prolific", "Apple", "Samsung", "Intel", "Brio",
-    "Blaster", "Mitsumi", "Orico", "8BitDo"
+    "FTDI", "WCH", "Qinheng", "Morii", "Prolific", "Apple", "Samsung",
+    "Intel", "Brio", "Blaster", "Mitsumi", "Orico", "8BitDo"
 };
 
 int inst_other_heading_index(const char *heading)
