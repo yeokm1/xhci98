@@ -21,6 +21,8 @@
 #define IDD_FINISH              108
 #define IDD_UWELCOME            109
 #define IDD_ADVANCED            110
+/* Record 26 section 5.0 (draft 35): the Change folder dialog. */
+#define IDD_FOLDER              111
 
 /* The controls. */
 #define IDC_TITLE               1001
@@ -48,6 +50,11 @@
 #define IDC_C_STOR              1025    /* 98 SE: the USB storage drivers */
 #define IDC_C_STOR_T            1026
 #define IDC_C_VSD               1027    /* S98VSD.VXD, Stor98's child     */
+#define IDC_C_RESTAGE           1028    /* Replace the stored build       */
+#define IDC_C_DIRLINE           1029    /* the folder chosen, one line    */
+#define IDC_C_SETTINGS          1033    /* Settings...                    */
+#define IDC_C_FOLDER            1034    /* Change folder...               */
+#define IDC_S_PART              1035    /* a tab's next part              */
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

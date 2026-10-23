@@ -4607,3 +4607,183 @@ whose entry reached the disk before the hibernate survives (runs 2 and
 **Not run** (owner, 2026-10-23: not needed): the same leg with a
 non-tunnelled NVMe and with Microsoft's `stornvme`. The trace shows the
 lost write was never issued.
+
+## 43.42s - the installer's simplification (2026-10-23)
+
+Roadmap-usb4 task 43.42's simplification, the owner's rulings of
+2026-10-22 and 2026-10-23 (design record 26 section 5.0, draft 35;
+record 23 revision 37, decision D20), read in QEMU guests on development
+host A, one guest at a time, headless, keys by QMP `send-key` and screens
+by QMP `screendump`; no display client. Branch `p43-42s`.
+
+### The 98 SE Insert Disk prompt, read first (09:15 to 10:30)
+
+The vehicle: the `p43-46` leg cut (`3.2.0.0` at `062e02d7` merged into
+`p43-46` at `ac4eca4c`; `xhci98-3.1.0.0.zip`, SHA-256
+`b29f3eeb357bc4a826b5cf812a42f0d4f52efd60b616146f0ebfa0e4b45fd22d`),
+each run an update over 43.5's `w98-hcd310` image (`3.1.0.0` on the
+controller) with the choices left as they were: `XhciSilentInstall` 0,
+the UAS box and the storage row ticked. A QEMU `usb-uas` with a
+`scsi-hd` under it, plugged after a cold start.
+
+- After the install, before any plug (observed): `SYSTEM32\DRIVERS`
+  holds `XHCI98.SYS` alone; `INF\OTHER` holds the controller's INF copy
+  alone; `DevicePath` is `C:\WINDOWS\INF;C:\XHCI98`.
+- First plug, port 1 (observed): the Add New Hardware wizard names
+  `C:\XHCI98\XHCIUAS.INF`, then "Insert Disk 'xhci98 xHCI Host
+  Controller Disk'"; the copy dialog: "The file 'xhciuas.sys' ... cannot
+  be found", Copy files from `C:\WIN98`; its details: source
+  `C:\WIN98\xhciuas.sys`, destination
+  `C:\WINDOWS\SYSTEM32\DRIVERS\xhciuas.sys`, error 2. `C:\WIN98` is
+  `SourcePath` ("c:\win98\") under `HKLM\Software\Microsoft\Windows\
+  CurrentVersion\Setup`, Windows' own setup source.
+- After typing `C:\XHCI98` (observed): the devnode
+  `Enum\USB\VID_46F4&PID_0003\27842-0000:00:03.0-1`, Driver
+  `USB\0002`, upper filter `USBNTMAP.SYS`; `Class\USB\0002` InfPath
+  `YEOKHE~2.INF` (`INF\OTHER\Yeo Kheng Mengxhciuas.inf`, byte for byte
+  the package's), InfSection `Uas.Dev`; `SetupX\INF\OEM Name` maps it to
+  `xhciuas.inf`. No record of an INF's source path anywhere under
+  `CurrentVersion`.
+- Two INF variants, each on a first install (observed): the plain
+  `[SourceDisksNames]` as `1=%DiskName%,,,` with the tag file under
+  `.x86`, and the disk numbered 99: both still prompt from `C:\WIN98`.
+- `xhciuas.sys` put in `SYSTEM32\DRIVERS` by hand (the package's bytes,
+  27,876 bytes, SHA-256 `fd68f787...`), nothing else changed, a fresh
+  update (observed): the first plug raises the wizard, installs with no
+  prompt, and the disk mounts as F:.
+- A replug at another port (port 3 in the same session, port 2 after a
+  cold start; observed): the wizard again, no prompt, the disk mounted.
+
+The cause (inferred from those readings): installing from an INF found on
+`DevicePath`, 98 SE's wizard looks for a file not yet at its destination
+at Windows' own `SourcePath`, not in the INF's folder. The fix is the
+installer's (record 26 section 5.0): with the UAS box ticked it puts
+`xhciuas.sys` in `SYSTEM32\DRIVERS`.
+
+### The legs (11:30 to 12:55)
+
+The vehicle: the leg cut above with the installer's programs
+(`SETUP.EXE`, `XHCIWIZ.EXE`, `XHCIINST.EXE`, `XHCIWZ64.EXE`,
+`XHCIIN64.EXE`) replaced by this branch's, built by `xhciinst\build.cmd`
+inside the gated build of `c6b9d125` (`XHCIWIZ.EXE` SHA-256
+`a9bc0d9659e41904...`, `SETUP.EXE` `c2083115866e6220...`); the drivers
+are `3.2.0.0`'s, which this branch does not change.
+
+#### 98 SE, an update with the storage row (`w98-hcd310`): PASS
+
+- Welcome (640x480): the title, the system line, the log line, the
+  device list (the controller and the root hub, "current (this
+  release)") and the plan's text, all inside the screen.
+- Components: the USB drivers with the UAS box under them, the storage
+  row (ticked), Thunderbolt unticked with Stor98 and its request-size box
+  greyed under it, the USB Tree with its "can run faster" box, "Tools
+  folder: C:\XHCI98", Settings... and Change folder...; no "Replace the
+  stored build" row.
+- The keyboard: Tab to Thunderbolt and Space ticks it and shows Stor98
+  and the request-size box ticked; Tab and Space on Stor98 unticks it
+  and greys the box under it; Space again ticks it, and the box under it
+  with it; the request-size box unticked by the user stays unticked
+  across two more Spaces on Stor98. Every tick changed on the screen at
+  the key that changed it. So the 43.11 reading (Space "left it
+  unticked") was Space unticking a box the Thunderbolt tick had ticked.
+- Settings...: one tab, USB (Thunderbolt unticked), the port switch
+  greyed and `XhciSilentInstall` "0 off (default)"; its Advanced lists
+  `XhciInterruptMode`, `XhciPollFineTimer`, `XhciSelectiveSuspend`,
+  `XhciForceBulkOnly`, `XhciFastPollFsLs`. Seen: the note box took the
+  focus when the dialog opened, and Esc there did not close the dialog
+  (fixed after the leg: the note is no tab stop).
+- Summary, Install, Steps ("A UAS disk plugged in later opens Windows'
+  New Hardware wizard (again at another port); Next until Finish installs
+  it, no disk asked for."), Finish; the log: "Copied xhciuas.sys to
+  C:\WINDOWS\SYSTEM32\DRIVERS\xhciuas.sys.", the file there the package's
+  bytes (SHA-256 `fd68f78782a264bc...`, read from the disk image).
+- After the restart, the first UAS plug (port 1): the wizard, location
+  `C:\XHCI98\XHCIUAS.INF`, Next to "Windows has finished installing", **no
+  Insert Disk prompt**, F: "Orico" in My Computer. A replug at port 3:
+  the wizard again (a new devnode), Next to Finish, no prompt.
+
+#### 98 SE with NUSB 3.3 installed (`w98-nusb`): PASS
+
+- Components: the storage row shown and unticked.
+- Change folder...: `C:\PROGRA~1\X Y Z` refused in the dialog ("each
+  folder name 8 characters at most ... no spaces"), OK staying in it;
+  Cancel kept `C:\XHCI98`.
+- Install: exit 3; the log "Copied xhciuas.sys to
+  C:\WINDOWS\SYSTEM32\DRIVERS\xhciuas.sys.".
+
+#### ME (`me-310u4`): PASS
+
+- Components: no storage row; the rows otherwise as on 98 SE.
+- Thunderbolt ticked, Settings...: three tabs, USB, Thunderbolt and
+  Stor98; the Thunderbolt tab's three rows ("not set (default 1)") and
+  its note; its Advanced lists the connection manager's values,
+  `XhciCmNoIrqStart` "now: not set (default 1)" and `Restart` greyed
+  "(Windows 2000 to 10 only)". Not installed.
+
+#### 2000 (`win2k-clean`, no driver on the controller): PASS
+
+- Welcome: the controller "no driver", "install (no driver)".
+- Components: no storage row, no "Replace the stored build" row; the
+  request-size box greyed "(Windows 98 SE and ME only)". Not installed.
+
+#### 7 SP1 32-bit at 120 DPI on 800x600 (43.11's `w7` overlay, `2.4.0.0` on the controller): PASS
+
+- The window opens moved to the top of the work area and lies inside it
+  whole, its frame above the taskbar (the 43.11 finding: about 635 by
+  575, the frame below the buttons under the taskbar).
+- Welcome: the two devices "xhci98 2.4.0.0", "update (an older
+  release)", and the plan's text.
+- Components: as on 2000, with "Replace the stored build of this
+  package's drivers" shown greyed (no store trap on this image).
+- Settings... with Thunderbolt unticked: the USB tab alone. Its Advanced:
+  `XhciInterruptMode` "now: 2" set to 3 ("3 (to be written)"), OK; the
+  Settings dialog's Cancel; opened again, Advanced reads "now: 2" again:
+  Cancel restored the choices as they stood at the opening.
+- Thunderbolt ticked, Settings...: three tabs, USB, Thunderbolt and
+  Stor98, each whole at 120 DPI; the Thunderbolt tab's Advanced ends
+  with `XhciCmBridgeNumbering` and `XhciCmNoIrqStart` greyed "(Windows 98
+  SE and ME only)" and `Restart` "now: not set (default 1)" with its
+  note; Stor98's tab its two rows. Not installed.
+
+#### XP x64 SP2, the 64-bit package (`winxp64`, no driver on the controller): PASS
+
+The x64 tree: the owner-signed `release-x64` directory of the integration
+build `5ad53f7d` (`E:\xhci98-scratch\signed-amd64-5ad53f7d`, the drivers
+of `3.2.0.0`'s line, a `.cat` beside each INF) beside the x86 tree above,
+with this branch's `XHCIWZ64.EXE` (SHA-256 `173ecfe17e99ecc7...`, built
+at `4a465d83`); XP x64 enforces no signature.
+
+- `xhcicm.cat` deleted from the tree: the Welcome page ends with
+  "REFUSED: this 64-bit package carries the Thunderbolt driver without
+  its catalog, xhcicm.cat: restore the complete package, with its .cat
+  files, and run the installer again. Nothing was changed.", Next
+  disabled. Seen: the device list showed its "No device of this package
+  is present now" row under the refusal (fixed after the leg, `ac009c55`:
+  a refusal shows its text alone).
+- The complete tree: Welcome lists the controller "no driver", "install
+  (no driver)"; Components, Summary ("Install and stage the package
+  now"; Thunderbolt and Stor98 left out); Install: Windows' "has not
+  passed Windows Logo testing" twice (the controller, the root hub's
+  Found New Hardware wizard), Continue Anyway each time; Finish "Changes
+  were made. Please restart Windows now.", "Staged xhci98.inf as
+  oem0.inf. Staged xhciuas.inf as oem1.inf.", "Installing Universal
+  Serial Bus (USB) Controller ... done."
+
+#### Found on the legs, fixed after them
+
+- The Settings dialog's note box took the focus at the opening and
+  swallowed Esc (98 SE, 7): `4a465d83` makes it no tab stop.
+- The Summary, Steps and Finish pages left a band empty under their
+  text at the sheet's new 210 units: `4a465d83` grows their templates.
+- A refusal's Welcome page showed the device list (XP x64): `ac009c55`.
+
+These three were read in the window's self-test and the code review, not
+again in a guest.
+
+#### Guests
+
+All on QMP ports 49080 to 49088, one at a time, 1 vCPU (98 SE, ME, 2000)
+or 2 (7, XP x64), and all closed: 83716, 71232 (98 SE s1), 76272 (98 SE
+with NUSB), 74216 (ME), 81112 (2000), 83296 (7), 78672 (XP x64); the
+Insert Disk reading's 6036, 72536, 65796, 65632, 52680, 67296, 74712,
+68900.

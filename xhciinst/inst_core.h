@@ -390,6 +390,13 @@ int inst_ts_confirmed(int tsOption, int sbState);
 #define INST_APPLY_CM       3
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
+#define INST_APPLY_MARK     6   /* where the mark service runs (inst_mk_system) */
+
+/* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
+ * or the mark service's own Parameters key (its Restart). */
+#define INST_LOC_MW         0
+#define INST_LOC_MARK       1
+#define INST_MK_PARAMS_KEY  "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Parameters"
 
 /* The values a choice list names (0 to 4: XhciFastPollFsLs's 4). */
 #define INST_CHOICES        5
@@ -414,6 +421,7 @@ typedef struct _INST_VALUE {
     INST_U32 Hi;
     int NoInf;
     INST_U32 Def;
+    int Loc;                /* INST_LOC_*: 0 for every Services\USB value */
 } INST_VALUE;
 
 /* The most values the table holds (the answers' arrays). */
@@ -1072,7 +1080,6 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 #define INST_CW_STOR        0x01UL  /* the 98 SE storage pack elsewhere  */
 #define INST_CW_CMALONE     0x02UL  /* 98 SE, ME: the CM alone           */
 #define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
-#define INST_CW_S98_8       0x08UL  /* 8, 8.1: Stor98                    */
 #define INST_CW_NOCM8       0x10UL  /* 8, 8.1: no connection manager     */
 INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
                             int usb, int stor, int s98);
@@ -1614,13 +1621,35 @@ void inst_sha256(const unsigned char *data, size_t len, char *hex65);
  * section 6.4, draft 16). Part of the Thunderbolt 3 / USB4 support and
  * chosen with it (owner, 2026-10-19, replacing "never unasked"): with tb
  * (that support in the run) 0, neither asked nor installed; with it,
- * Enter and /yes give Y, /stor98 installs it without asking, /nostor98
- * leaves it out without asking, /list asks nothing. Returns the decision
- * when it is not asked; *asked whether it is, *def what Enter gives.
- * is8 (Windows 8 and 8.1, record 26 section 5.3.1 case 3b, draft 20):
- * Enter and /yes give N, only /stor98 installs it unasked. */
+ * Enter and /yes give the system's default (tableDef, inst_s98_box_default),
+ * /stor98 installs it without asking, /nostor98 leaves it out without
+ * asking, /list asks nothing. Returns the decision when it is not asked;
+ * *asked whether it is, *def what Enter gives. */
 int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
-                    int noStor98, int list, int is8, int *asked, int *def);
+                    int noStor98, int list, int tableDef, int *asked,
+                    int *def);
+
+/* Record 26 section 5.0 (draft 35): the systems of Stor98's default table,
+ * and the system a version is (-1 for one the table has no line for). */
+#define INST_S98SYS_98SE       0
+#define INST_S98SYS_ME         1
+#define INST_S98SYS_2000       2
+#define INST_S98SYS_XP         3
+#define INST_S98SYS_VISTA      4
+#define INST_S98SYS_7          5
+#define INST_S98SYS_8          6
+#define INST_S98SYS_81         7
+#define INST_S98SYS_10         8
+#define INST_S98SYS_COUNT      9
+int inst_s98_sys_index(int nt, INST_U32 major, INST_U32 minor);
+/* Stor98's box while the Thunderbolt box is ticked, and the console's
+ * Enter: 1 ticked. A system without a line takes 1. */
+int inst_s98_box_default(int sys);
+
+/* Record 23 D20 (a): the 64-bit package's connection manager without its
+ * catalog. arch INST_ARCH_*, haveCm the three files there, cat xhcicm.cat
+ * there. The refusal's text, or NULL to go on. */
+const char *inst_cm_cat_refusal(int arch, int haveCm, int cat);
 
 /* Record 26 section 5.3.1 case 3b (roadmap-usb4 task 43.23): on Windows 8
  * and 8.1 (is8: the INST_OS_CMONLY kind, which takes in 10 below build

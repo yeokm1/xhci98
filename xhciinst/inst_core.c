@@ -1682,7 +1682,9 @@ const INST_VALUE instValues[] = {
       "applies to your machine.", 0x4UL,
       { "off", "on", "on for any Intel controller, at your own risk",
         NULL } },
-    { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0xFUL, 0xFUL,
+    /* Record 26 section 5.0 (owner, 2026-10-22): Advanced, never asked;
+     * /set Name=Value. */
+    { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0xFUL,
       "how the controller's events arrive",
       "with %s, a controller Windows gives no such interrupt does not "
       "start (Code 10).", 0xAUL,
@@ -1705,7 +1707,7 @@ const INST_VALUE instValues[] = {
       "Add New Hardware wizard",
       "Restart Windows after changing it.", 0,
       { "off", "on", NULL, NULL } },
-    { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3UL, 0x3UL,
+    { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
       "Bulk-Only instead of UAS for a disk that offers both",
       "read as each device is connected; on Windows 2000 and later a disk "
       "already installed keeps its driver until it is uninstalled in "
@@ -1783,7 +1785,25 @@ const INST_VALUE instValues[] = {
       "0 leaves them as they come up: a device behind a switch may then "
       "show Code 29 until a restart.", 0x1UL,
       { "leave them as they come up", "set them up", NULL, NULL },
-      0, 0, 1, 1UL }
+      0, 0, 1, 1UL },
+    /* Record 26 section 5.0 (draft 35): never asked, the Thunderbolt tab's
+     * Advanced row; not written by the INF, the driver's default 1. */
+    { "XhciCmNoIrqStart", INST_INF_CM, INST_APPLY_9X_CM, 0x0UL, 0x3UL,
+      "start an NVMe drive behind a tunnel whose interrupt cannot be routed, "
+      "for Stor98 to poll",
+      "0 leaves such a drive at its problem code.", 0x1UL,
+      { "no", "yes", NULL, NULL },
+      0, 0, 1, 1UL },
+    /* Record 26 section 5.0: the mark service's own value, in its
+     * Parameters key and never under Services\USB, read once at its start
+     * (xhcimark.c) and written in its step of the run; never asked. */
+    { "Restart", INST_INF_CM, INST_APPLY_MARK, 0x0UL, 0x3UL,
+      "the safe-removal mark service restarts a unit's stack so a mark takes "
+      "effect at once",
+      "0 keeps the marks written, but a mark takes effect only at that "
+      "stack's next rebuild.", 0x1UL,
+      { "no", "yes", NULL, NULL },
+      0, 0, 1, 1UL, INST_LOC_MARK }
 };
 const int instValueCount = (int)(sizeof(instValues) / sizeof(instValues[0]));
 
@@ -1895,6 +1915,8 @@ int inst_value_relevant(int index, const INST_ENV *env)
         return (!env->Nt && env->AnyXhci) ? 1 : 0;
     case INST_APPLY_9X_CM:
         return (!env->Nt && env->CmNhi) ? 1 : 0;
+    case INST_APPLY_MARK:
+        return inst_mk_system(env);
     default:
         return 0;
     }
@@ -1914,6 +1936,8 @@ int inst_value_greyed(int index, const INST_ENV *env)
         /* The Thunderbolt rows are shown with no host interface present
          * too (record 26 section 5.5), so this one is as well. */
         return env->Nt ? 1 : 0;
+    case INST_APPLY_MARK:
+        return inst_mk_system(env) ? 0 : 1;
     default:
         return 0;
     }
@@ -1930,6 +1954,8 @@ const char *inst_value_only(int index)
     case INST_APPLY_9X_XHCI:
     case INST_APPLY_9X_CM:
         return "Windows 98 SE and ME only";
+    case INST_APPLY_MARK:
+        return "Windows 2000 to 10 only";
     default:
         return NULL;
     }
@@ -1985,6 +2011,9 @@ INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
     if ((instValues[index].Apply == INST_APPLY_9X_XHCI ||
          instValues[index].Apply == INST_APPLY_9X_CM) && env->Nt) {
         return 0;   /* a 98 SE and ME value: /set refuses it on NT */
+    }
+    if (instValues[index].Apply == INST_APPLY_MARK && !inst_mk_system(env)) {
+        return 0;   /* no mark service on this system */
     }
     if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
         !(env->Nt && env->Major >= 6)) {
@@ -3676,9 +3705,7 @@ INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
     if (usb && is8) {
         w |= INST_CW_USB8;
     }
-    if (s98 && is8) {
-        w |= INST_CW_S98_8;
-    }
+    (void)s98;
     return w;
 }
 
@@ -3743,12 +3770,6 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "On Windows 8, 8.1 and 10 it installs only what is ticked: "
                       "the xHCI98 tools, and the xHCI98 USB drivers if their "
                       "box is ticked.");
-    }
-    if (set & INST_CW_S98_8) {
-        inst_cat_para(out, cap,
-                      "Stor98 has not been tested on Windows 8, 8.1 or 10. If a "
-                      "drive behind a Thunderbolt or USB4 tunnel uses "
-                      "Windows' own NVMe driver, this choice replaces it.");
     }
 }
 
@@ -5884,14 +5905,63 @@ int inst_s98_cold_start(int nt)
 }
 
 int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
-                    int noStor98, int list, int is8, int *asked, int *def)
+                    int noStor98, int list, int tableDef, int *asked,
+                    int *def)
 {
-    *def = is8 ? 0 : 1;
+    *def = tableDef ? 1 : 0;
     *asked = haveS98 && tb && !yes && !stor98Switch && !noStor98 && !list;
-    if (is8) {
-        return haveS98 && tb && stor98Switch;
+    return haveS98 && tb && !noStor98 && (stor98Switch || tableDef);
+}
+
+int inst_s98_sys_index(int nt, INST_U32 major, INST_U32 minor)
+{
+    if (!nt) {
+        return major != 4UL ? -1 : minor == 10UL ? INST_S98SYS_98SE :
+               minor == 90UL ? INST_S98SYS_ME : -1;
     }
-    return haveS98 && tb && !noStor98;
+    if (major == 5UL) {
+        return minor == 0UL ? INST_S98SYS_2000 : INST_S98SYS_XP;
+    }
+    if (major == 6UL) {
+        return minor == 0UL ? INST_S98SYS_VISTA : minor == 1UL ? INST_S98SYS_7 :
+               minor == 2UL ? INST_S98SYS_8 : minor == 3UL ? INST_S98SYS_81 :
+               INST_S98SYS_10;
+    }
+    return major == 10UL ? INST_S98SYS_10 : -1;
+}
+
+int inst_s98_box_default(int sys)
+{
+    /* One line a system (owner, 2026-10-22): ticked everywhere for now.
+     * On 8.1 and 10 a line becomes 0 only once Windows' own stornvme is
+     * shown to hot-plug behind this package's tunnel (roadmap 43.24 for
+     * 8.1, 43.33 and 43.37 for 10); 8 has no in-box NVMe driver. */
+    static const unsigned char table[INST_S98SYS_COUNT] = {
+        1,  /* 98 SE */
+        1,  /* ME */
+        1,  /* 2000 */
+        1,  /* XP */
+        1,  /* Vista */
+        1,  /* 7 */
+        1,  /* 8 */
+        1,  /* 8.1 */
+        1   /* 10 */
+    };
+
+    if (sys < 0 || sys >= INST_S98SYS_COUNT) {
+        return 1;
+    }
+    return table[sys];
+}
+
+const char *inst_cm_cat_refusal(int arch, int haveCm, int cat)
+{
+    if (arch != INST_ARCH_AMD64 || !haveCm || cat) {
+        return NULL;
+    }
+    return "this 64-bit package carries the Thunderbolt driver without its "
+           "catalog, xhcicm.cat: restore the complete package, with its "
+           ".cat files, and run the installer again.";
 }
 
 int inst_s98_over_inbox(int is8, const char *service)

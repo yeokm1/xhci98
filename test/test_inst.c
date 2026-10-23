@@ -467,9 +467,6 @@ static void test_cm_only(void)
                 if (usb && sys == 3) {
                     want |= INST_CW_USB8;
                 }
-                if (s98 && sys == 3) {
-                    want |= INST_CW_S98_8;
-                }
                 if (w != want) {
                     printf("warnings: system %d boxes %d: %lu\n", sys, box,
                            (unsigned long)w);
@@ -484,14 +481,14 @@ static void test_cm_only(void)
         inst_comp_warn_text(0, "C:\\XHCI98", text, sizeof(text));
         CHECK(text[0] == '\0', "no warning: no text");
         inst_comp_warn_text(INST_CW_STOR | INST_CW_CMALONE | INST_CW_USB8 |
-                            INST_CW_S98_8 | INST_CW_NOCM8, "C:\\XHCI98", text,
+                            INST_CW_NOCM8, "C:\\XHCI98", text,
                             sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
               strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
               strstr(text, "UAS disk driver, when ticked, is only staged") !=
                   NULL &&
-              strstr(text, "Stor98 has not been tested") != NULL &&
+              strstr(text, "Stor98 has not been tested") == NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
     }
@@ -1254,7 +1251,53 @@ static void test_values(void)
     e = env(0, 4, 10, INST_ARCH_X86);
     e.AnyXhci = 1;
     CHECK(!inst_value_applies(psw, &e), "98, no Intel 7-9: no port switch");
-    CHECK(inst_value_applies(im, &e), "98: interrupt mode");
+    /* Record 26 section 5.0 (owner, 2026-10-22): Advanced, not asked;
+     * /set takes it as before. */
+    CHECK(!inst_value_applies(im, &e), "98: interrupt mode not asked");
+    {
+        int fb = inst_value_find("XhciForceBulkOnly");
+        int ni = inst_value_find("XhciCmNoIrqStart");
+        INST_ENV e2 = e;
+        e2.CmNhi = 1;
+        CHECK(fb >= 0 && !inst_value_applies(fb, &e) &&
+              inst_value_set_mask(fb, &e) == 0x3,
+              "ForceBulkOnly: Advanced, /set 0 and 1");
+        CHECK(ni >= 0 && instValues[ni].Inf == INST_INF_CM &&
+              instValues[ni].NoInf && instValues[ni].Def == 1 &&
+              !inst_value_applies(ni, &e2) &&
+              inst_value_set_mask(ni, &e2) == 0x3,
+              "XhciCmNoIrqStart: 98 SE, default 1, not written by the "
+              "INF, Advanced");
+        e2 = env(1, 6, 1, INST_ARCH_X86);
+        e2.AnyXhci = 1;
+        e2.CmNhi = 1;
+        CHECK(ni >= 0 && inst_value_set_mask(ni, &e2) == 0,
+              "XhciCmNoIrqStart: refused on NT");
+        {
+            int rs = inst_value_find("Restart");
+            INST_ENV e9 = env(0, 4, 10, INST_ARCH_X86);
+            CHECK(rs >= 0 && instValues[rs].Loc == INST_LOC_MARK &&
+                  instValues[rs].Inf == INST_INF_CM &&
+                  instValues[rs].Asked == 0 && instValues[rs].NoInf &&
+                  instValues[rs].Def == 1,
+                  "Restart: the mark service's key, never asked, default 1");
+            CHECK(rs >= 0 && inst_value_set_mask(rs, &e2) == 0x3 &&
+                  inst_value_relevant(rs, &e2) &&
+                  !inst_value_greyed(rs, &e2),
+                  "Restart on 7: /set 0 and 1, shown");
+            CHECK(rs >= 0 && inst_value_set_mask(rs, &e9) == 0 &&
+                  inst_value_greyed(rs, &e9),
+                  "Restart on 98 SE: greyed, /set refuses it");
+            for (rs = 0; rs < instValueCount; rs++) {
+                if (instValues[rs].Loc != INST_LOC_MW &&
+                    !inst_eq(instValues[rs].Name, "Restart")) {
+                    break;
+                }
+            }
+            CHECK(rs == instValueCount,
+                  "Restart the one value outside Services\\USB");
+        }
+    }
     CHECK(!inst_value_applies(ft, &e), "98: no fine timer");
     /* Owner, 2026-10-15: the fine timer and selective suspend are never
      * asked; /set Name=Value still sets them. */
@@ -1264,7 +1307,7 @@ static void test_values(void)
     CHECK(inst_value_set("XhciPollFineTimer=1", &idx, &v) == 1 &&
           idx == ft && v == 1, "/set still sets the fine timer");
     CHECK(!inst_value_applies(cm, &e), "no NHI: no cm values");
-    CHECK_EQ(inst_value_asked_mask(im, &e), 0x7, "98: interrupt mode 0-2");
+    CHECK_EQ(inst_value_set_mask(im, &e), 0x7, "98: interrupt mode 0-2");
     e.PswController = 1;
     CHECK(inst_value_applies(psw, &e), "an Intel 7-9 controller: port switch");
     e.CmNhi = 1;
@@ -1299,10 +1342,10 @@ static void test_values(void)
               strstr(instValues[si].Caution, "CD") == NULL,
               "the silent install's note: the restart alone");
     }
-    CHECK_EQ(inst_value_asked_mask(im, &e), 0x7, "2000: no MSI");
+    CHECK_EQ(inst_value_set_mask(im, &e), 0x7, "2000: no MSI");
     e = env(1, 6, 1, INST_ARCH_AMD64);
     e.AnyXhci = 1;
-    CHECK_EQ(inst_value_asked_mask(im, &e), 0xF, "7: MSI offered");
+    CHECK_EQ(inst_value_set_mask(im, &e), 0xF, "7: MSI offered");
     e.AnyXhci = 0;
     CHECK(!inst_value_applies(im, &e), "no controller: nothing asked");
     CHECK(!inst_value_applies(-1, &e), "bad index");
@@ -4026,28 +4069,28 @@ static void test_s98(void)
               "/nostor98 belongs to an install");
         /* Chosen with the Thunderbolt support (owner, 2026-10-19,
          * replacing "never unasked"). */
-        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 0, 0, &asked, &def) && asked && def,
+        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 0, 1, &asked, &def) && asked && def,
               "asked, Enter gives Y");
-        CHECK(inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 1, 0, 0, 0, 1, &asked, &def) && !asked,
               "/thunderbolt /yes: Y, not asked");
-        CHECK(!inst_s98_decide(1, 1, 1, 0, 1, 0, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 1, 1, 0, 1, 0, 1, &asked, &def) && !asked,
               "/nostor98: left out unasked");
-        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 1, &asked, &def) && !asked,
               "/stor98: installed unasked");
-        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, 0, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, 0, 1, &asked, &def) && !asked,
               "no Stor98 in the package: nothing");
-        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 1, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 1, 1, &asked, &def) && !asked,
               "/list asks nothing, Y shown");
-        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, 0, 0, &asked, &def) && !asked &&
-              !inst_s98_decide(1, 0, 1, 1, 0, 0, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, 0, 1, &asked, &def) && !asked &&
+              !inst_s98_decide(1, 0, 1, 1, 0, 0, 1, &asked, &def) && !asked,
               "no Thunderbolt support in the run: Stor98 neither asked nor "
               "installed");
-        CHECK(!inst_s98_decide(1, 1, 0, 0, 0, 0, 1, &asked, &def) && asked &&
-              !def, "8 and 8.1: asked, Enter gives N");
-        CHECK(!inst_s98_decide(1, 1, 1, 0, 0, 0, 1, &asked, &def) && !asked,
-              "8 and 8.1, /yes: N");
-        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 1, &asked, &def) && !asked,
-              "8 and 8.1, /stor98: installed unasked");
+        CHECK(!inst_s98_decide(1, 1, 0, 0, 0, 0, 0, &asked, &def) && asked &&
+              !def, "a system whose table line is 0: asked, Enter gives N");
+        CHECK(!inst_s98_decide(1, 1, 1, 0, 0, 0, 0, &asked, &def) && !asked,
+              "table line 0, /yes: N");
+        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 0, &asked, &def) && !asked,
+              "table line 0, /stor98: installed unasked");
         /* Task 43.23 (record 26 section 5.3.1 case 3b): 8.1's and 10's own
          * stornvme on a tunnel drive is installed over, forced; nothing
          * else is. */
@@ -4073,19 +4116,50 @@ static void test_s98(void)
             int k11 = inst_os_kind(1, 10, 0, 22000) == INST_OS_CMONLY;
 
             CHECK(k10 && k1507 && !k11 &&
-                  !inst_s98_decide(1, 1, 0, 0, 0, 0, k10, &asked, &def) &&
+                  !inst_s98_decide(1, 1, 0, 0, 0, 0, !k10, &asked, &def) &&
                   asked && !def,
-                  "10 (1507, 22H2): Stor98 asked, Enter gives N, as on 8");
-            CHECK(!inst_s98_decide(1, 1, 1, 0, 0, 0, k10, &asked, &def) &&
+                  "a 0 line (as 10 would take): Stor98 asked, Enter gives N");
+            CHECK(!inst_s98_decide(1, 1, 1, 0, 0, 0, !k10, &asked, &def) &&
                   !asked &&
-                  inst_s98_decide(1, 1, 1, 1, 0, 0, k10, &asked, &def) &&
+                  inst_s98_decide(1, 1, 1, 1, 0, 0, !k10, &asked, &def) &&
                   !asked,
-                  "10: /yes gives N, /stor98 installs unasked");
+                  "a 0 line: /yes gives N, /stor98 installs unasked");
             CHECK(inst_s98_over_inbox(k10, "stornvme") &&
                   !inst_s98_over_inbox(k10, "secnvme") &&
                   !inst_s98_over_inbox(k10, "stor98"),
                   "10: a drive under 10's own stornvme is installed over, "
                   "forced; a vendor's driver is left");
+        }
+        {
+            int t;
+            int all = 1;
+            for (t = 0; t < INST_S98SYS_COUNT; t++) {
+                all = all && inst_s98_box_default(t) == 1;
+            }
+            CHECK(all && inst_s98_box_default(-1) == 1 &&
+                  inst_s98_box_default(INST_S98SYS_COUNT) == 1,
+                  "Stor98's table: ticked on every system for now (owner, "
+                  "2026-10-22)");
+            CHECK(inst_s98_sys_index(0, 4, 10) == INST_S98SYS_98SE &&
+                  inst_s98_sys_index(0, 4, 90) == INST_S98SYS_ME &&
+                  inst_s98_sys_index(1, 5, 0) == INST_S98SYS_2000 &&
+                  inst_s98_sys_index(1, 5, 1) == INST_S98SYS_XP &&
+                  inst_s98_sys_index(1, 5, 2) == INST_S98SYS_XP &&
+                  inst_s98_sys_index(1, 6, 0) == INST_S98SYS_VISTA &&
+                  inst_s98_sys_index(1, 6, 1) == INST_S98SYS_7 &&
+                  inst_s98_sys_index(1, 6, 2) == INST_S98SYS_8 &&
+                  inst_s98_sys_index(1, 6, 3) == INST_S98SYS_81 &&
+                  inst_s98_sys_index(1, 10, 0) == INST_S98SYS_10 &&
+                  inst_s98_sys_index(0, 4, 0) == -1,
+                  "the table's systems by version");
+            CHECK(inst_cm_cat_refusal(INST_ARCH_AMD64, 1, 0) != NULL &&
+                  strstr(inst_cm_cat_refusal(INST_ARCH_AMD64, 1, 0),
+                         "xhcicm.cat") != NULL &&
+                  inst_cm_cat_refusal(INST_ARCH_AMD64, 1, 1) == NULL &&
+                  inst_cm_cat_refusal(INST_ARCH_AMD64, 0, 0) == NULL &&
+                  inst_cm_cat_refusal(INST_ARCH_X86, 1, 0) == NULL,
+                  "x64: the connection manager refused without xhcicm.cat; "
+                  "no CM, or x86, not");
         }
         CHECK(inst_s98_box_open(1, 1, 1) && !inst_s98_box_open(1, 1, 0) &&
               !inst_s98_box_open(1, 0, 1) && !inst_s98_box_open(0, 1, 1),

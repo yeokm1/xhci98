@@ -445,6 +445,7 @@ static int s98_rec_has(const char *sub, const char *name);
 static int s98_pending_resolve(int uninstall);
 static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
+static int own_put(const char *from, const char *to);
 
 static int haveCm;
 /* The connection manager alone (record 23 section 4.5, revision 13): the
@@ -2258,6 +2259,17 @@ static int check_package(void)
                       NULL);
     }
     haveCm = (cmFiles == 3);
+    {
+        /* Record 23 D20 (a): the x64 connection manager only with its
+         * catalog (owner, 2026-10-22). */
+        const char *why;
+        join(path, sizeof(path), pkgDir, "xhcicm.cat");
+        why = inst_cm_cat_refusal(INST_MY_ARCH, haveCm,
+                                  file_exists(path, NULL));
+        if (why != NULL) {
+            return refuse(why, " Nothing was changed.");
+        }
+    }
     if (!haveCm) {
         out("This package carries no Thunderbolt or USB4 driver "
             "(xhcicm.sys); going on without it.\n\n");
@@ -2414,7 +2426,9 @@ static int mw_value(int v, DWORD *value)
     if (stScreens) {
         return 0;
     }
-    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, KEY_QUERY_VALUE, &k);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, instValues[v].Loc == INST_LOC_MARK ?
+                      INST_MK_PARAMS_KEY : INST_MW_KEY, 0, KEY_QUERY_VALUE,
+                      &k);
     if (r == ERROR_FILE_NOT_FOUND) {
         return 0;
     }
@@ -2465,6 +2479,9 @@ static int value_targets(int v, INST_VNOW *vnow, int cap, int *nNow,
 
     *nNow = 0;
     *cmNew = 0;
+    if (instValues[v].Loc != INST_LOC_MW) {
+        return 0;   /* the mark service's own key: no device holds it */
+    }
     for (i = 0; i < devCount; i++) {
         DWORD now;
         int r;
@@ -2658,7 +2675,8 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         greyed = inst_value_greyed(v, &envNow);
         cmRow = instValues[v].Inf == INST_INF_CM &&
                 (instValues[v].Apply == INST_APPLY_CM ||
-                 instValues[v].Apply == INST_APPLY_9X_CM);
+                 instValues[v].Apply == INST_APPLY_9X_CM ||
+                 instValues[v].Apply == INST_APPLY_MARK);
         asked = inst_value_applies(v, &envNow) ||
                 (cmRow && !greyed && instValues[v].Asked != 0) ||
                 (greyed && instValues[v].Asked != 0);
@@ -2863,8 +2881,9 @@ static void write_values(void)
         flagFailed = 1;
     }
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
-        if (!answerSet[v] || value_inf(v) == NULL) {
-            continue;
+        if (!answerSet[v] || value_inf(v) == NULL ||
+            instValues[v].Loc != INST_LOC_MW) {
+            continue;   /* the mark service's Restart: its own step */
         }
         /* The silent install on: the list first - merged and verified once,
          * even where the switch already reads 1, as silent-on.bat does -
@@ -8417,10 +8436,16 @@ static int steps_9x(const char *dir)
     }
     /* The Thunderbolt half only when this run copied its INF (section 8.5). */
     out("\nThen run INSTALL.BAT again, to check the result and set the "
-        "driver's options.\n"
-        "A UAS disk%s found later finds its driver\nin the same folder by "
-        "itself.\n",
-        (haveCm && tbInclude) ? " or a Thunderbolt controller" : "");
+        "driver's options.\n");
+    if (usbInclude && uasInclude) {
+        out("A UAS disk plugged in later opens Windows' New Hardware wizard "
+            "(again at\nanother port); Next until Finish installs it, no "
+            "disk asked for.\n");
+    }
+    if (haveCm && tbInclude) {
+        out("A Thunderbolt controller found later finds its driver in the "
+            "same folder\nby itself.\n");
+    }
     if (envNow.Minor == 10 && !stor_covered()) {
         out("On Windows 98 SE any disk, UAS included, needs the USB storage "
             "drivers: the\ninstaller's row for them, or NUSB's mass-storage "
@@ -8996,6 +9021,47 @@ static int pass_any(int inf, int controllers)
  * driver, at most four passes; the UAS devices; the host interface. Each
  * pass behind the gate. Every device of the plan that is left goes to the
  * steps. */
+/* Record 26 section 5.0 (draft 35): on 98 SE and ME the UAS driver's
+ * file where the New Hardware wizard looks for it, so a UAS disk plugged
+ * in later installs from the copy on DevicePath with no Insert Disk prompt
+ * (the wizard asks at Windows' own SourcePath for a file not yet at its
+ * destination). The 9x uninstall's file list removes it. */
+static void uas_sys_9x(void)
+{
+    char src[INST_PATH_CHARS];
+    char dst[INST_PATH_CHARS];
+
+    if (envNow.Nt || opts.List || !usbInclude || !uasInclude) {
+        return;
+    }
+    if (groupVerdict[group_of_inf(INST_INF_UAS)] != INST_GROUP_OK) {
+        /* A newer or unreadable xhciuas.sys there is refused as its
+         * group is (record 23 section 5.3): never replaced from here. */
+        logonly("uas: the UAS group is refused; SYSTEM32\\DRIVERS left\n");
+        return;
+    }
+    join(src, sizeof(src), srcDir, "xhciuas.sys");
+    if (GetWindowsDirectoryA(dst, sizeof(dst)) == 0) {
+        out("xhciuas.sys could not be put in SYSTEM32\\DRIVERS: no Windows "
+            "directory.\n");
+        flagFailed = 1;
+        return;
+    }
+    join(dst, sizeof(dst), dst, "SYSTEM32\\DRIVERS\\xhciuas.sys");
+    if (same_file(src, dst)) {
+        logonly("uas: %s is the package's\n", dst);
+        return;
+    }
+    if (own_put(src, dst) != 1) {
+        out("xhciuas.sys could not be put in %s: a UAS disk plugged in later "
+            "asks for the\ndriver disk (type %s).\n", dst, srcDir);
+        flagFailed = 1;
+        return;
+    }
+    flagChanged = 1;
+    out("Copied xhciuas.sys to %s.\n", dst);
+}
+
 static void helper_installs(void)
 {
     int k;
@@ -9419,6 +9485,7 @@ static int run_install_9x(void)
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
     hashed_cleanup();
     helper_installs();
+    uas_sys_9x();
     s98_file_update_9x();
     vsd_run(vsd_mode(0));
     write_values();
@@ -10742,6 +10809,46 @@ static int mk_running(SC_HANDLE s)
  * package's copy put into system32 through a .TMP and compared byte for
  * byte, registered with its quoted full path (its own process, automatic
  * start, LocalSystem), the log's directory made, then started. */
+/* The service's Restart chosen (record 26 section 5.0): written to its
+ * Parameters key after its registration and before its start, the value
+ * it reads once there. Never under Services\USB. */
+static void mk_restart_value(void)
+{
+    int v = inst_value_find("Restart");
+    HKEY k;
+    DWORD val;
+    LONG r;
+
+    if (v < 0 || v >= INST_MAX_VALUES || !answerSet[v]) {
+        return;
+    }
+    val = (DWORD)answerValue[v];
+    {
+        /* Written only when it changes what the service reads: the value
+         * there already, or absent with the default chosen. */
+        DWORD cur = 0;
+        int st = mw_value(v, &cur);
+        if ((st == 1 && cur == val) || (st == 0 && val == instValues[v].Def)) {
+            logonly("mark service: Restart stays %lu\n", (unsigned long)val);
+            return;
+        }
+    }
+    r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL);
+    if (r == ERROR_SUCCESS) {
+        r = RegSetValueExA(k, "Restart", 0, REG_DWORD, (const BYTE *)&val,
+                           sizeof(val));
+        RegCloseKey(k);
+    }
+    if (r != ERROR_SUCCESS) {
+        out("Restart could not be set: error %ld.\n", (long)r);
+        flagFailed = 1;
+        return;
+    }
+    flagChanged = 1;
+    out("The mark service's Restart set to %lu.\n", (unsigned long)val);
+}
+
 static void mk_install(void)
 {
     char src[INST_PATH_CHARS];
@@ -10862,6 +10969,7 @@ static void mk_install(void)
     if (!make_dirs(dir)) {
         out("The service's log directory %s could not be made.\n", dir);
     }
+    mk_restart_value();
 start:
     if (s == NULL) {
         goto done;
@@ -15768,7 +15876,7 @@ static void s98_question(void)
     char text[1024];
 
     r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
-                        opts.NoStor98, opts.List, osKind == INST_OS_CMONLY,
+                        opts.NoStor98, opts.List, inst_eng_s98_default(),
                         &asked, &def);
     if (!haveS98) {
         s98_apply(0);
@@ -21039,22 +21147,15 @@ static int stor_silent_remove(void)
 
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap)
 {
+    /* The window's row on 98 SE alone (record 26 section 5.0): case 1,
+     * the files copied elsewhere, is the console's /storage only. */
     if (storTools) {
-        *offered = storPack > 0;
-        *def = storToolsInclude;
+        *offered = 0;
+        *def = 0;
         if (cap > 0) {
-            if (storPack == 0) {
-                inst_copy(note, "This download does not carry them.", cap);
-            } else if (storPack < 0) {
-                inst_copy(note, "The storage files in this download are not "
-                          "the ones this release carries.", cap);
-            } else {
-                inst_copy(note, "For Windows 98 SE only: ticked here, the "
-                          "files are copied to the tools folder, nothing "
-                          "installs them.", cap);
-            }
+            note[0] = '\0';
         }
-        return 1;
+        return 0;
     }
     *offered = storHere && storPack > 0;
     *def = storInclude;
@@ -21134,6 +21235,30 @@ int inst_eng_s98_state(int *have, char *version, size_t cap)
     *have = haveS98;
     inst_copy(version, s98VersionText, cap);
     return s98Include;
+}
+
+int inst_eng_s98_default(void)
+{
+    return inst_s98_box_default(inst_s98_sys_index(envNow.Nt, envNow.Major,
+                                                    envNow.Minor));
+}
+
+int inst_eng_restage_state(void)
+{
+    int k;
+
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (trapOem[k][0] != '\0') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void inst_eng_restage_choose(int on)
+{
+    opts.Restage = on ? 1 : 0;
+    logonly("restage: chosen %d\n", opts.Restage);
 }
 
 void inst_eng_s98_choose(int include)
@@ -21351,12 +21476,15 @@ static const char stLongName[] =
 static void st_screens_once(int longest)
 {
     /* The Thunderbolt question answered Y: Enter gives N since record 23
-     * revision 23, and the connection manager's questions follow a Y. */
+     * revision 23, and the connection manager's questions follow a Y; the
+     * interrupt mode and the forced Bulk-Only no longer asked (record 26
+     * draft 35), so the bad answer 9 goes to the connection manager's
+     * mode. */
     static const char *const nt1[] = {
-        "y", "", "", "9", "", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
+        "y", "", "9", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
     };
     static const char *const x9[] = {
-        "y", "", "", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
+        "y", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
         "y", "n", NULL
     };
     static const char *const un[] = { "REMOVE", NULL };
@@ -21694,11 +21822,11 @@ static int selftest_screens(void)
 {
     static const int order[] = {
         /* NT /list: nothing asked; NT install: the Thunderbolt question,
-         * the port switchover, the interrupt mode, the forced Bulk-Only,
-         * the connection manager's three, the directory, the confirmation,
-         * the word. */
+         * the port switchover, the connection manager's three (the
+         * interrupt mode and the forced Bulk-Only Advanced since record 26
+         * draft 35), the directory, the confirmation, the word. */
         INST_Q_TB, INST_Q_VALUE, INST_Q_VALUE, INST_Q_VALUE, INST_Q_VALUE,
-        INST_Q_VALUE, INST_Q_VALUE, INST_Q_DIR, INST_Q_CONFIRM, INST_Q_REMOVE
+        INST_Q_DIR, INST_Q_CONFIRM, INST_Q_REMOVE
     };
     INST_ENV saved = envNow;
     INST_FRONT savedFront = front;
@@ -22290,6 +22418,9 @@ static int mw_values_remove(void)
         return 0;
     }
     for (v = 0; v < instValueCount; v++) {
+        if (instValues[v].Loc != INST_LOC_MW) {
+            continue;   /* goes with the mark service's key */
+        }
         if (opts.List) {
             DWORD t;
             if (RegQueryValueExA(k, instValues[v].Name, NULL, &t, NULL, NULL) ==

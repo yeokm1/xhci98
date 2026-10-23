@@ -1,6 +1,13 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 36, 2026-10-23 (roadmap-usb4 task 43.46, design record
+Status: revision 37, 2026-10-23 (roadmap-usb4 task 43.42's
+simplification, record 26 draft 35: the x64 package refused without
+`xhcicm.cat` beside the connection manager, section 5.10; the console
+no longer asks `XhciInterruptMode` and `XhciForceBulkOnly`, section 8;
+Stor98's Enter default from one per-system table, section 8.5; on 98 SE
+and ME `xhciuas.sys` put in `SYSTEM32\DRIVERS` with the UAS driver,
+section 6; decision D20);
+revision 36, 2026-10-23 (roadmap-usb4 task 43.46, design record
 30 section 7.2: `/s98vsd` and `/nos98vsd`, `S98VSD.VXD` with Stor98 on
 98 SE and ME, the switch table; recorded at the batch 7 merge);
 revision 35, 2026-10-22 (roadmap-usb4 task 43.27, record 25
@@ -2198,11 +2205,11 @@ user-visible effect, off or on by default for a reason the user can judge
 | Value | INF, section | Asked when | Allowed (asked) | Allowed (`/set`) | Meaning shown |
 |---|---|---|---|---|---|
 | `XhciIntelPortSwitch` | `xhci98.inf`, the controller's | a present controller passes the driver's `XhciPswGate` (Intel 7-, 8- and 9-series, C610) | 0, 1 | 0, 1, 2 (2 is the README's "at your own risk" setting for other Intel controllers) | route the shared connectors from the EHCI controller to this driver |
-| `XhciInterruptMode` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1, 2; 3 on Vista and 7 only | 0, 1, 2; 3 on Vista and 7 only (it fails the start elsewhere) | automatic, line only, polling always, message only |
+| `XhciInterruptMode` | `xhci98.inf`, the controller's | never (revision 37, D20 (b); the window's Advanced) | - | 0, 1, 2; 3 on Vista and 7 only (it fails the start elsewhere) | automatic, line only, polling always, message only |
 | `XhciPollFineTimer` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | a finer system clock while polling |
 | `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
 | `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later, where the window shows it greyed (record 26 section 5.4) | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
-| `XhciForceBulkOnly` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1 | 0, 1 | Bulk-Only instead of UAS for a disk that offers both, from its next connection; a UAS-only disk is not affected |
+| `XhciForceBulkOnly` | `xhci98.inf`, the controller's | never (revision 37, D20 (b); the window's Advanced) | - | 0, 1 | Bulk-Only instead of UAS for a disk that offers both, from its next connection; a UAS-only disk is not affected |
 | `XhciFastPollFsLs` | `xhci98.inf`, the controller's | never (owner, 2026-10-19; the window's "Advanced...") | - | 0, 2, 3, 4 (1 is not a mode) | poll a mouse faster than 1000 Hz, with SweetLow's hidusbf: off (0); a root-port mouse set to 31/62 Hz in hidusbf at 2000/4000 Hz (2) or 4000/8000 Hz (3); the rate the client chooses, codes 128 to 143 (4). Its caution: outside the xHCI specification for Low and Full Speed, read at the controller's start so restart after changing it, and with 4 the value set and Windows restarted before the filter's code |
 | `XhciCmMode` | `xhcicm.inf`, the NHI's | a present NHI `xhcicm.inf` matches | 0, 1 | 0 to 3 | the connection manager off or automatic (2 and 3 are the record 21 overrides, `/set` only) |
 | `XhciCmApprove` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | approve Thunderbolt devices automatically |
@@ -3092,7 +3099,11 @@ the user.
   component in the run, on 2000 to 7; every name is removed, step 0
   first, whenever no `xhcicm` service is left; and the Advanced dialog
   does not yet offer the service's `Restart` (it is set by hand under
-  `Services\xhcimark\Parameters`).
+  `Services\xhcimark\Parameters`). Amended by revision 37: `Restart` is a
+  row of the value table with its own location (record 26 section 5.0,
+  `INST_LOC_MARK`), the Thunderbolt tab's Advanced row and `/set
+  Restart=0`, written to that key in the service's step before its
+  start and never under `Services\USB`.
 - **D17** (revision 13; the owner's request of 2026-10-19, the choices
   below the orchestrator's) The connection manager alone: offered on 2000
   to 7 by `/cmonly` or the window's box, the only install on 8 and 8.1,
@@ -3112,6 +3123,23 @@ the user.
   tasks 43.29's and 43.23's installer rows.
 - **D19** (revision 13) The mark service on 8 and 8.1 as on 2000 to 7
   (section 9.5).
+- **D20** (revision 37; the owner, 2026-10-22 and 2026-10-23; record 26
+  section 5.0, draft 35) Four changes of the tool with the window's
+  simplification. (a) The 64-bit tool refuses, before any change, a
+  package carrying the connection manager's three files without
+  `xhcicm.cat` beside them (`inst_cm_cat_refusal`); a package without
+  the connection manager needs no catalog of it, and the x86 tool is
+  unchanged. (b) `XhciInterruptMode` and `XhciForceBulkOnly` are no
+  longer asked (their `Asked` mask 0: Advanced rows of the window);
+  `/set` sets them as before. (c) Stor98's question takes its Enter
+  default from `inst_s98_box_default`, one line per system, [Y] on every
+  system for now, 8 and 8.1 included (the `is8` exception and its
+  warning removed). (d) On 98 SE and ME, with the USB drivers and the UAS
+  driver in the run, `xhciuas.sys` is put in `%windir%\SYSTEM32\DRIVERS`
+  after the helper's installs, so the New Hardware wizard of a UAS disk
+  plugged in later finds it and asks for no disk (the 98 SE reading of
+  2026-10-23, record 26 section 5.0); the uninstall's 9x file list
+  already removes it.
 
 ## 14. Open, and the risks
 

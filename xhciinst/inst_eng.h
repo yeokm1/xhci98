@@ -281,6 +281,13 @@ INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, const char *dir,
 /* The Summary's line for it, "" when it is not shown. */
 void inst_eng_stor_summary(char *out, size_t cap);
 void inst_eng_s98_choose(int include);
+/* Stor98's box while the Thunderbolt box is ticked, on this system (record
+ * 26 section 5.0, draft 35: inst_s98_box_default). */
+int inst_eng_s98_default(void);
+/* The store trap found (record 23 section 5.7): the Components page's
+ * "Replace the stored build" box shown; its choice is /restage's. */
+int inst_eng_restage_state(void);
+void inst_eng_restage_choose(int on);
 
 /* One of its settings (section 5.6): its name on this system, on the page
  * (Asked) or behind Advanced, what is set now (State 1 set, 0 not, -1
