@@ -689,6 +689,8 @@ static void disk_facts(const char *folder, PF_ENV *e)
 static int g_s98state;
 /* why the last run ended before its plan did, for its report */
 static char g_runWhy[400];
+/* the whole file's verification: the blocks it could not check */
+static volatile pf_u32 g_endUnchecked;
 /* The run's search state, as its report states it: set as the run starts
  * and changed only by the run's own counter reads */
 static int g_runS98state, g_runS98matches, g_runS98ids;
@@ -2849,12 +2851,18 @@ static unsigned __stdcall run_main(void *arg)
     } else if (g_p.verify && r->map != NULL && (g_p.verifyEnd || g_plan.minWrite == 0)) {
         pf_u32 fb;
         pf_u32 bad;
+        pf_u32 inc0 = r->incomplete;
 
         post_status("Verifying the whole file");
         bad = verify_since(r, 0, 1, &fb);
+        g_endUnchecked = r->incomplete - inc0;
         if (bad == 0 && r->verifyCut) {
             InterlockedExchange((LONG *)&g_endVerify, PF_EV_STOPPED);
             post_log("The whole file's verification was stopped before its end; it is not known to be clean.");
+        } else if (bad == 0 && g_endUnchecked != 0) {
+            /* blocks a refused or unfinished request left unknown were skipped */
+            InterlockedExchange((LONG *)&g_endVerify, PF_EV_INCOMPLETE);
+            post_log("The whole file's verification found no error, but not every block was checked.");
         } else if (bad == 0) {
             InterlockedExchange((LONG *)&g_endVerify, PF_EV_CLEAN);
             post_log("The whole file verified clean.");
@@ -2987,6 +2995,7 @@ static char *build_report(size_t *lenOut)
     ri.stor98 = pages;
     ri.endVerify = (int)g_endVerify;
     ri.stopped = g_runWhy;
+    ri.endUnchecked = g_endUnchecked;
     pf_tx_init(&t, buf, cap);
     {
         /* the run's workload; only how values are shown follows the window */
@@ -3834,6 +3843,7 @@ static void start_run(void)
     InterlockedExchange((LONG *)&g_running, 1);
     InterlockedExchange((LONG *)&g_runBad, 0);
     InterlockedExchange((LONG *)&g_endVerify, PF_EV_NONE);
+    g_endUnchecked = 0;
     controls_enable(0);
     EnableWindow(ctl(IDC_START), FALSE);
     EnableWindow(ctl(IDC_STOP), TRUE);

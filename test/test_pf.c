@@ -500,6 +500,23 @@ static void test_key_saved(void)
     CHECK_EQ(sv.nrows, 8, "eight results");
     CHECK(strstr(buf, "Stopped:") == NULL, "a run that ended as planned has no Stopped line");
     {
+        /* a whole-file verification that skipped blocks is not called clean */
+        static char b3[65536];
+        PF_TEXT t3;
+
+        ri.endVerify = PF_EV_INCOMPLETE;
+        ri.endUnchecked = 12;
+        pf_tx_init(&t3, b3, sizeof(b3));
+        pf_report(&t3, &p, &pl, res, 1, &ri);
+        CHECK(strstr(b3, "Whole file:  no error found, but not complete: 12 blocks not checked") != NULL,
+              "an incomplete whole-file verification says so");
+        CHECK(strstr(b3, "XPRF-VERIFY 1 5") != NULL, "and its machine line");
+        CHECK_EQ(pf_saved_parse(b3, t3.len, &sv), 0, "which reads back");
+        CHECK_EQ(sv.endVerify, PF_EV_INCOMPLETE, "as incomplete");
+        ri.endVerify = PF_EV_NONE;
+        ri.endUnchecked = 0;
+    }
+    {
         /* a /report or /folder longer than the field is refused, not cut */
         static char lng[300];
         char *av[4];

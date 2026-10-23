@@ -1553,6 +1553,9 @@ a choice:
   run's workload and dropped from the display when they differ.
 - **A stopped verification** is never reported clean: a step's becomes
   Stopped, the whole file's says it is not known to be clean.
+  One that skipped blocks a refused or unfinished request left unknown
+  is not either: the whole file's then reads "no error found, but not
+  complete" with the count (`XPRF-VERIFY 1 5`).
 - **The plan is made aside**: a refused start leaves the shown results and
   their plan as they were.
 - **Medians**: with Show set to Median, IOPS is the median pass's too.

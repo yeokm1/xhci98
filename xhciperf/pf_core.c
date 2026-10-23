@@ -1570,11 +1570,16 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
     pf_tx_nl(t);
     if (ri->endVerify != PF_EV_NONE) {
         static const char *const ev[] = {
-            "", "clean", "DATA ERRORS FOUND", "the file could not be read", "stopped before its end: not known to be clean"
+            "", "clean", "DATA ERRORS FOUND", "the file could not be read", "stopped before its end: not known to be clean",
+            "no error found, but not complete: "
         };
 
         pf_tx_s(t, "Whole file:  ");
-        pf_tx_s(t, (ri->endVerify > 0 && ri->endVerify <= PF_EV_STOPPED) ? ev[ri->endVerify] : "?");
+        pf_tx_s(t, (ri->endVerify > 0 && ri->endVerify <= PF_EV_INCOMPLETE) ? ev[ri->endVerify] : "?");
+        if (ri->endVerify == PF_EV_INCOMPLETE) {
+            pf_tx_u(t, ri->endUnchecked);
+            pf_tx_s(t, " blocks not checked");
+        }
         pf_tx_nl(t);
     }
     pf_tx_s(t, "Passes:      ");
@@ -1817,7 +1822,7 @@ long pf_saved_parse(const char *text, size_t len, PF_SAVED *sv)
         } else if (n >= 14 && memcmp(s, "XPRF-VERIFY 1 ", 14) == 0) {
             pf_u64 v;
 
-            if (!pf_parse_u64(s + 14, n - 14, &v) || v > PF_EV_STOPPED) {
+            if (!pf_parse_u64(s + 14, n - 14, &v) || v > PF_EV_INCOMPLETE) {
                 return line;
             }
             sv->endVerify = (int)v;
