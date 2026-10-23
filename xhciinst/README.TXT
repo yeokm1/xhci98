@@ -336,9 +336,10 @@ the drivers afresh (nor does Windows 10's).
 
 Windows 10 is installable. Its drivers were read in virtual machines of
 22H2, each installed by a script; the installer's console install and
-uninstall were read there only in task 43.59's legs (10 x86 and x64),
-and its full matrix is still to run. It admits every build below
-22000 - the releases 1507 to 22H2 and
+uninstall were read there in task 43.59's legs (10 x86 and x64), and the
+full matrix through the installer in task 43.24's (an uninstall there may
+need a restart and a second run). It admits every build below 22000 -
+the releases 1507 to 22H2 and
 the LTSC releases - and Windows Server 2016, 2019 and 2022, which it
 treats as Windows 10 and which are untested; only 22H2 is to be tested.
 It installs there as on Windows 8.1 but for Stor98: the connection manager,

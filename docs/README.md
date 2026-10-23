@@ -87,6 +87,9 @@ source comments, scripts, and other docs use these same locations.
   task 43.14's: whether an INF naming a refused storage interface's VID/PID
   binds it on Windows 98 SE and ME, and task 43.16's legs of the device id that
   replaced it.
+- [Phase 43, the Windows 8 to 10 installer legs](contributing/runs/run-43-24.md) -
+  tasks 43.24, 43.31 and 43.37: the installer's own route on 8, 8.1 and
+  10, x86 and x64, in QEMU with the emulated Thunderbolt 3 controller.
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
