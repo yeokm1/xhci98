@@ -3622,11 +3622,16 @@ two drivers faulted equally often (6 and 6). None of these differences is
 significant, and the fault itself is IOS's. Every surviving run's
 `fc /b` after the replug was clean.
 
+### The owner's decision (2026-10-23)
+
+The owner judged 43.69 against its base, the branch before it, on which
+it is no worse, and ticked it. The difference between `3.1.0.0` and the
+`3.2.0.0` line stays open for after the release.
+
 ### Owed
 
-- The owner's reading of the criterion: "no worse than the release
-  driver" holds against the task's own base and on the patched QEMU, not
-  in the raw stock-QEMU count against `3.1.0.0`.
+- The `3.1.0.0` against `3.2.0.0` fault rate: the line's higher count on
+  stock QEMU (not significant, p = 0.15), open for after the release.
 - The 98 SE IOS fault on real hardware, under NUSB 3.3 and a real stick.
 - `qemu-system-x86_64` (stock and the `qemu-cancel` build) exiting at a
   `device_del` of a `usb-storage` stick, for the emulator's keepers.
