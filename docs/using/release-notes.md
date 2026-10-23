@@ -245,7 +245,8 @@ as they are made; the head of this file is rewritten when it is cut.
   over an install that has the Thunderbolt driver leaves that driver as
   it is unless you tick the box.
 - **Stor98 comes with the Thunderbolt 3 / USB4 support.** Ticking the
-  Thunderbolt box ticks the Stor98 box under it, which you can untick;
+  Thunderbolt box ticks the "Stor98 (hot-pluggable NVMe driver)" box under
+  it, which you can untick;
   in the console `/thunderbolt` includes Stor98 too (asked, Enter for Y;
   unasked with `/yes`), and `/nostor98` leaves it out.
 - **Windows 98 SE and ME: Stor98 is updated as a file.** An older
@@ -257,9 +258,9 @@ as they are made; the head of this file is rewritten when it is cut.
   `stor98.inf` Windows keeps, and asks you to shut down and start
   Windows again. It does so whether or not the enclosure is plugged in,
   so an enclosure that was unplugged during the update no longer keeps
-  the old Stor98. The Summary page asks for one tick first, "Please
+  the old Stor98. Install asks first in a message box, "Please
   disconnect all external NVMe drives before proceeding" (the console
-  asks the same, Enter for N); unticked, Stor98 is left for a later run.
+  asks the same, Enter for N); Cancel stays on the Summary page.
   A drive first plugged after the start binds to the new Stor98. And an
   install the helper could not finish is now reported as unfinished,
   with steps, rather than as "nothing to do".

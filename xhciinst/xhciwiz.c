@@ -1300,7 +1300,7 @@ static void othlist_detail(int set, int i)
     }
     {
         char scope[600];
-        inst_eng_other_pkg_scope(set, i, scope, sizeof(scope));
+        inst_eng_other_pkg_scope(set, i, dirChoice, scope, sizeof(scope));
         _snprintf(text, sizeof(text) - 1, "%s:%s. %s%s%s%s",
                   set == INST_SET_FREE ? "free" : "nonfree", v.Id,
                   v.Blocked ? "Not available: " : "", v.Blocked ? v.Why : "",
@@ -1338,6 +1338,7 @@ static void othlist_sync(void)
         int open = IsDlgButtonChecked(GetParent(othList), oth_id(set,
                                       IDC_O_BOX)) == BST_CHECKED;
         INST_OTHPKG_VIEW v;
+        (void)first;
         for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
             HWND b = GetDlgItem(othList, othlist_id(set, i));
             char label[INST_PKG_DESC_MAX + 40];
@@ -1351,17 +1352,22 @@ static void othlist_sync(void)
             CheckDlgButton(othList, othlist_id(set, i), v.Tick ? BST_CHECKED
                                                                : BST_UNCHECKED);
             EnableWindow(b, open);
-            {
-                /* The tab stop on the first open box: Tab enters the list
-                 * there, the arrows move within it. */
-                LONG st = GetWindowLongA(b, GWL_STYLE) &
-                          ~(LONG)(WS_TABSTOP | WS_GROUP);
-                if (open && first) {
-                    st |= WS_TABSTOP | WS_GROUP;
-                    first = 0;
-                }
-                SetWindowLongA(b, GWL_STYLE, st);
+        }
+    }
+    {
+        /* The tab stop and the group on the first open box in the list's
+         * own order: Tab enters the list there, the arrows move within it,
+         * and no other control starts a group. */
+        HWND c = GetWindow(othList, GW_CHILD);
+        for (; c != NULL; c = GetWindow(c, GW_HWNDNEXT)) {
+            LONG st = GetWindowLongA(c, GWL_STYLE) &
+                      ~(LONG)(WS_TABSTOP | WS_GROUP);
+            if (first && IsWindowEnabled(c) &&
+                GetDlgCtrlID(c) >= IDC_OL_BASE) {
+                st |= WS_TABSTOP | WS_GROUP;
+                first = 0;
             }
+            SetWindowLongA(c, GWL_STYLE, st);
         }
     }
 }
@@ -1642,7 +1648,7 @@ static void oth_fill(HWND dlg)
         }
         /* Absent or not this release's, the line takes the row's place. */
         r.left = 8;
-        r.top = set == INST_SET_FREE ? (shown ? 38 : 2) : (shown ? 92 : 56);
+        r.top = set == INST_SET_FREE ? (shown ? 46 : 2) : (shown ? 107 : 63);
         r.right = 8 + 284;
         r.bottom = r.top + 16;
         top = r;
@@ -3365,7 +3371,8 @@ static void summary_fill(HWND dlg)
                     if (e != NULL) {
                         *e = '\0';
                     }
-                    _snprintf(line, sizeof(line) - 1, "- %s\n", p);
+                    _snprintf(line, sizeof(line) - 1, p[0] == ' ' ?
+                              "%s\n" : "- %s\n", p);
                     line[sizeof(line) - 1] = '\0';
                     tb_add(&t, line);
                     if (e == NULL) {

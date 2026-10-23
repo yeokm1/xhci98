@@ -310,7 +310,8 @@ int inst_eng_other_pkg(int set, int i, INST_OTHPKG_VIEW *v);
 int inst_eng_other_pkg_tick(int set, int i, int tick);
 const char *inst_eng_other_earlier(int set);
 /* The package's scope on this system in words, for its details. */
-void inst_eng_other_pkg_scope(int set, int i, char *out, size_t cap);
+void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
+                              size_t cap);
 /* The free set's certificate (section 6.7.11): ticked, and *offered the
  * box shown; and its choice. */
 int inst_eng_other_trust(int *offered);

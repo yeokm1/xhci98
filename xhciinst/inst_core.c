@@ -5439,7 +5439,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       284, 20 },
     { INST_PT_NOW, "Restart Windows now", 284, 10 },
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
-    { INST_PT_S98, "Stor98, the bundled NVMe driver", 258, 10 },
+    { INST_PT_S98, "Stor98 (hot-pluggable NVMe driver)", 258, 10 },
     { INST_PT_S98_T,
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",

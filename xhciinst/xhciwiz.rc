@@ -136,15 +136,15 @@ CAPTION "Other USB drivers"
 FONT 8, "MS Sans Serif"
 BEGIN
     AUTOCHECKBOX    "", 1090, 8, 2, 284, 10, WS_TABSTOP
-    LTEXT           "", 1091, 20, 12, 272, 26
-    LTEXT           "", 1094, 8, 38, 284, 16
-    AUTOCHECKBOX    "", 1095, 8, 56, 284, 10, WS_TABSTOP
-    LTEXT           "", 1096, 20, 66, 272, 26
-    LTEXT           "", 1099, 8, 92, 284, 16
+    LTEXT           "", 1091, 20, 12, 272, 34
+    LTEXT           "", 1094, 8, 46, 284, 16
+    AUTOCHECKBOX    "", 1095, 8, 63, 284, 10, WS_TABSTOP
+    LTEXT           "", 1096, 20, 73, 272, 34
+    LTEXT           "", 1099, 8, 107, 284, 16
     LTEXT           "Let Windows choose these drivers automatically for matching devices:",
-                    IDC_O_HEAD, 8, 110, 284, 10
-    LTEXT           "", IDC_O_AREA, 8, 121, 284, 52, NOT WS_VISIBLE
-    EDITTEXT        IDC_O_DETAIL, 8, 175, 284, 32, ES_MULTILINE | ES_READONLY |
+                    IDC_O_HEAD, 8, 124, 284, 10
+    LTEXT           "", IDC_O_AREA, 8, 134, 284, 42, NOT WS_VISIBLE
+    EDITTEXT        IDC_O_DETAIL, 8, 178, 284, 29, ES_MULTILINE | ES_READONLY |
                     ES_AUTOVSCROLL | WS_VSCROLL | NOT WS_TABSTOP
 END
 

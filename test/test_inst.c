@@ -4347,10 +4347,10 @@ static void test_s98(void)
               NULL &&
           strstr(inst_page_text(INST_PT_S98_T), "internal") == NULL,
           "the Components page's sentence");
-    /* Roadmap 43.7 (owner, 2026-10-19): part of this package. */
+    /* The owner, 2026-10-23 (replacing roadmap 43.7's "the bundled"). */
     CHECK(strcmp(inst_page_text(INST_PT_S98),
-                 "Stor98, the bundled NVMe driver") == 0,
-          "the Components row names Stor98 as this package's");
+                 "Stor98 (hot-pluggable NVMe driver)") == 0,
+          "the Components row: the owner's words of 2026-10-23");
 }
 
 /* ---- task 42-A.17's reading rule; task 42-A.5's installer hooks --------- */

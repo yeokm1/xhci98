@@ -121,7 +121,7 @@ the BIOS
 already gave them one. Unticked, a Thunderbolt driver already installed
 stays as it is, and this package's is kept out of Windows' reach.
 
-Stor98, the bundled NVMe driver (its guide is stor98-readme.txt):
+Stor98 (hot-pluggable NVMe driver; its guide is stor98-readme.txt):
 ticked with the Thunderbolt 3 / USB4 box, and you
 can untick it. Ticked, it is installed on every NVMe drive behind a
 Thunderbolt or USB4 tunnel that has no driver - never on one another
