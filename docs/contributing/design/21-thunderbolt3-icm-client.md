@@ -904,15 +904,49 @@ revised by the owner on 2026-10-15 to name the hardware rather than the
 driver's role. Each NHI line names its controller's generation, never the
 connection manager that runs it, so a controller keeps its name whichever
 of the ICM client and the USB4 software connection manager takes it:
-`xHCI98 Thunderbolt 2 Controller` (`Tb2Desc`) for Falcon Ridge `156A` and
-`156C`; `xHCI98 Thunderbolt 3 Controller` (`NhiDesc`) for Alpine Ridge,
-Titan Ridge and Ice Lake `8A17` and `8A0D`; `xHCI98 USB4 Host Router`
-(`U4Desc`) for Maple Ridge, Tiger Lake to Meteor Lake and every line of
-design record 22 section 3.7, the class line included. A message profile
-is not a generation: Ice Lake is Thunderbolt 3 hardware though it shares
-the ICL messages with its USB4 successors, and Maple Ridge is USB4
-hardware though it speaks the TR messages. "Host Router" is USB4's name
-for the host's own router, which the NHI belongs to. The filter INF
+the generation's base - `xHCI98 TB2 Controller` for Falcon Ridge,
+`xHCI98 TB3 Controller` for Alpine Ridge, Titan Ridge and Ice Lake,
+`xHCI98 USB4 Router` for Maple Ridge, Tiger Lake onward and every line of
+design record 22 section 3.7 - and since 3.2.0.0 the maker and product
+after it, one `[Strings]` entry per product (roadmap-usb4 task 43.73, the
+owner, 2026-10-23: "Base (Maker Product)" in the compact form, TB2 and TB3
+for Thunderbolt 2 and 3, Router for Host Router, within 98 SE's 46
+characters, design record 23 section 5.13.1); the class line keeps the
+plain `xHCI98 USB4 Router` (`U4Desc`). Up to 3.1.0.0 the strings were
+`xHCI98 Thunderbolt 2 Controller` (`Tb2Desc`), `xHCI98 Thunderbolt 3
+Controller` (`NhiDesc`) and `xHCI98 USB4 Host Router` (`U4Desc`), with no
+product. A message profile is not a generation: Ice Lake is Thunderbolt 3
+hardware though it shares the ICL messages with its USB4 successors, and
+Maple Ridge is USB4 hardware though it speaks the TR messages. "Router" is
+USB4's Host Router, the host's own router, which the NHI belongs to. A
+description is no input to Windows' ranking, so the per-product strings on
+the same lines rank as the three strings did (record 23 section 5.13).
+
+| Ids (8086 unless shown) | Token | Device Manager name | Source of the product |
+|---|---|---|---|
+| `156A`, `156C` | `Tb2FrDesc` | `xHCI98 TB2 Controller (Intel Falcon Ridge)` | `src\cm\cm_vals.c` (Falcon Ridge 2C, 4C); usb4-emu `docs/CONTROLLER-CATALOG.md` (Falcon Ridge row); Linux `pci_ids.h` `PCI_DEVICE_ID_INTEL_FALCON_RIDGE_*_NHI` |
+| `1575`, `1577`, `15BF`, `15D2`, `15D9` | `Tb3ArDesc` | `xHCI98 TB3 Controller (Intel Alpine Ridge)` | `cm_vals.c` (Alpine Ridge 2C, 4C, LP, C 4C, C 2C); the catalog's Alpine Ridge rows; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_LP_NHI`, `_C_4C_NHI`, `_C_2C_NHI`; FreeBSD `nhi_reg.h` `DEVICE_AR_*`; `15BF` captured (the P14s Gen 1) |
+| `15E8`, `15EB` | `Tb3TrDesc` | `xHCI98 TB3 Controller (Intel Titan Ridge)` | `cm_vals.c`; the catalog's Titan Ridge row; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_TITAN_RIDGE_2C_NHI`, `_4C_NHI` |
+| `8A0D`, `8A17` | `Tb3IlDesc` | `xHCI98 TB3 Controller (Intel Ice Lake)` | `cm_vals.c`; the catalog's Ice Lake row; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_ICL_NHI1`, `_NHI0` |
+| `1134`, `1137` | `U4MrDesc` | `xHCI98 USB4 Router (Intel Maple Ridge)` | `cm_vals.c`; the catalog's Maple Ridge row; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_MAPLE_RIDGE_2C_NHI`, `_4C_NHI` |
+| `9A1B`, `9A1D`, `9A1F`, `9A21` | `U4TlDesc` | `xHCI98 USB4 Router (Intel Tiger Lake)` | `cm_vals.c`; record 22 section 3.1; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_TGL_NHI0`, `_NHI1`, `TGL_H_NHI0`, `_NHI1` |
+| `463E`, `466D` | `U4AdDesc` | `xHCI98 USB4 Router (Intel Alder Lake)` | `cm_vals.c`; the catalog's Alder Lake-P row (`463e` read on the Framework); Linux `nhi.h` `PCI_DEVICE_ID_INTEL_ADL_NHI0`, `_NHI1` |
+| `A73E`, `A76D` | `U4RlDesc` | `xHCI98 USB4 Router (Intel Raptor Lake)` | `cm_vals.c`; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_RPL_NHI0`, `_NHI1` |
+| `7EB2`, `7EC2`, `7EC3` | `U4MlDesc` | `xHCI98 USB4 Router (Intel Meteor Lake)` | `cm_vals.c` (Meteor Lake M, P); Linux `nhi.h` `PCI_DEVICE_ID_INTEL_MTL_M_NHI0`, `MTL_P_NHI0`, `_NHI1` |
+| `A833`, `A834` | `U4LnDesc` | `xHCI98 USB4 Router (Intel Lunar Lake)` | `cm_vals.c`; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_LNL_NHI0`, `_NHI1` |
+| `E333`, `E334`, `E433`, `E434` | `U4PlDesc` | `xHCI98 USB4 Router (Intel Panther Lake)` | `cm_vals.c` (Panther Lake M, P); Linux `nhi.h` `PCI_DEVICE_ID_INTEL_PTL_M_NHI0` to `PTL_P_NHI1` |
+| `4D33` | `U4WlDesc` | `xHCI98 USB4 Router (Intel Wildcat Lake)` | `cm_vals.c`; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_WCL_NHI0` |
+| `5781`, `5784` | `U4BrDesc` | `xHCI98 USB4 Router (Intel Barlow Ridge)` | `cm_vals.c` (host 80G, 40G); Linux `nhi.h` `PCI_DEVICE_ID_INTEL_BARLOW_RIDGE_HOST_80G_NHI`, `_40G_NHI` |
+| `1022:1668`, `1022:1669` | `U4PsDesc` | `xHCI98 USB4 Router (AMD Pink Sardine)` | `cm_vals.c`; record 22 section 3.1; FreeBSD `nhi_reg.h` `DEVICE_PINK_SARDINE_0`, `_1` (Linux names no AMD NHI id) |
+| class `0C0340` | `U4Desc` | `xHCI98 USB4 Router` | any other USB4 host (ASMedia, other AMD, the emulator's `1B36:00F4`) |
+
+The product is the family, not the part: the 2C, 4C, LP and C parts of
+Alpine Ridge are one name, as Tiger Lake's UP3 and H are and Barlow Ridge's
+80G and 40G. Every id's product is established by the repository's own
+table and a second source; none is left for the owner. The table lives as
+`instNhiNames` in `xhciinst\inst_core.c` (XHCITR shows the same names, record
+23 section 5.13.5), `test_inst` holds both NHI INFs to it line by line, and
+the gate's `CM-DESC` holds each id to its token. The filter INF
 becomes the port's device INF - its model line supplies the description,
 and `Include`/`Needs` reuse `machine.inf`'s install sections but not its
 name - so the filter's descriptions name the bridge, not the filter:

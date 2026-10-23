@@ -247,9 +247,14 @@ run sheets cite them.
 The two nodes of 4.3, as Device Manager shows them:
 
 ```
-xHCI98 USB 3.x eXtensible Host Controller
+xHCI98 USB 3 Controller (Red Hat QEMU xHCI)
     xHCI98 USB 3.x Root Hub
 ```
+
+(the controller's product as the installer names it, design record 23
+section 5.13: on another controller its own product, or the plain
+"xHCI98 USB 3 Controller" for one the table does not know, or after a hand
+install; "xHCI98 USB 3.x eXtensible Host Controller" up to `3.1.0.0`)
 
 Both are the INFs' strings, and both architectures' INFs carry the same ones,
 so they do not say which package was installed; what says that is which

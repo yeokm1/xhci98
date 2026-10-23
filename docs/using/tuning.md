@@ -29,7 +29,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
 | 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
 
-`NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
+`NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3 Controller" (from `3.2.0.0`; "xHCI98 USB 3.x eXtensible Host Controller" before it). The number varies from machine to machine.
 
 **One value for every controller (from `3.1.0.0`).** Every value below, and every `XhciCm*` value of the Thunderbolt driver, can also be set once for the whole machine, in this key on every Windows:
 

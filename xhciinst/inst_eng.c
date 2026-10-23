@@ -110,6 +110,7 @@ static INST_FRONT front;
 #define INST_CM_DRP_HARDWAREID      0x00000002UL
 #define INST_CM_DRP_COMPATIBLEIDS   0x00000003UL
 #define INST_CM_DRP_DRIVER          0x0000000AUL
+#define INST_CM_DRP_FRIENDLYNAME    0x0000000DUL
 #define INST_INSTALL_WAIT_MS        600000UL   /* the barrier: a wizard answered */
 #define INST_FIRST_WAIT_MS          60000UL    /* before the first change      */
 #define INST_REAPPEAR_MS            15000UL    /* a device a parent's job hid */
@@ -200,6 +201,7 @@ static struct {
 typedef struct _DEVREC {
     char Id[INST_ID_CHARS];
     char Desc[128];
+    char Friendly[128];     /* FriendlyName, "" none (task 43.73)  */
     char Service[64];
     char Driver[128];
     char Hw[INST_MSZ_BYTES];
@@ -1192,6 +1194,11 @@ static void walk_cm(DWORD dn, int depth)
             }
             prop9x(dn, d->Id, INST_CM_DRP_DEVICEDESC, "DeviceDesc", d->Desc,
                    sizeof(d->Desc));
+            prop9x(dn, d->Id, INST_CM_DRP_FRIENDLYNAME, "FriendlyName",
+                   d->Friendly, sizeof(d->Friendly));
+            if (d->Friendly[0] != '\0') {
+                inst_copy(d->Desc, d->Friendly, sizeof(d->Desc));
+            }
             d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
             d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
             if (api.Status(&status, &problem, dn, 0) == INST_CR_SUCCESS) {
@@ -1362,6 +1369,12 @@ static int scan_nt(void)
             unreadable++;
         }
         sd_prop(set, &data, SPDRP_DEVICEDESC, d->Desc, sizeof(d->Desc), NULL);
+        sd_prop(set, &data, SPDRP_FRIENDLYNAME, d->Friendly,
+                sizeof(d->Friendly), NULL);
+        if (d->Friendly[0] != '\0') {
+            /* The name Device Manager shows is the one said (task 43.73). */
+            inst_copy(d->Desc, d->Friendly, sizeof(d->Desc));
+        }
         cr = api.Status(&status, &problem, data.DevInst, 0);
         if (cr == INST_CR_SUCCESS) {
             d->Present = 1;
@@ -1894,8 +1907,21 @@ static void print_plan(void)
             continue;
         }
         any = 1;
-        out("  %s\n", d->Desc[0] ? d->Desc : "(no description)");
+        out("  %s\n", d->Friendly[0] ? d->Friendly :
+                      d->Desc[0] ? d->Desc : "(no description)");
         out("    %s\n", d->Id);
+        {
+            /* Record 23 section 5.13: the name the install gives it. */
+            char canon[INST_NAME_MAX + 8];
+            INST_U32 vd;
+            if (usbInclude && d->Inf == INST_INF_XHCI && is_controller(d) &&
+                inst_pci_vendev(first_hw(d), &vd) &&
+                inst_xhci_name(vd & 0xFFFFUL, vd >> 16, canon,
+                               sizeof(canon)) == 1 &&
+                strcmp(canon, d->Friendly) != 0) {
+                out("    Device Manager name: %s\n", canon);
+            }
+        }
         out("    INF %s; driver %s%s%s; %s%s\n", instInfFile[d->Inf],
             d->Service[0] ? d->Service : "none",
             d->VersionText[0] ? " " : "", d->VersionText,
@@ -9520,6 +9546,294 @@ static int find_in_set(HDEVINFO set, const char *id, SP_DEVINFO_DATA *data)
     }
 }
 
+/* ======================================================================== */
+/* Controller names (record 23 section 5.13, task 43.73)                     */
+/* ======================================================================== */
+
+/* xhci98.inf matches the xHCI class alone and gives every controller the one
+ * plain name; a hardware-id line would outrank Windows' own usbxhci on 8 to
+ * 10. So the product name is the devnode's FriendlyName, which this step
+ * writes from inst_core.c's table after every install run, whatever the run
+ * did (a same-version run reinstalls nothing), and clears at the uninstall.
+ * HKLM\Software\xhci98\Names records each instance named and the name
+ * written: only a name this installer wrote is ever changed or cleared, so
+ * a user's rename (or a vendor tool's) stays, and a controller another
+ * driver took over loses the name that would call it xHCI98's. The bridge
+ * and the NHI are never named here (their INFs name them). */
+#define INST_NAMES_KEY      INST_DIR_KEY "\\Names"
+#define INST_FNAME_CHARS     128
+
+/* 1 read (buf the name written), 0 none. */
+static int names_rec_get(const char *id, char *buf, DWORD cap)
+{
+    return reg_text(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, id, buf, cap, NULL) &&
+           buf[0] != '\0';
+}
+
+static int names_rec_put(const char *id, const char *name)
+{
+    HKEY k;
+    LONG w;
+
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return 0;
+    }
+    w = RegSetValueExA(k, id, 0, REG_SZ, (const BYTE *)name,
+                       (DWORD)strlen(name) + 1);
+    RegCloseKey(k);
+    return w == ERROR_SUCCESS;
+}
+
+static void names_rec_del(const char *id)
+{
+    HKEY k;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0, KEY_SET_VALUE,
+                      &k) == ERROR_SUCCESS) {
+        RegDeleteValueA(k, id);
+        RegCloseKey(k);
+    }
+}
+
+/* The devnode's FriendlyName now: 1 read ("" none), 0 no such devnode, -1
+ * unreadable. set is NT's device list (every class, present or not). */
+static int names_now(HDEVINFO set, const char *id, char *buf, DWORD cap)
+{
+    SP_DEVINFO_DATA data;
+    int r;
+
+    buf[0] = '\0';
+    if (envNow.Nt) {
+        if (set == INVALID_HANDLE_VALUE || !find_in_set(set, id, &data)) {
+            return 0;
+        }
+        r = sd_prop(set, &data, SPDRP_FRIENDLYNAME, buf, cap, NULL);
+        return r < 0 ? -1 : 1;
+    }
+    {
+        char path[INST_ID_CHARS + 16];
+        HKEY k;
+        join(path, sizeof(path), "Enum", id);
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
+            ERROR_SUCCESS) {
+            return 0;
+        }
+        RegCloseKey(k);
+        r = reg_text3(HKEY_LOCAL_MACHINE, path, "FriendlyName", buf, cap);
+        if (r <= 0) {
+            buf[0] = '\0';
+        }
+        return r < 0 ? -1 : 1;
+    }
+}
+
+/* FriendlyName := name, or removed when name is NULL. 1 done. */
+static int names_write(HDEVINFO set, const char *id, const char *name)
+{
+    SP_DEVINFO_DATA data;
+    char path[INST_ID_CHARS + 16];
+    HKEY k;
+    LONG w;
+
+    if (envNow.Nt) {
+        if (set == INVALID_HANDLE_VALUE || api.SetRegProp == NULL ||
+            !find_in_set(set, id, &data)) {
+            return 0;
+        }
+        return name != NULL ?
+               api.SetRegProp(set, &data, SPDRP_FRIENDLYNAME,
+                              (const BYTE *)name, (DWORD)strlen(name) + 1) != 0 :
+               api.SetRegProp(set, &data, SPDRP_FRIENDLYNAME, NULL, 0) != 0;
+    }
+    /* 98 SE and ME: Device Manager reads the value from the devnode's Enum
+     * key (task 43.73's reading: a FriendlyName there is the name shown). */
+    join(path, sizeof(path), "Enum", id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_SET_VALUE, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    w = name != NULL ?
+        RegSetValueExA(k, "FriendlyName", 0, REG_SZ, (const BYTE *)name,
+                       (DWORD)strlen(name) + 1) :
+        RegDeleteValueA(k, "FriendlyName");
+    RegCloseKey(k);
+    return w == ERROR_SUCCESS || (name == NULL && w == ERROR_FILE_NOT_FOUND);
+}
+
+/* The table's name for an xHCI controller, or NULL (no row: the plain
+ * name of the INF, no FriendlyName). */
+static const char *names_canon(const DEVREC *d, char *buf, size_t cap)
+{
+    INST_U32 vd;
+
+    if (!is_controller(d) || !inst_pci_vendev(first_hw(d), &vd) ||
+        inst_xhci_name(vd & 0xFFFFUL, vd >> 16, buf, cap) != 1) {
+        return NULL;
+    }
+    return buf;
+}
+
+static int namesSaid;
+
+static void names_say(const char *what, const char *name, const char *id)
+{
+    if (!namesSaid) {
+        out("\nDevice Manager names:\n");
+        namesSaid = 1;
+    }
+    out("  %s: %s\n    %s\n", what, name, id);
+}
+
+/* One devnode: the decision of inst_name_action, made and recorded. */
+static void names_one(HDEVINFO set, const char *id, int ours,
+                      const char *canon)
+{
+    char now[INST_FNAME_CHARS];
+    char rec[INST_FNAME_CHARS];
+    int hasRec = names_rec_get(id, rec, sizeof(rec));
+    int keep;
+    int a;
+    int r = names_now(set, id, now, sizeof(now));
+
+    if (r == 0) {
+        /* No devnode any more: nothing of ours is left to clear. */
+        if (hasRec) {
+            names_rec_del(id);
+            logonly("names: %s gone, its record forgotten\n", id);
+        }
+        return;
+    }
+    if (r < 0) {
+        out("The name of %s could not be read: it is left as it is.\n", id);
+        return;
+    }
+    a = inst_name_action(ours, canon, now, hasRec ? rec : NULL, &keep);
+    if (a == INST_NAME_SET) {
+        if (names_write(set, id, canon) && names_rec_put(id, canon)) {
+            flagChanged = 1;
+            names_say("named", canon, id);
+            logonly("names: %s := \"%s\" (was \"%s\")\n", id, canon, now);
+        } else {
+            out("%s could not be named \"%s\" (error %lu).\n", id, canon,
+                (unsigned long)GetLastError());
+        }
+        return;
+    }
+    if (a == INST_NAME_CLEAR) {
+        if (names_write(set, id, NULL)) {
+            flagChanged = 1;
+            names_rec_del(id);
+            names_say("name removed", now, id);
+            logonly("names: %s cleared (was \"%s\")\n", id, now);
+        } else {
+            out("The name \"%s\" of %s could not be removed (error %lu).\n",
+                now, id, (unsigned long)GetLastError());
+        }
+        return;
+    }
+    if (keep && (!hasRec || strcmp(rec, canon) != 0)) {
+        names_rec_put(id, canon);
+    } else if (!keep && hasRec) {
+        names_rec_del(id);
+        logonly("names: %s keeps \"%s\", not this installer's\n", id, now);
+    }
+}
+
+/* After an install run (uninstall 0) or at the uninstall's end (1): every
+ * xHCI controller the scan lists, then every recorded instance the scan
+ * did not. */
+static void names_reconcile(int uninstall)
+{
+    HDEVINFO set = INVALID_HANDLE_VALUE;
+    static char ids[INST_MAX_DEVS][INST_ID_CHARS];
+    char canonBuf[INST_FNAME_CHARS];
+    int done = 0;
+    int i;
+    HKEY k;
+
+    namesSaid = 0;
+    if (opts.List) {
+        return;
+    }
+    if (!scan()) {
+        out("The controllers' names were not reconciled: the device list "
+            "could not be read.\n");
+        return;
+    }
+    if (envNow.Nt && api.GetClassDevs != NULL) {
+        set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+    }
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        const char *canon;
+        char rec[INST_FNAME_CHARS];
+        if (!is_controller(d)) {
+            continue;
+        }
+        canon = names_canon(d, canonBuf, sizeof(canonBuf));
+        if (canon == NULL && !names_rec_get(d->Id, rec, sizeof(rec))) {
+            continue;
+        }
+        names_one(set, d->Id, !uninstall && inst_eq(d->Service, "xhci98"),
+                  canon);
+        if (done < INST_MAX_DEVS) {
+            inst_copy(ids[done++], d->Id, INST_ID_CHARS);
+        }
+    }
+    /* A recorded instance that is no controller now, or not listed: the
+     * name this installer wrote goes. */
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        static char left[64][INST_ID_CHARS];
+        int nLeft = 0;
+        DWORD v;
+        for (v = 0; nLeft < 64; v++) {
+            char name[INST_ID_CHARS];
+            DWORD n = sizeof(name);
+            int j;
+            int seen = 0;
+            if (RegEnumValueA(k, v, name, &n, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                break;
+            }
+            for (j = 0; j < done; j++) {
+                if (inst_eq(ids[j], name)) {
+                    seen = 1;
+                }
+            }
+            if (!seen) {
+                inst_copy(left[nLeft++], name, INST_ID_CHARS);
+            }
+        }
+        RegCloseKey(k);
+        for (i = 0; i < nLeft; i++) {
+            names_one(set, left[i], 0, NULL);
+        }
+    }
+    if (set != INVALID_HANDLE_VALUE) {
+        api.Destroy(set);
+    }
+    /* The record goes when it holds nothing (the uninstall's end, or an
+     * install that named nothing), so the install directory's key can. */
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        DWORD values = 1;
+        if (RegQueryInfoKeyA(k, NULL, NULL, NULL, NULL, NULL, NULL, &values,
+                             NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+            values = 1;
+        }
+        RegCloseKey(k);
+        if (values == 0 &&
+            RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY) == ERROR_SUCCESS) {
+            logonly("deleted HKLM\\%s\n", INST_NAMES_KEY);
+        }
+    }
+    if (uninstall && namesSaid) {
+        out("\n");
+    }
+}
+
 /* A tunnel port this package's filter is on, by its UpperFilters or by its
  * driver key naming this package's filter INF (record 23 section 9.2). */
 static int is_filter_host(const DEVREC *d)
@@ -11195,6 +11509,7 @@ static int run_uninstall_nt(void)
     if (!go_on()) {
         return stop_uninstall("cancelled.");
     }
+    names_reconcile(1);
     finish_remove();
     if (!flagChanged) {
         out("Nothing of this package was found.\n");
@@ -11210,10 +11525,11 @@ static void uninstall_steps_9x(void)
 {
     out("\nThen, by hand, in this order:\n"
         "  1. Device Manager: remove \"xHCI98 USB Attached SCSI Storage\" and "
-        "an\n     \"xHCI98 Thunderbolt 2 Controller\", \"xHCI98 Thunderbolt 3 "
-        "Controller\" or\n     \"xHCI98 USB4 Host Router\" if there is one; "
-        "then \"xHCI98 USB 3.x\n     eXtensible Host Controller\" (it removes "
-        "the root hub and everything\n     beneath it).\n"
+        "an\n     \"xHCI98 TB2 Controller\", \"xHCI98 TB3 Controller\" or "
+        "\"xHCI98 USB4 Router\"\n     if there is one; then \"xHCI98 USB 3 "
+        "Controller\" (each name may carry\n     its product in parentheses; "
+        "the controller's removal takes the root hub\n     and everything "
+        "beneath it).\n"
         "  2. Delete the INF files listed above, so the restart cannot find "
         "the driver\n     again.\n"
         "  3. Restart. If the New Hardware wizard offers the controller, "
@@ -11748,11 +12064,11 @@ static int run_uninstall_9x(void)
          * next run, finding none, removes the rest. */
         out("\nRemove these devices by hand, in this order:\n"
             "  1. Device Manager: remove \"xHCI98 USB Attached SCSI Storage\" "
-            "and an\n     \"xHCI98 Thunderbolt 2 Controller\", \"xHCI98 "
-            "Thunderbolt 3 Controller\" or\n     \"xHCI98 USB4 Host Router\" "
-            "if there is one; then \"xHCI98 USB 3.x\n     eXtensible Host "
-            "Controller\" (it removes the root hub and everything\n     "
-            "beneath it).\n"
+            "and an\n     \"xHCI98 TB2 Controller\", \"xHCI98 TB3 "
+            "Controller\" or \"xHCI98 USB4 Router\"\n     if there is one; "
+            "then \"xHCI98 USB 3 Controller\" (each name may carry\n     "
+            "its product in parentheses; the controller's removal takes the "
+            "root hub\n     and everything beneath it).\n"
             "  2. Without restarting, run the uninstall again: it removes the "
             "rest.\n");
         return stop_uninstall("the devices are left for the steps above.");
@@ -11800,6 +12116,7 @@ static int run_uninstall_9x(void)
     if (flagSteps || flagFailed) {
         return stop_uninstall("a driver file is still in use.");
     }
+    names_reconcile(1);
     finish_remove();
     out("\nWindows finds the controller again at the next start and has no "
         "driver for it:\non a machine whose only USB controller is xHCI, the "
@@ -21345,7 +21662,7 @@ static void st_put32(unsigned char *b, size_t off, INST_U32 v)
 }
 
 static const char stLongName[] =
-    "xHCI98 USB 3.x eXtensible Host Controller with a very long name ";
+    "xHCI98 USB 3 Controller (Intel 8 Series) with a very long name ";
 
 /* A run of the screens; longest: names, ids and paths at their longest. */
 static void st_screens_once(int longest)
@@ -21382,10 +21699,11 @@ static void st_screens_once(int longest)
         memcpy(dir, "C:\\", 3);
         dir[99] = '\0';
     } else {
-        inst_copy(desc[0], "xHCI98 USB 3.x eXtensible Host Controller",
+        inst_copy(desc[0], "xHCI98 USB 3 Controller (Intel 8 Series)",
                   sizeof(desc[0]));
         inst_copy(desc[1], "xHCI98 USB 3.x Root Hub", sizeof(desc[1]));
-        inst_copy(desc[2], "xHCI98 Thunderbolt 3 Controller", sizeof(desc[2]));
+        inst_copy(desc[2], "xHCI98 TB3 Controller (Intel Titan Ridge)",
+                  sizeof(desc[2]));
         inst_copy(id[0], "PCI\\VEN_8086&DEV_8C31&SUBSYS_05BE1028&REV_04\\"
                   "3&11583659&0&A0", sizeof(id[0]));
         inst_copy(id[1], "USB\\XHCI98_ROOT_HUB\\4&2C4F2A1B&0", sizeof(id[1]));
@@ -22834,6 +23152,11 @@ int inst_eng_run(void)
         }
     }
 
+    /* Whatever the run did, the controllers' names follow the table
+     * (record 23 section 5.13): a same-version run reinstalls nothing. */
+    if (code != INST_EXIT_REFUSED && !opts.List && usbInclude) {
+        names_reconcile(0);
+    }
     /* Whatever the run's verdict, the invariant of record 21 section 7.4
      * holds at its end (decision M13). */
     mk_end_of_run();

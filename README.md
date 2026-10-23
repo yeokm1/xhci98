@@ -64,14 +64,20 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 - Intel Thunderbolt 2 and 3 controllers, and USB4-generation Intel ones while their firmware runs its own connection manager: the driver approves each device the firmware announces.
 - USB4 hosts whose firmware has no connection manager (AMD, ASMedia ASM4242 on AM5 X870 boards, Intel Lunar Lake and later, Barlow Ridge): the driver is the connection manager and builds the tunnels.
 
+Device Manager names each controller by its generation, then its maker and product: Thunderbolt 2 and Thunderbolt 3 (TB2, TB3) controllers, and USB4 Routers (the USB4 host router).
+
 | Controller | PCI ids (`8086:` unless named) | In Device Manager |
 |---|---|---|
-| Falcon Ridge (Thunderbolt 2) | `156A`, `156C` | xHCI98 Thunderbolt 2 Controller |
-| Alpine Ridge and Titan Ridge (Thunderbolt 3) | `15BF`, `1575`, `1577`, `15D2`, `15D9`, `15E8`, `15EB` | xHCI98 Thunderbolt 3 Controller |
-| Ice Lake | `8A0D`, `8A17` | xHCI98 Thunderbolt 3 Controller |
-| Maple Ridge, Tiger Lake to Meteor Lake | `1134`, `1137`, `9A1B`, `9A1D`, `9A1F`, `9A21`, `463E`, `466D`, `A73E`, `A76D`, `7EB2`, `7EC2`, `7EC3` | xHCI98 USB4 Host Router |
-| Lunar Lake, Panther Lake, Wildcat Lake, Barlow Ridge | `A833`, `A834`, `E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784` | xHCI98 USB4 Host Router |
-| AMD, ASMedia and any other USB4 host | `1022:1668`, `1022:1669`, PCI class `0C0340` | xHCI98 USB4 Host Router |
+| Falcon Ridge (Thunderbolt 2) | `156A`, `156C` | xHCI98 TB2 Controller (Intel Falcon Ridge) |
+| Alpine Ridge (Thunderbolt 3) | `15BF`, `1575`, `1577`, `15D2`, `15D9` | xHCI98 TB3 Controller (Intel Alpine Ridge) |
+| Titan Ridge (Thunderbolt 3) | `15E8`, `15EB` | xHCI98 TB3 Controller (Intel Titan Ridge) |
+| Ice Lake | `8A0D`, `8A17` | xHCI98 TB3 Controller (Intel Ice Lake) |
+| Maple Ridge | `1134`, `1137` | xHCI98 USB4 Router (Intel Maple Ridge) |
+| Tiger Lake, Alder Lake, Raptor Lake, Meteor Lake | `9A1B`, `9A1D`, `9A1F`, `9A21`; `463E`, `466D`; `A73E`, `A76D`; `7EB2`, `7EC2`, `7EC3` | xHCI98 USB4 Router (Intel Tiger Lake), (Intel Alder Lake), (Intel Raptor Lake), (Intel Meteor Lake) |
+| Lunar Lake, Panther Lake, Wildcat Lake | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | xHCI98 USB4 Router (Intel Lunar Lake), (Intel Panther Lake), (Intel Wildcat Lake) |
+| Barlow Ridge | `5781`, `5784` | xHCI98 USB4 Router (Intel Barlow Ridge) |
+| AMD Pink Sardine | `1022:1668`, `1022:1669` | xHCI98 USB4 Router (AMD Pink Sardine) |
+| ASMedia and any other USB4 host | PCI class `0C0340` | xHCI98 USB4 Router |
 
 ### Before you start: the BIOS
 
@@ -189,10 +195,10 @@ The established route: the INF install through Device Manager (Update Driver / H
 2. Install the prerequisites above. On a fresh Windows 98 SE the order is NUSB, then xhci98, then the UAS disk.
 3. In Device Manager, find the unrecognised xHCI controller (yellow mark, usually under "Other devices", e.g. "Universal Serial Bus Controller" or "PCI System Peripheral").
 4. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> `release-x86\` or `release-x64\`.
-5. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98 USB 3.x Root Hub" beneath. Windows 98 SE may ask for its CD for `usbd.sys`. Reboot if asked.
+5. It installs as "xHCI98 USB 3 Controller" with "xHCI98 USB 3.x Root Hub" beneath; `SETUP.EXE` names a controller it knows with its maker and product too, e.g. "xHCI98 USB 3 Controller (Renesas uPD720202)", and a hand install does not. Windows 98 SE may ask for its CD for `usbd.sys`. Reboot if asked.
 6. A Thunderbolt 3 or USB4 controller installs the same way, from the same directory:
    - In Device Manager it has a yellow mark, often as "PCI System Peripheral" or "Base System Device".
-   - It installs as "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" (the table under [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4)).
+   - It installs as "xHCI98 TB3 Controller (Intel Alpine Ridge)", "xHCI98 USB4 Router (Intel Meteor Lake)" and so on (the table under [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4)).
    - On 2000 to 7, each of its PCI ports then takes the filter: Update Driver on the port, then Have Disk on `release-x86\nt\` (32-bit) or `release-x64\` itself (64-bit).
    - The ports then show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge".
 7. Plug in a UAS disk; when the wizard asks for "xHCI98 USB Attached SCSI Storage", give it the same directory. No restart is needed.
@@ -236,7 +242,7 @@ Details and limits: [the release notes' F6 section](docs/using/release-notes.md#
 
 ### Upgrading the driver
 
-Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
+Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on the controller ("xHCI98 USB 3.x eXtensible Host Controller" before 3.2.0.0, "xHCI98 USB 3 Controller" from it), then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
 
 - **98 SE and ME:** restart afterwards, although Windows does not ask. The old driver runs until then.
 - **2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `release-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.

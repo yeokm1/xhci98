@@ -40,7 +40,9 @@
 
 Option Explicit
 
-Const XHCI_DESC = "xHCI98 USB 3.x eXtensible Host Controller"
+' The controller's description from 3.2.0.0 (task 43.73), and before it.
+Const XHCI_DESC = "xHCI98 USB 3 Controller"
+Const XHCI_DESC_OLD = "xHCI98 USB 3.x eXtensible Host Controller"
 Const VALUE_NAME = "XhciIntelPortSwitch"
 Const CLASS_9X = "HKLM\System\CurrentControlSet\Services\Class\USB\"
 Const CLASS_NT = "HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\"
@@ -140,7 +142,7 @@ Function FindKeys()
         desc = ReadValue(base & name & "\DriverDesc", ok)
         If ok Then
             If VarType(desc) = vbString Then
-                If LCase(desc) = LCase(XHCI_DESC) Then
+                If LCase(desc) = LCase(XHCI_DESC) Or LCase(desc) = LCase(XHCI_DESC_OLD) Then
                     If isNT Then
                         found = found & name & " "
                     Else

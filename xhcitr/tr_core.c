@@ -3447,7 +3447,7 @@ const char *tr_pci_vendor(unsigned int ven)
 }
 
 void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
-                    unsigned int dev, int tbKind)
+                    unsigned int dev, int tbKind, int named)
 {
     const char *tb = tbKind == TR_TB_TB3 ? "Thunderbolt 3"
                      : tbKind == TR_TB_USB4 ? "USB4"
@@ -3467,6 +3467,10 @@ void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
         return;
     }
     if (!haveIds) {
+        return;
+    }
+    if (named) {
+        tr_sprintf(out, cap, " - %04X:%04X", ven, dev);
         return;
     }
     name = tr_pci_vendor(ven);

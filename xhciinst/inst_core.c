@@ -7031,3 +7031,255 @@ const char *inst_stor_remove_text(int why)
         return "";
     }
 }
+
+/* ======================================================================== */
+/* Controller names (task 43.73; record 23 section 5.13, record 21 3.3)     */
+/* ======================================================================== */
+
+/* Each row's source is record 23 section 5.13's table (the xHCI rows) or
+ * record 21 section 3.3's (the NHI rows); test_inst holds every name to
+ * INST_NAME_MAX, ASCII and one row per id, and the NHI rows to the model
+ * lines of xhcicm.inf and xhcicm-amd64.inf. */
+const INST_NAMEROW instXhciNames[] = {
+    { 0x1002UL, 0x7316UL, INST_NB_USB3, "AMD Navi 10" },
+    { 0x1022UL, 0x13EDUL, INST_NB_USB3, "AMD Ariel" },
+    { 0x1022UL, 0x13EEUL, INST_NB_USB3, "AMD Ariel" },
+    { 0x1022UL, 0x148CUL, INST_NB_USB3, "AMD Starship" },
+    { 0x1022UL, 0x15D4UL, INST_NB_USB3, "AMD FireFlight" },
+    { 0x1022UL, 0x15D5UL, INST_NB_USB3, "AMD FireFlight" },
+    { 0x1022UL, 0x15E0UL, INST_NB_USB3, "AMD Raven" },
+    { 0x1022UL, 0x15E1UL, INST_NB_USB3, "AMD Raven" },
+    { 0x1022UL, 0x15E5UL, INST_NB_USB3, "AMD Raven2" },
+    { 0x1022UL, 0x1639UL, INST_NB_USB3, "AMD Renoir" },
+    { 0x1022UL, 0x43B9UL, INST_NB_USB3, "AMD X370" },
+    { 0x1022UL, 0x43BAUL, INST_NB_USB3, "AMD X399" },
+    { 0x1022UL, 0x43BBUL, INST_NB_USB3, "AMD 300 Series" },
+    { 0x1022UL, 0x43BCUL, INST_NB_USB3, "AMD A320" },
+    { 0x1022UL, 0x7814UL, INST_NB_USB3, "AMD FCH" },
+    { 0x1033UL, 0x0194UL, INST_NB_USB3, "NEC uPD720200" },
+    { 0x104CUL, 0x8241UL, INST_NB_USB3, "TI TUSB73x0" },
+    { 0x1106UL, 0x3432UL, INST_NB_USB3, "VIA VL800/VL801" },
+    { 0x1106UL, 0x3483UL, INST_NB_USB3, "VIA VL805/VL806" },
+    { 0x1912UL, 0x0014UL, INST_NB_USB3, "Renesas uPD720201" },
+    { 0x1912UL, 0x0015UL, INST_NB_USB3, "Renesas uPD720202" },
+    { 0x1B21UL, 0x1042UL, INST_NB_USB3, "ASMedia ASM1042" },
+    { 0x1B21UL, 0x1142UL, INST_NB_USB3, "ASMedia ASM1042A" },
+    { 0x1B21UL, 0x1242UL, INST_NB_USB3, "ASMedia ASM1142" },
+    { 0x1B21UL, 0x2142UL, INST_NB_USB3, "ASMedia ASM2142" },
+    { 0x1B21UL, 0x3042UL, INST_NB_USB3, "ASMedia ASM3042" },
+    { 0x1B21UL, 0x3242UL, INST_NB_USB3, "ASMedia ASM3242" },
+    { 0x1B36UL, 0x000DUL, INST_NB_USB3, "Red Hat QEMU xHCI" },
+    { 0x1B6FUL, 0x7023UL, INST_NB_USB3, "Etron EJ168" },
+    { 0x1B6FUL, 0x7052UL, INST_NB_USB3, "Etron EJ188" },
+    { 0x1B73UL, 0x1000UL, INST_NB_USB3, "Fresco Logic FL1000" },
+    { 0x1B73UL, 0x1009UL, INST_NB_USB3, "Fresco Logic FL1009" },
+    { 0x1B73UL, 0x1100UL, INST_NB_USB3, "Fresco Logic FL1100" },
+    { 0x1B73UL, 0x1400UL, INST_NB_USB3, "Fresco Logic FL1400" },
+    { 0x1D17UL, 0x9202UL, INST_NB_USB3, "Zhaoxin ZX-100" },
+    { 0x1D17UL, 0x9203UL, INST_NB_USB3, "Zhaoxin ZX-200" },
+    { 0x8086UL, 0x02EDUL, INST_NB_USB3, "Intel 400 Series LP" },
+    { 0x8086UL, 0x0AA8UL, INST_NB_USB3, "Intel Broxton" },
+    { 0x8086UL, 0x1138UL, INST_NB_USB3, "Intel Maple Ridge" },
+    { 0x8086UL, 0x15B5UL, INST_NB_USB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15B6UL, INST_NB_USB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15C1UL, INST_NB_USB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15D4UL, INST_NB_USB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15DBUL, INST_NB_USB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15E9UL, INST_NB_USB3, "Intel Titan Ridge" },
+    { 0x8086UL, 0x15ECUL, INST_NB_USB3, "Intel Titan Ridge" },
+    { 0x8086UL, 0x15F0UL, INST_NB_USB3, "Intel Titan Ridge" },
+    { 0x8086UL, 0x19D0UL, INST_NB_USB3, "Intel Denverton" },
+    { 0x8086UL, 0x1AA8UL, INST_NB_USB3, "Intel Broxton" },
+    { 0x8086UL, 0x1E31UL, INST_NB_USB3, "Intel 7 Series" },
+    { 0x8086UL, 0x22B5UL, INST_NB_USB3, "Intel Cherryview" },
+    { 0x8086UL, 0x51EDUL, INST_NB_USB3, "Intel Alder Lake PCH" },
+    { 0x8086UL, 0x54EDUL, INST_NB_USB3, "Intel Alder Lake-N" },
+    { 0x8086UL, 0x5AA8UL, INST_NB_USB3, "Intel Apollo Lake" },
+    { 0x8086UL, 0x8A13UL, INST_NB_USB3, "Intel Ice Lake" },
+    { 0x8086UL, 0x8C31UL, INST_NB_USB3, "Intel 8 Series" },
+    { 0x8086UL, 0x8CB1UL, INST_NB_USB3, "Intel 9 Series" },
+    { 0x8086UL, 0x8D31UL, INST_NB_USB3, "Intel C610/X99" },
+    { 0x8086UL, 0x9A13UL, INST_NB_USB3, "Intel Tiger Lake" },
+    { 0x8086UL, 0x9C31UL, INST_NB_USB3, "Intel 8 Series LP" },
+    { 0x8086UL, 0x9CB1UL, INST_NB_USB3, "Intel 9 Series LP" },
+    { 0x8086UL, 0x9D2FUL, INST_NB_USB3, "Intel 100 Series LP" },
+    { 0x8086UL, 0xA0EDUL, INST_NB_USB3, "Intel 500 Series LP" },
+    { 0x8086UL, 0xA12FUL, INST_NB_USB3, "Intel 100 Series" },
+    { 0x8086UL, 0xA3AFUL, INST_NB_USB3, "Intel 400 Series" }
+};
+const int instXhciNameCount =
+    (int)(sizeof(instXhciNames) / sizeof(instXhciNames[0]));
+
+const INST_NAMEROW instNhiNames[] = {
+    { 0x1022UL, 0x1668UL, INST_NB_USB4, "AMD Pink Sardine" },
+    { 0x1022UL, 0x1669UL, INST_NB_USB4, "AMD Pink Sardine" },
+    { 0x8086UL, 0x1134UL, INST_NB_USB4, "Intel Maple Ridge" },
+    { 0x8086UL, 0x1137UL, INST_NB_USB4, "Intel Maple Ridge" },
+    { 0x8086UL, 0x156AUL, INST_NB_TB2, "Intel Falcon Ridge" },
+    { 0x8086UL, 0x156CUL, INST_NB_TB2, "Intel Falcon Ridge" },
+    { 0x8086UL, 0x1575UL, INST_NB_TB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x1577UL, INST_NB_TB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15BFUL, INST_NB_TB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15D2UL, INST_NB_TB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15D9UL, INST_NB_TB3, "Intel Alpine Ridge" },
+    { 0x8086UL, 0x15E8UL, INST_NB_TB3, "Intel Titan Ridge" },
+    { 0x8086UL, 0x15EBUL, INST_NB_TB3, "Intel Titan Ridge" },
+    { 0x8086UL, 0x463EUL, INST_NB_USB4, "Intel Alder Lake" },
+    { 0x8086UL, 0x466DUL, INST_NB_USB4, "Intel Alder Lake" },
+    { 0x8086UL, 0x4D33UL, INST_NB_USB4, "Intel Wildcat Lake" },
+    { 0x8086UL, 0x5781UL, INST_NB_USB4, "Intel Barlow Ridge" },
+    { 0x8086UL, 0x5784UL, INST_NB_USB4, "Intel Barlow Ridge" },
+    { 0x8086UL, 0x7EB2UL, INST_NB_USB4, "Intel Meteor Lake" },
+    { 0x8086UL, 0x7EC2UL, INST_NB_USB4, "Intel Meteor Lake" },
+    { 0x8086UL, 0x7EC3UL, INST_NB_USB4, "Intel Meteor Lake" },
+    { 0x8086UL, 0x8A0DUL, INST_NB_TB3, "Intel Ice Lake" },
+    { 0x8086UL, 0x8A17UL, INST_NB_TB3, "Intel Ice Lake" },
+    { 0x8086UL, 0x9A1BUL, INST_NB_USB4, "Intel Tiger Lake" },
+    { 0x8086UL, 0x9A1DUL, INST_NB_USB4, "Intel Tiger Lake" },
+    { 0x8086UL, 0x9A1FUL, INST_NB_USB4, "Intel Tiger Lake" },
+    { 0x8086UL, 0x9A21UL, INST_NB_USB4, "Intel Tiger Lake" },
+    { 0x8086UL, 0xA73EUL, INST_NB_USB4, "Intel Raptor Lake" },
+    { 0x8086UL, 0xA76DUL, INST_NB_USB4, "Intel Raptor Lake" },
+    { 0x8086UL, 0xA833UL, INST_NB_USB4, "Intel Lunar Lake" },
+    { 0x8086UL, 0xA834UL, INST_NB_USB4, "Intel Lunar Lake" },
+    { 0x8086UL, 0xE333UL, INST_NB_USB4, "Intel Panther Lake" },
+    { 0x8086UL, 0xE334UL, INST_NB_USB4, "Intel Panther Lake" },
+    { 0x8086UL, 0xE433UL, INST_NB_USB4, "Intel Panther Lake" },
+    { 0x8086UL, 0xE434UL, INST_NB_USB4, "Intel Panther Lake" }
+};
+const int instNhiNameCount =
+    (int)(sizeof(instNhiNames) / sizeof(instNhiNames[0]));
+
+const char *inst_name_base(int base)
+{
+    switch (base) {
+    case INST_NB_TB2:
+        return INST_NAME_TB2;
+    case INST_NB_TB3:
+        return INST_NAME_TB3;
+    case INST_NB_USB4:
+        return INST_NAME_USB4;
+    default:
+        return INST_NAME_USB3;
+    }
+}
+
+static int name_put(char *out, size_t cap, int base, const char *product)
+{
+    const char *b = inst_name_base(base);
+    size_t need = strlen(b) + (product != NULL ? strlen(product) + 3 : 0);
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    if (need >= cap) {
+        return 0;
+    }
+    strcpy(out, b);
+    if (product != NULL) {
+        strcat(out, " (");
+        strcat(out, product);
+        strcat(out, ")");
+    }
+    return 1;
+}
+
+static const INST_NAMEROW *name_row(const INST_NAMEROW *t, int n, INST_U32 ven,
+                                    INST_U32 dev)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (t[i].Ven == ven && t[i].Dev == dev) {
+            return &t[i];
+        }
+    }
+    return NULL;
+}
+
+int inst_xhci_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
+{
+    const INST_NAMEROW *r = name_row(instXhciNames, instXhciNameCount, ven, dev);
+
+    if (r == NULL) {
+        name_put(out, cap, INST_NB_USB3, NULL);
+        return 0;
+    }
+    return name_put(out, cap, INST_NB_USB3, r->Product);
+}
+
+int inst_nhi_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
+{
+    const INST_NAMEROW *r = name_row(instNhiNames, instNhiNameCount, ven, dev);
+
+    if (r == NULL) {
+        name_put(out, cap, INST_NB_USB4, NULL);
+        return 0;
+    }
+    return name_put(out, cap, r->Base, r->Product);
+}
+
+/* The first PCI\VEN_&DEV_ id of a list. */
+static int name_ids(const char *msz, size_t bytes, INST_U32 *ven, INST_U32 *dev)
+{
+    size_t off = 0;
+    INST_U32 vd;
+
+    while (msz != NULL && off < bytes && msz[off] != '\0') {
+        if (inst_pci_vendev(msz + off, &vd)) {
+            *ven = vd & 0xFFFFUL;
+            *dev = vd >> 16;
+            return 1;
+        }
+        off += strlen(msz + off) + 1;
+    }
+    return 0;
+}
+
+int inst_dev_canon(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes, const char *service, char *out,
+                   size_t cap)
+{
+    INST_U32 ven;
+    INST_U32 dev;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (service == NULL || !name_ids(hw, hwBytes, &ven, &dev)) {
+        return 0;
+    }
+    if (inst_eq(service, "xhci98") &&
+        (inst_msz_has(hw, hwBytes, "PCI\\CC_0C0330") ||
+         inst_msz_has(compat, compatBytes, "PCI\\CC_0C0330"))) {
+        inst_xhci_name(ven, dev, out, cap);
+        return out[0] != '\0';
+    }
+    if (inst_eq(service, "xhcicm")) {
+        inst_nhi_name(ven, dev, out, cap);
+        return out[0] != '\0';
+    }
+    return 0;
+}
+
+int inst_name_action(int ours, const char *canon, const char *current,
+                     const char *recorded, int *record)
+{
+    int mine = recorded != NULL && current[0] != '\0' &&
+               strcmp(current, recorded) == 0;
+
+    *record = 0;
+    if (ours && canon != NULL) {
+        if (current[0] == '\0' || mine || strcmp(current, canon) == 0) {
+            *record = 1;
+            return strcmp(current, canon) == 0 ? INST_NAME_NONE : INST_NAME_SET;
+        }
+        /* A name someone else gave it (the user's rename, a vendor's
+         * tool) stays, and is not this installer's to clear. */
+        return INST_NAME_NONE;
+    }
+    /* Not ours (another driver now, or an id the table no longer holds):
+     * the name this installer wrote goes, and any other stays. */
+    return mine ? INST_NAME_CLEAR : INST_NAME_NONE;
+}
