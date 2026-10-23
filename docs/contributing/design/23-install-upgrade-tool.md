@@ -2028,10 +2028,18 @@ description and the maker suffix.
 #### 5.13.6 The readings
 
 Task 43.73's legs (`docs/contributing/runs/run-43.md`, "43.73"): every
-name of both tables in 98 SE's and ME's Device Manager; on 98 SE and 7 x86
-the `qemu-xhci` controller (`1B36:000D`) installed, updated from 3.1.0.0
-and uninstalled, and the emulator's `tb3-alpine-ridge` and `usb4-generic`
-profiles showing the NHI's name, in Device Manager and in XHCITR.
+name of both tables whole in 98 SE's and ME's Device Manager; on 98 SE the
+`qemu-xhci` controller (`1B36:000D`) and the emulator's Alpine Ridge xHCI
+named at an update from 3.0.0.0 and gone with their devnodes at the
+uninstall, the `tb3-alpine-ridge` NHI installed under its INF name; on 7
+x86 the controller named at an install, at a same-version run that
+reinstalled nothing, again after `/force` (whose reinstall had cleared the
+FriendlyName) and cleared with its devnode at the uninstall, the
+`usb4-generic` NHI under the class line's plain name; XHCITR on both.
+**98 SE's Properties caption shows the DeviceDesc**, not the FriendlyName
+("xHCI98 USB 3 Controller Properties"), where 7's shows the FriendlyName:
+on 98 SE and ME the product shows in the tree and on the General tab only.
+Whether the installer should write the 9x DeviceDesc too is the owner's.
 
 ## 6. The Windows 98 SE and ME route
 
