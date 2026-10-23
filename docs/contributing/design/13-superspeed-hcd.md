@@ -11411,8 +11411,10 @@ Transfer Events of every TD that finished before the stop precede the
 command's completion on the event ring (every TRB the driver builds names
 Interrupter Target 0, so both reach the primary event ring, in order) and
 have been retired by the time the command completes, and a Stop
-Endpoint's own Transfer Event completes nothing (`hcd_dev.c`). (One case
-rests on more than ordering; see "The residue" below.) A cancelled TD behind a surviving one is
+Endpoint's own Transfer Event completes nothing (`hcd_dev.c`). (One TD
+breaks that ordering; since task 43.69 the stopped TD is read from the
+controller, "The stopped TD, read from the controller" below.) A
+cancelled TD behind a surviving one is
 rewritten in place as No Ops (`XhciRingNoOpAt`, every TRB of it); the
 dequeue is not moved and no Set TR Dequeue is sent, and the doorbell
 restarts the survivors. Only when the head itself is cancelled, or the
@@ -11513,27 +11515,108 @@ kept, the survivor and the No Op past the wrap each resolving as its own
 TD, and the next crossing chaining it again; the vector fails without the
 change (three checks).
 
-**The residue (reviewed 2026-10-23; not changed).** The head is the
-stopped TD only when every TD before the stop has been retired by the
-command's completion. One TD is not: a bulk IN TD whose Short Packet
-event named a TRB before its last is held on the queue
-(`XHCI_XFER_FLAG_SHORT_DEFERRED`, `src\xhci_xfer.c`) until the second
-event 4.10.1.1.2 promises on its last TRB, or until a drain pass reads the
-event ring empty (`XhciSlotDrainSettled`). A conforming controller writes
-that second event before the Stop Endpoint's completion, so the TD has
-been retired by then. A controller that writes only the first - QEMU does,
-which is why the settle exists - can leave it at the head while the
-controller has moved on and stopped inside the next TD; a cancel of that
-next TD then takes the "behind a survivor" path, rewrites the TD the
-controller stopped in and moves nothing, which 4.6.9 forbids. On QEMU it
-changes nothing (the emulator has already dropped every TD it fetched);
-on hardware it needs both a controller that breaks 4.10.1.1.2 and a cancel
-in that window. The remedy, if wanted, is Linux's: take the stopped TD
-from the Endpoint Context's TR Dequeue Pointer, which 4.6.9 promises is
-written before the completion (`xhci_get_hw_deq`, `trb_in_td`), not from
-the queue's head, and move the dequeue past it when it is cancelled. That
-touches the deferral's ownership of its TRBs and is not done here; it is
-an owner's question (task 43.64's report).
+**The stopped TD, read from the controller (task 43.69, 2026-10-23).**
+Until 43.69 the head was the stopped TD on ordering alone, and one TD
+broke the ordering. A bulk IN TD whose Short Packet event named a TRB
+before its last is held on the queue (`XHCI_XFER_FLAG_SHORT_DEFERRED`,
+`src\xhci_xfer.c`) until the second event 4.10.1.1.2 promises on its last
+TRB, or until a drain pass reads the event ring empty
+(`XhciSlotDrainSettled`). A conforming controller writes that second event
+before the Stop Endpoint's completion, so the TD has been retired by then.
+A controller that writes only the first (QEMU does, which is why the settle
+exists) can leave it at the head while the controller has moved on and
+stopped inside the next TD. A cancel of that next TD then took the "behind
+a survivor" path: it rewrote the TD the controller stopped in and moved
+nothing, which 4.6.9 forbids. The rule since 43.69 is Linux's (reference
+source, `xhci-ring.c`: `xhci_get_hw_deq`, `trb_in_td`,
+`xhci_invalidate_cancelled_tds`, `xhci_move_dequeue_past_td`): **the
+stopped TD is the one that holds the controller's own saved dequeue.**
+
+- *The reading.* When the endpoint reads Stopped after `hcdCfgQuiesce`,
+  `hcdCfgCancelPipe` reads the TR Dequeue Pointer and DCS the controller
+  saved (`hcdCfgSavedDequeue`): the Endpoint Context's dwords 2 and 3
+  (6.2.3), or, for a stream's pipe, its Stream Context's dwords 0 and 1
+  (6.2.4.1, with the SCT in bits 3:1 masked off), the field Linux's
+  `xhci_get_hw_deq` reads for a stream. 4.6.9 (p.119) has the controller
+  write both "Before generating a Command Completion Event for this
+  command", the Stream Context's included ("the Output Endpoint Context or
+  Stream Context associated with the stopped Transfer Ring"), so streams
+  take this path like any other pipe.
+- *Placing it* (`XhciXferStopPlace`, pure). The reading is acted on only
+  when it is what 4.6.9 describes. It must lie on the ring (high dword 0,
+  the address inside the segment), at an outstanding TRB or at the enqueue
+  position. Its DCS must equal the cycle bit the driver wrote at that TRB,
+  or the producer cycle at the enqueue position. A pointer on the Link TRB
+  is taken as the base's TRB, with the cycle toggled, as execution and
+  `XhciRingResyncOwed` take it. Every queued TD wholly before it must be a
+  held short-deferred TD: any other TD there would have had its own event
+  before the completion. A reading that fails any of these is UNREAD, and
+  the cancel keeps the pre-43.69 head rule unchanged. QEMU is the
+  controller that fails it: it saves its fetch pointer, past every TD it
+  has fetched (above), so its cancels behave as they did. Otherwise the
+  position is IN_TD (a TRB of a queued TD: the stopped TD) or BETWEEN (in
+  no queued TD: on the No Ops of a TD an earlier cancel removed, or at the
+  enqueue position, which is the ring empty or the position just past the
+  last TD).
+- *Held TDs before the position have been passed.* The controller has
+  moved past each of them without sending the second event. Each is
+  settled as the drain's settle would settle it (`HcdDevStopSettle`
+  calling `XhciXferDrainSettled`, oldest first, through the ordinary result
+  path): retired with the length its Short Packet event measured, counted
+  in `MidTdShortRetires`, and its tail index recorded as the settle records
+  it. The Stop Endpoint's completion follows every event the controller
+  wrote before it, so this gate is as strong as the drain's empty pass, and
+  the window for a late tail is the same one `MidTdShortTails` already
+  measures. A held TD that is also cancelled is settled too: the controller
+  finished it, and a conforming controller's tail would have completed it
+  before the cancel pass could. A retire the ring refuses leaves the TD
+  queued and no longer held, with the drain that refusal asks for
+  (`DrainPending`, as `hcdSettlePipe` does it). The TD is then a TD before
+  the position that is not held, and the head rule stands.
+- *Then the head is exact, and the placement is the one this section
+  describes above* (`XhciXferCancelPlace`, pure, Linux's
+  `xhci_invalidate_cancelled_tds`). IN_TD: the stopped TD is the head. If
+  it is cancelled, Set TR Dequeue moves past it, to the first TRB of the
+  oldest TD not cancelled or to the enqueue position, with the cycle the
+  ring holds there (`XhciRingDequeueCycle`, the new lap's when the move
+  crosses the wrap). If it is not cancelled it is left untouched (4.6.9
+  option 3), and every cancelled TD behind it becomes No Ops in place
+  (`XhciRingNoOpAt`, with the Link unchained as described above), the
+  doorbell alone restarting the ring. BETWEEN: the controller has entered
+  no queued TD. If the head is cancelled the dequeue moves to the oldest
+  survivor, which discards no partial progress; otherwise cancelled TDs
+  become No Ops. An Error endpoint owes the move whatever is cancelled, as
+  before.
+- *Which states reach it.* The context is read only for an endpoint that
+  reads Stopped. A Running endpoint's Stop Endpoint is the case above, and
+  so is one already Stopped (its context was written at that stop or by a
+  later Set TR Dequeue). A Halted or Error endpoint reaches Stopped through
+  `hcdCfgQuiesce`'s Set TR Dequeue to the software dequeue
+  (`hcdCfgRecoverDequeue`), so its context then names the head's first TRB
+  or the enqueue position and nothing is settled. The halted path is
+  unchanged and does not share the defect: the event that halts the
+  endpoint on a TD behind a held one sweeps the held one first
+  (`xhciXferFinishGroup`, the loop over the TDs ahead). On a streams
+  endpoint whose recovery moves only the failed streams, every other
+  stream's context is as the controller saved it, which is the reading
+  wanted. A Disabled endpoint has no context to read, and it gets neither
+  command, as before. EP0 never holds a deferral (only a TD that is all
+  data defers), so for it the reading confirms the head or is UNREAD.
+
+Host vectors (`test_xfer.c`, `test_stop_place_*`): the head as the stopped
+TD; a held head with the controller inside the next TD, cancelled (the move
+past it, its TRBs not rewritten, and the head rule alone shown choosing No
+Ops for it) and not cancelled (left as the head, the TD behind it the No
+Ops); a stream's reading with its SCT bits; the stopped TD past the ring's
+wrap, read on TRB 0 with the new lap's DCS and on the Link TRB, refused
+with the old lap's DCS, and moved past with the new lap's cycle; a held TD
+the controller stopped inside, which is not settled, with the TD behind it
+crossing the Link rewritten and the Link unchained; the position outside
+every TD (an empty ring, just past two held TDs, on the No Ops of a removed
+TD), with each reading that is not acted on (a high dword, off the ring,
+past the enqueue, behind the dequeue, the wrong DCS, a TD before it that
+is not held, QEMU's fetch pointer); and several cancelled TDs around a
+survivor.
 
 **What is owed.** Nothing on hardware for the placement. No leg was run
 for this task: QEMU follows a Link without reading its Chain flag
