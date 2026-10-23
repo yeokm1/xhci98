@@ -398,7 +398,7 @@ The scheme is one four-part version per released package, and all four fields ha
 
 | Field | Moves for | Cut that did it |
 |---|---|---|
-| First | A change really major enough to warrant it. It went `0` -> `1` for the first final release and has not moved since | `1.0.0.0` (task 14.2), the first release; everything before it was a `0.x` pre-release carrying no claim of being finished |
+| First | A change in what the product fundamentally is. It has moved three times: `0` -> `1` for the first final release, `1` -> `2` when the driver was rewritten as a whole USB host controller driver, no longer under Windows' own USB port driver, and `2` -> `3` for a new driver, `xhcicm.sys`, for Thunderbolt 3 and USB4 | `1.0.0.0` (task 14.2), the first final release, after the `0.x` pre-releases, which carried no claim of being finished; `2.0.0.0`, the whole host controller driver (`releases\history.md`); `3.0.0.0`, the connection manager for Thunderbolt 3 and USB4 |
 | Second | A major change: a new architecture, or a new function | `1.1.0.0`, which adds the amd64 build and a second package (Phase 21; the cut is roadmap task 22.10) |
 | Third | A patch or a bug fix in the driver's code | `1.0.1.0`, the owner's decision of 2026-09-03 when task 19.7 put issue 4's fix into Phase 19's release |
 | Fourth | A release that changes only the install media or the documents | `1.0.0.1`, which moved `usbd.sys` and `usbhub.sys` onto the `LayoutFile` route and off the download |
@@ -407,7 +407,7 @@ The date is set to the release date and never moves backwards within a series. R
 
 It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
 
-The major version also says whether this is a final release, which is the other half of the first field's meaning and the only reason it has ever moved. Those `0.x` directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
+The major version also says whether this is a final release, which is the other half of the first field's meaning and why it moved from `0` to `1`; its two later moves, to `2.0.0.0` and `3.0.0.0`, were each a change in what the product is (the table). `3.2.0.0`, despite its size, is a second-field release by that rule (owner, 2026-10-23): new functions, no change in what the product is. Those `0.x` directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
 
 The numbering has been restarted once, at the project owner's direction: an earlier `1.0.0.x` series of development builds was removed from `releases\` and the version restarted at `0.0.0.1`, which is where the `0.x` pre-releases came from. Two consequences outlive it:
 
