@@ -30,7 +30,9 @@ of their own, which you can save to a text file; the rest of the install
 completes.
 
 It uses only routines Windows documents for this. It is not devcon, and
-this package carries no Microsoft file.
+this package's own files include no Microsoft file (the downloads'
+NUSB33, and NONFREE in the -nonfree download, carry some: see their
+readme.txt).
 
 The connection manager alone: you can leave the USB drivers (xhci98.sys,
 xhciuas.sys) out and install only the Thunderbolt 3 / USB4 connection
