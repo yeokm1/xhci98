@@ -2826,6 +2826,10 @@ function Read-OtherStageMeta {
         $f = @($line -split '\|' | ForEach-Object { $_.Trim() })
         if ($f[0] -ceq "NEEDS") { throw "$Label has a NEEDS line, metadata this release does not read: '$line'." }
         if ($script:OtherMetaKinds -cnotcontains $f[0]) { continue }
+        # inst_stage_meta reads each field into a buffer of 173 bytes
+        # (INST_OTHER_REL_CHARS + 32): a longer one makes the installer refuse
+        # the whole set, so the cut refuses it first.
+        foreach ($x in $f) { if ($x.Length -gt 172) { throw "$Label has a $($f[0]) line with a field of $($x.Length) characters; the installer reads at most 172: '$line'." } }
         if ($f[0] -ceq "PACKAGE") {
             if ($f.Count -ne 4 -or -not (Test-OtherPkgId -Id $f[1]) -or ($f[2] -cne "CLASS" -and $f[2] -cne "DEVICE")) {
                 throw "$Label has a PACKAGE line that is not 'PACKAGE | <class>/<package> | CLASS or DEVICE | <description>': '$line'."

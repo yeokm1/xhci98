@@ -2030,6 +2030,7 @@ try {
         $tbl = Get-InstOtherTable -Repo $repo
         Assert-True ((@($brands | Where-Object { $tbl.Brands -cnotcontains $_ }).Count -eq 0) -and (@($tbl.Brands | Where-Object { $brands -cnotcontains $_ }).Count -eq 0)) "xhciinst\inst_core.c's instBrandWords and scripts\package\brand-words.txt differ."
         $instC = [System.IO.File]::ReadAllText((Join-Path $repo "xhciinst\inst_core.c"))
+        Assert-True (@(Read-OtherStageMeta -Text ("COEXISTS | free:a/b | free:c/d | W98SE | " + ("w" * 172)) -Label "s" -Brands $brands).Count -eq 1) "a relationship line whose why is 172 characters was refused."
         Assert-True ($tbl.Pkgs.Count -gt 0 -and $tbl.Pkgs.Count -eq @([regex]::Matches(([regex]::Match($instC, 'instOtherPkgs\[\]\s*=\s*\{(.*?)\n\};', 'Singleline').Groups[1].Value), '\{\s*INST_SET_')).Count -and $tbl.Rels.Count -gt 0) "the installer's package table was not read whole."
         $hm = [regex]::Match($instC, 'instOtherHeadings\[\]\s*=\s*\{([^}]*)\}')
         $heads = @([regex]::Matches($hm.Groups[1].Value, '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
@@ -2040,7 +2041,8 @@ try {
                 @{ T = "PACKAGE | net/X | DEVICE | d"; Want = "is not 'PACKAGE" },
                 @{ T = "NEEDS | free:a/b | free:c/d"; Want = "NEEDS" },
                 @{ T = "EXCLUDES | free:a/b | other:c/d | W98SE | w"; Want = "which is not free:" },
-                @{ T = "COEXISTS | free:a/b | free:c/d | W95 | w"; Want = "cannot read" })) {
+                @{ T = "COEXISTS | free:a/b | free:c/d | W95 | w"; Want = "cannot read" },
+                @{ T = ("EXCLUDES | free:a/b | free:c/d | W98SE | " + ("w" * 173)); Want = "at most 172" })) {
             $msg = ""
             try { Read-OtherStageMeta -Text $bad.T -Label "s" -Brands $brands | Out-Null } catch { $msg = $_.Exception.Message }
             Assert-True ($msg.Contains($bad.Want)) ("the metadata line '" + $bad.T + "' did not refuse with '" + $bad.Want + "': '" + $msg + "'")
