@@ -1,6 +1,9 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 19, 2026-10-22 (revision 19, the red tray icon,
+Status: revision 20, 2026-10-23 (revision 20, 98 SE's tooltip after a
+long hover and the balloon a click is on, roadmap-usb4 task 43.72:
+sections 7.1, 7.7 item 6 and 16 item 11, with sections 10 and 11);
+revision 19, 2026-10-22 (revision 19, the red tray icon,
 roadmap-usb4 task 43.57: section 7.2.1, with sections 7.1, 9, 10, 11
 and 12, and record 13 section 8.12's failed flag);
 revision 18, 2026-10-22 (revision 18, the "can run faster"
@@ -1181,6 +1184,31 @@ XHCIINST needs nothing new: it runs as an administrator (record 24 section
   the shell has no balloons, the last event (at most 63 characters).
   While the icon is red (revision 19), what is wrong instead (section
   7.2.1), and the left-click menu and the double click lead to it.
+  **98 SE after a long hover** (revision 20, task 43.72). Read in QEMU
+  with a build that traced every `Shell_NotifyIcon` call and tray message
+  to the debug port: `shell32.dll` 4.72 shows an icon's tooltip once per
+  entry, and a pointer that rests on the icon until the tooltip times out
+  and then leaves it with no move over the notification area beside it
+  leaves that tooltip "popped" for good - it never shows again for the
+  icon, while the clock's and every other tooltip still do, and the
+  tool's own `NIM_MODIFY` calls (all accepted, the text intact) do not
+  bring it back. QEMU's pointer jumps, so it does this every time; a real
+  mouse moved off the icon fast can. `3.2.0.0`'s XHCITR did the same. A
+  `NIF_TIP` with no text and then the text did not help; removing the
+  icon and adding it again (a new tooltip of its own in the shell) did.
+  So on 98 SE alone (`shell32.dll` below 5.0) the tray notes each
+  `WM_MOUSEMOVE` the icon reports (`tr_hover_move`), and the 1 s poll,
+  once the pointer is more than a small icon's width or height from the
+  last move's point, or out of the notification area, and no tray menu
+  is up, adds the icon again
+  (`tray_remove`, `tray_add`: its colour and tooltip as `tray_red` and
+  section 7.2 last chose) when that hover may have outlasted the
+  tooltip: the shell shows it the initial delay after the last move and
+  keeps it the autopop time, which comctl32 derives from the double-click
+  time (1 and 10 times it), so 11 times `GetDoubleClickTime()`, less the
+  poll's period (`tr_hover_poll`, host-tested). A hover shorter than
+  that is left alone; one longer draws the icon again once, perhaps at
+  another place among the area's icons.
 - A hidden top-level window (class `Xhci98TrTray`) owns the icon, so the
   `TaskbarCreated` broadcast reaches it and the icon is re-added after an
   Explorer restart; `WM_CLOSE` to it ends the program cleanly.
@@ -1887,7 +1915,7 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    the state it was in.
 6. **Clicking.** The balloon's click (`NIN_BALLOONUSERCLICK`, which the
    shell sends after `NIM_SETVERSION` 3; only for a balloon of this
-   notice, the last one shown; not on 2000, below) and, while the icon is red, a first item
+   notice, the one on the screen (below); not on 2000, below) and, while the icon is red, a first item
    of the left-click menu, "<n> USB device(s) can run faster..." (since
    revision 19 shown only while the icon is not red and the set holds a
    device, `TR_FW_LINK` alone; while red the menu's first item is
@@ -1909,6 +1937,31 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    device carry the same lines under "Can run faster", and so do Save
    Report and `/report`, whether the notice is on or off: they are a
    reading, not a notice.
+   **Which balloon is clicked** (revision 20, task 43.72). The shell's
+   messages name no balloon, and a balloon sent while another of the
+   icon's is up may replace it at once (a `NIN_BALLOONSHOW` then follows)
+   or wait until it goes, so the kind of the last balloon sent - what the
+   click went by until this revision - is not always the kind on the
+   screen: an eject's outcome sent while the notice's balloon was up
+   made a click on the notice's open nothing, and the reverse could open
+   the list for another notice. The tray keeps the kind each
+   `NIN_BALLOONSHOW` saw sent (`tr_bkind_step`, `tr_bkind_fast`,
+   host-tested), none after a hide, a timeout, a click or the icon's
+   balloon taken away (item 9's re-send), and a click opens the list only
+   when that kind is the notice's. The balloons sent and not yet shown
+   are kept in order (the last sixteen): a show is the oldest's where the
+   shell queues them and the newest's where it replaces them, so it is
+   that kind when they are all of one kind and counts as another
+   balloon's when they are not - a click on it then opens nothing, the
+   icon's menu still leading to the list or the device, rather than the
+   list for a notice that is not the one clicked. Each show takes the
+   oldest away, and a hide, a timeout, a click or the icon's balloon
+   taken away (item 9's re-send) ends the one shown and leaves those
+   waiting, since a show or a click the shell posted before it may still
+   come; one the shell dropped unshown keeps only the next show in doubt,
+   more waiting than are kept (sixteen) are counted, and their shows,
+   which come first, are in doubt; so is a show with none waiting. A shell not heard from in the session (and not Vista or
+   later, item 9) is read by the last balloon sent, as before.
    **Windows 2000 (task 43.68, 2026-10-23).** Read on 2000 SP4 in QEMU
    with a build that logged every `WM_TRAYICON` message (`runs/run-43.md`,
    "43.68"): the notice's balloon was shown and a click on it closed it,
@@ -2170,9 +2223,21 @@ no answer at all, sent again at the deadline only from a shell heard
 from; the re-send lost or unanswered, given up; a new text, another
 balloon, a click, the device gone and the notice off) in
 `test\test_tr.c`.
+
 Revision 19: the red icon's decision and tooltip (`tr_red_state`,
 `tr_red_tip`, section 7.2.1 item 10) in `test\test_trred.c`, over
 `xhcitr\tr_red.c`; `xhci98.sys`'s failed flag in `test\test_xhq.c`.
+
+Revision 20: the balloon a click is on (`tr_bkind_step`,
+`tr_bkind_fast`: another balloon queued behind the notice's and the
+reverse, a replacement with its show, a show after two and three kinds
+waiting and with an end between, one dropped unshown, more than the
+bound, a show with none waiting, the re-send's removal before and after
+an older show, a shell not heard from) and 98 SE's long hover (`tr_hover_move`, `tr_hover_poll`:
+a short hover and a long one either side of 11 double-click times less
+the poll, the last move counting, once per hover, resting on the icon,
+another double-click time, across `GetTickCount`'s wrap) in
+`test\test_tr.c`.
 
 ## 11. Legs
 
@@ -2192,6 +2257,7 @@ Revision 19: the red icon's decision and tooltip (`tr_red_state`,
 | T.12 | 98 SE; ME as the control | revision 17: the pop-up of section 16 for a plug of the Thunderbolt emulator's device and for the outcome of a Safely Remove from the tray, by screenshot; the focus left where it was; a click on the body and on the close box; the timeout; two notices in turn; on ME the shell's balloon and no pop-up |
 | T.13 | 98 SE, ME, 2000, XP, 7 x86 and x64, 8 and 8.1 (roadmap-usb4 43.28) | revision 18: a SuperSpeed stick on a USB 2.0 root port and behind a High Speed hub (the balloon, 98 SE's tooltip, the red icon, the box), then moved to a USB 3 port (the icon clears); two such devices with one moved; a High Speed-only device never counted on a High Speed port or hub, and counted at Full Speed behind a Full Speed hub (item 1's High Speed case, its device_qualifier answered); the default per target; the setting turned off in the tool and by the installer |
 | T.14 | 98 SE, ME, 2000, XP, 7 x86 and x64 (with 43.28) | revision 19, by screenshot: the icon red and its tooltip for a SuperSpeed stick on a USB 2.0 port, a High Speed stick behind a Full Speed hub, the Thunderbolt emulator's device left unapproved, and two at once ("and 1 more"; 98 SE's 63 characters); each put right and the icon back; a sleep and resume leaving it as it was; an Explorer restart while red; the menu's first item and the double click opening the window on the device; the notice turned off clearing conditions 1 and 2; 98 SE at 16 colours |
+| T.15 | 98 SE; 2000 and XP | revision 20 (read 2026-10-23, QEMU, 43.28's installed guests, by screenshot): on 98 SE a pointer resting on the red icon until its tooltip timed out, then away, and back, twice - the tooltip shows again each time (with `3.2.0.0`'s and 43.57's XHCITR it never does again), and the "can run faster" pop-up at the tray's start; a stick that raised the Add New Hardware wizard, the pop-up when the wizard finished (`USBSTOR.INF` from NUSB 3.3 given to it); on 2000 the notice's balloon "Click the icon for what to try.", a click on it and on an eject's "Device stopped" opening nothing, the icon's first item opening the tree on the port; on XP a click on the notice's balloon opening the list and one on "Device stopped" opening nothing |
 
 ## 12. Decisions
 
@@ -2668,3 +2734,11 @@ The tooltip's last event (section 7.1) is kept as it is.
     focus left where it was, a click on the body and on the close box,
     the timeout, two notices in turn; ME as the control, with the shell's
     balloon and no pop-up.
+
+11. **A plug that raises the Add New Hardware wizard** (revision 20,
+    task 43.72). Read in QEMU with the traced build: 98 SE broadcasts
+    `DBT_DEVNODES_CHANGED` for a device that needs a driver only once its
+    wizard ends (finished or cancelled), so the tool reads the device,
+    and its notice's pop-up shows, then, for its 10 s; nothing is lost,
+    and a check made while the wizard is up sees none (read both
+    with the wizard cancelled and with it finished on `USBSTOR.INF`).

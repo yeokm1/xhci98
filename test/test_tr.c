@@ -2876,6 +2876,238 @@ static void test_qual_cache(void)
 /* 43.66 (record 25 section 7.7 item 9): the notice's balloon the shell did
  * not show, sent again once; never twice where the shell showed it or says
  * nothing. */
+/* Task 43.72: 98 SE's icon tooltip after a long hover. */
+static void test_hover(void)
+{
+    TR_HOVER h;
+    TR_U32 t0 = 0xFFFFF000UL;   /* across GetTickCount's wrap */
+
+    memset(&h, 0, sizeof(h));
+    CHECK_EQ(tr_hover_poll(&h, t0, 1, 500UL, 1000UL), 0, "hover: none yet");
+    CHECK_EQ(tr_hover_poll(NULL, t0, 1, 500UL, 1000UL), 0, "hover: no state");
+    tr_hover_move(NULL, t0);
+
+    /* A short hover: the tooltip still up when the pointer left. */
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 1000UL, 0, 500UL, 1000UL), 0,
+             "hover: still on the icon");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 3000UL, 1, 500UL, 1000UL), 0,
+             "hover: left after 3 s: nothing");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 9000UL, 1, 500UL, 1000UL), 0,
+             "hover: once ended, never again");
+
+    /* A long one: 500 ms initial delay + 5000 ms autopop, less the poll. */
+    tr_hover_move(&h, t0);
+    tr_hover_move(&h, t0 + 400UL);      /* the last move counts */
+    CHECK_EQ(tr_hover_poll(&h, t0 + 400UL + 4499UL, 1, 500UL, 1000UL), 0,
+             "hover: just short of the tooltip's time");
+    tr_hover_move(&h, t0 + 400UL);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 400UL + 4500UL, 1, 500UL, 1000UL), 1,
+             "hover: the tooltip timed out: add the icon again");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 20000UL, 1, 500UL, 1000UL), 0,
+             "hover: once per hover");
+    /* Still on the icon however long: nothing until it leaves. */
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 60000UL, 0, 500UL, 1000UL), 0,
+             "hover: resting on the icon");
+    CHECK_EQ(tr_hover_poll(&h, t0 + 61000UL, 1, 500UL, 1000UL), 1,
+             "hover: then away");
+    /* A slower double-click setting lengthens the tooltip's time. */
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 8000UL, 1, 900UL, 1000UL), 0,
+             "hover: 900 ms double click: 9.9 s");
+    tr_hover_move(&h, t0);
+    CHECK_EQ(tr_hover_poll(&h, t0 + 8900UL, 1, 900UL, 1000UL), 1,
+             "hover: 900 ms double click: past it");
+}
+
+/* Task 43.72: which balloon a click is on. */
+static void test_bkind(void)
+{
+    TR_BKIND b;
+
+    memset(&b, 0, sizeof(b));
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: nothing sent");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 0, "bkind: nothing sent, silent shell");
+    CHECK_EQ(tr_bkind_fast(NULL, 1), 0, "bkind: no state");
+    tr_bkind_step(NULL, TR_BE_SHOW);
+
+    /* The notice shown, then another balloon sent that waits behind it
+     * (no show yet): a click is still on the notice's. */
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the notice shown");
+    tr_bkind_step(&b, TR_BE_OTHER);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1,
+             "bkind: another queued behind the notice: the click is the notice's");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 0,
+             "bkind: a silent shell can only go by the last one sent");
+    /* The notice goes, the other is shown: its click is not the notice's. */
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: gone, nothing up");
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: the other shown");
+
+    /* The reverse: another shown, the notice queued behind it. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_SENT);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0,
+             "bkind: the notice queued behind another: the click is the other's");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 1, "bkind: silent shell: the last sent");
+    tr_bkind_step(&b, TR_BE_CLICK);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: clicked away");
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: then the notice shown");
+
+    /* A balloon that replaces the one up at once: the shell's show for it
+     * says which. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_HIDE);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: replaced by another");
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: replaced by the notice");
+
+    /* Taken away (the re-send's removal), then sent again. */
+    tr_bkind_step(&b, TR_BE_DROP);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: removed: nothing up");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 0, "bkind: removed: nothing sent");
+    tr_bkind_step(&b, TR_BE_SENT);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: re-sent, not shown yet");
+    CHECK_EQ(tr_bkind_fast(&b, 0), 1, "bkind: re-sent, silent shell");
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: re-sent and shown");
+    /* Two kinds sent before either's show is handled (the show posted for
+     * the first before the second went): it may be either's, so a click
+     * on it opens nothing; the next show, after it went, is the second's. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: a show after two kinds: not the notice's");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: then the queued notice's show");
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: the reverse order too");
+    /* Round 2's case: one shown, two of different kinds sent behind it,
+     * its end, then a show: in doubt, and so are three waiting; the doubt
+     * clears as the shows take them away. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: an end between: still in doubt");
+    tr_bkind_step(&b, TR_BE_CLICK);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the last one waiting shown");
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: three waiting, mixed");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: two waiting, mixed");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: one waiting, the notice's");
+    /* A balloon the shell dropped unshown keeps only the next show in
+     * doubt. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);         /* dropped, never shown */
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: after a dropped one: in doubt");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: then sure again");
+    /* More waiting than kept: every show in doubt until none waits. */
+    memset(&b, 0, sizeof(b));
+    {
+        int i;
+        tr_bkind_step(&b, TR_BE_OTHER);
+        for (i = 0; i < TR_BK_PENDING; i++) {
+            tr_bkind_step(&b, TR_BE_SENT);
+        }
+        CHECK_EQ(b.N, TR_BK_PENDING, "bkind: bounded");
+        tr_bkind_step(&b, TR_BE_SHOW);
+        CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: spilled: the other's show is in doubt");
+        for (i = 0; i < TR_BK_PENDING; i++) {
+            tr_bkind_step(&b, TR_BE_TIMEOUT);
+            tr_bkind_step(&b, TR_BE_SHOW);
+        }
+        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: spilled: the last waiting, the notice's");
+        CHECK_EQ(b.N, 0, "bkind: drained");
+        CHECK_EQ(b.Lost, 0, "bkind: none lost");
+        tr_bkind_step(&b, TR_BE_TIMEOUT);
+        tr_bkind_step(&b, TR_BE_SENT);
+        tr_bkind_step(&b, TR_BE_SHOW);
+        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: drained: sure again");
+    }
+    /* Round 4's case: seventeen others, then the notice, none shown yet:
+     * the two not kept come first, all the others in doubt, the notice's
+     * last. */
+    memset(&b, 0, sizeof(b));
+    {
+        int i;
+        int fastShows = 0;
+        for (i = 0; i < 17; i++) {
+            tr_bkind_step(&b, TR_BE_OTHER);
+        }
+        tr_bkind_step(&b, TR_BE_SENT);
+        CHECK_EQ(b.Lost, 2, "bkind: two not kept");
+        for (i = 0; i < 17; i++) {
+            tr_bkind_step(&b, TR_BE_SHOW);
+            fastShows += tr_bkind_fast(&b, 1);
+            tr_bkind_step(&b, TR_BE_TIMEOUT);
+        }
+        CHECK_EQ(fastShows, 0, "bkind: none of the others' shows is the notice's");
+        tr_bkind_step(&b, TR_BE_SHOW);
+        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the notice's, last");
+    }
+    /* Round 3's case: the re-send's removal with an older balloon's show
+     * still on its way. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_DROP);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: a show from before the removal: in doubt");
+    /* A show with none waiting cannot be placed: in doubt. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: a show with none waiting");
+    /* The same kind twice (the 43.66 re-send) is no doubt. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the notice sent twice, shown");
+    tr_bkind_step(&b, TR_BE_SENT);
+    /* Ticks change nothing. */
+    tr_bkind_step(&b, TR_BE_TICK);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: a tick changes nothing");
+}
+
 static void test_bsend(void)
 {
     TR_BSEND s;
@@ -3591,6 +3823,8 @@ int main(void)
     test_login();
     test_qual_cache();
     test_bsend();
+    test_bkind();
+    test_hover();
     test_fast();
     test_levels();
     test_labels();

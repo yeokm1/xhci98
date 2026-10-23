@@ -2997,6 +2997,105 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports)
     }
 }
 
+void tr_bkind_step(TR_BKIND *b, int ev)
+{
+    if (b == NULL) {
+        return;
+    }
+    if (b->N < 0 || b->N > TR_BK_PENDING) {
+        b->N = 0;
+    }
+    switch (ev) {
+    case TR_BE_SENT:
+    case TR_BE_OTHER: {
+        int kind = ev == TR_BE_SENT ? TR_BK_FAST : TR_BK_OTHER;
+        if (b->N == TR_BK_PENDING) {
+            /* Full: the oldest is counted, its kind not kept. Saturated,
+             * the count stays: every show in doubt from then on. */
+            memmove(&b->Wait[0], &b->Wait[1], (TR_BK_PENDING - 1) * sizeof(b->Wait[0]));
+            b->N--;
+            if (b->Lost < TR_BK_LOST_MAX) {
+                b->Lost++;
+            }
+        }
+        b->Wait[b->N++] = kind;
+        b->Sent = kind;
+        break;
+    }
+    case TR_BE_SHOW:
+        if (b->Lost > 0) {
+            /* One of those counted, the oldest: its kind is not known. */
+            if (b->Lost < TR_BK_LOST_MAX) {
+                b->Lost--;
+            }
+            b->Shown = TR_BK_OTHER;
+        } else if (b->N == 0) {
+            /* None waiting: a show this list cannot place. */
+            b->Shown = TR_BK_OTHER;
+        } else {
+            int i;
+            int kind = b->Wait[0];
+            for (i = 1; i < b->N; i++) {
+                if (b->Wait[i] != kind) {
+                    kind = TR_BK_OTHER; /* the oldest's or the newest's */
+                    break;
+                }
+            }
+            b->Shown = kind;
+            memmove(&b->Wait[0], &b->Wait[1], (b->N - 1) * sizeof(b->Wait[0]));
+            b->N--;
+        }
+        break;
+    case TR_BE_HIDE:
+    case TR_BE_TIMEOUT:
+    case TR_BE_CLICK:
+        b->Shown = TR_BK_NONE;
+        break;
+    case TR_BE_DROP:
+        /* Taken away, shown or queued: none is up. Those waiting are kept:
+         * a show or a click the shell posted before the removal may still
+         * come, and must stay in doubt. */
+        b->Sent = TR_BK_NONE;
+        b->Shown = TR_BK_NONE;
+        break;
+    default:
+        break;
+    }
+}
+
+void tr_hover_move(TR_HOVER *h, TR_U32 nowMs)
+{
+    if (h == NULL) {
+        return;
+    }
+    h->On = 1;
+    h->Last = nowMs;
+}
+
+int tr_hover_poll(TR_HOVER *h, TR_U32 nowMs, int away, TR_U32 dblClickMs,
+                  TR_U32 pollMs)
+{
+    TR_U32 shown;               /* the initial delay and the autopop time  */
+
+    if (h == NULL || !h->On || !away) {
+        return 0;
+    }
+    h->On = 0;
+    shown = 11UL * dblClickMs;
+    /* The pointer left at most one poll ago, so a hover that may have
+     * outlasted the tooltip counts: a needless re-add only draws the icon
+     * again (on 98 SE perhaps at another place among the area's icons). */
+    return nowMs - h->Last + pollMs >= shown;
+}
+
+int tr_bkind_fast(const TR_BKIND *b, int reports)
+{
+    if (b == NULL) {
+        return 0;
+    }
+    return (reports ? b->Shown : b->Sent) == TR_BK_FAST;
+}
+
 void tr_fast_balloon(char *out, size_t cap, const char *name,
                      const TR_FAST *f, int count, int clickBalloon)
 {
