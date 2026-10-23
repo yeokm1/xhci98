@@ -516,6 +516,7 @@ static void tb_question(void);
 static int tb_decide(int *asked, int *def, int *installed);
 static void tb_apply(int include);
 static void tb_later_note(const char *dir);
+static void names_reconcile(int uninstall);
 
 static int flagFailed;
 static int flagRestart;
@@ -8062,6 +8063,12 @@ static int run_install_nt(void)
         old_dir_cleanup();
         arp_write(0);
     }
+    /* Whatever this run installed, the controllers' names follow the table
+     * (record 23 section 5.13): a same-version run reinstalls nothing. Only
+     * on this, the run's normal end, and after its last use of the plan. */
+    if (usbInclude) {
+        names_reconcile(0);
+    }
     if (flagRestart) {
         /* The second sentence only where it can apply (the 2000 leg read
          * it after a settings-only run). */
@@ -9470,6 +9477,10 @@ static int run_install_9x(void)
     i = steps_9x(srcDir);
     tb_later_note(srcDir);
     note_old_entries();
+    /* Record 23 section 5.13, before Device Manager is opened. */
+    if (usbInclude) {
+        names_reconcile(0);
+    }
     open_device_manager(i);
     /* Steps are left only where a device needs one (the helper could not
      * do it, a refused version, an entry that may be a cancelled wizard's
@@ -9596,8 +9607,34 @@ static void names_rec_del(const char *id)
     }
 }
 
+/* NT: the devnode in the device list: 1 found (data filled), 0 the list
+ * holds no such devnode, -1 the list could not be read to its end. */
+static int names_find(HDEVINFO set, const char *id, SP_DEVINFO_DATA *data)
+{
+    DWORD i;
+    char got[INST_ID_CHARS];
+
+    if (set == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    for (i = 0;; i++) {
+        data->cbSize = sizeof(*data);
+        if (!api.EnumInfo(set, i, data)) {
+            return GetLastError() == ERROR_NO_MORE_ITEMS ? 0 : -1;
+        }
+        if (!api.GetInstanceId(set, data, got, sizeof(got), NULL)) {
+            return -1;
+        }
+        if (inst_eq(got, id)) {
+            return 1;
+        }
+    }
+}
+
 /* The devnode's FriendlyName now: 1 read ("" none), 0 no such devnode, -1
- * unreadable. set is NT's device list (every class, present or not). */
+ * not known (the list, the key or the value unreadable, or not a string):
+ * only a 0 lets a record go, and only a 1 lets a name change. set is NT's
+ * device list (every class, present or not). */
 static int names_now(HDEVINFO set, const char *id, char *buf, DWORD cap)
 {
     SP_DEVINFO_DATA data;
@@ -9605,19 +9642,31 @@ static int names_now(HDEVINFO set, const char *id, char *buf, DWORD cap)
 
     buf[0] = '\0';
     if (envNow.Nt) {
-        if (set == INVALID_HANDLE_VALUE || !find_in_set(set, id, &data)) {
-            return 0;
+        r = names_find(set, id, &data);
+        if (r <= 0) {
+            return r;
         }
-        r = sd_prop(set, &data, SPDRP_FRIENDLYNAME, buf, cap, NULL);
-        return r < 0 ? -1 : 1;
+        /* The Enum key itself, not SetupAPI's answer, which gives the same
+         * ERROR_INVALID_DATA for a value absent and for one it cannot
+         * return (section 5.3). */
+        r = enum_value(id, "FriendlyName", REG_SZ, buf, cap, NULL);
+        if (r < 0) {
+            buf[0] = '\0';
+            return -1;
+        }
+        return 1;
     }
     {
         char path[INST_ID_CHARS + 16];
         HKEY k;
+        LONG e;
         join(path, sizeof(path), "Enum", id);
-        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
-            ERROR_SUCCESS) {
+        e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k);
+        if (e == ERROR_FILE_NOT_FOUND) {
             return 0;
+        }
+        if (e != ERROR_SUCCESS) {
+            return -1;
         }
         RegCloseKey(k);
         r = reg_text3(HKEY_LOCAL_MACHINE, path, "FriendlyName", buf, cap);
@@ -9637,8 +9686,7 @@ static int names_write(HDEVINFO set, const char *id, const char *name)
     LONG w;
 
     if (envNow.Nt) {
-        if (set == INVALID_HANDLE_VALUE || api.SetRegProp == NULL ||
-            !find_in_set(set, id, &data)) {
+        if (api.SetRegProp == NULL || names_find(set, id, &data) != 1) {
             return 0;
         }
         return name != NULL ?
@@ -9685,7 +9733,9 @@ static void names_say(const char *what, const char *name, const char *id)
     out("  %s: %s\n    %s\n", what, name, id);
 }
 
-/* One devnode: the decision of inst_name_action, made and recorded. */
+/* One devnode: the decision of inst_name_action, made and recorded. The
+ * record is written before the name, so a name this installer wrote is
+ * never left without its record; a write that fails puts the record back. */
 static void names_one(HDEVINFO set, const char *id, int ours,
                       const char *canon)
 {
@@ -9710,13 +9760,23 @@ static void names_one(HDEVINFO set, const char *id, int ours,
     }
     a = inst_name_action(ours, canon, now, hasRec ? rec : NULL, &keep);
     if (a == INST_NAME_SET) {
-        if (names_write(set, id, canon) && names_rec_put(id, canon)) {
+        if (!names_rec_put(id, canon)) {
+            out("%s is not named: the record of its name could not be "
+                "written.\n", id);
+            return;
+        }
+        if (names_write(set, id, canon)) {
             flagChanged = 1;
             names_say("named", canon, id);
             logonly("names: %s := \"%s\" (was \"%s\")\n", id, canon, now);
         } else {
             out("%s could not be named \"%s\" (error %lu).\n", id, canon,
                 (unsigned long)GetLastError());
+            if (hasRec) {
+                names_rec_put(id, rec);
+            } else {
+                names_rec_del(id);
+            }
         }
         return;
     }
@@ -9740,20 +9800,24 @@ static void names_one(HDEVINFO set, const char *id, int ours,
     }
 }
 
-/* After an install run (uninstall 0) or at the uninstall's end (1): every
- * xHCI controller the scan lists, then every recorded instance the scan
- * did not. */
+/* At the normal end of an install run (uninstall 0) or of the uninstall
+ * (1): every xHCI controller a fresh scan lists, then every recorded
+ * instance the scan did not. It scans, so devs[] is the scan's afterwards:
+ * the run calls it after the last use of its own plan. */
 static void names_reconcile(int uninstall)
 {
     HDEVINFO set = INVALID_HANDLE_VALUE;
     static char ids[INST_MAX_DEVS][INST_ID_CHARS];
+    static char left[INST_MAX_DEVS][INST_ID_CHARS];
     char canonBuf[INST_FNAME_CHARS];
     int done = 0;
+    int nLeft = 0;
+    int more = 0;
     int i;
     HKEY k;
 
     namesSaid = 0;
-    if (opts.List) {
+    if (opts.List || runCancelled) {
         return;
     }
     if (!scan()) {
@@ -9782,19 +9846,22 @@ static void names_reconcile(int uninstall)
         }
     }
     /* A recorded instance that is no controller now, or not listed: the
-     * name this installer wrote goes. */
+     * name this installer wrote goes. The values are read first, then
+     * acted on, since acting deletes them. */
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0, KEY_READ, &k) ==
         ERROR_SUCCESS) {
-        static char left[64][INST_ID_CHARS];
-        int nLeft = 0;
         DWORD v;
-        for (v = 0; nLeft < 64; v++) {
+        for (v = 0;; v++) {
             char name[INST_ID_CHARS];
             DWORD n = sizeof(name);
             int j;
             int seen = 0;
-            if (RegEnumValueA(k, v, name, &n, NULL, NULL, NULL, NULL) !=
-                ERROR_SUCCESS) {
+            LONG e = RegEnumValueA(k, v, name, &n, NULL, NULL, NULL, NULL);
+            if (e == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (e != ERROR_SUCCESS || nLeft >= INST_MAX_DEVS) {
+                more = 1;
                 break;
             }
             for (j = 0; j < done; j++) {
@@ -9810,6 +9877,12 @@ static void names_reconcile(int uninstall)
         for (i = 0; i < nLeft; i++) {
             names_one(set, left[i], 0, NULL);
         }
+    }
+    if (more) {
+        out("Not every recorded controller name was read: HKLM\\%s keeps "
+            "the rest; run the\n%s again.\n", INST_NAMES_KEY,
+            uninstall ? "uninstall" : "install");
+        flagSteps = 1;
     }
     if (set != INVALID_HANDLE_VALUE) {
         api.Destroy(set);
@@ -23152,11 +23225,6 @@ int inst_eng_run(void)
         }
     }
 
-    /* Whatever the run did, the controllers' names follow the table
-     * (record 23 section 5.13): a same-version run reinstalls nothing. */
-    if (code != INST_EXIT_REFUSED && !opts.List && usbInclude) {
-        names_reconcile(0);
-    }
     /* Whatever the run's verdict, the invariant of record 21 section 7.4
      * holds at its end (decision M13). */
     mk_end_of_run();

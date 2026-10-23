@@ -1964,13 +1964,16 @@ both NHI INFs; `test_inst` holds every model line of `xhcicm.inf` and
 
 #### 5.13.4 The reconciliation
 
-`names_reconcile` (`xhciinst\inst_eng.c`) runs at the end of every install
-run that was not refused and not `/list`, with the USB drivers in the run,
-**whatever the run did** - a run that found every device current
-reinstalled nothing (`inst_action_runs`), and a machine updated by hand
-through Have Disk and then given to the installer is named all the same -
-and at the end of the uninstall, before its records go. It scans the
-devices again and, for each xHCI controller and each instance the record
+`names_reconcile` (`xhciinst\inst_eng.c`) runs at the normal end of every
+install run with the USB drivers in it - never in a run that was refused,
+stopped (a changed plan, an unsettled tree, a barrier that failed) or
+cancelled, and never under `/list` - **whatever the run installed**: a run
+that found every device current reinstalled nothing (`inst_action_runs`),
+and a machine updated by hand through Have Disk and then given to the
+installer is named all the same. On 98 SE and ME it runs before the run
+opens Device Manager. It runs again at the end of the uninstall, before its
+records go. It scans the devices again (after the run's last use of its
+plan) and, for each xHCI controller and each instance the record
 names, takes `inst_name_action`'s decision (`inst_core.c`, the host suite's
 vectors):
 
@@ -1992,8 +1995,15 @@ uninstall's removal deletes with its value). The key goes when it is
 empty, so the install directory's key can (section 9.6). On NT the write is
 `SetupDiSetDeviceRegistryPropertyA(SPDRP_FRIENDLYNAME)`, and the clear the
 same call with no data; on 98 SE and ME the value `FriendlyName` of the
-devnode's `HKLM\Enum` key. A name that cannot be read or written is said
-and left; it is no failure of the run. The run prints each change under
+devnode's `HKLM\Enum` key; on NT the name is read from the devnode's
+`Enum` key itself, since SetupAPI answers `ERROR_INVALID_DATA` both for a
+value absent and for one it cannot return. The record is written before the
+name, and put back if the write fails, so a name this installer wrote never
+lacks its record. A record goes only when the devnode is shown absent (the
+device list read to its end, or the `Enum` key not found); a list, key or
+value that cannot be read leaves both the name and the record as they are,
+said and no failure of the run. More recorded instances than one scan holds
+(1,536) leave the rest recorded, say so and ask for the run again. The run prints each change under
 "Device Manager names:", and the plan names the controller as it will be
 shown ("Device Manager name: ...").
 
