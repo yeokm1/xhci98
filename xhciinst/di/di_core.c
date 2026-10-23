@@ -262,8 +262,31 @@ static void di_cmd_clear(DI_CMD *cmd)
     cmd->hwnd = 0;
     cmd->devid[0] = '\0';
     cmd->inf[0] = '\0';
+    cmd->section[0] = '\0';
     cmd->flags = 0;
     cmd->why = "";
+}
+
+/*
+ * An install section's name as the job's SECTION line may carry it: 1 to
+ * DI_SECTION_MAX characters, each a letter, a digit, '.' or '_' (the
+ * installer's own test, inst_core.c's inst_di_section).
+ */
+static int di_section_ok(const char *s)
+{
+    unsigned i;
+    unsigned n = di_strlen(s);
+    if (n == 0 || n > DI_SECTION_MAX) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char ch = s[i];
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+              (ch >= '0' && ch <= '9') || ch == '.' || ch == '_')) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /*
@@ -354,6 +377,9 @@ static int di_line_is(const DI_TOK *t, int n, const char *key, int words)
  *   HWND <decimal>
  *   DEVICE <device id>            install and remove
  *   INF <inf path>                install
+ *   SECTION <install section>     install, optional: the section to
+ *                                 install instead of the model's (since
+ *                                 3.2.0.0; record 26 section 6.7.12)
  *   FLAGS <flag> [<flag>]         install, optional: force, quiet
  *   END
  *
@@ -461,6 +487,17 @@ int di_parse(const char *cmdline, const char *jobtext, const char *own_version,
         }
     }
     p = di_line(p, t, DI_MAX_TOKENS, &n);
+    if (cmd->job == DI_JOB_INSTALL && n >= 1 && di_tok_is(&t[0], "SECTION")) {
+        if (n != 2 ||
+            !di_copy(cmd->section, sizeof cmd->section, t[1].p, t[1].n) ||
+            !di_section_ok(cmd->section)) {
+            cmd->section[0] = '\0';
+            cmd->job = DI_JOB_NONE;
+            cmd->why = "section";
+            return DI_PARSE_COMMAND;
+        }
+        p = di_line(p, t, DI_MAX_TOKENS, &n);
+    }
     if (cmd->job == DI_JOB_INSTALL && n >= 1 && di_tok_is(&t[0], "FLAGS")) {
         if (n < 2 || n > 3) {
             cmd->job = DI_JOB_NONE;

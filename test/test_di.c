@@ -216,6 +216,37 @@ static void test_parse_refused(void)
     CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0 1\r\nEND\r\n", &c),
              DI_PARSE_COMMAND, "an HWND line of two words");
 
+    /* The SECTION line (since 3.2.0.0; record 26 section 6.7.12). */
+#define SEC_HEAD "XHCIDI-JOB 1\r\nJOB install\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nDEVICE USB\\A\\B\r\nINF C:\\X\\A.INF\r\n"
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION Xhci.Upd\r\nFLAGS quiet\r\nEND\r\n", &c),
+             DI_PARSE_OK, "a SECTION line before FLAGS");
+    CHECK(strcmp(c.section, "Xhci.Upd") == 0, "the section read");
+    CHECK(c.flags == DI_FLAG_QUIET, "the flags after it read");
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION Xhci.Upd\r\nEND\r\n", &c),
+             DI_PARSE_OK, "a SECTION line with no FLAGS");
+    CHECK(strcmp(c.section, "Xhci.Upd") == 0, "the section read, no FLAGS");
+    CHECK_EQ(parse_text(SEC_HEAD "FLAGS quiet\r\nEND\r\n", &c),
+             DI_PARSE_OK, "no SECTION line");
+    CHECK(c.section[0] == '\0', "no section");
+    CHECK_EQ(parse_text(SEC_HEAD "FLAGS quiet\r\nSECTION Xhci.Upd\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "SECTION after FLAGS");
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a SECTION line with no name");
+    CHECK(strcmp(c.why, "section") == 0, "why: section");
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION A B\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a SECTION line of two names");
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION Xhci,Upd\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a section name with a comma");
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a section name of 33 characters");
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION ABCDEFGHIJKLMNOPQRSTUVWXYZ012345\r\nEND\r\n", &c),
+             DI_PARSE_OK, "a section name of 32 characters");
+    CHECK_EQ(parse_text(SEC_HEAD "SECTION Xhci.Upd\r\nSECTION Xhci.Upd\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "SECTION twice");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB remove\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nDEVICE USB\\A\\B\r\n"
+                        "SECTION Xhci.Upd\r\nEND\r\n", &c), DI_PARSE_COMMAND, "SECTION on a removal");
+#undef SEC_HEAD
+
     CHECK_EQ(parse("probe C:\\X\\R.TXT -1", &c), DI_PARSE_COMMAND, "a negative hwnd");
     CHECK(strcmp(c.why, "hwnd") == 0, "why: hwnd");
     CHECK_EQ(parse("probe C:\\X\\R.TXT 65536", &c), DI_PARSE_COMMAND, "an hwnd above 16 bits");

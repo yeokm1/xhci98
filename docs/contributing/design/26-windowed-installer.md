@@ -1,6 +1,12 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 38, 2026-10-23 (the owner's point of that day: on 98 SE
+Status: draft 39, 2026-10-23 (the owner's decisions of that day: the
+controller's wizard on 98 SE asks for no disk after a placement, by a
+copy row in `xhci98.inf`'s wizard section that keeps a file already
+there and an update section with the temporary name that only the
+helper installs, section 5.0; the free set's certificate packaged,
+section 6.7.11; record 23 revision 41, record 27 section 4.1); draft
+38, 2026-10-23 (the owner's point of that day: on 98 SE
 and ME `xhci98.sys` and `xhcicm.sys` put in `SYSTEM32\DRIVERS` as
 `xhciuas.sys` is, recorded, section 5.0; record 23 revision 40); draft
 37, 2026-10-23 (roadmap-usb4 task 43.48, the owner's
@@ -842,6 +848,76 @@ Thunderbolt controller found later opens the wizard and installs with no
 disk asked for. The leg: an install with no controller present, then a
 controller added (`qemu-xhci`, and the Thunderbolt model), the wizard
 finishing with no Insert Disk prompt.
+
+**Draft 39: the controller's wizard, read and fixed in the INF** (the
+owner, 2026-10-23: fixed before the cut; `runs/run-43-42s.md`). The leg
+of draft 38 showed the placement does not spare the controller's
+prompt: with `xhci98.sys` placed and no controller present, a cold start
+with `qemu-xhci` added raised the wizard, which found
+`C:\XHCI98\XHCI98.INF` and then asked for the "xhci98 xHCI Host
+Controller Disk", giving `C:\WIN98\xhci98.sys` as the source (error 2;
+observed). Its row was `xhci98.sys,,xhci98.tmp`, the temporary-name row
+an update over a loaded binary needs (the INF gate's W98-TEMPNAME). A
+plain `xhci98.sys` row asked as well, the file in place (observed, the
+INF edited in the guest); `xhci98.sys,,,16`, `COPYFLG_NO_OVERWRITE`,
+installed with no disk asked for and the controller started (observed,
+the same guest). Why the plain row asks for `xhci98.sys` where
+`xhciuas.inf`'s plain row did not ask for `xhciuas.sys` is not read
+(`xhci98.inf` has a `LayoutFile` and `xhciuas.inf` none is the one
+difference seen, not tested). So `xhci98.inf` now has two Windows 98 SE
+and ME install sections for its one controller model:
+
+- **`[Xhci.Dev]`**, the one the model names and so the one Windows' own
+  wizard and Update Driver take: its driver row is `[Xhci.CopyPrep]`'s
+  `xhci98.sys,,,16`, which keeps a file already there. A controller found
+  after the installer placed the file installs with no disk asked for; a
+  controller found with no file there copies it from the source, asked
+  for as before.
+- **`[Xhci.Upd]`**, which no model names: the same `AddReg` and the same
+  copy sections but `[Xhci.CopyFiles]`'s `xhci98.sys,,xhci98.tmp` (shared
+  with the NT sections and the right-click install, unchanged). The
+  setup engines never offer it; the installer's helper installs it by
+  name for a controller that is there (record 27 section 4.1, the job
+  file's `SECTION` line, `INST_XHCI_UPD_SECTION`): `DiCreateDriverNode`
+  makes the driver node from the chosen one with this section, and
+  `DIF_INSTALLDEVICE` installs it. The driver key then reads
+  `InfSection = Xhci.Upd` (XHCITR's table knows it). The root hub, the
+  hubs and the composite parents copy nothing and keep the model's
+  section.
+
+The INF gate holds the pair (W98-PREPROW: the wizard's row is
+`COPYFLG_NO_OVERWRITE` with no temporary name; W98-PREPSECT: the update
+section exists, no model names it, its directives equal the wizard
+section's but for the one copy section, whose rows equal the wizard's
+but for the temporary name and the flag, and `inst_core.h`'s name for it
+is the INF's; W98-TEMPNAME now on the update section's row). **The cost**:
+an update by hand through Windows' Update Driver on 98 SE and ME takes
+`[Xhci.Dev]` and so keeps the `xhci98.sys` that is there, older or not;
+`INSTALL.BAT` is the update path there (the release notes say so).
+`xhcicm.inf` has no temporary name on its row (`xhcicm.sys`, shared with
+its NT sections) and was left as it is: it has the shape of
+`xhciuas.inf` (a plain row and no `LayoutFile`), whose wizard asked for
+nothing with its file placed, not of `xhci98.inf`; its own wizard was
+not read in this leg (no Thunderbolt model added; section 14).
+**The legs** (98 SE, 2026-10-23): an install with no controller present,
+then the controller added, no disk asked for, `InfSection = Xhci.Dev`;
+and over an installed 3.1.0.0 with the controller present, `/force` (the
+leg package carries `3.1.0.0`'s version, so a plain run said "this
+release runs it"): the helper installed `Xhci.Upd`, `XHCI98.TMP` and
+`WININIT.INI`'s `[rename]` line were there before the restart, and after
+it `XHCI98.SYS` alone, the package's bytes, the run that followed saying
+"current (this release)". The windowed run before it (no `/force`) had
+already replaced the loaded `xhci98.sys` with the package's (draft 38's
+`drivers_9x`, an `own_put` over the running file, which succeeded): the
+loaded binary is not held open on 98 SE. **ME** (the same `/force` over
+3.1.0.0, 2026-10-23): the probe ran (ME's `SETUPX.DLL` exports
+`DiCreateDriverNode`), the helper installed `Xhci.Upd` (`InfSection =
+Xhci.Upd`), and the controller and root hub were started; there the
+placement ran after the helper in the same run, and `own_put`'s own
+`XHCI98.TMP` took the engine's pending one (the same bytes), so
+`WININIT.INI`'s `[rename]` line named a file that was gone. ME's restart
+processed it and left `xhci98.sys` in place, the package's (observed);
+the two using one temporary name is recorded in section 14.
 
 **What draft 35 builds, and the owner's points of 2026-10-23** (roadmap
 task 43.42's simplification, its code). The design above is built as it
@@ -3671,12 +3747,28 @@ words is in `inst_core.c` until then), the table's history in
 overlap listing for the maintainer, and the cut-side reader's skipping of
 the metadata lines (the pinned packs carry none, so nothing reads them
 yet);
-the free set's certificate's packaging (`usb-wdm-free-test.cer` at the
-release's top: the pin's `SHA256:` line, the exporter copying it into
-`USBDRV\FREE\`, and `package-common.ps1` accepting it as a pinned file, which
-today refuses it as unclaimed) and its legs (the installer's side is
-built with this section; no free set carries a certificate yet); and the window self-test's layout of this page with every row of
-both tables. Until they are built the record's sentences that say the
+the free set's certificate's legs (no free set carries a certificate
+yet; the packaging is built, draft 39, below); and the window
+self-test's layout of this page with every row of both tables.
+
+**The certificate's packaging** (draft 39, the owner's decision of
+2026-10-23; built). `wdmfree-pin.txt` names the owner's certificate by a
+`Certificate:` line, its SHA-1 thumbprint
+(`814CF778B45159EC2659C39C16C7E75EB3C37145`, "CN=usb-wdm-free project
+test signing (not trusted)", 2000-01-01 to 2039-12-31), which may stand
+before a release qualifies. With a `Tag:` line, the `Certificate:` line
+and the `SHA256:` line of `usb-wdm-free-test.cer` at the release's top go
+together (`Read-WdmFreePin` refuses either alone), and
+`Export-WdmFreeSet` copies the file into `USBDRV\FREE\`, held to the
+pinned hash and refused unless it is one DER certificate with no private
+key and the pinned thumbprint (`Test-WdmFreeCer`), and hashes it in the
+set's `SHA256.TXT`, where the installer's `INST_WDMFREE_CER` reads it.
+The public half is the usb-wdm-free release's file, as `xhci98-test.cer`
+is the cut's: no certificate is tracked in this repository, and the
+private key is never read by anything here. The packager self-tests make
+a throwaway certificate in memory for the fixture (only its public half
+written, no store touched) and hold the repository's pin to the owner's
+thumbprint. Until they are built the record's sentences that say the
 cut refuses or writes these describe the design, not the build.
 
 **Host vectors** (`test_inst.c`): the id from a `STAGE.TXT` path, both
@@ -4263,6 +4355,21 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   98 SE, the second accepted everywhere (section 6.5.9).
 
 ## 14. Open, and the risks
+
+- (draft 39) On 98 SE and ME the placement's `own_put` writes
+  `XHCI98.TMP`, the name `[Xhci.Upd]`'s row gives the engine's pending
+  copy, so a run whose helper update queued a `WININIT.INI` rename and
+  whose placement then replaced the file leaves that rename naming a
+  file that is gone (the same bytes were put in place). ME's restart
+  processed such a line and kept `xhci98.sys` (observed); 98 SE's
+  `WININIT.EXE` is not read with one. A distinct temporary name for the
+  placement is the fix if a leg shows harm.
+- (draft 39) `xhcicm.inf`'s wizard with `xhcicm.sys` placed and a
+  Thunderbolt controller found later is not read. Its copy row is the
+  plain form, which asked for `xhci98.sys` in `xhci98.inf`; but
+  `xhcicm.inf` has no `LayoutFile`, as `xhciuas.inf` has none, and
+  `xhciuas.inf`'s plain row asked for nothing with its file placed, so
+  `xhcicm.inf` is expected to behave as `xhciuas.inf` (inferred).
 
 - (draft 37) A run cut short between adding usb-wdm-free's certificate
   to a store and recording it leaves a trust the uninstall does not

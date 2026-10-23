@@ -2355,6 +2355,11 @@ $script:NonFreePin = [pscustomobject]@{
 $script:WdmFreeFolder = "USBDRV\FREE"
 $script:WdmFreePrefix = "free"
 $script:WdmFreeExtras = @("LICENSE", "NOTICE.md", "STAGE.TXT")
+# The free set's certificate's public half, at the usb-wdm-free release's top
+# and at the set's own (USBDRV\FREE\), where the installer looks for it
+# (INST_WDMFREE_CER; design record 26 section 6.7.11): pinned by a
+# "Certificate:" line (its SHA-1 thumbprint) and its "SHA256:" line.
+$script:WdmFreeCer = "usb-wdm-free-test.cer"
 $script:OtherSums = "SHA256.TXT"
 $script:DownloadsRecordName = "downloads.txt"
 # The systems STAGE.TXT and READ.TXT name (usb-wdm-nonfree 128106f's
@@ -2572,7 +2577,7 @@ function Read-WdmFreePin {
     # files (path from the release's top to hash). Read strictly.
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "no usb-wdm-free pin at '$Path'." }
-    $tag = ""; $commit = ""
+    $tag = ""; $commit = ""; $thumb = ""
     $packages = [ordered]@{}
     $files = [ordered]@{}
     foreach ($line in ([System.IO.File]::ReadAllText($Path) -split "`r?`n")) {
@@ -2583,6 +2588,9 @@ function Read-WdmFreePin {
             $tag = $Matches[1]
         } elseif ($t -match '^Commit: ([0-9a-f]{40})$') {
             $commit = $Matches[1]
+        } elseif ($t -match '^Certificate: ([0-9A-Fa-f]{40})$') {
+            if ($thumb -ne "") { throw "'$Path' names two certificates." }
+            $thumb = $Matches[1].ToUpperInvariant()
         } elseif ($t -match '^Package: ([a-z0-9]+/[a-z0-9]+) \| (.+)$') {
             $pk = $Matches[1]; $sy = @($Matches[2].Trim() -split '\s+')
             foreach ($s in $sy) { if ($script:StageSystems -cnotcontains $s) { throw "'$Path' names a system it cannot read, '$s'." } }
@@ -2596,12 +2604,36 @@ function Read-WdmFreePin {
         }
     }
     if ($tag -eq "") {
+        # The Certificate line alone may stand before a release qualifies:
+        # it records the owner's certificate, and nothing is exported.
         if ($commit -ne "" -or $packages.Count -gt 0 -or $files.Count -gt 0) { throw "'$Path' names no tag and still names a commit, packages or files." }
         return $null
     }
     if ($commit -eq "" -or $packages.Count -eq 0) { throw "'$Path' names a tag with no commit or no package." }
     foreach ($x in $script:WdmFreeExtras) { if (-not $files.Contains($x)) { throw "'$Path' does not pin the release's $x." } }
-    return [pscustomobject]@{ Tag = $tag; Commit = $commit; Packages = $packages; Files = $files }
+    if (($thumb -ne "") -ne $files.Contains($script:WdmFreeCer)) {
+        throw "'$Path' names $(if ($thumb -ne '') { 'a certificate and pins no ' + $script:WdmFreeCer } else { $script:WdmFreeCer + ' and names no Certificate: thumbprint' }): the two go together."
+    }
+    return [pscustomobject]@{ Tag = $tag; Commit = $commit; Packages = $packages; Files = $files; Thumbprint = $thumb }
+}
+
+function Test-WdmFreeCer {
+    # The free set's certificate file: one X.509 certificate, DER, with no
+    # private key (a .cer cannot carry one; a .pfx renamed would be refused
+    # by the parse below or by HasPrivateKey), its SHA-1 thumbprint the
+    # pin's. Throws with the reason; nothing is added to any store.
+    param([string]$Path, [string]$Thumbprint, [string]$Label)
+    $b = [System.IO.File]::ReadAllBytes($Path)
+    if ($b.Length -lt 64 -or $b[0] -ne 0x30) { throw "$Label is not a DER certificate." }
+    try { $ct = [System.Security.Cryptography.X509Certificates.X509Certificate2]::GetCertContentType($b) } catch { throw "$Label is not a DER certificate ($($_.Exception.InnerException.Message))." }
+    if ($ct -ne [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert) { throw "$Label is a $ct, not a certificate." }
+    $x = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (, $b)
+    try {
+        if ($x.HasPrivateKey) { throw "$Label carries a private key." }
+        if ($x.Thumbprint.ToUpperInvariant() -ne $Thumbprint) { throw "$Label's thumbprint is $($x.Thumbprint), not the pinned $Thumbprint." }
+    } finally {
+        $x.Reset()
+    }
 }
 
 function Export-WdmFreeSet {
@@ -2643,12 +2675,22 @@ function Export-WdmFreeSet {
         }
     }
     foreach ($x in $script:WdmFreeExtras) { $claimed[$x] = $true }
+    $thumb = ""
+    if ($Pin.PSObject.Properties.Name -contains "Thumbprint") { $thumb = [string]$Pin.Thumbprint }
+    if ($thumb -ne "") { $claimed[$script:WdmFreeCer] = $true }
     $stray = @($Pin.Files.Keys | Where-Object { -not $claimed.ContainsKey($_) })
     if ($stray.Count -gt 0) { throw "the usb-wdm-free pin lists files of no pinned package: $(@($stray | Select-Object -First 5) -join ', ')." }
     foreach ($x in @("LICENSE", "NOTICE.md")) {
         $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $x -OutFile (Join-Path $Dest $x)
         if ($h -ne $Pin.Files[$x]) { throw "usb-wdm-free $($Pin.Tag)'s $x is $h, not the pinned $($Pin.Files[$x])." }
         $files[$x] = $h
+    }
+    if ($thumb -ne "") {
+        $cerOut = Join-Path $Dest $script:WdmFreeCer
+        $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $script:WdmFreeCer -OutFile $cerOut
+        if ($h -ne $Pin.Files[$script:WdmFreeCer]) { throw "usb-wdm-free $($Pin.Tag)'s $($script:WdmFreeCer) is $h, not the pinned $($Pin.Files[$script:WdmFreeCer])." }
+        Test-WdmFreeCer -Path $cerOut -Thumbprint $thumb -Label "usb-wdm-free $($Pin.Tag)'s $($script:WdmFreeCer)"
+        $files[$script:WdmFreeCer] = $h
     }
     $stageSrc = Join-Path $Dest ".stage-src"
     $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path "STAGE.TXT" -OutFile $stageSrc

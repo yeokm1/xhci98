@@ -9,6 +9,7 @@
 #   Commit: <the commit it names, 40 hex>
 #   Package: <class>/<package> | <the systems its legs passed on>
 #   SHA256: <64 hex> <path from the release's top>
+#   Certificate: <the SHA-1 thumbprint of usb-wdm-free-test.cer, 40 hex>
 #
 # one Package line per qualifying package, the systems in STAGE.TXT's tokens
 # (W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64), and
@@ -17,5 +18,17 @@
 # files at exactly these bytes. With no Tag line no release qualifies: the cut
 # makes no download 2, and download 3 carries no WDMFREE\.
 #
+# The certificate (design record 26 section 6.7.11): usb-wdm-free signs its
+# x64 drivers with its own test certificate, whose public half is the
+# release's top-level usb-wdm-free-test.cer. With a Tag line, a Certificate
+# line and that file's SHA256 line go together: the cut copies the file into
+# USBDRV\FREE\, hashed in its SHA256.TXT, and refuses it unless it is one DER
+# certificate with no private key and this thumbprint. The Certificate line
+# may stand alone before a release qualifies; it is the owner's certificate
+# (CN=usb-wdm-free project test signing (not trusted), 2000-01-01 to
+# 2039-12-31, made 2026-10-23).
+#
 # No usb-wdm-free release qualifies yet (2026-10-22): it has no release and no
 # STAGE.TXT.
+
+Certificate: 814CF778B45159EC2659C39C16C7E75EB3C37145

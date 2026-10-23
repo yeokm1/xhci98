@@ -490,8 +490,8 @@ try {
     # being reported, and the throw took the media layout and the footprint
     # with it. Both are written from the parse, so both must still appear.
     $xrefCopyInf = New-MutatedInf -Name "xref-copyfiles" -Mutate {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.NoSuchCopy")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS,Xhci.NoSuchCopy")
     }
     $xrefLayout = Join-Path $script:work "xref-copyfiles-layout.txt"
     $xrefFootprint = Join-Path $script:work "xref-copyfiles-footprint.txt"
@@ -1226,14 +1226,14 @@ try {
     # clean Windows 98 install would write the loader value and copy no
     # driver. The OS-source list stays, so the OS-* rules are not what fires.
     Assert-RuleFires "w98-copyfiles-gap" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS",
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS",
                              "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyOS")
     }
     # The undecorated install section losing its AddReg: Windows 98 binds the
     # device and then loads nothing, because DevLoader and NTMPDriver are what
     # that section carries.
     Assert-RuleFires "w98-no-addreg" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyPrep")
     }
     #
     # **A genuinely NT-only INF** - the mistake this task exists to prevent. It
@@ -1248,7 +1248,7 @@ try {
     # the INF against Windows 2000 alone would produce.
     #
     Assert-RuleFires "nt-only" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n", "")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS,Xhci.CopyUI`r`n", "")
     }
 
     # ---- the files the OS supplies (Phase 17, release 1.0.0.1; Phase 19) ----
@@ -1278,8 +1278,8 @@ try {
     # [Xhci.CopyOS] is shared, so each case drops the section from ONE route
     # rather than emptying it.
     Assert-RuleFires "os-no-usbd-w98" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS,Xhci.CopyUI",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyUI")
     }
     Assert-RuleFires "os-no-usbd-nt" "OS-MISSING" {
         param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS",
@@ -1297,7 +1297,7 @@ try {
     # section of that route's own, plus the shared list and a root-hub install,
     # which is the likeliest place for an editor to put the hub driver back.
     Assert-RuleFires "os-usbhub-on-w98" "OS-HCDREPLACED" {
-        param($t) Add-CopySection $t "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub.sys,,,16"
+        param($t) Add-CopySection $t "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS,Xhci.CopyUI" "usbhub.sys,,,16"
     }
     Assert-RuleFires "os-usbhub-on-nt" "OS-HCDREPLACED" {
         param($t) Add-CopySection $t "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub.sys,,,16"
@@ -1320,7 +1320,7 @@ try {
         param($t) Add-CopySection $t "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub20.sys,,,16"
     }
     Assert-RuleFires "os-usbhub20-on-w98" "OS-NEVER" {
-        param($t) Add-CopySection $t "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub20.sys,,,16"
+        param($t) Add-CopySection $t "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS,Xhci.CopyUI" "usbhub20.sys,,,16"
     }
     Assert-RuleFires "os-usbhub20-on-media" "OS-NEVER" {
         param($t) $t.Replace("xhci98.inf=1`r`n", "xhci98.inf=1`r`nusbhub20.sys=1`r`n")
@@ -1371,8 +1371,8 @@ try {
 
     # Gone from the 9x path, and from the NT path, one at a time.
     Assert-RuleFires "os-no-usbui-w98" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS,Xhci.CopyUI",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,Xhci.CopyOS")
     }
     Assert-RuleFires "os-no-usbui-nt" "OS-MISSING" {
         param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
@@ -1440,6 +1440,35 @@ try {
     # binary fails - and until that audit only the footprint diff noticed.
     Assert-RuleFires "w98-no-tempname" "W98-TEMPNAME" {
         param($t) $t.Replace("xhci98.sys,,xhci98.tmp", "xhci98.sys")
+    }
+
+    # The wizard's row and the update section (since 3.2.0.0; design
+    # record 26 section 6.7.12): the wizard's [Xhci.Dev] keeps a file already
+    # there and carries no temporary name; [Xhci.Upd], which no model names,
+    # is the same install with the temporary name, and the installer names it.
+    Assert-RuleFires "w98-prep-tempname" "W98-PREPROW" {
+        param($t) $t.Replace("[Xhci.CopyPrep]`r`nxhci98.sys,,,16", "[Xhci.CopyPrep]`r`nxhci98.sys,,xhci98.tmp,16")
+    }
+    Assert-RuleFires "w98-prep-plain" "W98-PREPROW" {
+        param($t) $t.Replace("[Xhci.CopyPrep]`r`nxhci98.sys,,,16", "[Xhci.CopyPrep]`r`nxhci98.sys")
+    }
+    Assert-RuleFires "w98-prep-wizard-tempname" "W98-PREPROW" {
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,", "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,")
+    }
+    Assert-RuleFires "w98-upd-missing" "W98-PREPSECT" {
+        param($t) $t.Replace("[Xhci.Upd]`r`n", "[Xhci.Upd2]`r`n")
+    }
+    Assert-RuleFires "w98-upd-modelled" "W98-PREPSECT" {
+        param($t) $t.Replace("%XhciDesc%=Xhci.Dev,PCI\CC_0C0330", "%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`r`n%XhciDesc%=Xhci.Upd,PCI\CC_0C0330")
+    }
+    Assert-RuleFires "w98-upd-addreg" "W98-PREPSECT" {
+        param($t) $t.Replace("[Xhci.Upd]`r`nAddReg=Xhci.AddReg", "[Xhci.Upd]`r`nAddReg=Xhci.AddReg,Xhci.Msi.AddReg")
+    }
+    Assert-RuleFires "w98-upd-copylist" "W98-PREPSECT" {
+        param($t) $t.Replace("[Xhci.Upd]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI", "[Xhci.Upd]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
+    }
+    Assert-RuleFires "w98-upd-noflag" "W98-PREPSECT" {
+        param($t) $t.Replace("[Xhci.CopyFiles]`r`nxhci98.sys,,xhci98.tmp", "[Xhci.CopyFiles]`r`nxhci98.sys,,xhci98.tmp,16")
     }
 
     # Both right-click sections gone (audit of 2026-09-07). This is the shape that used to
@@ -2004,7 +2033,7 @@ try {
         param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,", "[DefaultInstall]`r`nCopyFiles=XhciHlpr.CopyFiles,Inf.CopyFiles,")
     }
     Assert-RuleFires "x86-hlpr-on-98-device" "HLPR-PLACE" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,", "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=XhciHlpr.CopyFiles,Xhci.CopyFiles,")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyPrep,", "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=XhciHlpr.CopyFiles,Xhci.CopyFiles,")
     }
     Assert-RuleFires "x86-hlpr-svc-on-roothub" "HLPR-PLACE" {
         param($t) $t.Replace("[RootHub.Dev6.NTx86.Services]`r`nAddService=xhci98,0x00000002,Xhci.AddService`r`n",

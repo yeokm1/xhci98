@@ -8606,8 +8606,17 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     if (owner > 65535UL) {
         owner = 0;
     }
-    if (!inst_di_jobfile(jobText, sizeof(jobText), job, helperResult, owner,
-                         id, inf, force, 1) ||
+    /* The controller's install names xhci98.inf's update section, the one
+     * with the temporary name, which no model names (record 26 section
+     * 6.7.12): the wizard's [Xhci.Dev] copies plainly, so that a controller
+     * found after a placement asks for no disk, and over a loaded
+     * xhci98.sys the 9x engine needs the temporary name. The root hub, the hubs and the composite
+     * parents copy nothing and take the model's section. */
+    if (!inst_di_jobfile_sec(jobText, sizeof(jobText), job, helperResult,
+                             owner, id, inf,
+                             (job == INST_DI_INSTALL && d != NULL &&
+                              d->Inf == INST_INF_XHCI && is_controller(d)) ?
+                             INST_XHCI_UPD_SECTION : NULL, force, 1) ||
         !inst_di_cmdline(tail, sizeof(tail), XHCIINST_VERSION,
                          helperJobFile)) {
         logonly("helper: the job cannot be written (%s %s, result %s, job "

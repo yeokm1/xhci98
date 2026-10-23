@@ -4109,6 +4109,13 @@ or says it was found by reading the code.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
+- **Windows 98 SE and ME: update with `INSTALL.BAT`, not with Update
+  Driver** (from `3.2.0.0`). The controller's install that Windows' own
+  wizard and Update Driver take keeps an `xhci98.sys` already in
+  `SYSTEM32\DRIVERS`, so that a controller found after the installer ran
+  asks for no disk; an Update Driver over an earlier xhci98 therefore
+  keeps the earlier file. The installer replaces it. A controller with no
+  driver yet installs through Update Driver as before.
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.

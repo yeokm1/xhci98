@@ -1940,6 +1940,21 @@ try {
             Ensure-Directory (Split-Path -Parent $fp)
             [System.IO.File]::WriteAllBytes($fp, [System.Text.Encoding]::ASCII.GetBytes($freeFiles[$k]))
         }
+        # The certificate's public half: a throwaway one made here in memory
+        # for this run (never the owner's, never added to any store; only
+        # its DER public half is written), at the release's top.
+        $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+        try {
+            $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest("CN=xhci98 test-package throwaway", $rsa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            $tmpCert = $req.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+            $cerBytes = $tmpCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+            $cerThumb = $tmpCert.Thumbprint.ToUpperInvariant()
+            $tmpCert.Reset()
+        } finally {
+            $rsa.Dispose()
+        }
+        [System.IO.File]::WriteAllBytes((Join-Path $freeRepo "usb-wdm-free-test.cer"), $cerBytes)
+        [System.IO.File]::WriteAllBytes((Join-Path $freeRepo "notacert.cer"), [System.Text.Encoding]::ASCII.GetBytes("0 not a certificate, padded to more than sixty-four bytes of text"))
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
@@ -1956,16 +1971,46 @@ try {
         foreach ($k in @($freeFiles.Keys | Where-Object { $_ -notlike "free/video/*" })) {
             $freePinLines += ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo $k.Replace('/', '\'))) + " " + $k)
         }
+        $cerPinLines = @("Certificate: $cerThumb", ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo "usb-wdm-free-test.cer")) + " usb-wdm-free-test.cer"))
         $freePinPath = Join-Path $script:work "wdmfree-pin.txt"
-        [System.IO.File]::WriteAllText($freePinPath, (($freePinLines -join "`r`n") + "`r`n"))
+        [System.IO.File]::WriteAllText($freePinPath, ((($freePinLines + $cerPinLines) -join "`r`n") + "`r`n"))
         $freePin = Read-WdmFreePin -Path $freePinPath
         $fr = Export-WdmFreeSet -Root $freeRepo -Pin $freePin -Dest (Join-Path $script:work "wdmfree-exp")
+        Assert-True ($fr.Files.Contains("usb-wdm-free-test.cer") -and (Get-FileSha256 -Path (Join-Path $fr.Dir "usb-wdm-free-test.cer")) -eq $fr.Files["usb-wdm-free-test.cer"]) "the free export does not carry the pinned certificate at its top."
+        Assert-True ([System.IO.File]::ReadAllText((Join-Path $fr.Dir "SHA256.TXT")).Contains(" usb-wdm-free-test.cer")) "FREE\SHA256.TXT does not hash the certificate."
+        $cerCases = @(
+            @{ Lines = @($freePinLines + @($cerPinLines[1])); Want = "go together"; Why = "the certificate's file with no Certificate line"; Read = $true },
+            @{ Lines = @($freePinLines + @($cerPinLines[0])); Want = "go together"; Why = "a Certificate line with no file pinned"; Read = $true },
+            @{ Lines = @($freePinLines + @($cerPinLines[0], $cerPinLines[0])); Want = "two certificates"; Why = "two Certificate lines"; Read = $true },
+            @{ Lines = @($freePinLines + @(("Certificate: " + ("0" * 40)), $cerPinLines[1])); Want = "not the pinned"; Why = "another thumbprint"; Read = $false },
+            @{ Lines = @($freePinLines + @($cerPinLines[0], ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo "notacert.cer")) + " usb-wdm-free-test.cer"))); Want = "not the pinned"; Why = "the certificate at other bytes"; Read = $false })
+        foreach ($cc in $cerCases) {
+            $cp = Join-Path $script:work ("wdmfree-pin-cer-" + [System.IO.Path]::GetRandomFileName() + ".txt")
+            [System.IO.File]::WriteAllText($cp, (($cc.Lines -join "`r`n") + "`r`n"))
+            $msg = ""
+            try {
+                $pp = Read-WdmFreePin -Path $cp
+                if (-not $cc.Read) { Export-WdmFreeSet -Root $freeRepo -Pin $pp -Dest (Join-Path $script:work ("wdmfree-cer-" + [System.IO.Path]::GetRandomFileName())) | Out-Null }
+            } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($cc.Want)) ("the free pin with " + $cc.Why + " did not refuse with '" + $cc.Want + "': '" + $msg + "'")
+        }
+        $msg = ""
+        try { Test-WdmFreeCer -Path (Join-Path $freeRepo "notacert.cer") -Thumbprint $cerThumb -Label "x" } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("not a DER certificate")) ("a file that is no certificate was accepted as the free set's: '" + $msg + "'")
+        $msg = ""
+        try { Test-WdmFreeCer -Path (Join-Path $fr.Dir "usb-wdm-free-test.cer") -Thumbprint ("F" * 40) -Label "x" } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("not the pinned")) ("the free set's certificate at another thumbprint was accepted: '" + $msg + "'")
+        $noTagPin = Join-Path $script:work "wdmfree-pin-notag.txt"
+        [System.IO.File]::WriteAllText($noTagPin, "# no release yet`r`n$($cerPinLines[0])`r`n")
+        Assert-True ($null -eq (Read-WdmFreePin -Path $noTagPin)) "a pin of a Certificate line alone did not read as no release."
         Assert-True ($fr.Files.Contains("net\cdcx\w98se-me\CDCX.SYS") -and -not $fr.Files.Contains("video\camx\w98se\CAMX.INF")) "the free export does not hold the pinned package alone."
         $frStage = [System.IO.File]::ReadAllText((Join-Path $fr.Dir "STAGE.TXT"))
         Assert-True ($frStage.Contains("free/net/cdcx/w2k-8/CDCX.INF") -and -not $frStage.Contains("CAMX")) "WDMFREE\STAGE.TXT is not the pinned package's lines."
         Assert-True ([System.IO.File]::ReadAllText((Join-Path $fr.Dir "READ.TXT")).Contains("net/cdcx | W98SE W2K")) "WDMFREE\READ.TXT does not carry the pinned package's systems."
         foreach ($x in @("LICENSE", "NOTICE.md", "READ.TXT", "SHA256.TXT", "STAGE.TXT")) { Assert-True ($fr.Files.Contains($x)) "the free export has no $x." }
         Assert-True ($null -eq (Read-WdmFreePin -Path (Join-Path $repo "scripts\package\wdmfree-pin.txt")) -or $true) "the repository's pin does not read."
+        $repoPinText = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\package\wdmfree-pin.txt"))
+        Assert-True ($repoPinText -match '(?m)^Certificate: 814CF778B45159EC2659C39C16C7E75EB3C37145\r?$') "the repository's pin does not name the owner's usb-wdm-free certificate (design record 26 section 6.7.11)."
         $badPin = Join-Path $script:work "wdmfree-pin-bad.txt"
         [System.IO.File]::WriteAllText($badPin, (($freePinLines | Where-Object { $_ -notlike "*CDCX.SYS" }) -join "`r`n") + "`r`n")
         $msg = ""

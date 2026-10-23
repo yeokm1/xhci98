@@ -1323,6 +1323,25 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet);
 
+/* The same with a SECTION line after INF, for an install only: the
+ * install section the helper installs instead of the one the model names
+ * (record 27 section 4.1; record 26 section 6.7.12). NULL or "" writes
+ * none, as inst_di_jobfile; otherwise 1 to 32 characters, each a letter,
+ * a digit, '.' or '_'. */
+int inst_di_jobfile_sec(char *out, size_t cap, int job, const char *result,
+                        unsigned long hwnd, const char *devId,
+                        const char *inf, const char *section, int force,
+                        int quiet);
+
+/* xhci98.inf's Windows 98 SE and ME install section with the temporary
+ * name (record 26 section 6.7.12): no model names it, so Windows' own
+ * wizard takes [Xhci.Dev], whose copy row is plain and asks for no disk
+ * when the installer placed xhci98.sys, and the helper installs this one
+ * by name for a controller that is there, so an update over a loaded
+ * xhci98.sys is renamed into place at the restart. The INF gate holds the
+ * INF's section to this name (W98-PREPSECT). */
+#define INST_XHCI_UPD_SECTION "Xhci.Upd"
+
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another
  * version or job, an unknown word). */

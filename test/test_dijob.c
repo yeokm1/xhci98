@@ -25,9 +25,9 @@ static const char *rootHub =
     "\\BUS_00&DEV_03&FUNC_00";
 
 /* One job written by the installer and read by the helper. */
-static void round_trip(int job, int dijob, const char *devId,
-                       const char *inf, int force, int quiet,
-                       unsigned long hwnd, const char *what)
+static void round_trip_sec(int job, int dijob, const char *devId,
+                           const char *inf, const char *section, int force,
+                           int quiet, unsigned long hwnd, const char *what)
 {
     char text[INST_DI_JOB_BYTES + 1];
     char path[128];
@@ -36,8 +36,9 @@ static void round_trip(int job, int dijob, const char *devId,
     int ok;
 
     ok = inst_di_jobpath(path, sizeof(path), "C:\\XHCI98") &&
-         inst_di_jobfile(text, sizeof(text), job, "C:\\XHCI98\\XHCIDI.RES",
-                         hwnd, devId, inf, force, quiet) &&
+         inst_di_jobfile_sec(text, sizeof(text), job,
+                             "C:\\XHCI98\\XHCIDI.RES", hwnd, devId, inf,
+                             section, force, quiet) &&
          inst_di_cmdline(tail, sizeof(tail), V, path);
     CHECK(ok, what);
     if (!ok) {
@@ -59,6 +60,14 @@ static void round_trip(int job, int dijob, const char *devId,
     if (job == INST_DI_INSTALL) {
         CHECK(((c.flags & DI_FLAG_QUIET) != 0) == (quiet != 0), what);
     }
+    CHECK(strcmp(c.section, section != NULL ? section : "") == 0, what);
+}
+
+static void round_trip(int job, int dijob, const char *devId,
+                       const char *inf, int force, int quiet,
+                       unsigned long hwnd, const char *what)
+{
+    round_trip_sec(job, dijob, devId, inf, NULL, force, quiet, hwnd, what);
 }
 
 static void test_jobs(void)
@@ -80,6 +89,12 @@ static void test_jobs(void)
                "a root hub's 87-character id, read by the helper");
     round_trip(INST_DI_REMOVE, DI_JOB_REMOVE, rootHub, NULL, 0, 0, 0UL,
                "a removal, read by the helper");
+    round_trip_sec(INST_DI_INSTALL, DI_JOB_INSTALL, pci,
+                   "C:\\XHCI98\\XHCI98.INF", INST_XHCI_UPD_SECTION, 1, 1, 0UL,
+                   "the controller's install with its update section");
+    round_trip_sec(INST_DI_INSTALL, DI_JOB_INSTALL, pci,
+                   "C:\\XHCI98\\XHCI98.INF", INST_XHCI_UPD_SECTION, 0, 0, 0UL,
+                   "the update section with no FLAGS line");
     memset(longId, 'I', 200);
     memcpy(longId, "PCI\\", 4);
     longId[200] = '\0';

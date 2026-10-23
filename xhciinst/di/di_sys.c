@@ -156,6 +156,8 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     static char infname[DI_PATH_MAX + 1];
     static char dir[MAX_PATH_LEN];
     static char oldpath[MAX_PATH_LEN];
+    static char mfg[DI_PATH_MAX + 1];
+    static char provider[DI_PATH_MAX + 1];
     LPDEVICE_INFO list = NULL;
     LPDEVICE_INFO lpdi = NULL;
     LPDEVICE_INFO e;
@@ -282,6 +284,61 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     if (!di_same_inf(infname, cmd->inf)) {
         di_fail_self(run, DI_SELF_OTHERINF);
         goto cleanup;
+    }
+
+    /*
+     * The job's SECTION line (record 27 section 4.1; record 26 section
+     * 6.7.12): the same driver installed from another section of the same
+     * INF, one no model names, so no compatible list holds a node for it.
+     * DiCreateDriverNode makes one (setupx.h) from the chosen node's own
+     * rank, type, date, descriptions, provider, manufacturer and INF, with
+     * the section the job names; its flags, driver date and private data
+     * are the chosen node's too. The new node is the selected driver and is
+     * on no list, so the list's destruction never frees it; the helper ends
+     * after this one job, and the node is the engine's memory for that long.
+     */
+    if (cmd->section[0] != '\0' &&
+        (dn->lpszSectionName == NULL ||
+         !di_ieq(dn->lpszSectionName, cmd->section))) {
+        LPDRIVER_NODE nn = NULL;
+        mfg[0] = '\0';
+        provider[0] = '\0';
+        if (dn->atMfgName != 0) {
+            GlobalGetAtomName(dn->atMfgName, mfg, sizeof mfg);
+        }
+        if (dn->atProviderName != 0) {
+            GlobalGetAtomName(dn->atProviderName, provider, sizeof provider);
+        }
+        err = DiCreateDriverNode(&nn, dn->Rank, dn->InfType, dn->InfDate,
+                                 dn->lpszDescription,
+                                 dn->lpszDrvDescription != NULL ?
+                                     dn->lpszDrvDescription :
+                                     dn->lpszDescription,
+                                 provider, mfg, infname, cmd->section,
+                                 dn->dwPrivateData);
+        di_call(run, "DiCreateDriverNode", cmd->section, err);
+        if (err != OK) {
+            di_fail(run, err);
+            goto cleanup;
+        }
+        if (nn == NULL) {
+            di_fail_self(run, DI_SELF_NOSECTION);
+            goto cleanup;
+        }
+        nn->Flags = dn->Flags;
+        nn->DriverDate = dn->DriverDate;
+        lpdi->lpSelectedDriver = nn;
+        dn = nn;
+        infname[0] = '\0';
+        GlobalGetAtomName(dn->atInfFileName, infname, sizeof infname);
+        di_emit(run, di_out_driver(&run->out, infname,
+                                   dn->lpszSectionName != NULL ? dn->lpszSectionName : "",
+                                   dn->lpszDescription != NULL ? dn->lpszDescription : "",
+                                   dn->Rank, dn->DriverDate));
+        if (!di_same_inf(infname, cmd->inf)) {
+            di_fail_self(run, DI_SELF_OTHERINF);
+            goto cleanup;
+        }
     }
 
     /*
