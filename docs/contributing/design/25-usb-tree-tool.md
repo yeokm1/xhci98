@@ -1199,7 +1199,8 @@ XHCIINST needs nothing new: it runs as an administrator (record 24 section
   So on 98 SE alone (`shell32.dll` below 5.0) the tray notes each
   `WM_MOUSEMOVE` the icon reports (`tr_hover_move`), and the 1 s poll,
   once the pointer is more than a small icon's width or height from the
-  last move's point and no tray menu is up, adds the icon again
+  last move's point, or out of the notification area, and no tray menu
+  is up, adds the icon again
   (`tray_remove`, `tray_add`: its colour and tooltip as `tray_red` and
   section 7.2 last chose) when that hover may have outlasted the
   tooltip: the shell shows it the initial delay after the last move and
@@ -1947,9 +1948,13 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    `NIN_BALLOONSHOW` saw sent (`tr_bkind_step`, `tr_bkind_fast`,
    host-tested), none after a hide, a timeout, a click or the icon's
    balloon taken away (item 9's re-send), and a click opens the list only
-   when that kind is the notice's. A shell not heard from in the session
-   (and not Vista or later, item 9) is read by the last balloon sent, as
-   before.
+   when that kind is the notice's. A show that follows two balloons of
+   different kinds sent since the last show or end may be either's (the
+   first's, posted before the second went), so it counts as another's:
+   a click on it opens nothing - the icon's menu still leads to the list
+   or the device - rather than the list for a notice that is not the
+   one clicked. A shell not heard from in the session (and not Vista or
+   later, item 9) is read by the last balloon sent, as before.
    **Windows 2000 (task 43.68, 2026-10-23).** Read on 2000 SP4 in QEMU
    with a build that logged every `WM_TRAYICON` message (`runs/run-43.md`,
    "43.68"): the notice's balloon was shown and a click on it closed it,
@@ -2216,8 +2221,8 @@ Revision 19: the red icon's decision and tooltip (`tr_red_state`,
 
 Revision 20: the balloon a click is on (`tr_bkind_step`,
 `tr_bkind_fast`: another balloon queued behind the notice's and the
-reverse, a replacement with its show, the re-send's removal, a shell not
-heard from) and 98 SE's long hover (`tr_hover_move`, `tr_hover_poll`:
+reverse, a replacement with its show, a show after two kinds sent, the
+re-send's removal, a shell not heard from) and 98 SE's long hover (`tr_hover_move`, `tr_hover_poll`:
 a short hover and a long one either side of 11 double-click times less
 the poll, the last move counting, once per hover, resting on the icon,
 another double-click time, across `GetTickCount`'s wrap) in

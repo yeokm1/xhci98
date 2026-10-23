@@ -867,8 +867,12 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports);
  * (reports, as tr_bsend_step's) the kind is the one the last
  * NIN_BALLOONSHOW saw sent, and none once a hide, a timeout, a click or a
  * removal ended it; where it does not, the kind of the last one sent (the
- * only reading there is; 2000 reports no click at all, task 43.68).
- * Zeroed is nothing sent. */
+ * only reading there is; 2000 reports no click at all, task 43.68). A
+ * show that follows two balloons of different kinds sent since the last
+ * show or end cannot be told apart - it may be the first's, posted before
+ * the second went - so it counts as another balloon's: a click on it opens
+ * nothing (the menu still does) rather than the list for a notice that
+ * is not the user's. Zeroed is nothing sent. */
 #define TR_BK_NONE      0
 #define TR_BK_OTHER     1
 #define TR_BK_FAST      2   /* the "can run faster" notice's */
@@ -876,6 +880,8 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports);
 typedef struct _TR_BKIND {
     int Sent;                   /* TR_BK_* of the last balloon sent        */
     int Shown;                  /* TR_BK_* the last NIN_BALLOONSHOW saw    */
+    int Pending;                /* sent since the last show or end         */
+    int Mixed;                  /* ... and of two kinds                    */
 } TR_BKIND;
 
 /* ev: TR_BE_SENT (the notice's), TR_BE_OTHER (another balloon sent),

@@ -3004,23 +3004,34 @@ void tr_bkind_step(TR_BKIND *b, int ev)
     }
     switch (ev) {
     case TR_BE_SENT:
-        b->Sent = TR_BK_FAST;
+    case TR_BE_OTHER: {
+        int kind = ev == TR_BE_SENT ? TR_BK_FAST : TR_BK_OTHER;
+        if (b->Pending && b->Sent != kind) {
+            b->Mixed = 1;
+        }
+        b->Sent = kind;
+        b->Pending = 1;
         break;
-    case TR_BE_OTHER:
-        b->Sent = TR_BK_OTHER;
-        break;
+    }
     case TR_BE_SHOW:
-        b->Shown = b->Sent;
+        /* Two kinds sent since the last show: this show may be either's. */
+        b->Shown = b->Mixed ? TR_BK_OTHER : b->Sent;
+        b->Pending = 0;
+        b->Mixed = 0;
         break;
     case TR_BE_HIDE:
     case TR_BE_TIMEOUT:
     case TR_BE_CLICK:
         b->Shown = TR_BK_NONE;
+        b->Pending = 0;
+        b->Mixed = 0;
         break;
     case TR_BE_DROP:
         /* Taken away, shown or queued: nothing of it is up or to come. */
         b->Sent = TR_BK_NONE;
         b->Shown = TR_BK_NONE;
+        b->Pending = 0;
+        b->Mixed = 0;
         break;
     default:
         break;

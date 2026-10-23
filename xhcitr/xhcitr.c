@@ -7618,6 +7618,17 @@ static void tray_hover_poll(void)
            trayHoverPt.x - p.x > GetSystemMetrics(SM_CXSMICON) ||
            p.y - trayHoverPt.y > GetSystemMetrics(SM_CYSMICON) ||
            trayHoverPt.y - p.y > GetSystemMetrics(SM_CYSMICON);
+    if (!away) {
+        /* A short jump off the taskbar's edge: out of the notification
+         * area at all is away too. */
+        HWND bar = FindWindowA("Shell_TrayWnd", NULL);
+        HWND nfy = bar != NULL ? FindWindowExA(bar, NULL, "TrayNotifyWnd", NULL)
+                               : NULL;
+        RECT r;
+        if (nfy != NULL && GetWindowRect(nfy, &r) && !PtInRect(&r, p)) {
+            away = 1;
+        }
+    }
     if (tr_hover_poll(&trayHover, GetTickCount(), away, GetDoubleClickTime(),
                       TRAY_POLL_MS)) {
         tray_remove();

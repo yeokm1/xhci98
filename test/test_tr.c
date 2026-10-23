@@ -2983,6 +2983,29 @@ static void test_bkind(void)
     CHECK_EQ(tr_bkind_fast(&b, 0), 1, "bkind: re-sent, silent shell");
     tr_bkind_step(&b, TR_BE_SHOW);
     CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: re-sent and shown");
+    /* Two kinds sent before either's show is handled (the show posted for
+     * the first before the second went): it may be either's, so a click
+     * on it opens nothing; the next show, after it went, is the second's. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: a show after two kinds: not the notice's");
+    tr_bkind_step(&b, TR_BE_TIMEOUT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: then the queued notice's show");
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: the reverse order too");
+    /* The same kind twice (the 43.66 re-send) is no doubt. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the notice sent twice, shown");
+    tr_bkind_step(&b, TR_BE_SENT);
     /* Ticks change nothing. */
     tr_bkind_step(&b, TR_BE_TICK);
     CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: a tick changes nothing");
