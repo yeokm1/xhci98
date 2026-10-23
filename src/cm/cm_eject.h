@@ -367,9 +367,9 @@ BOOLEAN CmEjOwesRemoval(const CM_EJ_TX *t);
 #define CM_EJ_VANISH_RETRY_MAX_MS  64000UL
 ULONG CmEjVanishRetryMs(ULONG attempts);
 
-/* An event that may have let the holder go - a tunnel up on the member
- * (the re-plug), a tool's eject or status ask - makes a vetoed vanished
- * child's query due at once and restarts its backoff. TRUE when it did. */
+/* An event that may have let the holder go - today a live tunnel up on
+ * the member (the re-plug) - makes a vetoed vanished child's query due at
+ * once and restarts its backoff. TRUE when it did. */
 BOOLEAN CmEjNudge(CM_EJ_TX *t, ULONG nowMs);
 
 /* A vanished child of member `bridge`, its devnode read by the sweep: QUERY
