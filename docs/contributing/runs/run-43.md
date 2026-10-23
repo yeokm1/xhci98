@@ -4552,7 +4552,7 @@ issued to the device. The release notes now describe it. A second cause,
 the connection manager's own, found in two of the runs, is the
 post-release item RESUME.1.
 
-**Machine and build.** The kit and package of `run-43-52.md`: 3.2.0.0 at
+**Machine and build.** The kit and package of "43.52 the legs" above: 3.2.0.0 at
 `062e02d7` (x86 release TEST cut), usb4-emu at QEMU `46d96fb`, TCG, 2
 vCPUs, q35, `usb4-generic` `host-model=amd` with its PCIe tunnel on the
 q35 `usb4-tunnel-port`, the ASM2464 enclosure with a FAT volume (`E:`)
