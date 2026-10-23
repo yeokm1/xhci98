@@ -2426,7 +2426,9 @@ static int mw_value(int v, DWORD *value)
     if (stScreens) {
         return 0;
     }
-    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, KEY_QUERY_VALUE, &k);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, instValues[v].Loc == INST_LOC_MARK ?
+                      INST_MK_PARAMS_KEY : INST_MW_KEY, 0, KEY_QUERY_VALUE,
+                      &k);
     if (r == ERROR_FILE_NOT_FOUND) {
         return 0;
     }
@@ -2477,6 +2479,9 @@ static int value_targets(int v, INST_VNOW *vnow, int cap, int *nNow,
 
     *nNow = 0;
     *cmNew = 0;
+    if (instValues[v].Loc != INST_LOC_MW) {
+        return 0;   /* the mark service's own key: no device holds it */
+    }
     for (i = 0; i < devCount; i++) {
         DWORD now;
         int r;
@@ -2670,7 +2675,8 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         greyed = inst_value_greyed(v, &envNow);
         cmRow = instValues[v].Inf == INST_INF_CM &&
                 (instValues[v].Apply == INST_APPLY_CM ||
-                 instValues[v].Apply == INST_APPLY_9X_CM);
+                 instValues[v].Apply == INST_APPLY_9X_CM ||
+                 instValues[v].Apply == INST_APPLY_MARK);
         asked = inst_value_applies(v, &envNow) ||
                 (cmRow && !greyed && instValues[v].Asked != 0) ||
                 (greyed && instValues[v].Asked != 0);
@@ -2875,8 +2881,9 @@ static void write_values(void)
         flagFailed = 1;
     }
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
-        if (!answerSet[v] || value_inf(v) == NULL) {
-            continue;
+        if (!answerSet[v] || value_inf(v) == NULL ||
+            instValues[v].Loc != INST_LOC_MW) {
+            continue;   /* the mark service's Restart: its own step */
         }
         /* The silent install on: the list first - merged and verified once,
          * even where the switch already reads 1, as silent-on.bat does -
@@ -10796,6 +10803,36 @@ static int mk_running(SC_HANDLE s)
  * package's copy put into system32 through a .TMP and compared byte for
  * byte, registered with its quoted full path (its own process, automatic
  * start, LocalSystem), the log's directory made, then started. */
+/* The service's Restart chosen (record 26 section 5.0): written to its
+ * Parameters key after its registration and before its start, the value
+ * it reads once there. Never under Services\USB. */
+static void mk_restart_value(void)
+{
+    int v = inst_value_find("Restart");
+    HKEY k;
+    DWORD val;
+    LONG r;
+
+    if (v < 0 || v >= INST_MAX_VALUES || !answerSet[v]) {
+        return;
+    }
+    val = (DWORD)answerValue[v];
+    r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MK_PARAMS_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL);
+    if (r == ERROR_SUCCESS) {
+        r = RegSetValueExA(k, "Restart", 0, REG_DWORD, (const BYTE *)&val,
+                           sizeof(val));
+        RegCloseKey(k);
+    }
+    if (r != ERROR_SUCCESS) {
+        out("Restart could not be set: error %ld.\n", (long)r);
+        flagFailed = 1;
+        return;
+    }
+    flagChanged = 1;
+    out("The mark service's Restart set to %lu.\n", (unsigned long)val);
+}
+
 static void mk_install(void)
 {
     char src[INST_PATH_CHARS];
@@ -10916,6 +10953,7 @@ static void mk_install(void)
     if (!make_dirs(dir)) {
         out("The service's log directory %s could not be made.\n", dir);
     }
+    mk_restart_value();
 start:
     if (s == NULL) {
         goto done;
@@ -22361,6 +22399,9 @@ static int mw_values_remove(void)
         return 0;
     }
     for (v = 0; v < instValueCount; v++) {
+        if (instValues[v].Loc != INST_LOC_MW) {
+            continue;   /* goes with the mark service's key */
+        }
         if (opts.List) {
             DWORD t;
             if (RegQueryValueExA(k, instValues[v].Name, NULL, &t, NULL, NULL) ==

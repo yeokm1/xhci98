@@ -390,6 +390,13 @@ int inst_ts_confirmed(int tsOption, int sbState);
 #define INST_APPLY_CM       3
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
+#define INST_APPLY_MARK     6   /* where the mark service runs (inst_mk_system) */
+
+/* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
+ * or the mark service's own Parameters key (its Restart). */
+#define INST_LOC_MW         0
+#define INST_LOC_MARK       1
+#define INST_MK_PARAMS_KEY  "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Parameters"
 
 /* The values a choice list names (0 to 4: XhciFastPollFsLs's 4). */
 #define INST_CHOICES        5
@@ -414,6 +421,7 @@ typedef struct _INST_VALUE {
     INST_U32 Hi;
     int NoInf;
     INST_U32 Def;
+    int Loc;                /* INST_LOC_*: 0 for every Services\USB value */
 } INST_VALUE;
 
 /* The most values the table holds (the answers' arrays). */

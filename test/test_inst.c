@@ -1273,6 +1273,30 @@ static void test_values(void)
         e2.CmNhi = 1;
         CHECK(ni >= 0 && inst_value_set_mask(ni, &e2) == 0,
               "XhciCmNoIrqStart: refused on NT");
+        {
+            int rs = inst_value_find("Restart");
+            INST_ENV e9 = env(0, 4, 10, INST_ARCH_X86);
+            CHECK(rs >= 0 && instValues[rs].Loc == INST_LOC_MARK &&
+                  instValues[rs].Inf == INST_INF_CM &&
+                  instValues[rs].Asked == 0 && instValues[rs].NoInf &&
+                  instValues[rs].Def == 1,
+                  "Restart: the mark service's key, never asked, default 1");
+            CHECK(rs >= 0 && inst_value_set_mask(rs, &e2) == 0x3 &&
+                  inst_value_relevant(rs, &e2) &&
+                  !inst_value_greyed(rs, &e2),
+                  "Restart on 7: /set 0 and 1, shown");
+            CHECK(rs >= 0 && inst_value_set_mask(rs, &e9) == 0 &&
+                  inst_value_greyed(rs, &e9),
+                  "Restart on 98 SE: greyed, /set refuses it");
+            for (rs = 0; rs < instValueCount; rs++) {
+                if (instValues[rs].Loc != INST_LOC_MW &&
+                    !inst_eq(instValues[rs].Name, "Restart")) {
+                    break;
+                }
+            }
+            CHECK(rs == instValueCount,
+                  "Restart the one value outside Services\\USB");
+        }
     }
     CHECK(!inst_value_applies(ft, &e), "98: no fine timer");
     /* Owner, 2026-10-15: the fine timer and selective suspend are never

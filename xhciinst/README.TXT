@@ -86,20 +86,21 @@ keeps one open until the window closes. If the window cannot be started
 
 The window walks you through:
 
-  Welcome          the system found, the log's place
-  What was found   each device of the package, what runs it now and what
-                   will be done, and any warning
-  Components       the USB drivers, Thunderbolt 3 / USB4 support,
-                   Stor98 (where the package carries it), the USB storage
-                   drivers for 98 SE (where the download carries them),
+  Welcome          the system found, the log's place, and what was
+                   found: each device of the package, what runs it now
+                   and what will be done, and any warning
+  Components       the USB drivers with the UAS disk driver under them,
+                   Thunderbolt 3 / USB4 support with Stor98 under it
+                   (where the package carries it), the USB storage
+                   drivers (98 SE only, where the download carries them),
                    the xHCI98 USB Tree started at login, and the tools
-                   folder; every box on every system, with a warning on
-                   Next for one that does not apply there
-  USB settings     the options below that apply to this machine
-  Thunderbolt      the connection manager's options, when it is ticked
-  Stor98 settings  Stor98's own options, when it is ticked
-  Summary          everything that will happen; nothing is changed before
-                   you click Install
+                   folder (Change folder...); a warning on Next for a box
+                   that does not apply there. Settings... opens one
+                   dialog with a tab each for USB, Thunderbolt and
+                   Stor98, the components ticked; Advanced... on a tab
+                   holds the rest of its options
+  Summary          everything that will happen, the warnings again;
+                   nothing is changed before you click Install
   Progress         each step as it runs; Cancel stops at the next step
   Steps            (98 SE and ME) a device the installer could not install
   Finish           the result, and Restart now or Restart later
@@ -115,7 +116,8 @@ that port is approved automatically and gets a PCI Express connection,
 which lets it read and write the computer's memory: these systems have no
 Thunderbolt control panel to ask first. On a computer whose port is within
 reach of people you do not trust, set XhciCmApprove to 0 on the
-Thunderbolt settings page; devices then get no connection unless the BIOS
+Settings dialog's Thunderbolt tab; devices then get no connection unless
+the BIOS
 already gave them one. Unticked, a Thunderbolt driver already installed
 stays as it is, and this package's is kept out of Windows' reach.
 
@@ -124,13 +126,13 @@ ticked with the Thunderbolt 3 / USB4 box, and you
 can untick it. Ticked, it is installed on every NVMe drive behind a
 Thunderbolt or USB4 tunnel that has no driver - never on one another
 driver runs, nor on an internal drive - and an older Stor98 is
-updated. Its settings page shows
+updated. Its tab in the Settings dialog shows
 each of Stor98's options as it is now ("not set" means Stor98's built-in
 default); a row left alone writes nothing. On Windows 98 SE and ME an
 older Stor98 is updated as a file, replaced when Windows next starts
-(no drive is reinstalled), once you tick "Please disconnect all external
-NVMe drives before proceeding" on the Summary page (unticked, Stor98 is
-left for a later run), and the window then offers "Shut down now"
+(no drive is reinstalled), once you answer OK to "Please disconnect all
+external NVMe drives before proceeding" at Install (Cancel stays on the
+Summary page), and the window then offers "Shut down now"
 rather than a restart: Stor98's readme asks for a fresh start after its
 update there. On 2000 to 7 a
 drive behind a Thunderbolt or USB4 port is unplugged and plugged in again
@@ -339,23 +341,25 @@ changes it.
 The options
 -----------
 
-The settings pages (and the console's questions) show a few of the
+The Settings dialog's tabs (and the console's questions) show a few of the
 driver's options, each only where the hardware it affects is present,
 with the value now, each value allowed with what it means, and the
 default. A value left as it is is not written; one you change is written
 machine-wide (HKLM\System\CurrentControlSet\Services\USB), which every
 controller's driver reads first, and both places are shown where they
 differ. They are XhciIntelPortSwitch (only with an Intel 7-, 8- or
-9-series controller), XhciInterruptMode, XhciForceBulkOnly,
-XhciSilentInstall (Windows 98 SE and ME only, off by default: on does what
+9-series controller), XhciSilentInstall (Windows 98 SE and ME only, off
+by default: on does what
 tools\silent\silent-on.bat does), and XhciCmMode, XhciCmApprove and
 XhciCmSafeEject (with the Thunderbolt support). The release notes,
 "Registry settings", say what each does. An answer applies from the
-driver's next start. Advanced... on each page holds the values for the
-release notes' advice and a tester's use (XhciPollFineTimer,
-XhciSelectiveSuspend, XhciCmReenum, XhciCmUsb3Tunnel, XhciCmLaneBonding,
-XhciCmPreOsCleanup, the connection manager's waits and its log); the
-console sets them only with /set Name=Value.
+driver's next start. Advanced... on each tab holds the values for the
+release notes' advice and a tester's use (XhciInterruptMode,
+XhciForceBulkOnly, XhciPollFineTimer, XhciSelectiveSuspend, XhciCmReenum,
+XhciCmUsb3Tunnel, XhciCmLaneBonding, XhciCmPreOsCleanup, the connection
+manager's waits and its log, XhciCmNoIrqStart on 98 SE and ME, and the
+mark service's Restart on 2000 to 10); the console sets them only with
+/set Name=Value.
 
 When Windows starts installing a device by itself while the installer
 runs - a Found New Hardware window, perhaps behind the installer's - it

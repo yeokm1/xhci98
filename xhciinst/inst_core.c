@@ -1793,7 +1793,17 @@ const INST_VALUE instValues[] = {
       "for Stor98 to poll",
       "0 leaves such a drive at its problem code.", 0x1UL,
       { "no", "yes", NULL, NULL },
-      0, 0, 1, 1UL }
+      0, 0, 1, 1UL },
+    /* Record 26 section 5.0: the mark service's own value, in its
+     * Parameters key and never under Services\USB, read once at its start
+     * (xhcimark.c) and written in its step of the run; never asked. */
+    { "Restart", INST_INF_CM, INST_APPLY_MARK, 0x0UL, 0x3UL,
+      "the safe-removal mark service restarts a unit's stack so a mark takes "
+      "effect at once",
+      "0 keeps the marks written, but a mark takes effect only at that "
+      "stack's next rebuild.", 0x1UL,
+      { "no", "yes", NULL, NULL },
+      0, 0, 1, 1UL, INST_LOC_MARK }
 };
 const int instValueCount = (int)(sizeof(instValues) / sizeof(instValues[0]));
 
@@ -1905,6 +1915,8 @@ int inst_value_relevant(int index, const INST_ENV *env)
         return (!env->Nt && env->AnyXhci) ? 1 : 0;
     case INST_APPLY_9X_CM:
         return (!env->Nt && env->CmNhi) ? 1 : 0;
+    case INST_APPLY_MARK:
+        return inst_mk_system(env);
     default:
         return 0;
     }
@@ -1924,6 +1936,8 @@ int inst_value_greyed(int index, const INST_ENV *env)
         /* The Thunderbolt rows are shown with no host interface present
          * too (record 26 section 5.5), so this one is as well. */
         return env->Nt ? 1 : 0;
+    case INST_APPLY_MARK:
+        return inst_mk_system(env) ? 0 : 1;
     default:
         return 0;
     }
@@ -1940,6 +1954,8 @@ const char *inst_value_only(int index)
     case INST_APPLY_9X_XHCI:
     case INST_APPLY_9X_CM:
         return "Windows 98 SE and ME only";
+    case INST_APPLY_MARK:
+        return "Windows 2000 to 10 only";
     default:
         return NULL;
     }
@@ -1995,6 +2011,9 @@ INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
     if ((instValues[index].Apply == INST_APPLY_9X_XHCI ||
          instValues[index].Apply == INST_APPLY_9X_CM) && env->Nt) {
         return 0;   /* a 98 SE and ME value: /set refuses it on NT */
+    }
+    if (instValues[index].Apply == INST_APPLY_MARK && !inst_mk_system(env)) {
+        return 0;   /* no mark service on this system */
     }
     if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
         !(env->Nt && env->Major >= 6)) {
