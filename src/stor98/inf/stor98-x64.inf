@@ -73,6 +73,7 @@ ErrorControl=%SERVICE_ERROR_NORMAL%
 ServiceBinary=%12%\stor98.sys
 LoadOrderGroup=SCSI Miniport
 AddReg=Stor98_ServiceReg
+DelReg=Stor98_ServiceDelReg
 
 [Stor98_ServiceReg]
 HKR,"Parameters\PnpInterface","5",%REG_DWORD%,0x00000001
@@ -81,7 +82,10 @@ HKR,"Parameters\Device","NumberOfRequests",%REG_DWORD%,0x00000020
 ; No DmaRemappingCompatible: with the value 1 Windows 10 x64 (19045) does
 ; not start this SCSIport miniport at all (Code 10, 0xC00000C2, event 4),
 ; on a machine with no Kernel DMA Protection either (docs/PLAN.md, the
-; reading of 2026-10-23).
+; reading of 2026-10-23). An update over a build that wrote it deletes it.
+
+[Stor98_ServiceDelReg]
+HKR,"Parameters","DmaRemappingCompatible"
 
 [Stor98_EventLog]
 AddReg=Stor98_EventLogReg

@@ -15,7 +15,8 @@ one. The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
 packager makes and test-signs (design record 19, owner 2026-10-22: Windows
 8 to 10 x64 refuse a package without one in test-signing mode), and writes
 no DmaRemappingCompatible (with it 1, Windows 10 x64 does not start Stor98:
-docs/PLAN.md, 2026-10-23); the x86 INF names no catalog. scripts\build-driver.cmd
+docs/PLAN.md, 2026-10-23) and deletes one an earlier build wrote, in the
+service's DelReg; the x86 INF names no catalog. scripts\build-driver.cmd
 runs it with the other INF gates, after -SelfTest.
 
 .PARAMETER Path
@@ -60,8 +61,14 @@ function Get-InfFault {
         if ($cat.Count -ne 1 -or $cat[0].Groups[1].Value -ne "" -or $cat[0].Groups[2].Value -cne "stor98.cat") {
             return "it does not name its catalog once as CatalogFile=stor98.cat (design record 19: the packager makes and signs it)"
         }
-        if ([regex]::IsMatch($t, '(?im)^[ \t]*HKR[ \t]*,[^\r\n]*DmaRemappingCompatible')) {
+        # A line that sets it has a flags field after the value's name; the
+        # DelReg line that removes it has none.
+        if ([regex]::IsMatch($t, '(?im)^[ \t]*HKR[ \t]*,[^,\r\n]*,[ \t]*"?DmaRemappingCompatible"?[ \t]*,')) {
             return "it writes DmaRemappingCompatible, with which Windows 10 x64 does not start Stor98 (docs/PLAN.md, 2026-10-23)"
+        }
+        if (-not [regex]::IsMatch($t, '(?im)^[ \t]*DelReg[ \t]*=[ \t]*Stor98_ServiceDelReg[ \t]*\r?$') -or
+            -not [regex]::IsMatch($t, '(?ims)^\[Stor98_ServiceDelReg\][ \t]*\r?\n(?:;[^\r\n]*\r?\n)*HKR,"Parameters","DmaRemappingCompatible"[ \t]*\r?$')) {
+            return "it does not delete DmaRemappingCompatible in the service's DelReg (an update over a 3.2.0.0 build that wrote it)"
         }
     } elseif ($cat.Count -ne 0) {
         return "it names a catalog, and the x86 package carries none (design record 19)"
@@ -124,7 +131,9 @@ try {
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile.NTamd64=stor98.cat"); Ok = $false; Why = "a decorated catalog line in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=stor98.cat`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "two catalog lines in the x64 INF" },
             @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",`"DmaRemappingCompatible`",%REG_DWORD%,0x00000001`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 1" },
-            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR, Parameters, DmaRemappingCompatible, 0x00010001, 2`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 2, spaced" }
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR, Parameters, DmaRemappingCompatible, 0x00010001, 2`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 2, spaced" },
+            @{ T = $b64.Replace("DelReg=Stor98_ServiceDelReg`r`n", ""); Ok = $false; Why = "no DelReg for DmaRemappingCompatible" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"`r`n", "HKR,`"Parameters`",`"Other`"`r`n"); Ok = $false; Why = "a DelReg of another value" }
         )
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("stor98-inf-" + [System.IO.Path]::GetRandomFileName())
         New-Item -ItemType Directory -Path $tmp | Out-Null
