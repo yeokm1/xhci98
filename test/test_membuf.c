@@ -51,7 +51,8 @@ static void test_declared_size(void)
     CHECK_EQ(XHCI_MAX_SLOTS, 32, "declared slot cap");
     CHECK_EQ(XHCI_MAX_SCRATCHPAD, 64, "declared scratchpad cap");
     CHECK_EQ(XHCI_MAX_POOL_RINGS, 32, "declared pooled-ring cap");
-    CHECK_EQ(XHCI_MAX_DEVICE_ENDPOINTS, 4, "declared per-device endpoint cap");
+    CHECK_EQ(XHCI_POOL_DEVICE_RINGS, 16, "declared per-device ring cap");
+    CHECK_EQ(XHCI_MAX_DEVICE_ENDPOINTS, 4, "miniport-era endpoint records");
 
     /*
      * The ring and reservation policies (power-of-two counts, the 16-4096
@@ -443,8 +444,8 @@ static void test_index_bounds(void)
  * first ring while a ring is free.**
  *
  * The first draft of that section said the pool *size* guaranteed this. It does
- * not - eight devices at the per-device cap of 4 hold all 32 rings, and the
- * ninth is refused a first endpoint. This vector is the counterexample, run
+ * not - two devices at the per-device cap of 16 hold all 32 rings, and the
+ * third is refused a first endpoint. This vector is the counterexample, run
  * against the rule that fixes it: the greedy devices must be held to one ring
  * each until every other live device has had its chance.
  */
@@ -463,7 +464,7 @@ static void test_pool_first_ring_guarantee(void)
     /*
      * 32 live devices, each asking for a second ring before the others have a
      * first. `ringless` is the number of *other* live records holding nothing.
-     * Without the rule the first eight would take everything.
+     * Without the rule the first two would take everything.
      */
     live = 32;
     for (dev = 1; dev <= live; dev++) {
@@ -489,30 +490,85 @@ static void test_pool_first_ring_guarantee(void)
              "a full pool refuses as empty, not as unfair");
 
     /*
-     * Now the greedy case with room: 4 live devices on a fresh pool. Each may
-     * reach the cap, because `ringless` falls to zero once all four hold one.
+     * Now the greedy case with room: 2 live devices on a fresh pool. Each may
+     * reach the cap, because `ringless` falls to zero once both hold one.
      */
     XhciPoolInit(&pool);
     granted = 0;
-    for (dev = 1; dev <= 4; dev++) {
-        CHECK_EQ(XhciPoolAcquire(&pool, dev, 4UL - dev, &idx), XHCI_POOL_OK,
-                 "first ring for each of four devices");
+    for (dev = 1; dev <= 2; dev++) {
+        CHECK_EQ(XhciPoolAcquire(&pool, dev, 2UL - dev, &idx), XHCI_POOL_OK,
+                 "first ring for each of two devices");
         granted++;
     }
-    for (dev = 1; dev <= 4; dev++) {
+    for (dev = 1; dev <= 2; dev++) {
         ULONG n;
-        for (n = 1; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
+        for (n = 1; n < XHCI_POOL_DEVICE_RINGS; n++) {
             CHECK_EQ(XhciPoolAcquire(&pool, dev, 0UL, &idx), XHCI_POOL_OK,
                      "later rings granted once nobody is ringless");
             granted++;
         }
         CHECK_EQ(XhciPoolAcquire(&pool, dev, 0UL, &idx), XHCI_POOL_AT_CAP,
-                 "the per-device cap refuses the fifth");
+                 "the per-device cap refuses the seventeenth");
     }
-    CHECK_EQ(granted, 16UL, "four devices at the cap of four");
-    CHECK_EQ(pool.InUse, 16UL, "pool accounting agrees");
-    CHECK_EQ(pool.AcquireFailuresCap, 4UL, "one cap refusal per device");
-    CHECK_EQ(pool.PeakInUse, 16UL, "peak recorded");
+    CHECK_EQ(granted, 32UL, "two devices at the cap of sixteen");
+    CHECK_EQ(pool.InUse, 32UL, "pool accounting agrees");
+    CHECK_EQ(pool.AcquireFailuresCap, 2UL, "one cap refusal per device");
+    CHECK_EQ(pool.AcquireFailuresEmpty, 0UL,
+             "the cap answers before the full pool does");
+    CHECK_EQ(pool.PeakInUse, 32UL, "peak recorded");
+}
+
+/*
+ * Task 43.67: the configurations that the cap of 4 refused with
+ * USBD_STATUS_NO_MEMORY at their fifth pipe. A wired Xbox 360 pad selects 4
+ * interfaces holding 7 endpoints; the 360 wireless receiver 8 interfaces of
+ * 2, 16 endpoints, or its 4 pad interfaces, 8. Each is opened whole beside a
+ * hub and a keyboard holding one ring each and a mouse still ringless, and
+ * the mouse's first ring is granted after.
+ */
+static void test_pool_large_configurations(void)
+{
+    static const ULONG wants[3] = { 7UL, 8UL, 16UL };
+    XHCI_RING_POOL pool;
+    ULONG idx;
+    ULONG w;
+    ULONG n;
+
+    for (w = 0; w < 3; w++) {
+        XhciPoolInit(&pool);
+        CHECK_EQ(XhciPoolAcquire(&pool, 1UL, 0UL, &idx), XHCI_POOL_OK,
+                 "the hub's interrupt ring");
+        CHECK_EQ(XhciPoolAcquire(&pool, 2UL, 0UL, &idx), XHCI_POOL_OK,
+                 "the keyboard's interrupt ring");
+        for (n = 0; n < wants[w]; n++) {
+            CHECK_EQ(XhciPoolAcquire(&pool, 3UL, 1UL, &idx), XHCI_POOL_OK,
+                     "every endpoint of the pad's configuration");
+        }
+        CHECK_EQ(XhciPoolDeviceCount(&pool, 3UL), wants[w],
+                 "the whole configuration held");
+        CHECK_EQ(pool.AcquireFailuresCap, 0UL, "no cap refusal");
+        CHECK_EQ(XhciPoolAcquire(&pool, 4UL, 0UL, &idx), XHCI_POOL_OK,
+                 "the mouse's first ring after it");
+    }
+
+    /* The receiver's whole configuration is the cap: one more is refused. */
+    CHECK_EQ(XhciPoolAcquire(&pool, 3UL, 0UL, &idx), XHCI_POOL_AT_CAP,
+             "a seventeenth ring is refused at the cap");
+
+    /* The same receiver switching all 16 (an alternate setting of each
+     * interface, design record 20 section 5.2) fits beside nothing else:
+     * the pool is exactly twice the cap. */
+    XhciPoolInit(&pool);
+    for (n = 0; n < XHCI_POOL_DEVICE_RINGS; n++) {
+        CHECK_EQ(XhciPoolAcquire(&pool, 3UL, 0UL, &idx), XHCI_POOL_OK,
+                 "the receiver to the cap");
+    }
+    for (n = 0; n < XHCI_POOL_DEVICE_RINGS; n++) {
+        CHECK_EQ(XhciPoolAcquireReserved(&pool, 3UL, 0UL,
+                                         XHCI_POOL_DEVICE_RINGS, &idx),
+                 XHCI_POOL_OK, "each replacement within the reservation");
+    }
+    CHECK_EQ(XhciPoolFree(&pool), 0UL, "the whole pool while in flight");
 }
 
 /*
@@ -578,15 +634,15 @@ static void test_pool_admission_boundaries(void)
      * cannot buy the stronger property at all.
      */
     XhciPoolInit(&pool);
-    for (dev = 1; dev <= 8; dev++) {
+    for (dev = 1; dev <= 2; dev++) {
         ULONG n;
-        for (n = 0; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
+        for (n = 0; n < XHCI_POOL_DEVICE_RINGS; n++) {
             CHECK_EQ(XhciPoolAcquire(&pool, dev, 0UL, &idx), XHCI_POOL_OK,
-                     "eight devices reach the cap with nothing else live");
+                     "two devices reach the cap with nothing else live");
         }
     }
-    CHECK_EQ(pool.InUse, 32UL, "eight devices at the cap hold the whole pool");
-    CHECK_EQ(XhciPoolAcquire(&pool, 9UL, 0UL, &idx), XHCI_POOL_EMPTY,
+    CHECK_EQ(pool.InUse, 32UL, "two devices at the cap hold the whole pool");
+    CHECK_EQ(XhciPoolAcquire(&pool, 3UL, 0UL, &idx), XHCI_POOL_EMPTY,
              "a device arriving later IS refused its first ring - the "
              "documented limit, not a bug");
 }
@@ -635,31 +691,34 @@ static void test_pool_reserved(void)
     ULONG n;
 
     XhciPoolInit(&pool);
-    for (n = 0; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
+    for (n = 0; n < XHCI_POOL_DEVICE_RINGS; n++) {
         CHECK_EQ(XhciPoolAcquire(&pool, 1UL, 0UL, &idx), XHCI_POOL_OK,
                  "device 1 to the cap");
     }
     CHECK_EQ(XhciPoolAcquire(&pool, 1UL, 0UL, &idx), XHCI_POOL_AT_CAP,
-             "a fifth ring outside a switch is refused");
-    /* A switch of all four: each replacement granted, the cap counting
+             "a ring past the cap outside a switch is refused");
+    /* A switch of all of them: each replacement granted, the cap counting
      * the rings outside the reservation. */
-    for (n = 0; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
-        CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 0UL, 4UL, &idx),
+    for (n = 0; n < XHCI_POOL_DEVICE_RINGS; n++) {
+        CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 0UL,
+                                         XHCI_POOL_DEVICE_RINGS, &idx),
                  XHCI_POOL_OK, "replacement granted within the reservation");
     }
-    CHECK_EQ(XhciPoolDeviceCount(&pool, 1UL), 8UL,
+    CHECK_EQ(XhciPoolDeviceCount(&pool, 1UL), 2UL * XHCI_POOL_DEVICE_RINGS,
              "twice the cap while the switch is in flight");
-    CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 0UL, 4UL, &idx),
-             XHCI_POOL_AT_CAP, "a fifth replacement is refused");
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 0UL,
+                                     XHCI_POOL_DEVICE_RINGS, &idx),
+             XHCI_POOL_AT_CAP, "a replacement past the cap is refused");
     CHECK_EQ(pool.AcquireFailuresCap, 2UL, "both cap refusals counted");
 
     /* A reservation larger than what is held reserves nothing. */
     XhciPoolInit(&pool);
-    for (n = 0; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
+    for (n = 0; n < XHCI_POOL_DEVICE_RINGS; n++) {
         CHECK_EQ(XhciPoolAcquire(&pool, 2UL, 0UL, &idx), XHCI_POOL_OK,
                  "device 2 to the cap");
     }
-    CHECK_EQ(XhciPoolAcquireReserved(&pool, 2UL, 0UL, 9UL, &idx),
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 2UL, 0UL,
+                                     XHCI_POOL_DEVICE_RINGS + 1UL, &idx),
              XHCI_POOL_AT_CAP, "an overlong reservation is no reservation");
 
     /* Fairness keeps the physical count: a device whose every ring is
@@ -727,7 +786,7 @@ static void test_pool_release(void)
      * **The last entry too**, which the vectors above cannot reach: they use the
      * low indices, so a release loop bounded at `XHCI_MAX_POOL_RINGS - 1` would
      * leak ring 31 on every ordinary teardown and pass everything. Fill the pool
-     * with eight devices at the per-device cap, then release the one that owns
+     * with two devices at the per-device cap, then release the one that owns
      * the top of it.
      */
     {
@@ -737,19 +796,19 @@ static void test_pool_release(void)
         XhciPoolInit(&pool);
         for (i = 0; i < XHCI_MAX_POOL_RINGS; i++) {
             CHECK_EQ(XhciPoolAcquire(&pool,
-                                     (i / XHCI_MAX_DEVICE_ENDPOINTS) + 1UL,
+                                     (i / XHCI_POOL_DEVICE_RINGS) + 1UL,
                                      0UL, &a),
-                     XHCI_POOL_OK, "the whole pool, four rings per device");
+                     XHCI_POOL_OK, "the whole pool, the cap per device");
         }
-        last = XHCI_MAX_POOL_RINGS / XHCI_MAX_DEVICE_ENDPOINTS;
+        last = XHCI_MAX_POOL_RINGS / XHCI_POOL_DEVICE_RINGS;
         CHECK_EQ(pool.Owner[XHCI_MAX_POOL_RINGS - 1], last,
                  "the last entry belongs to the last device");
-        CHECK_EQ(XhciPoolReleaseDevice(&pool, last), XHCI_MAX_DEVICE_ENDPOINTS,
-                 "and all four of its rings come back");
+        CHECK_EQ(XhciPoolReleaseDevice(&pool, last), XHCI_POOL_DEVICE_RINGS,
+                 "and all of its rings come back");
         CHECK_EQ(pool.Owner[XHCI_MAX_POOL_RINGS - 1], 0UL,
                  "including the one at the very top of the pool");
-        CHECK_EQ(XhciPoolFree(&pool), XHCI_MAX_DEVICE_ENDPOINTS,
-                 "so exactly four are free again");
+        CHECK_EQ(XhciPoolFree(&pool), XHCI_POOL_DEVICE_RINGS,
+                 "so exactly the cap is free again");
     }
 }
 
@@ -890,6 +949,7 @@ int main(void)
     test_pool_accounting_disagreement();
     test_pool_release();
     test_pool_reserved();
+    test_pool_large_configurations();
     test_resource_base();
     test_context_strides();
 

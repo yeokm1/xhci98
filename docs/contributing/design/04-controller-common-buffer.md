@@ -306,7 +306,9 @@ already carries declared-policy limits with an explicit refusal above them
 - 32 rings, 1024-byte stride, 32,768 bytes: one new region, sized to equal the
   EP0 region.
 - A per-device cap of 4 open non-default endpoints, which bounds how fast one
-  device can consume the pool.
+  device can consume the pool. (The HCD's cap is 16 since task 43.67,
+  `XHCI_POOL_DEVICE_RINGS`: 4 refused a wired Xbox 360 pad's 7 endpoints.
+  The arithmetic below is the miniport's, at 4.)
 - Exhaustion refuses (`MP_STATUS_NO_RESOURCES` from `OpenEndpoint`) and is
   counted. usbport turns that into a pipe-open failure that usbhub degrades on,
   which is the same contract the slot limit already relies on.

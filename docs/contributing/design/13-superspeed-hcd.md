@@ -9492,8 +9492,8 @@ Phases 26 to 28 it does not: it allocates **design record 04's layout,
 unchanged - 409,600 bytes, one `AllocateCommonBuffer` call with
 `CacheEnabled` = TRUE**, carved by the same `xhci_mem.c` the miniport carves
 with, under the same policy limits (32 enabled slots, 64 scratchpad pages, 32
-pooled transfer rings with a per-device cap of 4) and the same refusal above
-them. Three reasons, in order of weight:
+pooled transfer rings with a per-device cap of 4, 16 since task 43.67 as
+`XHCI_POOL_DEVICE_RINGS`) and the same refusal above them. Three reasons, in order of weight:
 
 1. **The size is already observed granted, through the same route, on every
    target.** usbport's allocation of the miniport's common buffer is an
