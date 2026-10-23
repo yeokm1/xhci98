@@ -14,8 +14,8 @@ $CHICAGO$ for the x86 INF (98 SE and ME read it) and $Windows NT$ for the x64
 one. The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
 packager makes and test-signs (design record 19, owner 2026-10-22: Windows
 8 to 10 x64 refuse a package without one in test-signing mode), and writes
-DmaRemappingCompatible=1 under its service's Parameters key (Kernel DMA
-Protection, docs/PLAN.md); the x86 INF names no catalog. scripts\build-driver.cmd
+no DmaRemappingCompatible (with it 1, Windows 10 x64 does not start Stor98:
+docs/PLAN.md, 2026-10-23); the x86 INF names no catalog. scripts\build-driver.cmd
 runs it with the other INF gates, after -SelfTest.
 
 .PARAMETER Path
@@ -60,8 +60,8 @@ function Get-InfFault {
         if ($cat.Count -ne 1 -or $cat[0].Groups[1].Value -ne "" -or $cat[0].Groups[2].Value -cne "stor98.cat") {
             return "it does not name its catalog once as CatalogFile=stor98.cat (design record 19: the packager makes and signs it)"
         }
-        if ([regex]::Matches($t, '(?im)^HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001\r?$').Count -ne 1) {
-            return "it does not write DmaRemappingCompatible=1 once under the service's Parameters key (docs/PLAN.md, Kernel DMA Protection)"
+        if ([regex]::IsMatch($t, '(?im)^[ \t]*HKR[ \t]*,[^\r\n]*DmaRemappingCompatible')) {
+            return "it writes DmaRemappingCompatible, with which Windows 10 x64 does not start Stor98 (docs/PLAN.md, 2026-10-23)"
         }
     } elseif ($cat.Count -ne 0) {
         return "it names a catalog, and the x86 package carries none (design record 19)"
@@ -123,8 +123,8 @@ try {
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=other.cat"); Ok = $false; Why = "another catalog name in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile.NTamd64=stor98.cat"); Ok = $false; Why = "a decorated catalog line in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=stor98.cat`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "two catalog lines in the x64 INF" },
-            @{ T = $b64.Replace('HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001', 'HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000002'); Ok = $false; Why = "DmaRemappingCompatible other than 1" },
-            @{ T = $b64.Replace('HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001', ''); Ok = $false; Why = "no DmaRemappingCompatible" }
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",`"DmaRemappingCompatible`",%REG_DWORD%,0x00000001`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 1" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR, Parameters, DmaRemappingCompatible, 0x00010001, 2`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 2, spaced" }
         )
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("stor98-inf-" + [System.IO.Path]::GetRandomFileName())
         New-Item -ItemType Directory -Path $tmp | Out-Null

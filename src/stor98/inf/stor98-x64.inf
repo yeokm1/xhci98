@@ -78,12 +78,10 @@ AddReg=Stor98_ServiceReg
 HKR,"Parameters\PnpInterface","5",%REG_DWORD%,0x00000001
 HKR,"Parameters\Device","MaximumSGList",%REG_DWORD%,0x000000FF
 HKR,"Parameters\Device","NumberOfRequests",%REG_DWORD%,0x00000020
-; Kernel DMA Protection (Windows 10 1803 and later, 64-bit): every bus
-; address the driver gives the controller comes from SCSIport's DMA path
-; (the uncached extension and the SRB's mapped buffer), so it opts in to DMA
-; remapping, Microsoft's per-driver value (docs/PLAN.md, the decision of
-; 2026-10-22). Earlier systems do not read it.
-HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001
+; No DmaRemappingCompatible: with the value 1 Windows 10 x64 (19045) does
+; not start this SCSIport miniport at all (Code 10, 0xC00000C2, event 4),
+; on a machine with no Kernel DMA Protection either (docs/PLAN.md, the
+; reading of 2026-10-23).
 
 [Stor98_EventLog]
 AddReg=Stor98_EventLogReg

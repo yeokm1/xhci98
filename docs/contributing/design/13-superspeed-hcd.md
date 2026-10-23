@@ -4502,7 +4502,10 @@ As 6.12.11's list for 8, read for 10 (each row's label is its reading's):
    (record 21 section 3.6), so `stor98-x64.inf` writes
    `DmaRemappingCompatible` 1 from `3.2.0.0` (`src\stor98\docs\PLAN.md`,
    "Kernel DMA Protection"); no machine here has the protection on, so
-   the run-time reading stays owed.
+   the run-time reading stays owed. **Withdrawn 2026-10-23**: with the
+   value 1 Windows 10 x64 does not start Stor98 at all (Code 10,
+   `0xC00000C2`), so the INF writes none again (`runs/run-43.md`
+   "43.59s").
 5. **The OVMF guest with Secure Boot** (43.32, not built): needed only
    for 43.36's refusal case. Recommendation: build it in 43.37, with
    Microsoft's KEK and DB certificates enrolled by hand in the

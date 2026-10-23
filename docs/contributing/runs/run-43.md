@@ -3540,3 +3540,30 @@ controller does with such a transfer is still unread.
   a device pulled mid-enumeration (and mid-select) at a root port and
   behind a hub - whether metal ever leaves the transfer without an event.
 - The first-EP0-request-after-Address-Device case at run time.
+
+## 43.59s Stor98 x64 does not start on Windows 10 x64 with DmaRemappingCompatible (2026-10-23)
+
+Found by 43.59's x64 legs (branch `p43-59`, its run notes there): with the
+owner-signed amd64 package of integ6b `5ad53f7d` and the project test
+certificate trusted, Stor98 did not start on Windows 10 x64 22H2 (19045)
+on any NVMe controller, tunnelled or internal: Code 10, problem status
+`0xC00000C2`, System event 4 from `stor98` ("internal error in its data
+structures", final status `0xC00000C2`). The same package's Stor98 ran on
+8.1 x64, and 10 x86's Stor98 (whose INF never wrote the value) runs.
+
+Read on the same 10 x64 guest (QEMU under TCG, `-machine pc`, no IOMMU,
+so no Kernel DMA Protection), Stor98 bound to an internal NVMe controller
+hot-added on the root bus, failing as above:
+
+| Step | Device |
+|---|---|
+| `Services\stor98\Parameters\DmaRemappingCompatible` deleted, `pnputil /restart-device` | started |
+| the value written back as 1, `pnputil /restart-device` | Code 10 (`CM_PROB_FAILED_START`) |
+
+So the opt-in written from `3.2.0.0` (Stor98 `docs/PLAN.md`, "Kernel DMA
+Protection", 2026-10-22) is what stops it. The x64 INF writes no value
+again and `check-stor98-inf.ps1` now refuses one; why 10's SCSIport
+refuses a miniport that opts in is not read. Owed: the fixed package
+signed (the owner) and Stor98 read starting on 10 x64 from it; on a
+machine with Kernel DMA Protection on, a tunnelled drive under Stor98
+waits for sign-in again, as before `3.2.0.0`.
