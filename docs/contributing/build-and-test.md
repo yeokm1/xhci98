@@ -4586,8 +4586,8 @@ table for the exact mobile IDs.
 
 | Controller | How to get it | Why it matters | Maps to phase |
 |---|---|---|---|
-| Fresco Logic FL1000 (`1D5C:1000`) | PCIe add-in card | Spurious success; validates residual-length computation. | Phase 7-8 |
-| VIA Labs VL805/VL806 (`2109:0812` / `2109:0813`) | PCIe add-in card | Common, generally clean; VL800 early revisions share the spurious-success bug. | Phase 7-8 |
+| Fresco Logic FL1000 (`1B73:1000`) | PCIe add-in card | Spurious success; validates residual-length computation. | Phase 7-8 |
+| VIA Labs VL805/VL806 (`1106:3483`; `2109:0812` and `2109:0813` are VIA Labs USB hub ids, not the controller's) | PCIe add-in card | Common, generally clean; VL800 early revisions share the spurious-success bug. | Phase 7-8 |
 | Etron EJ168 (`1B6F:7023`) | PCIe add-in card | Known-flaky budget controller; confirms graceful degradation rather than hang. | Phase 13 (stability) |
 
 Practical notes:
