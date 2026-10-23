@@ -2320,6 +2320,8 @@ VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
 
 /* hcd_dev.c */
 ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
+ULONG HcdDevStopSettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG deqLow,
+                       ULONG deqHigh);
 
 /* hcd_inj.c and hcd_ctl.c's qemu half: the qemu flavour only, nothing in
  * debug or release (design record 17 section 5; xhci_inj.h). */

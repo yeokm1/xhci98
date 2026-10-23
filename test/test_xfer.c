@@ -5162,6 +5162,410 @@ static void test_td_size_big_td_forms(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 43.69: the stopped TD read from the controller's saved dequeue */
+/*                                                                     */
+/* Design record 13 section 14, "The stopped TD, read from the         */
+/* controller". XhciXferStopPlace places the TR Dequeue Pointer and    */
+/* DCS a Stopped endpoint saved (xHCI 4.6.9 p.119) against the queue;  */
+/* hcd_dev.c's HcdDevStopSettle settles each held short-deferred TD    */
+/* before it with XhciXferDrainSettled, which these vectors call as it */
+/* does; XhciXferCancelPlace is hcd_cfg.c's placement rule. The TDs    */
+/* are fixture_submit_interrupt_multi's, three TRBs each: 0-2, 3-5,    */
+/* 6-8 and on. A saved dequeue is the TRB's address with DCS in bit 0. */
+/* ------------------------------------------------------------------ */
+
+static ULONG saved_deq(XFER_FIXTURE *fix, ULONG index, ULONG dcs)
+{
+    return XhciRingTrbPA(&fix->ring, index) | dcs;
+}
+
+/* Hold `which` as the one-event controller leaves it: a Short Packet on its
+ * first TRB of three and no second event. */
+static void hold_short(XFER_FIXTURE *fix, ULONG which)
+{
+    XHCI_XFER_EVENT_RESULT result;
+
+    CHECK_EQ(deliver(fix, fix->transfers[which].FirstIndex,
+                     XHCI_CC_SHORT_PACKET, 40, &result),
+             XHCI_XFER_OK, "a mid-TD Short Packet, the only event");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "held, not completed");
+    CHECK_EQ(fix->transfers[which].Flags & XHCI_XFER_FLAG_SHORT_DEFERRED,
+             XHCI_XFER_FLAG_SHORT_DEFERRED, "armed");
+}
+
+/* The settle HcdDevStopSettle does for one passed TD. */
+static void settle_passed(XFER_FIXTURE *fix, ULONG which)
+{
+    XHCI_XFER_EVENT_RESULT result;
+
+    CHECK_EQ(settle(fix, &result), XHCI_XFER_OK, "settled");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "it completes");
+    CHECK_EQ(result.CompletedCount, 1, "alone");
+    CHECK_EQ(result.Completed, &fix->transfers[which], "the held TD");
+    CHECK_EQ(result.NeedsRecovery, 0, "with no recovery");
+    CHECK_EQ(fix->transfers[which].UsbdStatus, WANT_USBD_SUCCESS,
+             "a success");
+    CHECK_EQ(fix->transfers[which].BytesTransferred, 24,
+             "with the length its Short Packet measured, 64 - 40");
+}
+
+/* The head is the stopped TD: nothing passed, nothing settled; a cancel of
+ * the TD behind it is a No Op in place, a cancel of the head moves past it. */
+static void test_stop_place_head_is_stopped(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[2];
+
+    fixture_init(&fix, 32);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 1, 1),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_IN_TD, "inside a TD");
+    CHECK_EQ(place.Stopped, &fix.transfers[0], "the head");
+    CHECK_EQ(place.Passed, 0, "nothing before it");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 0, 1),
+                               0, &place), XHCI_XFER_OK, "on its first TRB");
+    CHECK_EQ(place.Stopped, &fix.transfers[0], "still the head");
+
+    c[0] = &fix.transfers[1];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0),
+             XHCI_XFER_NO_INDEX,
+             "TD 1 cancelled behind the stopped head: no move, No Ops");
+    c[0] = &fix.transfers[0];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0), 3,
+             "the head cancelled: past it, to TD 1's first TRB");
+    c[1] = &fix.transfers[1];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 2, 0), 6,
+             "the head and TD 1 cancelled: to TD 2, the oldest survivor");
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 0, 1), 0,
+             "nothing cancelled but Error: to the head's first TRB");
+    CHECK_EQ(fix.queue.Count, 3, "neither function changed the queue");
+}
+
+/* The defect: TD 0 held, the controller past it and stopped inside TD 1,
+ * which is cancelled. */
+static void test_stop_place_held_head_next_cancelled(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[1];
+    ULONG before[3];
+    ULONG i;
+
+    fixture_init(&fix, 32);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+    hold_short(&fix, 0);
+    for (i = 0; i < 3; i++) {
+        before[i] = fix.mem[3 + i].Control;
+    }
+
+    c[0] = &fix.transfers[1];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0),
+             XHCI_XFER_NO_INDEX,
+             "(the head rule alone: TD 1 behind the held head, rewritten in "
+             "place - the TD the controller is in, which 4.6.9 forbids)");
+
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 4, 1),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_IN_TD, "inside a TD");
+    CHECK_EQ(place.Stopped, &fix.transfers[1], "TD 1, not the head");
+    CHECK_EQ(place.Passed, 1, "the held TD passed");
+    /* Bits 3:1 of a Stream Context's dword 0 are its SCT: masked off. */
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring,
+                               saved_deq(&fix, 4, 1) | 0x2UL, 0, &place),
+             XHCI_XFER_OK, "a stream's reading, SCT 1");
+    CHECK_EQ(place.Stopped, &fix.transfers[1], "the same TD");
+
+    settle_passed(&fix, 0);
+    CHECK_EQ(fix.queue.Head, &fix.transfers[1], "the stopped TD is the head");
+    CHECK_EQ(fix.ring.Dequeue, 3, "the software dequeue at its first TRB");
+    CHECK_EQ(fix.queue.MidTdShortRetires, 1, "counted as the early retire");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 4, 1),
+                               0, &place), XHCI_XFER_OK, "placed again");
+    CHECK_EQ(place.Passed, 0, "nothing left to settle");
+
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0), 6,
+             "the stopped TD cancelled: Set TR Dequeue past it, to TD 2");
+    for (i = 0; i < 3; i++) {
+        CHECK_EQ(fix.mem[3 + i].Control, before[i],
+                 "and neither the placement nor the settle touched its TRBs");
+    }
+    CHECK_EQ(XhciXferQueueRemove(&fix.queue, &fix.transfers[1]), 1,
+             "TD 1 off the queue");
+    CHECK_EQ(XhciRingSetDequeue(&fix.ring, XhciRingTrbPA(&fix.ring, 6)),
+             XHCI_RING_OK, "the ring's dequeue moved");
+    CHECK_EQ(XhciRingDequeueCycle(&fix.ring), 1, "with DCS 1, this lap's");
+}
+
+/* The same, TD 1 not cancelled: it is left untouched, TD 2 becomes No Ops. */
+static void test_stop_place_held_head_next_kept(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[1];
+
+    fixture_init(&fix, 32);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+    hold_short(&fix, 0);
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 5, 1),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Stopped, &fix.transfers[1], "TD 1, on its last TRB");
+    CHECK_EQ(place.Passed, 1, "the held TD passed");
+    settle_passed(&fix, 0);
+
+    c[0] = &fix.transfers[2];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0),
+             XHCI_XFER_NO_INDEX,
+             "TD 2 cancelled behind the stopped TD: no move, No Ops in place");
+    CHECK_EQ(fix.queue.Head, &fix.transfers[1],
+             "the TD the controller is in heads the queue and is not one");
+}
+
+/* Across the wrap, with 43.64's Link unchain: a 12-TRB ring (0-10, the Link
+ * at 11), TD 2 at 6-8 held, TD 3 at 9, 10 and past the Link 0, TD 4 at 1-3. */
+static void test_stop_place_wrap(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[1];
+
+    fixture_init(&fix, 12);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(deliver(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "TD 0 done");
+    CHECK_EQ(deliver(&fix, 5, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "TD 1 done");
+    CHECK_EQ(fix.ring.Dequeue, 6, "(the ring's dequeue at 6)");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 3), XHCI_XFER_OK, "TD 3");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 4), XHCI_XFER_OK, "TD 4");
+    CHECK_EQ(fix.transfers[3].FirstIndex, 9, "(TD 3 from 9)");
+    CHECK_EQ(fix.transfers[3].LastIndex, 0, "(to 0, past the Link)");
+    CHECK_EQ(fix.transfers[4].FirstIndex, 1, "(TD 4 from 1)");
+    CHECK_EQ(fix.mem[11].Control & XHCI_TRB_CH, XHCI_TRB_CH,
+             "(the Link chained into TD 3)");
+    hold_short(&fix, 2);
+
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 0, 0),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_IN_TD,
+             "TRB 0 with DCS 0, the new lap's cycle: inside a TD");
+    CHECK_EQ(place.Stopped, &fix.transfers[3], "TD 3, past the wrap");
+    CHECK_EQ(place.Passed, 1, "the held TD 2 passed");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 0, 1),
+                               0, &place), XHCI_XFER_OK, "the old lap's DCS");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD,
+             "DCS 1 at TRB 0 is not the cycle written there: unread");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 11, 1),
+                               0, &place), XHCI_XFER_OK, "on the Link");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_IN_TD,
+             "the Link with its own cycle is TRB 0 with the cycle toggled");
+    CHECK_EQ(place.Stopped, &fix.transfers[3], "TD 3 again");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 10, 1),
+                               0, &place), XHCI_XFER_OK, "before the Link");
+    CHECK_EQ(place.Stopped, &fix.transfers[3], "TD 3 at TRB 10, DCS 1");
+
+    settle_passed(&fix, 2);
+    CHECK_EQ(fix.queue.Head, &fix.transfers[3], "TD 3 heads the queue");
+    c[0] = &fix.transfers[3];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0), 1,
+             "TD 3 cancelled: past it, to TD 4 at 1");
+    CHECK_EQ(XhciXferQueueRemove(&fix.queue, &fix.transfers[3]), 1, "TD 3 off");
+    CHECK_EQ(XhciRingSetDequeue(&fix.ring, XhciRingTrbPA(&fix.ring, 1)),
+             XHCI_RING_OK, "the ring's dequeue moved past the wrap");
+    CHECK_EQ(XhciRingDequeueCycle(&fix.ring), 0,
+             "with DCS 0, the new lap's: Set TR Dequeue's cycle is right");
+}
+
+/* Across the wrap, the stopped TD not cancelled and the one behind it
+ * crossing the Link: No Ops in place, the Link unchained (43.64). */
+static void test_stop_place_wrap_noop_behind(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[1];
+    ULONG index;
+
+    fixture_init(&fix, 12);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(deliver(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "TD 0 done");
+    CHECK_EQ(deliver(&fix, 5, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "TD 1 done");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 3), XHCI_XFER_OK, "TD 3");
+    hold_short(&fix, 2);
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 7, 1),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Stopped, &fix.transfers[2],
+             "inside the held TD itself: the controller has not passed it");
+    CHECK_EQ(place.Passed, 0, "so nothing is settled");
+
+    c[0] = &fix.transfers[3];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0),
+             XHCI_XFER_NO_INDEX, "TD 3 behind it: No Ops in place");
+    for (index = 9;; index = XhciRingNextIndex(&fix.ring, index)) {
+        CHECK_EQ(XhciRingNoOpAt(&fix.ring, index), XHCI_RING_OK, "a No Op");
+        if (index == fix.transfers[3].LastIndex) {
+            break;
+        }
+    }
+    CHECK_EQ(fix.mem[11].Control & XHCI_TRB_CH, 0UL,
+             "the Link in front of the No Op past the wrap unchained");
+    CHECK_EQ(XHCI_TRB_GET_TYPE(fix.mem[6].Control) != XHCI_TRB_TYPE_NOOP, 1,
+             "and the TD the controller is in left as it was");
+}
+
+/* The saved dequeue in no queued TD. */
+static void test_stop_place_outside(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[1];
+    ULONG index;
+
+    fixture_init(&fix, 32);
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 0, 1),
+                               0, &place), XHCI_XFER_OK, "an empty ring");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_BETWEEN,
+             "at the enqueue position: in no TD");
+    CHECK_EQ(place.Passed, 0, "with nothing passed");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 0, 0),
+                               0, &place), XHCI_XFER_OK, "the wrong DCS");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD,
+             "not the producer cycle at the enqueue position: unread");
+
+    /* Just past the last TD: both held, the controller at the enqueue. */
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    hold_short(&fix, 0);
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 6, 1),
+                               0, &place), XHCI_XFER_OK, "at the enqueue");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD,
+             "TD 1 passed with no event of its own: unread");
+    hold_short(&fix, 1);
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 6, 1),
+                               0, &place), XHCI_XFER_OK, "both held");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_BETWEEN, "past every TD");
+    CHECK_EQ(place.Passed, 2, "both passed");
+    CHECK_EQ(place.Stopped, NULL, "none stopped in");
+    settle_passed(&fix, 0);
+    settle_passed(&fix, 1);
+    CHECK_EQ(fix.queue.Count, 0, "the queue empty");
+    CHECK_EQ(fix.ring.Dequeue, 6, "the ring's dequeue at the enqueue");
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, NULL, 0, 0),
+             XHCI_XFER_NO_INDEX, "nothing to place");
+
+    /* On the No Ops of a TD an earlier cancel removed: TD 2 (6-8) held,
+     * TD 3 (9-11) gone, TD 4 (12-14) behind. */
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 3), XHCI_XFER_OK, "TD 3");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 4), XHCI_XFER_OK, "TD 4");
+    hold_short(&fix, 2);
+    for (index = 9; index <= 11; index++) {
+        CHECK_EQ(XhciRingNoOpAt(&fix.ring, index), XHCI_RING_OK, "a No Op");
+    }
+    CHECK_EQ(XhciXferQueueRemove(&fix.queue, &fix.transfers[3]), 1, "TD 3 off");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 10, 1),
+                               0, &place), XHCI_XFER_OK, "on the No Ops");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_BETWEEN, "in no queued TD");
+    CHECK_EQ(place.Passed, 1, "the held TD before it");
+    settle_passed(&fix, 2);
+    c[0] = &fix.transfers[4];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0), 15,
+             "TD 4, not entered, cancelled at the head: to the enqueue");
+
+    /* Readings that are not acted on. */
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 13, 1),
+                               1, &place), XHCI_XFER_OK, "a high dword");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD, "unread");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, (RING_PA - 16UL) | 1UL,
+                               0, &place), XHCI_XFER_OK, "off the ring");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD, "unread");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 20, 1),
+                               0, &place), XHCI_XFER_OK, "past the enqueue");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD,
+             "a TRB neither outstanding nor the enqueue: unread");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 3, 1),
+                               0, &place), XHCI_XFER_OK, "behind the dequeue");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD, "retired TRBs: unread");
+    CHECK_EQ(XhciXferStopPlace(NULL, &fix.ring, 0, 0, &place),
+             XHCI_XFER_BAD_PARAM, "no queue");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD, "and unread");
+}
+
+/* QEMU's reading: its fetch pointer, past a TD that is not held. */
+static void test_stop_place_fetch_pointer(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[1];
+
+    fixture_init(&fix, 32);
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "TD 0");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 1), XHCI_XFER_OK, "TD 1");
+    CHECK_EQ(fixture_submit_interrupt_multi(&fix, 2), XHCI_XFER_OK, "TD 2");
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 6, 1),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Verdict, XHCI_XFER_STOP_UNREAD,
+             "TDs 0 and 1 before it, neither held: unread");
+    CHECK_EQ(place.Passed, 0, "nothing to settle");
+    CHECK_EQ(place.Stopped, NULL, "and no stopped TD named");
+    c[0] = &fix.transfers[1];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 1, 0),
+             XHCI_XFER_NO_INDEX, "so the head rule stands, as before 43.69");
+}
+
+/* Several cancelled: TD 0 held, TD 1 (stopped in) and TD 2 cancelled, TD 3
+ * a survivor, TD 4 cancelled. */
+static void test_stop_place_many_cancelled(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_STOP_PLACE place;
+    PXHCI_TRANSFER c[3];
+    ULONG i;
+
+    fixture_init(&fix, 32);
+    for (i = 0; i < 5; i++) {
+        CHECK_EQ(fixture_submit_interrupt_multi(&fix, i), XHCI_XFER_OK, "TD");
+    }
+    hold_short(&fix, 0);
+    CHECK_EQ(XhciXferStopPlace(&fix.queue, &fix.ring, saved_deq(&fix, 4, 1),
+                               0, &place), XHCI_XFER_OK, "placed");
+    CHECK_EQ(place.Stopped, &fix.transfers[1], "TD 1");
+    CHECK_EQ(place.Passed, 1, "TD 0 passed");
+    settle_passed(&fix, 0);
+    c[0] = &fix.transfers[1];
+    c[1] = &fix.transfers[2];
+    c[2] = &fix.transfers[4];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 3, 0), 9,
+             "past TDs 1 and 2 to TD 3, the oldest survivor; TD 2 and TD 4 "
+             "are the caller's No Ops");
+    c[0] = &fix.transfers[2];
+    c[1] = &fix.transfers[4];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 2, 0),
+             XHCI_XFER_NO_INDEX,
+             "TD 1 kept: no move, TDs 2 and 4 rewritten in place");
+    c[0] = &fix.transfers[1];
+    c[1] = &fix.transfers[2];
+    c[2] = &fix.transfers[3];
+    CHECK_EQ(XhciXferCancelPlace(&fix.queue, &fix.ring, c, 3, 0), 12,
+             "TDs 1 to 3 cancelled: to TD 4");
+}
+
 int main(void)
 {
     test_td_size_control_forms();
@@ -5238,6 +5642,14 @@ int main(void)
     test_retry_settle_moves_dequeue();
     test_retry_stream_wrap();
     test_event_high_pointer_refused();
+    test_stop_place_head_is_stopped();
+    test_stop_place_held_head_next_cancelled();
+    test_stop_place_held_head_next_kept();
+    test_stop_place_wrap();
+    test_stop_place_wrap_noop_behind();
+    test_stop_place_outside();
+    test_stop_place_fetch_pointer();
+    test_stop_place_many_cancelled();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

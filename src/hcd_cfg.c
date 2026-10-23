@@ -4532,14 +4532,54 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
+ * Task 43.69: the TR Dequeue Pointer and DCS a Stopped endpoint saved for
+ * `pipe`'s ring, which xHCI 4.6.9 p.119 has the controller write before the
+ * command's completion - the Endpoint Context's dwords 2 and 3, or for a
+ * stream's pipe its Stream Context's dwords 0 and 1 (Linux's
+ * xhci_get_hw_deq). Returns 0 when there is no context to read. Controller
+ * lock held.
+ */
+static ULONG hcdCfgSavedDequeue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                PHCD_PIPE pipe, PULONG deqLow,
+                                PULONG deqHigh)
+{
+    volatile ULONG *ctx;
+    PHCD_PIPE ep;
+    ULONG offset;
+
+    if (pipe->StreamId != 0) {
+        ep = hcdCfgEndpointOf(pipe);
+        if (ep->Streams == NULL || pipe->StreamId > ep->Streams->Count) {
+            return 0;
+        }
+        ctx = (volatile ULONG *)((PUCHAR)ep->Streams->Va +
+                                 pipe->StreamId * XHCI_STREAM_CONTEXT_BYTES);
+        *deqLow = ctx[0];
+        *deqHigh = ctx[1];
+        return 1;
+    }
+    if (XhciEndpointContextOffset(&hc->Hc.Layout, dev->SlotId, pipe->Dci,
+                                  &offset) != XHCI_LAYOUT_OK) {
+        return 0;
+    }
+    ctx = XhciCommonAt(&hc->Hc, offset);
+    *deqLow = ctx[2];
+    *deqHigh = ctx[3];
+    return 1;
+}
+
+/*
  * Take a pipe's cancelled requests off it (hcd_io.c marked them). With the
  * pipe paused and the endpoint brought to rest, each cancelled record still
  * held completes, and each on the ring leaves the engine's queue and
- * completes as CANCELED. The TD the controller stopped in is the queue's
- * head and is never rewritten (xHCI 4.6.9): when the head itself is
+ * completes as CANCELED. The TD the controller stopped in is never rewritten
+ * (xHCI 4.6.9). It is the queue's head once the held short-deferred TDs the
+ * controller's saved dequeue shows it has passed are settled (task 43.69,
+ * HcdDevStopSettle; design record 13 section 14): when the head is
  * cancelled - or the endpoint sits in Error - Set TR Dequeue moves to the
  * oldest survivor's first TRB, or to the enqueue position when none
- * survives; a cancelled TD behind a survivor becomes No Ops in place. The
+ * survives; a cancelled TD behind a survivor becomes No Ops in place
+ * (XhciXferCancelPlace). The
  * miniport's placement (xhciEpPlaceDequeue, branch 1.2.0.0). A Disabled
  * endpoint gets neither the Set TR Dequeue (a Context State Error there,
  * xHCI 4.6.10) nor a doorbell: its software ring alone moves, for the
@@ -4553,7 +4593,6 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PXHCI_TRANSFER cancelled[2 * HCD_PIPE_XFERS];
     PXHCI_TRANSFER t;
     PXHCI_TRANSFER head;
-    PXHCI_TRANSFER survivor;
     PLIST_ENTRY entry;
     PLIST_ENTRY next;
     PHCD_XFER x;
@@ -4561,7 +4600,10 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG state;
     ULONG count;
     ULONG move;
+    ULONG target;
     ULONG index;
+    ULONG deqLow;
+    ULONG deqHigh;
     ULONG i;
 
     /* A stream's cancel pauses its whole endpoint, as its abort does
@@ -4591,8 +4633,14 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             InsertTailList(&hc->DoneList, &x->Link);
         }
     }
+    /* 43.69: the stopped TD from the controller's own dequeue, not from the
+     * queue's order alone - a held short-deferred TD the controller passed
+     * without its second event settles first. */
+    if (state == XHCI_EP_STATE_STOPPED &&
+        hcdCfgSavedDequeue(hc, dev, pipe, &deqLow, &deqHigh)) {
+        (VOID)HcdDevStopSettle(hc, pipe, deqLow, deqHigh);
+    }
     head = pipe->Queue->Head;
-    survivor = NULL;
     count = 0;
     for (t = head; t != NULL; t = t->Next) {
         /* A cancelled record's TD, or (36.24) the successor of a pipelined
@@ -4603,11 +4651,11 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             if (count < 2 * HCD_PIPE_XFERS) {
                 cancelled[count++] = t;
             }
-        } else if (survivor == NULL) {
-            survivor = t;
         }
     }
-    move = (state == XHCI_EP_STATE_ERROR);
+    target = XhciXferCancelPlace(pipe->Queue, pipe->Ring, cancelled, count,
+                                 state == XHCI_EP_STATE_ERROR);
+    move = (target != XHCI_XFER_NO_INDEX);
     for (i = 0; i < count; i++) {
         t = cancelled[i];
         if (t != head) {
@@ -4618,8 +4666,6 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                     break;
                 }
             }
-        } else {
-            move = 1;
         }
         (VOID)XhciXferQueueRemove(pipe->Queue, t);
         t->UsbdStatus = HCD_USBD_CANCELED;
@@ -4631,10 +4677,8 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     HcdIoRefillFlush(hc);
     if (move) {
-        (VOID)XhciRingSetDequeue(
-            pipe->Ring,
-            XhciRingTrbPA(pipe->Ring, survivor != NULL ? survivor->FirstIndex
-                                                       : pipe->Ring->Enqueue));
+        (VOID)XhciRingSetDequeue(pipe->Ring,
+                                 XhciRingTrbPA(pipe->Ring, target));
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 
