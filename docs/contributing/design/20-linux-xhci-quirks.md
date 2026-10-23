@@ -654,9 +654,10 @@ bus: a later control transfer's failure never reverses what a successful
 command installed or released.
 
 **The per-device cap during a transaction.** The pool refuses a device
-already holding `XHCI_MAX_DEVICE_ENDPOINTS` (four) rings (`xhci_mem.c`,
-`XhciPoolAcquire`; `xhci.h`), so holding the old rings while the new are
-made would refuse ordinary switches - a device with four endpoints could
+already holding `XHCI_POOL_DEVICE_RINGS` rings (`xhci_mem.c`,
+`XhciPoolAcquire`; `xhci.h`; sixteen since task 43.67, four before, when
+it was `XHCI_MAX_DEVICE_ENDPOINTS`), so holding the old rings while the
+new are made would refuse ordinary switches - a device at the cap could
 not make its first replacement. The cap is therefore taken against a
 device's rings outside any transaction. A transaction's reservation is
 fixed before it allocates anything: every allocation its command will
