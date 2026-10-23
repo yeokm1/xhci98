@@ -99,9 +99,11 @@ Windows 10 22H2 (32-bit); 32-bit Windows 8.1 has not been run. The
 64-bit package carries a catalog file, stor98.cat, which Windows 8 x64,
 8.1 x64 and 10 x64 require in test-signing mode (without it: 'The
 third-party INF does not contain digital signature information'):
-keep it beside stor98.inf. With it the package was taken into the
-driver store on 8.1 x64 and 10 x64; Stor98 x64 has not yet run a drive
-on 8 x64, 8.1 x64 or 10 x64.
+keep it beside stor98.inf. With it, signed and trusted, Stor98 x64 ran
+tunnelled drives on 8.1 x64 and 10 x64 in xhci98's roadmap 43.59 (on 10
+x64 only without DmaRemappingCompatible, which this INF no longer
+writes), and a surprise unplug during a copy failed at once with no
+hang; it has not yet run a drive on 8 x64.
 
 TEST SIGNING (64-bit Vista and 7)
 
