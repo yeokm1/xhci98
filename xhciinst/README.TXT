@@ -128,7 +128,9 @@ Stor98, the bundled NVMe driver (its guide is stor98-readme.txt):
 ticked with the Thunderbolt 3 / USB4 box, and you
 can untick it. Ticked, it is installed on every NVMe drive behind a
 Thunderbolt or USB4 tunnel that has no driver - never on one another
-driver runs, nor on an internal drive - and an older Stor98 is
+driver runs (but on 8.1 and 10 on a tunnel drive that Windows' own
+stornvme runs, which it replaces), nor on an internal drive - and an
+older Stor98 is
 updated. Its tab in the Settings dialog shows
 each of Stor98's options as it is now ("not set" means Stor98's built-in
 default); a row left alone writes nothing. On Windows 98 SE and ME an
@@ -291,8 +293,9 @@ Windows 10 is installable. Its drivers were read in virtual machines of
 there. It admits every build below 22000 - the releases 1507 to 22H2 and
 the LTSC releases - and Windows Server 2016, 2019 and 2022, which it
 treats as Windows 10 and which are untested; only 22H2 is to be tested.
-It installs there as on Windows 8.1: the connection manager, and the USB
-drivers and Stor98 only when you tick them. Windows 10 has no Thunderbolt
+It installs there as on Windows 8.1: the connection manager with Stor98
+(ticked with it, /nostor98 leaves it out), and the USB drivers only when
+you tick them. Windows 10 has no Thunderbolt
 or USB4 driver of its own (USB4 support came with Windows 11), but many
 computers come with Intel's Thunderbolt driver: where it runs the
 Thunderbolt controller, the installer leaves it as it is. On 64-bit

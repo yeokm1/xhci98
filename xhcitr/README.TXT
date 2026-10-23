@@ -271,10 +271,13 @@ drives - on a USB 2.0 port, behind a USB 2.0 hub, fallen back to USB 2.0
 in a USB 3 port, or a 10 Gbit/s device at 5 Gbit/s - or a High Speed
 device runs at Full Speed behind a Full Speed hub (one not itself
 behind a High Speed hub), a balloon names it
-(the tooltip on Windows 98 SE) and the icon turns red until every such
-device is reconnected at its speed or removed. Click the balloon, or the
-first item of the icon's menu while it is red, for each device's port and
-hub, the speed it runs at and the speed it can, and what to try. A hub is
+(the tooltip on Windows 98 SE) and, but for a 10 Gbit/s device at 5
+Gbit/s, the icon turns red until every such device is reconnected at its
+speed or removed. Click the balloon for each device's port and hub, the
+speed it runs at and the speed it can, and what to try; the first item
+of the icon's menu shows the same when only a 10 Gbit/s device at 5
+Gbit/s is counted, and while the icon is red opens the window on the
+device instead. A hub is
 never listed itself: the USB 2.0 half of a USB 3 hub always runs at High
 Speed.
 
