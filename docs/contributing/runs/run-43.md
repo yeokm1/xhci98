@@ -3777,3 +3777,287 @@ The guests' logs: `E:\xhci98-vm\p43-47\keep` (`debugcon-*.log`,
   request, and the parked claims: host vectors only.
 - The ICM client with two members (Titan Ridge) on 98 SE.
 - A deeper queue, and real hardware.
+
+## 43.20 - GEN1.3's Virtual-Machine Legs on 98 SE and ME (2026-10-22/23)
+
+Roadmap 43.20: "the virtual-machine part of GEN1.3: ME; a resume with two
+enclosures attached; volumes over 128 MiB; two drives behind one
+enclosure's or dock's switch under load; an internal NVMe under Stor98
+beside a tunnelled one under load". GEN1.2 (42-V.7, `E:\xhci98-vm\m31\v7\RESULT.md`)
+read two enclosures, one per USB4 port, on 98 SE only, with 128 MiB volumes
+and no resume. This sheet is for the coordinator to fold into `runs/run-43.md`.
+
+**Verdict: open.** Every leg passes on ME. On 98 SE every leg passes except
+the resume, which cannot be read on this vehicle (below). No driver defect
+was found, and nothing in the tree changes except this sheet and the roadmap
+line. Three things were found on the way. None is shown to be the driver's:
+
+- **The kit's own first layout was wrong.** With an internal NVMe at `00:08`,
+  both enclosures' NVMes sat at Code 29 with no interrupt (42-A.15's
+  no-route case). The chain's NVMe, whose interrupt line `xhcicm.sys` writes,
+  started. With the internal NVMe moved to a function of a listed slot
+  (`00:03.1`), every NVMe starts. `00:08` lies outside SeaBIOS's static
+  `$PIR` table, which lists only bus-0 devices 1-6. That this is the cause is
+  an inference from the three layout controls in "The `$PIR` layout" below.
+- **ME hangs on waking after a cancelled background MS-DOS job.** Three wakes
+  hung, and each came after a `start /m` copy loop had been stopped with
+  Ctrl+C. A stock ME guest with none of this package's files hangs the same
+  way after the same steps, so the hang is not attributed to the package.
+  The resume leg's readings come from wakes without that step.
+- **98 SE cannot be read across a Stand by here.** After the wake, 98 SE
+  keeps finding "new" PCI-to-PCI bridges, Stor98 controllers and unknown
+  "PCI Card" devices, and the tunnelled volumes do not come back. QEMU, read
+  after the wizards had started, showed both tunnel bridges with secondary
+  and subordinate bus 0 and their windows closed. The likely reading, not
+  shown: the bridges lost their numbers in S3 and 98 SE walked them in that
+  state. ME logs `cm.nvlink.up.no-bus` at each resume too (as in 42-A.25),
+  yet its volumes return; what numbers ME's bus again was not identified.
+  Some 98 SE wakes here also showed display or MS-DOS Prompt failures,
+  one of them on a package-installed control with no tunnel device
+  attached (as N3 N6). So a real check is needed (below).
+
+GEN1.3's real-hardware part (two-port hardware) stays with GEN1.3 and the
+owner's bench, as before.
+
+| Leg | ME | 98 SE |
+|---|---|---|
+| Fresh install with Thunderbolt and Stor98, cold start, all five NVMe volumes present, no problem code | P (exit 4 and the wizards, as N3 meu2) | P (exit 3) |
+| GEN1.2 on ME: a long run on port 1's enclosure while port 2's is unplugged for 20 s and replugged, x3 | P | (GEN1.2, 42-V.7) |
+| Volumes over 128 MiB: an 8 MiB file written past 4 GiB (6 GiB volume) and past 2 GiB (3 GiB volume) read back; 100.7 MB passes written past 4 GiB and compared | P | P |
+| Two drives behind one switch (two downstream ports of one switch, each with its NVMe), both under copy-and-compare at once | P (2 passes each) | P (4 passes each) |
+| Internal NVMe under Stor98 beside a tunnelled one, both under copy-and-compare at once | P (2 passes each) | P (4 passes each) |
+| Resume with two enclosures attached (and the switch's two drives and the internal NVMe): files written before Stand by compare clean after the wake, new writes compare | P (one wake with every drive written before and compared after; other wakes checked to varying extents, as listed in ME item 6; see the hang note) | not readable here ("98 SE resume") |
+| N3 F1 retaken: port 2's enclosure unplugged, Stand by, wake, port 2 plugged | P: port 1's volume stays; only port 2's entry published | - |
+
+Mismatches: none. The one `MISMATCH` mark in `me2x\debugcon-d.log` (`HIF1`)
+was an operator error: the test named `F:`, which was the CD there, so `fc`
+found no file (the internal volume was `E:`; `HIE1-OK` follows).
+
+### Build
+
+Branch `p43-20` at `b7e58ca1` (the `3.2.0.0` release branch's head, no
+source change: the development build for `3.2.0.0`, still stamped
+`3.1.0.0`, as the installer log and `XHCITR` show). Gated
+`build-driver` x86, all flavours, passed (`out\gated-x86-release.txt`); the
+release package staged by `make-package.ps1 -Flavor release`
+(`E:\xhci98-vm\p43-20\pkg-rel`), checked equal to the guests' `xfer\PKG\release-x86`:
+`xhci98.sys` `1A4328F4...`, `xhcicm.sys` `B02C0C71...`, `stor98.mpd`
+`6A46D54F...` (the gated manifest's values). `INSTALL.BAT`, `XHCIINST.EXE`,
+`XHCIWIZ.EXE`, `XHCIDI.EXE` and `XHCITR.EXE` from the same build. Hashes of every
+transferred file: `E:\xhci98-vm\p43-20\sums-pkg.txt`, `sums-xfer.txt`.
+
+### The vehicle
+
+Development host A, QEMU TCG, host under heavy load from other agents'
+guests (CPU about 76-97 %); no timing is read here. usb4-emu `660f085`
+(`qemu-system-x86_64.exe` SHA-256 `9dfdcf9b...`, checked by the launcher),
+i440FX, `pentium3,-apic`, 1 vCPU, 256 MB, headless, screendumps and keys over
+QMP. Kit `E:\xhci98-vm\p43-20` (`scripts\launch.ps1`, `pids.txt`, `shots\`,
+`logs\`). Topology (`launch.ps1 -Chain -Chain2 -Internal -Enc0AtBoot -Enc1AtBoot`):
+
+- `usb4-host profile=usb4-generic` NHI `00:04`, tunnel bridges `tb0` `00:05`
+  (port 1; `bus-reserve=8,mem-reserve=32M`) and `tb1` `00:06` (port 2);
+- port 1: `enc0`, the ASM2464 device router, with its NVMe (6 GiB FAT32,
+  `HI.BIN` written by mtools after 4 GiB of filler, so its clusters lie past
+  4 GiB), and behind the same tunnel the switch stand-in: `usb4-asm-pci-usp`
+  (1B21:2421) with two downstream ports (`pci-bridge-seat` at its 0 and 1),
+  each with an NVMe (`CHAIN`, `CHAIN2`, 512 MiB) - two drives behind one
+  switch, as a dock's;
+- port 2: `enc1`, a plain `usb4-device` with its NVMe (1 GiB);
+- internal: an NVMe on bus 0 at `00:03.1` (3 GiB, `HI.BIN` past 2 GiB;
+  `00:03.2` on 98 SE from its cold start on, see 98 SE item 2),
+  `qemu-xhci` at `00:03.0` made multifunction for it.
+
+Data: `D:\SET\S1..S3.BIN` (3 x 32 MiB random, 100.7 MB a pass), `D:\SM\B4.BIN`
+(4 MiB), `D:\HI.BIN` (8 MiB); batches from 42-V.7 (`LA.BAT`, `LP.BAT` = four
+`LA` passes, `SB.BAT`, `FC1.BAT`) plus `HI.BAT`. Every compare is `fc /b`
+and writes a `t9x mark <tag>-OK` or `-MISMATCH` line to the debug console.
+"At once" = two `start /m D:\LP.BAT` windows running together.
+
+Guests: ME = an overlay of `vm\t37me\winme-stock-base.qcow2` (`me2`, the
+install), then overlays of it for the legs (`me2x`, `me2c`, `me3`). 98 SE =
+an overlay of `vm\t26\win98-clean.qcow2` (`w98b`). The predecessor's ME
+overlay (`me`, the 3.1.0.0 image `me-310u4` with binaries copied by hand) was
+set aside and not used for any reading.
+
+### The `$PIR` layout (kit finding, not the driver)
+
+First cold start with the internal NVMe at `00:08` (`me2` boot b): only the
+chain's volume came up. `XHCITR /report`: both enclosures' NVMes "Stor98
+Storage Controller for NVMe SSDs [not started - problem code 29]",
+"Resources: none allocated", asking for 16 KiB of memory and no IRQ; the
+chain's NVMe, whose interrupt line `xhcicm.sys` writes when it numbers the
+chain (`cm.brnum.9x.irq=00010A01`), started. Three boots of the same disk:
+
+| Boot (`me2x`) | Internal NVMe | Enclosures' NVMes |
+|---|---|---|
+| a | none | both started (IRQ 10), F: and G: |
+| b | `00:08` | both Code 29, no resources |
+| c | `00:03.1` | both started, plus the internal volume |
+
+SeaBIOS's `$PIR` (read from guest memory at `F55A0`) has six entries, bus 0
+devices 1-6. A bus-0 device outside it is consistent with `PCI.VXD` giving
+up IRQ routing for functions added after POST, which is 42-A.15's case
+(record 28's note); the readings above show the effect, not `PCI.VXD`'s
+reason. The ME install (`me2` boot a) had the internal NVMe at `00:08`;
+every ME leg after it uses `00:03.1`, every 98 SE leg after its install
+`00:03.2`. Nothing in the driver changes:
+interrupt routing for a function that appears after POST with no route is
+NOIRQ.1's question and stays there.
+
+### ME
+
+1. Install (`me2` boot a): first boot's wizards finished with no driver;
+   `INSTALL /console /yes /thunderbolt /stor98` from `D:\PKG`: exit 4 and
+   the Steps text, while Windows' own wizards bound Stor98 on the tunnel
+   NVMes from `C:\XHCI98` / `INF\OTHER` (as N3 N4 and meu2). Log
+   `logs\me2\inst1-log.txt`: the internal NVMe "is internal ... the installer
+   leaves it as it is (Stor98 goes on tunnel drives only)". The shutdown
+   after the install did not power off (black screen for 6 min, the processor
+   looping at `C005255A` with interrupts off); stopped by hand, ScanDisk at
+   the next boot (compare N3 N8; one occurrence, unattributed).
+2. Cold start, full topology (`me2x` boot d): Windows' wizard found Stor98 for
+   the second downstream port's NVMe ("Select Other Driver": the
+   `INF\OTHER` copy and `C:\XHCI98\STOR98.INF`, the first taken) and for the
+   internal NVMe at its new address. Volumes: E: INTNL (internal), G: ENC0,
+   H: CHAIN, I: ENC1, J: CHAIN2. `XHCITR /report` (`logs\me2x\d1-rep.txt`):
+   no problem code; `cm.brnum.9x.win-need=00300000` with three bridge windows
+   (`FE70FE60`, `FE70FE70`, `FE60FE60`) inside port 1's `FC800000-FE7FFFFF`.
+3. Over 128 MiB: `HIG1-OK` (6 GiB volume, past 4 GiB), `HIE1-OK` (3 GiB,
+   past 2 GiB).
+4. Switch pair at once (H: and J:): `CH1`, `CH2`, `CJ1`, `CJ2` all S1-S3 OK
+   (12 compares, 4 x 100.7 MB written). Stopped after pass 2 (about 20 min a
+   pass under this load).
+5. Internal beside tunnelled at once (E: and G:): `IE1`, `IE2`, `TG1`, `TG2`
+   all OK (12). G:'s writes land past 4 GiB.
+6. Resume (`me2c` boot e, full topology): five drives written (`P1x-OK`),
+   Stand by (QEMU "paused (suspended)"), `system_wakeup`: all five volumes
+   back; the files written before compare clean (`Q1E/G/H/I/J-OK`), `HIG2-OK`,
+   `HIE2-OK`, new writes `R1x-OK`. Other wakes that came back, each read
+   less fully:
+
+   | Wake | Attached across the sleep | Read after it |
+   |---|---|---|
+   | `me2c` e, first | full topology | the desktop, an Explorer window per volume, all five `vol` labels |
+   | `me2c` e, third (item 7) | full, ENC1 absent | files compared, see item 7 |
+   | `me3` a, first (an MS-DOS Prompt left open after `H1G-OK`) | full | the desktop and the open prompt only |
+   | `me2c` a | NHI and bridges only | the desktop |
+   | `me2c` b | the two enclosures | the desktop, Explorer windows for both volumes |
+   | `me2c` c | the enclosures and the internal NVMe | the desktop, Explorer windows for the three volumes |
+   | `me2c` d | the enclosures and the switch's two drives | the desktop, Explorer windows for the volumes |
+
+   `me2c` boot e's report counts `cm.suspends 3`, `cm.resumes 3` (the first
+   wake, this one and item 7's).
+7. N3 F1 retaken (`me2c` boot e): ENC1 unplugged awake, Stand by, wake, ENC1
+   plugged: port 1's volume stays (G: ENC0), ENC1 returns (as J:); every file
+   written before compares clean (`F1G/J/H/I/E-OK`), new writes `F2G/J-OK`.
+   The log publishes port 2's own entry only, `cm.nvlink.up=02000A01`, after
+   the resume's `no-bus` entries; the cross-port republish F1 read
+   (`02000101` on port 2's action) is gone.
+8. GEN1.2 on ME (`me2c` boot e): a long run on G: (`UG1`, `UG2` OK) while
+   ENC1 was unplugged for 20 s and replugged three times, with a 4 MiB
+   compare after each replug (`UB1-3-OK`); the tray said "QEMU USB4 NVMe
+   Enclosure was disconnected".
+
+Hangs on waking (not attributed). Three wakes did not come back:
+`me2x` boot d, `me2c` boot e's fourth wake, `me3` boot a's second wake.
+Each followed a `start /m D:\LP.BAT` window that had been stopped with
+Ctrl+C and closed. Display frozen; the processor in V86 code
+(`0070:042B`/`0000:0000`, then `FFFF:3536`) or in the VMM (`C00138C1`); in
+the usb4 trace both tunnels stay down with `awaiting_ack=1` (the NHI is
+never touched again). Control: the stock ME image with no xhci98 file, the
+same NHI and bridges with no driver, the same loop on C: stopped with Ctrl+C,
+then Stand by: hung the same way (processor at `016F:BFF83847`, display
+frozen). A stock wake with an MS-DOS Prompt merely open came back. Traces:
+`logs\me2x\trace-d-resume-hang.log`, `logs\me2c\trace-e-resume-hang.log`,
+`logs\trace-me3-a-resume-hang.log`.
+
+### 98 SE
+
+1. Install (`w98b` boot a): bridge wizards (`MACHINE2.INF`), USB and internal
+   NVMe finished with no driver; `INSTALL /console /yes /thunderbolt /stor98`:
+   the CD prompt for `usbd.sys` (`E:\WIN98`), then, as the tunnel came up,
+   the chain's bridge wizards (each asking for a restart, declined) and
+   Windows' Stor98 wizards for the four tunnel NVMes (the first asked for
+   the "Stor98 Storage Controller Disk", `C:\XHCI98` typed; as 42-V.7 O1);
+   exit 3. Log `logs\w98b\inst1-log.txt`.
+2. Cold start (boot b, the internal NVMe moved to `00:03.2` so that it is a
+   new device): Windows' wizard installed Stor98 on it from `C:\XHCI98`, and
+   the USB HID wizard took the CD. Volumes: F: INTNL, G: CHAIN, H: CHAIN2,
+   I: ENC0, J: ENC1.
+3. Over 128 MiB: `WHI1-OK` (past 4 GiB), `WHF1-OK` (past 2 GiB).
+4. Switch pair at once (G: and H:): four passes each, 24 compares OK.
+5. Internal beside tunnelled at once (F: and I:): four passes each, 24
+   compares OK. I:'s writes land past 4 GiB.
+
+Marks: `w98b\debugcon-b.log`: 48 load-compare `-OK` marks, 55 `-OK`
+marks in all, no `MISMATCH`.
+
+### 98 SE resume
+
+Not readable on this vehicle. Read in order:
+
+| Guest, boot | Attached | Before Stand by | After `system_wakeup` |
+|---|---|---|---|
+| `w98b` b | full topology | MS-DOS Prompts used for the legs | display frozen; a `T9X` typed into Run never ran; both tunnels stay down |
+| `w98b` c | full | fresh boot, no MS-DOS Prompt | the same |
+| `w98k` a (`w98b`'s disk) | NHI and bridges only | - | fatal exception 0E, `018F:BFF9DFFF`, after the Run probe |
+| `w98ctl` a, `w98ctl2` a (stock 98 SE, no package; `2a893ea` emulator for the second) | NHI and bridges only | - | `w98ctl2`: a live desktop before any key; the Run probe then gave fatal exception 0E, `0167:BFF9DFFF` (both). So the probe crashes 98 SE after a wake, and the `w98k` reading says nothing |
+| `w98b` d | full | fresh boot | display back after Ctrl+Esc; both tunnels re-inserted (gen 2); then New Hardware wizards one after another: four PCI-to-PCI bridges (each asking for a restart), two Stor98 controllers (each asking for a restart, one with an empty warning box), unknown "PCI Card" devices; then "There is not enough memory available to display the program" for an MS-DOS Prompt |
+| `w98b` e | enclosures, internal | fresh boot | an unknown "PCI Card" wizard; in a full-screen MS-DOS Prompt `F:` was the CD and `G:` to `J:` read "Invalid drive specification": no tunnelled volume |
+| `w98b` f | none (the package installed) | fresh boot | a live desktop; a windowed MS-DOS Prompt "not enough memory to display", black after full screen and back |
+| `w98b` g, h (`2a893ea`) | two enclosures | fresh boot | a "PCI Card" wizard. `w98b`'s disk still carried the cancelled wizards of boot d, so this is not a clean reading |
+| `w98c` c (a fresh install with only the two enclosures; `XPF`, `XPG`, `XHF` written and compared in the boot before) | two enclosures | fresh boot, no MS-DOS Prompt | both tunnels re-inserted; then a PCI-to-PCI bridge wizard, another, a third. QEMU `info pci` (`logs\w98c\info-pci-after-wake.txt`): `tb0` and `tb1` "secondary bus 0, subordinate bus 0", memory windows closed; before the sleep `XHCITR` read `tb0` "primary 00, Bus 01-01" |
+
+What was read: `info pci`, taken after the third bridge wizard of `w98c`
+boot c, shows `tb0` and `tb1` at secondary and subordinate bus 0 with their
+windows closed. Before the sleep, `XHCITR` showed them numbered. The rest is
+a hypothesis, not shown: the bridges lose their numbers and windows in S3,
+98 SE walks them before anything numbers them again, and a bridge whose
+secondary bus is 0 shows bus 0 again below it. That would fit the wizards
+for "new" bridges and for devices with no driver, but when the numbers
+changed and what 98 SE walked were not read. ME also logs
+`cm.nvlink.up.no-bus` at each resume (42-A.25), yet its volumes return; what
+numbers its bus again was not identified.
+
+Source reading: `xhcicm.sys` numbers only bridges below a tunnel port, never
+the port itself. `XhciTbtNumberBridges` (`src/cm/tbt_brnum.c`, at the
+`XHCI_TBT_CFG_BUSES` read) refuses a port whose secondary bus is not above
+its own bus (outcome `XHCI_TBT_BRNUM_PORT`), and `cm_noirq.c` has no
+numbering step. Numbering the tunnel port on a 9x resume would be new
+design, not a fix within 43.20. Some wakes here also broke 98 SE's display
+or a windowed MS-DOS Prompt, `w98b` boot f with no tunnel device among
+them (N3 N6). So the data part of the leg could not be read on this
+vehicle.
+
+Traces: `logs\w98b\trace-b-resume-hang.log`, `trace-c-resume-hang.log`,
+`trace-d-resume-storm.log`, `trace-e-resume-encs.log`,
+`trace-g-resume-encs.log`; `logs\w98c\trace-c-wake.log`.
+
+### Left for the owner's bench (GEN1.3)
+
+- **Real check needed (a diagnostic, not 43.20's leg): 98 SE Stand by with
+  a Thunderbolt/USB4 NVMe enclosure attached.** It tells whether the
+  emulator's unnumbered bridges also happen on real hardware. 43.20's
+  98 SE resume with two enclosures stays owed either way: it needs a
+  two-port host (next item), unless the owner substitutes or defers it. On
+  the P14s Gen 1 (one port) under 98 SE with this package and the bundled Stor98: write a file
+  to the enclosure's volume, restart, then without opening an MS-DOS Prompt
+  choose Start > Shut Down > Stand by, wake the machine, and wait a minute.
+  Look for: no New Hardware wizard for a "PCI standard PCI-to-PCI bridge",
+  a "Stor98 Storage Controller" or a "PCI Card"; the volume under the same
+  letter; the file comparing clean (`fc /b` in a full-screen MS-DOS Prompt);
+  `XHCITR /report` showing the tunnel port with its bus numbers (the
+  "Buses" line) as before the sleep. If wizards do appear, record them and
+  compare the tunnel port's bus numbers before and after the sleep;
+  matching symptoms alone do not establish the emulator's cause.
+- Two real NVMe enclosures on a two-port USB4/Thunderbolt host, 98 SE and
+  ME: a long copy-and-compare on one while the other is unplugged and
+  replugged, and a Stand by and wake with both attached (the P14s has one
+  port).
+- Two NVMe drives behind one real dock's switch at once, and an internal
+  NVMe under Stor98 beside a tunnelled one, on a machine whose BIOS routes the
+  tunnel port's interrupts (the emulator's needs the layout above).
+- ME's hang on waking after a cancelled background MS-DOS job: whether a real
+  ME machine does it too (the stock control here reproduces the hang
+  without the package; the cause remains unidentified).
