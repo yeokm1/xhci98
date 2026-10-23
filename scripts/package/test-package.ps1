@@ -20,7 +20,10 @@ VM is installed from, and two of its jobs fail quietly if they are wrong:
     caller never named.
 
 Every case uses stand-in files - text "drivers" - so nothing here needs a
-build, the git-ignored tools\ staging, a VM, or any Microsoft binary. One
+build, a VM, or a driver binary. The four-directory upload case needs WDK
+7.1's MakeCat (tools\WinDDK71\bin\x86\MakeCat.exe, which the amd64 build
+needs anyway) for its x64 catalogs, and .NET Framework 4.7.2 or later for the
+in-memory certificate that signs them (CertificateRequest). One
 stand-in driver carries the exact probe marker to prove diagnostic artifacts
 are rejected before staging.
 
@@ -2440,6 +2443,17 @@ try {
         $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-UploadDir", $up4) + $st4)
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("-SelfTestCatalogThumbprint is test-package.ps1's alone")) `
             ("-SelfTestCatalogThumbprint was taken with the repository's own releases\:`n" + $r.Output)
+        $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", "releases",
+                                          "-PackageRoot", $noOut, "-UploadDir", $up4) + $st4)
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("-SelfTestCatalogThumbprint is test-package.ps1's alone")) `
+            ("-SelfTestCatalogThumbprint was taken with a relative -ReleasesDir naming the repository's releases\:`n" + $r.Output)
+        $stLink = Join-Path $script:work "releases-link"
+        New-Item -ItemType Junction -Path $stLink -Target $relRoot4 | Out-Null
+        $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $stLink,
+                                          "-PackageRoot", $noOut, "-UploadDir", $up4) + $st4)
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("-SelfTestCatalogThumbprint is test-package.ps1's alone")) `
+            ("-SelfTestCatalogThumbprint was taken with a -ReleasesDir reached through a junction:`n" + $r.Output)
+        [System.IO.Directory]::Delete($stLink)
         $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
                                           "-PackageRoot", $noOut, "-UploadDir", $up4, "-SelfTestCatalogThumbprint", $script:TestSignThumbprint))
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("-SelfTestCatalogThumbprint is test-package.ps1's alone")) `

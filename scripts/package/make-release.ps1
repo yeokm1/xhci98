@@ -572,26 +572,6 @@ was asked for, and nothing else.
 #
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
-# The upload set's catalog check judges against the project certificate; only
-# the packager's self-test, on a stand-in tree under the temporary directory,
-# may name another (its throwaway one).
-$catThumbForUpload = $script:TestSignThumbprint
-if ($SelfTestCatalogThumbprint -ne "") {
-    $stRepoReleases = [System.IO.Path]::GetFullPath((Join-Path $repo "releases")).TrimEnd('\')
-    $stRd = [System.IO.Path]::GetFullPath($ReleasesDir).TrimEnd('\')
-    $stTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
-    if (-not $UploadSetOnly -or
-        [Environment]::GetEnvironmentVariable("XHCI98_PACKAGER_SELFTEST", "Process") -ne "1" -or
-        $stRd -eq $stRepoReleases -or
-        $stRd.StartsWith($stRepoReleases + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
-        -not $stRd.StartsWith($stTemp + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
-        $SelfTestCatalogThumbprint -notmatch '^[0-9A-Fa-f]{40}$' -or
-        $SelfTestCatalogThumbprint -eq $script:TestSignThumbprint) {
-        throw "-SelfTestCatalogThumbprint is test-package.ps1's alone: only with -UploadSetOnly, XHCI98_PACKAGER_SELFTEST=1 and a -ReleasesDir under the temporary directory that is not the repository's releases\, and never the project certificate's thumbprint. A real cut cannot take it."
-    }
-    $catThumbForUpload = $SelfTestCatalogThumbprint.ToUpperInvariant()
-    Write-Warn "-SelfTestCatalogThumbprint: the upload set's x64 catalogs are judged against a self-test certificate; this run is the packager's self-test, not a cut"
-}
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 # The five tools whose README.TXT the cut reads, from package-common.ps1's
 # table, which the gated build's readme check reads too (task 43.61).
@@ -738,6 +718,42 @@ function Resolve-DirectoryArgument {
 }
 
 $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
+# The upload set's catalog check judges against the project certificate; only
+# the packager's self-test, on a stand-in tree under the temporary directory,
+# may name another (its throwaway one). Judged on the -ReleasesDir this run
+# goes on to use (resolved above, against the current location), and with
+# no reparse point (a junction or a symbolic link) on the way from the
+# temporary directory to it, so neither a relative path nor a link can bring
+# the repository's releases\ under this parameter.
+$catThumbForUpload = $script:TestSignThumbprint
+if ($SelfTestCatalogThumbprint -ne "") {
+    $stRepoReleases = [System.IO.Path]::GetFullPath((Join-Path $repo "releases")).TrimEnd('\')
+    $stRd = [System.IO.Path]::GetFullPath($ReleasesDir).TrimEnd('\')
+    $stTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
+    $stOk = $UploadSetOnly -and
+            [Environment]::GetEnvironmentVariable("XHCI98_PACKAGER_SELFTEST", "Process") -eq "1" -and
+            $stRd -ne $stRepoReleases -and
+            -not $stRd.StartsWith($stRepoReleases + '\', [System.StringComparison]::OrdinalIgnoreCase) -and
+            $stRd.StartsWith($stTemp + '\', [System.StringComparison]::OrdinalIgnoreCase) -and
+            $SelfTestCatalogThumbprint -match '^[0-9A-Fa-f]{40}$' -and
+            $SelfTestCatalogThumbprint -ne $script:TestSignThumbprint
+    if ($stOk) {
+        $stAt = $stRd
+        while ($stAt.Length -gt $stTemp.Length) {
+            if (Test-Path -LiteralPath $stAt) {
+                $stItem = Get-Item -LiteralPath $stAt -Force
+                if ($stItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { $stOk = $false; break }
+            }
+            $stAt = [System.IO.Path]::GetDirectoryName($stAt)
+            if ($null -eq $stAt) { break }
+        }
+    }
+    if (-not $stOk) {
+        throw "-SelfTestCatalogThumbprint is test-package.ps1's alone: only with -UploadSetOnly, XHCI98_PACKAGER_SELFTEST=1 and a -ReleasesDir under the temporary directory, reached through no junction or link, that is not the repository's releases\, and never the project certificate's thumbprint. A real cut cannot take it."
+    }
+    $catThumbForUpload = $SelfTestCatalogThumbprint.ToUpperInvariant()
+    Write-Warn "-SelfTestCatalogThumbprint: the upload set's x64 catalogs are judged against a self-test certificate; this run is the packager's self-test, not a cut"
+}
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $MarkToolDir = Resolve-DirectoryArgument $MarkToolDir
@@ -2585,7 +2601,7 @@ $gateOut
             if ($catWhy -ne "") {
                 throw "the assembled upload set's $f\ directory does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Do not upload it."
             }
-            Write-Ok ("{0}\ carries a catalog per INF, signed by the project test certificate" -f $f)
+            Write-Ok ("{0}\ carries a catalog per INF, signed by {1} ({2})" -f $f, $(if ($catThumbForUpload -eq $script:TestSignThumbprint) { "the project test certificate" } else { "the packager self-test's throwaway certificate" }), $catThumbForUpload)
         }
 
         # The UAS pair, by its own INF and gate. Required of a directory this
