@@ -2934,7 +2934,7 @@ function Get-ReadmeOtherContentsText {
     }
     if ($Kind -eq "nonfree") {
         if ($L.Count -gt 0) { $L += "" }
-        $L += Format-ReadmeWrap -Lead "  NONFREE\        - " -Rest "                    " `
+        $L += Format-ReadmeWrap -Lead "  USBDRV\NONFREE\ - " -Rest "                    " `
                   -Text "other makers' drivers, not this project's and not tested by it, from usb-wdm-nonfree $NonFreeTag"
         $L += ""
         $L += "      NOTICE.md    whose each one is"

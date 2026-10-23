@@ -20868,12 +20868,16 @@ static void stor_tools_copy(void)
         return;
     }
     join(dir, sizeof(dir), toolDir, INST_USBDRV_DIR);
-    CreateDirectoryA(dir, NULL);
     join(dir, sizeof(dir), dir, "NUSB33");
     if (opts.List) {
         out("(/list) the USB storage drivers' seven files would be copied to "
             "%s.\n", dir);
         return;
+    }
+    {
+        char up[INST_PATH_CHARS];
+        join(up, sizeof(up), toolDir, INST_USBDRV_DIR);
+        CreateDirectoryA(up, NULL);
     }
     if (!CreateDirectoryA(dir, NULL) && file_state(dir) != -1) {
         out("%s could not be made: the USB storage drivers' files are not "
@@ -22555,9 +22559,14 @@ static void other_trust_add(void)
         }
         if (!c.Prop(ctx, OTH_SHA1_PROP, sha, &sn) || sn != sizeof(sha)) {
             /* Not recorded: taken out again (CertDelete frees ctx). */
-            out("usb-wdm-free's certificate's thumbprint could not be read: "
-                "it is not left in the %s store.\n", othStores[s]);
-            c.Delete(ctx);
+            if (c.Delete(ctx)) {
+                out("usb-wdm-free's certificate's thumbprint could not be "
+                    "read: it is not left in the %s store.\n", othStores[s]);
+            } else {
+                out("usb-wdm-free's certificate was added to the %s store and "
+                    "could not be read or taken out again: remove it there by "
+                    "hand (certmgr.msc).\n", othStores[s]);
+            }
             ctx = NULL;
             flagSteps = 1;
         } else {
@@ -22568,9 +22577,15 @@ static void other_trust_add(void)
             _snprintf(name, sizeof(name) - 1, "Trust%s", othStores[s]);
             name[sizeof(name) - 1] = '\0';
             if (!other_key_str(INST_SET_FREE, NULL, name, thumb)) {
-                out("usb-wdm-free's certificate could not be recorded: it is "
-                    "not left in the %s store.\n", othStores[s]);
-                c.Delete(ctx);
+                if (c.Delete(ctx)) {
+                    out("usb-wdm-free's certificate could not be recorded: it "
+                        "is not left in the %s store.\n", othStores[s]);
+                } else {
+                    out("usb-wdm-free's certificate (%s) was added to the %s "
+                        "store and could be neither recorded nor taken out "
+                        "again: remove it there by hand (certmgr.msc).\n",
+                        thumb, othStores[s]);
+                }
                 ctx = NULL;
                 flagSteps = 1;
             } else {
@@ -23835,6 +23850,7 @@ static int other_begin(int set, const char *dir, char *recPath, size_t cap)
             return 0;
         }
         CreateDirectoryA(toolDir, NULL);
+        other_mkdirs(recPath);
         h = CreateFileA(recPath, GENERIC_WRITE, 0, NULL, CREATE_NEW,
                         FILE_ATTRIBUTE_NORMAL, NULL);
         if (h == INVALID_HANDLE_VALUE) {
@@ -24851,17 +24867,6 @@ static int other_remove(int set, int uninstall)
             }
         }
         other_rmdirs(dir);
-        {
-            /* USBDRV with its last folder. */
-            char up[INST_PATH_CHARS];
-            char *s2;
-            inst_copy(up, dir, sizeof(up));
-            s2 = strrchr(up, '\\');
-            if (s2 != NULL) {
-                *s2 = '\0';
-                RemoveDirectoryA(up);
-            }
-        }
         out("%s's copies in %s were removed.\n", inst_other_label(set), dir);
         if (!other_key_made(set, 2)) {
             return 0;
@@ -24872,6 +24877,18 @@ static int other_remove(int set, int uninstall)
         out("  %s could not be %s.\n", recPath, r < 0 ? "read" : "deleted");
         flagSteps = 1;
         return 0;
+    }
+    {
+        /* USBDRV with its last folder and journal (fails while not
+         * empty). */
+        char up[INST_PATH_CHARS];
+        char *s2;
+        inst_copy(up, recPath, sizeof(up));
+        s2 = strrchr(up, '\\');
+        if (s2 != NULL) {
+            *s2 = '\0';
+            RemoveDirectoryA(up);
+        }
     }
     return other_key_delete(set);
 }

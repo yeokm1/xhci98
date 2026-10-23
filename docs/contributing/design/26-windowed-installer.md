@@ -2770,9 +2770,14 @@ printable ASCII without `\ : * ? " < > | ;` (the last because
 `DevicePath` separates its entries with it), with no empty, `.` or `..`
 part and no part that starts with a space or ends with a space or a dot,
 and at most 140 characters (`Test-OtherSetRelPath` at the cut,
-`inst_other_rel_ok` in the installer): with the install directory's 100
-characters (record 23 section 9.6), `\USBDRV\NONFREE\` and a temporary suffix,
-every destination stays under `MAX_PATH`. The installer checks each
+`inst_other_rel_ok` in the installer). With `\USBDRV\NONFREE\` (draft 37) the
+whole is no longer guaranteed under `MAX_PATH` for every accepted
+input: the install directory's 100 characters (record 23 section 9.6),
+16 for `\USBDRV\NONFREE\`, a 140-character path, the 10-character
+temporary suffix and the terminating zero come to 267; it holds for a
+path of at most 133 characters, and every relative path of both pinned
+sets is far shorter. The copy's own check below is what keeps a longer
+one out. The installer checks each
 source and destination path it builds against `MAX_PATH` as well (a
 download unpacked deep in a tree can pass it on the source side), and a
 file whose path does not fit is not copied, and said.
@@ -3066,7 +3071,7 @@ and said with the file that stopped it.
 - **98 SE and ME** (the owner, 2026-10-22: those systems' hardware
   wizard does not search subfolders, so one folder per driver, and
   "stage" there means `DevicePath`): each distinct folder of those INFs,
-  `<dir>\USBDRV\USBDRV\NONFREE\serial\ftdi\w98se-me` say, appended to `DevicePath`
+  `<dir>\USBDRV\NONFREE\serial\ftdi\w98se-me` say, appended to `DevicePath`
   (`inst_path_append`) when it is not there already, and only when the
   folder holds no file but those the set lists (the wizard reads every
   INF of a folder on `DevicePath`: an unlisted INF there leaves the
@@ -3665,9 +3670,11 @@ words is in `inst_core.c` until then), the table's history in
 overlap listing for the maintainer, and the cut-side reader's skipping of
 the metadata lines (the pinned packs carry none, so nothing reads them
 yet);
-the free set's certificate's legs (the code is built with this section;
-no free set carries a certificate yet, so it is read only with a
-stand-in); and the window self-test's layout of this page with every row of
+the free set's certificate's packaging (`usb-wdm-free-test.cer` at the
+release's top: the pin's `SHA256:` line, the exporter copying it into
+`USBDRV\FREE\`, and `package-common.ps1` accepting it as a pinned file, which
+today refuses it as unclaimed) and its legs (the installer's side is
+built with this section; no free set carries a certificate yet); and the window self-test's layout of this page with every row of
 both tables. Until they are built the record's sentences that say the
 cut refuses or writes these describe the design, not the build.
 
