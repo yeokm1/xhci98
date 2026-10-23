@@ -4768,22 +4768,60 @@ the code (`runs/run-42.md`, "42-A.5"):
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.
 
-### 7.5 Stor98 on a tunnelled drive first plugged after the install (task 43.59, 2026-10-22; recorded, not shipped)
+### 7.5 Stor98 on a tunnelled drive first plugged after the install (task 43.59, 2026-10-22; Windows 8.1 only)
 
-**The owner's decision (2026-10-23): not shipped.** On 8.1 and 10 Windows'
-own `stornvme` stays the default driver of a tunnelled NVMe drive, and
-Stor98 stays opt-in per drive as before (the installer's case 3b, or by
-hand). The mark service's switch below is not merged (branch `p43-59`
-keeps it); on Windows 8, which has no `stornvme`, Stor98 stays the
-drive's driver. Read before the decision (`runs/run-43.md` "43.59"):
-`stornvme` under this connection manager ends a surprise removal promptly
-and comes back at a re-plug (10 x86, 8.1 x64), so it needs no
-replacement there; and the premise below that `stornvme` outranks Stor98
-holds only for an unsigned Stor98: signed and trusted (10 x64, 8.1 x64)
-the two rank alike and Windows selects Stor98 by itself for every NVMe
-drive first seen after the install, internal ones too. The section is
-kept as the design that was built and read.
+**The owner's decision (2026-10-23): Windows 8.1 only.** On Windows 8.1 a
+tunnelled NVMe drive gets Stor98 by default; an internal drive keeps
+Windows' own `stornvme`; on Windows 10 every drive keeps `stornvme` and
+Stor98 stays opt-in per drive (the installer's case 3b, or by hand); on
+Windows 8, which has no `stornvme`, Stor98 is the drive's driver as
+before. Why 8.1 (`runs/run-43.md` "43.59"): under this connection manager
+a surprise unplug during a write left 8.1's `stornvme` (6.3.9600.16421,
+8.1's own) holding the write for good - the disks removed (event 157)
+1 to 3 s after the pull, one reset (129) and one controller error (11),
+then the copy blocked for 50 minutes and more, the controller's devnode
+not started and never removed, `diskpart` wedged, and a re-plug no help.
+Our side did its part: the connection manager's re-enumeration ran
+(`cm.reenum.downs` 1), the bridge had no function below it, and Windows
+began the surprise removal (the devnode's started bit cleared). The same
+pull failed the write promptly under Stor98 on 8.1 x64, and under
+`stornvme` and Stor98 on 10 x86 and 10 x64 (10's `stornvme` removed the
+controller at once). With no connection manager (43.23) 8.1's `stornvme`
+also blocked, there because Windows never learned of the removal, and it
+came back with the tunnel. Unread: whether a later 8.1 update's
+`stornvme` mends it (the images carry none).
 
+*The 8.1 gate* (`inst_s98_switch_os`, inst_core.c, host vectors): NT
+6.3 with a build below 10000 (8.1 is 6.3.9600; 10 reports 10.0 and builds
+from 10240, and an unmanifested program on 10 is told 6.2 or 6.3, never a
+build of 10000 and up from `RtlGetVersion`). The version is
+`RtlGetVersion`'s, in the installer as now and in the mark service, which
+has no compatibility manifest (its `GetVersionEx` says 6.2 build 9200 on
+8.1 and 10 alike).
+
+- **The installer** writes `Parameters\Stor98Inf` only where the gate
+  passes, and on any other system deletes a value an earlier build or an
+  8.1 install left (an install, update or the end of any run that keeps
+  the service).
+- **The mark service** switches nothing where the gate fails, whatever
+  the value says, and logs that once. Its recovery of an owed enable runs
+  on every system, so no drive is left disabled.
+- **Drives present at the install** (8.1): case 3b installs Stor98 where
+  the drive's hardware id is its own; where an internal drive shares the
+  id (`hwid_clear`) the run leaves it, says the service puts Stor98 on it,
+  and the service does, seconds after the run (read on 10 x86: 11 s).
+- **Drives first seen later** (8.1): the switch below.
+- **Internal drives**: never a candidate (the verified tunnel port), and
+  on 6.3 and later the INF names `PCI\CC_010802` as a compatible id only
+  (branch `p43-59i`), so Windows' ranking keeps `stornvme` on an internal
+  drive added later.
+- **An in-place upgrade from 8.1 to 10**: a switched drive keeps Stor98,
+  the bound driver Windows migrates; Stor98 x64 starts on 10 (its INF
+  writes no `DmaRemappingCompatible`, branch `p43-59s`). The service's
+  gate stops any new switch on 10 and the next installer run deletes the
+  stale value. The uninstall on 10 still gives every switched drive back:
+  the drives are under Stor98's `Devices` record and `mk_s98_settle`
+  enters any bound drive the records name, whatever the system.
 
 **The problem** (roadmap-usb4.md 43.23, `runs/run-43.md` "43.23",
 question 2). On Windows 8.1 and 10 an NVMe controller behind a Thunderbolt
