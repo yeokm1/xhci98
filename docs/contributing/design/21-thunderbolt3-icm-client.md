@@ -40,6 +40,9 @@ day): the x64 package keeps the filter INF at the flavour directory's
 root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
 package keeps `nt\` (section 3.3, the packaging in section 3.3's last
 paragraphs, section 6.2's filter install).
+Section 7.5, added 2026-10-22 (task 43.59, the owner's decision of
+that day): Stor98 on a tunnelled NVMe drive first plugged after the
+install on 8.1 and 10, put there by the mark service.
 Section 5.3 revised 2026-10-21 (task 43.44, the owner's choice of that
 day): the client reads each announced router's USB4 Version once per
 occupancy, so the status record no longer calls every such router
@@ -4760,6 +4763,438 @@ the code (`runs/run-42.md`, "42-A.5"):
 - **Hand registration.** `XHCIMARK -register` and `-unregister` register
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.
+
+### 7.5 Stor98 on a tunnelled drive first plugged after the install (task 43.59, 2026-10-22; recorded, not shipped)
+
+**The owner's decision (2026-10-23): not shipped.** On 8.1 and 10 Windows'
+own `stornvme` stays the default driver of a tunnelled NVMe drive, and
+Stor98 stays opt-in per drive as before (the installer's case 3b, or by
+hand). The mark service's switch below is not merged (branch `p43-59`
+keeps it); on Windows 8, which has no `stornvme`, Stor98 stays the
+drive's driver. Read before the decision (`runs/run-43.md` "43.59"):
+`stornvme` under this connection manager ends a surprise removal promptly
+and comes back at a re-plug (10 x86, 8.1 x64), so it needs no
+replacement there; and the premise below that `stornvme` outranks Stor98
+holds only for an unsigned Stor98: signed and trusted (10 x64, 8.1 x64)
+the two rank alike and Windows selects Stor98 by itself for every NVMe
+drive first seen after the install, internal ones too. The section is
+kept as the design that was built and read.
+
+
+**The problem** (roadmap-usb4.md 43.23, `runs/run-43.md` "43.23",
+question 2). On Windows 8.1 and 10 an NVMe controller behind a Thunderbolt
+or USB4 tunnel that is first plugged after the install gets Windows' own
+`stornvme`, not Stor98, and keeps it until the installer runs again. The
+installer's case 3b (record 26 sections 5.3.1 and 6.3) installs Stor98
+over `stornvme` only on the tunnel drives present during its run. On 2000
+to 7 the staged `stor98.inf` takes such a drive by itself, and on 8 too,
+because those systems have no NVMe driver of their own. The owner's
+decision of 2026-10-22 replaced the recommendation made there ("accept it
+and say so"): **Stor98 is to win by itself, on tunnelled NVMe drives only.
+An internal NVMe drive keeps `stornvme` and is never displaced.**
+
+#### 7.5.1 Why Windows picks `stornvme`
+
+The sources are Microsoft's "How Windows Ranks Driver Packages",
+"Signature Score", "Identifier Score", "Overview of the Driver Package
+Selection Process" and "AllSigningEqual Group Policy" pages (read
+2026-10-22). They say:
+
+- A rank is `0xSSGGTHHH`, and the lowest wins. `SS` is the signature
+  score, `GG` the feature score ("unspecified ... 0x00FF0000") and
+  `THHH` the identifier score.
+- A device hardware id matching a model's hardware id scores `0x0000` to
+  `0x0FFF`. The three kinds of compatible-id match score `0x1000` to
+  `0x3FFF`.
+- The date and version are compared only between equal ranks.
+- The best signature score goes to "a trusted signature": WHQL, inbox and
+  Windows SE signatures, and Authenticode signatures from a trusted
+  chain. Then come two scores for a package with no valid signature. The
+  worst goes to a package "not signed or whose signing state is unknown".
+- `AllSigningEqual` (on by default since Windows 7) ranks Microsoft and
+  Authenticode signatures equally. It concerns signed packages only.
+
+Measured on Windows 10 22H2 (record 13 section 6.14.1, 2026-10-22): the
+uncatalogued `xhci98.inf` was ranked `0x80FF2005`, "Signer Score - Not
+digitally signed". The inbox `usbxhci.inf` was ranked `0x00802005`.
+
+`stornvme.inf` on 8.1 and 10 (record 13 section 6.12; `runs/run-43.md`
+"43.23", hashes there) has one model line, `PCI\CC_010802`, a compatible
+id of every NVMe controller. It carries `ExcludeFromSelect = *` and is
+inbox-signed. Stor98's INFs match the same compatible id with no catalog,
+so `stornvme` wins on the signature score alone. Two consequences follow.
+
+1. **A better identifier match cannot win.** Suppose a private hardware
+   id is added to a tunnelled drive and Stor98's INF matches it
+   (identifier `0x0000`). The unsigned x86 package then ranks about
+   `0x80FF0000`, which still loses to `stornvme`'s `0x00FF2xxx`.
+2. **A test-signed catalog** (branch `p43-36s`) does not change that by
+   any rule the pages state. Its certificate chains to no root the
+   machine trusts (no certificate is ever imported: record 19, Stor98's
+   `AGENTS.md`), so it is not "a trusted signature", in test-signing
+   mode or not. This is inference: the x64 signer score of a test-signed
+   catalog is unread and is owed to the x64 legs.
+
+So Stor98 can win a ranking only where `stornvme` does not match at all.
+Otherwise it has to be put on the device after Windows chose.
+
+#### 7.5.2 The routes compared
+
+**(a) The bridge filter rewrites the child's ids.** This driver's
+child filter (section 3.2, role 3) sits on a device newly reported on an
+active tunnel bridge's secondary bus. It is attached before the PnP
+manager builds that device's stack, and so before the PnP manager sends
+`IRP_MN_QUERY_ID`. On a `BusQueryHardwareIDs` answer it could put a
+private id (say `XHCICM\CC_010802`) first; on `BusQueryCompatibleIDs` it
+could drop `PCI\CC_010802`. Stor98's INF would gain a model line for the
+private id. By 7.5.1 the private id alone does not win. Dropping the
+compatible id does: `stornvme` then has no match, and the staged Stor98
+is the only candidate. Against it:
+
+- **Depth.** The child filter exists only for the device at the top of a
+  tunnel port's secondary bus: record 24 section 4.3's unit. In every
+  real enclosure that device is a switch, not the NVMe controller. The
+  ORICO ASM2464 (section 7.4 revision 2) and a Thunderbolt 3 enclosure's
+  device controller both put an upstream and a downstream port between
+  the tunnel port and the drive. Only the emulator's
+  `usb4-tunnel-bridge` with `nvme-drive=` puts the controller directly
+  on the tunnel bus. Reaching the drive needs a child filter on each
+  bridge of the enclosure, attaching in turn to what that bridge's
+  `BusRelations` reports. On 2000 and XP a bridge's first-time driver
+  install loses that child (section 7.4 revision 2, 42-0.4 and 42-A.5,
+  formerly EJRB.1). So on a never-seen enclosure the drive would be
+  enumerated without the rewrite, which is exactly the first plug this
+  task is about. On 8.1 and 10 that loss is unread.
+- **It is kernel code in the PnP id path** of every tunnelled device. It
+  changes what Windows records about the device: its hardware ids, and
+  what Device Manager, Windows Update and any later driver search see.
+- **It does not reach a devnode configured before the rewrite.** A drive
+  already set up on `stornvme` keeps its configured driver, because the
+  PnP manager does not rank again for a configured devnode. So (a) needs
+  a second route for that case anyway.
+- On 98 SE to 7 it would change nothing, if gated to 8 and later as (b)
+  is.
+
+**(b) The mark service installs Stor98 on the drive.** `xhcimark`
+(section 7.4 revision 3) already:
+
+- runs as `LocalSystem` on 2000 to 10 when the connection manager is
+  installed;
+- walks the whole devnode tree each second;
+- reads each domain's verified tunnel ports from the driver;
+- restarts one devnode through SetupAPI under the tools' eject mutex.
+
+On a tunnelled NVMe devnode that Windows has just started under
+`stornvme`, it installs the staged Stor98 on that devnode alone. It
+stops the drive, installs, and starts it again, as Device Manager's
+"Update driver" does. It works at any depth, because the test is
+ancestry in the devnode tree, not a filter on the bus. It also works
+whatever the package's signature, because no ranking is asked: the
+package is chosen. And it reaches a devnode configured before the
+install. Against it:
+
+- `stornvme` runs the drive for the second or two before the switch, and
+  the volume mounts and is dismounted once.
+- The switch can be refused by an open file (the stop is a query-remove)
+  and is then left (7.5.4).
+- It needs the service running, so not with `XhciCmSafeEject` 0 (7.5.6,
+  Q1).
+
+**(c) Other levers the reading suggests, each rejected:**
+
+- **`AllSigningEqual`.** It concerns signed packages, and Stor98 has no
+  trusted signature (7.5.1). It is also a machine-wide policy over every
+  device's ranking.
+- **A `FeatureScore`.** It sits below the signature score in the rank, so
+  it cannot overcome it.
+- **The driver database or `CriticalDeviceDatabase`.** Editing them is
+  undocumented, and section 7.4's CDDB scrub shows what such copies do to
+  later devices.
+- **A class co-installer for the SCSI adapter class choosing at
+  `DIF_SELECTBESTCOMPATDRV`.** It would run for every storage controller
+  on the machine. Co-installers are a legacy interface, and whether 10
+  consults them for an inbox, lockdown-style INF such as `stornvme.inf`
+  is unread.
+- **Device installation restriction policies** (`DenyDeviceIDs`). They
+  block the device, not one driver.
+- **`UpdateDriverForPlugAndPlayDevices`.** The installer's own call
+  reaches every present device with the hardware id it is given. An
+  internal drive of the same model would be taken too, which the
+  installer avoids only by refusing the call (`hwid_clear`). A
+  per-devnode install has no such limit.
+
+**Recommended: (b).** It is the only route that reaches the drive
+inside a real enclosure on its first plug. It is user mode in a service
+that already exists. It does not depend on the signature at all. And
+with the policy value of 7.5.3 absent it does nothing new, so 98 SE to 7
+are unchanged. (a) is recorded as the way to avoid `stornvme`'s brief
+start, should that ever matter more than depth and kernel risk.
+
+#### 7.5.3 What (b) does
+
+*The switch's gate: the policy value.* The value is
+`HKLM\SYSTEM\CurrentControlSet\Services\xhcimark\Parameters\Stor98Inf`
+(`REG_SZ`). It holds the full path of the staged `stor98.inf` as the
+store published it (`%SystemRoot%\INF\oemNN.inf`, the name
+`SetupCopyOEMInf` returned, record 26 section 6.3).
+
+- **Written** by an install or update run whose Stor98 box was ticked,
+  on the systems where Windows has its own NVMe driver. That is
+  `INST_OS_CMONLY` (8, 8.1 and 10 below build 22000: record 23 section
+  4.5), and only once the staging succeeded and the run installs or keeps
+  the service (`inst_mk_end_action` `INST_MK_INSTALL`), after the run's
+  own Stor98 jobs (`mk_end_of_run`).
+- **Left as it is** by a run with the box unticked, as record 26 section
+  6.3 leaves an installed Stor98.
+- **Gone with the service key** when the service is removed (the
+  uninstall's step 3, record 26 section 9.3; safe eject turned off,
+  `inst_mk_end_action` `INST_MK_REMOVE`).
+- **Never written on 98 SE to 7.** On 8 it is written and has nothing to
+  find, because 8 has no `stornvme`.
+
+*The installer's pause.* Two objects, because a mutex is a thread's
+and the window runs the engine on more than one thread (its plan on the
+window's thread, its run on a worker, `xhciwiz.c`):
+
+- The **pause event** `Global\Xhci98S98Pause`. An install, update or
+  uninstall run creates it at the first of its plan, its run or its
+  uninstall, and keeps the handle open to the end of its process. Its
+  existence is the pause: the service tests it with `OpenEvent`, and any
+  answer but "not found" counts as paused.
+- The **switch mutex** `Global\Xhci98S98Switch`. The service holds it,
+  with the eject mutex, through each switch and each recovery, and tests
+  the event inside it. Once the event exists the installer waits for the
+  mutex (up to 60 s) and releases it at once: a barrier, so a switch
+  already under way ends before the run reads anything, and none starts
+  after. A run that cannot create the event, or does not get the mutex
+  within 60 s, is refused with nothing changed.
+
+So no switch or recovery runs beside an installer's reading of the
+devices, its case 3b jobs or its uninstall, on the first run or any
+later one, whatever the value already says.
+
+The service reads the value at every poll that has a candidate. It acts only
+when the value names an existing file `oem<digits>.inf` directly in
+`%SystemRoot%\INF` (`mk_s98_inf_ok`). A missing or malformed value is
+"switch off", logged once.
+
+*The candidate* (`mk_s98_wanted`, the pure half). This poll's walk must
+be whole, as every other step requires. The candidate is one devnode
+that meets all of these:
+
+1. Its id is `PCI\` and its compatible ids carry `PCI\CC_010802`.
+2. Its service is `stornvme` in any case. This is `inst_s98_over_inbox`
+   with the `INST_OS_CMONLY` kind: Stor98, a vendor's service, a longer
+   name or no service is never taken.
+3. It is started with no problem code.
+4. It is below a verified tunnel port: an ancestor at any depth (up to
+   the walk's 64) is the devnode at an active member's location of a
+   domain verifiable this poll (decision M11's test, `mk_verifiable`,
+   `mk_member_active`). This is record 23 section 4.4's "behind a
+   tunnel" reading of the same answers.
+5. It is not a protected node (`mk_protect`).
+6. No Windows installation is pending (`CMP_WaitNoPendingInstallEvents`,
+   as for the restart).
+7. Its record (below) allows an attempt now.
+
+An internal drive fails rule 4 and is never touched: no route here can
+change its driver.
+
+*The record.* One `REG_SZ` per devnode under
+`HKLM\SYSTEM\CurrentControlSet\Services\xhcimark\Stor98`, named by the
+instance id. It is written before each act and holds one state:
+
+- `disable`: about to be stopped.
+- `install`: stopped, Stor98 being installed.
+- `enable`: its enable is owed, not yet seen to hold.
+- `done`: read back running Stor98.
+- `restart`: the install asked for a restart of Windows, and the drive
+  does not run Stor98 yet.
+- `busy`: Windows refused the stop.
+- `failed`: anything else.
+
+`disable`, `install` and `enable` all owe an enable (the recovery below)
+and are never final. `done`, `restart` and `failed` are final for the
+switch: the devnode is never switched again by the service. So a drive the user later moves back to `stornvme`, or that
+Windows Update gives a vendor's driver, stays as chosen; the installer's
+next run still applies case 3b. `busy` allows another attempt only at a
+new arrival: the devnode absent at one whole walk and present at the
+next, or the service's start. Within one arrival it allows two more
+attempts, 10 s apart (`mk_s98_retry`). The service follows arrivals for
+up to 256 devnodes on `stornvme` at once (each present devnode keeps its
+entry at every walk; only a gone one's entry is given up); past that a
+drive is not tried until another goes. A record whose devnode no longer
+exists even as a phantom is deleted at the inventory (each minute),
+unless it still owes an enable.
+
+*Ownership.* A drive the switch bound to Stor98 - its `Service` value
+reads `stor98`, started or not - is entered under the installer's record
+of Stor98's devices (`HKLM\Software\xhci98\Stor98\Devices`, the data
+`switched`; record 26 section 6.3), as a device the installer's own call
+bound is entered: the reading before showed `stornvme`, the reading
+after shows Stor98. The entry is written **before** the record's final
+state (`done`, `restart` or `failed`). An entry that cannot be written
+leaves the record `enable`, which the recovery reads again at the next
+poll, so a crash or a failed write between the two loses nothing. With
+no installer record (`HKLM\Software\xhci98\Stor98` absent) nothing is
+entered and the service says so in its log. The uninstall then removes
+the drive whatever `PreExisting` says, as it removes the installer's own
+devices, and before it deletes the service's key it enters every drive
+the records name that is bound to Stor98, present or not, whatever state
+its record reached (`mk_s98_settle`).
+
+*The switch*, under the tools' eject mutex (`Global\XhciinstTbAsk`, 1 s,
+as the restart takes it), so it never runs inside an eject or a restart,
+and the switch mutex (1 s), with the pause event absent:
+
+1. **Fresh reads.** `CM_Locate_DevNode` of the id, its service still
+   `stornvme`, started with no problem, and its parent chain still
+   reaching the member's location. The member's domain is read again as
+   the restart reads it (`mk_fresh_same`): its NHI started, both answers
+   read and verifiable (`mk_verifiable`), the epoch the poll sampled, the
+   member still active. Anything changed, a mutex held or the pause on
+   ends the attempt with no record change and no attempt counted.
+2. **`disable` written, then the stop.** `DIF_PROPERTYCHANGE` with
+   `DICS_DISABLE` and `DICS_FLAG_CONFIGSPECIFIC` (the current profile, as
+   Device Manager disables). This is a query-remove, so an open file, a
+   paging file, a hibernation file or the system volume refuses it.
+   Windows reports a refusal as `DI_NEEDREBOOT` or `DI_NEEDRESTART`.
+   - On a refusal: `DICS_ENABLE` at once, which withdraws the pending
+     disable, so nothing waits for a restart. Each property change
+     clears both restart flags first, so it reads only its own answer.
+     That enable answers a restart too while the devnode runs on
+     (Windows 10 x86, read 2026-10-22); it counts as held when the
+     devnode reads started, not disabled, and both disable flags read
+     clear: the current profile's `CSCONFIGFLAG_DISABLED`
+     (`CM_Get_HW_Prof_FlagsA`, the flag the config-specific change
+     writes) and the global `CONFIGFLAG_DISABLED` (`SPDRP_CONFIGFLAGS`).
+     Then `busy`, and the reason is logged; `enable` if not. The
+     recovery settles an owed enable by the same reading.
+   - Not refused, but the devnode is not left disabled (problem 22) and
+     stopped: no install, and on to step 4.
+3. **`install` written.** `SetupDiSetDeviceInstallParams` with
+   `DriverPath` = the value and `DI_ENUMSINGLEINF`, then
+   `SetupDiBuildDriverInfoList` (`SPDIT_COMPATDRIVER`), then
+   `DIF_SELECTBESTCOMPATDRV` over that one INF's nodes, then
+   `DiInstallDevice` (`newdev.dll`, looked up at run time; Vista and
+   later, so 8, 8.1 and 10) with `DIIDFLAG_NOFINISHINSTALLUI` and no
+   window. The package is already in the driver store, staged by the
+   installer with the user's consent. So no prompt is expected; one that
+   would be needed fails the call in session 0 (unread: the leg).
+4. **`DICS_ENABLE`**, whatever step 3 returned.
+5. **The read-back.** The devnode absent or still disabled: `enable`.
+   Stor98 as the service, started, no problem: `done`. The install
+   returned success with `NeedReboot` set and the drive does not run
+   Stor98: `restart`. Anything else: `failed`. Each is logged with the
+   service, status and problem read.
+
+Every step is logged in `XHCIMARK.LOG`: the candidate, each call and its
+error, the veto, the read-back.
+
+*Recovery* (`mk_s98_recover`), at every poll, whatever the value says
+now. A record owing an enable (`disable` or `install`: a stop or crash
+in the middle of a switch; `enable`: an enable that did not hold) waits
+while its devnode is absent, since it would come back disabled. Once the
+devnode is present and disabled it is enabled under the same locks as a
+switch (the eject mutex, the switch mutex, the pause event absent), and
+the record stays `enable` until a read shows it not disabled; a failure
+is logged once and tried again at each poll. Once present and not
+disabled, the record becomes `done` when the drive runs Stor98 and
+`failed` otherwise, the ownership entry first wherever it is bound to
+Stor98. A `restart` record is decided
+the same way at the first pass after the service's start. A poll takes at
+most 16 records, from a cursor that goes on where the last poll stopped,
+so drives that stay absent while owing an enable never keep a present one
+waiting; the first pass lasts until it has read every record. **The
+uninstall** (and a run that removes the service with safe eject off,
+`mk_remove`) reads every record, with no limit, after the service is
+stopped and before its key goes: it enters each drive bound to Stor98
+under `Devices` (above) and enables every devnode whose record is not
+final (`disable`, `install`, `enable`, or a text it does not know),
+present or not (`DIF_PROPERTYCHANGE`, `DICS_ENABLE`, the current
+profile). A records key or a record that cannot be read, a drive whose
+driver cannot be read, an entry that cannot be written or a devnode that
+cannot be enabled stops that step, the service and its key left for the
+next run (`mk_s98_settle`). So no drive is left disabled with nobody to
+enable it.
+
+*What it is not.* It does nothing for a drive whose service is not
+`stornvme`, and nothing with the value absent. It writes no `LowerFilters`
+(the mark's own rules stand: a driver install deletes the unit's mark, and
+section 7.4 writes it again within a poll). Its only write outside its
+own key is the ownership entry above.
+
+#### 7.5.4 The cases
+
+| Case | What happens |
+|---|---|
+| A tunnelled drive first plugged after the install (8.1, 10) | Windows installs and starts `stornvme`; within a poll of the install's end the service switches the devnode to Stor98 (`done`); the volume is dismounted once and comes back under Stor98 |
+| The same drive plugged again at the same tunnel port | the same devnode, Stor98 already: not a candidate |
+| An internal NVMe drive | below no verified tunnel port: never a candidate, `stornvme` stays |
+| The drive moved from the tunnel to an internal M.2 slot | a new devnode at the internal location (a PCI instance id follows the location), not below a tunnel port: `stornvme`, untouched |
+| ... and back to the tunnel | the tunnel devnode returns with Stor98 (`done`); a tunnel devnode never switched (first seen before the install) is a candidate at this arrival |
+| Two drives, tunnelled | one devnode each, one switch per poll |
+| A tunnelled and an internal drive of the same model | a per-devnode install: the tunnelled one switched, the internal one not (the installer's `UpdateDriverForPlugAndPlayDevices` refuses this case instead) |
+| A drive already on `stornvme` with a file open, a paging file, or Windows on it (a tunnelled boot disk) | the stop is refused; enabled again at once, `busy`; two retries 10 s apart, then again only at the next arrival; nothing is left for a restart, so Stor98 (demand-start, data disks only, its INF) never becomes a boot disk's driver |
+| The user puts the drive back on `stornvme`, or Windows Update installs a vendor's driver on it | `done` is final: left as chosen; a vendor's driver is never a candidate anyway (rule 2) |
+| The uninstall | step 3 stops the service, enables any drive still owed an enable, and deletes the service's key (value and records) before Stor98's devices are removed; the switched drives are under `Devices` and are removed (record 26 section 6.3), with `PreExisting` set or not, and Windows binds `stornvme` at their next enumeration with no service to switch them back |
+| An installer run while the service is polling | the run's pause event exists from its plan to its end, and the barrier waits out a switch already under way: no switch or recovery beside its reading, its case 3b jobs or its uninstall; a switch that does not end within 60 s refuses the run |
+| Stor98 bound but not started, or the service stopped between the bind and the record | the ownership entry is written before the final state (or the record is left `enable` and read again); the uninstall enters any bound drive its records name before the key goes |
+| The enclosure unplugged in the middle of a switch | the record owes an enable (`disable`, `install` or `enable`); at the drive's next arrival it is enabled, then `done` or `failed`; at an uninstall it is enabled first, present or not |
+| A run with the Stor98 box unticked, or safe eject off | the value stays (unticked), or goes with the service (safe eject off: Q1); with no value the service switches nothing |
+| The service stopped, or the domain not verifiable (an NHI not answering, Intel's own Thunderbolt driver on the NHI) | nothing switches; the drive keeps `stornvme` until the installer runs, as before this task |
+| 98 SE and ME | no service (no NT services): unchanged |
+| 2000 to 7 | no value written: unchanged; the staged INF takes a new drive by itself as before |
+| 8 | the value is written, and no `stornvme` exists to find |
+| x64 (8.1 x64, 10 x64) | the same service code (`XHCIMK64.EXE`); waits on `p43-36s`'s catalog to be installable at all |
+
+#### 7.5.5 The pure half and the legs
+
+The pure half is in `mark_core.c`, run by `XHCIMARK -selftest` (the
+gated build runs it):
+
+- `mk_s98_inf_ok`: the value's form.
+- `mk_s98_wanted`: rules 1 to 7, returning the first reason that refuses,
+  for the log.
+- `mk_s98_below`: the ancestor test over a parent array.
+- `mk_s98_rec_parse` and `mk_s98_rec_text`: the record.
+- `mk_s98_retry`: the attempts in one arrival.
+- `mk_s98_recover`: the recovery of a record outside a switch.
+
+The installer's half is `inst_s98_auto_value`, in `inst_core.c`, held
+by `test_inst`: whether the run writes the value, from the system's kind,
+the box, the staging and the service's end action.
+
+The legs are on the Windows 10 x86 guest, in the emulator with the
+Thunderbolt 3 (ICM) profile, after the package's install with the box
+ticked:
+
+1. The internal drive stays `stornvme`.
+2. A drive plugged after the install ends on Stor98, with the volume
+   usable.
+3. A re-plug is not switched again.
+4. A drive behind a two-bridge chain (`usb4-asm-pci-usp`,
+   `pci-bridge-seat`) also ends on Stor98, which is the depth (a) could
+   not reach.
+5. A drive whose volume holds an open file refuses the stop and stays
+   `stornvme`, enabled.
+
+Owed: the same on 8.1 (no 8.1 x86 medium) and the x64 builds after
+`p43-36s`'s catalog, the USB4 profile (a stop is not an eject there:
+only problem 47 is confirmed, section 7.4), and the uninstall giving the
+drive back to `stornvme`, which is 43.24's.
+
+#### 7.5.6 Questions for the owner
+
+1. **Safe eject off.** With `XhciCmSafeEject` 0 the service is neither
+   installed nor kept (owner, 2026-10-19; `inst_mk_end_action`), so this
+   switch does not run then. Recommendation: keep that rule and say it in
+   the release notes. Running the service with safe eject off for this
+   alone would undo the 2026-10-19 decision.
+2. **Final means final.** Recommendation: a devnode switched once (or
+   failed) is never switched again by the service, so that a user's
+   choice of `stornvme` or a vendor's driver stands. The alternative is to
+   switch it at every arrival.
 
 ## 8. Registry values, counters, the log and the snapshot
 

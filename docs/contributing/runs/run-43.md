@@ -3540,3 +3540,150 @@ controller does with such a transfer is still unread.
   a device pulled mid-enumeration (and mid-select) at a root port and
   behind a hub - whether metal ever leaves the transfer without an event.
 - The first-EP0-request-after-Address-Device case at run time.
+
+## 43.59 Stor98 wins a tunnelled NVMe drive first plugged after the install (2026-10-22)
+
+Roadmap-usb4 task 43.59, the owner's "Make Stor98 win" from 43.23's
+question 2. Designed in record 21 section 7.5 (record 26 section 6.3
+amended), branch `p43-59` off `3.2.0.0`. Development host A, QEMU under
+TCG (usb4-emu `bin-2a893ea`, SHA-256 `6a1dfcc8...bd66`), `-machine pc`,
+two virtual CPUs, 2048 MB, headless; the Windows 10 x86 guest (build
+19041, test mode) on an overlay of its pristine image, with the
+emulator's `tb3-alpine-ridge` NHI, its tunnel bridge `tb0` (SHPC
+auto-enable), an internal `nvme` at 00:09 (serial `S98INT59`) and the
+tunnelled drive plugged at run time by QMP (`usb4-device`, ASM2464
+router, serial `USB4EMU59`, a 128 MB FAT volume). The host was heavily
+loaded by other agents' guests throughout, so no time below is a
+performance reading.
+
+### Before the code: stornvme and Stor98 at a disconnect under our connection manager
+
+The owner asked (2026-10-22), before Stor98 replaces `stornvme` at all,
+whether Windows' own `stornvme` handles a disconnect properly when
+xHCI98's connection manager is installed and reports the removal.
+43.23's hang came from a vehicle with no connection manager. The guest
+had the connection manager alone (`/cmonly`, x86 `release` of
+`7fda1598`'s gated build), the tunnelled drive on `stornvme`; a
+PowerShell loop copied a 4 MB file onto it (a line per copy), and the
+enclosure was surprise-unplugged (QMP `device_del`) about 45 s in. Then
+the same with the drive moved to Stor98 by the mark service.
+
+| Run | Driver | The copy | Disk events | After | Re-plug |
+|---|---|---|---|---|---|
+| A | `stornvme` | copy 57 failed 2.2 s after the unplug ("The volume for a file has been externally altered") | `disk` 157 "Disk 4 has been surprise removed" at once; `fastfat` 50 and the Delayed Write popup (26) | Disk 4 and F: gone from DiskPart | Disk 4 and F: back |
+| A2 | `stornvme` | copy 28 failed within 3 s ("Could not find a part of the path") | 157 at once, two `disk` 51; `fastfat` 141 and popups | gone | back |
+| B | Stor98 | copy 66 failed about 1 s after | 157 at once | gone | back, Stor98 running |
+| 1 to 5 (a later boot) | Stor98 | failed within 2 s of each unplug | 157 each | gone | back; after each re-plug 234 to 600 copies, and in runs 4 and 5 all four copies compared equal to the source (`fc /b`) |
+
+No event 129 (reset) or 153 (retry) in any run. So with the connection
+manager installed both drivers end a disconnect promptly and cleanly and
+both come back at a re-plug; the reading gives no disconnect reason
+for or against replacing `stornvme`.
+
+One unexplained reading: after run B's re-plug (the first re-plug of
+the drive on Stor98), the next copy loop's PowerShell died before its
+first copy line with `System.AccessViolationException` (Application
+events 1026 and 1000, `powershell.exe`, faulting module unknown,
+0xC0000005, several threads at once), about 35 s before that run's
+unplug and with no disk event near it. A control loop on the system
+drive (600 copies) was clean, and the sequence repeated five times on
+the next boot (runs 1 to 5, the last two with a data compare) did not
+show it again. Not read further: it may be PowerShell, the guest or the
+driver; a memory reading at a recurrence would decide.
+
+### The switch
+
+On a fresh overlay of the pristine image, with the two-bridge chain
+(`-Chain`: an ASM USP at 01:03.0, a downstream port and an NVMe behind it,
+serial `CHAIN59`), the package of the gated build at `1f49eedb` (x86
+`release`), its `XHCIMARK.EXE` built from the branch as it then stood:
+`6b5439d2` at step 1, `946569b6` at step 2, `b9b72306` from step 3, the
+console install `/cmonly /yes /stor98` with nothing plugged, then a
+restart. The installer staged Stor98 (`oem4.inf`), left the internal
+drive ("not behind a Thunderbolt or USB4 tunnel") and wrote
+`Parameters\Stor98Inf`.
+
+| Step | What was done | Reading |
+|---|---|---|
+| 1 | Enclosure plugged (both drives appear at once) | The chain's drive (`6&3A7C4023&0&00001828`, two bridges deep) began its switch 83 s after the plug and ran Stor98 12 s later, `done`, under `Devices` as `switched` (its first attempt waited for "a Windows installation is pending"). The enclosure's own drive (`4&1D29C6E2&0&0828`): its stop refused 14 s after the plug, with nothing of ours holding it, then `enable` (owed) and at the next poll `failed`, final: a defect (below). Internal drive: "not below a verified tunnel port" at each start, never touched. The chain's disk came up offline in DiskPart (the same base image as the enclosure's, so the same disk signature: a vehicle artefact) |
+| 2 | The flag fix; record deleted; restart; re-plug | Switched 7 s after the plug, Stor98 37 s later, `done` |
+| 3 | The drive put back on `stornvme` (its devnode removed and rescanned, record deleted), a file opened on its volume, the service started | Stop refused at 00:31:31, :42 and :54 (`busy` each, two retries 11 to 12 s apart), then nothing more while the drive stayed; the file closed, still nothing (the same arrival) |
+| 4 | Unplug and re-plug (a new arrival) | Switched 7 s after the plug, Stor98 29 s later, `done`; a copy to F: compared equal (`fc /b`) |
+| 5 | Console uninstall (`/uninstall /yes`) | The service stopped and removed, both switched drives removed as this installer's Stor98 devices, `oem4.inf` and the `stor98` service removed; after a rescan both drives `stornvme`, started, with no restart |
+| 6 | The tip's service (`4a846846`): install again (`/cmonly /yes /stor98`), restart, the service stopped, plug, a file opened on the enclosure drive's volume, the service started | The enclosure drive refused at 01:30:37, :50 and 01:31:01, `busy`, nothing more; the chain's drive switched between them (one switch a poll), `done`; the file closed, then unplug and re-plug: switched 24 s after the plug ("a Windows installation is pending" first), Stor98 6 s later, `done`; both under `Devices`; the internal drive `stornvme` throughout |
+
+The defect step 1 found, in two parts. A refused `DICS_DISABLE` leaves
+`DI_NEEDRESTART` in the element's install parameters, and the
+`DICS_ENABLE` that follows read it as its own answer (`946569b6` clears
+both restart flags before each call). That was not all: with the flags
+cleared, step 3's first run showed the enable itself answering a restart
+while the devnode ran on, started with no problem, so the record still
+went `enable` and then `failed`. `b9b72306` takes such an enable as held
+when the current profile's `CSCONFIGFLAG_DISABLED` reads clear
+(`CM_Get_HW_Prof_FlagsA`), and the record is `busy`, as section 7.5's
+failure table says; step 3's readings are that build's. Before it, any
+drive whose stop was refused at the switch stayed on `stornvme` for
+good; at step 1 nothing of ours held the volume (what did, Windows' own
+work at a first arrival, was not read).
+
+### Builds and review
+
+The design was reviewed twice before its code (the second's findings,
+the installer's pause across the window's two threads, ownership before
+the final state and the recovery under the pause, are `3402f535`). The
+code was then reviewed seven times: `5e38173c` (the uninstall reads every
+record, the recovery a cursor), `1f49eedb` (the uninstall's device lookup
+tells an error from absence), `9aca6fdc`, `c3816947`, `88ec6e1c` and
+`6b5439d2` (the arrival bookkeeping: every candidate and every present
+devnode keeps its entry, a full table gives up only a gone one, 256 of
+them); the seventh found nothing. The leg fixes were reviewed until clean
+(`946569b6` clean; `b9b72306` led to `4a1f8a1a`, the global flag, and
+`4a846846`, the recovery's reading; the last review found nothing).
+
+The gated builds, x86 `all` and amd64 `all`, passed at `1f49eedb` (the
+package for steps 1 to 5) and again at `4a846846`: amd64's records clean
+at `4a846846`; x86's marked dirty, as `4a846846` was committed while that
+run was under way (the mark service alone; x86's own XHCIMARK self-test
+ran on `4a846846`'s source).
+
+### Owed
+
+- 8.1 (no x86 medium) and every x64 leg, after `p43-36s`'s test-signed
+  catalog;
+- the USB4 profile (these legs ran the `tb3-alpine-ridge` ICM profile);
+- the installer's pause read live (an install run while the service is
+  switching);
+- a recurrence of the PowerShell fault above, read with the guest's
+  memory.
+
+### The x64 legs: 10 x64 and 8.1 x64 with the owner-signed package (2026-10-23)
+
+The owner-signed amd64 package of integ6b `5ad53f7d` (every `.sys` and
+`.cat` signed with the project test certificate), its drivers unchanged,
+with this branch's user-mode tools after merging that same commit
+(`abb70446`: this branch's `src\` is then `5ad53f7d`'s, so the signed
+binaries are this branch's drivers; 43.59 changes no driver). The
+certificate was added to Root and TrustedPublisher in each guest; no
+publisher prompt appeared. Fresh overlays of the pristine images, two
+virtual CPUs, 2048 MB, the same devices as the x86 legs (`-Chain`); the
+console install `/cmonly /yes /stor98` with nothing plugged, a restart,
+then the mark service stopped before the plug, so that what Windows does
+on its own is read first.
+
+| | 10 x64 (19045) | 8.1 x64 (9600) |
+|---|---|---|
+| Driver Windows selects at the tunnelled drives' first plug, the service stopped | Stor98, both drives: equal rank `00FF2005` (both match `PCI\CC_010802`), Stor98 "Authenticode" against `stornvme` "Inbox", Stor98 `Selected`, `stornvme` `Outranked` (setupapi.dev.log) | Stor98, both drives, the same ranks and signer scores |
+| An internal NVMe first plugged after the install (hot-added on the root bus) | Stor98 | Stor98 |
+| Stor98 starts | No, on any of the three: problem status `0xC00000C2`; System event 4 from `stor98` ("internal error in its data structures", final status `0xC00000C2`) | Yes, on all three; a copy to the tunnelled drive compared equal |
+| The internal drive present at the install | `stornvme`, untouched | `stornvme`, untouched |
+| The mark service | Never needed: no drive was on `stornvme` below the tunnel | The same: nothing to switch |
+| The uninstall | Leaves Stor98 on all three (none is in its `Devices` record; the internal one "not this package's to remove"), so on 10 x64 the drives stay failed | Leaves Stor98 on all three, running |
+
+So with a trusted signature the design's premise is reversed: section
+7.5 rests on `stornvme` outranking an uncatalogued Stor98, and that holds
+only while Stor98 is unsigned (x86, read above). Signed and trusted, Stor98
+wins every new NVMe drive on its own, tunnelled or internal, on both
+systems (by its newer date, the ranks and signer classes being otherwise
+as above), which breaks the owner's rule for internal drives, and on 10
+x64 Stor98 x64 does not start at all in this vehicle. Not read: why
+Stor98 x64 fails on 10 x64 (a debug build's stage codes would show it).

@@ -1599,6 +1599,24 @@ unasked. With the box ticked:
   still names (an update of the hand-installed device from the bundled
   release points its driver key at the newest copy) stays with it, by
   the reference check, and the finish page says so.
+- **Tunnel drives first plugged after the run on 8.1 and 10** (task
+  43.59, 2026-10-22; record 21 section 7.5): Windows gives them
+  `stornvme`, which outranks the staged INF, so a run that ticks the
+  box on the `INST_OS_CMONLY` kind, staged `stor98.inf` and installs
+  or keeps the mark service writes the staged copy's path to the
+  service's `Parameters\Stor98Inf` (`inst_s98_auto_value`) after its
+  own Stor98 jobs, and the service installs Stor98 on each such drive
+  behind a verified tunnel port, entering each one it bound under
+  `Devices` (data `switched`) before its own final record, as this
+  installer's own call would; every install, update and uninstall run
+  keeps the pause event `Global\Xhci98S98Pause` open from its plan to its
+  end, after a barrier on the service's switch mutex, which pauses the
+  service (a run that cannot pause it is refused); the value goes with
+  the service key (section 9.3 step 3 stops the service, enters under
+  `Devices` every drive its records name that is bound to Stor98, enables
+  any drive its switch left owing an enable, and removes the service
+  before Stor98's devices), and the uninstall removes the switched drives
+  with the other `Devices`.
 - **Tunnel drives Windows bound after the run** (draft 12; the owner's
   coordinator, 2026-10-19, from the Windows ME matrix leg of that day).
   The install stages Stor98 and records no device when no tunnel was up

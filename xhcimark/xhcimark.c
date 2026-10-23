@@ -1952,6 +1952,982 @@ static void mk_inventory(int quiet)
     }
 }
 
+/* ======================================================================== */
+/* Stor98 on a tunnelled drive (record 21 section 7.5, task 43.59)          */
+/* ======================================================================== */
+
+/* On 8, 8.1 and 10 Windows gives a tunnelled NVMe drive first plugged
+ * after the install its own stornvme, which outranks the uncatalogued
+ * Stor98 on the signature score. With Parameters\Stor98Inf naming the
+ * staged Stor98 (the installer writes it on those systems alone), each
+ * started stornvme devnode below a verified tunnel port is stopped, given
+ * that one INF's driver and started again. Its record under
+ * Services\xhcimark\Stor98 is written before each act; a disable is never
+ * left behind unrecorded, and a record owing an enable stays until the
+ * enable is seen. */
+
+#define MK_S98_KEY_PATH     MK_SVC_KEY "\\" MK_S98_KEY
+#define MK_S98_OWN_KEY      "Software\\xhci98\\Stor98"
+#define MK_S98_SWITCH_MUTEX "Global\\Xhci98S98Switch"
+#define MK_S98_PAUSE_EVENT  "Global\\Xhci98S98Pause"
+#define MK_S98_SEEN_MAX     256
+#define MK_S98_TODO_MAX     16
+#define MK_PROB_DISABLED    0x00000016UL
+#define MK_DICS_ENABLE      0x00000001UL
+#define MK_DICS_DISABLE     0x00000002UL
+#define MK_DICS_FLAG_CONFIGSPECIFIC 0x00000002UL
+#define MK_DIF_SELECTBESTCOMPATDRV 0x00000017UL
+#define MK_DI_ENUMSINGLEINF 0x00010000UL
+#define MK_SPDIT_COMPATDRIVER 0x00000002UL
+#define MK_DIIDFLAG_NOFINISHINSTALLUI 0x00000002UL
+
+typedef BOOL (WINAPI *PFN_SETDIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
+                                       PSP_DEVINSTALL_PARAMS_A);
+typedef BOOL (WINAPI *PFN_DRVLIST)(HDEVINFO, PSP_DEVINFO_DATA, DWORD);
+typedef DWORD (WINAPI *PFN_HWPROFFLAGS)(LPSTR, ULONG, PULONG, ULONG);
+#define MK_CSCONFIGFLAG_DISABLED 0x00000001UL
+#define MK_SPDRP_CONFIGFLAGS    0x0000000AUL
+#define MK_CONFIGFLAG_DISABLED  0x00000001UL
+typedef BOOL (WINAPI *PFN_GETSELDRVW)(HDEVINFO, PSP_DEVINFO_DATA,
+                                      PSP_DRVINFO_DATA_W);
+typedef BOOL (WINAPI *PFN_DIINSTALL)(HWND, HDEVINFO, PSP_DEVINFO_DATA,
+                                     PSP_DRVINFO_DATA_W, DWORD, PBOOL);
+
+/* Looked up at the first switch, so 2000 to 7, which never have the
+ * value, never ask for newdev.dll's DiInstallDevice (Vista and later). */
+static struct {
+    int Tried;
+    int Ok;
+    HMODULE NewDev;
+    PFN_SETDIPARAMS SetDiParams;
+    PFN_DRVLIST Build;
+    PFN_DRVLIST DestroyDrv;
+    PFN_GETSELDRVW GetSelected;
+    PFN_DIINSTALL Install;
+    PFN_HWPROFFLAGS HwProfFlags;    /* optional: CM_Get_HW_Prof_FlagsA */
+} s98api;
+
+/* The devnodes on stornvme seen at whole walks: their arrival. */
+static struct {
+    char Id[INST_ID_CHARS];
+    DWORD Walk;             /* the last whole walk that saw it            */
+    int Attempts;           /* in this arrival                            */
+    DWORD At;               /* the last attempt                           */
+    int Why;                /* the reason last logged, -1 none            */
+} s98Seen[MK_S98_SEEN_MAX];
+static int s98SeenCount;
+static DWORD s98Walk;           /* whole walks so far                     */
+static int s98PolicyState = -1; /* the value's last logged state          */
+static int s98FirstDone;        /* the first poll's restart records read  */
+static DWORD s98Cursor;         /* the record the next recovery reads first */
+static char s98EnableLogged[MK_S98_TODO_MAX][INST_ID_CHARS];
+
+static int mk_s98_api(void)
+{
+    int missing = 0;
+
+    if (s98api.Tried) {
+        return s98api.Ok;
+    }
+    s98api.Tried = 1;
+    s98api.NewDev = LoadLibraryA("newdev.dll");
+    s98api.SetDiParams = (PFN_SETDIPARAMS)mk_proc(api.SetupApi,
+                             "SetupDiSetDeviceInstallParamsA", &missing);
+    s98api.Build = (PFN_DRVLIST)mk_proc(api.SetupApi,
+                       "SetupDiBuildDriverInfoList", &missing);
+    s98api.DestroyDrv = (PFN_DRVLIST)mk_proc(api.SetupApi,
+                            "SetupDiDestroyDriverInfoList", &missing);
+    s98api.GetSelected = (PFN_GETSELDRVW)mk_proc(api.SetupApi,
+                             "SetupDiGetSelectedDriverW", &missing);
+    s98api.Install = (PFN_DIINSTALL)mk_proc(s98api.NewDev, "DiInstallDevice",
+                                            &missing);
+    s98api.HwProfFlags = (PFN_HWPROFFLAGS)GetProcAddress(api.SetupApi,
+                             "CM_Get_HW_Prof_FlagsA");
+    s98api.Ok = missing == 0;
+    if (!s98api.Ok) {
+        mk_log("Stor98: the switch's routines are missing; no drive is "
+               "switched");
+    }
+    return s98api.Ok;
+}
+
+/* The value, when it names a staged INF that exists: 1 with inf filled. */
+static int mk_s98_policy(char *inf, size_t cap)
+{
+    HKEY k;
+    DWORD type;
+    DWORD n = (DWORD)cap - 1;
+    char windir[MAX_PATH];
+    int state = 0;
+    DWORD a;
+
+    memset(inf, 0, cap);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_PARAMS_KEY, 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        if (RegQueryValueExA(k, MK_S98_VALUE, NULL, &type, (LPBYTE)inf, &n) ==
+                ERROR_SUCCESS && type == REG_SZ) {
+            inf[cap - 1] = '\0';
+            state = 1;
+        } else {
+            memset(inf, 0, cap);
+        }
+        RegCloseKey(k);
+    }
+    if (state == 1) {
+        if (GetWindowsDirectoryA(windir, sizeof(windir)) == 0 ||
+            !mk_s98_inf_ok(inf, windir)) {
+            state = 2;
+        } else {
+            a = GetFileAttributesA(inf);
+            if (a == 0xFFFFFFFFUL || (a & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                state = 3;
+            }
+        }
+    }
+    if (state != s98PolicyState) {
+        s98PolicyState = state;
+        if (state == 1) {
+            mk_log("Stor98: tunnelled drives on stornvme are switched to %s",
+                   inf);
+        } else if (state != 0) {
+            mk_log("Stor98: %s names %s, %s; no drive is switched",
+                   MK_S98_VALUE, inf, state == 2 ? "not a staged INF"
+                                                 : "a file that is not there");
+        }
+    }
+    return state == 1;
+}
+
+static int mk_s98_rec_get(const char *id)
+{
+    HKEY k;
+    DWORD type;
+    char text[32];
+    DWORD n = sizeof(text) - 1;
+    LONG r;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_KEY_PATH, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return MK_S98_NONE;
+    }
+    memset(text, 0, sizeof(text));
+    r = RegQueryValueExA(k, id, NULL, &type, (LPBYTE)text, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return MK_S98_NONE;
+    }
+    if (r != ERROR_SUCCESS || type != REG_SZ) {
+        return MK_S98_FAILED;
+    }
+    text[sizeof(text) - 1] = '\0';
+    return mk_s98_rec_parse(text);
+}
+
+static int mk_s98_rec_set(const char *id, int state)
+{
+    HKEY k;
+    DWORD disp;
+    const char *text = mk_s98_rec_text(state);
+    LONG r;
+
+    if (text == NULL ||
+        RegCreateKeyExA(HKEY_LOCAL_MACHINE, MK_S98_KEY_PATH, 0, NULL,
+                        REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, NULL, &k,
+                        &disp) != ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegSetValueExA(k, id, 0, REG_SZ, (const BYTE *)text,
+                       (DWORD)strlen(text) + 1);
+    RegCloseKey(k);
+    if (r != ERROR_SUCCESS) {
+        mk_log("Stor98: %s: the record \"%s\" could not be written (error "
+               "%ld)", id, text, (long)r);
+    }
+    return r == ERROR_SUCCESS;
+}
+
+/* "done": the drive is also entered under the installer's record of
+ * Stor98's devices (record 26 section 6.3), as a device the installer's
+ * own call bound is, so the uninstall gives it back to stornvme whatever
+ * PreExisting says. Only into a record the installer made. */
+static int mk_s98_own(const char *id)
+{
+    HKEY k;
+    HKEY d;
+    LONG r;
+    static const char text[] = "switched";
+
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_OWN_KEY, 0, KEY_CREATE_SUB_KEY,
+                      &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        mk_log("Stor98: %s is bound to Stor98, and the installer's record of "
+               "Stor98 is not there: not entered", id);
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        mk_log("Stor98: the installer's record of Stor98 did not open (error "
+               "%ld)", (long)r);
+        return 0;
+    }
+    r = RegCreateKeyExA(k, "Devices", 0, NULL, REG_OPTION_NON_VOLATILE,
+                        KEY_SET_VALUE, NULL, &d, NULL);
+    RegCloseKey(k);
+    if (r == ERROR_SUCCESS) {
+        r = RegSetValueExA(d, id, 0, REG_SZ, (const BYTE *)text,
+                           (DWORD)sizeof(text));
+        RegCloseKey(d);
+    }
+    if (r != ERROR_SUCCESS) {
+        mk_log("Stor98: %s could not be entered among Stor98's devices "
+               "(error %ld)", id, (long)r);
+        return 0;
+    }
+    return 1;
+}
+
+/* A final state, after the ownership entry when the devnode is bound to
+ * Stor98 (its Service value, started or not): an entry that cannot be
+ * written leaves the record "enable", so the recovery tries again. */
+static void mk_s98_finish(const char *id, int state, int bound)
+{
+    if (bound && !mk_s98_own(id)) {
+        (void)mk_s98_rec_set(id, MK_S98_ENABLE);
+        return;
+    }
+    (void)mk_s98_rec_set(id, state);
+}
+
+/* 1 while an installer run holds its pause event open. */
+static int mk_s98_paused(void)
+{
+    HANDLE e = OpenEventA(SYNCHRONIZE, FALSE, MK_S98_PAUSE_EVENT);
+
+    if (e != NULL) {
+        CloseHandle(e);
+        return 1;
+    }
+    return GetLastError() != ERROR_FILE_NOT_FOUND;
+}
+
+/* The eject mutex, then the switch mutex the installer waits on, with no
+ * installer run in progress: 1 with both held. */
+static int mk_s98_lock(HANDLE *em, HANDLE *sm)
+{
+    *em = mk_lock(MK_EJECT_MUTEX, 1000);
+    if (*em == NULL) {
+        return 0;
+    }
+    *sm = mk_lock(MK_S98_SWITCH_MUTEX, 1000);
+    if (*sm == NULL) {
+        mk_unlock(*em);
+        return 0;
+    }
+    if (mk_s98_paused()) {
+        mk_unlock(*sm);
+        mk_unlock(*em);
+        return 0;
+    }
+    return 1;
+}
+
+/* DIF_PROPERTYCHANGE on the one devnode; 1 when made with no restart asked
+ * (*vetoed 1 when Windows answered DI_NEEDREBOOT or DI_NEEDRESTART). */
+static int mk_s98_propchange(HDEVINFO set, SP_DEVINFO_DATA *data,
+                             DWORD change, int *vetoed)
+{
+    SP_PROPCHANGE_PARAMS pcp;
+    SP_DEVINSTALL_PARAMS_A ip;
+
+    *vetoed = 0;
+    /* The restart flags stay in the element's install parameters from an
+     * earlier call (a refused stop's): cleared first, so only this call's
+     * own answer is read. */
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (s98api.SetDiParams != NULL && api.GetDiParams(set, data, &ip) &&
+        (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
+        ip.Flags &= ~(DWORD)(MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART);
+        (void)s98api.SetDiParams(set, data, &ip);
+    }
+    memset(&pcp, 0, sizeof(pcp));
+    pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+    pcp.ClassInstallHeader.InstallFunction = MK_DIF_PROPERTYCHANGE;
+    pcp.StateChange = change;
+    pcp.Scope = MK_DICS_FLAG_CONFIGSPECIFIC;
+    pcp.HwProfile = 0;
+    if (!api.SetCiParams(set, data, &pcp.ClassInstallHeader, sizeof(pcp)) ||
+        !api.CallCi(MK_DIF_PROPERTYCHANGE, set, data)) {
+        return 0;
+    }
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (api.GetDiParams(set, data, &ip) &&
+        (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
+        *vetoed = 1;
+        return 0;
+    }
+    return 1;
+}
+
+/* 1 when the current hardware profile's flags of `id` read and do not
+ * disable it (what a DICS_ENABLE with DICS_FLAG_CONFIGSPECIFIC writes),
+ * and its global ConfigFlags read and do not disable it either (which no
+ * config-specific change touches). 0 when either disables it or cannot be
+ * read. */
+static int mk_s98_profile_enabled(HDEVINFO set, SP_DEVINFO_DATA *data,
+                                  const char *id)
+{
+    char buf[INST_ID_CHARS];
+    ULONG flags = 0;
+    DWORD cfg = 0;
+    DWORD type = 0;
+
+    if (s98api.HwProfFlags == NULL) {
+        return 0;
+    }
+    inst_copy(buf, id, sizeof(buf));
+    if (s98api.HwProfFlags(buf, 0, &flags, 0) != MK_CR_SUCCESS ||
+        (flags & MK_CSCONFIGFLAG_DISABLED) != 0) {
+        return 0;
+    }
+    if (!api.GetRegProp(set, data, MK_SPDRP_CONFIGFLAGS, &type, (PBYTE)&cfg,
+                        sizeof(cfg), NULL) ||
+        type != REG_DWORD) {
+        return 0;
+    }
+    return (cfg & MK_CONFIGFLAG_DISABLED) == 0;
+}
+
+/* Opens the one devnode into a set of its own; INVALID_HANDLE_VALUE when
+ * it cannot. */
+static HDEVINFO mk_s98_open(const char *id, SP_DEVINFO_DATA *data)
+{
+    HDEVINFO set = api.CreateList(NULL, NULL);
+
+    if (set == INVALID_HANDLE_VALUE) {
+        return set;
+    }
+    memset(data, 0, sizeof(*data));
+    data->cbSize = sizeof(*data);
+    if (!api.OpenInfo(set, id, NULL, 0, data)) {
+        api.Destroy(set);
+        return INVALID_HANDLE_VALUE;
+    }
+    return set;
+}
+
+/* The devnode's fresh state: present, its service, started, its problem. */
+static int mk_s98_fresh(const char *id, char *service, size_t cap,
+                        ULONG *st, ULONG *pr, DWORD *dn)
+{
+    memset(service, 0, cap);
+    *st = 0;
+    *pr = 0;
+    if (api.Locate(dn, (char *)id, MK_CM_LOCATE_NORMAL) != MK_CR_SUCCESS) {
+        return 0;
+    }
+    (void)mk_prop_text(*dn, MK_CM_DRP_SERVICE, service, cap, NULL);
+    if (api.Status(st, pr, *dn, 0) != MK_CR_SUCCESS) {
+        *st = 0;
+        *pr = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static int mk_s98_disabled(ULONG st, ULONG pr)
+{
+    return (st & MK_DN_HAS_PROBLEM) != 0 && pr == MK_PROB_DISABLED;
+}
+
+static int mk_s98_runs(const char *service, ULONG st)
+{
+    return inst_eq(service, "stor98") && (st & MK_DN_STARTED) != 0 &&
+           (st & MK_DN_HAS_PROBLEM) == 0;
+}
+
+/* 1 when the fresh devnode's ancestors still reach member location `bdf`. */
+static int mk_s98_still_below(DWORD dn, INST_U32 bdf)
+{
+    DWORD p;
+    ULONG bus;
+    ULONG address;
+    int steps;
+
+    for (steps = 0; steps < 64; steps++) {
+        if (api.Parent(&p, dn, 0) != MK_CR_SUCCESS) {
+            return 0;
+        }
+        if (mk_prop_dword(p, MK_CM_DRP_BUSNUMBER, &bus) &&
+            mk_prop_dword(p, MK_CM_DRP_ADDRESS, &address) &&
+            bus == ((bdf >> 8) & 0xFFUL) && address == mk_addr_of(bdf)) {
+            return 1;
+        }
+        dn = p;
+    }
+    return 0;
+}
+
+/* The member's domain read again: its NHI started, verifiable, the epoch
+ * the poll sampled, the member still active (as mk_fresh_same reads it). */
+static int mk_s98_domain_fresh(const MK_NHI *h, INST_U32 member)
+{
+    static MK_NHI f;
+    ULONG st;
+    ULONG pr;
+
+    memset(&f, 0, sizeof(f));
+    f.Node = h->Node;
+    if (api.Status(&st, &pr, nodes[h->Node].Dn, 0) != MK_CR_SUCCESS) {
+        return 0;
+    }
+    f.DevOk = (st & MK_DN_STARTED) != 0 && (st & MK_DN_HAS_PROBLEM) == 0;
+    return mk_read_nhi(&f) && mk_verifiable(f.DevOk, &f.Q, &f.M) &&
+           f.Q.EpochLo == h->Q.EpochLo && f.Q.EpochHi == h->Q.EpochHi &&
+           mk_member_active(&f.Q, member);
+}
+
+/* The switch of one devnode (section 7.5.3, "The switch"), under the tools'
+ * eject mutex and the switch mutex, with no installer pause. Returns the
+ * state recorded, or MK_S98_NONE when nothing was done (a lock held, the
+ * pause on, a fresh read changed). */
+static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
+                         const char *inf)
+{
+    HANDLE em;
+    HANDLE sm;
+    HDEVINFO set = INVALID_HANDLE_VALUE;
+    SP_DEVINFO_DATA data;
+    SP_DEVINSTALL_PARAMS_A ip;
+    SP_DRVINFO_DATA_W drv;
+    char service[64];
+    ULONG st;
+    ULONG pr;
+    DWORD dn;
+    BOOL reboot = FALSE;
+    int vetoed;
+    int result = MK_S98_NONE;
+    int built = 0;
+    int installed = 0;
+    int enabled;
+    int fresh;
+    DWORD err = 0;
+
+    /* An installer run keeps its pause event open from its plan to its
+     * end: no switch beside its reads and Stor98 jobs. */
+    if (!mk_s98_lock(&em, &sm)) {
+        return MK_S98_NONE;
+    }
+    if (!mk_no_install_pending() ||
+        !mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn) ||
+        !inst_s98_over_inbox(1, service) || (st & MK_DN_STARTED) == 0 ||
+        (st & MK_DN_HAS_PROBLEM) != 0 || !mk_s98_still_below(dn, member) ||
+        !mk_s98_domain_fresh(h, member)) {
+        mk_log("Stor98: %s or its domain changed before its switch; looked "
+               "at again", id);
+        goto out;
+    }
+    set = mk_s98_open(id, &data);
+    if (set == INVALID_HANDLE_VALUE) {
+        mk_log("Stor98: %s could not be opened (error %lu)", id,
+               GetLastError());
+        goto out;
+    }
+    if (!mk_s98_rec_set(id, MK_S98_DISABLE)) {
+        goto out;
+    }
+    mk_log("Stor98: switching %s from stornvme (member %04lX)", id, member);
+    if (!mk_s98_propchange(set, &data, MK_DICS_DISABLE, &vetoed)) {
+        int refused = vetoed;
+        err = GetLastError();
+        /* A refused stop asked for a restart; the enable withdraws it. Its
+         * own answer is a restart too while the devnode runs on (Windows 10
+         * x86, 2026-10-22): then the profile's flag the enable clears, and
+         * the global one, show it held. */
+        st = 0;
+        pr = 0;
+        enabled = mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
+        fresh = mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn);
+        if (!enabled && vetoed && fresh && (st & MK_DN_STARTED) != 0 &&
+            !mk_s98_disabled(st, pr) &&
+            mk_s98_profile_enabled(set, &data, id)) {
+            enabled = 1;
+        }
+        if (!enabled || !fresh || mk_s98_disabled(st, pr)) {
+            mk_log("Stor98: %s: the stop was %s (error %lu), and its enable "
+                   "is not seen (it answered %s; status %08lX problem %lu); "
+                   "it is owed", id, refused ? "refused" : "not made", err,
+                   enabled ? "done" : vetoed ? "a restart" : "a failure", st,
+                   pr);
+            result = MK_S98_ENABLE;
+        } else {
+            result = refused ? MK_S98_BUSY : MK_S98_FAILED;
+            mk_log("Stor98: %s: the stop was %s (error %lu); left on "
+                   "stornvme", id, refused ? "refused" : "not made", err);
+        }
+        goto record;
+    }
+    if (!mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn) ||
+        (st & MK_DN_STARTED) != 0 || !mk_s98_disabled(st, pr)) {
+        mk_log("Stor98: %s was not left stopped (status %08lX problem %lu)",
+               id, st, pr);
+        result = MK_S98_FAILED;
+    } else if (!mk_s98_rec_set(id, MK_S98_INSTALL)) {
+        result = MK_S98_FAILED;
+    } else {
+        memset(&ip, 0, sizeof(ip));
+        ip.cbSize = sizeof(ip);
+        if (api.GetDiParams(set, &data, &ip)) {
+            ip.Flags |= MK_DI_ENUMSINGLEINF;
+            inst_copy(ip.DriverPath, inf, sizeof(ip.DriverPath));
+            if (s98api.SetDiParams(set, &data, &ip) &&
+                s98api.Build(set, &data, MK_SPDIT_COMPATDRIVER)) {
+                built = 1;
+                memset(&drv, 0, sizeof(drv));
+                drv.cbSize = sizeof(drv);
+                if (api.CallCi(MK_DIF_SELECTBESTCOMPATDRV, set, &data) &&
+                    s98api.GetSelected(set, &data, &drv)) {
+                    installed = s98api.Install(NULL, set, &data, &drv,
+                                               MK_DIIDFLAG_NOFINISHINSTALLUI,
+                                               &reboot) ? 1 : 0;
+                }
+            }
+        }
+        if (!installed) {
+            err = GetLastError();
+            mk_log("Stor98: %s: Stor98 was not installed (error %lu)", id,
+                   err);
+        } else if (reboot) {
+            mk_log("Stor98: %s: the install asked for a restart of Windows",
+                   id);
+        }
+        if (built) {
+            (void)s98api.DestroyDrv(set, &data, MK_SPDIT_COMPATDRIVER);
+        }
+    }
+    enabled = mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
+    if (!enabled) {
+        mk_log("Stor98: %s: the enable answered %s (error %lu)", id,
+               vetoed ? "a restart" : "a failure", GetLastError());
+    }
+    if (!mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn) ||
+        mk_s98_disabled(st, pr)) {
+        mk_log("Stor98: %s: its enable is not seen; it is owed", id);
+        result = MK_S98_ENABLE;
+    } else if (mk_s98_runs(service, st)) {
+        result = MK_S98_DONE;
+        mk_log("Stor98: %s now runs Stor98", id);
+    } else {
+        if (result == MK_S98_NONE) {
+            result = installed && reboot ? MK_S98_RESTART : MK_S98_FAILED;
+        }
+        mk_log("Stor98: %s reads service %s, status %08lX, problem %lu after "
+               "the switch (%s)", id, service[0] ? service : "(none)", st, pr,
+               mk_s98_rec_text(result));
+    }
+record:
+    if (result == MK_S98_ENABLE || result == MK_S98_BUSY) {
+        (void)mk_s98_rec_set(id, result);
+    } else {
+        mk_s98_finish(id, result, inst_eq(service, "stor98"));
+    }
+out:
+    if (set != INVALID_HANDLE_VALUE) {
+        api.Destroy(set);
+    }
+    mk_unlock(sm);
+    mk_unlock(em);
+    return result;
+}
+
+/* 1 when the enable owed for `id` has been logged this run (so it is
+ * logged once); `mark` records it. */
+static int mk_s98_enable_logged(const char *id, int mark)
+{
+    int i;
+
+    for (i = 0; i < MK_S98_TODO_MAX; i++) {
+        if (inst_eq(s98EnableLogged[i], id)) {
+            return 1;
+        }
+    }
+    if (mark) {
+        for (i = 0; i < MK_S98_TODO_MAX; i++) {
+            if (s98EnableLogged[i][0] == '\0') {
+                inst_copy(s98EnableLogged[i], id, sizeof(s98EnableLogged[i]));
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Every record outside a switch (mk_s98_recover): an enable owed is made
+ * once the devnode is present, the record kept until it is seen; a
+ * "restart" is decided at the first poll after the service's start. At most
+ * MK_S98_TODO_MAX records a poll, from a cursor that goes on where the last
+ * poll stopped, so absent drives owing an enable never starve the others;
+ * "first" lasts until the first pass has read every record. */
+static void mk_s98_recover_all(void)
+{
+    HKEY k;
+    DWORD i;
+    char id[INST_ID_CHARS];
+    char text[32];
+    DWORD in;
+    DWORD tn;
+    DWORD type;
+    char service[64];
+    ULONG st;
+    ULONG pr;
+    DWORD dn;
+    int present;
+    int a;
+    int r;
+    int vetoed;
+    int ok;
+    int disabled;
+    HANDLE em;
+    HANDLE sm;
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    static char todo[MK_S98_TODO_MAX][INST_ID_CHARS];
+    int nTodo = 0;
+    int j;
+    int first;
+    DWORD count = 0;
+    DWORD step;
+    DWORD next;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_KEY_PATH, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        s98FirstDone = 1;
+        s98Cursor = 0;
+        return;
+    }
+    if (RegQueryInfoKeyA(k, NULL, NULL, NULL, NULL, NULL, NULL, &count, NULL,
+                         NULL, NULL, NULL) != ERROR_SUCCESS) {
+        count = 0;
+    }
+    if (s98Cursor >= count) {
+        s98Cursor = 0;
+    }
+    next = 0;                   /* 0: this pass reached the list's end */
+    for (step = 0; step < count; step++) {
+        i = (s98Cursor + step) % count;
+        if (nTodo == MK_S98_TODO_MAX) {
+            next = i;
+            break;
+        }
+        in = sizeof(id) - 1;
+        tn = sizeof(text) - 1;
+        memset(id, 0, sizeof(id));
+        memset(text, 0, sizeof(text));
+        if (RegEnumValueA(k, i, id, &in, NULL, &type, (LPBYTE)text, &tn) !=
+            ERROR_SUCCESS) {
+            continue;
+        }
+        id[sizeof(id) - 1] = '\0';
+        r = type == REG_SZ ? mk_s98_rec_parse(text) : MK_S98_FAILED;
+        if (r == MK_S98_DISABLE || r == MK_S98_INSTALL ||
+            r == MK_S98_ENABLE || (r == MK_S98_RESTART && !s98FirstDone)) {
+            inst_copy(todo[nTodo++], id, sizeof(todo[0]));
+        }
+    }
+    RegCloseKey(k);
+    if (nTodo == 0) {
+        s98FirstDone = 1;
+        s98Cursor = 0;
+        return;
+    }
+    /* The same locks as a switch: nothing beside an installer run. The
+     * first poll's "restart" records wait for the first poll that runs. */
+    if (!mk_s98_lock(&em, &sm)) {
+        return;
+    }
+    first = !s98FirstDone;
+    if (next == 0) {
+        s98FirstDone = 1;
+    }
+    s98Cursor = next;
+    /* The profile and global flags are read as the switch reads them. */
+    (void)mk_s98_api();
+    for (j = 0; j < nTodo; j++) {
+        r = mk_s98_rec_get(todo[j]);
+        if (r == MK_S98_RESTART && !first) {
+            continue;
+        }
+        present = mk_s98_fresh(todo[j], service, sizeof(service), &st, &pr,
+                               &dn);
+        disabled = mk_s98_disabled(st, pr);
+        /* An enable owed is settled only once both flags read clear: a
+         * devnode running on can still carry a disable for its next
+         * start. */
+        if (present && !disabled &&
+            (r == MK_S98_DISABLE || r == MK_S98_INSTALL ||
+             r == MK_S98_ENABLE)) {
+            set = mk_s98_open(todo[j], &data);
+            if (set == INVALID_HANDLE_VALUE) {
+                disabled = 1;
+            } else {
+                disabled = !mk_s98_profile_enabled(set, &data, todo[j]);
+                api.Destroy(set);
+            }
+        }
+        a = mk_s98_recover(r, present, disabled, mk_s98_runs(service, st),
+                           first);
+        if (a == MK_S98_R_ENABLE) {
+            ok = 0;
+            set = mk_s98_open(todo[j], &data);
+            if (set != INVALID_HANDLE_VALUE) {
+                (void)mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
+                ok = mk_s98_fresh(todo[j], service, sizeof(service), &st,
+                                  &pr, &dn) && !mk_s98_disabled(st, pr) &&
+                     mk_s98_profile_enabled(set, &data, todo[j]);
+                api.Destroy(set);
+            }
+            if (!ok) {
+                if (!mk_s98_enable_logged(todo[j], 1)) {
+                    mk_log("Stor98: %s, left disabled by a switch, could not "
+                           "be enabled yet (error %lu); tried again each poll",
+                           todo[j], GetLastError());
+                }
+                if (r != MK_S98_ENABLE) {
+                    (void)mk_s98_rec_set(todo[j], MK_S98_ENABLE);
+                }
+                continue;
+            }
+            mk_log("Stor98: %s, left disabled by a switch, enabled again",
+                   todo[j]);
+            a = mk_s98_recover(MK_S98_ENABLE, 1, 0, mk_s98_runs(service, st),
+                               first);
+        }
+        if (a == MK_S98_R_DONE || a == MK_S98_R_FAIL) {
+            mk_s98_finish(todo[j], a == MK_S98_R_DONE ? MK_S98_DONE
+                                                      : MK_S98_FAILED,
+                          inst_eq(service, "stor98"));
+            mk_log("Stor98: %s recorded %s (service %s)", todo[j],
+                   a == MK_S98_R_DONE ? "done" : "failed",
+                   service[0] ? service : "(none)");
+        }
+    }
+    mk_unlock(sm);
+    mk_unlock(em);
+}
+
+/* The records whose devnode Windows no longer has, even as a phantom. A
+ * record owing an enable stays: its devnode's settings would come back
+ * with it. */
+static void mk_s98_prune(void)
+{
+    HKEY k;
+    DWORD i;
+    DWORD dn;
+    DWORD type;
+    char id[INST_ID_CHARS];
+    char text[32];
+    DWORD in;
+    DWORD tn;
+    int r;
+    static char gone[MK_S98_TODO_MAX][INST_ID_CHARS];
+    int nGone = 0;
+    int j;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_S98_KEY_PATH, 0,
+                      KEY_READ | KEY_SET_VALUE, &k) != ERROR_SUCCESS) {
+        return;
+    }
+    for (i = 0; nGone < MK_S98_TODO_MAX; i++) {
+        in = sizeof(id) - 1;
+        tn = sizeof(text) - 1;
+        memset(text, 0, sizeof(text));
+        if (RegEnumValueA(k, i, id, &in, NULL, &type, (LPBYTE)text, &tn) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        id[sizeof(id) - 1] = '\0';
+        r = type == REG_SZ ? mk_s98_rec_parse(text) : MK_S98_FAILED;
+        if (r != MK_S98_DISABLE && r != MK_S98_INSTALL &&
+            r != MK_S98_ENABLE &&
+            api.Locate(&dn, id, MK_CM_LOCATE_PHANTOM) ==
+                MK_CR_NO_SUCH_DEVNODE) {
+            inst_copy(gone[nGone++], id, sizeof(gone[0]));
+        }
+    }
+    for (j = 0; j < nGone; j++) {
+        if (RegDeleteValueA(k, gone[j]) == ERROR_SUCCESS) {
+            mk_log("Stor98: the record of %s, which Windows no longer has, "
+                   "deleted", gone[j]);
+        }
+    }
+    RegCloseKey(k);
+}
+
+/* The arrival entry of `id` at this whole walk: a devnode not seen at the
+ * walk before starts a new arrival. With `create` 0, only an entry already
+ * there is kept: mk_s98_poll does that for every devnode present before it
+ * looks at the candidates, so an entry not seen at this walk is a devnode
+ * gone, the one a full table gives up. With none to give up (more than
+ * MK_S98_SEEN_MAX devnodes on stornvme at once), -1, and that devnode is
+ * not tried at this walk. -1 too with `create` 0 and no entry. */
+static int mk_s98_seen(const char *id, int create)
+{
+    int i;
+    int old = 0;
+
+    for (i = 0; i < s98SeenCount; i++) {
+        if (inst_eq(s98Seen[i].Id, id)) {
+            if (s98Seen[i].Walk != s98Walk && s98Seen[i].Walk + 1 != s98Walk) {
+                s98Seen[i].Attempts = 0;
+                s98Seen[i].Why = -1;
+            }
+            s98Seen[i].Walk = s98Walk;
+            return i;
+        }
+        if (s98Seen[i].Walk < s98Seen[old].Walk) {
+            old = i;
+        }
+    }
+    if (!create) {
+        return -1;
+    }
+    if (s98SeenCount < MK_S98_SEEN_MAX) {
+        i = s98SeenCount++;
+    } else if (s98Seen[old].Walk != s98Walk) {
+        i = old;
+    } else {
+        return -1;
+    }
+    memset(&s98Seen[i], 0, sizeof(s98Seen[i]));
+    inst_copy(s98Seen[i].Id, id, sizeof(s98Seen[i].Id));
+    s98Seen[i].Walk = s98Walk;
+    s98Seen[i].Why = -1;
+    return i;
+}
+
+/* The nearest ancestor of `node` marked a member: its index, or -1. */
+static int mk_s98_member_node(int node, const int *member)
+{
+    int p;
+    int steps;
+
+    for (p = nodes[node].Parent, steps = 0; p >= 0 && steps < 64;
+         p = nodes[p].Parent, steps++) {
+        if (member[p]) {
+            return p;
+        }
+    }
+    return -1;
+}
+
+/* One poll's switch: records settled first, then at most one devnode
+ * switched; every candidate's arrival entry is kept at every walk, the
+ * ones after the switched one too, so no retry budget or delay restarts
+ * for a drive that stayed. */
+static void mk_s98_poll(const int *prot)
+{
+    static int parent[MK_MAX_NODES];
+    static int member[MK_MAX_NODES];
+    static int owner[MK_MAX_NODES];
+    static INST_U32 bdf[MK_MAX_NODES];
+    char inf[MAX_PATH];
+    int policy;
+    int i;
+    int k;
+    int m;
+    INST_U32 p;
+    int done = 0;
+
+    s98Walk++;
+    policy = mk_s98_policy(inf, sizeof(inf));
+    /* An enable owed is made whatever the value says now. */
+    mk_s98_recover_all();
+    for (i = 0; i < nodeCount; i++) {
+        parent[i] = nodes[i].Parent;
+        member[i] = 0;
+        owner[i] = -1;
+        bdf[i] = 0;
+    }
+    for (i = 0; i < nhiCount; i++) {
+        if (!nhis[i].Verifiable) {
+            continue;
+        }
+        for (p = 0; p < nhis[i].Q.Ports && p < 4; p++) {
+            if (mk_member_active(&nhis[i].Q, nhis[i].Q.Port[p])) {
+                k = mk_find_loc(nhis[i].Q.Port[p]);
+                if (k >= 0) {
+                    member[k] = 1;
+                    owner[k] = i;
+                    bdf[k] = nhis[i].Q.Port[p];
+                }
+            }
+        }
+    }
+    /* Every devnode present keeps its arrival, a candidate or not (its
+     * properties unreadable at this walk, say). */
+    for (i = 0; i < nodeCount && s98SeenCount > 0; i++) {
+        (void)mk_s98_seen(nodes[i].Id, 0);
+    }
+    for (i = 0; i < nodeCount; i++) {
+        MK_S98_IN in;
+        int s;
+        int w;
+        int r;
+        memset(&in, 0, sizeof(in));
+        in.IsPci = mk_is_pci(&nodes[i]);
+        in.Nvme = inst_msz_has(nodes[i].Compat, nodes[i].CompatBytes,
+                               MK_S98_CC);
+        in.Service = nodes[i].ServiceBad ? NULL : nodes[i].Service;
+        w = mk_s98_wanted(&in);
+        if (w == MK_S98_W_CLASS || w == MK_S98_W_SERVICE) {
+            continue;
+        }
+        s = mk_s98_seen(nodes[i].Id, 1);
+        if (s < 0 || done) {
+            continue;
+        }
+        in.PolicyOk = policy;
+        in.WalkWhole = walkBad == 0;
+        in.StatusOk = nodes[i].StatusOk;
+        in.Started = (nodes[i].Status & MK_DN_STARTED) != 0;
+        in.Problem = (nodes[i].Status & MK_DN_HAS_PROBLEM) != 0;
+        in.Below = mk_s98_below(parent, nodeCount, i, member);
+        in.Protected = prot[i];
+        in.Record = mk_s98_rec_get(nodes[i].Id);
+        in.Attempts = s98Seen[s].Attempts;
+        in.SinceMs = GetTickCount() - s98Seen[s].At;
+        in.InstallPending = 0;
+        w = mk_s98_wanted(&in);
+        if (w == MK_S98_GO) {
+            in.InstallPending = !mk_no_install_pending();
+            w = mk_s98_wanted(&in);
+        }
+        m = w == MK_S98_GO ? mk_s98_member_node(i, member) : -1;
+        if (w == MK_S98_GO && (m < 0 || owner[m] < 0)) {
+            w = MK_S98_W_TUNNEL;
+        }
+        if (w != MK_S98_GO) {
+            if (w != s98Seen[s].Why && w != MK_S98_W_POLICY) {
+                mk_log("Stor98: %s on stornvme: %s", nodes[i].Id,
+                       mk_s98_why_text(w));
+            }
+            s98Seen[s].Why = w;
+            continue;
+        }
+        if (!mk_s98_api()) {
+            return;
+        }
+        s98Seen[s].Attempts++;
+        s98Seen[s].At = GetTickCount();
+        s98Seen[s].Why = -1;
+        r = mk_s98_switch(nodes[i].Id, &nhis[owner[m]], bdf[m], inf);
+        if (r == MK_S98_NONE) {
+            s98Seen[s].Attempts--;  /* nothing was attempted */
+        }
+        done = 1;
+    }
+}
+
 /* One poll; returns the milliseconds to the next. */
 static DWORD mk_poll(void)
 {
@@ -1985,6 +2961,7 @@ static DWORD mk_poll(void)
     }
     if (!inventoryDone || GetTickCount() - lastInventory >= MK_INVENTORY_MS) {
         mk_inventory(inventoryDone);
+        mk_s98_prune();
         inventoryDone = 1;
         lastInventory = GetTickCount();
     }
@@ -1998,6 +2975,7 @@ static DWORD mk_poll(void)
     }
     mk_entries(prot);
     mk_reconcile_all();
+    mk_s98_poll(prot);
     return mk_poll_ms(any);
 }
 
