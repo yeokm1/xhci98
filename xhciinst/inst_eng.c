@@ -1925,12 +1925,15 @@ static void print_plan(void)
                 inst_pci_vendev(first_hw(d), &vd) &&
                 inst_xhci_name(vd & 0xFFFFUL, vd >> 16, canon,
                                sizeof(canon)) == 1) {
-                int hasRec = names_rec_get(d->Id, rec, sizeof(rec));
-                int a = inst_name_action(1, canon, d->Friendly,
+                /* Ours after the run: xhci98's now, or installed by it. */
+                int ours = inst_eq(d->Service, "xhci98") ||
+                           (d->Runs && !d->Refused);
+                int hasRec = names_rec_get(d->Id, rec, sizeof(rec)) == 1;
+                int a = inst_name_action(ours, canon, d->Friendly,
                                          hasRec ? rec : NULL, &keep);
                 if (a == INST_NAME_SET) {
                     out("    Device Manager name: %s\n", canon);
-                } else if (!keep) {
+                } else if (ours && !keep) {
                     out("    Device Manager name: %s (the name it was given "
                         "stays)\n", d->Friendly);
                 }
@@ -9587,11 +9590,29 @@ static int find_in_set(HDEVINFO set, const char *id, SP_DEVINFO_DATA *data)
 #define INST_NAMES_KEY      INST_DIR_KEY "\\Names"
 #define INST_FNAME_CHARS     128
 
-/* 1 read (buf the name written), 0 none. */
+/* 1 read (buf the name written), 0 none (no record key, or no value for
+ * the instance), -1 unreadable: never taken for "none". */
 static int names_rec_get(const char *id, char *buf, DWORD cap)
 {
-    return reg_text(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, id, buf, cap, NULL) &&
-           buf[0] != '\0';
+    HKEY k;
+    LONG e;
+    int r;
+
+    buf[0] = '\0';
+    e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0, KEY_READ, &k);
+    if (e == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (e != ERROR_SUCCESS) {
+        return -1;
+    }
+    RegCloseKey(k);
+    r = reg_text3(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, id, buf, cap);
+    if (r <= 0) {
+        buf[0] = '\0';
+        return r;
+    }
+    return buf[0] != '\0' ? 1 : 0;
 }
 
 static int names_rec_put(const char *id, const char *name)
@@ -9758,7 +9779,14 @@ static int names_one(HDEVINFO set, const char *id, int ours,
     int hasRec = names_rec_get(id, rec, sizeof(rec));
     int keep;
     int a;
-    int r = names_now(set, id, now, sizeof(now));
+    int r;
+
+    if (hasRec < 0) {
+        out("The record of %s's name could not be read: its name is left as "
+            "it is.\n", id);
+        return 0;
+    }
+    r = names_now(set, id, now, sizeof(now));
 
     if (r == 0) {
         /* No devnode any more: nothing of ours is left to clear. */
@@ -9854,7 +9882,7 @@ static int names_reconcile(int uninstall)
             continue;
         }
         canon = names_canon(d, canonBuf, sizeof(canonBuf));
-        if (canon == NULL && !names_rec_get(d->Id, rec, sizeof(rec))) {
+        if (canon == NULL && names_rec_get(d->Id, rec, sizeof(rec)) == 0) {
             continue;
         }
         if (!names_one(set, d->Id,
@@ -9867,9 +9895,21 @@ static int names_reconcile(int uninstall)
     }
     /* A recorded instance that is no controller now, or not listed: the
      * name this installer wrote goes. The values are read first, then
-     * acted on, since acting deletes them. */
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0, KEY_READ, &k) ==
-        ERROR_SUCCESS) {
+     * acted on, since acting deletes them. A record key that is there and
+     * cannot be read is no empty record. */
+    {
+        LONG e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_NAMES_KEY, 0,
+                               KEY_READ, &k);
+        if (e != ERROR_SUCCESS && e != ERROR_FILE_NOT_FOUND) {
+            out("HKLM\\%s could not be read (error %ld).\n", INST_NAMES_KEY,
+                (long)e);
+            whole = 0;
+        }
+        if (e != ERROR_SUCCESS) {
+            k = NULL;
+        }
+    }
+    if (k != NULL) {
         DWORD v;
         for (v = 0;; v++) {
             char name[INST_ID_CHARS];
