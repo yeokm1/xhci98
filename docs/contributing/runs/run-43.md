@@ -3499,6 +3499,35 @@ screenshots of the notification area every 4 to 10 s.
 
 Design record 25 section 7.7 item 9.
 
+## 43.68 XHCITR's balloon click on Windows 2000 (2026-10-23)
+
+43.28's finding 3: on 2000 a click on the "can run faster" balloon closed
+it and opened no list window; the icon menu's first line did.
+
+**Vehicle.** Development host A, QEMU 11.1.0 (scoop, stock), TCG,
+`pc,acpi=off`, `pentium3,-apic`, one vCPU, 512 MB; Windows 2000 SP4
+(`vm\t26\win2k-clean`, an overlay); `qemu-xhci` `p2=4,p3=2`, the tablet
+on port 1, the Full Speed hub on port 4 and new sticks behind it; the
+`p43-66` package at `401d49fb` installed with `INSTALL /console /yes
+/nopause` (controller and root hub started, no restart).
+
+**Readings.**
+
+1. A build of `bcdbe4b4` logging every `WM_TRAYICON` message: the
+   balloon shown, clicked (the click found by the balloon's colour in a
+   screenshot): it closed, no window, and **no message at all** reached
+   the tool - no `NIN_BALLOONSHOW` (`WM_USER` + 2) when it appeared, no
+   `NIN_BALLOONUSERCLICK` (+ 5) for the click - while a right click on
+   the icon arrived as `0x204`, `0x205` and `WM_CONTEXTMENU` (`0x7B`),
+   so `NIM_SETVERSION` 3 had taken. 2000's shell does not report
+   balloons; the click cannot be seen.
+2. `046a8996`: the balloon reads "... Click the icon for what to try.";
+   the icon's left click opens the menu, "1 USB device can run
+   faster..." first, which opened the list window "A USB device can run
+   faster" with the stick's entry. **Passes.**
+
+Design record 25 section 7.7 item 6.
+
 ## 43.53 - A Request to a Departed Device That Never Completes
 
 Roadmap-usb4 task 43.53, opened by the owner on 2026-10-22 from 43.49's
