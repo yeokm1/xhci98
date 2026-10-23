@@ -78,7 +78,7 @@ function Get-InfFault {
             $res = [regex]::Replace($line, '%([^%]+)%', { param($x) $k = $x.Groups[1].Value.ToLowerInvariant(); if ($strings.ContainsKey($k)) { $strings[$k] } else { $x.Value } })
             if ($res -match '(?i)DmaRemappingCompatible') { $named += , @($section, $res) }
         }
-        if ($named.Count -ne 1 -or $named[0][0] -ne 'Stor98_ServiceDelReg' -or ($named[0][1] -replace '\s', '') -cne 'HKR,"Parameters","DmaRemappingCompatible"') {
+        if ($named.Count -ne 1 -or $named[0][0] -ne 'Stor98_ServiceDelReg' -or $named[0][1] -cnotmatch '^HKR[ \t]*,[ \t]*"Parameters"[ \t]*,[ \t]*"DmaRemappingCompatible"$') {
             return "it names DmaRemappingCompatible other than once, in [Stor98_ServiceDelReg] as HKR,`"Parameters`",`"DmaRemappingCompatible`" (with the value Windows 10 x64 does not start Stor98, docs/PLAN.md 2026-10-23)"
         }
         # And that DelReg is the service-install section's own: anywhere else
@@ -151,6 +151,8 @@ try {
             @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",`"DmaRemappingCompatible`",%REG_DWORD%,0x00000001`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 1" },
             @{ T = $b64.Replace("[Stor98_EventLog]", "HKR, Parameters, DmaRemappingCompatible, 0x00010001, 2`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 2, spaced" },
             @{ T = $b64.Replace("DelReg=Stor98_ServiceDelReg`r`n", ""); Ok = $false; Why = "no DelReg for DmaRemappingCompatible" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"", "HKR,`"Para meters`",`"DmaRemappingCompatible`""); Ok = $false; Why = "a DelReg of another subkey (a space inside the quotes)" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"", "HKR, `"Parameters`" , `"DmaRemappingCompatible`""); Ok = $true; Why = "spaces around the DelReg's commas" },
             @{ T = $b64.Replace("[Stor98_EventLog]", "HKLM,System\CurrentControlSet\Services\stor98\Parameters,DmaRemappingCompatible,0x00010001,1`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible through HKLM" },
             @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",%Dmr%,%REG_DWORD%,1`r`n`r`n[Stor98_EventLog]").Replace("[Strings]", "[Strings]`r`nDmr=`"DmaRemappingCompatible`""); Ok = $false; Why = "DmaRemappingCompatible through a [Strings] token" },
             @{ T = $b64.Replace("AddReg=Stor98_ServiceReg`r`nDelReg=Stor98_ServiceDelReg`r`n", "AddReg=Stor98_ServiceReg`r`n").Replace("CopyFiles=Stor98_CopyFiles", "CopyFiles=Stor98_CopyFiles`r`nDelReg=Stor98_ServiceDelReg"); Ok = $false; Why = "the DelReg in the device's install section, not the service's" },
