@@ -8,32 +8,6 @@
 #include "tr_red.h"
 #include "../src/cm/cm_status.h"
 
-/* cm_live.h's states, as tr_core.c restates them: that header cannot be
- * included by a tool. */
-#define TR_LIVE_SUSPECT          2UL
-#define TR_LIVE_ABSENT           3UL
-#define TR_LIVE_CONFIG_LOST      4UL
-#define TR_LIVE_RECOVERING       5UL
-#define TR_LIVE_RECOVERY_FAILED  6UL
-#define TR_LIVE_CONTAINED        7UL
-#define TR_LIVE_PREPARING        9UL
-
-int tr_red_lost(TR_U32 live)
-{
-    switch (live) {
-    case TR_LIVE_SUSPECT:
-    case TR_LIVE_ABSENT:
-    case TR_LIVE_CONFIG_LOST:
-    case TR_LIVE_RECOVERING:
-    case TR_LIVE_RECOVERY_FAILED:
-    case TR_LIVE_CONTAINED:
-    case TR_LIVE_PREPARING:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
 static int trRedWaiting(const TR_SROUTER *r)
 {
     return r->Kind == CM_ST_KIND_ICM &&
@@ -63,7 +37,8 @@ void tr_red_state(const TR_RED_IN *in, TR_RED *out)
     out->Nhi = 0;
     if (s != NULL) {
         for (i = 0; i < s->NhiCount && i < TR_SNAP_NHI; i++) {
-            if (tr_red_lost(s->Live[i]) ||
+            /* The "stopped answering" balloon's test (section 7.2). */
+            if (tr_live_lost(s->Live[i]) ||
                 (in->Stage != NULL && in->Stage[i] == CM_ST_STAGE_FAILED)) {
                 trRedHold(out, TR_RED_HC, i, 1);
             }

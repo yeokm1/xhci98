@@ -1,0 +1,110 @@
+/*
+ * xhciperf.rc - the resources of XHCIPERF.EXE and XHCIPF64.EXE (design
+ * record 29 sections 5.1 and 10.3): the icon drawn for this project, the
+ * version from src\xhci_version.h, the menu, the More and About dialogs,
+ * and the manifest (xhciperf.manifest, resource 1 of type 24).
+ */
+
+#include <windows.h>
+#include "../src/xhci_version.h"
+#include "pf_res.h"
+
+IDI_APP ICON "xhciperf.ico"
+
+1 24 "xhciperf.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     XHCI_VER_CSV
+PRODUCTVERSION  XHCI_VER_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS__WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Yeo Kheng Meng\0"
+            VALUE "FileDescription",  "xHCI98 Disk Benchmark\0"
+            VALUE "FileVersion",      XHCI_VER_STR "\0"
+            VALUE "InternalName",     "xhciperf\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "OriginalFilename", "XHCIPERF.EXE\0"
+            VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
+            VALUE "ProductVersion",   XHCI_VER_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDM_MAIN MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&Save results...",              IDM_SAVE
+        MENUITEM "&Compare with saved results...", IDM_COMPARE
+        MENUITEM "&Keep these settings",          IDM_SAVEPRESET
+        MENUITEM SEPARATOR
+        MENUITEM "E&xit",                         IDM_EXIT
+    END
+    POPUP "&Edit"
+    BEGIN
+        MENUITEM "&Copy results",                 IDM_COPY
+        MENUITEM "Copy the current &page",        IDM_COPYPAGE
+    END
+    POPUP "&View"
+    BEGIN
+        MENUITEM "MB/s (1,000,000 bytes)",        IDM_UNIT_MB
+        MENUITEM "MiB/s (1,048,576 bytes)",       IDM_UNIT_MIB
+        MENUITEM SEPARATOR
+        MENUITEM "Show the &best pass",           IDM_SHOW_BEST
+        MENUITEM "Show the &mean",                IDM_SHOW_MEAN
+        MENUITEM "Show the m&edian",              IDM_SHOW_MEDIAN
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&Readme",                       IDM_README
+        MENUITEM "&About",                        IDM_ABOUT
+    END
+END
+
+IDD_MORE DIALOG 0, 0, 260, 196
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "More settings"
+FONT 8, "MS Sans Serif"
+BEGIN
+    AUTOCHECKBOX    "Run a size sweep instead of the fixed tests", IDC_M_SWEEP, 8, 8, 240, 10
+    LTEXT           "Sweep sizes from", -1, 8, 25, 60, 8
+    COMBOBOX        IDC_M_SWMIN, 70, 23, 50, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "to", -1, 126, 25, 10, 8
+    COMBOBOX        IDC_M_SWMAX, 140, 23, 50, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Total per size (MiB, 0: the file):", -1, 8, 43, 110, 8
+    EDITTEXT        IDC_M_SWTOTAL, 120, 41, 50, 12, ES_NUMBER
+    AUTOCHECKBOX    "Time each size instead (the measuring time)", IDC_M_SWTIMED, 8, 58, 240, 10
+    LTEXT           "Pause between tests:", -1, 8, 76, 80, 8
+    COMBOBOX        IDC_M_PAUSE, 90, 74, 50, 100, CBS_DROPDOWNLIST | WS_TABSTOP
+    AUTOCHECKBOX    "Warm-up: each test once, untimed, first", IDC_M_WARMUP, 8, 92, 240, 10
+    AUTOCHECKBOX    "Cached writes: include the flush in the write time", IDC_M_FLUSH, 8, 106, 240, 10
+    AUTOCHECKBOX    "Check the data during the timed read", IDC_M_VDURING, 8, 120, 240, 10
+    AUTOCHECKBOX    "Verify the whole file at the end", IDC_M_VEND, 8, 134, 240, 10
+    AUTOCHECKBOX    "Stop on a data error", IDC_M_STOPERR, 8, 148, 240, 10
+    LTEXT           "Seed:", -1, 8, 164, 30, 8
+    EDITTEXT        IDC_M_SEED, 40, 162, 70, 12, ES_NUMBER
+    DEFPUSHBUTTON   "OK", IDOK, 146, 178, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 202, 178, 50, 14
+END
+
+IDD_ABOUT DIALOG 0, 0, 240, 92
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "About the xHCI98 Disk Benchmark"
+FONT 8, "MS Sans Serif"
+BEGIN
+    ICON            IDI_APP, IDC_ABOUT_ICON, 8, 8, 21, 20
+    LTEXT           "", IDC_ABOUT_TEXT, 36, 8, 196, 60
+    DEFPUSHBUTTON   "OK", IDOK, 182, 72, 50, 14
+END

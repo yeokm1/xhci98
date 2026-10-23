@@ -38,11 +38,15 @@
 #define IDM_V_AUTO              40026
 #define IDM_LOGIN               40027
 #define IDM_LEVEL               40028
+#define IDM_RMWARN              40029
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031
+#define IDM_BENCH               40032   /* the disk benchmark (record 29 section 11) */
 #define IDM_ABOUT               40040
 #define IDM_OPEN                40050
-#define IDM_RED                 40051   /* the tray menu's red item */
+#define IDM_FAST                40051   /* the notice on or off          */
+#define IDM_FAST_SHOW           40052   /* the devices that can run faster */
+#define IDM_RED                 40053   /* the tray menu red item */
 #define IDM_UNIT0               41000   /* 41000..41063: the tray's units */
 
 #endif /* TR_RES_H */

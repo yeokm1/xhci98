@@ -1,9 +1,16 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 18, 2026-10-22 (revision 18, the red tray icon,
+Status: revision 19, 2026-10-22 (revision 19, the red tray icon,
 roadmap-usb4 task 43.57: section 7.2.1, with sections 7.1, 9, 10, 11
-and 12, and record 13 section 8.12's failed flag); revision 15,
-2026-10-19 (revision 15, Windows 2000's USB disk
+and 12, and record 13 section 8.12's failed flag);
+revision 18, 2026-10-22 (revision 18, the "can run faster"
+notice, roadmap-usb4 tasks 43.27 and 43.30, with the owner's decisions
+of 2026-10-22: section 7.7, with sections 8, 10 and 11; record 13 section
+8.4.1 is its driver half);
+revision 17, 2026-10-22 (revision 17, the 98 SE pop-up,
+roadmap-usb4 task 43.55: section 16, with sections 7.2, 11 and 12);
+revision 16, 2026-10-21 (revision 16, the unexpected-removal
+notice, roadmap-usb4 task 43.21, below; revision 15, Windows 2000's USB disk
 class and its stopped mark, roadmap-usb4 task 42-A.28: sections 6.5 and
 14; revision 14, XHCISNAP's reading
 moved here, below; revision 13, the drivers' logging level, below;
@@ -15,7 +22,7 @@ tree's labels (end of section 7.4). Revision 9 adds the drivers' logs
 (below). Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
 decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
-Revision 6 was reviewed and revised five times early on 2026-10-16
+Revision 6 was reviewed and revised early on 2026-10-16
 (`63cbfdbe`); the code is written against both. Revision 8, the same day, adds the install
 directory (see below). Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
@@ -85,6 +92,16 @@ and `/report` (section 15). XHCISNAP.EXE and its SNAPON.BAT, SNAPGET.BAT
 and SNAPOFF.BAT leave the package. Sections 4.6, 4.8 and 12 change with
 it.
 
+Revision 16, 2026-10-21 (roadmap-usb4 task 43.21, which was UNPL.1 and
+earlier 42-A.8; the owner's request behind decision T9, and the owner's
+decision of 2026-10-18 that it is NT-only): the tray says when a
+Thunderbolt or USB4 unit was removed unexpectedly - Windows surprise-removed
+a running device of it - from a count the child filter keeps, published in
+the query's answer as its version 2 (section 7.6). The notice says the
+unit was removed unexpectedly, never that data was lost. 98 SE and ME
+have no child filter and show such a unit as disconnected, as before.
+Sections 4.3, 4.4, 7.2, 10, 11 and 12 change with it.
+
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
 authentication material.
@@ -128,7 +145,9 @@ authentication material.
 - A notification-area (tray) icon: a left click lists the units to eject,
   a double click opens the window, balloons announce plug, approval,
   disconnection and the outcome of an eject where the shell has balloons,
-  the tooltip carries the last event where it has not; it starts at
+  the tooltip carries the last event where it has not, and on 98 SE the
+  tool draws a pop-up of its own in the balloon's place (section 16,
+  revision 17); it starts at
   login (owner).
 - Runs as the logged-on user, with no administrator rights and no UAC
   prompt at start (owner); an action that needs rights asks for them then.
@@ -348,7 +367,16 @@ branch, marked "(behind <router name>)".
 - **The NHI's node** lists the NHI, each tunnel port (with its source
   and whether it is active), and below each port the functions found
   there, indented by bridge depth; on 98 SE and ME "Not read on this
-  system" stands for them (section 4.7). **An xhci98 controller's node**
+  system" stands for them (section 4.7) where the driver does not read
+  below the port (`CM_QP_F_BELOW_OS`, with its reason), and since
+  roadmap-usb4 task 43.63 a port the driver walked with nothing below it
+  is "None found." there as on NT (a 98 SE or ME driver has read below
+  the port since task 42-A.14): the answer says so by
+  `CM_QP_F_UNWALKED_SAID`, under which a member whose own bus numbers the
+  walk did not admit has its own entry ("Not walked: PCI.VXD does not
+  read the port's bus numbers ..."); from an older driver that walks,
+  an empty port is "None listed", and in a cut-short answer
+  (`CM_QP_F_TRUNCATED`) too, on every system. **An xhci98 controller's node**
   shows the controller.
 - **Text.** Every line within 79 columns; the host suite holds it on a
   worst case. The constants are `tr_pci.c`'s own, each cited to the PCI
@@ -421,7 +449,9 @@ then the status record byte for byte as `CmStatusBuild` builds it (record
 24 section 3.1), one 32-byte extension per router entry (link rate per
 lane, width, the lane adapter's link state and speed code as read, the
 IDs the connection manager holds for a router the record has none for,
-flags), then the instance ID.
+flags), then the instance ID. Since revision 16 the answer is version 2:
+the same header, then section 7.6's removal block, then the record, the
+extensions and the instance ID as before, each found by its offset.
 
 - **Publication.** After each pass the connection-manager thread builds
   the whole answer on its own thread and copies it into the query
@@ -453,7 +483,9 @@ flags), then the instance ID.
 
 The registry record (`XhciCmStatus`, version 1), the ask and echo, and
 XHCIINST's use of them stay exactly as record 24 has them. Revision 9
-leaves the query's answer (`XCMQ`, version 1) as it is.
+leaves the query's answer (`XCMQ`, version 1) as it is. Revision 16 makes
+it version 2 (section 7.6); the registry record stays version 1 and
+XHCIINST, which never reads the query, is untouched.
 
 ### 4.5 `IOCTL_XHCICM_LOG` (revision 9)
 
@@ -648,8 +680,12 @@ header type and bus numbers its walk needs.
   and touches nothing of the device. Where the walk is not made, each
   member keeps one `CM_QP_S_NOT_READ_OS` entry with its reason in
   `CM_QP_E_INFO` (`CM_QP_NR_*`: no worker, the worker busy, `PCI.VXD`'s
-  guard refused, the controller lost; 0 from a driver before it), and
-  the tool says which.
+  guard refused, the controller lost, and since roadmap-usb4 task 43.63
+  the member's own bus numbers not admitted by the rule above; 0 from a
+  driver before it), and the tool says which. Where the walk is made and
+  finds nothing, the port is "None found." as on NT; where the answer
+  was cut short (`CM_QP_F_TRUNCATED`) a port with nothing listed is said
+  as "None listed" rather than empty (task 43.63, on every system).
 - **No kernel address.** The answer holds configuration space and the
   driver's own counts. The BARs and bridge windows are bus addresses,
   shown by the owner's request; they are the ranges Device Manager's
@@ -757,7 +793,9 @@ record.
    device", the unit and the devnodes that will stop as the tree last
    showed them, OK / Cancel (from the tray menu the selection is the
    request and the dialog follows it), with record 24 section 5.4's
-   reminder where it gives one (its revision 8, roadmap-usb4 task 43.8).
+   reminder where it gives one (its revision 8, roadmap-usb4 task 43.8),
+   as one paragraph the box wraps: the console's line break in the
+   shared text is a space there (`tr_put_box`, task 43.63).
    Nothing below waits on the user.
 2. Take the shared eject mutex (section 6.3). Query (Q1). An answer is
    eligible when the record's stage is active, the inert and stopping
@@ -784,7 +822,10 @@ record.
    record 21 section 7.2, the 9x half; the code is 42-A.13) a unit's
    eject on 98 SE and ME is asked of the connection manager through
    record 24's ask and result values instead, the two calls staying for
-   the plain USB devices of section 6.5. Never forced, never
+   the plain USB devices of section 6.5 (as built in task 43.18 under Q3's
+   epoch and content generation, which Q4 just confirmed; the port's
+   details say "Blocked" while the status record's blocked bit for it is
+   set, record 24 section 3.1). Never forced, never
    `DIF_REMOVE`, one unit at a
    time. Since revision 11 the not-removable fallback is
    `CM_Query_And_Remove_SubTreeW`, decided by `inst_eject_nt_step` as
@@ -794,8 +835,35 @@ record.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
    5.4 with every fact it needs), captured as text; on a veto, the vetoing
-   device and the reason.
-8. Release the mutex, then show the result: a message box from the
+   device and the reason. The text is shown with its wrapped lines
+   joined (`tr_join_lines`, paragraph breaks kept), so the advice laid
+   out for the console ("Other devices behind the same Thunderbolt port
+   ...", "The device has started again ...") is one paragraph in the box
+   or balloon (held by a host vector, task 43.63). The tunnel watch (2026-10-22, from the 43.45
+   legs; `tr_eject_watch_kind` in `tr_core.c`) depends on who confirms
+   the eject to the connection manager (record 21 section 7.4). An
+   administrator's run confirms it itself and watches 10 s, as XHCIINST
+   does; so does the not-removable route, which nothing confirms. A run
+   without administrator rights on XP and later, the mark service not
+   read as stopped or absent, leaves the confirmation to the service's
+   next pass: the service writes it under this mutex, so the tool
+   releases the mutex here, before the watch, and watches 10 s plus
+   twice the service's idle period (`mk_poll_ms(0)`, 10 s), 30 s. That
+   is a budget, not a bound the service promises: its pass needs the NHI
+   verifiable, the unit's departure pending and Windows holding it for
+   eject (problem 47), and a walk has no time limit. If the tunnel is
+   still up it says "The PCIe tunnel has not been seen closed yet. It
+   closes if the xHCI98 mark service confirms the eject to the
+   Thunderbolt driver, which the service does in the background; an
+   eject made as an administrator is confirmed by this tool itself."
+   The watch ends early at the installer's quit event (section 7.1), as
+   30 s outlasts the installer's 15 s wait for the tool to end; no
+   answer is shown then. Without administrator rights on 2000, or with
+   the service stopped or absent, nothing confirms it: 10 s, then "The
+   PCIe tunnel stays up until the device is unplugged, because the eject
+   was not confirmed to the Thunderbolt driver; an eject made as an
+   administrator is confirmed by this tool itself."
+8. Release the mutex (if step 7 has not), then show the result: a message box from the
    window or a balloon (tooltip on 98 SE) from the tray.
 
 ### 6.3 The shared mutex
@@ -808,7 +876,8 @@ access to SYSTEM and Administrators, so an unelevated tray and an
 elevated XHCIINST can both take it. An abandoned mutex counts as taken
 (the transaction revalidates everything anyway). A wait longer than 10 s
 refuses ("another program is removing a device"). It is held only for
-one transaction, never while waiting for elevation.
+one transaction, never while waiting for elevation, and not through a
+tunnel watch that waits for the mark service (section 6.2 step 7).
 
 ### 6.4 Rights
 
@@ -1107,7 +1176,7 @@ XHCIINST needs nothing new: it runs as an administrator (record 24 section
   About, Exit.
 - **Tooltip**: "xHCI98 USB Tree: N Thunderbolt/USB4 devices" and, where
   the shell has no balloons, the last event (at most 63 characters).
-  While the icon is red (revision 18), what is wrong instead (section
+  While the icon is red (revision 19), what is wrong instead (section
   7.2.1), and the left-click menu and the double click lead to it.
 - A hidden top-level window (class `Xhci98TrTray`) owns the icon, so the
   `TaskbarCreated` broadcast reaches it and the icon is re-added after an
@@ -1141,7 +1210,19 @@ A new epoch is a new set of devices.
 | an ICM device's approval becomes pending or unanswered | "<name> is waiting to be approved." |
 | an ICM device's approval becomes failed | "<name> could not be approved." |
 | a router entry leaves | "<name> was disconnected." |
-| the liveness state leaves ACTIVE | "The Thunderbolt/USB4 controller stopped answering." |
+| the liveness state goes from ACTIVE to a loss state, or the record's stage from active to failed | "The Thunderbolt/USB4 controller stopped answering." |
+| the NHI's unexpected-removal count rises (revision 16, section 7.6; NT) | "A Thunderbolt or USB4 device was removed unexpectedly." |
+
+A loss state (`tr_live_lost`) is suspect, absent, configuration lost,
+recovering, recovery failed, contained or preparing. OFF ("not
+monitored") is not one: the connection manager disarms the monitor at
+every sleep and stop (`CmLiveDisarm`), so until 2026-10-22 the tray
+raised this balloon after every sleep and hibernate with nothing failed
+(the 43.45 legs, 7 x86). Revoked (a PnP stop or removal) and a value
+the tool does not know are not loss states either. A resume that fails
+(`cm_power.c`) leaves the liveness OFF and sets the stage failed, so the
+stage's move from active to failed raises the same balloon, once for the
+NHI however many of the two changes one sample shows.
 
 The approval events read the ICM's approval states only: a USB4 entry's
 approval word folds held, failed and unsupported together and an eject
@@ -1155,16 +1236,19 @@ without the child filter (record 21 section 7.4, record 24 section 5.2),
 and another program can stop a unit and the user unplug it between two
 samples. So the tray says "disconnected", never "unplugged while in use"
 (decision T9). The outcome of an eject comes from the transaction
-(section 6.2 step 7), not from this diff.
+(section 6.2 step 7), not from this diff. The unexpected-removal notice of
+revision 16 is no reading of this diff either: it comes from a count the
+driver keeps of what Windows itself did to a running device (section 7.6).
 
 **Balloons.** Where `shell32.dll` is version 5.0 or later (2000, ME, XP
 and later) the tray uses the version 2 `NOTIFYICONDATAA` size with
 `NIF_INFO` balloons and `NIM_SETVERSION` 3; on 98 SE (4.72) the version 1
-size and the tooltip. The structures are declared in `tr_core.h` for the
+size and the tooltip, and since revision 17 a pop-up the tool draws
+itself for each notice that gets a balloon elsewhere (section 16). The structures are declared in `tr_core.h` for the
 MSVC 6.0 build with size checks (88 and 488 bytes, ANSI, x86); the x64
 build uses the WDK's header.
 
-### 7.2.1 The red icon (revision 18, task 43.57)
+### 7.2.1 The red icon (revision 19, task 43.57)
 
 Roadmap-usb4 43.57 (owner, 2026-10-22): the tray's icon turns red while
 any of four conditions holds, and returns to its usual icon when none
@@ -1182,7 +1266,7 @@ a disconnection or an eject.
    |---|---|---|
    | `TR_RED_HC` | a controller has stopped answering: an NHI whose liveness is a loss state or whose record's stage is failed; an `xhci98.sys` controller failed for good | the poll's snapshot (section 7.2); the controller's query answer (item 3) |
    | `TR_RED_WAIT` | a Thunderbolt or USB4 device is waiting to be approved | the poll's snapshot |
-   | `TR_RED_SLOW3` | a USB 3 (SuperSpeed-capable) device runs at High, Full or Low Speed | 43.27's set (section 7.6), item 2 |
+   | `TR_RED_SLOW3` | a USB 3 (SuperSpeed-capable) device runs at High, Full or Low Speed | 43.27's set (section 7.7), item 2 |
    | `TR_RED_SLOW2` | a High Speed-capable device runs at Full Speed because the hub it is behind is a Full Speed hub | the same, item 2 |
 
    **A controller.** For an NHI the test is the one the "stopped
@@ -1205,38 +1289,23 @@ a disconnection or an eject.
    does not count either: nothing the user does in the tool approves it.
 
 2. **Conditions 1 and 2 are 43.27's reading, consumed, not made again.**
-   43.27's `tr_fast_check` (section 7.6 item 1) already decides which
-   ports hold a USB 3 device running below SuperSpeed; the red icon takes
-   its set as it stands. Its kinds map as follows: `TR_FW_PORT2`,
-   `TR_FW_HUB2`, `TR_FW_HUB1` and `TR_FW_HUB3` are `TR_RED_SLOW3`;
-   `TR_FW_LINK` (a SuperSpeedPlus device at 5 Gbit/s) is **not** red - it
-   runs at USB 3 speed, which the owner's condition names, and section
-   7.6 item 8 shows it may have no faster port to go to - and it keeps
-   43.27's balloon and list.
-   Condition 2 is not in 43.27's set, and is added to it as a sixth kind,
-   `TR_FW_FSHUB`: a port of an `xhci98.sys` controller holding a
-   connected device that is not a hub, running at Full Speed, behind a
-   hub that itself runs at Full Speed, whose device descriptor's `bcdUSB`
-   is 0x0200 or more, and that answers a request for its device
-   qualifier descriptor (`GET_DESCRIPTOR_FROM_NODE_CONNECTION`, `wValue`
-   0600h, 10 bytes; the door forwards it to the device, record 13 section
-   8.11) with 10 bytes whose type byte is 6. USB 2.0 section 9.6.2: a
-   High Speed-capable device has a device qualifier, and a Full
-   Speed-only device answers the request with a request error, so a
-   `bcdUSB` of 2.00 alone, which many Full Speed devices declare, is not
-   taken as proof. The request is the one device request this section
-   adds: made once per connection (the key of 43.27's item 4) and only
-   for a device that passes every other clause, kept with the key, and
-   never repeated at a refresh. Its "Try" text is section 7.6 item 2's
-   for `TR_FW_HUB1`. A device behind a Full Speed hub at a USB 2.0 hub is
-   the same case; a Full Speed device at a root port is not (it is not
-   slowed by a hub).
-   The red icon reads that set only while 43.27's notice is in force
-   (section 7.6 item 7): turned off, conditions 1 and 2 do not hold, as
-   43.27 already says of its red icon. **Until 43.27 is merged** the
-   tool's half that hands the set over (`red_slow`, `xhcitr.c`) is a stub
-   that hands over none, so conditions 1 and 2 never hold; the merge
-   fills it from 43.27's keys and adds `TR_FW_FSHUB`.
+   43.27's `tr_fast_check` (section 7.7 item 1) already decides which
+   ports hold a device running slower than it declares; the red icon
+   takes its set as it stands (`red_slow`, `xhcitr.c`, which reads the
+   model's ports as `fast_scan` does and sends no request of its own: a
+   device qualifier is the answer the scan settled). Its kinds map as
+   follows: `TR_FW_PORT2`, `TR_FW_HUB2`, `TR_FW_HUB1` and `TR_FW_HUB3`
+   are `TR_RED_SLOW3`; `TR_FW_HUBFS`, 43.27's High Speed case (a High
+   Speed-capable device at Full Speed behind a Full Speed hub, its
+   device qualifier answered, section 7.7 item 1), is `TR_RED_SLOW2`;
+   `TR_FW_LINK` (a SuperSpeedPlus device at 5 Gbit/s) is **not** red -
+   it runs at USB 3 speed, which the owner's condition names, and
+   section 7.7 item 8 shows it may have no faster port to go to - and it
+   keeps 43.27's balloon, list and menu line (item 7). The red icon
+   reads that set only while 43.27's notice is in force (section 7.7
+   item 7): turned off, conditions 1 and 2 do not hold; turned on, the
+   icon is decided again at once. The set is the model's, so it changes
+   at a model refresh, after which `tray_red` runs (item 5).
 
 3. **`xhci98.sys`'s failed flag.** The query answer (record 13 section
    8.12) gains one flag, `XHQ_F_FAILED` (`0x80`): set when
@@ -1314,12 +1383,15 @@ a disconnection or an eject.
    the refreshed tree does not (a view setting may hide that branch).
    When the icon is its usual colour the menu and the double click are
    unchanged. A balloon's click keeps whatever its own notice gives it
-   (43.27's opens its list; section 16 item 6). This item replaces
-   43.27's own first menu line, "<n> USB device(s) can run faster..."
-   (section 7.6 item 6), so the menu carries one such line, and 43.27's
-   tooltip while red (section 7.6 item 5) is this item's tooltip.
+   (43.27's opens its list; section 16 item 6). While the icon is red
+   this item replaces 43.27's own first menu line, "<n> USB device(s)
+   can run faster..." (section 7.7 item 6), so the menu carries one such
+   line, and 43.27's tooltip while red (section 7.7 item 5) is this
+   item's tooltip. Where the icon is not red but 43.27's set holds a
+   device (`TR_FW_LINK` devices alone, item 2), 43.27's line stays, so
+   its list is still reachable from the menu.
 
-8. **The red icon** (`xhcitr-r.ico`, `IDI_RED`), drawn as `xhcitr.ico`
+8. **The red icon** (`xhcitr-f.ico`, `IDI_RED`), drawn as `xhcitr.ico`
    is (section 9): the same glyph, the same sizes (16, 32 and 48 pixels)
    and the same depths (4 bits per pixel in the 16 VGA colours, and 32
    bits per pixel), with the controller box's blue - VGA colour 12,
@@ -1330,9 +1402,10 @@ a disconnection or an eject.
    on the taskbar's grey (C0C0C0) and on XP's blue and 7's dark taskbar
    reads as clearly as the blue it replaces. It is loaded as the usual
    icon is, at the small-icon size (`SM_CXSMICON`), so the shell picks
-   the depth the display has. This is the icon 43.27 named
-   `xhcitr-f.ico` (section 7.6 item 5): one red icon serves every
-   condition, and 43.27 adds none of its own.
+   the depth the display has. It is the file 43.27 added (section 7.7
+   item 5), byte for byte the icon this section drew: one red icon serves
+   every condition, and 43.27's own red state (its icon handle and
+   tooltip) gives way to `tray_red`.
 
 9. **High contrast.** Notification-area icons are drawn with their own
    colours in every high-contrast scheme, so the icon stays red there;
@@ -1357,11 +1430,11 @@ a disconnection or an eject.
 
 11. **Not done.** A condition on a controller that is not this package's
     (Windows' own USB stacks answer none of these readings); the
-    Container ID pairing of a USB 3 hub's halves (section 7.6 item 1);
+    Container ID pairing of a USB 3 hub's halves (section 7.7 item 1);
     and a red icon for a device whose approval failed, which no action
     of the tool's can put right.
 
-The legs are with 43.28 (section 11, T.13).
+The legs are with 43.28 (section 11, T.14).
 
 ### 7.3 Command line
 
@@ -1489,6 +1562,391 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
    block before the tree, and a controller's and an NHI's details carry
    its own line.
 
+### 7.6 The unexpected-removal notice (revision 16)
+
+Roadmap-usb4 task 43.21. Decision T9 left the owner's request for a
+notice on an unsafe unplug open because a 1 s sample cannot prove one, and
+named the source that can: the child filter, which on NT sees Windows
+surprise-remove a unit's device (record 21 section 7.4). This section
+publishes what it sees and has the tray say so. It is NT-only (the
+owner, 2026-10-18): 98 SE and ME offer no documented way to watch a
+removal from outside the device's stack, and a unit gone there without an
+eject the tool saw proves nothing - an eject from Windows' own applet, a
+re-enumeration and a power loss look the same - so there such a unit is
+shown as disconnected, as before.
+
+1. **What is counted.** An attachment of `xhcicm.sys` on a PDO (a child
+   filter of either kind, or a bridge filter on a child that is a
+   bridge) that receives `IRP_MN_SURPRISE_REMOVAL` counts one unexpected
+   removal in its domain when:
+   - the attachment is bound to a marks entry of a listed domain (record
+     21 section 7.4, revision 3: a PDO an active member's bridge
+     reported). Whenever the table brings a current entry up to date
+     from the attachment list (`cmMarkAtt`), each attachment on its PDO
+     takes the entry's serial, its domain and that domain's start count
+     (`CM_REENUM.Starts`, which a stop and start moves on while the
+     table and its serials begin again); the event finds that entry by
+     serial in that domain, only while the domain is listed at the same
+     start and the entry's PDO is the attachment's, current or a
+     tombstone - a tombstone
+     because the PnP manager surprise-removes a device after the bus
+     answer that no longer lists it, and the member bridge's filter,
+     reading that answer on its way back, has already made the entry a
+     tombstone (`cmMarksSyncAll`). Never by the PDO's address: a
+     tombstone keeps the address of a PDO that is gone, which a later PDO
+     may reuse, and a member's stop and start makes a new entry with a
+     new serial for the same PDO, which the attachment then follows. The
+     entry's own surprise-removal count (`CM_QM_E_COUNTS1`) is found the
+     same way; until revision 16 it was looked up among the current
+     entries by address, so an unplug's surprise removal did not reach it;
+   - that attachment saw the device started: its start succeeded below
+     it and no stop or removal followed;
+   - the entry has not been counted before. A PDO is counted once however
+     many of this driver's attachments it carries; a surprise-removed PDO
+     never starts again, and a re-plug is a new PDO with a new entry; and
+   - the device's removal is not owed to a loss of the host interface.
+     It is, and is counted apart (`CM_Q_RM_LOST`, no notice), when at the
+     event the domain's liveness is not ACTIVE, a loss is being drained
+     (`CM_REENUM.LossDrain`), or the device's member is one a recovery
+     owes or holds a retirement for (`CM_NHI.RecDebtMask`, accumulated
+     during the attempt, and `RecBarred`, the barrier it becomes at the
+     commit, record 22 section 7.7 part 4). The liveness returns to
+     ACTIVE at the commit, before the barrier is serviced, and a
+     member's bit leaves `RecBarred` only once `CmReenumRetired` has seen
+     its old devices' removal finish - so a lost device's surprise
+     removal, which comes before that removal finishes, finds its member
+     barred even after ACTIVE. The commit moves the debt into the barrier
+     (`RecBarred |= RecDebtMask`, then `RecDebtMask = 0`) under the
+     registration list's lock, which the event holds while it reads both,
+     so a member moving from one to the other is never seen in neither;
+     every other write to either is a single aligned word. A loss the
+     liveness has not yet noticed when the removal comes is not told
+     apart.
+
+   Never counted: a removal after a query-remove (an eject from any tool,
+   a disable, a driver update, an uninstall: Windows does not
+   surprise-remove those); a device that never started (no driver of its
+   own, or a start refused while its tunnel is torn down for an eject,
+   `CmRegStartAllowed`); a function deeper than a member's direct
+   children, which has no marks entry (the devices of a chain's second
+   router); a device no attachment of this driver sits on - a unit
+   present at boot that was never marked, because the mark service is not
+   installed or not running, or because the unit was never plugged in
+   while it ran (the bridge filter attaches to a child at a plug, the
+   mark's `LowerFilters` at every start; read by leg T.11 on 2000 and XP,
+   2026-10-22: such a unit's unplug gives Windows 2000's Unsafe Removal
+   dialog and the "disconnected" balloon, and no count); anything on 98
+   SE and ME, where there is no filter. Windows
+   surprise-removes more than an unplugged unit: a device whose driver
+   reports itself failed (`PNP_DEVICE_FAILED`), a function its tunnel lost
+   to a link fault, a unit gone across a sleep. That is why the notice
+   says "removed unexpectedly", never "unplugged", and nothing about data.
+2. **Which unit.** The child filter knows the device's entry and its
+   member - the tunnel port, by bus, device and function - and nothing
+   of a router. Which router a device ran behind cannot be proved from
+   the driver's side: neither connection manager gives a continuity
+   token at the moment a bridge's answer lists the device (under the
+   ICM a replacement can be announced and approved before the bus answer
+   that drops the old device; under the USB4 profile the member's
+   connection generation is refreshed only when the re-enumeration is
+   serviced, after the answer it caused may already have come). Nor can
+   the tray prove it from what it sees leave: a router is keyed by its
+   route or place, which a replacement shares, and a clean departure on
+   the same port can fall beside another device's removal. So the key the
+   answer carries for the last removal is its tunnel port, and the
+   notice names no unit; the unit's own "disconnected" balloon, which the
+   tray shows as before, names it where it left the record (accepted by
+   the owner, 2026-10-22, in place of the roadmap entry's "last router
+   key"). The count,
+   the lost count and the last member live beside the marks table, under
+   the registration list's lock, and are emptied with it at the domain's
+   start and stop, so they are per start, as the epoch is.
+3. **The answer, version 2.** `CM_Q_VERSION` is 2. The 64-byte header is
+   version 1's. At offset 64 follows the removal block, `CM_Q_RM_BYTES`
+   = 32:
+
+   | Offset | Field |
+   |---|---|
+   | +0 | `CM_Q_RM_FLAGS`: `CM_Q_RF_WATCHED` (this domain's removals are watched: an NT target whose domain is listed on the filter route) |
+   | +4 | `CM_Q_RM_COUNT`: unexpected removals counted since this start; it wraps |
+   | +8 | `CM_Q_RM_MEMBER`: the last one's member, bus 15:8, device 7:3, function 2:0; `CM_Q_UNKNOWN` before the first |
+   | +12 | `CM_Q_RM_LOST`: surprise removals in a loss of the host interface (item 1), counted apart; it wraps |
+   | +16 | reserved, 0, to +31 |
+
+   The record follows at 96 (`CM_Q_O_REC_OFFSET` says so), then the
+   extensions and the instance ID, each at its offset as before;
+   `CM_Q_BUILD_MAX` grows by the block. The answer the device holds
+   before the thread's first pass carries the block as the table stands
+   (count 0 after a start). The content generation follows the block like
+   any other byte. The driver's own stamp clearing of the embedded record
+   (`CmQueryPublish`) finds the record at its offset, not at 64.
+
+   Readers: XHCITR takes versions 1 and 2, reading version 1 as "not
+   reported by this driver"; the mark service (`xhcimark`), which reads
+   nothing of the block, takes both. A reader from before revision 16
+   refuses version 2, as the header's rule says; the package replaces
+   its drivers and tools together (section 8).
+4. **The tray.** The snapshot keeps each NHI's block (flags, count,
+   member). Between two snapshots, for an NHI both hold at the same
+   epoch, each with `CM_Q_RF_WATCHED` and the liveness ACTIVE, a count
+   that differs gives one event, however much it moved (one unplug can
+   remove several devices, counted in one burst; where a burst straddles
+   two polls a second notice can follow, which is accepted): "A
+   Thunderbolt or USB4 device was removed unexpectedly.", under the
+   tray's warning title. It is decided within that one diff, so nothing
+   waits across polls: a domain whose liveness has left ACTIVE in either
+   sample gives none (it already says it stopped answering). The
+   departures are shown as before: where the unit's router left the
+   record, its own "<name> was disconnected." comes too, in the same poll
+   or another, and names it. Balloons are 2000 and later anyway, and 98
+   SE and ME never set `CM_Q_RF_WATCHED`. Item 8's option can turn the
+   warning off. Where the departure falls in the warning's own poll, the
+   warning's balloon carries it as a second line ("A Thunderbolt or USB4
+   device was removed unexpectedly." then "<name> was disconnected."), and
+   so every other event of that poll, each on its own line, a line that
+   does not fit left out (`tr_events_text`): leg T.11 read on XP, on
+   2026-10-22, that a second balloon from the same icon replaces the first
+   at once, so the departure shown after the warning hid it.
+5. **The window and the report.** The NHI's details carry
+   "Unexpected removals:" with the count since this start and, after
+   the first, the last one's tunnel port, and the count in a loss when
+   it is not 0; "not watched on
+   this system" without `CM_Q_RF_WATCHED`; "not reported by this driver"
+   for a version 1 answer. Save Report and `/report` carry the same line.
+6. **Windows 2000** shows its own Unsafe Removal dialog after an unplug
+   without an eject (record 21 section 7.4, read by leg 39-V.2). The
+   tray's notice comes as well there (the owner, 2026-10-22: every NT
+   system, 2000 included), and item 8's option is the way to have only
+   Windows' own.
+7. **Release notes.** "The tray's unexpected-removal notice is shown on
+   Windows 2000 and later only; on Windows 98 SE and ME a Thunderbolt or
+   USB4 unit removed without an eject is shown as disconnected", with
+   item 8's option.
+8. **The option** (the owner, 2026-10-22). A checked item, "Warn when a
+   device is removed unexpectedly", in the tray's right-click menu and
+   the window's View menu beside "Start at login", on by default, per
+   user: the DWORD `WarnRemoved` under the tool's settings key
+   (`HKCU\Software\xHCI98\XHCITR`, where "Start at login" keeps
+   `TrayAtLogin`, section 7.4), no driver value. It reads as section
+   7.4's value does: only a DWORD 0 turns the warning off; absent,
+   another type or any other number is on (`tr_warn_removed`,
+   host-tested). With it off the tray skips the warning's balloon alone:
+   the count still rises in the driver and shows in the details, and the
+   "disconnected" balloons are unchanged. It is read when a warning is
+   due, so a change takes effect at the next poll in every running copy
+   of the user's tray. On 98 SE and ME, where there is no warning, the
+   item is not shown.
+
+### 7.7 The "can run faster" notice (revision 18, task 43.27)
+
+Roadmap-usb4 43.27 (the Windows 8 reporter's idea, owner, 2026-10-20): on
+every target under `xhci98.sys`, when a device that declares SuperSpeed or
+SuperSpeedPlus in its BOS runs slower than it can, a balloon names it and
+the tray icon turns red until every such device reconnects at its speed
+or is removed; clicking shows the device, its port and hub, the speed it
+runs at and the speed it can, and what to try. Its input is the
+`_EX_V2` capable flags, which `xhci98.sys` answers on every connection
+from record 13 section 8.4.1 (the BOS read at High and Full Speed, built
+with this task).
+
+**The owner's decisions of 2026-10-22** (picking from record 13 section
+6.12.11's options for 43.30, then widening them the same day): option 1,
+the BOS read at High and Full Speed for `bcdUSB` 0x0210 or more (record 13
+section 8.4.1); option 3, this notice on by default on 8, 8.1 and 10, and
+then **on by default on every target** - 98 SE, ME, 2000, XP, XP x64,
+Vista, 7, 8, 8.1 and 10 - since under `xhci98.sys` Windows' own notice
+appears on none of them; option 4, the release notes saying so; option 5,
+the notice widened to **a High Speed device slowed by a Full Speed hub**,
+on every target too. Option 2 (`_EX` `Speed` 3 on NT 6.2 and later) is not
+taken. Delivery is section 7.2's rule: a `NIF_INFO` balloon where
+`shell32.dll` is 5.0 or later, the tooltip on 98 SE (4.72). The user's
+choice to turn it off stays (item 7). These items are 43.30's "can perform
+faster" part, done here; the UAS client-contract half of 43.30 is separate.
+
+1. **Which devices count** (`tr_fast_check`, host-tested). A port the
+   scan read (section 5) counts when all of these hold: its controller is
+   `xhci98.sys`'s (`UCTRL.Ours`); it is connected; the device is not a
+   hub; `_EX_V2` answered; and the speed the device declares is above the
+   speed it runs at. Declared: bit 3 (`SuperSpeedPlusCapableOrHigher`)
+   SuperSpeedPlus, else bit 1 SuperSpeed, else nothing. Running: bit 2
+   SuperSpeedPlus, else bit 0 SuperSpeed, else the `_EX` `Speed` byte
+   (Low, Full, High); a byte the tool does not know never counts. So a
+   SuperSpeed or SuperSpeedPlus device at High or Full Speed counts, and
+   a SuperSpeedPlus device at 5 Gbit/s; a High Speed-only device never
+   does, nor a USB 3 device whose BOS read failed (no flag). Windows' own
+   controllers are not read: their stacks answer no capable flag before
+   Windows 8, and on 8 and later Windows has its own notice.
+   **A hub never counts itself.** A USB 3 hub is two hubs on two ports
+   (record 13 section 10.13), and its USB 2.0 half runs at High Speed by
+   design beside its SuperSpeed half; the two share a Container ID (USB
+   3.2 section 11.3), which the tool does not read, so it cannot tell
+   that half from a USB 3 hub on a USB 2.0 port. A SuperSpeed device
+   behind a hub that runs slow counts itself, and its text names the hub.
+   **The High Speed case** (option 5): a device that declares no
+   SuperSpeed, runs at Full Speed behind a hub that runs at Full Speed,
+   declares `bcdUSB` 0x0200 or more, and answers GET_DESCRIPTOR(DEVICE_
+   QUALIFIER) (type 6, WDK 7.1 `usb200.h`'s
+   `USB_DEVICE_QUALIFIER_DESCRIPTOR`, 10 bytes) with a descriptor of
+   bLength 10 and type 6, counts, its declared speed High. USB 2.0 section
+   9.6.2 (from memory, not read here: no USB 2.0 text is in
+   `docs/references`) gives a High Speed-capable device that descriptor
+   and has a Full Speed-only device refuse it; USB 3.2 section 9.4.3
+   (read) has a SuperSpeed device refuse it at Gen X speed only. The
+   driver keeps no such reading, so the tool asks
+   (`IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`, which `xhci98.sys`'s
+   door forwards to the device) **once per candidate**: only for a port
+   `tr_fast_wants_qual` admits (the conditions above but the answer), and
+   only when its key (item 4) has no settled answer kept from earlier
+   refreshes (`TR_QUAL_CACHE`, room for one per port of the tool's model,
+   1024, `TR_QUAL_MAX`; nothing in it is ever replaced, and a new key that
+   finds no room is not asked, `tr_qual_room`; `tr_qual_get`, `tr_qual_put`, `tr_qual_begin`,
+   `tr_qual_end`, host-tested). A short or malformed answer is "Full Speed
+   only" and is settled at once. No answer at all is not: the hub request
+   gives one result for a STALL (a Full Speed-only device's answer) and
+   for a transient failure (a suspended device, a request cancelled, an
+   allocation or open that failed), so it is asked again at the next
+   refreshes and settled as "Full Speed only" after the third such
+   failure (`TR_QUAL_TRIES`); until then it is not counted. An answer of
+   10 bytes of type 6 settles "High Speed capable". Each refresh's scan
+   drops the answers of the candidates it did not see that a device's
+   answer settled, so such a device is asked again when it comes back;
+   one that had a request go unanswered is kept, and settled as "Full
+   Speed only" if it was not yet, so a device that went away after an
+   unanswered request (perhaps with a controller recovery that request
+   caused, if `xhci98.sys` could not withdraw it) is not asked again for
+   as long as the tool runs. The scan marks every candidate present before
+   it sends any request, so that dropping happens before a new key is
+   added (43.27, reviewed and
+   revised 2026-10-22).
+   On a root port a High Speed device runs at High Speed (every USB 2.0
+   root port of an xHCI controller is High Speed), so a root port is
+   never asked. Nor is a device whose Full Speed hub is itself behind a
+   hub at High Speed or faster, or behind one whose connection was not
+   read (`UnderTt`): it is behind a TT, where `xhci98.sys` cannot withdraw
+   a request that is never answered from EP0 (`hcdEp0Withdraw`, record 13
+   section 8.4.1) and resets the controller instead, so the tool's own
+   request could cost every device on it. Such a device is not counted;
+   the cost is the notice for a High Speed device behind a Full Speed hub
+   behind a High Speed hub. Only the refresh's scan asks; the details
+   pane and item 6's list read the answers it settled, so drawing them
+   neither sends a request nor uses up a try.
+2. **Where it is, and what to try** (`TR_FW_*`, `tr_fast_where`,
+   `tr_fast_try`):
+
+   | Where | Read as | Try |
+   |---|---|---|
+   | `TR_FW_PORT2` | on a root port, below SuperSpeed (a root port at High or Full Speed is a USB 2.0 port: a USB 3 connector's SuperSpeed port carries nothing slower) | "Connect it to a USB 3 port of this computer (often blue, or marked SS). If it is already in one, it fell back to USB 2.0 there: try another cable or another port." |
+   | `TR_FW_HUB2` | behind a hub at High Speed that declares no SuperSpeed | "Connect it to a USB 3 port of this computer, or through a USB 3 hub." |
+   | `TR_FW_HUB1` | behind a hub at Full Speed that declares no SuperSpeed | the same; for the High Speed case (declared High Speed): "Connect it to a port of this computer, or through a USB 2.0 or USB 3 hub, rather than through this Full Speed hub." |
+   | `TR_FW_HUB3` | behind a hub that declares SuperSpeed and runs below it | "Connect the hub to a USB 3 port of this computer with a USB 3 cable. If it already is, try another cable for the hub, then for the device." |
+   | `TR_FW_LINK` | a SuperSpeedPlus device at 5 Gbit/s | "Connect it to a port rated 10 Gbit/s or more (USB 3.1 Gen 2 or USB 3.2), with a cable rated for that speed. A 5 Gbit/s port is the most it gets there." |
+
+   A hub whose own connection was not read (another controller's, or
+   `_EX_V2` refused) is taken as `TR_FW_HUB2` by its speed.
+3. **When it is read.** At every model refresh (`refresh_model`): the
+   start, F5 and the window's automatic refresh, and the tray's refresh
+   500 ms after each `DBT_DEVNODES_CHANGED`. Nothing new is polled. No
+   device is asked anything but item 1's High Speed candidate, until its
+   answer is settled (three requests at most while it stays on its port);
+   otherwise the scan's `_EX` and
+   `_EX_V2` requests are all it reads.
+4. **The set and its balloons.** Each counted device is keyed by its
+   controller's driver key, its port path and its VID:PID (`tr_fast_key`);
+   the tool keeps the last refresh's keys, 32 at most (`TR_FAST_MAX`; a
+   33rd is counted, never keyed, and gets no balloon of its own). A key
+   that was not in the last set is new (`tr_fast_new`), and the new keys
+   of one refresh get one balloon, title "A USB device can run faster":
+   for one, "<name> runs at High Speed (480 Mbit/s) on a USB 2.0 port;
+   it can run at SuperSpeed (5 Gbit/s). Click here for what to try."
+   (`tr_fast_balloon`; the "on a ..." part from section 2's "Where"); for
+   several, "<n> USB devices run slower than they can: <name> and <n-1>
+   more. Click here for what to try." The tray's first refresh treats
+   every counted device as new, since the reporter's case is a stick left
+   in at login. The name is the device's as the tree labels it (its drive
+   letters first where it has some, section 6.5). Where the shell has no
+   balloons (98 SE) the red icon's tooltip says it (item 5; its 63
+   characters hold the count, not the balloon's text), and the menu's
+   first item opens the list (item 6). A balloon owed before the icon is
+   added (the start's first refresh comes before it) is shown once it is.
+5. **The icon.** Since revision 19 the icon, its tooltip while red and
+   the menu's first line are section 7.2.1's, which takes this set as
+   two of its conditions (a `TR_FW_LINK` device is not one, section 7.2.1
+   item 2); what follows is this revision's own text. Red while the
+   notice is on and the set holds a device:
+   `xhcitr-f.ico` (`IDI_FAST`), which is `xhcitr.ico` with the
+   controller's blue - VGA colour 12, 0000FF, in each 4-bit image, and
+   the same colour in each 32-bit one - painted red FF0000, every other
+   pixel unchanged. The usual icon again once the set is empty: each
+   counted device reconnected at its speed (the refresh after the plug
+   reads it so) or removed. The tooltip while red: "xHCI98 USB Tree: <n>
+   USB device(s) can run faster", set again whenever a refresh changes the
+   count while the icon stays red. An Explorer restart re-adds the icon in
+   the state it was in.
+6. **Clicking.** The balloon's click (`NIN_BALLOONUSERCLICK`, which the
+   shell sends after `NIM_SETVERSION` 3; only for a balloon of this
+   notice, the last one shown) and, while the icon is red, a first item
+   of the left-click menu, "<n> USB device(s) can run faster...", open one
+   window, "A USB device can run faster", listing every counted device
+   (`tr_fast_entry`) in a read-only text box that scrolls, with a Close
+   button (Escape and Enter close it too): 80 columns of its fixed font
+   wide and two thirds of the work area high, never wider than the work
+   area, so it fits a 640 by 480 screen, and resizable; one
+   such window at a time, its text read again when it is asked for again.
+   The text is built in a buffer that doubles from 16 KiB to 1 MiB (60
+   KiB on 98 SE and ME, whose edit control holds 64 KiB) until it fits,
+   each entry whole or not at all; past that it ends with "<n> more devices are not listed." (A
+   message box was the first build; it neither scrolls nor fits several
+   devices on a 640 by 480 screen.) Each entry: its name
+   and VID:PID; "Port <path> of <controller>"; "Behind <hub> (<its
+   speed>)" when it is behind a hub; "Runs at <speed>"; "Can run at
+   <speed>"; "Try: <section 2's text>". The window's details of the
+   device carry the same lines under "Can run faster", and so do Save
+   Report and `/report`, whether the notice is on or off: they are a
+   reading, not a notice.
+7. **On or off** (`inst_fast_default`, `inst_fast_on` in
+   `xhciinst\inst_core.c`, which both tools link; host-tested).
+   - The user's choice: "Tell me when a device can run faster", a
+     checkable item in the View menu and in the icon's right-click menu,
+     writes the DWORD `FasterNotice` under `HKCU\Software\xHCI98\XHCITR`
+     (0 off, 1 on), as "Start at login" writes `TrayAtLogin`.
+   - The computer's: the DWORD `TrayFasterNotice` under
+     `HKLM\Software\xhci98`, the installer's own key (record 23 section
+     9.6), written by the installer only (its Components page and `/faster`
+     and `/nofaster`, record 26 section 5.3; record 23 section 9.5).
+   - In force: the user's DWORD 0 or 1, else the computer's DWORD 0 or 1,
+     else this system's default. Another type or another number counts
+     as absent.
+   - The default (43.27's rule: on where Windows shows no notice of its
+     own under this driver; the owner's decision of 2026-10-22 above):
+     **on on every system**. Under `xhci98.sys` Windows' own notices
+     appear on none, but for one case below: 7's High Speed balloon is
+     raised by `usbhub.sys`,
+     which this bus replaces (measured on 7, record 13 section 6.12.11),
+     and 8's and 8.1's Explorer line needs a running `usbxhci`
+     controller (static, the same section); 10's is assumed to need the
+     same until 43.33 (b) reads it, and a reading that says otherwise
+     goes back to the owner. `inst_fast_default` keeps the system as an
+     argument for that. The case: Explorer's test accepts any working
+     `usbxhci` controller, so on an 8, 8.1 or 10 computer where another
+     controller runs Windows' own driver, its line may show for a stick on
+     an `xhci98.sys` controller too (record 13 section 6.12.11, "A
+     computer with both drivers"), beside this notice. The tool keeps its
+     own on there (the orchestrator's choice, for the owner to confirm):
+     reading the other controller's service to stay quiet would rest on
+     a test of Windows' that is static and unread on 10, and a double
+     notice tells the user nothing wrong. 43.28 reads such a computer.
+   - Off: no balloon, no red icon, no menu line. Turned on, the icon
+     turns red at once when the set holds a device, with no balloon;
+     turned off, it goes back.
+8. **Not done.** Windows' own controllers' devices; the pairing of a USB
+   3 hub's two halves (item 1); and the top rate of a port, which no
+   request the tool sends reads (the root hub answers no speed table), so
+   a SuperSpeedPlus device on a computer whose every port runs at 5
+   Gbit/s keeps the icon red until the notice is turned off, as 43.27's
+   text counts it.
+
+The legs are roadmap-usb4 43.28 (section 11, T.13).
+
 ## 8. Install, upgrade and uninstall
 
 - XHCIINST owns the tool's file (and its `.TMP`, `.BAK` and `.DEL`
@@ -1497,6 +1955,12 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
   them as its own. Nothing is
   ever left pending for a restart on 98 SE or ME, and XHCIINST never
   edits `WININIT.INI`.
+- (Revision 18) The computer's choice of the "can run faster" notice,
+  `TrayFasterNotice` under `HKLM\Software\xhci98` (section 7.7), is
+  XHCIINST's too: written only when the user changes the Components
+  page's box or gives `/faster` or `/nofaster`, and deleted by the
+  uninstall with the install directory's record. The users'
+  `FasterNotice` values under `HKCU` are left, as `TrayAtLogin` is.
 - **One at a time.** XHCIINST holds a machine-wide maintenance mutex
   (`Global\XhciinstMaint` on NT, `XhciinstMaint` on 98 SE and ME, with the
   shared mutex's security) for everything in this section. A second
@@ -1552,7 +2016,7 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
   tree line to two devices and an eject arrow, in the 16 VGA colours with
   no partial transparency, at 16, 32 and 48 pixels, 4 and 32 bits per
   pixel, so it reads the same on 98 SE's grey taskbar, XP's blue and 7's
-  dark one. Since revision 18 its red twin `xhcitr-r.ico` (section 7.2.1
+  dark one. Since revision 19 its red twin `xhcitr-f.ico` (section 7.2.1
   item 8), the controller's blue painted red, is the tray's icon while
   a condition holds.
 - Version resource from `src\xhci_version.h`.
@@ -1591,7 +2055,30 @@ what each level serves, the ring's text and cut, the configuration read's
 states, the sizing) and the tool's reader and texts of it in
 `test\test_xhq.c`, with the default level.
 
-Revision 18: the red icon's decision and tooltip (`tr_red_state`,
+Revision 16: the count (`cm_marks.c`: once per PDO, a tombstone found
+by serial, a serial of another start or of another PDO refused, a device
+never started, a loss counted apart, the block, the reset) in
+`test\test_cm_marks.c`; the version 2 layout, the block, the record at
+its offset and the content generation in `test\test_cm_query.c`; the
+readers of both versions, the event (a rise, a wrap, a rise of more than
+one, an epoch change, the liveness gate either side, not watched, a
+version 1 answer, the "disconnected" beside it unchanged), the details
+line and the option's reading (`tr_warn_removed`) in `test\test_tr.c`,
+with the mark service's reader of version 2.
+
+Revision 18: the "can run faster" decision (`tr_fast_check`: each speed
+against each declared speed, a hub, another controller, no `_EX_V2`, an
+unknown speed byte, 98's `_EX` bytes 3 and 4, each "Where" with a hub
+read and not read, the High Speed case and its qualifier
+(`tr_fast_wants_qual`, `tr_qual_ok`)), the key and the new-key diff (`tr_fast_key`,
+`tr_fast_new`: a device moved, one gone and back, the 32 bound), the
+balloon, the box's entry and its 79 columns (`tr_fast_balloon`,
+`tr_fast_entry`) in `test\test_tr.c`; the default per system and the
+value in force (`inst_fast_default`, `inst_fast_on`: on for every
+target's version, 10.0 and 6.4 included, each source's 0, 1, another number and absent) in
+`test\test_inst.c`, with the installer's switches.
+
+Revision 19: the red icon's decision and tooltip (`tr_red_state`,
 `tr_red_tip`, section 7.2.1 item 10) in `test\test_trred.c`, over
 `xhcitr\tr_red.c`; `xhci98.sys`'s failed flag in `test\test_xhq.c`.
 
@@ -1608,8 +2095,11 @@ Revision 18: the red icon's decision and tooltip (`tr_red_state`,
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciCmLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 | T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
+| T.11 | 2000, XP, XP x64, Vista x86, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "A Thunderbolt or USB4 device was removed unexpectedly." beside the unit's "disconnected"; a chain's first device unplugged gives one such notice where its removals fall in one sampled change of the count (another where they straddle two samples); an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; with "Warn when a device is removed unexpectedly" unchecked, an unplug with no eject gives no warning balloon and the count still rises in the details; on 98 SE the unplug reads "disconnected", the details "not watched on this system", and the item is not shown. Read 2026-10-22 (`runs/run-43.md`); the chain case is not readable on the emulator |
 | T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
-| T.13 | 98 SE, ME, 2000, XP, 7 x86 and x64 (with 43.28) | revision 18, by screenshot: the icon red and its tooltip for a SuperSpeed stick on a USB 2.0 port, a High Speed stick behind a Full Speed hub, the Thunderbolt emulator's device left unapproved, and two at once ("and 1 more"; 98 SE's 63 characters); each put right and the icon back; a sleep and resume leaving it as it was; an Explorer restart while red; the menu's first item and the double click opening the window on the device; the notice turned off clearing conditions 1 and 2; 98 SE at 16 colours |
+| T.12 | 98 SE; ME as the control | revision 17: the pop-up of section 16 for a plug of the Thunderbolt emulator's device and for the outcome of a Safely Remove from the tray, by screenshot; the focus left where it was; a click on the body and on the close box; the timeout; two notices in turn; on ME the shell's balloon and no pop-up |
+| T.13 | 98 SE, ME, 2000, XP, 7 x86 and x64, 8 and 8.1 (roadmap-usb4 43.28) | revision 18: a SuperSpeed stick on a USB 2.0 root port and behind a High Speed hub (the balloon, 98 SE's tooltip, the red icon, the box), then moved to a USB 3 port (the icon clears); two such devices with one moved; a High Speed-only device never counted on a High Speed port or hub, and counted at Full Speed behind a Full Speed hub (item 1's High Speed case, its device_qualifier answered); the default per target; the setting turned off in the tool and by the installer |
+| T.14 | 98 SE, ME, 2000, XP, 7 x86 and x64 (with 43.28) | revision 19, by screenshot: the icon red and its tooltip for a SuperSpeed stick on a USB 2.0 port, a High Speed stick behind a Full Speed hub, the Thunderbolt emulator's device left unapproved, and two at once ("and 1 more"; 98 SE's 63 characters); each put right and the icon back; a sleep and resume leaving it as it was; an Explorer restart while red; the menu's first item and the double click opening the window on the device; the notice turned off clearing conditions 1 and 2; 98 SE at 16 colours |
 
 ## 12. Decisions
 
@@ -1653,7 +2143,8 @@ Revision 18: the red icon's decision and tooltip (`tr_red_state`,
   the owner asked for a notice on an unsafe unplug: polling cannot prove
   one (section 7.2). The authoritative source is the child filter, which
   sees a unit's surprise removal on NT; publishing a count of those in the
-  query is planned work for the owner to open.
+  query is planned work for the owner to open. **Opened by revision 16**
+  (roadmap-usb4 43.21): decision T22.
 - **T10** A USB device's eject is section 6.5's short transaction - the
   shared mutex, the device found again by instance ID and its eligibility
   read again just before the call - not section 6.2's: no query device
@@ -1722,7 +2213,25 @@ Revision 18: the red icon's decision and tooltip (`tr_red_state`,
   Report carries the snapshot, so one file is the bug report. Its level
   switches do not move: section 7.5 already replaces them.
 
-- **T24** (owner, 2026-10-22, roadmap-usb4 43.57; revision 18) The
+- **T22** (owner, 2026-10-18, 2026-10-20 and 2026-10-22, roadmap-usb4
+  43.21; revision 16) The tray says a unit "was removed unexpectedly" when the child
+  filter saw Windows surprise-remove a running device of it, from a
+  count in the query's answer (version 2), on NT only; never that it was
+  unplugged or that data was lost (section 7.6). The count, not the 1 s
+  diff, is the evidence. The answer's key for the last removal is its
+  tunnel port, not a router, and the notice names no unit: neither the
+  driver nor the tray can prove which router a removed device ran
+  behind, and the unit's own "disconnected" balloon names it. The owner
+  accepted that on 2026-10-22, had the warning shown on every NT system,
+  2000 included, and asked for a per-user option to turn it off, on by
+  default (section 7.6 item 8).
+- **T23** (owner, 2026-10-22, roadmap-usb4 43.55; revision 17) On 98
+  SE alone the tray draws its own balloon-like pop-up for each notice
+  that gets a balloon elsewhere (section 16), through the one
+  `tray_balloon` route, and a click on it is reported to the tray as
+  the shell reports a balloon's click. Every other system keeps the
+  shell's balloon. (T22 is revision 16's.)
+- **T24** (owner, 2026-10-22, roadmap-usb4 43.57; revision 19) The
   tray's icon is red while a condition holds that is still present and
   that the user can put right: a USB 3 device below USB 3 speed, a High
   Speed device slowed by a Full Speed hub, a Thunderbolt or USB4 device
@@ -1735,9 +2244,8 @@ Revision 18: the red icon's decision and tooltip (`tr_red_state`,
   on 98 SE and 127 from `shell32.dll` 5.0; when it is not red the
   tooltip is as before. A click leads to the window on the device
   concerned (section 7.2.1). The ranking of the conditions, the
-  double click and menu item as "a click", condition 2's device
-  qualifier request, `TR_FW_LINK` left out and `xhci98.sys`'s failed
-  flag are orchestrator decisions for the owner to confirm.
+  double click and menu item as "a click", `TR_FW_LINK` left out and
+  `xhci98.sys`'s failed flag are orchestrator decisions for the owner to confirm.
 
 ## 13. Open
 
@@ -1756,6 +2264,10 @@ Revision 18: the red icon's decision and tooltip (`tr_red_state`,
   returns to `DeviceIoControl` for the removed-device answer.
 - Whether the ICM's firmware messages carry a link rate the client could
   keep; until read, "not reported by the firmware".
+- Revision 16: whether Windows 2000, which shows its own Unsafe Removal
+  dialog after an unplug without an eject, gets the tray's notice too.
+  Closed by the owner, 2026-10-22: it does, with the option of section
+  7.6 item 8.
 
 ## 14. As built
 
@@ -1926,3 +2438,141 @@ moved) stays the reference for the route and the files.
 11. **The door.** `xhci98.sys`'s USBUSER pass-through is kept unchanged
     (section 4.8): Windows' own property tabs use it, and the snapshot
     reads through it.
+
+## 16. The 98 SE pop-up (revision 17, task 43.55)
+
+Roadmap-usb4 43.55 (owner, 2026-10-22: "do this specially for 98 SE"):
+on Windows 98 SE, whose `shell32.dll` (4.72) shows no balloons, the tray
+draws a pop-up of its own for every notice that gets a balloon on ME,
+2000 and later, and looks and behaves like a balloon as far as plain
+Win32 on 98 SE allows. Only there: where `shell32.dll` is 5.0 or later
+the shell's balloon stays, unchanged, and the pop-up is never created.
+The tooltip's last event (section 7.1) is kept as it is.
+
+1. **One hook.** `tray_balloon` is already the one route of every
+   notice: the poll's events of section 7.2 (plug, approval,
+   disconnection, the controller that stops answering), the outcome of
+   an eject started from the tray (sections 6.2 and 6.5), and each later
+   notice that raises a balloon through it (43.21's unexpected-removal
+   warning, 43.27's "can run faster" notice). Where the shell has no
+   balloons it hands the title, the text and the icon kind to the pop-up
+   (`tr_pop_show`, `xhcitr\tr_popw.c`) after the tooltip; nothing else in
+   the tray changes. The outcome of an eject from the tray, which took a
+   message box on 98 SE for want of a balloon, takes the pop-up under the
+   balloon's own rule (shorter than 250 characters, else the message
+   box): the two tests read "the shell has balloons, or the pop-up is
+   ready" in place of "the shell has balloons". A pop-up whose class or
+   window cannot be made leaves 98 SE as it was before this revision:
+   the tooltip, and the message box for an eject's outcome.
+2. **The window.** A top-level `WS_POPUP` of its own class
+   (`Xhci98TrPop`), `WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, owned by the
+   hidden tray window (so no taskbar button, and it goes with the tray),
+   shown with `SW_SHOWNOACTIVATE` and answering `WM_MOUSEACTIVATE` with
+   `MA_NOACTIVATE`: it never takes the focus or the keyboard. Its shape
+   is a rounded rectangle with a stem toward the notification area
+   (`SetWindowRgn` over `CreateRoundRectRgn` and `CreatePolygonRgn`).
+   Colours and font are the system's: `COLOR_INFOBK` behind,
+   `COLOR_INFOTEXT` for the text and a one-pixel border, and the tooltip
+   font (`NONCLIENTMETRICS` `lfStatusFont`, the font 98's tooltips use;
+   `DEFAULT_GUI_FONT` if that cannot be read), bold for the title. The
+   icon is the shell's for the balloon's `NIIF_*` kind - `IDI_INFORMATION`
+   for `NIIF_INFO`, `IDI_WARNING` for `NIIF_WARNING`, `IDI_ERROR` for
+   `NIIF_ERROR`, none for `NIIF_NONE` - drawn at the small-icon size
+   (`SM_CXSMICON`) beside the title; the close box is
+   `DrawFrameControl`'s caption close button, as tall as the title line,
+   at the top right. Title and text are cut where the balloon's fields
+   cut them (63 and 255 characters).
+3. **Its size** (`tr_pop_layout`, pure). Every length is from the font
+   and the system metrics, never a fixed pixel count, so Large Fonts
+   scale it: the padding is half a line, the stem a line high, the text
+   wraps (`DrawText` `DT_WORDBREAK`) at 40 average characters or the
+   screen's width less two margins and the padding, whichever is less,
+   and a pop-up taller than the screen less the taskbar is cut to it (the
+   text first, then the title row); a room too narrow for the icon and
+   the close box loses the title, never the screen's edge. At
+   640 x 480 with Large Fonts the longest notice (255 characters) fits.
+4. **Where** (`tr_pop_edge`, `tr_pop_place`, pure; the primary monitor
+   alone, since 98 SE's notification area is on it). The inputs are the
+   screen (`SM_CXSCREEN`, `SM_CYSCREEN`), the work area
+   (`SPI_GETWORKAREA`), the taskbar's rectangle (`FindWindowA
+   ("Shell_TrayWnd")`), the notification area's (`FindWindowExA` of
+   `TrayNotifyWnd` below it) and the pop-up's size.
+   - The edge: a taskbar wider than tall is at the top when its middle is
+     above the screen's, else at the bottom; one taller than wide at the
+     left or the right by the same test. An auto-hidden taskbar keeps its
+     rectangle mostly off the screen with a sliver on it, and the same
+     test reads its edge. A rectangle that is empty, or touches no edge of
+     the screen, counts as no taskbar; then the edge is the side where the
+     work area falls short of the screen, and the bottom when it falls
+     short of none.
+   - The anchor: the middle of the notification area, when there is one
+     and it lies in the taskbar; else the taskbar's far end (the right
+     end of a top or bottom taskbar, the bottom end of a left or right
+     one) less a margin; with no taskbar, that corner of the work area.
+     The line the pop-up stands on is the taskbar's inner edge, held
+     inside the screen (an auto-hidden taskbar's is the sliver's), or the
+     work area's edge.
+   - The place: beside that line on the screen's side, the stem at the
+     anchor, the body reaching away from the screen's near corner (to
+     the left of the anchor on a top or bottom taskbar, above it on a
+     left or right one), then moved wholly inside the screen with a
+     margin, the stem held between the body's rounded corners. It never
+     covers the taskbar.
+5. **Time, and one at a time** (`tr_popq_*`, `tr_pop_expired`, pure).
+   A pop-up shows for 10 seconds, the timeout `tray_balloon` gives the
+   shell (10 s is also the shell's least), counted from when it shows
+   with `GetTickCount` (its wrap at 49.7 days taken by the unsigned
+   difference). The shell of 2000 and ME also stops the count while the
+   user is away from the machine; 98 SE has no `GetLastInputInfo`, so
+   the pop-up does not, and the tooltip still carries the last event. A
+   notice raised while one shows waits in a queue of 8 and shows when
+   the one before closes, in the order raised, each for its full time,
+   as 2000's shell showed this icon's balloons in turn (the 43.21 legs
+   read the warning and then "disconnected" on 2000). A ninth waiting
+   notice drops the oldest waiting information notice, or, when every
+   waiting one is a warning or an error, the oldest waiting one. Should
+   USER give no timer, the pop-up still closes by its close box or a
+   click, or when the next notice is raised after its 10 seconds.
+6. **The mouse.** A click on the close box closes the pop-up; so does a
+   right click anywhere on it. A left click on the body closes it and
+   does what a click on a balloon does: the tray window receives
+   `WM_TRAYICON` with `NIN_BALLOONUSERCLICK` (`WM_USER + 5`) in the low
+   word of `lParam`, which is how the shell reports a balloon's click
+   after `NIM_SETVERSION` 3, so whatever the tray does for a balloon's
+   click it does for the pop-up's, with no second path (until 43.27 it
+   does nothing; 43.27's notice opens its list). `wParam` is the id the
+   notice was raised with, kept with it in the queue (`TR_POP_NOTE`'s
+   `Id`), not the last one raised: a notice queued behind another
+   reports its own, so the tray opens 43.27's list for that notice's
+   click alone (its id 2, every other notice's 1; the batch 7 merge,
+   2026-10-23). The time running out
+   and the close box send `NIN_BALLOONTIMEOUT` (`WM_USER + 4`), and the
+   showing sends `NIN_BALLOONSHOW` (`WM_USER + 2`), as the shell does.
+   Either way the next waiting notice shows. Showing takes nothing from
+   the foreground window; a press on the pop-up takes its activation
+   (98 SE's USER, despite `MA_NOACTIVATE`), as a press on the shell's
+   own balloon does on ME (leg T.12, 2026-10-22).
+7. **Changes around it.** A display change (`WM_DISPLAYCHANGE`) or a
+   work-area change (`WM_SETTINGCHANGE` with `SPI_SETWORKAREA`, which a
+   taskbar moved or resized sends) places the showing pop-up again; an
+   Explorer restart needs nothing, each pop-up reading the taskbar when
+   it shows. The tray's exit destroys it with the tray window, the queue
+   with it. A full-screen program is not detected (98 SE's shell has no
+   such test either).
+8. **x64.** The pop-up's code is built into `XHCITR64.EXE` too, and never
+   runs there: every x64 Windows has `shell32.dll` 6.0.
+9. **Host vectors** (`test\test_trpop.c`, over `xhcitr\tr_pop.c`): the
+   edge from a taskbar on each side, shown and auto-hidden; no taskbar,
+   with the work area short on each side and on none; an empty taskbar
+   rectangle and one that touches no edge; the anchor with the
+   notification area, without it and outside the taskbar; the place at
+   each edge, in a corner and held inside a 640 x 480 screen; the size at
+   small and large font metrics, a 255-character text at 640 x 480, the
+   cut to the screen's height; the queue's order, its bound and the drop
+   rule; the timeout at the tick's wrap.
+10. **Leg T.12** (section 11): on 98 SE, the pop-up for a plug of the
+    Thunderbolt emulator's device and for the outcome of a Safely Remove
+    from the tray, read by screenshot (`screendump` over QMP), the
+    focus left where it was, a click on the body and on the close box,
+    the timeout, two notices in turn; ME as the control, with the shell's
+    balloon and no pop-up.

@@ -87,6 +87,18 @@
 #define CM_ST_STAGE_FAILED      3UL
 
 #define CM_ST_F_TRUNCATED       0x00000001UL    /* more routers than entries */
+/* Bits 11:8, one a port in the record's port order: that member is blocked
+ * by a Windows 98 SE or ME eject (record 21 section 7.2 part 1, task
+ * 43.18): a removal left query-removed and not made, or one that keeps
+ * failing; no UP is published and no re-enumeration made there until it is
+ * retired. A reader that knows no such bit reads 0 for it. */
+#define CM_ST_F_BLOCKED_SHIFT   8UL
+#define CM_ST_F_BLOCKED_MASK    0x0000000FUL
+/* Bits 15:12, the same order: a 98 SE or ME eject on that member is in
+ * progress and not blocked (accepted, its query or removal running, its
+ * answer awaited). A clear bit says neither that a removal ended nor that
+ * nothing changed. */
+#define CM_ST_F_EJECTING_SHIFT  12UL
 
 /* Kinds, and what CM_ST_E_IDS holds for each. */
 #define CM_ST_KIND_ICM          1UL     /* an ICM-announced device: the

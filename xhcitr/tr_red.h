@@ -38,7 +38,8 @@ typedef struct _TR_REDDEV {
 
 typedef struct _TR_RED_IN {
     const TR_SNAP *Snap;        /* the poll's; NULL or not Valid: no NHI  */
-    const TR_U32 *Stage;        /* CM_ST_STAGE_* per Snap NHI, or NULL    */
+    const TR_U32 *Stage;        /* CM_ST_STAGE_* per Snap NHI (Snap->Stage
+                                   in the tool), or NULL                  */
     const TR_REDHC *Hc;
     int HcCount;
     const TR_REDDEV *Dev;
@@ -55,12 +56,6 @@ typedef struct _TR_RED {
     int Index;
     int Nhi;
 } TR_RED;
-
-/* 1 for a liveness (CM_LIVE_*) the "stopped answering" balloon counts as
- * a loss: suspect, absent, configuration lost, recovering, recovery
- * failed, contained, preparing. Never OFF ("not monitored", every sleep
- * and stop), revoked, active or a value this tool does not know. */
-int tr_red_lost(TR_U32 live);
 
 /* The state, from its inputs alone. Each NHI and each controller counts
  * once, however many of its clauses hold; each router entry and each

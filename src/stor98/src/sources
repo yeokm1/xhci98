@@ -71,6 +71,7 @@ SOURCES=nvme2k.c       \
         nvme2k_scsi.c  \
         sense.c        \
         inqid.c        \
+        pfstat.c       \
         utils.c        \
         engine.c       \
         lifecycle.c    \

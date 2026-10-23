@@ -680,7 +680,7 @@ static LONG hcdCfgSelectAnswer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * a start). At XhciTolerance 0 nothing is charged, as before
  * (HcdTolLocCharge). The caller has checked dev->Location. Thread only.
  */
-static VOID hcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+VOID HcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     if (!HcdTolLocCharge(hc, &hc->Ports[dev->Location - 1],
                          XHCI_TOL_CHARGE_REENUM)) {
@@ -703,7 +703,7 @@ static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         !HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
         XHCI_DBG_VALUE("hcd: command failed on a departing device, "
                        "cycling location", dev->Location);
-        hcdCfgCycle(hc, dev);
+        HcdCfgCycle(hc, dev);
         return 0;
     }
     HcdSvcRequestReset(&hc->Hc);
@@ -4825,7 +4825,7 @@ cleanup:
         XHCI_DBG_VALUE("hcd: reset port failed, cycling port", dev->Port);
         if (dev->Pdo != NULL) {
             /* The device's group: every function PDO of it goes. */
-            hcdCfgCycle(hc, dev);
+            HcdCfgCycle(hc, dev);
         }
         return HCD_USBD_INTERNAL_HC_ERROR;
     }

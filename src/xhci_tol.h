@@ -352,6 +352,47 @@ ULONG XhciTolWaitStep(ULONG done, ULONG marked, ULONG expired);
 
 ULONG XhciTolWaitResolved(ULONG reason, ULONG done, ULONG expired);
 
+/*
+ * A thread control transfer past its one deadline, the wait not abandoned
+ * (task 43.53; design record 13 section 10.5.1). First, once EP0 has been
+ * stopped where it read Running: stopCode the Stop Endpoint's completion
+ * code (XHCI_CC_SUCCESS when EP0 needed no stop; 0 when none could be sent
+ * or it never completed), epState EP0's state read after it (XHCI_EP_
+ * STATE_*), done the transfer's completion read after that. A completion
+ * that came before the stop is the answer; a stop that failed, or EP0 in
+ * any state but Stopped or Error, keeps the controller reset; otherwise
+ * the TD is inert - the controller processes it no more, the scratch is
+ * safe for reading the departure, and Set TR Dequeue is legal (Halted
+ * would want a Reset Endpoint first, and with no completion seen it is
+ * not explained).
+ */
+#define XHCI_TOL_LATE_RESET         0UL     /* the controller recovery     */
+#define XHCI_TOL_LATE_DONE          1UL     /* completed before the stop   */
+#define XHCI_TOL_LATE_INERT         2UL     /* stopped: read the departure */
+#define XHCI_TOL_LATE_LEFT          3UL     /* gone: its teardown takes it */
+#define XHCI_TOL_LATE_CYCLE         4UL     /* leaving: its location cycled */
+
+ULONG XhciTolLateStopped(ULONG stopCode, ULONG epState, ULONG done);
+
+/*
+ * Then, the TD inert, hcdCfgFault's order: left the record is gone or no
+ * longer its port's; present its path reads present (HcdHubPathPresent,
+ * any value when left); hub the record is a hub's; published it has its
+ * PDO and its group's serial. Gone: LEFT. Present, or a hub: RESET. A
+ * published device: CYCLE. One with no PDO yet: LEFT, its enumeration's
+ * failed step tearing it down.
+ */
+ULONG XhciTolLateVerdict(ULONG left, ULONG present, ULONG hub,
+                         ULONG published);
+
+/*
+ * Last, a LEFT or CYCLE verdict only: retired the stopped record was taken
+ * off EP0 and the controller's dequeue moved past it (Set TR Dequeue), so
+ * no later doorbell can run it again. Not retired: RESET, as before. Any
+ * other verdict is returned as it is.
+ */
+ULONG XhciTolLateRetired(ULONG verdict, ULONG retired);
+
 /* The backstop's one observation (record 17 section 4.1). */
 typedef struct _XHCI_TOL_OBS {
     ULONG Valid;

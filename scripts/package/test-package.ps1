@@ -181,7 +181,7 @@ try {
             "out\free\x86\stor98.sys"   = "stand-in x86 sys"
             "out\free\amd64\stor98.sys" = "stand-in amd64 sys"
             "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
-            "inf\stor98-x64.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
+            "inf\stor98-x64.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`nCatalogFile=stor98.cat`r`n"
             "include\stor98cm.h" = [System.IO.File]::ReadAllText($nvHeader4)
             "LICENSE" = "stand-in licence"; "NOTICE" = "stand-in notice"; "docs\package-readme.txt" = "stand-in readme"
         }
@@ -239,8 +239,8 @@ try {
 
     # A caller naming -DriverPath without -Stor98Root gets no Stor98 (the
     # flat package above), and -NoStor98 says the same for a default one.
-    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "stor98*" }).Count -eq 0) `
-        "a package built without Stor98 carries Stor98 files."
+    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "stor98*" -or $_.Name -like "S98VSD*" }).Count -eq 0) `
+        "a package built without Stor98 carries Stor98 files or its layer."
 
     # Refusals, before anything is staged.
     $nvNoAmd64 = New-Stor98Tree -Name "nv-noamd64" -Omit @("out\free\amd64\stor98.sys")
@@ -298,7 +298,7 @@ try {
     foreach ($anchor in @(
         @{ Find = 'if ($null -ne $stor98 -and $f -eq "release") {'; Why = "the debug legs would bundle Stor98 too" },
         @{ Find = '$pkgArgs += "-NoStor98"'; Why = "the debug legs no longer refuse Stor98" },
-        @{ Find = '$(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)'; Why = "the build loop no longer accepts exactly the bundled paths" },
+        @{ Find = '$(if ($legSigned) { $certPublishable + $catPublishable } else { @() }) + $legStor98)'; Why = "the build loop no longer accepts exactly the bundled paths" },
         @{ Find = '$stor98 = Resolve-Stor98Build -Repo $repo -Arch $s98Arches'; Why = "the cut no longer verifies the built Stor98 up front" },
         @{ Find = 'Test-DriverVersionMatches -Reported $nvVer -Declared $Version'; Why = "the published Stor98 images are no longer held to the release's version" }
     )) {
@@ -1603,7 +1603,7 @@ try {
         # wrong hash.
         Write-Step "the driver pack: one revision's bytes, held to SHA256.TXT and the allowlist"
         $packRepo = Join-Path $script:work "usb-wdm-nonfree"
-        $packSub = "non-free/storage/nusb33/w98se"
+        $packSub = "nusb33/w98se"
         $packDirFx = Join-Path $packRepo ($packSub.Replace('/', '\'))
         Ensure-Directory $packDirFx
         function Invoke-PackGit {
@@ -1644,14 +1644,18 @@ try {
         }
         Invoke-PackGit @("init", "-q") | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $packRepo ".gitattributes"), "* -text`n")
-        [System.IO.File]::WriteAllText((Join-Path $packRepo "NOTICE.md"), "# Notice`n`nStand-in.`n")
+        # The pack's own NOTICE.md and NUSB 3.3's nusb33/NOTICE.md differ, so
+        # the export is seen to take the second (owner, 2026-10-22: NUSB is
+        # kept apart from the non-free pack).
+        [System.IO.File]::WriteAllText((Join-Path $packRepo "NOTICE.md"), "# Notice`n`nThe pack's stand-in.`n")
+        [System.IO.File]::WriteAllText((Join-Path $packRepo "nusb33\NOTICE.md"), "# Notice`n`nNUSB 3.3's stand-in.`n")
         Write-PackFixture -Map $packText
         $allowPath = Join-Path $script:work "drvpack-allow.txt"
         [System.IO.File]::WriteAllText($allowPath, ((@($packText.Keys | ForEach-Object {
             (Get-FileSha256 -Path (Join-Path $packDirFx $_)) + "  " + $_ }) -join "`r`n") + "`r`n"))
         $packGood = [ordered]@{}
         foreach ($name in $packText.Keys) { $packGood[$name] = Get-FileSha256 -Path (Join-Path $packDirFx $name) }
-        $packGood["NOTICE.md"] = Get-FileSha256 -Path (Join-Path $packRepo "NOTICE.md")
+        $packGood["NOTICE.md"] = Get-FileSha256 -Path (Join-Path $packRepo "nusb33\NOTICE.md")
         Invoke-PackGit @("add", "-A") | Out-Null
         Invoke-PackGit @("commit", "-q", "-m", "c1") | Out-Null
         $c1 = Invoke-PackGit @("rev-parse", "HEAD")
@@ -1676,7 +1680,7 @@ try {
         # revision refused with its reason. A package of make-package.ps1's
         # never carries the pack.
         $packDl = [ordered]@{}
-        foreach ($name in $packText.Keys) { $packDl["STORAGE\NUSB33\W98SE\$name"] = $packGood[$name] }
+        foreach ($name in $packText.Keys) { $packDl["W98SE\$name"] = $packGood[$name] }
         $packDl["NOTICE.md"] = $packGood["NOTICE.md"]
         $packAllow = Read-DriverPackAllowlist -Path $allowPath
         $exp = Export-DriverPack -Root $packRepo -Revision $c1 -Dest (Join-Path $script:work "drvpack-c1") -Allowlist $packAllow
@@ -1686,9 +1690,11 @@ try {
         }
         Assert-True ($exp.Files.Count -eq 9 -and $exp.Files.Contains("SHA256.TXT")) "the export does not hold the seven, NOTICE.md and its own SHA256.TXT."
         $sumsDl = Read-DriverPackHashList -Text ([System.IO.File]::ReadAllText((Join-Path $exp.Dir "SHA256.TXT"))) -Label "the download's SHA256.TXT"
-        Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["STORAGE/NUSB33/W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NONFREE\ paths."
+        Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NUSB33\ paths."
         Assert-True ((Get-DriverPackFolderFault -Dir $exp.Dir -Files $exp.Files) -eq "") "the export does not pass its own folder check."
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "NONFREE"))) "a package of make-package.ps1's carries NONFREE\."
+        foreach ($dlDir in @("NUSB33", "NONFREE")) {
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $dlDir))) "a package of make-package.ps1's carries $dlDir\."
+        }
         foreach ($bad in @(
                 @{ Rev = $c2; Want = "not the allowlisted file"; Why = "changed bytes under a matching SHA256.TXT" },
                 @{ Rev = $c3; Want = "not the allowlisted folder"; Why = "an eighth file" },
@@ -1725,20 +1731,24 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
         $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
         foreach ($fl in @("release", "debug")) {
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NONFREE"))) "the upload set's $fl\ holds NONFREE\; it belongs at the root."
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
         }
-        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NONFREE") -Files $exp.Files
-        Assert-True ($fault -eq "") "the upload set's NONFREE\ is not the recorded folder: $fault."
+        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NUSB33") -Files $exp.Files
+        Assert-True ($fault -eq "") "the upload set's NUSB33\ is not the recorded folder: $fault."
+        # NUSB 3.3's folder stands beside the installer, never inside a
+        # NONFREE\ (owner, 2026-10-22).
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "the upload set holds a NONFREE\; NUSB 3.3's files belong in NUSB33\."
         foreach ($inf in @("USBSTOR.INF", "USBNTMAP.INF")) {
-            $p = Join-Path $uploadDir "NONFREE\STORAGE\NUSB33\W98SE\$inf"
+            $p = Join-Path $uploadDir "NUSB33\W98SE\$inf"
             Assert-True ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).LastWriteTime -eq $projStamp) "the upload set's $inf is not dated by this project's INFs."
         }
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NONFREE"))) "-UploadSetOnly put the driver pack under releases\."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NUSB33"))) "-UploadSetOnly put the driver pack under releases\."
         $zip = [System.IO.Compression.ZipFile]::OpenRead($uploadZip)
         try { $entries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
-        foreach ($want in @("NONFREE/STORAGE/NUSB33/W98SE/USBSTOR.INF", "NONFREE/NOTICE.md", "NONFREE/SHA256.TXT")) {
+        foreach ($want in @("NUSB33/W98SE/USBSTOR.INF", "NUSB33/NOTICE.md", "NUSB33/SHA256.TXT")) {
             Assert-True ($entries -contains $want) "the archive has no '$want' entry."
         }
+        Assert-True (@($entries | Where-Object { $_ -like "NONFREE/*" }).Count -eq 0) "the archive has a NONFREE/ entry."
         $pubAfter = @{}
         foreach ($f in (Get-ChildItem -LiteralPath $pubRoot -File -Recurse)) { $pubAfter[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash }
         Assert-True ($pubAfter.Count -eq $pubBefore.Count -and @($pubBefore.Keys | Where-Object { $pubAfter[$_] -ne $pubBefore[$_] }).Count -eq 0) `
@@ -1767,17 +1777,17 @@ try {
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", (Join-Path $script:work "no-such-pack")))
         Assert-True ($r.ExitCode -eq 0) ("a release recorded without the driver pack was not assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "a release recorded without the driver pack got NONFREE\ in its download."
-        # A published tree holding NONFREE\ is refused: the pack is never
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NUSB33"))) "a release recorded without the driver pack got NUSB33\ in its download."
+        # A published tree holding NUSB33\ is refused: the pack is never
         # in releases\.
-        Ensure-Directory (Join-Path $pubRoot "NONFREE")
-        Set-Content -LiteralPath (Join-Path $pubRoot "NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        Ensure-Directory (Join-Path $pubRoot "NUSB33")
+        Set-Content -LiteralPath (Join-Path $pubRoot "NUSB33\NOTICE.md") -Value "committed by hand" -Encoding ASCII
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
         $r = Invoke-Releaser $packRelArgs
-        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NONFREE\ was assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NONFREE\."
-        Remove-Item -LiteralPath (Join-Path $pubRoot "NONFREE") -Recurse -Force
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NUSB33\ was assembled:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NUSB33\."
+        Remove-Item -LiteralPath (Join-Path $pubRoot "NUSB33") -Recurse -Force
         Write-AsciiFile -Path $recPath -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
 
         # The record is required from 3.2.0.0 (an older release may lack
@@ -1805,8 +1815,15 @@ try {
         # The installer's own table of the seven (xhciinst\inst_core.c,
         # instStorFile; design record 26 section 6.5.1) is this allowlist:
         # the same names and the same hashes, so the installer verifies the
-        # download's NONFREE\ folder by what the cut put there.
+        # download's NUSB33\ folder by what the cut put there.
         $coreText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhciinst\inst_core.c"))
+        # And the installer reads them from the folder the cut writes them
+        # to: inst_core.h's INST_STOR_PACK_DIR is NUSB33\W98SE.
+        $coreHText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhciinst\inst_core.h"))
+        $packDirM = [regex]::Match($coreHText, '#define\s+INST_STOR_PACK_DIR\s+"([^"]+)"')
+        $packDirWant = "$($script:DriverPackFolder)\$($script:DriverPackStorageDir)"
+        Assert-True ($packDirM.Success -and $packDirM.Groups[1].Value.Replace('\\', '\') -eq $packDirWant) `
+            ("the installer's INST_STOR_PACK_DIR is '{0}', not the download's {1}." -f $packDirM.Groups[1].Value, $packDirWant)
         $instSeven = [ordered]@{}
         foreach ($m in [regex]::Matches($coreText, '\{\s*"([A-Za-z0-9.]+)",\s*INST_STOR_DIR_\w+,\s*"([0-9A-Fa-f]{64})"')) {
             $instSeven[$m.Groups[1].Value.ToUpperInvariant()] = $m.Groups[2].Value.ToUpperInvariant()
@@ -3298,7 +3315,7 @@ try {
            Why  = "the upload assembly no longer holds each directory's filter INF to the place its architecture and version put it" },
         @{ Find = 'Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version';
            Why  = "the published xhcicm.sys is no longer held to the refusals xhciuas.sys is" },
-        @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
+        @{ Find = '$legCopy += $certPublishable';
            Why  = "a signed x64 leg no longer publishes xhci98-test.cer beside the binaries it signed (design record 19)" },
         @{ Find = '$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")';
            Why  = "the port switchover's user script and its two batch files (roadmap-hcd tasks 36.42 and 36.56) are no longer the files portsw\ carries" },
@@ -3318,8 +3335,8 @@ try {
            Why  = "a cut no longer stages the DOS qualifier into tools\xhciqual\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")';
-           Why  = "tools\ no longer holds exactly the qualifier, the port switchover, the silent install, the cleanup tool, the install tool, the USB tree tool and the mark service (tasks 38.9, 38.2, 38.8, 40.6, 41-A.6, 42-A.4 and 42-A.5)" },
+        @{ Find = '$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark", "xhciperf")';
+           Why  = "tools\ no longer holds exactly the qualifier, the port switchover, the silent install, the cleanup tool, the install tool, the USB tree tool, the mark service and the disk benchmark (tasks 38.9, 38.2, 38.8, 40.6, 41-A.6, 42-A.4, 42-A.5 and 43.50)" },
         @{ Find = '$retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0" }';
            Why  = "the upload assembly no longer admits tools\xhcisnap\ in a release that published it, or admits it in a later one (task 42-A.4)" },
         @{ Find = '$snapSchemaTool = Get-SnapSchema -Path (Join-Path $TrayToolDir "tr_snap.c") -Macro "SNAP_SCHEMA"';
@@ -3646,7 +3663,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "$d\xhci98.inf"), "; stand-in")
         }
-        foreach ($name in @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")) {
+        foreach ($name in @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark", "xhciperf")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut "tools\$name") | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "tools\$name\readme.txt"), "stand-in")
         }
@@ -4562,6 +4579,255 @@ try {
         @{ Find = 'Assert-TestSigned -Sys $sys -BuiltSys $builtSys'; Why = "the published x64 xhci98.sys is no longer held to the signature" },
         @{ Find = 'Assert-TestSigned -Sys $Sys -BuiltSys $builtSys'; Why = "the published x64 xhciuas.sys is no longer held to the signature" },
         @{ Find = '-Signed:$legSigned'; Why = "the UAS check no longer knows the leg is signed" }
+    )) {
+        Assert-True ($releaserText.Contains($anchor.Find)) `
+            ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
+    }
+
+    # --- the x64 catalogs (design record 19 section 3a; owner 2026-10-22) ---
+    #
+    # The verdict is a pure function of a parsed catalog, so it is driven
+    # with mocks; the parser is driven with a catalog WDK 7.1's MakeCat makes
+    # here of stand-in files (unsigned: no key is needed or used), where the
+    # toolchain is present.
+    Write-Step "x64 catalogs: the verdict on a parsed catalog (mocks)"
+    $catThumb = "00112233445566778899AABBCCDDEEFF00112233"
+    $catInfDigest = "1111111111111111111111111111111111111111"
+    $catSysDigest = "2222222222222222222222222222222222222222"
+    function New-CatMember {
+        param([string]$File, [string]$Digest, [string]$DataOid)
+        $sip = if ($DataOid -eq "1.3.6.1.4.1.311.2.1.15") { "{C689AAB8-8E78-11D0-8C47-00C04FC295EE}" } else { "{DE351A42-8E59-11D0-8C47-00C04FC295EE}" }
+        return [pscustomobject]@{ Tag = $Digest; File = $File; DataOid = $DataOid; DigestOid = "1.3.14.3.2.26";
+                                  Digest = $Digest; Indirect = 1; Names = 1; SipGuid = $sip; InfoVersion = 512; Infos = 1 }
+    }
+    function New-CatMock {
+        return [pscustomobject]@{
+            SignerCount = 1; Thumbprint = $catThumb; Subject = "CN=x"; DigestOid = "1.3.14.3.2.26";
+            SignatureValid = $true; Timestamped = $false; ContentType = "1.3.6.1.4.1.311.10.1";
+            Usage = @("1.3.6.1.4.1.311.12.1.1"); MemberAlgOid = "1.3.6.1.4.1.311.12.1.2";
+            OsAttr = @($script:CatalogOsAttr)
+            Members = @((New-CatMember -File "x.inf" -Digest $catInfDigest -DataOid "1.3.6.1.4.1.311.2.1.25"),
+                        (New-CatMember -File "x.sys" -Digest $catSysDigest -DataOid "1.3.6.1.4.1.311.2.1.15"))
+        }
+    }
+    $catExpected = @{ "x.inf" = @{ Digest = $catInfDigest; Pe = $false }; "x.sys" = @{ Digest = $catSysDigest; Pe = $true } }
+    Assert-True ((Test-PackageCatalog -Catalog (New-CatMock) -Expected $catExpected -Thumbprint $catThumb) -eq "") `
+        "Test-PackageCatalog refused the catalog record 19 section 3a prescribes."
+    $catCases = @(
+        @{ Name = "absent";       Do = { param($m) $null };                                         Says = "there is no catalog" },
+        @{ Name = "unsigned";     Do = { param($m) $m.SignerCount = 0; $m };                        Says = "is not signed" },
+        @{ Name = "two signers";  Do = { param($m) $m.SignerCount = 2; $m };                        Says = "2 signers" },
+        @{ Name = "other cert";   Do = { param($m) $m.Thumbprint = "FF" + $catThumb.Substring(2); $m }; Says = "not by the project test certificate" },
+        @{ Name = "SHA-256";      Do = { param($m) $m.DigestOid = "2.16.840.1.101.3.4.2.1"; $m };   Says = "not SHA-1" },
+        @{ Name = "bad PKCS #7";  Do = { param($m) $m.SignatureValid = $false; $m };                Says = "does not verify" },
+        @{ Name = "timestamped";  Do = { param($m) $m.Timestamped = $true; $m };                    Says = "countersignature" },
+        @{ Name = "not a list";   Do = { param($m) $m.Usage = @("1.3.6.1.4.1.311.10.3.1"); $m };    Says = "not a catalog list" },
+        @{ Name = "no OSAttr";    Do = { param($m) $m.OsAttr = @(); $m };                           Says = "its OSAttr" },
+        @{ Name = "old OSAttr";   Do = { param($m) $m.OsAttr = @("2:6.1"); $m };                    Says = "its OSAttr" },
+        @{ Name = "missing file"; Do = { param($m) $m.Members = @($m.Members[0]); $m };             Says = "does not list 'x.sys'" },
+        @{ Name = "extra file";   Do = { param($m) $m.Members = @($m.Members) + @(New-CatMember -File "y.sys" -Digest "33" -DataOid "1.3.6.1.4.1.311.2.1.15"); $m }; Says = "not one of its package files" },
+        @{ Name = "twice";        Do = { param($m) $m.Members = @($m.Members) + @($m.Members[0]); $m }; Says = "twice" },
+        @{ Name = "stale digest"; Do = { param($m) $m.Members[1].Digest = "44"; $m };               Says = "vouches for digest" },
+        @{ Name = "wrong tag";    Do = { param($m) $m.Members[1].Tag = "x.sys"; $m };               Says = "not by its digest" },
+        @{ Name = "SHA-256 file"; Do = { param($m) $m.Members[0].DigestOid = "2.16.840.1.101.3.4.2.1"; $m }; Says = "not SHA-1" },
+        @{ Name = "flat as PE";   Do = { param($m) $m.Members[1].DataOid = "1.3.6.1.4.1.311.2.1.25"; $m }; Says = "indirect data type" },
+        @{ Name = "PE as flat";   Do = { param($m) $m.Members[0].DataOid = "1.3.6.1.4.1.311.2.1.15"; $m }; Says = "indirect data type" },
+        @{ Name = "no name";      Do = { param($m) $m.Members[0].Names = 0; $m };                   Says = "does not carry one File name" },
+        @{ Name = "no data";      Do = { param($m) $m.Members[0].Indirect = 0; $m };                Says = "indirect data attribute" },
+        @{ Name = "odd data";     Do = { param($m) $m.Members[0].DataOid = "1.2.3.4"; $m };         Says = "indirect data type" },
+        @{ Name = "no info";      Do = { param($m) $m.Members[0].Infos = 0; $m };                   Says = "member info" },
+        @{ Name = "wrong SIP";    Do = { param($m) $m.Members[1].SipGuid = "{DE351A42-8E59-11D0-8C47-00C04FC295EE}"; $m }; Says = "member info" },
+        @{ Name = "info version"; Do = { param($m) $m.Members[0].InfoVersion = 256; $m };           Says = "member info" }
+    )
+    foreach ($c in $catCases) {
+        $why = Test-PackageCatalog -Catalog (& $c.Do (New-CatMock)) -Expected $catExpected -Thumbprint $catThumb
+        Assert-True ($why -match [regex]::Escape($c.Says)) `
+            ("Test-PackageCatalog on the '{0}' mock said '{1}', expected '{2}'." -f $c.Name, $why, $c.Says)
+    }
+    # Every INF of the amd64 package has its catalog in the table, and every
+    # amd64 INF names it (the gates' BOTH-CATALOG holds the line itself).
+    foreach ($pair in @(@("xhci98.cat", "src\xhci98-amd64.inf"), @("xhciuas.cat", "src\uas\xhciuas-amd64.inf"),
+                        @("xhcicm.cat", "src\cm\xhcicm-amd64.inf"), @("xhcicmf.cat", "src\cm\xhcicmf-amd64.inf"),
+                        @("stor98.cat", "src\stor98\inf\stor98-x64.inf"))) {
+        Assert-True ($script:PackageCatalogs.Contains($pair[0])) "package-common.ps1's catalog table has no $($pair[0])."
+        $catInfText = [System.IO.File]::ReadAllText((Join-Path $repo $pair[1]))
+        Assert-True ($catInfText -match ('(?m)^CatalogFile=' + [regex]::Escape($pair[0]) + '\r?$')) "$($pair[1]) does not name $($pair[0])."
+    }
+
+    # The image digest does not change when the image is signed, so a
+    # catalog covers the signed binary and the build alike. (The synthetic
+    # image is 1024 bytes, so there is no padding before the table.) And an
+    # explicit -End is honoured.
+    $catU = New-SyntheticPe -Size 1024
+    $catSigned = New-SyntheticSigned -Unsigned $catU -TableLen 64
+    Assert-True ((Get-PeImageDigest -Bytes $catSigned) -eq (Get-PeImageDigest -Bytes $catU)) `
+        "Get-PeImageDigest gave a signed image a digest other than its unsigned build's."
+    Assert-True ((Get-PeImageDigest -Bytes $catSigned -End 1024) -eq (Get-PeImageDigest -Bytes $catU)) `
+        "Get-PeImageDigest did not stop at the -End it was given."
+    Assert-True ((Get-PeImageDigest -Bytes $catSigned -End 1088) -ne (Get-PeImageDigest -Bytes $catU)) `
+        "Get-PeImageDigest ignored the -End it was given."
+    # An image whose length is not a multiple of 8 (an x86 build with its
+    # debug data after the sections) is hashed with zeros up to the next
+    # multiple, as MakeCat's member digest is: the same digest as the
+    # image with those zeros written, and not the digest of its bytes alone.
+    $catOdd = New-Object byte[] 1030
+    [Array]::Copy($catU, $catOdd, 1024)
+    for ($i = 1024; $i -lt 1030; $i++) { $catOdd[$i] = 0xAA }
+    $catEven = New-Object byte[] 1032
+    [Array]::Copy($catOdd, $catEven, 1030)
+    Assert-True ((Get-PeImageDigest -Bytes $catOdd) -eq (Get-PeImageDigest -Bytes $catEven)) `
+        "Get-PeImageDigest did not pad an image of 1030 bytes with zeros to 1032."
+    # Signed, the same image carries those zeros before its table at 1032:
+    # the signed and the unsigned digest agree, by the table and by -End.
+    $catOddS = New-SyntheticSigned -Unsigned $catOdd -TableLen 64
+    Assert-True ((Get-PeImageDigest -Bytes $catOddS) -eq (Get-PeImageDigest -Bytes $catOdd)) `
+        "Get-PeImageDigest gave an odd-length image signed a digest other than its unsigned build's."
+    Assert-True ((Get-PeImageDigest -Bytes $catOddS -End 1032) -eq (Get-PeImageDigest -Bytes $catOdd)) `
+        "Get-PeImageDigest gave an odd-length image signed, by -End, a digest other than its unsigned build's."
+    # Malformed: the two zeros removed and the table moved up to 1030, its
+    # entry pointing there. The padding must not recreate the missing zeros:
+    # a table, or an -End, off a multiple of 8 is refused.
+    $catMis = New-Object byte[] (1030 + 64)
+    [Array]::Copy($catOddS, $catMis, 1030)
+    [Array]::Copy($catOddS, 1032, $catMis, 1030, 64)
+    [BitConverter]::GetBytes([uint32]1030).CopyTo($catMis, 0x80 + 24 + 112 + 32)
+    $threw = $false
+    try { [void](Get-PeImageDigest -Bytes $catMis) } catch { $threw = $true }
+    Assert-True $threw "Get-PeImageDigest hashed an image whose certificate table is not on a multiple of 8."
+    $threw = $false
+    try { [void](Get-PeImageDigest -Bytes $catMis -End 1030) } catch { $threw = $true }
+    Assert-True $threw "Get-PeImageDigest took an -End that is not a multiple of 8."
+
+    # The trust list's extensions, encoded by hand: a critical flag is
+    # admitted only in DER (one byte, TRUE).
+    function New-Der {
+        param([int]$Tag, [byte[]]$Body)
+        $n = $Body.Length
+        $len = if ($n -lt 0x80) { @($n) } elseif ($n -lt 0x100) { @(0x81, $n) } else { @(0x82, ($n -shr 8), ($n -band 0xFF)) }
+        return ,[byte[]](@($Tag) + $len + $Body)
+    }
+    function New-CatOid { param([byte[]]$Body) return ,(New-Der -Tag 0x06 -Body $Body) }
+    $ctlNvOid = New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x02, 0x01))
+    function New-TestNv {
+        param([byte[]]$Flags)
+        return ,(New-Der -Tag 0x30 -Body ([byte[]]((New-Der -Tag 0x1E -Body ([System.Text.Encoding]::BigEndianUnicode.GetBytes("OSAttr"))) +
+                                                   $Flags +
+                                                   (New-Der -Tag 0x04 -Body ([System.Text.Encoding]::Unicode.GetBytes($script:CatalogOsAttr + [char]0))))))
+    }
+    $ctlNv = New-TestNv -Flags ([byte[]](0x02, 0x04, 0x10, 0x01, 0x00, 0x01))
+    function New-TestCtl {
+        param([byte[]]$Critical)
+        $usage = New-Der -Tag 0x30 -Body (New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x01, 0x01)))
+        $time = New-Der -Tag 0x17 -Body ([System.Text.Encoding]::ASCII.GetBytes("261022000000Z"))
+        $alg = New-Der -Tag 0x30 -Body ([byte[]]((New-CatOid ([byte[]](0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x01, 0x02))) + [byte[]](0x05, 0x00)))
+        $ext = New-Der -Tag 0x30 -Body ([byte[]]($ctlNvOid + $Critical + (New-Der -Tag 0x04 -Body $ctlNv)))
+        $exts = New-Der -Tag 0xA0 -Body (New-Der -Tag 0x30 -Body $ext)
+        return ,(New-Der -Tag 0x30 -Body ([byte[]]($usage + $time + $alg + $exts)))
+    }
+    $ctlOk = ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical ([byte[]]@()))
+    Assert-True (@($ctlOk.OsAttr).Count -eq 1 -and @($ctlOk.OsAttr)[0] -eq $script:CatalogOsAttr -and @($ctlOk.Members).Count -eq 0) `
+        ("ConvertFrom-CatalogTrustList misread a hand-encoded list: OSAttr '{0}', {1} members." -f (@($ctlOk.OsAttr) -join '|'), @($ctlOk.Members).Count)
+    $ctlTrue = ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical ([byte[]](0x01, 0x01, 0xFF)))
+    Assert-True (@($ctlTrue.OsAttr)[0] -eq $script:CatalogOsAttr) "ConvertFrom-CatalogTrustList refused an extension marked critical in DER."
+    foreach ($badBool in @(@{ Name = "empty"; B = [byte[]](0x01, 0x00) }, @{ Name = "FALSE"; B = [byte[]](0x01, 0x01, 0x00) },
+                           @{ Name = "not FF"; B = [byte[]](0x01, 0x01, 0x01) }, @{ Name = "two bytes"; B = [byte[]](0x01, 0x02, 0x00, 0xFF) })) {
+        $threw = $false
+        try { [void](ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical $badBool.B)) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-CatalogTrustList accepted the '{0}' critical flag, which is not DER." -f $badBool.Name)
+    }
+    $ctlNvGood = $ctlNv
+    foreach ($badFlags in @(@{ Name = "empty"; B = [byte[]](0x02, 0x00) }, @{ Name = "other"; B = [byte[]](0x02, 0x04, 0x00, 0x00, 0x00, 0x01) },
+                            @{ Name = "five bytes"; B = [byte[]](0x02, 0x05, 0x00, 0x10, 0x01, 0x00, 0x01) })) {
+        $ctlNv = New-TestNv -Flags $badFlags.B
+        $threw = $false
+        try { [void](ConvertFrom-CatalogTrustList -Content (New-TestCtl -Critical ([byte[]]@()))) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-CatalogTrustList accepted the '{0}' name-value flags." -f $badFlags.Name)
+    }
+    $ctlNv = $ctlNvGood
+
+    $makeCatExe = Join-Path $repo "tools\WinDDK71\bin\x86\MakeCat.exe"
+    if (Test-Path -LiteralPath $makeCatExe) {
+        Write-Step "x64 catalogs: the parser, on a catalog MakeCat makes of stand-ins"
+        $catWork = Join-Path $script:work "catalog"
+        New-Item -ItemType Directory -Force -Path $catWork | Out-Null
+        # The PE member: a driver this tree has built, where there is one
+        # (MakeCat's PE hashing needs a real image, which the synthetic
+        # header is not); otherwise a text stand-in, hashed flat, and the PE
+        # member type is left to the mocks above and to the packager's own
+        # check of every catalog it signs.
+        $catPe = Join-Path $catWork "x.sys"
+        $catBuilt = @(Get-ChildItem -LiteralPath (Join-Path $repo "src") -Recurse -File -Filter "xhci98.sys" -ErrorAction SilentlyContinue |
+                      Where-Object { $_.FullName -match '\\obj(fre|chk)' } | Select-Object -First 1)
+        if ($catBuilt.Count -gt 0) {
+            Copy-Item -LiteralPath $catBuilt[0].FullName -Destination $catPe
+        } else {
+            [System.IO.File]::WriteAllText($catPe, "not a driver", (New-Object System.Text.ASCIIEncoding))
+            Write-Warn "x64 catalogs: no built xhci98.sys under src\obj*, so the catalog's second member is a text stand-in."
+        }
+        $catInf = Join-Path $catWork "x.inf"
+        [System.IO.File]::WriteAllText($catInf, "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nCatalogFile=x.cat`r`n", (New-Object System.Text.ASCIIEncoding))
+        # The packager's own CDF and MakeCat step (New-PackageCatalogFile),
+        # left unsigned.
+        $catFile = New-PackageCatalogFile -StageDir $catWork -CatName "x.cat" -Files @("x.inf", "x.sys") `
+                                          -WorkDir (Join-Path $catWork "work") -MakeCat $makeCatExe
+        $catRead = Read-CatalogFile -Path $catFile
+        $catReal = @{ "x.inf" = (Get-CatalogMemberDigest -Path $catInf); "x.sys" = (Get-CatalogMemberDigest -Path $catPe) }
+        Assert-True (($catReal["x.sys"].Pe -eq ($catBuilt.Count -gt 0)) -and -not $catReal["x.inf"].Pe) "Get-CatalogMemberDigest did not tell the image from the INF."
+        Assert-True ($catRead.SignerCount -eq 0 -and $catRead.Members.Count -eq 2 -and @($catRead.OsAttr)[0] -eq $script:CatalogOsAttr) `
+            ("Read-CatalogFile misread MakeCat's catalog: {0} signers, {1} members, OSAttr '{2}'." -f $catRead.SignerCount, $catRead.Members.Count, (@($catRead.OsAttr) -join '|'))
+        Assert-True ((Test-PackageCatalog -Catalog $catRead -Expected $catReal -Thumbprint $catThumb) -match "is not signed") `
+            "Test-PackageCatalog did not refuse MakeCat's unsigned catalog as unsigned."
+        # What the members say, judged as if the catalog were signed: the
+        # parse and the digests agree, and a changed file is caught.
+        $catAsSigned = $catRead.PSObject.Copy()
+        $catAsSigned.SignerCount = 1; $catAsSigned.Thumbprint = $catThumb; $catAsSigned.DigestOid = "1.3.14.3.2.26"; $catAsSigned.SignatureValid = $true
+        $why = Test-PackageCatalog -Catalog $catAsSigned -Expected $catReal -Thumbprint $catThumb
+        Assert-True ($why -eq "") ("Test-PackageCatalog refused the members MakeCat wrote for the files it was given: $why")
+        [System.IO.File]::AppendAllText($catInf, "; changed`r`n")
+        $catChanged = @{ "x.inf" = (Get-CatalogMemberDigest -Path $catInf); "x.sys" = $catReal["x.sys"] }
+        Assert-True ((Test-PackageCatalog -Catalog $catAsSigned -Expected $catChanged -Thumbprint $catThumb) -match "vouches for digest") `
+            "Test-PackageCatalog accepted a catalog for an INF changed after it was made."
+        # The catalog's own name-value (OSAttr) sits in an Extension inside
+        # the [0] extensions SEQUENCE; a SET in either place is refused.
+        $catBytes = [System.IO.File]::ReadAllBytes($catFile)
+        $nvOid = [byte[]](0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0C, 0x02, 0x01)
+        $nvAt = -1
+        for ($i = 0; $i -le $catBytes.Length - $nvOid.Length; $i++) {
+            $hit = $true
+            for ($j = 0; $j -lt $nvOid.Length; $j++) { if ($catBytes[$i + $j] -ne $nvOid[$j]) { $hit = $false; break } }
+            if ($hit) { $nvAt = $i }
+        }
+        Assert-True ($nvAt -gt 4 -and $catBytes[$nvAt - 2] -eq 0x30 -and $catBytes[$nvAt - 4] -eq 0x30) `
+            "the MakeCat catalog's last name-value OID is not inside an Extension SEQUENCE inside the extensions SEQUENCE where this case expects it."
+        foreach ($back in @(2, 4)) {
+            $bad = [byte[]]$catBytes.Clone(); $bad[$nvAt - $back] = 0x31
+            $badFile = Join-Path $catWork ("bad-ext-$back.cat")
+            [System.IO.File]::WriteAllBytes($badFile, $bad)
+            $threw = $false
+            try { [void](Read-CatalogFile -Path $badFile) } catch { $threw = $true }
+            Assert-True $threw "Read-CatalogFile accepted a catalog whose extension container (offset -$back from the OSAttr OID) is a SET."
+        }
+        # A package directory missing a catalog its INF names is refused.
+        $catPkg = Join-Path $catWork "pkg"
+        New-Item -ItemType Directory -Force -Path $catPkg | Out-Null
+        Copy-Item -LiteralPath $catInf -Destination (Join-Path $catPkg "xhci98.inf")
+        Copy-Item -LiteralPath $catPe -Destination (Join-Path $catPkg "xhci98.sys")
+        Assert-True ((Test-CatalogOfPackage -Dir $catPkg -Thumbprint $catThumb) -match "has no xhci98.cat") `
+            "Test-CatalogOfPackage accepted a package whose xhci98.inf has no catalog beside it."
+        Copy-Item -LiteralPath $catFile -Destination (Join-Path $catPkg "xhci98.cat")
+        Assert-True ((Test-CatalogOfPackage -Dir $catPkg -Thumbprint $catThumb) -match "xhci98.cat: the catalog is not signed") `
+            "Test-CatalogOfPackage did not judge the catalog beside xhci98.inf."
+    } else {
+        Write-Warn "x64 catalogs: no MakeCat at '$makeCatExe' (tools\WinDDK71), so the parser case on a real catalog is skipped."
+    }
+    # And where the packager and the cut apply them.
+    $tsCatAt = $tsPkgText.IndexOf('Invoke-TestSignCatalog -StageDir $stageDir')
+    $tsStorStageAt = $tsPkgText.IndexOf("Bundled files never replace this project's own.")
+    Assert-True ($tsCatAt -gt 0 -and $tsStorStageAt -gt 0 -and $tsCatAt -gt $tsStorStageAt) `
+        "make-package.ps1 no longer makes the catalogs after the last file is staged."
+    foreach ($anchor in @(
+        @{ Find = 'Test-CatalogOfPackage -Dir $destDir -Thumbprint $testSignCert.Thumbprint'; Why = "the published x64 catalogs are no longer checked" },
+        @{ Find = 'Test-CatalogOfPackage -Dir $uploadFlavorDir -Thumbprint $script:TestSignThumbprint'; Why = "the upload set's x64 catalogs are no longer checked" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")

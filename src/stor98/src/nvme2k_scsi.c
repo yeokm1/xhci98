@@ -32,6 +32,7 @@
 #include "nvme2k.h"
 #include "utils.h"
 #include "inqid.h"
+#include "stor98ver.h"
 
 //
 // Completion of SRBs the driver answers itself (no NVMe command). The
@@ -93,10 +94,21 @@ static BOOLEAN ScsiNotReady(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
 BOOLEAN ScsiHandleInquiry(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 {
     UCHAR data[INQ_RESP_MAX];
-    ULONG n, i;
+    ULONG n, i, alloc;
 
-    n = InqResponse(Srb->Cdb, DevExt->ControllerSerialNumber, DevExt->ControllerModelNumber,
-                    DevExt->ControllerFirmwareRevision, data);
+    if ((Srb->Cdb[1] & 0x03) == 0x01 && Srb->Cdb[2] == STOR98PF_VPD_PAGE) {
+        // Stor98's identity page (include/stor98pf.h; MD-8), the proof a
+        // reader asks for before it sends READ BUFFER.
+        PfIdentityPage(PfPciLocation(DevExt->BusNumber, DevExt->SlotNumber), data);
+        n = STOR98PF_VPD_LEN;
+        alloc = ((ULONG)Srb->Cdb[3] << 8) | Srb->Cdb[4];
+        if (n > alloc) {
+            n = alloc;
+        }
+    } else {
+        n = InqResponse(Srb->Cdb, DevExt->ControllerSerialNumber, DevExt->ControllerModelNumber,
+                        DevExt->ControllerFirmwareRevision, data);
+    }
     if (n == INQ_REFUSE) {
         return ScsiIllegalRequest(DevExt, Srb, SCSI_ADSENSE_INVALID_CDB);
     }
@@ -108,6 +120,89 @@ BOOLEAN ScsiHandleInquiry(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     }
     for (i = 0; i < n; i++) {
         ((PUCHAR)Srb->DataBuffer)[i] = data[i];
+    }
+    Srb->DataTransferLength = n;
+    return ScsiSuccess(DevExt, Srb);
+}
+
+//
+// ScsiHandleReadBuffer - READ BUFFER, the counter answer (docs/PLAN.md MD-8,
+// include/stor98pf.h). Built from the device extension in HwStartIo, which
+// the port runs synchronised with the interrupt and timer callbacks, so the
+// copy is consistent; no NVMe command, no access to the medium. Anything the
+// interface does not answer is INVALID FIELD IN CDB. The answer is cut at
+// the allocation length and the data buffer, as INQUIRY's is.
+//
+static VOID ScsiPfAnswer(IN PHW_DEVICE_EXTENSION DevExt, OUT PSTOR98PF_ANSWER A)
+{
+    static const char ver[] = STOR98_VER_STR;
+    ULONG i;
+
+    RtlZeroMemory(A, sizeof(*A));
+    A->Signature = STOR98PF_SIGNATURE;
+    A->Version = STOR98PF_VERSION;
+    A->Length = sizeof(*A);
+    A->Epoch = DevExt->PfEpoch;
+#ifdef NVME2K_W9X
+    A->Build |= STOR98PF_BUILD_9X;
+#endif
+#ifdef _WIN64
+    A->Build |= STOR98PF_BUILD_AMD64;
+#endif
+    A->PciLocation = PfPciLocation(DevExt->BusNumber, DevExt->SlotNumber);
+    A->VendorDevice = ((ULONG)DevExt->DeviceId << 16) | DevExt->VendorId;
+    A->State = (ULONG)DevExt->State | ((ULONG)DevExt->Bringup << 8);
+    for (i = 0; i < sizeof(A->DriverVersion) - 1 && ver[i] != 0; i++) {
+        A->DriverVersion[i] = (UCHAR)ver[i];
+    }
+    A->BlockSize = DevExt->NamespaceBlockSize;
+    A->BlocksLo = (ULONG)DevExt->NamespaceSizeInBlocks;
+    A->BlocksHi = (ULONG)(DevExt->NamespaceSizeInBlocks >> 32);
+    A->MaxTransfer = DevExt->PfMaxTransfer;
+    A->PhysicalBreaks = DevExt->PfBreaks;
+    // MDTS in units of the minimum page size, as lifecycle.c reads it
+    A->MdtsBytes = (DevExt->Mdts != 0 && DevExt->Mdts < 20) ? ((ULONG)PAGE_SIZE << DevExt->Mdts) : 0;
+    A->MaxChildBytes = DevExt->MaxChildBytes;
+    A->ChildLimitIo = DevExt->ChildLimitIo;
+    A->ChildrenIo = DevExt->ChildrenIo;
+    A->WriteThrough = DevExt->WtMode;
+    A->Vwc = DevExt->Vwc ? 1 : 0;
+    A->Polling = (DevExt->PollAlways ? 1 : 0) | (DevExt->PollMode ? 2 : 0) | ((ULONG)DevExt->PollWhy << 8);
+    A->Dcb9xSeen = DevExt->PfDcbSeen;
+    A->DcbMaxXferLen = DevExt->PfDcbMaxXfer;
+    A->DcbMaxSgElements = DevExt->PfDcbMaxSg;
+    A->DcbDmdFlags = DevExt->PfDcbDmd;
+    A->Events[STOR98PF_EV_FAST_FAILS] = DevExt->FastFails;
+    A->Events[STOR98PF_EV_BUSY] = DevExt->BusyReturned;
+    A->Events[STOR98PF_EV_RESETS] = DevExt->ResetCalls;
+    A->Events[STOR98PF_EV_GONE_DEADLINES] = DevExt->GoneDeadlineCount;
+    A->Events[STOR98PF_EV_STALE_CQES] = DevExt->StaleCqes;
+    A->Events[STOR98PF_EV_LATE_CQES] = DevExt->LateCqes;
+    A->Events[STOR98PF_EV_QUARANTINED] = DevExt->Quarantined;
+    A->Events[STOR98PF_EV_STORM_MASKS] = DevExt->StormMasks;
+    A->Totals = DevExt->Pf;
+}
+
+BOOLEAN ScsiHandleReadBuffer(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
+{
+    UCHAR desc[4];
+    const UCHAR *src;
+    ULONG n;
+
+    ScsiPfAnswer(DevExt, &DevExt->PfAnswer);
+    if (PfReadBuffer(Srb->Cdb, Srb->CdbLength, &DevExt->PfAnswer, desc, &src, &n) != PF_RB_OK) {
+        return ScsiIllegalRequest(DevExt, Srb, SCSI_ADSENSE_INVALID_CDB);
+    }
+    if (n > Srb->DataTransferLength) {
+        n = Srb->DataTransferLength;
+    }
+    if (Srb->DataBuffer == NULL) {
+        n = 0;
+    }
+    if (!EngCopyToCaller(DevExt, Srb, src, n)) {
+        // 9x: the data buffer cannot be resolved; nothing was copied.
+        Srb->DataTransferLength = 0;
+        return ScsiError(DevExt, Srb, SRB_STATUS_ERROR);
     }
     Srb->DataTransferLength = n;
     return ScsiSuccess(DevExt, Srb);

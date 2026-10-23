@@ -190,23 +190,28 @@ ULONG CmQueryBuild(UCHAR *buf, const CM_QUERY_IN *in)
     ULONG i;
     ULONG at;
 
-    cmQZero(buf, CM_Q_HDR_BYTES);
+    cmQZero(buf, CM_Q_REC_AT);
+    if (in->Removal != NULL) {
+        cmQCopy(buf + CM_Q_HDR_BYTES, in->Removal, CM_Q_RM_BYTES);
+    } else {
+        cmQPut(buf + CM_Q_HDR_BYTES, CM_Q_RM_MEMBER, CM_Q_UNKNOWN);
+    }
     n = cmQRouters(in->Record, in->RecordBytes);
     rec = 0;
     if (in->Record != NULL && in->RecordBytes >= CM_ST_HDR_BYTES &&
         in->RecordBytes <= CM_ST_MAX_BYTES) {
         rec = CM_ST_HDR_BYTES + n * CM_ST_ENTRY_BYTES;
-        cmQCopy(buf + CM_Q_HDR_BYTES, in->Record, CM_ST_HDR_BYTES);
+        cmQCopy(buf + CM_Q_REC_AT, in->Record, CM_ST_HDR_BYTES);
         if (n == 0) {
             /* A record cut to its header says so in its own fields. */
-            cmQPut(buf + CM_Q_HDR_BYTES, CM_ST_O_BYTES, CM_ST_HDR_BYTES);
-            cmQPut(buf + CM_Q_HDR_BYTES, CM_ST_O_ROUTER_COUNT, 0);
+            cmQPut(buf + CM_Q_REC_AT, CM_ST_O_BYTES, CM_ST_HDR_BYTES);
+            cmQPut(buf + CM_Q_REC_AT, CM_ST_O_ROUTER_COUNT, 0);
         } else {
-            cmQCopy(buf + CM_Q_HDR_BYTES + CM_ST_HDR_BYTES,
+            cmQCopy(buf + CM_Q_REC_AT + CM_ST_HDR_BYTES,
                     in->Record + CM_ST_HDR_BYTES, n * CM_ST_ENTRY_BYTES);
         }
     }
-    at = CM_Q_HDR_BYTES + rec;
+    at = CM_Q_REC_AT + rec;
     ext = at;
     for (i = 0; i < n; i++) {
         if (in->Ext != NULL && i < in->ExtCount) {
@@ -235,11 +240,11 @@ ULONG CmQueryBuild(UCHAR *buf, const CM_QUERY_IN *in)
     cmQPut(buf, CM_Q_O_LIVE, in->Live);
     cmQPut(buf, CM_Q_O_FLAGS,
            (in->Inert ? CM_Q_F_INERT : 0) |
-               (rec != 0 && (cmQGet(buf + CM_Q_HDR_BYTES, CM_ST_O_FLAGS) &
+               (rec != 0 && (cmQGet(buf + CM_Q_REC_AT, CM_ST_O_FLAGS) &
                              CM_ST_F_TRUNCATED) != 0
                     ? CM_Q_F_TRUNCATED
                     : 0));
-    cmQPut(buf, CM_Q_O_REC_OFFSET, rec != 0 ? CM_Q_HDR_BYTES : 0);
+    cmQPut(buf, CM_Q_O_REC_OFFSET, rec != 0 ? CM_Q_REC_AT : 0);
     cmQPut(buf, CM_Q_O_EXT_OFFSET, ext);
     cmQPut(buf, CM_Q_O_EXT_SHAPE, (n & 0xFFFFUL) | (CM_Q_EXT_BYTES << 16));
     cmQPut(buf, CM_Q_O_EPOCH_LO, in->EpochLo);

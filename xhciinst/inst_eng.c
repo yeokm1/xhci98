@@ -64,6 +64,9 @@
 #include "inst_eng.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/cm/cm_ejask.h"
+#include "inst_ej9x.h"
+#include "../src/cm/cm_query.h"
 
 /* The driver's own switchover gate (src\xhci_psw.c), declared here rather
  * than through xhci_psw.h, whose compatibility header is the driver's. */
@@ -262,6 +265,8 @@ static int idle_filtered_port(const DEVREC *d, int inf);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
+static int sbState;          /* INST_SB_*: Secure Boot as read (43.22) */
+static int cmBootRefused;    /* CM-alone kind, x64: the CM refused (43.22) */
 static int pkgSigned = -1;  /* xhci98.sys signed: 1, unsigned: 0, unread: -1 */
 static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
 static char srcDir[INST_PATH_CHARS];
@@ -324,6 +329,11 @@ static int haveS98;         /* the flavour directory carries Stor98       */
 static int s98Include;      /* ticked, or /stor98, with the Thunderbolt
                                component in the run                       */
 static int s98Want;         /* ticked, or /stor98                          */
+/* S98VSD.VXD (design record 30 section 7). */
+static int haveVsd;         /* the flavour directory carries S98VSD.VXD   */
+static char vsdHash[65];    /* its SHA-256 (98 SE and ME)                 */
+static int vsdChoice;       /* the box ticked, or the console's Y         */
+static int vsdDid;          /* 1 placed, 2 queued, 4 removed              */
 static int s98TopoFresh;    /* the places were read since the last scan   */
 static int s98Share;        /* INST_S98_SHARE_*, the latest plan's        */
 static int s98Shown;        /* the plan was printed: later reasons are said */
@@ -403,6 +413,11 @@ static void s98_ask_values(void);
 static void s98_ask_unused(void);
 static void s98_file_update_9x(void);
 static void s98_wininit_cancel(const char *bin);
+static int stor_hash(const char *path, char hex[65]);
+static int vsd_check_package(void);
+static int vsd_mode(int uninstall);
+static int vsd_run(int mode);
+static void vsd_question(void);
 static int s98_pre_commit(void);
 static void s98_question(void);
 static void s98_reconnect_nt(void);
@@ -448,6 +463,11 @@ static int storPack;        /* 1 the download's seven verified, 0 absent,
                                -1 not this release's                    */
 static int storInclude;     /* the row ticked                            */
 static int storCopyOk;      /* the seven go into this run's package copy */
+static int storDpOff;       /* 98 SE: DevicePath withdrawn by this run and
+                               not named again (record 26 section 6.5.5) */
+static int stor_98se(void);
+static int stor_pair_left(void);
+static int stor_inf_found(int i);
 static char storPackDir[INST_PATH_CHARS];
 static int storPlanCase;      /* the case the plan showed (defined below) */
 static void pkg_src(const char *rel, char *path, size_t cap);
@@ -465,6 +485,9 @@ static int stor_any(int kind);
 static int stor_covered(void);
 static void stor_tools_copy(void);
 static int stor_tools_remove(void);
+static void stor_silent_merge(void);
+static int stor_silent_remove(void);
+static int silent_gate_on(void);
 static int controller_listed(void);
 static int stor_un_devices(void);
 static int stor_un_adopt(int record);
@@ -1686,7 +1709,8 @@ static void group_verdicts(void)
                 continue;
             }
             d->Refused = 0;
-            if (groupVerdict[g] != INST_GROUP_OK && d->Action != INST_ACT_FOREIGN) {
+            if (groupVerdict[g] != INST_GROUP_OK && d->Action != INST_ACT_FOREIGN &&
+                d->Action != INST_ACT_WINDOWS) {
                 d->Refused = 1;
                 d->Runs = 0;
             } else if (repair && envNow.Nt && d->Present &&
@@ -1769,7 +1793,8 @@ static void plan(void)
          * on a drive, are installed over; every other driver stays. */
         if (osKind == INST_OS_CMONLY && dv.HasService &&
             ((d->Inf == INST_INF_XHCI && inst_eq(d->Service, "USBXHCI")) ||
-             (d->Inf == INST_INF_S98 && inst_eq(d->Service, "stornvme")))) {
+             (d->Inf == INST_INF_S98 &&
+              inst_s98_over_inbox(1, d->Service)))) {
             dv.HasService = 0;
         }
         dv.OwnService = inst_eq(d->Service, instInfService[d->Inf]);
@@ -1789,6 +1814,9 @@ static void plan(void)
             }
         }
         d->Action = inst_action(&dv, inf_version(d->Inf));
+        if (d->Inf == INST_INF_UAS) {
+            d->Action = inst_uas_nt6_action(osKind, d->Action);
+        }
         d->Runs = inst_action_runs(d->Action, opts.Force);
         /* /restage: a confirmed binary mismatch reinstalls the INF's devices,
          * whatever their DriverVersion says (record 23 section 5.7). */
@@ -2184,7 +2212,7 @@ static int check_package(void)
     join(pkgDir, sizeof(pkgDir), root, opts.Dir);
     out("Package:   %s\n", root);
     out("Directory: %s\n\n", pkgDir);
-    if (!s98_check_package()) {
+    if (!s98_check_package() || !vsd_check_package()) {
         return 0;
     }
 
@@ -2521,6 +2549,7 @@ static void ask_values(void)
             answerValue[v] = chosenValue[v];
         }
     }
+
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
         INST_U32 m = inst_value_asked_mask(v, &envNow);
         INST_U32 def;
@@ -2797,6 +2826,7 @@ static int value_needs_write(int v)
         value_inf(v) == NULL) {
         return 0;
     }
+
     inst_value_default(v, value_inf(v), &def);
     value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
     mw = mw_value(v, &mwv);
@@ -3962,6 +3992,18 @@ static int forget_dir(void)
         RegCloseKey(k);
         return 0;
     }
+    /* Task 43.27: the computer's choice of the tool's notice. */
+    r = RegDeleteValueA(k, INST_FAST_VALUE);
+    if (r == ERROR_SUCCESS) {
+        flagChanged = 1;
+        logonly("deleted HKLM\\%s\\%s\n", INST_DIR_KEY, INST_FAST_VALUE);
+    } else if (r != ERROR_FILE_NOT_FOUND) {
+        out("The USB Tree's \"can run faster\" choice could not be deleted "
+            "(error %ld).\n", (long)r);
+        flagFailed = 1;
+        RegCloseKey(k);
+        return 0;
+    }
     r = RegDeleteValueA(k, INST_DIR_VALUE);
     if (r == ERROR_SUCCESS) {
         flagChanged = 1;
@@ -4266,6 +4308,37 @@ static void old_dir_cleanup(void)
     movefrom_set(toolLeft ? oldToolDir : NULL);
 }
 
+/* Record 23 section 9.5 item 7: TrayFasterNotice written as 1 or 0 unless
+ * it already is; a failure fails the run. */
+static void fast_write(int on)
+{
+    DWORD v = on ? 1UL : 0UL;
+    DWORD now = 0;
+    HKEY k = NULL;
+
+    if (reg_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_FAST_VALUE, &now) &&
+        now == v) {
+        return;
+    }
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) == ERROR_SUCCESS &&
+        RegSetValueExA(k, INST_FAST_VALUE, 0, REG_DWORD, (const BYTE *)&v,
+                       sizeof(v)) == ERROR_SUCCESS) {
+        flagChanged = 1;
+        out("Its \"can run faster\" notice is %s for this computer "
+            "(INSTALL /%s: %s).\n", on ? "on" : "off",
+            on ? "nofaster" : "faster", on ? "off" : "on");
+        logonly("wrote HKLM\\%s\\%s = %lu\n", INST_DIR_KEY, INST_FAST_VALUE,
+                (unsigned long)v);
+    } else {
+        out("Its \"can run faster\" notice could not be written.\n");
+        flagFailed = 1;
+    }
+    if (k != NULL) {
+        RegCloseKey(k);
+    }
+}
+
 /* Record 23 section 9.5: the tool for this machine's architecture into the
  * install directory (section 9.6), and the Run value that starts it at
  * login (none with /notray), under the maintenance lock; after a move, the
@@ -4350,6 +4423,12 @@ static void tray_install(void)
         out("The xHCI98 USB Tree: %s\n  %s%s\n",
             copy ? "would be copied to" : "is current at", t.Exe,
             inst_tray_list_text(runState, action));
+        if (opts.Faster || opts.NoFaster) {
+            DWORD v = 0;
+            int have = reg_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY,
+                                 INST_FAST_VALUE, &v);
+            out("  %s\n", inst_fast_list_text(opts.Faster, have, v));
+        }
         if (moving()) {
             out("  The copy in %s would be removed.\n", oldToolDir);
         }
@@ -4398,6 +4477,11 @@ static void tray_install(void)
         }
     } else if (action == INST_TRAY_RUN_DELETE && tray_run_delete() < 0) {
         flagFailed = 1;
+    }
+    /* Task 43.27 (record 23 section 9.5 item 7): the computer's choice
+     * of the tool's "can run faster" notice, with the tool in place. */
+    if ((opts.Faster || opts.NoFaster) && file_exists(t.Exe, NULL)) {
+        fast_write(opts.Faster);
     }
     /* In place: the directory is recorded, and after a move the old copy
      * goes - the Run value names the new one already (or none, /notray). */
@@ -4843,11 +4927,16 @@ static int package_files(PKG_EACH each, void *ctx)
                 continue;
             }
             /* A No to the Thunderbolt question: none of its files in the
-             * copy, so no wizard and no store offers them (section 8.5). */
+             * copy, so no wizard and no store offers them (section 8.5);
+             * the x64 package's two catalogs go with their INFs (design
+             * record 19 section 3a). The other catalogs ride along with
+             * the rest of the flavour directory, beside their INFs. */
             if (!tbInclude && !tbTagAll &&
                 (inst_eq(fd.cFileName, "xhcicm.inf") ||
                                inst_eq(fd.cFileName, "xhcicmf.inf") ||
-                               inst_eq(fd.cFileName, "xhcicm.sys"))) {
+                               inst_eq(fd.cFileName, "xhcicm.sys") ||
+                               inst_eq(fd.cFileName, "xhcicm.cat") ||
+                               inst_eq(fd.cFileName, "xhcicmf.cat"))) {
                 continue;
             }
             inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));
@@ -4864,12 +4953,14 @@ static int package_files(PKG_EACH each, void *ctx)
         }
         FindClose(h);
     }
-    /* 98 SE: the USB storage drivers' seven, from the download's NONFREE\
+    /* 98 SE: the USB storage drivers' seven, from the download's NUSB33\
      * folder, once their files are in place (record 26 section 6.5.4). */
     if (!envNow.Nt && storCopyOk) {
         int i;
+        /* USBNTMAP.INF before USBSTOR.INF, so a copy cut short never holds
+         * USBSTOR.INF alone (record 26 section 6.5.5). */
         for (i = 0; i < INST_STOR_COUNT; i++) {
-            if (!each(instStorFile[i].Name, ctx)) {
+            if (!each(instStorFile[instStorCopyOrder[i]].Name, ctx)) {
                 return 0;
             }
         }
@@ -5151,6 +5242,33 @@ static int flat_listed(const char *dir, const char *lst, const char *name)
     return found;
 }
 
+/* One file of a list deleted, an .inf with its .PNF. 1 gone; 0 it stayed
+ * (said). */
+static int flat_delete(char *file)
+{
+    size_t n;
+    int gone;
+
+    SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+    if (DeleteFileA(file)) {
+        flagChanged = 1;
+    }
+    gone = GetFileAttributesA(file) == 0xFFFFFFFFUL;
+    if (!gone) {
+        out("%s could not be deleted (error %lu).\n", file,
+            (unsigned long)GetLastError());
+    }
+    n = strlen(file);
+    if (n > 4 && inst_eq(file + n - 4, ".inf")) {
+        strcpy(file + n - 4, ".PNF");
+        SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+        if (DeleteFileA(file)) {
+            flagChanged = 1;
+        }
+    }
+    return gone;
+}
+
 /* The files dir\lst names (each .inf with its .PNF) deleted, then lst -
  * only when every one of them is gone, so a file that would not go stays
  * named for the next run. Only plain names: a list never reaches outside
@@ -5163,8 +5281,8 @@ static int flat_remove_list(const char *dir, const char *lst)
     char *text;
     char *p;
     char *nl;
-    size_t n;
     int left = 0;
+    int late = 0;
 
     join(path, sizeof(path), dir, lst);
     text = read_file(path, NULL);
@@ -5187,26 +5305,33 @@ static int flat_remove_list(const char *dir, const char *lst)
             inst_eq(p, inst_tray_file(INST_MY_ARCH))) {
             continue;
         }
+        /* USBNTMAP.INF after the rest, once USBSTOR.INF is gone (record
+         * 26 section 6.5.5). */
+        if (inst_stor_rm_late(p, NULL)) {
+            late = 1;
+            continue;
+        }
         join(file, sizeof(file), dir, p);
-        SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
-        if (DeleteFileA(file)) {
-            flagChanged = 1;
-        }
-        if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
-            out("%s could not be deleted (error %lu).\n", file,
-                (unsigned long)GetLastError());
+        if (!flat_delete(file)) {
             left = 1;
-        }
-        n = strlen(file);
-        if (n > 4 && inst_eq(file + n - 4, ".inf")) {
-            strcpy(file + n - 4, ".PNF");
-            SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
-            if (DeleteFileA(file)) {
-                flagChanged = 1;
-            }
         }
     }
     free(text);
+    if (late) {
+        join(file, sizeof(file), dir,
+             instStorFile[INST_STOR_IDX_USBSTOR_INF].Name);
+        if (file_state(file) != 0) {
+            out("%s stays while %s is there.\n",
+                instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name, file);
+            left = 1;
+        } else {
+            join(file, sizeof(file), dir,
+                 instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name);
+            if (!flat_delete(file)) {
+                left = 1;
+            }
+        }
+    }
     if (left) {
         flagSteps = 1;
         return 0;
@@ -5237,6 +5362,7 @@ static int flat_drop_work(const char *dir)
     }
     join(lst, sizeof(lst), dir, INST_FLAT_LIST);
     if (GetFileAttributesA(lst) == 0xFFFFFFFFUL) {
+        int late = 0;
         join(lst, sizeof(lst), work, INST_FLAT_LIST);
         text = read_file(lst, NULL);
         for (p = text; p != NULL && *p != '\0'; p = nl) {
@@ -5255,6 +5381,12 @@ static int flat_drop_work(const char *dir)
                 inst_eq(p, inst_tray_file(INST_MY_ARCH))) {
                 continue;
             }
+            /* USBNTMAP.INF last, once USBSTOR.INF is gone (record 26
+             * section 6.5.5). */
+            if (inst_stor_rm_late(p, NULL)) {
+                late = 1;
+                continue;
+            }
             join(file, sizeof(file), dir, p);
             SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
             if (DeleteFileA(file)) {
@@ -5267,6 +5399,25 @@ static int flat_drop_work(const char *dir)
             }
         }
         free(text);
+        if (late) {
+            join(file, sizeof(file), dir,
+                 instStorFile[INST_STOR_IDX_USBSTOR_INF].Name);
+            if (file_state(file) != 0) {
+                left = 1;
+            } else {
+                join(file, sizeof(file), dir,
+                     instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name);
+                SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+                if (DeleteFileA(file)) {
+                    flagChanged = 1;
+                }
+                if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+                    out("%s could not be deleted (error %lu).\n", file,
+                        (unsigned long)GetLastError());
+                    left = 1;
+                }
+            }
+        }
     }
     /* A file that stayed keeps the staging list that names it. */
     if (left) {
@@ -6140,10 +6291,16 @@ static int stage_nt(void)
         logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, media);
         if (!api.CopyOem(path, media, SPOST_PATH, 0, dest, sizeof(dest), NULL,
                          &component)) {
+            DWORD err = GetLastError();
+            const char *why = inst_stage_error_text(err, INST_MY_ARCH,
+                                                    osKind);
             out("%s could not be staged (error 0x%08lX).%s\n", instInfFile[k],
-                (unsigned long)GetLastError(),
+                (unsigned long)err,
                 trapOem[k][0] ? " Run INSTALL.BAT again: it stages from the "
                                 "same local copy." : "");
+            if (why != NULL) {
+                out("%s\n", why);
+            }
             return 0;
         }
         if (k == INST_INF_CM) {
@@ -6282,9 +6439,10 @@ static DWORD call_flags(const DEVREC *x, int inf)
      * (record 26 section 6.3); an update of a Stor98 it runs, or /force's
      * reinstall, takes record 23's forced route. */
     if (inf == INST_INF_S98) {
-        /* Over Windows' own stornvme (8.1, record 26 section 5.3.1 case
-         * 3b): its signed in-box INF outranks Stor98's, so forced. */
-        if (x->Action == INST_ACT_INSTALL && inst_eq(x->Service, "stornvme")) {
+        /* Over Windows' own stornvme (8.1 and 10, record 26 section 5.3.1
+         * case 3b): its signed in-box INF outranks Stor98's, so forced. */
+        if (x->Action == INST_ACT_INSTALL &&
+            inst_s98_over_inbox(osKind == INST_OS_CMONLY, x->Service)) {
             return INST_INSTALLFLAG_FORCE;
         }
         return x->Action == INST_ACT_INSTALL ? 0 : INST_INSTALLFLAG_FORCE;
@@ -6510,7 +6668,8 @@ static int install_inf(int inf, int controllers)
                 } else {
                     callIdx[n++] = c;
                     if (inf == INST_INF_S98 &&
-                        inst_eq(devs[j].Service, "stornvme") &&
+                        inst_s98_over_inbox(osKind == INST_OS_CMONLY,
+                                            devs[j].Service) &&
                         !s98_pending_mark(devs[j].Id, "attempt")) {
                         /* Its ownership survives a reconnection that comes
                          * only in a later run (record 26 section 5.3.1 case
@@ -7140,16 +7299,23 @@ static void check_results(void)
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
                    changedReboot[c]) {
             /* 32-bit Vista and 7 hold the controller until the helper's
              * restart (release notes, "Installing", step 3). */
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
+        } else if (envNow.Major >= 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
                    (d->Problem == 52UL || d->Problem == 39UL) &&
                    !testSigningConfirmed) {
             out("  %s does not load: test-signing mode is needed (see the "
                 "note above).\n", d->Desc);
+            flagSteps = 1;
+        } else if (inst_sig_note_kind(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                                      osKind) == INST_SIG_X86_SB &&
+                   d->Problem == 52UL) {
+            out("  %s does not load: Windows refuses the unsigned driver "
+                "while Secure Boot\n  is on (see the note above).\n",
+                d->Desc);
             flagSteps = 1;
         } else if (changedReboot[c] && d->Problem == 0) {
             /* The old release runs until the restart its install asked for. */
@@ -7233,7 +7399,24 @@ static void testsigning_note_cm(void);
  * imported. */
 static void testsigning_note(void)
 {
+    cmBootRefused = 0;
     testsigning_note0();
+    if (usbInclude && tbInclude) {
+        /* The USB drivers ticked on 8 and 8.1 x64 (task 43.43 case 3): the
+         * connection manager in the run is a boot driver all the same. */
+        switch (inst_cm_boot_gate(INST_MY_ARCH, osKind, pkgCmSigned,
+                                  testSigningConfirmed)) {
+        case INST_CMBOOT_WARN:
+            out("%s\n", inst_cm_boot_warn_text());
+            break;
+        case INST_CMBOOT_REFUSE:
+            cmBootRefused = 1;
+            out("%s\n", inst_cm_boot_refuse_text());
+            break;
+        default:
+            break;
+        }
+    }
     if (INST_MY_ARCH == INST_ARCH_AMD64 && envNow.Major >= 6 && s98Include) {
         out("stor98.sys, the bundled Stor98, is signed (or not) with the "
             "drivers above, by\nthe same certificate: it loads as they "
@@ -7241,25 +7424,75 @@ static void testsigning_note(void)
     }
 }
 
+/* Secure Boot's state on the connection-manager-alone kind of system
+ * (record 26 section 5.3.2, record 23 section 5.10 revision 30; owner,
+ * 2026-10-22): read and shown, never changed; the raw value logged. */
+static void sb_read(void)
+{
+    DWORD v = 0;
+    int found;
+
+    sbState = INST_SB_UNKNOWN;
+    if (stScreens || !inst_sb_applies(envNow.Nt, osKind)) {
+        return;
+    }
+    found = reg_dword(HKEY_LOCAL_MACHINE, INST_SB_KEY, INST_SB_VALUE, &v);
+    sbState = inst_sb_state(found, found ? INST_REG_DWORD_TYPE : 0UL,
+                            (INST_U32)v);
+    if (found) {
+        logonly("UEFISecureBootEnabled: %lu (state %d)\n", (unsigned long)v,
+                sbState);
+    } else {
+        logonly("UEFISecureBootEnabled: not read as a REG_DWORD (state %d)\n",
+                sbState);
+    }
+}
+
+/* The x64 note's Secure Boot sentence, where the state is known. */
+static void sb_say_x64(void)
+{
+    const char *t = inst_sb_text(INST_ARCH_AMD64, sbState);
+
+    if (t != NULL) {
+        out("%s", t);
+    }
+}
+
 static void testsigning_note0(void)
 {
     char opt[512];
+    const char *sb;
 
     testSigningConfirmed = 0;
-    if (INST_MY_ARCH != INST_ARCH_AMD64 || envNow.Major < 6) {
+    sb_read();
+    switch (inst_sig_note_kind(INST_MY_ARCH, envNow.Nt, envNow.Major,
+                               osKind)) {
+    case INST_SIG_X64:
+        break;
+    case INST_SIG_X86_SB:
+        /* The state read says which case applies; not known, the note
+         * names both. */
+        sb = inst_sb_text(INST_ARCH_X86, sbState);
+        out("%s\n", sb != NULL ? sb : inst_sig_x86_sb_text());
+        return;
+    default:
         return;
     }
     if (!usbInclude) {
-        testsigning_note_cm();
+        /* No kernel driver in a tools-only run (record 26 section 5.3.1
+         * case 5): nothing to sign. */
+        if (haveCm && tbInclude) {
+            testsigning_note_cm();
+        }
         return;
     }
     if (reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
                  "SystemStartOptions", opt, sizeof(opt), NULL)) {
         logonly("SystemStartOptions: %s\n", opt);
-        if (inst_testsigning(opt)) {
-            testSigningConfirmed = 1;
-        }
+        testSigningConfirmed = inst_ts_confirmed(inst_testsigning(opt),
+                                                 sbState);
     }
+    sb_say_x64();
     if (pkgSigned < 0) {
         testSigningConfirmed = 0;
         out("NOTE: whether the x64 drivers carry a signature could not be read. "
@@ -7298,19 +7531,38 @@ static void testsigning_note0(void)
 
 /* The note for the connection manager alone (record 23 section 5.10,
  * revision 13): the binary read is xhcicm.sys, the device that shows the
- * code the NHI, and on 8 and 8.1 the Secure Boot condition. */
+ * code the NHI. On the connection-manager-alone kind of system (8, 8.1
+ * and 10 below build 22000, x64) the boot-driver gate answers instead
+ * (revision 30), and its texts carry the Secure Boot condition.
+ */
 static void testsigning_note_cm(void)
 {
     char opt[512];
-    int w8 = envNow.Major == 6 && envNow.Minor >= 2;
 
     if (!stScreens &&
         reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
                  "SystemStartOptions", opt, sizeof(opt), NULL)) {
         logonly("SystemStartOptions: %s\n", opt);
-        if (inst_testsigning(opt)) {
-            testSigningConfirmed = 1;
-        }
+        testSigningConfirmed = inst_ts_confirmed(inst_testsigning(opt),
+                                                 sbState);
+    }
+    sb_say_x64();
+    /* Task 43.22: 8 and 8.1 x64 make xhcicm a boot driver; the gate answers
+     * for every system of that kind (8, 8.1 and 10 x64), so what follows
+     * is Vista's and 7's. */
+    switch (inst_cm_boot_gate(INST_MY_ARCH, osKind, pkgCmSigned,
+                              testSigningConfirmed)) {
+    case INST_CMBOOT_WARN:
+        out("Test-signing mode is on: the test-signed x64 connection manager "
+            "loads.\n%s\n", inst_cm_boot_warn_text());
+        return;
+    case INST_CMBOOT_REFUSE:
+        testSigningConfirmed = 0;
+        cmBootRefused = 1;
+        out("%s\n", inst_cm_boot_refuse_text());
+        return;
+    default:
+        break;
     }
     if (pkgCmSigned < 0) {
         testSigningConfirmed = 0;
@@ -7336,13 +7588,6 @@ static void testsigning_note_cm(void)
             "testsigning on  then restart), or on a start\nwith driver "
             "signature enforcement disabled. This tool does not change "
             "it.\n");
-    }
-    if (w8) {
-        out("Windows 8 and 8.1: test-signing mode can be turned on only with "
-            "Secure Boot\noff in the computer's firmware setup. The start "
-            "without signature enforcement\nis Advanced startup, Troubleshoot, "
-            "Startup Settings, \"Disable driver\nsignature enforcement\", at "
-            "every start.\n");
     }
     out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
         "(52 on 7).\nIf this start is one without signature enforcement, go "
@@ -7665,6 +7910,9 @@ static int plan_nt(void)
     memset(refusalSeen, 0, sizeof(refusalSeen));
     note_refusals(1);
     testsigning_note();
+    if (cmBootRefused) {
+        return INST_EXIT_REFUSED;
+    }
     return -1;
 }
 
@@ -7823,7 +8071,22 @@ stopped:
  * this run's or the earlier install directory taken out, then addDir
  * appended when it is not NULL. No other entry is touched, and the value
  * keeps its type. */
+static int devicepath_write(const char *addDir);
+
+/* devicepath_write, and on 98 SE whether this run left DevicePath without
+ * the install directory: every way out of the run then reads the INF
+ * directories for a USBSTOR.INF left alone (record 26 section 6.5.5). */
 static int devicepath_update(const char *addDir)
+{
+    int r = devicepath_write(addDir);
+
+    if (r) {
+        storDpOff = addDir == NULL && stor_98se();
+    }
+    return r;
+}
+
+static int devicepath_write(const char *addDir)
 {
     char list[2048];
     char mid[2048];
@@ -9157,6 +9420,7 @@ static int run_install_9x(void)
     hashed_cleanup();
     helper_installs();
     s98_file_update_9x();
+    vsd_run(vsd_mode(0));
     write_values();
     s98_write_values();
     tray_install();
@@ -10743,6 +11007,13 @@ static void mk_end_of_run(void)
  * once the package is gone. */
 static int stop_uninstall(const char *why)
 {
+    /* DevicePath withdrawn and the run stopping before its storage INF
+     * step: the INF directories read for a USBSTOR.INF left alone (record
+     * 26 section 6.5.5). */
+    if (storDpOff && !opts.List) {
+        storDpOff = 0;
+        stor_pair_left();
+    }
     out("\nSTOPPED: %s\nNothing after this step was done. Restart Windows if "
         "it asked, then run\nthe uninstall again (Add/Remove Programs, or "
         "INSTALL /console /uninstall):\nit goes on from what is left.\n", why);
@@ -11463,6 +11734,7 @@ static int run_uninstall_9x(void)
         files_9x(1);
         stor_un_rest();
         stor_tools_remove();
+        stor_silent_remove();
         finish_remove();
         return INST_EXIT_DONE;
     }
@@ -11509,6 +11781,9 @@ static int run_uninstall_9x(void)
         return stop_uninstall("Stor98's INF copies or its driver could not be "
                               "removed.");
     }
+    if (!vsd_run(INST_VSD_UNINSTALL)) {
+        return stop_uninstall("S98VSD.VXD could not be removed.");
+    }
     files_9x(0);
     if (!stor_un_rest()) {
         return stop_uninstall("a USB storage file is still in use, or its "
@@ -11517,6 +11792,10 @@ static int run_uninstall_9x(void)
     if (!stor_tools_remove()) {
         return stop_uninstall("a USB storage file in the tools folder could "
                               "not be removed.");
+    }
+    if (!stor_silent_remove()) {
+        return stop_uninstall("a SilentClasses entry of the USB storage "
+                              "drivers could not be removed.");
     }
     if (flagSteps || flagFailed) {
         return stop_uninstall("a driver file is still in use.");
@@ -12867,8 +13146,234 @@ static int eject_confirm(void)
            inst_tb_answer(line, 0) == 1;
 }
 
+/*
+ * 98 SE and ME: a unit's eject asked of xhcicm.sys (record 24 section 7.1,
+ * revision 6; record 21 section 7.2 part 1; task 43.18). The tool makes
+ * neither CONFIGMG call for a unit: it writes XhciCmEjectAsk to the NHI's
+ * driver key and reads XhciCmEjectReply and XhciCmEjectResult from its
+ * hardware key.
+ */
+
+/* The query device's token for NHI k: its name from the NHI's hardware
+ * key (XhciCmQueryName), one IOCTL_XHCICM_QUERY, the header checked and
+ * the record's NHI ids compared with the devnode's. 1 when read. */
+static int tb_token(int k, INST_EJ_TOKEN *tok)
+{
+    char path[INST_PATH_CHARS];
+    char name[32];
+    char dev[48];
+    unsigned char *buf;
+    HKEY key;
+    HANDLE h;
+    DWORD type;
+    DWORD n;
+    DWORD got;
+    DWORD size;
+    INST_U32 vd;
+    INST_U32 rec;
+    int ok;
+    int tries;
+
+    memset(tok, 0, sizeof(*tok));
+    if (tbh[k].Node < 0) {
+        return 0;
+    }
+    join(path, sizeof(path), "Enum", tbn[tbh[k].Node].R.Id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    n = sizeof(name) - 1;
+    ok = RegQueryValueExA(key, CM_Q_NAME_VALUE, NULL, &type,
+                          (LPBYTE)name, &n) == ERROR_SUCCESS &&
+         type == REG_SZ && n > 1;
+    RegCloseKey(key);
+    if (!ok) {
+        return 0;
+    }
+    name[n < sizeof(name) ? n : sizeof(name) - 1] = '\0';
+    _snprintf(dev, sizeof(dev) - 1, "\\\\.\\%s", name);
+    dev[sizeof(dev) - 1] = '\0';
+    h = CreateFileA(dev, GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                    0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        h = CreateFileA(dev, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        OPEN_EXISTING, 0, NULL);
+    }
+    if (h == INVALID_HANDLE_VALUE) {
+        logonly("query device %s: not opened (%lu)\n", dev,
+                (unsigned long)GetLastError());
+        return 0;
+    }
+    ok = 0;
+    buf = NULL;
+    size = CM_Q_ASK_BYTES;
+    for (tries = 0; tries < 3 && !ok; tries++) {
+        unsigned char *b = (unsigned char *)realloc(buf, size);
+        if (b == NULL) {
+            break;
+        }
+        buf = b;
+        got = 0;
+        if (!DeviceIoControl(h, CM_Q_IOCTL, NULL, 0, buf, size, &got,
+                             NULL) ||
+            got < CM_Q_HDR_BYTES || got > size) {
+            break;
+        }
+        if (inst_get32(buf, CM_Q_O_BYTES) > got) {
+            size = inst_get32(buf, CM_Q_O_BYTES);
+            if (size > CM_Q_MAX_BYTES) {
+                break;
+            }
+            continue;
+        }
+        if (!inst_ej_token(buf, got, tok)) {
+            break;
+        }
+        /* The answer is this NHI's: the record's ids are the devnode's. */
+        rec = inst_get32(buf, CM_Q_O_REC_OFFSET);
+        ok = rec + CM_ST_HDR_BYTES <= got &&
+             inst_pci_vendev(tbn[tbh[k].Node].R.Id, &vd) &&
+             inst_get32(buf + rec, CM_ST_O_NHI_ID) == vd;
+    }
+    CloseHandle(h);
+    free(buf);
+    logonly("query token %s: %s epoch %08lX%08lX generation %lu%s\n", dev,
+            ok ? "read" : "refused", (unsigned long)tok->EpochHi,
+            (unsigned long)tok->EpochLo, (unsigned long)tok->ContentGen,
+            tok->Eligible ? "" : " (not eligible)");
+    return ok;
+}
+
+/* A REG_BINARY of exactly `want` bytes from NHI k's hardware key. */
+static int tb_hw_binary(int k, const char *value, unsigned char *b,
+                        DWORD want)
+{
+    char path[INST_PATH_CHARS];
+    HKEY key;
+    DWORD type;
+    DWORD n;
+    int ok;
+
+    if (tbh[k].Node < 0) {
+        return 0;
+    }
+    join(path, sizeof(path), "Enum", tbn[tbh[k].Node].R.Id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    n = want;
+    ok = RegQueryValueExA(key, value, NULL, &type, b, &n) == ERROR_SUCCESS &&
+         type == REG_BINARY && n == want;
+    RegCloseKey(key);
+    return ok;
+}
+
+static void tb_eject_unask(int k)
+{
+    HKEY key;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[k].DrvPath, 0, KEY_SET_VALUE,
+                      &key) == ERROR_SUCCESS) {
+        RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+        RegCloseKey(key);
+    }
+}
+
+/*
+ * The ask and its wait. Returns the outcome (INST_EJ_*) with its text, or
+ * -1 for the uncertain end; *notClean as inst_ej_outcome's.
+ */
+static int tb_eject9x(int k, INST_U32 member, INST_U32 unit,
+                      const INST_EJ_TOKEN *tok, const char **text,
+                      int *notClean)
+{
+    unsigned char ask[CM_EJ_ASK_BYTES];
+    unsigned char res[CM_EJ_RESULT_BYTES];
+    unsigned char rep[CM_EJ_REPLY_BYTES];
+    INST_EJ_RESULT r;
+    INST_EJ_WAIT w;
+    INST_U32 nonce;
+    INST_U32 reason;
+    INST_U32 lastStep;
+    HKEY key;
+    int got;
+    int end;
+    int written;
+    static INST_U32 lastNonce;
+
+    *notClean = 0;
+    *text = "";
+    nonce = inst_ej_nonce(GetTickCount() ^ (GetCurrentProcessId() << 8),
+                          lastNonce);
+    lastNonce = nonce;
+    inst_ej_ask(ask, nonce, member, unit, tok);
+    driver_key_path(&tbn[tbh[k].Node].R, tbh[k].DrvPath,
+                    sizeof(tbh[k].DrvPath));
+    written = 0;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[k].DrvPath, 0, KEY_SET_VALUE,
+                      &key) == ERROR_SUCCESS) {
+        written = RegSetValueExA(key, CM_EJ_ASK_VALUE, 0, REG_BINARY, ask,
+                                 sizeof(ask)) == ERROR_SUCCESS;
+        RegCloseKey(key);
+    }
+    logonly("eject ask 0x%08lX (port %04lX, unit %04lX) to %s: %s\n",
+            (unsigned long)nonce, (unsigned long)member, (unsigned long)unit,
+            tbh[k].DrvPath, written ? "written" : "refused");
+    if (!written) {
+        *text = "The Thunderbolt driver could not be asked (its registry key "
+                "is not writable).";
+        return INST_EJ_UNSUPPORTED;
+    }
+    out("Asked the Thunderbolt driver to stop the device.\n");
+    inst_ej_wait_init(&w, GetTickCount());
+    lastStep = 0;
+    end = INST_EJ_W_WAIT;
+    while (end == INST_EJ_W_WAIT || end == INST_EJ_W_DELETE) {
+        Sleep(CM_EJ_POLL_MS);
+        reason = tb_hw_binary(k, CM_EJ_REPLY_VALUE, rep, sizeof(rep))
+                     ? inst_ej_reply(rep, sizeof(rep), nonce)
+                     : 0;
+        got = tb_hw_binary(k, CM_EJ_RESULT_VALUE, res, sizeof(res)) &&
+              inst_ej_result(res, sizeof(res), nonce, &r);
+        if (got && r.Step != lastStep) {
+            lastStep = r.Step;
+            logonly("eject step %lu outcome %lu query 0x%lX remove 0x%lX "
+                    "answer 0x%08lX clock %lu\n",
+                    (unsigned long)r.Step, (unsigned long)r.Outcome,
+                    (unsigned long)r.QueryCr, (unsigned long)r.RemoveCr,
+                    (unsigned long)r.Answer, (unsigned long)r.Clock);
+        }
+        end = inst_ej_wait_step(&w, GetTickCount(), reason,
+                                got ? &r : NULL);
+        if (end == INST_EJ_W_DELETE) {
+            tb_eject_unask(k);
+            logonly("eject ask unanswered after %lu ms: deleted\n",
+                    (unsigned long)CM_EJ_ANSWER_MS);
+        }
+        if (end == INST_EJ_W_REJECTED) {
+            logonly("eject ask rejected: reason %lu\n",
+                    (unsigned long)reason);
+        }
+    }
+    tb_eject_unask(k);
+    if (end == INST_EJ_W_REJECTED) {
+        return inst_ej_rejected(reason, text);
+    }
+    if (end == INST_EJ_W_UNCERTAIN) {
+        *text = inst_ej_uncertain_text();
+        return -1;
+    }
+    return inst_ej_outcome(&r, text, notClean);
+}
+
 static int run_eject(void)
 {
+    INST_EJ_TOKEN tok1;
+    INST_EJ_TOKEN tok2;
+    int haveTok;
     char id[INST_ID_CHARS];
     char portId[INST_ID_CHARS];
     char desc[128];
@@ -12915,7 +13420,9 @@ static int run_eject(void)
                 return INST_EXIT_REFUSED;
             }
         }
-        out("\nThere is nothing to eject.\n");
+        /* /eject is for Thunderbolt and USB4 devices (owner, 2026-10-22). */
+        out("\nThere is nothing to eject.\nFor a USB drive, use Safely Remove "
+            "in the xHCI98 USB Tree.\n");
         tb_unask();
         return INST_EXIT_REFUSED;
     }
@@ -12965,6 +13472,9 @@ static int run_eject(void)
             return INST_EXIT_REFUSED;
         }
     }
+    /* 98 SE and ME: the topology the unit is chosen under, before the
+     * revalidation (record 21 section 7.2 part 1, the freshness token). */
+    haveTok = !envNow.Nt && tb_token(nhiK, &tok1);
     /* Revalidation (record 24 section 7.3), immediately before the call:
      * a fresh ask answered, then the tree read again at that generation. */
     if (!tb_reconfirm() || !tb_scan(0) || tbnBad != 0 || tbChanging) {
@@ -13050,28 +13560,39 @@ static int run_eject(void)
         }
         tb_watch_tunnel(nhiK, portBdf);
     } else {
-        cr = tbQueryRemove(tbn[u].Dn, INST_UI_NOT_OK);
-        logonly("CM_Query_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
-        outcome = inst_eject9x_query(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            out("%s\n", text);
-            if (cr != INST_CR_REMOVE_VETOED && outcome == INST_EJ_VETO) {
-                out("(code 0x%08lX)\n", (unsigned long)cr);
-            }
+        INST_U32 unit;
+        int notClean;
+
+        /* Asked of the Thunderbolt driver (task 43.18): the unit chosen
+         * under the same start and content of the query answer before and
+         * after the revalidation, then the ask and its result. */
+        unit = inst_ej_unit_loc(id);
+        if (!haveTok || !tb_token(nhiK, &tok2) || !tok2.Eligible ||
+            !inst_ej_same_token(&tok1, &tok2) || unit == INST_EJ_NO_LOC) {
+            out("The device list changed, or the Thunderbolt driver's own "
+                "list could not be read;\nnothing was ejected.\n");
             tb_unask();
-            return inst_eject_code(outcome);
+            return INST_EXIT_REFUSED;
         }
-        /* Accepted: the removal always follows (record 24 section 7.1). */
-        cr = tbRemove(tbn[u].Dn, INST_UI_NOT_OK);
-        logonly("CM_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
-        outcome = inst_eject9x_remove(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            out("%s\n(code 0x%08lX)\n", text, (unsigned long)cr);
+        outcome = tb_eject9x(nhiK, portBdf, unit, &tok2, &text, &notClean);
+        if (outcome < 0) {
+            out("%s\n", text);
             tb_unask();
             devLast = text;
+            return INST_EXIT_FAILED;
+        }
+        if (outcome != INST_EJ_DONE) {
+            out("%s\n", text);
+            tb_unask();
+            if (outcome == INST_EJ_FAILED) {
+                devLast = text;
+            }
             return inst_eject_code(outcome);
         }
         out("Windows has stopped %s.\n", desc);
+        if (notClean) {
+            out("%s\n", inst_ej_not_clean_text());
+        }
         out("Until you unplug it, Device Manager's Refresh, or the "
             "Thunderbolt driver\nlooking at the port again, can start it "
             "again.\n");
@@ -15291,7 +15812,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [%s].\n", def ? "Y" : "N");
     } else if (!def) {
-        out("  /yes: N on Windows 8 and 8.1 (/stor98 installs it).\n");
+        out("  /yes: N on Windows 8, 8.1 and 10 (/stor98 installs it).\n");
     } else {
         out("  /yes: Y, with the Thunderbolt support (/nostor98 leaves it "
             "out).\n");
@@ -15951,6 +16472,850 @@ static void s98_file_update_9x(void)
 /* The uninstall, removing the bundled Stor98 on 98 SE and ME: a file
  * update this installer queued (s98_file_update_9x) is taken back - its
  * [rename] entry for stor98.mpd and STOR98.TMP beside it. */
+/* ======================================================================== */
+/* S98VSD.VXD, the 98 SE and ME IOS layer for Stor98's disks (design record */
+/* 30 section 7; owner, 2026-10-22)                                          */
+/* ======================================================================== */
+
+/* SYSTEM\IOSUBSYS\S98VSD.VXD and S98VSD.TMP beside it (long and 8.3 forms:
+ * WININIT.INI is read before Windows runs). 0 when the system directory
+ * cannot be read. */
+static int vsd_paths(char *dest, char *tmp, char *destShort, char *tmpShort,
+                     size_t cap)
+{
+    char dir[INST_PATH_CHARS];
+    char dirShort[INST_PATH_CHARS];
+    DWORD n;
+
+    if (GetSystemDirectoryA(dir, sizeof(dir)) == 0) {
+        return 0;
+    }
+    join(dir, sizeof(dir), dir, "IOSUBSYS");
+    n = GetShortPathNameA(dir, dirShort, sizeof(dirShort));
+    if (n == 0 || n >= sizeof(dirShort)) {
+        inst_copy(dirShort, dir, sizeof(dirShort));
+    }
+    join(dest, cap, dir, "S98VSD.VXD");
+    join(tmp, cap, dir, "S98VSD.TMP");
+    join(destShort, cap, dirShort, "S98VSD.VXD");
+    join(tmpShort, cap, dirShort, "S98VSD.TMP");
+    return 1;
+}
+
+/* The record's value: 1 read, 0 absent, -1 unreadable. */
+static int vsd_rec_get(const char *name, char *buf, DWORD cap)
+{
+    HKEY k;
+    LONG r;
+    DWORD type = 0;
+    DWORD n = cap;
+
+    buf[0] = '\0';
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_VSD_KEY, 0, KEY_QUERY_VALUE,
+                      &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return -1;
+    }
+    r = RegQueryValueExA(k, name, NULL, &type, (BYTE *)buf, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        buf[0] = '\0';
+        return 0;
+    }
+    if (r != ERROR_SUCCESS || type != REG_SZ || n == 0 || n > cap ||
+        buf[n - 1] != '\0') {
+        buf[0] = '\0';
+        return -1;
+    }
+    return 1;
+}
+
+static int vsd_rec_set(const char *name, const char *text)
+{
+    HKEY k;
+    LONG w;
+
+    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_VSD_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL);
+    if (w == ERROR_SUCCESS) {
+        w = RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)text,
+                           (DWORD)strlen(text) + 1);
+        RegCloseKey(k);
+    }
+    if (w != ERROR_SUCCESS) {
+        out("S98VSD.VXD's record could not be written (HKLM\\%s, %s: error "
+            "%ld).\n", INST_VSD_KEY, name, (long)w);
+        return 0;
+    }
+    logonly("s98vsd: record %s=%s\n", name, text);
+    return 1;
+}
+
+/* The value deleted; the key with it once it holds none. */
+static int vsd_rec_del(const char *name)
+{
+    HKEY k;
+    LONG w;
+    DWORD values = 0;
+
+    w = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_VSD_KEY, 0,
+                      KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
+    if (w == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (w != ERROR_SUCCESS) {
+        return 0;
+    }
+    w = RegDeleteValueA(k, name);
+    if (w != ERROR_SUCCESS && w != ERROR_FILE_NOT_FOUND) {
+        RegCloseKey(k);
+        return 0;
+    }
+    if (RegQueryInfoKeyA(k, NULL, NULL, NULL, NULL, NULL, NULL, &values,
+                         NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+        values = 1;
+    }
+    RegCloseKey(k);
+    if (values == 0) {
+        RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_VSD_KEY);
+    }
+    logonly("s98vsd: record %s deleted\n", name);
+    return 1;
+}
+
+/* A file against the record's two hashes: INST_VF_*, or -1 when it is
+ * there and cannot be read (then nothing is decided about it). */
+static int vsd_class(const char *path, const char *file, const char *pend)
+{
+    char hex[65];
+    int s = stor_hash(path, hex);
+
+    if (s == 0) {
+        return INST_VF_ABSENT;
+    }
+    if (s < 0) {
+        logonly("s98vsd: %s cannot be read\n", path);
+        return -1;
+    }
+    if (pend[0] != '\0' && inst_eq(hex, pend)) {
+        return INST_VF_PENDING;
+    }
+    if (file[0] != '\0' && inst_eq(hex, file)) {
+        return INST_VF_FILE;
+    }
+    return INST_VF_OTHER;
+}
+
+/* 1 when a [rename] side names the path, long or 8.3. */
+static int vsd_names(const char *side, const char *lng, const char *shrt)
+{
+    return inst_eq(side, lng) || inst_eq(side, shrt);
+}
+
+/* WININIT.INI's [rename] lines naming either file: INST_VE_*. */
+static int vsd_entry(const char *dest, const char *tmp, const char *destS,
+                     const char *tmpS)
+{
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char *sec;
+    char *p;
+    DWORD n;
+    int exact = 0;
+    int other = 0;
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return INST_VE_CONFLICT;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    sec = (char *)malloc(32768);
+    if (sec == NULL) {
+        return INST_VE_CONFLICT;
+    }
+    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
+    if (n >= 32768 - 2) {
+        free(sec);
+        return INST_VE_CONFLICT;
+    }
+    for (p = sec; *p != '\0'; p += strlen(p) + 1) {
+        char line[2 * INST_PATH_CHARS];
+        char *eq;
+        int namesDest;
+        int namesTmp;
+        inst_copy(line, p, sizeof(line));
+        eq = strchr(line, '=');
+        if (eq == NULL) {
+            continue;
+        }
+        *eq = '\0';
+        namesDest = vsd_names(line, dest, destS) || vsd_names(eq + 1, dest, destS);
+        namesTmp = vsd_names(line, tmp, tmpS) || vsd_names(eq + 1, tmp, tmpS);
+        if (!namesDest && !namesTmp) {
+            continue;
+        }
+        if (vsd_names(line, dest, destS) && vsd_names(eq + 1, tmp, tmpS)) {
+            exact++;
+        } else {
+            other++;
+        }
+    }
+    free(sec);
+    if (other != 0) {
+        return INST_VE_CONFLICT;
+    }
+    return exact != 0 ? INST_VE_EXACT : INST_VE_ABSENT;
+}
+
+/* The facts of record 30 section 7.3, read afresh. 0 unreadable. */
+static int vsd_facts(int mode, INST_VSDFACTS *f, char *file, char *pend,
+                     size_t cap)
+{
+    char dest[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char destS[INST_PATH_CHARS];
+    char tmpS[INST_PATH_CHARS];
+    int a;
+    int b;
+
+    if (!vsd_paths(dest, tmp, destS, tmpS, sizeof(dest))) {
+        return 0;
+    }
+    a = vsd_rec_get("File", file, (DWORD)cap);
+    b = vsd_rec_get("Pending", pend, (DWORD)cap);
+    if (a < 0 || b < 0) {
+        return 0;
+    }
+    memset(f, 0, sizeof(*f));
+    f->Pending = pend[0] != '\0';
+    f->FileVal = file[0] != '\0';
+    f->Dest = vsd_class(dest, file, pend);
+    f->Tmp = vsd_class(tmp, file, pend);
+    if (f->Dest < 0 || f->Tmp < 0) {
+        return 0;
+    }
+    f->Entry = vsd_entry(dest, tmp, destS, tmpS);
+    f->Mode = mode;
+    f->PkgIsPending = haveVsd && f->Pending && inst_eq(pend, vsdHash);
+    f->PkgIsFile = haveVsd && f->FileVal && inst_eq(file, vsdHash);
+    f->FileIsPending = f->Pending && f->FileVal && inst_eq(file, pend);
+    return 1;
+}
+
+/* The package's S98VSD.VXD on 98 SE and ME: present, this release's (its
+ * stamp), and hashed. Its absence is no error; a wrong one refuses. */
+static int vsd_check_package(void)
+{
+    char path[INST_PATH_CHARS];
+    char stamp[64];
+    char *buf;
+    DWORD size = 0;
+    DWORD i;
+    size_t sl;
+    int found = 0;
+
+    haveVsd = 0;
+    vsdHash[0] = '\0';
+    join(path, sizeof(path), pkgDir, "S98VSD.VXD");
+    if (envNow.Nt) {
+        haveVsd = file_exists(path, NULL);
+        return 1;
+    }
+    if (!file_exists(path, NULL)) {
+        return 1;
+    }
+    buf = read_file(path, &size);
+    if (buf == NULL) {
+        return refuse("a file of the package is unreadable: ", path);
+    }
+    _snprintf(stamp, sizeof(stamp) - 1, "S98VSD.VXD %s", XHCIINST_VERSION);
+    stamp[sizeof(stamp) - 1] = '\0';
+    sl = strlen(stamp);
+    for (i = 0; i + sl <= size && !found; i++) {
+        found = memcmp(buf + i, stamp, sl) == 0;
+    }
+    if (!found) {
+        free(buf);
+        return refuse("the package's S98VSD.VXD is not this release's: ",
+                      path);
+    }
+    inst_sha256((const unsigned char *)buf, size, vsdHash);
+    free(buf);
+    haveVsd = 1;
+    logonly("s98vsd: bundled, SHA-256 %s\n", vsdHash);
+    return 1;
+}
+
+/* The run's mode for the layer (inst_vsd_mode). */
+static int vsd_mode(int uninstall)
+{
+    return inst_vsd_mode(!envNow.Nt, uninstall, haveVsd, s98Include, 0,
+                         vsdChoice);
+}
+
+/* One step of the table, made. 1 done. */
+static int vsd_do(int op, const char *file, const char *pend)
+{
+    char dest[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char destS[INST_PATH_CHARS];
+    char tmpS[INST_PATH_CHARS];
+    char src[INST_PATH_CHARS];
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+
+    (void)file;
+    if (!vsd_paths(dest, tmp, destS, tmpS, sizeof(dest)) ||
+        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    switch (op) {
+    case INST_VOP_SET_FILE:
+        return vsd_rec_set("File", pend);
+    case INST_VOP_DEL_ENTRY:
+        if (!WritePrivateProfileStringA("rename", destS, NULL, ini) ||
+            !WritePrivateProfileStringA("rename", dest, NULL, ini) ||
+            vsd_entry(dest, tmp, destS, tmpS) == INST_VE_EXACT) {
+            out("S98VSD.VXD's [rename] line in %s could not be taken back "
+                "(error %lu).\n", ini, (unsigned long)GetLastError());
+            return 0;
+        }
+        logonly("s98vsd: WININIT.INI [rename] %s taken back\n", destS);
+        return 1;
+    case INST_VOP_DEL_TMP:
+        if (!delete_file(tmp)) {
+            out("%s could not be deleted (error %lu).\n", tmp,
+                (unsigned long)GetLastError());
+            return 0;
+        }
+        logonly("s98vsd: %s deleted\n", tmp);
+        return 1;
+    case INST_VOP_DEL_PENDING:
+        return vsd_rec_del("Pending");
+    case INST_VOP_DEL_FILEVAL:
+        return vsd_rec_del("File");
+    case INST_VOP_DEL_DEST:
+        if (!delete_file(dest)) {
+            out("%s could not be deleted (error %lu): restart Windows and run "
+                "the installer again.\n", dest, (unsigned long)GetLastError());
+            steps_add_id("S98VSD.VXD", "not removed: restart Windows and run "
+                         "the installer again");
+            flagSteps = 1;
+            flagRestart = 1;
+            return 0;
+        }
+        out("%s was deleted.\n", dest);
+        vsdDid |= 4;
+        flagChanged = 1;
+        flagRestart = 1;
+        return 1;
+    case INST_VOP_START:
+        join(src, sizeof(src), pkgDir, "S98VSD.VXD");
+        if (!vsd_rec_set("Pending", vsdHash)) {
+            return 0;
+        }
+        /* CREATE_NEW: CopyFile never replaces here. */
+        if (!CopyFileA(src, tmp, TRUE)) {
+            out("S98VSD.VXD could not be written as %s (error %lu).\n", tmp,
+                (unsigned long)GetLastError());
+            vsd_rec_del("Pending");
+            return 0;
+        }
+        if (!same_file(src, tmp)) {
+            out("%s is not the package's S98VSD.VXD once written.\n", tmp);
+            delete_file(tmp);
+            vsd_rec_del("Pending");
+            return 0;
+        }
+        logonly("s98vsd: %s written\n", tmp);
+        return 1;
+    case INST_VOP_MOVE:
+        if (!MoveFileA(tmp, dest)) {
+            out("%s could not be moved to %s (error %lu).\n", tmp, dest,
+                (unsigned long)GetLastError());
+            return 0;
+        }
+        out("S98VSD.VXD is in %s; Windows loads it at the next start.\n",
+            dest);
+        vsdDid |= 1;
+        flagChanged = 1;
+        flagRestart = 1;
+        return 1;
+    case INST_VOP_WRITE_ENTRY:
+        if (!WritePrivateProfileStringA("rename", destS, tmpS, ini)) {
+            out("The replacement of %s could not be queued in %s.\n", dest,
+                ini);
+            return 0;
+        }
+        logonly("s98vsd: WININIT.INI [rename] %s=%s\n", destS, tmpS);
+        out("S98VSD.VXD replaces %s when Windows next starts.\n", dest);
+        vsdDid |= 2;
+        flagChanged = 1;
+        flagRestart = 1;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* WININIT.INI's [rename] lines whose destination is the old name: own
+ * when the source is this installer's S98VSD.TMP, other otherwise. The
+ * file is read whole and parsed here, so a read that fails is never an
+ * empty section: 0 unless the file was read, or is not there at all. */
+static int vsd_old_lines(const char *ini, const char *old, const char *oldS,
+                         const char *tmp, const char *tmpS, int *own,
+                         int *other)
+{
+    char *buf;
+    char *p;
+    DWORD size = 0;
+    DWORD err;
+    int inRename = 0;
+
+    *own = 0;
+    *other = 0;
+    if (GetFileAttributesA(ini) == (DWORD)0xFFFFFFFF) {
+        err = GetLastError();
+        return err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND;
+    }
+    buf = read_file(ini, &size);
+    if (buf == NULL) {
+        return 0;
+    }
+    for (p = buf; *p != '\0';) {
+        char line[2 * INST_PATH_CHARS];
+        char *end = p;
+        char *a;
+        char *z;
+        char *eq;
+        size_t len;
+
+        while (*end != '\0' && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        len = (size_t)(end - p);
+        if (len >= sizeof(line)) {
+            /* A line this long names no path this installer wrote, but
+             * it cannot be read as one either: unread. */
+            free(buf);
+            return 0;
+        }
+        memcpy(line, p, len);
+        line[len] = '\0';
+        p = end;
+        while (*p == '\r' || *p == '\n') {
+            p++;
+        }
+        for (a = line; *a == ' ' || *a == '\t'; a++) {
+        }
+        z = a + strlen(a);
+        while (z > a && (z[-1] == ' ' || z[-1] == '\t')) {
+            *--z = '\0';
+        }
+        if (*a == '[') {
+            inRename = inst_eq(a, "[rename]");
+            continue;
+        }
+        if (!inRename || *a == ';' || (eq = strchr(a, '=')) == NULL) {
+            continue;
+        }
+        *eq = '\0';
+        for (z = eq; z > a && (z[-1] == ' ' || z[-1] == '\t'); ) {
+            *--z = '\0';
+        }
+        for (z = eq + 1; *z == ' ' || *z == '\t'; z++) {
+        }
+        if (!vsd_names(a, old, oldS)) {
+            continue;
+        }
+        if (vsd_names(z, tmp, tmpS)) {
+            (*own)++;
+        } else {
+            (*other)++;
+        }
+    }
+    free(buf);
+    return 1;
+}
+
+/* The layer's old name, IOSUBSYS\STOR98.VXD, from the test cuts and the
+ * first bench (record 30 section 3.1): Windows loads it in the place of
+ * stor98.mpd, which then does not start (Code 10). This project's file
+ * there is removed on every 98 SE and ME run, with the test cut's own
+ * WININIT.INI line that would put it there (STOR98.VXD=S98VSD.TMP);
+ * another program's file is left and said. 0 when it could not be
+ * removed (said, and a step left). */
+static int vsd_old_name(void)
+{
+    char dir[INST_PATH_CHARS];
+    char dirS[INST_PATH_CHARS];
+    char old[INST_PATH_CHARS];
+    char oldS[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char tmpS[INST_PATH_CHARS];
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char file[80];
+    char pend[80];
+    char hex[65];
+    int ownLines = 0;
+    int otherLines = 0;
+    char *buf;
+    DWORD size = 0;
+    DWORD n;
+    int own;
+    int k;
+
+    if (GetSystemDirectoryA(dir, sizeof(dir)) == 0 ||
+        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 1;
+    }
+    join(dir, sizeof(dir), dir, "IOSUBSYS");
+    n = GetShortPathNameA(dir, dirS, sizeof(dirS));
+    if (n == 0 || n >= sizeof(dirS)) {
+        inst_copy(dirS, dir, sizeof(dirS));
+    }
+    join(old, sizeof(old), dir, INST_VSD_OLD);
+    join(oldS, sizeof(oldS), dirS, INST_VSD_OLD);
+    join(tmp, sizeof(tmp), dir, INST_VSD_TMPNAME);
+    join(tmpS, sizeof(tmpS), dirS, INST_VSD_TMPNAME);
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    /* WININIT.INI's lines that put a file at the old name: the test cut's
+     * own (STOR98.VXD=S98VSD.TMP) and any other. Read whole, as the
+     * profile calls see only the first of equal keys. */
+    if (!vsd_old_lines(ini, old, oldS, tmp, tmpS, &ownLines, &otherLines)) {
+        out("WININIT.INI could not be read: %s is left as it is.\n", old);
+        steps_add_id(INST_VSD_OLD, "WININIT.INI unreadable: run the installer "
+                     "again");
+        flagSteps = 1;
+        return 0;
+    }
+    if (ownLines != 0 && otherLines != 0) {
+        /* The installer's line cannot be taken back alone (one key), and
+         * left, it puts the old name back at the next start. */
+        out("WININIT.INI holds this installer's [rename] line for %s and "
+            "another program's: nothing is changed. Remove the line that "
+            "names S98VSD.TMP from WININIT.INI, then run the installer "
+            "again.\n", old);
+        steps_add_id(INST_VSD_OLD, "WININIT.INI: remove the [rename] line that "
+                     "names S98VSD.TMP, then run the installer again");
+        flagSteps = 1;
+        return 0;
+    }
+    for (k = 0; ownLines != 0 && k < 16; k++) {
+        if (!WritePrivateProfileStringA("rename", (k & 1) == 0 ? oldS : old,
+                                        NULL, ini)) {
+            ownLines = -1;
+            break;
+        }
+        /* 9x keeps profile writes in a cache: flushed before the file is
+         * read back. */
+        WritePrivateProfileStringA(NULL, NULL, NULL, ini);
+        if ((k & 1) != 0 &&
+            !vsd_old_lines(ini, old, oldS, tmp, tmpS, &ownLines, &otherLines)) {
+            /* Unread, nothing shows the line gone: the failure below. */
+            ownLines = -1;
+            break;
+        }
+    }
+    if (ownLines != 0) {
+        out("The [rename] line for %s in %s could not be taken back (error "
+            "%lu): restart Windows, then run the installer again.\n", old, ini,
+            (unsigned long)GetLastError());
+        steps_add_id(INST_VSD_OLD, "a queued update to the old name remains: "
+                     "restart Windows, then run the installer again");
+        flagSteps = 1;
+        flagRestart = 1;
+        return 0;
+    }
+    if (otherLines != 0) {
+        out("WININIT.INI has another program's [rename] line that puts a file "
+            "at %s at the next start: it is left as it is. While that file is "
+            "there, Stor98 does not start.\n", old);
+        steps_add_id(INST_VSD_OLD, "another program's WININIT.INI line puts a "
+                     "file there: Stor98 does not start while it is there");
+        flagSteps = 1;
+    }
+    if (!file_exists(old, NULL)) {
+        return 1;
+    }
+    if (vsd_rec_get("File", file, sizeof(file)) < 0) {
+        file[0] = '\0';
+    }
+    if (vsd_rec_get("Pending", pend, sizeof(pend)) < 0) {
+        pend[0] = '\0';
+    }
+    buf = read_file(old, &size);
+    hex[0] = '\0';
+    if (buf != NULL) {
+        inst_sha256((const unsigned char *)buf, size, hex);
+    }
+    own = inst_vsd_old_is_own((const unsigned char *)buf, buf != NULL ? size : 0,
+                              hex, file, pend);
+    free(buf);
+    if (!own) {
+        out("%s is not this package's file: it is left as it is. While it is "
+            "there, Windows loads it in the place of Stor98's stor98.mpd and "
+            "Stor98 does not start.\n", old);
+        steps_add_id(INST_VSD_OLD, "another program's file in IOSUBSYS: "
+                     "Stor98 does not start while it is there");
+        flagSteps = 1;
+        return 1;
+    }
+    if (!delete_file(old)) {
+        out("%s, this package's layer under its old name, could not be "
+            "deleted (error %lu): restart Windows and run the installer "
+            "again.\n", old, (unsigned long)GetLastError());
+        steps_add_id(INST_VSD_OLD, "not removed: restart Windows and run the "
+                     "installer again");
+        flagSteps = 1;
+        flagRestart = 1;
+        return 0;
+    }
+    out("%s, this package's layer under its old name, was deleted: it "
+        "stopped Stor98 from starting.\n", old);
+    flagChanged = 1;
+    flagRestart = 1;
+    return 1;
+}
+
+/* Record 30 section 7.3: the table made step by step until it stops. 0 a
+ * step failed or the table stopped on a conflict (said, and a step left). */
+static int vsd_run(int mode)
+{
+    INST_VSDFACTS f;
+    char file[80];
+    char pend[80];
+    int i;
+    int op = INST_VOP_DONE;
+    int conflict = 0;
+
+    if (envNow.Nt || opts.List) {
+        return 1;
+    }
+    if (!vsd_old_name()) {
+        step(INST_STEP_FAILED, "STOR98.VXD (the old name): not removed");
+        return 0;
+    }
+    if (mode == INST_VSD_NONE) {
+        return 1;
+    }
+    step(INST_STEP_BEGIN, "S98VSD.VXD, large transfers for Stor98");
+    for (i = 0; i < 24; i++) {
+        /* Cancelled: stop between steps; the record keeps what is in
+         * flight, which the next run recovers (record 30 section 7.3). */
+        if (!go_on()) {
+            steps_add_id("S98VSD.VXD", "not changed: the run was cancelled; "
+                         "run the installer again");
+            step(INST_STEP_LEFT, "S98VSD.VXD: left, the run cancelled");
+            return 0;
+        }
+        if (!vsd_facts(mode, &f, file, pend, sizeof(file))) {
+            out("S98VSD.VXD's record or files could not be read: it is left "
+                "as it is.\n");
+            flagFailed = 1;
+            step(INST_STEP_FAILED, "S98VSD.VXD: its record unreadable");
+            return 0;
+        }
+        conflict = conflict || f.Entry == INST_VE_CONFLICT;
+        op = inst_vsd_next(&f);
+        logonly("s98vsd: mode %d pend %d file %d dest %d tmp %d entry %d "
+                "-> %d\n", mode, f.Pending, f.FileVal, f.Dest, f.Tmp, f.Entry,
+                op);
+        if (op < INST_VOP_STEPS) {
+            break;
+        }
+        if (!vsd_do(op, file, pend)) {
+            flagFailed = flagFailed || op != INST_VOP_DEL_DEST;
+            step(INST_STEP_FAILED, "S98VSD.VXD: a step failed (the log has "
+                 "it)");
+            return 0;
+        }
+    }
+    switch (op) {
+    case INST_VOP_QUEUED:
+        /* Queued by this run or an earlier one: the start still owes it. */
+        flagRestart = 1;
+        step(INST_STEP_DONE, "S98VSD.VXD: updated at the next start");
+        return 1;
+    case INST_VOP_FOREIGN:
+        out("IOSUBSYS\\S98VSD.VXD is another installation's file: it is "
+            "left as it is.\n");
+        step(INST_STEP_LEFT, "S98VSD.VXD: left, another installation's "
+             "file");
+        return 1;
+    case INST_VOP_BLOCK_TMP:
+        out("IOSUBSYS\\S98VSD.TMP is not this installer's: S98VSD.VXD is "
+            "not placed or updated until it is removed.\n");
+        steps_add_id("S98VSD.VXD", "remove IOSUBSYS\\S98VSD.TMP, then run "
+                     "the installer again");
+        flagSteps = 1;
+        step(INST_STEP_LEFT, "S98VSD.VXD: left, a foreign S98VSD.TMP");
+        return 0;
+    case INST_VOP_BLOCK_INI:
+        out("WININIT.INI has another program's [rename] line for S98VSD.VXD "
+            "or S98VSD.TMP: nothing of S98VSD.VXD is changed until the next "
+            "start has run it.\n");
+        steps_add_id("S98VSD.VXD", "restart Windows, then run the installer "
+                     "again");
+        flagSteps = 1;
+        step(INST_STEP_LEFT, "S98VSD.VXD: left, another rename is queued");
+        return 0;
+    default:
+        break;
+    }
+    if (i == 24) {
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "S98VSD.VXD: the steps did not settle");
+        return 0;
+    }
+    if (conflict) {
+        /* Another program's [rename] line is left as it is (record 30
+         * section 7.3): it may put a file at IOSUBSYS\S98VSD.VXD at the
+         * next start, whatever this run removed. */
+        out("WININIT.INI holds another program's [rename] line for "
+            "IOSUBSYS\\S98VSD.VXD or S98VSD.TMP; it is left as it is and "
+            "may put a file there at the next start.\n");
+        steps_add_id("S98VSD.VXD", "another program's WININIT.INI line names "
+                     "it: after the next start, check IOSUBSYS\\S98VSD.VXD");
+        flagSteps = 1;
+    }
+    step(INST_STEP_DONE, (vsdDid & 4) ? "S98VSD.VXD: removed" :
+         (vsdDid & 1) ? "S98VSD.VXD: installed" : "S98VSD.VXD: as it is");
+    return 1;
+}
+
+/* The console's question (record 30 section 7.2). */
+static void vsd_question(void)
+{
+    int shown;
+    int open;
+    int def;
+    int k;
+    int r;
+    char line[16];
+    char text[512];
+
+    def = inst_vsd_box(!envNow.Nt, haveVsd, s98Include, opts.NoStor98Vxd,
+                       &shown, &open);
+    if (envNow.Nt || !shown || !open) {
+        vsdChoice = 0;
+        if (!envNow.Nt && shown && opts.Stor98Vxd) {
+            /* Asked for, but Stor98 is not in the run (a No to its
+             * question): said, not dropped in silence. */
+            out("/s98vsd: S98VSD.VXD is not installed: Stor98 is not in "
+                "this run.\n");
+            logonly("s98vsd: /s98vsd without Stor98 in the run\n");
+        }
+        if (!envNow.Nt && shown && !s98Include) {
+            out("S98VSD.VXD, large transfers for Stor98: follows Stor98, which "
+                "is not in this run.\n\n");
+        }
+        return;
+    }
+    out("S98VSD.VXD, large transfers for Stor98 (Windows 98 SE and ME)\n");
+    out("  Lets Windows 98 SE and ME send Stor98 reads and writes of up to "
+        "2 MiB whole,\n  instead of in 63 KiB pieces. Changes nothing for "
+        "copies through the file cache.\n");
+    r = def;
+    if (opts.NoStor98Vxd) {
+        out("  /nos98vsd: left out without asking.\n");
+    } else if (opts.Stor98Vxd) {
+        out("  /s98vsd: installed without asking.\n");
+    } else if (opts.List) {
+        out("  /list: it would be asked; Enter would give [Y].\n");
+    } else if (opts.Yes) {
+        out("  /yes: Y (/nos98vsd leaves it out).\n");
+    } else {
+        inst_yesno_question(text, sizeof(text),
+                            "Install S98VSD.VXD, large transfers for Stor98?",
+                            "install it", "leave it out", 1);
+        for (k = 0;; k++) {
+            if (!ask(INST_Q_VSD, k == 0 ? text : "  Type Y or N, or Enter "
+                     "for [Y]: ", k > 0, 0, 1, NULL, line, sizeof(line))) {
+                r = 1;
+                out("\n");
+                break;
+            }
+            r = inst_tb_answer(line, 1);
+            if (r >= 0) {
+                break;
+            }
+        }
+    }
+    out("\n");
+    vsdChoice = r ? 1 : 0;
+    logonly("s98vsd: chosen %d\n", vsdChoice);
+}
+
+/* What the run will do, for the Summary (record 30 section 7.3): the
+ * table's first step read, nothing made. */
+const char *inst_eng_vsd_plan(void)
+{
+    INST_VSDFACTS f;
+    char file[80];
+    char pend[80];
+    int mode = vsd_mode(0);
+
+    if (envNow.Nt || mode == INST_VSD_NONE || !haveVsd) {
+        return NULL;
+    }
+    if (!vsd_facts(mode, &f, file, pend, sizeof(file))) {
+        return "Large transfers for Stor98 (S98VSD.VXD): its record cannot be "
+               "read; left as it is";
+    }
+    /* The outcome, not the first step: what is there decides it. */
+    if (f.Dest == INST_VF_OTHER) {
+        return "Large transfers for Stor98 (S98VSD.VXD): left, another "
+               "installation's file";
+    }
+    if (mode == INST_VSD_INACTIVE) {
+        return f.Dest != INST_VF_ABSENT ? "Large transfers for Stor98 "
+               "(S98VSD.VXD): kept, with Stor98" : NULL;
+    }
+    if (mode == INST_VSD_DESELECTED) {
+        return (f.Dest != INST_VF_ABSENT ||
+                (f.Pending && f.Tmp == INST_VF_PENDING)) ?
+               "Large transfers for Stor98 (S98VSD.VXD): removed" : NULL;
+    }
+    if (f.Entry == INST_VE_CONFLICT || f.Tmp == INST_VF_OTHER) {
+        return "Large transfers for Stor98 (S98VSD.VXD): left until the "
+               "steps the run lists are done";
+    }
+    if ((f.Dest == INST_VF_FILE && f.PkgIsFile) ||
+        (f.Dest == INST_VF_PENDING && f.PkgIsPending)) {
+        return "Large transfers for Stor98 (S98VSD.VXD): this release's, as "
+               "it is";
+    }
+    if (f.Dest == INST_VF_ABSENT) {
+        return "Large transfers for Stor98 (S98VSD.VXD): installed, loaded at "
+               "the next start";
+    }
+    return "Large transfers for Stor98 (S98VSD.VXD): updated at the next "
+           "start";
+}
+
+/* The window's box (record 30 section 7.1). */
+int inst_eng_vsd_state(int *shown, int *sys9x)
+{
+    *shown = haveVsd;
+    *sys9x = !envNow.Nt;
+    return vsdChoice;
+}
+
+void inst_eng_vsd_choose(int ticked)
+{
+    int shown;
+    int open;
+
+    vsdChoice = ticked && inst_vsd_box(!envNow.Nt, haveVsd, s98Include, 0,
+                                       &shown, &open);
+    logonly("s98vsd: chosen %d\n", vsdChoice);
+}
+
 static void s98_wininit_cancel(const char *bin)
 {
     char win[INST_PATH_CHARS];
@@ -16461,6 +17826,8 @@ static DWORD storChoice;
 static int storSource;
 static int storDefault;
 static int storPlanCase = -1;   /* the case the plan showed */
+static int storHalf;    /* READ: the INF directories hold USBSTOR.INF alone */
+static int storPairSaid;        /* the pair's step already said this run */
 static int storRunCase = -1;    /* the case read again before the copies */
 static int storPre;
 static int storPreOwed;
@@ -16927,7 +18294,20 @@ static void stor_read(void)
     storPack = stor_pack_check();
     stor_read_states(storSt);
     storPlanCase = inst_stor_case(storSt, storSource);
-    storDefault = inst_stor_default(storHaveChoice, (int)storChoice, storSt);
+    storDefault = inst_stor_default(storUsb20u, storHaveChoice,
+                                    (int)storChoice, storSt);
+    /* A lone USBSTOR.INF (record 26 section 6.5.5): the row ticked when a
+     * ticked run completes the pair, NUSB installed winning (unticked);
+     * the row says so either way. */
+    storHalf = inst_stor_pair(stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                              stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)) ==
+               INST_STOR_PAIR_STOR;
+    storDefault = inst_stor_half_default(storDefault, storUsb20u,
+                                         storHalf ? INST_STOR_PAIR_STOR :
+                                         INST_STOR_PAIR_NONE,
+                                         storPack > 0 &&
+                                         inst_stor_route(storPlanCase));
+    logonly("storage: lone USBSTOR.INF %d\n", storHalf);
     if (storPack <= 0) {
         storInclude = 0;
     } else if (opts.Storage) {
@@ -16941,24 +18321,35 @@ static void stor_read(void)
             storDefault, storInclude);
 }
 
+/* The lone USBSTOR.INF's sentence, after the row's lines. */
+static void stor_note_half(char *out, size_t cap)
+{
+    if (!storHalf) {
+        return;
+    }
+    strncat(out, " ", cap - strlen(out) - 1);
+    strncat(out, inst_stor_half_text(storPack > 0 &&
+                                     inst_stor_route(storPlanCase)),
+            cap - strlen(out) - 1);
+}
+
 /* The row's lines: the detection's text, and NUSB's entry. */
 static void stor_note(char *out, size_t cap)
 {
     if (storPack == 0) {
         inst_copy(out, "This download does not carry the USB storage drivers "
-                  "(NONFREE\\STORAGE\\NUSB33\\W98SE).", cap);
+                  "(NUSB33\\W98SE).", cap);
+        stor_note_half(out, cap);
         return;
     }
     if (storPack < 0) {
         inst_copy(out, "The storage files in this download are not the ones "
                   "this release carries (the log names them).", cap);
+        stor_note_half(out, cap);
         return;
     }
-    inst_stor_found_text(out, cap, storSt);
-    if (storUsb20u) {
-        strncat(out, " NUSB is installed (its Uninstall\\USB20U entry is "
-                "there).", cap - strlen(out) - 1);
-    }
+    inst_stor_note_text(out, cap, storSt, storUsb20u);
+    stor_note_half(out, cap);
 }
 
 /* What a ticked run does, one sentence (the plan, the Summary). */
@@ -17393,6 +18784,7 @@ static int stor_before_write(void)
 static void stor_run_begin_body(void);
 static void stor_place_infs(void);
 static void stor_inf_named(int which[2]);
+static int stor_inf_found(int i);
 
 /* The INFs this installer placed in %windir%\INF (the record's Placed),
  * withdrawn under section 6.5.8 step 3's protections (sections 6.5.4 and
@@ -17415,6 +18807,8 @@ static int stor_unplace(void)
     int named;
     int e;
     int h;
+    int pass;
+    int found = 0;
 
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_USB20U_KEY, 0, KEY_READ,
                       &u);
@@ -17422,53 +18816,98 @@ static int stor_unplace(void)
         RegCloseKey(u);
     }
     usb20u = r != ERROR_FILE_NOT_FOUND;
-    for (;;) {
-        e = stor_rec_enum("Placed", i, name, sizeof(name), data, sizeof(data));
-        if (e < 0) {
-            return 0;
-        }
-        if (e == 0) {
-            return 1;
-        }
-        h = stor_hash(name, hex);
-        if (h < 0) {
-            out("%s cannot be read.\n", name);
-            return 0;
-        }
-        if (h > 0 && inst_eq(hex, data) && !usb20u) {
-            base = strrchr(name, '\\');
-            base = base != NULL ? base + 1 : name;
-            named = s98_inf_named_9x(base);
-            if (named < 0) {
-                out("%s: whether a device names it cannot be read.\n", name);
+    /* USBSTOR.INF first; USBNTMAP.INF only once no copy of USBSTOR.INF is
+     * left where Windows finds it (record 26 section 6.5.5). */
+    for (pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            found = stor_inf_found(INST_STOR_IDX_USBSTOR_INF);
+            if (found < 0) {
+                out("Whether USBSTOR.INF is still in the INF directory cannot be "
+                    "read.\n");
                 return 0;
             }
-            if (named > 0) {
-                logonly("storage: %s stays placed: a device names it\n", name);
-                out("%s stays: a device names it (the uninstall removes it "
-                    "after the device).\n", name);
+        }
+        for (i = 0;;) {
+            e = stor_rec_enum("Placed", i, name, sizeof(name), data, sizeof(data));
+            if (e < 0) {
+                return 0;
+            }
+            if (e == 0) {
+                break;
+            }
+            if (inst_stor_rm_late(NULL, data) != pass) {
                 i++;
                 continue;
             }
-            own_variant(name, ".PNF", pnf, sizeof(pnf));
-            if (file_state(pnf) < 0 ||
-                (file_state(pnf) > 0 && !delete_file(pnf)) ||
-                !delete_file(name)) {
-                out("%s could not be deleted (error %lu).\n", name,
-                    (unsigned long)GetLastError());
+            h = stor_hash(name, hex);
+            if (h < 0) {
+                out("%s cannot be read.\n", name);
                 return 0;
             }
-            flagChanged = 1;
-            out("Deleted %s.\n", name);
-        } else if (h > 0) {
-            out("%s stays: %s.\n", name, usb20u ?
-                "NUSB is installed (Uninstall\\USB20U)" :
-                "it has changed since this installer placed it");
-        }
-        if (!stor_rec_del("Placed", name)) {
-            return 0;
+            if (h > 0 && found) {
+                logonly("storage: %s stays placed: USBSTOR.INF is still there\n",
+                        name);
+                out("%s stays while USBSTOR.INF is in the INF directory.\n",
+                    name);
+                i++;
+                continue;
+            }
+            if (h > 0 && inst_eq(hex, data) && !usb20u) {
+                base = strrchr(name, '\\');
+                base = base != NULL ? base + 1 : name;
+                named = s98_inf_named_9x(base);
+                if (named < 0) {
+                    out("%s: whether a device names it cannot be read.\n", name);
+                    return 0;
+                }
+                if (named > 0) {
+                    logonly("storage: %s stays placed: a device names it\n", name);
+                    out("%s stays: a device names it (the uninstall removes it "
+                        "after the device).\n", name);
+                    i++;
+                    continue;
+                }
+                own_variant(name, ".PNF", pnf, sizeof(pnf));
+                if (file_state(pnf) < 0 ||
+                    (file_state(pnf) > 0 && !delete_file(pnf)) ||
+                    !delete_file(name)) {
+                    out("%s could not be deleted (error %lu).\n", name,
+                        (unsigned long)GetLastError());
+                    return 0;
+                }
+                flagChanged = 1;
+                out("Deleted %s.\n", name);
+            } else if (h > 0) {
+                out("%s stays: %s.\n", name, usb20u ?
+                    "NUSB is installed (Uninstall\\USB20U)" :
+                    "it has changed since this installer placed it");
+            }
+            if (!stor_rec_del("Placed", name)) {
+                return 0;
+            }
         }
     }
+    return 1;
+}
+
+/* 1 when the INF directories hold USBSTOR.INF without USBNTMAP.INF, or
+ * cannot be read: said (record 26 section 6.5.5). */
+static int stor_pair_left(void)
+{
+    int pair = inst_stor_pair(stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                              stor_inf_found(INST_STOR_IDX_USBNTMAP_INF));
+
+    if (!inst_stor_pair_warn(pair)) {
+        return 0;
+    }
+    logonly("storage: the INF directories' pair is %d\n", pair);
+    storPairSaid = 1;
+    out("USBSTOR.INF is still in the INF directory without USBNTMAP.INF%s.\n"
+        "Plug in no new USB disk until both or neither are there: Windows' "
+        "own NTMAP.INF\nwould take it and stop Windows. Run the installer "
+        "again, or remove that copy\nof USBSTOR.INF.\n",
+        pair < 0 ? " (the directory could not be read whole)" : "");
+    return 1;
 }
 
 /* 0 when the run must stop before the package's copy: an earlier
@@ -17518,6 +18957,14 @@ static int stor_run_begin(void)
             "again.\n");
         flagFailed = 1;
         return 0;
+    }
+    /* With the package directory off DevicePath, a copy of USBSTOR.INF
+     * the setup engine made in INF\OTHER may be left with no USBNTMAP.INF
+     * findable (record 26 section 6.5.5): said, a step. */
+    if (storWithdrawn && !opts.List && stor_pair_left()) {
+        storStepsLeft = 1;
+        flagSteps = 1;
+        storDpOff = 0;
     }
     storSourceOff = storSource && !storCopyOk;
     return 1;
@@ -17700,18 +19147,41 @@ static void stor_inf_named(int which[2])
     }
 }
 
+/* The INF at index i in %windir%\INF under its own name: 1, 0, -1. */
+static int stor_inf_here(int i)
+{
+    char path[INST_PATH_CHARS];
+    int s;
+
+    if (!stor_dest(i, path, sizeof(path))) {
+        return -1;
+    }
+    s = file_state(path);
+    return s > 0 ? 1 : s;
+}
+
 static void stor_place_infs(void)
 {
     int named[2];
     INST_U32 set;
     int i;
-
+    int k;
+    int pair;
     int st[INST_STOR_COUNT];
 
     stor_inf_named(named);
     set = inst_stor_inf_set(storCopyOk, named);
-    for (i = INST_STOR_BINARIES; i < INST_STOR_COUNT; i++) {
+    /* USBNTMAP.INF first, and USBSTOR.INF only once it is there: never
+     * USBSTOR.INF alone, which lets 98 SE's own NTMAP.INF take the disk
+     * unit (record 26 section 6.5.5). */
+    for (k = INST_STOR_BINARIES; k < INST_STOR_COUNT; k++) {
+        i = instStorCopyOrder[k];
         if ((set & (1UL << i)) == 0) {
+            continue;
+        }
+        if (i == INST_STOR_IDX_USBSTOR_INF &&
+            stor_inf_here(INST_STOR_IDX_USBNTMAP_INF) != 1) {
+            storInfMissed = 1;
             continue;
         }
         if (stor_place(i)) {
@@ -17724,6 +19194,29 @@ static void stor_place_infs(void)
         } else {
             storInfMissed = 1;
         }
+    }
+    /* The pair in %windir%\INF whole or not there: a half this installer
+     * placed, in this run or an earlier one, is withdrawn, and a step is
+     * left. */
+    pair = inst_stor_pair(stor_inf_here(INST_STOR_IDX_USBSTOR_INF),
+                          stor_inf_here(INST_STOR_IDX_USBNTMAP_INF));
+    k = inst_stor_half(pair, pair == INST_STOR_PAIR_BOTH ||
+                             pair == INST_STOR_PAIR_NONE ? 0 :
+                             stor_placed_any());
+    if (k == INST_STOR_HALF_WITHDRAW) {
+        out("The USB storage drivers' two INFs are not both in the INF "
+            "directory: the one\nthis installer placed is taken out "
+            "again.\n");
+        if (!stor_unplace()) {
+            out("It could not be taken out. Run the installer again.\n");
+        }
+        storInfPlaced = 0;
+    }
+    if (k != INST_STOR_HALF_NONE) {
+        logonly("storage: the INFs in the INF directory are not a pair "
+                "(%d)\n", pair);
+        storInfMissed = 1;
+        storStepsLeft = 1;
     }
     /* The route read again after the moves, and when nothing was moved:
      * a file of other bytes that appeared meanwhile makes it
@@ -17742,6 +19235,7 @@ static void stor_place_infs(void)
             return;
         }
     }
+    stor_silent_merge();
 }
 
 /* After the package's copy is made: Source cleared when it was made
@@ -17765,50 +19259,87 @@ static void stor_copy_made(void)
 
 static int stor_takes_unit(const DEVREC *d)
 {
-    char path[INST_PATH_CHARS];
-    char cls[64];
-    char port[64];
-    char ntmp[64];
-    char inf[INST_PATH_CHARS];
-    char win[INST_PATH_CHARS];
-    char *slash;
-    int readable = 1;
-    int inWin = 0;
-    int r;
+    return inst_stor_unit_takes(!(d->Driver[0] == '\0' ||
+                                  (d->Problem == 28UL &&
+                                   d->Service[0] == '\0')));
+}
 
-    if (d->Driver[0] == '\0' || (d->Problem == 28UL && d->Service[0] == '\0')) {
-        return inst_stor_unit_takes(0, 0, NULL, NULL, NULL, NULL, 0);
+/* 1 when a copy of the INF at index i is in INF or INF\OTHER, by its name
+ * or its text; 0 none; -1 unknown: a listing that failed or ended early,
+ * or an INF whose text could not be read, which may be a renamed copy. */
+static int stor_inf_found(int i)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    char *text;
+    DWORD bytes;
+    DWORD e;
+    int pass;
+    int found = 0;
+    int unread = 0;
+    int incomplete = 0;
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return -1;
     }
-    inst_copy(cls, d->Driver, sizeof(cls));
-    slash = strchr(cls, '\\');
-    if (slash == NULL) {
-        readable = 0;
-    } else {
-        *slash = '\0';
+    for (pass = 0; pass < 2 && !found; pass++) {
+        const char *sub = pass == 0 ? "INF" : "INF\\OTHER";
+        join(pattern, sizeof(pattern), win, sub);
+        join(pattern, sizeof(pattern), pattern, "*.INF");
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            e = GetLastError();
+            if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND &&
+                e != ERROR_NO_MORE_FILES) {
+                incomplete = 1;
+            }
+            continue;
+        }
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                continue;
+            }
+            if (inst_eq(fd.cFileName, instStorFile[i].Name)) {
+                found = 1;
+                break;
+            }
+            join(path, sizeof(path), win, sub);
+            join(path, sizeof(path), path, fd.cFileName);
+            bytes = 0;
+            text = read_file(path, &bytes);
+            if (text == NULL) {
+                unread = 1;
+                continue;
+            }
+            found = inst_stor_inf_is(text, bytes, i);
+            free(text);
+        } while (!found && FindNextFileA(h, &fd));
+        if (!found && GetLastError() != ERROR_NO_MORE_FILES) {
+            incomplete = 1;
+        }
+        FindClose(h);
     }
-    driver_key_path(d, path, sizeof(path));
-    r = reg_text3(HKEY_LOCAL_MACHINE, path, "PortDriver", port, sizeof(port));
-    if (r == 0) {
-        port[0] = '\0';
-    } else if (r < 0) {
-        readable = 0;
-    }
-    r = reg_text3(HKEY_LOCAL_MACHINE, path, "NTMPDriver", ntmp, sizeof(ntmp));
-    if (r == 0) {
-        ntmp[0] = '\0';
-    } else if (r < 0) {
-        readable = 0;
-    }
-    if (d->InfPathState <= 0) {
-        readable = 0;
-    } else if (strchr(d->InfPath, '\\') == NULL &&
-               GetWindowsDirectoryA(win, sizeof(win)) != 0) {
-        join(inf, sizeof(inf), win, "INF");
-        join(inf, sizeof(inf), inf, d->InfPath);
-        inWin = file_state(inf) > 0;
-    }
-    return inst_stor_unit_takes(1, readable, cls, port, ntmp, d->InfPath,
-                                inWin);
+    return inst_stor_scan(found, unread, incomplete);
+}
+
+/* The helper's Bulk-Only step admitted (record 26 section 6.5.5): the
+ * package's copy holds USBNTMAP.INF of the download's bytes, and the INF
+ * directories do not hold USBSTOR.INF without it. */
+static int stor_bulk_ok(void)
+{
+    char from[INST_PATH_CHARS];
+    char to[INST_PATH_CHARS];
+    const char *n = instStorFile[INST_STOR_IDX_USBNTMAP_INF].Name;
+
+    join(from, sizeof(from), storPackDir, n);
+    join(to, sizeof(to), srcDir, n);
+    return inst_stor_bulk_admit(storCopyOk, same_file(from, to) ? 1 : 0,
+                                inst_stor_pair(
+                                    stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                                    stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)));
 }
 
 static int stor_job_index(const char *id)
@@ -17939,6 +19470,14 @@ static int stor_stage(int kind, int *first)
         stor_record();
     }
     if (!stor_any(kind)) {
+        return 1;
+    }
+    if (kind == INST_STOR_KIND_BULK && !stor_bulk_ok()) {
+        out("The USB storage devices are not installed now: USBNTMAP.INF is "
+            "not where Windows\nfinds USBSTOR.INF. Run the installer "
+            "again.\n");
+        logonly("storage: the Bulk-Only step not admitted\n");
+        storStepsLeft = 1;
         return 1;
     }
     if (!gate_9x(1)) {
@@ -18220,7 +19759,6 @@ static void stor_record(void)
 static void stor_run_end(void)
 {
     int i;
-    int unitBound = 0;
 
     if (!storHere || storPack <= 0) {
         return;
@@ -18233,24 +19771,10 @@ static void stor_run_end(void)
                 stor_bound(d, INST_STOR_KIND_UNIT) != 1) {
                 continue;
             }
-            unitBound = 1;
             if ((d->Status & INST_DN_STARTED) == 0 || d->Problem != 0) {
                 out("\n%s\n  Unplug the disk and plug it in again: it starts "
                     "as \"USB Disk\" then.\n", d->Desc[0] ? d->Desc : d->Id);
                 storStepsLeft = 1;
-            }
-        }
-        if (!unitBound) {
-            /* A copy of USBNTMAP.INF the setup engine made for this
-             * installer: a unit was bound from it, and later ones are. */
-            char vn[INST_PATH_CHARS];
-            char vd[96];
-            DWORD vi;
-            for (vi = 0; stor_rec_enum("Infs", vi, vn, sizeof(vn), vd,
-                                       sizeof(vd)) > 0; vi++) {
-                if (inst_eq(vd, instStorFile[INST_STOR_IDX_USBNTMAP_INF].Sha256)) {
-                    unitBound = 1;
-                }
             }
         }
         /* Every storage device still without its driver (the helper not
@@ -18263,27 +19787,17 @@ static void stor_run_end(void)
                 stor_bound(d, k) != 0) {
                 continue;
             }
-            if (k == INST_STOR_KIND_UNIT && d->Driver[0] != '\0') {
-                out("\n%s\n  Still \"Disk drive\": in Device Manager, Disk "
-                    "drives, open it, Driver, Update\n  Driver, \"Display a "
-                    "list of all the drivers\", Have Disk, type %s,\n  choose "
-                    "\"USB Disk\"; then unplug the disk and plug it in "
-                    "again.\n", d->Desc[0] ? d->Desc : d->Id, toolDir);
-            } else {
-                out("\n%s\n  No driver yet: in Device Manager open it, "
-                    "Driver, Update Driver, and let\n  the wizard search, or "
-                    "give it the folder %s.\n",
-                    d->Desc[0] ? d->Desc : d->Id, toolDir);
-            }
+            out("\n%s\n  No driver yet: in Device Manager open it, "
+                "Driver, Update Driver, and let\n  the wizard search, or "
+                "give it the folder %s.\n",
+                d->Desc[0] ? d->Desc : d->Id, toolDir);
             storStepsLeft = 1;
         }
-        if (!unitBound && !opts.List) {
-            out("\nUSB storage: if the first USB disk you plug in shows as "
-                "\"Disk drive\" with no\ndrive letter, run the installer "
-                "again (it moves it to \"USB Disk\"), or use\nUpdate Driver on "
-                "it with %s, then unplug it and plug it in again.\n",
-                toolDir);
-        }
+    }
+    if (storCopyOk && !opts.List && !silent_gate_on()) {
+        out("\nUSB storage: Windows' wizard still opens for each new USB disk "
+            "unless the silent\ninstall (XhciSilentInstall) is turned on in "
+            "the USB settings.\n");
     }
     if (storInfPlaced && !opts.List) {
         out("\nUSB storage: if Windows asks for a file such as USBSTOR.SYS "
@@ -18877,6 +20391,8 @@ static int stor_un_rest(void)
     int e;
     int left = 0;
     int sub;
+    int pass;
+    int found = 0;
     HKEY u;
     LONG r;
 
@@ -18890,34 +20406,145 @@ static int stor_un_rest(void)
         return 0;
     }
     /* The INF copies, each with its .PNF and its one OEM Name value; then
-     * the INFs placed in %windir%\INF (Placed, no OEM Name value). */
-    for (sub = 0; sub < 2; sub++) {
-        const char *key = sub == 0 ? "Infs" : "Placed";
-        for (i = 0;;) {
-            int named;
-            int h;
-            e = stor_rec_enum(key, i, name, sizeof(name), data, sizeof(data));
-            if (e < 0) {
-                flagFailed = 1;
-                return 0;
-            }
-            if (e == 0) {
-                break;
-            }
-            h = stor_hash(name, hex);
-            if (h == 0) {
-                /* The copy is gone (an earlier run deleted it, or by hand):
-                 * its exact OEM Name value goes, then the record's. */
-                if (opts.List) {
-                    out("(/list) %s is gone; %s.\n", name, sub == 0 ?
-                        "its OEM Name value would be removed" :
-                        "it would be forgotten");
+     * the INFs placed in %windir%\INF (Placed, no OEM Name value). Every
+     * copy of USBSTOR.INF first, then USBNTMAP.INF's, each only once no
+     * copy of USBSTOR.INF is left where Windows finds it (record 26 section
+     * 6.5.5). */
+    for (pass = 0; pass < 2; pass++) {
+        if (pass == 1 && !opts.List) {
+            found = stor_inf_found(INST_STOR_IDX_USBSTOR_INF);
+        }
+        for (sub = 0; sub < 2; sub++) {
+            const char *key = sub == 0 ? "Infs" : "Placed";
+            for (i = 0;;) {
+                int named;
+                int h;
+                e = stor_rec_enum(key, i, name, sizeof(name), data, sizeof(data));
+                if (e < 0) {
+                    flagFailed = 1;
+                    return 0;
+                }
+                if (e == 0) {
+                    break;
+                }
+                if (inst_stor_rm_late(NULL, data) != pass) {
                     i++;
                     continue;
                 }
+                h = stor_hash(name, hex);
+                if (h > 0 && found != 0) {
+                    if (found < 0) {
+                        out("  %s: whether USBSTOR.INF is still in the INF "
+                            "directory cannot be read; it\n  stays for now.\n",
+                            name);
+                        flagFailed = 1;
+                        left = 1;
+                        i++;
+                        continue;
+                    }
+                    out("  %s stays: USBSTOR.INF is still in the INF "
+                        "directory.\n", name);
+                    if (!stor_rec_del(key, name)) {
+                        return 0;
+                    }
+                    continue;
+                }
+                if (h == 0) {
+                    /* The copy is gone (an earlier run deleted it, or by hand):
+                     * its exact OEM Name value goes, then the record's. */
+                    if (opts.List) {
+                        out("(/list) %s is gone; %s.\n", name, sub == 0 ?
+                            "its OEM Name value would be removed" :
+                            "it would be forgotten");
+                        i++;
+                        continue;
+                    }
+                    if (sub == 0 && !stor_oem_forget(name)) {
+                        out("  The setup engine's record of %s could not be "
+                            "removed.\n", name);
+                        flagFailed = 1;
+                        left = 1;
+                        i++;
+                        continue;
+                    }
+                    if (!stor_rec_del(key, name)) {
+                        return 0;
+                    }
+                    continue;
+                }
+                inst_copy(rel, name, sizeof(rel));
+                {
+                    char base[INST_PATH_CHARS];
+                    WIN32_FIND_DATAA fd;
+                    HANDLE fh;
+                    join(base, sizeof(base), win, "INF\\");
+                    if (inst_eqn(name, base, strlen(base))) {
+                        inst_copy(rel, name + strlen(base), sizeof(rel));
+                    }
+                    fh = FindFirstFileA(name, &fd);
+                    if (fh != INVALID_HANDLE_VALUE) {
+                        char *s = strrchr(rel, '\\');
+                        FindClose(fh);
+                        if (s != NULL) {
+                            s[1] = '\0';
+                        } else {
+                            rel[0] = '\0';
+                        }
+                        strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
+                    }
+                }
+                named = h > 0 ? s98_inf_named_9x(rel) : -1;
+                if (h < 0 || named < 0) {
+                    out("  %s: whether a device names it cannot be read; it stays "
+                        "for now.\n", name);
+                    flagFailed = 1;
+                    left = 1;
+                    i++;
+                    continue;
+                }
+                if (!inst_eq(hex, data) || storUsb20u || named > 0) {
+                    out("  %s stays: %s.\n", name, !inst_eq(hex, data) ?
+                        "its bytes changed" : storUsb20u ?
+                        "NUSB is installed (Uninstall\\USB20U)" :
+                        "a device still names it");
+                    if (opts.List) {
+                        i++;
+                        continue;
+                    }
+                    if (!stor_rec_del(key, name)) {
+                        return 0;
+                    }
+                    continue;
+                }
+                if (opts.List) {
+                    out("(/list) %s would be deleted%s.\n", name, pass == 1 ?
+                        ", once no copy of USBSTOR.INF is left" : "");
+                    i++;
+                    continue;
+                }
+                inst_copy(pnf, name, sizeof(pnf));
+                if (strlen(pnf) > 4) {
+                    strcpy(pnf + strlen(pnf) - 4, ".PNF");
+                }
+                if (file_state(pnf) < 0 ||
+                    (file_state(pnf) > 0 && !delete_file(pnf)) ||
+                    !delete_file(name)) {
+                    out("  %s could not be deleted (error %lu): restart Windows, "
+                        "then run the uninstall\n  again.\n", name,
+                        (unsigned long)GetLastError());
+                    flagRestart = 1;
+                    flagSteps = 1;
+                    left = 1;
+                    i++;
+                    continue;
+                }
+                out("Deleted %s.\n", name);
+                flagChanged = 1;
                 if (sub == 0 && !stor_oem_forget(name)) {
-                    out("  The setup engine's record of %s could not be "
-                        "removed.\n", name);
+                    /* The record stays: the next run finds the copy gone and
+                     * removes the value then. */
+                    out("  The setup engine's record of it could not be removed "
+                        "now.\n");
                     flagFailed = 1;
                     left = 1;
                     i++;
@@ -18926,89 +20553,13 @@ static int stor_un_rest(void)
                 if (!stor_rec_del(key, name)) {
                     return 0;
                 }
-                continue;
-            }
-            inst_copy(rel, name, sizeof(rel));
-            {
-                char base[INST_PATH_CHARS];
-                WIN32_FIND_DATAA fd;
-                HANDLE fh;
-                join(base, sizeof(base), win, "INF\\");
-                if (inst_eqn(name, base, strlen(base))) {
-                    inst_copy(rel, name + strlen(base), sizeof(rel));
-                }
-                fh = FindFirstFileA(name, &fd);
-                if (fh != INVALID_HANDLE_VALUE) {
-                    char *s = strrchr(rel, '\\');
-                    FindClose(fh);
-                    if (s != NULL) {
-                        s[1] = '\0';
-                    } else {
-                        rel[0] = '\0';
-                    }
-                    strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
-                }
-            }
-            named = h > 0 ? s98_inf_named_9x(rel) : -1;
-            if (h < 0 || named < 0) {
-                out("  %s: whether a device names it cannot be read; it stays "
-                    "for now.\n", name);
-                flagFailed = 1;
-                left = 1;
-                i++;
-                continue;
-            }
-            if (!inst_eq(hex, data) || storUsb20u || named > 0) {
-                out("  %s stays: %s.\n", name, !inst_eq(hex, data) ?
-                    "its bytes changed" : storUsb20u ?
-                    "NUSB is installed (Uninstall\\USB20U)" :
-                    "a device still names it");
-                if (opts.List) {
-                    i++;
-                    continue;
-                }
-                if (!stor_rec_del(key, name)) {
-                    return 0;
-                }
-                continue;
-            }
-            if (opts.List) {
-                out("(/list) %s would be deleted.\n", name);
-                i++;
-                continue;
-            }
-            inst_copy(pnf, name, sizeof(pnf));
-            if (strlen(pnf) > 4) {
-                strcpy(pnf + strlen(pnf) - 4, ".PNF");
-            }
-            if (file_state(pnf) < 0 ||
-                (file_state(pnf) > 0 && !delete_file(pnf)) ||
-                !delete_file(name)) {
-                out("  %s could not be deleted (error %lu): restart Windows, "
-                    "then run the uninstall\n  again.\n", name,
-                    (unsigned long)GetLastError());
-                flagRestart = 1;
-                flagSteps = 1;
-                left = 1;
-                i++;
-                continue;
-            }
-            out("Deleted %s.\n", name);
-            flagChanged = 1;
-            if (sub == 0 && !stor_oem_forget(name)) {
-                /* The record stays: the next run finds the copy gone and
-                 * removes the value then. */
-                out("  The setup engine's record of it could not be removed "
-                    "now.\n");
-                flagFailed = 1;
-                left = 1;
-                i++;
-                continue;
-            }
-            if (!stor_rec_del(key, name)) {
-                return 0;
             }
         }
+    }
+    /* Neither half alone left where Windows finds it (section 6.5.5). */
+    storDpOff = 0;
+    if (!opts.List && stor_pair_left()) {
+        flagSteps = 1;
     }
     /* The files, last. */
     for (i = 0;;) {
@@ -19091,6 +20642,7 @@ static int stor_forget(void)
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Infs");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Placed");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Tools");
+    RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Silent");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Devices");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Before");
     w = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY);
@@ -19225,6 +20777,264 @@ static int stor_tools_remove(void)
     return !left;
 }
 
+/* ---- the silent install with the storage row (record 26 section 6.5.12,
+ * task 43.42 option A) ------------------------------------------------- */
+
+/* 1 when XhciSilentInstall reads on after this run's writes, as the
+ * driver reads it: the machine-wide value where there is one, else every
+ * controller's own value. */
+static int silent_gate_on(void)
+{
+    int v = inst_value_find("XhciSilentInstall");
+    DWORD mwv = 0;
+    DWORD now;
+    int mw;
+    int i;
+    int any = 0;
+
+    if (v < 0 || v >= INST_MAX_VALUES) {
+        return 0;
+    }
+    mw = mw_value(v, &mwv);
+    if (mw != 0) {
+        return mw > 0 && mwv == 1;
+    }
+    /* Every controller xhci98 runs, whether or not this run reached it. */
+    for (i = 0; i < devCount; i++) {
+        if (!is_controller(&devs[i]) || !inst_eq(devs[i].Service, "xhci98")) {
+            continue;
+        }
+        any = 1;
+        /* Its driver key read directly: the device's Inf is -1 when the
+         * USB drivers are out of this run. */
+        {
+            char path[INST_PATH_CHARS];
+            if (devs[i].Driver[0] == '\0') {
+                return 0;
+            }
+            driver_key_path(&devs[i], path, sizeof(path));
+            if (!reg_dword(HKEY_LOCAL_MACHINE, path, instValues[v].Name,
+                           &now) || now != 1) {
+                return 0;
+            }
+        }
+    }
+    return any;
+}
+
+static int silent_taken(const char *name, void *ctx)
+{
+    HKEY k = (HKEY)ctx;
+    DWORD t;
+    DWORD n = 0;
+
+    LONG r = RegQueryValueExA(k, name, NULL, &t, NULL, &n);
+
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    return r == ERROR_SUCCESS || r == ERROR_MORE_DATA ? 1 : -1;
+}
+
+static void silent_hex(const unsigned char *e, char *out)
+{
+    static const char hx[] = "0123456789ABCDEF";
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        out[2 * i] = hx[(e[i] >> 4) & 0x0F];
+        out[2 * i + 1] = hx[e[i] & 0x0F];
+    }
+    out[8] = '\0';
+}
+
+/* The Bulk-Only entries added to SilentClasses where none holds their
+ * bytes, each recorded before it is written; never over a value. */
+static void stor_silent_merge(void)
+{
+    HKEY k;
+    LONG r;
+    DWORD i;
+    DWORD n;
+    DWORD t;
+    DWORD dn;
+    char name[256];
+    unsigned char data[16];
+    unsigned char have[64][4];
+    int valid[64];
+    int nh = 0;
+    int full = 0;
+    int kept = 0;
+    INST_U32 set;
+    int e;
+    char hex[9];
+
+    if (!storCopyOk || opts.List || !stor_98se()) {
+        return;
+    }
+    r = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_SILENT_KEY, 0, NULL, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &k, NULL);
+    if (r != ERROR_SUCCESS) {
+        out("USB storage: the SilentClasses list could not be opened (error "
+            "%ld): new USB disks\nmay still open Windows' wizard.\n", (long)r);
+        return;
+    }
+    for (i = 0;; i++) {
+        n = sizeof(name);
+        dn = sizeof(data);
+        r = RegEnumValueA(k, i, name, &n, NULL, &t, data, &dn);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS && r != ERROR_MORE_DATA) {
+            out("USB storage: the SilentClasses list could not be read whole: "
+                "nothing is added.\n");
+            RegCloseKey(k);
+            return;
+        }
+        if (nh >= 64) {
+            full = 1;
+            continue;
+        }
+        valid[nh] = r == ERROR_SUCCESS && t == REG_BINARY && dn == 4;
+        memcpy(have[nh], data, 4);
+        if (valid[nh] && (data[0] & 0xC0) != 0) {
+            kept++;
+        }
+        nh++;
+    }
+    if (full) {
+        out("USB storage: the SilentClasses list is longer than this installer "
+            "reads: nothing\nis added.\n");
+        RegCloseKey(k);
+        return;
+    }
+    set = inst_stor_silent_add((const unsigned char (*)[4])have, valid, nh);
+    for (e = 0; e < INST_STOR_SILENT_COUNT; e++) {
+        if ((set & (1UL << e)) == 0) {
+            continue;
+        }
+        if (!inst_stor_silent_name(e, silent_taken, (void *)k, name,
+                                   sizeof(name))) {
+            out("USB storage: the SilentClasses names could not be read: "
+                "nothing more is added.\n");
+            break;
+        }
+        silent_hex(instStorSilent[e], hex);
+        if (!stor_rec_text("Silent", name, hex)) {
+            continue;
+        }
+        r = RegSetValueExA(k, name, 0, REG_BINARY, instStorSilent[e], 4);
+        if (r != ERROR_SUCCESS) {
+            out("USB storage: SilentClasses %s could not be written (error "
+                "%ld).\n", name, (long)r);
+            stor_rec_del("Silent", name);
+            continue;
+        }
+        flagChanged = 1;
+        kept++;
+        out("USB storage: SilentClasses %s added (class 08, subclass %02X, "
+            "protocol 50).\n", name, (unsigned)instStorSilent[e][2]);
+    }
+    RegCloseKey(k);
+    if (kept > (int)32) {
+        out("USB storage: SilentClasses holds more than the 32 entries the "
+            "driver reads: one\nadded here may not be read.\n");
+    }
+}
+
+/* The uninstall: each entry the Silent record names, deleted while it holds
+ * the recorded bytes; the key and every other value stay. 1 done; 0 the
+ * record or the list could not be read or written (the record kept). */
+static int stor_silent_remove(void)
+{
+    char name[256];
+    char data[96];
+    char hex[9];
+    unsigned char now[16];
+    DWORD t;
+    DWORD dn;
+    DWORD i = 0;
+    HKEY k = NULL;
+    LONG r;
+    int e;
+
+    for (;;) {
+        e = stor_rec_enum("Silent", i, name, sizeof(name), data, sizeof(data));
+        if (e < 0) {
+            flagFailed = 1;
+            if (k != NULL) {
+                RegCloseKey(k);
+            }
+            return 0;
+        }
+        if (e == 0) {
+            break;
+        }
+        if (k == NULL) {
+            r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_SILENT_KEY, 0,
+                              KEY_QUERY_VALUE | KEY_SET_VALUE, &k);
+            if (r == ERROR_FILE_NOT_FOUND) {
+                k = NULL;
+            } else if (r != ERROR_SUCCESS) {
+                flagFailed = 1;
+                return 0;
+            }
+        }
+        dn = sizeof(now);
+        r = k != NULL ? RegQueryValueExA(k, name, NULL, &t, now, &dn)
+                      : ERROR_FILE_NOT_FOUND;
+        if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND &&
+            r != ERROR_MORE_DATA) {
+            /* Unreadable: the evidence is kept for the next run. */
+            out("  SilentClasses %s cannot be read: it stays for now.\n", name);
+            flagFailed = 1;
+            if (k != NULL) {
+                RegCloseKey(k);
+            }
+            return 0;
+        }
+        if (r == ERROR_SUCCESS && t == REG_BINARY && dn == 4) {
+            silent_hex(now, hex);
+        } else {
+            hex[0] = '\0';
+        }
+        if (opts.List) {
+            out("(/list) SilentClasses %s %s.\n", name,
+                r == ERROR_FILE_NOT_FOUND ? "is gone" :
+                inst_eq(hex, data) ? "would be deleted" :
+                "has changed and would stay");
+            i++;
+            continue;
+        }
+        if (r != ERROR_FILE_NOT_FOUND && inst_eq(hex, data)) {
+            if (RegDeleteValueA(k, name) != ERROR_SUCCESS) {
+                out("  SilentClasses %s could not be deleted.\n", name);
+                flagFailed = 1;
+                if (k != NULL) {
+                    RegCloseKey(k);
+                }
+                return 0;
+            }
+            out("Removed SilentClasses %s.\n", name);
+            flagChanged = 1;
+        } else if (r != ERROR_FILE_NOT_FOUND) {
+            out("  SilentClasses %s stays: it has changed since this installer "
+                "added it.\n", name);
+        }
+        if (!stor_rec_del("Silent", name)) {
+            if (k != NULL) {
+                RegCloseKey(k);
+            }
+            return 0;
+        }
+    }
+    if (k != NULL) {
+        RegCloseKey(k);
+    }
+    return !flagFailed;
+}
+
 /* ---- the window's (record 26 section 5.3) ------------------------------- */
 
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap)
@@ -19283,6 +21093,13 @@ void inst_eng_stor_summary(char *out, size_t cap)
                   "files copied to %s\\NUSB33 only; nothing installs them "
                   "here.", toolDir);
         out[cap - 1] = '\0';
+        return;
+    }
+    if (storHere && storPack <= 0 && storHalf) {
+        /* The Summary still carries the row's note, with the lone
+         * USBSTOR.INF's sentence (record 26 section 6.5.5). */
+        inst_copy(out, "USB storage drivers for Windows 98 SE: not offered "
+                  "by this download.", cap);
         return;
     }
     if (!storHere || storPack <= 0) {
@@ -19415,7 +21232,7 @@ void inst_eng_usage(void)
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (on 98 SE and ME with a warning)\n"
-"  /usb          Windows 8 and 8.1: install the USB drivers too (untested)\n"
+"  /usb          Windows 8, 8.1 and 10: install the USB drivers too (untested)\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
@@ -19424,6 +21241,8 @@ void inst_eng_usage(void)
 "                elsewhere copy their files to the tools folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
+"  /faster       turn the USB Tree's \"can run faster\" notice on for this\n"
+"                computer (/nofaster: off)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
 "  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
@@ -19614,7 +21433,7 @@ static void st_screens_once(int longest)
         storUsb20u = 1;
         storSource = 0;
         storPlanCase = inst_stor_case(storSt, 0);
-        storDefault = inst_stor_default(0, 0, storSt);
+        storDefault = inst_stor_default(storUsb20u, 0, 0, storSt);
         storInclude = storDefault;
 
         /* /list */
@@ -19679,6 +21498,19 @@ static void st_screens_once(int longest)
         for (i = -1; i <= 1; i++) {
             pkgCmSigned = i;
             testsigning_note_cm();
+        }
+        if (k == 0) {
+            /* Test-signing mode confirmed, and what 32-bit 8 and 8.1 print
+             * in its place (task 43.22). */
+            pkgCmSigned = 1;
+            testSigningConfirmed = 1;
+            testsigning_note_cm();
+            out("%s\n", inst_sig_x86_sb_text());
+            /* The Secure Boot sentences, each architecture and state. */
+            for (i = INST_SB_OFF; i <= INST_SB_ON; i++) {
+                out("%s\n%s\n", inst_sb_text(INST_ARCH_AMD64, i),
+                    inst_sb_text(INST_ARCH_X86, i));
+            }
         }
         pkgCmSigned = -1;
         testSigningConfirmed = 0;
@@ -19936,9 +21768,19 @@ static int selftest_screens(void)
 /* The installer's own files and the uninstall entry (record 26 6.2, 9.1)   */
 /* ======================================================================== */
 
+/* The disk benchmark of this architecture (design record 29 section 11,
+ * task 43.50), from the package's tools\xhciperf\: put in place and
+ * removed with the installer's own files, by their route. */
+#if INST_MY_ARCH == INST_ARCH_AMD64
+#define INST_PERF_NAME      "XHCIPF64.EXE"
+#else
+#define INST_PERF_NAME      "XHCIPERF.EXE"
+#endif
+#define INST_PERF_README    "XHCIPERF.TXT"   /* its readme, which its Help opens */
+
 /* The installer's files of this architecture, from the package's
  * tools\xhciinst\: the window, the console tool, and on 98 SE and ME the
- * helper. */
+ * helper; then the disk benchmark, from tools\xhciperf\ (own_src). */
 static int own_names(const char **names)
 {
     int n = 0;
@@ -19948,7 +21790,16 @@ static int own_names(const char **names)
     if (!envNow.Nt) {
         names[n++] = INST_DI_NAME;
     }
+    names[n++] = INST_PERF_NAME;
+    names[n++] = INST_PERF_README;
     return n;
+}
+
+/* The package folder a file of own_names comes from */
+static const char *own_src(const char *name)
+{
+    return (strcmp(name, INST_PERF_NAME) == 0 || strcmp(name, INST_PERF_README) == 0) ? "tools\\xhciperf"
+                                                                                     : "tools\\xhciinst";
 }
 
 /* One file put in place by the USB tree tool's route (record 23 section
@@ -20012,7 +21863,7 @@ static int own_put(const char *from, const char *to)
  * the package's bytes, never left for a restart. */
 static void own_install(void)
 {
-    const char *names[3];
+    const char *names[6];
     char from[INST_PATH_CHARS];
     char to[INST_PATH_CHARS];
     int n;
@@ -20024,7 +21875,7 @@ static void own_install(void)
     }
     n = own_names(names);
     for (i = 0; i < n; i++) {
-        join(from, sizeof(from), root, "tools\\xhciinst");
+        join(from, sizeof(from), root, own_src(names[i]));
         join(from, sizeof(from), from, names[i]);
         join(to, sizeof(to), toolDir, names[i]);
         if (!file_exists(from, NULL)) {
@@ -20183,7 +22034,7 @@ static int job_file_for(const char *dir, char *out, size_t cap)
 
 static int own_remove_in(const char *dir, int window)
 {
-    const char *names[4];
+    const char *names[6];
     char path[INST_PATH_CHARS];
     int n;
     int i;
@@ -20239,7 +22090,7 @@ static void helper_files_gone(void)
 static int own_any_in(const char *dir)
 {
     static const char *const ext[3] = { ".TMP", ".BAK", ".DEL" };
-    const char *names[3];
+    const char *names[6];
     char path[INST_PATH_CHARS];
     char v[INST_PATH_CHARS];
     int n;
@@ -20343,7 +22194,8 @@ static void arp_write(int incomplete)
                   envNow.Nt && inst_arp_cm_only(svc_state("xhci98"),
                                                 svc_state("xhcicm"),
                                                 !opts.Uninstall &&
-                                                !usbInclude));
+                                                !usbInclude && haveCm &&
+                                                tbInclude));
     if (!inst_arp_command(cmd, sizeof(cmd), toolDir, window, envNow.Nt)) {
         out("The Add/Remove Programs entry cannot name %s.\n", exe);
         flagFailed = 1;
@@ -20587,8 +22439,8 @@ int inst_eng_begin(int argc, char **argv)
         envNow.Nt = 1;
         if (osKind == INST_OS_REFUSED) {
             out("This Windows is not one this package supports (2000, XP, "
-                "XP x64, Vista, 7;\n8 and 8.1 for the Thunderbolt 3 / USB4 "
-                "connection manager alone).\n");
+                "XP x64, Vista, 7;\n8, 8.1 and 10 below build 22000 for the "
+                "Thunderbolt 3 / USB4\nconnection manager).\n");
             return INST_EXIT_REFUSED;
         }
         isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
@@ -20617,12 +22469,18 @@ int inst_eng_begin(int argc, char **argv)
     if (!envNow.Nt && INST_MY_ARCH != INST_ARCH_X86) {
         return INST_EXIT_REFUSED;
     }
+    /* Design record 30 section 7.2 (owner, 2026-10-22). */
+    if ((opts.Stor98Vxd || opts.NoStor98Vxd) && envNow.Nt) {
+        out("REFUSED: /s98vsd and /nos98vsd are for Windows 98 SE and "
+            "ME only.\n");
+        return INST_EXIT_REFUSED;
+    }
     for (i = 0; i < opts.SetCount; i++) {
         int sk = instValues[opts.SetIndex[i]].Inf;
         if ((opts.CmOnly || (osKind == INST_OS_CMONLY && !opts.Usb)) &&
             (sk == INST_INF_XHCI || sk == INST_INF_UAS)) {
             out("REFUSED: /set %s:\nthe USB drivers are not in this run "
-                "(/cmonly, or Windows 8 and 8.1).\n",
+                "(/cmonly, or Windows 8, 8.1 and 10).\n",
                 instValues[opts.SetIndex[i]].Name);
             return INST_EXIT_REFUSED;
         }
@@ -20739,17 +22597,26 @@ static int usb_decide(void)
         out("REFUSED: %s\n", why != NULL ? why : "the components.");
         return 0;
     }
-    if (osKind == INST_OS_CMONLY && r == 0) {
+    if (osKind == INST_OS_CMONLY && r == 0 && !haveCm) {
+        /* Record 26 section 5.3.1 case 5 (owner, 2026-10-22). */
+        out("%s: this package carries no Thunderbolt 3 / USB4 driver; it "
+            "installs the xHCI98\ntools, and the xHCI98 USB drivers only "
+            "with /usb (untested on Windows 8, 8.1\nand 10).\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
+    } else if (osKind == INST_OS_CMONLY && r == 0) {
         /* Decision D18 as amended by record 23 revision 26 (task 43.43):
          * the USB drivers and Stor98 are offered here, unticked. */
         out("%s: this package installs the Thunderbolt 3 / USB4 connection "
             "manager\nhere; Windows' own USB 3 driver keeps running the USB "
             "controllers unless\n/usb puts the xHCI98 USB drivers in the run "
-            "(untested on Windows 8 and 8.1).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            "(untested on Windows 8, 8.1\nand 10).\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY) {
         out("/usb: the xHCI98 USB drivers are in this run (untested on %s).\n\n",
-            inst_os_name(1, envNow.Major, envNow.Minor));
+            inst_os_name(1, envNow.Major, envNow.Minor,
+                         osv.dwBuildNumber & 0xFFFFUL));
     } else if (r == 0) {
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");
@@ -20814,6 +22681,7 @@ void inst_eng_tb_question(void)
 {
     tb_question();
     s98_question();
+    vsd_question();
     stor_question();
 }
 
@@ -20868,7 +22736,8 @@ static void cm_off_warning(void)
 static INST_U32 comp_warnings_for(int usb, int stor, int s98)
 {
     return inst_comp_warnings(!envNow.Nt && envNow.Minor == 10, !envNow.Nt,
-                              osKind == INST_OS_CMONLY, usb, stor, s98);
+                              osKind == INST_OS_CMONLY, haveCm, usb, stor,
+                              s98);
 }
 
 static void comp_warnings_out(void)
@@ -20943,9 +22812,27 @@ int inst_eng_ask(void)
 int inst_eng_run(void)
 {
     int code = envNow.Nt ? run_install_nt() : run_install_9x();
-    int f = flagFailed;
-    int r = flagRestart;
-    int s = flagSteps;
+    int f;
+    int r;
+    int s;
+
+    f = flagFailed;
+    r = flagRestart;
+    s = flagSteps;
+    /* A run that ends with DevicePath withdrawn, and every install run on
+     * 98 SE, whatever its way out: a USBSTOR.INF left alone in the INF
+     * directories is said once, a step (record 26 section 6.5.5). */
+    if ((storDpOff || storHere) && !opts.List) {
+        storDpOff = 0;
+        if (!storPairSaid &&
+            inst_stor_pair_warn(inst_stor_pair(
+                stor_inf_found(INST_STOR_IDX_USBSTOR_INF),
+                stor_inf_found(INST_STOR_IDX_USBNTMAP_INF)))) {
+            out("\n");
+            stor_pair_left();
+            flagSteps = 1;
+        }
+    }
 
     /* Whatever the run's verdict, the invariant of record 21 section 7.4
      * holds at its end (decision M13). */
@@ -21248,6 +23135,16 @@ const char *inst_eng_confirm_text(void)
 const char *inst_eng_summary_head(int writes, int other)
 {
     return inst_summary_head(planned_runs(), writes, other, envNow.Nt);
+}
+
+int inst_eng_fast_state(void)
+{
+    DWORD v = 0;
+    int have = reg_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_FAST_VALUE, &v);
+
+    return inst_fast_on(0, 0, have, v,
+                        inst_fast_default(envNow.Nt, envNow.Major,
+                                          envNow.Minor));
 }
 
 int inst_eng_tray_started(void)

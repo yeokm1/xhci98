@@ -56,8 +56,8 @@ way, its `SOURCES` entry `..\xhci_log.c` hashed by path. `stor98` and
 `stor98mpd` are Stor98 (`src\stor98\src\`, roadmap-usb4 task 42-A.30),
 `stor98.srcstamp` beside `stor98.sys` (x86 or amd64) or `stor98.mpd` (98
 SE and ME) in `src\stor98\out\free\<target>\`: its `SOURCES` list, every
-header in `src\stor98\src\`, its interface header
-`src\stor98\include\stor98cm.h` and `src\xhci_version.h`, the version it
+header in `src\stor98\src\`, its interface headers
+`src\stor98\include\stor98cm.h` and `stor98pf.h`, and `src\xhci_version.h`, the version it
 takes since 3.1.0.0.
 
 .PARAMETER Write
@@ -134,7 +134,7 @@ if ($Driver -eq "stor98" -or $Driver -eq "stor98mpd") {
     $srcDir = Join-Path $repo "src\stor98\src"
     $stampName = "stor98.srcstamp"
     $binaryName = if ($Driver -eq "stor98mpd") { "stor98.mpd" } else { "stor98.sys" }
-    $extraFiles = @("..\include\stor98cm.h", "..\..\xhci_version.h")
+    $extraFiles = @("..\include\stor98cm.h", "..\include\stor98pf.h", "..\..\xhci_version.h")
 }
 # Prefixed rather than listed like a source file, so the source comparison
 # below cannot mistake it for a file that appeared in src\.

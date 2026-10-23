@@ -121,6 +121,15 @@ typedef struct _XHCI_ENUM_PORT {
     ULONG BosLength;        /* SuperSpeed: wTotalLength of the BOS      */
     ULONG BosMissing;       /* SuperSpeed: the BOS read failed, and the
                              * enumeration went on without it           */
+    /* Task 43.27 (design record 13 section 8.4.1): the BOS read at High
+     * and Full Speed. Usb2Bos is the caller's switch (XhciUsb2Bos), set
+     * before it reports the 18-byte device descriptor read; XhciEnumReset
+     * clears it. Usb2BosTried: this attempt made the read. Usb2BosSkip:
+     * an attempt that made it failed, so the retries of this connection
+     * do not; a new connection clears it. */
+    ULONG Usb2Bos;
+    ULONG Usb2BosTried;
+    ULONG Usb2BosSkip;
 } XHCI_ENUM_PORT, *PXHCI_ENUM_PORT;
 
 typedef struct _XHCI_ENUM_EVENT {
@@ -131,7 +140,8 @@ typedef struct _XHCI_ENUM_EVENT {
     ULONG Bytes;            /* TRANSFER_DONE: bytes received            */
     ULONG Value;            /* TRANSFER_DONE: bMaxPacketSize0 after the
                              * 8-byte read (at SuperSpeed the exponent,
-                             * 9 for 512), wTotalLength after the
+                             * 9 for 512), bcdUSB after the 18-byte
+                             * read (task 43.27), wTotalLength after the
                              * 9-byte configuration read and after the
                              * 5-byte BOS read                          */
 } XHCI_ENUM_EVENT, *PXHCI_ENUM_EVENT;
@@ -147,6 +157,42 @@ typedef struct _XHCI_ENUM_ACTION {
  * Speed), 512 at SuperSpeed (29-A.3). 0 for a speed the machine does not
  * take. */
 ULONG XhciEnumInitialMps0(ULONG speed);
+
+/* The bcdUSB from which a device at High or Full Speed is asked for its
+ * BOS (task 43.27): USB 3.2 section 9.2.6.6 obliges a device declaring at
+ * least 0210H to answer, and 9.6.1 makes an Enhanced SuperSpeed device in
+ * a USB 2.0 mode declare exactly 0210H. */
+#define XHCI_ENUM_USB2_BOS_BCD      0x0210UL
+
+/* Whether the BOS is read after the device descriptor (design record 13
+ * section 8.4.1): always at SuperSpeed; at High and Full Speed when bcdUsb
+ * is XHCI_ENUM_USB2_BOS_BCD or more, `on` (the switch) is nonzero and
+ * `skip` (an earlier attempt's failure) is zero; never at Low Speed or an
+ * unknown speed. 1 or 0. */
+ULONG XhciEnumWantsBos(ULONG speed, ULONG bcdUsb, ULONG on, ULONG skip);
+
+/* The devices whose BOS read at High or Full Speed did not end cleanly -
+ * not answered by the deadline, or failed other than by a STALL (task
+ * 43.27, design record 13 section 8.4.1): kept by VID:PID for the
+ * controller's started life, so neither a retry nor the re-enumeration
+ * after a controller recovery asks one of them again. Nothing is ever
+ * dropped: a device that finds it full sets Saturated, and from then on
+ * no device is read at High or Full Speed until the next start. */
+#define XHCI_ENUM_BOS_MEMO_SLOTS 16UL
+typedef struct _XHCI_ENUM_BOS_MEMO {
+    ULONG Count;
+    ULONG Saturated;
+    ULONG VidPid[XHCI_ENUM_BOS_MEMO_SLOTS];
+} XHCI_ENUM_BOS_MEMO, *PXHCI_ENUM_BOS_MEMO;
+
+VOID XhciEnumBosMemoAdd(PXHCI_ENUM_BOS_MEMO memo, ULONG vidPid);
+
+/* 1 when a run that stops at a controller halt now should put the port's
+ * device in the memo (record 13 section 8.4.1, rule 3): this attempt made
+ * the High or Full Speed read and has not reached its PDO. */
+ULONG XhciEnumBosHaltMemo(const XHCI_ENUM_PORT *port);
+/* 1 when the device is not to be read: in the memo, or the memo full. */
+ULONG XhciEnumBosMemoHas(const XHCI_ENUM_BOS_MEMO *memo, ULONG vidPid);
 
 /* Put a port in XHCI_ENUM_EMPTY with nothing owned. */
 VOID XhciEnumReset(PXHCI_ENUM_PORT port);

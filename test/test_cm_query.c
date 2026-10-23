@@ -69,7 +69,9 @@ static void test_layout(void)
     CHECK_EQ(CM_Q_O_CONTENT_GEN + 4, CM_Q_HDR_BYTES, "the generation ends the header");
     CHECK_EQ(CM_Q_X_FLAGS + 4 + 8, CM_Q_EXT_BYTES, "8 bytes reserved");
     CHECK(CM_Q_BUILD_MAX <= CM_Q_ASK_BYTES, "one ask holds the largest");
-    CHECK_EQ(CM_Q_BUILD_MAX, 64 + 3200 + 768 + 200, "the largest answer");
+    CHECK_EQ(CM_Q_BUILD_MAX, 64 + 32 + 3200 + 768 + 200, "the largest answer");
+    CHECK_EQ(CM_Q_REC_AT, 96, "version 2: the record after the block");
+    CHECK_EQ(CM_Q_RM_LOST + 4 + 16, CM_Q_RM_BYTES, "16 bytes reserved");
 }
 
 /* The USB4 connection manager: two host ports, one read within its
@@ -143,37 +145,40 @@ static void test_u4(void)
 
     q_in(&q, r, n);
     bytes = CmQueryBuild(built, &q);
-    CHECK_EQ(bytes, 64 + r + 3 * 32 + strlen(id), "the whole answer");
+    CHECK_EQ(bytes, 96 + r + 3 * 32 + strlen(id), "the whole answer");
     CHECK_EQ(get32(built, CM_Q_O_MAGIC), CM_Q_MAGIC, "magic");
-    CHECK_EQ(get32(built, CM_Q_O_VERSION), 1, "version");
+    CHECK_EQ(get32(built, CM_Q_O_VERSION), 2, "version 2");
+    CHECK_EQ(get32(built, 64 + CM_Q_RM_FLAGS), 0, "no block given: not watched");
+    CHECK_EQ(get32(built, 64 + CM_Q_RM_COUNT), 0, "none counted");
+    CHECK_EQ(get32(built, 64 + CM_Q_RM_MEMBER), CM_Q_UNKNOWN, "no member");
     CHECK_EQ(get32(built, CM_Q_O_BYTES), bytes, "size");
     CHECK_EQ(get32(built, CM_Q_O_PASS), 0, "no pass in the build");
     CHECK_EQ(get32(built, CM_Q_O_PASS_AGE_MS), CM_Q_UNKNOWN, "no age");
     CHECK_EQ(get32(built, CM_Q_O_LIVE), CM_LIVE_ACTIVE, "live");
     CHECK_EQ(get32(built, CM_Q_O_FLAGS), 0, "no flag");
-    CHECK_EQ(get32(built, CM_Q_O_REC_OFFSET), 64, "record at 64");
-    CHECK_EQ(get32(built, CM_Q_O_EXT_OFFSET), 64 + r, "extensions after it");
+    CHECK_EQ(get32(built, CM_Q_O_REC_OFFSET), 96, "record at 96");
+    CHECK_EQ(get32(built, CM_Q_O_EXT_OFFSET), 96 + r, "extensions after it");
     CHECK_EQ(get32(built, CM_Q_O_EXT_SHAPE), 0x00200003UL, "3 x 32");
     CHECK_EQ(get32(built, CM_Q_O_EPOCH_LO), 0x89ABCDEFUL, "epoch lo");
     CHECK_EQ(get32(built, CM_Q_O_EPOCH_HI), 0x01DC1234UL, "epoch hi");
     CHECK_EQ(get32(built, CM_Q_O_NHI_BDF), 0x0500UL, "05:00.0");
-    CHECK_EQ(get32(built, CM_Q_O_ID_OFFSET), 64 + r + 96, "id last");
+    CHECK_EQ(get32(built, CM_Q_O_ID_OFFSET), 96 + r + 96, "id last");
     CHECK_EQ(get32(built, CM_Q_O_ID_BYTES), strlen(id), "id length");
     CHECK_EQ(get32(built, CM_Q_O_CONTENT_GEN), 0, "no content generation yet");
-    CHECK(memcmp(built + 64, rec, r) == 0, "the record byte for byte");
-    CHECK(memcmp(built + 64 + r, ext, 96) == 0, "the extensions");
-    CHECK(memcmp(built + 64 + r + 96, id, strlen(id)) == 0, "the id, no NUL");
+    CHECK(memcmp(built + 96, rec, r) == 0, "the record byte for byte");
+    CHECK(memcmp(built + 96 + r, ext, 96) == 0, "the extensions");
+    CHECK(memcmp(built + 96 + r + 96, id, strlen(id)) == 0, "the id, no NUL");
 
     /* Fewer extensions than routers: the rest unknown. */
     q.ExtCount = 1;
     (void)CmQueryBuild(built, &q);
-    e = 64 + r + 2 * 32;
+    e = 96 + r + 2 * 32;
     CHECK_EQ(get32(built, e + CM_Q_X_LINK_STATE), CM_Q_UNKNOWN,
              "a missing extension is unknown");
     /* An id with a byte outside printable ASCII, or too long: none. */
     q.ExtCount = n;
     q.IdBytes = CM_Q_ID_MAX + 1;
-    CHECK_EQ(CmQueryBuild(built, &q), 64 + r + 96, "an id too long: none");
+    CHECK_EQ(CmQueryBuild(built, &q), 96 + r + 96, "an id too long: none");
     CHECK_EQ(get32(built, CM_Q_O_ID_BYTES), 0, "id bytes 0");
     q.Id = "A\tB";
     q.IdBytes = 3;
@@ -224,13 +229,13 @@ static void test_answer(void)
     ULONG bytes;
     ULONG info;
     static const UCHAR golden[64] = {
-        'X', 'C', 'M', 'Q', 1, 0, 0, 0,
+        'X', 'C', 'M', 'Q', 2, 0, 0, 0,
         0, 0, 0, 0, 7, 0, 0, 0,             /* bytes patched below; pass 7 */
         0xE8, 0x03, 0, 0, 1, 0, 0, 0,       /* 1000 ms; ACTIVE */
-        0x05, 0, 0, 0, 64, 0, 0, 0,         /* INERT | STOPPING; record */
-        192, 0, 0, 0, 0, 0, 0, 0,           /* ext at 64 + 128; 0 x 32 */
+        0x05, 0, 0, 0, 96, 0, 0, 0,         /* INERT | STOPPING; record */
+        224, 0, 0, 0, 0, 0, 0, 0,           /* ext at 96 + 128; 0 x 32 */
         0xEF, 0xCD, 0xAB, 0x89, 0x34, 0x12, 0xDC, 0x01,
-        0x00, 0x05, 0, 0, 192, 0, 0, 0,     /* 05:00.0; id at 192 */
+        0x00, 0x05, 0, 0, 224, 0, 0, 0,     /* 05:00.0; id at 224 */
         0, 0, 0, 0, 0, 0, 0, 0              /* id bytes patched; content gen */
     };
     UCHAR want[64];
@@ -242,7 +247,7 @@ static void test_answer(void)
     q_in(&q, r, 0);
     q.Inert = 1;
     bytes = CmQueryBuild(built, &q);
-    CHECK_EQ(bytes, 64 + 128 + strlen(id), "no extension");
+    CHECK_EQ(bytes, 96 + 128 + strlen(id), "no extension");
     memcpy(want, golden, 64);
     put32(want, CM_Q_O_BYTES, bytes);
     want[CM_Q_O_EXT_SHAPE + 2] = 32;
@@ -265,7 +270,7 @@ static void test_answer(void)
              CM_Q_ANS_WHOLE, "exactly: whole");
     CHECK_EQ(info, bytes, "all of it");
     CHECK(memcmp(out, want, 64) == 0, "the same header");
-    CHECK(memcmp(out + 64, rec, 128) == 0, "the record");
+    CHECK(memcmp(out + 96, rec, 128) == 0, "the record");
     CHECK_EQ(CmQueryAnswer(out, sizeof(out), built, bytes, 0, 1000, FALSE,
                            &info),
              CM_Q_ANS_WHOLE, "a larger buffer: whole");
@@ -314,7 +319,7 @@ static void test_edges(void)
     CHECK_EQ(bytes, CM_Q_BUILD_MAX, "the largest answer");
     CHECK_EQ(get32(built, CM_Q_O_FLAGS), CM_Q_F_TRUNCATED, "truncated");
     CHECK_EQ(get32(built, CM_Q_O_EXT_SHAPE), 0x00200018UL, "24 x 32");
-    CHECK(memcmp(built + 64, rec, CM_ST_MAX_BYTES) == 0, "the whole record");
+    CHECK(memcmp(built + 96, rec, CM_ST_MAX_BYTES) == 0, "the whole record");
     CHECK_EQ(CmQueryAnswer(out, CM_Q_ASK_BYTES, built, bytes, 1, 0, FALSE,
                            &info),
              CM_Q_ANS_WHOLE, "the first ask holds it");
@@ -326,14 +331,14 @@ static void test_edges(void)
              0, "no extension for a malformed record");
     q_in(&q, CM_ST_MAX_BYTES, n);
     bytes = CmQueryBuild(built, &q);
-    CHECK_EQ(bytes, 64 + 128 + strlen(id), "cut to the header");
-    CHECK_EQ(get32(built + 64, CM_ST_O_ROUTER_COUNT), 0, "count 0");
-    CHECK_EQ(get32(built + 64, CM_ST_O_BYTES), 128, "its size 128");
+    CHECK_EQ(bytes, 96 + 128 + strlen(id), "cut to the header");
+    CHECK_EQ(get32(built + 96, CM_ST_O_ROUTER_COUNT), 0, "count 0");
+    CHECK_EQ(get32(built + 96, CM_ST_O_BYTES), 128, "its size 128");
     CHECK_EQ(get32(built, CM_Q_O_EXT_SHAPE), 0x00200000UL, "no extension");
     /* No record at all. */
     q.Record = NULL;
     bytes = CmQueryBuild(built, &q);
-    CHECK_EQ(bytes, 64 + strlen(id), "the header and the id");
+    CHECK_EQ(bytes, 96 + strlen(id), "the header, the block and the id");
     CHECK_EQ(get32(built, CM_Q_O_REC_OFFSET), 0, "no record offset");
 }
 
@@ -370,6 +375,35 @@ static void test_content_gen(void)
     put32(built, CM_Q_O_PASS_AGE_MS, 77);
     CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 1,
              "stamp, echo, pass and age: no change");
+
+    {
+        /* The removal block is content too (design record 25 section 7.6). */
+        static UCHAR rm[CM_Q_RM_BYTES];
+        ULONG g;
+        memset(rm, 0, sizeof(rm));
+        put32(rm, CM_Q_RM_FLAGS, CM_Q_RF_WATCHED);
+        put32(rm, CM_Q_RM_MEMBER, CM_Q_UNKNOWN);
+        q.Removal = rm;
+        b = CmQueryBuild(built, &q);
+        CHECK(memcmp(built + 64, rm, CM_Q_RM_BYTES) == 0,
+              "the block at 64, byte for byte");
+        CHECK_EQ(get32(built, CM_Q_O_REC_OFFSET), 96, "the record after it");
+        g = CmQueryContentGen(built, b, prevAns, pb);
+        CHECK_EQ(g, 2, "watched: a change");
+        memcpy(prevAns, built, b);
+        pb = b;
+        put32(rm, CM_Q_RM_COUNT, 1);
+        put32(rm, CM_Q_RM_MEMBER, 0x0400);
+        b = CmQueryBuild(built, &q);
+        CHECK_EQ(get32(built, 64 + CM_Q_RM_COUNT), 1, "the count");
+        CHECK_EQ(get32(built, 64 + CM_Q_RM_MEMBER), 0x0400, "the member");
+        CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 3,
+                 "a removal counted: a change");
+        q.Removal = NULL;
+        b = CmQueryBuild(built, &q);
+        pb = CmQueryBuild(prevAns, &q);
+        (void)CmQueryContentGen(prevAns, pb, NULL, 0);
+    }
 
     q.Live = CM_LIVE_SUSPECT;
     b = CmQueryBuild(built, &q);

@@ -92,6 +92,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * another number or another type is the 0.96 floor (XhciVersionFloor).
  * Read at every start and latched for its lifetime. */
 #define HCD_VALUE_ACCEPT_096    L"XhciAccept096"
+/* Task 43.27 (design record 13 section 8.4.1): the BOS read at High and
+ * Full Speed, written by no INF: only a DWORD 0 turns it off; absent,
+ * another number or another type is on. Read at every start. */
+#define HCD_VALUE_USB2_BOS      L"XhciUsb2Bos"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
  * 0, another number, another type or a failed read is off (O6). The INFs
@@ -479,6 +483,12 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "hub.speed.value",
                 NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
     XhciLogNote(ext, "hub.speed.fallback", hc->HubSpeedFallback);
+
+    /* Task 43.27. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_USB2_BOS, &value);
+    hc->Usb2Bos = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    XhciLogNote(ext, "enum.bos.usb2.on", hc->Usb2Bos);
 
     /* Task 38.11: latched in the extension, which this start has zeroed
      * and which no in-place reinitialization zeroes again, so every version

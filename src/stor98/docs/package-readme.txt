@@ -6,12 +6,14 @@ of Windows, for use with xhci98. It runs a PCI NVMe controller, such as
 the drive in a Thunderbolt or USB4 enclosure, as a SCSI adapter on:
 
   - Windows 98 SE and Windows ME                 the 32-bit package
-  - Windows 2000 SP4, XP, Vista and 7 (32-bit)   the 32-bit package
+  - Windows 2000 SP4, XP, Vista, 7, 8, 8.1      the 32-bit package
+    and 10 (32-bit; 10 below build 22000)
   - Windows XP x64, Vista x64 and 7 x64          the 64-bit package
+    (8 x64, 8.1 x64 and 10 x64: untested; see WINDOWS 8, 8.1 AND 10)
 
 In the 32-bit package stor98.inf serves every 32-bit system, with
 stor98.mpd for Windows 98 SE and ME and stor98.sys for Windows 2000 to
-7; each system copies only its own file. In the 64-bit package
+10; each system copies only its own file. In the 64-bit package
 stor98.inf and stor98.sys are the 64-bit driver.
 
 Stor98 is built with xhci98 and carries the xhci98 package's version
@@ -73,7 +75,7 @@ Windows 98 SE / ME
   Hardware wizard works the same way: search a specific location, that
   folder.
 
-Windows 2000, XP, Vista, 7 (32-bit)
+Windows 2000, XP, Vista, 7, 8, 8.1, 10 (32-bit)
   In Device Manager open the controller (often shown as 'Mass Storage
   Controller' or 'PCI Device' with a yellow mark), choose Update Driver,
   install from a specific location, Have Disk, and point it at the
@@ -83,6 +85,21 @@ Windows XP x64, Vista x64, 7 x64
   As above, using the 64-bit package's folder. On Vista x64 and 7 x64
   turn on test-signing mode first, as for xhci98's own drivers; see
   the next section.
+
+WINDOWS 8, 8.1 AND 10
+
+The installer offers Stor98 on Windows 8, 8.1 and 10 (below build
+22000) too, unticked: it is untested there with xhci98's connection
+manager. Windows 8 has no NVMe driver of its own; Windows 8.1 and 10
+run their own (stornvme), and a ticked box puts Stor98 in its place on
+a drive behind a tunnel. The 32-bit package was read on Windows 8 and
+Windows 10 22H2 (32-bit); 32-bit Windows 8.1 has not been run. The
+64-bit package carries a catalog file, stor98.cat, which Windows 8 x64,
+8.1 x64 and 10 x64 require in test-signing mode (without it: 'The
+third-party INF does not contain digital signature information'):
+keep it beside stor98.inf. With it the package was taken into the
+driver store on 8.1 x64 and 10 x64; Stor98 x64 has not yet run a drive
+on 8 x64, 8.1 x64 or 10 x64.
 
 TEST SIGNING (64-bit Vista and 7)
 
@@ -114,16 +131,17 @@ HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98, as a string
 (REG_SZ, numbers in decimal) or, for the numeric ones, a DWORD. Read
 whenever the controller starts (at boot, or when it is plugged in).
 
-Windows 2000 to 7: one REG_SZ value DriverParameter in
+Windows 2000 to 10: one REG_SZ value DriverParameter in
 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\stor98\
 Parameters\Device, holding lower-case key=value pairs separated by
 semicolons, for example maxtransferkb=128;pollmode=1. Read when the
 controller starts (at boot, or after disabling and enabling it; a resume
-keeps what was read at the start).
+keeps what was read at the start). In the table '2000 to 7' covers
+Windows 8, 8.1 and 10 as well.
 
   9x name / NT key        Unit  Default            Range
   ----------------------  ----  -----------------  ------------------------
-  StorMaxTransferKB       KiB   512 on 98 SE / ME  64 to the default, in
+  StorMaxTransferKB       KiB   2048 on 98 SE / ME 64 to the default, in
   maxtransferkb=                256 on 2000 to 7   multiples of 4; anything
                                                    else is refused and the
                                                    default stands

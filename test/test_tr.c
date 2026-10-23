@@ -543,9 +543,21 @@ static void test_bos_hub_string(void)
 
 /* ---- xhcicm.sys's query -------------------------------------------------- */
 
+/* The answer qb_build lays out: version 2 (the removal block at 64, the
+ * record after it) unless qbV1; the block's flags, count and member. */
+static int qbV1;
+static TR_U32 qbRmFlags;
+static TR_U32 qbRmCount;
+static TR_U32 qbRmMember = CM_Q_UNKNOWN;
+
+static TR_U32 qb_rec(void)
+{
+    return qbV1 ? CM_Q_HDR_BYTES : CM_Q_HDR_BYTES + CM_Q_RM_BYTES;
+}
+
 static size_t qb_eoff(TR_U32 i)
 {
-    return (size_t)(CM_Q_HDR_BYTES + CM_ST_HDR_BYTES + i * CM_ST_ENTRY_BYTES);
+    return (size_t)(qb_rec() + CM_ST_HDR_BYTES + i * CM_ST_ENTRY_BYTES);
 }
 
 /* A whole, valid answer with `routers` zeroed entries; its size. */
@@ -553,22 +565,27 @@ static size_t qb_build(unsigned char *b, TR_U32 routers, TR_U32 epochLo,
                        TR_U32 pass)
 {
     TR_U32 recBytes = CM_ST_HDR_BYTES + routers * CM_ST_ENTRY_BYTES;
-    TR_U32 extOff = CM_Q_HDR_BYTES + recBytes;
+    TR_U32 extOff = qb_rec() + recBytes;
     TR_U32 idOff = extOff + routers * CM_Q_EXT_BYTES;
     TR_U32 idLen = (TR_U32)strlen(QB_ID);
     TR_U32 bytes = idOff + idLen;
-    unsigned char *r = b + CM_Q_HDR_BYTES;
+    unsigned char *r = b + qb_rec();
     TR_U32 i;
 
     memset(b, 0, (size_t)bytes + 64);
     put32(b, CM_Q_O_MAGIC, CM_Q_MAGIC);
-    put32(b, CM_Q_O_VERSION, CM_Q_VERSION);
+    put32(b, CM_Q_O_VERSION, qbV1 ? CM_Q_VERSION_1 : CM_Q_VERSION);
+    if (!qbV1) {
+        put32(b + CM_Q_HDR_BYTES, CM_Q_RM_FLAGS, qbRmFlags);
+        put32(b + CM_Q_HDR_BYTES, CM_Q_RM_COUNT, qbRmCount);
+        put32(b + CM_Q_HDR_BYTES, CM_Q_RM_MEMBER, qbRmMember);
+    }
     put32(b, CM_Q_O_BYTES, bytes);
     put32(b, CM_Q_O_PASS, pass);
     put32(b, CM_Q_O_PASS_AGE_MS, 100UL);
     put32(b, CM_Q_O_LIVE, 1UL);
     put32(b, CM_Q_O_FLAGS, 0UL);
-    put32(b, CM_Q_O_REC_OFFSET, CM_Q_HDR_BYTES);
+    put32(b, CM_Q_O_REC_OFFSET, qb_rec());
     put32(b, CM_Q_O_EXT_OFFSET, extOff);
     put32(b, CM_Q_O_EXT_SHAPE, routers | (CM_Q_EXT_BYTES << 16));
     put32(b, CM_Q_O_EPOCH_LO, epochLo);
@@ -645,8 +662,8 @@ static void test_query(void)
              CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     qb_entry(qa, 1UL, CM_ST_KIND_ICM, 0x0102UL, 0UL, CM_ST_APPR_APPROVED,
              CM_ST_TUN_UP, CM_ST_GEN_TBT3, "Apple", "Display");
-    CHECK_EQ(n, 64 + 128 + 256 + 64 + strlen(QB_ID), "the built answer's size");
-    extOff = 64UL + 128UL + 256UL;
+    CHECK_EQ(n, 96 + 128 + 256 + 64 + strlen(QB_ID), "the built answer's size");
+    extOff = 96UL + 128UL + 256UL;
     idOff = extOff + 64UL;
 
     CHECK(tr_query_parse(qa, n, &q) == 1, "a whole answer parses");
@@ -661,7 +678,7 @@ static void test_query(void)
     CHECK_EQ(q.NhiBdf, 0x0300, "NhiBdf");
     CHECK_EQ(q.ContentGen, 3, "ContentGen");
     CHECK(strcmp(q.Id, QB_ID) == 0, "Id");
-    CHECK(q.Rec == qa + 64, "Rec");
+    CHECK(q.Rec == qa + 96, "Rec");
     CHECK_EQ(q.RecBytes, 128 + 256, "RecBytes");
     CHECK_EQ(q.ExtOffset, extOff, "ExtOffset");
     CHECK_EQ(q.ExtCount, 2, "ExtCount");
@@ -705,7 +722,7 @@ static void test_query(void)
     put32(qa, CM_Q_O_MAGIC, 0x514D4359UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "bad magic refused");
     put32(qa, CM_Q_O_MAGIC, CM_Q_MAGIC);
-    put32(qa, CM_Q_O_VERSION, 2UL);
+    put32(qa, CM_Q_O_VERSION, 3UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "bad version refused");
     put32(qa, CM_Q_O_VERSION, CM_Q_VERSION);
 
@@ -762,12 +779,14 @@ static void test_query(void)
     put32(qa, CM_Q_O_REC_OFFSET, 32UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "record inside the header");
     put32(qa, CM_Q_O_REC_OFFSET, 64UL);
-    put32(qa, 64 + CM_ST_O_ENTRY_BYTES, 64UL);
+    CHECK(tr_query_parse(qa, n, &q) == 0, "version 2: a record inside the block");
+    put32(qa, CM_Q_O_REC_OFFSET, 96UL);
+    put32(qa, 96 + CM_ST_O_ENTRY_BYTES, 64UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "a record inst_st_check refuses");
-    put32(qa, 64 + CM_ST_O_ENTRY_BYTES, CM_ST_ENTRY_BYTES);
-    put32(qa, 64 + CM_ST_O_BYTES, 0x10000UL);
+    put32(qa, 96 + CM_ST_O_ENTRY_BYTES, CM_ST_ENTRY_BYTES);
+    put32(qa, 96 + CM_ST_O_BYTES, 0x10000UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "a record bigger than the answer");
-    put32(qa, 64 + CM_ST_O_BYTES, 128UL + 256UL);
+    put32(qa, 96 + CM_ST_O_BYTES, 128UL + 256UL);
 
     CHECK(tr_query_parse(qa, n, &q) == 1, "restored answer parses");
 
@@ -797,10 +816,10 @@ static void test_query(void)
     CHECK(tr_query_eject_ready(&q, &why) == 0 && has(why, "idle"),
           "eject: inert");
     q.Flags = CM_Q_F_TRUNCATED;
-    put32(qa, 64 + CM_ST_O_STAGE, CM_ST_STAGE_FAILED);
+    put32(qa, 96 + CM_ST_O_STAGE, CM_ST_STAGE_FAILED);
     CHECK(tr_query_eject_ready(&q, &why) == 0 && has(why, "not active"),
           "eject: stage not active");
-    put32(qa, 64 + CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
+    put32(qa, 96 + CM_ST_O_STAGE, CM_ST_STAGE_ACTIVE);
     q.Live = 3;
     CHECK(tr_query_eject_ready(&q, &why) == 0 && has(why, "not answering"),
           "eject: live not active");
@@ -838,10 +857,10 @@ static void test_query(void)
     q2.Pass = 7;
 
     CHECK(tr_query_same_content(&q, &q2), "same epoch and content");
-    put32(qb, 64 + CM_ST_O_GENERATION, 8UL);
+    put32(qb, 96 + CM_ST_O_GENERATION, 8UL);
     CHECK(tr_query_same_content(&q, &q2),
           "the record's generation alone is not content");
-    put32(qb, 64 + CM_ST_O_GENERATION, 7UL);
+    put32(qb, 96 + CM_ST_O_GENERATION, 7UL);
     q2.ContentGen = 4;
     CHECK(!tr_query_same_content(&q, &q2), "another content generation");
     q2.ContentGen = 3;
@@ -1064,6 +1083,184 @@ static void snap_of(TR_SNAP *s, const unsigned char *b, size_t n, TR_U32 live)
 
 static TR_SNAP so;
 static TR_SNAP sn;
+static TR_SNAP s3;
+
+/* Design record 25 section 7.6: the removal block's readers, the event and
+ * the details line. */
+static void test_removals(void)
+{
+    TR_EVENT ev[8];
+    TR_QUERY q;
+    MK_QUERY mq;
+    INST_U32 need;
+    char out[160];
+    size_t n;
+    int k;
+
+    /* Version 2. */
+    qbRmFlags = CM_Q_RF_WATCHED;
+    qbRmCount = 3UL;
+    qbRmMember = 0x0E21UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    CHECK(tr_query_parse(qa, n, &q) == 1, "v2 parses");
+    CHECK_EQ(q.Version, 2, "v2: version");
+    CHECK_EQ(q.RmFlags, CM_Q_RF_WATCHED, "v2: watched");
+    CHECK_EQ(q.RmCount, 3, "v2: count");
+    CHECK_EQ(q.RmMember, 0x0E21, "v2: member");
+    CHECK(q.Rec == qa + 96, "v2: the record at 96");
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "3 since this start; the last on tunnel port 0E:04.1")
+              == 0, "text: count and port");
+    put32(qa, CM_Q_HDR_BYTES + CM_Q_RM_LOST, 2UL);
+    (void)tr_query_parse(qa, n, &q);
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(has(out, "; 2 in a loss of the controller"), "text: the loss");
+    CHECK(mk_query_parse(qa, n, &mq, &need) == 1, "the mark service takes v2");
+    put32(qa, CM_Q_O_REC_OFFSET, 80UL);
+    CHECK(tr_query_parse(qa, n, &q) == 0, "v2: a record inside the block");
+    qbRmCount = 0UL;
+    qbRmMember = CM_Q_UNKNOWN;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    (void)tr_query_parse(qa, n, &q);
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "none since this start") == 0, "text: none");
+    qbRmFlags = 0UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    (void)tr_query_parse(qa, n, &q);
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "not watched on this system") == 0, "text: not watched");
+
+    /* Version 1: no block. */
+    qbV1 = 1;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    CHECK(tr_query_parse(qa, n, &q) == 1, "v1 still parses");
+    CHECK_EQ(q.Version, 1, "v1: version");
+    CHECK_EQ(q.RmFlags | q.RmCount, 0, "v1: no block");
+    CHECK_EQ(q.RmMember, CM_Q_UNKNOWN, "v1: no member");
+    CHECK(q.Rec == qa + 64, "v1: the record at 64");
+    tr_removal_text(&q, out, sizeof(out));
+    CHECK(strcmp(out, "not reported by this driver") == 0, "text: v1");
+    CHECK(mk_query_parse(qa, n, &mq, &need) == 1, "the mark service takes v1");
+    qbV1 = 0;
+
+    /* The event: a watched NHI, both ACTIVE, the count moved. */
+    qbRmFlags = CM_Q_RF_WATCHED;
+    qbRmCount = 3UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    snap_of(&so, qa, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &so, ev, 8), 0, "no change: none");
+    qbRmCount = 4UL;
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 1UL);
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK_EQ(k, 1, "a rise: one event");
+    CHECK_EQ(ev[0].Kind, TR_EV_REMOVED, "removed");
+    tr_event_text(&ev[0], out, sizeof(out));
+    CHECK(strcmp(out, "A Thunderbolt or USB4 device was removed unexpectedly.")
+              == 0, "the text names no unit");
+    CHECK(strcmp(tr_event_title(TR_EV_REMOVED), "Thunderbolt/USB4 warning") == 0,
+          "a warning");
+    CHECK(!has(out, "data") && !has(out, "unplug"), "no data, no unplug");
+    CHECK_EQ(tr_diff(&so, &sn, ev, 0), 0, "cap 0");
+    qbRmCount = 7UL;
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 1, "a rise of four: one event");
+    qbRmCount = 0xFFFFFFFFUL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    snap_of(&so, qa, n, 1UL);
+    qbRmCount = 0UL;
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 1, "a wrap: one event");
+    /* Another start: none. */
+    qbRmCount = 1UL;
+    n = qb_build(qb, 1UL, 0x22222222UL, 1UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "a new epoch: none");
+    /* The liveness, either side (cm_live.h: 1 ACTIVE, 5 RECOVERING,
+     * 7 CONTAINED). */
+    n = qb_build(qb, 1UL, 0x11111111UL, 6UL);
+    snap_of(&sn, qb, n, 7UL);
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "left ACTIVE: the stop event alone");
+    snap_of(&so, qa, qb_build(qa, 1UL, 0x11111111UL, 5UL), 5UL);
+    snap_of(&sn, qb, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "not ACTIVE before: none");
+    /* Not watched on either side: none. */
+    qbRmFlags = 0UL;
+    qbRmCount = 5UL;
+    snap_of(&so, qa, qb_build(qa, 1UL, 0x11111111UL, 5UL), 1UL);
+    qbRmFlags = CM_Q_RF_WATCHED;
+    qbRmCount = 6UL;
+    snap_of(&sn, qb, qb_build(qb, 1UL, 0x11111111UL, 6UL), 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "not watched before: none");
+    CHECK_EQ(tr_diff(&sn, &so, ev, 8), 0, "not watched now: none");
+    /* Version 1 before: none. */
+    qbV1 = 1;
+    snap_of(&so, qa, qb_build(qa, 1UL, 0x11111111UL, 5UL), 1UL);
+    qbV1 = 0;
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "a v1 answer before: none");
+    /* A full buffer: the warning comes first. */
+    qbRmCount = 1UL;
+    n = qb_build(qa, 0UL, 0x11111111UL, 5UL);
+    snap_of(&so, qa, n, 1UL);
+    qbRmCount = 2UL;
+    n = qb_build(qb, 3UL, 0x11111111UL, 6UL);
+    qb_entry(qb, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL,
+             CM_ST_APPR_APPROVED, CM_ST_TUN_UP, CM_ST_GEN_USB4, "A", "1");
+    qb_entry(qb, 1UL, CM_ST_KIND_USB4_PORT, 0x0102UL, 2UL,
+             CM_ST_APPR_APPROVED, CM_ST_TUN_UP, CM_ST_GEN_USB4, "B", "2");
+    qb_entry(qb, 2UL, CM_ST_KIND_USB4_PORT, 0x0103UL, 3UL,
+             CM_ST_APPR_APPROVED, CM_ST_TUN_UP, CM_ST_GEN_USB4, "C", "3");
+    snap_of(&sn, qb, n, 1UL);
+    k = tr_diff(&so, &sn, ev, 2);
+    CHECK_EQ(k, 2, "a full buffer");
+    CHECK_EQ(ev[0].Kind, TR_EV_REMOVED, "the warning not dropped");
+
+    /* Beside a departure, which is shown as before. */
+    qbRmCount = 1UL;
+    n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
+    qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
+    snap_of(&so, qa, n, 1UL);
+    qbRmCount = 2UL;
+    snap_of(&sn, qb, qb_build(qb, 0UL, 0x11111111UL, 6UL), 1UL);
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK_EQ(k, 2, "a departure and a removal");
+    CHECK_EQ(ev[0].Kind, TR_EV_REMOVED, "the removal first");
+    CHECK(ev[1].Kind == TR_EV_LEFT && strcmp(ev[1].Name, "Acme Dock") == 0,
+          "the unit's disconnected, named");
+    /* One balloon for both (T.11, 2026-10-22: on XP the second balloon
+     * replaced the warning at once). */
+    {
+        char all[256];
+        char small[80];
+        CHECK_EQ(tr_events_text(ev, k, all, sizeof(all)), 2, "one balloon: two lines");
+        CHECK(strcmp(all, "A Thunderbolt or USB4 device was removed unexpectedly.\n"
+                          "Acme Dock was disconnected.") == 0,
+              "one balloon: the warning first, the departure below it");
+        CHECK_EQ(tr_events_text(ev, k, small, sizeof(small)), 1,
+                 "one balloon: a line that does not fit is left out");
+        CHECK(strcmp(small, "A Thunderbolt or USB4 device was removed unexpectedly.") == 0,
+              "one balloon: the warning whole");
+        CHECK_EQ(tr_events_text(ev, k, small, 10), 0, "one balloon: nothing fits");
+        CHECK(small[0] == '\0', "one balloon: nothing fits - empty");
+        CHECK_EQ(tr_events_text(ev, 0, all, sizeof(all)), 0, "one balloon: no events");
+    }
+
+    /* The option: only a DWORD 0 turns the warning off. */
+    CHECK(tr_warn_removed(0, 0UL), "option: no value - on");
+    CHECK(tr_warn_removed(1, 1UL), "option: 1 - on");
+    CHECK(tr_warn_removed(1, 7UL), "option: another number - on");
+    CHECK(!tr_warn_removed(1, 0UL), "option: a DWORD 0 - off");
+    CHECK(strcmp(TR_WARN_VALUE, "WarnRemoved") == 0, "option: its name");
+
+    qbRmFlags = 0UL;
+    qbRmCount = 0UL;
+    qbRmMember = CM_Q_UNKNOWN;
+}
 
 static void test_events(void)
 {
@@ -1251,6 +1448,56 @@ static void test_events(void)
     CHECK_EQ(tr_diff(&sn, &so, ev, 8), 0, "diff: back to ACTIVE is quiet");
     snap_of(&so, qa, n, 0UL);
     CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: OFF to SUSPECT is quiet");
+
+    /* A sleep: ACTIVE, then OFF ("not monitored", CmLiveDisarm), then
+     * ACTIVE after the wake. Nothing failed, so nothing is raised. */
+    snap_of(&so, qa, n, 1UL);
+    snap_of(&sn, qa, n, 0UL);
+    snap_of(&s3, qa, n, 1UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: ACTIVE to OFF (a sleep) is quiet");
+    CHECK_EQ(tr_diff(&sn, &s3, ev, 8), 0, "diff: OFF to ACTIVE (the wake) is quiet");
+    /* ACTIVE to each loss state raises it, whatever came before. */
+    {
+        static const TR_U32 lost[] = { 2UL, 3UL, 4UL, 5UL, 6UL, 7UL, 9UL };
+        size_t j;
+        for (j = 0; j < sizeof(lost) / sizeof(lost[0]); j++) {
+            snap_of(&sn, qa, n, lost[j]);
+            k = tr_diff(&s3, &sn, ev, 8);
+            CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+                  "diff: ACTIVE (after a wake) to a loss state is STOPPED");
+            CHECK_EQ(tr_live_lost(lost[j]), 1, "a loss state");
+        }
+    }
+    /* Neither a stop's revocation nor a state not known is a loss. */
+    snap_of(&sn, qa, n, 8UL);
+    CHECK_EQ(tr_diff(&s3, &sn, ev, 8), 0, "diff: ACTIVE to REVOKED is quiet");
+    snap_of(&sn, qa, n, 10UL);
+    CHECK_EQ(tr_diff(&s3, &sn, ev, 8), 0, "diff: ACTIVE to an unknown state is quiet");
+    CHECK_EQ(tr_live_lost(0UL), 0, "OFF is no loss");
+    CHECK_EQ(tr_live_lost(1UL), 0, "ACTIVE is no loss");
+    CHECK_EQ(tr_live_lost(8UL), 0, "REVOKED is no loss");
+    /* A loss that persists is raised once. */
+    snap_of(&so, qa, n, 2UL);
+    snap_of(&sn, qa, n, 3UL);
+    CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: SUSPECT to ABSENT is quiet");
+    /* A resume that failed: the liveness stays OFF, the stage goes to
+     * failed (cm_power.c). Raised once, whether or not the sleep's OFF was
+     * sampled in between; a healthy resume (above) stays quiet. */
+    snap_of(&so, qa, n, 1UL);
+    CHECK_EQ(so.Stage[0], CM_ST_STAGE_ACTIVE, "snap: its stage");
+    snap_of(&sn, qa, n, 0UL);
+    sn.Stage[0] = CM_ST_STAGE_FAILED;
+    k = tr_diff(&so, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "diff: ACTIVE to OFF with the stage failed is STOPPED");
+    snap_of(&s3, qa, n, 0UL);
+    k = tr_diff(&s3, &sn, ev, 8);
+    CHECK(k == 1 && ev[0].Kind == TR_EV_STOPPED,
+          "diff: OFF (asleep) to OFF with the stage failed is STOPPED");
+    CHECK_EQ(tr_diff(&sn, &sn, ev, 8), 0, "diff: a failed stage stays quiet");
+    snap_of(&s3, qa, n, 2UL);
+    s3.Stage[0] = CM_ST_STAGE_FAILED;
+    CHECK_EQ(tr_diff(&so, &s3, ev, 8), 1, "diff: a loss and a failed stage, one event");
 
     /* A new epoch is a new set of devices. */
     n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
@@ -2417,6 +2664,488 @@ static void test_login(void)
     CHECK(tr_tray_login_start(0, 1, 0) == 1, "login: a plain start always opens");
 }
 
+/* The "can run faster" notice (record 25 section 7.7, revision 18). */
+static TR_FAST_IN fast_in(TR_U32 flags, unsigned int ex)
+{
+    TR_FAST_IN in;
+
+    memset(&in, 0, sizeof(in));
+    in.Ours = 1;
+    in.Connected = 1;
+    in.HaveV2 = 1;
+    in.V2Flags = flags;
+    in.ExSpeed = ex;
+    in.Root = 1;
+    return in;
+}
+
+static int fast_lines_fit(const char *s)
+{
+    int col = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\r' || *s == '\n') {
+            col = 0;
+        } else if (++col > 79) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Section 7.7 item 1: the qualifier answers settle on a
+ * device's answer or the third request without one, and a scan drops the
+ * keys it did not see. */
+static void test_qual_cache(void)
+{
+    static TR_QUAL_CACHE c;
+    static const unsigned char hs[10] = {10, 6, 0, 2, 0, 0, 0, 64, 1, 0};
+    static const unsigned char bad[10] = {9, 6, 0, 2, 0, 0, 0, 64, 1, 0};
+    char key[TR_FAST_KEY];
+    int i;
+
+    memset(&c, 0, sizeof(c));
+    CHECK(tr_qual_get(&c, "a") == -1, "qual: unknown key asks");
+    CHECK(tr_qual_put(&c, "a", NULL, 0) == 0, "qual: no answer counts 0 now");
+    CHECK(tr_qual_get(&c, "a") == -1, "qual: one failure asks again");
+    CHECK(tr_qual_put(&c, "a", hs, 10) == 1, "qual: then the answer");
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: settled High Speed capable");
+    CHECK_EQ(c.N, 1, "qual: one entry");
+
+    tr_qual_put(&c, "b", NULL, 0);
+    tr_qual_put(&c, "b", NULL, 0);
+    CHECK(tr_qual_get(&c, "b") == -1, "qual: two failures still ask");
+    tr_qual_put(&c, "b", NULL, 0);
+    CHECK(tr_qual_get(&c, "b") == 0, "qual: the third settles Full Speed");
+
+    CHECK(tr_qual_put(&c, "c", bad, 10) == 0, "qual: malformed is 0");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: and settled at once");
+    CHECK(tr_qual_put(&c, "d", hs, 5) == 0, "qual: short is 0");
+    CHECK(tr_qual_get(&c, "d") == 0, "qual: settled at once");
+
+    /* A scan that sees a and c only: d, settled by its answer, is dropped
+     * and asked again when it is back; b, settled by unanswered requests,
+     * is kept. */
+    tr_qual_begin(&c);
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: a seen");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: c seen");
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, 3, "qual: three kept");
+    CHECK(tr_qual_get(&c, "d") == -1, "qual: d gone, asked again");
+    CHECK(tr_qual_get(&c, "b") == 0, "qual: b kept, not asked");
+    CHECK(tr_qual_get(&c, "a") == 1, "qual: a kept");
+    CHECK(tr_qual_get(&c, "c") == 0, "qual: c kept");
+    /* An entry asked in the scan (put) is seen too, and keeps its tries. */
+    tr_qual_begin(&c);
+    tr_qual_put(&c, "e", NULL, 0);
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, 2, "qual: b and e kept");
+    CHECK(tr_qual_get(&c, "e") == -1, "qual: e unsettled, kept");
+    tr_qual_put(&c, "e", NULL, 0);
+    tr_qual_put(&c, "e", NULL, 0);
+    CHECK(tr_qual_get(&c, "e") == 0, "qual: e settled across scans");
+    /* An unanswered request, then a scan without the device (gone, perhaps
+     * with the recovery the request caused): settled, never asked again. */
+    tr_qual_begin(&c);
+    tr_qual_put(&c, "f", NULL, 0);
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == -1, "qual: f one try");
+    tr_qual_begin(&c);
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f gone after a try: settled");
+    tr_qual_begin(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f back: not asked");
+    tr_qual_end(&c);
+    CHECK(tr_qual_get(&c, "f") == 0, "qual: f still settled");
+
+    /* Turnover in a full cache, as the scan does it: every candidate
+     * present marked first (new ones before retained ones), then the end,
+     * then the requests. No retained key is lost. */
+    memset(&c, 0, sizeof(c));
+    tr_qual_begin(&c);
+    for (i = 0; i < TR_QUAL_MAX; i++) {
+        sprintf(key, "t%d", i);
+        tr_qual_put(&c, key, (i % 2) ? hs : NULL, (i % 2) ? 10 : 0);
+    }
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: turnover: full");
+    CHECK_EQ(tr_qual_room(&c, "x"), 0, "qual: full: a new key not asked");
+    CHECK_EQ(tr_qual_room(&c, "t3"), 1, "qual: full: a kept key may be");
+    tr_qual_put(&c, "x", hs, 10);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: full: nothing replaced");
+    CHECK(tr_qual_get(&c, "x") == -1, "qual: full: the new key not kept");
+    CHECK(tr_qual_get(&c, "t0") == -1, "qual: full: the first kept");
+    {
+        int j;
+        int ok = 1;
+        tr_qual_begin(&c);
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (tr_qual_get(&c, key) != -1) {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            (void)tr_qual_get(&c, key);
+        }
+        tr_qual_end(&c);
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (!tr_qual_room(&c, key)) {
+                ok = 0;
+            }
+            tr_qual_put(&c, key, hs, 10);
+        }
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            if (tr_qual_get(&c, key) == ((j % 2) ? 1 : -1)) {
+                if (j % 2 == 0) {
+                    tr_qual_put(&c, key, NULL, 0);
+                }
+            } else {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 100; j++) {
+            sprintf(key, "t%d", j);
+            if (tr_qual_get(&c, key) != ((j % 2) ? 1 : -1)) {
+                ok = 0;
+            }
+        }
+        for (j = 0; j < 400; j++) {
+            sprintf(key, "n%d", j);
+            if (tr_qual_get(&c, key) != 1) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "qual: turnover keeps the scan's keys, answers and tries");
+    }
+
+    /* More candidates than the balloon keeps (TR_FAST_MAX): repeated
+     * scans keep every answer and every unsettled try. */
+    memset(&c, 0, sizeof(c));
+    for (i = 0; i < 3; i++) {
+        int j;
+        int ok = 1;
+        tr_qual_begin(&c);
+        for (j = 0; j < TR_FAST_MAX + 8; j++) {
+            sprintf(key, "m%d", j);
+            if (tr_qual_get(&c, key) < 0) {
+                if (j % 2) {
+                    tr_qual_put(&c, key, hs, 10);
+                } else {
+                    tr_qual_put(&c, key, NULL, 0);
+                }
+            }
+        }
+        tr_qual_end(&c);
+        CHECK_EQ(c.N, TR_FAST_MAX + 8, "qual: every candidate kept");
+        for (j = 0; j < TR_FAST_MAX + 8; j++) {
+            sprintf(key, "m%d", j);
+            if (tr_qual_get(&c, key) != (j % 2 ? 1 : (i < 2 ? -1 : 0))) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "qual: answers kept, tries counted across scans");
+    }
+
+    /* Full of keys whose requests went unanswered and whose devices went
+     * away: every one kept, so none is asked again; a new key is not
+     * asked at all. */
+    memset(&c, 0, sizeof(c));
+    tr_qual_begin(&c);
+    for (i = 0; i < TR_QUAL_MAX; i++) {
+        sprintf(key, "k%d", i);
+        tr_qual_put(&c, key, NULL, 0);
+    }
+    tr_qual_end(&c);
+    tr_qual_begin(&c);
+    tr_qual_end(&c);
+    CHECK_EQ(c.N, TR_QUAL_MAX, "qual: failure keys all kept");
+    CHECK(tr_qual_get(&c, "k0") == 0 && tr_qual_get(&c, "k1023") == 0,
+          "qual: failure keys settled, not asked again");
+    CHECK_EQ(tr_qual_room(&c, "new"), 0, "qual: no room: the new key not asked");
+    CHECK_EQ(tr_qual_room(NULL, "a"), 1, "qual: NULL: room");
+    CHECK(tr_qual_get(NULL, "a") == -1, "qual: NULL asks");
+    CHECK(tr_qual_put(NULL, "a", hs, 10) == 1, "qual: NULL still answers");
+    tr_qual_begin(NULL);
+    tr_qual_end(NULL);
+}
+
+static void test_fast(void)
+{
+    TR_FAST_IN in;
+    TR_FAST f;
+    char keys[3][TR_FAST_KEY];
+    char key[TR_FAST_KEY];
+    char out[400];
+    char box[2048];
+    TR_TEXT t;
+
+    /* Declared and running speeds. */
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_CAPABLE), TR_SPEED_SUPER, "can: SS");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE),
+             TR_SPEED_SUPERPLUS, "can: SSP");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SSP_CAPABLE), TR_SPEED_SUPERPLUS,
+             "can: SSP alone");
+    CHECK_EQ(tr_fast_can(1, TR_V2_F_SS_NOW), -1, "can: operating is not declaring");
+    CHECK_EQ(tr_fast_can(0, TR_V2_F_SS_CAPABLE), -1, "can: no _EX_V2");
+
+    /* A USB 3 stick on a USB 2.0 root port. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "SS at HS on a root port counts");
+    CHECK_EQ(f.Now, TR_SPEED_HIGH, "runs at High Speed");
+    CHECK_EQ(f.Can, TR_SPEED_SUPER, "can SuperSpeed");
+    CHECK_EQ(f.Where, TR_FW_PORT2, "on a USB 2.0 port");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_FULL);
+    CHECK(tr_fast_check(&in, &f) && f.Now == TR_SPEED_FULL, "SS at FS counts");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH);
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPERPLUS &&
+              f.Where == TR_FW_PORT2, "SSP at HS: can SuperSpeedPlus");
+
+    /* At its speed, or declaring nothing: never. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "SS at SS: no");
+    CHECK_EQ(f.Now, -1, "nothing filled");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE |
+                 TR_V2_F_SSP_NOW, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "SSP at SSP: no");
+    in = fast_in(0, TR_SPEED_HIGH);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a High Speed-only device: never");
+    in = fast_in(0, TR_SPEED_LOW);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a Low Speed device: never");
+
+    /* A SuperSpeedPlus device at 5 Gbit/s. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2);
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "SSP at 5 Gbit/s counts");
+    CHECK_EQ(f.Now, TR_SPEED_SUPER, "runs at SuperSpeed");
+    CHECK_EQ(f.Where, TR_FW_LINK, "a 5 Gbit/s link");
+    /* 98 SE and ME: the _EX byte 3 or 4 with the operating flags. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 3);
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_LINK, "98: byte 3, SSP capable");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE |
+                 TR_V2_F_SSP_NOW, 4);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "98: byte 4 at SSP: no");
+    /* A byte the decision does not trust, with no operating flag. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, 3);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "byte 3, no operating flag: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, 0xFF);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "an unknown byte: no");
+
+    /* What never counts. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.IsHub = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "a hub never counts itself");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Ours = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "another driver's controller: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Connected = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "not connected: no");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.HaveV2 = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "no _EX_V2: no");
+    CHECK_EQ(tr_fast_check(NULL, &f), 0, "no port: no");
+
+    /* Behind hubs. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubFlags = 0;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB2 &&
+              f.HubNow == TR_SPEED_HIGH, "behind a USB 2.0 hub");
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB1 &&
+              f.HubNow == TR_SPEED_FULL, "behind a Full Speed hub");
+    in.HubExSpeed = TR_SPEED_HIGH;
+    in.HubFlags = TR_V2_F_SS_CAPABLE;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB3,
+          "behind a USB 3 hub at High Speed");
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB3,
+          "behind a USB 3 hub at Full Speed");
+    in.HubKnown = 0;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB2 && f.HubNow == -1,
+          "a hub not read: by default a USB 2.0 hub");
+    in.HubKnown = 1;
+    in.HubHaveV2 = 0;
+    in.HubExSpeed = TR_SPEED_FULL;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB1,
+          "a hub without _EX_V2: by its speed");
+
+    /* The High Speed case (the owner, 2026-10-22): at Full Speed behind a
+     * Full Speed hub, asked for its device_qualifier. */
+    in = fast_in(0, TR_SPEED_FULL);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.BcdUsb = 0x0200;
+    in.HsQual = -1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 1, "HS case: a candidate is asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: not asked yet: no");
+    in.HsQual = 0;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: refused: Full Speed only");
+    in.HsQual = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "HS case: answered: counts");
+    CHECK(f.Now == TR_SPEED_FULL && f.Can == TR_SPEED_HIGH &&
+              f.Where == TR_FW_HUBFS && f.HubNow == TR_SPEED_FULL,
+          "HS case: Full Speed, can High, behind a Full Speed hub");
+    in.BcdUsb = 0x0110;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: USB 1.1 is not asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: USB 1.1 never counts");
+    in.BcdUsb = 0x0200;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: behind a High Speed hub: no");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: a Full Speed device there: no");
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.Root = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a root port is never asked");
+    in.Root = 0;
+    in.HubKnown = 0;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a hub not read: not asked");
+    in.HubKnown = 1;
+    in.UnderTt = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0,
+             "HS case: the Full Speed hub behind a High Speed one: not asked");
+    in.HsQual = 1;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "HS case: behind a TT never counts");
+    in.HsQual = -1;
+    in.UnderTt = 0;
+    in.ExSpeed = TR_SPEED_HIGH;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: at High Speed: no");
+    in.ExSpeed = TR_SPEED_FULL;
+    in.IsHub = 1;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: a hub: no");
+    in.IsHub = 0;
+    in.Ours = 0;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: another controller: no");
+    in.Ours = 1;
+    in.V2Flags = TR_V2_F_SS_CAPABLE;
+    CHECK_EQ(tr_fast_wants_qual(&in), 0, "HS case: SuperSpeed-capable: the SS case");
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPER && f.Where == TR_FW_HUB1,
+          "SS-capable at Full Speed behind a Full Speed hub: the SS case");
+    CHECK_EQ(tr_fast_wants_qual(NULL), 0, "HS case: no port");
+    {
+        static const unsigned char q[10] = { 10, 6, 0, 2, 0, 0, 0, 64, 1, 0 };
+        static const unsigned char d[10] = { 18, 1, 0, 2, 0, 0, 0, 64, 1, 0 };
+        CHECK_EQ(tr_qual_ok(q, 10), 1, "qualifier: 10 bytes, type 6");
+        CHECK_EQ(tr_qual_ok(q, 9), 0, "qualifier: short");
+        CHECK_EQ(tr_qual_ok(d, 10), 0, "qualifier: a device descriptor is not one");
+        CHECK_EQ(tr_qual_ok(NULL, 10), 0, "qualifier: none");
+    }
+    in = fast_in(0, TR_SPEED_FULL);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_FULL;
+    in.BcdUsb = 0x0200;
+    in.HsQual = 1;
+    tr_fast_check(&in, &f);
+    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1);
+    CHECK(strcmp(out, "USB Flash Disk (G:) runs at Full Speed (12 Mbit/s) behind "
+                      "a Full Speed hub; it can run at High Speed (480 Mbit/s). "
+                      "Click here for what to try.") == 0, "HS case: the balloon");
+    CHECK(strstr(tr_fast_try(TR_FW_HUBFS), "rather than through this Full Speed hub")
+              != NULL, "HS case: try");
+
+    /* The texts. */
+    CHECK(strstr(tr_fast_try(TR_FW_PORT2), "fell back to USB 2.0") != NULL,
+          "try: a USB 2.0 port");
+    CHECK(strstr(tr_fast_try(TR_FW_HUB2), "USB 3 hub") != NULL, "try: a hub");
+    CHECK(strcmp(tr_fast_try(TR_FW_HUB1), tr_fast_try(TR_FW_HUB2)) == 0,
+          "try: a Full Speed hub as a USB 2.0 one");
+    CHECK(strstr(tr_fast_try(TR_FW_HUB3), "Connect the hub") != NULL,
+          "try: the hub to a USB 3 port");
+    CHECK(strstr(tr_fast_try(TR_FW_LINK), "10 Gbit/s or more") != NULL,
+          "try: a faster port");
+    CHECK(tr_fast_try(TR_FW_NONE)[0] == '\0', "try: nothing for none");
+    CHECK(strcmp(tr_fast_speed(TR_SPEED_HIGH), "High Speed (480 Mbit/s)") == 0,
+          "speed: High");
+    CHECK(strcmp(tr_fast_speed(TR_SPEED_SUPERPLUS),
+                 "SuperSpeedPlus (10 Gbit/s or more)") == 0, "speed: SSP");
+    CHECK(strcmp(tr_fast_speed(-1), "a speed not reported") == 0, "speed: none");
+
+    /* Keys, and which are new. */
+    tr_fast_key(key, sizeof(key), "{36fc9e60}\\0003", "3.2", 0x0781, 0x5581);
+    CHECK(strcmp(key, "{36fc9e60}\\0003|3.2|0781:5581") == 0, "the key");
+    tr_fast_key(keys[0], TR_FAST_KEY, "{36fc9e60}\\0003", "3.2", 0x0781, 0x5581);
+    tr_fast_key(keys[1], TR_FAST_KEY, "{36fc9e60}\\0003", "4", 0x0781, 0x5581);
+    tr_fast_key(keys[2], TR_FAST_KEY, NULL, NULL, 0x10000, 0x1);
+    CHECK(strcmp(keys[2], "||0000:0001") == 0, "a key of nothing");
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 2, key), 0,
+             "the same device again: not new");
+    tr_fast_key(key, sizeof(key), "{36fc9e60}\\0003", "3.1", 0x0781, 0x5581);
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 2, key), 1,
+             "moved to another port: new");
+    CHECK_EQ(tr_fast_new((const char (*)[TR_FAST_KEY])keys, 1, keys[1]), 1,
+             "past the count: new");
+    CHECK_EQ(tr_fast_new(NULL, 0, key), 1, "no last set: new");
+
+    /* The balloon. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    tr_fast_check(&in, &f);
+    tr_fast_balloon(out, sizeof(out), "USB Mass Storage Device (F:)", &f, 1);
+    CHECK(strcmp(out, "USB Mass Storage Device (F:) runs at High Speed "
+                      "(480 Mbit/s) on a USB 2.0 port; it can run at SuperSpeed "
+                      "(5 Gbit/s). Click here for what to try.") == 0,
+          "balloon: one");
+    CHECK(strlen(out) < 256, "balloon: fits szInfo");
+    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3);
+    CHECK(strcmp(out, "3 USB devices run slower than they can: Stick and 2 "
+                      "more. Click here for what to try.") == 0, "balloon: three");
+    CHECK(strlen(TR_FAST_TITLE) < 64, "the title fits szInfoTitle");
+
+    /* The box's entry. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubExSpeed = TR_SPEED_HIGH;
+    tr_fast_check(&in, &f);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "USB Mass Storage Device (F:)", 0x0781, 0x5581,
+                  "Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller",
+                  "Generic USB Hub", &f);
+    CHECK(strstr(box, "USB Mass Storage Device (F:) (0781:5581)\r\n") == box,
+          "entry: the name first");
+    CHECK(strstr(box, "  Port 3.2 of Intel(R) USB 3.0 eXtensible Host Controller\r\n")
+              != NULL, "entry: the port");
+    CHECK(strstr(box, "  Behind Generic USB Hub (High Speed (480 Mbit/s))\r\n") != NULL,
+          "entry: the hub");
+    CHECK(strstr(box, "  Runs at:    High Speed (480 Mbit/s)\r\n") != NULL,
+          "entry: runs at");
+    CHECK(strstr(box, "  Can run at: SuperSpeed (5 Gbit/s)\r\n") != NULL,
+          "entry: can run at");
+    CHECK(strstr(box, "  Try: Connect it to a USB 3 port of this computer, or through a "
+                      "USB 3 hub.\r\n") != NULL, "entry: try, on one line");
+    CHECK(fast_lines_fit(box), "entry: 79 columns");
+    CHECK(!t.Overflow, "entry: no overflow");
+    /* No hub line on a root port; a long port line wrapped. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    tr_fast_check(&in, &f);
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "A device with a rather long name that goes on", 1, 2,
+                  "Port 15 of AMD USB 3.10 eXtensible Host Controller - 1.10 "
+                  "(Microsoft) - AMD 1022:15B6 (behind PCI bridge 00:08.1)", NULL, &f);
+    CHECK(strstr(box, "Behind") == NULL, "entry: no hub line on a root port");
+    CHECK(fast_lines_fit(box), "entry: a long port line in 79 columns");
+    CHECK(strstr(box, "fell back to USB 2.0") != NULL, "entry: the root port's try");
+    CHECK(strstr(box, "  Try: Connect it to a USB 3 port of this computer (often blue, or "
+                      "marked SS).\r\n       If it is already in one,") != NULL,
+          "entry: try wrapped and indented");
+
+    /* The menu line. */
+    tr_fast_menu(out, sizeof(out), 1);
+    CHECK(strcmp(out, "1 USB device can run faster...") == 0, "menu: one");
+    tr_fast_menu(out, sizeof(out), 2);
+    CHECK(strcmp(out, "2 USB devices can run faster...") == 0, "menu: two");
+    CHECK(strcmp(TR_FAST_VALUE, "FasterNotice") == 0, "the user's value");
+}
+
 static void test_labels(void)
 {
     unsigned int ven;
@@ -2675,6 +3404,61 @@ static void test_marks(void)
     CHECK(strcmp(tr_mksvc_text(99), "not read") == 0, "unknown state");
 }
 
+/* The tunnel watch after an NT eject: who confirms, how long, what is said. */
+static void test_eject_watch(void)
+{
+    int s;
+
+    /* An administrator's run confirms itself: the 10 s watch, every OS and
+     * service state, as before. */
+    for (s = TR_SV_UNREAD; s <= TR_SV_OTHER; s++) {
+        CHECK_EQ(tr_eject_watch_kind(1, 0, 0, s), TR_EJW_PLAIN, "admin, XP+");
+        CHECK_EQ(tr_eject_watch_kind(1, 0, 1, s), TR_EJW_PLAIN, "admin, 2000");
+        CHECK_EQ(tr_eject_watch_kind(0, 1, 0, s), TR_EJW_PLAIN,
+                 "the not-removable route");
+    }
+    /* No administrator, XP and later: the mark service confirms unless it
+     * is known to be down. */
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_RUNNING), TR_EJW_SERVICE,
+             "service running");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_OTHER), TR_EJW_SERVICE,
+             "service starting");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_UNREAD), TR_EJW_SERVICE,
+             "service state not read");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_STOPPED), TR_EJW_UNCONFIRMED,
+             "service stopped");
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 0, TR_SV_ABSENT), TR_EJW_UNCONFIRMED,
+             "service not installed");
+    /* 2000: problem 24 is no confirmation, so the service never writes one. */
+    CHECK_EQ(tr_eject_watch_kind(0, 0, 1, TR_SV_RUNNING), TR_EJW_UNCONFIRMED,
+             "2000, no administrator");
+
+    /* The bound: a tool's own confirmation keeps 10 s; the service's adds
+     * its idle period twice, that period being the service's own. */
+    CHECK_EQ(mk_poll_ms(0), TR_EJW_MK_IDLE_MS, "the service's idle period");
+    CHECK(mk_poll_ms(1) <= TR_EJW_MK_IDLE_MS, "its busy period is shorter");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_PLAIN), 10000UL, "plain bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_UNCONFIRMED), 10000UL, "unconfirmed bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_SERVICE),
+             TR_EJW_OWN_MS + 2UL * mk_poll_ms(0), "service bound");
+    CHECK_EQ(tr_eject_watch_ms(TR_EJW_SERVICE), 30000UL, "service bound 30 s");
+
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_PLAIN),
+                 "The Thunderbolt driver has not confirmed that the PCIe "
+                 "tunnel was closed.") == 0, "plain text unchanged");
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_SERVICE),
+                 "The PCIe tunnel has not been seen closed yet. It closes "
+                 "if the xHCI98 mark service confirms the eject to the "
+                 "Thunderbolt driver, which the service does in the "
+                 "background; an eject made as an administrator is confirmed "
+                 "by this tool itself.") == 0, "service text");
+    CHECK(strcmp(tr_eject_open_text(TR_EJW_UNCONFIRMED),
+                 "The PCIe tunnel stays up until the device is unplugged, "
+                 "because the eject was not confirmed to the Thunderbolt "
+                 "driver; an eject made as an administrator is confirmed by "
+                 "this tool itself.") == 0, "unconfirmed text");
+}
+
 int main(void)
 {
     test_printf();
@@ -2685,16 +3469,20 @@ int main(void)
     test_query();
     test_texts();
     test_events();
+    test_removals();
     test_keys_args_report();
     test_sizes();
     test_desc_lengths();
     test_usb_eject();
     test_elevated_stop();
     test_login();
+    test_qual_cache();
+    test_fast();
     test_levels();
     test_labels();
     test_resources();
     test_marks();
+    test_eject_watch();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {
@@ -2831,6 +3619,21 @@ int main(void)
         tr_confirm_lead(&t, "USB xHCI Controller", "USB xHCI Controller", NULL, 0);
         CHECK(strcmp(buf, "Stop USB xHCI Controller?\r\n\r\nThese devices will stop:\r\n") == 0,
               "confirm: no disk");
+        /* Task 43.63: the reminder in the box is one paragraph; the
+         * console's text keeps its own wrap. */
+        CHECK(strchr(inst_eject_remind_text(), '\n') != NULL,
+              "reminder: the console's text is wrapped");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_put(&t, "Close any program that uses them first.\n");
+        tr_put_box(&t, inst_eject_remind_text());
+        CHECK(strcmp(buf, "Close any program that uses them first.\r\n"
+                          "Before you eject it, make sure none of its other "
+                          "devices (USB ports, card readers, network) is in "
+                          "use; stop them in Windows first.") == 0,
+              "reminder: one paragraph in the box, the break a space");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_put_box(&t, "a\nb\n");
+        CHECK(strcmp(buf, "a b ") == 0, "box text: every break a space, no CR");
         memset(e, 0, sizeof(e));
         memcpy(e + CM_ST_E_VENDOR, "Acme\tCorp", 9);
         memcpy(e + CM_ST_E_MODEL, " Dock\r\n  X1 ", 12);
@@ -2939,6 +3742,38 @@ int main(void)
         strcpy(s, "a\n   b\r\n");
         tr_join_lines(s);
         CHECK(strcmp(s, "a b ") == 0, "join: indentation after a break dropped");
+        {
+            /* Task 43.63: the after-eject box. ej_run lays out its answer
+             * as below and every caller joins it before the box or the
+             * balloon, so inst_unplug_text's console wrap is a space
+             * there; the console keeps its wrap. */
+            char a[512];
+            TR_TEXT tt;
+            int k;
+            static const int kinds[2] = { INST_UNPLUG_OTHERS,
+                                          INST_UNPLUG_RESTARTED };
+            static const char *const want[2] = {
+                "Windows has stopped QEMU NVMe Ctrl (E:).\r\n\r\n"
+                "Other devices behind the same Thunderbolt port are still "
+                "running: eject them too before you unplug it.",
+                "Windows has stopped QEMU NVMe Ctrl (E:).\r\n\r\n"
+                "The device has started again, so it is not safe to unplug. "
+                "Close the programs using it and stop it again in the xHCI98 "
+                "USB Tree."
+            };
+            for (k = 0; k < 2; k++) {
+                CHECK(strchr(inst_unplug_text(kinds[k], INST_TOOL_TREE), '\n')
+                          != NULL, "after: the console's text is wrapped");
+                tr_text_init(&tt, a, sizeof(a));
+                tr_printf(&tt, "Windows has stopped %s.\n",
+                          "QEMU NVMe Ctrl (E:)");
+                tr_printf(&tt, "\n%s",
+                          inst_unplug_text(kinds[k], INST_TOOL_TREE));
+                tr_join_lines(a);
+                CHECK(strcmp(a, want[k]) == 0,
+                      "after: one paragraph in the box, the break a space");
+            }
+        }
         {
             /* Exact-sized buffers: the join never writes past the input. */
             char e1[6];

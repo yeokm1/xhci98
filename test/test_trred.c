@@ -140,6 +140,28 @@ static void test_stage(void)
     in.Stage = NULL;
     state();
     CHECK_EQ(r.Count, 0, "no stage read: the stage is not counted");
+
+    /* As the tool wires it: the snapshot's own stage (TR_SNAP.Stage). */
+    reset();
+    snap.Stage[1] = CM_ST_STAGE_FAILED;
+    in.Stage = snap.Stage;
+    state();
+    CHECK_EQ(r.Count, 1, "the snapshot's failed stage is red");
+    CHECK_EQ(r.Index, 1, "the second NHI");
+}
+
+/* The liveness test is the "stopped answering" balloon's (tr_live_lost):
+ * for every value, red exactly when that test says lost. */
+static void test_live_same(void)
+{
+    TR_U32 v;
+
+    for (v = 0; v < 16; v++) {
+        reset();
+        snap.Live[0] = v;
+        state();
+        CHECK_EQ(r.Count, tr_live_lost(v) ? 1 : 0, "red as the balloon's test");
+    }
 }
 
 static void test_hc(void)
@@ -366,6 +388,7 @@ int main(void)
     test_nothing();
     test_liveness();
     test_stage();
+    test_live_same();
     test_hc();
     test_wait();
     test_slow();
