@@ -21476,12 +21476,15 @@ static const char stLongName[] =
 static void st_screens_once(int longest)
 {
     /* The Thunderbolt question answered Y: Enter gives N since record 23
-     * revision 23, and the connection manager's questions follow a Y. */
+     * revision 23, and the connection manager's questions follow a Y; the
+     * interrupt mode and the forced Bulk-Only no longer asked (record 26
+     * draft 35), so the bad answer 9 goes to the connection manager's
+     * mode. */
     static const char *const nt1[] = {
-        "y", "", "", "9", "", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
+        "y", "", "9", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
     };
     static const char *const x9[] = {
-        "y", "", "", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
+        "y", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
         "y", "n", NULL
     };
     static const char *const un[] = { "REMOVE", NULL };
