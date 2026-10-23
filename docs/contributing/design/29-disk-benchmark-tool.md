@@ -1633,6 +1633,19 @@ a choice:
   (43.46) the demand for physical scatter/gather is gone and every
   request arrived whole in both orders. The 9x facts now say so when the
   demand stands, and the release notes carry it as a known limitation.
+- **ME, P.5 (2026-10-23, emulator, kit `E:\xhci98-vm\p43-50`, images `m2`
+  and `m3` from `E:\stor98-vm\int\me\base.qcow2`, this branch's Stor98 as
+  `stor98.mpd`)**: as on 98 SE. Without S98VSD.VXD the first study run
+  after the start had aligned and offset requests whole and scattered ones
+  double-buffered; the probe re-allocating its buffer then saw every round
+  double-buffered, and the second run every test. With S98VSD.VXD (the
+  layer claimed the Stor98 DCB) the first run had every test whole,
+  scattered included, and the probe every round whole. Open: the second
+  run with the layer found no Stor98 disk ("not reported by this disk's
+  driver") and so carries no counters; 98 SE did not show it, and it is
+  not yet read why (the attribution on ME after a program left a
+  `PROBE.TMP` behind on the drive is the first thing to look at). Its
+  scattered writes ran at 6 MB/s against 15 to 38 MB/s for the others.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.
