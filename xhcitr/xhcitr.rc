@@ -76,7 +76,6 @@ BEGIN
     BEGIN
         MENUITEM "&Safely Remove...\tDel",  IDM_EJECT
         MENUITEM "&Properties\tEnter",      IDM_PROPS
-        MENUITEM "&Disk benchmark...",      IDM_BENCH
     END
     POPUP "&Help"
     BEGIN

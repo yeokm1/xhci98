@@ -1646,6 +1646,11 @@ a choice:
   not yet read why (the attribution on ME after a program left a
   `PROBE.TMP` behind on the drive is the first thing to look at). Its
   scattered writes ran at 6 MB/s against 15 to 38 MB/s for the others.
+- **Not shipped (owner, 2026-10-23).** XHCIPERF is dropped from the `3.2.0.0`
+  package, its installer copy, its uninstall and XHCITR's Action menu; it
+  stays in the tree as a developer diagnostic, built and host-tested at every
+  gated build, and Stor98's counter answer (MD-8) stays in the driver. What
+  is still open is roadmap-usb4's PERF.1.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then the tool is built,
   gated and host-tested only.

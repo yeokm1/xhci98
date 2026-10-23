@@ -39,7 +39,6 @@
 #define IDM_LEVEL               40028
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031
-#define IDM_BENCH               40032   /* the disk benchmark (record 29 section 11) */
 #define IDM_ABOUT               40040
 #define IDM_OPEN                40050
 #define IDM_UNIT0               41000   /* 41000..41063: the tray's units */
