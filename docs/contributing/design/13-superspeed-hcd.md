@@ -11629,6 +11629,24 @@ the fix, and the change is a ring edit the
 host vector covers. The QEMU patch is for the emulator a repository keeps
 (`usb-wdm-free`'s patched QEMU, or the `usb4-emu` fork), not this one.
 
+For task 43.69 (runtime, QEMU 11.1 stock `qemu-xhci`, TCG, the `qemu`
+flavour of branch `p43-69`, 2026-10-23), the legs are regression legs: QEMU
+saves its fetch pointer and finishes every TD it fetched, so no emulator
+leg can produce the TD a controller stops inside behind a held one.
+`usb-wdm-free`'s `usbcom` split flavour on 98 SE, which cancels a TD behind
+live ones at every close: 24 runs of `COMTEST COM4 closes 10 16384` and a
+64 KiB echo, every one PASS, 268 zero-length INs from the No Ops all
+completed in order. 2000 and 7 x86: a stick pulled during a copy,
+replugged, copied again and compared with `fc /b`, no differences. 98 SE (NUSB 3.3's mass
+storage driver): a stick pulled mid-copy raises 98's own exception 0E in
+IOS called from `voltrack` with this build and, as a control, with the
+`3.1.0.0` release driver alike; the driver re-enumerated the stick and its
+transfer counters balanced. After the replug the control's `fc /b` found no
+differences. With this build the first run showed 98's Disk Write Error
+instead and then a black display, the second the exception and then no
+shell, so neither run's `fc /b` was read: a leg owed on 98 SE. Nothing on hardware: the defect needs a
+controller that breaks 4.10.1.1.2 and a cancel in the window.
+
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 
 The full table section 7.3 summarises: 205 candidate pairs, each with its
