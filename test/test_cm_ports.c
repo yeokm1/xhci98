@@ -341,6 +341,48 @@ static void test_snapshot(void)
              "the same answer twice has nothing new");
 }
 
+/* ---- the population generation an eject is checked against (43.70) ---- */
+
+static void test_generation(void)
+{
+    int a;
+    int b;
+    int c;
+    PVOID old[2];
+    PVOID now[2];
+    ULONG isNew[2];
+    ULONG fresh;
+
+    old[0] = &a;
+    old[1] = &b;
+    /* the ejected function leaving after Windows turned the slot off */
+    now[0] = &a;
+    fresh = CmPortsNewPdos((PVOID const *)old, 2, (PVOID const *)now, 1, isNew);
+    CHECK_EQ(CmPortsNewGeneration(fresh, 2, 1), 0,
+             "a departure alone keeps the generation");
+    CHECK_EQ(CmPortsNewGeneration(0, 1, 0), 0,
+             "the last function leaving keeps the generation");
+    CHECK_EQ(CmPortsNewGeneration(0, 2, 2), 0,
+             "the same population keeps the generation");
+    /* a replacement: the old one gone, a new one in its place */
+    now[0] = &a;
+    now[1] = &c;
+    fresh = CmPortsNewPdos((PVOID const *)old, 2, (PVOID const *)now, 2, isNew);
+    CHECK_EQ(CmPortsNewGeneration(fresh, 2, 2), 1,
+             "a new function in a departed one's place starts a new generation");
+    CHECK_EQ(CmPortsNewGeneration(1, 0, 1), 1,
+             "a first function starts a new generation");
+    CHECK_EQ(CmPortsNewGeneration(0, 1, 2), 1,
+             "a longer answer with nothing new (a PDO twice) starts one too");
+
+    CHECK_EQ(CmPortsStaleWhy(0, 0, 0, 0, 0), 0, "nothing refused, generations 0");
+    CHECK_EQ(CmPortsStaleWhy(0, 1, 0, 5, 4), CM_EJ_STALE_GEN | 0x0500UL | 0x040000UL,
+             "the generation check, both generations recorded");
+    CHECK_EQ(CmPortsStaleWhy(1, 0, 1, 0x1FF, 0x2AB),
+             CM_EJ_STALE_SERIAL | CM_EJ_STALE_STACK | 0xFF00UL | 0xAB0000UL,
+             "the publication and the stack checks, generations truncated to a byte");
+}
+
 /* ---- the child filter's attach decision (section 7.4, revision 2) ------ */
 
 static void test_child_attach(void)
@@ -533,6 +575,7 @@ int main(void)
     test_infs();
     test_ids();
     test_snapshot();
+    test_generation();
     test_child_attach();
     test_bound();
     test_watchdog();

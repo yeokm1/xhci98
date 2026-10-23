@@ -4600,7 +4600,11 @@ made the service look:
   teardown - only on a **positive, identity-checked confirmation** that
   the unit was ejected, dropping it when an attachment of this driver
   returns on the PDO (a rebuild), when the PDO leaves the snapshot (an
-  unplug, whose own tunnel-down path takes over), and **on any change of
+  unplug, whose own tunnel-down path takes over; since task 43.70 the
+  departure is kept on the PDO's tombstone, confirmable once, until a
+  function newly answers behind the same member, because under native
+  PCIe hot-plug the eject's own departure leaves the snapshot before the
+  tool's confirmation is read), and **on any change of
   the port's connection** under the USB4 profile (the connection
   generation the pending departure was recorded under differs: an
   unplug and re-plug the connection manager saw before `BusRelations`
@@ -4632,7 +4636,20 @@ made the service look:
   tools write the same value for their own confirmed ejects. The thread
   reads it with the status ask, checks the epoch, the serial, the
   connection generation and that the PDO is still reported with its
-  departure pending, posts the eject once, and clears the value. No
+  departure pending, or left with it pending and nothing new has
+  answered behind the member since, posts the eject once, and clears the
+  value. Under
+  native PCIe hot-plug Windows turns the slot off as part of the eject,
+  so the ejected function can leave the bridge's answer before a tool's
+  own confirmation is read, or after it is posted and before its
+  hand-off (task 43.70, read on 7 x86 in the emulator, q35: an elevated
+  `XHCIINST /eject` refused three times out of three). Since then a PDO
+  that left with its departure pending stays confirmable once, as a
+  tombstone, until a function newly answers behind the same member (so a
+  late confirmation never ejects a replacement that arrived before it),
+  and a departure alone does not start a new population
+  generation at the bridge (`CmPortsNewGeneration`: only a function
+  newly answering does, so a replacement still ends the eject). No
   confirmation - the service stopped, Windows 2000's applet, a disabled
   unit, a unit mid-rebuild, a unit stopped by the query-and-remove
   fallback of record 24 section 7.2 (which Windows does not hold as

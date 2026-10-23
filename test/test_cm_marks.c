@@ -327,6 +327,58 @@ static void test_confirm(void)
     e->Flags = 0;
     CHECK(CmMarksConfirm(&t, v, 28, 1, 2, FALSE, gens, 2, &why) == NULL && why == CM_MK_CONF_IDENTITY,
           "a location not known");
+
+    /* Task 43.70: the eject's own departure reported before its
+     * confirmation is read (native PCIe hot-plug turns the slot off first):
+     * the tombstone that left pending is still confirmable, once. */
+    e->Flags = CM_QM_EF_LOCATED;
+    e->PendingAt = 50;
+    e->PendingGen = 9;
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 0, FALSE, TRUE, 60);
+    CHECK(e->Tomb && e->PendingAt == 0 && e->LeftPendingAt == 50 && e->LeftPendingGen == 9,
+          "left with its departure pending: a tombstone that keeps it");
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == e && why == CM_MK_CONF_OK,
+          "its confirmation, read after the departure, names it");
+    gens[1] = 10;
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_GEN,
+          "USB4: not across a new connection of the port");
+    gens[1] = 9;
+    put32(v, CM_QC_O_ADDRESS, 0x00020000UL);
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_IDENTITY,
+          "not for another address");
+    put32(v, CM_QC_O_ADDRESS, 0x00010000UL);
+    e->LeftPendingAt = 0;
+    e->LeftPendingGen = 0;
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_SERIAL,
+          "confirmed once: the tombstone is no longer one");
+
+    /* a function that left with nothing pending is never confirmable */
+    CmMarksReset(&t);
+    snap[0] = P(4);
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 1, FALSE, TRUE, 70);
+    e = CmMarksFind(&t, P(4));
+    e->Flags = CM_QM_EF_LOCATED;
+    e->Bus = 7;
+    e->Address = 0x00010000UL;
+    put32(v, CM_QC_O_SERIAL, e->Serial);
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 0, FALSE, TRUE, 80);
+    CHECK(e->Tomb && e->LeftPendingAt == 0, "left with nothing pending");
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_SERIAL,
+          "a surprise removal's tombstone is not ejected by a confirmation");
+
+    /* a replacement answering before the late confirmation, with the
+     * port's connection unchanged: the departure is forgotten */
+    e->PendingAt = 0;
+    e->LeftPendingAt = 90;
+    e->LeftPendingGen = 9;
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == e,
+          "left pending: confirmable while nothing new answers");
+    snap[0] = P(5);
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 1, FALSE, TRUE, 95);
+    CHECK(e->Tomb && e->LeftPendingAt == 0 && e->LeftPendingGen == 0,
+          "a new function behind the member forgets the kept departure");
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_SERIAL,
+          "the late confirmation no longer names anything");
 }
 
 /* The unexpected removals (design record 25 section 7.6): an entry found

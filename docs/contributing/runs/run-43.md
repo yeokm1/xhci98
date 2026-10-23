@@ -5215,3 +5215,89 @@ key adopted, and the uninstall on both: read, with the fixes above. Not read: th
 set (no release qualifies), ME, 2000, 7 and the x64 systems, a plug on
 XP (QEMU emulates none of the INFs staged there), the flush fix under
 another power cut.
+
+## 43.70 - The Elevated Eject Under Native PCIe Hot-Plug
+
+Task 43.70 of `roadmap-usb4.md`, read on 2026-10-23. The roadmap entry
+carries the task; this section carries what each leg did and what it
+read.
+
+**On `E:\...` paths here.** They say where a reading was kept on the host
+that took it; they are not files a clone has.
+
+### 43.70 - `XHCIINST /eject` on 7 x86, q35
+
+**Verdict: done** (2026-10-23). The elevated `XHCIINST /eject` closes the
+PCIe tunnel on a native hot-plug tunnel port, three times out of three.
+Before the change it left the tunnel up three times out of three
+(`run-43-52.md`, leg b).
+
+**Machine.** The kit of `run-43-52.md`: Windows 7 SP1 x86, q35, TCG, 2
+vCPUs, usb4-emu at QEMU `46d96fb`, `usb4-generic` `host-model=amd` with
+its PCIe tunnel on the q35 `usb4-tunnel-port`. The enclosure is the
+ASM2464 model with a FAT volume (`E:`) on Stor98. Each check copies a
+1 MiB file to `E:` and compares it (`fc /b`).
+
+**What the log read before the change.** The leg was run three times on
+the 3.2.0.0 test cut; the driver log is from XHCITR's report.
+
+- After a replug: `cm.reenum.confirm.refused` with reason 3, no entry of
+  that serial. The tool's confirmation names a marks entry that had
+  already become a tombstone: the ejected function had left the bridge's
+  bus relations before the connection manager's thread read the
+  confirmation.
+- After a second replug, and again as the first eject after a restart:
+  `cm.reenum.confirm`, then `cm.reenum.eject.stale`. The confirmation
+  was accepted and recorded the bridge's population generation. The
+  departure answer then started a new generation before the hand-off.
+
+The emulator's trace shows Windows turning the slot off as part of the
+eject (`guest turned the slot off`), and only then the function's
+removal. Under native hot-plug the departure therefore races the tool's
+confirmation, which the tool writes as soon as Windows answers, and
+either order refused the eject. The mark service's confirmation, a few
+seconds later, came after the departure every time it was read, and
+worked (`run-43-52.md`, leg a). On the i440FX emulator's SHPC bridge
+Windows does not drive the slot, and the eject has worked there since
+43.45.
+
+**The change.** In `xhcicm.sys` (record 21 section 7.4):
+
+- A departure alone no longer starts a new population generation at the
+  bridge (`CmPortsNewGeneration`). Only a function newly answering does,
+  so a replacement device still ends an eject posted for its
+  predecessor. A departure is logged (`cm.reenum.departure`).
+- An entry that leaves the bridge's answer with its departure pending
+  keeps that departure as a tombstone (`LeftPendingAt`,
+  `LeftPendingGen`). A confirmation of its serial is accepted once,
+  with the same identity and USB4 connection-generation checks, until a
+  function newly answers behind the same member: then the kept departure
+  is forgotten, so a late confirmation never ejects a replacement that
+  arrived before it. A function that leaves with nothing pending is never
+  confirmable.
+- A stale eject logs which check refused it
+  (`cm.reenum.eject.stale.why`).
+
+Host vectors: `test_cm_ports`'s generation rule and `test_cm_marks`'s
+confirmation of a tombstone (accepted once, not across a new connection,
+not for another address, not for a surprise removal's tombstone, not
+once a replacement has answered). The change was reviewed and revised
+(the replacement rule was added). The host suite passed, and the gated
+`all` builds passed on x86 and amd64 ("BUILD + GATES PASSED (debug
+release qemu)").
+
+**The legs after the change.** The release-flavour `xhcicm.sys` was
+copied over the installed one: first the build before the replacement
+rule (`7B05DEBD...`), then the final one (`21B41150...`).
+
+| Leg | Result |
+|---|---|
+| Elevated `XHCIINST /eject 1`, three times, a replug between (`7B05DEBD...`) | **Pass**, three of three: "Windows has stopped PCI Express standard Upstream Switch Port. The PCIe tunnel was closed.", exit 0. The tunnel was down (`admin-down`) 4 to 5 s after the answer. Log: `cm.reenum.confirm`, `cm.reenum.departure`, `cm.reenum.eject` once; `cm.reenum.departure`, `cm.reenum.confirm`, `cm.reenum.eject` twice. Both orders were read |
+| The same with the final driver (`21B41150...`) | **Pass**, three of three, the tunnel down 5 to 6 s after the answer; log `cm.reenum.departure`, `cm.reenum.confirm`, `cm.reenum.eject` each time; a write after the last replug compares clean |
+| XHCITR's eject from the tray, without administrator rights (`7B05DEBD...`) | **Pass**: the tunnel closed 6 s after OK, "The PCIe tunnel was closed." |
+| Replug after the ejects | The volume is back; a new write compares clean |
+
+**On the kit.** Each new start of the emulator gave the q35 tunnel port a
+new device instance, which had no filter: `XHCIINST /eject` said "There
+is nothing to eject". `INSTALL` was run again to put the filter on it,
+and the leg ran after guest restarts within the same emulator process.

@@ -53,6 +53,10 @@ typedef struct _CM_MARK {
     ULONG TombGen;          /* the generation that made it a tombstone    */
     ULONG Unexpected;       /* its surprise removal counted (design record
                                25 section 7.6)                             */
+    ULONG LeftPendingAt;    /* a tombstone: the departure pending when it
+                               left the snapshot, 0 for none or once
+                               confirmed (task 43.70)                      */
+    ULONG LeftPendingGen;
 } CM_MARK, *PCM_MARK;
 
 typedef struct _CM_MARKS {
@@ -180,7 +184,10 @@ ULONG CmMarksAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
  * The confirmation of record 21 section 7.4 (cm_query.h CM_QC_*): the
  * entry it names, or NULL with *why (CM_MK_CONF_*) when it is not one
  * the thread may act on: the epoch not this start's, no current entry of
- * that serial, its member, bus or address not the confirmation's, its
+ * that serial and no tombstone of it that left with its departure pending
+ * and is not yet confirmed (task 43.70: the eject's own departure, which
+ * native PCIe hot-plug reports before a tool's confirmation is read), its
+ * member, bus or address not the confirmation's, its
  * location unknown, not reported, no departure pending, or (with
  * `checkGen`, the USB4 profile) the generation not the departure's or not
  * portGen[member], the port's now (members past `ports` have none).
