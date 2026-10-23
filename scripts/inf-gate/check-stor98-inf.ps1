@@ -14,8 +14,9 @@ $CHICAGO$ for the x86 INF (98 SE and ME read it) and $Windows NT$ for the x64
 one. The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
 packager makes and test-signs (design record 19, owner 2026-10-22: Windows
 8 to 10 x64 refuse a package without one in test-signing mode), and writes
-DmaRemappingCompatible=1 under its service's Parameters key (Kernel DMA
-Protection, docs/PLAN.md); the x86 INF names no catalog. scripts\build-driver.cmd
+no DmaRemappingCompatible (with it 1, Windows 10 x64 does not start Stor98:
+docs/PLAN.md, 2026-10-23) and deletes one an earlier build wrote, in the
+service's DelReg; the x86 INF names no catalog. scripts\build-driver.cmd
 runs it with the other INF gates, after -SelfTest.
 
 .PARAMETER Path
@@ -60,8 +61,32 @@ function Get-InfFault {
         if ($cat.Count -ne 1 -or $cat[0].Groups[1].Value -ne "" -or $cat[0].Groups[2].Value -cne "stor98.cat") {
             return "it does not name its catalog once as CatalogFile=stor98.cat (design record 19: the packager makes and signs it)"
         }
-        if ([regex]::Matches($t, '(?im)^HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001\r?$').Count -ne 1) {
-            return "it does not write DmaRemappingCompatible=1 once under the service's Parameters key (docs/PLAN.md, Kernel DMA Protection)"
+        # DmaRemappingCompatible (with it Windows 10 x64 does not start Stor98,
+        # docs/PLAN.md, 2026-10-23) may be named once only, %tokens% of
+        # [Strings] resolved and comments dropped, whatever the root or the
+        # form: by the DelReg entry of the service-install section, which
+        # removes a value an earlier 3.2.0.0 build wrote.
+        $strings = @{}
+        $sm = [regex]::Match($t, '(?ims)^[ \t]*\[Strings\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+        if ($sm.Success) {
+            foreach ($m in [regex]::Matches($sm.Groups[1].Value, '(?m)^[ \t]*([^;=\s][^=\r\n]*?)[ \t]*=[ \t]*"?([^"\r\n]*)"?')) { $strings[$m.Groups[1].Value.Trim().ToLowerInvariant()] = $m.Groups[2].Value }
+        }
+        $section = ''; $named = @()
+        foreach ($raw in ($t -split '\r?\n')) {
+            $line = ($raw -replace ';.*$', '').Trim()
+            if ($line -match '^\[([^\]]+)\]$') { $section = $Matches[1].Trim(); continue }
+            $res = [regex]::Replace($line, '%([^%]+)%', { param($x) $k = $x.Groups[1].Value.ToLowerInvariant(); if ($strings.ContainsKey($k)) { $strings[$k] } else { $x.Value } })
+            if ($res -match '(?i)DmaRemappingCompatible') { $named += , @($section, $res) }
+        }
+        if ($named.Count -ne 1 -or $named[0][0] -ne 'Stor98_ServiceDelReg' -or $named[0][1] -cnotmatch '^HKR[ \t]*,[ \t]*"Parameters"[ \t]*,[ \t]*"DmaRemappingCompatible"$') {
+            return "it names DmaRemappingCompatible other than once, in [Stor98_ServiceDelReg] as HKR,`"Parameters`",`"DmaRemappingCompatible`" (with the value Windows 10 x64 does not start Stor98, docs/PLAN.md 2026-10-23)"
+        }
+        # And that DelReg is the service-install section's own: anywhere else
+        # its HKR is another key and the old value stays.
+        $svc = [regex]::Match($t, '(?ims)^[ \t]*\[Stor98_Service\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+        if (-not $svc.Success -or -not [regex]::IsMatch($svc.Groups[1].Value, '(?im)^[ \t]*DelReg[ \t]*=[ \t]*Stor98_ServiceDelReg[ \t]*\r?$') -or
+            [regex]::Matches($t, '(?im)^[ \t]*DelReg[ \t]*=[ \t]*[^\r\n]*Stor98_ServiceDelReg').Count -ne 1) {
+            return "its [Stor98_Service] section (the AddService one) does not carry DelReg=Stor98_ServiceDelReg alone, so an update would keep DmaRemappingCompatible"
         }
     } elseif ($cat.Count -ne 0) {
         return "it names a catalog, and the x86 package carries none (design record 19)"
@@ -123,8 +148,15 @@ try {
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=other.cat"); Ok = $false; Why = "another catalog name in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile.NTamd64=stor98.cat"); Ok = $false; Why = "a decorated catalog line in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=stor98.cat`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "two catalog lines in the x64 INF" },
-            @{ T = $b64.Replace('HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001', 'HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000002'); Ok = $false; Why = "DmaRemappingCompatible other than 1" },
-            @{ T = $b64.Replace('HKR,"Parameters","DmaRemappingCompatible",%REG_DWORD%,0x00000001', ''); Ok = $false; Why = "no DmaRemappingCompatible" }
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",`"DmaRemappingCompatible`",%REG_DWORD%,0x00000001`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 1" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR, Parameters, DmaRemappingCompatible, 0x00010001, 2`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 2, spaced" },
+            @{ T = $b64.Replace("DelReg=Stor98_ServiceDelReg`r`n", ""); Ok = $false; Why = "no DelReg for DmaRemappingCompatible" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"", "HKR,`"Para meters`",`"DmaRemappingCompatible`""); Ok = $false; Why = "a DelReg of another subkey (a space inside the quotes)" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"", "HKR, `"Parameters`" , `"DmaRemappingCompatible`""); Ok = $true; Why = "spaces around the DelReg's commas" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKLM,System\CurrentControlSet\Services\stor98\Parameters,DmaRemappingCompatible,0x00010001,1`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible through HKLM" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",%Dmr%,%REG_DWORD%,1`r`n`r`n[Stor98_EventLog]").Replace("[Strings]", "[Strings]`r`nDmr=`"DmaRemappingCompatible`""); Ok = $false; Why = "DmaRemappingCompatible through a [Strings] token" },
+            @{ T = $b64.Replace("AddReg=Stor98_ServiceReg`r`nDelReg=Stor98_ServiceDelReg`r`n", "AddReg=Stor98_ServiceReg`r`n").Replace("CopyFiles=Stor98_CopyFiles", "CopyFiles=Stor98_CopyFiles`r`nDelReg=Stor98_ServiceDelReg"); Ok = $false; Why = "the DelReg in the device's install section, not the service's" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"`r`n", "HKR,`"Parameters`",`"Other`"`r`n"); Ok = $false; Why = "a DelReg of another value" }
         )
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("stor98-inf-" + [System.IO.Path]::GetRandomFileName())
         New-Item -ItemType Directory -Path $tmp | Out-Null

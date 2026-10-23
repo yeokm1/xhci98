@@ -1141,6 +1141,16 @@ isolation evidence.
   PlatCmLinkPoll, P9EvidenceE1, P9Work; contract text: `include/stor98cm.h` R7, R8d.
   Tests: TESTING.md "Two drives in one ICM domain (9x)" and "Quarantined block after a
   surprise removal (9x)".
+- **Kernel DMA Protection: withdrawn 2026-10-23, the x64 INF writes no
+  `DmaRemappingCompatible`.** Read on Windows 10 x64 22H2 (19045) in QEMU (no IOMMU, no
+  Kernel DMA Protection; xhci98's `runs/run-43.md` "43.59s"): with the value 1 Stor98 does not
+  start on any NVMe controller, tunnelled or internal (Code 10, problem status `0xC00000C2`,
+  event 4 "internal error in its data structures" from the port with final status
+  `0xC00000C2`); with the value deleted the same device starts at `pnputil /restart-device`,
+  and written back it fails again. 8.1 x64 (which does not read the value) and 10 x86 (whose
+  INF never wrote it) start it. So a tunnelled drive under Stor98 on a machine with the
+  protection on waits for sign-in again (never starts under "block all"), as before 3.2.0.0;
+  why SCSIport refuses the opt-in is not read. The 2026-10-22 entry below is kept as history.
 - **Kernel DMA Protection: `DmaRemappingCompatible` 1 in the x64 INF, decided 2026-10-22
   (owner, on xhci98's roadmap-usb4 task 43.33's reading).** On a 64-bit Windows 10 (1803
   and later) whose firmware turns Kernel DMA Protection on, a device behind an external
