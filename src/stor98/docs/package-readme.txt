@@ -89,9 +89,10 @@ Windows XP x64, Vista x64, 7 x64
 WINDOWS 8, 8.1 AND 10
 
 The installer offers Stor98 on Windows 8, 8.1 and 10 (below build
-22000) too, ticked with the Thunderbolt support as on every other
-system (/nostor98 leaves it out); it is untested there with xhci98's
-connection manager. Windows 8 has no NVMe driver of its own; Windows
+22000) too: ticked with the Thunderbolt support on 8 and 8.1
+(/nostor98 leaves it out), unticked on 10, where Windows' own stornvme
+stays the tunnelled drive's driver (xhci98's roadmap 43.59). Windows
+8 has no NVMe driver of its own; Windows
 8.1 and 10 run their own (stornvme), and Stor98 takes its place on a
 drive behind a tunnel. The 32-bit package was read on Windows 8 and
 Windows 10 22H2 (32-bit); 32-bit Windows 8.1 has not been run. The
