@@ -22378,6 +22378,107 @@ static int other_adopt(int set)
     return 1;
 }
 
+/* The store's INF hashes, read once for an adopted set's uninstall (each
+ * other_inventory reads every INF of the store): 64 hex characters and a
+ * NUL each. */
+static char *othStore;
+static int othStoreN;
+
+/* 1 the store was read whole into othStore, 0 not (freed). */
+static int other_store_load(void)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+    DWORD e;
+    int cap = 0;
+    int whole = 1;
+
+    free(othStore);
+    othStore = NULL;
+    othStoreN = 0;
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(pattern, sizeof(pattern), win, "inf\\*.inf");
+    f = FindFirstFileA(pattern, &fd);
+    if (f == INVALID_HANDLE_VALUE) {
+        e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_NO_MORE_FILES;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            continue;
+        }
+        if (othStoreN == cap) {
+            char *grown;
+            cap = cap == 0 ? 256 : cap * 2;
+            grown = (char *)realloc(othStore, (size_t)cap * 65);
+            if (grown == NULL) {
+                whole = 0;
+                break;
+            }
+            othStore = grown;
+        }
+        join(path, sizeof(path), win, "inf");
+        join(path, sizeof(path), path, fd.cFileName);
+        if (other_hash(path, othStore + (size_t)othStoreN * 65) != 1) {
+            whole = 0;
+            continue;
+        }
+        othStoreN++;
+    } while (FindNextFileA(f, &fd));
+    e = GetLastError();
+    FindClose(f);
+    if (!whole || e != ERROR_NO_MORE_FILES) {
+        free(othStore);
+        othStore = NULL;
+        othStoreN = 0;
+        return 0;
+    }
+    return 1;
+}
+
+/* folder added to kept (';'-joined) once; othKeepFull when it does not
+ * fit. */
+static void other_keep_once(char *kept, size_t cap, const char *folder)
+{
+    const char *s = kept;
+    size_t fl = strlen(folder);
+
+    while (*s != '\0') {
+        const char *end = strchr(s, ';');
+        size_t len = end != NULL ? (size_t)(end - s) : strlen(s);
+        if (len == fl && inst_eqn(s, folder, fl)) {
+            return;
+        }
+        if (end == NULL) {
+            break;
+        }
+        s = end + 1;
+    }
+    if (strlen(kept) + fl + 2 >= cap) {
+        othKeepFull = 1;
+        return;
+    }
+    strcat(kept, folder);
+    strcat(kept, ";");
+}
+
+static int other_store_has(const char *hex)
+{
+    int i;
+
+    for (i = 0; i < othStoreN; i++) {
+        if (inst_eq(othStore + (size_t)i * 65, hex)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* 2000 and later, an adopted set: each folder under dir holding an INF
  * whose bytes an INF of the store holds, added to kept; every INF of the
  * tree is read, whoever put it there. 0 when that cannot be read. */
@@ -22415,21 +22516,14 @@ static int other_keep_store_infs(int set, const char *dir, char *kept,
         }
         {
             char hex[65];
-            char list[1024];
-            if (other_hash(path, hex) != 1 ||
-                !other_inventory(hex, 0xFFFFFFFFUL, list, sizeof(list))) {
+            if (other_hash(path, hex) != 1) {
                 out("  The driver store could not be compared with %s: %s's "
                     "copies are left.\n", path, inst_other_label(set));
                 ok = 0;
                 continue;
             }
-            if (list[0] != '\0') {
-                if (strlen(kept) + strlen(dir) + 2 >= cap) {
-                    othKeepFull = 1;
-                } else {
-                    strcat(kept, dir);
-                    strcat(kept, ";");
-                }
+            if (other_store_has(hex)) {
+                other_keep_once(kept, cap, dir);
                 added = 1;
             }
         }
@@ -22472,12 +22566,7 @@ static int other_adopted_keep(int set, const char *dir, const OTHREC *recs,
                 out("  %s stays on DevicePath, and its folder with it: whose "
                     "the entry is is not\n  known (its record was lost).\n",
                     entry);
-                if (strlen(kept) + len + 2 >= cap) {
-                    othKeepFull = 1;
-                } else {
-                    strcat(kept, entry);
-                    strcat(kept, ";");
-                }
+                other_keep_once(kept, cap, entry);
             }
             if (end == NULL) {
                 break;
@@ -22486,37 +22575,34 @@ static int other_adopted_keep(int set, const char *dir, const OTHREC *recs,
         }
         return 1;
     }
+    if (!other_store_load()) {
+        out("  The driver store could not be listed: %s's copies are "
+            "left.\n", inst_other_label(set));
+        flagSteps = 1;
+        return 0;
+    }
     /* The recorded INFs too, by their recorded bytes: a source INF since
      * deleted or changed may still be in the store. */
     for (i = 0; i < count; i++) {
-        char list[1024];
         const char *pth = recs[i].Path;
         size_t pl = strlen(pth);
         if (pl < 4 || !inst_eq(pth + pl - 4, ".inf") || pl <= dl + 1) {
             continue;
         }
-        if (!other_inventory(recs[i].Hash, 0xFFFFFFFFUL, list,
-                             sizeof(list))) {
-            out("  The driver store could not be listed: %s's copies are "
-                "left.\n", inst_other_label(set));
-            flagSteps = 1;
-            return 0;
-        }
-        if (list[0] != '\0') {
+        if (other_store_has(recs[i].Hash)) {
             char folder[INST_PATH_CHARS];
             inst_copy(folder, pth, sizeof(folder));
             if (strrchr(folder, '\\') != NULL) {
                 *strrchr(folder, '\\') = '\0';
             }
-            if (strlen(kept) + strlen(folder) + 2 >= cap) {
-                othKeepFull = 1;
-            } else {
-                strcat(kept, folder);
-                strcat(kept, ";");
-            }
+            other_keep_once(kept, cap, folder);
         }
     }
-    return other_keep_store_infs(set, dir, kept, cap);
+    i = other_keep_store_infs(set, dir, kept, cap);
+    free(othStore);
+    othStore = NULL;
+    othStoreN = 0;
+    return i;
 }
 
 /* The set's key and record for this run (section 6.7.5): 1 ready, with
@@ -23614,9 +23700,21 @@ static int other_remove(int set, int uninstall)
             return 0;
         }
         if (kept[0] != '\0') {
+            const char *s = kept;
             out("%s: these folders are kept, for the driver a device or the "
-                "driver store uses\nfrom them; their files are yours now: %s\n",
-                inst_other_label(set), kept);
+                "driver store uses\nfrom them; their files are yours now:\n",
+                inst_other_label(set));
+            while (*s != '\0') {
+                const char *end = strchr(s, ';');
+                size_t len = end != NULL ? (size_t)(end - s) : strlen(s);
+                if (len > 0) {
+                    out("  %.*s\n", (int)len, s);
+                }
+                if (end == NULL) {
+                    break;
+                }
+                s = end + 1;
+            }
         }
         other_rmdirs(dir);
         out("%s's copies in %s were removed.\n", inst_other_label(set), dir);
