@@ -500,6 +500,29 @@ static void test_key_saved(void)
     CHECK_EQ(sv.nrows, 8, "eight results");
     CHECK(strstr(buf, "Stopped:") == NULL, "a run that ended as planned has no Stopped line");
     {
+        /* a /report or /folder longer than the field is refused, not cut */
+        static char lng[300];
+        char *av[4];
+        PF_PARAMS lp;
+        PF_CMDLINE lc;
+        char w2[200];
+
+        memset(lng, 'a', sizeof(lng) - 1);
+        lng[0] = 'C';
+        lng[1] = ':';
+        lng[2] = '\\';
+        lng[sizeof(lng) - 1] = 0;
+        av[0] = "XHCIPERF.EXE";
+        av[1] = "/report";
+        av[2] = lng;
+        av[3] = NULL;
+        pf_defaults(&lp, PF_OS_NT);
+        CHECK(pf_cmdline(3, av, &lp, &lc, w2, sizeof(w2)) != 0, "an overlong /report is refused");
+        av[1] = "/folder";
+        pf_defaults(&lp, PF_OS_NT);
+        CHECK(pf_cmdline(3, av, &lp, &lc, w2, sizeof(w2)) != 0, "an overlong /folder is refused");
+    }
+    {
         /* a run that ended early says why, wrapped within 79 columns */
         static char b2[65536];
         PF_TEXT t2;

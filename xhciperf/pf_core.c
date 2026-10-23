@@ -1889,9 +1889,17 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
             pf_preset(p, pr);
             i++;
         } else if (pf_ieq(a, "folder")) {
+            if (strlen(nx) >= sizeof(c->folder)) {
+                pf_cpy(why, whyCap, "/folder takes a path of at most 259 characters.");
+                return 1;
+            }
             pf_cpy(c->folder, sizeof(c->folder), nx);
             i++;
         } else if (pf_ieq(a, "report")) {
+            if (strlen(nx) >= sizeof(c->report)) {
+                pf_cpy(why, whyCap, "/report takes a path of at most 259 characters.");
+                return 1;
+            }
             pf_cpy(c->report, sizeof(c->report), nx);
             i++;
         } else if (pf_ieq(a, "size")) {

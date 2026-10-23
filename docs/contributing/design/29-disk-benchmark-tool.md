@@ -1429,11 +1429,13 @@ P.9 on 7, and XP x64, Vista and 8 x64 stay owed.
 
 **On the owner's real-check list.** On real 98 SE hardware, whether the
 Quick preset's 2 s timed steps on the IDE system disk end near 2 s. On the
-emulator under heavy PIO the guest's tick count (the deadline's clock) lagged
-the performance counter (the measurement's) about fourteen times: a 2 s
-step ran 28 s by the counter. The figures stay right, since they use the
-counter; only the step's length is in question, and the clock is not
-changed until the reading.
+emulator two of them ran 28 s (the 1 MiB read and the 4 KiB random write,
+on ESDI_506 under TCG). The tick count was first suspected and is not the
+cause: a probe timing 64 MiB of unbuffered 1 MiB reads and writes on that
+disk read the tick count and the performance counter within 0.1 % of each
+other (42.3 s and 224.6 s), and the step's figures agreed with both (a
+result whose two clocks disagree takes the tick count, section 3.6). Why
+the deadline did not end those steps is not yet read.
 
 ### 14.3 Decided by the owner (2026-10-22)
 

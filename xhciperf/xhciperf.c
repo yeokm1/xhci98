@@ -3715,7 +3715,8 @@ static int report_write(const char *s, size_t n)
 
     /* the name as the system resolves it: either separator, a relative
      * path, the trailing dots and spaces Win32 drops; a stream refused */
-    if (GetFullPathNameA(g_cl.report, sizeof(full), full, &fp) == 0 || fp == NULL) {
+    len = GetFullPathNameA(g_cl.report, sizeof(full), full, &fp);
+    if (len == 0 || len >= sizeof(full) || fp == NULL) {
         log_add("The report's path cannot be resolved; it is not written.");
         return 0;
     }
