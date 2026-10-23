@@ -166,7 +166,8 @@ static int vsdChoice;
  * unticked; the "Replace the stored build" box. */
 static int s98Own = 1;
 static int vsdOwn = 1;
-static int restageHere;
+static int restageSys;          /* Vista and later: the row is on the page */
+static int restageHere;         /* the store trap found: the row open      */
 static int restageChoice;
 static int readDone;            /* the reading's job has ended */
 static char s98Ver[32];
@@ -404,6 +405,8 @@ static void end_run(int code)
     }
 }
 
+static void os_version(OSVERSIONINFOA *v);
+
 static unsigned __stdcall job_main(void *arg)
 {
     int job = (int)(size_t)arg;
@@ -455,6 +458,12 @@ static unsigned __stdcall job_main(void *arg)
             sink = &planText;
             LeaveCriticalSection(&textLock);
             planCode = inst_eng_plan();
+            {
+                OSVERSIONINFOA v;
+                os_version(&v);
+                restageSys = v.dwPlatformId == VER_PLATFORM_WIN32_NT &&
+                             v.dwMajorVersion >= 6;
+            }
             restageHere = inst_eng_restage_state();
             restageChoice = opts->Restage;
             inst_eng_dir_default(dirChoice, sizeof(dirChoice), dirNow,
@@ -810,6 +819,15 @@ static void replan(void)
     LeaveCriticalSection(&textLock);
     planCode = inst_eng_plan();
     rowCount = inst_eng_rows(rows, INST_MAX_VALUES);
+    /* The store trap read again with the components as they stand: the
+     * Thunderbolt box ticked may find one (record 23 section 5.7). */
+    restageHere = inst_eng_restage_state();
+    if (pageWnd[P_COMP] != NULL) {
+        EnableWindow(GetDlgItem(pageWnd[P_COMP], IDC_C_RESTAGE), restageHere);
+        if (!restageHere) {
+            CheckDlgButton(pageWnd[P_COMP], IDC_C_RESTAGE, BST_UNCHECKED);
+        }
+    }
 }
 
 /* ---- the Components page (record 26 section 5.3) ------------------------- */
@@ -920,9 +938,10 @@ static void comp_move(HWND dlg, int id, int dy)
  * storage drivers' row under the UAS box, in the place the locked USB
  * drivers' sentence leaves, and the rows below it moved down; on every
  * other system the row is hidden and the template's layout stands. The
- * "Replace the stored build" box only where the store trap was found
- * (Vista to 10, never with the storage row): elsewhere the folder's line
- * and the buttons take its place (record 26 section 5.0, draft 35). */
+ * "Replace the stored build" box on Vista and later (never with the
+ * storage row), open only where the store trap was found: elsewhere the
+ * folder's line and the buttons take its place (record 26 section 5.0,
+ * draft 35). */
 static void comp_layout(HWND dlg)
 {
     static const int below[] = {
@@ -942,7 +961,7 @@ static void comp_layout(HWND dlg)
         return;
     }
     compLaidOut = 1;
-    if (!restageHere) {
+    if (!restageSys) {
         r.left = 0;
         r.top = 0;
         r.right = 0;
@@ -1049,8 +1068,9 @@ static void comp_fill(HWND dlg)
     CheckDlgButton(dlg, IDC_C_FAST, fastChoice ? BST_CHECKED : BST_UNCHECKED);
     ShowWindow(GetDlgItem(dlg, IDC_C_TRAY), trayHere ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_FAST), trayHere ? SW_SHOW : SW_HIDE);
-    CheckDlgButton(dlg, IDC_C_RESTAGE, restageChoice ? BST_CHECKED :
-                                                      BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_C_RESTAGE, restageHere && restageChoice ?
+                   BST_CHECKED : BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_C_RESTAGE), restageHere);
     comp_dirline(dlg);
 }
 

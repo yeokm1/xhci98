@@ -9034,6 +9034,12 @@ static void uas_sys_9x(void)
     if (envNow.Nt || opts.List || !usbInclude || !uasInclude) {
         return;
     }
+    if (groupVerdict[group_of_inf(INST_INF_UAS)] != INST_GROUP_OK) {
+        /* A newer or unreadable xhciuas.sys there is refused as its
+         * group is (record 23 section 5.3): never replaced from here. */
+        logonly("uas: the UAS group is refused; SYSTEM32\\DRIVERS left\n");
+        return;
+    }
     join(src, sizeof(src), srcDir, "xhciuas.sys");
     if (GetWindowsDirectoryA(dst, sizeof(dst)) == 0) {
         out("xhciuas.sys could not be put in SYSTEM32\\DRIVERS: no Windows "
@@ -9046,7 +9052,7 @@ static void uas_sys_9x(void)
         logonly("uas: %s is the package's\n", dst);
         return;
     }
-    if (!own_put(src, dst)) {
+    if (own_put(src, dst) != 1) {
         out("xhciuas.sys could not be put in %s: a UAS disk plugged in later "
             "asks for the\ndriver disk (type %s).\n", dst, srcDir);
         flagFailed = 1;
