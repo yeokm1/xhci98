@@ -1,6 +1,14 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 35, 2026-10-23 (roadmap-usb4 task 43.42, the
+Status: draft 36, 2026-10-23 (roadmap-usb4 task 43.48, the owner's
+decisions of 2026-10-22: three release downloads, the free and non-free
+driver sets offered from the folders the download carries, copied and
+never installed, every box unticked, an optional stage for the first
+plug, the uninstall removing what was placed, and the drivers'
+addresses beside the rows and on the Finish page, section 6.7; the
+coordinator's overnight decisions of 2026-10-23 on its proposals,
+pending the owner's review, section 6.7.10; record 23 revision 38;
+recorded at the batch 8 merge); draft 35, 2026-10-23 (roadmap-usb4 task 43.42, the
 simplification built, with the owner's points of 2026-10-22 and
 2026-10-23: the silent install no longer to cover `xhciuas.inf`, the
 wizard's Insert Disk prompt read and fixed by the installer, the x64
@@ -949,6 +957,10 @@ Check boxes, one a line, each with one sentence:
 | xHCI98 USB Tree, the tray tool, started at login (draft 33: the label carries what was the sentence under it) | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | Tell me when a USB device can run faster (draft 33, task 43.27) | the computer's choice in force: `TrayFasterNotice` under `HKLM\Software\xhci98` when it is a DWORD 0 or 1, else the default, on on every system (the owner, 2026-10-22; `inst_fast_default`, record 25 section 7.7); `/faster` and `/nofaster` preselect it | yes | XHCITR's balloon and red icon for a device running slower than it can; a box of its own, in the place of the tray box's sentence, indented under it and not tied to it (the notice also shows when the tool is opened by hand); shown when the tray box is (the package carries the tool); written only when its tick is changed from the one in force (record 23 section 9.5 item 7) |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
+
+(Draft 35) The free and non-free driver sets' rows are on a page of
+their own after this one, "Other USB drivers", section 6.7.4, until
+section 5.0's simplified Components page is built.
 
 The component page is not shown under `/uninstall`. Unticking Thunderbolt
 support does what record 23 section 8.5's N does; unticking the tray tool
@@ -2630,6 +2642,556 @@ leaves every other value (the whole list an explicit 1 merged stays); and,
 on a run that never turned the gate on, the uninstall leaves
 `SilentClasses` as it found it.
 
+### 6.7 The other USB drivers: usb-wdm-free and usb-wdm-nonfree (task 43.48; draft 36)
+
+The owner's decisions of 2026-10-22 (roadmap-usb4 task 43.48): three
+release downloads, each a superset of the one before; the installer shows
+a row for a driver set only when the download it runs from carries it;
+every such row unticked unless the user ticks it ("default off"); the
+installer copies a set and never installs it ("nothing beta or
+third-party installed behind the user's back"); an optional box under
+each row, unticked, lets Windows use the copied drivers at the first plug
+of a device; the uninstall removes what it placed; and the addresses of
+the up-to-date drivers, `https://github.com/yeokm1/usb-wdm-free` and
+`https://github.com/yeokm1/usb-wdm-nonfree`, are given beside the rows
+and on the Finish page, on every system and in every download, with what
+this download does not carry. NUSB 3.3's storage files are not a set of
+this section: they are section 6.5's, in `NUSB33\` in every download, and
+nothing here reads, copies or stages them.
+
+#### 6.7.1 The three downloads
+
+| Download | Zip | At its root, beside `SETUP.EXE` |
+|---|---|---|
+| 1 | `xhci98-<version>.zip` | the package (as today) and `NUSB33\` |
+| 2 | `xhci98-<version>-free.zip` | download 1's files and `WDMFREE\` |
+| 3 | `xhci98-<version>-nonfree.zip` | download 2's files and `NONFREE\` |
+
+The names are proposals for the owner; download 1 keeps the name every
+release had, so a link to "the release zip" still reaches the base
+download. Each zip is built from the same published tree and differs from
+the one before by its folder alone and by its readme (below). The folder
+names are 8.3 (`WDMFREE`, `NONFREE`), as `NUSB33` is.
+
+**While no usb-wdm-free release qualifies** (no driver's legs have passed
+on its systems yet, roadmap 43.48: "A usb-wdm-free driver qualifies for
+download (2) only once its legs have passed on its systems"), the pin of
+section 6.7.2 names none, and the cut makes downloads 1 and 3 only:
+download 2 would be download 1 under another name, and download 3 carries
+no `WDMFREE\`, its readme saying that no free driver is in any download of
+this release yet. **This is an exception to the roadmap line's "three
+zips", for the owner to confirm**; the alternatives are a download 2 equal
+to download 1 under its own name, or holding download 3 back too until
+download 2 exists. Each is a switch of the cut, not a design change.
+
+**Each readme** (the release's `readme.txt`, which in the published tree
+is download 1's; `make-release.ps1` renders the other downloads' from the
+same function and puts each in its own zip in its place) carries a
+section "THIS DOWNLOAD" saying which download it is by number and zip
+name, what it adds to the one before, which of the three this release
+has, and both addresses; downloads 2 and 3 say that the free drivers are
+at a beta stage and that a problem with one goes to
+`https://github.com/yeokm1/usb-wdm-free/issues`, not to xHCI98's; download
+3 says that `NONFREE\` holds other makers' drivers, Microsoft's KMDF
+co-installers among them, unmodified, with no licence to redistribute
+them established (legal-provenance.md section 5), and that they are not
+tested by this project. Its "What is in this directory" lists the
+download's folders.
+
+#### 6.7.2 What each folder holds, and its record
+
+**`NONFREE\`**: the `non-free/` folder of a tagged release of the owner's
+`usb-wdm-nonfree` pack, its contents at `NONFREE\`'s root
+(`NONFREE\ethernet\...` is the pack's `non-free/ethernet/...`), read from
+the checkout's git objects at the tag's commit and each file held to the
+pack's `SHA256.TXT` at that commit, which must list every file under
+`non-free/` and nothing else there; beside them the pack's `NOTICE.md`
+(whose each driver is), `README.md` (which folder serves which Windows)
+and `STAGE.TXT` (below), unchanged, and a `SHA256.TXT` the packager
+writes: one line `<sha256, lower case>  <path>` for every other file in
+the folder, the path relative to `NONFREE\` with `/`, the lines in
+ordinal order of the path, ASCII, CRLF line ends. The pack's `nusb33/` is
+not in it and is not duplicated there (owner, 2026-10-22). The pin
+(`package-common.ps1`): the tag `v1.0.0`, its commit
+`128106f786d462024eda08d117154b21cb01b57b`, and the SHA-256 of the pack's
+`SHA256.TXT` blob there,
+`d48c086301074793d6f0ed26798425ebd70345c977f11fade9c47531956d070e`; the
+generated `NONFREE\SHA256.TXT` of that pin hashes to
+`e3ea38f94c0c30e1804fe1ca6d89f5e0eb671ee4dbfa31a71fbd151aa12845c1`
+(456 lines), which the installer carries.
+
+**`WDMFREE\`**: the qualifying drivers of a tagged release of
+`usb-wdm-free`, each package's folder `free/<class>/<package>/` at
+`WDMFREE\<class>\<package>\`, every file held to a SHA-256 recorded in
+this repository (the pin `scripts\package\wdmfree-pin.txt`: the tag, its
+commit, one `Package:` line per qualifying package with the systems its
+legs passed on, and one `SHA256:` line per file, the release's `LICENSE`,
+`NOTICE.md` and `STAGE.TXT` among them), and that release's `LICENSE`
+(GPL-2.0) and `NOTICE.md`; beside them a `STAGE.TXT` (a fixed header and
+then the release's own lines for the qualifying packages' INFs, verbatim,
+in the pack's format below), a `READ.TXT` the packager writes from the
+pin (a fixed header, then one line `<class>/<package> | <systems>` per
+package in the pin's order, the systems in the pin's order and
+`STAGE.TXT`'s tokens; ASCII, CRLF), and a `SHA256.TXT` written as
+`NONFREE\`'s is. usb-wdm-free has no release yet and no `STAGE.TXT`:
+until it has both the pin is empty and so is the installer's hash for the
+set (section 6.7.1). A release with no `STAGE.TXT`, or one whose lines do
+not put every INF of a qualifying package on exactly one line, is refused
+by the cut.
+
+**Paths.** Every path of either folder is `/`-separated, relative,
+printable ASCII without `\ : * ? " < > | ;` (the last because
+`DevicePath` separates its entries with it), with no empty, `.` or `..`
+part and no part that starts with a space or ends with a space or a dot,
+and at most 140 characters (`Test-OtherSetRelPath` at the cut,
+`inst_other_rel_ok` in the installer): with the install directory's 100
+characters (record 23 section 9.6), `\NONFREE\` and a temporary suffix,
+every destination stays under `MAX_PATH`. The installer checks each
+source and destination path it builds against `MAX_PATH` as well (a
+download unpacked deep in a tree can pass it on the source side), and a
+file whose path does not fit is not copied, and said.
+
+**`STAGE.TXT`** is the pack's format (usb-wdm-nonfree `128106f`, its own
+header): `ACTION | SYSTEMS | INF | NOTE`, `#` comments, `STAGE` or
+`COPY`, the systems as tokens (`W98SE WME W2K WXP WXP64 WVISTA WVISTA64
+W7 W7X64`, read here with `W8 W8X64 W10 W10X64` added for 8 and 8.1 and
+for 10), the INF's path from the pack's or the release's top
+(`non-free/...` or `free/...`, which the installer strips to a path
+under its folder). On any one system no two `STAGE` lines match one
+hardware ID (the pack's rule, kept by its maintainer); a `COPY` INF is
+never staged.
+
+**The installer's record of a set** is the SHA-256 of its folder's
+`SHA256.TXT`, compiled into the installer (`INST_NONFREE_SUMS` and
+`INST_WDMFREE_SUMS`, `inst_core.h`; empty when the release has no such
+set), which `test-package.ps1` and the cut hold equal to what the
+packager writes for the pin. Through it the installer trusts each line
+of that file, and holds every file it reads or copies to its line's hash.
+
+**The release's record of its downloads** is
+`releases\<version>\downloads.txt` (tracked, beside `drvpack.txt`): the
+downloads cut (`base`, `free`, `nonfree`), and for each set its tag, its
+commit and the SHA-256 of the `SHA256.TXT` the cut wrote, or `none`; with
+the free set, the pin used, copied beside it as
+`releases\<version>\wdmfree-pin.txt`. `-UploadSetOnly` rebuilds each
+recorded download from these and the published tree alone (never the
+current pins or a checkout's HEAD), and refuses one whose regenerated
+`SHA256.TXT` does not hash as recorded; the readme of each download is a
+function of the published readme and this record.
+
+#### 6.7.3 Detection
+
+At the read, for each set: **carried** when its folder is at the package
+root (record 23 section 4.2), its `SHA256.TXT` hashes to the installer's
+value, every path that file lists passes `inst_other_rel_ok` and is
+present, `STAGE.TXT` (and for the free set `READ.TXT`) is among them,
+hashes as its line lists and parses, and every `STAGE.TXT` INF is listed;
+the parsed lines of those small files are kept from the bytes that were
+hashed and used for every later decision of the run. **Not this
+release's** when the folder is there and any of that fails (the log names
+what); **absent** otherwise. The other files' bytes are read when they
+are copied (section 6.7.5), not at the read: `NONFREE\` is 66 MB, and
+hashing it before the first page would keep a Windows 98 SE machine on
+the Welcome page for minutes.
+
+#### 6.7.4 The page
+
+The Components page (section 5.3) has no room left at 640 by 480, so the
+rows are on a page of their own after it, "Other USB drivers", shown on
+every system, in every download and on every install run (never under
+`/uninstall`): a proposal for the owner, who asked for the addresses "on
+the Components page beside the rows"; this page is the Components
+page's second part, and the rows and their addresses are on it. From the
+top:
+
+- **The free USB class drivers (usb-wdm-free, beta)**, a check box,
+  unticked, shown only when the set is carried; its sentence: "Copies the
+  free USB class drivers to <dir>\WDMFREE. Nothing is installed: Windows
+  uses them only for a device you point it at, or with the box below.
+  These drivers are at a beta stage: report a problem with them at
+  https://github.com/yeokm1/usb-wdm-free/issues, not to xHCI98." Under
+  it, indented, a second box, unticked, open only while the first is
+  ticked: "Let Windows use these automatically when a device is plugged
+  in", with the count of INFs that would be staged on this Windows
+  ("Stages 3 of their INFs for this Windows."), or "None of them is for
+  this Windows." and greyed when that count is 0.
+- **The non-free driver pack (usb-wdm-nonfree)**, the same two boxes,
+  the sentence: "Copies other makers' drivers (USB Ethernet, serial and
+  game pads) to <dir>\NONFREE. They are their makers' work, not this
+  project's, and have not been tested by this project on any Windows.
+  Nothing is installed: Windows uses them only for a device you point it
+  at, or with the box below."
+- **Under each row, always, and in place of the row where the set is not
+  carried**, one line (`inst_other_absent_text`, host-tested for both
+  sets, the three states and both release forms): carried, "Up to date:
+  <address>."; absent, "Not in this download: <what it is> are in
+  xhci98-<version>-free.zip (or -nonfree.zip) and at <address>.", or for
+  the free set of a release with none, "<what it is> are not in any
+  download of this release yet: see <address>."; not this release's, "The
+  <folder> folder beside this installer is not this release's (the log
+  says why): it is not offered. Get <what it is> from <the zip> or
+  <address>." The issues address is in the free row's sentence.
+
+The words are proposals for the owner. The page is laid out to fit 640
+by 480 with both rows and both lines (a dialog of the Components page's
+height); that it does, with the longest install directory, is not yet
+read: no host check renders it, and a 98 SE leg reads it (section
+6.7.9).
+
+**Defaults**: every box unticked on every run, whatever an earlier run
+chose (owner, 2026-10-22: "default off"); no choice is recorded. The
+console switches `/free`, `/freestage`, `/nonfree` and `/nonfreestage`
+preselect them (a stage switch implies its set), in the window too, as
+`/storage` does; `/yes` and `/defaults` take none.
+
+**Systems**: both rows are offered on every system (task 43.43's rule:
+every box everywhere): a copy is useful wherever the user can carry the
+folder to another machine; the stage box counts only the `STAGE` lines
+naming this system's token (`inst_sys_token`: 98 SE `W98SE`, ME `WME`,
+2000 `W2K`, XP `WXP`, XP x64 `WXP64`, Vista `WVISTA`/`WVISTA64`, 7
+`W7`/`W7X64`, 8 and 8.1 `W8`/`W8X64`, 10 `W10`/`W10X64`).
+
+**The warnings on Next** (section 5.3.1's message box, two more
+paragraphs, `inst_comp_warnings`' bits `INST_CW_FREE_UNREAD` and
+`INST_CW_NONFREE`): the free row ticked where a package with an INF on a
+line naming this system has no legs on it by `READ.TXT` - "Some of the
+free USB class drivers have not been tested on this Windows: <the
+packages>. They are copied all the same." (with " and staged" when the
+stage box is ticked); the non-free row ticked, on any system - "The
+non-free drivers have not been tested by this project on any Windows.
+They are copied as their makers released them; if a device misbehaves
+with one, remove the device in Device Manager and run the uninstall."
+On 64-bit Vista and 7, either stage box ticked adds: "On 64-bit Windows a
+staged driver loads only if Windows accepts its signature: an unsigned one
+only on a start with driver signature enforcement disabled (F8), a
+test-signed one also in test-signing mode."
+OK goes on, Cancel stays, as section 5.3.1 has it; the console prints
+them under "WARNING:".
+
+#### 6.7.5 Ticked: the copy
+
+**The set's key first.** For a set with no key, before the first file
+is touched, `HKLM\Software\xhci98\Other\Free` (or `\NonFree`) is made
+with `Record` (the record file's path), `RecordMade` (0), `Dir` (the
+folder the copies go to) and `Sums` (the hash of the `SHA256.TXT` they
+are made from); a write that fails stops the set's copy (said, the failed
+flag set). A set whose key is there is an earlier run's: its values are
+kept, and with `RecordMade` 1 its record file is opened, held to its
+header, recovered (below) and appended to; with `RecordMade` 2 (an
+uninstall or a withdrawal cut short after the copies went) the run first
+finishes that removal (section 6.7.8), and the set is then made afresh,
+or, when the removal cannot finish, not copied this run. A key whose
+`RecordMade` is 0 or missing, or that lacks one of the four values, is a
+making of the key cut short: with no file at its `Record` path (or, with
+no `Record`, at this run's) the key is deleted and made afresh; with one,
+the file's owner cannot be told, and the case below applies. The
+uninstall finds a set by this key.
+
+**An earlier copy elsewhere or of another release.** When the key names
+another `Dir` (the install directory moved, record 23 section 9.6) or
+another `Sums`, the earlier copies and staging are withdrawn first by the
+uninstall's rules (section 6.7.8), and the set is copied anew only when
+that withdrawal left nothing; otherwise the set is not copied this run,
+and the run says why. A folder the withdrawal keeps because a device's
+driver still names an INF in it (section 6.7.8) does not stop it: that
+folder keeps the earlier release's files, the new copy leaves every file
+there as it is, and the run says which folder. An unticked row leaves an
+earlier run's copies and staging as they are (unticking is "not now", as
+for every component), wherever they are.
+
+**The record file** is `<the install directory>\WDMFREE.REC` or
+`\NONFREE.REC`, ASCII, CRLF, a file and not registry values because on 98
+SE and ME a registry key holds at most 64 KB of values and `NONFREE\`'s
+457 files would pass that. Its first line is `XHCI98 SET RECORD 1 <Free or
+NonFree> <Dir>`. With the key written, it is made with `CREATE_NEW`, its
+header written and flushed, and only then `RecordMade` set to 1. When
+`CREATE_NEW` fails (a file of that name is there) the run takes the
+values it just wrote out of the key and stops the set's copy, said, and
+never writes to or deletes that file. A later run that finds
+`RecordMade` 0 with the file absent makes it afresh; with the file
+present it cannot tell whose the file is, leaves it alone, and stops the
+set's copy with a step for the user (delete the file if it is not
+wanted, then run the installer again; the steps flag set), and the
+uninstall leaves it and the key the same way. **A run that finds no key
+and a record file whose whole first line is this set's header for this
+folder** (on 98 SE and ME a power cut after the copies began can leave
+the file and lose the registry's key, which those systems write out
+later; read on the 43.48 leg of 2026-10-23) takes the file as this
+installer's and makes the key again - a ticked run, an unticked one
+(which then recovers it) and the uninstall alike, `/list` saying so and
+writing nothing. The key is marked `Adopted` (written first, `RecordMade`
+1 last, so a run cut short in between resumes the adoption; a key with
+no value and no subkey, its making stopped before the first, is taken as
+no key): what the
+lost `Staged` values recorded is not known, so nothing of it is removed
+on their account - the uninstall of an adopted set keeps, on 98 SE and
+ME, every folder a `DevicePath` entry names under the set's folder and
+the entry with it (said: whose the entry is is not known), and on 2000
+and later every folder under it holding an INF, whoever put it there,
+whose bytes an INF of the store holds; a `DevicePath` or a store that
+cannot be read leaves every copy, with the steps flag. An install
+directory under the legacy `%windir%\XHCI98` loses an adopted set's
+`DevicePath` entries to that function's cleanup (an earlier build's
+directory only; accepted, a proposal). The file is then recovered and
+appended to; any other
+file of that name is in doubt, as above. Each write of `RecordMade` is
+followed by `RegFlushKey` (a flush that fails stops the step, the record
+kept), and each copied file
+is flushed (`FlushFileBuffers`) before its `D` line, so a power cut
+leaves fewer records naming bytes that were never written. A record file
+whose first line is not the header, or that cannot be read, stops the
+set's copy and the uninstall's deletion by it the same way. Each later
+line ends with
+CRLF and is one of:
+
+- `F <token> <sha256, lower case> <full path>`: a file a run is about to
+  make, the token 8 hex digits chosen at random by each run that copies;
+- `T <token> <full path>`: its temporary file made (below);
+- `D <token> <full path>`: that file made, with its recorded bytes;
+- `A <token> <full path>`: that file not made.
+
+A `T`, `D` or `A` line belongs to the `F` line of the same token and
+path; a later run appends its own lines, and closes an earlier run's open
+line with that line's own token.
+
+A last line without its CRLF is a write cut short and is dropped; any
+other line that does not read so makes the record unreadable, which stops
+the set's copy and keeps the uninstall from deleting by it (said, with
+the steps flag).
+
+**The files.** Each listed file of the set's `SHA256.TXT` (`STAGE.TXT`,
+`READ.TXT`, `NOTICE.md`, `README.md` and `LICENSE` among them, since every
+other file of the folder is listed), then `SHA256.TXT` itself from the
+bytes the read hashed, is copied to `<Dir>\<relative path>` by section
+5.3.1 case 1's rule:
+
+1. a file of that path already there - the same bytes, other bytes or
+   unreadable - is left as it is and never recorded;
+2. the line `F <token> <hash> <full path>` is appended to the record and flushed
+   (`FlushFileBuffers`);
+3. `<full path>.~<the run's token>` is made with `CREATE_NEW`; when that
+   fails (the name is taken) its `A` line is appended and nothing is
+   deleted; otherwise its `T` line is appended and flushed;
+4. the bytes are written to it, hashed as they are written;
+5. it is moved to its name with `MoveFileA`, which never replaces, and
+   its `D` line is appended.
+
+When step 4 or 5 fails (the hash is not the line's, a write fails) the
+temporary file is deleted and then its `A` line appended; when the
+deletion fails the line is left open, for the recovery, and the run goes
+on with the next file. **Recovery** (the next run, ticked or not, and the
+uninstall, before anything else of the set), for each `F` line with no
+`D` or `A` line of its own, by its own token alone: with a `T` line, the
+temporary file `<full path>.~<token>` is this installer's and is deleted;
+without one, a file of that name is not known to be this installer's (a
+run cut short between steps 2 and 3, or between the `CREATE_NEW` and its
+`T` line): it is left, named in a step for the user (delete it if it is
+not wanted), with the steps flag. The line is closed only once no
+temporary file of it is left - with `D` when the file is present with the
+recorded bytes, else with `A` - so a temporary file whose deletion failed,
+or that waits for the user, keeps its line open, and the uninstall that
+meets an open line it cannot close keeps the record file and the key and
+ends incomplete. A file present with the recorded
+bytes under a `D` line is this installer's. The run says how many of the
+set's files are in the folder and names up to three it left out; a later
+ticked run copies what is still absent.
+
+#### 6.7.6 Ticked: let Windows use them at the first plug
+
+Only `STAGE` lines naming this system's token, never a `COPY` line, and
+only where **the INF's whole folder** is in place: every file the set's
+`SHA256.TXT` lists under that folder present at `<Dir>` with its listed
+bytes (this run's or an earlier run's copy, or a file of the same bytes),
+since the INF's driver files, catalogs and co-installers sit beside it in
+every folder of both sets. A folder that is not whole is left copy-only,
+and said with the file that stopped it.
+
+- **98 SE and ME** (the owner, 2026-10-22: those systems' hardware
+  wizard does not search subfolders, so one folder per driver, and
+  "stage" there means `DevicePath`): each distinct folder of those INFs,
+  `<dir>\NONFREE\serial\ftdi\w98se-me` say, appended to `DevicePath`
+  (`inst_path_append`) when it is not there already, and only when the
+  folder holds no file but those the set lists (the wizard reads every
+  INF of a folder on `DevicePath`: an unlisted INF there leaves the
+  folder copy-only, said). The record is the `Staged` subkey's value of
+  that path, data `DevicePath`, written before the value is changed; a
+  folder already on `DevicePath` before the run is not recorded. Every
+  INF of a staged folder is then visible to the wizard, a `COPY` INF in
+  it too: the pack's two `COPY` INFs of 98 SE folders (FTDI's
+  `FTSERMOU.INF` and `FTCSMOU.INF`) are each copied to the INF folder by
+  their bus INF's own install anyway (`STAGE.TXT`'s notes), which is
+  accepted (proposal). `DevicePath` is held to the length the engine
+  already writes (2048 bytes); a folder that would pass it is not added,
+  and said. The set's staging runs after `devicepath_update` in the same
+  run, and a recorded folder missing from `DevicePath` (that function
+  takes out every entry under the legacy `%windir%\XHCI98`) is appended
+  again, whether or not the row is ticked this run. The copy and the
+  staging stop at a cancel (`go_on`) between two files or two INFs,
+  the record left whole for the next run.
+- **2000 and later**: each INF through `SetupCopyOEMInf` (`SPOST_PATH`,
+  its folder at `<Dir>` as the source), as record 23 section 5.6 stages
+  the package's own. **The inventory** before the call: every `*.inf` of
+  `%windir%\inf` (the `oem<n>.inf` names and the original names alike,
+  since the call may answer with either) whose bytes are this INF's. An
+  inventory that is not whole (the folder not listed, an INF of the same
+  size not readable) stages nothing: that INF stays copy-only, said, as
+  `s98_oem_before` leaves Stor98's unrecorded on the same failure. The
+  record is a value of the `Staged` subkey named for the INF's relative
+  path, written before the call with the data `pending <the INF's
+  SHA-256> <the inventory's names, separated by '|', which no file name
+  holds>`, and after it:
+  - the call failed: the value deleted;
+  - it returned a name the inventory held: an INF already in the store,
+    not this installer's. The value's data becomes `foreign <the INF's
+    SHA-256> <name>` (the hash first, being of a fixed length, and the
+    name last, since a stored INF's original name may hold a space): the
+    call may have pointed that stored INF's source
+    at `<Dir>` (record 23 section 5.6's flags), so its folder is kept
+    while it is there (section 6.7.8), and it is never removed. Said
+    ("already in the driver store as <name>, not placed by this
+    installer; Windows may use the files stored with it"). Whether that
+    stored package holds this set's driver files (record 23 section
+    5.7's trap, which `store_matches` reads for this package's own INFs)
+    is not read for these sets: a proposal, said in the same sentence;
+  - it returned a new name: `own <the INF's SHA-256> <name>`.
+
+  An INF whose value is `own` or `foreign` with its name still holding
+  those bytes is staged already and is not staged again; one whose name
+  no longer does has its value deleted and is staged as any other, and
+  one whose name cannot be read is left as it is (said). **A `pending`
+  value** found by a later run or the uninstall is a run cut short at the
+  call: which INF the call answered with cannot be told, and it may have
+  pointed an inventoried INF's source at `<Dir>`, so none is taken as
+  this installer's and every INF of `%windir%\inf` holding those bytes,
+  inventoried or new, becomes a `foreign` value of its own (named for the
+  INF's relative path and the stored name; its folder kept, the INF never
+  removed); the run says an interrupted run may have left a copy in the
+  driver store, and with none found the value is deleted. On 64-bit Vista and 7 the call stores an unsigned or
+  test-signed package after Windows' own publisher question, which the
+  user answers; a refusal is said and nothing recorded. Whether the driver
+  then loads is the system's signature policy, which the warning of
+  section 6.7.4 says.
+
+  An `own` INF is identified by its name and its bytes. Identical INF
+  bytes may come with another catalog (Microsoft's `SetupCopyOEMInf`
+  documentation): a name Windows gave this installer's INF, freed by
+  someone removing it, and given again to identical bytes from another
+  source would be taken as this installer's and removed by the uninstall
+  when no device names it. That residue is accepted (a proposal): it
+  needs another program to stage this set's own INF bytes under the name
+  this one was given.
+
+The Summary and the console's plan list what will be staged; the
+progress line says what was.
+
+#### 6.7.7 The Finish page and the console's end
+
+Under the run's text on the Finish page, and at the end of the console's
+output, a paragraph "Other USB drivers" (`inst_eng_other_finish`), on
+every install run, on every system and in every download: for each set,
+its address always; when copied, the folder and, for this Windows, the
+folders that hold an INF on a line naming it ("To install one by hand,
+point the Add New Hardware Wizard (or Update Driver) at one of: ...", up
+to six, then "and <n> more: see <dir>\NONFREE\STAGE.TXT"), and which were
+staged; when not copied, the line of section 6.7.4 for its state
+(carried and left unticked: "Not copied this time; it is in this
+download's <folder>."). The uninstall's Finish page does not carry it.
+
+#### 6.7.8 The uninstall
+
+Before section 9.3 step 5 (the installer's own files), on both routes,
+for each set whose key exists: first the staging, then the copies, then
+the records, each step only when the one before left nothing.
+
+- **Staged on 98 SE and ME**: each `DevicePath` entry the record names
+  taken out (`inst_path_remove`, that exact entry alone), its value then
+  deleted.
+- **Staged on 2000 and later**: each recorded `oem<n>.inf` (a `pending`
+  value resolved first, section 6.7.6) removed from the store when it
+  still holds the recorded bytes (a name Windows has since given another
+  INF is not this installer's: its value goes and the file stays) and no
+  devnode's driver key names it as its `InfPath` (`s98_un_inf_nt`'s
+  rule), with `SetupUninstallOEMInf` where Windows has it and on 2000 the
+  `.pnf` and then the `.inf` deleted (KB 813449's order), and its value
+  then deleted. An INF a device's driver names, or that cannot be
+  removed, stays, said, and its value is kept until the set's key goes.
+- **The folders kept**: on 2000 and XP, Windows installs a device again
+  from the source an INF in its store was staged from (record 23 section
+  4.4's reason for a permanent copy), so the folder at `<Dir>` of every
+  `own` INF kept in the store above, and of every `foreign` INF whose
+  name still holds the recorded bytes, is kept whole, by the record and
+  whatever the folder's files now are; the folder's files become the
+  user's and the run names the folder. The values that keep a folder go
+  only with the set's key, after the copies' step has finished, so an
+  uninstall cut short anywhere before decides the same way again. A
+  store that cannot be read (`%windir%\inf` not listed, a recorded name
+  not readable) keeps every folder with a staged value and leaves the
+  uninstall incomplete (said, the steps flag set), as an unreadable
+  driver key does for `s98_un_inf_nt`.
+- **The copies**: the record's recovery first (section 6.7.5); then each
+  file under a `D` line outside a kept folder, deleted when its bytes are
+  still the recorded ones, kept and said when they have changed, nothing
+  done when it is gone; then each folder of the set bottom up when empty,
+  then `RecordMade` set to 2 (the copies done) and the record file
+  deleted (only once its every line is closed).
+- **The records**: the set's key, then `Other` when empty. A run that
+  finds `RecordMade` 2 has only these steps left: it deletes the record
+  file if it is still there, then the key; a record file missing with
+  `RecordMade` 1 is an error that keeps the key and ends the uninstall
+  incomplete.
+
+A deletion that fails, or a removal from the store that fails, keeps the
+record file and the key, sets the restart and steps flags and leaves the
+uninstall incomplete with its Add/Remove Programs entry, as section
+5.3.1's case 1 rule has it. A driver a device installed from a copy or a
+staged INF stays installed: Windows copied its files to its own folders at
+the install, and nothing here removes a driver Windows installed (record
+23 section 9.3).
+
+#### 6.7.9 Not done, and owed
+
+- (Read on the 43.48 legs, 2026-10-23, `runs/run-43.md`.) On 98 SE a
+  device whose driver is in a staged folder installs with no wizard, but
+  the setup engine asks for the vendor's disk for each file, offering its
+  own source path (the Windows CD's), not the folder it found the INF in:
+  the user types the folder, which the Finish page lists. Whether a
+  `SourcePath` the installer sets could spare that, and at what cost to
+  the other installs, is owed.
+- The free set's rows cannot be read until a usb-wdm-free release with a
+  `STAGE.TXT` qualifies; until then they are read only with stand-ins
+  (`test-package.ps1`).
+- `uvcdec`'s `VIDC.MJPG` check (usb-wdm-free's webcam codec: warn when
+  another codec holds `VIDC.MJPG`; on 2000 the uninstall removes it only
+  while it names `uvcdec.dll`) belongs to the install of that driver,
+  which this installer does not do; it is owed when `uvc98` qualifies.
+- The legs: the page at 640 by 480 on 98 SE with both rows, a copy and a
+  stage of the non-free set on 98 SE and on XP, the wizard finding a
+  staged folder at a plug, an interrupted copy resumed, and the uninstall
+  (owner, 2026-10-22: no VM checks of the non-free drivers themselves;
+  these legs read the installer, not the drivers).
+
+#### 6.7.10 The coordinator's overnight decisions (2026-10-23, pending the owner's review)
+
+The six proposals this section put to the owner were taken overnight by
+the coordinator of the 3.2.0.0 work on 2026-10-23, as recommended, and
+stand until the owner reviews them:
+
+1. While no usb-wdm-free release qualifies, the cut makes downloads 1
+   and 3 only (section 6.7.1); download 2 is made once the pin names a
+   release.
+2. The zips are `xhci98-<version>.zip`, `-free.zip` and `-nonfree.zip`,
+   and the folders `WDMFREE\` and `NONFREE\` (sections 6.7.1 and 6.7.2).
+3. The rows are on a page of their own after Components, "Other USB
+   drivers", with the addresses beside them there and on the Finish page
+   (section 6.7.4); when section 5.0's simplified Components page is
+   built, they move into its row table.
+4. The page's, the lines' and the warnings' words are as section 6.7.4
+   has them.
+5. On 98 SE and ME a staged folder's `COPY` INFs (FTDI's `FTSERMOU.INF`
+   and `FTCSMOU.INF`) are visible to the wizard with it (section 6.7.6).
+6. The residue of a store name freed and given again to identical INF
+   bytes from another source (section 6.7.6) is accepted.
+
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 
 On 98 SE and ME the engine runs record 23 section 6's route (the copy, the
@@ -3262,6 +3824,7 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 | `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, the package root's starter of the window (draft 15) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt`; the wizard first, the console second |
 | `test\test_inst.c` | the host suite |
+| `scripts\package\wdmfree-pin.txt` | (draft 36) the qualifying usb-wdm-free drivers and each file's SHA-256 (section 6.7.2) |
 | `test\test_wizlay.c` | (draft 21) the layout arithmetic's host suite |
 | `scripts\package\test-package.ps1` | (draft 17) the installer's table of the seven held to `package-common.ps1`'s allowlist |
 | `scripts\package\make-release.ps1`, `test-package.ps1`, `scripts\build-driver.cmd` | staging, the mutation cases, the gates |

@@ -408,6 +408,41 @@ long as that revision is in it.
 A SHA256.TXT-form file standing in for the allowlist of the seven, for
 test-package.ps1's stand-ins. Refused with the repository's own releases\.
 
+.PARAMETER NoNonFree
+Make no download 3. By default (roadmap-usb4 task 43.48; the owner's
+decision of 2026-10-22, design record 26 section 6.7) a cut makes three
+downloads, each holding the one before: xhci98-<version>.zip (the package
+and NUSB33\), xhci98-<version>-free.zip (with WDMFREE\, the qualifying
+usb-wdm-free drivers) and xhci98-<version>-nonfree.zip (with NONFREE\, the
+non-free/ folder of usb-wdm-nonfree at the tag package-common.ps1 pins, read
+from the -DriverPackRoot checkout's git objects and each file held to the
+pack's SHA256.TXT at that commit, whose own hash is pinned). -NoDriverPack
+makes no download 3 either. releases\<version>\downloads.txt records which
+downloads were made and each set's tag, commit and SHA256.TXT hash, from
+which -UploadSetOnly rebuilds them.
+
+.PARAMETER NoWdmFree
+Make no download 2, and no WDMFREE\ in download 3. While
+scripts\package\wdmfree-pin.txt names no usb-wdm-free release (none
+qualifies yet) that is what every cut does.
+
+.PARAMETER WdmFreeRoot
+The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
+(git-ignored: a clone there, or a junction to one). Read only when the pin
+names a release.
+
+.PARAMETER WdmFreePin
+A pin file standing in for scripts\package\wdmfree-pin.txt, for
+test-package.ps1's stand-ins and dry cuts. Refused with the repository's own
+releases\.
+
+.PARAMETER NonFreePinFile
+A file of three lines, "Tag: <tag>", "Commit: <40 hex>" and "PackSums: <64
+hex>", standing in for package-common.ps1's pin of usb-wdm-nonfree, for
+test-package.ps1's stand-ins. Refused with the repository's own releases\.
+With either stand-in the cut does not hold the set's SHA256.TXT to the hash
+the installer carries (a warning says so).
+
 .PARAMETER CheckOnly
 Run the cut's text, readme and staleness checks and nothing else (roadmap-usb4
 task 43.9; owner, 2026-10-20, after the 3.1.0.0 cut stopped twice on text
@@ -485,6 +520,11 @@ param(
     [switch]$NoDriverPack,
     [string]$DriverPackRoot = "",
     [string]$DriverPackAllowlist = "",
+    [switch]$NoNonFree,
+    [switch]$NoWdmFree,
+    [string]$WdmFreeRoot = "",
+    [string]$WdmFreePin = "",
+    [string]$NonFreePinFile = "",
     [switch]$CheckOnly
 )
 
@@ -1565,12 +1605,12 @@ function Get-UploadSetPaths {
     # renames of the swap have succeeded; a rollback removes the staged pair
     # and never touches a pre-existing asset. -UploadSetOnly, which publishes
     # nothing, writes the final names directly.
-    param([string]$UploadDir, [string]$Version, [switch]$Staged)
-    $suffix = if ($Staged) { ".staging" } else { "" }
-    return [pscustomobject]@{
-        Root = Join-Path $UploadDir ("upload-" + $Version + $suffix)
-        Zip  = Join-Path $UploadDir ("xhci98-" + $Version + ".zip" + $suffix)
-    }
+    #
+    # **-Kind names one of the release's three downloads** (task 43.48,
+    # design record 26 section 6.7.1): "base" the names above, "free" and
+    # "nonfree" the same with "-free" or "-nonfree" after the version.
+    param([string]$UploadDir, [string]$Version, [switch]$Staged, [string]$Kind = "base")
+    return (Get-DownloadPaths -UploadDir $UploadDir -Version $Version -Kind $Kind -Staged:$Staged)
 }
 
 # Move a set New-UploadSet built with -Staged onto its final names. Called only
@@ -1657,6 +1697,9 @@ function Get-UploadSetRepairCommand {
     # The pack's checkout, where it was named; drvpack.txt says whether the
     # download needs it, so -NoDriverPack is never carried over.
     if ($bound.ContainsKey("DriverPackRoot")) { $cmd += " -DriverPackRoot " + (& $quote $DriverPackRoot) }
+    # The free set's checkout likewise; downloads.txt says which downloads
+    # need which set.
+    if ($bound.ContainsKey("WdmFreeRoot")) { $cmd += " -WdmFreeRoot " + (& $quote $WdmFreeRoot) }
     return $cmd
 }
 
@@ -1667,6 +1710,13 @@ function Get-UploadSetRepairCommand {
 function Remove-StagedUploadSet {
     param([Parameter(Mandatory = $true)]$Set)
     foreach ($p in @($Set.Root, $Set.Zip)) {
+        # Never anything at or under -ReleasesDir, whatever the set says.
+        $rd = $ReleasesDir.TrimEnd('\')
+        if ($p.TrimEnd('\') -eq $rd -or $p.StartsWith($rd + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $rd.StartsWith($p.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Warn ("'{0}' is at, under or around the releases directory; it is not removed" -f $p)
+            continue
+        }
         if (Test-Path -LiteralPath $p) {
             Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -2179,6 +2229,15 @@ function New-UploadSet {
         # as NUSB33\, the one thing the set holds that the published tree
         # does not.
         $DriverPack = $null,
+        # Which of the release's downloads this is (task 43.48, design record
+        # 26 section 6.7): "base", "free" (adds WDMFREE\) or "nonfree" (adds
+        # NONFREE\, and WDMFREE\ when the release has it), -Kinds all of the
+        # release's, and the two sets, Export-WdmFreeSet's and
+        # Export-NonFreeSet's results or $null.
+        [string]$Kind = "base",
+        [string[]]$Kinds = @("base"),
+        $WdmFreeSet = $null,
+        $NonFreeSet = $null,
         # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
         # caller moves the result onto the final names with Publish-UploadSet
         # once its publish has succeeded, or drops it with
@@ -2197,16 +2256,19 @@ function New-UploadSet {
         throw "no architecture was given for published directory(ies): $($missingArch -join ', ')."
     }
 
-    Write-Step "Upload set"
+    Write-Step ("Upload set: " + (Get-DownloadZipName -Version $Version -Kind $Kind))
+    if ($Kinds -notcontains $Kind) { throw "download '$Kind' is not one of this release's ($($Kinds -join ', '))." }
+    if ($Kind -eq "free" -and $null -eq $WdmFreeSet) { throw "download 2 was asked for without the free set." }
+    if ($Kind -eq "nonfree" -and ($null -eq $NonFreeSet -or $null -eq $DriverPack)) { throw "download 3 was asked for without the non-free set or NUSB33\." }
 
     # Named in Get-UploadSetPaths, beside the early containment check that
     # names the same two.
-    $paths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Staged:$Staged
+    $paths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Staged:$Staged -Kind $Kind
     $uploadRoot = $paths.Root
     $uploadZip = $paths.Zip
     $finalPaths = $null
     if ($Staged) {
-        $finalPaths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version
+        $finalPaths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Kind $Kind
         # The final names are checked too: they are what Publish-UploadSet
         # writes later, from a place that has no PublishedRoot to check against.
         Assert-UploadSetOutsideRelease -UploadRoot $finalPaths.Root -UploadZip $finalPaths.Zip `
@@ -2253,6 +2315,38 @@ function New-UploadSet {
         $packFault = Get-DriverPackFolderFault -Dir $packTarget -Files $DriverPack.Files
         if ($packFault -ne "") { throw "the upload set's driver pack is not the folder that was verified: $packFault." }
         Write-Ok ("{0}\ holds the driver pack's files, usb-wdm-nonfree {1}" -f $script:DriverPackFolder, $DriverPack.Revision)
+    }
+
+    # **The other drivers' sets** (task 43.48): WDMFREE\ in downloads 2 and
+    # 3, NONFREE\ in download 3, each the folder its export verified, and
+    # never in a published tree.
+    $setTargets = @()
+    foreach ($sp in @(@($script:WdmFreeFolder, $WdmFreeSet, @("free", "nonfree")), @($script:NonFreeFolder, $NonFreeSet, @("nonfree")))) {
+        $target = Join-Path $uploadRoot $sp[0]
+        if (Test-Path -LiteralPath $target) {
+            throw "'$PublishedRoot' holds a $($sp[0])\; the downloads' driver sets are never in releases\ (design record 26 section 6.7.2)."
+        }
+        if ($null -ne $sp[1] -and $sp[2] -contains $Kind) {
+            Copy-Item -LiteralPath $sp[1].Dir -Destination $target -Recurse
+            $setFault = Get-DriverPackFolderFault -Dir $target -Files $sp[1].Files
+            if ($setFault -ne "") { throw "the upload set's $($sp[0])\ is not the folder that was verified: $setFault." }
+            $setTargets += [pscustomobject]@{ Dir = $target; Set = $sp[1] }
+            Write-Ok ("{0}\ holds {1} {2}: {3} files" -f $sp[0], $(if ($sp[0] -eq $script:NonFreeFolder) { "usb-wdm-nonfree" } else { "usb-wdm-free" }), $sp[1].Tag, $sp[1].Files.Count)
+        }
+    }
+
+    # **This download's readme** (design record 26 section 6.7.1): the
+    # published one is download 1's, and every other download's is rendered
+    # from it by the same function the cut checked it with.
+    if ($Kind -ne "base") {
+        $rdPath = Join-Path $uploadRoot "readme.txt"
+        $rdText = [System.IO.File]::ReadAllText($rdPath)
+        $rdNew = ConvertTo-DownloadReadme -Text $rdText -Version $Version -Kind $Kind -Kinds $Kinds `
+                     -FreeTag $(if ($null -ne $WdmFreeSet) { $WdmFreeSet.Tag } else { "" }) `
+                     -NonFreeTag $(if ($null -ne $NonFreeSet) { $NonFreeSet.Tag } else { "" }) `
+                     -DriverPackIncluded ($null -ne $DriverPack) -Label "'$rdPath'"
+        [System.IO.File]::WriteAllText($rdPath, $rdNew, (New-Object System.Text.ASCIIEncoding))
+        Write-Ok ("readme.txt is {0}'s" -f (Get-DownloadZipName -Version $Version -Kind $Kind))
     }
 
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
@@ -2650,8 +2744,17 @@ $gateOut
         if ($packFault -ne "") { throw "the upload set's driver pack changed after it was verified: $packFault." }
         $packPrefix = (Get-Item -LiteralPath $packTarget).FullName.TrimEnd('\') + '\'
     }
+    # The sets' INFs carry their makers' dates likewise (task 43.48), and
+    # are held to their verified hashes instead.
+    $setPrefixes = @()
+    foreach ($st in $setTargets) {
+        $setFault = Get-DriverPackFolderFault -Dir $st.Dir -Files $st.Set.Files
+        if ($setFault -ne "") { throw "the upload set's $(Split-Path -Leaf $st.Dir)\ changed after it was verified: $setFault." }
+        $setPrefixes += (Get-Item -LiteralPath $st.Dir).FullName.TrimEnd('\') + '\'
+    }
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   Where-Object { $null -eq $packPrefix -or -not $_.FullName.StartsWith($packPrefix, [System.StringComparison]::OrdinalIgnoreCase) } |
+                  Where-Object { $f = $_.FullName; @($setPrefixes | Where-Object { $f.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0 } |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
         throw "the assembled upload set's INFs declare $($infDates.Count) DriverVer dates ($($infDates -join ', ')), not one: the release has no single date to give its files."
@@ -2732,6 +2835,16 @@ $stor98 = $null
 $driverPack = $null
 $driverPackDir = ""
 $driverPackAllow = $null
+# The downloads' driver sets (task 43.48), their private directories, and
+# the downloads this run makes or rebuilds.
+$wdmFreeSet = $null
+$nonFreeSet = $null
+$wdmFreeDir = ""
+$nonFreeDir = ""
+$downloadKinds = @("base")
+$stagedUploads = @()
+$readmeFreeTag = ""
+$readmeNonFreeTag = ""
 
 try {
     if ($UploadSetOnly -and $SkipUploadSet) {
@@ -2924,6 +3037,87 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
                 $driverPack.Revision, $script:DriverPackFolder)
         }
     }
+    # --- the other USB drivers' sets: downloads 2 and 3 (task 43.48) --------
+    #
+    # Design record 26 section 6.7. Download 1 is the package with NUSB33\
+    # (above); download 3 adds NONFREE\, the non-free/ folder of the pinned
+    # usb-wdm-nonfree tag in the same checkout, only where download 1 has
+    # NUSB33\; download 2 adds WDMFREE\, the drivers wdmfree-pin.txt names,
+    # only while it names a release. Each set's SHA256.TXT, as written here,
+    # must hash to the value the installer carries (xhciinst\inst_core.h),
+    # which is how the installer knows the folder is this release's. A cut
+    # resolves the sets here, before anything is built; -UploadSetOnly takes
+    # them from downloads.txt instead, below.
+    if ($WdmFreePin -ne "" -or $NonFreePinFile -ne "") {
+        $repoReleases = (Join-Path $repo "releases").TrimEnd('\')
+        $rd = $ReleasesDir.TrimEnd('\')
+        if ($rd -eq $repoReleases -or
+            $rd.StartsWith($repoReleases + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "-WdmFreePin and -NonFreePinFile replace the pins of the downloads' driver sets, so they are for stand-ins and dry cuts only, and never with the repository's own releases\ ('$ReleasesDir')."
+        }
+    }
+    if (-not $UploadSetOnly) {
+        $instOtherSums = Get-InstOtherSums -Repo $repo
+        $nfPin = $script:NonFreePin
+        if ($NonFreePinFile -ne "") { $nfPin = Read-NonFreePinFile -Path $NonFreePinFile }
+        if ($NoNonFree) {
+            Write-Warn "-NoNonFree: no download 3, though the installer names one."
+        } elseif (-not $driverPackIncluded) {
+            if (-not $NoDriverPack -and $Arch -notcontains "x86") {
+                Write-Warn "no download 3: it is made only beside a download 1 that carries NUSB33\, which an x64-only cut does not."
+            }
+        } else {
+            $nonFreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-nonfree-" + [System.IO.Path]::GetRandomFileName())
+            try {
+                $nonFreeSet = Export-NonFreeSet -Root $DriverPackRoot -Pin $nfPin -Dest $nonFreeDir
+            } catch {
+                if (-not $CheckOnly) { throw }
+                Stop-CutCheck $_.Exception.Message
+                $nonFreeSet = $null
+            }
+            if ($null -ne $nonFreeSet) {
+                if ($NonFreePinFile -ne "") {
+                    Write-Warn ("-NonFreePinFile: NONFREE\SHA256.TXT ({0}) is not held to the installer's INST_NONFREE_SUMS" -f $nonFreeSet.Sums)
+                } elseif ($nonFreeSet.Sums -ne $instOtherSums.NonFree) {
+                    Stop-CutCheck "NONFREE\SHA256.TXT for usb-wdm-nonfree $($nfPin.Tag) hashes to $($nonFreeSet.Sums), and the installer carries '$($instOtherSums.NonFree)' (INST_NONFREE_SUMS, xhciinst\inst_core.h): change the two together, and rebuild the installer."
+                }
+                Write-Ok ("download 3: usb-wdm-nonfree {0} ({1}), {2} files in NONFREE\" -f $nonFreeSet.Tag, $nonFreeSet.Revision.Substring(0, 12), $nonFreeSet.Files.Count)
+            }
+        }
+        $freePinPath = if ($WdmFreePin -ne "") { $WdmFreePin } else { Get-DefaultWdmFreePinPath }
+        $freePin = Read-WdmFreePin -Path $freePinPath
+        if ($null -eq $freePin) {
+            if ($WdmFreePin -eq "" -and $instOtherSums.Free -ne "") {
+                Stop-CutCheck "wdmfree-pin.txt names no usb-wdm-free release, and the installer carries a hash for one (INST_WDMFREE_SUMS, xhciinst\inst_core.h): change the two together."
+            }
+            Write-Ok "no usb-wdm-free release qualifies (wdmfree-pin.txt): no download 2, and no WDMFREE\ in download 3"
+        } elseif ($NoWdmFree) {
+            Write-Warn "-NoWdmFree: no download 2 and no WDMFREE\, though the pin names usb-wdm-free $($freePin.Tag)."
+        } else {
+            if ($WdmFreeRoot -eq "") { $WdmFreeRoot = Get-DefaultWdmFreeRoot }
+            $wdmFreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-wdmfree-" + [System.IO.Path]::GetRandomFileName())
+            try {
+                $wdmFreeSet = Export-WdmFreeSet -Root $WdmFreeRoot -Pin $freePin -Dest $wdmFreeDir
+            } catch {
+                if (-not $CheckOnly) { throw }
+                Stop-CutCheck $_.Exception.Message
+                $wdmFreeSet = $null
+            }
+            if ($null -ne $wdmFreeSet) {
+                $wdmFreeSet | Add-Member -NotePropertyName PinPath -NotePropertyValue $freePinPath
+                if ($WdmFreePin -ne "") {
+                    Write-Warn ("-WdmFreePin: WDMFREE\SHA256.TXT ({0}) is not held to the installer's INST_WDMFREE_SUMS" -f $wdmFreeSet.Sums)
+                } elseif ($wdmFreeSet.Sums -ne $instOtherSums.Free) {
+                    Stop-CutCheck "WDMFREE\SHA256.TXT for usb-wdm-free $($freePin.Tag) hashes to $($wdmFreeSet.Sums), and the installer carries '$($instOtherSums.Free)' (INST_WDMFREE_SUMS, xhciinst\inst_core.h): change the two together, and rebuild the installer."
+                }
+                Write-Ok ("download 2: usb-wdm-free {0} ({1}), {2} files in WDMFREE\" -f $wdmFreeSet.Tag, $wdmFreeSet.Revision.Substring(0, 12), $wdmFreeSet.Files.Count)
+            }
+        }
+        $downloadKinds = @("base")
+        if ($null -ne $wdmFreeSet) { $downloadKinds += "free"; $readmeFreeTag = $wdmFreeSet.Tag }
+        if ($null -ne $nonFreeSet) { $downloadKinds += "nonfree"; $readmeNonFreeTag = $nonFreeSet.Tag }
+    }
+
     # **None of the seven is ever tracked.** A cut refuses while any of their
     # names is under releases\ or among this repository's tracked files,
     # whether or not it includes the pack, since a copy committed by hand is
@@ -3143,13 +3337,70 @@ Name a checkout holding that revision with -DriverPackRoot.
                 Write-Ok ("driver pack: usb-wdm-nonfree {0}, every file the bytes {1} records" -f $driverPack.Revision, $script:DriverPackRecordName)
             }
         }
-        $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
-                             -LegArches $legArches `
-                             -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Stor98 $stor98 -DriverPack $driverPack
+        # The downloads (task 43.48), from the record the cut wrote: each set
+        # exported at its recorded tag and commit (the non-free one held to
+        # its recorded pack hash, the free one to the pin copied beside the
+        # record) and its SHA256.TXT held to the recorded hash, never to the
+        # current pins.
+        $dlRecordPath = Join-Path $finalRoot $script:DownloadsRecordName
+        $dlKinds = @("base")
+        if (-not (Test-Path -LiteralPath $dlRecordPath)) {
+            if (Test-DownloadsRecordRequired -Version $Version) {
+                throw "'$finalRoot' has no $($script:DownloadsRecordName), which every release from 3.2.0.0 is cut with: without it this run cannot tell which downloads the release has. Restore it from git (git checkout -- releases)."
+            }
+        } else {
+            if ($NoNonFree -or $NoWdmFree -or $WdmFreePin -ne "" -or $NonFreePinFile -ne "") {
+                throw "-UploadSetOnly rebuilds the downloads '$dlRecordPath' records, with their recorded sets: -NoNonFree, -NoWdmFree, -WdmFreePin and -NonFreePinFile do not apply."
+            }
+            $dlRecord = ConvertFrom-DownloadsRecord -Text ([System.IO.File]::ReadAllText($dlRecordPath)) -Label "'$dlRecordPath'"
+            $dlKinds = $dlRecord.Kinds
+            if ($null -ne $dlRecord.NonFree) {
+                if ($null -eq $driverPack) {
+                    throw "'$dlRecordPath' records a download 3, which carries NUSB33\, and this rebuild has no driver pack: drvpack.txt must record one."
+                }
+                $nonFreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-nonfree-" + [System.IO.Path]::GetRandomFileName())
+                try {
+                    $nonFreeSet = Export-NonFreeSet -Root $DriverPackRoot -Dest $nonFreeDir `
+                                      -Pin ([pscustomobject]@{ Tag = $dlRecord.NonFree.Tag; Commit = $dlRecord.NonFree.Revision; PackSums = $dlRecord.NonFree.PackSums })
+                } catch {
+                    throw "$Version's download 3 carries usb-wdm-nonfree $($dlRecord.NonFree.Tag) ('$dlRecordPath'), and it could not be read: $($_.Exception.Message) Name a checkout holding that tag with -DriverPackRoot."
+                }
+                if ($nonFreeSet.Sums -ne $dlRecord.NonFree.Sums) {
+                    throw "usb-wdm-nonfree $($dlRecord.NonFree.Tag) gives a NONFREE\SHA256.TXT of $($nonFreeSet.Sums), not the $($dlRecord.NonFree.Sums) '$dlRecordPath' records."
+                }
+                Write-Ok ("download 3: usb-wdm-nonfree {0}, the SHA256.TXT {1} records" -f $nonFreeSet.Tag, $script:DownloadsRecordName)
+            }
+            if ($null -ne $dlRecord.Free) {
+                $pubPin = Join-Path $finalRoot "wdmfree-pin.txt"
+                $freePin = Read-WdmFreePin -Path $pubPin
+                if ($null -eq $freePin -or $freePin.Tag -ne $dlRecord.Free.Tag -or $freePin.Commit -ne $dlRecord.Free.Revision) {
+                    throw "'$pubPin' is not the pin of the usb-wdm-free $($dlRecord.Free.Tag) '$dlRecordPath' records."
+                }
+                if ($WdmFreeRoot -eq "") { $WdmFreeRoot = Get-DefaultWdmFreeRoot }
+                $wdmFreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-wdmfree-" + [System.IO.Path]::GetRandomFileName())
+                try {
+                    $wdmFreeSet = Export-WdmFreeSet -Root $WdmFreeRoot -Pin $freePin -Dest $wdmFreeDir
+                } catch {
+                    throw "$Version's download 2 carries usb-wdm-free $($dlRecord.Free.Tag) ('$dlRecordPath'), and it could not be read: $($_.Exception.Message) Name a checkout holding that tag with -WdmFreeRoot."
+                }
+                if ($wdmFreeSet.Sums -ne $dlRecord.Free.Sums) {
+                    throw "usb-wdm-free $($dlRecord.Free.Tag) gives a WDMFREE\SHA256.TXT of $($wdmFreeSet.Sums), not the $($dlRecord.Free.Sums) '$dlRecordPath' records."
+                }
+                Write-Ok ("download 2: usb-wdm-free {0}, the SHA256.TXT {1} records" -f $wdmFreeSet.Tag, $script:DownloadsRecordName)
+            }
+        }
+        $builtZips = @()
+        foreach ($dk in $dlKinds) {
+            $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
+                                 -LegArches $legArches `
+                                 -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
+                                 -Publishable $publishable -Stor98 $stor98 -DriverPack $driverPack `
+                                 -Kind $dk -Kinds $dlKinds -WdmFreeSet $wdmFreeSet -NonFreeSet $nonFreeSet
+            $builtZips += $set.Zip
+        }
 
         Write-Step "Done"
-        Write-Host "Upload:     $($set.Zip)"
+        Write-Host "Upload:     $($builtZips -join "`n            ")"
         Write-Host "            Assembled from the published $finalRoot; nothing under"
         Write-Host "            releases\ was read for anything but copying, and nothing was"
         Write-Host "            written there. This is the GitHub release asset; it is"
@@ -3428,9 +3679,11 @@ the result in place of the marker, then cut again. The first:
     # with an -UploadDir pointing into releases\ ran both non-reproducible
     # builds and published the version directory before saying no.
     if (-not $SkipUploadSet) {
-        $early = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version
-        Assert-UploadSetOutsideRelease -UploadRoot $early.Root -UploadZip $early.Zip `
-                                       -PublishedRoot $finalRoot -ReleasesRoot $ReleasesDir
+        foreach ($dk in $downloadKinds) {
+            $early = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Kind $dk
+            Assert-UploadSetOutsideRelease -UploadRoot $early.Root -UploadZip $early.Zip `
+                                           -PublishedRoot $finalRoot -ReleasesRoot $ReleasesDir
+        }
     }
 
     # --- build and gate each flavour, then take only what may be tracked -----
@@ -4520,6 +4773,10 @@ helper (xhciinst\di\build.cmd).
         $contents += "      W98SE\       the seven files, unmodified"
         $contents += ""
     }
+    # The other USB drivers (task 43.48): download 1's lines here; each other
+    # download's readme puts its own in their place (ConvertTo-DownloadReadme).
+    $contents += @((Get-ReadmeOtherContentsText -Kind "base" -FreeTag $readmeFreeTag -NonFreeTag $readmeNonFreeTag) -split "`r`n")
+    $contents += ""
     if ($null -ne $qualtoolStaged) {
         $qexe = Get-Item -LiteralPath (Join-Path $qualtoolStaged "XHCIQUAL.EXE")
         $contents += "  TOOLS\XHCIQUAL\  - the DOS machine checker from step 1"
@@ -4866,6 +5123,12 @@ network adapters sit on top of it unchanged. It drives SuperSpeed (USB 3.x)
 devices and hubs as well as High, Full and Low Speed ones. The second driver
 beside it, xhciuas.sys, runs UAS (USB Attached SCSI) storage, which none of
 these systems has a driver of its own for.
+
+
+THIS DOWNLOAD
+------------------------------------------------------------------------------
+
+{DOWNLOAD}
 
 
 ISSUE REPORTING
@@ -6678,8 +6941,15 @@ file is named, never shipped.
 '@
     }
 
+    # The same words, from the function each download's readme is rendered
+    # with (task 43.48): download 1's here, the published text.
+    $readmeMsFiles = Get-ReadmeMsFilesText -DriverPackIncluded $driverPackIncluded -Kind "base"
+    $readmeDownload = Get-ReadmeDownloadText -Version $Version -Kind "base" -Kinds $downloadKinds `
+                          -FreeTag $readmeFreeTag -NonFreeTag $readmeNonFreeTag -DriverPackIncluded $driverPackIncluded
+
     $readme = $template.
         Replace("{TESTBANNER}", $testBanner).
+        Replace("{DOWNLOAD}", $readmeDownload).
         Replace("{MSSTORAGE}", $readmeMsStorage.TrimEnd()).
         Replace("{MSFILES}", $readmeMsFiles.TrimEnd()).
         Replace("{VERSION}", $Version).
@@ -6726,6 +6996,22 @@ is replaced by its reading. The first:
     # was written, in a file nobody re-reads after generating it.
     Write-GeneratedText -Path (Join-Path $destRoot "readme.txt") `
                         -Lines ($readme -split "`r?`n")
+    # And each other download's (task 43.48), which the upload set renders
+    # from this one: the same 78 columns of printable ASCII, checked here,
+    # into a private file, so the cut and -CheckOnly refuse it before
+    # anything is built on it.
+    foreach ($dk in @($downloadKinds | Where-Object { $_ -ne "base" })) {
+        $variant = ConvertTo-DownloadReadme -Text $readme -Version $Version -Kind $dk -Kinds $downloadKinds `
+                       -FreeTag $readmeFreeTag -NonFreeTag $readmeNonFreeTag -DriverPackIncluded $driverPackIncluded `
+                       -Label "the rendered readme.txt"
+        $variantPath = Join-Path ([System.IO.Path]::GetTempPath()) ("readme-" + $dk + "-" + [System.IO.Path]::GetRandomFileName() + ".txt")
+        try {
+            Write-GeneratedText -Path $variantPath -Lines ($variant -split "`r?`n")
+        } finally {
+            Remove-Item -LiteralPath $variantPath -Force -ErrorAction SilentlyContinue
+        }
+        Write-Ok ("the readme of {0} rendered and checked" -f (Get-DownloadZipName -Version $Version -Kind $dk))
+    }
 
     # --- the qualifier's own readme -----------------------------------------
     if ($null -ne $qualtoolStaged) {
@@ -7236,8 +7522,15 @@ is statically linked into each, which NOTICE.TXT beside this file records.
         Write-Ok "readme.txt written beside the installer's executables"
 
         if ($driverPackIncluded) {
-            $instMsFiles = "The download's only Microsoft files are NUSB 3.3's Windows 98 SE storage`r`n" +
-                           "files, in a folder of their own with their own NOTICE.md."
+            $instMsFiles = $(if ($null -ne $nonFreeSet) {
+                               "The base download's only Microsoft files are NUSB 3.3's Windows 98 SE`r`n" +
+                               "storage files, in a folder of their own with their own NOTICE.md; the`r`n" +
+                               "non-free download also carries other makers' drivers in NONFREE\, two`r`n" +
+                               "KMDF co-installers of Microsoft's among them, with their NOTICE.md."
+                           } else {
+                               "The download's only Microsoft files are NUSB 3.3's Windows 98 SE storage`r`n" +
+                               "files, in a folder of their own with their own NOTICE.md."
+                           })
         } else {
             $instMsFiles = "This package carries no Microsoft file."
         }
@@ -7484,6 +7777,16 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Ok ("{0} records that this download carries no driver pack" -f $script:DriverPackRecordName)
     }
 
+    # The downloads' record (task 43.48): tracked, plain text, and what
+    # -UploadSetOnly rebuilds downloads 2 and 3 from; with the free set, the
+    # pin it was cut with beside it.
+    Write-AsciiFile -Path (Join-Path $destRoot $script:DownloadsRecordName) `
+                    -Lines (ConvertTo-DownloadsRecord -Version $Version -Kinds $downloadKinds -Free $wdmFreeSet -NonFree $nonFreeSet)
+    if ($null -ne $wdmFreeSet) {
+        Copy-Item -LiteralPath $wdmFreeSet.PinPath -Destination (Join-Path $destRoot "wdmfree-pin.txt")
+    }
+    Write-Ok ("{0} records the downloads {1}" -f $script:DownloadsRecordName, (@($downloadKinds | ForEach-Object { Get-DownloadZipName -Version $Version -Kind $_ }) -join ", "))
+
     # --- the upload set: what actually goes to the GitHub release ------------
     #
     # `releases\<version>\` is the tracked half. The download a user gets is
@@ -7526,11 +7829,26 @@ after checkout. Restore it with:  git checkout -- LICENSE
             $legDirs += $leg.Dir
             $legArches[$leg.Dir] = $leg.PkgArch
         }
-        $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
-                             -LegArches $legArches `
-                             -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Staged -Stor98 $stor98 -DriverPack $driverPack
-        $stagedUpload = $set
+        # One set per download (task 43.48), each staged; all of them are
+        # published after the swap, or all removed when the cut fails.
+        foreach ($dk in $downloadKinds) {
+            # Registered for the failure path before it is built, so a set
+            # whose assembly throws half-way is removed with the others.
+            $pendingPaths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Staged -Kind $dk
+            # Held to the containment rule before the failure path is told
+            # it may delete them.
+            Assert-UploadSetOutsideRelease -UploadRoot $pendingPaths.Root -UploadZip $pendingPaths.Zip `
+                                           -PublishedRoot $destRoot -ReleasesRoot $ReleasesDir
+            $stagedUploads += [pscustomobject]@{ Root = $pendingPaths.Root; Zip = $pendingPaths.Zip;
+                                                 Final = (Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Kind $dk) }
+            $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
+                                 -LegArches $legArches `
+                                 -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
+                                 -Publishable $publishable -Staged -Stor98 $stor98 -DriverPack $driverPack `
+                                 -Kind $dk -Kinds $downloadKinds -WdmFreeSet $wdmFreeSet -NonFreeSet $nonFreeSet
+            $stagedUploads[$stagedUploads.Count - 1] = $set
+            if ($dk -eq "base") { $stagedUpload = $set }
+        }
     }
 
     # --- publish: replace the destination only now ---------------------------
@@ -7634,17 +7952,20 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # anyway. The staged pair is left where it is so
     # nothing is lost, the state of out\ is said, and -UploadSetOnly - which
     # rebuilds the asset from the published tree - is the way back.
-    if ($null -ne $stagedUpload) {
+    $publishedZips = @()
+    foreach ($one in @($stagedUploads)) {
         try {
-            $final = Publish-UploadSet -Set $stagedUpload
-            $stagedUpload = $null
-            $uploadRoot = $final.Root
-            $uploadZip = $final.Zip
-            Write-Ok ("upload set published as {0}" -f $uploadZip)
+            $final = Publish-UploadSet -Set $one
+            $publishedZips += $final.Zip
+            if ($one -eq $stagedUpload) {
+                $uploadRoot = $final.Root
+                $uploadZip = $final.Zip
+            }
+            Write-Ok ("upload set published as {0}" -f $final.Zip)
         } catch {
             $uploadPublishError = $_.Exception.Message
             $stateLines = @()
-            foreach ($p in @($stagedUpload.Final.Root, $stagedUpload.Final.Zip, $stagedUpload.Root, $stagedUpload.Zip, ($stagedUpload.Final.Zip + ".previous"))) {
+            foreach ($p in @($one.Final.Root, $one.Final.Zip, $one.Root, $one.Zip, ($one.Final.Zip + ".previous"))) {
                 $stateLines += ("              {0}  {1}" -f $(if (Test-Path -LiteralPath $p) { "present" } else { "absent " }), $p)
             }
             Write-Warn ("the release IS published at {0}, but its upload set could not be moved onto its final names: {1}" -f $finalRoot, $uploadPublishError)
@@ -7652,9 +7973,10 @@ after checkout. Restore it with:  git checkout -- LICENSE
             foreach ($l in $stateLines) { Write-Host $l }
             Write-Host   "            Rebuild the asset from the published tree with:"
             Write-Host  ("              {0}" -f (Get-UploadSetRepairCommand))
-            $stagedUpload = $null
         }
     }
+    $stagedUpload = $null
+    $stagedUploads = @()
 
     # --- summary -------------------------------------------------------------
     Write-Host ""
@@ -7696,6 +8018,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
+        foreach ($z in @($publishedZips | Where-Object { $_ -ne $uploadZip })) {
+            Write-Host "            $z"
+        }
+        if ($publishedZips.Count -gt 1) {
+            Write-Host "            One zip per download (design record 26 section 6.7.1); each holds"
+            Write-Host "            the one before it and its own readme. Upload them all."
+        }
         if ($driverPackIncluded) {
             Write-Host "            The same tree, zipped, with NUSB 3.3's storage files added in a"
             Write-Host "            folder of their own: this download's only Microsoft files. This"
@@ -7718,13 +8047,16 @@ after checkout. Restore it with:  git checkout -- LICENSE
     if ($CheckOnly) {
         Write-Err ("-CheckOnly stopped at that, which it cannot go on past; it had noted {0} other refusal(s) before it, above." -f $script:cutCheckFaults.Count)
     }
-    if ($null -ne $stagedUpload -and -not $swapDone) {
-        # The cut did not publish, so the set built for it goes, and the
-        # asset that was there before the run stays what it was. Only before
-        # the swap: after it the cut is published, the staged set is handled
-        # (and kept) by the local catch above, and this wording would be false.
-        Remove-StagedUploadSet -Set $stagedUpload
-        Write-Warn ("the staged upload set was removed; the previous {0}, if any, is untouched" -f $stagedUpload.Final.Zip)
+    if (@($stagedUploads).Count -gt 0 -and -not $swapDone) {
+        # The cut did not publish, so the sets built for it go, and the
+        # assets that were there before the run stay what they were. Only
+        # before the swap: after it the cut is published, the staged sets
+        # are handled (and kept) by the local catch above, and this wording
+        # would be false.
+        foreach ($one in @($stagedUploads)) {
+            Remove-StagedUploadSet -Set $one
+            Write-Warn ("the staged upload set was removed; the previous {0}, if any, is untouched" -f $one.Final.Zip)
+        }
     } elseif ($swapDone) {
         Write-Warn ("the release IS published at {0}; what failed came after the publish swap. If the upload set is missing or stale, rebuild it with: {1}" -f $finalRoot, (Get-UploadSetRepairCommand))
     }
@@ -7735,6 +8067,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($driverPackDir -ne "" -and (Test-Path -LiteralPath $driverPackDir)) {
         Remove-Item -LiteralPath $driverPackDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($d in @($wdmFreeDir, $nonFreeDir)) {
+        if ($d -ne "" -and (Test-Path -LiteralPath $d)) {
+            Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

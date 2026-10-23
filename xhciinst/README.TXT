@@ -165,6 +165,27 @@ put in the INF folder, the copies Windows made of their INFs for it and
 the devices installed from them (a stick first plugged in after the
 install included), never while NUSB is installed.
 
+Other USB drivers (the page after Components). A release has up to
+three downloads: xhci98-<version>.zip, -free.zip, which adds the free
+USB class drivers of usb-wdm-free in a WDMFREE folder (beta: report a
+problem with one of them at https://github.com/yeokm1/usb-wdm-free/issues,
+not to xHCI98), and -nonfree.zip, which adds the non-free driver pack of
+usb-wdm-nonfree in a NONFREE folder: other makers' drivers, not this
+project's and not tested by it. The page shows a row for each set this
+download carries and, for each it does not, which download and which
+address have it (https://github.com/yeokm1/usb-wdm-free and
+https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers
+are). Every row is unticked unless you tick it. Ticked, the set is
+copied to WDMFREE or NONFREE in the tools folder and nothing is
+installed; the box under it, also unticked, lets Windows use the copied
+drivers when a device is plugged in (on 98 SE and ME by adding each
+driver's folder to DevicePath, on 2000 and later by staging its INF in
+the driver store), only for the INFs the set's STAGE.TXT names for this
+Windows. The Finish page lists the folders to point the hardware wizard
+at. The uninstall removes the copies, the DevicePath entries and the
+staged INFs it made; a driver a device installed from them stays
+installed, and so does a folder whose INF a device still uses.
+
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
 /thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and
@@ -172,8 +193,8 @@ Switches the window takes: /uninstall (the uninstall, below), /to path
 unticked; /s98vsd needs Stor98 in the run), /faster and /nofaster
 (the USB Tree's "can run faster" notice on or off for this computer),
 /notray,
-/nouas, /storage, /nostorage, /cmonly and /usb (the components,
-preselected),
+/nouas, /storage, /nostorage, /cmonly, /usb, /free, /freestage,
+/nonfree and /nonfreestage (the components, preselected),
 /set Name=Value
 (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
@@ -223,6 +244,14 @@ The console tool
                                 warning; /nostorage leaves them out on any
                                 system; without either the console asks
                                 on 98 SE, and /yes takes the row's default
+  INSTALL /console /free        copies the free USB class drivers this
+                                download carries without asking;
+                                /freestage also lets Windows use them at
+                                a device's first plug; /nonfree and
+                                /nonfreestage do the same for the
+                                non-free driver pack; without them the
+                                console asks, Enter for N, and /yes
+                                takes N
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that

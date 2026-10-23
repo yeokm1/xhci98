@@ -2323,3 +2323,649 @@ function ConvertFrom-MarkdownBlocks {
     $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
     return $out
 }
+
+# --- the other USB drivers: usb-wdm-free and usb-wdm-nonfree (task 43.48) --
+#
+# Three release downloads, each a superset of the one before (the owner's
+# decision of 2026-10-22; design record 26 section 6.7): download 1 the
+# package with NUSB33\ (above), download 2 that with WDMFREE\ (the
+# qualifying drivers of a tagged usb-wdm-free release, each file held to a
+# SHA-256 of wdmfree-pin.txt beside this file), download 3 that with
+# NONFREE\ (the non-free/ folder of a tagged usb-wdm-nonfree release, each
+# file held to the pack's SHA256.TXT at the pinned commit, whose own hash
+# is pinned here). Neither folder is ever in releases\ or in a package of
+# make-package.ps1's. Each folder's SHA256.TXT is written here, one line
+# "<sha256, lower case>  <path>" per other file of the folder, '/'
+# separated, in ordinal order of the path, CRLF; the installer carries the
+# hash of that file for this release's pins (INST_NONFREE_SUMS and
+# INST_WDMFREE_SUMS, xhciinst\inst_core.h), which the cut holds equal to
+# what it writes.
+$script:NonFreeFolder = "NONFREE"
+$script:NonFreePrefix = "non-free"
+$script:NonFreeExtras = @("NOTICE.md", "README.md", "STAGE.TXT")
+$script:NonFreePin = [pscustomobject]@{
+    Tag        = "v1.0.0"
+    Commit     = "128106f786d462024eda08d117154b21cb01b57b"
+    # The SHA-256 of the pack's own SHA256.TXT blob at that commit.
+    PackSums   = "D48C086301074793D6F0ED26798425EBD70345C977F11FADE9C47531956D070E"
+}
+$script:WdmFreeFolder = "WDMFREE"
+$script:WdmFreePrefix = "free"
+$script:WdmFreeExtras = @("LICENSE", "NOTICE.md", "STAGE.TXT")
+$script:OtherSums = "SHA256.TXT"
+$script:DownloadsRecordName = "downloads.txt"
+# The systems STAGE.TXT and READ.TXT name (usb-wdm-nonfree 128106f's
+# header, with 8 and 8.1, and 10, added here).
+$script:StageSystems = @("W98SE", "WME", "W2K", "WXP", "WXP64", "WVISTA", "WVISTA64",
+                         "W7", "W7X64", "W8", "W8X64", "W10", "W10X64")
+# The three downloads, by kind: the zip's and the workspace's suffix, and
+# the folders each adds to the one before.
+$script:DownloadKindTable = [ordered]@{
+    "base"    = [pscustomobject]@{ Number = 1; Suffix = "";         Adds = "" }
+    "free"    = [pscustomobject]@{ Number = 2; Suffix = "-free";    Adds = "WDMFREE" }
+    "nonfree" = [pscustomobject]@{ Number = 3; Suffix = "-nonfree"; Adds = "NONFREE" }
+}
+
+function Get-DefaultWdmFreeRoot {
+    # A checkout of usb-wdm-free (or a junction to one) in the git-ignored
+    # scripts\local\.
+    return (Join-Path (Get-DefaultLocalScriptDir) "usb-wdm-free")
+}
+
+function Get-DefaultWdmFreePinPath {
+    return (Join-Path $PSScriptRoot "wdmfree-pin.txt")
+}
+
+function Test-OtherSetRelPath {
+    # A path under a set's folder the installer will accept
+    # (inst_other_rel_ok): '/' separated, relative, no empty, "." or ".."
+    # part, printable ASCII with no character Windows refuses in a name and
+    # no ';' (DevicePath's separator), at most 140 characters (design record
+    # 26 section 6.7.2).
+    param([string]$Rel)
+    if ($Rel -eq "" -or $Rel.Length -gt 140) { return $false }
+    if ($Rel -notmatch '^[\x20-\x7E]+$') { return $false }
+    if ($Rel -match '[\\:*?"<>|;]') { return $false }
+    foreach ($part in ($Rel -split '/')) {
+        if ($part -eq "" -or $part -eq "." -or $part -eq ".." -or $part.EndsWith(" ") -or $part.EndsWith(".") -or $part.StartsWith(" ")) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-OtherSetBlob {
+    # One blob of the checkout at -Root, at -Rev, into -OutFile (a new file),
+    # and its SHA-256.
+    param([string]$Root, [string]$Rev, [string]$Path, [string]$OutFile)
+    $parent = Split-Path -Parent $OutFile
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    Invoke-DriverPackGit -Root $Root -Arguments @("cat-file", "blob", "${Rev}:$Path") -OutFile $OutFile | Out-Null
+    return (Get-FileSha256 -Path $OutFile)
+}
+
+function Get-OtherSetTree {
+    # The files under -Prefix/ at -Rev: an ordered map of path to "mode type".
+    param([string]$Root, [string]$Rev, [string]$Prefix)
+    $tree = Invoke-DriverPackGit -Root $Root -Arguments @("ls-tree", "-r", $Rev, "$Prefix/")
+    $map = [ordered]@{}
+    foreach ($line in @($tree -split "`n" | Where-Object { $_.Trim() -ne "" })) {
+        $m = [regex]::Match($line.TrimEnd("`r"), '^(\d{6}) (\w+) [0-9a-f]{40}\t(.+)$')
+        if (-not $m.Success) { throw "git ls-tree printed a line this script cannot read: '$line'." }
+        $map[$m.Groups[3].Value] = ($m.Groups[1].Value + " " + $m.Groups[2].Value)
+    }
+    return $map
+}
+
+function Resolve-OtherSetTag {
+    # The commit -Tag names in the checkout at -Root, held to -Commit.
+    param([string]$Root, [string]$Tag, [string]$Commit, [string]$What)
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        throw "no $What checkout at '$Root'."
+    }
+    $rev = ""
+    try {
+        $rev = (Invoke-DriverPackGit -Root $Root -Arguments @("rev-parse", "--verify", "--quiet", "refs/tags/$Tag^{commit}")).Trim()
+    } catch {
+        $rev = ""
+    }
+    if ($rev -notmatch '^[0-9a-f]{40}$') {
+        throw "the $What checkout at '$Root' has no tag $Tag."
+    }
+    if ($rev -ne $Commit) {
+        throw "the $What checkout's tag $Tag is commit $rev, not the pinned ${Commit}: the tag was moved, or this is another repository."
+    }
+    return $rev
+}
+
+function Read-StageText {
+    # STAGE.TXT (usb-wdm-nonfree 128106f's format): its data lines as
+    # objects (Action, Systems, Inf, Note, Line), every other line a comment
+    # or blank. A malformed line is refused.
+    param([string]$Text, [string]$Label)
+    $out = @()
+    foreach ($line in ($Text -split "`r?`n")) {
+        $t = $line.Trim()
+        if ($t -eq "" -or $t.StartsWith("#")) { continue }
+        $f = @($line -split '\|')
+        if ($f.Count -ne 4) { throw "$Label has a line that is not 'ACTION | SYSTEMS | INF | NOTE': '$line'." }
+        $action = $f[0].Trim()
+        if ($action -cne "STAGE" -and $action -cne "COPY") { throw "$Label has a line whose action is not STAGE or COPY: '$line'." }
+        $systems = @($f[1].Trim() -split '\s+' | Where-Object { $_ -ne "" })
+        if ($systems.Count -eq 0) { throw "$Label has a line naming no system: '$line'." }
+        foreach ($s in $systems) {
+            if ($script:StageSystems -cnotcontains $s) { throw "$Label names a system it cannot read, '$s': '$line'." }
+        }
+        $inf = $f[2].Trim()
+        if ($inf -eq "") { throw "$Label has a line naming no INF: '$line'." }
+        $out += [pscustomobject]@{ Action = $action; Systems = $systems; Inf = $inf; Note = $f[3].Trim(); Line = $line }
+    }
+    return $out
+}
+
+function Assert-StageCovers {
+    # Every INF of -Infs (paths from the release's top) on exactly one line
+    # of -Lines, and every line's INF among them.
+    param($Lines, [string[]]$Infs, [string]$Label)
+    $seen = @{}
+    foreach ($l in $Lines) {
+        if ($Infs -cnotcontains $l.Inf) { throw "$Label names $($l.Inf), which is not an INF of the set." }
+        $k = $l.Inf.ToLowerInvariant()
+        if ($seen.ContainsKey($k)) { throw "$Label names $($l.Inf) on two lines." }
+        $seen[$k] = $true
+    }
+    $missing = @($Infs | Where-Object { -not $seen.ContainsKey($_.ToLowerInvariant()) })
+    if ($missing.Count -gt 0) { throw "$Label puts no line on $(@($missing | Select-Object -First 5) -join ', ')." }
+}
+
+function Write-OtherSetSums {
+    # The folder's SHA256.TXT from -Files (path under the folder with '\'
+    # to hash); returns its own hash.
+    param([string]$Dir, $Files)
+    $keys = [string[]]@($Files.Keys | ForEach-Object { $_.Replace('\', '/') })
+    [Array]::Sort($keys, [System.StringComparer]::Ordinal)
+    $lines = @($keys | ForEach-Object { "{0}  {1}" -f $Files[$_.Replace('/', '\')].ToLowerInvariant(), $_ })
+    $path = Join-Path $Dir $script:OtherSums
+    [System.IO.File]::WriteAllText($path, (($lines -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
+    return (Get-FileSha256 -Path $path)
+}
+
+function Export-NonFreeSet {
+    # Writes the download's NONFREE\ into -Dest (a new directory): the
+    # pack's non-free/ at the pinned tag's commit, its NOTICE.md, README.md
+    # and STAGE.TXT, and the folder's SHA256.TXT. The tag must be the pinned
+    # commit, the pack's SHA256.TXT there the pinned bytes, and non-free/
+    # exactly the files it lists under non-free/, each a plain file with
+    # its listed bytes and a path the installer accepts; STAGE.TXT must
+    # read and put every INF of non-free/ on exactly one line.
+    param([string]$Root, $Pin = $null, [string]$Dest)
+    if ($null -eq $Pin) { $Pin = $script:NonFreePin }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "no checkout at '$Root' for the download's driver set: clone it there, make a junction there to a clone, or name one." }
+    $Root = (Resolve-Path -LiteralPath $Root -ErrorAction Stop).ProviderPath.TrimEnd('\')
+    $rev = Resolve-OtherSetTag -Root $Root -Tag $Pin.Tag -Commit $Pin.Commit -What "usb-wdm-nonfree"
+    if (Test-Path -LiteralPath $Dest) { throw "'$Dest' already exists; the non-free set is exported into a new directory." }
+    New-Item -ItemType Directory -Path $Dest | Out-Null
+    $scratch = Join-Path $Dest ".pack-sums"
+    $sumsHash = Get-OtherSetBlob -Root $Root -Rev $rev -Path "SHA256.TXT" -OutFile $scratch
+    $sumsText = [System.IO.File]::ReadAllText($scratch)
+    Remove-Item -LiteralPath $scratch -Force
+    if ($sumsHash -ne $Pin.PackSums.ToUpperInvariant()) {
+        throw "usb-wdm-nonfree $($Pin.Tag)'s SHA256.TXT is $sumsHash, not the pinned $($Pin.PackSums)."
+    }
+    $sums = Read-DriverPackHashList -Text $sumsText -Label "usb-wdm-nonfree $($Pin.Tag)'s SHA256.TXT"
+    $pre = $script:NonFreePrefix + "/"
+    $want = [ordered]@{}
+    foreach ($p in $sums.Keys) { if ($p.StartsWith($pre, [System.StringComparison]::Ordinal)) { $want[$p] = $sums[$p] } }
+    $tree = Get-OtherSetTree -Root $Root -Rev $rev -Prefix $script:NonFreePrefix
+    $extra = @($tree.Keys | Where-Object { -not $want.Contains($_) })
+    $missing = @($want.Keys | Where-Object { -not $tree.Contains($_) })
+    if ($extra.Count -gt 0 -or $missing.Count -gt 0) {
+        throw "usb-wdm-nonfree $($Pin.Tag)'s non-free/ is not the files its SHA256.TXT lists. Not listed: $(if ($extra.Count) { @($extra | Select-Object -First 5) -join ', ' } else { '(none)' }); missing: $(if ($missing.Count) { @($missing | Select-Object -First 5) -join ', ' } else { '(none)' })."
+    }
+    $files = [ordered]@{}
+    $infs = @()
+    foreach ($p in $want.Keys) {
+        if ($tree[$p] -ne "100644 blob") { throw "usb-wdm-nonfree $($Pin.Tag)'s $p is not a plain file ($($tree[$p]))." }
+        $rel = $p.Substring($pre.Length)
+        if (-not (Test-OtherSetRelPath -Rel $rel)) { throw "usb-wdm-nonfree $($Pin.Tag)'s $p has a path the installer does not accept." }
+        $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $p -OutFile (Join-Path $Dest $rel.Replace('/', '\'))
+        if ($h -ne $want[$p]) { throw "usb-wdm-nonfree $($Pin.Tag)'s $p does not hash as its SHA256.TXT lists it ($h)." }
+        $files[$rel.Replace('/', '\')] = $h
+        if ($p.EndsWith(".inf", [System.StringComparison]::OrdinalIgnoreCase)) { $infs += $p }
+    }
+    foreach ($x in $script:NonFreeExtras) {
+        if ($files.Contains($x)) { throw "usb-wdm-nonfree $($Pin.Tag)'s non-free/ holds a $x, which would clash with the pack's own." }
+        $files[$x] = Get-OtherSetBlob -Root $Root -Rev $rev -Path $x -OutFile (Join-Path $Dest $x)
+    }
+    $stage = Read-StageText -Text ([System.IO.File]::ReadAllText((Join-Path $Dest "STAGE.TXT"))) -Label "usb-wdm-nonfree $($Pin.Tag)'s STAGE.TXT"
+    Assert-StageCovers -Lines $stage -Infs $infs -Label "usb-wdm-nonfree $($Pin.Tag)'s STAGE.TXT"
+    $own = Write-OtherSetSums -Dir $Dest -Files $files
+    $files[$script:OtherSums] = $own
+    return [pscustomobject]@{ Kind = "nonfree"; Folder = $script:NonFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev;
+                              PackSums = $Pin.PackSums.ToUpperInvariant(); Dir = $Dest; Sums = $own; Files = $files }
+}
+
+function Read-NonFreePinFile {
+    # A stand-in for $script:NonFreePin (-NonFreePinFile): "Tag: <tag>",
+    # "Commit: <40 hex>" and "PackSums: <64 hex>".
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "no non-free pin at '$Path'." }
+    $v = @{}
+    foreach ($line in ([System.IO.File]::ReadAllText($Path) -split "`r?`n")) {
+        if ($line.Trim() -eq "") { continue }
+        if ($line -match '^(Tag): (\S+)$' -or $line -match '^(Commit): ([0-9a-f]{40})$' -or $line -match '^(PackSums): ([0-9A-Fa-f]{64})$') {
+            $v[$Matches[1]] = $Matches[2]
+        } else {
+            throw "'$Path' has a line it cannot read: '$line'."
+        }
+    }
+    foreach ($k in @("Tag", "Commit", "PackSums")) { if (-not $v.ContainsKey($k)) { throw "'$Path' names no $k." } }
+    return [pscustomobject]@{ Tag = $v["Tag"]; Commit = $v["Commit"]; PackSums = $v["PackSums"].ToUpperInvariant() }
+}
+
+function Read-WdmFreePin {
+    # wdmfree-pin.txt: $null while it names no release (no "Tag:" line);
+    # otherwise its tag, commit, packages (class/package to systems) and
+    # files (path from the release's top to hash). Read strictly.
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "no usb-wdm-free pin at '$Path'." }
+    $tag = ""; $commit = ""
+    $packages = [ordered]@{}
+    $files = [ordered]@{}
+    foreach ($line in ([System.IO.File]::ReadAllText($Path) -split "`r?`n")) {
+        $t = $line.Trim()
+        if ($t -eq "" -or $t.StartsWith("#")) { continue }
+        if ($t -match '^Tag: (\S+)$') {
+            if ($tag -ne "") { throw "'$Path' names two tags." }
+            $tag = $Matches[1]
+        } elseif ($t -match '^Commit: ([0-9a-f]{40})$') {
+            $commit = $Matches[1]
+        } elseif ($t -match '^Package: ([a-z0-9]+/[a-z0-9]+) \| (.+)$') {
+            $pk = $Matches[1]; $sy = @($Matches[2].Trim() -split '\s+')
+            foreach ($s in $sy) { if ($script:StageSystems -cnotcontains $s) { throw "'$Path' names a system it cannot read, '$s'." } }
+            if ($packages.Contains($pk)) { throw "'$Path' names $pk twice." }
+            $packages[$pk] = $sy
+        } elseif ($t -match '^SHA256: ([0-9A-Fa-f]{64}) (\S.*)$') {
+            if ($files.Contains($Matches[2])) { throw "'$Path' lists $($Matches[2]) twice." }
+            $files[$Matches[2]] = $Matches[1].ToUpperInvariant()
+        } else {
+            throw "'$Path' has a line it cannot read: '$line'."
+        }
+    }
+    if ($tag -eq "") {
+        if ($commit -ne "" -or $packages.Count -gt 0 -or $files.Count -gt 0) { throw "'$Path' names no tag and still names a commit, packages or files." }
+        return $null
+    }
+    if ($commit -eq "" -or $packages.Count -eq 0) { throw "'$Path' names a tag with no commit or no package." }
+    foreach ($x in $script:WdmFreeExtras) { if (-not $files.Contains($x)) { throw "'$Path' does not pin the release's $x." } }
+    return [pscustomobject]@{ Tag = $tag; Commit = $commit; Packages = $packages; Files = $files }
+}
+
+function Export-WdmFreeSet {
+    # Writes the download's WDMFREE\ into -Dest (a new directory): each
+    # pinned package's free/<class>/<package>/ at the pinned tag's commit,
+    # exactly the files the pin lists under it with their pinned bytes, at
+    # WDMFREE\<class>\<package>\; the release's LICENSE and NOTICE.md; a
+    # STAGE.TXT of the release's lines for those packages' INFs, every one
+    # of them on exactly one line; a READ.TXT of the systems each package's
+    # legs passed on; and the folder's SHA256.TXT.
+    param([string]$Root, $Pin, [string]$Dest)
+    if ($null -eq $Pin) { throw "the usb-wdm-free pin names no release." }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "no checkout at '$Root' for the download's driver set: clone it there, make a junction there to a clone, or name one." }
+    $Root = (Resolve-Path -LiteralPath $Root -ErrorAction Stop).ProviderPath.TrimEnd('\')
+    $rev = Resolve-OtherSetTag -Root $Root -Tag $Pin.Tag -Commit $Pin.Commit -What "usb-wdm-free"
+    if (Test-Path -LiteralPath $Dest) { throw "'$Dest' already exists; the free set is exported into a new directory." }
+    New-Item -ItemType Directory -Path $Dest | Out-Null
+    $pre = $script:WdmFreePrefix + "/"
+    $files = [ordered]@{}
+    $infs = @()
+    $claimed = @{}
+    foreach ($pk in $Pin.Packages.Keys) {
+        $tree = Get-OtherSetTree -Root $Root -Rev $rev -Prefix ($pre + $pk)
+        $pinned = @($Pin.Files.Keys | Where-Object { $_.StartsWith($pre + $pk + "/", [System.StringComparison]::Ordinal) })
+        $extra = @($tree.Keys | Where-Object { $pinned -cnotcontains $_ })
+        $missing = @($pinned | Where-Object { -not $tree.Contains($_) })
+        if ($tree.Count -eq 0 -or $extra.Count -gt 0 -or $missing.Count -gt 0) {
+            throw "usb-wdm-free $($Pin.Tag)'s $pre$pk/ is not the files the pin lists. Not pinned: $(if ($extra.Count) { @($extra | Select-Object -First 5) -join ', ' } else { '(none)' }); missing: $(if ($missing.Count) { @($missing | Select-Object -First 5) -join ', ' } elseif ($tree.Count -eq 0) { 'the whole folder' } else { '(none)' })."
+        }
+        foreach ($p in $pinned) {
+            $claimed[$p] = $true
+            if ($tree[$p] -ne "100644 blob") { throw "usb-wdm-free $($Pin.Tag)'s $p is not a plain file ($($tree[$p]))." }
+            $rel = $p.Substring($pre.Length)
+            if (-not (Test-OtherSetRelPath -Rel $rel)) { throw "usb-wdm-free $($Pin.Tag)'s $p has a path the installer does not accept." }
+            $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $p -OutFile (Join-Path $Dest $rel.Replace('/', '\'))
+            if ($h -ne $Pin.Files[$p]) { throw "usb-wdm-free $($Pin.Tag)'s $p is $h, not the pinned $($Pin.Files[$p])." }
+            $files[$rel.Replace('/', '\')] = $h
+            if ($p.EndsWith(".inf", [System.StringComparison]::OrdinalIgnoreCase)) { $infs += $p }
+        }
+    }
+    foreach ($x in $script:WdmFreeExtras) { $claimed[$x] = $true }
+    $stray = @($Pin.Files.Keys | Where-Object { -not $claimed.ContainsKey($_) })
+    if ($stray.Count -gt 0) { throw "the usb-wdm-free pin lists files of no pinned package: $(@($stray | Select-Object -First 5) -join ', ')." }
+    foreach ($x in @("LICENSE", "NOTICE.md")) {
+        $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $x -OutFile (Join-Path $Dest $x)
+        if ($h -ne $Pin.Files[$x]) { throw "usb-wdm-free $($Pin.Tag)'s $x is $h, not the pinned $($Pin.Files[$x])." }
+        $files[$x] = $h
+    }
+    $stageSrc = Join-Path $Dest ".stage-src"
+    $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path "STAGE.TXT" -OutFile $stageSrc
+    $stageText = [System.IO.File]::ReadAllText($stageSrc)
+    Remove-Item -LiteralPath $stageSrc -Force
+    if ($h -ne $Pin.Files["STAGE.TXT"]) { throw "usb-wdm-free $($Pin.Tag)'s STAGE.TXT is $h, not the pinned $($Pin.Files['STAGE.TXT'])." }
+    $mine = @(Read-StageText -Text $stageText -Label "usb-wdm-free $($Pin.Tag)'s STAGE.TXT" | Where-Object {
+        $inf = $_.Inf
+        @($Pin.Packages.Keys | Where-Object { $inf.StartsWith($pre + $_ + "/", [System.StringComparison]::Ordinal) }).Count -gt 0
+    })
+    Assert-StageCovers -Lines $mine -Infs $infs -Label "usb-wdm-free $($Pin.Tag)'s STAGE.TXT, for the pinned packages,"
+    $stageOut = @(
+        "# STAGE.TXT - which of these drivers' INFs may be staged, on which Windows",
+        "#",
+        "# The lines of usb-wdm-free $($Pin.Tag)'s STAGE.TXT for the drivers in this",
+        "# download, unchanged; its format is that file's (and usb-wdm-nonfree's):",
+        "#   ACTION | SYSTEMS | INF | NOTE",
+        "# Written by xHCI98's make-release.ps1 (roadmap-usb4 task 43.48).",
+        "") + @($mine | ForEach-Object { $_.Line.TrimEnd() })
+    [System.IO.File]::WriteAllText((Join-Path $Dest "STAGE.TXT"), (($stageOut -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
+    $files["STAGE.TXT"] = Get-FileSha256 -Path (Join-Path $Dest "STAGE.TXT")
+    $readOut = @(
+        "# READ.TXT - the systems each driver here was tested on",
+        "#",
+        "# One line a driver: <class>/<package> | <systems>, the systems in",
+        "# STAGE.TXT's tokens: those its legs passed on, by xHCI98's pin of",
+        "# usb-wdm-free $($Pin.Tag) (roadmap-usb4 task 43.48). The installer warns",
+        "# when a driver is copied on another.",
+        "") + @($Pin.Packages.Keys | ForEach-Object { "{0} | {1}" -f $_, ($Pin.Packages[$_] -join " ") })
+    [System.IO.File]::WriteAllText((Join-Path $Dest "READ.TXT"), (($readOut -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
+    $files["READ.TXT"] = Get-FileSha256 -Path (Join-Path $Dest "READ.TXT")
+    $own = Write-OtherSetSums -Dir $Dest -Files $files
+    $files[$script:OtherSums] = $own
+    return [pscustomobject]@{ Kind = "free"; Folder = $script:WdmFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev;
+                              Dir = $Dest; Sums = $own; Files = $files }
+}
+
+function Get-InstOtherSums {
+    # The hashes the installer carries for this release's sets
+    # (xhciinst\inst_core.h): Free and NonFree, upper case, "" for none.
+    param([string]$Repo)
+    $text = [System.IO.File]::ReadAllText((Join-Path $Repo "xhciinst\inst_core.h"))
+    $r = @{}
+    foreach ($pair in @(@("Free", "INST_WDMFREE_SUMS"), @("NonFree", "INST_NONFREE_SUMS"))) {
+        $m = [regex]::Match($text, '(?m)^#define\s+' + $pair[1] + '\s+"([0-9A-Fa-f]{64})?"')
+        if (-not $m.Success) { throw "xhciinst\inst_core.h has no #define $($pair[1]) of a SHA-256 or an empty string." }
+        $r[$pair[0]] = $m.Groups[1].Value.ToUpperInvariant()
+    }
+    return $r
+}
+
+function Get-DownloadPaths {
+    # The workspace and the zip of one download under -UploadDir.
+    param([string]$UploadDir, [string]$Version, [string]$Kind, [switch]$Staged)
+    $suffix = if ($Staged) { ".staging" } else { "" }
+    $k = $script:DownloadKindTable[$Kind].Suffix
+    return [pscustomobject]@{
+        Root = Join-Path $UploadDir ("upload-" + $Version + $k + $suffix)
+        Zip  = Join-Path $UploadDir ("xhci98-" + $Version + $k + ".zip" + $suffix)
+    }
+}
+
+function Get-DownloadZipName {
+    param([string]$Version, [string]$Kind)
+    return ("xhci98-" + $Version + $script:DownloadKindTable[$Kind].Suffix + ".zip")
+}
+
+function Test-DownloadsRecordRequired {
+    param([string]$Version)
+    return ([version]$Version -ge [version]"3.2.0.0")
+}
+
+function ConvertTo-DownloadsRecord {
+    # The tracked record in releases\<version>\ of which downloads the
+    # release has and which sets they carry: what -UploadSetOnly rebuilds
+    # downloads 2 and 3 from. $Free and $NonFree are the exports, or $null.
+    param([string]$Version, [string[]]$Kinds, $Free, $NonFree)
+    $lines = @(
+        "xhci98 $Version - the release's downloads",
+        "Written by scripts\package\make-release.ps1 (roadmap-usb4 task 43.48) and",
+        "read back by its -UploadSetOnly. The sets' files are never in this directory.",
+        "",
+        ("Downloads: " + ($Kinds -join " "))
+    )
+    $lines += $(if ($null -eq $Free) { "Free: none" } else { "Free: $($Free.Tag) $($Free.Revision) $($Free.Sums)" })
+    $lines += $(if ($null -eq $NonFree) { "NonFree: none" } else { "NonFree: $($NonFree.Tag) $($NonFree.Revision) $($NonFree.Sums) $($NonFree.PackSums)" })
+    return $lines
+}
+
+function ConvertFrom-DownloadsRecord {
+    # The record ConvertTo-DownloadsRecord writes, read back strictly.
+    param([string]$Text, [string]$Label)
+    $kinds = $null
+    $sets = @{}
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '^Downloads: ([a-z ]+)$') {
+            if ($null -ne $kinds) { throw "$Label says Downloads twice." }
+            $kinds = @($Matches[1].Trim() -split ' ')
+        } elseif ($line -match '^(Free|NonFree): none$') {
+            if ($sets.ContainsKey($Matches[1])) { throw "$Label says $($Matches[1]) twice." }
+            $sets[$Matches[1]] = $null
+        } elseif ($line -match '^Free: (\S+) ([0-9a-f]{40}) ([0-9A-F]{64})$') {
+            if ($sets.ContainsKey("Free")) { throw "$Label says Free twice." }
+            $sets["Free"] = [pscustomobject]@{ Tag = $Matches[1]; Revision = $Matches[2]; Sums = $Matches[3]; PackSums = "" }
+        } elseif ($line -match '^NonFree: (\S+) ([0-9a-f]{40}) ([0-9A-F]{64}) ([0-9A-F]{64})$') {
+            if ($sets.ContainsKey("NonFree")) { throw "$Label says NonFree twice." }
+            $sets["NonFree"] = [pscustomobject]@{ Tag = $Matches[1]; Revision = $Matches[2]; Sums = $Matches[3]; PackSums = $Matches[4] }
+        } elseif ($line -match '^(Downloads|Free|NonFree):') {
+            throw "$Label has a line it cannot read: '$line'."
+        }
+    }
+    if ($null -eq $kinds -or -not $sets.ContainsKey("Free") -or -not $sets.ContainsKey("NonFree")) {
+        throw "$Label does not say Downloads, Free and NonFree."
+    }
+    foreach ($k in $kinds) { if (-not $script:DownloadKindTable.Contains($k)) { throw "$Label names a download '$k'." } }
+    if ($kinds[0] -ne "base" -or @($kinds | Sort-Object -Unique).Count -ne $kinds.Count) { throw "$Label's downloads do not start with base, once each." }
+    if (($kinds -contains "free") -ne ($null -ne $sets["Free"])) { throw "$Label's free download and its Free line disagree." }
+    if (($kinds -contains "nonfree") -ne ($null -ne $sets["NonFree"])) { throw "$Label's non-free download and its NonFree line disagree." }
+    return [pscustomobject]@{ Kinds = $kinds; Free = $sets["Free"]; NonFree = $sets["NonFree"] }
+}
+
+# --- each download's readme (task 43.48; design record 26 section 6.7.1) ---
+#
+# The published readme.txt is download 1's. The other downloads' readmes
+# are the same text with three of its parts replaced by their own, each a
+# function of the version, the record of the downloads and whether the
+# download carries NUSB 3.3's files: so -UploadSetOnly renders the same
+# bytes from the published readme and downloads.txt alone.
+
+function Get-ReadmeMsFilesText {
+    # The readme's {MSFILES} paragraph for a download.
+    param([bool]$DriverPackIncluded, [string]$Kind)
+    if ($Kind -eq "nonfree") {
+        if (-not $DriverPackIncluded) { throw "a download with NONFREE\ is cut only with the driver pack, which also gives NUSB33\." }
+        return @'
+Microsoft files are in this download in two places: the seven Windows 98 SE
+storage files of section 3, in a folder of their own, copied unmodified from
+NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third party's); and, among the
+other makers' drivers in NONFREE\, the two KMDF co-installers ASIX ships with
+its AX88772 and AX88179 drivers (WdfCoInstaller01007.dll and
+WdfCoInstaller01009.dll), as ASIX ships them. None of them is this project's
+work. No licence to redistribute them has been established, nothing here
+grants you any right in them, and the NOTICE.md beside each says whose they
+are. The usbd.sys and usbui.dll the install needs are not in this download:
+Windows copies them from your own Windows installation source (section 3).
+'@.TrimEnd()
+    }
+    if ($DriverPackIncluded) {
+        return @'
+Microsoft files are in this download in one place only: the seven Windows
+98 SE storage files of section 3, in a folder of their own, copied
+unmodified from NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third
+party's). They are not this project's work. No licence to redistribute them
+has been established, nothing here grants you any right in them, and the
+NOTICE.md beside them says whose they are. The usbd.sys and usbui.dll the
+install needs are not in this download: Windows copies them from your own
+Windows installation source (section 3).
+'@.TrimEnd()
+    }
+    return @'
+No Microsoft file is in this download. The usbd.sys and usbui.dll the
+install needs are copied by Windows from your own Windows installation
+source (section 3), and on Windows 98 SE the storage files of section 3 come
+from NUSB; nothing here grants you any right in them, and nothing here
+copies them. xhciuas.inf names NUSB's USBNTMAP.SYS on Windows 98 SE; the
+file is named, never shipped.
+'@.TrimEnd()
+}
+
+function Format-ReadmeWrap {
+    # A paragraph's words in lines of at most -Width columns, -Lead before
+    # the first and -Rest before every other.
+    param([string]$Text, [int]$Width = 76, [string]$Lead = "", [string]$Rest = "")
+    $lines = @()
+    $line = $Lead
+    $fresh = $true
+    foreach ($w in @($Text -split ' ' | Where-Object { $_ -ne "" })) {
+        if (-not $fresh -and ($line.Length + 1 + $w.Length) -gt $Width) {
+            $lines += $line
+            $line = $Rest + $w
+        } elseif ($fresh) {
+            $line = $line + $w
+        } else {
+            $line = $line + " " + $w
+        }
+        $fresh = $false
+    }
+    if (-not $fresh) { $lines += $line }
+    return $lines
+}
+
+function Get-ReadmeDownloadText {
+    # The readme's "THIS DOWNLOAD" body for download -Kind of a release
+    # whose downloads are -Kinds; -FreeTag and -NonFreeTag the sets' tags,
+    # "" for none.
+    param([string]$Version, [string]$Kind, [string[]]$Kinds, [string]$FreeTag, [string]$NonFreeTag,
+          [bool]$DriverPackIncluded = $true)
+    $z1 = Get-DownloadZipName -Version $Version -Kind "base"
+    $z2 = Get-DownloadZipName -Version $Version -Kind "free"
+    $z3 = Get-DownloadZipName -Version $Version -Kind "nonfree"
+    $L = @()
+    switch ($Kind) {
+        "base" {
+            if ($DriverPackIncluded) {
+                $L += "This is $z1, the base download of xhci98 ${Version}: the drivers,"
+                $L += "their tools and installer, and NUSB 3.3's Windows 98 SE storage files"
+                $L += "(NUSB33\)."
+            } else {
+                $L += "This is $z1, the base download of xhci98 ${Version}: the drivers,"
+                $L += "their tools and installer."
+            }
+        }
+        "free" {
+            $L += Format-ReadmeWrap -Text ("This is ${z2}: the base download, $z1, with the free USB " +
+                                          "class drivers of usb-wdm-free $FreeTag added in WDMFREE\.")
+        }
+        "nonfree" {
+            if ($FreeTag -ne "") {
+                $L += Format-ReadmeWrap -Text ("This is ${z3}: $z2 (the base download with the free USB " +
+                                              "class drivers of usb-wdm-free $FreeTag in WDMFREE\), with " +
+                                              "the non-free driver pack of usb-wdm-nonfree $NonFreeTag " +
+                                              "added in NONFREE\.")
+            } else {
+                $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the non-free " +
+                                              "driver pack of usb-wdm-nonfree $NonFreeTag added in NONFREE\.")
+            }
+        }
+        default { throw "no download '$Kind'." }
+    }
+    $L += ""
+    $L += "This release has these downloads, each holding the one before it:"
+    $L += ""
+    $L += ("  {0,-26} the base download" -f $z1)
+    if ($Kinds -contains "free") { $L += ("  {0,-26} adds the free USB class drivers (WDMFREE\)" -f $z2) }
+    if ($Kinds -contains "nonfree") { $L += ("  {0,-26} adds the non-free driver pack (NONFREE\)" -f $z3) }
+    $L += ""
+    if ($Kinds -notcontains "free") {
+        $L += "No free USB class driver is in any download of this release yet: none"
+        $L += "has passed its tests on its systems."
+        $L += ""
+    }
+    $L += "The installer copies those drivers only when you tick them, and never"
+    $L += "installs one by itself. The up-to-date drivers, free and non-free, are at:"
+    $L += ""
+    $L += "  https://github.com/yeokm1/usb-wdm-free"
+    $L += "  https://github.com/yeokm1/usb-wdm-nonfree"
+    if ($Kind -ne "base" -and $FreeTag -ne "") {
+        $L += ""
+        $L += "The free USB class drivers are at a beta stage. Please report a problem"
+        $L += "with one of them to their maintainer, at"
+        $L += ""
+        $L += "      https://github.com/yeokm1/usb-wdm-free/issues"
+        $L += ""
+        $L += "and not on xHCI98's issues page."
+    }
+    if ($Kind -eq "nonfree") {
+        $L += ""
+        $L += "NONFREE\ holds other makers' drivers (USB Ethernet, serial and game pad"
+        $L += "drivers), unmodified, as their makers released them. They are not this"
+        $L += "project's work and have not been tested by this project on any Windows."
+        $L += "NONFREE\NOTICE.md says whose each one is, and quotes what some of their"
+        $L += "makers said about passing them on; apart from that, no licence to"
+        $L += "redistribute them has been found."
+    }
+    return ($L -join "`r`n")
+}
+
+function Get-ReadmeOtherContentsText {
+    # The readme's "What is in this directory" lines for the other drivers.
+    param([string]$Kind, [string]$FreeTag, [string]$NonFreeTag)
+    $L = @()
+    if ($Kind -eq "base" -or ($Kind -eq "nonfree" -and $FreeTag -eq "")) {
+        if ($Kind -eq "base") {
+            $L += "  (No other USB drivers in this download: see THIS DOWNLOAD, at the top.)"
+            return ($L -join "`r`n")
+        }
+    } else {
+        $L += Format-ReadmeWrap -Lead "  WDMFREE\        - " -Rest "                    " `
+                  -Text "the free USB class drivers (beta), from usb-wdm-free $FreeTag"
+        $L += ""
+        $L += "      LICENSE      their licence, the GNU GPL v2"
+        $L += "      NOTICE.md    the code in them adapted from other projects"
+        $L += "      READ.TXT     the systems each driver was tested on"
+        $L += "      SHA256.TXT   every file's hash"
+        $L += "      STAGE.TXT    which INF Windows may use on which system"
+    }
+    if ($Kind -eq "nonfree") {
+        if ($L.Count -gt 0) { $L += "" }
+        $L += Format-ReadmeWrap -Lead "  NONFREE\        - " -Rest "                    " `
+                  -Text "other makers' drivers, not this project's and not tested by it, from usb-wdm-nonfree $NonFreeTag"
+        $L += ""
+        $L += "      NOTICE.md    whose each one is"
+        $L += "      README.md    which folder serves which Windows"
+        $L += "      SHA256.TXT   every file's hash"
+        $L += "      STAGE.TXT    which INF Windows may use on which system"
+    }
+    return ($L -join "`r`n")
+}
+
+function ConvertTo-DownloadReadme {
+    # Download -Kind's readme from the published (download 1's) -Text: each
+    # of the three parts, which must be there exactly once as download 1's,
+    # replaced by -Kind's.
+    param([string]$Text, [string]$Version, [string]$Kind, [string[]]$Kinds, [string]$FreeTag, [string]$NonFreeTag,
+          [bool]$DriverPackIncluded, [string]$Label)
+    if ($Kind -eq "base") { return $Text }
+    $pairs = @(
+        @((Get-ReadmeDownloadText -Version $Version -Kind "base" -Kinds $Kinds -FreeTag $FreeTag -NonFreeTag $NonFreeTag -DriverPackIncluded $DriverPackIncluded),
+          (Get-ReadmeDownloadText -Version $Version -Kind $Kind -Kinds $Kinds -FreeTag $FreeTag -NonFreeTag $NonFreeTag -DriverPackIncluded $DriverPackIncluded)),
+        @((Get-ReadmeOtherContentsText -Kind "base" -FreeTag $FreeTag -NonFreeTag $NonFreeTag),
+          (Get-ReadmeOtherContentsText -Kind $Kind -FreeTag $FreeTag -NonFreeTag $NonFreeTag)),
+        @((Get-ReadmeMsFilesText -DriverPackIncluded $DriverPackIncluded -Kind "base"),
+          (Get-ReadmeMsFilesText -DriverPackIncluded $DriverPackIncluded -Kind $Kind))
+    )
+    foreach ($p in $pairs) {
+        $at = $Text.IndexOf($p[0], [System.StringComparison]::Ordinal)
+        if ($at -lt 0 -or $Text.IndexOf($p[0], $at + 1, [System.StringComparison]::Ordinal) -ge 0) {
+            throw "$Label does not hold download 1's text exactly once where download '$Kind' replaces it (the first line: '$(($p[0] -split "`r`n")[0])'): the published readme is not this release's."
+        }
+        $Text = $Text.Substring(0, $at) + $p[1] + $Text.Substring($at + $p[0].Length)
+    }
+    return $Text
+}

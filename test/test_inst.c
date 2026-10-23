@@ -5548,6 +5548,210 @@ static void test_vsd(void)
           "a foreign destination: its file left, the owned queue withdrawn");
 }
 
+/* The other USB drivers: usb-wdm-free and usb-wdm-nonfree (record 26
+ * section 6.7, roadmap-usb4 task 43.48). */
+static void test_other_sets(void)
+{
+    INST_STAGE_LINE sl;
+    INST_REC_LINE rl;
+    INST_U32 mask;
+    char hex[65];
+    char rel[INST_OTHER_REL_CHARS];
+    char pkg[64];
+    char text[1024];
+    char longp[200];
+    INST_U32 w;
+
+    /* The paths (package-common.ps1's Test-OtherSetRelPath). */
+    CHECK(inst_other_rel_ok("serial/ch341/w98se-xp/WIN 1X/CH341SER.INF"),
+          "rel: a space inside a part");
+    CHECK(inst_other_rel_ok("a/b.c"), "rel: plain");
+    CHECK(!inst_other_rel_ok(""), "rel: empty");
+    CHECK(!inst_other_rel_ok("a/../b"), "rel: ..");
+    CHECK(!inst_other_rel_ok("a/./b"), "rel: .");
+    CHECK(!inst_other_rel_ok("a//b"), "rel: an empty part");
+    CHECK(!inst_other_rel_ok("/a"), "rel: leading /");
+    CHECK(!inst_other_rel_ok("a/"), "rel: trailing /");
+    CHECK(!inst_other_rel_ok("a;b/c"), "rel: DevicePath's ;");
+    CHECK(!inst_other_rel_ok("a\\b"), "rel: a backslash");
+    CHECK(!inst_other_rel_ok("c:/a"), "rel: a drive");
+    CHECK(!inst_other_rel_ok("a/b "), "rel: a trailing space");
+    CHECK(!inst_other_rel_ok("a/ b"), "rel: a leading space");
+    CHECK(!inst_other_rel_ok("a/b."), "rel: a trailing dot");
+    CHECK(!inst_other_rel_ok("a/\xe9"), "rel: not ASCII");
+    memset(longp, 'x', sizeof(longp));
+    longp[140] = '\0';
+    CHECK(inst_other_rel_ok(longp), "rel: 140 characters");
+    longp[140] = 'x';
+    longp[141] = '\0';
+    CHECK(!inst_other_rel_ok(longp), "rel: 141 characters");
+
+    /* The systems' tokens. */
+    CHECK(inst_sys_token(0, 4, 10, 2222, 0) == 0 &&
+          strcmp(inst_sys_name(0), "W98SE") == 0, "sys: 98 SE");
+    CHECK(inst_sys_token(0, 4, 10, 1998, 0) == -1, "sys: 98 FE has none");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(0, 4, 90, 3000, 0)), "WME") == 0,
+          "sys: ME");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(1, 5, 0, 2195, 0)), "W2K") == 0,
+          "sys: 2000");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(1, 5, 1, 2600, 0)), "WXP") == 0,
+          "sys: XP");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(1, 5, 2, 3790, 1)), "WXP64") ==
+          0 && inst_sys_token(1, 5, 2, 3790, 0) == -1, "sys: XP x64, not 2003");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(1, 6, 0, 6002, 1)), "WVISTA64")
+          == 0, "sys: Vista x64");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(1, 6, 1, 7601, 0)), "W7") == 0,
+          "sys: 7");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(1, 6, 3, 9600, 1)), "W8X64") ==
+          0, "sys: 8.1 x64");
+    CHECK(strcmp(inst_sys_name(inst_sys_token(1, 10, 0, 19045, 1)), "W10X64")
+          == 0 && inst_sys_token(1, 10, 0, 22000, 1) == -1, "sys: 10, not 11");
+    CHECK(inst_sys_mask("W98SE WME", &mask) && mask == 3UL, "mask: two");
+    CHECK(!inst_sys_mask("W98SE W95", &mask), "mask: an unknown token");
+    CHECK(!inst_sys_mask("  ", &mask), "mask: none");
+
+    /* STAGE.TXT (usb-wdm-nonfree 128106f's format). */
+    CHECK(inst_stage_parse("# a comment", "non-free", &sl) == 0, "stage: #");
+    CHECK(inst_stage_parse("   ", "non-free", &sl) == 0, "stage: blank");
+    CHECK(inst_stage_parse("STAGE | W98SE WME        | non-free/serial/ftdi/"
+                           "w98se-me/FTDIBUS.INF  | the USB device; on 2000 "
+                           "ftdi/w2k wins (0403:6001)", "non-free", &sl) == 1 &&
+          sl.Stage && sl.Systems == 3UL &&
+          strcmp(sl.Inf, "serial/ftdi/w98se-me/FTDIBUS.INF") == 0,
+          "stage: a STAGE line");
+    CHECK(inst_stage_parse("COPY  | W98SE WME W2K WXP | non-free/serial/ch341/"
+                           "w98se-xp/WIN 1X/CH341SER.INF | WCH's second copy",
+                           "non-free", &sl) == 1 && !sl.Stage &&
+          strcmp(sl.Inf, "serial/ch341/w98se-xp/WIN 1X/CH341SER.INF") == 0,
+          "stage: a COPY line with a space in the path");
+    CHECK(inst_stage_parse("STAGE | W98SE | free/a/B.INF | x", "non-free",
+                           &sl) == -1, "stage: another set's prefix");
+    CHECK(inst_stage_parse("STAGE | W98SE | free/a/B.INF | x", "free", &sl) ==
+          1, "stage: the free set's prefix");
+    CHECK(inst_stage_parse("STAGE | W98SE | non-free/a/B.INF", "non-free",
+                           &sl) == -1, "stage: three fields");
+    CHECK(inst_stage_parse("STAGE | W98SE | non-free/a/B.INF | x | y",
+                           "non-free", &sl) == -1, "stage: five fields");
+    CHECK(inst_stage_parse("stage | W98SE | non-free/a/B.INF | x", "non-free",
+                           &sl) == -1, "stage: the action's case");
+    CHECK(inst_stage_parse("STAGE | W95 | non-free/a/B.INF | x", "non-free",
+                           &sl) == -1, "stage: an unknown system");
+    CHECK(inst_stage_parse("STAGE | W98SE | non-free/../B.INF | x", "non-free",
+                           &sl) == -1, "stage: a path it refuses");
+
+    /* SHA256.TXT and READ.TXT. */
+    CHECK(inst_sums_parse("692db360d876b53bd4bd1395c49a14e69858a6af8c01b97c68b1"
+                          "c4262534af7d  ethernet/ax88179/w7/ax88179_178a.cat"
+                          "\r\n", hex, rel, sizeof(rel)) == 1 &&
+          strncmp(hex, "692DB360", 8) == 0 &&
+          strcmp(rel, "ethernet/ax88179/w7/ax88179_178a.cat") == 0,
+          "sums: a line");
+    CHECK(inst_sums_parse("", hex, rel, sizeof(rel)) == 0, "sums: blank");
+    CHECK(inst_sums_parse("692db360d876b53bd4bd1395c49a14e69858a6af8c01b97c68b1"
+                          "c4262534af7d *a/b", hex, rel, sizeof(rel)) == -1,
+          "sums: the binary marker");
+    CHECK(inst_sums_parse("zz2db360d876b53bd4bd1395c49a14e69858a6af8c01b97c68b1"
+                          "c4262534af7d  a/b", hex, rel, sizeof(rel)) == -1,
+          "sums: not hex");
+    CHECK(inst_read_parse("net/cdcnet | W98SE W2K", pkg, sizeof(pkg), &mask) ==
+          1 && strcmp(pkg, "net/cdcnet") == 0 && mask == 5UL, "read: a line");
+    CHECK(inst_read_parse("cdcnet | W98SE", pkg, sizeof(pkg), &mask) == -1,
+          "read: no class");
+    CHECK(inst_read_parse("# x", pkg, sizeof(pkg), &mask) == 0, "read: #");
+
+    /* The record file. */
+    inst_rec_header(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98\\NONFREE");
+    CHECK(strcmp(text, "XHCI98 SET RECORD 1 NonFree C:\\XHCI98\\NONFREE") == 0,
+          "rec: the header");
+    CHECK(inst_rec_parse("F 0A1B2C3D 692db360d876b53bd4bd1395c49a14e69858a6af8c"
+                         "01b97c68b1c4262534af7d C:\\XHCI98\\NONFREE\\a b\\c.inf",
+                         &rl) == 1 && rl.Kind == 'F' &&
+          strcmp(rl.Token, "0A1B2C3D") == 0 &&
+          strncmp(rl.Hash, "692DB360", 8) == 0 &&
+          strcmp(rl.Path, "C:\\XHCI98\\NONFREE\\a b\\c.inf") == 0, "rec: F");
+    CHECK(inst_rec_parse("D 0A1B2C3D C:\\XHCI98\\NONFREE\\c.inf", &rl) == 1 &&
+          rl.Kind == 'D' && strcmp(rl.Token, "0A1B2C3D") == 0, "rec: D");
+    CHECK(inst_rec_parse("T 0A1B2C3D C:\\x", &rl) == 1 &&
+          inst_rec_parse("A 0A1B2C3D C:\\x", &rl) == 1, "rec: T and A");
+    CHECK(inst_rec_parse("D 0a1b2c3d C:\\x", &rl) == -1, "rec: a lower-case token");
+    CHECK(inst_rec_parse("D C:\\x", &rl) == -1, "rec: no token");
+    CHECK(inst_rec_parse("D 0A1B2C3D relative\\path", &rl) == -1,
+          "rec: not a full path");
+    CHECK(inst_rec_parse("X 0A1B2C3D C:\\x", &rl) == -1, "rec: an unknown kind");
+    CHECK(inst_rec_parse("F 0A1B2C3D 692d C:\\x", &rl) == -1, "rec: a short hash");
+
+    /* The page's texts. */
+    CHECK(strcmp(inst_other_folder(INST_SET_FREE), "WDMFREE") == 0 &&
+          strcmp(inst_other_folder(INST_SET_NONFREE), "NONFREE") == 0,
+          "texts: the folders");
+    inst_other_sentence(text, sizeof(text), INST_SET_FREE, "C:\\XHCI98");
+    CHECK(strstr(text, "C:\\XHCI98\\WDMFREE. Nothing is installed") != NULL &&
+          strstr(text, "beta stage") != NULL &&
+          strstr(text, "https://github.com/yeokm1/usb-wdm-free/issues, not "
+                       "to xHCI98.") != NULL, "texts: the free sentence");
+    inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98");
+    CHECK(strstr(text, "C:\\XHCI98\\NONFREE. They are their makers'") != NULL &&
+          strstr(text, "not been tested by this project") != NULL,
+          "texts: the non-free sentence");
+    inst_other_stage_text(text, sizeof(text), 0);
+    CHECK(strcmp(text, "None of them is for this Windows.") == 0,
+          "texts: no INF for this Windows");
+    inst_other_stage_text(text, sizeof(text), 37);
+    CHECK(strcmp(text, "Stages 37 of their INFs for this Windows.") == 0,
+          "texts: 37 INFs");
+    inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_CARRIED, 1,
+                    "3.2.0.0");
+    CHECK(strcmp(text, "Up to date: https://github.com/yeokm1/usb-wdm-nonfree.")
+          == 0, "line: carried");
+    inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_ABSENT, 1,
+                    "3.2.0.0");
+    CHECK(strcmp(text, "Not in this download: the non-free driver pack is in "
+                 "xhci98-3.2.0.0-nonfree.zip and at "
+                 "https://github.com/yeokm1/usb-wdm-nonfree.") == 0,
+          "line: non-free absent");
+    inst_other_line(text, sizeof(text), INST_SET_FREE, INST_OTHER_ABSENT, 1,
+                    "3.2.0.0");
+    CHECK(strcmp(text, "Not in this download: the free USB class drivers are in "
+                 "xhci98-3.2.0.0-free.zip and at "
+                 "https://github.com/yeokm1/usb-wdm-free.") == 0,
+          "line: free absent");
+    inst_other_line(text, sizeof(text), INST_SET_FREE, INST_OTHER_ABSENT, 0,
+                    "3.2.0.0");
+    CHECK(strcmp(text, "The free USB class drivers are not in any download of "
+                 "this release yet: see https://github.com/yeokm1/usb-wdm-free.")
+          == 0, "line: a release with no free set");
+    inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_NOTOURS, 1,
+                    "3.2.0.0");
+    CHECK(strstr(text, "The NONFREE folder beside this installer is not this "
+                       "release's") != NULL &&
+          strstr(text, "xhci98-3.2.0.0-nonfree.zip or https://github.com/"
+                       "yeokm1/usb-wdm-nonfree.") != NULL, "line: not ours");
+    inst_other_line(text, sizeof(text), INST_SET_FREE, INST_OTHER_NOTOURS, 0,
+                    "3.2.0.0");
+    CHECK(strstr(text, "Get the free USB class drivers from https://github.com/"
+                       "yeokm1/usb-wdm-free.") != NULL &&
+          strstr(text, ".zip") == NULL, "line: not ours, no free set");
+
+    /* The warnings on Next. */
+    CHECK(inst_other_warnings(0, "net/cdcnet", 0, 0, 0, 1) == 0,
+          "warn: nothing ticked");
+    CHECK(inst_other_warnings(1, "", 1, 0, 0, 0) == 0,
+          "warn: free, every package read here");
+    w = inst_other_warnings(1, "net/cdcnet", 1, 1, 0, 1);
+    CHECK(w == (INST_OW_FREE_UNREAD | INST_OW_NONFREE | INST_OW_X64SIG),
+          "warn: all three");
+    CHECK(inst_other_warnings(0, "", 0, 1, 0, 1) == INST_OW_NONFREE,
+          "warn: no x64 line without a stage box");
+    inst_other_warn_text(w, "net/cdcnet", 1, text, sizeof(text));
+    CHECK(strstr(text, "this Windows: net/cdcnet. They are copied all the same "
+                       "and staged.\n\nThe non-free drivers") != NULL &&
+          strstr(text, "(F8)") != NULL, "warn: the words");
+    /* The compiled record of each set: the non-free set this release's,
+     * the free set none until a usb-wdm-free release qualifies. */
+    CHECK(strlen(inst_other_sums(INST_SET_NONFREE)) == 64 &&
+          strlen(inst_other_sums(INST_SET_FREE)) == 0, "sums: the record");
+}
+
 int main(void)
 {
     test_versions();
@@ -5590,6 +5794,7 @@ int main(void)
     test_storage();
     test_vsd();
     test_vsd_names();
+    test_other_sets();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

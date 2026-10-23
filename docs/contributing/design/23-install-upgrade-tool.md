@@ -1,6 +1,12 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 37, 2026-10-23 (roadmap-usb4 task 43.42's
+Status: revision 38, 2026-10-23 (roadmap-usb4 task 43.48: the free and
+non-free driver sets a download carries, copied to the install directory
+and optionally staged for the first plug, the switches `/free`,
+`/freestage`, `/nonfree` and `/nonfreestage`, and their removal in the
+uninstall before the installer's own files; record 26 draft 36 section
+6.7; recorded at the batch 7 merge);
+revision 37, 2026-10-23 (roadmap-usb4 task 43.42's
 simplification, record 26 draft 35: the x64 package refused without
 `xhcicm.cat` beside the connection manager, section 5.10; the console
 no longer asks `XhciInterruptMode` and `XhciForceBulkOnly`, section 8;

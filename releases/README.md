@@ -272,6 +272,25 @@ does - `-Arch amd64` writes `out\pkg-release-amd64\`, around
   succeeded (the old zip is renamed `.previous` for the moment of the move);
   a failure in that last step leaves the release published and prints
   `make-release.ps1 -UploadSetOnly -Version <version>` as the repair.
+- **From `3.2.0.0`, up to three of these pairs, one per download**
+  (roadmap-usb4 task 43.48; design record 26 section 6.7): the base pair
+  above, carrying `NUSB33\`; `upload-<version>-free\` and
+  `xhci98-<version>-free.zip`, which add `WDMFREE\` (the usb-wdm-free
+  drivers `scripts\package\wdmfree-pin.txt` names); and
+  `upload-<version>-nonfree\` and `xhci98-<version>-nonfree.zip`, which add
+  `NONFREE\` (the `non-free/` folder of usb-wdm-nonfree at the tag
+  `package-common.ps1` pins, from the `-DriverPackRoot` checkout). Each
+  holds the one before and its own `readme.txt`, rendered from the
+  published one (download 1's), whose "THIS DOWNLOAD" section, contents and
+  Microsoft-files paragraph it replaces. While the pin names no release the
+  cut makes no `-free` pair, and the `-nonfree` one carries no `WDMFREE\`
+  (proposal for the owner); `-NoNonFree` and `-NoWdmFree` leave a pair out.
+  Each set's `SHA256.TXT` is held to the hash the installer carries
+  (`INST_NONFREE_SUMS`, `INST_WDMFREE_SUMS` in `xhciinst\inst_core.h`),
+  so a pin and the installer change together. `releases\<version>\
+  downloads.txt` records the pairs cut and each set's tag, commit and
+  hashes, with a copy of the free pin beside it, and `-UploadSetOnly`
+  rebuilds every recorded pair from them. Upload every zip of the cut.
 
 The assembly gates each published directory as the install media it is
 (`check-inf.ps1 -PackageDir`, under the architecture that directory is for:

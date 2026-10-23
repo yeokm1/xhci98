@@ -469,6 +469,12 @@ static int storDpOff;       /* 98 SE: DevicePath withdrawn by this run and
 static int stor_98se(void);
 static int stor_pair_left(void);
 static int stor_inf_found(int i);
+static void other_read(void);
+static void other_question(void);
+static void other_print_plan(void);
+static void other_run(void);
+static int other_uninstall(void);
+static void other_finish(char *text, size_t cap, const char *nl);
 static char storPackDir[INST_PATH_CHARS];
 static int storPlanCase;      /* the case the plan showed (defined below) */
 static void pkg_src(const char *rel, char *path, size_t cap);
@@ -1971,6 +1977,7 @@ static void print_plan(void)
         }
     }
     out("\n");
+    other_print_plan();
 }
 
 /* The input warning (record 23 section 5.8), before the confirmation. */
@@ -8052,6 +8059,7 @@ static int run_install_nt(void)
         tray_install();
         own_install();
         stor_tools_copy();
+        other_run();
         old_dir_cleanup();
         arp_write(0);
     }
@@ -9493,6 +9501,7 @@ static int run_install_9x(void)
     tray_install();
     own_install();
     stor_tools_copy();
+    other_run();
     old_dir_cleanup();
     arp_write(0);
     check_results_9x();
@@ -11241,6 +11250,7 @@ static int run_uninstall_nt(void)
         remove_services_and_files();
         cddb_service_scrub();
         stor_tools_remove();
+        other_uninstall();
         finish_remove();
         out("\n/list: nothing was changed.\n");
         return INST_EXIT_DONE;
@@ -11295,6 +11305,10 @@ static int run_uninstall_nt(void)
     if (!stor_tools_remove()) {
         return stop_uninstall("a USB storage file in the tools folder could "
                               "not be removed.");
+    }
+    if (!other_uninstall()) {
+        return stop_uninstall("a copy of the other USB drivers, or a staged "
+                              "INF of them, could not be removed.");
     }
     if (flagFailed || flagSteps) {
         return stop_uninstall("a service or a file of this package could not "
@@ -11842,6 +11856,7 @@ static int run_uninstall_9x(void)
         files_9x(1);
         stor_un_rest();
         stor_tools_remove();
+        other_uninstall();
         stor_silent_remove();
         finish_remove();
         return INST_EXIT_DONE;
@@ -11904,6 +11919,10 @@ static int run_uninstall_9x(void)
     if (!stor_silent_remove()) {
         return stop_uninstall("a SilentClasses entry of the USB storage "
                               "drivers could not be removed.");
+    }
+    if (!other_uninstall()) {
+        return stop_uninstall("a copy of the other USB drivers could not be "
+                              "removed, or its DevicePath entry changed.");
     }
     if (flagSteps || flagFailed) {
         return stop_uninstall("a driver file is still in use.");
@@ -21143,6 +21162,2875 @@ static int stor_silent_remove(void)
     return !flagFailed;
 }
 
+/* ---- the other USB drivers: usb-wdm-free and usb-wdm-nonfree (record 26
+ * section 6.7; roadmap-usb4 task 43.48) ---------------------------------
+ *
+ * A set is copied from the download's WDMFREE\ or NONFREE\ to the install
+ * directory, never installed; ticked, its STAGE lines for this system are
+ * staged for the first plug (DevicePath on 98 SE and ME, SetupCopyOEMInf on
+ * 2000 and later). The copies are recorded in a record file per set beside
+ * the folders (section 6.7.5), the staging under the set's key. */
+
+typedef struct _OTHFILE {
+    char Rel[INST_OTHER_REL_CHARS];     /* '/'-separated, under the folder */
+    char Hash[65];
+} OTHFILE;
+
+typedef struct _OTHREAD {
+    char Pkg[64];
+    INST_U32 Mask;
+} OTHREAD;
+
+typedef struct _OTHSET {
+    int State;                  /* INST_OTHER_*                            */
+    char Src[INST_PATH_CHARS];  /* the download's folder                   */
+    char *Sums;                 /* its SHA256.TXT's bytes, as hashed       */
+    DWORD SumsLen;
+    OTHFILE *Files;
+    int Count;
+    INST_STAGE_LINE *Stage;
+    int StageCount;
+    OTHREAD *Read;
+    int ReadCount;
+    int Include;                /* the row ticked                          */
+    int StageOn;                /* its stage box ticked                    */
+    int ForThis;                /* STAGE lines naming this system          */
+    char Unread[256];           /* free: packages not read on this system  */
+    /* the run's outcome, for the Finish page */
+    int Ran;
+    int InFolder;
+    int StagedNow;
+    char LeftOut[200];
+    char Why[200];
+} OTHSET;
+
+static OTHSET oth[INST_SET_COUNT];
+static int othRead;             /* other_read ran (an install run)          */
+static int othSys = -1;         /* inst_sys_token for this system           */
+static int othKeepFull;         /* a folder to keep did not fit kept        */
+
+/* Record lines, read back. */
+typedef struct _OTHREC {
+    char Kind;                  /* 'F' entries only, after reading         */
+    char Hash[65];
+    char Path[INST_PATH_CHARS];
+    char Token[9];
+    int Temp;                   /* a T line seen                           */
+    int Closed;                 /* a D or A line seen                      */
+    int Done;                   /* D                                       */
+} OTHREC;
+
+static void other_key(int set, char *path, size_t cap)
+{
+    join(path, cap, INST_OTHER_KEY, inst_other_subkey(set));
+}
+
+static int other_is64(void)
+{
+    return INST_MY_ARCH == INST_ARCH_AMD64;
+}
+
+static void other_sys(void)
+{
+    OSVERSIONINFOA v;
+
+    if (!inst_eng_os_read(&v)) {
+        othSys = -1;
+        return;
+    }
+    othSys = inst_sys_token(envNow.Nt, v.dwMajorVersion, v.dwMinorVersion,
+                            v.dwBuildNumber & 0xFFFFUL, other_is64());
+}
+
+/* rel ('/'-separated) under dir, with '\'. */
+static void other_path(char *out, size_t cap, const char *dir,
+                       const char *rel)
+{
+    char *p;
+
+    join(out, cap, dir, rel);
+    for (p = out + strlen(dir); *p != '\0'; p++) {
+        if (*p == '/') {
+            *p = '\\';
+        }
+    }
+}
+
+/* The SHA-256 of a file: 1 read, 0 absent, -1 unreadable. */
+static int other_hash(const char *path, char hex[65])
+{
+    DWORD n = 0;
+    char *buf;
+    int s = file_state(path);
+
+    hex[0] = '\0';
+    if (s == 0) {
+        return 0;
+    }
+    if (s < 0) {
+        return -1;
+    }
+    buf = read_file(path, &n);
+    if (buf == NULL) {
+        return -1;
+    }
+    inst_sha256((const unsigned char *)buf, n, hex);
+    free(buf);
+    return 1;
+}
+
+static int other_find(const OTHSET *o, const char *rel)
+{
+    int i;
+
+    for (i = 0; i < o->Count; i++) {
+        if (inst_eq(o->Files[i].Rel, rel)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void other_free(OTHSET *o)
+{
+    free(o->Sums);
+    free(o->Files);
+    free(o->Stage);
+    free(o->Read);
+    o->Sums = NULL;
+    o->Files = NULL;
+    o->Stage = NULL;
+    o->Read = NULL;
+    o->Count = o->StageCount = o->ReadCount = 0;
+}
+
+/* The text of a listed small file, checked against its line: NULL when it
+ * is not listed, cannot be read or is not the listed bytes. */
+static char *other_listed_text(OTHSET *o, const char *rel, DWORD *n)
+{
+    char path[INST_PATH_CHARS];
+    char hex[65];
+    char *buf;
+    int i = other_find(o, rel);
+
+    if (i < 0) {
+        logonly("other: %s lists no %s\n", o->Src, rel);
+        return NULL;
+    }
+    other_path(path, sizeof(path), o->Src, rel);
+    buf = read_file(path, n);
+    if (buf == NULL) {
+        logonly("other: %s cannot be read\n", path);
+        return NULL;
+    }
+    inst_sha256((const unsigned char *)buf, *n, hex);
+    if (!inst_eq(hex, o->Files[i].Hash)) {
+        logonly("other: %s is %s, not its line's\n", path, hex);
+        free(buf);
+        return NULL;
+    }
+    return buf;
+}
+
+/* Each line of text (CRLF or LF) to fn; 0 when fn refuses one. */
+typedef int (*OTHLINEFN)(OTHSET *o, int set, const char *line);
+
+static int other_lines(OTHSET *o, int set, char *text, OTHLINEFN fn)
+{
+    char *p = text;
+
+    while (*p != '\0') {
+        char *e = strchr(p, '\n');
+        if (e != NULL) {
+            *e = '\0';
+        }
+        if (e != NULL && e > p && e[-1] == '\r') {
+            e[-1] = '\0';
+        }
+        if (!fn(o, set, p)) {
+            return 0;
+        }
+        if (e == NULL) {
+            break;
+        }
+        p = e + 1;
+    }
+    return 1;
+}
+
+static int other_sums_line(OTHSET *o, int set, const char *line)
+{
+    char hex[65];
+    char rel[INST_OTHER_REL_CHARS];
+    int r = inst_sums_parse(line, hex, rel, sizeof(rel));
+
+    (void)set;
+    if (r == 0) {
+        return 1;
+    }
+    if (r < 0 || other_find(o, rel) >= 0) {
+        logonly("other: %s\\SHA256.TXT line not read: %s\n", o->Src, line);
+        return 0;
+    }
+    inst_copy(o->Files[o->Count].Rel, rel, sizeof(o->Files[0].Rel));
+    inst_copy(o->Files[o->Count].Hash, hex, sizeof(o->Files[0].Hash));
+    o->Count++;
+    return 1;
+}
+
+static int other_stage_line(OTHSET *o, int set, const char *line)
+{
+    INST_STAGE_LINE s;
+    int r = inst_stage_parse(line, inst_other_prefix(set), &s);
+    INST_STAGE_LINE *grow;
+
+    if (r == 0) {
+        return 1;
+    }
+    if (r < 0 || other_find(o, s.Inf) < 0) {
+        logonly("other: %s\\STAGE.TXT line not read or not listed: %s\n",
+                o->Src, line);
+        return 0;
+    }
+    grow = (INST_STAGE_LINE *)realloc(o->Stage, sizeof(*grow) *
+                                      (size_t)(o->StageCount + 1));
+    if (grow == NULL) {
+        return 0;
+    }
+    o->Stage = grow;
+    o->Stage[o->StageCount++] = s;
+    return 1;
+}
+
+static int other_read_line(OTHSET *o, int set, const char *line)
+{
+    OTHREAD rd;
+    int r = inst_read_parse(line, rd.Pkg, sizeof(rd.Pkg), &rd.Mask);
+    OTHREAD *grow;
+
+    (void)set;
+    if (r == 0) {
+        return 1;
+    }
+    if (r < 0) {
+        logonly("other: %s\\READ.TXT line not read: %s\n", o->Src, line);
+        return 0;
+    }
+    grow = (OTHREAD *)realloc(o->Read, sizeof(*grow) *
+                              (size_t)(o->ReadCount + 1));
+    if (grow == NULL) {
+        return 0;
+    }
+    o->Read = grow;
+    o->Read[o->ReadCount++] = rd;
+    return 1;
+}
+
+/* The package ("class/package") of a path under the free folder. */
+static void other_pkg_of(const char *rel, char *pkg, size_t cap)
+{
+    const char *s = strchr(rel, '/');
+
+    inst_copy(pkg, rel, cap);
+    if (s != NULL) {
+        s = strchr(s + 1, '/');
+    }
+    if (s != NULL && (size_t)(s - rel) < cap) {
+        pkg[s - rel] = '\0';
+    }
+}
+
+/* Section 6.7.3: one set's state in the download. */
+static void other_read_set(int set)
+{
+    OTHSET *o = &oth[set];
+    char path[INST_PATH_CHARS];
+    char hex[65];
+    DWORD n = 0;
+    DWORD m = 0;
+    char *text;
+    int i;
+    int lines = 0;
+    const char *want = inst_other_sums(set);
+
+    other_free(o);
+    o->State = INST_OTHER_ABSENT;
+    join(o->Src, sizeof(o->Src), root, inst_other_folder(set));
+    if (file_state(o->Src) != -1 || GetFileAttributesA(o->Src) ==
+        0xFFFFFFFFUL) {
+        logonly("other: %s is not there\n", o->Src);
+        return;
+    }
+    o->State = INST_OTHER_NOTOURS;
+    if (want[0] == '\0') {
+        logonly("other: %s is there, and this release has no such set\n",
+                o->Src);
+        return;
+    }
+    join(path, sizeof(path), o->Src, "SHA256.TXT");
+    o->Sums = read_file(path, &o->SumsLen);
+    if (o->Sums == NULL) {
+        logonly("other: %s cannot be read\n", path);
+        return;
+    }
+    inst_sha256((const unsigned char *)o->Sums, o->SumsLen, hex);
+    if (!inst_eq(hex, want)) {
+        logonly("other: %s is %s, not this release's %s\n", path, hex, want);
+        return;
+    }
+    for (i = 0; o->Sums[i] != '\0'; i++) {
+        if (o->Sums[i] == '\n') {
+            lines++;
+        }
+    }
+    o->Files = (OTHFILE *)malloc(sizeof(OTHFILE) * (size_t)(lines + 1));
+    text = (char *)malloc(o->SumsLen + 1);
+    if (o->Files == NULL || text == NULL) {
+        free(text);
+        return;
+    }
+    memcpy(text, o->Sums, o->SumsLen + 1);
+    if (!other_lines(o, set, text, other_sums_line) || o->Count == 0) {
+        free(text);
+        return;
+    }
+    free(text);
+    for (i = 0; i < o->Count; i++) {
+        other_path(path, sizeof(path), o->Src, o->Files[i].Rel);
+        if (strlen(path) + 1 > MAX_PATH || file_state(path) != 1) {
+            logonly("other: %s is missing or its path is too long\n", path);
+            return;
+        }
+    }
+    text = other_listed_text(o, "STAGE.TXT", &n);
+    if (text == NULL || !other_lines(o, set, text, other_stage_line)) {
+        free(text);
+        return;
+    }
+    free(text);
+    if (set == INST_SET_FREE) {
+        text = other_listed_text(o, "READ.TXT", &m);
+        if (text == NULL || !other_lines(o, set, text, other_read_line)) {
+            free(text);
+            return;
+        }
+        free(text);
+    }
+    o->State = INST_OTHER_CARRIED;
+    logonly("other: %s carried, %d files, %d STAGE.TXT lines\n", o->Src,
+            o->Count, o->StageCount);
+}
+
+/* The STAGE lines for this system, and (free) the packages with a line for
+ * it that READ.TXT does not read on it. */
+static void other_count(int set)
+{
+    OTHSET *o = &oth[set];
+    INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
+    char pkg[64];
+    int i;
+    int j;
+
+    o->ForThis = 0;
+    o->Unread[0] = '\0';
+    for (i = 0; i < o->StageCount; i++) {
+        int read = 0;
+        if (!(o->Stage[i].Systems & bit)) {
+            continue;
+        }
+        if (o->Stage[i].Stage) {
+            o->ForThis++;
+        }
+        if (set != INST_SET_FREE) {
+            continue;
+        }
+        other_pkg_of(o->Stage[i].Inf, pkg, sizeof(pkg));
+        for (j = 0; j < o->ReadCount; j++) {
+            if (inst_eq(o->Read[j].Pkg, pkg) && (o->Read[j].Mask & bit)) {
+                read = 1;
+            }
+        }
+        if (!read && strstr(o->Unread, pkg) == NULL) {
+            if (o->Unread[0] != '\0') {
+                strncat(o->Unread, ", ", sizeof(o->Unread) -
+                        strlen(o->Unread) - 1);
+            }
+            strncat(o->Unread, pkg, sizeof(o->Unread) - strlen(o->Unread) - 1);
+        }
+    }
+}
+
+static void other_read(void)
+{
+    int set;
+
+    other_sys();
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        other_read_set(set);
+        other_count(set);
+        oth[set].Include = 0;
+        oth[set].StageOn = 0;
+        if (oth[set].State == INST_OTHER_CARRIED) {
+            if (set == INST_SET_FREE ? opts.Free : opts.NonFree) {
+                oth[set].Include = 1;
+            }
+            if (set == INST_SET_FREE ? opts.FreeStage : opts.NonFreeStage) {
+                oth[set].StageOn = oth[set].ForThis > 0;
+            }
+        }
+    }
+    othRead = 1;
+}
+
+/* The release's version, for the texts. */
+static const char *other_version(void)
+{
+    return XHCIINST_VERSION;
+}
+
+static void other_question(void)
+{
+    char text[1200];
+    char line[16];
+    int set;
+    int k;
+
+    if (!othRead) {
+        return;
+    }
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        OTHSET *o = &oth[set];
+        char sentence[700];
+        char under[400];
+        const char *sw = set == INST_SET_FREE ? "/free" : "/nonfree";
+        int r;
+
+        inst_other_line(under, sizeof(under), set, o->State,
+                        inst_other_sums(set)[0] != '\0', other_version());
+        out("%s\n", inst_other_label(set));
+        if (o->State != INST_OTHER_CARRIED) {
+            stor_out_wrapped("  ", under);
+            out("\n");
+            continue;
+        }
+        inst_other_sentence(sentence, sizeof(sentence), set,
+                            toolDir[0] ? toolDir : "the tools folder");
+        stor_out_wrapped("  ", sentence);
+        stor_out_wrapped("  ", under);
+        if (o->Include) {
+            out("  %s: copied without asking%s.\n\n", sw,
+                o->StageOn ? ", and staged" : "");
+            continue;
+        }
+        if (opts.List || opts.Yes || opts.Defaults) {
+            out("  %s: N, the default (only %s copies them).\n\n",
+                opts.List ? "/list" : opts.Yes ? "/yes" : "/defaults", sw);
+            continue;
+        }
+        inst_yesno_question(text, sizeof(text), set == INST_SET_FREE ?
+                            "Copy the free USB class drivers?" :
+                            "Copy the non-free driver pack?",
+                            "copy them", "leave them out", 0);
+        r = 0;
+        for (k = 0;; k++) {
+            if (!ask(INST_Q_OTHER, k == 0 ? text : "  Type Y or N, or Enter: ",
+                     k > 0, 0, 0, NULL, line, sizeof(line))) {
+                break;
+            }
+            r = inst_tb_answer(line, 0);
+            if (r >= 0) {
+                break;
+            }
+        }
+        o->Include = r > 0;
+        if (o->Include && o->ForThis > 0) {
+            char st[96];
+            inst_other_stage_text(st, sizeof(st), o->ForThis);
+            stor_out_wrapped("  ", st);
+            inst_yesno_question(text, sizeof(text), "Let Windows use them "
+                                "automatically when a device is plugged in?",
+                                "stage them", "copy only", 0);
+            r = 0;
+            for (k = 0;; k++) {
+                if (!ask(INST_Q_OTHER, k == 0 ? text :
+                         "  Type Y or N, or Enter: ", k > 0, 0, 0, NULL, line,
+                         sizeof(line))) {
+                    break;
+                }
+                r = inst_tb_answer(line, 0);
+                if (r >= 0) {
+                    break;
+                }
+            }
+            o->StageOn = r > 0;
+        }
+        out("\n");
+        logonly("other: %s asked, include %d, stage %d\n",
+                inst_other_subkey(set), o->Include, o->StageOn);
+    }
+    {
+        char warn[2048];
+        INST_U32 w = inst_other_warnings(
+            oth[INST_SET_FREE].Include, oth[INST_SET_FREE].Unread,
+            oth[INST_SET_FREE].StageOn, oth[INST_SET_NONFREE].Include,
+            oth[INST_SET_NONFREE].StageOn,
+            other_is64() && envNow.Major == 6);
+        if (w != 0) {
+            inst_other_warn_text(w, oth[INST_SET_FREE].Unread,
+                                 oth[INST_SET_FREE].StageOn, warn,
+                                 sizeof(warn));
+            out("WARNING:\n");
+            stor_out_wrapped("  ", warn);
+            out("\n");
+        }
+    }
+}
+
+static void other_print_plan(void)
+{
+    int set;
+
+    if (!othRead) {
+        return;
+    }
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        OTHSET *o = &oth[set];
+        if (o->State != INST_OTHER_CARRIED) {
+            continue;
+        }
+        if (!o->Include) {
+            out("%s: left out.\n", inst_other_label(set));
+        } else {
+            out("%s: copied to %s\\%s%s.\n", inst_other_label(set),
+                toolDir[0] ? toolDir : "the tools folder",
+                inst_other_folder(set), o->StageOn ?
+                ", and the INFs for this Windows staged" : " only");
+        }
+    }
+}
+
+/* ---- the record file (section 6.7.5) ---- */
+
+static int othRecBroken;        /* a record write failed this run       */
+
+static int other_rec_append(const char *path, const char *line)
+{
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD put;
+    DWORD n = (DWORD)strlen(line);
+    BOOL ok;
+
+    if (h == INVALID_HANDLE_VALUE) {
+        othRecBroken = 1;
+        return 0;
+    }
+    SetLastError(NO_ERROR);
+    if (SetFilePointer(h, 0, NULL, FILE_END) == 0xFFFFFFFFUL &&
+        GetLastError() != NO_ERROR) {
+        CloseHandle(h);
+        othRecBroken = 1;
+        return 0;
+    }
+    ok = WriteFile(h, line, n, &put, NULL) && put == n &&
+         WriteFile(h, "\r\n", 2, &put, NULL) && put == 2 &&
+         FlushFileBuffers(h);
+    CloseHandle(h);
+    if (!ok) {
+        othRecBroken = 1;
+    }
+    return ok ? 1 : 0;
+}
+
+static int other_rec_line(const char *path, char kind, const char *token,
+                          const char *hash, const char *p)
+{
+    char line[INST_PATH_CHARS + 96];
+
+    if (othRecBroken) {
+        return 0;
+    }
+    if (hash != NULL) {
+        _snprintf(line, sizeof(line) - 1, "%c %s %s %s", kind, token, hash, p);
+    } else {
+        _snprintf(line, sizeof(line) - 1, "%c %s %s", kind, token, p);
+    }
+    line[sizeof(line) - 1] = '\0';
+    return other_rec_append(path, line);
+}
+
+/* The record file read back (section 6.7.5): 1 read into *recs (the F
+ * entries, each with its run's token and whether a T, D or A followed),
+ * 0 absent, -1 not this set's record or unreadable. */
+/* The record file cut back to its last whole line (good bytes). */
+static int other_rec_trim(const char *path, DWORD good)
+{
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    BOOL ok;
+
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = SetFilePointer(h, (LONG)good, NULL, FILE_BEGIN) == good &&
+         SetEndOfFile(h) && FlushFileBuffers(h);
+    CloseHandle(h);
+    return ok ? 1 : 0;
+}
+
+static int other_rec_load(int set, const char *path, const char *dir,
+                          OTHREC **recs, int *count)
+{
+    char header[INST_PATH_CHARS + 40];
+    DWORD n = 0;
+    char *text;
+    char *p;
+    char *e;
+    int lines = 0;
+    int first = 1;
+    int i;
+    OTHREC *r;
+
+    *recs = NULL;
+    *count = 0;
+    if (file_state(path) == 0) {
+        return 0;
+    }
+    text = read_file(path, &n);
+    if (text == NULL) {
+        return -1;
+    }
+    for (i = 0; i < (int)n; i++) {
+        if (text[i] == '\n') {
+            lines++;
+        }
+    }
+    r = (OTHREC *)calloc((size_t)lines + 1, sizeof(OTHREC));
+    if (r == NULL) {
+        free(text);
+        return -1;
+    }
+    inst_rec_header(header, sizeof(header), set, dir);
+    p = text;
+    while (*p != '\0') {
+        INST_REC_LINE rl;
+        e = strstr(p, "\r\n");
+        if (e == NULL) {
+            /* A last line without its CRLF: a write cut short, cut off
+             * the file before anything is appended to it - but only after
+             * the header was read whole and is this set's. */
+            if (first || (!opts.List &&
+                          !other_rec_trim(path, (DWORD)(p - text)))) {
+                free(text);
+                free(r);
+                return -1;
+            }
+            break;
+        }
+        *e = '\0';
+        if (first) {
+            if (strcmp(p, header) != 0) {
+                free(text);
+                free(r);
+                return -1;
+            }
+            first = 0;
+        } else if (inst_rec_parse(p, &rl) != 1) {
+            logonly("other: %s: a line not read: %s\n", path, p);
+            free(text);
+            free(r);
+            return -1;
+        } else if (rl.Kind == 'F') {
+            OTHREC *x = &r[*count];
+            x->Kind = 'F';
+            inst_copy(x->Hash, rl.Hash, sizeof(x->Hash));
+            inst_copy(x->Path, rl.Path, sizeof(x->Path));
+            inst_copy(x->Token, rl.Token, sizeof(x->Token));
+            (*count)++;
+        } else {
+            for (i = *count - 1; i >= 0; i--) {
+                if (!r[i].Closed && strcmp(r[i].Token, rl.Token) == 0 &&
+                    inst_eq(r[i].Path, rl.Path)) {
+                    if (rl.Kind == 'T') {
+                        r[i].Temp = 1;
+                    } else {
+                        r[i].Closed = 1;
+                        r[i].Done = rl.Kind == 'D';
+                    }
+                    break;
+                }
+            }
+        }
+        p = e + 2;
+    }
+    free(text);
+    if (first) {
+        free(r);
+        return -1;
+    }
+    *recs = r;
+    return 1;
+}
+
+/* Section 6.7.5's recovery: every open F line closed where it can be; 0
+ * when one stays open (a step for the user, or a deletion that failed). */
+static int other_rec_recover(const char *recPath, OTHREC *recs, int count)
+{
+    char tmp[INST_PATH_CHARS];
+    char hex[65];
+    int i;
+    int open = 0;
+
+    for (i = 0; i < count; i++) {
+        OTHREC *x = &recs[i];
+        int s;
+        if (x->Closed) {
+            continue;
+        }
+        _snprintf(tmp, sizeof(tmp) - 1, "%s.~%s", x->Path, x->Token);
+        tmp[sizeof(tmp) - 1] = '\0';
+        s = file_state(tmp);
+        if (s != 0) {
+            if (!x->Temp || s < 0) {
+                out("  %s is in the way and is not known to be this "
+                    "installer's: delete it if it\n  is not wanted, then run "
+                    "the installer again.\n", tmp);
+                flagSteps = 1;
+                open = 1;
+                continue;
+            }
+            if (opts.List) {
+                out("(/list) %s would be deleted.\n", tmp);
+                open = 1;
+                continue;
+            }
+            if (!delete_file(tmp)) {
+                out("  %s could not be deleted.\n", tmp);
+                flagSteps = 1;
+                flagRestart = 1;
+                open = 1;
+                continue;
+            }
+        }
+        if (opts.List) {
+            continue;
+        }
+        x->Done = other_hash(x->Path, hex) == 1 && inst_eq(hex, x->Hash);
+        if (!other_rec_line(recPath, (char)(x->Done ? 'D' : 'A'), x->Token,
+                            NULL, x->Path)) {
+            open = 1;
+            continue;
+        }
+        x->Closed = 1;
+    }
+    return !open;
+}
+
+/* ---- the set's key ---- */
+
+/* 1 the set's key is there, 0 not, -1 it cannot be opened. */
+static int other_key_exists(int set)
+{
+    char key[INST_PATH_CHARS];
+    HKEY k;
+    LONG r;
+
+    other_key(set, key, sizeof(key));
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &k);
+    if (r == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return 1;
+    }
+    return (r == ERROR_FILE_NOT_FOUND || r == ERROR_PATH_NOT_FOUND) ? 0 : -1;
+}
+
+static int other_key_text(int set, const char *name, char *buf, DWORD cap)
+{
+    char key[INST_PATH_CHARS];
+    int e = other_key_exists(set);
+
+    if (e <= 0) {
+        buf[0] = '\0';
+        return e;
+    }
+    other_key(set, key, sizeof(key));
+    return reg_text3(HKEY_LOCAL_MACHINE, key, name, buf, cap);
+}
+
+static int other_key_put(int set, const char *sub, const char *name,
+                         DWORD type, const void *data, DWORD n)
+{
+    char key[INST_PATH_CHARS];
+    HKEY k;
+    LONG w;
+
+    other_key(set, key, sizeof(key));
+    if (sub != NULL) {
+        join(key, sizeof(key), key, sub);
+    }
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, key, 0, NULL, 0, KEY_WRITE, NULL,
+                        &k, NULL) != ERROR_SUCCESS) {
+        return 0;
+    }
+    w = RegSetValueExA(k, name, 0, type, (const BYTE *)data, n);
+    RegCloseKey(k);
+    return w == ERROR_SUCCESS;
+}
+
+static int other_key_str(int set, const char *sub, const char *name,
+                         const char *text)
+{
+    return other_key_put(set, sub, name, REG_SZ, text,
+                         (DWORD)strlen(text) + 1);
+}
+
+static int other_key_made(int set, DWORD v)
+{
+    /* Flushed: 98 SE and ME keep the registry in memory, and a power cut
+     * after the copies would otherwise lose the record of them. */
+    int ok = other_key_put(set, NULL, "RecordMade", REG_DWORD, &v, sizeof(v));
+
+    if (ok && RegFlushKey(HKEY_LOCAL_MACHINE) != ERROR_SUCCESS) {
+        out("The registry could not be written out after %s's record.\n",
+            inst_other_label(set));
+        ok = 0;
+    }
+    return ok;
+}
+
+static int other_key_del_value(int set, const char *sub, const char *name)
+{
+    char key[INST_PATH_CHARS];
+    HKEY k;
+    LONG r;
+
+    other_key(set, key, sizeof(key));
+    if (sub != NULL) {
+        join(key, sizeof(key), key, sub);
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_SET_VALUE, &k) !=
+        ERROR_SUCCESS) {
+        return 1;
+    }
+    r = RegDeleteValueA(k, name);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND;
+}
+
+/* The set's key, Staged first (NT does not delete a key with subkeys),
+ * then Other when it is empty. */
+static int other_key_delete(int set)
+{
+    char key[INST_PATH_CHARS];
+    char staged[INST_PATH_CHARS];
+    LONG r;
+
+    other_key(set, key, sizeof(key));
+    join(staged, sizeof(staged), key, "Staged");
+    r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, staged);
+    if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, key);
+    if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    /* Other only when empty: on 98 SE and ME RegDeleteKey takes the
+     * subkeys with it, the other set's among them. */
+    {
+        HKEY k;
+        DWORD subKeys = 1;
+        DWORD values = 1;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_OTHER_KEY, 0, KEY_READ, &k)
+            == ERROR_SUCCESS) {
+            if (RegQueryInfoKeyA(k, NULL, NULL, NULL, &subKeys, NULL, NULL,
+                                 &values, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                subKeys = 1;
+            }
+            RegCloseKey(k);
+            if (subKeys == 0 && values == 0) {
+                RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_OTHER_KEY);
+            }
+        }
+    }
+    return 1;
+}
+
+/* The Staged values, one at a time: 1 value i read, 0 none left, -1 the
+ * key unreadable. */
+static int other_staged_enum(int set, DWORD i, char *name, DWORD nameCap,
+                             char *data, DWORD dataCap)
+{
+    char key[INST_PATH_CHARS];
+    HKEY k;
+    DWORD t;
+    DWORD nn = nameCap;
+    DWORD dn = dataCap - 1;
+    LONG r;
+
+    other_key(set, key, sizeof(key));
+    join(key, sizeof(key), key, "Staged");
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return -1;
+    }
+    r = RegEnumValueA(k, i, name, &nn, NULL, &t, (LPBYTE)data, &dn);
+    RegCloseKey(k);
+    if (r == ERROR_NO_MORE_ITEMS) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS || t != REG_SZ) {
+        return -1;
+    }
+    data[dn < dataCap ? dn : dataCap - 1] = '\0';
+    return 1;
+}
+
+/* ---- the store (NT) ---- */
+
+/* The INFs of %windir%\inf holding hex's bytes (size theirs, or
+ * 0xFFFFFFFF for any), their names joined by spaces into list: 1 whole, 0
+ * not whole (the folder not listed, or one that might be not readable). */
+static int other_inventory(const char *hex, DWORD size, char *list,
+                           size_t cap)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char h[65];
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+    DWORD e;
+    int whole = 1;
+
+    list[0] = '\0';
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(pattern, sizeof(pattern), win, "inf\\*.inf");
+    f = FindFirstFileA(pattern, &fd);
+    if (f == INVALID_HANDLE_VALUE) {
+        e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_NO_MORE_FILES;
+    }
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (size != 0xFFFFFFFFUL &&
+             (fd.nFileSizeHigh != 0 || fd.nFileSizeLow != size))) {
+            continue;
+        }
+        join(path, sizeof(path), win, "inf");
+        join(path, sizeof(path), path, fd.cFileName);
+        if (other_hash(path, h) != 1) {
+            whole = 0;
+            continue;
+        }
+        if (inst_eq(h, hex)) {
+            if (strlen(list) + strlen(fd.cFileName) + 2 >= cap) {
+                whole = 0;
+                continue;
+            }
+            if (list[0] != '\0') {
+                strcat(list, "|");
+            }
+            strcat(list, fd.cFileName);
+        }
+    } while (FindNextFileA(f, &fd));
+    e = GetLastError();
+    FindClose(f);
+    return whole && e == ERROR_NO_MORE_FILES;
+}
+
+/* 1 when name is one of list's ('|'-separated: no file name holds one). */
+static int other_in_list(const char *list, const char *name)
+{
+    const char *p = list;
+    size_t n = strlen(name);
+
+    while (*p != '\0') {
+        const char *e = strchr(p, '|');
+        size_t len = e != NULL ? (size_t)(e - p) : strlen(p);
+        if (len == n && inst_eqn(p, name, n)) {
+            return 1;
+        }
+        if (e == NULL) {
+            break;
+        }
+        p = e + 1;
+    }
+    return 0;
+}
+
+/* A Staged value's data "own <64 hex> <name>" or "foreign <64 hex>
+ * <name>" read: 1 (own 1 or 0), 0 not one. */
+static int other_staged_data(const char *data, int *own, char *hex,
+                             char *name, size_t cap)
+{
+    const char *p;
+
+    if (inst_starts(data, "own ")) {
+        *own = 1;
+        p = data + 4;
+    } else if (inst_starts(data, "foreign ")) {
+        *own = 0;
+        p = data + 8;
+    } else {
+        return 0;
+    }
+    if (strlen(p) < 66 || p[64] != ' ' || strlen(p + 65) >= cap) {
+        return 0;
+    }
+    memcpy(hex, p, 64);
+    hex[64] = '\0';
+    inst_copy(name, p + 65, cap);
+    return 1;
+}
+
+/* %windir%\inf\name's bytes are hex: 1, 0 not (or gone), -1 unreadable. */
+static int other_store_holds(const char *name, const char *hex)
+{
+    char win[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char h[65];
+    int r;
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return -1;
+    }
+    join(path, sizeof(path), win, "inf");
+    join(path, sizeof(path), path, name);
+    r = other_hash(path, h);
+    if (r <= 0) {
+        return r;
+    }
+    return inst_eq(h, hex) ? 1 : 0;
+}
+
+/* NT: a pending value resolved (section 6.7.6): every INF of the store
+ * holding its bytes becomes a foreign value; the pending value goes. 0 when
+ * the store cannot be read. data is "pending <64 hex> <names>". */
+static int other_pending_resolve(int set, const char *rel, const char *data)
+{
+    char hex[65];
+    char list[1024];
+    char name[INST_PATH_CHARS];
+    char vname[INST_PATH_CHARS * 2];
+    char vdata[INST_PATH_CHARS + 96];
+    const char *p;
+    int n;
+
+    if (strlen(data) < 8 + 64) {
+        return other_key_del_value(set, "Staged", rel);
+    }
+    memcpy(hex, data + 8, 64);
+    hex[64] = '\0';
+    if (!other_inventory(hex, 0xFFFFFFFFUL, list, sizeof(list))) {
+        return 0;
+    }
+    p = list;
+    while (*p != '\0') {
+        const char *e = strchr(p, '|');
+        size_t len = e != NULL ? (size_t)(e - p) : strlen(p);
+        if (len >= sizeof(name)) {
+            return 0;
+        }
+        memcpy(name, p, len);
+        name[len] = '\0';
+        n = _snprintf(vname, sizeof(vname) - 1, "%s|%s", rel, name);
+        if (n < 0 || n >= (int)sizeof(vname) - 1) {
+            return 0;
+        }
+        vname[sizeof(vname) - 1] = '\0';
+        n = _snprintf(vdata, sizeof(vdata) - 1, "foreign %s %s", hex, name);
+        if (n < 0 || n >= (int)sizeof(vdata) - 1) {
+            return 0;
+        }
+        vdata[sizeof(vdata) - 1] = '\0';
+        if (!other_key_str(set, "Staged", vname, vdata)) {
+            return 0;
+        }
+        out("An interrupted run may have left %s in the driver store as "
+            "%s; it is kept as\nit is.\n", rel, name);
+        if (e == NULL) {
+            break;
+        }
+        p = e + 1;
+    }
+    return other_key_del_value(set, "Staged", rel);
+}
+
+/* ---- the copy (section 6.7.5) ---- */
+
+static void other_mkdirs(const char *file)
+{
+    char d[INST_PATH_CHARS];
+    char *p;
+
+    inst_copy(d, file, sizeof(d));
+    p = strrchr(d, '\\');
+    if (p == NULL) {
+        return;
+    }
+    *p = '\0';
+    for (p = d + 3; *p != '\0'; p++) {
+        if (*p == '\\') {
+            *p = '\0';
+            CreateDirectoryA(d, NULL);
+            *p = '\\';
+        }
+    }
+    CreateDirectoryA(d, NULL);
+}
+
+/* One file: 1 in place (copied now or there before), 0 left out. */
+static int other_copy_file(OTHSET *o, const char *recPath, const char *dest,
+                           const char *rel, const char *hash,
+                           const char *token, const char *bytes, DWORD n,
+                           int *made)
+{
+    char src[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char hex[65];
+    char *buf = NULL;
+    HANDLE h;
+    DWORD put;
+    int ok;
+
+    *made = 0;
+    if (file_state(dest) != 0) {
+        return 1;
+    }
+    other_path(src, sizeof(src), o->Src, rel);
+    _snprintf(tmp, sizeof(tmp) - 1, "%s.~%s", dest, token);
+    tmp[sizeof(tmp) - 1] = '\0';
+    if (strlen(tmp) + 1 > MAX_PATH || strlen(src) + 1 > MAX_PATH) {
+        logonly("other: %s: the path is too long\n", dest);
+        return 0;
+    }
+    if (bytes == NULL) {
+        buf = read_file(src, &n);
+        if (buf == NULL) {
+            logonly("other: %s cannot be read\n", src);
+            return 0;
+        }
+        bytes = buf;
+    }
+    inst_sha256((const unsigned char *)bytes, n, hex);
+    if (!inst_eq(hex, hash)) {
+        logonly("other: %s is %s, not its line's\n", src, hex);
+        free(buf);
+        return 0;
+    }
+    other_mkdirs(dest);
+    if (!other_rec_line(recPath, 'F', token, hash, dest)) {
+        free(buf);
+        return 0;
+    }
+    h = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        logonly("other: %s could not be made (error %lu)\n", tmp,
+                (unsigned long)GetLastError());
+        other_rec_line(recPath, 'A', token, NULL, dest);
+        free(buf);
+        return 0;
+    }
+    if (!other_rec_line(recPath, 'T', token, NULL, dest)) {
+        CloseHandle(h);
+        free(buf);
+        return 0;
+    }
+    /* Flushed before its D line: a power cut on 98 SE and ME otherwise
+     * leaves a file the record calls whole with bytes never written. */
+    ok = WriteFile(h, bytes, n, &put, NULL) && put == n &&
+         FlushFileBuffers(h);
+    CloseHandle(h);
+    free(buf);
+    if (ok) {
+        ok = MoveFileA(tmp, dest) ? 1 : 0;
+    }
+    if (!ok) {
+        logonly("other: %s not copied (error %lu)\n", dest,
+                (unsigned long)GetLastError());
+        if (delete_file(tmp)) {
+            other_rec_line(recPath, 'A', token, NULL, dest);
+        }
+        return 0;
+    }
+    flagChanged = 1;
+    if (!other_rec_line(recPath, 'D', token, NULL, dest)) {
+        return 0;
+    }
+    *made = 1;
+    return 1;
+}
+
+static int other_remove(int set, int uninstall);
+
+static int other_adopted(int set)
+{
+    char key[INST_PATH_CHARS];
+    DWORD v = 0;
+
+    other_key(set, key, sizeof(key));
+    return reg_dword(HKEY_LOCAL_MACHINE, key, "Adopted", &v) && v == 1;
+}
+
+/* The set's key is there with no value and no subkey: a making of it
+ * (other_adopt's or a run's) stopped before its first value was written;
+ * it is taken as no key. */
+static int other_key_bare(int set)
+{
+    char key[INST_PATH_CHARS];
+    HKEY k;
+    DWORD subs = 0;
+    DWORD vals = 0;
+    LONG r;
+
+    other_key(set, key, sizeof(key));
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegQueryInfoKeyA(k, NULL, NULL, NULL, &subs, NULL, NULL, &vals, NULL,
+                         NULL, NULL, NULL);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS && subs == 0 && vals == 0;
+}
+
+/* An adoption may be made or resumed: the key Adopted, or bare. */
+static int other_adoptable(int set)
+{
+    return other_adopted(set) || other_key_bare(set);
+}
+
+/* No key for the set (or a bare one, or one this function began and did
+ * not finish: Adopted 1 with RecordMade not yet 1), and at the install directory's
+ * name a record file whose whole first line is this set's header for that
+ * folder: the key was lost (on 98 SE and ME a power cut before the
+ * registry was written out; section 6.7.5), the file is this installer's,
+ * and the key is made again for it, marked Adopted: what its lost Staged
+ * values recorded is not known, so the uninstall keeps what any staging
+ * may need (other_adopted_keep). Adopted is written first and RecordMade
+ * last, so a run cut short in between resumes here. 1 adopted, 0 nothing
+ * to adopt, -1 in doubt or failed (said). */
+static int other_adopt(int set)
+{
+    char key[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char recPath[INST_PATH_CHARS];
+    char header[INST_PATH_CHARS + 40];
+    DWORD n = 0;
+    DWORD made = 0;
+    DWORD one = 1;
+    char *text;
+    size_t hl;
+    int e;
+
+    if (toolDir[0] == '\0') {
+        return 0;
+    }
+    other_key(set, key, sizeof(key));
+    e = other_key_exists(set);
+    if (e < 0) {
+        return -1;
+    }
+    if (e > 0 && (!other_adoptable(set) ||
+                  (reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made) &&
+                   made != 0))) {
+        /* Not an adoption cut short: RecordMade 1 is a whole record, 2 an
+         * uninstall whose copies are done. */
+        return 0;
+    }
+    join(dir, sizeof(dir), toolDir, inst_other_folder(set));
+    _snprintf(recPath, sizeof(recPath) - 1, "%s\\%s.REC", toolDir,
+              inst_other_folder(set));
+    recPath[sizeof(recPath) - 1] = '\0';
+    e = file_state(recPath);
+    if (e == 0) {
+        return 0;
+    }
+    text = e > 0 ? read_file(recPath, &n) : NULL;
+    inst_rec_header(header, sizeof(header), set, dir);
+    strcat(header, "\r\n");
+    hl = strlen(header);
+    if (text == NULL || n < hl || memcmp(text, header, hl) != 0) {
+        free(text);
+        out("%s is there and is not known to be this installer's: delete it "
+            "if it is not\nwanted, then run the installer again.\n", recPath);
+        flagSteps = 1;
+        return -1;
+    }
+    free(text);
+    if (opts.List) {
+        out("(/list) %s would be taken as this installer's record of %s.\n",
+            recPath, inst_other_label(set));
+        return 0;
+    }
+    if (!other_key_put(set, NULL, "Adopted", REG_DWORD, &one, sizeof(one)) ||
+        !other_key_str(set, NULL, "Record", recPath) ||
+        !other_key_str(set, NULL, "Dir", dir) ||
+        !other_key_str(set, NULL, "Sums", inst_other_sums(set)) ||
+        !other_key_made(set, 1)) {
+        flagFailed = 1;
+        return -1;
+    }
+    out("%s: its record %s was found with no registry key, and is taken "
+        "as this\ninstaller's again; what it had staged is not known, and "
+        "the uninstall keeps\nwhat a staged driver may need.\n",
+        inst_other_label(set), recPath);
+    return 1;
+}
+
+/* The store's INF hashes, read once for an adopted set's uninstall (each
+ * other_inventory reads every INF of the store): 64 hex characters and a
+ * NUL each. */
+static char *othStore;
+static int othStoreN;
+
+/* 1 the store was read whole into othStore, 0 not (freed). */
+static int other_store_load(void)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+    DWORD e;
+    int cap = 0;
+    int whole = 1;
+
+    free(othStore);
+    othStore = NULL;
+    othStoreN = 0;
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(pattern, sizeof(pattern), win, "inf\\*.inf");
+    f = FindFirstFileA(pattern, &fd);
+    if (f == INVALID_HANDLE_VALUE) {
+        e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_NO_MORE_FILES;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            continue;
+        }
+        if (othStoreN == cap) {
+            char *grown;
+            cap = cap == 0 ? 256 : cap * 2;
+            grown = (char *)realloc(othStore, (size_t)cap * 65);
+            if (grown == NULL) {
+                whole = 0;
+                break;
+            }
+            othStore = grown;
+        }
+        join(path, sizeof(path), win, "inf");
+        join(path, sizeof(path), path, fd.cFileName);
+        if (other_hash(path, othStore + (size_t)othStoreN * 65) != 1) {
+            whole = 0;
+            continue;
+        }
+        othStoreN++;
+    } while (FindNextFileA(f, &fd));
+    e = GetLastError();
+    FindClose(f);
+    if (!whole || e != ERROR_NO_MORE_FILES) {
+        free(othStore);
+        othStore = NULL;
+        othStoreN = 0;
+        return 0;
+    }
+    return 1;
+}
+
+/* folder added to kept (';'-joined) once; othKeepFull when it does not
+ * fit. */
+static void other_keep_once(char *kept, size_t cap, const char *folder)
+{
+    const char *s = kept;
+    size_t fl = strlen(folder);
+
+    while (*s != '\0') {
+        const char *end = strchr(s, ';');
+        size_t len = end != NULL ? (size_t)(end - s) : strlen(s);
+        if (len == fl && inst_eqn(s, folder, fl)) {
+            return;
+        }
+        if (end == NULL) {
+            break;
+        }
+        s = end + 1;
+    }
+    if (strlen(kept) + fl + 2 >= cap) {
+        othKeepFull = 1;
+        return;
+    }
+    strcat(kept, folder);
+    strcat(kept, ";");
+}
+
+static int other_store_has(const char *hex)
+{
+    int i;
+
+    for (i = 0; i < othStoreN; i++) {
+        if (inst_eq(othStore + (size_t)i * 65, hex)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 2000 and later, an adopted set: each folder under dir holding an INF
+ * whose bytes an INF of the store holds, added to kept; every INF of the
+ * tree is read, whoever put it there. 0 when that cannot be read. */
+static int other_keep_store_infs(int set, const char *dir, char *kept,
+                                 size_t cap)
+{
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+    DWORD e;
+    int ok = 1;
+    int added = 0;
+
+    join(pattern, sizeof(pattern), dir, "*");
+    f = FindFirstFileA(pattern, &fd);
+    if (f == INVALID_HANDLE_VALUE) {
+        e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND;
+    }
+    do {
+        size_t nl = strlen(fd.cFileName);
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) {
+            continue;
+        }
+        join(path, sizeof(path), dir, fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (!other_keep_store_infs(set, path, kept, cap)) {
+                ok = 0;
+            }
+            continue;
+        }
+        if (added || nl < 4 || !inst_eq(fd.cFileName + nl - 4, ".inf")) {
+            continue;
+        }
+        {
+            char hex[65];
+            if (other_hash(path, hex) != 1) {
+                out("  The driver store could not be compared with %s: %s's "
+                    "copies are left.\n", path, inst_other_label(set));
+                ok = 0;
+                continue;
+            }
+            if (other_store_has(hex)) {
+                other_keep_once(kept, cap, dir);
+                added = 1;
+            }
+        }
+    } while (FindNextFileA(f, &fd));
+    e = GetLastError();
+    FindClose(f);
+    return ok && e == ERROR_NO_MORE_FILES;
+}
+
+/* The uninstall of an adopted set (section 6.7.5): every folder that may
+ * have been staged is kept - on 98 SE and ME each folder a DevicePath
+ * entry names under dir (the entry left too: whose it is is not known), on
+ * 2000 and later each folder of an INF under dir whose bytes an INF of the
+ * store holds. 0 when that cannot be read (nothing deleted). */
+static int other_adopted_keep(int set, const char *dir, const OTHREC *recs,
+                              int count, char *kept, size_t cap)
+{
+    size_t dl = strlen(dir);
+    int i;
+
+    if (!envNow.Nt) {
+        char list[2048];
+        char entry[INST_PATH_CHARS];
+        DWORD type = REG_SZ;
+        const char *s;
+        if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
+                      sizeof(list), &type)) {
+            out("  DevicePath could not be read: %s's copies are left.\n",
+                inst_other_label(set));
+            flagSteps = 1;
+            return 0;
+        }
+        for (s = list; *s != '\0';) {
+            const char *end = strchr(s, ';');
+            size_t len = end != NULL ? (size_t)(end - s) : strlen(s);
+            if (len < sizeof(entry) && len > dl + 1 &&
+                inst_eqn(s, dir, dl) && s[dl] == '\\') {
+                memcpy(entry, s, len);
+                entry[len] = '\0';
+                out("  %s stays on DevicePath, and its folder with it: whose "
+                    "the entry is is not\n  known (its record was lost).\n",
+                    entry);
+                other_keep_once(kept, cap, entry);
+            }
+            if (end == NULL) {
+                break;
+            }
+            s = end + 1;
+        }
+        return 1;
+    }
+    if (!other_store_load()) {
+        out("  The driver store could not be listed: %s's copies are "
+            "left.\n", inst_other_label(set));
+        flagSteps = 1;
+        return 0;
+    }
+    /* The recorded INFs too, by their recorded bytes: a source INF since
+     * deleted or changed may still be in the store. */
+    for (i = 0; i < count; i++) {
+        const char *pth = recs[i].Path;
+        size_t pl = strlen(pth);
+        if (pl < 4 || !inst_eq(pth + pl - 4, ".inf") || pl <= dl + 1) {
+            continue;
+        }
+        if (other_store_has(recs[i].Hash)) {
+            char folder[INST_PATH_CHARS];
+            inst_copy(folder, pth, sizeof(folder));
+            if (strrchr(folder, '\\') != NULL) {
+                *strrchr(folder, '\\') = '\0';
+            }
+            other_keep_once(kept, cap, folder);
+        }
+    }
+    i = other_keep_store_infs(set, dir, kept, cap);
+    free(othStore);
+    othStore = NULL;
+    othStoreN = 0;
+    return i;
+}
+
+/* The set's key and record for this run (section 6.7.5): 1 ready, with
+ * the record's path in recPath and its recovery done; 0 the set is not
+ * copied this run (said). */
+static int other_begin(int set, const char *dir, char *recPath, size_t cap)
+{
+    OTHSET *o = &oth[set];
+    char key[INST_PATH_CHARS];
+    char v[INST_PATH_CHARS];
+    char header[INST_PATH_CHARS + 40];
+    DWORD made = 0;
+    HANDLE h;
+    DWORD put;
+    OTHREC *recs = NULL;
+    int count = 0;
+    int r;
+
+    other_key(set, key, sizeof(key));
+    _snprintf(recPath, cap - 1, "%s\\%s.REC", toolDir, inst_other_folder(set));
+    recPath[cap - 1] = '\0';
+    /* A making of the key cut short (section 6.7.5): RecordMade 0 or
+     * missing, or a value missing. With no record file it is made afresh;
+     * with one, whose it is cannot be told. */
+    {
+        HKEY k;
+        char rp[INST_PATH_CHARS];
+        char sums[80];
+        DWORD md = 0;
+        int whole;
+
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_READ, &k) ==
+            ERROR_SUCCESS) {
+            RegCloseKey(k);
+            whole = other_key_text(set, "Record", rp, sizeof(rp)) > 0 &&
+                    other_key_text(set, "Dir", v, sizeof(v)) > 0 &&
+                    other_key_text(set, "Sums", sums, sizeof(sums)) > 0 &&
+                    reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &md);
+            if ((!whole || md == 0) && other_adoptable(set)) {
+                if (other_adopt(set) < 0) {
+                    inst_copy(o->Why, "its record could not be made again",
+                              sizeof(o->Why));
+                    return 0;
+                }
+            } else if (!whole || md == 0) {
+                if (other_key_text(set, "Record", rp, sizeof(rp)) <= 0) {
+                    inst_copy(rp, recPath, sizeof(rp));
+                }
+                if (file_state(rp) != 0) {
+                    out("%s is there and is not known to be this installer's: "
+                        "delete it if it is\nnot wanted, then run the "
+                        "installer again.\n", rp);
+                    flagSteps = 1;
+                    inst_copy(o->Why, "its record file is in doubt",
+                              sizeof(o->Why));
+                    return 0;
+                }
+                if (!other_key_delete(set)) {
+                    inst_copy(o->Why, "its record could not be reset",
+                              sizeof(o->Why));
+                    return 0;
+                }
+            }
+        }
+    }
+    r = other_key_text(set, "Dir", v, sizeof(v));
+    if (r < 0) {
+        inst_copy(o->Why, "its record could not be read", sizeof(o->Why));
+        return 0;
+    }
+    if (r > 0) {
+        char sums[80];
+        if (other_key_text(set, "Sums", sums, sizeof(sums)) <= 0 ||
+            !inst_eq(v, dir) || !inst_eq(sums, inst_other_sums(set))) {
+            out("%s: an earlier copy of another release or in another folder "
+                "is withdrawn first.\n", inst_other_label(set));
+            if (!other_remove(set, 0)) {
+                inst_copy(o->Why, "the earlier copy could not be withdrawn "
+                          "whole", sizeof(o->Why));
+                return 0;
+            }
+        }
+    }
+    r = other_key_text(set, "Dir", v, sizeof(v));
+    if (r > 0) {
+        if (other_key_text(set, "Record", v, sizeof(v)) > 0) {
+            inst_copy(recPath, v, cap);
+        }
+        if (!reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made)) {
+            made = 0;
+        }
+        if (made == 2) {
+            if (!other_remove(set, 0)) {
+                inst_copy(o->Why, "an earlier withdrawal could not be "
+                          "finished", sizeof(o->Why));
+                return 0;
+            }
+            r = 0;
+        } else if (made == 0 && file_state(recPath) != 0) {
+            out("%s is there and is not known to be this installer's: delete "
+                "it if it is not\nwanted, then run the installer again.\n",
+                recPath);
+            flagSteps = 1;
+            inst_copy(o->Why, "its record file is in doubt", sizeof(o->Why));
+            return 0;
+        }
+    }
+    /* No key and this set's record file: adopted (section 6.7.5). */
+    if (r <= 0 && file_state(recPath) != 0) {
+        int ad = other_adopt(set);
+        if (ad < 0) {
+            inst_copy(o->Why, "a file of its record's name is in the way, or "
+                      "its record could not be made again", sizeof(o->Why));
+            return 0;
+        }
+        if (ad > 0) {
+            r = 1;
+            made = 1;
+        }
+    }
+    if (r <= 0 || made == 0) {
+        if (r <= 0 && (!other_key_str(set, NULL, "Record", recPath) ||
+                       !other_key_made(set, 0) ||
+                       !other_key_str(set, NULL, "Dir", dir) ||
+                       !other_key_str(set, NULL, "Sums",
+                                      inst_other_sums(set)))) {
+            flagFailed = 1;
+            inst_copy(o->Why, "its record could not be written", sizeof(o->Why));
+            return 0;
+        }
+        CreateDirectoryA(toolDir, NULL);
+        h = CreateFileA(recPath, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                        FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE) {
+            out("%s could not be made: %s is not copied.\n", recPath,
+                inst_other_label(set));
+            if (r <= 0) {
+                other_key_delete(set);
+            }
+            inst_copy(o->Why, "its record file could not be made",
+                      sizeof(o->Why));
+            return 0;
+        }
+        inst_rec_header(header, sizeof(header), set, dir);
+        strcat(header, "\r\n");
+        if (!WriteFile(h, header, (DWORD)strlen(header), &put, NULL) ||
+            !FlushFileBuffers(h)) {
+            CloseHandle(h);
+            inst_copy(o->Why, "its record file could not be written",
+                      sizeof(o->Why));
+            return 0;
+        }
+        CloseHandle(h);
+        if (!other_key_made(set, 1)) {
+            inst_copy(o->Why, "its record could not be written", sizeof(o->Why));
+            return 0;
+        }
+        return 1;
+    }
+    r = other_rec_load(set, recPath, dir, &recs, &count);
+    if (r <= 0) {
+        out("%s cannot be read as this installer's record: %s is not "
+            "copied.\nDelete it if it is not wanted, then run the installer "
+            "again.\n", recPath, inst_other_label(set));
+        flagSteps = 1;
+        inst_copy(o->Why, "its record file cannot be read", sizeof(o->Why));
+        return 0;
+    }
+    other_rec_recover(recPath, recs, count);
+    free(recs);
+    if (othRecBroken) {
+        inst_copy(o->Why, "its record file could not be written",
+                  sizeof(o->Why));
+        return 0;
+    }
+    return 1;
+}
+
+/* A folder ('/'-separated, under the set's) whole at dir: every listed file
+ * under it present with its bytes; on 98 SE and ME, and nothing else in
+ * the folder itself. why the first file that stops it. */
+static int other_folder_whole(OTHSET *o, const char *dir, const char *folder,
+                              char *why, size_t cap)
+{
+    char path[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char rel[INST_OTHER_REL_CHARS + 64];
+    char hex[65];
+    size_t fl = strlen(folder);
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+    int i;
+
+    for (i = 0; i < o->Count; i++) {
+        if (!inst_eqn(o->Files[i].Rel, folder, fl) ||
+            o->Files[i].Rel[fl] != '/') {
+            continue;
+        }
+        other_path(path, sizeof(path), dir, o->Files[i].Rel);
+        if (other_hash(path, hex) != 1 || !inst_eq(hex, o->Files[i].Hash)) {
+            inst_copy(why, path, cap);
+            return 0;
+        }
+    }
+    if (envNow.Nt) {
+        return 1;
+    }
+    other_path(pattern, sizeof(pattern), dir, folder);
+    join(pattern, sizeof(pattern), pattern, "*");
+    f = FindFirstFileA(pattern, &fd);
+    if (f == INVALID_HANDLE_VALUE) {
+        inst_copy(why, pattern, cap);
+        return 0;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            continue;
+        }
+        _snprintf(rel, sizeof(rel) - 1, "%s/%s", folder, fd.cFileName);
+        rel[sizeof(rel) - 1] = '\0';
+        if (other_find(o, rel) < 0) {
+            FindClose(f);
+            other_path(why, cap, dir, rel);
+            return 0;
+        }
+    } while (FindNextFileA(f, &fd));
+    if (GetLastError() != ERROR_NO_MORE_FILES) {
+        FindClose(f);
+        other_path(why, cap, dir, folder);
+        return 0;
+    }
+    FindClose(f);
+    return 1;
+}
+
+/* 98 SE and ME: the folder on DevicePath (section 6.7.6). */
+static int other_stage_9x(int set, const char *folderPath)
+{
+    char list[2048];
+    char newList[2048];
+    DWORD type = REG_SZ;
+    HKEY k;
+    LONG w;
+    int r;
+
+    if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
+                  sizeof(list), &type)) {
+        out("  DevicePath could not be read: %s is not staged.\n", folderPath);
+        return 0;
+    }
+    r = inst_path_append(list, folderPath, newList, sizeof(newList));
+    if (r < 0) {
+        out("  DevicePath has no room for %s: it is not staged.\n",
+            folderPath);
+        return 0;
+    }
+    if (strcmp(newList, list) == 0) {
+        return 1;
+    }
+    if (!other_key_str(set, "Staged", folderPath, "DevicePath")) {
+        return 0;
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_REG_CV, 0, KEY_SET_VALUE, &k)
+        != ERROR_SUCCESS) {
+        return 0;
+    }
+    w = RegSetValueExA(k, "DevicePath", 0, type, (const BYTE *)newList,
+                       (DWORD)strlen(newList) + 1);
+    RegCloseKey(k);
+    if (w != ERROR_SUCCESS) {
+        return 0;
+    }
+    flagChanged = 1;
+    return 1;
+}
+
+/* 2000 and later: one INF through SetupCopyOEMInf (section 6.7.6). */
+static int other_stage_nt(int set, const char *dir, const INST_STAGE_LINE *s,
+                          const char *hash)
+{
+    char path[INST_PATH_CHARS];
+    char media[INST_PATH_CHARS];
+    char dest[INST_PATH_CHARS];
+    char list[1024];
+    char data[INST_PATH_CHARS + 1100];
+    char name[INST_PATH_CHARS];
+    char vhex[65];
+    int own;
+    char *component = NULL;
+    const char *nm;
+    DWORD size = 0;
+    char *buf;
+    int r;
+
+    {
+        char key[INST_PATH_CHARS];
+        other_key(set, key, sizeof(key));
+        join(key, sizeof(key), key, "Staged");
+        r = reg_text3(HKEY_LOCAL_MACHINE, key, s->Inf, data, sizeof(data));
+    }
+    if (r > 0 && other_staged_data(data, &own, vhex, name, sizeof(name))) {
+        r = other_store_holds(name, vhex);
+        if (r > 0) {
+            return 1;
+        }
+        if (r < 0) {
+            out("  %s: the store's %s cannot be read; it is left as it "
+                "is.\n", s->Inf, name);
+            return 0;
+        }
+        other_key_del_value(set, "Staged", s->Inf);
+    } else if (r > 0 && inst_starts(data, "pending ")) {
+        if (!other_pending_resolve(set, s->Inf, data)) {
+            return 0;
+        }
+    }
+    if (api.CopyOem == NULL) {
+        out("  SetupCopyOEMInfA is missing: %s is not staged.\n", s->Inf);
+        return 0;
+    }
+    other_path(path, sizeof(path), dir, s->Inf);
+    buf = read_file(path, &size);
+    if (buf == NULL) {
+        out("  %s is not staged: its copy cannot be read.\n", s->Inf);
+        return 0;
+    }
+    free(buf);
+    if (!other_inventory(hash, size, list, sizeof(list))) {
+        out("  %s is not staged: the driver store could not be listed whole.\n",
+            s->Inf);
+        return 0;
+    }
+    _snprintf(data, sizeof(data) - 1, "pending %s %s", hash, list);
+    data[sizeof(data) - 1] = '\0';
+    if (!other_key_str(set, "Staged", s->Inf, data)) {
+        return 0;
+    }
+    inst_copy(media, path, sizeof(media));
+    if (strrchr(media, '\\') != NULL) {
+        *strrchr(media, '\\') = '\0';
+    }
+    dest[0] = '\0';
+    logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, media);
+    if (!api.CopyOem(path, media, SPOST_PATH, 0, dest, sizeof(dest), NULL,
+                     &component)) {
+        out("  %s could not be staged (error 0x%08lX).\n", s->Inf,
+            (unsigned long)GetLastError());
+        other_key_del_value(set, "Staged", s->Inf);
+        return 0;
+    }
+    nm = component != NULL ? component : dest;
+    if (strrchr(nm, '\\') != NULL) {
+        nm = strrchr(nm, '\\') + 1;
+    }
+    if (other_in_list(list, nm)) {
+        _snprintf(data, sizeof(data) - 1, "foreign %s %s", hash, nm);
+        out("  %s is already in the driver store as %s, not placed by this "
+            "installer;\n  Windows may use the files stored with it (whether "
+            "they are this set's is\n  not read).\n", s->Inf, nm);
+    } else {
+        _snprintf(data, sizeof(data) - 1, "own %s %s", hash, nm);
+        flagChanged = 1;
+    }
+    data[sizeof(data) - 1] = '\0';
+    return other_key_str(set, "Staged", s->Inf, data);
+}
+
+/* An earlier run's open lines closed, for a set this run does not copy
+ * (section 6.7.5's recovery runs whether or not the row is ticked). */
+static void other_recover_only(int set)
+{
+    char key[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char recPath[INST_PATH_CHARS];
+    DWORD made = 0;
+    OTHREC *recs = NULL;
+    int count = 0;
+
+    if (opts.List) {
+        return;
+    }
+    if (other_key_exists(set) == 0 || other_adoptable(set)) {
+        int ad = other_adopt(set);
+        if (ad < 0) {
+            out("%s: its record could not be taken up again; it is left as "
+                "it is.\n", inst_other_label(set));
+            flagSteps = 1;
+            return;
+        }
+        if (ad == 0 && (other_key_exists(set) != 1 || other_key_bare(set))) {
+            return;
+        }
+    }
+    if (other_key_exists(set) != 1) {
+        return;
+    }
+    other_key(set, key, sizeof(key));
+    if (other_key_text(set, "Dir", dir, sizeof(dir)) <= 0 ||
+        other_key_text(set, "Record", recPath, sizeof(recPath)) <= 0 ||
+        !reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made) ||
+        made != 1) {
+        return;
+    }
+    if (other_rec_load(set, recPath, dir, &recs, &count) <= 0) {
+        out("%s cannot be read as this installer's record of %s.\n", recPath,
+            inst_other_label(set));
+        flagSteps = 1;
+        return;
+    }
+    othRecBroken = 0;
+    if (!other_rec_recover(recPath, recs, count) && othRecBroken) {
+        out("%s could not be written.\n", recPath);
+        flagSteps = 1;
+    }
+    free(recs);
+}
+
+/* 98 SE and ME: each folder the Staged record names put back on
+ * DevicePath where this run's own cleanup of the legacy %windir%\XHCI98
+ * took it out (devicepath_update): unticking leaves staging as it is. */
+static void other_restore_devicepath(int set)
+{
+    char name[INST_PATH_CHARS * 2];
+    char data[INST_PATH_CHARS + 1100];
+    char list[2048];
+    char newList[2048];
+    DWORD type = REG_SZ;
+    DWORD i;
+    int e;
+
+    if (envNow.Nt || opts.List) {
+        return;
+    }
+    e = other_key_exists(set);
+    if (e < 0) {
+        out("%s: its record cannot be read; its DevicePath entries are not "
+            "checked.\n", inst_other_label(set));
+        flagSteps = 1;
+        return;
+    }
+    if (e == 0) {
+        return;
+    }
+    for (i = 0;; i++) {
+        e = other_staged_enum(set, i, name, sizeof(name), data, sizeof(data));
+        if (e < 0) {
+            out("%s: its staging record cannot be read; its DevicePath "
+                "entries are not checked.\n", inst_other_label(set));
+            flagSteps = 1;
+            return;
+        }
+        if (e == 0) {
+            return;
+        }
+        if (!inst_eq(data, "DevicePath")) {
+            continue;
+        }
+        if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
+                      sizeof(list), &type) ||
+            inst_path_append(list, name, newList, sizeof(newList)) < 0) {
+            out("DevicePath could not be read or has no room: %s is not on "
+                "it.\n", name);
+            flagSteps = 1;
+            continue;
+        }
+        if (strcmp(list, newList) != 0) {
+            HKEY k;
+            LONG w = ERROR_ACCESS_DENIED;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_REG_CV, 0, KEY_SET_VALUE,
+                              &k) == ERROR_SUCCESS) {
+                w = RegSetValueExA(k, "DevicePath", 0, type,
+                                   (const BYTE *)newList,
+                                   (DWORD)strlen(newList) + 1);
+                RegCloseKey(k);
+            }
+            if (w != ERROR_SUCCESS) {
+                out("DevicePath could not be written: %s is not on it.\n",
+                    name);
+                flagSteps = 1;
+                continue;
+            }
+            logonly("other: %s put back on DevicePath\n", name);
+            flagChanged = 1;
+        }
+    }
+}
+
+static void other_run_set(int set)
+{
+    OTHSET *o = &oth[set];
+    char dir[INST_PATH_CHARS];
+    char recPath[INST_PATH_CHARS];
+    char dest[INST_PATH_CHARS];
+    char token[9];
+    char why[INST_PATH_CHARS];
+    int i;
+    int made;
+    int left = 0;
+    DWORD rnd;
+
+    o->Ran = 0;
+    o->InFolder = 0;
+    o->StagedNow = 0;
+    o->LeftOut[0] = '\0';
+    o->Why[0] = '\0';
+    if (!go_on()) {
+        return;
+    }
+    other_restore_devicepath(set);
+    if (o->State != INST_OTHER_CARRIED || !o->Include || toolDir[0] == '\0') {
+        other_recover_only(set);
+        return;
+    }
+    join(dir, sizeof(dir), toolDir, inst_other_folder(set));
+    if (opts.List) {
+        out("(/list) %s would be copied to %s%s.\n", inst_other_label(set), dir,
+            o->StageOn ? ", and its INFs for this Windows staged" : "");
+        return;
+    }
+    step(INST_STEP_BEGIN, "Copying %s to %s", inst_other_label(set), dir);
+    othRecBroken = 0;
+    if (!other_begin(set, dir, recPath, sizeof(recPath))) {
+        out("%s is not copied: %s.\n", inst_other_label(set), o->Why);
+        flagSteps = 1;
+        if (othRecBroken || strstr(o->Why, "written") != NULL ||
+            strstr(o->Why, "made") != NULL) {
+            flagFailed = 1;
+        }
+        step(INST_STEP_FAILED, "%s", inst_other_label(set));
+        return;
+    }
+    o->Ran = 1;
+    rnd = (GetTickCount() ^ (DWORD)GetCurrentProcessId() ^
+           ((DWORD)rand() << 16) ^ (DWORD)rand()) & 0xFFFFFFFFUL;
+    _snprintf(token, sizeof(token), "%08lX", (unsigned long)rnd);
+    token[8] = '\0';
+    for (i = 0; i <= o->Count && !othRecBroken; i++) {
+        const char *rel = i < o->Count ? o->Files[i].Rel : "SHA256.TXT";
+        char hex[65];
+        if (!go_on()) {
+            left++;
+            break;
+        }
+        if (i == o->Count) {
+            inst_sha256((const unsigned char *)o->Sums, o->SumsLen, hex);
+        }
+        other_path(dest, sizeof(dest), dir, rel);
+        if (other_copy_file(o, recPath, dest, rel,
+                            i < o->Count ? o->Files[i].Hash : hex, token,
+                            i < o->Count ? NULL : o->Sums, o->SumsLen,
+                            &made)) {
+            o->InFolder++;
+        } else {
+            left++;
+            if (left <= 3) {
+                if (o->LeftOut[0] != '\0') {
+                    strncat(o->LeftOut, ", ", sizeof(o->LeftOut) -
+                            strlen(o->LeftOut) - 1);
+                }
+                strncat(o->LeftOut, rel, sizeof(o->LeftOut) -
+                        strlen(o->LeftOut) - 1);
+            }
+        }
+    }
+    if (othRecBroken) {
+        out("%s: its record file %s could not be written; the copy stops "
+            "here.\n", inst_other_label(set), recPath);
+        flagFailed = 1;
+        left++;
+    }
+    out("%s: %d of its %d files are in %s.\n", inst_other_label(set),
+        o->InFolder, o->Count + 1, dir);
+    if (left > 0) {
+        out("Not copied: %s%s (see the log).\n", o->LeftOut,
+            left > 3 ? " and more" : "");
+        flagSteps = 1;
+    }
+    if (o->StageOn && othSys >= 0) {
+        char done[INST_PATH_CHARS * 4];
+        done[0] = '\0';
+        for (i = 0; i < o->StageCount; i++) {
+            const INST_STAGE_LINE *s = &o->Stage[i];
+            char folder[INST_OTHER_REL_CHARS];
+            char folderPath[INST_PATH_CHARS];
+            int k = other_find(o, s->Inf);
+            if (!s->Stage || !(s->Systems & ((INST_U32)1 << othSys)) || k < 0) {
+                continue;
+            }
+            if (!go_on()) {
+                left++;
+                break;
+            }
+            inst_copy(folder, s->Inf, sizeof(folder));
+            if (strrchr(folder, '/') != NULL) {
+                *strrchr(folder, '/') = '\0';
+            }
+            if (!other_folder_whole(o, dir, folder, why, sizeof(why))) {
+                out("  %s is not staged: %s is missing, changed or unlisted.\n",
+                    s->Inf, why);
+                left++;
+                continue;
+            }
+            if (!envNow.Nt) {
+                other_path(folderPath, sizeof(folderPath), dir, folder);
+                if (strstr(done, folderPath) != NULL) {
+                    continue;
+                }
+                if (other_stage_9x(set, folderPath)) {
+                    o->StagedNow++;
+                    if (strlen(done) + strlen(folderPath) + 2 < sizeof(done)) {
+                        strcat(done, folderPath);
+                        strcat(done, ";");
+                    }
+                } else {
+                    left++;
+                }
+            } else if (other_stage_nt(set, dir, s, o->Files[k].Hash)) {
+                o->StagedNow++;
+            } else {
+                left++;
+            }
+        }
+        if (left > 0) {
+            flagSteps = 1;
+        }
+        out("%s: %d %s for this Windows staged.\n", inst_other_label(set),
+            o->StagedNow, envNow.Nt ? "INF(s)" : "folder(s)");
+    }
+    step(left > 0 ? INST_STEP_LEFT : INST_STEP_DONE, "%s", inst_other_label(set));
+}
+
+static void other_run(void)
+{
+    int set;
+
+    if (!othRead) {
+        return;
+    }
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        other_run_set(set);
+    }
+}
+
+/* ---- the uninstall, and the withdrawal (section 6.7.8) ---- */
+
+/* 1 when the folder of path (a full path) is one of kept's (';'-ended). */
+static int other_kept(const char *kept, const char *path)
+{
+    const char *p = kept;
+
+    while (*p != '\0') {
+        const char *e = strchr(p, ';');
+        size_t n = e != NULL ? (size_t)(e - p) : strlen(p);
+        if (n > 0 && strlen(path) > n && inst_eqn(path, p, n) &&
+            path[n] == '\\') {
+            return 1;
+        }
+        if (e == NULL) {
+            break;
+        }
+        p = e + 1;
+    }
+    return 0;
+}
+
+
+static void other_keep(char *kept, size_t cap, const char *dir,
+                       const char *rel)
+{
+    char folder[INST_PATH_CHARS];
+    char probe[INST_PATH_CHARS + 1];
+
+    other_path(folder, sizeof(folder), dir, rel);
+    if (strrchr(folder, '\\') != NULL) {
+        *strrchr(folder, '\\') = '\0';
+    }
+    /* Once each. */
+    inst_copy(probe, folder, sizeof(probe));
+    strncat(probe, "\\x", sizeof(probe) - strlen(probe) - 1);
+    if (other_kept(kept, probe)) {
+        return;
+    }
+    if (strlen(kept) + strlen(folder) + 2 >= cap) {
+        othKeepFull = 1;
+        return;
+    }
+    strcat(kept, folder);
+    strcat(kept, ";");
+}
+
+/* An INF a devnode's driver key names: 1 named, 0 not, -1 a key unread. */
+static int other_inf_named(const char *name)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].InfPathState < 0) {
+            return -1;
+        }
+        if (devs[i].InfPathState > 0 && inst_eq(devs[i].InfPath, name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* NT: an own INF out of the store, as s98_un_inf_nt takes Stor98's. */
+static int other_store_remove(const char *name)
+{
+    char win[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char pnf[INST_PATH_CHARS];
+    int s;
+
+    if (api.UninstallOem != NULL) {
+        return api.UninstallOem(name, 0, NULL) ? 1 : 0;
+    }
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(path, sizeof(path), win, "inf");
+    join(path, sizeof(path), path, name);
+    inst_copy(pnf, path, sizeof(pnf));
+    if (strlen(pnf) > 4) {
+        strcpy(pnf + strlen(pnf) - 4, ".pnf");
+    }
+    s = file_state(pnf);
+    if (s < 0 || (s > 0 && !DeleteFileA(pnf))) {
+        return 0;
+    }
+    s = file_state(path);
+    return !(s < 0 || (s > 0 && !DeleteFileA(path)));
+}
+
+/* The staging taken out: 1 nothing left but the values that keep a folder
+ * (their folders in kept), 0 something stays for a later run. */
+static int other_unstage(int set, const char *dir, char *kept, size_t cap)
+{
+    char name[INST_PATH_CHARS * 2];
+    char data[INST_PATH_CHARS + 1100];
+    char store[INST_PATH_CHARS];
+    char list[2048];
+    char newList[2048];
+    DWORD type = REG_SZ;
+    DWORD i = 0;
+    int e;
+    int ok = 1;
+
+    for (;;) {
+        e = other_staged_enum(set, i, name, sizeof(name), data, sizeof(data));
+        if (e < 0) {
+            out("  %s: its staging record cannot be read.\n",
+                inst_other_label(set));
+            flagSteps = 1;
+            return 0;
+        }
+        if (e == 0) {
+            break;
+        }
+        if (inst_eq(data, "DevicePath")) {
+            if (opts.List) {
+                out("(/list) %s would be taken out of DevicePath.\n", name);
+                i++;
+                continue;
+            }
+            if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
+                          sizeof(list), &type) ||
+                inst_path_remove(list, name, newList, sizeof(newList)) < 0) {
+                out("  DevicePath could not be changed: %s stays on it.\n",
+                    name);
+                flagSteps = 1;
+                ok = 0;
+                i++;
+                continue;
+            }
+            if (strcmp(list, newList) != 0) {
+                HKEY k;
+                LONG w = ERROR_ACCESS_DENIED;
+                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_REG_CV, 0,
+                                  KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                    w = RegSetValueExA(k, "DevicePath", 0, type,
+                                       (const BYTE *)newList,
+                                       (DWORD)strlen(newList) + 1);
+                    RegCloseKey(k);
+                }
+                if (w != ERROR_SUCCESS) {
+                    out("  DevicePath could not be written: %s stays on it.\n",
+                        name);
+                    flagSteps = 1;
+                    ok = 0;
+                    i++;
+                    continue;
+                }
+                out("%s taken out of DevicePath.\n", name);
+                flagChanged = 1;
+            }
+            if (!other_key_del_value(set, "Staged", name)) {
+                ok = 0;
+                i++;
+            }
+            continue;
+        }
+        if (inst_starts(data, "pending ")) {
+            if (opts.List || !other_pending_resolve(set, name, data)) {
+                if (!opts.List) {
+                    out("  %s: an interrupted staging could not be resolved: "
+                        "the driver store\n  could not be listed.\n", name);
+                    flagSteps = 1;
+                    ok = 0;
+                }
+                other_keep(kept, cap, dir, name);
+                i++;
+                continue;
+            }
+            /* The values it wrote are read on the next pass. */
+            i = 0;
+            continue;
+        }
+        {
+            const char *rel = name;
+            char relBuf[INST_PATH_CHARS];
+            char vhex[65];
+            int own = 0;
+            int h;
+            if (strchr(name, '|') != NULL) {
+                inst_copy(relBuf, name, sizeof(relBuf));
+                *strchr(relBuf, '|') = '\0';
+                rel = relBuf;
+            }
+            if (!other_staged_data(data, &own, vhex, store, sizeof(store))) {
+                /* A value this installer cannot read: its folder is kept,
+                 * and the value with it. */
+                out("  %s: its staging record cannot be read; its folder is "
+                    "kept.\n", rel);
+                flagSteps = 1;
+                ok = 0;
+                other_keep(kept, cap, dir, rel);
+                i++;
+                continue;
+            }
+            h = other_store_holds(store, vhex);
+            if (h < 0) {
+                out("  The driver store's %s cannot be read: %s's folder is "
+                    "kept.\n", store, rel);
+                flagSteps = 1;
+                ok = 0;
+                other_keep(kept, cap, dir, rel);
+                i++;
+                continue;
+            }
+            if (h == 0) {
+                /* Not there, or another INF under the name now. */
+                if (!opts.List && !other_key_del_value(set, "Staged", name)) {
+                    ok = 0;
+                    i++;
+                }
+                if (opts.List) {
+                    i++;
+                }
+                continue;
+            }
+            if (!own) {
+                other_keep(kept, cap, dir, rel);
+                i++;
+                continue;
+            }
+            e = other_inf_named(store);
+            if (e != 0) {
+                out("  %s %s: it stays in the driver store, and %s's folder "
+                    "with it.\n", store, e > 0 ? "is named by a device" :
+                    "may be named by a device (a driver key cannot be read)",
+                    rel);
+                if (e < 0) {
+                    flagSteps = 1;
+                    ok = 0;
+                }
+                other_keep(kept, cap, dir, rel);
+                i++;
+                continue;
+            }
+            if (opts.List) {
+                out("(/list) %s would be removed from the driver store.\n",
+                    store);
+                i++;
+                continue;
+            }
+            if (!other_store_remove(store)) {
+                out("  %s could not be removed from the driver store (error "
+                    "%lu): %s's folder\n  is kept.\n", store,
+                    (unsigned long)GetLastError(), rel);
+                flagSteps = 1;
+                ok = 0;
+                other_keep(kept, cap, dir, rel);
+                i++;
+                continue;
+            }
+            out("%s was removed from the driver store.\n", store);
+            flagChanged = 1;
+            if (!other_key_del_value(set, "Staged", name)) {
+                ok = 0;
+                i++;
+            }
+        }
+    }
+    return ok;
+}
+
+/* Each folder of the set under dir, children first, removed when empty. */
+static void other_rmdirs(const char *dir)
+{
+    char pattern[INST_PATH_CHARS];
+    char sub[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE f;
+
+    join(pattern, sizeof(pattern), dir, "*");
+    f = FindFirstFileA(pattern, &fd);
+    if (f != INVALID_HANDLE_VALUE) {
+        do {
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                strcmp(fd.cFileName, ".") != 0 &&
+                strcmp(fd.cFileName, "..") != 0) {
+                join(sub, sizeof(sub), dir, fd.cFileName);
+                other_rmdirs(sub);
+            }
+        } while (FindNextFileA(f, &fd));
+        FindClose(f);
+    }
+    RemoveDirectoryA(dir);
+}
+
+/* The set withdrawn (section 6.7.8), by the uninstall (uninstall 1) or by a
+ * ticked run over another release's copy: 1 nothing of it left for a later
+ * run, 0 something left (said; the record and key kept). */
+static int other_remove(int set, int uninstall)
+{
+    char key[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char recPath[INST_PATH_CHARS];
+    char hex[65];
+    char kept[INST_PATH_CHARS * 32];
+    DWORD made = 1;
+    OTHREC *recs = NULL;
+    int count = 0;
+    int r;
+    int i;
+    int ok = 1;
+
+    (void)uninstall;
+    other_key(set, key, sizeof(key));
+    r = other_key_exists(set);
+    if (r == 0 || (r > 0 && other_adoptable(set))) {
+        /* A record file whose key was lost (section 6.7.5). */
+        r = other_adopt(set);
+        if (r == 0 && other_key_exists(set) == 1) {
+            if (other_key_bare(set)) {
+                /* A bare key: under /list other_adopt has said what it
+                 * would do; else there is no record file, nothing was
+                 * copied, and the key goes. */
+                if (opts.List) {
+                    return 1;
+                }
+                return other_key_delete(set);
+            }
+            r = 1;
+        }
+        if (r == 0) {
+            return 1;
+        }
+        if (r < 0) {
+            return 0;
+        }
+        r = other_key_exists(set);
+    }
+    if (r < 0) {
+        out("  %s: its record cannot be read; nothing of it is removed.\n",
+            inst_other_label(set));
+        flagSteps = 1;
+        return 0;
+    }
+    recPath[0] = '\0';
+    dir[0] = '\0';
+    {
+        char sums[80];
+        if (other_key_text(set, "Record", recPath, sizeof(recPath)) <= 0) {
+            recPath[0] = '\0';
+        }
+        if (recPath[0] == '\0' ||
+            other_key_text(set, "Dir", dir, sizeof(dir)) <= 0 ||
+            other_key_text(set, "Sums", sums, sizeof(sums)) <= 0 ||
+            !reg_dword(HKEY_LOCAL_MACHINE, key, "RecordMade", &made)) {
+            /* A making of the key cut short (section 6.7.5). */
+            made = 0;
+        }
+    }
+    if (made == 0) {
+        if (recPath[0] == '\0') {
+            if (toolDir[0] == '\0') {
+                out("  %s: its record is incomplete and names no record "
+                    "file; it is left.\n", inst_other_label(set));
+                flagSteps = 1;
+                return 0;
+            }
+            _snprintf(recPath, sizeof(recPath) - 1, "%s\\%s.REC", toolDir,
+                      inst_other_folder(set));
+            recPath[sizeof(recPath) - 1] = '\0';
+        }
+        if (file_state(recPath) != 0) {
+            out("  %s is not known to be this installer's: it is left. Delete "
+                "it if it is not\n  wanted, then run the uninstall again.\n",
+                recPath);
+            flagSteps = 1;
+            return 0;
+        }
+        if (opts.List) {
+            out("(/list) %s's record would be removed.\n", inst_other_label(set));
+            return 1;
+        }
+        return other_key_delete(set);
+    }
+    kept[0] = '\0';
+    othKeepFull = 0;
+    if (made == 1) {
+        if (!other_unstage(set, dir, kept, sizeof(kept))) {
+            return 0;
+        }
+        if (othKeepFull) {
+            out("  %s: too many folders to keep; its copies are left.\n",
+                inst_other_label(set));
+            flagSteps = 1;
+            return 0;
+        }
+        r = other_rec_load(set, recPath, dir, &recs, &count);
+        if (r <= 0) {
+            out("  %s %s: %s's copies are left.\n", recPath, r == 0 ?
+                "is missing" : "cannot be read as this installer's record",
+                inst_other_label(set));
+            flagSteps = 1;
+            return 0;
+        }
+        othRecBroken = 0;
+        if (!opts.List && !other_rec_recover(recPath, recs, count)) {
+            free(recs);
+            return 0;
+        }
+        if (other_adopted(set) &&
+            (!other_adopted_keep(set, dir, recs, count, kept, sizeof(kept)) ||
+             othKeepFull)) {
+            free(recs);
+            flagSteps = 1;
+            return 0;
+        }
+        for (i = 0; i < count; i++) {
+            const OTHREC *x = &recs[i];
+            int h;
+            if (!x->Done || other_kept(kept, x->Path)) {
+                continue;
+            }
+            h = other_hash(x->Path, hex);
+            if (h == 0) {
+                continue;
+            }
+            if (h < 0) {
+                out("  %s cannot be read: it stays for now.\n", x->Path);
+                flagSteps = 1;
+                flagRestart = 1;
+                ok = 0;
+                continue;
+            }
+            if (!inst_eq(hex, x->Hash)) {
+                out("  %s stays: it has changed since this installer copied "
+                    "it.\n", x->Path);
+                continue;
+            }
+            if (opts.List) {
+                continue;
+            }
+            if (!delete_file(x->Path)) {
+                out("  %s could not be deleted: restart Windows, then run the "
+                    "uninstall again.\n", x->Path);
+                flagSteps = 1;
+                flagRestart = 1;
+                ok = 0;
+                continue;
+            }
+            flagChanged = 1;
+        }
+        free(recs);
+        if (opts.List) {
+            out("(/list) %s's copies in %s would be deleted.\n",
+                inst_other_label(set), dir);
+            return 1;
+        }
+        if (!ok) {
+            return 0;
+        }
+        if (kept[0] != '\0') {
+            const char *s = kept;
+            out("%s: these folders are kept, for the driver a device or the "
+                "driver store uses\nfrom them; their files are yours now:\n",
+                inst_other_label(set));
+            while (*s != '\0') {
+                const char *end = strchr(s, ';');
+                size_t len = end != NULL ? (size_t)(end - s) : strlen(s);
+                if (len > 0) {
+                    out("  %.*s\n", (int)len, s);
+                }
+                if (end == NULL) {
+                    break;
+                }
+                s = end + 1;
+            }
+        }
+        other_rmdirs(dir);
+        out("%s's copies in %s were removed.\n", inst_other_label(set), dir);
+        if (!other_key_made(set, 2)) {
+            return 0;
+        }
+    }
+    r = file_state(recPath);
+    if (r < 0 || (r > 0 && !delete_file(recPath))) {
+        out("  %s could not be %s.\n", recPath, r < 0 ? "read" : "deleted");
+        flagSteps = 1;
+        return 0;
+    }
+    return other_key_delete(set);
+}
+
+/* The uninstall's step (section 6.7.8): 1 nothing left for a later run. */
+static int other_uninstall(void)
+{
+    int set;
+    int ok = 1;
+
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        if (!other_remove(set, 1)) {
+            ok = 0;
+        }
+    }
+    return ok;
+}
+
+/* ---- the window's, and the Finish page's (sections 6.7.4 and 6.7.7) ---- */
+
+int inst_eng_other_state(int set, int *state, int *forThis, int *include,
+                         int *stage)
+{
+    if (set < 0 || set >= INST_SET_COUNT || !othRead) {
+        return 0;
+    }
+    *state = oth[set].State;
+    *forThis = oth[set].ForThis;
+    *include = oth[set].Include;
+    *stage = oth[set].StageOn;
+    return 1;
+}
+
+void inst_eng_other_texts(int set, const char *dir, char *sentence,
+                          size_t sCap, char *line, size_t lCap)
+{
+    if (set < 0 || set >= INST_SET_COUNT) {
+        return;
+    }
+    inst_other_sentence(sentence, sCap, set, dir);
+    inst_other_line(line, lCap, set, othRead ? oth[set].State :
+                    INST_OTHER_ABSENT, inst_other_sums(set)[0] != '\0',
+                    other_version());
+}
+
+void inst_eng_other_choose(int set, int include, int stage)
+{
+    if (set < 0 || set >= INST_SET_COUNT || !othRead) {
+        return;
+    }
+    oth[set].Include = include && oth[set].State == INST_OTHER_CARRIED;
+    oth[set].StageOn = oth[set].Include && stage && oth[set].ForThis > 0;
+    logonly("other: %s chosen %d, stage %d\n", inst_other_subkey(set),
+            oth[set].Include, oth[set].StageOn);
+}
+
+void inst_eng_other_warnings(char *text, size_t cap)
+{
+    INST_U32 w = inst_other_warnings(
+        oth[INST_SET_FREE].Include, oth[INST_SET_FREE].Unread,
+        oth[INST_SET_FREE].StageOn, oth[INST_SET_NONFREE].Include,
+        oth[INST_SET_NONFREE].StageOn, other_is64() && envNow.Major == 6);
+
+    inst_other_warn_text(w, oth[INST_SET_FREE].Unread,
+                         oth[INST_SET_FREE].StageOn, text, cap);
+}
+
+void inst_eng_other_summary(const char *dir, char *text, size_t cap)
+{
+    int set;
+    const char *d = dir != NULL && dir[0] ? dir : toolDir;
+
+    if (cap == 0) {
+        return;
+    }
+    text[0] = '\0';
+    for (set = 0; set < INST_SET_COUNT && othRead; set++) {
+        char one[400];
+        if (oth[set].State != INST_OTHER_CARRIED) {
+            continue;
+        }
+        if (!oth[set].Include) {
+            _snprintf(one, sizeof(one) - 1, "%s: left out.",
+                      inst_other_label(set));
+        } else {
+            _snprintf(one, sizeof(one) - 1, "%s: copied to %s\\%s%s.",
+                      inst_other_label(set), d, inst_other_folder(set),
+                      oth[set].StageOn ? ", its INFs for this Windows staged"
+                                       : "; nothing installs them");
+        }
+        one[sizeof(one) - 1] = '\0';
+        if (text[0] != '\0') {
+            strncat(text, "\r\n", cap - strlen(text) - 1);
+        }
+        strncat(text, one, cap - strlen(text) - 1);
+    }
+}
+
+/* Section 6.7.7's paragraph, lines joined by nl. */
+static void other_finish(char *text, size_t cap, const char *nl)
+{
+    int set;
+    char one[1200];
+    char line[400];
+
+    if (cap == 0) {
+        return;
+    }
+    text[0] = '\0';
+    if (!othRead) {
+        return;
+    }
+    inst_copy(text, "Other USB drivers", cap);
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        OTHSET *o = &oth[set];
+        strncat(text, nl, cap - strlen(text) - 1);
+        if (o->State == INST_OTHER_CARRIED && o->Ran) {
+            char dir[INST_PATH_CHARS];
+            char folders[INST_PATH_CHARS * 7];
+            int i;
+            int n = 0;
+            int shown = 0;
+            INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
+            join(dir, sizeof(dir), toolDir, inst_other_folder(set));
+            folders[0] = '\0';
+            for (i = 0; i < o->StageCount; i++) {
+                char f[INST_PATH_CHARS];
+                if (!(o->Stage[i].Systems & bit)) {
+                    continue;
+                }
+                other_path(f, sizeof(f), dir, o->Stage[i].Inf);
+                if (strrchr(f, '\\') != NULL) {
+                    *strrchr(f, '\\') = '\0';
+                }
+                if (strstr(folders, f) != NULL) {
+                    continue;
+                }
+                if (shown < 6 && strlen(folders) + strlen(f) + 8 <
+                    sizeof(folders)) {
+                    strcat(folders, nl);
+                    strcat(folders, "  ");
+                    strcat(folders, f);
+                    shown++;
+                }
+                n++;
+            }
+            _snprintf(one, sizeof(one) - 1, "%s: in %s%s. Up to date: %s.",
+                      inst_other_label(set), dir, o->StagedNow > 0 ?
+                      ", its INFs for this Windows staged" : "",
+                      inst_other_address(set));
+            one[sizeof(one) - 1] = '\0';
+            strncat(text, one, cap - strlen(text) - 1);
+            if (n > 0) {
+                strncat(text, nl, cap - strlen(text) - 1);
+                strncat(text, "To install one by hand, point the Add New "
+                        "Hardware Wizard (or Update Driver) at one of:",
+                        cap - strlen(text) - 1);
+                strncat(text, folders, cap - strlen(text) - 1);
+                if (n > shown) {
+                    _snprintf(one, sizeof(one) - 1, "%sand %d more: see "
+                              "%s\\STAGE.TXT", nl, n - shown, dir);
+                    one[sizeof(one) - 1] = '\0';
+                    strncat(text, one, cap - strlen(text) - 1);
+                }
+            }
+        } else if (o->State == INST_OTHER_CARRIED) {
+            _snprintf(one, sizeof(one) - 1, "%s: not copied this time%s%s; "
+                      "it is in this download's %s. Up to date: %s.",
+                      inst_other_label(set), o->Why[0] ? " (" : "", o->Why[0] ?
+                      o->Why : "", inst_other_folder(set),
+                      inst_other_address(set));
+            one[sizeof(one) - 1] = '\0';
+            if (o->Why[0]) {
+                char *c = strstr(one, "; it is");
+                if (c != NULL) {
+                    memmove(c + 1, c, strlen(c) + 1);
+                    *c = ')';
+                }
+            }
+            strncat(text, one, cap - strlen(text) - 1);
+        } else {
+            inst_other_line(line, sizeof(line), set, o->State,
+                            inst_other_sums(set)[0] != '\0', other_version());
+            _snprintf(one, sizeof(one) - 1, "%s: %s", inst_other_label(set),
+                      line);
+            one[sizeof(one) - 1] = '\0';
+            strncat(text, one, cap - strlen(text) - 1);
+        }
+    }
+}
+
+void inst_eng_other_finish(char *text, size_t cap)
+{
+    other_finish(text, cap, "\n");
+}
+
 /* ---- the window's (record 26 section 5.3) ------------------------------- */
 
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap)
@@ -21365,6 +24253,10 @@ void inst_eng_usage(void)
 "  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's);\n"
 "                elsewhere copy their files to the tools folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
+"  /free         copy the free USB class drivers (beta) to the tools folder;\n"
+"  /freestage    and let Windows use them when a device is plugged in\n"
+"  /nonfree      copy the non-free driver pack to the tools folder;\n"
+"  /nonfreestage and let Windows use it when a device is plugged in\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /faster       turn the USB Tree's \"can run faster\" notice on for this\n"
 "                computer (/nofaster: off)\n"
@@ -22706,6 +25598,7 @@ int inst_eng_read(void)
     /* Record 26 section 6.5 on Windows 98 SE; elsewhere (section 5.3.1,
      * task 43.43) /storage copies the files to the tools folder only. */
     stor_read();
+    other_read();
     if (opts.Storage && storPack <= 0) {
         out("REFUSED: /storage: %s\n", storPack == 0 ?
             "this download does not carry the USB storage drivers." :
@@ -22814,6 +25707,7 @@ void inst_eng_tb_question(void)
     s98_question();
     vsd_question();
     stor_question();
+    other_question();
 }
 
 int inst_eng_tb_state(int *haveCmOut, int *present, int *defaultYes,
@@ -23130,6 +26024,11 @@ int inst_eng_end(int code, int *line)
     } else if (relaunched) {
         out("\nThe uninstall goes on in the window that opened.\n");
     } else if (!opts.SelfTest) {
+        if (!instWindow && othRead && !opts.Uninstall) {
+            char para[4096];
+            other_finish(para, sizeof(para), "\n");
+            out("\n%s\n", para);
+        }
         code = inst_final(flagChanged, opts.List, code, &last);
         out("\n%s\n", inst_final_text_cold(last, inst_eng_shutdown()));
     }

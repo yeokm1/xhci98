@@ -1,0 +1,21 @@
+# wdmfree-pin.txt - the usb-wdm-free drivers xHCI98's download 2 and 3 carry
+#
+# Read by scripts\package\make-release.ps1 (roadmap-usb4 task 43.48; design
+# record 26 section 6.7.2). A usb-wdm-free driver qualifies only once its legs
+# have passed on its systems (roadmap 43.48). The lines, '#' and blank lines
+# aside:
+#
+#   Tag: <the usb-wdm-free release's tag>
+#   Commit: <the commit it names, 40 hex>
+#   Package: <class>/<package> | <the systems its legs passed on>
+#   SHA256: <64 hex> <path from the release's top>
+#
+# one Package line per qualifying package, the systems in STAGE.TXT's tokens
+# (W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64), and
+# one SHA256 line per file of each package's free/<class>/<package>/ and for
+# the release's LICENSE, NOTICE.md and STAGE.TXT. The cut takes exactly these
+# files at exactly these bytes. With no Tag line no release qualifies: the cut
+# makes no download 2, and download 3 carries no WDMFREE\.
+#
+# No usb-wdm-free release qualifies yet (2026-10-22): it has no release and no
+# STAGE.TXT.
