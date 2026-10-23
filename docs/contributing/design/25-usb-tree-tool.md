@@ -1959,8 +1959,8 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    taken away (item 9's re-send) ends the one shown and leaves those
    waiting, since a show or a click the shell posted before it may still
    come; one the shell dropped unshown keeps only the next show in doubt,
-   and more waiting than are kept (sixteen) keeps every show in doubt
-   until none waits. A shell not heard from in the session (and not Vista or
+   more waiting than are kept (sixteen) are counted, and their shows,
+   which come first, are in doubt; so is a show with none waiting. A shell not heard from in the session (and not Vista or
    later, item 9) is read by the last balloon sent, as before.
    **Windows 2000 (task 43.68, 2026-10-23).** Read on 2000 SP4 in QEMU
    with a build that logged every `WM_TRAYICON` message (`runs/run-43.md`,

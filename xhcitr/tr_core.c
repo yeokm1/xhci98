@@ -3010,21 +3010,28 @@ void tr_bkind_step(TR_BKIND *b, int ev)
     case TR_BE_OTHER: {
         int kind = ev == TR_BE_SENT ? TR_BK_FAST : TR_BK_OTHER;
         if (b->N == TR_BK_PENDING) {
-            /* Full: the oldest goes, and with it what its kind was, so
-             * every show is in doubt until none waits. */
+            /* Full: the oldest is counted, its kind not kept. Saturated,
+             * the count stays: every show in doubt from then on. */
             memmove(&b->Wait[0], &b->Wait[1], (TR_BK_PENDING - 1) * sizeof(b->Wait[0]));
             b->N--;
-            b->Spilled = 1;
+            if (b->Lost < TR_BK_LOST_MAX) {
+                b->Lost++;
+            }
         }
         b->Wait[b->N++] = kind;
         b->Sent = kind;
         break;
     }
     case TR_BE_SHOW:
-        if (b->N == 0) {
-            /* None waiting: the last one sent. */
-            b->Shown = b->Spilled ? TR_BK_OTHER : b->Sent;
-            b->Spilled = 0;
+        if (b->Lost > 0) {
+            /* One of those counted, the oldest: its kind is not known. */
+            if (b->Lost < TR_BK_LOST_MAX) {
+                b->Lost--;
+            }
+            b->Shown = TR_BK_OTHER;
+        } else if (b->N == 0) {
+            /* None waiting: a show this list cannot place. */
+            b->Shown = TR_BK_OTHER;
         } else {
             int i;
             int kind = b->Wait[0];
@@ -3034,12 +3041,9 @@ void tr_bkind_step(TR_BKIND *b, int ev)
                     break;
                 }
             }
-            b->Shown = b->Spilled ? TR_BK_OTHER : kind;
+            b->Shown = kind;
             memmove(&b->Wait[0], &b->Wait[1], (b->N - 1) * sizeof(b->Wait[0]));
             b->N--;
-            if (b->N == 0) {
-                b->Spilled = 0;
-            }
         }
         break;
     case TR_BE_HIDE:

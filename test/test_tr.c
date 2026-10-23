@@ -3047,16 +3047,38 @@ static void test_bkind(void)
         CHECK_EQ(b.N, TR_BK_PENDING, "bkind: bounded");
         tr_bkind_step(&b, TR_BE_SHOW);
         CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: spilled: the other's show is in doubt");
-        for (i = 1; i < TR_BK_PENDING; i++) {
+        for (i = 0; i < TR_BK_PENDING; i++) {
             tr_bkind_step(&b, TR_BE_TIMEOUT);
             tr_bkind_step(&b, TR_BE_SHOW);
         }
-        CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: spilled: in doubt to the last");
+        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: spilled: the last waiting, the notice's");
         CHECK_EQ(b.N, 0, "bkind: drained");
+        CHECK_EQ(b.Lost, 0, "bkind: none lost");
         tr_bkind_step(&b, TR_BE_TIMEOUT);
         tr_bkind_step(&b, TR_BE_SENT);
         tr_bkind_step(&b, TR_BE_SHOW);
         CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: drained: sure again");
+    }
+    /* Round 4's case: seventeen others, then the notice, none shown yet:
+     * the two not kept come first, all the others in doubt, the notice's
+     * last. */
+    memset(&b, 0, sizeof(b));
+    {
+        int i;
+        int fastShows = 0;
+        for (i = 0; i < 17; i++) {
+            tr_bkind_step(&b, TR_BE_OTHER);
+        }
+        tr_bkind_step(&b, TR_BE_SENT);
+        CHECK_EQ(b.Lost, 2, "bkind: two not kept");
+        for (i = 0; i < 17; i++) {
+            tr_bkind_step(&b, TR_BE_SHOW);
+            fastShows += tr_bkind_fast(&b, 1);
+            tr_bkind_step(&b, TR_BE_TIMEOUT);
+        }
+        CHECK_EQ(fastShows, 0, "bkind: none of the others' shows is the notice's");
+        tr_bkind_step(&b, TR_BE_SHOW);
+        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the notice's, last");
     }
     /* Round 3's case: the re-send's removal with an older balloon's show
      * still on its way. */
@@ -3067,13 +3089,13 @@ static void test_bkind(void)
     tr_bkind_step(&b, TR_BE_SENT);
     tr_bkind_step(&b, TR_BE_SHOW);
     CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: a show from before the removal: in doubt");
-    /* A show with none waiting: the last one sent. */
+    /* A show with none waiting cannot be placed: in doubt. */
     memset(&b, 0, sizeof(b));
     tr_bkind_step(&b, TR_BE_SENT);
     tr_bkind_step(&b, TR_BE_SHOW);
     tr_bkind_step(&b, TR_BE_TIMEOUT);
     tr_bkind_step(&b, TR_BE_SHOW);
-    CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: a show with none waiting");
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: a show with none waiting");
     /* The same kind twice (the 43.66 re-send) is no doubt. */
     memset(&b, 0, sizeof(b));
     tr_bkind_step(&b, TR_BE_SENT);

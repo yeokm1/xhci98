@@ -878,19 +878,21 @@ int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports);
  * in doubt. A hide, a timeout or a click ends the one shown and leaves
  * those waiting; so does the icon's balloon taken away (TR_BE_DROP), since
  * a show or a click the shell posted before it may still be on its way.
- * More waiting than kept leaves every show in doubt until none waits.
- * Zeroed is nothing sent. */
+ * More waiting than kept are counted (Lost, oldest of all): their shows
+ * come first where the shell queues and are in doubt; a show with none
+ * waiting is in doubt too. Zeroed is nothing sent. */
 #define TR_BK_NONE      0
 #define TR_BK_OTHER     1
 #define TR_BK_FAST      2   /* the "can run faster" notice's */
 
 #define TR_BK_PENDING   16
+#define TR_BK_LOST_MAX  30000
 typedef struct _TR_BKIND {
     int Sent;                   /* TR_BK_* of the last balloon sent        */
     int Shown;                  /* TR_BK_* the last NIN_BALLOONSHOW saw    */
     int Wait[TR_BK_PENDING];    /* sent, not shown yet, oldest first       */
     int N;
-    int Spilled;                /* more were waiting than kept             */
+    int Lost;                   /* waiting, older than Wait, kinds unkept  */
 } TR_BKIND;
 
 /* ev: TR_BE_SENT (the notice's), TR_BE_OTHER (another balloon sent),
