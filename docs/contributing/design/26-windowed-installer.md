@@ -894,8 +894,23 @@ one that copies `xhci98.sys`, the update's row for it unconditional (no
 flag), and `inst_core.h`'s name for it is the INF's; W98-TEMPNAME now on
 the update section's row). **The cost**:
 an update by hand through Windows' Update Driver on 98 SE and ME takes
-`[Xhci.Dev]` and so keeps the `xhci98.sys` that is there, older or not;
-`INSTALL.BAT` is the update path there (the release notes say so).
+`[Xhci.Dev]` and so keeps the `xhci98.sys` that is there, older or not
+(observed: Update Driver, "Display a list", Have Disk, over an installed
+3.1.0.0 with a package whose `xhci98.sys` carries 3.2.0.0's version
+resource finished with no prompt and left the 3.1.0.0 file, its File
+version 3.1.0.0); `INSTALL.BAT` is the update path there (the release
+notes say so). **The other flags, tried for the owner** (2026-10-24, the
+owner not accepting that cost as it stood): `COPYFLG_OVERWRITE_OLDER_ONLY`
+(64) on the wizard's row asked for the disk in the prepared case, the
+file in place ("The file 'xhci98.sys' ... cannot be found", from
+`C:\WIN98`); 64 with `COPYFLG_NO_VERSION_DIALOG` (96) asked the same.
+With 64, Update Driver over 3.1.0.0 asked for the disk as well (Have
+Disk's folder is not where the engine looks, `C:\WIN98` offered) and,
+the folder typed, replaced the loaded file at once (the 3.2.0.0-stamped
+bytes, no `.tmp`, no `WININIT.INI`) and asked for a restart. 1 and 2
+(warn on and forbid a skip) only add to a prompt, so were not tried. So
+no flag spares the prepared prompt and replaces by hand both: 16 stays,
+and the cost with it.
 `xhcicm.inf` has no temporary name on its row (`xhcicm.sys`, shared with
 its NT sections) and was left as it is: it has the shape of
 `xhciuas.inf` (a plain row and no `LayoutFile`), whose wizard asked for
@@ -919,7 +934,12 @@ placement ran after the helper in the same run, and `own_put`'s own
 `XHCI98.TMP` took the engine's pending one (the same bytes), so
 `WININIT.INI`'s `[rename]` line named a file that was gone. ME's restart
 processed it and left `xhci98.sys` in place, the package's (observed);
-the two using one temporary name is recorded in section 14.
+the two using one temporary name was then fixed: the placement writes
+through its own temporary name, `XHCI98.IN$` (`own_put_as`), never the
+engine's `XHCI98.TMP`. Read again on ME (2026-10-24, the same `/force`):
+before the restart `XHCI98.TMP` (the engine's) and `xhci98.sys` (the
+placement's) side by side, `WININIT.INI`'s line naming the `.tmp`; after
+it `xhci98.sys` alone, the package's, `WININIT.INI` processed.
 
 **What draft 35 builds, and the owner's points of 2026-10-23** (roadmap
 task 43.42's simplification, its code). The design above is built as it
@@ -4359,14 +4379,10 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 
 ## 14. Open, and the risks
 
-- (draft 39) On 98 SE and ME the placement's `own_put` writes
-  `XHCI98.TMP`, the name `[Xhci.Upd]`'s row gives the engine's pending
-  copy, so a run whose helper update queued a `WININIT.INI` rename and
-  whose placement then replaced the file leaves that rename naming a
-  file that is gone (the same bytes were put in place). ME's restart
-  processed such a line and kept `xhci98.sys` (observed); 98 SE's
-  `WININIT.EXE` is not read with one. A distinct temporary name for the
-  placement is the fix if a leg shows harm.
+- (draft 39) A run cut short inside the placement's copy can leave
+  `XHCI98.IN$` (or `XHCIUAS.IN$`, `XHCICM.IN$`) in `SYSTEM32\DRIVERS`;
+  the next run's placement overwrites it, and the uninstall does not
+  list it.
 - (draft 39) `xhcicm.inf`'s wizard with `xhcicm.sys` placed and a
   Thunderbolt controller found later is not read. Its copy row is the
   plain form, which asked for `xhci98.sys` in `xhci98.inf`; but

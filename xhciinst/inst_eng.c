@@ -446,6 +446,7 @@ static int s98_pending_resolve(int uninstall);
 static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
 static int own_put(const char *from, const char *to);
+static int own_put_as(const char *from, const char *to, const char *tmpExt);
 
 static int haveCm;
 /* The connection manager alone (record 23 section 4.5, revision 13): the
@@ -9078,7 +9079,12 @@ static void sys_9x(int inf, const char *file, int include, const char *later)
         logonly("placed9x: %s is the package's\n", dst);
         return;
     }
-    if (own_put(src, dst) != 1) {
+    /* Its own temporary name, .IN$: the setup engine's pending copy of
+     * the same file is <name>.TMP (xhci98.inf's [Xhci.Upd] row, renamed
+     * into place by WININIT.INI at the restart), and writing through it
+     * would take that copy and leave the rename naming a gone file (the
+     * ME leg of 2026-10-23; record 26 section 5.0, draft 39). */
+    if (own_put_as(src, dst, ".IN$") != 1) {
         out("%s could not be put in %s: %s plugged in later asks for the\n"
             "driver disk (type %s).\n", file, dst, later, srcDir);
         flagFailed = 1;
@@ -26079,6 +26085,13 @@ static const char *own_src(const char *name)
  * .BAK dance on 98 SE and ME. 1 done, 0 failed (said), 2 in use (said). */
 static int own_put(const char *from, const char *to)
 {
+    return own_put_as(from, to, ".TMP");
+}
+
+/* own_put with the temporary copy's extension given (four characters,
+ * the dot included). */
+static int own_put_as(const char *from, const char *to, const char *tmpExt)
+{
     char tmp[INST_PATH_CHARS];
     char bak[INST_PATH_CHARS];
     size_t n;
@@ -26091,7 +26104,7 @@ static int own_put(const char *from, const char *to)
     if (n < 4) {
         return 0;
     }
-    strcpy(tmp + n - 4, ".TMP");
+    strcpy(tmp + n - 4, tmpExt);
     strcpy(bak + n - 4, ".BAK");
     SetFileAttributesA(tmp, FILE_ATTRIBUTE_NORMAL);
     if (!CopyFileA(from, tmp, FALSE) || !same_file(from, tmp)) {
