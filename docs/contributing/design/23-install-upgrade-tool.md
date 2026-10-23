@@ -2003,9 +2003,17 @@ lacks its record. A record goes only when the devnode is shown absent (the
 device list read to its end, or the `Enum` key not found); a list, key or
 value that cannot be read leaves both the name and the record as they are,
 said and no failure of the run. More recorded instances than one scan holds
-(1,536) leave the rest recorded, say so and ask for the run again. The run prints each change under
-"Device Manager names:", and the plan names the controller as it will be
-shown ("Device Manager name: ...").
+(1,536) leave the rest recorded, say so and ask for the run again. **At
+the uninstall a name left so stops the uninstall before its final removal**
+(the tools, the Add/Remove Programs entry and the install directory's
+record stay, `stop_uninstall`), so the next uninstall can still find and
+clear it. The scan the step makes replaces the device list; the
+safe-removal mark decision that follows the install run reads that list,
+so it rescans first if the last scan was short, and leaves the service as
+it is if that fails too. The run prints each change under
+"Device Manager names:", and the plan names the controller as the run will
+leave it, by the same decision ("Device Manager name: ...", or the name it
+was given and that it keeps).
 
 #### 5.13.5 XHCITR
 

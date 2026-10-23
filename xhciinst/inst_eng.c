@@ -516,7 +516,8 @@ static void tb_question(void);
 static int tb_decide(int *asked, int *def, int *installed);
 static void tb_apply(int include);
 static void tb_later_note(const char *dir);
-static void names_reconcile(int uninstall);
+static int names_reconcile(int uninstall);
+static int names_rec_get(const char *id, char *buf, DWORD cap);
 
 static int flagFailed;
 static int flagRestart;
@@ -1558,10 +1559,13 @@ static int scan_9x(void)
     return 1;
 }
 
+static int lastScanOk = 1;   /* devs[] is a whole list (task 43.73) */
+
 static int scan(void)
 {
     s98TopoFresh = 0;
-    return envNow.Nt ? scan_nt() : scan_9x();
+    lastScanOk = envNow.Nt ? scan_nt() : scan_9x();
+    return lastScanOk;
 }
 
 /* The first hardware id of a devnode. */
@@ -1914,13 +1918,22 @@ static void print_plan(void)
         {
             /* Record 23 section 5.13: the name the install gives it. */
             char canon[INST_NAME_MAX + 8];
+            char rec[128];
             INST_U32 vd;
+            int keep;
             if (usbInclude && d->Inf == INST_INF_XHCI && is_controller(d) &&
                 inst_pci_vendev(first_hw(d), &vd) &&
                 inst_xhci_name(vd & 0xFFFFUL, vd >> 16, canon,
-                               sizeof(canon)) == 1 &&
-                strcmp(canon, d->Friendly) != 0) {
-                out("    Device Manager name: %s\n", canon);
+                               sizeof(canon)) == 1) {
+                int hasRec = names_rec_get(d->Id, rec, sizeof(rec));
+                int a = inst_name_action(1, canon, d->Friendly,
+                                         hasRec ? rec : NULL, &keep);
+                if (a == INST_NAME_SET) {
+                    out("    Device Manager name: %s\n", canon);
+                } else if (!keep) {
+                    out("    Device Manager name: %s (the name it was given "
+                        "stays)\n", d->Friendly);
+                }
             }
         }
         out("    INF %s; driver %s%s%s; %s%s\n", instInfFile[d->Inf],
@@ -9735,9 +9748,10 @@ static void names_say(const char *what, const char *name, const char *id)
 
 /* One devnode: the decision of inst_name_action, made and recorded. The
  * record is written before the name, so a name this installer wrote is
- * never left without its record; a write that fails puts the record back. */
-static void names_one(HDEVINFO set, const char *id, int ours,
-                      const char *canon)
+ * never left without its record; a write that fails puts the record back.
+ * 0 when the devnode's name or record could not be settled. */
+static int names_one(HDEVINFO set, const char *id, int ours,
+                     const char *canon)
 {
     char now[INST_FNAME_CHARS];
     char rec[INST_FNAME_CHARS];
@@ -9752,18 +9766,18 @@ static void names_one(HDEVINFO set, const char *id, int ours,
             names_rec_del(id);
             logonly("names: %s gone, its record forgotten\n", id);
         }
-        return;
+        return 1;
     }
     if (r < 0) {
         out("The name of %s could not be read: it is left as it is.\n", id);
-        return;
+        return !hasRec;
     }
     a = inst_name_action(ours, canon, now, hasRec ? rec : NULL, &keep);
     if (a == INST_NAME_SET) {
         if (!names_rec_put(id, canon)) {
             out("%s is not named: the record of its name could not be "
                 "written.\n", id);
-            return;
+            return 1;
         }
         if (names_write(set, id, canon)) {
             flagChanged = 1;
@@ -9778,7 +9792,7 @@ static void names_one(HDEVINFO set, const char *id, int ours,
                 names_rec_del(id);
             }
         }
-        return;
+        return 1;
     }
     if (a == INST_NAME_CLEAR) {
         if (names_write(set, id, NULL)) {
@@ -9786,11 +9800,11 @@ static void names_one(HDEVINFO set, const char *id, int ours,
             names_rec_del(id);
             names_say("name removed", now, id);
             logonly("names: %s cleared (was \"%s\")\n", id, now);
-        } else {
-            out("The name \"%s\" of %s could not be removed (error %lu).\n",
-                now, id, (unsigned long)GetLastError());
+            return 1;
         }
-        return;
+        out("The name \"%s\" of %s could not be removed (error %lu).\n",
+            now, id, (unsigned long)GetLastError());
+        return 0;
     }
     if (keep && (!hasRec || strcmp(rec, canon) != 0)) {
         names_rec_put(id, canon);
@@ -9798,13 +9812,16 @@ static void names_one(HDEVINFO set, const char *id, int ours,
         names_rec_del(id);
         logonly("names: %s keeps \"%s\", not this installer's\n", id, now);
     }
+    return 1;
 }
 
 /* At the normal end of an install run (uninstall 0) or of the uninstall
  * (1): every xHCI controller a fresh scan lists, then every recorded
  * instance the scan did not. It scans, so devs[] is the scan's afterwards:
- * the run calls it after the last use of its own plan. */
-static void names_reconcile(int uninstall)
+ * the run calls it after the last use of its own plan. 1 when every
+ * recorded name was settled; 0 when one is left for another run (the
+ * uninstall then stops before its final removal). */
+static int names_reconcile(int uninstall)
 {
     HDEVINFO set = INVALID_HANDLE_VALUE;
     static char ids[INST_MAX_DEVS][INST_ID_CHARS];
@@ -9813,17 +9830,18 @@ static void names_reconcile(int uninstall)
     int done = 0;
     int nLeft = 0;
     int more = 0;
+    int whole = 1;
     int i;
     HKEY k;
 
     namesSaid = 0;
     if (opts.List || runCancelled) {
-        return;
+        return 1;
     }
     if (!scan()) {
         out("The controllers' names were not reconciled: the device list "
             "could not be read.\n");
-        return;
+        return 0;
     }
     if (envNow.Nt && api.GetClassDevs != NULL) {
         set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
@@ -9839,8 +9857,10 @@ static void names_reconcile(int uninstall)
         if (canon == NULL && !names_rec_get(d->Id, rec, sizeof(rec))) {
             continue;
         }
-        names_one(set, d->Id, !uninstall && inst_eq(d->Service, "xhci98"),
-                  canon);
+        if (!names_one(set, d->Id,
+                       !uninstall && inst_eq(d->Service, "xhci98"), canon)) {
+            whole = 0;
+        }
         if (done < INST_MAX_DEVS) {
             inst_copy(ids[done++], d->Id, INST_ID_CHARS);
         }
@@ -9875,14 +9895,16 @@ static void names_reconcile(int uninstall)
         }
         RegCloseKey(k);
         for (i = 0; i < nLeft; i++) {
-            names_one(set, left[i], 0, NULL);
+            if (!names_one(set, left[i], 0, NULL)) {
+                whole = 0;
+            }
         }
     }
     if (more) {
         out("Not every recorded controller name was read: HKLM\\%s keeps "
             "the rest; run the\n%s again.\n", INST_NAMES_KEY,
             uninstall ? "uninstall" : "install");
-        flagSteps = 1;
+        whole = 0;
     }
     if (set != INVALID_HANDLE_VALUE) {
         api.Destroy(set);
@@ -9905,6 +9927,7 @@ static void names_reconcile(int uninstall)
     if (uninstall && namesSaid) {
         out("\n");
     }
+    return whole;
 }
 
 /* A tunnel port this package's filter is on, by its UpperFilters or by its
@@ -11366,6 +11389,13 @@ static void mk_end_of_run(void)
     if (!envNow.Nt) {
         return;
     }
+    /* The decision reads devs[]: never from a list a scan left short. */
+    if (!lastScanOk && !scan()) {
+        out("The safe-removal mark service is left as it is: the device list "
+            "could not be read.\n");
+        flagSteps = 1;
+        return;
+    }
     safe = mk_safe_eject_now();
     cm = svc_state(INST_MK_NAME);
     a = inst_mk_end_action(cm, haveCm && tbInclude, inst_mk_system(&envNow),
@@ -11582,7 +11612,10 @@ static int run_uninstall_nt(void)
     if (!go_on()) {
         return stop_uninstall("cancelled.");
     }
-    names_reconcile(1);
+    if (!names_reconcile(1)) {
+        return stop_uninstall("a controller's name this package gave it "
+                              "could not be removed.");
+    }
     finish_remove();
     if (!flagChanged) {
         out("Nothing of this package was found.\n");
@@ -12189,7 +12222,10 @@ static int run_uninstall_9x(void)
     if (flagSteps || flagFailed) {
         return stop_uninstall("a driver file is still in use.");
     }
-    names_reconcile(1);
+    if (!names_reconcile(1)) {
+        return stop_uninstall("a controller's name this package gave it "
+                              "could not be removed.");
+    }
     finish_remove();
     out("\nWindows finds the controller again at the next start and has no "
         "driver for it:\non a machine whose only USB controller is xHCI, the "
