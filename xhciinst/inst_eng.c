@@ -9856,6 +9856,7 @@ static int unfilter_nt(HDEVINFO set, const DEVREC *d)
     char msz[512];
     size_t n;
     int removed;
+    int step;
 
     out("Taking xhcicm off the tunnel port %s ... ", d->Id);
     if (opts.List) {
@@ -9879,7 +9880,17 @@ static int unfilter_nt(HDEVINFO set, const DEVREC *d)
     }
     flagChanged = 1;
     out(removed ? "done.\n" : "not in its filters.\n");
-    if (inst_port_step(d->Present, n > 0) == INST_PORT_REMOVE) {
+    step = inst_port_step(d->Present, n > 0);
+    if (step == INST_PORT_WAIT) {
+        /* Another filter is left on it: removing the entry would drop
+         * that one too (record 23 section 9.2 step 1, revision 42). */
+        out("  The port is not connected, so its driver cannot be given back "
+            "now, and another\n  filter is on it: connect the dock and run "
+            "INSTALL.BAT /uninstall again.\n");
+        flagSteps = 1;
+        return 0;
+    }
+    if (step == INST_PORT_REMOVE) {
         /* A port that is gone for good (a dock sold, a USB4 port's
          * controller replaced) would block the uninstall forever (run-43-24,
          * Finding 9; the owner, 2026-10-24): its entry is removed instead,
