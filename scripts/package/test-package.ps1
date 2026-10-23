@@ -2123,7 +2123,42 @@ try {
         }
         $msg = ""
         try { Test-OtherPkgsTransition -Prev $recW -Now $recA } catch { $msg = $_.Exception.Message }
-        Assert-True ($msg.Contains("keeps its words")) ("a withdrawn row made current again was not refused: '" + $msg + "'")
+        Assert-True ($msg.Contains("stays withdrawn")) ("a withdrawn row made current again was not refused: '" + $msg + "'")
+        Assert-True ((Get-InfModelDecoScore -Deco "NTx86.6.1.3" -Arch "x86" -Ver @(6, 1, 7601)) -lt 0 -and (Get-InfModelDecoScore -Deco "NT.6.0" -Arch "amd64" -Ver @(6, 1, 7601)) -lt 0 -and (Get-InfModelDecoScore -Deco "NTx86.6.1.1" -Arch "x86" -Ver @(6, 1, 7601)) -gt (Get-InfModelDecoScore -Deco "NTx86.6.1" -Arch "x86" -Ver @(6, 1, 7601)) -and (Get-InfModelDecoScore -Deco "NTamd64.10.0...16299" -Arch "amd64" -Ver @(10, 0, 19045)) -gt 0 -and (Get-InfModelDecoScore -Deco "NTamd64.10.0...22000" -Arch "amd64" -Ver @(10, 0, 19045)) -lt 0) "a decoration's product type, architecture or build was not read as the engine reads it."
+        Assert-True ((Split-InfFields -Text '"Disk, one",,,..\x') -join "|" -eq '"Disk, one"|||..\x') "a quoted comma split an INF field."
+        $osp2 = Join-Path $osp "net\e\w98"
+        Ensure-Directory $osp2
+        [System.IO.File]::WriteAllText((Join-Path $osp2 "E.INF"), "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[SourceDisksNames]`r`n1=`"Disk, one`",,,..\..\..\a\w98`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $osp2 "F.INF"), "[Version]`r`nSignature=`"`$Windows NT`$`"`r`n[SourceDisksNames]`r`n1=d,,,`r`n[SourceDisksNames.x86]`r`n1=d,,,..\..\..\a\w98`r`n[SourceDisksNames.amd64]`r`n1=d,,,`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n")
+        foreach ($bad in @(@{ I = "E.INF"; Why = "a quoted disk description before an outside path" }, @{ I = "F.INF"; Why = "an x86 disk path outside, the amd64 one inside" })) {
+            $msg = ""
+            try { Test-OtherStagePackages -Lines @(Read-StageText -Text ("STAGE | WXP | free/net/e/w98/" + $bad.I + " | e") -Label "s") -Dir $osp -Prefix "free" -Label "s" } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains("outside its package's folder")) ("the folder check with " + $bad.Why + " did not refuse: '" + $msg + "'")
+        }
+        # A package of COPY lines alone is a package of the set.
+        $setC = @([pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/a/w98/A.INF | a`nCOPY | W98SE | free/net/b/w98/C.INF | c" -Label "s") })
+        Test-OtherPkgTable -Table $tblT -Sets $setC -Meta @() -Brands $brands -Headings $heads
+        $msg = ""
+        try { Test-OtherPkgTable -Table ([pscustomobject]@{ Pkgs = @($tblT.Pkgs[0]); Rels = @(); Brands = $brands }) -Sets $setC -Meta @() -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("free:net/b is a package of the carried free set")) ("a package of COPY lines alone with no row was accepted: '" + $msg + "'")
+        # PACKAGE lines: two for one package refused; one wins over the row in
+        # the record; one of a package the set does not ship is known.
+        $mP = @([pscustomobject]@{ Kind = "PACKAGE"; A = "net/b"; B = "CLASS"; Systems = @(); Desc = "USB Ethernet (b): CDC adapters"; Set = "free"; Shipped = $true },
+                [pscustomobject]@{ Kind = "PACKAGE"; A = "net/q"; B = "DEVICE"; Systems = @(); Desc = "USB Ethernet (q): q adapters"; Set = "free"; Shipped = $false })
+        Test-OtherPkgTable -Table $tblT -Sets $setA -Meta $mP -Brands $brands -Headings $heads
+        $msg = ""
+        try { Test-OtherPkgTable -Table $tblT -Sets $setA -Meta @($mP + @($mP[0])) -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("two PACKAGE lines for net/b")) ("two PACKAGE lines for one package were accepted: '" + $msg + "'")
+        $recP = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.3.0.0" -Table $tblT -Meta $mP) -join "`r`n") -Label "p"
+        $rb = @($recP.Rows | Where-Object { $_.Id -ceq "free:net/b" })
+        $rq = @($recP.Rows | Where-Object { $_.Id -ceq "free:net/q" })
+        Assert-True ($recP.Rows.Count -eq 3 -and $rb.Count -eq 1 -and $rb[0].Kind -ceq "CLASS" -and $rb[0].Desc -ceq "USB Ethernet (b): CDC adapters" -and $rq.Count -eq 1 -and $rq[0].State -ceq "known") "the record does not hold one row a package, the PACKAGE line's words winning and a package not shipped known."
+        # A row withdrawn with new words is refused.
+        $tblW2 = [pscustomobject]@{ Pkgs = @($tblT.Pkgs[0], [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): other words"; Withdrawn = $true }); Rels = $tblT.Rels; Brands = $brands }
+        $recW2 = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.3.0.0" -Table $tblW2 -Meta @()) -join "`r`n") -Label "w2"
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $recA -Now $recW2 } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("keeps its words")) ("a row withdrawn with new words was accepted: '" + $msg + "'")
         $relDir = Join-Path $script:work "oth-releases"
         foreach ($v in @("3.1.0.0", "3.2.0.0", "3.10.0.0")) { Ensure-Directory (Join-Path $relDir $v) }
         [System.IO.File]::WriteAllText((Join-Path $relDir "3.2.0.0\otherpkgs.txt"), ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n"))

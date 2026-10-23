@@ -2740,7 +2740,7 @@ function Export-WdmFreeSet {
     $files["READ.TXT"] = Get-FileSha256 -Path (Join-Path $Dest "READ.TXT")
     $own = Write-OtherSetSums -Dir $Dest -Files $files
     $files[$script:OtherSums] = $own
-    return [pscustomobject]@{ Kind = "free"; Folder = $script:WdmFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev;
+    return [pscustomobject]@{ Kind = "free"; Folder = $script:WdmFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev; FullStage = $stageText;
                               Dir = $Dest; Sums = $own; Files = $files }
 }
 
@@ -2954,6 +2954,23 @@ function Expand-InfValue {
     }).Trim().Trim('"')
 }
 
+function Split-InfFields {
+    # An INF value's comma-separated fields, a comma inside double quotes
+    # not a separator (a quoted disk description may hold one), each field
+    # trimmed and its quotes kept for Expand-InfValue to drop.
+    param([string]$Text)
+    $out = New-Object System.Collections.ArrayList
+    $sb = New-Object System.Text.StringBuilder
+    $q = $false
+    foreach ($ch in $Text.ToCharArray()) {
+        if ($ch -eq '"') { $q = -not $q }
+        if ($ch -eq ',' -and -not $q) { [void]$out.Add($sb.ToString().Trim()); [void]$sb.Clear(); continue }
+        [void]$sb.Append($ch)
+    }
+    [void]$out.Add($sb.ToString().Trim())
+    return [string[]]$out.ToArray()
+}
+
 function Get-InfEntries {
     # The "key = value" entries of a section as Key (lower case) and Value.
     param($Inf, [string]$Section)
@@ -3017,42 +3034,59 @@ function Test-OtherStagePackages {
             $inf = Read-InfText -Path $infPath
             $pkgDir = [System.IO.Path]::GetFullPath((Join-Path $Dir ($o.Pkg.Replace('/', '\')))).TrimEnd('\') + '\'
             $infDir = Split-Path -Parent $infPath
-            $disks = @{}
-            foreach ($sn in @($inf.Sections.Keys | Where-Object { $_ -match '^sourcedisksnames(\..+)?$' })) {
+            # [SourceDisksNames] and its platform forms: a decorated
+            # [SourceDisksFiles.<p>] resolves a disk through
+            # [SourceDisksNames.<p>] first and the undecorated section after,
+            # as the engine does; an undecorated one is checked through every
+            # platform's view, since each platform's engine reads it.
+            $diskMaps = @{}
+            foreach ($sn in @($inf.Sections.Keys | Where-Object { $_ -match '^sourcedisksnames(\.(.+))?$' })) {
+                $deco = ""
+                if ($sn -match '^sourcedisksnames\.(.+)$') { $deco = $Matches[1] }
+                $map = @{}
                 foreach ($e in (Get-InfEntries -Inf $inf -Section $sn)) {
-                    $f = @($e.Value -split ',')
+                    $f = @(Split-InfFields -Text $e.Value)
                     $sub = ""
                     if ($f.Count -ge 4) { $sub = (Expand-InfValue -Inf $inf -Text $f[3]).Trim('\') }
-                    $disks[$e.Key] = $sub
+                    $map[$e.Key] = $sub
                 }
+                $diskMaps[$deco] = $map
             }
-            $known = @{}
+            $decos = @($diskMaps.Keys | Where-Object { $_ -ne "" })
             foreach ($sf in @($inf.Sections.Keys | Where-Object { $_ -match '^sourcedisksfiles(\..+)?$' })) {
+                $fdeco = ""
+                if ($sf -match '^sourcedisksfiles\.(.+)$') { $fdeco = $Matches[1] }
+                $views = @($fdeco)
+                if ($fdeco -eq "") { $views = @("") + $decos }
                 foreach ($e in (Get-InfEntries -Inf $inf -Section $sf)) {
                     $name = Expand-InfValue -Inf $inf -Text $e.Key
-                    $f = @($e.Value -split ',')
+                    $f = @(Split-InfFields -Text $e.Value)
                     $disk = $f[0].Trim()
                     $sub = ""
                     if ($f.Count -ge 2) { $sub = (Expand-InfValue -Inf $inf -Text $f[1]).Trim('\') }
-                    $base = $infDir
-                    if ($disks.ContainsKey($disk) -and $disks[$disk] -ne "") { $base = Join-Path $base $disks[$disk] }
-                    if ($sub -ne "") { $base = Join-Path $base $sub }
-                    $full = [System.IO.Path]::GetFullPath((Join-Path $base $name))
-                    if (-not $full.StartsWith($pkgDir, [System.StringComparison]::OrdinalIgnoreCase)) {
-                        throw "$Label's $($o.Line.Inf) takes $name from outside its package's folder ($($o.Pkg)/): a package is self-contained (design record 26 section 6.7.11)."
+                    foreach ($v in $views) {
+                        $dp = ""
+                        if ($v -ne "" -and $diskMaps.ContainsKey($v) -and $diskMaps[$v].ContainsKey($disk)) { $dp = $diskMaps[$v][$disk] }
+                        elseif ($diskMaps.ContainsKey("") -and $diskMaps[""].ContainsKey($disk)) { $dp = $diskMaps[""][$disk] }
+                        $base = $infDir
+                        if ($dp -ne "") { $base = Join-Path $base $dp }
+                        if ($sub -ne "") { $base = Join-Path $base $sub }
+                        $full = [System.IO.Path]::GetFullPath((Join-Path $base $name))
+                        if (-not $full.StartsWith($pkgDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            throw "$Label's $($o.Line.Inf) takes $name from outside its package's folder ($($o.Pkg)/): a package is self-contained (design record 26 section 6.7.11)."
+                        }
                     }
                     # Not held to exist: a vendor's INF lists both
                     # architectures' files where each folder holds its own
                     # (Realtek's rtuxp.INF), and the engine copies only what
                     # the system's install section names.
-                    $known[$name.ToLowerInvariant()] = $true
                 }
             }
             # Include names an INF of Windows' own %windir%\INF; one that
             # names an INF of either set takes another package's file.
             foreach ($sec in $inf.Sections.Keys) {
                 foreach ($e in @(Get-InfEntries -Inf $inf -Section $sec | Where-Object { $_.Key -eq "include" })) {
-                    foreach ($n in @($e.Value -split ',' | ForEach-Object { (Expand-InfValue -Inf $inf -Text $_).ToLowerInvariant() } | Where-Object { $_ -ne "" })) {
+                    foreach ($n in @(Split-InfFields -Text $e.Value | ForEach-Object { (Expand-InfValue -Inf $inf -Text $_).ToLowerInvariant() } | Where-Object { $_ -ne "" })) {
                         if ($AllInfs -contains $n) { throw "$Label's $($o.Line.Inf) includes $n, an INF of a driver set: Include takes Windows' own %windir%\INF, so a package may need no other (design record 26 section 6.7.11)." }
                     }
                 }
@@ -3061,57 +3095,93 @@ function Test-OtherStagePackages {
     }
 }
 
+# Each token's engines: the NT version(s) it stands for (8 also 8.1, 10 its
+# 22H2 build), the architecture, whether decorations are read at all (not
+# on 98 SE, ME and 2000).
 $script:OtherSysInfo = [ordered]@{
-    "W98SE" = @{ Nt = $false; Arch = "x86"; Ver = 0.0; NoDeco = $false }
-    "WME" = @{ Nt = $false; Arch = "x86"; Ver = 0.0; NoDeco = $false }
-    "W2K" = @{ Nt = $true; Arch = "x86"; Ver = 5.0; NoDeco = $true }
-    "WXP" = @{ Nt = $true; Arch = "x86"; Ver = 5.1; NoDeco = $false }
-    "WXP64" = @{ Nt = $true; Arch = "amd64"; Ver = 5.2; NoDeco = $false }
-    "WVISTA" = @{ Nt = $true; Arch = "x86"; Ver = 6.0; NoDeco = $false }
-    "WVISTA64" = @{ Nt = $true; Arch = "amd64"; Ver = 6.0; NoDeco = $false }
-    "W7" = @{ Nt = $true; Arch = "x86"; Ver = 6.1; NoDeco = $false }
-    "W7X64" = @{ Nt = $true; Arch = "amd64"; Ver = 6.1; NoDeco = $false }
-    "W8" = @{ Nt = $true; Arch = "x86"; Ver = 6.2; NoDeco = $false }
-    "W8X64" = @{ Nt = $true; Arch = "amd64"; Ver = 6.2; NoDeco = $false }
-    "W10" = @{ Nt = $true; Arch = "x86"; Ver = 10.0; NoDeco = $false }
-    "W10X64" = @{ Nt = $true; Arch = "amd64"; Ver = 10.0; NoDeco = $false }
+    "W98SE" = @{ Nt = $false; Arch = "x86"; Vers = @(@(0, 0, 0)); NoDeco = $true }
+    "WME" = @{ Nt = $false; Arch = "x86"; Vers = @(@(0, 0, 0)); NoDeco = $true }
+    "W2K" = @{ Nt = $true; Arch = "x86"; Vers = @(, @(5, 0, 2195)); NoDeco = $true }
+    "WXP" = @{ Nt = $true; Arch = "x86"; Vers = @(, @(5, 1, 2600)); NoDeco = $false }
+    "WXP64" = @{ Nt = $true; Arch = "amd64"; Vers = @(, @(5, 2, 3790)); NoDeco = $false }
+    "WVISTA" = @{ Nt = $true; Arch = "x86"; Vers = @(, @(6, 0, 6002)); NoDeco = $false }
+    "WVISTA64" = @{ Nt = $true; Arch = "amd64"; Vers = @(, @(6, 0, 6002)); NoDeco = $false }
+    "W7" = @{ Nt = $true; Arch = "x86"; Vers = @(, @(6, 1, 7601)); NoDeco = $false }
+    "W7X64" = @{ Nt = $true; Arch = "amd64"; Vers = @(, @(6, 1, 7601)); NoDeco = $false }
+    "W8" = @{ Nt = $true; Arch = "x86"; Vers = @(@(6, 2, 9200), @(6, 3, 9600)); NoDeco = $false }
+    "W8X64" = @{ Nt = $true; Arch = "amd64"; Vers = @(@(6, 2, 9200), @(6, 3, 9600)); NoDeco = $false }
+    "W10" = @{ Nt = $true; Arch = "x86"; Vers = @(, @(10, 0, 19045)); NoDeco = $false }
+    "W10X64" = @{ Nt = $true; Arch = "amd64"; Vers = @(, @(10, 0, 19045)); NoDeco = $false }
+}
+
+function Get-InfModelDecoScore {
+    # How well a [Manufacturer] decoration (NT[arch][.major[.minor[.type
+    # [.suite[.build]]]]]) fits a workstation of -Arch at -Ver (major,
+    # minor, build): -1 when it does not apply, else a score where a higher
+    # version, a build, a product type and an architecture rank higher, as
+    # the engine prefers the most specific match. On 64-bit Windows a
+    # decoration must name the architecture; a server product type (2 or 3)
+    # or a suite mask never applies to the systems the sets serve; a build
+    # number is read by 10 only (1607 and later).
+    param([string]$Deco, [string]$Arch, $Ver)
+    $m = [regex]::Match($Deco, '^(?i)NT(x86|amd64|ia64|arm|arm64)?(?:\.(\d+)(?:\.(\d+)(?:\.(0x[0-9A-Fa-f]+|\d*)(?:\.(0x[0-9A-Fa-f]+|\d*)(?:\.(\d+))?)?)?)?)?$')
+    if (-not $m.Success) { return -1 }
+    $a = $m.Groups[1].Value
+    if ($a -ne "" -and $a -ine $Arch) { return -1 }
+    if ($a -eq "" -and $Arch -ne "x86") { return -1 }
+    $maj = 0; $min = 0; $build = 0
+    if ($m.Groups[2].Success) { $maj = [int]$m.Groups[2].Value }
+    if ($m.Groups[3].Success) { $min = [int]$m.Groups[3].Value }
+    if ($maj -gt $Ver[0] -or ($maj -eq $Ver[0] -and $min -gt $Ver[1])) { return -1 }
+    $type = 0
+    if ($m.Groups[4].Success -and $m.Groups[4].Value -ne "") {
+        $type = [Convert]::ToInt32($m.Groups[4].Value, $(if ($m.Groups[4].Value -match '^0x') { 16 } else { 10 }))
+        if ($type -ne 1) { return -1 }
+    }
+    if ($m.Groups[5].Success -and $m.Groups[5].Value -ne "") {
+        $suite = [Convert]::ToInt64($m.Groups[5].Value, $(if ($m.Groups[5].Value -match '^0x') { 16 } else { 10 }))
+        if ($suite -ne 0) { return -1 }
+    }
+    if ($m.Groups[6].Success -and $m.Groups[6].Value -ne "") {
+        $build = [int]$m.Groups[6].Value
+        if ($Ver[0] -lt 10 -or $build -gt $Ver[2]) { return -1 }
+    }
+    return ([int64]$maj * 1000000000 + [int64]$min * 10000000 + [int64]$build * 10 + $(if ($type -ne 0) { 2 } else { 0 }) + $(if ($a -ne "") { 1 } else { 0 }))
 }
 
 function Get-InfModelIds {
     # The ids an INF's models match on one system token: the [Manufacturer]
     # entries' models sections, each with the decoration that system's
     # engine takes (none on 98 SE, ME and 2000; on XP and later the best
-    # NT[arch][.major.minor] it lists that applies, else the undecorated
-    # section, which 64-bit Windows does not read).
+    # applying decoration the entry lists, else the undecorated section,
+    # which 64-bit Windows does not read), over each version the token
+    # stands for.
     param($Inf, [string]$Sys)
     $si = $script:OtherSysInfo[$Sys]
     $ids = @()
-    foreach ($e in (Get-InfEntries -Inf $inf -Section "Manufacturer")) {
-        $f = @($e.Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+    foreach ($e in (Get-InfEntries -Inf $Inf -Section "Manufacturer")) {
+        $f = @(Split-InfFields -Text $e.Value | Where-Object { $_ -ne "" })
         if ($f.Count -eq 0) { continue }
         $models = Expand-InfValue -Inf $Inf -Text $f[0]
-        $section = $null
-        if ($si.Nt -and -not $si.NoDeco) {
-            $best = $null; $bestScore = -1
-            foreach ($d in @($f | Select-Object -Skip 1)) {
-                if ($d -notmatch '^(?i)NT(x86|amd64|ia64|arm|arm64)?(\.(\d+)(\.(\d+))?)?') { continue }
-                $arch = $Matches[1]
-                if ($arch -and $arch -ine $si.Arch) { continue }
-                $ver = 0.0
-                if ($Matches[3]) { $ver = [double]("{0}.{1}" -f $Matches[3], $(if ($Matches[5]) { $Matches[5] } else { "0" })) }
-                if ($ver -gt $si.Ver) { continue }
-                $score = $ver * 10 + $(if ($arch) { 1 } else { 0 })
-                if ($score -gt $bestScore) { $best = $d; $bestScore = $score }
-            }
-            if ($null -ne $best) { $section = $models + "." + $best }
-            elseif ($si.Arch -ne "amd64") { $section = $models }
+        $sections = @()
+        if ($si.NoDeco) {
+            $sections += $models
         } else {
-            $section = $models
+            foreach ($ver in $si.Vers) {
+                $best = $null; $bestScore = -1
+                foreach ($d in @($f | Select-Object -Skip 1)) {
+                    $sc = Get-InfModelDecoScore -Deco $d -Arch $si.Arch -Ver $ver
+                    if ($sc -gt $bestScore) { $best = $d; $bestScore = $sc }
+                }
+                if ($null -ne $best) { $sections += ($models + "." + $best) }
+                elseif ($si.Arch -eq "x86") { $sections += $models }
+            }
         }
-        if ($null -eq $section) { continue }
-        foreach ($m in (Get-InfEntries -Inf $Inf -Section $section)) {
-            $mf = @($m.Value -split ',' | ForEach-Object { (Expand-InfValue -Inf $Inf -Text $_).Trim() })
-            foreach ($id in @($mf | Select-Object -Skip 1)) { if ($id -ne "") { $ids += $id.ToUpperInvariant() } }
+        foreach ($section in @($sections | Sort-Object -Unique)) {
+            foreach ($m in (Get-InfEntries -Inf $Inf -Section $section)) {
+                $mf = @(Split-InfFields -Text $m.Value | ForEach-Object { (Expand-InfValue -Inf $Inf -Text $_).Trim() })
+                foreach ($id in @($mf | Select-Object -Skip 1)) { if ($id -ne "") { $ids += $id.ToUpperInvariant() } }
+            }
         }
     }
     return @($ids | Sort-Object -Unique)
@@ -3157,6 +3227,42 @@ function Get-OtherScopes {
     return $scope
 }
 
+function Get-OtherPresent {
+    # Each set's packages, from every line, STAGE or COPY:
+    # "<set>:<class>/<package>" list.
+    param($Sets)
+    $out = @()
+    foreach ($s in $Sets) {
+        foreach ($l in $s.Lines) { $out += ($s.Name + ":" + (Get-OtherPkgOf -Path $l.Inf -Prefix $s.Prefix)) }
+    }
+    return @($out | Sort-Object -Unique)
+}
+
+function Get-OtherEffectiveRows {
+    # The rows the cut records and holds: the table's, a carried set's
+    # PACKAGE line winning over its row (its kind and words, the table's
+    # heading), a PACKAGE line with no row added, and a PACKAGE line of a
+    # package the set's release has and does not ship (a package that does
+    # not qualify) recorded as known, not shipped.
+    param($Table, $Meta)
+    $rows = @()
+    foreach ($p in $Table.Pkgs) {
+        $q = $p.Set + ":" + $p.Id
+        $m = @($Meta | Where-Object { $_.Kind -ceq "PACKAGE" -and ($_.Set + ":" + $_.A) -ceq $q })
+        if ($m.Count -gt 0 -and $m[0].Shipped) {
+            $rows += [pscustomobject]@{ Id = $q; Kind = $m[0].B; Heading = $p.Heading; Desc = $m[0].Desc; State = "current" }
+        } else {
+            $rows += [pscustomobject]@{ Id = $q; Kind = $p.Kind; Heading = $p.Heading; Desc = $p.Desc; State = $(if ($p.Withdrawn) { "withdrawn" } else { "current" }) }
+        }
+    }
+    foreach ($m in @($Meta | Where-Object { $_.Kind -ceq "PACKAGE" })) {
+        $q = $m.Set + ":" + $m.A
+        if (@($rows | Where-Object { $_.Id -ceq $q }).Count -gt 0) { continue }
+        $rows += [pscustomobject]@{ Id = $q; Kind = $m.B; Heading = "-"; Desc = $m.Desc; State = $(if ($m.Shipped) { "current" } else { "known" }) }
+    }
+    return $rows
+}
+
 function Test-OtherPkgTable {
     # The installer's table (Get-InstOtherTable) and any PACKAGE lines held
     # to the sets and the rules (record 26 section 6.7.11): every row's id,
@@ -3176,11 +3282,17 @@ function Test-OtherPkgTable {
         if ($why -ne "") { throw "the installer's table's description of $q $why." }
         $known[$q] = $p
     }
-    $scope = Get-OtherScopes -Sets $Sets
+    $present = Get-OtherPresent -Sets $Sets
+    $seenMeta = @{}
+    foreach ($m in @($Meta | Where-Object { $_.Kind -ceq "PACKAGE" })) {
+        $q = $m.Set + ":" + $m.A
+        if ($seenMeta.ContainsKey($q)) { throw "the $($m.Set) set's STAGE.TXT has two PACKAGE lines for $($m.A)." }
+        $seenMeta[$q] = $true
+        $known[$q] = $true
+    }
     foreach ($s in $Sets) {
-        $metaPkgs = @($Meta | Where-Object { $_.Set -eq $s.Name -and $_.Kind -ceq "PACKAGE" } | ForEach-Object { $_.A })
-        foreach ($mp in $metaPkgs) { $known[$s.Name + ":" + $mp] = $true }
-        $have = @($scope.Keys | Where-Object { $_.StartsWith($s.Name + ":") })
+        $metaPkgs = @($Meta | Where-Object { $_.Set -eq $s.Name -and $_.Kind -ceq "PACKAGE" -and $_.Shipped } | ForEach-Object { $_.A })
+        $have = @($present | Where-Object { $_.StartsWith($s.Name + ":") })
         foreach ($k in $have) {
             $id = $k.Substring($s.Name.Length + 1)
             if ($metaPkgs -ccontains $id) { continue }
@@ -3247,15 +3359,12 @@ function ConvertTo-OtherPkgsRecord {
         "# 6.7.11). The next cut reads it and refuses a table that drops a row or a",
         "# line: a row is only ever marked withdrawn, with its words kept.",
         "#",
-        "#   ROW | <set>:<class>/<package> | CLASS or DEVICE | <heading> | <description> | current or withdrawn",
+        "#   ROW | <set>:<class>/<package> | CLASS or DEVICE | <heading> | <description> | current, withdrawn or known",
         "#   EXCLUDES or COEXISTS | <set>:<id> | <set>:<id> | <systems> | <why>",
         "",
         "Version: $Version")
-    foreach ($p in $Table.Pkgs) {
-        $lines += ("ROW | {0}:{1} | {2} | {3} | {4} | {5}" -f $p.Set, $p.Id, $p.Kind, $p.Heading, $p.Desc, $(if ($p.Withdrawn) { "withdrawn" } else { "current" }))
-    }
-    foreach ($m in @($Meta | Where-Object { $_.Kind -ceq "PACKAGE" })) {
-        $lines += ("ROW | {0}:{1} | {2} | {3} | {4} | {5}" -f $m.Set, $m.A, $m.B, "-", $m.Desc, "current")
+    foreach ($r in (Get-OtherEffectiveRows -Table $Table -Meta $Meta)) {
+        $lines += ("ROW | {0} | {1} | {2} | {3} | {4}" -f $r.Id, $r.Kind, $r.Heading, $r.Desc, $r.State)
     }
     foreach ($r in (@($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" }))) {
         $lines += ("{0} | {1} | {2} | {3} | {4}" -f $r.Kind, $r.A, $r.B, ($r.Systems -join " "), $r.Desc)
@@ -3271,7 +3380,8 @@ function ConvertFrom-OtherPkgsRecord {
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
         if ($t -match '^Version: (\S+)$') { $ver = $Matches[1]; continue }
         $f = @($line -split '\|' | ForEach-Object { $_.Trim() })
-        if ($f[0] -ceq "ROW" -and $f.Count -eq 6 -and ($f[5] -ceq "current" -or $f[5] -ceq "withdrawn")) {
+        if ($f[0] -ceq "ROW" -and $f.Count -eq 6 -and @("current", "withdrawn", "known") -ccontains $f[5]) {
+            if (@($rows | Where-Object { $_.Id -ceq $f[1] }).Count -gt 0) { throw "$Label has two rows for $($f[1])." }
             $rows += [pscustomobject]@{ Id = $f[1]; Kind = $f[2]; Heading = $f[3]; Desc = $f[4]; State = $f[5] }
         } elseif (($f[0] -ceq "EXCLUDES" -or $f[0] -ceq "COEXISTS") -and $f.Count -eq 5) {
             $rels += [pscustomobject]@{ Kind = $f[0]; A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }); Desc = $f[4] }
@@ -3293,8 +3403,11 @@ function Test-OtherPkgsTransition {
         $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
         if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
         if ($n[0].Kind -cne $r.Kind) { throw "the package table makes $($r.Id) a $($n[0].Kind) package; $($Prev.Version) had it $($r.Kind)." }
-        if ($r.State -ceq "withdrawn" -and ($n[0].State -cne "withdrawn" -or $n[0].Desc -cne $r.Desc)) {
-            throw "$($r.Id) was withdrawn in $($Prev.Version), and this table changes it: a withdrawn row keeps its words."
+        if ($r.State -ceq "withdrawn" -and $n[0].State -cne "withdrawn") {
+            throw "$($r.Id) was withdrawn in $($Prev.Version), and this table makes it $($n[0].State): a withdrawn row stays withdrawn and keeps its words."
+        }
+        if ($n[0].State -ceq "withdrawn" -and ($n[0].Desc -cne $r.Desc -or $n[0].Heading -cne $r.Heading)) {
+            throw "$($r.Id) is withdrawn here with words other than $($Prev.Version)'s: a withdrawn row keeps its words."
         }
     }
     foreach ($r in $Prev.Rels) {
@@ -3340,9 +3453,16 @@ function Invoke-OtherSetChecks {
         if ($null -eq $pair[1]) { continue }
         $stageText = [System.IO.File]::ReadAllText((Join-Path $pair[1].Dir "STAGE.TXT"))
         $lines = Read-StageText -Text $stageText -Label "$($pair[0])'s STAGE.TXT"
-        $sets += [pscustomobject]@{ Name = $pair[0]; Lines = $lines; Dir = $pair[1].Dir; Prefix = $pair[2] }
-        foreach ($m in (Read-OtherStageMeta -Text $stageText -Label "$($pair[0])'s STAGE.TXT" -Brands $brands)) {
+        $set = [pscustomobject]@{ Name = $pair[0]; Lines = $lines; Dir = $pair[1].Dir; Prefix = $pair[2] }
+        $sets += $set
+        # The metadata of the release's whole STAGE.TXT, before the
+        # exporter's filtering: a package that does not qualify is known.
+        $full = $stageText
+        if ($pair[1].PSObject.Properties.Name -contains "FullStage") { $full = $pair[1].FullStage }
+        $here = Get-OtherPresent -Sets @($set)
+        foreach ($m in (Read-OtherStageMeta -Text $full -Label "$($pair[0])'s STAGE.TXT" -Brands $brands)) {
             $m | Add-Member -NotePropertyName Set -NotePropertyValue $pair[0]
+            $m | Add-Member -NotePropertyName Shipped -NotePropertyValue ($m.Kind -ceq "PACKAGE" -and $here -ccontains ($pair[0] + ":" + $m.A))
             $meta += $m
         }
     }
