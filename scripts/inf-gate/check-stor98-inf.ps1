@@ -76,6 +76,14 @@ function Get-InfFault {
     # The models (43.59): one [Manufacturer] line, exactly these decorations,
     # and each section exactly one model line - the class id as the hardware
     # id before NT 6.3, as the compatible id (hardware id empty) from it.
+    # Windows merges sections of one name, so a second one would escape the
+    # checks below: no section name may appear twice.
+    $seen = @{}
+    foreach ($h in [regex]::Matches($t, '(?m)^[ \t]*\[([^\]\r\n]+)\][ \t]*\r?$')) {
+        $k = $h.Groups[1].Value.Trim().ToLowerInvariant()
+        if ($seen.ContainsKey($k)) { return "its section [$($h.Groups[1].Value.Trim())] appears twice (Windows merges them)" }
+        $seen[$k] = 1
+    }
     $mfgSec = [regex]::Match($t, '(?ims)^[ \t]*\[Manufacturer\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
     if (-not $mfgSec.Success) { return "it has no [Manufacturer] section" }
     $mlines = @([regex]::Matches($mfgSec.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value })
@@ -152,6 +160,8 @@ try {
             @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat`r`n", ""); Ok = $false; Why = "no catalog in the x64 INF" },
             @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3", "%Mfg%=Stor98_Models,NTamd64"); Ok = $false; Why = "no NT 6.3 models in the x64 INF" },
+            @{ T = $b64 + "`r`n[Stor98_Models.NTamd64.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802`r`n"; Ok = $false; Why = "a second NT 6.3 models section in the x64 INF" },
+            @{ T = $b64 + "`r`n[Manufacturer]`r`n%Mfg%=Stor98_Models,NTamd64.10.0`r`n"; Ok = $false; Why = "a second [Manufacturer] section in the x64 INF" },
             @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3", "%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0"); Ok = $false; Why = "a later decoration in the x64 INF" },
             @{ T = $b64.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class id as the hardware id on 8.1 and 10 in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=other.cat"); Ok = $false; Why = "another catalog name in the x64 INF" },
