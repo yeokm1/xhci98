@@ -1998,8 +1998,8 @@ Windows can find them:
   one of this installer's own copies that the same uninstall kept (its
   deletion failed, or whether a device names it could not be read): then
   `USBNTMAP.INF`'s record stays too, so the run after the restart removes
-  both (`inst_stor_late_action`, `INST_STOR_LATE_HELD`; 43.5's leg of
-  2026-10-23, finding F1, left `USBNTMAP.INF` behind before). A reading that fails stops the
+  both (`inst_stor_late_action`, `INST_STOR_LATE_HELD`; before this, 43.5's leg
+  of 2026-10-23 found `USBNTMAP.INF` left behind). A reading that fails stops the
   withdrawal as before, and leaves the uninstall's copy for its next run.
   The presence scan is strict (`inst_stor_scan`): an INF whose text
   cannot be read, or a listing cut short, reads as unknown and keeps
@@ -2560,7 +2560,7 @@ drivers are not taken care of on this machine (`stor_covered`: this
 run put the seven in place, or found all of them installed), on 98 SE
 alone, and names both ways: "the installer's row for them, or NUSB's
 mass-storage component", as the steps' other storage sentence does.
-Since 43.5's legs of 2026-10-23 (finding F2, `stor_advice`) it is also
+Since 43.5's legs of 2026-10-23 (`stor_advice`) it is also
 left out while NUSB is installed (`Uninstall\USB20U`, whatever the row
 chose), and a download without the storage drivers names NUSB's
 component or "a download of this release with them" instead of the row

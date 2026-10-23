@@ -20225,7 +20225,7 @@ static int stor_covered(void)
     return storCopyOk || (storHere && storPlanCase == INST_STOR_CASE_COMPLETE);
 }
 
-/* The Steps page's storage advice (roadmap-usb4 43.5 F2): on 98 SE only,
+/* The Steps page's storage advice (roadmap-usb4 43.5, 2026-10-23): on 98 SE only,
  * only while storage is not covered and NUSB is not installed. */
 static int stor_advice(void)
 {
