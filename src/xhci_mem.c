@@ -388,15 +388,15 @@ ULONG XhciPoolAcquireReserved(PXHCI_RING_POOL pool,
      * Two counts, kept apart (design record 20 section 5.2). The cap is
      * taken against the rings the device holds outside the caller's
      * transaction: `reserved` is the rings that transaction's command
-     * will drop, held until a proof releases them, and a device with four
-     * endpoints must still be able to make its first replacement. A
+     * will drop, held until a proof releases them, and a device at the cap
+     * must still be able to make its first replacement. A
      * reservation larger than what is held is a caller's slip and reserves
      * nothing. The fairness test below keeps the physical count, so a
      * replacement never passes for a device's first ring.
      */
     held = XhciPoolDeviceCount(pool, deviceRef);
     if ((reserved <= held ? held - reserved : held) >=
-        XHCI_MAX_DEVICE_ENDPOINTS) {
+        XHCI_POOL_DEVICE_RINGS) {
         pool->AcquireFailuresCap++;
         return XHCI_POOL_AT_CAP;
     }
@@ -411,9 +411,9 @@ ULONG XhciPoolAcquireReserved(PXHCI_RING_POOL pool,
      * The admission rule, and it is the whole reason "no device is starved of
      * its first endpoint" is true - the pool *size* does not establish that and
      * an earlier draft of design doc 04 section 3.6 wrongly said it did. With a
-     * per-device cap of 4, eight devices can hold all 32 rings and the ninth
+     * per-device cap of 16, two devices can hold all 32 rings and the third
      * gets its first endpoint refused; sizing the guarantee instead would need
-     * 31 * 4 + 1 = 125 rings.
+     * 31 * 16 + 1 = 497 rings.
      *
      * So a *first* ring is always granted while one is free, and a later ring
      * is granted only if the invariant `free >= ringless` survives it. A
