@@ -177,12 +177,19 @@ address have it (https://github.com/yeokm1/usb-wdm-free and
 https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers
 are). Every row is unticked unless you tick it. Ticked, the set is
 copied to WDMFREE or NONFREE in the tools folder and nothing is
-installed; the box under it, also unticked, lets Windows use the copied
-drivers when a device is plugged in (on 98 SE and ME by adding each
-driver's folder to DevicePath, on 2000 and later by staging its INF in
-the driver store), only for the INFs the set's STAGE.TXT names for this
-Windows. The Finish page lists the folders to point the hardware wizard
-at. The uninstall removes the copies, the DevicePath entries and the
+installed. Below the rows, under "Let Windows choose these drivers
+automatically for matching devices", is a box for each driver package
+of a set that has an INF for this Windows, grouped by kind (Audio,
+Video, HID, Network, Storage, Serial, Other), each unticked and open
+only while its set's row is ticked; a ticked package's INFs for this
+Windows are made available to Windows (on 98 SE and ME by adding the
+package's folder to DevicePath, on 2000 and later by staging its INF in
+the driver store); Windows may still ask for the folder of the files
+the first time. Two packages that would claim the same device are not
+offered together, and the box below the list says why. What an earlier
+run staged is listed there too: leaving a box unticked does not undo
+it. The Finish page lists the folders to point the hardware wizard at.
+The uninstall removes the copies, the DevicePath entries and the
 staged INFs it made; a driver a device installed from them stays
 installed, and so does a folder whose INF a device still uses.
 
@@ -193,8 +200,9 @@ Switches the window takes: /uninstall (the uninstall, below), /to path
 unticked; /s98vsd needs Stor98 in the run), /faster and /nofaster
 (the USB Tree's "can run faster" notice on or off for this computer),
 /notray,
-/nouas, /storage, /nostorage, /cmonly, /usb, /free, /freestage,
-/nonfree and /nonfreestage (the components, preselected),
+/nouas, /storage, /nostorage, /cmonly, /usb, /wdmfree:copy,
+/wdmfree:stage=<ids>, /wdmnonfree:copy and /wdmnonfree:stage=<ids>
+(the components, preselected; /free and /nonfree are the copies),
 /set Name=Value
 (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
@@ -244,14 +252,18 @@ The console tool
                                 warning; /nostorage leaves them out on any
                                 system; without either the console asks
                                 on 98 SE, and /yes takes the row's default
-  INSTALL /console /free        copies the free USB class drivers this
+  INSTALL /console /wdmfree:copy
+                                copies the free USB class drivers this
                                 download carries without asking;
-                                /freestage also lets Windows use them at
-                                a device's first plug; /nonfree and
-                                /nonfreestage do the same for the
-                                non-free driver pack; without them the
-                                console asks, Enter for N, and /yes
-                                takes N
+                                /wdmfree:stage=audio/uac2,video/uvc98
+                                also lets Windows choose those packages
+                                automatically for matching devices
+                                (INSTALL /list lists the packages for
+                                this Windows); /wdmnonfree: does the same
+                                for the non-free driver pack. /freestage
+                                and /nonfreestage are refused: name the
+                                packages. Without them the console asks,
+                                Enter for N, and /yes takes N
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that

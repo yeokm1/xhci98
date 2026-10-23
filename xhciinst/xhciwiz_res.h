@@ -72,16 +72,22 @@
 #define IDC_A_LABEL             1082
 #define IDC_A_CHOICE            1083
 #define IDC_A_EDIT              1084
-/* The other USB drivers' page (record 26 section 6.7.4): per set (free
- * first, then non-free, IDC_O_STRIDE apart) the box, its sentence, the
- * stage box, its line and the line under the row. */
+/* The other USB drivers' page (record 26 sections 6.7.4 and 6.7.11): per
+ * set (free first, then non-free, IDC_O_STRIDE apart) the copy box, its
+ * sentence and the line under the row; then the packages' heading, the
+ * place of their scrolling list and the details of the focused one. */
 #define IDC_O_BASE              1090
 #define IDC_O_STRIDE            5
 #define IDC_O_BOX               0
 #define IDC_O_TEXT              1
-#define IDC_O_STAGE             2
-#define IDC_O_STAGE_T           3
 #define IDC_O_LINE              4
+#define IDC_O_HEAD              1100
+#define IDC_O_AREA              1101
+#define IDC_O_DETAIL            1102
+/* The packages' list (a child dialog): a box per package of a set, made at
+ * run time, IDC_OL_BASE + 100 * set + its index. */
+#define IDD_OTHERLIST           113
+#define IDC_OL_BASE             1500
 
 /* The settings rows, made at run time: a label, a choice (a combo box, or
  * an edit box for a range), a note, per row. */

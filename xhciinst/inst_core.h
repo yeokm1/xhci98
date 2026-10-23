@@ -659,6 +659,10 @@ const char *inst_fast_list_text(int want, int have, INST_U32 now);
 
 #define INST_MAX_SET        16
 
+/* Record 26 section 6.7.11: a package id, and the packages of a set. */
+#define INST_PKG_ID_CHARS       64  /* "<class>/<package>"                  */
+#define INST_PKG_MAX            48  /* packages of one set                   */
+
 typedef struct _INST_OPTS {
     int List;
     int Yes;
@@ -682,9 +686,11 @@ typedef struct _INST_OPTS {
     int NoStorage;          /* /nostorage: left out, on any system      */
     int Free;               /* /free: the free USB class drivers copied
                                (record 26 section 6.7.4)                */
-    int FreeStage;          /* /freestage: and staged (implies /free)   */
     int NonFree;            /* /nonfree: the non-free pack copied       */
-    int NonFreeStage;       /* /nonfreestage: and staged                */
+    /* Record 26 section 6.7.11: /wdmfree:stage= and /wdmnonfree:stage=,
+     * the packages of a set to stage (each implies its set's copy). */
+    int StageCount[2];
+    char StageIds[2][INST_PKG_MAX * INST_PKG_ID_CHARS];
     int Faster;             /* /faster: XHCITR's "can run faster" notice
                                on for this computer (record 23 section
                                9.5 item 7)                              */
@@ -1957,6 +1963,71 @@ int inst_stage_parse(const char *line, const char *prefix,
 int inst_sums_parse(const char *line, char hex65[65], char *rel, size_t cap);
 /* One line of READ.TXT, "<class>/<package> | <systems>": as above. */
 int inst_read_parse(const char *line, char *pkg, size_t cap, INST_U32 *mask);
+
+/* ---- Driver packages of the other sets (record 26 section 6.7.11, draft
+ * 37): staging one box per package ------------------------------------ */
+
+#define INST_PKG_CLASS          0   /* a USB class driver: no brand words   */
+#define INST_PKG_DEVICE         1   /* a device driver: its chip family     */
+#define INST_PKG_DESC_MAX       80
+#define INST_SYS_ALL            0x1FFFUL    /* every STAGE.TXT token        */
+
+typedef struct _INST_OTHER_PKG {
+    int Set;                /* INST_SET_*                                 */
+    const char *Id;         /* "<class>/<package>", as STAGE.TXT's paths  */
+    int Kind;               /* INST_PKG_*                                 */
+    const char *Heading;    /* Audio, Video, HID, Network, Storage, ...   */
+    const char *Desc;
+    int Withdrawn;          /* a package no release carries any more      */
+} INST_OTHER_PKG;
+extern const INST_OTHER_PKG instOtherPkgs[];
+extern const int instOtherPkgCount;
+
+/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems. */
+typedef struct _INST_OTHER_REL {
+    int SetA;
+    const char *A;
+    int SetB;
+    const char *B;
+    INST_U32 Systems;
+    int Excludes;
+} INST_OTHER_REL;
+extern const INST_OTHER_REL instOtherRels[];
+extern const int instOtherRelCount;
+
+/* The headings, in the page's order; and the index of a heading (the last,
+ * "Other", for one the list does not hold). */
+extern const char *const instOtherHeadings[];
+extern const int instOtherHeadingCount;
+int inst_other_heading_index(const char *heading);
+
+/* The package of a path under a set's folder: its first two parts. */
+void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
+/* The table's row of a package, or NULL. */
+const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
+/* 1 when the table's relations exclude the pair on system token tok. */
+int inst_other_excludes(int setA, const char *a, int setB, const char *b,
+                        int tok);
+/* 1 when a description keeps the rules: printable ASCII, no '|', at most
+ * INST_PKG_DESC_MAX characters, and for a CLASS row no brand word. */
+int inst_other_desc_ok(int kind, const char *desc);
+/* The brand word a description holds (whole word, any case), or NULL. */
+const char *inst_other_brand_word(const char *desc);
+/* A /wdmfree:stage= list, "<class>/<package>[,...]": the count of ids put
+ * into ids (each INST_PKG_ID_CHARS), -1 when an id is not of that form or
+ * there are more than cap. */
+int inst_other_id_list(const char *list, char *ids, int cap);
+/* A metadata line of STAGE.TXT (PACKAGE, EXCLUDES, COEXISTS): 1 the
+ * line is one (kind 'P', 'E' or 'C', the fields copied), 0 not a metadata
+ * line, -1 a metadata line it cannot read, or a NEEDS line (unsupported). */
+typedef struct _INST_STAGE_META {
+    char Kind;
+    char A[INST_PKG_ID_CHARS + 16];   /* PACKAGE: the id; else "set:id"  */
+    char B[INST_PKG_ID_CHARS + 16];   /* PACKAGE: CLASS or DEVICE        */
+    char Desc[INST_PKG_DESC_MAX + 1];
+    INST_U32 Systems;
+} INST_STAGE_META;
+int inst_stage_meta(const char *line, INST_STAGE_META *out);
 
 /* The record file (section 6.7.5): its header line, and one later line
  * read: 1 (Kind 'F' with Token, Hash and Path; 'T', 'D' or 'A' with Token

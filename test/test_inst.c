@@ -5752,6 +5752,179 @@ static void test_other_sets(void)
           strlen(inst_other_sums(INST_SET_FREE)) == 0, "sums: the record");
 }
 
+
+/* Record 26 section 6.7.11 (draft 37): the driver packages of the other
+ * sets, their words, their relations, the switches. */
+static void test_other_pkgs(void)
+{
+    static const char *const nonfreePin[] = {
+        "ethernet/ax88179", "ethernet/ax88772", "ethernet/rtl815x",
+        "hid/x360c", "hid/x360wc", "serial/ch341", "serial/ft2232d",
+        "serial/ftdi"
+    };
+    static const char *const freeReadme[] = {
+        "video/uvc98", "audio/uac2", "audio/usbmidi", "net/cdcnet",
+        "net/rtl815x", "net/ax88179", "serial/usbcom", "hid/xpad98",
+        "storage/usbflop", "generic/libusb0"
+    };
+    char ids[INST_PKG_MAX * INST_PKG_ID_CHARS];
+    char pkg[INST_PKG_ID_CHARS];
+    INST_STAGE_META m;
+    INST_STAGE_LINE sl;
+    INST_OPTS o;
+    char err[256];
+    char *argv1[4];
+    int i;
+    int j;
+    int bad = 0;
+
+    for (i = 0; i < instOtherPkgCount; i++) {
+        const INST_OTHER_PKG *r = &instOtherPkgs[i];
+        if (!inst_other_desc_ok(r->Kind, r->Desc) ||
+            inst_other_heading_index(r->Heading) < 0 ||
+            !inst_eq(instOtherHeadings[inst_other_heading_index(r->Heading)],
+                     r->Heading)) {
+            printf("package row %d (%s): %s\n", i, r->Id, r->Desc);
+            bad = 1;
+        }
+        for (j = 0; j < i; j++) {
+            if (instOtherPkgs[j].Set == r->Set &&
+                inst_eq(instOtherPkgs[j].Id, r->Id)) {
+                bad = 1;
+            }
+        }
+        if (strstr(r->Desc, r->Id + (strchr(r->Id, '/') - r->Id) + 1) ==
+            NULL) {
+            printf("package row %s does not name its package\n", r->Id);
+            bad = 1;
+        }
+    }
+    CHECK(!bad, "every package row: its words by the rules, its heading "
+          "listed, its id once, its package named in its words");
+    for (i = 0; i < (int)(sizeof(nonfreePin) / sizeof(nonfreePin[0])); i++) {
+        CHECK(inst_other_pkg(INST_SET_NONFREE, nonfreePin[i]) != NULL,
+              nonfreePin[i]);
+    }
+    for (i = 0; i < (int)(sizeof(freeReadme) / sizeof(freeReadme[0])); i++) {
+        CHECK(inst_other_pkg(INST_SET_FREE, freeReadme[i]) != NULL,
+              freeReadme[i]);
+    }
+    CHECK(inst_other_pkg(INST_SET_FREE, "ethernet/ax88179") == NULL &&
+          inst_other_pkg(INST_SET_NONFREE, "net/ax88179") == NULL,
+          "a row belongs to its set");
+    CHECK(strstr(inst_other_pkg(INST_SET_FREE, "video/uvc98")->Desc,
+                 "USB Video Class 1.0 to 1.5") != NULL &&
+          strstr(inst_other_pkg(INST_SET_FREE, "audio/uac2")->Desc,
+                 "USB Audio Class 2.0") != NULL &&
+          strstr(inst_other_pkg(INST_SET_FREE, "audio/uac1")->Desc,
+                 "USB Audio Class 1.0") != NULL &&
+          strstr(inst_other_pkg(INST_SET_FREE, "audio/usbmidi")->Desc,
+                 "USB MIDI 1.0") != NULL,
+          "the class drivers name their class versions (owner, 2026-10-23)");
+    CHECK(inst_eq(inst_other_pkg(INST_SET_FREE, "hid/xpad98")->Desc,
+                  "Game pads (xpad98): for Xbox 360 and Xbox One "
+                  "controllers") &&
+          inst_other_pkg(INST_SET_FREE, "hid/xpad98")->Kind == INST_PKG_DEVICE,
+          "xpad98: the owner's compatibility wording, a DEVICE row");
+    CHECK(!inst_other_desc_ok(INST_PKG_CLASS, "USB audio (uac2): sound cards "
+                              "such as the Creative X4") &&
+          inst_other_desc_ok(INST_PKG_DEVICE, "USB Ethernet (x): adapters "
+                             "with an ASIX AX88179 chip") &&
+          !inst_other_desc_ok(INST_PKG_CLASS, "USB Ethernet (x): adapters "
+                              "with an ASIX AX88179 chip") &&
+          inst_other_desc_ok(INST_PKG_CLASS, "Webcams (uvc98): USB Video "
+                             "Class cameras, Asixth") &&
+          !inst_other_desc_ok(INST_PKG_CLASS, "a | b") &&
+          !inst_other_desc_ok(INST_PKG_CLASS, "") &&
+          !inst_other_desc_ok(INST_PKG_DEVICE, "0123456789012345678901234567"
+                              "8901234567890123456789012345678901234567890123"
+                              "4567890"),
+          "the words' rules: a brand refused in a class driver's, a chip "
+          "family allowed in a device driver's, whole words only, no '|', "
+          "not empty, at most 80 characters");
+    inst_other_pkg_of("audio/uac2/w98se/uac2.inf", pkg, sizeof(pkg));
+    CHECK(inst_eq(pkg, "audio/uac2"), "a path's package: its first two parts");
+    CHECK(inst_other_excludes(INST_SET_FREE, "audio/uac1", INST_SET_FREE,
+                              "audio/usbmidi", 0) &&
+          inst_other_excludes(INST_SET_FREE, "audio/usbmidi", INST_SET_FREE,
+                              "audio/uac1", 7) &&
+          inst_other_excludes(INST_SET_NONFREE, "hid/x360wc", INST_SET_FREE,
+                              "hid/xpad98", 0) &&
+          !inst_other_excludes(INST_SET_FREE, "hid/xpad98", INST_SET_NONFREE,
+                               "hid/x360c", 0) &&
+          !inst_other_excludes(INST_SET_FREE, "audio/uac2", INST_SET_FREE,
+                               "audio/usbmidi", 0) &&
+          !inst_other_excludes(INST_SET_FREE, "audio/uac1", INST_SET_FREE,
+                               "audio/usbmidi", -1),
+          "EXCLUDES both ways and across the sets; COEXISTS bars nothing");
+    CHECK(inst_other_id_list("audio/uac2,Video/UVC98,audio/uac2", ids,
+                             INST_PKG_MAX) == 2 &&
+          inst_eq(ids, "audio/uac2") &&
+          inst_eq(ids + INST_PKG_ID_CHARS, "video/uvc98") &&
+          inst_other_id_list("audio", ids, INST_PKG_MAX) == -1 &&
+          inst_other_id_list("audio/uac2/x", ids, INST_PKG_MAX) == -1 &&
+          inst_other_id_list("audio/uac2,", ids, INST_PKG_MAX) == -1 &&
+          inst_other_id_list("", ids, INST_PKG_MAX) == -1 &&
+          inst_other_id_list("free:audio/uac2", ids, INST_PKG_MAX) == -1 &&
+          inst_other_id_list("a/b,c/d", ids, 1) == -1,
+          "a stage list: ids folded to lower case, once each; a bad form or "
+          "too many refused");
+    CHECK(inst_stage_meta("PACKAGE | audio/uac2 | CLASS | USB audio (uac2): "
+                          "USB Audio Class 2.0 sound cards and DACs", &m) == 1 &&
+          m.Kind == 'P' && inst_eq(m.A, "audio/uac2") &&
+          inst_eq(m.B, "CLASS"), "a PACKAGE line read");
+    CHECK(inst_stage_meta("PACKAGE | audio/uac2 | CLASS | sound cards like "
+                          "the Creative X4", &m) == -1 &&
+          inst_stage_meta("PACKAGE | audio/uac2 | WIDGET | x", &m) == -1 &&
+          inst_stage_meta("NEEDS | audio/uac2 | free:audio/x | why", &m) == -1,
+          "a brand in a CLASS line, an unknown kind and a NEEDS line refused");
+    CHECK(inst_stage_meta("EXCLUDES | free:audio/uac1 | nonfree:hid/x360c | "
+                          "W98SE WME | why", &m) == 1 && m.Kind == 'E' &&
+          m.Systems == 3UL &&
+          inst_stage_meta("COEXISTS | free:a/b | free:c/d | W7 | x", &m) == 1 &&
+          m.Kind == 'C' &&
+          inst_stage_meta("EXCLUDES | audio/uac1 | free:c/d | W7 | x", &m) ==
+          -1,
+          "EXCLUDES and COEXISTS read, their ids set-qualified");
+    CHECK(inst_stage_meta("STAGE | W98SE | free/a/b/c.inf | x", &m) == 0 &&
+          inst_stage_parse("PACKAGE | a/b | CLASS | USB floppy (b): UFI "
+                           "floppy drives", "free", &sl) == 0 &&
+          inst_stage_parse("NEEDS | a/b | free:c/d | x", "free", &sl) == -1,
+          "the STAGE/COPY reader skips the metadata lines and refuses "
+          "others");
+    argv1[0] = "x";
+    argv1[1] = "/wdmfree:stage=audio/uac2,video/uvc98";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 &&
+          o.Free && o.StageCount[INST_SET_FREE] == 2 &&
+          inst_eq(o.StageIds[INST_SET_FREE] + INST_PKG_ID_CHARS,
+                  "video/uvc98"),
+          "/wdmfree:stage= names packages and implies the copy");
+    argv1[1] = "/wdmnonfree:copy";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.NonFree &&
+          o.StageCount[INST_SET_NONFREE] == 0, "/wdmnonfree:copy");
+    argv1[1] = "/free";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Free,
+          "/free kept as /wdmfree:copy");
+    argv1[1] = "/freestage";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
+          strstr(err, "/wdmfree:stage=") != NULL,
+          "/freestage refused with the new form named");
+    argv1[1] = "/nonfreestage";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
+          strstr(err, "/wdmnonfree:stage=") != NULL, "/nonfreestage refused");
+    argv1[1] = "/wdmnonfree:stage=hid/x360c";
+    argv1[2] = "/wdmnonfree:stage=hid/x360wc";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+          "a stage switch twice refused");
+    argv1[1] = "/wdmfree:stage=uac2";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1,
+          "a stage list of a bad form refused");
+    argv1[1] = "/wdmfree:stage=audio/uac2";
+    argv1[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+          "/wdmfree: belongs to an install");
+}
+
 int main(void)
 {
     test_versions();
@@ -5782,6 +5955,7 @@ int main(void)
     test_questions();
     test_dir_check();
     test_to_switch();
+    test_other_pkgs();
     test_di_helper();
     test_mw_values();
     test_greyed();
