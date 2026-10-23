@@ -3229,7 +3229,11 @@ staged for its package holds an INF of another package. The installer
 holds this at the read: every folder of a `STAGE` line naming 98 SE or
 ME belongs to one package (the folder is under that package's
 `<class>/<package>/`, which the path rule gives, and no other package's
-line names a file in it); a set whose lines break it is "not this
+line names a file in it), and holds no `STAGE` INF whose line does not
+name the system it is staged for (a folder staged on 98 SE whose other
+INF is a `STAGE` line for `W2K` alone would show that INF to 98 SE's
+wizard); its `COPY` INFs are the only other INFs it may hold. A set
+whose lines break it is "not this
 release's" (section 6.7.3), and the cut refuses it first
 (`Test-OtherStagePackages`, proposal). Within one package's folder the
 `COPY` INFs stay visible to the wizard with the package's `STAGE` INFs
@@ -3266,8 +3270,11 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
   named by both kinds of line on a common system, or by two lines of one
   kind whose systems overlap (an `EXCLUDES` on `W98SE` and a `COEXISTS`
   on `WXP` for one pair is valid), and a line naming an id that no package of either set's known
-  metadata (the current rows and the withdrawn ones, below) has ever
-  had; it lists, for the maintainer and not as a refusal, the candidate
+  metadata has ever had: the current and withdrawn rows (below), and
+  every `PACKAGE` line of the pinned release's whole `STAGE.TXT` before
+  the exporter's filtering (a package of the pack that does not qualify
+  is known, never offered and never selectable, and the history file
+  keeps it as "known, not shipped"); it lists, for the maintainer and not as a refusal, the candidate
   pairs it can see that no line names (below). A line whose other
   endpoint is in a set this download does not carry still binds: a package excluded by an absent
   one is offered, and one excluded by a package staged by an earlier run
