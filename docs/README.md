@@ -87,6 +87,9 @@ source comments, scripts, and other docs use these same locations.
   task 43.14's: whether an INF naming a refused storage interface's VID/PID
   binds it on Windows 98 SE and ME, and task 43.16's legs of the device id that
   replaced it.
+- [Run 43.42s](contributing/runs/run-43-42s.md) - the installer's
+  simplification read in guests (98 SE, ME, 2000, 7 at 120 DPI, XP x64)
+  and the 98 SE UAS Insert Disk prompt's cause.
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
