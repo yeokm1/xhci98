@@ -1141,6 +1141,16 @@ isolation evidence.
   PlatCmLinkPoll, P9EvidenceE1, P9Work; contract text: `include/stor98cm.h` R7, R8d.
   Tests: TESTING.md "Two drives in one ICM domain (9x)" and "Quarantined block after a
   surprise removal (9x)".
+- **Windows 8.1 and 10 keep their own `stornvme`; the INFs match `PCI\CC_0108` there,
+  decided 2026-10-23 (owner, xhci98 roadmap-usb4 43.59).** Signed and trusted, the x64 Stor98
+  ranked with `stornvme` (both `00FF2005` on `PCI\CC_010802`) and Windows selected it by itself
+  for every NVMe drive first seen after the install, internal ones too (10 x64 and 8.1 x64,
+  xhci98 `runs/run-43.md` "43.59" on branch `p43-59`). So both INFs carry a models section
+  decorated `NTx86.6.3` / `NTamd64.6.3` matching only `PCI\CC_0108`, the controller's last
+  compatible id, which `stornvme`'s `PCI\CC_010802` always outranks; Stor98 then binds only
+  where xhci98's installer puts it on one drive (`UpdateDriverForPlugAndPlayDevices` with
+  this INF) or a user does by hand. Windows 8, which has no `stornvme`, and every earlier
+  system keep `PCI\CC_010802`. xhci98's `check-stor98-inf.ps1` and `test_inst` hold it.
 - **Kernel DMA Protection: `DmaRemappingCompatible` 1 in the x64 INF, decided 2026-10-22
   (owner, on xhci98's roadmap-usb4 task 43.33's reading).** On a 64-bit Windows 10 (1803
   and later) whose firmware turns Kernel DMA Protection on, a device behind an external

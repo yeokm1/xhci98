@@ -702,6 +702,71 @@ static void test_real_infs(void)
     free(u64);
 }
 
+/* Stor98's two INFs (roadmap-usb4 43.59, owner 2026-10-23): on 2000 to 8
+ * and 98 SE and ME the models match every NVMe controller by
+ * PCI\CC_010802; on 8.1 and 10 (NT 6.3 and later) only PCI\CC_0108, which
+ * Windows' own stornvme (PCI\CC_010802) outranks, so Stor98 goes only where
+ * the installer puts it - and the installer, reading the same models,
+ * still finds an NVMe controller by its compatible ids. */
+static void test_stor98_infs(void)
+{
+    static const char nvmeHw[] =
+        "PCI\\VEN_1B36&DEV_0010&SUBSYS_11001AF4&REV_02\0"
+        "PCI\\VEN_1B36&DEV_0010&SUBSYS_11001AF4\0\0";
+    static const char nvmeCompat[] =
+        "PCI\\VEN_1B36&DEV_0010&REV_02\0PCI\\VEN_1B36&DEV_0010\0"
+        "PCI\\VEN_1B36&CC_010802\0PCI\\VEN_1B36&CC_0108\0PCI\\VEN_1B36\0"
+        "PCI\\CC_010802\0PCI\\CC_0108\0\0";
+    char *x86 = load("..\\src\\stor98\\inf\\stor98-x86.inf");
+    char *a64 = load("..\\src\\stor98\\inf\\stor98-x64.inf");
+    INST_ENV e;
+    INST_IDLIST ids;
+
+    CHECK(x86 != NULL && a64 != NULL, "Stor98's two INFs read");
+    if (x86 == NULL || a64 == NULL) {
+        free(x86);
+        free(a64);
+        return;
+    }
+    CHECK(inst_inf_arch_ok(x86, INST_ARCH_X86), "stor98-x86.inf is x86");
+    CHECK(inst_inf_arch_ok(a64, INST_ARCH_AMD64), "stor98-x64.inf is amd64");
+    e = env(0, 4, 10, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "98 SE: the class match");
+    e = env(1, 5, 0, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "2000: the class match");
+    e = env(1, 6, 2, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "8 x86: the class match");
+    e = env(1, 6, 2, INST_ARCH_AMD64);
+    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_010802"), "8 x64: the class match");
+    e = env(1, 6, 3, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_0108") && !has_id(&ids, "PCI\\CC_010802"),
+          "8.1 x86: PCI\\CC_0108 alone");
+    CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
+                         sizeof(nvmeCompat), &ids) >= 0,
+          "8.1 x86: the installer still finds an NVMe controller");
+    e = env(1, 6, 3, INST_ARCH_AMD64);
+    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_0108") && !has_id(&ids, "PCI\\CC_010802"),
+          "8.1 x64: PCI\\CC_0108 alone");
+    e = env(1, 10, 0, INST_ARCH_AMD64);
+    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_0108") && !has_id(&ids, "PCI\\CC_010802"),
+          "10 x64: PCI\\CC_0108 alone");
+    CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
+                         sizeof(nvmeCompat), &ids) >= 0,
+          "10 x64: the installer still finds an NVMe controller");
+    e = env(1, 10, 0, INST_ARCH_X86);
+    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
+          has_id(&ids, "PCI\\CC_0108"), "10 x86: PCI\\CC_0108 alone");
+    free(x86);
+    free(a64);
+}
+
 /* The Thunderbolt INFs in src\cm\ (task 39-A.1). A missing one is a
  * failure, as a missing INF of src\ is above: the tree carries them. */
 static void test_cm_infs(void)
@@ -5483,6 +5548,7 @@ int main(void)
     test_reg_hex();
     test_real_infs();
     test_cm_infs();
+    test_stor98_infs();
     test_parser();
     test_ids();
     test_actions();
