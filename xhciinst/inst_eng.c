@@ -19952,6 +19952,12 @@ static int own_names(const char **names)
     return n;
 }
 
+/* Files an earlier build put in the install directory with the
+ * installer's own and no longer ships: the disk benchmark of task 43.50
+ * (a 3.2.0.0 test cut's; owner, 2026-10-23). Still removed by the
+ * uninstall and still counted as the installer's by own_any_in. */
+static const char *const ownRetired[3] = { "XHCIPERF.EXE", "XHCIPF64.EXE", "XHCIPERF.TXT" };
+
 /* The package folder a file of own_names comes from */
 static const char *own_src(const char *name)
 {
@@ -20191,7 +20197,7 @@ static int job_file_for(const char *dir, char *out, size_t cap)
 
 static int own_remove_in(const char *dir, int window)
 {
-    const char *names[6];
+    const char *names[10];
     char path[INST_PATH_CHARS];
     int n;
     int i;
@@ -20203,6 +20209,9 @@ static int own_remove_in(const char *dir, int window)
      * when asked. */
     n = own_names(names);
     names[0] = INST_DI_RESULT_NAME;
+    for (i = 0; i < 3; i++) {
+        names[n++] = ownRetired[i];
+    }
     if (window) {
         names[n] = inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW);
         n++;
@@ -20247,7 +20256,7 @@ static void helper_files_gone(void)
 static int own_any_in(const char *dir)
 {
     static const char *const ext[3] = { ".TMP", ".BAK", ".DEL" };
-    const char *names[6];
+    const char *names[10];
     char path[INST_PATH_CHARS];
     char v[INST_PATH_CHARS];
     int n;
@@ -20269,6 +20278,9 @@ static int own_any_in(const char *dir)
         return 1;
     }
     n = own_names(names);
+    for (i = 0; i < 3; i++) {
+        names[n++] = ownRetired[i];
+    }
     for (i = 0; i < n; i++) {
         join(path, sizeof(path), dir, names[i]);
         if (file_state(path) != 0) {
