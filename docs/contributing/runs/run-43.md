@@ -3616,8 +3616,8 @@ for the release flavour; p43-69 against its own base p = 0.65).
 43.69 is no worse than the branch it is built on: in the like-for-like
 pair, the release flavour faulted 5 times and its base 7, and the
 branch's release flavour survived every pull in two series. Against
-`3.1.0.0` the branch faulted more often on stock QEMU (12 and 8 of 20,
-the release and qemu flavours, against 9 of 20). On the patched QEMU the
+`3.1.0.0` the branch faulted more often on stock QEMU (the release
+flavour 12 of 20, the qemu flavour 8 of 10, against 9 of 20). On the patched QEMU the
 two drivers faulted equally often (6 and 6). None of these differences is
 significant, and the fault itself is IOS's. Every surviving run's
 `fc /b` after the replug was clean.
