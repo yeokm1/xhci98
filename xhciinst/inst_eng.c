@@ -21933,19 +21933,10 @@ static int selftest_screens(void)
 /* The installer's own files and the uninstall entry (record 26 6.2, 9.1)   */
 /* ======================================================================== */
 
-/* The disk benchmark of this architecture (design record 29 section 11,
- * task 43.50), from the package's tools\xhciperf\: put in place and
- * removed with the installer's own files, by their route. */
-#if INST_MY_ARCH == INST_ARCH_AMD64
-#define INST_PERF_NAME      "XHCIPF64.EXE"
-#else
-#define INST_PERF_NAME      "XHCIPERF.EXE"
-#endif
-#define INST_PERF_README    "XHCIPERF.TXT"   /* its readme, which its Help opens */
-
 /* The installer's files of this architecture, from the package's
  * tools\xhciinst\: the window, the console tool, and on 98 SE and ME the
- * helper; then the disk benchmark, from tools\xhciperf\ (own_src). */
+ * helper. (The disk benchmark of task 43.50 is not shipped: owner,
+ * 2026-10-23.) */
 static int own_names(const char **names)
 {
     int n = 0;
@@ -21955,16 +21946,20 @@ static int own_names(const char **names)
     if (!envNow.Nt) {
         names[n++] = INST_DI_NAME;
     }
-    names[n++] = INST_PERF_NAME;
-    names[n++] = INST_PERF_README;
     return n;
 }
+
+/* Files an earlier build put in the install directory with the
+ * installer's own and no longer ships: the disk benchmark of task 43.50
+ * (a 3.2.0.0 test cut's; owner, 2026-10-23). Still removed by the
+ * uninstall and still counted as the installer's by own_any_in. */
+static const char *const ownRetired[3] = { "XHCIPERF.EXE", "XHCIPF64.EXE", "XHCIPERF.TXT" };
 
 /* The package folder a file of own_names comes from */
 static const char *own_src(const char *name)
 {
-    return (strcmp(name, INST_PERF_NAME) == 0 || strcmp(name, INST_PERF_README) == 0) ? "tools\\xhciperf"
-                                                                                     : "tools\\xhciinst";
+    (void)name;
+    return "tools\\xhciinst";
 }
 
 /* One file put in place by the USB tree tool's route (record 23 section
@@ -22199,7 +22194,7 @@ static int job_file_for(const char *dir, char *out, size_t cap)
 
 static int own_remove_in(const char *dir, int window)
 {
-    const char *names[6];
+    const char *names[10];
     char path[INST_PATH_CHARS];
     int n;
     int i;
@@ -22211,6 +22206,9 @@ static int own_remove_in(const char *dir, int window)
      * when asked. */
     n = own_names(names);
     names[0] = INST_DI_RESULT_NAME;
+    for (i = 0; i < 3; i++) {
+        names[n++] = ownRetired[i];
+    }
     if (window) {
         names[n] = inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW);
         n++;
@@ -22255,7 +22253,7 @@ static void helper_files_gone(void)
 static int own_any_in(const char *dir)
 {
     static const char *const ext[3] = { ".TMP", ".BAK", ".DEL" };
-    const char *names[6];
+    const char *names[10];
     char path[INST_PATH_CHARS];
     char v[INST_PATH_CHARS];
     int n;
@@ -22277,6 +22275,9 @@ static int own_any_in(const char *dir)
         return 1;
     }
     n = own_names(names);
+    for (i = 0; i < 3; i++) {
+        names[n++] = ownRetired[i];
+    }
     for (i = 0; i < n; i++) {
         join(path, sizeof(path), dir, names[i]);
         if (file_state(path) != 0) {

@@ -109,7 +109,7 @@ identification.
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`; the window and `SETUP.EXE` from `3.1.0.0`, not cut yet) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`, and from `3.1.0.0` `XHCIWIZ.EXE` and `XHCIWZ64.EXE`; `releases/<version>/INSTALL.BAT`, and from `3.1.0.0` `releases/<version>/SETUP.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
 | Published USB tree tool binaries | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhcitr/XHCITR.EXE` and `XHCITR64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's). See section 2a |
-| Published disk benchmark binaries | Yes, from the first cut that carries them (`3.2.0.0`; not cut yet) | `releases/<version>/tools/xhciperf/XHCIPERF.EXE` and `XHCIPF64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's), and they compile Stor98's BSD-3-Clause interface header `src/stor98/include/stor98pf.h`. See section 2a, "XHCIPERF.EXE and XHCIPF64.EXE" |
+| Disk benchmark binaries (`XHCIPERF.EXE`, `XHCIPF64.EXE`) | No: a developer diagnostic, never in a package (owner, 2026-10-23: dropped from `3.2.0.0`); built under `xhciperf\` and git-ignored | `xhciperf/` only | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's), and they compile Stor98's BSD-3-Clause interface header `src/stor98/include/stor98pf.h`. See section 2a |
 | Published 98 SE and ME device-install helper binary | Yes, from the first cut that carries it (`3.1.0.0`; not cut yet) | `releases/<version>/tools/xhciinst/XHCIDI.EXE` | Built from this project's sources but not only this project's code (design record 27 section 3): a 16-bit Windows program whose Open Watcom 2.0 C runtime is statically linked in (the Sybase Open Watcom Public License, as the qualifier's), linked against the Windows 98 SE DDK's `setupx.lib`, an import library whose OMF records name the module `SETUPX` and its exports and carry no code, so the image holds module-and-ordinal imports of the running system's `SETUPX.DLL` and no Microsoft code; compiled against that DDK's `inc16\setupx.h`, the `prsht.h` it includes and its 98 `windows.h` (the four members identified in `docs/references/README.md`, "Windows 98 DDK"); see section 2a, "XHCIDI.EXE" (task 42-A.1) |
 | Published 98 SE and ME IOS layer for Stor98's disks | Yes, from the first cut that carries it (`3.2.0.0`; not cut yet) | `releases/<version>/release-x86/S98VSD.VXD` and the other x86 flavour directories beside `stor98.mpd` | Built from this project's sources alone (design record 30 section 6): Open Watcom 2.0's compiler with no runtime linked (`-zl`, no library), linked by the Windows 98 SE DDK's `LINK.EXE` 5.12, which adds its MS-DOS stub and its `Rich` record of tool identifiers as Microsoft's linkers do to every PE driver of this package; compiled against ten of that DDK's headers (`docs/references/README.md`, "Windows 98 DDK"), none of whose text the image holds; GPL-2.0 like the rest of this project |
 | Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
@@ -352,9 +352,9 @@ at every build. It contains and runs no Microsoft setup program; the
 
 #### XHCIPERF.EXE and XHCIPF64.EXE
 
-`releases/<version>/tools/xhciperf/XHCIPERF.EXE` and `XHCIPF64.EXE` are the
-xHCI98 Disk Benchmark of `3.2.0.0` (roadmap-usb4 task 43.50, design record
-29), built by `xhciperf/build.cmd` from `xhciperf/xhciperf.c`, `pf_core.c`
+`XHCIPERF.EXE` and `XHCIPF64.EXE` are XHCIPERF, the disk benchmark of
+roadmap-usb4 task 43.50 (design record 29), a developer diagnostic that no
+package carries (owner, 2026-10-23: dropped from `3.2.0.0`), built by `xhciperf/build.cmd` from `xhciperf/xhciperf.c`, `pf_core.c`
 and `pf_s98.c`, with `xhciperf/xhciperf.rc` embedding
 `xhciperf/xhciperf.manifest` and `xhciperf/xhciperf.ico`, an icon drawn for
 this project - this project's own - and compiling Stor98's interface header
@@ -366,9 +366,7 @@ runtime (`LIBCMT`) into `XHCIPF64.EXE`. `xhciperf/check-imports.ps1`,
 which `xhciperf/selftest.cmd` runs at every gated build, requires exactly
 `KERNEL32`, `USER32`, `GDI32`, `ADVAPI32`, `SHELL32`, `COMCTL32` and
 `COMDLG32` and no delay-load import. `WNASPI32.DLL` and `OLE32.DLL` are the
-system's own, loaded at run time and never shipped. `make-release.ps1`
-generates a `NOTICE.TXT` beside the two executables recording the
-linkages. ATTO Disk Benchmark and CrystalDiskMark were the owner's
+system's own, loaded at run time and never shipped. ATTO Disk Benchmark and CrystalDiskMark were the owner's
 references for the window's layout only (record 29 section 12): neither
 was run, read or examined, and nothing of theirs is in these files.
 

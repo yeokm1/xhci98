@@ -64,7 +64,6 @@ easy to spot.
                            Thunderbolt or USB4 device
   Action > Properties      opens the device in Device Manager
                            (Windows 2000 and later)
-  Action > Disk benchmark  starts the xHCI98 Disk Benchmark on that disk
 
 A right click on the tree opens the Action menu. The window remembers its
 size and the View settings.
