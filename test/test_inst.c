@@ -4133,24 +4133,24 @@ static void test_s98(void)
         {
             int t;
             int all = 1;
-            for (t = 0; t < INST_SYS_COUNT; t++) {
+            for (t = 0; t < INST_S98SYS_COUNT; t++) {
                 all = all && inst_s98_box_default(t) == 1;
             }
             CHECK(all && inst_s98_box_default(-1) == 1 &&
-                  inst_s98_box_default(INST_SYS_COUNT) == 1,
+                  inst_s98_box_default(INST_S98SYS_COUNT) == 1,
                   "Stor98's table: ticked on every system for now (owner, "
                   "2026-10-22)");
-            CHECK(inst_sys_index(0, 4, 10) == INST_SYS_98SE &&
-                  inst_sys_index(0, 4, 90) == INST_SYS_ME &&
-                  inst_sys_index(1, 5, 0) == INST_SYS_2000 &&
-                  inst_sys_index(1, 5, 1) == INST_SYS_XP &&
-                  inst_sys_index(1, 5, 2) == INST_SYS_XP &&
-                  inst_sys_index(1, 6, 0) == INST_SYS_VISTA &&
-                  inst_sys_index(1, 6, 1) == INST_SYS_7 &&
-                  inst_sys_index(1, 6, 2) == INST_SYS_8 &&
-                  inst_sys_index(1, 6, 3) == INST_SYS_81 &&
-                  inst_sys_index(1, 10, 0) == INST_SYS_10 &&
-                  inst_sys_index(0, 4, 0) == -1,
+            CHECK(inst_s98_sys_index(0, 4, 10) == INST_S98SYS_98SE &&
+                  inst_s98_sys_index(0, 4, 90) == INST_S98SYS_ME &&
+                  inst_s98_sys_index(1, 5, 0) == INST_S98SYS_2000 &&
+                  inst_s98_sys_index(1, 5, 1) == INST_S98SYS_XP &&
+                  inst_s98_sys_index(1, 5, 2) == INST_S98SYS_XP &&
+                  inst_s98_sys_index(1, 6, 0) == INST_S98SYS_VISTA &&
+                  inst_s98_sys_index(1, 6, 1) == INST_S98SYS_7 &&
+                  inst_s98_sys_index(1, 6, 2) == INST_S98SYS_8 &&
+                  inst_s98_sys_index(1, 6, 3) == INST_S98SYS_81 &&
+                  inst_s98_sys_index(1, 10, 0) == INST_S98SYS_10 &&
+                  inst_s98_sys_index(0, 4, 0) == -1,
                   "the table's systems by version");
             CHECK(inst_cm_cat_refusal(INST_ARCH_AMD64, 1, 0) != NULL &&
                   strstr(inst_cm_cat_refusal(INST_ARCH_AMD64, 1, 0),

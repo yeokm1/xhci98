@@ -21239,8 +21239,8 @@ int inst_eng_s98_state(int *have, char *version, size_t cap)
 
 int inst_eng_s98_default(void)
 {
-    return inst_s98_box_default(inst_sys_index(envNow.Nt, envNow.Major,
-                                           envNow.Minor));
+    return inst_s98_box_default(inst_s98_sys_index(envNow.Nt, envNow.Major,
+                                                    envNow.Minor));
 }
 
 int inst_eng_restage_state(void)

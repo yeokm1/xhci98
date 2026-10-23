@@ -5913,21 +5913,21 @@ int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
     return haveS98 && tb && !noStor98 && (stor98Switch || tableDef);
 }
 
-int inst_sys_index(int nt, INST_U32 major, INST_U32 minor)
+int inst_s98_sys_index(int nt, INST_U32 major, INST_U32 minor)
 {
     if (!nt) {
-        return major != 4UL ? -1 : minor == 10UL ? INST_SYS_98SE :
-               minor == 90UL ? INST_SYS_ME : -1;
+        return major != 4UL ? -1 : minor == 10UL ? INST_S98SYS_98SE :
+               minor == 90UL ? INST_S98SYS_ME : -1;
     }
     if (major == 5UL) {
-        return minor == 0UL ? INST_SYS_2000 : INST_SYS_XP;
+        return minor == 0UL ? INST_S98SYS_2000 : INST_S98SYS_XP;
     }
     if (major == 6UL) {
-        return minor == 0UL ? INST_SYS_VISTA : minor == 1UL ? INST_SYS_7 :
-               minor == 2UL ? INST_SYS_8 : minor == 3UL ? INST_SYS_81 :
-               INST_SYS_10;
+        return minor == 0UL ? INST_S98SYS_VISTA : minor == 1UL ? INST_S98SYS_7 :
+               minor == 2UL ? INST_S98SYS_8 : minor == 3UL ? INST_S98SYS_81 :
+               INST_S98SYS_10;
     }
-    return major == 10UL ? INST_SYS_10 : -1;
+    return major == 10UL ? INST_S98SYS_10 : -1;
 }
 
 int inst_s98_box_default(int sys)
@@ -5936,7 +5936,7 @@ int inst_s98_box_default(int sys)
      * On 8.1 and 10 a line becomes 0 only once Windows' own stornvme is
      * shown to hot-plug behind this package's tunnel (roadmap 43.24 for
      * 8.1, 43.33 and 43.37 for 10); 8 has no in-box NVMe driver. */
-    static const unsigned char table[INST_SYS_COUNT] = {
+    static const unsigned char table[INST_S98SYS_COUNT] = {
         1,  /* 98 SE */
         1,  /* ME */
         1,  /* 2000 */
@@ -5948,7 +5948,7 @@ int inst_s98_box_default(int sys)
         1   /* 10 */
     };
 
-    if (sys < 0 || sys >= INST_SYS_COUNT) {
+    if (sys < 0 || sys >= INST_S98SYS_COUNT) {
         return 1;
     }
     return table[sys];

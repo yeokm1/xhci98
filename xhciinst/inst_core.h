@@ -1631,17 +1631,17 @@ int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
 
 /* Record 26 section 5.0 (draft 35): the systems of Stor98's default table,
  * and the system a version is (-1 for one the table has no line for). */
-#define INST_SYS_98SE       0
-#define INST_SYS_ME         1
-#define INST_SYS_2000       2
-#define INST_SYS_XP         3
-#define INST_SYS_VISTA      4
-#define INST_SYS_7          5
-#define INST_SYS_8          6
-#define INST_SYS_81         7
-#define INST_SYS_10         8
-#define INST_SYS_COUNT      9
-int inst_sys_index(int nt, INST_U32 major, INST_U32 minor);
+#define INST_S98SYS_98SE       0
+#define INST_S98SYS_ME         1
+#define INST_S98SYS_2000       2
+#define INST_S98SYS_XP         3
+#define INST_S98SYS_VISTA      4
+#define INST_S98SYS_7          5
+#define INST_S98SYS_8          6
+#define INST_S98SYS_81         7
+#define INST_S98SYS_10         8
+#define INST_S98SYS_COUNT      9
+int inst_s98_sys_index(int nt, INST_U32 major, INST_U32 minor);
 /* Stor98's box while the Thunderbolt box is ticked, and the console's
  * Enter: 1 ticked. A system without a line takes 1. */
 int inst_s98_box_default(int sys);
