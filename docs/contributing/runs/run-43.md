@@ -3505,6 +3505,16 @@ clean in every run.
 the thread and then the system IRP completed, with no D3 requested
 (`cm_pwrr.c`, host suite `test_cm_pwrr`).
 
+**After the change** (the gated `qemu` build of `c91940ec`, the same
+vehicle, the wizard route of me2 to me5, each on a fresh overlay): five
+first shutdowns, all clean, QEMU gone about 5 s after OK; four of the
+five logs carry `cm.power.direct=00000004` (the direct route to D3's
+quiescence) and `cm.shutdown=00000002`, which the thread now gets to emit
+before the machine powers off; the fifth stopped after `cm.start` and
+shut down cleanly all the same. A sixth run, whose wizard keystrokes
+fell out of step on the loaded host and never started the driver, is not
+counted. Before the change three of five such shutdowns hung.
+
 ## 43.53 - A Request to a Departed Device That Never Completes
 
 Roadmap-usb4 task 43.53, opened by the owner on 2026-10-22 from 43.49's
