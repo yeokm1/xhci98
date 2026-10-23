@@ -1820,12 +1820,14 @@ removed, and `tools\xhcicln\` lists and removes them if you want ("From
 **The options it asks about** are a few of the "Registry settings" below,
 each only where the hardware or the Windows it affects is present:
 `XhciIntelPortSwitch` (only with an Intel 7-, 8- or 9-series controller),
-`XhciInterruptMode`, `XhciForceBulkOnly`, `XhciSilentInstall` (Windows 98
+`XhciSilentInstall` (Windows 98
 SE and ME only, off by default; on does exactly what
 `tools\silent\silent-on.bat` does, off what `silent-off.bat` does, and the
 question says to restart after), and
 `XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` (only with a
-Thunderbolt or USB4 controller). Each shows the value now, the default
+Thunderbolt or USB4 controller). From `3.2.0.0` it no longer asks
+`XhciInterruptMode` or `XhciForceBulkOnly`: set them with `/set
+Name=Value`, or in the window's Advanced settings. Each shows the value now, the default
 and the values allowed, with a warning where the setting has one; Enter
 keeps the value, and only an answer changes it. An answer applies from
 the driver's next start: on a new Thunderbolt install the first start runs
