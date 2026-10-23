@@ -1505,7 +1505,8 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     if (cr != CMG_CR_SUCCESS) {
         /* The re-enumeration after it only asks PCI.VXD to read the bus
          * again. A vanished child's refusal may become its transaction,
-         * which asks again every 2 s. A devnode read gone is no veto. */
+         * which asks again, backed off (CmEjVanishRetryMs). A devnode
+         * read gone is no veto. */
         if (cr != CMG_CR_NO_SUCH_DEVNODE) {
             w->C.Vetoed++;
         }
@@ -3326,7 +3327,8 @@ static VOID cmWkThread(PVOID context)
             cmWkOp(w, CM_WK_NO_OP, 0);
         }
         if (go && w->OpenState == CM_CFGWK_OPEN_OK) {
-            /* Task 43.47: parked claims retried every 2 s, before and
+            /* Task 43.47: parked claims retried (a removal every 2 s, a
+             * refused query backed off, CmEjClaimRetry), before and
              * whatever the members' re-enumerations. */
             cmWkOp(w, CM_WK_NO_OP, 0);
             for (i = 0; i < w->Members && go; i++) {

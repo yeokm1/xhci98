@@ -347,10 +347,10 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
                 in->NowMs - t->LastQueryAt <
                     CmEjVanishRetryMs(t->QueryAttempts)) {
                 /* A vetoed vanished child: asked again, never forced (R12
-                 * S4), at a backed-off interval (task 43.47f): every query
-                 * of a held volume is a configuration-manager event the
-                 * system must service, and a stream of them every 2 s met
-                 * a holder's exit and stopped the system VM. */
+                 * S4), at a backed-off interval (task 43.47f): fewer
+                 * configuration-manager events against a held volume, a
+                 * mitigation tried against a system stop at the holder's
+                 * exit whose cause is not established (record 21). */
                 return CM_EJ_DO_NONE;
             }
             return CM_EJ_DO_QUERY;

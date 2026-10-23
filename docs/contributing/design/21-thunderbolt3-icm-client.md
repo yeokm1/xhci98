@@ -3853,17 +3853,20 @@ revised:
   (the re-plug), the event that most often follows the holder's release,
   makes it due at once and starts the backoff again - only an up the
   connection manager still reads as live, so a stale one does not. A
-  parked claim's
-  refused query backs off the same way. Why: a stress loop of 43.47's leg
-  (`runs/run-43-47r.md`) stopped the whole system VM of 98 SE and of ME,
-  about once in twenty to forty cycles, at the moment the holder (an
-  MS-DOS Prompt whose read had failed, an Explorer window on the drive)
-  was let go while the query was being asked every 2 s: the
-  connection-manager thread was found waiting in its own timed wait
-  between passes, none of this driver's CONFIGMG calls in flight, the
-  shell and its clock stopped. Every vetoed query is a configuration
-  manager event the system services against the holder; the backoff
-  makes one far less likely to meet the release.
+  parked claim's refused query backs off the same way. Why: a stress
+  loop of 43.47's leg (`runs/run-43-47r.md`) stopped the connection
+  manager on 98 SE and on ME at the moment the holder (an MS-DOS Prompt
+  whose read had failed, an Explorer window on the drive) was let go
+  while the query was being asked every 2 s. On 98 SE the whole system VM
+  stopped (the shell and its clock), and markers found the thread waiting
+  in its own timed wait between passes with none of this driver's CONFIGMG
+  calls in flight; ME's stop was not read that closely. The cause is not
+  established. The backoff is a mitigation tried, not a fix: it lowers the
+  number of queries, and did not remove the stop (before it, 98 SE 3 in
+  about 83 cycles and ME 1 in about 30; after it, 98 SE none in 40 and ME
+  1 in 16, where the loop's timing put a backed-off query at the holder's
+  exit in every cycle). The release notes list the stop as a known
+  limitation.
 - **Its course.** `Query_Remove_SubTree` (a call on the member's worker,
   its instance id read back first as every call of a record is), made
   only while the member's removal gate is down (no decision pending, no
