@@ -3244,7 +3244,9 @@ explicit lines the pack's maintainer owns, added to the pack's format
 
 ```
 PACKAGE  | <class>/<package> | CLASS or DEVICE | <description>
-EXCLUDES | <class>/<package> | <class>/<package> | <systems> | <why>
+EXCLUDES | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
+COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
+NEEDS    | <class>/<package> | <set>:<class>/<package> | <why>
 ```
 
 - `PACKAGE`: one per package. `CLASS` for a driver of a USB class
@@ -3254,13 +3256,32 @@ EXCLUDES | <class>/<package> | <class>/<package> | <systems> | <why>
   names the class and its version where one applies and **no brand,
   maker or product** (owner, 2026-10-23); a `DEVICE` description may name
   the chip family it is for and nothing else of a maker's.
-- `EXCLUDES`: two packages, of either set, that may not both be staged
-  on the named systems: the generic and specific drivers of one device
-  (the pack's case: `uac1` and `usbmidi`, both matching an audio-class
-  device's MIDI interface by different ids). The installer refuses the
-  combination before any change (the window greys the second box while
-  the first is ticked, and says why in its details; the console refuses
-  the switch).
+- `EXCLUDES`: two packages, set-qualified (`free:` or `nonfree:`, since
+  both sets may hold one path), that may not both be staged on the named
+  systems: the generic and specific drivers of one device (the pack's
+  case: `uac1` and `usbmidi`, both matching an audio-class device's MIDI
+  interface by different ids). `COEXISTS`: two packages whose overlap the
+  maintainer has considered and allows. Every pair of packages whose
+  scopes on a system can match one device (the cut's overlap report
+  below) must be named by exactly one `EXCLUDES` or `COEXISTS` line; a
+  pair named by both, or a line naming a package neither set carries, is
+  refused by the cut. A line whose other endpoint is in a set this
+  download does not carry still binds: a package excluded by an absent
+  one is offered, and one excluded by a package staged by an earlier run
+  is not (below).
+- `NEEDS`: a package that is staged only with another (a filter or a
+  library its INF names): the box of the first ticks the second and keeps
+  it ticked and greyed while it is ticked; the console adds the second
+  and says so. A `NEEDS` naming a package with no `STAGE` line on this
+  system makes the first not offered here (said in its set's details).
+- **The exclusions hold against what is staged already**, not only this
+  run's ticks: before any change, every ticked package is checked against
+  every other ticked one and against each package the records of either
+  set name as staged in any state (confirmed, partial, pending or
+  unknown, below). The installer refuses the combination before any
+  change: the window greys the box with the reason in its details ("Not
+  with free:audio/uac1, staged earlier: uninstall first, or ..."), and
+  the console refuses the switch with the same reason, exit 1.
 
 Until a set's pinned release carries `PACKAGE` lines (neither does today:
 `usb-wdm-nonfree` `v1.0.0` is pinned by its hash, and `usb-wdm-free` has
@@ -3274,14 +3295,28 @@ there, the descriptions keep the length and character rules, and a
 set's `NOTICE.md` and a fixed list of consumer brands, matched as whole
 words, case-insensitively). Where a release carries its own `PACKAGE`
 lines they win and the table's row for that package is not used; the
-same checks apply to them. **The literal-id rule is not enough**: the
+same checks apply to them. **The format's integration**: the metadata
+lines are a separate kind, read by a parser of their own
+(`inst_stage_meta`, and `Read-OtherStageMeta` at the cut), never by the
+`STAGE`/`COPY` parsers (`inst_stage_line`, `package-common.ps1`'s line
+reader), which skip a line whose first field is `PACKAGE`, `EXCLUDES`,
+`COEXISTS` or `NEEDS` and refuse every other unknown first field as now;
+`Assert-StageCovers`' one-line-per-INF accounting counts `STAGE` and
+`COPY` lines alone. The free set's exporter keeps a metadata line when
+every package it names (the set-qualified endpoints of the free set) is a
+qualifying package, and drops it otherwise, as it filters the INF lines
+by qualifying package; the generated `STAGE.TXT` keeps the kept lines
+verbatim after the INF lines. **The literal-id rule is not enough**: the
 pack's rule that no two `STAGE` lines match one hardware id on a system
 (section 6.7.2) is checked by the cut over the union of both sets,
 per system (proposal: `Test-OtherStageIds`, reading each `STAGE` INF's
 `[Models]` sections for that system's decorations), and it does not
 settle a generic driver and a specific one matching one device by
 different ids (a compatible id against a hardware id): that is what
-`EXCLUDES` states, and only the pack's maintainer decides it.
+`EXCLUDES` and `COEXISTS` state, and only the pack's maintainer decides
+it. The cut reports every pair whose scopes can match one device (one
+package's hardware ids against the other's class-wide compatible ids,
+per system) and refuses a pair no line names.
 
 **The words** (proposals; the table's first rows, for the packages the
 free set's README lists and the non-free pack's folders):
@@ -3315,23 +3350,35 @@ description differ, the README wins and the row is corrected.
   indented, the heading line "Let Windows choose these drivers
   automatically for matching devices:" and under it, for each heading in
   the order Audio, Video, HID, Network, Storage, Serial, Other, a static
-  heading and one check box per package of the set that has an INF on a
-  line naming this system, unticked, with its description as its label
+  heading and one check box per package of the set that has at least one
+  `STAGE` line naming this system (a package whose lines for this system
+  are all `COPY` has nothing to stage and is not listed), unticked, with its description as its label
   and its id in the details. The package boxes are open only while the
   set's copy box is ticked (a package can be staged only from a copy of
   this run or an earlier one, section 6.7.6), and greyed with the
   reason in the details where `EXCLUDES` bars them. A package with no
-  line for this system is not listed (the details area of the set says
-  "<n> more packages are for other Windows versions; they are copied, not
-  offered here.").
+  `STAGE` line for this system is not listed (the details area of the
+  set says "<n> more packages are for other Windows versions or copy-only
+  here; they are copied, not offered here.").
 - The non-free set: the same, its sentence as now.
-- **Earlier staging**, under each set's packages, one static line when
-  the set's record names staged INFs or folders (section 6.7.6's
-  `Staged` values): "Earlier staging remains active: <ids>. Leaving a box
-  unticked does not undo it; the uninstall does." The ids come from the
-  record's paths (their first two parts), never from this release's
-  table. A record written by draft 36's set-wide staging is read the
-  same way: nothing is inferred from it about packages it did not stage.
+- **Earlier staging**, under each set's packages, one static line per
+  state when the set's record names staged INFs or folders (section
+  6.7.6's `Staged` values), the ids taken from the record's paths (their
+  first two parts), never from this release's table, and each value read
+  as section 6.7.6 reads it at a run: **confirmed** (a `DevicePath`
+  entry still there; an `own` INF whose name still holds its bytes),
+  **foreign** (a `foreign` value: in the store, not this installer's),
+  **pending** (a run cut short at the call), **gone** (a `DevicePath`
+  entry or a stored name no longer there or no longer those bytes: the
+  value is tidied as section 6.7.6 says and nothing shown), and
+  **unknown** (the store or `DevicePath` unreadable). The line: "Staged
+  by an earlier run: <ids> (still offered to Windows); <ids> (in the
+  driver store from another source); <ids> (an interrupted run: may be in
+  the driver store); <ids> (could not be read). Leaving a box unticked
+  does not undo any of it. The uninstall removes what this installer
+  placed and no device uses." (each clause only when it has ids). A
+  record written by draft 36's set-wide staging is read the same way:
+  nothing is inferred from it about packages it did not stage.
 - **The details area**, below the scrolling region and outside it: the
   focused package's id, its scope on this system (the INFs, by name,
   with the `COPY` INFs of its folders), its exclusion if any, and for
@@ -3346,18 +3393,27 @@ description differ, the README wins and the row is corrected.
   The keyboard: Tab enters the region at its first open box and leaves it
   after its last; Up and Down move between its boxes; the region scrolls
   to keep the focused box in view. Measured at 640 by 480 at 96 DPI and
-  at 800 by 600 at 120 DPI (the window self-test lays the page out with
-  every row of both tables at the template's size; the legs read it).
+  at 120 DPI, and at 800 by 600 at 120 DPI (the window self-test lays
+  the page out with every row of both tables at the template's size; the
+  legs read all three). At 640 by 480 and 120 DPI the sheet may not fit
+  the work area whatever the page holds (the Components page alone is
+  about 550 pixels tall there): the region shrinks to its minimum of
+  three box lines, the details area to three lines, and the sheet is
+  moved into the work area by section 5.0's rule; what does not fit is
+  read and said by the leg, not promised.
 - The addresses' lines (section 6.7.4) stay under each set.
 
 **The defaults** (section 6.7.4 amended): every box unticked on every
 run. No choice is saved; what was staged is recorded (section 6.7.6) and
 shown as earlier staging. An earlier staging is never withdrawn because
 its box is unticked this run; it goes only with the uninstall, or when
-the copy step of section 6.7.5 withdraws a set whose hash changed (which
-it does today, before the new copy): that withdrawal is said package by
-package in the progress ("Earlier staging of <id> withdrawn: this
-release's <set> differs."), and a package ticked this run whose folder
+the copy step of section 6.7.5 withdraws a set before the new copy,
+which it does today in two cases: the set's hash changed, and the
+install directory moved (`Dir` differs). Either withdrawal is said
+package by package in the progress ("Earlier staging of <id> withdrawn:
+this release's <set> differs." or "...: the install directory moved to
+<dir>."), and the package is offered again unticked; its staging comes
+back only by its box., and a package ticked this run whose folder
 could not be made whole again is said as not staged, by id.
 
 **Staging** (section 6.7.6 amended): the run stages, for each ticked
@@ -3398,8 +3454,9 @@ owed (section 6.7.9).
   set's prefix implied by the switch, so `free:` is not typed), and imply
   its copy (the plan says so).
 - Every named package is checked before any change: one the set does not
-  carry, one with no line for this system, and a pair `EXCLUDES` bars
-  are refused with the reason, exit 1, nothing changed.
+  carry, one with no `STAGE` line for this system, one whose `NEEDS`
+  cannot be met, and a pair `EXCLUDES` bars (this run's or against
+  earlier staging) are refused with the reason, exit 1, nothing changed.
 - `/yes` and `/defaults` stage nothing, as now.
 - **The old switches** (decision, proposal): `/free` and `/nonfree` stay,
   the same as `/wdmfree:copy` and `/wdmnonfree:copy`; `/freestage` and
@@ -3425,7 +3482,8 @@ partial-staging words. The packaging tests: `Test-OtherStagePackages`
 and `Test-OtherStageIds` over stand-ins.
 
 **Legs** (owed with the code, the free set's stand-in or its first
-release): the page at 640 by 480 on 98 SE and at 120 DPI on 7, keyboard
+release): the page at 640 by 480 on 98 SE, at 640 by 480 and at 800 by
+600 at 120 DPI on 7, keyboard
 only and with the mouse; a copy with two packages staged and one left on
 98 SE (the `DevicePath` entries exactly those packages' folders) and on
 XP (the store holding exactly their INFs); a second run showing them as
