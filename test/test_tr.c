@@ -2873,6 +2873,107 @@ static void test_qual_cache(void)
     tr_qual_end(NULL);
 }
 
+/* 43.66 (record 25 section 7.7 item 9): the notice's balloon the shell did
+ * not show, sent again once; never twice where the shell showed it or says
+ * nothing. */
+static void test_bsend(void)
+{
+    TR_BSEND s;
+    TR_U32 t0 = 0xFFFF0000UL;   /* GetTickCount wraps inside the vectors */
+
+    /* 7's case: gone without being shown, sent again once after the wait. */
+    memset(&s, 0, sizeof(s));
+    CHECK_EQ(s.State, TR_BS_IDLE, "bsend: zeroed is idle");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_SENT, t0, 0), 0, "bsend: sent");
+    CHECK_EQ(s.State, TR_BS_SENT, "bsend: awaiting the shell");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TIMEOUT, t0 + 2000UL, 1), 0,
+             "bsend: timeout, unshown");
+    CHECK_EQ(s.State, TR_BS_LOST, "bsend: lost");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, t0 + 2000UL + TR_BS_WAIT_MS - 1UL, 1),
+             0, "bsend: not before the wait");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TIMEOUT, t0 + 3000UL, 1), 0,
+             "bsend: a second timeout while lost");
+    CHECK_EQ(s.State, TR_BS_LOST, "bsend: still lost, its wait unchanged");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, t0 + 2000UL + TR_BS_WAIT_MS, 1), 1,
+             "bsend: sent again after the wait, across the wrap");
+    CHECK_EQ(s.State, TR_BS_SENT, "bsend: awaiting again");
+    CHECK_EQ(s.Resent, 1, "bsend: as the re-send");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TIMEOUT, t0 + 90000UL, 1), 0,
+             "bsend: the re-send lost too");
+    CHECK_EQ(s.State, TR_BS_IDLE, "bsend: given up: once only");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, t0 + 900000UL, 1), 0,
+             "bsend: nothing more");
+
+    /* HIDE counts as gone, as TIMEOUT does. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_bsend_step(&s, TR_BE_SENT, 100UL, 0);
+    (void)tr_bsend_step(&s, TR_BE_HIDE, 200UL, 1);
+    CHECK_EQ(s.State, TR_BS_LOST, "bsend: hide unshown: lost");
+
+    /* An older balloon's timeout delivered after this one was sent, then
+     * this one shown: never sent again. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_bsend_step(&s, TR_BE_SENT, 100UL, 1);
+    (void)tr_bsend_step(&s, TR_BE_TIMEOUT, 101UL, 1);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_SHOW, 3000UL, 1), 0,
+             "bsend: shown after a stale timeout");
+    CHECK_EQ(s.State, TR_BS_SHOWN, "bsend: lost then shown: shown");
+    (void)tr_bsend_step(&s, TR_BE_TIMEOUT, 13000UL, 1);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 101UL + 2UL * TR_BS_WAIT_MS, 1), 0,
+             "bsend: shown after a stale timeout: not sent again");
+
+    /* XP's case: shown, so never sent again. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_bsend_step(&s, TR_BE_SENT, 100UL, 1);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_SHOW, 5000UL, 1), 0, "bsend: shown");
+    CHECK_EQ(s.State, TR_BS_SHOWN, "bsend: shown state");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 100UL + TR_BS_NOSHOW_MS * 3UL, 1), 0,
+             "bsend: shown: no deadline");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TIMEOUT, 15000UL, 1), 0,
+             "bsend: shown then timed out");
+    CHECK_EQ(s.State, TR_BS_IDLE, "bsend: done");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 900000UL, 1), 0,
+             "bsend: done: nothing");
+
+    /* No answer at all: sent again at the deadline only where the shell
+     * has been seen to answer. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_bsend_step(&s, TR_BE_SENT, 100UL, 0);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 100UL + TR_BS_NOSHOW_MS * 5UL, 0), 0,
+             "bsend: a shell never heard from: never sent again");
+    CHECK_EQ(s.State, TR_BS_SENT, "bsend: still awaiting");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 100UL + TR_BS_NOSHOW_MS - 1UL, 1), 0,
+             "bsend: heard from: not before the deadline");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 100UL + TR_BS_NOSHOW_MS, 1), 1,
+             "bsend: heard from: sent again at the deadline");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 100UL + 3UL * TR_BS_NOSHOW_MS, 1), 0,
+             "bsend: the re-send unanswered too");
+    CHECK_EQ(s.State, TR_BS_IDLE, "bsend: given up");
+
+    /* A new text starts again; another balloon, a click, the device gone or
+     * the notice off end it. */
+    memset(&s, 0, sizeof(s));
+    (void)tr_bsend_step(&s, TR_BE_SENT, 0UL, 0);
+    (void)tr_bsend_step(&s, TR_BE_TIMEOUT, 10UL, 1);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 10UL + TR_BS_WAIT_MS, 1), 1,
+             "bsend: re-sent");
+    (void)tr_bsend_step(&s, TR_BE_SENT, 50000UL, 1);
+    CHECK_EQ(s.Resent, 0, "bsend: a new text owes its own re-send");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_OTHER, 50001UL, 1), 0, "bsend: other");
+    CHECK_EQ(s.State, TR_BS_IDLE, "bsend: replaced by another: not owed");
+    (void)tr_bsend_step(&s, TR_BE_SENT, 0UL, 0);
+    (void)tr_bsend_step(&s, TR_BE_TIMEOUT, 10UL, 1);
+    (void)tr_bsend_step(&s, TR_BE_DROP, 20UL, 1);
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_TICK, 10UL + TR_BS_WAIT_MS, 1), 0,
+             "bsend: dropped while lost: not sent");
+    (void)tr_bsend_step(&s, TR_BE_SENT, 0UL, 0);
+    (void)tr_bsend_step(&s, TR_BE_CLICK, 10UL, 1);
+    CHECK_EQ(s.State, TR_BS_IDLE, "bsend: clicked: done");
+    CHECK_EQ(tr_bsend_step(&s, TR_BE_SHOW, 20UL, 1), 0, "bsend: idle show");
+    CHECK_EQ(s.State, TR_BS_IDLE, "bsend: a show while idle changes nothing");
+    CHECK_EQ(tr_bsend_step(NULL, TR_BE_TICK, 0UL, 1), 0, "bsend: NULL");
+}
+
 static void test_fast(void)
 {
     TR_FAST_IN in;
@@ -3045,7 +3146,7 @@ static void test_fast(void)
     in.BcdUsb = 0x0200;
     in.HsQual = 1;
     tr_fast_check(&in, &f);
-    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1);
+    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1, 1);
     CHECK(strcmp(out, "USB Flash Disk (G:) runs at Full Speed (12 Mbit/s) behind "
                       "a Full Speed hub; it can run at High Speed (480 Mbit/s). "
                       "Click here for what to try.") == 0, "HS case: the balloon");
@@ -3088,16 +3189,28 @@ static void test_fast(void)
     /* The balloon. */
     in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
     tr_fast_check(&in, &f);
-    tr_fast_balloon(out, sizeof(out), "USB Mass Storage Device (F:)", &f, 1);
+    tr_fast_balloon(out, sizeof(out), "USB Mass Storage Device (F:)", &f, 1, 1);
     CHECK(strcmp(out, "USB Mass Storage Device (F:) runs at High Speed "
                       "(480 Mbit/s) on a USB 2.0 port; it can run at SuperSpeed "
                       "(5 Gbit/s). Click here for what to try.") == 0,
           "balloon: one");
     CHECK(strlen(out) < 256, "balloon: fits szInfo");
-    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3);
+    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3, 1);
     CHECK(strcmp(out, "3 USB devices run slower than they can: Stick and 2 "
                       "more. Click here for what to try.") == 0, "balloon: three");
     CHECK(strlen(TR_FAST_TITLE) < 64, "the title fits szInfoTitle");
+
+    /* 43.68: 2000's shell sends no click, so its balloon points at the icon. */
+    tr_fast_balloon(out, sizeof(out), "Stick", &f, 3, 0);
+    CHECK(strcmp(out, "3 USB devices run slower than they can: Stick and 2 "
+                      "more. Click the icon for what to try.") == 0,
+          "balloon: three, 2000's text");
+    CHECK(strlen(out) < 256, "2000's text fits szInfo");
+    CHECK_EQ(tr_fast_click_balloon(1, 5UL, 0UL), 0, "2000: the icon");
+    CHECK_EQ(tr_fast_click_balloon(1, 5UL, 1UL), 1, "XP: the balloon");
+    CHECK_EQ(tr_fast_click_balloon(1, 5UL, 2UL), 1, "XP x64: the balloon");
+    CHECK_EQ(tr_fast_click_balloon(1, 6UL, 1UL), 1, "7: the balloon");
+    CHECK_EQ(tr_fast_click_balloon(0, 4UL, 90UL), 1, "ME: the balloon");
 
     /* The box's entry. */
     in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
@@ -3480,6 +3593,7 @@ int main(void)
     test_elevated_stop();
     test_login();
     test_qual_cache();
+    test_bsend();
     test_fast();
     test_levels();
     test_labels();

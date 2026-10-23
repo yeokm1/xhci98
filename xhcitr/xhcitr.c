@@ -5343,6 +5343,9 @@ static void ej_elevated(HWND owner, const char *unitId)
 static void tray_balloon(const char *title, const char *text, int warn);
 static void tray_balloon_as(const char *title, const char *text, int warn,
                             int fast);
+static int tray_balloon_send(const char *title, const char *text, int warn,
+                             int fast);
+static void tray_balloon_clear(void);
 
 /* ======================================================================== */
 /* Plain USB devices (record 25 section 6.5, revision 7)                     */
@@ -6336,7 +6339,9 @@ static int fastOn;              /* the setting in force at the last scan    */
 static int fastPending;         /* a balloon owed until the icon is there   */
 static char fastText[256];
 static int fastBalloon;         /* the last balloon shown was this notice's */
-static int fastRed;             /* the icon shown is the red one            */
+static TR_BSEND fastSend;       /* whether the shell showed it (item 9)     */
+static char fastTextKey[TR_FAST_KEY];   /* the device fastText names        */
+static int fastRed;            /* the icon shown is the red one            */
 static int fastTipN = -1;       /* the count its tooltip says, -1 none      */
 static HICON hIconFast;
 /* The High Speed case's answers (item 1), by key, the oldest replaced. */
@@ -6516,6 +6521,30 @@ static void fast_announce(void)
     tray_balloon_as(TR_FAST_TITLE, fastText, 0, 1);
 }
 
+/* Item 9 (task 43.66): what the shell said of the notice's balloon, or the
+ * second's tick; a balloon it did not show is sent again, once. */
+static int balloonAnswers;      /* the shell has sent a NIN_BALLOON* message */
+static void fast_balloon_event(int ev)
+{
+    /* A shell that answers: one heard from in this session, or Vista and
+     * later, whose shell was read answering (7, task 43.66) and drops a
+     * balloon queued behind its own without a word. */
+    int answers = balloonAnswers || (envNt && envMajor >= 6);
+
+    if (tr_bsend_step(&fastSend, ev, GetTickCount(), answers)) {
+        if (iconAdded && fastOn && fastCount > 0) {
+            /* The one still queued, if any, taken away first: an empty
+             * szInfo with NIF_INFO removes the icon's balloon (the
+             * documented way), so the re-send cannot show beside it. */
+            tray_balloon_clear();
+            (void)tray_balloon_send(TR_FAST_TITLE, fastText, 0, 1);
+        } else {
+            (void)tr_bsend_step(&fastSend, TR_BE_DROP, GetTickCount(),
+                                answers);
+        }
+    }
+}
+
 /* After every model refresh (section 7.7 items 3 and 4): the counted set,
  * the balloon for the devices new to it, and the icon. */
 static void fast_scan(void)
@@ -6561,10 +6590,20 @@ static void fast_scan(void)
     }
     memcpy(fastKeys, keys, sizeof(keys));
     fastKeyN = n;
+    /* A balloon still owed (item 9), or not yet sent for want of the icon,
+     * that names a device gone, or with the notice off, is not sent. */
+    if (!fastOn ||
+        tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN,
+                    fastTextKey)) {
+        fastPending = 0;
+        fast_balloon_event(TR_BE_DROP);
+    }
     if (fresh > 0 && first >= 0) {
         char name[160];
         fast_name(first, name, sizeof(name));
-        tr_fast_balloon(fastText, sizeof(fastText), name, &firstF, fresh);
+        tr_fast_balloon(fastText, sizeof(fastText), name, &firstF, fresh,
+                        tr_fast_click_balloon(envNt, envMajor, envMinor));
+        fast_key_of(first, fastTextKey, sizeof(fastTextKey));
         fastPending = 1;
     }
     fast_icon();
@@ -6788,6 +6827,7 @@ static void fast_toggle(void)
     fast_set(!fast_setting());
     fastOn = fast_setting();
     fastPending = 0;
+    fast_balloon_event(TR_BE_DROP);
     fast_icon();
 }
 
@@ -7564,15 +7604,16 @@ static void tray_remove(void)
  * there the notice carries its own id (TRAY_POP_FAST), which its click
  * reports. */
 #define TRAY_POP_FAST   2
-static void tray_balloon_as(const char *title, const char *text, int warn,
-                            int fast)
+/* The balloon itself; 1 when the shell's was asked for. */
+static int tray_balloon_send(const char *title, const char *text, int warn,
+                             int fast)
 {
     TR_NID n;
 
     tr_copy(lastEvent, text, sizeof(lastEvent));
     fastBalloon = 0;
     if (!iconAdded) {
-        return;
+        return 0;
     }
     if (!shellV5) {
         tray_update();
@@ -7580,7 +7621,7 @@ static void tray_balloon_as(const char *title, const char *text, int warn,
          * section 16). */
         tr_pop_show(hTray, WM_TRAYICON, fast ? TRAY_POP_FAST : 1, title, text,
                     warn ? TR_POP_WARNING : TR_POP_INFO);
-        return;
+        return 0;
     }
     memset(&n, 0, sizeof(n));
     n.cbSize = TR_NID_V2;
@@ -7593,6 +7634,35 @@ static void tray_balloon_as(const char *title, const char *text, int warn,
     n.dwInfoFlags = warn ? NIIF_WARNING : NIIF_INFO;
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
     fastBalloon = fast;
+    return 1;
+}
+
+/* The icon's balloon taken away, shown or queued (NIF_INFO, empty szInfo;
+ * Shell_NotifyIcon's documented removal). Shell 5.0 and later only. */
+static void tray_balloon_clear(void)
+{
+    TR_NID n;
+
+    if (!iconAdded || !shellV5) {
+        return;
+    }
+    memset(&n, 0, sizeof(n));
+    n.cbSize = TR_NID_V2;
+    n.hWnd = hTray;
+    n.uID = 1;
+    n.uFlags = NIF_INFO;
+    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+}
+
+/* A balloon with new text: the notice's is watched until the shell shows
+ * it (item 9); any other replaces it, and the notice's is then not owed. */
+static void tray_balloon_as(const char *title, const char *text, int warn,
+                            int fast)
+{
+    if (tray_balloon_send(title, text, warn, fast)) {
+        (void)tr_bsend_step(&fastSend, fast ? TR_BE_SENT : TR_BE_OTHER,
+                            GetTickCount(), 0);
+    }
 }
 
 static void tray_balloon(const char *title, const char *text, int warn)
@@ -7885,7 +7955,29 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         case WM_USER + 1:       /* NIN_KEYSELECT: the keyboard's click */
             tray_unit_menu();
             break;
+        case WM_USER + 2:       /* NIN_BALLOONSHOW */
+            if (shellV5) {
+                balloonAnswers = 1;
+                fast_balloon_event(fastBalloon ? TR_BE_SHOW : TR_BE_OTHER);
+            }
+            break;
+        case WM_USER + 3:       /* NIN_BALLOONHIDE */
+            if (shellV5) {
+                balloonAnswers = 1;
+                fast_balloon_event(TR_BE_HIDE);
+            }
+            break;
+        case WM_USER + 4:       /* NIN_BALLOONTIMEOUT */
+            if (shellV5) {
+                balloonAnswers = 1;
+                fast_balloon_event(TR_BE_TIMEOUT);
+            }
+            break;
         case WM_USER + 5:       /* NIN_BALLOONUSERCLICK */
+            if (shellV5) {
+                balloonAnswers = 1;
+                fast_balloon_event(TR_BE_CLICK);
+            }
             if (shellV5 ? fastBalloon : wp == TRAY_POP_FAST) {
                 fastBalloon = 0;
                 fast_box(NULL);
@@ -7912,6 +8004,7 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 return 0;
             }
             poll();
+            fast_balloon_event(TR_BE_TICK);
         } else if (wp == TIMER_CHANGE) {
             KillTimer(w, TIMER_CHANGE);
             refresh_window();

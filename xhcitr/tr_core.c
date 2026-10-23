@@ -2943,19 +2943,82 @@ int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key)
     return 1;
 }
 
-void tr_fast_balloon(char *out, size_t cap, const char *name,
-                     const TR_FAST *f, int count)
+int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports)
 {
+    TR_U32 age;
+
+    if (s == NULL) {
+        return 0;
+    }
+    age = nowMs - s->Since;
+    switch (ev) {
+    case TR_BE_SENT:
+        s->State = TR_BS_SENT;
+        s->Resent = 0;
+        s->Since = nowMs;
+        return 0;
+    case TR_BE_SHOW:
+        /* Lost too can be shown after all: the gone it saw may have been
+         * an older balloon's, posted before this one was sent. */
+        if (s->State == TR_BS_SENT || s->State == TR_BS_LOST) {
+            s->State = TR_BS_SHOWN;
+            s->Since = nowMs;
+        }
+        return 0;
+    case TR_BE_HIDE:
+    case TR_BE_TIMEOUT:
+        /* Gone. Unshown, it is owed once; shown, or already re-sent, it is
+         * done. */
+        if (s->State == TR_BS_SENT && !s->Resent) {
+            s->State = TR_BS_LOST;
+            s->Since = nowMs;
+        } else if (s->State != TR_BS_LOST) {
+            s->State = TR_BS_IDLE;
+        }
+        return 0;
+    case TR_BE_TICK:
+        if (s->State == TR_BS_SENT && reports && age >= TR_BS_NOSHOW_MS) {
+            /* No answer at all from a shell that answers: lost, and long
+             * enough waited already. */
+            if (s->Resent) {
+                s->State = TR_BS_IDLE;
+                return 0;
+            }
+        } else if (s->State != TR_BS_LOST || age < TR_BS_WAIT_MS) {
+            return 0;
+        }
+        s->State = TR_BS_SENT;
+        s->Resent = 1;
+        s->Since = nowMs;
+        return 1;
+    default:                    /* OTHER, CLICK, DROP, anything else */
+        s->State = TR_BS_IDLE;
+        return 0;
+    }
+}
+
+void tr_fast_balloon(char *out, size_t cap, const char *name,
+                     const TR_FAST *f, int count, int clickBalloon)
+{
+    /* Where a click on the balloon reaches the tool it opens the list;
+     * where it does not (2000, task 43.68) the icon's menu does. */
+    const char *click = clickBalloon ? "Click here for what to try."
+                                     : "Click the icon for what to try.";
+
     if (count > 1) {
         tr_sprintf(out, cap, "%d USB devices run slower than they can: %s and "
-                             "%d more. Click here for what to try.",
-                   count, name, count - 1);
+                             "%d more. %s",
+                   count, name, count - 1, click);
         return;
     }
-    tr_sprintf(out, cap, "%s runs at %s %s; it can run at %s. Click here for "
-                         "what to try.",
+    tr_sprintf(out, cap, "%s runs at %s %s; it can run at %s. %s",
                name, tr_fast_speed(f->Now), tr_fast_where(f->Where),
-               tr_fast_speed(f->Can));
+               tr_fast_speed(f->Can), click);
+}
+
+int tr_fast_click_balloon(int nt, unsigned long major, unsigned long minor)
+{
+    return !(nt && major == 5UL && minor == 0UL);
 }
 
 /* `lead`, then `text` broken at its spaces so that a line passes 79
