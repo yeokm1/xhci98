@@ -1,6 +1,11 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 38, 2026-10-23 (roadmap-usb4 task 43.48: the free and
+Status: revision 39, 2026-10-23 (roadmap-usb4 task 43.48, record 26
+draft 37 section 6.7.11: `/wdmfree:copy`, `/wdmfree:stage=<ids>` and
+the same for `/wdmnonfree:`, checked before any change; `/free` and
+`/nonfree` kept as the copies, `/freestage` and `/nonfreestage` refused
+with the new form named; the console's package question);
+revision 38, 2026-10-23 (roadmap-usb4 task 43.48: the free and
 non-free driver sets a download carries, copied to the install directory
 and optionally staged for the first plug, the switches `/free`,
 `/freestage`, `/nonfree` and `/nonfreestage`, and their removal in the

@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 36, 2026-10-23 (roadmap-usb4 task 43.48, the owner's
+Status: draft 37, 2026-10-23 (roadmap-usb4 task 43.48, the owner's
+decision of that day: the other drivers' copy one box per set, their
+staging one box per driver package under class headings, with the
+packs' own descriptions and exclusions, earlier staging shown, and the
+console's `/wdmfree:` and `/wdmnonfree:` switches, section 6.7.11;
+record 23 revision 39); draft 36, 2026-10-23 (roadmap-usb4 task 43.48, the owner's
 decisions of 2026-10-22: three release downloads, the free and non-free
 driver sets offered from the folders the download carries, copied and
 never installed, every box unticked, an optional stage for the first
@@ -3192,6 +3197,240 @@ stand until the owner reviews them:
 6. The residue of a store name freed and given again to identical INF
    bytes from another source (section 6.7.6) is accepted.
 
+#### 6.7.11 Staging by driver package (draft 37; the owner's decision of 2026-10-23)
+
+The owner, 2026-10-23, on the granularity of the other drivers' boxes
+(option B of the coordinator's two, reviewed independently and
+recommended): **the copy stays one box per set; the staging becomes one
+box per driver package**, under class headings that only help the eye.
+This section amends sections 6.7.4 to 6.7.8 where it says so; the rest of
+section 6.7 (the folders, their records, the detection, the copy, the
+journals, the uninstall's order) stands. Proposals of this section's own
+are marked so.
+
+**The package, and its id.** A package is a folder
+`<class>/<package>/` of a set (`WDMFREE\audio\uac2\`,
+`NONFREE\serial\ftdi\`): the first two parts of the paths its
+`STAGE.TXT` lines name, under the set's prefix. Its id is set-qualified
+and stable across releases: `free:audio/uac2`, `nonfree:serial/ftdi`
+(lower case, the set's folder's parts as `STAGE.TXT` writes them). The
+id is the only name a choice, a switch or a record uses for it; its
+heading, its words and its place on the page are presentation and never
+identify it. A package's **scope on this system** is the set of its
+`STAGE` lines naming this system's token (section 6.7.4's
+`inst_sys_token`): its box stages exactly those INFs, never a `COPY` line,
+never another system's line, and never another package's INF in place of
+one that cannot be staged (no fallback).
+
+**Each package its own folders.** On 98 SE and ME staging adds a folder
+to `DevicePath`, and the hardware wizard reads every INF of a folder it
+finds there (section 6.7.6), so a box is honest only when no folder
+staged for its package holds an INF of another package. The installer
+holds this at the read: every folder of a `STAGE` line naming 98 SE or
+ME belongs to one package (the folder is under that package's
+`<class>/<package>/`, which the path rule gives, and no other package's
+line names a file in it); a set whose lines break it is "not this
+release's" (section 6.7.3), and the cut refuses it first
+(`Test-OtherStagePackages`, proposal). Within one package's folder the
+`COPY` INFs stay visible to the wizard with the package's `STAGE` INFs
+(the FTDI case, decision 5 of section 6.7.10, which stands): its details
+say so ("Staging also lets Windows see <n> INF(s) this package marks
+copy-only: <names>.").
+
+**The metadata.** `STAGE.TXT`'s `NOTE` field is not parsed (section
+6.7.2) and stays free text. A package's words and its rules come from
+explicit lines the pack's maintainer owns, added to the pack's format
+(proposal for both packs' maintainer, who is the owner):
+
+```
+PACKAGE  | <class>/<package> | CLASS or DEVICE | <description>
+EXCLUDES | <class>/<package> | <class>/<package> | <systems> | <why>
+```
+
+- `PACKAGE`: one per package. `CLASS` for a driver of a USB class
+  (bound by class, subclass and protocol, or by a class-wide compatible
+  id), `DEVICE` for one bound by vendor and product ids. The description:
+  at most 72 printable ASCII characters, no `|`; a `CLASS` description
+  names the class and its version where one applies and **no brand,
+  maker or product** (owner, 2026-10-23); a `DEVICE` description may name
+  the chip family it is for and nothing else of a maker's.
+- `EXCLUDES`: two packages, of either set, that may not both be staged
+  on the named systems: the generic and specific drivers of one device
+  (the pack's case: `uac1` and `usbmidi`, both matching an audio-class
+  device's MIDI interface by different ids). The installer refuses the
+  combination before any change (the window greys the second box while
+  the first is ticked, and says why in its details; the console refuses
+  the switch).
+
+Until a set's pinned release carries `PACKAGE` lines (neither does today:
+`usb-wdm-nonfree` `v1.0.0` is pinned by its hash, and `usb-wdm-free` has
+no release), the installer's own table supplies them
+(`instOtherPkgs`, `inst_core.c`: id, kind, heading, description, and the
+exclusions), and the cut holds the table to the pinned `STAGE.TXT`:
+every package there has exactly one row and no row names a package not
+there, the descriptions keep the length and character rules, and a
+`CLASS` row's description holds no word of the brand list
+(`scripts\package\brand-words.txt`, proposal: the makers named in either
+set's `NOTICE.md` and a fixed list of consumer brands, matched as whole
+words, case-insensitively). Where a release carries its own `PACKAGE`
+lines they win and the table's row for that package is not used; the
+same checks apply to them. **The literal-id rule is not enough**: the
+pack's rule that no two `STAGE` lines match one hardware id on a system
+(section 6.7.2) is checked by the cut over the union of both sets,
+per system (proposal: `Test-OtherStageIds`, reading each `STAGE` INF's
+`[Models]` sections for that system's decorations), and it does not
+settle a generic driver and a specific one matching one device by
+different ids (a compatible id against a hardware id): that is what
+`EXCLUDES` states, and only the pack's maintainer decides it.
+
+**The words** (proposals; the table's first rows, for the packages the
+free set's README lists and the non-free pack's folders):
+
+| Id | Kind | Heading | Description |
+|---|---|---|---|
+| `free:audio/uac1` | CLASS | Audio | USB Audio Class 1.0: speakers, headsets and microphones |
+| `free:audio/uac2` | CLASS | Audio | USB Audio Class 2.0: sound cards and DACs |
+| `free:audio/usbmidi` | CLASS | Audio | USB MIDI 1.0: keyboards and MIDI interfaces |
+| `free:video/uvc98` | CLASS | Video | Webcams: USB Video Class 1.0 to 1.5 cameras |
+| `free:hid/xpad98` | DEVICE | HID | Game pads that use the Xbox 360 or Xbox One controller protocol |
+| `free:net/cdcnet` | CLASS | Network | USB Ethernet of the CDC ECM, CDC NCM and RNDIS classes |
+| `free:net/ax88179` | DEVICE | Network | USB Ethernet adapters with an ASIX AX88179 chip |
+| `free:net/rtl815x` | DEVICE | Network | USB Ethernet adapters with a Realtek RTL8152 or RTL8153 chip |
+| `free:serial/usbcom` | CLASS | Serial | USB serial ports of the CDC ACM class |
+| `free:storage/usbflop` | CLASS | Storage | USB floppy drives of the UFI class |
+| `free:generic/libusb0` | CLASS | Other | libusb-win32 0.1, for programs that talk to a device directly |
+
+The non-free pack's rows are `DEVICE` rows named for their chip
+families (FTDI, Prolific, CH341, CP210x serial chips; the pack's
+Ethernet chips; its game pad drivers), written when the code is, from
+its `NOTICE.md`. The `xpad98` row names a controller protocol, not a
+maker's product: whether "Xbox" may stand in a `DEVICE` description is
+the owner's call (question, section 14). Where the README's scope and a
+description differ, the README wins and the row is corrected.
+
+**The page** (section 6.7.4 amended). From the top:
+
+- The free set: its copy box and sentence as now ("Copies the free USB
+  class drivers to <dir>\WDMFREE. Nothing is installed..."), then,
+  indented, the heading line "Let Windows choose these drivers
+  automatically for matching devices:" and under it, for each heading in
+  the order Audio, Video, HID, Network, Storage, Serial, Other, a static
+  heading and one check box per package of the set that has an INF on a
+  line naming this system, unticked, with its description as its label
+  and its id in the details. The package boxes are open only while the
+  set's copy box is ticked (a package can be staged only from a copy of
+  this run or an earlier one, section 6.7.6), and greyed with the
+  reason in the details where `EXCLUDES` bars them. A package with no
+  line for this system is not listed (the details area of the set says
+  "<n> more packages are for other Windows versions; they are copied, not
+  offered here.").
+- The non-free set: the same, its sentence as now.
+- **Earlier staging**, under each set's packages, one static line when
+  the set's record names staged INFs or folders (section 6.7.6's
+  `Staged` values): "Earlier staging remains active: <ids>. Leaving a box
+  unticked does not undo it; the uninstall does." The ids come from the
+  record's paths (their first two parts), never from this release's
+  table. A record written by draft 36's set-wide staging is read the
+  same way: nothing is inferred from it about packages it did not stage.
+- **The details area**, below the scrolling region and outside it: the
+  focused package's id, its scope on this system (the INFs, by name,
+  with the `COPY` INFs of its folders), its exclusion if any, and for
+  the non-free set the makers' warning; for a set's copy box, the set's
+  sentence and address.
+- **The layout**: a scrolling region of plain check boxes and static
+  headings (a child window with its own vertical scroll bar, its
+  contents laid out by the measured font as `wiz_lay.c` measures the
+  settings rows, each label wrapped to the region's width), not a list
+  view (no 98 SE list view groups, no themed disabled state to rely on);
+  the copy boxes, the details area and the sheet's buttons outside it.
+  The keyboard: Tab enters the region at its first open box and leaves it
+  after its last; Up and Down move between its boxes; the region scrolls
+  to keep the focused box in view. Measured at 640 by 480 at 96 DPI and
+  at 800 by 600 at 120 DPI (the window self-test lays the page out with
+  every row of both tables at the template's size; the legs read it).
+- The addresses' lines (section 6.7.4) stay under each set.
+
+**The defaults** (section 6.7.4 amended): every box unticked on every
+run. No choice is saved; what was staged is recorded (section 6.7.6) and
+shown as earlier staging. An earlier staging is never withdrawn because
+its box is unticked this run; it goes only with the uninstall, or when
+the copy step of section 6.7.5 withdraws a set whose hash changed (which
+it does today, before the new copy): that withdrawal is said package by
+package in the progress ("Earlier staging of <id> withdrawn: this
+release's <set> differs."), and a package ticked this run whose folder
+could not be made whole again is said as not staged, by id.
+
+**Staging** (section 6.7.6 amended): the run stages, for each ticked
+package, the INFs of its scope, with section 6.7.6's mechanics and
+records unchanged (the `Staged` values keep their physical names: the
+`DevicePath` entry on 98 SE and ME, the INF's relative path on 2000 and
+later). A package whose every INF staged is "staged"; one with some
+staged and some not is "partly staged" with the INFs that were not and
+why; the Summary, the progress and the Finish page say it by id. The
+ticks are intent only: the records, not the ticks, say what the
+installer owns, and the uninstall (section 6.7.8, unchanged) removes what
+the records name.
+
+**The words of the action**: "Let Windows choose this driver
+automatically for matching devices" (never "at the first plug": on 98 SE
+the setup engine may still ask for the vendor's disk, section 6.7.9),
+and on 98 SE and ME the details add "Windows may ask for the folder of
+the files the first time; it is <dir>\<folder>." for a package whose
+folders hold driver files besides its INFs.
+
+**8, 8.1 and 10** (section 6.7.4's signature paragraph amended): on
+64-bit Vista and 7 the warning stands as it is; on 8, 8.1 and 10 the
+packages of both sets carry no catalog this project signs, so
+`SetupCopyOEMInf` refuses a package without a valid signature on 64-bit
+8 to 10 (Microsoft's documented policy, not read here), and the box of
+a package with an INF on a line naming `W8X64` or `W10X64` says "On
+64-bit Windows 8 to 10 Windows stores this driver only if its signature
+is valid; this one may be refused." On 32-bit 8 to 10 the publisher
+question of section 6.7.6 applies. Whether either set's INFs carry
+catalogs is the packs'; nothing here signs them. A leg on 8 or 10 is
+owed (section 6.7.9).
+
+**The console** (record 23 revision 39):
+
+- `/wdmfree:copy` and `/wdmnonfree:copy` copy a set.
+- `/wdmfree:stage=<class/package>[,<class/package>...]` and
+  `/wdmnonfree:stage=...` stage the named packages of that set (the
+  set's prefix implied by the switch, so `free:` is not typed), and imply
+  its copy (the plan says so).
+- Every named package is checked before any change: one the set does not
+  carry, one with no line for this system, and a pair `EXCLUDES` bars
+  are refused with the reason, exit 1, nothing changed.
+- `/yes` and `/defaults` stage nothing, as now.
+- **The old switches** (decision, proposal): `/free` and `/nonfree` stay,
+  the same as `/wdmfree:copy` and `/wdmnonfree:copy`; `/freestage` and
+  `/nonfreestage` are refused with "/freestage staged a whole set; name
+  the packages: /wdmfree:stage=<class/package>,... (INSTALL /? lists
+  them)." They are never read as a subset.
+- `INSTALL /?` lists each carried set's packages for this system with
+  their ids and descriptions; the console's question for a set asks the
+  copy (Y/N, Enter N) and then, after a Y, "Stage which? (ids separated
+  by commas, Enter for none)", the list printed above it, a wrong id
+  asked again.
+
+**Host vectors** (`test_inst.c`): the id from a `STAGE.TXT` path, both
+sets; a package's scope per system token, `COPY` lines never in it; the
+98 SE and ME one-package-a-folder rule over good and broken line sets;
+`EXCLUDES` in both directions and across the sets; the table held to a
+stand-in `STAGE.TXT` (a row missing, a row extra, a description too long,
+a brand word in a `CLASS` row and the same word allowed in a `DEVICE`
+row); the switches (each form, an unknown id, an ineligible id, an
+excluded pair, the old stage switches refused, `/free` as
+`/wdmfree:copy`); earlier staging read from a draft 36 record; the
+partial-staging words. The packaging tests: `Test-OtherStagePackages`
+and `Test-OtherStageIds` over stand-ins.
+
+**Legs** (owed with the code, the free set's stand-in or its first
+release): the page at 640 by 480 on 98 SE and at 120 DPI on 7, keyboard
+only and with the mouse; a copy with two packages staged and one left on
+98 SE (the `DevicePath` entries exactly those packages' folders) and on
+XP (the store holding exactly their INFs); a second run showing them as
+earlier staging; the uninstall removing exactly what was staged.
+
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 
 On 98 SE and ME the engine runs record 23 section 6's route (the copy, the
@@ -3757,6 +3996,10 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 
 ## 14. Open, and the risks
 
+- (draft 37) Whether "Xbox" may stand in `xpad98`'s description, a
+  `DEVICE` row naming a controller protocol rather than a chip family
+  (section 6.7.11): the owner's call. The proposal keeps it, being the
+  protocol's only name.
 - (draft 35) The controller's own New Hardware wizard after an install
   with no controller present (98 SE and ME) asks for the driver disk,
   and the Steps text tells the user to type the install directory: by
