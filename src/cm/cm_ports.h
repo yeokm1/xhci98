@@ -102,6 +102,32 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
                      ULONG nowCount, PULONG isNew);
 
 /*
+ * Whether a bridge's answer starts a new population generation, the one
+ * an eject is posted against and checked at its hand-off (section 7.4,
+ * task 43.70): 1 when a function newly answers (`fresh`, CmPortsNewPdos's
+ * count) or the answer is longer than the snapshot, 0 for the same
+ * population or a departure alone. Under native PCIe hot-plug Windows'
+ * PCI driver turns the slot off as part of the eject and reports the
+ * ejected function gone only after that, after a tool's own confirmation
+ * was posted; a replacement is always a new function, so it still ends
+ * the old generation.
+ */
+ULONG CmPortsNewGeneration(ULONG fresh, ULONG oldCount, ULONG nowCount);
+
+/*
+ * The log value of an eject dropped at its hand-off (task 43.70): bits
+ * 0 to 3 the checks that refused it (CM_EJ_STALE_*), bits 8 to 15 the
+ * bridge's generation now and 16 to 23 the eject's, each truncated to
+ * its low byte.
+ */
+#define CM_EJ_STALE_OWNER    0x1UL  /* bridge gone or another domain's */
+#define CM_EJ_STALE_SERIAL   0x2UL  /* a new publication of the bridge */
+#define CM_EJ_STALE_GEN      0x4UL  /* a new population generation */
+#define CM_EJ_STALE_STACK    0x8UL  /* a function behind it has a stack */
+ULONG CmPortsStaleWhy(ULONG serialChanged, ULONG genChanged,
+                      ULONG notReady, ULONG genNow, ULONG genEject);
+
+/*
  * Whether a child filter goes on a PDO the snapshot found new (section 7.4
  * step 1, revision 2). `chain[0..chainCount-1]` is the driver object of
  * each device object already attached above the PDO, lowest first, as the

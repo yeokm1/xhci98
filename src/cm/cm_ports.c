@@ -409,6 +409,32 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
     return fresh;
 }
 
+ULONG CmPortsNewGeneration(ULONG fresh, ULONG oldCount, ULONG nowCount)
+{
+    if (fresh != 0 || nowCount > oldCount) {
+        return 1;
+    }
+    return 0;
+}
+
+ULONG CmPortsStaleWhy(ULONG serialChanged, ULONG genChanged,
+                      ULONG notReady, ULONG genNow, ULONG genEject)
+{
+    ULONG why;
+
+    why = 0;
+    if (serialChanged) {
+        why |= CM_EJ_STALE_SERIAL;
+    }
+    if (genChanged) {
+        why |= CM_EJ_STALE_GEN;
+    }
+    if (notReady) {
+        why |= CM_EJ_STALE_STACK;
+    }
+    return why | ((genNow & 0xFFUL) << 8) | ((genEject & 0xFFUL) << 16);
+}
+
 ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
                          ULONG chainCount, PVOID busDriver, PVOID self)
 {

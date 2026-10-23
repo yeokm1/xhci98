@@ -544,8 +544,9 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
 
     /* The snapshot is replaced under the lock, since the eject's
      * eligibility (cmEjectReady) reads it from the child's removal. A
-     * changed population starts a new generation (RelGen), which an eject
-     * posted against the old one fails at its hand-off; a new function
+     * function newly answering starts a new generation (RelGen,
+     * CmPortsNewGeneration), which an eject posted against the old one
+     * fails at its hand-off; a departure alone keeps it; a new function
      * forgets an orderly removal seen before it arrived (EjectSeen), so a
      * replacement is never torn down for its predecessor's eject. The
      * answer settles the bridge after a tunnel change only if the query
@@ -553,8 +554,14 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
      * overlapped one leaves it unsettled for the next query, which the
      * change's own invalidation brings. */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    if (fresh != 0 || count != filter->SnapCount) {
+    if (CmPortsNewGeneration(fresh, filter->SnapCount, count)) {
         filter->RelGen++;
+    } else if (count != filter->SnapCount && filter->Owner != NULL) {
+        /* A departure alone (task 43.70): under native hot-plug the
+         * ejected function leaves the answer only after Windows has turned
+         * the slot off, after the confirmation was posted; the
+         * generation is kept, so that eject is still the bridge's. */
+        CmLogNote(filter->Owner, "cm.reenum.departure", filter->Bdf);
     }
     if (fresh != 0) {
         filter->EjectSeen = 0;
@@ -1461,6 +1468,8 @@ VOID CmReenumConfirm(PCM_NHI nhi, const UCHAR *v, ULONG bytes)
         }
         m->PendingAt = 0;
         m->PendingGen = 0;
+        m->LeftPendingAt = 0;       /* a tombstone's, confirmed once */
+        m->LeftPendingGen = 0;
         CmMarksTouch(&r->Marks, m, cmMarkNow(nhi));
     }
     if (posted) {
@@ -2540,6 +2549,7 @@ VOID CmReenumService(PCM_NHI nhi)
     KIRQL irql;
     PCM_FILTER f;
     PCM_FILTER ejHeld[XHCI_TBT_MAX_TUNNELS];
+    ULONG staleWhy[XHCI_TBT_MAX_TUNNELS];
     ULONG pending;
     ULONG stale;
     ULONG mask;
@@ -2600,6 +2610,7 @@ VOID CmReenumService(PCM_NHI nhi)
      * lock is released. */
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         ejHeld[i] = NULL;
+        staleWhy[i] = 0;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
     pending = r->EjectPending;
@@ -2626,6 +2637,20 @@ VOID CmReenumService(PCM_NHI nhi)
             f->RelGen != r->Port[i].EjectGen || !cmEjectReady(f)) {
             pending &= ~(1UL << i);
             stale |= 1UL << i;
+            /* Which check refused it (task 43.70), for the log: bit 0
+             * the bridge gone or another domain's, 1 a new publication,
+             * 2 a new population generation, 3 a function with a stack;
+             * bits 8 to 15 the bridge's generation now, 16 to 23 the
+             * eject's. */
+            if (f == NULL || f->Owner != nhi) {
+                staleWhy[i] = CM_EJ_STALE_OWNER;
+            } else {
+                staleWhy[i] = CmPortsStaleWhy(
+                    (ULONG)(f->Serial != r->Port[i].EjectSerial),
+                    (ULONG)(f->RelGen != r->Port[i].EjectGen),
+                    (ULONG)!cmEjectReady(f), f->RelGen,
+                    r->Port[i].EjectGen);
+            }
         } else {
             taken = 1;
             if (r->EjectHook != NULL) {
@@ -2645,6 +2670,7 @@ VOID CmReenumService(PCM_NHI nhi)
         if (stale & (1UL << i)) {
             r->EjectsStale++;
             CmLogNote(nhi, "cm.reenum.eject.stale", r->Port[i].Bdf);
+            CmLogNote(nhi, "cm.reenum.eject.stale.why", staleWhy[i]);
         }
         if ((pending & (1UL << i)) == 0) {
             continue;
