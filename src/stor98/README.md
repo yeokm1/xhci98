@@ -9,7 +9,7 @@ storage driver for NVMe SSDs that xhci98's connection manager brings up behind a
 |---|---|---|
 | Windows 9x | Windows 98 SE, ME | SCSI miniport (`.mpd`); no helper VxD ([PLAN.md](docs/PLAN.md) 0.12, MD-5) |
 | NT, 32-bit | Windows 2000 SP4, XP, Vista, 7, 8, 8.1, 10 (below build 22000) | SCSIport miniport (`.sys`) |
-| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8 x64, 8.1 x64 and 10 x64 untested (from xhci98 3.2.0.0 the package installs there with its catalog; the driver has not run there) | SCSIport miniport (`.sys`, amd64) |
+| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8.1 x64 and 10 x64 read in virtual machines only (xhci98's roadmap 43.59: tunnelled drives run, a surprise unplug fails at once; on 10 x64 without `DmaRemappingCompatible`, 43.59s); 8 x64 untested (from xhci98 3.2.0.0 the package installs there with its catalog) | SCSIport miniport (`.sys`, amd64) |
 
 Windows 8, 8.1 and 10 since xhci98 3.2.0.0 (xhci98's roadmap 43.23; 10 below build 22000,
 which xhci98's installer admits beside 8 and 8.1 from its roadmap 43.34): see
