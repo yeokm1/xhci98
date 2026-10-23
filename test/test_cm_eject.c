@@ -988,8 +988,8 @@ static VOID test_qualification(VOID)
 #define VNODE       0xC0DE0001UL
 #define VETOED      0x17UL
 
-/* A vanished child's record, its query vetoed: asked again every 2 s,
- * never forced, its member held all the while; the held exposure and
+/* A vanished child's record, its query vetoed: asked again, backed off
+ * (2, 4, 8, 16 s ...), never forced, its member held all the while; the held exposure and
  * re-enumeration run only once it is removed. */
 static VOID test_vanished_veto(VOID)
 {
@@ -1037,8 +1037,15 @@ static VOID test_vanished_veto(VOID)
         act = CmNvlinkHoldRun(&held, CmEjGate(&t), TRUE, TRUE, TRUE, TRUE,
                               &missed, &vanish, &fresh);
         CHECK_EQ(act, 0, "while vetoed: nothing exposed or re-enumerated");
+        if (now == 5000) {
+            CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 2, "vetoed twice: 4 s next");
+        }
+        if (now == 6000) {
+            CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 3, "the third at 6 s");
+        }
     }
-    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 31, "vetoed: every 2 s for a minute");
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 5,
+             "vetoed: backed off, 2, 4, 8 and 16 s apart (0, 2, 6, 14, 30)");
     CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "vetoed: never forced");
     CHECK((t.Flags & CM_EJ_F_BLOCKED) == 0, "vetoed: no deadline, no block");
     CHECK(CmEjBusy(&t), "vetoed: the passes' cadence kept");
@@ -1047,7 +1054,7 @@ static VOID test_vanished_veto(VOID)
     f.QueryCr = CM_EJ_CR_SUCCESS;
     in.NowMs = 62000;
     drive(&t, &f, &in);
-    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 32, "closed: the query accepted");
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 6, "closed: the query accepted");
     CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 1, "closed: the removal");
     CHECK_EQ(t.Phase, CM_EJ_P_DONE, "closed: retired");
     CHECK((t.Flags & CM_EJ_F_REMOVED) != 0, "closed: removed");
@@ -1068,6 +1075,69 @@ static VOID test_vanished_veto(VOID)
     drive(&t, &f, &in);
     CHECK_EQ(t.Phase, CM_EJ_P_DONE, "gone: retired by its disappearance");
     CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "gone: nothing to remove");
+}
+
+/* Task 43.47f: the backoff and the nudge. */
+static VOID test_vanished_backoff(VOID)
+{
+    CM_EJ_TX t;
+    FAKE f;
+    CM_EJ_IN in;
+    ULONG now;
+
+    CHECK_EQ(CmEjVanishRetryMs(1), 2000, "backoff: 2 s after the first");
+    CHECK_EQ(CmEjVanishRetryMs(2), 4000, "backoff: 4 s");
+    CHECK_EQ(CmEjVanishRetryMs(5), 32000, "backoff: 32 s");
+    CHECK_EQ(CmEjVanishRetryMs(6), 64000, "backoff: 64 s");
+    CHECK_EQ(CmEjVanishRetryMs(40), CM_EJ_VANISH_RETRY_MAX_MS,
+             "backoff: held at its cap, no overflow");
+
+    fakeInit(&f);
+    f.QueryCr = VETOED;
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    for (now = 0; now <= 600000; now += 1000) {
+        in = mkIn(now);
+        drive(&t, &f, &in);
+    }
+    /* 0, 2, 6, 14, 30, 62, then every 64 s: 126 ... 574. */
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 14, "ten minutes vetoed: 14 queries");
+    CHECK_EQ(f.Calls[CM_EJ_DO_REMOVE], 0, "never forced");
+    CHECK(CmEjGate(&t), "the member held throughout");
+
+    /* A re-plug nudges it: asked at once, the backoff from its start. */
+    CHECK(CmEjNudge(&t, 600500), "nudged");
+    in = mkIn(600500);
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 15, "nudged: asked at once");
+    in.NowMs = 602499;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 15, "nudged: then 2 s");
+    in.NowMs = 602500;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_QUERY], 16, "nudged: asked at 2 s");
+
+    /* Nothing to nudge: an eject, a removal, a record not yet queried. */
+    CmEjBeginVanished(&t, VBRIDGE, VNODE, 0);
+    CHECK(!CmEjNudge(&t, 10), "not yet queried: nothing");
+    t.Phase = CM_EJ_P_REMOVE;
+    t.QueryAttempts = 1;
+    CHECK(!CmEjNudge(&t, 10), "removing: nothing");
+    begin(&t, TRUE, 0);
+    t.Phase = CM_EJ_P_QUERY;
+    t.QueryAttempts = 1;
+    CHECK(!CmEjNudge(&t, 10), "an eject: nothing");
+
+    /* A parked claim's refused query backs off as well. */
+    CmEjClaimBegin(&t, VBRIDGE, VNODE, 0);
+    CHECK(!CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                        TRUE, FALSE, 1000),
+          "parked: first refusal");
+    CHECK_EQ(CmEjClaimRetry(&t, 3000), CM_EJ_DO_QUERY, "parked: 2 s");
+    CHECK(!CmEjClaimEnd(&t, VETOED, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE, 0, 0,
+                        TRUE, FALSE, 3000),
+          "parked: second refusal");
+    CHECK_EQ(CmEjClaimRetry(&t, 6999), CM_EJ_DO_NONE, "parked: then 4 s");
+    CHECK_EQ(CmEjClaimRetry(&t, 7000), CM_EJ_DO_QUERY, "parked: at 4 s");
 }
 
 /* The NHI stopped mid-retry: the record kept and adopted by the next
@@ -1493,6 +1563,7 @@ int main(void)
     test_decision();
     test_bytewrite();
     test_vanished_veto();
+    test_vanished_backoff();
     test_vanished_stop();
     test_vanished_o6();
     test_vanished_claims();

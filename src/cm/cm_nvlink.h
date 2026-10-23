@@ -137,7 +137,8 @@
  * children a tunnel down took away get no request (nothing to flush); a
  * present one does. Since task 43.47 they are no longer the worker's
  * where the member has a call worker: each is a vanished child's
- * transaction of cm_eject.h, its veto retried every 2 s and its member
+ * transaction of cm_eject.h, its veto retried (backed off from 2 s to
+ * 64 s, CmEjVanishRetryMs) and its member
  * held until it is retired, and the worker's own removals claim the
  * devnode in the same records first.
  *

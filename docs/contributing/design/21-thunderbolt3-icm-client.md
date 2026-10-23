@@ -3097,7 +3097,7 @@ the removal retries. The design therefore separates two things that
   earlier accepted query of that devnode is outstanding (a refused
   query owes nothing: there is no retirement debt, so the blocker is
   released and the query is not repeated; a vanished child's vetoed
-  query is not this case and keeps its 2 s retries and its gate) -
+  query is not this case and keeps its retries and its gate) -
   never by time or by a worker's exit (R8c, S5). The image stays
   resident, so the code and the lists outlive the stop (section 6.1's
   rule).
@@ -3521,8 +3521,9 @@ interval, 50 ms while any wait is pending (part 0).
 
 **Vanished children** (a tunnel down's removal of functions that no longer
 answer) go through the same transaction as an ejected unit, without the
-request: the query, and on a veto a retry every 2 s (R12 S4: "a veto is
-retried every 2 s and never forced"), the removal, and the member's
+request: the query, and on a veto a retry, never forced (R12 S4: "a veto
+is retried every 2 s and never forced"; since task 43.47f backed off from
+2 s to at most 64 s, see "The veto's cadence"), the removal, and the member's
 exposure gate up until every vanished child of that member is retired
 (R8c, S5: no re-enumeration and no `UP` before); today a vetoed query of a vanished
 child lets the member's re-enumeration go ahead, which this ends. A
@@ -3887,12 +3888,33 @@ revised:
   when its devnode is found is answered as not found, nothing called,
   under the records' lock, so an eject and a claim never both query one
   devnode.
+- **The veto's cadence (task 43.47f, 2026-10-23).** A vetoed vanished
+  child's query is asked again 2 s after the first refusal, then 4, 8,
+  16, 32 s, and then every 64 s, never forced; a tunnel up on its member
+  (the re-plug), the event that most often follows the holder's release,
+  makes it due at once and starts the backoff again - only an up the
+  connection manager still reads as live, so a stale one does not. A
+  parked claim's refused query backs off the same way. Why: a stress
+  loop of 43.47's leg (`runs/run-43.md`, "43.47r") stopped the connection
+  manager on 98 SE and on ME at the moment the holder (an MS-DOS Prompt
+  whose read had failed, an Explorer window on the drive) was let go
+  while the query was being asked every 2 s. On 98 SE the whole system VM
+  stopped (the shell and its clock), and markers found the thread waiting
+  in its own timed wait between passes with none of this driver's CONFIGMG
+  calls in flight; ME's stop was not read that closely. The cause is not
+  established. The backoff is a mitigation tried, not a fix: it lowers the
+  number of queries, and did not remove the stop (before it, 98 SE 3 in
+  about 83 cycles and ME 1 in about 30; after it, 98 SE none in 40 and ME
+  1 in 16, where the loop's timing put a backed-off query at the holder's
+  exit in every cycle). The release notes list the stop as a known
+  limitation.
 - **Its course.** `Query_Remove_SubTree` (a call on the member's worker,
   its instance id read back first as every call of a record is), made
   only while the member's removal gate is down (no decision pending, no
   acknowledgement awaited behind it). Vetoed (or any other refusal): kept
-  in its phase and asked again every 2 s, never forced, with no deadline
-  (R12 S4); the member shows "a removal is in progress". Accepted: the
+  in its phase and asked again, never forced, with no deadline
+  (R12 S4), at the cadence above; the member shows "a removal is in
+  progress". Accepted: the
   removal is authorised (nothing behind it to isolate, assumption A1),
   and `Remove_SubTree` is made, retried every 2 s while it fails; 30 s
   after its first attempt the member is blocked (the status record's
@@ -3982,7 +4004,8 @@ revised:
   accepted query with its first attempt and its request). Parked claims
   have a **scheduler of their own** on the CONFIGMG worker, run on every
   tick whatever the members' admission and outside the loss's attempt
-  count: each is taken up again 2 s after its last attempt - its devnode's
+  count: each is taken up again 2 s after its last attempt (a refused
+  query at the backed-off cadence above) - its devnode's
   instance id read back first (gone: freed; not read: parked again) - and
   makes its query again where it was refused, or its removal alone where
   it was accepted (never a second query), its request withdrawn and the
@@ -4004,8 +4027,9 @@ revised:
   removes nothing and fails the member's request, retried, so no
   re-enumeration follows it.
 
-*Host vectors* (`test_cm_eject`): a vetoed vanished child retried every
-2 s with the gate up, and released at its removal; a re-plug of the
+*Host vectors* (`test_cm_eject`): a vetoed vanished child retried with
+the gate up (2, 4, 8, 16 s apart, then capped at 64 s, a re-plug's nudge
+asking at once), and released at its removal; a re-plug of the
 member during the retries (the held exposure and re-enumeration run only
 after the retirement); the NHI stopped mid-retry and the record adopted
 (present: the query asked again; gone: retired; an accepted query owed
@@ -4014,7 +4038,7 @@ past 30 s (blocked, no teardown, still retried, the block lifted by its
 success); the takeovers (a claim refused, removed, and failed into the
 transaction, never queried again; a vanished child's refused or
 unqueried claim made the transaction; with no call worker a refused
-query and a failed removal parked, retried every 2 s by the worker's
+query and a failed removal parked, retried by the worker's
 scheduler - the query again, then the removal alone - and a parked claim
 taken over by a start; a loss's refusal settled); two members, one held
 while the other's work goes on; the sweep's readings, their retries with

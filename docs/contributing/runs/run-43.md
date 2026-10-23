@@ -5724,3 +5724,168 @@ The clean 7 x86 base, `qemu-xhci`, the emulator's `usb4-generic` NHI
 
 Kit `E:\xhci98-vm\p43-73` (shots `a98-*`, `ame-*`, `t1`-`t5-*`,
 `l1`-`l8-*`); every guest of it shut down.
+
+## 43.47r - the vanished-child stall, the stress loop (2026-10-23)
+
+The owner made 43.47's one unreproduced stall release-blocking on
+2026-10-23 until it is reproduced or ruled out. These are the readings of
+a stress loop of the same leg. **The stall is reproduced, on 98 SE under
+the ICM client and on ME under the USB4 profile; its cause is not
+established.** Task 43.47f's backoff of the vetoed query lowers the
+queries and does not remove the stall (one on ME in 16 cycles, "The
+backoff build").
+
+**On `E:\...` paths here.** They say where a reading was kept on the host
+that took it; they are not files a clone has.
+
+### The vehicle
+
+- 43.47's kit (`E:\xhci98-vm\p43-47`, QMP 49000 and 49002), QEMU under
+  TCG, one vCPU and 256 MB per guest, the two guests run side by side.
+  98 SE: the Alpine Ridge topology of the ICM client (overlay `c`). ME: the
+  generic USB4 topology (overlay `b`). The bundled Stor98 as installed.
+- `xhcicm.sys`: the `qemu` flavour of `ff50ddb3`, 43.47's last code
+  commit (SHA-256 prefix `92dcbfd0`). That is the 43.47 code `integ8`
+  carries at `93872e37`. `integ8`'s own `qemu` build (SHA-256 prefix `a6fc60a8`) and a trial build with immediate port-0xE9 markers were
+  built and not reached in a guest before the time ran out.
+- The cycle (`scripts\stress.ps1` of the kit): the drive on port 1, an
+  Explorer window on `E:` from AutoPlay; an MS-DOS Prompt opened over it,
+  `C:`, `copy /b E:\BIG.BIN NUL` with its 20th read held by the harness
+  (`at=fetch op=read nth=20 act=hold`), the unplug; Enter (in case a
+  system-modal screen is up); the re-plug while the query is vetoed; then
+  Abort, the Explorer window closed, the prompt exited, and the vanished
+  record has 90 s (plus a further Enter and 60 s) to retire and the drive
+  to come back with its `UP`.
+
+### Readings
+
+| Run | System | Order | Cycles | Stalls |
+|---|---|---|---|---|
+| s1 | 98 SE, ICM | as above | 3 | 1, at cycle 3 |
+| s1 | ME, USB4 | as above | 5 | 1, at cycle 5 |
+| s2 | ME, USB4 | the Explorer window closed only after the drive was back | 13 | 1 at cycle 13 (below) |
+| s2 | 98 SE, ICM | the same | 7 | 0 (two cycles were counted as stalls by the first version of the script and were not: a copy that never started, and a release before the re-plug) |
+
+**The stall (s1, both systems).** The record's query was vetoed (17h)
+about every 2 s through the re-plug, as in 43.47's legs; after the release
+steps (Abort, the Explorer window closed, the prompt exited) the
+connection-manager thread logged nothing more. No further query, no
+retirement, and on 98 SE a later unplug of the enclosure was not logged
+either, so the thread itself was stopped, not only the query. The shell
+answered no Start menu on either system. The guests' CPU sat in the VMM
+(`info registers`: `CS:EIP` `0028:C000A8xx`, not halted). Pressing Enter
+changed nothing. Logs: `E:\xhci98-vm\p43-47\keep\stall-w98-s1-c3.log`,
+`stall-me-s1-c5.log`, `debugcon-*-s1.log`, `trace-*-s1.log`, screenshots
+in `shots\`.
+
+**ME, s2 cycle 13.** The unplug of that cycle was not logged at all and
+the screen went black with only the clock drawn. It may be the same stop
+or task 43.49's ME stop after repeated plugs; it is not counted either
+way.
+
+### What it suggests, not established
+
+The thread stops right after a vetoed query is followed by the holder's
+release, and the shell stops with it. That fits a
+`CM_Query_Remove_SubTree` made by the call worker that does not return
+(the configuration manager waiting on the shell's answer to the
+device-change broadcast while the shell is busy), with the thread then
+blocked behind the busy configuration manager in a service it calls on
+every pass. Record 21 section 6.1 already reads that a CONFIGMG call blocks
+while the configuration manager is busy. The retries every 2 s make a
+query being in flight at that moment far likelier than the single query
+of `3.0.0.0`. Neither the blocked call nor the thread's blocking point
+was read: the marker build that would show both (`!cfg.q>`/`!cfg.q<`
+around each query and removal, `!t1`..`!t6` and `!r0`..`!r5` through the
+thread's pass) was built and installed on 98 SE, but no cycle was run
+on it.
+
+### The marker build (task 43.47f)
+
+The loop was run again on the marker build (`integ8` 93872e37 with
+port-0xE9 markers: `!t0`..`!t7`, `!tq` and `!tw` through the
+connection-manager thread's pass in `cm_thr.c`, `!cfg.q>`/`!cfg.q<`
+around each query and removal the call worker makes), on 98 SE under the
+ICM profile, holder a DOS-box copy and an Explorer window on E:
+(`stress2.ps1`, AutoPlay off). Cycles 1-3 were clean; cycle 4 stalled
+(`keep\stall2-w98-h1-c4.log`, `debugcon-w98-h1.log`). ME was run for
+eight cycles on the same build, none of which reached a held volume
+("no holder", not counted).
+
+**What the stall shows.** Every 2 s the worker asked the vetoed query
+(`!cfg.q>` then `!cfg.q<=17h`, `cm.vanish.cr=02080217`), and the call had
+returned each time. The last pass logged `!t0` to `!t7` and `!tq=1`, the
+marker placed just before the thread's timed `KeWaitForSingleObject` on
+its work event at the top of its loop, and nothing after it: neither
+`!tw` (the wait's return) nor a timer pass, although the wait is timed.
+No `!cfg.q>` was open: no CONFIGMG call of ours was in flight, on the
+worker or on the thread. The shell, the tray clock and the Start menu
+were frozen while the pointer still moved.
+
+**What it points to.** The thread is not blocked in any call of ours or
+in any service it makes; it waits in its own timed wait, which does not
+end, while the system's own VM no longer runs (the clock stopped). The
+stop came with the holder's release (the copy's abort and exit, the
+Explorer window on E: closed) while the vetoed query was being asked
+every 2 s. Keeping the thread's services off CONFIGMG during a worker's
+call does not apply: none was in flight. The change tried is the query's
+cadence: task 43.47f asks a vetoed vanished child again after 2, 4, 8, 16
+and 32 s, then every 64 s, and at once when a live tunnel comes up on its
+member (the re-plug that usually follows the release); a parked claim's
+refused query backs off the same way. A control run with the retries
+removed was built and not run.
+
+### The backoff build (task 43.47f, 2026-10-23/24)
+
+`xhcicm.sys`: the `qemu` flavour of `cb41dc6a` on `p43-47f` (`integ8`
+93872e37 plus the backoff; SHA-256 prefix `ad9a34f6`), installed on both
+overlays and booted cold. The two guests ran side by side.
+
+| System, profile, loop | Cycles | Stalls |
+| --- | --- | --- |
+| 98 SE, ICM client (`c`), `stress2.ps1` | 40 clean | 0 |
+| ME, USB4 (`b`), `stress.ps1` | 15 clean, then cycle 16 | 1 |
+
+Against the readings before it (the `ff50ddb3` and marker builds, the
+same two loops): 98 SE 3 stalls in about 83 cycles (cycle 3, cycle 1 after
+35 clean, cycle 4), ME 1 in about 30 (cycle 5; 25 clean on a second run).
+98 SE's 40 clean cycles say little alone: a run of the same
+loop before the backoff was also 40 clean. The backoff did not remove the
+stall.
+
+**ME, cycle 16** (`keep\stall-me-x1-c16.log`, `me\debugcon-x1.log`). The
+re-plug's nudge, then vetoes at about 0, 2, 6, 14 and 30 s after it, the
+last about 2 s after the prompt's exit; in the good cycles the sixth
+query, at about 62 s, is accepted and the record retires. In cycle 16
+nothing more was logged: no sixth query, and an unplug of the enclosure
+4 minutes later was not logged either. Unlike 98 SE's stops, the system
+went on: the tray clock ran, the Start menu opened, XHCITR ran (it found
+the query device not answering). The script's own timing puts the
+backed-off query at 30 s right at the holder's exit, so this loop
+exercised the stop's moment in every cycle; the backoff lowers the number
+of queries, not that coincidence.
+
+**A system-modal screen stops the thread.** In 43.47's own L2 leg on ME
+(two-port), Windows' blue "Disk Write Error - press any key" screen was up
+after the unplug and nothing pressed a key: for its whole time (about
+65 s) the driver logged nothing, port 2's plug and unplug included, and
+it went on when the screen went (the re-plug of port 1). The thread runs
+in the system's own VM, which such a screen holds. This is the likeliest
+shape of the stall: a screen of that kind (or the hold it makes) that is
+never shown or never answered once the holder exits. Not established.
+
+**43.47's legs on the backoff build (ME, USB4).** L1 (Explorer's copy;
+no veto on this run): the record retired, the drive came back with its
+`UP`. L2 two-port: the vetoes, the nudge at the re-plug, then after Abort
+and exit the record retired at the sixth query and the drive came back;
+port 2's plug in the middle was not seen while the screen above was up
+(run twice; a plug of port 2 afterwards came up at once). 98 SE's legs
+were not run again.
+
+### Not done
+
+- 98 SE under the USB4 profile not run (before the backoff or on it).
+- The marker build with the backoff and call-worker markers (`!ww`,
+  `!wk`, `!w>`, `!w<`, `!qs`) was built and not run; it would show
+  whether the thread waits or is held at ME's stop.
+- The control run with the retries removed.

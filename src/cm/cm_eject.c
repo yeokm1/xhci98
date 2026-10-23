@@ -344,9 +344,13 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
                 return CM_EJ_DO_NONE;
             }
             if ((t->Flags & CM_EJ_F_VANISH) != 0 && t->QueryAttempts != 0 &&
-                in->NowMs - t->LastQueryAt < CM_NVLINK_RETRY_MS) {
-                /* A vetoed vanished child: asked again every 2 s, never
-                 * forced (R12 S4). */
+                in->NowMs - t->LastQueryAt <
+                    CmEjVanishRetryMs(t->QueryAttempts)) {
+                /* A vetoed vanished child: asked again, never forced (R12
+                 * S4), at a backed-off interval (task 43.47f): fewer
+                 * configuration-manager events against a held volume, a
+                 * mitigation tried against a system stop at the holder's
+                 * exit whose cause is not established (record 21). */
                 return CM_EJ_DO_NONE;
             }
             return CM_EJ_DO_QUERY;
@@ -500,7 +504,8 @@ VOID CmEjFeed(CM_EJ_TX *t, ULONG kind, ULONG value, ULONG aux, ULONG nowMs)
                 return;
             }
             if (value != CM_EJ_CR_SUCCESS) {
-                /* Vetoed, or not made: asked again (CmEjNext's 2 s). */
+                /* Vetoed, or not made: asked again (CmEjNext, backed off
+                 * by CmEjVanishRetryMs). */
                 return;
             }
             /* Accepted: nothing behind it to isolate (its link-down reset
@@ -810,6 +815,30 @@ BOOLEAN CmEjOwesRemoval(const CM_EJ_TX *t)
 
 /* ---- the vanished child (task 43.47) ------------------------------------- */
 
+ULONG CmEjVanishRetryMs(ULONG attempts)
+{
+    ULONG ms;
+    ULONG k;
+
+    ms = CM_NVLINK_RETRY_MS;
+    for (k = 1; k < attempts && ms < CM_EJ_VANISH_RETRY_MAX_MS; k++) {
+        ms *= 2;
+    }
+    return ms > CM_EJ_VANISH_RETRY_MAX_MS ? CM_EJ_VANISH_RETRY_MAX_MS : ms;
+}
+
+BOOLEAN CmEjNudge(CM_EJ_TX *t, ULONG nowMs)
+{
+    if ((t->Flags & CM_EJ_F_VANISH) == 0 || t->Phase != CM_EJ_P_QUERY ||
+        t->QueryAttempts == 0) {
+        return FALSE;
+    }
+    /* Due at once, and the backoff from its start again. */
+    t->QueryAttempts = 0;
+    t->LastQueryAt = nowMs;
+    return TRUE;
+}
+
 static VOID cmEjBeginRecord(CM_EJ_TX *t, ULONG bridge, ULONG devnode,
                             ULONG phase, ULONG nowMs)
 {
@@ -858,11 +887,16 @@ BOOLEAN CmEjClaimEnd(CM_EJ_TX *t, ULONG queryCr, ULONG removeCr,
     }
     if (queryCr != CM_EJ_CR_SUCCESS) {
         /* A vanished child's refusal (or its query not made) owes its
-         * retries (R12 S4), 2 s after this one: the transaction's, or,
+         * retries (R12 S4), backed off from 2 s after this one
+         * (CmEjVanishRetryMs; a query not made 2 s): the transaction's, or,
          * with no call worker, its parked claim's (CmEjClaimRetry). */
         t->Flags &= ~(CM_EJ_F_QUERIED | CM_EJ_F_AUTH);
         t->QueryCr = queryCr;
-        t->QueryAttempts = queryCr == CM_EJ_NO_CR ? 0UL : 1UL;
+        if (queryCr != CM_EJ_NO_CR) {
+            /* Each refusal backs the next query off further
+             * (CmEjVanishRetryMs). */
+            t->QueryAttempts++;
+        }
         t->LastQueryAt = nowMs;
         t->Attempts = 0;
         if (!takeover) {
@@ -928,7 +962,9 @@ ULONG CmEjClaimRetry(CM_EJ_TX *t, ULONG nowMs)
     } else {
         last = t->QueryAttempts != 0 ? t->LastQueryAt : nowMs - CM_NVLINK_RETRY_MS;
     }
-    if (nowMs - last < CM_NVLINK_RETRY_MS) {
+    if (nowMs - last < ((t->Flags & CM_EJ_F_QUERIED) != 0
+                            ? CM_NVLINK_RETRY_MS
+                            : CmEjVanishRetryMs(t->QueryAttempts))) {
         return CM_EJ_DO_NONE;
     }
     t->Flags &= ~CM_EJ_F_PARKED;
