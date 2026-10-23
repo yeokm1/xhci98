@@ -3846,12 +3846,28 @@ revised:
   when its devnode is found is answered as not found, nothing called,
   under the records' lock, so an eject and a claim never both query one
   devnode.
+- **The veto's cadence (task 43.47f, 2026-10-23).** A vetoed vanished
+  child's query is asked again 2 s after the first refusal, then 4, 8,
+  16, 32 s, and then every 64 s, never forced; a tunnel up on its member
+  (the re-plug), the event that most often follows the holder's release,
+  makes it due at once and starts the backoff again. A parked claim's
+  refused query backs off the same way. Why: a stress loop of 43.47's leg
+  (`runs/run-43-47r.md`) stopped the whole system VM of 98 SE and of ME,
+  about once in twenty to forty cycles, at the moment the holder (an
+  MS-DOS Prompt whose read had failed, an Explorer window on the drive)
+  was let go while the query was being asked every 2 s: the
+  connection-manager thread was found waiting in its own timed wait
+  between passes, none of this driver's CONFIGMG calls in flight, the
+  shell and its clock stopped. Every vetoed query is a configuration
+  manager event the system services against the holder; the backoff
+  makes one far less likely to meet the release.
 - **Its course.** `Query_Remove_SubTree` (a call on the member's worker,
   its instance id read back first as every call of a record is), made
   only while the member's removal gate is down (no decision pending, no
   acknowledgement awaited behind it). Vetoed (or any other refusal): kept
-  in its phase and asked again every 2 s, never forced, with no deadline
-  (R12 S4); the member shows "a removal is in progress". Accepted: the
+  in its phase and asked again, never forced, with no deadline
+  (R12 S4), at the cadence above; the member shows "a removal is in
+  progress". Accepted: the
   removal is authorised (nothing behind it to isolate, assumption A1),
   and `Remove_SubTree` is made, retried every 2 s while it fails; 30 s
   after its first attempt the member is blocked (the status record's

@@ -361,6 +361,17 @@ BOOLEAN CmEjOwesRemoval(const CM_EJ_TX *t);
 
 /* ---- the vanished child (task 43.47) ---------------------------------- */
 
+/* A vetoed vanished child's next query (task 43.47f): CM_NVLINK_RETRY_MS
+ * after the first refusal, doubled after each further one, at most
+ * CM_EJ_VANISH_RETRY_MAX_MS. `attempts` the queries asked so far (>= 1). */
+#define CM_EJ_VANISH_RETRY_MAX_MS  64000UL
+ULONG CmEjVanishRetryMs(ULONG attempts);
+
+/* An event that may have let the holder go - a tunnel up on the member
+ * (the re-plug), a tool's eject or status ask - makes a vetoed vanished
+ * child's query due at once and restarts its backoff. TRUE when it did. */
+BOOLEAN CmEjNudge(CM_EJ_TX *t, ULONG nowMs);
+
 /* A vanished child of member `bridge`, its devnode read by the sweep: QUERY
  * owed at once, no tool's result slot (consumed from the start). */
 VOID CmEjBeginVanished(CM_EJ_TX *t, ULONG bridge, ULONG devnode,
@@ -668,6 +679,11 @@ VOID CmEjectStop(struct _CM_NHI *nhi);
  * sweep's. FALSE: the caller posts the removal as before. On the thread.
  */
 BOOLEAN CmEjectSweep(struct _CM_NHI *nhi, ULONG member);
+
+/* Task 43.47f: a tunnel up on member `member` (XHCI_TBT_NO_MEMBER: every
+ * member) makes each of this start's vetoed vanished children on it due
+ * for its query at once (CmEjNudge). On the thread. */
+VOID CmEjectNudge(struct _CM_NHI *nhi, ULONG member);
 
 /* The transactions' clock (ms), for the CONFIGMG worker's attempts. Any
  * IRQL <= DISPATCH_LEVEL. */

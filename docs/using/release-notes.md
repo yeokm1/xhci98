@@ -693,8 +693,9 @@ every system `INSTALL /devices` shows what is connected and
   again, can start the device again.
   A drive unplugged without an eject while a program still has a file
   open on it (from `3.2.0.0`): Windows refuses to remove the drive's old
-  entry, and the Thunderbolt driver asks it again every 2 seconds until
-  the file is closed, never forcing it; meanwhile the USB Tree shows "A
+  entry, and the Thunderbolt driver asks it again - after 2 seconds,
+  then less and less often down to about once a minute, and at once when the
+  drive is plugged back in - until the file is closed, never forcing it; meanwhile the USB Tree shows "A
   removal is in progress" on the port, and a drive plugged back in there
   appears only once the old entry has gone (before, the old entry was
   left and could take the returning drive, which then failed). A removal

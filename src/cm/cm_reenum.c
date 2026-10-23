@@ -2515,6 +2515,13 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         return;
     }
     if (action->Kind == TBT_ICM_ACT_TUNNEL_UP) {
+        if (r->Route == CM_ROUTE_CONFIGMG) {
+            /* Task 43.47f: a re-plug is the event that most often follows
+             * the holder's release; a vetoed vanished child on the member
+             * asks again now instead of at its backed-off time. */
+            CmEjectNudge(nhi, nhi->U4On ? CmNhiActionMember(nhi, action)
+                                        : XHCI_TBT_NO_MEMBER);
+        }
         state = cmPoll(nhi, action, XHCI_TBT_WANT_UP);
         CmLogNote(nhi, "cm.reenum.up.poll", (state << 8) | r->Poll.Last);
         if (state == XHCI_TBT_POLL_ABANDONED) {

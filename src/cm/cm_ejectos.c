@@ -2250,6 +2250,32 @@ ULONG CmEjectNow(VOID)
     return cmEjNow();
 }
 
+VOID CmEjectNudge(PCM_NHI nhi, ULONG member)
+{
+    KIRQL irql;
+    ULONG now;
+    ULONG i;
+    ULONG n;
+
+    if (!cmEj9x(nhi)) {
+        return;
+    }
+    now = cmEjNow();
+    n = 0;
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    for (i = 0; i < CM_EJ_RECORDS; i++) {
+        if (cmEj[i].Nhi == nhi &&
+            (member == XHCI_TBT_NO_MEMBER || cmEj[i].Member == member) &&
+            CmEjNudge(&cmEj[i].Tx, now)) {
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
+    if (n != 0) {
+        CmLogNote(nhi, "cm.vanish.nudge", (member << 16) | n);
+    }
+}
+
 ULONG CmEjectClaim(ULONG bridge, ULONG devnode, const char *id,
                    BOOLEAN *owned, BOOLEAN *accepted, PULONG entry,
                    PULONG sequence, PULONG generation)
