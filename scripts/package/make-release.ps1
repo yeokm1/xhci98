@@ -5695,7 +5695,7 @@ UPDATING FROM AN EARLIER 2.x RELEASE
 ....................................
 
 On Windows 98 SE and ME use INSTALL.BAT or SETUP.EXE, not Update Driver:
-from 3.2.0.0 the controller's install that Update Driver takes keeps an
+from this release on, Update Driver's install of the controller keeps an
 xhci98.sys already in SYSTEM32\DRIVERS, so it would keep the earlier
 driver. Elsewhere:
 
