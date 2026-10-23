@@ -376,9 +376,9 @@ storage files and their nusb33/NOTICE.md from the usb-wdm-nonfree checkout
 (-DriverPackRoot), from its git objects at HEAD, and holds them to the
 pack's SHA256.TXT and to the allowlist of the seven (package-common.ps1),
 before anything is built. They go into the upload set alone, at its root
-as NUSB33\, a folder of its own beside the installer and not inside a
-NONFREE\ (owner, 2026-10-22; 8.3 names: NUSB33\NOTICE.md, NUSB33\SHA256.TXT
-and NUSB33\W98SE\), where the installer takes them from; never into a
+as USBDRV\NUSB33\, a folder of its own beside the installer and not inside
+USBDRV\NONFREE\ (owner, 2026-10-22; 8.3 names under USBDRV\: NUSB33\NOTICE.md,
+NUSB33\SHA256.TXT and NUSB33\W98SE\), where the installer takes them from; never into a
 package of make-package.ps1's or into releases\<version>\: the cut refuses to start while any of the seven names
 is under releases\ or among the tracked files. What releases\<version>\
 does hold is drvpack.txt, a record of whether the pack was included and, if
@@ -401,8 +401,9 @@ test-package.ps1's stand-ins. Refused with the repository's own releases\.
 Make no download 3. By default (roadmap-usb4 task 43.48; the owner's
 decision of 2026-10-22, design record 26 section 6.7) a cut makes three
 downloads, each holding the one before: xhci98-<version>.zip (the package
-and NUSB33\), xhci98-<version>-free.zip (with WDMFREE\, the qualifying
-usb-wdm-free drivers) and xhci98-<version>-nonfree.zip (with NONFREE\, the
+and USBDRV\NUSB33\), xhci98-<version>-free.zip (with USBDRV\FREE\, the
+qualifying usb-wdm-free drivers) and xhci98-<version>-nonfree.zip (with
+USBDRV\NONFREE\, the
 non-free/ folder of usb-wdm-nonfree at the tag package-common.ps1 pins, read
 from the -DriverPackRoot checkout's git objects and each file held to the
 pack's SHA256.TXT at that commit, whose own hash is pinned). -NoDriverPack
@@ -411,7 +412,7 @@ downloads were made and each set's tag, commit and SHA256.TXT hash, from
 which -UploadSetOnly rebuilds them.
 
 .PARAMETER NoWdmFree
-Make no download 2, and no WDMFREE\ in download 3. While
+Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release (none
 qualifies yet) that is what every cut does.
 
@@ -3116,9 +3117,9 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             }
             if ($null -ne $nonFreeSet) {
                 if ($NonFreePinFile -ne "") {
-                    Write-Warn ("-NonFreePinFile: NONFREE\SHA256.TXT ({0}) is not held to the installer's INST_NONFREE_SUMS" -f $nonFreeSet.Sums)
+                    Write-Warn ("-NonFreePinFile: USBDRV\NONFREE\SHA256.TXT ({0}) is not held to the installer's INST_NONFREE_SUMS" -f $nonFreeSet.Sums)
                 } elseif ($nonFreeSet.Sums -ne $instOtherSums.NonFree) {
-                    Stop-CutCheck "NONFREE\SHA256.TXT for usb-wdm-nonfree $($nfPin.Tag) hashes to $($nonFreeSet.Sums), and the installer carries '$($instOtherSums.NonFree)' (INST_NONFREE_SUMS, xhciinst\inst_core.h): change the two together, and rebuild the installer."
+                    Stop-CutCheck "USBDRV\NONFREE\SHA256.TXT for usb-wdm-nonfree $($nfPin.Tag) hashes to $($nonFreeSet.Sums), and the installer carries '$($instOtherSums.NonFree)' (INST_NONFREE_SUMS, xhciinst\inst_core.h): change the two together, and rebuild the installer."
                 }
                 Write-Ok ("download 3: usb-wdm-nonfree {0} ({1}), {2} files in USBDRV\NONFREE\" -f $nonFreeSet.Tag, $nonFreeSet.Revision.Substring(0, 12), $nonFreeSet.Files.Count)
             }
@@ -3129,9 +3130,9 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             if ($WdmFreePin -eq "" -and $instOtherSums.Free -ne "") {
                 Stop-CutCheck "wdmfree-pin.txt names no usb-wdm-free release, and the installer carries a hash for one (INST_WDMFREE_SUMS, xhciinst\inst_core.h): change the two together."
             }
-            Write-Ok "no usb-wdm-free release qualifies (wdmfree-pin.txt): no download 2, and no WDMFREE\ in download 3"
+            Write-Ok "no usb-wdm-free release qualifies (wdmfree-pin.txt): no download 2, and no USBDRV\FREE\ in download 3"
         } elseif ($NoWdmFree) {
-            Write-Warn "-NoWdmFree: no download 2 and no WDMFREE\, though the pin names usb-wdm-free $($freePin.Tag)."
+            Write-Warn "-NoWdmFree: no download 2 and no USBDRV\FREE\, though the pin names usb-wdm-free $($freePin.Tag)."
         } else {
             if ($WdmFreeRoot -eq "") { $WdmFreeRoot = Get-DefaultWdmFreeRoot }
             $wdmFreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-wdmfree-" + [System.IO.Path]::GetRandomFileName())
@@ -3145,11 +3146,11 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             if ($null -ne $wdmFreeSet) {
                 $wdmFreeSet | Add-Member -NotePropertyName PinPath -NotePropertyValue $freePinPath
                 if ($WdmFreePin -ne "") {
-                    Write-Warn ("-WdmFreePin: WDMFREE\SHA256.TXT ({0}) is not held to the installer's INST_WDMFREE_SUMS" -f $wdmFreeSet.Sums)
+                    Write-Warn ("-WdmFreePin: USBDRV\FREE\SHA256.TXT ({0}) is not held to the installer's INST_WDMFREE_SUMS" -f $wdmFreeSet.Sums)
                 } elseif ($wdmFreeSet.Sums -ne $instOtherSums.Free) {
-                    Stop-CutCheck "WDMFREE\SHA256.TXT for usb-wdm-free $($freePin.Tag) hashes to $($wdmFreeSet.Sums), and the installer carries '$($instOtherSums.Free)' (INST_WDMFREE_SUMS, xhciinst\inst_core.h): change the two together, and rebuild the installer."
+                    Stop-CutCheck "USBDRV\FREE\SHA256.TXT for usb-wdm-free $($freePin.Tag) hashes to $($wdmFreeSet.Sums), and the installer carries '$($instOtherSums.Free)' (INST_WDMFREE_SUMS, xhciinst\inst_core.h): change the two together, and rebuild the installer."
                 }
-                Write-Ok ("download 2: usb-wdm-free {0} ({1}), {2} files in WDMFREE\" -f $wdmFreeSet.Tag, $wdmFreeSet.Revision.Substring(0, 12), $wdmFreeSet.Files.Count)
+                Write-Ok ("download 2: usb-wdm-free {0} ({1}), {2} files in USBDRV\FREE\" -f $wdmFreeSet.Tag, $wdmFreeSet.Revision.Substring(0, 12), $wdmFreeSet.Files.Count)
             }
         }
         $downloadKinds = @("base")
@@ -3423,7 +3424,7 @@ Name a checkout holding that revision with -DriverPackRoot.
                     throw "$Version's download 3 carries usb-wdm-nonfree $($dlRecord.NonFree.Tag) ('$dlRecordPath'), and it could not be read: $($_.Exception.Message) Name a checkout holding that tag with -DriverPackRoot."
                 }
                 if ($nonFreeSet.Sums -ne $dlRecord.NonFree.Sums) {
-                    throw "usb-wdm-nonfree $($dlRecord.NonFree.Tag) gives a NONFREE\SHA256.TXT of $($nonFreeSet.Sums), not the $($dlRecord.NonFree.Sums) '$dlRecordPath' records."
+                    throw "usb-wdm-nonfree $($dlRecord.NonFree.Tag) gives a USBDRV\NONFREE\SHA256.TXT of $($nonFreeSet.Sums), not the $($dlRecord.NonFree.Sums) '$dlRecordPath' records."
                 }
                 Write-Ok ("download 3: usb-wdm-nonfree {0}, the SHA256.TXT {1} records" -f $nonFreeSet.Tag, $script:DownloadsRecordName)
             }
@@ -3441,7 +3442,7 @@ Name a checkout holding that revision with -DriverPackRoot.
                     throw "$Version's download 2 carries usb-wdm-free $($dlRecord.Free.Tag) ('$dlRecordPath'), and it could not be read: $($_.Exception.Message) Name a checkout holding that tag with -WdmFreeRoot."
                 }
                 if ($wdmFreeSet.Sums -ne $dlRecord.Free.Sums) {
-                    throw "usb-wdm-free $($dlRecord.Free.Tag) gives a WDMFREE\SHA256.TXT of $($wdmFreeSet.Sums), not the $($dlRecord.Free.Sums) '$dlRecordPath' records."
+                    throw "usb-wdm-free $($dlRecord.Free.Tag) gives a USBDRV\FREE\SHA256.TXT of $($wdmFreeSet.Sums), not the $($dlRecord.Free.Sums) '$dlRecordPath' records."
                 }
                 Write-Ok ("download 2: usb-wdm-free {0}, the SHA256.TXT {1} records" -f $wdmFreeSet.Tag, $script:DownloadsRecordName)
             }
@@ -5692,6 +5693,11 @@ does not touch it.
 
 UPDATING FROM AN EARLIER 2.x RELEASE
 ....................................
+
+On Windows 98 SE and ME use INSTALL.BAT or SETUP.EXE, not Update Driver:
+from 3.2.0.0 the controller's install that Update Driver takes keeps an
+xhci98.sys already in SYSTEM32\DRIVERS, so it would keep the earlier
+driver. Elsewhere:
 
 Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
 Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same

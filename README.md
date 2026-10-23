@@ -254,7 +254,7 @@ Details and limits: [the release notes' F6 section](docs/using/release-notes.md#
 
 Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on the controller ("xHCI98 USB 3.x eXtensible Host Controller" before 3.2.0.0, "xHCI98 USB 3 Controller" from it), then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
 
-- **98 SE and ME:** restart afterwards, although Windows does not ask. The old driver runs until then.
+- **98 SE and ME:** from `3.2.0.0` upgrade with `SETUP.EXE` or `INSTALL.BAT`, not Update Driver: the controller's install that Update Driver takes keeps an `xhci98.sys` already in `SYSTEM32\DRIVERS`, so it would keep the earlier driver. Restart afterwards, although Windows does not ask. The old driver runs until then.
 - **2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `release-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.
 - **XP, Vista and 7:** the new driver runs at once, after the unsigned-driver warning. 32-bit Vista and 7 ask for a restart for `xhcihlpr.sys`; 64-bit Vista and 7 need test-signing mode.
 - **Vista and 7:** a build with the same `DriverVer` as the installed one is not taken. Use a newer build.
