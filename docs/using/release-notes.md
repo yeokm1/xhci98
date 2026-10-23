@@ -4381,10 +4381,11 @@ this project's source tree but under its own licence (BSD-3-Clause), with
 its licence and notice beside it ("NVMe drives behind Thunderbolt or
 USB4"). The `usbd.sys` and `usbui.dll` the install needs are not in the
 download: they are Windows' own and are copied by Windows from your own
-installation source. No download so far carries a Microsoft file. From
-`3.2.0.0` (planned, not yet built) a download's only Microsoft files are to be
-NUSB 3.3's seven Windows 98 SE storage files ("Windows 98 SE and ME: the
-stock install, and storage"), unmodified, in a folder of their own with a
+installation source. No download up to `3.1.0.0` carries a Microsoft
+file. From `3.2.0.0` the base and `-free` downloads' only Microsoft files
+are NUSB 3.3's seven Windows 98 SE storage files ("Windows 98 SE and
+ME: the stock install, and storage"; the `-nonfree` download adds two
+more, below), unmodified, in a folder of their own with a
 `NOTICE.md` saying whose they are; they are not this project's work and are
 under no licence of this project's, and no licence to redistribute them has
 been established. A download built without them carries no Microsoft file,
