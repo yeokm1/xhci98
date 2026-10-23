@@ -23473,7 +23473,12 @@ static int other_remove(int set, int uninstall)
         r = other_adopt(set);
         if (r == 0 && other_key_exists(set) == 1) {
             if (other_key_bare(set)) {
-                /* A bare key and no record file: nothing was copied. */
+                /* A bare key: under /list other_adopt has said what it
+                 * would do; else there is no record file, nothing was
+                 * copied, and the key goes. */
+                if (opts.List) {
+                    return 1;
+                }
                 return other_key_delete(set);
             }
             r = 1;
