@@ -504,7 +504,8 @@ VOID CmEjFeed(CM_EJ_TX *t, ULONG kind, ULONG value, ULONG aux, ULONG nowMs)
                 return;
             }
             if (value != CM_EJ_CR_SUCCESS) {
-                /* Vetoed, or not made: asked again (CmEjNext's 2 s). */
+                /* Vetoed, or not made: asked again (CmEjNext, backed off
+                 * by CmEjVanishRetryMs). */
                 return;
             }
             /* Accepted: nothing behind it to isolate (its link-down reset

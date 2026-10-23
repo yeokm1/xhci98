@@ -988,8 +988,8 @@ static VOID test_qualification(VOID)
 #define VNODE       0xC0DE0001UL
 #define VETOED      0x17UL
 
-/* A vanished child's record, its query vetoed: asked again every 2 s,
- * never forced, its member held all the while; the held exposure and
+/* A vanished child's record, its query vetoed: asked again, backed off
+ * (2, 4, 8, 16 s ...), never forced, its member held all the while; the held exposure and
  * re-enumeration run only once it is removed. */
 static VOID test_vanished_veto(VOID)
 {
