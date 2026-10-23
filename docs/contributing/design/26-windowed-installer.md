@@ -3260,19 +3260,27 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
   systems: the generic and specific drivers of one device (the pack's
   case: `uac1` and `usbmidi`, both matching an audio-class device's MIDI
   interface by different ids). `COEXISTS`: two packages whose overlap the
-  maintainer has considered and allows. Every pair of packages whose
-  scopes on a system can match one device (the cut's overlap report
-  below) must be named by exactly one `EXCLUDES` or `COEXISTS` line; a
-  pair named by both, or a line naming a package neither set carries, is
-  refused by the cut. A line whose other endpoint is in a set this
-  download does not carry still binds: a package excluded by an absent
+  maintainer has considered and allows. **The policy**: declaring every
+  overlap is the maintainer's duty, and the gate enforces only what it
+  can see: it refuses a pair named by both kinds of line, a pair named
+  twice, and a line naming an id that no package of either set's known
+  metadata (the current rows and the withdrawn ones, below) has ever
+  had; it lists, for the maintainer and not as a refusal, the candidate
+  pairs it can see that no line names (below). A line whose other
+  endpoint is in a set this download does not carry still binds: a package excluded by an absent
   one is offered, and one excluded by a package staged by an earlier run
   is not (below).
 - **No dependencies between packages.** A package is self-contained:
-  every file a `STAGE` INF of it names is under its own folder (the cut
-  refuses one that names a file elsewhere, `Test-OtherStagePackages`), so
-  no package needs another staged with it, and the format has no line
-  for one. A pack that ever needs a dependency changes this section
+  every file a `STAGE` INF of it copies from its source disks
+  (`[SourceDisksFiles]`, and the files its copy sections name from them)
+  is under its own folder, and the cut refuses one that names a file
+  elsewhere (`Test-OtherStagePackages`). What an INF takes from Windows
+  itself is not a dependency on a package and is allowed: an
+  `[Version]`'s `LayoutFile` (the pack's `x360c.inf` names `layout.inf`,
+  `layout1.inf` and `layout2.inf`), an `Include`/`Needs` of an INF of
+  Windows' own `%windir%\INF`, and a file copied from a `LayoutFile`'s
+  source disks. So no package needs another staged with it, and the
+  format has no line for one. A pack that ever needs a dependency changes this section
   first.
 - **The exclusions hold against what is staged already**, not only this
   run's ticks: before any change, every ticked package is checked against
@@ -3287,17 +3295,23 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
   row is marked withdrawn, never removed), so an earlier staging's
   exclusions are known when its set is absent from this download or has
   dropped the package; an earlier-staged id no row and no carried line
-  knows is refused against every tick of its class heading's packages
-  (conservative: "staged earlier, not known to this release: uninstall
-  first, or leave <heading> unticked").
+  knows, or a staged record whose path cannot be read into an id, makes
+  every package box of both sets refused (conservative, since headings
+  say nothing of what a driver matches: "Something staged by an earlier
+  run is not known to this release (<path>): uninstall the other drivers
+  first to choose new ones."); the copy boxes stay open.
 
 Until a set's pinned release carries `PACKAGE` lines (neither does today:
 `usb-wdm-nonfree` `v1.0.0` is pinned by its hash, and `usb-wdm-free` has
 no release), the installer's own table supplies them
 (`instOtherPkgs`, `inst_core.c`: id, kind, heading, description, and the
 exclusions), and the cut holds the table to the pinned `STAGE.TXT`:
-every package there has exactly one row and no row names a package not
-there, the descriptions keep the length and character rules, and a
+every package there has exactly one current row and no current row names
+a package not there; a withdrawn row (a package an earlier release
+carried) is held only to its own form (an id, a kind, a heading, a
+description by the same rules) and to never having been removed (the
+table's withdrawn rows are compared with the previous release's, which
+the cut reads from `releases\<version>\`), the descriptions keep the length and character rules, and a
 `CLASS` row's description holds no word of the brand list
 (`scripts\package\brand-words.txt`, proposal: the makers named in either
 set's `NOTICE.md` and a fixed list of consumer brands, matched as whole
@@ -3379,10 +3393,10 @@ description differ, the README wins and the row is corrected.
   state when the set's record names staged INFs or folders (section
   6.7.6's `Staged` values), the ids taken from the record's paths,
   never from this release's table: on 98 SE and ME the value's name is
-  an absolute folder, which must lie under the record's `Dir` and the
-  set's folder there (`<Dir>\WDMFREE\` or `<Dir>\NONFREE\`, compared
-  case-insensitively, part by part), and the id is the set's prefix and
-  the next two parts; on 2000 and later the value's name is the INF's
+  an absolute folder, which must lie under the record's `Dir` (the set's
+  own folder, `...\WDMFREE` or `...\NONFREE`, which `Dir` already
+  names; compared case-insensitively, part by part), and the id is the
+  set's prefix and the next two parts below `Dir`; on 2000 and later the value's name is the INF's
   path under the set's folder (section 6.7.6), its first two parts, and
   a `foreign` value named for a path and a stored name (a `pending`
   value's resolution) is read for its path part, which the record writes
@@ -3397,11 +3411,15 @@ description differ, the README wins and the row is corrected.
   by the page or the console's checks, which change nothing), and
   **unknown** (the store or `DevicePath` unreadable). On 98 SE and ME a
   recorded entry missing from `DevicePath` is not gone: the run's staging
-  step appends it again whether or not its box is ticked (section 6.7.6),
-  and it is shown as confirmed. The line: "Staged
+  step appends it again whether or not its box is ticked (section 6.7.6);
+  until an entry is read present it is shown as "recorded, to be offered
+  again at Install" (its own clause of the line), and a restoration that
+  fails (the value full, unreadable or not writable) is said by the
+  progress and the Finish page with the folder. The line: "Staged
   by an earlier run: <ids> (still offered to Windows); <ids> (in the
   driver store from another source); <ids> (an interrupted run: may be in
-  the driver store); <ids> (could not be read). Leaving a box unticked
+  the driver store); <ids> (recorded, to be offered again at Install);
+  <ids> (could not be read). Leaving a box unticked
   does not undo any of it. The uninstall removes what this installer
   placed and no device uses." (each clause only when it has ids). A
   record written by draft 36's set-wide staging is read the same way:
