@@ -473,6 +473,8 @@ static void stor_record(void);
 static void stor_run_end(void);
 static int stor_any(int kind);
 static int stor_covered(void);
+static int stor_advice(void);
+static void stor_advice_out(void);
 static void stor_tools_copy(void);
 static int stor_tools_remove(void);
 static void stor_silent_merge(void);
@@ -8156,10 +8158,9 @@ static int steps_9x(const char *dir)
     if (helperRan && stepsCount == 0) {
         /* The helper did every device (record 26 section 7): only the
          * storage advice stays. */
-        if (envNow.Minor == 10 && !stor_covered()) {
-            out("\nOn Windows 98 SE any disk, UAS included, needs the USB "
-                "storage drivers: the\ninstaller's row for them, or NUSB's "
-                "mass-storage component.\n");
+        if (stor_advice()) {
+            out("\n");
+            stor_advice_out();
         }
         if (envNow.Minor == 90 && !ntmap_present()) {
             out("On this Windows ME, plug in an ordinary USB stick once before "
@@ -8357,10 +8358,8 @@ static int steps_9x(const char *dir)
         "A UAS disk%s found later finds its driver\nin the same folder by "
         "itself.\n",
         (haveCm && tbInclude) ? " or a Thunderbolt controller" : "");
-    if (envNow.Minor == 10 && !stor_covered()) {
-        out("On Windows 98 SE any disk, UAS included, needs the USB storage "
-            "drivers: the\ninstaller's row for them, or NUSB's mass-storage "
-            "component.\n");
+    if (stor_advice()) {
+        stor_advice_out();
     }
     if (envNow.Minor == 90 && !ntmap_present()) {
         out("On this Windows ME, plug in an ordinary USB stick once before the "
@@ -15707,8 +15706,8 @@ static void s98_question(void)
         return;
     }
     if (!haveCm || !tbInclude) {
-        out("Stor98 %s, the bundled NVMe driver: left out, it comes with the "
-            "Thunderbolt 3 /\nUSB4 support.\n\n", s98VersionText);
+        out("Stor98 %s, the bundled NVMe driver: left out, it comes with "
+            "the\nThunderbolt 3 / USB4 support.\n\n", s98VersionText);
         logonly("stor98: left out with the Thunderbolt support\n");
         s98_apply(0);
         return;
@@ -18884,7 +18883,7 @@ static void stor_run_end(void)
     }
     if (storCopyOk && !opts.List && !silent_gate_on()) {
         out("\nUSB storage: Windows' wizard still opens for each new USB disk "
-            "unless the silent\ninstall (XhciSilentInstall) is turned on in "
+            "unless\nthe silent install (XhciSilentInstall) is turned on in "
             "the USB settings.\n");
     }
     if (storInfPlaced && !opts.List) {
@@ -19481,6 +19480,7 @@ static int stor_un_rest(void)
     int sub;
     int pass;
     int found = 0;
+    int ownHeld = 0;
     HKEY u;
     LONG r;
 
@@ -19521,7 +19521,8 @@ static int stor_un_rest(void)
                 }
                 h = stor_hash(name, hex);
                 if (h > 0 && found != 0) {
-                    if (found < 0) {
+                    int act = inst_stor_late_action(found, ownHeld);
+                    if (act == INST_STOR_LATE_UNREAD) {
                         out("  %s: whether USBSTOR.INF is still in the INF "
                             "directory cannot be read; it\n  stays for now.\n",
                             name);
@@ -19532,6 +19533,14 @@ static int stor_un_rest(void)
                     }
                     out("  %s stays: USBSTOR.INF is still in the INF "
                         "directory.\n", name);
+                    if (act == INST_STOR_LATE_HELD) {
+                        /* This installer's own USBSTOR.INF stays this run:
+                         * the record of USBNTMAP.INF stays with it, so the
+                         * run after the restart removes both. */
+                        left = 1;
+                        i++;
+                        continue;
+                    }
                     if (!stor_rec_del(key, name)) {
                         return 0;
                     }
@@ -19587,6 +19596,9 @@ static int stor_un_rest(void)
                         "for now.\n", name);
                     flagFailed = 1;
                     left = 1;
+                    if (pass == 0) {
+                        ownHeld = 1;
+                    }
                     i++;
                     continue;
                 }
@@ -19623,6 +19635,9 @@ static int stor_un_rest(void)
                     flagRestart = 1;
                     flagSteps = 1;
                     left = 1;
+                    if (pass == 0) {
+                        ownHeld = 1;
+                    }
                     i++;
                     continue;
                 }
@@ -20208,6 +20223,28 @@ void inst_eng_stor_summary(char *out, size_t cap)
 static int stor_covered(void)
 {
     return storCopyOk || (storHere && storPlanCase == INST_STOR_CASE_COMPLETE);
+}
+
+/* The Steps page's storage advice (roadmap-usb4 43.5 F2): on 98 SE only,
+ * only while storage is not covered and NUSB is not installed. */
+static int stor_advice(void)
+{
+    return envNow.Minor == 10 && !stor_covered() && !storUsb20u;
+}
+
+/* Its text: the installer's row is named only when this download carries
+ * the storage drivers. */
+static void stor_advice_out(void)
+{
+    if (storPack > 0) {
+        out("On Windows 98 SE any disk, UAS included, needs the USB storage "
+            "drivers: the\ninstaller's row for them, or NUSB's mass-storage "
+            "component.\n");
+    } else {
+        out("On Windows 98 SE any disk, UAS included, needs the USB storage "
+            "drivers:\nNUSB's mass-storage component, or a download of this "
+            "release with them.\n");
+    }
 }
 
 /* The final line's shutdown form for a UAS devnode at Code 2 before this

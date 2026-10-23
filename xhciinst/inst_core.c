@@ -6370,6 +6370,17 @@ int inst_stor_rm_late(const char *name, const char *sha256)
     return sha256 != NULL && inst_eq(sha256, f->Sha256);
 }
 
+int inst_stor_late_action(int found, int ownHeld)
+{
+    if (found == 0) {
+        return INST_STOR_LATE_GO;
+    }
+    if (found < 0) {
+        return INST_STOR_LATE_UNREAD;
+    }
+    return ownHeld ? INST_STOR_LATE_HELD : INST_STOR_LATE_FOREIGN;
+}
+
 int inst_stor_pair(int stor, int ntmap)
 {
     if (stor < 0 || ntmap < 0) {

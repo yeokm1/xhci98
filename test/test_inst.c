@@ -4694,6 +4694,18 @@ static void test_storage(void)
               instStorFile[INST_STOR_IDX_USBSTOR_INF].Sha256) &&
           !inst_stor_rm_late(NULL, NULL) && !inst_stor_rm_late(NULL, ""),
           "late: USBSTOR.INF's bytes, or nothing recorded: first");
+    /* roadmap-usb4 43.5 F1: an uninstall whose own USBSTOR.INF could not be
+     * deleted keeps USBNTMAP.INF's record for the run after the restart. */
+    CHECK(inst_stor_late_action(0, 0) == INST_STOR_LATE_GO &&
+          inst_stor_late_action(0, 1) == INST_STOR_LATE_GO,
+          "late: no USBSTOR.INF left, USBNTMAP.INF goes");
+    CHECK(inst_stor_late_action(-1, 0) == INST_STOR_LATE_UNREAD &&
+          inst_stor_late_action(-1, 1) == INST_STOR_LATE_UNREAD,
+          "late: USBSTOR.INF unread, USBNTMAP.INF and its record stay");
+    CHECK(inst_stor_late_action(1, 1) == INST_STOR_LATE_HELD,
+          "late: this installer's own USBSTOR.INF held, the record stays");
+    CHECK(inst_stor_late_action(1, 0) == INST_STOR_LATE_FOREIGN,
+          "late: another's USBSTOR.INF, the record goes, the file stays");
     CHECK(inst_stor_pair(0, 0) == INST_STOR_PAIR_NONE &&
           inst_stor_pair(1, 1) == INST_STOR_PAIR_BOTH &&
           inst_stor_pair(1, 0) == INST_STOR_PAIR_STOR &&

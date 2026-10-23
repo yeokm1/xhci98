@@ -1831,6 +1831,18 @@ extern const int instStorCopyOrder[INST_STOR_COUNT];
 /* 1 when a file (by its name, or NULL and its recorded SHA-256) is
  * USBNTMAP.INF, deleted only once USBSTOR.INF of the same place is gone. */
 int inst_stor_rm_late(const char *name, const char *sha256);
+/* The uninstall's USBNTMAP.INF copy while a copy of USBSTOR.INF is still
+ * where Windows finds it (found 1, -1 unread; 0 none: INST_STOR_LATE_GO),
+ * ownHeld 1 when this run kept one of this installer's own recorded
+ * copies of USBSTOR.INF (its deletion failed, or its users unread). */
+#define INST_STOR_LATE_GO       0   /* no USBSTOR.INF left: deleted now   */
+#define INST_STOR_LATE_UNREAD   1   /* stays, its record kept, a failure  */
+#define INST_STOR_LATE_HELD     2   /* stays beside this installer's own
+                                       USBSTOR.INF: its record kept, so
+                                       the next run removes both        */
+#define INST_STOR_LATE_FOREIGN  3   /* stays beside another's USBSTOR.INF:
+                                       the pair kept, the record dropped */
+int inst_stor_late_action(int found, int ownHeld);
 /* The pair in one place: stor and ntmap 1 present, 0 absent, -1 unread. */
 #define INST_STOR_PAIR_NONE     0
 #define INST_STOR_PAIR_BOTH     1
