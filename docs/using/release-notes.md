@@ -4479,19 +4479,24 @@ and its `readme.txt` says so. On Windows 98 SE, `xhciuas.inf` names
 From `3.2.0.0` a release has up to three downloads (roadmap-usb4 task
 43.48, design record 26 section 6.7): `xhci98-<version>.zip`;
 `xhci98-<version>-free.zip`, which adds the usb-wdm-free USB class
-drivers in `WDMFREE\` (beta; their problems go to that project); and
-`xhci98-<version>-nonfree.zip`, which adds the usb-wdm-nonfree pack of
-other makers' drivers in `NONFREE\`, not this project's and not tested
-by it. `NONFREE\` holds two more Microsoft files, the KMDF co-installers
+drivers in `USBDRV\FREE\` (experimental: they may not work with every
+device and can make Windows unstable; their problems go to that
+project); and `xhci98-<version>-nonfree.zip`, which adds the
+usb-wdm-nonfree pack of other makers' drivers in `USBDRV\NONFREE\`, not
+this project's and not tested by it (NUSB 3.3's storage files are in
+`USBDRV\NUSB33\` in every download). `USBDRV\NONFREE\` holds two more
+Microsoft files, the KMDF co-installers
 ASIX ships with its drivers (`WdfCoInstaller01007.dll` and
 `WdfCoInstaller01009.dll`, the latter in a 32- and a 64-bit folder),
 unmodified, with no licence to redistribute them established either.
 The installer's Other USB drivers page, after Components, offers each
 set the download carries, unticked: ticked, it is copied to the tools
-folder and nothing is installed, and a second box lets Windows use the
-copied drivers at a device's first plug; for a set the download does not
-carry, the page names the download and the address that have it. The
-uninstall removes what it placed.
+folder and nothing is installed, and a box per driver package, grouped
+by kind and unticked, lets Windows use that package's drivers at a
+device's first plug; for a set the download does not carry, the page
+names the download and the address that have it. The uninstall removes
+what it placed.
+
 ## Trademarks
 
 Xbox is a trademark of Microsoft Corporation. It names the controllers the

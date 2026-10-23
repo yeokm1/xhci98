@@ -142,7 +142,7 @@ Controller Deviations This Driver Acts On".
 
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, from `3.0.0.0` `INSTALL.BAT` (from `3.1.0.0` also `SETUP.EXE`), the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and, from `3.2.0.0`, `NUSB33\` when the cut carries NUSB 3.3's storage files, `WDMFREE\` in the `-free` download and `NONFREE\` in the `-nonfree` one (each download holds the one before, and while the free pin names no release there is no `-free` download and the `-nonfree` one has no `WDMFREE\`; that download's `readme.txt` lists its folders), and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` (up to `3.0.0.0`) and `portsw\` (roadmap-hcd task 38.9), from `2.4.0.0` also `silent\` and `xhcicln\` (tasks 38.2 and 38.8), and from `3.0.0.0` also `xhciinst\` and `xhcitr\` (design records 23 and 25). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
+| 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, from `3.0.0.0` `INSTALL.BAT` (from `3.1.0.0` also `SETUP.EXE`), the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and, from `3.2.0.0`, `USBDRV\`, holding `NUSB33\` when the cut carries NUSB 3.3's storage files, `FREE\` in the `-free` download and `NONFREE\` in the `-nonfree` one (each download holds the one before, and while the free pin names no release there is no `-free` download and the `-nonfree` one has no `FREE\`; that download's `readme.txt` lists its folders), and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` (up to `3.0.0.0`) and `portsw\` (roadmap-hcd task 38.9), from `2.4.0.0` also `silent\` and `xhcicln\` (tasks 38.2 and 38.8), and from `3.0.0.0` also `xhciinst\` and `xhcitr\` (design records 23 and 25). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
 | 2.2 | From `3.1.0.0`: check that `tools\xhcitr\` is one of them and `tools\xhcisnap\` is not; up to `3.0.0.0`, that `tools\xhcisnap\` is one of them | From `3.1.0.0`: `tools\xhcitr\` holds `XHCITR.EXE` and `XHCITR64.EXE`, and no `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT` or `SNAPOFF.BAT` is anywhere in the asset (roadmap-usb4 task 42-A.4). Up to `3.0.0.0`: `tools\xhcisnap\` holds `XHCISNAP.EXE`, with `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside it from `2.4.0.0` (roadmap-hcd task 38.1), and a download without it is a cut made with `-SkipSnapTool`. It is what step 8 needs, so report a download without it rather than skipping the step |
 | 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names, and nothing else. Read the list off that file rather than from memory. For `3.0.0.0` it is `xhci98.inf`, `xhci98.sys`, `xhciuas.inf`, `xhciuas.sys`, `xhcicm.inf`, `xhcicm.sys`, `txtsetup.oem` and `nt\`, which holds `xhcicmf.inf` and a copy of `xhcicm.sys`; with `xhcihlpr.sys` in the two `-x86` directories and `xhci98-test.cer` in the two `-x64` ones; and in the download `release-x86\` and `release-x64\` also hold the bundled Stor98's files, each name starting `stor98`, as the same section says. From `3.1.0.0` the two `-x64` directories have no `nt\`: `xhcicmf.inf` is at their root beside `xhcicm.sys`, of which they hold one copy. `2.0.0.0`'s list was the first four |
 | 2.4 | Look for a version directory nested inside another | None |
@@ -165,12 +165,12 @@ A flavour directory holds the drivers and their INFs (from `3.0.0.0`
 x86 pair) and, in the download's `release-` directories, the bundled
 Stor98, and no Microsoft file (from `3.2.0.0` the Microsoft files a
 download may carry are outside the flavour directories: NUSB 3.3's in
-`NUSB33\`, and in the `-nonfree` download two KMDF co-installers in
-`NONFREE\`). What the install needs beyond them, `usbd.sys` and `usbui.dll`, Windows
+`USBDRV\NUSB33\`, and in the `-nonfree` download two KMDF co-installers
+in `USBDRV\NONFREE\`). What the install needs beyond them, `usbd.sys` and `usbui.dll`, Windows
 supplies from its own installation source at step 4 (`readme.txt` section 3).
 On Windows 98 SE the storage clauses also need NUSB's mass-storage component,
 which a download up to `3.1.0.0` does not carry (from `3.2.0.0` its storage
-files are in `NUSB33\` when the cut carries them).
+files are in `USBDRV\NUSB33\` when the cut carries them).
 
 If one directory nests another copy of the version inside itself (2.4): stop,
 and report the asset rather than the driver. That is a packaging defect and it

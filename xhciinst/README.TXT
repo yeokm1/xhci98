@@ -31,7 +31,8 @@ completes.
 
 It uses only routines Windows documents for this. It is not devcon, and
 this package's own files include no Microsoft file (the downloads'
-NUSB33, and NONFREE in the -nonfree download, carry some: see their
+USBDRV\NUSB33, and USBDRV\NONFREE in the -nonfree download, carry
+some: see their
 readme.txt).
 
 The names in Device Manager: each USB 3 controller the installer knows is
