@@ -5633,3 +5633,94 @@ Read in QEMU on 98 SE with the gated `qemu` build and xpad98's trace build (`usb
 Recorded at the batch 10 merge from the roadmap line, which carried these readings alone (`roadmap-usb4.md`, 43.72); the branch's own words follow.
 
 Read 2026-10-23 in QEMU with a build tracing every `Shell_NotifyIcon` call and tray message to the debug port (record 25 sections 7.1 and 16 item 11): (A) `shell32.dll` 4.72 shows an icon's tooltip once per entry and, after a pointer rests on the icon until the tooltip times out and leaves without a move beside it, never again (the clock's still shows); removing and adding the icon brings it back, a `NIF_TIP` cleared and set does not; the pop-up was not missing: 98 SE announces a device that needs a driver only when its wizard ends, and the pop-up shows then. Fixed on branch `p43-72` (from `integ8` at `afdaca10`, with `p43-57` at `47dbf436` merged): on 98 SE the poll adds the icon again after a hover that outlasted the tooltip (`tr_hover_poll`); the balloon a click is on is the kind the last `NIN_BALLOONSHOW` saw (`tr_bkind_step`, `tr_bkind_fast`); host vectors in `test_tr.c`; record 25 revision 20. Reviewed in five rounds (a show after balloons of two kinds, an older balloon's end, the re-send's removal and more waiting than kept all leave the show in doubt, a click on it then opening nothing). Legs read 2026-10-23 (record 25 T.15, by screenshot): 98 SE, the tooltip again after each long hover (never again with `3.2.0.0`'s XHCITR) and the pop-up when a stick's wizard finished; 2000, the balloon's text and clicks opening nothing, the menu leading on; XP, the notice's balloon click opening the list and an eject's opening nothing. Built with every gate, `scripts\build-driver.cmd all` and `all -amd64`.
+
+## 43.73 - controller names, the readings (2026-10-23)
+
+Task 43.73 (design record 23 section 5.13, record 21 section 3.3), branch
+`p43-73` at `547dd225` (the guest package: the x86 `release` test cut of
+that tree, version stamp 3.1.0.0, `-TestLabel`). Development host A, QEMU
+headless, TCG, the `usb4-emu` emulator build of the 43.45 kit
+(`qemu-system-x86_64.exe` SHA-256 `6a1dfcc8...bd66`).
+
+### The length (98 SE and ME)
+
+98 SE (the clean 98 SE base) and ME (the stock ME base), 640x480, the
+default Windows Standard scheme. Test devnodes under
+`HKLM\Enum\Root\XNAME\nnnn` (class System, `ConfigFlags` 0x40), imported
+with `regedit /s`, listed by Device Manager's Refresh under System devices;
+each read in the tree ("View devices by type"), in its Properties caption
+and on its General tab.
+
+- The first set (98 SE): `xHCI98 USB4 Router (Intel Meteor Lake)` (38)
+  to `xHCI98 USB 3 Controller (ASMedia ASM2142/ASM3142)` (49) and a 54- and
+  an 80-character ruler. Every name up to 48 characters was whole in all
+  three places; the 49-character one was cut in the tree ("...ASM3") and
+  the caption ("...ASM31...") and wrapped to a second line on the General
+  tab; the 54-character `... (Intel 100 Series/C230 Series)` was whole in
+  the tree (narrow glyphs) and cut in the caption. The caption is the
+  narrowest: " Properties" after a name of 43 or more characters was cut
+  first. A FriendlyName set beside a DeviceDesc was the name in the tree.
+  Hence `INST_NAME_MAX` 46.
+- Every name of both tables (71: the 55 names of the xHCI table, the 14 of the NHI table
+  and the two plain names), the same
+  way on 98 SE and on ME: every one whole in the tree, in the caption (the
+  word "Properties" cut after some) and on one line of the General tab.
+
+### 98 SE: the update and the uninstall (`tb3-alpine-ridge`)
+
+The 43.x kits' 98 SE base with 3.0.0.0 installed, `qemu-xhci`
+(`1B36:000D`), the emulator's `tb3-alpine-ridge` NHI (`8086:15BF`) with its
+xHCI (`8086:15C1`) and tunnel bridge. First start: the bridge took
+`MACHINE2.INF`, the `15C1` xHCI took 3.0.0.0's `XHCI98.INF` from
+`C:\XHCI98` as "xHCI98 USB 3.x eXtensible Host Controller", the NHI found
+no driver (Unknown Device).
+
+- `INSTALL /console /yes /thunderbolt` from the package: the Windows CD
+  was asked for `usbd.sys` once (the image's CD in the drive, `E:\WIN98`)
+  and the package disk once (`C:\XHCI98`); the New Hardware wizard that
+  came for the NHI during the run named it "xHCI98 TB3 Controller (Intel
+  Alpine Ridge)" (the INF's new string) and installed it from `C:\XHCI98`.
+  The run ended "Device Manager names: named: xHCI98 USB 3 Controller (Red
+  Hat QEMU xHCI) ... named: xHCI98 USB 3 Controller (Intel Alpine Ridge)",
+  exit code 3.
+- After the restart, Device Manager: under Universal Serial Bus
+  controllers "xHCI98 USB 3 Controller (Intel Alpine Ridge)" and "xHCI98
+  USB 3 Controller (Red Hat QEMU xHCI)", under System devices "xHCI98 TB3
+  Controller (Intel Alpine Ridge)". The controller's General tab shows the
+  product name; **its Properties caption shows the DeviceDesc**, "xHCI98
+  USB 3 Controller Properties": 98 SE's caption does not take the
+  FriendlyName (an owner question, the report).
+- XHCITR: "xHCI98 TB3 Controller (Intel Alpine Ridge)", "xHCI98 USB 3
+  Controller (Red Hat QEMU xHCI)", "xHCI98 USB 3 Controller (Intel Alpine
+  Ridge)" in the tree; the details' "Description" stays the DeviceDesc.
+- `INSTALL /console /uninstall /yes`: the devnodes were removed, with
+  their names; after the restart the controller came back as "PCI
+  Universal Serial Bus" in the New Hardware wizard, no name of ours.
+
+### 7 x86: install, update, uninstall, install (`usb4-generic`)
+
+The clean 7 x86 base, `qemu-xhci`, the emulator's `usb4-generic` NHI
+(`1B36:00F4`, the class line) and tunnel bridge.
+
+- 3.1.0.0 (the published release) installed first: "xHCI98 USB 3.x
+  eXtensible Host Controller", "xHCI98 USB4 Host Router".
+- The package over it, `/yes /thunderbolt`: every device current, nothing
+  reinstalled, and the run named the controller all the same ("named:
+  xHCI98 USB 3 Controller (Red Hat QEMU xHCI)"). Device Manager showed it,
+  and so did its Properties caption on 7. The NHI kept its 3.1.0.0 string,
+  not reinstalled.
+- `/force`: everything reinstalled; the NHI became "xHCI98 USB4 Router";
+  the log shows the reinstall had cleared the FriendlyName (`was ""`) and
+  the same run named it again.
+- XHCITR from the package: "xHCI98 USB 3 Controller (Red Hat QEMU xHCI)",
+  "xHCI98 USB4 Router". The tray copy in `C:\XHCI98` was 3.1.0.0's (the
+  same version, so the installer kept it) and showed the old label.
+- `/uninstall /yes`: the log reads "names: PCI\VEN_1B36&DEV_000D... gone,
+  its record forgotten" and "deleted HKLM\Software\xhci98\Names".
+- After a restart, the package again on the controller with no driver
+  (the install leg): the plan's "Device Manager name: xHCI98 USB 3
+  Controller (Red Hat QEMU xHCI)", the run's "named: ...", and after the
+  restarts the controller, root hub and NHI as named.
+
+Kit `E:\xhci98-vm\p43-73` (shots `a98-*`, `ame-*`, `t1`-`t5-*`,
+`l1`-`l8-*`); every guest of it shut down.

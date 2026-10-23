@@ -40,7 +40,9 @@
 
 Option Explicit
 
-Const XHCI_DESC = "xHCI98 USB 3.x eXtensible Host Controller"
+' The controller's description from 3.2.0.0 (task 43.73), and before it.
+Const XHCI_DESC = "xHCI98 USB 3 Controller"
+Const XHCI_DESC_OLD = "xHCI98 USB 3.x eXtensible Host Controller"
 Const VALUE_NAME = "XhciSilentInstall"
 Const CLASS_9X = "HKLM\System\CurrentControlSet\Services\Class\USB\"
 Const LIST_KEY = "HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses"
@@ -143,7 +145,7 @@ Function FindKeys()
         desc = ReadValue(base & name & "\DriverDesc", ok)
         If ok Then
             If VarType(desc) = vbString Then
-                If LCase(desc) = LCase(XHCI_DESC) Then
+                If LCase(desc) = LCase(XHCI_DESC) Or LCase(desc) = LCase(XHCI_DESC_OLD) Then
                     drv = ReadValue(base & name & "\NTMPDriver", ok)
                     If ok Then
                         If VarType(drv) = vbString Then

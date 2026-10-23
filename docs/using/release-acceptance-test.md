@@ -251,11 +251,17 @@ run sheets cite them.
 The two nodes of 4.3, as Device Manager shows them:
 
 ```
-xHCI98 USB 3.x eXtensible Host Controller
+xHCI98 USB 3 Controller (Red Hat QEMU xHCI)
     xHCI98 USB 3.x Root Hub
 ```
 
-Both are the INFs' strings, and both architectures' INFs carry the same ones,
+(the controller's product as the installer names it, design record 23
+section 5.13: on another controller its own product, or the plain
+"xHCI98 USB 3 Controller" for one the table does not know, or after a hand
+install; "xHCI98 USB 3.x eXtensible Host Controller" up to `3.1.0.0`)
+
+The root hub's name and the controller's plain name are the INFs' strings,
+and the product the installer's table, the same in both architectures' packages,
 so they do not say which package was installed; what says that is which
 directory was pointed at. An external hub plugged in later appears as
 "xHCI98 USB Hub" beneath the port it is plugged into, with the devices

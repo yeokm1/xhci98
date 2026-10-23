@@ -2217,4 +2217,58 @@ int inst_stor_adoptable(int published, int beforeOk, int inBefore,
 int inst_stor_remove(int present, int hashSame, int usb20u, int users);
 const char *inst_stor_remove_text(int why);
 
+/* ---- controller names (task 43.73; design record 23 section 5.13, record
+ * 21 section 3.3) --------------------------------------------------------- */
+
+/* The longest name, in characters: 98 SE's Device Manager showed a 48-
+ * character name whole in the tree, in the Properties title and on the
+ * General tab at 640x480 and the default font, and cut a 49-character one
+ * in all three (task 43.73's reading); the table holds every name below. */
+#define INST_NAME_MAX       46
+#define INST_NAME_USB3      "xHCI98 USB 3 Controller"
+#define INST_NAME_TB2       "xHCI98 TB2 Controller"
+#define INST_NAME_TB3       "xHCI98 TB3 Controller"
+#define INST_NAME_USB4      "xHCI98 USB4 Router"
+
+/* A row: PCI vendor and device, the base (NHI rows only: INST_NB_*) and
+ * the maker-and-product text the parentheses carry. */
+#define INST_NB_USB3        0
+#define INST_NB_TB2         1
+#define INST_NB_TB3         2
+#define INST_NB_USB4        3
+typedef struct _INST_NAMEROW {
+    INST_U32 Ven;
+    INST_U32 Dev;
+    int Base;
+    const char *Product;
+} INST_NAMEROW;
+extern const INST_NAMEROW instXhciNames[];  /* xHCI controllers (0C0330) */
+extern const int instXhciNameCount;
+extern const INST_NAMEROW instNhiNames[];   /* xhcicm.inf's NHI ids      */
+extern const int instNhiNameCount;
+const char *inst_name_base(int base);
+/* The canonical name of an xHCI controller (1: a row of the table, the
+ * product in parentheses; 0: not one, the plain name) and of an NHI (1: a
+ * row; 0: the class line's plain name). out holds at least
+ * INST_NAME_MAX + 1 bytes. */
+int inst_xhci_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
+int inst_nhi_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
+/* A devnode's canonical name: 1 for an xHCI controller (PCI\CC_0C0330 in
+ * its ids) whose service is xhci98, or a PCI device whose service is
+ * xhcicm (the NHI), out then the name; 0 for any other. */
+int inst_dev_canon(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes, const char *service, char *out,
+                   size_t cap);
+/* The reconciliation of one controller's FriendlyName (record 23 section
+ * 5.13): ours whether xhci98 drives it, canon its table name or NULL (an
+ * id the table does not hold), current the FriendlyName now ("" none),
+ * recorded the name this installer recorded writing or NULL. *record is
+ * set to 1 when the record is to hold canon afterwards, 0 when it is to be
+ * forgotten. */
+#define INST_NAME_NONE      0   /* nothing written                          */
+#define INST_NAME_SET       1   /* FriendlyName := canon                    */
+#define INST_NAME_CLEAR     2   /* FriendlyName removed                     */
+int inst_name_action(int ours, const char *canon, const char *current,
+                     const char *recorded, int *record);
+
 #endif /* INST_CORE_H */

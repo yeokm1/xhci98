@@ -3510,19 +3510,25 @@ static void test_labels(void)
     CHECK(!tr_pci_loc9x("PCI\\VEN_8086&DEV_15C1\\0000083000", &ven, &dev),
           "98 location: a path form is not one");
 
-    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x02EDU, TR_TB_NOT);
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x02EDU, TR_TB_NOT, 0);
     CHECK(strcmp(out, " - Intel 8086:02ED") == 0, "controller: Intel PCH xHCI");
-    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x15C1U, TR_TB_TB3);
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x02EDU, TR_TB_NOT, 1);
+    CHECK(strcmp(out, " - 8086:02ED") == 0,
+          "controller: named by the table, the maker not said twice");
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x15C1U, TR_TB_TB3, 0);
     CHECK(strcmp(out, " - Thunderbolt 3 controller's USB (8086:15C1)") == 0,
           "controller: Alpine Ridge's own xHCI");
-    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x8A13U, TR_TB_USB4);
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x15C1U, TR_TB_TB3, 1);
+    CHECK(strcmp(out, " - Thunderbolt 3 controller's USB (8086:15C1)") == 0,
+          "controller: Alpine Ridge's own xHCI, named");
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x8A13U, TR_TB_USB4, 0);
     CHECK(strcmp(out, " - USB4 controller's USB (8086:8A13)") == 0, "controller: USB4");
-    tr_ctrl_suffix(out, sizeof(out), 0, 0, 0, TR_TB_UNKNOWN);
+    tr_ctrl_suffix(out, sizeof(out), 0, 0, 0, TR_TB_UNKNOWN, 0);
     CHECK(strcmp(out, " - Thunderbolt controller's USB") == 0,
           "controller: an NHI's, no ids, no generation");
-    tr_ctrl_suffix(out, sizeof(out), 1, 0xABCDU, 0x0001U, TR_TB_NOT);
+    tr_ctrl_suffix(out, sizeof(out), 1, 0xABCDU, 0x0001U, TR_TB_NOT, 0);
     CHECK(strcmp(out, " - vendor ABCD ABCD:0001") == 0, "controller: unknown vendor");
-    tr_ctrl_suffix(out, sizeof(out), 0, 0, 0, TR_TB_NOT);
+    tr_ctrl_suffix(out, sizeof(out), 0, 0, 0, TR_TB_NOT, 1);
     CHECK(out[0] == '\0', "controller: nothing read, nothing added");
 
     tr_roothub_label(out, sizeof(out), 18, 1, 14, 4);

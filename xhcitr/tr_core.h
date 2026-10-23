@@ -956,9 +956,10 @@ const char *tr_pci_vendor(unsigned int ven);
 /* What follows a controller's description in the tree: " - Intel
  * 8086:02ED", " - vendor 1AB2 1AB2:0001", or for a Thunderbolt chip's
  * own xHCI " - Thunderbolt 3 controller's USB (8086:15C1)"; "" (or the
- * Thunderbolt words alone) when the ids were not read. */
+ * Thunderbolt words alone) when the ids were not read. named: the name
+ * already carries the maker (task 43.73), so " - 8086:02ED". */
 void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
-                    unsigned int dev, int tbKind);
+                    unsigned int dev, int tbKind, int named);
 
 /* "Root hub - 18 ports (14 USB 2.0, 4 USB 3.x)"; without the split when
  * known is 0 (a port did not report its protocols); "Root hub" for 0

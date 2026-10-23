@@ -163,7 +163,10 @@ is the index; this is the same list in the proposal's order:
 - **The device names** are `xHCI98 USB 3.x eXtensible Host Controller` and
   `xHCI98 USB 3.x Root Hub` (owner, 2026-10-02; spelled xHCI98 by the owner
   2026-10-03), the INFs' device
-  descriptions on every path.
+  descriptions on every path. From 3.2.0.0 the controller's is `xHCI98 USB
+  3 Controller`, and the installer gives each controller its table knows
+  its maker and product through the FriendlyName (roadmap-usb4 task 43.73,
+  design record 23 section 5.13).
 - **The root hub is a devnode, and both property tabs are kept** (owner,
   2026-10-02, reversing a narrower answer given on the review earlier
   that day). The controller FDO creates a root-hub PDO under a
@@ -539,8 +542,9 @@ Windows 7 x64). Each models section carries two models: the controller under
 `PCI\CC_0C0330` and the root hub under `XHCI98\ROOT_HUB` (`USB\XHCI98_ROOT_HUB`
 from `2.4.0.0`; the hub and composite models of 10.11 and 10.12 beside them), both bound to
 `xhci98.sys` through one service, `xhci98`. The device descriptions are
-the owner's names: `xHCI98 USB 3.x eXtensible Host Controller` and `xHCI98
-USB 3.x Root Hub`. Both files pass the INF gate under its HCD profile
+the owner's names: `xHCI98 USB 3.x eXtensible Host Controller` (from
+3.2.0.0 `xHCI98 USB 3 Controller`, design record 23 section 5.13) and
+`xHCI98 USB 3.x Root Hub`. Both files pass the INF gate under its HCD profile
 (section 9).
 
 What they fetch from the OS through `LayoutFile`, and what they refuse to:

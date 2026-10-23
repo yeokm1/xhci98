@@ -34,91 +34,91 @@ CatalogFile=xhcicm.cat
 [CmModels.NTamd64]
 ; Record 21 section 3.3's list: Intel's firmware connection manager hosts.
 ; 15BF has been read by this project; every other line is untested.
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF
-%Tb2Desc%=Cm.Dev,PCI\VEN_8086&DEV_156A
-%Tb2Desc%=Cm.Dev,PCI\VEN_8086&DEV_156C
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1575
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1577
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D2
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D9
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15E8
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15EB
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_1134
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_1137
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A17
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A0D
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A1B
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A1D
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A1F
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A21
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_463E
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_466D
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A73E
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A76D
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_7EB2
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_7EC2
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
+%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF
+%Tb2FrDesc%=Cm.Dev,PCI\VEN_8086&DEV_156A
+%Tb2FrDesc%=Cm.Dev,PCI\VEN_8086&DEV_156C
+%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_1575
+%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_1577
+%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D2
+%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D9
+%Tb3TrDesc%=Cm.Dev,PCI\VEN_8086&DEV_15E8
+%Tb3TrDesc%=Cm.Dev,PCI\VEN_8086&DEV_15EB
+%U4MrDesc%=Cm.Dev,PCI\VEN_8086&DEV_1134
+%U4MrDesc%=Cm.Dev,PCI\VEN_8086&DEV_1137
+%Tb3IlDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A17
+%Tb3IlDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A0D
+%U4TlDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1B
+%U4TlDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1D
+%U4TlDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1F
+%U4TlDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A21
+%U4AdDesc%=Cm.Dev,PCI\VEN_8086&DEV_463E
+%U4AdDesc%=Cm.Dev,PCI\VEN_8086&DEV_466D
+%U4RlDesc%=Cm.Dev,PCI\VEN_8086&DEV_A73E
+%U4RlDesc%=Cm.Dev,PCI\VEN_8086&DEV_A76D
+%U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EB2
+%U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC2
+%U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
 ; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
 ; class line, and any other USB4 host (class 0C/03/40) by the class line,
 ; which the id lines outrank. All untested.
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A833
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A834
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E333
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E334
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E433
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E434
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_4D33
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5781
-%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5784
-%U4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1668
-%U4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1669
+%U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A833
+%U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A834
+%U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E333
+%U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E334
+%U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E433
+%U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E434
+%U4WlDesc%=Cm.Dev,PCI\VEN_8086&DEV_4D33
+%U4BrDesc%=Cm.Dev,PCI\VEN_8086&DEV_5781
+%U4BrDesc%=Cm.Dev,PCI\VEN_8086&DEV_5784
+%U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1668
+%U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669
 %U4Desc%=Cm.Dev,PCI\CC_0C0340
 
 [CmModels.NTamd64.6.0]
 ; Record 21 section 3.3's list: Intel's firmware connection manager hosts.
 ; 15BF has been read by this project; every other line is untested.
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF
-%Tb2Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156A
-%Tb2Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1575
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1577
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D2
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D9
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15E8
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15EB
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_1134
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_1137
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A17
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A0D
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1B
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1D
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1F
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A21
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_463E
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_466D
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A73E
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A76D
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_7EB2
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC2
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
+%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF
+%Tb2FrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156A
+%Tb2FrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156C
+%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1575
+%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1577
+%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D2
+%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D9
+%Tb3TrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15E8
+%Tb3TrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15EB
+%U4MrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1134
+%U4MrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1137
+%Tb3IlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A17
+%Tb3IlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A0D
+%U4TlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1B
+%U4TlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1D
+%U4TlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1F
+%U4TlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A21
+%U4AdDesc%=Cm.Dev6,PCI\VEN_8086&DEV_463E
+%U4AdDesc%=Cm.Dev6,PCI\VEN_8086&DEV_466D
+%U4RlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A73E
+%U4RlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A76D
+%U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EB2
+%U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC2
+%U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
 ; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
 ; class line, and any other USB4 host (class 0C/03/40) by the class line,
 ; which the id lines outrank. All untested.
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E334
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E433
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E434
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_4D33
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5781
-%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
-%U4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
-%U4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
+%U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
+%U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
+%U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
+%U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E334
+%U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E433
+%U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E434
+%U4WlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_4D33
+%U4BrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_5781
+%U4BrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
+%U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
+%U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
 %U4Desc%=Cm.Dev6,PCI\CC_0C0340
 
 [SourceDisksNames]
@@ -189,7 +189,19 @@ CopyFiles=Cm.CopyFiles
 Provider="Yeo Kheng Meng"
 Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
-Tb2Desc="xHCI98 Thunderbolt 2 Controller"
-NhiDesc="xHCI98 Thunderbolt 3 Controller"
-U4Desc="xHCI98 USB4 Host Router"
+Tb2FrDesc="xHCI98 TB2 Controller (Intel Falcon Ridge)"
+Tb3ArDesc="xHCI98 TB3 Controller (Intel Alpine Ridge)"
+Tb3TrDesc="xHCI98 TB3 Controller (Intel Titan Ridge)"
+Tb3IlDesc="xHCI98 TB3 Controller (Intel Ice Lake)"
+U4MrDesc="xHCI98 USB4 Router (Intel Maple Ridge)"
+U4TlDesc="xHCI98 USB4 Router (Intel Tiger Lake)"
+U4AdDesc="xHCI98 USB4 Router (Intel Alder Lake)"
+U4RlDesc="xHCI98 USB4 Router (Intel Raptor Lake)"
+U4MlDesc="xHCI98 USB4 Router (Intel Meteor Lake)"
+U4LnDesc="xHCI98 USB4 Router (Intel Lunar Lake)"
+U4PlDesc="xHCI98 USB4 Router (Intel Panther Lake)"
+U4WlDesc="xHCI98 USB4 Router (Intel Wildcat Lake)"
+U4BrDesc="xHCI98 USB4 Router (Intel Barlow Ridge)"
+U4PsDesc="xHCI98 USB4 Router (AMD Pink Sardine)"
+U4Desc="xHCI98 USB4 Router"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

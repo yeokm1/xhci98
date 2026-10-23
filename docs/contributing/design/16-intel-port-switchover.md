@@ -296,8 +296,9 @@ systems, and on 98 and ME, where WMI is not part of a stock install, has
 headers; only if neither answers does it probe every number from `0000` to
 `9999`, which takes minutes (a gap in the numbers says nothing about the keys
 after it, so no shorter probe is complete). A key is this driver's controller when its `DriverDesc` is the
-INFs' `XhciDesc` ("xHCI98 USB 3.x eXtensible Host Controller", which
-neither the root hub nor a hub carries), and on 98 and ME also when its
+INFs' `XhciDesc` ("xHCI98 USB 3 Controller" from 3.2.0.0, "xHCI98 USB 3.x
+eXtensible Host Controller" before it, both accepted; neither the root hub
+nor a hub carries either), and on 98 and ME also when its
 `NTMPDriver` is `xhci98.sys`. Every such key is set, so a key left from an
 earlier PCI position is set too, harmlessly. It never writes 2: that value
 is the user's own risk (section 4a) and is set by hand.

@@ -168,6 +168,39 @@ included.
 
 To benchmark a disk, use CrystalDiskMark or ATTO Disk Benchmark (suggestions, not part of this package). XHCIPERF stays a developer diagnostic in the source tree (`xhciperf\`), not shipped.
 
+## Controller names in Device Manager (new in `3.2.0.0`)
+
+Device Manager names each controller this package drives by its kind, then
+its maker and product in parentheses, with no driver version (that is on
+the Driver tab, and in the xHCI98 USB Tree):
+
+- **USB 3 controllers:** `xHCI98 USB 3 Controller (Renesas uPD720202)`,
+  `(ASMedia ASM3242)`, `(Intel 9 Series LP)`, `(Red Hat QEMU xHCI)` and so
+  on, for the controllers the installer's table knows (design record 23
+  section 5.13 lists them, with where each name was read); any other is
+  `xHCI98 USB 3 Controller`. The INF still matches every xHCI controller
+  by its class and gives the plain name, so that Windows 8 to 10 still
+  rank their own driver first; the product name is the device's
+  FriendlyName, which `SETUP.EXE` and `INSTALL.BAT` write at every install
+  and update and remove at the uninstall. A hand install from the INF
+  shows the plain name. A name you gave the controller yourself is kept.
+  Up to `3.1.0.0` the name was `xHCI98 USB 3.x eXtensible Host
+  Controller`.
+- **Thunderbolt and USB4 controllers:** `xHCI98 TB2 Controller (Intel
+  Falcon Ridge)`, `xHCI98 TB3 Controller (Intel Titan Ridge)`, `xHCI98
+  USB4 Router (Intel Meteor Lake)`, from the INF itself ("Which
+  controllers", below); TB2 and TB3 are Thunderbolt 2 and Thunderbolt 3, and
+  a USB4 Router is the USB4 host router. Any other USB4 host is `xHCI98
+  USB4 Router`. Up to `3.1.0.0` they were `xHCI98 Thunderbolt 2
+  Controller`, `xHCI98 Thunderbolt 3 Controller` and `xHCI98 USB4 Host
+  Router`.
+- **The xHCI98 USB Tree** shows the same names.
+
+Every name is at most 46 characters: the longest that Windows 98 SE's
+Device Manager showed whole at 640x480, in the list and in the
+Properties window's title and General tab (the word "Properties" after a
+long name can still be cut in the title). Read in virtual machines only.
+
 ## What `3.1.0.0` changes
 
 This section collects the changes made for the next release, `3.1.0.0`,
@@ -406,16 +439,16 @@ interface", function of a Thunderbolt or USB4 controller), by PCI id:
 
 | Generation | PCI ids (`8086:` unless named) | Connection manager | Device Manager |
 |---|---|---|---|
-| Falcon Ridge (Thunderbolt 2) | `156A`, `156C` | the firmware's | `xHCI98 Thunderbolt 2 Controller` |
-| Alpine Ridge (Thunderbolt 3) | `15BF` (JHL6240), `1575`, `1577`, `15D2`, `15D9` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
-| Titan Ridge (Thunderbolt 3) | `15E8`, `15EB` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
-| Ice Lake (integrated) | `8A0D`, `8A17` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
-| Maple Ridge | `1134`, `1137` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Tiger Lake, Alder Lake, Raptor Lake, Meteor Lake (integrated) | `9A1B`, `9A1D`, `9A1F`, `9A21`; `463E`, `466D`; `A73E`, `A76D`; `7EB2`, `7EC2`, `7EC3` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Lunar Lake, Panther Lake, Wildcat Lake (integrated) | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Barlow Ridge | `5781`, `5784` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| AMD | `1022:1668`, `1022:1669` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Any other USB4 host (PCI class `0C0340`; ASMedia's ASM4242 on AM5 X870 boards among them) | by class | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
+| Falcon Ridge (Thunderbolt 2) | `156A`, `156C` | the firmware's | `xHCI98 TB2 Controller (Intel Falcon Ridge)` |
+| Alpine Ridge (Thunderbolt 3) | `15BF` (JHL6240), `1575`, `1577`, `15D2`, `15D9` | the firmware's | `xHCI98 TB3 Controller (Intel Alpine Ridge)` |
+| Titan Ridge (Thunderbolt 3) | `15E8`, `15EB` | the firmware's | `xHCI98 TB3 Controller (Intel Titan Ridge)` |
+| Ice Lake (integrated) | `8A0D`, `8A17` | the firmware's | `xHCI98 TB3 Controller (Intel Ice Lake)` |
+| Maple Ridge | `1134`, `1137` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Router (Intel Maple Ridge)` |
+| Tiger Lake, Alder Lake, Raptor Lake, Meteor Lake (integrated) | `9A1B`, `9A1D`, `9A1F`, `9A21`; `463E`, `466D`; `A73E`, `A76D`; `7EB2`, `7EC2`, `7EC3` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Router (Intel Tiger Lake)`, `(Intel Alder Lake)`, `(Intel Raptor Lake)`, `(Intel Meteor Lake)` |
+| Lunar Lake, Panther Lake, Wildcat Lake (integrated) | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | `xhcicm.sys`'s | `xHCI98 USB4 Router (Intel Lunar Lake)`, `(Intel Panther Lake)`, `(Intel Wildcat Lake)` |
+| Barlow Ridge | `5781`, `5784` | `xhcicm.sys`'s | `xHCI98 USB4 Router (Intel Barlow Ridge)` |
+| AMD Pink Sardine | `1022:1668`, `1022:1669` | `xhcicm.sys`'s | `xHCI98 USB4 Router (AMD Pink Sardine)` |
+| Any other USB4 host (PCI class `0C0340`; ASMedia's ASM4242 on AM5 X870 boards among them) | by class | `xhcicm.sys`'s | `xHCI98 USB4 Router` |
 
 Not claimed: Apple machines and Apple's controllers, the USB-only
 Thunderbolt functions (`15DC`, `15DD`, `15DE`), and the older Light Ridge,
@@ -1055,14 +1088,19 @@ have every leg.
 
 ### Thunderbolt and USB4 in Device Manager
 
-`xhcicm.sys` names a controller by its generation, the same whichever
-connection manager runs it:
+`xhcicm.sys` names a controller by its generation, then (from `3.2.0.0`)
+its maker and product, the same whichever connection manager runs it
+("Which controllers", above, has each id's name):
 
 | Device Manager shows | For |
 |---|---|
-| `xHCI98 Thunderbolt 2 Controller` | Intel Falcon Ridge |
-| `xHCI98 Thunderbolt 3 Controller` | Intel Alpine Ridge, Titan Ridge and Ice Lake |
-| `xHCI98 USB4 Host Router` | Intel Maple Ridge, Tiger Lake to Meteor Lake, Lunar, Panther and Wildcat Lake, Barlow Ridge; AMD's and any other USB4 host |
+| `xHCI98 TB2 Controller (...)` | Intel Falcon Ridge |
+| `xHCI98 TB3 Controller (...)` | Intel Alpine Ridge, Titan Ridge and Ice Lake |
+| `xHCI98 USB4 Router (...)` | Intel Maple Ridge, Tiger Lake to Meteor Lake, Lunar, Panther and Wildcat Lake, Barlow Ridge; AMD Pink Sardine |
+| `xHCI98 USB4 Router` | any other USB4 host |
+
+Up to `3.1.0.0` these were `xHCI98 Thunderbolt 2 Controller`, `xHCI98
+Thunderbolt 3 Controller` and `xHCI98 USB4 Host Router`.
 
 On Windows 2000, XP, Vista and 7 the PCI bridge ports the filter attaches
 to - the controller's own switch ports or, on the integrated
@@ -1686,8 +1724,9 @@ and ME: the stock install, and storage").
      driver software. If Windows warns that it cannot verify the publisher,
      install the driver anyway. Use Device Manager rather than right-clicking
      the INF.
-3. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98
-   USB 3.x Root Hub" beneath it. Restart if asked: Windows 98 SE asks once,
+3. It installs as "xHCI98 USB 3 Controller" ("xHCI98 USB 3.x eXtensible
+   Host Controller" up to `3.1.0.0`) with "xHCI98 USB 3.x Root Hub" beneath
+   it; the installer adds the maker and product, a hand install does not. Restart if asked: Windows 98 SE asks once,
    after the controller's install, and 32-bit Vista and 7 ask, for the
    helper, holding the controller (Code 28 on 7, Code 1 on Vista) until
    the restart (read with `2.3.x`'s `xhcimsi.sys`; with `xhcihlpr.sys` not
@@ -3536,7 +3575,7 @@ transfer:
 
 | | |
 |---|---|
-| Key | the controller's driver key, where the install writes the other `Xhci` values ("Registry settings", above): on 2000, XP, Vista and 7 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`, the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller" (on Vista and 7 Device Manager's Details tab gives it as the "Driver key") |
+| Key | the controller's driver key, where the install writes the other `Xhci` values ("Registry settings", above): on 2000, XP, Vista and 7 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`, the subkey whose `DriverDesc` is "xHCI98 USB 3 Controller" ("xHCI98 USB 3.x eXtensible Host Controller" up to `3.1.0.0`) (on Vista and 7 Device Manager's Details tab gives it as the "Driver key") |
 | Value | `XhciWideMap`, a `DWORD`; change it with `regedit` (Modify) or a `.reg` file |
 | Default | off: the install writes `0`, and a missing value means off too |
 | On | `1`, then **restart Windows**; `0` and a restart turn it off again |

@@ -232,6 +232,8 @@ typedef struct _DNODE {
     int Ejectable;          /* a unit, not blocked                          */
     int IsDisk;             /* setup class DiskDrive                        */
     char Friendly[128];     /* a disk's friendly name, where it has one     */
+    char Canon[64];         /* xhci98's controller, xhcicm's NHI: the name
+                               of record 23 section 5.13 (task 43.73)     */
     char Letters[TR_LETTERS_BYTES]; /* a disk's drive letters, where found  */
     char Cls[32];           /* the setup class                              */
     int ReadOk;             /* every property read whole                    */
@@ -579,7 +581,7 @@ static int dn_started(const DNODE *d)
 
 static const char *dn_name(const DNODE *d)
 {
-    return d->Desc[0] ? d->Desc : first_hw(d);
+    return d->Canon[0] ? d->Canon : d->Desc[0] ? d->Desc : first_hw(d);
 }
 
 /* The driver (software) key of a devnode, relative to HKLM. */
@@ -1054,6 +1056,10 @@ static int dn_read(DNODE *t)
     }
     tr_tidy_name(t->Desc);
     tr_tidy_name(t->Friendly);
+    /* The package's controllers and NHIs by the installer's table, whatever
+     * name the devnode carries (task 43.73). */
+    inst_dev_canon(t->Hw, t->HwBytes, t->Compat, t->CompatBytes, t->Service,
+                   t->Canon, sizeof(t->Canon));
     if (api.Status(&status, &problem, t->Dn, 0) == TR_CR_SUCCESS) {
         t->Status = status;
         t->Problem = (status & INST_DN_HAS_PROBLEM) ? problem : 0;
@@ -2278,8 +2284,11 @@ static void build_usb(int root)
             unsigned int ven = 0;
             unsigned int dev = 0;
             int ids = c->Dn >= 0 && tr_pci_ids(gw.N[c->Dn].Id, &ven, &dev);
+            char canon[64];
             tr_ctrl_suffix(suffix, sizeof(suffix), ids, ven, dev,
-                           ctrl_tb_kind(c->Dn));
+                           ctrl_tb_kind(c->Dn),
+                           c->Ours && ids &&
+                               inst_xhci_name(ven, dev, canon, sizeof(canon)) == 1);
         }
         tr_sprintf(label, sizeof(label), "%s  (%s)%s%s%s%s",
                    c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "USB host controller",

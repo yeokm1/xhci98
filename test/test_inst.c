@@ -5938,6 +5938,221 @@ static void test_other_sets(void)
           strlen(inst_other_sums(INST_SET_FREE)) == 0, "sums: the record");
 }
 
+/* Task 43.73: the controller names (record 23 section 5.13, record 21
+ * section 3.3). Every name of both tables is within INST_NAME_MAX (98 SE's
+ * Device Manager, measured), ASCII, the compact form, one row per id; the
+ * NHI table is exactly xhcicm.inf's and xhcicm-amd64.inf's model lines,
+ * string for string; xhci98.inf's class line keeps the one plain name. */
+static int name_ok(const char *s)
+{
+    size_t i;
+
+    if (strlen(s) == 0 || strlen(s) > INST_NAME_MAX) {
+        return 0;
+    }
+    for (i = 0; s[i] != '\0'; i++) {
+        if ((unsigned char)s[i] < 0x20 || (unsigned char)s[i] > 0x7E ||
+            s[i] == '"' || s[i] == '%' || s[i] == ';') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void names_table(const INST_NAMEROW *t, int n, int nhi)
+{
+    char name[INST_NAME_MAX + 8];
+    char what[160];
+    int i;
+    int j;
+
+    for (i = 0; i < n; i++) {
+        int got = nhi ? inst_nhi_name(t[i].Ven, t[i].Dev, name, sizeof(name))
+                      : inst_xhci_name(t[i].Ven, t[i].Dev, name, sizeof(name));
+        sprintf(what, "%04lX:%04lX is named, within %d characters: '%s'",
+                (unsigned long)t[i].Ven, (unsigned long)t[i].Dev,
+                INST_NAME_MAX, name);
+        CHECK(got == 1 && name_ok(name), what);
+        CHECK(strncmp(name, "xHCI98 ", 7) == 0 &&
+              strstr(name, "Host") == NULL && strstr(name, "Thunderbolt") == NULL,
+              "the compact form: xHCI98 first, no Host, TB2/TB3");
+        CHECK(nhi ? t[i].Base != INST_NB_USB3 : t[i].Base == INST_NB_USB3,
+              "the row's base fits its table");
+        CHECK(t[i].Product != NULL && strchr(t[i].Product, ' ') != NULL,
+              "the product carries its maker");
+        for (j = 0; j < i; j++) {
+            if (t[j].Ven == t[i].Ven && t[j].Dev == t[i].Dev) {
+                CHECK(0, "one row per id");
+            }
+        }
+    }
+}
+
+/* The model lines of one NHI INF against the table: every line's string is
+ * the table's name for its id (the class line the plain name), and every
+ * row of the table is a line of each models section. */
+static void names_inf(const char *text, const char *section, const char *label)
+{
+    const char *p = inst_inf_section(text, section);
+    char line[512];
+    char key[128];
+    char value[256];
+    char id[128];
+    char desc[256];
+    char name[INST_NAME_MAX + 8];
+    char what[256];
+    int seen[128];
+    int lines = 0;
+    int i;
+
+    memset(seen, 0, sizeof(seen));
+    CHECK(p != NULL && instNhiNameCount <= 128, label);
+    while (p != NULL && (p = inst_inf_line(p, line, sizeof(line))) != NULL) {
+        INST_U32 vd;
+        INST_U32 ven;
+        INST_U32 dev;
+        if (!inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) ||
+            !inst_inf_field(value, 1, id, sizeof(id))) {
+            continue;
+        }
+        lines++;
+        CHECK(inst_inf_expand(text, key, desc, sizeof(desc)), "the token is defined");
+        if (inst_eq(id, "PCI\\CC_0C0340")) {
+            CHECK(strcmp(desc, INST_NAME_USB4) == 0, "the class line: the plain name");
+            continue;
+        }
+        CHECK(inst_pci_vendev(id, &vd), "an NHI line binds a PCI id");
+        ven = vd & 0xFFFFUL;
+        dev = vd >> 16;
+        sprintf(what, "%s %s: '%s' is the table's name", label, id, desc);
+        CHECK(inst_nhi_name(ven, dev, name, sizeof(name)) == 1 &&
+              strcmp(desc, name) == 0 && name_ok(desc), what);
+        for (i = 0; i < instNhiNameCount; i++) {
+            if (instNhiNames[i].Ven == ven && instNhiNames[i].Dev == dev) {
+                seen[i] = 1;
+            }
+        }
+    }
+    CHECK_EQ(lines, instNhiNameCount + 1, "one line per row, and the class line");
+    for (i = 0; i < instNhiNameCount; i++) {
+        sprintf(what, "%s binds %04lX:%04lX", label,
+                (unsigned long)instNhiNames[i].Ven,
+                (unsigned long)instNhiNames[i].Dev);
+        CHECK(seen[i], what);
+    }
+}
+
+static void test_names(void)
+{
+    char name[INST_NAME_MAX + 8];
+    char small[12];
+    char *cm = load("..\\src\\cm\\xhcicm.inf");
+    char *c64 = load("..\\src\\cm\\xhcicm-amd64.inf");
+    char *x86 = load("..\\src\\xhci98.inf");
+    char *a64 = load("..\\src\\xhci98-amd64.inf");
+    int rec;
+    static const char hwQ[] = "PCI\\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01\0"
+                              "PCI\\VEN_1B36&DEV_000D\0";
+    static const char ccQ[] = "PCI\\CC_0C0330\0PCI\\CC_0C03\0";
+    static const char hwN[] = "PCI\\VEN_8086&DEV_15BF&SUBSYS_22B117AA\0";
+    static const char ccN[] = "PCI\\CC_088000\0";
+    static const char hwU[] = "PCI\\VEN_ABCD&DEV_0001\0PCI\\CC_0C0330\0";
+
+    names_table(instXhciNames, instXhciNameCount, 0);
+    names_table(instNhiNames, instNhiNameCount, 1);
+    CHECK(name_ok(INST_NAME_USB3) && name_ok(INST_NAME_USB4) &&
+          name_ok(INST_NAME_TB2) && name_ok(INST_NAME_TB3), "the plain names");
+
+    CHECK(inst_xhci_name(0x1B36UL, 0x000DUL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (Red Hat QEMU xHCI)") == 0,
+          "QEMU's controller");
+    CHECK(inst_xhci_name(0x1B21UL, 0x3242UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (ASMedia ASM3242)") == 0,
+          "the owner's example");
+    CHECK(inst_xhci_name(0x1B21UL, 0x1142UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (ASMedia ASM1042A)") == 0,
+          "1142 is the ASM1042A (Linux xhci-pci.c), 1242 the ASM1142");
+    CHECK(inst_xhci_name(0x8086UL, 0x15C1UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (Intel Alpine Ridge)") == 0,
+          "the emulator's Alpine Ridge xHCI");
+    CHECK(inst_xhci_name(0xABCDUL, 0x0001UL, name, sizeof(name)) == 0 &&
+          strcmp(name, INST_NAME_USB3) == 0, "an id the table lacks: the plain name");
+    CHECK(inst_nhi_name(0x8086UL, 0x15BFUL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 TB3 Controller (Intel Alpine Ridge)") == 0,
+          "the captured NHI");
+    CHECK(inst_nhi_name(0x8086UL, 0x156AUL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 TB2 Controller (Intel Falcon Ridge)") == 0,
+          "Falcon Ridge is TB2");
+    CHECK(inst_nhi_name(0x8086UL, 0x7EC2UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB4 Router (Intel Meteor Lake)") == 0,
+          "the owner's example");
+    CHECK(inst_nhi_name(0x1B36UL, 0x00F4UL, name, sizeof(name)) == 0 &&
+          strcmp(name, "xHCI98 USB4 Router") == 0, "any other USB4 host: the plain name");
+    CHECK(inst_xhci_name(0x1B36UL, 0x000DUL, small, sizeof(small)) == 0 &&
+          small[0] == '\0', "a buffer too small is left empty");
+
+    CHECK(inst_dev_canon(hwQ, sizeof(hwQ), ccQ, sizeof(ccQ), "xhci98", name,
+                         sizeof(name)) &&
+          strcmp(name, "xHCI98 USB 3 Controller (Red Hat QEMU xHCI)") == 0,
+          "ours: the canonical name");
+    CHECK(!inst_dev_canon(hwQ, sizeof(hwQ), ccQ, sizeof(ccQ), "usbxhci", name,
+                          sizeof(name)) && name[0] == '\0',
+          "Windows' own driver: no name of ours");
+    CHECK(!inst_dev_canon(hwQ, sizeof(hwQ), ccN, sizeof(ccN), "xhci98", name,
+                          sizeof(name)), "xhci98 on no xHCI class: not a controller");
+    CHECK(inst_dev_canon(hwN, sizeof(hwN), ccN, sizeof(ccN), "xhcicm", name,
+                         sizeof(name)) &&
+          strcmp(name, "xHCI98 TB3 Controller (Intel Alpine Ridge)") == 0,
+          "the NHI under xhcicm");
+    CHECK(inst_dev_canon(hwU, sizeof(hwU), "", 0, "xhci98", name, sizeof(name)) &&
+          strcmp(name, INST_NAME_USB3) == 0, "ours, unknown id: the plain name");
+
+    /* The reconciliation (record 23 section 5.13). */
+    CHECK(inst_name_action(1, "A (x)", "", NULL, &rec) == INST_NAME_SET && rec,
+          "ours, no name: set and recorded");
+    CHECK(inst_name_action(1, "A (x)", "A (x)", "A (x)", &rec) == INST_NAME_NONE &&
+          rec, "ours, already ours: nothing, still recorded");
+    CHECK(inst_name_action(1, "A (x)", "A (x)", NULL, &rec) == INST_NAME_NONE &&
+          rec, "the same name with no record: adopted");
+    CHECK(inst_name_action(1, "A (y)", "A (x)", "A (x)", &rec) == INST_NAME_SET &&
+          rec, "the table's name changed: set again");
+    CHECK(inst_name_action(1, "A (x)", "My USB", NULL, &rec) == INST_NAME_NONE &&
+          !rec, "a rename stays, not recorded");
+    CHECK(inst_name_action(1, "A (x)", "My USB", "A (x)", &rec) == INST_NAME_NONE &&
+          !rec, "a rename after ours stays, the record forgotten");
+    CHECK(inst_name_action(1, NULL, "A (x)", "A (x)", &rec) == INST_NAME_CLEAR &&
+          !rec, "an id the table no longer holds: ours cleared");
+    CHECK(inst_name_action(0, "A (x)", "A (x)", "A (x)", &rec) == INST_NAME_CLEAR &&
+          !rec, "another driver now: ours cleared");
+    CHECK(inst_name_action(0, "A (x)", "Vendor name", "A (x)", &rec) ==
+          INST_NAME_NONE && !rec, "another driver's own name stays");
+    CHECK(inst_name_action(0, NULL, "A (x)", NULL, &rec) == INST_NAME_NONE && !rec,
+          "never recorded: never touched");
+    CHECK(inst_name_action(0, NULL, "", "A (x)", &rec) == INST_NAME_NONE && !rec,
+          "already gone: forgotten");
+
+    CHECK(cm != NULL && c64 != NULL && x86 != NULL && a64 != NULL,
+          "the NHI and controller INFs read");
+    if (cm != NULL && c64 != NULL) {
+        names_inf(cm, "CmModels", "xhcicm.inf [CmModels]");
+        names_inf(cm, "CmModels.NTx86.6.0", "xhcicm.inf [CmModels.NTx86.6.0]");
+        names_inf(c64, "CmModels.NTamd64", "xhcicm-amd64.inf [CmModels.NTamd64]");
+        names_inf(c64, "CmModels.NTamd64.6.0",
+                  "xhcicm-amd64.inf [CmModels.NTamd64.6.0]");
+    }
+    if (x86 != NULL && a64 != NULL) {
+        CHECK(inst_inf_expand(x86, "%XhciDesc%", name, sizeof(name)) &&
+              strcmp(name, INST_NAME_USB3) == 0 &&
+              inst_inf_expand(a64, "%XhciDesc%", name, sizeof(name)) &&
+              strcmp(name, INST_NAME_USB3) == 0,
+              "xhci98.inf's class line: the one plain name");
+    }
+    free(cm);
+    free(c64);
+    free(x86);
+    free(a64);
+}
+
 int main(void)
 {
     test_versions();
@@ -5982,6 +6197,7 @@ int main(void)
     test_vsd();
     test_vsd_names();
     test_other_sets();
+    test_names();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

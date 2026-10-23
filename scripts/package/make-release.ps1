@@ -5514,8 +5514,10 @@ CD, a shared folder - then:
       code 1 until a restart. Both have only been run in virtual
       machines.{ARCHINSTALL}
 
-It installs as "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98
-USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
+It installs as "xHCI98 USB 3 Controller", with "xHCI98 USB 3.x Root Hub"
+underneath it; SETUP.EXE adds the controller's maker and product, as in
+"xHCI98 USB 3 Controller (Renesas uPD720202)", and a hand install does
+not. Neither should carry a warning mark.
 
 THE UAS DRIVER installs the first time a UAS disk is plugged in. On
 Windows 98 SE, ME, 2000, XP and Vista a New Hardware wizard asks for its

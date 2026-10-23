@@ -1,6 +1,10 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 38, 2026-10-23 (roadmap-usb4 task 43.48: the free and
+Status: revision 39, 2026-10-23 (roadmap-usb4 task 43.73, the owner: the
+controllers named with maker and product, the xHCI controllers through
+the FriendlyName this tool writes and clears, the NHIs through their INF
+lines, 98 SE's 46 characters; section 5.13; recorded at the batch 10 merge);
+revision 38, 2026-10-23 (roadmap-usb4 task 43.48: the free and
 non-free driver sets a download carries, copied to the install directory
 and optionally staged for the first plug, the switches `/free`,
 `/freestage`, `/nonfree` and `/nonfreestage`, and their removal in the
@@ -1816,6 +1820,246 @@ Only 22H2 is read here, and the release notes say so (43.36).
   guest with Secure Boot on the note's text and the load refused as it
   says" is therefore a documentation reading, not a leg.
 
+### 5.13 Controller names (roadmap-usb4 task 43.73, owner 2026-10-23)
+
+The owner's decisions of 2026-10-23: every controller this package drives
+shows in Device Manager as its base name with the maker and the product
+after it, `Base (Maker Product)`, in the compact form, with no driver
+version in any name (the version is the Driver tab's and XHCITR's): `xHCI98
+USB 3 Controller (Renesas uPD720202)`, `xHCI98 TB3 Controller (Intel Titan
+Ridge)`, `xHCI98 USB4 Router (Intel Meteor Lake)`; the class catch-alls
+stay plain, `xHCI98 USB 3 Controller` and `xHCI98 USB4 Router`.
+Documents introduce "Thunderbolt 3 (TB3)" once. The same hardware gets the
+same name on every system and both architectures. The rule over all of it:
+**no change may alter which driver Windows ranks first on any system.**
+
+**Two routes, chosen by that rule.** `src\xhci98.inf` matches
+`PCI\CC_0C0330` alone and must stay so: a hardware-id line would outrank
+Windows' own `usbxhci.sys` on 8, 8.1 and 10 (section 5.12, record 21
+section 3.6). It keeps one plain name, `XhciDesc` = `xHCI98 USB 3
+Controller` (it was `xHCI98 USB 3.x eXtensible Host Controller` up to
+3.1.0.0), and the installer names each controller its table knows through
+the devnode's **FriendlyName**, which every target's Device Manager shows
+in the description's place (read on 98 SE below; on NT
+`SPDRP_FRIENDLYNAME`, Microsoft's documented property). The NHI is the
+other case: `xhcicm.inf` already carries a line per NHI id beside its class
+line (record 21 section 3.3), so its names are those lines' own
+descriptions, one `[Strings]` entry per product, and no FriendlyName is
+written for an NHI. A description is no input to the ranking - a driver's
+rank comes from which of the device's ids the line matched and where that
+id stands in its list, then the signature, date and version (Microsoft,
+"How Windows Ranks Drivers"; on 98 SE and ME the setup engine's `DRIVER_NODE` rank, "0 is the most compatible", which record 27 section 5 reads, is the match's too) - so a
+different string on the same line ranks the same; no line was added,
+removed or moved, and the gates' `CM-IDLIST`, `CM-IDSET` and
+`CM-CLASSLINE` still hold the lines to the table of `src\cm\cm_vals.c`.
+The tunnel ports' bridges keep the filter INF's names (record 21 section
+3.3) and are never given a FriendlyName, so the uninstall's `unfilter_nt`,
+which gives a bridge back to `machine.inf` and leaves its devnode, has no
+name of this package's to clear there.
+
+#### 5.13.1 The length: read on 98 SE
+
+98 SE's Device Manager was read in a QEMU guest (the clean 98 SE base,
+640x480, the default Windows Standard scheme, whose items are MS Sans
+Serif 8 and whose captions MS Sans Serif 8 bold), task 43.73,
+2026-10-23. Test devnodes were made root-enumerated
+(`HKLM\Enum\Root\XNAME\nnnn`, class System, `ConfigFlags` 0x40 so no wizard
+runs, imported with `regedit /s`), Device Manager's Refresh listed them
+under System devices, and each was read in the tree ("View devices by
+type", the default) and in its Properties dialog (the caption, which is
+"<name> Properties", and the General tab's name line). A FriendlyName set
+beside a DeviceDesc was the name shown (the same reading).
+
+| Name (characters) | Tree | Caption | General tab |
+|---|---|---|---|
+| `xHCI98 USB4 Router (Intel Meteor Lake)` (38) | whole | whole, "Properties" whole | whole |
+| `xHCI98 USB 3 Controller (Zhaoxin ZX-200)` (40) | whole | whole, "Properties" whole | whole |
+| `xHCI98 TB3 Controller (Intel Alpine Ridge)` (42) | whole | whole, "Properties" whole | whole |
+| `xHCI98 USB 3 Controller (Red Hat QEMU xHCI)` (43) | whole | whole, "Propert..." | whole |
+| `xHCI98 USB 3 Controller (Intel Alpine Ridge)` (44) | whole | whole, "Properties" whole | whole |
+| `xHCI98 USB 3 Controller (Fresco Logic FL1000)` (45) | whole | whole, "Properti..." | whole |
+| `xHCI98 USB 3 Controller (Intel Sunrise Point-LP)` (48) | whole | whole, "Prop..." | whole |
+| `xHCI98 USB 3 Controller (ASMedia ASM2142/ASM3142)` (49) | cut ("...ASM3") | cut ("...ASM31...") | wrapped to a second line |
+| `xHCI98 USB 3 Controller (Intel 100 Series/C230 Series)` (54) | whole | cut ("...C230 Serie...") | whole, at the edge |
+
+The 54-character name shows that the width, not the count, is the limit
+(its glyphs are narrow); the stock "Advanced Configuration and Power
+Interface (ACPI) BIOS" (52) already reaches the tree's edge. The narrowest
+place is the caption, where the name is followed by " Properties" in bold:
+the word is cut first, then the name. **The hard maximum is 46
+characters** (`INST_NAME_MAX`, `xhciinst\inst_core.h`): below the first
+truncation of a name (49) with a margin for wider letters, every name of
+both tables within it, and `test_inst` refuses a longer one. Within it the
+name itself is whole everywhere; " Properties" after a name of 43 or more
+characters may be cut in the caption, which is Windows' word, not the
+name. "View devices by connection" indents a PCI device three levels
+deeper (Computer, the BIOS enumerator, PCI bus) and was not the view
+measured. Every name of both tables was then read the same way on 98 SE
+and on ME (section 5.13.6).
+
+#### 5.13.2 The xHCI table
+
+`instXhciNames` in `xhciinst\inst_core.c` is the table: a controller of an
+id in it is named `xHCI98 USB 3 Controller (<product>)`, any other keeps the
+INF's plain name. Its ids are the controllers this repository knows: the
+quirk surveys (design record 20 and its Linux mirror `xhci-pci.c`, whose
+`PCI_DEVICE_ID_*` names are cited by symbol), record 16's PCH list, the
+controller list of `docs/contributing/build-and-test.md` ("Tier 2", "Tier
+3"), the machines the project has run (`runs/run-35.md`, `run-36.md`), and
+QEMU's. The product is the form those sources give, shortened only to an
+established alias within the 46 characters (the Intel chipsets by their
+series, an "LP" for the on-package PCH that the sources call PCH-LP, as
+Linux's `LYNXPOINT_LP` and record 16's "Lynx Point-LP"); pci.ids
+(2026.10.23) was read as a cross-check only.
+
+| Id | Product | Source (repository first) |
+|---|---|---|
+| `1002:7316` | AMD Navi 10 | record 20 Q11 (ATI Navi10); Linux `PCI_DEVICE_ID_ATI_NAVI10_7316_XHCI` |
+| `1022:13ED`, `13EE` | AMD Ariel | Linux `PCI_DEVICE_ID_AMD_ARIEL_TYPEC_XHCI`, `_TYPEA_`; record 20 (interval-9 row) |
+| `1022:148C` | AMD Starship | Linux `PCI_DEVICE_ID_AMD_STARSHIP_XHCI`; record 20 |
+| `1022:15D4`, `15D5` | AMD FireFlight | Linux `PCI_DEVICE_ID_AMD_FIREFLIGHT_15D4_XHCI`, `_15D5_`; record 20 |
+| `1022:15E0`, `15E1` | AMD Raven | Linux `PCI_DEVICE_ID_AMD_RAVEN_15E0_XHCI`, `_15E1_`; record 20 Q7 |
+| `1022:15E5` | AMD Raven2 | Linux `PCI_DEVICE_ID_AMD_RAVEN2_XHCI`; record 20 Q3, Q16 |
+| `1022:1639` | AMD Renoir | Linux `PCI_DEVICE_ID_AMD_RENOIR_XHCI` (pci.ids: Renoir/Cezanne) |
+| `1022:43B9`, `43BA`, `43BB`, `43BC` | AMD X370, AMD X399, AMD 300 Series, AMD A320 | Linux `PCI_DEVICE_ID_AMD_PROMONTORYA_4` to `_1`; record 20 Q7, U2 rows; the chipset names pci.ids' |
+| `1022:7814` | AMD FCH | build-and-test Tier 2 (Kaveri/Carrizo APU); pci.ids "FCH USB XHCI Controller" |
+| `1033:0194` | NEC uPD720200 | build-and-test Tier 2 |
+| `104C:8241` | TI TUSB73x0 | record 20 Q10; pci.ids "TUSB73x0" |
+| `1106:3432` | VIA VL800/VL801 | record 20 Q2 (`xhci-pci.c` 286-288); pci.ids "VL800/801" |
+| `1106:3483` | VIA VL805/VL806 | Linux `PCI_DEVICE_ID_VIA_VL805`; build-and-test Tier 3 (VL805/VL806) |
+| `1912:0014`, `0015` | Renesas uPD720201, uPD720202 | build-and-test Tier 2 |
+| `1B21:1042` | ASMedia ASM1042 | Linux `PCI_DEVICE_ID_ASMEDIA_1042_XHCI`; build-and-test Tier 2 |
+| `1B21:1142` | ASMedia ASM1042A | Linux `PCI_DEVICE_ID_ASMEDIA_1042A_XHCI`; record 20 Q9 |
+| `1B21:1242` | ASMedia ASM1142 | Linux `PCI_DEVICE_ID_ASMEDIA_1142_XHCI` |
+| `1B21:2142` | ASMedia ASM2142 | Linux `PCI_DEVICE_ID_ASMEDIA_2142_XHCI` (pci.ids: ASM2142/ASM3142, 49 characters with the base, so Linux's form) |
+| `1B21:3042` | ASMedia ASM3042 | Linux `PCI_DEVICE_ID_ASMEDIA_3042_XHCI`; record 20 Q3 |
+| `1B21:3242` | ASMedia ASM3242 | Linux `PCI_DEVICE_ID_ASMEDIA_3242_XHCI`; the owner's example |
+| `1B36:000D` | Red Hat QEMU xHCI | record 13 (qemu-xhci); the owner's example |
+| `1B6F:7023`, `7052` | Etron EJ168, EJ188 | Linux `PCI_DEVICE_ID_ETRON_EJ168`, `_EJ188`; record 20 Q14a |
+| `1B73:1000` | Fresco Logic FL1000 | Linux `PCI_DEVICE_ID_FRESCO_LOGIC_PDK`; record 20 Q1 ("FL1000/PDK") |
+| `1B73:1009`, `1100`, `1400` | Fresco Logic FL1009, FL1100, FL1400 | Linux `PCI_DEVICE_ID_FRESCO_LOGIC_FL1009`, `_FL1100`, `_FL1400`; record 20 Q1, Q2 |
+| `1D17:9202`, `9203` | Zhaoxin ZX-100, ZX-200 | record 20 Q3, Q13; pci.ids |
+| `8086:1E31` | Intel 7 Series | record 16 (Panther Point, 7-series); the B490 (`runs/run-35.md`) |
+| `8086:8C31` | Intel 8 Series | record 16 (Lynx Point, 8-series); the owner's example "8 Series/C220 Series" is 52 characters with the base |
+| `8086:9C31` | Intel 8 Series LP | record 16 (Lynx Point-LP, 8-series mobile); Linux `PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_XHCI` |
+| `8086:8CB1` | Intel 9 Series | record 16 (Wildcat Point, 9-series) |
+| `8086:9CB1` | Intel 9 Series LP | record 16 (Wildcat Point-LP, 9-series mobile); the E7250 (`runs/run-36.md`) |
+| `8086:8D31` | Intel C610/X99 | record 16 (Wellsburg, C610/X99) |
+| `8086:9D2F` | Intel 100 Series LP | record 20 (Sunrise Point-LP, 100-series mobile); the E460 (`runs/run-35.md`) |
+| `8086:A12F` | Intel 100 Series | record 20 (Sunrise Point-H, 100-series desktop) |
+| `8086:02ED` | Intel 400 Series LP | the P14s Gen 1 (build-and-test, Comet Lake); pci.ids "400 Series Chipset Family On-Package" |
+| `8086:A3AF` | Intel 400 Series | Linux `PCI_DEVICE_ID_INTEL_COMET_LAKE_XHCI`; pci.ids B460/H410 |
+| `8086:A0ED` | Intel 500 Series LP | record 20 (Tiger Lake PCH); pci.ids "500 Series Chipset Family On-Package" |
+| `8086:51ED` | Intel Alder Lake PCH | record 20; Linux `PCI_DEVICE_ID_INTEL_ALDER_LAKE_PCH_XHCI` |
+| `8086:54ED` | Intel Alder Lake-N | record 20; Linux `PCI_DEVICE_ID_INTEL_ALDER_LAKE_N_PCH_XHCI` |
+| `8086:22B5` | Intel Cherryview | record 20; Linux `PCI_DEVICE_ID_INTEL_CHERRYVIEW_XHCI` |
+| `8086:5AA8` | Intel Apollo Lake | record 20; Linux `PCI_DEVICE_ID_INTEL_APOLLO_LAKE_XHCI` |
+| `8086:0AA8`, `1AA8` | Intel Broxton | Linux `PCI_DEVICE_ID_INTEL_BROXTON_M_XHCI`, `_B_XHCI` |
+| `8086:19D0` | Intel Denverton | record 20; Linux `PCI_DEVICE_ID_INTEL_DENVERTON_XHCI` |
+| `8086:8A13` | Intel Ice Lake | Linux `PCI_DEVICE_ID_INTEL_ICE_LAKE_XHCI` (the CPU's Thunderbolt xHCI) |
+| `8086:9A13` | Intel Tiger Lake | Linux `PCI_DEVICE_ID_INTEL_TIGER_LAKE_XHCI` |
+| `8086:1138` | Intel Maple Ridge | Linux `PCI_DEVICE_ID_INTEL_MAPLE_RIDGE_XHCI` |
+| `8086:15B5`, `15B6`, `15C1`, `15D4`, `15DB` | Intel Alpine Ridge | Linux `PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_2C_XHCI`, `_4C_`, `_LP_`, `_C_4C_`, `_C_2C_`; `15C1` the P14s's and the emulator's `usb4-tb3-xhci` |
+| `8086:15E9`, `15EC`, `15F0` | Intel Titan Ridge | Linux `PCI_DEVICE_ID_INTEL_TITAN_RIDGE_2C_XHCI`, `_4C_`, `_DD_` |
+
+Left out, for the owner (the controller keeps the plain name meanwhile):
+`1022:145C` (pci.ids "Family 17h (Models 00h-0fh)", no product name in any
+source here), `1022:43FC` and `43FD` (Promontory 21, record 20; the 600 or
+800 series is not established here), `17CD:0200` (Cadence, no product in
+any source), and the non-x86 `1DB7:DC27`, `14E4:9026`, `177D:9026`. Two
+rows of build-and-test's Tier 3 carry ids that are not PCI controllers'
+(`1D5C:1000` for the FL1000, whose vendor is `1B73`; `2109:0812` and
+`0813`, VIA Labs' USB hub ids, for the VL805/VL806, whose PCI id is
+`1106:3483`), and are not taken.
+
+#### 5.13.3 The NHI names
+
+Record 21 section 3.3 holds the NHI table (`instNhiNames`, the same file):
+the generation's base, `xHCI98 TB2 Controller`, `xHCI98 TB3 Controller` or
+`xHCI98 USB4 Router`, and the maker and product, one string per product in
+both NHI INFs; `test_inst` holds every model line of `xhcicm.inf` and
+`xhcicm-amd64.inf` to the table string for string, and the gate's
+`CM-DESC` holds each id to its product's token.
+
+#### 5.13.4 The reconciliation
+
+`names_reconcile` (`xhciinst\inst_eng.c`) runs at the normal end of every
+install run with the USB drivers in it - never in a run that was refused,
+stopped (a changed plan, an unsettled tree, a barrier that failed) or
+cancelled, and never under `/list` - **whatever the run installed**: a run
+that found every device current reinstalled nothing (`inst_action_runs`),
+and a machine updated by hand through Have Disk and then given to the
+installer is named all the same. On 98 SE and ME it runs before the run
+opens Device Manager. It runs again at the end of the uninstall, before its
+records go. It scans the devices again (after the run's last use of its
+plan) and, for each xHCI controller and each instance the record
+names, takes `inst_name_action`'s decision (`inst_core.c`, the host suite's
+vectors):
+
+| The controller | Its FriendlyName now | Done |
+|---|---|---|
+| xhci98's, id in the table | none, or the one this installer recorded writing, or already the table's | set to the table's name (nothing when it is already), recorded |
+| xhci98's, id in the table | any other (the user's rename, a vendor tool's) | left; any record of ours forgotten |
+| xhci98's, id no longer in the table | the one recorded | cleared, forgotten |
+| another driver's now (a later driver, Windows Update), or any controller at the uninstall | the one recorded | cleared, forgotten: a name saying xHCI98 on another driver's controller would be false |
+| any | not the one recorded, or no record | left |
+| a recorded instance with no devnode | - | forgotten |
+
+The record is `HKLM\Software\xhci98\Names`, one `REG_SZ` per instance id,
+the name written; it lists absent devices too, so a controller another
+driver took over, or one not plugged in, is still found at the uninstall
+(on NT the device list holds phantoms, `DIGCF_ALLCLASSES` without
+`DIGCF_PRESENT`; on 98 SE and ME the devnode's `HKLM\Enum` key, which the
+uninstall's removal deletes with its value). The key goes when it is
+empty, so the install directory's key can (section 9.6). On NT the write is
+`SetupDiSetDeviceRegistryPropertyA(SPDRP_FRIENDLYNAME)`, and the clear the
+same call with no data; on 98 SE and ME the value `FriendlyName` of the
+devnode's `HKLM\Enum` key; on NT the name is read from the devnode's
+`Enum` key itself, since SetupAPI answers `ERROR_INVALID_DATA` both for a
+value absent and for one it cannot return. The record is written before the
+name, and put back if the write fails, so a name this installer wrote never
+lacks its record. A record goes only when the devnode is shown absent (the
+device list read to its end, or the `Enum` key not found); a list, key or
+value that cannot be read leaves both the name and the record as they are,
+said and no failure of the run. More recorded instances than one scan holds
+(1,536) leave the rest recorded, say so and ask for the run again. **At
+the uninstall a name left so stops the uninstall before its final removal**
+(the tools, the Add/Remove Programs entry and the install directory's
+record stay, `stop_uninstall`), so the next uninstall can still find and
+clear it. The scan the step makes replaces the device list; the
+safe-removal mark decision that follows the install run reads that list,
+so it rescans first if the last scan was short, and leaves the service as
+it is if that fails too. The run prints each change under
+"Device Manager names:", and the plan names the controller as the run will
+leave it, by the same decision ("Device Manager name: ...", or the name it
+was given and that it keeps).
+
+#### 5.13.5 XHCITR
+
+XHCITR shows the same canonical name: a devnode xhci98 drives that is an
+xHCI controller, or one xhcicm drives (the NHI), is named by the same
+table (`inst_dev_canon`, linked from `inst_core.c`), whatever its
+FriendlyName or DeviceDesc says, in the tree, the details and the report
+(`dn_name`); its suffix then gives the ids alone (" - 1912:0015"), since
+the name carries the maker. Another driver's controller keeps its own
+description and the maker suffix.
+
+#### 5.13.6 The readings
+
+Task 43.73's legs (`docs/contributing/runs/run-43.md`, "43.73"): every
+name of both tables whole in 98 SE's and ME's Device Manager; on 98 SE the
+`qemu-xhci` controller (`1B36:000D`) and the emulator's Alpine Ridge xHCI
+named at an update from 3.0.0.0 and gone with their devnodes at the
+uninstall, the `tb3-alpine-ridge` NHI installed under its INF name; on 7
+x86 the controller named at an install, at a same-version run that
+reinstalled nothing, again after `/force` (whose reinstall had cleared the
+FriendlyName) and cleared with its devnode at the uninstall, the
+`usb4-generic` NHI under the class line's plain name; XHCITR on both.
+**98 SE's Properties caption shows the DeviceDesc**, not the FriendlyName
+("xHCI98 USB 3 Controller Properties"), where 7's shows the FriendlyName:
+on 98 SE and ME the product shows in the tree and on the General tab only.
+Whether the installer should write the 9x DeviceDesc too is the owner's.
+
 ## 6. The Windows 98 SE and ME route
 
 ### 6.1 What exists on these systems, and what is not used
@@ -1954,7 +2198,7 @@ For each xHCI controller (`PCI\CC_0C0330` among its ids):
   "Specify a location" and the local directory; Windows 98 SE may ask for
   its CD; restart when asked, and on ME restart anyway;
 - **an older `xhci98.sys`**: the same Update Driver route on "xHCI98 USB
-  3.x eXtensible Host Controller", "Search for a better driver than the
+  3.x eXtensible Host Controller" (an older package's name for it), "Search for a better driver than the
   one your device is using now", no box ticked; restart afterwards
   although Windows does not ask (release notes, "Updating from 2.y.y.y");
   then the same route on "xHCI98 USB 3.x Root Hub", listed as a step of
@@ -2291,7 +2535,7 @@ Per value, once, for every device it applies to:
 
 ```
 XhciForceBulkOnly - Bulk-Only instead of UAS for a disk that offers both
-  now: 0 (xHCI98 USB 3.x eXtensible Host Controller)
+  now: 0 (xHCI98 USB 3 Controller (Intel 8 Series))
   allowed:
     0  UAS where the disk offers it
     1  Bulk-Only
@@ -2678,11 +2922,13 @@ system's `CFGMGR32.DLL`). So the tool:
    step 4) - the device installer's own copies, and the plain copies the
    INFs' `DefaultInstall` sections make - and the driver files present;
 3. prints the steps, dependants first: in Device Manager remove "xHCI98
-   USB Attached SCSI Storage" and an "xHCI98 Thunderbolt 2 Controller",
-   "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" if
-   there is one,
-   then "xHCI98 USB 3.x eXtensible Host Controller" (which removes the root
-   hub and everything beneath it); then delete the listed INF files, so
+   USB Attached SCSI Storage" and an "xHCI98 TB2 Controller", "xHCI98 TB3
+   Controller" or "xHCI98 USB4 Router" if there is one, then "xHCI98 USB 3
+   Controller" (each name with its product in parentheses where section
+   5.13's tables know it; the controller's removal takes the root hub and
+   everything beneath it; up to 3.1.0.0 the names were "xHCI98 Thunderbolt
+   2 Controller", "xHCI98 Thunderbolt 3 Controller", "xHCI98 USB4 Host
+   Router" and "xHCI98 USB 3.x eXtensible Host Controller"); then delete the listed INF files, so
    the restart cannot find the driver again; then restart, and
    cancel the New Hardware wizard if it offers the controller; then
    delete the driver files listed and restart once more.

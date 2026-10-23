@@ -211,7 +211,12 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 Provider="Yeo Kheng Meng"
 Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
-XhciDesc="xHCI98 USB 3.x eXtensible Host Controller"
+; XhciDesc is the one plain name of the class line, which no hardware-id
+; line may join (it would outrank Windows' own usbxhci on 8 to 10): the
+; installer names each controller its table knows (xHCI98 USB 3
+; Controller (Renesas uPD720202)) through its FriendlyName (record 23
+; section 5.13, task 43.73).
+XhciDesc="xHCI98 USB 3 Controller"
 RootHubDesc="xHCI98 USB 3.x Root Hub"
 HubDesc="xHCI98 USB Hub"
 Hub30Desc="xHCI98 USB 3.x Hub"

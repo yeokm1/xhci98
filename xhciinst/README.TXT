@@ -34,6 +34,16 @@ this package's own files include no Microsoft file (the downloads'
 NUSB33, and NONFREE in the -nonfree download, carry some: see their
 readme.txt).
 
+The names in Device Manager: each USB 3 controller the installer knows is
+named with its maker and product, as in "xHCI98 USB 3 Controller (Renesas
+uPD720202)". Every install or update run writes that name (the device's
+FriendlyName), even one that had nothing to reinstall, and the uninstall
+removes it; a name you gave the controller yourself is kept. A controller
+installed from the INF alone shows the plain "xHCI98 USB 3 Controller".
+Thunderbolt and USB4 controllers take theirs from the INF, as in "xHCI98
+TB3 Controller (Intel Titan Ridge)" and "xHCI98 USB4 Router (Intel Meteor
+Lake)" - TB2 and TB3 are Thunderbolt 2 and Thunderbolt 3.
+
 The connection manager alone: you can leave the USB drivers (xhci98.sys,
 xhciuas.sys) out and install only the Thunderbolt 3 / USB4 connection
 manager, for a computer whose USB 3 controllers already run another
