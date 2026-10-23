@@ -4635,8 +4635,8 @@ and on its General tab.
   narrowest: " Properties" after a name of 43 or more characters was cut
   first. A FriendlyName set beside a DeviceDesc was the name in the tree.
   Hence `INST_NAME_MAX` 46.
-- Every name of both tables (71: 63 product names of the xHCI table, 13 of
-  the NHI table, less the shared ones, and the two plain names), the same
+- Every name of both tables (71: the 55 names of the xHCI table, the 14 of the NHI table
+  and the two plain names), the same
   way on 98 SE and on ME: every one whole in the tree, in the caption (the
   word "Properties" cut after some) and on one line of the General tab.
 
