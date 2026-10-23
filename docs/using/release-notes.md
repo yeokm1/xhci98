@@ -1004,6 +1004,12 @@ have every leg.
 - **Standby and hibernation with a tunnelled device attached are
   unsupported** on every system, and so is standby with an integrated
   controller (Ice Lake and later). Stop and unplug the device first.
+  Where the tunnel port is a native PCIe hot-plug port (the integrated
+  USB4 root ports, and the emulator's q35 port), Windows finds the port
+  empty at the resume, before the tunnel is back, and reports the drive
+  missing: files written shortly before the hibernation are lost, and
+  the drive comes back only when it is plugged in again. Always use Safely
+  Remove before standby or hibernation.
 - **Windows 98 SE and ME: a device plugged in after the start needs an
   interrupt line from the BIOS.** On the ThinkPad P14s Gen 1 the BIOS's
   routing table covers the Thunderbolt port (read from a capture); on
