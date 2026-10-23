@@ -268,6 +268,9 @@ void pf_tx_s(PF_TEXT *t, const char *s);
 void pf_tx_u(PF_TEXT *t, pf_u64 v);
 void pf_tx_pad(PF_TEXT *t, const char *s, int width, int right);
 void pf_tx_nl(PF_TEXT *t);
+/* label, then text word-wrapped to 79 columns, later lines indented to the
+ * label's width; a line break after the last */
+void pf_tx_wrapped(PF_TEXT *t, const char *label, const char *text);
 
 /* The file's ownership header (section 3.1): PF_UNIT bytes. */
 typedef struct pf_header {
@@ -317,6 +320,7 @@ typedef struct pf_runinfo {
     pf_u32 attributes;
     const char *stor98;     /* the Stor98 page's text, or "" */
     int endVerify;          /* PF_EV_: the whole file's verification at the end */
+    const char *stopped;    /* why the run ended before its plan did, or NULL or "" */
 } PF_RUNINFO;
 /* The whole file's verification at a run's end */
 #define PF_EV_NONE          0   /* not asked, or no verification */

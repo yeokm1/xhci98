@@ -858,7 +858,11 @@ button says to run the tool as an administrator).
 [/depth <n>] [/threads <n>] [/report <file>] [/exit]` starts the run at
 once with those parameters over the defaults, writes the report if asked
 and exits with 0 (every test passed), 1 (a test failed or a data error),
-2 (refused) or 3 (stopped). The window shows the run; `/exit` closes it at
+2 (refused) or 3 (stopped). A run that ends before its plan does gives
+the reason in its report's header (`Stopped:`), and a run refused before
+it begins still writes a report of three lines with the folder and the
+refusal (`Refused:`), so a batch file's report always says what
+happened. The window shows the run; `/exit` closes it at
 the end. This is what the emulator legs drive (43.12's unattended route)
 and what a user pastes into a batch file. `/selftest` renders every text
 of the pure half at its longest to a file and exits, for section 10.3.
@@ -1414,6 +1418,21 @@ Each the author's, for the owner to confirm, unless it names the owner.
 | P.9 | 98 SE and 7 x64 | install, update with the tool running, uninstall: the file placed, "steps left", removed |
 | P.10 | the owner's hardware | 98 SE on the P14s with Stor98, before and after 43.46's VSD; Windows 10 or 7 on the same drive; the saved files compared |
 
+**Narrowed (the coordinator's overnight decision, 2026-10-23, pending the
+owner's review).** 98 SE: every leg of the table but P.6 and P.10. ME: the
+9x set again (P.1, P.2, P.5 with and without S98VSD.VXD, P.7, P.8). NT:
+P.3, P.4 and P.6 on 2000, XP, 7 and 10, x86 (10 x64 only where cheap); on
+8 and 8.1 one P.4 smoke run (Quick) each. The other cells of P.4, P.7 to
+P.9 on 7, and XP x64, Vista and 8 x64 stay owed.
+
+**On the owner's real-check list.** On real 98 SE hardware, whether the
+Quick preset's 2 s timed steps on the IDE system disk end near 2 s. On the
+emulator under heavy PIO the guest's tick count (the deadline's clock) lagged
+the performance counter (the measurement's) about fourteen times: a 2 s
+step ran 28 s by the counter. The figures stay right, since they use the
+counter; only the step's length is in question, and the clock is not
+changed until the reading.
+
 ### 14.3 Decided by the owner (2026-10-22)
 
 Every question draft 8 left for the owner is answered: the Stor98 change
@@ -1593,6 +1612,20 @@ a choice:
   Stor98's counters); where it finds no SCSI instance present at all,
   the letter's only claimant, and with more than one the page and the
   report say the registry gives the letter to that many disks.
+- **The buffer's physical order on 98 SE (2026-10-23, emulator)**: a
+  second run in one boot had every aligned request double-buffered by IOS
+  and cut into 63 KiB pieces. The cause is the physical order of the
+  buffer's pages, not the tool: a probe that allocated a 128 KiB buffer
+  400 times at the same linear address, wrote 16 unbuffered requests from
+  it and freed it saw them alternate exactly, whole in one round and
+  double-buffered in the next, as the page allocator handed the same
+  pages back in reversed order (32 physical runs, over the DCB's 17
+  scatter/gather elements). After a fresh start the free list is mostly
+  ascending, so a first run's aligned buffer usually arrives whole; after
+  other programs have freed memory it often does not. With S98VSD.VXD
+  (43.46) the demand for physical scatter/gather is gone and every
+  request arrived whole in both orders. The 9x facts now say so when the
+  demand stands, and the release notes carry it as a known limitation.
 - **Owed**: the legs of section 14 (P.0 live, P.1 to P.10), all of them on
   virtual machines or the owner's hardware; until then its readings are
   the 98 SE smoke runs and the owner's 98 SE bench above, not the

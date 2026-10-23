@@ -188,6 +188,12 @@ of 512 MB and a tenth of the drive).
   system into 63 KiB pieces before Stor98 sees it, and a 128 to 512 KiB
   one too when its buffer is physically fragmented; with it, requests of
   up to 2 MiB reach Stor98 whole. The Stor98 page shows which.
+- **Known limitation: the buffer's physical order on 98 SE.** On 98 SE,
+  without `S98VSD.VXD`, whether a test's buffer reaches the drive whole
+  depends on how physically ordered Windows' free memory is: usually yes
+  after a fresh start, often not after other programs have run. An aligned
+  buffer is no exception; the Stor98 page's buffer-layout line says what
+  each test's requests were.
 - **Stor98:** where the bundled Stor98 drives the disk, the Stor98 page
   shows what reached the drive during each test - the sizes of the
   requests Stor98 received and of the commands it sent, its splits, the

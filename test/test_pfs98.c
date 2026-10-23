@@ -236,6 +236,36 @@ static void test_buckets_page(void)
 
 /* The report's line for a run whose tests carry no Stor98 page: one per
  * state, each a single line beginning "Stor98: " */
+/* On 9x with physical scatter/gather demanded the facts say that the
+ * buffer's mode does not decide whether a request arrives whole; with the
+ * demand removed by a layer they do not */
+static void test_facts_order(void)
+{
+    char buf[2048];
+    PF_TEXT t;
+    S98_ANSWER a;
+
+    build(5);
+    put32(ans + S98_OFS_DCBSEEN, 1);
+    put32(ans + S98_OFS_DCBMAXXFER, 524288u);
+    put32(ans + S98_OFS_DCBMAXSG, 17);
+    put32(ans + S98_OFS_DCBDMD, 0x00040E00u);
+    CHECK(s98_parse(ans, S98_ANSWER_BYTES, &a), "an answer with the DCB's facts");
+    pf_tx_init(&t, buf, sizeof(buf));
+    s98_facts(&t, &a, 1);
+    CHECK(strstr(buf, "lies in 17 physical pieces or fewer, which even an aligned buffer is not sure to") != NULL,
+          "the demand: an aligned buffer is not sure to arrive whole");
+    pf_tx_init(&t, buf, sizeof(buf));
+    s98_facts(&t, &a, 0);
+    CHECK(strstr(buf, "physical pieces") == NULL, "not on NT");
+    put32(ans + S98_OFS_DCBDMD, 0x00040600u);
+    CHECK(s98_parse(ans, S98_ANSWER_BYTES, &a), "the demand removed");
+    pf_tx_init(&t, buf, sizeof(buf));
+    s98_facts(&t, &a, 1);
+    CHECK(strstr(buf, "removed the demand") != NULL && strstr(buf, "physical pieces") == NULL,
+          "no such line once a layer removed the demand");
+}
+
 static void test_report_line(void)
 {
     static const struct {
@@ -276,6 +306,7 @@ int main(void)
     test_identity();
     test_buckets_page();
     test_report_line();
+    test_facts_order();
     printf("test_pfs98: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

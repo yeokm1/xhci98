@@ -687,6 +687,8 @@ static void disk_facts(const char *folder, PF_ENV *e)
 /* ------------------------------------------------------------------------ */
 
 static int g_s98state;
+/* why the last run ended before its plan did, for its report */
+static char g_runWhy[400];
 /* The run's search state, as its report states it: set as the run starts
  * and changed only by the run's own counter reads */
 static int g_runS98state, g_runS98matches, g_runS98ids;
@@ -1949,6 +1951,11 @@ static void record_put(RUN *r, pf_u64 planned, pf_u64 prepared)
     memcpy(rec + 36, &r->indexHi, 4);
     RegSetValueExA(k, "Leftover", 0, REG_BINARY, rec, sizeof(rec));
     RegSetValueExA(k, "LeftoverPath", 0, REG_SZ, (const BYTE *)r->path, (DWORD)strlen(r->path) + 1);
+    if (prepared == 0 || prepared == planned) {
+        /* 98 SE and ME write the registry lazily: without this a crash during
+         * the preparation loses the record of the file it leaves behind */
+        RegFlushKey(k);
+    }
     RegCloseKey(k);
 }
 
@@ -2061,6 +2068,40 @@ static int leftover_offer(HWND owner, const char *path, int quiet)
     return 1;
 }
 
+/* 1 when path is surely not there: the system says the file is not found
+ * and its folder answers. A drive that is gone, not ready or answering
+ * nothing (a disk unplugged during a run, a letter not there after a
+ * restart) leaves it unknown, and the record is kept for the next start. */
+static int file_surely_gone(const char *path)
+{
+    char dir[MAX_PATH];
+    char *slash;
+    DWORD err;
+
+    if (GetFileAttributesA(path) != 0xFFFFFFFF) {
+        return 0;
+    }
+    err = GetLastError();
+    if (err != ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    sz_cpy(dir, sizeof(dir), path);
+    slash = strrchr(dir, '\\');
+    if (slash == NULL) {
+        return 0;
+    }
+    if (slash == dir + 2 && dir[1] == ':') {
+        /* the drive's root: its volume answers */
+        char vol[32];
+        DWORD serial, maxc, fl;
+
+        slash[1] = 0;
+        return GetVolumeInformationA(dir, vol, sizeof(vol), &serial, &maxc, &fl, NULL, 0) != 0;
+    }
+    *slash = 0;
+    return GetFileAttributesA(dir) != 0xFFFFFFFF;
+}
+
 /* Only a file this run created is deleted, and never by its name alone:
  * on NT the anchor's FILE_FLAG_DELETE_ON_CLOSE deletes it as the last
  * handle closes; on 9x, which has no handle-bound deletion, the name is
@@ -2084,6 +2125,8 @@ static void cleanup_file(RUN *r)
             /* still there and still ours: another program holds it open */
             gone = !handle_is_ours(r, h, 0);
             CloseHandle(h);
+        } else if (!file_surely_gone(r->path)) {
+            gone = 0;       /* the drive does not answer: not known to be deleted */
         }
     } else {
         h = CreateFileA(r->path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
@@ -2095,7 +2138,7 @@ static void cleanup_file(RUN *r)
             if (!ours || !DeleteFileA(r->path)) {
                 gone = 0;
             }
-        } else if (GetFileAttributesA(r->path) != 0xFFFFFFFF) {
+        } else if (!file_surely_gone(r->path)) {
             gone = 0;
         }
     }
@@ -2931,6 +2974,7 @@ static char *build_report(size_t *lenOut)
     ri.attributes = g_attributes;
     ri.stor98 = pages;
     ri.endVerify = (int)g_endVerify;
+    ri.stopped = g_runWhy;
     pf_tx_init(&t, buf, cap);
     {
         /* the run's workload; only how values are shown follows the window */
@@ -3651,6 +3695,18 @@ static void controls_enable(int on)
 
 static void refuse(const char *why)
 {
+    if (g_cl.report[0] != 0 && g_cl.run) {
+        /* a command-line run refused before it began still leaves its report */
+        char buf[1024];
+        PF_TEXT t;
+
+        pf_tx_init(&t, buf, sizeof(buf));
+        pf_tx_s(&t, "xHCI98 Disk Benchmark " XHCIPERF_VERSION);
+        pf_tx_nl(&t);
+        pf_tx_wrapped(&t, "Folder:      ", g_folder);
+        pf_tx_wrapped(&t, "Refused:     ", why);
+        write_file(g_cl.report, buf, t.len);
+    }
     if (g_cl.exitAtEnd) {
         log_add(why);
         g_cliExit = 2;
@@ -3670,6 +3726,7 @@ static void start_run(void)
     if (g_running) {
         return;
     }
+    g_runWhy[0] = 0;
     params_from_ui();
     if (check_folder(g_folder, canon, sizeof(canon), why, sizeof(why)) != 0) {
         refuse(why);
@@ -4297,6 +4354,7 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         SetWindowTextA(g_status, "Ready");
         log_add("Run ended.");
         InvalidateRect(g_view, NULL, TRUE);
+        sz_cpy(g_runWhy, sizeof(g_runWhy), lp != 0 ? (const char *)lp : "");
         if (g_cl.report[0] != 0) {
             size_t n;
             char *r = build_report(&n);
@@ -4613,7 +4671,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
         rp[0] = 0;
         if (!g_cl.run && record_get(&rec, rp, sizeof(rp)) && GetFileAttributesA(rp) != 0xFFFFFFFF) {
             leftover_offer(w, rp, 0);
-        } else if (!g_cl.run && rec.present && GetFileAttributesA(rp) == 0xFFFFFFFF) {
+        } else if (!g_cl.run && rec.present && rp[0] != 0 && file_surely_gone(rp)) {
             record_clear();
         }
     }

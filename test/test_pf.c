@@ -498,6 +498,42 @@ static void test_key_saved(void)
     }
     CHECK_EQ(pf_saved_parse(buf, t.len, &sv), 0, "the saved file reads back");
     CHECK_EQ(sv.nrows, 8, "eight results");
+    CHECK(strstr(buf, "Stopped:") == NULL, "a run that ended as planned has no Stopped line");
+    {
+        /* a run that ended early says why, wrapped within 79 columns */
+        static char b2[65536];
+        PF_TEXT t2;
+        const char *s, *l;
+        int ok = 1;
+
+        ri.stopped = "There is not enough free space on this drive for the test file: it needs 1,024 MB and "
+                     "the drive has 300 MB free beyond the Windows drive's reserve.";
+        pf_tx_init(&t2, b2, sizeof(b2));
+        pf_report(&t2, &p, &pl, res, 1, &ri);
+        l = strstr(b2, "Stopped:     There is not enough free space");
+        CHECK(l != NULL, "the Stopped line");
+        {
+            const char *nx = l != NULL ? strstr(l, "\r\n") : NULL;
+
+            CHECK(nx != NULL && strncmp(nx + 2, "             ", 13) == 0 && nx[15] != ' ' && nx[15] != '\r',
+                  "wrapped under its label");
+        }
+        for (s = b2; *s; ) {
+            const char *e2 = strstr(s, "\r\n");
+            size_t n = e2 ? (size_t)(e2 - s) : strlen(s);
+
+            if (n > 79 && strncmp(s, "XPRF-", 5) != 0) {
+                ok = 0;
+            }
+            if (!e2) {
+                break;
+            }
+            s = e2 + 2;
+        }
+        CHECK(ok, "within 79 columns");
+        CHECK_EQ(pf_saved_parse(b2, t2.len, &sv), 0, "and the saved file still reads back");
+        ri.stopped = NULL;
+    }
     CHECK(strcmp(sv.rows[0].label, "Seq 1M d8 t1") == 0 && sv.rows[0].op == PF_OP_WRITE, "the first row");
     CHECK_EQ(pf_saved_value(&sv.rows[1], PF_SHOW_BEST, 0), 2000, "the second row's rate");
     CHECK_EQ(sv.rows[1].npass, 1, "one pass kept");
