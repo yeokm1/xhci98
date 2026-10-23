@@ -3456,6 +3456,49 @@ unticked and its note, on a real NUSB setup. Shots in
 `E:\xhci98-vm\p43-62\shots\` (`n-*`, `hcdwiz-n-*`); the package in
 `E:\xhci98-vm\p43-62\pkg32`. Guest closed.
 
+## 43.66 XHCITR's "can run faster" balloon the shell did not show (2026-10-23)
+
+43.28's finding 1: on 7, a stick's first plug gave no balloon of ours
+while Windows' own "Your device is ready to use" balloon showed.
+
+**Vehicle.** Development host A, QEMU 11.1.0 (scoop), TCG, `pc`,
+`qemu64`, two vCPUs, 1536 MB, the clock at 2026-09-20 as 43.28 ran it;
+Windows 7 SP1 x86 (`vm\t28pre\win7-base`, an overlay); `qemu-xhci`
+`p2=4,p3=2`, a tablet on QEMU port 1, QEMU's Full Speed `usb-hub` on
+port 4 and VVFAT sticks behind it, each with a serial of its own so
+that Windows meets it for the first time. The package of `p43-66` at
+`401d49fb`, `INSTALL /console /yes /nopause` elevated, one restart.
+Kit `E:\xhci98-vm\p43-6x` (git-ignored). The balloons read from
+screenshots of the notification area every 4 to 10 s.
+
+**Readings.**
+
+1. `401d49fb` (the first watch: a re-send after a timeout or hide, the
+   no-answer re-send only once the shell had answered): first plug
+   with the user idle. Windows' "Installing" and then "Your device is
+   ready to use" held the area for about seven minutes, since 7 keeps
+   a balloon while nobody uses the machine; once the pointer moved it
+   went, and no balloon of ours followed in the next two minutes. The
+   icon was red in the overflow. 43.28's case, reproduced.
+2. The same build with a log of every watch event, the user active: the
+   balloon was sent, `NIN_BALLOONSHOW` came 9.7 s later, and
+   `NIN_BALLOONTIMEOUT` 8.5 s after that when Windows' replaced it: shown,
+   so not sent again.
+3. The same, a new stick with the user idle for 150 s: no message at all
+   for our balloon while Windows' stayed - no show, no timeout - so the
+   no-answer re-send went at 60 s (the session had heard a show in 2);
+   once the pointer moved Windows' went and ours was shown, once, then
+   timed out. A queued balloon on 7 is answered by silence, which the
+   first build only acted on after an earlier answer: reading 1's first
+   balloon of the session had none.
+4. `bcdbe4b4` (Vista and later count as answering from the start; a
+   re-send first takes the queued balloon away): a new tray process, its
+   first balloon, a new stick, the user idle for 150 s, then active:
+   ours shown once after Windows' went, no second balloon in the next
+   two minutes. **Passes.**
+
+Design record 25 section 7.7 item 9.
+
 ## 43.53 - A Request to a Departed Device That Never Completes
 
 Roadmap-usb4 task 43.53, opened by the owner on 2026-10-22 from 43.49's
