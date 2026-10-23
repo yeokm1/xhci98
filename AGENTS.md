@@ -793,6 +793,16 @@ rules that bind day-to-day work, and none of them is optional.
   `nusb33/` (kept apart from its `non-free/` pack, owner 2026-10-22) with
   their `NOTICE.md`, never in a commit, and with no licence to redistribute them
   established; the generated readme says which kind of download it is.
+  The second is decided for `3.2.0.0` as well (owner, 2026-10-22, task
+  43.48) and recorded there: download 3, `xhci98-<version>-nonfree.zip`,
+  carries the `non-free/` folder of `usb-wdm-nonfree` at a pinned tag as
+  `NONFREE\`, other makers' drivers among which are two Microsoft KMDF
+  co-installers, unmodified, with no licence to redistribute them found
+  beyond the few makers' statements the pack's `NOTICE.md` quotes;
+  download 2, `-free.zip`, carries the qualifying
+  `usb-wdm-free` drivers (GPL-2.0) as `WDMFREE\`. Both in the release
+  downloads only, never in a commit; the installer copies them only when
+  ticked and never installs them.
   **Do not put any other Microsoft file onto the media or the download,
   under any name, without a decision recorded there**, and do not write
   "this project redistributes nothing"

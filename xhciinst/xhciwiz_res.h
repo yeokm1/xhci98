@@ -21,8 +21,9 @@
 #define IDD_FINISH              108
 #define IDD_UWELCOME            109
 #define IDD_ADVANCED            110
+#define IDD_OTHER               111     /* the other USB drivers (section 6.7) */
 /* Record 26 section 5.0 (draft 35): the Change folder dialog. */
-#define IDD_FOLDER              111
+#define IDD_FOLDER              112
 
 /* The controls. */
 #define IDC_TITLE               1001
@@ -71,6 +72,16 @@
 #define IDC_A_LABEL             1082
 #define IDC_A_CHOICE            1083
 #define IDC_A_EDIT              1084
+/* The other USB drivers' page (record 26 section 6.7.4): per set (free
+ * first, then non-free, IDC_O_STRIDE apart) the box, its sentence, the
+ * stage box, its line and the line under the row. */
+#define IDC_O_BASE              1090
+#define IDC_O_STRIDE            5
+#define IDC_O_BOX               0
+#define IDC_O_TEXT              1
+#define IDC_O_STAGE             2
+#define IDC_O_STAGE_T           3
+#define IDC_O_LINE              4
 
 /* The settings rows, made at run time: a label, a choice (a combo box, or
  * an edit box for a range), a note, per row. */

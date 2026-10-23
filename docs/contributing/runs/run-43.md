@@ -5103,3 +5103,115 @@ refuses a miniport that opts in is not read. Owed: the fixed package
 signed (the owner) and Stor98 read starting on 10 x64 from it; on a
 machine with Kernel DMA Protection on, a tunnelled drive under Stor98
 waits for sign-in again, as before `3.2.0.0`.
+
+## 43.48 - The Other USB Drivers: the Installer's Legs
+
+2026-10-23, branch `p43-48b` after the batch 7 merge (`07294a20`), with
+the three fixes these legs led to (the record adopted after a lost key,
+the flushes, the Summary's folder). The package: the dry cut's download
+3 (`make-release.ps1 -Arch x86 -TestLabel`, real pins, release flavour:
+`xhci98-3.1.0.0-nonfree.zip`'s tree, `NONFREE\` from usb-wdm-nonfree
+v1.0.0), the installer's executables rebuilt with the fixes. QEMU 11.1.0,
+`qemu-xhci p2=4,p3=2`, headless, one guest at a time, kit
+`E:\xhci98-vm\p43-48` (QMP 49010), overlays over the read-only bases.
+Readings are runtime, through the window's pages, the console's text,
+`regedit /e` and `reg query` exports and the record file, read over the
+guest's serial port.
+
+### Windows 98 SE (the gold image, 640 by 480)
+
+- **The page.** "Other USB drivers" after Components, at 640 by 480:
+  the free set's line in the row's place ("The free USB class drivers are
+  not in any download of this release yet: see
+  https://github.com/yeokm1/usb-wdm-free."), the non-free row with its
+  sentence, its stage box greyed until the row is ticked ("Stages 9 of
+  their INFs for this Windows."), its address line. Everything fits; no
+  control is cut. Next with the row ticked showed the non-free warning,
+  OK went on.
+- **The Summary** first said "copied to \NONFREE": the engine's text took
+  the tools folder before the run had set it. Fixed to take the window's
+  chosen folder; then "copied to C:\XHCI98\NONFREE, its INFs for this
+  Windows staged".
+- **A copy cut short.** Power cut through QMP 20 s into "Copying
+  Non-free driver pack": the record file held 249 whole entries (F, T, D
+  each), no open line, no temporary file. The next run stopped the set
+  with "its record file could not be made": the registry's
+  `Other\NonFree` key had not survived the cut (98 SE writes its registry
+  out later) and the file was there. Fixed: a record file whose whole
+  first line is this set's header is taken as this installer's and its
+  key made again. The run after the fix copied the rest (a second run
+  token, 224 entries), 457 distinct files in the record. Fifteen files
+  the first run had recorded D were absent at the second and were copied
+  again, and three (in `rtl815x\wxp`) were present with other bytes at
+  the uninstall; that the cut lost their writes is the likely reading,
+  not taken further. Fixed for later runs: each copy is flushed before
+  its D line, and `RecordMade` with `RegFlushKey`.
+- **The stage.** `DevicePath` after the run:
+  `C:\WINDOWS\INF;C:\XHCI98;` and the five 98 SE folders of `STAGE.TXT`
+  (ax88772, ftdi, ft2232d, ch341, x360c), each recorded under
+  `Other\NonFree\Staged` with the data `DevicePath`.
+- **The Finish page** paragraph: the free set's line, then "Non-free
+  driver pack (usb-wdm-nonfree): in C:\XHCI98\NONFREE, its INFs for this
+  Windows staged. Up to date: https://github.com/yeokm1/usb-wdm-nonfree."
+  and the seven folders for this Windows to point the wizard at.
+- **A plug.** QEMU's `usb-serial` (FTDI 0403:6001; it enumerates only with
+  a chardev that opens - a `null` chardev leaves it unaddressed) on a
+  root port: "New Hardware Found", no wizard: Windows took FTDIBUS.INF
+  from the staged folder. Its file copy asked for the "FTDI USB Drivers
+  Disk", offering `D:\WIN98`, not the folder; with the folder typed the
+  driver installed. Windows then stopped responding (not read: the
+  vendor's 98 driver on this stack, or QEMU's serial model; the owner's
+  rule of 2026-10-22, no checks of the non-free drivers themselves).
+- **The uninstall** (the window, from `C:\XHCI98`): the five folders
+  taken out of `DevicePath` one by one, the copies deleted, the folders
+  removed, the key gone; three files of `rtl815x\wxp` left as "changed
+  since this installer copied it" (the cut's survivors with other bytes),
+  so `C:\XHCI98` stayed with them. Exit 3.
+
+### Windows XP SP3
+
+- **The console**: `INSTALL /console /yes /nonfreestage /nopause`: the
+  non-free warning under "WARNING:", the run, Windows' unsigned-package
+  questions answered for each staged INF; the paragraph at the end (the
+  free line, the copied folder, "its INFs for this Windows staged", six
+  folders and "and 1 more: see C:\XHCI98\NONFREE\STAGE.TXT"). Exit 3.
+- `reg query`: `Other\NonFree` with `RecordMade` 1 and six `own` values,
+  `oem2.inf` to `oem7.inf` (ax88772, ax88179, rtl815x, ch341, x360c,
+  x360wc), each with the INF's hash.
+- **The uninstall** (`INSTALL /console /uninstall`, REMOVE): "oem2.inf
+  was removed from the driver store" to oem7, the copies removed,
+  `C:\XHCI98` removed; afterwards no `Software\xhci98` key, no
+  `C:\XHCI98`, no `oem*.inf` in `%windir%\inf`. Exit 3.
+
+### A lost key, on the final installer
+
+The adoption of a record file whose key was lost (record 26 section
+6.7.5) was reworked after the legs above; it was read again on a fresh
+overlay of each guest, from a dry cut of the final code. Each time: the
+console install with `/yes /nonfreestage`, the set's key deleted by hand
+(`reg delete` on XP, a `REGEDIT4` file with `[-...]` on 98 SE), then
+`INSTALL /console /uninstall`.
+
+- **XP SP3**: the same six `own` INFs staged; the uninstall said the
+  record "was found with no registry key, and is taken as this
+  installer's again", kept eight folders (the six staged and two whose
+  INFs hold the same bytes, `rtl815x\wxp\WINXP\64` and
+  `ch341\w98se-xp\WIN 1X`), one to a line, removed every other copy
+  and the record, and left `oem2.inf` to `oem7.inf` in the store (whose
+  they are is not known). No `Software\xhci98` key afterwards. Exit 3.
+  A first run took four minutes over the store (each INF of the set
+  hashed every INF of the store); the store is now hashed once, and the
+  run takes under a minute.
+- **98 SE**: five folders on `DevicePath`; after the key's deletion the
+  uninstall kept the five entries and their folders ("whose the entry is
+  is not known"), removed `C:\XHCI98` from `DevicePath`, every other
+  copy, the record and `Software\xhci98`. Exit 3.
+
+### Verdict
+
+The page at 640 by 480, a copy and a stage on 98 SE and on XP, a staged
+folder found at a plug on 98 SE, a copy cut short and resumed, a lost
+key adopted, and the uninstall on both: read, with the fixes above. Not read: the free
+set (no release qualifies), ME, 2000, 7 and the x64 systems, a plug on
+XP (QEMU emulates none of the INFs staged there), the flush fix under
+another power cut.

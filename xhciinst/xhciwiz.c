@@ -94,7 +94,8 @@
 #define P_PROGRESS          7
 #define P_STEPS             8
 #define P_FINISH            9
-#define P_COUNT             10
+#define P_OTHER             10  /* after P_COMP (record 26 section 6.7.4) */
+#define P_COUNT             11
 
 #define WIZ_PATH            520
 #define WIZ_ROWS            12
@@ -145,6 +146,8 @@ static int fastForced;
 /* The USB storage drivers' box, Windows 98 SE alone (record 26 section
  * 6.5): shown, offered (the download's seven verified), ticked, the
  * detection's line. */
+static int othChoice[INST_SET_COUNT];
+static int othStage[INST_SET_COUNT];
 static int storShown;
 static int storOffered;
 static int storChoice;
@@ -454,6 +457,19 @@ static unsigned __stdcall job_main(void *arg)
             }
             storShown = inst_eng_stor_state(&storOffered, &storChoice,
                                             storNote, sizeof(storNote));
+            /* The other USB drivers' boxes: unticked, but by /free,
+             * /freestage, /nonfree and /nonfreestage (record 26 section
+             * 6.7.4), which the read applied. */
+            {
+                int set;
+                for (set = 0; set < INST_SET_COUNT; set++) {
+                    int state;
+                    int forThis;
+                    othChoice[set] = othStage[set] = 0;
+                    inst_eng_other_state(set, &state, &forThis,
+                                         &othChoice[set], &othStage[set]);
+                }
+            }
             EnterCriticalSection(&textLock);
             sink = &planText;
             LeaveCriticalSection(&textLock);
@@ -1257,6 +1273,122 @@ static int comp_leave(HWND dlg)
         }
     }
     comp_take(dlg);
+    return 1;
+}
+
+/* ---- the other USB drivers' page (record 26 section 6.7.4) --------------- */
+
+static int oth_id(int set, int what)
+{
+    return IDC_O_BASE + IDC_O_STRIDE * set + what;
+}
+
+/* The stage box open only while its set's box is ticked. */
+static void oth_sync(HWND dlg, int set)
+{
+    int state;
+    int forThis;
+    int inc;
+    int st;
+    int open;
+
+    if (!inst_eng_other_state(set, &state, &forThis, &inc, &st)) {
+        return;
+    }
+    open = state == INST_OTHER_CARRIED && forThis > 0 &&
+           IsDlgButtonChecked(dlg, oth_id(set, IDC_O_BOX)) == BST_CHECKED;
+    if (!open) {
+        CheckDlgButton(dlg, oth_id(set, IDC_O_STAGE), BST_UNCHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, oth_id(set, IDC_O_STAGE)), open);
+    EnableWindow(GetDlgItem(dlg, oth_id(set, IDC_O_STAGE_T)), open);
+}
+
+static void oth_fill(HWND dlg)
+{
+    int set;
+
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        char sentence[800];
+        char line[512];
+        char st[96];
+        int state = INST_OTHER_ABSENT;
+        int forThis = 0;
+        int inc = 0;
+        int stage = 0;
+        int shown;
+        int w;
+        RECT top;
+        RECT r;
+
+        inst_eng_other_state(set, &state, &forThis, &inc, &stage);
+        inst_eng_other_texts(set, dirChoice[0] ? dirChoice : "the tools folder",
+                             sentence, sizeof(sentence), line, sizeof(line));
+        shown = state == INST_OTHER_CARRIED;
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_BOX), inst_other_label(set));
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_TEXT), sentence);
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_STAGE),
+                        inst_other_stage_label());
+        inst_other_stage_text(st, sizeof(st), forThis);
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_STAGE_T), st);
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_LINE), line);
+        for (w = IDC_O_BOX; w <= IDC_O_STAGE_T; w++) {
+            ShowWindow(GetDlgItem(dlg, oth_id(set, w)), shown ? SW_SHOW
+                                                              : SW_HIDE);
+        }
+        /* Absent or not this release's, the line takes the row's place. */
+        r.left = 8;
+        r.top = set == INST_SET_FREE ? (shown ? 78 : 4) : (shown ? 186 : 112);
+        r.right = 8 + 284;
+        r.bottom = r.top + 26;
+        top = r;
+        MapDialogRect(dlg, &top);
+        SetWindowPos(GetDlgItem(dlg, oth_id(set, IDC_O_LINE)), NULL, top.left,
+                     top.top, top.right - top.left, top.bottom - top.top,
+                     SWP_NOZORDER);
+        CheckDlgButton(dlg, oth_id(set, IDC_O_BOX), shown && othChoice[set] ?
+                       BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(dlg, oth_id(set, IDC_O_STAGE),
+                       shown && othChoice[set] && othStage[set] ? BST_CHECKED
+                                                                : BST_UNCHECKED);
+        oth_sync(dlg, set);
+    }
+}
+
+/* Next from the page: the choices, and section 6.7.4's warnings, once per
+ * Next; Cancel in the box stays on the page. */
+static int oth_leave(HWND dlg)
+{
+    int set;
+    int changed = 0;
+    char warn[2048];
+    char box[2200];
+
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        int inc = IsDlgButtonChecked(dlg, oth_id(set, IDC_O_BOX)) ==
+                  BST_CHECKED;
+        int st = inc && IsDlgButtonChecked(dlg, oth_id(set, IDC_O_STAGE)) ==
+                 BST_CHECKED;
+        if (inc != othChoice[set] || st != othStage[set]) {
+            changed = 1;
+        }
+        othChoice[set] = inc;
+        othStage[set] = st;
+        inst_eng_other_choose(set, inc, st);
+    }
+    inst_eng_other_warnings(warn, sizeof(warn));
+    if (warn[0] != '\0') {
+        _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays on "
+                  "this page to change the choice.", warn);
+        box[sizeof(box) - 1] = '\0';
+        if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
+                        MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+            return 0;
+        }
+    }
+    if (changed) {
+        replan();
+    }
     return 1;
 }
 
@@ -2936,6 +3068,26 @@ static void summary_fill(HWND dlg)
                 tb_add(&t, line);
             }
         }
+        {
+            char ol[900];
+            inst_eng_other_summary(dirChoice, ol, sizeof(ol));
+            if (ol[0] != '\0') {
+                char *p = ol;
+                while (*p != '\0') {
+                    char *e = strstr(p, "\r\n");
+                    if (e != NULL) {
+                        *e = '\0';
+                    }
+                    _snprintf(line, sizeof(line) - 1, "- %s\n", p);
+                    line[sizeof(line) - 1] = '\0';
+                    tb_add(&t, line);
+                    if (e == NULL) {
+                        break;
+                    }
+                    p = e + 2;
+                }
+            }
+        }
         if (storShown) {
             char sl[400];
             inst_eng_stor_summary(sl, sizeof(sl));
@@ -3159,7 +3311,29 @@ static void finish_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_F_LAST, ran ? last :
                     "Nothing was changed.");
     EnterCriticalSection(&textLock);
-    set_edit(dlg, IDC_DETAIL, runText.Buf != NULL ? runText.Buf : "");
+    {
+        /* The other USB drivers' paragraph under the run's text, on every
+         * install run (record 26 section 6.7.7). */
+        static char para[4096];
+        char *all;
+        const char *run = runText.Buf != NULL ? runText.Buf : "";
+        para[0] = '\0';
+        if (!uninstallMode) {
+            inst_eng_other_finish(para, sizeof(para));
+        }
+        all = (char *)malloc(strlen(run) + strlen(para) + 8);
+        if (all != NULL) {
+            strcpy(all, run);
+            if (para[0] != '\0') {
+                strcat(all, "\n\n");
+                strcat(all, para);
+            }
+            set_edit(dlg, IDC_DETAIL, all);
+            free(all);
+        } else {
+            set_edit(dlg, IDC_DETAIL, run);
+        }
+    }
     LeaveCriticalSection(&textLock);
     SetDlgItemTextA(dlg, IDC_F_NOW, inst_page_text(cold ? INST_PT_SHUT_NOW
                                                         : INST_PT_NOW));
@@ -3355,6 +3529,13 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 comp_usb_click(dlg);
             }
             return TRUE;
+        case IDC_O_BASE + IDC_O_BOX:
+        case IDC_O_BASE + IDC_O_STRIDE + IDC_O_BOX:
+            if (HIWORD(wp) == BN_CLICKED) {
+                oth_sync(dlg, LOWORD(wp) == IDC_O_BASE + IDC_O_BOX ?
+                         INST_SET_FREE : INST_SET_NONFREE);
+            }
+            return TRUE;
         case IDC_S_ADVANCED:
             if (page == P_S98) {
                 s98_page_leave(dlg);
@@ -3409,6 +3590,10 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 break;
             case P_COMP:
                 comp_fill(dlg);
+                buttons(PSWIZB_BACK | PSWIZB_NEXT);
+                break;
+            case P_OTHER:
+                oth_fill(dlg);
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
             case P_USB:
@@ -3472,6 +3657,7 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 inst_eng_s98_file_ok(ok);
             }
             if ((page == P_COMP && !comp_leave(dlg)) ||
+                (page == P_OTHER && !oth_leave(dlg)) ||
                 ((page == P_USB || page == P_TBS) &&
                  !settings_leave(dlg, page))) {
                 SET_RESULT(dlg, -1);
@@ -3634,17 +3820,19 @@ static int run_wizard(void)
     /* Record 26 section 5.0: Welcome, Components, Summary, Progress,
      * (Steps), Finish; the settings in the Settings dialog. */
     static const int order[] = {
-        P_WELCOME, P_COMP, P_SUMMARY, P_PROGRESS, P_STEPS, P_FINISH
+        P_WELCOME, P_COMP, P_OTHER, P_SUMMARY, P_PROGRESS, P_STEPS,
+        P_FINISH
     };
     static const int uorder[] = { P_WELCOME, P_SUMMARY, P_PROGRESS, P_FINISH };
     static const int tmpl[P_COUNT] = {
         IDD_WELCOME, IDD_FOUND, IDD_COMPONENTS, IDD_SETTINGS, IDD_SETTINGS,
-        IDD_SETTINGS, IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH
+        IDD_SETTINGS, IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH,
+        IDD_OTHER
     };
     static const char *const title[P_COUNT] = {
         "Welcome", "What was found", "Components", "USB settings",
         "Thunderbolt settings", "Stor98 settings", "Summary", "Progress",
-        "Steps left for you", "Finish"
+        "Steps left for you", "Finish", "Other USB drivers"
     };
     PROPSHEETPAGEA pg[P_COUNT];
     HPROPSHEETPAGE hp[P_COUNT];
