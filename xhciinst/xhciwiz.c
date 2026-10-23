@@ -1357,12 +1357,13 @@ static void oth_fill(HWND dlg)
 
 /* Next from the page: the choices, and section 6.7.4's warnings, once per
  * Next; Cancel in the box stays on the page. */
-static int oth_leave(HWND dlg)
+/* The page's boxes taken into othChoice and othStage and the engine, on
+ * Next and on Back alike (so a Back to Components and Next again keeps
+ * them); 1 when a choice changed. */
+static int oth_capture(HWND dlg)
 {
     int set;
     int changed = 0;
-    char warn[2048];
-    char box[2200];
 
     for (set = 0; set < INST_SET_COUNT; set++) {
         int inc = IsDlgButtonChecked(dlg, oth_id(set, IDC_O_BOX)) ==
@@ -1376,6 +1377,15 @@ static int oth_leave(HWND dlg)
         othStage[set] = st;
         inst_eng_other_choose(set, inc, st);
     }
+    return changed;
+}
+
+static int oth_leave(HWND dlg)
+{
+    int changed = oth_capture(dlg);
+    char warn[2048];
+    char box[2200];
+
     inst_eng_other_warnings(warn, sizeof(warn));
     if (warn[0] != '\0') {
         _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays on "
@@ -3000,6 +3010,16 @@ static void summary_fill(HWND dlg)
                 dirNow[0] == '\0' || !inst_eq(dirNow, dirChoice) ||
                 (trayHere && trayChoice != inst_eng_tray_started()) ||
                 (trayHere && (fastForced || fastChoice != fastNow));
+        /* A driver set the download carries and the user chose to copy
+         * (section 6.7) counts too. */
+        for (i = 0; i < INST_SET_COUNT; i++) {
+            int state = INST_OTHER_ABSENT;
+            int forThis = 0;
+            int inc = 0;
+            int stage = 0;
+            inst_eng_other_state(i, &state, &forThis, &inc, &stage);
+            other |= state == INST_OTHER_CARRIED && othChoice[i];
+        }
         _snprintf(line, sizeof(line) - 1, "%s.\n\n",
                   inst_eng_summary_head(writes, other));
         line[sizeof(line) - 1] = '\0';
@@ -3675,6 +3695,9 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case PSN_WIZBACK:
             if (page == P_S98) {
                 s98_page_leave(dlg);
+            }
+            if (page == P_OTHER && oth_capture(dlg)) {
+                replan();       /* the warnings stay Next's (oth_leave) */
             }
             if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
                 SET_RESULT(dlg, -1);
