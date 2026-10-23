@@ -85,7 +85,8 @@ The work and the evidence behind each change are in [docs/PLAN.md](docs/PLAN.md)
 
 Since xhci98 3.2.0.0 (its roadmap 43.23, owner 2026-10-20) xhci98's installer offers
 Stor98 on Windows 8 and 8.1 as on 2000 to 7: on NVMe drives behind a Thunderbolt or USB4
-tunnel only, its box unticked by default there and marked untested until xhci98's
+tunnel only, its box ticked with the Thunderbolt box there as on every system (xhci98's
+design record 26 section 5.0; `/nostor98` leaves it out), untested until xhci98's
 Windows 8 legs (its roadmap 43.24) pass. Windows 8 has no NVMe driver of its own;
 Windows 8.1 binds its own `stornvme` to every NVMe controller, and the installer installs
 Stor98 over it, forced, on a tunnel drive it finds at install time. Read in the emulator
