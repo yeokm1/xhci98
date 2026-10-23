@@ -3128,7 +3128,7 @@ the user.
   unchanged. (b) `XhciInterruptMode` and `XhciForceBulkOnly` are no
   longer asked (their `Asked` mask 0: Advanced rows of the window);
   `/set` sets them as before. (c) Stor98's question takes its Enter
-  default from `inst_s98_default`, one line per system, [Y] on every
+  default from `inst_s98_box_default`, one line per system, [Y] on every
   system for now, 8 and 8.1 included (the `is8` exception and its
   warning removed). (d) On 98 SE and ME, with the USB drivers and the UAS
   driver in the run, `xhciuas.sys` is put in `%windir%\SYSTEM32\DRIVERS`

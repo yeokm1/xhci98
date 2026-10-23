@@ -814,7 +814,7 @@ not changed by this draft, an owner question (section 14).
 task 43.42's simplification, its code). The design above is built as it
 stands, with these points:
 
-- **Stor98's per-OS table** is `inst_s98_default` in the pure half, one
+- **Stor98's per-OS table** is `inst_s98_box_default` in the pure half, one
   line per system (98 SE, ME, 2000, XP, Vista, 7, 8, 8.1, 10): ticked on
   every system, 8, 8.1 and 10 included (the owner's interim of
   2026-10-22). Roadmap 43.59 (the owner, 2026-10-23 06:10: Windows'

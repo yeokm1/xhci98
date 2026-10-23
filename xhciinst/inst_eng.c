@@ -445,6 +445,7 @@ static int s98_rec_has(const char *sub, const char *name);
 static int s98_pending_resolve(int uninstall);
 static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
+static int own_put(const char *from, const char *to);
 
 static int haveCm;
 /* The connection manager alone (record 23 section 4.5, revision 13): the
@@ -2258,6 +2259,17 @@ static int check_package(void)
                       NULL);
     }
     haveCm = (cmFiles == 3);
+    {
+        /* Record 23 D20 (a): the x64 connection manager only with its
+         * catalog (owner, 2026-10-22). */
+        const char *why;
+        join(path, sizeof(path), pkgDir, "xhcicm.cat");
+        why = inst_cm_cat_refusal(INST_MY_ARCH, haveCm,
+                                  file_exists(path, NULL));
+        if (why != NULL) {
+            return refuse(why, " Nothing was changed.");
+        }
+    }
     if (!haveCm) {
         out("This package carries no Thunderbolt or USB4 driver "
             "(xhcicm.sys); going on without it.\n\n");
@@ -8417,10 +8429,16 @@ static int steps_9x(const char *dir)
     }
     /* The Thunderbolt half only when this run copied its INF (section 8.5). */
     out("\nThen run INSTALL.BAT again, to check the result and set the "
-        "driver's options.\n"
-        "A UAS disk%s found later finds its driver\nin the same folder by "
-        "itself.\n",
-        (haveCm && tbInclude) ? " or a Thunderbolt controller" : "");
+        "driver's options.\n");
+    if (usbInclude && uasInclude) {
+        out("A UAS disk plugged in later opens Windows' New Hardware wizard "
+            "(again at\nanother port); Next until Finish installs it, no "
+            "disk asked for.\n");
+    }
+    if (haveCm && tbInclude) {
+        out("A Thunderbolt controller found later finds its driver in the "
+            "same folder\nby itself.\n");
+    }
     if (envNow.Minor == 10 && !stor_covered()) {
         out("On Windows 98 SE any disk, UAS included, needs the USB storage "
             "drivers: the\ninstaller's row for them, or NUSB's mass-storage "
@@ -8996,6 +9014,41 @@ static int pass_any(int inf, int controllers)
  * driver, at most four passes; the UAS devices; the host interface. Each
  * pass behind the gate. Every device of the plan that is left goes to the
  * steps. */
+/* Record 26 section 5.0 (draft 35): on 98 SE and ME the UAS driver's
+ * file where the New Hardware wizard looks for it, so a UAS disk plugged
+ * in later installs from the copy on DevicePath with no Insert Disk prompt
+ * (the wizard asks at Windows' own SourcePath for a file not yet at its
+ * destination). The 9x uninstall's file list removes it. */
+static void uas_sys_9x(void)
+{
+    char src[INST_PATH_CHARS];
+    char dst[INST_PATH_CHARS];
+
+    if (envNow.Nt || opts.List || !usbInclude || !uasInclude) {
+        return;
+    }
+    join(src, sizeof(src), srcDir, "xhciuas.sys");
+    if (GetWindowsDirectoryA(dst, sizeof(dst)) == 0) {
+        out("xhciuas.sys could not be put in SYSTEM32\\DRIVERS: no Windows "
+            "directory.\n");
+        flagFailed = 1;
+        return;
+    }
+    join(dst, sizeof(dst), dst, "SYSTEM32\\DRIVERS\\xhciuas.sys");
+    if (same_file(src, dst)) {
+        logonly("uas: %s is the package's\n", dst);
+        return;
+    }
+    if (!own_put(src, dst)) {
+        out("xhciuas.sys could not be put in %s: a UAS disk plugged in later "
+            "asks for the\ndriver disk (type %s).\n", dst, srcDir);
+        flagFailed = 1;
+        return;
+    }
+    flagChanged = 1;
+    out("Copied xhciuas.sys to %s.\n", dst);
+}
+
 static void helper_installs(void)
 {
     int k;
@@ -9419,6 +9472,7 @@ static int run_install_9x(void)
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
     hashed_cleanup();
     helper_installs();
+    uas_sys_9x();
     s98_file_update_9x();
     vsd_run(vsd_mode(0));
     write_values();
@@ -15768,7 +15822,7 @@ static void s98_question(void)
     char text[1024];
 
     r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
-                        opts.NoStor98, opts.List, osKind == INST_OS_CMONLY,
+                        opts.NoStor98, opts.List, inst_eng_s98_default(),
                         &asked, &def);
     if (!haveS98) {
         s98_apply(0);
@@ -21039,22 +21093,15 @@ static int stor_silent_remove(void)
 
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap)
 {
+    /* The window's row on 98 SE alone (record 26 section 5.0): case 1,
+     * the files copied elsewhere, is the console's /storage only. */
     if (storTools) {
-        *offered = storPack > 0;
-        *def = storToolsInclude;
+        *offered = 0;
+        *def = 0;
         if (cap > 0) {
-            if (storPack == 0) {
-                inst_copy(note, "This download does not carry them.", cap);
-            } else if (storPack < 0) {
-                inst_copy(note, "The storage files in this download are not "
-                          "the ones this release carries.", cap);
-            } else {
-                inst_copy(note, "For Windows 98 SE only: ticked here, the "
-                          "files are copied to the tools folder, nothing "
-                          "installs them.", cap);
-            }
+            note[0] = '\0';
         }
-        return 1;
+        return 0;
     }
     *offered = storHere && storPack > 0;
     *def = storInclude;
@@ -21134,6 +21181,30 @@ int inst_eng_s98_state(int *have, char *version, size_t cap)
     *have = haveS98;
     inst_copy(version, s98VersionText, cap);
     return s98Include;
+}
+
+int inst_eng_s98_default(void)
+{
+    return inst_s98_box_default(inst_sys_index(envNow.Nt, envNow.Major,
+                                           envNow.Minor));
+}
+
+int inst_eng_restage_state(void)
+{
+    int k;
+
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (trapOem[k][0] != '\0') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void inst_eng_restage_choose(int on)
+{
+    opts.Restage = on ? 1 : 0;
+    logonly("restage: chosen %d\n", opts.Restage);
 }
 
 void inst_eng_s98_choose(int include)
