@@ -3120,7 +3120,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
                 } elseif ($nonFreeSet.Sums -ne $instOtherSums.NonFree) {
                     Stop-CutCheck "NONFREE\SHA256.TXT for usb-wdm-nonfree $($nfPin.Tag) hashes to $($nonFreeSet.Sums), and the installer carries '$($instOtherSums.NonFree)' (INST_NONFREE_SUMS, xhciinst\inst_core.h): change the two together, and rebuild the installer."
                 }
-                Write-Ok ("download 3: usb-wdm-nonfree {0} ({1}), {2} files in NONFREE\" -f $nonFreeSet.Tag, $nonFreeSet.Revision.Substring(0, 12), $nonFreeSet.Files.Count)
+                Write-Ok ("download 3: usb-wdm-nonfree {0} ({1}), {2} files in USBDRV\NONFREE\" -f $nonFreeSet.Tag, $nonFreeSet.Revision.Substring(0, 12), $nonFreeSet.Files.Count)
             }
         }
         $freePinPath = if ($WdmFreePin -ne "") { $WdmFreePin } else { Get-DefaultWdmFreePinPath }
@@ -7521,8 +7521,8 @@ is statically linked into each, which NOTICE.TXT beside this file records.
             $instMsFiles = $(if ($null -ne $nonFreeSet) {
                                "The base download's only Microsoft files are NUSB 3.3's Windows 98 SE`r`n" +
                                "storage files, in a folder of their own with their own NOTICE.md; the`r`n" +
-                               "non-free download also carries other makers' drivers in NONFREE\, two`r`n" +
-                               "KMDF co-installers of Microsoft's among them, with their NOTICE.md."
+                               "non-free download also carries other makers' drivers in USBDRV\NONFREE\,`r`n" +
+                               "two KMDF co-installers of Microsoft's among them, with their NOTICE.md."
                            } else {
                                "The download's only Microsoft files are NUSB 3.3's Windows 98 SE storage`r`n" +
                                "files, in a folder of their own with their own NOTICE.md."
