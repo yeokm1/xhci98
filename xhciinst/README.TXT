@@ -223,6 +223,10 @@ The console tool
                                 on 98 SE, and /yes takes the row's default
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
+  INSTALL /console /faster      turns the xHCI98 USB Tree's "can run
+                                faster" notice on for this computer;
+                                /nofaster turns it off (each user's own
+                                choice in the USB Tree overrides it)
   INSTALL /console /to path     installs the xHCI98 tools in that
                                 directory without asking
 

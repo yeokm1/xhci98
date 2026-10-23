@@ -5346,10 +5346,15 @@ would now find a USB 3 stick on a USB 2.0 port capable, and still show no
 "can perform faster" line (6.12.11's `usbxhci` test); Vista's and 7's
 pages and XP's never read `_EX_V2`.
 
-**Not read.** Whether QEMU's emulated devices declare 0x0210 at High
-Speed (QEMU's device sources are not among `external\`'s files): if they
-declare 0x0200, no QEMU device exercises this read, and 43.28's legs need
-a device that does. No real USB 3 device has been read through it.
+**QEMU does not exercise it** (read 2026-10-23, QEMU 11.1.0's `hw/usb/`,
+tag `v11.1.0`; `runs/run-43.md`, "43.28"): `usb-storage` and `usb-uas` declare
+`bcdUSB` 0x0200 at High and Full Speed and 0x0300 at SuperSpeed, and no
+QEMU device declares 0x0210 at any speed, so this read is never made in a
+QEMU guest as QEMU ships. A QEMU built with `usb-storage` declaring
+0x0210 at High Speed exercised it on 98 SE, ME, 2000, XP, 7 x86 and 7 x64
+(43.28, 2026-10-23):
+the read made, the capable flag set, the stick counted. No real USB 3
+device has been read through it.
 
 ### 8.5 The OS INFs' registrations, quoted
 
