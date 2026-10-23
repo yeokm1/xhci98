@@ -500,6 +500,28 @@ static void test_key_saved(void)
     CHECK_EQ(sv.nrows, 8, "eight results");
     CHECK(strstr(buf, "Stopped:") == NULL, "a run that ended as planned has no Stopped line");
     {
+        /* a region that is not a whole number of map blocks: the tail is mapped too */
+        PF_PARAMS q;
+        PF_PLAN pq;
+        PF_ENV eq;
+
+        env_nt(&eq);
+        pf_defaults(&q, PF_OS_NT);
+        pf_preset(&q, PF_PRESET_SWEEP);
+        q.fileMiB = 17;
+        q.sweepMin = 8388608u;
+        q.sweepMax = 8388608u;
+        q.ops = PF_OP_READ;
+        q.verify = 1;
+        q.pattern = PF_PAT_VERIFY;
+        if (pf_plan(&q, &eq, &pq, why, sizeof(why)) == PF_OK) {
+            CHECK(pq.mapBlocks * (pf_u64)pq.mapBlock >= pq.regionBytes, "the map covers the whole region");
+            CHECK((pq.mapBlocks - 1) * (pf_u64)pq.mapBlock < pq.regionBytes, "with no block past it");
+        } else {
+            CHECK(0, why);
+        }
+    }
+    {
         /* a whole-file verification that skipped blocks is not called clean */
         static char b3[65536];
         PF_TEXT t3;

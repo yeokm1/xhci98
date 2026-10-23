@@ -1536,7 +1536,7 @@ static pf_u32 check_read(RUN *r, const unsigned char *buf, pf_u64 off, pf_u32 si
 
     for (i = 0; i < size; i += r->mapBlock) {
         pf_u64 blk = (off + i - PF_HEADER_BYTES) / r->mapBlock;
-        pf_u32 gen;
+        pf_u32 gen, n = (size - i < r->mapBlock) ? size - i : r->mapBlock;
 
         if (blk >= r->mapBlocks) {
             break;
@@ -1546,7 +1546,7 @@ static pf_u32 check_read(RUN *r, const unsigned char *buf, pf_u64 off, pf_u32 si
             r->incomplete++;
             continue;
         }
-        if (pf_check(buf + i, r->mapBlock, r->runId, (off + i) / PF_UNIT, gen, &fb, &fg) != 0) {
+        if (pf_check(buf + i, n, r->runId, (off + i) / PF_UNIT, gen, &fb, &fg) != 0) {
             if (bad == 0 && firstBadOut != NULL) {
                 *firstBadOut = (pf_u32)((off + i) / PF_UNIT) + fb;
             }
@@ -2369,6 +2369,10 @@ static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad)
         }
         off = PF_HEADER_BYTES + b * r->mapBlock;
         len = (DWORD)((e - b) * r->mapBlock);
+        if (b * r->mapBlock + len > g_plan.regionBytes) {
+            /* the region's partial last block */
+            len = (DWORD)(g_plan.regionBytes - b * r->mapBlock);
+        }
         hi = (LONG)(off >> 32);
         SetFilePointer(h, (LONG)(off & 0xFFFFFFFFu), &hi, FILE_BEGIN);
         if (!ReadFile(h, r->vbuf, len, &got, NULL) || got != len) {

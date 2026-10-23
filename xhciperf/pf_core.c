@@ -710,7 +710,9 @@ int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_
             }
         }
         pl->mapBlock = writes ? pl->minWrite : smallest;
-        pl->mapBlocks = region / pl->mapBlock;
+        /* the last block may be partial: the region need not be a whole
+         * number of blocks, and its tail is verified too */
+        pl->mapBlocks = (region + pl->mapBlock - 1) / pl->mapBlock;
         if (pl->mapBlocks * 4 > PF_MAP_MAX_BYTES) {
             return pf_refuse(why, whyCap, "To verify, lower the file size or raise the smallest write size.");
         }

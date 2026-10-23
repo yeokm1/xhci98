@@ -123,7 +123,7 @@ typedef struct pf_step {
 typedef struct pf_plan {
     int nsteps;
     PF_STEP steps[PF_MAX_STEPS];
-    pf_u64 regionBytes;     /* the tests' part of the file */
+    pf_u64 regionBytes;     /* the tests' part of the file (mapBlocks covers it, the last block maybe partial) */
     pf_u64 fileBytes;       /* with the header */
     pf_u32 maxSize;         /* the largest request */
     pf_u32 minWrite;        /* the smallest write, the map's block */
