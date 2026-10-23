@@ -581,6 +581,9 @@ call :run test_cm_noirq "test_cm_noirq.c ..\src\cm\cm_noirq.c"
 rem test_cm_live links nothing else: the host-interface liveness monitor's
 rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
 call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"
+rem test_cm_pwrr links nothing else: the system SET_POWER's route, and the
+rem 9x shutdown taken with no device IRP (task 43.65).
+call :run test_cm_pwrr "test_cm_pwrr.c ..\src\cm\cm_pwrr.c"
 rem test_cm_nvlink links nothing else: the stor98 link-state channel's entry
 rem protocol, statement conditions, 9x record and REMOVE_PENDING request
 rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).

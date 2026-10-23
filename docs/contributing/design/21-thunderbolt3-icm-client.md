@@ -1840,6 +1840,25 @@ instance, in the order the capture or the client shows:
   does under Linux's unbind. Nothing behind the tunnel is removed by this
   driver at its own stop.
 - **Shutdown**: the unbind sequence, if the stop has not already run it.
+  **On Windows 98 SE and ME it runs with no device IRP** (task 43.65,
+  2026-10-23; `cm_pwrr.c`, host suite `test_cm_pwrr`): the system
+  IRP's completion takes the direct route (`CmPowerDirectWork`, the
+  route that already served a failed `PoRequestPowerIrp`) - the thread's
+  quiescence, then the system IRP completed - instead of requesting D3
+  and passing that D3 down from the thread. Read in the emulator (ME,
+  the `usb4-generic` host, 2026-10-23, `runs/run-43.md`, "43.65"): on
+  the first shutdown after a wizard or the installer had started the
+  driver without a restart, three of five such shutdowns hung with VMM
+  idle (EIP `c005255a`, interrupts off, every thread blocked), and the
+  driver's log ring read from the guest's memory ended, on the build
+  that marked each step, after `PoStartNextPowerIrp` and before
+  `PoCallDriver` of the D3 returned: the bus below never returned it.
+  The shutdowns of a driver started at boot passed. Why the bus blocks
+  is not read (it is NTKERN's and CONFIGMG's; no static reading taken);
+  a shutdown needs no device state of this driver's, the quiescence is
+  the same on either route, and `xhci98.sys`, whose D3 is passed down
+  from its own dispatch routine, is unchanged. Sleeps on 9x, and every
+  transition on NT, request their device IRP as before.
 - **System suspend** (`IRP_MN_SET_POWER` to D3 for S3 or S4): first the
   held mark of section 6.3 on every active member; then rings stopped,
   then the row's mailbox sequence of section 1.4.4 - FR and AR `0x05` save

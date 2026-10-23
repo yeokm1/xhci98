@@ -45,7 +45,10 @@
  *     tunnel up recorded as a resume obligation, then the rings stopped;
  *     nothing is sent to the fabric (no Guide chapter 8 sleep flow).
  *   D3, shutdown: the unbind, if the stop has not already run it, and the
- *     Bus Master bit and platform power restored as at a stop.
+ *     Bus Master bit and platform power restored as at a stop. On Windows
+ *     98 SE and ME a shutdown takes this as the direct transition, with no
+ *     device IRP (cm_pwrr.h, task 43.65): the D3 passed down from this
+ *     thread did not always return from the bus there.
  *   D0 after a suspend this driver ran: the integrated family's force
  *     power, firmware-ready poll and LTR again, the Bus Master bit, then
  *     the client's resume and reconciliation (the USB4 profile: TbtU4Resume,
@@ -61,6 +64,13 @@
  */
 
 #include "cm.h"
+#include "cm_pwrr.h"
+
+/* cm_pwrr.h takes the WDK's power state numbers as ULONGs. */
+XHCI_C_ASSERT(cm_pwrr_states,
+              PowerSystemWorking == CM_PWR_S_WORKING &&
+              PowerSystemShutdown == CM_PWR_S_SHUTDOWN &&
+              PowerDeviceD0 == CM_PWR_D0 && PowerDeviceD3 == CM_PWR_D3);
 
 /* ---------------------------------------------------------------------- */
 /* The thread's half                                                    */
@@ -540,6 +550,8 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     DEVICE_POWER_STATE want;
     POWER_STATE state;
     NTSTATUS status;
+    ULONG route;
+    ULONG w;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
@@ -551,16 +563,21 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
          * client is activated once a sleep or shutdown has been taken. */
         CmPowerSetSystem(nhi, stack->Parameters.Power.State.SystemState);
     }
-    want = (nhi->SystemPower == PowerSystemWorking) ? PowerDeviceD0
-                                                     : PowerDeviceD3;
-    if (!NT_SUCCESS(Irp->IoStatus.Status) || !nhi->Started) {
+    /* cm_pwrr.h: the state already held, or a client suspended in D0 by
+     * an earlier direct transition, owes no device IRP; nor does a
+     * shutdown on Windows 98 SE and ME (task 43.65), whose device IRP's
+     * D3, passed down from the thread, did not always return. */
+    route = CmPowerRoute((BOOLEAN)NT_SUCCESS(Irp->IoStatus.Status),
+                         (BOOLEAN)(nhi->Started != 0),
+                         (ULONG)nhi->SystemPower, (ULONG)nhi->DevicePower,
+                         (BOOLEAN)(nhi->Suspended != 0),
+                         nhi->PowerOnNt, &w);
+    want = (DEVICE_POWER_STATE)w;
+    if (route == CM_PWR_PASS) {
         return cmSystemPass(nhi, Irp);
     }
-    if (want == nhi->DevicePower) {
-        /* An earlier direct transition left the client suspended in D0:
-         * no device IRP is owed, only its reinitialisation. */
-        if (want == PowerDeviceD0 && nhi->Suspended &&
-            cmSystemDirect(nhi, Irp, want)) {
+    if (route == CM_PWR_DIRECT) {
+        if (cmSystemDirect(nhi, Irp, want)) {
             return STATUS_MORE_PROCESSING_REQUIRED;
         }
         return cmSystemPass(nhi, Irp);
@@ -615,6 +632,9 @@ NTSTATUS CmNhiPower(PCM_NHI nhi, PIRP irp)
         return status;
     }
     if (stack->Parameters.Power.Type == SystemPowerState) {
+        /* Read here, at PASSIVE_LEVEL, for cmSystemDone, which may run at
+         * DISPATCH_LEVEL. */
+        nhi->PowerOnNt = IoIsWdmVersionAvailable(1, 0x10);
         IoMarkIrpPending(irp);
         IoCopyCurrentIrpStackLocationToNext(irp);
         CM_SET_COMPLETION_ALWAYS(irp, cmSystemDone, nhi);
