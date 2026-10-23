@@ -1,6 +1,12 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 41, 2026-10-23 (record 26 draft 39: on 98 SE and ME
+Status: revision 42, 2026-10-24 (the 8, 8.1 and 10 legs of
+`runs/run-43-24.md`, Findings 2, 3, 4 and 9, the owner's decisions of
+2026-10-24: on NT a root hub is removed after the controllers; a tunnel
+port not present has its entry removed, with a warning, instead of
+stopping the uninstall; the driver-store check skips a source file the
+stored package does not hold; `/restage` named for Vista to 10;
+section 9.2 steps 1 and 2, section 5.7); revision 41, 2026-10-23 (record 26 draft 39: on 98 SE and ME
 the controller's install through the helper names `xhci98.inf`'s update
 section, `Xhci.Upd`, by the job file's `SECTION` line, record 27 section
 4.1, and the wizard's `Xhci.Dev` keeps a placed `xhci98.sys`; an update
@@ -1261,7 +1267,12 @@ too, without changing anything:
 2. `SetupGetInfDriverStoreLocationA` (Vista onward) on it gives the stored
    INF's full path, and the directory part is the stored package;
 3. each file of the INF's `[SourceDisksFiles]` is compared byte for byte
-   with the package's.
+   with the package's. A file the package holds and the stored package
+   does not is not compared (revision 42): the store holds only what this
+   system's install copies, and the x86 package's `stor98.inf` names
+   `stor98.mpd` for 98 SE and ME, which no NT install stages, so its
+   absence read as "cannot be read" and left Stor98's devices on 8 x86 and
+   10 x86 (`runs/run-43-24.md`, Finding 3).
 
 All equal: nothing to do, the store holds this package. Any difference is
 the trap. "No trap" is a verified answer only: a store that cannot be
@@ -2072,7 +2083,7 @@ these systems.
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/s98vsd`, `/nos98vsd` | (revision 36) preselect `S98VSD.VXD`, Stor98's large-transfer layer on 98 SE and ME, ticked or unticked (design record 30 section 7.2); without either it follows Stor98 (ticked whenever Stor98 is, the owner, 2026-10-22), and the console asks after Stor98's question, Enter and `/yes` giving Y. `/s98vsd` needs Stor98 in the run (`/stor98`, or `/thunderbolt` or `/cmonly` without `/nostor98`); refused together, with `/uninstall`, `/devices` and `/eject`, and both on every system but 98 SE and ME |
 | `/faster`, `/nofaster` | (revision 35) the computer's choice of XHCITR's "can run faster" notice, on or off (section 9.5 item 7; record 25 section 7.7); refused together, and with `/uninstall`, `/devices` and `/eject` |
-| `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
+| `/restage` | Vista to 10: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
 | `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
 | `/nopause` | do not wait for Enter before closing |
@@ -2577,14 +2588,28 @@ after it, reports what was done, and tells the user to restart and run
    kept, and set back if the reinstall changed them (a restart then); and
    an `InfPath` that is readable and not this package's. No such node, a
    failure, or a postcondition not met stops the run before step 2. A port
-   not present cannot be
-   reinstalled: its filter name is removed and the run stops (exit 4)
-   with "connect the dock and run INSTALL.BAT /uninstall again" - the
-   port is still a filter host by its `InfPath`, so the next run finds it.
-   This is unread in any guest here (no Thunderbolt port in QEMU; section
-   12) and is held to these gates.
+   not present cannot be reinstalled. Until revision 42 its filter name
+   was removed and the run stopped (exit 4) with "connect the dock and run
+   INSTALL.BAT /uninstall again", so a dock gone for good (sold, or a USB4
+   port's controller replaced) left the uninstall unable to finish
+   (`runs/run-43-24.md`, Finding 9: on 10 x64 two tunnel bridges of two
+   machines on one disk, each absent on the other, stopped seven runs).
+   Since revision 42 (the owner, 2026-10-24) its filter name is removed
+   and then its devnode, not present, with `DIF_REMOVE` as in step 2 and
+   a warning ("the port is not connected, so its driver cannot be given
+   back now. Its entry is removed instead: Windows sets the port up again
+   with its own driver when the dock is next connected."); the run goes
+   on. At its next connection Windows makes a new devnode and, this
+   package's INFs being gone from the store by step 4, installs its own
+   bridge driver.
 2. **The devnodes**, children before parents (UAS devices, composite and
-   hub entries, root hubs, NHIs, controllers last), each with
+   hub entries, root hubs, NHIs, controllers last; on NT since revision
+   42 the root hubs after the controllers, `inst_remove_rank_nt`: on 8.1
+   and 10 a root hub removed under its running controller came straight
+   back, "Still there: USB\XHCI98_ROOT_HUB\...", `runs/run-43-24.md`,
+   Finding 2, and a controller's removal takes its root hub with it, so a
+   root hub then not found in a fresh device list is "gone with its
+   controller"; 98 SE and ME keep this order), each with
    `SetupDiCallClassInstaller(DIF_REMOVE)` and `DI_REMOVEDEVICE_GLOBAL`,
    the route Device Manager's Uninstall and `XHCICLN` take;
    `DI_NEEDREBOOT` or `DI_NEEDRESTART` after it is "removed, restart

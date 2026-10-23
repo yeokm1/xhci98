@@ -925,6 +925,33 @@ int inst_bundled_service(const char *service);
 int inst_remove_rank(const char *instanceId, const char *service,
                      int filterPresent);
 
+/* The NT uninstall's rank (record 23 section 9.2): inst_remove_rank's, but
+ * a root hub after the controllers (6): on 8.1 and 10 a root hub removed
+ * under its running controller came straight back, the controller
+ * reporting it again (run-43-24, Finding 2), and the controller's own
+ * removal takes it with it. 98 SE and ME keep inst_remove_rank's order. */
+int inst_remove_rank_nt(const char *instanceId, const char *service);
+#define INST_REMOVE_RANK_NT_MAX 6
+
+/* The driver-store check's reading of one source file (record 23 section
+ * 5.7): same is same_file3's answer (1 equal, 0 different, -1 a side not
+ * read), pkgState and storeState file_state's (1 there, 0 absent, -1 not
+ * readable). A file the package holds and the stored package lacks is
+ * skipped: the store holds only what this system's install copies
+ * (run-43-24, Finding 3). */
+#define INST_STORE_EQUAL   0
+#define INST_STORE_DIFFERS 1
+#define INST_STORE_UNREAD  2
+#define INST_STORE_SKIP    3
+int inst_store_verdict(int same, int pkgState, int storeState);
+
+/* The uninstall's step for a tunnel port it filtered (record 23 section
+ * 9.2 step 1): present, it is given back to Windows' own driver; not
+ * present, its entry is removed (revision 42, run-43-24 Finding 9). */
+#define INST_PORT_GIVE_BACK 1
+#define INST_PORT_REMOVE    2
+int inst_port_step(int present);
+
 /* ---- the Thunderbolt and USB4 device viewer and eject (record 24) ------------- */
 
 /* The filter INF's model ids (src\cm\xhcicmf.inf), the candidate tunnel

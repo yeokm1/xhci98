@@ -211,7 +211,7 @@ unticked; /s98vsd needs Stor98 in the run), /faster and /nofaster
 /set Name=Value
 (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
-/restage (Vista and 7: replace a stored development build with the same
+/restage (Vista to 10: replace a stored development build with the same
 DriverVer), /debug (the debug- directory, only if a maintainer asks),
 /log path.
 
