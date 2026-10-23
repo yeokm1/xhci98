@@ -1360,16 +1360,54 @@ static void othlist_sync(void)
          * and no other control starts a group. */
         HWND c = GetWindow(othList, GW_CHILD);
         for (; c != NULL; c = GetWindow(c, GW_HWNDNEXT)) {
+            int id = GetDlgCtrlID(c);
             LONG st = GetWindowLongA(c, GWL_STYLE) &
                       ~(LONG)(WS_TABSTOP | WS_GROUP);
-            if (first && IsWindowEnabled(c) &&
-                GetDlgCtrlID(c) >= IDC_OL_BASE) {
+            if (first && IsWindowEnabled(c) && id >= IDC_OL_BASE &&
+                id < IDC_OL_BASE + 100 * INST_SET_COUNT) {
                 st |= WS_TABSTOP | WS_GROUP;
                 first = 0;
             }
             SetWindowLongA(c, GWL_STYLE, st);
         }
     }
+}
+
+static WNDPROC othBoxProc;
+
+/* The next (dir 1) or previous (-1) open box of the list after box, in
+ * the list's own order; NULL at either end. */
+static HWND othlist_step(HWND box, int dir)
+{
+    HWND c = box;
+
+    for (;;) {
+        int id;
+        c = GetWindow(c, dir > 0 ? GW_HWNDNEXT : GW_HWNDPREV);
+        if (c == NULL) {
+            return NULL;
+        }
+        id = GetDlgCtrlID(c);
+        if (id >= IDC_OL_BASE && id < IDC_OL_BASE + 100 * INST_SET_COUNT &&
+            IsWindowEnabled(c)) {
+            return c;
+        }
+    }
+}
+
+static LRESULT CALLBACK othbox_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_GETDLGCODE) {
+        return CallWindowProcA(othBoxProc, h, msg, wp, lp) | DLGC_WANTARROWS;
+    }
+    if (msg == WM_KEYDOWN && (wp == VK_DOWN || wp == VK_UP)) {
+        HWND n = othlist_step(h, wp == VK_DOWN ? 1 : -1);
+        if (n != NULL) {
+            SetFocus(n);
+        }
+        return 0;
+    }
+    return CallWindowProcA(othBoxProc, h, msg, wp, lp);
 }
 
 static void othlist_scroll(int to)
@@ -1567,7 +1605,10 @@ static void othlist_build(HWND page)
                             (first ? WS_TABSTOP | WS_GROUP : 0),
                             dlu_x(page, 10), y, w - dlu_x(page, 10), lh + 2,
                             othlist_id(set, i), font);
-                (void)b;
+                if (b != NULL) {
+                    othBoxProc = GET_PROC(b);
+                    SET_PROC(b, othbox_sub);
+                }
                 first = 0;
                 y += lh + 3;
             }
@@ -1580,9 +1621,16 @@ static void othlist_build(HWND page)
             if (th < othBoxH) {
                 th = othBoxH;
             }
-            make_px(othList, "BUTTON", t, BS_AUTOCHECKBOX | BS_MULTILINE |
-                    BS_TOP | BS_NOTIFY, dlu_x(page, 10), y,
-                    w - dlu_x(page, 10), th + 2, othlist_id(set, 99), font);
+            {
+                HWND tb = make_px(othList, "BUTTON", t, BS_AUTOCHECKBOX |
+                                  BS_MULTILINE | BS_TOP | BS_NOTIFY,
+                                  dlu_x(page, 10), y, w - dlu_x(page, 10),
+                                  th + 2, othlist_id(set, 99), font);
+                if (tb != NULL) {
+                    othBoxProc = GET_PROC(tb);
+                    SET_PROC(tb, othbox_sub);
+                }
+            }
             y += th + 3;
         }
         {

@@ -22007,9 +22007,6 @@ static int other_pair_excluded(int setA, const char *a, int setB,
     int i;
 
     othPairWhy = NULL;
-    if (inst_other_excludes(setA, a, setB, b, othSys)) {
-        return 1;
-    }
     _snprintf(qa, sizeof(qa) - 1, "%s:%s", other_set_tag(setA), a);
     qa[sizeof(qa) - 1] = '\0';
     _snprintf(qb, sizeof(qb) - 1, "%s:%s", other_set_tag(setB), b);
@@ -22027,7 +22024,7 @@ static int other_pair_excluded(int setA, const char *a, int setB,
             }
         }
     }
-    return 0;
+    return inst_other_excludes(setA, a, setB, b, othSys);
 }
 
 /* The packages of a set from its STAGE lines, their words from its
@@ -22565,7 +22562,8 @@ static void other_trust_add(void)
             } else {
                 out("usb-wdm-free's certificate was added to the %s store and "
                     "could not be read or taken out again: remove it there by "
-                    "hand (certmgr.msc).\n", othStores[s]);
+                    "hand (mmc, the Certificates snap-in for the Computer "
+                    "account).\n", othStores[s]);
             }
             ctx = NULL;
             flagSteps = 1;
@@ -22583,7 +22581,8 @@ static void other_trust_add(void)
                 } else {
                     out("usb-wdm-free's certificate (%s) was added to the %s "
                         "store and could be neither recorded nor taken out "
-                        "again: remove it there by hand (certmgr.msc).\n",
+                        "again: remove it there by hand (mmc, the "
+                        "Certificates snap-in for the Computer account).\n",
                         thumb, othStores[s]);
                 }
                 ctx = NULL;

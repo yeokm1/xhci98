@@ -2961,8 +2961,9 @@ there as it is, and the run says which folder. An unticked row leaves an
 earlier run's copies and staging as they are (unticking is "not now", as
 for every component), wherever they are.
 
-**The record file** is `<the install directory>\WDMFREE.REC` or
-`\NONFREE.REC`, ASCII, CRLF, a file and not registry values because on 98
+**The record file** is `<the install directory>\USBDRV\FREE.REC` or
+`\USBDRV\NONFREE.REC` (draft 37; `WDMFREE.REC` and `NONFREE.REC` at the top
+before), ASCII, CRLF, a file and not registry values because on 98
 SE and ME a registry key holds at most 64 KB of values and `USBDRV\NONFREE\`'s
 457 files would pass that. Its first line is `XHCI98 SET RECORD 1 <Free or
 NonFree> <Dir>`. With the key written, it is made with `CREATE_NEW`, its
