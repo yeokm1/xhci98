@@ -946,8 +946,9 @@ back. The 9x uninstall now looks first, before any change, for a
 `WININIT.INI` `[rename]` line whose destination is one of the package's
 driver files in `SYSTEM32\DRIVERS` (`rename_pending_9x`), and with one
 stops ("Windows replaces xhci98.sys at the next start (WININIT.INI):
-restart Windows first.", exit 4), nothing removed; read on 98 SE after a
-`/force` update (2026-10-24).
+restart Windows first.", exit 4), nothing removed; a `[rename]` section
+it cannot read whole (no memory, or longer than its 32 KB buffer) stops
+it the same way. Read on 98 SE after a `/force` update (2026-10-24).
 
 **What draft 35 builds, and the owner's points of 2026-10-23** (roadmap
 task 43.42's simplification, its code). The design above is built as it

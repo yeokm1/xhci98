@@ -11897,8 +11897,10 @@ static void files_9x(int list)
 /* A WININIT.INI [rename] line that puts a file over one of this package's
  * driver files in SYSTEM32\DRIVERS at the next start (the setup engine's
  * pending copy, xhci98.inf's [Xhci.Upd] row: xhci98.sys=...\xhci98.tmp):
- * its file name into what, 1; 0 for none. An uninstall before that
- * restart would delete the file and the restart put it back. */
+ * its file name into what, 1; 0 for none; -1 when the section cannot be
+ * read whole (no memory, or longer than the buffer), which the caller
+ * takes as a pending one. An uninstall before that restart would delete
+ * the file and the restart put it back. */
 static int rename_pending_9x(char *what, size_t cap)
 {
     char win[INST_PATH_CHARS];
@@ -11921,9 +11923,16 @@ static int rename_pending_9x(char *what, size_t cap)
     join(drv, sizeof(drv), win, "SYSTEM32\\DRIVERS");
     sec = (char *)calloc(1, 32768);
     if (sec == NULL) {
-        return 0;
+        inst_copy(what, "WININIT.INI's [rename] (no memory to read it)", cap);
+        return -1;
     }
-    GetPrivateProfileSectionA("rename", sec, 32766, ini);
+    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
+    if (n >= 32768 - 2) {
+        free(sec);
+        inst_copy(what, "WININIT.INI's [rename] (too long to read whole)",
+                  cap);
+        return -1;
+    }
     for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
         char *eq = strchr(p, '=');
         if (eq == NULL || eq == p) {
@@ -11956,7 +11965,7 @@ static int run_uninstall_9x(void)
 {
     char dir[INST_PATH_CHARS];
     char win[INST_PATH_CHARS];
-    char pend[64];
+    char pend[80];
     int r;
 
     if (!warn_uninstall()) {
@@ -11968,13 +11977,18 @@ static int run_uninstall_9x(void)
     }
     /* Before anything is removed (record 26 section 5.0, draft 39): a
      * driver file the next start replaces would come back after it. */
-    if (rename_pending_9x(pend, sizeof(pend))) {
+    r = rename_pending_9x(pend, sizeof(pend));
+    if (r > 0) {
         out("Windows replaces %s at the next start (WININIT.INI): restart "
             "Windows first.\n", pend);
-        if (!opts.List) {
-            return stop_uninstall("a driver file of this package is "
-                                  "replaced at the next start.");
-        }
+    } else if (r < 0) {
+        out("%s could not be read, so whether Windows replaces a driver "
+            "file of this package at the next start is not known: restart "
+            "Windows first.\n", pend);
+    }
+    if (r != 0 && !opts.List) {
+        return stop_uninstall("a driver file of this package may be "
+                              "replaced at the next start.");
     }
     r = remove_9x_devnodes();
     if (opts.List) {
