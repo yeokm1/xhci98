@@ -506,7 +506,9 @@ the logged-on user, with no administrator rights.
   Windows to stop the device and says when to unplug it.
 - **Balloons** say when a device connects, waits for approval or
   disconnects, on Windows 2000, ME and later; on 98 SE the icon's tooltip
-  shows the last event. A balloon never says how a device left: only a
+  shows the last event (from `3.2.0.0` again after a pointer rested on the
+  icon until the tooltip timed out, after which 98 SE's shell showed it no
+  more; roadmap task 43.72). A balloon never says how a device left: only a
   removal the tool made reports its outcome, and, from `3.2.0.0`, the
   unexpected-removal warning below. In `3.1.0.0` the tray
   warned "The Thunderbolt/USB4 controller stopped answering" after every
@@ -588,7 +590,9 @@ the logged-on user, with no administrator rights.
   after Windows' own has gone (read on 7 x86 in QEMU, roadmap task
   43.66). Clicking the balloon lists each device
   with its port and hub, the speed it runs at and the speed it can, and
-  what to try; so does the first item of the icon's menu when only a
+  what to try; from `3.2.0.0` a click acts on the balloon on the screen,
+  and opens nothing when the tool cannot tell which of its balloons that
+  is (the icon's menu then leads on; roadmap task 43.72); so does the first item of the icon's menu when only a
   10 Gbit/s device at 5 Gbit/s is counted (while the icon is red that
   item opens the window on the device instead). The device's details,
   Save Report and `XHCITR /report`
@@ -4108,6 +4112,22 @@ or says it was found by reading the code.
   attached froze the machine, or stopped it with a fatal exception in
   `USBAUDIO`, about half the time, on Windows' own stack as well; with no
   audio device, or no USBView, it never did.
+  It is the first USB audio device to arrive after a boot that can
+  freeze 98 SE (a sound card, a headset, a USB MIDI or audio interface,
+  or a webcam with a microphone), whatever its driver: seen with
+  Windows' own `usbaudio.sys` and with usb-wdm-free's `uac2`, under
+  Windows' own UHCI driver, NUSB and `xhci98.sys` alike (QEMU readings,
+  2026-10-23); once one device had come through in a boot, later
+  arrivals in that boot did not freeze. For `3.2.0.0` it is documented,
+  not fixed (the owner's decision). What helps: **plug the device in
+  before switching on and leave it plugged in until shutdown** (a device
+  present when Windows started came up with it in every boot read); if
+  Windows freezes at a plug, restart with the device plugged in; and for
+  a webcam whose microphone you do not need, usb-wdm-free's `NOAUD98.INF`
+  gives the microphone no driver, so no audio driver starts and the camera
+  keeps working (usb-wdm-free's README, "98 SE may freeze when the first
+  USB audio device is plugged in after a boot"). Real-PC readings are
+  owed.
 - **Windows 98 SE in a virtual machine cannot play USB audio** through
   Windows 98's own `USBAUDIO.VXD`; that is QEMU's emulated device and the
   VxD, through this driver and through a UHCI controller alike. On real

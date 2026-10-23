@@ -273,7 +273,10 @@ behind a High Speed hub), a balloon names it
 (the tooltip on Windows 98 SE) and, but for a 10 Gbit/s device at 5
 Gbit/s, the icon turns red until every such device is reconnected at its
 speed or removed. Click the balloon for each device's port and hub, the
-speed it runs at and the speed it can, and what to try; the first item
+speed it runs at and the speed it can, and what to try (a click opens
+nothing on Windows 2000, whose balloon says to click the icon instead,
+nor when the tool cannot tell which of its balloons is on the screen;
+the icon's menu then leads on); the first item
 of the icon's menu shows the same when only a 10 Gbit/s device at 5
 Gbit/s is counted, and while the icon is red opens the window on the
 device instead. A hub is
