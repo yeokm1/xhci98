@@ -21,10 +21,11 @@ and released as part of xhci98, with xhci98's version.
   Those systems install no driver package without one in
   test-signing mode.
 - Kernel DMA Protection (64-bit Windows 10 1803 and later): stor98.inf
-  declares the driver compatible with DMA remapping, so on a machine
-  with the protection on, an NVMe drive behind a Thunderbolt or USB4
-  tunnel need not wait for a user to sign in. Not yet tried on such
-  a machine.
+  does not declare the driver compatible with DMA remapping after all
+  (with the declaration, Windows 10 x64 did not start the driver at all),
+  and removes the declaration an earlier build of this release wrote;
+  so on a machine with the protection on, an NVMe drive behind a
+  Thunderbolt or USB4 tunnel waits for a user to sign in, as before.
 - A read-only counter answer for xhci98's disk benchmark (XHCIPERF):
   Stor98 answers READ BUFFER (buffer ID 53h) from memory with the sizes
   of the requests it received and of the commands it sent to the drive,

@@ -1183,7 +1183,11 @@ the SRB's own buffer, `ScsiPortGetPhysicalAddress` - and none taken around
 it, so from `3.2.0.0` its x64 INF writes `DmaRemappingCompatible` 1, the
 per-driver value Microsoft documents for releases up to Windows 11 23H2;
 `src\stor98\docs\PLAN.md`, "Kernel DMA Protection". Unread on a machine
-with the protection on.)* The protection is a feature of the
+with the protection on.)* *(Withdrawn 2026-10-23: with the value 1 Windows
+10 x64 does not start Stor98 at all, Code 10, `0xC00000C2`, on a machine
+without the protection too; the x64 INF writes no value again, so the
+paragraph's first reading stands: under Stor98 such a drive waits for
+sign-in. `runs/run-43.md` "43.59s".)* The protection is a feature of the
 firmware and of 64-bit 10 only; it is unread on any machine here.
 Linux's documentation adds that such machines usually ship with the
 Thunderbolt security level set to "none", the IOMMU doing the gating
