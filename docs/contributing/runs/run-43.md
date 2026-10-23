@@ -3732,6 +3732,34 @@ for 4 MiB under the emulator), fixed by inlining; the some 500 "Online
 namespace ids QEMU's NVMe controller reports, on the internal controller
 as on the tunnelled one (10 lists only namespace 1).
 
+### The 8.1-only switch: the legs on 8.1 x64 and 10 x64 (2026-10-23)
+
+The package of `p43-59k` at `450aba31` (gated builds x86 and amd64 clean
+at that commit; review clean), amd64 `release`, unsigned from the
+packager, its catalogs made on the host by the packager's own
+`New-PackageCatalogFile` (WDK 7.1 MakeCat) and every `.sys` and `.cat`
+signed in the guest with a throwaway certificate (8.1: WDK 7.1 MakeCert
+and SignTool; 10: `New-SelfSignedCertificate`, `Set-AuthenticodeSignature`)
+in Root and TrustedPublisher. So the INFs are the ones that ship; the
+owner's signature comes with the cut's bench candidate. Fresh overlays,
+two virtual CPUs, 2048 MB, the 128 MB FAT tunnelled drive (ASM2464), an
+internal `nvme` on the root bus; both controllers share the hardware id
+`PCI\VEN_1B36&DEV_0010&SUBSYS_11001AF4&REV_02`.
+
+| Leg | Reading |
+|---|---|
+| 8.1 x64, first install (`/cmonly /yes`), the enclosure plugged | Stor98 included unasked ("/yes: Y"); the tunnelled drive's place unreadable before the connection manager ran, so left; after the restart and a re-plug the mark service switched it (20:09:02 to 20:09:29, `done`); the internal drive "not below a verified tunnel port" |
+| 8.1 x64, an internal NVMe hot-added after the install | `stornvme` (the INF's compatible-only match below `stornvme`'s, with Stor98 signed and trusted) |
+| 8.1 x64, surprise unplug during `copy.ps1` under Stor98 | the copy failed 2 s after the pull ("The volume for a file has been externally altered"), PowerShell ended: no hang |
+| 8.1 x64, uninstall (`/uninstall /yes`) | the switched drive removed as this installer's Stor98 device, `oem3.inf` and the `stor98` service removed |
+| 8.1 x64, an update with the connection manager in place and the tunnel up (`/nostor98` first, restart, plug; then `/yes`), the hardware id shared with the internal drive | "is shared with ..., which this run leaves; this run changes neither: the safe-removal mark service puts Stor98 on the tunnel drive alone once this run ends" (exit code 4); the service switched the tunnelled drive 18 s later (`done`), the internal one stayed `stornvme` |
+| 10 x64, install with `/stor98` (opt-in) | no `Stor98Inf` written, no "plugged in later gets Stor98" line |
+| 10 x64, a stale `Stor98Inf` written by hand, a restart, the drive plugged | "Stor98Inf names C:\Windows\INF\oem4.inf, and Windows is 10.0 build 19045, not 8.1; no drive is switched"; both controllers `stornvme`, with Stor98 staged, signed and trusted |
+
+Not read: an 8.1 install where the hardware id is the tunnelled drive's
+own (the installer's own per-drive install, case 3b, on 8.1; unchanged
+from 3.2.0.0's code); the owner-signed package; a real 8.1 machine.
+
 ## 43.59s Stor98 x64 does not start on Windows 10 x64 with DmaRemappingCompatible (2026-10-23)
 
 Found by 43.59's x64 legs (branch `p43-59`, its run notes there): with the
