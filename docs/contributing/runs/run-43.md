@@ -3620,11 +3620,35 @@ guest's serial port.
   `C:\XHCI98` removed; afterwards no `Software\xhci98` key, no
   `C:\XHCI98`, no `oem*.inf` in `%windir%\inf`. Exit 3.
 
+### A lost key, on the final installer
+
+The adoption of a record file whose key was lost (record 26 section
+6.7.5) was reworked after the legs above; it was read again on a fresh
+overlay of each guest, from a dry cut of the final code. Each time: the
+console install with `/yes /nonfreestage`, the set's key deleted by hand
+(`reg delete` on XP, a `REGEDIT4` file with `[-...]` on 98 SE), then
+`INSTALL /console /uninstall`.
+
+- **XP SP3**: the same six `own` INFs staged; the uninstall said the
+  record "was found with no registry key, and is taken as this
+  installer's again", kept eight folders (the six staged and two whose
+  INFs hold the same bytes, `rtl815x\wxp\WINXP\64` and
+  `ch341\w98se-xp\WIN 1X`), one to a line, removed every other copy
+  and the record, and left `oem2.inf` to `oem7.inf` in the store (whose
+  they are is not known). No `Software\xhci98` key afterwards. Exit 3.
+  A first run took four minutes over the store (each INF of the set
+  hashed every INF of the store); the store is now hashed once, and the
+  run takes under a minute.
+- **98 SE**: five folders on `DevicePath`; after the key's deletion the
+  uninstall kept the five entries and their folders ("whose the entry is
+  is not known"), removed `C:\XHCI98` from `DevicePath`, every other
+  copy, the record and `Software\xhci98`. Exit 3.
+
 ### Verdict
 
 The page at 640 by 480, a copy and a stage on 98 SE and on XP, a staged
-folder found at a plug on 98 SE, a copy cut short and resumed, and the
-uninstall on both: read, with the three fixes above. Not read: the free
+folder found at a plug on 98 SE, a copy cut short and resumed, a lost
+key adopted, and the uninstall on both: read, with the fixes above. Not read: the free
 set (no release qualifies), ME, 2000, 7 and the x64 systems, a plug on
 XP (QEMU emulates none of the INFs staged there), the flush fix under
 another power cut.
