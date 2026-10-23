@@ -862,7 +862,9 @@ and exits with 0 (every test passed), 1 (a test failed or a data error),
 the reason in its report's header (`Stopped:`), and a run refused before
 it begins still writes a report of three lines with the folder and the
 refusal (`Refused:`), so a batch file's report always says what
-happened. The window shows the run; `/exit` closes it at
+happened; a stop by the user or by closing the window says so too. A
+report is never written to a file named `XHCIPERF.TMP`, the test file's
+name, which may be a kept file of another program's. The window shows the run; `/exit` closes it at
 the end. This is what the emulator legs drive (43.12's unattended route)
 and what a user pastes into a batch file. `/selftest` renders every text
 of the pure half at its longest to a file and exits, for section 10.3.
@@ -1427,11 +1429,13 @@ P.9 on 7, and XP x64, Vista and 8 x64 stay owed.
 
 **On the owner's real-check list.** On real 98 SE hardware, whether the
 Quick preset's 2 s timed steps on the IDE system disk end near 2 s. On the
-emulator under heavy PIO the guest's tick count (the deadline's clock) lagged
-the performance counter (the measurement's) about fourteen times: a 2 s
-step ran 28 s by the counter. The figures stay right, since they use the
-counter; only the step's length is in question, and the clock is not
-changed until the reading.
+emulator two of them ran 28 s (the 1 MiB read and the 4 KiB random write,
+on ESDI_506 under TCG). The tick count was first suspected and is not the
+cause: a probe timing 64 MiB of unbuffered 1 MiB reads and writes on that
+disk read the tick count and the performance counter within 0.1 % of each
+other (42.3 s and 224.6 s), and the step's figures agreed with both (a
+result whose two clocks disagree takes the tick count, section 3.6). Why
+the deadline did not end those steps is not yet read.
 
 ### 14.3 Decided by the owner (2026-10-22)
 
@@ -1549,6 +1553,9 @@ a choice:
   run's workload and dropped from the display when they differ.
 - **A stopped verification** is never reported clean: a step's becomes
   Stopped, the whole file's says it is not known to be clean.
+  One that skipped blocks a refused or unfinished request left unknown
+  is not either: the whole file's then reads "no error found, but not
+  complete" with the count (`XPRF-VERIFY 1 5`).
 - **The plan is made aside**: a refused start leaves the shown results and
   their plan as they were.
 - **Medians**: with Show set to Median, IOPS is the median pass's too.

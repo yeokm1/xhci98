@@ -500,6 +500,68 @@ static void test_key_saved(void)
     CHECK_EQ(sv.nrows, 8, "eight results");
     CHECK(strstr(buf, "Stopped:") == NULL, "a run that ended as planned has no Stopped line");
     {
+        /* a region that is not a whole number of map blocks: the tail is mapped too */
+        PF_PARAMS q;
+        PF_PLAN pq;
+        PF_ENV eq;
+
+        env_nt(&eq);
+        pf_defaults(&q, PF_OS_NT);
+        pf_preset(&q, PF_PRESET_SWEEP);
+        q.fileMiB = 17;
+        q.sweepMin = 8388608u;
+        q.sweepMax = 8388608u;
+        q.ops = PF_OP_READ;
+        q.verify = 1;
+        q.pattern = PF_PAT_VERIFY;
+        if (pf_plan(&q, &eq, &pq, why, sizeof(why)) == PF_OK) {
+            CHECK(pq.mapBlocks * (pf_u64)pq.mapBlock >= pq.regionBytes, "the map covers the whole region");
+            CHECK((pq.mapBlocks - 1) * (pf_u64)pq.mapBlock < pq.regionBytes, "with no block past it");
+        } else {
+            CHECK(0, why);
+        }
+    }
+    {
+        /* a whole-file verification that skipped blocks is not called clean */
+        static char b3[65536];
+        PF_TEXT t3;
+
+        ri.endVerify = PF_EV_INCOMPLETE;
+        ri.endUnchecked = 12;
+        pf_tx_init(&t3, b3, sizeof(b3));
+        pf_report(&t3, &p, &pl, res, 1, &ri);
+        CHECK(strstr(b3, "Whole file:  no error found, but not complete: 12 blocks not checked") != NULL,
+              "an incomplete whole-file verification says so");
+        CHECK(strstr(b3, "XPRF-VERIFY 1 5") != NULL, "and its machine line");
+        CHECK_EQ(pf_saved_parse(b3, t3.len, &sv), 0, "which reads back");
+        CHECK_EQ(sv.endVerify, PF_EV_INCOMPLETE, "as incomplete");
+        ri.endVerify = PF_EV_NONE;
+        ri.endUnchecked = 0;
+    }
+    {
+        /* a /report or /folder longer than the field is refused, not cut */
+        static char lng[300];
+        char *av[4];
+        PF_PARAMS lp;
+        PF_CMDLINE lc;
+        char w2[200];
+
+        memset(lng, 'a', sizeof(lng) - 1);
+        lng[0] = 'C';
+        lng[1] = ':';
+        lng[2] = '\\';
+        lng[sizeof(lng) - 1] = 0;
+        av[0] = "XHCIPERF.EXE";
+        av[1] = "/report";
+        av[2] = lng;
+        av[3] = NULL;
+        pf_defaults(&lp, PF_OS_NT);
+        CHECK(pf_cmdline(3, av, &lp, &lc, w2, sizeof(w2)) != 0, "an overlong /report is refused");
+        av[1] = "/folder";
+        pf_defaults(&lp, PF_OS_NT);
+        CHECK(pf_cmdline(3, av, &lp, &lc, w2, sizeof(w2)) != 0, "an overlong /folder is refused");
+    }
+    {
         /* a run that ended early says why, wrapped within 79 columns */
         static char b2[65536];
         PF_TEXT t2;

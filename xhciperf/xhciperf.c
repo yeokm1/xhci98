@@ -689,6 +689,8 @@ static void disk_facts(const char *folder, PF_ENV *e)
 static int g_s98state;
 /* why the last run ended before its plan did, for its report */
 static char g_runWhy[400];
+/* the whole file's verification: the blocks it could not check */
+static volatile pf_u32 g_endUnchecked;
 /* The run's search state, as its report states it: set as the run starts
  * and changed only by the run's own counter reads */
 static int g_runS98state, g_runS98matches, g_runS98ids;
@@ -1534,7 +1536,7 @@ static pf_u32 check_read(RUN *r, const unsigned char *buf, pf_u64 off, pf_u32 si
 
     for (i = 0; i < size; i += r->mapBlock) {
         pf_u64 blk = (off + i - PF_HEADER_BYTES) / r->mapBlock;
-        pf_u32 gen;
+        pf_u32 gen, n = (size - i < r->mapBlock) ? size - i : r->mapBlock;
 
         if (blk >= r->mapBlocks) {
             break;
@@ -1544,7 +1546,7 @@ static pf_u32 check_read(RUN *r, const unsigned char *buf, pf_u64 off, pf_u32 si
             r->incomplete++;
             continue;
         }
-        if (pf_check(buf + i, r->mapBlock, r->runId, (off + i) / PF_UNIT, gen, &fb, &fg) != 0) {
+        if (pf_check(buf + i, n, r->runId, (off + i) / PF_UNIT, gen, &fb, &fg) != 0) {
             if (bad == 0 && firstBadOut != NULL) {
                 *firstBadOut = (pf_u32)((off + i) / PF_UNIT) + fb;
             }
@@ -1829,21 +1831,33 @@ static void worker_async(WORKER *w)
             continue;
         }
         if (rc >= WAIT_OBJECT_0 && rc < WAIT_OBJECT_0 + (DWORD)npend) {
-            DWORD got = 0;
-            BOOL ok;
+            int first = wk[rc - WAIT_OBJECT_0], m;
 
-            k = wk[rc - WAIT_OBJECT_0];
-            ok = GetOverlappedResult(w->h, &ov[k], &got, TRUE);
-            w->busy[k] = 0;
-            complete_one(w, slot_buf(r, w->index, k, s->buffer, depth), w->inflight[k], gens[k], write, issued[k],
-                         ok, got);
-            if (!ok || got != s->size) {
-                DWORD e = ok ? ERROR_HANDLE_EOF : GetLastError();
+            /* Every completion already in is collected before a slot is
+             * refilled, from the signalled slot on: the wait favours the
+             * lowest slot, and a request that completes at once would
+             * otherwise overtake the others, shrinking the depth and
+             * lengthening their measured latency */
+            for (m = 0; m < depth; m++) {
+                DWORD got = 0;
+                BOOL ok;
 
-                if (e != ERROR_OPERATION_ABORTED) {
-                    worker_fail(w, e);
+                k = (first + m) % depth;
+                if (!w->busy[k] || (m != 0 && WaitForSingleObject(ov[k].hEvent, 0) != WAIT_OBJECT_0)) {
+                    continue;
                 }
-                stopping = 1;
+                ok = GetOverlappedResult(w->h, &ov[k], &got, TRUE);
+                w->busy[k] = 0;
+                complete_one(w, slot_buf(r, w->index, k, s->buffer, depth), w->inflight[k], gens[k], write,
+                             issued[k], ok, got);
+                if (!ok || got != s->size) {
+                    DWORD e = ok ? ERROR_HANDLE_EOF : GetLastError();
+
+                    if (e != ERROR_OPERATION_ABORTED && !w->failed) {
+                        worker_fail(w, e);
+                    }
+                    stopping = 1;
+                }
             }
         } else {
             /* the wait itself failed: the step fails; cancel, then collect
@@ -2355,6 +2369,10 @@ static pf_u32 verify_since(RUN *r, pf_u32 genStart, int all, pf_u32 *firstBad)
         }
         off = PF_HEADER_BYTES + b * r->mapBlock;
         len = (DWORD)((e - b) * r->mapBlock);
+        if (b * r->mapBlock + len > g_plan.regionBytes) {
+            /* the region's partial last block */
+            len = (DWORD)(g_plan.regionBytes - b * r->mapBlock);
+        }
         hi = (LONG)(off >> 32);
         SetFilePointer(h, (LONG)(off & 0xFFFFFFFFu), &hi, FILE_BEGIN);
         if (!ReadFile(h, r->vbuf, len, &got, NULL) || got != len) {
@@ -2837,12 +2855,18 @@ static unsigned __stdcall run_main(void *arg)
     } else if (g_p.verify && r->map != NULL && (g_p.verifyEnd || g_plan.minWrite == 0)) {
         pf_u32 fb;
         pf_u32 bad;
+        pf_u32 inc0 = r->incomplete;
 
         post_status("Verifying the whole file");
         bad = verify_since(r, 0, 1, &fb);
+        g_endUnchecked = r->incomplete - inc0;
         if (bad == 0 && r->verifyCut) {
             InterlockedExchange((LONG *)&g_endVerify, PF_EV_STOPPED);
             post_log("The whole file's verification was stopped before its end; it is not known to be clean.");
+        } else if (bad == 0 && g_endUnchecked != 0) {
+            /* blocks a refused or unfinished request left unknown were skipped */
+            InterlockedExchange((LONG *)&g_endVerify, PF_EV_INCOMPLETE);
+            post_log("The whole file's verification found no error, but not every block was checked.");
         } else if (bad == 0) {
             InterlockedExchange((LONG *)&g_endVerify, PF_EV_CLEAN);
             post_log("The whole file verified clean.");
@@ -2975,6 +2999,7 @@ static char *build_report(size_t *lenOut)
     ri.stor98 = pages;
     ri.endVerify = (int)g_endVerify;
     ri.stopped = g_runWhy;
+    ri.endUnchecked = g_endUnchecked;
     pf_tx_init(&t, buf, cap);
     {
         /* the run's workload; only how values are shown follows the window */
@@ -3693,6 +3718,34 @@ static void controls_enable(int on)
     EnableMenuItem(m, IDM_SAVEPRESET, MF_BYCOMMAND | (on ? MF_ENABLED : MF_GRAYED));
 }
 
+/* The report's file, unless it would be a file named like the test file
+ * (this run's, or one kept because it is not recognisably ours) */
+static int report_write(const char *s, size_t n)
+{
+    char full[MAX_PATH], base[MAX_PATH];
+    char *fp = NULL, *b;
+    size_t len;
+
+    /* the name as the system resolves it: either separator, a relative
+     * path, the trailing dots and spaces Win32 drops; a stream refused */
+    len = GetFullPathNameA(g_cl.report, sizeof(full), full, &fp);
+    if (len == 0 || len >= sizeof(full) || fp == NULL) {
+        log_add("The report's path cannot be resolved; it is not written.");
+        return 0;
+    }
+    sz_cpy(base, sizeof(base), fp);
+    len = strlen(base);
+    while (len > 0 && (base[len - 1] == '.' || base[len - 1] == ' ')) {
+        base[--len] = 0;
+    }
+    b = base;
+    if (strchr(b, ':') != NULL || lstrcmpiA(b, "XHCIPERF.TMP") == 0) {
+        log_add("The report is not written to a file named XHCIPERF.TMP, the test file's name, or to a stream.");
+        return 0;
+    }
+    return write_file(full, s, n);
+}
+
 static void refuse(const char *why)
 {
     if (g_cl.report[0] != 0 && g_cl.run) {
@@ -3705,7 +3758,7 @@ static void refuse(const char *why)
         pf_tx_nl(&t);
         pf_tx_wrapped(&t, "Folder:      ", g_folder);
         pf_tx_wrapped(&t, "Refused:     ", why);
-        write_file(g_cl.report, buf, t.len);
+        report_write(buf, t.len);
     }
     if (g_cl.exitAtEnd) {
         log_add(why);
@@ -3726,7 +3779,6 @@ static void start_run(void)
     if (g_running) {
         return;
     }
-    g_runWhy[0] = 0;
     params_from_ui();
     if (check_folder(g_folder, canon, sizeof(canon), why, sizeof(why)) != 0) {
         refuse(why);
@@ -3758,6 +3810,7 @@ static void start_run(void)
     g_runS98matches = g_s98matches;
     g_runS98ids = g_s98ids;
     memset(g_res, 0, sizeof(g_res));
+    g_runWhy[0] = 0;
     memset(g_s98steps, 0, sizeof(g_s98steps));
     g_runP = g_p;
     if (g_haveSaved) {
@@ -3794,6 +3847,7 @@ static void start_run(void)
     InterlockedExchange((LONG *)&g_running, 1);
     InterlockedExchange((LONG *)&g_runBad, 0);
     InterlockedExchange((LONG *)&g_endVerify, PF_EV_NONE);
+    g_endUnchecked = 0;
     controls_enable(0);
     EnableWindow(ctl(IDC_START), FALSE);
     EnableWindow(ctl(IDC_STOP), TRUE);
@@ -4354,12 +4408,13 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         SetWindowTextA(g_status, "Ready");
         log_add("Run ended.");
         InvalidateRect(g_view, NULL, TRUE);
-        sz_cpy(g_runWhy, sizeof(g_runWhy), lp != 0 ? (const char *)lp : "");
+        sz_cpy(g_runWhy, sizeof(g_runWhy), lp != 0 ? (const char *)lp :
+               (wp == 3 ? "Stopped before the plan ended (Stop pressed, or the window closed)." : ""));
         if (g_cl.report[0] != 0) {
             size_t n;
             char *r = build_report(&n);
 
-            if (r == NULL || !write_file(g_cl.report, r, n)) {
+            if (r == NULL || !report_write(r, n)) {
                 log_add("The report could not be written.");
                 InterlockedExchange((LONG *)&g_runBad, 1);
             }

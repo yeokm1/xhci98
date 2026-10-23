@@ -710,7 +710,9 @@ int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_
             }
         }
         pl->mapBlock = writes ? pl->minWrite : smallest;
-        pl->mapBlocks = region / pl->mapBlock;
+        /* the last block may be partial: the region need not be a whole
+         * number of blocks, and its tail is verified too */
+        pl->mapBlocks = (region + pl->mapBlock - 1) / pl->mapBlock;
         if (pl->mapBlocks * 4 > PF_MAP_MAX_BYTES) {
             return pf_refuse(why, whyCap, "To verify, lower the file size or raise the smallest write size.");
         }
@@ -1570,11 +1572,16 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
     pf_tx_nl(t);
     if (ri->endVerify != PF_EV_NONE) {
         static const char *const ev[] = {
-            "", "clean", "DATA ERRORS FOUND", "the file could not be read", "stopped before its end: not known to be clean"
+            "", "clean", "DATA ERRORS FOUND", "the file could not be read", "stopped before its end: not known to be clean",
+            "no error found, but not complete: "
         };
 
         pf_tx_s(t, "Whole file:  ");
-        pf_tx_s(t, (ri->endVerify > 0 && ri->endVerify <= PF_EV_STOPPED) ? ev[ri->endVerify] : "?");
+        pf_tx_s(t, (ri->endVerify > 0 && ri->endVerify <= PF_EV_INCOMPLETE) ? ev[ri->endVerify] : "?");
+        if (ri->endVerify == PF_EV_INCOMPLETE) {
+            pf_tx_u(t, ri->endUnchecked);
+            pf_tx_s(t, " blocks not checked");
+        }
         pf_tx_nl(t);
     }
     pf_tx_s(t, "Passes:      ");
@@ -1817,7 +1824,7 @@ long pf_saved_parse(const char *text, size_t len, PF_SAVED *sv)
         } else if (n >= 14 && memcmp(s, "XPRF-VERIFY 1 ", 14) == 0) {
             pf_u64 v;
 
-            if (!pf_parse_u64(s + 14, n - 14, &v) || v > PF_EV_STOPPED) {
+            if (!pf_parse_u64(s + 14, n - 14, &v) || v > PF_EV_INCOMPLETE) {
                 return line;
             }
             sv->endVerify = (int)v;
@@ -1889,9 +1896,17 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
             pf_preset(p, pr);
             i++;
         } else if (pf_ieq(a, "folder")) {
+            if (strlen(nx) >= sizeof(c->folder)) {
+                pf_cpy(why, whyCap, "/folder takes a path of at most 259 characters.");
+                return 1;
+            }
             pf_cpy(c->folder, sizeof(c->folder), nx);
             i++;
         } else if (pf_ieq(a, "report")) {
+            if (strlen(nx) >= sizeof(c->report)) {
+                pf_cpy(why, whyCap, "/report takes a path of at most 259 characters.");
+                return 1;
+            }
             pf_cpy(c->report, sizeof(c->report), nx);
             i++;
         } else if (pf_ieq(a, "size")) {

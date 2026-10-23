@@ -123,7 +123,7 @@ typedef struct pf_step {
 typedef struct pf_plan {
     int nsteps;
     PF_STEP steps[PF_MAX_STEPS];
-    pf_u64 regionBytes;     /* the tests' part of the file */
+    pf_u64 regionBytes;     /* the tests' part of the file (mapBlocks covers it, the last block maybe partial) */
     pf_u64 fileBytes;       /* with the header */
     pf_u32 maxSize;         /* the largest request */
     pf_u32 minWrite;        /* the smallest write, the map's block */
@@ -321,6 +321,7 @@ typedef struct pf_runinfo {
     const char *stor98;     /* the Stor98 page's text, or "" */
     int endVerify;          /* PF_EV_: the whole file's verification at the end */
     const char *stopped;    /* why the run ended before its plan did, or NULL or "" */
+    pf_u64 endUnchecked;    /* PF_EV_INCOMPLETE: the blocks not checked */
 } PF_RUNINFO;
 /* The whole file's verification at a run's end */
 #define PF_EV_NONE          0   /* not asked, or no verification */
@@ -328,6 +329,7 @@ typedef struct pf_runinfo {
 #define PF_EV_BAD           2   /* data errors */
 #define PF_EV_UNREAD        3   /* the file could not be read */
 #define PF_EV_STOPPED       4   /* stopped before it ended, or before it began */
+#define PF_EV_INCOMPLETE    5   /* no error in what was read, but blocks were not checked */
 void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RESULT *res,
                int npasses, const PF_RUNINFO *ri);
 void pf_summary_line(PF_TEXT *t, const PF_STEP *s, const PF_SHOWN *sh, int mib);
