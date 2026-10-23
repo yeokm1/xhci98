@@ -2509,7 +2509,8 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
             mk_s98_profile_enabled(set, &data, id)) {
             enabled = 1;
         }
-        if (!enabled || !fresh || mk_s98_disabled(st, pr)) {
+        if (!enabled || !fresh || mk_s98_disabled(st, pr) ||
+            !mk_s98_profile_enabled(set, &data, id)) {
             mk_log("Stor98: %s: the stop was %s (error %lu), and its enable "
                    "is not seen (it answered %s; status %08lX problem %lu); "
                    "it is owed", id, refused ? "refused" : "not made", err,
