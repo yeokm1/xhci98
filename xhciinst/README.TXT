@@ -143,7 +143,7 @@ there: a Stor98 installed before, by hand or by an earlier tool, stays.
 USB storage drivers (Windows 98 SE only). Windows 98 SE has no USB
 mass-storage driver: every USB disk, Bulk-Only or UAS under xhciuas.sys,
 needs NUSB 3.3's seven storage files, which a download built with them
-carries in its NUSB33\ folder. The row for them is ticked when none of
+carries in USBDRV\NUSB33. The row for them is ticked when none of
 the seven is found, and unticked when any of them is there or NUSB is
 installed (its Uninstall\USB20U entry; whatever an earlier run chose;
 /storage still ticks it). With NUSB not installed, a USBSTOR.INF found
@@ -167,16 +167,17 @@ install included), never while NUSB is installed.
 
 Other USB drivers (the page after Components). A release has up to
 three downloads: xhci98-<version>.zip, -free.zip, which adds the free
-USB class drivers of usb-wdm-free in a WDMFREE folder (beta: report a
-problem with one of them at https://github.com/yeokm1/usb-wdm-free/issues,
-not to xHCI98), and -nonfree.zip, which adds the non-free driver pack of
-usb-wdm-nonfree in a NONFREE folder: other makers' drivers, not this
+USB class drivers of usb-wdm-free in USBDRV\FREE ("These drivers are
+experimental. They may not work with every device and can make Windows
+unstable. Report problems at https://github.com/yeokm1/usb-wdm-free."),
+and -nonfree.zip, which adds the non-free driver pack of
+usb-wdm-nonfree in USBDRV\NONFREE: other makers' drivers, not this
 project's and not tested by it. The page shows a row for each set this
 download carries and, for each it does not, which download and which
 address have it (https://github.com/yeokm1/usb-wdm-free and
 https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers
 are). Every row is unticked unless you tick it. Ticked, the set is
-copied to WDMFREE or NONFREE in the tools folder and nothing is
+copied to USBDRV\FREE or USBDRV\NONFREE in the tools folder and nothing is
 installed. Below the rows, under "Let Windows choose these drivers
 automatically for matching devices", is a box for each driver package
 of a set that has an INF for this Windows, grouped by kind (Audio,
@@ -252,7 +253,7 @@ The console tool
   INSTALL /console /storage     Windows 98 SE: installs the USB storage
                                 drivers without asking; on any other
                                 system it only copies their files to
-                                NUSB33 in the tools folder, with a
+                                USBDRV\NUSB33 in the tools folder, with a
                                 warning; /nostorage leaves them out on any
                                 system; without either the console asks
                                 on 98 SE, and /yes takes the row's default

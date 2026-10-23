@@ -3789,7 +3789,8 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                   "98 SE only. On this Windows they are not installed: their "
                   "seven files are copied to ", sizeof(one));
         strncat(one, dir, sizeof(one) - strlen(one) - 1);
-        strncat(one, "\\NUSB33 for you to use by hand, and nothing installs "
+        strncat(one, "\\USBDRV\\NUSB33 for you to use by hand, and nothing "
+                "installs "
                 "them.", sizeof(one) - strlen(one) - 1);
         inst_cat_para(out, cap, one);
     }
@@ -7541,7 +7542,7 @@ int inst_rec_parse(const char *line, INST_REC_LINE *out)
 const char *inst_other_label(int set)
 {
     return set == INST_SET_FREE ?
-        "Free USB class drivers (usb-wdm-free, beta)" :
+        "Free USB class drivers (usb-wdm-free, experimental)" :
         "Non-free driver pack (usb-wdm-nonfree)";
 }
 
@@ -7551,19 +7552,17 @@ void inst_other_sentence(char *out, size_t cap, int set, const char *dir)
         return;
     }
     if (set == INST_SET_FREE) {
-        inst_catv(out, cap, 6, "Copies the free USB class drivers to ", dir,
-                  "\\" INST_WDMFREE_DIR ". Nothing is installed: Windows uses "
-                  "them only for a device you point it at, or with the box "
-                  "below. They are at a beta stage: report a problem with them "
-                  "at ", inst_other_address(INST_SET_FREE), "/issues, not to ",
-                  "xHCI98.");
+        /* The owner's sentence of 2026-10-23, verbatim (experimental,
+         * not beta). */
+        inst_catv(out, cap, 4, "Copied to ", dir,
+                  "\\" INST_WDMFREE_DIR ". ", INST_FREE_NOTICE);
     } else {
         inst_catv(out, cap, 3, "Copies other makers' drivers (USB Ethernet, "
                   "serial and game pads) to ", dir,
                   "\\" INST_NONFREE_DIR ". They are their makers' work, not "
                   "this project's, and have not been tested by this project on "
                   "any Windows. Nothing is installed: Windows uses them only "
-                  "for a device you point it at, or with the box below.");
+                  "for a device you point it at, or with the boxes below.");
     }
 }
 

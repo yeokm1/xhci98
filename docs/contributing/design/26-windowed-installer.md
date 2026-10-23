@@ -15,7 +15,7 @@ never installed, every box unticked, an optional stage for the first
 plug, the uninstall removing what was placed, and the drivers'
 addresses beside the rows and on the Finish page, section 6.7; the
 coordinator's overnight decisions of 2026-10-23 on its proposals,
-pending the owner's review, section 6.7.10; record 23 revision 38;
+approved by the owner the same day, section 6.7.10; record 23 revision 38;
 recorded at the batch 8 merge); draft 35, 2026-10-23 (roadmap-usb4 task 43.42, the
 simplification built, with the owner's points of 2026-10-22 and
 2026-10-23: the silent install no longer to cover `xhciuas.inf`, the
@@ -667,7 +667,8 @@ unticked) the Finish page and the readme give the exact folder per kind
 of device, for the Found New Hardware wizard; the uninstall removes the
 copied folders and whatever was staged. Each row is shown only when its
 folder is there and holds what its record names, and the rows carry the
-free drivers' beta notice and the two project addresses
+free drivers' experimental notice (the owner's sentence of 2026-10-23,
+section 6.7.4) and the two project addresses
 (`https://github.com/yeokm1/usb-wdm-free`,
 `https://github.com/yeokm1/usb-wdm-nonfree`) beside them and on the
 Finish page. This design leaves that room and settles nothing more: the
@@ -1821,8 +1822,9 @@ Windows 98 SE has no USB mass-storage driver: a Bulk-Only stick is
 Code 2, because `xhciuas.inf` names `USBNTMAP.SYS` as an upper filter and
 NTKERN fails a devnode whose named filter is missing (`runs/run-28.md`,
 "Windows 98 SE with no USB 2.0 stack, and with SweetLow's alone"). From `3.2.0.0` the release
-download carries NUSB 3.3's seven storage files at its root as
-`NUSB33\`, a folder of its own and never inside a `NONFREE\` (task 43.3;
+download carries NUSB 3.3's seven storage files as `USBDRV\NUSB33\` (draft 37;
+`NUSB33\` at its root before), a folder of its own and never inside the
+non-free set's (task 43.3;
 owner, 2026-10-22; `legal-provenance.md` section 5, "NUSB 3.3's
 Windows 98 SE storage files"), and the installer offers them. The owner's
 decisions of 2026-10-20: selectable, so a user who already has NUSB need
@@ -2678,29 +2680,30 @@ the up-to-date drivers, `https://github.com/yeokm1/usb-wdm-free` and
 `https://github.com/yeokm1/usb-wdm-nonfree`, are given beside the rows
 and on the Finish page, on every system and in every download, with what
 this download does not carry. NUSB 3.3's storage files are not a set of
-this section: they are section 6.5's, in `NUSB33\` in every download, and
+this section: they are section 6.5's, in `USBDRV\NUSB33\` in every download, and
 nothing here reads, copies or stages them.
 
 #### 6.7.1 The three downloads
 
 | Download | Zip | At its root, beside `SETUP.EXE` |
 |---|---|---|
-| 1 | `xhci98-<version>.zip` | the package (as today) and `NUSB33\` |
-| 2 | `xhci98-<version>-free.zip` | download 1's files and `WDMFREE\` |
-| 3 | `xhci98-<version>-nonfree.zip` | download 2's files and `NONFREE\` |
+| 1 | `xhci98-<version>.zip` | the package (as today) and `USBDRV\NUSB33\` |
+| 2 | `xhci98-<version>-free.zip` | download 1's files and `USBDRV\FREE\` |
+| 3 | `xhci98-<version>-nonfree.zip` | download 2's files and `USBDRV\NONFREE\` |
 
 The names are proposals for the owner; download 1 keeps the name every
 release had, so a link to "the release zip" still reaches the base
 download. Each zip is built from the same published tree and differs from
 the one before by its folder alone and by its readme (below). The folder
-names are 8.3 (`WDMFREE`, `NONFREE`), as `NUSB33` is.
+names are 8.3 (`USBDRV\FREE`, `USBDRV\NONFREE`, `USBDRV\NUSB33`; the owner,
+2026-10-23, section 6.7.2).
 
 **While no usb-wdm-free release qualifies** (no driver's legs have passed
 on its systems yet, roadmap 43.48: "A usb-wdm-free driver qualifies for
 download (2) only once its legs have passed on its systems"), the pin of
 section 6.7.2 names none, and the cut makes downloads 1 and 3 only:
 download 2 would be download 1 under another name, and download 3 carries
-no `WDMFREE\`, its readme saying that no free driver is in any download of
+no `USBDRV\FREE\`, its readme saying that no free driver is in any download of
 this release yet. **This is an exception to the roadmap line's "three
 zips", for the owner to confirm**; the alternatives are a download 2 equal
 to download 1 under its own name, or holding download 3 back too until
@@ -2711,10 +2714,11 @@ is download 1's; `make-release.ps1` renders the other downloads' from the
 same function and puts each in its own zip in its place) carries a
 section "THIS DOWNLOAD" saying which download it is by number and zip
 name, what it adds to the one before, which of the three this release
-has, and both addresses; downloads 2 and 3 say that the free drivers are
-at a beta stage and that a problem with one goes to
-`https://github.com/yeokm1/usb-wdm-free/issues`, not to xHCI98's; download
-3 says that `NONFREE\` holds other makers' drivers, Microsoft's KMDF
+has, and both addresses; downloads 2 and 3 carry the owner's sentence
+for the free drivers ("These drivers are experimental. They may not work
+with every device and can make Windows unstable. Report problems at
+https://github.com/yeokm1/usb-wdm-free."); download
+3 says that `USBDRV\NONFREE\` holds other makers' drivers, Microsoft's KMDF
 co-installers among them, unmodified, with no licence to redistribute
 them established (legal-provenance.md section 5), and that they are not
 tested by this project. Its "What is in this directory" lists the
@@ -2722,29 +2726,29 @@ download's folders.
 
 #### 6.7.2 What each folder holds, and its record
 
-**`NONFREE\`**: the `non-free/` folder of a tagged release of the owner's
-`usb-wdm-nonfree` pack, its contents at `NONFREE\`'s root
-(`NONFREE\ethernet\...` is the pack's `non-free/ethernet/...`), read from
+**`USBDRV\NONFREE\`**: the `non-free/` folder of a tagged release of the owner's
+`usb-wdm-nonfree` pack, its contents at `USBDRV\NONFREE\`'s root
+(`USBDRV\NONFREE\ethernet\...` is the pack's `non-free/ethernet/...`), read from
 the checkout's git objects at the tag's commit and each file held to the
 pack's `SHA256.TXT` at that commit, which must list every file under
 `non-free/` and nothing else there; beside them the pack's `NOTICE.md`
 (whose each driver is), `README.md` (which folder serves which Windows)
 and `STAGE.TXT` (below), unchanged, and a `SHA256.TXT` the packager
 writes: one line `<sha256, lower case>  <path>` for every other file in
-the folder, the path relative to `NONFREE\` with `/`, the lines in
+the folder, the path relative to `USBDRV\NONFREE\` with `/`, the lines in
 ordinal order of the path, ASCII, CRLF line ends. The pack's `nusb33/` is
 not in it and is not duplicated there (owner, 2026-10-22). The pin
 (`package-common.ps1`): the tag `v1.0.0`, its commit
 `128106f786d462024eda08d117154b21cb01b57b`, and the SHA-256 of the pack's
 `SHA256.TXT` blob there,
 `d48c086301074793d6f0ed26798425ebd70345c977f11fade9c47531956d070e`; the
-generated `NONFREE\SHA256.TXT` of that pin hashes to
+generated `USBDRV\NONFREE\SHA256.TXT` of that pin hashes to
 `e3ea38f94c0c30e1804fe1ca6d89f5e0eb671ee4dbfa31a71fbd151aa12845c1`
 (456 lines), which the installer carries.
 
-**`WDMFREE\`**: the qualifying drivers of a tagged release of
+**`USBDRV\FREE\`**: the qualifying drivers of a tagged release of
 `usb-wdm-free`, each package's folder `free/<class>/<package>/` at
-`WDMFREE\<class>\<package>\`, every file held to a SHA-256 recorded in
+`USBDRV\FREE\<class>\<package>\`, every file held to a SHA-256 recorded in
 this repository (the pin `scripts\package\wdmfree-pin.txt`: the tag, its
 commit, one `Package:` line per qualifying package with the systems its
 legs passed on, and one `SHA256:` line per file, the release's `LICENSE`,
@@ -2755,7 +2759,7 @@ in the pack's format below), a `READ.TXT` the packager writes from the
 pin (a fixed header, then one line `<class>/<package> | <systems>` per
 package in the pin's order, the systems in the pin's order and
 `STAGE.TXT`'s tokens; ASCII, CRLF), and a `SHA256.TXT` written as
-`NONFREE\`'s is. usb-wdm-free has no release yet and no `STAGE.TXT`:
+`USBDRV\NONFREE\`'s is. usb-wdm-free has no release yet and no `STAGE.TXT`:
 until it has both the pin is empty and so is the installer's hash for the
 set (section 6.7.1). A release with no `STAGE.TXT`, or one whose lines do
 not put every INF of a qualifying package on exactly one line, is refused
@@ -2767,7 +2771,7 @@ printable ASCII without `\ : * ? " < > | ;` (the last because
 part and no part that starts with a space or ends with a space or a dot,
 and at most 140 characters (`Test-OtherSetRelPath` at the cut,
 `inst_other_rel_ok` in the installer): with the install directory's 100
-characters (record 23 section 9.6), `\NONFREE\` and a temporary suffix,
+characters (record 23 section 9.6), `\USBDRV\NONFREE\` and a temporary suffix,
 every destination stays under `MAX_PATH`. The installer checks each
 source and destination path it builds against `MAX_PATH` as well (a
 download unpacked deep in a tree can pass it on the source side), and a
@@ -2801,6 +2805,36 @@ current pins or a checkout's HEAD), and refuses one whose regenerated
 `SHA256.TXT` does not hash as recorded; the readme of each download is a
 function of the published readme and this record.
 
+**One folder for the other drivers** (the owner, 2026-10-23, draft 37).
+NUSB 3.3's files and both sets are under one folder, in the download and
+in the install directory alike, every level of it 8.3: `USBDRV\NUSB33\`
+(the storage row's `USBDRV\NUSB33\W98SE`, `INST_STOR_PACK_DIR`; on a
+system but 98 SE `/storage` copies the seven to `<dir>\USBDRV\NUSB33`),
+`USBDRV\FREE\` and `USBDRV\NONFREE\` (`INST_WDMFREE_DIR`,
+`INST_NONFREE_DIR`), which replace the top-level `WDMFREE\` and
+`NONFREE\` and `NUSB33\` of drafts 22 to 36. The packager writes them so
+(`package-common.ps1`: `$UsbDrvFolder`, `$DriverPackFolder`,
+`$NonFreeFolder`, `$WdmFreeFolder`), the upload set and the release
+layout checks hold them there (a published tree holding `USBDRV\` is
+refused), the install directory's copies, the record files' `Dir`, the
+staged `DevicePath` entries and the uninstall's folders follow, and the
+uninstall takes `USBDRV\` itself with its last folder. **No compatibility
+is needed**: `3.1.0.0` shipped no NUSB folder (`releases\3.1.0.0\` holds
+none, and its installer had no storage row), and neither set has
+shipped, so no update finds one of them at an old path.
+**`DevicePath` on 98 SE and ME** gains `USBDRV\` in every per-package
+entry: with the default `C:\XHCI98` an entry is about 45 characters
+(`C:\XHCI98\USBDRV\NONFREE\serial\ft2232d\w98se-me`), so the base
+value (`C:\WINDOWS\INF;C:\XHCI98`) and every package of both sets with a
+98 SE line (the pinned non-free pack's six, the free README's ten) come
+to about 750 characters; with a 100-character install directory (record
+23 section 9.6) each entry grows by 90 and the whole by about 1,450, past
+2,048. The installer keeps its own limit, the 2,048 bytes
+`devicepath_write` holds, and a package whose entry would pass it is not
+staged and is said (section 6.7.6); the 98 SE setup engine's own limit on
+`DevicePath` is not read (owed, a leg with a value near 2,048 that a
+wizard must still search to its end).
+
 #### 6.7.3 Detection
 
 At the read, for each set: **carried** when its folder is at the package
@@ -2812,7 +2846,7 @@ the parsed lines of those small files are kept from the bytes that were
 hashed and used for every later decision of the run. **Not this
 release's** when the folder is there and any of that fails (the log names
 what); **absent** otherwise. The other files' bytes are read when they
-are copied (section 6.7.5), not at the read: `NONFREE\` is 66 MB, and
+are copied (section 6.7.5), not at the read: `USBDRV\NONFREE\` is 66 MB, and
 hashing it before the first page would keep a Windows 98 SE machine on
 the Welcome page for minutes.
 
@@ -2826,12 +2860,13 @@ the Components page beside the rows"; this page is the Components
 page's second part, and the rows and their addresses are on it. From the
 top:
 
-- **The free USB class drivers (usb-wdm-free, beta)**, a check box,
-  unticked, shown only when the set is carried; its sentence: "Copies the
-  free USB class drivers to <dir>\WDMFREE. Nothing is installed: Windows
-  uses them only for a device you point it at, or with the box below.
-  These drivers are at a beta stage: report a problem with them at
-  https://github.com/yeokm1/usb-wdm-free/issues, not to xHCI98." Under
+- **The free USB class drivers (usb-wdm-free, experimental)**, a check
+  box, unticked, shown only when the set is carried; its sentence (the
+  owner, 2026-10-23: experimental, not beta, the second part his
+  sentence verbatim, also on the Finish page, in the console and in the
+  readmes): "Copied to <dir>\USBDRV\FREE. These drivers are
+  experimental. They may not work with every device and can make Windows
+  unstable. Report problems at https://github.com/yeokm1/usb-wdm-free." Under
   it, indented, a second box, unticked, open only while the first is
   ticked: "Let Windows use these automatically when a device is plugged
   in", with the count of INFs that would be staged on this Windows
@@ -2839,7 +2874,7 @@ top:
   this Windows." and greyed when that count is 0.
 - **The non-free driver pack (usb-wdm-nonfree)**, the same two boxes,
   the sentence: "Copies other makers' drivers (USB Ethernet, serial and
-  game pads) to <dir>\NONFREE. They are their makers' work, not this
+  game pads) to <dir>\USBDRV\NONFREE. They are their makers' work, not this
   project's, and have not been tested by this project on any Windows.
   Nothing is installed: Windows uses them only for a device you point it
   at, or with the box below."
@@ -2923,7 +2958,7 @@ for every component), wherever they are.
 
 **The record file** is `<the install directory>\WDMFREE.REC` or
 `\NONFREE.REC`, ASCII, CRLF, a file and not registry values because on 98
-SE and ME a registry key holds at most 64 KB of values and `NONFREE\`'s
+SE and ME a registry key holds at most 64 KB of values and `USBDRV\NONFREE\`'s
 457 files would pass that. Its first line is `XHCI98 SET RECORD 1 <Free or
 NonFree> <Dir>`. With the key written, it is made with `CREATE_NEW`, its
 header written and flushed, and only then `RecordMade` set to 1. When
@@ -3031,7 +3066,7 @@ and said with the file that stopped it.
 - **98 SE and ME** (the owner, 2026-10-22: those systems' hardware
   wizard does not search subfolders, so one folder per driver, and
   "stage" there means `DevicePath`): each distinct folder of those INFs,
-  `<dir>\NONFREE\serial\ftdi\w98se-me` say, appended to `DevicePath`
+  `<dir>\USBDRV\USBDRV\NONFREE\serial\ftdi\w98se-me` say, appended to `DevicePath`
   (`inst_path_append`) when it is not there already, and only when the
   folder holds no file but those the set lists (the wizard reads every
   INF of a folder on `DevicePath`: an unlisted INF there leaves the
@@ -3114,7 +3149,7 @@ every install run, on every system and in every download: for each set,
 its address always; when copied, the folder and, for this Windows, the
 folders that hold an INF on a line naming it ("To install one by hand,
 point the Add New Hardware Wizard (or Update Driver) at one of: ...", up
-to six, then "and <n> more: see <dir>\NONFREE\STAGE.TXT"), and which were
+to six, then "and <n> more: see <dir>\USBDRV\NONFREE\STAGE.TXT"), and which were
 staged; when not copied, the line of section 6.7.4 for its state
 (carried and left unticked: "Not copied this time; it is in this
 download's <folder>."). The uninstall's Finish page does not carry it.
@@ -3192,17 +3227,19 @@ the install, and nothing here removes a driver Windows installed (record
   (owner, 2026-10-22: no VM checks of the non-free drivers themselves;
   these legs read the installer, not the drivers).
 
-#### 6.7.10 The coordinator's overnight decisions (2026-10-23, pending the owner's review)
+#### 6.7.10 The coordinator's overnight decisions (2026-10-23, approved by the owner 2026-10-23)
 
 The six proposals this section put to the owner were taken overnight by
 the coordinator of the 3.2.0.0 work on 2026-10-23, as recommended, and
-stand until the owner reviews them:
+were approved by the owner on 2026-10-23, as amended that day (the
+folders under `USBDRV\`, the experimental sentence and the per-package
+descriptions; sections 6.7.2, 6.7.4 and 6.7.11):
 
 1. While no usb-wdm-free release qualifies, the cut makes downloads 1
    and 3 only (section 6.7.1); download 2 is made once the pin names a
    release.
 2. The zips are `xhci98-<version>.zip`, `-free.zip` and `-nonfree.zip`,
-   and the folders `WDMFREE\` and `NONFREE\` (sections 6.7.1 and 6.7.2).
+   and the folders `USBDRV\FREE\` and `USBDRV\NONFREE\` (sections 6.7.1 and 6.7.2).
 3. The rows are on a page of their own after Components, "Other USB
    drivers", with the addresses beside them there and on the Finish page
    (section 6.7.4); when section 5.0's simplified Components page is

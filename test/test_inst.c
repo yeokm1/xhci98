@@ -483,7 +483,7 @@ static void test_cm_only(void)
         inst_comp_warn_text(INST_CW_STOR | INST_CW_CMALONE | INST_CW_USB8 |
                             INST_CW_NOCM8, "C:\\XHCI98", text,
                             sizeof(text));
-        CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
+        CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
               strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
               strstr(text, "UAS disk driver, when ticked, is only staged") !=
@@ -5681,16 +5681,18 @@ static void test_other_sets(void)
     CHECK(inst_rec_parse("F 0A1B2C3D 692d C:\\x", &rl) == -1, "rec: a short hash");
 
     /* The page's texts. */
-    CHECK(strcmp(inst_other_folder(INST_SET_FREE), "WDMFREE") == 0 &&
-          strcmp(inst_other_folder(INST_SET_NONFREE), "NONFREE") == 0,
+    CHECK(strcmp(inst_other_folder(INST_SET_FREE), "USBDRV\\FREE") == 0 &&
+          strcmp(inst_other_folder(INST_SET_NONFREE), "USBDRV\\NONFREE") == 0,
           "texts: the folders");
     inst_other_sentence(text, sizeof(text), INST_SET_FREE, "C:\\XHCI98");
-    CHECK(strstr(text, "C:\\XHCI98\\WDMFREE. Nothing is installed") != NULL &&
-          strstr(text, "beta stage") != NULL &&
-          strstr(text, "https://github.com/yeokm1/usb-wdm-free/issues, not "
-                       "to xHCI98.") != NULL, "texts: the free sentence");
+    CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\FREE. ") != NULL &&
+          strstr(text, INST_FREE_NOTICE) != NULL &&
+          strcmp(INST_FREE_NOTICE, "These drivers are experimental. They may "
+                 "not work with every device and can make Windows unstable. "
+                 "Report problems at https://github.com/yeokm1/usb-wdm-free.")
+          == 0, "texts: the free sentence, the owner's words of 2026-10-23");
     inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98");
-    CHECK(strstr(text, "C:\\XHCI98\\NONFREE. They are their makers'") != NULL &&
+    CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\NONFREE. They are their makers'") != NULL &&
           strstr(text, "not been tested by this project") != NULL,
           "texts: the non-free sentence");
     inst_other_stage_text(text, sizeof(text), 0);
@@ -5722,7 +5724,7 @@ static void test_other_sets(void)
           == 0, "line: a release with no free set");
     inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_NOTOURS, 1,
                     "3.2.0.0");
-    CHECK(strstr(text, "The NONFREE folder beside this installer is not this "
+    CHECK(strstr(text, "The USBDRV\\NONFREE folder beside this installer is not this "
                        "release's") != NULL &&
           strstr(text, "xhci98-3.2.0.0-nonfree.zip or https://github.com/"
                        "yeokm1/usb-wdm-nonfree.") != NULL, "line: not ours");

@@ -2307,10 +2307,14 @@ function New-UploadSet {
     # tree does not, where the installer takes it from. A published tree
     # holding one is refused - the pack is never in releases\.
     $packTarget = Join-Path $uploadRoot $script:DriverPackFolder
+    if (Test-Path -LiteralPath (Join-Path $uploadRoot $script:UsbDrvFolder)) {
+        throw "'$PublishedRoot' holds a $($script:UsbDrvFolder)\; the driver pack and the downloads' driver sets are never in releases\ (docs\contributing\legal-provenance.md section 5)."
+    }
     if (Test-Path -LiteralPath $packTarget) {
         throw "'$PublishedRoot' holds a $($script:DriverPackFolder)\; the driver pack is never in releases\ (docs\contributing\legal-provenance.md section 5)."
     }
     if ($null -ne $DriverPack) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $packTarget) | Out-Null
         Copy-Item -LiteralPath $DriverPack.Dir -Destination $packTarget -Recurse
         $packFault = Get-DriverPackFolderFault -Dir $packTarget -Files $DriverPack.Files
         if ($packFault -ne "") { throw "the upload set's driver pack is not the folder that was verified: $packFault." }
@@ -2327,6 +2331,7 @@ function New-UploadSet {
             throw "'$PublishedRoot' holds a $($sp[0])\; the downloads' driver sets are never in releases\ (design record 26 section 6.7.2)."
         }
         if ($null -ne $sp[1] -and $sp[2] -contains $Kind) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
             Copy-Item -LiteralPath $sp[1].Dir -Destination $target -Recurse
             $setFault = Get-DriverPackFolderFault -Dir $target -Files $sp[1].Files
             if ($setFault -ne "") { throw "the upload set's $($sp[0])\ is not the folder that was verified: $setFault." }
@@ -4766,7 +4771,7 @@ helper (xhciinst\di\build.cmd).
         $contents += ""
     }
     if ($driverPackIncluded) {
-        $contents += "  NUSB33\         - NUSB 3.3's Windows 98 SE storage files (section 3)"
+        $contents += "  USBDRV\NUSB33\  - NUSB 3.3's Windows 98 SE storage files (section 3)"
         $contents += ""
         $contents += "      NOTICE.md    whose they are: not this project's"
         $contents += "      SHA256.TXT   their hashes"

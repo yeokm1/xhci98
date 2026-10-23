@@ -1493,8 +1493,9 @@ Safely Remove also stops USB storage on both systems.
 **Planned for `3.2.0.0`, not yet built: the download is to carry them,
 and the installer to offer them on Windows 98 SE** (roadmap-usb4 tasks 43.3
 and 43.4). They are to be NUSB 3.3's copies, unmodified, in a folder of
-their own at the download's root, `NUSB33\` (the files in
-`NUSB33\W98SE\`), with a `NOTICE.md` saying whose they
+their own, `USBDRV\NUSB33\` (the files in
+`USBDRV\NUSB33\W98SE\`; `USBDRV\` also holds the other USB
+drivers' sets, `FREE\` and `NONFREE\`), with a `NOTICE.md` saying whose they
 are; they are not this
 project's work, and no licence to redistribute them has been established.
 The installer's row is planned for Windows 98 SE only, to install them

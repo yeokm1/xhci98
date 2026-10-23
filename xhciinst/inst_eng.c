@@ -18532,7 +18532,7 @@ static void stor_note(char *out, size_t cap)
 {
     if (storPack == 0) {
         inst_copy(out, "This download does not carry the USB storage drivers "
-                  "(NUSB33\\W98SE).", cap);
+                  "(USBDRV\\NUSB33\\W98SE).", cap);
         stor_note_half(out, cap);
         return;
     }
@@ -20867,7 +20867,9 @@ static void stor_tools_copy(void)
         toolDir[0] == '\0') {
         return;
     }
-    join(dir, sizeof(dir), toolDir, "NUSB33");
+    join(dir, sizeof(dir), toolDir, INST_USBDRV_DIR);
+    CreateDirectoryA(dir, NULL);
+    join(dir, sizeof(dir), dir, "NUSB33");
     if (opts.List) {
         out("(/list) the USB storage drivers' seven files would be copied to "
             "%s.\n", dir);
@@ -20963,9 +20965,15 @@ static int stor_tools_remove(void)
         if (!stor_rec_del("Tools", name)) {
             return 0;
         }
-        /* The folder goes with its last file, whichever folder it is. */
+        /* The folder goes with its last file, whichever folder it is, and
+         * USBDRV with its last folder. */
         if (RemoveDirectoryA(dir)) {
             out("%s removed.\n", dir);
+            s = strrchr(dir, '\\');
+            if (s != NULL) {
+                *s = '\0';
+                RemoveDirectoryA(dir);
+            }
         }
     }
     return !left;
@@ -24843,6 +24851,17 @@ static int other_remove(int set, int uninstall)
             }
         }
         other_rmdirs(dir);
+        {
+            /* USBDRV with its last folder. */
+            char up[INST_PATH_CHARS];
+            char *s2;
+            inst_copy(up, dir, sizeof(up));
+            s2 = strrchr(up, '\\');
+            if (s2 != NULL) {
+                *s2 = '\0';
+                RemoveDirectoryA(up);
+            }
+        }
         out("%s's copies in %s were removed.\n", inst_other_label(set), dir);
         if (!other_key_made(set, 2)) {
             return 0;
@@ -25169,8 +25188,10 @@ static void other_finish(char *text, size_t cap, const char *nl)
                 }
                 n++;
             }
-            _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.",
-                      inst_other_label(set), dir, inst_other_address(set));
+            _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.%s%s",
+                      inst_other_label(set), dir, inst_other_address(set),
+                      set == INST_SET_FREE ? nl : "",
+                      set == INST_SET_FREE ? INST_FREE_NOTICE : "");
             one[sizeof(one) - 1] = '\0';
             strncat(text, one, cap - strlen(text) - 1);
             for (i = 0; i < o->PkgCount; i++) {
@@ -25280,7 +25301,8 @@ void inst_eng_stor_summary(char *out, size_t cap)
     out[0] = '\0';
     if (storTools && storToolsInclude) {
         _snprintf(out, cap - 1, "USB storage drivers for Windows 98 SE: their "
-                  "files copied to %s\\NUSB33 only; nothing installs them "
+                  "files copied to %s\\USBDRV\\NUSB33 only; nothing "
+                  "installs them "
                   "here.", toolDir);
         out[cap - 1] = '\0';
         return;
@@ -25454,7 +25476,8 @@ void inst_eng_usage(void)
 "  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's);\n"
 "                elsewhere copy their files to the tools folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
-"  /wdmfree:copy copy the free USB class drivers (beta) to the tools folder\n"
+"  /wdmfree:copy copy the free USB class drivers (experimental) to the tools\n"
+"                folder\n"
 "                (/free is the same)\n"
 "  /wdmfree:stage=<class/package>,...  and let Windows choose those packages\n"
 "                automatically for matching devices (INSTALL /list lists\n"

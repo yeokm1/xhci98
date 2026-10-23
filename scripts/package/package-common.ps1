@@ -1866,7 +1866,10 @@ function Get-GatedHeadAdvance {
 # to the pack's SHA256.TXT at that revision and to this allowlist, which is
 # legal-provenance.md section 5's table: changing it is a decision recorded
 # there first.
-$script:DriverPackFolder = "NUSB33"
+# The owner, 2026-10-23: NUSB 3.3's files and both sets under one
+# folder, USBDRV\, every level 8.3 (record 26 section 6.7.2).
+$script:UsbDrvFolder = "USBDRV"
+$script:DriverPackFolder = "USBDRV\NUSB33"
 $script:DriverPackStorageRel = "nusb33/w98se"
 # Where the seven sit under NUSB33\ in the download.
 $script:DriverPackStorageDir = "W98SE"
@@ -2340,7 +2343,7 @@ function ConvertFrom-MarkdownBlocks {
 # hash of that file for this release's pins (INST_NONFREE_SUMS and
 # INST_WDMFREE_SUMS, xhciinst\inst_core.h), which the cut holds equal to
 # what it writes.
-$script:NonFreeFolder = "NONFREE"
+$script:NonFreeFolder = "USBDRV\NONFREE"
 $script:NonFreePrefix = "non-free"
 $script:NonFreeExtras = @("NOTICE.md", "README.md", "STAGE.TXT")
 $script:NonFreePin = [pscustomobject]@{
@@ -2349,7 +2352,7 @@ $script:NonFreePin = [pscustomobject]@{
     # The SHA-256 of the pack's own SHA256.TXT blob at that commit.
     PackSums   = "D48C086301074793D6F0ED26798425EBD70345C977F11FADE9C47531956D070E"
 }
-$script:WdmFreeFolder = "WDMFREE"
+$script:WdmFreeFolder = "USBDRV\FREE"
 $script:WdmFreePrefix = "free"
 $script:WdmFreeExtras = @("LICENSE", "NOTICE.md", "STAGE.TXT")
 $script:OtherSums = "SHA256.TXT"
@@ -2362,8 +2365,8 @@ $script:StageSystems = @("W98SE", "WME", "W2K", "WXP", "WXP64", "WVISTA", "WVIST
 # the folders each adds to the one before.
 $script:DownloadKindTable = [ordered]@{
     "base"    = [pscustomobject]@{ Number = 1; Suffix = "";         Adds = "" }
-    "free"    = [pscustomobject]@{ Number = 2; Suffix = "-free";    Adds = "WDMFREE" }
-    "nonfree" = [pscustomobject]@{ Number = 3; Suffix = "-nonfree"; Adds = "NONFREE" }
+    "free"    = [pscustomobject]@{ Number = 2; Suffix = "-free";    Adds = "USBDRV\FREE" }
+    "nonfree" = [pscustomobject]@{ Number = 3; Suffix = "-nonfree"; Adds = "USBDRV\NONFREE" }
 }
 
 function Get-DefaultWdmFreeRoot {
@@ -2852,7 +2855,7 @@ function Get-ReadmeDownloadText {
             if ($DriverPackIncluded) {
                 $L += "This is $z1, the base download of xhci98 ${Version}: the drivers,"
                 $L += "their tools and installer, and NUSB 3.3's Windows 98 SE storage files"
-                $L += "(NUSB33\)."
+                $L += "(USBDRV\NUSB33\)."
             } else {
                 $L += "This is $z1, the base download of xhci98 ${Version}: the drivers,"
                 $L += "their tools and installer."
@@ -2860,17 +2863,17 @@ function Get-ReadmeDownloadText {
         }
         "free" {
             $L += Format-ReadmeWrap -Text ("This is ${z2}: the base download, $z1, with the free USB " +
-                                          "class drivers of usb-wdm-free $FreeTag added in WDMFREE\.")
+                                          "class drivers of usb-wdm-free $FreeTag added in USBDRV\FREE\.")
         }
         "nonfree" {
             if ($FreeTag -ne "") {
                 $L += Format-ReadmeWrap -Text ("This is ${z3}: $z2 (the base download with the free USB " +
-                                              "class drivers of usb-wdm-free $FreeTag in WDMFREE\), with " +
+                                              "class drivers of usb-wdm-free $FreeTag in USBDRV\FREE\), with " +
                                               "the non-free driver pack of usb-wdm-nonfree $NonFreeTag " +
-                                              "added in NONFREE\.")
+                                              "added in USBDRV\NONFREE\.")
             } else {
                 $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the non-free " +
-                                              "driver pack of usb-wdm-nonfree $NonFreeTag added in NONFREE\.")
+                                              "driver pack of usb-wdm-nonfree $NonFreeTag added in USBDRV\NONFREE\.")
             }
         }
         default { throw "no download '$Kind'." }
@@ -2879,8 +2882,8 @@ function Get-ReadmeDownloadText {
     $L += "This release has these downloads, each holding the one before it:"
     $L += ""
     $L += ("  {0,-26} the base download" -f $z1)
-    if ($Kinds -contains "free") { $L += ("  {0,-26} adds the free USB class drivers (WDMFREE\)" -f $z2) }
-    if ($Kinds -contains "nonfree") { $L += ("  {0,-26} adds the non-free driver pack (NONFREE\)" -f $z3) }
+    if ($Kinds -contains "free") { $L += ("  {0,-26} adds the free USB class drivers (USBDRV\FREE\)" -f $z2) }
+    if ($Kinds -contains "nonfree") { $L += ("  {0,-26} adds the non-free driver pack (USBDRV\NONFREE\)" -f $z3) }
     $L += ""
     if ($Kinds -notcontains "free") {
         $L += "No free USB class driver is in any download of this release yet: none"
@@ -2894,21 +2897,18 @@ function Get-ReadmeDownloadText {
     $L += "  https://github.com/yeokm1/usb-wdm-nonfree"
     if ($Kind -ne "base" -and $FreeTag -ne "") {
         $L += ""
-        $L += "The free USB class drivers are at a beta stage. Please report a problem"
-        $L += "with one of them to their maintainer, at"
-        $L += ""
-        $L += "      https://github.com/yeokm1/usb-wdm-free/issues"
-        $L += ""
-        $L += "and not on xHCI98's issues page."
+        $L += "The free USB class drivers: These drivers are experimental. They may"
+        $L += "not work with every device and can make Windows unstable. Report"
+        $L += "problems at https://github.com/yeokm1/usb-wdm-free."
     }
     if ($Kind -eq "nonfree") {
         $L += ""
-        $L += "NONFREE\ holds other makers' drivers (USB Ethernet, serial and game pad"
-        $L += "drivers), unmodified, as their makers released them. They are not this"
-        $L += "project's work and have not been tested by this project on any Windows."
-        $L += "NONFREE\NOTICE.md says whose each one is, and quotes what some of their"
-        $L += "makers said about passing them on; apart from that, no licence to"
-        $L += "redistribute them has been found."
+        $L += "USBDRV\NONFREE\ holds other makers' drivers (USB Ethernet, serial and"
+        $L += "game pad drivers), unmodified, as their makers released them. They are"
+        $L += "not this project's work and have not been tested by this project on any"
+        $L += "Windows. USBDRV\NONFREE\NOTICE.md says whose each one is, and quotes"
+        $L += "what some of their makers said about passing them on; apart from that,"
+        $L += "no licence to redistribute them has been found."
     }
     return ($L -join "`r`n")
 }
@@ -2923,8 +2923,8 @@ function Get-ReadmeOtherContentsText {
             return ($L -join "`r`n")
         }
     } else {
-        $L += Format-ReadmeWrap -Lead "  WDMFREE\        - " -Rest "                    " `
-                  -Text "the free USB class drivers (beta), from usb-wdm-free $FreeTag"
+        $L += Format-ReadmeWrap -Lead "  USBDRV\FREE\    - " -Rest "                    " `
+                  -Text "the free USB class drivers (experimental), from usb-wdm-free $FreeTag"
         $L += ""
         $L += "      LICENSE      their licence, the GNU GPL v2"
         $L += "      NOTICE.md    the code in them adapted from other projects"

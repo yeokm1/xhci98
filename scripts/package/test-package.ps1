@@ -1695,7 +1695,7 @@ try {
         $sumsDl = Read-DriverPackHashList -Text ([System.IO.File]::ReadAllText((Join-Path $exp.Dir "SHA256.TXT"))) -Label "the download's SHA256.TXT"
         Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NUSB33\ paths."
         Assert-True ((Get-DriverPackFolderFault -Dir $exp.Dir -Files $exp.Files) -eq "") "the export does not pass its own folder check."
-        foreach ($dlDir in @("NUSB33", "NONFREE")) {
+        foreach ($dlDir in @("USBDRV\NUSB33", "USBDRV\NONFREE")) {
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $dlDir))) "a package of make-package.ps1's carries $dlDir\."
         }
         foreach ($bad in @(
@@ -1734,24 +1734,24 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
         $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
         foreach ($fl in @("release", "debug")) {
-            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\USBDRV\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
         }
-        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NUSB33") -Files $exp.Files
+        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "USBDRV\NUSB33") -Files $exp.Files
         Assert-True ($fault -eq "") "the upload set's NUSB33\ is not the recorded folder: $fault."
         # NUSB 3.3's folder stands beside the installer, never inside a
         # NONFREE\ (owner, 2026-10-22).
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "the upload set holds a NONFREE\; NUSB 3.3's files belong in NUSB33\."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "USBDRV\NONFREE"))) "the upload set holds a NONFREE\; NUSB 3.3's files belong in NUSB33\."
         foreach ($inf in @("USBSTOR.INF", "USBNTMAP.INF")) {
-            $p = Join-Path $uploadDir "NUSB33\W98SE\$inf"
+            $p = Join-Path $uploadDir "USBDRV\NUSB33\W98SE\$inf"
             Assert-True ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).LastWriteTime -eq $projStamp) "the upload set's $inf is not dated by this project's INFs."
         }
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NUSB33"))) "-UploadSetOnly put the driver pack under releases\."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "USBDRV\NUSB33"))) "-UploadSetOnly put the driver pack under releases\."
         $zip = [System.IO.Compression.ZipFile]::OpenRead($uploadZip)
         try { $entries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
-        foreach ($want in @("NUSB33/W98SE/USBSTOR.INF", "NUSB33/NOTICE.md", "NUSB33/SHA256.TXT")) {
+        foreach ($want in @("USBDRV/NUSB33/W98SE/USBSTOR.INF", "USBDRV/NUSB33/NOTICE.md", "USBDRV/NUSB33/SHA256.TXT")) {
             Assert-True ($entries -contains $want) "the archive has no '$want' entry."
         }
-        Assert-True (@($entries | Where-Object { $_ -like "NONFREE/*" }).Count -eq 0) "the archive has a NONFREE/ entry."
+        Assert-True (@($entries | Where-Object { $_ -like "USBDRV/NONFREE/*" }).Count -eq 0) "the archive has a NONFREE/ entry."
         $pubAfter = @{}
         foreach ($f in (Get-ChildItem -LiteralPath $pubRoot -File -Recurse)) { $pubAfter[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash }
         Assert-True ($pubAfter.Count -eq $pubBefore.Count -and @($pubBefore.Keys | Where-Object { $pubAfter[$_] -ne $pubBefore[$_] }).Count -eq 0) `
@@ -1780,17 +1780,17 @@ try {
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", (Join-Path $script:work "no-such-pack")))
         Assert-True ($r.ExitCode -eq 0) ("a release recorded without the driver pack was not assembled:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NUSB33"))) "a release recorded without the driver pack got NUSB33\ in its download."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "USBDRV\NUSB33"))) "a release recorded without the driver pack got NUSB33\ in its download."
         # A published tree holding NUSB33\ is refused: the pack is never
         # in releases\.
-        Ensure-Directory (Join-Path $pubRoot "NUSB33")
-        Set-Content -LiteralPath (Join-Path $pubRoot "NUSB33\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        Ensure-Directory (Join-Path $pubRoot "USBDRV\NUSB33")
+        Set-Content -LiteralPath (Join-Path $pubRoot "USBDRV\NUSB33\NOTICE.md") -Value "committed by hand" -Encoding ASCII
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
         $r = Invoke-Releaser $packRelArgs
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NUSB33\ was assembled:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NUSB33\."
-        Remove-Item -LiteralPath (Join-Path $pubRoot "NUSB33") -Recurse -Force
+        Remove-Item -LiteralPath (Join-Path $pubRoot "USBDRV") -Recurse -Force
         Write-AsciiFile -Path $recPath -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
 
         # The record is required from 3.2.0.0 (an older release may lack
@@ -2014,13 +2014,13 @@ try {
                 try { $rdText = $sr.ReadToEnd() } finally { $sr.Dispose() }
             } finally { $zip.Dispose() }
             $e = $zipEntries[$dk]
-            Assert-True ($e -contains "NUSB33/W98SE/USBSTOR.INF" -and $e -contains "release/xhci98.sys") "$dk's zip does not hold the package and NUSB33\."
-            Assert-True (($e -contains "WDMFREE/net/cdcx/w98se-me/CDCX.SYS") -eq ($dk -ne "base")) "$dk's zip has the wrong WDMFREE\."
-            Assert-True (($e -contains "NONFREE/ethernet/axs/w98se-me/AXS.INF" -and $e -contains "NONFREE/STAGE.TXT") -eq ($dk -eq "nonfree")) "$dk's zip has the wrong NONFREE\."
-            Assert-True (@($e | Where-Object { $_ -like "WDMFREE/video/*" -or $_ -like "NONFREE/nusb33/*" -or $_ -like "*/NUSB33/*" }).Count -eq 0) "$dk's zip holds an unpinned package or a second NUSB33\."
+            Assert-True ($e -contains "USBDRV/NUSB33/W98SE/USBSTOR.INF" -and $e -contains "release/xhci98.sys") "$dk's zip does not hold the package and NUSB33\."
+            Assert-True (($e -contains "USBDRV/FREE/net/cdcx/w98se-me/CDCX.SYS") -eq ($dk -ne "base")) "$dk's zip has the wrong WDMFREE\."
+            Assert-True (($e -contains "USBDRV/NONFREE/ethernet/axs/w98se-me/AXS.INF" -and $e -contains "USBDRV/NONFREE/STAGE.TXT") -eq ($dk -eq "nonfree")) "$dk's zip has the wrong NONFREE\."
+            Assert-True (@($e | Where-Object { $_ -like "USBDRV/FREE/video/*" -or $_ -like "USBDRV/NONFREE/nusb33/*" -or ($_ -like "*/NUSB33/*" -and $_ -notlike "USBDRV/NUSB33/*") }).Count -eq 0) "$dk's zip holds an unpinned package or a second NUSB33\."
             $zn = Get-DownloadZipName -Version $relVersion -Kind $dk
             Assert-True ($rdText.Contains("This is $zn")) "$dk's readme does not say it is $zn."
-            Assert-True (($rdText.Contains("usb-wdm-free/issues")) -eq ($dk -ne "base")) "$dk's readme has the wrong word on the free drivers' issues page."
+            Assert-True (($rdText.Contains("These drivers are experimental.")) -eq ($dk -ne "base")) "$dk's readme has the wrong word on the free drivers (the owner's experimental sentence)."
             Assert-True ($rdText.Contains("https://github.com/yeokm1/usb-wdm-free") -and $rdText.Contains("https://github.com/yeokm1/usb-wdm-nonfree")) "$dk's readme does not give both addresses."
             Assert-True (($rdText.Contains("in two places")) -eq ($dk -eq "nonfree")) "$dk's readme says the wrong thing of Microsoft's files."
         }
@@ -2028,15 +2028,15 @@ try {
             Assert-True (@($zipEntries["base"] | Where-Object { $zipEntries["free"] -notcontains $_ }).Count -eq 0) "download 2 does not hold every entry of download 1."
             Assert-True (@($zipEntries["free"] | Where-Object { $zipEntries["nonfree"] -notcontains $_ }).Count -eq 0) "download 3 does not hold every entry of download 2."
         }
-        foreach ($nm in @("WDMFREE", "NONFREE")) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot $nm))) "-UploadSetOnly put $nm\ under releases\." }
+        foreach ($nm in @("USBDRV\FREE", "USBDRV\NONFREE", "USBDRV")) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot $nm))) "-UploadSetOnly put $nm\ under releases\." }
 
         # Refusals, each leaving no zip: a published NONFREE\, a recorded
         # hash the tag does not give, a stand-in pin in this mode.
-        Ensure-Directory (Join-Path $pubRoot "NONFREE")
-        Set-Content -LiteralPath (Join-Path $pubRoot "NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        Ensure-Directory (Join-Path $pubRoot "USBDRV\NONFREE")
+        Set-Content -LiteralPath (Join-Path $pubRoot "USBDRV\NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
         $r = Invoke-Releaser $dlArgs
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NONFREE\ was assembled:`n" + $r.Output)
-        Remove-Item -LiteralPath (Join-Path $pubRoot "NONFREE") -Recurse -Force
+        Remove-Item -LiteralPath (Join-Path $pubRoot "USBDRV") -Recurse -Force
         [System.IO.File]::WriteAllText((Join-Path $pubRoot "downloads.txt"), $dlRec.Replace($nf.Sums, ("B" * 64)) + "`r`n")
         $z3 = (Get-DownloadPaths -UploadDir $upRoot -Version $relVersion -Kind "nonfree").Zip
         Remove-Item -LiteralPath $z3 -Force
@@ -2063,7 +2063,7 @@ try {
         $instHText = [System.IO.File]::ReadAllText((Join-Path $repo "xhciinst\inst_core.h"))
         foreach ($pair in @(@("INST_WDMFREE_DIR", $script:WdmFreeFolder), @("INST_NONFREE_DIR", $script:NonFreeFolder))) {
             $m = [regex]::Match($instHText, '#define\s+' + $pair[0] + '\s+"([^"]+)"')
-            Assert-True ($m.Success -and $m.Groups[1].Value -ceq $pair[1]) ("the installer's {0} is not the download's {1}\." -f $pair[0], $pair[1])
+            Assert-True ($m.Success -and $m.Groups[1].Value.Replace('\\', '\') -ceq $pair[1]) ("the installer's {0} is not the download's {1}\." -f $pair[0], $pair[1])
         }
         $repoPin = Read-WdmFreePin -Path (Join-Path $repo "scripts\package\wdmfree-pin.txt")
         Assert-True (($null -eq $repoPin) -eq ($instSums.Free -eq "")) "INST_WDMFREE_SUMS and wdmfree-pin.txt disagree on whether the release has a free set."

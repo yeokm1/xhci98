@@ -1911,13 +1911,20 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * folder must hold. "" for a release with no such set. */
 #define INST_WDMFREE_SUMS       ""
 #define INST_NONFREE_SUMS     "E3EA38F94C0C30E1804FE1CA6D89F5E0EB671EE4DBFA31A71FBD151AA12845C1"
-#define INST_WDMFREE_DIR        "WDMFREE"
-#define INST_NONFREE_DIR        "NONFREE"
-#define INST_SET_FREE           0   /* usb-wdm-free, WDMFREE\                */
-#define INST_SET_NONFREE        1   /* usb-wdm-nonfree's non-free/, NONFREE\ */
+/* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
+ * in the download and in the install directory, every level 8.3. */
+#define INST_USBDRV_DIR         "USBDRV"
+#define INST_WDMFREE_DIR        "USBDRV\\FREE"
+#define INST_NONFREE_DIR        "USBDRV\\NONFREE"
+#define INST_SET_FREE           0   /* usb-wdm-free, USBDRV\FREE\          */
+#define INST_SET_NONFREE        1   /* usb-wdm-nonfree's non-free/, USBDRV\NONFREE\ */
 #define INST_SET_COUNT          2
 /* The free set's certificate's public half (record 26 section 6.7.11). */
 #define INST_WDMFREE_CER        "usb-wdm-free-test.cer"
+/* The owner's sentence for the free set (2026-10-23), verbatim. */
+#define INST_FREE_NOTICE "These drivers are experimental. They may not work " \
+    "with every device and can make Windows unstable. Report problems at " \
+    "https://github.com/yeokm1/usb-wdm-free."
 /* A set's state in the download (section 6.7.3). */
 #define INST_OTHER_ABSENT       0   /* no folder                             */
 #define INST_OTHER_CARRIED      1   /* the folder holds what the record names */
@@ -2082,7 +2089,7 @@ void inst_other_warn_text(INST_U32 set, const char *freeUnread,
 #define INST_STOR_DIR_DRIVERS   0   /* %windir%\SYSTEM32\DRIVERS (dirid 10) */
 #define INST_STOR_DIR_IOS       1   /* the system directory's IOSUBSYS (12) */
 #define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
-#define INST_STOR_PACK_DIR      "NUSB33\\W98SE"
+#define INST_STOR_PACK_DIR      "USBDRV\\NUSB33\\W98SE"
 #define INST_STOR_KEY           "Software\\xhci98\\Storage"
 /* S98VSD.VXD's own record (design record 30 section 7.4): File and
  * Pending, apart from Stor98's. */
