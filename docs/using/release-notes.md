@@ -2913,7 +2913,7 @@ controller read its own key, as before. A value of the wrong type there
 still wins, and the driver's default stands. The INFs write nothing
 there, so nothing changes until a value is set in it; `portsw.vbs`,
 `silent.vbs` and their batch files set their value there and show both.
-The installer's settings pages, its console questions and `INSTALL /set`
+The installer's Settings dialog, its console questions and `INSTALL /set`
 write the machine-wide value too, never a controller's own, and show
 both; its uninstall deletes the values it names there and leaves the key.
 To give one controller a different value, delete the machine-wide value
