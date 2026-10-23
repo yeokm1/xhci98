@@ -4117,8 +4117,10 @@ or says it was found by reading the code.
   or a webcam with a microphone), whatever its driver: seen with
   Windows' own `usbaudio.sys` and with usb-wdm-free's `uac2`, under
   Windows' own UHCI driver, NUSB and `xhci98.sys` alike (QEMU readings,
-  2026-10-23); once one device had come through in a boot, later
-  arrivals in that boot did not freeze. For `3.2.0.0` it is documented,
+  2026-10-23); once a first plug after the boot had come through, later
+  plugs in that boot did not freeze, but a device that came up with
+  Windows at the start does not protect the next plug (unplugged and
+  plugged back, it froze 5 times in 7). For `3.2.0.0` it is documented,
   not fixed (the owner's decision). What helps: **plug the device in
   before switching on and leave it plugged in until shutdown** (a device
   present when Windows started came up with it in every boot read); if
@@ -4379,10 +4381,11 @@ this project's source tree but under its own licence (BSD-3-Clause), with
 its licence and notice beside it ("NVMe drives behind Thunderbolt or
 USB4"). The `usbd.sys` and `usbui.dll` the install needs are not in the
 download: they are Windows' own and are copied by Windows from your own
-installation source. No download so far carries a Microsoft file. From
-`3.2.0.0` (planned, not yet built) a download's only Microsoft files are to be
-NUSB 3.3's seven Windows 98 SE storage files ("Windows 98 SE and ME: the
-stock install, and storage"), unmodified, in a folder of their own with a
+installation source. No download up to `3.1.0.0` carries a Microsoft
+file. From `3.2.0.0` the base and `-free` downloads' only Microsoft files
+are NUSB 3.3's seven Windows 98 SE storage files ("Windows 98 SE and
+ME: the stock install, and storage"; the `-nonfree` download adds two
+more, below), unmodified, in a folder of their own with a
 `NOTICE.md` saying whose they are; they are not this project's work and are
 under no licence of this project's, and no licence to redistribute them has
 been established. A download built without them carries no Microsoft file,
