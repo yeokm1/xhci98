@@ -421,6 +421,9 @@ typedef struct _HW_DEVICE_EXTENSION {
     ULONG PfDcbDmd;
     STOR98PF_TOTALS Pf;
     STOR98PF_ANSWER PfAnswer;                       // built in HwStartIo for READ BUFFER, then copied
+#ifdef STOR98_TEST_NOAUTOSENSE
+    ULONG TestNoAsReads;                            // READ(10)s seen by the test build
+#endif
     ENG_CLOCK Clock;
     ENG_TUNABLES Tun;
     ENG_BUSY Busy[ENG_BUSY_TRACK];

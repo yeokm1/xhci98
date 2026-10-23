@@ -758,6 +758,110 @@ is dropped for 3.2.0.0 (owner, 2026-10-22). A cost or speed task opens
 after 3.2.0.0 only if Windows 7's Q1T1 reading on the same drive is much
 faster.
 
+### The legs of section 9.2 (2026-10-23)
+
+These are record 30's section 9.2 legs, run overnight one guest at a time
+(TCG, one vCPU, 256 MB). There were three vehicles:
+
+- **98 SE gold.** The kit's `i98`: an overlay of the t26 gold 98 SE with
+  xHCI98 3.0.0.0. It uses the generic USB4 profile (`usb4-host
+  profile=usb4-generic`, bridge 00:05) with no TB3 xHCI and no internal
+  NVMe. With p42-s98tun's layout (`usb4-tb3-xhci` at 00:07, an internal
+  NVMe at 00:09) the hot-plugged NVMe got Code 29 ("did not give it an
+  IRQ"), as in `run-40.md`; without the internal NVMe it mounted.
+- **98 SE QuickInstall.** The read-first vehicle: the 2 MiB `stor98.mpd`
+  as `STOR98.MPD`, with `PortDriver` set to `stor98.mpd`.
+- **ME.** The p43-13 ME image with xHCI98 3.1.0.0, the same generic
+  profile.
+
+The package was this branch's test cut ("43.46 legs, S98VSD.VXD") at
+`8f99acde`; its `S98VSD.VXD` is `85C2AC4B...`. The `qemu` image is the same
+code with its debug-port lines. Every verify was 0 unless said otherwise.
+
+**The installer, 98 SE gold, console route** (`INSTALL.BAT /console`,
+read back from `XHCIINST.LOG`, `IOSUBSYS`, `WININIT.INI` and `regedit
+/e` of the record). A cold start and a plug after the desktop came between
+the install and the first I/O.
+
+| Run | Switches | Table (the log) | After |
+|---|---|---|---|
+| install over 3.0.0.0 | `/yes /thunderbolt` | 16, 17, 10, 13, 0 | `S98VSD.VXD` placed; `File` = `85C2AC4B...` |
+| update, same bytes | `/yes /thunderbolt` | 0 | "as it is" |
+| untick | `/yes /thunderbolt /nos98vsd` | 15, 14, 0 | file and key gone |
+| retick | `/yes /thunderbolt /s98vsd` | 16, 17, 10, 13, 0 | placed again |
+| old name, a test cut's queued update (`STOR98.VXD` = the first bench's bytes, `S98VSD.TMP` the same, `Pending` its hash, `WININIT.INI` `STOR98.VXD=S98VSD.TMP`) | `/yes /thunderbolt` | 12, 13, 0 | `STOR98.VXD` deleted ("this package's layer under its old name"), the line taken back (`[rename]` left empty), the `.TMP` and `Pending` deleted, `File` kept; after a restart no `STOR98.VXD`, and the drive verified 0 |
+| old name alone (the bench's way B) | `/yes /thunderbolt` | 0 | `STOR98.VXD` deleted, identified by its DDB and stamp |
+| uninstall | `/uninstall /yes` | - | `S98VSD.VXD`, `STOR98.MPD` and the key gone; no `WININIT.INI` |
+
+On ME the install read 16, 17, 10, 13, 0 as on 98 SE. ME's first
+shutdown after that install hung in VMM (EIP `C005255A`, unchanged over a
+minute) and was stopped from QMP. The layer was not loaded in that boot,
+since IOS loads it at the next start. Every later ME shutdown, with the
+layer loaded, was clean.
+
+**Data and insertion.**
+
+| Vehicle | Arrival | Image | Phases | Result |
+|---|---|---|---|---|
+| 98 SE gold | plugged after the desktop | release, installed | 1 and 2 MiB at +0, +512, fragmented, then +0 again | verify 0; 2 MiB read 125 to 166 MB/s |
+| ME | plugged after the desktop | release, installed | 1 and 2 MiB at +0, +512, fragmented | verify 0; 2 MiB read 185 to 213 MB/s |
+| ME | plugged after the desktop | `qemu` | the same, then 128 KiB, 1 and 2 MiB again in the same boot | claimed `0x609` at `0x11`; most runs 257 (1 MiB +512), 431 (2 MiB +512), 512 (2 MiB fragmented), all as whole requests; no refusal |
+| QuickInstall | present at boot (the tunnel up before Windows) | `qemu` | 1 and 2 MiB at +0, +512, fragmented | claimed at boot; most runs 512 at 2 MiB |
+
+**Pass-through and SMART** (QuickInstall, `qemu` image): `t9x aspi`
+returned INQUIRY "QEMU NVMe Ctrl", VPD 80h "USB4EMU01", READ CAPACITY
+2,097,151 x 512, LOG SENSE 2Fh, ATA PASS-THROUGH IDENTIFY (serial, firmware,
+model) and SMART READ DATA, and READ/WRITE(10) of 1 to 255 sectors at
+offsets 0, 4, 512, 2052 and 4092, with 0 failures. `t9x abs F 60000` and
+`t9x file` also had 0 failures.
+
+**Surprise removal** (ME, release image): the enclosure was pulled twice
+during 2 MiB phases. PERF2 reported errors ("bad 32", `open` failed 31)
+and nothing hung. After a replug, 1 and 2 MiB verified 0. (The "bad 1"
+lines before the second pull were the volume filling up, 128 MiB of files
+on 126.7 MiB free, not the layer.)
+
+**Memory pressure** (QuickInstall, `qemu` image): `PERF2 file ... eat=230`
+commits 230 MiB and touches it in a thread beside the phases, more than
+the 256 MB guest has. 1 and 2 MiB at +0 (4 to 32 MB/s while paging) and
+on a fragmented buffer verified 0. A first form, a 300 MiB eater in its
+own window, thrashed until no DOS box could be opened, and was stopped.
+
+**Fault injection** (QuickInstall, the `qemu` flavour with
+`VSD_TEST_DEFS=-dVSD_TEST_REFUSE=37` and kind 1 or 2, never packaged): every
+37th request with data was refused before any IOR field changed, 121
+refusals in each run. PERF2 at 1 and 2 MiB, 64 and 128 KiB had bad counts
+of 0 and verified 0. The refused requests were retried above the layer,
+with no hang and no visible second completion.
+
+**`SCSIPORT.PDR`'s own sense fetch** (Stor98's test build
+`STOR98_TEST_NOAUTOSENSE=7` with `STOR98_DBGPORT`, never packaged): every
+seventh READ(10) completes CHECK CONDITION, its sense kept and no autosense.
+Stage `0x17E` logs it with the READ's `DataBuffer`, and `0x17F` logs each
+REQUEST SENSE with its own:
+
+| SCSIPORT.PDR | Injected | REQUEST SENSE | The REQUEST SENSE's buffer | PERF2 64 KiB, 1 and 2 MiB |
+|---|---|---|---|---|
+| QuickInstall (23,674 bytes, 2001-01-09) | 330 | 330 | `C26B96B8`, `C26B6BF0` (VxD memory; the READs' were `C6xxxxxx`) | verify 0 |
+| gold (23,650 bytes, 1999-04-23), copied over it | 323 | 323 | `C26B96B8`, `C26B6BF0` | verify 0 |
+| ME's | 320 | 320 | `C2E2E518`, `C2E2BA40` | verify 0 |
+
+That is the port's own REQUEST SENSE, answered from Stor98's kept entry,
+and the read retried. `ScsiPortGetPhysicalAddress` calls were not logged,
+so record 30's "no translation for it" is not read. The i98 kit needed
+`-device usb4-debug-port` for Stor98's debug-port lines; without it the
+test build injected without logging.
+
+After review the test build was revised (`b5008f40`): the injected
+failure ends earlier kept sense and finishes through `EngStartIoTail`.
+The QuickInstall row was run again with it: 330 injected, 330 REQUEST
+SENSE, and 64 KiB, 1 and 2 MiB with `t9x file` all verified 0.
+
+**43.50's free-memory finding.** These readings were each a new boot's
+first runs, apart from the fragmented phases and the second runs noted
+above. The P14s "no layer" arm ran after an XHCIPERF run in the same boot.
+Record 30 section 9.2 carries the caveat.
+
 ## 43.13 the idle poll period, 50 against 500 ms (2026-10-22)
 
 The table `runs/run-38.md` "38.3" left as T8 (deferred by the owner on

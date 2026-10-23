@@ -848,6 +848,40 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
     EngProbeSg9x(Srb);
 #endif
     EngPfSrbIn(DevExt, Srb);
+#ifdef STOR98_TEST_NOAUTOSENSE
+#ifndef STOR98_DBGPORT
+#error STOR98_TEST_NOAUTOSENSE is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)
+#endif
+    // Test build (xhci98 record 30 section 9.2 item 10): every N-th READ(10)
+    // fails with CHECK CONDITION, its sense kept and not given as autosense,
+    // which is when SCSIPORT.PDR fetches the sense itself with a REQUEST
+    // SENSE of its own; that one is answered from the kept entry (sense.c).
+    if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && Srb->Cdb[0] == SCSIOP_REQUEST_SENSE) {
+        DBGSTAGE(STG_TEST_REQSENSE, (ULONG)(ULONG_PTR)Srb->DataBuffer);
+    }
+    if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && Srb->Cdb[0] == SCSIOP_READ &&
+        ++DevExt->TestNoAsReads % STOR98_TEST_NOAUTOSENSE == 0) {
+        UCHAR senseLen = Srb->SenseInfoBufferLength;
+        BOOLEAN tagged = (BOOLEAN)((Srb->SrbFlags & SRB_FLAGS_QUEUE_ACTION_ENABLE) &&
+                                   Srb->QueueTag != SP_UNTAGGED);
+
+        DBGSTAGE(STG_TEST_NOAS, (ULONG)(ULONG_PTR)Srb->DataBuffer);
+        // A new READ ends the sense kept for earlier commands (sense.c), as
+        // EngStartIo would have done.
+        ScsiSenseNewCommand(DevExt, Srb);
+        Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+        // No room for autosense: the kept path of ScsiSetSense.
+        Srb->SenseInfoBufferLength = 0;
+        ScsiSetSense(DevExt, Srb, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0);
+        Srb->SenseInfoBufferLength = senseLen;
+        Srb->DataTransferLength = 0;
+        ScsiError(DevExt, Srb, SRB_STATUS_ERROR);
+        // The engine's own queue-readiness accounting (NextRequest, or the
+        // NextLuRequest a tagged request owes).
+        EngStartIoTail(DevExt, tagged);
+        return TRUE;
+    }
+#endif
     return EngStartIo(DevExt, Srb);
 }
 

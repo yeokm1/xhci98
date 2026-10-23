@@ -170,6 +170,9 @@
 #define STG_XFER_TUNABLE        0x160   // arg: limit used, KiB (15:0) | result (XFER_DEFAULT 0, XFER_SET 1, XFER_REFUSED 2) << 16 | resumed << 20 | parsed << 21; every HwFindAdapter
 #define STG_XFER_REFUSED        0x161   // arg: the refused raw value as read (KiB; 0xFFFFFFFF saturated); 0 also when it is not a number
 // 9x caller-buffer resolution (sg9x.h; docs/INVESTIGATION-9X-REQUEST-SIZE.md), 0x170
+// Test-only STOR98_TEST_NOAUTOSENSE (xhci98 record 30 section 9.2 item 10), 0x17E
+#define STG_TEST_NOAS           0x17E   // arg: the READ SRB's DataBuffer; every N-th READ(10) completed CHECK CONDITION with its sense kept, autosense not given
+#define STG_TEST_REQSENSE       0x17F   // arg: the REQUEST SENSE SRB's DataBuffer; every REQUEST SENSE in the test build
 #define STG_SG9X                0x170   // arg: kind (0 linear, 1 SG list, 2 unknown) | use (0 PRP1 check, 1 copy to bounce, 2 copy to caller, 3 probe of a non-READ/WRITE SRB with data) << 2 | resolved << 4 | IOR_func (0x3F = unknown) << 8 | CDB[0] << 16; for kind != linear, IOR_func not READ/WRITE, every bounce copy, every probe
 
 // Packed request description: function | cdb0 << 8 | state << 16 | flags << 24

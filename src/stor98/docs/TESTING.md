@@ -327,7 +327,9 @@ folder; copy it away before the next build). build.exe does not track `C_DEFINES
 `src\lifecycle.c` before building with a different `STOR98_TESTDEF` and again before the next
 ordinary build, or the objects of the previous build are linked unchanged.
 Other 9x test defaults: `-DSTOR98_TEST_BOUNCE=1` (`bounce=1`), `-DSTOR98_TEST_FRAG_KB=<KiB>`
-(`frag=`), and `-DSTOR98_TEST_SG9X_FAIL=<n>`, which makes every n-th copy between a bounce buffer and
+(`frag=`), `-DSTOR98_TEST_NOAUTOSENSE=<n>` (every n-th READ(10) completes CHECK CONDITION
+with its sense kept and no autosense, for xhci98 record 30's leg of SCSIPORT.PDR's own
+REQUEST SENSE; stages 0x17E and 0x17F), and `-DSTOR98_TEST_SG9X_FAIL=<n>`, which makes every n-th copy between a bounce buffer and
 the caller's buffer report "unresolved" before anything is copied, to drive the failure path of
 the 9x caller-buffer lookup (PLAN 0.4, "9x caller buffer"). Each of these refuses to compile
 without `STOR98_DBGPORT`. Check the image before trusting a run: stage 0xCC carries the frag

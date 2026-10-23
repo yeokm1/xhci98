@@ -1180,6 +1180,34 @@ installer so that its file is `stor98.mpd` and its port name `stor98`:
    and the file compares clean. The test build is part of the code step's
    scope, under Stor98's `AGENTS.md`; it is never packaged.
 
+**The legs' results (2026-10-23)** [obs]. Each row ran one guest at a time
+under TCG with one vCPU and 256 MB. Every verify was 0 unless the row says
+otherwise. `runs/run-43.md`, "The legs of section 9.2", has the details.
+
+| Item | Vehicle | Result |
+|---|---|---|
+| 1, data | 98 SE gold IOS set (the installer's install, the drive plugged after the desktop), 98 SE QuickInstall, ME | 1 and 2 MiB at +0, +512 and on a fragmented buffer: verify 0 and no refusal. With the `qemu` image the lists reached 512 runs at 2 MiB (fragmented) and 257 runs at 1 MiB +512, so the requests reached Stor98 whole. The +1 offset, the 4 MiB phase and the `STOR98_TEST_BOUNCE` arm did not run. |
+| 2, the cost | - | dropped for 3.2.0.0 (owner, 2026-10-22) |
+| 3, insertion | all three, plugged after the desktop; QuickInstall with the disk present at boot | the claim at load group `0x11` with demand `0x609`, above `SCSIPORT.PDR`'s `0x14` with `0xE09`, every time |
+| 4, coexistence | all three | `S98VSD.VXD` and `stor98.mpd` both loaded; the IDE disk left (`ESDI_506`) |
+| 5, pass-through and SMART | QuickInstall, `qemu` image | `t9x aspi` (ASPI: INQUIRY, VPD 80h, READ CAPACITY, LOG SENSE 2Fh, ATA PASS-THROUGH IDENTIFY and SMART READ DATA, READ/WRITE(10) at five offsets) 0 failures; `t9x abs` (VWIN32 absolute) and `t9x file` 0 failures. The per-function counts of requests without `IORF_SRB_VALID` were not read. |
+| 6, surprise removal | ME | the enclosure pulled twice during 2 MiB phases: the requester got errors, with no hang; after a replug, 1 and 2 MiB verified 0 |
+| 7, install and uninstall | 98 SE gold, console route; ME install | install; an update over the same bytes; `/nos98vsd`; `/s98vsd`; the old name with a test cut's queued update, and the old name alone; the uninstall: each read back from IOSUBSYS, `WININIT.INI` and the record (section 7.3). Not run: the window route, an update over older bytes, a placement cut short at each step, and `/s98vsd` on 2000 (host vectors only). |
+| 8, memory pressure | QuickInstall, `qemu` image | `PERF2 ... eat=230` (230 MiB committed and touched beside the phases, more than the guest has): 1 and 2 MiB at +0 and fragmented, verify 0 |
+| 9, refusal path | QuickInstall, `VSD_TEST_REFUSE=37`, kinds 1 (no list) and 2 (callback table full) | 121 refusals each; the requests were retried above the layer; verify 0, no hang |
+| 10, `SCSIPORT.PDR`'s sense fetch | `STOR98_TEST_NOAUTOSENSE=7` with the gold and the QuickInstall `SCSIPORT.PDR`, and ME | every injected CHECK CONDITION (323, 330 and 320) was followed by a REQUEST SENSE with a `DataBuffer` in VxD memory, not the caller's; the read was retried and verify was 0. The `ScsiPortGetPhysicalAddress` check was not made. |
+
+The free memory's state, as roadmap 43.50 found it: on 98 SE, a buffer
+freed and allocated again comes back in reversed page order, so the
+physical runs depend on what ran before in the same boot. The emulator
+readings above were each a new boot's first runs, except where a row
+says "fragmented" (`PERF2`'s own every-other-page pattern) or the row
+reports a second run in the same boot. On the P14s, the "no layer" arm
+ran `PERF2` after an XHCIPERF run in the same boot, so it may be the
+double-buffered case. The 4 to 5 times is then the gain in that
+realistic, fragmented state, and may be larger than against a fresh
+boot's first run.
+
 On the owner's real hardware: the throughput before and after
 (roadmap 43.46's last clause), the owner's.
 
