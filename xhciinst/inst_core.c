@@ -2199,6 +2199,9 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         } else if (inst_switch(a, "nonfree") ||
                    inst_switch(a, "wdmnonfree:copy")) {
             opts->NonFree = 1;
+        } else if (inst_switch(a, "wdmfree:trust")) {
+            opts->FreeTrust = 1;
+            opts->Free = 1;
         } else if (inst_switch(a, "freestage") ||
                    inst_switch(a, "nonfreestage")) {
             /* Record 26 section 6.7.11: never read as a subset. */

@@ -5917,6 +5917,9 @@ static void test_other_pkgs(void)
     argv1[1] = "/wdmnonfree:copy";
     CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.NonFree &&
           o.StageCount[INST_SET_NONFREE] == 0, "/wdmnonfree:copy");
+    argv1[1] = "/wdmfree:trust";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.FreeTrust &&
+          o.Free, "/wdmfree:trust (its conditions are the read's)");
     argv1[1] = "/free";
     CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Free,
           "/free kept as /wdmfree:copy");

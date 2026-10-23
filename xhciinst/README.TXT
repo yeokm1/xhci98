@@ -188,6 +188,10 @@ the driver store); Windows may still ask for the folder of the files
 the first time. Two packages that would claim the same device are not
 offered together, and the box below the list says why. What an earlier
 run staged is listed there too: leaving a box unticked does not undo
+it. On 64-bit Vista and later, with a free package ticked, one more box
+offers to trust usb-wdm-free's own test certificate (its 64-bit drivers
+are signed with it and load only in test-signing mode); the uninstall
+removes the trust it added. No trust is added for the non-free drivers.
 it. The Finish page lists the folders to point the hardware wizard at.
 The uninstall removes the copies, the DevicePath entries and the
 staged INFs it made; a driver a device installed from them stays

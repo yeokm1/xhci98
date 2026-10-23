@@ -3555,6 +3555,50 @@ owed (section 6.7.9).
   by commas, Enter for none)", the list printed above it, a wrong id
   asked again.
 
+**The free set's certificate on 64-bit Windows** (the owner, 2026-10-23).
+usb-wdm-free signs its x64 drivers and catalogs with its own test
+certificate, not this project's; usb-wdm-nonfree is not signed by the
+owner, and each set carries its own catalogs. So:
+
+- The free set carries the certificate's public half,
+  `WDMFREE\usb-wdm-free-test.cer` (`INST_WDMFREE_CER`), listed in its
+  `SHA256.TXT` and so held to the installer's hash like every other file
+  of the set; the certificate itself is the owner's to supply. A free set
+  without it offers no trust.
+- **The offer**: on 64-bit Vista and later only, and only while at least
+  one free package is ticked, one more box under the free set's packages,
+  unticked: "Trust usb-wdm-free's test certificate on this computer (its
+  64-bit drivers are signed with it; they load only in test-signing
+  mode)". The page says so in the free set's details. Ticked, after the
+  set's copy and before its staging, the run adds the certificate to the
+  local machine's `Root` and `TrustedPublisher` stores (crypt32's
+  `CertOpenStore` and `CertAddEncodedCertificateToStore` with
+  `CERT_STORE_ADD_NEW`, looked up at run time, so no image imports
+  `CRYPT32.DLL`). A store that holds the certificate already is not
+  touched and not recorded (it is not this installer's); one it adds is
+  recorded, a value named `Trust<store>` under the set's key with the
+  certificate's SHA-1 thumbprint, written after the add succeeded (a run
+  cut short between the add and the record leaves a trust the uninstall
+  does not know: said in section 14). A failure is said, the staging
+  goes on, and Windows' own publisher question then appears as without
+  it.
+- **Never for the non-free set**: the installer adds no trust for it, on
+  any system; its drivers' signatures are their makers'.
+- **The uninstall** removes, from each store a `Trust<store>` value
+  names, the certificate with that thumbprint (`CertFindCertificateInStore`
+  by `CERT_FIND_SHA1_HASH`, then `CertDeleteCertificateFromStore`), then
+  the value; one already gone is nothing to do; one that cannot be
+  removed keeps its value and leaves the uninstall incomplete. Trust that
+  was there before the run is never removed.
+- **The console**: `/wdmfree:trust` (with a free package staged; refused
+  otherwise, and on a system with no offer), and after "Stage which?" on
+  64-bit Vista and later, with a free package ticked, "Trust
+  usb-wdm-free's test certificate on this computer?", Enter for N; `/yes`
+  and `/defaults` take N.
+- **Tests**: never with the owner's certificate and never on the host:
+  a throwaway certificate made inside the guest for the leg, its public
+  half placed in a stand-in free set there.
+
 **What the code of 2026-10-23 builds, and what is owed.** Built
 (`a6ee3898` and its review): the table and its relations (the free
 README's packages and the pinned non-free pack's eight, the words in the
@@ -3582,7 +3626,10 @@ words is in `inst_core.c` until then), the table's history in
 `releases\<version>\otherpkgs.txt` and the transition check, the
 overlap listing for the maintainer, and the cut-side reader's skipping of
 the metadata lines (the pinned packs carry none, so nothing reads them
-yet); and the window self-test's layout of this page with every row of
+yet);
+the free set's certificate's legs (the code is built with this section;
+no free set carries a certificate yet, so it is read only with a
+stand-in); and the window self-test's layout of this page with every row of
 both tables. Until they are built the record's sentences that say the
 cut refuses or writes these describe the design, not the build.
 
@@ -4171,6 +4218,10 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 
 ## 14. Open, and the risks
 
+- (draft 37) A run cut short between adding usb-wdm-free's certificate
+  to a store and recording it leaves a trust the uninstall does not
+  know; the next run finds the certificate present and does not record
+  it either. Accepted (proposal): the window is one call wide.
 - (draft 37) Whether "Xbox" may stand in `xpad98`'s description, a
   `DEVICE` row naming a controller protocol rather than a chip family
   (section 6.7.11): the owner's call. The proposal keeps it, being the

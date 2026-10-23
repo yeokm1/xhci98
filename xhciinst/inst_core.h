@@ -690,6 +690,7 @@ typedef struct _INST_OPTS {
     /* Record 26 section 6.7.11: /wdmfree:stage= and /wdmnonfree:stage=,
      * the packages of a set to stage (each implies its set's copy). */
     int StageCount[2];
+    int FreeTrust;          /* /wdmfree:trust (section 6.7.11)          */
     char StageIds[2][INST_PKG_MAX * INST_PKG_ID_CHARS];
     int Faster;             /* /faster: XHCITR's "can run faster" notice
                                on for this computer (record 23 section
@@ -1915,6 +1916,8 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
 #define INST_SET_FREE           0   /* usb-wdm-free, WDMFREE\                */
 #define INST_SET_NONFREE        1   /* usb-wdm-nonfree's non-free/, NONFREE\ */
 #define INST_SET_COUNT          2
+/* The free set's certificate's public half (record 26 section 6.7.11). */
+#define INST_WDMFREE_CER        "usb-wdm-free-test.cer"
 /* A set's state in the download (section 6.7.3). */
 #define INST_OTHER_ABSENT       0   /* no folder                             */
 #define INST_OTHER_CARRIED      1   /* the folder holds what the record names */

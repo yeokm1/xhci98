@@ -21299,6 +21299,11 @@ static OTHSET oth[INST_SET_COUNT];
 static char othSwitchErr[400];  /* a /wdm...:stage= id refused at the read */
 static int other_pkgs_build(OTHSET *o, int set);
 static const char *other_set_tag(int set);
+static int othTrust;            /* the trust box ticked (or /wdmfree:trust) */
+static int other_trust_offered(void);
+static int other_key_str(int set, const char *sub, const char *name,
+                         const char *text);
+static int other_key_del_value(int set, const char *sub, const char *name);
 static int other_sig_kind(void);
 static int other_staged_data(const char *data, int *own, char *hex,
                              char *name, size_t cap);
@@ -21889,6 +21894,26 @@ static void other_question(void)
         if (o->Include && o->ForThis > 0) {
             other_ask_pkgs(set);
         }
+        if (set == INST_SET_FREE && other_trust_offered() && !othTrust) {
+            inst_yesno_question(text, sizeof(text), "Trust usb-wdm-free's "
+                                "test certificate on this computer (its "
+                                "64-bit drivers are signed with it; they load "
+                                "only in test-signing mode)?", "trust it",
+                                "leave it", 0);
+            r = 0;
+            for (k = 0;; k++) {
+                if (!ask(INST_Q_OTHER, k == 0 ? text :
+                         "  Type Y or N, or Enter: ", k > 0, 0, 0, NULL, line,
+                         sizeof(line))) {
+                    break;
+                }
+                r = inst_tb_answer(line, 0);
+                if (r >= 0) {
+                    break;
+                }
+            }
+            othTrust = r > 0;
+        }
         out("\n");
         logonly("other: %s asked, include %d, stage %d\n",
                 inst_other_subkey(set), o->Include, o->StageOn);
@@ -22335,6 +22360,7 @@ static int other_ticks(void)
     int i;
 
     othSwitchErr[0] = '\0';
+    othTrust = opts.FreeTrust;
     for (set = 0; set < INST_SET_COUNT; set++) {
         OTHSET *o = &oth[set];
         for (i = 0; i < opts.StageCount[set]; i++) {
@@ -22365,7 +22391,279 @@ static int other_ticks(void)
             }
         }
     }
+    if (opts.FreeTrust && !other_trust_offered()) {
+        inst_copy(othSwitchErr, "/wdmfree:trust: the offer is made only on "
+                  "64-bit Vista and later, with a free package staged and "
+                  "the set carrying its certificate", sizeof(othSwitchErr));
+        return 0;
+    }
     return 1;
+}
+
+
+/* ---- the free set's certificate on 64-bit Windows (section 6.7.11) ---- */
+
+/* crypt32, looked up at run time (no image imports it), with its types as
+ * opaque pointers. */
+typedef void *(WINAPI *PFN_CERTOPENSTORE)(LPCSTR, DWORD, void *, DWORD,
+                                          const void *);
+typedef BOOL (WINAPI *PFN_CERTCLOSESTORE)(void *, DWORD);
+typedef BOOL (WINAPI *PFN_CERTADDENC)(void *, DWORD, const BYTE *, DWORD,
+                                      DWORD, const void **);
+typedef BOOL (WINAPI *PFN_CERTGETPROP)(const void *, DWORD, void *, DWORD *);
+typedef BOOL (WINAPI *PFN_CERTFREECTX)(const void *);
+typedef const void *(WINAPI *PFN_CERTFIND)(void *, DWORD, DWORD, DWORD,
+                                           const void *, const void *);
+typedef BOOL (WINAPI *PFN_CERTDELETE)(const void *);
+
+#define OTH_STORE_PROV_SYSTEM_A     ((LPCSTR)9)
+#define OTH_SYSTEM_STORE_LM         0x00020000UL
+#define OTH_ENCODING                0x00010001UL   /* X509 | PKCS7 */
+#define OTH_ADD_NEW                 1UL
+#define OTH_SHA1_PROP               3UL
+#define OTH_FIND_SHA1               0x00010000UL
+#define OTH_E_EXISTS                0x80092005UL
+
+typedef struct _OTHBLOB {
+    DWORD Size;
+    BYTE *Data;
+} OTHBLOB;
+
+
+typedef struct _OTHCRYPT {
+    PFN_CERTOPENSTORE Open;
+    PFN_CERTCLOSESTORE Close;
+    PFN_CERTADDENC Add;
+    PFN_CERTGETPROP Prop;
+    PFN_CERTFREECTX Free;
+    PFN_CERTFIND Find;
+    PFN_CERTDELETE Delete;
+} OTHCRYPT;
+
+static int other_crypt(OTHCRYPT *c)
+{
+    HMODULE m = LoadLibraryA("crypt32.dll");
+
+    memset(c, 0, sizeof(*c));
+    if (m == NULL) {
+        return 0;
+    }
+    c->Open = (PFN_CERTOPENSTORE)GetProcAddress(m, "CertOpenStore");
+    c->Close = (PFN_CERTCLOSESTORE)GetProcAddress(m, "CertCloseStore");
+    c->Add = (PFN_CERTADDENC)GetProcAddress(m,
+                                            "CertAddEncodedCertificateToStore");
+    c->Prop = (PFN_CERTGETPROP)GetProcAddress(m,
+                                     "CertGetCertificateContextProperty");
+    c->Free = (PFN_CERTFREECTX)GetProcAddress(m,
+                                              "CertFreeCertificateContext");
+    c->Find = (PFN_CERTFIND)GetProcAddress(m, "CertFindCertificateInStore");
+    c->Delete = (PFN_CERTDELETE)GetProcAddress(m,
+                                       "CertDeleteCertificateFromStore");
+    return c->Open != NULL && c->Close != NULL && c->Add != NULL &&
+           c->Prop != NULL && c->Free != NULL && c->Find != NULL &&
+           c->Delete != NULL;
+}
+
+/* 1 when the offer is made: 64-bit Vista and later, the free set carried
+ * with its certificate, a free package ticked. */
+static int other_trust_offered(void)
+{
+    const OTHSET *o = &oth[INST_SET_FREE];
+
+    return othRead && envNow.Nt && envNow.Major >= 6 && other_is64() &&
+           o->State == INST_OTHER_CARRIED && o->Include && o->StageOn &&
+           other_find(o, INST_WDMFREE_CER) >= 0;
+}
+
+static const char *const othStores[2] = { "Root", "TrustedPublisher" };
+
+/* The certificate added to each store that does not hold it, each add
+ * recorded by its thumbprint (section 6.7.11). */
+static void other_trust_add(void)
+{
+    OTHSET *o = &oth[INST_SET_FREE];
+    OTHCRYPT c;
+    char path[INST_PATH_CHARS];
+    char hex[65];
+    char *buf;
+    DWORD n = 0;
+    int k = other_find(o, INST_WDMFREE_CER);
+    int s;
+
+    if (!othTrust || !other_trust_offered() || k < 0) {
+        return;
+    }
+    other_path(path, sizeof(path), o->Src, INST_WDMFREE_CER);
+    buf = read_file(path, &n);
+    if (buf != NULL) {
+        inst_sha256((const unsigned char *)buf, n, hex);
+    }
+    if (buf == NULL || !inst_eq(hex, o->Files[k].Hash) || !other_crypt(&c)) {
+        out("usb-wdm-free's certificate could not be added: %s.\n",
+            buf == NULL ? "its file could not be read" :
+            !inst_eq(hex, o->Files[k].Hash) ? "its file is not the set's" :
+            "the certificate routines are missing");
+        free(buf);
+        flagSteps = 1;
+        return;
+    }
+    for (s = 0; s < 2; s++) {
+        void *st = c.Open(OTH_STORE_PROV_SYSTEM_A, 0, NULL,
+                          OTH_SYSTEM_STORE_LM, othStores[s]);
+        const void *ctx = NULL;
+        BYTE sha[20];
+        DWORD sn = sizeof(sha);
+        char name[32];
+        char thumb[41];
+        int i;
+        if (st == NULL) {
+            out("The %s store could not be opened (error %lu): usb-wdm-free's "
+                "certificate is not added there.\n", othStores[s],
+                (unsigned long)GetLastError());
+            flagSteps = 1;
+            continue;
+        }
+        if (!c.Add(st, OTH_ENCODING, (const BYTE *)buf, n, OTH_ADD_NEW,
+                   &ctx)) {
+            DWORD e = GetLastError();
+            if (e == OTH_E_EXISTS) {
+                out("usb-wdm-free's certificate is in the %s store already; "
+                    "left as it is.\n", othStores[s]);
+            } else {
+                out("usb-wdm-free's certificate could not be added to the %s "
+                    "store (error 0x%08lX).\n", othStores[s],
+                    (unsigned long)e);
+                flagSteps = 1;
+            }
+            c.Close(st, 0);
+            continue;
+        }
+        if (!c.Prop(ctx, OTH_SHA1_PROP, sha, &sn) || sn != sizeof(sha)) {
+            out("usb-wdm-free's certificate was added to the %s store, but its "
+                "thumbprint could not be read: the uninstall will not remove "
+                "it.\n", othStores[s]);
+            flagSteps = 1;
+        } else {
+            for (i = 0; i < 20; i++) {
+                _snprintf(thumb + 2 * i, 3, "%02X", (unsigned)sha[i]);
+            }
+            thumb[40] = '\0';
+            _snprintf(name, sizeof(name) - 1, "Trust%s", othStores[s]);
+            name[sizeof(name) - 1] = '\0';
+            if (!other_key_str(INST_SET_FREE, NULL, name, thumb)) {
+                out("usb-wdm-free's certificate was added to the %s store, "
+                    "but not recorded: the uninstall will not remove it.\n",
+                    othStores[s]);
+                flagSteps = 1;
+            } else {
+                flagChanged = 1;
+                out("usb-wdm-free's certificate (%s) added to the %s store.\n",
+                    thumb, othStores[s]);
+            }
+        }
+        c.Free(ctx);
+        c.Close(st, 0);
+    }
+    free(buf);
+}
+
+/* The uninstall's: each recorded certificate removed from its store. 1
+ * nothing recorded is left. */
+static int other_trust_remove(int set)
+{
+    OTHCRYPT c;
+    int s;
+    int ok = 1;
+    int crypt = -1;
+
+    for (s = 0; s < 2; s++) {
+        char name[32];
+        char thumb[48];
+        BYTE sha[20];
+        OTHBLOB blob;
+        void *st;
+        const void *ctx;
+        int i;
+        _snprintf(name, sizeof(name) - 1, "Trust%s", othStores[s]);
+        name[sizeof(name) - 1] = '\0';
+        if (other_key_text(set, name, thumb, sizeof(thumb)) <= 0) {
+            continue;
+        }
+        if (opts.List) {
+            out("(/list) the certificate %s would be removed from the %s "
+                "store.\n", thumb, othStores[s]);
+            continue;
+        }
+        if (crypt < 0) {
+            crypt = other_crypt(&c);
+        }
+        for (i = 0; i < 20 && strlen(thumb) == 40; i++) {
+            char two[3];
+            two[0] = thumb[2 * i];
+            two[1] = thumb[2 * i + 1];
+            two[2] = '\0';
+            sha[i] = (BYTE)strtoul(two, NULL, 16);
+        }
+        if (!crypt || strlen(thumb) != 40) {
+            out("The certificate %s could not be removed from the %s store.\n",
+                thumb, othStores[s]);
+            ok = 0;
+            continue;
+        }
+        st = c.Open(OTH_STORE_PROV_SYSTEM_A, 0, NULL, OTH_SYSTEM_STORE_LM,
+                    othStores[s]);
+        if (st == NULL) {
+            out("The %s store could not be opened (error %lu).\n",
+                othStores[s], (unsigned long)GetLastError());
+            ok = 0;
+            continue;
+        }
+        blob.Size = sizeof(sha);
+        blob.Data = sha;
+        ctx = c.Find(st, OTH_ENCODING, 0, OTH_FIND_SHA1, &blob, NULL);
+        if (ctx != NULL && !c.Delete(ctx)) {
+            out("The certificate %s could not be removed from the %s store "
+                "(error %lu).\n", thumb, othStores[s],
+                (unsigned long)GetLastError());
+            ok = 0;
+            c.Close(st, 0);
+            continue;
+        }
+        c.Close(st, 0);
+        if (ctx != NULL) {
+            flagChanged = 1;
+            out("Removed usb-wdm-free's certificate (%s) from the %s store.\n",
+                thumb, othStores[s]);
+        }
+        if (!other_key_del_value(set, NULL, name)) {
+            ok = 0;
+        }
+    }
+    if (!ok) {
+        flagSteps = 1;
+    }
+    return ok;
+}
+
+int inst_eng_other_trust_possible(void)
+{
+    const OTHSET *o = &oth[INST_SET_FREE];
+
+    return othRead && envNow.Nt && envNow.Major >= 6 && other_is64() &&
+           o->State == INST_OTHER_CARRIED &&
+           other_find(o, INST_WDMFREE_CER) >= 0;
+}
+
+int inst_eng_other_trust(int *offered)
+{
+    *offered = other_trust_offered();
+    return othTrust && *offered;
+}
+
+void inst_eng_other_trust_choose(int on)
+{
+    othTrust = on ? 1 : 0;
+    logonly("other: trust chosen %d\n", othTrust);
 }
 
 /* ---- the record file (section 6.7.5) ---- */
@@ -23947,6 +24245,9 @@ static void other_run_set(int set)
             left > 3 ? " and more" : "");
         flagSteps = 1;
     }
+    if (set == INST_SET_FREE) {
+        other_trust_add();
+    }
     if (o->StageOn && othSys >= 0) {
         char done[INST_PATH_CHARS * 4];
         done[0] = '\0';
@@ -24347,6 +24648,9 @@ static int other_remove(int set, int uninstall)
 
     (void)uninstall;
     other_key(set, key, sizeof(key));
+    if (!other_trust_remove(set)) {
+        return 0;       /* the record kept for the next uninstall */
+    }
     r = other_key_exists(set);
     if (r == 0 || (r > 0 && other_adoptable(set))) {
         /* A record file whose key was lost (section 6.7.5). */

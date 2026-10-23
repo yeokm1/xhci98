@@ -1324,6 +1324,16 @@ static void othlist_sync(void)
     if (othList == NULL) {
         return;
     }
+    {
+        HWND tb = GetDlgItem(othList, othlist_id(INST_SET_FREE, 99));
+        int offered = 0;
+        int on = inst_eng_other_trust(&offered);
+        if (tb != NULL) {
+            CheckDlgButton(othList, othlist_id(INST_SET_FREE, 99),
+                           on ? BST_CHECKED : BST_UNCHECKED);
+            EnableWindow(tb, offered);
+        }
+    }
     for (set = 0; set < INST_SET_COUNT; set++) {
         int open = IsDlgButtonChecked(GetParent(othList), oth_id(set,
                                       IDC_O_BOX)) == BST_CHECKED;
@@ -1446,6 +1456,23 @@ static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
         }
         set = (id - IDC_OL_BASE) / 100;
         i = (id - IDC_OL_BASE) % 100;
+        if (i == 99) {
+            /* The free set's certificate (record 26 section 6.7.11). */
+            if (HIWORD(wp) == BN_CLICKED) {
+                inst_eng_other_trust_choose(IsDlgButtonChecked(dlg, id) ==
+                                            BST_CHECKED);
+                othlist_sync();
+            } else if (HIWORD(wp) == BN_SETFOCUS) {
+                othlist_show((HWND)lp);
+                SetDlgItemTextA(GetParent(dlg), IDC_O_DETAIL, "usb-wdm-free "
+                                "signs its 64-bit drivers with its own test "
+                                "certificate. Ticked, the run adds it to this "
+                                "computer's trusted roots and publishers, and "
+                                "the uninstall removes what it added. No trust "
+                                "is ever added for the non-free drivers.");
+            }
+            return TRUE;
+        }
         if (HIWORD(wp) == BN_SETFOCUS) {
             othlist_show((HWND)lp);
             othlist_detail(set, i);
@@ -1538,6 +1565,19 @@ static void othlist_build(HWND page)
                 first = 0;
                 y += lh + 3;
             }
+        }
+        if (set == INST_SET_FREE && inst_eng_other_trust_possible()) {
+            const char *t = "Trust usb-wdm-free's test certificate on this "
+                            "computer (its 64-bit drivers are signed with it; "
+                            "they load only in test-signing mode)";
+            int th = text_h(dc, t, w - dlu_x(page, 22), NULL);
+            if (th < othBoxH) {
+                th = othBoxH;
+            }
+            make_px(othList, "BUTTON", t, BS_AUTOCHECKBOX | BS_MULTILINE |
+                    BS_TOP | BS_NOTIFY, dlu_x(page, 10), y,
+                    w - dlu_x(page, 10), th + 2, othlist_id(set, 99), font);
+            y += th + 3;
         }
         {
             const char *e = inst_eng_other_earlier(set);
