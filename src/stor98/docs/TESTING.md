@@ -121,11 +121,11 @@ roots (until 0.4.0.0, the folders of a release stage):
   folder. **XP x64, Vista x64, 7 x64**: the same with `x64\`; Vista x64 and 7 x64 need
   test-signing on and a signed image (Code 52 otherwise).
 - **8 and 8.1**: 8 x86 installs from `x86\` (read 2026-10-22 through the installer's own
-  call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refused xhci98
-  3.1.0.0's `x64\` package at the driver store because it has no catalog (`0xE000022F`,
-  with test-signing on; off not read); with `stor98.cat` (xhci98 3.2.0.0) 8.1 x64 took it
-  into the store (xhci98's roadmap 43.36), no drive bound; 8 x64 with it, and 8.1 x86, not
-  run.
+  call, not Device Manager; "Windows 8 and 8.1" below); 8 x64 and 8.1 x64 refuse the
+  `x64\` package at the driver store because it has no catalog (`0xE000022F`, with
+  test-signing on; off not read); 8.1 x86 not run. With xhci98's 3.2.0.0 catalogs and its installer
+  (xhci98 roadmap 43.24, 2026-10-23): `x64\` installs and runs on 8 x64 and 8.1 x64, and `x86\`
+  on 8.1 x86 ("Read under xhci98's installer" below).
 - **10 (below build 22000)**: 10 x86 installs from `x86\` over Windows' own `stornvme`
   (the installer's own call, forced); 10 x64 refused the catalog-less `x64\` as 8 x64 did
   ("Windows 10", below), and took the package with `stor98.cat` into the store as 8.1 x64
@@ -157,8 +157,8 @@ Stor98 on NT 6.2 and 6.3, read in QEMU on xhci98's pristine Windows 8 and 8.1 im
 (`E:\xhci98-vm\win8-10\<name>\<name>-pristine.qcow2` on development host A, through
 overlays; `-machine pc`, TCG, `-cpu qemu64,+3dnowprefetch`, 2 vCPUs, 2 GB, test-signing on):
 Windows 8 Pro x86 and x64 (6.2.9200) and Windows 8.1 Pro x64 (6.3.9600, with Update). There
-is no Windows 8.1 x86 medium, so **32-bit Windows 8.1 has not been run** (owner,
-2026-10-22: untested ground, covered by 8 x86 and 8.1 x64; see the table at the end).
+was no Windows 8.1 x86 medium for this reading, so 32-bit Windows 8.1 was not run here; it
+was read later under xhci98's installer ("Read under xhci98's installer" below).
 
 Vehicle: usb4-emu's QEMU (`bin-2a893ea`, the build xhci98's p42-s98tun legs use), each guest
 with two NVMe controllers: a plain QEMU `nvme` on the root bus (a blank 1 GiB disk) and a
@@ -193,10 +193,30 @@ SHA-1 test signature there is unread); a removal with a platform notification (p
 controller) and xhci98's connection manager's link-down statement on 8 and 8.1 (roadmap
 43.24); the xhci98 installer's own run on 8 and 8.1 (43.24).
 
+### Read under xhci98's installer (xhci98 roadmap 43.24, 2026-10-23)
+
+xhci98's `INSTALL /console /cmonly /stor98 /yes` (and `/usb /thunderbolt /stor98`), with
+xhci98's connection manager running the emulator's Thunderbolt 3 controller and the NVMe
+behind its tunnel; the x64 package signed with the project test certificate, its catalogs
+accepted in test-signing mode after Windows' publisher prompt (xhci98 `runs/run-43-24.md`):
+
+- Stor98 x64 installed and started on 8 x64 and 8.1 x64; on 8.1 x64 and 8.1 x86 the
+  installer put it over `stornvme` on the tunnel drive. Stor98 x86 started on 8 x86 and
+  8.1 x86 (8.1 x86 from the owner's medium of 2026-10-23).
+- An unplug during writes under Stor98, on every one of the four: the copy failed within
+  about 1 to 6 s ("The volume for a file has been externally altered", or the path gone),
+  the disk removed (event 157 on 8.1), no hang. xhci98's link-down statement is withheld on
+  NT 6.x by design (its ordering is qualified on 2000 x86 and XP x64 only), so Stor98's own
+  gone deadline ends the I/O there.
+- An eject through xhci98 (`INSTALL /console /eject`) stopped Stor98's controller (Code 47)
+  and the drive came back under Stor98 when plugged in again.
+- Under `stornvme` without Stor98, an unplug during writes on 8.1 x64 with xhci98's
+  connection manager left the copy blocked for over an hour, not released by a re-plug.
+
 | Untested ground on 8 and 8.1 | State |
 |---|---|
-| Windows 8.1, 32-bit | Not run: no install medium (owner, 2026-10-22: skipped for xhci98 `3.2.0.0`, covered by 8 x86 and 8.1 x64). The x86 package is the one 8 x86 ran; 8.1 x86's `stornvme` and SCSIport are unread |
-| Stor98 x64 on 8, 8.1 and 10 | Not loaded. Without a catalog the package is refused at the driver store (above); with the test-signed `stor98.cat` of xhci98 3.2.0.0 (owner, 2026-10-22) it was taken into the store on 8.1 x64 and 10 x64 (xhci98's roadmap 43.36, the catalog signed in the guest with a certificate of its own) and bound to no drive. Owed: the forced install over `stornvme`, the load and a removal under Stor98 on 8 x64, 8.1 x64 and 10 x64 |
+| Windows 8.1, 32-bit | Run under xhci98's installer only (above): install over `stornvme`, I/O, an eject and an unplug during writes. 8.1 x86's SCSIport is unread statically |
+| Stor98 x64 on 10 | xhci98's roadmap 43.59 (its Code 10 on 10 x64, fixed there); xhci98's 43.37 legs ran the build before that fix. On 8 x64 and 8.1 x64 it installs and runs with the catalogs (above) |
 | Removal with a platform notification, and xhci98's link-down statement, on 8 and 8.1 | Not read; xhci98's roadmap 43.24 |
 
 ## Windows 10 (xhci98 roadmap 43.23 and 43.34, 2026-10-22)

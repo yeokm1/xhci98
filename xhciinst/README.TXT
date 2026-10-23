@@ -313,10 +313,12 @@ the connection manager alone, uninstall (Add/Remove Programs, or INSTALL
 go the other way, run the installer again with them ticked. Add/Remove
 Programs lists one entry either way, named for what is installed.
 
-Windows 8 and 8.1 were read in virtual machines, the install alone, on 8
-(32-bit and x64) and 8.1 x64 (on 8.1 x64 also the console's update and
-uninstall, task 43.59); 8.1 32-bit has not been run. The connection
-manager installs there as on Windows 7. On 64-bit Windows 8 and 8.1 this
+Windows 8 and 8.1, 32-bit and 64-bit, were run with this package in
+virtual machines only (QEMU, its emulated Thunderbolt 3 controller and
+NVMe enclosure): the connection manager, Stor98 and the USB drivers
+installed, worked and uninstalled as on Windows 7. An uninstall with the
+USB drivers may stop part-way and ask for a restart and a second run; do
+both (on Windows 10 too). [HIBERNATE-NOTE] On 64-bit Windows 8 and 8.1 this
 package's x64 drivers, being test-signed, load in test-signing mode, which
 those systems let you turn on only with Secure Boot off in the computer's
 firmware setup, or on a start with driver signature enforcement disabled.
