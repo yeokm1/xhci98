@@ -1949,15 +1949,18 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    host-tested), none after a hide, a timeout, a click or the icon's
    balloon taken away (item 9's re-send), and a click opens the list only
    when that kind is the notice's. The balloons sent and not yet shown
-   are kept in order (the last eight): a show is the oldest's where the
+   are kept in order (the last sixteen): a show is the oldest's where the
    shell queues them and the newest's where it replaces them, so it is
    that kind when they are all of one kind and counts as another
    balloon's when they are not - a click on it then opens nothing, the
    icon's menu still leading to the list or the device, rather than the
    list for a notice that is not the one clicked. Each show takes the
-   oldest away, and a hide, a timeout or a click ends the one shown and
-   leaves those waiting; one the shell dropped unshown keeps only the
-   next show in doubt. A shell not heard from in the session (and not Vista or
+   oldest away, and a hide, a timeout, a click or the icon's balloon
+   taken away (item 9's re-send) ends the one shown and leaves those
+   waiting, since a show or a click the shell posted before it may still
+   come; one the shell dropped unshown keeps only the next show in doubt,
+   and more waiting than are kept (sixteen) keeps every show in doubt
+   until none waits. A shell not heard from in the session (and not Vista or
    later, item 9) is read by the last balloon sent, as before.
    **Windows 2000 (task 43.68, 2026-10-23).** Read on 2000 SP4 in QEMU
    with a build that logged every `WM_TRAYICON` message (`runs/run-43.md`,
@@ -2226,8 +2229,9 @@ Revision 19: the red icon's decision and tooltip (`tr_red_state`,
 Revision 20: the balloon a click is on (`tr_bkind_step`,
 `tr_bkind_fast`: another balloon queued behind the notice's and the
 reverse, a replacement with its show, a show after two and three kinds
-waiting and with an end between, one dropped unshown, the bound, a show
-with none waiting, the re-send's removal, a shell not heard from) and 98 SE's long hover (`tr_hover_move`, `tr_hover_poll`:
+waiting and with an end between, one dropped unshown, more than the
+bound, a show with none waiting, the re-send's removal before and after
+an older show, a shell not heard from) and 98 SE's long hover (`tr_hover_move`, `tr_hover_poll`:
 a short hover and a long one either side of 11 double-click times less
 the poll, the last move counting, once per hover, resting on the icon,
 another double-click time, across `GetTickCount`'s wrap) in

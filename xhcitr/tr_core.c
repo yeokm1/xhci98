@@ -3010,9 +3010,11 @@ void tr_bkind_step(TR_BKIND *b, int ev)
     case TR_BE_OTHER: {
         int kind = ev == TR_BE_SENT ? TR_BK_FAST : TR_BK_OTHER;
         if (b->N == TR_BK_PENDING) {
-            /* Full: the oldest goes (only the doubt it carried is lost). */
+            /* Full: the oldest goes, and with it what its kind was, so
+             * every show is in doubt until none waits. */
             memmove(&b->Wait[0], &b->Wait[1], (TR_BK_PENDING - 1) * sizeof(b->Wait[0]));
             b->N--;
+            b->Spilled = 1;
         }
         b->Wait[b->N++] = kind;
         b->Sent = kind;
@@ -3020,7 +3022,9 @@ void tr_bkind_step(TR_BKIND *b, int ev)
     }
     case TR_BE_SHOW:
         if (b->N == 0) {
-            b->Shown = b->Sent;         /* none waiting: the last one sent */
+            /* None waiting: the last one sent. */
+            b->Shown = b->Spilled ? TR_BK_OTHER : b->Sent;
+            b->Spilled = 0;
         } else {
             int i;
             int kind = b->Wait[0];
@@ -3030,9 +3034,12 @@ void tr_bkind_step(TR_BKIND *b, int ev)
                     break;
                 }
             }
-            b->Shown = kind;
+            b->Shown = b->Spilled ? TR_BK_OTHER : kind;
             memmove(&b->Wait[0], &b->Wait[1], (b->N - 1) * sizeof(b->Wait[0]));
             b->N--;
+            if (b->N == 0) {
+                b->Spilled = 0;
+            }
         }
         break;
     case TR_BE_HIDE:
@@ -3041,10 +3048,11 @@ void tr_bkind_step(TR_BKIND *b, int ev)
         b->Shown = TR_BK_NONE;
         break;
     case TR_BE_DROP:
-        /* Taken away, shown or queued: nothing of it is up or to come. */
+        /* Taken away, shown or queued: none is up. Those waiting are kept:
+         * a show or a click the shell posted before the removal may still
+         * come, and must stay in doubt. */
         b->Sent = TR_BK_NONE;
         b->Shown = TR_BK_NONE;
-        b->N = 0;
         break;
     default:
         break;

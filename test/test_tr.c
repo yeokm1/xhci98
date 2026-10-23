@@ -3036,7 +3036,7 @@ static void test_bkind(void)
     tr_bkind_step(&b, TR_BE_SENT);
     tr_bkind_step(&b, TR_BE_SHOW);
     CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: then sure again");
-    /* More waiting than kept: the oldest go. */
+    /* More waiting than kept: every show in doubt until none waits. */
     memset(&b, 0, sizeof(b));
     {
         int i;
@@ -3046,8 +3046,27 @@ static void test_bkind(void)
         }
         CHECK_EQ(b.N, TR_BK_PENDING, "bkind: bounded");
         tr_bkind_step(&b, TR_BE_SHOW);
-        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the oldest dropped from the doubt");
+        CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: spilled: the other's show is in doubt");
+        for (i = 1; i < TR_BK_PENDING; i++) {
+            tr_bkind_step(&b, TR_BE_TIMEOUT);
+            tr_bkind_step(&b, TR_BE_SHOW);
+        }
+        CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: spilled: in doubt to the last");
+        CHECK_EQ(b.N, 0, "bkind: drained");
+        tr_bkind_step(&b, TR_BE_TIMEOUT);
+        tr_bkind_step(&b, TR_BE_SENT);
+        tr_bkind_step(&b, TR_BE_SHOW);
+        CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: drained: sure again");
     }
+    /* Round 3's case: the re-send's removal with an older balloon's show
+     * still on its way. */
+    memset(&b, 0, sizeof(b));
+    tr_bkind_step(&b, TR_BE_OTHER);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_DROP);
+    tr_bkind_step(&b, TR_BE_SENT);
+    tr_bkind_step(&b, TR_BE_SHOW);
+    CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: a show from before the removal: in doubt");
     /* A show with none waiting: the last one sent. */
     memset(&b, 0, sizeof(b));
     tr_bkind_step(&b, TR_BE_SENT);
