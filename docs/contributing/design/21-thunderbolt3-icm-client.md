@@ -4764,7 +4764,22 @@ the code (`runs/run-42.md`, "42-A.5"):
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.
 
-### 7.5 Stor98 on a tunnelled drive first plugged after the install (task 43.59, 2026-10-22; draft)
+### 7.5 Stor98 on a tunnelled drive first plugged after the install (task 43.59, 2026-10-22; recorded, not shipped)
+
+**The owner's decision (2026-10-23): not shipped.** On 8.1 and 10 Windows'
+own `stornvme` stays the default driver of a tunnelled NVMe drive, and
+Stor98 stays opt-in per drive as before (the installer's case 3b, or by
+hand). The mark service's switch below is not merged (branch `p43-59`
+keeps it); on Windows 8, which has no `stornvme`, Stor98 stays the
+drive's driver. Read before the decision (`runs/run-43.md` "43.59"):
+`stornvme` under this connection manager ends a surprise removal promptly
+and comes back at a re-plug (10 x86, 8.1 x64), so it needs no
+replacement there; and the premise below that `stornvme` outranks Stor98
+holds only for an unsigned Stor98: signed and trusted (10 x64, 8.1 x64)
+the two rank alike and Windows selects Stor98 by itself for every NVMe
+drive first seen after the install, internal ones too. The section is
+kept as the design that was built and read.
+
 
 **The problem** (roadmap-usb4.md 43.23, `runs/run-43.md` "43.23",
 question 2). On Windows 8.1 and 10 an NVMe controller behind a Thunderbolt
