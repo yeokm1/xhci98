@@ -1933,7 +1933,7 @@ try {
             "free/video/camx/w98se/CAMX.INF"  = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=07/08/2026,0.1`r`n"
             "LICENSE"                         = "stand-in GPL-2.0"
             "NOTICE.md"                       = "# stand-in free notice`n"
-            "STAGE.TXT"                       = "STAGE | W98SE WME | free/net/cdcx/w98se-me/CDCX.INF | a`nSTAGE | W2K WXP W7X64 | free/net/cdcx/w2k-8/CDCX.INF | b`nSTAGE | W98SE | free/video/camx/w98se/CAMX.INF | c`n"
+            "STAGE.TXT"                       = "STAGE | W98SE WME | free/net/cdcx/w98se-me/CDCX.INF | a`nSTAGE | W2K WXP W7X64 | free/net/cdcx/w2k-8/CDCX.INF | b`nSTAGE | W98SE | free/video/camx/w98se/CAMX.INF | c`nPACKAGE | net/cdcx | DEVICE | USB Ethernet (cdcx): stand-in adapters`nPACKAGE | video/camx | CLASS | Webcams (camx): stand-in cameras`nEXCLUDES | free:net/cdcx | nonfree:serial/none | W98SE | a stand-in line`n"
         }
         foreach ($k in $freeFiles.Keys) {
             $fp = Join-Path $freeRepo $k.Replace('/', '\')
@@ -2021,6 +2021,116 @@ try {
         $msg = ""
         try { Export-WdmFreeSet -Root $freeRepo -Pin (Read-WdmFreePin -Path $badPin) -Dest (Join-Path $script:work "wdmfree-bad") | Out-Null } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("not the files the pin lists")) ("a free release holding a file the pin does not list was exported: '" + $msg + "'")
+
+        # The other sets' cut-side checks (design record 26 section 6.7.11).
+        $frStageAll = [System.IO.File]::ReadAllText((Join-Path $fr.Dir "STAGE.TXT"))
+        Assert-True ($frStageAll.Contains("PACKAGE | net/cdcx | DEVICE") -and -not $frStageAll.Contains("PACKAGE | video/camx") -and $frStageAll.Contains("EXCLUDES | free:net/cdcx | nonfree:serial/none")) "WDMFREE\STAGE.TXT does not keep the qualifying package's PACKAGE line and every EXCLUDES line, or keeps another package's PACKAGE line."
+        Assert-True (@(Read-StageText -Text $frStageAll -Label "s").Count -eq 2) "Read-StageText did not skip the metadata lines."
+        $brands = Read-BrandWords
+        $tbl = Get-InstOtherTable -Repo $repo
+        Assert-True ((@($brands | Where-Object { $tbl.Brands -cnotcontains $_ }).Count -eq 0) -and (@($tbl.Brands | Where-Object { $brands -cnotcontains $_ }).Count -eq 0)) "xhciinst\inst_core.c's instBrandWords and scripts\package\brand-words.txt differ."
+        $instC = [System.IO.File]::ReadAllText((Join-Path $repo "xhciinst\inst_core.c"))
+        Assert-True ($tbl.Pkgs.Count -gt 0 -and $tbl.Pkgs.Count -eq @([regex]::Matches(([regex]::Match($instC, 'instOtherPkgs\[\]\s*=\s*\{(.*?)\n\};', 'Singleline').Groups[1].Value), '\{\s*INST_SET_')).Count -and $tbl.Rels.Count -gt 0) "the installer's package table was not read whole."
+        $hm = [regex]::Match($instC, 'instOtherHeadings\[\]\s*=\s*\{([^}]*)\}')
+        $heads = @([regex]::Matches($hm.Groups[1].Value, '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+        Test-OtherPkgTable -Table $tbl -Sets @() -Meta @() -Brands $brands -Headings $heads
+        Assert-True ((Find-BrandWord -Text "USB Audio Class 1.0 (sony): x" -Words $brands) -eq "Sony" -and (Find-BrandWord -Text "Sonyx 1.0" -Words $brands) -eq "") "the brand match is not whole-word and case-blind."
+        foreach ($bad in @(
+                @{ T = "PACKAGE | net/x | CLASS | USB Ethernet (x): Realtek adapters"; Want = "a brand" },
+                @{ T = "PACKAGE | net/X | DEVICE | d"; Want = "is not 'PACKAGE" },
+                @{ T = "NEEDS | free:a/b | free:c/d"; Want = "NEEDS" },
+                @{ T = "EXCLUDES | free:a/b | other:c/d | W98SE | w"; Want = "which is not free:" },
+                @{ T = "COEXISTS | free:a/b | free:c/d | W95 | w"; Want = "cannot read" })) {
+            $msg = ""
+            try { Read-OtherStageMeta -Text $bad.T -Label "s" -Brands $brands | Out-Null } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the metadata line '" + $bad.T + "' did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # Folders and self-containment over a stand-in set.
+        $osp = Join-Path $script:work "osp"
+        $ospFiles = [ordered]@{
+            "net/a/w98/A.INF" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[SourceDisksNames]`r`n1=d,,,`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n[Manufacturer]`r`n%M%=Mo`r`n[Mo]`r`n%D%=I,USB\VID_1234&PID_0001`r`n[I]`r`nCopyFiles=C`r`n[C]`r`nA.SYS`r`n[Strings]`r`nM=m`r`nD=d`r`n"
+            "net/a/w98/A.SYS" = "a"
+            "net/a/w98/B.INF" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`n[Manufacturer]`r`nM=Mo`r`n[Mo]`r`nD=I,USB\VID_1234&PID_0002`r`n"
+            "net/b/w98/C.INF" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[SourceDisksNames]`r`n1=d,,,..\..\..\a\w98`r`n[SourceDisksFiles]`r`nA.SYS=1`r`n[Manufacturer]`r`nM=Mo`r`n[Mo]`r`nD=I,USB\VID_1234&PID_0001`r`n"
+            "net/c/w98/D.INF" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`n[I]`r`nInclude=a.inf`r`n[Manufacturer]`r`nM=Mo`r`n[Mo]`r`nD=I,USB\VID_1234&PID_0003`r`n"
+        }
+        foreach ($k in $ospFiles.Keys) {
+            $fp = Join-Path $osp $k.Replace('/', '\')
+            Ensure-Directory (Split-Path -Parent $fp)
+            [System.IO.File]::WriteAllBytes($fp, [System.Text.Encoding]::ASCII.GetBytes($ospFiles[$k]))
+        }
+        $ospOk = @(Read-StageText -Text "STAGE | W98SE WME | free/net/a/w98/A.INF | a`nCOPY | W2K | free/net/a/w98/B.INF | b" -Label "s")
+        Test-OtherStagePackages -Lines $ospOk -Dir $osp -Prefix "free" -Label "s" -AllInfs @("a.inf", "b.inf")
+        foreach ($bad in @(
+                @{ L = "STAGE | W98SE | free/net/a/w98/A.INF | a`nSTAGE | W2K | free/net/a/w98/B.INF | b"; Want = "does not name W98SE"; Why = "a STAGE INF beside a 98 SE one that is not staged there" },
+                @{ L = "STAGE | W98SE | free/net/b/w98/C.INF | c"; Want = "outside its package's folder"; Why = "a source disk in another package's folder" },
+                @{ L = "STAGE | W98SE | free/net/c/w98/D.INF | d"; Want = "includes a.inf"; Why = "an Include of another package's INF" },
+                @{ L = "STAGE | W98SE | free/net/z/w98/Z.INF | z"; Want = "does not hold"; Why = "a STAGE INF the set does not hold" })) {
+            $msg = ""
+            try { Test-OtherStagePackages -Lines @(Read-StageText -Text $bad.L -Label "s") -Dir $osp -Prefix "free" -Label "s" -AllInfs @("a.inf", "b.inf", "c.inf", "d.inf") } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the folder check with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # One id a system over both sets: A.INF and C.INF both match PID_0001.
+        $idSets = @([pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/a/w98/A.INF | a" -Label "s") },
+                    [pscustomobject]@{ Name = "nonfree"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | WME | free/net/b/w98/C.INF | c" -Label "s") })
+        Test-OtherStageIds -Sets $idSets
+        $idSets[1].Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/b/w98/C.INF | c" -Label "s")
+        $msg = ""
+        try { Test-OtherStageIds -Sets $idSets } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("USB\VID_1234&PID_0001") -and $msg.Contains("W98SE")) ("two INFs of the union matching one id on one system were not refused: '" + $msg + "'")
+        $xpInf = Join-Path $osp "net\a\w98\X.INF"
+        [System.IO.File]::WriteAllText($xpInf, "[Manufacturer]`r`nM=Mo,NTx86,NTamd64.6.0,NTx86.6.1`r`n[Mo]`r`nD=I,ID\UNDEC`r`n[Mo.NTx86]`r`nD=I,ID\X86`r`n[Mo.NTamd64.6.0]`r`nD=I,ID\AMD64`r`n[Mo.NTx86.6.1]`r`nD=I,ID\SEVEN`r`n")
+        $xi = Read-InfText -Path $xpInf
+        Assert-True ((Get-InfModelIds -Inf $xi -Sys "W98SE") -join "," -eq "ID\UNDEC" -and (Get-InfModelIds -Inf $xi -Sys "W2K") -join "," -eq "ID\UNDEC" -and (Get-InfModelIds -Inf $xi -Sys "WXP") -join "," -eq "ID\X86" -and (Get-InfModelIds -Inf $xi -Sys "W7") -join "," -eq "ID\SEVEN" -and @(Get-InfModelIds -Inf $xi -Sys "WXP64").Count -eq 0 -and (Get-InfModelIds -Inf $xi -Sys "W7X64") -join "," -eq "ID\AMD64") "the models section each system's engine takes was not chosen as it would choose it."
+        # The table against the sets, and the relationship lines.
+        $tblT = [pscustomobject]@{
+            Pkgs = @([pscustomobject]@{ Set = "free"; Id = "net/a"; Kind = "CLASS"; Heading = "Network"; Desc = "USB Ethernet (a): CDC adapters"; Withdrawn = $false },
+                     [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): adapters"; Withdrawn = $false })
+            Rels = @([pscustomobject]@{ Kind = "EXCLUDES"; A = "free:net/a"; B = "free:net/b"; Systems = @("W98SE"); Desc = "t" })
+            Brands = $brands }
+        $setA = @([pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $osp; Lines = @(Read-StageText -Text "STAGE | W98SE | free/net/a/w98/A.INF | a`nSTAGE | W98SE WME | free/net/b/w98/C.INF | c" -Label "s") })
+        Test-OtherPkgTable -Table $tblT -Sets $setA -Meta @() -Brands $brands -Headings $heads
+        $ov = @(Get-OtherOverlaps -Table $tblT -Sets $setA -Meta @())
+        Assert-True ($ov.Count -eq 0) "an overlap a line names was listed."
+        $setA[0].Lines = @(Read-StageText -Text "STAGE | WME | free/net/a/w98/A.INF | a`nSTAGE | W98SE WME | free/net/b/w98/C.INF | c" -Label "s")
+        $ov = @(Get-OtherOverlaps -Table $tblT -Sets $setA -Meta @())
+        Assert-True ($ov.Count -eq 1 -and $ov[0].Contains("free:net/a and free:net/b") -and $ov[0].Contains("WME")) ("the CLASS package's unstated overlap was not listed: '" + ($ov -join '; ') + "'")
+        foreach ($bad in @(
+                @{ M = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/b"; B = "free:net/a"; Systems = @("W98SE", "WME"); Desc = "m"; Set = "free" }); P = $tblT.Pkgs; Want = "one line a pair a system"; Why = "both kinds on a common system" },
+                @{ M = @([pscustomobject]@{ Kind = "EXCLUDES"; A = "free:net/a"; B = "nonfree:x/y"; Systems = @("W2K"); Desc = "m"; Set = "free" }); P = $tblT.Pkgs; Want = "has ever had"; Why = "an unknown id" },
+                @{ M = @(); P = @($tblT.Pkgs[0]); Want = "current rows for it"; Why = "a carried package with no row" },
+                @{ M = @(); P = @($tblT.Pkgs + @([pscustomobject]@{ Set = "free"; Id = "net/gone"; Kind = "DEVICE"; Heading = "Network"; Desc = "g"; Withdrawn = $false })); Want = "mark it withdrawn"; Why = "a current row the set does not have" },
+                @{ M = @(); P = @($tblT.Pkgs[0], [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "CLASS"; Heading = "Network"; Desc = "USB Ethernet (b): ASIX adapters"; Withdrawn = $false }); Want = "a brand"; Why = "a CLASS row naming a brand" })) {
+            $t2 = [pscustomobject]@{ Pkgs = $bad.P; Rels = $tblT.Rels; Brands = $brands }
+            $msg = ""
+            try { Test-OtherPkgTable -Table $t2 -Sets $setA -Meta $bad.M -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the package table with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # The history: a row or a line is never dropped.
+        $recA = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n") -Label "a"
+        Assert-True ($recA.Rows.Count -eq 2 -and $recA.Rels.Count -eq 1 -and $recA.Version -eq "3.2.0.0") "otherpkgs.txt does not read back as written."
+        Test-OtherPkgsTransition -Prev $recA -Now $recA
+        $tblW = [pscustomobject]@{ Pkgs = @($tblT.Pkgs[0], [pscustomobject]@{ Set = "free"; Id = "net/b"; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (b): adapters"; Withdrawn = $true }); Rels = $tblT.Rels; Brands = $brands }
+        $recW = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.3.0.0" -Table $tblW -Meta @()) -join "`r`n") -Label "w"
+        Test-OtherPkgsTransition -Prev $recA -Now $recW
+        foreach ($bad in @(
+                @{ Now = [pscustomobject]@{ Version = "x"; Rows = @($recA.Rows[0]); Rels = $recA.Rels }; Want = "drops free:net/b"; Why = "a row dropped" },
+                @{ Now = [pscustomobject]@{ Version = "x"; Rows = $recA.Rows; Rels = @() }; Want = "drops the EXCLUDES line"; Why = "a line dropped" },
+                @{ Now = [pscustomobject]@{ Version = "x"; Rows = @($recA.Rows[0], [pscustomobject]@{ Id = "free:net/b"; Kind = "CLASS"; Heading = "Network"; Desc = "d"; State = "current" }); Rels = $recA.Rels }; Want = "makes free:net/b a CLASS"; Why = "a kind changed" })) {
+            $msg = ""
+            try { Test-OtherPkgsTransition -Prev $recA -Now $bad.Now } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the history with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $recW -Now $recA } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("keeps its words")) ("a withdrawn row made current again was not refused: '" + $msg + "'")
+        $relDir = Join-Path $script:work "oth-releases"
+        foreach ($v in @("3.1.0.0", "3.2.0.0", "3.10.0.0")) { Ensure-Directory (Join-Path $relDir $v) }
+        [System.IO.File]::WriteAllText((Join-Path $relDir "3.2.0.0\otherpkgs.txt"), ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n"))
+        [System.IO.File]::WriteAllText((Join-Path $relDir "3.10.0.0\otherpkgs.txt"), ((ConvertTo-OtherPkgsRecord -Version "3.10.0.0" -Table $tblT -Meta @()) -join "`r`n"))
+        $pv = Find-PreviousOtherPkgs -ReleasesDir $relDir -Version "3.3.0.0"
+        Assert-True ($null -ne $pv -and $pv.V -eq [version]"3.2.0.0") "the previous release's otherpkgs.txt was not the newest below this version."
+        Assert-True ($null -eq (Find-PreviousOtherPkgs -ReleasesDir $relDir -Version "3.1.0.0")) "a release with no earlier otherpkgs.txt found one."
 
         # The record of the downloads, read back strictly.
         $dlRec = (ConvertTo-DownloadsRecord -Version $relVersion -Kinds @("base", "free", "nonfree") -Free $fr -NonFree $nf) -join "`r`n"
@@ -2121,6 +2231,9 @@ try {
         if (Test-Path -LiteralPath $realPack) {
             $realNf = Export-NonFreeSet -Root $realPack -Dest (Join-Path $script:work "nonfree-real")
             Assert-True ($realNf.Sums -eq $instSums.NonFree) ("NONFREE\SHA256.TXT for the pinned usb-wdm-nonfree is {0}; the installer carries {1}." -f $realNf.Sums, $instSums.NonFree)
+            # The cut's checks of record 26 section 6.7.11 over the pinned pack.
+            $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
+            Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
         } else {
             Write-Host "  (no usb-wdm-nonfree checkout at ${realPack}: INST_NONFREE_SUMS is not checked against the pinned tag here)"
         }

@@ -2449,13 +2449,16 @@ function Resolve-OtherSetTag {
 function Read-StageText {
     # STAGE.TXT (usb-wdm-nonfree 128106f's format): its data lines as
     # objects (Action, Systems, Inf, Note, Line), every other line a comment
-    # or blank. A malformed line is refused.
+    # or blank. A malformed line is refused. A PACKAGE, EXCLUDES or COEXISTS
+    # line is metadata, Read-OtherStageMeta's (record 26 section 6.7.11),
+    # and skipped here; any other first field is refused, as before.
     param([string]$Text, [string]$Label)
     $out = @()
     foreach ($line in ($Text -split "`r?`n")) {
         $t = $line.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
         $f = @($line -split '\|')
+        if (@("PACKAGE", "EXCLUDES", "COEXISTS") -ccontains $f[0].Trim()) { continue }
         if ($f.Count -ne 4) { throw "$Label has a line that is not 'ACTION | SYSTEMS | INF | NOTE': '$line'." }
         $action = $f[0].Trim()
         if ($action -cne "STAGE" -and $action -cne "COPY") { throw "$Label has a line whose action is not STAGE or COPY: '$line'." }
@@ -2714,6 +2717,15 @@ function Export-WdmFreeSet {
         "#   ACTION | SYSTEMS | INF | NOTE",
         "# Written by xHCI98's make-release.ps1 (roadmap-usb4 task 43.48).",
         "") + @($mine | ForEach-Object { $_.Line.TrimEnd() })
+    # The metadata kept (record 26 section 6.7.11): a qualifying package's
+    # PACKAGE line, and every EXCLUDES and COEXISTS line whatever its
+    # endpoints, so filtering never drops a constraint; verbatim, after the
+    # INF lines.
+    foreach ($ml in ($stageText -split "`r?`n")) {
+        $mf = @($ml -split '\|' | ForEach-Object { $_.Trim() })
+        if ($mf[0] -ceq "PACKAGE" -and $mf.Count -ge 2 -and $Pin.Packages.Contains($mf[1])) { $stageOut += $ml.TrimEnd() }
+        elseif ($mf[0] -ceq "EXCLUDES" -or $mf[0] -ceq "COEXISTS") { $stageOut += $ml.TrimEnd() }
+    }
     [System.IO.File]::WriteAllText((Join-Path $Dest "STAGE.TXT"), (($stageOut -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
     $files["STAGE.TXT"] = Get-FileSha256 -Path (Join-Path $Dest "STAGE.TXT")
     $readOut = @(
@@ -2730,6 +2742,627 @@ function Export-WdmFreeSet {
     $files[$script:OtherSums] = $own
     return [pscustomobject]@{ Kind = "free"; Folder = $script:WdmFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev;
                               Dir = $Dest; Sums = $own; Files = $files }
+}
+
+# ---- The other sets' cut-side checks (design record 26 section 6.7.11) ----
+#
+# What the cut holds both driver sets to before it writes a download that
+# carries them, and the history it keeps of the installer's package table:
+# the 98 SE and ME one-package-a-folder rule and each STAGE INF's
+# self-containment (Test-OtherStagePackages), one hardware id per system over
+# both sets (Test-OtherStageIds), the package table and any PACKAGE lines
+# against the sets and the brand list (Test-OtherPkgTable,
+# scripts\package\brand-words.txt), the history in
+# releases\<version>\otherpkgs.txt (Test-OtherPkgsTransition), and the
+# overlap listing for the maintainer (Get-OtherOverlaps). Invoke-OtherSetChecks
+# runs them all for make-release.ps1.
+
+$script:OtherPkgsRecordName = "otherpkgs.txt"
+$script:OtherMetaKinds = @("PACKAGE", "EXCLUDES", "COEXISTS")
+$script:BrandWordsName = "brand-words.txt"
+
+function Get-BrandWordsPath {
+    return (Join-Path $PSScriptRoot $script:BrandWordsName)
+}
+
+function Read-BrandWords {
+    # brand-words.txt: one word a line, '#' comments and blank lines aside;
+    # a word is letters and digits only, matched whole and without case.
+    param([string]$Path = "")
+    if ($Path -eq "") { $Path = Get-BrandWordsPath }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "no brand list at '$Path'." }
+    $out = @()
+    foreach ($line in ([System.IO.File]::ReadAllText($Path) -split "`r?`n")) {
+        $t = $line.Trim()
+        if ($t -eq "" -or $t.StartsWith("#")) { continue }
+        if ($t -notmatch '^[A-Za-z0-9]+$') { throw "'$Path' has a line that is not one word of letters and digits: '$line'." }
+        if (@($out | Where-Object { $_ -ieq $t }).Count -gt 0) { throw "'$Path' names $t twice." }
+        $out += $t
+    }
+    if ($out.Count -eq 0) { throw "'$Path' names no word." }
+    return $out
+}
+
+function Find-BrandWord {
+    # The first word of -Words found whole, without case, in -Text; "" none.
+    param([string]$Text, [string[]]$Words)
+    foreach ($w in $Words) {
+        if ($Text -match ('(?i)(^|[^A-Za-z0-9])' + [regex]::Escape($w) + '($|[^A-Za-z0-9])')) { return $w }
+    }
+    return ""
+}
+
+function Test-OtherPkgDesc {
+    # A package's description by inst_other_desc_ok's rules: 1 to 80
+    # printable ASCII characters, no '|', and for a CLASS package no word of
+    # the brand list. "" when it passes, else the reason.
+    param([string]$Kind, [string]$Desc, [string[]]$Brands)
+    if ($Desc -eq "" -or $Desc.Length -gt 80) { return "is $($Desc.Length) characters, not 1 to 80" }
+    if ($Desc -notmatch '^[\x20-\x7E]+$' -or $Desc.Contains("|")) { return "holds a character other than printable ASCII, or a '|'" }
+    if ($Kind -ceq "CLASS") {
+        $b = Find-BrandWord -Text $Desc -Words $Brands
+        if ($b -ne "") { return "is a CLASS package's and names '$b', a brand (scripts\package\brand-words.txt)" }
+    }
+    return ""
+}
+
+function Test-OtherPkgId {
+    param([string]$Id)
+    return ($Id -cmatch '^[a-z0-9_-]+/[a-z0-9_-]+$' -and $Id.Length -lt 48)
+}
+
+function Read-OtherStageMeta {
+    # The PACKAGE, EXCLUDES and COEXISTS lines of a STAGE.TXT (section
+    # 6.7.11's format, inst_stage_meta's rules) as objects: Kind ("PACKAGE",
+    # "EXCLUDES" or "COEXISTS"), A, B, Systems, Desc and Line. PACKAGE: A the
+    # id, B CLASS or DEVICE, Desc its description; the others: A and B
+    # set-qualified ids, Systems their tokens, Desc the why. A malformed one
+    # is refused; a NEEDS line is unsupported metadata.
+    param([string]$Text, [string]$Label, [string[]]$Brands)
+    $out = @()
+    foreach ($line in ($Text -split "`r?`n")) {
+        $t = $line.Trim()
+        if ($t -eq "" -or $t.StartsWith("#")) { continue }
+        $f = @($line -split '\|' | ForEach-Object { $_.Trim() })
+        if ($f[0] -ceq "NEEDS") { throw "$Label has a NEEDS line, metadata this release does not read: '$line'." }
+        if ($script:OtherMetaKinds -cnotcontains $f[0]) { continue }
+        if ($f[0] -ceq "PACKAGE") {
+            if ($f.Count -ne 4 -or -not (Test-OtherPkgId -Id $f[1]) -or ($f[2] -cne "CLASS" -and $f[2] -cne "DEVICE")) {
+                throw "$Label has a PACKAGE line that is not 'PACKAGE | <class>/<package> | CLASS or DEVICE | <description>': '$line'."
+            }
+            $why = Test-OtherPkgDesc -Kind $f[2] -Desc $f[3] -Brands $Brands
+            if ($why -ne "") { throw "$Label's PACKAGE line for $($f[1]): its description $why." }
+            $out += [pscustomobject]@{ Kind = "PACKAGE"; A = $f[1]; B = $f[2]; Systems = @(); Desc = $f[3]; Line = $line }
+        } else {
+            if ($f.Count -ne 5) { throw "$Label has a $($f[0]) line that is not '$($f[0]) | <set>:<id> | <set>:<id> | <systems> | <why>': '$line'." }
+            foreach ($q in @($f[1], $f[2])) {
+                if ($q -notmatch '^(free|nonfree):(.+)$' -or -not (Test-OtherPkgId -Id $Matches[2])) { throw "$Label's $($f[0]) line names '$q', which is not free:<class>/<package> or nonfree:<class>/<package>: '$line'." }
+            }
+            $sy = @($f[3] -split '\s+' | Where-Object { $_ -ne "" })
+            if ($sy.Count -eq 0) { throw "$Label's $($f[0]) line names no system: '$line'." }
+            foreach ($s in $sy) { if ($script:StageSystems -cnotcontains $s) { throw "$Label's $($f[0]) line names a system it cannot read, '$s'." } }
+            $out += [pscustomobject]@{ Kind = $f[0]; A = $f[1]; B = $f[2]; Systems = $sy; Desc = $f[4]; Line = $line }
+        }
+    }
+    return $out
+}
+
+function Get-InstOtherTable {
+    # The installer's package table, read from xhciinst\inst_core.c:
+    # instOtherPkgs (Set, Id, Kind, Heading, Desc, Withdrawn), instOtherRels
+    # (A, B set-qualified, Systems as tokens, Kind EXCLUDES or COEXISTS) and
+    # instBrandWords. Each initializer is read whole; a row this reader
+    # cannot take is refused, so the C and the cut cannot read two tables.
+    param([string]$Repo)
+    $text = [System.IO.File]::ReadAllText((Join-Path $Repo "xhciinst\inst_core.c"))
+    function Get-Block([string]$Name) {
+        $m = [regex]::Match($text, [regex]::Escape($Name) + '\[\]\s*=\s*\{(.*?)\n\};', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        if (-not $m.Success) { throw "xhciinst\inst_core.c has no initializer of $Name that this reader can find." }
+        return $m.Groups[1].Value
+    }
+    function Join-Literals([string]$Body) {
+        # Adjacent string literals made one, as the C compiler does.
+        return [regex]::Replace($Body, '"\s*\r?\n\s*"', '')
+    }
+    $pkgs = @()
+    $body = Join-Literals (Get-Block "instOtherPkgs")
+    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_PKG_CLASS|INST_PKG_DEVICE)\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*([01])\s*\}')) {
+        $pkgs += [pscustomobject]@{
+            Set = $(if ($m.Groups[1].Value -eq "INST_SET_FREE") { "free" } else { "nonfree" })
+            Id = $m.Groups[2].Value
+            Kind = $(if ($m.Groups[3].Value -eq "INST_PKG_CLASS") { "CLASS" } else { "DEVICE" })
+            Heading = $m.Groups[4].Value
+            Desc = $m.Groups[5].Value
+            Withdrawn = ($m.Groups[6].Value -eq "1")
+        }
+    }
+    $rows = @([regex]::Matches($body, '\{\s*INST_SET_')).Count
+    if ($pkgs.Count -eq 0 -or $pkgs.Count -ne $rows) { throw "xhciinst\inst_core.c's instOtherPkgs has $rows rows and this reader took $($pkgs.Count): change the reader with the table." }
+    $rels = @()
+    $body = Get-Block "instOtherRels"
+    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*([A-Z_]+|0x[0-9A-Fa-f]+UL?)\s*,\s*([01])\s*\}')) {
+        $mask = $m.Groups[5].Value
+        if ($mask -eq "INST_SYS_ALL") { $sys = @($script:StageSystems) }
+        elseif ($mask -match '^0x([0-9A-Fa-f]+)') {
+            $v = [Convert]::ToInt64($Matches[1], 16)
+            $sys = @(for ($i = 0; $i -lt $script:StageSystems.Count; $i++) { if ($v -band ([int64]1 -shl $i)) { $script:StageSystems[$i] } })
+        } else { throw "xhciinst\inst_core.c's instOtherRels names a system mask this reader cannot read, '$mask'." }
+        $rels += [pscustomobject]@{
+            Kind = $(if ($m.Groups[6].Value -eq "1") { "EXCLUDES" } else { "COEXISTS" })
+            A = ($(if ($m.Groups[1].Value -eq "INST_SET_FREE") { "free:" } else { "nonfree:" }) + $m.Groups[2].Value)
+            B = ($(if ($m.Groups[3].Value -eq "INST_SET_FREE") { "free:" } else { "nonfree:" }) + $m.Groups[4].Value)
+            Systems = $sys
+            Desc = "the installer's table"
+        }
+    }
+    $relRows = @([regex]::Matches($body, '\{\s*INST_SET_')).Count
+    if ($rels.Count -ne $relRows) { throw "xhciinst\inst_core.c's instOtherRels has $relRows rows and this reader took $($rels.Count): change the reader with the table." }
+    $words = @([regex]::Matches((Get-Block "instBrandWords"), '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+    return [pscustomobject]@{ Pkgs = $pkgs; Rels = $rels; Brands = $words }
+}
+
+function Read-InfText {
+    # An INF's sections, for the cut's own checks: an ordered map of the
+    # section name in lower case to its entries (comments after ';' outside
+    # quotes dropped, blank lines dropped, a '\' continuation joined), with
+    # %token%s replaced from [Strings] when asked for.
+    param([string]$Path)
+    $raw = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::Default)
+    if ($raw.Length -ge 1 -and [int]$raw[0] -eq 0xFEFF) { $raw = $raw.Substring(1) }
+    $secs = [ordered]@{}
+    $cur = $null
+    $pending = ""
+    foreach ($line in ($raw -split "`r?`n")) {
+        $l = $pending + $line
+        $pending = ""
+        $sb = New-Object System.Text.StringBuilder
+        $q = $false
+        foreach ($ch in $l.ToCharArray()) {
+            if ($ch -eq '"') { $q = -not $q }
+            if ($ch -eq ';' -and -not $q) { break }
+            [void]$sb.Append($ch)
+        }
+        $l = $sb.ToString().Trim()
+        if ($l.EndsWith("\")) { $pending = $l.Substring(0, $l.Length - 1); continue }
+        if ($l -eq "") { continue }
+        if ($l -match '^\[(.+)\]$') {
+            $cur = $Matches[1].Trim().ToLowerInvariant()
+            if (-not $secs.Contains($cur)) { $secs[$cur] = New-Object System.Collections.ArrayList }
+            continue
+        }
+        if ($null -ne $cur) { [void]$secs[$cur].Add($l) }
+    }
+    $strings = @{}
+    foreach ($k in @($secs.Keys | Where-Object { $_ -match '^strings(\..+)?$' })) {
+        foreach ($e in $secs[$k]) {
+            if ($e -match '^([^=]+?)\s*=\s*(.*)$') {
+                $n = $Matches[1].Trim().ToLowerInvariant()
+                if (-not $strings.ContainsKey($n)) { $strings[$n] = $Matches[2].Trim().Trim('"') }
+            }
+        }
+    }
+    return [pscustomobject]@{ Sections = $secs; Strings = $strings; Path = $Path }
+}
+
+function Expand-InfValue {
+    param($Inf, [string]$Text)
+    return [regex]::Replace($Text, '%([^%]+)%', {
+        param($m)
+        $k = $m.Groups[1].Value.ToLowerInvariant()
+        if ($Inf.Strings.ContainsKey($k)) { return $Inf.Strings[$k] }
+        return $m.Value
+    }).Trim().Trim('"')
+}
+
+function Get-InfEntries {
+    # The "key = value" entries of a section as Key (lower case) and Value.
+    param($Inf, [string]$Section)
+    $k = $Section.ToLowerInvariant()
+    if (-not $Inf.Sections.Contains($k)) { return @() }
+    $out = @()
+    foreach ($e in $Inf.Sections[$k]) {
+        if ($e -match '^([^=]+?)\s*=\s*(.*)$') { $out += [pscustomobject]@{ Key = $Matches[1].Trim().Trim('"').ToLowerInvariant(); Value = $Matches[2].Trim(); Raw = $e } }
+        else { $out += [pscustomobject]@{ Key = ""; Value = $e; Raw = $e } }
+    }
+    return $out
+}
+
+function Get-OtherPkgOf {
+    # "<class>/<package>" of a set path ("non-free/serial/ftdi/w2k/x.inf").
+    param([string]$Path, [string]$Prefix)
+    $rel = $Path.Substring($Prefix.Length + 1)
+    $p = @($rel -split '/')
+    if ($p.Count -lt 3) { return "" }
+    return ($p[0] + "/" + $p[1])
+}
+
+function Test-OtherStagePackages {
+    # Record 26 section 6.7.11, "Each package its own folders" and "No
+    # dependencies between packages", over one set: -Lines its STAGE.TXT's
+    # (Read-StageText), -Dir the exported folder (paths under -Prefix/ there
+    # without the prefix), -AllInfs every INF file name of both sets (lower
+    # case), for the Include rule. Throws the first fault with its reason.
+    param($Lines, [string]$Dir, [string]$Prefix, [string]$Label, [string[]]$AllInfs = @())
+    $pre = $Prefix + "/"
+    $byFolder = @{}
+    foreach ($l in $Lines) {
+        if (-not $l.Inf.StartsWith($pre, [System.StringComparison]::Ordinal)) { throw "$Label names $($l.Inf), which is not under $pre." }
+        $pk = Get-OtherPkgOf -Path $l.Inf -Prefix $Prefix
+        if ($pk -eq "") { throw "$Label names $($l.Inf), which is not under a <class>/<package>/ folder." }
+        $folder = $l.Inf.Substring(0, $l.Inf.LastIndexOf('/')).ToLowerInvariant()
+        if (-not $byFolder.ContainsKey($folder)) { $byFolder[$folder] = @() }
+        $byFolder[$folder] += [pscustomobject]@{ Line = $l; Pkg = $pk }
+    }
+    # The 98 SE and ME folder rule: a folder staged there belongs to one
+    # package, and every other STAGE INF in it is staged on that system too.
+    foreach ($folder in $byFolder.Keys) {
+        $here = $byFolder[$folder]
+        foreach ($sys in @("W98SE", "WME")) {
+            $staged = @($here | Where-Object { $_.Line.Action -ceq "STAGE" -and $_.Line.Systems -ccontains $sys })
+            if ($staged.Count -eq 0) { continue }
+            $pkgs = @($here | ForEach-Object { $_.Pkg } | Sort-Object -Unique)
+            if ($pkgs.Count -gt 1) { throw "$Label stages $($staged[0].Line.Inf) on $sys, and its folder holds INFs of $($pkgs -join ' and '): on 98 SE and ME the wizard reads every INF of a folder on DevicePath, so one package a folder (design record 26 section 6.7.11)." }
+            foreach ($o in @($here | Where-Object { $_.Line.Action -ceq "STAGE" -and $_.Line.Systems -cnotcontains $sys })) {
+                throw "$Label stages $($staged[0].Line.Inf) on $sys, and $($o.Line.Inf) beside it is a STAGE line that does not name ${sys}: the wizard there would see it (design record 26 section 6.7.11)."
+            }
+        }
+    }
+    # Self-containment: every file a STAGE INF takes from its source disks is
+    # under its own package's folder and in the set.
+    foreach ($folder in $byFolder.Keys) {
+        foreach ($o in @($byFolder[$folder] | Where-Object { $_.Line.Action -ceq "STAGE" })) {
+            $relInf = $o.Line.Inf.Substring($pre.Length)
+            $infPath = Join-Path $Dir $relInf.Replace('/', '\')
+            if (-not (Test-Path -LiteralPath $infPath -PathType Leaf)) { throw "$Label names $($o.Line.Inf), which the set does not hold." }
+            $inf = Read-InfText -Path $infPath
+            $pkgDir = [System.IO.Path]::GetFullPath((Join-Path $Dir ($o.Pkg.Replace('/', '\')))).TrimEnd('\') + '\'
+            $infDir = Split-Path -Parent $infPath
+            $disks = @{}
+            foreach ($sn in @($inf.Sections.Keys | Where-Object { $_ -match '^sourcedisksnames(\..+)?$' })) {
+                foreach ($e in (Get-InfEntries -Inf $inf -Section $sn)) {
+                    $f = @($e.Value -split ',')
+                    $sub = ""
+                    if ($f.Count -ge 4) { $sub = (Expand-InfValue -Inf $inf -Text $f[3]).Trim('\') }
+                    $disks[$e.Key] = $sub
+                }
+            }
+            $known = @{}
+            foreach ($sf in @($inf.Sections.Keys | Where-Object { $_ -match '^sourcedisksfiles(\..+)?$' })) {
+                foreach ($e in (Get-InfEntries -Inf $inf -Section $sf)) {
+                    $name = Expand-InfValue -Inf $inf -Text $e.Key
+                    $f = @($e.Value -split ',')
+                    $disk = $f[0].Trim()
+                    $sub = ""
+                    if ($f.Count -ge 2) { $sub = (Expand-InfValue -Inf $inf -Text $f[1]).Trim('\') }
+                    $base = $infDir
+                    if ($disks.ContainsKey($disk) -and $disks[$disk] -ne "") { $base = Join-Path $base $disks[$disk] }
+                    if ($sub -ne "") { $base = Join-Path $base $sub }
+                    $full = [System.IO.Path]::GetFullPath((Join-Path $base $name))
+                    if (-not $full.StartsWith($pkgDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        throw "$Label's $($o.Line.Inf) takes $name from outside its package's folder ($($o.Pkg)/): a package is self-contained (design record 26 section 6.7.11)."
+                    }
+                    # Not held to exist: a vendor's INF lists both
+                    # architectures' files where each folder holds its own
+                    # (Realtek's rtuxp.INF), and the engine copies only what
+                    # the system's install section names.
+                    $known[$name.ToLowerInvariant()] = $true
+                }
+            }
+            # Include names an INF of Windows' own %windir%\INF; one that
+            # names an INF of either set takes another package's file.
+            foreach ($sec in $inf.Sections.Keys) {
+                foreach ($e in @(Get-InfEntries -Inf $inf -Section $sec | Where-Object { $_.Key -eq "include" })) {
+                    foreach ($n in @($e.Value -split ',' | ForEach-Object { (Expand-InfValue -Inf $inf -Text $_).ToLowerInvariant() } | Where-Object { $_ -ne "" })) {
+                        if ($AllInfs -contains $n) { throw "$Label's $($o.Line.Inf) includes $n, an INF of a driver set: Include takes Windows' own %windir%\INF, so a package may need no other (design record 26 section 6.7.11)." }
+                    }
+                }
+            }
+        }
+    }
+}
+
+$script:OtherSysInfo = [ordered]@{
+    "W98SE" = @{ Nt = $false; Arch = "x86"; Ver = 0.0; NoDeco = $false }
+    "WME" = @{ Nt = $false; Arch = "x86"; Ver = 0.0; NoDeco = $false }
+    "W2K" = @{ Nt = $true; Arch = "x86"; Ver = 5.0; NoDeco = $true }
+    "WXP" = @{ Nt = $true; Arch = "x86"; Ver = 5.1; NoDeco = $false }
+    "WXP64" = @{ Nt = $true; Arch = "amd64"; Ver = 5.2; NoDeco = $false }
+    "WVISTA" = @{ Nt = $true; Arch = "x86"; Ver = 6.0; NoDeco = $false }
+    "WVISTA64" = @{ Nt = $true; Arch = "amd64"; Ver = 6.0; NoDeco = $false }
+    "W7" = @{ Nt = $true; Arch = "x86"; Ver = 6.1; NoDeco = $false }
+    "W7X64" = @{ Nt = $true; Arch = "amd64"; Ver = 6.1; NoDeco = $false }
+    "W8" = @{ Nt = $true; Arch = "x86"; Ver = 6.2; NoDeco = $false }
+    "W8X64" = @{ Nt = $true; Arch = "amd64"; Ver = 6.2; NoDeco = $false }
+    "W10" = @{ Nt = $true; Arch = "x86"; Ver = 10.0; NoDeco = $false }
+    "W10X64" = @{ Nt = $true; Arch = "amd64"; Ver = 10.0; NoDeco = $false }
+}
+
+function Get-InfModelIds {
+    # The ids an INF's models match on one system token: the [Manufacturer]
+    # entries' models sections, each with the decoration that system's
+    # engine takes (none on 98 SE, ME and 2000; on XP and later the best
+    # NT[arch][.major.minor] it lists that applies, else the undecorated
+    # section, which 64-bit Windows does not read).
+    param($Inf, [string]$Sys)
+    $si = $script:OtherSysInfo[$Sys]
+    $ids = @()
+    foreach ($e in (Get-InfEntries -Inf $inf -Section "Manufacturer")) {
+        $f = @($e.Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+        if ($f.Count -eq 0) { continue }
+        $models = Expand-InfValue -Inf $Inf -Text $f[0]
+        $section = $null
+        if ($si.Nt -and -not $si.NoDeco) {
+            $best = $null; $bestScore = -1
+            foreach ($d in @($f | Select-Object -Skip 1)) {
+                if ($d -notmatch '^(?i)NT(x86|amd64|ia64|arm|arm64)?(\.(\d+)(\.(\d+))?)?') { continue }
+                $arch = $Matches[1]
+                if ($arch -and $arch -ine $si.Arch) { continue }
+                $ver = 0.0
+                if ($Matches[3]) { $ver = [double]("{0}.{1}" -f $Matches[3], $(if ($Matches[5]) { $Matches[5] } else { "0" })) }
+                if ($ver -gt $si.Ver) { continue }
+                $score = $ver * 10 + $(if ($arch) { 1 } else { 0 })
+                if ($score -gt $bestScore) { $best = $d; $bestScore = $score }
+            }
+            if ($null -ne $best) { $section = $models + "." + $best }
+            elseif ($si.Arch -ne "amd64") { $section = $models }
+        } else {
+            $section = $models
+        }
+        if ($null -eq $section) { continue }
+        foreach ($m in (Get-InfEntries -Inf $Inf -Section $section)) {
+            $mf = @($m.Value -split ',' | ForEach-Object { (Expand-InfValue -Inf $Inf -Text $_).Trim() })
+            foreach ($id in @($mf | Select-Object -Skip 1)) { if ($id -ne "") { $ids += $id.ToUpperInvariant() } }
+        }
+    }
+    return @($ids | Sort-Object -Unique)
+}
+
+function Test-OtherStageIds {
+    # The pack's rule that no two STAGE lines match one id on a system,
+    # held over the union of both sets (record 26 section 6.7.11): -Sets a
+    # list of @{ Lines; Dir; Prefix; Name }. Throws the first id two INFs of
+    # the union both match on one system.
+    param($Sets)
+    $seen = @{}
+    foreach ($s in $Sets) {
+        $pre = $s.Prefix + "/"
+        foreach ($l in @($s.Lines | Where-Object { $_.Action -ceq "STAGE" })) {
+            $inf = Read-InfText -Path (Join-Path $s.Dir ($l.Inf.Substring($pre.Length).Replace('/', '\')))
+            foreach ($sys in $l.Systems) {
+                foreach ($id in (Get-InfModelIds -Inf $inf -Sys $sys)) {
+                    $k = "$sys|$id"
+                    $who = "$($s.Name):$($l.Inf)"
+                    if ($seen.ContainsKey($k) -and $seen[$k] -ne $who) {
+                        throw "two INFs staged on $sys match $($id): $($seen[$k]) and $who. One id one STAGE line a system, over both sets (design record 26 section 6.7.11)."
+                    }
+                    $seen[$k] = $who
+                }
+            }
+        }
+    }
+}
+
+function Get-OtherScopes {
+    # Each package of -Sets with the systems its STAGE lines name:
+    # "<set>:<class>/<package>" to a list of tokens.
+    param($Sets)
+    $scope = [ordered]@{}
+    foreach ($s in $Sets) {
+        foreach ($l in @($s.Lines | Where-Object { $_.Action -ceq "STAGE" })) {
+            $key = $s.Name + ":" + (Get-OtherPkgOf -Path $l.Inf -Prefix $s.Prefix)
+            if (-not $scope.Contains($key)) { $scope[$key] = @() }
+            $scope[$key] = @($scope[$key] + $l.Systems | Sort-Object -Unique)
+        }
+    }
+    return $scope
+}
+
+function Test-OtherPkgTable {
+    # The installer's table (Get-InstOtherTable) and any PACKAGE lines held
+    # to the sets and the rules (record 26 section 6.7.11): every row's id,
+    # heading and description by the rules, a CLASS row with no brand word;
+    # every package of a carried set with exactly one current row (or its
+    # PACKAGE line), and no current row of a carried set naming a package
+    # it does not have; the relationship lines naming known ids, and no pair
+    # named by both kinds, or twice by one kind, on a common system.
+    param($Table, $Sets, $Meta, [string[]]$Brands, [string[]]$Headings)
+    $known = @{}
+    foreach ($p in $Table.Pkgs) {
+        $q = $p.Set + ":" + $p.Id
+        if (-not (Test-OtherPkgId -Id $p.Id)) { throw "the installer's table names '$q', which is not <class>/<package>." }
+        if ($known.ContainsKey($q)) { throw "the installer's table names $q twice." }
+        if ($Headings -cnotcontains $p.Heading) { throw "the installer's table gives $q the heading '$($p.Heading)', which is not one of its headings." }
+        $why = Test-OtherPkgDesc -Kind $p.Kind -Desc $p.Desc -Brands $Brands
+        if ($why -ne "") { throw "the installer's table's description of $q $why." }
+        $known[$q] = $p
+    }
+    $scope = Get-OtherScopes -Sets $Sets
+    foreach ($s in $Sets) {
+        $metaPkgs = @($Meta | Where-Object { $_.Set -eq $s.Name -and $_.Kind -ceq "PACKAGE" } | ForEach-Object { $_.A })
+        foreach ($mp in $metaPkgs) { $known[$s.Name + ":" + $mp] = $true }
+        $have = @($scope.Keys | Where-Object { $_.StartsWith($s.Name + ":") })
+        foreach ($k in $have) {
+            $id = $k.Substring($s.Name.Length + 1)
+            if ($metaPkgs -ccontains $id) { continue }
+            $rows = @($Table.Pkgs | Where-Object { $_.Set -eq $s.Name -and $_.Id -ceq $id -and -not $_.Withdrawn })
+            if ($rows.Count -ne 1) { throw "$k is a package of the carried $($s.Name) set, and the installer's table has $($rows.Count) current rows for it, not one: add its row (xhciinst\inst_core.c, instOtherPkgs)." }
+        }
+        foreach ($p in @($Table.Pkgs | Where-Object { $_.Set -eq $s.Name -and -not $_.Withdrawn })) {
+            if ($have -cnotcontains ($s.Name + ":" + $p.Id) -and $metaPkgs -cnotcontains $p.Id) {
+                throw "the installer's table has a current row for $($s.Name):$($p.Id), which the carried $($s.Name) set does not have: mark it withdrawn (its words kept)."
+            }
+        }
+    }
+    $rels = @($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" })
+    for ($i = 0; $i -lt $rels.Count; $i++) {
+        foreach ($q in @($rels[$i].A, $rels[$i].B)) {
+            if (-not $known.ContainsKey($q)) { throw "a $($rels[$i].Kind) line names $q, which no package of either set's known metadata has ever had." }
+        }
+        for ($j = $i + 1; $j -lt $rels.Count; $j++) {
+            $same = ($rels[$i].A -ceq $rels[$j].A -and $rels[$i].B -ceq $rels[$j].B) -or ($rels[$i].A -ceq $rels[$j].B -and $rels[$i].B -ceq $rels[$j].A)
+            if (-not $same) { continue }
+            $common = @($rels[$i].Systems | Where-Object { $rels[$j].Systems -ccontains $_ })
+            if ($common.Count -gt 0) {
+                throw "$($rels[$i].A) and $($rels[$i].B) are named by a $($rels[$i].Kind) and a $($rels[$j].Kind) line on $($common -join ' '): one line a pair a system."
+            }
+        }
+    }
+}
+
+function Get-OtherOverlaps {
+    # For the maintainer, not a refusal: each pair of a CLASS package with
+    # another package that stage on a common system, with the systems no
+    # EXCLUDES or COEXISTS line of the pair names (record 26 section 6.7.11).
+    param($Table, $Sets, $Meta)
+    $scope = Get-OtherScopes -Sets $Sets
+    $kind = @{}
+    foreach ($p in $Table.Pkgs) { $kind[$p.Set + ":" + $p.Id] = $p.Kind }
+    foreach ($m in @($Meta | Where-Object { $_.Kind -ceq "PACKAGE" })) { $kind[$m.Set + ":" + $m.A] = $m.B }
+    $rels = @($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" })
+    $keys = @($scope.Keys)
+    $out = @()
+    for ($i = 0; $i -lt $keys.Count; $i++) {
+        for ($j = $i + 1; $j -lt $keys.Count; $j++) {
+            $a = $keys[$i]; $b = $keys[$j]
+            if ($kind[$a] -cne "CLASS" -and $kind[$b] -cne "CLASS") { continue }
+            $common = @($scope[$a] | Where-Object { $scope[$b] -ccontains $_ })
+            if ($common.Count -eq 0) { continue }
+            $stated = @()
+            foreach ($r in @($rels | Where-Object { ($_.A -ceq $a -and $_.B -ceq $b) -or ($_.A -ceq $b -and $_.B -ceq $a) })) { $stated += $r.Systems }
+            $open = @($common | Where-Object { $stated -cnotcontains $_ })
+            if ($open.Count -gt 0) { $out += ("{0} and {1} both stage on {2}, and no EXCLUDES or COEXISTS line names them there" -f $a, $b, ($open -join " ")) }
+        }
+    }
+    return $out
+}
+
+function ConvertTo-OtherPkgsRecord {
+    # releases\<version>\otherpkgs.txt: the table's rows, current and
+    # withdrawn, and every relationship line of the table and both sets.
+    param([string]$Version, $Table, $Meta)
+    $lines = @(
+        "# otherpkgs.txt - the other USB drivers' package table this release was cut with",
+        "#",
+        "# Written by scripts\package\make-release.ps1 (design record 26 section",
+        "# 6.7.11). The next cut reads it and refuses a table that drops a row or a",
+        "# line: a row is only ever marked withdrawn, with its words kept.",
+        "#",
+        "#   ROW | <set>:<class>/<package> | CLASS or DEVICE | <heading> | <description> | current or withdrawn",
+        "#   EXCLUDES or COEXISTS | <set>:<id> | <set>:<id> | <systems> | <why>",
+        "",
+        "Version: $Version")
+    foreach ($p in $Table.Pkgs) {
+        $lines += ("ROW | {0}:{1} | {2} | {3} | {4} | {5}" -f $p.Set, $p.Id, $p.Kind, $p.Heading, $p.Desc, $(if ($p.Withdrawn) { "withdrawn" } else { "current" }))
+    }
+    foreach ($m in @($Meta | Where-Object { $_.Kind -ceq "PACKAGE" })) {
+        $lines += ("ROW | {0}:{1} | {2} | {3} | {4} | {5}" -f $m.Set, $m.A, $m.B, "-", $m.Desc, "current")
+    }
+    foreach ($r in (@($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" }))) {
+        $lines += ("{0} | {1} | {2} | {3} | {4}" -f $r.Kind, $r.A, $r.B, ($r.Systems -join " "), $r.Desc)
+    }
+    return $lines
+}
+
+function ConvertFrom-OtherPkgsRecord {
+    param([string]$Text, [string]$Label)
+    $rows = @(); $rels = @(); $ver = ""
+    foreach ($line in ($Text -split "`r?`n")) {
+        $t = $line.Trim()
+        if ($t -eq "" -or $t.StartsWith("#")) { continue }
+        if ($t -match '^Version: (\S+)$') { $ver = $Matches[1]; continue }
+        $f = @($line -split '\|' | ForEach-Object { $_.Trim() })
+        if ($f[0] -ceq "ROW" -and $f.Count -eq 6 -and ($f[5] -ceq "current" -or $f[5] -ceq "withdrawn")) {
+            $rows += [pscustomobject]@{ Id = $f[1]; Kind = $f[2]; Heading = $f[3]; Desc = $f[4]; State = $f[5] }
+        } elseif (($f[0] -ceq "EXCLUDES" -or $f[0] -ceq "COEXISTS") -and $f.Count -eq 5) {
+            $rels += [pscustomobject]@{ Kind = $f[0]; A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }); Desc = $f[4] }
+        } else {
+            throw "$Label has a line it cannot read: '$line'."
+        }
+    }
+    if ($ver -eq "") { throw "$Label names no version." }
+    return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels }
+}
+
+function Test-OtherPkgsTransition {
+    # The previous release's record (-Prev, ConvertFrom-OtherPkgsRecord's)
+    # against this cut's (-Now, the same): every row is still there with its
+    # kind; a withdrawn row stays withdrawn with its words; every
+    # relationship line is still there, on at least its systems.
+    param($Prev, $Now)
+    foreach ($r in $Prev.Rows) {
+        $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
+        if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
+        if ($n[0].Kind -cne $r.Kind) { throw "the package table makes $($r.Id) a $($n[0].Kind) package; $($Prev.Version) had it $($r.Kind)." }
+        if ($r.State -ceq "withdrawn" -and ($n[0].State -cne "withdrawn" -or $n[0].Desc -cne $r.Desc)) {
+            throw "$($r.Id) was withdrawn in $($Prev.Version), and this table changes it: a withdrawn row keeps its words."
+        }
+    }
+    foreach ($r in $Prev.Rels) {
+        $n = @($Now.Rels | Where-Object { $_.Kind -ceq $r.Kind -and (($_.A -ceq $r.A -and $_.B -ceq $r.B) -or ($_.A -ceq $r.B -and $_.B -ceq $r.A)) })
+        $kept = $false
+        foreach ($x in $n) { if (@($r.Systems | Where-Object { $x.Systems -cnotcontains $_ }).Count -eq 0) { $kept = $true } }
+        if (-not $kept) { throw "the package table drops the $($r.Kind) line of $($r.A) and $($r.B) on $($r.Systems -join ' '), which $($Prev.Version) carried: a line is never removed (design record 26 section 6.7.11)." }
+    }
+}
+
+function Find-PreviousOtherPkgs {
+    # The newest releases\<v>\otherpkgs.txt below -Version, or $null.
+    param([string]$ReleasesDir, [string]$Version)
+    if (-not (Test-Path -LiteralPath $ReleasesDir -PathType Container)) { return $null }
+    $best = $null
+    foreach ($d in (Get-ChildItem -LiteralPath $ReleasesDir -Directory)) {
+        $v = $null
+        if (-not [version]::TryParse($d.Name, [ref]$v)) { continue }
+        if ($v -ge [version]$Version) { continue }
+        $p = Join-Path $d.FullName $script:OtherPkgsRecordName
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        if ($null -eq $best -or $v -gt $best.V) { $best = [pscustomobject]@{ V = $v; Path = $p } }
+    }
+    return $best
+}
+
+function Invoke-OtherSetChecks {
+    # Every check of this block over the carried sets (Export-WdmFreeSet's
+    # and Export-NonFreeSet's results, either $null), the installer's table
+    # and the previous release's record. Returns the record's lines and the
+    # overlap listing; throws the first refusal.
+    param([string]$Repo, [string]$ReleasesDir, [string]$Version, $Free, $NonFree, [string]$BrandPath = "")
+    $brands = Read-BrandWords -Path $BrandPath
+    $table = Get-InstOtherTable -Repo $Repo
+    $missing = @($brands | Where-Object { $table.Brands -cnotcontains $_ }) + @($table.Brands | Where-Object { $brands -cnotcontains $_ })
+    if ($missing.Count -gt 0) { throw "xhciinst\inst_core.c's instBrandWords and scripts\package\brand-words.txt differ ($($missing -join ', ')): change the two together." }
+    $hText = [System.IO.File]::ReadAllText((Join-Path $Repo "xhciinst\inst_core.c"))
+    $hm = [regex]::Match($hText, 'instOtherHeadings\[\]\s*=\s*\{([^}]*)\}')
+    $headings = @([regex]::Matches($hm.Groups[1].Value, '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value })
+    $sets = @()
+    $meta = @()
+    foreach ($pair in @(@("free", $Free, $script:WdmFreePrefix), @("nonfree", $NonFree, $script:NonFreePrefix))) {
+        if ($null -eq $pair[1]) { continue }
+        $stageText = [System.IO.File]::ReadAllText((Join-Path $pair[1].Dir "STAGE.TXT"))
+        $lines = Read-StageText -Text $stageText -Label "$($pair[0])'s STAGE.TXT"
+        $sets += [pscustomobject]@{ Name = $pair[0]; Lines = $lines; Dir = $pair[1].Dir; Prefix = $pair[2] }
+        foreach ($m in (Read-OtherStageMeta -Text $stageText -Label "$($pair[0])'s STAGE.TXT" -Brands $brands)) {
+            $m | Add-Member -NotePropertyName Set -NotePropertyValue $pair[0]
+            $meta += $m
+        }
+    }
+    $allInfs = @()
+    foreach ($s in $sets) { $allInfs += @(Get-ChildItem -LiteralPath $s.Dir -Recurse -File -Filter "*.inf" | ForEach-Object { $_.Name.ToLowerInvariant() }) }
+    foreach ($s in $sets) {
+        Test-OtherStagePackages -Lines $s.Lines -Dir $s.Dir -Prefix $s.Prefix -Label "the $($s.Name) set's STAGE.TXT" -AllInfs $allInfs
+    }
+    Test-OtherStageIds -Sets $sets
+    Test-OtherPkgTable -Table $table -Sets $sets -Meta $meta -Brands $brands -Headings $headings
+    $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta
+    $prev = $null
+    $vParsed = $null
+    if ([version]::TryParse($Version, [ref]$vParsed)) { $prev = Find-PreviousOtherPkgs -ReleasesDir $ReleasesDir -Version $Version }
+    if ($null -ne $prev) {
+        $p = ConvertFrom-OtherPkgsRecord -Text ([System.IO.File]::ReadAllText($prev.Path)) -Label "'$($prev.Path)'"
+        $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
+        Test-OtherPkgsTransition -Prev $p -Now $n
+    }
+    return [pscustomobject]@{ Record = $record; Overlaps = @(Get-OtherOverlaps -Table $table -Sets $sets -Meta $meta); Previous = $prev }
 }
 
 function Get-InstOtherSums {

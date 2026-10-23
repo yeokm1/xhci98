@@ -4815,6 +4815,95 @@ static void st_settings_layout(HWND parent)
     DestroyWindow(d);
 }
 
+/* The Other USB drivers page's list with every row of both tables, current
+ * and withdrawn (record 26 section 6.7.11): the list made in IDC_O_AREA's
+ * place as othlist_build makes it, each package's longest label (its "not
+ * available" form) in its box's text width with no word wider than it and
+ * no taller than the list's window, so every row can be scrolled into view
+ * whole; each "<set>: <heading>" one line in the list's width; the trust
+ * box's words likewise. */
+static void st_other_layout(HWND parent)
+{
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHER), parent,
+                                st_proc, 0);
+    HWND l;
+    HFONT font;
+    HFONT old;
+    HDC dc;
+    RECT area;
+    RECT c;
+    POINT pt;
+    char msg[200];
+    char label[INST_PKG_DESC_MAX + 40];
+    int w;
+    int boxH;
+    int set;
+    int i;
+    int lh;
+    int wide;
+
+    st(d != NULL, "the other USB drivers page");
+    if (d == NULL) {
+        return;
+    }
+    font = (HFONT)SendMessageA(d, WM_GETFONT, 0, 0);
+    GetWindowRect(GetDlgItem(d, IDC_O_AREA), &area);
+    pt.x = area.left;
+    pt.y = area.top;
+    ScreenToClient(d, &pt);
+    l = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHERLIST), d, st_proc,
+                           0);
+    st(l != NULL, "the other USB drivers' list");
+    if (l == NULL) {
+        DestroyWindow(d);
+        return;
+    }
+    SetWindowPos(l, NULL, pt.x, pt.y, area.right - area.left,
+                 area.bottom - area.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    GetClientRect(l, &c);
+    w = c.right - dlu_x(d, 4);
+    dc = GetDC(l);
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    boxH = text_h(dc, "Xg", w, NULL) + 2;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < instOtherHeadingCount; i++) {
+            _snprintf(label, sizeof(label) - 1, "%s: %s", set ==
+                      INST_SET_FREE ? "Free drivers" : "Non-free drivers",
+                      instOtherHeadings[i]);
+            label[sizeof(label) - 1] = '\0';
+            text_h(dc, label, 0, &wide);
+            _snprintf(msg, sizeof(msg) - 1, "the heading \"%s\" fits one "
+                      "line of the list", label);
+            msg[sizeof(msg) - 1] = '\0';
+            st(wide <= w - dlu_x(d, 2), msg);
+        }
+    }
+    for (i = 0; i < instOtherPkgCount; i++) {
+        const INST_OTHER_PKG *p = &instOtherPkgs[i];
+        _snprintf(label, sizeof(label) - 1, "%s (not available: see below)",
+                  p->Desc);
+        label[sizeof(label) - 1] = '\0';
+        lh = text_h(dc, label, w - dlu_x(d, 22), &wide);
+        _snprintf(msg, sizeof(msg) - 1, "%s:%s's box: no word wider than "
+                  "it, and whole in the list's window", p->Set ==
+                  INST_SET_FREE ? "free" : "nonfree", p->Id);
+        msg[sizeof(msg) - 1] = '\0';
+        st(wide <= w - dlu_x(d, 22) && lh > 0 &&
+           (lh < boxH ? boxH : lh) + 2 <= c.bottom, msg);
+    }
+    lh = text_h(dc, "Trust usb-wdm-free's test certificate on this computer "
+                "(its 64-bit drivers are signed with it; they load only in "
+                "test-signing mode)", w - dlu_x(d, 22), &wide);
+    st(wide <= w - dlu_x(d, 22) && lh + 2 <= c.bottom, "the trust box: whole "
+       "in the list's window");
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(l, dc);
+    DestroyWindow(l);
+    DestroyWindow(d);
+}
+
 static int selftest(void)
 {
     static const int wIds[] = { IDC_TEXT };
@@ -4903,6 +4992,7 @@ static int selftest(void)
         st_page(parent, IDD_FOLDER, fIds, fTexts, 2, "the tools folder");
         st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
         st_comp_layout(parent);
+        st_other_layout(parent);
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
                 "shutdown");

@@ -3740,18 +3740,67 @@ scrolling list with its details, and the 64-bit 8 to 10 words. The host
 holds the table to the rules in `test_inst.c` (every row's words, no
 brand in a `CLASS` row, every package of the pinned non-free pack and of
 the free README with a row), not the cut. **Owed** (not built on
-2026-10-23): the cut's checks of this section - `Test-OtherStagePackages`
-(the folder rule and the self-containment of a `STAGE` INF's files, at
-the cut), `Test-OtherStageIds` (the hardware ids over the union of both
-sets), `scripts\package\brand-words.txt` (the installer's list of brand
-words is in `inst_core.c` until then), the table's history in
-`releases\<version>\otherpkgs.txt` and the transition check, the
-overlap listing for the maintainer, and the cut-side reader's skipping of
-the metadata lines (the pinned packs carry none, so nothing reads them
-yet);
-the free set's certificate's legs (no free set carries a certificate
-yet; the packaging is built, draft 39, below); and the window
-self-test's layout of this page with every row of both tables.
+2026-10-23): the free set's certificate's legs (no free set carries a
+certificate yet; the packaging is built, draft 39, below).
+
+**The cut's checks of this section** (draft 39, 2026-10-24; built).
+`make-release.ps1` runs `Invoke-OtherSetChecks` (`package-common.ps1`)
+after it exports the carried sets and before anything is written, a
+refusal being a cut check (noted by `-CheckOnly`, thrown by a cut):
+
+- `Test-OtherStagePackages`, per set: every `STAGE` and `COPY` path under
+  a `<class>/<package>/` folder; on 98 SE and ME, a folder a `STAGE`
+  line stages there holds INFs of one package, and no other `STAGE` INF
+  in it whose line does not name that system (its `COPY` INFs stay
+  visible, decision 5); every `[SourceDisksFiles]` entry of a `STAGE`
+  INF, resolved through its `[SourceDisksNames]` path and subdirectory,
+  inside its own package's folder (not held to exist: a vendor INF lists
+  both architectures' files where each folder holds its own, Realtek's
+  `rtuxp.INF`); and no `Include` naming an INF of either set (an
+  `Include` takes Windows' own `%windir%\INF`; a `LayoutFile` and its
+  files are Windows' own and allowed).
+- `Test-OtherStageIds`, over the union of both sets: no id matched by two
+  `STAGE` INFs on one system token, each INF's models read with the
+  decoration that system's engine takes (none on 98 SE, ME and 2000; on
+  XP and later the best `NT[arch][.major.minor]` the `[Manufacturer]`
+  entry lists that applies, else the undecorated section, which 64-bit
+  Windows does not read).
+- `Test-OtherPkgTable`: the installer's table read from `inst_core.c`
+  (`Get-InstOtherTable`, which refuses a row it cannot read, so the C and
+  the cut read one table), every row's id, heading and description by
+  the rules, a `CLASS` description with no word of
+  `scripts\package\brand-words.txt` (the makers the sets' `NOTICE.md`
+  files name and a fixed list of consumer brands, whole words without
+  case; `inst_core.c`'s `instBrandWords` must equal it, word for word);
+  every package of a carried set with exactly one current row or a
+  `PACKAGE` line, no current row of a carried set naming a package it
+  lacks; every `EXCLUDES` and `COEXISTS` line (the table's and the
+  sets') naming ids known to the table or the sets' `PACKAGE` lines, and
+  no pair named twice, by either kind, on a common system.
+- The history: the record `releases\<version>\otherpkgs.txt` (every
+  row with its kind, heading, description and current or withdrawn
+  state, and every relationship line), written beside `downloads.txt`;
+  the newest earlier release's record read back and the transition
+  refused if it drops a row, changes a row's kind, changes or revives a
+  withdrawn row, or drops a relationship line or narrows its systems. A
+  first record (3.1.0.0 has none) is accepted.
+- The overlap listing, in the cut's log for the maintainer and not a
+  refusal: each pair of a `CLASS` package with another package staging
+  on a common system, with the systems no line of the pair names.
+- `Read-StageText` skips `PACKAGE`, `EXCLUDES` and `COEXISTS` lines
+  (`Read-OtherStageMeta` reads them, a `NEEDS` line refused), and the
+  free set's exporter keeps a qualifying package's `PACKAGE` line and
+  every `EXCLUDES` and `COEXISTS` line in the `STAGE.TXT` it writes.
+
+Over the pinned `usb-wdm-nonfree` `v1.0.0` every check holds (read
+2026-10-24; no overlap is listed, its packages all `DEVICE`). The window
+self-test (`xhciwiz.c`, `st_other_layout`) lays the page's list out as
+`othlist_build` does with every row of both tables, current and
+withdrawn, each in its longest ("not available") form: no word wider
+than its box's text, each box whole in the list's window, each
+"<set>: <heading>" one line. The packaging tests hold each refusal over
+stand-ins, and, where the pack's checkout is present, the checks over
+the pinned pack.
 
 **The certificate's packaging** (draft 39, the owner's decision of
 2026-10-23; built). `wdmfree-pin.txt` names the owner's certificate by a
