@@ -1292,17 +1292,24 @@ static int othlist_id(int set, int i)
 static void othlist_detail(int set, int i)
 {
     INST_OTHPKG_VIEW v;
-    char text[700];
+    char text[1100];
     HWND page = othList != NULL ? GetParent(othList) : NULL;
 
     if (page == NULL || !inst_eng_other_pkg(set, i, &v)) {
         return;
     }
-    _snprintf(text, sizeof(text) - 1, "%s:%s. %s Stages %d INF%s for this "
-              "Windows.%s%s%s", set == INST_SET_FREE ? "free" : "nonfree",
-              v.Id, v.Desc, v.Infs, v.Infs == 1 ? "" : "s",
-              v.Earlier ? " Staged by an earlier run." : "",
-              v.Blocked ? " Not available: " : "", v.Blocked ? v.Why : "");
+    {
+        char scope[600];
+        inst_eng_other_pkg_scope(set, i, scope, sizeof(scope));
+        _snprintf(text, sizeof(text) - 1, "%s:%s. %s%s%s%s",
+                  set == INST_SET_FREE ? "free" : "nonfree", v.Id,
+                  v.Blocked ? "Not available: " : "", v.Blocked ? v.Why : "",
+                  v.Blocked ? " " : "", scope);
+        if (v.Earlier) {
+            strncat(text, " Staged by an earlier run.", sizeof(text) -
+                    strlen(text) - 1);
+        }
+    }
     text[sizeof(text) - 1] = '\0';
     SetDlgItemTextA(page, IDC_O_DETAIL, text);
 }
@@ -1312,6 +1319,7 @@ static void othlist_sync(void)
 {
     int set;
     int i;
+    int first = 1;
 
     if (othList == NULL) {
         return;
@@ -1333,6 +1341,17 @@ static void othlist_sync(void)
             CheckDlgButton(othList, othlist_id(set, i), v.Tick ? BST_CHECKED
                                                                : BST_UNCHECKED);
             EnableWindow(b, open);
+            {
+                /* The tab stop on the first open box: Tab enters the list
+                 * there, the arrows move within it. */
+                LONG st = GetWindowLongA(b, GWL_STYLE) &
+                          ~(LONG)(WS_TABSTOP | WS_GROUP);
+                if (open && first) {
+                    st |= WS_TABSTOP | WS_GROUP;
+                    first = 0;
+                }
+                SetWindowLongA(b, GWL_STYLE, st);
+            }
         }
     }
 }

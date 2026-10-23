@@ -5892,6 +5892,21 @@ static void test_other_pkgs(void)
           inst_stage_parse("NEEDS | a/b | free:c/d | x", "free", &sl) == -1,
           "the STAGE/COPY reader skips the metadata lines and refuses "
           "others");
+    {
+        char wt[1024];
+        INST_U32 w = inst_other_warnings(0, "", 0, 1, 1, 2);
+        CHECK((w & INST_OW_X64STORE) && !(w & INST_OW_X64SIG) &&
+              (inst_other_warnings(0, "", 0, 1, 1, 1) & INST_OW_X64SIG) &&
+              !(inst_other_warnings(0, "", 0, 1, 0, 2) & INST_OW_X64STORE),
+              "64-bit 8 to 10: the store's words, not Vista's and 7's; only "
+              "with a package staged");
+        inst_other_warn_text(INST_OW_X64STORE, "", 0, wt, sizeof(wt));
+        CHECK(strstr(wt, "8 to 10") != NULL && strstr(wt, "F8") == NULL,
+              "the 8 to 10 words");
+    }
+    CHECK(inst_stage_meta("EXCLUDES | free:a/b | free:c/d | W7 | one device",
+                          &m) == 1 && inst_eq(m.Desc, "one device"),
+          "a relation's why kept");
     argv1[0] = "x";
     argv1[1] = "/wdmfree:stage=audio/uac2,video/uvc98";
     CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 &&

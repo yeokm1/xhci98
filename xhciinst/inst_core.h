@@ -2024,7 +2024,7 @@ typedef struct _INST_STAGE_META {
     char Kind;
     char A[INST_PKG_ID_CHARS + 16];   /* PACKAGE: the id; else "set:id"  */
     char B[INST_PKG_ID_CHARS + 16];   /* PACKAGE: CLASS or DEVICE        */
-    char Desc[INST_PKG_DESC_MAX + 1];
+    char Desc[INST_PKG_DESC_MAX + 1];  /* PACKAGE's words; else the why */
     INST_U32 Systems;
 } INST_STAGE_META;
 int inst_stage_meta(const char *line, INST_STAGE_META *out);
@@ -2057,6 +2057,7 @@ void inst_other_line(char *out, size_t cap, int set, int state,
 #define INST_OW_FREE_UNREAD     0x01UL
 #define INST_OW_NONFREE         0x02UL
 #define INST_OW_X64SIG          0x04UL
+#define INST_OW_X64STORE        0x08UL  /* 64-bit 8 to 10 (section 6.7.11) */
 INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
                              int freeStage, int nonfreeTicked,
                              int nonfreeStage, int x64nt6);

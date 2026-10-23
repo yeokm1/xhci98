@@ -3271,7 +3271,9 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
 - `PACKAGE`: one per package. `CLASS` for a driver of a USB class
   (bound by class, subclass and protocol, or by a class-wide compatible
   id), `DEVICE` for one bound by vendor and product ids. The description:
-  at most 72 printable ASCII characters, no `|`; a `CLASS` description
+  at most 80 printable ASCII characters, no `|`, in the form "<what>
+  (<package>): <for what>" (the coordinator's pattern of 2026-10-23,
+  "Webcams (uvc98): USB Video Class 1.0 to 1.5 cameras"); a `CLASS` description
   names the class and its version where one applies and **no brand,
   maker or product** (owner, 2026-10-23); a `DEVICE` description may name
   the chip family it is for and nothing else of a maker's.
@@ -3552,6 +3554,37 @@ owed (section 6.7.9).
   copy (Y/N, Enter N) and then, after a Y, "Stage which? (ids separated
   by commas, Enter for none)", the list printed above it, a wrong id
   asked again.
+
+**What the code of 2026-10-23 builds, and what is owed.** Built
+(`a6ee3898` and its review): the table and its relations (the free
+README's packages and the pinned non-free pack's eight, the words in the
+"<what> (<package>): ..." form; xpad98's the owner's compatibility
+wording "Game pads (xpad98): for Xbox 360 and Xbox One controllers", a
+`DEVICE` row, with "Xbox is a trademark of Microsoft Corporation." in the
+release notes' Trademarks section), the metadata lines' parser and the
+`STAGE`/`COPY` reader skipping them, the packages per set, the 98 SE and
+ME folder rule at the read (a set that breaks it is not this release's),
+the exclusions against ticks and earlier staging, the earlier staging
+read and verified (98 SE and ME: the entry on `DevicePath` now, or to be
+appended again; 2000 and later: the stored name holding the bytes, a gone
+one shown nowhere and barring nothing), the ticks, the staging filtered
+by package with each package's outcome on the progress and the Finish
+page, the console's switches, question and `/list` listing, the page's
+scrolling list with its details, and the 64-bit 8 to 10 words. The host
+holds the table to the rules in `test_inst.c` (every row's words, no
+brand in a `CLASS` row, every package of the pinned non-free pack and of
+the free README with a row), not the cut. **Owed** (not built on
+2026-10-23): the cut's checks of this section - `Test-OtherStagePackages`
+(the folder rule and the self-containment of a `STAGE` INF's files, at
+the cut), `Test-OtherStageIds` (the hardware ids over the union of both
+sets), `scripts\package\brand-words.txt` (the installer's list of brand
+words is in `inst_core.c` until then), the table's history in
+`releases\<version>\otherpkgs.txt` and the transition check, the
+overlap listing for the maintainer, and the cut-side reader's skipping of
+the metadata lines (the pinned packs carry none, so nothing reads them
+yet); and the window self-test's layout of this page with every row of
+both tables. Until they are built the record's sentences that say the
+cut refuses or writes these describe the design, not the build.
 
 **Host vectors** (`test_inst.c`): the id from a `STAGE.TXT` path, both
 sets; a package's scope per system token, `COPY` lines never in it; the

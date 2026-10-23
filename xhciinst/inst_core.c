@@ -7638,7 +7638,7 @@ INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
     }
     if (x64nt6 && ((freeTicked && freeStage) ||
                    (nonfreeTicked && nonfreeStage))) {
-        w |= INST_OW_X64SIG;
+        w |= x64nt6 == 2 ? INST_OW_X64STORE : INST_OW_X64SIG;
     }
     return w;
 }
@@ -7672,6 +7672,13 @@ void inst_other_warn_text(INST_U32 set, const char *freeUnread,
                       "accepts its signature: an unsigned one only on a start "
                       "with driver signature enforcement disabled (F8), a "
                       "test-signed one also in test-signing mode.");
+    }
+    if (set & INST_OW_X64STORE) {
+        inst_cat_para(out, cap,
+                      "On 64-bit Windows 8 to 10 Windows stores a staged "
+                      "driver only if its signature is valid: a package "
+                      "without a valid signature may be refused, and is then "
+                      "copied only.");
     }
 }
 
@@ -7971,9 +7978,11 @@ int inst_stage_meta(const char *line, INST_STAGE_META *out)
             !inst_field(line, 2, out->B, sizeof(out->B)) ||
             !inst_meta_qualified(out->B) ||
             !inst_field(line, 3, f, sizeof(f)) ||
-            !inst_sys_mask(f, &out->Systems)) {
+            !inst_sys_mask(f, &out->Systems) ||
+            !inst_field(line, 4, f, sizeof(f))) {
             return -1;
         }
+        inst_copy(out->Desc, f, sizeof(out->Desc));
         return 1;
     }
     return 0;

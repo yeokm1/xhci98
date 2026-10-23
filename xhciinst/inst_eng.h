@@ -309,6 +309,8 @@ typedef struct _INST_OTHPKG_VIEW {
 int inst_eng_other_pkg(int set, int i, INST_OTHPKG_VIEW *v);
 int inst_eng_other_pkg_tick(int set, int i, int tick);
 const char *inst_eng_other_earlier(int set);
+/* The package's scope on this system in words, for its details. */
+void inst_eng_other_pkg_scope(int set, int i, char *out, size_t cap);
 void inst_eng_other_warnings(char *text, size_t cap);
 void inst_eng_other_summary(const char *dir, char *text, size_t cap);
 void inst_eng_other_finish(char *text, size_t cap);
