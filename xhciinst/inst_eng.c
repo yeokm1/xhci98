@@ -8451,8 +8451,8 @@ static int steps_9x(const char *dir)
             "disk asked for.\n");
     }
     if (haveCm && tbInclude) {
-        out("A Thunderbolt controller found later finds its driver in the "
-            "same folder\nby itself.\n");
+        out("A Thunderbolt controller found later opens the New Hardware "
+            "wizard; Next\nuntil Finish installs it, no disk asked for.\n");
     }
     if (envNow.Minor == 10 && !stor_covered()) {
         out("On Windows 98 SE any disk, UAS included, needs the USB storage "
@@ -9029,45 +9029,74 @@ static int pass_any(int inf, int controllers)
  * driver, at most four passes; the UAS devices; the host interface. Each
  * pass behind the gate. Every device of the plan that is left goes to the
  * steps. */
-/* Record 26 section 5.0 (draft 35): on 98 SE and ME the UAS driver's
- * file where the New Hardware wizard looks for it, so a UAS disk plugged
- * in later installs from the copy on DevicePath with no Insert Disk prompt
- * (the wizard asks at Windows' own SourcePath for a file not yet at its
- * destination). The 9x uninstall's file list removes it. */
-static void uas_sys_9x(void)
+/* Record 26 section 5.0 (drafts 35 and 38): on 98 SE and ME a driver file
+ * where the New Hardware wizard looks for it, so a device plugged in later
+ * installs from the copy on DevicePath with no Insert Disk prompt (the
+ * wizard asks at Windows' own SourcePath for a file not yet at its
+ * destination): xhciuas.sys with the UAS driver, xhci98.sys with the USB
+ * drivers, xhcicm.sys with the Thunderbolt support. Each placement is
+ * recorded under INST_PLACED9X_KEY; the 9x uninstall's file list removes
+ * the package's driver files whoever put them there. */
+#define INST_PLACED9X_KEY INST_DIR_KEY "\\Placed9x"
+
+static void sys_9x(int inf, const char *file, int include, const char *later)
 {
     char src[INST_PATH_CHARS];
     char dst[INST_PATH_CHARS];
+    char hex[65];
+    HKEY k;
 
-    if (envNow.Nt || opts.List || !usbInclude || !uasInclude) {
+    if (envNow.Nt || opts.List || !include) {
         return;
     }
-    if (groupVerdict[group_of_inf(INST_INF_UAS)] != INST_GROUP_OK) {
-        /* A newer or unreadable xhciuas.sys there is refused as its
-         * group is (record 23 section 5.3): never replaced from here. */
-        logonly("uas: the UAS group is refused; SYSTEM32\\DRIVERS left\n");
+    if (groupVerdict[group_of_inf(inf)] != INST_GROUP_OK) {
+        /* A newer or unreadable file there is refused as its group is
+         * (record 23 section 5.3): never replaced from here. */
+        logonly("placed9x: %s's group is refused; SYSTEM32\\DRIVERS left\n",
+                file);
         return;
     }
-    join(src, sizeof(src), srcDir, "xhciuas.sys");
+    join(src, sizeof(src), srcDir, file);
     if (GetWindowsDirectoryA(dst, sizeof(dst)) == 0) {
-        out("xhciuas.sys could not be put in SYSTEM32\\DRIVERS: no Windows "
-            "directory.\n");
+        out("%s could not be put in SYSTEM32\\DRIVERS: no Windows "
+            "directory.\n", file);
         flagFailed = 1;
         return;
     }
-    join(dst, sizeof(dst), dst, "SYSTEM32\\DRIVERS\\xhciuas.sys");
+    join(dst, sizeof(dst), dst, "SYSTEM32\\DRIVERS");
+    join(dst, sizeof(dst), dst, file);
     if (same_file(src, dst)) {
-        logonly("uas: %s is the package's\n", dst);
+        logonly("placed9x: %s is the package's\n", dst);
         return;
     }
     if (own_put(src, dst) != 1) {
-        out("xhciuas.sys could not be put in %s: a UAS disk plugged in later "
-            "asks for the\ndriver disk (type %s).\n", dst, srcDir);
+        out("%s could not be put in %s: %s plugged in later asks for the\n"
+            "driver disk (type %s).\n", file, dst, later, srcDir);
         flagFailed = 1;
         return;
     }
     flagChanged = 1;
-    out("Copied xhciuas.sys to %s.\n", dst);
+    out("Copied %s to %s.\n", file, dst);
+    hex[0] = '\0';
+    stor_hash(dst, hex);
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) == ERROR_SUCCESS) {
+        RegSetValueExA(k, file, 0, REG_SZ, (const BYTE *)hex,
+                       (DWORD)strlen(hex) + 1);
+        RegCloseKey(k);
+        logonly("placed9x: recorded %s %s\n", file, hex);
+    } else {
+        logonly("placed9x: %s not recorded\n", file);
+    }
+}
+
+static void drivers_9x(void)
+{
+    sys_9x(INST_INF_XHCI, "xhci98.sys", usbInclude, "a controller");
+    sys_9x(INST_INF_UAS, "xhciuas.sys", usbInclude && uasInclude,
+           "a UAS disk");
+    sys_9x(INST_INF_CM, "xhcicm.sys", haveCm && tbInclude,
+           "a Thunderbolt controller");
 }
 
 static void helper_installs(void)
@@ -9493,7 +9522,7 @@ static int run_install_9x(void)
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
     hashed_cleanup();
     helper_installs();
-    uas_sys_9x();
+    drivers_9x();
     s98_file_update_9x();
     vsd_run(vsd_mode(0));
     write_values();
@@ -11821,8 +11850,13 @@ static void files_9x(int list)
         }
         SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
         if (DeleteFileA(path)) {
+            char rec[80];
+            DWORD t;
             flagChanged = 1;
-            out("Deleted %s.\n", path);
+            out("Deleted %s%s.\n", path,
+                reg_text(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY, instFiles[i],
+                         rec, sizeof(rec), &t) ?
+                " (placed there by this installer)" : "");
         } else {
             out("%s is still in use: restart Windows, then run the uninstall "
                 "again to delete it.\n", path);
@@ -11908,6 +11942,10 @@ static int run_uninstall_9x(void)
         return stop_uninstall("S98VSD.VXD could not be removed.");
     }
     files_9x(0);
+    if (RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY) ==
+        ERROR_SUCCESS) {
+        logonly("placed9x: record deleted\n");
+    }
     if (!stor_un_rest()) {
         return stop_uninstall("a USB storage file is still in use, or its "
                               "record could not be read.");

@@ -4334,3 +4334,10 @@ under no licence of this project's, and no licence to redistribute them has
 been established. A download built without them carries no Microsoft file,
 and its `readme.txt` says so. On Windows 98 SE, `xhciuas.inf` names
 `USBNTMAP.SYS` as a filter on the UAS device.
+
+## Trademarks
+
+Xbox is a trademark of Microsoft Corporation. It names the controllers the
+free driver set's `xpad98` game pad driver is for; neither this project
+nor that driver is Microsoft's, and no Microsoft name or logo is part of
+any product name here.

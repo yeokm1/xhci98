@@ -1,6 +1,8 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 39, 2026-10-23 (roadmap-usb4 task 43.48, record 26
+Status: revision 40, 2026-10-23 (record 26 draft 38: D20 (d) extended
+to `xhci98.sys` and `xhcicm.sys`, recorded under `Placed9x`);
+revision 39, 2026-10-23 (roadmap-usb4 task 43.48, record 26
 draft 37 section 6.7.11: `/wdmfree:copy`, `/wdmfree:stage=<ids>` and
 the same for `/wdmnonfree:`, checked before any change; `/free` and
 `/nonfree` kept as the copies, `/freestage` and `/nonfreestage` refused
@@ -3150,7 +3152,10 @@ the user.
   after the helper's installs, so the New Hardware wizard of a UAS disk
   plugged in later finds it and asks for no disk (the 98 SE reading of
   2026-10-23, record 26 section 5.0); the uninstall's 9x file list
-  already removes it.
+  already removes it. Revision 40: `xhci98.sys` with the USB drivers and
+  `xhcicm.sys` with the Thunderbolt support too, each placement recorded
+  under `HKLM\Software\xhci98\Placed9x` and the record deleted by the
+  9x uninstall.
 
 ## 14. Open, and the risks
 

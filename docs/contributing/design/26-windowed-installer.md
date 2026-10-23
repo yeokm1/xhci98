@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 37, 2026-10-23 (roadmap-usb4 task 43.48, the owner's
+Status: draft 38, 2026-10-23 (the owner's point of that day: on 98 SE
+and ME `xhci98.sys` and `xhcicm.sys` put in `SYSTEM32\DRIVERS` as
+`xhciuas.sys` is, recorded, section 5.0; record 23 revision 40); draft
+37, 2026-10-23 (roadmap-usb4 task 43.48, the owner's
 decision of that day: the other drivers' copy one box per set, their
 staging one box per driver package under class headings, with the
 packs' own descriptions and exclusions, earlier staging shown, and the
@@ -823,8 +826,21 @@ one would keep its devnode across ports, not read here),
 and that is its normal behaviour, recorded here and not changed. The
 same cause very likely stands behind the controller's own wizard asking
 for the disk after an install with no controller present (`xhci98.sys`
-and `xhcicm.sys` not in `SYSTEM32\DRIVERS` yet; inferred, not read):
-not changed by this draft, an owner question (section 14).
+and `xhcicm.sys` not in `SYSTEM32\DRIVERS` yet; inferred, not read).
+**Draft 38** (the owner, 2026-10-23): the run puts all three there by the
+same rule (`drivers_9x`): `xhci98.sys` with the USB drivers, `xhciuas.sys`
+with the UAS box as well, `xhcicm.sys` with the Thunderbolt support, each
+only when its group is not refused (a newer or unreadable file there is
+left), after the helper's installs. Each placement is recorded, a value
+named for the file with its SHA-256 under `HKLM\Software\xhci98\Placed9x`;
+the 9x uninstall deletes the package's driver files from
+`SYSTEM32\DRIVERS` as it did (they are the package's whoever put them
+there: Windows from the INF, or this run), says of each whether this
+installer placed it, and deletes the record. The Steps text says a
+Thunderbolt controller found later opens the wizard and installs with no
+disk asked for. The leg: an install with no controller present, then a
+controller added (`qemu-xhci`, and the Thunderbolt model), the wizard
+finishing with no Insert Disk prompt.
 
 **What draft 35 builds, and the owner's points of 2026-10-23** (roadmap
 task 43.42's simplification, its code). The design above is built as it
@@ -4127,12 +4143,9 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   (section 6.7.11): the owner's call. The proposal keeps it, being the
   protocol's only name.
 - (draft 35) The controller's own New Hardware wizard after an install
-  with no controller present (98 SE and ME) asks for the driver disk,
-  and the Steps text tells the user to type the install directory: by
-  the UAS reading of section 5.0 its cause is very likely the same
-  (`xhci98.sys`, and `xhcicm.sys` for a Thunderbolt controller, not in
-  `SYSTEM32\DRIVERS` yet; inferred, not read). Putting them there too
-  is the owner's call; this draft does not.
+  with no controller present (98 SE and ME) asked for the driver disk:
+  decided by the owner on 2026-10-23, draft 38 puts the files in place
+  (section 5.0).
 - How Windows' own hardware wizards on 98 SE and ME and the helper's
   installs meet after the controller's restart is designed as a wait and
   a retry (section 7) and read on the 42-V.1 legs; record 27 section 12
