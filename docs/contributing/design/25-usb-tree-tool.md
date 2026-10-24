@@ -1425,9 +1425,11 @@ a disconnection or an eject.
 8. **The red icon** (`xhcitr-f.ico`, `IDI_RED`), drawn as `xhcitr.ico`
    is (section 9): the same glyph, the same sizes (16, 32 and 48 pixels)
    and the same depths (4 bits per pixel in the 16 VGA colours, and 32
-   bits per pixel), with the controller box's blue - VGA colour 12,
-   0000FF, in each 4-bit image, and the same colour in each 32-bit one -
-   painted red, VGA colour 9, FF0000, and every other pixel, the masks
+   bits per pixel), with the green of the stack beside the controller -
+   VGA colour 10, 00FF00, in each 4-bit image, and the same colour in
+   each 32-bit one - painted red, VGA colour 9, FF0000 (the owner,
+   2026-10-24: the blue box stays blue, the green turns red, which reads
+   more plainly at 16 pixels), and every other pixel, the masks
    and the white highlight unchanged. VGA colour 9 is one of the 16
    colours every display mode of 98 SE draws without dithering, and red
    on the taskbar's grey (C0C0C0) and on XP's blue and 7's dark taskbar
@@ -1905,7 +1907,7 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    item 2); what follows is this revision's own text. Red while the
    notice is on and the set holds a device:
    `xhcitr-f.ico` (since revision 19 loaded as `IDI_RED`), which is `xhcitr.ico` with the
-   controller's blue - VGA colour 12, 0000FF, in each 4-bit image, and
+   stack's green - VGA colour 10, 00FF00, in each 4-bit image, and
    the same colour in each 32-bit one - painted red FF0000, every other
    pixel unchanged. The usual icon again once the set is empty: each
    counted device reconnected at its speed (the refresh after the plug
@@ -2155,7 +2157,7 @@ item 9.
   no partial transparency, at 16, 32 and 48 pixels, 4 and 32 bits per
   pixel, so it reads the same on 98 SE's grey taskbar, XP's blue and 7's
   dark one. Since revision 19 its red twin `xhcitr-f.ico` (section 7.2.1
-  item 8), the controller's blue painted red, is the tray's icon while
+  item 8), the stack's green painted red, is the tray's icon while
   a condition holds.
 - Version resource from `src\xhci_version.h`.
 
