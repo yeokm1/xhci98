@@ -2213,13 +2213,46 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                      "/wdmnonfree:stage=<class/package>,... (INSTALL "
                      "/list lists them)", NULL);
             return 1;
-        } else if ((a[0] == '/' || a[0] == '-') &&
-                   (inst_starts(a + 1, "wdmfree:stage=") ||
-                    inst_starts(a + 1, "wdmnonfree:stage="))) {
+        } else if (inst_switch(a, "wdmfree:stage") ||
+                   inst_switch(a, "wdmnonfree:stage") ||
+                   ((a[0] == '/' || a[0] == '-') &&
+                    (inst_starts(a + 1, "wdmfree:stage=") ||
+                     inst_starts(a + 1, "wdmnonfree:stage=")))) {
             int set = inst_starts(a + 1, "wdmfree:") ? INST_SET_FREE
                                                      : INST_SET_NONFREE;
-            const char *list = strchr(a, '=') + 1;
+            char joined[INST_PKG_MAX * INST_PKG_ID_CHARS];
+            const char *list;
             int n;
+            if (strchr(a, '=') != NULL) {
+                list = strchr(a, '=') + 1;
+            } else {
+                /* COMMAND.COM splits a batch file's arguments at '=' and
+                 * at ',', so INSTALL.BAT hands on /wdmfree:stage=a/b,c/d as
+                 * /wdmfree:stage a/b c/d: take back the ids that follow. */
+                size_t used = 0;
+                joined[0] = '\0';
+                while (i + 1 < argc && argv[i + 1][0] != '/' &&
+                       argv[i + 1][0] != '-' &&
+                       strchr(argv[i + 1], '/') != NULL) {
+                    size_t len = strlen(argv[i + 1]);
+                    if (used + len + 2 > sizeof(joined)) {
+                        inst_err(err, errCap, "not a package list "
+                                 "(<class>/<package>,...): ", argv[i + 1]);
+                        return 1;
+                    }
+                    if (used != 0) {
+                        joined[used++] = ',';
+                    }
+                    memcpy(joined + used, argv[i + 1], len + 1);
+                    used += len;
+                    i++;
+                }
+                if (used == 0) {
+                    inst_err(err, errCap, a, " needs =<class/package>,...");
+                    return 1;
+                }
+                list = joined;
+            }
             if (opts->StageCount[set] != 0) {
                 inst_err(err, errCap, set == INST_SET_FREE ?
                          "/wdmfree:stage= given twice" :

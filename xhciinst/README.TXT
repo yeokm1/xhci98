@@ -299,11 +299,13 @@ The console tool
 
 Its other switches are the window's, and /nopause. On Windows 98 SE and
 ME, INSTALL.BAT takes eight arguments at most, seven after /console, and
-/set Name=Value counts as three; it refuses more rather than run a
-shortened command. Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with
-the same arguments instead for a longer one. On 98 SE and ME the console
-tool installs each device through the helper too; a Windows dialog may
-open (the Windows CD for usbd.sys): answer it as below.
+COMMAND.COM splits them at = and at commas: /set Name=Value counts as
+three, and /wdmfree:stage=audio/uac2,video/uvc98 as three too (one more
+than its packages). It refuses more rather than run a shortened command.
+Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with the same arguments
+instead for a longer one. On 98 SE and ME the console tool installs each
+device through the helper too; a Windows dialog may open (the Windows CD
+for usbd.sys): answer it as below.
 
 The connection manager alone
 ----------------------------

@@ -6422,6 +6422,45 @@ static void test_other_pkgs(void)
     argv1[2] = "/uninstall";
     CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
           "/wdmfree: belongs to an install");
+    {
+        /* As COMMAND.COM hands them on from INSTALL.BAT: split at '='
+         * and at ','. */
+        const char *s1[] = { "x", "/list", "/wdmfree:stage", "net/cdcnet" };
+        const char *s2[] = { "x", "/WDMFREE:STAGE", "audio/uac2",
+                             "video/uvc98" };
+        const char *s3[] = { "x", "/wdmnonfree:stage", "hid/x360c",
+                             "hid/x360wc", "net/ax88772" };
+        const char *s4[] = { "x", "/wdmfree:stage", "net/cdcnet", "/list" };
+        const char *s5[] = { "x", "/wdmfree:stage", "/list" };
+        const char *s6[] = { "x", "/wdmfree:stage", "cdcnet" };
+        const char *s7[] = { "x", "/wdmfree:stage=audio/uac2,video/uvc98",
+                             "/list" };
+        const char *s8[] = { "x", "/wdmfree:stage", "net/cdcnet",
+                             "/wdmfree:stage=audio/uac2" };
+        CHECK(parse(4, s1, &o) == 0 && o.List && o.Free &&
+              o.StageCount[INST_SET_FREE] == 1 &&
+              inst_eq(o.StageIds[INST_SET_FREE], "net/cdcnet"),
+              "a split /wdmfree:stage= of one id rejoined");
+        CHECK(parse(4, s2, &o) == 0 && o.StageCount[INST_SET_FREE] == 2 &&
+              inst_eq(o.StageIds[INST_SET_FREE], "audio/uac2") &&
+              inst_eq(o.StageIds[INST_SET_FREE] + INST_PKG_ID_CHARS,
+                      "video/uvc98"),
+              "a split list of two ids rejoined, any case");
+        CHECK(parse(5, s3, &o) == 0 && o.NonFree && !o.Free &&
+              o.StageCount[INST_SET_NONFREE] == 3 &&
+              inst_eq(o.StageIds[INST_SET_NONFREE] + 2 * INST_PKG_ID_CHARS,
+                      "net/ax88772"),
+              "a split /wdmnonfree:stage= list of three ids rejoined");
+        CHECK(parse(4, s4, &o) == 0 && o.List &&
+              o.StageCount[INST_SET_FREE] == 1,
+              "a switch after a split id is not swallowed");
+        CHECK(parse(3, s5, &o) == 1, "/wdmfree:stage with no id refused");
+        CHECK(parse(3, s6, &o) == 1, "a word that is no id is not taken");
+        CHECK(parse(3, s7, &o) == 0 && o.List &&
+              o.StageCount[INST_SET_FREE] == 2,
+              "the unsplit = form unchanged");
+        CHECK(parse(4, s8, &o) == 1, "split and unsplit forms twice refused");
+    }
 }
 
 int main(void)
