@@ -6886,13 +6886,6 @@ static int read_string(HKEY key, const char *name, char *out, DWORD outBytes)
  * `setupapi.dev.log` agrees: `InstallSec - Xhci.Dev6`, `ActualSec -
  * Xhci.Dev6.NTx86`. So the row is the undecorated name, and no decorated
  * `Xhci.Dev6.*` row is added on a guess.
- *
- * **`Xhci.Upd` is the fourth, Windows 98 SE and ME only** (3.2.0.0, design
- * record 26 section 6.7.12): the same install as `Xhci.Dev` with the
- * temporary-name copy row, which no model names and XHCIINST's helper
- * installs by name for a controller that is there; a 98 SE key the
- * installer updated reads `InfSection = Xhci.Upd` (the 98 SE leg of
- * 2026-10-23).
  */
 static const struct {
     const char *section;
@@ -6900,8 +6893,7 @@ static const struct {
 } ourSections[] = {
     { "Xhci.Dev",       "InfSection = Xhci.Dev" },
     { "Xhci.Dev.NTx86", "InfSection = Xhci.Dev.NTx86" },
-    { "Xhci.Dev6",      "InfSection = Xhci.Dev6" },
-    { "Xhci.Upd",       "InfSection = Xhci.Upd" }
+    { "Xhci.Dev6",      "InfSection = Xhci.Dev6" }
 };
 
 /*
