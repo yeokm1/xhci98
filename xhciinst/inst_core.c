@@ -2213,13 +2213,46 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                      "/wdmnonfree:stage=<class/package>,... (INSTALL "
                      "/list lists them)", NULL);
             return 1;
-        } else if ((a[0] == '/' || a[0] == '-') &&
-                   (inst_starts(a + 1, "wdmfree:stage=") ||
-                    inst_starts(a + 1, "wdmnonfree:stage="))) {
+        } else if (inst_switch(a, "wdmfree:stage") ||
+                   inst_switch(a, "wdmnonfree:stage") ||
+                   ((a[0] == '/' || a[0] == '-') &&
+                    (inst_starts(a + 1, "wdmfree:stage=") ||
+                     inst_starts(a + 1, "wdmnonfree:stage=")))) {
             int set = inst_starts(a + 1, "wdmfree:") ? INST_SET_FREE
                                                      : INST_SET_NONFREE;
-            const char *list = strchr(a, '=') + 1;
+            char joined[INST_PKG_MAX * INST_PKG_ID_CHARS];
+            const char *list;
             int n;
+            if (strchr(a, '=') != NULL) {
+                list = strchr(a, '=') + 1;
+            } else {
+                /* COMMAND.COM splits a batch file's arguments at '=' and
+                 * at ',', so INSTALL.BAT hands on /wdmfree:stage=a/b,c/d as
+                 * /wdmfree:stage a/b c/d: take back the ids that follow. */
+                size_t used = 0;
+                joined[0] = '\0';
+                while (i + 1 < argc && argv[i + 1][0] != '/' &&
+                       argv[i + 1][0] != '-' &&
+                       strchr(argv[i + 1], '/') != NULL) {
+                    size_t len = strlen(argv[i + 1]);
+                    if (used + len + 2 > sizeof(joined)) {
+                        inst_err(err, errCap, "not a package list "
+                                 "(<class>/<package>,...): ", argv[i + 1]);
+                        return 1;
+                    }
+                    if (used != 0) {
+                        joined[used++] = ',';
+                    }
+                    memcpy(joined + used, argv[i + 1], len + 1);
+                    used += len;
+                    i++;
+                }
+                if (used == 0) {
+                    inst_err(err, errCap, a, " needs =<class/package>,...");
+                    return 1;
+                }
+                list = joined;
+            }
             if (opts->StageCount[set] != 0) {
                 inst_err(err, errCap, set == INST_SET_FREE ?
                          "/wdmfree:stage= given twice" :
@@ -3849,9 +3882,10 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "uninstall gives the controllers back to Windows' own "
                       "driver, and may need a restart and a second run to "
                       "finish. There the UAS disk driver, when "
-                      "ticked, is only staged: Windows' own UAS driver stays "
-                      "the default, and xhciuas.sys can be chosen for a disk "
-                      "in Device Manager.");
+                      "ticked, is staged: Windows keeps its own UAS driver "
+                      "unless this package's test certificate is trusted, "
+                      "when Windows may choose xhciuas.sys; either can be "
+                      "chosen for a disk in Device Manager.");
     }
     if (set & INST_CW_NOCM8) {
         inst_cat_para(out, cap,
@@ -8117,6 +8151,31 @@ static int inst_pkg_id_ok(const char *id)
         }
     }
     return slash == 1;
+}
+
+int inst_other_pnf(const char *path, char *out, size_t cap)
+{
+    size_t n = strlen(path);
+
+    if (n <= 4 || n >= cap || !inst_eq(path + n - 4, ".inf") ||
+        path[n - 5] == '\\') {
+        return 0;
+    }
+    memcpy(out, path, n - 4);
+    strcpy(out + n - 4, ".PNF");
+    return 1;
+}
+
+const char *inst_other_trust_plan(int offered, int chosen)
+{
+    if (!offered) {
+        return NULL;
+    }
+    return chosen ?
+        "usb-wdm-free's test certificate (" INST_WDMFREE_CER "): added to "
+        "the Root and TrustedPublisher stores." :
+        "usb-wdm-free's test certificate (" INST_WDMFREE_CER "): not added "
+        "to the certificate stores.";
 }
 
 int inst_other_id_list(const char *list, char *ids, int cap)

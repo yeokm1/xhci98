@@ -490,8 +490,11 @@ static void test_cm_only(void)
                      "controller") != NULL &&
               strstr(text, "may need a restart and a second run") != NULL &&
               strstr(text, "tested") == NULL &&
-              strstr(text, "UAS disk driver, when ticked, is only staged") !=
+              strstr(text, "UAS disk driver, when ticked, is staged") !=
                   NULL &&
+              strstr(text, "test certificate is trusted, when Windows may "
+                     "choose xhciuas.sys") != NULL &&
+              strstr(text, "only staged") == NULL &&
               strstr(text, "Stor98 has not been tested") == NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
@@ -6422,6 +6425,73 @@ static void test_other_pkgs(void)
     argv1[2] = "/uninstall";
     CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
           "/wdmfree: belongs to an install");
+    {
+        /* As COMMAND.COM hands them on from INSTALL.BAT: split at '='
+         * and at ','. */
+        const char *s1[] = { "x", "/list", "/wdmfree:stage", "net/cdcnet" };
+        const char *s2[] = { "x", "/WDMFREE:STAGE", "audio/uac2",
+                             "video/uvc98" };
+        const char *s3[] = { "x", "/wdmnonfree:stage", "hid/x360c",
+                             "hid/x360wc", "net/ax88772" };
+        const char *s4[] = { "x", "/wdmfree:stage", "net/cdcnet", "/list" };
+        const char *s5[] = { "x", "/wdmfree:stage", "/list" };
+        const char *s6[] = { "x", "/wdmfree:stage", "cdcnet" };
+        const char *s7[] = { "x", "/wdmfree:stage=audio/uac2,video/uvc98",
+                             "/list" };
+        const char *s8[] = { "x", "/wdmfree:stage", "net/cdcnet",
+                             "/wdmfree:stage=audio/uac2" };
+        CHECK(parse(4, s1, &o) == 0 && o.List && o.Free &&
+              o.StageCount[INST_SET_FREE] == 1 &&
+              inst_eq(o.StageIds[INST_SET_FREE], "net/cdcnet"),
+              "a split /wdmfree:stage= of one id rejoined");
+        CHECK(parse(4, s2, &o) == 0 && o.StageCount[INST_SET_FREE] == 2 &&
+              inst_eq(o.StageIds[INST_SET_FREE], "audio/uac2") &&
+              inst_eq(o.StageIds[INST_SET_FREE] + INST_PKG_ID_CHARS,
+                      "video/uvc98"),
+              "a split list of two ids rejoined, any case");
+        CHECK(parse(5, s3, &o) == 0 && o.NonFree && !o.Free &&
+              o.StageCount[INST_SET_NONFREE] == 3 &&
+              inst_eq(o.StageIds[INST_SET_NONFREE] + 2 * INST_PKG_ID_CHARS,
+                      "net/ax88772"),
+              "a split /wdmnonfree:stage= list of three ids rejoined");
+        CHECK(parse(4, s4, &o) == 0 && o.List &&
+              o.StageCount[INST_SET_FREE] == 1,
+              "a switch after a split id is not swallowed");
+        CHECK(parse(3, s5, &o) == 1, "/wdmfree:stage with no id refused");
+        CHECK(parse(3, s6, &o) == 1, "a word that is no id is not taken");
+        CHECK(parse(3, s7, &o) == 0 && o.List &&
+              o.StageCount[INST_SET_FREE] == 2,
+              "the unsplit = form unchanged");
+        CHECK(parse(4, s8, &o) == 1, "split and unsplit forms twice refused");
+    }
+    {
+        char pnf[64];
+        CHECK(inst_other_pnf("C:\\XHCI98\\USBDRV\\FREE\\serial\\usbcom\\"
+                             "w98se-me\\USBCOM.INF", pnf, sizeof(pnf)) == 1 &&
+              inst_eq(pnf, "C:\\XHCI98\\USBDRV\\FREE\\serial\\usbcom\\"
+                      "w98se-me\\USBCOM.PNF"),
+              "a removed staged INF's .PNF named beside it");
+        CHECK(inst_other_pnf("C:\\D\\usbcomp.inf", pnf, sizeof(pnf)) == 1 &&
+              inst_eq(pnf, "C:\\D\\usbcomp.PNF"), "any case of .inf");
+        CHECK(inst_other_pnf("C:\\D\\USBCOM.SYS", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf("C:\\D\\README.TXT", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf("C:\\D\\x.pnf", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf("C:\\D\\.inf", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf(".inf", pnf, sizeof(pnf)) == 0,
+              "no .PNF for a file that is not an INF");
+        CHECK(inst_other_pnf("C:\\D\\USBCOM.INF", pnf, 15) == 0 &&
+              inst_other_pnf("C:\\D\\USBCOM.INF", pnf, 16) == 1,
+              "a .PNF path that does not fit refused");
+    }
+    CHECK(inst_other_trust_plan(0, 0) == NULL &&
+          inst_other_trust_plan(0, 1) == NULL,
+          "no certificate line where the offer is not made");
+    CHECK(strstr(inst_other_trust_plan(1, 1), "added to the Root and "
+                 "TrustedPublisher stores") != NULL &&
+          strstr(inst_other_trust_plan(1, 1), INST_WDMFREE_CER) != NULL,
+          "/wdmfree:trust's plan line names the certificate and the stores");
+    CHECK(strstr(inst_other_trust_plan(1, 0), "not added") != NULL,
+          "the certificate left out said");
 }
 
 int main(void)

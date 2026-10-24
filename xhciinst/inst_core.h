@@ -1142,7 +1142,8 @@ int inst_uas_decide(int usbInclude, int noUas);
 
 /* Windows 8 and 8.1 (task 43.29, owner 2026-10-22; record 26 section
  * 5.3.1 case 3a): xhciuas.inf is staged but never forced, so Windows' own
- * UAS driver stays the default. A UAS disk with no driver is left for
+ * UAS driver stays the default unless the test certificate is trusted
+ * (then Windows may rank xhciuas above it). A UAS disk with no driver is left for
  * Windows (INST_ACT_WINDOWS); one on another driver stays foreign; one
  * already on xhciuas (the user's own pick) is kept current. Any other
  * system, or kind: the action as given. */
@@ -2090,6 +2091,14 @@ const char *inst_other_brand_word(const char *desc);
  * into ids (each INST_PKG_ID_CHARS), -1 when an id is not of that form or
  * there are more than cap. */
 int inst_other_id_list(const char *list, char *ids, int cap);
+/* The device installer's precompiled copy beside an INF a set's uninstall
+ * deletes: 1 with path's <name>.PNF in out when path ends in .inf (any
+ * case), 0 for any other file or when it does not fit. */
+int inst_other_pnf(const char *path, char *out, size_t cap);
+/* The plan's line for usb-wdm-free's test certificate: NULL when the offer
+ * is not made, else whether the run adds it to the Root and
+ * TrustedPublisher stores. */
+const char *inst_other_trust_plan(int offered, int chosen);
 /* A metadata line of STAGE.TXT (PACKAGE, EXCLUDES, COEXISTS): 1 the
  * line is one (kind 'P', 'E' or 'C', the fields copied), 0 not a metadata
  * line, -1 a metadata line it cannot read, or a NEEDS line (unsupported). */

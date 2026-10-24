@@ -121,6 +121,7 @@ Safely Remove first is still the recommended way to unplug a drive, on every sys
 
 **Stor98 is only for hot-pluggable NVMe drives behind a Thunderbolt or USB4 port. Do not use it for internal NVMe drives.**
 
+- On Windows 8, which has no NVMe driver of its own, Windows itself puts the staged Stor98 on an internal NVMe drive that has no driver: without a prompt when this package's test certificate is trusted, and otherwise through the "can't verify the publisher" prompt (not read). The drive then runs on Stor98, and the uninstall leaves Stor98 in place, on every drive, while that drive uses it.
 - The package carries Stor98 in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system.
 - On 98 SE and ME, `S98VSD.VXD` (beside Stor98 in `release-x86\`) lets reads and writes of up to 2 MiB reach Stor98 whole, for much faster transfers. `SETUP.EXE` installs it with Stor98 (its own box, ticked with Stor98's).
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).

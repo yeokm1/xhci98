@@ -1412,8 +1412,8 @@ static int scan_nt(void)
         return 0;
     }
     if (unreadable) {
-        out("%d device entries could not be read whole: nothing is changed "
-            "(record 23 section 5.3).\n", unreadable);
+        out("%d device entries could not be read whole: nothing is "
+            "changed.\n", unreadable);
         return 0;
     }
     return 1;
@@ -1566,8 +1566,8 @@ static int scan_9x(void)
         return 0;
     }
     if (walkErrors) {
-        out("%d device entries could not be read whole: nothing is changed "
-            "(record 23 section 6.3).\n", walkErrors);
+        out("%d device entries could not be read whole: nothing is "
+            "changed.\n", walkErrors);
         return 0;
     }
     return 1;
@@ -16935,7 +16935,7 @@ static void s98_question(void)
     }
     if (!haveCm || !tbInclude) {
         out("Stor98 %s (hot-pluggable NVMe driver): left out, it comes with the "
-            "Thunderbolt 3 /\nUSB4 support.\n\n", s98VersionText);
+            "Thunderbolt 3 / USB4 support.\n\n", s98VersionText);
         logonly("stor98: left out with the Thunderbolt support\n");
         s98_apply(0);
         return;
@@ -22817,8 +22817,8 @@ static void other_question(void)
         stor_out_wrapped("  ", under);
         if (o->Include) {
             int i;
-            out("  %s: copied without asking%s.\n", sw,
-                o->StageOn ? ", these packages staged:" : "");
+            out("  %s: copied without asking%s\n", sw,
+                o->StageOn ? ", these packages staged:" : ".");
             for (i = 0; i < o->PkgCount; i++) {
                 if (o->Pkg[i].Tick) {
                     out("    %s %s\n", o->Pkg[i].Id, o->Pkg[i].Desc);
@@ -22925,6 +22925,13 @@ static void other_print_plan(void)
                 inst_other_folder(set), o->StageOn ?
                 ", and its ticked packages' INFs for this Windows staged" :
                 " only");
+            if (set == INST_SET_FREE) {
+                const char *t = inst_other_trust_plan(other_trust_offered(),
+                                                      othTrust);
+                if (t != NULL) {
+                    out("%s\n", t);
+                }
+            }
         }
     }
 }
@@ -25795,6 +25802,17 @@ static int other_remove(int set, int uninstall)
                 continue;
             }
             flagChanged = 1;
+            {
+                /* 98 SE's device installer writes <name>.PNF beside a
+                 * staged INF it binds a device from (the 3.2.0.0 matrix's
+                 * uninstall leg): it goes with its INF, so the folder can
+                 * go. */
+                char pnf[INST_PATH_CHARS];
+                if (inst_other_pnf(x->Path, pnf, sizeof(pnf)) &&
+                    file_state(pnf) > 0 && !delete_file(pnf)) {
+                    out("  %s could not be deleted.\n", pnf);
+                }
+            }
         }
         free(recs);
         if (opts.List) {

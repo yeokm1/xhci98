@@ -159,6 +159,13 @@ drive behind a Thunderbolt or USB4 port is unplugged and plugged in again
 after its update; the installer asks for that and waits up to two
 minutes. The uninstall removes Stor98 only where this installer put it
 there: a Stor98 installed before, by hand or by an earlier tool, stays.
+Stor98 is not for internal NVMe drives. Windows 8 has no NVMe driver of
+its own, and there Windows itself puts the staged Stor98 on an internal
+NVMe drive that has no driver: without a prompt when this package's test
+certificate is trusted, and otherwise through the "can't verify the
+publisher" prompt (not read). The drive then runs on Stor98, and the
+uninstall leaves Stor98 in place, on every drive, while that drive uses
+it.
 
 USB storage drivers (Windows 98 SE only). Windows 98 SE has no USB
 mass-storage driver: every USB disk, Bulk-Only or UAS under xhciuas.sys,
@@ -211,9 +218,14 @@ offered together, and the box below the list says why. What an earlier
 run staged is listed there too: leaving a box unticked does not undo
 it. On 64-bit Vista and later, with a free package ticked, one more box
 offers to trust usb-wdm-free's own test certificate (its 64-bit drivers
-are signed with it and load only in test-signing mode); the uninstall
-removes the trust it added. No trust is added for the non-free drivers.
-it. The Finish page lists the folders to point the hardware wizard at.
+are signed with it and load only in test-signing mode; the console's
+switch is /wdmfree:trust); the uninstall removes the trust it added. No
+trust is added for the non-free drivers. Trusting the certificate lets
+Windows load the set's test-signed 64-bit drivers, but Windows still
+says "Windows can't verify the publisher of this driver software" when
+it stages one of these packages, because they carry no catalog: answer
+"Install this driver software anyway". The Finish page lists the folders
+to point the hardware wizard at.
 The uninstall removes the copies, the DevicePath entries and the
 staged INFs it made; a driver a device installed from them stays
 installed, and so does a folder whose INF a device still uses.
@@ -299,11 +311,13 @@ The console tool
 
 Its other switches are the window's, and /nopause. On Windows 98 SE and
 ME, INSTALL.BAT takes eight arguments at most, seven after /console, and
-/set Name=Value counts as three; it refuses more rather than run a
-shortened command. Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with
-the same arguments instead for a longer one. On 98 SE and ME the console
-tool installs each device through the helper too; a Windows dialog may
-open (the Windows CD for usbd.sys): answer it as below.
+COMMAND.COM splits them at = and at commas: /set Name=Value counts as
+three, and /wdmfree:stage=audio/uac2,video/uvc98 as three too (one more
+than its packages). It refuses more rather than run a shortened command.
+Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with the same arguments
+instead for a longer one. On 98 SE and ME the console tool installs each
+device through the helper too; a Windows dialog may open (the Windows CD
+for usbd.sys): answer it as below.
 
 The connection manager alone
 ----------------------------

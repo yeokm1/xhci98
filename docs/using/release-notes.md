@@ -287,9 +287,14 @@ as they are made; the head of this file is rewritten when it is cut.
   reports them; the installer selects tunnel drives only. An internal NVMe
   drive is left as it is, and so is one whose place cannot be read; the
   installer says which and why. Stor98 is not for internal NVMe drives:
-  do not install it on one. On 2000 to 8 Stor98's INF matches every
+  do not install it on one. On 2000 to 7 Stor98's INF matches every
   NVMe controller (`PCI\CC_010802`), so Windows may still offer Stor98
   for an internal NVMe drive that has no driver, later: decline it there.
+  Windows 8 has no NVMe driver of its own, and there Windows itself puts
+  the staged Stor98 on an internal NVMe drive that has no driver: with
+  this package's test certificate trusted it does so without a prompt,
+  and otherwise through the "can't verify the publisher" prompt (not
+  read). The drive then runs on Stor98.
   On 8.1 and 10 it names that id as a compatible id only, which Windows'
   own NVMe driver (`stornvme`) outranks, so there Windows never chooses
   Stor98 by itself: it goes only on a drive the installer or you put it
@@ -301,7 +306,10 @@ as they are made; the head of this file is rewritten when it is cut.
   one driver file. The uninstall removes the bundled Stor98 also from a
   tunnel drive Windows bound to it after the install (an enclosure first
   plugged after the restart), when Stor98 was not there before this
-  package's installer.
+  package's installer. While a drive the installer did not put Stor98 on
+  uses it, such as an internal drive Windows 8 gave it, the uninstall
+  leaves Stor98 in place, its service and INF with it, and the tunnel
+  drives keep it too.
 - **The Thunderbolt 3 / USB4 connection manager alone.** The installer
   can install `xhcicm.sys` (with its tunnel-port filter and, on NT, the
   safe-removal mark service) without `xhci98.sys` and `xhciuas.sys`, for
@@ -2415,8 +2423,13 @@ only on NVMe drives behind a Thunderbolt or USB4 tunnel ("What `3.1.0.0`
 changes"), and updates an older Stor98 on such a drive (on Windows 98 SE
 and ME as a file, at the next start, after a shut down). Stor98 is not for
 internal NVMe drives: do not install it on one. Its INF matches every NVMe
-controller, so Windows may still offer it for an internal NVMe drive that
-has no driver: decline it there.
+controller, so on 2000 to 7 Windows may still offer it for an internal
+NVMe drive that has no driver: decline it there. On Windows 8, which has
+no NVMe driver of its own, Windows itself puts the staged Stor98 on such a
+drive, without a prompt when this package's test certificate is trusted
+and otherwise through the "can't verify the publisher" prompt (not read);
+the drive then runs on Stor98, and the uninstall leaves Stor98 in place,
+on every drive, while that drive uses it.
 
 On Windows 98 SE and ME, `release-x86\` also carries `S98VSD.VXD` (new in
 `3.2.0.0`, roadmap-usb4 task 43.46, design record 30), this package's own
