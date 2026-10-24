@@ -52,8 +52,9 @@ hosts and enclosure; the release notes say what was read where.
   and 10 a resume, and the start after a shutdown where Fast Startup is
   on, stopped Windows with bug check 0x9F, and on 2000 to 7 a resume took
   several minutes; the connection manager now passes a tunnel bridge's
-  power-on down at once on every Windows, instead of holding it for the
-  controller's resume.
+  power-on down at once on Windows 2000 to 10, instead of holding it for
+  the controller's resume. Standby or hibernation with a tunnelled device
+  attached is still not supported.
 - Fixed: Windows ME's first shutdown after the install no longer hangs; a
   device with more than four endpoints (an Xbox 360 pad) is no longer
   refused; a cancelled transfer behind another no longer leaves the ring
