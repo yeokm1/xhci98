@@ -160,7 +160,7 @@ Each release has three zips. Each holds everything in the one before it, so pick
 |---|---|
 | `xhci98-<version>.zip` | The xHCI98 drivers (USB 3, UAS, Thunderbolt 3 / USB4), Stor98, the installer and the tools. Also NUSB 3.3's seven Windows 98 SE storage files in `USBDRV\NUSB33\`, which the installer offers on 98 SE when NUSB is not installed (an installed NUSB is kept). |
 | `xhci98-<version>-free.zip` | Adds the free USB class drivers (audio, webcam, Ethernet and more) from [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) in `USBDRV\FREE\`. Experimental: they may not work with every device and can make Windows unstable. |
-| `xhci98-<version>-nonfree.zip` | Adds a pack of other manufacturers' USB drivers from [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) in `USBDRV\NONFREE\`, not this project's work and not tested by it. |
+| `xhci98-<version>-nonfree.zip` | Adds a pack of other manufacturers' USB drivers from [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) in `USBDRV\NONFREE\`, not this project's work. |
 
 Nothing from `USBDRV\` is installed unless you tick it on the installer's Other USB drivers page.
 
@@ -354,7 +354,7 @@ Each driver directory holds:
 
 ## Reporting a bug
 
-Bugs in the free USB class drivers that a download may carry (the [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) drivers, in beta) go to [that project's issues](https://github.com/yeokm1/usb-wdm-free/issues), not here. The non-free drivers (the [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) pack) are their vendors' drivers as released and are not tested or changed by this project. Everything else goes here:
+Bugs in the free USB class drivers that a download may carry (the [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) drivers, in beta) go to [that project's issues](https://github.com/yeokm1/usb-wdm-free/issues), not here. The non-free drivers (the [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) pack) are their vendors' drivers as released and are not changed by this project. Everything else goes here:
 
 Open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
 

@@ -665,7 +665,9 @@ if it does not fit, the value is left as it was, the staging is reported
 not done, and the Finish page and the readme give the copied folders as
 for a driver not staged. The non-free row's sentence
 and its sub-box carry a firmer warning ("not tested by this project;
-the vendors' drivers as released"): the pack's vendors' own setups are
+the vendors' drivers as released"; the owner's decision of 2026-10-24
+removed the testing warning and kept the other makers' attribution,
+section 6.7.4): the pack's vendors' own setups are
 the user's to run, this package carrying the pack and not being its
 installer. Three rules bound the staging: only an INF-based driver is
 staged, a driver that comes with a setup program being copied only,
@@ -2897,7 +2899,9 @@ https://github.com/yeokm1/usb-wdm-free."); download
 3 says that `USBDRV\NONFREE\` holds other makers' drivers, Microsoft's KMDF
 co-installers among them, unmodified, with no licence to redistribute
 them established (legal-provenance.md section 5), and that they are not
-tested by this project. Its "What is in this directory" lists the
+this project's work (until 2026-10-24 it also said they were not tested
+by this project; section 6.7.4 has the owner's decision). Its "What is
+in this directory" lists the
 download's folders.
 
 #### 6.7.2 What each folder holds, and its record
@@ -3058,7 +3062,8 @@ top:
   game pads) to <dir>\USBDRV\NONFREE. They are their makers' work, not this
   project's, and have not been tested by this project on any Windows.
   Nothing is installed: Windows uses them only for a device you point it
-  at, or with the box below."
+  at, or with the box below." (2026-10-24: without the testing clause, as
+  the owner's decision at the end of this section has it.)
 - **Under each row, always, and in place of the row where the set is not
   carried**, one line (`inst_other_absent_text`, host-tested for both
   sets, the three states and both release forms): carried, "Up to date:
@@ -3105,6 +3110,26 @@ only on a start with driver signature enforcement disabled (F8), a
 test-signed one also in test-signing mode."
 OK goes on, Cancel stays, as section 5.3.1 has it; the console prints
 them under "WARNING:".
+
+**No testing warnings (the owner's decision of 2026-10-24, amending
+this section, sections 6.7 and 6.7.1 and section 6.7.11's 8 to 10
+paragraph where they say otherwise).** The Other USB drivers page, its
+warnings on Next, the console's `/wdmfree` and `/wdmnonfree` warnings,
+the per-package details, the readme and the downloads' readme say
+nothing about testing for either set. The two testing paragraphs above
+are gone, with their bits (named `INST_CW_` above, `INST_OW_FREE_UNREAD`
+and `INST_OW_NONFREE` in the code): `inst_other_warnings`
+and `inst_other_warn_text` keep only the two 64-bit signature notes,
+`INST_OW_X64SIG` (64-bit Vista and 7, the paragraph above) and
+`INST_OW_X64STORE` (64-bit 8 to 10, section 6.7.11), so the message box
+on Next shows only when one of them applies. The non-free row's sentence
+keeps the attribution and drops the rest: "Copies other makers' drivers
+(USB Ethernet, serial and game pads) to <dir>\USBDRV\NONFREE. They are
+their makers' work, not this project's. Nothing is installed: Windows
+uses them only for a device you point it at, or with the boxes below."
+A non-free package's details end "Another maker's driver." The free
+set's `READ.TXT` is still packaged and read, and no longer drives a
+warning.
 
 #### 6.7.5 Ticked: the copy
 

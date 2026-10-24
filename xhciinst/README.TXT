@@ -192,7 +192,7 @@ experimental. They may not work with every device and can make Windows
 unstable. Report problems at https://github.com/yeokm1/usb-wdm-free."),
 and -nonfree.zip, which adds the non-free driver pack of
 usb-wdm-nonfree in USBDRV\NONFREE: other makers' drivers, not this
-project's and not tested by it. The page shows a row for each set this
+project's work. The page shows a row for each set this
 download carries and, for each it does not, which download and which
 address have it (https://github.com/yeokm1/usb-wdm-free and
 https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers

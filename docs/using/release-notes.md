@@ -4497,7 +4497,7 @@ drivers in `USBDRV\FREE\` (experimental: they may not work with every
 device and can make Windows unstable; their problems go to that
 project); and `xhci98-<version>-nonfree.zip`, which adds the
 usb-wdm-nonfree pack of other makers' drivers in `USBDRV\NONFREE\`, not
-this project's and not tested by it (NUSB 3.3's storage files are in
+this project's work (NUSB 3.3's storage files are in
 `USBDRV\NUSB33\` of every download that carries them). `USBDRV\NONFREE\` holds two more
 Microsoft files, the KMDF co-installers
 ASIX ships with its drivers (`WdfCoInstaller01007.dll` and

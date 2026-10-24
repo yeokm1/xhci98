@@ -22191,7 +22191,6 @@ typedef struct _OTHSET {
     int EarlierCount;           /* "set:id" of every package recorded      */
     int EarlierUnknown;         /* a record no package explains            */
     int ForThis;                /* STAGE lines naming this system          */
-    char Unread[256];           /* free: packages not read on this system  */
     /* the run's outcome, for the Finish page */
     int Ran;
     int InFolder;
@@ -22562,20 +22561,16 @@ static void other_read_set(int set)
             o->Src, o->Count, o->StageCount, o->PkgCount);
 }
 
-/* The STAGE lines for this system, and (free) the packages with a line for
- * it that READ.TXT does not read on it. */
+/* The STAGE lines for this system. */
 static void other_count(int set)
 {
     OTHSET *o = &oth[set];
     INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
     char pkg[64];
     int i;
-    int j;
 
     o->ForThis = 0;
-    o->Unread[0] = '\0';
     for (i = 0; i < o->StageCount; i++) {
-        int read = 0;
         if (!(o->Stage[i].Systems & bit)) {
             continue;
         }
@@ -22588,22 +22583,6 @@ static void other_count(int set)
                 o->Pkg[k].Eligible = 1;
                 o->Pkg[k].Infs++;
             }
-        }
-        if (set != INST_SET_FREE) {
-            continue;
-        }
-        other_pkg_of(o->Stage[i].Inf, pkg, sizeof(pkg));
-        for (j = 0; j < o->ReadCount; j++) {
-            if (inst_eq(o->Read[j].Pkg, pkg) && (o->Read[j].Mask & bit)) {
-                read = 1;
-            }
-        }
-        if (!read && strstr(o->Unread, pkg) == NULL) {
-            if (o->Unread[0] != '\0') {
-                strncat(o->Unread, ", ", sizeof(o->Unread) -
-                        strlen(o->Unread) - 1);
-            }
-            strncat(o->Unread, pkg, sizeof(o->Unread) - strlen(o->Unread) - 1);
         }
     }
 }
@@ -22826,14 +22805,11 @@ static void other_question(void)
     {
         char warn[2048];
         INST_U32 w = inst_other_warnings(
-            oth[INST_SET_FREE].Include, oth[INST_SET_FREE].Unread,
-            oth[INST_SET_FREE].StageOn, oth[INST_SET_NONFREE].Include,
-            oth[INST_SET_NONFREE].StageOn,
+            oth[INST_SET_FREE].Include, oth[INST_SET_FREE].StageOn,
+            oth[INST_SET_NONFREE].Include, oth[INST_SET_NONFREE].StageOn,
             other_sig_kind());
         if (w != 0) {
-            inst_other_warn_text(w, oth[INST_SET_FREE].Unread,
-                                 oth[INST_SET_FREE].StageOn, warn,
-                                 sizeof(warn));
+            inst_other_warn_text(w, warn, sizeof(warn));
             out("WARNING:\n");
             stor_out_wrapped("  ", warn);
             out("\n");
@@ -25958,7 +25934,7 @@ void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
                 cap - strlen(out) - 1);
     }
     if (set == INST_SET_NONFREE) {
-        strncat(out, " Another maker's driver, not tested by this project.",
+        strncat(out, " Another maker's driver.",
                 cap - strlen(out) - 1);
     }
 }
@@ -25993,12 +25969,11 @@ void inst_eng_other_choose(int set, int include, int stage)
 void inst_eng_other_warnings(char *text, size_t cap)
 {
     INST_U32 w = inst_other_warnings(
-        oth[INST_SET_FREE].Include, oth[INST_SET_FREE].Unread,
-        oth[INST_SET_FREE].StageOn, oth[INST_SET_NONFREE].Include,
-        oth[INST_SET_NONFREE].StageOn, other_sig_kind());
+        oth[INST_SET_FREE].Include, oth[INST_SET_FREE].StageOn,
+        oth[INST_SET_NONFREE].Include, oth[INST_SET_NONFREE].StageOn,
+        other_sig_kind());
 
-    inst_other_warn_text(w, oth[INST_SET_FREE].Unread,
-                         oth[INST_SET_FREE].StageOn, text, cap);
+    inst_other_warn_text(w, text, cap);
 }
 
 void inst_eng_other_summary(const char *dir, char *text, size_t cap)

@@ -3725,10 +3725,9 @@ function Get-ReadmeDownloadText {
         $L += ""
         $L += "USBDRV\NONFREE\ holds other makers' drivers (USB Ethernet, serial and"
         $L += "game pad drivers), unmodified, as their makers released them. They are"
-        $L += "not this project's work and have not been tested by this project on any"
-        $L += "Windows. USBDRV\NONFREE\NOTICE.md says whose each one is, and quotes"
-        $L += "what some of their makers said about passing them on; apart from that,"
-        $L += "no licence to redistribute them has been found."
+        $L += "not this project's work. USBDRV\NONFREE\NOTICE.md says whose each one"
+        $L += "is, and quotes what some of their makers said about passing them on;"
+        $L += "apart from that, no licence to redistribute them has been found."
     }
     return ($L -join "`r`n")
 }
@@ -3755,7 +3754,7 @@ function Get-ReadmeOtherContentsText {
     if ($Kind -eq "nonfree") {
         if ($L.Count -gt 0) { $L += "" }
         $L += Format-ReadmeWrap -Lead "  USBDRV\NONFREE\ - " -Rest "                    " `
-                  -Text "other makers' drivers, not this project's and not tested by it, from usb-wdm-nonfree $NonFreeTag"
+                  -Text "other makers' drivers, not this project's work, from usb-wdm-nonfree $NonFreeTag"
         $L += ""
         $L += "      NOTICE.md    whose each one is"
         $L += "      README.md    which folder serves which Windows"
