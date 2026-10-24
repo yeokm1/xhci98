@@ -3658,8 +3658,8 @@ function Get-ReadmeMsFilesText {
 Microsoft files are in this download in two places: the seven Windows 98 SE
 storage files of section 3, in a folder of their own, copied unmodified from
 NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third party's); and, among the
-other manufacturers' drivers in USBDRV\NONFREE\, the two KMDF co-installers ASIX
-ships with its AX88772 and AX88179 drivers (WdfCoInstaller01007.dll and
+other manufacturers' drivers in USBDRV\NONFREE\, the two KMDF co-installers
+ASIX ships with its AX88772 and AX88179 drivers (WdfCoInstaller01007.dll and
 WdfCoInstaller01009.dll), as ASIX ships them. None of them is this project's
 work. No licence to redistribute them has been established, nothing here
 grants you any right in them, and the NOTICE.md beside each says whose they
