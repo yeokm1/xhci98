@@ -105,6 +105,14 @@ or it does not load and the controller shows Code 39 on Vista, Code 52 on
 7, with nothing plugged into it working inside Windows, a USB keyboard or mouse
 included.
 
+- **Keep test-signing mode on while the Thunderbolt 3 / USB4 support is
+  installed** on 64-bit Windows. Windows makes its driver a boot driver
+  (it filters a PCI bridge). Turned off, Windows 8, 8.1 and 10 stop in
+  Automatic Repair, and Windows 7 x64 starts but silently rolls the whole
+  xHCI98 install back (read in a virtual machine), leaving the controllers
+  at Code 52. Vista x64 was not read. A Windows feature update, turning
+  Secure Boot on, or a boot repair can turn test-signing mode off too.
+
 - With BitLocker on the system drive, suspend BitLocker before changing the
   boot setting, or the next boot asks for the recovery key.
 - This is not Microsoft signing: the certificate is the project's own test
