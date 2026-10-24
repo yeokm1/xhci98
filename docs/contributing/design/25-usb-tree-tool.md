@@ -1899,20 +1899,36 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    in at login. The name is the device's as the tree labels it (its drive
    letters first where it has some, section 6.5), the same function
    naming both (`fast_name`, `tr_fast_name`, host-tested): its devnode's
-   name; else its product string (`iProduct`, spaces at either end
-   taken off); "USB device <VID:PID>" only when neither is there (task
-   43.78). A device just plugged in has no devnode for the tree while
+   name where Windows gave a specific one; else its product string
+   (`iProduct`, spaces at either end taken off); else its devnode's name
+   where that is one of Windows' class names; "USB device <VID:PID>" only
+   when none is there (task 43.78). The class names (owner, 2026-10-24:
+   they say what kind of device it is, not which) are
+   `tr_name_generic`'s, host-tested, matched whole with case aside: "USB
+   Input Device", "USB Human Interface Device", "Human Interface
+   Device", "HID Keyboard Device", "HID-compliant mouse", "HID-compliant
+   device", "HID-compliant consumer control device", "HID-compliant game
+   controller", "HID-compliant system controller", "USB Composite
+   Device", "USB Mass Storage Device", "USB Device", "Unknown Device",
+   "USB Printing Support", "USB Audio Device", "USB Printer", and the hub
+   names "Generic USB Hub", "USB Hub", "USB 2.0 Hub", "Standard USB Hub";
+   and by prefix "Unknown USB Device" and a hardware ID ("USB\...")
+   standing in for a name. A name with a disk's name or drive letters
+   (section 6.5) is specific. A device just plugged in has no devnode for the tree while
    Windows installs its driver, since the driver key the tree matches it
    by is written then; the balloon comes at that refresh, so the 3.2.0.0
    matrix (2026-10-24, QEMU's usb-kbd and usb-mouse behind a Full Speed
    hub on 7 and XP) saw "USB device 0627:0001" where the device answers
-   "QEMU USB Keyboard". For such a device the scan asks the string (string
+   "QEMU USB Keyboard". For such a device, and for one whose devnode
+   has only a class name, the scan asks the string (string
    descriptor 0 for its first language, 0x0409 if none, then `iProduct`,
    through the hub as item 1's request goes), once per key while it stays
    (kept by key, answered or not, for the keys of the last refresh, and
    kept while the key stays even once a devnode names the device), and
    never for one behind a TT (item 1's reason) or with `iProduct` 0. The
-   details pane's strings, once read, serve as well. **The hold** (43.78):
+   details pane's strings, once read, serve as well (so the tree names
+   a device it did not count by its product string only once that pane
+   has read it). **The hold** (43.78):
    so that the balloon names the device as the list and the tooltip do
    (the matrix read a stick's balloon as "USB device 46F4:0001" and its
    list entry and tooltip as "QEMU QEMU HARDDISK USB Device (G:)"), a
@@ -1928,8 +1944,9 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    that has its devnode at the refresh that finds it
    (the tray's first refresh, a device plugged in again) is not held.
    Read on 7 x86 in QEMU with usb-kbd and usb-mouse behind a Full Speed
-   hub: "2 USB devices run slower than they can: USB Input Device and 1
-   more." (the 3.2.0.0 build: "USB device 0627:0001 runs at ..."). Where the shell has no
+   hub, before the class names were set aside: "2 USB devices run
+   slower than they can: USB Input Device and 1 more." (the 3.2.0.0
+   build: "USB device 0627:0001 runs at ..."). Where the shell has no
    balloons (98 SE) the red icon's tooltip says it (item 5; its 63
    characters hold the count, not the balloon's text), and the menu's
    first item opens the list (item 6). A balloon owed before the icon is

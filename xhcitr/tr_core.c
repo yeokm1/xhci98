@@ -2943,6 +2943,53 @@ int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key)
     return 1;
 }
 
+/* Windows' own class names for a USB device, 98 SE to 10: they say what
+ * kind of device it is, not which (owner, 2026-10-24). Matched whole,
+ * case aside. */
+static const char *const trGenericNames[] = {
+    "USB Input Device",
+    "USB Human Interface Device",
+    "Human Interface Device",
+    "HID Keyboard Device",
+    "HID-compliant mouse",
+    "HID-compliant device",
+    "HID-compliant consumer control device",
+    "HID-compliant game controller",
+    "HID-compliant system controller",
+    "USB Composite Device",
+    "USB Mass Storage Device",
+    "USB Device",
+    "Unknown Device",
+    "USB Printing Support",
+    "USB Audio Device",
+    "USB Printer",
+    "Generic USB Hub",
+    "USB Hub",
+    "USB 2.0 Hub",
+    "Standard USB Hub"
+};
+
+int tr_name_generic(const char *name)
+{
+    size_t i;
+
+    if (name == NULL || name[0] == '\0') {
+        return 0;
+    }
+    /* "Unknown USB Device (Device Descriptor Request Failed)" and its
+     * kin, and a hardware ID standing in for a name. */
+    if (tr_starts_ci(name, "Unknown USB Device") ||
+        tr_starts_ci(name, "USB\\")) {
+        return 1;
+    }
+    for (i = 0; i < sizeof(trGenericNames) / sizeof(trGenericNames[0]); i++) {
+        if (tr_eq(name, trGenericNames[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void tr_fast_name(char *out, size_t cap, const char *label,
                   const char *product, unsigned int vid, unsigned int pid)
 {
@@ -2951,7 +2998,7 @@ void tr_fast_name(char *out, size_t cap, const char *label,
     if (cap == 0) {
         return;
     }
-    if (label != NULL && label[0] != '\0') {
+    if (label != NULL && label[0] != '\0' && !tr_name_generic(label)) {
         tr_copy(out, label, cap);
         return;
     }
@@ -2971,6 +3018,10 @@ void tr_fast_name(char *out, size_t cap, const char *label,
             out[len] = '\0';
             return;
         }
+    }
+    if (label != NULL && label[0] != '\0') {
+        tr_copy(out, label, cap);   /* a class name, better than none */
+        return;
     }
     tr_sprintf(out, cap, "USB device %04X:%04X", vid & 0xFFFFU, pid & 0xFFFFU);
 }

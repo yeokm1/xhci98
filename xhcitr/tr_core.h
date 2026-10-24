@@ -752,10 +752,16 @@ void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
 /* 1 when key is not among the n keys of old (each TR_FAST_KEY wide). */
 int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
 
+/* 1 when name is one of Windows' class names for a USB device ("USB
+ * Input Device", "HID-compliant mouse", "USB Mass Storage Device", ...),
+ * which says what kind of device it is and not which (owner, 2026-10-24). */
+int tr_name_generic(const char *name);
+
 /* A device's name (item 4, task 43.78): label, the tree's name from its
- * devnode, when it has one; else its product string with the spaces at
- * either end taken off, when any is left; else "USB device VID:PID".
- * label and product may be NULL. */
+ * devnode, when it has one tr_name_generic does not match; else its
+ * product string with the spaces at either end taken off, when any is
+ * left; else the class-name label; else "USB device VID:PID". label and
+ * product may be NULL. */
 void tr_fast_name(char *out, size_t cap, const char *label,
                   const char *product, unsigned int vid, unsigned int pid);
 

@@ -6547,8 +6547,9 @@ static int fastProdN;
 
 /* Port k's product string into up[k].Prod when it has no devnode for the
  * tree to name it by (its driver still being installed: the driver key the
- * tree matches by is written then), from the last scan's or asked; kept
- * in nk/np for the next scan. */
+ * tree matches by is written then) or only a class name of Windows'
+ * (tr_name_generic), from the last scan's or asked; kept in nk/np for the
+ * next scan. */
 static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
                          char (*np)[128], int *nn)
 {
@@ -6571,7 +6572,14 @@ static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
     if (i == fastProdN) {
         /* Kept while the key stays even once a devnode names it, so a
          * devnode lost again later does not ask again. */
-        if (p->Dn >= 0 || idx == 0 || fast_tt(k)) {
+        char label[160];
+        label[0] = '\0';
+        if (p->Dn >= 0) {
+            usb_label(p->Dn, label, sizeof(label));
+        }
+        /* Asked only where no specific devnode name serves. */
+        if ((p->Dn >= 0 && label[0] != '\0' && !tr_name_generic(label)) ||
+            idx == 0 || fast_tt(k)) {
             return;
         }
         n = usb_desc(p->Hub, p->Conn.Port, 3, 0, 0, 255, &b);
