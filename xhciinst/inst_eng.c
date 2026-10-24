@@ -10348,7 +10348,7 @@ static int unfilter_nt(HDEVINFO set, const DEVREC *d)
     step = inst_port_step(d->Present, n > 0);
     if (step == INST_PORT_WAIT) {
         /* Another filter is left on it: removing the entry would drop
-         * that one too (record 23 section 9.2 step 1, revision 42). */
+         * that one too (record 23 section 9.2 step 1, revision 43). */
         out("  The port is not connected, so its driver cannot be given back "
             "now, and another\n  filter is on it: connect the dock and run "
             "INSTALL.BAT /uninstall again.\n");

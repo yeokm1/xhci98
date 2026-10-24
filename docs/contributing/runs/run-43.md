@@ -6082,7 +6082,7 @@ were not run again.
 
 ## 43.42v - The Uninstall on 8.1 and 10 in One Run (2026-10-24)
 
-From the 8, 8.1 and 10 legs (`runs/run-43-24.md` on its own branch,
+From the 8, 8.1 and 10 legs (`runs/run-43-24.md`,
 "Findings" 2, 3, 4 and 9) and the owner's decisions of 2026-10-24: on NT
 a root hub removed after its controller, an absent tunnel port's entry
 removed with a warning instead of stopping the uninstall, the Stor98

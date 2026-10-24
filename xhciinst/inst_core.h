@@ -951,7 +951,7 @@ int inst_store_verdict(const char *name, int same, int pkgState,
 /* The uninstall's step for a tunnel port it filtered (record 23 section
  * 9.2 step 1): present, it is given back to Windows' own driver; not
  * present with no other filter left once xhcicm is off, its entry is
- * removed (revision 42, run-43-24 Finding 9); not present with another
+ * removed (revision 43, run-43-24 Finding 9); not present with another
  * filter left, the run stops as before, since removing the entry would
  * drop that filter with it. */
 #define INST_PORT_GIVE_BACK 1
