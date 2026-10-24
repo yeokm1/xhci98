@@ -203,6 +203,10 @@ You can also install by hand from Device Manager ([Install by hand](#install-by-
 3. Go through the pages: Welcome, Components, Other USB drivers and Summary. The driver's options are under Settings; the tools go to `C:\XHCI98`. Nothing changes until you click Install.
 4. Answer Windows' unsigned-driver questions. If the Finish page lists steps left for you (a Found New Hardware window, for instance), do them and run `SETUP.EXE` again. Restart if it offers.
 
+<img src="images/xhci98-setup-components-98se.png" width="477">
+
+The installer's Components page on Windows 98 SE.
+
 What it does:
 
 - **Windows 2000 to 7:** installs or updates the driver of every device present and stages the package for devices plugged in later.
