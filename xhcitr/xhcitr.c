@@ -6559,7 +6559,7 @@ static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
     DWORD n;
     int i;
 
-    if (p->Dn >= 0 || *nn >= TR_FAST_MAX) {
+    if (*nn >= TR_FAST_MAX) {
         return;
     }
     for (i = 0; i < fastProdN; i++) {
@@ -6569,7 +6569,9 @@ static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
         }
     }
     if (i == fastProdN) {
-        if (idx == 0 || fast_tt(k)) {
+        /* Kept while the key stays even once a devnode names it, so a
+         * devnode lost again later does not ask again. */
+        if (p->Dn >= 0 || idx == 0 || fast_tt(k)) {
             return;
         }
         n = usb_desc(p->Hub, p->Conn.Port, 3, 0, 0, 255, &b);

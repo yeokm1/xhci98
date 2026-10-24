@@ -1909,7 +1909,8 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    "QEMU USB Keyboard". For such a device the scan asks the string (string
    descriptor 0 for its first language, 0x0409 if none, then `iProduct`,
    through the hub as item 1's request goes), once per key while it stays
-   (kept by key, answered or not, for the keys of the last refresh), and
+   (kept by key, answered or not, for the keys of the last refresh, and
+   kept while the key stays even once a devnode names the device), and
    never for one behind a TT (item 1's reason) or with `iProduct` 0. The
    details pane's strings, once read, serve as well. Where the shell has no
    balloons (98 SE) the red icon's tooltip says it (item 5; its 63
