@@ -1912,7 +1912,21 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    (kept by key, answered or not, for the keys of the last refresh, and
    kept while the key stays even once a devnode names the device), and
    never for one behind a TT (item 1's reason) or with `iProduct` 0. The
-   details pane's strings, once read, serve as well. Where the shell has no
+   details pane's strings, once read, serve as well. **The hold** (43.78):
+   so that the balloon names the device as the list and the tooltip do
+   (the matrix read a stick's balloon as "USB device 46F4:0001" and its
+   list entry and tooltip as "QEMU QEMU HARDDISK USB Device (G:)"), a
+   balloon whose first device has no devnode at that refresh is held:
+   each second's tick (`TIMER_POLL`) reads the model of the last refresh
+   and sends it, its name read again, once that device has a devnode and
+   3 seconds have passed since the hold began (`FAST_SETTLE_MS`, room for
+   its disk and letters), or after 15 seconds whatever it has
+   (`FAST_HOLD_MS`). New devices of the refreshes while it is held join
+   its count. A device that has its devnode at the refresh that finds it
+   (the tray's first refresh, a device plugged in again) is not held.
+   Read on 7 x86 in QEMU with usb-kbd and usb-mouse behind a Full Speed
+   hub: "2 USB devices run slower than they can: USB Input Device and 1
+   more." (the 3.2.0.0 build: "USB device 0627:0001 runs at ..."). Where the shell has no
    balloons (98 SE) the red icon's tooltip says it (item 5; its 63
    characters hold the count, not the balloon's text), and the menu's
    first item opens the list (item 6). A balloon owed before the icon is

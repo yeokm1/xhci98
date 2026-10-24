@@ -6588,10 +6588,81 @@ static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
     (*nn)++;
 }
 
-/* The owed balloon, once the icon is there. */
+/* Item 4's hold (task 43.78): a balloon whose first device has no devnode
+ * yet (Windows still installing its driver) waits for one, and then
+ * FAST_SETTLE_MS from the arrival for its disks and letters, so it names
+ * the device as the tree, the list and the tooltip then do; FAST_HOLD_MS
+ * at most, then it goes with the name it has. */
+#define FAST_SETTLE_MS  3000UL
+#define FAST_HOLD_MS    15000UL
+static int fastHold;            /* fastText waits for its device's devnode */
+static DWORD fastHoldTick;      /* when the hold began                      */
+static TR_FAST fastHoldF;       /* fastText's first device, as counted      */
+static int fastHoldCount;       /* the new devices fastText counts          */
+
+/* The port fastTextKey names in the model, or -1. */
+static int fast_text_port(void)
+{
+    char key[TR_FAST_KEY];
+    int k;
+
+    for (k = 0; k < upCount; k++) {
+        if (!up[k].HaveConn || up[k].Conn.Status != TR_CS_CONNECTED) {
+            continue;
+        }
+        fast_key_of(k, key, sizeof(key));
+        if (strcmp(key, fastTextKey) == 0) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* fastText from its first device's name in the model as it is now. */
+static void fast_text(void)
+{
+    char name[160];
+    int k = fast_text_port();
+
+    if (k < 0) {
+        return;                 /* kept as it was */
+    }
+    fast_name(k, name, sizeof(name));
+    tr_fast_balloon(fastText, sizeof(fastText), name, &fastHoldF,
+                    fastHoldCount,
+                    tr_fast_click_balloon(envNt, envMajor, envMinor));
+}
+
+static void fast_announce(void);
+
+/* Each second's tick: the held balloon goes once its device has a
+ * devnode and has settled, or the hold is up. */
+static void fast_hold_tick(void)
+{
+    DWORD el;
+    int k;
+
+    if (!fastHold) {
+        return;
+    }
+    if (!fastPending) {
+        fastHold = 0;
+        return;
+    }
+    el = GetTickCount() - fastHoldTick;
+    k = fast_text_port();
+    if ((k >= 0 && up[k].Dn >= 0 && el >= FAST_SETTLE_MS) ||
+        el >= FAST_HOLD_MS) {
+        fastHold = 0;
+        fast_text();
+        fast_announce();
+    }
+}
+
+/* The owed balloon, once the icon is there and no hold is on. */
 static void fast_announce(void)
 {
-    if (!fastPending || !iconAdded) {
+    if (!fastPending || !iconAdded || fastHold) {
         return;
     }
     fastPending = 0;
@@ -6688,14 +6759,21 @@ static void fast_scan(void)
         tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN,
                     fastTextKey)) {
         fastPending = 0;
+        fastHold = 0;
         fast_balloon_event(TR_BE_DROP);
     }
     if (fresh > 0 && first >= 0) {
-        char name[160];
-        fast_name(first, name, sizeof(name));
-        tr_fast_balloon(fastText, sizeof(fastText), name, &firstF, fresh,
-                        tr_fast_click_balloon(envNt, envMajor, envMinor));
-        fast_key_of(first, fastTextKey, sizeof(fastTextKey));
+        if (fastHold && fastPending) {
+            /* Held for the first device's devnode: these join it. */
+            fastHoldCount += fresh;
+        } else {
+            fastHoldF = firstF;
+            fastHoldCount = fresh;
+            fast_key_of(first, fastTextKey, sizeof(fastTextKey));
+            fastHold = up[first].Dn < 0;
+            fastHoldTick = GetTickCount();
+        }
+        fast_text();
         fastPending = 1;
     }
     /* The icon follows in refresh_model's tray_red, which reads this set
@@ -8338,6 +8416,7 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 return 0;
             }
             poll();
+            fast_hold_tick();
             fast_balloon_event(TR_BE_TICK);
             tray_hover_poll();
         } else if (wp == TIMER_CHANGE) {
