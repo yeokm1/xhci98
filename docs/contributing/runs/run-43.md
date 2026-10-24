@@ -6171,5 +6171,4 @@ on overlays of the 43.5 bases; headless QEMU, my own ports.
 | (c) `INSTALL.BAT /force` | ME (after (b)) | exit 3, "xHCI98 USB 3 Controller: xhci98 3.2.0.0, started", root hub the same: **PASS** |
 | (d) uninstall | 98 SE (after (c)) | `INSTALL /console /uninstall /yes`: exit 3; no `xhci*.*` in `SYSTEM32\DRIVERS`, `INF\OTHER` empty, no `C:\XHCI98`: **PASS** |
 | (d) uninstall | ME (after (c)) | exit 3; the INF copies and their records, `stor98.mpd`, `xhci98.sys`, `xhciuas.sys` ("placed there by this installer"), `xhcicm.sys`, the tools and the entry removed: **PASS** |
-
-The NT Update Driver leg (XP) is reported separately.
+| (b) Update Driver by hand, NT | XP SP3 (p43-12's image) | the controller with no driver: Found New Hardware, "Install from a list or specific location", the 3.1.0.0 package's `release-x86`: "xHCI98 USB 3.x eXtensible Host Controller", Driver Version 3.1.0.0; then Device Manager, the controller, Update Driver, the same route to this build's `release-x86`, "Continue Anyway": "xHCI98 USB 3 Controller", Driver Version 3.2.0.0, dated 24-Oct-26, no restart asked: **PASS** (the root hub's own Found New Hardware wizards were cancelled in the leg, so it shows a problem; not this change's) |
