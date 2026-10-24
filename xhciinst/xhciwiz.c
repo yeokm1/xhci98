@@ -79,6 +79,17 @@
 #define WM_APP_FOCUS        (WM_APP + 6)    /* the focus to Next or Finish   */
 #define WM_APP_FIT          (WM_APP + 7)    /* the sheet moved into the work area */
 
+/* The wheel, which MSVC 6.0's headers give only for a later WINVER. */
+#ifndef WM_MOUSEWHEEL
+#define WM_MOUSEWHEEL       0x020A
+#endif
+#ifndef WHEEL_DELTA
+#define WHEEL_DELTA         120
+#endif
+#ifndef SPI_GETWHEELSCROLLLINES
+#define SPI_GETWHEELSCROLLLINES 104
+#endif
+
 #define JOB_READ            1
 #define JOB_RUN             2
 #define JOB_UNINSTALL       3
@@ -1324,6 +1335,7 @@ static int comp_leave(HWND dlg)
 /* ---- the other USB drivers' page (record 26 sections 6.7.4, 6.7.11) ------ */
 
 static int dlu_x(HWND dlg, int x);
+static int dlu_y(HWND dlg, int y);
 static HWND make_px(HWND dlg, const char *cls, const char *text, DWORD style,
                     int x, int y, int w, int h, int id, HFONT font);
 static int text_h(HDC dc, const char *text, int w, int *wide);
@@ -1454,6 +1466,9 @@ static HWND othlist_step(HWND box, int dir)
 
 static LRESULT CALLBACK othbox_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
+    if (msg == WM_MOUSEWHEEL && othList != NULL) {
+        return SendMessageA(othList, msg, wp, lp);
+    }
     if (msg == WM_GETDLGCODE) {
         return CallWindowProcA(othBoxProc, h, msg, wp, lp) | DLGC_WANTARROWS;
     }
@@ -1517,6 +1532,111 @@ static void othlist_show(HWND box)
     }
 }
 
+/* One screen of the list less a line, as a list box pages; a line at least. */
+static int othlist_page(void)
+{
+    RECT c;
+    int p;
+
+    GetClientRect(othList, &c);
+    p = c.bottom - othBoxH;
+    return p < othBoxH ? othBoxH : p;
+}
+
+/* The wheel by whole lines, Windows' lines per notch but never more than a
+ * screen holds, so no row is jumped over unseen. */
+static int othWheel;
+
+static void othlist_wheel(int delta)
+{
+    UINT lines = 3;
+    UINT most;
+    int n;
+
+    if (othBoxH <= 0) {
+        return;
+    }
+    if (!SystemParametersInfoA(SPI_GETWHEELSCROLLLINES, 0, &lines, 0)) {
+        lines = 3;
+    }
+    if (lines == 0) {
+        return;
+    }
+    most = (UINT)(othlist_page() / othBoxH);
+    if (most < 1) {
+        most = 1;
+    }
+    if (lines > most) {
+        lines = most;
+    }
+    if ((othWheel > 0 && delta < 0) || (othWheel < 0 && delta > 0)) {
+        othWheel = 0;
+    }
+    othWheel += delta;
+    n = othWheel / WHEEL_DELTA;
+    if (n == 0) {
+        return;
+    }
+    othWheel -= n * WHEEL_DELTA;
+    othlist_scroll(othListPos - n * (int)lines * othBoxH);
+}
+
+/* A click in the list's empty space takes the focus into the list, to its
+ * first open box wholly in view, so the arrows and the wheel then act on it
+ * and nothing scrolls under the pointer. */
+static void othlist_take_focus(void)
+{
+    HWND f = GetFocus();
+    HWND c;
+    RECT cr;
+
+    if (f != NULL && GetParent(f) == othList) {
+        return;
+    }
+    GetClientRect(othList, &cr);
+    for (c = GetWindow(othList, GW_CHILD); c != NULL;
+         c = GetWindow(c, GW_HWNDNEXT)) {
+        int id = GetDlgCtrlID(c);
+        RECT r;
+        POINT a;
+        POINT b;
+        if (id < IDC_OL_BASE || id >= IDC_OL_BASE + 100 * INST_SET_COUNT ||
+            !IsWindowEnabled(c)) {
+            continue;
+        }
+        GetWindowRect(c, &r);
+        a.x = r.left;
+        a.y = r.top;
+        b.x = r.right;
+        b.y = r.bottom;
+        ScreenToClient(othList, &a);
+        ScreenToClient(othList, &b);
+        if (a.y >= 0 && b.y <= cr.bottom) {
+            SetFocus(c);
+            return;
+        }
+    }
+}
+
+/* The wheel over the list, wherever the focus is: the sheet passes it on. */
+static int othlist_wheel_over(WPARAM wp, LPARAM lp)
+{
+    RECT r;
+    POINT pt;
+
+    if (othList == NULL || !IsWindowVisible(othList)) {
+        return 0;
+    }
+    pt.x = (short)LOWORD(lp);
+    pt.y = (short)HIWORD(lp);
+    GetWindowRect(othList, &r);
+    if (!PtInRect(&r, pt)) {
+        return 0;
+    }
+    SendMessageA(othList, WM_MOUSEWHEEL, wp, lp);
+    return 1;
+}
+
 static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
                                         LPARAM lp)
 {
@@ -1524,10 +1644,25 @@ static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
     int set;
     int i;
 
-    (void)lp;
     switch (msg) {
     case WM_INITDIALOG:
         return FALSE;
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        /* A list's white, and its text on it; a closed box's in grey. */
+        SetBkColor((HDC)wp, GetSysColor(COLOR_WINDOW));
+        SetTextColor((HDC)wp, GetSysColor(msg != WM_CTLCOLORDLG &&
+                                          !IsWindowEnabled((HWND)lp) ?
+                                          COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+        return (WIZ_DLGRET)(size_t)GetSysColorBrush(COLOR_WINDOW);
+    case WM_MOUSEWHEEL:
+        othlist_wheel((int)(short)HIWORD(wp));
+        SET_RESULT(dlg, 0);
+        return TRUE;
+    case WM_LBUTTONDOWN:
+        othlist_take_focus();
+        return TRUE;
     case WM_VSCROLL:
         switch (LOWORD(wp)) {
         case SB_LINEUP:
@@ -1537,10 +1672,16 @@ static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
             othlist_scroll(othListPos + othBoxH);
             break;
         case SB_PAGEUP:
-            othlist_scroll(othListPos - 3 * othBoxH);
+            othlist_scroll(othListPos - othlist_page());
             break;
         case SB_PAGEDOWN:
-            othlist_scroll(othListPos + 3 * othBoxH);
+            othlist_scroll(othListPos + othlist_page());
+            break;
+        case SB_TOP:
+            othlist_scroll(0);
+            break;
+        case SB_BOTTOM:
+            othlist_scroll(othListH);
             break;
         case SB_THUMBTRACK:
         case SB_THUMBPOSITION:
@@ -1712,6 +1853,7 @@ static void othlist_build(HWND page)
     ReleaseDC(othList, dc);
     othListH = y;
     othListPos = 0;
+    othWheel = 0;
     othlist_scroll(0);
     othlist_sync();
 }
@@ -1722,6 +1864,79 @@ static void oth_sync(HWND dlg, int set)
     inst_eng_other_choose(set, IsDlgButtonChecked(dlg, oth_id(set,
                           IDC_O_BOX)) == BST_CHECKED, 0);
     othlist_sync();
+}
+
+/* The page's texts at the heights they take, no taller than the template
+ * gives each, and the list given the room that leaves above the details
+ * box: more of its rows in view when a set is absent or its words short. */
+static void oth_flow(HWND dlg)
+{
+    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    HFONT old;
+    HDC dc;
+    RECT d;
+    POINT pt;
+    char text[800];
+    int x = dlu_x(dlg, 8);
+    int w = dlu_x(dlg, 284);
+    int tx = dlu_x(dlg, 20);
+    int tw = dlu_x(dlg, 272);
+    int y = dlu_y(dlg, 2);
+    int set;
+    int h;
+
+    dc = GetDC(dlg);
+    if (dc == NULL) {
+        return;
+    }
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        HWND box = GetDlgItem(dlg, oth_id(set, IDC_O_BOX));
+        HWND t = GetDlgItem(dlg, oth_id(set, IDC_O_TEXT));
+        HWND ln = GetDlgItem(dlg, oth_id(set, IDC_O_LINE));
+        /* Alone, the line has the whole row's place, so all of it shows. */
+        int most = dlu_y(dlg, 60);
+        if (GetWindowLongA(box, GWL_STYLE) & WS_VISIBLE) {
+            most = dlu_y(dlg, 16);
+            SetWindowPos(box, NULL, x, y, w, dlu_y(dlg, 10), SWP_NOZORDER |
+                         SWP_NOACTIVATE);
+            y += dlu_y(dlg, 10);
+            GetWindowTextA(t, text, sizeof(text));
+            h = text_h(dc, text, tw, NULL);
+            if (h > dlu_y(dlg, 34)) {
+                h = dlu_y(dlg, 34);
+            }
+            SetWindowPos(t, NULL, tx, y, tw, h, SWP_NOZORDER |
+                         SWP_NOACTIVATE);
+            y += h;
+        }
+        GetWindowTextA(ln, text, sizeof(text));
+        h = text_h(dc, text, w, NULL);
+        if (h > most) {
+            h = most;
+        }
+        if (h > 0) {
+            SetWindowPos(ln, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+            y += h;
+        }
+        y += dlu_y(dlg, 1);
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(dlg, dc);
+    SetWindowPos(GetDlgItem(dlg, IDC_O_HEAD), NULL, x, y, w, dlu_y(dlg, 10),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    y += dlu_y(dlg, 10);
+    GetWindowRect(GetDlgItem(dlg, IDC_O_DETAIL), &d);
+    pt.x = d.left;
+    pt.y = d.top;
+    ScreenToClient(dlg, &pt);
+    h = pt.y - dlu_y(dlg, 2) - y;
+    if (h >= dlu_y(dlg, 42)) {
+        SetWindowPos(GetDlgItem(dlg, IDC_O_AREA), NULL, x, y, w, h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 }
 
 static void oth_fill(HWND dlg)
@@ -1765,6 +1980,7 @@ static void oth_fill(HWND dlg)
                        BST_CHECKED : BST_UNCHECKED);
     }
     SetDlgItemTextA(dlg, IDC_O_DETAIL, "");
+    oth_flow(dlg);
     othlist_build(dlg);
 }
 
@@ -4146,6 +4362,9 @@ static WNDPROC sheetProc;
 
 static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
+    if (msg == WM_MOUSEWHEEL && othlist_wheel_over(wp, lp)) {
+        return 0;
+    }
     if (msg == WM_APP_FIT) {
         wiz_fit(h);
         return 0;
