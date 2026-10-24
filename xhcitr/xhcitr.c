@@ -310,6 +310,9 @@ typedef struct _UPORT {
     unsigned char StrRaw[3][256];
     DWORD StrN[3];
     int HaveStr[3];
+    char Prod[128];             /* a counted device's product string, read
+                                   by the notice's scan when it has no
+                                   devnode (record 25 section 7.7 item 4) */
 } UPORT;
 
 #define K_ROOT      0
@@ -2030,12 +2033,7 @@ static void usb_add_ports(int parentT, int ctrl, int parentUp)
                        tr_conn_status_text(p->Conn.Status));
         } else {
             char name[160];
-            tr_sprintf(name, sizeof(name), "USB device %04X:%04X",
-                       (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8),
-                       (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8));
-            if (dn >= 0) {
-                usb_label(dn, name, sizeof(name));
-            }
+            fast_name(k, name, sizeof(name));
             tr_sprintf(label, sizeof(label), "[Port %lu%s] %s  %s%s",
                        (unsigned long)p->Conn.Port,
                        tr_port_tag(p->HaveV2, p->V2Proto), name,
@@ -3101,7 +3099,7 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
             tr_text_init(&e, eb, sizeof(eb));
             tr_fast_entry(&e, name, fast_vid(p), fast_pid(p), port,
                           p->ParentUp >= 0 ? hub : NULL, &f);
-            tr_put(t, "  Can run faster (record 25 section 7.7):\n");
+            tr_put(t, "  Can run faster:\n");
             tr_put(t, "  ");
             {
                 /* The entry's lines, each indented two more. */
@@ -6505,21 +6503,175 @@ static unsigned int fast_pid(const UPORT *p)
     return (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8);
 }
 
-/* A device's name as the tree labels it, or its VID:PID. */
+/* A device's name, the tree's label and the notice's alike (section 7.7
+ * item 4): its devnode's, else its product string (the scan's, or the
+ * details pane's), else its VID:PID. */
 static void fast_name(int k, char *out, size_t cap)
 {
     const UPORT *p = &up[k];
+    char label[160];
 
-    tr_sprintf(out, cap, "USB device %04X:%04X", fast_vid(p), fast_pid(p));
+    label[0] = '\0';
     if (p->Dn >= 0) {
-        usb_label(p->Dn, out, cap);
+        usb_label(p->Dn, label, sizeof(label));
+    }
+    tr_fast_name(out, cap, label,
+                 p->Prod[0] ? p->Prod : (p->HaveStr[1] ? p->Str[1] : NULL),
+                 fast_vid(p), fast_pid(p));
+}
+
+/* 1 when port k's device is behind a TT: below High Speed, with a hub
+ * further up at High Speed or faster or not read. A request it never
+ * answers costs the controller there (section 7.7 item 1). */
+static int fast_tt(int k)
+{
+    int a;
+
+    if (up[k].Conn.Speed >= TR_SPEED_HIGH) {
+        return 0;
+    }
+    for (a = up[k].ParentUp; a >= 0; a = up[a].ParentUp) {
+        if (!up[a].HaveConn || up[a].Conn.Speed >= TR_SPEED_HIGH) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The product strings the last scan read, by key (item 4): one request
+ * pair per counted device without a devnode while it stays, kept whether
+ * answered or not. */
+static char fastProdKey[TR_FAST_MAX][TR_FAST_KEY];
+static char fastProd[TR_FAST_MAX][128];
+static int fastProdN;
+
+/* Port k's product string into up[k].Prod when it has no devnode for the
+ * tree to name it by (its driver still being installed: the driver key the
+ * tree matches by is written then) or only a class name of Windows'
+ * (tr_name_generic), from the last scan's or asked; kept in nk/np for the
+ * next scan. */
+static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
+                         char (*np)[128], int *nn)
+{
+    UPORT *p = &up[k];
+    unsigned char *b;
+    unsigned int lang = 0x0409;
+    unsigned int idx = p->Conn.Dev[15];
+    DWORD n;
+    int i;
+
+    if (*nn >= TR_FAST_MAX) {
+        return;
+    }
+    for (i = 0; i < fastProdN; i++) {
+        if (strcmp(fastProdKey[i], key) == 0) {
+            tr_copy(p->Prod, fastProd[i], sizeof(p->Prod));
+            break;
+        }
+    }
+    if (i == fastProdN) {
+        /* Kept while the key stays even once a devnode names it, so a
+         * devnode lost again later does not ask again. */
+        char label[160];
+        label[0] = '\0';
+        if (p->Dn >= 0) {
+            usb_label(p->Dn, label, sizeof(label));
+        }
+        /* Asked only where no specific devnode name serves. */
+        if ((p->Dn >= 0 && label[0] != '\0' && !tr_name_generic(label)) ||
+            idx == 0 || fast_tt(k)) {
+            return;
+        }
+        n = usb_desc(p->Hub, p->Conn.Port, 3, 0, 0, 255, &b);
+        if (n >= 4) {
+            lang = (unsigned int)b[2] | ((unsigned int)b[3] << 8);
+        }
+        free(b);
+        n = usb_desc(p->Hub, p->Conn.Port, 3, idx, lang, 255, &b);
+        (void)tr_dec_string(b, n, p->Prod, sizeof(p->Prod));
+        free(b);
+    }
+    tr_copy(nk[*nn], key, TR_FAST_KEY);
+    tr_copy(np[*nn], p->Prod, 128);
+    (*nn)++;
+}
+
+/* Item 4's hold (task 43.78): a balloon whose first device has no devnode
+ * yet (Windows still installing its driver) waits for one, and then
+ * FAST_SETTLE_MS from the arrival for its disks and letters, so it names
+ * the device as the tree, the list and the tooltip then do; FAST_HOLD_MS
+ * at most, then it goes with the name it has. */
+#define FAST_SETTLE_MS  3000UL
+#define FAST_HOLD_MS    15000UL
+static int fastHold;            /* fastText waits for its device's devnode */
+static DWORD fastHoldTick;      /* when the hold began                      */
+static TR_FAST fastHoldF;       /* fastText's first device, as counted      */
+static int fastHoldCount;       /* the new devices fastText counts          */
+
+/* The port fastTextKey names in the model, or -1. */
+static int fast_text_port(void)
+{
+    char key[TR_FAST_KEY];
+    int k;
+
+    for (k = 0; k < upCount; k++) {
+        if (!up[k].HaveConn || up[k].Conn.Status != TR_CS_CONNECTED) {
+            continue;
+        }
+        fast_key_of(k, key, sizeof(key));
+        if (strcmp(key, fastTextKey) == 0) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* fastText from its first device's name in the model as it is now. */
+static void fast_text(void)
+{
+    char name[160];
+    int k = fast_text_port();
+
+    if (k < 0) {
+        return;                 /* kept as it was */
+    }
+    fast_name(k, name, sizeof(name));
+    tr_fast_balloon(fastText, sizeof(fastText), name, &fastHoldF,
+                    fastHoldCount,
+                    tr_fast_click_balloon(envNt, envMajor, envMinor));
+}
+
+static void fast_announce(void);
+
+/* Each second's tick: the held balloon goes once its device has a
+ * devnode and has settled, or the hold is up. */
+static void fast_hold_tick(void)
+{
+    DWORD el;
+    int k;
+
+    if (!fastHold) {
+        fast_announce();        /* one released while the icon was away */
+        return;
+    }
+    if (!fastPending) {
+        fastHold = 0;
+        return;
+    }
+    el = GetTickCount() - fastHoldTick;
+    k = fast_text_port();
+    if ((k >= 0 && up[k].Dn >= 0 && el >= FAST_SETTLE_MS) ||
+        el >= FAST_HOLD_MS) {
+        fastHold = 0;
+        fast_text();
+        fast_announce();
     }
 }
 
-/* The owed balloon, once the icon is there. */
+/* The owed balloon, once the icon is there and no hold is on. */
 static void fast_announce(void)
 {
-    if (!fastPending || !iconAdded) {
+    if (!fastPending || !iconAdded || fastHold) {
         return;
     }
     fastPending = 0;
@@ -6545,7 +6697,9 @@ static void fast_balloon_event(int ev)
     int answers = balloon_answers();
 
     if (tr_bsend_step(&fastSend, ev, GetTickCount(), answers)) {
-        if (iconAdded && fastOn && fastCount > 0) {
+        /* Not while a balloon is held: fastText is the held one's now,
+         * and the hold sends it (item 4). */
+        if (iconAdded && fastOn && fastCount > 0 && !fastHold) {
             /* The one still queued, if any, taken away first: an empty
              * szInfo with NIF_INFO removes the icon's balloon (the
              * documented way), so the re-send cannot show beside it. */
@@ -6563,6 +6717,9 @@ static void fast_balloon_event(int ev)
 static void fast_scan(void)
 {
     char keys[TR_FAST_MAX][TR_FAST_KEY];
+    char prodKeys[TR_FAST_MAX][TR_FAST_KEY];
+    char prods[TR_FAST_MAX][128];
+    int prodN = 0;
     int n = 0;
     int fresh = 0;
     int first = -1;
@@ -6591,6 +6748,7 @@ static void fast_scan(void)
             continue;
         }
         fast_key_of(k, key, sizeof(key));
+        fast_product(k, key, prodKeys, prods, &prodN);
         if (tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN, key)) {
             if (fresh == 0) {
                 first = k;
@@ -6603,20 +6761,30 @@ static void fast_scan(void)
     }
     memcpy(fastKeys, keys, sizeof(keys));
     fastKeyN = n;
+    memcpy(fastProdKey, prodKeys, sizeof(prodKeys));
+    memcpy(fastProd, prods, sizeof(prods));
+    fastProdN = prodN;
     /* A balloon still owed (item 9), or not yet sent for want of the icon,
      * that names a device gone, or with the notice off, is not sent. */
     if (!fastOn ||
         tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN,
                     fastTextKey)) {
         fastPending = 0;
+        fastHold = 0;
         fast_balloon_event(TR_BE_DROP);
     }
     if (fresh > 0 && first >= 0) {
-        char name[160];
-        fast_name(first, name, sizeof(name));
-        tr_fast_balloon(fastText, sizeof(fastText), name, &firstF, fresh,
-                        tr_fast_click_balloon(envNt, envMajor, envMinor));
-        fast_key_of(first, fastTextKey, sizeof(fastTextKey));
+        if (fastHold && fastPending) {
+            /* Held for the first device's devnode: these join it. */
+            fastHoldCount += fresh;
+        } else {
+            fastHoldF = firstF;
+            fastHoldCount = fresh;
+            fast_key_of(first, fastTextKey, sizeof(fastTextKey));
+            fastHold = up[first].Dn < 0;
+            fastHoldTick = GetTickCount();
+        }
+        fast_text();
         fastPending = 1;
     }
     /* The icon follows in refresh_model's tray_red, which reads this set
@@ -8259,6 +8427,7 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 return 0;
             }
             poll();
+            fast_hold_tick();
             fast_balloon_event(TR_BE_TICK);
             tray_hover_poll();
         } else if (wp == TIMER_CHANGE) {

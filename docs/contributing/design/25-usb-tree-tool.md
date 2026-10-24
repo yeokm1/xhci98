@@ -1880,9 +1880,10 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    start, F5 and the window's automatic refresh, and the tray's refresh
    500 ms after each `DBT_DEVNODES_CHANGED`. Nothing new is polled. No
    device is asked anything but item 1's High Speed candidate, until its
-   answer is settled (three requests at most while it stays on its port);
-   otherwise the scan's `_EX` and
-   `_EX_V2` requests are all it reads.
+   answer is settled (three requests at most while it stays on its port),
+   and item 4's product string of a counted device with no devnode (one
+   pair of requests while it stays on its port); otherwise the scan's
+   `_EX` and `_EX_V2` requests are all it reads.
 4. **The set and its balloons.** Each counted device is keyed by its
    controller's driver key, its port path and its VID:PID (`tr_fast_key`);
    the tool keeps the last refresh's keys, 32 at most (`TR_FAST_MAX`; a
@@ -1896,7 +1897,56 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    more. Click here for what to try." The tray's first refresh treats
    every counted device as new, since the reporter's case is a stick left
    in at login. The name is the device's as the tree labels it (its drive
-   letters first where it has some, section 6.5). Where the shell has no
+   letters first where it has some, section 6.5), the same function
+   naming both (`fast_name`, `tr_fast_name`, host-tested): its devnode's
+   name where Windows gave a specific one; else its product string
+   (`iProduct`, spaces at either end taken off); else its devnode's name
+   where that is one of Windows' class names; "USB device <VID:PID>" only
+   when none is there (task 43.78). The class names (owner, 2026-10-24:
+   they say what kind of device it is, not which) are
+   `tr_name_generic`'s, host-tested, matched whole with case aside: "USB
+   Input Device", "USB Human Interface Device", "Human Interface
+   Device", "HID Keyboard Device", "HID-compliant mouse", "HID-compliant
+   device", "HID-compliant consumer control device", "HID-compliant game
+   controller", "HID-compliant system controller", "USB Composite
+   Device", "USB Mass Storage Device", "USB Device", "Unknown Device",
+   "USB Printing Support", "USB Audio Device", "USB Printer", and the hub
+   names "Generic USB Hub", "USB Hub", "USB 2.0 Hub", "Standard USB Hub";
+   and by prefix "Unknown USB Device" and a hardware ID ("USB\...")
+   standing in for a name. A name with a disk's name or drive letters
+   (section 6.5) is specific. A device just plugged in has no devnode for the tree while
+   Windows installs its driver, since the driver key the tree matches it
+   by is written then; the balloon comes at that refresh, so the 3.2.0.0
+   matrix (2026-10-24, QEMU's usb-kbd and usb-mouse behind a Full Speed
+   hub on 7 and XP) saw "USB device 0627:0001" where the device answers
+   "QEMU USB Keyboard". For such a device, and for one whose devnode
+   has only a class name, the scan asks the string (string
+   descriptor 0 for its first language, 0x0409 if none, then `iProduct`,
+   through the hub as item 1's request goes), once per key while it stays
+   (kept by key, answered or not, for the keys of the last refresh, and
+   kept while the key stays even once a devnode names the device), and
+   never for one behind a TT (item 1's reason) or with `iProduct` 0. The
+   details pane's strings, once read, serve as well (so the tree names
+   a device it did not count by its product string only once that pane
+   has read it). **The hold** (43.78):
+   so that the balloon names the device as the list and the tooltip do
+   (the matrix read a stick's balloon as "USB device 46F4:0001" and its
+   list entry and tooltip as "QEMU QEMU HARDDISK USB Device (G:)"), a
+   balloon whose first device has no devnode at that refresh is held:
+   each second's tick (`TIMER_POLL`) reads the model of the last refresh
+   and sends it, its name read again, once that device has a devnode and
+   3 seconds have passed since the hold began (`FAST_SETTLE_MS`, room for
+   its disk and letters), or after 15 seconds whatever it has
+   (`FAST_HOLD_MS`). New devices of the refreshes while it is held join
+   its count. While it is held, item 9's re-send of an earlier balloon
+   is not made (`fastText` is the held one's), and one released while the
+   icon is away goes at the first tick after the icon is back. A device
+   that has its devnode at the refresh that finds it
+   (the tray's first refresh, a device plugged in again) is not held.
+   Read on 7 x86 in QEMU with usb-kbd and usb-mouse behind a Full Speed
+   hub, before the class names were set aside: "2 USB devices run
+   slower than they can: USB Input Device and 1 more." (the 3.2.0.0
+   build: "USB device 0627:0001 runs at ..."). Where the shell has no
    balloons (98 SE) the red icon's tooltip says it (item 5; its 63
    characters hold the count, not the balloon's text), and the menu's
    first item opens the list (item 6). A balloon owed before the icon is

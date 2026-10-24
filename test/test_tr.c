@@ -3418,6 +3418,57 @@ static void test_fast(void)
              "past the count: new");
     CHECK_EQ(tr_fast_new(NULL, 0, key), 1, "no last set: new");
 
+    /* The name (task 43.78): a specific label, the product string, a
+     * class-name label, the VID:PID last. */
+    tr_fast_name(out, sizeof(out), "QEMU QEMU HARDDISK USB Device (G:)",
+                 "QEMU USB HARDDRIVE", 0x46F4, 0x0001);
+    CHECK(strcmp(out, "QEMU QEMU HARDDISK USB Device (G:)") == 0,
+          "name: a specific label first");
+    tr_fast_name(out, sizeof(out), "USB Input Device", "QEMU USB Keyboard",
+                 0x0627, 0x0001);
+    CHECK(strcmp(out, "QEMU USB Keyboard") == 0,
+          "name: the product over a class name");
+    tr_fast_name(out, sizeof(out), "HID-compliant mouse", "  ", 0x0627, 0x0001);
+    CHECK(strcmp(out, "HID-compliant mouse") == 0,
+          "name: a class name over the VID:PID");
+    tr_fast_name(out, sizeof(out), "usb mass storage device", NULL, 1, 2);
+    CHECK(strcmp(out, "usb mass storage device") == 0,
+          "name: a class name, no product");
+    CHECK_EQ(tr_name_generic("USB Input Device"), 1, "generic: 7's HID");
+    CHECK_EQ(tr_name_generic("usb human interface device"), 1,
+             "generic: 98 and XP's HID, case aside");
+    CHECK_EQ(tr_name_generic("HID Keyboard Device"), 1, "generic: keyboard");
+    CHECK_EQ(tr_name_generic("HID-compliant mouse"), 1, "generic: mouse");
+    CHECK_EQ(tr_name_generic("USB Composite Device"), 1, "generic: composite");
+    CHECK_EQ(tr_name_generic("USB Mass Storage Device"), 1, "generic: storage");
+    CHECK_EQ(tr_name_generic("USB Device"), 1, "generic: USB Device");
+    CHECK_EQ(tr_name_generic("Unknown Device"), 1, "generic: unknown");
+    CHECK_EQ(tr_name_generic("Unknown USB Device (Device Descriptor Request "
+                             "Failed)"), 1, "generic: 7's unknown, prefix");
+    CHECK_EQ(tr_name_generic("USB Printing Support"), 1, "generic: printing");
+    CHECK_EQ(tr_name_generic("USB Audio Device"), 1, "generic: audio");
+    CHECK_EQ(tr_name_generic("USB\\VID_0627&PID_0001"), 1,
+             "generic: a hardware ID");
+    CHECK_EQ(tr_name_generic("USB Mass Storage Device (F:)"), 0,
+             "specific: letters added");
+    CHECK_EQ(tr_name_generic("QEMU QEMU HARDDISK USB Device (G:)"), 0,
+             "specific: the disk's name");
+    CHECK_EQ(tr_name_generic("USB Input Devices"), 0, "specific: not whole");
+    CHECK_EQ(tr_name_generic(""), 0, "generic: empty is not");
+    CHECK_EQ(tr_name_generic(NULL), 0, "generic: NULL is not");
+    tr_fast_name(out, sizeof(out), "", "QEMU USB Keyboard", 0x0627, 0x0001);
+    CHECK(strcmp(out, "QEMU USB Keyboard") == 0, "name: no label, the product");
+    tr_fast_name(out, sizeof(out), NULL, "  Mouse  ", 0x0627, 0x0001);
+    CHECK(strcmp(out, "Mouse") == 0, "name: the product's spaces off");
+    tr_fast_name(out, sizeof(out), NULL, "   ", 0x0627, 0x0001);
+    CHECK(strcmp(out, "USB device 0627:0001") == 0, "name: blank product");
+    tr_fast_name(out, sizeof(out), NULL, NULL, 0x10627, 0xABCD);
+    CHECK(strcmp(out, "USB device 0627:ABCD") == 0, "name: nothing, VID:PID");
+    tr_fast_name(out, 6, NULL, " Keyboard", 0, 0);
+    CHECK(strcmp(out, "Keybo") == 0, "name: product cut to fit");
+    tr_fast_name(out, 1, "x", "y", 0, 0);
+    CHECK(out[0] == '\0', "name: room for the terminator only");
+
     /* The balloon. */
     in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
     tr_fast_check(&in, &f);
