@@ -16,6 +16,8 @@
 #include <string.h>
 #define SG9X_ARENA 0x10000UL   /* host addresses */
 #include "sg9x.h"
+#include "prpchk.h"
+#include <stdlib.h>
 
 static int failures;
 
@@ -28,6 +30,105 @@ static void check(int ok, const char *what)
 }
 
 static unsigned char pool[8 * 4096];
+
+/* Odd and unaligned caller buffers (xhci98 roadmap 43.79): the PRP rules
+   bounce every offset that is not DWORD aligned, and the bounce copy moves
+   the bytes in both directions at offsets 1, 2, 3, 511 and page straddles,
+   for 512 B to 2 MiB, in 32 KiB children (ENG_BOUNCE_PAGES), through a
+   one-fragment byte list and a list of fragments out of order. */
+static void unaligned(void)
+{
+    static const ULONG offs[6] = { 1, 2, 3, 511, 4094, 4095 };
+    static const ULONG sizes[5] = { 512, 4096, 65536, 131072, 2097152 };
+    ULONG total = 2097152 + 32768, o, s, k, i, nfr;
+    unsigned char *mem = (unsigned char *)malloc(total + 4096);
+    unsigned char *ref = (unsigned char *)malloc(total);
+    unsigned char *bnc = (unsigned char *)malloc(32768);
+    STOR98_SGD9X *fl = (STOR98_SGD9X *)malloc(sizeof(STOR98_SGD9X) * 600);
+    STOR98_SGD9X one[2];
+    unsigned char *page;
+    int ok;
+
+    if (mem == NULL || ref == NULL || bnc == NULL || fl == NULL) {
+        check(0, "unaligned: host allocation");
+        return;
+    }
+    page = mem + (4096 - ((ULONG)mem & 4095));
+    check(!PrpFirstOk(0x12345001, 0xC0001001) && !PrpFirstOk(0x12345002, 0xC0001002) &&
+          !PrpFirstOk(0x12345003, 0xC0001003) && !PrpFirstOk(0x123451FF, 0xC00011FF) &&
+          !PrpFirstOk(0x12345FFE, 0xC0001FFE), "PRP1: offsets 1, 2, 3, 511, 4094 refused (bounced)");
+    check(PrpFirstOk(0x12345000, 0xC0001000) && PrpFirstOk(0x12345004, 0xC0001004) &&
+          PrpFirstOk(0x12345E00, 0xC0001E00), "PRP1: offsets 0, 4, 3584 accepted");
+    check(!PrpFirstOk(0x12345004, 0xC0001008), "PRP1: a page offset that moved refused");
+    check(PrpLaterOk(0x12346000) && !PrpLaterOk(0x12346001) && !PrpLaterOk(0x12346004),
+          "PRP2 and list entries: page aligned only");
+    for (o = 0; o < 6; o++) {
+        for (s = 0; s < 5; s++) {
+            ULONG sz = sizes[s], start = offs[o];
+            int dir;
+            for (dir = 0; dir < 2; dir++) {
+                int shape;
+                for (shape = 0; shape < 2; shape++) {
+                    for (i = 0; i < total; i++) page[i] = (unsigned char)(i * 7 + (i >> 12) + 1);
+                    memcpy(ref, page, total);
+                    if (shape == 0) {
+                        one[0].Count = sz; one[0].Linear = (ULONG)page + start;
+                        one[1].Count = 0;
+                        nfr = 1;
+                    } else {
+                        /* 4 KiB fragments (16 KiB at 2 MiB, within IOS's 255),
+                           the first one start bytes in, in reverse order; byte
+                           counts */
+                        ULONG fs = sz > 1048576 ? 16384 : 4096;
+                        ULONG left = sz, f = 0, pg = (sz + start + fs - 1) / fs;
+                        nfr = 0;
+                        while (left != 0) {
+                            ULONG at = (pg - 1 - f) * fs + (f == 0 ? start : 0);
+                            ULONG n = fs - (f == 0 ? start : 0);
+                            if (n > left) n = left;
+                            fl[nfr].Count = n; fl[nfr].Linear = (ULONG)page + at;
+                            nfr++; f++; left -= n;
+                        }
+                        fl[nfr].Count = 0;
+                    }
+                    ok = 1;
+                    for (k = 0; k < sz && ok; k += 32768) {
+                        ULONG n = sz - k < 32768 ? sz - k : 32768;
+                        const STOR98_SGD9X *l = shape == 0 ? one : fl;
+                        ULONG lin, run, j;
+                        if (dir == 0) {
+                            /* write: caller -> bounce, checked byte by byte */
+                            memset(bnc, 0xEE, 32768);
+                            ok = Sg9xCopy(l, 0, k, bnc, n, FALSE);
+                            for (j = 0; j < n && ok; j++) {
+                                ok = Sg9xResolve(l, 0, k + j, &lin, &run) &&
+                                     bnc[j] == *(unsigned char *)lin;
+                            }
+                        } else {
+                            /* read: bounce -> caller; only the caller's bytes change */
+                            for (j = 0; j < n; j++) bnc[j] = (unsigned char)((k + j) ^ 0x5A);
+                            ok = Sg9xCopy(l, 0, k, bnc, n, TRUE);
+                            for (j = 0; j < n && ok; j++) {
+                                ok = Sg9xResolve(l, 0, k + j, &lin, &run) &&
+                                     *(unsigned char *)lin == bnc[j];
+                                if (ok) ref[lin - (ULONG)page] = bnc[j];
+                            }
+                        }
+                    }
+                    if (ok) {
+                        ok = memcmp(page, ref, total) == 0;
+                    }
+                    if (!ok) {
+                        printf("  offset %lu size %lu dir %d shape %d\n", start, sz, dir, shape);
+                    }
+                    check(ok, dir == 0 ? "bounce copy from an unaligned caller (write)" :
+                                         "bounce copy to an unaligned caller (read), nothing else touched");
+                }
+            }
+        }
+    }
+    free(fl); free(bnc); free(ref); free(mem);
+}
 
 int main(void)
 {
@@ -184,6 +285,7 @@ int main(void)
         check(!Sg9xCopy(l, 9, 512, bb, 2048, FALSE) && bb[0] == 0x3C, "refused copy wrote nothing to the bounce");
     }
 
+    unaligned();
     printf("%d failure(s)\n", failures);
     return failures;
 }

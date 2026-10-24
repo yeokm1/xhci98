@@ -409,6 +409,13 @@ test client"):
   format FLBAS selects (with bits 6:5 when there are more than 16 formats), 512 to
   4096 bytes served, other block sizes, NSZE 0, an index past NLBAF, metadata and
   protection refused.
+- `tests/unit/sg9x_ut.c`, unaligned caller buffers (xhci98's roadmap 43.79): src/prpchk.h,
+  the PRP rules `EngMapCaller` holds a translation to (a first entry at offset 1, 2, 3,
+  511 or 4094 refused, so the child bounces; 0, 4 and 3584 accepted; a moved page offset
+  refused; later entries page aligned only), and the bounce copy (`Sg9xCopy`) at offsets
+  1, 2, 3, 511, 4094 and 4095 for 512 B, 4 KiB, 64 KiB, 128 KiB and 2 MiB, in 32 KiB
+  children, through a one-fragment byte list and fragments out of order, both
+  directions: every byte moved, and on a read nothing outside the caller's bytes touched.
 
 ## Measurement definitions
 
