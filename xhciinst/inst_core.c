@@ -4830,6 +4830,40 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
 }
 
 /* ======================================================================== */
+/* The gate before a pass on 98 SE and ME (record 27 section 6)             */
+/* ======================================================================== */
+
+int inst_gate_ask(int asked, int wizard)
+{
+    return !asked || wizard != 0;
+}
+
+/* The titles the hardware wizards of 98 SE and ME open under: the small
+ * window while Windows builds its driver list, and the wizards. */
+static const char *const instWizardTitles[] = {
+    "Found New Hardware",
+    "New Hardware Found",
+    "Add New Hardware Wizard",
+    "Update Device Driver Wizard"
+};
+
+int inst_wizard_title(const char *title)
+{
+    int i;
+
+    if (title == NULL) {
+        return 0;
+    }
+    for (i = 0; i < (int)(sizeof(instWizardTitles) /
+                          sizeof(instWizardTitles[0])); i++) {
+        if (inst_eq(title, instWizardTitles[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ======================================================================== */
 /* The 98 SE and ME helper (record 27 sections 4 and 5.4; task 42-A.2)      */
 /* ======================================================================== */
 

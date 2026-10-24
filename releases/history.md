@@ -33,6 +33,8 @@ hosts and enclosure; the release notes say what was read where.
   The Other USB drivers page copies a set the download carries only when
   ticked and installs none of its drivers; a box per driver package lets
   Windows use it at a device's first plug.
+- On 98 SE and ME the installer asks once per run whether a hardware
+  wizard is open, and asks again only when it finds one open.
 - Windows 10 (below build 22000): the Thunderbolt 3 / USB4 connection
   manager, with the USB drivers an opt-in. The 64-bit package carries a
   test-signed catalog for each driver, which 64-bit 8, 8.1 and 10 need in

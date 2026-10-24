@@ -3085,6 +3085,9 @@ typedef BOOL (WINAPI *PFN_SETDACL)(PSECURITY_DESCRIPTOR, BOOL, PACL, BOOL);
 typedef BOOL (WINAPI *PFN_MOVEEX)(LPCSTR, LPCSTR, DWORD);
 typedef HWND (WINAPI *PFN_FINDWINDOW)(LPCSTR, LPCSTR);
 typedef BOOL (WINAPI *PFN_POSTMESSAGE)(HWND, UINT, WPARAM, LPARAM);
+typedef BOOL (WINAPI *PFN_ENUMWINDOWS)(WNDENUMPROC, LPARAM);
+typedef int (WINAPI *PFN_GETWINDOWTEXT)(HWND, LPSTR, int);
+typedef BOOL (WINAPI *PFN_ISWINDOWVISIBLE)(HWND);
 
 /* MoveFileExA, looked up at run time like every other NT-only call here:
  * a static import would load on 98 SE and ME only because their KERNEL32
@@ -8888,13 +8891,83 @@ static int helper_ready(void)
     return 1;
 }
 
+typedef struct _WIZ_LOOK {
+    PFN_GETWINDOWTEXT GetText;
+    PFN_ISWINDOWVISIBLE Visible;
+    int Found;
+    char Title[64];
+} WIZ_LOOK;
+
+static BOOL CALLBACK wizard_window(HWND w, LPARAM lp)
+{
+    WIZ_LOOK *s = (WIZ_LOOK *)lp;
+    char title[64];
+
+    if (!s->Visible(w)) {
+        return TRUE;
+    }
+    title[0] = '\0';
+    if (s->GetText(w, title, sizeof(title)) <= 0) {
+        return TRUE;
+    }
+    title[sizeof(title) - 1] = '\0';
+    if (inst_wizard_title(title)) {
+        s->Found = 1;
+        inst_copy(s->Title, title, sizeof(s->Title));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* A hardware wizard's window open now, looked for by its title among the
+ * visible top-level windows: 1 one is (its title in title), 0 none, -1
+ * the look could not be made. user32 is loaded here, not imported: the
+ * console tool imports KERNEL32 and ADVAPI32 alone (its import gate). */
+static int wizard_open_9x(char *title, size_t cap)
+{
+    HMODULE user32;
+    PFN_ENUMWINDOWS enumWindows = NULL;
+    WIZ_LOOK s;
+    BOOL ok;
+    int r = -1;
+
+    memset(&s, 0, sizeof(s));
+    user32 = LoadLibraryA("user32.dll");
+    if (user32 == NULL) {
+        return -1;
+    }
+    enumWindows = (PFN_ENUMWINDOWS)GetProcAddress(user32, "EnumWindows");
+    s.GetText = (PFN_GETWINDOWTEXT)GetProcAddress(user32, "GetWindowTextA");
+    s.Visible = (PFN_ISWINDOWVISIBLE)GetProcAddress(user32,
+                                                    "IsWindowVisible");
+    if (enumWindows != NULL && s.GetText != NULL && s.Visible != NULL) {
+        ok = enumWindows(wizard_window, (LPARAM)&s);
+        if (s.Found) {
+            inst_copy(title, s.Title, cap);
+            r = 1;
+        } else if (ok) {
+            r = 0;
+        }
+    }
+    FreeLibrary(user32);
+    return r;
+}
+
+/* Whether the gate has asked in this run: it asks once, and afterwards
+ * only when it sees a wizard open or cannot look (W9XGATE.1). */
+static int gateAsked;
+
 /* The gate before a pass (record 27 section 6): the tree settled, then
- * the user's word that no hardware wizard is open. 1 go on, 0 stop. */
+ * the user's word that no hardware wizard is open - asked the first time,
+ * and afterwards only when a wizard's window is found open or the look
+ * cannot be made. 1 go on, 0 stop. */
 static int gate_9x(int first)
 {
     char line[16];
+    char title[64];
     int r;
     int k;
+    int w;
 
     if (!first) {
         out("Waiting for the devices to settle ... ");
@@ -8908,6 +8981,21 @@ static int gate_9x(int first)
     if (opts.Yes) {
         return go_on();
     }
+    w = 1;
+    title[0] = '\0';
+    if (gateAsked) {
+        w = wizard_open_9x(title, sizeof(title));
+        if (w > 0) {
+            out("A hardware wizard is open (\"%s\").\n", title);
+        } else if (w < 0) {
+            logonly("gate: the open windows could not be read\n");
+        }
+    }
+    if (!inst_gate_ask(gateAsked, w)) {
+        logonly("gate: no hardware wizard open\n");
+        return go_on();
+    }
+    gateAsked = 1;
     for (k = 0;; k++) {
         if (!ask(INST_Q_GATE, k == 0 ?
                  "\nIf Windows has a hardware wizard open (Found New Hardware, "
