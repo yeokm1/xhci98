@@ -1110,8 +1110,12 @@ have every leg.
   (those whose directory entries were still in Windows' cache), and the
   drive comes back only when it is plugged in again (read on the
   emulator; on the integrated root ports it is expected from the same
-  mechanism, not yet read). Always use Safely
-  Remove before standby or hibernation.
+  mechanism, not yet read). On Windows 7 x64, read on the emulator, the
+  first shutdown after resuming from a hibernation with a tunnelled NVMe
+  drive still attached can hang at "Shutting down"; without the drive,
+  or without this package, it completes, and it also completes when the
+  drive was stopped with Safely Remove before the hibernation. Always use
+  Safely Remove before standby or hibernation.
 - **Windows 98 SE and ME: a device plugged in after the start needs an
   interrupt line from the BIOS.** On the ThinkPad P14s Gen 1 the BIOS's
   routing table covers the Thunderbolt port (read from a capture); on
