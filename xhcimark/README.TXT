@@ -21,8 +21,8 @@ name again when the device leaves. It touches nothing else.
 Where it runs
 -------------
 
-Windows 2000 to 10 (below build 22000), 32-bit and 64-bit, only when the
-Thunderbolt 3 / USB4 component is installed. Never on Windows 98 SE or ME.
+Windows 2000 to 10, 32-bit and 64-bit, only when the Thunderbolt 3 / USB4
+component is installed. Never on Windows 98 SE or ME.
 
   XHCIMARK.EXE  32-bit Windows 2000, XP, Vista, 7, 8, 8.1 and 10
   XHCIMK64.EXE  Windows XP x64, Vista x64, 7 x64, 8 x64, 8.1 x64 and 10 x64

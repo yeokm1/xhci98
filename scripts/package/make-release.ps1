@@ -4761,10 +4761,11 @@ helper (xhciinst\di\build.cmd).
         $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
-        $contents += "      xhcicm.inf   (the Thunderbolt 3 connection manager's INF)"
+        $contents += "      xhcicm.inf   (the Thunderbolt 3 / USB4 connection manager's INF)"
         if ($leg.Arch -eq "x86") {
             $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
-            $contents += "                   later only: never point Windows 98 or ME at nt\)"
+            $contents += "                   later only: never point Windows 98 or ME at nt\;"
+            $contents += "                   nt\xhcicm.sys beside it is the same xhcicm.sys)"
         } else {
             $contents += "      xhcicmf.inf  (its tunnel-port filter's INF)"
         }
@@ -4775,7 +4776,7 @@ helper (xhciinst\di\build.cmd).
         if ($leg.Arch -eq "x86") {
             $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7; section 4)"
         } else {
-            $contents += "      xhci98-test.cer (the test certificate both .sys files are"
+            $contents += "      xhci98-test.cer (the test certificate every .sys file here is"
             $contents += "                   signed with; you need not import it; section 4)"
             $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
             $contents += "                   it: Windows 8, 8.1 and 10 x64 need them; section 4)"
@@ -4818,13 +4819,13 @@ helper (xhciinst\di\build.cmd).
         $m64 = Get-Item -LiteralPath (Join-Path $marktoolStaged "XHCIMK64.EXE")
         $contents += "  TOOLS\XHCIMARK\ - the Thunderbolt safe-removal mark service"
         $contents += ""
-        $contents += ("      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 7" -f $m32.Length)
+        $contents += ("      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 10" -f $m32.Length)
         $contents += ("      XHCIMK64.EXE {0:N0} bytes, for 64-bit Windows" -f $m64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
         $contents += "      Installed by SETUP.EXE with the Thunderbolt 3 /"
-        $contents += "      USB4 component on Windows 2000 to 7; never run by"
+        $contents += "      USB4 component on Windows 2000 to 10; never run by"
         $contents += "      hand. It keeps a Thunderbolt device listed in"
         $contents += "      Safely Remove Hardware across a driver install,"
         $contents += "      update or a disable and enable."
@@ -4984,6 +4985,12 @@ helper (xhciinst\di\build.cmd).
             $contents += "  this project's other x64 drivers (xhci98-test.cer), in the same"
             $contents += "  step: test-signing mode loads them all."
         }
+        if ($stor98X86) {
+            $contents += ""
+            $contents += "  RELEASE-X86's S98VSD.VXD is for Windows 98 SE and ME: it lets reads"
+            $contents += "  and writes of up to 2 MiB reach Stor98 whole. SETUP.EXE installs it"
+            $contents += "  with Stor98 there (its own box, ticked with Stor98's)."
+        }
         $contents += ""
     }
 
@@ -5044,9 +5051,10 @@ other.
 "@
         $readmeArchOs = @"
 
-  - Windows XP, Vista and 7, x64, through separate 64-bit drivers. On Vista
-    x64 and 7 x64 they carry a test signature only, so Windows must be in
-    test-signing mode, or driver signature enforcement disabled (section 4).
+  - Windows XP, Vista and 7, x64, through separate 64-bit drivers, which
+    also serve 8, 8.1 and 10 x64 (below). From Vista x64 on they carry a
+    test signature only, so Windows must be in test-signing mode, or driver
+    signature enforcement disabled (section 4).
 "@
         $readmeArchOsReq = @"
 
@@ -5062,10 +5070,12 @@ other.
       The same route as the 32-bit edition of the same Windows, pointed at
       RELEASE-X64\. Windows XP x64 needs nothing more.
 
-      WINDOWS VISTA X64 AND WINDOWS 7 X64: TEST-SIGNING MODE
-      The 64-bit xhci98.sys and xhciuas.sys are test-signed, so on these
-      two systems the driver can run in test-signing mode instead of
-      disabling driver signature enforcement with F8 at every start. Once:
+      WINDOWS VISTA X64 TO 10 X64: TEST-SIGNING MODE
+      The 64-bit drivers are test-signed, so on these systems they can
+      run in test-signing mode instead of disabling driver signature
+      enforcement with F8 at every start. On 8, 8.1 and 10, first turn
+      Secure Boot off in the computer's firmware setup: test-signing mode
+      cannot be turned on while it is on. Then, once:
 
         1. Open an elevated Command Prompt: Start, type cmd, right-click
            it, Run as administrator.
@@ -5073,8 +5083,8 @@ other.
            This is a boot setting of the current Windows entry, so it stays
            on for every start until it is turned off; no F8 is needed.
         3. Restart. "Test Mode" shows on the desktop while it is on:
-           at the bottom right on 7, with the version and build, and in
-           the corners on Vista.
+           at the bottom right on 7 and later, with the version and build,
+           and in the corners on Vista.
         4. Install the driver as above. Windows still says it cannot
            verify the publisher; choose "Install this driver software
            anyway". Afterwards the Driver tab says "Not digitally
@@ -5101,7 +5111,8 @@ other.
         mode; keep the .cat files with the INFs.
       - F8 -> Disable Driver Signature Enforcement still works as before,
         for one start, without test mode.
-      - 32-bit Vista and 7, and XP x64, need neither.
+      - 32-bit Vista and 7, and XP x64, need neither. 32-bit 8, 8.1 and
+        10 need Secure Boot off, and no test-signing mode.
 "@
         $readmeArchFiles = @"
 
@@ -5117,7 +5128,7 @@ other.
     $template = @'
 ==============================================================================
                               x h c i 9 8   {VERSION}
-    USB 3.x for Windows 98 SE, ME, 2000, XP, Vista and 7 on xHCI machines
+    USB 3.x for Windows 98 SE to 7, Thunderbolt 3 and USB4 for 98 SE to 10
 ==============================================================================
 {TESTBANNER}
 Released {DATE}.{INCOMPLETE}
@@ -5126,6 +5137,9 @@ Most PCs made from the mid 2010s onward have only USB 3.x (xHCI)
 controllers, which older Windows cannot use. This package drives them on:
 
   - Windows 98 SE, ME, 2000 SP4, XP, Vista and 7, 32-bit{ARCHOS}
+  - Windows 8, 8.1 and 10, for the Thunderbolt 3 / USB4 connection
+    manager: Windows' own USB 3 driver stays there unless you tick this
+    package's USB drivers. Secure Boot must be off (section 4).
 
 xhci98.sys is a whole USB host controller driver. It runs the controller,
 the root hub, every hub behind it and the splitting of composite devices
@@ -5133,7 +5147,9 @@ itself, and Windows' own drivers for keyboards, mice, storage, audio and
 network adapters sit on top of it unchanged. It drives SuperSpeed (USB 3.x)
 devices and hubs as well as High, Full and Low Speed ones. The second driver
 beside it, xhciuas.sys, runs UAS (USB Attached SCSI) storage, which none of
-these systems has a driver of its own for.
+these systems has a driver of its own for. A third, xhcicm.sys, is the
+Thunderbolt 3 and USB4 connection manager, and the bundled Stor98 drives an
+NVMe drive behind a Thunderbolt or USB4 port (section 8).
 
 
 THIS DOWNLOAD
@@ -5345,10 +5361,9 @@ and on Windows Vista and 7 it may use a message-signalled interrupt (MSI)
 in place of the pin. A controller whose interrupt line the driver sees
 raised and never delivered is polled the same way.
 
-The checker's last criterion, "no USB 2.0 ports", dates from the earlier,
-USB 2.0-only releases. This driver accepts a controller with no USB 2.0
-port at all, built from the specification; no such controller has been
-tested.
+The checker's last criterion, "no USB 2.0 ports", is stricter than the
+driver: this driver accepts a controller with no USB 2.0 port at all,
+built from the specification; no such controller has been tested.
 
 
 ==============================================================================
@@ -5359,6 +5374,8 @@ tested.
                      ME, 32-bit Windows XP (SP3), 32-bit Windows Vista (SP2)
                      and 32-bit Windows 7 (SP1) in virtual machines only.
                      Windows 2000 has never run on real hardware.{ARCHOSREQ}
+                     Windows 8, 8.1 and 10, for Thunderbolt 3 and USB4,
+                     in virtual machines only.
 
   On Windows 98 SE   Nothing for the controller, hubs, mice, keyboards and
                      audio: no USB 2.0 stack is needed. FOR USB STORAGE,
@@ -5373,6 +5390,10 @@ tested.
 
   On Windows 2000,   Nothing to install. DO NOT install NUSB on these.
   XP, Vista and 7
+
+  On Windows 8,      Secure Boot off in the computer's firmware setup, and
+  8.1 and 10         on x64 test-signing mode as well (section 4). DO NOT
+                     install NUSB on these.
 
   Controller         xHCI, PCI class code 0C0330, and a memory window
                      below 4 GB. No interrupt pin is needed: a controller
@@ -5397,11 +5418,14 @@ The package's own files are in:
                              and 7 a finer clock while the controller is
                              polled. The install puts it on those four
                              systems and no other
+  xhcicm.inf, xhcicm.sys     the Thunderbolt 3 / USB4 connection manager,
+                             with xhcicmf.inf, its tunnel-port filter's INF
+                             (in nt\ in the -X86 directories)
 
-Nothing else is in the package, and there is nothing to complete. The
-Intel port switchover's scripts (section 9, XhciIntelPortSwitch) are not
-part of it: they are in the TOOLS\PORTSW directory, one copy for all of
-them.
+Section 8 lists every file, Stor98's among them, and there is nothing to
+complete. The Intel port switchover's scripts (section 9,
+XhciIntelPortSwitch) are not in these directories: they are in the
+TOOLS\PORTSW directory, one copy for all of them.
 
 Two files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and this download does not carry them:
@@ -5433,7 +5457,7 @@ installation source, each only if it is absent.
   AND XP          installation has, with no prompt.{ARCHFILES}
 
   WINDOWS VISTA   Nothing to do: every installation already has both.
-  AND 7
+  TO 10
 
 USB STORAGE ON WINDOWS 98 SE NEEDS NUSB'S MASS-STORAGE PART
 ...........................................................
@@ -5506,19 +5530,19 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
-There are two ways to install: SETUP.EXE, or Device Manager by hand (BY
-HAND, below), which still works and remains supported.
+SETUP.EXE IS THE RECOMMENDED WAY TO INSTALL OR UPDATE. Device Manager by
+hand (BY HAND, below) still works and remains supported.
 
 THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE. To
 uninstall, use Remove in Add/Remove Programs (Programs and Features on
-Vista and 7).
+Vista and later).
 
 Unzip the WHOLE package first, then double-click SETUP.EXE in its top
 directory. On Windows 2000 and XP sign in as an administrator; on Vista and
-7 Windows asks once for an administrator's approval. It opens the
-installer's window, which shows
-what it found, lets you choose the components and a few of the driver's
-options (section 9), shows a summary, and on Install:
+later Windows asks once for an administrator's approval. Its window has
+four pages - Welcome (what it found), Components, Other USB drivers and
+Summary - with a few of the driver's options (section 9) in its Settings
+dialog. Nothing changes before you click Install, and then it:
 
   - on Windows 2000, XP, XP x64, Vista and 7 installs or updates every
     driver of the package on the devices present - the controller, its root
@@ -5526,14 +5550,25 @@ options (section 9), shows a summary, and on Install:
     the rest for devices plugged in later. It handles the update traps
     below (Windows 2000's Have Disk, the root hub, Vista and 7's same
     DriverVer);
+  - on Windows 8, 8.1 and 10 installs the Thunderbolt 3 / USB4 connection
+    manager, and this package's USB drivers only if you tick them (Windows'
+    own USB 3 driver stays otherwise). On x64 it installs the connection
+    manager only in test-signing mode, and Windows makes it a boot driver:
+    keep test-signing mode on while it is installed, or Windows stops in
+    Automatic Repair;
   - on Windows 98 SE and ME copies the package to the install directory
     you choose (C:\XHCI98 unless you choose another), where the hardware
     wizards search by themselves, and installs each device's driver
     through Windows' own device installer; a device it cannot install gets
     its Device Manager steps on a page of their own, which you can save.
+    It asks you once in a run to finish any hardware wizard already open,
+    and again only when it finds one open. On 98 SE it also offers NUSB
+    3.3's storage files (section 3) unless NUSB is installed. A USB 3
+    controller added after the install may ask once for the "xhci98 xHCI
+    Host Controller Disk": give it the install directory.
 
 It ends by offering to restart Windows. Add/Remove Programs (Programs and
-Features on Vista and 7, in Control Panel) lists the package as "xHCI98
+Features on Vista and later, in Control Panel) lists the package as "xHCI98
 USB 3.x drivers"; Remove there takes every driver of the package away
 again (it warns first: on a machine whose only USB controller is xHCI,
 the USB keyboard and mouse stop working).
@@ -5549,9 +5584,13 @@ every USB controller, hub and device, and the Thunderbolt and USB4 devices
 with what is connected behind them; its icon in the notification area of
 the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
 Safely Remove Hardware icon does for other devices. It needs no
-administrator to run. The installer's Components page can leave out its
-start at login; the uninstall removes it with the drivers.
-TOOLS\XHCITR\readme.txt has the rest.
+administrator to run. It shows a "can run faster" balloon for a device on
+a slower port or behind a slower hub, turns its icon red while something
+needs you (a slow device, a device waiting for approval, a controller
+that stopped answering), and on Windows 2000 and later warns after a
+Thunderbolt or USB4 device is removed unexpectedly. The installer's
+Components page can leave out its start at login; the uninstall removes
+it with the drivers. TOOLS\XHCITR\readme.txt has the rest.
 
 On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
 keyboard and mouse that do not go through this driver, as below; the
@@ -5706,12 +5745,15 @@ does not touch it.
   Emergency Repair Disk and Windows XP's Automated System Recovery were
   not tried.
 
-UPDATING FROM AN EARLIER 2.x RELEASE
-....................................
+UPDATING FROM AN EARLIER RELEASE
+................................
 
-Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
-Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same
-directory as a new install. Nothing needs renaming first. (From 2.3.x or
+Run SETUP.EXE over the installed release: it handles the traps below
+itself. By hand, install over it with Update Driver on the controller
+("xHCI98 USB 3.x eXtensible Host Controller" until this release renamed
+it), then on "xHCI98 USB 3.x Root Hub", both pointed at the same
+directory as a new install. On 98 SE and ME too, Update Driver replaces
+xhci98.sys. Nothing needs renaming first. (From 2.3.x or
 earlier the controller alone: the root hub is a new one and installs by
 itself - read FROM 2.3.x below first.) As read in virtual machines:
 
@@ -5938,8 +5980,8 @@ Things specific to this driver, worth knowing in advance:
   problem happens, under two names.
 
   From a prompt the same steps are (step 1 needs administrator rights on
-  Windows 2000 to 7: on Vista and 7, a Command Prompt started with "Run as
-  administrator"):
+  Windows 2000 and later: on Vista and later, a Command Prompt started with
+  "Run as administrator"):
 
       1. XHCITR /setlevel xhci98=2, and restart Windows if it was not 2
       2. make the problem happen again
@@ -6014,12 +6056,16 @@ it anyway if it is not there - the reports are what fix it:
 Outside this driver's control - these come from Windows, NUSB or the driver
 being unsigned, and no change to this driver can remove them:
 
-  * WINDOWS VISTA X64 AND 7 X64 NEED TEST-SIGNING MODE, OR DRIVER
+  * WINDOWS VISTA X64 TO 10 X64 NEED TEST-SIGNING MODE, OR DRIVER
     SIGNATURE ENFORCEMENT DISABLED. The x64 drivers carry this project's
     own test signature, not Microsoft's. Turn on test-signing mode once
     (section 4), which shows "Test Mode" on the desktop, or disable driver
     signature enforcement at every start (F8); otherwise the controller
     sits at Code 39 on Vista, Code 52 on 7.
+
+  * TURN SECURE BOOT OFF ON WINDOWS 8, 8.1 AND 10; the x64 drivers also
+    need test-signing mode, which cannot be turned on while Secure Boot is
+    on (section 4).
 
   * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
     installed there is no mass-storage driver at all. HID and audio still
@@ -6064,6 +6110,14 @@ being unsigned, and no change to this driver can remove them:
     to remove them with pnputil.
 
 May be addressed in a later release:
+
+  * THUNDERBOLT 3 AND USB4: STANDBY AND HIBERNATION WITH A TUNNELLED DEVICE
+    ATTACHED ARE NOT SUPPORTED. Stop and unplug every Thunderbolt or USB4
+    device first. On 7 x64 the first shutdown after such a resume can hang.
+
+  * WINDOWS 98 SE AND ME: A USB 3 CONTROLLER ADDED AFTER THE INSTALL MAY
+    ASK ONCE FOR THE "xhci98 xHCI Host Controller Disk". Give it the
+    install directory (C:\XHCI98 unless you chose another).
 
   * SELECTIVE SUSPEND IS OFF UNLESS YOU TURN IT ON, AND HUBS ARE NEVER
     SUSPENDED (sections 5 and 9).
@@ -6202,7 +6256,7 @@ Untested ground:
 ==============================================================================
 
 {CONTENTS}
-Both drivers are called xhci98.sys and xhciuas.sys in every directory, and
+The drivers carry the same names in every directory, and
 every copy carries driver version {VERSION}, so a copy taken out of its
 directory cannot be identified by name or by version. (The -X86 directories
 also hold xhcihlpr.sys, the 32-bit Windows 2000, XP, Vista and 7 helper,
@@ -6238,7 +6292,7 @@ A value that is absent means the default each one states.
   .........................................
 
   Default 2 (an update keeps the value an earlier install wrote, which
-  was 0 before this release). Level 0 is off outright; above it each
+  was 0 before 3.0.0.0). Level 0 is off outright; above it each
   level is the one below plus one thing:
 
       0   OFF. The driver does not answer XHCITR's snapshot at all.
@@ -6745,7 +6799,7 @@ A value that is absent means the default each one states.
   WHERE THE KEY IS. The values live in the controller's own driver key,
   which is spelled one way on the NT systems and another on the 9x ones:
 
-    Windows 2000, XP, Vista and 7
+    Windows 2000 to 10
       HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\
         {36FC9E60-C465-11CF-8056-444553540000}\0002
 
@@ -6778,8 +6832,8 @@ A value that is absent means the default each one states.
   program's memory. At level 0 the driver does not answer at all, so the
   value you set IS the lock. On Windows 2000 and later you need
   administrator rights to set it (XHCITR's Logging level asks for them; on
-  Vista and 7, XHCITR /setlevel needs a Command Prompt started with "Run as
-  administrator").
+  Vista and later, XHCITR /setlevel needs a Command Prompt started with
+  "Run as administrator").
 
 
 ==============================================================================
@@ -6793,12 +6847,13 @@ A value that is absent means the default each one states.
 ==============================================================================
 
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
-applies to this project's own code in xhci98.sys, xhciuas.sys and the 32-bit
-helper xhcihlpr.sys, and to their INFs. The 64-bit xhci98.sys and xhcihlpr.sys
-also carry a few small support routines that Microsoft's driver kit links in
-(a stack-cookie check, and in xhcihlpr.sys a device-security helper), which
-are not this project's work; docs/contributing/legal-provenance.md, in the
-project's source repository, records them.
+applies to this project's own code in xhci98.sys, xhciuas.sys, xhcicm.sys
+and the 32-bit helper xhcihlpr.sys, and to their INFs. The 64-bit builds of
+the first three, and xhcihlpr.sys, also carry a few small support routines
+that Microsoft's driver kit links in (a stack-cookie check, and in
+xhcihlpr.sys a device-security helper), which are not this project's work;
+docs/contributing/legal-provenance.md, in the project's source repository,
+records them.
 
 {MSFILES}
 
