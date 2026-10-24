@@ -1412,8 +1412,8 @@ static int scan_nt(void)
         return 0;
     }
     if (unreadable) {
-        out("%d device entries could not be read whole: nothing is changed "
-            "(record 23 section 5.3).\n", unreadable);
+        out("%d device entries could not be read whole: nothing is "
+            "changed.\n", unreadable);
         return 0;
     }
     return 1;
@@ -1566,8 +1566,8 @@ static int scan_9x(void)
         return 0;
     }
     if (walkErrors) {
-        out("%d device entries could not be read whole: nothing is changed "
-            "(record 23 section 6.3).\n", walkErrors);
+        out("%d device entries could not be read whole: nothing is "
+            "changed.\n", walkErrors);
         return 0;
     }
     return 1;
