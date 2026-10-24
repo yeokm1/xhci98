@@ -2349,7 +2349,7 @@ $script:NonFreePrefix = "non-free"
 $script:NonFreeExtras = @("NOTICE.md", "README.md", "STAGE.TXT")
 $script:NonFreePin = [pscustomobject]@{
     Tag        = "v1.0.0"
-    Commit     = "128106f786d462024eda08d117154b21cb01b57b"
+    Commit     = "3b558c04a462a643abec84b31e5611c866e3a72d"
     # The SHA-256 of the pack's own SHA256.TXT blob at that commit.
     PackSums   = "D48C086301074793D6F0ED26798425EBD70345C977F11FADE9C47531956D070E"
 }
@@ -2363,7 +2363,7 @@ $script:WdmFreeExtras = @("LICENSE", "NOTICE.md", "STAGE.TXT")
 $script:WdmFreeCer = "usb-wdm-free-test.cer"
 $script:OtherSums = "SHA256.TXT"
 $script:DownloadsRecordName = "downloads.txt"
-# The systems STAGE.TXT and READ.TXT name (usb-wdm-nonfree 128106f's
+# The systems STAGE.TXT and READ.TXT name (usb-wdm-nonfree v1.0.0's
 # header, with 8 and 8.1, and 10, added here).
 $script:StageSystems = @("W98SE", "WME", "W2K", "WXP", "WXP64", "WVISTA", "WVISTA64",
                          "W7", "W7X64", "W8", "W8X64", "W10", "W10X64")
@@ -2448,7 +2448,7 @@ function Resolve-OtherSetTag {
 }
 
 function Read-StageText {
-    # STAGE.TXT (usb-wdm-nonfree 128106f's format): its data lines as
+    # STAGE.TXT (usb-wdm-nonfree v1.0.0's format): its data lines as
     # objects (Action, Systems, Inf, Note, Line), every other line a comment
     # or blank. A malformed line is refused. A PACKAGE, EXCLUDES or COEXISTS
     # line is metadata, Read-OtherStageMeta's (record 26 section 6.7.11),

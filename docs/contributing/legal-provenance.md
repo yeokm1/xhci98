@@ -1696,7 +1696,7 @@ repository's sources or build depend on another's. What is decided:
   repository's git objects at a pinned tag and refuses a published tree
   holding either folder.
 - **`NONFREE\` is the `non-free/` folder of the owner's `usb-wdm-nonfree`
-  at tag `v1.0.0`** (commit `128106f786d462024eda08d117154b21cb01b57b`),
+  at tag `v1.0.0`** (commit `3b558c04a462a643abec84b31e5611c866e3a72d`),
   every file held to that commit's `SHA256.TXT`, whose own SHA-256
   (`d48c086301074793d6f0ed26798425ebd70345c977f11fade9c47531956d070e`) is
   pinned in `package-common.ps1`; with the pack's `NOTICE.md`, `README.md`
