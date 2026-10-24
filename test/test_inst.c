@@ -6036,14 +6036,18 @@ static void test_other_sets(void)
     CHECK(strcmp(inst_other_folder(INST_SET_FREE), "USBDRV\\FREE") == 0 &&
           strcmp(inst_other_folder(INST_SET_NONFREE), "USBDRV\\NONFREE") == 0,
           "texts: the folders");
-    inst_other_sentence(text, sizeof(text), INST_SET_FREE, "C:\\XHCI98");
+    inst_other_sentence(text, sizeof(text), INST_SET_FREE, "C:\\XHCI98", 1);
     CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\FREE. ") != NULL &&
           strstr(text, INST_FREE_NOTICE) != NULL &&
           strcmp(INST_FREE_NOTICE, "These drivers are experimental. They may "
                  "not work with every device and can make Windows unstable. "
                  "Report problems at https://github.com/yeokm1/usb-wdm-free.")
           == 0, "texts: the free sentence, the owner's words of 2026-10-23");
-    inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98");
+    inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98", 0);
+    CHECK(strstr(text, "point it at.") != NULL &&
+          strstr(text, "boxes") == NULL,
+          "texts: the non-free sentence on 98 SE and ME names no boxes");
+    inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98", 1);
     CHECK(strstr(text, "Copies other manufacturers' drivers (USB Ethernet, "
                        "serial and game pads) to C:\\XHCI98\\USBDRV\\NONFREE. "
                        "They are from their manufacturers, not this project. "

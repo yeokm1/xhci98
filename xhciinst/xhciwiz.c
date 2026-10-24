@@ -1846,6 +1846,13 @@ static void othlist_build(HWND page)
          * and the line says where to point the hardware wizard. */
         const char *none = inst_eng_other_none_text();
         int nh = text_h(dc, none, w, NULL) + 2;
+        int vsdShown;
+        int sys9x;
+        (void)inst_eng_vsd_state(&vsdShown, &sys9x);
+        if (sys9x) {
+            SetDlgItemTextA(page, IDC_O_HEAD,
+                            "Using these drivers on Windows 98 SE and ME:");
+        }
         if (nh < othBoxH) {
             nh = othBoxH;
         }

@@ -7930,7 +7930,8 @@ const char *inst_other_label(int set)
         "Non-free driver pack (usb-wdm-nonfree)";
 }
 
-void inst_other_sentence(char *out, size_t cap, int set, const char *dir)
+void inst_other_sentence(char *out, size_t cap, int set, const char *dir,
+                         int nt)
 {
     if (cap == 0) {
         return;
@@ -7941,12 +7942,12 @@ void inst_other_sentence(char *out, size_t cap, int set, const char *dir)
         inst_catv(out, cap, 4, "Copied to ", dir,
                   "\\" INST_WDMFREE_DIR ". ", INST_FREE_NOTICE);
     } else {
-        inst_catv(out, cap, 3, "Copies other manufacturers' drivers (USB "
+        inst_catv(out, cap, 4, "Copies other manufacturers' drivers (USB "
                   "Ethernet, serial and game pads) to ", dir,
                   "\\" INST_NONFREE_DIR ". They are from their manufacturers, "
                   "not this project. Nothing is installed: Windows uses them "
-                  "only for a device you point it at, or with the boxes "
-                  "below.");
+                  "only for a device you point it at",
+                  nt ? ", or with the boxes below." : ".");
     }
 }
 

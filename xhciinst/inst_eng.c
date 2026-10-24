@@ -22824,7 +22824,8 @@ static void other_question(void)
             continue;
         }
         inst_other_sentence(sentence, sizeof(sentence), set,
-                            toolDir[0] ? toolDir : "the tools folder");
+                            toolDir[0] ? toolDir : "the tools folder",
+                            envNow.Nt);
         stor_out_wrapped("  ", sentence);
         stor_out_wrapped("  ", under);
         if (o->Include) {
@@ -25931,7 +25932,7 @@ void inst_eng_other_texts(int set, const char *dir, char *sentence,
     if (set < 0 || set >= INST_SET_COUNT) {
         return;
     }
-    inst_other_sentence(sentence, sCap, set, dir);
+    inst_other_sentence(sentence, sCap, set, dir, envNow.Nt);
     inst_other_line(line, lCap, set, othRead ? oth[set].State :
                     INST_OTHER_ABSENT, inst_other_sums(set)[0] != '\0',
                     other_version());
