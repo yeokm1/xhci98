@@ -300,6 +300,9 @@ as they are made; the head of this file is rewritten when it is cut.
   do not install it on one. On 2000 to 7 Stor98's INF matches every
   NVMe controller (`PCI\CC_010802`), so Windows may still offer Stor98
   for an internal NVMe drive that has no driver, later: decline it there.
+  On 7 x64 with this package's test certificate trusted, Windows puts the
+  staged Stor98 on such a drive at the next start without asking (read in
+  a virtual machine), as on 8 below.
   Windows 8 has no NVMe driver of its own, and there Windows itself puts
   the staged Stor98 on an internal NVMe drive that has no driver: with
   this package's test certificate trusted it does so without a prompt,
@@ -2434,7 +2437,9 @@ changes"), and updates an older Stor98 on such a drive (on Windows 98 SE
 and ME as a file, at the next start, after a shut down). Stor98 is not for
 internal NVMe drives: do not install it on one. Its INF matches every NVMe
 controller, so on 2000 to 7 Windows may still offer it for an internal
-NVMe drive that has no driver: decline it there. On Windows 8, which has
+NVMe drive that has no driver: decline it there. On 7 x64 with this
+package's test certificate trusted, Windows puts Stor98 on such a drive at
+the next start without asking (read in a virtual machine). On Windows 8, which has
 no NVMe driver of its own, Windows itself puts the staged Stor98 on such a
 drive, without a prompt when this package's test certificate is trusted
 and otherwise through the "can't verify the publisher" prompt (not read);
