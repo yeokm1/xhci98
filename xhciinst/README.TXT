@@ -218,7 +218,8 @@ hardware wizard finding any driver). There, when the wizard asks for a
 driver, choose "Specify a location" and point it at the package's
 folder, USBDRV\FREE\<class>\<package>\<folder> (or USBDRV\NONFREE\...)
 in the install directory; an install over a run that added such
-folders to DevicePath takes them out again. Two packages that would claim the same device are not
+folders to DevicePath takes them out again. Two packages that would
+claim the same device are not
 offered together, and the box below the list says why. What an earlier
 run staged is listed there too: leaving a box unticked does not undo
 it. On 64-bit Vista and later, with a free package ticked, one more box
