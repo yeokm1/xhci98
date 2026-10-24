@@ -8152,6 +8152,19 @@ static int inst_pkg_id_ok(const char *id)
     return slash == 1;
 }
 
+int inst_other_pnf(const char *path, char *out, size_t cap)
+{
+    size_t n = strlen(path);
+
+    if (n <= 4 || n >= cap || !inst_eq(path + n - 4, ".inf") ||
+        path[n - 5] == '\\') {
+        return 0;
+    }
+    memcpy(out, path, n - 4);
+    strcpy(out + n - 4, ".PNF");
+    return 1;
+}
+
 int inst_other_id_list(const char *list, char *ids, int cap)
 {
     int n = 0;

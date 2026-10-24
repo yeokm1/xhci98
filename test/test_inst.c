@@ -6461,6 +6461,25 @@ static void test_other_pkgs(void)
               "the unsplit = form unchanged");
         CHECK(parse(4, s8, &o) == 1, "split and unsplit forms twice refused");
     }
+    {
+        char pnf[64];
+        CHECK(inst_other_pnf("C:\\XHCI98\\USBDRV\\FREE\\serial\\usbcom\\"
+                             "w98se-me\\USBCOM.INF", pnf, sizeof(pnf)) == 1 &&
+              inst_eq(pnf, "C:\\XHCI98\\USBDRV\\FREE\\serial\\usbcom\\"
+                      "w98se-me\\USBCOM.PNF"),
+              "a removed staged INF's .PNF named beside it");
+        CHECK(inst_other_pnf("C:\\D\\usbcomp.inf", pnf, sizeof(pnf)) == 1 &&
+              inst_eq(pnf, "C:\\D\\usbcomp.PNF"), "any case of .inf");
+        CHECK(inst_other_pnf("C:\\D\\USBCOM.SYS", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf("C:\\D\\README.TXT", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf("C:\\D\\x.pnf", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf("C:\\D\\.inf", pnf, sizeof(pnf)) == 0 &&
+              inst_other_pnf(".inf", pnf, sizeof(pnf)) == 0,
+              "no .PNF for a file that is not an INF");
+        CHECK(inst_other_pnf("C:\\D\\USBCOM.INF", pnf, 15) == 0 &&
+              inst_other_pnf("C:\\D\\USBCOM.INF", pnf, 16) == 1,
+              "a .PNF path that does not fit refused");
+    }
 }
 
 int main(void)

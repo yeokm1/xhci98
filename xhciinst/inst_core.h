@@ -2090,6 +2090,10 @@ const char *inst_other_brand_word(const char *desc);
  * into ids (each INST_PKG_ID_CHARS), -1 when an id is not of that form or
  * there are more than cap. */
 int inst_other_id_list(const char *list, char *ids, int cap);
+/* The device installer's precompiled copy beside an INF a set's uninstall
+ * deletes: 1 with path's <name>.PNF in out when path ends in .inf (any
+ * case), 0 for any other file or when it does not fit. */
+int inst_other_pnf(const char *path, char *out, size_t cap);
 /* A metadata line of STAGE.TXT (PACKAGE, EXCLUDES, COEXISTS): 1 the
  * line is one (kind 'P', 'E' or 'C', the fields copied), 0 not a metadata
  * line, -1 a metadata line it cannot read, or a NEEDS line (unsupported). */
