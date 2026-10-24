@@ -971,7 +971,11 @@ the state of `WININIT.INI`'s `[rename]` section for the two files -
 **absent** (no line names either file), **exact** (this installer's one
 line above, both paths compared without regard to case, and no other
 line naming either file) or **conflicting** (any other line naming
-either file, with or without the exact one) - the record's values, and
+either file, with or without the exact one; the section is read from the
+file's own bytes, after 9x's profile cache is flushed to it, never
+through `GetPrivateProfileSectionA`, under which an update over older
+bytes on 98 SE and ME never saw its own line and repeated the write until
+the run failed, task 43.80) - the record's values, and
 the run's **mode** for the layer:
 
 - **selected**: the box ticked, its target the package's file (hash `H`);
