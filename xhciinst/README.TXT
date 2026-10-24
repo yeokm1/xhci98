@@ -318,7 +318,7 @@ virtual machines only (QEMU, its emulated Thunderbolt 3 controller and
 NVMe enclosure): the connection manager, Stor98 and the USB drivers
 installed, worked and uninstalled as on Windows 7. An uninstall with the
 USB drivers may stop part-way and ask for a restart and a second run; do
-both (on Windows 10 too). [HIBERNATE-NOTE] On 64-bit Windows 8 and 8.1 this
+both (on Windows 10 too). On 64-bit Windows 8 and 8.1 this
 package's x64 drivers, being test-signed, load in test-signing mode, which
 those systems let you turn on only with Secure Boot off in the computer's
 firmware setup, or on a start with driver signature enforcement disabled.
