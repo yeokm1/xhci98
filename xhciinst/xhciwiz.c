@@ -947,20 +947,22 @@ static void comp_move(HWND dlg, int id, int dy)
  * "Replace the stored build" box on Vista and later (never with the
  * storage row), open only where the store trap was found: elsewhere the
  * folder's line and the buttons take its place (record 26 section 5.0,
- * draft 35). */
+ * draft 35). The storage row's box shows three lines (owner, 2026-10-24),
+ * so the rows below move down by a little less each, the page keeping its
+ * height: each pair is a control and its move, in dialog units. */
 static void comp_layout(HWND dlg)
 {
-    static const int below[] = {
-        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_C_TRAY,
-        IDC_C_FAST, IDC_C_RESTAGE, IDC_C_DIRLINE, IDC_C_SETTINGS,
-        IDC_C_FOLDER
+    static const int below[][2] = {
+        { IDC_C_TB, 21 }, { IDC_C_TB_T, 21 }, { IDC_C_S98, 19 },
+        { IDC_C_S98_T, 19 }, { IDC_C_VSD, 19 }, { IDC_C_TRAY, 18 },
+        { IDC_C_FAST, 18 }, { IDC_C_RESTAGE, 18 }, { IDC_C_DIRLINE, 17 },
+        { IDC_C_SETTINGS, 17 }, { IDC_C_FOLDER, 17 }
     };
     static const int last[] = { IDC_C_DIRLINE, IDC_C_SETTINGS, IDC_C_FOLDER };
     RECT r;
     HWND h;
     POINT pt;
     int up;
-    int down;
     size_t i;
 
     if (compLaidOut) {
@@ -983,19 +985,13 @@ static void comp_layout(HWND dlg)
         ShowWindow(GetDlgItem(dlg, IDC_C_STOR_T), SW_HIDE);
         return;
     }
-    /* Both are vertical distances, in the dialog's vertical units. */
+    /* A vertical distance, in the dialog's vertical units. */
     r.left = 0;
     r.top = 0;
     r.right = 0;
     r.bottom = 17;
     MapDialogRect(dlg, &r);
     up = r.bottom;
-    r.left = 0;
-    r.top = 0;
-    r.right = 0;
-    r.bottom = 15;
-    MapDialogRect(dlg, &r);
-    down = r.bottom;
     ShowWindow(GetDlgItem(dlg, IDC_C_DRIVERS_T), SW_HIDE);
     h = GetDlgItem(dlg, IDC_C_UAS);
     GetWindowRect(h, &r);
@@ -1010,7 +1006,12 @@ static void comp_layout(HWND dlg)
     ScreenToClient(dlg, &pt);
     SetWindowPos(h, NULL, pt.x, pt.y - up, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     for (i = 0; i < sizeof(below) / sizeof(below[0]); i++) {
-        comp_move(dlg, below[i], down);
+        r.left = 0;
+        r.top = 0;
+        r.right = 0;
+        r.bottom = below[i][1];
+        MapDialogRect(dlg, &r);
+        comp_move(dlg, below[i][0], r.bottom);
     }
 }
 
@@ -2197,7 +2198,8 @@ static void lay_measure(HWND dlg, HFONT font, const LAYROW *lr, int n,
     ReleaseDC(dlg, dc);
     g->NoteBottom = page.bottom - dlu_y(dlg, 4);
     /* Six lines at least where the rows allow (a part of two or more
-     * rows always does); a lone tall row takes from it down to two. */
+     * rows always does); a lone tall row takes from it down to three
+     * (owner, 2026-10-24: no scrolling box of two lines). */
     least = note_lines_h(dlg, 6);
     g->Parts = wiz_lay_split(g->RowH, n, g->Sep, g->NoteBottom - least -
                              dlu_y(dlg, 6) - g->RowsTop, WIZ_LAY_PER_PART,
@@ -2209,7 +2211,7 @@ static void lay_measure(HWND dlg, HFONT font, const LAYROW *lr, int n,
         }
     }
     g->NoteTop = wiz_lay_note_top(g->RowsTop, tallest, dlu_y(dlg, 6),
-                                  g->NoteBottom, note_lines_h(dlg, 2));
+                                  g->NoteBottom, note_lines_h(dlg, 3));
 }
 
 /* One row made at y: the line above it (not on a part's first), the

@@ -1511,9 +1511,14 @@ under the rows 20 dialog units tall, two lines.
   evenly (the first parts take one row more where they cannot be
   equal: four rows are two and two), such that every part of two or
   more rows fits that room. A lone row taller than the room takes it
-  from the note, down to two lines of the note's font; a row taller
+  from the note, down to three lines of the note's font (two until the
+  owner's decision of 2026-10-24: no scrolling read-only box in the
+  window shows fewer than three lines; the Components page's storage
+  box, `IDC_C_STOR_T`, grew from 20 to 27 dialog units under the same
+  decision, the rows below it moving down by 21 to 17 units so the
+  page keeps its height); a row taller
   still is beyond what the window lays out (a font about three times
-  the dialog's), and the note then keeps its two lines at the page's
+  the dialog's), and the note then keeps its three lines at the page's
   foot. With the head carrying its part words, one property-sheet page
   carries every part.
 - *Moving between parts*: Next on a part before the last takes the
