@@ -485,7 +485,11 @@ static void test_cm_only(void)
                             sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
-              strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
+              strstr(text, "On Windows 8, 8.1 and 10 the xHCI98 USB drivers "
+                     "replace Windows' own USB 3 driver on every xHCI "
+                     "controller") != NULL &&
+              strstr(text, "may need a restart and a second run") != NULL &&
+              strstr(text, "tested") == NULL &&
               strstr(text, "UAS disk driver, when ticked, is only staged") !=
                   NULL &&
               strstr(text, "Stor98 has not been tested") == NULL &&

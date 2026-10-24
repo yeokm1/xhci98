@@ -3839,17 +3839,16 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "dock's included, stays without one, and the USB devices "
                       "on it do not work. Only the Thunderbolt 3 / USB4 "
                       "connection manager is installed; xHCI98 USB drivers "
-                      "already installed stay as they are. This has not been "
-                      "tested on Windows 98 SE or ME.");
+                      "already installed stay as they are.");
     }
     if (set & INST_CW_USB8) {
         inst_cat_para(out, cap,
-                      "The xHCI98 USB drivers have not been tested on Windows "
-                      "8, 8.1 or 10. They replace Windows' own USB 3 driver on "
-                      "every xHCI controller, the one your keyboard and mouse "
-                      "may use included. The uninstall is meant to give the "
-                      "controllers back to Windows' own driver; that has not "
-                      "been tested either. There the UAS disk driver, when "
+                      "On Windows 8, 8.1 and 10 the xHCI98 USB drivers replace "
+                      "Windows' own USB 3 driver on every xHCI controller, the "
+                      "one your keyboard and mouse may use included. The "
+                      "uninstall gives the controllers back to Windows' own "
+                      "driver, and may need a restart and a second run to "
+                      "finish. There the UAS disk driver, when "
                       "ticked, is only staged: Windows' own UAS driver stays "
                       "the default, and xhciuas.sys can be chosen for a disk "
                       "in Device Manager.");
@@ -5503,13 +5502,13 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_WELCOME_TOOLS,
       "This puts the xHCI98 tools in a folder you choose, and installs the "
       "xHCI98 USB 3.x drivers only if you tick them on the next page "
-      "(untested on this Windows, where its own USB 3 driver runs the "
-      "controllers). Nothing is changed until you click Install on the "
+      "(on this Windows its own USB 3 driver runs the controllers). "
+      "Nothing is changed until you click Install on the "
       "Summary page. Help opens the readme.",
       284, 58 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "
-      "replaces it (untested here).",
+      "replaces it.",
       272, 16 },
     { INST_PT_DRIVERS_OFF,
       "Left out: the connection manager alone. USB drivers already "

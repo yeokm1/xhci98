@@ -26379,7 +26379,7 @@ void inst_eng_usage(void)
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (on 98 SE and ME with a warning)\n"
-"  /usb          Windows 8, 8.1 and 10: install the USB drivers too (untested)\n"
+"  /usb          Windows 8, 8.1 and 10: install the USB drivers too\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
@@ -27785,7 +27785,7 @@ static int usb_decide(void)
         /* Record 26 section 5.3.1 case 5 (owner, 2026-10-22). */
         out("%s: this package carries no Thunderbolt 3 / USB4 driver; it "
             "installs the xHCI98\ntools, and the xHCI98 USB drivers only "
-            "with /usb (untested on Windows 8, 8.1\nand 10).\n\n",
+            "with /usb.\n\n",
             inst_os_name(1, envNow.Major, envNow.Minor,
                          osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY && r == 0) {
@@ -27793,12 +27793,12 @@ static int usb_decide(void)
          * the USB drivers and Stor98 are offered here, unticked. */
         out("%s: this package installs the Thunderbolt 3 / USB4 connection "
             "manager\nhere; Windows' own USB 3 driver keeps running the USB "
-            "controllers unless\n/usb puts the xHCI98 USB drivers in the run "
-            "(untested on Windows 8, 8.1\nand 10).\n\n",
+            "controllers unless\n/usb puts the xHCI98 USB drivers in the "
+            "run.\n\n",
             inst_os_name(1, envNow.Major, envNow.Minor,
                          osv.dwBuildNumber & 0xFFFFUL));
     } else if (osKind == INST_OS_CMONLY) {
-        out("/usb: the xHCI98 USB drivers are in this run (untested on %s).\n\n",
+        out("/usb: the xHCI98 USB drivers are in this run on %s.\n\n",
             inst_os_name(1, envNow.Major, envNow.Minor,
                          osv.dwBuildNumber & 0xFFFFUL));
     } else if (r == 0) {

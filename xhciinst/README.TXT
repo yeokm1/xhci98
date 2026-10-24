@@ -50,12 +50,12 @@ xhciuas.sys) out and install only the Thunderbolt 3 / USB4 connection
 manager, for a computer whose USB 3 controllers already run another
 maker's driver - untick the USB drivers on the Components page, or
 INSTALL /console /cmonly. On Windows 98 SE and ME the installer warns
-first: those systems have no USB 3 driver of their own, and this has not
-been tested there. On Windows 8, 8.1 and 10 the USB drivers are
-unticked by default, Windows' own driver running the controllers;
-ticking them (or /usb) replaces Windows' own, with a warning that they
-are untested there. Stor98 is ticked with the Thunderbolt support on
-every system but 10, where Windows' own NVMe driver (stornvme) stays the
+first: those systems have no USB 3 driver of their own. On Windows 8,
+8.1 and 10 the USB drivers are unticked by default, Windows' own driver
+running the controllers; ticking them (or /usb) replaces Windows' own on
+every xHCI controller, with a warning that says so. Stor98 is ticked
+with the Thunderbolt support on every system but 10, where Windows' own
+NVMe driver (stornvme) stays the
 tunnelled drive's driver and Stor98 is yours to tick (task 43.59); on
 8.1 it replaces stornvme on a drive behind a tunnel. Windows 11 (build
 22000 and later) is refused: it has a USB4 connection manager of its
@@ -255,8 +255,7 @@ The console tool
                                 USB drivers (with a warning on 98 SE and
                                 ME; on 8, 8.1 and 10 the default)
   INSTALL /console /usb         Windows 8, 8.1 and 10: installs the USB
-                                drivers too, over Windows' own (untested
-                                there)
+                                drivers too, over Windows' own
   INSTALL /console /thunderbolt /stor98
                                 installs the bundled Stor98 without asking;
                                 it is part of the Thunderbolt 3 / USB4

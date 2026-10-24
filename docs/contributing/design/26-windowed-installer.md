@@ -1138,6 +1138,16 @@ ticking them again gives the Thunderbolt box back its own state.
 
 #### 5.3.1 Every box on every system (task 43.43; draft 20)
 
+The owner's decision of 2026-10-24, amending this section and every page
+and box below that quotes a testing caveat: no installer page, message box
+or console line says that a driver has not been tested, xHCI98's own
+included. The warnings keep their facts and cautions (on 8, 8.1 and 10
+the USB drivers replace Windows' own on every xHCI controller, the
+keyboard's and mouse's included; the uninstall gives the controllers back
+and may need a restart and a second run; the UAS driver is only staged
+there), and lose the "untested" words (`INST_CW_USB8`, `INST_CW_CMALONE`,
+`INST_PT_WELCOME_TOOLS`, `INST_PT_DRIVERS_T8`, the console's `/usb` lines).
+
 The owner, 2026-10-21: "for the installer first page, all options should
 be available to all OS. Defaults can remain", and the same day, in place
 of "greyed with a reason": every box shown and tickable on every system,
