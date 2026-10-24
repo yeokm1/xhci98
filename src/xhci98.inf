@@ -75,7 +75,6 @@ xhci98.inf=1
 [DestinationDirs]
 DefaultDestDir=10
 Xhci.CopyFiles=10,System32\Drivers
-Xhci.CopyPrep=10,System32\Drivers
 XhciHlpr.CopyFiles=10,System32\Drivers
 XhciMsi.DelFiles=10,System32\Drivers
 Xhci.CopyOS=10,System32\Drivers
@@ -84,24 +83,7 @@ Inf.CopyFiles=17
 
 ; --- Windows 98 SE and ME ---------------------------------------------------
 
-; Two install sections, one model (design record 26 section 6.7.12). The
-; model's [Xhci.Dev] is the one Windows' own wizard takes, and its copy row
-; keeps a file already there (flag 16, no overwrite): the wizard looks for
-; xhci98.sys at Windows' setup source, not beside this INF, so a controller
-; found after the installer placed the file asks for no disk (the 98 SE leg
-; of 2026-10-23; a plain row asked, as the temporary-name row did).
-; [Xhci.Upd] is the same install with the temporary name and no flag, for
-; an update over a loaded xhci98.sys; no model names it, so the setup
-; engines never offer it, and only XHCIINST's helper installs it, by name
-; (its job file's SECTION line). The gate holds the two equal but for that
-; row (W98-PREPSECT). An update by hand through Windows' own Update Driver
-; takes [Xhci.Dev] and so keeps the xhci98.sys there: INSTALL.BAT is the
-; way to update on 98 SE and ME.
 [Xhci.Dev]
-AddReg=Xhci.AddReg
-CopyFiles=Xhci.CopyPrep,Xhci.CopyOS,Xhci.CopyUI
-
-[Xhci.Upd]
 AddReg=Xhci.AddReg
 CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 
@@ -334,11 +316,6 @@ LoadOrderGroup=Base
 
 [Xhci.CopyFiles]
 xhci98.sys,,xhci98.tmp
-
-; Windows 98 SE and ME's wizard: a file already there is kept (see
-; [Xhci.Dev]).
-[Xhci.CopyPrep]
-xhci98.sys,,,16
 
 [XhciHlpr.AddService]
 DisplayName=%XhciHlprSvcDesc%

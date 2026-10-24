@@ -8684,17 +8684,8 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     if (owner > 65535UL) {
         owner = 0;
     }
-    /* The controller's install names xhci98.inf's update section, the one
-     * with the temporary name, which no model names (record 26 section
-     * 6.7.12): the wizard's [Xhci.Dev] copies plainly, so that a controller
-     * found after a placement asks for no disk, and over a loaded
-     * xhci98.sys the 9x engine needs the temporary name. The root hub, the hubs and the composite
-     * parents copy nothing and take the model's section. */
-    if (!inst_di_jobfile_sec(jobText, sizeof(jobText), job, helperResult,
-                             owner, id, inf,
-                             (job == INST_DI_INSTALL && d != NULL &&
-                              d->Inf == INST_INF_XHCI && is_controller(d)) ?
-                             INST_XHCI_UPD_SECTION : NULL, force, 1) ||
+    if (!inst_di_jobfile(jobText, sizeof(jobText), job, helperResult, owner,
+                         id, inf, force, 1) ||
         !inst_di_cmdline(tail, sizeof(tail), XHCIINST_VERSION,
                          helperJobFile)) {
         logonly("helper: the job cannot be written (%s %s, result %s, job "
@@ -9157,7 +9148,7 @@ static void sys_9x(int inf, const char *file, int include, const char *later)
         return;
     }
     /* Its own temporary name, .IN$: the setup engine's pending copy of
-     * the same file is <name>.TMP (xhci98.inf's [Xhci.Upd] row, renamed
+     * the same file is <name>.TMP (xhci98.inf's [Xhci.CopyFiles] row, renamed
      * into place by WININIT.INI at the restart), and writing through it
      * would take that copy and leave the rename naming a gone file (the
      * ME leg of 2026-10-23; record 26 section 5.0, draft 39). */
@@ -9189,7 +9180,13 @@ static void sys_9x(int inf, const char *file, int include, const char *later)
 
 static void drivers_9x(void)
 {
-    sys_9x(INST_INF_XHCI, "xhci98.sys", usbInclude, "a controller");
+    /* Not xhci98.sys (the owner, 2026-10-24): xhci98.inf's [Xhci.Dev] is
+     * 3.1.0.0's again, its row the temporary-name one, which copies
+     * whatever is in place, so a placed file spared no prompt and an Update
+     * Driver by hand must replace the file (record 26 section 5.0, draft
+     * 40). A controller added later asks once for the disk, and the
+     * install directory answers it. The uninstall still removes a
+     * placement an earlier run recorded. */
     sys_9x(INST_INF_UAS, "xhciuas.sys", usbInclude && uasInclude,
            "a UAS disk");
     sys_9x(INST_INF_CM, "xhcicm.sys", haveCm && tbInclude,
@@ -12672,7 +12669,7 @@ static void files_9x(int list)
 
 /* A WININIT.INI [rename] line that puts a file over one of this package's
  * driver files in SYSTEM32\DRIVERS at the next start (the setup engine's
- * pending copy, xhci98.inf's [Xhci.Upd] row: xhci98.sys=...\xhci98.tmp):
+ * pending copy, xhci98.inf's [Xhci.CopyFiles] row: xhci98.sys=...\xhci98.tmp):
  * its file name into what, 1; 0 for none; -1 when the section cannot be
  * read whole (no memory, or longer than the buffer), which the caller
  * takes as a pending one. An uninstall before that restart would delete

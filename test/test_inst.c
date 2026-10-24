@@ -3447,23 +3447,6 @@ static void test_di_helper(void)
                           inf, 1, 1) &&
           strstr(tail, "\r\nFLAGS force quiet\r\nEND\r\n") != NULL,
           "force before quiet");
-    CHECK(inst_di_jobfile_sec(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
-                              id, inf, INST_XHCI_UPD_SECTION, 0, 1) &&
-          strstr(tail, "\r\nINF C:\\XHCI98\\XHCICM.INF\r\nSECTION Xhci.Upd"
-                       "\r\nFLAGS quiet\r\nEND\r\n") != NULL,
-          "the SECTION line, after INF and before FLAGS");
-    CHECK(inst_di_jobfile_sec(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
-                              id, inf, "", 0, 1) &&
-          strstr(tail, "SECTION") == NULL, "an empty section writes none");
-    CHECK(!inst_di_jobfile_sec(tail, sizeof(tail), INST_DI_REMOVE, res, 0UL,
-                               id, NULL, INST_XHCI_UPD_SECTION, 0, 0),
-          "no SECTION on a removal");
-    CHECK(!inst_di_jobfile_sec(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
-                               id, inf, "Xhci Upd", 0, 1),
-          "a section name with a space");
-    CHECK(!inst_di_jobfile_sec(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
-                               id, inf, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456",
-                               0, 1), "a section name of 33 characters");
     CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
                           inf, 0, 0) &&
           strstr(tail, "FLAGS") == NULL &&

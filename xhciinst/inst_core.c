@@ -4944,34 +4944,6 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet)
 {
-    return inst_di_jobfile_sec(out, cap, job, result, hwnd, devId, inf, NULL,
-                               force, quiet);
-}
-
-/* 1 when s is a section name the job may carry: 1 to 32 characters, each
- * a letter, a digit, '.' or '_' (the helper's own test, di_core.c). */
-static int inst_di_section(const char *s)
-{
-    size_t i;
-
-    if (s == NULL || s[0] == '\0' || strlen(s) > 32) {
-        return 0;
-    }
-    for (i = 0; s[i] != '\0'; i++) {
-        char ch = s[i];
-        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
-              (ch >= '0' && ch <= '9') || ch == '.' || ch == '_')) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-int inst_di_jobfile_sec(char *out, size_t cap, int job, const char *result,
-                        unsigned long hwnd, const char *devId,
-                        const char *inf, const char *section, int force,
-                        int quiet)
-{
     char t[INST_DI_JOB_BYTES + 64];
     size_t n;
 
@@ -4992,10 +4964,6 @@ int inst_di_jobfile_sec(char *out, size_t cap, int job, const char *result,
          (n = strlen(inf)) < 4 || !inst_eq(inf + n - 4, ".INF"))) {
         return 0;
     }
-    if (section != NULL && section[0] != '\0' &&
-        (job != INST_DI_INSTALL || !inst_di_section(section))) {
-        return 0;
-    }
     t[0] = '\0';
     inst_cat(t, sizeof(t), "XHCIDI-JOB 1\r\nJOB ");
     inst_cat(t, sizeof(t), inst_di_job_word(job));
@@ -5013,11 +4981,6 @@ int inst_di_jobfile_sec(char *out, size_t cap, int job, const char *result,
         inst_cat(t, sizeof(t), "INF ");
         inst_cat(t, sizeof(t), inf);
         inst_cat(t, sizeof(t), "\r\n");
-        if (section != NULL && section[0] != '\0') {
-            inst_cat(t, sizeof(t), "SECTION ");
-            inst_cat(t, sizeof(t), section);
-            inst_cat(t, sizeof(t), "\r\n");
-        }
         if (force || quiet) {
             inst_cat(t, sizeof(t), "FLAGS");
             if (force) {

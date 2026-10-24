@@ -28,7 +28,6 @@
 #define DI_PATH_MAX         255
 #define DI_VERSION_MAX      31
 #define DI_LINE_MAX         1024
-#define DI_SECTION_MAX      32
 
 /*
  * The job file (record 27 section 4.1): its path on the command line at
@@ -65,7 +64,6 @@ typedef struct _DI_CMD {
     unsigned long hwnd;
     char devid[DI_DEVID_MAX + 1];
     char inf[DI_PATH_MAX + 1];
-    char section[DI_SECTION_MAX + 1];
     unsigned flags;
     const char *why;
 } DI_CMD;
@@ -143,14 +141,6 @@ const char *di_verdict(int job, unsigned err, unsigned long flags);
 #define DI_SELF_NOSELECT        "XHCIDI_NO_SELECTION"
 #define DI_SELF_OTHERINF        "XHCIDI_OTHER_INF"
 #define DI_SELF_NOATOM          "XHCIDI_NO_ATOM"
-
-/*
- * The job's SECTION line named an install section (record 27 section 4.1)
- * and the driver node for it could not be made from the chosen one
- * (DiCreateDriverNode answered no node): nothing was installed. Written as
- * "failed XHCIDI_NO_SECTION_NODE 0".
- */
-#define DI_SELF_NOSECTION       "XHCIDI_NO_SECTION_NODE"
 
 /*
  * The result file, one line at a time. di_out_* format the next line into

@@ -156,14 +156,10 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     static char infname[DI_PATH_MAX + 1];
     static char dir[MAX_PATH_LEN];
     static char oldpath[MAX_PATH_LEN];
-    static char mfg[DI_PATH_MAX + 1];
-    static char provider[DI_PATH_MAX + 1];
     LPDEVICE_INFO list = NULL;
     LPDEVICE_INFO lpdi = NULL;
     LPDEVICE_INFO e;
     LPDRIVER_NODE dn;
-    LPDRIVER_NODE made = NULL;
-    LPDRIVER_NODE chosen = NULL;
     ATOM atom = 0;
     int ldd_saved = 0;
     unsigned long flags;
@@ -289,65 +285,6 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     }
 
     /*
-     * The job's SECTION line (record 27 section 4.1; record 26 section
-     * 6.7.12): the same driver installed from another section of the same
-     * INF, one no model names, so no compatible list holds a node for it.
-     * DiCreateDriverNode makes one (setupx.h) from the chosen node's own
-     * rank, type, date, descriptions, provider, manufacturer and INF, with
-     * the section the job names; its flags, driver date and private data
-     * are the chosen node's too. The new node is the selected driver for
-     * the install; at the end the chosen node is selected again and the new
-     * one put at the head of the compatible list, so the device info's
-     * destruction frees it with the list's own nodes (DiDestroyDeviceInfoList
-     * destroys a device info's driver lists).
-     */
-    if (cmd->section[0] != '\0' &&
-        (dn->lpszSectionName == NULL ||
-         !di_ieq(dn->lpszSectionName, cmd->section))) {
-        LPDRIVER_NODE nn = NULL;
-        mfg[0] = '\0';
-        provider[0] = '\0';
-        if (dn->atMfgName != 0) {
-            GlobalGetAtomName(dn->atMfgName, mfg, sizeof mfg);
-        }
-        if (dn->atProviderName != 0) {
-            GlobalGetAtomName(dn->atProviderName, provider, sizeof provider);
-        }
-        err = DiCreateDriverNode(&nn, dn->Rank, dn->InfType, dn->InfDate,
-                                 dn->lpszDescription,
-                                 dn->lpszDrvDescription != NULL ?
-                                     dn->lpszDrvDescription :
-                                     dn->lpszDescription,
-                                 provider, mfg, infname, cmd->section,
-                                 dn->dwPrivateData);
-        di_call(run, "DiCreateDriverNode", cmd->section, err);
-        if (err != OK) {
-            di_fail(run, err);
-            goto cleanup;
-        }
-        if (nn == NULL) {
-            di_fail_self(run, DI_SELF_NOSECTION);
-            goto cleanup;
-        }
-        nn->Flags = dn->Flags;
-        nn->DriverDate = dn->DriverDate;
-        made = nn;
-        chosen = dn;
-        lpdi->lpSelectedDriver = nn;
-        dn = nn;
-        infname[0] = '\0';
-        GlobalGetAtomName(dn->atInfFileName, infname, sizeof infname);
-        di_emit(run, di_out_driver(&run->out, infname,
-                                   dn->lpszSectionName != NULL ? dn->lpszSectionName : "",
-                                   dn->lpszDescription != NULL ? dn->lpszDescription : "",
-                                   dn->Rank, dn->DriverDate));
-        if (!di_same_inf(infname, cmd->inf)) {
-            di_fail_self(run, DI_SELF_OTHERINF);
-            goto cleanup;
-        }
-    }
-
-    /*
      * LDID_SRCPATH, the "source of installation" (setupx.h's logical disk
      * ids), set to the INF's directory for the install and restored after
      * (section 5.3); a path that cannot be saved is not changed.
@@ -380,11 +317,6 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     }
 
 cleanup:
-    if (lpdi != NULL && made != NULL) {
-        lpdi->lpSelectedDriver = chosen;
-        made->lpNextDN = lpdi->lpCompatDrvList;
-        lpdi->lpCompatDrvList = made;
-    }
     if (lpdi != NULL) {
         DiDestroyDeviceInfoList(lpdi);
     }
