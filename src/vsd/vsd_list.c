@@ -269,3 +269,17 @@ int VsdNoDataFunc(unsigned func)
         return 0;
     }
 }
+
+/* IORF_PHYS_SGDS takes no part in the decision (vsd_list.h). */
+int VsdPlan(VSD_U32 flags, VSD_U32 count, unsigned func, VSD_U32 srbLen)
+{
+    int srb = (flags & VSD_IORF_SRB_VALID) != 0;
+
+    if (!srb) {
+        srbLen = 0;
+    }
+    if (count == 0 || VsdNoDataFunc(func)) {
+        return srbLen != 0 ? VSD_P_SRB_NODATA : VSD_P_NODATA;
+    }
+    return srb ? VSD_P_BUILD : VSD_P_NO_SRB;
+}

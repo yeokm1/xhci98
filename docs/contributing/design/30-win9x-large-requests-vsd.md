@@ -1,6 +1,10 @@
 # Design Record 30 - S98VSD.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 12, 2026-10-22 (the file renamed `S98VSD.VXD`: as
+Status: draft 13, 2026-10-24 (roadmap 43.79: a list that arrives with
+`IORF_PHYS_SGDS` is replaced, never passed down, after IOS's double
+buffer was found sending one with a linear address, which corrupted
+every unbuffered transfer at an unaligned buffer; sections 4.1, 4.6 and
+9.2 item 1); draft 12, 2026-10-22 (the file renamed `S98VSD.VXD`: as
 `STOR98.VXD` it stopped Stor98's start, Code 10, on the owner's bench and
 in the emulator, section 3.1; owner, 2026-10-22); draft 11, 2026-10-22,
 reviewed and revised (the sense-fetch
@@ -400,10 +404,12 @@ the INQUIRY vendor field is the drive's, not the driver's.
 
 After the insertion the AER reads `DCB_dmd_flags` again. If
 `phys_sgd` is still there (an entry above this one inserted earlier
-kept it), the layer edits nothing: IOS then builds every list itself,
-each request arrives with `IORF_PHYS_SGDS`, and the layer passes it down
-untouched (section 4.1), which is today's behaviour; the case is counted
-and printed in the `qemu` build (section 4.9). The prototype's fallback,
+kept it), the layer edits nothing: IOS then builds every list itself
+and each request arrives with `IORF_PHYS_SGDS`. Until roadmap 43.79 the
+layer passed such a request down untouched; since then it replaces the
+list with its own translation of the same buffer (section 4.1 item 1),
+the same runs, held to the same checks and refusals. The case is
+counted and printed in the `qemu` build (section 4.9). The prototype's fallback,
 clearing `phys_sgd` from other layers' entries, is not carried: it
 writes into structures other drivers own, it was never needed in four
 boots [obs], and the legs of section 9.2 item 3 read whether it is
@@ -445,8 +451,18 @@ parameters are ordinary C arguments.
 
 The request routine looks at each IOP in this order:
 
-1. `IORF_PHYS_SGDS` already set (IOS or a layer above built the list):
-   passed down untouched.
+1. `IORF_PHYS_SGDS` already set: **not** a reason to pass the request
+   down. Until roadmap 43.79 such a request was passed down untouched,
+   taken to carry a physical list IOS or a layer above had built. On
+   this layer's DCB it does not: with `phys_sgd` no longer demanded,
+   IOS's double buffer (section 4.6) arrives with `IORF_PHYS_SGDS` set
+   and a list that holds the double buffer's **linear** address, and
+   `SCSIPORT.PDR` handed that address to Stor98 as a physical one
+   [static and obs, section 4.6]. A list that arrives is therefore
+   counted, set aside and replaced by this layer's own, built by items 2
+   and 3 like any other request's; the callback puts the one that came
+   back. No request with data goes down with a list this layer did not
+   build (`VsdPlan`, `vsd_list.c`).
 2. `IOR_xfer_count` 0, or a function that carries no data by its
    definition [hdr: `IOR.H`] - `IOR_CANCEL`, `IOR_MEDIA_CHECK`,
    `IOR_MEDIA_CHECK_RESET`, `IOR_LOAD_MEDIA`, `IOR_EJECT_MEDIA`,
@@ -653,13 +669,65 @@ to stay 0.
   SRB. Stor98's SMART answers on 9x go through pass-through SRBs to the
   same path (Stor98 `docs/TESTING.md`, `tests/scsichk` and
   `tests/logsense`); section 9.2 item 5 runs both through this layer.
-- **`IORF_DOUBLE_BUFFER`**: IOS marks a request whose buffer is
-  misaligned for the alignment the DCB demands, which this layer keeps
-  demanding (section 3.4), and serves it from a buffer of its own
-  [static]; this layer builds the list from whatever `IOR_buffer_ptr`
-  holds when the request reaches it, the double buffer then [hyp:
-  IOS substitutes the buffer above the calldown chain; the odd-offset
-  leg of section 9.2 item 1 reads it with data compared].
+- **`IORF_DOUBLE_BUFFER`** (read 2026-10-24, roadmap 43.79, after the
+  odd-offset leg found every dword wrong). IOS marks a request whose
+  buffer is misaligned for the alignment the DCB demands, which this
+  layer keeps demanding (section 3.4), and serves it from a buffer of
+  its own [static]. In the three `IOS.VXD` builds of section 2.1 (the
+  QuickInstall addresses; gold the same, ME object 1 `0x10119F` to
+  `0x101267`):
+  - the criteria routine tests the word and dword demand (`0x600`)
+    **before** `phys_sgd` (`0x1015BE` to `0x101631`): a misaligned
+    request is marked whether or not the DCB demands physical lists,
+    and without `phys_sgd` the routine returns at once (`0x1016A9`); its
+    caller then sets `IORF_DOUBLE_BUFFER` (`0x100317`), and
+    `IOS_SendCommand` takes its double-buffer branch (`0x100BD3`,
+    `0x100D0F`) before the first calldown;
+  - that branch allocates the buffer (`_PageAllocate` at `0x100DD3`, or
+    from IOS's own allocator at `0x100DFC`, whose block is page-rounded
+    only when `DCB_max_xfer_len` is 4 KiB, so a piece may straddle a
+    page [hyp]), sets `IOR_buffer_ptr` to it with the old pointer saved, clears
+    `IORF_SCATTER_GATHER`, sets **`IORF_PHYS_SGDS`** and points
+    `IOR_sgd_lin_phys` at a one-entry list in its own block, address and
+    length (`0x100E65` to `0x100E9C`), and sends the request down in
+    pieces of at most 4 KiB, each from the top of the chain
+    (`0x100FC8`), copying in before a write and out after a read;
+  - the entry's address is made physical, by `_CopyPageTable`, **only
+    when the DCB's `DCB_dmd_flags` hold `phys_sgd`** (`0x100EC1`); the
+    list pointer itself only when they hold `DCB_dmd_phys_sgd_ptr`
+    (`0x100E76`). IOR.H says the same of `IORF_DOUBLE_BUFFER`: the
+    client must ensure that both the SGD buffer pointers and
+    `IOR_sgd_lin_phys` are virtual.
+  On this layer's DCB the demand is `0x609`, so the entry keeps the
+  double buffer's linear address. Up to 43.79 the layer passed such a
+  request down untouched (section 4.1 item 1 as it was), `SCSIPORT.PDR`
+  walked the list (section 2.2 item 4) and gave Stor98 the linear
+  address as the physical one: page-aligned, so Stor98's PRP checks held,
+  and the controller read or wrote whatever physical memory sat at that
+  address. Every buffer not at a 4-byte boundary was affected, both
+  directions, with no error: writes put other memory's bytes or zeros on
+  the disk, reads left the caller's buffer with other bytes and wrote
+  the drive's data into memory that was not the buffer's [obs, the
+  emulator, 98 SE and ME, `3.2.0.0`: PERF3 at +1 with every dword
+  wrong; N3IO at +1, +2, +3, +511 and +4094, reads returning foreign
+  bytes; without the layer, and at +0, +512 and a sector-aligned +3584,
+  clean]. Since 43.79 the request is built like any other (section 4.1):
+  `IOR_buffer_ptr` is the double buffer, `IOR_xfer_count` the piece, so
+  the list is the double buffer's physical runs; the callback puts the
+  list IOS left, and its flag, back before IOS's completion of the piece
+  runs. The rule covers the class, not only this branch: the only two
+  instructions in the image's code that set `IORF_PHYS_SGDS` (a search
+  for a byte, dword or bit set of it) are this branch's (`0x100E9C`) and
+  the criteria routine's own builder's (`0x1017B1`), which runs only
+  under `phys_sgd` [static], and a list from a layer above is replaced the same way, so whatever
+  shape arrives, what reaches `SCSIPORT.PDR` is this layer's
+  translation of the buffer `SCSIPORT.PDR` itself takes `DataBuffer`
+  from.
+  A misaligned request that IOS does not double-buffer (a pass-through,
+  IOR function `0x0F`, which skips the alignment check, `0x101672`)
+  reaches Stor98 with a list whose first run has the odd offset, and
+  Stor98 bounces it: a first PRP entry that is not DWORD aligned is
+  never sent (Stor98 `src/prpchk.h`, `EngMapCaller`).
 
 ### 4.7 Page locking
 
@@ -683,13 +751,14 @@ and what it rests on:
    buffer translated is the one IOS would have translated: no layer
    between `IOS_SendCommand` and this layer replaces `IOR_buffer_ptr` or
    the logical list with other memory. IOS's own double buffer is
-   substituted at `IOS_SendCommand` (section 4.6), before either
-   translation, so it is the same buffer in both - **if** IOS substitutes
-   it there, which is itself a [hyp] (section 4.6) and part of the same
-   reading owed before the code: where IOS substitutes the double
-   buffer, which of `IOR_buffer_ptr`, `IORF_SCATTER_GATHER` and the list
-   it changes, and where that buffer's physical list was built under
-   `phys_sgd`. For the layers above
+   substituted at `IOS_SendCommand` (section 4.6), before the first
+   calldown, so it is the same buffer in both [static, read 2026-10-24
+   for roadmap 43.79: it sets `IOR_buffer_ptr` to its buffer, clears
+   `IORF_SCATTER_GATHER` and sets `IORF_PHYS_SGDS` with a one-entry list,
+   physical only under `phys_sgd`; the pages are IOS's own allocation].
+   Up to 43.79 that list reached `SCSIPORT.PDR` as it came, which is the
+   corruption section 4.6 records; since then this layer translates the
+   double buffer itself like any other buffer. For the layers above
    this one on Stor98's disk (load group 7, `DISKTSD.VXD`; `0x10`,
    `DISKVSD.VXD`; the chain the prototype printed) it is a [hyp], **read
    before the code is written** (a static reading of each layer's request
@@ -738,7 +807,8 @@ the disk to come back and compare clean after it is plugged in again.
 
 ### 4.9 Counters and the `qemu` build
 
-The counters (lists built; passed with `IORF_PHYS_SGDS`; passed with no
+The counters (lists built; arrived with `IORF_PHYS_SGDS`, and with
+`IORF_DOUBLE_BUFFER` too, each list then replaced; passed with no
 data; refused by kind; the most runs and bytes in one list; DCBs claimed
 and left by condition; `phys_sgd` still demanded after an insertion)
 live in the layer's data. The `qemu` flavour's build also writes each
@@ -1187,6 +1257,7 @@ otherwise. `runs/run-43.md`, "The legs of section 9.2", has the details.
 | Item | Vehicle | Result |
 |---|---|---|
 | 1, data | 98 SE gold IOS set (the installer's install, the drive plugged after the desktop), 98 SE QuickInstall, ME | 1 and 2 MiB at +0, +512 and on a fragmented buffer: verify 0 and no refusal. With the `qemu` image the lists reached 512 runs at 2 MiB (fragmented) and 257 runs at 1 MiB +512, so the requests reached Stor98 whole. The +1 offset, the 4 MiB phase and the `STOR98_TEST_BOUNCE` arm did not run. |
+| 1, data, unaligned (43.79, 2026-10-24) | 98 SE QuickInstall IOS and ME, each from the matrix's installed image, the drive at boot; `S98VSD.VXD` of `7abba43a`, the `qemu` image then the release image, Stor98's free image of the same tree | Before the fix (`3.2.0.0`'s image, the matrix's N3 leg): every dword wrong at +1 for 4, 64 and 128 KiB, both directions, no error; reads at +2, +3, +511 and +4094 returned foreign memory bytes. After it, with each image: a matrix tool of this task's (`unalio`, 4 MiB a case) at offsets 1, 2, 3, 511, 4094, 4095, 0, 4, 512 and 3584 for 512 B, 4 KiB, 64 KiB, 128 KiB and 2 MiB, each a read at the offset after an aligned write and a write at the offset with an aligned verify (100 cases a system), 64 guard bytes either side of the buffer untouched and a 16 MiB sentinel block unchanged; `PERF3` (16 MiB) at +1 for 4, 64 and 128 KiB, +2 and +511 at 128 KiB, +0 at 64 KiB and 2 MiB and +512 at 2 MiB; `N3IO` (8 MiB) write at +1 read at +0, write at +0 read at +1, +2, +3, +511 both ways, +4094 at 4 KiB and +3584 at 1 KiB: every compare 0, no error, no refusal. The `qemu` image printed the first list that came: flags `0x04008441`, its one entry the double buffer's linear address (`0xE433E000` on 98 SE, `0xE3E80000` on ME, equal to `IOR_buffer_ptr`), 512 bytes. Unaligned rates 3 to 10 MB/s (4 KiB pieces), aligned 2 MiB 92 to 167 MB/s. |
 | 2, the cost | - | dropped for 3.2.0.0 (owner, 2026-10-22) |
 | 3, insertion | all three, plugged after the desktop; QuickInstall with the disk present at boot | the claim at load group `0x11` with demand `0x609`, above `SCSIPORT.PDR`'s `0x14` with `0xE09`, every time |
 | 4, coexistence | all three | `S98VSD.VXD` and `stor98.mpd` both loaded; the IDE disk left (`ESDI_506`) |
@@ -1281,9 +1352,12 @@ stamp, `S98VSD.VXD` where it read `STOR98.VXD` (SHA-256
   near-contiguous buffer: read on the legs (section 9.2 item 2). If not,
   the owner decides whether the layer ships ticked by default.
 - The insertion order on the gold IOS, ME and a disk present at boot
-  (section 9.2 item 3); if `phys_sgd` stays demanded, the layer is inert
-  there (D2) and the owner decides whether to edit the entries above.
-- `IORF_DOUBLE_BUFFER`'s buffer at this layer (section 4.6) [hyp].
+  (section 9.2 item 3); if `phys_sgd` stays demanded, the layer lifts
+  no limit there (D2; it still rebuilds each list, section 3.4) and the
+  owner decides whether to edit the entries above.
+- `IORF_DOUBLE_BUFFER`'s buffer at this layer: read and fixed
+  (section 4.6, roadmap 43.79). No real-hardware reading at an
+  unaligned buffer yet.
 - `SCSIPORT.PDR`'s own requests (section 2.3 item 3): closed by Stor98
   answering `REQUEST SENSE` in software; a condition on Stor98, recorded in
   its `docs/PLAN.md`.

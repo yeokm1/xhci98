@@ -57,6 +57,7 @@
 
 #include "nvme2k.h"
 #include "utils.h"
+#include "prpchk.h"
 #ifdef NVME2K_W9X
 #include "sg9x.h"
 #endif
@@ -860,8 +861,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     // PRP entry 1: DWORD aligned (bits 1:0 zero); its page offset is the
     // buffer's page offset.
     callerVa = EngCallerVa(Srb, c->BufOffset);
-    if (callerVa == NULL || (pa.LowPart & 3) != 0 ||
-        (pa.LowPart & (PAGE_SIZE - 1)) != ((ULONG)(ULONG_PTR)callerVa & (PAGE_SIZE - 1))) {
+    if (callerVa == NULL || !PrpFirstOk(pa.LowPart, (ULONG)(ULONG_PTR)callerVa)) {
         return 2;
     }
     offsetInPage = pa.LowPart & (PAGE_SIZE - 1);
@@ -884,7 +884,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
         if (len == 0) {
             return 1;
         }
-        if ((pa.LowPart & (PAGE_SIZE - 1)) != 0) {
+        if (!PrpLaterOk(pa.LowPart)) {
             return 2;
         }
         if (!EngSpanOk(pa, len, need)) {
@@ -918,7 +918,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
         pa = ScsiPortGetPhysicalAddress(DevExt, Srb, va + off, &len);
         if (len == 0) {
             why = 1;
-        } else if ((pa.LowPart & (PAGE_SIZE - 1)) != 0) {
+        } else if (!PrpLaterOk(pa.LowPart)) {
             why = 2;
         } else if (!EngSpanOk(pa, len, need)) {
             why = 4;

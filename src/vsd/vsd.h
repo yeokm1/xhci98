@@ -36,7 +36,8 @@ typedef struct VSD_AREA {
 /* Counters (section 4.9); the release build keeps them for a debugger. */
 typedef struct VSD_COUNTS {
     ULONG Built;                /* lists built                     */
-    ULONG Prebuilt;             /* passed with IORF_PHYS_SGDS       */
+    ULONG Prebuilt;             /* came with IORF_PHYS_SGDS: rebuilt */
+    ULONG DoubleBuf;            /* ... and IORF_DOUBLE_BUFFER        */
     ULONG NoData;               /* passed with no data              */
     ULONG Refused[VSD_R_KINDS]; /* by VSD_R_ value                  */
     ULONG SrbNoData;            /* SRB data on a no-data request    */

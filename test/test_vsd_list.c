@@ -407,6 +407,96 @@ static void test_func(void)
     }
 }
 
+/* Unaligned buffers and IOS's double buffer (roadmap 43.79, record 30
+ * section 4.6). With phys_sgd dropped IOS double-buffers a misaligned
+ * request in pieces and sends each down with IORF_PHYS_SGDS set and
+ * IOR_sgd_lin_phys at a one-entry list holding the double buffer's LINEAR
+ * address; passed down as it came, SCSIPORT.PDR handed that address to
+ * Stor98 as a physical one. Every request with data is now planned for a
+ * list of this layer's, built from IOR_buffer_ptr, whatever flags came. */
+static void test_plan(void)
+{
+    static const unsigned funcs[2] = { 0x00, 0x01 };    /* IOR_READ, IOR_WRITE */
+    static const VSD_U32 extra[4] = { 0, VSD_IORF_PHYS_SGDS, VSD_IORF_DBLBUF,
+        VSD_IORF_PHYS_SGDS | VSD_IORF_DBLBUF };
+    int f;
+    int e;
+
+    for (f = 0; f < 2; f++) {
+        for (e = 0; e < 4; e++) {
+            VSD_U32 fl = VSD_IORF_SRB_VALID | extra[e];
+            CHECK(VsdPlan(fl, 8, funcs[f], 4096) == VSD_P_BUILD,
+                  "a read or write with data gets this layer's list, a list that came or none");
+            CHECK(VsdPlan(extra[e], 8, funcs[f], 0) == VSD_P_NO_SRB,
+                  "data and no SRB refused, a list that came or none");
+            CHECK(VsdPlan(fl, 0, funcs[f], 0) == VSD_P_NODATA,
+                  "a zero count goes down untouched");
+            CHECK(VsdPlan(fl, 0, funcs[f], 512) == VSD_P_SRB_NODATA,
+                  "SRB data on a zero count refused");
+        }
+    }
+    CHECK(VsdPlan(VSD_IORF_PHYS_SGDS, 0, 0x27, 0) == VSD_P_NODATA,
+          "a flush goes down untouched");
+    CHECK(VsdPlan(VSD_IORF_PHYS_SGDS, 0, 0x27, 512) == VSD_P_NODATA,
+          "an SRB length read without IORF_SRB_VALID is ignored");
+}
+
+static void test_unaligned(void)
+{
+    static const VSD_U32 offs[7] = { 1, 2, 3, 511, 4094, 4095, 3584 };
+    static const VSD_U32 sizes[5] = { 512, 4096, 65536, 131072, VSD_MAX_XFER };
+    VSD_REQ r;
+    VSD_U32 n;
+    VSD_U32 t;
+    VSD_U32 dbl;
+    int o;
+    int s;
+    int k;
+
+    for (k = 0; k < 3; k++) {
+        frames(k == 2 ? 0x30000UL : 0x1000UL, k == 0 ? 1 : (k == 1 ? 2 : -1));
+        for (o = 0; o < 7; o++) {
+            for (s = 0; s < 5; s++) {
+                VSD_U32 buf = lin(7, offs[o]);
+                req_linear(&r, buf, sizes[s]);
+                r.SrbValid = 1;
+                r.SrbLength = sizes[s];
+                CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_OK &&
+                      t == sizes[s] && list_matches(buf, sizes[s], n) &&
+                      runs[0].Addr == ((pte[7] & VSD_PTE_FRAME) | offs[o]),
+                      "an unaligned buffer: its first run keeps the byte offset, every byte translated");
+                req_sg(&r, 0);
+                sg_setup(0x10000UL, 1);
+                desc[0][0] = sizes[s];
+                desc[0][1] = buf;
+                r.BufferPtr = descAddr;
+                r.XferCount = sizes[s];
+                CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_OK &&
+                      list_matches(buf, sizes[s], n),
+                      "the same through a one-fragment logical list");
+            }
+        }
+    }
+
+    /* IOS's double-buffer piece: IOR_buffer_ptr is its buffer (linear, on
+     * an 8 KiB allocation, so a 4 KiB piece may straddle two pages), the
+     * count the piece's sectors, IORF_SCATTER_GATHER cleared. The list
+     * built names the frames, never the linear address. */
+    frames(0x1000UL, 2);
+    for (o = 0; o < 3; o++) {
+        dbl = lin(20, o == 0 ? 0 : (o == 1 ? 0x800 : 0xFFC));
+        req_linear(&r, dbl, 8);
+        r.Chars = 0;
+        r.Shift = 9;
+        r.SrbValid = 1;
+        r.SrbLength = 4096;
+        CHECK(VsdBuild(&r, &io, runs, scratch, &n, &t) == VSD_OK && t == 4096 &&
+              list_matches(dbl, 4096, n) && runs[0].Addr != dbl &&
+              n == (o == 0 ? 1UL : 2UL),
+              "a double-buffer piece: its physical runs, never its linear address");
+    }
+}
+
 int main(void)
 {
     test_linear();
@@ -416,6 +506,8 @@ int main(void)
     test_srb();
     test_claim();
     test_func();
+    test_plan();
+    test_unaligned();
     printf("test_vsd_list: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

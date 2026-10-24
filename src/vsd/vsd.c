@@ -131,7 +131,8 @@ void VsdConfig(AEP_dcb_config *aep, DCB *dcb)
     VSD_LINE("claimed dcb/dmd", dcb, dcb->DCB_cmn.DCB_dmd_flags);
     VSD_CHAIN(dcb);
     /* Another layer's earlier entry may have kept phys_sgd; then IOS builds
-     * every list and this layer passes each request down (section 3.4). */
+     * every list, and this layer still replaces each with its own
+     * translation of the same buffer (sections 3.4 and 4.1). */
     if (dcb->DCB_cmn.DCB_dmd_flags & DCB_dmd_phys_sgd) {
         VsdCounts.PhysLeft++;
         VSD_LINE("phys_sgd still demanded", dcb, dcb->DCB_cmn.DCB_dmd_flags);
@@ -209,31 +210,50 @@ void __cdecl VsdRequest(IOP *iop)
     VSD_U32 total;
     int r;
 
-    if (ior->IOR_flags & IORF_PHYS_SGDS) {
-        VsdCounts.Prebuilt++;
-        VsdCallDown(iop);
-        return;
-    }
     if (ior->IOR_flags & IORF_SRB_VALID) {
         srb = (UCHAR *)iop->IOP_srb;
         srbLen = *(ULONG *)(srb + VSD_SRB_DATA_LENGTH);
     }
-    if (ior->IOR_xfer_count == 0 || VsdNoDataFunc(ior->IOR_func)) {
-        if (srbLen != 0) {
-            VSD_LINE("refusal: SRB data, no list; srb len", srbLen, ior->IOR_xfer_count);
-            VsdRefuse(iop, &VsdCounts.SrbNoData);
-            return;
+    /* A list that arrives (IORF_PHYS_SGDS) is replaced, never passed down:
+     * IOS's double buffer arrives with one holding a linear address, which
+     * SCSIPORT.PDR would hand Stor98 as a physical one (vsd_list.h,
+     * VsdPlan; record 30 section 4.6). */
+    if (ior->IOR_flags & IORF_PHYS_SGDS) {
+        VsdCounts.Prebuilt++;
+        if (ior->IOR_flags & IORF_DOUBLE_BUFFER) {
+            VsdCounts.DoubleBuf++;
         }
+        /* The qemu build: the first such request's list as it came (the
+         * odd-offset legs read that its entry was linear). */
+        if (VsdCounts.Prebuilt == 1) {
+            VSD_LINE("phys_sgds came: flags/sgd", ior->IOR_flags, ior->IOR_sgd_lin_phys);
+            /* Read only where it is a pointer into the system arena. */
+            if (ior->IOR_sgd_lin_phys >= 0xC0000000UL &&
+                ior->IOR_sgd_lin_phys <= 0xFFFFFFF0UL) {
+                VSD_LINE("phys_sgds came: entry addr/len",
+                         ((ULONG *)ior->IOR_sgd_lin_phys)[0],
+                         ((ULONG *)ior->IOR_sgd_lin_phys)[1]);
+            }
+            VSD_LINE("phys_sgds came: buffer/count", ior->IOR_buffer_ptr, ior->IOR_xfer_count);
+        }
+    }
+    switch (VsdPlan(ior->IOR_flags, ior->IOR_xfer_count, ior->IOR_func, srbLen)) {
+    case VSD_P_NODATA:
         VsdCounts.NoData++;
         VsdCallDown(iop);
         return;
-    }
-    /* No SRB construction for an incoming request without one is read
-     * (section 4.3), so none is admitted. */
-    if (srb == 0) {
+    case VSD_P_SRB_NODATA:
+        VSD_LINE("refusal: SRB data, no list; srb len", srbLen, ior->IOR_xfer_count);
+        VsdRefuse(iop, &VsdCounts.SrbNoData);
+        return;
+    case VSD_P_NO_SRB:
+        /* No SRB construction for an incoming request without one is read
+         * (section 4.3), so none is admitted. */
         VSD_LINE("refusal: no SRB; count", ior->IOR_xfer_count, 0);
         VsdRefuse(iop, &VsdCounts.NoSrb);
         return;
+    default:
+        break;
     }
     cb = (IOP_callback_entry *)iop->IOP_callback_ptr;
 #ifdef VSD_TEST_REFUSE
