@@ -1632,8 +1632,8 @@ VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
               ((action->Port & 0xFFUL) << 16) |
                   (action->Generation & 0xFFFFUL));
     /* The new establishment's UP now: this hook runs before anything can
-     * expose the endpoint, also on the resume path, before held D0
-     * requests are released. It names the tunnel (port, connection
+     * expose the endpoint, also on the resume path, before the bridges'
+     * marks are released and the bridges invalidated. It names the tunnel (port, connection
      * generation), so the seam's later exposure of the same tunnel finds
      * the entry UP for it and leaves its generation as it is (stor98cm.h
      * R8b: only a new tunnel increments it; task 42-A.6). */

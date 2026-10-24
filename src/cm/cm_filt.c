@@ -12,7 +12,9 @@
  *       every BusRelations answer on its way back, keeps the snapshot and
  *       the baseline, and on an active bridge with safe eject on attaches
  *       a child filter to each new PDO (section 7.4). A device D0 request
- *       on a bridge the NHI holds for its resume is retained (section 6.3).
+ *       on a bridge the NHI marked for its resume is passed down at once
+ *       and counted; the NHI's release then invalidates the bridge
+ *       (section 6.3).
  *   [CM_KIND_CHILD]   role 3, safe eject's child filter, created by the
  *       bridge filter above a new device's PDO (directly, or above the bus
  *       filters already there, CmPortsChildAttach), or since task 42-A.5
