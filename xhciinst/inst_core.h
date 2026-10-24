@@ -1314,6 +1314,19 @@ int inst_value_question_mw(char *out, size_t cap, int index, INST_U32 mask,
 int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
                          int n, INST_U32 def, INST_U32 answer);
 
+/* ---- the gate before a pass on 98 SE and ME (record 27 section 6) ---- */
+
+/* Whether the gate asks the user: always the first time in a run (asked
+ * 0), and afterwards only when a hardware wizard was seen open (wizard 1)
+ * or the look could not be made (wizard -1); wizard 0, none seen, goes on
+ * without asking. 1 ask, 0 not. */
+int inst_gate_ask(int asked, int wizard);
+
+/* 1 when a visible top-level window's title is a hardware wizard's on 98
+ * SE or ME (Found New Hardware, New Hardware Found, Add New Hardware
+ * Wizard, Update Device Driver Wizard; any case), 0 for any other. */
+int inst_wizard_title(const char *title);
+
 /* ---- the 98 SE and ME helper, XHCIDI.EXE (record 27 sections 4 and 5.4) ---- */
 
 #define INST_DI_NAME            "XHCIDI.EXE"

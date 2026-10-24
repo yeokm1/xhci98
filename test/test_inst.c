@@ -3360,6 +3360,32 @@ static const char *diFile(const char *body)
     return buf;
 }
 
+/* The gate before a pass on 98 SE and ME (record 27 section 6,
+ * W9XGATE.1): asked once, then only when a wizard is seen open or the
+ * look fails. */
+static void test_gate(void)
+{
+    CHECK_EQ(inst_gate_ask(0, 1), 1, "gate: the first call asks");
+    CHECK_EQ(inst_gate_ask(0, 0), 1, "gate: the first call asks, none seen");
+    CHECK_EQ(inst_gate_ask(0, -1), 1, "gate: the first call asks, no look");
+    CHECK_EQ(inst_gate_ask(1, 0), 0, "gate: later, no wizard: not asked");
+    CHECK_EQ(inst_gate_ask(1, 1), 1, "gate: later, a wizard open: asked");
+    CHECK_EQ(inst_gate_ask(1, -1), 1, "gate: later, no look: asked");
+
+    CHECK(inst_wizard_title("Found New Hardware"), "wizard: Found New Hardware");
+    CHECK(inst_wizard_title("New Hardware Found"), "wizard: New Hardware Found");
+    CHECK(inst_wizard_title("Add New Hardware Wizard"),
+          "wizard: Add New Hardware Wizard");
+    CHECK(inst_wizard_title("update device driver wizard"),
+          "wizard: Update Device Driver Wizard, any case");
+    CHECK(!inst_wizard_title("xHCI98 Setup"), "wizard: not the installer");
+    CHECK(!inst_wizard_title("Add New Hardware"), "wizard: a part is not one");
+    CHECK(!inst_wizard_title("Found New Hardware Wizard Help"),
+          "wizard: a longer title is not one");
+    CHECK(!inst_wizard_title(""), "wizard: an empty title");
+    CHECK(!inst_wizard_title(NULL), "wizard: no title");
+}
+
 static void test_di_helper(void)
 {
     char tail[512];
@@ -6424,6 +6450,7 @@ int main(void)
     test_dir_check();
     test_to_switch();
     test_other_pkgs();
+    test_gate();
     test_di_helper();
     test_mw_values();
     test_greyed();

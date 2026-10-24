@@ -193,7 +193,9 @@ from Add/Remove Programs. What changes here, section by section:
   order (the controllers; after the settle the root hub, hubs and
   composite entries, at most four passes; UAS devices; the host
   interface), each pass behind the gate (the tree settled, and the user's
-  word that no hardware wizard is open; `/yes` asks no word), each device
+  word that no hardware wizard is open, asked at the first gate and later
+  only when a wizard's window is found open, record 27 section 6 draft
+  15; `/yes` asks no word), each device
   read back afterwards (record 26 section 8). Section 6.4's printed steps
   stay for a device the helper could not install (with a line of its own
   for one gone after its install), and in their old form - the controller

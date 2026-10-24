@@ -1,6 +1,9 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 14, 2026-10-24 (the owner's decision of that day, record
+Status: draft 15, 2026-10-24 (the owner's decision of that day,
+W9XGATE.1: the gate of section 6 asks once in a run, and before a later
+pass only when it finds a hardware wizard's window open or cannot look,
+section 6 and H6); draft 14, 2026-10-24 (the owner's decision of that day, record
 26 section 5.0's draft 40: draft 13's `SECTION` line, its
 `DiCreateDriverNode` node and import withdrawn before the cut; the
 helper is draft 12's again, and draft 13's text below stands only as the
@@ -764,6 +767,19 @@ step 2: the tree read and settled, and the user's Next on a page that
 says to finish any hardware wizard already open (Next until its end, and
 Finish where Windows "has not installed a driver"), so a controller whose
 own wizard is open when the installer starts is never installed under it.
+The page is shown once in a run, at the first gate (draft 15, the owner's
+decision of 2026-10-24, W9XGATE.1: it came five or six times in one
+update). Every later gate still waits for the settle, then looks for a
+wizard itself: a visible top-level window titled "Found New Hardware",
+"New Hardware Found", "Add New Hardware Wizard" or "Update Device Driver
+Wizard" (`inst_wizard_title`, read through `EnumWindows` with `user32.dll`
+loaded at run time, so the console tool's imports stay `KERNEL32` and
+`ADVAPI32`). One found brings the page back, its title said; none found
+goes on without it; a look that cannot be made (`user32.dll` or one of
+its three calls missing, the enumeration failed) asks, as before
+(`inst_gate_ask`). `/yes` asks nothing, as before. The titles are the
+English systems'; on another language's the look finds nothing, and the
+first gate's page and the settle are what stand.
 The page says not to cancel a wizard, because a cancelled one removes its
 device until the next start (section 5.1); a device the helper then
 answers `not-present` for is a step of the finish page (restart, finish
@@ -1064,8 +1080,10 @@ found through `DevicePath`.
   comes with its own default path, is Windows' own, the installer's page
   saying what to type (section 5.3).
 - **H6** The installer never installs under a wizard it cannot see: a
-  settle and the user's Next gate every pass after the controller (section
-  6; record 23 decision D13 on these systems).
+  settle gates every pass, the user's Next the first, and a later pass
+  the user's Next again only when a wizard's window is found open or the
+  look cannot be made (section 6, draft 15; record 23 decision D13 on
+  these systems).
 - **H7** Removal through `DIF_REMOVE` with an explicit global
   `REMOVEDEVICE_PARAMS`, entries present or not, children first, the
   controller last; an entry left stops the uninstall's destructive steps;
