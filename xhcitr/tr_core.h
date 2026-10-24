@@ -752,6 +752,13 @@ void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
 /* 1 when key is not among the n keys of old (each TR_FAST_KEY wide). */
 int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
 
+/* A device's name (item 4, task 43.78): label, the tree's name from its
+ * devnode, when it has one; else its product string with the spaces at
+ * either end taken off, when any is left; else "USB device VID:PID".
+ * label and product may be NULL. */
+void tr_fast_name(char *out, size_t cap, const char *label,
+                  const char *product, unsigned int vid, unsigned int pid);
+
 /* The device_qualifier answers by key (item 1): Val 1 High Speed capable,
  * 0 Full Speed only, -1 not settled yet, Tries the requests that got no
  * answer. Zeroed is empty. */

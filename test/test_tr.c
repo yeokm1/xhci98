@@ -3418,6 +3418,24 @@ static void test_fast(void)
              "past the count: new");
     CHECK_EQ(tr_fast_new(NULL, 0, key), 1, "no last set: new");
 
+    /* The name (task 43.78): the tree's label, the product string, the
+     * VID:PID last. */
+    tr_fast_name(out, sizeof(out), "USB Input Device", "QEMU USB Keyboard",
+                 0x0627, 0x0001);
+    CHECK(strcmp(out, "USB Input Device") == 0, "name: the label first");
+    tr_fast_name(out, sizeof(out), "", "QEMU USB Keyboard", 0x0627, 0x0001);
+    CHECK(strcmp(out, "QEMU USB Keyboard") == 0, "name: no label, the product");
+    tr_fast_name(out, sizeof(out), NULL, "  Mouse  ", 0x0627, 0x0001);
+    CHECK(strcmp(out, "Mouse") == 0, "name: the product's spaces off");
+    tr_fast_name(out, sizeof(out), NULL, "   ", 0x0627, 0x0001);
+    CHECK(strcmp(out, "USB device 0627:0001") == 0, "name: blank product");
+    tr_fast_name(out, sizeof(out), NULL, NULL, 0x10627, 0xABCD);
+    CHECK(strcmp(out, "USB device 0627:ABCD") == 0, "name: nothing, VID:PID");
+    tr_fast_name(out, 6, NULL, " Keyboard", 0, 0);
+    CHECK(strcmp(out, "Keybo") == 0, "name: product cut to fit");
+    tr_fast_name(out, 1, "x", "y", 0, 0);
+    CHECK(out[0] == '\0', "name: room for the terminator only");
+
     /* The balloon. */
     in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
     tr_fast_check(&in, &f);

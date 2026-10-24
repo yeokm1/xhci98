@@ -2943,6 +2943,38 @@ int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key)
     return 1;
 }
 
+void tr_fast_name(char *out, size_t cap, const char *label,
+                  const char *product, unsigned int vid, unsigned int pid)
+{
+    size_t len;
+
+    if (cap == 0) {
+        return;
+    }
+    if (label != NULL && label[0] != '\0') {
+        tr_copy(out, label, cap);
+        return;
+    }
+    if (product != NULL) {
+        while (*product == ' ') {
+            product++;
+        }
+        len = strlen(product);
+        while (len > 0 && product[len - 1] == ' ') {
+            len--;
+        }
+        if (len > 0) {
+            if (len > cap - 1) {
+                len = cap - 1;
+            }
+            memcpy(out, product, len);
+            out[len] = '\0';
+            return;
+        }
+    }
+    tr_sprintf(out, cap, "USB device %04X:%04X", vid & 0xFFFFU, pid & 0xFFFFU);
+}
+
 int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports)
 {
     TR_U32 age;

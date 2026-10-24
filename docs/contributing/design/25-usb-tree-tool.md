@@ -1880,9 +1880,10 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    start, F5 and the window's automatic refresh, and the tray's refresh
    500 ms after each `DBT_DEVNODES_CHANGED`. Nothing new is polled. No
    device is asked anything but item 1's High Speed candidate, until its
-   answer is settled (three requests at most while it stays on its port);
-   otherwise the scan's `_EX` and
-   `_EX_V2` requests are all it reads.
+   answer is settled (three requests at most while it stays on its port),
+   and item 4's product string of a counted device with no devnode (one
+   pair of requests while it stays on its port); otherwise the scan's
+   `_EX` and `_EX_V2` requests are all it reads.
 4. **The set and its balloons.** Each counted device is keyed by its
    controller's driver key, its port path and its VID:PID (`tr_fast_key`);
    the tool keeps the last refresh's keys, 32 at most (`TR_FAST_MAX`; a
@@ -1896,7 +1897,21 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    more. Click here for what to try." The tray's first refresh treats
    every counted device as new, since the reporter's case is a stick left
    in at login. The name is the device's as the tree labels it (its drive
-   letters first where it has some, section 6.5). Where the shell has no
+   letters first where it has some, section 6.5), the same function
+   naming both (`fast_name`, `tr_fast_name`, host-tested): its devnode's
+   name; else its product string (`iProduct`, spaces at either end
+   taken off); "USB device <VID:PID>" only when neither is there (task
+   43.78). A device just plugged in has no devnode for the tree while
+   Windows installs its driver, since the driver key the tree matches it
+   by is written then; the balloon comes at that refresh, so the 3.2.0.0
+   matrix (2026-10-24, QEMU's usb-kbd and usb-mouse behind a Full Speed
+   hub on 7 and XP) saw "USB device 0627:0001" where the device answers
+   "QEMU USB Keyboard". For such a device the scan asks the string (string
+   descriptor 0 for its first language, 0x0409 if none, then `iProduct`,
+   through the hub as item 1's request goes), once per key while it stays
+   (kept by key, answered or not, for the keys of the last refresh), and
+   never for one behind a TT (item 1's reason) or with `iProduct` 0. The
+   details pane's strings, once read, serve as well. Where the shell has no
    balloons (98 SE) the red icon's tooltip says it (item 5; its 63
    characters hold the count, not the balloon's text), and the menu's
    first item opens the list (item 6). A balloon owed before the icon is

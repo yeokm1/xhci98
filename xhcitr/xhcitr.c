@@ -310,6 +310,9 @@ typedef struct _UPORT {
     unsigned char StrRaw[3][256];
     DWORD StrN[3];
     int HaveStr[3];
+    char Prod[128];             /* a counted device's product string, read
+                                   by the notice's scan when it has no
+                                   devnode (record 25 section 7.7 item 4) */
 } UPORT;
 
 #define K_ROOT      0
@@ -2030,12 +2033,7 @@ static void usb_add_ports(int parentT, int ctrl, int parentUp)
                        tr_conn_status_text(p->Conn.Status));
         } else {
             char name[160];
-            tr_sprintf(name, sizeof(name), "USB device %04X:%04X",
-                       (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8),
-                       (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8));
-            if (dn >= 0) {
-                usb_label(dn, name, sizeof(name));
-            }
+            fast_name(k, name, sizeof(name));
             tr_sprintf(label, sizeof(label), "[Port %lu%s] %s  %s%s",
                        (unsigned long)p->Conn.Port,
                        tr_port_tag(p->HaveV2, p->V2Proto), name,
@@ -6505,15 +6503,87 @@ static unsigned int fast_pid(const UPORT *p)
     return (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8);
 }
 
-/* A device's name as the tree labels it, or its VID:PID. */
+/* A device's name, the tree's label and the notice's alike (section 7.7
+ * item 4): its devnode's, else its product string (the scan's, or the
+ * details pane's), else its VID:PID. */
 static void fast_name(int k, char *out, size_t cap)
 {
     const UPORT *p = &up[k];
+    char label[160];
 
-    tr_sprintf(out, cap, "USB device %04X:%04X", fast_vid(p), fast_pid(p));
+    label[0] = '\0';
     if (p->Dn >= 0) {
-        usb_label(p->Dn, out, cap);
+        usb_label(p->Dn, label, sizeof(label));
     }
+    tr_fast_name(out, cap, label,
+                 p->Prod[0] ? p->Prod : (p->HaveStr[1] ? p->Str[1] : NULL),
+                 fast_vid(p), fast_pid(p));
+}
+
+/* 1 when port k's device is behind a TT: below High Speed, with a hub
+ * further up at High Speed or faster or not read. A request it never
+ * answers costs the controller there (section 7.7 item 1). */
+static int fast_tt(int k)
+{
+    int a;
+
+    if (up[k].Conn.Speed >= TR_SPEED_HIGH) {
+        return 0;
+    }
+    for (a = up[k].ParentUp; a >= 0; a = up[a].ParentUp) {
+        if (!up[a].HaveConn || up[a].Conn.Speed >= TR_SPEED_HIGH) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The product strings the last scan read, by key (item 4): one request
+ * pair per counted device without a devnode while it stays, kept whether
+ * answered or not. */
+static char fastProdKey[TR_FAST_MAX][TR_FAST_KEY];
+static char fastProd[TR_FAST_MAX][128];
+static int fastProdN;
+
+/* Port k's product string into up[k].Prod when it has no devnode for the
+ * tree to name it by (its driver still being installed: the driver key the
+ * tree matches by is written then), from the last scan's or asked; kept
+ * in nk/np for the next scan. */
+static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
+                         char (*np)[128], int *nn)
+{
+    UPORT *p = &up[k];
+    unsigned char *b;
+    unsigned int lang = 0x0409;
+    unsigned int idx = p->Conn.Dev[15];
+    DWORD n;
+    int i;
+
+    if (p->Dn >= 0 || *nn >= TR_FAST_MAX) {
+        return;
+    }
+    for (i = 0; i < fastProdN; i++) {
+        if (strcmp(fastProdKey[i], key) == 0) {
+            tr_copy(p->Prod, fastProd[i], sizeof(p->Prod));
+            break;
+        }
+    }
+    if (i == fastProdN) {
+        if (idx == 0 || fast_tt(k)) {
+            return;
+        }
+        n = usb_desc(p->Hub, p->Conn.Port, 3, 0, 0, 255, &b);
+        if (n >= 4) {
+            lang = (unsigned int)b[2] | ((unsigned int)b[3] << 8);
+        }
+        free(b);
+        n = usb_desc(p->Hub, p->Conn.Port, 3, idx, lang, 255, &b);
+        (void)tr_dec_string(b, n, p->Prod, sizeof(p->Prod));
+        free(b);
+    }
+    tr_copy(nk[*nn], key, TR_FAST_KEY);
+    tr_copy(np[*nn], p->Prod, 128);
+    (*nn)++;
 }
 
 /* The owed balloon, once the icon is there. */
@@ -6563,6 +6633,9 @@ static void fast_balloon_event(int ev)
 static void fast_scan(void)
 {
     char keys[TR_FAST_MAX][TR_FAST_KEY];
+    char prodKeys[TR_FAST_MAX][TR_FAST_KEY];
+    char prods[TR_FAST_MAX][128];
+    int prodN = 0;
     int n = 0;
     int fresh = 0;
     int first = -1;
@@ -6591,6 +6664,7 @@ static void fast_scan(void)
             continue;
         }
         fast_key_of(k, key, sizeof(key));
+        fast_product(k, key, prodKeys, prods, &prodN);
         if (tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN, key)) {
             if (fresh == 0) {
                 first = k;
@@ -6603,6 +6677,9 @@ static void fast_scan(void)
     }
     memcpy(fastKeys, keys, sizeof(keys));
     fastKeyN = n;
+    memcpy(fastProdKey, prodKeys, sizeof(prodKeys));
+    memcpy(fastProd, prods, sizeof(prods));
+    fastProdN = prodN;
     /* A balloon still owed (item 9), or not yet sent for want of the icon,
      * that names a device gone, or with the notice off, is not sent. */
     if (!fastOn ||
