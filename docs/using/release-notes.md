@@ -2438,6 +2438,20 @@ transfers verified with the drive plugged after the desktop, and two
 surprise removals mid-transfer that reported errors and hung nothing. Its
 remaining legs (roadmap-usb4 task 43.46) are still owed.
 
+The `S98VSD.VXD` of the first `3.2.0.0` cut corrupted data, silently and
+in both directions, on an unbuffered read or write (a program that opens
+a file with `FILE_FLAG_NO_BUFFERING`) whose buffer did not start at a
+4-byte boundary, on a Stor98 drive: a write could put other memory's
+bytes on the disk, and a read could return other bytes and write the
+drive's data into memory that was not the program's. Windows serves
+such a transfer through a buffer of its own, and the layer handed
+Stor98 that buffer's virtual address as a physical one. Fixed by
+roadmap-usb4 task 43.79 (2026-10-24, design record 30 section 4.6):
+read on the 98 SE and ME emulators at offsets 1, 2, 3, 511 and across a
+page, 512 bytes to 2 MiB, every compare clean. Such transfers stay slow
+(Windows moves them 4 KiB at a time). Without `S98VSD.VXD`, and with a
+buffer at a 4-byte boundary, transfers were not affected.
+
 When a tunnel drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:
 
