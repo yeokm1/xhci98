@@ -17812,27 +17812,50 @@ static char *wininit_text(const char *ini, int *gone)
     return buf;
 }
 
-/* WININIT.INI's [rename] lines naming either file: INST_VE_*. */
-static int vsd_entry(const char *dest, const char *tmp, const char *destS,
-                     const char *tmpS)
+static int vsd_line_noop(void *ctx, const char *key, const char *value)
+{
+    (void)ctx;
+    (void)key;
+    (void)value;
+    return 1;
+}
+
+/* WININIT.INI's [rename] lines naming either file: INST_VE_*. A section
+ * that cannot be read is INST_VE_CONFLICT, with *unread 1 (unread may be
+ * NULL). */
+static int vsd_entry_r(const char *dest, const char *tmp, const char *destS,
+                       const char *tmpS, int *unread)
 {
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
     char *text;
     int gone;
     int r;
+    int dummy;
 
+    if (unread == NULL) {
+        unread = &dummy;
+    }
+    *unread = 1;
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return INST_VE_CONFLICT;
     }
     join(ini, sizeof(ini), win, "WININIT.INI");
     text = wininit_text(ini, &gone);
     if (text == NULL) {
+        *unread = !gone;
         return gone ? INST_VE_ABSENT : INST_VE_CONFLICT;
     }
+    *unread = !inst_rename_scan(text, vsd_line_noop, NULL);
     r = inst_vsd_entry_text(text, dest, destS, tmp, tmpS);
     free(text);
     return r;
+}
+
+static int vsd_entry(const char *dest, const char *tmp, const char *destS,
+                     const char *tmpS)
+{
+    return vsd_entry_r(dest, tmp, destS, tmpS, NULL);
 }
 
 /* The facts of record 30 section 7.3, read afresh. 0 unreadable. */
@@ -17931,6 +17954,7 @@ static int vsd_do(int op, const char *file, const char *pend)
     char src[INST_PATH_CHARS];
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
+    int unread = 0;
 
     (void)file;
     if (!vsd_paths(dest, tmp, destS, tmpS, sizeof(dest)) ||
@@ -17944,7 +17968,8 @@ static int vsd_do(int op, const char *file, const char *pend)
     case INST_VOP_DEL_ENTRY:
         if (!WritePrivateProfileStringA("rename", destS, NULL, ini) ||
             !WritePrivateProfileStringA("rename", dest, NULL, ini) ||
-            vsd_entry(dest, tmp, destS, tmpS) == INST_VE_EXACT) {
+            vsd_entry_r(dest, tmp, destS, tmpS, &unread) == INST_VE_EXACT ||
+            unread) {
             out("S98VSD.VXD's [rename] line in %s could not be taken back "
                 "(error %lu).\n", ini, (unsigned long)GetLastError());
             return 0;
