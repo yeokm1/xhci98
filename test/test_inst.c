@@ -6044,8 +6044,11 @@ static void test_other_sets(void)
                  "Report problems at https://github.com/yeokm1/usb-wdm-free.")
           == 0, "texts: the free sentence, the owner's words of 2026-10-23");
     inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98");
-    CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\NONFREE. They are their makers' "
-                       "work, not this project's. Nothing is installed") != NULL &&
+    CHECK(strstr(text, "Copies other manufacturers' drivers (USB Ethernet, "
+                       "serial and game pads) to C:\\XHCI98\\USBDRV\\NONFREE. "
+                       "They are from their manufacturers, not this project. "
+                       "Nothing is installed") != NULL &&
+          strstr(text, "makers") == NULL &&
           strstr(text, "tested") == NULL,
           "texts: the non-free sentence, no testing warning (2026-10-24)");
     inst_other_stage_text(text, sizeof(text), 0);

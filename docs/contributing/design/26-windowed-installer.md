@@ -3319,28 +3319,27 @@ since the INF's driver files, catalogs and co-installers sit beside it in
 every folder of both sets. A folder that is not whole is left copy-only,
 and said with the file that stopped it.
 
-- **98 SE and ME** (the owner, 2026-10-22: those systems' hardware
-  wizard does not search subfolders, so one folder per driver, and
-  "stage" there means `DevicePath`): each distinct folder of those INFs,
-  `<dir>\USBDRV\NONFREE\serial\ftdi\w98se-me` say, appended to `DevicePath`
-  (`inst_path_append`) when it is not there already, and only when the
-  folder holds no file but those the set lists (the wizard reads every
-  INF of a folder on `DevicePath`: an unlisted INF there leaves the
-  folder copy-only, said). The record is the `Staged` subkey's value of
-  that path, data `DevicePath`, written before the value is changed; a
-  folder already on `DevicePath` before the run is not recorded. Every
-  INF of a staged folder is then visible to the wizard, a `COPY` INF in
-  it too: the pack's two `COPY` INFs of 98 SE folders (FTDI's
-  `FTSERMOU.INF` and `FTCSMOU.INF`) are each copied to the INF folder by
-  their bus INF's own install anyway (`STAGE.TXT`'s notes), which is
-  accepted (proposal). `DevicePath` is held to the length the engine
-  already writes (2048 bytes); a folder that would pass it is not added,
-  and said. The set's staging runs after `devicepath_update` in the same
-  run, and a recorded folder missing from `DevicePath` (that function
-  takes out every entry under the legacy `%windir%\XHCI98`) is appended
-  again, whether or not the row is ticked this run. The copy and the
-  staging stop at a cancel (`go_on`) between two files or two INFs,
-  the record left whole for the next run.
+- **98 SE and ME: no staging** (the owner, 2026-10-24, superseding the
+  `DevicePath` staging of 2026-10-22). With every package of both sets
+  ticked, `DevicePath` grew to 15 entries and 608 characters on the
+  owner's P14s Gen 1, and 98 SE's hardware wizard then found no driver at
+  all, not even in `%windir%\INF` (a PCI-to-PCI bridge from `MACHINE.INF`,
+  a disk drive from `DISKDRV.INF`); read again on a stock 98 SE guest,
+  where the wizard named and found a new bridge's driver with a
+  `DevicePath` of 280 characters and found none with one of 285 or
+  more. So on these systems no `STAGE` line counts for this system
+  (`other_count`), no package is offered or ticked, the sets are copied
+  only, and none of their folders goes on `DevicePath`: the page's list
+  says to point the hardware wizard at the package's folder,
+  `USBDRV\FREE\<class>\<package>\<folder>` (or `USBDRV\NONFREE\...`), and
+  `/wdmfree:stage=` and `/wdmnonfree:stage=` are refused before any
+  change. Every run takes out each `DevicePath` entry an earlier run's
+  `Staged` record names (`other_withdraw_devicepath`: `inst_path_remove`
+  of that exact entry, then the value deleted), ticked row or not, so an
+  install, update or repair over such a run gives the wizard its search
+  back; the uninstall does the same (section 6.7.8). `DevicePath` then
+  holds `%windir%\INF` and the install directory, whose copy carries NUSB
+  3.3's seven files when the storage row installs them.
 - **2000 and later**: each INF through `SetupCopyOEMInf` (`SPOST_PATH`,
   its folder at `<Dir>` as the source), as record 23 section 5.6 stages
   the package's own. **The inventory** before the call: every `*.inf` of

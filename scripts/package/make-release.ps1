@@ -7599,8 +7599,9 @@ is statically linked into each, which NOTICE.TXT beside this file records.
             $instMsFiles = $(if ($null -ne $nonFreeSet) {
                                "The base download's only Microsoft files are NUSB 3.3's Windows 98 SE`r`n" +
                                "storage files, in a folder of their own with their own NOTICE.md; the`r`n" +
-                               "non-free download also carries other makers' drivers in USBDRV\NONFREE\,`r`n" +
-                               "two KMDF co-installers of Microsoft's among them, with their NOTICE.md."
+                               "non-free download also carries other manufacturers' drivers in`r`n" +
+                               "USBDRV\NONFREE\, two KMDF co-installers of Microsoft's among them, with`r`n" +
+                               "their NOTICE.md."
                            } else {
                                "The download's only Microsoft files are NUSB 3.3's Windows 98 SE storage`r`n" +
                                "files, in a folder of their own with their own NOTICE.md."

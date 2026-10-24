@@ -4206,6 +4206,15 @@ or says it was found by reading the code.
   suspended when Windows asks, but a hub, the root hub and the controller
   never are, and the driver never suspends anything on a timer of its own.
   See "XhciSelectiveSuspend: putting idle devices to sleep".
+- **On Windows 98 SE and ME the free and non-free drivers are copied, not
+  staged.** The installer copies them to `USBDRV\FREE\` and
+  `USBDRV\NONFREE\` in the install directory and adds none of their
+  folders to `DevicePath`: a long `DevicePath` stops 98 SE's hardware
+  wizard finding any driver, Windows' own in `C:\WINDOWS\INF` included.
+  When the wizard asks for a driver, choose "Specify a location" and point
+  it at the package's folder, `USBDRV\FREE\<class>\<package>\<folder>` (or
+  `USBDRV\NONFREE\...`). Running the installer again takes out the
+  package folders an earlier build added to `DevicePath`.
 - **No USB storage on a stock Windows 98 SE without NUSB's storage files.**
   The installer is planned to offer them on Windows 98 SE from `3.2.0.0`
   (not yet built); see "Windows 98
@@ -4532,7 +4541,7 @@ drivers in `USBDRV\FREE\` (experimental: they may not work with every
 device and can make Windows unstable; their problems go to that
 project) and the CamCheck webcam preview tool in
 `USBDRV\FREE\tools\camcheck\`; and `xhci98-<version>-nonfree.zip`, which
-adds the usb-wdm-nonfree pack of other makers' drivers in `USBDRV\NONFREE\`, not
+adds the usb-wdm-nonfree pack of other manufacturers' drivers in `USBDRV\NONFREE\`, not
 this project's work (NUSB 3.3's storage files are in
 `USBDRV\NUSB33\` of every download that carries them). `USBDRV\NONFREE\` holds two more
 Microsoft files, the KMDF co-installers
@@ -4542,10 +4551,11 @@ unmodified, with no licence to redistribute them established either.
 The installer's Other USB drivers page, after Components, offers each
 set the download carries, unticked: ticked, it is copied to the tools
 folder and nothing is installed, and a box per driver package, grouped
-by kind and unticked, lets Windows use that package's drivers at a
-device's first plug; for a set the download does not carry, the page
-names the download and the address that have it. The uninstall removes
-what it placed.
+by kind and unticked, lets Windows 2000 to 10 use that package's drivers
+at a device's first plug; on 98 SE and ME no package is offered and the
+sets are copied only ("Known limitations"). For a set the download does
+not carry, the page names the download and the address that have it.
+The uninstall removes what it placed.
 
 ## Trademarks
 

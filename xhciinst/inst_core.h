@@ -2144,6 +2144,10 @@ int inst_rec_parse(const char *line, INST_REC_LINE *out);
  * the release's, releaseHas 0 when the release has no such set. */
 const char *inst_other_label(int set);
 void inst_other_sentence(char *out, size_t cap, int set, const char *dir);
+/* The Other USB drivers page's line when no package is offered: on 98 SE
+ * and ME (nt 0) that the drivers are copied, not staged, and where to
+ * point the hardware wizard; elsewhere that none is for this Windows. */
+const char *inst_other_none_text(int nt);
 const char *inst_other_stage_label(void);
 void inst_other_stage_text(char *out, size_t cap, int n);
 void inst_other_line(char *out, size_t cap, int set, int state,

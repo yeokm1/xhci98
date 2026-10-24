@@ -1842,10 +1842,16 @@ static void othlist_build(HWND page)
         }
     }
     if (y == 0) {
-        make_px(othList, "STATIC", "None of the drivers carried has one for "
-                "this Windows.", SS_LEFT | SS_NOPREFIX, dlu_x(page, 2), 0, w,
-                othBoxH, -1, font);
-        y = othBoxH;
+        /* On 98 SE and ME no package is offered: the sets are copied only,
+         * and the line says where to point the hardware wizard. */
+        const char *none = inst_eng_other_none_text();
+        int nh = text_h(dc, none, w, NULL) + 2;
+        if (nh < othBoxH) {
+            nh = othBoxH;
+        }
+        make_px(othList, "STATIC", none, SS_LEFT | SS_NOPREFIX,
+                dlu_x(page, 2), 0, w, nh, -1, font);
+        y = nh;
     }
     if (old != NULL) {
         SelectObject(dc, old);
