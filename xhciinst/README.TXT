@@ -159,6 +159,13 @@ drive behind a Thunderbolt or USB4 port is unplugged and plugged in again
 after its update; the installer asks for that and waits up to two
 minutes. The uninstall removes Stor98 only where this installer put it
 there: a Stor98 installed before, by hand or by an earlier tool, stays.
+Stor98 is not for internal NVMe drives. Windows 8 has no NVMe driver of
+its own, and there Windows itself puts the staged Stor98 on an internal
+NVMe drive that has no driver: without a prompt when this package's test
+certificate is trusted, and otherwise through the "can't verify the
+publisher" prompt (not read). The drive then runs on Stor98, and the
+uninstall leaves Stor98 in place, on every drive, while that drive uses
+it.
 
 USB storage drivers (Windows 98 SE only). Windows 98 SE has no USB
 mass-storage driver: every USB disk, Bulk-Only or UAS under xhciuas.sys,
