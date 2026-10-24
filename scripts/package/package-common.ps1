@@ -2356,6 +2356,11 @@ $script:NonFreePin = [pscustomobject]@{
 $script:WdmFreeFolder = "USBDRV\FREE"
 $script:WdmFreePrefix = "free"
 $script:WdmFreeExtras = @("LICENSE", "NOTICE.md", "STAGE.TXT")
+# The release's tools (owner, 2026-10-24): free/tools/<name>/, pinned by a
+# "Tool:" line each, carried at USBDRV\FREE\tools\<name>\. Not driver
+# packages: no INF and no STAGE.TXT line. The readme's words for each.
+$script:WdmFreeToolsDir = "tools"
+$script:WdmFreeToolWords = [ordered]@{ "camcheck" = "CamCheck, a webcam preview for the uvc98 driver" }
 # The free set's certificate's public half, at the usb-wdm-free release's top
 # and at the set's own (USBDRV\FREE\), where the installer looks for it
 # (INST_WDMFREE_CER; design record 26 section 6.7.11): pinned by a
@@ -2583,6 +2588,7 @@ function Read-WdmFreePin {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "no usb-wdm-free pin at '$Path'." }
     $tag = ""; $commit = ""; $thumb = ""
     $packages = [ordered]@{}
+    $tools = @()
     $files = [ordered]@{}
     foreach ($line in ([System.IO.File]::ReadAllText($Path) -split "`r?`n")) {
         $t = $line.Trim()
@@ -2595,8 +2601,13 @@ function Read-WdmFreePin {
         } elseif ($t -match '^Certificate: ([0-9A-Fa-f]{40})$') {
             if ($thumb -ne "") { throw "'$Path' names two certificates." }
             $thumb = $Matches[1].ToUpperInvariant()
+        } elseif ($t -match '^Tool: ([a-z0-9]{1,8})$') {
+            if ($tools -ccontains $Matches[1]) { throw "'$Path' names the tool $($Matches[1]) twice." }
+            if (-not $script:WdmFreeToolWords.Contains($Matches[1])) { throw "'$Path' names the tool $($Matches[1]), which the readme has no words for (`$script:WdmFreeToolWords)." }
+            $tools += $Matches[1]
         } elseif ($t -match '^Package: ([a-z0-9]+/[a-z0-9]+) \| (.+)$') {
             $pk = $Matches[1]; $sy = @($Matches[2].Trim() -split '\s+')
+            if ($pk.StartsWith($script:WdmFreeToolsDir + "/", [System.StringComparison]::Ordinal)) { throw "'$Path' names $pk as a package: the release's $($script:WdmFreeToolsDir)/ holds tools, pinned by Tool: lines." }
             foreach ($s in $sy) { if ($script:StageSystems -cnotcontains $s) { throw "'$Path' names a system it cannot read, '$s'." } }
             if ($packages.Contains($pk)) { throw "'$Path' names $pk twice." }
             $packages[$pk] = $sy
@@ -2610,7 +2621,7 @@ function Read-WdmFreePin {
     if ($tag -eq "") {
         # The Certificate line alone may stand before a release qualifies:
         # it records the owner's certificate, and nothing is exported.
-        if ($commit -ne "" -or $packages.Count -gt 0 -or $files.Count -gt 0) { throw "'$Path' names no tag and still names a commit, packages or files." }
+        if ($commit -ne "" -or $packages.Count -gt 0 -or $tools.Count -gt 0 -or $files.Count -gt 0) { throw "'$Path' names no tag and still names a commit, packages, tools or files." }
         return $null
     }
     if ($commit -eq "" -or $packages.Count -eq 0) { throw "'$Path' names a tag with no commit or no package." }
@@ -2618,7 +2629,7 @@ function Read-WdmFreePin {
     if (($thumb -ne "") -ne $files.Contains($script:WdmFreeCer)) {
         throw "'$Path' names $(if ($thumb -ne '') { 'a certificate and pins no ' + $script:WdmFreeCer } else { $script:WdmFreeCer + ' and names no Certificate: thumbprint' }): the two go together."
     }
-    return [pscustomobject]@{ Tag = $tag; Commit = $commit; Packages = $packages; Files = $files; Thumbprint = $thumb }
+    return [pscustomobject]@{ Tag = $tag; Commit = $commit; Packages = $packages; Tools = $tools; Files = $files; Thumbprint = $thumb }
 }
 
 function Test-WdmFreeCer {
@@ -2648,7 +2659,9 @@ function Export-WdmFreeSet {
     # Writes the download's WDMFREE\ into -Dest (a new directory): each
     # pinned package's free/<class>/<package>/ at the pinned tag's commit,
     # exactly the files the pin lists under it with their pinned bytes, at
-    # WDMFREE\<class>\<package>\; the release's LICENSE and NOTICE.md; a
+    # WDMFREE\<class>\<package>\; each pinned tool's free/tools/<name>/ the
+    # same way, at WDMFREE\tools\<name>\, with no INF; the release's LICENSE
+    # and NOTICE.md; a
     # STAGE.TXT of the release's lines for those packages' INFs, every one
     # of them on exactly one line; a READ.TXT of the systems each package's
     # legs passed on; and the folder's SHA256.TXT.
@@ -2682,12 +2695,34 @@ function Export-WdmFreeSet {
             if ($p.EndsWith(".inf", [System.StringComparison]::OrdinalIgnoreCase)) { $infs += $p }
         }
     }
+    $tools = @()
+    if ($Pin.PSObject.Properties.Name -contains "Tools") { $tools = @($Pin.Tools) }
+    foreach ($tl in $tools) {
+        $tp = $pre + $script:WdmFreeToolsDir + "/" + $tl
+        $tree = Get-OtherSetTree -Root $Root -Rev $rev -Prefix $tp
+        $pinned = @($Pin.Files.Keys | Where-Object { $_.StartsWith($tp + "/", [System.StringComparison]::Ordinal) })
+        $extra = @($tree.Keys | Where-Object { $pinned -cnotcontains $_ })
+        $missing = @($pinned | Where-Object { -not $tree.Contains($_) })
+        if ($tree.Count -eq 0 -or $extra.Count -gt 0 -or $missing.Count -gt 0) {
+            throw "usb-wdm-free $($Pin.Tag)'s $tp/ is not the files the pin lists. Not pinned: $(if ($extra.Count) { @($extra | Select-Object -First 5) -join ', ' } else { '(none)' }); missing: $(if ($missing.Count) { @($missing | Select-Object -First 5) -join ', ' } elseif ($tree.Count -eq 0) { 'the whole folder' } else { '(none)' })."
+        }
+        foreach ($p in $pinned) {
+            $claimed[$p] = $true
+            if ($tree[$p] -ne "100644 blob") { throw "usb-wdm-free $($Pin.Tag)'s $p is not a plain file ($($tree[$p]))." }
+            if ($p.EndsWith(".inf", [System.StringComparison]::OrdinalIgnoreCase)) { throw "usb-wdm-free $($Pin.Tag)'s $p is an INF in a tool's folder: a tool is not a driver package." }
+            $rel = $p.Substring($pre.Length)
+            if (-not (Test-OtherSetRelPath -Rel $rel)) { throw "usb-wdm-free $($Pin.Tag)'s $p has a path the installer does not accept." }
+            $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $p -OutFile (Join-Path $Dest $rel.Replace('/', '\'))
+            if ($h -ne $Pin.Files[$p]) { throw "usb-wdm-free $($Pin.Tag)'s $p is $h, not the pinned $($Pin.Files[$p])." }
+            $files[$rel.Replace('/', '\')] = $h
+        }
+    }
     foreach ($x in $script:WdmFreeExtras) { $claimed[$x] = $true }
     $thumb = ""
     if ($Pin.PSObject.Properties.Name -contains "Thumbprint") { $thumb = [string]$Pin.Thumbprint }
     if ($thumb -ne "") { $claimed[$script:WdmFreeCer] = $true }
     $stray = @($Pin.Files.Keys | Where-Object { -not $claimed.ContainsKey($_) })
-    if ($stray.Count -gt 0) { throw "the usb-wdm-free pin lists files of no pinned package: $(@($stray | Select-Object -First 5) -join ', ')." }
+    if ($stray.Count -gt 0) { throw "the usb-wdm-free pin lists files of no pinned package or tool: $(@($stray | Select-Object -First 5) -join ', ')." }
     foreach ($x in @("LICENSE", "NOTICE.md")) {
         $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $x -OutFile (Join-Path $Dest $x)
         if ($h -ne $Pin.Files[$x]) { throw "usb-wdm-free $($Pin.Tag)'s $x is $h, not the pinned $($Pin.Files[$x])." }
@@ -2734,15 +2769,14 @@ function Export-WdmFreeSet {
         "#",
         "# One line a driver: <class>/<package> | <systems>, the systems in",
         "# STAGE.TXT's tokens: those its legs passed on, by xHCI98's pin of",
-        "# usb-wdm-free $($Pin.Tag) (roadmap-usb4 task 43.48). The installer warns",
-        "# when a driver is copied on another.",
+        "# usb-wdm-free $($Pin.Tag) (roadmap-usb4 task 43.48).",
         "") + @($Pin.Packages.Keys | ForEach-Object { "{0} | {1}" -f $_, ($Pin.Packages[$_] -join " ") })
     [System.IO.File]::WriteAllText((Join-Path $Dest "READ.TXT"), (($readOut -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
     $files["READ.TXT"] = Get-FileSha256 -Path (Join-Path $Dest "READ.TXT")
     $own = Write-OtherSetSums -Dir $Dest -Files $files
     $files[$script:OtherSums] = $own
     return [pscustomobject]@{ Kind = "free"; Folder = $script:WdmFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev; FullStage = $stageText;
-                              Dir = $Dest; Sums = $own; Files = $files }
+                              Dir = $Dest; Sums = $own; Files = $files; Tools = $tools }
 }
 
 # ---- The other sets' cut-side checks (design record 26 section 6.7.11) ----
@@ -3487,6 +3521,17 @@ function Invoke-OtherSetChecks {
             $meta += $m
         }
     }
+    # The free set's tools are not packages: no STAGE.TXT line and no INF.
+    foreach ($s in @($sets | Where-Object { $_.Name -ceq "free" })) {
+        $tpre = $s.Prefix + "/" + $script:WdmFreeToolsDir + "/"
+        $tl = @($s.Lines | Where-Object { $_.Inf.StartsWith($tpre, [System.StringComparison]::OrdinalIgnoreCase) })
+        if ($tl.Count -gt 0) { throw "the free set's STAGE.TXT names $($tl[0].Inf): $tpre holds tools, not driver packages." }
+        $tdir = Join-Path $s.Dir $script:WdmFreeToolsDir
+        if (Test-Path -LiteralPath $tdir) {
+            $ti = @(Get-ChildItem -LiteralPath $tdir -Recurse -File -Filter "*.inf")
+            if ($ti.Count -gt 0) { throw "the free set's $($script:WdmFreeToolsDir)\ holds an INF, $($ti[0].FullName): a tool is not a driver package." }
+        }
+    }
     $allInfs = @()
     foreach ($s in $sets) { $allInfs += @(Get-ChildItem -LiteralPath $s.Dir -Recurse -File -Filter "*.inf" | ForEach-Object { $_.Name.ToLowerInvariant() }) }
     foreach ($s in $sets) {
@@ -3735,7 +3780,7 @@ function Get-ReadmeDownloadText {
 
 function Get-ReadmeOtherContentsText {
     # The readme's "What is in this directory" lines for the other drivers.
-    param([string]$Kind, [string]$FreeTag, [string]$NonFreeTag)
+    param([string]$Kind, [string]$FreeTag, [string]$NonFreeTag, [string[]]$FreeTools = @())
     $L = @()
     if ($Kind -eq "base" -or ($Kind -eq "nonfree" -and $FreeTag -eq "")) {
         if ($Kind -eq "base") {
@@ -3751,6 +3796,10 @@ function Get-ReadmeOtherContentsText {
         $L += "      READ.TXT     the systems each driver was tested on"
         $L += "      SHA256.TXT   every file's hash"
         $L += "      STAGE.TXT    which INF Windows may use on which system"
+        foreach ($tl in $FreeTools) {
+            $tlLead = "      tools\" + $tl + "\ "
+            $L += Format-ReadmeWrap -Lead $tlLead -Rest (" " * $tlLead.Length) -Text $script:WdmFreeToolWords[$tl]
+        }
     }
     if ($Kind -eq "nonfree") {
         if ($L.Count -gt 0) { $L += "" }
@@ -3770,13 +3819,13 @@ function ConvertTo-DownloadReadme {
     # of the three parts, which must be there exactly once as download 1's,
     # replaced by -Kind's.
     param([string]$Text, [string]$Version, [string]$Kind, [string[]]$Kinds, [string]$FreeTag, [string]$NonFreeTag,
-          [bool]$DriverPackIncluded, [string]$Label)
+          [bool]$DriverPackIncluded, [string]$Label, [string[]]$FreeTools = @())
     if ($Kind -eq "base") { return $Text }
     $pairs = @(
         @((Get-ReadmeDownloadText -Version $Version -Kind "base" -Kinds $Kinds -FreeTag $FreeTag -NonFreeTag $NonFreeTag -DriverPackIncluded $DriverPackIncluded),
           (Get-ReadmeDownloadText -Version $Version -Kind $Kind -Kinds $Kinds -FreeTag $FreeTag -NonFreeTag $NonFreeTag -DriverPackIncluded $DriverPackIncluded)),
         @((Get-ReadmeOtherContentsText -Kind "base" -FreeTag $FreeTag -NonFreeTag $NonFreeTag),
-          (Get-ReadmeOtherContentsText -Kind $Kind -FreeTag $FreeTag -NonFreeTag $NonFreeTag)),
+          (Get-ReadmeOtherContentsText -Kind $Kind -FreeTag $FreeTag -NonFreeTag $NonFreeTag -FreeTools $FreeTools)),
         @((Get-ReadmeMsFilesText -DriverPackIncluded $DriverPackIncluded -Kind "base"),
           (Get-ReadmeMsFilesText -DriverPackIncluded $DriverPackIncluded -Kind $Kind))
     )

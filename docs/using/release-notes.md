@@ -4495,8 +4495,9 @@ From `3.2.0.0` a release has up to three downloads (roadmap-usb4 task
 `xhci98-<version>-free.zip`, which adds the usb-wdm-free USB class
 drivers in `USBDRV\FREE\` (experimental: they may not work with every
 device and can make Windows unstable; their problems go to that
-project); and `xhci98-<version>-nonfree.zip`, which adds the
-usb-wdm-nonfree pack of other makers' drivers in `USBDRV\NONFREE\`, not
+project) and the CamCheck webcam preview tool in
+`USBDRV\FREE\tools\camcheck\`; and `xhci98-<version>-nonfree.zip`, which
+adds the usb-wdm-nonfree pack of other makers' drivers in `USBDRV\NONFREE\`, not
 this project's and not tested by it (NUSB 3.3's storage files are in
 `USBDRV\NUSB33\` of every download that carries them). `USBDRV\NONFREE\` holds two more
 Microsoft files, the KMDF co-installers

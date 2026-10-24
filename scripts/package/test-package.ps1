@@ -1988,6 +1988,8 @@ try {
             "free/net/cdcx/w98se-me/CDCX.SYS" = "stand-in CDCX.SYS"
             "free/net/cdcx/w2k-8/CDCX.INF"    = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=07/08/2026,0.1`r`n"
             "free/video/camx/w98se/CAMX.INF"  = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=07/08/2026,0.1`r`n"
+            "free/tools/camcheck/CAMCHECK.EXE" = "stand-in CAMCHECK.EXE"
+            "free/tools/camcheck/README.TXT"   = "stand-in tool readme`r`n"
             "LICENSE"                         = "stand-in GPL-2.0"
             "NOTICE.md"                       = "# stand-in free notice`n"
             "STAGE.TXT"                       = "STAGE | W98SE WME | free/net/cdcx/w98se-me/CDCX.INF | a`nSTAGE | W2K WXP W7X64 | free/net/cdcx/w2k-8/CDCX.INF | b`nSTAGE | W98SE | free/video/camx/w98se/CAMX.INF | c`nPACKAGE | net/cdcx | DEVICE | USB Ethernet (cdcx): stand-in adapters`nPACKAGE | video/camx | CLASS | Webcams (camx): stand-in cameras`nEXCLUDES | free:net/cdcx | nonfree:serial/none | W98SE | a stand-in line`n"
@@ -2025,7 +2027,7 @@ try {
             $ErrorActionPreference = $savedEap
         }
         $freePinLines = @("# stand-in pin", "Tag: v0.1.0", "Commit: $freeCommit", "Package: net/cdcx | W98SE W2K")
-        foreach ($k in @($freeFiles.Keys | Where-Object { $_ -notlike "free/video/*" })) {
+        foreach ($k in @($freeFiles.Keys | Where-Object { $_ -notlike "free/video/*" -and $_ -notlike "free/tools/*" })) {
             $freePinLines += ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo $k.Replace('/', '\'))) + " " + $k)
         }
         $cerPinLines = @("Certificate: $cerThumb", ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo "usb-wdm-free-test.cer")) + " usb-wdm-free-test.cer"))
@@ -2078,6 +2080,33 @@ try {
         $msg = ""
         try { Export-WdmFreeSet -Root $freeRepo -Pin (Read-WdmFreePin -Path $badPin) -Dest (Join-Path $script:work "wdmfree-bad") | Out-Null } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("not the files the pin lists")) ("a free release holding a file the pin does not list was exported: '" + $msg + "'")
+        # The release's tools (owner, 2026-10-24): a Tool line carries
+        # free/tools/<name>/ whole at WDMFREE\tools\<name>\, never as a package.
+        Assert-True (-not $fr.Files.Contains("tools\camcheck\CAMCHECK.EXE") -and @($fr.Tools).Count -eq 0) "the free export carried a tool its pin names no Tool line for."
+        $toolSums = @("free/tools/camcheck/CAMCHECK.EXE", "free/tools/camcheck/README.TXT" | ForEach-Object { "SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo $_.Replace('/', '\'))) + " " + $_ })
+        $toolPin = Join-Path $script:work "wdmfree-pin-tool.txt"
+        [System.IO.File]::WriteAllText($toolPin, ((($freePinLines + @("Tool: camcheck") + $toolSums) -join "`r`n") + "`r`n"))
+        $ft = Export-WdmFreeSet -Root $freeRepo -Pin (Read-WdmFreePin -Path $toolPin) -Dest (Join-Path $script:work "wdmfree-tool")
+        Assert-True ($ft.Files.Contains("tools\camcheck\CAMCHECK.EXE") -and (Get-FileSha256 -Path (Join-Path $ft.Dir "tools\camcheck\CAMCHECK.EXE")) -eq $ft.Files["tools\camcheck\CAMCHECK.EXE"] -and (@($ft.Tools) -join ",") -ceq "camcheck") "the free export does not carry the pinned tool at tools\camcheck\."
+        Assert-True ([System.IO.File]::ReadAllText((Join-Path $ft.Dir "SHA256.TXT")).Contains(" tools/camcheck/README.TXT") -and -not [System.IO.File]::ReadAllText((Join-Path $ft.Dir "READ.TXT")).Contains("tools") -and -not [System.IO.File]::ReadAllText((Join-Path $ft.Dir "STAGE.TXT")).Contains("tools/")) "WDMFREE\SHA256.TXT does not hash the tool, or READ.TXT or STAGE.TXT names it."
+        foreach ($tc in @(
+                @{ Lines = @($freePinLines + @("Tool: camcheck") + @($toolSums[0])); Want = "not the files the pin lists"; Why = "a tool's file left out of the pin"; Read = $false },
+                @{ Lines = @($freePinLines + $toolSums); Want = "no pinned package or tool"; Why = "a tool's files with no Tool line"; Read = $false },
+                @{ Lines = @($freePinLines + @("Tool: camcheck", "Tool: camcheck") + $toolSums); Want = "twice"; Why = "a Tool line twice"; Read = $true },
+                @{ Lines = @($freePinLines + @("Tool: zzz")); Want = "no words"; Why = "a tool the readme cannot describe"; Read = $true },
+                @{ Lines = @($freePinLines + @("Package: tools/camcheck | W98SE") + $toolSums); Want = "holds tools"; Why = "a tool pinned as a package"; Read = $true })) {
+            $tp = Join-Path $script:work ("wdmfree-pin-tl-" + [System.IO.Path]::GetRandomFileName() + ".txt")
+            [System.IO.File]::WriteAllText($tp, (($tc.Lines -join "`r`n") + "`r`n"))
+            $msg = ""
+            try {
+                $pp = Read-WdmFreePin -Path $tp
+                if (-not $tc.Read) { Export-WdmFreeSet -Root $freeRepo -Pin $pp -Dest (Join-Path $script:work ("wdmfree-tl-" + [System.IO.Path]::GetRandomFileName())) | Out-Null }
+            } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($tc.Want)) ("the free pin with " + $tc.Why + " did not refuse with '" + $tc.Want + "': '" + $msg + "'")
+        }
+        $rdTool = Get-ReadmeOtherContentsText -Kind "free" -FreeTag "v0.1.0" -NonFreeTag "" -FreeTools @("camcheck")
+        $rdNone = Get-ReadmeOtherContentsText -Kind "free" -FreeTag "v0.1.0" -NonFreeTag ""
+        Assert-True ($rdTool.Contains("      tools\camcheck\ CamCheck, a webcam preview") -and -not $rdNone.Contains("tools\") -and @($rdTool -split "`r`n" | Where-Object { $_.Length -gt 78 }).Count -eq 0) "the free download's readme does not name the set's tools\camcheck\ in 78 columns, or names it with no tool carried."
 
         # The other sets' cut-side checks (design record 26 section 6.7.11).
         $frStageAll = [System.IO.File]::ReadAllText((Join-Path $fr.Dir "STAGE.TXT"))
