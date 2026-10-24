@@ -105,6 +105,16 @@ or it does not load and the controller shows Code 39 on Vista, Code 52 on
 7, with nothing plugged into it working inside Windows, a USB keyboard or mouse
 included.
 
+- **Keep test-signing mode on while the Thunderbolt 3 / USB4 support is
+  installed** on 64-bit Windows with a Thunderbolt or USB4 controller,
+  whether or not anything is plugged in. Windows makes its driver a boot
+  driver once its filter is on the controller's PCI ports, which exist
+  with nothing attached. Turned off, Windows 8, 8.1 and 10 stop in
+  Automatic Repair, and Windows 7 x64 starts but silently rolls the whole
+  xHCI98 install back (read in a virtual machine), leaving the controllers
+  at Code 52. Vista x64 was not read. A Windows feature update, turning
+  Secure Boot on, or a boot repair can turn test-signing mode off too.
+
 - With BitLocker on the system drive, suspend BitLocker before changing the
   boot setting, or the next boot asks for the recovery key.
 - This is not Microsoft signing: the certificate is the project's own test
@@ -290,6 +300,9 @@ as they are made; the head of this file is rewritten when it is cut.
   do not install it on one. On 2000 to 7 Stor98's INF matches every
   NVMe controller (`PCI\CC_010802`), so Windows may still offer Stor98
   for an internal NVMe drive that has no driver, later: decline it there.
+  On 7 x64 with this package's test certificate trusted, Windows puts the
+  staged Stor98 on such a drive at the next start without asking (read in
+  a virtual machine), as on 8 below.
   Windows 8 has no NVMe driver of its own, and there Windows itself puts
   the staged Stor98 on an internal NVMe drive that has no driver: with
   this package's test certificate trusted it does so without a prompt,
@@ -2424,7 +2437,9 @@ changes"), and updates an older Stor98 on such a drive (on Windows 98 SE
 and ME as a file, at the next start, after a shut down). Stor98 is not for
 internal NVMe drives: do not install it on one. Its INF matches every NVMe
 controller, so on 2000 to 7 Windows may still offer it for an internal
-NVMe drive that has no driver: decline it there. On Windows 8, which has
+NVMe drive that has no driver: decline it there. On 7 x64 with this
+package's test certificate trusted, Windows puts Stor98 on such a drive at
+the next start without asking (read in a virtual machine). On Windows 8, which has
 no NVMe driver of its own, Windows itself puts the staged Stor98 on such a
 drive, without a prompt when this package's test certificate is trusted
 and otherwise through the "can't verify the publisher" prompt (not read);
