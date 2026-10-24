@@ -5585,14 +5585,15 @@ at each login. Its window shows
 every USB controller, hub and device, and the Thunderbolt and USB4 devices
 with what is connected behind them; its icon in the notification area of
 the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
-Safely Remove Hardware icon does for other devices. It needs no
-administrator to run. It shows a "can run faster" balloon for a device on
-a slower port or behind a slower hub, turns its icon red while something
-needs you (a slow device, a device waiting for approval, a controller
-that stopped answering), and on Windows 2000 and later warns after a
-Thunderbolt or USB4 device is removed unexpectedly. The installer's
-Components page can leave out its start at login; the uninstall removes
-it with the drivers. TOOLS\XHCITR\readme.txt has the rest.
+Safely Remove Hardware icon does for other devices. It shows a "can run
+faster" balloon for a device on a slower port or behind a slower hub,
+turns its icon red while something needs you (a slow device, a device
+waiting for approval, a controller that stopped answering), and on
+Windows 2000 and later warns after a Thunderbolt or USB4 device is
+removed unexpectedly. It needs no
+administrator to run. The installer's Components page can leave out its
+start at login; the uninstall removes it with the drivers.
+TOOLS\XHCITR\readme.txt has the rest.
 
 On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
 keyboard and mouse that do not go through this driver, as below; the
@@ -6294,7 +6295,7 @@ A value that is absent means the default each one states.
   .........................................
 
   Default 2 (an update keeps the value an earlier install wrote, which
-  was 0 before 3.0.0.0). Level 0 is off outright; above it each
+  was 0 in older releases). Level 0 is off outright; above it each
   level is the one below plus one thing:
 
       0   OFF. The driver does not answer XHCITR's snapshot at all.
