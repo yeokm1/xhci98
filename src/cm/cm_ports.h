@@ -236,6 +236,35 @@ ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume);
 ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over);
 
 /*
+ * Whether a held member's device D0 is retained (record 21 section 6.3,
+ * task 43.24h), from the running NT's version (`major`.`minor`, the
+ * kernel's own: KUSER_SHARED_DATA NtMajorVersion and NtMinorVersion; the
+ * WDM version cannot tell, since 8, 8.1 and 10 report the WDM version 7
+ * does): not on 6.2 (Windows 8) and later. There the power manager resumes the non-pageable devices before
+ * the pageable ones, and the bridge's bus driver completes its system S0
+ * only once its D0 has: a retained bridge D0 kept the pageable NHI from
+ * ever receiving its own S0 and D0, so its resume, the release, never
+ * came and the machine stopped with bug check 0x9F at every resume from
+ * hibernation and every Fast Startup boot. 2000 to 7 resume a held bridge
+ * correctly (read on XP x64, Vista and 7) and keep the hold.
+ */
+BOOLEAN CmPortsHoldD0(ULONG major, ULONG minor);
+
+/*
+ * The release of a member at the NHI's resume, stop or removal (section
+ * 6.3): a member still marked by this NHI (`marked`) has its mark cleared
+ * (CM_PORTS_REL_CLEAR) and, where re-enumeration is on (`reenumOn`), its
+ * bridge invalidated (CM_PORTS_REL_INVALIDATE) when the resume failed
+ * (`failed`, the failure path) or its D0 went down unheld (`passed`, so
+ * the devices behind it may have resumed against an absent tunnel). A
+ * member no longer marked by this NHI is left alone.
+ */
+#define CM_PORTS_REL_CLEAR          0x1UL
+#define CM_PORTS_REL_INVALIDATE     0x2UL
+ULONG CmPortsRelease(ULONG marked, ULONG reenumOn, BOOLEAN failed,
+                     ULONG passed);
+
+/*
  * Windows 98 and ME: a member's known children (devnode handles) kept only
  * while present among `present`, in order; returns the new count.
  * CONFIGMG reuses a freed devnode's handle, so an identity must be

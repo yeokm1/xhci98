@@ -2501,7 +2501,9 @@ driver makes one:
 - A device `IRP_MN_SET_POWER` to D0 that reaches a held member's filter
   is passed down with a completion routine and **retained** there, after
   the bus driver has finished with it, so the devices below the port are
-  not powered; nothing waits in a dispatch routine.
+  not powered; nothing waits in a dispatch routine. **On 2000 to 7
+  only**: on Windows 8 and later the D0 is passed down at once (task
+  43.24h, 2026-10-24, below).
 - The NHI thread clears the mark and releases the IRP when its resume has
   either **succeeded** (section 5.6's resume sequence and the
   reconciliation of section 5.3 done, the tunnels re-announced) or
@@ -2525,10 +2527,43 @@ driver makes one:
 - An NHI that does not resume at all (removed, or refused at resume)
   takes the failure path for every held member at its removal.
 
+**Windows 8 and later: no hold** (task 43.24h, 2026-10-24;
+`CmPortsHoldD0`, `cm_ports.h`). The test is the running kernel's own
+version, 6.2 or later, read from the shared user data page
+(`KUSER_SHARED_DATA` `NtMajorVersion` and `NtMinorVersion`) on NT only:
+the WDM version cannot tell, because 8, 8.1 and 10 report the WDM
+version 7 does. The mark is still set at the suspend. A held member's D0 is passed down at
+once and logged (`cm.reenum.hold.passed`, the bridge's location). At the
+NHI's release the member is invalidated whatever the outcome
+(`cm.reenum.hold.passed-released` or `cm.reenum.hold.passed-failed`,
+then the invalidation, `CmPortsRelease`): its devices may have resumed
+against an absent tunnel, and `pci.sys` enumerates the port again now that
+the tunnels are back. The reason is a deadlock in the resume. The NHI's
+device object is `DO_POWER_PAGABLE` and the bridges' are not. The power
+manager of these systems resumes the non-pageable devices before the
+pageable ones, and the bridge's bus driver completes its system S0 only
+once its D0 has completed. A retained bridge D0 therefore kept the NHI
+from ever receiving its own S0 and D0, and the NHI's resume, the only
+thing that releases that D0, never ran. Read on Windows 8 x64
+(`runs/run-43-24.md`): the dump's blocked IRP was the tunnel port's D0,
+held on its filter after the system S0 had passed down. The NHI's log
+ended at its suspend (`cm.suspend=00000005`; suspends 1, resumes 0), and
+the emulator saw no `driver ready` before the power manager's watchdog
+stopped the machine with bug check 0x9F (3). The same bug check was read
+at the resume from hibernation on 8 x86, 8 x64, 8.1 x64 and 10 x64, and
+at the boot after a Fast Startup shutdown (a resume from the hibernation
+file, the default shutdown there) on 8.1 x64 and 10 x64, each with a
+tunnel port marked. XP x64 SP2, Vista SP2 x86, and 7 SP1 x86 and x64
+resumed from hibernation with the enclosure attached and its port
+marked, under the hold, with the drive present and answering afterwards
+and no bug check (tasks 43.21 and 43.44, 2026-10-22, the kit's run
+notes). So 2000 to 7 keep the hold. The legs of task 43.24h read the
+Windows 8 and later path.
+
 Because of that window, **system suspend with a tunnelled device attached
 is unsupported in this release on every target**, and the release notes
-say so: the hold orders the successful resume, and nothing yet orders a
-failed one. Leg `39-V.2` reads, where the guest offers S3, a resume that
+say so: on 2000 to 7 the hold orders the successful resume and nothing
+yet orders a failed one; on Windows 8 and later no resume is ordered. Leg `39-V.2` reads, where the guest offers S3, a resume that
 succeeds, one that fails (the firmware not answering `driver ready`), an
 unplug during sleep, and the watchdog's expiry. On Windows 98 there is no
 such hook at all; Windows 98 on the APM machines this project runs rarely
@@ -6105,7 +6140,9 @@ revised to it in draft 6.
   half rests on `Change_DevNode_Status` setting `DN_REMOVABLE` and on what
   ME's applet lists, both unread.
 - **Resume ordering** (section 6.3): the NT hold orders a successful
-  resume and is unread; a failed one is not ordered, so suspend with a
+  resume on 2000 to 7 (read at hibernation on XP x64, Vista and 7); a
+  failed one is not ordered, and on Windows 8 and later no resume is
+  (task 43.24h: a held D0 deadlocked their resume), so suspend with a
   tunnelled device attached is unsupported on every target in this
   release; Windows 98 has no such hook.
 - **The dock's PCIe switch** (`8086:15d3`, `ICM-PROTOCOL` section 10.1) and

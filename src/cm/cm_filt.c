@@ -375,7 +375,8 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
  * Power: passed down as NT 5.x requires of a filter, except a device D0
  * request on a bridge the NHI holds for its resume (record 21 section
  * 6.3), which cm_reenum.c passes down with a completion routine that
- * retains it.
+ * retains it - on 2000 to 7 only: on Windows 8 and later it goes down at
+ * once (CmRegHoldD0, cm_ports.h CmPortsHoldD0; task 43.24h).
  */
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
 {

@@ -545,6 +545,8 @@ typedef struct _CM_FILTER {
     ULONG HoldReenum;       /* invalidate on the watchdog's failure path   */
     ULONG HoldLeftS;        /* the watchdog's seconds still to run         */
     PIRP HeldIrp;           /* the retained device D0 IRP                  */
+    ULONG Passed;           /* Windows 8 and later: this mark's D0 went
+                             * down at once, unheld (task 43.24h)          */
     ULONG TimerArmed;
     KTIMER HoldTimer;
     KDPC HoldDpc;

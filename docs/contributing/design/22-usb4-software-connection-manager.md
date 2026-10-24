@@ -1559,8 +1559,11 @@ has **succeeded** or **failed**; the filter's watchdog is record 21's
 fixed 5-minute cap, never longer (the NHI's resume bound plus 10 s is
 logged, and logged as over the cap when it would pass it), and its expiry
 is the failure path, never success; an NHI
-that does not resume takes the failure path at its removal. Under this
-profile:
+that does not resume takes the failure path at its removal. On Windows 8
+and later the D0 is never retained (record 21 section 6.3, task 43.24h:
+a retained bridge D0 deadlocked their resume), and the NHI's release
+invalidates each member whose D0 went down unheld, after a successful
+resume too. Under this profile:
 
 - **What must be restored** is tracked per tunnel, not per port state:
   at suspend the NHI records every tunnel that is up on the domain - each
@@ -1602,7 +1605,8 @@ profile:
   top as the watchdog's margin.
 
 Record 21 section 6.3's conclusion stands for this profile too: the hold
-orders a successful resume and cannot close the window of a failed one,
+orders a successful resume on 2000 to 7 (on Windows 8 and later there is
+no hold, task 43.24h) and cannot close the window of a failed one,
 so **system suspend with a tunnelled device attached is unsupported in this
 release on every target**, and the release notes say so. On Windows 98 no
 filter sits on a bridge (record 21 section 6.1) and there is no hold at
@@ -3268,7 +3272,7 @@ from their first form, as each row says.
 | U12 | The device description | Changed by the owner, 2026-10-15 (first form: `xHCI98 USB4 Host Interface`): `xHCI98 USB4 Host Router` for every USB4-generation host whichever connection manager runs it (the "ICM or USB4" ids included), `xHCI98 USB4 PCI Bridge` for its tunnel ports, the same service and binary. From 3.2.0.0 (owner, 2026-10-23, task 43.73): `xHCI98 USB4 Router` with the maker and product per id, the class line plain (record 21 section 3.3) | 3.7 |
 | U13 | `XhciCmTunnelBridge` with more than one tunnel port | Changed (first form: a list indexed by USB4 port): record 21 section 6.3's per-domain override, an unordered set; the port-to-bridge correspondence is router-named or learned (section 7.6), never taken from list order | 7.6, 12 |
 | U14 | The selection | section 3's four tests, the inert start in its two forms, the three positive admissions of section 3.4, and the hardware-profile table apart from the CM table (owner's coverage plan, 2026-10-15) | 3, 4 |
-| U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": the NT hold is released through record 21's failure path (release, then invalidation), since holding a bridge's D0 for ever would hang the system's resume; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
+| U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": the NT hold is released through record 21's failure path (release, then invalidation), since holding a bridge's D0 for ever would hang the system's resume (on Windows 8 and later the D0 is not held at all, because a held D0 deadlocks their resume, task 43.24h: after any resume each member still marked whose D0 went down unheld is released and, with re-enumeration on, invalidated); system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
 | U16 | The TMU | configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
 | U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in `3.0.0.0`. **Revised 2026-10-18** by the owner's opening of Phase 42, which promoted the planned recovery (`U4REC.1`) into `3.1.0.0` as tasks 42-0.5 and 42-A.10: CONTAINED is no longer terminal, the recovery of section 7.7's revision following on its precondition (decisions U18 to U29 there, the orchestrator's) | 7.7 |
 
