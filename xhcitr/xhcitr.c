@@ -6643,6 +6643,7 @@ static void fast_hold_tick(void)
     int k;
 
     if (!fastHold) {
+        fast_announce();        /* one released while the icon was away */
         return;
     }
     if (!fastPending) {
@@ -6688,7 +6689,9 @@ static void fast_balloon_event(int ev)
     int answers = balloon_answers();
 
     if (tr_bsend_step(&fastSend, ev, GetTickCount(), answers)) {
-        if (iconAdded && fastOn && fastCount > 0) {
+        /* Not while a balloon is held: fastText is the held one's now,
+         * and the hold sends it (item 4). */
+        if (iconAdded && fastOn && fastCount > 0 && !fastHold) {
             /* The one still queued, if any, taken away first: an empty
              * szInfo with NIF_INFO removes the icon's balloon (the
              * documented way), so the re-send cannot show beside it. */

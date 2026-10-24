@@ -1922,7 +1922,10 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    3 seconds have passed since the hold began (`FAST_SETTLE_MS`, room for
    its disk and letters), or after 15 seconds whatever it has
    (`FAST_HOLD_MS`). New devices of the refreshes while it is held join
-   its count. A device that has its devnode at the refresh that finds it
+   its count. While it is held, item 9's re-send of an earlier balloon
+   is not made (`fastText` is the held one's), and one released while the
+   icon is away goes at the first tick after the icon is back. A device
+   that has its devnode at the refresh that finds it
    (the tray's first refresh, a device plugged in again) is not held.
    Read on 7 x86 in QEMU with usb-kbd and usb-mouse behind a Full Speed
    hub: "2 USB devices run slower than they can: USB Input Device and 1
