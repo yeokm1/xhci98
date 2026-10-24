@@ -383,7 +383,9 @@ package of make-package.ps1's or into releases\<version>\: the cut refuses to st
 is under releases\ or among the tracked files. What releases\<version>\
 does hold is drvpack.txt, a record of whether the pack was included and, if
 it was, its revision and every file's hash; -UploadSetOnly rebuilds the
-download from that record. The generated readme and the installer's
+download from that record. That record, downloads.txt, otherpkgs.txt and
+wdmfree-pin.txt stay in releases\<version>\ and are left out of every
+upload set and zip (owner, 2026-10-24). The generated readme and the installer's
 NOTICE.TXT name the files when the pack is in the download, and say there is
 no Microsoft file in it when it is not.
 
@@ -2320,7 +2322,8 @@ function New-UploadSet {
     Ensure-Directory $UploadDir
 
     # Start from the published tree, so the two differ by exactly the files
-    # added below and nothing else can drift between them.
+    # added and the records left out below, and nothing else can drift
+    # between them.
     #
     # **$uploadRoot is deliberately not created first, and that is the whole
     # point of this line.** Copy-Item of a directory into a destination that
@@ -2335,6 +2338,18 @@ function New-UploadSet {
     # that a failed run rather than a shipped one; this comment is why the call
     # is shaped the way it is.
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
+
+    # **The release's own records stay in releases\<version>\ alone** (the
+    # owner's decision of 2026-10-24): drvpack.txt, downloads.txt,
+    # otherpkgs.txt and wdmfree-pin.txt, at the top level only. The caller
+    # read them from the published tree, which keeps them; no download
+    # carries them.
+    foreach ($recName in $script:ReleaseRecordOnlyNames) {
+        $recCopy = Join-Path $uploadRoot $recName
+        if (Test-Path -LiteralPath $recCopy -PathType Leaf) {
+            Remove-Item -LiteralPath $recCopy -Force
+        }
+    }
 
     # **The driver pack's NUSB 3.3 folder, at the download's root as
     # NUSB33\** (task 43.3; owner, 2026-10-20 and 2026-10-22): the one thing the set holds that the published

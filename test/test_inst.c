@@ -485,7 +485,11 @@ static void test_cm_only(void)
                             sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
-              strstr(text, "not been tested on Windows 8, 8.1 or 10") != NULL &&
+              strstr(text, "On Windows 8, 8.1 and 10 the xHCI98 USB drivers "
+                     "replace Windows' own USB 3 driver on every xHCI "
+                     "controller") != NULL &&
+              strstr(text, "may need a restart and a second run") != NULL &&
+              strstr(text, "tested") == NULL &&
               strstr(text, "UAS disk driver, when ticked, is only staged") !=
                   NULL &&
               strstr(text, "Stor98 has not been tested") == NULL &&
@@ -5925,9 +5929,10 @@ static void test_other_sets(void)
                  "Report problems at https://github.com/yeokm1/usb-wdm-free.")
           == 0, "texts: the free sentence, the owner's words of 2026-10-23");
     inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98");
-    CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\NONFREE. They are their makers'") != NULL &&
-          strstr(text, "not been tested by this project") != NULL,
-          "texts: the non-free sentence");
+    CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\NONFREE. They are their makers' "
+                       "work, not this project's. Nothing is installed") != NULL &&
+          strstr(text, "tested") == NULL,
+          "texts: the non-free sentence, no testing warning (2026-10-24)");
     inst_other_stage_text(text, sizeof(text), 0);
     CHECK(strcmp(text, "None of them is for this Windows.") == 0,
           "texts: no INF for this Windows");
@@ -5968,19 +5973,20 @@ static void test_other_sets(void)
           strstr(text, ".zip") == NULL, "line: not ours, no free set");
 
     /* The warnings on Next. */
-    CHECK(inst_other_warnings(0, "net/cdcnet", 0, 0, 0, 1) == 0,
+    CHECK(inst_other_warnings(0, 0, 0, 0, 1) == 0,
           "warn: nothing ticked");
-    CHECK(inst_other_warnings(1, "", 1, 0, 0, 0) == 0,
-          "warn: free, every package read here");
-    w = inst_other_warnings(1, "net/cdcnet", 1, 1, 0, 1);
-    CHECK(w == (INST_OW_FREE_UNREAD | INST_OW_NONFREE | INST_OW_X64SIG),
-          "warn: all three");
-    CHECK(inst_other_warnings(0, "", 0, 1, 0, 1) == INST_OW_NONFREE,
+    CHECK(inst_other_warnings(1, 1, 1, 1, 0) == 0,
+          "warn: both ticked and staged, 32-bit: no testing warning");
+    CHECK(inst_other_warnings(1, 0, 1, 0, 1) == 0,
           "warn: no x64 line without a stage box");
-    inst_other_warn_text(w, "net/cdcnet", 1, text, sizeof(text));
-    CHECK(strstr(text, "this Windows: net/cdcnet. They are copied all the same "
-                       "and staged.\n\nThe non-free drivers") != NULL &&
-          strstr(text, "(F8)") != NULL, "warn: the words");
+    w = inst_other_warnings(1, 1, 1, 0, 1);
+    CHECK(w == INST_OW_X64SIG, "warn: the signature note alone");
+    inst_other_warn_text(w, text, sizeof(text));
+    CHECK(strncmp(text, "On 64-bit Windows a staged driver", 33) == 0 &&
+          strstr(text, "(F8)") != NULL && strstr(text, "tested") == NULL &&
+          strstr(text, "non-free") == NULL, "warn: the words");
+    inst_other_warn_text(0, text, sizeof(text));
+    CHECK(text[0] == '\0', "warn: none, no box");
     /* The compiled record of each set: each this release's (the free set's
      * from usb-wdm-free v0.1.0, scripts\package\wdmfree-pin.txt). */
     CHECK(strlen(inst_other_sums(INST_SET_NONFREE)) == 64 &&
@@ -6343,13 +6349,13 @@ static void test_other_pkgs(void)
           "others");
     {
         char wt[1024];
-        INST_U32 w = inst_other_warnings(0, "", 0, 1, 1, 2);
+        INST_U32 w = inst_other_warnings(0, 0, 1, 1, 2);
         CHECK((w & INST_OW_X64STORE) && !(w & INST_OW_X64SIG) &&
-              (inst_other_warnings(0, "", 0, 1, 1, 1) & INST_OW_X64SIG) &&
-              !(inst_other_warnings(0, "", 0, 1, 0, 2) & INST_OW_X64STORE),
+              (inst_other_warnings(0, 0, 1, 1, 1) & INST_OW_X64SIG) &&
+              !(inst_other_warnings(0, 0, 1, 0, 2) & INST_OW_X64STORE),
               "64-bit 8 to 10: the store's words, not Vista's and 7's; only "
               "with a package staged");
-        inst_other_warn_text(INST_OW_X64STORE, "", 0, wt, sizeof(wt));
+        inst_other_warn_text(INST_OW_X64STORE, wt, sizeof(wt));
         CHECK(strstr(wt, "8 to 10") != NULL && strstr(wt, "F8") == NULL,
               "the 8 to 10 words");
     }

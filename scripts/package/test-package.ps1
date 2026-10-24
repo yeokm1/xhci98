@@ -1531,6 +1531,13 @@ try {
         # And the downloads' record (task 43.48), required likewise: download
         # 1 alone.
         Write-AsciiFile -Path (Join-Path $pubRoot "downloads.txt") -Lines (ConvertTo-DownloadsRecord -Version $relVersion -Kinds @("base") -Free $null -NonFree $null)
+        # The two other records a release directory may keep, stand-ins
+        # this mode does not read: with the two above, the four no download
+        # carries (the owner's decision of 2026-10-24).
+        Write-AsciiFile -Path (Join-Path $pubRoot "otherpkgs.txt") -Lines @("stand-in otherpkgs record")
+        Write-AsciiFile -Path (Join-Path $pubRoot "wdmfree-pin.txt") -Lines @("stand-in pin copy")
+        Assert-True ((@($script:ReleaseRecordOnlyNames) -join " ") -eq "drvpack.txt downloads.txt otherpkgs.txt wdmfree-pin.txt") `
+            ("the records no download carries are not exactly the four: " + (@($script:ReleaseRecordOnlyNames) -join ", "))
 
         # What the published tree looks like before the run, so that a mode
         # whose whole promise is "writes nothing under releases\" is held to it.
@@ -1585,6 +1592,20 @@ try {
             foreach ($want in @("release/xhci98.sys", "debug/xhci98.inf")) {
                 Assert-True ($entries -contains $want) "the archive has no '$want' entry."
             }
+            # The release's records stay in releases\<version>\: the zip
+            # and the directory carry none of the four, the record all four.
+            foreach ($rec in @("drvpack.txt", "downloads.txt", "otherpkgs.txt", "wdmfree-pin.txt")) {
+                Assert-True (@($entries | Where-Object { ($_ -split "/")[-1] -ieq $rec }).Count -eq 0) "the archive carries $rec, a record the release directory alone keeps."
+                Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir $rec))) "the upload set carries $rec, a record the release directory alone keeps."
+                Assert-True (Test-Path -LiteralPath (Join-Path $pubRoot $rec)) "-UploadSetOnly took $rec out of the release directory."
+            }
+            # Apart from those four, the set is the published tree file for
+            # file (this download carries no pack and no set).
+            $pubRel = @(Get-ChildItem -LiteralPath $pubRoot -File -Recurse | ForEach-Object { $_.FullName.Substring($pubRoot.TrimEnd('\').Length + 1) } |
+                        Where-Object { @("drvpack.txt", "downloads.txt", "otherpkgs.txt", "wdmfree-pin.txt") -notcontains $_ } | Sort-Object)
+            $upRel = @(Get-ChildItem -LiteralPath $uploadDir -File -Recurse | ForEach-Object { $_.FullName.Substring($uploadDir.TrimEnd('\').Length + 1) } | Sort-Object)
+            Assert-True (($pubRel -join "|") -eq ($upRel -join "|")) `
+                ("the upload set is not the published tree less the four records: " + ((Compare-Object $pubRel $upRel | ForEach-Object { $_.SideIndicator + $_.InputObject }) -join ", "))
         }
 
         # Nothing under releases\ was written to. That is the promise that makes
@@ -1598,6 +1619,10 @@ try {
         $touched = @($pubBefore.Keys | Where-Object { $pubAfter[$_] -ne $pubBefore[$_] })
         Assert-True ($touched.Count -eq 0) `
             ("-UploadSetOnly rewrote " + $touched.Count + " file(s) of the published release, which it must never write to.")
+        # The two stand-ins go: the cases below read this release as a real
+        # one, and an otherpkgs.txt there is parsed as the previous record.
+        Remove-Item -LiteralPath (Join-Path $pubRoot "otherpkgs.txt") -Force
+        Remove-Item -LiteralPath (Join-Path $pubRoot "wdmfree-pin.txt") -Force
 
         # --- assembled from the tracked directory alone ---------------------
         #
@@ -2295,6 +2320,9 @@ try {
             Assert-True (($e -contains "USBDRV/FREE/net/cdcx/w98se-me/CDCX.SYS") -eq ($dk -ne "base")) "$dk's zip has the wrong WDMFREE\."
             Assert-True (($e -contains "USBDRV/NONFREE/ethernet/axs/w98se-me/AXS.INF" -and $e -contains "USBDRV/NONFREE/STAGE.TXT") -eq ($dk -eq "nonfree")) "$dk's zip has the wrong NONFREE\."
             Assert-True (@($e | Where-Object { $_ -like "USBDRV/FREE/video/*" -or $_ -like "USBDRV/NONFREE/nusb33/*" -or ($_ -like "*/NUSB33/*" -and $_ -notlike "USBDRV/NUSB33/*") }).Count -eq 0) "$dk's zip holds an unpinned package or a second NUSB33\."
+            foreach ($rec in @("drvpack.txt", "downloads.txt", "otherpkgs.txt", "wdmfree-pin.txt")) {
+                Assert-True ($e -notcontains $rec -and -not (Test-Path -LiteralPath (Join-Path $pp.Root $rec))) "$dk's download carries $rec, a record the release directory alone keeps."
+            }
             $zn = Get-DownloadZipName -Version $relVersion -Kind $dk
             Assert-True ($rdText.Contains("This is $zn")) "$dk's readme does not say it is $zn."
             Assert-True (($rdText.Contains("These drivers are experimental.")) -eq ($dk -ne "base")) "$dk's readme has the wrong word on the free drivers (the owner's experimental sentence)."
@@ -2306,6 +2334,7 @@ try {
             Assert-True (@($zipEntries["free"] | Where-Object { $zipEntries["nonfree"] -notcontains $_ }).Count -eq 0) "download 3 does not hold every entry of download 2."
         }
         foreach ($nm in @("USBDRV\FREE", "USBDRV\NONFREE", "USBDRV")) { Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot $nm))) "-UploadSetOnly put $nm\ under releases\." }
+        foreach ($rec in @("drvpack.txt", "downloads.txt", "wdmfree-pin.txt")) { Assert-True (Test-Path -LiteralPath (Join-Path $pubRoot $rec)) "-UploadSetOnly took $rec out of the release directory." }
 
         # Refusals, each leaving no zip: a published NONFREE\, a recorded
         # hash the tag does not give, a stand-in pin in this mode.

@@ -1723,7 +1723,9 @@ repository's sources or build depend on another's. What is decided:
   for this project, and the owner took the decision with that stated; it
   is a fact about the decision, not a permission. The pack says its drivers are
   untested by its maintainer (owner, 2026-10-22: no VM checks of them), and
-  the installer and the readme say they are not tested by this project.
+  the installer and the readme say they are other makers' drivers, not
+  this project's work (until 2026-10-24 they also said the drivers were not
+  tested by this project; the owner removed that warning that day).
 - **`WDMFREE\` is the qualifying drivers of a tagged `usb-wdm-free`
   release** (the owner's own GPL-2.0 project), every file held to a SHA-256
   in `scripts/package/wdmfree-pin.txt`, with that release's `LICENSE` and

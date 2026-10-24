@@ -2111,18 +2111,14 @@ const char *inst_other_stage_label(void);
 void inst_other_stage_text(char *out, size_t cap, int n);
 void inst_other_line(char *out, size_t cap, int set, int state,
                      int releaseHas, const char *version);
-/* The page's warnings on Next (section 6.7.4): freeUnread the free
- * packages with an INF for this system that READ.TXT does not read on it
- * ("" for none), the boxes as ticked, x64nt6 64-bit Vista or 7. */
-#define INST_OW_FREE_UNREAD     0x01UL
-#define INST_OW_NONFREE         0x02UL
+/* The page's warnings on Next (section 6.7.4): the 64-bit signature notes
+ * alone, no testing warning (the owner's decision of 2026-10-24); the boxes
+ * as ticked, x64nt6 1 for 64-bit Vista or 7, 2 for 64-bit 8 to 10. */
 #define INST_OW_X64SIG          0x04UL
 #define INST_OW_X64STORE        0x08UL  /* 64-bit 8 to 10 (section 6.7.11) */
-INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
-                             int freeStage, int nonfreeTicked,
-                             int nonfreeStage, int x64nt6);
-void inst_other_warn_text(INST_U32 set, const char *freeUnread,
-                          int freeStage, char *out, size_t cap);
+INST_U32 inst_other_warnings(int freeTicked, int freeStage,
+                             int nonfreeTicked, int nonfreeStage, int x64nt6);
+void inst_other_warn_text(INST_U32 set, char *out, size_t cap);
 
 /* ---- the USB storage drivers on Windows 98 SE (record 26 section 6.5;
  * roadmap-usb4 task 43.4) ----------------------------------------------- */

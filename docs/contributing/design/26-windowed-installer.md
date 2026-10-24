@@ -665,7 +665,9 @@ if it does not fit, the value is left as it was, the staging is reported
 not done, and the Finish page and the readme give the copied folders as
 for a driver not staged. The non-free row's sentence
 and its sub-box carry a firmer warning ("not tested by this project;
-the vendors' drivers as released"): the pack's vendors' own setups are
+the vendors' drivers as released"; the owner's decision of 2026-10-24
+removed the testing warning and kept the other makers' attribution,
+section 6.7.4): the pack's vendors' own setups are
 the user's to run, this package carrying the pack and not being its
 installer. Three rules bound the staging: only an INF-based driver is
 staged, a driver that comes with a setup program being copied only,
@@ -1136,6 +1138,16 @@ ticking them again gives the Thunderbolt box back its own state.
 
 #### 5.3.1 Every box on every system (task 43.43; draft 20)
 
+The owner's decision of 2026-10-24, amending this section and every page
+and box below that quotes a testing caveat: no installer page, message box
+or console line says that a driver has not been tested, xHCI98's own
+included. The warnings keep their facts and cautions (on 8, 8.1 and 10
+the USB drivers replace Windows' own on every xHCI controller, the
+keyboard's and mouse's included; the uninstall gives the controllers back
+and may need a restart and a second run; the UAS driver is only staged
+there), and lose the "untested" words (`INST_CW_USB8`, `INST_CW_CMALONE`,
+`INST_PT_WELCOME_TOOLS`, `INST_PT_DRIVERS_T8`, the console's `/usb` lines).
+
 The owner, 2026-10-21: "for the installer first page, all options should
 be available to all OS. Defaults can remain", and the same day, in place
 of "greyed with a reason": every box shown and tickable on every system,
@@ -1499,9 +1511,14 @@ under the rows 20 dialog units tall, two lines.
   evenly (the first parts take one row more where they cannot be
   equal: four rows are two and two), such that every part of two or
   more rows fits that room. A lone row taller than the room takes it
-  from the note, down to two lines of the note's font; a row taller
+  from the note, down to three lines of the note's font (two until the
+  owner's decision of 2026-10-24: no scrolling read-only box in the
+  window shows fewer than three lines; the Components page's storage
+  box, `IDC_C_STOR_T`, grew from 20 to 27 dialog units under the same
+  decision, the rows below it moving down by 21 to 17 units so the
+  page keeps its height); a row taller
   still is beyond what the window lays out (a font about three times
-  the dialog's), and the note then keeps its two lines at the page's
+  the dialog's), and the note then keeps its three lines at the page's
   foot. With the head carrying its part words, one property-sheet page
   carries every part.
 - *Moving between parts*: Next on a part before the last takes the
@@ -2897,7 +2914,9 @@ https://github.com/yeokm1/usb-wdm-free."); download
 3 says that `USBDRV\NONFREE\` holds other makers' drivers, Microsoft's KMDF
 co-installers among them, unmodified, with no licence to redistribute
 them established (legal-provenance.md section 5), and that they are not
-tested by this project. Its "What is in this directory" lists the
+this project's work (until 2026-10-24 it also said they were not tested
+by this project; section 6.7.4 has the owner's decision). Its "What is
+in this directory" lists the
 download's folders.
 
 #### 6.7.2 What each folder holds, and its record
@@ -3058,7 +3077,8 @@ top:
   game pads) to <dir>\USBDRV\NONFREE. They are their makers' work, not this
   project's, and have not been tested by this project on any Windows.
   Nothing is installed: Windows uses them only for a device you point it
-  at, or with the box below."
+  at, or with the box below." (2026-10-24: without the testing clause, as
+  the owner's decision at the end of this section has it.)
 - **Under each row, always, and in place of the row where the set is not
   carried**, one line (`inst_other_absent_text`, host-tested for both
   sets, the three states and both release forms): carried, "Up to date:
@@ -3105,6 +3125,26 @@ only on a start with driver signature enforcement disabled (F8), a
 test-signed one also in test-signing mode."
 OK goes on, Cancel stays, as section 5.3.1 has it; the console prints
 them under "WARNING:".
+
+**No testing warnings (the owner's decision of 2026-10-24, amending
+this section, sections 6.7 and 6.7.1 and section 6.7.11's 8 to 10
+paragraph where they say otherwise).** The Other USB drivers page, its
+warnings on Next, the console's `/wdmfree` and `/wdmnonfree` warnings,
+the per-package details, the readme and the downloads' readme say
+nothing about testing for either set. The two testing paragraphs above
+are gone, with their bits (named `INST_CW_` above, `INST_OW_FREE_UNREAD`
+and `INST_OW_NONFREE` in the code): `inst_other_warnings`
+and `inst_other_warn_text` keep only the two 64-bit signature notes,
+`INST_OW_X64SIG` (64-bit Vista and 7, the paragraph above) and
+`INST_OW_X64STORE` (64-bit 8 to 10, section 6.7.11), so the message box
+on Next shows only when one of them applies. The non-free row's sentence
+keeps the attribution and drops the rest: "Copies other makers' drivers
+(USB Ethernet, serial and game pads) to <dir>\USBDRV\NONFREE. They are
+their makers' work, not this project's. Nothing is installed: Windows
+uses them only for a device you point it at, or with the boxes below."
+A non-free package's details end "Another maker's driver." The free
+set's `READ.TXT` is still packaged and read, and no longer drives a
+warning.
 
 #### 6.7.5 Ticked: the copy
 

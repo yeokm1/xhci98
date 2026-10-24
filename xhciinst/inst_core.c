@@ -3839,17 +3839,16 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "dock's included, stays without one, and the USB devices "
                       "on it do not work. Only the Thunderbolt 3 / USB4 "
                       "connection manager is installed; xHCI98 USB drivers "
-                      "already installed stay as they are. This has not been "
-                      "tested on Windows 98 SE or ME.");
+                      "already installed stay as they are.");
     }
     if (set & INST_CW_USB8) {
         inst_cat_para(out, cap,
-                      "The xHCI98 USB drivers have not been tested on Windows "
-                      "8, 8.1 or 10. They replace Windows' own USB 3 driver on "
-                      "every xHCI controller, the one your keyboard and mouse "
-                      "may use included. The uninstall is meant to give the "
-                      "controllers back to Windows' own driver; that has not "
-                      "been tested either. There the UAS disk driver, when "
+                      "On Windows 8, 8.1 and 10 the xHCI98 USB drivers replace "
+                      "Windows' own USB 3 driver on every xHCI controller, the "
+                      "one your keyboard and mouse may use included. The "
+                      "uninstall gives the controllers back to Windows' own "
+                      "driver, and may need a restart and a second run to "
+                      "finish. There the UAS disk driver, when "
                       "ticked, is only staged: Windows' own UAS driver stays "
                       "the default, and xhciuas.sys can be chosen for a disk "
                       "in Device Manager.");
@@ -5503,13 +5502,13 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_WELCOME_TOOLS,
       "This puts the xHCI98 tools in a folder you choose, and installs the "
       "xHCI98 USB 3.x drivers only if you tick them on the next page "
-      "(untested on this Windows, where its own USB 3 driver runs the "
-      "controllers). Nothing is changed until you click Install on the "
+      "(on this Windows its own USB 3 driver runs the controllers). "
+      "Nothing is changed until you click Install on the "
       "Summary page. Help opens the readme.",
       284, 58 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "
-      "replaces it (untested here).",
+      "replaces it.",
       272, 16 },
     { INST_PT_DRIVERS_OFF,
       "Left out: the connection manager alone. USB drivers already "
@@ -7774,9 +7773,9 @@ void inst_other_sentence(char *out, size_t cap, int set, const char *dir)
         inst_catv(out, cap, 3, "Copies other makers' drivers (USB Ethernet, "
                   "serial and game pads) to ", dir,
                   "\\" INST_NONFREE_DIR ". They are their makers' work, not "
-                  "this project's, and have not been tested by this project on "
-                  "any Windows. Nothing is installed: Windows uses them only "
-                  "for a device you point it at, or with the boxes below.");
+                  "this project's. Nothing is installed: Windows uses them "
+                  "only for a device you point it at, or with the boxes "
+                  "below.");
     }
 }
 
@@ -7840,18 +7839,11 @@ void inst_other_line(char *out, size_t cap, int set, int state,
     }
 }
 
-INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
-                             int freeStage, int nonfreeTicked,
-                             int nonfreeStage, int x64nt6)
+INST_U32 inst_other_warnings(int freeTicked, int freeStage,
+                             int nonfreeTicked, int nonfreeStage, int x64nt6)
 {
     INST_U32 w = 0;
 
-    if (freeTicked && freeUnread != NULL && freeUnread[0] != '\0') {
-        w |= INST_OW_FREE_UNREAD;
-    }
-    if (nonfreeTicked) {
-        w |= INST_OW_NONFREE;
-    }
     if (x64nt6 && ((freeTicked && freeStage) ||
                    (nonfreeTicked && nonfreeStage))) {
         w |= x64nt6 == 2 ? INST_OW_X64STORE : INST_OW_X64SIG;
@@ -7859,29 +7851,12 @@ INST_U32 inst_other_warnings(int freeTicked, const char *freeUnread,
     return w;
 }
 
-void inst_other_warn_text(INST_U32 set, const char *freeUnread,
-                          int freeStage, char *out, size_t cap)
+void inst_other_warn_text(INST_U32 set, char *out, size_t cap)
 {
-    char one[768];
-
     if (cap == 0) {
         return;
     }
     out[0] = '\0';
-    if (set & INST_OW_FREE_UNREAD) {
-        inst_catv(one, sizeof(one), 4, "Some of the free USB class drivers "
-                  "have not been tested on this Windows: ", freeUnread,
-                  ". They are copied all the same",
-                  freeStage ? " and staged." : ".");
-        inst_cat_para(out, cap, one);
-    }
-    if (set & INST_OW_NONFREE) {
-        inst_cat_para(out, cap,
-                      "The non-free drivers have not been tested by this "
-                      "project on any Windows. They are copied as their makers "
-                      "released them; if a device misbehaves with one, remove "
-                      "the device in Device Manager and run the uninstall.");
-    }
     if (set & INST_OW_X64SIG) {
         inst_cat_para(out, cap,
                       "On 64-bit Windows a staged driver loads only if Windows "

@@ -50,12 +50,12 @@ xhciuas.sys) out and install only the Thunderbolt 3 / USB4 connection
 manager, for a computer whose USB 3 controllers already run another
 maker's driver - untick the USB drivers on the Components page, or
 INSTALL /console /cmonly. On Windows 98 SE and ME the installer warns
-first: those systems have no USB 3 driver of their own, and this has not
-been tested there. On Windows 8, 8.1 and 10 the USB drivers are
-unticked by default, Windows' own driver running the controllers;
-ticking them (or /usb) replaces Windows' own, with a warning that they
-are untested there. Stor98 is ticked with the Thunderbolt support on
-every system but 10, where Windows' own NVMe driver (stornvme) stays the
+first: those systems have no USB 3 driver of their own. On Windows 8,
+8.1 and 10 the USB drivers are unticked by default, Windows' own driver
+running the controllers; ticking them (or /usb) replaces Windows' own on
+every xHCI controller, with a warning that says so. Stor98 is ticked
+with the Thunderbolt support on every system but 10, where Windows' own
+NVMe driver (stornvme) stays the
 tunnelled drive's driver and Stor98 is yours to tick (task 43.59); on
 8.1 it replaces stornvme on a drive behind a tunnel. Windows 11 (build
 22000 and later) is refused: it has a USB4 connection manager of its
@@ -192,7 +192,7 @@ experimental. They may not work with every device and can make Windows
 unstable. Report problems at https://github.com/yeokm1/usb-wdm-free."),
 and -nonfree.zip, which adds the non-free driver pack of
 usb-wdm-nonfree in USBDRV\NONFREE: other makers' drivers, not this
-project's and not tested by it. The page shows a row for each set this
+project's work. The page shows a row for each set this
 download carries and, for each it does not, which download and which
 address have it (https://github.com/yeokm1/usb-wdm-free and
 https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers
@@ -255,8 +255,7 @@ The console tool
                                 USB drivers (with a warning on 98 SE and
                                 ME; on 8, 8.1 and 10 the default)
   INSTALL /console /usb         Windows 8, 8.1 and 10: installs the USB
-                                drivers too, over Windows' own (untested
-                                there)
+                                drivers too, over Windows' own
   INSTALL /console /thunderbolt /stor98
                                 installs the bundled Stor98 without asking;
                                 it is part of the Thunderbolt 3 / USB4
@@ -356,9 +355,9 @@ Windows 10 is installable. Its drivers were read in virtual machines of
 22H2, each installed by a script; the installer's console install and
 uninstall were read there in task 43.59's legs (10 x86 and x64), and the
 full matrix through the installer in task 43.24's (an uninstall there may
-need a restart and a second run). It admits every build below 22000 -
-the releases 1507 to 22H2 and
-the LTSC releases - and Windows Server 2016, 2019 and 2022, which it
+need a restart and a second run). It admits every release of Windows 10,
+1507 to 22H2 and the LTSC releases, and Windows Server 2016, 2019 and
+2022, which it
 treats as Windows 10 and which are untested; only 22H2 is to be tested.
 It installs there as on Windows 8.1 but for Stor98: the connection manager,
 with Stor98 unticked (Windows' own stornvme stays; /stor98 asks for Stor98),
