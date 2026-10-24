@@ -7950,9 +7950,11 @@ const int instOtherHeadingCount =
  * xpad98's is the owner's compatibility wording of 2026-10-23, a DEVICE
  * row, with the trademark notice in the release notes. */
 const INST_OTHER_PKG instOtherPkgs[] = {
+    /* uac1 and ax88179 are in no usb-wdm-free release 3.2.0.0 carries
+     * (v0.1.0): withdrawn, their words and ids kept. */
     { INST_SET_FREE, "audio/uac1", INST_PKG_CLASS, "Audio",
       "USB audio (uac1): USB Audio Class 1.0 speakers, headsets and "
-      "microphones", 0 },
+      "microphones", 1 },
     { INST_SET_FREE, "audio/uac2", INST_PKG_CLASS, "Audio",
       "USB audio (uac2): USB Audio Class 2.0 sound cards and DACs", 0 },
     { INST_SET_FREE, "audio/usbmidi", INST_PKG_CLASS, "Audio",
@@ -7964,7 +7966,7 @@ const INST_OTHER_PKG instOtherPkgs[] = {
     { INST_SET_FREE, "net/cdcnet", INST_PKG_CLASS, "Network",
       "USB Ethernet (cdcnet): CDC ECM, CDC NCM and RNDIS adapters", 0 },
     { INST_SET_FREE, "net/ax88179", INST_PKG_DEVICE, "Network",
-      "USB Ethernet (ax88179): adapters with an ASIX AX88179 chip", 0 },
+      "USB Ethernet (ax88179): adapters with an ASIX AX88179 chip", 1 },
     { INST_SET_FREE, "net/rtl815x", INST_PKG_DEVICE, "Network",
       "USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or "
       "RTL8153 chip", 0 },

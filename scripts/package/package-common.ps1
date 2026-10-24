@@ -3312,7 +3312,17 @@ function Test-OtherPkgTable {
             }
         }
     }
-    $rels = @($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" })
+    # A pair a carried set's STAGE.TXT names with the same kind as the
+    # installer's own line for it (the installer's proposal for the
+    # maintainer, which it reads only after the pack's lines) is the pack's
+    # declaration: the installer's line is not counted twice against it. A
+    # pack line of the other kind on a common system is still refused.
+    $metaRels = @($Meta | Where-Object { $_.Kind -cne "PACKAGE" })
+    $tableRels = @($Table.Rels | Where-Object {
+        $t = $_
+        @($metaRels | Where-Object { $_.Kind -ceq $t.Kind -and (($_.A -ceq $t.A -and $_.B -ceq $t.B) -or ($_.A -ceq $t.B -and $_.B -ceq $t.A)) }).Count -eq 0
+    })
+    $rels = @($tableRels) + @($metaRels)
     for ($i = 0; $i -lt $rels.Count; $i++) {
         foreach ($q in @($rels[$i].A, $rels[$i].B)) {
             if (-not $known.ContainsKey($q)) { throw "a $($rels[$i].Kind) line names $q, which no package of either set's known metadata has ever had." }

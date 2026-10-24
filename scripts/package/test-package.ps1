@@ -2165,6 +2165,13 @@ try {
             try { Test-OtherPkgTable -Table $t2 -Sets $setA -Meta $bad.M -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
             Assert-True ($msg.Contains($bad.Want)) ("the package table with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
         }
+        # The pack naming a pair the installer's table names, with the same
+        # kind, is the pack's declaration, not a second line for the pair
+        # (usb-wdm-free v0.1.0's STAGE.TXT and the table's proposals).
+        $mSame = @([pscustomobject]@{ Kind = "EXCLUDES"; A = "free:net/b"; B = "free:net/a"; Systems = @("W98SE", "WME"); Desc = "m"; Set = "free" })
+        $msg = ""
+        try { Test-OtherPkgTable -Table $tblT -Sets $setA -Meta $mSame -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg -eq "") ("the pack's EXCLUDES line for a pair the table also excludes was refused: '" + $msg + "'")
         # The history: a row or a line is never dropped.
         $recA = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n") -Label "a"
         Assert-True ($recA.Rows.Count -eq 2 -and $recA.Rels.Count -eq 1 -and $recA.Version -eq "3.2.0.0") "otherpkgs.txt does not read back as written."
