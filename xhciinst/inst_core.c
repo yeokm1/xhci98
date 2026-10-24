@@ -6398,6 +6398,109 @@ int inst_le_ddb_name(const unsigned char *buf, size_t n, char name[9])
     return 1;
 }
 
+int inst_rename_scan(const char *text, INST_RENAME_FN fn, void *ctx)
+{
+    const char *p = text;
+    int inRename = 0;
+
+    while (p != NULL && *p != '\0') {
+        char line[INST_RENAME_LINE];
+        const char *end = p;
+        char *a;
+        char *z;
+        char *eq;
+        size_t len;
+
+        while (*end != '\0' && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        len = (size_t)(end - p);
+        if (len >= sizeof(line)) {
+            return 0;
+        }
+        memcpy(line, p, len);
+        line[len] = '\0';
+        p = end;
+        while (*p == '\r' || *p == '\n') {
+            p++;
+        }
+        for (a = line; *a == ' ' || *a == '\t'; a++) {
+        }
+        z = a + strlen(a);
+        while (z > a && (z[-1] == ' ' || z[-1] == '\t')) {
+            *--z = '\0';
+        }
+        if (*a == '[') {
+            inRename = inst_eq(a, "[rename]");
+            continue;
+        }
+        if (!inRename || *a == ';' || (eq = strchr(a, '=')) == NULL) {
+            continue;
+        }
+        *eq = '\0';
+        for (z = eq; z > a && (z[-1] == ' ' || z[-1] == '\t'); ) {
+            *--z = '\0';
+        }
+        for (z = eq + 1; *z == ' ' || *z == '\t'; z++) {
+        }
+        if (!fn(ctx, a, z)) {
+            break;
+        }
+    }
+    return 1;
+}
+
+typedef struct _INST_VSD_SCAN {
+    const char *Dest;
+    const char *DestS;
+    const char *Tmp;
+    const char *TmpS;
+    int Exact;
+    int Other;
+} INST_VSD_SCAN;
+
+static int inst_vsd_names(const char *side, const char *lng, const char *shrt)
+{
+    return inst_eq(side, lng) || inst_eq(side, shrt);
+}
+
+static int inst_vsd_scan_line(void *ctx, const char *key, const char *value)
+{
+    INST_VSD_SCAN *s = (INST_VSD_SCAN *)ctx;
+    int keyDest = inst_vsd_names(key, s->Dest, s->DestS);
+    int keyTmp = inst_vsd_names(key, s->Tmp, s->TmpS);
+    int valDest = inst_vsd_names(value, s->Dest, s->DestS);
+    int valTmp = inst_vsd_names(value, s->Tmp, s->TmpS);
+
+    if (keyDest && valTmp) {
+        s->Exact++;
+    } else if (keyDest || keyTmp || valDest || valTmp) {
+        s->Other++;
+    }
+    return 1;
+}
+
+int inst_vsd_entry_text(const char *text, const char *dest,
+                        const char *destS, const char *tmp,
+                        const char *tmpS)
+{
+    INST_VSD_SCAN s;
+
+    s.Dest = dest;
+    s.DestS = destS;
+    s.Tmp = tmp;
+    s.TmpS = tmpS;
+    s.Exact = 0;
+    s.Other = 0;
+    if (!inst_rename_scan(text, inst_vsd_scan_line, &s)) {
+        return INST_VE_CONFLICT;
+    }
+    if (s.Other != 0) {
+        return INST_VE_CONFLICT;
+    }
+    return s.Exact != 0 ? INST_VE_EXACT : INST_VE_ABSENT;
+}
+
 int inst_vsd_old_is_own(const unsigned char *buf, size_t n, const char *hash,
                         const char *file, const char *pend)
 {

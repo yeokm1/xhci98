@@ -1793,6 +1793,21 @@ int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
 #define INST_VE_EXACT       1   /* this installer's one line, and no other */
 #define INST_VE_CONFLICT    2   /* any other line naming either file       */
 
+/* WININIT.INI's text, read whole from the file (98 SE's and ME's
+ * GetPrivateProfileSectionA did not give its [rename] lines back, the
+ * 3.2.0.0 matrix): each line of a [rename] section, the key and the value
+ * trimmed, ';' lines skipped, to fn, which returns 0 to stop. 1 read
+ * whole; 0 a line longer than INST_RENAME_LINE (nothing then decided). */
+#define INST_RENAME_LINE    1040
+typedef int (*INST_RENAME_FN)(void *ctx, const char *key, const char *value);
+int inst_rename_scan(const char *text, INST_RENAME_FN fn, void *ctx);
+/* S98VSD.VXD's entry in that text: INST_VE_*, the long and the 8.3 path
+ * of each file compared without regard to case; a text not read whole is
+ * INST_VE_CONFLICT. */
+int inst_vsd_entry_text(const char *text, const char *dest,
+                        const char *destS, const char *tmp,
+                        const char *tmpS);
+
 typedef struct _INST_VSDFACTS {
     int Pending;            /* the record's Pending value is set          */
     int FileVal;            /* the record's File value is set             */

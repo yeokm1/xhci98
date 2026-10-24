@@ -449,6 +449,7 @@ static int s98_rec_has(const char *sub, const char *name);
 static int s98_pending_resolve(int uninstall);
 static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
+static char *wininit_text(const char *ini, int *gone);
 static int own_put(const char *from, const char *to);
 static int remove_nt(HDEVINFO set, const DEVREC *d);
 static int own_put_as(const char *from, const char *to, const char *tmpExt);
@@ -12758,23 +12759,58 @@ static void files_9x(int list)
 /* A WININIT.INI [rename] line that puts a file over one of this package's
  * driver files in SYSTEM32\DRIVERS at the next start (the setup engine's
  * pending copy, xhci98.inf's [Xhci.CopyFiles] row: xhci98.sys=...\xhci98.tmp):
- * its file name into what, 1; 0 for none; -1 when the section cannot be
- * read whole (no memory, or longer than the buffer), which the caller
+ * its file name into what, 1; 0 for none; -1 when the file cannot be
+ * read whole (unreadable, or a line too long), which the caller
  * takes as a pending one. An uninstall before that restart would delete
  * the file and the restart put it back. */
+typedef struct _RENPEND {
+    const char *Drv;
+    char *What;
+    size_t Cap;
+    int Hit;
+} RENPEND;
+
+static int rename_pending_line(void *ctx, const char *key, const char *value)
+{
+    RENPEND *r = (RENPEND *)ctx;
+    char full[INST_PATH_CHARS];
+    char sf[INST_PATH_CHARS];
+    char st[INST_PATH_CHARS];
+    DWORD n;
+    size_t i;
+
+    (void)value;
+    if (key[0] == '\0' || inst_eq(key, "NUL")) {
+        return 1;
+    }
+    n = GetShortPathNameA(key, st, sizeof(st));
+    if (n == 0 || n >= sizeof(st)) {
+        inst_copy(st, key, sizeof(st));
+    }
+    for (i = 0; i < sizeof(instFiles) / sizeof(instFiles[0]); i++) {
+        join(full, sizeof(full), r->Drv, instFiles[i]);
+        n = GetShortPathNameA(full, sf, sizeof(sf));
+        if (n == 0 || n >= sizeof(sf)) {
+            inst_copy(sf, full, sizeof(sf));
+        }
+        if (inst_eq(key, full) || inst_eq(st, sf)) {
+            inst_copy(r->What, instFiles[i], r->Cap);
+            r->Hit = 1;
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int rename_pending_9x(char *what, size_t cap)
 {
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
     char drv[INST_PATH_CHARS];
-    char full[INST_PATH_CHARS];
-    char sf[INST_PATH_CHARS];
-    char st[INST_PATH_CHARS];
-    char *sec;
-    char *p;
-    DWORD n;
-    size_t i;
-    int hit = 0;
+    RENPEND r;
+    char *text;
+    int gone;
+    int whole;
 
     what[0] = '\0';
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
@@ -12782,44 +12818,26 @@ static int rename_pending_9x(char *what, size_t cap)
     }
     join(ini, sizeof(ini), win, "WININIT.INI");
     join(drv, sizeof(drv), win, "SYSTEM32\\DRIVERS");
-    sec = (char *)calloc(1, 32768);
-    if (sec == NULL) {
-        inst_copy(what, "WININIT.INI's [rename] (no memory to read it)", cap);
+    text = wininit_text(ini, &gone);
+    if (text == NULL) {
+        if (gone) {
+            return 0;
+        }
+        inst_copy(what, "WININIT.INI's [rename] (it cannot be read)", cap);
         return -1;
     }
-    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
-    if (n >= 32768 - 2) {
-        free(sec);
-        inst_copy(what, "WININIT.INI's [rename] (too long to read whole)",
+    r.Drv = drv;
+    r.What = what;
+    r.Cap = cap;
+    r.Hit = 0;
+    whole = inst_rename_scan(text, rename_pending_line, &r);
+    free(text);
+    if (!r.Hit && !whole) {
+        inst_copy(what, "WININIT.INI's [rename] (a line too long to read)",
                   cap);
         return -1;
     }
-    for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
-        char *eq = strchr(p, '=');
-        if (eq == NULL || eq == p) {
-            continue;
-        }
-        *eq = '\0';
-        n = GetShortPathNameA(p, st, sizeof(st));
-        if (n == 0 || n >= sizeof(st)) {
-            inst_copy(st, p, sizeof(st));
-        }
-        for (i = 0; i < sizeof(instFiles) / sizeof(instFiles[0]) && !hit;
-             i++) {
-            join(full, sizeof(full), drv, instFiles[i]);
-            n = GetShortPathNameA(full, sf, sizeof(sf));
-            if (n == 0 || n >= sizeof(sf)) {
-                inst_copy(sf, full, sizeof(sf));
-            }
-            if (inst_eq(p, full) || inst_eq(st, sf)) {
-                inst_copy(what, instFiles[i], cap);
-                hit = 1;
-            }
-        }
-        *eq = '=';
-    }
-    free(sec);
-    return hit;
+    return r.Hit;
 }
 
 static int run_uninstall_9x(void)
@@ -17774,58 +17792,70 @@ static int vsd_names(const char *side, const char *lng, const char *shrt)
     return inst_eq(side, lng) || inst_eq(side, shrt);
 }
 
-/* WININIT.INI's [rename] lines naming either file: INST_VE_*. */
-static int vsd_entry(const char *dest, const char *tmp, const char *destS,
-                     const char *tmpS)
+/* WININIT.INI read whole, after 9x's profile cache is flushed to it (the
+ * file, not the profile routines: 98 SE and ME gave the section back
+ * without this installer's own line, the 3.2.0.0 matrix). NULL with *gone
+ * 1 when there is no file; NULL with *gone 0 when it cannot be read. */
+static char *wininit_text(const char *ini, int *gone)
+{
+    DWORD err;
+    char *buf;
+
+    *gone = 0;
+    WritePrivateProfileStringA(NULL, NULL, NULL, ini);
+    if (GetFileAttributesA(ini) == (DWORD)0xFFFFFFFF) {
+        err = GetLastError();
+        *gone = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND;
+        return NULL;
+    }
+    buf = read_file(ini, NULL);
+    return buf;
+}
+
+static int vsd_line_noop(void *ctx, const char *key, const char *value)
+{
+    (void)ctx;
+    (void)key;
+    (void)value;
+    return 1;
+}
+
+/* WININIT.INI's [rename] lines naming either file: INST_VE_*. A section
+ * that cannot be read is INST_VE_CONFLICT, with *unread 1 (unread may be
+ * NULL). */
+static int vsd_entry_r(const char *dest, const char *tmp, const char *destS,
+                       const char *tmpS, int *unread)
 {
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
-    char *sec;
-    char *p;
-    DWORD n;
-    int exact = 0;
-    int other = 0;
+    char *text;
+    int gone;
+    int r;
+    int dummy;
 
+    if (unread == NULL) {
+        unread = &dummy;
+    }
+    *unread = 1;
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return INST_VE_CONFLICT;
     }
     join(ini, sizeof(ini), win, "WININIT.INI");
-    sec = (char *)malloc(32768);
-    if (sec == NULL) {
-        return INST_VE_CONFLICT;
+    text = wininit_text(ini, &gone);
+    if (text == NULL) {
+        *unread = !gone;
+        return gone ? INST_VE_ABSENT : INST_VE_CONFLICT;
     }
-    n = GetPrivateProfileSectionA("rename", sec, 32768, ini);
-    if (n >= 32768 - 2) {
-        free(sec);
-        return INST_VE_CONFLICT;
-    }
-    for (p = sec; *p != '\0'; p += strlen(p) + 1) {
-        char line[2 * INST_PATH_CHARS];
-        char *eq;
-        int namesDest;
-        int namesTmp;
-        inst_copy(line, p, sizeof(line));
-        eq = strchr(line, '=');
-        if (eq == NULL) {
-            continue;
-        }
-        *eq = '\0';
-        namesDest = vsd_names(line, dest, destS) || vsd_names(eq + 1, dest, destS);
-        namesTmp = vsd_names(line, tmp, tmpS) || vsd_names(eq + 1, tmp, tmpS);
-        if (!namesDest && !namesTmp) {
-            continue;
-        }
-        if (vsd_names(line, dest, destS) && vsd_names(eq + 1, tmp, tmpS)) {
-            exact++;
-        } else {
-            other++;
-        }
-    }
-    free(sec);
-    if (other != 0) {
-        return INST_VE_CONFLICT;
-    }
-    return exact != 0 ? INST_VE_EXACT : INST_VE_ABSENT;
+    *unread = !inst_rename_scan(text, vsd_line_noop, NULL);
+    r = inst_vsd_entry_text(text, dest, destS, tmp, tmpS);
+    free(text);
+    return r;
+}
+
+static int vsd_entry(const char *dest, const char *tmp, const char *destS,
+                     const char *tmpS)
+{
+    return vsd_entry_r(dest, tmp, destS, tmpS, NULL);
 }
 
 /* The facts of record 30 section 7.3, read afresh. 0 unreadable. */
@@ -17924,6 +17954,7 @@ static int vsd_do(int op, const char *file, const char *pend)
     char src[INST_PATH_CHARS];
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
+    int unread = 0;
 
     (void)file;
     if (!vsd_paths(dest, tmp, destS, tmpS, sizeof(dest)) ||
@@ -17937,7 +17968,8 @@ static int vsd_do(int op, const char *file, const char *pend)
     case INST_VOP_DEL_ENTRY:
         if (!WritePrivateProfileStringA("rename", destS, NULL, ini) ||
             !WritePrivateProfileStringA("rename", dest, NULL, ini) ||
-            vsd_entry(dest, tmp, destS, tmpS) == INST_VE_EXACT) {
+            vsd_entry_r(dest, tmp, destS, tmpS, &unread) == INST_VE_EXACT ||
+            unread) {
             out("S98VSD.VXD's [rename] line in %s could not be taken back "
                 "(error %lu).\n", ini, (unsigned long)GetLastError());
             return 0;
@@ -18024,80 +18056,53 @@ static int vsd_do(int op, const char *file, const char *pend)
  * when the source is this installer's S98VSD.TMP, other otherwise. The
  * file is read whole and parsed here, so a read that fails is never an
  * empty section: 0 unless the file was read, or is not there at all. */
+typedef struct _VSDOLD {
+    const char *Old;
+    const char *OldS;
+    const char *Tmp;
+    const char *TmpS;
+    int *Own;
+    int *Other;
+} VSDOLD;
+
+static int vsd_old_line(void *ctx, const char *key, const char *value)
+{
+    VSDOLD *v = (VSDOLD *)ctx;
+
+    if (vsd_names(key, v->Old, v->OldS)) {
+        if (vsd_names(value, v->Tmp, v->TmpS)) {
+            (*v->Own)++;
+        } else {
+            (*v->Other)++;
+        }
+    }
+    return 1;
+}
+
 static int vsd_old_lines(const char *ini, const char *old, const char *oldS,
                          const char *tmp, const char *tmpS, int *own,
                          int *other)
 {
-    char *buf;
-    char *p;
-    DWORD size = 0;
-    DWORD err;
-    int inRename = 0;
+    VSDOLD v;
+    char *text;
+    int gone;
+    int r;
 
     *own = 0;
     *other = 0;
-    if (GetFileAttributesA(ini) == (DWORD)0xFFFFFFFF) {
-        err = GetLastError();
-        return err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND;
+    text = wininit_text(ini, &gone);
+    if (text == NULL) {
+        return gone;
     }
-    buf = read_file(ini, &size);
-    if (buf == NULL) {
-        return 0;
-    }
-    for (p = buf; *p != '\0';) {
-        char line[2 * INST_PATH_CHARS];
-        char *end = p;
-        char *a;
-        char *z;
-        char *eq;
-        size_t len;
-
-        while (*end != '\0' && *end != '\r' && *end != '\n') {
-            end++;
-        }
-        len = (size_t)(end - p);
-        if (len >= sizeof(line)) {
-            /* A line this long names no path this installer wrote, but
-             * it cannot be read as one either: unread. */
-            free(buf);
-            return 0;
-        }
-        memcpy(line, p, len);
-        line[len] = '\0';
-        p = end;
-        while (*p == '\r' || *p == '\n') {
-            p++;
-        }
-        for (a = line; *a == ' ' || *a == '\t'; a++) {
-        }
-        z = a + strlen(a);
-        while (z > a && (z[-1] == ' ' || z[-1] == '\t')) {
-            *--z = '\0';
-        }
-        if (*a == '[') {
-            inRename = inst_eq(a, "[rename]");
-            continue;
-        }
-        if (!inRename || *a == ';' || (eq = strchr(a, '=')) == NULL) {
-            continue;
-        }
-        *eq = '\0';
-        for (z = eq; z > a && (z[-1] == ' ' || z[-1] == '\t'); ) {
-            *--z = '\0';
-        }
-        for (z = eq + 1; *z == ' ' || *z == '\t'; z++) {
-        }
-        if (!vsd_names(a, old, oldS)) {
-            continue;
-        }
-        if (vsd_names(z, tmp, tmpS)) {
-            (*own)++;
-        } else {
-            (*other)++;
-        }
-    }
-    free(buf);
-    return 1;
+    v.Old = old;
+    v.OldS = oldS;
+    v.Tmp = tmp;
+    v.TmpS = tmpS;
+    v.Own = own;
+    v.Other = other;
+    r = inst_rename_scan(text, vsd_old_line, &v);
+    free(text);
+    return r;
 }
 
 /* The layer's old name, IOSUBSYS\STOR98.VXD, from the test cuts and the

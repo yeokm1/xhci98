@@ -5464,6 +5464,92 @@ static size_t le_make(const char *ddbName, unsigned long ddbOff,
     return sizeof(leImg);
 }
 
+static int count_rename(void *ctx, const char *key, const char *value)
+{
+    int *n = (int *)ctx;
+
+    (void)key;
+    (void)value;
+    (*n)++;
+    return 1;
+}
+
+/* WININIT.INI as 98 SE leaves it after this installer's write, and the
+ * variants a run meets (task 43.80). */
+static void test_wininit_text(void)
+{
+    static const char D[] = "C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.VXD";
+    static const char T[] = "C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.TMP";
+    static const char DS[] = "C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.VXD";
+    static const char TS[] = "C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.TMP";
+    static const char DL[] = "C:\\Program Files\\W98\\SYSTEM\\IOSUBSYS\\S98VSD.VXD";
+    static const char TL[] = "C:\\Program Files\\W98\\SYSTEM\\IOSUBSYS\\S98VSD.TMP";
+    static const char DL8[] = "C:\\PROGRA~1\\W98\\SYSTEM\\IOSUBSYS\\S98VSD.VXD";
+    static const char TL8[] = "C:\\PROGRA~1\\W98\\SYSTEM\\IOSUBSYS\\S98VSD.TMP";
+    char big[INST_RENAME_LINE + 32];
+    int n = 0;
+
+    CHECK(inst_vsd_entry_text("[rename]\r\n"
+                              "C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.VXD=C:\\"
+                              "WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.TMP\r\n",
+                              D, DS, T, TS) == INST_VE_EXACT,
+          "the one line WritePrivateProfileString leaves: exact");
+    CHECK(inst_vsd_entry_text("[Rename]\r\nc:\\windows\\system\\iosubsys\\"
+                              "s98vsd.vxd = c:\\windows\\system\\iosubsys\\"
+                              "s98vsd.tmp", D, DS, T, TS) == INST_VE_EXACT,
+          "any case, spaces round '=', no final newline: exact");
+    CHECK(inst_vsd_entry_text("[rename]\nNUL=C:\\WINDOWS\\X.TMP\n"
+                              "C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.VXD=C:\\"
+                              "WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.TMP\n"
+                              "C:\\WINDOWS\\SYSTEM\\STOR98.MPD=C:\\WINDOWS\\"
+                              "SYSTEM\\STOR98.TMP\n", D, DS, T, TS) ==
+          INST_VE_EXACT, "other files' lines beside it: exact");
+    CHECK(inst_vsd_entry_text("", D, DS, T, TS) == INST_VE_ABSENT &&
+          inst_vsd_entry_text("[rename]\r\n", D, DS, T, TS) ==
+              INST_VE_ABSENT &&
+          inst_vsd_entry_text("[other]\r\nC:\\WINDOWS\\SYSTEM\\IOSUBSYS\\"
+                              "S98VSD.VXD=C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\"
+                              "S98VSD.TMP\r\n[rename]\r\n", D, DS, T, TS) ==
+              INST_VE_ABSENT &&
+          inst_vsd_entry_text("[rename]\r\n;C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\"
+                              "S98VSD.VXD=C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\"
+                              "S98VSD.TMP\r\n", D, DS, T, TS) ==
+              INST_VE_ABSENT,
+          "no line, another section's, a comment: absent");
+    CHECK(inst_vsd_entry_text("[rename]\r\nNUL=C:\\WINDOWS\\SYSTEM\\"
+                              "IOSUBSYS\\S98VSD.TMP\r\n", D, DS, T, TS) ==
+              INST_VE_CONFLICT &&
+          inst_vsd_entry_text("[rename]\r\nC:\\WINDOWS\\SYSTEM\\IOSUBSYS\\"
+                              "S98VSD.VXD=C:\\WINDOWS\\OTHER.VXD\r\n", D, DS, T,
+                              TS) == INST_VE_CONFLICT &&
+          inst_vsd_entry_text("[rename]\r\nC:\\WINDOWS\\SYSTEM\\IOSUBSYS\\"
+                              "S98VSD.VXD=C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\"
+                              "S98VSD.TMP\r\nNUL=C:\\WINDOWS\\SYSTEM\\"
+                              "IOSUBSYS\\S98VSD.VXD\r\n", D, DS, T, TS) ==
+              INST_VE_CONFLICT,
+          "another line naming either file: conflict");
+    CHECK(inst_vsd_entry_text("[rename]\r\nC:\\PROGRA~1\\W98\\SYSTEM\\"
+                              "IOSUBSYS\\S98VSD.VXD=C:\\PROGRA~1\\W98\\SYSTEM\\"
+                              "IOSUBSYS\\S98VSD.TMP\r\n", DL, DL8, TL, TL8) ==
+              INST_VE_EXACT &&
+          inst_vsd_entry_text("[rename]\r\nC:\\Program Files\\W98\\SYSTEM\\"
+                              "IOSUBSYS\\S98VSD.VXD=C:\\PROGRA~1\\W98\\SYSTEM\\"
+                              "IOSUBSYS\\S98VSD.TMP\r\n", DL, DL8, TL, TL8) ==
+              INST_VE_EXACT,
+          "8.3 names, and a long key with an 8.3 value: exact");
+    memset(big, 'A', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    memcpy(big, "[rename]\r\n", 10);
+    CHECK(inst_vsd_entry_text(big, D, DS, T, TS) == INST_VE_CONFLICT &&
+          inst_rename_scan(big, count_rename, &n) == 0,
+          "a line too long to read: nothing decided");
+    n = 0;
+    CHECK(inst_rename_scan("[boot]\r\na=b\r\n[rename]\r\nx=y\r\n\r\n"
+                           "  z = w  \r\n[other]\r\nq=r\r\n", count_rename,
+                           &n) == 1 && n == 2,
+          "only [rename]'s lines are passed on");
+}
+
 static void test_vsd_names(void)
 {
     char name[9];
@@ -6539,6 +6625,7 @@ int main(void)
     test_storage();
     test_vsd();
     test_vsd_names();
+    test_wininit_text();
     test_other_sets();
     test_names();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
