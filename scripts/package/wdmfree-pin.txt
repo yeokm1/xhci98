@@ -40,7 +40,7 @@
 
 Certificate: 814CF778B45159EC2659C39C16C7E75EB3C37145
 Tag: v0.1.0
-Commit: 5fa3db7d8d6f5dd3143b66a0895ae9c4151afd6b
+Commit: 66f4368217e0d3ed0a95a1be0f2bedd0f6c9a673
 Package: audio/uac2 | W98SE WXP W7 W7X64
 Package: audio/usbmidi | W98SE W2K
 Package: video/uvc98 | W98SE W2K
