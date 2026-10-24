@@ -401,7 +401,8 @@ through Finish, even when it finds no driver; never cancel one: on 98 SE
 a cancelled wizard hides its device until Windows restarts, and the
 installer can then only list the device for after the restart. Before
 the first device the installer asks you to finish any such wizard; later
-it asks again only when it sees one of those wizards open.
+it asks again only when it sees one of those wizards open, or when it
+cannot look.
 
 Asked for the Windows CD (Windows' own files, such as usbd.sys), insert
 it and type its WIN98 folder (WIN9X on ME) with your CD drive's letter,
