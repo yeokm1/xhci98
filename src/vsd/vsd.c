@@ -131,7 +131,8 @@ void VsdConfig(AEP_dcb_config *aep, DCB *dcb)
     VSD_LINE("claimed dcb/dmd", dcb, dcb->DCB_cmn.DCB_dmd_flags);
     VSD_CHAIN(dcb);
     /* Another layer's earlier entry may have kept phys_sgd; then IOS builds
-     * every list and this layer passes each request down (section 3.4). */
+     * every list, and this layer still replaces each with its own
+     * translation of the same buffer (sections 3.4 and 4.1). */
     if (dcb->DCB_cmn.DCB_dmd_flags & DCB_dmd_phys_sgd) {
         VsdCounts.PhysLeft++;
         VSD_LINE("phys_sgd still demanded", dcb, dcb->DCB_cmn.DCB_dmd_flags);

@@ -404,10 +404,12 @@ the INQUIRY vendor field is the drive's, not the driver's.
 
 After the insertion the AER reads `DCB_dmd_flags` again. If
 `phys_sgd` is still there (an entry above this one inserted earlier
-kept it), the layer edits nothing: IOS then builds every list itself,
-each request arrives with `IORF_PHYS_SGDS`, and the layer passes it down
-untouched (section 4.1), which is today's behaviour; the case is counted
-and printed in the `qemu` build (section 4.9). The prototype's fallback,
+kept it), the layer edits nothing: IOS then builds every list itself
+and each request arrives with `IORF_PHYS_SGDS`. Until roadmap 43.79 the
+layer passed such a request down untouched; since then it replaces the
+list with its own translation of the same buffer (section 4.1 item 1),
+the same runs, held to the same checks and refusals. The case is
+counted and printed in the `qemu` build (section 4.9). The prototype's fallback,
 clearing `phys_sgd` from other layers' entries, is not carried: it
 writes into structures other drivers own, it was never needed in four
 boots [obs], and the legs of section 9.2 item 3 read whether it is
@@ -749,13 +751,14 @@ and what it rests on:
    buffer translated is the one IOS would have translated: no layer
    between `IOS_SendCommand` and this layer replaces `IOR_buffer_ptr` or
    the logical list with other memory. IOS's own double buffer is
-   substituted at `IOS_SendCommand` (section 4.6), before either
-   translation, so it is the same buffer in both - **if** IOS substitutes
-   it there, which is itself a [hyp] (section 4.6) and part of the same
-   reading owed before the code: where IOS substitutes the double
-   buffer, which of `IOR_buffer_ptr`, `IORF_SCATTER_GATHER` and the list
-   it changes, and where that buffer's physical list was built under
-   `phys_sgd`. For the layers above
+   substituted at `IOS_SendCommand` (section 4.6), before the first
+   calldown, so it is the same buffer in both [static, read 2026-10-24
+   for roadmap 43.79: it sets `IOR_buffer_ptr` to its buffer, clears
+   `IORF_SCATTER_GATHER` and sets `IORF_PHYS_SGDS` with a one-entry list,
+   physical only under `phys_sgd`; the pages are IOS's own allocation].
+   Up to 43.79 that list reached `SCSIPORT.PDR` as it came, which is the
+   corruption section 4.6 records; since then this layer translates the
+   double buffer itself like any other buffer. For the layers above
    this one on Stor98's disk (load group 7, `DISKTSD.VXD`; `0x10`,
    `DISKVSD.VXD`; the chain the prototype printed) it is a [hyp], **read
    before the code is written** (a static reading of each layer's request
@@ -804,7 +807,8 @@ the disk to come back and compare clean after it is plugged in again.
 
 ### 4.9 Counters and the `qemu` build
 
-The counters (lists built; passed with `IORF_PHYS_SGDS`; passed with no
+The counters (lists built; arrived with `IORF_PHYS_SGDS`, and with
+`IORF_DOUBLE_BUFFER` too, each list then replaced; passed with no
 data; refused by kind; the most runs and bytes in one list; DCBs claimed
 and left by condition; `phys_sgd` still demanded after an insertion)
 live in the layer's data. The `qemu` flavour's build also writes each
@@ -1348,8 +1352,9 @@ stamp, `S98VSD.VXD` where it read `STOR98.VXD` (SHA-256
   near-contiguous buffer: read on the legs (section 9.2 item 2). If not,
   the owner decides whether the layer ships ticked by default.
 - The insertion order on the gold IOS, ME and a disk present at boot
-  (section 9.2 item 3); if `phys_sgd` stays demanded, the layer is inert
-  there (D2) and the owner decides whether to edit the entries above.
+  (section 9.2 item 3); if `phys_sgd` stays demanded, the layer lifts
+  no limit there (D2; it still rebuilds each list, section 3.4) and the
+  owner decides whether to edit the entries above.
 - `IORF_DOUBLE_BUFFER`'s buffer at this layer: read and fixed
   (section 4.6, roadmap 43.79). No real-hardware reading at an
   unaligned buffer yet.
