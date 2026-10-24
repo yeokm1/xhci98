@@ -1205,6 +1205,53 @@ static void test_actions(void)
              "another driver's device is left");
     CHECK_EQ(inst_remove_rank("USB\\XHCI98_NOXPORT&VID_1&PID_2\\x", "usbstor", 0),
              -1, "a refused interface is left");
+    /* NT: a root hub after its controller (run-43-24, Finding 2). */
+    CHECK_EQ(inst_remove_rank_nt("USB\\XHCI98_ROOT_HUB\\4&1", "xhci98"),
+             INST_REMOVE_RANK_NT_MAX, "NT: the root hub after the controllers");
+    CHECK_EQ(inst_remove_rank_nt("PCI\\VEN_1B36&DEV_000D\\3", "xhci98"), 5,
+             "NT: the controller before its root hub");
+    CHECK(inst_remove_rank_nt("PCI\\VEN_1B36&DEV_000D\\3", "xhci98") <
+          inst_remove_rank_nt("USB\\XHCI98_ROOT_HUB\\4&1", "xhci98"),
+          "NT: controller, then root hub");
+    CHECK_EQ(inst_remove_rank_nt("USB\\XHCI98_HUB&VID_1&PID_2\\x", "xhci98"), 2,
+             "NT: a hub as before");
+    CHECK_EQ(inst_remove_rank_nt("USB\\VID_1&PID_2\\x", "xhciuas"), 0,
+             "NT: UAS first as before");
+    CHECK_EQ(inst_remove_rank_nt("PCI\\VEN_8086&DEV_15BF\\3", "xhcicm"), 4,
+             "NT: the NHI as before");
+    CHECK_EQ(inst_remove_rank_nt("USB\\VID_046D&PID_C077\\5", "HidUsb"), -1,
+             "NT: another driver's device left");
+    CHECK_EQ(inst_remove_rank("USB\\XHCI98_ROOT_HUB\\4&1", "xhci98", 0), 3,
+             "98 SE and ME keep the root hub before the controller");
+
+    /* The driver-store check (run-43-24, Finding 3). */
+    CHECK_EQ(inst_store_verdict("stor98.sys", 1, 1, 1), INST_STORE_EQUAL,
+             "store: equal");
+    CHECK_EQ(inst_store_verdict("stor98.sys", 0, 1, 1), INST_STORE_DIFFERS,
+             "store: differs");
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, 1, 0), INST_STORE_SKIP,
+             "store: stor98.mpd the stored package lacks (NT)");
+    CHECK_EQ(inst_store_verdict("S98VSD.VXD", -1, 1, 0), INST_STORE_SKIP,
+             "store: a VxD the stored package lacks (NT)");
+    CHECK_EQ(inst_store_verdict("stor98.sys", -1, 1, 0), INST_STORE_UNREAD,
+             "store: an NT file the stored package lacks blocks");
+    CHECK_EQ(inst_store_verdict("xhci98.cat", -1, 1, 0), INST_STORE_UNREAD,
+             "store: a catalog the stored package lacks blocks");
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, 1, -1), INST_STORE_UNREAD,
+             "store: a stored file not readable");
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, 0, 1), INST_STORE_UNREAD,
+             "store: the package's own file missing");
+    CHECK_EQ(inst_store_verdict("stor98.mpd", -1, -1, 0), INST_STORE_UNREAD,
+             "store: the package's file not readable");
+    CHECK_EQ(inst_store_verdict(NULL, -1, 1, 0), INST_STORE_UNREAD,
+             "store: no name");
+    /* A tunnel port at the uninstall (run-43-24, Finding 9). */
+    CHECK_EQ(inst_port_step(1, 0), INST_PORT_GIVE_BACK, "port present: given back");
+    CHECK_EQ(inst_port_step(1, 1), INST_PORT_GIVE_BACK,
+             "port present, other filters: given back");
+    CHECK_EQ(inst_port_step(0, 0), INST_PORT_REMOVE, "port absent: its entry removed");
+    CHECK_EQ(inst_port_step(0, 1), INST_PORT_WAIT,
+             "port absent with another filter: the run waits for it");
 }
 
 static void test_helpers(void)

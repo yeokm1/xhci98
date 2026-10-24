@@ -2881,6 +2881,43 @@ int inst_remove_rank(const char *instanceId, const char *service,
     return 3;
 }
 
+int inst_store_verdict(const char *name, int same, int pkgState,
+                       int storeState)
+{
+    size_t n = name != NULL ? strlen(name) : 0;
+
+    if (same == 1) {
+        return INST_STORE_EQUAL;
+    }
+    if (same == 0) {
+        return INST_STORE_DIFFERS;
+    }
+    if (pkgState > 0 && storeState == 0 && n > 4 &&
+        (inst_eq(name + n - 4, ".mpd") || inst_eq(name + n - 4, ".vxd"))) {
+        return INST_STORE_SKIP;
+    }
+    return INST_STORE_UNREAD;
+}
+
+int inst_port_step(int present, int otherFilters)
+{
+    if (present) {
+        return INST_PORT_GIVE_BACK;
+    }
+    return otherFilters ? INST_PORT_WAIT : INST_PORT_REMOVE;
+}
+
+int inst_remove_rank_nt(const char *instanceId, const char *service)
+{
+    int old;
+    int r = inst_remove_rank(instanceId, service, 0);
+
+    if (r == 3 && inst_bus_base(instanceId, &old) == 1) {
+        return INST_REMOVE_RANK_NT_MAX;
+    }
+    return r;
+}
+
 /* ======================================================================== */
 /* The Thunderbolt and USB4 device viewer and eject (record 24)              */
 /* ======================================================================== */

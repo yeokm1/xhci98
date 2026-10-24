@@ -450,6 +450,7 @@ static int s98_pending_resolve(int uninstall);
 static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
 static int own_put(const char *from, const char *to);
+static int remove_nt(HDEVINFO set, const DEVREC *d);
 static int own_put_as(const char *from, const char *to, const char *tmpExt);
 
 static int haveCm;
@@ -6162,6 +6163,18 @@ static void trap_scan(void)
                         inst_inf_source_path(infText[k], i, rel, sizeof(rel));
                         join(b, sizeof(b), store, rel);
                         s = same_file3(a, b);
+                        if (inst_store_verdict(rel, s,
+                                               s < 0 ? file_state(a) : 1,
+                                               s < 0 ? file_state(b) : 1) ==
+                            INST_STORE_SKIP) {
+                            /* The store holds only what this system's
+                             * install copies: the x86 package's stor98.inf
+                             * names stor98.mpd for 98 SE and ME, which no
+                             * NT install stages (run-43-24, Finding 3). */
+                            logonly("%s is not in the stored package (%s): "
+                                    "not compared\n", rel, store);
+                            continue;
+                        }
                         if (s == 0) {
                             logonly("%s differs from %s\n", a, b);
                             differs = 1;
@@ -10308,6 +10321,7 @@ static int unfilter_nt(HDEVINFO set, const DEVREC *d)
     char msz[512];
     size_t n;
     int removed;
+    int step;
 
     out("Taking xhcicm off the tunnel port %s ... ", d->Id);
     if (opts.List) {
@@ -10331,11 +10345,27 @@ static int unfilter_nt(HDEVINFO set, const DEVREC *d)
     }
     flagChanged = 1;
     out(removed ? "done.\n" : "not in its filters.\n");
-    if (!d->Present) {
+    step = inst_port_step(d->Present, n > 0);
+    if (step == INST_PORT_WAIT) {
+        /* Another filter is left on it: removing the entry would drop
+         * that one too (record 23 section 9.2 step 1, revision 42). */
         out("  The port is not connected, so its driver cannot be given back "
-            "now: connect\n  the dock and run INSTALL.BAT /uninstall again.\n");
+            "now, and another\n  filter is on it: connect the dock and run "
+            "INSTALL.BAT /uninstall again.\n");
         flagSteps = 1;
         return 0;
+    }
+    if (step == INST_PORT_REMOVE) {
+        /* A port that is gone for good (a dock sold, a USB4 port's
+         * controller replaced) would block the uninstall forever (run-43-24,
+         * Finding 9; the owner, 2026-10-24): its entry is removed instead,
+         * so Windows sets the port up again from its own INF when it is
+         * next connected. */
+        out("  WARNING: the port is not connected, so its driver cannot be "
+            "given back now.\n  Its entry is removed instead: Windows sets "
+            "the port up again with its own\n  driver when the dock is next "
+            "connected.\n");
+        return remove_nt(set, d);
     }
     out("Giving the port back to Windows' own driver ... ");
     if (!reinstall_without_ours(set, &data)) {
@@ -11997,12 +12027,31 @@ static int run_uninstall_nt(void)
         return stop_uninstall("a tunnel port's driver change waits for a "
                               "restart.");
     }
-    for (rank = 0; rank <= 5 && ok; rank++) {
+    for (rank = 0; rank <= INST_REMOVE_RANK_NT_MAX && ok; rank++) {
+        if (rank == INST_REMOVE_RANK_NT_MAX && !opts.List) {
+            /* The root hubs after the controllers (run-43-24, Finding 2):
+             * a fresh list, since a controller's removal took its root
+             * hub with it, or left it a devnode not present. */
+            api.Destroy(set);
+            set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+            if (set == INVALID_HANDLE_VALUE) {
+                out("The device list could not be opened again.\n");
+                flagFailed = 1;
+                return stop_uninstall("the device list could not be read "
+                                      "again.");
+            }
+        }
         for (i = 0; i < devCount && ok; i++) {
-            if (inst_remove_rank(devs[i].Id, devs[i].Service, 0) == rank) {
+            if (inst_remove_rank_nt(devs[i].Id, devs[i].Service) == rank) {
+                SP_DEVINFO_DATA gone;
                 if (!opts.List && !go_on()) {
                     api.Destroy(set);
                     return stop_uninstall("cancelled.");
+                }
+                if (rank == INST_REMOVE_RANK_NT_MAX && !opts.List &&
+                    !find_in_set(set, devs[i].Id, &gone)) {
+                    out("%s: gone with its controller.\n", devs[i].Id);
+                    continue;
                 }
                 ok = remove_nt(set, &devs[i]);
             }
@@ -26377,7 +26426,7 @@ void inst_eng_usage(void)
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /faster       turn the USB Tree's \"can run faster\" notice on for this\n"
 "                computer (/nofaster: off)\n"
-"  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
+"  /restage      Vista to 10: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
 "  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
 "  /nopause      do not wait for Enter at the end\n"
