@@ -122,7 +122,7 @@ An NVMe drive in an enclosure needs an NVMe driver. **[Stor98](src/stor98/)**, s
 
 Use Safely Remove before unplugging a drive, on every system.
 
-**Stor98 is only for NVMe drives behind a Thunderbolt or USB4 port, not internal ones.** `SETUP.EXE` puts it only on tunnel drives. On 2000 to 7 Windows may offer it for an internal NVMe drive with no driver: decline. On 7 x64 and 8, once the test certificate is trusted, Windows may put it on such a drive without asking; the uninstall then leaves it on that drive.
+**Stor98 is only for NVMe drives behind a Thunderbolt or USB4 port, not internal ones.** `SETUP.EXE` puts it only on tunnel drives. On 2000 to 7 Windows may offer it for an internal NVMe drive with no driver: decline. On Vista x64, 7 x64 and 8, once the test certificate is trusted, Windows may put it on such a drive without asking; the uninstall then leaves it on that drive.
 
 - `SETUP.EXE` installs Stor98 with the Thunderbolt 3 / USB4 support (its box, ticked with it) and updates an earlier Stor98. By hand: Update Driver on the drive's NVMe controller -> Have Disk -> `release-x86\` or `release-x64\`.
 - On 98 SE and ME, `S98VSD.VXD` lets reads and writes of up to 2 MiB reach Stor98 whole, for much faster transfers. `SETUP.EXE` installs it with Stor98.
