@@ -1,9 +1,13 @@
 # xhci98 - Release Notes
 
-This file describes package version `3.0.0.0`, the fifteenth release and
-the eighth of the host controller driver, dated 2026-10-17 (`DriverVer`
-`10/17/2026,3.0.0.0`, in all eight INFs). What it adds to `2.4.0.0` is
-"What `3.0.0.0` adds", below; what `2.4.0.0` added to `2.3.1.0` is "What
+This file describes package version `3.2.0.0`, the seventeenth release and
+the tenth of the host controller driver, dated 2026-10-24 (`DriverVer`
+`10/24/2026,3.2.0.0`, in all ten INFs: the eight of `xhci98.sys`, the UAS
+driver and the connection manager, and Stor98's two). What it adds to
+`3.1.0.0` is its entry in `releases/history.md` and is marked "new in
+`3.2.0.0`" or "from `3.2.0.0`" where it applies below; what `3.1.0.0`
+changed from `3.0.0.0` is "What `3.1.0.0` changes", below. What `3.0.0.0`
+added to `2.4.0.0` is "What `3.0.0.0` adds"; what `2.4.0.0` added to `2.3.1.0` is "What
 `2.4.0.0` adds" after it, what `2.3.1.0` changed from `2.3.0.0` is "What
 `2.3.1.0` changed" after that, and what `2.3.0.0` changed from `2.2.0.0` is
 "What `2.3.0.0` changed"; what `2.2.0.0` changed from `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and
@@ -2141,7 +2145,11 @@ one.
 From `3.0.0.0` the installer (`SETUP.EXE` from `3.1.0.0`) does what
 follows on Windows 2000 to 7 and prepares it on 98 SE and ME ("Installing, updating and uninstalling with
 INSTALL.BAT"); this section is the route by hand, and what each system
-does either way.
+does either way. On Windows 98 SE and ME, to `3.2.0.0` or later, update
+with `INSTALL.BAT` (or `SETUP.EXE`) rather than Update Driver: the
+controller's install that Update Driver takes keeps an `xhci98.sys`
+already in `SYSTEM32\DRIVERS`, so a manual Update Driver would keep the
+earlier driver ("Known limitations").
 
 **From `2.3.x` or earlier to `2.4.0.0` or later, read "From 2.3.x or
 earlier" (below) first**: that update finds each root hub, hub and
@@ -2357,7 +2365,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `3.1.0.0`.
+This download bundles Stor98 `3.2.0.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."

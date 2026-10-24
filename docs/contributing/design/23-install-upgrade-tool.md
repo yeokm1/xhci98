@@ -2858,7 +2858,7 @@ after it, reports what was done, and tells the user to restart and run
    that filter too, which nothing would put back).
 2. **The devnodes**, children before parents (UAS devices, composite and
    hub entries, root hubs, NHIs, controllers last; on NT since revision
-   42 the root hubs after the controllers, `inst_remove_rank_nt`: on 8.1
+   43 the root hubs after the controllers, `inst_remove_rank_nt`: on 8.1
    and 10 a root hub removed under its running controller came straight
    back, "Still there: USB\XHCI98_ROOT_HUB\...", `runs/run-43-24.md`,
    Finding 2, and a controller's removal takes its root hub with it, so a
