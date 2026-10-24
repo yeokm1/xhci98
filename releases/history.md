@@ -61,9 +61,7 @@ hosts and enclosure; the release notes say what was read where.
   root hubs after their controllers and no longer stops at a tunnel port
   that is not present (read in one run on 8.1 x64 and 10 x64; on 10 x86
   removing Stor98 can still need a restart and a second run).
-- Updating from `3.1.0.0`: run `SETUP.EXE`. On 98 SE and ME update with
-  the installer, not Update Driver, which there keeps the earlier
-  `xhci98.sys`.
+- Updating from `3.1.0.0`: run `SETUP.EXE`.
 
 ## 3.1.0.0 - 2026-10-19
 

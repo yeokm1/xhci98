@@ -2161,11 +2161,7 @@ one.
 From `3.0.0.0` the installer (`SETUP.EXE` from `3.1.0.0`) does what
 follows on Windows 2000 to 7 and prepares it on 98 SE and ME ("Installing, updating and uninstalling with
 INSTALL.BAT"); this section is the route by hand, and what each system
-does either way. On Windows 98 SE and ME, to `3.2.0.0` or later, update
-with `INSTALL.BAT` (or `SETUP.EXE`) rather than Update Driver: the
-controller's install that Update Driver takes keeps an `xhci98.sys`
-already in `SYSTEM32\DRIVERS`, so a manual Update Driver would keep the
-earlier driver ("Known limitations").
+does either way.
 
 **From `2.3.x` or earlier to `2.4.0.0` or later, read "From 2.3.x or
 earlier" (below) first**: that update finds each root hub, hub and
@@ -4264,13 +4260,6 @@ or says it was found by reading the code.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
-- **Windows 98 SE and ME: update with `INSTALL.BAT`, not with Update
-  Driver** (from `3.2.0.0`). The controller's install that Windows' own
-  wizard and Update Driver take keeps an `xhci98.sys` already in
-  `SYSTEM32\DRIVERS`, so that a controller found after the installer ran
-  asks for no disk; an Update Driver over an earlier xhci98 therefore
-  keeps the earlier file. The installer replaces it. A controller with no
-  driver yet installs through Update Driver as before.
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.
