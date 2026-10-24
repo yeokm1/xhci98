@@ -1,6 +1,13 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 43, 2026-10-24 (the 8, 8.1 and 10 legs of
+Status: revision 44, 2026-10-24 (record 26 section 5.0's draft 40, the
+owner's decision of that day: on 98 SE and ME xhci98.inf's controller
+install is 3.1.0.0's again, its temporary-name row replacing the file,
+so an Update Driver by hand updates as before, and revision 42's helper
+`SECTION` line is withdrawn; `xhci98.sys` is no longer put in
+`SYSTEM32\DRIVERS` by the run, revision 41's placement kept for
+`xhciuas.sys` and `xhcicm.sys`; a controller added after the install
+asks once for the disk, which the install directory answers); revision 43, 2026-10-24 (the 8, 8.1 and 10 legs of
 `runs/run-43-24.md`, Findings 2, 3, 4 and 9, the owner's decisions of
 2026-10-24: on NT a root hub is removed after the controllers; a tunnel
 port not present has its entry removed, with a warning, instead of
@@ -3443,7 +3450,10 @@ the user.
   already removes it. Revision 41: `xhci98.sys` with the USB drivers and
   `xhcicm.sys` with the Thunderbolt support too, each placement recorded
   under `HKLM\Software\xhci98\Placed9x` and the record deleted by the
-  9x uninstall.
+  9x uninstall. Revision 44 (the owner, 2026-10-24): not `xhci98.sys`
+  any more, since `xhci98.inf`'s row is 3.1.0.0's again and a placed
+  file spared no prompt with it; an earlier run's record of it is still
+  removed by the uninstall.
 
 ## 14. Open, and the risks
 

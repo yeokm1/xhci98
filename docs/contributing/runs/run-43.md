@@ -6149,3 +6149,27 @@ revision 43.
 8.1 x64 105712, 100292, 70368; 10 x64 81064, 48652 and the generic
 machine's before them (the kit's own `pids.txt`, ports 49082 and 49084),
 all stopped.
+
+## 43.42w - 98 SE and ME: 3.1.0.0's copy row back, the update legs (2026-10-24)
+
+The owner's decision of 2026-10-24 (design record 26 section 5.0, draft
+40): `xhci98.inf`'s `[Xhci.Dev]` copies `xhci98.sys,,xhci98.tmp` again,
+so an Update Driver from Device Manager always replaces the file, and a
+controller added after the install asks once for the disk. Branch
+`p43-42w` at `a85d5693` (merged into `integ12` as `4ff1aa3e`): its x86
+release build (`objfre`, `xhci98.sys` 3.2.0.0, SHA-256 `7bd0b08b...`),
+INFs and installer laid over the 43.42s leg tree (`release-x86`
+re-laid with this build's drivers, Stor98 and `S98VSD.VXD` included),
+on overlays of the 43.5 bases; headless QEMU, my own ports.
+
+| Leg | System | Reading |
+|---|---|---|
+| (a) fresh install, no controller; then the controller added | 98 SE (pristine) | `SETUP.EXE`, defaults: the Steps page's "where it asks for the xHCI98 driver disk, type C:\XHCI98"; cold start with `qemu-xhci`: the wizard found `C:\XHCI98\XHCI98.INF`, asked for the "xhci98 xHCI Host Controller Disk", then "The file 'xhci98.sys' ... cannot be found", `C:\WIN98` offered; `C:\XHCI98` typed: "Windows has finished installing", the restart asked: **PASS** (one prompt, answered by the install directory) |
+| (b) Update Driver by hand over 3.1.0.0 | 98 SE (`w98-hcd310`) | Device Manager, the controller, Update Driver, "Display a list", Have Disk `D:\PKG\RELEASE-X86`: "xHCI98 USB 3 Controller", no disk asked for, "finished installing"; before the restart `XHCI98.SYS` 300,171 (3.1.0.0) and `XHCI98.TMP` 310,160 with `WININIT.INI` `[rename]`; after it `XHCI98.SYS` alone, 310,160, File version 3.2.0.0, SHA-256 the package's `7bd0b08b...`: **PASS** |
+| (b) the same | ME (`me-310u4`) | the same route ("Specify the location", "Display a list", Have Disk): "finished installing", Driver Date 10/24/2026; `XHCI98.TMP` 310,160 and the rename pending; after the restart `XHCI98.SYS` 310,160 dated 10-24-26, no `WININIT.INI`: **PASS** |
+| (c) `INSTALL.BAT` over 3.1.0.0 | 98 SE | `INSTALL /console /yes`: the controller and root hub updated, "the new driver file replaces the running one at the next start", exit 3; after the restart `XHCI98.SYS` 310,160: **PASS** |
+| (c) `INSTALL.BAT /force` | ME (after (b)) | exit 3, "xHCI98 USB 3 Controller: xhci98 3.2.0.0, started", root hub the same: **PASS** |
+| (d) uninstall | 98 SE (after (c)) | `INSTALL /console /uninstall /yes`: exit 3; no `xhci*.*` in `SYSTEM32\DRIVERS`, `INF\OTHER` empty, no `C:\XHCI98`: **PASS** |
+| (d) uninstall | ME (after (c)) | exit 3; the INF copies and their records, `stor98.mpd`, `xhci98.sys`, `xhciuas.sys` ("placed there by this installer"), `xhcicm.sys`, the tools and the entry removed: **PASS** |
+
+The NT Update Driver leg (XP) is reported separately.

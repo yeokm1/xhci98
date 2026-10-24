@@ -1,6 +1,13 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 39, 2026-10-23 (the owner's decisions of that day: the
+Status: draft 40, 2026-10-24 (the owner's decision of that day: 3.2.0.0
+ships 3.1.0.0's copy behaviour for `xhci98.inf` on 98 SE and ME, so an
+Update Driver from Device Manager always replaces `xhci98.sys`, and a
+controller added after the install asks once for the disk, which the
+install directory answers; draft 39's pair of sections, the helper's
+`SECTION` line and the placement of `xhci98.sys` withdrawn, the rest of
+draft 39 standing; section 5.0; record 23 revision 44, record 27 draft
+14); draft 39, 2026-10-23 (the owner's decisions of that day: the
 controller's wizard on 98 SE asks for no disk after a placement, by a
 copy row in `xhci98.inf`'s wizard section that keeps a file already
 there and an update section with the temporary name that only the
@@ -852,6 +859,30 @@ Thunderbolt controller found later opens the wizard and installs with no
 disk asked for. The leg: an install with no controller present, then a
 controller added (`qemu-xhci`, and the Thunderbolt model), the wizard
 finishing with no Insert Disk prompt.
+
+**Draft 40 (the owner, 2026-10-24): what follows under draft 39 was
+withdrawn before the cut.** The owner's requirement is that an update
+through Device Manager always works, and draft 39's row kept an older
+`xhci98.sys` (read below). `xhci98.inf`'s `[Xhci.Dev]` copies
+`[Xhci.CopyFiles]` again, `xhci98.sys,,xhci98.tmp`, as in 3.1.0.0:
+`[Xhci.CopyPrep]`, `[Xhci.Upd]`, the helper's `SECTION` line and its
+`DiCreateDriverNode` node, and the gate's W98-PREPROW and W98-PREPSECT
+are gone (W98-TEMPNAME holds `[Xhci.Dev]`'s row again), and the run no
+longer puts `xhci98.sys` in `SYSTEM32\DRIVERS` (with this row a placed
+file spared no prompt; `xhciuas.sys` and `xhcicm.sys` are still placed,
+through `.IN$`, and the uninstall still removes an earlier run's
+placement and keeps its `WININIT.INI` guard). So a controller added after
+the install asks once for the "xhci98 xHCI Host Controller Disk", which
+the install directory answers (`C:\XHCI98`), and Update Driver replaces
+the file. Read on 98 SE and ME (2026-10-24, the 3.2.0.0 build): Update
+Driver over 3.1.0.0 (Have Disk, the package's `release-x86`) queued
+`XHCI98.TMP` and the `WININIT.INI` rename, and after the restart
+`xhci98.sys` was the package's (3.2.0.0, SHA-256 `7bd0b08b...`) on both;
+`INSTALL.BAT` updated over 3.1.0.0 (98 SE) and with `/force` (ME); the
+uninstall was clean on both; a fresh install with no controller, then
+the controller, asked once for the disk and `C:\XHCI98` answered it
+(98 SE). How to spare the prompt and keep Update Driver working is the
+next release's (roadmap-usb4, W9XPROMPT.1).
 
 **Draft 39: the controller's wizard, read and fixed in the INF** (the
 owner, 2026-10-23: fixed before the cut; `runs/run-43.md`, "43.42s"). The leg
@@ -4495,6 +4526,12 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   98 SE, the second accepted everywhere (section 6.5.9).
 
 ## 14. Open, and the risks
+
+- (draft 40) A controller added after the install on 98 SE and ME asks
+  once for the "xhci98 xHCI Host Controller Disk" (Windows' own setup
+  folder offered); the install directory answers it, as in 3.1.0.0.
+  Sparing that prompt with an Update Driver that still replaces the file
+  is the next release's (section 5.0, draft 40; roadmap-usb4).
 
 - (draft 39) A run cut short inside the placement's copy can leave
   `XHCI98.IN$` (or `XHCIUAS.IN$`, `XHCICM.IN$`) in `SYSTEM32\DRIVERS`;
