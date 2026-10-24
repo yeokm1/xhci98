@@ -13,7 +13,7 @@
  *     hardware part;
  *   - the bridge filter's snapshot (section 7.4): which PDOs of a
  *     BusRelations answer were not in the previous one;
- *   - the resume hold's watchdog bound (section 6.3).
+ *   - the resume's logged bounds (section 6.3; diagnostics since task 43.24h).
  *
  * C89, DDK-free, no allocation, no lock. IRQL: any.
  */
@@ -187,7 +187,8 @@ ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
                        ULONG aboveChild);
 
 /*
- * The resume hold's watchdog (section 6.3): the NHI's own resume bound
+ * The resume's bound (section 6.3), logged as a diagnostic since task
+ * 43.24h (below): the NHI's own resume bound
  * plus CM_PORTS_HOLD_EXTRA_MS. The resume is every synchronous stage of
  * the client's bring-up: the platform's readiness (CM_PORTS_HOLD_PLATFORM_MS,
  * the integrated hosts' force power and firmware-ready wait with the NVM
@@ -201,12 +202,10 @@ ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
  * retained much longer meets the power-IRP watchdog (Microsoft's bug check
  * 0x9F, DRIVER_POWER_STATE_FAILURE, about ten minutes), so the hold ends
  * at five minutes whatever the client's configured timeouts would allow.
- * A client still working at that point is treated as failed: the IRP is
- * released and the bridge invalidated (record 21 section 6.3's failure
- * path), which is the bounded, recoverable outcome; a hang of the power
- * transition is not. cm_reenum.c logs this bound and arms the watchdog
- * at CM_PORTS_HOLD_MAX_MS itself: the client's announcement-driven work
- * has no bound this arithmetic can count exactly.
+ * Since task 43.24h no power IRP is retained (record 21 section 6.3: a
+ * retained bridge D0 deadlocked the NT resume), so this bound and the cap
+ * are diagnostics: cm_reenum.c logs them at the suspend and nothing waits
+ * on either.
  */
 typedef struct _CM_PORTS_RESUME {
     ULONG ReadyMs;
@@ -226,43 +225,27 @@ typedef struct _CM_PORTS_RESUME {
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume);
 
 /*
- * The hold's watchdog, ms, for either profile: always CM_PORTS_HOLD_MAX_MS,
- * the fixed five-minute outer cap on every NT target. `clientMs` is the
- * client's own resume bound (the USB4 client's, or 0 when none is known);
- * *over is set TRUE when that bound plus CM_PORTS_HOLD_EXTRA_MS would pass
- * the cap - the cap still holds, and a client still working when it ends
- * takes the failure path (record 21 section 6.3).
+ * The five-minute cap, ms, logged for either profile: always
+ * CM_PORTS_HOLD_MAX_MS. `clientMs` is the client's own resume bound (the
+ * USB4 client's, or 0 when none is known); *over is set TRUE when that
+ * bound plus CM_PORTS_HOLD_EXTRA_MS would pass the cap. A diagnostic since
+ * task 43.24h: no power IRP waits on it (record 21 section 6.3).
  */
 ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over);
 
 /*
- * Whether a held member's device D0 is retained (record 21 section 6.3,
- * task 43.24h), from the running NT's version (`major`.`minor`, the
- * kernel's own: KUSER_SHARED_DATA NtMajorVersion and NtMinorVersion; the
- * WDM version cannot tell, since 8, 8.1 and 10 report the WDM version 7
- * does): not on 6.2 (Windows 8) and later. There the power manager resumes the non-pageable devices before
- * the pageable ones, and the bridge's bus driver completes its system S0
- * only once its D0 has: a retained bridge D0 kept the pageable NHI from
- * ever receiving its own S0 and D0, so its resume, the release, never
- * came and the machine stopped with bug check 0x9F at every resume from
- * hibernation and every Fast Startup boot. 2000 to 7 resume a held bridge
- * correctly (read on XP x64, Vista and 7) and keep the hold.
- */
-BOOLEAN CmPortsHoldD0(ULONG major, ULONG minor);
-
-/*
- * The release of a member at the NHI's resume, stop or removal (section
- * 6.3): a member still marked by this NHI (`marked`) has its mark cleared
- * (CM_PORTS_REL_CLEAR) and, where re-enumeration is on (`reenumOn`), its
- * bridge invalidated (CM_PORTS_REL_INVALIDATE) when the resume failed
- * (`failed`, the failure path) or its D0 went down unheld (`passed`, so
- * the devices behind it may have resumed against an absent tunnel). A
- * member no longer marked by this NHI is left alone.
+ * The release of a member at the NHI's resume, stop or removal (record 21
+ * section 6.3, task 43.24h): a member still marked by this NHI has its
+ * mark cleared (CM_PORTS_REL_CLEAR) and, where re-enumeration is on, its
+ * bridge invalidated (CM_PORTS_REL_INVALIDATE), whether the resume
+ * succeeded or failed: the bridge's D0 went down at once, so the devices
+ * behind it may have resumed against an absent tunnel. A member no longer
+ * marked by it is left alone. The resume's outcome is not an input: only
+ * the log names it.
  */
 #define CM_PORTS_REL_CLEAR          0x1UL
 #define CM_PORTS_REL_INVALIDATE     0x2UL
-ULONG CmPortsRelease(ULONG marked, ULONG reenumOn, BOOLEAN failed,
-                     ULONG passed);
+ULONG CmPortsRelease(ULONG markedByThis, ULONG reenumOn);
 
 /*
  * Windows 98 and ME: a member's known children (devnode handles) kept only

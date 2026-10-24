@@ -534,21 +534,12 @@ ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over)
     return CM_PORTS_HOLD_MAX_MS;
 }
 
-BOOLEAN CmPortsHoldD0(ULONG major, ULONG minor)
+ULONG CmPortsRelease(ULONG markedByThis, ULONG reenumOn)
 {
-    return (BOOLEAN)(major < 6UL || (major == 6UL && minor < 2UL));
-}
-
-ULONG CmPortsRelease(ULONG marked, ULONG reenumOn, BOOLEAN failed,
-                     ULONG passed)
-{
-    if (!marked) {
+    if (!markedByThis) {
         return 0;
     }
-    if (reenumOn && (failed || passed)) {
-        return CM_PORTS_REL_CLEAR | CM_PORTS_REL_INVALIDATE;
-    }
-    return CM_PORTS_REL_CLEAR;
+    return CM_PORTS_REL_CLEAR | (reenumOn ? CM_PORTS_REL_INVALIDATE : 0);
 }
 
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume)

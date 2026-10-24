@@ -61,8 +61,7 @@
  * re-enumeration follows.
  *
  * IRQL: the CmReenum* calls at PASSIVE_LEVEL on the connection-manager
- * thread; the CmReg* calls as cm_reenum.h states; the hold's completion
- * routine and DPC at <= DISPATCH_LEVEL.
+ * thread; the CmReg* calls as cm_reenum.h states.
  */
 
 #include "cm.h"
@@ -109,22 +108,7 @@ static ULONG cmRegUnattributed;
 static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
 static ULONG cmRegOver;
-static ULONG cmRegWatchdogs;
-/* CmPortsHoldD0 of the running NT's version, read once at CmRegInit:
- * FALSE on Windows 8 and later, whose resume a retained bridge D0
- * deadlocks (task 43.24h). The version is the kernel's, from the shared
- * user data page (KUSER_SHARED_DATA NtMajorVersion and NtMinorVersion,
- * the same offsets on every NT; mapped at this fixed kernel address,
- * never paged), read only where IoIsWdmVersionAvailable(1, 0x10) says NT:
- * Windows 98 and ME have no such page, and no bridge filter either. */
-static BOOLEAN cmRegHoldD0;
-#if defined(_WIN64)
-#define CM_SHARED_DATA      ((volatile ULONG *)(ULONG_PTR)0xFFFFF78000000000ui64)
-#else
-#define CM_SHARED_DATA      ((volatile ULONG *)(ULONG_PTR)0xFFDF0000UL)
-#endif
-#define CM_SHARED_NT_MAJOR  (0x26CUL / sizeof(ULONG))
-#define CM_SHARED_NT_MINOR  (0x270UL / sizeof(ULONG))
+static ULONG cmRegPassed;
 /* Every attachment of this driver on a device (task 42-A.5, cm_reenum.h's
  * "The marks"), and the LowerFilters children no active member owned. */
 static LIST_ENTRY cmRegAtts;
@@ -134,7 +118,6 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
                               PULONG over);
 static VOID cmDiscoverAndList(PCM_NHI nhi);
 static VOID cmMarksSyncAll(VOID);
-static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2);
 
 /* ====================================================================== */
 /* Configuration space                                                    */
@@ -194,11 +177,6 @@ VOID CmRegInit(VOID)
     InitializeListHead(&cmRegFilters);
     InitializeListHead(&cmRegDomains);
     InitializeListHead(&cmRegAtts);
-    cmRegHoldD0 = TRUE;
-    if (IoIsWdmVersionAvailable(1, 0x10)) {
-        cmRegHoldD0 = CmPortsHoldD0(CM_SHARED_DATA[CM_SHARED_NT_MAJOR],
-                                    CM_SHARED_DATA[CM_SHARED_NT_MINOR]);
-    }
 }
 
 VOID CmRegFilterInit(PCM_FILTER filter)
@@ -206,12 +184,10 @@ VOID CmRegFilterInit(PCM_FILTER filter)
     InitializeListHead(&filter->RegLink);
     InitializeListHead(&filter->AttLink);
     KeInitializeEvent(&filter->Rundown, NotificationEvent, FALSE);
-    KeInitializeTimer(&filter->HoldTimer);
-    KeInitializeDpc(&filter->HoldDpc, cmHoldDpc, filter);
 }
 
 VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
-                   PULONG refused, PULONG watchdogs)
+                   PULONG refused, PULONG passed)
 {
     KIRQL irql;
 
@@ -220,7 +196,7 @@ VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
     *over = cmRegOver;
     *skipped = cmRegSkipped;
     *refused = cmRegRefused;
-    *watchdogs = cmRegWatchdogs;
+    *passed = cmRegPassed;
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
@@ -401,7 +377,6 @@ VOID CmRegPublish(PCM_FILTER filter)
         filter->InFlight = 0;
         filter->Held = 0;
         filter->HeldBy = NULL;
-        filter->Passed = 0;
         /* A new publication: an eject's hold ended before the withdrawal
          * completed (it holds a reference), so none is carried over. */
         filter->EjectHold = 0;
@@ -415,53 +390,11 @@ VOID CmRegPublish(PCM_FILTER filter)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
-/*
- * Releases a held filter's retained D0 IRP. Under the lock: returns the
- * IRP for the caller to complete after the lock is dropped (PoStartNext-
- * PowerIrp, then the completion), or NULL. The hold's reference passes to
- * the caller when the timer is not armed or was cancelled (*dropRef TRUE:
- * the caller lowers InFlight after its last use of the filter); otherwise
- * the DPC, already queued, lowers it.
- */
-static PIRP cmHoldRelease(PCM_FILTER f, BOOLEAN *dropRef)
-{
-    PIRP irp;
-
-    *dropRef = FALSE;
-    f->Held = 0;
-    f->HeldBy = NULL;
-    f->Passed = 0;
-    irp = f->HeldIrp;
-    if (irp == NULL) {
-        return NULL;
-    }
-    f->HeldIrp = NULL;
-    if (f->TimerArmed) {
-        if (KeCancelTimer(&f->HoldTimer)) {
-            f->TimerArmed = 0;
-            *dropRef = TRUE;
-        }
-    } else {
-        *dropRef = TRUE;
-    }
-    return irp;
-}
-
-static VOID cmHoldComplete(PIRP irp)
-{
-    PoStartNextPowerIrp(irp);
-    IoCompleteRequest(irp, IO_NO_INCREMENT);
-}
-
 VOID CmRegWithdraw(PCM_FILTER filter)
 {
     KIRQL irql;
-    PIRP irp;
-    BOOLEAN dropRef;
     ULONG wait;
 
-    irp = NULL;
-    dropRef = FALSE;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (!filter->Published) {
         KeReleaseSpinLock(&cmRegLock, irql);
@@ -472,16 +405,11 @@ VOID CmRegWithdraw(PCM_FILTER filter)
     filter->Baseline = 0;
     RemoveEntryList(&filter->RegLink);
     InitializeListHead(&filter->RegLink);
-    irp = cmHoldRelease(filter, &dropRef);
-    if (dropRef) {
-        cmRegDrop(filter);
-    }
+    filter->Held = 0;
+    filter->HeldBy = NULL;
     wait = filter->InFlight;
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
-    if (irp != NULL) {
-        cmHoldComplete(irp);
-    }
     if (wait != 0) {
         (VOID)KeWaitForSingleObject(&filter->Rundown, Executive, KernelMode,
                                     FALSE, NULL);
@@ -1507,125 +1435,21 @@ VOID CmReenumConfirm(PCM_NHI nhi, const UCHAR *v, ULONG bytes)
     }
 }
 
-/* ---- the resume hold -------------------------------------------------- */
+/* ---- the resume mark -------------------------------------------------- */
 
-/* One second, relative, in 100 ns units: -10,000,000 as two halves (no
- * 64-bit arithmetic). */
-static VOID cmHoldArm(PCM_FILTER f)
-{
-    LARGE_INTEGER due;
-
-    due.LowPart = 0xFF676980UL;
-    due.HighPart = -1;
-    f->TimerArmed = 1;
-    (VOID)KeSetTimer(&f->HoldTimer, due, &f->HoldDpc);
-}
-
-/*
- * The watchdog (section 6.3): one tick a second while a D0 IRP is
- * retained; at the bound's end the IRP is released by the failure path,
- * never taken for success, and the bridge invalidated so the functions
- * that did not come back are reported missing. <= DISPATCH_LEVEL.
- */
-static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
-{
-    PCM_FILTER f;
-    PIRP irp;
-    PDEVICE_OBJECT pdo;
-    ULONG invalidate;
-    KIRQL irql;
-
-    UNREFERENCED_PARAMETER(dpc);
-    UNREFERENCED_PARAMETER(arg1);
-    UNREFERENCED_PARAMETER(arg2);
-    f = (PCM_FILTER)context;
-    irp = NULL;
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    f->TimerArmed = 0;
-    if (f->HeldIrp == NULL) {
-        /* Released while this DPC was queued: the hold's reference is
-         * this DPC's to drop. */
-        cmRegDrop(f);
-        KeReleaseSpinLock(&cmRegLock, irql);
-        return;
-    }
-    if (f->HoldLeftS > 1) {
-        f->HoldLeftS--;
-        cmHoldArm(f);
-        KeReleaseSpinLock(&cmRegLock, irql);
-        return;
-    }
-    irp = f->HeldIrp;
-    f->HeldIrp = NULL;
-    f->Held = 0;
-    f->HeldBy = NULL;
-    invalidate = f->HoldReenum;
-    pdo = f->Common.Pdo;
-    cmRegWatchdogs++;
-    KeReleaseSpinLock(&cmRegLock, irql);
-    cmHoldComplete(irp);
-    if (invalidate) {
-        IoInvalidateDeviceRelations(pdo, BusRelations);
-    }
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    cmRegDrop(f);
-    KeReleaseSpinLock(&cmRegLock, irql);
-}
-
-/* The D0 IRP's completion on a held bridge: retained while the hold
- * stands, after the bus driver below has finished with it.
- * <= DISPATCH_LEVEL. */
-static NTSTATUS cmHoldDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
-{
-    PCM_FILTER f;
-    KIRQL irql;
-
-    UNREFERENCED_PARAMETER(device);
-    f = (PCM_FILTER)context;
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    if (f->Held && !f->Gone && NT_SUCCESS(irp->IoStatus.Status)) {
-        f->HeldIrp = irp;
-        cmHoldArm(f);
-        KeReleaseSpinLock(&cmRegLock, irql);
-        return STATUS_MORE_PROCESSING_REQUIRED;
-    }
-    cmRegDrop(f);
-    KeReleaseSpinLock(&cmRegLock, irql);
-    PoStartNextPowerIrp(irp);
-    return STATUS_SUCCESS;
-}
-
-BOOLEAN CmRegHoldD0(PCM_FILTER filter, PIRP irp)
+VOID CmRegPassD0(PCM_FILTER filter)
 {
     KIRQL irql;
-    BOOLEAN hold;
 
-    hold = FALSE;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (filter->Published && !filter->Gone && filter->Held &&
-        filter->HeldIrp == NULL && !filter->TimerArmed) {
-        if (cmRegHoldD0) {
-            filter->InFlight++;
-            hold = TRUE;
-        } else if (filter->HeldBy != NULL) {
-            /* Windows 8 and later (cm_ports.h, CmPortsHoldD0): passed
-             * down at once, the mark kept for the NHI's release, which
-             * invalidates the bridge. The holder is used under the
-             * list's lock only, which its delisting takes too (order:
-             * cmRegLock, then LogLock). */
-            filter->Passed = 1;
-            CmLogNote(filter->HeldBy, "cm.reenum.hold.passed", filter->Bdf);
-        }
+        filter->HeldBy != NULL) {
+        cmRegPassed++;
+        /* The holder is used under the list's lock only, which its
+         * delisting takes too (order: cmRegLock, then LogLock). */
+        CmLogNote(filter->HeldBy, "cm.reenum.hold.passed", filter->Bdf);
     }
     KeReleaseSpinLock(&cmRegLock, irql);
-    if (!hold) {
-        return FALSE;
-    }
-    IoMarkIrpPending(irp);
-    IoCopyCurrentIrpStackLocationToNext(irp);
-    CM_SET_COMPLETION_ALWAYS(irp, cmHoldDone, filter);
-    (VOID)PoCallDriver(filter->Common.Lower, irp);
-    return TRUE;
 }
 
 /* ====================================================================== */
@@ -2932,7 +2756,6 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     CM_PORTS_RESUME resume;
     KIRQL irql;
     PCM_FILTER f;
-    ULONG seconds;
     ULONG i;
     BOOLEAN over;
 
@@ -2959,11 +2782,9 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     resume.CmdMs = nhi->Icm.CmdTimeoutMs;
     resume.ApproveMs = nhi->Icm.ApproveTimeoutMs;
     resume.Retries = nhi->Icm.Retries;
-    /* The client's own bound is logged; the watchdog itself is the fixed
-     * limit, CM_PORTS_HOLD_MAX_MS: the client's announcement-driven work
-     * has no bound this driver can count exactly (each drain may process
-     * many announcements), and past the limit the failure path is the
-     * policy (cm_ports.h). */
+    /* The client's own bound and the five-minute cap are logged as
+     * diagnostics (cm_ports.h): no power IRP waits on them (task 43.24h,
+     * record 21 section 6.3). */
     CmLogNote(nhi, "cm.reenum.hold.client-ms", CmPortsHoldBound(&resume));
     /* The fixed five-minute outer cap, under either profile; under USB4
      * the client's bound is logged, and a bound that with record 21's
@@ -2977,7 +2798,6 @@ VOID CmReenumSuspend(PCM_NHI nhi)
                       nhi->U4ResumeBoundMs);
         }
     }
-    seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
     if (r->Route != CM_ROUTE_FILTER) {
         return;
@@ -2988,9 +2808,6 @@ VOID CmReenumSuspend(PCM_NHI nhi)
         if (f != NULL && f->Owner == nhi && f->Active) {
             f->Held = 1;
             f->HeldBy = nhi;
-            f->Passed = 0;
-            f->HoldLeftS = seconds;
-            f->HoldReenum = r->Reenum;
             r->Port[i].Flags |= CM_PORT_HELD;
         }
     }
@@ -2998,11 +2815,12 @@ VOID CmReenumSuspend(PCM_NHI nhi)
 }
 
 /*
- * Every member in `mask` this domain holds released; `fail` takes section
- * 6.3's failure path, an invalidation of each released member, which a
- * member whose D0 went down unheld (Windows 8 and later, task 43.24h)
- * takes on success too (cm_ports.h, CmPortsRelease). Spin locks,
- * IoCompleteRequest, PoStartNextPowerIrp and IoInvalidateDeviceRelations
+ * Every member in `mask` this domain marked released, and each one that
+ * was still marked invalidated, whatever the resume's outcome (`fail`
+ * names it in the log only): its D0 went down at once (task 43.24h), so
+ * the devices behind it may have resumed against an absent tunnel, and
+ * the bridge's relations are asked for again now the tunnels are back
+ * (record 21 section 6.3). Spin locks and IoInvalidateDeviceRelations
  * only: callable at <= DISPATCH_LEVEL (CmReenumResumeFailed's use).
  */
 static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
@@ -3010,11 +2828,9 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
     PCM_REENUM r;
     KIRQL irql;
     PCM_FILTER f;
-    PIRP irp;
-    BOOLEAN dropRef;
     ULONG i;
     ULONG was;
-    ULONG passed;
+    ULONG act;
 
     r = &nhi->Reenum;
     if (r->Route != CM_ROUTE_FILTER) {
@@ -3024,35 +2840,22 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
         if ((mask & (1UL << i)) == 0) {
             continue;
         }
-        irp = NULL;
-        dropRef = FALSE;
-        was = 0;
-        passed = 0;
-        f = NULL;
         KeAcquireSpinLock(&cmRegLock, &irql);
         r->Port[i].Flags &= ~CM_PORT_HELD;
         f = cmRegFind(r->Port[i].Bdf);
-        if (f != NULL && f->HeldBy == nhi) {
-            was = 1;
-            passed = f->Passed;
-            irp = cmHoldRelease(f, &dropRef);
+        was = (ULONG)(f != NULL && f->HeldBy == nhi);
+        act = CmPortsRelease(was, r->Reenum);
+        if (act & CM_PORTS_REL_CLEAR) {
+            f->Held = 0;
+            f->HeldBy = NULL;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
-        if (irp != NULL) {
-            cmHoldComplete(irp);
+        if (act & CM_PORTS_REL_CLEAR) {
             CmLogNote(nhi, fail ? "cm.reenum.hold.released-failed"
                                 : "cm.reenum.hold.released",
                       r->Port[i].Bdf);
-        } else if (passed) {
-            CmLogNote(nhi, fail ? "cm.reenum.hold.passed-failed"
-                                : "cm.reenum.hold.passed-released",
-                      r->Port[i].Bdf);
         }
-        if (dropRef) {
-            cmRegRelease(f);
-        }
-        if (CmPortsRelease(was, r->Reenum, fail, passed) &
-            CM_PORTS_REL_INVALIDATE) {
+        if (act & CM_PORTS_REL_INVALIDATE) {
             (VOID)cmInvalidate(nhi, i, FALSE);
         }
     }
@@ -3103,7 +2906,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     ULONG over;
     ULONG skipped;
     ULONG refused;
-    ULONG watchdogs;
+    ULONG passed;
     ULONG i;
 
     r = &nhi->Reenum;
@@ -3194,12 +2997,12 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
     CmLogNote(nhi, "cm.reenum.holds", r->Holds);
-    CmRegCounters(&attached, &over, &skipped, &refused, &watchdogs);
+    CmRegCounters(&attached, &over, &skipped, &refused, &passed);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
     CmLogNote(nhi, "cm.reenum.child.over", over);
     CmLogNote(nhi, "cm.reenum.child.skipped", skipped);
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
-    CmLogNote(nhi, "cm.reenum.hold.watchdogs", watchdogs);
+    CmLogNote(nhi, "cm.reenum.hold.passed", passed);
     CmLogNote(nhi, "cm.reenum.child.stray", cmRegStray);
     CmLogNote(nhi, "cm.reenum.departures", r->Departures);
     CmLogNote(nhi, "cm.reenum.departures.dropped", r->DeparturesDropped);

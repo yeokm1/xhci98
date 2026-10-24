@@ -44,19 +44,16 @@
  *                    Cheap when there is nothing to do.
  *   CmReenumSuspend  at the system suspend's D3, before the client sends
  *                    anything to the firmware: the held mark on every
- *                    active member (section 6.3, resume ordering), and the
- *                    filters' watchdog: a fixed five minutes
- *                    (CM_PORTS_HOLD_MAX_MS, below the power-IRP watchdog),
- *                    past which the failure path runs; the client's own
- *                    resume bound is computed and logged as a diagnostic
- *                    only.
+ *                    active member (section 6.3, resume ordering). No
+ *                    power IRP is retained on the mark (task 43.24h); the
+ *                    client's own resume bound and the five-minute cap
+ *                    (CM_PORTS_HOLD_MAX_MS) are computed and logged as
+ *                    diagnostics only.
  *   CmReenumResumed  at the D0 after it, once the client's resume and
  *                    reconciliation have run (ok TRUE) or failed (ok
- *                    FALSE): release the held members' retained D0 IRPs;
- *                    on failure also ask each member's filter for an
- *                    invalidation (section 6.3's failure path), as on
- *                    success for a member whose D0 went down unheld
- *                    (Windows 8 and later, task 43.24h).
+ *                    FALSE): clear the held members' marks and ask each
+ *                    member's filter for an invalidation, whatever the
+ *                    outcome (section 6.3's release).
  *   CmReenumStop     at stop, surprise removal, removal and shutdown,
  *                    before the client's unbind: release every held member
  *                    by the failure path, clear the active marks, withdraw
@@ -113,11 +110,10 @@
  * The NHI keeps the correspondence (CM_NHI.Binds) and drives the learning
  * itself. At a suspend under U4On, CM_NHI.U4ResumeBoundMs holds the USB4
  * client's resume bound (TbtU4ResumeBoundUs for the most obligations a
- * domain holds, rounded up) before CmReenumSuspend is called; the hold's
- * watchdog stays the fixed five-minute outer cap on every NT target
- * (CmPortsHoldWatchdog): that bound plus record 21's 10 s is logged when it
- * would pass the cap, and a client still working when the cap ends takes
- * the failure path. CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
+ * domain holds, rounded up) before CmReenumSuspend is called; it is logged,
+ * with the five-minute cap (CmPortsHoldWatchdog) and whether that bound
+ * plus record 21's 10 s would pass it, as diagnostics only: no power IRP
+ * waits on it (task 43.24h). CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
  * USB4 client's bound. CmReenumResumed's `ok` is FALSE whenever an
  * obligation was not met, though the domain keeps running.
  *
@@ -329,7 +325,8 @@ typedef struct _CM_REENUM {
     CM_REENUM_EJECT EjectHook;
     PVOID EjectContext;
 
-    /* The filters' watchdog for a held D0 IRP, ms (CmReenumSuspend). */
+    /* The five-minute cap, ms, logged at CmReenumSuspend (a diagnostic
+     * since task 43.24h: no D0 IRP is held). */
     ULONG HoldBoundMs;
 
     /* 98: the CONFIGMG route, each port's children already seen, and the
@@ -411,8 +408,8 @@ VOID CmReenumService(struct _CM_NHI *nhi);
 VOID CmReenumSuspend(struct _CM_NHI *nhi);
 VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
 /* A resume the thread will not run (the D0 IRP failed below, or no
- * thread to queue it to): every held member released by the failure path
- * at once, so no bridge's D0 waits for the watchdog. The exception to the
+ * thread to queue it to): every marked member released by the failure
+ * path at once (its mark cleared, its bridge invalidated). The exception to the
  * thread contract: any context at <= DISPATCH_LEVEL, idempotent, and
  * harmless where nothing is held. IRQL: <= DISPATCH_LEVEL, any context
  * (cm_power.c's D0 completion calls it). */
@@ -647,18 +644,19 @@ VOID CmRegInit(VOID);
  * from its AddDevice or creation, before it is attached. Any IRQL. */
 VOID CmRegFilterInit(struct _CM_FILTER *filter);
 
-/* The registration list's counters, for the NHI's log at stop. */
+/* The registration list's counters, for the NHI's log at stop; `passed`
+ * counts the device D0s that reached a marked bridge (CmRegPassD0). */
 VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
-                   PULONG refused, PULONG watchdogs);
+                   PULONG refused, PULONG passed);
 
 /* The bridge filter's start has completed below it successfully: publish
  * its entry under its bus, device and function (IoGetDeviceProperty). A
  * filter whose location cannot be read publishes nothing. PASSIVE_LEVEL. */
 VOID CmRegPublish(struct _CM_FILTER *filter);
 
-/* Stop, surprise removal, removal: withdraw the entry, release a retained
- * D0 IRP by the failure path, and wait for every call in flight on it to
- * drain. Idempotent. PASSIVE_LEVEL. */
+/* Stop, surprise removal, removal: withdraw the entry, clear its resume
+ * mark, and wait for every call in flight on it to drain. Idempotent.
+ * PASSIVE_LEVEL. */
 VOID CmRegWithdraw(struct _CM_FILTER *filter);
 
 /* A BusRelations request completed below a bridge filter (successfully):
@@ -673,13 +671,12 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
  * sequence, handed to CmRegRelations with the answer. PASSIVE_LEVEL. */
 ULONG CmRegRelationsBegin(struct _CM_FILTER *filter);
 
-/* A device IRP_MN_SET_POWER to D0 on a bridge filter: TRUE when it was
- * passed down with the hold's completion routine (the caller returns
- * STATUS_PENDING), FALSE when the caller passes it down as usual. On
- * Windows 8 and later never TRUE (cm_ports.h, CmPortsHoldD0): a held
- * member's D0 is logged (cm.reenum.hold.passed) and noted for the NHI's
- * release, which then invalidates the bridge. <= DISPATCH_LEVEL. */
-BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
+/* A device IRP_MN_SET_POWER to D0 on a bridge filter, which the caller
+ * then passes down as usual: on a bridge an NHI marked at its suspend, it
+ * is counted and logged to that NHI (cm.reenum.hold.passed, the bridge's
+ * location). Never retained (record 21 section 6.3, task 43.24h).
+ * <= DISPATCH_LEVEL. */
+VOID CmRegPassD0(struct _CM_FILTER *filter);
 
 /*
  * The marks (record 21 section 7.4, revision 3; task 42-A.5). Every
