@@ -6087,7 +6087,7 @@ From the 8, 8.1 and 10 legs (`runs/run-43-24.md` on its own branch,
 a root hub removed after its controller, an absent tunnel port's entry
 removed with a warning instead of stopping the uninstall, the Stor98
 driver-store check on NT, the `/restage` usage line. Design record 23
-revision 42.
+revision 43.
 
 ### The vehicle
 

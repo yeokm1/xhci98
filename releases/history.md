@@ -52,8 +52,10 @@ hosts and enclosure; the release notes say what was read where.
   device with more than four endpoints (an Xbox 360 pad) is no longer
   refused; a cancelled transfer behind another no longer leaves the ring
   chained wrong; the elevated `INSTALL /eject` closes the tunnel on a
-  native PCIe hot-plug port; the uninstall on 8, 8.1 and 10 completes in
-  one run.
+  native PCIe hot-plug port; on 8, 8.1 and 10 the uninstall removes the
+  root hubs after their controllers and no longer stops at a tunnel port
+  that is not present (read in one run on 8.1 x64 and 10 x64; on 10 x86
+  removing Stor98 can still need a restart and a second run).
 - Updating from `3.1.0.0`: run `SETUP.EXE`. On 98 SE and ME update with
   the installer, not Update Driver, which there keeps the earlier
   `xhci98.sys`.
