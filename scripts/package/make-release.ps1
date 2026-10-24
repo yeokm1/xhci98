@@ -6116,7 +6116,8 @@ May be addressed in a later release:
 
   * THUNDERBOLT 3 AND USB4: STANDBY AND HIBERNATION WITH A TUNNELLED DEVICE
     ATTACHED ARE NOT SUPPORTED. Stop and unplug every Thunderbolt or USB4
-    device first. On 7 x64 the first shutdown after such a resume can hang.
+    device first. On XP x64 and 7 x64 the first shutdown after such a
+    resume can stall for over ten minutes.
 
   * WINDOWS 98 SE AND ME: A USB 3 CONTROLLER ADDED AFTER THE INSTALL MAY
     ASK ONCE FOR THE "xhci98 xHCI Host Controller Disk". Give it the

@@ -1114,9 +1114,10 @@ have every leg.
   emulator, the first shutdown after resuming from a hibernation with a
   tunnelled NVMe drive still attached can stall at "Shutting down" for
   over ten minutes (XP x64 finished after twelve; 7 x64 was stopped after
-  fifteen). On 7 x64, without the drive, or without this package, it
-  completes, and it also completes when the drive was stopped with Safely
-  Remove before the hibernation. Always use
+  fifteen); 8 x64 and 10 x64 do not stall. On 7 x64, without the drive,
+  or without this package, it completes, and it also completes when the
+  drive was stopped with Safely Remove before the hibernation (read on 7
+  only). Always use
   Safely Remove before standby or hibernation.
 - **Windows 98 SE and ME: a device plugged in after the start needs an
   interrupt line from the BIOS.** On the ThinkPad P14s Gen 1 the BIOS's
