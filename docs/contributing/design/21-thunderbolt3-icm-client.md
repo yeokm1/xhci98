@@ -2491,91 +2491,90 @@ only with a qualified byte writer.
 
 **Resume ordering.** Linux uses the ACPI links above to resume the tunnel
 ports only after the NHI, so the tunnels are back before the devices
-behind them are touched. Nothing gives that order here, so on NT the
-driver makes one:
+behind them are touched. Nothing gives that order on NT, and since task
+43.24h (2026-10-24) the driver does not try to make one. It marks the
+ports and enumerates them again after its own resume:
 
 - At its own system suspend (section 5.6) the NHI marks every active
   member of its set **held**, under the list's lock, before it sends
-  anything to the firmware. The mark is set before either device can
-  resume, so it holds whichever of the NHI and the port resumes first.
+  anything to the firmware.
 - A device `IRP_MN_SET_POWER` to D0 that reaches a held member's filter
-  is passed down with a completion routine and **retained** there, after
-  the bus driver has finished with it, so the devices below the port are
-  not powered; nothing waits in a dispatch routine. **On 2000 to 7
-  only**: on Windows 8 and later the D0 is passed down at once (task
-  43.24h, 2026-10-24, below).
-- The NHI thread clears the mark and releases the IRP when its resume has
-  either **succeeded** (section 5.6's resume sequence and the
-  reconciliation of section 5.3 done, the tunnels re-announced) or
-  **failed** (any step's bound exhausted, the failure after activation
-  of section 1.4.2; the host-router poll's exhaustion is not one, section
-  5.1 step 9). Failure is not taken for restoration: the thread releases
-  the IRP and at once asks the filter for an invalidation, so `pci.sys`
-  reports the functions that did not come back as missing. An
-  invalidation only requests later PnP processing and is not a barrier,
-  so the drivers below may resume against an absent tunnel before their
-  removal - the failure path limits that window and does not close it.
-- The hold ends at the earlier of the NHI's resume result and a fixed
-  5-minute cap, the same on every NT target and under either profile,
-  below the power manager's own watchdog; the client bounds its own
-  resume at 270 s (`TBT_ICM_RESUME_BUDGET_MS`: bring-up, retries,
-  reconciliation and the announcements' drain, each wait clipped to what
-  is left), so its result comes inside the cap. The client's computed
-  bound (the sum of its steps' timeouts and tries for its row, plus 10 s)
-  is logged only. At the cap the filter releases the IRP itself and takes
-  the failure path; it never treats the expiry as success.
+  is passed down at once, like every other power IRP, and counted: the
+  log line `cm.reenum.hold.passed` with the bridge's location, and the
+  counter of the same name. It is never retained.
+- The NHI thread clears the mark when its resume has either
+  **succeeded** (section 5.6's resume sequence and the reconciliation of
+  section 5.3 done, the tunnels re-announced) or **failed** (any step's
+  bound exhausted, the failure after activation of section 1.4.2; the
+  host-router poll's exhaustion is not one, section 5.1 step 9). In both
+  cases it then asks the member's filter for an invalidation, so `pci.sys`
+  enumerates the port again: the functions that came back are found, and
+  the ones that did not are reported missing (`CmPortsRelease`,
+  `cm_ports.h`). An invalidation only requests later PnP processing and
+  is not a barrier.
 - An NHI that does not resume at all (removed, or refused at resume)
-  takes the failure path for every held member at its removal.
+  clears the marks and invalidates at its removal.
+- The client's resume bound and the five-minute cap are still computed
+  and logged at the suspend (`cm.reenum.hold.client-ms`,
+  `cm.reenum.hold.bound-ms`). They are diagnostics: nothing waits on
+  them.
 
-**Windows 8 and later: no hold** (task 43.24h, 2026-10-24;
-`CmPortsHoldD0`, `cm_ports.h`). The test is the running kernel's own
-version, 6.2 or later, read from the shared user data page
-(`KUSER_SHARED_DATA` `NtMajorVersion` and `NtMinorVersion`) on NT only:
-the WDM version cannot tell, because 8, 8.1 and 10 report the WDM
-version 7 does. The mark is still set at the suspend. A held member's D0 is passed down at
-once and logged (`cm.reenum.hold.passed`, the bridge's location). At the
-NHI's release the member is invalidated whatever the outcome
-(`cm.reenum.hold.passed-released` or `cm.reenum.hold.passed-failed`,
-then the invalidation, `CmPortsRelease`): its devices may have resumed
-against an absent tunnel, and `pci.sys` enumerates the port again now that
-the tunnels are back. The reason is a deadlock in the resume. The NHI's
-device object is `DO_POWER_PAGABLE` and the bridges' are not. The power
-manager of these systems resumes the non-pageable devices before the
-pageable ones, and the bridge's bus driver completes its system S0 only
-once its D0 has completed. A retained bridge D0 therefore kept the NHI
-from ever receiving its own S0 and D0, and the NHI's resume, the only
-thing that releases that D0, never ran. Read on Windows 8 x64
-(`runs/run-43-24.md`): the dump's blocked IRP was the tunnel port's D0,
-held on its filter after the system S0 had passed down. The NHI's log
-ended at its suspend (`cm.suspend=00000005`; suspends 1, resumes 0), and
-the emulator saw no `driver ready` before the power manager's watchdog
-stopped the machine with bug check 0x9F (3). The same bug check was read
-at the resume from hibernation on 8 x86, 8 x64, 8.1 x64 and 10 x64, and
-at the boot after a Fast Startup shutdown (a resume from the hibernation
-file, the default shutdown there) on 8.1 x64 and 10 x64, each with a
-tunnel port marked. XP x64 SP2, Vista SP2 x86, and 7 SP1 x86 and x64
-resumed from hibernation with the enclosure attached and its port
-marked, under the hold, with the drive present and answering afterwards
-and no bug check (tasks 43.21 and 43.44, 2026-10-22, the kit's run
-notes). So 2000 to 7 keep the hold. The legs of task 43.24h read the
-Windows 8 and later path.
+**Why the D0 is no longer held.** Until task 43.24h the filter retained
+the held member's D0 IRP with a completion routine, until the NHI's
+resume released it or a five-minute watchdog did. That cannot work on
+NT. The NHI's device object is `DO_POWER_PAGABLE` and the bridges' are
+not. The power manager resumes the non-pageable devices before the
+pageable ones, and the bridge's bus driver (`pci.sys`) completes its
+system S0 only once its D0 has completed. So a retained bridge D0 keeps
+the NHI from receiving its own S0 and D0, and the NHI's resume, the only
+thing that could release the bridge's D0, cannot run.
 
-Because of that window, **system suspend with a tunnelled device attached
-is unsupported in this release on every target**, and the release notes
-say so: on 2000 to 7 the hold orders the successful resume and nothing
-yet orders a failed one; on Windows 8 and later no resume is ordered. Leg `39-V.2` reads, where the guest offers S3, a resume that
-succeeds, one that fails (the firmware not answering `driver ready`), an
-unplug during sleep, and the watchdog's expiry. On Windows 98 there is no
-such hook at all; Windows 98 on the APM machines this project runs rarely
-reaches S3.
+What happened then depended on whose watchdog fired first:
 
-The failed resume is a recorded exception to the coverage plan's rule
-that tunnels are restored before dependent PCI devices resume: the held D0
-is released, then the invalidation asked for, because holding a bridge's
-D0 for ever would hang the system's resume. Design record 22 records it
-as its decision U15, for both profiles, and this record carries the same
-decision (an orchestrator decision of 2026-10-15, for the owner to
-confirm).
+- **Windows 8, 8.1 and 10.** The power manager's own watchdog fired
+  first, after about two minutes, with bug check 0x9F (3). In the 8 x64
+  dump (`runs/run-43-24.md`) the blocked IRP was the tunnel port's D0,
+  held on its filter after the system S0 had passed down, with the hold's
+  watchdog at 182 of its 300 seconds. The NHI's log ended at its suspend
+  (`cm.suspend=00000005`; suspends 1, resumes 0), and the emulator saw no
+  `driver ready`. The same bug check was read at the resume from
+  hibernation on 8 x86, 8 x64, 8.1 x64 and 10 x64. It was also read at
+  the boot after a Fast Startup shutdown (a resume from the hibernation
+  file, the default shutdown there) on 8.1 x64 and 10 x64.
+- **2000 to 7.** The power manager's watchdog is longer, so the hold's
+  five-minute cap fired first and released every held D0 through the
+  failure path. Only then did the NHI resume. On 7 x64 the guest resumed
+  from hibernation with the enclosure attached, in about 6 to 10 minutes
+  under the emulator, and the drive came back (task 43.24h). The
+  counter `cm.reenum.hold.watchdogs` read 2, one for each of the Titan
+  Ridge's two tunnel ports. The PASS readings of the 43.21 and 43.44 legs
+  on XP x64, Vista and 7 (2026-10-22) were the same recoveries. On no NT
+  did the hold order a resume.
+
+The cost of dropping the hold is the ordering it was meant to give, which
+it never gave. The devices behind a port resume before its tunnel is back
+and may fail their own resume against the absent tunnel. The invalidation
+after the NHI's resume is what recovers them: each finds its tunnel again,
+or is reported missing and removed. This is section 6.3's old failure
+path, now taken at every resume and without the five-minute stall.
+
+**System suspend with a tunnelled device attached stays unsupported in
+this release on every target**, and the release notes say so. What task
+43.24h changes is that it no longer stops Windows 8 to 10 and no longer
+stalls 2000 to 7 for five minutes. Leg `39-V.2` reads, where the guest
+offers S3, a resume that succeeds, one that fails (the firmware not
+answering `driver ready`), and an unplug during sleep. On Windows 98
+there is no such hook at all, since no filter of this driver attaches to
+a bridge there (section 6.1). Windows 98 on the APM machines this
+project runs rarely reaches S3.
+
+Releasing the ports before their tunnels are back is a recorded
+exception to the coverage plan's rule that tunnels are restored before
+dependent PCI devices resume. Design record 22 records it as its decision
+U15, for both profiles, and this record carries the same decision. It
+was an orchestrator decision of 2026-10-15 for a failed resume, widened
+by task 43.24h on 2026-10-24 to every resume, because a retained D0
+deadlocks the NT resume (the owner, 2026-10-24).
 
 ### 6.4 When re-enumeration cannot be done
 
@@ -6139,12 +6138,12 @@ revised to it in draft 6.
   `Removable` and `SurpriseRemovalOK` set decides the 2000 path; the 9x
   half rests on `Change_DevNode_Status` setting `DN_REMOVABLE` and on what
   ME's applet lists, both unread.
-- **Resume ordering** (section 6.3): the NT hold orders a successful
-  resume on 2000 to 7 (read at hibernation on XP x64, Vista and 7); a
-  failed one is not ordered, and on Windows 8 and later no resume is
-  (task 43.24h: a held D0 deadlocked their resume), so suspend with a
-  tunnelled device attached is unsupported on every target in this
-  release; Windows 98 has no such hook.
+- **Resume ordering** (section 6.3): no NT resume is ordered. Since task
+  43.24h a held port's D0 goes down at once, because a retained one
+  deadlocked the resume (a bug check on 8 to 10, a five-minute stall on
+  2000 to 7), and every resume re-enumerates the ports after the NHI's.
+  So suspend with a tunnelled device attached is unsupported on every
+  target in this release. Windows 98 has no such hook.
 - **The dock's PCIe switch** (`8086:15d3`, `ICM-PROTOCOL` section 10.1) and
   its five downstream ports appear behind the tunnel on the real machine,
   where the emulator shows one NVMe: `pci.sys` and `PCI.VXD` enumerate

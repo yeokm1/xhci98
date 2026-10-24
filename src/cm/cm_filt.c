@@ -372,11 +372,14 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 }
 
 /*
- * Power: passed down as NT 5.x requires of a filter, except a device D0
- * request on a bridge the NHI holds for its resume (record 21 section
- * 6.3), which cm_reenum.c passes down with a completion routine that
- * retains it - on 2000 to 7 only: on Windows 8 and later it goes down at
- * once (CmRegHoldD0, cm_ports.h CmPortsHoldD0; task 43.24h).
+ * Power: passed down as NT 5.x requires of a filter, every IRP and at
+ * once. A device D0 on a bridge the NHI marked at its suspend is never
+ * retained (record 21 section 6.3, task 43.24h): the power manager does
+ * not send the pageable NHI its own resume while a bridge's resume waits,
+ * so a retained D0 stopped every resume from hibernation and every Fast
+ * Startup boot with bug check 0x9F. It is counted and logged
+ * (CmRegPassD0); the NHI's resume releases the mark and invalidates the
+ * bridge, and the devices behind it are enumerated again.
  */
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
 {
@@ -386,9 +389,8 @@ NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
     if (filter->Common.Kind == CM_KIND_FILTER &&
         stack->MinorFunction == IRP_MN_SET_POWER &&
         stack->Parameters.Power.Type == DevicePowerState &&
-        stack->Parameters.Power.State.DeviceState == PowerDeviceD0 &&
-        CmRegHoldD0(filter, irp)) {
-        return STATUS_PENDING;
+        stack->Parameters.Power.State.DeviceState == PowerDeviceD0) {
+        CmRegPassD0(filter);
     }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);

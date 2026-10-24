@@ -539,17 +539,10 @@ typedef struct _CM_FILTER {
     ULONG SafeEject;        /* Owner's XhciCmSafeEject                     */
     struct _CM_NHI *Owner;
     ULONG OwnerIndex;       /* the member's index in Owner's set           */
-    /* The resume hold (record 21 section 6.3). */
+    /* The resume mark (record 21 section 6.3): set at the NHI's suspend,
+     * cleared by its resume's release; no power IRP is retained. */
     ULONG Held;
     struct _CM_NHI *HeldBy;
-    ULONG HoldReenum;       /* invalidate on the watchdog's failure path   */
-    ULONG HoldLeftS;        /* the watchdog's seconds still to run         */
-    PIRP HeldIrp;           /* the retained device D0 IRP                  */
-    ULONG Passed;           /* Windows 8 and later: this mark's D0 went
-                             * down at once, unheld (task 43.24h)          */
-    ULONG TimerArmed;
-    KTIMER HoldTimer;
-    KDPC HoldDpc;
     /* The snapshot of section 7.4: written by the PnP dispatch alone,
      * under the registration list's lock (the eject's eligibility reads
      * it from a child's removal). */

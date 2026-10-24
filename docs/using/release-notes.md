@@ -989,12 +989,14 @@ have every leg.
   connection manager's port filter kept a bridge's power-on back for the
   controller's resume, and on these systems Windows does not resume the
   controller until that power-on has completed. The same guests without
-  this package hibernated and resumed. From `3.2.0.0`, on Windows 8 and
-  later, the power-on is passed on at once and the port is enumerated
-  again once the controller has resumed. 2000 to 7 keep the old order;
-  of those, the resume was read to work in the same emulator on XP x64,
-  Vista and 7 (2000 and 32-bit XP were not hibernated there). The legs
-  with this change are task 43.24's.
+  this package hibernated and resumed. On 2000 to 7 the same wait ended
+  after five minutes, when the connection manager gave up waiting and
+  let the power-on through. The resume then completed and the drive came
+  back, so a resume took about 6 to 10 minutes in the emulator (read on 7
+  x64, and earlier on XP x64 and Vista). From `3.2.0.0`, on every
+  Windows from 2000 to 10, the power-on is passed on at once and the port
+  is enumerated again once the controller has resumed. The legs with this
+  change are task 43.24's.
 - **The BIOS must leave the controller on.** A controller the BIOS
   switched off is not switched on: with "Thunderbolt BIOS Assist" on and
   nothing attached at power-on, the BIOS powers it down, and the switch

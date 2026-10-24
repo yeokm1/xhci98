@@ -357,7 +357,7 @@ static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
         "cm.reenum.9x.gone", "cm.reenum.9x.gone-dropped", "cm.reenum.ejects",
         "cm.reenum.child.attached", "cm.reenum.child.over",
         "cm.reenum.child.skipped",
-        "cm.reenum.child.refused", "cm.reenum.hold.watchdogs",
+        "cm.reenum.child.refused", "cm.reenum.hold.passed",
         "cm.live.state", "cm.live.refused",
         "cm.log.debugview"
     };

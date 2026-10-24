@@ -152,8 +152,8 @@ VOID CmNhiPlatformRelease(PCM_NHI nhi, BOOLEAN mayClear)
 /*
  * The USB4 profile's suspend (record 22 sections 7.6 and 11): the
  * obligations recorded and the rings stopped (TbtU4Suspend), and the
- * resume bound for them logged at the tick read now - the hold's own
- * watchdog is the re-enumeration seam's (cm_reenum.h, CmReenumSuspend).
+ * resume bound for them logged at the tick read now, as a diagnostic (no
+ * power IRP waits on it; cm_reenum.h, CmReenumSuspend).
  * IRQL: PASSIVE_LEVEL, the thread.
  */
 static VOID cmU4Suspend(PCM_NHI nhi)
@@ -219,9 +219,9 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     nhi->Counters.Suspends++;
     CmLogNote(nhi, "cm.suspend", (ULONG)nhi->SystemPower);
     if (nhi->U4On) {
-        /* The bound the hold's watchdog must cover, for the most
-         * obligations a domain can hold, before the hold is published
-         * (cm_reenum.h, CmReenumSuspend). */
+        /* The USB4 client's resume bound, for the most obligations a
+         * domain can hold, logged with the marks (a diagnostic; cm_reenum.h,
+         * CmReenumSuspend). */
         nhi->U4ResumeBoundMs =
             (TbtU4ResumeBoundUs(TBT_U4_OBLIGATIONS, nhi->ClockTickUs) +
              999UL) / 1000UL;
@@ -484,9 +484,9 @@ static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         nhi->Counters.PowerInline++;
     }
     /* No reinitialisation will run for this D0 (refused below, or no
-     * thread): a suspend this driver ran, or a domain still holding its
-     * tunnel bridges, is owed their release now, through the failure path,
-     * rather than at the bridge filters' watchdog (cm_reenum.h). */
+     * thread): a suspend this driver ran, or a domain still marking its
+     * tunnel bridges, is owed their release now, through the failure path:
+     * the marks cleared and the bridges invalidated (cm_reenum.h). */
     if (nhi->Suspended || nhi->ReenumOn) {
         CmReenumResumeFailed(nhi);
     }
