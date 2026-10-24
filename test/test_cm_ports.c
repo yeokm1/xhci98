@@ -569,6 +569,36 @@ static void test_watchdog(void)
     CHECK(over, "over");
 }
 
+/* Task 43.24h: the hold on 2000 to 7 only; the release's invalidation
+ * (record 21 section 6.3). */
+static void test_hold_release(void)
+{
+    CHECK(CmPortsHoldD0(5, 0), "2000: the D0 is retained");
+    CHECK(CmPortsHoldD0(5, 1), "XP: retained");
+    CHECK(CmPortsHoldD0(5, 2), "XP x64 and Server 2003: retained");
+    CHECK(CmPortsHoldD0(6, 0), "Vista: retained");
+    CHECK(CmPortsHoldD0(6, 1), "7: retained");
+    CHECK(!CmPortsHoldD0(6, 2), "8: never retained");
+    CHECK(!CmPortsHoldD0(6, 3), "8.1: never retained");
+    CHECK(!CmPortsHoldD0(10, 0), "10 (and 11, 10.0): never retained");
+    CHECK(!CmPortsHoldD0(7, 0), "a later major: never retained");
+    CHECK(CmPortsHoldD0(4, 0), "below 2000 (no such target): retained, as before");
+    CHECK_EQ(CmPortsRelease(1, 1, FALSE, 0), CM_PORTS_REL_CLEAR,
+             "held and resumed: released, no invalidation (the hold ordered it)");
+    CHECK_EQ(CmPortsRelease(1, 1, TRUE, 0), CM_PORTS_REL_CLEAR | CM_PORTS_REL_INVALIDATE,
+             "held, resume failed: the failure path");
+    CHECK_EQ(CmPortsRelease(1, 1, FALSE, 1), CM_PORTS_REL_CLEAR | CM_PORTS_REL_INVALIDATE,
+             "passed unheld, resumed: invalidated");
+    CHECK_EQ(CmPortsRelease(1, 1, TRUE, 1), CM_PORTS_REL_CLEAR | CM_PORTS_REL_INVALIDATE,
+             "passed unheld, failed: invalidated");
+    CHECK_EQ(CmPortsRelease(1, 0, TRUE, 1), CM_PORTS_REL_CLEAR,
+             "re-enumeration off (XhciCmReenum 0): cleared only");
+    CHECK_EQ(CmPortsRelease(0, 1, TRUE, 1), 0, "not marked by this NHI: left alone");
+    CHECK_EQ(CmPortsRelease(0, 0, FALSE, 0), 0, "nothing");
+    CHECK_EQ(CmPortsRelease(1, 7, FALSE, 1), CM_PORTS_REL_CLEAR | CM_PORTS_REL_INVALIDATE,
+             "any nonzero XhciCmReenum");
+}
+
 int main(void)
 {
     test_families();
@@ -579,6 +609,7 @@ int main(void)
     test_child_attach();
     test_bound();
     test_watchdog();
+    test_hold_release();
     test_keep_present();
 
     printf("\n%d checks, %d failures\n", checks, failures);

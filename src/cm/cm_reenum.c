@@ -110,6 +110,21 @@ static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
 static ULONG cmRegOver;
 static ULONG cmRegWatchdogs;
+/* CmPortsHoldD0 of the running NT's version, read once at CmRegInit:
+ * FALSE on Windows 8 and later, whose resume a retained bridge D0
+ * deadlocks (task 43.24h). The version is the kernel's, from the shared
+ * user data page (KUSER_SHARED_DATA NtMajorVersion and NtMinorVersion,
+ * the same offsets on every NT; mapped at this fixed kernel address,
+ * never paged), read only where IoIsWdmVersionAvailable(1, 0x10) says NT:
+ * Windows 98 and ME have no such page, and no bridge filter either. */
+static BOOLEAN cmRegHoldD0;
+#if defined(_WIN64)
+#define CM_SHARED_DATA      ((volatile ULONG *)(ULONG_PTR)0xFFFFF78000000000ui64)
+#else
+#define CM_SHARED_DATA      ((volatile ULONG *)(ULONG_PTR)0xFFDF0000UL)
+#endif
+#define CM_SHARED_NT_MAJOR  (0x26CUL / sizeof(ULONG))
+#define CM_SHARED_NT_MINOR  (0x270UL / sizeof(ULONG))
 /* Every attachment of this driver on a device (task 42-A.5, cm_reenum.h's
  * "The marks"), and the LowerFilters children no active member owned. */
 static LIST_ENTRY cmRegAtts;
@@ -179,6 +194,11 @@ VOID CmRegInit(VOID)
     InitializeListHead(&cmRegFilters);
     InitializeListHead(&cmRegDomains);
     InitializeListHead(&cmRegAtts);
+    cmRegHoldD0 = TRUE;
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        cmRegHoldD0 = CmPortsHoldD0(CM_SHARED_DATA[CM_SHARED_NT_MAJOR],
+                                    CM_SHARED_DATA[CM_SHARED_NT_MINOR]);
+    }
 }
 
 VOID CmRegFilterInit(PCM_FILTER filter)
@@ -381,6 +401,7 @@ VOID CmRegPublish(PCM_FILTER filter)
         filter->InFlight = 0;
         filter->Held = 0;
         filter->HeldBy = NULL;
+        filter->Passed = 0;
         /* A new publication: an eject's hold ended before the withdrawal
          * completed (it holds a reference), so none is carried over. */
         filter->EjectHold = 0;
@@ -409,6 +430,7 @@ static PIRP cmHoldRelease(PCM_FILTER f, BOOLEAN *dropRef)
     *dropRef = FALSE;
     f->Held = 0;
     f->HeldBy = NULL;
+    f->Passed = 0;
     irp = f->HeldIrp;
     if (irp == NULL) {
         return NULL;
@@ -1582,8 +1604,18 @@ BOOLEAN CmRegHoldD0(PCM_FILTER filter, PIRP irp)
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (filter->Published && !filter->Gone && filter->Held &&
         filter->HeldIrp == NULL && !filter->TimerArmed) {
-        filter->InFlight++;
-        hold = TRUE;
+        if (cmRegHoldD0) {
+            filter->InFlight++;
+            hold = TRUE;
+        } else if (filter->HeldBy != NULL) {
+            /* Windows 8 and later (cm_ports.h, CmPortsHoldD0): passed
+             * down at once, the mark kept for the NHI's release, which
+             * invalidates the bridge. The holder is used under the
+             * list's lock only, which its delisting takes too (order:
+             * cmRegLock, then LogLock). */
+            filter->Passed = 1;
+            CmLogNote(filter->HeldBy, "cm.reenum.hold.passed", filter->Bdf);
+        }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
     if (!hold) {
@@ -2956,6 +2988,7 @@ VOID CmReenumSuspend(PCM_NHI nhi)
         if (f != NULL && f->Owner == nhi && f->Active) {
             f->Held = 1;
             f->HeldBy = nhi;
+            f->Passed = 0;
             f->HoldLeftS = seconds;
             f->HoldReenum = r->Reenum;
             r->Port[i].Flags |= CM_PORT_HELD;
@@ -2966,7 +2999,9 @@ VOID CmReenumSuspend(PCM_NHI nhi)
 
 /*
  * Every member in `mask` this domain holds released; `fail` takes section
- * 6.3's failure path, an invalidation of each released member. Spin locks,
+ * 6.3's failure path, an invalidation of each released member, which a
+ * member whose D0 went down unheld (Windows 8 and later, task 43.24h)
+ * takes on success too (cm_ports.h, CmPortsRelease). Spin locks,
  * IoCompleteRequest, PoStartNextPowerIrp and IoInvalidateDeviceRelations
  * only: callable at <= DISPATCH_LEVEL (CmReenumResumeFailed's use).
  */
@@ -2979,6 +3014,7 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
     BOOLEAN dropRef;
     ULONG i;
     ULONG was;
+    ULONG passed;
 
     r = &nhi->Reenum;
     if (r->Route != CM_ROUTE_FILTER) {
@@ -2991,12 +3027,14 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
         irp = NULL;
         dropRef = FALSE;
         was = 0;
+        passed = 0;
         f = NULL;
         KeAcquireSpinLock(&cmRegLock, &irql);
         r->Port[i].Flags &= ~CM_PORT_HELD;
         f = cmRegFind(r->Port[i].Bdf);
         if (f != NULL && f->HeldBy == nhi) {
             was = 1;
+            passed = f->Passed;
             irp = cmHoldRelease(f, &dropRef);
         }
         KeReleaseSpinLock(&cmRegLock, irql);
@@ -3005,11 +3043,16 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
             CmLogNote(nhi, fail ? "cm.reenum.hold.released-failed"
                                 : "cm.reenum.hold.released",
                       r->Port[i].Bdf);
+        } else if (passed) {
+            CmLogNote(nhi, fail ? "cm.reenum.hold.passed-failed"
+                                : "cm.reenum.hold.passed-released",
+                      r->Port[i].Bdf);
         }
         if (dropRef) {
             cmRegRelease(f);
         }
-        if (was && fail && r->Reenum != 0) {
+        if (CmPortsRelease(was, r->Reenum, fail, passed) &
+            CM_PORTS_REL_INVALIDATE) {
             (VOID)cmInvalidate(nhi, i, FALSE);
         }
     }

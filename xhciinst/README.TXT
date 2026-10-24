@@ -331,10 +331,12 @@ the connection manager alone, uninstall (Add/Remove Programs, or INSTALL
 go the other way, run the installer again with them ticked. Add/Remove
 Programs lists one entry either way, named for what is installed.
 
-Windows 8 and 8.1 were read in virtual machines, the install alone, on 8
-(32-bit and x64) and 8.1 x64 (on 8.1 x64 also the console's update and
-uninstall, task 43.59); 8.1 32-bit has not been run. The connection
-manager installs there as on Windows 7. On 64-bit Windows 8 and 8.1 this
+Windows 8 and 8.1, 32-bit and 64-bit, were run with this package in
+virtual machines only (QEMU, its emulated Thunderbolt 3 controller and
+NVMe enclosure): the connection manager, Stor98 and the USB drivers
+installed, worked and uninstalled as on Windows 7. An uninstall with the
+USB drivers may stop part-way and ask for a restart and a second run; do
+both (on Windows 10 too). On 64-bit Windows 8 and 8.1 this
 package's x64 drivers, being test-signed, load in test-signing mode, which
 those systems let you turn on only with Secure Boot off in the computer's
 firmware setup, or on a start with driver signature enforcement disabled.
@@ -352,9 +354,10 @@ the drivers afresh (nor does Windows 10's).
 
 Windows 10 is installable. Its drivers were read in virtual machines of
 22H2, each installed by a script; the installer's console install and
-uninstall were read there only in task 43.59's legs (10 x86 and x64),
-and its full matrix is still to run. It admits every build below
-22000 - the releases 1507 to 22H2 and
+uninstall were read there in task 43.59's legs (10 x86 and x64), and the
+full matrix through the installer in task 43.24's (an uninstall there may
+need a restart and a second run). It admits every build below 22000 -
+the releases 1507 to 22H2 and
 the LTSC releases - and Windows Server 2016, 2019 and 2022, which it
 treats as Windows 10 and which are untested; only 22H2 is to be tested.
 It installs there as on Windows 8.1 but for Stor98: the connection manager,

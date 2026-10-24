@@ -54,7 +54,9 @@
  *                    reconciliation have run (ok TRUE) or failed (ok
  *                    FALSE): release the held members' retained D0 IRPs;
  *                    on failure also ask each member's filter for an
- *                    invalidation (section 6.3's failure path).
+ *                    invalidation (section 6.3's failure path), as on
+ *                    success for a member whose D0 went down unheld
+ *                    (Windows 8 and later, task 43.24h).
  *   CmReenumStop     at stop, surprise removal, removal and shutdown,
  *                    before the client's unbind: release every held member
  *                    by the failure path, clear the active marks, withdraw
@@ -673,8 +675,10 @@ ULONG CmRegRelationsBegin(struct _CM_FILTER *filter);
 
 /* A device IRP_MN_SET_POWER to D0 on a bridge filter: TRUE when it was
  * passed down with the hold's completion routine (the caller returns
- * STATUS_PENDING), FALSE when the caller passes it down as usual.
- * <= DISPATCH_LEVEL. */
+ * STATUS_PENDING), FALSE when the caller passes it down as usual. On
+ * Windows 8 and later never TRUE (cm_ports.h, CmPortsHoldD0): a held
+ * member's D0 is logged (cm.reenum.hold.passed) and noted for the NHI's
+ * release, which then invalidates the bridge. <= DISPATCH_LEVEL. */
 BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
 
 /*
