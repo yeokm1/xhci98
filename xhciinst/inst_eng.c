@@ -9107,12 +9107,12 @@ static int pass_any(int inf, int controllers)
  * driver, at most four passes; the UAS devices; the host interface. Each
  * pass behind the gate. Every device of the plan that is left goes to the
  * steps. */
-/* Record 26 section 5.0 (drafts 35 and 38): on 98 SE and ME a driver file
- * where the New Hardware wizard looks for it, so a device plugged in later
- * installs from the copy on DevicePath with no Insert Disk prompt (the
- * wizard asks at Windows' own SourcePath for a file not yet at its
- * destination): xhciuas.sys with the UAS driver, xhci98.sys with the USB
- * drivers, xhcicm.sys with the Thunderbolt support. Each placement is
+/* Record 26 section 5.0 (drafts 35, 38 and 40): on 98 SE and ME a driver
+ * file where the New Hardware wizard looks for it, so a device plugged in
+ * later installs from the copy on DevicePath with no Insert Disk prompt
+ * (the wizard asks at Windows' own SourcePath for a file not yet at its
+ * destination): xhciuas.sys with the UAS driver, xhcicm.sys with the
+ * Thunderbolt support (xhci98.sys no longer, draft 40: see drivers_9x). Each placement is
  * recorded under INST_PLACED9X_KEY; the 9x uninstall's file list removes
  * the package's driver files whoever put them there. */
 #define INST_PLACED9X_KEY INST_DIR_KEY "\\Placed9x"

@@ -48,11 +48,12 @@ hosts and enclosure; the release notes say what was read where.
   port or behind a slower hub, a red icon while something needs you, a
   warning after a Thunderbolt or USB4 device is removed unexpectedly, and
   98 SE's notices in a pop-up of their own.
-- Windows 8, 8.1 and 10 with the connection manager installed: a resume
-  from hibernation, and the start after a shutdown where Fast Startup is
-  on, stopped Windows with bug check 0x9F; on Windows 8 and later the
-  connection manager now passes a tunnel bridge's power-on down at once
-  instead of holding it for the controller's resume.
+- Hibernation with the connection manager installed: on Windows 8, 8.1
+  and 10 a resume, and the start after a shutdown where Fast Startup is
+  on, stopped Windows with bug check 0x9F, and on 2000 to 7 a resume took
+  several minutes; the connection manager now passes a tunnel bridge's
+  power-on down at once on every Windows, instead of holding it for the
+  controller's resume.
 - Fixed: Windows ME's first shutdown after the install no longer hangs; a
   device with more than four endpoints (an Xbox 360 pad) is no longer
   refused; a cancelled transfer behind another no longer leaves the ring
