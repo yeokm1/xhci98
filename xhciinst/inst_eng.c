@@ -22925,6 +22925,13 @@ static void other_print_plan(void)
                 inst_other_folder(set), o->StageOn ?
                 ", and its ticked packages' INFs for this Windows staged" :
                 " only");
+            if (set == INST_SET_FREE) {
+                const char *t = inst_other_trust_plan(other_trust_offered(),
+                                                      othTrust);
+                if (t != NULL) {
+                    out("%s\n", t);
+                }
+            }
         }
     }
 }

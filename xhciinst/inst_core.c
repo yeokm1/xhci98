@@ -8165,6 +8165,18 @@ int inst_other_pnf(const char *path, char *out, size_t cap)
     return 1;
 }
 
+const char *inst_other_trust_plan(int offered, int chosen)
+{
+    if (!offered) {
+        return NULL;
+    }
+    return chosen ?
+        "usb-wdm-free's test certificate (" INST_WDMFREE_CER "): added to "
+        "the Root and TrustedPublisher stores." :
+        "usb-wdm-free's test certificate (" INST_WDMFREE_CER "): not added "
+        "to the certificate stores.";
+}
+
 int inst_other_id_list(const char *list, char *ids, int cap)
 {
     int n = 0;

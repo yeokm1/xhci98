@@ -6480,6 +6480,15 @@ static void test_other_pkgs(void)
               inst_other_pnf("C:\\D\\USBCOM.INF", pnf, 16) == 1,
               "a .PNF path that does not fit refused");
     }
+    CHECK(inst_other_trust_plan(0, 0) == NULL &&
+          inst_other_trust_plan(0, 1) == NULL,
+          "no certificate line where the offer is not made");
+    CHECK(strstr(inst_other_trust_plan(1, 1), "added to the Root and "
+                 "TrustedPublisher stores") != NULL &&
+          strstr(inst_other_trust_plan(1, 1), INST_WDMFREE_CER) != NULL,
+          "/wdmfree:trust's plan line names the certificate and the stores");
+    CHECK(strstr(inst_other_trust_plan(1, 0), "not added") != NULL,
+          "the certificate left out said");
 }
 
 int main(void)

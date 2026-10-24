@@ -2094,6 +2094,10 @@ int inst_other_id_list(const char *list, char *ids, int cap);
  * deletes: 1 with path's <name>.PNF in out when path ends in .inf (any
  * case), 0 for any other file or when it does not fit. */
 int inst_other_pnf(const char *path, char *out, size_t cap);
+/* The plan's line for usb-wdm-free's test certificate: NULL when the offer
+ * is not made, else whether the run adds it to the Root and
+ * TrustedPublisher stores. */
+const char *inst_other_trust_plan(int offered, int chosen);
 /* A metadata line of STAGE.TXT (PACKAGE, EXCLUDES, COEXISTS): 1 the
  * line is one (kind 'P', 'E' or 'C', the fields copied), 0 not a metadata
  * line, -1 a metadata line it cannot read, or a NEEDS line (unsupported). */
