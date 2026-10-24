@@ -208,7 +208,9 @@ rem                  the ring's text and cut, the PCI states, the sizing,
 rem                  XHCITR's reader and texts, the default level 2
 rem   test_vsd_list - S98VSD.VXD's pure half (src\vsd\vsd_list.c, task
 rem                  43.46, design record 30 section 9.1): the claim, the
-rem                  function table, the physical list and its refusals
+rem                  function table, the physical list and its refusals,
+rem                  the request plan (a list that came is replaced) and
+rem                  unaligned buffers and IOS's double-buffer pieces (43.79)
 rem   test_di      - XHCIDI.EXE's pure part (xhciinst\di\di_core.c, task
 rem                  42-A.1, design record 27 section 11): the command line
 rem                  and its refusals, the result file's lines, the verdicts,

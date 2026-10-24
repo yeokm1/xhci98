@@ -125,4 +125,24 @@ int VsdClaimTest(const unsigned char *port, VSD_U32 devflags, VSD_U32 dmd,
  * section 4.1 item 2; every other value, an undefined one included, is 0. */
 int VsdNoDataFunc(unsigned func);
 
+/* What the request routine does with a request (section 4.1). An
+ * IORF_PHYS_SGDS that arrives is not a reason to pass a request down:
+ * with phys_sgd no longer demanded IOS's own double buffer arrives with
+ * that flag and a list holding the buffer's LINEAR address (IOS
+ * IOS_SendCommand, QuickInstall object 1 0x100E65-0x100EC8 [static];
+ * IOR.H on IORF_DOUBLE_BUFFER: the SGD pointers are virtual), so every
+ * request with data gets this layer's list, built from IOR_buffer_ptr. */
+#define VSD_P_BUILD         0   /* build the list, then call down          */
+#define VSD_P_NODATA        1   /* no data: call down untouched            */
+#define VSD_P_SRB_NODATA    2   /* refused: SRB data on a no-data request  */
+#define VSD_P_NO_SRB        3   /* refused: data and no SRB (section 4.3)  */
+
+#define VSD_IORF_SRB_VALID  0x00008000UL    /* IOR.H IORF_SRB_VALID      */
+#define VSD_IORF_PHYS_SGDS  0x04000000UL    /* IOR.H IORF_PHYS_SGDS      */
+#define VSD_IORF_DBLBUF     0x00000040UL    /* IOR.H IORF_DOUBLE_BUFFER  */
+
+/* flags: IOR_flags; count: IOR_xfer_count; func: IOR_func; srbLen: the
+ * SRB's DataTransferLength when IORF_SRB_VALID is set, else ignored. */
+int VsdPlan(VSD_U32 flags, VSD_U32 count, unsigned func, VSD_U32 srbLen);
+
 #endif
