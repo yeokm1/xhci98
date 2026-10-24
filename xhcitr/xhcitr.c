@@ -3099,7 +3099,7 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
             tr_text_init(&e, eb, sizeof(eb));
             tr_fast_entry(&e, name, fast_vid(p), fast_pid(p), port,
                           p->ParentUp >= 0 ? hub : NULL, &f);
-            tr_put(t, "  Can run faster (record 25 section 7.7):\n");
+            tr_put(t, "  Can run faster:\n");
             tr_put(t, "  ");
             {
                 /* The entry's lines, each indented two more. */
