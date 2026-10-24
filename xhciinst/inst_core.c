@@ -7941,13 +7941,26 @@ void inst_other_sentence(char *out, size_t cap, int set, const char *dir)
         inst_catv(out, cap, 4, "Copied to ", dir,
                   "\\" INST_WDMFREE_DIR ". ", INST_FREE_NOTICE);
     } else {
-        inst_catv(out, cap, 3, "Copies other makers' drivers (USB Ethernet, "
-                  "serial and game pads) to ", dir,
-                  "\\" INST_NONFREE_DIR ". They are their makers' work, not "
-                  "this project's. Nothing is installed: Windows uses them "
+        inst_catv(out, cap, 3, "Copies other manufacturers' drivers (USB "
+                  "Ethernet, serial and game pads) to ", dir,
+                  "\\" INST_NONFREE_DIR ". They are from their manufacturers, "
+                  "not this project. Nothing is installed: Windows uses them "
                   "only for a device you point it at, or with the boxes "
                   "below.");
     }
+}
+
+const char *inst_other_none_text(int nt)
+{
+    if (!nt) {
+        return "On Windows 98 SE and ME these drivers are copied only, not "
+               "staged: when Windows' hardware wizard asks for a driver, "
+               "choose Specify a location and point it at the package's "
+               "folder in the install directory: USBDRV\\FREE\\<class>\\"
+               "<package>\\<folder>, or USBDRV\\NONFREE\\... for the "
+               "non-free drivers.";
+    }
+    return "None of the drivers carried has one for this Windows.";
 }
 
 const char *inst_other_stage_label(void)

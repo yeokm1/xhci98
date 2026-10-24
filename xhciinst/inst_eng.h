@@ -287,6 +287,10 @@ void inst_eng_stor_summary(char *out, size_t cap);
  * 0 before the read. Its sentence for dir and the line under its row; the
  * choice; the page's warnings on Next ("" for none); the Summary's lines;
  * the Finish page's paragraph. */
+/* The Other USB drivers page's line when no package is offered: on 98 SE
+ * and ME the copy-only note (inst_other_none_text). */
+const char *inst_eng_other_none_text(void);
+
 int inst_eng_other_state(int set, int *state, int *forThis, int *include,
                          int *stage);
 void inst_eng_other_texts(int set, const char *dir, char *sentence,

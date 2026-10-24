@@ -198,8 +198,8 @@ USB class drivers of usb-wdm-free in USBDRV\FREE ("These drivers are
 experimental. They may not work with every device and can make Windows
 unstable. Report problems at https://github.com/yeokm1/usb-wdm-free."),
 and -nonfree.zip, which adds the non-free driver pack of
-usb-wdm-nonfree in USBDRV\NONFREE: other makers' drivers, not this
-project's work. The page shows a row for each set this
+usb-wdm-nonfree in USBDRV\NONFREE: other manufacturers' drivers, not
+this project's work. The page shows a row for each set this
 download carries and, for each it does not, which download and which
 address have it (https://github.com/yeokm1/usb-wdm-free and
 https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers
@@ -210,10 +210,15 @@ automatically for matching devices", is a box for each driver package
 of a set that has an INF for this Windows, grouped by kind (Audio,
 Video, HID, Network, Storage, Serial, Other), each unticked and open
 only while its set's row is ticked; a ticked package's INFs for this
-Windows are made available to Windows (on 98 SE and ME by adding the
-package's folder to DevicePath, on 2000 and later by staging its INF in
-the driver store); Windows may still ask for the folder of the files
-the first time. Two packages that would claim the same device are not
+Windows are staged in the driver store, and Windows may still ask for
+the folder of the files the first time. On Windows 98 SE and ME no
+package is offered: the sets are copied only, and none of their
+folders is added to DevicePath (a long DevicePath stops 98 SE's
+hardware wizard finding any driver). There, when the wizard asks for a
+driver, choose "Specify a location" and point it at the package's
+folder, USBDRV\FREE\<class>\<package>\<folder> (or USBDRV\NONFREE\...)
+in the install directory; an install over a run that added such
+folders to DevicePath takes them out again. Two packages that would claim the same device are not
 offered together, and the box below the list says why. What an earlier
 run staged is listed there too: leaving a box unticked does not undo
 it. On 64-bit Vista and later, with a free package ticked, one more box
@@ -299,7 +304,10 @@ The console tool
                                 for the non-free driver pack. /freestage
                                 and /nonfreestage are refused: name the
                                 packages. Without them the console asks,
-                                Enter for N, and /yes takes N
+                                Enter for N, and /yes takes N. On 98 SE
+                                and ME the sets are copied only, and
+                                /wdmfree:stage= and /wdmnonfree:stage=
+                                are refused, with nothing changed
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /faster      turns the xHCI98 USB Tree's "can run
@@ -312,8 +320,7 @@ The console tool
 Its other switches are the window's, and /nopause. On Windows 98 SE and
 ME, INSTALL.BAT takes eight arguments at most, seven after /console, and
 COMMAND.COM splits them at = and at commas: /set Name=Value counts as
-three, and /wdmfree:stage=audio/uac2,video/uvc98 as three too (one more
-than its packages). It refuses more rather than run a shortened command.
+three. It refuses more rather than run a shortened command.
 Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with the same arguments
 instead for a longer one. On 98 SE and ME the console tool installs each
 device through the helper too; a Windows dialog may open (the Windows CD

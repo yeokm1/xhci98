@@ -3658,7 +3658,7 @@ function Get-ReadmeMsFilesText {
 Microsoft files are in this download in two places: the seven Windows 98 SE
 storage files of section 3, in a folder of their own, copied unmodified from
 NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third party's); and, among the
-other makers' drivers in USBDRV\NONFREE\, the two KMDF co-installers ASIX
+other manufacturers' drivers in USBDRV\NONFREE\, the two KMDF co-installers ASIX
 ships with its AX88772 and AX88179 drivers (WdfCoInstaller01007.dll and
 WdfCoInstaller01009.dll), as ASIX ships them. None of them is this project's
 work. No licence to redistribute them has been established, nothing here
@@ -3774,11 +3774,12 @@ function Get-ReadmeDownloadText {
     }
     if ($Kind -eq "nonfree") {
         $L += ""
-        $L += "USBDRV\NONFREE\ holds other makers' drivers (USB Ethernet, serial and"
-        $L += "game pad drivers), unmodified, as their makers released them. They are"
-        $L += "not this project's work. USBDRV\NONFREE\NOTICE.md says whose each one"
-        $L += "is, and quotes what some of their makers said about passing them on;"
-        $L += "apart from that, no licence to redistribute them has been found."
+        $L += "USBDRV\NONFREE\ holds other manufacturers' drivers (USB Ethernet, serial"
+        $L += "and game pad drivers), unmodified, as their manufacturers released them."
+        $L += "They are not this project's work. USBDRV\NONFREE\NOTICE.md says whose"
+        $L += "each one is, and quotes what some of their manufacturers said about"
+        $L += "passing them on; apart from that, no licence to redistribute them has"
+        $L += "been found."
     }
     return ($L -join "`r`n")
 }
@@ -3809,7 +3810,7 @@ function Get-ReadmeOtherContentsText {
     if ($Kind -eq "nonfree") {
         if ($L.Count -gt 0) { $L += "" }
         $L += Format-ReadmeWrap -Lead "  USBDRV\NONFREE\ - " -Rest "                    " `
-                  -Text "other makers' drivers, not this project's work, from usb-wdm-nonfree $NonFreeTag"
+                  -Text "other manufacturers' drivers, not this project's work, from usb-wdm-nonfree $NonFreeTag"
         $L += ""
         $L += "      NOTICE.md    whose each one is"
         $L += "      README.md    which folder serves which Windows"

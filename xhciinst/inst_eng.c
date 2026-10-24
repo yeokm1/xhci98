@@ -22654,7 +22654,11 @@ static void other_read_set(int set)
             o->Src, o->Count, o->StageCount, o->PkgCount);
 }
 
-/* The STAGE lines for this system. */
+/* The STAGE lines for this system. None on 98 SE and ME: there the sets
+ * are copied only and no folder of theirs goes on DevicePath (owner,
+ * 2026-10-24: with the packages' folders DevicePath grew to 15 entries
+ * and about 600 characters, and 98 SE's hardware wizard then found no
+ * driver at all, not even in %windir%\INF). */
 static void other_count(int set)
 {
     OTHSET *o = &oth[set];
@@ -22663,6 +22667,9 @@ static void other_count(int set)
     int i;
 
     o->ForThis = 0;
+    if (!envNow.Nt) {
+        return;
+    }
     for (i = 0; i < o->StageCount; i++) {
         if (!(o->Stage[i].Systems & bit)) {
             continue;
@@ -22929,7 +22936,8 @@ static void other_print_plan(void)
                 toolDir[0] ? toolDir : "the tools folder",
                 inst_other_folder(set), o->StageOn ?
                 ", and its ticked packages' INFs for this Windows staged" :
-                " only");
+                !envNow.Nt ? " only; point the hardware wizard at a "
+                "package's folder there" : " only");
             if (set == INST_SET_FREE) {
                 const char *t = inst_other_trust_plan(other_trust_offered(),
                                                       othTrust);
@@ -23121,6 +23129,11 @@ static void other_earlier(int set)
             break;
         }
         rel[0] = '\0';
+        /* 98 SE and ME: an earlier run's DevicePath entry is taken out by
+         * this run (other_withdraw_devicepath), not shown as staged. */
+        if (!envNow.Nt && inst_eq(data, "DevicePath")) {
+            continue;
+        }
         if (inst_eq(data, "DevicePath")) {
             size_t n = haveDir ? strlen(dir) : 0;
             char dp[2048];
@@ -23356,6 +23369,10 @@ static int other_ticks(void)
                           other_set_tag(set), id, o->State !=
                           INST_OTHER_CARRIED ? "this download does not carry "
                           "its set" : k < 0 ? "no such package in the set" :
+                          !envNow.Nt ? "on Windows 98 SE and ME the drivers "
+                          "are copied, not staged (use /wdmfree:copy or "
+                          "/wdmnonfree:copy, then point the hardware wizard "
+                          "at the package's folder)" :
                           "it has nothing to stage on this Windows");
                 othSwitchErr[sizeof(othSwitchErr) - 1] = '\0';
                 return 0;
@@ -25105,10 +25122,12 @@ static void other_recover_only(int set)
     free(recs);
 }
 
-/* 98 SE and ME: each folder the Staged record names put back on
- * DevicePath where this run's own cleanup of the legacy %windir%\XHCI98
- * took it out (devicepath_update): unticking leaves staging as it is. */
-static void other_restore_devicepath(int set)
+/* 98 SE and ME: each folder an earlier run's Staged record names taken
+ * out of DevicePath, and its record value with it. The sets are copied
+ * only on these systems (other_count): a DevicePath of many entries left
+ * 98 SE's hardware wizard finding no driver at all, so an install, update
+ * or repair over such a run gives the wizard its search back. */
+static void other_withdraw_devicepath(int set)
 {
     char name[INST_PATH_CHARS * 2];
     char data[INST_PATH_CHARS + 1100];
@@ -25147,9 +25166,8 @@ static void other_restore_devicepath(int set)
         }
         if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
                       sizeof(list), &type) ||
-            inst_path_append(list, name, newList, sizeof(newList)) < 0) {
-            out("DevicePath could not be read or has no room: %s is not on "
-                "it.\n", name);
+            inst_path_remove(list, name, newList, sizeof(newList)) < 0) {
+            out("DevicePath could not be changed: %s stays on it.\n", name);
             flagSteps = 1;
             continue;
         }
@@ -25164,14 +25182,20 @@ static void other_restore_devicepath(int set)
                 RegCloseKey(k);
             }
             if (w != ERROR_SUCCESS) {
-                out("DevicePath could not be written: %s is not on it.\n",
+                out("DevicePath could not be written: %s stays on it.\n",
                     name);
                 flagSteps = 1;
                 continue;
             }
-            logonly("other: %s put back on DevicePath\n", name);
+            out("%s taken out of DevicePath.\n", name);
             flagChanged = 1;
         }
+        if (!other_key_del_value(set, "Staged", name)) {
+            flagSteps = 1;
+            continue;
+        }
+        /* The value is gone: the next one now has this index. */
+        i--;
     }
 }
 
@@ -25196,7 +25220,7 @@ static void other_run_set(int set)
     if (!go_on()) {
         return;
     }
-    other_restore_devicepath(set);
+    other_withdraw_devicepath(set);
     if (o->State != INST_OTHER_CARRIED || !o->Include || toolDir[0] == '\0') {
         other_recover_only(set);
         return;
@@ -26050,6 +26074,11 @@ void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
     }
 }
 
+const char *inst_eng_other_none_text(void)
+{
+    return inst_other_none_text(envNow.Nt);
+}
+
 const char *inst_eng_other_earlier(int set)
 {
     if (set < 0 || set >= INST_SET_COUNT || !othRead) {
@@ -26109,6 +26138,8 @@ void inst_eng_other_summary(const char *dir, char *text, size_t cap)
                       inst_other_label(set), d, inst_other_folder(set),
                       oth[set].StageOn ? "; Windows may choose the "
                       "packages below for matching devices" :
+                      !envNow.Nt ? "; point the hardware wizard at a "
+                      "package's folder there" :
                       "; nothing installs them");
         }
         one[sizeof(one) - 1] = '\0';
