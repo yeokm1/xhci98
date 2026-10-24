@@ -926,6 +926,33 @@ static void comp_usb_click(HWND dlg)
     comp_usb_state(dlg);
 }
 
+static int dlu_y(HWND dlg, int y);
+
+/* A read-only edit box's height for a number of lines of its font: the
+ * lines, its frame (the control's window less its client height) and
+ * 2 dialog units for the edit control's own margins (record 26 section
+ * 5.4: the Settings note, and the Components page's storage box). */
+static int box_lines_h(HWND dlg, int id, int lines)
+{
+    HWND box = GetDlgItem(dlg, id);
+    HFONT f = (HFONT)SendMessageA(box, WM_GETFONT, 0, 0);
+    HDC dc = GetDC(box);
+    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    TEXTMETRICA tm;
+    RECT win;
+    RECT cli;
+
+    GetTextMetricsA(dc, &tm);
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(box, dc);
+    GetWindowRect(box, &win);
+    GetClientRect(box, &cli);
+    return lines * tm.tmHeight + (win.bottom - win.top) - cli.bottom +
+           dlu_y(dlg, 2);
+}
+
 /* A control moved down by dy pixels (up when negative). */
 static void comp_move(HWND dlg, int id, int dy)
 {
@@ -947,15 +974,18 @@ static void comp_move(HWND dlg, int id, int dy)
  * "Replace the stored build" box on Vista and later (never with the
  * storage row), open only where the store trap was found: elsewhere the
  * folder's line and the buttons take its place (record 26 section 5.0,
- * draft 35). The storage row's box shows three lines (owner, 2026-10-24),
- * so the rows below move down by a little less each, the page keeping its
- * height: each pair is a control and its move, in dialog units. */
+ * draft 35). The storage row's box shows three whole lines of its font at
+ * least (owner, 2026-10-24), and more where its template's room holds
+ * more: its height is measured (box_lines_h), never past the room unless
+ * three lines need it, when the rows below move down by the difference
+ * too. The rows below move down by a little less each, the page keeping
+ * its height: each pair is a control and its move, in dialog units. */
 static void comp_layout(HWND dlg)
 {
     static const int below[][2] = {
-        { IDC_C_TB, 21 }, { IDC_C_TB_T, 21 }, { IDC_C_S98, 19 },
-        { IDC_C_S98_T, 19 }, { IDC_C_VSD, 19 }, { IDC_C_TRAY, 18 },
-        { IDC_C_FAST, 18 }, { IDC_C_RESTAGE, 18 }, { IDC_C_DIRLINE, 17 },
+        { IDC_C_TB, 22 }, { IDC_C_TB_T, 22 }, { IDC_C_S98, 20 },
+        { IDC_C_S98_T, 20 }, { IDC_C_VSD, 20 }, { IDC_C_TRAY, 19 },
+        { IDC_C_FAST, 19 }, { IDC_C_RESTAGE, 19 }, { IDC_C_DIRLINE, 18 },
         { IDC_C_SETTINGS, 17 }, { IDC_C_FOLDER, 17 }
     };
     static const int last[] = { IDC_C_DIRLINE, IDC_C_SETTINGS, IDC_C_FOLDER };
@@ -963,6 +993,9 @@ static void comp_layout(HWND dlg)
     HWND h;
     POINT pt;
     int up;
+    int room;
+    int lines;
+    int more;
     size_t i;
 
     if (compLaidOut) {
@@ -985,11 +1018,19 @@ static void comp_layout(HWND dlg)
         ShowWindow(GetDlgItem(dlg, IDC_C_STOR_T), SW_HIDE);
         return;
     }
-    /* A vertical distance, in the dialog's vertical units. */
+    /* The USB drivers' box 2 dialog units higher (the page's top margin
+     * as the other pages have it), its sentence hidden, and the UAS box
+     * and its words 19 units higher, in its place. */
     r.left = 0;
     r.top = 0;
     r.right = 0;
-    r.bottom = 17;
+    r.bottom = 2;
+    MapDialogRect(dlg, &r);
+    comp_move(dlg, IDC_C_DRIVERS, -r.bottom);
+    r.left = 0;
+    r.top = 0;
+    r.right = 0;
+    r.bottom = 19;
     MapDialogRect(dlg, &r);
     up = r.bottom;
     ShowWindow(GetDlgItem(dlg, IDC_C_DRIVERS_T), SW_HIDE);
@@ -1005,13 +1046,28 @@ static void comp_layout(HWND dlg)
     pt.y = r.top;
     ScreenToClient(dlg, &pt);
     SetWindowPos(h, NULL, pt.x, pt.y - up, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    /* The storage box: the most whole lines its room holds, three at
+     * least. */
+    h = GetDlgItem(dlg, IDC_C_STOR_T);
+    GetWindowRect(h, &r);
+    room = r.bottom - r.top;
+    lines = 3;
+    while (lines < 20 && box_lines_h(dlg, IDC_C_STOR_T, lines + 1) <= room) {
+        lines++;
+    }
+    more = box_lines_h(dlg, IDC_C_STOR_T, lines) - room;
+    SetWindowPos(h, NULL, 0, 0, r.right - r.left, room + more,
+                 SWP_NOMOVE | SWP_NOZORDER);
+    if (more < 0) {
+        more = 0;
+    }
     for (i = 0; i < sizeof(below) / sizeof(below[0]); i++) {
         r.left = 0;
         r.top = 0;
         r.right = 0;
         r.bottom = below[i][1];
         MapDialogRect(dlg, &r);
-        comp_move(dlg, below[i][0], r.bottom);
+        comp_move(dlg, below[i][0], r.bottom + more);
     }
 }
 
@@ -2125,29 +2181,6 @@ static void head_text(const char *head, int part, int parts, char *out,
     out[cap - 1] = '\0';
 }
 
-/* The note's height for a number of lines of its font: the lines, its
- * frame and the edit control's own margins. */
-static int note_lines_h(HWND dlg, int lines)
-{
-    HWND note = GetDlgItem(dlg, IDC_S_NOTE);
-    HFONT f = (HFONT)SendMessageA(note, WM_GETFONT, 0, 0);
-    HDC dc = GetDC(note);
-    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
-    TEXTMETRICA tm;
-    RECT win;
-    RECT cli;
-
-    GetTextMetricsA(dc, &tm);
-    if (old != NULL) {
-        SelectObject(dc, old);
-    }
-    ReleaseDC(note, dc);
-    GetWindowRect(note, &win);
-    GetClientRect(note, &cli);
-    return lines * tm.tmHeight + (win.bottom - win.top) - cli.bottom +
-           dlu_y(dlg, 2);
-}
-
 static void lay_measure(HWND dlg, HFONT font, const LAYROW *lr, int n,
                         const char *head, LAYGEO *g)
 {
@@ -2200,7 +2233,7 @@ static void lay_measure(HWND dlg, HFONT font, const LAYROW *lr, int n,
     /* Six lines at least where the rows allow (a part of two or more
      * rows always does); a lone tall row takes from it down to three
      * (owner, 2026-10-24: no scrolling box of two lines). */
-    least = note_lines_h(dlg, 6);
+    least = box_lines_h(dlg, IDC_S_NOTE, 6);
     g->Parts = wiz_lay_split(g->RowH, n, g->Sep, g->NoteBottom - least -
                              dlu_y(dlg, 6) - g->RowsTop, WIZ_LAY_PER_PART,
                              g->Start, WIZ_ROWS + 1);
@@ -2211,7 +2244,8 @@ static void lay_measure(HWND dlg, HFONT font, const LAYROW *lr, int n,
         }
     }
     g->NoteTop = wiz_lay_note_top(g->RowsTop, tallest, dlu_y(dlg, 6),
-                                  g->NoteBottom, note_lines_h(dlg, 3));
+                                  g->NoteBottom,
+                                  box_lines_h(dlg, IDC_S_NOTE, 3));
 }
 
 /* One row made at y: the line above it (not on a part's first), the
@@ -4375,6 +4409,31 @@ static void st_page(HWND parent, int tmpl, const int *ids, const int *texts,
     DestroyWindow(d);
 }
 
+/* A scrolling read-only box shows a number of whole lines of its font: its
+ * formatting rectangle, where the edit control draws its text, is that
+ * many lines high at least (owner, 2026-10-24: three at least). */
+static void st_box_lines(HWND box, int lines, const char *what)
+{
+    HFONT f = (HFONT)SendMessageA(box, WM_GETFONT, 0, 0);
+    HDC dc = GetDC(box);
+    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    TEXTMETRICA tm;
+    RECT fmt;
+    char msg[200];
+
+    GetTextMetricsA(dc, &tm);
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(box, dc);
+    SendMessageA(box, EM_GETRECT, 0, (LPARAM)&fmt);
+    _snprintf(msg, sizeof(msg) - 1, "%s shows %d whole lines (%ld px, a "
+              "line %ld)", what, lines, (long)(fmt.bottom - fmt.top),
+              (long)tm.tmHeight);
+    msg[sizeof(msg) - 1] = '\0';
+    st(fmt.bottom - fmt.top >= lines * tm.tmHeight, msg);
+}
+
 /* The Components page as 98 SE lays it out (comp_layout, record 26
  * section 5.3, draft 17): the rows one below another, none overlapping,
  * the last inside the page. */
@@ -4421,6 +4480,8 @@ static void st_comp_layout(HWND parent)
         prev = r;
     }
     st(ok, "the components on 98 SE: no row over another, all on the page");
+    st_box_lines(GetDlgItem(d, IDC_C_STOR_T), 3, "the components on 98 SE: "
+                 "the storage box");
     storShown = saved;
     compLaidOut = 0;
     DestroyWindow(d);
@@ -4858,6 +4919,8 @@ static void st_other_layout(HWND parent)
     if (d == NULL) {
         return;
     }
+    st_box_lines(GetDlgItem(d, IDC_O_DETAIL), 3, "the other USB drivers' "
+                 "details box");
     font = (HFONT)SendMessageA(d, WM_GETFONT, 0, 0);
     GetWindowRect(GetDlgItem(d, IDC_O_AREA), &area);
     pt.x = area.left;

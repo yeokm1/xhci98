@@ -1515,10 +1515,9 @@ under the rows 20 dialog units tall, two lines.
   more rows fits that room. A lone row taller than the room takes it
   from the note, down to three lines of the note's font (two until the
   owner's decision of 2026-10-24: no scrolling read-only box in the
-  window shows fewer than three lines; the Components page's storage
-  box, `IDC_C_STOR_T`, grew from 20 to 27 dialog units under the same
-  decision, the rows below it moving down by 21 to 17 units so the
-  page keeps its height); a row taller
+  window shows fewer than three whole lines; the Components page's
+  storage box, `IDC_C_STOR_T`, is under the same decision, below); a
+  row taller
   still is beyond what the window lays out (a font about three times
   the dialog's), and the note then keeps its three lines at the page's
   foot. With the head carrying its part words, one property-sheet page
@@ -1550,6 +1549,32 @@ under the rows 20 dialog units tall, two lines.
   its frame (the control's window less its client height) and 2
   dialog units for the edit control's own margins; a longer text
   scrolls in it as today.
+- *Three whole lines in every scrolling read-only box* (owner,
+  2026-10-24): a box's height for n lines is `box_lines_h`, the
+  note's rule above (n lines of its font, its frame, 2 dialog units of
+  margin), and the self-test holds each box's formatting rectangle
+  (`EM_GETRECT`) at three lines of its font at least. The Components
+  page's storage box on 98 SE (`IDC_C_STOR_T`; 20 dialog units, two
+  lines, until then, and 27, about two and a half, in the first
+  attempt) is measured so: its template room is 31 dialog units
+  (8, 55 to 86), and `comp_layout` sets it to the most whole lines that
+  room holds, three at least (three, 46 pixels of its 50, at 96 DPI;
+  three at 120 DPI too), the rows below moving down further by what
+  three lines need past the room, should a font need it. The room is
+  found on 98 SE alone (the row and its box are hidden elsewhere, where
+  the template's layout stands): the USB drivers' box 2 dialog units
+  higher (at 2, the other pages' top margin), the UAS box and its words
+  19 units higher in the place of the hidden sentence, the storage row
+  at 44 and its box at 55, and the rows below it moved down by 22 (the
+  Thunderbolt row, at 87), 20 (Stor98 and S98VSD), 19 (the tray and
+  faster boxes), 18 (the folder's line, at 184) and 17 (the buttons,
+  195 to 209 of the page's 210), each one dialog unit under the one
+  above; the "Replace the stored build" box is never shown with the
+  storage row (Vista and later only). The Other USB drivers page's
+  details box (`IDC_O_DETAIL`, 29 dialog units) holds three whole lines
+  as it is (47 pixels at 96 DPI, the three lines, frame and margins
+  46) and is unchanged; the Settings note's least height is six lines,
+  three for a lone tall row.
 - *640 by 480 on 98 SE*: no template grows (`IDD_SETTINGS` stays 300
   by 200 dialog units, the Components page the tallest at 223), so the
   window is the size it was.
