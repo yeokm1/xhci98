@@ -106,8 +106,10 @@ or it does not load and the controller shows Code 39 on Vista, Code 52 on
 included.
 
 - **Keep test-signing mode on while the Thunderbolt 3 / USB4 support is
-  installed** on 64-bit Windows. Windows makes its driver a boot driver
-  (it filters a PCI bridge). Turned off, Windows 8, 8.1 and 10 stop in
+  installed** on 64-bit Windows with a Thunderbolt or USB4 controller,
+  whether or not anything is plugged in. Windows makes its driver a boot
+  driver once its filter is on the controller's PCI ports, which exist
+  with nothing attached. Turned off, Windows 8, 8.1 and 10 stop in
   Automatic Repair, and Windows 7 x64 starts but silently rolls the whole
   xHCI98 install back (read in a virtual machine), leaving the controllers
   at Code 52. Vista x64 was not read. A Windows feature update, turning
