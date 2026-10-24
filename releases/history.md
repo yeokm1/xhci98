@@ -14,8 +14,7 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
 ## 3.2.0.0 - 2026-10-24
 
-Every system `3.1.0.0` supports is supported, and Windows 10 below build
-22000 is added. A release now comes as up to three downloads, and the
+Every system `3.1.0.0` supports is supported, and Windows 10 is added. A release now comes as up to three downloads, and the
 installer, the USB Tree and Stor98 have each changed. It was read in QEMU
 virtual machines, the Thunderbolt 3 and USB4 parts against the emulated
 hosts and enclosure; the release notes say what was read where.
@@ -33,7 +32,7 @@ hosts and enclosure; the release notes say what was read where.
   The Other USB drivers page copies a set the download carries only when
   ticked and installs none of its drivers; a box per driver package lets
   Windows use it at a device's first plug.
-- Windows 10 (below build 22000): the Thunderbolt 3 / USB4 connection
+- Windows 10: the Thunderbolt 3 / USB4 connection
   manager, with the USB drivers an opt-in. The 64-bit package carries a
   test-signed catalog for each driver, which 64-bit 8, 8.1 and 10 need in
   test-signing mode.

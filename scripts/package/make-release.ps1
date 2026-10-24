@@ -5122,10 +5122,9 @@ Most PCs made from the mid 2010s onward have only USB 3.x (xHCI)
 controllers, which older Windows cannot use. This package drives them on:
 
   - Windows 98 SE, ME, 2000 SP4, XP, Vista and 7, 32-bit{ARCHOS}
-  - Windows 8, 8.1 and 10 (below build 22000), for the Thunderbolt 3 /
-    USB4 connection manager: Windows' own USB 3 driver stays there unless
-    you tick this package's USB drivers. Secure Boot must be off (section
-    4).
+  - Windows 8, 8.1 and 10, for the Thunderbolt 3 / USB4 connection
+    manager: Windows' own USB 3 driver stays there unless you tick this
+    package's USB drivers. Secure Boot must be off (section 4).
 
 xhci98.sys is a whole USB host controller driver. It runs the controller,
 the root hub, every hub behind it and the splitting of composite devices
@@ -5360,8 +5359,8 @@ built from the specification; no such controller has been tested.
                      ME, 32-bit Windows XP (SP3), 32-bit Windows Vista (SP2)
                      and 32-bit Windows 7 (SP1) in virtual machines only.
                      Windows 2000 has never run on real hardware.{ARCHOSREQ}
-                     Windows 8, 8.1 and 10 (below build 22000), for
-                     Thunderbolt 3 and USB4, in virtual machines only.
+                     Windows 8, 8.1 and 10, for Thunderbolt 3 and USB4,
+                     in virtual machines only.
 
   On Windows 98 SE   Nothing for the controller, hubs, mice, keyboards and
                      audio: no USB 2.0 stack is needed. FOR USB STORAGE,
@@ -6049,9 +6048,9 @@ being unsigned, and no change to this driver can remove them:
     signature enforcement at every start (F8); otherwise the controller
     sits at Code 39 on Vista, Code 52 on 7.
 
-  * WINDOWS 8, 8.1 AND 10 NEED SECURE BOOT OFF, 32-bit and x64 alike: with
-    it on, Windows refuses this package's drivers, and test-signing mode
-    cannot be turned on (section 4).
+  * TURN SECURE BOOT OFF ON WINDOWS 8, 8.1 AND 10; the x64 drivers also
+    need test-signing mode, which cannot be turned on while Secure Boot is
+    on (section 4).
 
   * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
     installed there is no mass-storage driver at all. HID and audio still
