@@ -27619,8 +27619,8 @@ int inst_eng_begin(int argc, char **argv)
         envNow.Nt = 1;
         if (osKind == INST_OS_REFUSED) {
             out("This Windows is not one this package supports (2000, XP, "
-                "XP x64, Vista, 7;\n8, 8.1 and 10 below build 22000 for the "
-                "Thunderbolt 3 / USB4\nconnection manager).\n");
+                "XP x64, Vista, 7;\n8, 8.1 and 10 for the Thunderbolt 3 / "
+                "USB4 connection manager).\n");
             return INST_EXIT_REFUSED;
         }
         isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
