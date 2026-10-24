@@ -5998,10 +5998,10 @@ static void test_other_sets(void)
     CHECK(strstr(text, "this Windows: net/cdcnet. They are copied all the same "
                        "and staged.\n\nThe non-free drivers") != NULL &&
           strstr(text, "(F8)") != NULL, "warn: the words");
-    /* The compiled record of each set: the non-free set this release's,
-     * the free set none until a usb-wdm-free release qualifies. */
+    /* The compiled record of each set: each this release's (the free set's
+     * from usb-wdm-free v0.1.0, scripts\package\wdmfree-pin.txt). */
     CHECK(strlen(inst_other_sums(INST_SET_NONFREE)) == 64 &&
-          strlen(inst_other_sums(INST_SET_FREE)) == 0, "sums: the record");
+          strlen(inst_other_sums(INST_SET_FREE)) == 64, "sums: the record");
 }
 
 /* Task 43.73: the controller names (record 23 section 5.13, record 21
