@@ -2763,9 +2763,8 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     r->Suspends++;
     /* Every synchronous stage of the client's resume (cm_ports.h), with
      * every device the client's table can hold re-announced and approved
-     * (a dock plugged during the sleep can add several), held to the
-     * operating system's limit on a retained power IRP: past it the
-     * failure path runs, never a stalled power transition. */
+     * (a dock plugged during the sleep can add several): the bound logged
+     * below, a diagnostic (no power IRP is retained, task 43.24h). */
     profile = nhi->Icm.Profile;
     resume.ReadyMs = nhi->Icm.CmdTimeoutMs;
     resume.ReadyRetries = 0;

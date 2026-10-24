@@ -95,7 +95,7 @@
  *     (CmNvlinkHeld): the seam makes no removal call for it (the
  *     invalidation that reports the endpoint missing on NT,
  *     Query_Remove_SubTree and Remove_SubTree on 9x), no exposure, and on
- *     NT no release of its held D0 requests at a resume; it holds the
+ *     NT no release of its resume mark at a resume; it holds the
  *     member's work and runs it from a later pass once the gate falls,
  *     while every other member's statement, exposure and removal go on.
  *     On NT nothing waits while no receiver has ever asked for the table
@@ -537,12 +537,12 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
 #define CM_HELD_REENUM      0x01UL  /* its exposure and re-enumeration     */
 #define CM_HELD_VANISH      0x02UL  /* ... removing vanished children     */
 #define CM_HELD_FRESH       0x04UL  /* ... a fresh exposure               */
-#define CM_HELD_RELEASE     0x08UL  /* NT: its held D0 requests' release  */
+#define CM_HELD_RELEASE     0x08UL  /* NT: its resume mark's release      */
 #define CM_HELD_FAIL        0x10UL  /* ... on the failure path            */
 #define CM_HELD_LOSS        0x20UL  /* NT: the loss's own call (removal)  */
 
 /* CmNvlinkHoldRun's answer, bits. */
-#define CM_HELD_DO_RELEASE  0x01UL  /* release its held D0 requests       */
+#define CM_HELD_DO_RELEASE  0x01UL  /* release its resume mark           */
 #define CM_HELD_DO_FAIL     0x02UL  /* ... on the failure path            */
 #define CM_HELD_DO_REENUM   0x04UL  /* expose and call, *vanish, *fresh    */
 #define CM_HELD_DO_OWE      0x08UL  /* not active: owed (Missed) instead  */
@@ -718,7 +718,7 @@ ULONG CmNvlinkPortDown(struct _CM_NHI *nhi, ULONG member,
  * CmNvlinkHeld steps first and answers member `bridge`'s gate: TRUE while
  * a wait of this domain is pending behind it, and then the seam makes no
  * removal call, no exposure (CmNvlinkExpose refuses one too) and no
- * release of held D0 requests for that member, and runs them from a pass
+ * release of the resume mark for that member, and runs them from a pass
  * after the gate falls; nothing of another member's waits on it.
  * CmNvlinkPending: any wait of any domain pending (the thread's cadence).
  */
@@ -791,7 +791,7 @@ ULONG CmNvlinkIdleMs(ULONG configured);
  * itself (CmNvlinkExpose of the port's bridge with the port's tunnel, or
  * of every member with none when the correspondence is not known), before
  * anything - the seam's
- * re-enumeration, or the release of held D0 requests at a resume - can
+ * re-enumeration, or the release of the resume marks at a resume - can
  * expose the endpoint. CmNvlinkU4Down (CM_U4_DOWN_HOOK) maps the port to
  * its member by correspondence and calls CmNvlinkPortDown; it returns
  * TBT_U4_STMT_SENT when a DOWN_QUIESCED was written, else

@@ -1853,8 +1853,8 @@ static VOID cmU4LogRouter(PCM_NHI nhi, ULONG port)
  * oldest first, to the re-enumeration seam in its form (unless
  * XhciCmReenum is 0), a tunnel up then learned for its port, a tunnel down
  * arming the baseline again. The resume takes the batch before it
- * releases the bridges' held D0 IRPs and delivers it after, so a rebuilt
- * tunnel's UP is published before any child driver can resume (cm.h,
+ * releases the bridges' marks and delivers it after, so a rebuilt
+ * tunnel's UP is published before the bridges are enumerated again (cm.h,
  * CM_U4_UP_HOOK). A batch taken and not yet delivered is delivered before
  * another is taken.
  */

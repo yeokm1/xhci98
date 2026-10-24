@@ -275,8 +275,8 @@ typedef struct _CM_NHI {
     ULONG U4SeamValid;
     /* The USB4 profile's resume bound in ms for the most obligations a
      * domain can hold (TbtU4ResumeBoundUs, rounded up), set before
-     * CmReenumSuspend: the hold's watchdog must be at least this plus
-     * record 21's 10 s (cm_reenum.h). */
+     * CmReenumSuspend, and logged there with record 21's 10 s and the
+     * five-minute cap as diagnostics (cm_reenum.h). */
     ULONG U4ResumeBoundMs;
     /* Every port read disconnected (TbtU4AllPortsDisconnected) by the
      * unbind just before it stopped the rings: the fresh evidence

@@ -471,8 +471,7 @@ ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
     act = 0;
     if (h & CM_HELD_RELEASE) {
         /* The resume's release waits for the acknowledgement decision
-         * alone, never for the transport (the hold's own watchdog is not
-         * the release). */
+         * alone, never for the transport. */
         act |= CM_HELD_DO_RELEASE | ((h & CM_HELD_FAIL) ? CM_HELD_DO_FAIL : 0);
         h &= ~(CM_HELD_RELEASE | CM_HELD_FAIL);
     }

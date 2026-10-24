@@ -3004,8 +3004,9 @@ so it stays up, as on a port FAILED for PCIe (section 7.2).
   resume obligation (each tunnel up at suspend, whatever its port's state)
   - verified and preserved, rebuilt where the domain lost its
   configuration, torn down on removal evidence, or HELD on a failed
-  verification - and the NT filter's held D0 IRPs released on success or
-  through the failure path (section 7.6); only then are other ports'
+  verification - and the NT filter's marks released and the bridges
+  invalidated, on success or failure (section 7.6; no D0 is held since
+  task 43.24h); only then are other ports'
   connections served. A verification is section 9.2's, its Router Ready
   wait included, inside the resume's budget: the 500 ms is within the
   margin `TbtU4ResumeBoundUs` already counts for the step running when
