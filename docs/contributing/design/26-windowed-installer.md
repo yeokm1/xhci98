@@ -2915,7 +2915,7 @@ the folder, the path relative to `USBDRV\NONFREE\` with `/`, the lines in
 ordinal order of the path, ASCII, CRLF line ends. The pack's `nusb33/` is
 not in it and is not duplicated there (owner, 2026-10-22). The pin
 (`package-common.ps1`): the tag `v1.0.0`, its commit
-`128106f786d462024eda08d117154b21cb01b57b`, and the SHA-256 of the pack's
+`3b558c04a462a643abec84b31e5611c866e3a72d`, and the SHA-256 of the pack's
 `SHA256.TXT` blob there,
 `d48c086301074793d6f0ed26798425ebd70345c977f11fade9c47531956d070e`; the
 generated `USBDRV\NONFREE\SHA256.TXT` of that pin hashes to
@@ -2958,7 +2958,7 @@ source and destination path it builds against `MAX_PATH` as well (a
 download unpacked deep in a tree can pass it on the source side), and a
 file whose path does not fit is not copied, and said.
 
-**`STAGE.TXT`** is the pack's format (usb-wdm-nonfree `128106f`, its own
+**`STAGE.TXT`** is the pack's format (usb-wdm-nonfree `v1.0.0`, its own
 header): `ACTION | SYSTEMS | INF | NOTE`, `#` comments, `STAGE` or
 `COPY`, the systems as tokens (`W98SE WME W2K WXP WXP64 WVISTA WVISTA64
 W7 W7X64`, read here with `W8 W8X64 W10 W10X64` added for 8 and 8.1 and

@@ -5843,7 +5843,7 @@ static void test_other_sets(void)
     CHECK(!inst_sys_mask("W98SE W95", &mask), "mask: an unknown token");
     CHECK(!inst_sys_mask("  ", &mask), "mask: none");
 
-    /* STAGE.TXT (usb-wdm-nonfree 128106f's format). */
+    /* STAGE.TXT (usb-wdm-nonfree v1.0.0's format). */
     CHECK(inst_stage_parse("# a comment", "non-free", &sl) == 0, "stage: #");
     CHECK(inst_stage_parse("   ", "non-free", &sl) == 0, "stage: blank");
     CHECK(inst_stage_parse("STAGE | W98SE WME        | non-free/serial/ftdi/"
