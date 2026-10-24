@@ -2960,6 +2960,13 @@ set (section 6.7.1). A release with no `STAGE.TXT`, or one whose lines do
 not put every INF of a qualifying package on exactly one line, is refused
 by the cut.
 
+The release's tools (owner, 2026-10-24: CamCheck, the webcam preview)
+are carried the same way: one `Tool:` line per tool, its folder
+`free/tools/<name>/` at `USBDRV\FREE\tools\<name>\`, each file with its
+`SHA256:` line. A tool is not a driver package: no INF, no `STAGE.TXT`
+line and no `READ.TXT` line; the installer copies it with the set's
+other files and removes it with them.
+
 **Paths.** Every path of either folder is `/`-separated, relative,
 printable ASCII without `\ : * ? " < > | ;` (the last because
 `DevicePath` separates its entries with it), with no empty, `.` or `..`

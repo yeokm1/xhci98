@@ -27,6 +27,8 @@ hosts and enclosure; the release notes say what was read where.
   makers' drivers from usb-wdm-nonfree in `USBDRV\NONFREE\`. NUSB 3.3's
   seven Windows 98 SE storage files are in `USBDRV\NUSB33\`, and the
   installer offers them on 98 SE.
+- The `-free` and `-nonfree` downloads include CamCheck, a webcam preview
+  tool for the uvc98 driver, in `USBDRV\FREE\tools\camcheck\`.
 - The installer is simpler: Welcome (with what was found), Components,
   Other USB drivers, Summary, and the settings in one Settings dialog.
   The Other USB drivers page copies a set the download carries only when

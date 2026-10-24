@@ -2398,6 +2398,7 @@ function New-UploadSet {
         $rdNew = ConvertTo-DownloadReadme -Text $rdText -Version $Version -Kind $Kind -Kinds $Kinds `
                      -FreeTag $(if ($null -ne $WdmFreeSet) { $WdmFreeSet.Tag } else { "" }) `
                      -NonFreeTag $(if ($null -ne $NonFreeSet) { $NonFreeSet.Tag } else { "" }) `
+                     -FreeTools $(if ($null -ne $WdmFreeSet) { @($WdmFreeSet.Tools) } else { @() }) `
                      -DriverPackIncluded ($null -ne $DriverPack) -Label "'$rdPath'"
         [System.IO.File]::WriteAllText($rdPath, $rdNew, (New-Object System.Text.ASCIIEncoding))
         Write-Ok ("readme.txt is {0}'s" -f (Get-DownloadZipName -Version $Version -Kind $Kind))
@@ -2899,6 +2900,7 @@ $nonFreeDir = ""
 $downloadKinds = @("base")
 $stagedUploads = @()
 $readmeFreeTag = ""
+$readmeFreeTools = @()
 $readmeNonFreeTag = ""
 
 try {
@@ -3169,7 +3171,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             }
         }
         $downloadKinds = @("base")
-        if ($null -ne $wdmFreeSet) { $downloadKinds += "free"; $readmeFreeTag = $wdmFreeSet.Tag }
+        if ($null -ne $wdmFreeSet) { $downloadKinds += "free"; $readmeFreeTag = $wdmFreeSet.Tag; $readmeFreeTools = @($wdmFreeSet.Tools) }
         if ($null -ne $nonFreeSet) { $downloadKinds += "nonfree"; $readmeNonFreeTag = $nonFreeSet.Tag }
 
         # The other sets' checks (design record 26 section 6.7.11): the 98 SE
@@ -7070,7 +7072,7 @@ is replaced by its reading. The first:
     foreach ($dk in @($downloadKinds | Where-Object { $_ -ne "base" })) {
         $variant = ConvertTo-DownloadReadme -Text $readme -Version $Version -Kind $dk -Kinds $downloadKinds `
                        -FreeTag $readmeFreeTag -NonFreeTag $readmeNonFreeTag -DriverPackIncluded $driverPackIncluded `
-                       -Label "the rendered readme.txt"
+                       -FreeTools $readmeFreeTools -Label "the rendered readme.txt"
         $variantPath = Join-Path ([System.IO.Path]::GetTempPath()) ("readme-" + $dk + "-" + [System.IO.Path]::GetRandomFileName() + ".txt")
         try {
             Write-GeneratedText -Path $variantPath -Lines ($variant -split "`r?`n")

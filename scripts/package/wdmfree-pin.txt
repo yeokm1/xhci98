@@ -8,15 +8,20 @@
 #   Tag: <the usb-wdm-free release's tag>
 #   Commit: <the commit it names, 40 hex>
 #   Package: <class>/<package> | <the systems its legs passed on>
+#   Tool: <name>
 #   SHA256: <64 hex> <path from the release's top>
 #   Certificate: <the SHA-1 thumbprint of usb-wdm-free-test.cer, 40 hex>
 #
 # one Package line per qualifying package, the systems in STAGE.TXT's tokens
 # (W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64), and
-# one SHA256 line per file of each package's free/<class>/<package>/ and for
-# the release's LICENSE, NOTICE.md and STAGE.TXT. The cut takes exactly these
-# files at exactly these bytes. With no Tag line no release qualifies: the cut
-# makes no download 2, and download 3 carries no WDMFREE\.
+# one Tool line per tool the download carries (the release's
+# free/tools/<name>/, a tool and not a driver package: no INF, no STAGE.TXT
+# line; the cut puts it in USBDRV\FREE\tools\<name>\), and one SHA256 line
+# per file of each package's free/<class>/<package>/, of each tool's
+# free/tools/<name>/ and for the release's LICENSE, NOTICE.md and STAGE.TXT.
+# The cut takes exactly these files at exactly these bytes. With no Tag line
+# no release qualifies: the cut makes no download 2, and download 3 carries
+# no WDMFREE\.
 #
 # The certificate (design record 26 section 6.7.11): usb-wdm-free signs its
 # x64 drivers with its own test certificate, whose public half is the
@@ -30,11 +35,12 @@
 #
 # For 3.2.0.0: usb-wdm-free v0.1.0 (owner, 2026-10-24), each package with the
 # systems its recorded legs passed on (usb-wdm-free's README and STAGE.TXT;
-# rtl815x 98 SE only, its ME "Not evaluated"); uac1 is not in it.
+# rtl815x 98 SE only, its ME "Not evaluated"); uac1 is not in it. Its tool
+# CamCheck, the webcam preview (owner, 2026-10-24).
 
 Certificate: 814CF778B45159EC2659C39C16C7E75EB3C37145
 Tag: v0.1.0
-Commit: 5bbf8bdd32c108fb81686554fde539cd0d3fd29a
+Commit: 36e0a3d37a3a07d74b6b3aecb989f84bd85c1134
 Package: audio/uac2 | W98SE WXP W7 W7X64
 Package: audio/usbmidi | W98SE W2K
 Package: video/uvc98 | W98SE W2K
@@ -45,6 +51,7 @@ Package: hid/xpad98 | W98SE WME W2K WXP WVISTA WXP64 WVISTA64
 Package: storage/usbflop | W98SE WME W2K WXP W7X64
 Package: generic/libusb0 | W98SE
 Package: audio/noaud | W98SE
+Tool: camcheck
 SHA256: 175750947481BE2CE8F4C6AE7F983D910E6DFB7832E4AC5F9AC8401E0FA9F30D free/audio/noaud/w98se/NOAUD98.INF
 SHA256: C832D716430146E2B3BC42368FC09156622FFCCC7F2C0A84A9E481B14C7C83D4 free/audio/noaud/w98se/README.TXT
 SHA256: 7C47589515CA6DBFC7E868EF949F2F0595884E8393CF3D8C423A308FE3124A4B free/audio/uac2/w2k-xp/uac2wdm.inf
@@ -119,6 +126,9 @@ SHA256: 3C07688873F6F1795118D38D36C78B394EC0BF03224899802C051053D9DB7115 free/st
 SHA256: E18DE02DD57090B9DA12A994DF4D7C5724D10CA0EAE01155113E57B454688639 free/storage/usbflop/w98se/USBFLOP.INF
 SHA256: 3C07688873F6F1795118D38D36C78B394EC0BF03224899802C051053D9DB7115 free/storage/usbflop/wme/README.TXT
 SHA256: 04B464C31537344A3367D89FD0DDE209BF5F398E87F69E49B3DB989DC0A7A345 free/storage/usbflop/wme/USBFLOP.INF
+SHA256: 72DBA52C83F58047E16830C9A2A4871D661A448D0F080D698E3B957BAB65E2DD free/tools/camcheck/CAMCHECK.EXE
+SHA256: D8EDF3A8B66EDA011975D622415A510AE4DCE4DB70A5DC54E6BE7BCA6EF795E5 free/tools/camcheck/NOTICE.TXT
+SHA256: 7C047001EDAB6C1C7E83F605AD81CA9849904B463C935F847E1037FB3B761461 free/tools/camcheck/README.TXT
 SHA256: B0F5FD3153A674B201582A9BD12F23D7D553430D9D69FF46D4B641E126981A44 free/video/uvc98/w2k/UVCM2.INF
 SHA256: F86039785B423206A6F32BDAC46848823321D27539725CA60EBCD2211FF5965F free/video/uvc98/w2k/uvcm2.sys
 SHA256: F86039785B423206A6F32BDAC46848823321D27539725CA60EBCD2211FF5965F free/video/uvc98/w98se-me/uvcm2.sys
