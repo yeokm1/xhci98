@@ -81,6 +81,10 @@ Device Manager names each controller by its generation, then its maker and produ
 | AMD Pink Sardine | `1022:1668`, `1022:1669` | xHCI98 USB4 Router (AMD Pink Sardine) |
 | ASMedia and any other USB4 host | PCI class `0C0340` | xHCI98 USB4 Router |
 
+### Before you start: 64-bit Windows
+
+On 64-bit Windows (Vista x64 to 10 x64) with a Thunderbolt or USB4 controller, **test-signing mode is required for as long as the Thunderbolt 3 / USB4 support is installed**, whether or not anything is plugged in: Windows makes its driver a boot driver once it is on the controller's PCI ports. With test-signing turned off, Windows 8, 8.1 and 10 stop in Automatic Repair, and Windows 7 x64 silently rolls the xHCI98 install back. A Windows feature update, turning Secure Boot on, or a boot repair can turn test-signing off too. See [test-signing mode](#64-bit-vista-to-10-test-signing-mode).
+
 ### Before you start: the BIOS
 
 - Boot in legacy (CSM) mode, as for every system here.
