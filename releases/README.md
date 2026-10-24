@@ -147,7 +147,8 @@ generated `NOTICE.TXT`, the third-party notices for what is statically linked
 into its executables (for `XHCIQUAL.EXE`, a DOS/32A executable, that extender
 and the Open Watcom C runtime).
 
-The upload set is this tree zipped. Since 3.1.0.0 (roadmap-usb4 task
+The upload set is this tree zipped, less the release's records (from
+3.2.0.0, see "What actually gets uploaded"). Since 3.1.0.0 (roadmap-usb4 task
 42-A.30) the `release-x86\` and `release-x64\` directories here also hold the
 Stor98 that `scripts\build-driver.cmd` built from `src\stor98` with the
 drivers, at the same version and date (`stor98.inf`, `stor98.mpd` and
@@ -262,7 +263,13 @@ does - `-Arch amd64` writes `out\pkg-release-amd64\`, around
 - `releases\<version>\`: tracked, the schema drawn above, what you see here.
 - `out\upload-<version>\` and `out\xhci98-<version>.zip`: git-ignored, the
   same tree (in 3.0.0.0 plus the pinned Stor98 release in its `release-`
-  directories). The zip is the GitHub release asset. It is the one of the two
+  directories), less the release's own records: `drvpack.txt`,
+  `downloads.txt`, `otherpkgs.txt` and `wdmfree-pin.txt` stay at the top of
+  `releases\<version>\`, committed, and no upload set or zip carries them
+  (the owner's decision of 2026-10-24; nothing at runtime reads them, the
+  installer having its own compiled table). `-UploadSetOnly` reads them
+  from the release directory and leaves them there. The zip is the GitHub
+  release asset. It is the one of the two
   named after the project because it is what a stranger downloads and has to
   recognise afterwards; the directory is a workspace inside `out\`. The
   archive carries no top-level directory, so its name is all the download

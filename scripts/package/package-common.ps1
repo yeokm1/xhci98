@@ -2759,6 +2759,12 @@ function Export-WdmFreeSet {
 # runs them all for make-release.ps1.
 
 $script:OtherPkgsRecordName = "otherpkgs.txt"
+# The records a release directory keeps for the maintainer, which no download
+# carries (the owner's decision of 2026-10-24): nothing at runtime reads them,
+# the installer having its own compiled table. New-UploadSet leaves exactly
+# these out, at the top level of the published tree alone.
+$script:ReleaseRecordOnlyNames = @($script:DriverPackRecordName, $script:DownloadsRecordName,
+                                   $script:OtherPkgsRecordName, "wdmfree-pin.txt")
 $script:OtherMetaKinds = @("PACKAGE", "EXCLUDES", "COEXISTS")
 $script:BrandWordsName = "brand-words.txt"
 
