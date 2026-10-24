@@ -1142,7 +1142,8 @@ int inst_uas_decide(int usbInclude, int noUas);
 
 /* Windows 8 and 8.1 (task 43.29, owner 2026-10-22; record 26 section
  * 5.3.1 case 3a): xhciuas.inf is staged but never forced, so Windows' own
- * UAS driver stays the default. A UAS disk with no driver is left for
+ * UAS driver stays the default unless the test certificate is trusted
+ * (then Windows may rank xhciuas above it). A UAS disk with no driver is left for
  * Windows (INST_ACT_WINDOWS); one on another driver stays foreign; one
  * already on xhciuas (the user's own pick) is kept current. Any other
  * system, or kind: the action as given. */

@@ -490,8 +490,11 @@ static void test_cm_only(void)
                      "controller") != NULL &&
               strstr(text, "may need a restart and a second run") != NULL &&
               strstr(text, "tested") == NULL &&
-              strstr(text, "UAS disk driver, when ticked, is only staged") !=
+              strstr(text, "UAS disk driver, when ticked, is staged") !=
                   NULL &&
+              strstr(text, "test certificate is trusted, when Windows may "
+                     "choose xhciuas.sys") != NULL &&
+              strstr(text, "only staged") == NULL &&
               strstr(text, "Stor98 has not been tested") == NULL &&
               strlen(text) < sizeof(text) - 1,
               "every warning, whole, in one text");
