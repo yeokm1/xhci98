@@ -2172,6 +2172,14 @@ try {
         $msg = ""
         try { Test-OtherPkgTable -Table $tblT -Sets $setA -Meta $mSame -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
         Assert-True ($msg -eq "") ("the pack's EXCLUDES line for a pair the table also excludes was refused: '" + $msg + "'")
+        # ...but the pack's other kind on another system the table excludes
+        # on is still refused: the installer would fall back to the table.
+        $tblAll = [pscustomobject]@{ Pkgs = $tblT.Pkgs; Rels = @([pscustomobject]@{ Kind = "EXCLUDES"; A = "free:net/a"; B = "free:net/b"; Systems = @("W98SE", "WXP"); Desc = "t" }); Brands = $brands }
+        $mSplit = @([pscustomobject]@{ Kind = "EXCLUDES"; A = "free:net/a"; B = "free:net/b"; Systems = @("W98SE"); Desc = "m"; Set = "free" },
+                    [pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "free:net/b"; Systems = @("WXP"); Desc = "m"; Set = "free" })
+        $msg = ""
+        try { Test-OtherPkgTable -Table $tblAll -Sets $setA -Meta $mSplit -Brands $brands -Headings $heads } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("one line a pair a system")) ("a pack COEXISTS on a system the table excludes on was not refused: '" + $msg + "'")
         # The history: a row or a line is never dropped.
         $recA = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.2.0.0" -Table $tblT -Meta @()) -join "`r`n") -Label "a"
         Assert-True ($recA.Rows.Count -eq 2 -and $recA.Rels.Count -eq 1 -and $recA.Version -eq "3.2.0.0") "otherpkgs.txt does not read back as written."

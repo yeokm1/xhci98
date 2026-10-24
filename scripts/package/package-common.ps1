@@ -3312,17 +3312,17 @@ function Test-OtherPkgTable {
             }
         }
     }
-    # A pair a carried set's STAGE.TXT names with the same kind as the
-    # installer's own line for it (the installer's proposal for the
-    # maintainer, which it reads only after the pack's lines) is the pack's
-    # declaration: the installer's line is not counted twice against it. A
-    # pack line of the other kind on a common system is still refused.
+    # Every line of both sources is checked against every other: two kinds
+    # for a pair on a common system are refused wherever they come from (the
+    # installer reads the pack's lines first and then its table's, so a
+    # table EXCLUDES under a pack COEXISTS would still exclude). Two lines
+    # of the same kind are refused within one source; a pack line of the
+    # same kind as the installer's own line for the pair (the installer's
+    # proposal for the maintainer) is the pack's declaration, not a second.
     $metaRels = @($Meta | Where-Object { $_.Kind -cne "PACKAGE" })
-    $tableRels = @($Table.Rels | Where-Object {
-        $t = $_
-        @($metaRels | Where-Object { $_.Kind -ceq $t.Kind -and (($_.A -ceq $t.A -and $_.B -ceq $t.B) -or ($_.A -ceq $t.B -and $_.B -ceq $t.A)) }).Count -eq 0
-    })
+    $tableRels = @($Table.Rels)
     $rels = @($tableRels) + @($metaRels)
+    $nTable = $tableRels.Count
     for ($i = 0; $i -lt $rels.Count; $i++) {
         foreach ($q in @($rels[$i].A, $rels[$i].B)) {
             if (-not $known.ContainsKey($q)) { throw "a $($rels[$i].Kind) line names $q, which no package of either set's known metadata has ever had." }
@@ -3331,7 +3331,8 @@ function Test-OtherPkgTable {
             $same = ($rels[$i].A -ceq $rels[$j].A -and $rels[$i].B -ceq $rels[$j].B) -or ($rels[$i].A -ceq $rels[$j].B -and $rels[$i].B -ceq $rels[$j].A)
             if (-not $same) { continue }
             $common = @($rels[$i].Systems | Where-Object { $rels[$j].Systems -ccontains $_ })
-            if ($common.Count -gt 0) {
+            $tableAndPack = ($i -lt $nTable) -ne ($j -lt $nTable)
+            if ($common.Count -gt 0 -and -not ($tableAndPack -and $rels[$i].Kind -ceq $rels[$j].Kind)) {
                 throw "$($rels[$i].A) and $($rels[$i].B) are named by a $($rels[$i].Kind) and a $($rels[$j].Kind) line on $($common -join ' '): one line a pair a system."
             }
         }
