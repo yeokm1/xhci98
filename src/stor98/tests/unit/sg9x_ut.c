@@ -36,6 +36,19 @@ static unsigned char pool[8 * 4096];
    the bytes in both directions at offsets 1, 2, 3, 511 and page straddles,
    for 512 B to 2 MiB, in 32 KiB children (ENG_BOUNCE_PAGES), through a
    one-fragment byte list and a list of fragments out of order. */
+/* Where byte Off of the request lies in the pool, from the layout the test
+   builds, not through Sg9xResolve: one fragment at Start, or fragments of
+   Fs bytes (the first Fs - Start) placed in reverse order from page Pg - 1. */
+static ULONG where(int Shape, ULONG Start, ULONG Fs, ULONG Pg, ULONG Off)
+{
+    ULONG p = Off + Start;
+
+    if (Shape == 0) {
+        return p;
+    }
+    return (Pg - 1 - p / Fs) * Fs + p % Fs;
+}
+
 static void unaligned(void)
 {
     static const ULONG offs[6] = { 1, 2, 3, 511, 4094, 4095 };
@@ -69,6 +82,8 @@ static void unaligned(void)
             for (dir = 0; dir < 2; dir++) {
                 int shape;
                 for (shape = 0; shape < 2; shape++) {
+                    ULONG fs = sz > 1048576 ? 16384 : 4096;
+                    ULONG pg = (sz + start + fs - 1) / fs;
                     for (i = 0; i < total; i++) page[i] = (unsigned char)(i * 7 + (i >> 12) + 1);
                     memcpy(ref, page, total);
                     if (shape == 0) {
@@ -79,8 +94,7 @@ static void unaligned(void)
                         /* 4 KiB fragments (16 KiB at 2 MiB, within IOS's 255),
                            the first one start bytes in, in reverse order; byte
                            counts */
-                        ULONG fs = sz > 1048576 ? 16384 : 4096;
-                        ULONG left = sz, f = 0, pg = (sz + start + fs - 1) / fs;
+                        ULONG left = sz, f = 0;
                         nfr = 0;
                         while (left != 0) {
                             ULONG at = (pg - 1 - f) * fs + (f == 0 ? start : 0);
@@ -95,23 +109,21 @@ static void unaligned(void)
                     for (k = 0; k < sz && ok; k += 32768) {
                         ULONG n = sz - k < 32768 ? sz - k : 32768;
                         const STOR98_SGD9X *l = shape == 0 ? one : fl;
-                        ULONG lin, run, j;
+                        ULONG at, j;
                         if (dir == 0) {
                             /* write: caller -> bounce, checked byte by byte */
                             memset(bnc, 0xEE, 32768);
                             ok = Sg9xCopy(l, 0, k, bnc, n, FALSE);
                             for (j = 0; j < n && ok; j++) {
-                                ok = Sg9xResolve(l, 0, k + j, &lin, &run) &&
-                                     bnc[j] == *(unsigned char *)lin;
+                                at = where(shape, start, fs, pg, k + j);
+                                ok = bnc[j] == page[at];
                             }
                         } else {
                             /* read: bounce -> caller; only the caller's bytes change */
                             for (j = 0; j < n; j++) bnc[j] = (unsigned char)((k + j) ^ 0x5A);
                             ok = Sg9xCopy(l, 0, k, bnc, n, TRUE);
-                            for (j = 0; j < n && ok; j++) {
-                                ok = Sg9xResolve(l, 0, k + j, &lin, &run) &&
-                                     *(unsigned char *)lin == bnc[j];
-                                if (ok) ref[lin - (ULONG)page] = bnc[j];
+                            for (j = 0; j < n; j++) {
+                                ref[where(shape, start, fs, pg, k + j)] = bnc[j];
                             }
                         }
                     }
