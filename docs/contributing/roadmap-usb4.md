@@ -535,6 +535,7 @@ Left by `3.1.0.0`" above.
 - [ ] CMCOMMENTS.1 the comments and record 22 text left describing the removed bridge hold after 43.24h (a comments-only commit; `cm_filt.c`, `cm_nhi.c`, `cm_nvlinkos.c`, `cm.h`, `cm_nvlink.c`, `cm_nvlink.h`, `cm_reenum.c`, record 22 near line 3007): found at the `3.2.0.0` cut, left so the cut needed no rebuild
 - [ ] STALL47.1 the cause of 43.47's connection-manager thread stall on 98 SE and ME, which `3.2.0.0` ships as a mitigation (the backoff) and a known limitation; the marker run was inconclusive
 - [ ] TRSCROLL.1 XHCITR opened by a double click on the red icon shows its tree scrolled right, cutting off the start of the node names (seen on 7 x86 and 98 SE at the `3.2.0.0` cut's red-icon legs); cosmetic
+- [ ] UN9XLEFT.1 the 98 SE uninstall's leftovers (the `3.2.0.0` matrix, 2026-10-24): SetupX's `OEM Name` records for `USBSTOR.INF` and `USBNTMAP.INF` stay after their files are deleted (the records of `xhci98.inf` and `xhciuas.inf` are removed), and phantom disk-drive device nodes under `Enum\SCSI` stay after their USB parents are removed; harmless, cosmetic
 - [ ] TRVER.1 XHCITR warns when the running driver's version differs from the installed files' (an update not yet restarted into)
 
 ### Windows 8, 8.1 and 10
