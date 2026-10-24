@@ -6992,6 +6992,17 @@ static int was_expanded(const char *key)
     return 0;
 }
 
+/* Select item and scroll it into view, then back to the left edge
+ * (TRSCROLL.1): the tree-view scrolls sideways to show a deep item's text,
+ * which leaves the start of every node name cut off. SB_LEFT is a plain
+ * WM_HSCROLL, the same on 98 SE's comctl32 4.72 and on NT. */
+static void tree_select_shown(HTREEITEM item)
+{
+    TreeView_SelectItem(hTree, item);
+    TreeView_EnsureVisible(hTree, item);
+    SendMessageA(hTree, WM_HSCROLL, SB_LEFT, 0);
+}
+
 static void fill_tree(void)
 {
     int i;
@@ -7023,9 +7034,7 @@ static void fill_tree(void)
         select = tn[0].Item;
     }
     if (select != NULL) {
-        TreeView_SelectItem(hTree, select);
-        TreeView_EnsureVisible(hTree, select);
-        SendMessageA(hTree, WM_HSCROLL, SB_LEFT, 0);
+        tree_select_shown(select);
     }
     SendMessageA(hTree, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(hTree, NULL, TRUE);
@@ -7777,8 +7786,7 @@ static void open_window_at(const char *want)
     for (pass = 0; pass < 2 && key[0] != '\0'; pass++) {
         for (i = 0; i < tnCount; i++) {
             if (tn[i].Item != NULL && strcmp(tn[i].Key, key) == 0) {
-                TreeView_SelectItem(hTree, tn[i].Item);
-                TreeView_EnsureVisible(hTree, tn[i].Item);
+                tree_select_shown(tn[i].Item);
                 return;
             }
         }
@@ -7790,8 +7798,7 @@ static void open_window_at(const char *want)
      * rather than whatever the refresh kept selected. */
     for (i = 0; i < tnCount; i++) {
         if (tn[i].Item != NULL && strcmp(tn[i].Key, "R:root") == 0) {
-            TreeView_SelectItem(hTree, tn[i].Item);
-            TreeView_EnsureVisible(hTree, tn[i].Item);
+            tree_select_shown(tn[i].Item);
             return;
         }
     }
