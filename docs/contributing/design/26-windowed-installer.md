@@ -4533,10 +4533,12 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   Sparing that prompt with an Update Driver that still replaces the file
   is the next release's (section 5.0, draft 40; roadmap-usb4).
 
-- (draft 39) A run cut short inside the placement's copy can leave
-  `XHCI98.IN$` (or `XHCIUAS.IN$`, `XHCICM.IN$`) in `SYSTEM32\DRIVERS`;
-  the next run's placement overwrites it, and the uninstall does not
-  list it.
+- (draft 39, as draft 40 leaves it) A run cut short inside the
+  placement's copy can leave `XHCIUAS.IN$` or `XHCICM.IN$` in
+  `SYSTEM32\DRIVERS`; the next run's placement overwrites it, and the
+  uninstall does not list it. (`xhci98.sys` is no longer placed, draft
+  40; an `XHCI98.IN$` left by a draft 39 build is not removed by
+  anything.)
 - (draft 39) `xhcicm.inf`'s wizard with `xhcicm.sys` placed and a
   Thunderbolt controller found later is not read. Its copy row is the
   plain form, which asked for `xhci98.sys` in `xhci98.inf`; but
@@ -4555,7 +4557,9 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 - (draft 35) The controller's own New Hardware wizard after an install
   with no controller present (98 SE and ME) asked for the driver disk:
   decided by the owner on 2026-10-23, draft 38 puts the files in place
-  (section 5.0).
+  (section 5.0). Superseded for the controller by draft 40: it asks
+  once, as in 3.1.0.0 (above); the placement stands for `xhciuas.sys`
+  and `xhcicm.sys`.
 - How Windows' own hardware wizards on 98 SE and ME and the helper's
   installs meet after the controller's restart is designed as a wait and
   a retry (section 7) and read on the 42-V.1 legs; record 27 section 12
