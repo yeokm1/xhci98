@@ -3104,7 +3104,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             Write-Warn "-NoNonFree: no download 3, though the installer names one."
         } elseif (-not $driverPackIncluded) {
             if (-not $NoDriverPack -and $Arch -notcontains "x86") {
-                Write-Warn "no download 3: it is made only beside a download 1 that carries NUSB33\, which an x64-only cut does not."
+                Write-Warn "no download 3: it is made only beside a download 1 that carries USBDRV\NUSB33\, which an x64-only cut does not."
             }
         } else {
             $nonFreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-nonfree-" + [System.IO.Path]::GetRandomFileName())
@@ -3414,7 +3414,7 @@ Name a checkout holding that revision with -DriverPackRoot.
             $dlKinds = $dlRecord.Kinds
             if ($null -ne $dlRecord.NonFree) {
                 if ($null -eq $driverPack) {
-                    throw "'$dlRecordPath' records a download 3, which carries NUSB33\, and this rebuild has no driver pack: drvpack.txt must record one."
+                    throw "'$dlRecordPath' records a download 3, which carries USBDRV\NUSB33\, and this rebuild has no driver pack: drvpack.txt must record one."
                 }
                 $nonFreeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-nonfree-" + [System.IO.Path]::GetRandomFileName())
                 try {

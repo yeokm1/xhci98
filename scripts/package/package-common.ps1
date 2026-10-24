@@ -3591,7 +3591,7 @@ function Get-ReadmeMsFilesText {
     # The readme's {MSFILES} paragraph for a download.
     param([bool]$DriverPackIncluded, [string]$Kind)
     if ($Kind -eq "nonfree") {
-        if (-not $DriverPackIncluded) { throw "a download with NONFREE\ is cut only with the driver pack, which also gives NUSB33\." }
+        if (-not $DriverPackIncluded) { throw "a download with USBDRV\NONFREE\ is cut only with the driver pack, which also gives USBDRV\NUSB33\." }
         return @'
 Microsoft files are in this download in two places: the seven Windows 98 SE
 storage files of section 3, in a folder of their own, copied unmodified from

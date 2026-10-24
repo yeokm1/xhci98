@@ -6079,3 +6079,73 @@ were not run again.
   `!wk`, `!w>`, `!w<`, `!qs`) was built and not run; it would show
   whether the thread waits or is held at ME's stop.
 - The control run with the retries removed.
+
+## 43.42v - The Uninstall on 8.1 and 10 in One Run (2026-10-24)
+
+From the 8, 8.1 and 10 legs (`runs/run-43-24.md` on its own branch,
+"Findings" 2, 3, 4 and 9) and the owner's decisions of 2026-10-24: on NT
+a root hub removed after its controller, an absent tunnel port's entry
+removed with a warning instead of stopping the uninstall, the Stor98
+driver-store check on NT, the `/restage` usage line. Design record 23
+revision 43.
+
+### The vehicle
+
+- **Code under test**: branch `p43-42v` (from `p43-42t` at `ad3fd929`),
+  the gated build of `0a343290` (x86 and amd64, debug, release and qemu,
+  every gate passed).
+- **The package**: `make-release.ps1 -Arch x86 -Flavor release
+  -SkipQualtool -TestLabel "p43-42v uninstall legs" -DriverPackRoot
+  <usb-wdm-nonfree>` into a scratch releases directory, its download 3
+  unzipped onto the transfer drive, with `release-x64\` the owner-signed
+  tree of `integ6b` at `5ad53f7d` (`signed-amd64-5ad53f7d`, the tree
+  `runs/run-43-24.md` used; its drivers carry `3.1.0.0` as this branch's
+  do). The installer is this branch's (`XHCIIN64.EXE`).
+- **Guests**: the 8.1 x64 and 10 x64 images of `win8-10`, each an
+  overlay over the prepared starting point the 43.24 legs used (read-only
+  backing), QEMU `bin-2a893ea` with the Thunderbolt emulator, the 43.24
+  kit's guest scripts (`leg.ps1`, the runner task) in a kit of this run's
+  own. Headless, overlays only.
+- **The sequence on each guest** (the 10 x64 Finding 9 situation, two
+  machines on one disk): (a) the generic USB4 machine (`usb4-generic`,
+  its tunnel bridge `1B36:0001` at 00:05) with its enclosure,
+  `INSTALL /console /cmonly /nostor98 /yes`; (b) the Thunderbolt 3 machine
+  (Alpine Ridge, its tunnel bridge at 00:06, the TB xHCI `8086:15C1`)
+  with the enclosure plugged, `INSTALL /console /usb /thunderbolt
+  /stor98 /yes`; (c) the Thunderbolt 3 machine with the enclosure absent
+  (so the 00:05 bridge and the NVMe absent too), `INSTALL /console
+  /uninstall /yes`, then a reading after the restart.
+
+### Windows 8.1 x64: PASS
+
+| Step | Reading |
+|---|---|
+| (a) the connection manager on the generic machine | exit 3 in 158 s; the USB4 host router on `xhcicm`, started; "Adding the filter to PCI standard PCI-to-PCI bridge ... done, restart needed"; after the restart `FLT VEN_1B36&DEV_0001 upper=xhcicm`, the NVMe's `lower=xhcicm` (the mark) |
+| (b) the USB drivers on the Thunderbolt 3 machine | exit 3 in 299 s, three publisher prompts answered; both xHCI controllers (`1B36:000D` and the TB `8086:15C1`) on `xhci98` with a root hub each, the NHI on `xhcicm`, the tunnel NVMe on `stor98`; two `1B36:0001` bridges filtered (00:05 not present, 00:06 present) |
+| (c) the uninstall, the enclosure absent | **one run, exit 3 in 59 s**: Stor98's device (not present) removed, its INF, service and file; "Taking xhcicm off the tunnel port ...\3&267A616A&2&28 ... done.", "WARNING: the port is not connected, so its driver cannot be given back now. Its entry is removed instead: Windows sets the port up again with its own driver when the dock is next connected.", "Removing ...\3&267A616A&2&28 (not present) ... removed."; the 00:06 bridge and four `8086:15C0` ports given back to Windows' own driver; the generic host (not present), the NHI, the TB xHCI and the QEMU xHCI removed, then the root hubs `USB\XHCI98_ROOT_HUB\7&2C9CB1DB&0&0` and `4&E5ED83&0&0` removed after them (the TB xHCI's is the one that came back in 43.31); the four INFs, both services and files, the tools and the Add/Remove Programs entry removed |
+| After the restart | both xHCI controllers on `USBXHCI`, the 00:06 bridge on `pci` with no filter, the NHI Code 28 (no driver), no `xhci98`, `xhcicm` or `stor98` service, no Add/Remove Programs entry, no `UpperFilters`/`LowerFilters` naming `xhcicm` |
+
+### Windows 10 x64: PASS
+
+| Step | Reading |
+|---|---|
+| (a) the connection manager on the generic machine | exit 3 in 130 s; the 00:05 bridge filtered |
+| (b) the USB drivers on the Thunderbolt 3 machine | exit 3 in 271 s; both xHCI controllers and their root hubs on `xhci98`; Stor98 on the tunnel NVMe problem code 14, Code 10 after the restart (43.59's reading, as before); both `1B36:0001` bridges `upper=xhcicm` |
+| (c) the uninstall, the enclosure absent | **one run, exit 3 in 124 s**: Stor98's device (not present) removed; the absent bridge `...\3&267A616A&0&28` given the warning and its entry removed; the present bridges given back; the generic host (not present), the NHI, the TB xHCI and the QEMU xHCI removed, then the root hubs `7&333A50B3&0&0` (the one "Still there" in 43.37) and `4&1E07C8A8&0&0`; the INFs, services, tools and entry removed |
+| After the restart | both xHCI controllers on `USBXHCI`, the 00:06 bridge on `pci`, the NHI Code 28, no service, entry or filter of this package |
+
+### Not read
+
+- 8.1 x86 and 10 x86 (the two x64 guests were asked for). 10 x86's first
+  stop in 43.37 was Stor98's NVMe, whose removal waited for a restart;
+  this change does not touch that.
+- An absent port with another vendor's filter left on it (the run then
+  stops as before): host vectors only.
+- The `stor98.mpd` store check on 8 x86 and 10 x86 (Finding 3): host
+  vectors only.
+
+### Guests
+
+8.1 x64 105712, 100292, 70368; 10 x64 81064, 48652 and the generic
+machine's before them (the kit's own `pids.txt`, ports 49082 and 49084),
+all stopped.
