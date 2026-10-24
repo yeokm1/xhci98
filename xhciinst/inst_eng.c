@@ -22817,8 +22817,8 @@ static void other_question(void)
         stor_out_wrapped("  ", under);
         if (o->Include) {
             int i;
-            out("  %s: copied without asking%s.\n", sw,
-                o->StageOn ? ", these packages staged:" : "");
+            out("  %s: copied without asking%s\n", sw,
+                o->StageOn ? ", these packages staged:" : ".");
             for (i = 0; i < o->PkgCount; i++) {
                 if (o->Pkg[i].Tick) {
                     out("    %s %s\n", o->Pkg[i].Id, o->Pkg[i].Desc);
