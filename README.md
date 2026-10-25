@@ -366,6 +366,7 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - The free and non-free drivers are copied, not staged: point the hardware wizard at the package's folder under `C:\XHCI98\USBDRV\`.
   - Windows 98 SE: the first USB audio device plugged in after a boot (a webcam with a microphone included) can freeze Windows, with Windows' own drivers too. Plug it in before switching on and leave it plugged in; for a webcam whose microphone you do not need, usb-wdm-free's `NOAUD98.INF` avoids it.
   - Windows 98 SE and ME: the Sound Blaster X4 needs the free UAC 2.0 driver installed by hand. The free drivers are only copied there, so Windows' own USB audio driver (USB Audio Class 1.0 only) takes the X4 at its first plug and stops Windows with a fatal exception 0E in `USBAUDIO`. Unplug it and restart (Safe Mode if needed), then Update Driver on its audio entry -> "Display a list of all the drivers in a specific location" -> Have Disk -> `C:\XHCI98\USBDRV\FREE\audio\uac2\w98se-me`, and restart with it plugged in.
+  - Windows 98 SE and ME: installing the free audio or MIDI driver, Windows may ask for `wdmaudio.cat`, `ks.cat` and other files of its own from the Windows CD. Point it at the CD's `WIN98` folder, or click Skip File for the `.cat` files: they only hold signatures, which 98 SE and ME do not check.
 - **Windows 2000**
   - A mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it, or disable and enable it.
 - **Windows XP**
