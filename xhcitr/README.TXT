@@ -81,6 +81,17 @@ using the device, Windows refuses and the tool tells you which.
 Close the programs and windows that use the device first, as with
 Windows' own Safely Remove Hardware.
 
+Under the USB4 connection manager on Windows 2000 to 7, the stop also
+closes the device's PCIe tunnel once the Thunderbolt driver has the stop
+confirmed. Run as an administrator, the tool confirms it at once. Without
+administrator rights on XP, Vista and 7 the xHCI98 mark service
+confirms it in the background: the tool waits up to 30 seconds for that,
+and if the tunnel is still up then it says the tunnel has not been seen
+closed and closes if the mark service confirms the eject. On Windows
+2000 without administrator rights, or with the mark service stopped,
+nothing confirms it and the tunnel stays up until you unplug the
+device.
+
 Stopping a USB stick or disk
 ----------------------------
 
@@ -224,7 +235,8 @@ The notification-area icon
   Click            a list of the devices you can stop: USB devices,
                    then Thunderbolt and USB4 devices
   Double-click     opens the window
-  Right-click      Open, Refresh, About, Start at login and Exit
+  Right-click      Open, Refresh, About, Start at login, Tell me when a
+                   device can run faster, and Exit
 
 Start at login
 --------------
@@ -239,7 +251,43 @@ INSTALL /notray, so it starts for nobody; run INSTALL again without
 The icon says when a Thunderbolt or USB4 device is connected, is waiting
 to be approved, could not be approved or was disconnected, and when the
 controller stops answering: in a balloon on Windows ME, 2000 and later,
-and in the icon's tooltip on Windows 98 SE.
+and in the icon's tooltip on Windows 98 SE. Sleep, hibernation and a
+stop of the controller are not reported as the controller not answering;
+a controller that does not start again after a sleep is.
+
+Windows 98 SE has no balloons, so there the tool also shows a pop-up of
+its own beside the icon in their place, for each event a balloon
+reports elsewhere and for the outcome of a removal started from the
+icon. The pop-up takes no focus; it closes after 10 seconds, or by its
+close box or a right click; a click on it does what a click on a
+balloon does; several wait their turn.
+
+Can run faster
+--------------
+
+When a USB 3 device runs slower than it can on a controller xhci98.sys
+drives - on a USB 2.0 port, behind a USB 2.0 hub, fallen back to USB 2.0
+in a USB 3 port, or a 10 Gbit/s device at 5 Gbit/s - or a High Speed
+device runs at Full Speed behind a Full Speed hub (one not itself
+behind a High Speed hub), a balloon names it
+(the tooltip on Windows 98 SE) and, but for a 10 Gbit/s device at 5
+Gbit/s, the icon turns red until every such device is reconnected at its
+speed or removed. Click the balloon for each device's port and hub, the
+speed it runs at and the speed it can, and what to try (a click opens
+nothing on Windows 2000, whose balloon says to click the icon instead,
+nor when the tool cannot tell which of its balloons is on the screen;
+the icon's menu then leads on); the first item
+of the icon's menu shows the same when only a 10 Gbit/s device at 5
+Gbit/s is counted, and while the icon is red opens the window on the
+device instead. A hub is
+never listed itself: the USB 2.0 half of a USB 3 hub always runs at High
+Speed.
+
+"Tell me when a device can run faster" in the View menu and the icon's
+right-click menu turns this on or off for you. The installer's box of the
+same name (or INSTALL /faster and /nofaster) sets it for the computer;
+your own choice overrides that. It is on by default on every Windows:
+Windows' own "can perform faster" notices do not appear under xhci98.sys.
 
 From a command line
 -------------------

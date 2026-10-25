@@ -50,9 +50,10 @@ goto end
 
 :toomany
 echo Too many arguments for INSTALL.BAT on this Windows (eight at most, seven
-echo after /console, and /set Name=Value counts as three). Run
+echo after /console; /set Name=Value counts as three, and a /wdmfree:stage=
+echo list one more than its packages). Run
 echo TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with the same arguments
-echo instead, or use fewer /set.
+echo instead, or use fewer arguments.
 goto end
 
 :nodir

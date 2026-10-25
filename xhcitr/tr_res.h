@@ -7,6 +7,7 @@
 #define TR_RES_H
 
 #define IDI_APP                 1
+#define IDI_RED                 2       /* record 25 section 7.2.1 */
 #define IDR_MENU                100
 #define IDR_ACCEL               101
 #define IDD_ABOUT               102
@@ -37,10 +38,14 @@
 #define IDM_V_AUTO              40026
 #define IDM_LOGIN               40027
 #define IDM_LEVEL               40028
+#define IDM_RMWARN              40029
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031
 #define IDM_ABOUT               40040
 #define IDM_OPEN                40050
+#define IDM_FAST                40051   /* the notice on or off          */
+#define IDM_FAST_SHOW           40052   /* the devices that can run faster */
+#define IDM_RED                 40053   /* the tray menu red item */
 #define IDM_UNIT0               41000   /* 41000..41063: the tray's units */
 
 #endif /* TR_RES_H */

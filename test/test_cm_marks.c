@@ -327,10 +327,196 @@ static void test_confirm(void)
     e->Flags = 0;
     CHECK(CmMarksConfirm(&t, v, 28, 1, 2, FALSE, gens, 2, &why) == NULL && why == CM_MK_CONF_IDENTITY,
           "a location not known");
+
+    /* Task 43.70: the eject's own departure reported before its
+     * confirmation is read (native PCIe hot-plug turns the slot off first):
+     * the tombstone that left pending is still confirmable, once. */
+    e->Flags = CM_QM_EF_LOCATED;
+    e->PendingAt = 50;
+    e->PendingGen = 9;
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 0, FALSE, TRUE, 60);
+    CHECK(e->Tomb && e->PendingAt == 0 && e->LeftPendingAt == 50 && e->LeftPendingGen == 9,
+          "left with its departure pending: a tombstone that keeps it");
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == e && why == CM_MK_CONF_OK,
+          "its confirmation, read after the departure, names it");
+    gens[1] = 10;
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_GEN,
+          "USB4: not across a new connection of the port");
+    gens[1] = 9;
+    put32(v, CM_QC_O_ADDRESS, 0x00020000UL);
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_IDENTITY,
+          "not for another address");
+    put32(v, CM_QC_O_ADDRESS, 0x00010000UL);
+    e->LeftPendingAt = 0;
+    e->LeftPendingGen = 0;
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_SERIAL,
+          "confirmed once: the tombstone is no longer one");
+
+    /* a function that left with nothing pending is never confirmable */
+    CmMarksReset(&t);
+    snap[0] = P(4);
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 1, FALSE, TRUE, 70);
+    e = CmMarksFind(&t, P(4));
+    e->Flags = CM_QM_EF_LOCATED;
+    e->Bus = 7;
+    e->Address = 0x00010000UL;
+    put32(v, CM_QC_O_SERIAL, e->Serial);
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 0, FALSE, TRUE, 80);
+    CHECK(e->Tomb && e->LeftPendingAt == 0, "left with nothing pending");
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_SERIAL,
+          "a surprise removal's tombstone is not ejected by a confirmation");
+
+    /* a replacement answering before the late confirmation, with the
+     * port's connection unchanged: the departure is forgotten */
+    e->PendingAt = 0;
+    e->LeftPendingAt = 90;
+    e->LeftPendingGen = 9;
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == e,
+          "left pending: confirmable while nothing new answers");
+    snap[0] = P(5);
+    (VOID)CmMarksSync(&t, 1, 0x0520, snap, 1, FALSE, TRUE, 95);
+    CHECK(e->Tomb && e->LeftPendingAt == 0 && e->LeftPendingGen == 0,
+          "a new function behind the member forgets the kept departure");
+    CHECK(CmMarksConfirm(&t, v, 28, 1, 2, TRUE, gens, 2, &why) == NULL && why == CM_MK_CONF_SERIAL,
+          "the late confirmation no longer names anything");
+}
+
+/* The unexpected removals (design record 25 section 7.6): an entry found
+ * by serial, current or a tombstone; counted once per PDO, only when the
+ * attachment saw the device started; a loss counted apart; the block. */
+static void test_removals(void)
+{
+    PVOID snap[4];
+    PCM_MARK e1;
+    PCM_MARK e2;
+    PCM_MARK e3;
+    ULONG s1;
+    ULONG s2;
+    ULONG i;
+
+    CmMarksReset(&t);
+    CHECK_EQ(t.RmMember, CM_Q_UNKNOWN, "reset: no member");
+    CmMarksRemovalBlock(buf, &t, TRUE);
+    CHECK_EQ(get32(buf, CM_Q_RM_FLAGS), CM_Q_RF_WATCHED, "block: watched");
+    CHECK_EQ(get32(buf, CM_Q_RM_COUNT), 0, "block: none counted");
+    CHECK_EQ(get32(buf, CM_Q_RM_MEMBER), CM_Q_UNKNOWN, "block: no member");
+    CHECK_EQ(get32(buf, CM_Q_RM_LOST), 0, "block: none lost");
+    CmMarksRemovalBlock(buf, &t, FALSE);
+    CHECK_EQ(get32(buf, CM_Q_RM_FLAGS), 0, "block: not watched");
+    memset(buf, 0xCC, CM_Q_RM_BYTES);
+    CmMarksRemovalBlock(buf, NULL, FALSE);
+    CHECK_EQ(get32(buf, CM_Q_RM_MEMBER), CM_Q_UNKNOWN, "no table: no member");
+    for (i = 16; i < CM_Q_RM_BYTES; i++) {
+        CHECK_EQ(buf[i], 0, "no table: reserved 0");
+    }
+
+    snap[0] = P(1);
+    snap[1] = P(2);
+    snap[2] = P(3);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 3, FALSE, TRUE, 100);
+    e1 = CmMarksFind(&t, P(1));
+    e2 = CmMarksFind(&t, P(2));
+    e3 = CmMarksFind(&t, P(3));
+    s1 = e1->Serial;
+    s2 = e2->Serial;
+    CHECK(CmMarksFindSerial(&t, 0) == NULL, "serial 0: none");
+    CHECK(CmMarksFindSerial(&t, 999) == NULL, "an unknown serial: none");
+    CHECK(CmMarksFindSerial(&t, s2) == e2, "a current entry by serial");
+
+    /* The bus answer drops P(1) first: its entry is a tombstone. */
+    snap[0] = P(2);
+    snap[1] = P(3);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 2, FALSE, TRUE, 200);
+    CHECK(CmMarksFind(&t, P(1)) == NULL, "P(1) no longer current");
+    e1 = CmMarksFindSerial(&t, s1);
+    CHECK(e1 != NULL && e1->Tomb, "the tombstone found by serial");
+    CHECK(CmMarksSurprise(&t, e1, TRUE, FALSE, 210), "counted");
+    CHECK_EQ(t.Removals, 1, "one removal");
+    CHECK_EQ(t.RmMember, 0x0300, "its member");
+    CHECK_EQ(e1->Count[CM_MK_SURPRISE], 1, "the entry's own count");
+    CHECK(!CmMarksSurprise(&t, e1, TRUE, FALSE, 211),
+          "a second attachment of the same PDO: not again");
+    CHECK_EQ(t.Removals, 1, "still one");
+    CHECK_EQ(e1->Count[CM_MK_SURPRISE], 2, "the entry's count still moves");
+
+    /* A device the attachment never saw started; then one that did. */
+    CHECK(!CmMarksSurprise(&t, e2, FALSE, FALSE, 220), "never started: not");
+    CHECK_EQ(t.Removals, 1, "unchanged");
+    CHECK(CmMarksSurprise(&t, e2, TRUE, FALSE, 221),
+          "another attachment saw it started: counted");
+    CHECK_EQ(t.Removals, 2, "two");
+
+    /* In a loss: apart, once. */
+    CHECK(!CmMarksSurprise(&t, e3, TRUE, TRUE, 230), "a loss: not unexpected");
+    CHECK_EQ(t.Lost, 1, "counted apart");
+    CHECK_EQ(t.Removals, 2, "the count unchanged");
+    CHECK(!CmMarksSurprise(&t, e3, TRUE, FALSE, 231),
+          "the same PDO after the loss ended: not again");
+    CHECK_EQ(t.Removals, 2, "still two");
+
+    CmMarksRemovalBlock(buf, &t, TRUE);
+    CHECK_EQ(get32(buf, CM_Q_RM_COUNT), 2, "block: two");
+    CHECK_EQ(get32(buf, CM_Q_RM_MEMBER), 0x0300, "block: the member");
+    CHECK_EQ(get32(buf, CM_Q_RM_LOST), 1, "block: one lost");
+
+    /* The counts wrap. */
+    t.Removals = 0xFFFFFFFFUL;
+    snap[0] = P(4);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 1, 0x0400, snap, 1, FALSE, TRUE, 300);
+    CHECK(CmMarksSurprise(&t, CmMarksFind(&t, P(4)), TRUE, FALSE, 301),
+          "counted past the top");
+    CHECK_EQ(t.Removals, 0, "wrapped");
+    CHECK_EQ(t.RmMember, 0x0400, "the last one's member");
+
+    CmMarksReset(&t);
+    CHECK_EQ(t.Removals | t.Lost, 0, "reset: counts 0");
+    CHECK(CmMarksFindSerial(&t, s1) == NULL, "reset: no entry");
+
+    /* The binding's gates: the start, the serial, the PDO. */
+    snap[0] = P(5);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 1, FALSE, TRUE, 400);
+    e1 = CmMarksFind(&t, P(5));
+    s1 = e1->Serial;
+    CHECK(CmMarksBound(&t, 2, 2, s1, P(5)) == e1, "bound: found");
+    CHECK(CmMarksBound(&t, 3, 2, s1, P(5)) == NULL,
+          "bound in an earlier start: refused (serials begin again)");
+    CHECK(CmMarksBound(&t, 2, 2, s1, P(6)) == NULL,
+          "another PDO under that serial: refused");
+    CHECK(CmMarksBound(&t, 2, 2, 0, P(5)) == NULL, "never bound: refused");
+    CHECK(CmMarksBound(&t, 2, 2, s1, NULL) == NULL, "no PDO: refused");
+    /* The member stops and starts: buried, then a new entry and serial
+     * for the same PDO; the old serial still finds the tombstone. */
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, NULL, 0, FALSE, FALSE, 410);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 1, FALSE, TRUE, 420);
+    e2 = CmMarksFind(&t, P(5));
+    s2 = e2->Serial;
+    CHECK(s2 != s1, "a new serial after the member's restart");
+    CHECK(CmMarksBound(&t, 2, 2, s2, P(5)) == e2, "rebound: the new entry");
+    e3 = CmMarksBound(&t, 2, 2, s1, P(5));
+    CHECK(e3 != NULL && e3->Tomb, "the old binding: its tombstone");
+
+    /* The loss predicate. */
+    CHECK(!CmMarksLoss(TRUE, FALSE, 0, 0, 1), "ACTIVE, nothing owed: no loss");
+    CHECK(CmMarksLoss(FALSE, FALSE, 0, 0, 1), "not ACTIVE: a loss");
+    CHECK(CmMarksLoss(TRUE, TRUE, 0, 0, 1), "a loss drained: a loss");
+    CHECK(CmMarksLoss(TRUE, FALSE, 0, 0x2, 1), "ACTIVE, the member owed: a loss");
+    CHECK(CmMarksLoss(TRUE, FALSE, 0x2, 0, 1),
+          "ACTIVE, the member barred: a loss");
+    CHECK(!CmMarksLoss(TRUE, FALSE, 0x1, 0x4, 1),
+          "another member owed or barred: no loss");
+    CHECK(!CmMarksLoss(TRUE, FALSE, 0xFFFFFFFFUL, 0, 32),
+          "a member past the mask: no loss by it");
 }
 
 int main(void)
 {
+    test_removals();
     test_sync();
     test_relocate();
     test_tombs();

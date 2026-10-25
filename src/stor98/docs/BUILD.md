@@ -169,9 +169,12 @@ or not, at every start.
 **Since xhci98 3.1.0.0 one signature signs every driver of the package** (owner,
 2026-10-19): the amd64 `stor98.sys` is signed by xhci98's `make-package.ps1 -TestSignPfx`,
 in the same step and with the same key as `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` -
-an embedded Authenticode signature, SHA-1 file digest, no timestamp, no catalog, the INFs
-unchanged - and `xhci98-test.cer` beside them is that certificate's public half (xhci98's
-design record 19). The 32-bit and Windows 9x images are never signed. Stor98's own test
+an embedded Authenticode signature, SHA-1 file digest, no timestamp - and `xhci98-test.cer`
+beside them is that certificate's public half (xhci98's design record 19). Since 3.2.0.0
+(owner, 2026-10-22) `inf\stor98-x64.inf` names `CatalogFile=stor98.cat`, and the packager
+makes that catalog (the INF and `stor98.sys`) with WDK 7.1's MakeCat and signs it with the
+same key, because Windows 8 to 10 x64 refuse a package without one in test-signing mode
+(record 19 section 3a); the x86 INF names none. The 32-bit and Windows 9x images are never signed. Stor98's own test
 certificate (`CN=stor98 project test signing (not trusted)`), which signed the amd64 image
 of `0.3.0.0` to `0.4.0.0` with `stor98-test.cer` beside it, signs nothing any more, and its
 scripts (`make-testcert.ps1`, `sign-x64.ps1`, `testsign-common.ps1`) were removed. Windows 7

@@ -194,6 +194,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "enum.cmd.busy.drains", hc->EnumCommandBusyDrains, 1);
     XhciLogAppend(log, "enum.wait.drains", hc->EnumWaitDrains, 1);
     XhciLogAppend(log, "enum.xfer.timedout", hc->EnumTransfersTimedOut, 1);
+    XhciLogAppend(log, "enum.xfer.departed", hc->EnumTransfersDeparted, 1);
     XhciLogAppend(log, "serial.ids", hc->SerialIdsTaken, 1);
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
     XhciLogAppend(log, "serial.readfailed", hc->SerialReadsFailed, 1);
@@ -641,5 +642,20 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 #ifdef XHCI_DBG_TRACE
     hcdCountersTrace(&hc->Counters);
+    /* Record 13 section 11.8, point 10: the ring pages and BEI, read as
+     * they stand (unlocked reads of words the thread and the publication
+     * write; a trace, not a decision). */
+    XHCI_DBG_VALUE_CHANGED("iso pages built", hc->IsoPagesBuilt);
+    XHCI_DBG_VALUE_CHANGED("iso pages refused - budget",
+                           hc->IsoPagesRefusedBudget);
+    XHCI_DBG_VALUE_CHANGED("iso pages refused - memory",
+                           hc->IsoPagesRefusedMemory);
+    XHCI_DBG_VALUE_CHANGED("iso pages retired", hc->IsoPagesRetiredCount);
+    XHCI_DBG_VALUE_CHANGED("iso budget counted", hc->IsoCapOut);
+    XHCI_DBG_VALUE_CHANGED("iso page largest request TRBs",
+                           hc->IsoPageLargestTrbs);
+    XHCI_DBG_VALUE_CHANGED("iso page largest request packets",
+                           hc->IsoPageLargestPackets);
+    XHCI_DBG_VALUE_CHANGED("iso BEI TDs", hc->IsoBeiTds);
 #endif
 }

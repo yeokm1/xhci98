@@ -482,7 +482,10 @@ line per Intel id of section 3.1's "USB4 only" rows
 (`PCI\VEN_8086&DEV_xxxx`), the "ICM or USB4" ids being in record 21
 section 3.3's list already; and `PCI\VEN_1022&DEV_1668` and `DEV_1669`,
 named beside the class line so the INF says which AMD hosts are meant
-(decision U12: `U4Desc` = `xHCI98 USB4 Host Router`). The description
+(decision U12: `U4Desc` = `xHCI98 USB4 Host Router`; from 3.2.0.0 the
+id lines name their products, `xHCI98 USB4 Router (AMD Pink Sardine)` and
+so on, and the class line is `xHCI98 USB4 Router`, roadmap-usb4 task 43.73,
+record 21 section 3.3). The description
 names the hardware's generation, not the connection manager running it,
 so the "ICM or USB4" ids (Maple Ridge, Tiger Lake to Meteor Lake) carry
 `U4Desc` too and a controller keeps its name whichever manager takes it;
@@ -1548,16 +1551,15 @@ from the whole set (section 10.2).
 children of active members; the filter never reports a matched root port
 itself removable.
 
-**Resume ordering** is record 21 section 6.3's hold, unchanged, since the
-filter is shared: at its own system suspend the NHI marks every active
-member held; a D0 IRP reaching a held member's filter is passed down and
-retained in its completion routine; the NHI releases it when its resume
-has **succeeded** or **failed**; the filter's watchdog is record 21's
-fixed 5-minute cap, never longer (the NHI's resume bound plus 10 s is
-logged, and logged as over the cap when it would pass it), and its expiry
-is the failure path, never success; an NHI
-that does not resume takes the failure path at its removal. Under this
-profile:
+**Resume ordering** is record 21 section 6.3's, unchanged, since the
+filter is shared. At its own system suspend the NHI marks every active
+member held. A D0 IRP reaching a held member's filter is passed down at
+once and never retained (task 43.24h: a retained bridge D0 deadlocked
+the NT resume). When the NHI's resume has **succeeded** or **failed**,
+the NHI clears each member's mark and invalidates the member. The NHI's
+resume bound plus 10 s, and the five-minute cap, are logged as
+diagnostics only. An NHI that does not resume clears and invalidates at
+its removal. Under this profile:
 
 - **What must be restored** is tracked per tunnel, not per port state:
   at suspend the NHI records every tunnel that is up on the domain - each
@@ -1581,9 +1583,11 @@ profile:
   HELD, untouched); a HELD port's preserved tunnel that did not survive,
   which this driver does not rebuild, its configuration being someone
   else's; the NHI's own resume failing. The failure path is record 21's:
-  release the IRP and at once ask the filter for an invalidation, so the
-  functions that did not come back are reported missing; nothing is torn
-  down without removal evidence. Decision U15 records this window.
+  the member's mark cleared and, with re-enumeration on, an invalidation
+  asked of its filter, so the functions that did not come back are
+  reported missing (since task 43.24h the same release follows a resume
+  that succeeded too); nothing is torn down without removal evidence.
+  Decision U15 records this window.
 - **The NHI's resume bound** under this profile is the sum, over its
   steps, of their implemented costs, each rounded as section 5.3 measures
   it - a maximum wait counted at its bound plus one tick, a minimum wait at
@@ -1596,10 +1600,12 @@ profile:
   it, Configuration Ready, the Detect gate, the paths, L0, the USB3
   bandwidth handshake), with each step's repetition count (retries,
   polls, the obligations recorded at suspend); record 21's 10 s is added on
-  top as the watchdog's margin.
+  top as the logged bound's margin (no watchdog waits on it since task
+  43.24h).
 
-Record 21 section 6.3's conclusion stands for this profile too: the hold
-orders a successful resume and cannot close the window of a failed one,
+Record 21 section 6.3's conclusion stands for this profile too: no NT
+resume is ordered (task 43.24h), and the re-enumeration after the NHI's
+resume does not close the window,
 so **system suspend with a tunnelled device attached is unsupported in this
 release on every target**, and the release notes say so. On Windows 98 no
 filter sits on a bridge (record 21 section 6.1) and there is no hold at
@@ -2786,7 +2792,8 @@ vanished function, and the tools' 9x eject went to Windows directly).
 Since 2026-10-18 record 21 section 7.2's 9x half (task 42-0.7; the code is
 42-A.13) routes the tools' 9x eject through that worker step, hands a clean
 removal back to the thread for section 10.4's per-port teardown, and makes
-the 9x statement once each system's G3 ordering is read.
+the 9x statement once each system's G3 ordering is read (both read and
+admitted on 2026-10-22, task 43.18, `runs/run-43.md`).
 
 **Only a new tunnel moves a generation** (task 42-A.6; `stor98cm.h` as
 Stor98 revised it on 2026-10-18, entry protocol step 1 and R8b). The UP
@@ -2997,8 +3004,9 @@ so it stays up, as on a port FAILED for PCIe (section 7.2).
   resume obligation (each tunnel up at suspend, whatever its port's state)
   - verified and preserved, rebuilt where the domain lost its
   configuration, torn down on removal evidence, or HELD on a failed
-  verification - and the NT filter's held D0 IRPs released on success or
-  through the failure path (section 7.6); only then are other ports'
+  verification - and the NT filter's marks released and the bridges
+  invalidated, on success or failure (section 7.6; no D0 is held since
+  task 43.24h); only then are other ports'
   connections served. A verification is section 9.2's, its Router Ready
   wait included, inside the resume's budget: the 500 ms is within the
   margin `TbtU4ResumeBoundUs` already counts for the step running when
@@ -3261,10 +3269,10 @@ from their first form, as each row says.
 | U9 | Safe eject under the software connection manager | an orderly per-port teardown that 39-A.8's mechanism calls, for the children of associated tunnel ports only | 10.4 |
 | U10 | Cutting with the USB4 profile emulator-only | yes: `3.0.0.0` carries it, the release notes saying "run on the emulator only" and every real host id untested but active by default | 14.4 |
 | U11 | The host suites' fabric | a C89 fake fabric of this project's own as the gate, plus the `usb4-emu` fabric cross-check as a recorded reading | 14.1 |
-| U12 | The device description | Changed by the owner, 2026-10-15 (first form: `xHCI98 USB4 Host Interface`): `xHCI98 USB4 Host Router` for every USB4-generation host whichever connection manager runs it (the "ICM or USB4" ids included), `xHCI98 USB4 PCI Bridge` for its tunnel ports, the same service and binary | 3.7 |
+| U12 | The device description | Changed by the owner, 2026-10-15 (first form: `xHCI98 USB4 Host Interface`): `xHCI98 USB4 Host Router` for every USB4-generation host whichever connection manager runs it (the "ICM or USB4" ids included), `xHCI98 USB4 PCI Bridge` for its tunnel ports, the same service and binary. From 3.2.0.0 (owner, 2026-10-23, task 43.73): `xHCI98 USB4 Router` with the maker and product per id, the class line plain (record 21 section 3.3) | 3.7 |
 | U13 | `XhciCmTunnelBridge` with more than one tunnel port | Changed (first form: a list indexed by USB4 port): record 21 section 6.3's per-domain override, an unordered set; the port-to-bridge correspondence is router-named or learned (section 7.6), never taken from list order | 7.6, 12 |
 | U14 | The selection | section 3's four tests, the inert start in its two forms, the three positive admissions of section 3.4, and the hardware-profile table apart from the CM table (owner's coverage plan, 2026-10-15) | 3, 4 |
-| U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": the NT hold is released through record 21's failure path (release, then invalidation), since holding a bridge's D0 for ever would hang the system's resume; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
+| U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": since task 43.24h the NT bridge's D0 is not held at all, because a held D0 deadlocks the NT resume (a bug check on 8 to 10, the five-minute watchdog's release on 2000 to 7), and after any resume each member still marked is released and, with re-enumeration on, invalidated, which is record 21's old failure path taken every time; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
 | U16 | The TMU | configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
 | U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in `3.0.0.0`. **Revised 2026-10-18** by the owner's opening of Phase 42, which promoted the planned recovery (`U4REC.1`) into `3.1.0.0` as tasks 42-0.5 and 42-A.10: CONTAINED is no longer terminal, the recovery of section 7.7's revision following on its precondition (decisions U18 to U29 there, the orchestrator's) | 7.7 |
 

@@ -25,6 +25,7 @@
 #define CM_LIVE_RECOVERY_FAILED  6UL
 #define CM_LIVE_CONTAINED        7UL
 #define CM_LIVE_REVOKED          8UL
+#define CM_LIVE_PREPARING        9UL
 
 /* ======================================================================== */
 /* Text                                                                      */
@@ -65,6 +66,13 @@ void tr_put(TR_TEXT *t, const char *s)
 {
     while (*s != '\0') {
         tr_ch(t, *s++);
+    }
+}
+
+void tr_put_box(TR_TEXT *t, const char *s)
+{
+    for (; *s != '\0'; s++) {
+        tr_ch(t, (char)(*s == '\n' ? ' ' : *s));
     }
 }
 
@@ -921,9 +929,11 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
 
     memset(q, 0, sizeof(*q));
     if (n < CM_Q_HDR_BYTES || tr_d32(b + CM_Q_O_MAGIC) != CM_Q_MAGIC ||
-        tr_d32(b + CM_Q_O_VERSION) != CM_Q_VERSION) {
+        (tr_d32(b + CM_Q_O_VERSION) != CM_Q_VERSION &&
+         tr_d32(b + CM_Q_O_VERSION) != CM_Q_VERSION_1)) {
         return 0;
     }
+    q->Version = tr_d32(b + CM_Q_O_VERSION);
     q->Base = b;
     q->Bytes = tr_d32(b + CM_Q_O_BYTES);
     q->Pass = tr_d32(b + CM_Q_O_PASS);
@@ -952,6 +962,18 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
     if (recOff < CM_Q_HDR_BYTES || recOff > q->Bytes ||
         q->Bytes - recOff < CM_ST_HDR_BYTES) {
         return 0;
+    }
+    if (q->Version != CM_Q_VERSION_1) {
+        /* The block sits between the header and the record. */
+        if (recOff < CM_Q_HDR_BYTES + CM_Q_RM_BYTES) {
+            return 0;
+        }
+        q->RmFlags = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_FLAGS);
+        q->RmCount = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_COUNT);
+        q->RmMember = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_MEMBER);
+        q->RmLost = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_LOST);
+    } else {
+        q->RmMember = CM_Q_UNKNOWN;
     }
     q->Rec = b + recOff;
     q->RecBytes = tr_d32(q->Rec + CM_ST_O_BYTES);
@@ -1319,6 +1341,27 @@ void tr_snap_init(TR_SNAP *s)
     memset(s, 0, sizeof(*s));
 }
 
+/* A record entry as the snapshot keeps it. */
+static void tr_srouter(TR_SROUTER *x, const unsigned char *e, TR_U32 nhiKey,
+                       TR_U32 epochLo, TR_U32 epochHi)
+{
+    memset(x, 0, sizeof(*x));
+    x->Nhi = nhiKey;
+    x->EpochLo = epochLo;
+    x->EpochHi = epochHi;
+    x->Kind = tr_d32(e + CM_ST_E_KIND);
+    x->RouteLo = tr_d32(e + CM_ST_E_ROUTE_LO);
+    x->RouteHi = tr_d32(e + CM_ST_E_ROUTE_HI);
+    x->Place = tr_d32(e + CM_ST_E_PLACE);
+    x->Ids = tr_d32(e + CM_ST_E_IDS);
+    x->ShortId = tr_d32(e + CM_ST_E_SHORT_ID);
+    x->Approval = tr_d32(e + CM_ST_E_APPROVAL);
+    x->Tunnels = tr_d32(e + CM_ST_E_TUNNELS);
+    x->Bridge = tr_d32(e + CM_ST_E_BRIDGE);
+    x->Gen = tr_d32(e + CM_ST_E_GEN);
+    tr_router_name(e, x->Name, sizeof(x->Name));
+}
+
 int tr_snap_add(TR_SNAP *s, TR_U32 nhiKey, const TR_QUERY *q)
 {
     TR_U32 n = tr_d32(q->Rec + CM_ST_O_ROUTER_COUNT);
@@ -1330,32 +1373,19 @@ int tr_snap_add(TR_SNAP *s, TR_U32 nhiKey, const TR_QUERY *q)
     }
     s->NhiKey[s->NhiCount] = nhiKey;
     s->Live[s->NhiCount] = q->Live;
+    s->Stage[s->NhiCount] = tr_d32(q->Rec + CM_ST_O_STAGE);
     s->EpochLo[s->NhiCount] = q->EpochLo;
     s->EpochHi[s->NhiCount] = q->EpochHi;
+    s->RmFlags[s->NhiCount] = q->RmFlags;
+    s->RmCount[s->NhiCount] = q->RmCount;
     s->NhiCount++;
     for (r = 0; r < n; r++) {
         const unsigned char *e = q->Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
-        TR_SROUTER *x;
         if (s->Count >= TR_SNAP_ROUTERS) {
             s->Truncated = 1;
             return 0;
         }
-        x = &s->R[s->Count++];
-        memset(x, 0, sizeof(*x));
-        x->Nhi = nhiKey;
-        x->EpochLo = q->EpochLo;
-        x->EpochHi = q->EpochHi;
-        x->Kind = tr_d32(e + CM_ST_E_KIND);
-        x->RouteLo = tr_d32(e + CM_ST_E_ROUTE_LO);
-        x->RouteHi = tr_d32(e + CM_ST_E_ROUTE_HI);
-        x->Place = tr_d32(e + CM_ST_E_PLACE);
-        x->Ids = tr_d32(e + CM_ST_E_IDS);
-        x->ShortId = tr_d32(e + CM_ST_E_SHORT_ID);
-        x->Approval = tr_d32(e + CM_ST_E_APPROVAL);
-        x->Tunnels = tr_d32(e + CM_ST_E_TUNNELS);
-        x->Bridge = tr_d32(e + CM_ST_E_BRIDGE);
-        x->Gen = tr_d32(e + CM_ST_E_GEN);
-        tr_router_name(e, x->Name, sizeof(x->Name));
+        tr_srouter(&s->R[s->Count++], e, nhiKey, q->EpochLo, q->EpochHi);
     }
     return 1;
 }
@@ -1451,6 +1481,44 @@ static int tr_first_of(const TR_SNAP *s, int i)
     return 1;
 }
 
+int tr_live_lost(TR_U32 live)
+{
+    switch (live) {
+    case CM_LIVE_SUSPECT:
+    case CM_LIVE_ABSENT:
+    case CM_LIVE_CONFIG_LOST:
+    case CM_LIVE_RECOVERING:
+    case CM_LIVE_RECOVERY_FAILED:
+    case CM_LIVE_CONTAINED:
+    case CM_LIVE_PREPARING:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Revision 16 (record 25 section 7.6): whether NHI i of `now` has an
+ * unexpected removal against `old` - the same NHI at the same epoch, both
+ * watched and ACTIVE, the count moved. */
+static int tr_removed(const TR_SNAP *old, const TR_SNAP *now, int i)
+{
+    int k;
+
+    for (k = 0; k < old->NhiCount; k++) {
+        if (old->NhiKey[k] != now->NhiKey[i]) {
+            continue;
+        }
+        return old->EpochLo[k] == now->EpochLo[i] &&
+               old->EpochHi[k] == now->EpochHi[i] &&
+               (old->RmFlags[k] & CM_Q_RF_WATCHED) != 0 &&
+               (now->RmFlags[i] & CM_Q_RF_WATCHED) != 0 &&
+               old->Live[k] == CM_LIVE_ACTIVE &&
+               now->Live[i] == CM_LIVE_ACTIVE &&
+               old->RmCount[k] != now->RmCount[i];
+    }
+    return 0;
+}
+
 int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
 {
     int count = 0;
@@ -1463,10 +1531,20 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
     for (i = 0; i < now->NhiCount; i++) {
         for (k = 0; k < old->NhiCount; k++) {
             if (old->NhiKey[k] == now->NhiKey[i] &&
-                old->Live[k] == CM_LIVE_ACTIVE &&
-                now->Live[i] != CM_LIVE_ACTIVE) {
+                ((old->Live[k] == CM_LIVE_ACTIVE && tr_live_lost(now->Live[i])) ||
+                 (old->Stage[k] == CM_ST_STAGE_ACTIVE &&
+                  now->Stage[i] == CM_ST_STAGE_FAILED))) {
                 count = tr_ev(ev, cap, count, TR_EV_STOPPED, NULL, 0);
             }
+        }
+    }
+    /* The warnings before the ordinary events, so a full buffer never
+     * drops one (the caller moves on to the next sample either way). */
+    for (i = 0; i < now->NhiCount && i < TR_SNAP_NHI; i++) {
+        if (tr_removed(old, now, i) && count < cap) {
+            memset(&ev[count], 0, sizeof(ev[count]));
+            ev[count].Kind = TR_EV_REMOVED;
+            count++;
         }
     }
     for (i = 0; i < now->Count; i++) {
@@ -1517,6 +1595,35 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
     return count;
 }
 
+void tr_removal_text(const TR_QUERY *q, char *out, size_t cap)
+{
+    char lost[48];
+
+    lost[0] = '\0';
+    if (q->Version != CM_Q_VERSION_1 && q->RmLost != 0) {
+        tr_sprintf(lost, sizeof(lost), "; %lu in a loss of the controller",
+                   (unsigned long)q->RmLost);
+    }
+    if (q->Version == CM_Q_VERSION_1) {
+        tr_copy(out, "not reported by this driver", cap);
+    } else if ((q->RmFlags & CM_Q_RF_WATCHED) == 0) {
+        tr_copy(out, "not watched on this system", cap);
+    } else if (q->RmCount == 0) {
+        tr_sprintf(out, cap, "none since this start%s", lost);
+    } else if (q->RmMember == CM_Q_UNKNOWN) {
+        tr_sprintf(out, cap, "%lu since this start%s",
+                   (unsigned long)q->RmCount, lost);
+    } else {
+        tr_sprintf(out, cap,
+                   "%lu since this start; the last on tunnel port "
+                   "%02lX:%02lX.%lu%s",
+                   (unsigned long)q->RmCount,
+                   (unsigned long)CM_ST_BDF_BUS(q->RmMember),
+                   (unsigned long)CM_ST_BDF_DEV(q->RmMember),
+                   (unsigned long)CM_ST_BDF_FN(q->RmMember), lost);
+    }
+}
+
 void tr_event_text(const TR_EVENT *e, char *out, size_t cap)
 {
     char gen[32];
@@ -1542,10 +1649,46 @@ void tr_event_text(const TR_EVENT *e, char *out, size_t cap)
     case TR_EV_LEFT:
         tr_sprintf(out, cap, "%s was disconnected.", e->Name);
         break;
+    case TR_EV_REMOVED:
+        tr_copy(out, "A Thunderbolt or USB4 device was removed unexpectedly.",
+                cap);
+        break;
     default:
         tr_copy(out, "", cap);
         break;
     }
+}
+
+int tr_events_text(const TR_EVENT *ev, int count, char *out, size_t cap)
+{
+    char line[256];
+    size_t used = 0;
+    size_t len;
+    int lines = 0;
+    int i;
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    for (i = 0; i < count; i++) {
+        tr_event_text(&ev[i], line, sizeof(line));
+        len = strlen(line);
+        if (len == 0) {
+            continue;
+        }
+        /* The line, its separator before it, and the terminator. */
+        if (used + (lines > 0 ? 1 : 0) + len + 1 > cap) {
+            continue;
+        }
+        if (lines > 0) {
+            out[used++] = '\n';
+        }
+        memcpy(out + used, line, len + 1);
+        used += len;
+        lines++;
+    }
+    return lines;
 }
 
 const char *tr_event_title(int kind)
@@ -1553,6 +1696,7 @@ const char *tr_event_title(int kind)
     switch (kind) {
     case TR_EV_STOPPED:
     case TR_EV_FAILED:
+    case TR_EV_REMOVED:
         return "Thunderbolt/USB4 warning";
     default:
         return "Thunderbolt/USB4";
@@ -2510,6 +2654,624 @@ int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value)
     return !(trayMode && haveValue && value == 0);
 }
 
+int tr_warn_removed(int haveValue, TR_U32 value)
+{
+    return !(haveValue && value == 0);
+}
+
+/* ---- the "can run faster" notice (record 25 section 7.7) ------------------ */
+
+int tr_fast_can(int haveV2, TR_U32 flags)
+{
+    if (!haveV2) {
+        return -1;
+    }
+    if (flags & TR_V2_F_SSP_CAPABLE) {
+        return TR_SPEED_SUPERPLUS;
+    }
+    if (flags & TR_V2_F_SS_CAPABLE) {
+        return TR_SPEED_SUPER;
+    }
+    return -1;
+}
+
+/* The speed a connection runs at: the _EX_V2 operating flags, else the _EX
+ * byte when it names Low, Full or High Speed; -1 otherwise. A byte of 3 or
+ * 4 (98 SE's and ME's SuperSpeed and SuperSpeedPlus) with no operating
+ * flag is not a speed this decision trusts. */
+static int tr_fast_now(int haveV2, TR_U32 flags, unsigned int exSpeed)
+{
+    if (haveV2 && (flags & TR_V2_F_SSP_NOW)) {
+        return TR_SPEED_SUPERPLUS;
+    }
+    if (haveV2 && (flags & TR_V2_F_SS_NOW)) {
+        return TR_SPEED_SUPER;
+    }
+    if (exSpeed <= TR_SPEED_HIGH) {
+        return (int)exSpeed;
+    }
+    return -1;
+}
+
+int tr_fast_wants_qual(const TR_FAST_IN *in)
+{
+    if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
+        !in->HaveV2 || in->Root || !in->HubKnown || in->UnderTt) {
+        return 0;
+    }
+    return tr_fast_can(in->HaveV2, in->V2Flags) < 0 &&
+           tr_fast_now(in->HaveV2, in->V2Flags, in->ExSpeed) == TR_SPEED_FULL &&
+           tr_fast_now(in->HubHaveV2, in->HubFlags, in->HubExSpeed) ==
+               TR_SPEED_FULL &&
+           in->BcdUsb >= 0x0200U;
+}
+
+int tr_qual_ok(const unsigned char *b, size_t n)
+{
+    return b != NULL && n >= TR_QUAL_BYTES && b[0] == TR_QUAL_BYTES &&
+           b[1] == 6;
+}
+
+static int tr_qual_find(const TR_QUAL_CACHE *c, const char *key)
+{
+    int i;
+
+    for (i = 0; i < c->N && i < TR_QUAL_MAX; i++) {
+        if (strcmp(c->Key[i], key) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int tr_qual_get(TR_QUAL_CACHE *c, const char *key)
+{
+    int i;
+
+    if (c == NULL || key == NULL || (i = tr_qual_find(c, key)) < 0) {
+        return -1;
+    }
+    c->Seen[i] = 1;
+    return c->Val[i];
+}
+
+int tr_qual_room(const TR_QUAL_CACHE *c, const char *key)
+{
+    return c == NULL || key == NULL || c->N < TR_QUAL_MAX ||
+           tr_qual_find(c, key) >= 0;
+}
+
+int tr_qual_put(TR_QUAL_CACHE *c, const char *key, const unsigned char *b,
+                size_t n)
+{
+    int i;
+    int v = (n > 0) ? tr_qual_ok(b, n) : 0;
+
+    if (c == NULL || key == NULL) {
+        return v;
+    }
+    i = tr_qual_find(c, key);
+    if (i < 0) {
+        if (c->N >= TR_QUAL_MAX) {
+            return v;
+        }
+        i = c->N++;
+        tr_copy(c->Key[i], key, TR_FAST_KEY);
+        c->Val[i] = -1;
+        c->Tries[i] = 0;
+    }
+    c->Seen[i] = 1;
+    if (n > 0) {
+        c->Val[i] = v;
+        c->Tries[i] = 0;
+    } else if (++c->Tries[i] >= TR_QUAL_TRIES) {
+        c->Val[i] = 0;
+    } else {
+        c->Val[i] = -1;
+    }
+    return v;
+}
+
+void tr_qual_begin(TR_QUAL_CACHE *c)
+{
+    int i;
+
+    for (i = 0; c != NULL && i < TR_QUAL_MAX; i++) {
+        c->Seen[i] = 0;
+    }
+}
+
+void tr_qual_end(TR_QUAL_CACHE *c)
+{
+    int i;
+    int n = 0;
+
+    if (c == NULL) {
+        return;
+    }
+    for (i = 0; i < c->N && i < TR_QUAL_MAX; i++) {
+        if (!c->Seen[i]) {
+            if (c->Tries[i] == 0) {
+                continue;
+            }
+            c->Val[i] = 0;
+        }
+        if (n != i) {
+            tr_copy(c->Key[n], c->Key[i], TR_FAST_KEY);
+            c->Val[n] = c->Val[i];
+            c->Tries[n] = c->Tries[i];
+            c->Seen[n] = c->Seen[i];
+        }
+        n++;
+    }
+    c->N = n;
+}
+
+int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f)
+{
+    int hubCan;
+
+    f->Now = -1;
+    f->Can = -1;
+    f->Where = TR_FW_NONE;
+    f->HubNow = -1;
+    if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
+        !in->HaveV2) {
+        return 0;
+    }
+    if (tr_fast_wants_qual(in)) {
+        if (in->HsQual != 1) {
+            return 0;
+        }
+        f->Now = TR_SPEED_FULL;
+        f->Can = TR_SPEED_HIGH;
+        f->Where = TR_FW_HUBFS;
+        f->HubNow = TR_SPEED_FULL;
+        return 1;
+    }
+    f->Can = tr_fast_can(in->HaveV2, in->V2Flags);
+    f->Now = tr_fast_now(in->HaveV2, in->V2Flags, in->ExSpeed);
+    if (f->Can < 0 || f->Now < 0 || f->Now >= f->Can) {
+        f->Now = -1;
+        f->Can = -1;
+        return 0;
+    }
+    if (f->Now == TR_SPEED_SUPER) {
+        f->Where = TR_FW_LINK;
+        return 1;
+    }
+    if (in->Root) {
+        f->Where = TR_FW_PORT2;
+        return 1;
+    }
+    if (in->HubKnown) {
+        f->HubNow = tr_fast_now(in->HubHaveV2, in->HubFlags, in->HubExSpeed);
+    }
+    hubCan = in->HubKnown ? tr_fast_can(in->HubHaveV2, in->HubFlags) : -1;
+    if (hubCan >= TR_SPEED_SUPER && f->HubNow >= 0 &&
+        f->HubNow < TR_SPEED_SUPER) {
+        f->Where = TR_FW_HUB3;
+    } else if (f->HubNow == TR_SPEED_FULL || f->HubNow == TR_SPEED_LOW) {
+        f->Where = TR_FW_HUB1;
+    } else {
+        f->Where = TR_FW_HUB2;
+    }
+    return 1;
+}
+
+const char *tr_fast_speed(int speed)
+{
+    switch (speed) {
+    case TR_SPEED_LOW:
+        return "Low Speed (1.5 Mbit/s)";
+    case TR_SPEED_FULL:
+        return "Full Speed (12 Mbit/s)";
+    case TR_SPEED_HIGH:
+        return "High Speed (480 Mbit/s)";
+    case TR_SPEED_SUPER:
+        return "SuperSpeed (5 Gbit/s)";
+    case TR_SPEED_SUPERPLUS:
+        return "SuperSpeedPlus (10 Gbit/s or more)";
+    default:
+        return "a speed not reported";
+    }
+}
+
+const char *tr_fast_where(int where)
+{
+    switch (where) {
+    case TR_FW_PORT2:
+        return "on a USB 2.0 port";
+    case TR_FW_HUB2:
+        return "behind a USB 2.0 hub";
+    case TR_FW_HUB1:
+        return "behind a Full Speed hub";
+    case TR_FW_HUB3:
+        return "behind a USB 3 hub that runs slower";
+    case TR_FW_LINK:
+        return "on a 5 Gbit/s link";
+    case TR_FW_HUBFS:
+        return "behind a Full Speed hub";
+    default:
+        return "";
+    }
+}
+
+const char *tr_fast_try(int where)
+{
+    switch (where) {
+    case TR_FW_PORT2:
+        return "Connect it to a USB 3 port of this computer (often blue, or "
+               "marked SS). If it is already in one, it fell back to USB 2.0 "
+               "there: try another cable or another port.";
+    case TR_FW_HUB2:
+    case TR_FW_HUB1:
+        return "Connect it to a USB 3 port of this computer, or through a "
+               "USB 3 hub.";
+    case TR_FW_HUB3:
+        return "Connect the hub to a USB 3 port of this computer with a USB 3 "
+               "cable. If it already is, try another cable for the hub, then "
+               "for the device.";
+    case TR_FW_LINK:
+        return "Connect it to a port rated 10 Gbit/s or more (USB 3.1 Gen 2 "
+               "or USB 3.2), with a cable rated for that speed. A 5 Gbit/s "
+               "port is the most it gets there.";
+    case TR_FW_HUBFS:
+        return "Connect it to a port of this computer, or through a USB 2.0 "
+               "or USB 3 hub, rather than through this Full Speed hub.";
+    default:
+        return "";
+    }
+}
+
+void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
+                 unsigned int vid, unsigned int pid)
+{
+    tr_sprintf(out, cap, "%s|%s|%04X:%04X", ctrlKey != NULL ? ctrlKey : "",
+               path != NULL ? path : "", vid & 0xFFFFU, pid & 0xFFFFU);
+}
+
+int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key)
+{
+    int i;
+
+    for (i = 0; old != NULL && i < n; i++) {
+        if (strcmp(old[i], key) == 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Windows' own class names for a USB device, 98 SE to 10: they say what
+ * kind of device it is, not which (owner, 2026-10-24). Matched whole,
+ * case aside. */
+static const char *const trGenericNames[] = {
+    "USB Input Device",
+    "USB Human Interface Device",
+    "Human Interface Device",
+    "HID Keyboard Device",
+    "HID-compliant mouse",
+    "HID-compliant device",
+    "HID-compliant consumer control device",
+    "HID-compliant game controller",
+    "HID-compliant system controller",
+    "USB Composite Device",
+    "USB Mass Storage Device",
+    "USB Device",
+    "Unknown Device",
+    "USB Printing Support",
+    "USB Audio Device",
+    "USB Printer",
+    "Generic USB Hub",
+    "USB Hub",
+    "USB 2.0 Hub",
+    "Standard USB Hub"
+};
+
+int tr_name_generic(const char *name)
+{
+    size_t i;
+
+    if (name == NULL || name[0] == '\0') {
+        return 0;
+    }
+    /* "Unknown USB Device (Device Descriptor Request Failed)" and its
+     * kin, and a hardware ID standing in for a name. */
+    if (tr_starts_ci(name, "Unknown USB Device") ||
+        tr_starts_ci(name, "USB\\")) {
+        return 1;
+    }
+    for (i = 0; i < sizeof(trGenericNames) / sizeof(trGenericNames[0]); i++) {
+        if (tr_eq(name, trGenericNames[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void tr_fast_name(char *out, size_t cap, const char *label,
+                  const char *product, unsigned int vid, unsigned int pid)
+{
+    size_t len;
+
+    if (cap == 0) {
+        return;
+    }
+    if (label != NULL && label[0] != '\0' && !tr_name_generic(label)) {
+        tr_copy(out, label, cap);
+        return;
+    }
+    if (product != NULL) {
+        while (*product == ' ') {
+            product++;
+        }
+        len = strlen(product);
+        while (len > 0 && product[len - 1] == ' ') {
+            len--;
+        }
+        if (len > 0) {
+            if (len > cap - 1) {
+                len = cap - 1;
+            }
+            memcpy(out, product, len);
+            out[len] = '\0';
+            return;
+        }
+    }
+    if (label != NULL && label[0] != '\0') {
+        tr_copy(out, label, cap);   /* a class name, better than none */
+        return;
+    }
+    tr_sprintf(out, cap, "USB device %04X:%04X", vid & 0xFFFFU, pid & 0xFFFFU);
+}
+
+int tr_bsend_step(TR_BSEND *s, int ev, TR_U32 nowMs, int reports)
+{
+    TR_U32 age;
+
+    if (s == NULL) {
+        return 0;
+    }
+    age = nowMs - s->Since;
+    switch (ev) {
+    case TR_BE_SENT:
+        s->State = TR_BS_SENT;
+        s->Resent = 0;
+        s->Since = nowMs;
+        return 0;
+    case TR_BE_SHOW:
+        /* Lost too can be shown after all: the gone it saw may have been
+         * an older balloon's, posted before this one was sent. */
+        if (s->State == TR_BS_SENT || s->State == TR_BS_LOST) {
+            s->State = TR_BS_SHOWN;
+            s->Since = nowMs;
+        }
+        return 0;
+    case TR_BE_HIDE:
+    case TR_BE_TIMEOUT:
+        /* Gone. Unshown, it is owed once; shown, or already re-sent, it is
+         * done. */
+        if (s->State == TR_BS_SENT && !s->Resent) {
+            s->State = TR_BS_LOST;
+            s->Since = nowMs;
+        } else if (s->State != TR_BS_LOST) {
+            s->State = TR_BS_IDLE;
+        }
+        return 0;
+    case TR_BE_TICK:
+        if (s->State == TR_BS_SENT && reports && age >= TR_BS_NOSHOW_MS) {
+            /* No answer at all from a shell that answers: lost, and long
+             * enough waited already. */
+            if (s->Resent) {
+                s->State = TR_BS_IDLE;
+                return 0;
+            }
+        } else if (s->State != TR_BS_LOST || age < TR_BS_WAIT_MS) {
+            return 0;
+        }
+        s->State = TR_BS_SENT;
+        s->Resent = 1;
+        s->Since = nowMs;
+        return 1;
+    default:                    /* OTHER, CLICK, DROP, anything else */
+        s->State = TR_BS_IDLE;
+        return 0;
+    }
+}
+
+void tr_bkind_step(TR_BKIND *b, int ev)
+{
+    if (b == NULL) {
+        return;
+    }
+    if (b->N < 0 || b->N > TR_BK_PENDING) {
+        b->N = 0;
+    }
+    switch (ev) {
+    case TR_BE_SENT:
+    case TR_BE_OTHER: {
+        int kind = ev == TR_BE_SENT ? TR_BK_FAST : TR_BK_OTHER;
+        if (b->N == TR_BK_PENDING) {
+            /* Full: the oldest is counted, its kind not kept. Saturated,
+             * the count stays: every show in doubt from then on. */
+            memmove(&b->Wait[0], &b->Wait[1], (TR_BK_PENDING - 1) * sizeof(b->Wait[0]));
+            b->N--;
+            if (b->Lost < TR_BK_LOST_MAX) {
+                b->Lost++;
+            }
+        }
+        b->Wait[b->N++] = kind;
+        b->Sent = kind;
+        break;
+    }
+    case TR_BE_SHOW:
+        if (b->Lost > 0) {
+            /* One of those counted, the oldest: its kind is not known. */
+            if (b->Lost < TR_BK_LOST_MAX) {
+                b->Lost--;
+            }
+            b->Shown = TR_BK_OTHER;
+        } else if (b->N == 0) {
+            /* None waiting: a show this list cannot place. */
+            b->Shown = TR_BK_OTHER;
+        } else {
+            int i;
+            int kind = b->Wait[0];
+            for (i = 1; i < b->N; i++) {
+                if (b->Wait[i] != kind) {
+                    kind = TR_BK_OTHER; /* the oldest's or the newest's */
+                    break;
+                }
+            }
+            b->Shown = kind;
+            memmove(&b->Wait[0], &b->Wait[1], (b->N - 1) * sizeof(b->Wait[0]));
+            b->N--;
+        }
+        break;
+    case TR_BE_HIDE:
+    case TR_BE_TIMEOUT:
+    case TR_BE_CLICK:
+        b->Shown = TR_BK_NONE;
+        break;
+    case TR_BE_DROP:
+        /* Taken away, shown or queued: none is up. Those waiting are kept:
+         * a show or a click the shell posted before the removal may still
+         * come, and must stay in doubt. */
+        b->Sent = TR_BK_NONE;
+        b->Shown = TR_BK_NONE;
+        break;
+    default:
+        break;
+    }
+}
+
+void tr_hover_move(TR_HOVER *h, TR_U32 nowMs)
+{
+    if (h == NULL) {
+        return;
+    }
+    h->On = 1;
+    h->Last = nowMs;
+}
+
+int tr_hover_poll(TR_HOVER *h, TR_U32 nowMs, int away, TR_U32 dblClickMs,
+                  TR_U32 pollMs)
+{
+    TR_U32 shown;               /* the initial delay and the autopop time  */
+
+    if (h == NULL || !h->On || !away) {
+        return 0;
+    }
+    h->On = 0;
+    shown = 11UL * dblClickMs;
+    /* The pointer left at most one poll ago, so a hover that may have
+     * outlasted the tooltip counts: a needless re-add only draws the icon
+     * again (on 98 SE perhaps at another place among the area's icons). */
+    return nowMs - h->Last + pollMs >= shown;
+}
+
+int tr_bkind_fast(const TR_BKIND *b, int reports)
+{
+    if (b == NULL) {
+        return 0;
+    }
+    return (reports ? b->Shown : b->Sent) == TR_BK_FAST;
+}
+
+void tr_fast_balloon(char *out, size_t cap, const char *name,
+                     const TR_FAST *f, int count, int clickBalloon)
+{
+    /* Where a click on the balloon reaches the tool it opens the list;
+     * where it does not (2000, task 43.68) the icon's menu does. */
+    const char *click = clickBalloon ? "Click here for what to try."
+                                     : "Click the icon for what to try.";
+
+    if (count > 1) {
+        tr_sprintf(out, cap, "%d USB devices run slower than they can: %s and "
+                             "%d more. %s",
+                   count, name, count - 1, click);
+        return;
+    }
+    tr_sprintf(out, cap, "%s runs at %s %s; it can run at %s. %s",
+               name, tr_fast_speed(f->Now), tr_fast_where(f->Where),
+               tr_fast_speed(f->Can), click);
+}
+
+int tr_fast_click_balloon(int nt, unsigned long major, unsigned long minor)
+{
+    return !(nt && major == 5UL && minor == 0UL);
+}
+
+/* `lead`, then `text` broken at its spaces so that a line passes 79
+ * columns only for a word longer than that, the continuation lines
+ * indented by `indent` spaces. */
+static void tr_fast_wrapped(TR_TEXT *t, const char *lead, const char *text,
+                            int indent)
+{
+    char line[96];
+    size_t len;
+    int sep;
+    const char *w = text;
+
+    tr_copy(line, lead, sizeof(line));
+    len = strlen(line);
+    sep = len > 0 && line[len - 1] != ' ';
+    while (*w != '\0') {
+        const char *e = w;
+        while (*e != '\0' && *e != ' ') {
+            e++;
+        }
+        if (len > (size_t)indent && len + (sep ? 1 : 0) + (size_t)(e - w) > 79) {
+            line[len] = '\0';
+            tr_printf(t, "%s\n", line);
+            memset(line, ' ', (size_t)indent);
+            len = (size_t)indent;
+            sep = 0;
+        }
+        if (sep && len < sizeof(line) - 1) {
+            line[len++] = ' ';
+        }
+        for (; w < e; w++) {
+            if (len < sizeof(line) - 1) {
+                line[len++] = *w;
+            }
+        }
+        sep = 1;
+        while (*w == ' ') {
+            w++;
+        }
+    }
+    line[len] = '\0';
+    tr_printf(t, "%s\n", line);
+}
+
+void tr_fast_entry(TR_TEXT *t, const char *name, unsigned int vid,
+                   unsigned int pid, const char *portLine,
+                   const char *hubName, const TR_FAST *f)
+{
+    char lead[160];
+
+    tr_sprintf(lead, sizeof(lead), "%s (%04X:%04X)", name, vid & 0xFFFFU,
+               pid & 0xFFFFU);
+    tr_fast_wrapped(t, "", lead, 2);
+    tr_fast_wrapped(t, "  ", portLine, 4);
+    if (hubName != NULL) {
+        tr_sprintf(lead, sizeof(lead), "Behind %s (%s)", hubName,
+                   tr_fast_speed(f->HubNow));
+        tr_fast_wrapped(t, "  ", lead, 4);
+    }
+    tr_printf(t, "  Runs at:    %s\n", tr_fast_speed(f->Now));
+    tr_printf(t, "  Can run at: %s\n", tr_fast_speed(f->Can));
+    tr_fast_wrapped(t, "  Try:", tr_fast_try(f->Where), 7);
+}
+
+void tr_fast_menu(char *out, size_t cap, int count)
+{
+    tr_sprintf(out, cap, "%d USB device%s can run faster...", count,
+               tr_plural(count));
+}
+
 /* ---- the drivers' logging levels (section 7.5) ---------------------------- */
 
 const char *tr_level_driver(int driver)
@@ -2867,7 +3629,7 @@ const char *tr_pci_vendor(unsigned int ven)
 }
 
 void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
-                    unsigned int dev, int tbKind)
+                    unsigned int dev, int tbKind, int named)
 {
     const char *tb = tbKind == TR_TB_TB3 ? "Thunderbolt 3"
                      : tbKind == TR_TB_USB4 ? "USB4"
@@ -2887,6 +3649,10 @@ void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
         return;
     }
     if (!haveIds) {
+        return;
+    }
+    if (named) {
+        tr_sprintf(out, cap, " - %04X:%04X", ven, dev);
         return;
     }
     name = tr_pci_vendor(ven);
@@ -3260,5 +4026,41 @@ const char *tr_mksvc_text(int state)
         return "starting or stopping";
     default:
         return "not read";
+    }
+}
+
+int tr_eject_watch_kind(int admin, int notRemovable, int w2k, int svcState)
+{
+    if (admin || notRemovable) {
+        return TR_EJW_PLAIN;
+    }
+    if (w2k || svcState == TR_SV_ABSENT || svcState == TR_SV_STOPPED) {
+        return TR_EJW_UNCONFIRMED;
+    }
+    return TR_EJW_SERVICE;
+}
+
+TR_U32 tr_eject_watch_ms(int kind)
+{
+    return kind == TR_EJW_SERVICE ? TR_EJW_OWN_MS + 2UL * TR_EJW_MK_IDLE_MS
+                                  : TR_EJW_OWN_MS;
+}
+
+const char *tr_eject_open_text(int kind)
+{
+    switch (kind) {
+    case TR_EJW_SERVICE:
+        return "The PCIe tunnel has not been seen closed yet. It closes if "
+               "the xHCI98 mark service confirms the eject to the Thunderbolt "
+               "driver, which the service does in the background; an eject "
+               "made as an administrator is confirmed by this tool itself.";
+    case TR_EJW_UNCONFIRMED:
+        return "The PCIe tunnel stays up until the device is unplugged, "
+               "because the eject was not confirmed to the Thunderbolt "
+               "driver; an eject made as an administrator is confirmed by "
+               "this tool itself.";
+    default:
+        return "The Thunderbolt driver has not confirmed that the PCIe tunnel "
+               "was closed.";
     }
 }

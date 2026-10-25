@@ -12,6 +12,62 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 3.2.0.0 - 2026-10-24
+
+Every system `3.1.0.0` supports is supported, and Windows 10 is added. A release now comes as up to three downloads, and the
+installer, the USB Tree and Stor98 have each changed. It was read in QEMU
+virtual machines, the Thunderbolt 3 and USB4 parts against the emulated
+hosts and enclosure; the release notes say what was read where.
+
+### What changed
+
+- Three downloads, each holding the one before: `xhci98-3.2.0.0.zip`;
+  `-free.zip`, which adds the free USB class drivers of usb-wdm-free
+  (experimental) in `USBDRV\FREE\`; and `-nonfree.zip`, which adds other
+  makers' drivers from usb-wdm-nonfree in `USBDRV\NONFREE\`. NUSB 3.3's
+  seven Windows 98 SE storage files are in `USBDRV\NUSB33\`, and the
+  installer offers them on 98 SE.
+- The `-free` and `-nonfree` downloads include CamCheck, a webcam preview
+  tool for the uvc98 driver, in `USBDRV\FREE\tools\camcheck\`.
+- The installer is simpler: Welcome (with what was found), Components,
+  Other USB drivers, Summary, and the settings in one Settings dialog.
+  The Other USB drivers page copies a set the download carries only when
+  ticked and installs none of its drivers; a box per driver package lets
+  Windows use it at a device's first plug.
+- On 98 SE and ME the installer asks once per run whether a hardware
+  wizard is open, and asks again only when it finds one open.
+- Windows 10: the Thunderbolt 3 / USB4 connection
+  manager, with the USB drivers an opt-in. The 64-bit package carries a
+  test-signed catalog for each driver, which 64-bit 8, 8.1 and 10 need in
+  test-signing mode.
+- Stor98 on a drive behind a tunnel: the default on 98 SE to 8 and on
+  8.1 (where the safe-removal mark service also puts it on a drive plugged
+  in later); on 10 Windows' own `stornvme` stays and Stor98 is an opt-in.
+- On 98 SE and ME, `S98VSD.VXD` lets reads and writes of up to 2 MiB
+  reach Stor98 whole; it is installed with Stor98 there.
+- The USB 3 controllers and the Thunderbolt and USB4 controllers are
+  named in Device Manager with maker and product.
+- The xHCI98 USB Tree: a "can run faster" notice for a device on a slower
+  port or behind a slower hub, a red icon while something needs you, a
+  warning after a Thunderbolt or USB4 device is removed unexpectedly, and
+  98 SE's notices in a pop-up of their own.
+- Hibernation with the connection manager installed: on Windows 8, 8.1
+  and 10 a resume, and the start after a shutdown where Fast Startup is
+  on, stopped Windows with bug check 0x9F, and on 2000 to 7 a resume took
+  several minutes; the connection manager now passes a tunnel bridge's
+  power-on down at once on Windows 2000 to 10, instead of holding it for
+  the controller's resume. Standby or hibernation with a tunnelled device
+  attached is still not supported.
+- Fixed: Windows ME's first shutdown after the install no longer hangs; a
+  device with more than four endpoints (an Xbox 360 pad) is no longer
+  refused; a cancelled transfer behind another no longer leaves the ring
+  chained wrong; the elevated `INSTALL /eject` closes the tunnel on a
+  native PCIe hot-plug port; on 8, 8.1 and 10 the uninstall removes the
+  root hubs after their controllers and no longer stops at a tunnel port
+  that is not present (read in one run on 8.1 x64 and 10 x64; on 10 x86
+  removing Stor98 can still need a restart and a second run).
+- Updating from `3.1.0.0`: run `SETUP.EXE`.
+
 ## 3.1.0.0 - 2026-10-19
 
 Every system `3.0.0.0` supports is supported, from the same four

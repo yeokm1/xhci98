@@ -44,17 +44,16 @@
  *                    Cheap when there is nothing to do.
  *   CmReenumSuspend  at the system suspend's D3, before the client sends
  *                    anything to the firmware: the held mark on every
- *                    active member (section 6.3, resume ordering), and the
- *                    filters' watchdog: a fixed five minutes
- *                    (CM_PORTS_HOLD_MAX_MS, below the power-IRP watchdog),
- *                    past which the failure path runs; the client's own
- *                    resume bound is computed and logged as a diagnostic
- *                    only.
+ *                    active member (section 6.3, resume ordering). No
+ *                    power IRP is retained on the mark (task 43.24h); the
+ *                    client's own resume bound and the five-minute cap
+ *                    (CM_PORTS_HOLD_MAX_MS) are computed and logged as
+ *                    diagnostics only.
  *   CmReenumResumed  at the D0 after it, once the client's resume and
  *                    reconciliation have run (ok TRUE) or failed (ok
- *                    FALSE): release the held members' retained D0 IRPs;
- *                    on failure also ask each member's filter for an
- *                    invalidation (section 6.3's failure path).
+ *                    FALSE): clear the held members' marks and ask each
+ *                    member's filter for an invalidation, whatever the
+ *                    outcome (section 6.3's release).
  *   CmReenumStop     at stop, surprise removal, removal and shutdown,
  *                    before the client's unbind: release every held member
  *                    by the failure path, clear the active marks, withdraw
@@ -111,11 +110,10 @@
  * The NHI keeps the correspondence (CM_NHI.Binds) and drives the learning
  * itself. At a suspend under U4On, CM_NHI.U4ResumeBoundMs holds the USB4
  * client's resume bound (TbtU4ResumeBoundUs for the most obligations a
- * domain holds, rounded up) before CmReenumSuspend is called; the hold's
- * watchdog stays the fixed five-minute outer cap on every NT target
- * (CmPortsHoldWatchdog): that bound plus record 21's 10 s is logged when it
- * would pass the cap, and a client still working when the cap ends takes
- * the failure path. CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
+ * domain holds, rounded up) before CmReenumSuspend is called; it is logged,
+ * with the five-minute cap (CmPortsHoldWatchdog) and whether that bound
+ * plus record 21's 10 s would pass it, as diagnostics only: no power IRP
+ * waits on it (task 43.24h). CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
  * USB4 client's bound. CmReenumResumed's `ok` is FALSE whenever an
  * obligation was not met, though the domain keeps running.
  *
@@ -219,6 +217,8 @@ typedef struct _CM_REENUM_PORT {
                                change in publication mode none alone -
                                record 22 section 7.7, U25 - is serviced as
                                the re-enumeration alone)                  */
+    ULONG HeldMark;         /* the work held behind a vanished-child sweep
+                               (task 43.47) carries a marking window      */
     ULONG EjectSerial;      /* the eject's bridge publication and          */
     ULONG EjectGen;         /* population generation, checked at hand-off */
     ULONG WalkLogged;       /* 98: a failed devnode walk was logged       */
@@ -325,7 +325,8 @@ typedef struct _CM_REENUM {
     CM_REENUM_EJECT EjectHook;
     PVOID EjectContext;
 
-    /* The filters' watchdog for a held D0 IRP, ms (CmReenumSuspend). */
+    /* The five-minute cap, ms, logged at CmReenumSuspend (a diagnostic
+     * since task 43.24h: no D0 IRP is held). */
     ULONG HoldBoundMs;
 
     /* 98: the CONFIGMG route, each port's children already seen, and the
@@ -339,6 +340,8 @@ typedef struct _CM_REENUM {
                                (cm_callwk.c, task 42-A.12)               */
     ULONG WkOpenSeen;       /* its opening read back                      */
     ULONG WkActive;         /* the owned-member mask it was last given    */
+    ULONG CallUsable;       /* members whose call worker opened its route,
+                               as last given to the worker (task 43.47)   */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
     ULONG DebtPending;      /* a tunnel change came while it was empty    */
     ULONG RediscoverAt;     /* NowMs of the last                          */
@@ -405,13 +408,20 @@ VOID CmReenumService(struct _CM_NHI *nhi);
 VOID CmReenumSuspend(struct _CM_NHI *nhi);
 VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
 /* A resume the thread will not run (the D0 IRP failed below, or no
- * thread to queue it to): every held member released by the failure path
- * at once, so no bridge's D0 waits for the watchdog. The exception to the
+ * thread to queue it to): every marked member released by the failure
+ * path at once (its mark cleared, its bridge invalidated). The exception to the
  * thread contract: any context at <= DISPATCH_LEVEL, idempotent, and
  * harmless where nothing is held. IRQL: <= DISPATCH_LEVEL, any context
  * (cm_power.c's D0 completion calls it). */
 VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
 VOID CmReenumStop(struct _CM_NHI *nhi);
+/* Task 43.18 (cm_ejectos.c): the index of member `bdf` in this start's
+ * set and its flags (CM_PORT_*), or XHCI_TBT_NO_MEMBER; and member i's
+ * re-enumeration owed with its exposure, run by the next pass that finds
+ * its gate down (ISOLATED_NOT_CLEAN's re-enumeration on the same tunnel).
+ * On the thread. */
+ULONG CmReenumMemberFlags(struct _CM_NHI *nhi, ULONG bdf, PULONG flags);
+VOID CmReenumOwe(struct _CM_NHI *nhi, ULONG i);
 /*
  * The host interface lost (cm_live.h, CM_LIVE_ACT_RECONCILE) in that
  * episode: called once per episode after the client's TUNNEL_DOWN and
@@ -541,6 +551,23 @@ ULONG CmCfgwkOpenState(struct _CM_CFGWK *w, PULONG why, PULONG version);
 /* A walk of every member forgetting the known children no longer present
  * (a tunnel down: a child the user removed is gone by then). */
 VOID CmCfgwkPrune(struct _CM_CFGWK *w);
+/* The 98 instance path of the function at `bdf` (cm_ports.h CmPortsIdPath:
+ * its devfn, each parent bridge's up to the root bus, the root bus), read
+ * through HalGetBusData; and whether a 98 device id names location `bdf`
+ * in either instance form, its expected path given. For the 9x eject
+ * transaction's executors (cm_ejectos.c). PASSIVE_LEVEL, any thread. */
+BOOLEAN CmCfgwkPciPath(ULONG bdf, PULONG path, PULONG count);
+BOOLEAN CmCfgwkIdNames(const char *id, ULONG bdf, const ULONG *want,
+                       ULONG wantCount);
+/* The identities answering on the secondary bus of the bridge at
+ * `bridge` (vendor 15:0, device 31:16), at most `room`; room + 1 when the
+ * bus could not be read completely (a Retry Status, an unread function).
+ * The vanished-child sweep's reading (task 43.47). PASSIVE_LEVEL. */
+ULONG CmCfgwkBusIds(ULONG bridge, PULONG ids, ULONG room);
+/* The members whose call worker is live (task 43.47): a claim of theirs
+ * whose removal failed may become the vanished transaction. Set by the
+ * thread once its call workers are made. <= DISPATCH_LEVEL. */
+VOID CmCfgwkTakeover(struct _CM_CFGWK *w, ULONG members);
 
 /* CONTROLLER_UNAVAILABLE (CmReenumUnavailable): each member in `active`
  * owes the removal of the children retained at its last healthy walk,
@@ -617,18 +644,19 @@ VOID CmRegInit(VOID);
  * from its AddDevice or creation, before it is attached. Any IRQL. */
 VOID CmRegFilterInit(struct _CM_FILTER *filter);
 
-/* The registration list's counters, for the NHI's log at stop. */
+/* The registration list's counters, for the NHI's log at stop; `passed`
+ * counts the device D0s that reached a marked bridge (CmRegPassD0). */
 VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
-                   PULONG refused, PULONG watchdogs);
+                   PULONG refused, PULONG passed);
 
 /* The bridge filter's start has completed below it successfully: publish
  * its entry under its bus, device and function (IoGetDeviceProperty). A
  * filter whose location cannot be read publishes nothing. PASSIVE_LEVEL. */
 VOID CmRegPublish(struct _CM_FILTER *filter);
 
-/* Stop, surprise removal, removal: withdraw the entry, release a retained
- * D0 IRP by the failure path, and wait for every call in flight on it to
- * drain. Idempotent. PASSIVE_LEVEL. */
+/* Stop, surprise removal, removal: withdraw the entry, clear its resume
+ * mark, and wait for every call in flight on it to drain. Idempotent.
+ * PASSIVE_LEVEL. */
 VOID CmRegWithdraw(struct _CM_FILTER *filter);
 
 /* A BusRelations request completed below a bridge filter (successfully):
@@ -643,11 +671,12 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
  * sequence, handed to CmRegRelations with the answer. PASSIVE_LEVEL. */
 ULONG CmRegRelationsBegin(struct _CM_FILTER *filter);
 
-/* A device IRP_MN_SET_POWER to D0 on a bridge filter: TRUE when it was
- * passed down with the hold's completion routine (the caller returns
- * STATUS_PENDING), FALSE when the caller passes it down as usual.
+/* A device IRP_MN_SET_POWER to D0 on a bridge filter, which the caller
+ * then passes down as usual: on a bridge an NHI marked at its suspend, it
+ * is counted and logged to that NHI (cm.reenum.hold.passed, the bridge's
+ * location). Never retained (record 21 section 6.3, task 43.24h).
  * <= DISPATCH_LEVEL. */
-BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
+VOID CmRegPassD0(struct _CM_FILTER *filter);
 
 /*
  * The marks (record 21 section 7.4, revision 3; task 42-A.5). Every
@@ -689,6 +718,16 @@ VOID CmRegAttLocateCaps(struct _CM_FILTER *filter, ULONG address);
 BOOLEAN CmRegAttMayMark(struct _CM_FILTER *filter);
 VOID CmRegAttAnswered(struct _CM_FILTER *filter);
 VOID CmRegAttEvent(struct _CM_FILTER *filter, ULONG which);
+/* CmRegAttSurprise  IRP_MN_SURPRISE_REMOVAL on the PDO (design record 25
+ *                   section 7.6): the entry this attachment was bound to
+ *                   (cmMarkAtt: domain, start and serial), current or a
+ *                   tombstone (the member bridge's bus answer buried it
+ *                   first), its count moved, and, with `started` (this
+ *                   attachment saw the device started) and the entry not
+ *                   counted before, the domain's unexpected removal - or,
+ *                   while the liveness is not ACTIVE or a loss is drained,
+ *                   one counted apart (CmMarksSurprise). PASSIVE_LEVEL. */
+VOID CmRegAttSurprise(struct _CM_FILTER *filter, BOOLEAN started);
 
 /*
  * CmRegStartAllowed  at a start's way down, for an object of this driver's
@@ -711,6 +750,15 @@ VOID CmRegAttRemoved(struct _CM_FILTER *filter, BOOLEAN afterQr);
  * its length. PASSIVE_LEVEL, the connection-manager thread. */
 ULONG CmReenumMarksBuild(struct _CM_NHI *nhi, UCHAR *out, BOOLEAN readAny,
                          ULONG readGen);
+/* The query answer's removal block (design record 25 section 7.6) into
+ * out (CM_Q_RM_BYTES): CM_Q_RF_WATCHED while the domain is listed on the
+ * filter route. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmReenumRemovals(struct _CM_NHI *nhi, UCHAR *out);
+/* A recovery's commit: the debt moved into the barrier (RecBarred |=
+ * RecDebtMask, RecDebtMask = 0) under the registration list's lock, which
+ * CmRegAttSurprise holds while it reads both, so a member is never seen
+ * in neither. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmReenumLossMove(struct _CM_NHI *nhi);
 /* XhciCmEjectConfirm as read (`bytes` of v): checked against the table
  * and, when it names a pending departure, the eject posted once for its
  * member. PASSIVE_LEVEL, the connection-manager thread. */

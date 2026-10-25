@@ -152,6 +152,25 @@ static UCHAR *cmStEntry(UCHAR *buf, ULONG *count, ULONG *flags)
     return e;
 }
 
+/* An ICM entry's generation (record 21 section 5.3): what the router's
+ * USB4 Version said, and not known before the read or where it failed;
+ * Thunderbolt 3, as before the read existed, where none was asked (the
+ * driver asks on every row). */
+static ULONG cmStIcmGen(const TBT_ICM *icm, const TBT_ICM_DEVICE *d)
+{
+    if (!icm->ReadVersion) {
+        return CM_ST_GEN_TBT3;
+    }
+    switch (d->VersionState) {
+    case TBT_ICM_VER_USB4:
+        return CM_ST_GEN_USB4 | ((d->Usb4Version & 0xFFUL) << 8);
+    case TBT_ICM_VER_TBT3:
+        return CM_ST_GEN_TBT3;
+    default:
+        return CM_ST_GEN_UNKNOWN;
+    }
+}
+
 static VOID cmStIcm(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
                     ULONG *count, ULONG *flags)
 {
@@ -180,7 +199,7 @@ static VOID cmStIcm(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
                     ? ((d->Names.TbVendorId & 0xFFFFUL) |
                        ((d->Names.TbModelId & 0xFFFFUL) << 16))
                     : CM_ST_UNKNOWN);
-        cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_TBT3);
+        cmStPut(e, CM_ST_E_GEN, cmStIcmGen(icm, d));
         cmStPut(e, CM_ST_E_LANES, CM_ST_LANES_UNKNOWN);
         /* A Thunderbolt 3 host carries USB inside the PCIe tunnel (the
          * device's own controller): it has no USB3 tunnel to report. */
@@ -344,6 +363,9 @@ ULONG CmStatusBuild(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
     }
     cmStPut(buf, CM_ST_O_ROUTER_COUNT, count);
     cmStPut(buf, CM_ST_O_ENTRY_BYTES, CM_ST_ENTRY_BYTES);
+    flags |= (in->Blocked & CM_ST_F_BLOCKED_MASK) << CM_ST_F_BLOCKED_SHIFT;
+    flags |= ((in->Blocked >> 4) & CM_ST_F_BLOCKED_MASK)
+             << CM_ST_F_EJECTING_SHIFT;
     cmStPut(buf, CM_ST_O_FLAGS, flags);
     cmStPut(buf, CM_ST_O_ECHO, in->Echo);
     return CM_ST_HDR_BYTES + count * CM_ST_ENTRY_BYTES;

@@ -18,7 +18,10 @@
  * thunks and guards) and records each member's children unmarked (the
  * start's baseline). Then, per request: a member's re-enumeration (its
  * vanished children query-removed and removed - a refusal respected, never
- * forced - then Reenumerate_DevNode), retried every CM_WK_RETRY_MS while
+ * forced - then Reenumerate_DevNode; since task 43.47 the vanished
+ * children are the member's sweep's and transactions' where it has a call
+ * worker, cm_eject.h, and this worker refuses any re-enumeration of a
+ * member they hold, CmEjectVanishHeld), retried every CM_WK_RETRY_MS while
  * the bridge's devnode cannot be found or the call fails - with, before
  * that call, the bus numbers of any bridge the tunnel brought up below the
  * member in reset state (record 21 section 6.1.1, XhciCmBridgeNumbering;
@@ -233,6 +236,12 @@ typedef struct _CM_CFGWK {
                                removal resolved with every recorded
                                devnode removed or absent (CmCfgwkRetired,
                                record 22 section 7.7's barrier)          */
+    ULONG Takeover;         /* members whose call worker is live: a claim
+                               whose removal failed may become their
+                               vanished transaction (task 43.47)         */
+    ULONG ClaimFull;        /* a claim found no free record in the
+                               operation in progress: its removal is owed,
+                               so no re-enumeration follows it            */
     ULONG Retry;            /* member calls owed after a failure          */
     ULONG RetryVanish;
     ULONG RetryAt;          /* ms clock of the last failure               */
@@ -508,6 +517,17 @@ static BOOLEAN cmWkIdNames(const char *id, ULONG bdf, const ULONG *want,
     return TRUE;
 }
 
+BOOLEAN CmCfgwkPciPath(ULONG bdf, PULONG path, PULONG count)
+{
+    return cmWkPciPath(bdf, path, count);
+}
+
+BOOLEAN CmCfgwkIdNames(const char *id, ULONG bdf, const ULONG *want,
+                       ULONG wantCount)
+{
+    return cmWkIdNames(id, bdf, want, wantCount);
+}
+
 /* TRUE while member i's lookups read no configuration space: its
  * CONTROLLER_UNAVAILABLE removal is owed, or the re-enumeration after it
  * is (read now, under the lock). */
@@ -721,6 +741,11 @@ static ULONG cmWkBusIds(ULONG bridge, PULONG ids, ULONG room)
         }
     }
     return n;
+}
+
+ULONG CmCfgwkBusIds(ULONG bridge, PULONG ids, ULONG room)
+{
+    return cmWkBusIds(bridge, ids, room);
 }
 
 static VOID cmWkForget(CM_WK_PORT *p, ULONG devnode)
@@ -994,7 +1019,13 @@ static BOOLEAN cmWkEnumAdmit(PCM_CFGWK w, ULONG i)
     BOOLEAN ok;
 
     KeAcquireSpinLock(&w->Lock, &irql);
-    ok = (BOOLEAN)((w->Hold & (1UL << i)) == 0);
+    /* Task 43.47: nor while the member's vanished children are not all
+     * retired (a sweep, a record or a claim on it), read under the same
+     * lock, so a sweep begun after this finds the call in EnumBusy and
+     * waits for it. */
+    ok = (BOOLEAN)((w->Hold & (1UL << i)) == 0 &&
+                   (w->PruneOwed & (1UL << i)) == 0 &&
+                   !CmEjectVanishHeld(w->Port[i].Bdf));
     if (ok) {
         w->EnumBusy |= 1UL << i;
     }
@@ -1141,7 +1172,8 @@ static BOOLEAN cmWkGoneSeed(PCM_CFGWK w, ULONG i, BOOLEAN add, BOOLEAN *none)
 }
 
 static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
-                               ULONG bridge, ULONG devnode);
+                               ULONG bridge, ULONG devnode,
+                               BOOLEAN vanished);
 
 /*
  * CONTROLLER_UNAVAILABLE on member i, request `gen`, over its Gone set:
@@ -1245,7 +1277,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
         vetoed = w->C.Vetoed;
         removed = w->C.Removed;
         calls = w->C.Calls;
-        current = cmWkRemoveChild(w, i, gen, bridge, node);
+        current = cmWkRemoveChild(w, i, gen, bridge, node, FALSE);
         if (w->C.Calls != calls) {
             /* The helper rescanned the bridge (stale after an accepted
              * query, whether or not the removal succeeded). */
@@ -1269,6 +1301,38 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
 }
 
 /*
+ * Task 43.47: whether `devnode` still carries instance id `id`, read back
+ * immediately before a call that names it: CMG_CR_SUCCESS (the call is
+ * made), CMG_CR_NO_SUCH_DEVNODE (verified gone: no such devnode, or a
+ * successful read finds another id - CONFIGMG reuses handles), or
+ * CMG_CR_FAILURE (inconclusive: nothing concluded, no call).
+ */
+static ULONG cmWkStill(PCM_CFGWK w, ULONG devnode, const char *id)
+{
+    char back[CMG_MAX_DEVICE_ID_LEN + 1];
+    ULONG cr;
+    ULONG k;
+
+    cr = CmCfgmgDeviceId(&w->Cfgmg, devnode, back, sizeof(back));
+    if (cr == CMG_CR_NO_SUCH_DEVNODE || cr == CMG_CR_INVALID_DEVNODE) {
+        return CMG_CR_NO_SUCH_DEVNODE;
+    }
+    if (cr != CMG_CR_SUCCESS) {
+        return CMG_CR_FAILURE;
+    }
+    back[CMG_MAX_DEVICE_ID_LEN] = '\0';
+    for (k = 0; k <= CMG_MAX_DEVICE_ID_LEN; k++) {
+        if (back[k] != id[k]) {
+            return CMG_CR_NO_SUCH_DEVNODE;
+        }
+        if (back[k] == '\0') {
+            break;
+        }
+    }
+    return CMG_CR_SUCCESS;
+}
+
+/*
  * The single removal step of a vanished child of member i, on the worker:
  * Query_Remove_SubTree, and Remove_SubTree only when that was accepted (a
  * refusal - a driver with open files - is respected: nothing forced,
@@ -1287,12 +1351,35 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
  * the query (nothing done) or after a completed removal and its rescan:
  * the caller abandons the rest. Any
  * orderly-remove handshake with the child's driver wraps this function.
+ *
+ * Task 43.47: the devnode is claimed in the eject records before the query
+ * (CmEjectClaim). A devnode a record names (a vanished child's
+ * transaction, an eject, a sweep's) is not called, and neither is one when
+ * no record is free: undecided, TRUE returned with nothing counted. The
+ * claim then ends (CmEjectClaimEnd): an accepted query whose removal
+ * failed becomes the vanished transaction, which owns the devnode from
+ * there - its request left in place, no rescan made here (the
+ * re-enumeration owed waits for the retirement) - and, for a vanished
+ * child (`vanished`), so does a refused query, its retries owed; both only
+ * where the member's call worker is live (Takeover).
  */
 static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
-                               ULONG bridge, ULONG devnode)
+                               ULONG bridge, ULONG devnode, BOOLEAN vanished)
 {
     ULONG cr;
     ULONG id;
+    ULONG claim;
+    ULONG first;
+    ULONG last;
+    ULONG attempts;
+    ULONG keptEntry;
+    ULONG keptSeq;
+    ULONG keptGen;
+    BOOLEAN owned;
+    BOOLEAN resumed;
+    BOOLEAN textOk;
+    BOOLEAN takeover;
+    BOOLEAN took;
     ULONG entry;
     ULONG seq;
     ULONG answer;
@@ -1314,9 +1401,10 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     /* The child's ids, for the stor98 handshake below (a function still
      * present with an UP entry published for them). */
     id = 0;
-    if (CmCfgmgDeviceId(&w->Cfgmg, devnode, text, sizeof(text)) !=
-            CMG_CR_SUCCESS ||
-        !CmPortsIdVenDev(text, sizeof(text), &id)) {
+    textOk = (BOOLEAN)(CmCfgmgDeviceId(&w->Cfgmg, devnode, text,
+                                       sizeof(text)) == CMG_CR_SUCCESS);
+    text[CMG_MAX_DEVICE_ID_LEN] = '\0';
+    if (!textOk || !CmPortsIdVenDev(text, sizeof(text), &id)) {
         id = 0;
     }
     if (!cmWkCurrent(w, i, gen)) {
@@ -1363,17 +1451,69 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     if (!cmWkCurrent(w, i, gen)) {
         return FALSE;
     }
+    /* The claim before anything irreversible (task 43.47). */
+    claim = 0;
+    owned = FALSE;
+    resumed = FALSE;
+    keptEntry = CM_EJ_NONE;
+    keptSeq = 0;
+    keptGen = 0;
+    if (textOk) {
+        claim = CmEjectClaim(w->Port[i].Bdf, devnode, text, &owned, &resumed,
+                             &keptEntry, &keptSeq, &keptGen);
+    }
+    if (claim == 0) {
+        if (!owned) {
+            w->ClaimFull = 1;
+        }
+        cmWkLog(w, "cm.vanish.claim.refused",
+                (w->Port[i].Bdf << 8) |
+                    (owned ? 1UL : (textOk ? 2UL : 3UL)));
+        return TRUE;
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    takeover = (BOOLEAN)((w->Takeover & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
     /* A vanished child leaves the known set whatever follows: CONFIGMG
      * reuses a freed devnode's handle, so a re-plug's devnode can come
      * back under the same value and must be marked as new (section
      * 7.4). */
     cmWkForget(&w->Port[i], devnode);
-    cr = CmCfgmgQueryRemove(&w->Cfgmg, devnode);
+    if (resumed) {
+        /* A query of this devnode was accepted before (its parked claim):
+         * never asked again; the removal alone, the request it left in
+         * place withdrawn on success. */
+        cmWkLog(w, "cm.vanish.claim.resumed", w->Port[i].Bdf);
+        entry = keptEntry;
+        seq = keptSeq;
+        egen = keptGen;
+        goto removal;
+    }
+    /* Its identity read back right before the query (task 43.47): gone,
+     * nothing owed; not read, no query made. */
+    cr = cmWkStill(w, devnode, text);
+    if (cr == CMG_CR_SUCCESS) {
+        cr = CmCfgmgQueryRemove(&w->Cfgmg, devnode);
+    } else if (cr != CMG_CR_NO_SUCH_DEVNODE) {
+        if (CmEjectClaimEnd(claim, CM_EJ_NO_CR, CM_EJ_NO_CR, 0, 0, 0,
+                            CM_EJ_NONE, 0, 0, vanished, takeover)) {
+            cmWkLog(w, "cm.vanish.takeover", (w->Port[i].Bdf << 8) | 4UL);
+        }
+        return TRUE;
+    }
     cmWkLog(w, "cm.reenum.9x.query-remove", cr);
     if (cr != CMG_CR_SUCCESS) {
         /* The re-enumeration after it only asks PCI.VXD to read the bus
-         * again. */
-        w->C.Vetoed++;
+         * again. A vanished child's refusal may become its transaction,
+         * which asks again, backed off (CmEjVanishRetryMs). A devnode
+         * read gone is no veto. */
+        if (cr != CMG_CR_NO_SUCH_DEVNODE) {
+            w->C.Vetoed++;
+        }
+        if (CmEjectClaimEnd(claim, cr, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE,
+                            0, 0, vanished, takeover)) {
+            cmWkLog(w, "cm.vanish.takeover", (w->Port[i].Bdf << 8) | 1UL);
+        }
         return TRUE;
     }
     /* stor98's orderly-removal handshake (MD-5; cm_nvlink.h), for a
@@ -1412,15 +1552,33 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
         }
         cmWkLog(w, "cm.nvlink.9x.remove-answer", (seq << 8) | answer);
     }
+removal:
     /* Remove_SubTree; after a stor98 request, retried every
      * CM_NVLINK_RETRY_MS while it fails, until CM_NVLINK_RETRY_FOR_MS after
      * the first attempt (R11 O6's bound, CmNvlinkRetryAgain; a veto is
      * never forced). */
     start = cmWkNowTicks();
+    first = 0;
+    last = 0;
+    attempts = 0;
     for (;;) {
-        cr = CmCfgmgRemove(&w->Cfgmg, devnode);
+        /* Published before the first attempt: the member's blocked bit
+         * follows O6's 30 s even while this call runs (task 43.47). */
+        last = CmEjectNow();
+        if (attempts == 0) {
+            first = last;
+            CmEjectClaimAccepted(claim, first);
+        }
+        attempts++;
+        /* Each attempt names the devnode only while it still carries the
+         * id (task 43.47): gone, retired; not read, a failed attempt. */
+        cr = cmWkStill(w, devnode, text);
+        if (cr == CMG_CR_SUCCESS) {
+            cr = CmCfgmgRemove(&w->Cfgmg, devnode);
+        }
         cmWkLog(w, "cm.reenum.9x.remove", cr);
-        if (cr == CMG_CR_SUCCESS || entry == CM_NVLINK_NONE ||
+        if (cr == CMG_CR_SUCCESS || cr == CMG_CR_NO_SUCH_DEVNODE ||
+            entry == CM_NVLINK_NONE ||
             !CmNvlinkRetryAgain(cmWkSince(start))) {
             break;
         }
@@ -1430,6 +1588,25 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     }
     if (cr == CMG_CR_SUCCESS) {
         w->C.Removed++;
+    }
+    took = CmEjectClaimEnd(claim, CMG_CR_SUCCESS, cr, first, last, attempts,
+                           entry, seq, egen, vanished, takeover);
+    if (took || (cr != CMG_CR_SUCCESS && cr != CMG_CR_NO_SUCH_DEVNODE &&
+                 takeover == FALSE)) {
+        /* The vanished transaction owns the devnode from here (or, with no
+         * call worker, its parked claim, this worker's to finish), its
+         * request left in place for it to withdraw (R9a); the
+         * re-enumeration this removal owed waits for its retirement
+         * (CmEjectVanishHeld), posted here when the request went stale. */
+        cmWkLog(w, "cm.vanish.takeover",
+                (w->Port[i].Bdf << 8) | (took ? 2UL : 3UL));
+        if (cmWkCurrent(w, i, gen)) {
+            return TRUE;
+        }
+        KeAcquireSpinLock(&w->Lock, &irql);
+        w->ReqReenum |= 1UL << i;
+        KeReleaseSpinLock(&w->Lock, irql);
+        return FALSE;
     }
     /* R11 O5: REMOVE_PENDING cleared after the removal. */
     if (entry != CM_NVLINK_NONE) {
@@ -1462,6 +1639,115 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     }
     cmWkLog(w, "cm.reenum.9x.reenumerate", (w->Port[i].Bdf << 8) | cr);
     return FALSE;
+}
+
+/*
+ * Task 43.47: one parked claim of member i due for its retry, made here
+ * whatever the member's admission (a claim parks only where the member has
+ * no call worker to take it over): its devnode's instance id read back
+ * first (gone, or another id: verified gone, the claim freed; not read:
+ * parked again), then the vanished child's query asked again where it was
+ * refused, and the removal of an accepted one - never a second query of an
+ * accepted devnode - its request withdrawn on success.
+ */
+static VOID cmWkParked(PCM_CFGWK w, ULONG i)
+{
+    ULONG claim;
+    ULONG devnode;
+    ULONG what;
+    ULONG entry;
+    ULONG seq;
+    ULONG egen;
+    ULONG cr;
+    ULONG now;
+    ULONG k;
+    BOOLEAN takeover;
+    KIRQL irql;
+    char id[CMG_MAX_DEVICE_ID_LEN + 1];
+    char back[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    claim = CmEjectParkedNext(w->Port[i].Bdf, &devnode, id, sizeof(id), &what,
+                              &entry, &seq, &egen);
+    if (claim == 0) {
+        return;
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    takeover = (BOOLEAN)((w->Takeover & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    now = CmEjectNow();
+    cr = CmCfgmgDeviceId(&w->Cfgmg, devnode, back, sizeof(back));
+    back[CMG_MAX_DEVICE_ID_LEN] = '\0';
+    if (cr == CMG_CR_SUCCESS) {
+        for (k = 0; k <= CMG_MAX_DEVICE_ID_LEN; k++) {
+            if (back[k] != id[k]) {
+                cr = CMG_CR_NO_SUCH_DEVNODE;
+                break;
+            }
+            if (back[k] == '\0') {
+                break;
+            }
+        }
+    } else if (cr == CMG_CR_INVALID_DEVNODE) {
+        cr = CMG_CR_NO_SUCH_DEVNODE;
+    }
+    if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+        /* Verified gone: its request withdrawn and the prune posted while
+         * the claim still holds the gate, then the claim ended. */
+        if (entry != CM_EJ_NONE) {
+            CmNvlinkWkWithdraw(entry, seq);
+        }
+        CmCfgwkPrune(w);
+        (VOID)CmEjectClaimEnd(claim, CMG_CR_SUCCESS, CMG_CR_NO_SUCH_DEVNODE,
+                              now, now, 1, CM_EJ_NONE, 0, 0, TRUE, takeover);
+        cmWkLog(w, "cm.vanish.parked.gone", w->Port[i].Bdf);
+        return;
+    }
+    if (cr != CMG_CR_SUCCESS) {
+        /* Not read: nothing concluded, parked again. */
+        (VOID)CmEjectClaimEnd(claim,
+                              what == CM_EJ_DO_QUERY ? CMG_CR_FAILURE
+                                                     : CMG_CR_SUCCESS,
+                              what == CM_EJ_DO_QUERY ? CM_EJ_NO_CR
+                                                     : CMG_CR_FAILURE,
+                              now, now, 1, entry, seq, egen, TRUE, takeover);
+        return;
+    }
+    if (what == CM_EJ_DO_QUERY) {
+        cr = CmCfgmgQueryRemove(&w->Cfgmg, devnode);
+        cmWkLog(w, "cm.vanish.parked.query", (w->Port[i].Bdf << 8) | cr);
+        if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+            if (entry != CM_EJ_NONE) {
+                CmNvlinkWkWithdraw(entry, seq);
+            }
+            CmCfgwkPrune(w);
+        }
+        if (cr != CMG_CR_SUCCESS) {
+            (VOID)CmEjectClaimEnd(claim, cr, CM_EJ_NO_CR, 0, 0, 0, CM_EJ_NONE,
+                                  0, 0, TRUE, takeover);
+            return;
+        }
+        now = CmEjectNow();
+    }
+    CmEjectClaimAccepted(claim, now);
+    cr = cmWkStill(w, devnode, id);
+    if (cr == CMG_CR_SUCCESS) {
+        cr = CmCfgmgRemove(&w->Cfgmg, devnode);
+    }
+    cmWkLog(w, "cm.vanish.parked.remove", (w->Port[i].Bdf << 8) | cr);
+    if (cr == CMG_CR_SUCCESS || cr == CMG_CR_NO_SUCH_DEVNODE) {
+        if (cr == CMG_CR_SUCCESS) {
+            w->C.Removed++;
+        }
+        if (entry != CM_EJ_NONE) {
+            /* R11 O5: the request it kept, withdrawn after the removal. */
+            CmNvlinkWkWithdraw(entry, seq);
+        }
+        /* Retired: this worker's sets forget the handle before any
+         * re-enumeration it makes. */
+        CmCfgwkPrune(w);
+    }
+    (VOID)CmEjectClaimEnd(claim, CMG_CR_SUCCESS, cr, now, now, 1, entry, seq,
+                          egen, TRUE, takeover);
 }
 
 /* tbt_brnum.c's accessors: PCI.VXD's own configuration-space services,
@@ -1769,6 +2055,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         w->C.CallFailures++;
         return FALSE;
     }
+    w->ClaimFull = 0;
     if (removeVanished) {
         idCount = cmWkBusIds(p->Bdf, ids, CM_WK_BUS_FUNCTIONS);
         complete = FALSE;
@@ -1805,7 +2092,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
             cmWkRetire(p, children[c], &retired);
             removed = w->C.Removed;
             calls = w->C.Calls;
-            current = cmWkRemoveChild(w, i, gen, bridge, children[c]);
+            current = cmWkRemoveChild(w, i, gen, bridge, children[c], TRUE);
             if (w->C.Calls != calls) {
                 /* The helper rescanned the bridge. */
                 p->PubGen++;
@@ -1820,6 +2107,12 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     }
     if (!cmWkCurrent(w, i, gen)) {
         return TRUE;
+    }
+    if (w->ClaimFull) {
+        /* Task 43.47: a vanished child found no free record for its
+         * claim, so it was not removed: failed, tried again (its removal
+         * before any re-enumeration of the member). */
+        return FALSE;
     }
     if (!cmWkPruneClear(w, i)) {
         /* A prune posted during the operation: paid first (failed,
@@ -1947,9 +2240,13 @@ static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
     ULONG open;
 
     KeAcquireSpinLock(&w->Lock, &irql);
+    /* Task 43.47: nor while a vanished child of the member is not retired
+     * or the worker's prune walk is owed. */
     open = (ULONG)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                   ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
-                    (1UL << i)) == 0);
+                   ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold |
+                     w->PruneOwed) &
+                    (1UL << i)) == 0 &&
+                   !CmEjectVanishHeld(w->Port[i].Bdf));
     KeReleaseSpinLock(&w->Lock, irql);
     return open;
 }
@@ -1966,8 +2263,10 @@ static BOOLEAN cmWkNiAdmit(PCM_CFGWK w, ULONG i)
 
     KeAcquireSpinLock(&w->Lock, &irql);
     open = (BOOLEAN)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                     ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
-                      (1UL << i)) == 0);
+                     ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold |
+                       w->PruneOwed) &
+                      (1UL << i)) == 0 &&
+                     !CmEjectVanishHeld(w->Port[i].Bdf));
     if (open) {
         w->EnumBusy |= 1UL << i;
     }
@@ -3028,6 +3327,22 @@ static VOID cmWkThread(PVOID context)
             cmWkOp(w, CM_WK_NO_OP, 0);
         }
         if (go && w->OpenState == CM_CFGWK_OPEN_OK) {
+            /* Task 43.47: parked claims retried (a removal every 2 s, a
+             * refused query backed off, CmEjClaimRetry), before and
+             * whatever the members' re-enumerations. */
+            cmWkOp(w, CM_WK_NO_OP, 0);
+            for (i = 0; i < w->Members && go; i++) {
+                if (!CmEjectParkedAny(w->Port[i].Bdf)) {
+                    continue;
+                }
+                cmWkLeave(w);
+                go = cmWkEnter(w);
+                if (go) {
+                    cmWkParked(w, i);
+                }
+            }
+        }
+        if (go && w->OpenState == CM_CFGWK_OPEN_OK) {
             for (i = 0; i < w->Members; i++) {
                 if ((reenum & (1UL << i)) == 0 ||
                     !cmWkCurrent(w, i, gen[i])) {
@@ -3042,10 +3357,12 @@ static VOID cmWkThread(PVOID context)
                     failedVanish |= vanish & (1UL << i);
                     continue;
                 }
-                if (cmWkGoneOwed(w, i) || cmWkHeld(w, i)) {
+                if (cmWkGoneOwed(w, i) || cmWkHeld(w, i) ||
+                    CmEjectVanishHeld(w->Port[i].Bdf)) {
                     /* Its CONTROLLER_UNAVAILABLE removal is still owed,
-                     * or its barrier stands: no re-enumeration before
-                     * it, tried again later. */
+                     * its barrier stands, or a vanished child of it is not
+                     * retired (task 43.47): no re-enumeration before it,
+                     * tried again later. */
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
                     continue;
@@ -3130,7 +3447,8 @@ static VOID cmWkThread(PVOID context)
         timed = (BOOLEAN)(w->Retry != 0 || w->MarkOpen || w->PruneOwed != 0 ||
                           w->ReqGone != 0);
         for (i = 0; i < w->Members && !timed; i++) {
-            if (CmNiBusy(&w->Port[i].Ni)) {
+            if (CmNiBusy(&w->Port[i].Ni) ||
+                CmEjectParkedAny(w->Port[i].Bdf)) {
                 timed = TRUE;
             }
         }
@@ -3269,6 +3587,15 @@ VOID CmCfgwkGone(PCM_CFGWK w, ULONG members, ULONG active)
     /* Removal only: no re-enumeration is asked (the barrier's member is
      * re-enumerated by the change that lifts it). */
     cmWkGoneReq(w, members, active, FALSE);
+}
+
+VOID CmCfgwkTakeover(PCM_CFGWK w, ULONG members)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->Takeover = members;
+    KeReleaseSpinLock(&w->Lock, irql);
 }
 
 VOID CmCfgwkHold(PCM_CFGWK w, ULONG members)

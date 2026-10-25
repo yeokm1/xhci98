@@ -10,6 +10,7 @@
 #include "tr_res.h"
 
 IDI_APP ICON "xhcitr.ico"
+IDI_RED ICON "xhcitr-f.ico"
 
 1 24 "xhcitr.manifest"
 
@@ -69,6 +70,8 @@ BEGIN
         MENUITEM "Auto &Refresh",                       IDM_V_AUTO
         MENUITEM SEPARATOR
         MENUITEM "Start at &login",                     IDM_LOGIN
+        MENUITEM "&Warn when a device is removed unexpectedly", IDM_RMWARN
+        MENUITEM "Tell me when a device can run &faster", IDM_FAST
         MENUITEM SEPARATOR
         MENUITEM "Logging le&vel...",                   IDM_LEVEL
     END

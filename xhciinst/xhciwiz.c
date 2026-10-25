@@ -43,6 +43,7 @@
 #include "../src/xhci_version.h"
 #include "inst_core.h"
 #include "inst_eng.h"
+#include "wiz_lay.h"
 #include "xhciwiz_res.h"
 
 /* MSVC 6.0's headers predate the pointer-sized window longs and declare a
@@ -76,6 +77,18 @@
 #define WM_APP_LINE         (WM_APP + 4)    /* report text: lParam text      */
 #define WM_APP_GATE         (WM_APP + 5)    /* sent: 1 go on, 0 stop         */
 #define WM_APP_FOCUS        (WM_APP + 6)    /* the focus to Next or Finish   */
+#define WM_APP_FIT          (WM_APP + 7)    /* the sheet moved into the work area */
+
+/* The wheel, which MSVC 6.0's headers give only for a later WINVER. */
+#ifndef WM_MOUSEWHEEL
+#define WM_MOUSEWHEEL       0x020A
+#endif
+#ifndef WHEEL_DELTA
+#define WHEEL_DELTA         120
+#endif
+#ifndef SPI_GETWHEELSCROLLLINES
+#define SPI_GETWHEELSCROLLLINES 104
+#endif
 
 #define JOB_READ            1
 #define JOB_RUN             2
@@ -92,7 +105,8 @@
 #define P_PROGRESS          7
 #define P_STEPS             8
 #define P_FINISH            9
-#define P_COUNT             10
+#define P_OTHER             10  /* after P_COMP (record 26 section 6.7.4) */
+#define P_COUNT             11
 
 #define WIZ_PATH            520
 #define WIZ_ROWS            12
@@ -134,6 +148,20 @@ static int uasChoice = 1;       /* the UAS driver's box (owner, 2026-10-19) */
 static int uasOwn = 1;          /* its own state while the USB box is off   */
 static int trayChoice = 1;
 static int trayHere;
+/* Task 43.27 (record 26 section 5.3, draft 33): the "can run faster" box,
+ * the computer's choice in force, and whether /faster or /nofaster made it
+ * changed. */
+static int fastChoice = 1;
+static int fastNow = 1;
+static int fastForced;
+/* The USB storage drivers' box, Windows 98 SE alone (record 26 section
+ * 6.5): shown, offered (the download's seven verified), ticked, the
+ * detection's line. */
+static int storShown;
+static int storOffered;
+static int storChoice;
+static char storNote[600];
+static int compLaidOut;
 
 /* Stor98, the bundled NVMe driver (record 26 sections 5.3 and 5.6): the
  * box, and the settings chosen (a word or a number as text, set or kept),
@@ -141,18 +169,22 @@ static int trayHere;
  * boxes for the drives an update touches. */
 static int s98Have;
 static int s98Choice;
+/* S98VSD.VXD's box (design record 30 section 7.1): Stor98's child. */
+static int vsdShown;
+static int vsd9x;
+static int vsdChoice;
+/* Record 26 section 5.0 (draft 35): Stor98's and S98VSD.VXD's own states,
+ * the table's default or the user's untick, kept while their parents are
+ * unticked; the "Replace the stored build" box. */
+static int s98Own = 1;
+static int vsdOwn = 1;
+static int restageSys;          /* Vista and later: the row is on the page */
+static int restageHere;         /* the store trap found: the row open      */
+static int restageChoice;
+static int readDone;            /* the reading's job has ended */
 static char s98Ver[32];
 static int s98WinSet[INST_S98_COUNT];
 static char s98WinVal[INST_S98_COUNT][32];
-#define WIZ_S98_ASKED   2
-static HWND s98Label[WIZ_S98_ASKED];
-static HWND s98Combo[WIZ_S98_ASKED];
-static HWND s98Now[WIZ_S98_ASKED];
-static HWND s98Sep[WIZ_S98_ASKED];
-static int s98ComboRow[WIZ_S98_ASKED];
-static int s98ComboCount;
-/* The one box of the 98 SE and ME file update (record 26 section 6.3). */
-static HWND s98UnusedBox;
 static char dirChoice[WIZ_PATH];
 static char dirNow[WIZ_PATH];
 
@@ -385,6 +417,8 @@ static void end_run(int code)
     }
 }
 
+static void os_version(OSVERSIONINFOA *v);
+
 static unsigned __stdcall job_main(void *arg)
 {
     int job = (int)(size_t)arg;
@@ -416,14 +450,42 @@ static unsigned __stdcall job_main(void *arg)
             /* Ticked with the Thunderbolt box (owner, 2026-10-19,
              * replacing "never unasked"); /nostor98 unticks it. */
             inst_eng_s98_state(&s98Have, s98Ver, sizeof(s98Ver));
-            s98Choice = s98Have && tbChoice && !opts->NoStor98;
+            /* The per-system table (record 26 section 5.0, draft 35). */
+            s98Own = !opts->NoStor98 &&
+                     (opts->Stor98 || inst_eng_s98_default());
+            s98Choice = s98Have && tbChoice && s98Own;
             inst_eng_s98_choose(s98Choice);
+            {
+                int sh;
+                int op;
+                inst_eng_vsd_state(&vsdShown, &vsd9x);
+                vsdOwn = !opts->NoStor98Vxd;
+                vsdChoice = inst_vsd_box(vsd9x, vsdShown, s98Choice,
+                                         opts->NoStor98Vxd, &sh, &op);
+                inst_eng_vsd_choose(vsdChoice);
+            }
+            storShown = inst_eng_stor_state(&storOffered, &storChoice,
+                                            storNote, sizeof(storNote));
+            /* The other USB drivers' boxes: unticked, but by /free,
+             * /nonfree and the /wdm...: switches (record 26 sections 6.7.4
+             * and 6.7.11), which the read applied to the engine's choices. */
             EnterCriticalSection(&textLock);
             sink = &planText;
             LeaveCriticalSection(&textLock);
             planCode = inst_eng_plan();
+            {
+                OSVERSIONINFOA v;
+                os_version(&v);
+                restageSys = v.dwPlatformId == VER_PLATFORM_WIN32_NT &&
+                             v.dwMajorVersion >= 6;
+            }
+            restageHere = inst_eng_restage_state();
+            restageChoice = opts->Restage;
             inst_eng_dir_default(dirChoice, sizeof(dirChoice), dirNow,
                                  sizeof(dirNow), &trayHere);
+            fastNow = inst_eng_fast_state();
+            fastForced = opts->Faster || opts->NoFaster;
+            fastChoice = opts->Faster ? 1 : opts->NoFaster ? 0 : fastNow;
             if (opts->To[0] != '\0') {
                 inst_copy(dirChoice, opts->To, sizeof(dirChoice));
             }
@@ -452,6 +514,12 @@ static unsigned __stdcall job_main(void *arg)
         LeaveCriticalSection(&textLock);
         inst_copy(opts->To, dirChoice, sizeof(opts->To));
         opts->NoTray = !trayChoice;
+        /* Written only when changed from the choice in force (record 23
+         * section 9.5 item 7), or when a switch asked for it. */
+        opts->Faster = trayHere && (fastForced || fastChoice != fastNow) &&
+                       fastChoice;
+        opts->NoFaster = trayHere && (fastForced || fastChoice != fastNow) &&
+                         !fastChoice;
         opts->SetCount = 0;
         for (i = 0; i < INST_MAX_VALUES; i++) {
             inst_eng_choose_value(i, choiceSet[i] && choice_live(i),
@@ -546,7 +614,8 @@ static const char *system_name(char *out, size_t cap)
 
     os_version(&v);
     name = inst_os_name(v.dwPlatformId == VER_PLATFORM_WIN32_NT,
-                        v.dwMajorVersion, v.dwMinorVersion);
+                        v.dwMajorVersion, v.dwMinorVersion,
+                        v.dwBuildNumber & 0xFFFFUL);
     _snprintf(out, cap - 1, "This computer: %s (%lu.%lu.%lu %s), %s.", name,
               (unsigned long)v.dwMajorVersion, (unsigned long)v.dwMinorVersion,
               (unsigned long)(v.dwBuildNumber & 0xFFFFUL), v.szCSDVersion,
@@ -610,6 +679,8 @@ static void open_devmgr(HWND owner)
 
 /* ---- the welcome pages ----------------------------------------------------- */
 
+static void found_fill(HWND dlg);
+
 static void welcome_texts(HWND dlg)
 {
     char title[128];
@@ -618,7 +689,8 @@ static void welcome_texts(HWND dlg)
     /* The connection manager alone: on 8 and 8.1 the install's texts; on a
      * machine with it alone registered the uninstall's (record 26 draft
      * 8). */
-    int cm = uninstallMode ? inst_eng_cm_only_machine() : is_cm_only_system();
+    int cm = uninstallMode ? inst_eng_cm_only_machine() :
+             (is_cm_only_system() && tbHave);
 
     _snprintf(title, sizeof(title) - 1, "%s %s",
               uninstallMode ? inst_page_text(cm ? INST_PT_UN_TITLE_CM :
@@ -633,6 +705,8 @@ static void welcome_texts(HWND dlg)
                                                   (cm ? INST_PT_UN_WARN_CM :
                                                    INST_PT_UN_WARN) :
                                                   cm ? INST_PT_WELCOME_CM :
+                                                  is_cm_only_system() ?
+                                                  INST_PT_WELCOME_TOOLS :
                                                   INST_PT_WELCOME));
     if (uninstallMode) {
         SetDlgItemTextA(dlg, IDC_U_AGREE, inst_page_text(cm ?
@@ -663,6 +737,21 @@ static void welcome_state(HWND dlg)
     EnterCriticalSection(&textLock);
     set_edit(dlg, IDC_STATUS, readText.Buf != NULL ? readText.Buf : "");
     LeaveCriticalSection(&textLock);
+    if (!uninstallMode) {
+        /* What was found, on the Welcome page (record 26 section 5.0): the
+         * devices and the plan's text once the reading has ended; a
+         * refusal shows its text alone. */
+        int list = readDone && readCode < 0 && planCode < 0;
+        ShowWindow(GetDlgItem(dlg, IDC_LIST), list ? SW_SHOW : SW_HIDE);
+        if (list) {
+            found_fill(dlg);
+            EnterCriticalSection(&textLock);
+            if (planText.Buf != NULL && planText.Buf[0] != '\0') {
+                set_edit(dlg, IDC_STATUS, planText.Buf);
+            }
+            LeaveCriticalSection(&textLock);
+        }
+    }
     if (readCode >= 0 || planCode >= 0) {
         if (planCode >= 0) {
             EnterCriticalSection(&textLock);
@@ -680,7 +769,7 @@ static void welcome_state(HWND dlg)
     }
 }
 
-/* ---- the Found page ----------------------------------------------------- */
+/* ---- what was found, on the Welcome page --------------------------------- */
 
 static void found_fill(HWND dlg)
 {
@@ -691,7 +780,9 @@ static void found_fill(HWND dlg)
     int i;
     int n = 0;
 
-    SetDlgItemTextA(dlg, IDC_TEXT, inst_page_text(INST_PT_FOUND));
+    if (lv == NULL) {
+        return;
+    }
     if (ListView_GetItemCount(lv) == 0 &&
         Header_GetItemCount(ListView_GetHeader(lv)) == 0) {
         memset(&c, 0, sizeof(c));
@@ -724,9 +815,6 @@ static void found_fill(HWND dlg)
         ListView_InsertItem(lv, &it);
         ListView_SetItemText(lv, 0, 2, "staged for later");
     }
-    EnterCriticalSection(&textLock);
-    set_edit(dlg, IDC_DETAIL, planText.Buf != NULL ? planText.Buf : "");
-    LeaveCriticalSection(&textLock);
 }
 
 /* The plan made again for the choices as they stand (record 26 section
@@ -740,12 +828,23 @@ static void replan(void)
     inst_eng_usb_choose(usbChoice);
     inst_eng_tb_choose(tbChoice);
     inst_eng_s98_choose(s98Choice);
+    inst_eng_vsd_choose(vsdChoice);
+    inst_eng_stor_choose(storChoice);
     EnterCriticalSection(&textLock);
     tb_clear(&planText);
     sink = &planText;
     LeaveCriticalSection(&textLock);
     planCode = inst_eng_plan();
     rowCount = inst_eng_rows(rows, INST_MAX_VALUES);
+    /* The store trap read again with the components as they stand: the
+     * Thunderbolt box ticked may find one (record 23 section 5.7). */
+    restageHere = inst_eng_restage_state();
+    if (pageWnd[P_COMP] != NULL) {
+        EnableWindow(GetDlgItem(pageWnd[P_COMP], IDC_C_RESTAGE), restageHere);
+        if (!restageHere) {
+            CheckDlgButton(pageWnd[P_COMP], IDC_C_RESTAGE, BST_UNCHECKED);
+        }
+    }
 }
 
 /* ---- the Components page (record 26 section 5.3) ------------------------- */
@@ -758,11 +857,40 @@ static void comp_s98_sync(HWND dlg)
                                  IsDlgButtonChecked(dlg, IDC_C_TB) ==
                                  BST_CHECKED);
 
+    int sh;
+    int vopen;
+
     if (!open) {
         CheckDlgButton(dlg, IDC_C_S98, BST_UNCHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_S98), open);
     EnableWindow(GetDlgItem(dlg, IDC_C_S98_T), open);
+    /* S98VSD.VXD, Stor98's child (record 30 section 7.1): open only while
+     * Stor98 is ticked, on 98 SE and ME; unticked and greyed otherwise. */
+    inst_vsd_box(vsd9x, vsdShown, IsDlgButtonChecked(dlg, IDC_C_S98) ==
+                 BST_CHECKED, 0, &sh, &vopen);
+    if (!vopen) {
+        CheckDlgButton(dlg, IDC_C_VSD, BST_UNCHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_C_VSD), vopen);
+}
+
+/* Ticked whenever Stor98 is ticked (owner, 2026-10-22), unless the user
+ * unticked it while Stor98 was (record 26 section 5.0). */
+static void comp_vsd_follow(HWND dlg)
+{
+    CheckDlgButton(dlg, IDC_C_VSD, IsDlgButtonChecked(dlg, IDC_C_S98) ==
+                   BST_CHECKED && vsdOwn ? BST_CHECKED : BST_UNCHECKED);
+    comp_s98_sync(dlg);
+}
+
+/* Stor98 with its parent: its own state while the Thunderbolt box is
+ * ticked, unticked without it (record 26 section 5.0, draft 35). */
+static void comp_s98_follow(HWND dlg)
+{
+    CheckDlgButton(dlg, IDC_C_S98, IsDlgButtonChecked(dlg, IDC_C_TB) ==
+                   BST_CHECKED && s98Own ? BST_CHECKED : BST_UNCHECKED);
+    comp_vsd_follow(dlg);
 }
 
 /* The USB drivers' box and what it locks (record 26 section 5.3, draft
@@ -788,10 +916,10 @@ static void comp_usb_state(HWND dlg)
     if (!usb && tbHave) {
         /* Locked on: Stor98 follows its parent here too (owner,
          * 2026-10-19), as on a click of the Thunderbolt box. */
-        if (IsDlgButtonChecked(dlg, IDC_C_TB) != BST_CHECKED) {
-            CheckDlgButton(dlg, IDC_C_S98, BST_CHECKED);
-        }
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
+        CheckDlgButton(dlg, IDC_C_S98, s98Own ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(dlg, IDC_C_VSD, s98Own && vsdOwn ? BST_CHECKED :
+                                                         BST_UNCHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_TB), usb && tbHave);
     comp_s98_sync(dlg);
@@ -809,8 +937,176 @@ static void comp_usb_click(HWND dlg)
     comp_usb_state(dlg);
 }
 
+static int dlu_y(HWND dlg, int y);
+
+/* A read-only edit box's height for a number of lines of its font: the
+ * lines, its frame (the control's window less its client height) and
+ * 2 dialog units for the edit control's own margins (record 26 section
+ * 5.4: the Settings note, and the Components page's storage box). */
+static int box_lines_h(HWND dlg, int id, int lines)
+{
+    HWND box = GetDlgItem(dlg, id);
+    HFONT f = (HFONT)SendMessageA(box, WM_GETFONT, 0, 0);
+    HDC dc = GetDC(box);
+    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    TEXTMETRICA tm;
+    RECT win;
+    RECT cli;
+
+    GetTextMetricsA(dc, &tm);
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(box, dc);
+    GetWindowRect(box, &win);
+    GetClientRect(box, &cli);
+    return lines * tm.tmHeight + (win.bottom - win.top) - cli.bottom +
+           dlu_y(dlg, 2);
+}
+
+/* A control moved down by dy pixels (up when negative). */
+static void comp_move(HWND dlg, int id, int dy)
+{
+    HWND h = GetDlgItem(dlg, id);
+    RECT r;
+    POINT pt;
+
+    GetWindowRect(h, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(dlg, &pt);
+    SetWindowPos(h, NULL, pt.x, pt.y + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+}
+
+/* The page as 98 SE shows it (record 26 section 5.3, draft 17): the USB
+ * storage drivers' row under the UAS box, in the place the locked USB
+ * drivers' sentence leaves, and the rows below it moved down; on every
+ * other system the row is hidden and the template's layout stands. The
+ * "Replace the stored build" box on Vista and later (never with the
+ * storage row), open only where the store trap was found: elsewhere the
+ * folder's line and the buttons take its place (record 26 section 5.0,
+ * draft 35). The storage row's box shows three whole lines of its font at
+ * least (owner, 2026-10-24), and more where its template's room holds
+ * more: its height is measured (box_lines_h), never past the room unless
+ * three lines need it, when the rows below move down by the difference
+ * too. The rows below move down by a little less each, the page keeping
+ * its height: each pair is a control and its move, in dialog units. */
+static void comp_layout(HWND dlg)
+{
+    static const int below[][2] = {
+        { IDC_C_TB, 22 }, { IDC_C_TB_T, 22 }, { IDC_C_S98, 20 },
+        { IDC_C_S98_T, 20 }, { IDC_C_VSD, 20 }, { IDC_C_TRAY, 19 },
+        { IDC_C_FAST, 19 }, { IDC_C_RESTAGE, 19 }, { IDC_C_DIRLINE, 18 },
+        { IDC_C_SETTINGS, 17 }, { IDC_C_FOLDER, 17 }
+    };
+    static const int last[] = { IDC_C_DIRLINE, IDC_C_SETTINGS, IDC_C_FOLDER };
+    RECT r;
+    HWND h;
+    POINT pt;
+    int up;
+    int room;
+    int lines;
+    int more;
+    size_t i;
+
+    if (compLaidOut) {
+        return;
+    }
+    compLaidOut = 1;
+    if (!restageSys) {
+        r.left = 0;
+        r.top = 0;
+        r.right = 0;
+        r.bottom = 14;
+        MapDialogRect(dlg, &r);
+        ShowWindow(GetDlgItem(dlg, IDC_C_RESTAGE), SW_HIDE);
+        for (i = 0; i < sizeof(last) / sizeof(last[0]); i++) {
+            comp_move(dlg, last[i], -r.bottom);
+        }
+    }
+    if (!storShown) {
+        ShowWindow(GetDlgItem(dlg, IDC_C_STOR), SW_HIDE);
+        ShowWindow(GetDlgItem(dlg, IDC_C_STOR_T), SW_HIDE);
+        return;
+    }
+    /* The USB drivers' box 2 dialog units higher (the page's top margin
+     * as the other pages have it), its sentence hidden, and the UAS box
+     * and its words 19 units higher, in its place. */
+    r.left = 0;
+    r.top = 0;
+    r.right = 0;
+    r.bottom = 2;
+    MapDialogRect(dlg, &r);
+    comp_move(dlg, IDC_C_DRIVERS, -r.bottom);
+    r.left = 0;
+    r.top = 0;
+    r.right = 0;
+    r.bottom = 19;
+    MapDialogRect(dlg, &r);
+    up = r.bottom;
+    ShowWindow(GetDlgItem(dlg, IDC_C_DRIVERS_T), SW_HIDE);
+    h = GetDlgItem(dlg, IDC_C_UAS);
+    GetWindowRect(h, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(dlg, &pt);
+    SetWindowPos(h, NULL, pt.x, pt.y - up, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    h = GetDlgItem(dlg, IDC_C_UAS_T);
+    GetWindowRect(h, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(dlg, &pt);
+    SetWindowPos(h, NULL, pt.x, pt.y - up, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    /* The storage box: the most whole lines its room holds, three at
+     * least. */
+    h = GetDlgItem(dlg, IDC_C_STOR_T);
+    GetWindowRect(h, &r);
+    room = r.bottom - r.top;
+    lines = 3;
+    while (lines < 20 && box_lines_h(dlg, IDC_C_STOR_T, lines + 1) <= room) {
+        lines++;
+    }
+    more = box_lines_h(dlg, IDC_C_STOR_T, lines) - room;
+    SetWindowPos(h, NULL, 0, 0, r.right - r.left, room + more,
+                 SWP_NOMOVE | SWP_NOZORDER);
+    if (more < 0) {
+        more = 0;
+    }
+    for (i = 0; i < sizeof(below) / sizeof(below[0]); i++) {
+        r.left = 0;
+        r.top = 0;
+        r.right = 0;
+        r.bottom = below[i][1];
+        MapDialogRect(dlg, &r);
+        comp_move(dlg, below[i][0], r.bottom + more);
+    }
+}
+
+/* The folder chosen, as the page's one line. */
+static void comp_dirline(HWND dlg)
+{
+    char text[WIZ_PATH + 32];
+
+    _snprintf(text, sizeof(text) - 1, "Tools folder: %s", dirChoice);
+    text[sizeof(text) - 1] = '\0';
+    SetDlgItemTextA(dlg, IDC_C_DIRLINE, text);
+}
+
 static void comp_fill(HWND dlg)
 {
+    char text[1200];
+
+    comp_layout(dlg);
+    if (storShown) {
+        SetDlgItemTextA(dlg, IDC_C_STOR, inst_page_text(INST_PT_STOR));
+        _snprintf(text, sizeof(text) - 1, "%s\r\n%s",
+                  inst_page_text(INST_PT_STOR_T), storNote);
+        text[sizeof(text) - 1] = '\0';
+        SetDlgItemTextA(dlg, IDC_C_STOR_T, text);
+        CheckDlgButton(dlg, IDC_C_STOR, storOffered && storChoice ?
+                       BST_CHECKED : BST_UNCHECKED);
+        EnableWindow(GetDlgItem(dlg, IDC_C_STOR), storOffered);
+    }
     SetDlgItemTextA(dlg, IDC_C_DRIVERS, inst_page_text(INST_PT_DRIVERS));
     CheckDlgButton(dlg, IDC_C_DRIVERS, usbChoice ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_DRIVERS), usbOffered);
@@ -832,21 +1128,24 @@ static void comp_fill(HWND dlg)
     CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98), s98Have ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98_T), s98Have ? SW_SHOW : SW_HIDE);
+    SetDlgItemTextA(dlg, IDC_C_VSD, inst_page_text(vsd9x ? INST_PT_VSD :
+                                                   INST_PT_VSD_OTHER));
+    CheckDlgButton(dlg, IDC_C_VSD, vsdChoice ? BST_CHECKED : BST_UNCHECKED);
+    /* On 98 SE and ME where the package carries the file; greyed on every
+     * other system whatever the package carries (record 30 section 7.1). */
+    ShowWindow(GetDlgItem(dlg, IDC_C_VSD),
+               s98Have && (vsdShown || !vsd9x) ? SW_SHOW : SW_HIDE);
     comp_s98_sync(dlg);
     SetDlgItemTextA(dlg, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
-    SetDlgItemTextA(dlg, IDC_C_TRAY_T, inst_page_text(INST_PT_TRAY_T));
+    SetDlgItemTextA(dlg, IDC_C_FAST, inst_page_text(INST_PT_FAST));
     CheckDlgButton(dlg, IDC_C_TRAY, trayChoice ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_C_FAST, fastChoice ? BST_CHECKED : BST_UNCHECKED);
     ShowWindow(GetDlgItem(dlg, IDC_C_TRAY), trayHere ? SW_SHOW : SW_HIDE);
-    ShowWindow(GetDlgItem(dlg, IDC_C_TRAY_T), trayHere ? SW_SHOW : SW_HIDE);
-    SetDlgItemTextA(dlg, IDC_C_DIR_L, inst_page_text(INST_PT_DIR));
-    SetDlgItemTextA(dlg, IDC_C_DIR, dirChoice);
-    SetDlgItemTextA(dlg, IDC_C_DIR_T, is_9x() ? inst_page_text(INST_PT_DIR_9X)
-                                              : "");
-    /* The folder's refusal takes the place of the 98 SE and ME line
-     * under it, so the page fits a 640 by 480 screen with the UAS box. */
-    SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
-    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_HIDE);
-    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
+    ShowWindow(GetDlgItem(dlg, IDC_C_FAST), trayHere ? SW_SHOW : SW_HIDE);
+    CheckDlgButton(dlg, IDC_C_RESTAGE, restageHere && restageChoice ?
+                   BST_CHECKED : BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_C_RESTAGE), restageHere);
+    comp_dirline(dlg);
 }
 
 static int CALLBACK browse_cb(HWND h, UINT msg, LPARAM lp, LPARAM data)
@@ -885,34 +1184,72 @@ static void comp_browse(HWND dlg)
     }
 }
 
-/* Next on the Components page: the folder checked as a typed answer is,
- * the choices taken, and the plan made again when they changed. 1 go on. */
-static int comp_leave(HWND dlg)
+/* The Change folder dialog (record 26 section 5.0): the folder's edit
+ * box, Browse, the 98 SE and ME line; OK stays until the folder passes
+ * the checks of section 5.3. */
+static WIZ_DLGRET CALLBACK folder_proc(HWND dlg, UINT msg, WPARAM wp,
+                                       LPARAM lp)
 {
     char typed[WIZ_PATH];
     char checked[WIZ_PATH];
+    char text[WIZ_PATH];
     const char *why;
+
+    (void)lp;
+    switch (msg) {
+    case WM_INITDIALOG:
+        SetDlgItemTextA(dlg, IDC_C_DIR_L, inst_page_text(INST_PT_DIR));
+        SetDlgItemTextA(dlg, IDC_C_DIR, dirChoice);
+        SetDlgItemTextA(dlg, IDC_C_DIR_T, is_9x() ?
+                        inst_page_text(INST_PT_DIR_9X) : "");
+        ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_HIDE);
+        return TRUE;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDC_C_BROWSE:
+            comp_browse(dlg);
+            return TRUE;
+        case IDOK:
+            GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
+            why = inst_eng_dir_check(typed, checked, sizeof(checked));
+            if (why != NULL) {
+                _snprintf(text, sizeof(text) - 1, "Not that folder: %s.", why);
+                text[sizeof(text) - 1] = '\0';
+                SetDlgItemTextA(dlg, IDC_C_DIR_WHY, text);
+                ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_HIDE);
+                ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_SHOW);
+                return TRUE;
+            }
+            inst_copy(dirChoice, checked, sizeof(dirChoice));
+            EndDialog(dlg, IDOK);
+            return TRUE;
+        case IDCANCEL:
+            EndDialog(dlg, IDCANCEL);
+            return TRUE;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/* The page's boxes handed to the engine, the plan made again when they
+ * changed (Next, and the Settings dialog's opening). */
+static void comp_take(HWND dlg)
+{
     int tb;
     int s98;
     int usb;
     int uas;
+    int stor;
+    int vsd;
+    int rs;
 
-    GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
-    why = inst_eng_dir_check(typed, checked, sizeof(checked));
-    if (why != NULL) {
-        char text[WIZ_PATH];
-        _snprintf(text, sizeof(text) - 1, "Not that folder: %s.", why);
-        text[sizeof(text) - 1] = '\0';
-        SetDlgItemTextA(dlg, IDC_C_DIR_WHY, text);
-        ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_HIDE);
-        ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_SHOW);
-        return 0;
-    }
-    SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
-    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_HIDE);
-    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
-    inst_copy(dirChoice, checked, sizeof(dirChoice));
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
+    fastChoice = IsDlgButtonChecked(dlg, IDC_C_FAST) == BST_CHECKED;
     usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
                      : usbChoice;
     tb = tbHave && (!usb || IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
@@ -921,19 +1258,764 @@ static int comp_leave(HWND dlg)
     }
     s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
           IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    {
+        int sh;
+        int vopen;
+        inst_vsd_box(vsd9x, vsdShown, s98, 0, &sh, &vopen);
+        vsd = vopen && IsDlgButtonChecked(dlg, IDC_C_VSD) == BST_CHECKED;
+    }
     uas = inst_uas_decide(usb, IsDlgButtonChecked(dlg, IDC_C_UAS) !=
                                BST_CHECKED);
     if (usb) {
         uasOwn = uas;
     }
+    stor = storShown && storOffered &&
+           IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
+    rs = restageHere && IsDlgButtonChecked(dlg, IDC_C_RESTAGE) == BST_CHECKED;
     if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
-        uas != uasChoice) {
+        uas != uasChoice || stor != storChoice || vsd != vsdChoice ||
+        rs != restageChoice) {
         usbChoice = usb;
         uasChoice = uas;
         tbChoice = tb;
         s98Choice = s98;
+        storChoice = stor;
+        vsdChoice = vsd;
+        restageChoice = rs;
+        inst_eng_restage_choose(rs);
         replan();
     }
+}
+
+/* Next on the Components page: the folder checked again, the warnings of
+ * record 26 section 5.3.1 (task 43.43) once, Cancel staying on the page,
+ * then the choices taken. 1 go on. */
+static int comp_leave(HWND dlg)
+{
+    char checked[WIZ_PATH];
+    char warn[2048];
+    char box[2200];
+    const char *why;
+    int usb;
+    int tb;
+    int s98;
+    int stor;
+
+    why = inst_eng_dir_check(dirChoice, checked, sizeof(checked));
+    if (why != NULL) {
+        _snprintf(box, sizeof(box) - 1, "Not that folder: %s. Change "
+                  "folder... chooses another.", why);
+        box[sizeof(box) - 1] = '\0';
+        MessageBoxA(GetParent(dlg), box, "xHCI98 Setup", MB_OK |
+                    MB_ICONWARNING);
+        return 0;
+    }
+    inst_copy(dirChoice, checked, sizeof(dirChoice));
+    usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
+                     : usbChoice;
+    tb = tbHave && (!usb || IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
+    s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
+          IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    stor = storShown && storOffered &&
+           IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
+    if (inst_eng_comp_warn(usb, stor, s98, checked, warn,
+                           sizeof(warn)) != 0) {
+        _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays "
+                  "on this page to change the choice.", warn);
+        box[sizeof(box) - 1] = '\0';
+        if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
+                        MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+            return 0;
+        }
+    }
+    comp_take(dlg);
+    return 1;
+}
+
+/* ---- the other USB drivers' page (record 26 sections 6.7.4, 6.7.11) ------ */
+
+static int dlu_x(HWND dlg, int x);
+static int dlu_y(HWND dlg, int y);
+static HWND make_px(HWND dlg, const char *cls, const char *text, DWORD style,
+                    int x, int y, int w, int h, int id, HFONT font);
+static int text_h(HDC dc, const char *text, int w, int *wide);
+
+static int oth_id(int set, int what)
+{
+    return IDC_O_BASE + IDC_O_STRIDE * set + what;
+}
+
+/* The packages' list: a child dialog in IDC_O_AREA's place, with a heading
+ * per set and class and one plain check box per package for this system,
+ * scrolled by its own bar (not a list view: section 6.7.11). */
+static HWND othList;
+static int othListH;            /* the contents' height, pixels             */
+static int othListPos;          /* the scroll position, pixels              */
+static int othBoxH;             /* one line's height                        */
+
+static int othlist_id(int set, int i)
+{
+    return IDC_OL_BASE + 100 * set + i;
+}
+
+static void othlist_detail(int set, int i)
+{
+    INST_OTHPKG_VIEW v;
+    char text[1100];
+    HWND page = othList != NULL ? GetParent(othList) : NULL;
+
+    if (page == NULL || !inst_eng_other_pkg(set, i, &v)) {
+        return;
+    }
+    {
+        char scope[600];
+        inst_eng_other_pkg_scope(set, i, dirChoice, scope, sizeof(scope));
+        _snprintf(text, sizeof(text) - 1, "%s:%s. %s%s%s%s",
+                  set == INST_SET_FREE ? "free" : "nonfree", v.Id,
+                  v.Blocked ? "Not available: " : "", v.Blocked ? v.Why : "",
+                  v.Blocked ? " " : "", scope);
+        if (v.Earlier) {
+            strncat(text, " Staged by an earlier run.", sizeof(text) -
+                    strlen(text) - 1);
+        }
+    }
+    text[sizeof(text) - 1] = '\0';
+    SetDlgItemTextA(page, IDC_O_DETAIL, text);
+}
+
+/* Each box's tick, label and enabled state from the engine. */
+static void othlist_sync(void)
+{
+    int set;
+    int i;
+    int first = 1;
+
+    if (othList == NULL) {
+        return;
+    }
+    {
+        HWND tb = GetDlgItem(othList, othlist_id(INST_SET_FREE, 99));
+        int offered = 0;
+        int on = inst_eng_other_trust(&offered);
+        if (tb != NULL) {
+            CheckDlgButton(othList, othlist_id(INST_SET_FREE, 99),
+                           on ? BST_CHECKED : BST_UNCHECKED);
+            EnableWindow(tb, offered);
+        }
+    }
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        int open = IsDlgButtonChecked(GetParent(othList), oth_id(set,
+                                      IDC_O_BOX)) == BST_CHECKED;
+        INST_OTHPKG_VIEW v;
+        (void)first;
+        for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
+            HWND b = GetDlgItem(othList, othlist_id(set, i));
+            char label[INST_PKG_DESC_MAX + 40];
+            if (b == NULL) {
+                continue;
+            }
+            _snprintf(label, sizeof(label) - 1, "%s%s", v.Desc, v.Blocked ?
+                      " (not available: see below)" : "");
+            label[sizeof(label) - 1] = '\0';
+            SetWindowTextA(b, label);
+            CheckDlgButton(othList, othlist_id(set, i), v.Tick ? BST_CHECKED
+                                                               : BST_UNCHECKED);
+            EnableWindow(b, open);
+        }
+    }
+    {
+        /* The tab stop and the group on the first open box in the list's
+         * own order: Tab enters the list there, the arrows move within it,
+         * and no other control starts a group. */
+        HWND c = GetWindow(othList, GW_CHILD);
+        for (; c != NULL; c = GetWindow(c, GW_HWNDNEXT)) {
+            int id = GetDlgCtrlID(c);
+            LONG st = GetWindowLongA(c, GWL_STYLE) &
+                      ~(LONG)(WS_TABSTOP | WS_GROUP);
+            if (first && IsWindowEnabled(c) && id >= IDC_OL_BASE &&
+                id < IDC_OL_BASE + 100 * INST_SET_COUNT) {
+                st |= WS_TABSTOP | WS_GROUP;
+                first = 0;
+            }
+            SetWindowLongA(c, GWL_STYLE, st);
+        }
+    }
+}
+
+static WNDPROC othBoxProc;
+
+/* The next (dir 1) or previous (-1) open box of the list after box, in
+ * the list's own order; NULL at either end. */
+static HWND othlist_step(HWND box, int dir)
+{
+    HWND c = box;
+
+    for (;;) {
+        int id;
+        c = GetWindow(c, dir > 0 ? GW_HWNDNEXT : GW_HWNDPREV);
+        if (c == NULL) {
+            return NULL;
+        }
+        id = GetDlgCtrlID(c);
+        if (id >= IDC_OL_BASE && id < IDC_OL_BASE + 100 * INST_SET_COUNT &&
+            IsWindowEnabled(c)) {
+            return c;
+        }
+    }
+}
+
+static LRESULT CALLBACK othbox_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_MOUSEWHEEL && othList != NULL) {
+        return SendMessageA(othList, msg, wp, lp);
+    }
+    if (msg == WM_GETDLGCODE) {
+        return CallWindowProcA(othBoxProc, h, msg, wp, lp) | DLGC_WANTARROWS;
+    }
+    if (msg == WM_KEYDOWN && (wp == VK_DOWN || wp == VK_UP)) {
+        HWND n = othlist_step(h, wp == VK_DOWN ? 1 : -1);
+        if (n != NULL) {
+            SetFocus(n);
+        }
+        return 0;
+    }
+    return CallWindowProcA(othBoxProc, h, msg, wp, lp);
+}
+
+static void othlist_scroll(int to)
+{
+    SCROLLINFO si;
+    RECT r;
+    int page;
+    int max;
+
+    GetClientRect(othList, &r);
+    page = r.bottom;
+    max = othListH > page ? othListH - page : 0;
+    if (to < 0) {
+        to = 0;
+    }
+    if (to > max) {
+        to = max;
+    }
+    if (to != othListPos) {
+        ScrollWindowEx(othList, 0, othListPos - to, NULL, NULL, NULL, NULL,
+                       SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE);
+        othListPos = to;
+    }
+    memset(&si, 0, sizeof(si));
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = othListH > 0 ? othListH - 1 : 0;
+    si.nPage = (UINT)page;
+    si.nPos = othListPos;
+    SetScrollInfo(othList, SB_VERT, &si, TRUE);
+}
+
+/* The focused box kept in view. */
+static void othlist_show(HWND box)
+{
+    RECT r;
+    RECT c;
+    POINT pt;
+
+    GetWindowRect(box, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(othList, &pt);
+    GetClientRect(othList, &c);
+    if (pt.y < 0) {
+        othlist_scroll(othListPos + pt.y);
+    } else if (pt.y + (r.bottom - r.top) > c.bottom) {
+        othlist_scroll(othListPos + pt.y + (r.bottom - r.top) - c.bottom);
+    }
+}
+
+/* One screen of the list less a line, as a list box pages; a line at least. */
+static int othlist_page(void)
+{
+    RECT c;
+    int p;
+
+    GetClientRect(othList, &c);
+    p = c.bottom - othBoxH;
+    return p < othBoxH ? othBoxH : p;
+}
+
+/* The wheel by whole lines, Windows' lines per notch but never more than a
+ * screen holds, so no row is jumped over unseen. */
+static int othWheel;
+
+static void othlist_wheel(int delta)
+{
+    UINT lines = 3;
+    UINT most;
+    int n;
+
+    if (othBoxH <= 0) {
+        return;
+    }
+    if (!SystemParametersInfoA(SPI_GETWHEELSCROLLLINES, 0, &lines, 0)) {
+        lines = 3;
+    }
+    if (lines == 0) {
+        return;
+    }
+    most = (UINT)(othlist_page() / othBoxH);
+    if (most < 1) {
+        most = 1;
+    }
+    if (lines > most) {
+        lines = most;
+    }
+    if ((othWheel > 0 && delta < 0) || (othWheel < 0 && delta > 0)) {
+        othWheel = 0;
+    }
+    othWheel += delta;
+    n = othWheel / WHEEL_DELTA;
+    if (n == 0) {
+        return;
+    }
+    othWheel -= n * WHEEL_DELTA;
+    othlist_scroll(othListPos - n * (int)lines * othBoxH);
+}
+
+/* A click in the list's empty space takes the focus into the list, to its
+ * first open box wholly in view, so the arrows and the wheel then act on it
+ * and nothing scrolls under the pointer. */
+static void othlist_take_focus(void)
+{
+    HWND f = GetFocus();
+    HWND c;
+    RECT cr;
+
+    if (f != NULL && GetParent(f) == othList) {
+        return;
+    }
+    GetClientRect(othList, &cr);
+    for (c = GetWindow(othList, GW_CHILD); c != NULL;
+         c = GetWindow(c, GW_HWNDNEXT)) {
+        int id = GetDlgCtrlID(c);
+        RECT r;
+        POINT a;
+        POINT b;
+        if (id < IDC_OL_BASE || id >= IDC_OL_BASE + 100 * INST_SET_COUNT ||
+            !IsWindowEnabled(c)) {
+            continue;
+        }
+        GetWindowRect(c, &r);
+        a.x = r.left;
+        a.y = r.top;
+        b.x = r.right;
+        b.y = r.bottom;
+        ScreenToClient(othList, &a);
+        ScreenToClient(othList, &b);
+        if (a.y >= 0 && b.y <= cr.bottom) {
+            SetFocus(c);
+            return;
+        }
+    }
+}
+
+/* The wheel over the list, wherever the focus is: the sheet passes it on. */
+static int othlist_wheel_over(WPARAM wp, LPARAM lp)
+{
+    RECT r;
+    POINT pt;
+
+    if (othList == NULL || !IsWindowVisible(othList)) {
+        return 0;
+    }
+    pt.x = (short)LOWORD(lp);
+    pt.y = (short)HIWORD(lp);
+    GetWindowRect(othList, &r);
+    if (!PtInRect(&r, pt)) {
+        return 0;
+    }
+    SendMessageA(othList, WM_MOUSEWHEEL, wp, lp);
+    return 1;
+}
+
+static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
+                                        LPARAM lp)
+{
+    int id;
+    int set;
+    int i;
+
+    switch (msg) {
+    case WM_INITDIALOG:
+        return FALSE;
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        /* A list's white, and its text on it; a closed box's in grey. */
+        SetBkColor((HDC)wp, GetSysColor(COLOR_WINDOW));
+        SetTextColor((HDC)wp, GetSysColor(msg != WM_CTLCOLORDLG &&
+                                          !IsWindowEnabled((HWND)lp) ?
+                                          COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+        return (WIZ_DLGRET)(size_t)GetSysColorBrush(COLOR_WINDOW);
+    case WM_MOUSEWHEEL:
+        othlist_wheel((int)(short)HIWORD(wp));
+        SET_RESULT(dlg, 0);
+        return TRUE;
+    case WM_LBUTTONDOWN:
+        othlist_take_focus();
+        return TRUE;
+    case WM_VSCROLL:
+        switch (LOWORD(wp)) {
+        case SB_LINEUP:
+            othlist_scroll(othListPos - othBoxH);
+            break;
+        case SB_LINEDOWN:
+            othlist_scroll(othListPos + othBoxH);
+            break;
+        case SB_PAGEUP:
+            othlist_scroll(othListPos - othlist_page());
+            break;
+        case SB_PAGEDOWN:
+            othlist_scroll(othListPos + othlist_page());
+            break;
+        case SB_TOP:
+            othlist_scroll(0);
+            break;
+        case SB_BOTTOM:
+            othlist_scroll(othListH);
+            break;
+        case SB_THUMBTRACK:
+        case SB_THUMBPOSITION:
+            othlist_scroll((int)(short)HIWORD(wp));
+            break;
+        default:
+            break;
+        }
+        return TRUE;
+    case WM_COMMAND:
+        id = LOWORD(wp);
+        if (id < IDC_OL_BASE || id >= IDC_OL_BASE + 100 * INST_SET_COUNT) {
+            break;
+        }
+        set = (id - IDC_OL_BASE) / 100;
+        i = (id - IDC_OL_BASE) % 100;
+        if (i == 99) {
+            /* The free set's certificate (record 26 section 6.7.11). */
+            if (HIWORD(wp) == BN_CLICKED) {
+                inst_eng_other_trust_choose(IsDlgButtonChecked(dlg, id) ==
+                                            BST_CHECKED);
+                othlist_sync();
+            } else if (HIWORD(wp) == BN_SETFOCUS) {
+                othlist_show((HWND)lp);
+                SetDlgItemTextA(GetParent(dlg), IDC_O_DETAIL, "usb-wdm-free "
+                                "signs its 64-bit drivers with its own test "
+                                "certificate. Ticked, the run adds it to this "
+                                "computer's trusted roots and publishers, and "
+                                "the uninstall removes what it added. No trust "
+                                "is ever added for the non-free drivers.");
+            }
+            return TRUE;
+        }
+        if (HIWORD(wp) == BN_SETFOCUS) {
+            othlist_show((HWND)lp);
+            othlist_detail(set, i);
+        } else if (HIWORD(wp) == BN_CLICKED) {
+            int tick = IsDlgButtonChecked(dlg, id) == BST_CHECKED;
+            /* A barred box takes no tick: its reason said again. */
+            inst_eng_other_pkg_tick(set, i, tick);
+            othlist_sync();
+            othlist_detail(set, i);
+        }
+        return TRUE;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/* The list made again from the engine's packages, in IDC_O_AREA's place. */
+static void othlist_build(HWND page)
+{
+    HFONT font = (HFONT)SendMessageA(page, WM_GETFONT, 0, 0);
+    RECT area;
+    RECT c;
+    POINT pt;
+    HDC dc;
+    HFONT old;
+    int y = 0;
+    int first = 1;
+    int w;
+    int set;
+    int h;
+    int i;
+
+    if (othList != NULL) {
+        DestroyWindow(othList);
+        othList = NULL;
+    }
+    GetWindowRect(GetDlgItem(page, IDC_O_AREA), &area);
+    pt.x = area.left;
+    pt.y = area.top;
+    ScreenToClient(page, &pt);
+    othList = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHERLIST), page,
+                                 othlist_proc, 0);
+    if (othList == NULL) {
+        return;
+    }
+    SetWindowPos(othList, GetDlgItem(page, IDC_O_HEAD), pt.x, pt.y,
+                 area.right - area.left, area.bottom - area.top,
+                 SWP_NOACTIVATE);
+    GetClientRect(othList, &c);
+    w = c.right - dlu_x(page, 4);
+    dc = GetDC(othList);
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    othBoxH = text_h(dc, "Xg", w, NULL) + 2;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (h = 0; h < instOtherHeadingCount; h++) {
+            INST_OTHPKG_VIEW v;
+            int any = 0;
+            for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
+                char head[96];
+                char label[INST_PKG_DESC_MAX + 40];
+                int lh;
+                HWND b;
+                if (!v.Eligible || v.Heading != h) {
+                    continue;
+                }
+                if (!any) {
+                    _snprintf(head, sizeof(head) - 1, "%s: %s", set ==
+                              INST_SET_FREE ? "Free drivers" :
+                              "Non-free drivers", instOtherHeadings[h]);
+                    head[sizeof(head) - 1] = '\0';
+                    make_px(othList, "STATIC", head, SS_LEFT | SS_NOPREFIX,
+                            dlu_x(page, 2), y, w, othBoxH, -1, font);
+                    y += othBoxH;
+                    any = 1;
+                }
+                _snprintf(label, sizeof(label) - 1, "%s (not available: see "
+                          "below)", v.Desc);
+                label[sizeof(label) - 1] = '\0';
+                lh = text_h(dc, label, w - dlu_x(page, 22), NULL);
+                if (lh < othBoxH) {
+                    lh = othBoxH;
+                }
+                b = make_px(othList, "BUTTON", v.Desc, BS_AUTOCHECKBOX |
+                            BS_MULTILINE | BS_TOP | BS_NOTIFY |
+                            (first ? WS_TABSTOP | WS_GROUP : 0),
+                            dlu_x(page, 10), y, w - dlu_x(page, 10), lh + 2,
+                            othlist_id(set, i), font);
+                if (b != NULL) {
+                    othBoxProc = GET_PROC(b);
+                    SET_PROC(b, othbox_sub);
+                }
+                first = 0;
+                y += lh + 3;
+            }
+        }
+        if (set == INST_SET_FREE && inst_eng_other_trust_possible()) {
+            const char *t = "Trust usb-wdm-free's test certificate on this "
+                            "computer (its 64-bit drivers are signed with it; "
+                            "they load only in test-signing mode)";
+            int th = text_h(dc, t, w - dlu_x(page, 22), NULL);
+            if (th < othBoxH) {
+                th = othBoxH;
+            }
+            {
+                HWND tb = make_px(othList, "BUTTON", t, BS_AUTOCHECKBOX |
+                                  BS_MULTILINE | BS_TOP | BS_NOTIFY,
+                                  dlu_x(page, 10), y, w - dlu_x(page, 10),
+                                  th + 2, othlist_id(set, 99), font);
+                if (tb != NULL) {
+                    othBoxProc = GET_PROC(tb);
+                    SET_PROC(tb, othbox_sub);
+                }
+            }
+            y += th + 3;
+        }
+        {
+            const char *e = inst_eng_other_earlier(set);
+            if (e[0] != '\0') {
+                int eh = text_h(dc, e, w, NULL) + 2;
+                make_px(othList, "STATIC", e, SS_LEFT | SS_NOPREFIX,
+                        dlu_x(page, 2), y, w, eh, -1, font);
+                y += eh + 2;
+            }
+        }
+    }
+    if (y == 0) {
+        /* On 98 SE and ME no package is offered: the sets are copied only,
+         * and the line says where to point the hardware wizard. */
+        const char *none = inst_eng_other_none_text();
+        int nh = text_h(dc, none, w, NULL) + 2;
+        int vsdShown;
+        int sys9x;
+        (void)inst_eng_vsd_state(&vsdShown, &sys9x);
+        if (sys9x) {
+            SetDlgItemTextA(page, IDC_O_HEAD,
+                            "Using these drivers on Windows 98 SE and ME:");
+        }
+        if (nh < othBoxH) {
+            nh = othBoxH;
+        }
+        make_px(othList, "STATIC", none, SS_LEFT | SS_NOPREFIX,
+                dlu_x(page, 2), 0, w, nh, -1, font);
+        y = nh;
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(othList, dc);
+    othListH = y;
+    othListPos = 0;
+    othWheel = 0;
+    othlist_scroll(0);
+    othlist_sync();
+}
+
+/* A set's copy box: its packages open only while it is ticked. */
+static void oth_sync(HWND dlg, int set)
+{
+    inst_eng_other_choose(set, IsDlgButtonChecked(dlg, oth_id(set,
+                          IDC_O_BOX)) == BST_CHECKED, 0);
+    othlist_sync();
+}
+
+/* The page's texts at the heights they take, no taller than the template
+ * gives each, and the list given the room that leaves above the details
+ * box: more of its rows in view when a set is absent or its words short. */
+static void oth_flow(HWND dlg)
+{
+    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    HFONT old;
+    HDC dc;
+    RECT d;
+    POINT pt;
+    char text[800];
+    int x = dlu_x(dlg, 8);
+    int w = dlu_x(dlg, 284);
+    int tx = dlu_x(dlg, 20);
+    int tw = dlu_x(dlg, 272);
+    int y = dlu_y(dlg, 2);
+    int set;
+    int h;
+
+    dc = GetDC(dlg);
+    if (dc == NULL) {
+        return;
+    }
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        HWND box = GetDlgItem(dlg, oth_id(set, IDC_O_BOX));
+        HWND t = GetDlgItem(dlg, oth_id(set, IDC_O_TEXT));
+        HWND ln = GetDlgItem(dlg, oth_id(set, IDC_O_LINE));
+        /* Alone, the line has the whole row's place, so all of it shows. */
+        int most = dlu_y(dlg, 60);
+        if (GetWindowLongA(box, GWL_STYLE) & WS_VISIBLE) {
+            most = dlu_y(dlg, 16);
+            SetWindowPos(box, NULL, x, y, w, dlu_y(dlg, 10), SWP_NOZORDER |
+                         SWP_NOACTIVATE);
+            y += dlu_y(dlg, 10);
+            GetWindowTextA(t, text, sizeof(text));
+            h = text_h(dc, text, tw, NULL);
+            if (h > dlu_y(dlg, 34)) {
+                h = dlu_y(dlg, 34);
+            }
+            SetWindowPos(t, NULL, tx, y, tw, h, SWP_NOZORDER |
+                         SWP_NOACTIVATE);
+            y += h;
+        }
+        GetWindowTextA(ln, text, sizeof(text));
+        h = text_h(dc, text, w, NULL);
+        if (h > most) {
+            h = most;
+        }
+        if (h > 0) {
+            SetWindowPos(ln, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+            y += h;
+        }
+        y += dlu_y(dlg, 1);
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(dlg, dc);
+    SetWindowPos(GetDlgItem(dlg, IDC_O_HEAD), NULL, x, y, w, dlu_y(dlg, 10),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    y += dlu_y(dlg, 10);
+    GetWindowRect(GetDlgItem(dlg, IDC_O_DETAIL), &d);
+    pt.x = d.left;
+    pt.y = d.top;
+    ScreenToClient(dlg, &pt);
+    h = pt.y - dlu_y(dlg, 2) - y;
+    if (h >= dlu_y(dlg, 42)) {
+        SetWindowPos(GetDlgItem(dlg, IDC_O_AREA), NULL, x, y, w, h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+static void oth_fill(HWND dlg)
+{
+    int set;
+
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        char sentence[800];
+        char line[512];
+        int state = INST_OTHER_ABSENT;
+        int forThis = 0;
+        int inc = 0;
+        int stage = 0;
+        int shown;
+        int w;
+        RECT top;
+        RECT r;
+
+        inst_eng_other_state(set, &state, &forThis, &inc, &stage);
+        inst_eng_other_texts(set, dirChoice[0] ? dirChoice : "the tools folder",
+                             sentence, sizeof(sentence), line, sizeof(line));
+        shown = state == INST_OTHER_CARRIED;
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_BOX), inst_other_label(set));
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_TEXT), sentence);
+        SetDlgItemTextA(dlg, oth_id(set, IDC_O_LINE), line);
+        for (w = IDC_O_BOX; w <= IDC_O_TEXT; w++) {
+            ShowWindow(GetDlgItem(dlg, oth_id(set, w)), shown ? SW_SHOW
+                                                              : SW_HIDE);
+        }
+        /* Absent or not this release's, the line takes the row's place. */
+        r.left = 8;
+        r.top = set == INST_SET_FREE ? (shown ? 46 : 2) : (shown ? 107 : 63);
+        r.right = 8 + 284;
+        r.bottom = r.top + 16;
+        top = r;
+        MapDialogRect(dlg, &top);
+        SetWindowPos(GetDlgItem(dlg, oth_id(set, IDC_O_LINE)), NULL, top.left,
+                     top.top, top.right - top.left, top.bottom - top.top,
+                     SWP_NOZORDER);
+        CheckDlgButton(dlg, oth_id(set, IDC_O_BOX), shown && inc ?
+                       BST_CHECKED : BST_UNCHECKED);
+    }
+    SetDlgItemTextA(dlg, IDC_O_DETAIL, "");
+    oth_flow(dlg);
+    othlist_build(dlg);
+}
+
+/* Next from the page: section 6.7.4's warnings, once per Next; Cancel in
+ * the box stays on the page. The choices are the engine's already. */
+static int oth_leave(HWND dlg)
+{
+    char warn[2048];
+    char box[2200];
+
+    (void)dlg;
+    inst_eng_other_warnings(warn, sizeof(warn));
+    if (warn[0] != '\0') {
+        _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays on "
+                  "this page to change the choice.", warn);
+        box[sizeof(box) - 1] = '\0';
+        if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
+                        MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+            return 0;
+        }
+    }
+    replan();
     return 1;
 }
 
@@ -1162,19 +2244,29 @@ static int combo_read(HWND combo, const INST_ROW *r, INST_U32 *v)
 }
 
 typedef struct _ROWCTL {
-    int Row;                /* index into rows[]                          */
+    int Row;                /* index into rows[]; Stor98's: instS98Values */
     HWND Label;
     HWND Choice;
     HWND Now;
     HWND Sep;               /* the line above the row; NULL on the first  */
 } ROWCTL;
 
+/* A settings page's rows as shown: the part made now, of how many
+ * (record 26 section 5.4, "The layout"). */
 typedef struct _ROWPAGE {
     int Count;
+    int Part;
+    int Parts;
     ROWCTL R[WIZ_ROWS];
 } ROWPAGE;
 
-static ROWPAGE pageRows[2];     /* P_USB, P_TBS */
+static ROWPAGE pageRows[3];     /* P_USB, P_TBS, P_S98 */
+static int navBack;             /* the last move between pages was Back */
+
+static ROWPAGE *page_rows(int page)
+{
+    return &pageRows[page == P_USB ? 0 : page == P_TBS ? 1 : 2];
+}
 
 /* DLU to pixels for a dialog. */
 static int dlu_x(HWND dlg, int x)
@@ -1201,18 +2293,25 @@ static int dlu_y(HWND dlg, int y)
     return r.bottom;
 }
 
-static HWND make_ctl(HWND dlg, const char *cls, const char *text, DWORD style,
-                     int x, int y, int w, int h, int id, HFONT font)
+/* A control at a place in pixels. */
+static HWND make_px(HWND dlg, const char *cls, const char *text, DWORD style,
+                    int x, int y, int w, int h, int id, HFONT font)
 {
     HWND c = CreateWindowExA(0, cls, text, WS_CHILD | WS_VISIBLE | style,
-                             dlu_x(dlg, x), dlu_y(dlg, y), dlu_x(dlg, w),
-                             dlu_y(dlg, h), dlg, (HMENU)(size_t)id, hInst,
-                             NULL);
+                             x, y, w, h, dlg, (HMENU)(size_t)id, hInst, NULL);
 
     if (c != NULL && font != NULL) {
         SendMessageA(c, WM_SETFONT, (WPARAM)font, FALSE);
     }
     return c;
+}
+
+/* ... and at a place in dialog units. */
+static HWND make_ctl(HWND dlg, const char *cls, const char *text, DWORD style,
+                     int x, int y, int w, int h, int id, HFONT font)
+{
+    return make_px(dlg, cls, text, style, dlu_x(dlg, x), dlu_y(dlg, y),
+                   dlu_x(dlg, w), dlu_y(dlg, h), id, font);
 }
 
 /* The label of a row: the name and the one sentence of meaning. */
@@ -1223,30 +2322,318 @@ static void row_label(const INST_ROW *r, char *out, size_t cap)
     out[cap - 1] = '\0';
 }
 
-/* An etched line across the page, between one row and the next, with the
- * gap under a choice wider than the one under its own label: a label is
- * not read as the title of the choice above it (owner, 2026-10-19). */
-static HWND row_sep(HWND dlg, int y, int id)
+/* ---- the settings pages' layout (record 26 section 5.4, "The layout") ---- */
+
+/* A row as the layout sees it: its two texts and its kind of choice. */
+typedef struct _LAYROW {
+    char Label[256];
+    char Now[160];
+    int Range;              /* a number box, not a drop-down              */
+} LAYROW;
+
+/* A page's geometry in pixels, from its own size and font. */
+typedef struct _LAYGEO {
+    int X;                  /* the column                                 */
+    int W;
+    int HeadH;
+    int RowsTop;
+    int NowW;               /* the "now" column, 0 none                   */
+    int LabelW;
+    int Gap;                /* a label to its choice                      */
+    int Sep;                /* one row to the next, the line in it        */
+    int ComboH;             /* a drop-down's closed box                   */
+    int EditH;
+    int EditW;
+    int TopH[WIZ_ROWS];     /* the label's or the "now" text's, the taller */
+    int LabelH[WIZ_ROWS];
+    int NowH[WIZ_ROWS];
+    int RowH[WIZ_ROWS];
+    int Start[WIZ_ROWS + 1];
+    int Parts;
+    int NoteTop;
+    int NoteBottom;
+} LAYGEO;
+
+/* Text in the font selected into dc: its height wrapped at w, or (w 0) on
+ * one line with its width in *wide. */
+static int text_h(HDC dc, const char *text, int w, int *wide)
 {
-    return make_ctl(dlg, "STATIC", "", SS_ETCHEDHORZ, 8, y, 284, 1, id, NULL);
+    RECT r;
+
+    if (wide != NULL) {
+        *wide = 0;
+    }
+    if (text[0] == '\0') {
+        return 0;
+    }
+    r.left = 0;
+    r.top = 0;
+    r.right = w > 0 ? w : 32767;
+    r.bottom = 0;
+    DrawTextA(dc, text, -1, &r, DT_CALCRECT | DT_NOPREFIX |
+              (w > 0 ? DT_WORDBREAK : DT_SINGLELINE));
+    if (wide != NULL) {
+        *wide = r.right - r.left;
+    }
+    return r.bottom - r.top;
 }
 
-/* One row of a settings page: a label of two lines, the choice under it,
- * the short "now" beside the choice, and above a row after the first the
- * line between rows. y in dialog units; four rows end at 22 + 3 * 38 + 30
- * = 166, above the note at 176. */
-#define WIZ_ROW_DLU 38
-#define WIZ_ROW_SEP 4
-static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
+/* A drop-down's closed height in a font: one made, read and destroyed. */
+static int combo_closed_h(HWND dlg, HFONT font)
 {
-    const INST_ROW *r = &rows[row];
-    char text[256];
+    RECT r;
+    HWND c = CreateWindowExA(0, "COMBOBOX", "", WS_CHILD | CBS_DROPDOWNLIST |
+                             WS_VSCROLL, 0, 0, 100, 200, dlg, (HMENU)0, hInst,
+                             NULL);
+    int h = dlu_y(dlg, 12);
 
-    rc->Row = row;
-    rc->Sep = y > 22 ? row_sep(dlg, y - WIZ_ROW_SEP, id + 3) : NULL;
-    row_label(r, text, sizeof(text));
-    rc->Label = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, y,
-                         284, 17, id, font);
+    if (c != NULL) {
+        if (font != NULL) {
+            SendMessageA(c, WM_SETFONT, (WPARAM)font, FALSE);
+        }
+        GetWindowRect(c, &r);
+        h = r.bottom - r.top;
+        DestroyWindow(c);
+    }
+    return h;
+}
+
+/* The page's head, with the part words where it has parts. */
+static void head_text(const char *head, int part, int parts, char *out,
+                      size_t cap)
+{
+    if (parts > 1) {
+        _snprintf(out, cap - 1, "%s (page %d of %d)", head, part + 1, parts);
+    } else {
+        _snprintf(out, cap - 1, "%s", head);
+    }
+    out[cap - 1] = '\0';
+}
+
+static void lay_measure(HWND dlg, HFONT font, const LAYROW *lr, int n,
+                        const char *head, LAYGEO *g)
+{
+    RECT page;
+    HDC dc;
+    HFONT old;
+    char text[600];
+    int widest = 0;
+    int tallest = 0;
+    int least;
+    int i;
+    int w;
+
+    memset(g, 0, sizeof(*g));
+    GetClientRect(dlg, &page);
+    g->X = dlu_x(dlg, 8);
+    g->W = page.right - 2 * g->X;
+    g->Gap = dlu_y(dlg, 2);
+    g->Sep = dlu_y(dlg, 9);
+    g->EditH = dlu_y(dlg, 12);
+    g->EditW = dlu_x(dlg, 60);
+    g->ComboH = combo_closed_h(dlg, font);
+    dc = GetDC(dlg);
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    /* The widest part words a page of n rows can have, so the head does
+     * not grow once the split is decided. */
+    head_text(head, n - 1, n, text, sizeof(text));
+    g->HeadH = text_h(dc, text, g->W, NULL);
+    g->RowsTop = dlu_y(dlg, 2) + g->HeadH + dlu_y(dlg, 4);
+    for (i = 0; i < n; i++) {
+        text_h(dc, lr[i].Now, 0, &w);
+        if (w > widest) {
+            widest = w;
+        }
+    }
+    g->NowW = wiz_lay_now_col(widest, g->W);
+    g->LabelW = g->NowW > 0 ? g->W - g->NowW - dlu_x(dlg, 6) : g->W;
+    for (i = 0; i < n; i++) {
+        g->LabelH[i] = text_h(dc, lr[i].Label, g->LabelW, NULL);
+        g->NowH[i] = g->NowW > 0 ? text_h(dc, lr[i].Now, g->NowW, NULL) : 0;
+        g->TopH[i] = g->LabelH[i] > g->NowH[i] ? g->LabelH[i] : g->NowH[i];
+        g->RowH[i] = g->TopH[i] + g->Gap + (lr[i].Range ? g->EditH
+                                                         : g->ComboH);
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(dlg, dc);
+    g->NoteBottom = page.bottom - dlu_y(dlg, 4);
+    /* Six lines at least where the rows allow (a part of two or more
+     * rows always does); a lone tall row takes from it down to three
+     * (owner, 2026-10-24: no scrolling box of two lines). */
+    least = box_lines_h(dlg, IDC_S_NOTE, 6);
+    g->Parts = wiz_lay_split(g->RowH, n, g->Sep, g->NoteBottom - least -
+                             dlu_y(dlg, 6) - g->RowsTop, WIZ_LAY_PER_PART,
+                             g->Start, WIZ_ROWS + 1);
+    for (i = 0; i < g->Parts; i++) {
+        w = wiz_lay_part_h(g->RowH, g->Start[i], g->Start[i + 1], g->Sep);
+        if (w > tallest) {
+            tallest = w;
+        }
+    }
+    g->NoteTop = wiz_lay_note_top(g->RowsTop, tallest, dlu_y(dlg, 6),
+                                  g->NoteBottom,
+                                  box_lines_h(dlg, IDC_S_NOTE, 3));
+}
+
+/* One row made at y: the line above it (not on a part's first), the
+ * label, the choice under the taller of the label and the "now" text, the
+ * "now" text at the right of the label's line. */
+static void lay_row(HWND dlg, const LAYGEO *g, const LAYROW *lr, int i,
+                    int y, int first, HFONT font, int id, ROWCTL *rc)
+{
+    int cy = y + g->TopH[i] + g->Gap;
+
+    /* The line between rows, with a gap above and below it: a label is
+     * not read as the title of the choice above it (owner, 2026-10-19). */
+    rc->Sep = first ? NULL : make_px(dlg, "STATIC", "", SS_ETCHEDHORZ, g->X,
+                                     y - (g->Sep + 2) / 2, g->W, 2, id + 3,
+                                     NULL);
+    rc->Label = make_px(dlg, "STATIC", lr->Label, SS_LEFT | SS_NOPREFIX, g->X,
+                        y, g->LabelW, g->LabelH[i], id, font);
+    if (lr->Range) {
+        rc->Choice = make_px(dlg, "EDIT", "", WS_BORDER | WS_TABSTOP |
+                             ES_AUTOHSCROLL | ES_NUMBER, g->X, cy, g->EditW,
+                             g->EditH, id + 1, font);
+    } else {
+        /* The height given is the closed box and the open list. */
+        rc->Choice = make_px(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST |
+                             WS_VSCROLL | WS_TABSTOP, g->X, cy, g->W,
+                             g->ComboH + dlu_y(dlg, 80), id + 1, font);
+    }
+    rc->Now = make_px(dlg, "STATIC", lr->Now, SS_RIGHT | SS_NOPREFIX,
+                      g->X + g->W - g->NowW, y, g->NowW, g->NowH[i], id + 2,
+                      font);
+}
+
+static void rows_clear(ROWPAGE *rp)
+{
+    int i;
+
+    for (i = 0; i < rp->Count; i++) {
+        DestroyWindow(rp->R[i].Label);
+        DestroyWindow(rp->R[i].Choice);
+        DestroyWindow(rp->R[i].Now);
+        if (rp->R[i].Sep != NULL) {
+            DestroyWindow(rp->R[i].Sep);
+        }
+    }
+    rp->Count = 0;
+}
+
+/* A settings page laid out: the head, the rows of the part shown made
+ * (row k's Row is ids[k]), the note and "Advanced..." placed; the caller
+ * fills the choices. part: 0 the first, -1 the last. */
+static void lay_page(HWND dlg, ROWPAGE *rp, const LAYROW *lr, const int *ids,
+                     int n, const char *head, int part)
+{
+    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    LAYGEO g;
+    char text[600];
+    int btnW = dlu_x(dlg, 60);
+    int btnH = dlu_y(dlg, 14);
+    int y;
+    int i;
+
+    rows_clear(rp);
+    lay_measure(dlg, font, lr, n, head, &g);
+    rp->Parts = g.Parts > 0 ? g.Parts : 1;
+    rp->Part = wiz_lay_part(part, rp->Parts);
+    head_text(head, rp->Part, rp->Parts, text, sizeof(text));
+    SetDlgItemTextA(dlg, IDC_S_HEAD, text);
+    SetWindowPos(GetDlgItem(dlg, IDC_S_HEAD), NULL, g.X, dlu_y(dlg, 2), g.W,
+                 g.HeadH, SWP_NOZORDER | SWP_NOACTIVATE);
+    y = g.RowsTop;
+    for (i = g.Parts > 0 ? g.Start[rp->Part] : 0;
+         g.Parts > 0 && i < g.Start[rp->Part + 1]; i++) {
+        ROWCTL *rc = &rp->R[rp->Count];
+        lay_row(dlg, &g, &lr[i], i, y, rp->Count == 0, font,
+                IDC_ROW_BASE + IDC_ROW_STRIDE * rp->Count, rc);
+        rc->Row = ids[i];
+        rp->Count++;
+        y += g.RowH[i] + g.Sep;
+    }
+    SetWindowPos(GetDlgItem(dlg, IDC_S_NOTE), NULL, g.X, g.NoteTop,
+                 g.W - btnW - dlu_x(dlg, 6), g.NoteBottom - g.NoteTop,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(dlg, IDC_S_ADVANCED), NULL, g.X + g.W - btnW,
+                 g.NoteBottom - btnH, btnW, btnH, SWP_NOZORDER |
+                 SWP_NOACTIVATE);
+}
+
+/* What an open list adds to its longest entry: its frame, its scroll bar
+ * and 4 dialog units. */
+static int combo_extra(HWND combo)
+{
+    return 2 * GetSystemMetrics(SM_CXEDGE) + GetSystemMetrics(SM_CXVSCROLL) +
+           dlu_x(GetParent(combo), 4);
+}
+
+/* A drop-down's open list as wide as its longest entry, measured in the
+ * box's own font, with the list's frame and scroll bar. */
+static void combo_fit(HWND combo)
+{
+    char text[320];
+    HFONT f = (HFONT)SendMessageA(combo, WM_GETFONT, 0, 0);
+    HDC dc = GetDC(combo);
+    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    RECT r;
+    RECT work;
+    SIZE sz;
+    int longest = 0;
+    int n = (int)SendMessageA(combo, CB_GETCOUNT, 0, 0);
+    int len;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        len = (int)SendMessageA(combo, CB_GETLBTEXTLEN, (WPARAM)i, 0);
+        if (len <= 0 || len >= (int)sizeof(text)) {
+            continue;
+        }
+        SendMessageA(combo, CB_GETLBTEXT, (WPARAM)i, (LPARAM)text);
+        if (GetTextExtentPoint32A(dc, text, len, &sz) && sz.cx > longest) {
+            longest = sz.cx;
+        }
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(combo, dc);
+    GetWindowRect(combo, &r);
+    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &work, 0)) {
+        work.left = 0;
+        work.right = GetSystemMetrics(SM_CXSCREEN);
+    }
+    SendMessageA(combo, CB_SETDROPPEDWIDTH,
+                 (WPARAM)wiz_lay_drop_w(longest, combo_extra(combo),
+                                        r.right - r.left,
+                                        work.right - work.left), 0);
+}
+
+/* A row of the drivers' values as the layout sees it. */
+static void row_texts(const INST_ROW *r, LAYROW *lr)
+{
+    row_label(r, lr->Label, sizeof(lr->Label));
+    if (r->Greyed) {
+        /* Shown, not hidden, so the page reads the same on every system
+         * (owner, 2026-10-19); row_read never takes it. */
+        _snprintf(lr->Now, sizeof(lr->Now) - 1, "(%s)",
+                  inst_value_only(r->Value));
+        lr->Now[sizeof(lr->Now) - 1] = '\0';
+    } else {
+        row_now(r, lr->Now, sizeof(lr->Now));
+    }
+    lr->Range = instValues[r->Value].Hi != 0;
+}
+
+/* A made row's choice filled: the number, or the list (its open width
+ * fitted); greyed with its label where the row is another system's. */
+static void row_choice(const ROWCTL *rc)
+{
+    const INST_ROW *r = &rows[rc->Row];
+    char text[32];
+
     if (instValues[r->Value].Hi != 0) {
         int mixed;
         INST_U32 start = row_start(r, &mixed);
@@ -1257,26 +2644,15 @@ static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
             _snprintf(text, sizeof(text) - 1, "%lu", (unsigned long)start);
             text[sizeof(text) - 1] = '\0';
         }
-        rc->Choice = make_ctl(dlg, "EDIT", text, WS_BORDER | WS_TABSTOP |
-                              ES_AUTOHSCROLL | ES_NUMBER, 8, y + 18, 60, 12,
-                              id + 1, font);
+        SetWindowTextA(rc->Choice, text);
     } else {
-        rc->Choice = make_ctl(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST |
-                              WS_VSCROLL | WS_TABSTOP, 8, y + 17, 160, 90,
-                              id + 1, font);
         row_fill_combo(rc->Choice, r);
+        combo_fit(rc->Choice);
     }
-    row_now(r, text, sizeof(text));
     if (r->Greyed) {
-        /* Shown, not hidden, so the page reads the same on every system
-         * (owner, 2026-10-19); row_read never takes it. */
-        _snprintf(text, sizeof(text) - 1, "(%s)", inst_value_only(r->Value));
-        text[sizeof(text) - 1] = '\0';
         EnableWindow(rc->Label, FALSE);
         EnableWindow(rc->Choice, FALSE);
     }
-    rc->Now = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 174, y + 19,
-                       118, 10, id + 2, font);
 }
 
 /* What a row's choice says now: 1 written (value in *v), 0 left as it is.
@@ -1306,24 +2682,9 @@ static int row_read(const ROWCTL *rc, INST_U32 *v)
     return combo_read(rc->Choice, r, v);
 }
 
-static void rows_clear(ROWPAGE *rp)
-{
-    int i;
-
-    for (i = 0; i < rp->Count; i++) {
-        DestroyWindow(rp->R[i].Label);
-        DestroyWindow(rp->R[i].Choice);
-        DestroyWindow(rp->R[i].Now);
-        if (rp->R[i].Sep != NULL) {
-            DestroyWindow(rp->R[i].Sep);
-        }
-    }
-    rp->Count = 0;
-}
-
 static void settings_note(HWND dlg, int page, int i)
 {
-    ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
+    ROWPAGE *rp = page_rows(page);
     char note[4096];
 
     if (page == P_TBS && !tbPresent && i < 0) {
@@ -1341,25 +2702,26 @@ static void settings_note(HWND dlg, int page, int i)
     }
 }
 
-static void settings_fill(HWND dlg, int page)
+/* A settings page shown at a part (0 the first, -1 the last). */
+static void settings_fill(HWND dlg, int page, int part)
 {
-    ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
-    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    ROWPAGE *rp = page_rows(page);
+    LAYROW lr[WIZ_ROWS];
     int idx[WIZ_ROWS];
     int n;
     int i;
     int adv;
 
-    rows_clear(rp);
-    SetDlgItemTextA(dlg, IDC_S_HEAD, inst_page_text(page == P_USB ?
-                                                    INST_PT_USB :
-                                                    INST_PT_TBSET));
     n = rows_for(page, 0, idx, WIZ_ROWS);
-    for (i = 0; i < n && i < 4; i++) {
-        row_make(dlg, &rp->R[i], idx[i], 22 + WIZ_ROW_DLU * i, font,
-                 IDC_ROW_BASE + IDC_ROW_STRIDE * i);
+    for (i = 0; i < n; i++) {
+        row_texts(&rows[idx[i]], &lr[i]);
     }
-    rp->Count = i;
+    lay_page(dlg, rp, lr, idx, n, inst_page_text(page == P_USB ? INST_PT_USB
+                                                               : INST_PT_TBSET),
+             part);
+    for (i = 0; i < rp->Count; i++) {
+        row_choice(&rp->R[i]);
+    }
     adv = rows_for(page, 1, idx, WIZ_ROWS);
     ShowWindow(GetDlgItem(dlg, IDC_S_ADVANCED), adv > 0 ? SW_SHOW : SW_HIDE);
     settings_note(dlg, page, rp->Count > 0 ? 0 : -1);
@@ -1369,7 +2731,7 @@ static void settings_fill(HWND dlg, int page)
  * in its range (said; the page stays). */
 static int settings_leave(HWND dlg, int page)
 {
-    ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
+    ROWPAGE *rp = page_rows(page);
     int i;
     INST_U32 v;
 
@@ -1506,6 +2868,7 @@ static void adv_show(HWND dlg, int i)
         ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
     } else {
         row_fill_combo(GetDlgItem(dlg, IDC_A_CHOICE), r);
+        combo_fit(GetDlgItem(dlg, IDC_A_CHOICE));
         ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_HIDE);
     }
@@ -1623,21 +2986,6 @@ static void s98_item_value(int i, int k, char *out, size_t cap)
     }
 }
 
-static void s98_page_clear(void)
-{
-    int i;
-
-    for (i = 0; i < s98ComboCount; i++) {
-        DestroyWindow(s98Label[i]);
-        DestroyWindow(s98Combo[i]);
-        DestroyWindow(s98Now[i]);
-        if (s98Sep[i] != NULL) {
-            DestroyWindow(s98Sep[i]);
-        }
-    }
-    s98ComboCount = 0;
-}
-
 /* Where the values go, said under the rows (Stor98's rule, per system). */
 static const char *s98_where(void)
 {
@@ -1650,59 +2998,63 @@ static const char *s98_where(void)
                      "controller starts.";
 }
 
-static void s98_page_fill(HWND dlg)
+/* Where the page reads a row: the engine, or the self-test's made-up
+ * rows. */
+static int (*s98RowFn)(int i, INST_S98ROW *r) = inst_eng_s98_row;
+
+/* A made row's list: not set, "not set (the built-in default is ...)"
+ * preselected; set, the value found preselected. Either, left as it is,
+ * writes nothing; the default chosen where none was set is written. */
+static void s98_combo_fill(HWND combo, int i)
 {
-    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    const INST_S98_VALUE *v = &instS98Values[i];
     INST_S98ROW r;
     char text[256];
-    int i;
+    char val[32];
+    int sel = 0;
     int k;
-    int y = 22;
-    int sel;
 
-    s98_page_clear();
-    SetDlgItemTextA(dlg, IDC_S_HEAD, inst_page_text(INST_PT_S98SET));
-    for (i = 0; i < INST_S98_COUNT && s98ComboCount < WIZ_S98_ASKED; i++) {
-        const INST_S98_VALUE *v = &instS98Values[i];
-        int n = s98ComboCount;
-        if (!inst_eng_s98_row(i, &r) || !r.Asked) {
+    s98RowFn(i, &r);
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)(r.State > 0 ?
+                 "(as it is: nothing written)" : r.NowText));
+    for (k = 0; k < INST_S98_WORDS_MAX && v->Means[k] != NULL; k++) {
+        s98_item(i, k, text, sizeof(text));
+        SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+        s98_item_value(i, k, val, sizeof(val));
+        if (s98WinSet[i] ? inst_eq(val, s98WinVal[i])
+                         : (r.State > 0 && inst_eq(val, r.Now))) {
+            sel = k + 1;
+        }
+    }
+    SendMessageA(combo, CB_SETCURSEL, (WPARAM)sel, 0);
+    combo_fit(combo);
+}
+
+/* Stor98's page shown at a part (0 the first, -1 the last), laid out as
+ * the drivers' pages are (record 26 section 5.6). */
+static void s98_page_fill(HWND dlg, int part)
+{
+    ROWPAGE *rp = page_rows(P_S98);
+    LAYROW lr[WIZ_ROWS];
+    int ids[WIZ_ROWS];
+    INST_S98ROW r;
+    int n = 0;
+    int i;
+
+    for (i = 0; i < INST_S98_COUNT && n < WIZ_ROWS; i++) {
+        if (!s98RowFn(i, &r) || !r.Asked) {
             continue;
         }
-        _snprintf(text, sizeof(text) - 1, "%s - %s", r.Name, v->What);
-        text[sizeof(text) - 1] = '\0';
-        /* The rows' line as on the USB pages: the row's "now" ends at
-         * y + 36, the next label starts 12 under it. */
-        s98Sep[n] = n > 0 ? row_sep(dlg, y - 6, IDC_ROW_BASE +
-                                    IDC_ROW_STRIDE * n + 3) : NULL;
-        s98Label[n] = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8,
-                               y, 284, 10, IDC_ROW_BASE + IDC_ROW_STRIDE * n,
-                               font);
-        s98Combo[n] = make_ctl(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST |
-                               WS_VSCROLL | WS_TABSTOP, 8, y + 11, 200, 90,
-                               IDC_ROW_BASE + IDC_ROW_STRIDE * n + 1, font);
-        s98Now[n] = make_ctl(dlg, "STATIC", r.NowText, SS_LEFT | SS_NOPREFIX,
-                             8, y + 26, 284, 10,
-                             IDC_ROW_BASE + IDC_ROW_STRIDE * n + 2, font);
-        s98ComboRow[n] = i;
-        /* Not set: "not set (the built-in default is ...)" preselected;
-         * set: the value found preselected. Either, left as it is, writes
-         * nothing; the default chosen where none was set is written. */
-        SendMessageA(s98Combo[n], CB_ADDSTRING, 0, (LPARAM)(r.State > 0 ?
-                     "(as it is: nothing written)" : r.NowText));
-        sel = 0;
-        for (k = 0; k < INST_S98_WORDS_MAX && v->Means[k] != NULL; k++) {
-            char val[32];
-            s98_item(i, k, text, sizeof(text));
-            SendMessageA(s98Combo[n], CB_ADDSTRING, 0, (LPARAM)text);
-            s98_item_value(i, k, val, sizeof(val));
-            if (s98WinSet[i] ? inst_eq(val, s98WinVal[i])
-                             : (r.State > 0 && inst_eq(val, r.Now))) {
-                sel = k + 1;
-            }
-        }
-        SendMessageA(s98Combo[n], CB_SETCURSEL, (WPARAM)sel, 0);
-        s98ComboCount++;
-        y += 48;
+        _snprintf(lr[n].Label, sizeof(lr[n].Label) - 1, "%s - %s", r.Name,
+                  instS98Values[i].What);
+        lr[n].Label[sizeof(lr[n].Label) - 1] = '\0';
+        inst_copy(lr[n].Now, r.NowText, sizeof(lr[n].Now));
+        lr[n].Range = 0;
+        ids[n++] = i;
+    }
+    lay_page(dlg, rp, lr, ids, n, inst_page_text(INST_PT_S98SET), part);
+    for (i = 0; i < rp->Count; i++) {
+        s98_combo_fill(rp->R[i].Choice, rp->R[i].Row);
     }
     SetDlgItemTextA(dlg, IDC_S_NOTE, s98_where());
     ShowWindow(GetDlgItem(dlg, IDC_S_ADVANCED), SW_SHOW);
@@ -1710,16 +3062,17 @@ static void s98_page_fill(HWND dlg)
 
 static void s98_page_leave(HWND dlg)
 {
+    ROWPAGE *rp = page_rows(P_S98);
     int n;
     int sel;
     int i;
 
     (void)dlg;
-    for (n = 0; n < s98ComboCount; n++) {
+    for (n = 0; n < rp->Count; n++) {
         INST_S98ROW r;
-        i = s98ComboRow[n];
-        inst_eng_s98_row(i, &r);
-        sel = (int)SendMessageA(s98Combo[n], CB_GETCURSEL, 0, 0);
+        i = rp->R[n].Row;
+        s98RowFn(i, &r);
+        sel = (int)SendMessageA(rp->R[n].Choice, CB_GETCURSEL, 0, 0);
         if (sel <= 0) {
             s98WinSet[i] = 0;
         } else {
@@ -1971,28 +3324,239 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
  * 2026-10-19): on 98 SE and ME, one box when the run replaces Stor98's
  * file. Ticked, the update goes ahead; unticked, Stor98 is left for a
  * later run. Install does not wait for it. */
-static void s98_unused_clear(void)
-{
-    if (s98UnusedBox != NULL) {
-        DestroyWindow(s98UnusedBox);
-        s98UnusedBox = NULL;
-    }
-}
+/* ---- the Settings dialog (record 26 section 5.0, draft 35) ----------------- */
 
-static void s98_unused_make(HWND dlg)
-{
-    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+/* A property sheet of its own, a tab per component in the run, each tab one
+ * part of its main rows at a time and its Advanced button. */
+static int setApplied;
 
-    s98_unused_clear();
-    if (!is_9x() || !s98Choice || !inst_eng_s98_file_update()) {
+/* A tab's "More >" button, left of Advanced, only when its rows take more
+ * than one part; the note narrowed to make room. */
+static void tab_part_btn(HWND dlg, int page)
+{
+    ROWPAGE *rp = page_rows(page);
+    HWND b = GetDlgItem(dlg, IDC_S_PART);
+    HWND a = GetDlgItem(dlg, IDC_S_ADVANCED);
+    HWND n = GetDlgItem(dlg, IDC_S_NOTE);
+    RECT ra;
+    RECT rn;
+    POINT pa;
+    POINT pn;
+    int gap = dlu_x(dlg, 6);
+    int w;
+
+    if (rp->Parts <= 1) {
+        ShowWindow(b, SW_HIDE);
         return;
     }
-    s98UnusedBox = make_ctl(dlg, "BUTTON", inst_page_text(INST_PT_S98_UNUSED),
-                            BS_AUTOCHECKBOX | WS_TABSTOP, 8, 157, 284, 10,
-                            IDC_SUM_S98, font);
-    /* The list above it shortened to make room. */
-    MoveWindow(GetDlgItem(dlg, IDC_DETAIL), dlu_x(dlg, 8), dlu_y(dlg, 24),
-               dlu_x(dlg, 284), dlu_y(dlg, 144 - 11 - 2), TRUE);
+    GetWindowRect(a, &ra);
+    GetWindowRect(n, &rn);
+    pa.x = ra.left;
+    pa.y = ra.top;
+    pn.x = rn.left;
+    pn.y = rn.top;
+    ScreenToClient(dlg, &pa);
+    ScreenToClient(dlg, &pn);
+    w = ra.right - ra.left;
+    SetWindowPos(b, NULL, pa.x - w - gap, pa.y, w, ra.bottom - ra.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(n, NULL, pn.x, pn.y, pa.x - w - 2 * gap - pn.x,
+                 rn.bottom - rn.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(b, SW_SHOW);
+}
+
+static void tab_fill(HWND dlg, int page, int part)
+{
+    if (page == P_S98) {
+        s98_page_fill(dlg, part);
+    } else {
+        settings_fill(dlg, page, part);
+    }
+    tab_part_btn(dlg, page);
+}
+
+/* The tab's choices taken: 0 when a range's text is out of its range. */
+static int tab_leave(HWND dlg, int page)
+{
+    if (page == P_S98) {
+        s98_page_leave(dlg);
+        return 1;
+    }
+    return settings_leave(dlg, page);
+}
+
+static WIZ_DLGRET CALLBACK tab_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    int page = GET_PAGE(dlg);
+    NMHDR *nm;
+
+    switch (msg) {
+    case WM_INITDIALOG:
+        page = (int)((PROPSHEETPAGEA *)lp)->lParam;
+        SET_PAGE(dlg, page);
+        tab_fill(dlg, page, 0);
+        return TRUE;
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDC_S_PART:
+            if (tab_leave(dlg, page)) {
+                ROWPAGE *rp = page_rows(page);
+                tab_fill(dlg, page, (rp->Part + 1) % rp->Parts);
+            }
+            return TRUE;
+        case IDC_S_ADVANCED:
+            if (page == P_S98) {
+                s98_page_leave(dlg);
+                DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_ADVANCED), dlg,
+                                s98_adv_proc, 0);
+                return TRUE;
+            }
+            if (!settings_leave(dlg, page)) {
+                return TRUE;
+            }
+            advPage = page;
+            DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_ADVANCED), dlg,
+                            adv_proc, 0);
+            return TRUE;
+        default:
+            if (page != P_S98 && (HIWORD(wp) == CBN_SETFOCUS ||
+                                  HIWORD(wp) == CBN_SELCHANGE ||
+                                  HIWORD(wp) == EN_SETFOCUS)) {
+                ROWPAGE *rp = page_rows(page);
+                int i;
+                for (i = 0; i < rp->Count; i++) {
+                    if ((HWND)lp == rp->R[i].Choice) {
+                        settings_note(dlg, page, i);
+                    }
+                }
+            }
+            break;
+        }
+        break;
+    case WM_NOTIFY:
+        nm = (NMHDR *)lp;
+        switch (nm->code) {
+        case PSN_KILLACTIVE:
+            SET_RESULT(dlg, tab_leave(dlg, page) ? FALSE : TRUE);
+            return TRUE;
+        case PSN_APPLY:
+            if (!tab_leave(dlg, page)) {
+                SET_RESULT(dlg, PSNRET_INVALID_NOCHANGEPAGE);
+                return TRUE;
+            }
+            setApplied = 1;
+            SET_RESULT(dlg, PSNRET_NOERROR);
+            return TRUE;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/* Settings... on the Components page: the boxes handed to the engine
+ * first, so the tabs are those of the components ticked now; OK keeps the
+ * choices, Cancel restores them as they stood when this opening began. */
+static void settings_open(HWND comp)
+{
+    static const char *const title[3] = { "USB", "Thunderbolt", "Stor98" };
+    static const int pg[3] = { P_USB, P_TBS, P_S98 };
+    static int keepSet[INST_MAX_VALUES];
+    static INST_U32 keepVal[INST_MAX_VALUES];
+    static int keepS98Set[INST_S98_COUNT];
+    static char keepS98Val[INST_S98_COUNT][32];
+    PROPSHEETPAGEA p[3];
+    HPROPSHEETPAGE hp[3];
+    PROPSHEETHEADERA h;
+    int idx[WIZ_ROWS];
+    int n = 0;
+    int i;
+
+    comp_take(comp);
+    for (i = 0; i < 3; i++) {
+        int in = pg[i] == P_USB ? usbChoice &&
+                     (rows_for(P_USB, 0, idx, WIZ_ROWS) > 0 ||
+                      rows_for(P_USB, 1, idx, WIZ_ROWS) > 0) :
+                 pg[i] == P_TBS ? tbChoice : s98Choice;
+        if (!in) {
+            continue;
+        }
+        memset(&p[n], 0, sizeof(p[n]));
+        p[n].dwSize = sizeof(p[n]);
+        p[n].dwFlags = PSP_USETITLE;
+        p[n].hInstance = hInst;
+        p[n].pszTemplate = MAKEINTRESOURCEA(IDD_SETTINGS);
+        p[n].pszTitle = title[i];
+        p[n].pfnDlgProc = tab_proc;
+        p[n].lParam = pg[i];
+        hp[n] = CreatePropertySheetPageA(&p[n]);
+        if (hp[n] == NULL) {
+            while (n > 0) {
+                DestroyPropertySheetPage(hp[--n]);
+            }
+            return;
+        }
+        n++;
+    }
+    if (n == 0) {
+        MessageBoxA(GetParent(comp), "None of the components ticked has "
+                    "settings on this computer.", "xHCI98 Setup",
+                    MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    memcpy(keepSet, choiceSet, sizeof(keepSet));
+    memcpy(keepVal, choiceVal, sizeof(keepVal));
+    memcpy(keepS98Set, s98WinSet, sizeof(keepS98Set));
+    memcpy(keepS98Val, s98WinVal, sizeof(keepS98Val));
+    memset(&h, 0, sizeof(h));
+    h.dwSize = sizeof(h);
+    h.dwFlags = PSH_NOAPPLYNOW;
+    h.hwndParent = GetParent(comp);
+    h.hInstance = hInst;
+    h.pszCaption = "xHCI98 Settings";
+    h.nPages = (UINT)n;
+    h.phpage = hp;
+    setApplied = 0;
+    PropertySheetA(&h);
+    if (!setApplied) {
+        memcpy(choiceSet, keepSet, sizeof(keepSet));
+        memcpy(choiceVal, keepVal, sizeof(keepVal));
+        memcpy(s98WinSet, keepS98Set, sizeof(keepS98Set));
+        memcpy(s98WinVal, keepS98Val, sizeof(keepS98Val));
+    }
+    /* The tabs' controls went with the sheet. */
+    memset(pageRows, 0, sizeof(pageRows));
+}
+
+/* Each paragraph's first sentence, one line each, for the Summary. */
+static void first_sentences(TEXTBUF *t, const char *text)
+{
+    const char *p = text;
+    char line[600];
+
+    while (*p != '\0') {
+        const char *end = strstr(p, ". ");
+        const char *para = strstr(p, "\n\n");
+        size_t n;
+        if (end == NULL || (para != NULL && para < end)) {
+            end = para != NULL ? para : p + strlen(p);
+        } else {
+            end++;
+        }
+        n = (size_t)(end - p);
+        if (n > sizeof(line) - 8) {
+            n = sizeof(line) - 8;
+        }
+        memcpy(line, "! ", 2);
+        memcpy(line + 2, p, n);
+        line[2 + n] = '\0';
+        strcat(line, "\n");
+        tb_add(t, line);
+        p = para != NULL ? para + 2 : p + strlen(p);
+    }
 }
 
 /* ---- the summary (record 26 section 5.7) ----------------------------------- */
@@ -2038,12 +3602,35 @@ static void summary_fill(HWND dlg)
         /* The tools installed for the first time or moved, and the
          * USB Tree's start at login turned on or off, count too. */
         other = (tbChoice && !tbInstalled) || s98Choice ||
+                (storShown && storOffered && storChoice) ||
                 dirNow[0] == '\0' || !inst_eq(dirNow, dirChoice) ||
-                (trayHere && trayChoice != inst_eng_tray_started());
+                (trayHere && trayChoice != inst_eng_tray_started()) ||
+                (trayHere && (fastForced || fastChoice != fastNow));
+        /* A driver set the download carries and the user chose to copy
+         * (section 6.7) counts too. */
+        for (i = 0; i < INST_SET_COUNT; i++) {
+            int state = INST_OTHER_ABSENT;
+            int forThis = 0;
+            int inc = 0;
+            int stage = 0;
+            inst_eng_other_state(i, &state, &forThis, &inc, &stage);
+            other |= state == INST_OTHER_CARRIED && inc;
+        }
         _snprintf(line, sizeof(line) - 1, "%s.\n\n",
                   inst_eng_summary_head(writes, other));
         line[sizeof(line) - 1] = '\0';
         tb_add(&t, line);
+        {
+            /* The Components page's warnings repeated (record 26 section
+             * 5.0): each one's first sentence. */
+            char warn[2048];
+            if (inst_eng_comp_warn(usbChoice, storShown && storChoice,
+                                   s98Choice, dirChoice, warn,
+                                   sizeof(warn)) != 0) {
+                first_sentences(&t, warn);
+                tb_add(&t, "\n");
+            }
+        }
         for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
             if (choiceSet[i] && choice_live(i) &&
                 inst_cm_mode_off(instValues[i].Name, choiceVal[i])) {
@@ -2067,8 +3654,10 @@ static void summary_fill(HWND dlg)
             tb_add(&t, "- none present: the drivers are staged for later.\n");
         }
         tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys\n" :
+               tbHave ? "\nThe components:\n- xhci98.sys and xhciuas.sys: "
+               "left out (the connection manager alone)\n" :
                "\nThe components:\n- xhci98.sys and xhciuas.sys: left out "
-               "(the connection manager alone)\n");
+               "(the xHCI98 tools alone)\n");
         if (usbChoice) {
             tb_add(&t, uasChoice ? "- xhciuas.sys, the UAS disk driver\n" :
                    "- xhciuas.sys, the UAS disk driver: left out (one "
@@ -2087,10 +3676,58 @@ static void summary_fill(HWND dlg)
             line[sizeof(line) - 1] = '\0';
             tb_add(&t, line);
         }
+        if (vsdShown && vsd9x) {
+            const char *vl = inst_eng_vsd_plan();
+            if (vl != NULL) {
+                _snprintf(line, sizeof(line) - 1, "- %s\n", vl);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
+            }
+        }
+        {
+            char ol[900];
+            inst_eng_other_summary(dirChoice, ol, sizeof(ol));
+            if (ol[0] != '\0') {
+                char *p = ol;
+                while (*p != '\0') {
+                    char *e = strstr(p, "\r\n");
+                    if (e != NULL) {
+                        *e = '\0';
+                    }
+                    _snprintf(line, sizeof(line) - 1, p[0] == ' ' ?
+                              "%s\n" : "- %s\n", p);
+                    line[sizeof(line) - 1] = '\0';
+                    tb_add(&t, line);
+                    if (e == NULL) {
+                        break;
+                    }
+                    p = e + 2;
+                }
+            }
+        }
+        if (storShown) {
+            char sl[400];
+            inst_eng_stor_summary(sl, sizeof(sl));
+            if (sl[0] != '\0') {
+                /* Each part added whole: the note may carry the lone
+                 * USBSTOR.INF's sentence (record 26 section 6.5.5). */
+                tb_add(&t, "- ");
+                tb_add(&t, sl);
+                tb_add(&t, "\n  ");
+                tb_add(&t, storNote);
+                tb_add(&t, "\n");
+            }
+        }
         if (trayHere) {
             tb_add(&t, trayChoice ? "- the xHCI98 USB Tree, started at login\n"
                                   : "- the xHCI98 USB Tree, not started at "
                                     "login\n");
+            if (fastForced || fastChoice != fastNow) {
+                tb_add(&t, fastChoice ? "- its \"can run faster\" notice turned "
+                                        "on for this computer\n"
+                                      : "- its \"can run faster\" notice turned "
+                                        "off for this computer\n");
+            }
         }
         tb_add(&t, "\nThe settings written machine-wide:\n");
         any = 0;
@@ -2291,7 +3928,29 @@ static void finish_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_F_LAST, ran ? last :
                     "Nothing was changed.");
     EnterCriticalSection(&textLock);
-    set_edit(dlg, IDC_DETAIL, runText.Buf != NULL ? runText.Buf : "");
+    {
+        /* The other USB drivers' paragraph under the run's text, on every
+         * install run (record 26 section 6.7.7). */
+        static char para[4096];
+        char *all;
+        const char *run = runText.Buf != NULL ? runText.Buf : "";
+        para[0] = '\0';
+        if (!uninstallMode) {
+            inst_eng_other_finish(para, sizeof(para));
+        }
+        all = (char *)malloc(strlen(run) + strlen(para) + 8);
+        if (all != NULL) {
+            strcpy(all, run);
+            if (para[0] != '\0') {
+                strcat(all, "\n\n");
+                strcat(all, para);
+            }
+            set_edit(dlg, IDC_DETAIL, all);
+            free(all);
+        } else {
+            set_edit(dlg, IDC_DETAIL, run);
+        }
+    }
     LeaveCriticalSection(&textLock);
     SetDlgItemTextA(dlg, IDC_F_NOW, inst_page_text(cold ? INST_PT_SHUT_NOW
                                                         : INST_PT_NOW));
@@ -2378,6 +4037,35 @@ static int page_skipped(int page)
     }
 }
 
+/* Next or Back on a settings page with parts (record 26 section 5.4, "The
+ * layout"): another part of the same page shown, its choices already
+ * taken, and 1 so the sheet stays; 0 at the page's first or last part. */
+static int part_step(HWND dlg, int page, int step)
+{
+    ROWPAGE *rp;
+    int to;
+
+    if (page != P_USB && page != P_TBS && page != P_S98) {
+        return 0;
+    }
+    rp = page_rows(page);
+    to = rp->Part + step;
+    if (to < 0 || to >= rp->Parts) {
+        return 0;
+    }
+    /* The focus to the button pressed first: the control that has it goes
+     * with its part. */
+    if (sheet != NULL) {
+        SendMessageA(sheet, WM_APP_FOCUS, step < 0 ? 1 : 0, 0);
+    }
+    if (page == P_S98) {
+        s98_page_fill(dlg, to);
+    } else {
+        settings_fill(dlg, page, to);
+    }
+    return 1;
+}
+
 static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     int page = GET_PAGE(dlg);
@@ -2416,17 +4104,36 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_U_AGREE:
             welcome_state(dlg);
             return TRUE;
-        case IDC_C_BROWSE:
-            comp_browse(dlg);
+        case IDC_C_FOLDER:
+            if (DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_FOLDER), dlg,
+                                folder_proc, 0) == IDOK) {
+                comp_dirline(dlg);
+            }
+            return TRUE;
+        case IDC_C_SETTINGS:
+            settings_open(dlg);
             return TRUE;
         case IDC_C_TB:
             if (HIWORD(wp) == BN_CLICKED) {
-                /* Stor98 follows its parent (owner, 2026-10-19): ticked
-                 * with it, and can be unticked under it. */
-                CheckDlgButton(dlg, IDC_C_S98,
-                               IsDlgButtonChecked(dlg, IDC_C_TB) ==
-                               BST_CHECKED ? BST_CHECKED : BST_UNCHECKED);
-                comp_s98_sync(dlg);
+                /* Stor98 follows its parent (owner, 2026-10-19): its own
+                 * state with it, unticked without it (record 26 section
+                 * 5.0, draft 35). */
+                comp_s98_follow(dlg);
+            }
+            return TRUE;
+        case IDC_C_S98:
+            if (HIWORD(wp) == BN_CLICKED) {
+                if (IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED) {
+                    s98Own = IsDlgButtonChecked(dlg, IDC_C_S98) ==
+                             BST_CHECKED;
+                }
+                comp_vsd_follow(dlg);
+            }
+            return TRUE;
+        case IDC_C_VSD:
+            if (HIWORD(wp) == BN_CLICKED &&
+                IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED) {
+                vsdOwn = IsDlgButtonChecked(dlg, IDC_C_VSD) == BST_CHECKED;
             }
             return TRUE;
         case IDC_C_UAS:
@@ -2437,6 +4144,13 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_C_DRIVERS:
             if (HIWORD(wp) == BN_CLICKED) {
                 comp_usb_click(dlg);
+            }
+            return TRUE;
+        case IDC_O_BASE + IDC_O_BOX:
+        case IDC_O_BASE + IDC_O_STRIDE + IDC_O_BOX:
+            if (HIWORD(wp) == BN_CLICKED) {
+                oth_sync(dlg, LOWORD(wp) == IDC_O_BASE + IDC_O_BOX ?
+                         INST_SET_FREE : INST_SET_NONFREE);
             }
             return TRUE;
         case IDC_S_ADVANCED:
@@ -2462,7 +4176,7 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         default:
             if (HIWORD(wp) == CBN_SETFOCUS || HIWORD(wp) == CBN_SELCHANGE ||
                 HIWORD(wp) == EN_SETFOCUS) {
-                ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
+                ROWPAGE *rp = page_rows(page);
                 int i;
                 for (i = 0; (page == P_USB || page == P_TBS) && i < rp->Count;
                      i++) {
@@ -2495,20 +4209,23 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 comp_fill(dlg);
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
+            case P_OTHER:
+                oth_fill(dlg);
+                buttons(PSWIZB_BACK | PSWIZB_NEXT);
+                break;
             case P_USB:
             case P_TBS:
-                settings_fill(dlg, page);
+                /* Entered with Back: the last part (record 26 section
+                 * 5.4, "The layout"). */
+                settings_fill(dlg, page, navBack ? -1 : 0);
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
             case P_S98:
-                s98_page_fill(dlg);
+                s98_page_fill(dlg, navBack ? -1 : 0);
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
             case P_SUMMARY:
                 summary_fill(dlg);
-                if (!uninstallMode) {
-                    s98_unused_make(dlg);
-                }
                 buttons((uninstallMode ? 0 : PSWIZB_BACK) | PSWIZB_NEXT);
                 next_text(uninstallMode ? "&Remove" : "&Install");
                 break;
@@ -2538,16 +4255,38 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 s98_page_leave(dlg);
             }
             if (page == P_SUMMARY && !uninstallMode) {
-                inst_eng_s98_file_ok(s98UnusedBox != NULL &&
-                                     SendMessageA(s98UnusedBox, BM_GETCHECK,
-                                                  0, 0) == BST_CHECKED);
+                /* The Stor98 file update's message box on 98 SE and ME
+                 * (record 26 section 5.0): Cancel stays, nothing written. */
+                int ok = 0;
+                if (is_9x() && s98Choice && inst_eng_s98_file_update()) {
+                    char box[600];
+                    _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; "
+                              "Cancel stays on this page.",
+                              inst_page_text(INST_PT_S98_UNUSED));
+                    box[sizeof(box) - 1] = '\0';
+                    if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
+                                    MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+                        SET_RESULT(dlg, -1);
+                        return TRUE;
+                    }
+                    ok = 1;
+                }
+                inst_eng_s98_file_ok(ok);
             }
             if ((page == P_COMP && !comp_leave(dlg)) ||
+                (page == P_OTHER && !oth_leave(dlg)) ||
                 ((page == P_USB || page == P_TBS) &&
                  !settings_leave(dlg, page))) {
                 SET_RESULT(dlg, -1);
                 return TRUE;
             }
+            if (part_step(dlg, page, 1)) {
+                SET_RESULT(dlg, -1);
+                return TRUE;
+            }
+            /* The direction a page is entered from: a departure's alone
+             * (record 26 section 5.4, "The layout"). */
+            navBack = 0;
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_WIZBACK:
@@ -2558,6 +4297,11 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 SET_RESULT(dlg, -1);
                 return TRUE;
             }
+            if (part_step(dlg, page, -1)) {
+                SET_RESULT(dlg, -1);
+                return TRUE;
+            }
+            navBack = 1;
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_WIZFINISH:
@@ -2592,13 +4336,55 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     return FALSE;
 }
 
+/* The sheet moved, never resized, so its frame lies in the work area (the
+ * 43.11 finding: 7 at 120 DPI on an 800 by 600 screen); its top left kept
+ * inside where it cannot all fit (record 26 section 5.0, draft 35). */
+static void wiz_fit(HWND h)
+{
+    RECT w;
+    RECT a;
+    int x;
+    int y;
+
+    if (!GetWindowRect(h, &w) ||
+        !SystemParametersInfoA(SPI_GETWORKAREA, 0, &a, 0)) {
+        return;
+    }
+    x = w.left;
+    y = w.top;
+    if (x + (w.right - w.left) > a.right) {
+        x = a.right - (w.right - w.left);
+    }
+    if (y + (w.bottom - w.top) > a.bottom) {
+        y = a.bottom - (w.bottom - w.top);
+    }
+    if (x < a.left) {
+        x = a.left;
+    }
+    if (y < a.top) {
+        y = a.top;
+    }
+    if (x != w.left || y != w.top) {
+        SetWindowPos(h, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER |
+                     SWP_NOACTIVATE);
+    }
+}
+
 /* The sheet's own messages: a job's end, the gate. */
 static WNDPROC sheetProc;
 
 static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
+    if (msg == WM_MOUSEWHEEL && othlist_wheel_over(wp, lp)) {
+        return 0;
+    }
+    if (msg == WM_APP_FIT) {
+        wiz_fit(h);
+        return 0;
+    }
     if (msg == WM_APP_DONE) {
         if ((int)wp == JOB_READ) {
+            readDone = 1;
             if (pageWnd[P_WELCOME] != NULL) {
                 welcome_state(pageWnd[P_WELCOME]);
             }
@@ -2614,7 +4400,8 @@ static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                            MB_OKCANCEL | MB_ICONINFORMATION) == IDOK ? 1 : 0;
     }
     if (msg == WM_APP_FOCUS) {
-        HWND b = GetDlgItem(h, ID_SHEET_NEXT);
+        /* wParam 1: Back, a part of a settings page stepped back to. */
+        HWND b = GetDlgItem(h, wp == 1 ? ID_SHEET_BACK : ID_SHEET_NEXT);
 
         if (b == NULL || !IsWindowVisible(b) || !IsWindowEnabled(b)) {
             b = GetDlgItem(h, ID_SHEET_FINISH);
@@ -2638,6 +4425,7 @@ static int CALLBACK sheet_cb(HWND h, UINT msg, LPARAM lp)
         /* Windows' own dialogs, and the 98 SE and ME helper's, are owned
          * by the sheet (record 26 section 3.1, record 27 section 4.1). */
         inst_eng_owner(h);
+        PostMessageA(h, WM_APP_FIT, 0, 0);
         if (!uninstallMode) {
             start_job(JOB_READ);
         }
@@ -2649,25 +4437,28 @@ static int CALLBACK sheet_cb(HWND h, UINT msg, LPARAM lp)
 
 static int run_wizard(void)
 {
+    /* Record 26 section 5.0: Welcome, Components, Summary, Progress,
+     * (Steps), Finish; the settings in the Settings dialog. */
     static const int order[] = {
-        P_WELCOME, P_FOUND, P_COMP, P_USB, P_TBS, P_S98, P_SUMMARY,
-        P_PROGRESS, P_STEPS, P_FINISH
+        P_WELCOME, P_COMP, P_OTHER, P_SUMMARY, P_PROGRESS, P_STEPS,
+        P_FINISH
     };
     static const int uorder[] = { P_WELCOME, P_SUMMARY, P_PROGRESS, P_FINISH };
     static const int tmpl[P_COUNT] = {
         IDD_WELCOME, IDD_FOUND, IDD_COMPONENTS, IDD_SETTINGS, IDD_SETTINGS,
-        IDD_SETTINGS, IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH
+        IDD_SETTINGS, IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH,
+        IDD_OTHER
     };
     static const char *const title[P_COUNT] = {
         "Welcome", "What was found", "Components", "USB settings",
         "Thunderbolt settings", "Stor98 settings", "Summary", "Progress",
-        "Steps left for you", "Finish"
+        "Steps left for you", "Finish", "Other USB drivers"
     };
     PROPSHEETPAGEA pg[P_COUNT];
     HPROPSHEETPAGE hp[P_COUNT];
     PROPSHEETHEADERA h;
     const int *list = uninstallMode ? uorder : order;
-    int n = uninstallMode ? 4 : 10;
+    int n = uninstallMode ? 4 : (int)(sizeof(order) / sizeof(order[0]));
     int i;
 
     for (i = 0; i < n; i++) {
@@ -2850,6 +4641,576 @@ static void st_page(HWND parent, int tmpl, const int *ids, const int *texts,
     DestroyWindow(d);
 }
 
+/* A scrolling read-only box shows a number of whole lines of its font: its
+ * formatting rectangle, where the edit control draws its text, is that
+ * many lines high at least (owner, 2026-10-24: three at least). */
+static void st_box_lines(HWND box, int lines, const char *what)
+{
+    HFONT f = (HFONT)SendMessageA(box, WM_GETFONT, 0, 0);
+    HDC dc = GetDC(box);
+    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    TEXTMETRICA tm;
+    RECT fmt;
+    char msg[200];
+
+    GetTextMetricsA(dc, &tm);
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(box, dc);
+    SendMessageA(box, EM_GETRECT, 0, (LPARAM)&fmt);
+    _snprintf(msg, sizeof(msg) - 1, "%s shows %d whole lines (%ld px, a "
+              "line %ld)", what, lines, (long)(fmt.bottom - fmt.top),
+              (long)tm.tmHeight);
+    msg[sizeof(msg) - 1] = '\0';
+    st(fmt.bottom - fmt.top >= lines * tm.tmHeight, msg);
+}
+
+/* The Components page as 98 SE lays it out (comp_layout, record 26
+ * section 5.3, draft 17): the rows one below another, none overlapping,
+ * the last inside the page. */
+static void st_comp_layout(HWND parent)
+{
+    static const int order[] = {
+        IDC_C_DRIVERS, IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR, IDC_C_STOR_T,
+        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_C_TRAY,
+        IDC_C_FAST, IDC_C_DIRLINE, IDC_C_SETTINGS
+    };
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
+                                parent, st_proc, 0);
+    RECT prev;
+    RECT r;
+    RECT page;
+    POINT pt;
+    size_t i;
+    int ok = 1;
+    int saved = storShown;
+
+    st(d != NULL, "the components, as 98 SE lays them out");
+    if (d == NULL) {
+        return;
+    }
+    storShown = 1;
+    compLaidOut = 0;
+    comp_layout(d);
+    GetClientRect(d, &page);
+    memset(&prev, 0, sizeof(prev));
+    for (i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+        GetWindowRect(GetDlgItem(d, order[i]), &r);
+        pt.x = r.left;
+        pt.y = r.top;
+        ScreenToClient(d, &pt);
+        r.bottom = pt.y + (r.bottom - r.top);
+        r.top = pt.y;
+        if ((i > 0 && r.top < prev.bottom) || r.bottom > page.bottom) {
+            printf("components on 98 SE: control %d at %ld..%ld, the one "
+                   "before ends at %ld, the page at %ld\n", order[i],
+                   (long)r.top, (long)r.bottom, (long)prev.bottom,
+                   (long)page.bottom);
+            ok = 0;
+        }
+        prev = r;
+    }
+    st(ok, "the components on 98 SE: no row over another, all on the page");
+    st_box_lines(GetDlgItem(d, IDC_C_STOR_T), 3, "the components on 98 SE: "
+                 "the storage box");
+    storShown = saved;
+    compLaidOut = 0;
+    DestroyWindow(d);
+}
+
+/* A control's rectangle in its dialog's client coordinates. */
+static RECT st_rect(HWND d, HWND c)
+{
+    RECT r;
+    POINT pt;
+
+    GetWindowRect(c, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(d, &pt);
+    r.right = pt.x + (r.right - r.left);
+    r.bottom = pt.y + (r.bottom - r.top);
+    r.left = pt.x;
+    r.top = pt.y;
+    return r;
+}
+
+/* A drop-down's entries (record 26 section 5.4, "The layout"): each
+ * within the closed box less the allowance the open list adds to the
+ * longest (combo_fit), so the open list is the box's width, and that it
+ * is. */
+static void st_combo(HWND combo, const char *what)
+{
+    char text[320];
+    char msg[200];
+    HFONT f = (HFONT)SendMessageA(combo, WM_GETFONT, 0, 0);
+    HDC dc = GetDC(combo);
+    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    int dropped = (int)SendMessageA(combo, CB_GETDROPPEDWIDTH, 0, 0);
+    int n = (int)SendMessageA(combo, CB_GETCOUNT, 0, 0);
+    int longest = 0;
+    int measured = 0;
+    int room;
+    RECT r;
+    SIZE sz;
+    int k;
+
+    /* Every entry measured, or the checks below prove nothing. */
+    for (k = 0; k < n; k++) {
+        int len = (int)SendMessageA(combo, CB_GETLBTEXTLEN, (WPARAM)k, 0);
+        if (len <= 0 || len >= (int)sizeof(text) ||
+            (int)SendMessageA(combo, CB_GETLBTEXT, (WPARAM)k,
+                              (LPARAM)text) != len ||
+            !GetTextExtentPoint32A(dc, text, len, &sz)) {
+            continue;
+        }
+        measured++;
+        if (sz.cx > longest) {
+            longest = sz.cx;
+        }
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    _snprintf(msg, sizeof(msg) - 1, "%s: every entry measured (%d of %d)",
+              what, measured, n);
+    msg[sizeof(msg) - 1] = '\0';
+    st(n > 0 && measured == n, msg);
+    ReleaseDC(combo, dc);
+    GetWindowRect(combo, &r);
+    room = (r.right - r.left) - combo_extra(combo);
+    _snprintf(msg, sizeof(msg) - 1, "%s: every entry (the longest %d) within "
+              "the closed box (%d)", what, longest, room);
+    msg[sizeof(msg) - 1] = '\0';
+    st(n > 0 && longest <= room, msg);
+    _snprintf(msg, sizeof(msg) - 1, "%s: the open list (%d) is the closed "
+              "box's width (%ld)", what, dropped, (long)(r.right - r.left));
+    msg[sizeof(msg) - 1] = '\0';
+    st(dropped == r.right - r.left, msg);
+}
+
+/* One part of a settings page as laid out (record 26 section 5.4, "The
+ * layout"): every text whole, nothing over anything else or off the page,
+ * the note six lines at least, each closed box across the column and its
+ * open list as wide as its longest entry. */
+static void st_lay_part(HWND d, const ROWPAGE *rp, const char *what)
+{
+    HWND note = GetDlgItem(d, IDC_S_NOTE);
+    RECT page;
+    RECT head = st_rect(d, GetDlgItem(d, IDC_S_HEAD));
+    RECT n = st_rect(d, note);
+    RECT adv = st_rect(d, GetDlgItem(d, IDC_S_ADVANCED));
+    RECT nc;
+    RECT prev = head;
+    TEXTMETRICA tm;
+    HDC dc;
+    HFONT f;
+    HFONT old;
+    char msg[160];
+    int ok = 1;
+    int i;
+
+    GetClientRect(d, &page);
+    st(fits(GetDlgItem(d, IDC_S_HEAD)), "the head fits");
+    st(rp->Count >= 1 && rp->Count <= WIZ_LAY_PER_PART, "one to three rows a "
+       "part");
+    for (i = 0; i < rp->Count; i++) {
+        const ROWCTL *rc = &rp->R[i];
+        RECT l = st_rect(d, rc->Label);
+        RECT w = st_rect(d, rc->Now);
+        RECT c = st_rect(d, rc->Choice);
+        char cls[16];
+        _snprintf(msg, sizeof(msg) - 1, "%s, row %d: the label fits", what, i);
+        msg[sizeof(msg) - 1] = '\0';
+        st(fits(rc->Label), msg);
+        _snprintf(msg, sizeof(msg) - 1, "%s, row %d: the now text fits", what,
+                  i);
+        msg[sizeof(msg) - 1] = '\0';
+        st(fits(rc->Now), msg);
+        if (l.top < prev.bottom || l.right > w.left || l.bottom > c.top ||
+            w.bottom > c.top || w.right > head.right || c.right > head.right ||
+            l.left != head.left || c.left != head.left) {
+            printf("%s, row %d: label %ld..%ld, now %ld..%ld (x %ld..%ld), "
+                   "choice %ld..%ld (x %ld..%ld), above it %ld\n", what, i,
+                   (long)l.top, (long)l.bottom, (long)w.top, (long)w.bottom,
+                   (long)w.left, (long)w.right, (long)c.top, (long)c.bottom,
+                   (long)c.left, (long)c.right, (long)prev.bottom);
+            ok = 0;
+        }
+        GetClassNameA(rc->Choice, cls, sizeof(cls));
+        if (lstrcmpiA(cls, "COMBOBOX") == 0) {
+            if (c.right != head.right) {
+                printf("%s, row %d: the closed box ends at %ld, the column at "
+                       "%ld\n", what, i, (long)c.right, (long)head.right);
+                ok = 0;
+            }
+            _snprintf(msg, sizeof(msg) - 1, "%s, row %d", what, i);
+            msg[sizeof(msg) - 1] = '\0';
+            st_combo(rc->Choice, msg);
+        }
+        prev = c;
+    }
+    if (n.top < prev.bottom || n.bottom > page.bottom || n.left != head.left ||
+        adv.left < n.right || adv.right > page.right ||
+        adv.bottom > page.bottom || adv.top < prev.bottom) {
+        printf("%s: the note %ld..%ld (x %ld..%ld), the last row ends at %ld, "
+               "Advanced x %ld..%ld y %ld..%ld, the page %ldx%ld\n", what,
+               (long)n.top, (long)n.bottom, (long)n.left, (long)n.right,
+               (long)prev.bottom, (long)adv.left, (long)adv.right,
+               (long)adv.top, (long)adv.bottom, (long)page.right,
+               (long)page.bottom);
+        ok = 0;
+    }
+    _snprintf(msg, sizeof(msg) - 1, "%s: no control over another, all on the "
+              "page", what);
+    msg[sizeof(msg) - 1] = '\0';
+    st(ok, msg);
+    dc = GetDC(note);
+    f = (HFONT)SendMessageA(note, WM_GETFONT, 0, 0);
+    old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    GetTextMetricsA(dc, &tm);
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(note, dc);
+    /* The edit control's formatting rectangle: where its text is drawn. */
+    SendMessageA(note, EM_GETRECT, 0, (LPARAM)&nc);
+    _snprintf(msg, sizeof(msg) - 1, "%s: the note shows six lines (%ld px, "
+              "a line %ld)", what, (long)(nc.bottom - nc.top),
+              (long)tm.tmHeight);
+    msg[sizeof(msg) - 1] = '\0';
+    st(nc.bottom - nc.top >= 6 * tm.tmHeight, msg);
+}
+
+/* The made-up Stor98 rows: both systems, set and not set. */
+static int stS98Nt;
+static int stS98State;
+
+static int st_s98_row(int i, INST_S98ROW *r)
+{
+    const INST_S98_VALUE *v = &instS98Values[i];
+    char now[32];
+
+    memset(r, 0, sizeof(*r));
+    if (!inst_s98_applies(i, stS98Nt)) {
+        return 0;
+    }
+    r->Value = i;
+    r->Asked = v->Asked;
+    r->Name = stS98Nt ? v->KeyNt : v->Name9x;
+    r->State = stS98State;
+    if (v->Kind == INST_S98_WORDS) {
+        inst_copy(now, v->Words[0], sizeof(now));
+    } else {
+        _snprintf(now, sizeof(now) - 1, "%lu", (unsigned long)v->Hi);
+        now[sizeof(now) - 1] = '\0';
+    }
+    inst_copy(r->Now, stS98State > 0 ? now : "", sizeof(r->Now));
+    inst_s98_now_text(i, stS98Nt, 0, stS98State, stS98State > 0 ? now : NULL,
+                      r->NowText, sizeof(r->NowText));
+    return 1;
+}
+
+/* The made-up rows of the drivers' values: every value of the table for
+ * the pages and Advanced, in one form (0 mixed, 1 set machine-wide, 2
+ * greyed: the values another system has alone). */
+static void st_rows(int form)
+{
+    int i;
+    int k;
+
+    rowCount = 0;
+    for (i = 0; i < instValueCount && rowCount < INST_MAX_VALUES; i++) {
+        INST_ROW *r = &rows[rowCount];
+        if ((instValues[i].Inf != INST_INF_XHCI &&
+             instValues[i].Inf != INST_INF_CM) ||
+            (form == 2 && inst_value_only(i) == NULL)) {
+            continue;
+        }
+        memset(r, 0, sizeof(*r));
+        r->Value = i;
+        r->Asked = instValues[i].Asked != 0;
+        r->Mask = instValues[i].Settable | instValues[i].Asked;
+        r->Def = instValues[i].Def;
+        r->Same = form != 0;
+        r->InForce = r->Def;
+        r->MwState = form == 1;
+        r->MwValue = 0xFFFFFFFFUL;
+        r->NowCount = 2;
+        for (k = 0; k < 2; k++) {
+            r->Now[k].State = 1;
+            r->Now[k].Value = (INST_U32)k;
+            r->Now[k].Desc = "Intel(R) USB 3.0 eXtensible Host "
+                             "Controller";
+        }
+        r->Greyed = form == 2;
+        rowCount++;
+    }
+}
+
+/* A choice made on a part kept across Next and Back (record 26 section
+ * 5.4, "The layout"): the first row's first entry that writes chosen, the
+ * page left to its last part and back to its first. */
+static void st_keep(HWND d, int page)
+{
+    ROWPAGE *rp = page_rows(page);
+    const INST_ROW *r;
+    int n;
+    int k;
+
+    settings_fill(d, page, 0);
+    if (rp->Count == 0) {
+        return;
+    }
+    r = &rows[rp->R[0].Row];
+    if (r->Greyed || instValues[r->Value].Hi != 0) {
+        rows_clear(rp);
+        return;
+    }
+    n = (int)SendMessageA(rp->R[0].Choice, CB_GETCOUNT, 0, 0);
+    for (k = 0; k < n; k++) {
+        INST_U32 data = (INST_U32)(size_t)SendMessageA(rp->R[0].Choice,
+                                                        CB_GETITEMDATA,
+                                                        (WPARAM)k, 0);
+        if (data != 0xFFFFFFFFUL && choice_writes(r, 0, data)) {
+            break;
+        }
+    }
+    if (k < n) {
+        SendMessageA(rp->R[0].Choice, CB_SETCURSEL, (WPARAM)k, 0);
+        st(settings_leave(d, page), "the part left");
+        settings_fill(d, page, -1);
+        st(settings_leave(d, page), "the last part left");
+        settings_fill(d, page, 0);
+        st(choiceSet[r->Value] &&
+           (int)SendMessageA(rp->R[0].Choice, CB_GETCURSEL, 0, 0) == k,
+           "a choice made on the first part kept after Next and Back");
+        choiceSet[r->Value] = 0;
+    }
+    rows_clear(rp);
+}
+
+/* The Advanced dialog with each of a page's advanced values shown in
+ * turn: its list's entries within the closed box, the open list as wide
+ * as the longest. */
+static void st_advanced(HWND parent, int page, const char *form)
+{
+    HWND a;
+    char what[96];
+    int i;
+
+    advPage = page;
+    a = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_ADVANCED), parent,
+                           adv_proc, 0);
+    st(a != NULL, "the Advanced dialog");
+    if (a == NULL) {
+        return;
+    }
+    for (i = 0; i < advCount; i++) {
+        adv_show(a, i);
+        if (instValues[rows[advIdx[i]].Value].Hi != 0) {
+            continue;
+        }
+        _snprintf(what, sizeof(what) - 1, "Advanced, %s, %s", form,
+                  instValues[rows[advIdx[i]].Value].Name);
+        what[sizeof(what) - 1] = '\0';
+        st_combo(GetDlgItem(a, IDC_A_CHOICE), what);
+    }
+    DestroyWindow(a);
+}
+
+/* Every settings page laid out (record 26 sections 5.4 and 11), every
+ * part, at the IDD_SETTINGS template's size and at the sheet's (the
+ * Components template's): the drivers' pages with every asked value of
+ * the table, mixed, set machine-wide and greyed, and Stor98's with its
+ * asked rows on both systems, set and not set; a choice kept across
+ * parts; the Advanced dialog's lists. */
+static void st_settings_layout(HWND parent)
+{
+    static const char *const form[] = { "mixed", "machine-wide", "greyed" };
+    static const char *const size[] = { "the template", "the sheet" };
+    static const int pages[] = { P_USB, P_TBS };
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_SETTINGS), parent,
+                                st_proc, 0);
+    HWND c = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
+                                parent, st_proc, 0);
+    RECT win;
+    RECT cli;
+    RECT big;
+    char what[128];
+    int idx[WIZ_ROWS];
+    int s;
+    int v;
+    int p;
+    int i;
+    int k;
+    int seen;
+
+    st(d != NULL && c != NULL, "the settings page for its layout");
+    if (d == NULL || c == NULL) {
+        return;
+    }
+    GetClientRect(c, &big);
+    DestroyWindow(c);
+    for (s = 0; s < 2; s++) {
+        if (s == 1) {
+            /* The sheet gives every page its largest template's size. */
+            GetWindowRect(d, &win);
+            GetClientRect(d, &cli);
+            SetWindowPos(d, NULL, 0, 0, big.right + (win.right - win.left) -
+                         cli.right, big.bottom + (win.bottom - win.top) -
+                         cli.bottom, SWP_NOMOVE | SWP_NOZORDER |
+                         SWP_NOACTIVATE);
+        }
+        for (v = 0; v < 3; v++) {
+            st_rows(v);
+            for (p = 0; p < 2; p++) {
+                ROWPAGE *rp = page_rows(pages[p]);
+                int n = rows_for(pages[p], 0, idx, WIZ_ROWS);
+                settings_fill(d, pages[p], 0);
+                seen = 0;
+                for (k = 0; k < rp->Parts; k++) {
+                    settings_fill(d, pages[p], k);
+                    _snprintf(what, sizeof(what) - 1, "%s settings at %s, "
+                              "%s, part %d of %d", pages[p] == P_USB ? "USB" :
+                              "Thunderbolt", size[s], form[v], k + 1,
+                              rp->Parts);
+                    what[sizeof(what) - 1] = '\0';
+                    if (n > 0) {
+                        st_lay_part(d, rp, what);
+                    }
+                    for (i = 0; i < rp->Count; i++) {
+                        st(seen + i < n && rp->R[i].Row == idx[seen + i],
+                           "the rows in their order across the parts");
+                    }
+                    seen += rp->Count;
+                }
+                st(seen == n, "every row in one part");
+                settings_fill(d, pages[p], -1);
+                st(rp->Part == rp->Parts - 1, "entered by Back: the last "
+                   "part");
+                rows_clear(rp);
+                st_keep(d, pages[p]);
+                if (s == 0) {
+                    st_advanced(parent, pages[p], form[v]);
+                }
+            }
+        }
+        rowCount = 0;
+        s98RowFn = st_s98_row;
+        for (v = 0; v < 4; v++) {
+            ROWPAGE *rp = page_rows(P_S98);
+            stS98Nt = v & 1;
+            stS98State = v >> 1;
+            s98_page_fill(d, 0);
+            for (k = 0; k < rp->Parts; k++) {
+                s98_page_fill(d, k);
+                _snprintf(what, sizeof(what) - 1, "Stor98's settings at %s, "
+                          "%s, %s, part %d of %d", size[s], stS98Nt ?
+                          "2000 to 7" : "98 SE and ME", stS98State ? "set" :
+                          "not set", k + 1, rp->Parts);
+                what[sizeof(what) - 1] = '\0';
+                st_lay_part(d, rp, what);
+            }
+            rows_clear(rp);
+        }
+        s98RowFn = inst_eng_s98_row;
+    }
+    DestroyWindow(d);
+}
+
+/* The Other USB drivers page's list with every row of both tables, current
+ * and withdrawn (record 26 section 6.7.11): the list made in IDC_O_AREA's
+ * place as othlist_build makes it, each package's longest label (its "not
+ * available" form) in its box's text width with no word wider than it and
+ * no taller than the list's window, so every row can be scrolled into view
+ * whole; each "<set>: <heading>" one line in the list's width; the trust
+ * box's words likewise. */
+static void st_other_layout(HWND parent)
+{
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHER), parent,
+                                st_proc, 0);
+    HWND l;
+    HFONT font;
+    HFONT old;
+    HDC dc;
+    RECT area;
+    RECT c;
+    POINT pt;
+    char msg[200];
+    char label[INST_PKG_DESC_MAX + 40];
+    int w;
+    int boxH;
+    int set;
+    int i;
+    int lh;
+    int wide;
+
+    st(d != NULL, "the other USB drivers page");
+    if (d == NULL) {
+        return;
+    }
+    st_box_lines(GetDlgItem(d, IDC_O_DETAIL), 3, "the other USB drivers' "
+                 "details box");
+    font = (HFONT)SendMessageA(d, WM_GETFONT, 0, 0);
+    GetWindowRect(GetDlgItem(d, IDC_O_AREA), &area);
+    pt.x = area.left;
+    pt.y = area.top;
+    ScreenToClient(d, &pt);
+    l = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_OTHERLIST), d, st_proc,
+                           0);
+    st(l != NULL, "the other USB drivers' list");
+    if (l == NULL) {
+        DestroyWindow(d);
+        return;
+    }
+    SetWindowPos(l, NULL, pt.x, pt.y, area.right - area.left,
+                 area.bottom - area.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    GetClientRect(l, &c);
+    w = c.right - dlu_x(d, 4);
+    dc = GetDC(l);
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    boxH = text_h(dc, "Xg", w, NULL) + 2;
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < instOtherHeadingCount; i++) {
+            _snprintf(label, sizeof(label) - 1, "%s: %s", set ==
+                      INST_SET_FREE ? "Free drivers" : "Non-free drivers",
+                      instOtherHeadings[i]);
+            label[sizeof(label) - 1] = '\0';
+            text_h(dc, label, 0, &wide);
+            _snprintf(msg, sizeof(msg) - 1, "the heading \"%s\" fits one "
+                      "line of the list", label);
+            msg[sizeof(msg) - 1] = '\0';
+            st(wide <= w - dlu_x(d, 2), msg);
+        }
+    }
+    for (i = 0; i < instOtherPkgCount; i++) {
+        const INST_OTHER_PKG *p = &instOtherPkgs[i];
+        _snprintf(label, sizeof(label) - 1, "%s (not available: see below)",
+                  p->Desc);
+        label[sizeof(label) - 1] = '\0';
+        lh = text_h(dc, label, w - dlu_x(d, 22), &wide);
+        _snprintf(msg, sizeof(msg) - 1, "%s:%s's box: no word wider than "
+                  "it, and whole in the list's window", p->Set ==
+                  INST_SET_FREE ? "free" : "nonfree", p->Id);
+        msg[sizeof(msg) - 1] = '\0';
+        st(wide <= w - dlu_x(d, 22) && lh > 0 &&
+           (lh < boxH ? boxH : lh) + 2 <= c.bottom, msg);
+    }
+    lh = text_h(dc, "Trust usb-wdm-free's test certificate on this computer "
+                "(its 64-bit drivers are signed with it; they load only in "
+                "test-signing mode)", w - dlu_x(d, 22), &wide);
+    st(wide <= w - dlu_x(d, 22) && lh + 2 <= c.bottom, "the trust box: whole "
+       "in the list's window");
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(l, dc);
+    DestroyWindow(l);
+    DestroyWindow(d);
+}
+
 static int selftest(void)
 {
     static const int wIds[] = { IDC_TEXT };
@@ -2857,17 +5218,17 @@ static int selftest(void)
     static const int uIds[] = { IDC_TITLE, IDC_TEXT, IDC_U_AGREE };
     static const int uTexts[] = { INST_PT_UN_TITLE, INST_PT_UN_WARN,
                                   INST_PT_UN_AGREE };
-    static const int fIds[] = { IDC_TEXT };
-    static const int fTexts[] = { INST_PT_FOUND };
+    static const int fIds[] = { IDC_C_DIR_L, IDC_C_DIR_T };
+    static const int fTexts[] = { INST_PT_DIR, INST_PT_DIR_9X };
     static const int cIds[] = {
         IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_S98,
-        IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T,
-        IDC_C_UAS, IDC_C_UAS_T
+        IDC_C_S98_T, IDC_C_TRAY, IDC_C_FAST, IDC_C_UAS, IDC_C_UAS_T,
+        IDC_C_STOR, IDC_C_VSD
     };
     static const int cTexts[] = {
         INST_PT_DRIVERS, INST_PT_DRIVERS_T, INST_PT_TB, INST_PT_TB_T,
-        INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_TRAY_T, INST_PT_DIR,
-        INST_PT_DIR_9X, INST_PT_UAS, INST_PT_UAS_T
+        INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_FAST, INST_PT_UAS,
+        INST_PT_UAS_T, INST_PT_STOR, INST_PT_VSD_OTHER
     };
     static const int s3Ids[] = { IDC_S_HEAD };
     static const int s3Texts[] = { INST_PT_S98SET };
@@ -2935,8 +5296,10 @@ static int selftest(void)
         st_page(parent, IDD_WELCOME, wIds, wTexts, 1, "the welcome");
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
-        st_page(parent, IDD_FOUND, fIds, fTexts, 1, "what was found");
+        st_page(parent, IDD_FOLDER, fIds, fTexts, 2, "the tools folder");
         st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
+        st_comp_layout(parent);
+        st_other_layout(parent);
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
                 "shutdown");
@@ -2958,75 +5321,7 @@ static int selftest(void)
         st_page(parent, IDD_STEPS, tIds, tTexts, 1, "the steps");
         st_page(parent, IDD_FINISH, nIds, nTexts, 2, "the finish");
         st_page(parent, IDD_ADVANCED, aIds, aTexts, 1, "the Advanced dialog");
-        /* Every settings row's label, at its size on the page (record 26
-         * section 11): the name and its sentence on two lines. */
-        {
-            HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_SETTINGS),
-                                        parent, st_proc, 0);
-            HFONT font = d != NULL ? (HFONT)SendMessageA(d, WM_GETFONT, 0, 0)
-                                   : NULL;
-            st(d != NULL, "the settings page for its rows");
-            for (i = 0; d != NULL && i < instValueCount; i++) {
-                INST_ROW r;
-                char text[256];
-                char msg[128];
-                HWND c;
-                memset(&r, 0, sizeof(r));
-                r.Value = i;
-                row_label(&r, text, sizeof(text));
-                c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, 22,
-                             284, 17, IDC_ROW_BASE, font);
-                _snprintf(msg, sizeof(msg) - 1, "the row label of %s fits",
-                          instValues[i].Name);
-                msg[sizeof(msg) - 1] = '\0';
-                st(fits(c), msg);
-                DestroyWindow(c);
-                /* A greyed row's words, in its "now" box. */
-                if (inst_value_only(i) != NULL) {
-                    _snprintf(text, sizeof(text) - 1, "(%s)",
-                              inst_value_only(i));
-                    text[sizeof(text) - 1] = '\0';
-                    c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX |
-                                 SS_LEFTNOWORDWRAP, 174, 41, 118, 10,
-                                 IDC_ROW_BASE, font);
-                    _snprintf(msg, sizeof(msg) - 1, "the greyed words of %s "
-                              "fit", instValues[i].Name);
-                    msg[sizeof(msg) - 1] = '\0';
-                    st(fits(c), msg);
-                    DestroyWindow(c);
-                }
-            }
-            /* Stor98's rows: the label, and each choice in its box. */
-            for (i = 0; d != NULL && i < INST_S98_COUNT; i++) {
-                const INST_S98_VALUE *v = &instS98Values[i];
-                char text[256];
-                char msg[128];
-                HWND c;
-                int k;
-                _snprintf(text, sizeof(text) - 1, "%s - %s",
-                          v->Name9x != NULL ? v->Name9x : v->KeyNt, v->What);
-                text[sizeof(text) - 1] = '\0';
-                c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, 22,
-                             284, 10, IDC_ROW_BASE, font);
-                _snprintf(msg, sizeof(msg) - 1, "Stor98's row label %d fits",
-                          i);
-                msg[sizeof(msg) - 1] = '\0';
-                st(fits(c), msg);
-                DestroyWindow(c);
-                for (k = 0; v->Asked && k < INST_S98_WORDS_MAX &&
-                            v->Means[k] != NULL; k++) {
-                    s98_item(i, k, text, sizeof(text));
-                    c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX |
-                                 SS_LEFTNOWORDWRAP, 8, 33, 186, 10,
-                                 IDC_ROW_BASE, font);
-                    st(fits(c), "a Stor98 choice fits its box");
-                    DestroyWindow(c);
-                }
-            }
-            if (d != NULL) {
-                DestroyWindow(d);
-            }
-        }
+        st_settings_layout(parent);
         DestroyWindow(parent);
     }
     printf("%d checks, %d failures\n", stChecks, stFailures);

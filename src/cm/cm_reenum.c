@@ -61,8 +61,7 @@
  * re-enumeration follows.
  *
  * IRQL: the CmReenum* calls at PASSIVE_LEVEL on the connection-manager
- * thread; the CmReg* calls as cm_reenum.h states; the hold's completion
- * routine and DPC at <= DISPATCH_LEVEL.
+ * thread; the CmReg* calls as cm_reenum.h states.
  */
 
 #include "cm.h"
@@ -109,7 +108,7 @@ static ULONG cmRegUnattributed;
 static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
 static ULONG cmRegOver;
-static ULONG cmRegWatchdogs;
+static ULONG cmRegPassed;
 /* Every attachment of this driver on a device (task 42-A.5, cm_reenum.h's
  * "The marks"), and the LowerFilters children no active member owned. */
 static LIST_ENTRY cmRegAtts;
@@ -119,7 +118,6 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
                               PULONG over);
 static VOID cmDiscoverAndList(PCM_NHI nhi);
 static VOID cmMarksSyncAll(VOID);
-static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2);
 
 /* ====================================================================== */
 /* Configuration space                                                    */
@@ -186,12 +184,10 @@ VOID CmRegFilterInit(PCM_FILTER filter)
     InitializeListHead(&filter->RegLink);
     InitializeListHead(&filter->AttLink);
     KeInitializeEvent(&filter->Rundown, NotificationEvent, FALSE);
-    KeInitializeTimer(&filter->HoldTimer);
-    KeInitializeDpc(&filter->HoldDpc, cmHoldDpc, filter);
 }
 
 VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
-                   PULONG refused, PULONG watchdogs)
+                   PULONG refused, PULONG passed)
 {
     KIRQL irql;
 
@@ -200,7 +196,7 @@ VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
     *over = cmRegOver;
     *skipped = cmRegSkipped;
     *refused = cmRegRefused;
-    *watchdogs = cmRegWatchdogs;
+    *passed = cmRegPassed;
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
@@ -394,52 +390,11 @@ VOID CmRegPublish(PCM_FILTER filter)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
-/*
- * Releases a held filter's retained D0 IRP. Under the lock: returns the
- * IRP for the caller to complete after the lock is dropped (PoStartNext-
- * PowerIrp, then the completion), or NULL. The hold's reference passes to
- * the caller when the timer is not armed or was cancelled (*dropRef TRUE:
- * the caller lowers InFlight after its last use of the filter); otherwise
- * the DPC, already queued, lowers it.
- */
-static PIRP cmHoldRelease(PCM_FILTER f, BOOLEAN *dropRef)
-{
-    PIRP irp;
-
-    *dropRef = FALSE;
-    f->Held = 0;
-    f->HeldBy = NULL;
-    irp = f->HeldIrp;
-    if (irp == NULL) {
-        return NULL;
-    }
-    f->HeldIrp = NULL;
-    if (f->TimerArmed) {
-        if (KeCancelTimer(&f->HoldTimer)) {
-            f->TimerArmed = 0;
-            *dropRef = TRUE;
-        }
-    } else {
-        *dropRef = TRUE;
-    }
-    return irp;
-}
-
-static VOID cmHoldComplete(PIRP irp)
-{
-    PoStartNextPowerIrp(irp);
-    IoCompleteRequest(irp, IO_NO_INCREMENT);
-}
-
 VOID CmRegWithdraw(PCM_FILTER filter)
 {
     KIRQL irql;
-    PIRP irp;
-    BOOLEAN dropRef;
     ULONG wait;
 
-    irp = NULL;
-    dropRef = FALSE;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (!filter->Published) {
         KeReleaseSpinLock(&cmRegLock, irql);
@@ -450,16 +405,11 @@ VOID CmRegWithdraw(PCM_FILTER filter)
     filter->Baseline = 0;
     RemoveEntryList(&filter->RegLink);
     InitializeListHead(&filter->RegLink);
-    irp = cmHoldRelease(filter, &dropRef);
-    if (dropRef) {
-        cmRegDrop(filter);
-    }
+    filter->Held = 0;
+    filter->HeldBy = NULL;
     wait = filter->InFlight;
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
-    if (irp != NULL) {
-        cmHoldComplete(irp);
-    }
     if (wait != 0) {
         (VOID)KeWaitForSingleObject(&filter->Rundown, Executive, KernelMode,
                                     FALSE, NULL);
@@ -544,8 +494,9 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
 
     /* The snapshot is replaced under the lock, since the eject's
      * eligibility (cmEjectReady) reads it from the child's removal. A
-     * changed population starts a new generation (RelGen), which an eject
-     * posted against the old one fails at its hand-off; a new function
+     * function newly answering starts a new generation (RelGen,
+     * CmPortsNewGeneration), which an eject posted against the old one
+     * fails at its hand-off; a departure alone keeps it; a new function
      * forgets an orderly removal seen before it arrived (EjectSeen), so a
      * replacement is never torn down for its predecessor's eject. The
      * answer settles the bridge after a tunnel change only if the query
@@ -553,8 +504,14 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
      * overlapped one leaves it unsettled for the next query, which the
      * change's own invalidation brings. */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    if (fresh != 0 || count != filter->SnapCount) {
+    if (CmPortsNewGeneration(fresh, filter->SnapCount, count)) {
         filter->RelGen++;
+    } else if (count != filter->SnapCount && filter->Owner != NULL) {
+        /* A departure alone (task 43.70): under native hot-plug the
+         * ejected function leaves the answer only after Windows has turned
+         * the slot off, after the confirmation was posted; the
+         * generation is kept, so that eject is still the bridge's. */
+        CmLogNote(filter->Owner, "cm.reenum.departure", filter->Bdf);
     }
     if (fresh != 0) {
         filter->EjectSeen = 0;
@@ -936,6 +893,10 @@ static VOID cmMarkAtt(PCM_NHI d, PCM_MARK m)
         if (f->Answered) {
             flags |= CM_QM_EF_REMOVABLE;
         }
+        /* The entry the attachment's surprise removal is counted in. */
+        f->MarkDom = d;
+        f->MarkStarts = d->Reenum.Starts;
+        f->MarkSerial = m->Serial;
     }
     /* A location once known stays known: the PDO is the same device. */
     flags |= m->Flags & CM_QM_EF_LOCATED;
@@ -1193,6 +1154,44 @@ VOID CmRegAttEvent(PCM_FILTER filter, ULONG which)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* Design record 25 section 7.6 (cm_reenum.h): the entry this attachment
+ * was bound to, by serial in its domain, if that domain is still listed in
+ * the same start; a loss of the host interface counts apart. */
+VOID CmRegAttSurprise(PCM_FILTER filter, BOOLEAN started)
+{
+    KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_NHI d;
+    PCM_MARK m;
+    BOOLEAN lost;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        d = CONTAINING_RECORD(CONTAINING_RECORD(e, CM_REENUM, Link), CM_NHI,
+                              Reenum);
+        if (d != filter->MarkDom) {
+            continue;
+        }
+        m = CmMarksBound(&d->Reenum.Marks, d->Reenum.Starts,
+                         filter->MarkStarts, filter->MarkSerial,
+                         (PVOID)filter->Common.Pdo);
+        if (m == NULL) {
+            break;
+        }
+        lost = CmMarksLoss((BOOLEAN)(d->Live.State == CM_LIVE_ACTIVE),
+                           (BOOLEAN)(d->Reenum.LossDrain != 0),
+                           d->RecBarred, d->RecDebtMask, m->Member);
+        if (CmMarksSurprise(&d->Reenum.Marks, m, started, lost,
+                            cmMarkNow(d))) {
+            CmLogNote(d, "cm.reenum.unexpected", m->MemberBdf);
+        } else if (lost && started) {
+            CmLogNote(d, "cm.reenum.unexpected.lost", m->MemberBdf);
+        }
+        break;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 /*
  * The attachment's device has been removed (cm_reenum.h). A departure
  * after a query-remove is recorded only when the last attachment of this
@@ -1350,6 +1349,33 @@ ULONG CmReenumMarksBuild(PCM_NHI nhi, UCHAR *out, BOOLEAN readAny,
     return bytes;
 }
 
+VOID CmReenumRemovals(PCM_NHI nhi, UCHAR *out)
+{
+    PCM_REENUM r;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    /* Unlisted (no route, or an inert start that never reached
+     * CmReenumStart, whose table was never reset): nothing watched. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (r->Listed && r->Route == CM_ROUTE_FILTER) {
+        CmMarksRemovalBlock(out, &r->Marks, TRUE);
+    } else {
+        CmMarksRemovalBlock(out, NULL, FALSE);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmReenumLossMove(PCM_NHI nhi)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    nhi->RecBarred |= nhi->RecDebtMask;
+    nhi->RecDebtMask = 0;
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 VOID CmReenumConfirm(PCM_NHI nhi, const UCHAR *v, ULONG bytes)
 {
     PCM_REENUM r;
@@ -1392,6 +1418,8 @@ VOID CmReenumConfirm(PCM_NHI nhi, const UCHAR *v, ULONG bytes)
         }
         m->PendingAt = 0;
         m->PendingGen = 0;
+        m->LeftPendingAt = 0;       /* a tombstone's, confirmed once */
+        m->LeftPendingGen = 0;
         CmMarksTouch(&r->Marks, m, cmMarkNow(nhi));
     }
     if (posted) {
@@ -1407,115 +1435,21 @@ VOID CmReenumConfirm(PCM_NHI nhi, const UCHAR *v, ULONG bytes)
     }
 }
 
-/* ---- the resume hold -------------------------------------------------- */
+/* ---- the resume mark -------------------------------------------------- */
 
-/* One second, relative, in 100 ns units: -10,000,000 as two halves (no
- * 64-bit arithmetic). */
-static VOID cmHoldArm(PCM_FILTER f)
-{
-    LARGE_INTEGER due;
-
-    due.LowPart = 0xFF676980UL;
-    due.HighPart = -1;
-    f->TimerArmed = 1;
-    (VOID)KeSetTimer(&f->HoldTimer, due, &f->HoldDpc);
-}
-
-/*
- * The watchdog (section 6.3): one tick a second while a D0 IRP is
- * retained; at the bound's end the IRP is released by the failure path,
- * never taken for success, and the bridge invalidated so the functions
- * that did not come back are reported missing. <= DISPATCH_LEVEL.
- */
-static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
-{
-    PCM_FILTER f;
-    PIRP irp;
-    PDEVICE_OBJECT pdo;
-    ULONG invalidate;
-    KIRQL irql;
-
-    UNREFERENCED_PARAMETER(dpc);
-    UNREFERENCED_PARAMETER(arg1);
-    UNREFERENCED_PARAMETER(arg2);
-    f = (PCM_FILTER)context;
-    irp = NULL;
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    f->TimerArmed = 0;
-    if (f->HeldIrp == NULL) {
-        /* Released while this DPC was queued: the hold's reference is
-         * this DPC's to drop. */
-        cmRegDrop(f);
-        KeReleaseSpinLock(&cmRegLock, irql);
-        return;
-    }
-    if (f->HoldLeftS > 1) {
-        f->HoldLeftS--;
-        cmHoldArm(f);
-        KeReleaseSpinLock(&cmRegLock, irql);
-        return;
-    }
-    irp = f->HeldIrp;
-    f->HeldIrp = NULL;
-    f->Held = 0;
-    f->HeldBy = NULL;
-    invalidate = f->HoldReenum;
-    pdo = f->Common.Pdo;
-    cmRegWatchdogs++;
-    KeReleaseSpinLock(&cmRegLock, irql);
-    cmHoldComplete(irp);
-    if (invalidate) {
-        IoInvalidateDeviceRelations(pdo, BusRelations);
-    }
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    cmRegDrop(f);
-    KeReleaseSpinLock(&cmRegLock, irql);
-}
-
-/* The D0 IRP's completion on a held bridge: retained while the hold
- * stands, after the bus driver below has finished with it.
- * <= DISPATCH_LEVEL. */
-static NTSTATUS cmHoldDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
-{
-    PCM_FILTER f;
-    KIRQL irql;
-
-    UNREFERENCED_PARAMETER(device);
-    f = (PCM_FILTER)context;
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    if (f->Held && !f->Gone && NT_SUCCESS(irp->IoStatus.Status)) {
-        f->HeldIrp = irp;
-        cmHoldArm(f);
-        KeReleaseSpinLock(&cmRegLock, irql);
-        return STATUS_MORE_PROCESSING_REQUIRED;
-    }
-    cmRegDrop(f);
-    KeReleaseSpinLock(&cmRegLock, irql);
-    PoStartNextPowerIrp(irp);
-    return STATUS_SUCCESS;
-}
-
-BOOLEAN CmRegHoldD0(PCM_FILTER filter, PIRP irp)
+VOID CmRegPassD0(PCM_FILTER filter)
 {
     KIRQL irql;
-    BOOLEAN hold;
 
-    hold = FALSE;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (filter->Published && !filter->Gone && filter->Held &&
-        filter->HeldIrp == NULL && !filter->TimerArmed) {
-        filter->InFlight++;
-        hold = TRUE;
+        filter->HeldBy != NULL) {
+        cmRegPassed++;
+        /* The holder is used under the list's lock only, which its
+         * delisting takes too (order: cmRegLock, then LogLock). */
+        CmLogNote(filter->HeldBy, "cm.reenum.hold.passed", filter->Bdf);
     }
     KeReleaseSpinLock(&cmRegLock, irql);
-    if (!hold) {
-        return FALSE;
-    }
-    IoMarkIrpPending(irp);
-    IoCopyCurrentIrpStackLocationToNext(irp);
-    CM_SET_COMPLETION_ALWAYS(irp, cmHoldDone, filter);
-    (VOID)PoCallDriver(filter->Common.Lower, irp);
-    return TRUE;
 }
 
 /* ====================================================================== */
@@ -1630,6 +1564,37 @@ static ULONG cmOwnedMask(PCM_NHI nhi)
         }
     }
     return mask;
+}
+
+ULONG CmReenumMemberFlags(PCM_NHI nhi, ULONG bdf, PULONG flags)
+{
+    ULONG i;
+
+    *flags = 0;
+    for (i = 0; i < nhi->Reenum.Members; i++) {
+        if (nhi->Reenum.Port[i].Bdf == bdf) {
+            *flags = cmFlags(nhi, i);
+            return i;
+        }
+    }
+    return XHCI_TBT_NO_MEMBER;
+}
+
+VOID CmReenumOwe(PCM_NHI nhi, ULONG i)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    if (i >= r->Members) {
+        return;
+    }
+    /* Owed with its exposure, run by the pass's owed-change loop at once
+     * once the member's gate is down: the UP before the call
+     * (obligation 1), the re-enumeration with its vanished-child scan. */
+    r->Port[i].Missed = 1;
+    r->Port[i].MissedExpose = 1;
+    r->Port[i].MissedAt = cmNow(nhi) - CM_MISSED_RETRY_MS;
+    CmLogNote(nhi, "cm.reenum.owed", r->Port[i].Bdf);
 }
 
 /*
@@ -1809,6 +1774,8 @@ static BOOLEAN cmTransport(PCM_NHI nhi)
  * post (with a marking window when `mark`); with `expose` FALSE the call
  * alone (publication mode none, record 22 section 7.7). Only for a member
  * whose stor98 gate is down (cmHeld). */
+static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i);
+
 static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
                         BOOLEAN fresh, ULONG tunnel, BOOLEAN mark,
                         BOOLEAN expose)
@@ -1816,6 +1783,17 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
     PCM_REENUM r;
 
     r = &nhi->Reenum;
+    if (removeVanished && cmVanishSweep(nhi, i)) {
+        /* Task 43.47: the removal is the member's sweep's now, and its
+         * gate is up: the exposure and re-enumeration held behind it,
+         * with their publication mode and marking window, run once every
+         * vanished child is retired. */
+        r->Port[i].Held |= CM_HELD_REENUM | (fresh ? CM_HELD_FRESH : 0UL);
+        r->Port[i].HeldExpose |= expose ? 1UL : 0UL;
+        r->Port[i].HeldMark |= mark ? 1UL : 0UL;
+        CmLogNote(nhi, "cm.reenum.vanish-held", r->Port[i].Bdf);
+        return;
+    }
     if (expose) {
         (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh, tunnel);
     }
@@ -1832,6 +1810,21 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
         cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, mark);
         r->Calls++;
     }
+}
+
+/*
+ * Task 43.47: member i's vanished children are its sweep's (cm_eject.h),
+ * entered where the CONFIGMG route has call workers and the host interface
+ * is live; TRUE when it was. Otherwise the worker's removal, as before.
+ */
+static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    return (BOOLEAN)(r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
+                     r->Callwk != NULL && cmTransport(nhi) &&
+                     CmEjectSweep(nhi, i));
 }
 
 /*
@@ -1964,6 +1957,12 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
          * by this call. */
         expose = (BOOLEAN)(!none || (r->Port[i].MissedExpose != 0 &&
                                      cmTransport(nhi)));
+        if (vanish && cmVanishSweep(nhi, i)) {
+            /* Task 43.47: the vanished children are read now, at the
+             * down, whatever the member's gates; the call below is held
+             * behind the sweep's gate without its removal. */
+            vanish = FALSE;
+        }
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
         if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark, &expose)) {
@@ -2077,6 +2076,7 @@ VOID CmReenumStart(PCM_NHI nhi)
 
     r = &nhi->Reenum;
     r->Starts++;
+    CmEjectReset(nhi);
     r->Route = CM_ROUTE_NONE;
     r->Why = CM_NOROUTE_NONE;
     r->Members = 0;
@@ -2205,6 +2205,7 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
     KIRQL irql;
     ULONG bdf[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
+    ULONG mask;
 
     r = &nhi->Reenum;
     if (!r->CfgmgOwed) {
@@ -2240,6 +2241,11 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
      * section 7.2 part 0): one per member, each opening its own route.
      * The route does not depend on them. */
     r->Callwk = CmCallwkStart(nhi, r->Members);
+    /* Task 43.47: no member's CONFIGMG worker claim becomes a vanished
+     * transaction until that member's call worker has opened its route
+     * (CmReenumService posts the mask as the openings are read back). */
+    r->CallUsable = 0;
+    CmCfgwkTakeover(r->Wk, 0);
 }
 
 /*
@@ -2374,6 +2380,14 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         return;
     }
     if (action->Kind == TBT_ICM_ACT_TUNNEL_UP) {
+        if (r->Route == CM_ROUTE_CONFIGMG && CmNhiActionLive(nhi, action)) {
+            /* Task 43.47f: a re-plug is the event that most often follows
+             * the holder's release; a vetoed vanished child on the member
+             * asks again now instead of at its backed-off time. A stale up
+             * (the device gone again, a later generation) nudges nothing. */
+            CmEjectNudge(nhi, nhi->U4On ? CmNhiActionMember(nhi, action)
+                                        : XHCI_TBT_NO_MEMBER);
+        }
         state = cmPoll(nhi, action, XHCI_TBT_WANT_UP);
         CmLogNote(nhi, "cm.reenum.up.poll", (state << 8) | r->Poll.Last);
         if (state == XHCI_TBT_POLL_ABANDONED) {
@@ -2387,6 +2401,9 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         }
         cmReenumAll(nhi, FALSE, TRUE, action);
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
+        /* The 9x statement decision's allowance counts from here (task
+         * 43.18). */
+        CmEjectDownBegin(nhi);
         state = cmPoll(nhi, action, XHCI_TBT_WANT_DOWN);
         CmLogNote(nhi, "cm.reenum.down.poll", (state << 8) | r->Poll.Last);
         if (state == XHCI_TBT_POLL_TIMEOUT) {
@@ -2402,6 +2419,18 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             CmNvlinkLost(nhi);
         } else if ((action->Why & CM_U4_WHY_BASE) == 0) {
             (VOID)CmNvlinkIcmDown(nhi, state);
+        }
+        /* A 9x eject transaction on the member learns of the tunnel down
+         * only now, after the statement's decision was entered (the USB4
+         * profile's DOWN hook entered it before this action was queued),
+         * so a decision not pending then has completed: its unit's
+         * function read gone after this, and after any acknowledgement
+         * wait, is retired by its own removal (task 43.18). Under the
+         * firmware connection manager no member is named: every member. */
+        if (r->Route == CM_ROUTE_CONFIGMG &&
+            action->Why != TBT_ICM_WHY_UNAVAILABLE) {
+            CmEjectDown(nhi, nhi->U4On ? CmNhiActionMember(nhi, action)
+                                       : XHCI_TBT_NO_MEMBER);
         }
         /* The acknowledgement before the removal is per member: a member
          * with a statement pending is held, the rest go on (cmHeld). */
@@ -2424,6 +2453,7 @@ VOID CmReenumService(PCM_NHI nhi)
     KIRQL irql;
     PCM_FILTER f;
     PCM_FILTER ejHeld[XHCI_TBT_MAX_TUNNELS];
+    ULONG staleWhy[XHCI_TBT_MAX_TUNNELS];
     ULONG pending;
     ULONG stale;
     ULONG mask;
@@ -2457,6 +2487,10 @@ VOID CmReenumService(PCM_NHI nhi)
     if (!r->Listed) {
         return;
     }
+    /* The 9x eject transactions and statement decisions (task 43.18),
+     * before any member's held work is looked at: a transaction retired or
+     * a decision made this pass lowers its member's gate for it. */
+    CmEjectService(nhi, FALSE);
     if (r->Route == CM_ROUTE_FILTER) {
         cmConnGens(nhi);
     }
@@ -2480,6 +2514,7 @@ VOID CmReenumService(PCM_NHI nhi)
      * lock is released. */
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         ejHeld[i] = NULL;
+        staleWhy[i] = 0;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
     pending = r->EjectPending;
@@ -2506,6 +2541,20 @@ VOID CmReenumService(PCM_NHI nhi)
             f->RelGen != r->Port[i].EjectGen || !cmEjectReady(f)) {
             pending &= ~(1UL << i);
             stale |= 1UL << i;
+            /* Which check refused it (task 43.70), for the log: bit 0
+             * the bridge gone or another domain's, 1 a new publication,
+             * 2 a new population generation, 3 a function with a stack;
+             * bits 8 to 15 the bridge's generation now, 16 to 23 the
+             * eject's. */
+            if (f == NULL || f->Owner != nhi) {
+                staleWhy[i] = CM_EJ_STALE_OWNER;
+            } else {
+                staleWhy[i] = CmPortsStaleWhy(
+                    (ULONG)(f->Serial != r->Port[i].EjectSerial),
+                    (ULONG)(f->RelGen != r->Port[i].EjectGen),
+                    (ULONG)!cmEjectReady(f), f->RelGen,
+                    r->Port[i].EjectGen);
+            }
         } else {
             taken = 1;
             if (r->EjectHook != NULL) {
@@ -2525,6 +2574,7 @@ VOID CmReenumService(PCM_NHI nhi)
         if (stale & (1UL << i)) {
             r->EjectsStale++;
             CmLogNote(nhi, "cm.reenum.eject.stale", r->Port[i].Bdf);
+            CmLogNote(nhi, "cm.reenum.eject.stale.why", staleWhy[i]);
         }
         if ((pending & (1UL << i)) == 0) {
             continue;
@@ -2600,8 +2650,10 @@ VOID CmReenumService(PCM_NHI nhi)
                                    (r->Port[i].Missed && !missed &&
                                     r->Port[i].MissedExpose != 0));
             r->Port[i].HeldExpose = 0;
-            mark = (BOOLEAN)(r->Port[i].Missed && !missed &&
-                             r->SafeEject != 0);
+            mark = (BOOLEAN)((r->Port[i].Missed && !missed &&
+                              r->SafeEject != 0) ||
+                             r->Port[i].HeldMark != 0);
+            r->Port[i].HeldMark = 0;
             if (r->Port[i].Missed && !missed) {
                 r->Port[i].MissedAt = cmNow(nhi);
                 CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
@@ -2632,6 +2684,7 @@ VOID CmReenumService(PCM_NHI nhi)
         if ((r->Port[i].Held & CM_HELD_REENUM) == 0) {
             /* Run, owed or discarded: the held work's mode goes with it. */
             r->Port[i].HeldExpose = 0;
+            r->Port[i].HeldMark = 0;
         }
     }
     /* A change skipped while a member was not active, now that it is;
@@ -2643,6 +2696,18 @@ VOID CmReenumService(PCM_NHI nhi)
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS &&
             !CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
             r->Port[i].MissedAt = cmNow(nhi);
+            if (cmVanishSweep(nhi, i)) {
+                /* Task 43.47: its vanished children the sweep's; the owed
+                 * call held behind its gate, exposure and marking window
+                 * with it. */
+                r->Port[i].Held |= CM_HELD_REENUM | CM_HELD_FRESH;
+                r->Port[i].HeldExpose |= r->Port[i].MissedExpose;
+                r->Port[i].HeldMark |= (r->SafeEject != 0) ? 1UL : 0UL;
+                r->Port[i].Missed = 0;
+                r->Port[i].MissedExpose = 0;
+                CmLogNote(nhi, "cm.reenum.vanish-held", r->Port[i].Bdf);
+                continue;
+            }
             if (r->Port[i].MissedExpose) {
                 (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
                                      CM_NVLINK_TUNNEL_NONE);
@@ -2668,6 +2733,20 @@ VOID CmReenumService(PCM_NHI nhi)
     }
     cmCfgmgOpened(nhi);
     CmCallwkService(nhi, r->Callwk);
+    if (r->Wk != NULL && r->Callwk != NULL) {
+        /* Task 43.47: the members whose call worker opened its route, the
+         * ones a claim may be handed to. */
+        mask = 0;
+        for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+            if (CmCallwkUsable(r->Callwk, i)) {
+                mask |= 1UL << i;
+            }
+        }
+        if (mask != r->CallUsable) {
+            r->CallUsable = mask;
+            CmCfgwkTakeover(r->Wk, mask);
+        }
+    }
 }
 
 VOID CmReenumSuspend(PCM_NHI nhi)
@@ -2677,7 +2756,6 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     CM_PORTS_RESUME resume;
     KIRQL irql;
     PCM_FILTER f;
-    ULONG seconds;
     ULONG i;
     BOOLEAN over;
 
@@ -2685,9 +2763,8 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     r->Suspends++;
     /* Every synchronous stage of the client's resume (cm_ports.h), with
      * every device the client's table can hold re-announced and approved
-     * (a dock plugged during the sleep can add several), held to the
-     * operating system's limit on a retained power IRP: past it the
-     * failure path runs, never a stalled power transition. */
+     * (a dock plugged during the sleep can add several): the bound logged
+     * below, a diagnostic (no power IRP is retained, task 43.24h). */
     profile = nhi->Icm.Profile;
     resume.ReadyMs = nhi->Icm.CmdTimeoutMs;
     resume.ReadyRetries = 0;
@@ -2704,11 +2781,9 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     resume.CmdMs = nhi->Icm.CmdTimeoutMs;
     resume.ApproveMs = nhi->Icm.ApproveTimeoutMs;
     resume.Retries = nhi->Icm.Retries;
-    /* The client's own bound is logged; the watchdog itself is the fixed
-     * limit, CM_PORTS_HOLD_MAX_MS: the client's announcement-driven work
-     * has no bound this driver can count exactly (each drain may process
-     * many announcements), and past the limit the failure path is the
-     * policy (cm_ports.h). */
+    /* The client's own bound and the five-minute cap are logged as
+     * diagnostics (cm_ports.h): no power IRP waits on them (task 43.24h,
+     * record 21 section 6.3). */
     CmLogNote(nhi, "cm.reenum.hold.client-ms", CmPortsHoldBound(&resume));
     /* The fixed five-minute outer cap, under either profile; under USB4
      * the client's bound is logged, and a bound that with record 21's
@@ -2722,7 +2797,6 @@ VOID CmReenumSuspend(PCM_NHI nhi)
                       nhi->U4ResumeBoundMs);
         }
     }
-    seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
     if (r->Route != CM_ROUTE_FILTER) {
         return;
@@ -2733,8 +2807,6 @@ VOID CmReenumSuspend(PCM_NHI nhi)
         if (f != NULL && f->Owner == nhi && f->Active) {
             f->Held = 1;
             f->HeldBy = nhi;
-            f->HoldLeftS = seconds;
-            f->HoldReenum = r->Reenum;
             r->Port[i].Flags |= CM_PORT_HELD;
         }
     }
@@ -2742,9 +2814,12 @@ VOID CmReenumSuspend(PCM_NHI nhi)
 }
 
 /*
- * Every member in `mask` this domain holds released; `fail` takes section
- * 6.3's failure path, an invalidation of each released member. Spin locks,
- * IoCompleteRequest, PoStartNextPowerIrp and IoInvalidateDeviceRelations
+ * Every member in `mask` this domain marked released, and each one that
+ * was still marked invalidated, whatever the resume's outcome (`fail`
+ * names it in the log only): its D0 went down at once (task 43.24h), so
+ * the devices behind it may have resumed against an absent tunnel, and
+ * the bridge's relations are asked for again now the tunnels are back
+ * (record 21 section 6.3). Spin locks and IoInvalidateDeviceRelations
  * only: callable at <= DISPATCH_LEVEL (CmReenumResumeFailed's use).
  */
 static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
@@ -2752,10 +2827,9 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
     PCM_REENUM r;
     KIRQL irql;
     PCM_FILTER f;
-    PIRP irp;
-    BOOLEAN dropRef;
     ULONG i;
     ULONG was;
+    ULONG act;
 
     r = &nhi->Reenum;
     if (r->Route != CM_ROUTE_FILTER) {
@@ -2765,28 +2839,22 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
         if ((mask & (1UL << i)) == 0) {
             continue;
         }
-        irp = NULL;
-        dropRef = FALSE;
-        was = 0;
-        f = NULL;
         KeAcquireSpinLock(&cmRegLock, &irql);
         r->Port[i].Flags &= ~CM_PORT_HELD;
         f = cmRegFind(r->Port[i].Bdf);
-        if (f != NULL && f->HeldBy == nhi) {
-            was = 1;
-            irp = cmHoldRelease(f, &dropRef);
+        was = (ULONG)(f != NULL && f->HeldBy == nhi);
+        act = CmPortsRelease(was, r->Reenum);
+        if (act & CM_PORTS_REL_CLEAR) {
+            f->Held = 0;
+            f->HeldBy = NULL;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
-        if (irp != NULL) {
-            cmHoldComplete(irp);
+        if (act & CM_PORTS_REL_CLEAR) {
             CmLogNote(nhi, fail ? "cm.reenum.hold.released-failed"
                                 : "cm.reenum.hold.released",
                       r->Port[i].Bdf);
         }
-        if (dropRef) {
-            cmRegRelease(f);
-        }
-        if (was && fail && r->Reenum != 0) {
+        if (act & CM_PORTS_REL_INVALIDATE) {
             (VOID)cmInvalidate(nhi, i, FALSE);
         }
     }
@@ -2837,7 +2905,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     ULONG over;
     ULONG skipped;
     ULONG refused;
-    ULONG watchdogs;
+    ULONG passed;
     ULONG i;
 
     r = &nhi->Reenum;
@@ -2892,6 +2960,9 @@ VOID CmReenumStop(PCM_NHI nhi)
                   (wc.NoIrqPin0Started << 16) | (wc.NoIrqPin0Seen & 0xFFFFUL));
     }
     if (r->Callwk != NULL) {
+        /* The eject transactions detached first: one already authorised
+         * to remove is handed to its worker to finish alone (task 43.18). */
+        CmEjectStop(nhi);
         /* Never waited for: a worker inside a call frees the block itself
          * when the call returns (cm_callwk.c). */
         CmCallwkStop(r->Callwk);
@@ -2925,12 +2996,12 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
     CmLogNote(nhi, "cm.reenum.holds", r->Holds);
-    CmRegCounters(&attached, &over, &skipped, &refused, &watchdogs);
+    CmRegCounters(&attached, &over, &skipped, &refused, &passed);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
     CmLogNote(nhi, "cm.reenum.child.over", over);
     CmLogNote(nhi, "cm.reenum.child.skipped", skipped);
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
-    CmLogNote(nhi, "cm.reenum.hold.watchdogs", watchdogs);
+    CmLogNote(nhi, "cm.reenum.hold.passed", passed);
     CmLogNote(nhi, "cm.reenum.child.stray", cmRegStray);
     CmLogNote(nhi, "cm.reenum.departures", r->Departures);
     CmLogNote(nhi, "cm.reenum.departures.dropped", r->DeparturesDropped);
@@ -2997,7 +3068,8 @@ BOOLEAN CmReenumRetire(PCM_NHI nhi, ULONG i, PULONG answers)
     }
     if (CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
         /* A stor98 statement behind this member still awaits its
-         * acknowledgement: no removal call before it falls (task 42-A.12);
+         * acknowledgement, or a 9x eject transaction or decision holds
+         * it: no removal call before it falls (tasks 42-A.12, 43.18);
          * asked again at a later pass. */
         return FALSE;
     }

@@ -1972,6 +1972,48 @@ static void test_set_dequeue_wrapped(void)
 }
 
 /*
+ * Record 13 section 11.8 (task 43.39): a ring page's ring is `allowance + 2`
+ * TRBs, 122 at today's allowance of 120 - not a power of two, which nothing
+ * in the ring's arithmetic assumes. Its capacity is the allowance; a TD
+ * placed across its Link TRB wraps and keeps its cycle; Set TR Dequeue onto
+ * the next TD's head across the wrap carries the lap's cycle.
+ */
+static void test_page_ring(void)
+{
+    static XHCI_TRB mem[122];
+    XHCI_TRB td[3];
+    XHCI_TRB one;
+    XHCI_RING ring;
+    ULONG pa;
+    ULONG i;
+
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 122, XHCI_RING_KIND_ISOCH),
+             XHCI_RING_OK, "a 122-TRB ring");
+    CHECK_EQ(XhciRingCapacity(&ring), 120, "capacity 120");
+    CHECK_EQ(mem[121].Control & (0x3FUL << 10), 6UL << 10,
+             "the Link TRB at 121");
+    XhciTrbNoOpCommand(&one);
+    for (i = 0; i < 119; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK, "filler");
+        CHECK_EQ(retire_success(&ring, pa), XHCI_RING_OK, "retired");
+    }
+    /* A TD at 119, 120, wrap, 0 - then a second at 1, 2, 3. */
+    build_td(td, 3);
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, &pa), XHCI_RING_OK, "wrapped");
+    CHECK_EQ(pa, RING_PA + 119 * 16, "head at 119");
+    CHECK_EQ(mem[0].Control & XHCI_TRB_CYCLE, 0UL,
+             "the TRB after the wrap is on the second lap");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK, "second");
+    CHECK_EQ(ring.Enqueue, 4, "enqueue past it");
+    CHECK_EQ(XhciRingSetDequeue(&ring, RING_PA + 120 * 16),
+             XHCI_RING_NOT_TD_HEAD, "inside the wrapped TD");
+    CHECK_EQ(XhciRingSetDequeue(&ring, RING_PA + 1 * 16), XHCI_RING_OK,
+             "the second TD's head, across the wrap");
+    CHECK_EQ(XhciRingDequeueCycle(&ring), 0, "with the second lap's cycle");
+    CHECK_EQ(XhciRingFree(&ring), 117, "the wrapped TD's three back");
+}
+
+/*
  * A Set TR Dequeue Pointer command carries a *pair*: the address and the
  * Dequeue Cycle State that goes in bit 0 of the same field. DCS "identifies
  * the value of the xHC Consumer Cycle State (CCS) flag for the TRB referenced
@@ -2738,6 +2780,80 @@ static void test_retire_iso_group(void)
              "a NULL ring is refused");
 }
 
+/*
+ * 43.64 (design record 13 section 14): a cancelled TD behind a survivor that
+ * crosses the wrap. The producer chained the Link TRB into it; once the TD's
+ * slots are No Ops the Link must be unchained again, or it would be the first
+ * TRB of a TD and a chained TRB in front of a No Op (4.11.7). The Link keeps
+ * its type, segment pointer, cycle and Toggle Cycle, and the next crossing
+ * chains it again.
+ */
+static void test_noop_unchains_link(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB td[3];
+    XHCI_TRB pair[2];
+    XHCI_RING ring;
+    ULONG linkBefore;
+    ULONG head;
+    ULONG tail;
+
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    build_td(td, 3);
+    build_td(pair, 2);
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK, "TD at 0-2");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, pair, 2, NULL), XHCI_RING_OK,
+             "the survivor at 3-4");
+    CHECK_EQ(XhciRingSetDequeue(&ring, XhciRingTrbPA(&ring, 3)), XHCI_RING_OK,
+             "the first TD reclaimed: the survivor is the head");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, 0UL,
+             "no TD has crossed the Link yet");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK,
+             "a TD at 5, 6 and, past the Link, 0");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, XHCI_TRB_CH,
+             "the producer chained the Link into it");
+    linkBefore = mem[7].Control;
+
+    CHECK_EQ(XhciRingNoOpAt(&ring, 5), XHCI_RING_OK, "TRB 5 rewritten");
+    CHECK_EQ(mem[7].Control, linkBefore,
+             "a slot not before the Link leaves the Link alone");
+    CHECK_EQ(XhciRingNoOpAt(&ring, 6), XHCI_RING_OK, "TRB 6 rewritten");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, 0UL, "the Link is unchained");
+    CHECK_EQ(mem[7].Control, linkBefore & ~XHCI_TRB_CH,
+             "and nothing else of it changed: type, cycle, Toggle Cycle");
+    CHECK_EQ(mem[7].Param0, RING_PA, "the segment pointer kept");
+    CHECK_EQ(XhciRingNoOpAt(&ring, 0), XHCI_RING_OK, "TRB 0 rewritten");
+    CHECK_EQ(XHCI_TRB_GET_TYPE(mem[0].Control), XHCI_TRB_TYPE_NOOP,
+             "a No Op past the Link");
+    CHECK_EQ(XhciRingTdBounds(&ring, 3, &head, &tail), XHCI_RING_OK,
+             "the survivor still resolves");
+    CHECK_EQ(head, 3UL, "with its own head");
+    CHECK_EQ(tail, 4UL, "and tail, untouched by the rewrite");
+    CHECK_EQ(XhciRingTdBounds(&ring, 0, &head, &tail), XHCI_RING_OK,
+             "the No Op past the Link resolves");
+    CHECK_EQ(head, 0UL, "as a TD of its own");
+    CHECK_EQ(tail, 0UL, "one TRB long");
+
+    /* Again idempotent, and the producer's next crossing chains it again. */
+    CHECK_EQ(XhciRingNoOpAt(&ring, 6), XHCI_RING_OK, "TRB 6 rewritten twice");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, 0UL, "the Link still unchained");
+    CHECK_EQ(XhciRingSetDequeue(&ring, XhciRingTrbPA(&ring, 1)), XHCI_RING_OK,
+             "everything up to the enqueue reclaimed");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK,
+             "a TD at 1-3");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, pair, 2, NULL), XHCI_RING_OK,
+             "a TD at 4-5");
+    CHECK_EQ(XhciRingSetDequeue(&ring, XhciRingTrbPA(&ring, 4)), XHCI_RING_OK,
+             "the first reclaimed");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK,
+             "a TD at 6 and, past the Link, 0 and 1");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, XHCI_TRB_CH,
+             "the next crossing chains the Link again");
+    CHECK_EQ(mem[6].Control & XHCI_TRB_CH, XHCI_TRB_CH,
+             "as the slot before it is chained");
+}
+
 static void test_noop_at_type_command_ring(void)
 {
     XHCI_TRB mem[8];
@@ -3222,6 +3338,7 @@ int main(void)
     test_deferred_td_swept_by_later_event();
     test_set_dequeue();
     test_set_dequeue_wrapped();
+    test_page_ring();
     test_dequeue_cycle();
     test_ring_restart();
     test_ring_resync_owed();
@@ -3238,6 +3355,7 @@ int main(void)
     test_reset_device_trb();
     test_completion_code_valid_per_kind();
     test_retire_iso_group();
+    test_noop_unchains_link();
     test_noop_at_type_command_ring();
     test_command_ring_stopped_classification();
     test_command_ring_alignment();

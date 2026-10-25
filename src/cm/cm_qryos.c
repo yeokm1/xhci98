@@ -357,7 +357,7 @@ static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
         "cm.reenum.9x.gone", "cm.reenum.9x.gone-dropped", "cm.reenum.ejects",
         "cm.reenum.child.attached", "cm.reenum.child.over",
         "cm.reenum.child.skipped",
-        "cm.reenum.child.refused", "cm.reenum.hold.watchdogs",
+        "cm.reenum.child.refused", "cm.reenum.hold.passed",
         "cm.live.state", "cm.live.refused",
         "cm.log.debugview"
     };
@@ -437,6 +437,7 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     CM_STATUS_IN in;
     CM_QUERY_IN qi;
     UCHAR rec[CM_ST_HDR_BYTES];
+    UCHAR rm[CM_Q_RM_BYTES];
     ULONG wait;
     ULONG k;
     BOOLEAN next;
@@ -475,6 +476,8 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     qi.NhiBdf = nhi->QueryBdf;
     qi.Id = nhi->QueryId;
     qi.IdBytes = nhi->QueryIdBytes;
+    CmReenumRemovals(nhi, rm);
+    qi.Removal = rm;
     q->Bytes = CmQueryBuild(q->Answer, &qi);
     (VOID)CmQueryContentGen(q->Answer, q->Bytes, NULL, 0);
 }
@@ -618,6 +621,7 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     PDEVICE_OBJECT self;
     PCM_QUERY_DEV q;
     CM_QUERY_IN qi;
+    UCHAR rm[CM_Q_RM_BYTES];
     LARGE_INTEGER ticks;
     KIRQL irql;
     ULONG bytes;
@@ -646,11 +650,14 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     qi.NhiBdf = nhi->QueryBdf;
     qi.Id = nhi->QueryId;
     qi.IdBytes = nhi->QueryIdBytes;
+    /* The removal block (design record 25 section 7.6). */
+    CmReenumRemovals(nhi, rm);
+    qi.Removal = rm;
     bytes = CmQueryBuild(nhi->QueryBuf, &qi);
     /* The record as CmStatusBuild makes it: the registry write's stamp,
      * which cm_statos.c puts in Built when it writes, is cleared. */
-    if (bytes >= CM_Q_HDR_BYTES + CM_ST_HDR_BYTES) {
-        CmStatusStamp(nhi->QueryBuf + CM_Q_HDR_BYTES, 0, 0, 0, 0);
+    if (bytes >= CM_Q_REC_AT + CM_ST_HDR_BYTES) {
+        CmStatusStamp(nhi->QueryBuf + CM_Q_REC_AT, 0, 0, 0, 0);
     }
     (VOID)CmQueryContentGen(nhi->QueryBuf, bytes, nhi->QueryLast,
                             nhi->QueryLastBytes);

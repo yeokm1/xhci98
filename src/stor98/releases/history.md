@@ -4,6 +4,42 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.2.0.0 - not yet released
+
+- Windows 8, 8.1 and 10 (below build 22000): xhci98's installer
+  offers Stor98 there (unticked) for NVMe drives behind a Thunderbolt
+  or USB4 tunnel; on 8.1 and 10 it replaces Windows' own NVMe driver on
+  such a drive. The 32-bit driver ran on Windows 8 and Windows 10 22H2
+  (32-bit) in the emulator unchanged. From this release the 64-bit
+  package, with its catalog (below), installs into the driver store
+  on 8.1 x64 and 10 x64; it has not yet run a drive there, nor on 8
+  x64. 32-bit Windows 8.1 is untested.
+- The INFs' comments name Windows 8, 8.1 and 10; nothing they install
+  changed.
+- 64-bit Windows 8, 8.1 and 10: stor98.inf names a catalog,
+  stor98.cat, signed with the same test certificate as the driver.
+  Those systems install no driver package without one in
+  test-signing mode.
+- Kernel DMA Protection (64-bit Windows 10 1803 and later): stor98.inf
+  does not declare the driver compatible with DMA remapping after all
+  (with the declaration, Windows 10 x64 did not start the driver at all),
+  and removes the declaration an earlier build of this release wrote;
+  so on a machine with the protection on, an NVMe drive behind a
+  Thunderbolt or USB4 tunnel waits for a user to sign in, as before.
+- A read-only counter answer for xhci98's disk benchmark (XHCIPERF):
+  Stor98 answers READ BUFFER (buffer ID 53h) from memory with the sizes
+  of the requests it received and of the commands it sent to the drive,
+  the splits, the physical layout of each request's buffer, the queue
+  depth reached, the errors, its limits and, on Windows 98 SE and ME,
+  what the system's disk layer hands it. INQUIRY lists a vendor page,
+  C9h, that identifies the adapter. No NVMe command is sent for either,
+  nothing is written, and nothing else changes (docs/PLAN.md MD-8).
+- Windows 98 SE / ME: the largest request the driver accepts is now
+  2 MiB (512 KiB before). Requests over 512 KiB reach it only with
+  xhci98's S98VSD.VXD installed, which the xhci98 installer offers on
+  98 SE and ME; without it Windows still cuts them into 63 KiB pieces
+  and nothing changes. StorMaxTransferKB accepts 64 to 2048 there.
+
 ## 3.1.0.0 - 2026-10-19
 
 The first Stor98 built with xhci98 and released in its package, at the

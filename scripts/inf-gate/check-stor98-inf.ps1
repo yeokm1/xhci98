@@ -11,8 +11,20 @@ src\stor98\inf\stor98-x86.inf and stor98-x64.inf, which the package stages as
 stor98.inf. Each must have exactly one DriverVer line, zero-padded
 MM/DD/YYYY, equal to the header's date and version; its Signature must be
 $CHICAGO$ for the x86 INF (98 SE and ME read it) and $Windows NT$ for the x64
-one. scripts\build-driver.cmd runs it with the other INF gates, after
--SelfTest.
+one. The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
+packager makes and test-signs (design record 19, owner 2026-10-22: Windows
+8 to 10 x64 refuse a package without one in test-signing mode), and writes
+no DmaRemappingCompatible (with it 1, Windows 10 x64 does not start Stor98:
+docs/PLAN.md, 2026-10-23) and deletes one an earlier build wrote, in the
+service's DelReg; the x86 INF names no catalog. On Windows 8.1 and
+10 (the models decorated NTx86.6.3 and NTamd64.6.3) each INF gives
+PCI\CC_010802 as the model's compatible id, its hardware id empty, so
+Windows' own stornvme (the same id as its hardware id) outranks it and
+Stor98 goes only where the installer puts it (roadmap-usb4 43.59, owner
+2026-10-23); its other models keep PCI\CC_010802 as the hardware id. The
+[Manufacturer] section must hold exactly one line, with exactly those
+decorations, so no later decoration can bring the class match back. scripts\build-driver.cmd
+runs it with the other INF gates, after -SelfTest.
 
 .PARAMETER Path
 One INF to check instead of both (the self-test's mutants).
@@ -51,6 +63,67 @@ function Get-InfFault {
     if ($got -cne $Want) { return "its DriverVer is '$got', and src\xhci_version.h says '$Want'" }
     $sig = [regex]::Match($t, '(?im)^[ \t]*Signature[ \t]*=[ \t]*"([^"]*)"')
     if (-not $sig.Success -or $sig.Groups[1].Value -ne $Signature) { return "its Signature is not `"$Signature`"" }
+    $cat = @([regex]::Matches($t, '(?im)^[ \t]*CatalogFile(\.[^ \t=]*)?[ \t]*=[ \t]*([^\r\n;]*?)[ \t]*(;[^\r\n]*)?\r?$'))
+    if ($Signature -eq '$Windows NT$') {
+        if ($cat.Count -ne 1 -or $cat[0].Groups[1].Value -ne "" -or $cat[0].Groups[2].Value -cne "stor98.cat") {
+            return "it does not name its catalog once as CatalogFile=stor98.cat (design record 19: the packager makes and signs it)"
+        }
+        # DmaRemappingCompatible (with it Windows 10 x64 does not start Stor98,
+        # docs/PLAN.md, 2026-10-23) may be named once only, %tokens% of
+        # [Strings] resolved and comments dropped, whatever the root or the
+        # form: by the DelReg entry of the service-install section, which
+        # removes a value an earlier 3.2.0.0 build wrote.
+        $strings = @{}
+        $sm = [regex]::Match($t, '(?ims)^[ \t]*\[Strings\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+        if ($sm.Success) {
+            foreach ($m in [regex]::Matches($sm.Groups[1].Value, '(?m)^[ \t]*([^;=\s][^=\r\n]*?)[ \t]*=[ \t]*"?([^"\r\n]*)"?')) { $strings[$m.Groups[1].Value.Trim().ToLowerInvariant()] = $m.Groups[2].Value }
+        }
+        $section = ''; $named = @()
+        foreach ($raw in ($t -split '\r?\n')) {
+            $line = ($raw -replace ';.*$', '').Trim()
+            if ($line -match '^\[([^\]]+)\]$') { $section = $Matches[1].Trim(); continue }
+            $res = [regex]::Replace($line, '%([^%]+)%', { param($x) $k = $x.Groups[1].Value.ToLowerInvariant(); if ($strings.ContainsKey($k)) { $strings[$k] } else { $x.Value } })
+            if ($res -match '(?i)DmaRemappingCompatible') { $named += , @($section, $res) }
+        }
+        if ($named.Count -ne 1 -or $named[0][0] -ne 'Stor98_ServiceDelReg' -or $named[0][1] -cnotmatch '^HKR[ \t]*,[ \t]*"Parameters"[ \t]*,[ \t]*"DmaRemappingCompatible"$') {
+            return "it names DmaRemappingCompatible other than once, in [Stor98_ServiceDelReg] as HKR,`"Parameters`",`"DmaRemappingCompatible`" (with the value Windows 10 x64 does not start Stor98, docs/PLAN.md 2026-10-23)"
+        }
+        # And that DelReg is the service-install section's own: anywhere else
+        # its HKR is another key and the old value stays.
+        $svc = [regex]::Match($t, '(?ims)^[ \t]*\[Stor98_Service\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+        if (-not $svc.Success -or -not [regex]::IsMatch($svc.Groups[1].Value, '(?im)^[ \t]*DelReg[ \t]*=[ \t]*Stor98_ServiceDelReg[ \t]*\r?$') -or
+            [regex]::Matches($t, '(?im)^[ \t]*DelReg[ \t]*=[ \t]*[^\r\n]*Stor98_ServiceDelReg').Count -ne 1) {
+            return "its [Stor98_Service] section (the AddService one) does not carry DelReg=Stor98_ServiceDelReg alone, so an update would keep DmaRemappingCompatible"
+        }
+    } elseif ($cat.Count -ne 0) {
+        return "it names a catalog, and the x86 package carries none (design record 19)"
+    }
+    # The models (43.59): one [Manufacturer] line, exactly these decorations,
+    # and each section exactly one model line - the class id as the hardware
+    # id before NT 6.3, as the compatible id (hardware id empty) from it.
+    # Windows merges sections of one name, so a second one would escape the
+    # checks below: no section name may appear twice.
+    $seen = @{}
+    foreach ($h in [regex]::Matches($t, '(?m)^[ \t]*\[([^\]\r\n]+)\][ \t]*(;[^\r\n]*)?\r?$')) {
+        $k = $h.Groups[1].Value.Trim().ToLowerInvariant()
+        if ($seen.ContainsKey($k)) { return "its section [$($h.Groups[1].Value.Trim())] appears twice (Windows merges them)" }
+        $seen[$k] = 1
+    }
+    $mfgSec = [regex]::Match($t, '(?ims)^[ \t]*\[Manufacturer\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+    if (-not $mfgSec.Success) { return "it has no [Manufacturer] section" }
+    $mlines = @([regex]::Matches($mfgSec.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value })
+    if ($mlines.Count -ne 1 -or $mlines[0] -notmatch '^%Mfg%[ \t]*=[ \t]*(.+)$') { return "its [Manufacturer] section does not hold exactly one %Mfg% line" }
+    $parts = @($Matches[1].Split(',') | ForEach-Object { $_.Trim() })
+    $want = if ($Signature -eq '$Windows NT$') { 'Stor98_Models,NTamd64,NTamd64.6.3' } else { 'Stor98_Models,NTx86.6.3' }
+    if (($parts -join ',') -cne $want) { return "its [Manufacturer] line is '$($parts -join ',')', not '$want' (8.1 and 10 keep stornvme)" }
+    $sections = if ($Signature -eq '$Windows NT$') { @(@('Stor98_Models.NTamd64', $false), @('Stor98_Models.NTamd64.6.3', $true)) } else { @(@('Stor98_Models', $false), @('Stor98_Models.NTx86.6.3', $true)) }
+    foreach ($s in $sections) {
+        $sm = [regex]::Match($t, '(?ims)^[ \t]*\[' + [regex]::Escape($s[0]) + '\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+        if (-not $sm.Success) { return "it has no [$($s[0])] section" }
+        $ml = @([regex]::Matches($sm.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value -replace '[ \t]', '' })
+        $line = if ($s[1]) { '%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802' } else { '%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802' }
+        if ($ml.Count -ne 1 -or $ml[0] -cne $line) { return "its [$($s[0])] section is not the one line '$line'" }
+    }
     if ($Signature -eq '$Windows NT$') {
         # The 64-bit INF: no undecorated models section, empty or not, for one
         # the [Manufacturer] line names - xhci98's installer refuses such an
@@ -87,7 +160,14 @@ try {
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=" + $parts[0] + ",0.4.0.0"); Ok = $false; Why = "another version" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$unpadded," + $parts[1]); Ok = ($unpadded -eq $parts[0]); Why = "an unpadded date" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nDriverVer=$want"); Ok = $false; Why = "two DriverVer lines" },
-                @{ T = $base.Replace('"$CHICAGO$"', '"$Windows NT$"'); Ok = $false; Why = "the wrong Signature" }
+                @{ T = $base.Replace('"$CHICAGO$"', '"$Windows NT$"'); Ok = $false; Why = "the wrong Signature" },
+                @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "a catalog in the x86 INF" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models"); Ok = $false; Why = "no NT 6.3 models in the x86 INF" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0"); Ok = $false; Why = "a later decoration in the x86 INF" },
+                @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models,NTx86.6.3`r`n%Mfg%=Other_Models"); Ok = $false; Why = "a second manufacturer line in the x86 INF" },
+                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class id as the hardware id on 8.1 and 10 in the x86 INF" },
+                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_0108"); Ok = $false; Why = "the whole subclass on 8.1 and 10 in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802", "[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802"); Ok = $false; Why = "no hardware id before 8.1 in the x86 INF" }
             )
             $i = 0
             foreach ($c in $cases) {
@@ -102,7 +182,27 @@ try {
         $b64 = [System.IO.File]::ReadAllText($infs[1].File)
         $c64 = @(
             @{ T = $b64; Ok = $true; Why = "the committed x64 INF" },
-            @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" }
+            @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat`r`n", ""); Ok = $false; Why = "no catalog in the x64 INF" },
+            @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3", "%Mfg%=Stor98_Models,NTamd64"); Ok = $false; Why = "no NT 6.3 models in the x64 INF" },
+            @{ T = $b64 + "`r`n[Stor98_Models.NTamd64.6.3]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802`r`n"; Ok = $false; Why = "a second NT 6.3 models section in the x64 INF" },
+            @{ T = $b64 + "`r`n[Manufacturer]`r`n%Mfg%=Stor98_Models,NTamd64.10.0`r`n"; Ok = $false; Why = "a second [Manufacturer] section in the x64 INF" },
+            @{ T = $b64 + "`r`n[Stor98_Models.NTamd64.6.3] ; more models`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802`r`n"; Ok = $false; Why = "a second NT 6.3 models section with a comment on its header" },
+            @{ T = $b64 + "`r`n[Manufacturer] ; more`r`n%Mfg%=Stor98_Models,NTamd64.10.0`r`n"; Ok = $false; Why = "a second [Manufacturer] with a comment on its header" },
+            @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3", "%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3,NTamd64.10.0"); Ok = $false; Why = "a later decoration in the x64 INF" },
+            @{ T = $b64.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class id as the hardware id on 8.1 and 10 in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=other.cat"); Ok = $false; Why = "another catalog name in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile.NTamd64=stor98.cat"); Ok = $false; Why = "a decorated catalog line in the x64 INF" },
+            @{ T = $b64.Replace("CatalogFile=stor98.cat", "CatalogFile=stor98.cat`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "two catalog lines in the x64 INF" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",`"DmaRemappingCompatible`",%REG_DWORD%,0x00000001`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 1" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR, Parameters, DmaRemappingCompatible, 0x00010001, 2`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible 2, spaced" },
+            @{ T = $b64.Replace("DelReg=Stor98_ServiceDelReg`r`n", ""); Ok = $false; Why = "no DelReg for DmaRemappingCompatible" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"", "HKR,`"Para meters`",`"DmaRemappingCompatible`""); Ok = $false; Why = "a DelReg of another subkey (a space inside the quotes)" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"", "HKR, `"Parameters`" , `"DmaRemappingCompatible`""); Ok = $true; Why = "spaces around the DelReg's commas" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKLM,System\CurrentControlSet\Services\stor98\Parameters,DmaRemappingCompatible,0x00010001,1`r`n`r`n[Stor98_EventLog]"); Ok = $false; Why = "DmaRemappingCompatible through HKLM" },
+            @{ T = $b64.Replace("[Stor98_EventLog]", "HKR,`"Parameters`",%Dmr%,%REG_DWORD%,1`r`n`r`n[Stor98_EventLog]").Replace("[Strings]", "[Strings]`r`nDmr=`"DmaRemappingCompatible`""); Ok = $false; Why = "DmaRemappingCompatible through a [Strings] token" },
+            @{ T = $b64.Replace("AddReg=Stor98_ServiceReg`r`nDelReg=Stor98_ServiceDelReg`r`n", "AddReg=Stor98_ServiceReg`r`n").Replace("CopyFiles=Stor98_CopyFiles", "CopyFiles=Stor98_CopyFiles`r`nDelReg=Stor98_ServiceDelReg"); Ok = $false; Why = "the DelReg in the device's install section, not the service's" },
+            @{ T = $b64.Replace("HKR,`"Parameters`",`"DmaRemappingCompatible`"`r`n", "HKR,`"Parameters`",`"Other`"`r`n"); Ok = $false; Why = "a DelReg of another value" }
         )
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("stor98-inf-" + [System.IO.Path]::GetRandomFileName())
         New-Item -ItemType Directory -Path $tmp | Out-Null

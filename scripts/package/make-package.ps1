@@ -161,10 +161,16 @@ names -DriverPath (the self-tests' stand-ins) stages it only when it names
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
 sign the staged xhci98.sys, xhciuas.sys, xhcicm.sys and the bundled stor98.sys
 (since 3.1.0.0; one key signs every driver of the package) of an amd64 package with an
-embedded Authenticode signature - SHA-1 file digest, no timestamp, no
-catalog, the INFs unchanged - and stage the certificate's public half beside
-them as xhci98-test.cer. That is what lets Vista x64 and Windows 7 x64 load
-the driver in test-signing mode instead of only on an F8 start. The password
+embedded Authenticode signature - SHA-1 file digest, no timestamp - and stage
+the certificate's public half beside them as xhci98-test.cer. That is what
+lets Vista x64 and Windows 7 x64 load the driver in test-signing mode instead
+of only on an F8 start. Since 3.2.0.0 (owner, 2026-10-22; record 19 section
+3a) it also makes, with WDK 7.1's MakeCat, one catalog per staged INF of the
+amd64 package (xhci98.cat, xhciuas.cat, xhcicm.cat, xhcicmf.cat, stor98.cat:
+the INF and the files its [SourceDisksFiles] names) and signs each with the
+same key, SHA-1, no timestamp, last of the staging: Windows 8, 8.1 and 10 x64
+refuse a package with no catalog in test-signing mode. Each catalog is held to
+Test-PackageCatalog (package-common.ps1) before it is staged. The password
 comes from the XHCI98_TESTSIGN_PW environment variable or, where that is
 unset, a prompt; it is never printed.
 
@@ -195,9 +201,13 @@ tree had uncommitted changes, whether its import gates had their target
 evidence, and the time. This mode reads the one for -Arch and -Flavor
 before anything else and refuses unless it is for this architecture and
 flavour, every binary to be staged has exactly the SHA-256 recorded for it,
-the build ran in a clean tree, the tree is now at that same commit with no
-uncommitted change, and the build's import gates had their target evidence
-(or this run passes -NoTargetEvidence too). Each binary is read once, into
+the build ran in a clean tree, the tree is now at that same commit - or at a
+newer one of which it is an ancestor, with no file changed since a build
+input (roadmap-usb4 task 43.9; package-common.ps1, Get-GatedHeadAdvance) -
+with no uncommitted change, and the build's import gates had their target
+evidence (or this run passes -NoTargetEvidence too). A documentation commit
+after the gated build therefore does not cost a rebuild; a change to a
+source, a header, the host suite or the import gates does. Each binary is read once, into
 memory; those bytes are what is hashed, and they are written to a private
 copy that every later step reads - the flavour markers, the signing, the
 staging - so the build's file is never read again. Each copy is checked
@@ -625,6 +635,66 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
 }
 
 
+function Invoke-TestSignCatalog {
+    # Makes $CatName for the staged files $Files of $StageDir with WDK 7.1's
+    # MakeCat, signs it with the project test certificate as Invoke-TestSign
+    # signs a binary (SHA-1, no timestamp), holds it to Test-PackageCatalog
+    # and stages it beside them (design record 19 section 3a). Every failure
+    # throws. The catalog is made in $WorkDir and copied in only once it has
+    # passed.
+    param([string]$StageDir, [string]$CatName, [string[]]$Files, [string]$WorkDir,
+          [string]$MakeCat, [string]$Pfx, [string]$Password, [string]$Thumbprint, [string]$SignTool)
+
+    $catPath = New-PackageCatalogFile -StageDir $StageDir -CatName $CatName -Files $Files -WorkDir $WorkDir -MakeCat $MakeCat
+    $expected = @{}
+    foreach ($f in $Files) { $expected[$f] = Get-CatalogMemberDigest -Path (Join-Path $StageDir $f) }
+    $savedEap = $ErrorActionPreference
+    $before = Get-UserKeyContainers
+    $signArgs = @("sign", "/q", "/f", $Pfx)
+    if ($Password -ne "") { $signArgs += @("/p", $Password) }
+    $signArgs += @("/fd", "sha1", $catPath)
+    $ErrorActionPreference = "Continue"
+    try {
+        $signOut = & $SignTool @signArgs 2>&1 | Out-String
+        $signRc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    $after = Get-UserKeyContainers
+    $left = @($after.Names | Where-Object { $before.Names -notcontains $_ })
+    if ($left.Count -gt 0) {
+        Write-Warn ("SignTool left {0} new key container file(s) while signing {1}; each may be a copy of the private key. They are hidden system files, so list them with -Force, and delete each one named here yourself (design record 19 section 5):" -f `
+            $left.Count, $CatName)
+        foreach ($n in $left) {
+            Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n).Replace("'", "''"))
+        }
+    }
+    if ($signRc -ne 0) {
+        throw "SignTool could not sign $CatName (exit $signRc):`n$signOut"
+    }
+    $why = Test-PackageCatalog -Catalog (Read-CatalogFile -Path $catPath) -Expected $expected -Thumbprint $Thumbprint
+    if ($why -ne "") {
+        throw "the signed $CatName is not what design record 19 section 3a prescribes: $why."
+    }
+    Copy-Item -LiteralPath $catPath -Destination (Join-Path $StageDir $CatName) -Force
+    Write-Ok ("{0} covers {1}, signed by the project test certificate {2} (SHA-1, no timestamp)" -f $CatName, ($Files -join " and "), $Thumbprint)
+}
+
+function Get-InfSourceFiles {
+    # The file names an INF's [SourceDisksFiles] sections (any decoration)
+    # list, lower-cased: what its catalog must cover besides the INF itself.
+    param([string]$Path)
+    $names = New-Object System.Collections.ArrayList
+    $in = $false
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $t = ($line -replace ';.*$', '').Trim()
+        if ($t -match '^\[(.+)\]$') { $in = ($matches[1].Trim() -match '^(?i)SourceDisksFiles(\..*)?$'); continue }
+        if ($in -and $t -match '^([^=]+?)\s*=') { [void]$names.Add($matches[1].Trim().ToLowerInvariant()) }
+    }
+    return @($names | Sort-Object -Unique)
+}
+
+
 $gateExtra = @()
 $variantDir = ""
 #
@@ -690,6 +760,39 @@ time; they land in different directories on purpose.
         }
         Write-Ok ("its interface header is {0} byte for byte (link-state interface {1})" -f $Stor98HeaderPath, $stor98.Interface)
         $stor98Files = @(Get-Stor98PackageFiles -Release $stor98 -Arch $Arch)
+        # S98VSD.VXD (task 43.46, design record 30 section 6.4), the 98 SE
+        # and ME IOS layer for Stor98's disks: this project's own image, staged
+        # beside stor98.mpd in the x86 package that carries Stor98, the qemu
+        # flavour's image in the qemu package; held to src\vsd\check-vsd.ps1
+        # again here. A package built where src\vsd\build.cmd could not build
+        # it goes without it (make-release.ps1 refuses that for a cut).
+        if ($Arch -eq "x86") {
+            $vsdPath = Join-Path $repo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD")
+            if (Test-Path -LiteralPath $vsdPath -PathType Leaf) {
+                if (-not $SkipBinaryGates) {
+                    $vsdArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\vsd\check-vsd.ps1"), $vsdPath)
+                    if ($Flavor -eq "qemu") { $vsdArgs += "-Qemu" }
+                    $out = & powershell.exe @vsdArgs 2>&1
+                    if ($LASTEXITCODE -ne 0) { throw ("S98VSD.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+                }
+                $stor98Files += [pscustomobject]@{ Source = "..\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD"
+                                                   FullPath = $vsdPath; Dest = "S98VSD.VXD"
+                                                   Sha256 = (Get-FileHash -LiteralPath $vsdPath -Algorithm SHA256).Hash }
+                Write-Ok ("S98VSD.VXD from {0}" -f $vsdPath)
+                # Windows loads an IOSUBSYS driver by its base name: a layer
+                # named STOR98.VXD beside stor98.mpd stopped Stor98's start
+                # (Code 10; design record 30 section 3.1, runs/run-43.md).
+                # No two of the drivers staged for IOSUBSYS share one.
+                $iosNames = @($stor98Files | Where-Object { $_.Dest -match '\.(mpd|vxd|pdr)$' } |
+                              ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Dest).ToUpperInvariant() })
+                $dupNames = @($iosNames | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+                if ($dupNames.Count -ne 0) {
+                    throw ("drivers staged for IOSUBSYS share a base name ({0}): Windows would load only one of them." -f ($dupNames -join ", "))
+                }
+            } else {
+                Write-Warn ("no S98VSD.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdPath)
+            }
+        }
     }
 
     $gated = $null
@@ -756,8 +859,15 @@ and deletes it when that flavour's build starts. Build and gate it first:
             $bytes = $null
         }
         $tree = Get-GitTreeState -Repo $repo
+        # A HEAD newer than the build's commit is admitted when no file
+        # changed since is a build input (roadmap-usb4 task 43.9), so a
+        # documentation commit after the gated build does not cost a rebuild.
+        $advance = $null
+        if ($tree.Head -ne "none" -and $gated.Commit -ne $tree.Head.ToLowerInvariant()) {
+            $advance = Get-GatedHeadAdvance -Repo $repo -From $gated.Commit -To $tree.Head
+        }
         $why = Get-GatedManifestFault -Manifest $gated -Arch $Arch -Flavor $Flavor -Binaries $snapBinaries `
-            -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence)
+            -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence) -Advance $advance
         # A refusal names the build's file, not the private copy it was read into.
         foreach ($name in @($snapBinaries.Keys)) { $why = $why.Replace($snapBinaries[$name], $gatedBinaries[$name]) }
         if ($why -ne "") {
@@ -771,6 +881,12 @@ committed tree, or run this without -SignOnly to run every gate here.
             $GatedManifestPath, $Flavor, $Arch, $gated.Commit, $gated.Time)
         foreach ($name in ($gatedBinaries.Keys | Sort-Object)) {
             Write-Host ("  {0,-13} {1}" -f $name, $gated.Sha256[$name])
+        }
+        if ($null -ne $advance) {
+            Write-Ok ("HEAD {0} is {1} commit(s) newer than that build, and none of the {2} file(s) changed since is a build input:" -f `
+                $tree.Head, $advance.Commits, $advance.Changed.Count)
+            foreach ($c in @($advance.Changed | Select-Object -First 20)) { Write-Host ("  {0}" -f $c) }
+            if ($advance.Changed.Count -gt 20) { Write-Host ("  and {0} more" -f ($advance.Changed.Count - 20)) }
         }
         Write-Host "  REUSED from the gated build, not run here: the host test suite; the import"
         Write-Host ("  gates of {0}{1}." -f (($gatedBinaries.Keys | Sort-Object) -join ", "),
@@ -1261,7 +1377,8 @@ The x86 package carries the x86 helper its INF names. Build it first
             $nf.FullPath = $signedS98
             $nf.Sha256 = (Get-FileHash -LiteralPath $signedS98 -Algorithm SHA256).Hash
         }
-        $testSignPassword = $null
+        # The password is kept for the catalogs, which are made once every
+        # file is staged (below), and dropped there.
     }
 
     # --- where each file goes, from the gate's own parse ---------------------
@@ -1377,6 +1494,49 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
             throw "the staged copy of Stor98's '$($nf.Source)' is not the file that was verified; it changed while it was being copied."
         }
     }
+
+    # --- the x64 catalogs (design record 19 section 3a) ----------------------
+    #
+    # Last of the staging, so each catalog is made of the bytes the package
+    # holds: every INF of a signed amd64 package names one of its own
+    # (CatalogFile=, held by the INF gates' BOTH-CATALOG), and Windows 8 to
+    # 10 x64 refuse the package without it in test-signing mode (owner,
+    # 2026-10-22; record 13 section 6.14.5). Each covers the INF and every
+    # file its [SourceDisksFiles] names, which must be the files the table
+    # in package-common.ps1 gives it.
+    if ($Arch -eq "amd64") {
+        $catInfs = @($script:PackageCatalogs.Keys | Where-Object { Test-Path -LiteralPath (Join-Path $stageDir $script:PackageCatalogs[$_].Inf) })
+        foreach ($catName in $catInfs) {
+            $spec = $script:PackageCatalogs[$catName]
+            $infFile = Join-Path $stageDir $spec.Inf
+            $named = @([System.IO.File]::ReadAllLines($infFile) | Where-Object { $_ -match '^\s*CatalogFile(\.[^=\s]*)?\s*=' })
+            if ($named.Count -ne 1 -or $named[0] -notmatch ('^\s*CatalogFile\s*=\s*' + [regex]::Escape($catName) + '\s*$')) {
+                throw "the staged $($spec.Inf) does not name its catalog once as CatalogFile=$catName (design record 19 section 3a)."
+            }
+            $covered = @($spec.Files | ForEach-Object { $_.ToLowerInvariant() })
+            $outside = @(Get-InfSourceFiles -Path $infFile | Where-Object { $covered -notcontains $_ })
+            if ($outside.Count -gt 0) {
+                throw "the staged $($spec.Inf) names $($outside -join ', ') in [SourceDisksFiles], which $catName does not cover; add it to `$script:PackageCatalogs in scripts\package\package-common.ps1."
+            }
+        }
+        if ($null -ne $testSignCert) {
+            Write-Step "x64 catalogs (design record 19 section 3a)"
+            $makeCat = Join-Path $repo "tools\WinDDK71\bin\x86\MakeCat.exe"
+            if (-not (Test-Path -LiteralPath $makeCat)) {
+                throw "no MakeCat at '$makeCat'. It is WDK 7.1's (tools\WinDDK71, docs\contributing\build-and-test.md)."
+            }
+            foreach ($catName in $catInfs) {
+                Invoke-TestSignCatalog -StageDir $stageDir -CatName $catName -Files $script:PackageCatalogs[$catName].Files `
+                    -WorkDir $signDir -MakeCat $makeCat -Pfx $TestSignPfx -Password $testSignPassword `
+                    -Thumbprint $testSignCert.Thumbprint -SignTool $signTool
+            }
+            $why = Test-CatalogOfPackage -Dir $stageDir -Thumbprint $testSignCert.Thumbprint
+            if ($why -ne "") { throw "the staged package's catalogs are not what design record 19 section 3a prescribes: $why." }
+        } elseif ($catInfs.Count -gt 0) {
+            Write-Warn "an unsigned amd64 package carries no catalog: its INFs name catalogs it does not hold, and Windows 8 to 10 x64 refuse it (design record 19 section 3a). Sign it with -TestSignPfx for those."
+        }
+    }
+    $testSignPassword = $null
 
     Write-Host ""
     foreach ($item in (Get-ChildItem -LiteralPath $stageDir -File -Recurse | Sort-Object FullName)) {

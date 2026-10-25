@@ -156,4 +156,36 @@ static BOOLEAN Sg9xCopy(const STOR98_SGD9X *Sgd, UCHAR Shift, ULONG Offset, UCHA
     return TRUE;
 }
 
+// What a request's DCB says (docs/PLAN.md MD-8, the counter answer), read
+// through the same checks as Sg9xClassify but for linear and scatter/gather
+// requests alike: the IOP in the arena and pointing back at the SRB, the
+// physical DCB pointer in the arena. DCB (Win98 DDK block\inc\DCB.H and
+// DCB.INC, packed; DCB_COMMON is 0x50 bytes): DCB_dmd_flags +0x1C,
+// DCB_max_xfer_len +0x50 (the first field after DCB_COMMON),
+// DCB_max_sg_elements +0x77 (a byte); IOR_flags' IORF_DOUBLE_BUFFER 0x40
+// (IOR.H). FALSE, and nothing written, when a check fails.
+#define SG9X_DCB_DMD        0x1C        // DCB_dmd_flags
+#define SG9X_DCB_MAXXFER    0x50        // DCB_max_xfer_len
+#define SG9X_DCB_MAXSG      0x77        // DCB_max_sg_elements
+#define SG9X_IORF_DBLBUF    0x00000040  // IORF_DOUBLE_BUFFER
+
+static BOOLEAN Sg9xDcbFacts(const void *Srb, ULONG *MaxXfer, ULONG *MaxSg, ULONG *DmdFlags, ULONG *IorFlags)
+{
+    ULONG iop, dcb;
+
+    iop = *(const ULONG *)((const UCHAR *)Srb + SG9X_SRB_IOP);
+    if (iop < SG9X_ARENA || *(const ULONG *)(iop + SG9X_IOP_SRB) != (ULONG)Srb) {
+        return FALSE;
+    }
+    dcb = *(const ULONG *)(iop + SG9X_IOP_PDCB);
+    if (dcb < SG9X_ARENA) {
+        return FALSE;
+    }
+    *IorFlags = *(const ULONG *)(iop + SG9X_IOR_FLAGS);
+    *DmdFlags = *(const ULONG *)(dcb + SG9X_DCB_DMD);
+    *MaxXfer = *(const ULONG *)(dcb + SG9X_DCB_MAXXFER);
+    *MaxSg = *(const UCHAR *)(dcb + SG9X_DCB_MAXSG);
+    return TRUE;
+}
+
 #endif // _STOR98_SG9X_H_

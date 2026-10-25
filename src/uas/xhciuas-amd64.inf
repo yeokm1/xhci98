@@ -23,7 +23,9 @@ Class=USB
 ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/19/2026,3.1.0.0
+DriverVer=10/24/2026,3.2.0.0
+; Made and test-signed by the packager alone (design record 19).
+CatalogFile=xhciuas.cat
 
 [Manufacturer]
 %Mfg%=UasModels,NTamd64

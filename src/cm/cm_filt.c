@@ -12,7 +12,9 @@
  *       every BusRelations answer on its way back, keeps the snapshot and
  *       the baseline, and on an active bridge with safe eject on attaches
  *       a child filter to each new PDO (section 7.4). A device D0 request
- *       on a bridge the NHI holds for its resume is retained (section 6.3).
+ *       on a bridge the NHI marked for its resume is passed down at once
+ *       and counted; the NHI's release then invalidates the bridge
+ *       (section 6.3).
  *   [CM_KIND_CHILD]   role 3, safe eject's child filter, created by the
  *       bridge filter above a new device's PDO (directly, or above the bus
  *       filters already there, CmPortsChildAttach), or since task 42-A.5
@@ -246,6 +248,7 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
     NTSTATUS status;
     KIRQL irql;
     BOOLEAN child;
+    BOOLEAN started;
 
     child = (BOOLEAN)(filter->Common.Kind == CM_KIND_CHILD);
     stack = IoGetCurrentIrpStackLocation(irp);
@@ -316,9 +319,10 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         break;
 
     case IRP_MN_SURPRISE_REMOVAL:
+        started = (BOOLEAN)(filter->Started != 0);
         filter->Started = 0;
         filter->SurpriseRemoved = 1;
-        CmRegAttEvent(filter, CM_MK_SURPRISE);
+        CmRegAttSurprise(filter, started);
         if (!child) {
             CmRegWithdraw(filter);
         }
@@ -370,10 +374,14 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 }
 
 /*
- * Power: passed down as NT 5.x requires of a filter, except a device D0
- * request on a bridge the NHI holds for its resume (record 21 section
- * 6.3), which cm_reenum.c passes down with a completion routine that
- * retains it.
+ * Power: passed down as NT 5.x requires of a filter, every IRP and at
+ * once. A device D0 on a bridge the NHI marked at its suspend is never
+ * retained (record 21 section 6.3, task 43.24h): the power manager does
+ * not send the pageable NHI its own resume while a bridge's resume waits,
+ * so a retained D0 stopped every resume from hibernation and every Fast
+ * Startup boot with bug check 0x9F. It is counted and logged
+ * (CmRegPassD0); the NHI's resume releases the mark and invalidates the
+ * bridge, and the devices behind it are enumerated again.
  */
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
 {
@@ -383,9 +391,8 @@ NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
     if (filter->Common.Kind == CM_KIND_FILTER &&
         stack->MinorFunction == IRP_MN_SET_POWER &&
         stack->Parameters.Power.Type == DevicePowerState &&
-        stack->Parameters.Power.State.DeviceState == PowerDeviceD0 &&
-        CmRegHoldD0(filter, irp)) {
-        return STATUS_PENDING;
+        stack->Parameters.Power.State.DeviceState == PowerDeviceD0) {
+        CmRegPassD0(filter);
     }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);

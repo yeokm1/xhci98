@@ -57,6 +57,7 @@
 #include "cm_statb.h"
 #include "cm_live.h"
 #include "cm_qryb.h"
+#include "cm_eject.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -274,8 +275,8 @@ typedef struct _CM_NHI {
     ULONG U4SeamValid;
     /* The USB4 profile's resume bound in ms for the most obligations a
      * domain can hold (TbtU4ResumeBoundUs, rounded up), set before
-     * CmReenumSuspend: the hold's watchdog must be at least this plus
-     * record 21's 10 s (cm_reenum.h). */
+     * CmReenumSuspend, and logged there with record 21's 10 s and the
+     * five-minute cap as diagnostics (cm_reenum.h). */
     ULONG U4ResumeBoundMs;
     /* Every port read disconnected (TbtU4AllPortsDisconnected) by the
      * unbind just before it stopped the rings: the fresh evidence
@@ -396,6 +397,9 @@ typedef struct _CM_NHI {
     ULONG Removing;         /* CmPowerDrain closed power admission        */
     /* CM_WORK_DIRECT's target: D0, or a sleep state's D3. */
     DEVICE_POWER_STATE DirectWant;
+    /* IoIsWdmVersionAvailable(1, 0x10), read by the power dispatch at
+     * PASSIVE_LEVEL for its completion routine (cm_pwrr.h, task 43.65). */
+    BOOLEAN PowerOnNt;
 
     CM_COUNTERS Counters;
 
@@ -445,6 +449,10 @@ typedef struct _CM_NHI {
      * emitter at a time: the thread, or the PnP path once it has ended). */
     ULONG LogDroppedEmitted;
     UCHAR LogEmit[XHCI_LOG_RING_BYTES];
+    /* The 9x eject asked of this driver and the 9x statement decision
+     * (cm_ejectos.c, task 43.18): this start's share; the transactions
+     * themselves are that file's image-static records. */
+    CM_EJ_DOM Ej;
 } CM_NHI, *PCM_NHI;
 
 /* The query device's extension (CM_KIND_QUERY): no lower object. Lock
@@ -531,15 +539,10 @@ typedef struct _CM_FILTER {
     ULONG SafeEject;        /* Owner's XhciCmSafeEject                     */
     struct _CM_NHI *Owner;
     ULONG OwnerIndex;       /* the member's index in Owner's set           */
-    /* The resume hold (record 21 section 6.3). */
+    /* The resume mark (record 21 section 6.3): set at the NHI's suspend,
+     * cleared by its resume's release; no power IRP is retained. */
     ULONG Held;
     struct _CM_NHI *HeldBy;
-    ULONG HoldReenum;       /* invalidate on the watchdog's failure path   */
-    ULONG HoldLeftS;        /* the watchdog's seconds still to run         */
-    PIRP HeldIrp;           /* the retained device D0 IRP                  */
-    ULONG TimerArmed;
-    KTIMER HoldTimer;
-    KDPC HoldDpc;
     /* The snapshot of section 7.4: written by the PnP dispatch alone,
      * under the registration list's lock (the eject's eligibility reads
      * it from a child's removal). */
@@ -598,6 +601,13 @@ typedef struct _CM_FILTER {
     ULONG LocBus;
     ULONG LocAddress;       /* DevicePropertyAddress                        */
     ULONG Answered;         /* Removable answered set                      */
+    /* The marks entry of its PDO this attachment was last bound to (design
+     * record 25 section 7.6): its domain, that domain's start count and
+     * the entry's serial; MarkDom NULL before any. Compared, never
+     * dereferenced unless the domain is still listed. */
+    struct _CM_NHI *MarkDom;
+    ULONG MarkStarts;
+    ULONG MarkSerial;
     ULONG Stray;            /* counted once as cm.reenum.child.stray       */
     /* Set while this object asks IoGetDeviceProperty for its PDO's
      * location: the PnP manager answers DevicePropertyAddress with an
@@ -648,6 +658,12 @@ VOID CmNhiSetChanged(PCM_NHI nhi);
  * to (record 22 section 7.2), 0 where none does or under the ICM client;
  * on the thread (task 42-A.5's pending departures). */
 ULONG CmNhiMemberGen(PCM_NHI nhi, ULONG member);
+/* Task 43.18 (cm_ejectos.c): the USB4 port member `member` corresponds
+ * to, 0 where none does or under the ICM client; and that member's PCIe
+ * teardown (record 22 section 10.4, the eject hook's own path), TRUE when
+ * its read-back proved the path closed. On the thread. */
+ULONG CmNhiMemberPort(PCM_NHI nhi, ULONG member);
+BOOLEAN CmNhiU4EjectMember(PCM_NHI nhi, ULONG bdf);
 /* cm_power.c's resume: the USB4 batch taken and its UPs published before
  * the held bridges are released (cm_nhi.c, cmU4Drain). */
 VOID CmNhiU4Take(PCM_NHI nhi);
@@ -747,6 +763,11 @@ VOID CmReadValues(PCM_NHI nhi);
  * the stop's work; CmStatusClose in the removal (idempotent). */
 VOID CmStatusOpen(PCM_NHI nhi);
 VOID CmStatusClose(PCM_NHI nhi);
+/* The 9x eject's result (`result` TRUE, CM_EJ_RESULT_VALUE) or reply
+ * (CM_EJ_REPLY_VALUE) into the NHI's hardware key (task 43.18); FALSE when
+ * the key is not open or the write failed. On the thread. */
+BOOLEAN CmStatusEjectWrite(PCM_NHI nhi, BOOLEAN result, const UCHAR *bytes,
+                           ULONG length);
 VOID CmStatusPass(PCM_NHI nhi);
 VOID CmStatusStopped(PCM_NHI nhi);
 /* XhciCmQueryName (REG_SZ) in the hardware key, empty to withdraw it;

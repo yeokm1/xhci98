@@ -69,10 +69,13 @@ objfre/
 !xhcitr/selftest.cmd
 !xhcimark/build.cmd
 !xhcimark/selftest.cmd
+!xhciperf/build.cmd
+!xhciperf/selftest.cmd
 !test/xfertest/build.cmd
 !test/pmclient/build.cmd
 !xhciinst/di/build.cmd
 !xhciinst/di/selftest.cmd
+!src/vsd/build.cmd
 !xhciinst/di/test/build.cmd
 !xhciqual/test/*.cmd
 !scripts/**/*.cmd
@@ -238,6 +241,7 @@ handoff.md
 # Phase 10: the per-host device-matrix config (copy of config.sample.psd1 beside
 # it). Lives with the harness, not at the repo root; the loaders look only here.
 scripts/vm-matrix/matrix.config.psd1
+scripts/vm-matrix/release.config.psd1
 
 # build.exe's warning logs, for the HCD (src), the UAS class driver
 # (src\uas, task 31-A.2), the connection manager (src\cm) and the MSI helper

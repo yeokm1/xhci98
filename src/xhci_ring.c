@@ -1309,6 +1309,17 @@ ULONG XhciRingNoOpAtType(PXHCI_RING ring, ULONG index, ULONG trbType)
      * exists.
      */
     ring->Base[index].Control = XHCI_TRB_TYPE(trbType) | cycle;
+    /*
+     * The slot before the Link TRB: a TD that crossed the wrap left the Link
+     * chained (the producer copies this slot's Chain flag onto it), and a
+     * chained Link in front of a No Op would make the Link the first TRB of a
+     * TD and precede a No Op with a chained TRB, both of which 4.11.7
+     * forbids (task 43.64, design record 13 section 14). Only CH changes: the
+     * Link's cycle and Toggle Cycle stay as the producer handed them over.
+     */
+    if (index == ring->Trbs - 2) {
+        ring->Base[ring->Trbs - 1].Control &= ~XHCI_TRB_CH;
+    }
     return XHCI_RING_OK;
 }
 

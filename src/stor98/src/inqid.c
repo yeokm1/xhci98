@@ -152,11 +152,14 @@ ULONG InqVpdPage(IN UCHAR Page, IN const UCHAR *Sn, IN const UCHAR *Mn, OUT UCHA
     Out[1] = Page;
     switch (Page) {
     case 0x00:
-        Out[3] = 3;
+        // C9h, stor98's identity page (include/stor98pf.h), is built by
+        // ScsiHandleInquiry, which knows the adapter's PCI location.
+        Out[3] = 4;
         Out[4] = 0x00;
         Out[5] = 0x80;
         Out[6] = 0x83;
-        return 4 + 3;
+        Out[7] = 0xC9;
+        return 4 + 4;
     case 0x80:
         Out[3] = 20;
         InqText(Sn, 20, &Out[4]);

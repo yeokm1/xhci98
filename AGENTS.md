@@ -168,8 +168,10 @@ was the only route). Read on the Vista x64 and Windows 7 x64 guests on
 2026-10-11 (task 36.50's rehearsal): with `bcdedit /set testsigning on` the
 driver loads at every start with no F8; without either the controller sits at
 Code 39 on Vista and Code 52 on 7 with nothing loaded. The install still asks
-about the publisher and the Driver tab says "Not digitally signed" - there is
-no catalog. It is not Microsoft signing. 32-bit Vista and Windows 7 do not
+about the publisher and the Driver tab says "Not digitally signed" - there was
+no catalog until 3.2.0.0, whose x64 package carries one per INF, signed by the
+same test certificate, because Windows 8 to 10 x64 refuse a package without
+one (design record 19 section 3a). It is not Microsoft signing. 32-bit Vista and Windows 7 do not
 enforce kernel-mode signing. The release notes carry that requirement beside the
 tier, not in a footnote. **And it rests on five cycles a guest**, which is
 what issue 7 section 6 says five cycles are: not a proof that the enable
@@ -255,6 +257,12 @@ xhcitr/         The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`), the
                 engine, moved; `docs/contributing/snapshot-reader.md` is
                 the route's reference); `xhcitr/README.TXT` is its guide.
                 Tracked.
+xhciperf/       XHCIPERF (`XHCIPERF.EXE`, `XHCIPF64.EXE`), a file-based
+                disk benchmark with a window that also reads Stor98's
+                counters: a developer diagnostic, built and host-tested
+                at every gated build and not shipped (owner, 2026-10-23;
+                roadmap-usb4 task 43.50, design record 29);
+                `xhciperf/README.TXT` is its guide. Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -431,7 +439,7 @@ SuperSpeed and USB 3 hub material, checked against xHCI 1.2c and USB 3.2
 ### Language and arithmetic
 
 - C89/C90 only. No `//` comments, no mid-block declarations, no `stdint.h`. Use `ULONG`/`USHORT`/`UCHAR` from `ntddk.h`.
-  The one exception is a third-party interface header carried byte for byte, `src/cm/stor98cm.h` (Stor98's, with `//` comments; `legal-provenance.md` section 2a): never edited here, and every compiler of the tree accepts it as it is.
+  The exceptions are Stor98's interface headers, with `//` comments: `src/cm/stor98cm.h`, carried byte for byte (`legal-provenance.md` section 2a), and `src/stor98/include/stor98pf.h`, which XHCIPERF includes in place (design record 29 section 7.2); never edited outside Stor98, and every compiler of the tree accepts them as they are.
 - No 64-bit DMA. Win98 is 32-bit; the upper 32 bits of all hardware addresses are always 0.
 - No 64-bit arithmetic (the `_alldiv`-style compiler helpers may not exist on Win98's kernel). Keep 64-bit hardware fields as Lo/Hi ULONG pairs, Hi always 0.
 - No floating point in kernel mode.
@@ -571,7 +579,7 @@ gated by the import gate's `-GateProfile hlprx86` against
 Windows 98 rules,
 because it is never installed on Windows 98 or ME.
 
-The media carries no Microsoft file. The HCD's INFs have the setup engine
+The media carries no Microsoft file, but for the one exception below. The HCD's INFs have the setup engine
 copy two of the OS's own files, `usbd.sys` (whose helper exports the class
 drivers above the HCD's PDOs import) to dirid 10 (`System32\Drivers`) and
 `usbui.dll` (the property-page provider, and on 9x the drawer of the tabs'
@@ -595,7 +603,20 @@ Since 2.4.0.0 it refuses the CD's compressed names too (`USBD.SY_`): the
 `hidclass.sys` and `hidparse.sys`, which the user copies from their own
 Windows 2000 CD to the floppy - the media still carries none of them
 (`OEM-W2K` holds that entry's shape).
-`legal-provenance.md` section 5 records why. Build install media with `scripts\package\make-package.ps1`, never by
+`legal-provenance.md` section 5 records why. **One exception is decided for
+`3.2.0.0`** (owner, 2026-10-20): NUSB 3.3's seven Windows 98 SE storage
+files, unmodified, from the separate driver-pack repository
+`usb-wdm-nonfree` (its top-level `nusb33/`, kept apart from the pack's
+`non-free/`), staged by task 43.3 with their `nusb33/NOTICE.md` into
+the upload set alone, at the download's root as `NUSB33\`, a folder of its
+own beside the installer and never inside a `NONFREE\` (owner, 2026-10-20;
+the folder 2026-10-22: NUSB is kept apart from the non-free pack, in the
+pack's repository and in the download), and never into a package, a commit or
+`releases\<version>\`. The `OS-*` and `PKG-MSFILE` rules stay as they are
+for this project's own files; they name none of the seven
+(roadmap-usb4 tasks 43.1 to 43.3;
+`legal-provenance.md` section 5, "NUSB 3.3's Windows 98 SE storage
+files"). Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
 and they are not separable: the obj subdirectory, which of the two INFs is
 staged for each driver, and the architecture both gates run under. A published release
@@ -622,9 +643,13 @@ have no `nt\`), and from `3.1.0.0` the bundled `stor98.sys` of
 `release-x64` (one key signs every driver, owner 2026-10-19; Stor98's own
 certificate is retired), carry an embedded Authenticode
 signature by the project test certificate - SHA-1 file digest, no
-timestamp, no catalog, the INFs unchanged - applied at staging by
-`make-package.ps1 -TestSignPfx` and never by hand, with the certificate's
-public half beside them as `xhci98-test.cer`; `make-release.ps1` refuses a
+timestamp - and from `3.2.0.0` each INF of an x64 directory a catalog of its
+own (`CatalogFile=`, the INF gates' `BOTH-CATALOG`), made with WDK 7.1's
+MakeCat and signed by the same certificate the same way (owner, 2026-10-22:
+Windows 8 to 10 x64 refuse a package without one; record 19 section 3a), all
+applied at staging by `make-package.ps1 -TestSignPfx` and never by hand, with
+the certificate's public half beside them as `xhci98-test.cer`; the x86
+package carries no catalog; `make-release.ps1` refuses a
 cut that would publish an x64 directory without it, with no switch past
 the refusal. The private key (`.pfx`) is held only on the maintainer's
 disk in the git-ignored `scripts\local\testsign\` or a folder outside the
@@ -754,19 +779,38 @@ rules that bind day-to-day work, and none of them is optional.
   the repository records where to fetch them: filename, version, SHA-256,
   URL, stated licence limit (`docs/references/README.md` is the pattern).
   Public availability of a document is not permission to rehost it.
-- The release download carries no Microsoft file. From 0.0.0.4 to 1.0.0.0
+- The release download carries no Microsoft file but one recorded
+  exception (below). From 0.0.0.4 to 1.0.0.0
   the assembled asset carried three (`usbd98.sys`, `usbd2k.sys`,
   `usbhub98.sys`), by a decision `legal-provenance.md` section 5 records, and
   that was withdrawn on 2026-09-02 before any upload: release 1.0.0.1 has the
   OS supply both files through the INF's `LayoutFile`, 1.0.1.0 adds
   `usbport.sys` on the NT path by the same route, and 1.0.2.0 adds `usbui.dll`
-  on all four paths by it, to dirid 11 rather than 10. **Do not put a
-  Microsoft file back onto the media, under any name, without a decision
-  recorded there**, and do not write "this project redistributes nothing"
+  on all four paths by it, to dirid 11 rather than 10. The one exception
+  since is decided for `3.2.0.0` (owner, 2026-10-20) and recorded there:
+  NUSB 3.3's seven Windows 98 SE storage files, unmodified, in the release
+  download only, in its own `NUSB33\` folder, from `usb-wdm-nonfree`'s
+  `nusb33/` (kept apart from its `non-free/` pack, owner 2026-10-22) with
+  their `NOTICE.md`, never in a commit, and with no licence to redistribute them
+  established; the generated readme says which kind of download it is.
+  The second is decided for `3.2.0.0` as well (owner, 2026-10-22, task
+  43.48) and recorded there: download 3, `xhci98-<version>-nonfree.zip`,
+  carries the `non-free/` folder of `usb-wdm-nonfree` at a pinned tag as
+  `NONFREE\`, other makers' drivers among which are two Microsoft KMDF
+  co-installers, unmodified, with no licence to redistribute them found
+  beyond the few makers' statements the pack's `NOTICE.md` quotes;
+  download 2, `-free.zip`, carries the qualifying
+  `usb-wdm-free` drivers (GPL-2.0) as `WDMFREE\`. Both in the release
+  downloads only, never in a commit; the installer copies them only when
+  ticked and never installs them.
+  **Do not put any other Microsoft file onto the media or the download,
+  under any name, without a decision recorded there**, and do not write
+  "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP` up to
   `3.0.0.0`, from `2.4.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0`
-  `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, and from `3.1.0.0`
-  `XHCIWIZ` and `XHCIWZ64`) carry statically linked runtimes (section 2a).
+  `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, from `3.1.0.0`
+  `XHCIWIZ` and `XHCIWZ64`)
+  carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh

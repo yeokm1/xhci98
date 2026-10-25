@@ -33,6 +33,10 @@
 # the one file that calls CONFIGMG (Windows 98 SE and ME, x86 only).
 # cm_call.c is the pure handoff word of the 9x per-member call workers
 # (test_cm_call; task 42-A.12), cm_callwk.c their threads.
+# cm_eject.c is the pure 9x eject transaction and statement decision
+# (test_cm_eject; task 43.18), cm_ejectos.c their driver half.
+# cm_pwrr.c is the pure route of a system SET_POWER's device half
+# (test_cm_pwrr; task 43.65), cm_power.c its driver half.
 #
 # ADDING A FILE. A new .c is one more line in SOURCES below (a file of
 # src\ by path, as ..\xhci_log.c is); scripts\source-stamp.ps1 reads this
@@ -72,9 +76,12 @@ SOURCES=cm_vals.c      \
         cm_cfgwk.c     \
         cm_filt.c      \
         cm_live.c      \
+        cm_pwrr.c      \
         cm_nvlinkos.c  \
         cm_call.c      \
         cm_callwk.c    \
+        cm_eject.c     \
+        cm_ejectos.c   \
         cm_status.c    \
         cm_qpci.c      \
         cm_statos.c            cm_query.c             cm_qryos.c     \

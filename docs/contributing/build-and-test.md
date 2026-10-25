@@ -112,6 +112,33 @@ in the large model, from `xhciinst\di\`:
   installer does and prints the result file, when its `END` line was read
   and when the process handle signalled. It is never packaged.
 
+The same install, with the same Windows 98 SE DDK, builds `S98VSD.VXD`, the
+98 SE and ME IOS layer for Stor98's disks (roadmap-usb4 task 43.46, design
+record 30 section 6), from `src\vsd\`:
+
+- `src\vsd\build.cmd` (`qemu` for the qemu flavour's image, which writes
+  to QEMU's debug console) finds `wcc386.exe` under `%WATCOM%` in `BINNT64`
+  or `BINNT` and Python on `PATH`, and answers exit 2 ("not built") on a
+  host without either or without the DDK. `src\vsd\stage-ddk.ps1` holds
+  ten DDK headers and the DDK's `LINK.EXE` 5.12 with its `MSPDB50.DLL` to
+  `docs\references\README.md`'s hashes and copies them into the
+  git-ignored `src\vsd\obj\`, mending the staged headers (a trailing
+  Ctrl-Z cut, `AEP.H`'s three typedef tails); nothing of the DDK is
+  tracked. Open Watcom compiles, `omfpub.py` and `omfcheck.py` guard the
+  objects, the DDK's linker links with `/VXD`, `callcheck.py` holds every
+  call in the image to the function the compiler named, and
+  `check-vsd.ps1` holds the image to its DDB `S98VSD`, its two VxD
+  services (`vsd-services.allow`), its stamp and, in the release image, no
+  debug-port write. Out come `src\vsd\obj\S98VSD.VXD` and
+  `src\vsd\obj\qemu\S98VSD.VXD`.
+- `scripts\build-driver.cmd` runs it on the x86 run, after Stor98's
+  build: the release image always, the qemu one when the run builds qemu;
+  a 2 is said and passed over. `make-package.ps1` stages the image beside
+  `stor98.mpd` in an x86 package that carries Stor98 (the qemu image in the
+  qemu package), and `make-release.ps1` refuses a cut without it. Its host
+  suite is `test\test_vsd_list.c`; the VxD itself runs only in a 98 SE or
+  ME guest.
+
 Two consequences worth knowing before they bite:
 
 - A repository path containing a space is a problem for the DDK half only.
@@ -179,6 +206,7 @@ Setup scripts:
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
 | `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers `src\`, `test\`, `scripts\`, `xhcisnap\` and `xhciqual\` through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
+| `scripts\check-readme-text.ps1` | Holds the five tool readmes `make-release.ps1` publishes (`xhcicln`, `xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut embeds it in the top-level `readme.txt` (`Get-HistoryEmbedLines` and `ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `build-driver.cmd` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text and are met only at a cut. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
 | `scripts\test-qemu-launchers.ps1` | Generates all eleven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP, Windows XP x64, Windows Vista, Windows 7, and - since roadmap task 21.8's generators were written on 2026-09-10 - Windows Vista x64 and Windows 7 x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that each of the four 6.x generators and the XP x64 one refuses `pentium3` **and names the feature that guest is missing** - long mode for the three 64-bit guests, the NX bit for the two 32-bit 6.x ones, so that nobody "fixes" a 64-bit refusal by reaching for a model with NX and no long mode - that no two launchers share a QEMU monitor port, that task 21.8's two guests still hold 55563 and 55564 (the assertion that replaced the one holding those ports for guests which did not exist yet), and that every launcher's run-time QEMU resolver announces which rung answered. Those last four read the preamble's **real output** rather than its source, because an `echo` that does not survive `cmd`'s parsing is worth nothing; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
@@ -370,7 +398,7 @@ The scheme is one four-part version per released package, and all four fields ha
 
 | Field | Moves for | Cut that did it |
 |---|---|---|
-| First | A change really major enough to warrant it. It went `0` -> `1` for the first final release and has not moved since | `1.0.0.0` (task 14.2), the first release; everything before it was a `0.x` pre-release carrying no claim of being finished |
+| First | A change in what the product fundamentally is. It has moved three times: `0` -> `1` for the first final release, `1` -> `2` when the driver was rewritten as a whole USB host controller driver, no longer under Windows' own USB port driver, and `2` -> `3` for a new driver, `xhcicm.sys`, for Thunderbolt 3 and USB4 | `1.0.0.0` (task 14.2), the first final release, after the `0.x` pre-releases, which carried no claim of being finished; `2.0.0.0`, the whole host controller driver (`releases\history.md`); `3.0.0.0`, the connection manager for Thunderbolt 3 and USB4 |
 | Second | A major change: a new architecture, or a new function | `1.1.0.0`, which adds the amd64 build and a second package (Phase 21; the cut is roadmap task 22.10) |
 | Third | A patch or a bug fix in the driver's code | `1.0.1.0`, the owner's decision of 2026-09-03 when task 19.7 put issue 4's fix into Phase 19's release |
 | Fourth | A release that changes only the install media or the documents | `1.0.0.1`, which moved `usbd.sys` and `usbhub.sys` onto the `LayoutFile` route and off the download |
@@ -379,7 +407,7 @@ The date is set to the release date and never moves backwards within a series. R
 
 It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
 
-The major version also says whether this is a final release, which is the other half of the first field's meaning and the only reason it has ever moved. Those `0.x` directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
+The major version also says whether this is a final release, which is the other half of the first field's meaning and why it moved from `0` to `1`; its two later moves, to `2.0.0.0` and `3.0.0.0`, were each a change in what the product is (the table). `3.2.0.0`, despite its size, is a second-field release by that rule (owner, 2026-10-23): new functions, no change in what the product is. Those `0.x` directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
 
 The numbering has been restarted once, at the project owner's direction: an earlier `1.0.0.x` series of development builds was removed from `releases\` and the version restarted at `0.0.0.1`, which is where the `0.x` pre-releases came from. Two consequences outlive it:
 
@@ -3145,8 +3173,8 @@ binaries are never signed.
   copy that every later step uses, and refuses unless the record is for
   that architecture and flavour, every copy has exactly its recorded
   SHA-256, the build ran in a clean tree, the tree is still at that commit
-  with no change, and the build's gates had target evidence (or the run
-  passes `-NoTargetEvidence` too); each copy is checked against its hash
+  - or at a newer one, below - with no change, and the build's gates had
+  target evidence (or the run passes `-NoTargetEvidence` too); each copy is checked against its hash
   again just before it is signed. It then skips the host test suite and the import gates, which
   are about the bytes, and keeps everything about the package: the
   flavour markers, the INF gates before staging (the media-layout one
@@ -3166,6 +3194,32 @@ binaries are never signed.
   ```
 
   `make-release.ps1` does not use it: a cut runs every gate.
+- **A documentation commit after the gated build** (roadmap-usb4.md task
+  43.9; owner, 2026-10-20). `-SignOnly` also admits a HEAD newer than the
+  record's commit when that commit is an ancestor of HEAD and no file
+  changed between the two (`git diff --name-only`) is a build input
+  (`package-common.ps1`, `Get-GatedHeadAdvance`), and it lists the files
+  that changed. A build input is a file any of the six source stamps lists
+  (`scripts\source-stamp.ps1 -Driver <name> -List` prints the stamp's own
+  list); a `.c`, `.h`, `.rc`, `.asm`, `.def`, `.mc` or `.inc` file, or a
+  `sources`, `makefile`, `makefile.inc` or `dirs`, in those files'
+  directories, so that a file added or removed since counts too; a file
+  `test\run-host-tests.cmd` compiles and the same kinds beside it (the
+  installer's, XHCITR's and XHCIMARK's pure halves); anything under
+  `test\`, `scripts\import-gate\` and Stor98's `src\`, `include\`,
+  `scripts\`, `tests\` and `third_party\`; and `build-driver.cmd`,
+  `build-all.cmd`, `source-stamp.ps1`, the build's binary checks and the
+  `scripts\common.ps1` they dot-source. So a
+  change to the documents, `releases\history.md`, a tool's `README.TXT`,
+  an INF or the packaging scripts after the build costs no rebuild (the
+  INF gates and the package's own gate run under `-SignOnly` anyway),
+  and a change to a source, a header, the host suite or the import gates
+  is refused as before, naming the files. A HEAD the record's commit is not
+  an ancestor of (a rebase, another branch) is refused too.
+- **The cut's checks without the cut: `make-release.ps1 -CheckOnly`**
+  (task 43.9). Releases `README.md`, "Cutting a release", says what it runs.
+  It reports each leg's gated build record as above, as a warning only,
+  since the cut itself does not read it.
 - **Verifying.** `tools\WinDDK71\bin\x86\SignTool.exe verify /pa /v
   <dir>\xhci98.sys` shows the SHA-1 file hash, the chain with the
   certificate's SHA-1 hash, "File is not timestamped", and then fails on
@@ -3248,6 +3302,48 @@ one of this project's files is a refusal. The package's `PKG-MSFILE` name
 rule covers every file, Stor98's included. `XHCIINST` must copy no file
 whose name starts with `stor98` into its local copy, which is on the
 hardware wizard's search path (design record 23 section 4.4).
+
+#### The driver pack: NUSB 3.3's 98 SE storage files (roadmap-usb4 task 43.3)
+
+The release download carries NUSB 3.3's seven Windows 98 SE storage files
+at its root as `NUSB33\`, a folder of its own beside the installer, in 8.3
+names (owner, 2026-10-20; the folder 2026-10-22): `NUSB33\NOTICE.md` (the
+pack's `nusb33/NOTICE.md`), `NUSB33\SHA256.TXT` (the seven's hashes at
+their paths under `NUSB33\`) and `NUSB33\W98SE\` with the seven files,
+where the installer takes them from (task 43.4). NUSB is kept apart from
+the non-free driver pack (owner, 2026-10-22): in the pack's repository its
+files are the top-level `nusb33/w98se/`, not under `non-free/`, and the
+download never puts them inside a `NONFREE\`. This is the one Microsoft file
+exception of the download (`legal-provenance.md` section 5). Only
+`make-release.ps1` adds it, to the upload set; no package of
+`make-package.ps1`'s carries it, and `releases\<version>\` never does.
+
+The files come from the owner's `usb-wdm-nonfree` repository, a checkout at
+`scripts\local\usb-wdm-nonfree` (git-ignored: a clone there or a junction
+to one; `-DriverPackRoot` names another), **read from its git objects at
+one revision** rather than from its working tree (`Export-DriverPack`,
+`scripts\package\package-common.ps1`). The folder is refused unless it holds
+exactly the seven names as plain files, each hashing as the pack's
+`SHA256.TXT` at that revision lists it and as the allowlist in
+`package-common.ps1` (section 5's table) pins it.
+
+A cut that publishes x86 directories resolves the checkout's `HEAD` once,
+before anything is built (`-NoDriverPack` cuts without the pack). It
+refuses to start while any of the seven names is under `releases\` or among
+the tracked files, and writes `releases\<version>\drvpack.txt`: whether the
+pack is included and, if so, its revision and every file's hash. The upload
+set adds `NUSB33\` before its gates run, and refuses a published tree that
+already holds one; its one-date rule reads this project's INFs only, the
+pack's two INFs (`USBSTOR.INF` dated 07/01/2001, `USBNTMAP.INF` 06/08/2000
+with no version) being held to their hashes instead, and every file, the
+pack's included, is dated by the release. `-UploadSetOnly` exports the
+revision `drvpack.txt` records and refuses unless every file's bytes are the
+recorded ones; a missing checkout or revision is a refusal, not a download
+without the pack, and so is a release from `3.2.0.0` with no `drvpack.txt`
+(an older one has none and is assembled without the pack). The tracked-name
+check reads `git ls-files -z`, so git's quoting of an unusual path cannot
+hide a name. `-DriverPackAllowlist` (a stand-in allowlist) is for
+`test-package.ps1` alone and is refused with the repository's `releases\`.
 `scripts\package\test-package.ps1` holds the layout with a stand-in Stor98
 tree.
 
@@ -3294,6 +3390,41 @@ guest:
 7z e vm\win7-x64.img 1.ntfs -o<scratch>
 7z l <scratch>\1.ntfs
 ```
+
+### Windows 10 target VMs (roadmap-usb4 43.32)
+
+Two Windows 10 22H2 guests, x86 and x64, for the Windows 10 tasks 43.33
+to 43.37 (run sheet `runs/run-43.md`, "43.32"). They are set up as the
+Vista and 7 machines above are - TCG, the legacy BIOS, test-signing on,
+the transfer drive, a prepared starting point under every leg - and they
+live, like the Windows 8 and 8.1 images they were built beside, on the
+VM disk of development host A, outside the tree:
+
+| | value |
+|---|---|
+| Media | the owner's `Win10_22H2_English_x64v1.iso` and `Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965 (the GVLK selects Pro; the guests are never activated) |
+| Pristine images | `E:\xhci98-vm\win8-10\w10x64\w10x64-pristine.qcow2` (SHA-256 `770f2795...6fdb636`) and `...\w10x86\w10x86-pristine.qcow2` (`10bfd472...135c92d`), read-only, 64 GiB, one NTFS partition on MBR; built 2026-10-22 by `E:\xhci98-vm\win8-10\scripts\install2.sh` (`RECIPE.txt` there has the recipe and the full hashes): WinPE and the image copy under WHPX, specialize, OOBE and the first logon under TCG. Local administrator `xhci` / `xhci98` with autologon; `bcdedit /set testsigning on` (the desktop shows "Test Mode"); hibernation and Windows Update off; no network |
+| Prepared starting points | `E:\xhci98-vm\p43-33\<g>\prep.qcow2` (read-only) over each pristine image: a scheduled task `xrun` (highest privileges, as `xhci`) that runs `<transfer drive>\auto\go.cmd`. A leg starts it with Win+R `schtasks /run /tn xrun`, elevated without a consent prompt; its logon trigger does not fire on these images |
+| Leg overlays | `E:\xhci98-vm\p43-33\<g>-<set>\disk.qcow2` over `prep.qcow2`, one directory per leg, never reused across legs; a fresh `out.qcow2` (1 GiB, formatted `OUT` as O: by the leg's script, read after power-off with 7-Zip) |
+| Launcher | `E:\xhci98-vm\p43-33\scripts\launch.ps1 -Guest w10x86\|w10x64 -Set <leg> [-Out] [-Devs ...]`; `q.ps1` (screendump, keys, typing, Win+R, the CD) and `stop.ps1` (ACPI power-off of only the pid the kit started) beside it |
+| QEMU | the usb4-emu build `vm\usb4\bin-2a893ea\qemu-system-x86_64.exe` (hash checked by the launcher), `-machine pc` (SeaBIOS), `-accel tcg,thread=multi`, `-cpu qemu64,+3dnowprefetch` (8.1 and 10 x64 need PrefetchW), `-smp 2`, 2048 MB, `-vga std`, `-display none`, `-nic none` |
+| Ports | QMP **48660** (`w10x86`) and **48661** (`w10x64`), from the block 48660-48689 |
+| USB | `qemu-xhci,p2=8,p3=4` at 00:03 (QEMU ports 1-4 USB 3 and 2.0, 5-8 USB 2.0 only): `usb-tablet` port 5, `usb-storage` on a USB 3 port (1) and a USB 2.0-only port (6), `usb-uas` port 2, `usb-audio` port 7, `usb-hub` port 8 with `usb-kbd` behind it; the emulator's Thunderbolt 3 NHI (`tb3-alpine-ridge`, 00:04), its xHCI (00:07) and tunnel bridge (00:05) |
+| Transfer | `E:\xhci98-vm\p43-33\xfer` as an IDE VVFAT drive (read at launch only): `auto\` the leg scripts, `pkg\` the package under test |
+| Secure Boot | none: SeaBIOS has none, which is why test-signing mode needs no firmware change. The OVMF guest with Secure Boot on that 43.32 asks for (for 43.36's refusal case) is **not built** (run sheet 43.32) |
+
+**The speed under TCG** (2026-10-22, host loaded): from power-on to the
+autologon desktop about 4.5 minutes at `-smp 2`, both guests; a
+`pnputil` or registry reading a few seconds; `msinfo32 /report` about ten
+minutes; `Get-PnpDeviceProperty` one key at a time far too slow (one
+pipeline per reading instead). Usable for the reading and install legs;
+no WHPX for the legs (43.12 keeps every guest on TCG). The display
+sleeps after about ten minutes: send a key before a screendump.
+
+**The vehicle's limits on 10** (record 13 section 6.14.3): QEMU's
+`usb-uas` does not start under 10's own `uaspstor` (Code 10), and QEMU's
+`usb-storage` reports `bcdUSB` 0x0200 at High Speed, so it cannot raise
+the "can perform faster" condition; the NHI has no driver on 10 (Code 28).
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
@@ -4455,8 +4586,8 @@ table for the exact mobile IDs.
 
 | Controller | How to get it | Why it matters | Maps to phase |
 |---|---|---|---|
-| Fresco Logic FL1000 (`1D5C:1000`) | PCIe add-in card | Spurious success; validates residual-length computation. | Phase 7-8 |
-| VIA Labs VL805/VL806 (`2109:0812` / `2109:0813`) | PCIe add-in card | Common, generally clean; VL800 early revisions share the spurious-success bug. | Phase 7-8 |
+| Fresco Logic FL1000 (`1B73:1000`) | PCIe add-in card | Spurious success; validates residual-length computation. | Phase 7-8 |
+| VIA Labs VL805/VL806 (`1106:3483`; `2109:0812` and `2109:0813` are VIA Labs USB hub ids, not the controller's) | PCIe add-in card | Common, generally clean; VL800 early revisions share the spurious-success bug. | Phase 7-8 |
 | Etron EJ168 (`1B6F:7023`) | PCIe add-in card | Known-flaky budget controller; confirms graceful degradation rather than hang. | Phase 13 (stability) |
 
 Practical notes:
@@ -5788,7 +5919,7 @@ memory. Shape:
 | Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0); the same `Xhci.AddReg.Global` history as the row above |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
-| Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
+| Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` (a no-overwrite row for the 98 SE and ME wizard was tried for 3.2.0.0 and withdrawn before the cut, design record 26 section 5.0, drafts 39 and 40) |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
 | Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
 | All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name, and since roadmap task 23.2 the controller's too on every NT path; on 9x `sysclass.dll` draws the controller's tab and `usbui.dll` the dialogs behind its buttons (the `EnumPropPages` bullet below); `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
@@ -6600,7 +6731,8 @@ Not in the table, and written by no INF on purpose:
 
 - the `qemu` flavour's test hooks, compiled into no other flavour:
   `XhciQemuInject`, `XhciQemuStartHold`, `XhciQemuMapGrant`,
-  `XhciQemuBigRefuse`, `XhciQemuPsiE460`, `XhciQemuNoInterrupt`,
+  `XhciQemuBigRefuse`, `XhciQemuIsoRing`, `XhciQemuPsiE460`,
+  `XhciQemuNoInterrupt`,
   `XhciQemuPinUnreadable`, `XhciQemuDeadLine`, `XhciQemuMsgConnectFail`,
   `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, `XhciQemuTmrDelayMs`,
   `XhciQemuSuspHoldDx`, and `xhcihlpr.sys`'s `XhciHlprInject` (its service
@@ -6912,6 +7044,17 @@ the blocks to the allocation. The log ring notes `qemu.bigrefuse`;
 `XHCISNAP`'s "stage 2" section counts the blocks built and refused, the
 one-TD URBs, the largest TD and the TDs of exactly 256, 257, 512 and 513
 TRBs. A change takes effect at the next start.
+
+**`XhciQemuIsoRing`** (roadmap-usb4 tasks 43.38 to 43.40, design record 13 section
+11.8, point 2; qemu flavour only, written by no INF). A REG_DWORD read at
+every start: 1 makes every isochronous pipe that is not zero-bandwidth a
+candidate for a ring page, so QEMU's Full Speed `usb-audio` reaches one;
+anything else leaves the candidates to the rule (serviced more than once
+a frame). The event budget still decides. The log ring notes
+`qemu.isoring`, `iso.page` at each grant or refusal and `iso.page.free` at
+each return; the qemu trace prints `iso pages built`, `iso pages refused -
+budget`, `iso budget counted`, `iso page largest request TRBs` and
+`iso BEI TDs` as they change. A change takes effect at the next start.
 
 **`XhciWideMap`** (roadmap-hcd task 36.24, design record 13 section 11.6;
 every flavour, not only qemu). A REG_DWORD in the controller's key, read at
@@ -8009,6 +8152,184 @@ Three things about it that are easy to get wrong:
   after the last transfer), never after, and never on the QEMU command line,
   which wedges SeaBIOS.
 
+### Faster emulator legs: starting points and the release matrix (roadmap-usb4 43.12)
+
+Release legs used to start each guest cold from its base image. Then an
+operator, or an agent typing blind into the guest, ran the installer, and
+the results were read off screenshots. Most of a leg's time went on boots
+under TCG and on that driving. Three things now replace it. Each is a
+tracked script in `scripts\vm-matrix\` and none depends on `scripts\local\`.
+Every guest stays on TCG: the owner ruled out WHPX on 2026-10-20, because
+the NT guests have problems under it.
+
+**A starting point per guest** (`make-start.ps1 -Guest <id>`). This is a
+saved machine state beside a frozen disk:
+
+1. An overlay of the guest's base image becomes the starting point's disk.
+   The base image itself is only read.
+2. A first, cold start with a CD that holds the poller. The host types the
+   CD's `XHSETUP` into Start, Run. It copies the poller to `C:\XHLEG` and
+   makes it start at every logon, then says so on COM1, and turns AutoRun
+   off on NT, so a leg's CD opens no window. On 98 SE and ME this is a Run
+   value. On 2000 and XP it is a Run value; on XP the host then sets the
+   unsigned-driver policy to Ignore, made the system default, through
+   System Properties' Driver Signing dialog (`PrepSteps`,
+   `xp-signing-ignore`), because the registry value a script writes is not
+   honoured and under Warn every unsigned install raises a question and a
+   Found New Hardware wizard. On Vista and 7 it is an
+   elevated logon task, so that no elevation prompt stops an unattended
+   install; creating it needs elevation itself, so for a guest marked
+   `SetupElevated` the host types the command into the Start menu's search
+   box, starts it with Ctrl+Shift+Enter and answers the consent prompt
+   (not yet run on a Vista or 7 guest). The host then shuts Windows down
+   from Start, Run.
+3. A second, cold start follows that shut down. Once the poller has said
+   `XHLEG BOOT` on COM1, and a settling time has passed, the host stops the
+   machine and saves its state.
+
+Every leg begins from that state, which is one cold start after a shut
+down. So Windows 98 SE's rule holds (feedback: never a warm restart; shut
+down, power off, start cold) and no leg starts from a warm restart.
+`start.json` records a hash of the machine's command line and the QEMU
+version. A leg refuses a starting point that was saved for another
+machine or another QEMU.
+
+**Unattended legs** (`run-leg.ps1 -Leg <id> -Package <unpacked download>`).
+The leg restores the starting point into a fresh overlay and puts the leg's
+CD in the drive. The CD holds the package under `PKG\` and the guest's leg
+script (`leg\LEG9X.BAT` or `leg\LEGNT.CMD`). The poller finds the CD and
+runs the script. The script runs one phase per Windows start, and each
+phase ends by switching the machine off:
+
+1. `INSTALL /console /yes /nopause /log ...`.
+2. After the start that follows:
+   - the driver file is checked;
+   - `INSTALL /console /list` must show the controller current;
+   - a USB stick the host plugs in on request must show up, and a 4 MiB
+     file copied to it must compare equal with `fc /b`;
+   - `INSTALL /console /uninstall /yes /nopause` runs.
+3. After the next start, `/list` must succeed and show nothing current.
+
+Each exit code and check, and the logs, go to COM1 as `XHLEG ...` lines.
+The host reads only COM1, and every restart is a cold start that the host
+makes. QEMU runs with `-action reboot=shutdown`, so a guest's restart ends
+the process.
+
+The host takes the steps a guest cannot take. These are named in
+`release-legs.psd1`:
+
+- on 98 SE, the controller's Add New Hardware wizard at the first start
+  after the install (record 23 section 6.2). It blocks every program
+  started at logon until it is answered, so the poller cannot run until
+  the host has walked it;
+- on 98 SE, the same wizard at the start after the uninstall, when the
+  controller has no driver again: it is escaped;
+- the first stick's wizard (roadmap-usb4 43.42, still open);
+- on XP, the Found New Hardware wizard for the controller with no driver,
+  which opens after logon without the focus and makes an install wait on
+  it (exit 4, "Windows is still installing something"): Alt+Tab and
+  Escape, before the state is saved and on a cold start (`esc-fnh`);
+- on XP, should the unsigned-driver question come all the same, Continue
+  Anyway (`PromptStep` `xp`, recognised by its warning sign).
+
+A step is tied to the phase the guest last reported (`AfterPhaseN`), not
+to a count of starts, so it follows the guest, and it is taken once: the
+start it was for consumes it.
+
+The verdict is PASS when all of these hold:
+
+- the guest says `END`;
+- every check passed;
+- each exit code is one the leg allows;
+- no step failed, and every start ended with the guest switching itself
+  off, or with the restart a host step answered, and QEMU exited cleanly.
+
+Whatever ends a start (a stall, the deadline, an error in the host's
+script), the host stops that start's QEMU, by its own QMP or its own
+process id, before the next start or the end of the leg.
+
+A guest frozen from outside with QMP `stop` (a quiet host for a measurement)
+does not run down the stall timer or the leg's deadline while the host waits
+on COM1; the time it spent frozen is recorded as `pausedSeconds`. The
+host's own steps (the 98 SE wizards, a few minutes each) keep their own
+deadlines, so a freeze during one can fail that step and the leg.
+
+`-Cold` runs the same leg from a cold start instead of the saved state.
+That is the measurement of what the starting points save.
+
+**One leg per system stays with the installer's window.** These are the
+Manual legs, run as `run-leg.ps1 -Leg <id>-window`. The guest is restored
+with the CD in and VNC on `127.0.0.1`. The operator runs `PKG\SETUP.EXE`
+and shuts Windows down, and the same checks follow unattended. The script
+opens no viewer.
+
+**The release matrix** (`release-matrix.ps1 -Package <dir>`). It checks
+every leg's starting point and starts nothing if one is stale. It then
+starts the standard legs of `release-legs.psd1` in parallel, each in its
+own port slot of three ports (QMP, VNC and the migration socket), within
+the budget:
+
+- the matrix's own vCPUs at most `MaxVcpu`;
+- every QEMU on the host together at most its logical processors.
+
+A running leg holds its vCPUs for its whole life, between its cold starts
+too. Other QEMUs on the host are counted as they run.
+
+It writes one table, `results.md` and `results.csv`, with each leg's
+verdict, minutes, starts, restore time, exit codes and reasons. The Manual
+legs appear in it as owed. The package goes onto each CD and is never run
+on the host.
+
+Per-host settings live in `release.config.psd1`, a copy of
+`release.config.sample.psd1` that is git-ignored: QEMU, the work
+directory, the port block, the vCPU cap, the stick image, and the guests
+with their base images, CPU, memory and keyboard layout. The NT images of
+this file are US Dvorak, and the host types through that layout.
+
+Facts these scripts rest on, read on development host A on 2026-10-22 with
+QEMU 11.1.0, are below. Each one is enforced in code.
+
+- **QEMU on Windows cannot migrate to a `file:` URI.** It fails with
+  "Failed to set FD nonblocking". The host listens on the migration port
+  and writes the stream itself, and a restore feeds the file back to
+  `-incoming tcp:`. QEMU keeps the socket open after the migration
+  completes, so the copy ends when `query-migrate` says completed and every
+  byte it counted has arrived.
+- **A qemu-xhci whose MSI-X was not set up cannot load its state.** The
+  state load asserts in `msix_vector_unuse` and QEMU exits. A CPU without
+  an APIC (`pentium3,-apic`, as earlier 98 SE kits used) has no MSI, so
+  the 9x guests take `pentium3` with its local APIC, which Windows 98 SE
+  does not use.
+- **The 98 SE wizard blocks logon programs.** Until the Add New Hardware
+  wizard for a controller with no driver is closed, nothing in the Run key
+  starts. So the host escapes it on a cold start (`ColdStep`) and walks it
+  after an install.
+- **98 SE can switch itself off from a batch file.**
+  `rundll32.exe shell32.dll,SHExitWindowsEx 5` does it from the poller's
+  minimised DOS box, with no dialog.
+- **The wizard's file copy asks when it gets there.** "Insert Disk" and
+  "Copy files from" come after the copy has scanned for a while, not at a
+  fixed time; a timed key sequence typed the install directory into the
+  progress dialog and the leg stalled. The host step recognises the two
+  dialogs, and the wizard's own page, by a few pixels of their title bars
+  and box on the 640x480 screen (`Get-Leg98Dialog`).
+- **The CD image builder holds its source files** until its objects are
+  collected, so a staging directory deleted at once can fail with "in use";
+  the scripts collect first and retry.
+Timings, read on development host A with `3.2.0.0` at `e61538ae` (TCG, QEMU
+11.1.0, 2026-10-22; the x86 upload set built locally with the driver pack):
+
+| What | Before (cold start) | After (saved starting point) |
+|---|---|---|
+| 98 SE console leg (4 starts) | 700 s; first start 230 s | 553 s; restore 0.7 s, first start 35 s |
+| XP console leg (3 starts, 2 vCPUs) | 572 s; first start 301 s | 424 s; restore 1.5 s, first start 130 s |
+| Both legs | 1272 s one after the other | 7.4 min wall time (`release-matrix.ps1`, run together, 3 vCPUs) |
+
+Making a starting point took 206 s on 98 SE (state 36 MB) and 335 s on XP
+(state 221 MB), once per guest and QEMU. The later starts are cold starts
+in both columns, so the saving is in the first start: the cold boot, and
+on 98 SE the wizard escaped. Before 43.12 the same checks were typed or
+clicked in a guest by an operator or by an agent reading screenshots.
 ### Testing Checklist
 
 From Phase 3 onward, run every applicable checklist item on both target VMs

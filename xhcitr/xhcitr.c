@@ -48,9 +48,13 @@
 #include "../xhciinst/inst_core.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/cm/cm_ejask.h"
+#include "../xhciinst/inst_ej9x.h"
 #include "tr_core.h"
 #include "tr_log.h"
 #include "tr_pci.h"
+#include "tr_red.h"
+#include "tr_popw.h"
 #include "tr_res.h"
 #include "../src/xhci_qry.h"
 
@@ -123,6 +127,7 @@ typedef TR_NIDA TR_NID;
 
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_POLL      1
+#define TRAY_POLL_MS    1000    /* TIMER_POLL's period                    */
 #define TIMER_CHANGE    2
 #define TIMER_CLICK     3
 
@@ -227,6 +232,8 @@ typedef struct _DNODE {
     int Ejectable;          /* a unit, not blocked                          */
     int IsDisk;             /* setup class DiskDrive                        */
     char Friendly[128];     /* a disk's friendly name, where it has one     */
+    char Canon[64];         /* xhci98's controller, xhcicm's NHI: the name
+                               of record 23 section 5.13 (task 43.73)     */
     char Letters[TR_LETTERS_BYTES]; /* a disk's drive letters, where found  */
     char Cls[32];           /* the setup class                              */
     int ReadOk;             /* every property read whole                    */
@@ -303,6 +310,9 @@ typedef struct _UPORT {
     unsigned char StrRaw[3][256];
     DWORD StrN[3];
     int HaveStr[3];
+    char Prod[128];             /* a counted device's product string, read
+                                   by the notice's scan when it has no
+                                   devnode (record 25 section 7.7 item 4) */
 } UPORT;
 
 #define K_ROOT      0
@@ -376,6 +386,23 @@ static int shellV5;
 static int iconAdded;
 static int trayNoClick;     /* the button-up after a double click */
 static int trayV3;          /* NIM_SETVERSION 3 took: WM_CONTEXTMENU comes */
+/* The red icon (record 25 section 7.2.1): what tray_red last chose. */
+#define TR_RED_HC_MAX   TR_MAX_CTRL
+/* Room for every port of the model: red_slow hands over each counted
+ * device, so the count, the first kind and the click's destination are
+ * whole however many there are. */
+#define TR_RED_DEV_MAX  TR_MAX_UPORTS
+#define TR_RED_KEY      280     /* TNODE.Key's size: the same cut */
+static HICON hIconRedSmall;
+static int trayRedOn;
+static char trayRedTip[128];
+static char trayRedMenu[260];   /* 127 characters, each '&' doubled */
+static char trayRedKey[TR_RED_KEY];
+static TR_REDHC redHc[TR_RED_HC_MAX];
+static char redHcKey[TR_RED_HC_MAX][TR_RED_KEY];
+static int redHcCount;
+static void red_hc_read(void);
+static void tray_red(void);
 static TR_SNAP snapOld;
 /* The poll's last answer per NHI, kept apart from the model the tree and
  * the details were built from (they change only with a refresh). */
@@ -410,6 +437,11 @@ static void usb_derive(void);
 static void log_node_add(int parentT, int which, int index, const char *id);
 static void pci_node_add(int parentT, int which, int index, const char *id);
 static void say(const char *text, int warn);
+static void fast_scan(void);
+static int fast_port(int k, TR_FAST *f, int ask);
+static void fast_name(int k, char *out, size_t cap);
+static unsigned int fast_vid(const UPORT *p);
+static unsigned int fast_pid(const UPORT *p);
 
 /* Windows 2000, whose devnode held for eject reads Code 24. */
 static int env_w2k(void)
@@ -552,7 +584,7 @@ static int dn_started(const DNODE *d)
 
 static const char *dn_name(const DNODE *d)
 {
-    return d->Desc[0] ? d->Desc : first_hw(d);
+    return d->Canon[0] ? d->Canon : d->Desc[0] ? d->Desc : first_hw(d);
 }
 
 /* The driver (software) key of a devnode, relative to HKLM. */
@@ -1027,6 +1059,10 @@ static int dn_read(DNODE *t)
     }
     tr_tidy_name(t->Desc);
     tr_tidy_name(t->Friendly);
+    /* The package's controllers and NHIs by the installer's table, whatever
+     * name the devnode carries (task 43.73). */
+    inst_dev_canon(t->Hw, t->HwBytes, t->Compat, t->CompatBytes, t->Service,
+                   t->Canon, sizeof(t->Canon));
     if (api.Status(&status, &problem, t->Dn, 0) == TR_CR_SUCCESS) {
         t->Status = status;
         t->Problem = (status & INST_DN_HAS_PROBLEM) ? problem : 0;
@@ -1997,12 +2033,7 @@ static void usb_add_ports(int parentT, int ctrl, int parentUp)
                        tr_conn_status_text(p->Conn.Status));
         } else {
             char name[160];
-            tr_sprintf(name, sizeof(name), "USB device %04X:%04X",
-                       (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8),
-                       (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8));
-            if (dn >= 0) {
-                usb_label(dn, name, sizeof(name));
-            }
+            fast_name(k, name, sizeof(name));
             tr_sprintf(label, sizeof(label), "[Port %lu%s] %s  %s%s",
                        (unsigned long)p->Conn.Port,
                        tr_port_tag(p->HaveV2, p->V2Proto), name,
@@ -2251,8 +2282,11 @@ static void build_usb(int root)
             unsigned int ven = 0;
             unsigned int dev = 0;
             int ids = c->Dn >= 0 && tr_pci_ids(gw.N[c->Dn].Id, &ven, &dev);
+            char canon[64];
             tr_ctrl_suffix(suffix, sizeof(suffix), ids, ven, dev,
-                           ctrl_tb_kind(c->Dn));
+                           ctrl_tb_kind(c->Dn),
+                           c->Ours && ids &&
+                               inst_xhci_name(ven, dev, canon, sizeof(canon)) == 1);
         }
         tr_sprintf(label, sizeof(label), "%s  (%s)%s%s%s%s",
                    c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "USB host controller",
@@ -2598,6 +2632,13 @@ static void refresh_model(int withUsb)
             tbDevices += (int)inst_get32(nhi[root].R, CM_ST_O_ROUTER_COUNT);
         }
     }
+    fast_scan();
+    if (hTray != NULL) {
+        /* Every model refresh, by whichever path: the controllers listed
+         * may have changed (record 25 section 7.2.1 items 3 and 5). */
+        red_hc_read();
+        tray_red();
+    }
     if (!withUsb) {
         return;
     }
@@ -2866,6 +2907,11 @@ static void details_nhi(TR_TEXT *t, int k)
         }
         tr_printf(t, "  Start epoch:         %08lX%08lX\n",
                   (unsigned long)h->Q.EpochHi, (unsigned long)h->Q.EpochLo);
+        {
+            char rmText[160];
+            tr_removal_text(&h->Q, rmText, sizeof(rmText));
+            tr_printf(t, "  Unexpected removals: %s\n", rmText);
+        }
         if (h->Q.Flags & CM_Q_F_STOPPING) {
             tr_put(t, "  The controller is stopping.\n");
         }
@@ -3035,6 +3081,43 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
     if (p->Bos != NULL && tr_bos_ssp_text(p->Bos, p->BosN, ssp, sizeof(ssp))) {
         tr_printf(t, "  Supported:     %s (the negotiated lane rate and count "
                      "are not reported)\n", ssp);
+    }
+    {
+        TR_FAST f;
+        if (fast_port(i, &f, 0)) {
+            char name[160];
+            char port[TR_NAME_CHARS + 96];
+            char hub[200];
+            TR_TEXT e;
+            char eb[1024];
+            fast_name(i, name, sizeof(name));
+            tr_sprintf(port, sizeof(port), "Port %s of %s", p->Path,
+                       c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "a USB host controller");
+            if (p->ParentUp >= 0) {
+                fast_name(p->ParentUp, hub, sizeof(hub));
+            }
+            tr_text_init(&e, eb, sizeof(eb));
+            tr_fast_entry(&e, name, fast_vid(p), fast_pid(p), port,
+                          p->ParentUp >= 0 ? hub : NULL, &f);
+            tr_put(t, "  Can run faster:\n");
+            tr_put(t, "  ");
+            {
+                /* The entry's lines, each indented two more. */
+                const char *s = eb;
+                char line[2];
+                line[1] = '\0';
+                for (; *s != '\0'; s++) {
+                    if (*s == '\r') {
+                        continue;
+                    }
+                    line[0] = *s;
+                    tr_put(t, line);
+                    if (*s == '\n' && s[1] != '\0') {
+                        tr_put(t, "  ");
+                    }
+                }
+            }
+        }
     }
     tr_printf(t, "  Address:       %u\n", p->Conn.Address);
     tr_printf(t, "  VID:PID:       %04X:%04X\n",
@@ -3469,6 +3552,20 @@ static void details_of(TR_TEXT *t, int i, int fetch)
     case K_PORT:
         tr_printf(t, "Thunderbolt tunnel port %d of %s\n", n->B + 1,
                   dn_name(&gw.N[nhi[n->A].Node]));
+        if (nhi[n->A].R != NULL && n->B >= 0 && n->B < 4 &&
+            ((inst_get32(nhi[n->A].R, CM_ST_O_FLAGS) >>
+              CM_ST_F_BLOCKED_SHIFT) & (1UL << n->B)) != 0) {
+            /* Record 21 section 7.2 part 1 (task 43.18): a 98 SE or ME
+             * eject on this port left its device stopped and not removed,
+             * or its removal keeps failing. */
+            tr_put(t, "  Blocked: a device on this port was stopped and not "
+                      "removed. Shut down\n  Windows before you unplug it.\n");
+        } else if (nhi[n->A].R != NULL && n->B >= 0 && n->B < 4 &&
+                   ((inst_get32(nhi[n->A].R, CM_ST_O_FLAGS) >>
+                     CM_ST_F_EJECTING_SHIFT) & (1UL << n->B)) != 0) {
+            tr_put(t, "  A removal is in progress on this port. Wait for it "
+                      "before you unplug\n  its device.\n");
+        }
         if (n->Dn >= 0) {
             details_devnode(t, n->Dn);
         } else {
@@ -3821,6 +3918,8 @@ static const char *ej_why_not(int u)
     return NULL;
 }
 
+static int ej_single(const WALK *w, int u);
+
 /* Every devnode the request holds is listed; a list that does not fit is
  * refused, never shortened (nothing is stopped that was not shown). */
 static int ej_confirm(HWND owner, const EJREQ *q)
@@ -3855,6 +3954,21 @@ static int ej_confirm(HWND owner, const EJREQ *q)
         tr_printf(&t, "    %s\n", n >= 0 ? dn_name(&gw.N[n]) : q->Devs[i]);
     }
     tr_put(&t, "\nClose any program that uses them first.");
+    {
+        /* Roadmap 43.8: the reminder before the stop, not after it. */
+        int u = walk_find_id(&gw, q->UnitId);
+        int k = u >= 0 && gw.N[u].Parent >= 0 ? gw.N[gw.N[u].Parent].PortNhi
+                                              : -1;
+        if (inst_eject_remind(u >= 0 && ej_single(&gw, u),
+                              k >= 0 && nhi[k].HaveQ
+                                  ? inst_port_usb3(nhi[k].Q.Rec, q->PortBdf)
+                                  : CM_ST_TUN_UNKNOWN)) {
+            /* One paragraph in the box (task 43.63); the console keeps
+             * the text's own wrap. */
+            tr_put(&t, "\n");
+            tr_put_box(&t, inst_eject_remind_text());
+        }
+    }
     if (t.Overflow) {
         MessageBoxA(owner, "The list of devices to stop is too long to show, so "
                     "nothing is stopped from here.", "Stop a Thunderbolt device",
@@ -3927,10 +4041,17 @@ static int ej_single(const WALK *w, int u)
 }
 
 /* Under the USB4 profile, the query watched for the router's PCIe tunnel
- * closed after the eject (record 24 section 5.2; xhciinst.c). */
-static const char *ej_watch_tunnel(const EJREQ *q)
+ * closed after the eject (record 24 section 5.2; xhciinst.c), for as long
+ * as tr_eject_watch_ms gives the watch's kind (TR_EJW_*). The mark
+ * service's watch outlasts the installer's wait for the tool to end
+ * (INST_TRAY_CLOSE_MS), so it ends at the installer's quit event and sets
+ * *quit; the tool then shows no answer and ends at its next poll. */
+static const char *ej_watch_tunnel(const EJREQ *q, int kind, int *quit)
 {
     DWORD start = GetTickCount();
+    DWORD bound = (DWORD)tr_eject_watch_ms(kind);
+
+    *quit = 0;
 
     for (;;) {
         unsigned char *b;
@@ -3955,9 +4076,12 @@ static const char *ej_watch_tunnel(const EJREQ *q)
                 return "The PCIe tunnel was closed.";
             }
         }
-        if (GetTickCount() - start >= 10000) {
-            return "The Thunderbolt driver has not confirmed that the PCIe tunnel "
-                   "was closed.";
+        if (GetTickCount() - start >= bound) {
+            return tr_eject_open_text(kind);
+        }
+        if (kind == TR_EJW_SERVICE && quit_asked()) {
+            *quit = 1;
+            return NULL;
         }
         Sleep(250);
     }
@@ -4827,6 +4951,114 @@ static int run_setlevel(void)
     return code;
 }
 
+/*
+ * 98 SE and ME: a unit's eject asked of xhcicm.sys (record 21 section 7.2
+ * part 1; record 24 section 7.1, revision 6; task 43.18), under the mutex
+ * ej_run holds: XhciCmEjectAsk written to the NHI's driver key, the reply
+ * and the result read from its hardware key every CM_EJ_POLL_MS. Returns
+ * the outcome (INST_EJ_*) with its text, -1 for the uncertain end;
+ * *notClean as inst_ej_outcome's.
+ */
+static int ej_ask9x(const EJREQ *q, const WALK *w, const TR_QUERY *tok,
+                    TR_U32 unit, const char **text, int *notClean)
+{
+    char drv[520];
+    char hw[520];
+    unsigned char ask[CM_EJ_ASK_BYTES];
+    unsigned char res[CM_EJ_RESULT_BYTES];
+    unsigned char rep[CM_EJ_REPLY_BYTES];
+    INST_EJ_TOKEN tk;
+    INST_EJ_RESULT r;
+    INST_EJ_WAIT wt;
+    INST_U32 nonce;
+    INST_U32 reason;
+    HKEY key;
+    DWORD type;
+    DWORD n;
+    int i;
+    int got;
+    int end;
+    int written;
+    static INST_U32 lastNonce;
+
+    *notClean = 0;
+    *text = "";
+    drv[0] = '\0';
+    for (i = 0; i < w->Count; i++) {
+        if (tr_eq(w->N[i].Id, q->NhiId) && w->N[i].Driver[0] != '\0') {
+            driver_key_path(&w->N[i], drv, sizeof(drv));
+        }
+    }
+    if (drv[0] == '\0') {
+        *text = "The Thunderbolt controller's registry key was not found; "
+                "nothing was stopped.";
+        return INST_EJ_CHANGED;
+    }
+    nhi_hw_key(q->NhiId, hw, sizeof(hw));
+    tk.EpochLo = tok->EpochLo;
+    tk.EpochHi = tok->EpochHi;
+    tk.ContentGen = tok->ContentGen;
+    tk.Eligible = 1;
+    nonce = inst_ej_nonce(GetTickCount() ^ (GetCurrentProcessId() << 8),
+                          lastNonce);
+    lastNonce = nonce;
+    inst_ej_ask(ask, nonce, q->PortBdf, unit, &tk);
+    written = 0;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+        ERROR_SUCCESS) {
+        written = RegSetValueExA(key, CM_EJ_ASK_VALUE, 0, REG_BINARY, ask,
+                                 sizeof(ask)) == ERROR_SUCCESS;
+        RegCloseKey(key);
+    }
+    if (!written) {
+        *text = "The Thunderbolt driver could not be asked (its registry key "
+                "is not writable); nothing was stopped.";
+        return INST_EJ_UNSUPPORTED;
+    }
+    inst_ej_wait_init(&wt, GetTickCount());
+    end = INST_EJ_W_WAIT;
+    while (end == INST_EJ_W_WAIT || end == INST_EJ_W_DELETE) {
+        Sleep(CM_EJ_POLL_MS);
+        reason = 0;
+        got = 0;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, hw, 0, KEY_READ, &key) ==
+            ERROR_SUCCESS) {
+            n = sizeof(rep);
+            if (RegQueryValueExA(key, CM_EJ_REPLY_VALUE, NULL, &type, rep,
+                                 &n) == ERROR_SUCCESS &&
+                type == REG_BINARY) {
+                reason = inst_ej_reply(rep, n, nonce);
+            }
+            n = sizeof(res);
+            got = RegQueryValueExA(key, CM_EJ_RESULT_VALUE, NULL, &type, res,
+                                   &n) == ERROR_SUCCESS &&
+                  type == REG_BINARY && inst_ej_result(res, n, nonce, &r);
+            RegCloseKey(key);
+        }
+        end = inst_ej_wait_step(&wt, GetTickCount(), reason,
+                                got ? &r : NULL);
+        if (end == INST_EJ_W_DELETE &&
+            RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+                ERROR_SUCCESS) {
+            RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+            RegCloseKey(key);
+        }
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+        ERROR_SUCCESS) {
+        RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+        RegCloseKey(key);
+    }
+    if (end == INST_EJ_W_REJECTED) {
+        return inst_ej_rejected(reason, text);
+    }
+    if (end == INST_EJ_W_UNCERTAIN) {
+        *text = inst_ej_uncertain_text();
+        return -1;
+    }
+    return inst_ej_outcome(&r, text, notClean);
+}
+
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
  * XHCIINST's exit code; msg the answer; *rights set for a rights failure
  * Windows answered (the elevated retry is the caller's, after this has
@@ -4852,13 +5084,14 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     int got;
     int single;
     int outcome;
+    int quit = 0;
     int code = INST_EXIT_REFUSED;
     TR_TEXT t;
 
     *rights = 0;
     tr_text_init(&t, msg, cap);
     memset(&w, 0, sizeof(w));
-    if (envNt ? api.Eject == NULL : (api.QueryRemove == NULL || api.Remove == NULL)) {
+    if (envNt && api.Eject == NULL) {
         tr_put(&t, "This Windows does not offer the call that stops a device.");
         return INST_EXIT_REFUSED;
     }
@@ -5049,27 +5282,54 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
                 tr_printf(&t, "%s\n", c);
             }
         }
-        tunnelNote = ej_watch_tunnel(q);
-    } else {
-        cr = api.QueryRemove(w.N[u].Dn, TR_UI_NOT_OK);
-        outcome = inst_eject9x_query(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            tr_put(&t, text);
-            if (cr != INST_CR_REMOVE_VETOED && outcome == INST_EJ_VETO) {
-                tr_printf(&t, "\n(code 0x%08lX)", (unsigned long)cr);
+        {
+            int kind = tr_eject_watch_kind(admin, notRemovable, env_w2k(),
+                                           admin || notRemovable
+                                               ? TR_SV_UNREAD
+                                               : mksvc_state());
+            if (kind == TR_EJW_SERVICE) {
+                /* The mark service writes its confirmation under this
+                 * mutex (xhcimark.c's mk_confirm), so a watch that held
+                 * it would wait for nothing. Windows has answered; the
+                 * rest only reads. */
+                ej_unlock(m);
+                m = NULL;
             }
-            code = inst_eject_code(outcome);
+            tunnelNote = ej_watch_tunnel(q, kind, &quit);
+            if (quit) {
+                /* Windows stopped the unit; the installer ends the tool. */
+                code = INST_EXIT_DONE;
+                goto out;
+            }
+        }
+    } else {
+        int notClean;
+        TR_U32 unit;
+
+        /* Asked of the Thunderbolt driver (task 43.18), under Q3's start
+         * epoch and content generation, which the last query just now
+         * still carried. */
+        unit = inst_ej_unit_loc(w.N[u].Id);
+        if (unit == INST_EJ_NO_LOC) {
+            tr_put(&t, "The device's place below the port could not be read; "
+                       "nothing was stopped.");
             goto out;
         }
-        /* Accepted: the removal always follows (record 24 section 7.1). */
-        cr = api.Remove(w.N[u].Dn, TR_UI_NOT_OK);
-        outcome = inst_eject9x_remove(cr, &text);
+        outcome = ej_ask9x(q, &w, &q3, unit, &text, &notClean);
+        if (outcome < 0) {
+            tr_put(&t, text);
+            code = INST_EXIT_FAILED;
+            goto out;
+        }
         if (outcome != INST_EJ_DONE) {
-            tr_printf(&t, "%s\n(code 0x%08lX)", text, (unsigned long)cr);
+            tr_put(&t, text);
             code = inst_eject_code(outcome);
             goto out;
         }
         tr_printf(&t, "Windows has stopped %s.\n", q->Desc);
+        if (notClean) {
+            tr_printf(&t, "%s\n", inst_ej_not_clean_text());
+        }
         tr_put(&t, "Until you unplug it, Device Manager's Refresh, or the "
                    "Thunderbolt driver looking at the port again, can start it "
                    "again.\n");
@@ -5078,7 +5338,7 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         tr_printf(&t, "%s\n", tunnelNote);
     }
     u = ej_after(q, single);
-    tr_printf(&t, "\n%s", inst_unplug_text(u));
+    tr_printf(&t, "\n%s", inst_unplug_text(u, INST_TOOL_TREE));
     code = u == INST_UNPLUG_RESTARTED ? INST_EXIT_STEPS : INST_EXIT_DONE;
 out:
     ej_unlock(m);
@@ -5113,6 +5373,11 @@ static void ej_elevated(HWND owner, const char *unitId)
 }
 
 static void tray_balloon(const char *title, const char *text, int warn);
+static void tray_balloon_as(const char *title, const char *text, int warn,
+                            int fast);
+static int tray_balloon_send(const char *title, const char *text, int warn,
+                             int fast);
+static void tray_balloon_clear(void);
 
 /* ======================================================================== */
 /* Plain USB devices (record 25 section 6.5, revision 7)                     */
@@ -5715,7 +5980,7 @@ static void usb_eject_ui(HWND owner, int d, int fromTray)
                         MB_YESNO | MB_ICONWARNING) == IDYES) {
             ej_elevated(owner, q->Id);
         }
-    } else if (fromTray && shellV5 && strlen(msg) < 250) {
+    } else if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -5882,12 +6147,14 @@ static void ej_unit(HWND owner, int u, int fromTray)
             code = ej_elev_run(owner, q, msg, sizeof(msg));
         }
     }
-    if (ejElevQuit) {
+    if (ejElevQuit || quit_asked()) {
+        /* An installer is waiting for the tool to end: no answer box, and
+         * the next poll ends it. */
         free(q);
         return;
     }
     tr_join_lines(msg);
-    if (fromTray && shellV5 && strlen(msg) < 250) {
+    if (fromTray && (shellV5 || tr_pop_ready(hTray)) && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -6018,6 +6285,59 @@ static void login_item(HMENU m, int append)
     }
 }
 
+/* The unexpected-removal warning, per user (record 25 section 7.6 item 8):
+ * a DWORD beside TrayAtLogin, read at each use, so a change reaches every
+ * running copy of the user's tray at its next poll. */
+static int warn_on(void)
+{
+    HKEY k;
+    DWORD t;
+    DWORD v = 1;
+    DWORD n = sizeof(v);
+    int have = 0;
+
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        have = RegQueryValueExA(k, TR_WARN_VALUE, NULL, &t, (LPBYTE)&v, &n) ==
+                   ERROR_SUCCESS && t == REG_DWORD && n == sizeof(v);
+        RegCloseKey(k);
+    }
+    return tr_warn_removed(have, (TR_U32)v);
+}
+
+static void warn_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_WARN_VALUE, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
+/* The item in a menu: NT only (98 SE and ME never warn). */
+static void warn_item(HMENU m, int append)
+{
+    UINT flags = MF_STRING | (warn_on() ? MF_CHECKED : MF_UNCHECKED);
+    const char *text = "&Warn when a device is removed unexpectedly";
+
+    if (!envNt) {
+        if (!append) {
+            DeleteMenu(m, IDM_RMWARN, MF_BYCOMMAND);
+        }
+        return;
+    }
+    if (append) {
+        AppendMenuA(m, flags, IDM_RMWARN, text);
+    } else {
+        ModifyMenuA(m, IDM_RMWARN, MF_BYCOMMAND | flags, IDM_RMWARN, text);
+    }
+}
+
 static void settings_save(void)
 {
     HKEY k;
@@ -6037,6 +6357,662 @@ static void settings_save(void)
                        sizeof(winRect));
     }
     RegCloseKey(k);
+}
+
+
+/* ======================================================================== */
+/* The "can run faster" notice (record 25 section 7.7)                       */
+/* ======================================================================== */
+
+static char fastKeys[TR_FAST_MAX][TR_FAST_KEY];
+static int fastKeyN;
+static int fastCount;           /* the devices counted at the last scan     */
+static int fastOn;              /* the setting in force at the last scan    */
+static int fastPending;         /* a balloon owed until the icon is there   */
+static char fastText[256];
+static TR_BKIND fastKind;       /* which balloon is up (task 43.72)         */
+static TR_BSEND fastSend;       /* whether the shell showed it (item 9)     */
+static char fastTextKey[TR_FAST_KEY];   /* the device fastText names        */
+/* The High Speed case's answers (item 1), by key, the oldest replaced. */
+static TR_QUAL_CACHE qualCache;
+/* Every port of the model has room for its answer (tr_core.h). */
+typedef char tr_qual_fits[(TR_QUAL_MAX >= TR_MAX_UPORTS) ? 1 : -1];
+static HWND hFastWnd;           /* the list's window, while it is open      */
+static HWND hFastEdit;
+static HWND hFastOk;
+
+static void tray_tip(TR_NID *n);
+
+/* The DWORD `name` under `key` of root, 1 when it reads as one. */
+static int fast_dword(HKEY root, const char *key, const char *name, DWORD *v)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = sizeof(*v);
+    int ok;
+
+    *v = 0;
+    if (RegOpenKeyExA(root, key, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    ok = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)v, &n) == ERROR_SUCCESS &&
+         t == REG_DWORD && n == sizeof(*v);
+    RegCloseKey(k);
+    return ok;
+}
+
+/* The setting in force (section 7.7 item 7). */
+static int fast_setting(void)
+{
+    DWORD u;
+    DWORD m;
+    int haveU = fast_dword(HKEY_CURRENT_USER, TR_SETTINGS_KEY, TR_FAST_VALUE, &u);
+    int haveM = fast_dword(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_FAST_VALUE, &m);
+
+    return inst_fast_on(haveU, u, haveM, m,
+                        inst_fast_default(envNt, envMajor, envMinor));
+}
+
+static void fast_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_FAST_VALUE, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
+static void fast_key_of(int k, char *key, size_t cap)
+{
+    const UCTRL *c = &uc[up[k].Ctrl];
+
+    tr_fast_key(key, cap, c->DrvKey[0] ? c->DrvKey : c->Path, up[k].Path,
+                fast_vid(&up[k]), fast_pid(&up[k]));
+}
+
+/* A candidate's device_qualifier (section 7.7 item 1): the answer settled
+ * for its key, else, when ask is set (the refresh's scan only), asked
+ * (tr_qual_put). 1 High Speed capable, 0 not, or not yet known. */
+static int fast_qual(int k, int ask)
+{
+    char key[TR_FAST_KEY];
+    unsigned char *b = NULL;
+    DWORD n;
+    int v;
+
+    fast_key_of(k, key, sizeof(key));
+    v = tr_qual_get(&qualCache, key);
+    if (v >= 0 || !ask || !tr_qual_room(&qualCache, key)) {
+        return v > 0 ? 1 : 0;
+    }
+    n = usb_desc(up[k].Hub, up[k].Conn.Port, 6, 0, 0, TR_QUAL_BYTES, &b);
+    v = tr_qual_put(&qualCache, key, b, n);
+    free(b);
+    return v;
+}
+
+/* Port k as tr_fast_check reads it; 1 when it counts, with *f. Only the
+ * scan (ask set) sends a device_qualifier request; the details pane and the
+ * list read the answers it settled. */
+static int fast_port(int k, TR_FAST *f, int ask)
+{
+    const UPORT *p = &up[k];
+    TR_FAST_IN in;
+    int a;
+
+    memset(&in, 0, sizeof(in));
+    in.Ours = uc[p->Ctrl].Ours;
+    in.Connected = p->HaveConn && p->Conn.Status == TR_CS_CONNECTED;
+    in.IsHub = p->Conn.IsHub;
+    in.HaveV2 = p->HaveV2;
+    in.V2Flags = p->V2Flags;
+    in.ExSpeed = p->Conn.Speed;
+    in.Root = p->ParentUp < 0;
+    if (p->ParentUp >= 0) {
+        const UPORT *h = &up[p->ParentUp];
+        in.HubKnown = h->HaveConn;
+        in.HubHaveV2 = h->HaveV2;
+        in.HubFlags = h->V2Flags;
+        in.HubExSpeed = h->Conn.Speed;
+        /* Behind a TT: a hub further up at High Speed or faster, or one
+         * not read (record 25 section 7.7 item 1). */
+        for (a = h->ParentUp; a >= 0; a = up[a].ParentUp) {
+            if (!up[a].HaveConn || up[a].Conn.Speed >= TR_SPEED_HIGH) {
+                in.UnderTt = 1;
+                break;
+            }
+        }
+    }
+    in.BcdUsb = (unsigned int)p->Conn.Dev[2] | ((unsigned int)p->Conn.Dev[3] << 8);
+    in.HsQual = tr_fast_wants_qual(&in) ? fast_qual(k, ask) : -1;
+    return tr_fast_check(&in, f);
+}
+
+static unsigned int fast_vid(const UPORT *p)
+{
+    return (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8);
+}
+
+static unsigned int fast_pid(const UPORT *p)
+{
+    return (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8);
+}
+
+/* A device's name, the tree's label and the notice's alike (section 7.7
+ * item 4): its devnode's, else its product string (the scan's, or the
+ * details pane's), else its VID:PID. */
+static void fast_name(int k, char *out, size_t cap)
+{
+    const UPORT *p = &up[k];
+    char label[160];
+
+    label[0] = '\0';
+    if (p->Dn >= 0) {
+        usb_label(p->Dn, label, sizeof(label));
+    }
+    tr_fast_name(out, cap, label,
+                 p->Prod[0] ? p->Prod : (p->HaveStr[1] ? p->Str[1] : NULL),
+                 fast_vid(p), fast_pid(p));
+}
+
+/* 1 when port k's device is behind a TT: below High Speed, with a hub
+ * further up at High Speed or faster or not read. A request it never
+ * answers costs the controller there (section 7.7 item 1). */
+static int fast_tt(int k)
+{
+    int a;
+
+    if (up[k].Conn.Speed >= TR_SPEED_HIGH) {
+        return 0;
+    }
+    for (a = up[k].ParentUp; a >= 0; a = up[a].ParentUp) {
+        if (!up[a].HaveConn || up[a].Conn.Speed >= TR_SPEED_HIGH) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The product strings the last scan read, by key (item 4): one request
+ * pair per counted device without a devnode while it stays, kept whether
+ * answered or not. */
+static char fastProdKey[TR_FAST_MAX][TR_FAST_KEY];
+static char fastProd[TR_FAST_MAX][128];
+static int fastProdN;
+
+/* Port k's product string into up[k].Prod when it has no devnode for the
+ * tree to name it by (its driver still being installed: the driver key the
+ * tree matches by is written then) or only a class name of Windows'
+ * (tr_name_generic), from the last scan's or asked; kept in nk/np for the
+ * next scan. */
+static void fast_product(int k, const char *key, char (*nk)[TR_FAST_KEY],
+                         char (*np)[128], int *nn)
+{
+    UPORT *p = &up[k];
+    unsigned char *b;
+    unsigned int lang = 0x0409;
+    unsigned int idx = p->Conn.Dev[15];
+    DWORD n;
+    int i;
+
+    if (*nn >= TR_FAST_MAX) {
+        return;
+    }
+    for (i = 0; i < fastProdN; i++) {
+        if (strcmp(fastProdKey[i], key) == 0) {
+            tr_copy(p->Prod, fastProd[i], sizeof(p->Prod));
+            break;
+        }
+    }
+    if (i == fastProdN) {
+        /* Kept while the key stays even once a devnode names it, so a
+         * devnode lost again later does not ask again. */
+        char label[160];
+        label[0] = '\0';
+        if (p->Dn >= 0) {
+            usb_label(p->Dn, label, sizeof(label));
+        }
+        /* Asked only where no specific devnode name serves. */
+        if ((p->Dn >= 0 && label[0] != '\0' && !tr_name_generic(label)) ||
+            idx == 0 || fast_tt(k)) {
+            return;
+        }
+        n = usb_desc(p->Hub, p->Conn.Port, 3, 0, 0, 255, &b);
+        if (n >= 4) {
+            lang = (unsigned int)b[2] | ((unsigned int)b[3] << 8);
+        }
+        free(b);
+        n = usb_desc(p->Hub, p->Conn.Port, 3, idx, lang, 255, &b);
+        (void)tr_dec_string(b, n, p->Prod, sizeof(p->Prod));
+        free(b);
+    }
+    tr_copy(nk[*nn], key, TR_FAST_KEY);
+    tr_copy(np[*nn], p->Prod, 128);
+    (*nn)++;
+}
+
+/* Item 4's hold (task 43.78): a balloon whose first device has no devnode
+ * yet (Windows still installing its driver) waits for one, and then
+ * FAST_SETTLE_MS from the arrival for its disks and letters, so it names
+ * the device as the tree, the list and the tooltip then do; FAST_HOLD_MS
+ * at most, then it goes with the name it has. */
+#define FAST_SETTLE_MS  3000UL
+#define FAST_HOLD_MS    15000UL
+static int fastHold;            /* fastText waits for its device's devnode */
+static DWORD fastHoldTick;      /* when the hold began                      */
+static TR_FAST fastHoldF;       /* fastText's first device, as counted      */
+static int fastHoldCount;       /* the new devices fastText counts          */
+
+/* The port fastTextKey names in the model, or -1. */
+static int fast_text_port(void)
+{
+    char key[TR_FAST_KEY];
+    int k;
+
+    for (k = 0; k < upCount; k++) {
+        if (!up[k].HaveConn || up[k].Conn.Status != TR_CS_CONNECTED) {
+            continue;
+        }
+        fast_key_of(k, key, sizeof(key));
+        if (strcmp(key, fastTextKey) == 0) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* fastText from its first device's name in the model as it is now. */
+static void fast_text(void)
+{
+    char name[160];
+    int k = fast_text_port();
+
+    if (k < 0) {
+        return;                 /* kept as it was */
+    }
+    fast_name(k, name, sizeof(name));
+    tr_fast_balloon(fastText, sizeof(fastText), name, &fastHoldF,
+                    fastHoldCount,
+                    tr_fast_click_balloon(envNt, envMajor, envMinor));
+}
+
+static void fast_announce(void);
+
+/* Each second's tick: the held balloon goes once its device has a
+ * devnode and has settled, or the hold is up. */
+static void fast_hold_tick(void)
+{
+    DWORD el;
+    int k;
+
+    if (!fastHold) {
+        fast_announce();        /* one released while the icon was away */
+        return;
+    }
+    if (!fastPending) {
+        fastHold = 0;
+        return;
+    }
+    el = GetTickCount() - fastHoldTick;
+    k = fast_text_port();
+    if ((k >= 0 && up[k].Dn >= 0 && el >= FAST_SETTLE_MS) ||
+        el >= FAST_HOLD_MS) {
+        fastHold = 0;
+        fast_text();
+        fast_announce();
+    }
+}
+
+/* The owed balloon, once the icon is there and no hold is on. */
+static void fast_announce(void)
+{
+    if (!fastPending || !iconAdded || fastHold) {
+        return;
+    }
+    fastPending = 0;
+    if (!fastOn) {
+        return;
+    }
+    tray_balloon_as(TR_FAST_TITLE, fastText, 0, 1);
+}
+
+/* Item 9 (task 43.66): what the shell said of the notice's balloon, or the
+ * second's tick; a balloon it did not show is sent again, once. */
+static int balloonAnswers;      /* the shell has sent a NIN_BALLOON* message */
+/* A shell that answers: one heard from in this session, or Vista and
+ * later, whose shell was read answering (7, task 43.66) and drops a
+ * balloon queued behind its own without a word. */
+static int balloon_answers(void)
+{
+    return balloonAnswers || (envNt && envMajor >= 6);
+}
+
+static void fast_balloon_event(int ev)
+{
+    int answers = balloon_answers();
+
+    if (tr_bsend_step(&fastSend, ev, GetTickCount(), answers)) {
+        /* Not while a balloon is held: fastText is the held one's now,
+         * and the hold sends it (item 4). */
+        if (iconAdded && fastOn && fastCount > 0 && !fastHold) {
+            /* The one still queued, if any, taken away first: an empty
+             * szInfo with NIF_INFO removes the icon's balloon (the
+             * documented way), so the re-send cannot show beside it. */
+            tray_balloon_clear();
+            (void)tray_balloon_send(TR_FAST_TITLE, fastText, 0, 1);
+        } else {
+            (void)tr_bsend_step(&fastSend, TR_BE_DROP, GetTickCount(),
+                                answers);
+        }
+    }
+}
+
+/* After every model refresh (section 7.7 items 3 and 4): the counted set,
+ * the balloon for the devices new to it, and the icon. */
+static void fast_scan(void)
+{
+    char keys[TR_FAST_MAX][TR_FAST_KEY];
+    char prodKeys[TR_FAST_MAX][TR_FAST_KEY];
+    char prods[TR_FAST_MAX][128];
+    int prodN = 0;
+    int n = 0;
+    int fresh = 0;
+    int first = -1;
+    TR_FAST firstF;
+    int k;
+
+    fastOn = fast_setting();
+    fastCount = 0;
+    memset(&firstF, 0, sizeof(firstF));
+    /* The candidates present marked first, so the answers of those gone
+     * are dropped before any new one is asked (section 7.7 item 1). */
+    tr_qual_begin(&qualCache);
+    for (k = 0; k < upCount; k++) {
+        TR_FAST f;
+        (void)fast_port(k, &f, 0);
+    }
+    tr_qual_end(&qualCache);
+    for (k = 0; k < upCount; k++) {
+        TR_FAST f;
+        char key[TR_FAST_KEY];
+        if (!fast_port(k, &f, 1)) {
+            continue;
+        }
+        fastCount++;
+        if (n >= TR_FAST_MAX) {
+            continue;
+        }
+        fast_key_of(k, key, sizeof(key));
+        fast_product(k, key, prodKeys, prods, &prodN);
+        if (tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN, key)) {
+            if (fresh == 0) {
+                first = k;
+                firstF = f;
+            }
+            fresh++;
+        }
+        tr_copy(keys[n], key, TR_FAST_KEY);
+        n++;
+    }
+    memcpy(fastKeys, keys, sizeof(keys));
+    fastKeyN = n;
+    memcpy(fastProdKey, prodKeys, sizeof(prodKeys));
+    memcpy(fastProd, prods, sizeof(prods));
+    fastProdN = prodN;
+    /* A balloon still owed (item 9), or not yet sent for want of the icon,
+     * that names a device gone, or with the notice off, is not sent. */
+    if (!fastOn ||
+        tr_fast_new((const char (*)[TR_FAST_KEY])fastKeys, fastKeyN,
+                    fastTextKey)) {
+        fastPending = 0;
+        fastHold = 0;
+        fast_balloon_event(TR_BE_DROP);
+    }
+    if (fresh > 0 && first >= 0) {
+        if (fastHold && fastPending) {
+            /* Held for the first device's devnode: these join it. */
+            fastHoldCount += fresh;
+        } else {
+            fastHoldF = firstF;
+            fastHoldCount = fresh;
+            fast_key_of(first, fastTextKey, sizeof(fastTextKey));
+            fastHold = up[first].Dn < 0;
+            fastHoldTick = GetTickCount();
+        }
+        fast_text();
+        fastPending = 1;
+    }
+    /* The icon follows in refresh_model's tray_red, which reads this set
+     * (section 7.2.1 items 2 and 5). */
+    fast_announce();
+}
+
+/* The list of section 7.7 item 6 into t, an entry whole or not at all,
+ * with room kept for the closing line; returns the devices left out. */
+static int fast_list(TR_TEXT *t)
+{
+    int k;
+    int shown = 0;
+    int left = 0;
+    size_t cap = t->Cap;
+
+    t->Cap = cap > 256 ? cap - 256 : cap;
+    for (k = 0; k < upCount; k++) {
+        TR_FAST f;
+        char name[160];
+        char port[TR_NAME_CHARS + 96];
+        char hub[200];
+        const UCTRL *c;
+        size_t mark;
+        if (!fast_port(k, &f, 0)) {
+            continue;
+        }
+        if (left > 0) {
+            left++;
+            continue;
+        }
+        mark = t->Len;
+        c = &uc[up[k].Ctrl];
+        fast_name(k, name, sizeof(name));
+        tr_sprintf(port, sizeof(port), "Port %s of %s", up[k].Path,
+                   c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "a USB host controller");
+        if (up[k].ParentUp >= 0) {
+            fast_name(up[k].ParentUp, hub, sizeof(hub));
+        }
+        if (shown > 0) {
+            tr_put(t, "\n");
+        }
+        tr_fast_entry(t, name, fast_vid(&up[k]), fast_pid(&up[k]), port,
+                      up[k].ParentUp >= 0 ? hub : NULL, &f);
+        if (t->Overflow) {
+            t->Len = mark;
+            t->Buf[mark] = '\0';
+            t->Overflow = 0;
+            left = 1;
+            continue;
+        }
+        shown++;
+    }
+    t->Cap = cap;
+    if (shown == 0 && left == 0) {
+        tr_put(t, "Every USB device runs at the speed it declares.\n");
+    }
+    return left;
+}
+
+static void fast_layout(HWND w)
+{
+    RECT r;
+    const int m = 8;
+    const int bw = 88;
+    const int bh = 26;
+
+    GetClientRect(w, &r);
+    MoveWindow(hFastEdit, m, m, r.right - 2 * m,
+               r.bottom - 3 * m - bh > 0 ? r.bottom - 3 * m - bh : 0, TRUE);
+    MoveWindow(hFastOk, r.right - m - bw, r.bottom - m - bh, bw, bh, TRUE);
+}
+
+static LRESULT CALLBACK fast_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_SIZE:
+        fast_layout(w);
+        return 0;
+    case WM_SETFOCUS:
+        SetFocus(hFastOk);
+        return 0;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+            DestroyWindow(w);
+            return 0;
+        }
+        break;
+    case WM_DESTROY:
+        hFastWnd = NULL;
+        hFastEdit = NULL;
+        hFastOk = NULL;
+        return 0;
+    }
+    return DefWindowProcA(w, msg, wp, lp);
+}
+
+/* The window's size: 80 columns of the fixed font, two thirds of the work
+ * area's height, neither past the work area. */
+static void fast_size(int *cx, int *cy)
+{
+    RECT wa;
+    HDC dc;
+    TEXTMETRICA tm;
+    int col = 8;
+
+    dc = GetDC(NULL);
+    if (dc != NULL) {
+        HGDIOBJ old = SelectObject(dc, hFixed != NULL
+                                           ? (HGDIOBJ)hFixed
+                                           : GetStockObject(ANSI_FIXED_FONT));
+        if (GetTextMetricsA(dc, &tm) && tm.tmAveCharWidth > 0) {
+            col = tm.tmAveCharWidth;
+        }
+        SelectObject(dc, old);
+        ReleaseDC(NULL, dc);
+    }
+    *cx = 80 * col + GetSystemMetrics(SM_CXVSCROLL) + 16 +
+          2 * GetSystemMetrics(SM_CXSIZEFRAME) + 8;
+    *cy = 400;
+    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+        *cy = (wa.bottom - wa.top) * 2 / 3;
+        if (*cx > wa.right - wa.left) {
+            *cx = wa.right - wa.left;
+        }
+    }
+}
+
+/* The window of section 7.7 item 6: the list in a text box that scrolls,
+ * built in a buffer that grows until it fits (60 KiB at most on 98 SE and
+ * ME, whose edit control holds 64 KiB; 1 MiB elsewhere). */
+static void fast_box(HWND owner)
+{
+    char *buf = NULL;
+    TR_TEXT t;
+    size_t cap;
+    size_t most = envNt ? 1048576UL : 61440UL;
+    int left = 0;
+    int cx;
+    int cy;
+
+    for (cap = 16384;; cap *= 2) {
+        if (cap > most) {
+            cap = most;
+        }
+        buf = (char *)malloc(cap);
+        if (buf == NULL) {
+            MessageBoxA(owner, "There is not enough memory to list the devices.",
+                        TR_FAST_TITLE, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+            return;
+        }
+        tr_text_init(&t, buf, cap);
+        left = fast_list(&t);
+        if (left == 0 || cap >= most) {
+            break;
+        }
+        free(buf);
+    }
+    if (left > 0) {
+        tr_printf(&t, "\n%d more device%s not listed.\n", left,
+                  left == 1 ? " is" : "s are");
+    }
+    if (hFastWnd == NULL) {
+        fast_size(&cx, &cy);
+        hFastWnd = CreateWindowExA(0, "Xhci98TrFast", TR_FAST_TITLE,
+                                   WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, cx, cy, owner,
+                                   NULL, hInst, NULL);
+        if (hFastWnd == NULL) {
+            free(buf);
+            return;
+        }
+        hFastEdit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                        WS_VSCROLL | WS_HSCROLL | ES_MULTILINE |
+                                        ES_READONLY | ES_AUTOVSCROLL |
+                                        ES_AUTOHSCROLL,
+                                    0, 0, 10, 10, hFastWnd, (HMENU)3, hInst,
+                                    NULL);
+        hFastOk = CreateWindowExA(0, "BUTTON", "Close",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                      BS_DEFPUSHBUTTON,
+                                  0, 0, 10, 10, hFastWnd, (HMENU)IDOK, hInst,
+                                  NULL);
+        if (hFastEdit == NULL || hFastOk == NULL) {
+            DestroyWindow(hFastWnd);
+            free(buf);
+            return;
+        }
+        SendMessageA(hFastEdit, WM_SETFONT,
+                     (WPARAM)(hFixed != NULL ? (HGDIOBJ)hFixed
+                                             : GetStockObject(ANSI_FIXED_FONT)),
+                     0);
+        SendMessageA(hFastEdit, EM_LIMITTEXT, 0, 0);
+        SendMessageA(hFastOk, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT),
+                     0);
+        fast_layout(hFastWnd);
+    }
+    SetWindowTextA(hFastEdit, buf);
+    free(buf);
+    ShowWindow(hFastWnd, IsIconic(hFastWnd) ? SW_RESTORE : SW_SHOWNORMAL);
+    SetForegroundWindow(hFastWnd);
+    SetFocus(hFastOk);
+}
+
+/* The item in a menu, checked as the setting in force. */
+static void fast_item(HMENU m, int append)
+{
+    UINT flags = MF_STRING | (fast_setting() ? MF_CHECKED : MF_UNCHECKED);
+    const char *text = "Tell me when a device can run &faster";
+
+    if (append) {
+        AppendMenuA(m, flags, IDM_FAST, text);
+    } else {
+        ModifyMenuA(m, IDM_FAST, MF_BYCOMMAND | flags, IDM_FAST, text);
+    }
+}
+
+/* The menu item chosen: the user's value turned over, the icon at once. */
+static void fast_toggle(void)
+{
+    fast_set(!fast_setting());
+    fastOn = fast_setting();
+    fastPending = 0;
+    fast_balloon_event(TR_BE_DROP);
+    if (hTray != NULL) {
+        tray_red();             /* the icon at once (section 7.2.1 item 2) */
+    }
 }
 
 /* ======================================================================== */
@@ -6184,6 +7160,17 @@ static int was_expanded(const char *key)
     return 0;
 }
 
+/* Select item and scroll it into view, then back to the left edge
+ * (TRSCROLL.1): the tree-view scrolls sideways to show a deep item's text,
+ * which leaves the start of every node name cut off. SB_LEFT is a plain
+ * WM_HSCROLL, the same on 98 SE's comctl32 4.72 and on NT. */
+static void tree_select_shown(HTREEITEM item)
+{
+    TreeView_SelectItem(hTree, item);
+    TreeView_EnsureVisible(hTree, item);
+    SendMessageA(hTree, WM_HSCROLL, SB_LEFT, 0);
+}
+
 static void fill_tree(void)
 {
     int i;
@@ -6215,9 +7202,7 @@ static void fill_tree(void)
         select = tn[0].Item;
     }
     if (select != NULL) {
-        TreeView_SelectItem(hTree, select);
-        TreeView_EnsureVisible(hTree, select);
-        SendMessageA(hTree, WM_HSCROLL, SB_LEFT, 0);
+        tree_select_shown(select);
     }
     SendMessageA(hTree, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(hTree, NULL, TRUE);
@@ -6426,6 +7411,12 @@ static void init_menu(HMENU m)
     if (GetMenuState(m, IDM_LOGIN, MF_BYCOMMAND) != (UINT)-1) {
         login_item(m, 0);
     }
+    if (GetMenuState(m, IDM_RMWARN, MF_BYCOMMAND) != (UINT)-1) {
+        warn_item(m, 0);
+    }
+    if (GetMenuState(m, IDM_FAST, MF_BYCOMMAND) != (UINT)-1) {
+        fast_item(m, 0);
+    }
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
                                           ? MF_ENABLED : MF_GRAYED));
@@ -6456,6 +7447,12 @@ static int command(HWND w, UINT id)
         return 1;
     case IDM_LOGIN:
         login_set(!login_on());
+        return 1;
+    case IDM_RMWARN:
+        warn_set(!warn_on());
+        return 1;
+    case IDM_FAST:
+        fast_toggle();
         return 1;
     case IDM_LEVEL:
         level_dialog(w, lv_driver_of_node(tree_selected()));
@@ -6683,6 +7680,10 @@ static void tray_tip(TR_NID *n)
 {
     char tip[128];
 
+    if (trayRedOn) {
+        tr_copy(n->szTip, trayRedTip, shellV5 ? sizeof(n->szTip) : 64);
+        return;
+    }
     if (!shellV5 && lastEvent[0] != '\0') {
         tr_sprintf(tip, sizeof(tip), "xHCI98 USB Tree: %d TB/USB4 - %s",
                    tbDevices, lastEvent);
@@ -6703,7 +7704,9 @@ static void tray_add(void)
     n.uID = 1;
     n.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     n.uCallbackMessage = WM_TRAYICON;
-    n.hIcon = hIconSmall;
+    /* In the colour tray_red last chose: an Explorer restart re-adds it
+     * as it was (record 25 section 7.2.1 item 5). */
+    n.hIcon = (trayRedOn && hIconRedSmall != NULL) ? hIconRedSmall : hIconSmall;
     tray_tip(&n);
     iconAdded = Shell_NotifyIconA(NIM_ADD, (PNOTIFYICONDATAA)&n) != 0;
     if (iconAdded && shellV5) {
@@ -6728,6 +7731,49 @@ static void tray_update(void)
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
 }
 
+/* 98 SE: the icon's tooltip after a long hover (task 43.72, tr_hover_poll):
+ * the hover, the point of its last move, and whether one of the tray's
+ * menus is up (its modal loop runs the poll's timer). */
+static TR_HOVER trayHover;
+static POINT trayHoverPt;
+static int trayInMenu;
+
+static void tray_remove(void);
+
+/* The poll's half: the pointer away from the icon after a hover whose
+ * tooltip timed out, and the icon added again so that its tooltip shows
+ * again. Shell 5.0 and later (ME, 2000 and later) are not touched. */
+static void tray_hover_poll(void)
+{
+    POINT p;
+    int away;
+
+    if (shellV5 || !iconAdded || trayInMenu || !trayHover.On) {
+        return;
+    }
+    GetCursorPos(&p);
+    away = p.x - trayHoverPt.x > GetSystemMetrics(SM_CXSMICON) ||
+           trayHoverPt.x - p.x > GetSystemMetrics(SM_CXSMICON) ||
+           p.y - trayHoverPt.y > GetSystemMetrics(SM_CYSMICON) ||
+           trayHoverPt.y - p.y > GetSystemMetrics(SM_CYSMICON);
+    if (!away) {
+        /* A short jump off the taskbar's edge: out of the notification
+         * area at all is away too. */
+        HWND bar = FindWindowA("Shell_TrayWnd", NULL);
+        HWND nfy = bar != NULL ? FindWindowExA(bar, NULL, "TrayNotifyWnd", NULL)
+                               : NULL;
+        RECT r;
+        if (nfy != NULL && GetWindowRect(nfy, &r) && !PtInRect(&r, p)) {
+            away = 1;
+        }
+    }
+    if (tr_hover_poll(&trayHover, GetTickCount(), away, GetDoubleClickTime(),
+                      TRAY_POLL_MS)) {
+        tray_remove();
+        tray_add();
+    }
+}
+
 static void tray_remove(void)
 {
     TR_NID n;
@@ -6743,17 +7789,30 @@ static void tray_remove(void)
     iconAdded = 0;
 }
 
-static void tray_balloon(const char *title, const char *text, int warn)
+/* fast: the "can run faster" notice, whose click opens the list. The
+ * shell's messages name no balloon, and one sent while another is up may
+ * replace it or wait behind it, so the kind on the screen is the one the
+ * last NIN_BALLOONSHOW saw sent (fastKind, tr_bkind_step; task 43.72);
+ * 98 SE's pop-up queues its notices, so there the notice carries its own
+ * id (TRAY_POP_FAST), which its click reports. */
+#define TRAY_POP_FAST   2
+/* The balloon itself; 1 when the shell's was asked for. */
+static int tray_balloon_send(const char *title, const char *text, int warn,
+                             int fast)
 {
     TR_NID n;
 
     tr_copy(lastEvent, text, sizeof(lastEvent));
     if (!iconAdded) {
-        return;
+        return 0;
     }
     if (!shellV5) {
         tray_update();
-        return;
+        /* 98 SE: the tool's own pop-up in the balloon's place (record 25
+         * section 16). */
+        tr_pop_show(hTray, WM_TRAYICON, fast ? TRAY_POP_FAST : 1, title, text,
+                    warn ? TR_POP_WARNING : TR_POP_INFO);
+        return 0;
     }
     memset(&n, 0, sizeof(n));
     n.cbSize = TR_NID_V2;
@@ -6764,6 +7823,237 @@ static void tray_balloon(const char *title, const char *text, int warn)
     tr_copy(n.szInfoTitle, title, sizeof(n.szInfoTitle));
     TR_NID_VERSION(n) = 10000;
     n.dwInfoFlags = warn ? NIIF_WARNING : NIIF_INFO;
+    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+    tr_bkind_step(&fastKind, fast ? TR_BE_SENT : TR_BE_OTHER);
+    return 1;
+}
+
+/* The icon's balloon taken away, shown or queued (NIF_INFO, empty szInfo;
+ * Shell_NotifyIcon's documented removal). Shell 5.0 and later only. */
+static void tray_balloon_clear(void)
+{
+    TR_NID n;
+
+    if (!iconAdded || !shellV5) {
+        return;
+    }
+    memset(&n, 0, sizeof(n));
+    n.cbSize = TR_NID_V2;
+    n.hWnd = hTray;
+    n.uID = 1;
+    n.uFlags = NIF_INFO;
+    Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
+    tr_bkind_step(&fastKind, TR_BE_DROP);
+}
+
+/* A balloon with new text: the notice's is watched until the shell shows
+ * it (item 9); any other replaces it, and the notice's is then not owed. */
+static void tray_balloon_as(const char *title, const char *text, int warn,
+                            int fast)
+{
+    if (tray_balloon_send(title, text, warn, fast)) {
+        (void)tr_bsend_step(&fastSend, fast ? TR_BE_SENT : TR_BE_OTHER,
+                            GetTickCount(), 0);
+    }
+}
+
+static void tray_balloon(const char *title, const char *text, int warn)
+{
+    tray_balloon_as(title, text, warn, 0);
+}
+
+/* ---- the red icon (record 25 section 7.2.1, task 43.57) ------------------ */
+
+/* 43.27's set, handed over (section 7.2.1 item 2): each device of it that
+ * is red - TR_RED_SLOW3 for TR_FW_PORT2, HUB2, HUB1 and HUB3, TR_RED_SLOW2
+ * for TR_FW_HUBFS, never TR_FW_LINK - with its name and its port's tree
+ * key, and only while 43.27's notice is in force. The model's ports read
+ * as fast_scan read them, with no request sent (the device_qualifier
+ * answers are the ones the scan settled). */
+static int red_slow(TR_REDDEV *dev, char (*keys)[TR_RED_KEY], int cap)
+{
+    int n = 0;
+    int k;
+
+    if (!fastOn) {
+        return 0;
+    }
+    for (k = 0; k < upCount && n < cap; k++) {
+        TR_FAST f;
+        if (!fast_port(k, &f, 0)) {
+            continue;
+        }
+        if (f.Where == TR_FW_HUBFS) {
+            dev[n].Kind = TR_RED_SLOW2;
+        } else if (f.Where == TR_FW_PORT2 || f.Where == TR_FW_HUB2 ||
+                   f.Where == TR_FW_HUB1 || f.Where == TR_FW_HUB3) {
+            dev[n].Kind = TR_RED_SLOW3;
+        } else {
+            continue;
+        }
+        fast_name(k, dev[n].Name, sizeof(dev[n].Name));
+        /* build_usb's key for the port's node. */
+        tr_key(keys[n], TR_RED_KEY, "U", uc[up[k].Ctrl].DrvKey, up[k].Path);
+        n++;
+    }
+    return n;
+}
+
+/* Every listed xhci98 controller's failed flag (section 7.2.1 item 3): the
+ * query answer's header alone. One that cannot be opened or refuses the
+ * request is not failed. */
+static void red_hc_read(void)
+{
+    int c;
+
+    redHcCount = 0;
+    for (c = 0; c < ucCount && redHcCount < TR_RED_HC_MAX; c++) {
+        unsigned char b[XHQ_HDR_BYTES];
+        DWORD got = 0;
+        HANDLE h;
+        TR_REDHC *r;
+        if (!uc[c].Ours) {
+            continue;
+        }
+        r = &redHc[redHcCount];
+        memset(r, 0, sizeof(*r));
+        tr_copy(r->Name, uc[c].Dn >= 0 && uc[c].Dn < gw.Count
+                             ? dn_name(&gw.N[uc[c].Dn]) : "",
+                sizeof(r->Name));
+        tr_key(redHcKey[redHcCount], sizeof(redHcKey[0]), "C", uc[c].DrvKey,
+               uc[c].Path);
+        h = open_device(uc[c].Path);
+        if (h != INVALID_HANDLE_VALUE) {
+            memset(b, 0, sizeof(b));
+            if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, sizeof(b), &got, NULL) &&
+                got >= XHQ_HDR_BYTES && inst_get32(b, XHQ_O_MAGIC) == XHQ_MAGIC) {
+                r->Failed = (inst_get32(b, XHQ_O_FLAGS) & XHQ_F_FAILED) != 0;
+            }
+            CloseHandle(h);
+        }
+        redHcCount++;
+    }
+}
+
+/* The window opened on the tree node of key (section 7.2.1 item 7): read
+ * again once when its model does not hold it; the top node when even that
+ * one does not. */
+static void open_window_at(const char *want)
+{
+    char key[TR_RED_KEY];
+    int pass;
+    int i;
+
+    /* A copy: opening the window refreshes the model, and tray_red with
+     * it, which may rewrite trayRedKey. */
+    tr_copy(key, want != NULL ? want : "", sizeof(key));
+    open_window();
+    if (hMain == NULL) {
+        return;
+    }
+    for (pass = 0; pass < 2 && key[0] != '\0'; pass++) {
+        for (i = 0; i < tnCount; i++) {
+            if (tn[i].Item != NULL && strcmp(tn[i].Key, key) == 0) {
+                tree_select_shown(tn[i].Item);
+                return;
+            }
+        }
+        if (pass == 0) {
+            refresh_window();
+        }
+    }
+    /* Not in the tree (a view setting may hide its branch): the top node,
+     * rather than whatever the refresh kept selected. */
+    for (i = 0; i < tnCount; i++) {
+        if (tn[i].Item != NULL && strcmp(tn[i].Key, "R:root") == 0) {
+            tree_select_shown(tn[i].Item);
+            return;
+        }
+    }
+}
+
+/* The one place the red state is applied (section 7.2.1 item 5): decided
+ * by tr_red_state over the poll's last snapshot, the controllers' flags
+ * and 43.27's set; one NIM_MODIFY when the colour or the tooltip changed. */
+static void tray_red(void)
+{
+    static TR_REDDEV dev[TR_RED_DEV_MAX];
+    static char devKey[TR_RED_DEV_MAX][TR_RED_KEY];
+    TR_RED_IN in;
+    TR_RED r;
+    TR_NID n;
+    char tip[128];
+    char item[128];
+    char key[TR_RED_KEY];
+    int on;
+    int k;
+    int i;
+
+    memset(&in, 0, sizeof(in));
+    in.Snap = &snapOld;
+    in.Stage = snapOld.Stage;
+    in.Hc = redHc;
+    in.HcCount = redHcCount;
+    in.Dev = dev;
+    in.DevCount = red_slow(dev, devKey, TR_RED_DEV_MAX);
+    tr_red_state(&in, &r);
+    on = r.Count > 0;
+    tip[0] = '\0';
+    item[0] = '\0';
+    key[0] = '\0';
+    if (on) {
+        tr_red_tip(&in, &r, shellV5, tip, shellV5 ? sizeof(tip) : 64);
+        tr_red_tip(&in, &r, 0, item, sizeof(item));
+        if (r.Kind == TR_RED_HC && r.Nhi) {
+            for (k = 0; k < nhiCount; k++) {
+                if (inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
+                               strlen(nhi[k].Id)) == snapOld.NhiKey[r.Index]) {
+                    tr_key(key, sizeof(key), "N", nhi[k].Id, NULL);
+                }
+            }
+        } else if (r.Kind == TR_RED_HC) {
+            tr_copy(key, redHcKey[r.Index], sizeof(key));
+        } else if (r.Kind == TR_RED_WAIT) {
+            const TR_SROUTER *e = &snapOld.R[r.Index];
+            for (k = 0; k < nhiCount; k++) {
+                if (inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
+                               strlen(nhi[k].Id)) == e->Nhi) {
+                    /* router_key's form for an ICM entry. */
+                    tr_sprintf(key, sizeof(key), "T:%s:%08lX:i%08lX.%08lX.%08lX",
+                               nhi[k].Id, (unsigned long)e->EpochLo,
+                               (unsigned long)e->Place, (unsigned long)e->Ids,
+                               (unsigned long)e->ShortId);
+                }
+            }
+        } else {
+            tr_copy(key, devKey[r.Index], sizeof(key));
+        }
+    }
+    tr_copy(trayRedKey, key, sizeof(trayRedKey));
+    /* A name's '&' doubled, so the menu shows it rather than underlining
+     * the next letter. */
+    for (k = 0, i = 0; item[k] != '\0' && i + 2 < (int)sizeof(trayRedMenu) - 3; k++) {
+        if (item[k] == '&') {
+            trayRedMenu[i++] = '&';
+        }
+        trayRedMenu[i++] = item[k];
+    }
+    tr_copy(trayRedMenu + i, "...", sizeof(trayRedMenu) - i);
+    if (on == trayRedOn && strcmp(tip, trayRedTip) == 0) {
+        return;
+    }
+    trayRedOn = on;
+    tr_copy(trayRedTip, tip, sizeof(trayRedTip));
+    if (!iconAdded) {
+        return;
+    }
+    memset(&n, 0, sizeof(n));
+    n.cbSize = shellV5 ? TR_NID_V2 : TR_NID_V1;
+    n.hWnd = hTray;
+    n.uID = 1;
+    n.uFlags = NIF_ICON | NIF_TIP;
+    n.hIcon = (on && hIconRedSmall != NULL) ? hIconRedSmall : hIconSmall;
+    tray_tip(&n);
     Shell_NotifyIconA(NIM_MODIFY, (PNOTIFYICONDATAA)&n);
 }
 
@@ -6822,8 +8112,28 @@ static void poll(void)
         tr_copy(pollId[k], nhi[k].Id, sizeof(pollId[k]));
     }
     count = tr_diff(&snapOld, now, ev, 8);
+    /* A warning due in this poll takes the poll's other events into its own
+     * balloon, under its title: on XP and later a second balloon from this
+     * icon replaces the first at once, so the departure that names the unit
+     * would hide the warning (record 25 section 7.6 item 4, read by T.11). */
+    for (i = 0; i < count; i++) {
+        if (ev[i].Kind == TR_EV_REMOVED) {
+            break;
+        }
+    }
+    if (i < count && warn_on()) {
+        char text[256];
+        (void)tr_events_text(ev, count, text, sizeof(text));
+        tray_balloon(tr_event_title(TR_EV_REMOVED), text, 1);
+        count = 0;
+    }
     for (i = 0; i < count; i++) {
         char text[256];
+        /* The user's option skips the warning's balloon alone (record 25
+         * section 7.6 item 8); the count still shows in the details. */
+        if (ev[i].Kind == TR_EV_REMOVED) {
+            continue;
+        }
         tr_event_text(&ev[i], text, sizeof(text));
         tray_balloon(tr_event_title(ev[i].Kind), text,
                      ev[i].Kind == TR_EV_STOPPED || ev[i].Kind == TR_EV_FAILED);
@@ -6844,6 +8154,10 @@ static void poll(void)
         (void)routers;
         tray_update();
     }
+    if (changed || pollCount % 5 == 0) {
+        red_hc_read();
+    }
+    tray_red();
 }
 
 static void tray_unit_menu(void)
@@ -6853,6 +8167,7 @@ static void tray_unit_menu(void)
     int i;
     int g;
     UINT cmd;
+    char redKey[TR_RED_KEY];
 
     if (m == NULL) {
         return;
@@ -6861,6 +8176,20 @@ static void tray_unit_menu(void)
         refresh_model(0);
     }
     trayUnitCount = 0;
+    /* The item's destination as shown: a poll while the menu is open may
+     * change trayRedKey. */
+    tr_copy(redKey, trayRedKey, sizeof(redKey));
+    if (trayRedOn) {
+        /* What turned the icon red, first (record 25 section 7.2.1 item 7). */
+        AppendMenuA(m, MF_STRING, IDM_RED, trayRedMenu);
+    } else if (fastOn && fastCount > 0) {
+        /* Counted but not red (only TR_FW_LINK devices, section 7.2.1
+         * item 2): 43.27's own line keeps its list reachable. */
+        char text[64];
+        tr_fast_menu(text, sizeof(text), fastCount);
+        AppendMenuA(m, MF_STRING, IDM_FAST_SHOW, text);
+        AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    }
     /* Two groups, each under a grey heading and only when it has an entry
      * (record 25 section 6.5): USB devices, then the Thunderbolt units. */
     for (g = 0; g < 2; g++) {
@@ -6910,12 +8239,18 @@ static void tray_unit_menu(void)
     AppendMenuA(m, MF_STRING, IDM_OPEN, "Open xHCI98 USB Tree");
     GetCursorPos(&p);
     SetForegroundWindow(hTray);
+    trayInMenu = 1;
     cmd = (UINT)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0,
                                hTray, NULL);
+    trayInMenu = 0;
     PostMessageA(hTray, WM_NULL, 0, 0);
     DestroyMenu(m);
     if (cmd == IDM_OPEN) {
         open_window();
+    } else if (cmd == IDM_RED) {
+        open_window_at(redKey);
+    } else if (cmd == IDM_FAST_SHOW) {
+        fast_box(NULL);
     } else if (cmd >= IDM_UNIT0 && cmd < (UINT)(IDM_UNIT0 + trayUnitCount)) {
         /* The tree may have been read again while the menu was open: the
          * unit is found again by its instance ID. */
@@ -6941,13 +8276,17 @@ static void tray_context_menu(void)
     AppendMenuA(m, MF_STRING, IDM_REFRESH, "&Refresh");
     AppendMenuA(m, MF_STRING, IDM_ABOUT, "&About");
     login_item(m, 1);
+    warn_item(m, 1);
+    fast_item(m, 1);
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_EXIT, "E&xit");
     SetMenuDefaultItem(m, IDM_OPEN, FALSE);
     GetCursorPos(&p);
     SetForegroundWindow(hTray);
+    trayInMenu = 1;
     cmd = (UINT)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, p.x, p.y, 0,
                                hTray, NULL);
+    trayInMenu = 0;
     PostMessageA(hTray, WM_NULL, 0, 0);
     DestroyMenu(m);
     switch (cmd) {
@@ -6963,6 +8302,12 @@ static void tray_context_menu(void)
         break;
     case IDM_LOGIN:
         login_set(!login_on());
+        break;
+    case IDM_RMWARN:
+        warn_set(!warn_on());
+        break;
+    case IDM_FAST:
+        fast_toggle();
         break;
     case IDM_EXIT:
         quit_all();
@@ -6999,6 +8344,10 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     }
     switch (msg) {
     case WM_TRAYICON:
+        if (LOWORD(lp) == WM_MOUSEMOVE) {
+            tr_hover_move(&trayHover, GetTickCount());
+            GetCursorPos(&trayHoverPt);
+        }
         switch (LOWORD(lp)) {
         case WM_LBUTTONUP:
             if (trayNoClick) {
@@ -7011,11 +8360,52 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         case WM_LBUTTONDBLCLK:
             KillTimer(w, TIMER_CLICK);
             trayNoClick = 1;
-            open_window();
+            if (trayRedOn) {
+                open_window_at(trayRedKey);
+            } else {
+                open_window();
+            }
             break;
         case WM_USER + 1:       /* NIN_KEYSELECT: the keyboard's click */
             tray_unit_menu();
             break;
+        case WM_USER + 2:       /* NIN_BALLOONSHOW */
+            if (shellV5) {
+                balloonAnswers = 1;
+                tr_bkind_step(&fastKind, TR_BE_SHOW);
+                fast_balloon_event(tr_bkind_fast(&fastKind, 1) ? TR_BE_SHOW
+                                                               : TR_BE_OTHER);
+            }
+            break;
+        case WM_USER + 3:       /* NIN_BALLOONHIDE */
+            if (shellV5) {
+                balloonAnswers = 1;
+                tr_bkind_step(&fastKind, TR_BE_HIDE);
+                fast_balloon_event(TR_BE_HIDE);
+            }
+            break;
+        case WM_USER + 4:       /* NIN_BALLOONTIMEOUT */
+            if (shellV5) {
+                balloonAnswers = 1;
+                tr_bkind_step(&fastKind, TR_BE_TIMEOUT);
+                fast_balloon_event(TR_BE_TIMEOUT);
+            }
+            break;
+        case WM_USER + 5: {     /* NIN_BALLOONUSERCLICK */
+            /* The balloon clicked: the one on the screen, which is not
+             * always the last one sent (task 43.72). */
+            int onFast = shellV5 ? tr_bkind_fast(&fastKind, balloon_answers())
+                                 : wp == TRAY_POP_FAST;
+            if (shellV5) {
+                balloonAnswers = 1;
+                tr_bkind_step(&fastKind, TR_BE_CLICK);
+                fast_balloon_event(TR_BE_CLICK);
+            }
+            if (onFast) {
+                fast_box(NULL);
+            }
+            break;
+        }
         case WM_RBUTTONUP:
             if (!trayV3) {
                 tray_context_menu();
@@ -7037,6 +8427,9 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 return 0;
             }
             poll();
+            fast_hold_tick();
+            fast_balloon_event(TR_BE_TICK);
+            tray_hover_poll();
         } else if (wp == TIMER_CHANGE) {
             KillTimer(w, TIMER_CHANGE);
             refresh_window();
@@ -7688,7 +9081,9 @@ answer:
             return code;
         }
     }
-    say(msg, code != INST_EXIT_DONE);
+    if (!quit_asked()) {
+        say(msg, code != INST_EXIT_DONE);
+    }
     free(q);
     return code;
 }
@@ -7785,6 +9180,16 @@ static int register_classes(void)
     wc.hInstance = hInst;
     wc.hIcon = hIconBig;
     wc.lpszClassName = "Xhci98TrTray";
+    if (!RegisterClassA(&wc)) {
+        return 0;
+    }
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = fast_proc;
+    wc.hInstance = hInst;
+    wc.hIcon = hIconBig;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+    wc.lpszClassName = "Xhci98TrFast";
     if (!RegisterClassA(&wc)) {
         return 0;
     }
@@ -7903,6 +9308,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     if (hIconSmall == NULL) {
         hIconSmall = hIconBig;
     }
+    hIconRedSmall = (HICON)LoadImageA(inst, MAKEINTRESOURCEA(IDI_RED), IMAGE_ICON,
+                                      GetSystemMetrics(SM_CXSMICON),
+                                      GetSystemMetrics(SM_CYSMICON), 0);
     hFixed = CreateFontA(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                          ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                          DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Courier New");
@@ -7921,8 +9329,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     refresh_model(0);
     tray_add();
+    fast_announce();
     poll();
-    SetTimer(hTray, TIMER_POLL, 1000, NULL);
+    SetTimer(hTray, TIMER_POLL, TRAY_POLL_MS, NULL);
     if (!opts.Tray) {
         open_window();
     }
@@ -7937,6 +9346,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
             if (hMain != NULL && hAccel != NULL &&
                 (msg.hwnd == hMain || IsChild(hMain, msg.hwnd)) &&
                 TranslateAcceleratorA(hMain, hAccel, &msg)) {
+                continue;
+            }
+            if (hFastWnd != NULL && IsDialogMessageA(hFastWnd, &msg)) {
                 continue;
             }
             TranslateMessage(&msg);

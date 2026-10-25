@@ -1,6 +1,29 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 9, 2026-10-19 (the fix round of that night: a helper that
+Status: draft 15, 2026-10-24 (the owner's decision of that day,
+W9XGATE.1: the gate of section 6 asks once in a run, and before a later
+pass only when it finds a hardware wizard's window open or cannot look,
+section 6 and H6); draft 14, 2026-10-24 (the owner's decision of that day, record
+26 section 5.0's draft 40: draft 13's `SECTION` line, its
+`DiCreateDriverNode` node and import withdrawn before the cut; the
+helper is draft 12's again, and draft 13's text below stands only as the
+record of what was tried); draft 13, 2026-10-23 (the owner's decision of that day, record
+26 section 5.0's draft 39: the job file's optional `SECTION` line, with
+which the helper installs `xhci98.inf`'s update section, one no model
+names, through a driver node `DiCreateDriverNode` makes, sections 4.1 and
+5.2; one import more, section 7); draft 12, 2026-10-22 (roadmap-usb4 task 43.5's finding: a
+storage unit is taken only with no driver, the "Disk drive" rebind
+retired, and the Bulk-Only step admitted only with `USBNTMAP.INF`
+findable beside `USBSTOR.INF`, record 26 section 6.5.5; steps 3a and 4a);
+draft 11, 2026-10-21 (roadmap-usb4 task 43.42: the installer,
+not the helper, places the pack's two storage INFs in `%windir%\INF`
+on 98 SE, record 26 section 6.5.11; sections 2 and 8 say where that
+stands against the driver index; the helper unchanged); draft 10, 2026-10-20 (roadmap-usb4 task 43.4: on Windows 98 SE
+the USB storage drivers of record 26 section 6.5 - Bulk-Only devices
+and storage units installed by NUSB 3.3's `USBSTOR.INF` and
+`USBNTMAP.INF` from the install directory, two steps of section 6, and
+the recorded storage devices removed first, section 9; sections 1.2,
+4.1, 8 and 12 to match; the helper itself unchanged); draft 9, 2026-10-19 (the fix round of that night: a helper that
 did not finish is an unfinished install with steps, exit 4, never a
 failure of the device and never "nothing to do", sections 4.1 and 4.2;
 and the installer never runs a job on a device Stor98 runs, record 26
@@ -72,8 +95,11 @@ steps", and this record says how, with what, and what it may not do.
 - The devices: the xHCI controller, its root hub, the hubs and composite
   entries the bus presents, a UAS device, the Thunderbolt or USB4 host
   interface (`xhcicm.inf`), and, when the user ticks it, the bundled
-  Stor98's NVMe devices (record 26 section 6.3); each a present devnode
-  (section 6).
+  Stor98's NVMe devices (record 26 section 6.3); on Windows 98 SE, when
+  the user ticks the USB storage drivers (record 26 section 6.5, draft
+  10), a Bulk-Only device with no driver and a storage unit with none
+  (draft 12: no longer one at Windows' generic "Disk drive"), by the
+  pack's own INFs from the install directory; each a present devnode (section 6).
 - The removal of a devnode, present or not, for the uninstall (section 9).
 - The toolchain and its place in the build and the cut (section 3), its
   provenance rows (section 3.4), the helper's interface to the installer
@@ -147,7 +173,11 @@ Not used, and why: anything the header marks reserved, `BUGBUG`, or "for
 use by Setup" (`dwSetupReserved`, `lpReserved`); the driver index
 (`DiBuildDriverIndex`, `DiAddSingleInfToDrvIdx`: prototypes with no
 documentation block, and a write into the engine's own index, which record
-23 section 6.1 already refuses for `INF\OTHER`); `GenInstall` on the INF's
+23 section 6.1 already refuses for `INF\OTHER`; draft 11: the pack's two
+INFs that record 26 section 6.5.11 has the installer place in
+`%windir%\INF` are a file copy of the 32-bit installer, which leaves
+the index to the engine as NUSB's own installer does, and no call of
+the helper's); `GenInstall` on the INF's
 sections by hand (the engine does it inside `DiInstallDevice`, which is
 the point); `DiInstallDrvSection` (a class-driver install, not a device's);
 and any registry key of the engine's bookkeeping (section 8) written
@@ -317,6 +347,7 @@ RESULT <result file>
 HWND <hwnd>
 DEVICE <device id>          install and remove only
 INF <inf path>              install only
+SECTION <install section>   install only, and optional (draft 13)
 FLAGS <flag> [<flag>]       install only, and optional
 END
 ```
@@ -391,7 +422,21 @@ The operands:
 - `INF <inf path>`: the INF in the install directory
   (`C:\XHCI98\XHCI98.INF`), at most 255 characters, every part 8.3 and no
   space (the engine's `atDriverPath` is one atom of at most 255
-  characters).
+  characters). From draft 10 it may be one of the two storage INFs the
+  install directory holds when record 26 section 6.5's row is ticked
+  (`C:\XHCI98\USBSTOR.INF`, `C:\XHCI98\USBNTMAP.INF`), unmodified, in
+  the same form: the helper treats every INF alike.
+- `SECTION <install section>` (draft 13, **withdrawn by draft 14**: the
+  helper reads no such line, and a job file with one is refused; record
+  26 section 5.0's draft 39): the install section to install instead of the one the chosen
+  node's model names, from the same INF; 1 to 32 characters, each a
+  letter, a digit, `.` or `_`. The installer writes it for the controller
+  of `xhci98.inf` alone (`INST_XHCI_UPD_SECTION`, `Xhci.Upd`, the
+  Windows 98 SE and ME install with the temporary-name copy row, which no
+  model names, so that Windows' own wizard takes `Xhci.Dev`, whose row
+  keeps a file already there); the root hub, the hubs, the composite
+  parents and every other INF's devices get no `SECTION` line. Section
+  5.2 says what the helper does with it.
 - `FLAGS`: one or both of `force` (reinstall a current driver: record
   23's `/force` and the Have Disk cases of its section 6.4) and `quiet`
   (section 5.2), lower case, each at most once; the line is left out for
@@ -633,6 +678,26 @@ record 23 section 6.4's steps.
   error, and whether `DiInstallDevice` returns it for a same-version
   install without the wizard's "better driver" test is a reading of the
   legs, with the Have Disk steps the fallback).
+- **The job's `SECTION`** (draft 13; withdrawn by draft 14, the helper
+  no longer makes such a node, and the import is gone). With a `SECTION` line whose name is
+  not the chosen node's `lpszSectionName` (compared without case), the
+  helper makes a node for it with `DiCreateDriverNode` (the header's
+  declaration: rank, INF type, INF date, the device and driver
+  descriptions, the provider and manufacturer names, the INF file and
+  the section, and the private data), every field the chosen node's but
+  the section, the provider and manufacturer read from the node's atoms;
+  sets the new node's `Flags` and `DriverDate` to the chosen node's;
+  makes it `lpSelectedDriver`; writes a `CALL DiCreateDriverNode
+  <section> <err>` line and a second `DRIVER` line from the new node, and
+  checks its INF is the job's again. After the install the chosen node
+  is selected again and the new one put at the head of
+  `lpCompatDrvList`, so `DiDestroyDeviceInfoList` frees it with the
+  list's own nodes. A failure of the call is `failed` with its error; no node with no
+  error is `failed XHCIDI_NO_SECTION_NODE 0`. Read on 98 SE (2026-10-23):
+  the controller's update over 3.1.0.0 installed `Xhci.Upd`, and its
+  driver key reads `InfSection = Xhci.Upd`, `InfPath`, `ProviderName`,
+  `DriverDesc`, `MatchingDeviceId` and `DriverDate` as an install of
+  `Xhci.Dev` writes them.
 
 ### 5.3 Installing
 
@@ -702,6 +767,19 @@ step 2: the tree read and settled, and the user's Next on a page that
 says to finish any hardware wizard already open (Next until its end, and
 Finish where Windows "has not installed a driver"), so a controller whose
 own wizard is open when the installer starts is never installed under it.
+The page is shown once in a run, at the first gate (draft 15, the owner's
+decision of 2026-10-24, W9XGATE.1: it came five or six times in one
+update). Every later gate still waits for the settle, then looks for a
+wizard itself: a visible top-level window titled "Found New Hardware",
+"New Hardware Found", "Add New Hardware Wizard" or "Update Device Driver
+Wizard" (`inst_wizard_title`, read through `EnumWindows` with `user32.dll`
+loaded at run time, so the console tool's imports stay `KERNEL32` and
+`ADVAPI32`). One found brings the page back, its title said; none found
+goes on without it; a look that cannot be made (`user32.dll` or one of
+its three calls missing, the enumeration failed) asks, as before
+(`inst_gate_ask`). `/yes` asks nothing, as before. The titles are the
+English systems'; on another language's the look finds nothing, and the
+first gate's page and the settle are what stand.
 The page says not to cancel a wizard, because a cancelled one removes its
 device until the next start (section 5.1); a device the helper then
 answers `not-present` for is a step of the finish page (restart, finish
@@ -738,9 +816,30 @@ plan goes on.
    device the helper answers `not-present` for after a parent's job of the
    run is waited for, the tree settled, and the job made once more before
    it is a step (record 23 section 5.8, revision 14).
+3a. **Bulk-Only devices** (draft 10; on 98 SE, only when record 26
+   section 6.5's row is ticked and its case allows a copy, and (draft 12)
+   only while the install directory holds `USBNTMAP.INF` and the INF
+   directories hold no `USBSTOR.INF` without it, record 26 section
+   6.5.5): each present
+   devnode with a Bulk-Only id (`USB\Class_08&SubClass_02&Prot_50`,
+   `SubClass_05`, `SubClass_06`) that no INF of this package matches and
+   that has no driver, by `USBSTOR.INF` from the install directory, after
+   the passes of step 3 and their settle. The storage files are already
+   in place (record 26 section 6.5.4), so the engine's copy writes the
+   same bytes.
 4. **UAS devices** (`xhciuas.inf`) present, install or update; on 98 SE
    the NUSB mass-storage prerequisite and on ME the first-stick advice
-   stay as record 23 section 6.4 says them, on the Found page.
+   stay as record 23 section 6.4 says them, on the Found page; on 98 SE
+   with the storage row ticked, `USBNTMAP.SYS` is in place before this
+   step, so a UAS disk installed here starts with its filter.
+4a. **Storage units** (draft 10; on 98 SE, as step 3a): after a settle,
+   each present unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom` or
+   `USBSTOR\GenSfloppy` among its ids) with no driver, by
+   `USBNTMAP.INF` from the install directory, "USB Disk" (draft 12: a
+   unit bound any way is left; record 26 section 6.5.5); then a
+   settle and the read-back, a unit bound but not started given the
+   replug step. A unit that appears in a later settle of the run is
+   taken the same way.
 5. **The Thunderbolt or USB4 host interface** (`xhcicm.inf`) when the
    component is ticked; its own devices (the bridges a tunnel brings up)
    are `xhcicm.sys`'s to number (task 42-A.14 and record 28 for what is
@@ -773,7 +872,8 @@ exports the same ordinals with the same behaviour is a hypothesis, not a
 reading and not anything the 98 SE DDK says (it is the only DDK at hand
 and says nothing about ME; ME's own is not here): the `probe` job's
 clean run on ME is the first check, and the ME leg reads every row of
-section 12 again before the record claims it. The differences record 23 recorded are the wizard's
+section 12 again before the record claims it. (Draft 13's `DiCreateDriverNode`, ordinal 309, was read
+on ME and withdrawn with draft 14.) The differences record 23 recorded are the wizard's
 (the "Select Other Driver" list naming a driver twice, `INF\OTHER`),
 which the helper does not open. ME's digital-signature prompt for an
 unsigned driver, where ME shows one, is Windows' own dialog owned by the
@@ -811,6 +911,22 @@ them, and its uninstall removes the `INF\OTHER` copies whose provider is
 this package's (record 26 section 9.3 step 4) after the devnodes are gone.
 Nothing here is written by the helper or the installer directly.
 
+The storage INFs (draft 10) leave the same kind of bookkeeping under
+their own provider, Microsoft's: a copy in `INF\OTHER` and its `OEM Name`
+value, a driver key of class `USB` (`USBSTOR.INF`, `NTMPDriver`
+`USBSTOR.SYS`) or `Storage` (`USBNTMAP.INF`, `DevLoader` `*IOS`,
+`PortDriver` `USBMPHLP.PDR`). Their provider is not this package's, so
+the rule above never reaches them; record 26 section 6.5.6 records each
+copy made for the installer by its exact `OEM Name` value, and section
+6.5.8 removes only those. Which name the engine gives the copy is read on
+43.5's legs. From draft 11 the same two INFs may also be in
+`%windir%\INF` under their own names, placed there by the installer
+(record 26 section 6.5.11): a device Windows then installs from one of
+them at its first plug is expected to carry the bare name (`USBSTOR.INF`)
+as its `InfPath`, with no `INF\OTHER` copy and no `OEM Name` value, which
+43.5's first leg, taken again, reads. The helper's own storage jobs still
+name the install directory's copy.
+
 ## 9. Removal, for the uninstall
 
 A `remove` job (section 4.1: `JOB remove`, `RESULT`, `HWND`, `DEVICE`): the
@@ -827,7 +943,10 @@ flag's: "Set if the lpClassInstallParams field points to a class install
 parameter block"), and `DiCallClassInstaller(DIF_REMOVE, lpdi)`, the class
 installer first and the engine's `DiRemoveDevice` as the default action.
 Children first is the installer's order (record 26 section 9.3 step 4):
-UAS devices, Stor98's recorded devices, the host interface, hubs and
+on 98 SE the storage units and then the Bulk-Only devices the installer
+recorded or adopted (record 26 section 6.5.8, draft 10; adopted since
+record 26 draft 18), UAS devices,
+Stor98's recorded devices, the host interface, hubs and
 composite entries, root hubs, controllers. Whether the engine lists an
 absent device's entry without `DIGCF_PRESENT`, whether `DIF_REMOVE` on it
 deletes its `Enum` and driver keys, and whether the removal of a
@@ -908,6 +1027,7 @@ key, `INF\OTHER`'s listing, and Device Manager:
 | UN, uninstall | each devnode removed through the helper in order, an unplugged UAS disk's entry and a moved controller's old entry among them (the removal of an entry that is not present); the subtree removal; the `INF\OTHER` copies and the files deleted by the installer; the restart; the controller back as an unknown device with no wizard finding a driver |
 | Probe | the `probe` job on 98 SE and ME: the helper loads (its ordinals resolved), writes its version, and refuses a job with another version before any call |
 | ME | every row above on ME, and ME's own prompts |
+| Storage (98 SE, draft 10; roadmap-usb4 task 43.5) | a Bulk-Only stick at "Unknown Device" and a unit with no driver installed by the pack's INFs from the install directory, the unit's "USB Disk" and whether it starts without a replug, and a unit already bound any way left as it is (draft 12); the `INF\OTHER` copies and `OEM Name` values the engine makes for them; whether the engine copies over a file of the same bytes, or one in use; the removal of the recorded storage devices before the UAS devices |
 | Dialogs and handles | that the engine's dialogs are owned by the installer's window; that the process handle of the 16-bit helper signals at its exit and what its exit code reads; the fallback poll of the result file |
 
 What the 98 SE smoke run of 2026-10-18 read before the legs (task 42-A.1,
@@ -960,8 +1080,10 @@ found through `DevicePath`.
   comes with its own default path, is Windows' own, the installer's page
   saying what to type (section 5.3).
 - **H6** The installer never installs under a wizard it cannot see: a
-  settle and the user's Next gate every pass after the controller (section
-  6; record 23 decision D13 on these systems).
+  settle gates every pass, the user's Next the first, and a later pass
+  the user's Next again only when a wizard's window is found open or the
+  look cannot be made (section 6, draft 15; record 23 decision D13 on
+  these systems).
 - **H7** Removal through `DIF_REMOVE` with an explicit global
   `REMOVEDEVICE_PARAMS`, entries present or not, children first, the
   controller last; an entry left stops the uninstall's destructive steps;
@@ -984,6 +1106,10 @@ found through `DevicePath`.
   `not-present` until the next start, so the installer asks for wizards
   to be finished, not cancelled, and lists a device left so as a
   restart-and-run-again step (sections 5.1 and 6).
+- **H12** (draft 10) The storage devices of record 26 section 6.5 go
+  through the same helper and the same calls as the package's own, with
+  the pack's unmodified INFs as the job's INF; the helper gains nothing
+  for them (no flag, no job kind).
 
 ## 14. Open, and the risks
 

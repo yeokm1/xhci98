@@ -56,8 +56,8 @@ way, its `SOURCES` entry `..\xhci_log.c` hashed by path. `stor98` and
 `stor98mpd` are Stor98 (`src\stor98\src\`, roadmap-usb4 task 42-A.30),
 `stor98.srcstamp` beside `stor98.sys` (x86 or amd64) or `stor98.mpd` (98
 SE and ME) in `src\stor98\out\free\<target>\`: its `SOURCES` list, every
-header in `src\stor98\src\`, its interface header
-`src\stor98\include\stor98cm.h` and `src\xhci_version.h`, the version it
+header in `src\stor98\src\`, its interface headers
+`src\stor98\include\stor98cm.h` and `stor98pf.h`, and `src\xhci_version.h`, the version it
 takes since 3.1.0.0.
 
 .PARAMETER Write
@@ -72,6 +72,12 @@ stamp that can answer only half the question must not report a match. Exit 2
 is not itself a verdict: a binary built before this script existed has nothing
 to compare against, and the caller decides whether that is fatal.
 
+.PARAMETER List
+Print the stamp's file list, one path a line relative to the repository
+root, and stamp nothing. The packager reads it to tell whether a commit since
+a gated build touched a build input (package-common.ps1,
+Get-GatedHeadAdvance; roadmap-usb4 task 43.9).
+
 .EXAMPLE
 powershell -File scripts\source-stamp.ps1 -Write src\objfre\i386
 powershell -File scripts\source-stamp.ps1 -Check src\objfre\i386
@@ -82,6 +88,7 @@ Both take the directory, not the file: the stamp is written beside
 param(
     [string]$Write = "",
     [string]$Check = "",
+    [switch]$List,
     [ValidateSet("xhci98", "xhciuas", "xhcihlpr", "xhcicm", "stor98", "stor98mpd")]
     [string]$Driver = "xhci98"
 )
@@ -127,7 +134,7 @@ if ($Driver -eq "stor98" -or $Driver -eq "stor98mpd") {
     $srcDir = Join-Path $repo "src\stor98\src"
     $stampName = "stor98.srcstamp"
     $binaryName = if ($Driver -eq "stor98mpd") { "stor98.mpd" } else { "stor98.sys" }
-    $extraFiles = @("..\include\stor98cm.h", "..\..\xhci_version.h")
+    $extraFiles = @("..\include\stor98cm.h", "..\include\stor98pf.h", "..\..\xhci_version.h")
 }
 # Prefixed rather than listed like a source file, so the source comparison
 # below cannot mistake it for a file that appeared in src\.
@@ -208,6 +215,18 @@ function Get-StampText {
         $lines.Add(("{0} {1}" -f $hash, $name))
     }
     return (($lines -join "`r`n") + "`r`n")
+}
+
+if ($List) {
+    $root = [System.IO.Path]::GetFullPath($repo).TrimEnd('\') + '\'
+    foreach ($name in (Get-SourceFiles)) {
+        $full = [System.IO.Path]::GetFullPath((Join-Path $srcDir $name))
+        if (-not $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "the stamp's '$name' is outside the repository."
+        }
+        Write-Output $full.Substring($root.Length)
+    }
+    exit 0
 }
 
 if ($Write -ne "") {

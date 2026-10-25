@@ -28,11 +28,12 @@
  * after it goes to the operation's late taker (cm_call.h, "AFTER THE
  * STOP").
  *
- * WHAT RUNS HERE TODAY. Each worker's opening of its route, read back by
- * the thread once (CmCallwkService). The clients that hand operations to
- * the workers - record 28's state machine (task 42-A.15), the removal
- * transaction and the statement's slot reading (tasks 42-A.12 and 42-A.13)
- * - submit through CmCallwkSubmit and take through CmCallwkTake.
+ * WHAT RUNS HERE. Each worker's opening of its route, read back by the
+ * thread once (CmCallwkService); since task 43.18 the 9x eject
+ * transaction's calls and the statement decision's slot reading
+ * (cm_ejectos.c). Record 28's state machine (task 42-A.15) stays on the
+ * CONFIGMG worker until its redesign. Clients submit through
+ * CmCallwkSubmit and take through CmCallwkTake.
  *
  * IRQL: as cm_call.h. Windows 98 SE and ME only; on NT CmCallwkStart
  * makes nothing.
@@ -53,6 +54,7 @@ typedef struct _CM_CALLWK_M {
     ULONG Live;             /* its thread was made                        */
     ULONG OpenId;           /* the opening's operation id                 */
     ULONG OpenSeen;         /* ... read back                              */
+    ULONG Opened;           /* ... and it opened the route                */
     CM_CFGMG Cfgmg;         /* this worker's own route                    */
 } CM_CALLWK_M;
 
@@ -108,7 +110,8 @@ static VOID cmCwHandOver(PCM_CALLWK b, CM_CALLWK_M *m, ULONG outcome)
     KIRQL irql;
 
     if (m->Call.Late != NULL) {
-        m->Call.Late(m->Call.Context, m->Call.Kind, m->Call.Ran, outcome,
+        m->Call.Late(&m->Cfgmg, m->Call.Context, m->Call.Kind, m->Call.Ran,
+                     outcome,
                      outcome == CM_CALL_L_RESULT ? m->Call.Res : NULL,
                      outcome == CM_CALL_L_RESULT ? m->Call.ResBytes : 0);
     }
@@ -288,6 +291,18 @@ BOOLEAN CmCallwkBusy(PCM_CALLWK b, ULONG member)
     return (BOOLEAN)(state == CM_CALL_SUBMITTED || state == CM_CALL_RUNNING);
 }
 
+BOOLEAN CmCallwkLive(PCM_CALLWK b, ULONG member)
+{
+    return (BOOLEAN)(b != NULL && member < b->Members &&
+                     b->M[member].Live != 0);
+}
+
+BOOLEAN CmCallwkUsable(PCM_CALLWK b, ULONG member)
+{
+    return (BOOLEAN)(b != NULL && member < b->Members &&
+                     b->M[member].Live != 0 && b->M[member].Opened != 0);
+}
+
 VOID CmCallwkService(struct _CM_NHI *nhi, PCM_CALLWK b)
 {
     CM_CALLWK_M *m;
@@ -312,6 +327,8 @@ VOID CmCallwkService(struct _CM_NHI *nhi, PCM_CALLWK b)
             continue;
         }
         m->OpenSeen = 1;
+        m->Opened = (r == CM_CALL_T_TAKEN && got >= 4 && out[0] != 0) ? 1UL
+                                                                       : 0UL;
         CmLogNote(nhi, "cm.callwk.open",
                   (i << 24) | ((out[1] & 0xFFUL) << 16) |
                       (out[0] != 0 ? 0x00800000UL : 0) |

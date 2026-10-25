@@ -32,13 +32,6 @@ A clause marked "record only" is an expectation this project has not
 observed on the `2.0.0.0` driver: write down what is seen, and do not fail
 the step on it.
 
-One caution for Windows 98 SE, carried from the `1.x` releases. Do not
-update to `2.0.0.0` in place over a running `1.x` driver under NUSB: NUSB's
-stack blue-screens as it stops the `1.x` driver. Follow the upgrade route of
-`readme.txt` section 4 (rename the old file and cold-boot first). The `1.x`
-freeze on cycling a device rapidly in and out of a port was not seen under
-`2.0.0.0`.
-
 ---
 
 ## Equipment
@@ -149,7 +142,7 @@ Controller Deviations This Driver Acts On".
 
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, from `3.0.0.0` `INSTALL.BAT` (from `3.1.0.0` also `SETUP.EXE`), the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` (up to `3.0.0.0`) and `portsw\` (roadmap-hcd task 38.9), from `2.4.0.0` also `silent\` and `xhcicln\` (tasks 38.2 and 38.8), and from `3.0.0.0` also `xhciinst\` and `xhcitr\` (design records 23 and 25). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
+| 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, from `3.0.0.0` `INSTALL.BAT` (from `3.1.0.0` also `SETUP.EXE`), the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and, from `3.2.0.0`, `USBDRV\`, holding `NUSB33\` when the cut carries NUSB 3.3's storage files, `FREE\` in the `-free` download and `NONFREE\` in the `-nonfree` one (each download holds the one before, and while the free pin names no release there is no `-free` download and the `-nonfree` one has no `FREE\`; that download's `readme.txt` lists its folders), and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` (up to `3.0.0.0`) and `portsw\` (roadmap-hcd task 38.9), from `2.4.0.0` also `silent\` and `xhcicln\` (tasks 38.2 and 38.8), and from `3.0.0.0` also `xhciinst\` and `xhcitr\` (design records 23 and 25). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
 | 2.2 | From `3.1.0.0`: check that `tools\xhcitr\` is one of them and `tools\xhcisnap\` is not; up to `3.0.0.0`, that `tools\xhcisnap\` is one of them | From `3.1.0.0`: `tools\xhcitr\` holds `XHCITR.EXE` and `XHCITR64.EXE`, and no `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT` or `SNAPOFF.BAT` is anywhere in the asset (roadmap-usb4 task 42-A.4). Up to `3.0.0.0`: `tools\xhcisnap\` holds `XHCISNAP.EXE`, with `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside it from `2.4.0.0` (roadmap-hcd task 38.1), and a download without it is a cut made with `-SkipSnapTool`. It is what step 8 needs, so report a download without it rather than skipping the step |
 | 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names, and nothing else. Read the list off that file rather than from memory. For `3.0.0.0` it is `xhci98.inf`, `xhci98.sys`, `xhciuas.inf`, `xhciuas.sys`, `xhcicm.inf`, `xhcicm.sys`, `txtsetup.oem` and `nt\`, which holds `xhcicmf.inf` and a copy of `xhcicm.sys`; with `xhcihlpr.sys` in the two `-x86` directories and `xhci98-test.cer` in the two `-x64` ones; and in the download `release-x86\` and `release-x64\` also hold the bundled Stor98's files, each name starting `stor98`, as the same section says. From `3.1.0.0` the two `-x64` directories have no `nt\`: `xhcicmf.inf` is at their root beside `xhcicm.sys`, of which they hold one copy. `2.0.0.0`'s list was the first four |
 | 2.4 | Look for a version directory nested inside another | None |
@@ -170,10 +163,14 @@ as a wrong pick and point at the other one.
 A flavour directory holds the drivers and their INFs (from `3.0.0.0`
 `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`, with `xhcihlpr.sys` in the
 x86 pair) and, in the download's `release-` directories, the bundled
-Stor98, and no Microsoft file. What the install needs beyond them, `usbd.sys` and `usbui.dll`, Windows
+Stor98, and no Microsoft file (from `3.2.0.0` the Microsoft files a
+download may carry are outside the flavour directories: NUSB 3.3's in
+`USBDRV\NUSB33\`, and in the `-nonfree` download two KMDF co-installers
+in `USBDRV\NONFREE\`). What the install needs beyond them, `usbd.sys` and `usbui.dll`, Windows
 supplies from its own installation source at step 4 (`readme.txt` section 3).
 On Windows 98 SE the storage clauses also need NUSB's mass-storage component,
-which this package does not carry.
+which a download up to `3.1.0.0` does not carry (from `3.2.0.0` its storage
+files are in `USBDRV\NUSB33\` when the cut carries them).
 
 If one directory nests another copy of the version inside itself (2.4): stop,
 and report the asset rather than the driver. That is a packaging defect and it
@@ -254,11 +251,17 @@ run sheets cite them.
 The two nodes of 4.3, as Device Manager shows them:
 
 ```
-xHCI98 USB 3.x eXtensible Host Controller
+xHCI98 USB 3 Controller (Red Hat QEMU xHCI)
     xHCI98 USB 3.x Root Hub
 ```
 
-Both are the INFs' strings, and both architectures' INFs carry the same ones,
+(the controller's product as the installer names it, design record 23
+section 5.13: on another controller its own product, or the plain
+"xHCI98 USB 3 Controller" for one the table does not know, or after a hand
+install; "xHCI98 USB 3.x eXtensible Host Controller" up to `3.1.0.0`)
+
+The root hub's name and the controller's plain name are the INFs' strings,
+and the product the installer's table, the same in both architectures' packages,
 so they do not say which package was installed; what says that is which
 directory was pointed at. An external hub plugged in later appears as
 "xHCI98 USB Hub" beneath the port it is plugged into, with the devices
@@ -305,12 +308,18 @@ device at a time, and do not cycle a device rapidly.
 | 5.7 | A UAS storage device | On a USB 3.x connector: plug in; on its first arrival a New Hardware wizard asks for its driver - point it at the same `release` directory. Vista's wizard names the device by its own product string, and it becomes "xHCI98 USB Attached SCSI Storage" once installed. Windows 7 shows no wizard: it searches Windows Update and reports the device was not installed; install it from Device Manager on the device's entry (Update Driver Software, Browse my computer for driver software, the same directory). Round-trip a file, unplug, plug it back in | It installs with no restart, a drive letter appears, and the file reads back with matching contents. On Windows 98 SE without NUSB's mass-storage component it sits at Code 2; that is the missing prerequisite (`readme.txt` section 3), so record it and SKIP. If the device offers both transports, also record which driver Device Manager shows; `XhciForceBulkOnly` is `readme.txt` section 9 and is not this clause |
 | 5.8 | A SuperSpeed device | On a USB 3.x connector: plug in, round-trip a file. Keep it plugged in for step 8 | It works, with matching contents. Its SuperSpeed is read at 8.8 from the driver's snapshot, not from Device Manager, which shows `High` at most |
 
-On Windows 98 SE, the first storage device installed from NUSB's five
-mass-storage files on their own, rather than from an NUSB install, takes one
-step more: Windows binds the new disk to its generic "Disk drive" and no drive
-letter appears until that entry is updated to "USB Disk" and the device
-replugged (`readme.txt` section 3). That is a reading of the prerequisite and
-not a failure of 5.2 or 5.7; record that it was needed.
+On Windows 98 SE, NUSB's seven mass-storage files installed by hand, rather
+than from an NUSB install or the installer's storage row, need
+`USBNTMAP.INF` copied into `C:\WINDOWS\INF` before the first disk is
+plugged in: otherwise a stock Windows 98 SE's own `NTMAP.INF` takes the
+disk, and Windows stops with "Invalid VxD dynamic link call from NTMAPHLP"
+(the release notes). On a Windows 98 SE that
+still holds NUSB's other files, the first storage device installed before
+`USBNTMAP.INF` was seen takes one step more: Windows binds the new disk to its
+generic "Disk drive" and no drive letter appears until that entry is updated
+to "USB Disk" and the device replugged (`readme.txt` section 3). That is a
+reading of the prerequisite and not a failure of 5.2 or 5.7; record that it
+was needed.
 
 If a device is only noticed after pressing Refresh in Device Manager: record
 it, take step 7's idle hot-plug check now, and say in the record that it was

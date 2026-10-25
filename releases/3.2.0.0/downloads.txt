@@ -1,0 +1,7 @@
+xhci98 3.2.0.0 - the release's downloads
+Written by scripts\package\make-release.ps1 (roadmap-usb4 task 43.48) and
+read back by its -UploadSetOnly. The sets' files are never in this directory.
+
+Downloads: base free nonfree
+Free: v0.1.0 57ba8091b382fbc3d0793cf85d5e912a8bd08a7d A089EA7DDE174D533B719401B38B99950AB47F48CBF02D52E4072D807923B561
+NonFree: v1.0.0 3b558c04a462a643abec84b31e5611c866e3a72d E3EA38F94C0C30E1804FE1CA6D89F5E0EB671EE4DBFA31A71FBD151AA12845C1 D48C086301074793D6F0ED26798425EBD70345C977F11FADE9C47531956D070E

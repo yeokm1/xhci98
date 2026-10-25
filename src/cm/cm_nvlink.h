@@ -40,10 +40,10 @@
  * CmNvlinkPublish9x's. Every read of the proof is counted, as NT counts
  * its callback's queries: until stor98 has read it, no receiver exists
  * and nothing waits for one. The REMOVE_PENDING request below is
- * interface 3's removal transaction (R9, R11); the 9x link-down statement
- * is not made (THE OBLIGATIONS, 2: no reading on 98 SE and ME), and an
- * eject the install or tray tool makes goes to Windows directly, without
- * the request (record 24 section 7.1).
+ * interface 3's removal transaction (R9, R11); since task 43.18 an eject
+ * the install or tray tool makes is asked of this driver and runs it
+ * (cm_eject.h), and a 9x tunnel down enters a statement decision whose
+ * slot reading the member's call worker makes (THE OBLIGATIONS, 2).
  *
  * THE OBLIGATIONS, and where each is met:
  *  1. UP with a new link generation BEFORE the operating system can
@@ -66,9 +66,13 @@
  *     is the documented later-than-stage-2 signal), the operating system
  *     and architecture are a pair the ordering is qualified on (Windows
  *     2000 on x86, XP x64 on amd64; not XP x86 until gate G3 runs there,
- *     not Vista or 7, whose native hot plug races the connection manager,
- *     not 98 SE or ME, where nothing here reads the SHPC slot), and the
- *     channel's own reading of the slot came DOWN within 2 s. USB4
+ *     not Vista or 7, whose native hot plug races the connection manager;
+ *     98 SE and ME each admitted on its own reading, cm_eject.c
+ *     CmEjQualified9x), and the channel's own reading of the
+ *     slot came DOWN within 2 s - on 98 SE and ME asynchronously: the
+ *     decision entered, the reading made through PCI.VXD by the member's
+ *     call worker, the verdict at CmNvlinkDecided (CM_NVLINK_PENDING
+ *     meanwhile, the member's removal held). USB4
  *     profile, CmNvlinkPortDown from the CM_U4_DOWN_HOOK - the same, plus
  *     TBT_U4_LINKDOWN.PathClosed (record 22 section 7.3 step 1 read back),
  *     the port's member known by correspondence, the reading DOWN within
@@ -91,7 +95,7 @@
  *     (CmNvlinkHeld): the seam makes no removal call for it (the
  *     invalidation that reports the endpoint missing on NT,
  *     Query_Remove_SubTree and Remove_SubTree on 9x), no exposure, and on
- *     NT no release of its held D0 requests at a resume; it holds the
+ *     NT no release of its resume mark at a resume; it holds the
  *     member's work and runs it from a later pass once the gate falls,
  *     while every other member's statement, exposure and removal go on.
  *     On NT nothing waits while no receiver has ever asked for the table
@@ -105,9 +109,10 @@
  *     7.1) and by the Detect gate under the USB4 profile (record 22 section
  *     10.1); nothing here.
  *
- * 9x ORDERLY REMOVAL (MD-5). On Windows 98 SE and ME every CONFIGMG call
- * is the domain's worker's (cm_cfgwk.c), never the connection-manager
- * thread's, and the worker's removal step (cmWkRemoveChild) wraps the
+ * 9x ORDERLY REMOVAL (MD-5). A tool's eject of a unit is the transaction of
+ * cm_eject.h (task 43.18): R11 O5's branches and O6 apart, on the thread,
+ * its calls on the member's call worker. What follows is the domain's
+ * CONFIGMG worker (cm_cfgwk.c), whose removal step (cmWkRemoveChild) wraps the
  * handshake around a removal of a function still present: Query_Remove_
  * SubTree first (the file system's quiescence and the configuration
  * manager's veto: a refusal is final, nothing is forced); then, accepted,
@@ -129,8 +134,13 @@
  * isolate the endpoint before Remove_SubTree) and after O6's 30 s (keep
  * retrying, no UP on that port until the removal succeeds); neither is
  * done here (roadmap-usb4.md NV9X.2, design record 21 section 7.2). The
- * children the worker removes for a tunnel down are functions that
- * vanished, which get no request (nothing to flush); a present one does.
+ * children a tunnel down took away get no request (nothing to flush); a
+ * present one does. Since task 43.47 they are no longer the worker's
+ * where the member has a call worker: each is a vanished child's
+ * transaction of cm_eject.h, its veto retried (backed off from 2 s to
+ * 64 s, CmEjVanishRetryMs) and its member
+ * held until it is retired, and the worker's own removals claim the
+ * devnode in the same records first.
  *
  * DDK-FREE PART. The functions under "pure" below use nothing but the
  * table and their arguments; test\test_cm_nvlink.c runs them on the host
@@ -217,6 +227,9 @@
 #define CM_NVLINK_LOST              10UL /* the host interface lost (record
                                            21 section 5.5): presence lost,
                                            nothing proven of the endpoint  */
+#define CM_NVLINK_PENDING           11UL /* 98 SE and ME: the decision is
+                                           entered, the slot reading posted
+                                           (task 43.18; CmNvlinkDecided)   */
 
 /* The 9x REMOVE_PENDING request (interface 3, R9): Flags bit 3 is the
  * request, RemoveSequence the connection manager's request sequence
@@ -524,12 +537,12 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
 #define CM_HELD_REENUM      0x01UL  /* its exposure and re-enumeration     */
 #define CM_HELD_VANISH      0x02UL  /* ... removing vanished children     */
 #define CM_HELD_FRESH       0x04UL  /* ... a fresh exposure               */
-#define CM_HELD_RELEASE     0x08UL  /* NT: its held D0 requests' release  */
+#define CM_HELD_RELEASE     0x08UL  /* NT: its resume mark's release      */
 #define CM_HELD_FAIL        0x10UL  /* ... on the failure path            */
 #define CM_HELD_LOSS        0x20UL  /* NT: the loss's own call (removal)  */
 
 /* CmNvlinkHoldRun's answer, bits. */
-#define CM_HELD_DO_RELEASE  0x01UL  /* release its held D0 requests       */
+#define CM_HELD_DO_RELEASE  0x01UL  /* release its resume mark           */
 #define CM_HELD_DO_FAIL     0x02UL  /* ... on the failure path            */
 #define CM_HELD_DO_REENUM   0x04UL  /* expose and call, *vanish, *fresh    */
 #define CM_HELD_DO_OWE      0x08UL  /* not active: owed (Missed) instead  */
@@ -705,13 +718,37 @@ ULONG CmNvlinkPortDown(struct _CM_NHI *nhi, ULONG member,
  * CmNvlinkHeld steps first and answers member `bridge`'s gate: TRUE while
  * a wait of this domain is pending behind it, and then the seam makes no
  * removal call, no exposure (CmNvlinkExpose refuses one too) and no
- * release of held D0 requests for that member, and runs them from a pass
+ * release of the resume mark for that member, and runs them from a pass
  * after the gate falls; nothing of another member's waits on it.
  * CmNvlinkPending: any wait of any domain pending (the thread's cadence).
  */
 VOID CmNvlinkStep(struct _CM_NHI *nhi);
 BOOLEAN CmNvlinkHeld(struct _CM_NHI *nhi, ULONG bridge);
 BOOLEAN CmNvlinkPending(VOID);
+/* Task 43.18: member `bridge`'s acknowledgement waits alone (CmNvlinkHeld
+ * without the 9x eject's gate), for the eject's isolation branch.
+ * CmNvlinkMarkEntry: DOWN_QUIESCED on entry `index` this domain published
+ * behind `bridge`, with its acknowledgement wait when `wait`; TRUE when
+ * written. CmNvlinkDecided: a 9x statement decision's end (cm_ejectos.c) -
+ * the verdict from its reading, then the statement made or withheld as
+ * CmNvlinkIcmDown and CmNvlinkPortDown make it. On the thread. */
+BOOLEAN CmNvlinkAckHeld(struct _CM_NHI *nhi, ULONG bridge);
+BOOLEAN CmNvlinkMarkEntry(struct _CM_NHI *nhi, ULONG bridge, ULONG index,
+                          BOOLEAN wait);
+/* After a clean 9x eject with no teardown (the firmware connection
+ * manager): entry `index` this domain published behind `bridge` leaves UP
+ * for IN_USE alone - no DOWN_QUIESCED, no wait, generation unchanged - as
+ * its Stor98 instance was removed with the devnode; TRUE when written. */
+BOOLEAN CmNvlinkRetireEjected(struct _CM_NHI *nhi, ULONG bridge,
+                              ULONG index);
+/* Whether member `bridge` reads as the emulator's bridge, as the
+ * statement's condition reads it (an SHPC capability, no PCI Express
+ * capability, and QEMU's vendor id on it or the bus-0 bridge above it):
+ * one reading, configuration reads alone. */
+BOOLEAN CmNvlinkEmulatorMember(struct _CM_NHI *nhi, ULONG bridge);
+struct _CM_EJ_DECISION;
+VOID CmNvlinkDecided(struct _CM_NHI *nhi,
+                     const struct _CM_EJ_DECISION *d);
 
 /* Windows 98 SE and ME, the CONFIGMG worker's removal step (see the file
  * header). CmNvlinkWkCandidate: whether entry `index` is one domain
@@ -754,7 +791,7 @@ ULONG CmNvlinkIdleMs(ULONG configured);
  * itself (CmNvlinkExpose of the port's bridge with the port's tunnel, or
  * of every member with none when the correspondence is not known), before
  * anything - the seam's
- * re-enumeration, or the release of held D0 requests at a resume - can
+ * re-enumeration, or the release of the resume marks at a resume - can
  * expose the endpoint. CmNvlinkU4Down (CM_U4_DOWN_HOOK) maps the port to
  * its member by correspondence and calls CmNvlinkPortDown; it returns
  * TBT_U4_STMT_SENT when a DOWN_QUIESCED was written, else

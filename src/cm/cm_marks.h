@@ -51,6 +51,12 @@ typedef struct _CM_MARK {
     ULONG ChangedAt;
     ULONG TombAt;
     ULONG TombGen;          /* the generation that made it a tombstone    */
+    ULONG Unexpected;       /* its surprise removal counted (design record
+                               25 section 7.6)                             */
+    ULONG LeftPendingAt;    /* a tombstone: the departure pending when it
+                               left the snapshot, 0 for none or once
+                               confirmed (task 43.70)                      */
+    ULONG LeftPendingGen;
 } CM_MARK, *PCM_MARK;
 
 typedef struct _CM_MARKS {
@@ -61,9 +67,14 @@ typedef struct _CM_MARKS {
     ULONG Dropped;          /* tombstones evicted unseen                  */
     ULONG ReadGen;          /* the newest generation a poll has read      */
     ULONG ReadAny;          /* ReadGen holds a reading                    */
+    /* The unexpected removals (design record 25 section 7.6). */
+    ULONG Removals;         /* counted since the reset; wraps             */
+    ULONG Lost;             /* surprise removals in a loss; wraps         */
+    ULONG RmMember;         /* the last one's member BDF, or CM_Q_UNKNOWN */
 } CM_MARKS, *PCM_MARKS;
 
-/* An empty table (the domain's start and stop). */
+/* An empty table (the domain's start and stop): no removal counted,
+ * RmMember CM_Q_UNKNOWN. */
 VOID CmMarksReset(PCM_MARKS m);
 
 /* The current entry of `pdo`, or NULL. */
@@ -105,6 +116,42 @@ BOOLEAN CmMarksDropMembers(PCM_MARKS m, ULONG members, ULONG now);
 /* A saturating 16-bit count of what an attachment saw. */
 VOID CmMarksCount(PCM_MARKS m, PCM_MARK e, ULONG which, ULONG now);
 
+/*
+ * ---- The unexpected removals (design record 25 section 7.6) ----
+ */
+
+/* The entry of serial `serial`, current or a tombstone, else NULL: an
+ * attachment finds its entry by the serial it was bound with, never by
+ * its PDO's address, which a tombstone keeps after the PDO is gone. */
+PCM_MARK CmMarksFindSerial(PCM_MARKS m, ULONG serial);
+
+/* The entry an attachment bound in start `boundStarts` with `serial` to
+ * `pdo` (cmMarkAtt) is, in a domain now at start `starts`: that entry,
+ * current or a tombstone, only when the starts agree and its PDO is still
+ * `pdo` - a stop and start begins the serials again. Else NULL. */
+PCM_MARK CmMarksBound(PCM_MARKS m, ULONG starts, ULONG boundStarts,
+                      ULONG serial, PVOID pdo);
+
+/* Whether a surprise removal on member `member` is owed to a loss of the
+ * host interface: the liveness not ACTIVE, a loss being drained, or the
+ * member owed (`debt`) or held (`barred`) for a recovery's retirement,
+ * which outlives the return to ACTIVE until the removal finishes. */
+BOOLEAN CmMarksLoss(BOOLEAN active, BOOLEAN draining, ULONG barred,
+                    ULONG debt, ULONG member);
+
+/* An attachment saw IRP_MN_SURPRISE_REMOVAL on entry e's PDO: the entry's
+ * own count moves (CM_MK_SURPRISE), and when the attachment saw the device
+ * `started` and the entry was not counted before, one surprise removal is
+ * counted: in a loss of the host interface (`lost`) apart, else as an
+ * unexpected removal with its member kept as the last one's. Returns TRUE
+ * when an unexpected removal was counted. */
+BOOLEAN CmMarksSurprise(PCM_MARKS m, PCM_MARK e, BOOLEAN started,
+                        BOOLEAN lost, ULONG now);
+
+/* The removal block (cm_query.h CM_Q_RM_*, CM_Q_RM_BYTES) into out;
+ * `watched` sets CM_Q_RF_WATCHED. m NULL: counts 0, no member. */
+VOID CmMarksRemovalBlock(UCHAR *out, const CM_MARKS *m, BOOLEAN watched);
+
 /* Tombstones past CM_QM_TOMB_MS that a poll has seen are freed. */
 VOID CmMarksEvict(PCM_MARKS m, ULONG now);
 
@@ -137,7 +184,10 @@ ULONG CmMarksAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
  * The confirmation of record 21 section 7.4 (cm_query.h CM_QC_*): the
  * entry it names, or NULL with *why (CM_MK_CONF_*) when it is not one
  * the thread may act on: the epoch not this start's, no current entry of
- * that serial, its member, bus or address not the confirmation's, its
+ * that serial and no tombstone of it that left with its departure pending
+ * and is not yet confirmed (task 43.70: the eject's own departure, which
+ * native PCIe hot-plug reports before a tool's confirmation is read), its
+ * member, bus or address not the confirmation's, its
  * location unknown, not reported, no departure pending, or (with
  * `checkGen`, the USB4 profile) the generation not the departure's or not
  * portGen[member], the port's now (members past `ports` have none).

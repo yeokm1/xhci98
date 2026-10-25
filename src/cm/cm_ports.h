@@ -13,7 +13,7 @@
  *     hardware part;
  *   - the bridge filter's snapshot (section 7.4): which PDOs of a
  *     BusRelations answer were not in the previous one;
- *   - the resume hold's watchdog bound (section 6.3).
+ *   - the resume's logged bounds (section 6.3; diagnostics since task 43.24h).
  *
  * C89, DDK-free, no allocation, no lock. IRQL: any.
  */
@@ -102,6 +102,32 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
                      ULONG nowCount, PULONG isNew);
 
 /*
+ * Whether a bridge's answer starts a new population generation, the one
+ * an eject is posted against and checked at its hand-off (section 7.4,
+ * task 43.70): 1 when a function newly answers (`fresh`, CmPortsNewPdos's
+ * count) or the answer is longer than the snapshot, 0 for the same
+ * population or a departure alone. Under native PCIe hot-plug Windows'
+ * PCI driver turns the slot off as part of the eject and reports the
+ * ejected function gone only after that, after a tool's own confirmation
+ * was posted; a replacement is always a new function, so it still ends
+ * the old generation.
+ */
+ULONG CmPortsNewGeneration(ULONG fresh, ULONG oldCount, ULONG nowCount);
+
+/*
+ * The log value of an eject dropped at its hand-off (task 43.70): bits
+ * 0 to 3 the checks that refused it (CM_EJ_STALE_*), bits 8 to 15 the
+ * bridge's generation now and 16 to 23 the eject's, each truncated to
+ * its low byte.
+ */
+#define CM_EJ_STALE_OWNER    0x1UL  /* bridge gone or another domain's */
+#define CM_EJ_STALE_SERIAL   0x2UL  /* a new publication of the bridge */
+#define CM_EJ_STALE_GEN      0x4UL  /* a new population generation */
+#define CM_EJ_STALE_STACK    0x8UL  /* a function behind it has a stack */
+ULONG CmPortsStaleWhy(ULONG serialChanged, ULONG genChanged,
+                      ULONG notReady, ULONG genNow, ULONG genEject);
+
+/*
  * Whether a child filter goes on a PDO the snapshot found new (section 7.4
  * step 1, revision 2). `chain[0..chainCount-1]` is the driver object of
  * each device object already attached above the PDO, lowest first, as the
@@ -161,7 +187,8 @@ ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
                        ULONG aboveChild);
 
 /*
- * The resume hold's watchdog (section 6.3): the NHI's own resume bound
+ * The resume's bound (section 6.3), logged as a diagnostic since task
+ * 43.24h (below): the NHI's own resume bound
  * plus CM_PORTS_HOLD_EXTRA_MS. The resume is every synchronous stage of
  * the client's bring-up: the platform's readiness (CM_PORTS_HOLD_PLATFORM_MS,
  * the integrated hosts' force power and firmware-ready wait with the NVM
@@ -175,12 +202,10 @@ ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
  * retained much longer meets the power-IRP watchdog (Microsoft's bug check
  * 0x9F, DRIVER_POWER_STATE_FAILURE, about ten minutes), so the hold ends
  * at five minutes whatever the client's configured timeouts would allow.
- * A client still working at that point is treated as failed: the IRP is
- * released and the bridge invalidated (record 21 section 6.3's failure
- * path), which is the bounded, recoverable outcome; a hang of the power
- * transition is not. cm_reenum.c logs this bound and arms the watchdog
- * at CM_PORTS_HOLD_MAX_MS itself: the client's announcement-driven work
- * has no bound this arithmetic can count exactly.
+ * Since task 43.24h no power IRP is retained (record 21 section 6.3: a
+ * retained bridge D0 deadlocked the NT resume), so this bound and the cap
+ * are diagnostics: cm_reenum.c logs them at the suspend and nothing waits
+ * on either.
  */
 typedef struct _CM_PORTS_RESUME {
     ULONG ReadyMs;
@@ -200,14 +225,27 @@ typedef struct _CM_PORTS_RESUME {
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume);
 
 /*
- * The hold's watchdog, ms, for either profile: always CM_PORTS_HOLD_MAX_MS,
- * the fixed five-minute outer cap on every NT target. `clientMs` is the
- * client's own resume bound (the USB4 client's, or 0 when none is known);
- * *over is set TRUE when that bound plus CM_PORTS_HOLD_EXTRA_MS would pass
- * the cap - the cap still holds, and a client still working when it ends
- * takes the failure path (record 21 section 6.3).
+ * The five-minute cap, ms, logged for either profile: always
+ * CM_PORTS_HOLD_MAX_MS. `clientMs` is the client's own resume bound (the
+ * USB4 client's, or 0 when none is known); *over is set TRUE when that
+ * bound plus CM_PORTS_HOLD_EXTRA_MS would pass the cap. A diagnostic since
+ * task 43.24h: no power IRP waits on it (record 21 section 6.3).
  */
 ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over);
+
+/*
+ * The release of a member at the NHI's resume, stop or removal (record 21
+ * section 6.3, task 43.24h): a member still marked by this NHI has its
+ * mark cleared (CM_PORTS_REL_CLEAR) and, where re-enumeration is on, its
+ * bridge invalidated (CM_PORTS_REL_INVALIDATE), whether the resume
+ * succeeded or failed: the bridge's D0 went down at once, so the devices
+ * behind it may have resumed against an absent tunnel. A member no longer
+ * marked by it is left alone. The resume's outcome is not an input: only
+ * the log names it.
+ */
+#define CM_PORTS_REL_CLEAR          0x1UL
+#define CM_PORTS_REL_INVALIDATE     0x2UL
+ULONG CmPortsRelease(ULONG markedByThis, ULONG reenumOn);
 
 /*
  * Windows 98 and ME: a member's known children (devnode handles) kept only

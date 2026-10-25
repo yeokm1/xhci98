@@ -36,6 +36,9 @@
 #define INST_Q_S98_VALUE    11  /* a Stor98 setting (Value: its row)      */
 #define INST_Q_S98_UNUSED   12  /* 98 SE and ME: external NVMe drives
                                    disconnected? (the file update)          */
+#define INST_Q_STOR         13  /* 98 SE: the USB storage drivers?         */
+#define INST_Q_VSD          14  /* 98 SE and ME: S98VSD.VXD?               */
+#define INST_Q_OTHER        15  /* a free or non-free set: copy it, stage it? */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -244,16 +247,95 @@ const char *inst_eng_confirm_text(void);
  * device plan and the page's own writes and other changes. */
 const char *inst_eng_summary_head(int writes, int other);
 
+/* S98VSD.VXD (design record 30 section 7): the window's box (its choice;
+ * *shown where the package carries the file, *sys9x on 98 SE and ME), the
+ * choice made, and the Summary's line (NULL: none). */
+int inst_eng_vsd_state(int *shown, int *sys9x);
+void inst_eng_vsd_choose(int ticked);
+const char *inst_eng_vsd_plan(void);
+
 /* 1 when the xHCI98 USB Tree is started at login now (its Run value is
  * there). */
 int inst_eng_tray_started(void);
+
+/* The computer's choice of XHCITR's "can run faster" notice in force (task
+ * 43.27): TrayFasterNotice when it is a DWORD 0 or 1, else this system's
+ * default (inst_fast_default). 1 on, 0 off. */
+int inst_eng_fast_state(void);
 
 /* ---- Stor98, the bundled NVMe driver (record 26 sections 5.3, 5.6, 6.3) -- */
 
 /* Whether the flavour directory carries it (and its version), and whether
  * it is in the run; the Components page's box. */
 int inst_eng_s98_state(int *have, char *version, size_t cap);
+
+/* The USB storage drivers' row on Windows 98 SE (record 26 section 6.5):
+ * 1 when it is shown; *offered when the download's seven are verified,
+ * *def the box's state now (the default and the switches), note the
+ * detection's line or why it is greyed. */
+int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap);
+void inst_eng_stor_choose(int include);
+/* Record 26 section 5.3.1 (task 43.43): the Components page's warnings for
+ * the boxes as ticked (stor: the storage row), their text for dir; 0 none. */
+INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, const char *dir,
+                            char *text, size_t cap);
+/* The Summary's line for it, "" when it is not shown. */
+void inst_eng_stor_summary(char *out, size_t cap);
+
+/* The other USB drivers (record 26 section 6.7): a set's state in the
+ * download (INST_OTHER_*), its STAGE lines for this system, and the boxes;
+ * 0 before the read. Its sentence for dir and the line under its row; the
+ * choice; the page's warnings on Next ("" for none); the Summary's lines;
+ * the Finish page's paragraph. */
+/* The Other USB drivers page's line when no package is offered: on 98 SE
+ * and ME the copy-only note (inst_other_none_text). */
+const char *inst_eng_other_none_text(void);
+
+int inst_eng_other_state(int set, int *state, int *forThis, int *include,
+                         int *stage);
+void inst_eng_other_texts(int set, const char *dir, char *sentence,
+                          size_t sCap, char *line, size_t lCap);
+void inst_eng_other_choose(int set, int include, int stage);
+/* Record 26 section 6.7.11: the i-th package of a set (0 past the last),
+ * its box ticked (0 when it cannot be: not eligible, barred, or the set
+ * not copied), and the set's earlier staging in words ("" for none). */
+typedef struct _INST_OTHPKG_VIEW {
+    char Id[INST_PKG_ID_CHARS];
+    char Desc[INST_PKG_DESC_MAX + 1];
+    char Why[200];
+    int Heading;
+    int Eligible;
+    int Infs;
+    int Tick;
+    int Blocked;
+    int Earlier;
+} INST_OTHPKG_VIEW;
+int inst_eng_other_pkg(int set, int i, INST_OTHPKG_VIEW *v);
+int inst_eng_other_pkg_tick(int set, int i, int tick);
+const char *inst_eng_other_earlier(int set);
+/* The package's scope on this system in words, for its details. */
+void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
+                              size_t cap);
+/* The free set's certificate (section 6.7.11): ticked, and *offered the
+ * box shown; and its choice. */
+int inst_eng_other_trust(int *offered);
+int inst_eng_other_trust_possible(void);
+void inst_eng_other_trust_choose(int on);
+void inst_eng_other_warnings(char *text, size_t cap);
+void inst_eng_other_summary(const char *dir, char *text, size_t cap);
+void inst_eng_other_finish(char *text, size_t cap);
 void inst_eng_s98_choose(int include);
+/* Stor98's box while the Thunderbolt box is ticked, on this system (record
+ * 26 section 5.0, draft 35: inst_s98_box_default). */
+int inst_eng_s98_default(void);
+/* The store trap found (record 23 section 5.7): the Components page's
+ * "Replace the stored build" box shown; its choice is /restage's. */
+int inst_eng_restage_state(void);
+void inst_eng_restage_choose(int on);
+
+/* 1 on Windows 8.1 (inst_s98_switch_os, task 43.59): Stor98 is ticked there
+ * as on 98 SE to 7, for the tunnelled drives (owner, 2026-10-23). */
+int inst_eng_os_is81(void);
 
 /* One of its settings (section 5.6): its name on this system, on the page
  * (Asked) or behind Advanced, what is set now (State 1 set, 0 not, -1

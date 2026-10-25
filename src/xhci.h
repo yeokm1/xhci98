@@ -901,9 +901,9 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
  * The pooled non-EP0 transfer rings (batch 7a-A; design doc 04 section 3.6).
  *
  * Sized to equal XHCI_MAX_SLOTS. That sizing does **not** by itself guarantee
- * every slot an endpoint - eight devices at the per-device cap hold all 32, and
- * guaranteeing the arbitrary worst case would take 125 rings. What protection
- * exists comes from the admission rule in XhciPoolAcquire, and it is narrower
+ * every slot an endpoint - two devices at the per-device cap hold all 32, and
+ * guaranteeing the arbitrary worst case would take 31 x 16 + 1 rings. What
+ * protection exists comes from the admission rule in XhciPoolAcquire, and it is narrower
  * than "every slot gets one": a later endpoint never displaces a device that is
  * already live, but a device created after the pool fills may still be refused
  * its first. Design doc 04 section 3.6 has the arithmetic showing the stronger
@@ -913,9 +913,19 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
  * buffer; this is a declared policy limit with a refusal above it, exactly like
  * the two above. The per-device cap bounds how fast one device can drain the
  * pool - it is a fairness bound, not the guarantee's mechanism.
+ *
+ * XHCI_POOL_DEVICE_RINGS is that cap (task 43.67). It was 4, the miniport's
+ * figure, until a wired Xbox 360 pad's configuration (4 interfaces, 7
+ * endpoints) was refused USBD_STATUS_NO_MEMORY at its fifth pipe; 16 takes
+ * the 360 wireless receiver's whole configuration (8 interfaces of 2) and is
+ * half the pool, so the first-ring rule still protects every other device.
+ * XHCI_MAX_DEVICE_ENDPOINTS stays the size of the miniport-era
+ * XHCI_DEVICE.Endpoints[] record array, which the HCD never fills; it is
+ * not the pool's cap, and changing it would move the extension's layout.
  */
 #define XHCI_MAX_POOL_RINGS         32UL
 #define XHCI_MAX_DEVICE_ENDPOINTS   4UL
+#define XHCI_POOL_DEVICE_RINGS      16UL
 
 /* Ring sizes (Phase 4 roadmap: 64 command TRBs, one 256-TRB event segment) */
 #define XHCI_CMD_RING_TRBS          64UL
@@ -1079,7 +1089,11 @@ XHCI_C_ASSERT(pool_is_at_least_the_slot_count,
               XHCI_MAX_POOL_RINGS >= XHCI_MAX_SLOTS);
 /* The per-device cap must not be able to exhaust the pool on its own. */
 XHCI_C_ASSERT(device_endpoint_cap_is_below_the_pool,
-              XHCI_MAX_DEVICE_ENDPOINTS < XHCI_MAX_POOL_RINGS);
+              XHCI_POOL_DEVICE_RINGS < XHCI_MAX_POOL_RINGS);
+/* A switch holds the old rings beside the new (design record 20 section
+ * 5.2), so one device at the cap mid-switch still fits the pool. */
+XHCI_C_ASSERT(device_switch_fits_the_pool,
+              2UL * XHCI_POOL_DEVICE_RINGS <= XHCI_MAX_POOL_RINGS);
 /* Ring segments are capped at 64 KB by spec Table 6-1. */
 XHCI_C_ASSERT(cmd_ring_segment_within_64k, XHCI_CMD_RING_BYTES <= 65536UL);
 XHCI_C_ASSERT(event_ring_segment_within_64k, XHCI_EVENT_RING_BYTES <= 65536UL);
@@ -1123,7 +1137,7 @@ typedef struct _XHCI_HC_LAYOUT {
     ULONG Ep0RingTrbs;
 
     /* The pooled non-EP0 rings are indexed by pool slot, not by Slot ID: a
-     * device holds between zero and XHCI_MAX_DEVICE_ENDPOINTS of them and they
+     * device holds between zero and XHCI_POOL_DEVICE_RINGS of them and they
      * are not contiguous per device. PoolRingCount is XHCI_MAX_POOL_RINGS and is
      * carried in the layout so the carve-time checks and the tests read the same
      * number the accessor bounds against. */
@@ -3396,7 +3410,9 @@ ULONG XhciRingSetDequeue(PXHCI_RING ring, ULONG dequeuePA);
  * nothing about Endpoint Contexts.
  *
  * Refuses the Link TRB and any index that is not outstanding, because both would
- * corrupt the ring rather than edit it.
+ * corrupt the ring rather than edit it. Rewriting the slot before the Link TRB
+ * also clears the Link's Chain flag, which a TD crossing the wrap had set, so
+ * the Link never chains into a No Op (4.11.7; task 43.64).
  */
 ULONG XhciRingNoOpAt(PXHCI_RING ring, ULONG index);
 
@@ -3987,9 +4003,17 @@ typedef struct _XHCI_TRANSFER {
  * uses for the slot and scratchpad counts, and the lever if a real USB Audio
  * device asks for more is `XHCI_POOL_RING_TRBS` rather than anything here.
  * `XHCI_EXTENSION.IsoRefusalsTooLarge` is what says whether one ever does.
+ *
+ * Design record 13 section 11.8 (task 43.39) adds the other lever: a pipe on a
+ * ring page of its own, whose ring is at most one page of TRBs and whose
+ * request is at most XHCI_XFER_MAX_ISO_PAGE_PACKETS packets. The pool
+ * ring's two values stay as they are, and so does the extension's scratch.
  */
 #define XHCI_XFER_MAX_ISO_TRBS      (XHCI_POOL_RING_TRBS - 2UL)
 #define XHCI_XFER_MAX_ISO_PACKETS   XHCI_XFER_MAX_ISO_TRBS
+#define XHCI_ISO_PAGE_MAX_RING_TRBS 256UL
+#define XHCI_XFER_MAX_ISO_PAGE_TRBS (XHCI_ISO_PAGE_MAX_RING_TRBS - 2UL)
+#define XHCI_XFER_MAX_ISO_PAGE_PACKETS 128UL
 
 /*
  * Where a built isochronous group landed. `TdLengths` is one entry per packet,
@@ -5300,8 +5324,9 @@ typedef struct _XHCI_DEVICE {
 
     /*
      * Non-default endpoints (batch 7a-A.1). Fixed-size because
-     * XHCI_MAX_DEVICE_ENDPOINTS is the declared per-device cap - a device asking
-     * for more is refused at OpenEndpoint, so there is nothing to grow into.
+     * XHCI_MAX_DEVICE_ENDPOINTS was the miniport's per-device cap - a device
+     * asking for more was refused at OpenEndpoint. The HCD keeps its pipes
+     * elsewhere and never fills these; its pool cap is XHCI_POOL_DEVICE_RINGS.
      *
      * `Dci` is 0 for a free slot rather than a separate flag: DCI 0 is the Slot
      * Context and is never an endpoint, so it cannot collide with a real value
@@ -7901,7 +7926,7 @@ typedef struct _XHCI_EXTENSION {
      * dropped, because a REMOVE cannot be told from a reopen.
      *
      * **It counts calls, not resources currently held**, and the two are not the
-     * same: what is held at any moment is bounded by `XHCI_MAX_DEVICE_ENDPOINTS`
+     * same: what is held at any moment is bounded by `XHCI_POOL_DEVICE_RINGS`
      * per device and released wholesale at teardown, so this cannot describe an
      * unbounded leak however high it climbs. What it is for is the *shape* -
      * a device repeatedly selecting alternate settings with fewer endpoints
@@ -8072,6 +8097,12 @@ typedef struct _XHCI_EXTENSION {
      * makes that sound**: the build, the publish and the record all happen
      * inside one hold of it, so no second submission can be between them.
      * Nothing outside that hold may read either field.
+     *
+     * Since design record 13 section 11.8 (task 43.39) the HCD builds into the
+     * controller's larger IsoTrbs and IsoTdLengths (hcd.h) under the same
+     * lock, and IsoScratch is no longer written; it stays, as does
+     * IsoLayout's array, because the extension's size and offsets travel in
+     * the snapshot (hcd_door.c). IsoLayout's counts are still this one's.
      */
     XHCI_TRB IsoScratch[XHCI_XFER_MAX_ISO_TRBS];
     XHCI_ISO_LAYOUT IsoLayout;

@@ -306,7 +306,9 @@ already carries declared-policy limits with an explicit refusal above them
 - 32 rings, 1024-byte stride, 32,768 bytes: one new region, sized to equal the
   EP0 region.
 - A per-device cap of 4 open non-default endpoints, which bounds how fast one
-  device can consume the pool.
+  device can consume the pool. (The HCD's cap is 16 since task 43.67,
+  `XHCI_POOL_DEVICE_RINGS`: 4 refused a wired Xbox 360 pad's 7 endpoints.
+  The arithmetic below is the miniport's, at 4.)
 - Exhaustion refuses (`MP_STATUS_NO_RESOURCES` from `OpenEndpoint`) and is
   counted. usbport turns that into a pipe-open failure that usbhub degrades on,
   which is the same contract the slot limit already relies on.
@@ -421,6 +423,13 @@ How deep usbport queues an interrupt endpoint is not derived anywhere, so 62
 is chosen as "the same as EP0, which has been sufficient" and not as a bound
 anything has established. If a ring-full refusal ever shows up in the 7a-V
 counters, that is the number to revisit and the derivation to do.
+
+For an isochronous pipe the pool ring is no longer the only home (design
+record 13 section 11.8, 2026-10-20): one serviced more than once a frame
+may be granted a ring in a common-buffer page of its own, outside this
+block, sized by the event ring's budget. The pool, its stride and this
+layout are unchanged, and such a pipe still takes its pool entry, unused,
+so the pool keeps bounding the endpoint contexts.
 
 `MiniPortResourcesSize` therefore becomes 409,600 bytes (400 KiB), up from
 376,832: a 2.25x multiple of the shipping EHCI miniport's 182,272 rather than

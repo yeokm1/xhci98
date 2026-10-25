@@ -2927,6 +2927,138 @@ ULONG XhciXferDeferralsArmed(const XHCI_TRANSFER_QUEUE *queue)
     return armed;
 }
 
+/* Positions forward from the ring's software dequeue, the Link TRB not
+ * counted: the order the controller executes the outstanding TRBs in. */
+static ULONG xhciXferFromDequeue(const XHCI_RING *ring, ULONG index)
+{
+    ULONG slots;
+
+    slots = ring->Trbs - 1;
+    return (index + slots - ring->Dequeue) % slots;
+}
+
+/*
+ * Task 43.69. The controller's saved dequeue against the queue. A reading
+ * that does not fit what 4.6.9 describes is UNREAD, and the caller keeps the
+ * head rule it had before. QEMU saves its fetch pointer, past every TD it
+ * fetched: a reading past a fetched TD that is not held is UNREAD, and one
+ * with only held TDs before it settles them, which QEMU has finished.
+ */
+ULONG XhciXferStopPlace(const XHCI_TRANSFER_QUEUE *queue,
+                        const XHCI_RING *ring,
+                        ULONG deqLow,
+                        ULONG deqHigh,
+                        PXHCI_XFER_STOP_PLACE place)
+{
+    const XHCI_TRANSFER *walk;
+    ULONG index;
+    ULONG dcs;
+    ULONG want;
+    ULONG at;
+    ULONG passed;
+
+    if (place == NULL) {
+        return XHCI_XFER_BAD_PARAM;
+    }
+    place->Verdict = XHCI_XFER_STOP_UNREAD;
+    place->Passed = 0;
+    place->Stopped = NULL;
+    if (queue == NULL || ring == NULL || ring->Base == NULL ||
+        ring->Trbs < 2) {
+        return XHCI_XFER_BAD_PARAM;
+    }
+    if (deqHigh != 0 ||
+        XhciRingIndexFromPA(ring, deqLow & XHCI_EP_DEQUEUE_MASK, &index) !=
+            XHCI_RING_OK) {
+        return XHCI_XFER_OK;
+    }
+    dcs = deqLow & XHCI_TRB_CYCLE;
+    if (index == ring->Trbs - 1) {
+        /* On the Link TRB: execution follows it to the base, toggling the
+         * cycle where the Link says to (xHCI 4.11.5.1). */
+        if ((ring->Base[index].Control & XHCI_TRB_CYCLE) != dcs) {
+            return XHCI_XFER_OK;
+        }
+        if ((ring->Base[index].Control & XHCI_TRB_LINK_TC) != 0) {
+            dcs ^= XHCI_TRB_CYCLE;
+        }
+        index = 0;
+    }
+    if (index == ring->Enqueue) {
+        want = ring->Cycle & XHCI_TRB_CYCLE;
+        at = xhciXferFromDequeue(ring, index);
+    } else if (XhciRingIsOutstanding(ring, index)) {
+        want = ring->Base[index].Control & XHCI_TRB_CYCLE;
+        at = xhciXferFromDequeue(ring, index);
+    } else {
+        return XHCI_XFER_OK;
+    }
+    if (dcs != want) {
+        return XHCI_XFER_OK;
+    }
+
+    passed = 0;
+    for (walk = queue->Head; walk != NULL; walk = walk->Next) {
+        if (xhciXferRangeContains(ring, walk->FirstIndex, walk->TrbCount,
+                                  index, NULL)) {
+            place->Verdict = XHCI_XFER_STOP_IN_TD;
+            place->Passed = passed;
+            place->Stopped = walk;
+            return XHCI_XFER_OK;
+        }
+        if (index != ring->Enqueue &&
+            xhciXferFromDequeue(ring, walk->FirstIndex) > at) {
+            break;              /* the first TD past the position */
+        }
+        if ((walk->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) == 0) {
+            return XHCI_XFER_OK;    /* its event would have come: UNREAD */
+        }
+        passed++;
+    }
+    place->Verdict = XHCI_XFER_STOP_BETWEEN;
+    place->Passed = passed;
+    return XHCI_XFER_OK;
+}
+
+ULONG XhciXferCancelPlace(const XHCI_TRANSFER_QUEUE *queue,
+                          const XHCI_RING *ring,
+                          PXHCI_TRANSFER const *cancelled,
+                          ULONG count,
+                          ULONG error)
+{
+    const XHCI_TRANSFER *walk;
+    const XHCI_TRANSFER *survivor;
+    ULONG move;
+    ULONG taken;
+    ULONG i;
+
+    if (queue == NULL || ring == NULL || (cancelled == NULL && count != 0)) {
+        return XHCI_XFER_NO_INDEX;
+    }
+    move = error;
+    survivor = NULL;
+    for (walk = queue->Head; walk != NULL; walk = walk->Next) {
+        taken = 0;
+        for (i = 0; i < count; i++) {
+            if (cancelled[i] == walk) {
+                taken = 1;
+                break;
+            }
+        }
+        if (taken) {
+            if (walk == queue->Head) {
+                move = 1;
+            }
+        } else if (survivor == NULL) {
+            survivor = walk;
+        }
+    }
+    if (!move) {
+        return XHCI_XFER_NO_INDEX;
+    }
+    return (survivor != NULL) ? survivor->FirstIndex : ring->Enqueue;
+}
+
 /* ------------------------------------------------------------------ */
 /* 9-A.1: isochronous transfers                                        */
 /*                                                                     */
@@ -3247,11 +3379,73 @@ static ULONG xhciXferIsoBurstFields(ULONG packetLength,
     return (*tbc <= XHCI_TRB_TBC_MAX && *tlbpc <= XHCI_TRB_TLBPC_MAX) ? 1 : 0;
 }
 
+/*
+ * The request's packet bound and where its TD lengths go (design record 13
+ * section 11.8, point 6): MaxPackets 0 is the pool ring's bound, and a bound
+ * above it needs an array of the caller's, since the layout's holds only
+ * XHCI_XFER_MAX_ISO_PACKETS. 0 for a combination nothing may build.
+ */
+static ULONG xhciXferIsoBound(const XHCI_ISO_REQUEST *request,
+                              PXHCI_ISO_LAYOUT layout,
+                              PULONG *lengths)
+{
+    ULONG bound;
+
+    bound = (request->MaxPackets == 0) ? XHCI_XFER_MAX_ISO_PACKETS
+                                       : request->MaxPackets;
+    if (bound > XHCI_XFER_MAX_ISO_PAGE_PACKETS) {
+        return 0;
+    }
+    if (request->TdLengths != NULL) {
+        if (lengths != NULL) {
+            *lengths = request->TdLengths;
+        }
+        return bound;
+    }
+    if (bound > XHCI_XFER_MAX_ISO_PACKETS) {
+        return 0;
+    }
+    if (lengths != NULL) {
+        *lengths = (layout != NULL) ? layout->TdLengths : NULL;
+    }
+    return bound;
+}
+
+/*
+ * Whether packet `i` of `packets` carries BEI (point 7): every TD but every
+ * `interval`-th and the request's last, so an unblocked interrupt comes at
+ * least every `interval` TDs and always at the request's end. 0 never.
+ */
+ULONG XhciXferIsoBlockBytes(ULONG packets)
+{
+    if (packets == 0 || packets > XHCI_XFER_MAX_ISO_PAGE_PACKETS) {
+        return 0;
+    }
+    return ((ULONG)XHCI_OFFSET_OF(USBPORT_ISO_TRANSFER, Packet) +
+            packets * (ULONG)sizeof(USBPORT_ISO_PACKET) + 7UL) &
+           ~7UL;
+}
+
+PUSBPORT_ISO_TRANSFER XhciXferIsoBlockAt(PVOID base, ULONG index,
+                                         ULONG stride)
+{
+    return (PUSBPORT_ISO_TRANSFER)((PUCHAR)base + index * stride);
+}
+
+ULONG XhciXferIsoBei(ULONG i, ULONG packets, ULONG interval)
+{
+    if (interval == 0 || i + 1 >= packets) {
+        return 0;
+    }
+    return ((i + 1) % interval) != 0 ? 1UL : 0UL;
+}
+
 /* One packet as one Isoch TD. `tdLength` receives the TRB count. */
 static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
                                     const USBPORT_ISO_PACKET *packet,
                                     const XHCI_ISO_REQUEST *request,
                                     ULONG useFrameId,
+                                    ULONG bei,
                                     ULONG *tdLength)
 {
     XHCI_TRB *last;
@@ -3377,12 +3571,16 @@ static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
      * value by the restore) is what absorbs that.
      *
      * BEI suppresses the interrupt while keeping the event, which is exactly
-     * what this wants and is **not available**: `docs/usb-xhci-info/xhci-programming.md`
-     * records Linux setting `XHCI_AVOID_BEI` on every Intel controller, and
-     * every machine in this project's fleet is Intel. It is the one optimisation
-     * here that could silently stop a stream.
+     * what this wants (design record 13 section 11.8, point 7): every TD but
+     * every BeiInterval-th and the request's last carries it, Linux's rule
+     * with `XHCI_AVOID_BEI` (`xhci-ring.c`, `trb_block_event_intr`), so the
+     * event of every packet is still written and the interrupts that drain
+     * them come at least every BeiInterval TDs and at the request's end.
      */
     last->Control |= XHCI_TRB_IOC;
+    if (bei) {
+        last->Control |= XHCI_TRB_BEI;
+    }
 
     *tdLength = state->TdTrbs;
     return XHCI_XFER_OK;
@@ -3460,7 +3658,7 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
     iso = request->Iso;
     if (iso->Signature != USBPORT_ISO_SIGNATURE ||
         iso->NumberOfPackets == 0 ||
-        iso->NumberOfPackets > XHCI_XFER_MAX_ISO_PACKETS) {
+        iso->NumberOfPackets > xhciXferIsoBound(request, NULL, NULL)) {
         return 0;
     }
     /* 36.57: the first TD alone names a frame; the rest are SIA. An ESIT
@@ -3574,12 +3772,19 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
 {
     XHCI_ISO_BUILD_STATE state;
     const USBPORT_ISO_TRANSFER *iso;
+    PULONG lengths;
     ULONG packets;
+    ULONG bound;
     ULONG useFrameId;
     ULONG status;
     ULONG i;
 
     if (request == NULL || out == NULL || layout == NULL || capacity == 0) {
+        return XHCI_XFER_BAD_PARAM;
+    }
+    lengths = NULL;
+    bound = xhciXferIsoBound(request, layout, &lengths);
+    if (bound == 0 || lengths == NULL) {
         return XHCI_XFER_BAD_PARAM;
     }
     layout->TrbCount = 0;
@@ -3620,7 +3825,7 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
      * capacity check inside the emitter cannot stand in for it - by the time
      * that fires, packets have already been read.
      */
-    if (packets > XHCI_XFER_MAX_ISO_PACKETS) {
+    if (packets > bound) {
         return XHCI_XFER_ISO_TOO_LARGE;
     }
     /*
@@ -3686,7 +3891,8 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
             &state, &iso->Packet[i], request,
             (useFrameId && (!request->Frames.FirstOnly || i == 0)) ? 1UL
                                                                     : 0UL,
-            &layout->TdLengths[i]);
+            XhciXferIsoBei(i, packets, request->BeiInterval),
+            &lengths[i]);
         if (status != XHCI_XFER_OK) {
             /*
              * **Running out of scratch is a size refusal, not a malformed
@@ -3722,6 +3928,7 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
                         PXHCI_ISO_LAYOUT layout)
 {
     XHCI_TD_GROUP_PLACEMENT placement;
+    PULONG lengths;
     ULONG requested;
     ULONG status;
     ULONG i;
@@ -3736,6 +3943,8 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
     if (status != XHCI_XFER_OK) {
         return status;
     }
+    lengths = NULL;
+    (VOID)xhciXferIsoBound(request, layout, &lengths);
     /*
      * A request that cannot fit an **empty** ring can never be placed, so it is
      * separated from ring-full here rather than answered with a retry usbport
@@ -3749,8 +3958,7 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
     }
 
     status = XhciRingEnqueueTdGroup(ring, scratch, layout->TrbCount,
-                                    layout->TdLengths, layout->TdCount,
-                                    &placement);
+                                    lengths, layout->TdCount, &placement);
     if (status == XHCI_RING_FULL) {
         return XHCI_XFER_BUSY;
     }

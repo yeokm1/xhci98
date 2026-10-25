@@ -43,6 +43,7 @@ static VOID cmMkBump(PCM_MARKS m)
 VOID CmMarksReset(PCM_MARKS m)
 {
     cmMkZero(m, sizeof(*m));
+    m->RmMember = CM_Q_UNKNOWN;
 }
 
 PCM_MARK CmMarksFind(PCM_MARKS m, PVOID pdo)
@@ -128,6 +129,12 @@ static VOID cmMkBury(PCM_MARKS m, PCM_MARK e, ULONG now)
         }
     }
     e->Tomb = 1;
+    /* Task 43.70: a function that leaves with its departure pending is
+     * the eject's own departure under native PCIe hot-plug, where Windows
+     * turns the slot off before a tool's confirmation is read; that
+     * confirmation may still name it (CmMarksConfirm). */
+    e->LeftPendingAt = e->PendingAt;
+    e->LeftPendingGen = e->PendingGen;
     e->PendingAt = 0;
     e->PendingGen = 0;
     e->TombAt = now;
@@ -176,6 +183,17 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
     for (k = 0; k < count; k++) {
         if (snap[k] == NULL || CmMarksFind(m, snap[k]) != NULL) {
             continue;
+        }
+        /* A function newly answering behind this member, entry or not:
+         * no departure kept by a tombstone of the member stays
+         * confirmable (task 43.70), so a late confirmation never ejects
+         * a replacement that arrived before it. */
+        for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+            if (m->E[i].Pdo != NULL && m->E[i].Tomb &&
+                m->E[i].Member == member) {
+                m->E[i].LeftPendingAt = 0;
+                m->E[i].LeftPendingGen = 0;
+            }
         }
         if (member >= CM_QM_MAX_MEMBERS ||
             cmMkCount(m, FALSE, member) >= CM_QM_MAX_CURRENT) {
@@ -263,6 +281,75 @@ VOID CmMarksCount(PCM_MARKS m, PCM_MARK e, ULONG which, ULONG now)
         e->Count[which]++;
     }
     CmMarksTouch(m, e, now);
+}
+
+PCM_MARK CmMarksFindSerial(PCM_MARKS m, ULONG serial)
+{
+    ULONG i;
+
+    if (serial == 0) {
+        return NULL;
+    }
+    for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+        if (m->E[i].Pdo != NULL && m->E[i].Serial == serial) {
+            return &m->E[i];
+        }
+    }
+    return NULL;
+}
+
+PCM_MARK CmMarksBound(PCM_MARKS m, ULONG starts, ULONG boundStarts,
+                      ULONG serial, PVOID pdo)
+{
+    PCM_MARK e;
+
+    if (starts != boundStarts) {
+        return NULL;
+    }
+    e = CmMarksFindSerial(m, serial);
+    if (e == NULL || pdo == NULL || e->Pdo != pdo) {
+        return NULL;
+    }
+    return e;
+}
+
+BOOLEAN CmMarksLoss(BOOLEAN active, BOOLEAN draining, ULONG barred,
+                    ULONG debt, ULONG member)
+{
+    if (!active || draining) {
+        return TRUE;
+    }
+    return (BOOLEAN)(member < 32 && ((barred | debt) & (1UL << member)) != 0);
+}
+
+BOOLEAN CmMarksSurprise(PCM_MARKS m, PCM_MARK e, BOOLEAN started,
+                        BOOLEAN lost, ULONG now)
+{
+    CmMarksCount(m, e, CM_MK_SURPRISE, now);
+    if (!started || e->Unexpected) {
+        return FALSE;
+    }
+    e->Unexpected = 1;
+    if (lost) {
+        m->Lost++;
+        return FALSE;
+    }
+    m->Removals++;
+    m->RmMember = e->MemberBdf;
+    return TRUE;
+}
+
+VOID CmMarksRemovalBlock(UCHAR *out, const CM_MARKS *m, BOOLEAN watched)
+{
+    cmMkZero(out, CM_Q_RM_BYTES);
+    cmMkPut32(out, CM_Q_RM_FLAGS, watched ? CM_Q_RF_WATCHED : 0);
+    if (m == NULL) {
+        cmMkPut32(out, CM_Q_RM_MEMBER, CM_Q_UNKNOWN);
+        return;
+    }
+    cmMkPut32(out, CM_Q_RM_COUNT, m->Removals);
+    cmMkPut32(out, CM_Q_RM_MEMBER, m->RmMember);
+    cmMkPut32(out, CM_Q_RM_LOST, m->Lost);
 }
 
 VOID CmMarksEvict(PCM_MARKS m, ULONG now)
@@ -395,6 +482,8 @@ PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
 {
     ULONG serial;
     ULONG i;
+    ULONG pendingAt;
+    ULONG pendingGen;
     PCM_MARK e;
 
     *why = CM_MK_CONF_SHORT;
@@ -414,6 +503,15 @@ PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
             e = &m->E[i];
         }
     }
+    /* Task 43.70: else a tombstone that left with its departure pending
+     * (cmMkBury), not yet confirmed - the eject's own departure reported
+     * before its confirmation was read. */
+    for (i = 0; i < CM_QM_MAX_ENTRIES && serial != 0 && e == NULL; i++) {
+        if (m->E[i].Pdo != NULL && m->E[i].Tomb &&
+            m->E[i].Serial == serial && m->E[i].LeftPendingAt != 0) {
+            e = &m->E[i];
+        }
+    }
     if (e == NULL) {
         *why = CM_MK_CONF_SERIAL;
         return NULL;
@@ -425,13 +523,15 @@ PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
         *why = CM_MK_CONF_IDENTITY;
         return NULL;
     }
-    if (e->PendingAt == 0) {
+    pendingAt = e->Tomb ? e->LeftPendingAt : e->PendingAt;
+    pendingGen = e->Tomb ? e->LeftPendingGen : e->PendingGen;
+    if (pendingAt == 0) {
         *why = CM_MK_CONF_NOT_PENDING;
         return NULL;
     }
     if (checkGen &&
-        (cmMkGet32(v, CM_QC_O_GEN) != e->PendingGen || e->Member >= ports ||
-         portGen[e->Member] != e->PendingGen)) {
+        (cmMkGet32(v, CM_QC_O_GEN) != pendingGen || e->Member >= ports ||
+         portGen[e->Member] != pendingGen)) {
         *why = CM_MK_CONF_GEN;
         return NULL;
     }

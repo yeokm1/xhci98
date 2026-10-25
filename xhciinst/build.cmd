@@ -24,9 +24,11 @@ rem USER32, GDI32, COMCTL32, COMDLG32 and SHELL32, SETUP.EXE KERNEL32,
 rem USER32 and SHELL32 (selftest.cmd holds them to it); every SetupAPI, newdev and configuration-manager routine is
 rem looked up at run time. Each embeds its manifest through its .rc.
 rem
-rem The sources: xhciinst.c (the console front end), xhciwiz.c (the window),
-rem inst_eng.c (the engine both drive), inst_core.c (the pure half the host
-rem suite test\test_inst.c also links) and ..\src\xhci_psw.c, the driver's
+rem The sources: xhciinst.c (the console front end), xhciwiz.c (the window)
+rem with wiz_lay.c (its settings pages' layout arithmetic, which the host
+rem suite test\test_wizlay.c also links), inst_eng.c (the engine both
+rem drive), inst_core.c (the pure half the host suite test\test_inst.c
+rem also links) and ..\src\xhci_psw.c, the driver's
 rem own port-switchover gate, compiled as the host suites compile it
 rem (XHCI_HOST_TEST), so the list of Intel controllers exists once. The 98
 rem SE and ME helper XHCIDI.EXE (record 27) has its own build in di\.
@@ -69,20 +71,20 @@ rc /fo xhciinst.res xhciinst.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /DXHCI_HOST_TEST /c /Foinst_psw.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCIINST.EXE xhciinst.c inst_eng.c inst_core.c inst_psw.obj xhciinst.res advapi32.lib /link /SUBSYSTEM:CONSOLE
+cl /nologo /W3 /WX /O2 /FeXHCIINST.EXE xhciinst.c inst_eng.c inst_core.c inst_ej9x.c inst_psw.obj xhciinst.res advapi32.lib /link /SUBSYSTEM:CONSOLE
 if errorlevel 1 exit /b 1
 if not exist XHCIINST.EXE exit /b 1
-del /q xhciinst.obj inst_eng.obj inst_core.obj inst_psw.obj xhciinst.res 2>nul
+del /q xhciinst.obj inst_eng.obj inst_core.obj inst_ej9x.obj inst_psw.obj xhciinst.res 2>nul
 echo Built XHCIINST.EXE
 rc /fo xhciwiz.res xhciwiz.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Foinst_psw.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCIWIZ.EXE xhciwiz.c inst_eng.c inst_core.c inst_psw.obj xhciwiz.res %WLIBS% /link /SUBSYSTEM:WINDOWS,4.0
+cl /nologo /W3 /WX /O2 /MT /FeXHCIWIZ.EXE xhciwiz.c wiz_lay.c inst_eng.c inst_core.c inst_ej9x.c inst_psw.obj xhciwiz.res %WLIBS% /link /SUBSYSTEM:WINDOWS,4.0
 if errorlevel 1 exit /b 1
 if not exist XHCIWIZ.EXE exit /b 1
 endlocal
-del /q xhciwiz.obj inst_eng.obj inst_core.obj inst_psw.obj xhciwiz.res 2>nul
+del /q xhciwiz.obj wiz_lay.obj inst_eng.obj inst_core.obj inst_ej9x.obj inst_psw.obj xhciwiz.res 2>nul
 echo Built XHCIWIZ.EXE
 setlocal
 set "PATH=%MSVC6%\VC98\Bin;%MSVC6%\Common\MSDev98\Bin;%PATH%"
@@ -108,18 +110,18 @@ rc /i "%WDK71%\inc\api" /fo xhciin64.res xhciinst.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Foinst_psw64.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCIIN64.EXE xhciinst.c inst_eng.c inst_core.c inst_psw64.obj xhciin64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCIIN64.EXE xhciinst.c inst_eng.c inst_core.c inst_ej9x.c inst_psw64.obj xhciin64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCIIN64.EXE exit /b 1
-del /q xhciinst.obj inst_eng.obj inst_core.obj xhciin64.res 2>nul
+del /q xhciinst.obj inst_eng.obj inst_core.obj inst_ej9x.obj xhciin64.res 2>nul
 echo Built XHCIIN64.EXE
 rc /i "%WDK71%\inc\api" /fo xhciwz64.res xhciwiz.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCIWZ64.EXE xhciwiz.c inst_eng.c inst_core.c inst_psw64.obj xhciwz64.res %WLIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCIWZ64.EXE xhciwiz.c wiz_lay.c inst_eng.c inst_core.c inst_ej9x.c inst_psw64.obj xhciwz64.res %WLIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCIWZ64.EXE exit /b 1
 endlocal
-del /q xhciwiz.obj inst_eng.obj inst_core.obj inst_psw64.obj xhciwz64.res 2>nul
+del /q xhciwiz.obj wiz_lay.obj inst_eng.obj inst_core.obj inst_ej9x.obj inst_psw64.obj xhciwz64.res 2>nul
 echo Built XHCIWZ64.EXE
 
 :done

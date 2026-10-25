@@ -409,6 +409,32 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
     return fresh;
 }
 
+ULONG CmPortsNewGeneration(ULONG fresh, ULONG oldCount, ULONG nowCount)
+{
+    if (fresh != 0 || nowCount > oldCount) {
+        return 1;
+    }
+    return 0;
+}
+
+ULONG CmPortsStaleWhy(ULONG serialChanged, ULONG genChanged,
+                      ULONG notReady, ULONG genNow, ULONG genEject)
+{
+    ULONG why;
+
+    why = 0;
+    if (serialChanged) {
+        why |= CM_EJ_STALE_SERIAL;
+    }
+    if (genChanged) {
+        why |= CM_EJ_STALE_GEN;
+    }
+    if (notReady) {
+        why |= CM_EJ_STALE_STACK;
+    }
+    return why | ((genNow & 0xFFUL) << 8) | ((genEject & 0xFFUL) << 16);
+}
+
 ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
                          ULONG chainCount, PVOID busDriver, PVOID self)
 {
@@ -506,6 +532,14 @@ ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over)
     *over = (BOOLEAN)(clientMs >= CM_PORTS_HOLD_MAX_MS ||
                       CM_PORTS_HOLD_MAX_MS - clientMs < CM_PORTS_HOLD_EXTRA_MS);
     return CM_PORTS_HOLD_MAX_MS;
+}
+
+ULONG CmPortsRelease(ULONG markedByThis, ULONG reenumOn)
+{
+    if (!markedByThis) {
+        return 0;
+    }
+    return CM_PORTS_REL_CLEAR | (reenumOn ? CM_PORTS_REL_INVALIDATE : 0);
 }
 
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume)

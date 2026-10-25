@@ -29,7 +29,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
 | 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
 
-`NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
+`NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3 Controller" (from `3.2.0.0`; "xHCI98 USB 3.x eXtensible Host Controller" before it). The number varies from machine to machine.
 
 **One value for every controller (from `3.1.0.0`).** Every value below, and every `XhciCm*` value of the Thunderbolt driver, can also be set once for the whole machine, in this key on every Windows:
 
@@ -37,7 +37,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 |---|---|
 | 98 SE to 7 (x86/x64) | `HKLM\System\CurrentControlSet\Services\USB` |
 
-A value there **wins** over the same value in a controller's own key, for every controller, whatever its type: a value of the wrong type there is read as "not set to a number" and its default stands. Only when the value is not there does each controller read its own key, as before. The INFs still write their numbers into each controller's own key and never into this one, so nothing changes until a value is set here. The installer's settings pages, its console questions and `INSTALL /set` write their value here too, never into a controller's own key, and show both; its uninstall deletes the values it names here and leaves the key. To give one controller a different value, delete the value here and set it in that controller's key. `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`, `silent.vbs`, `silent-on.bat` and `silent-off.bat` write their value here, show both and say which one is in force. Windows 2000 and later may not have this key; the scripts and the installer create it, and regedit can too (Edit > New > Key under `Services`). The key also holds `SilentClasses` and Windows' own `DisableSelectiveSuspend`, which are not this driver's values; leave them.
+A value there **wins** over the same value in a controller's own key, for every controller, whatever its type: a value of the wrong type there is read as "not set to a number" and its default stands. Only when the value is not there does each controller read its own key, as before. The INFs still write their numbers into each controller's own key and never into this one, so nothing changes until a value is set here. The installer's Settings dialog, its console questions and `INSTALL /set` write their value here too, never into a controller's own key, and show both; its uninstall deletes the values it names here and leaves the key. To give one controller a different value, delete the value here and set it in that controller's key. `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`, `silent.vbs`, `silent-on.bat` and `silent-off.bat` write their value here, show both and say which one is in force. Windows 2000 and later may not have this key; the scripts and the installer create it, and regedit can too (Edit > New > Key under `Services`). The key also holds `SilentClasses` and Windows' own `DisableSelectiveSuspend`, which are not this driver's values; leave them.
 
 **The driver's own settings**
 
@@ -102,7 +102,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmMode` | `0` off (the controller is bound, logged and left alone); `1` automatic; `2` an unlisted Intel controller driven as an Alpine Ridge and `3` the driver's own USB4 connection manager forced, both **at your own risk** | `0` | `3` | `1` | `1` |
 | `XhciCmApprove` | `1` approves every device, `0` none | `0` | `1` | `1` | `1` |
 | `XhciCmReenum` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh | `0` | `1` | `1` | `1` |
-| `XhciCmSafeEject` | `1` offers devices behind a tunnel for safe removal | `0` | `1` | `1` | `1` |
+| `XhciCmSafeEject` | `1` offers devices behind a tunnel for safe removal (98 SE and ME: in the USB Tree and `INSTALL /eject` only, no Windows dialog lists them) | `0` | `1` | `1` | `1` |
 | `XhciCmPollIdleMs` | How often, in ms, the driver looks at the controller with nothing happening | `50` | `5000` | `200` | `200` |
 | `XhciCmCmdTimeoutMs` | Firmware connection manager: the wait for a command's answer, in ms | `1000` | `60000` | `5000` | `5000` |
 | `XhciCmApproveTimeoutMs` | Firmware connection manager: the wait for an approval's answer, in ms | `1000` | `60000` | `10000` | `10000` |
@@ -147,7 +147,7 @@ A UAS-only device stays on UAS either way. The value is read each time a device 
 
 ## Polling a Low- or Full-Speed mouse above 1000 Hz (`XhciFastPollFsLs`)
 
-`XhciFastPollFsLs` polls a mouse faster than 1000 Hz, together with SweetLow's hidusbf. It is read when the controller starts, so restart after changing it. It is set by the installer's "Advanced..." on the USB settings page (or `/set XhciFastPollFsLs=<value>`) as well, which writes it machine-wide.
+`XhciFastPollFsLs` polls a mouse faster than 1000 Hz, together with SweetLow's hidusbf. It is read when the controller starts, so restart after changing it. It is set by the installer's "Advanced..." on the Settings dialog's USB tab (or `/set XhciFastPollFsLs=<value>`) as well, which writes it machine-wide.
 
 - `0` (default): off.
 - `2` or `3`: a mouse on a **root port**, set in hidusbf to "31 Hz" or "62 Hz", is polled at the rate below. A device behind a hub keeps its normal rate, and any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too.
@@ -301,7 +301,7 @@ On Windows 98 SE, a device Windows already has drivers for still brings the Add 
 
 `silent-on.bat` in `tools\silent\` merges the list (`SILENT.REG`: hubs, boot keyboards and mice, Bulk-Only storage) and then sets `1`. `silent-off.bat` sets `0` and keeps the list, as another USB stack may read it too. Restart after either. An update keeps the `1`. From `3.1.0.0` both set the value machine-wide, in `Services\USB` beside the list, and leave each controller's own value as it is; `silent.vbs show` shows both.
 
-Run `silent-on.bat` only once each listed class's drivers have been installed at least once, by plugging such a device and finishing its wizard. With no wizard, 98 SE asks for a missing driver file from its CD.
+With no wizard, 98 SE may ask for its CD for a missing driver file.
 
 With it on, Windows 98 SE installs a keyboard, mouse, stick and hub, each a device of its own, with no wizard. Windows ME installs those with no wizard even without it. Composite keyboards, mice and sticks may still bring up the wizard.
 

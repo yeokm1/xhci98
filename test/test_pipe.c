@@ -3151,6 +3151,78 @@ static void test_play2_async(void)
     CHECK_EQ(p[5].Offset, 964, "packet 5 after the 196");
 }
 
+/* ------------------------------------------------------------------ */
+/* The isochronous ring page (record 13 section 11.8, 43.39)            */
+/* ------------------------------------------------------------------ */
+
+static void test_iso_page(void)
+{
+    XHCI_PIPE_EP ep;
+
+    /* Point 2: a candidate is serviced more than once a frame. Expected
+     * Intervals by hand: HS bInterval n is n - 1 (Table 6-12); FS isoch
+     * bInterval 1 is 3. */
+    CHECK_EQ(ep_params(0x81, 1, 1024, 1, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "HS isoch bInterval 1");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 0), 1, "HS interval 0: candidate");
+    CHECK_EQ(ep_params(0x81, 1, 1024, 3, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "HS isoch bInterval 3");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 0), 1, "HS interval 2: candidate");
+    CHECK_EQ(ep_params(0x81, 1, 1024, 4, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "HS isoch bInterval 4");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 0), 0, "HS one a frame: not");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 1), 1, "...unless forced");
+    CHECK_EQ(ep_params(0x01, 1, 200, 1, XHCI_PIPE_SPEED_FULL, &ep),
+             XHCI_PIPE_OK, "FS isoch OUT");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 0), 0, "FS audio: not");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 1), 1, "FS audio forced (qemu)");
+    CHECK_EQ(ep_params(0x81, 1, 0, 1, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "zero-bandwidth isoch");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 1), 0, "zero bandwidth: never");
+    CHECK_EQ(ep_params(0x81, 2, 512, 0, XHCI_PIPE_SPEED_HIGH, &ep),
+             XHCI_PIPE_OK, "HS bulk");
+    CHECK_EQ(XhciPipeIsoPageWanted(&ep, 1), 0, "bulk: never");
+    CHECK_EQ(XhciPipeIsoPageWanted(NULL, 1), 0, "NULL");
+
+    /* Point 3, by hand: a pipe counted at capacity + 5, so kept = 64 +
+     * 2 x 67 = 198. 256 entries, nothing open: 58. */
+    CHECK_EQ(XHCI_ISO_EVENTS_OVER_TRBS, 5, "capacity plus five");
+    CHECK_EQ(XhciPipeIsoGrant(256, 0, 0, 62), 58, "256, alone: 58");
+    CHECK_EQ(XhciPipeIsoRingTrbs(58, 62), 122, "allowance 120, ring 122");
+    /* One pool pipe already counted (67): below 0. */
+    CHECK_EQ(XhciPipeIsoGrant(256, 67, 0, 62), 0, "after a pool pipe: none");
+    CHECK_EQ(XhciPipeIsoGrant(256, 125, 0, 62), 0, "after a page: none");
+    /* A switch dropping the page it replaces borrows its count. */
+    CHECK_EQ(XhciPipeIsoGrant(256, 125, 125, 62), 58, "switch borrows");
+    CHECK_EQ(XhciPipeIsoGrant(256, 125, 500, 62), 58, "borrow clamped");
+    /* 256 - 198 - 42 = 16, the minimum; 43 leaves 15. */
+    CHECK_EQ(XhciPipeIsoGrant(256, 42, 0, 62), 16, "exactly the minimum");
+    CHECK_EQ(XhciPipeIsoGrant(256, 43, 0, 62), 0, "below the minimum");
+    CHECK_EQ(XhciPipeIsoGrant(198, 0, 0, 62), 0, "nothing past the kept");
+    /* 1,024 entries: 826 capped at 192 (counted 259); then 1024 - 198 -
+     * 259 = 567 -> 192, 308 -> 192, then 49. */
+    CHECK_EQ(XhciPipeIsoGrant(1024, 0, 0, 62), 192, "1024: capped 192");
+    CHECK_EQ(XhciPipeIsoRingTrbs(192, 62), 256, "the page's 256");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 259, 0, 62), 192, "second");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 518, 0, 62), 192, "third");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 777, 0, 62), 49, "fourth: 49, 111");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 0xFFFFFFF0UL, 0, 62), 0, "no wrap");
+    CHECK_EQ(XhciPipeIsoGrant(1024, 0, 0, 254), 0, "no room over 254");
+    CHECK_EQ(XhciPipeIsoRingTrbs(0, 62), 0, "no grant, no ring");
+    CHECK_EQ(XhciPipeIsoRingTrbs(193, 62), 0, "past one page");
+
+    /* Bytes: 122 x 16 = 1,952 in a page, padded 3,904 still one; 130
+     * padded is 4,160, two pages. */
+    CHECK_EQ(XhciPipeIsoPageBytes(122, 0, 4096), 4096, "one page");
+    CHECK_EQ(XhciPipeIsoPageBytes(122, 1, 4096), 4096, "122 padded: one");
+    CHECK_EQ(XhciPipeIsoPageBytes(130, 1, 4096), 8192, "130 padded: two");
+    CHECK_EQ(XhciPipeIsoPageBytes(128, 1, 4096), 4096, "128 padded fits");
+    CHECK_EQ(XhciPipeIsoPageBytes(256, 0, 4096), 4096, "256: a page");
+    CHECK_EQ(XhciPipeIsoPageBytes(257, 0, 4096), 0, "257 refused");
+    CHECK_EQ(XhciPipeIsoPageBytes(2, 0, 4096), 0, "2 refused");
+    CHECK_EQ(XhciPipeIsoPageBytes(130, 0, 3000), 0, "odd page size");
+}
+
 int main(void)
 {
     test_seq();
@@ -3185,6 +3257,7 @@ int main(void)
     test_composite_record();
     test_walk_surplus();
     test_play2_async();
+    test_iso_page();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

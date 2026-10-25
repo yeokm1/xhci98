@@ -168,6 +168,8 @@ static VOID NegotiateDma(IN PHW_DEVICE_EXTENSION DevExt, IN OUT PPORT_CONFIGURAT
         breaks = ConfigInfo->NumberOfPhysicalBreaks;
     }
     ConfigInfo->NumberOfPhysicalBreaks = breaks;
+    DevExt->PfMaxTransfer = maxTransfer;
+    DevExt->PfBreaks = breaks;
     if (ConfigInfo->AlignmentMask < 0x3) {
         ConfigInfo->AlignmentMask = 0x3;        // PRP entries are DWORD aligned
     }
@@ -548,6 +550,16 @@ ULONG HwFindAdapter(
     // extension (G7, Q-NT), with no ArgumentString.
     DevExt->Resumed = (BOOLEAN)(DevExt->Magic == STOR98_DEVEXT_MAGIC);
     DevExt->Magic = STOR98_DEVEXT_MAGIC;
+    // The counter answer's totals live as long as this epoch (MD-8): a
+    // resume keeps them, every other start begins a new one.
+    if (!DevExt->Resumed) {
+        ULONG lo, hi;
+
+        RtlZeroMemory(&DevExt->Pf, sizeof(DevExt->Pf));
+        DevExt->PfDcbSeen = 0;
+        ClockReadTsc(&lo, &hi);
+        DevExt->PfEpoch = (lo ^ hi) | 1;
+    }
     // No sense kept before a stop or power transition survives it.
     ScsiSenseReset(DevExt);
     EngParseTunables(DevExt, ArgumentString);
@@ -681,6 +693,7 @@ BOOLEAN ScsiCompletesInSoftware(IN PSCSI_REQUEST_BLOCK Srb)
     case SCSIOP_MODE_SENSE:
     case SCSIOP_MODE_SENSE10:
     case SCSIOP_READ_DEFECT_DATA10:
+    case STOR98PF_OPCODE:
         return TRUE;
     case SCSI_SRV_ACT_IN:
         return (BOOLEAN)(Srb->Cdb[1] == SCSI_RD_CAPAC16);
@@ -748,6 +761,10 @@ BOOLEAN ScsiDispatch(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 
                 case SCSIOP_READ_DEFECT_DATA10:
                     return ScsiHandleReadDefectData10(DevExt, Srb);
+
+                case STOR98PF_OPCODE:
+                    // READ BUFFER: the counter answer (MD-8), from memory
+                    return ScsiHandleReadBuffer(DevExt, Srb);
 
                 default:
                     // Not implemented (READ/WRITE(12), REPORT LUNS, MODE
@@ -829,6 +846,41 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
 
 #if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
     EngProbeSg9x(Srb);
+#endif
+    EngPfSrbIn(DevExt, Srb);
+#ifdef STOR98_TEST_NOAUTOSENSE
+#ifndef STOR98_DBGPORT
+#error STOR98_TEST_NOAUTOSENSE is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)
+#endif
+    // Test build (xhci98 record 30 section 9.2 item 10): every N-th READ(10)
+    // fails with CHECK CONDITION, its sense kept and not given as autosense,
+    // which is when SCSIPORT.PDR fetches the sense itself with a REQUEST
+    // SENSE of its own; that one is answered from the kept entry (sense.c).
+    if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && Srb->Cdb[0] == SCSIOP_REQUEST_SENSE) {
+        DBGSTAGE(STG_TEST_REQSENSE, (ULONG)(ULONG_PTR)Srb->DataBuffer);
+    }
+    if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI && Srb->Cdb[0] == SCSIOP_READ &&
+        ++DevExt->TestNoAsReads % STOR98_TEST_NOAUTOSENSE == 0) {
+        UCHAR senseLen = Srb->SenseInfoBufferLength;
+        BOOLEAN tagged = (BOOLEAN)((Srb->SrbFlags & SRB_FLAGS_QUEUE_ACTION_ENABLE) &&
+                                   Srb->QueueTag != SP_UNTAGGED);
+
+        DBGSTAGE(STG_TEST_NOAS, (ULONG)(ULONG_PTR)Srb->DataBuffer);
+        // A new READ ends the sense kept for earlier commands (sense.c), as
+        // EngStartIo would have done.
+        ScsiSenseNewCommand(DevExt, Srb);
+        Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+        // No room for autosense: the kept path of ScsiSetSense.
+        Srb->SenseInfoBufferLength = 0;
+        ScsiSetSense(DevExt, Srb, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0);
+        Srb->SenseInfoBufferLength = senseLen;
+        Srb->DataTransferLength = 0;
+        ScsiError(DevExt, Srb, SRB_STATUS_ERROR);
+        // The engine's own queue-readiness accounting (NextRequest, or the
+        // NextLuRequest a tagged request owes).
+        EngStartIoTail(DevExt, tagged);
+        return TRUE;
+    }
 #endif
     return EngStartIo(DevExt, Srb);
 }

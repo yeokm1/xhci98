@@ -692,6 +692,11 @@ ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue);
  *                                             endpoint has been stopped: it is
  *                                             Running, so its TRBs are still
  *                                             the xHC's. Stop, then drain.
+ *
+ * Task 43.69 gives it a second gate: on a Stopped endpoint, for a held TD
+ * XhciXferStopPlace counts as passed. The Stop Endpoint's completion follows
+ * every event the controller wrote before it, so a tail it had sent has been
+ * consumed by then, as an empty pass proves for the first gate.
  */
 ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
                            PXHCI_RING ring,
@@ -707,6 +712,62 @@ ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
  * already removed from the mid-TD accounting once.
  */
 ULONG XhciXferDeferralsArmed(const XHCI_TRANSFER_QUEUE *queue);
+
+/*
+ * Task 43.69 (design record 13 section 14, "The stopped TD, read from the
+ * controller"). Where a stopped endpoint's own dequeue lies against the
+ * queue: `deqLow` and `deqHigh` are the TR Dequeue Pointer dwords the
+ * controller saved (the Endpoint Context's dwords 2 and 3, or a Stream
+ * Context's 0 and 1; bit 0 is DCS, bits 3:1 are masked off), which xHCI 4.6.9
+ * p.119 has it write before the Stop Endpoint's completion. Linux's
+ * xhci_get_hw_deq and trb_in_td.
+ *
+ *   XHCI_XFER_STOP_IN_TD    the position is a TRB of `Stopped`;
+ *   XHCI_XFER_STOP_BETWEEN  it is in no queued TD (on the No Ops of a TD
+ *                           removed earlier, or at the enqueue position);
+ *   XHCI_XFER_STOP_UNREAD   the reading is not one to act on: off the ring,
+ *                           a high dword, a position neither outstanding nor
+ *                           the enqueue, a DCS that is not the cycle written
+ *                           there, or a TD before it that is not a held
+ *                           short-deferred one (whose event would have come).
+ *
+ * `Passed` counts the queued TDs wholly before the position - every one of
+ * them carrying XHCI_XFER_FLAG_SHORT_DEFERRED, for any verdict but UNREAD.
+ * Those the caller settles with XhciXferDrainSettled, oldest first, on the
+ * stopped endpoint; the head is then the stopped TD (IN_TD) or a TD the
+ * controller has not entered (BETWEEN). Changes nothing. Pure.
+ */
+#define XHCI_XFER_STOP_UNREAD   0UL
+#define XHCI_XFER_STOP_IN_TD    1UL
+#define XHCI_XFER_STOP_BETWEEN  2UL
+
+typedef struct _XHCI_XFER_STOP_PLACE {
+    ULONG Verdict;                  /* XHCI_XFER_STOP_*                   */
+    ULONG Passed;                   /* held TDs before the position       */
+    const XHCI_TRANSFER *Stopped;   /* IN_TD: the TD holding it           */
+} XHCI_XFER_STOP_PLACE, *PXHCI_XFER_STOP_PLACE;
+
+ULONG XhciXferStopPlace(const XHCI_TRANSFER_QUEUE *queue,
+                        const XHCI_RING *ring,
+                        ULONG deqLow,
+                        ULONG deqHigh,
+                        PXHCI_XFER_STOP_PLACE place);
+
+/*
+ * Task 43.69. A cancel's placement on a stopped endpoint whose queue head is
+ * the stopped TD (or one the controller has not entered): the `count` TDs in
+ * `cancelled` leave the queue, a cancelled TD other than the head is rewritten
+ * as No Ops in place by the caller (xHCI 4.6.9 option 3), and when the head
+ * is cancelled or `error` is set, Set TR Dequeue moves to the first queued TD
+ * not in `cancelled`, or to the enqueue position. Returns that ring index, or
+ * XHCI_XFER_NO_INDEX when the dequeue stays. Linux's
+ * xhci_invalidate_cancelled_tds. Pure; call it before the TDs are removed.
+ */
+ULONG XhciXferCancelPlace(const XHCI_TRANSFER_QUEUE *queue,
+                          const XHCI_RING *ring,
+                          PXHCI_TRANSFER const *cancelled,
+                          ULONG count,
+                          ULONG error);
 
 /*
  * Detach every queued transfer, in order, without touching the ring - the
@@ -945,9 +1006,38 @@ typedef struct _XHCI_ISO_REQUEST {
      * the 1.0 form.
      */
     ULONG TdSizeForm;
+    /*
+     * Design record 13 section 11.8 (task 43.39). All three are 0 at every
+     * site that zeroes the request, which keeps the behaviour before it.
+     *
+     * MaxPackets: the request's packet bound, 0 meaning
+     * XHCI_XFER_MAX_ISO_PACKETS, never above XHCI_XFER_MAX_ISO_PAGE_PACKETS.
+     * TdLengths: where the build writes each TD's TRB count, MaxPackets
+     * entries; NULL means the layout's own array, and then MaxPackets may
+     * not exceed XHCI_XFER_MAX_ISO_PACKETS. BeiInterval: BEI on the last
+     * TRB of every TD but every BeiInterval-th and the request's last
+     * (point 7); 0 never sets it, and the caller passes 0 below xHCI 1.0.
+     */
+    ULONG MaxPackets;
+    PULONG TdLengths;
+    ULONG BeiInterval;
 } XHCI_ISO_REQUEST, *PXHCI_ISO_REQUEST;
 
 ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
+
+/* Whether packet `i` of a `packets`-packet request carries BEI under
+ * `interval` (design record 13 section 11.8, point 7): never the last,
+ * never every interval-th, never at interval 0. Pure. */
+ULONG XhciXferIsoBei(ULONG i, ULONG packets, ULONG interval);
+
+/* A pipe's request blocks (hcd.h HCD_ISO_BLOCK's shape, record 13 section
+ * 11.8, point 4): the bytes of one at `packets` packets, rounded to 8 so
+ * every block of an array starts aligned, 0 above
+ * XHCI_XFER_MAX_ISO_PAGE_PACKETS; and block `index` of an array of them
+ * `stride` bytes apart. Pure. */
+ULONG XhciXferIsoBlockBytes(ULONG packets);
+PUSBPORT_ISO_TRANSFER XhciXferIsoBlockAt(PVOID base, ULONG index,
+                                         ULONG stride);
 
 /*
  * How hcdIsoPublish schedules a request (task 36.57, design record 13
