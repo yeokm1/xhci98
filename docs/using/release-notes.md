@@ -4273,6 +4273,17 @@ or says it was found by reading the code.
   keeps working (usb-wdm-free's README, "98 SE may freeze when the first
   USB audio device is plugged in after a boot"). Real-PC readings are
   owed.
+- **Windows 98 SE and ME: the Sound Blaster X4 needs the free UAC 2.0
+  driver installed by hand.** The free and non-free drivers are only
+  copied there, not put on the hardware wizard's search path, so Windows'
+  own USB audio driver, which matches every USB audio device but knows
+  USB Audio Class 1.0 only, takes the X4 by itself at its first plug and
+  stops Windows with a fatal exception 0E in `USBAUDIO` (read on 98 SE).
+  Unplug the X4 and restart (in Safe Mode if Windows stops at the start),
+  then in Device Manager open the X4's audio entry, Update Driver,
+  "Display a list of all the drivers in a specific location", Have Disk,
+  and point it at `C:\XHCI98\USBDRV\FREE\audio\uac2\w98se-me`; restart
+  with the X4 plugged in.
 - **Windows 98 SE in a virtual machine cannot play USB audio** through
   Windows 98's own `USBAUDIO.VXD`; that is QEMU's emulated device and the
   VxD, through this driver and through a UHCI controller alike. On real
