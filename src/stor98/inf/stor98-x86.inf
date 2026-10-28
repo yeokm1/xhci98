@@ -4,8 +4,9 @@
 ; Copyright (c) 2026 Yeo Kheng Meng
 ;
 ; stor98-x86.inf - the 32-bit stor98 package, shipped as x86\stor98.inf next
-; to stor98.mpd and stor98.sys. One INF serves every 32-bit target, for any
-; PCI NVMe controller (class 01, subclass 08, interface 02):
+; to stor98.mpd and stor98.sys. One INF serves every 32-bit target, for a
+; PCI NVMe controller (class 01, subclass 08, interface 02) behind a
+; Thunderbolt or USB4 tunnel, which carries xhci98's tunnel id (below):
 ;
 ;   Windows 98 SE, ME    the undecorated install section: stor98.mpd into
 ;                        SYSTEM\IOSUBSYS (DIRID 12), loaded by IOS as the
@@ -30,10 +31,10 @@
 ; (docs/BUILD.md, "INFs and version").
 ;
 ; Windows 8, 8.1 and 10 (xhci98 roadmap 43.23; 10 below build 22000, 43.34)
-; take the .NTx86 sections as 2000 to 7 do. 8.1 and 10 bind their own
-; stornvme to every NVMe controller first: its signed in-box INF outranks
-; this one, so xhci98's installer installs over it on a tunnel drive with
-; INSTALLFLAG_FORCE (record 26 section 5.3.1).
+; take the .NTx86 sections as 2000 to 7 do. 8.1 and 10 have their own
+; stornvme; where it binds a tunnel drive first, xhci98's installer or its
+; safe-removal mark service puts Stor98 on that one drive (xhci98 design
+; record 31 sections 6 and 7).
 ;
 ; DriverVer is xhci98's package version and release date, from
 ; src\xhci_version.h (XHCI_VER_STR, XHCI_DRIVERVER_DATE), as in the other
@@ -45,7 +46,7 @@ Signature="$CHICAGO$"
 Class=SCSIAdapter
 ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/24/2026,3.2.0.0
+DriverVer=10/28/2026,3.3.0.0
 
 [DestinationDirs]
 ; DIRID 12: Windows\System\IoSubsys on Windows 9x, system32\drivers on NT.
@@ -59,19 +60,23 @@ stor98.mpd=1
 stor98.sys=1
 
 [Manufacturer]
-; Windows 8.1 and 10 (NT 6.3 and later) have their own NVMe driver, stornvme,
-; and keep it (owner, 2026-10-23, roadmap-usb4 43.59): there the models give
-; PCI\CC_010802 as this INF's compatible id, its hardware id empty, so the
-; match ranks as compatible-to-compatible, below stornvme's hardware-id
-; match on the same id, signed or not, and Stor98 binds only where the
-; installer puts it on one drive (case 3b, UpdateDriverForPlugAndPlayDevices
-; with this INF) or a user does. Windows 8, which has no stornvme, and every
-; earlier system keep PCI\CC_010802 as the hardware id.
-; Windows 98 SE, ME and 2000 read the first section only.
+; Stor98 is for drives behind a Thunderbolt or USB4 tunnel only (xhci98
+; design record 31). xhci98's connection manager gives such a drive one id
+; of its own, PCI\XHCI98_TUNNEL&CC_010802, and on Windows 2000 to 8 (the
+; undecorated section: Windows 2000 reads no models decoration) the model
+; matches that id alone, so Windows never picks this INF for an internal
+; NVMe drive there. Windows 8.1 and 10 (NT 6.3 and later) restart a device
+; with its ids read again, which loses that id, and keep xhci98 3.2.0.0's
+; model: PCI\CC_010802 as the compatible id, hardware id empty, which
+; ranks below their own stornvme on an internal drive (owner, 2026-10-23,
+; roadmap-usb4 43.59, and 2026-10-25, record 31 section 4.8); there
+; Stor98 goes on a tunnelled drive by xhci98's installer or its
+; safe-removal mark service. The 98 SE and ME installs take stor98w9.inf,
+; beside this one, which keeps the class match (record 31 section 5.2).
 %Mfg%=Stor98_Models,NTx86.6.3
 
 [Stor98_Models]
-%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802
+%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802
 
 [Stor98_Models.NTx86.6.3]
 %Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802

@@ -385,6 +385,8 @@ typedef struct _CM_REENUM {
                                instance (a baseline or a discovery would
                                be read from a lost tree)                 */
     ULONG Unavailable;      /* 98: CONTROLLER_UNAVAILABLE requests posted */
+    ULONG Deferred;         /* 98: members whose request's removal is held
+                               (record 21 section 6.1.2)                  */
     ULONG GoneDone;         /* 98: ... members whose retained children
                                were reconciled                           */
     ULONG GoneDropped;      /* 98: retained children no longer matching
@@ -434,6 +436,16 @@ VOID CmReenumOwe(struct _CM_NHI *nhi, ULONG i);
  */
 VOID CmReenumUnavailable(struct _CM_NHI *nhi, ULONG episode);
 /*
+ * Record 21 section 6.1.2 (task 44.54): under the USB4 profile on 98 SE and
+ * ME, CmReenumUnavailable's removal is held while the controller is away;
+ * this ends the hold for `members` (those of them held), whose path the
+ * recovery's commit found proved closed, and the worker makes
+ * the removal (the re-enumeration is the rebuild's). Nothing where none
+ * is held, on NT, or without the worker. IRQL: PASSIVE_LEVEL, the
+ * connection-manager thread.
+ */
+VOID CmReenumLossReturned(struct _CM_NHI *nhi, ULONG members);
+/*
  * The bracket around a loss's drain (cm_nhi.c CmNhiLost, cm_power.c's
  * failed resume): CmReenumLossBegin right after TbtIcmLost, before any
  * drain; CmReenumUnavailable (or CmReenumLossEnd where no request is owed
@@ -467,8 +479,9 @@ VOID CmReenumLossEnd(struct _CM_NHI *nhi);
 BOOLEAN CmReenumRetire(struct _CM_NHI *nhi, ULONG i, PULONG answers);
 /* 98 SE and ME: the members behind the barrier, whose re-enumeration the
  * worker holds (CmCfgwkHold) until it is lifted; nothing on NT, whose
- * calls cmReenumAll and the service skip themselves. */
-VOID CmReenumHold(struct _CM_NHI *nhi, ULONG members);
+ * calls cmReenumAll and the service skip themselves. TRUE when a worker
+ * took it. */
+BOOLEAN CmReenumHold(struct _CM_NHI *nhi, ULONG members);
 BOOLEAN CmReenumRetired(struct _CM_NHI *nhi, ULONG i, ULONG answers);
 /* Record 22 section 7.7 part 3 step 6 (U24): the discovery read again,
  * with the start's inputs, into a scratch record (the set untouched) -
@@ -575,8 +588,14 @@ VOID CmCfgwkTakeover(struct _CM_CFGWK *w, ULONG members);
  * bridge header, before any further re-enumeration of it; then a
  * re-enumeration with vanished children (a request as CmCfgwkPost's, so
  * an operation in progress on the member goes stale). `active` replaces
- * the owned members. Returns at once. <= DISPATCH_LEVEL. */
-VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active);
+ * the owned members. With `defer` the removal waits until CmCfgwkRelease
+ * names the member (record 21 section 6.1.2: the USB4 profile's loss,
+ * until the commit finds the path behind the member proved closed), and
+ * the re-enumeration after it is dropped then (the rebuild's own post
+ * re-enumerates the member); a later request merges into a hold and
+ * waits with it. Returns at once. <= DISPATCH_LEVEL. */
+VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active, BOOLEAN defer);
+VOID CmCfgwkRelease(struct _CM_CFGWK *w, ULONG members);
 /* The same removal for the members in `members` alone (record 22 section
  * 7.7's removal-only request), `active` replacing the owned members; and
  * the members whose last such removal resolved clean (every recorded
@@ -661,11 +680,69 @@ VOID CmRegWithdraw(struct _CM_FILTER *filter);
 
 /* A BusRelations request completed below a bridge filter (successfully):
  * keep the snapshot, set the baseline, and attach a child filter to each
- * PDO not in the previous snapshot where the bridge is active and safe
- * eject is on. `relations` may be NULL (no children). PASSIVE_LEVEL, in
- * the dispatch routine after the completion wait. */
+ * PDO not in the previous snapshot, and again to one in it whose stack
+ * was taken down with this driver's child (CmPortsChildFirst), on every
+ * filtered bridge whatever its active mark and safe eject say (design
+ * record 31 section 4.1; what a child answers is CmRegAttMayMark's).
+ * `relations` may be NULL (no children). PASSIVE_LEVEL, in the dispatch
+ * routine after the completion wait. */
 VOID CmRegRelations(struct _CM_FILTER *filter,
                     const DEVICE_RELATIONS *relations, ULONG seq);
+
+/*
+ * The tunnel id's chain (design record 31 sections 4.2 and 4.3), NT only.
+ *
+ * CmRegChainRelations  a BusRelations request completed below a child
+ *                      filter on a PCI-to-PCI bridge whose depth is below
+ *                      CM_TUNNEL_DEPTH_MAX (cm_ports.h CmPortsChainReads):
+ *                      the child's own snapshot kept and a child attached
+ *                      to its PDOs as CmRegRelations does, one deeper.
+ *                      Nothing of it is published to a domain.
+ *                      PASSIVE_LEVEL, after the completion wait.
+ * CmRegChainNote       one CM_CHAIN_EV_* event of a child: counted where it
+ *                      is a count (the id given, the rewrite refused for
+ *                      want of pool or over the size bound, a bridge past
+ *                      the depth bound) and recorded to the top bridge's
+ *                      owner, else the first domain listed on the filter
+ *                      route: the label, the child's depth in bits 23:16
+ *                      and the location of the bridge it sits on, and for
+ *                      the id the PDO's address at verbosity 4.
+ *                      <= DISPATCH_LEVEL.
+ * CmRegIdCounters      the counts, for the stop's log and the query
+ *                      device. <= DISPATCH_LEVEL.
+ */
+#define CM_CHAIN_EV_ID          0UL /* cm.chain.id: the id given          */
+#define CM_CHAIN_EV_NOMEM       1UL /* cm.chain.id.nomem                  */
+#define CM_CHAIN_EV_OVER        2UL /* cm.chain.id.over: list over 4 KiB  */
+#define CM_CHAIN_EV_DEEP        3UL /* cm.chain.deep: past the bound      */
+#define CM_CHAIN_EV_BRIDGE      4UL /* cm.chain.bridge: a link learned    */
+#define CM_CHAIN_EV_START       5UL /* cm.chain.start: its device started */
+#define CM_CHAIN_EV_REMOVE      6UL /* cm.chain.remove: its device removed */
+VOID CmRegChainRelations(struct _CM_FILTER *child,
+                         const DEVICE_RELATIONS *relations);
+VOID CmRegChainNote(struct _CM_FILTER *f, ULONG event);
+VOID CmRegIdCounters(PULONG given, PULONG nomem, PULONG over, PULONG deep,
+                     PULONG reattached);
+
+/*
+ * Design record 21 section 6.2.1 (task 44.53), a child's interrupt:
+ *
+ * CmRegIrqWire   the Line a child's function is to be given, or 0 with
+ *                *why (cm_irq.h CM_IRQ_WHY_*): the ancestry's locations
+ *                copied under the list's lock up to the first that is an
+ *                active member of a domain's set, then, outside it, the
+ *                function's bus read from the bridge above it (with
+ *                `address`, its DevicePropertyAddress, its location, put
+ *                in *fnBdf, else FFFFh), each bridge's secondary bus read
+ *                against the link below it, the function's header, and
+ *                the tunnel port's pin and Line (CmIrqWire).
+ *                PASSIVE_LEVEL (HalGetBusData).
+ * CmRegIrqNote   one log line of it (`label`, `value`) to the domain of
+ *                the child's top bridge, as CmRegChainNote writes.
+ */
+ULONG CmRegIrqWire(struct _CM_FILTER *child, ULONG address, PULONG why,
+                   PULONG fnBdf);
+VOID CmRegIrqNote(struct _CM_FILTER *f, const char *label, ULONG value);
 
 /* Before a BusRelations request is passed down: the bridge's tunnel-change
  * sequence, handed to CmRegRelations with the answer. PASSIVE_LEVEL. */
@@ -697,12 +774,16 @@ VOID CmRegPassD0(struct _CM_FILTER *filter);
  *                  the object is itself asking (CM_FILTER.InLocate): the
  *                  PnP manager answers DevicePropertyAddress with a
  *                  QUERY_CAPABILITIES down this stack. PASSIVE_LEVEL.
- * CmRegAttMayMark  whether this attachment answers Removable: a child the
- *                  bridge filter attached always (it exists only on an
- *                  active member with safe eject on); one AddDevice made,
- *                  or a bridge filter, only while its bus is the secondary
+ * CmRegAttMayMark  whether this attachment answers Removable: every kind
+ *                  - a child attached at BusRelations, one AddDevice made,
+ *                  a bridge filter - only while its bus is the secondary
  *                  bus of an active, exclusive member of a listed domain
- *                  whose XhciCmSafeEject is 1. PASSIVE_LEVEL.
+ *                  whose XhciCmSafeEject is 1 and the member's marks
+ *                  table holds its PDO (cm_ports.h CmPortsMayMark; design
+ *                  record 31 section 4.1: since the tunnel id a child is
+ *                  attached on every filtered bridge, so the NHI's and
+ *                  the host xHCI's are never answered Removable).
+ *                  PASSIVE_LEVEL.
  * CmRegAttAnswered Removable was answered set.
  * CmRegAttEvent    a CM_MK_* count (query-remove, cancel, surprise
  *                  removal, a start that failed) on the PDO's entry.

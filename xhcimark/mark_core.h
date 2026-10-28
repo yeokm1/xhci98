@@ -188,11 +188,42 @@ void mk_confirm_build(unsigned char *out, const MK_MARKS *m,
  * none did (record 25 section 3.4's cadence). */
 INST_U32 mk_poll_ms(int anyAnswered);
 
-/* ---- Stor98 on a tunnelled drive (record 21 section 7.5, task 43.59) ----- */
+/* ---- Stor98 on a tunnelled drive (record 31 section 6; record 21 section
+ * 7.5 was 3.2.0.0's) ------------------------------------------------------ */
 
 #define MK_S98_VALUE        "Stor98Inf" /* Parameters: the staged INF   */
 #define MK_S98_KEY          "Stor98"    /* the records, one per devnode */
 #define MK_S98_CC           "PCI\\CC_010802"
+#define MK_S98_TUNNEL_ID    "PCI\\XHCI98_TUNNEL&CC_010802"
+#define MK_S98_DEPTH_MAX    6   /* the filter chain's bound (record 31 4.3) */
+#define MK_S98_PROB_DISABLED 0x00000016UL
+
+/* The systems the fallback knows (record 31 section 6.2). */
+#define MK_S98_OS_NONE      0   /* not told, or below 2000                */
+#define MK_S98_OS_LOW       1   /* 2000 to 8: a devnode with no driver    */
+#define MK_S98_OS_81        2   /* 8.1: none, or stornvme (the 8.1 arm)   */
+#define MK_S98_OS_10        3   /* 10 and later: nothing                  */
+/* The system from an NT major, minor and build: 5.0 to 6.2 LOW; 6.3 below
+ * build 10000 81; 6.3 from build 10000, 6.4 and above 10; else NONE. */
+int mk_s98_os(INST_U32 major, INST_U32 minor, INST_U32 build);
+/* Two readings of the system (the version the API answers, the one the
+ * shared user data page keeps) must agree: else MK_S98_OS_NONE. */
+int mk_s98_os_both(int a, int b);
+/* 1 for stornvme, case ignored. */
+int mk_s98_inbox(const char *service);
+
+/* Why a tunnelled drive arrived without the id (record 31 section 4.4), as
+ * far as the service can tell: hasId the id among its compatible ids,
+ * portFilter the tunnel port's UpperFilters naming xhcicm (-1 unread),
+ * depth the devnodes from the port down to it (1 directly below). */
+#define MK_S98_ID_HAS       0   /* it carries the id (outranked on 8.1)   */
+#define MK_S98_ID_NOFILTER  1   /* the port carries no filter of ours     */
+#define MK_S98_ID_DEPTH     2   /* below the chain's depth                */
+#define MK_S98_ID_EARLY     3   /* enumerated before the id reached it    */
+#define MK_S98_ID_UNKNOWN   4   /* the port's filters unread              */
+#define MK_S98_ID_OS        5   /* 8.1 and later: no id by design         */
+int mk_s98_noid_why(int hasId, int portFilter, int depth);
+const char *mk_s98_noid_text(int why);
 #define MK_S98_RETRY_MS     10000UL     /* between attempts in one arrival */
 #define MK_S98_ATTEMPTS     3           /* the first and two retries      */
 
@@ -209,6 +240,9 @@ int mk_s98_inf_ok(const char *inf, const char *windir);
 #define MK_S98_FAILED       5   /* "failed": anything else, final           */
 #define MK_S98_ENABLE       6   /* "enable": its enable owed (not verified) */
 #define MK_S98_RESTART      7   /* "restart": the install asked for one     */
+#define MK_S98_GIVE         8   /* "give": a driverless devnode, installing */
+#define MK_S98_GIVE_RESTART 9   /* "give-restart": that install asked for a
+                                   restart of Windows                      */
 /* The text of a state; NULL for MK_S98_NONE or an unknown state. */
 const char *mk_s98_rec_text(int state);
 /* The state a record's text holds: MK_S98_NONE for NULL; an unknown text
@@ -228,6 +262,7 @@ int mk_s98_below(const int *parent, int n, int node, const int *member);
 /* One devnode against section 7.5.3's rules; MK_S98_GO or the first
  * reason that refuses (mk_s98_why_text). */
 typedef struct _MK_S98_IN {
+    int Os;                 /* MK_S98_OS_*                              */
     int PolicyOk;           /* mk_s98_inf_ok of the value               */
     int WalkWhole;          /* this poll's walk had no failure          */
     int IsPci;              /* its id starts PCI\                       */
@@ -236,6 +271,7 @@ typedef struct _MK_S98_IN {
     int StatusOk;           /* its status read                          */
     int Started;            /* DN_STARTED                               */
     int Problem;            /* DN_HAS_PROBLEM                           */
+    INST_U32 ProblemCode;   /* its problem number                       */
     int Below;              /* below an active member, domain verifiable */
     int Protected;          /* mk_protect's node                        */
     int InstallPending;     /* a Windows installation pending or unknown */
@@ -253,10 +289,26 @@ typedef struct _MK_S98_IN {
 #define MK_S98_W_STATE      7
 #define MK_S98_W_RECORD     8
 #define MK_S98_W_PENDING    9
+/* Logged-once markers of the 2000 and XP unit restart (xhcimark.c), never
+ * answers of mk_s98_wanted. */
+#define MK_S98_W_DECLINED   100
+#define MK_S98_W_UNIT       101
+#define MK_S98_W_AFTER      102
+#define MK_S98_W_OS         10
+/* Record 31 section 6.2: on 2000 to 8.1 a devnode with no driver (Service
+ * empty), not started and not disabled; on 8.1 also one started on
+ * stornvme (the 8.1 arm). Never one on Stor98 or another driver, never on
+ * 10. A NULL Service is one that could not be read. */
 int mk_s98_wanted(const MK_S98_IN *in);
+/* 1 when the devnode takes the 8.1 arm (a stop, the install, a start); 0
+ * for the install over nothing. */
+int mk_s98_displaces(const MK_S98_IN *in);
 const char *mk_s98_why_text(int why);
 
-/* What a record asks for outside a switch. "disable", "install" and
+/* What a record asks for outside a switch. "give" (an install over no
+ * driver cut short): once present, "done" when it runs Stor98, "failed"
+ * otherwise; nothing to enable, since nothing was stopped. "disable",
+ * "install" and
  * "enable" (a switch cut short, or an enable that did not hold): nothing
  * while the devnode is absent (it may come back disabled); its enable when
  * it is present and disabled, the record kept until the enable is seen;
@@ -269,6 +321,42 @@ const char *mk_s98_why_text(int why);
 #define MK_S98_R_DONE       3   /* record "done"                         */
 int mk_s98_recover(int record, int present, int disabled, int s98Started,
                    int firstPoll);
+
+/* ---- a plain drive's install set to run again (record 31 section 6.2) -- */
+
+/* A driverless NVMe function's state a unit restart admits: not started,
+ * and no problem or the problem "not configured" (1), "failed install"
+ * (28) or "reinstall" (18) - never disabled or any other problem. */
+int mk_s98_driverless(int started, int problem, INST_U32 code);
+
+/* CONFIGFLAG_FAILEDINSTALL cleared and CONFIGFLAG_REINSTALL set, every
+ * other flag kept: 0 when `cfg` reads so already (nothing to write), else
+ * 1 with *out the value to write. */
+#define MK_CONFIGFLAG_FAILEDINSTALL 0x00000040UL
+#define MK_CONFIGFLAG_REINSTALL     0x00000020UL
+int mk_s98_rerun_flags(INST_U32 cfg, INST_U32 *out);
+
+/* One devnode below a unit the safe-removal mark restarts ("The mark's
+ * restart", task 44.52). */
+typedef struct _MK_S98_MF {
+    int Nt5;                /* Windows 2000 or XP (NT 5.x)                */
+    int PolicyOk;           /* the policy value names a staged INF        */
+    int Below;              /* strictly below the unit                    */
+    int Nvme;               /* its compatible ids carry MK_S98_CC         */
+    int HasId;              /* they carry MK_S98_TUNNEL_ID                */
+    const char *Service;    /* its Service value, or NULL when unread     */
+    int Declined;           /* seen with the id and no driver this arrival */
+    int Protected;          /* mk_protect's node                          */
+    int StatusOk;           /* its status read                            */
+    int Started;            /* DN_STARTED                                 */
+    int Problem;            /* DN_HAS_PROBLEM                             */
+    INST_U32 ProblemCode;   /* its problem number                         */
+} MK_S98_MF;
+/* 1 when the mark's restart first sets this devnode's install to run
+ * again: on NT 5.x with the policy value good, a plain NVMe function below
+ * the unit with no driver, no id, in an admitted state, not declined and
+ * not protected. Never one with a driver or an unread Service. */
+int mk_s98_mark_sets(const MK_S98_MF *in);
 
 /* ---- the self-test -------------------------------------------------------- */
 

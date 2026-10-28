@@ -6,7 +6,7 @@
  * types, which clash with the Windows headers QEMU's osdep pulls in on
  * MinGW. Compiled with the core, strictly C89.
  *
- * Written for xhci98, 2026-10-15. SPDX-License-Identifier: GPL-2.0-only
+ * Written for xhci98, 2026-10-15. SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "../../src/cm/tbt_u4cm.h"
@@ -72,6 +72,13 @@ static ULONG xcLinkDown(PVOID ctx, const TBT_U4_LINKDOWN *info)
     return TBT_U4_STMT_WITHHELD;
 }
 
+static int xcAsm7;
+
+void xc_set_asm7(int on)
+{
+    xcAsm7 = on;
+}
+
 long xc_start(const XC_OPS *ops, void *arena, unsigned long phys,
               unsigned long bytes, int usb3)
 {
@@ -89,6 +96,7 @@ long xc_start_clean(const XC_OPS *ops, void *arena, unsigned long phys,
     TbtU4DefaultConfig(&c);
     c.Usb3Tunnel = (BOOLEAN)(usb3 != 0);
     c.PreOsCleanup = preOsCleanup;
+    c.AsmPcie7Credits = (BOOLEAN)(xcAsm7 != 0);
     c.RingFlags = TBT_RING_START_MASK_IMC;
     p = (UCHAR *)&xcRing;
     for (i = 0; i < sizeof(xcRing); i++) {
@@ -136,6 +144,9 @@ unsigned long xc_get(int what, unsigned long port)
     case XC_ACKS: return xcCm.Ctl.Counters.AcksPlain + xcCm.Ctl.Counters.AcksEnhanced;
     case XC_HOST_ADP_PRESENT:
         return port < TBT_U4_MAX_ADP ? xcCm.HostRouter.Adp[port].Present : 0;
+    case XC_HOST_ADP_TYPE:
+        return port < TBT_U4_MAX_ADP ? xcCm.HostRouter.Adp[port].Type : 0;
+    case XC_USB3_DOWN: return p != NULL ? p->Usb3Down : 0;
     case XC_DEV_ADP_PRESENT:
         p = TbtU4Port(&xcCm, port >> 8);
         return p != NULL && (port & 0xFFUL) < TBT_U4_MAX_ADP ?

@@ -163,13 +163,80 @@ typedef struct _TR_XHQ {
     TR_U32 Appends;
     TR_U32 Dropped;
     TR_U32 Flavour;
+    /* Version 2 (3.3.0.0; record 25 sections 18 and 19); 0 and NULL in a
+     * version 1 answer. */
+    TR_U32 Version;             /* XHQ_VERSION_1 to XHQ_VERSION             */
+    TR_U32 DriverVersion;       /* XHQ_O_DRIVER_VERSION                     */
+    const unsigned char *Xport; /* the transport part's records             */
+    TR_U32 XportCount;
+    TR_U32 XportRecord;         /* one record's bytes, at least 40          */
+    /* Version 3 (roadmap-usb4 44.80): 0 and NULL in an older answer. */
+    const unsigned char *Ports; /* root port n's XHQ_PT_* at n - 1          */
+    TR_U32 PortCount;
 } TR_XHQ;
 
-/* An answer of n bytes. 1 whole and consistent; -1 the header alone or a
- * size above n (x->Bytes the size, at most XHQ_MAX_BYTES); 0 anything
- * else: magic, version, a part outside the answer or past its bound, a
- * counter part not whole words, a PCI part not 0 or 256 bytes. */
+/* An answer of n bytes, version 1, 2 or 3. 1 whole and consistent; -1 the
+ * header alone or a size above n (x->Bytes the size, at most
+ * XHQ_MAX_BYTES); 0 anything else: magic, version, a part outside the
+ * answer or past its bound, a counter part not whole words, a PCI part
+ * not 0 or 256 bytes, a transport part not whole records or above
+ * XHQ_XPORT_MAX of them, a ports part above XHQ_PORTS_MAX bytes. */
 int tr_xhq_parse(const unsigned char *b, size_t n, TR_XHQ *x);
+
+/* The running driver's version from a header (at least XHQ_HDR_BYTES_V1
+ * bytes, n of them): 1 and *packed for a version 2 header of n >=
+ * XHQ_HDR_BYTES_V2 or a version 3 one of n >= XHQ_HDR_BYTES; 0 for a
+ * version 1 header (a driver before 3.3.0.0); -1 for anything else (not an
+ * answer of this driver). */
+int tr_xhq_driver(const unsigned char *b, size_t n, TR_U32 *packed);
+
+/* Root port `port`'s XHQ_PT_* from a parsed answer (roadmap-usb4 44.80);
+ * -1 when the answer has no ports part (a driver before it, or x NULL) or
+ * the port is past it. */
+int tr_xhq_port_top(const TR_XHQ *x, TR_U32 port);
+
+/* One storage transport record (record 25 section 19). */
+typedef struct _TR_XPORT {
+    TR_U32 Slot;
+    TR_U32 Port;
+    TR_U32 Route;
+    TR_U32 Iface;               /* 0xFF a device PDO                        */
+    TR_U32 Transport;           /* XHCI_XPORT_NONE .. _REFUSED              */
+    TR_U32 Why;                 /* XHCI_XPORT_WHY_*                         */
+    TR_U32 Alternate;
+    TR_U32 Inputs;              /* XHCI_XPORT_F_*                           */
+    TR_U32 Triple;              /* class 7:0, subclass 15:8, protocol 23:16 */
+    TR_U32 Count;
+} TR_XPORT;
+
+/* The record of root port `port` and route `route`: 1 and *r; 0 none. */
+int tr_xhq_xport_find(const TR_XHQ *x, TR_U32 port, TR_U32 route,
+                      TR_XPORT *r);
+
+/* xhci_xport.h's values, which that header cannot give a tool; test_trlog
+ * holds them equal. */
+#define TR_XPORT_NONE               0UL
+#define TR_XPORT_BOT                1UL
+#define TR_XPORT_UAS                2UL
+#define TR_XPORT_REFUSED            3UL
+#define TR_XPORT_WHY_NOT_UAS        0UL
+#define TR_XPORT_WHY_UAS            1UL
+#define TR_XPORT_WHY_UAS_ONLY       2UL
+#define TR_XPORT_WHY_UAS_ONLY_FORCED 3UL
+#define TR_XPORT_WHY_BOT_FORCED     4UL
+#define TR_XPORT_WHY_BOT_NO_STREAMS 5UL
+#define TR_XPORT_WHY_NO_STREAMS     6UL
+
+/* The "Transport:" line's words (section 19 item 3), without the label:
+ * "UAS (the device offers Bulk-Only and UAS; UAS chosen)", with
+ * "(interface n)" for a function and "; and N more storage interfaces"
+ * where the count says so. */
+void tr_xport_text(const TR_XPORT *r, char *out, size_t cap);
+
+/* Section 19 item 4: 1 when the record says UAS and `service` (the
+ * devnode's driver: a service name, or a 9x file name) is Windows'
+ * Bulk-Only usbstor, compared without case or a ".sys". */
+int tr_xport_stale(const TR_XPORT *r, const char *service);
 
 /* The "Driver log (xhci98)" node's text from a parsed answer: the build,
  * recording on or off with the advice, the nonzero counters by name, the

@@ -103,6 +103,7 @@ ntoskrnl.exe!IoReleaseCancelSpinLock       all  required  nt52-amd64-export; twi
 
 # --- Task 26-A.8: the door (twins of the x86 rows of the same task) ---
 ntoskrnl.exe!IoCreateSymbolicLink          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
+ntoskrnl.exe!IoGetDeviceObjectPointer      all  required  nt52-amd64-export; twin of the x86 row (task 44.81, the probe of the controller's \DosDevices name before it is created)
 ntoskrnl.exe!IoDeleteSymbolicLink          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 ntoskrnl.exe!IoRegisterDeviceInterface     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 ntoskrnl.exe!IoSetDeviceInterfaceState     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)

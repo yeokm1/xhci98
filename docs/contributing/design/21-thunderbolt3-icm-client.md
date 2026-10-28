@@ -48,6 +48,20 @@ day): the client reads each announced router's USB4 Version once per
 occupancy, so the status record no longer calls every such router
 Thunderbolt 3; first on the integrated rows and Maple Ridge, and from
 2026-10-22 (the owner's answer of that day) on every row.
+Sections 3.3 and 6.3 revised 2026-10-25 (task 44.40, the owner's decision
+of that day on design record 22 section 18.7): the ASMedia ASM4242 is a
+family, its NHI `1B21:2425` (still matched by the INFs' class line) with
+its switch's downstream port `1B21:2423`, so the discrete-switch source
+takes its Hot-Plug Capable ports as the tunnel-port set.
+Section 3.3 revised 2026-10-27 (roadmap-usb4 task 44.55, the owner's
+decisions of that day): the ASM4242's NHI, still matched by the class
+line alone (no id line, so no change of rank), is named `xHCI98 USB4
+Router (ASMedia ASM4242)` by the installer's FriendlyName, as the xHCI
+controllers are (record 23 section 5.13.8), and the filter line of its
+downstream ports names it, `xHCI98 USB4 PCI Bridge (ASMedia ASM4242)`.
+Section 6.1.2, added 2026-10-27 (task 44.54, the owner's decision of
+that day): on 98 SE and ME, under the USB4 profile, the removal of a
+drive that left with the controller waits for its return.
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -169,6 +183,8 @@ Out, each with where it goes:
   so an eject stops drivers and never the tunnel.
 - The dock's own devices: nothing here drives an xHCI, an NVMe or a NIC. The
   xHCI behind the tunnel is `xhci98.sys`'s by class, as any other.
+- A device chained behind another device's own PCIe switch (a daisy
+  chain): design record 34, for a later release.
 
 ### 1.4 How generic a Thunderbolt 3 client can be (owner's question, 2026-10-14)
 
@@ -879,7 +895,7 @@ filter INFs, the USB4-only hosts' tunnel ports where the same `pci.ids`
 | `8086:5783` | JHL9540 Thunderbolt 4 Bridge [Barlow Ridge Host 40G 2023] | Barlow Ridge `5784` | untested |
 | `1022:14CD`, `1022:14EF` | Family 19h USB4/Thunderbolt PCIe tunnel | AMD's USB4 hosts | untested |
 | `1022:150A` | Strix/Strix Halo PCIe USB4 Bridge | AMD's USB4 hosts | untested |
-| `1B21:2423` | ASM4242 PCIe Switch Downstream Port | ASMedia ASM4242 (class `0C0340` host) | untested |
+| `1B21:2423` | ASM4242 PCIe Switch Downstream Port | ASMedia ASM4242, NHI `1B21:2425` (matched by class `0C0340`; a family since task 44.40; named by the installer's FriendlyName since task 44.55) | its topology as record 22 section 18.1 gives it; the driver untested |
 | `1B36:0001` | the emulator's i440FX `usb4-tunnel-bridge` (QEMU's PCI-to-PCI bridge id) | `usb4-emu` | [obs] `runs/run-39.md` 39-0.7 |
 | `1B36:000C` | the emulator's q35 `usb4-tunnel-port` (QEMU's PCIe root port id) | `usb4-emu` | not read here |
 
@@ -941,7 +957,7 @@ the same lines rank as the three strings did (record 23 section 5.13).
 | `4D33` | `U4WlDesc` | `xHCI98 USB4 Router (Intel Wildcat Lake)` | `cm_vals.c`; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_WCL_NHI0` |
 | `5781`, `5784` | `U4BrDesc` | `xHCI98 USB4 Router (Intel Barlow Ridge)` | `cm_vals.c` (host 80G, 40G); Linux `nhi.h` `PCI_DEVICE_ID_INTEL_BARLOW_RIDGE_HOST_80G_NHI`, `_40G_NHI` |
 | `1022:1668`, `1022:1669` | `U4PsDesc` | `xHCI98 USB4 Router (AMD Pink Sardine)` | `cm_vals.c`; record 22 section 3.1; FreeBSD `nhi_reg.h` `DEVICE_PINK_SARDINE_0`, `_1` (Linux names no AMD NHI id) |
-| class `0C0340` | `U4Desc` | `xHCI98 USB4 Router` | any other USB4 host (ASMedia, other AMD, the emulator's `1B36:00F4`) |
+| class `0C0340` | `U4Desc` | `xHCI98 USB4 Router` | any other USB4 host (ASMedia, other AMD, the emulator's `1B36:00F4`); the ASM4242 (`1B21:2425`) then gets `xHCI98 USB4 Router (ASMedia ASM4242)` as the installer's FriendlyName (`instNhiFnNames`; 2026-10-25; task 44.55, record 23 section 5.13.8) |
 
 The product is the family, not the part: the 2C, 4C, LP and C parts of
 Alpine Ridge are one name, as Tiger Lake's UP3 and H are and Barlow Ridge's
@@ -956,12 +972,17 @@ name - so the filter's descriptions name the bridge, not the filter:
 `xHCI98 Thunderbolt PCI Bridge` (`TbBridgeDesc`) for the Thunderbolt 2
 and 3 generation's ports (Falcon, Alpine and Titan Ridge, Ice Lake `8A1D`
 to `8A23`), `xHCI98 USB4 PCI Bridge` (`U4BridgeDesc`) for the USB4
-generation's (Maple Ridge, Tiger Lake to Raptor Lake, Barlow Ridge, AMD,
-ASMedia) and `xHCI98 PCI Bridge` (`BridgeDesc`) for the emulator's QEMU
-bridges, every line keeping its `&CC_0604` form and the one set of
-install sections. One id names every port of a switch, upstream and
-downstream alike, and `CC_0604` does not tell them apart, so no name
-claims a port's role. The service is `xHCI98 Thunderbolt and USB4
+generation's (Maple Ridge, Tiger Lake to Raptor Lake, Barlow Ridge, AMD),
+`xHCI98 USB4 PCI Bridge (ASMedia ASM4242)` (`U4AsBridgeDesc`, task 44.55,
+the owner's decision of 2026-10-27, the maker and product as its NHI's)
+for the ASM4242's downstream port `2423`, and `xHCI98 PCI Bridge`
+(`BridgeDesc`) for the emulator's QEMU bridges, every line keeping its
+`&CC_0604` form and the one set of install sections. One id names every
+port of a switch, upstream and downstream alike, and `CC_0604` does not
+tell them apart, so no name claims a port's role. The ASM4242 is the
+exception: its upstream port has an id of its own (`2421`, record 22
+section 18.1) that no filter line binds, so it keeps Windows' own
+bridge name, and only the four downstream ports carry the product. The service is `xHCI98 Thunderbolt and USB4
 Connection Manager (xhcicm)` in all four INFs; no name carries "(TM)".
 The gate's `CM-DESC` holds each line to its generation's description and
 each string to its text. `StartType=3` (demand) for the NHI service,
@@ -1335,7 +1356,9 @@ filter's pass-through: a system power IRP is
 marked pending and passed down, and its completion routine requests the
 matching device power IRP (`PoRequestPowerIrp`) and completes the system
 IRP, with one `PoStartNextPowerIrp` before that completion, when the
-device IRP has finished; a D3 device IRP has its quiescence (section 5.6)
+device IRP has finished (on Windows 98 SE and ME a shutdown requests no
+device IRP and does not retain the system IRP for its quiescence, section
+5.6); a D3 device IRP has its quiescence (section 5.6)
 run on the thread first and is forwarded when that work is done; a D0
 device IRP is marked pending and forwarded with a completion routine that
 queues the reinitialisation to the thread and **retains** the IRP until
@@ -1841,7 +1864,9 @@ the loss - the tunnel-up re-enumeration's, the start's baseline or a
 marking window's - each revalidated by the instance id recorded then and
 found through the devnode tree alone, never by reading a bridge header
 the loss may have reset; a refusal is respected, and no re-enumeration
-of that bridge runs before the removal), and say nothing about the
+of that bridge runs before the removal; under the USB4 profile the
+removal waits for the host interface's return and a closed path,
+section 6.1.2), and say nothing about the
 endpoint: presence lost, not quiescence (section 7.3). `nvme98`'s
 link-state channel gets no statement from it: on NT each entry is treated
 as for a withheld one (`cm_nvlink.h` CM_NVLINK_LOST: never DOWN_QUIESCED,
@@ -1900,6 +1925,75 @@ instance, in the order the capture or the client shows:
   the same on either route, and `xhci98.sys`, whose D3 is passed down
   from its own dispatch routine, is unchanged. Sleeps on 9x, and every
   transition on NT, request their device IRP as before.
+  **And on Windows 98 SE and ME it sends no configuration IRP** (task
+  44.43, 2026-10-26; `CmPowerShutdownConfig`, `cm_pwrr.c`, host suite
+  `test_cm_pwrr`): the quiescence's last steps - the Bus Master bit
+  cleared and, on the integrated family, the force-power bit restored -
+  are left out there, at the quiescence and at a stop that runs after
+  the shutdown's system IRP, and the log says so
+  (`cm.shutdown.no-config`); a start queued beside that system IRP is
+  made inert before its first read, and the configuration route itself
+  refuses every request once that system IRP is published (`cmConfigOnce`),
+  work already running included, as does the query device's identity
+  read (`cmQId`, `IRP_MN_QUERY_ID`): no IRP of this driver's goes to the
+  bus after it.
+  Read in the emulator on QEMU's q35 board, 98 SE installed with ACPI
+  (`runs/run-44.md`, "44.43"; ME the same by the q35 base images'
+  reading): every shutdown with the connection manager started hung at
+  "Windows is shutting down", the CPU in the
+  VMM's idle loop, and the guest's memory showed the thread in that
+  direct route waiting on the `IRP_MN_READ_CONFIG` of the Command
+  register that the Bus Master clear reads first (`CmNhiQuiesce`,
+  `CmNhiSetBusMaster`, `cmConfigOnce`), which the bus never completed;
+  the system IRP, completed only after it, held the shutdown. With the
+  step left out 98 SE powered off in about 3 s, twice, and ME as the
+  run sheet records. On the i440FX images of the earlier legs the same IRP had
+  returned (43.65's, and the shutdowns of task 44.30's legs), so what the
+  bus does differs with the board or its power setup; why is not read.
+  The rings are stopped and mailbox `0x07` sent before it through the
+  host interface's registers and ring, so where the quiescence runs
+  nothing of this driver's runs on the host interface afterwards (since
+  44.47, below, it may not run at all). The machine then powers off, or
+  restarts; that a warm restart leaves no harm from the Bus Master bit
+  still set, and that an integrated controller's force power kept at a
+  9x shutdown is harmless, are inferred, not read (98 SE and ME hang on
+  a warm restart in the emulator, and no integrated controller has run
+  9x). Sleeps, and NT, are unchanged.
+  **And on Windows 98 SE and ME the system IRP does not wait for the
+  thread** (task 44.47, 2026-10-27; `CM_PWR_DETACH`, `cm_pwrr.c`, host
+  suite `test_cm_pwrr`): at a shutdown the completion routine publishes
+  the system state, queues the quiescence above to the
+  connection-manager thread with no IRP (`CM_WORK_QUIESCE`), and lets
+  the system IRP go on at once. This replaces, for the shutdown only,
+  43.65's order of the quiescence first and the system IRP after it;
+  the quiescence itself, with 44.43's rule, is unchanged, and it runs
+  when the thread next takes its work - or not at all, where the
+  machine powers off or restarts first, the rings then left running.
+  Read in the emulator on QEMU's
+  q35 board with the ASM4242 profile (the USB4 profile, record 22) and
+  its enclosure attached (ME, `runs/run-44.md`, "44.47"): most
+  shutdowns, and restarts, hung after the first `xhci98.sys`
+  controller's D3; the trace showed the system IRP reaching this driver
+  and the direct route queued, then no further step of the thread's,
+  the CPU in the VMM's idle loop; the thread's stack held a ring
+  transfer of its idle tick (the USB4 profile's learning retried for a
+  port still pending, record 22 section 7.6), from a memory image.
+  Why a thread inside such a transfer, whose waits are timed, does not
+  run again at that point of a 9x shutdown is not read (it is NTKERN's
+  and the VMM's); an idle thread, waiting for its work, is woken by the
+  queueing itself, and the same machine shut down without the
+  enclosure, or with `XhciCmMode` 0. What the route gives is narrower
+  than "nothing waits for the thread": the system IRP no longer does; a
+  later request that waits for it - a PnP stop or removal, whose joins
+  protect the extension's lifetime and stay as they are - still would,
+  and none was seen at a 9x shutdown in these readings. At a power-off
+  rings left running stop with the power. At a warm restart the
+  function's DMA is stopped only by the platform's reset, and a
+  following boot may reuse the memory the rings wrote: that the reset
+  comes first is inferred, not read, as for 44.43's Bus Master bit
+  (98 SE and ME hang on a warm restart in the emulator); the quiescence,
+  where the thread takes it in time, still stops the rings first.
+  Sleeps, and NT, still complete their system IRP after the transition.
 - **System suspend** (`IRP_MN_SET_POWER` to D3 for S3 or S4): first the
   held mark of section 6.3 on every active member; then rings stopped,
   then the row's mailbox sequence of section 1.4.4 - FR and AR `0x05` save
@@ -2245,8 +2339,10 @@ are the DDK's, and the legs on 98 SE and ME are what confirm them.
 owner, 2026-10-16); 0 turns this off, which leaves a hot-added bridge as
 it came up (on the P14s, Code 29 until a restart). Windows 98 SE and ME
 only: the NT route never reads it, since `pci.sys` owns a bridge's bus
-numbers and windows there. No INF writes it and the installer neither
-asks for it nor writes it.
+numbers and windows there. The x86 INF's 98 SE and ME install writes it
+at 1, only where it is missing (task 44.46, owner 2026-10-26, replacing
+the owner's 2026-10-16 "no INF writes it"); the installer never asks for
+it, and `INSTALL /set` and the window's Advanced row set it.
 
 **The diagnostic.** The 9x worker copies its last attempt to the NHI,
 and the thread writes it as `XhciCmBridgeDiag` (`REG_BINARY`, twenty
@@ -2265,6 +2361,251 @@ choice, and the user's way round it is the enclosure present at power-on
 with pre-boot on. Thunderbolt BIOS Assist Mode on is no way round on 98:
 read on the P14s with Assist on, the NHI is absent from Device Manager
 with or without the enclosure and a plug brings up nothing.
+
+### 6.1.2 A drive that left with the controller: its removal after the return (task 44.54, 2026-10-27)
+
+**What was read.** Task 44.17 (`runs/run-44.md`, "44.17 (continued)")
+found that on 98 SE, with the emulator's ASM4242 model on q35 and
+`root-hotplug=restore`, a tunnelled drive that leaves together with the
+whole USB4 controller (the root port's `present` false, then true) comes
+back at problem 14 (`CM_PROB_NEED_RESTART`) with no volume, although the
+connection manager contains the loss and 42-A.10's recovery commits with
+the tunnel preserved. Task 44.54 read why (`runs/run-44.md`, "44.54",
+which has the vehicle, each variant and the evidence), on a copy of that
+guest (the same package, a test cut of `078e3d4c`) with Stor98's
+debug-port image (the same Stor98 source, built with `STOR98_DBGPORT=1`)
+and the emulator's debug port:
+
+- At the departure the worker took the `CONTROLLER_UNAVAILABLE` request
+  of section 5.5 and removed the retained child of the member, the
+  enclosure's upstream bridge, by the ordinary transaction:
+  `Query_Remove_SubTree` and `Remove_SubTree` both returned `CR_SUCCESS`
+  (the log's `cm.reenum.9x.query-remove` and `cm.reenum.9x.remove` carry
+  those calls' results, not counts), then `Reenumerate_DevNode` of both
+  members. Stor98 received `HwAdapterState(FALSE)` and stopped with no
+  hardware access (stages `0x67` 0, `0xA9`, `0xB3` 1, `0x8B`, `0xCF` 0):
+  stage for stage the sequence of a plain unplug of the enclosure on a
+  controller that answers, after which a re-plug loads Stor98 afresh
+  (`DriverEntry`, stage `0x01`).
+- At the return Stor98 recorded nothing: no `DriverEntry`, no
+  `HwFindAdapter`. The new devnode's status was `0x18006EA6`:
+  `DN_DRIVER_LOADED` and `DN_ENUM_LOADED` set, `DN_STARTED` and
+  `DN_NOT_FIRST_TIME` clear (it never received a configuration start),
+  problem 14. Stor98's new instance is never started.
+- Three variants place the trigger. The connection manager built to make
+  no re-enumeration during the loss (the request removal-only): problem
+  14 again, so the containment's `Reenumerate_DevNode` calls on a bus
+  that reads all ones are not it. A fresh enclosure (unplugged while the
+  controller was away, plugged after the return): problem 14 again, so
+  the restored configuration of the drive is not it. The connection
+  manager built to make no removal at all during the loss: after the
+  return the old Stor98 instance was still bound and its volume usable
+  (the emulator's drive was not reset), and a plain unplug and re-plug of
+  the enclosure on the recovered controller loaded Stor98 afresh, which
+  started. A re-plug after the failure does not recover it: the
+  enclosure's upstream bridge then stays at problem 29
+  (`CM_PROB_HARDWARE_DISABLED`) with no resources, until a restart.
+
+The inference these support: the trigger is the removal's timing, made
+while the member (the tunnel port the removed subtree hangs from) and
+everything above it read all ones. How the old instance's teardown, IOS
+and CONFIGMG then hold the next instance at problem 14 was not read (their
+internals are not observable here). A removal of the same subtree while
+the member answers and the endpoint is absent - the case of a plain
+unplug, section 6.1 and Stor98's gate G9 - works, before and after a
+recovery. Stor98's old instance stops the same way in both cases, so
+nothing in Stor98 is changed.
+
+**The rule.** On 98 SE and ME, under the USB4 profile, whose loss has a
+recovery (record 22 section 7.7):
+
+1. **At the loss** the `CONTROLLER_UNAVAILABLE` request is posted as
+   before - the retained set taken, no configuration space read below the
+   members (`NoScan`) - but its **removal is held** (the worker's
+   `Defer`), and the re-enumeration owed after it is held with it, not
+   posted (so a held removal arms no retry and no timer of the worker).
+   `ReqGone`, `NoScan`, the retained set, the request's sequence and any
+   accepted query or claim keep every meaning they have; only the removal
+   waits. A held removal that names nothing - no child retained at the
+   member's last healthy walk, no removal-only request merged - is
+   resolved at once (there is no devnode to protect) and its held
+   re-enumeration dropped, so a member with no drive behind it (an empty
+   port) owes nothing; but the member stays held (`Defer`), so a later
+   request on it - the barrier's removal-only request among them, whose
+   walk may find a devnode the retained set did not name - waits for the
+   release like any other. And each member the held request names is marked for the
+   drain (below): on 98 SE and ME the loss changes no entry of Stor98's
+   table (section 5.5), so the reclassification U22 makes of a tunnel
+   whose entry lost `UP` is made here of those members' PCIe tunnels.
+   Only a request actually held marks anything: with `XhciCmReenum` 0,
+   or when the loss comes before the worker has started (`LossSeen`), no
+   request is posted, nothing is held and nothing is marked.
+2. **At the recovery** (record 22 section 7.7 part 4), the marked members'
+   PCIe tunnels are not preserved: step 4 demotes each port with a PCIe
+   tunnel up behind a marked member, step 5 drains it at both ends - the
+   path closed, so the endpoint behind it is reset by its link going down
+   (assumption A1) and can no longer reach memory - and its member takes
+   the removal debt and the barrier.
+3. **At the commit**, in this order: the debt taken into the barrier
+   (`RecBarred`) and the worker's `Hold` published for it
+   (`CmReenumHold`), then the hold released for each member whose path
+   is **closed** (`CmCfgwkRelease`; its held re-enumeration is dropped,
+   not posted: a released member's tunnel was drained, and the rebuild's
+   own tunnel-up post re-enumerates it with the rebuilt bridges numbered
+   first, section 6.1.1 - the held no-scan one, retried until the barrier
+   lifted, could run before that post and let PCI.VXD meet the
+   enclosure's bridges unnumbered, read on 98 SE as problem 29 on its
+   upstream bridge - or vacant, with nothing to bring back), then the
+   barrier's removal-only requests
+   (`CmNhiU4Barrier`), which merge into a removal still held and wait
+   with it. Closed is proved affirmatively, port by port, by this loss's
+   own drains or by a link read disconnected at the commit, as the
+   drains' removal debt is taken (`TbtU4TakeDebt`, while the bindings
+   still stand). A port is proved
+   closed when it was drained in this loss with its read-back passed (it
+   carries debt, `RecDrainPcie` clear: step 5's closure, the same one the
+   learning's pending mark waits for), no PCIe tunnel is up on it and no
+   host entry is left unswept (`HostResidual` clear); or, carrying no
+   debt, when it is **vacant** now (`TbtU4PortVacant`): its host lane 0
+   adapter read at the commit and found `DISCONNECTED` - no router on its
+   link, so no endpoint behind it whatever host entries an earlier
+   teardown left - with nothing of this driver's recorded on it (no
+   device, no tunnel up, owed or unproved, no host entry unswept, no
+   departed router). Any other port - one with no drain in this loss and
+   a link not read or not disconnected (an `EMPTY` port whose link still
+   carries a router not yet classified too), one HELD with an unverified
+   path, one whose interrupted sequence was undone without proof, a
+   tunnel still up, a drain whose read-back failed - proves nothing. A
+   member with ports bound to it (by correspondence,
+   record 22 section 7.6) is closed when each of them is proved closed:
+   a bridge carries one port's tunnel, so no other port reaches its
+   endpoint (the same rule the debt's attribution uses). A member with
+   no port bound to it is closed only when no port whose member is not
+   known is left unproved: on the ASM4242 model the correspondence is not
+   known at the commit (its router names no ports, `u4.map.none`, and a
+   tunnel found at the start leaves none learned), so there the drained
+   port and the vacant one together prove it; an unused port with a
+   router on its link and no PCIe tunnel (a USB3-only device) keeps such
+   members held - a limit of this rule. A member not proved closed at
+   the commit keeps
+   the hold until the restart: no later teardown releases it, since an
+   ordinary teardown records no proof. Released, the removal runs with
+   the
+   member answering and the endpoint cut off behind the closed path - the
+   plain unplug's case above, read working: each retained devnode
+   revalidated by its instance id,
+   `Query_Remove_SubTree` (a refusal respected, never forced),
+   `Remove_SubTree` (no `REMOVE_PENDING` request is made, as for any
+   vanished child: `CmNvlinkWkRequest` asks only a function that still
+   answers), and the barrier's retirement proof, mode *retire*, the
+   per-tunnel rebuild with a new generation, its `UP`, and the
+   re-enumeration that brings the drive back as a fresh device bound to
+   that generation, all as record 22 section 7.7 gives them. The worker
+   holds a member's re-enumerations (`Hold`, `CmNhiU4WorkerHold`) not
+   only while its barrier stands but until its port's PCIe rebuild has
+   been attempted (`RebuildPcie` clear; every member while the port's
+   member is not known), so no re-enumeration of it runs between its
+   retirement and the rebuild - one that numbered an empty bus and then,
+   the tunnel coming up meanwhile, let PCI.VXD meet the rebuilt bridges
+   unnumbered; what is refused meanwhile (the rebuild's own post, the
+   rescan a stale removal owes, a retry) is retried once the hold lifts,
+   the tunnel up where its rebuild succeeded (a failed or skipped one
+   leaves the bus empty, and the retry finds nothing). A worker made
+   after the commit (a loss during the bind) takes the hold in force
+   before any work is posted to it. And when the hold lifts its no-scan mark (`NoScan`,
+   set by the loss's request and by the barrier's removal-only ones) is
+   cleared, so that re-enumeration reads configuration space and numbers
+   the rebuilt bridges first.
+4. **A final refusal** (`u4.recover.final`) releases nothing. It is this
+   driver's policy - it ends automatic recovery of this instance for the
+   boot - and proves nothing about the path: the controller and the
+   endpoint may answer again, so no removal is made without the closure
+   above. The devnodes then stay until the restart, the drive failing
+   its I/O.
+
+Nothing else releases the hold. A cooldown, a rearm or a power transition
+that ends an attempt keeps it for the next attempt; a second loss before
+the commit merges into it; a stop of the connection manager (the
+system's shutdown, a disable, a revocation) ends the worker with the
+removal still owed, as any owed request ends there, and the stop waits
+for none of it. While it is held the devnodes stay: Stor98's own gone
+state fails new requests at once (`SRB_STATUS_NO_DEVICE`) and MD-1's
+deadline ends any it holds, and the volume stays listed, as 98 keeps any
+volume after a surprise removal no CONFIGMG caller removes (Stor98's gate
+G9), until a commit proves the path behind it closed, or the restart.
+Holding the devnode is the safe side: its removal would free the port's
+memory while the endpoint might still reach it (Stor98's gate G5).
+
+**The PCI.VXD route during a loss.** The numbering of section 6.1.1, and
+the query device's answer below the members, read configuration space
+through PCI.VXD's route, opened once behind its guard (the identity of a
+member read through `_PCI_Read_Config` against the HAL's). An attempt
+made while the controller is away - the USB Tree asking for its report
+during the loss - found the member's identity all ones through the HAL,
+and the refusal it latched turned the numbering off for the boot, so the
+rebuilt enclosure's upstream bridge came back at problem 29 (read on ME,
+`cm.brnum.9x.pci-refused`). A member that does not answer through the
+HAL (no read, all ones, no vendor, or vendor `0001h`, Configuration
+Request Retry Status), or stops answering so before the guard's own
+`_PCI_Read_Config`, now gives
+no verdict: nothing is latched, the route stays closed (nothing is
+written through it) and it is tried again at the next need; only a
+guard that compared two answers and found them different still turns it
+off.
+
+**A refusal.** Where a file is open on the drive, `Query_Remove_SubTree`
+is refused and respected. Stor98's old instance, which entered gone at
+the loss or meets the drained tunnel now, stays failed: Stor98 has no
+reconnect of a gone instance (its identity-checked reconnect is planned,
+not built), so the drive is not usable through it. The member's barrier
+stands (its devnode not retired) and the barrier asks for its
+removal-only request again every `CM_U4_RETIRE_RETRY_MS`, the veto
+honoured each time, as record 22 section 7.7 part 4 already does; once
+the file is closed the removal succeeds, the barrier lifts and the
+rebuild brings the drive back. Until then the drive is listed and fails
+its I/O.
+
+**What changes for the user.** Before, the drive letter of a drive that
+left with the controller went at once, and the drive did not return
+until a restart. Now it stays during the loss (its I/O failing at once),
+and after the return it goes and comes back with its volume, no restart;
+where the recovery is refused for good, it stays listed and failing
+until the restart instead of going.
+
+**Scope.** The ICM client is unchanged: its R32 power-off follows the last
+unplug [obs], so no drive is behind it, and a TB3 controller lost with a
+drive attached was not read. NT is unchanged: there `pci.sys` removes the
+tree at the loss and adds it again at the return (task 44.17 on XP and
+7). `XhciCmReenum` 0 asks for nothing, as before. No counter is added;
+the log says `cm.reenum.9x.unavailable.deferred` (the members) when the
+hold is taken and `cm.reenum.9x.unavailable.released` (the members
+released, and above them those still held) when it ends for some, and
+`u4.contained.lost-up` carries the marked members.
+
+**Where.** `src\cm\cm_cfgwk.c` (`Defer` and `DeferReenum`,
+`CmCfgwkUnavailable`'s hold, `CmCfgwkRelease`; the removal loop skips a
+held member), `src\cm\cm_reenum.c` (`CmReenumUnavailable` asks for the
+hold under the USB4 profile; `CmReenumLossReturned` releases it),
+`src\cm\cm_nhi.c` (the marking at the containment; the closure read
+in `cmU4AfterCommit`'s debt loop and the release after `CmReenumHold`),
+`src\cm\tbt_u4cm.c` (`TbtU4PortVacant`, the core's one new read, with
+its host vector in `test\test_u4cm.c`, `test_port_vacant`: a port with a
+device, or a router on its link not yet classified, is not vacant; an
+empty one and one after an unplug are).
+
+**Legs.** On q35 with the ASM4242 model and `restore`: 98 SE and ME, the
+case above (the drive back with its volume and a new generation, no
+restart; data written before the departure and after the return
+compared); on 98 SE, a copy running at the departure (gone, the I/O
+failed, the drive back); and, against a regression, a plain re-plug of
+the enclosure, Safely Remove, and the 44.43 and 44.47 shutdown cases
+(Shut Down with the enclosure and the connection manager running) on 98
+SE and ME. Not read by these legs and owed: a refusal followed by its
+release, a final refusal (the emulator offers no unverified stop), a
+drain whose read-back fails, a host whose port correspondence is
+learned with an unused port carrying a USB3-only router,
+a cooldown or power interruption during the hold, a second loss before
+the commit, and a disable during the hold.
 
 ### 6.2 Windows 2000 and later: the bridge filter
 
@@ -2312,6 +2653,355 @@ request is completed - the list is read and never changed. Its
 `AddDevice` attaches to any PDO the INF put it on; the location it
 publishes is what the NHI matches.
 
+### 6.2.1 A function hot-added behind a tunnel on Windows 2000's Standard PC HAL: its interrupt (task 44.53, 2026-10-27)
+
+**Status: built** (the owner's decision of 2026-10-27, after
+`runs/run-44.md` section 44.53; the legs in "44.53 (continued)").
+Windows 2000 on the ACPI HAL gives the same hot-added drive its
+interrupt (read below): of the two configurations read, the failure is
+the Standard PC HAL's (the MPS and the ACPI APIC HALs are not read).
+
+**What was seen** (`runs/run-44.md` section 44.50). On QEMU `q35` with
+Windows 2000 SP4 on the Standard PC HAL (`hal.dll` of hardware id
+`e_isa_up`, the devnode `Root\PCI_HAL\0000`), the emulated ASM4242 host
+and the ORICO model behind its first tunnel port, an NVMe drive
+hot-plugged after the system started is left at Code 10: its
+configuration space has Interrupt Pin 1 and Interrupt Line 0, its
+resources are 16 KB of memory and no interrupt, and SCSIport fails the
+PnP start (event 13, `IO_ERR_INCORRECT_IRQ`, unique value `418h`) before
+it calls Stor98's `HwFindAdapter`. The same drive present at a cold boot
+has Line `0Bh`, is given IRQ 11 and works. XP, Vista, 7, 8 and 8.1 x86,
+on the ACPI HAL, give the hot-added drive an interrupt on the same
+platform (44.45's legs).
+
+**Why** [inf]. On this HAL `pci.sys` appears to have no interrupt routing it can use
+here and builds a function's interrupt requirement from the Interrupt
+Line it read when it enumerated the function; SeaBIOS writes the Line of
+each function at POST only, so a function enumerated later reads 0 and
+gets no interrupt. The BIOS's `$PIR` table names its router as a PIIX3
+at 00:01.0, where the `q35` machine has its VGA, so no routing through
+the table is expected. Two readings fit this: 44.50's cold boot (Line
+`0Bh`, IRQ 11) and its try of writing Line `0Bh` after the plug, which
+changed nothing (the Line read 0 again after a restart of the bridge
+above it, consistent with `pci.sys` holding the value it read at
+enumeration). An ACPI HAL routes a PCI function's interrupt through the
+namespace's `_PRT`, walking up through bridges to the nearest one that
+has a `_PRT`, whenever a function arrives [inf], which fits XP and later
+working. Windows 2000 on the ACPI HAL (`halacpi.dll`, the 8259 PIC,
+the `q35` ACPI-HAL base `q35-bases\w2kacpi`) gives it one too: the same
+enclosure hot-plugged after a cold start without it came up with the
+drive at IRQ 11 (Line `0Bh` written, and so were the two switch ports'
+Lines), on Stor98, and its volume mounted (`runs/run-44.md` section
+44.53).
+
+**The shapes considered.**
+
+- (a) **The Line written before `pci.sys` reads it.** `pci.sys` reads a
+  function's header when it scans the bus the function sits on, in the
+  `BusRelations` request of the bridge above it, on the way down through
+  that bridge's FDO. The bridge filter (role 2) is an upper filter and
+  sees that request before the FDO, but only for the tunnel port itself,
+  that is for a drive directly on the tunnel bus (the emulator's direct
+  shape). Every bridge below the tunnel port carries a child filter
+  (role 3), which sits below `pci.sys`'s FDO and sees the request only
+  after the scan. The one moment a child filter has before the scan is
+  its bridge's own start, on the way back (the PnP manager starts a new
+  bridge, then asks for its relations); writing the Lines of the
+  bridge's secondary bus there would work for a chain plugged whole, but
+  not for a function that appears later below a started bridge, and it
+  needs a configuration write: `HalSetBusData` or
+  `HalSetBusDataByOffset`, which `xhci98.sys` does not import, so
+  section 10.3's rule (no pair the HCD has no evidence for) excludes it;
+  a write through the bridge's PDO (`IRP_MN_WRITE_CONFIG`) reaches the
+  bridge's own header only. Not used.
+- (b) **The interrupt added to the function's requirements** by its child
+  filter, in the `IRP_MN_QUERY_RESOURCE_REQUIREMENTS` answer on its way
+  back, and taken out again of the start it passes to `pci.sys`. The child filter is above every new PDO the chain reports, to
+  `CM_TUNNEL_DEPTH_MAX` (record 31 sections 4.1 and 4.3), attached in
+  the parent's `BusRelations` completion and so in place before the PnP
+  manager asks for the new function's requirements. It needs no write to
+  the hardware and no new import (the pool pair through `cm_pool.c`,
+  configuration reads through `HalGetBusData`, the registry read through
+  `cm_reg.c`'s `RtlQueryRegistryValues`). **Chosen**, below.
+- (c) **A polled start at the port driver's level.** Not reachable:
+  SCSIport fails the start before it calls the miniport, whatever the
+  miniport's `HW_INITIALIZATION_DATA` says (44.50's leg c had
+  `HwInterrupt` NULL and failed the same), and Stor98's polled path and
+  its `storpollmode` setting are both in `HwFindAdapter`. The port
+  driver is the system's.
+- (d) **A stated limitation**: on 2000 with the Standard PC HAL, a drive
+  plugged after the start is reached through a restart with the
+  enclosure attached (a pre-boot tunnel, as on the q35 model and the
+  ASM4242 firmware's pre-OS connection manager). This is the course where (b)
+  is not taken.
+
+**What the driver does** (b). Three requests of the child filter (role
+3) on an NT target change; everything else of the filter is as record 31
+and section 7.4 say. The interrupt is the filter's own addition, and
+the filter keeps two records: `PciNoIrq`, whether the last successful
+query answer from below (`pci.sys`'s own, before any addition) held no
+interrupt, and `IrqAdded`, the Line it last added (0 for none). Only a
+successful query answer changes `PciNoIrq`: a failed query, a stop and
+a filter request leave both as they were, so a start built from an
+earlier assignment is still read against them.
+
+All three are inert, the requests passed down unchanged and neither
+record kept, unless the system is the one of step 1 below (Windows 2000
+on the Standard PC HAL); that test comes first.
+
+*The query.* Given `IRP_MN_QUERY_RESOURCE_REQUIREMENTS`, the child
+forwards it synchronously and reads the answer on its way back. If the
+answer is not a success or carries no list, it goes up untouched and
+both records stay. If it is a success whose list holds an interrupt,
+`PciNoIrq` and `IrqAdded` are cleared and the answer goes up untouched: a
+function `pci.sys` gave an interrupt, by routing or by a Line the BIOS
+wrote, is left alone. Otherwise `PciNoIrq` is set, and an interrupt is
+added only when all of these hold, each read at that request (else the
+answer goes up untouched and `IrqAdded` stays, since a configuration
+built from an earlier answer may still carry it):
+
+1. **The system** is Windows 2000 (NT 5.0, read from the kernel's shared
+   data page as `cmChildTagOs` does) on the Standard PC HAL: the first
+   `HardwareID` string of
+   `HKLM\SYSTEM\CurrentControlSet\Enum\Root\PCI_HAL\0000` is `e_isa_up`
+   (compared case-insensitively; read on the 2000 `q35` base), read once
+   at the driver's start on the NT role (`cm_reg.c`, no wait on anything)
+   and held for its life; anything else, a missing key or a failed read
+   included, is no. That is the configuration 44.50 read. On it the IRQ a
+   PCI function is given at a cold boot is its BIOS-written Line [inf:
+   one function read, the drive's `0Bh` and IRQ 11]. XP on the Standard
+   PC HAL is not read and is left out; the MPS HALs (`mps_up`, `mps_mp`)
+   and the ACPI HALs are left out because the Line is not known to be
+   their wire [inf: the MPS HALs route through the BIOS's MP table, the
+   ACPI HALs through `_PRT`].
+2. **The answer** is a success carrying a list (`IoStatus.Information`
+   not NULL) whose `ListSize` is within a bound (4 KiB) and agrees with
+   its lists' counts, and no alternative list holds a descriptor of type
+   `CmResourceTypeInterrupt`.
+3. **The function** reads, through `HalGetBusData` at its location, a
+   vendor id other than `FFFFh` and `0001h`, a type 0 header, and an
+   Interrupt Pin of 1 to 4. Its device and function are its
+   `DevicePropertyAddress`, its bus the secondary bus register of the
+   bridge directly above it (the first ancestor of step 4): on Windows
+   2000 `DevicePropertyBusNumber` is not yet answered when the
+   requirements are queried (read on `q35`: `STATUS_OBJECT_NAME_NOT_FOUND`,
+   while the address answers), so the location `CmRegAttLocate` reads at
+   the start is not there yet.
+4. **The wire.** Under the registration list's lock the child's ancestry
+   is copied: the location of each filter on its `Parent` links (a child
+   made by `AddDevice`, the unit, has none; its next is its `Bridge`),
+   each located, until a location that is an **active** member of a
+   domain's tunnel-port set (section 6.3; matched by location against the
+   members, not by the filter's kind: on a discrete controller the
+   chain's root bridge filter is the controller switch's upstream port
+   above the tunnel port, record 31 section 4.3, and that one may not be
+   active). At most `CM_TUNNEL_DEPTH_MAX` ancestors are copied, the
+   tunnel port included, which covers every function the chain reaches.
+   No such ancestor: no. Only the ancestors' locations are copied; the
+   function's own is built outside the lock (step 3). Outside the lock
+   each bridge from the tunnel port down must answer as a present type 1
+   header whose secondary bus is the bus of the location below it (for
+   the bridge directly above the function a second read, which catches a
+   change between the two reads; a link that moved since it was located
+   refuses). Then the swizzle of section 6.1.1 step 5: the function's pin
+   p, rotated by the device number of the function and of each bridge
+   between it and the tunnel port ((p - 1 + the sum) mod 4: the
+   PCI-to-PCI Bridge Architecture Specification's mapping of a
+   secondary-bus device's INTx onto the bridge's primary interface, which
+   PCI Express's virtual wires keep), must equal the tunnel port's own
+   Interrupt Pin minus one, and the tunnel port's Interrupt Line, read
+   there, must be 3 to 15 and not 8 or 13 (a sanity bound on an ISA IRQ,
+   not a proof of routing). The function's interrupt then travels the
+   tunnel port's own wire at the tunnel port's primary side, and the Line
+   is the IRQ the BIOS routed that wire to at POST [inf: the BIOS wrote
+   the port's Line by the same rule; in 44.50 the tunnel port read `0Bh`
+   and the drive at a cold boot `0Bh`]. A function whose interrupt
+   arrives on another of the tunnel port's pins gets nothing: no Line the
+   port reads says where that pin goes.
+5. **The new answer.** A copy of the list, from paged pool
+   (`CmAllocPaged`, as the request's contract requires of a replaced
+   list), each alternative list given one more descriptor after its own,
+   zeroed whole and then set: `Type` `CmResourceTypeInterrupt`, `Option`
+   0, `ShareDisposition` `CmResourceShareShared`, `Flags`
+   `CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE`, `MinimumVector` and
+   `MaximumVector` the Line [inf: the descriptor `pci.sys` gives a
+   function with that Line on that HAL; the legs compare it with the cold
+   boot's recorded requirements]. The old list is freed with `ExFreePool`
+   (`CmFree`), the new one completes the request, `ListSize` the new
+   size, and `IrqAdded` is set to the Line. A failed allocation completes
+   the request as it came back; `IrqAdded` stays.
+
+*The filter request.* `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` carries a
+list the PnP manager chose, which may be the query's answer (with the
+added interrupt) or a configuration it holds for the devnode (without
+it). Handling it departs from the bus filter's usual part, which is to
+report requirements through the query only; it is done so that a start
+built from a held configuration still has the interrupt. The child
+forwards the request synchronously; on its way back it reads
+`IoStatus.Information` afresh (a driver below may have replaced the list
+and freed the one that arrived). If `PciNoIrq` and `IrqAdded` are both
+set, the status is a success or `STATUS_NOT_SUPPORTED` (nothing below
+handled it), the returned list passes step 2's bounds and holds no interrupt, step 5's
+addition is made to that returned list, which is freed, and the request
+completes with `STATUS_SUCCESS`. Every other case - a list that already
+holds an interrupt, the filter's own included, any other status, a
+failed allocation - goes up as it came back, and neither record
+changes.
+
+*The start.* A bus filter that adds a resource to the requirements
+takes it out of the `IRP_MN_START_DEVICE` it passes to the bus driver
+(the contract of `IRP_MN_QUERY_RESOURCE_REQUIREMENTS`). So, on a start
+with `PciNoIrq` set (`pci.sys` asked for no interrupt) and `IrqAdded`
+not 0 (this filter added one), the child counts
+every partial descriptor of type `CmResourceTypeInterrupt` in the raw
+list (`AllocatedResources`), whatever its level:
+
+- none: the start goes down unchanged;
+- exactly one, its level `IrqAdded` (not 0), at the same position as an interrupt descriptor of the
+  translated list (`AllocatedResourcesTranslated`; the two lists list
+  the same resources in the same order, so the position, not the
+  translated vector, is compared), the two lists of the same shape (the
+  count of full lists and of partial descriptors in each): copies of
+  both lists without that descriptor are built (nonpaged, `CmAlloc`),
+  the current stack location is copied to the next, the next one's two
+  pointers are replaced by the copies, the completion is installed and
+  the request is sent down and waited for (a forwarding of its own,
+  since `CmForwardSync` copies the stack location itself), and the copies
+  are freed after it completes. The stack locations above (SCSIport's)
+  and the lists the PnP manager owns are not touched, so the function
+  driver is given the interrupt and `pci.sys` the resources it asked for;
+- any other case - more than one interrupt, one at another level (a
+  held configuration with an interrupt this filter did not add), no
+  interrupt at its position in the translated list, a shape that
+  differs - or copies that cannot be allocated: the start is failed (`STATUS_INSUFFICIENT_RESOURCES`) with
+  anything allocated freed, so `pci.sys` is never given an interrupt it
+  did not ask for. The function is then where it is today, at Code 10.
+
+A stop keeps both records, so a start after a stop or a rebalance
+without another query, or after a failed one, is read the same way. A
+start with `PciNoIrq` clear goes down unchanged (its interrupts are
+`pci.sys`'s), and so does one with `IrqAdded` 0 (any interrupt in it is
+not this filter's).
+
+*What Stor98 does with it.* The Interrupt Line register stays 0: neither
+`pci.sys`, which never sees the interrupt, nor this filter writes it.
+Stor98 on NT reads Pin and Line in `HwFindAdapter` and polls when the
+Line is 0 or `FFh`, even with an interrupt from the port (`polltun.h`
+`PollDecide`, `POLL_WHY_NO_LINE`), clearing the interrupt it reports to
+SCSIport. So the drive starts on Stor98, which runs it polled, its
+reason "no line"; the interrupt resource lets SCSIport start the
+adapter and is otherwise unused by Stor98. A function driver that takes
+its interrupt from the resources (a dock's xHCI or network controller)
+uses the IRQ. Making Stor98 interrupt-driven here is a change to Stor98's
+polling decision (its own project, `src/stor98/AGENTS.md`) and is not
+part of this section.
+
+*The Interrupt Line* (read 2026-10-27, `runs/run-44.md` "44.53
+(continued, 2)"). Writing the IRQ into the function's Interrupt Line
+after the stripped start does not reach Stor98, and is not done. A test
+image sent `IRP_MN_WRITE_CONFIG` for the byte at 3Ch through the
+function's own stack once `pci.sys`'s start had completed: the request
+succeeded, but the byte it carried came back 0 and the Line read back 0,
+both through the stack and through `HalGetBusData`. `pci.sys` keeps the
+Line itself [inf: it puts its own value in place of a written one and
+answers a read with the value it assigned, 0 for a function it gave no
+interrupt; SCSIport reads the miniport's configuration through the same
+`pci.sys`]. So the write tried, through the function's stack after the
+start, did not reach Stor98, which read 0 [inf: no other write path was
+tried; `xhci98.sys` imports no configuration write through the HAL, so
+`xhcicm.sys` may not either, section 10.3]. A Line Stor98 does read
+comes from `pci.sys`'s own assignment, made from an interrupt in its
+start: a second test image left the added interrupt in
+the start passed to `pci.sys` (the stripping skipped). `pci.sys` started
+the function with it, Stor98 reported "line 11 ... port 11/11
+interrupt", and the PIC's IRQ 11 counted 1,607 interrupts over a copy of
+100 MiB that compared equal, as at a cold boot (1,606); with the stripped
+start the same copy ran polled and IRQ 11 never fired. That route departs
+from the requirements contract the start's stripping follows, so it is
+the owner's decision (44.53 (continued, 2)); until it is taken the
+stripped start stands and Stor98 polls.
+
+*Other HALs* (read the same day on `q35`, `/HAL=` and `/KERNEL=` in
+`boot.ini` of copies of the overlays). Windows 2000 on `halmps.dll` (two
+processors, `ntkrnlmp.exe`) and on `halapic.dll` (one): the ASM4242's own
+upstream switch port, `1B21:2421` on bus 1 below the root port, is at
+Code 35 [inf: the firmware's MP table describes too little], so the USB4 host
+never starts and no hot plug can be read; the gate, which reads the HAL
+devnode's id, still reads `e_isa_up` there, since `/HAL=` changes the
+file and not the devnode. XP on the Standard PC HAL through `/HAL=` on
+its ACPI install: Windows enumerated its devices again (the xHCI
+controllers at Code 1) and a hot-plugged enclosure's chain stopped below
+its upstream port, so no reading either. No other HAL is shown to have
+the gap; the gate is not widened.
+
+The building of the new requirement list (the walk of the alternatives,
+the bound, the interrupt test, the sizes), the stripping of the start's
+lists, the swizzle test, the HAL id's test and the two records'
+sequences are pure functions of `cm_irq.c` (a file of its own beside
+`cm_ports.c`) with host vectors in `test_cm_irq`, built for x86 and for
+amd64, whose resource descriptor is four bytes longer; `cm_filt.c`
+asserts the byte offsets `cm_irq.h` reads against the DDK's structures
+at compile time. The wire's walk is `cm_reenum.c`'s (`CmRegIrqWire`,
+under the registration list's lock), the gate's read `cm_reg.c`'s
+(`CmReadIrqGate`, from `DriverEntry`). Each outcome is logged to the
+domain's log with the function's location and the Line given or the
+reason for none (`cm.chain.irq`, `cm.chain.irq.no`, `cm.chain.irq.filter`,
+`cm.chain.irq.nomem`, `cm.chain.irq.start.stripped`,
+`cm.chain.irq.start.refused`, `cm.chain.irq.start.nomem`). No registry
+switch: the step acts only where the function would otherwise have no
+interrupt.
+
+The IRQ is shared, level-triggered, with whatever else the BIOS routed
+to the same wire, as at a cold boot (the drive on IRQ 11 beside the
+tunnel port's wire in 44.50's leg b).
+
+**What it does not reach.** A function with no child filter: the first
+plug of a never-seen switch enclosure on 2000, whose bridges' first-time
+installs lose the chain (record 31 section 4.3); that drive arrives
+untagged and without Stor98 there in any case, and after the mark
+service's restart of the unit the chain is in place again for it. A
+function whose interrupt arrives on another pin of the tunnel port (a
+device number other than 0 on a switch's internal bus with an odd
+rotation). A tunnel port whose Line the BIOS did not write. Another HAL, or
+another system: XP on the Standard PC HAL included (step 1).
+
+**Real hardware** [inf; the hardware bench, 44-E.6, reads 98 SE, XP and
+10 x64 only (owner, 2026-10-27), so 2000 stays read on the emulator]. Which HAL Windows 2000
+installs on a real ASM4242 machine with a CSM is not read: an ACPI HAL where
+2000's ACPI driver accepts the firmware's tables (the `q35` ACPI-HAL base
+needed its FADT rewritten before 2000's setup took it), else an MPS HAL
+where the CSM has an MP table, else the Standard PC HAL; nor are its
+`$PIR` table and whether 2000 has a router for its chipset. On `q35`
+2000's ACPI HAL started only after the base's boot sector rewrote the
+FADT in memory (revision 3 and 244 bytes to revision 1 and 116; the
+base's README records bug check `5Ch` without it, and does not say
+which of the two, or the table's place in its page, is the cause), so
+whether the ACPI HAL starts on a real firmware's tables is open too. This
+section helps only on the Standard PC HAL.
+
+**Verification.** Host vectors (the list builder: one and several
+alternatives, an interrupt already present, an empty list, the bound, a
+`ListSize` that disagrees with the counts; the start's stripping: the
+descriptor first, last and alone, raw and translated lists of different
+shapes, no matching descriptor; the swizzle: depths 1 to 8, device
+numbers 0 to 31, every pin pair, Lines 0, 2, 8, 13, `FFh` and 3 to 15;
+the ancestry: an inactive upstream chain root with an active tunnel port
+below it, no active ancestor; the record's sequences: query adds,
+filter request carries it, start stripped; query adds, stop, start
+without a query; query finds `pci.sys`'s own interrupt; a filter request
+with a held configuration lacking it; query adds, start succeeds, a
+later query fails, stop, start; a start holding another level, or two
+interrupts, failed; an excluded system, and an eligible one that added
+nothing, each with a no-interrupt query then an interrupt-bearing start,
+unchanged). Legs on `q35` 2000 (Standard PC HAL): the
+hot plug after a restart (Stor98 started with an IRQ, the volume
+mounted, Stor98's polling decision read on its debug port, the
+requirements recorded for the devnode compared with the cold boot's);
+a cold boot with
+the drive (unchanged: the interrupt is `pci.sys`'s, nothing added); 7 x86
+and XP hot plug (unchanged: the gate is no). The ACPI-HAL 2000 base's
+hot plug is read already (above): nothing is needed there.
+
 ### 6.3 Finding the tunnel ports: a set per domain, with its source
 
 A **domain** is one NHI and the fabric behind it; a machine can have more
@@ -2354,7 +3044,11 @@ in this order, each recorded per member as its source:
    the user adds a model line for the id to a copy of `xhcicmf.inf` and
    installs it, the procedure the README spells out beside `XhciCmMode`
    2's.
-2. **The discrete switch** (FR, AR, TR and Maple Ridge families). The
+2. **The discrete switch** (FR, AR, TR and Maple Ridge families, and
+   since task 44.40 the ASMedia ASM4242, whose NHI `1B21:2425` sits
+   behind its switch's downstream port `1B21:2423` and whose two
+   Hot-Plug Capable `2423` ports are the tunnel ports, the other two,
+   with no slot, holding its xHCI and its NHI: record 22 section 18.1). The
    NHI's parent is the header-type-1 function on some bus whose secondary
    bus number equals the NHI's bus; a member is a sibling of that parent
    (same bus) that is a header-type-1 function, is not the NHI's parent,
@@ -5092,9 +5786,10 @@ the code (`runs/run-42.md`, "42-A.5"):
   cleans a machine that ran a 3.1.0.0 test build whatever is installed;
   so does any install or update run that ends with no `xhcicm` service
   (`mk_end_of_run`), and the new service's first poll does the
-  `LowerFilters` part. `XHCICLN` only lists such values, with `xhcicm` not
-  installed, and points at that uninstall: a second writer could not be
-  serialised with the installer. Read on 2000 in the leg of 42-A.24: after
+  `LowerFilters` part. `XHCICLN` only listed such values, with `xhcicm` not
+  installed, and pointed at that uninstall: a second writer could not be
+  serialised with the installer (historical: XHCICLN was dropped in
+  `3.3.0.0`). Read on 2000 in the leg of 42-A.24: after
   a plug and install the database held only the filter INF's
   `UpperFilters`; a never-seen chain and a second enclosure on the other
   tunnel port of a two-port USB4 host came up with recorded marks only,
@@ -5118,6 +5813,22 @@ the code (`runs/run-42.md`, "42-A.5"):
   installer's hooks exist; the installer does it in a release.
 
 ### 7.5 Stor98 on a tunnelled drive first plugged after the install (task 43.59, 2026-10-22; Windows 8.1 only)
+
+**Amended for `3.3.0.0` by design record 31 (tasks 44.2 and 44.3, the
+owner's decisions of 2026-10-25).** A tunnelled NVMe function is given an
+id of this project's own, first among its compatible ids, and on 2000 to
+8 Stor98's INF matches that id alone. On 8.1 the readings of 2026-10-25
+showed that the package ranks unsigned without the certificate trusted,
+and that 8.1 reads a drive's ids again at the install's own restart,
+which loses the id: so 8.1 and 10 keep `3.2.0.0`'s model (the class as
+the compatible id), and this section's switch stays 8.1's ordinary route,
+as the "8.1 arm" of record 31 section 6, installing the class model over
+`stornvme` by model selection (record 31 sections 4.8 and 6.1; a proper
+8.1 fix is sought there). The same service puts Stor98 on a driverless
+tunnelled drive on Vista to 8 by model selection, and on 2000 and XP
+restarts the drive's enclosure so that Windows' own wizard offers it
+(record 31 section 6.2). The text below stands as the record of
+`3.2.0.0`; route (a) of 7.5.2 is the one record 31 takes.
 
 **The owner's decision (2026-10-23): Windows 8.1 only.** On Windows 8.1 a
 tunnelled NVMe drive gets Stor98 by default; an internal drive keeps
@@ -5622,10 +6333,9 @@ record 13 section 5.5). The INFs still write only the driver key:
 | `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
-| `XhciCmNoIrqStart` | 1 (not written by the INFs) | design record 28 section 7, Windows 98 SE and ME only: 1 starts an NVMe function below a tunnel port whose interrupt cannot be routed with no interrupt, for a bound Stor98 0.4.0.0 or later that polls (record 28 section 4); 0 leaves it at its problem code. Read where `XhciCmBridgeNumbering` is read; absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
-| `XhciCmBridgeNumbering` | 1 (not written by the INFs) | section 6.1.1, Windows 98 SE and ME only: 1 gives the bridges a tunnel brings up below a tunnel port their bus numbers and memory windows before the CONFIGMG re-enumeration; 0 turns that off (a hot-added bridge is then left as it came up: Code 29 on the P14s until a restart). Absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
+| `XhciCmNoIrqStart` | 1 (written by the x86 INF's 98 SE and ME install alone, task 44.46) | design record 28 section 7, Windows 98 SE and ME only: 1 starts an NVMe function below a tunnel port whose interrupt cannot be routed with no interrupt, for a bound Stor98 0.4.0.0 or later that polls (record 28 section 4); 0 leaves it at its problem code. Read where `XhciCmBridgeNumbering` is read; absent reads as 1; any value but 0 and 1 is refused and 1 stands. Read from `Services\USB` first and then the NHI's driver key (task 42-A.17). Ignored on NT |
+| `XhciCmBridgeNumbering` | 1 (written by the x86 INF's 98 SE and ME install alone, task 44.46, replacing the owner's 2026-10-16 "no INF writes it") | section 6.1.1, Windows 98 SE and ME only: 1 gives the bridges a tunnel brings up below a tunnel port their bus numbers and memory windows before the CONFIGMG re-enumeration; 0 turns that off (a hot-added bridge is then left as it came up: Code 29 on the P14s until a restart). Absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
 | `XhciCmSafeEject` | 1 | section 7.4: 1 marks the devices behind an active tunnel bridge removable (the NT child filters, and the 9x flag through `Change_DevNode_Status`); 0 marks nothing. Absent reads as 1, as written by the INFs. Read by the NHI at start and handed to the bridge filters with the active mark |
-| `XhciCmNoIrqStart` | 1 (not written by the INFs) | design record 28, Windows 98 SE and ME only, read from `Services\USB` first and then the NHI's driver key (task 42-A.17): 1 gives an NVMe function bound to Stor98 0.4.0.0 or later, whose interrupt pin has no provable route, a second logical configuration without the interrupt, so that it starts and Stor98 polls; 0 leaves it as `PCI.VXD` made it. Absent reads as 1; any other value is refused and 1 stands. Ignored on NT |
 | `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and held to at most 250 while any entry of the `nvme98` link-state table reads `UP` (section 7.2) |
 | `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
@@ -5734,8 +6444,10 @@ unlike the system time, which a user or a time service may set.
 
 ## 9. Provenance and licence
 
-This project is GPL-2.0-only and takes material from these places for this
-work, under `AGENTS.md`'s rules and `legal-provenance.md`:
+This project was GPL-2.0-only when this record was written and is
+GPL-2.0-or-later since 2026-10-26 (roadmap-usb4 task 44.38;
+`legal-provenance.md` sections 2a and 3). It takes material from these
+places for this work, under `AGENTS.md`'s rules and `legal-provenance.md`:
 
 | Source | Licence | How it is used | Record |
 |---|---|---|---|
@@ -5944,8 +6656,8 @@ The vehicle is `usb4-emu`'s QEMU fork and `scripts/run-win98.sh` on the
 - The machines this is for: the legacy operating systems need a CSM, so
   the realistic targets are Thunderbolt 3 laptops with a CSM (the P14s),
   Intel desktop boards with discrete Thunderbolt and a CSM (the firmware
-  connection manager), and AM5 X870 boards with a CSM (ASMedia's ASM4242,
-  design record 22's software connection manager). The Framework laptop
+  connection manager), and USB4 hosts with an ASMedia ASM4242 and a CSM
+  (design record 22's software connection manager). The Framework laptop
   is UEFI-only: its capture is a reference, not a run target.
 - `-trace 'usb4_*' -D <VM_DIR>\usb4-trace.log` on every leg; the trace
   decodes every ring 0 frame both ways and is the oracle for "what the

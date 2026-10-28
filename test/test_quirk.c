@@ -4,10 +4,11 @@
  * value's reading and normalization, value 2 offered or read as 1, the
  * match of every listed id with its neighbours and the other vendors' same
  * device numbers refused, VIA's vendor-wide row, the effective policy, the
- * packed word, XhciMsiAvoid's decision with an unknown identity, and
- * XhciStreamsOff's reading of HCCPARAMS1. The quirks' executors carry their
- * own vectors in test_ring, test_iso, test_link, test_stream, test_tol and
- * test_poll.
+ * packed word, XhciMsiAvoid's decision with an unknown identity,
+ * XhciStreamsOff's reading of HCCPARAMS1, and XhciAsmediaFlowControl's
+ * bounded wait for the control byte (task 44.65). The quirks' executors
+ * carry their own vectors in test_ring, test_iso, test_link, test_stream,
+ * test_tol and test_poll.
  */
 
 #include <stdio.h>
@@ -309,6 +310,111 @@ static void test_streams(void)
     CHECK_EQ(XhciQuirkStreamsHcc1(1, 0), 0, "a streamless one stays so");
 }
 
+/* Q9's wait: a scripted control byte. `script` gives the byte read at each
+ * read in turn, the last one repeated once the script runs out; the reads
+ * and stalls are counted, and a stall that does not follow a read is
+ * counted as out of order (two stalls in a row, or one before any read). */
+typedef struct _ASM_FAKE {
+    const UCHAR *Script;
+    ULONG Length;
+    ULONG Reads;
+    ULONG Stalls;
+    ULONG OutOfOrder;
+} ASM_FAKE;
+
+static UCHAR asmRead(PVOID context)
+{
+    ASM_FAKE *f;
+    ULONG i;
+
+    f = (ASM_FAKE *)context;
+    i = (f->Reads < f->Length) ? f->Reads : f->Length - 1;
+    f->Reads++;
+    return f->Script[i];
+}
+
+static void asmStall(PVOID context)
+{
+    ASM_FAKE *f;
+
+    f = (ASM_FAKE *)context;
+    f->Stalls++;
+    if (f->Stalls != f->Reads) {
+        f->OutOfOrder++;
+    }
+}
+
+static ULONG asmRun(ASM_FAKE *f, const UCHAR *script, ULONG length,
+                    ULONG tries)
+{
+    f->Script = script;
+    f->Length = length;
+    f->Reads = 0;
+    f->Stalls = 0;
+    f->OutOfOrder = 0;
+    return XhciQuirkAsmWait(asmRead, asmStall, f, 0x02, tries);
+}
+
+static void test_asm_wait(void)
+{
+    static const UCHAR clear[] = { 0x00 };
+    static const UCHAR otherBits[] = { 0xFD };
+    static const UCHAR afterThree[] = { 0x02, 0x03, 0x06, 0x01 };
+    static const UCHAR busy[] = { 0x02 };
+    static const UCHAR ff[] = { 0xFF };
+    static const UCHAR busyThenFf[] = { 0x02, 0x02, 0xFF, 0x00 };
+    static const UCHAR lastTry[] = {
+        0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x00
+    };
+    ASM_FAKE f;
+
+    CHECK_EQ(asmRun(&f, clear, 1, 1000), XHCI_QK_WHY_NONE,
+             "ready at once");
+    CHECK_EQ(f.Reads, 1, "ready at once: one read");
+    CHECK_EQ(f.Stalls, 0, "ready at once: no stall");
+
+    CHECK_EQ(asmRun(&f, otherBits, 1, 1000), XHCI_QK_WHY_NONE,
+             "only the write bit is read");
+    CHECK_EQ(f.Reads, 1, "other bits set: one read");
+
+    CHECK_EQ(asmRun(&f, afterThree, 4, 1000), XHCI_QK_WHY_NONE,
+             "ready after three busy reads");
+    CHECK_EQ(f.Reads, 4, "ready after three: four reads");
+    CHECK_EQ(f.Stalls, 3, "ready after three: a stall after each busy read");
+    CHECK_EQ(f.OutOfOrder, 0, "ready after three: each stall after its read");
+
+    CHECK_EQ(asmRun(&f, busy, 1, 1000), XHCI_QK_WHY_BUSY,
+             "never ready: the bound's result");
+    CHECK_EQ(f.Reads, 1000, "never ready: 1000 reads");
+    CHECK_EQ(f.Stalls, 1000, "never ready: 1000 stalls of 50 us");
+    CHECK_EQ(f.OutOfOrder, 0, "never ready: read, stall, read, stall");
+
+    CHECK_EQ(asmRun(&f, lastTry, 10, 10), XHCI_QK_WHY_NONE,
+             "clear at the last read the bound allows");
+    CHECK_EQ(f.Reads, 10, "the last read: ten reads");
+    CHECK_EQ(f.Stalls, 9, "the last read: nine stalls");
+    CHECK_EQ(asmRun(&f, lastTry, 10, 9), XHCI_QK_WHY_BUSY,
+             "clear one read past the bound: busy");
+    CHECK_EQ(f.Reads, 9, "one past the bound: never read");
+    CHECK_EQ(f.Stalls, 9, "one past the bound: a stall after the last read");
+
+    CHECK_EQ(asmRun(&f, ff, 1, 1000), XHCI_QK_WHY_READ_FF,
+             "FFh at once (or a failed read)");
+    CHECK_EQ(f.Reads, 1, "FFh at once: one read");
+    CHECK_EQ(f.Stalls, 0, "FFh at once: no stall");
+
+    CHECK_EQ(asmRun(&f, busyThenFf, 4, 1000), XHCI_QK_WHY_READ_FF,
+             "FFh after two busy reads ends the wait");
+    CHECK_EQ(f.Reads, 3, "FFh after two busy: three reads");
+    CHECK_EQ(f.Stalls, 2, "FFh after two busy: two stalls");
+    CHECK_EQ(f.OutOfOrder, 0, "FFh after two busy: each stall after its read");
+
+    CHECK_EQ(asmRun(&f, clear, 1, 0), XHCI_QK_WHY_BUSY,
+             "no tries: busy, nothing read");
+    CHECK_EQ(f.Reads, 0, "no tries: no read");
+    CHECK_EQ(f.Stalls, 0, "no tries: no stall");
+}
+
 int main(void)
 {
     test_names();
@@ -318,6 +424,7 @@ int main(void)
     test_state();
     test_msi_avoid();
     test_streams();
+    test_asm_wait();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

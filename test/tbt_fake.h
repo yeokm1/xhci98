@@ -20,6 +20,8 @@
 #ifndef TBT_FAKE_H
 #define TBT_FAKE_H
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../src/cm/tbt_ring.h"
 
@@ -127,6 +129,52 @@ static FAKE g_fake;
 static unsigned char *fakeMem(void)
 {
     return (unsigned char *)g_fake.MemDw;
+}
+
+/* The request trace (task 44.38): when the environment variable TBT_TRACE
+ * names a file, every frame transmitted, every BAR0 write and every log
+ * line are written to it in order with the virtual clock; fakeTraceMark
+ * writes a vector's name between them ("end" closes it; a failed open or
+ * write ends the run), fakeReset a line of its own. scripts\usb4-trace\u4-trace.ps1 captures and compares. */
+static FILE *g_fakeTraceFp;
+static int g_fakeTraceOpened;
+
+static FILE *fakeTraceOut(void)
+{
+    const char *p;
+
+    if (!g_fakeTraceOpened) {
+        g_fakeTraceOpened = 1;
+        p = getenv("TBT_TRACE");
+        if (p != NULL && p[0] != '\0') {
+            g_fakeTraceFp = fopen(p, "w");
+            if (g_fakeTraceFp == NULL) {
+                fprintf(stderr, "TBT_TRACE: cannot open %s\n", p);
+                exit(2);
+            }
+        }
+    }
+    return g_fakeTraceFp;
+}
+
+static void fakeTraceMark(const char *name)
+{
+    if (fakeTraceOut() != NULL) {
+        fprintf(fakeTraceOut(), "== %s\n", name);
+        if (fflush(fakeTraceOut()) != 0 || ferror(fakeTraceOut())) {
+            fprintf(stderr, "TBT_TRACE: write failed\n");
+            exit(2);
+        }
+        if (strcmp(name, "end") == 0) {
+            FILE *t = g_fakeTraceFp;
+
+            g_fakeTraceFp = NULL;
+            if (fclose(t) != 0) {
+                fprintf(stderr, "TBT_TRACE: close failed\n");
+                exit(2);
+            }
+        }
+    }
 }
 
 /* Spec 6.4.2.2 Table 6-1, written separately from the driver's. */
@@ -335,6 +383,14 @@ static void fakeProcessTx(void)
         if (fakeCrc(buf, len - 4) != fakeGetBe(buf + len - 4)) {
             g_fake.TxBadCrc++;
         }
+        if (fakeTraceOut() != NULL) {
+            fprintf(fakeTraceOut(), "%lu TX %lx", g_fake.NowUs, pdf);
+            for (i = 0; i < words && i < 64; i++) {
+                fprintf(fakeTraceOut(), " %08lx", dw[i]);
+            }
+            fprintf(fakeTraceOut(), "%s\n",
+                    fakeCrc(buf, len - 4) != fakeGetBe(buf + len - 4) ? " badcrc" : "");
+        }
         n = g_fake.TxCount;
         if (n < FAKE_TXLOG) {
             g_fake.TxLogPdf[n] = pdf;
@@ -401,6 +457,10 @@ static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
         g_fake.WrLogAtUs[g_fake.Writes] = g_fake.NowUs;
     }
     g_fake.Writes++;
+    if (fakeTraceOut() != NULL) {
+        fprintf(fakeTraceOut(), "%lu MW %05lx %08lx\n", g_fake.NowUs, (unsigned long)off,
+                (unsigned long)v);
+    }
     switch (off) {
     case 0x39900: g_fake.InmailData = v; return;
     case 0x39904:
@@ -482,6 +542,9 @@ static void fakeLog(PVOID ctx, const char *label, ULONG value)
     g_fake.LogCount++;
     g_fake.LastLabel = label;
     g_fake.LastValue = value;
+    if (fakeTraceOut() != NULL) {
+        fprintf(fakeTraceOut(), "%lu L %s %08lx\n", g_fake.NowUs, label, (unsigned long)value);
+    }
 }
 
 static const TBT_HOST g_fakeHost = {
@@ -493,6 +556,9 @@ static const TBT_HOST g_fakeHost = {
 static void fakeReset(void)
 {
     memset(&g_fake, 0, sizeof(g_fake));
+    if (fakeTraceOut() != NULL) {
+        fprintf(fakeTraceOut(), "reset\n");
+    }
     g_fake.Caps = 0x0000000CUL;
     g_fake.FwStatus = 0x800001A1UL;
     g_fake.Outmail = 0x800003F5UL;

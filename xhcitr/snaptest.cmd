@@ -435,6 +435,22 @@ for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE
     )
 )
 
+rem Task 44.35: the storage transport records, from a canned 629-word
+rem header: each case's words, a header from before 44.35 and a count
+rem past the header refused.
+"%~dp0XHCITR.EXE" /snaptest -selftest-xport > "%BASE%.xport.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-xport exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("slot  2, root port 3, route 00000: UAS (the device offers Bulk-Only and UAS; UAS chosen)" "slot  5, root port 1, route 00002: Bulk-Only (the device offers UAS too; XhciForceBulkOnly is set on this controller)" "slot  7, root port 20, route 00021: UAS (interface 1) (the only transport the device offers); and 1 more storage interface" "slot  9, root port 2, route 00000: Bulk-Only (the device offers no UAS setting)" "not kept by this driver (a 1224-byte header" "device records: 33 of 10 words at 309 - not a shape") do (
+    findstr /C:%%S "%BASE%.xport.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the transport decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rem Task 36.9: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
 "%~dp0XHCITR.EXE" /snaptest -selftest-hcd-bad > "%BASE%.hcdbad.log"

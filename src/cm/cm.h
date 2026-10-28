@@ -22,9 +22,12 @@
  *                NHI asks it through (task 39-A.5).
  *   [CM_CHILD]   safe eject's child filter (task 39-A.8), NT only,
  *                created by a bridge filter above a device newly reported
- *                on an active tunnel bridge, or (task 42-A.5, record 21
- *                section 7.4 revision 3) by AddDevice for a device whose
- *                LowerFilters value the mark service wrote: cm_filt.c.
+ *                on any tunnel bridge it filters, and below that by a
+ *                child on a PCI-to-PCI bridge (design record 31 sections
+ *                4.1 and 4.3: the tunnel id's chain), or (task 42-A.5,
+ *                record 21 section 7.4 revision 3) by AddDevice for a
+ *                device whose LowerFilters value the mark service wrote:
+ *                cm_filt.c.
  *
  * FILES. cm_entry.c (DriverEntry, AddDevice, the dispatch table),
  * cm_nhi.c, cm_thr.c, cm_power.c, cm_reenum.c (the re-enumeration and
@@ -58,6 +61,7 @@
 #include "cm_live.h"
 #include "cm_qryb.h"
 #include "cm_eject.h"
+#include "cm_irq.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -94,6 +98,8 @@
 #define CM_WORK_DIRECT 0x40UL  /* the system IRP's transition made without
                                   a device IRP (PoRequestPowerIrp failed),
                                   then its completion                      */
+#define CM_WORK_QUIESCE 0x80UL /* a 9x shutdown's quiescence, its system
+                                  IRP not retained for it (CM_PWR_DETACH)  */
 
 /* BAR0's extent this driver reads up to: the firmware status at 39944h
  * is the highest register touched (tbt_regs.h). A smaller window is
@@ -259,8 +265,18 @@ typedef struct _CM_NHI {
     ULONG U4On;
     TBT_U4CM U4;
     TBT_U4_CONFIG U4Cfg;
+    /* Record 22 section 9.4: the earlier instance's record, taken from its
+     * slot at the start with the ids it was written under. */
+    TBT_U4_CARRY U4Carry;
+    ULONG U4CarryIds;
+    ULONG U4CarrySub;
+    ULONG U4CarryTick;
     XHCI_TBT_BINDS Binds;
     ULONG ArmOwed;
+    /* Record 22 section 7.6's learning window per pending port (task
+     * 44.57): when cmU4LearnPending tries it again, and the ports it
+     * no longer tries (still pending). */
+    XHCI_TBT_LEARN_CLOCK U4LearnClock;
     ULONG U4BatchCount;
     TBT_U4_ACTION U4Batch[TBT_U4_ACTION_QUEUE];
     /* Per USB4 port, the connection generation whose PCIe path the
@@ -310,6 +326,8 @@ typedef struct _CM_NHI {
     ULONG RecLostUp;
     ULONG RecCmdSet;
     ULONG RecBarred;
+    ULONG RecWkHold;        /* 98: the worker's hold last posted (record 21
+                               section 6.1.2, CmNhiU4WorkerHold)          */
     ULONG RecDebtMask;      /* the members the attempts' drains owe a
                                removal (accumulated, read while every
                                binding stands), barred at the commit       */
@@ -508,10 +526,13 @@ typedef struct _CM_QUERY_DEV {
 
 /*
  * Both filter roles (record 21 section 3.2): the tunnel bridge's
- * (CM_KIND_FILTER, from AddDevice) and the child filter safe eject puts on
- * a device newly reported on an active bridge (CM_KIND_CHILD, created by
- * the bridge filter, cm_reenum.c). One structure, so both share the
- * remove lock and the device-usage handling of cm_filt.c.
+ * (CM_KIND_FILTER, from AddDevice) and the child filter put on a device
+ * newly reported on any filtered bridge or, down the tunnel id's chain, on
+ * a PCI-to-PCI bridge below one (CM_KIND_CHILD, created by the bridge
+ * filter or a chain child, cm_reenum.c; design record 31 sections 4.1 and
+ * 4.3), or by AddDevice. One structure, so both share the remove lock and
+ * the device-usage handling of cm_filt.c; a chain child keeps its own
+ * snapshot in the bridge's Snap fields.
  */
 typedef struct _CM_FILTER {
     CM_COMMON Common;
@@ -616,7 +637,31 @@ typedef struct _CM_FILTER {
      * double fault, the stack overflowed by the recursion). The PnP
      * dispatch alone touches it. */
     ULONG InLocate;
+
+    /* ---- the tunnel id's chain (design record 31 sections 4.2 and 4.3),
+     * the PnP dispatch's alone ---- */
+    ULONG Depth;            /* 0 a bridge filter; a child one more than the
+                               filter whose BusRelations attached it, 1 for
+                               one AddDevice made (a unit)                 */
+    struct _CM_FILTER *Parent;  /* the filter whose BusRelations attached
+                               this child (a bridge filter or a chain
+                               child), NULL for the others; it outlives
+                               the child, its device's children being
+                               removed before it                          */
+    ULONG ChainKind;        /* CM_CHAIN_*: what its compatible ids said    */
+
+    /* ---- a child's interrupt (design record 21 section 6.2.1, task
+     * 44.53), Windows 2000 on the Standard PC HAL alone; the PnP
+     * dispatch's alone ---- */
+    CM_IRQ_STATE Irq;       /* PciNoIrq and the Line added (cm_irq.h)      */
+    ULONG IrqBdf;           /* the function's location as CmRegIrqWire read
+                               it (XHCI_TBT_BDF, 16 bits), for the log;
+                               0 before                                  */
 } CM_FILTER, *PCM_FILTER;
+
+#define CM_CHAIN_UNKNOWN    0UL
+#define CM_CHAIN_BRIDGE     1UL /* PCI\CC_0604: reads its BusRelations      */
+#define CM_CHAIN_OTHER      2UL
 
 /* cm_entry.c */
 extern PDRIVER_OBJECT CmDriverObject;
@@ -646,6 +691,8 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi);
 BOOLEAN CmNhiFailed(PCM_NHI nhi);
 BOOLEAN CmNhiRunning(PCM_NHI nhi);
 VOID CmNhiUnbind(PCM_NHI nhi);
+/* Record 22 section 9.4's image-static slots: DriverEntry, once. */
+VOID CmNhiCarryInit(VOID);
 BOOLEAN CmNhiMayClearPower(PCM_NHI nhi);
 /* The stor98 channel's registration (CM_U4_UP_HOOK, CM_U4_DOWN_HOOK); on
  * the thread, or before the start. */
@@ -696,6 +743,7 @@ VOID CmNhiU4Probe(PCM_NHI nhi, ULONG nowMs);
  * its removal-only request made or retried, and every port's Barred set
  * from it (TbtU4SetBarred). The thread, PASSIVE_LEVEL. */
 VOID CmNhiU4Barrier(PCM_NHI nhi);
+ULONG CmNhiU4WorkerHold(PCM_NHI nhi);
 /* Whether the instance is one the probe serves: a contained USB4 instance
  * ACTIVE, or FAILED by a loss inside its bind or resume (U27). */
 BOOLEAN CmNhiU4Probing(PCM_NHI nhi);
@@ -740,6 +788,7 @@ VOID CmPowerSystemWork(PCM_NHI nhi, PIRP irp);
 VOID CmPowerD3Work(PCM_NHI nhi, PIRP irp);
 VOID CmPowerD0Work(PCM_NHI nhi, PIRP irp);
 VOID CmPowerDirectWork(PCM_NHI nhi, PIRP irp);
+VOID CmPowerQuiesceWork(PCM_NHI nhi);
 BOOLEAN CmPowerHold(PCM_NHI nhi);
 VOID CmPowerRelease(PCM_NHI nhi);
 VOID CmPowerDrain(PCM_NHI nhi);
@@ -757,6 +806,12 @@ NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp);
 
 /* cm_reg.c */
 VOID CmReadValues(PCM_NHI nhi);
+/* Design record 21 section 6.2.1's gate: 1 on Windows 2000 (NT 5.0) whose
+ * HAL is the Standard PC HAL (Root\PCI_HAL\0000's first HardwareID
+ * e_isa_up), else 0; read once by CmReadIrqGate in DriverEntry on the NT
+ * role, PASSIVE_LEVEL, and only read after. */
+extern ULONG CmIrqGate;
+VOID CmReadIrqGate(VOID);
 
 /* cm_statos.c: CmStatusOpen in the PnP start's dispatch (the keys and the
  * first record); CmStatusPass once per thread pass; CmStatusStopped after
@@ -809,6 +864,7 @@ VOID CmLogEmit(PCM_NHI nhi, ULONG reason);
 
 /* cm_pool.c */
 PVOID CmAlloc(ULONG bytes);
+PVOID CmAllocPaged(ULONG bytes);
 VOID CmFree(PVOID p);
 NTSTATUS CmDmaOpen(PCM_NHI nhi);
 VOID CmDmaClose(PCM_NHI nhi);

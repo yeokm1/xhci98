@@ -1,11 +1,10 @@
 @echo off
 rem build.cmd - build the installer's five executables (roadmap-usb4.md
 rem tasks 40.6, 42-A.2 and 42-A.31; design record 23 section 3, record 26
-rem sections 2 and 4): the console tool XHCIINST.EXE and XHCIIN64.EXE, as
-rem xhcicln\build.cmd builds XHCICLN.EXE and XHCICL64.EXE, the window
-rem XHCIWIZ.EXE and XHCIWZ64.EXE, as xhcitr\build.cmd builds XHCITR.EXE,
-rem and SETUP.EXE, the package root's starter of the window (setup.c), one
-rem 32-bit image for every target.
+rem sections 2 and 4): the console tool XHCIINST.EXE and XHCIIN64.EXE, the
+rem window XHCIWIZ.EXE and XHCIWZ64.EXE, as xhcitr\build.cmd builds
+rem XHCITR.EXE, and SETUP.EXE, the package root's starter of the window
+rem (setup.c), one 32-bit image for every target.
 rem
 rem   build.cmd        all five
 rem   build.cmd x86    XHCIINST.EXE, XHCIWIZ.EXE and SETUP.EXE alone, for a
@@ -28,7 +27,8 @@ rem The sources: xhciinst.c (the console front end), xhciwiz.c (the window)
 rem with wiz_lay.c (its settings pages' layout arithmetic, which the host
 rem suite test\test_wizlay.c also links), inst_eng.c (the engine both
 rem drive), inst_core.c (the pure half the host suite test\test_inst.c
-rem also links) and ..\src\xhci_psw.c, the driver's
+rem also links), inst_bootp.c (the system disk's path, design record 23
+rem section 5.14) and ..\src\xhci_psw.c, the driver's
 rem own port-switchover gate, compiled as the host suites compile it
 rem (XHCI_HOST_TEST), so the list of Intel controllers exists once. The 98
 rem SE and ME helper XHCIDI.EXE (record 27) has its own build in di\.
@@ -71,20 +71,20 @@ rc /fo xhciinst.res xhciinst.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /DXHCI_HOST_TEST /c /Foinst_psw.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCIINST.EXE xhciinst.c inst_eng.c inst_core.c inst_ej9x.c inst_psw.obj xhciinst.res advapi32.lib /link /SUBSYSTEM:CONSOLE
+cl /nologo /W3 /WX /O2 /FeXHCIINST.EXE xhciinst.c inst_eng.c inst_core.c inst_bootp.c inst_ej9x.c inst_psw.obj xhciinst.res advapi32.lib /link /SUBSYSTEM:CONSOLE
 if errorlevel 1 exit /b 1
 if not exist XHCIINST.EXE exit /b 1
-del /q xhciinst.obj inst_eng.obj inst_core.obj inst_ej9x.obj inst_psw.obj xhciinst.res 2>nul
+del /q xhciinst.obj inst_eng.obj inst_core.obj inst_bootp.obj inst_ej9x.obj inst_psw.obj xhciinst.res 2>nul
 echo Built XHCIINST.EXE
 rc /fo xhciwiz.res xhciwiz.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Foinst_psw.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCIWIZ.EXE xhciwiz.c wiz_lay.c inst_eng.c inst_core.c inst_ej9x.c inst_psw.obj xhciwiz.res %WLIBS% /link /SUBSYSTEM:WINDOWS,4.0
+cl /nologo /W3 /WX /O2 /MT /FeXHCIWIZ.EXE xhciwiz.c wiz_lay.c inst_eng.c inst_core.c inst_bootp.c inst_ej9x.c inst_psw.obj xhciwiz.res %WLIBS% /link /SUBSYSTEM:WINDOWS,4.0
 if errorlevel 1 exit /b 1
 if not exist XHCIWIZ.EXE exit /b 1
 endlocal
-del /q xhciwiz.obj wiz_lay.obj inst_eng.obj inst_core.obj inst_ej9x.obj inst_psw.obj xhciwiz.res 2>nul
+del /q xhciwiz.obj wiz_lay.obj inst_eng.obj inst_core.obj inst_bootp.obj inst_ej9x.obj inst_psw.obj xhciwiz.res 2>nul
 echo Built XHCIWIZ.EXE
 setlocal
 set "PATH=%MSVC6%\VC98\Bin;%MSVC6%\Common\MSDev98\Bin;%PATH%"
@@ -110,18 +110,18 @@ rc /i "%WDK71%\inc\api" /fo xhciin64.res xhciinst.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Foinst_psw64.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCIIN64.EXE xhciinst.c inst_eng.c inst_core.c inst_ej9x.c inst_psw64.obj xhciin64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCIIN64.EXE xhciinst.c inst_eng.c inst_core.c inst_bootp.c inst_ej9x.c inst_psw64.obj xhciin64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCIIN64.EXE exit /b 1
-del /q xhciinst.obj inst_eng.obj inst_core.obj inst_ej9x.obj xhciin64.res 2>nul
+del /q xhciinst.obj inst_eng.obj inst_core.obj inst_bootp.obj inst_ej9x.obj xhciin64.res 2>nul
 echo Built XHCIIN64.EXE
 rc /i "%WDK71%\inc\api" /fo xhciwz64.res xhciwiz.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCIWZ64.EXE xhciwiz.c wiz_lay.c inst_eng.c inst_core.c inst_ej9x.c inst_psw64.obj xhciwz64.res %WLIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCIWZ64.EXE xhciwiz.c wiz_lay.c inst_eng.c inst_core.c inst_bootp.c inst_ej9x.c inst_psw64.obj xhciwz64.res %WLIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCIWZ64.EXE exit /b 1
 endlocal
-del /q xhciwiz.obj wiz_lay.obj inst_eng.obj inst_core.obj inst_ej9x.obj inst_psw64.obj xhciwz64.res 2>nul
+del /q xhciwiz.obj wiz_lay.obj inst_eng.obj inst_core.obj inst_bootp.obj inst_ej9x.obj inst_psw64.obj xhciwz64.res 2>nul
 echo Built XHCIWZ64.EXE
 
 :done

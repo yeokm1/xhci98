@@ -143,6 +143,16 @@ int main(int argc, char **argv)
     char err[256];
     int r;
 
+    /* INSTALL.BAT's refusal of a command line longer than COMMAND.COM
+     * passes on 98 SE and ME (record 23 section 2), said here so that the
+     * batch file ends with this program's exit code: a program is the one
+     * thing that sets COMMAND.COM's errorlevel (task 44.4). */
+    if (argc == 2 && (argv[1][0] == '/' || argv[1][0] == '-') &&
+        inst_eq(argv[1] + 1, "toomany")) {
+        fputs(INST_TOOMANY_TEXT, stdout);
+        fflush(stdout);
+        return INST_EXIT_REFUSED;
+    }
     memset(&f, 0, sizeof(f));
     f.Line = con_line;
     f.Ask = con_ask;

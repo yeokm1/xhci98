@@ -111,13 +111,13 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmPreOsCleanup` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify, `1` cleans what it cannot verify, `2` cleans everything | `0` | `2` | `0` | `0` |
 | `XhciCmLogVerbosity` | The driver's log, on `xhci98.sys`'s `0` to `4` ladder, read by the xHCI98 USB Tree (the driver refuses no larger number; the Tree writes only `0` to `4`) | `0` | `4` | `2` | `2` |
 | `XhciCmLogDebugView` | The log sent to DebugView as well, in every build | `0` | `1` | `0` | `0` |
-| `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | not written |
-| `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 to poll (see below) | `0` | `1` | `1` | not written |
+| `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | `1` (98 SE and ME) |
+| `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 to poll (see below) | `0` | `1` | `1` | `1` (98 SE and ME) |
 | `XhciCmTunnelBridge` | A `REG_SZ`, not a `DWORD`: a comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports | - | - | absent (no override) | not written |
 
 The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs. From `3.1.0.0` it also shows the machine-wide value and, under it, each device's own value that it overrides; where the machine-wide value is set, "Set" writes that one, the value in force for every device.
 
-The install writes every value in these tables but the two marked "not written", at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
+The install writes every value in these tables but `XhciCmTunnelBridge`, whose absence means no override, at the number in its last column, so each one is already in the key, ready to change; a value marked "98 SE and ME" is written there alone, the systems that read it. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value.
 
@@ -376,8 +376,8 @@ on Windows 98 SE and ME only.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls (98 SE and ME; ignored on 2000 to 7; read in the emulator not to apply yet - the release notes, "Known limitations") | `0` | `1` | `1` | not written |
-| `XhciCmBridgeNumbering` | The set-up (bus numbers, memory windows, interrupt lines) of the PCI bridges a device brings up behind a Thunderbolt tunnel after Windows has started (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
+| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | `1` (98 SE and ME) |
+| `XhciCmBridgeNumbering` | The set-up (bus numbers, memory windows, interrupt lines) of the PCI bridges a device brings up behind a Thunderbolt tunnel after Windows has started (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | `1` (98 SE and ME) |
 
 A device whose PCI Express side has a bridge of its own, such as a USB4
 NVMe enclosure built on the ASMedia ASM2464, needs the bridge given bus
@@ -389,6 +389,8 @@ range and memory window the BIOS left for the Thunderbolt port, and gives
 a device behind them the port's own interrupt line where its interrupt
 provably arrives on that line, before it asks Windows to look.
 `0` leaves them as they come up, which was the behaviour before it. Any
-other value is refused and `1` stands. The install does not write it and
-does not ask for it (`INSTALL /set` does not take it either): set it
-with Regedit, and restart Windows or disable and enable the controller.
+other value is refused and `1` stands. The install writes it at `1` on
+98 SE and ME, only where it is missing, and does not ask for it: set it
+with `INSTALL /set XhciCmBridgeNumbering=0` (or `1`) or the installer's
+Thunderbolt "Advanced...", which write it machine-wide, or with Regedit,
+and restart Windows or disable and enable the controller.

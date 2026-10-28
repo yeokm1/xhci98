@@ -39,8 +39,8 @@ hubs and devices, their speed and their Device Manager entry.
 Each controller is named with its maker and PCI ID, for example
 "... - Intel 8086:02ED"; the USB controller inside a Thunderbolt chip
 reads "... - Thunderbolt 3 controller's USB (8086:15C1)". A root hub
-shows its ports and how many are USB 2.0 and USB 3.x, for example "Root
-hub - 18 ports (14 USB 2.0, 4 USB 3.x)", and each port its kind:
+shows its ports and how many are USB 2.0 and USB 3, for example "Root
+hub - 18 ports (14 USB 2.0, 4 USB 3)", and each port its kind:
 "[Port 15, USB 3]". A USB 3 connector has one port of each kind.
 
 The details of each device end with its resources: the memory and I/O
@@ -192,6 +192,25 @@ ME the devices behind a port are not read and say so. Under an xHCI
 controller it shows that controller. The drivers read configuration
 space and never change it. File > Save Report and /report include it.
 
+PCI and bridge diagnostics
+--------------------------
+
+The last item of the tree, "PCI and bridge diagnostics", shows what the
+package's drivers recorded about PCI bridges and interrupts, each value
+by its registry name, its raw value beside it in plain words, and "not
+recorded" where it is absent:
+
+- XHCIPFW's log: the PCI bridges whose prefetchable windows above 4 GB it
+  closed at the start, and any xHCI controller it found above 4 GB;
+- for each Thunderbolt or USB4 controller on Windows 98 SE and ME, the
+  connection manager's last bridge numbering and its last start of a
+  device with no interrupt;
+- on Windows 2000, the interrupt the connection manager gave a device
+  plugged in behind a tunnel, from its log.
+
+Select it and choose Edit > Copy with nothing selected to copy all of it,
+for a problem report; File > Save Report and /report include it.
+
 Logging level
 -------------
 
@@ -236,7 +255,8 @@ The notification-area icon
                    then Thunderbolt and USB4 devices
   Double-click     opens the window
   Right-click      Open, Refresh, About, Start at login, Tell me when a
-                   device can run faster, and Exit
+                   device can run faster, Watch Windows' own USB ports
+                   too, and Exit
 
 Start at login
 --------------
@@ -289,6 +309,23 @@ same name (or INSTALL /faster and /nofaster) sets it for the computer;
 your own choice overrides that. It is on by default on every Windows:
 Windows' own "can perform faster" notices do not appear under xhci98.sys.
 
+"Can run at" is never faster than this computer's USB 3 ports. On a
+computer whose USB 3 ports run at 5 Gbit/s at most, a 10 Gbit/s device
+at 5 Gbit/s is not listed, and the device's details say so in a note. A
+hub of 5 Gbit/s on the way holds a device to 5 Gbit/s too.
+
+Windows' own USB ports: by default only the ports xhci98.sys runs are
+watched. A USB 3 device on a USB 2.0 port of the board's own EHCI, OHCI
+or UHCI controller gives no notice. "Watch Windows' own USB ports too"
+in the View menu and the icon's right-click menu turns that on for you.
+It is off by default. The tool then asks such a device for its BOS
+descriptor through Windows' hub driver, once per plug, and only when it
+says USB 2.10 or later. A device that declares SuperSpeed there is
+listed with "Connect it to a USB 3 port of this computer." Where
+Windows' hub driver does not give the descriptor, nothing is said. On
+Windows 98 SE the tool reads no port of Windows' own USB controllers,
+so there the option does nothing.
+
 From a command line
 -------------------
 
@@ -326,5 +363,5 @@ full, 2 a name or switch refused, 3 to 8 as XHCITR /snapshot /? says.
 Licence
 -------
 
-Free software under the GNU General Public License, version 2. See the
-package's LICENSE and NOTICE files.
+Free software under the GNU General Public License, version 2 or later. See
+the package's LICENSE and NOTICE files.

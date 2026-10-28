@@ -108,7 +108,7 @@ static void test_parse(void)
     check(!PollParseDec("", &v) && v == 1234, "empty: not present");
     check(!PollParseDec("abc", &v) && v == 1234, "no digit: not present");
     check(PollParseDec("2000", &v) && v == 2000, "plain decimal");
-    check(PollParseDec("  15;pollidlems=3", &v) && v == 15, "leading blanks, stops at ';'");
+    check(PollParseDec("  15;storpollidlems=3", &v) && v == 15, "leading blanks, stops at ';'");
     check(PollParseDec("0", &v) && v == 0, "zero is present");
     check(PollParseDec("4294967295", &v) && v == 0xFFFFFFFF, "32-bit maximum");
     check(PollParseDec("99999999999999", &v) && v == 0xFFFFFFFF, "overflow saturates (then clamped)");

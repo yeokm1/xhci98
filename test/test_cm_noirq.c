@@ -57,6 +57,7 @@ static struct {
     ULONG GateOffAtKind;    /* the gate closes after this kind           */
     ULONG ClockAtKind;      /* the clock jumps at this kind ...          */
     ULONG ClockBy;          /* ... by this much                          */
+    ULONG AllAsIrq;         /* the every-type read reports IRQ types     */
 } f;
 
 static CM_NI_MEMBER mem;
@@ -245,6 +246,9 @@ static VOID exec(const CM_NI_OP *op, CM_NI_RES *res)
         }
         res->Rd = RDH(i, k);
         res->Type = f.Lc[i].Type[k];
+        if (op->ResType == 0 && f.AllAsIrq) {
+            res->Type = CM_NI_RES_IRQ;
+        }
         res->Size = f.Lc[i].Size[k];
         if (res->Size <= op->Len) {
             memcpy(mem.Desc + op->Off, f.Lc[i].Data[k], res->Size);
@@ -634,9 +638,10 @@ static VOID test_gate(VOID)
     CHECK_EQ(why(), CM_NI_W_CONFIG, "no basic configuration");
     model();
     f.Lc[0].N = 1;
+    f.Problem = 0x0C;
     start();
     pass();
-    CHECK_EQ(why(), CM_NI_W_CONFIG, "no IRQ descriptor");
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "no IRQ descriptor, problem 12");
     model();
     f.Lc[0].N = 0;
     for (lc = 0; lc < 10; lc++) {
@@ -687,12 +692,26 @@ static VOID test_gate(VOID)
     CHECK_EQ(why(), CM_NI_W_CONFIG, "an empty every-type read refused");
     CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "nothing created");
     /* PCI.VXD's configuration as read on 98 SE (2026-10-19): memory, no
-     * IRQ descriptor - refused, "configuration". */
+     * IRQ descriptor - the memory-only form at problem 29 (test_memonly),
+     * refused at the other configuration problems. */
     model();
     f.Lc[0].N = 1;
+    f.Problem = 0x10;
     start();
     pass();
-    CHECK_EQ(why(), CM_NI_W_CONFIG, "memory only: not this record's case");
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "memory only at 16: refused");
+    model();
+    f.Lc[0].N = 1;
+    f.Problem = 0x1B;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "memory only at 27: refused");
+    model();
+    f.Lc[0].N = 0;
+    addrd(0, CM_NI_RES_IRQ, 8, 0xB1);
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "an IRQ and no memory: refused");
     model();
     f.FailKind = CM_NI_OP_LC_LIST;
     f.FailCr = CM_NI_CR_FAILURE;
@@ -918,6 +937,195 @@ static VOID test_handles_and_admission(VOID)
     CHECK_EQ(mem.Dev[0].Used + mem.Dev[1].Used, 1, "one entry");
     CHECK(mem.Jrn[0].Used == 0 || mem.Jrn[0].Hash == 0x77777777UL,
           "the old journal dropped");
+}
+
+/* The memory-only form (record 28 section 12, task 44.30): PCI.VXD's own
+ * configuration holds the memory alone and the problem is 29; nothing is
+ * added, the devnode is reprocessed once a generation. */
+static VOID memonly(VOID)
+{
+    model();
+    f.Lc[0].N = 1;              /* the memory descriptor alone */
+}
+
+static VOID test_memonly(VOID)
+{
+    ULONG d[CM_NI_DIAG_WORDS];
+
+    memonly();
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "memory only: reprocessed");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "nothing added");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_RD], 0, "no descriptor written");
+    CHECK_EQ(f.Calls[CM_NI_OP_SET_PRI], 0, "no priority set");
+    CHECK_EQ(f.Calls[CM_NI_OP_PLACE], 0, "no handle to place");
+    CHECK_EQ(f.N, 1, "the list as PCI.VXD made it");
+    CHECK_EQ(f.Lc[0].Pri, 0x3000, "its priority untouched");
+    CHECK_EQ(f.Reprocessed, 1, "one Reprocess_DevNode");
+    CHECK_EQ(f.Calls[CM_NI_OP_STATUS], 2, "rule 2 read, then again");
+    CHECK_EQ(f.Calls[CM_NI_OP_BINDING], 2, "rule 4 read, then again");
+    CHECK_EQ(mem.C.Candidates, 1, "a candidate");
+    CHECK_EQ(mem.C.Attempts, 0, "no configuration created");
+    CHECK_EQ(mem.C.Reprocesses, 1, "a reprocess-only attempt");
+    CHECK_EQ(mem.C.MemOnly, 1, "of the memory-only form");
+    CHECK_EQ(mem.C.Leftovers, 0, "no leftover");
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_DONE, "started");
+    CHECK_EQ(f.Calls[CM_NI_OP_LINE], 1, "the line read once");
+    CHECK_EQ(mem.Dev[0].Line, 0, "line 0, as Stor98 reads it");
+    CHECK_EQ(mem.C.Started, 1, "counted");
+    CHECK_EQ(f.Readies, 0, "no READY");
+    CmNiDiag(&mem, d);
+    CHECK_EQ(d[5], 0x1D, "Code 29 before");
+    CHECK_EQ(d[7], CM_NI_DN_STARTED, "started after");
+    CHECK_EQ(d[9], 0UL | (1UL << 16), "none created, one candidate");
+    CHECK_EQ(mem.Jrn[0].Created, 0, "the journal holds no configuration");
+    CHECK_EQ(mem.Jrn[0].ReprocGen, 2, "... its reprocess mark");
+
+    /* Unstarted after the reprocess: the one READY after
+     * CM_NI_READY_AFTER_MS, then the deadline; nothing added. */
+    memonly();
+    f.StartOnReprocess = 0;
+    start();
+    pass();
+    ctx.Now += CM_NI_READY_AFTER_MS + 1;
+    pass();
+    CHECK_EQ(f.Readies, 1, "the READY fallback");
+    ctx.Now += CM_NOIRQ_TXN_MS;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_TIMEOUT, "timeout");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "still nothing added");
+    CHECK_EQ(mem.C.Leftovers, 0, "no leftover");
+    /* The same generation again: not reprocessed twice. */
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    CmNiSeen(&mem, DN, HASH, FN, 0);
+    pass();
+    CHECK_EQ(st(), CM_NI_S_FAILED, "FAILED stands for the generation");
+    CHECK_EQ(f.Reprocessed, 1, "one reprocess");
+    /* A new generation: read again and reprocessed once more. */
+    CmNiOpenWindow(&mem, 2, ctx.Now);
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "a new generation: once more");
+    CHECK_EQ(f.Reprocessed, 2, "a second reprocess");
+    CHECK_EQ(mem.C.Attempts, 0, "the attempts bound untouched");
+
+    /* The reprocess mark of this generation already taken (a devnode met
+     * again as PENDING within it): EXCLUDED, "attempts". */
+    memonly();
+    f.StartOnReprocess = 0;
+    start();
+    pass();
+    mem.Dev[0].State = CM_NI_S_PENDING;
+    mem.Dev[0].Step = 1;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_ATTEMPTS, "one reprocess a generation");
+    CHECK_EQ(f.Reprocessed, 1, "not reprocessed again");
+
+    /* The devnode disabled by the user before the reprocess (problem 22):
+     * FAILED "admission", never reprocessed. */
+    memonly();
+    f.StatusAtKind = CM_NI_OP_RD_READ;
+    f.StatusTo = CM_NI_DN_HAS_PROBLEM;
+    f.ProblemTo = 0x16;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_ADMISSION, "disabled meanwhile");
+    CHECK_EQ(f.Reprocessed, 0, "not reprocessed");
+    /* Its driver changed before the reprocess: the same. */
+    memonly();
+    start();
+    {
+        ULONG k;
+
+        /* Admitted, then the binding read again answers another driver. */
+        CmNiPass(&mem, &ctx);
+        for (k = 0; k < 64; k++) {
+            CM_NI_OP op;
+            CM_NI_RES res;
+
+            if (!CmNiNext(&mem, &ctx, &op)) {
+                break;
+            }
+            if (op.Kind == CM_NI_OP_BINDING && mem.Dev[0].Step != 3) {
+                f.Bind = CM_NI_BIND_DL | CM_NI_BIND_PD;
+            }
+            exec(&op, &res);
+            CmNiTake(&mem, &ctx, &res);
+        }
+    }
+    CHECK_EQ(why(), CM_NI_W_ADMISSION, "another driver meanwhile");
+    CHECK_EQ(f.Reprocessed, 0, "not reprocessed");
+
+    /* The window closed before the form is reached: not in time. */
+    memonly();
+    f.ClockAtKind = CM_NI_OP_RD_READ;
+    f.ClockBy = CM_NOIRQ_WINDOW_MS + 1;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "not read in time");
+    CHECK_EQ(f.Reprocessed, 0, "not reprocessed");
+
+    /* Two memory descriptors, no IRQ: the same form. */
+    memonly();
+    addrd(0, CM_NI_RES_MEM, 36, 0xA2);
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "two memory descriptors");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "nothing added");
+
+    /* The switch 0: nothing. */
+    memonly();
+    ctx.Switch = 0;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_OFF, "the switch 0");
+    CHECK_EQ(f.Reprocessed, 0, "not reprocessed");
+
+    /* Three configurations created earlier, none committed: the creation
+     * bound does not stop the form, which creates none. */
+    memonly();
+    start();
+    mem.Jrn[0].Used = 1;
+    mem.Jrn[0].Dn = DN;
+    mem.Jrn[0].Hash = HASH;
+    mem.Jrn[0].Created = CM_NOIRQ_ATTEMPTS;
+    mem.Jrn[0].E[0].Lc = 0x900;
+    mem.Jrn[0].E[1].Lc = 0x901;
+    mem.Jrn[0].E[1].Gone = 1;
+    mem.Jrn[0].E[2].Lc = 0x902;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_ATTEMPTED, "the bound full: still reprocessed");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "nothing created");
+    /* ... and the basic form with the bound full: refused, after its
+     * descriptors were read. */
+    model();
+    start();
+    mem.Jrn[0].Used = 1;
+    mem.Jrn[0].Dn = DN;
+    mem.Jrn[0].Hash = HASH;
+    mem.Jrn[0].Created = CM_NOIRQ_ATTEMPTS;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_ATTEMPTS, "the basic form: the bound");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "nothing created");
+
+    /* The typed reads find the memory alone, the every-type read an IRQ
+     * in its place: contradictory, refused. */
+    memonly();
+    f.AllAsIrq = 1;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "an IRQ met only by the every-type read");
+    CHECK_EQ(f.Reprocessed, 0, "not reprocessed");
+
+    /* Not Stor98's record: nothing. */
+    memonly();
+    ctx.Stor98 = CM_NI_STOR98_NONE;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_STOR98, "no installer record");
+    CHECK_EQ(f.Reprocessed, 0, "not reprocessed");
 }
 
 static VOID test_budgets_and_late(VOID)
@@ -1240,6 +1448,7 @@ int main(void)
     test_rules();
     test_interrupt();
     test_gate();
+    test_memonly();
     test_leftovers_and_generations();
     test_handles_and_admission();
     test_budgets_and_late();

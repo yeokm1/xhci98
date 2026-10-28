@@ -2,7 +2,7 @@
  * u4cm-glue.h - the plain-C interface between the usb4-emu cross-check
  * harness and xhci98's TbtU4 core (see u4cm-glue.c). C89, no DDK types.
  *
- * Written for xhci98, 2026-10-15. SPDX-License-Identifier: GPL-2.0-only
+ * Written for xhci98, 2026-10-15. SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #ifndef U4CM_GLUE_H
@@ -47,9 +47,14 @@ typedef struct XC_OPS {
 #define XC_DROM_CRC         29
 #define XC_TMU_ENABLED      30
 #define XC_ENUMERATED       31
+#define XC_HOST_ADP_TYPE    32      /* `port` is the adapter: ADP_CS_2's type */
+#define XC_USB3_DOWN        33
 
 long xc_start(const XC_OPS *ops, void *arena, unsigned long phys,
               unsigned long bytes, int usb3);
+/* XhciCmAsmediaPcie7Credits for the next start (task 44.41), 0 or 1. */
+void xc_set_asm7(int on);
+
 /* As xc_start, with XhciCmPreOsCleanup's value. */
 long xc_start_clean(const XC_OPS *ops, void *arena, unsigned long phys,
                     unsigned long bytes, int usb3, unsigned long preOsCleanup);

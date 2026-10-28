@@ -66,6 +66,10 @@ rule named as the other gates name their families.
            Xhci* value (VAL-MISSING, VAL-DEFAULT, VAL-FLAG, VAL-EXTRA; the
            2026-10-11 rule). XhciCmTunnelBridge is the one value read and
            never written: its absence is meaningful (record 21 section 8).
+           The values the driver reads on Windows 98 SE and ME alone
+           (XhciCmBridgeNumbering, XhciCmNoIrqStart; task 44.46) are
+           written by the x86 INF's undecorated install alone, at their
+           defaults in src\cm\cm_vals.h, and by no NT install path.
   CM-NHIHW No [<install>.HW] section: the NHI writes nothing to its
            hardware key, so no filter value can ride on it.
   CM-TMPNAME (x86) xhcicm.sys is copied with no temporary-file name.
@@ -141,6 +145,7 @@ $kind = if ($Filter) { "filter" } else { "nhi" }
 if ($InfPath -eq "") { $InfPath = $infFor["$kind-$Arch"] }
 $versionHeader = Join-Path $repo "src\xhci_version.h"
 $valsSource = Join-Path $repo "src\cm\cm_vals.c"
+$valsHeader = Join-Path $repo "src\cm\cm_vals.h"
 
 $binary = "xhcicm.sys"
 $service = "xhcicm"
@@ -172,7 +177,9 @@ $excludedIds = @("8086:15EF", "8086:0B26", "8086:5786", "8086:57A4",
 # pci.ids 2026.10.14; task 43.73's compact form, TB2/TB3 and Router, within
 # 98 SE's 46 characters). Each NHI id line takes its product's string; the
 # class line takes U4Desc; an id this table does not hold fails. A filter id
-# of QEMU's vendor takes BridgeDesc, one in neither list U4BridgeDesc.
+# of QEMU's vendor takes BridgeDesc, the ASM4242's downstream port
+# U4AsBridgeDesc (its maker and product; task 44.55), one in neither list
+# U4BridgeDesc.
 $descNhi = [ordered]@{
     "Tb2FrDesc" = @("xHCI98 TB2 Controller (Intel Falcon Ridge)", @("8086:156A", "8086:156C"))
     "Tb3ArDesc" = @("xHCI98 TB3 Controller (Intel Alpine Ridge)", @("8086:1575", "8086:1577", "8086:15BF", "8086:15D2", "8086:15D9"))
@@ -196,6 +203,7 @@ $descTbBridge = @("8086:156B", "8086:156D", "8086:1576", "8086:1578", "8086:15C0
 $descStrings = @{
     "nhi"    = [ordered]@{ "U4Desc" = "xHCI98 USB4 Router"; "CmSvcDesc" = "xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)" }
     "filter" = [ordered]@{ "TbBridgeDesc" = "xHCI98 Thunderbolt PCI Bridge"; "U4BridgeDesc" = "xHCI98 USB4 PCI Bridge";
+                           "U4AsBridgeDesc" = "xHCI98 USB4 PCI Bridge (ASMedia ASM4242)";
                            "BridgeDesc" = "xHCI98 PCI Bridge"; "CmSvcDesc" = "xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)" }
 }
 foreach ($k in $descNhi.Keys) { $descStrings["nhi"][$k] = $descNhi[$k][0] }
@@ -241,6 +249,24 @@ function Get-CmValueTable {
     return $table
 }
 
+# The values the driver reads on Windows 98 SE and ME alone (task 44.46):
+# no rule-table row; written by the x86 NHI INF's undecorated install alone,
+# each at its default, the macro of src\cm\cm_vals.h named here
+# ("#define <macro> <n>UL").
+$cmNineXValues = [ordered]@{
+    "XhciCmBridgeNumbering" = "CM_BRIDGE_NUMBERING_DEFAULT"
+    "XhciCmNoIrqStart"      = "CM_NOIRQ_START_DEFAULT"
+}
+function Get-CmNineXTable {
+    param([string]$HeaderText)
+    $table = [ordered]@{}
+    foreach ($name in $cmNineXValues.Keys) {
+        $m = [regex]::Match($HeaderText, '(?m)^\s*#define\s+' + $cmNineXValues[$name] + '\s+(\d+)UL?\b')
+        if ($m.Success) { $table[$name] = @{ Flag = "0x00010003"; Data = $m.Groups[1].Value } }
+    }
+    return $table
+}
+
 # The ids every models section of an INF binds, as one sorted list per
 # section name.
 function Get-ModelIds {
@@ -266,7 +292,9 @@ function Get-ModelIds {
 
 function Test-CmInfText {
     param([byte[]]$Bytes, [string]$HeaderText, [string]$ValsText, [string]$Package,
-          [string]$Profile = "x86", [string]$Kind = "nhi", [string[]]$FilterIds = @())
+          [string]$Profile = "x86", [string]$Kind = "nhi", [string[]]$FilterIds = @(),
+          [string]$NineXText = $null)
+    if ($null -eq $NineXText -or $NineXText -eq "") { $NineXText = $valsHeaderText }
 
     $ntSuffix = if ($Profile -eq "amd64") { ".NTamd64" } else { ".NTx86" }
     $infName = if ($Kind -eq "filter") { "xhcicmf.inf" } else { "xhcicm.inf" }
@@ -406,14 +434,28 @@ function Test-CmInfText {
 
     $valueTable = Get-CmValueTable $ValsText
     if ($Kind -eq "nhi" -and $valueTable.Count -lt 2) { & $add "VAL-SOURCE" "src\cm\cm_vals.c's rule table could not be read." }
+    $nineXTable = Get-CmNineXTable $NineXText
+    if ($Kind -eq "nhi" -and $nineXTable.Count -ne $cmNineXValues.Count) { & $add "VAL-SOURCE" "src\cm\cm_vals.h's defaults of the Windows 98 SE and ME values could not be read." }
+    # $nine: the Windows 98 SE and ME install, which alone writes the
+    # values the driver reads on those systems alone.
     $checkValues = {
-        param($sect, $where)
+        param($sect, $where, $nine)
         $seen = @{}
         foreach ($f in @(& $regLines $sect $where)) {
             if ($f.Count -lt 3 -or $f[0] -ine "HKR" -or $f[1] -ne "") { continue }
             $name = $f[2]
             if ($name -notmatch '^Xhci') { continue }
             if ($name -ieq "XhciCmTunnelBridge") { & $add "VAL-EXTRA" "$where writes XhciCmTunnelBridge, whose absence is meaningful: no INF writes it (record 21 section 8)."; continue }
+            if ($cmNineXValues.Contains($name)) {
+                if (-not $nine) { & $add "VAL-EXTRA" "$where writes $name, which the driver reads on Windows 98 SE and ME alone: their install alone writes it (task 44.46)."; continue }
+                if ($seen.ContainsKey($name)) { & $add "VAL-EXTRA" "$where writes $name twice."; continue }
+                $seen[$name] = $true
+                if (-not $nineXTable.Contains($name)) { continue }
+                $want = $nineXTable[$name]
+                if ($f.Count -ne 5 -or $f[3] -ine $want.Flag) { & $add "VAL-FLAG" "$where writes $name without flag $($want.Flag) (its type under FLG_ADDREG_NOCLOBBER)." }
+                elseif ($f[4] -ne $want.Data) { & $add "VAL-DEFAULT" "$where writes $name as $($f[4]); the driver's default is $($want.Data) (src\cm\cm_vals.h)." }
+                continue
+            }
             if (-not $valueTable.Contains($name)) { & $add "VAL-EXTRA" "$where writes $name, which the driver does not read."; continue }
             if ($seen.ContainsKey($name)) { & $add "VAL-EXTRA" "$where writes $name twice."; continue }
             $seen[$name] = $true
@@ -423,6 +465,11 @@ function Test-CmInfText {
         }
         foreach ($name in $valueTable.Keys) {
             if (-not $seen.ContainsKey($name)) { & $add "VAL-MISSING" "$where does not write $name; every install path writes every value the driver reads." }
+        }
+        if ($nine) {
+            foreach ($name in $cmNineXValues.Keys) {
+                if (-not $seen.ContainsKey($name)) { & $add "VAL-MISSING" "$where does not write $name; the Windows 98 SE and ME install writes every value the driver reads there (task 44.46)." }
+            }
         }
     }
 
@@ -498,7 +545,7 @@ function Test-CmInfText {
                 }
                 $vd = if ($m4.Success) { ($m4.Groups[1].Value + ":" + $m4.Groups[2].Value).ToUpperInvariant() } else { "" }
                 if ($Kind -eq "filter") {
-                    $wantDesc = if ($vd.StartsWith("1B36:")) { "BridgeDesc" } elseif ($descTbBridge -contains $vd) { "TbBridgeDesc" } else { "U4BridgeDesc" }
+                    $wantDesc = if ($vd.StartsWith("1B36:")) { "BridgeDesc" } elseif ($descTbBridge -contains $vd) { "TbBridgeDesc" } elseif ($vd -eq "1B21:2423") { "U4AsBridgeDesc" } else { "U4BridgeDesc" }
                 } else {
                     $wantDesc = if ($vd -eq "") { "U4Desc" } elseif ($descNhiById.ContainsKey($vd)) { $descNhiById[$vd] } else { "" }
                 }
@@ -592,7 +639,7 @@ function Test-CmInfText {
                 if (-not $haveMp) { & $add "PATH-9X" "[$name] writes no HKR,,NTMPDriver,,$binary." }
                 $own = @(& $checkCopy ((& $directive $s9 "CopyFiles") -join ',') "[$name]")
                 if ($own -notcontains $binary) { & $add "PATH-9X" "[$name] does not copy $binary." }
-                & $checkValues $s9 "[$name]"
+                & $checkValues $s9 "[$name]" $true
             }
         }
         foreach ($hwName in @("$name.HW", "$name$ntSuffix.HW")) {
@@ -602,7 +649,7 @@ function Test-CmInfText {
         else {
             $own = @(& $checkCopy ((& $directive $nt "CopyFiles") -join ',') "[$name$ntSuffix]")
             if ($own -notcontains $binary) { & $add $pathRule "[$name$ntSuffix] does not copy $binary." }
-            & $checkValues $nt "[$name$ntSuffix]"
+            & $checkValues $nt "[$name$ntSuffix]" $false
         }
         if ($null -eq $ssv) { & $add $pathRule "no [$name$ntSuffix.Services]: the NT targets would install a devnode with no service." }
         else { & $checkService $ssv "[$name$ntSuffix.Services]" $true }
@@ -746,8 +793,11 @@ function Test-CmTwin {
     $setB = (@($b.Values | ForEach-Object { $_ }) | Sort-Object -Unique) -join "|"
     if ($setA -ne $setB) { [void]$fail.Add("CM-TWIN the x86 and amd64 $Kind INFs bind different ids ($setA against $setB).") }
     if ($Kind -eq "nhi") {
-        $va = @([regex]::Matches($X86Text, '(?m)^HKR,,Xhci[^\r\n]*') | ForEach-Object { $_.Value } | Sort-Object -Unique) -join "|"
-        $vb = @([regex]::Matches($Amd64Text, '(?m)^HKR,,Xhci[^\r\n]*') | ForEach-Object { $_.Value } | Sort-Object -Unique) -join "|"
+        # The values the driver reads on Windows 98 SE and ME alone are the
+        # x86 INF's alone (task 44.46): VAL-EXTRA keeps them out of amd64.
+        $nineX = '^HKR,,(' + (@($cmNineXValues.Keys) -join '|') + '),'
+        $va = @([regex]::Matches($X86Text, '(?m)^HKR,,Xhci[^\r\n]*') | ForEach-Object { $_.Value } | Where-Object { $_ -notmatch $nineX } | Sort-Object -Unique) -join "|"
+        $vb = @([regex]::Matches($Amd64Text, '(?m)^HKR,,Xhci[^\r\n]*') | ForEach-Object { $_.Value } | Where-Object { $_ -notmatch $nineX } | Sort-Object -Unique) -join "|"
         if ($va -ne $vb) { [void]$fail.Add("CM-TWIN the x86 and amd64 NHI INFs write different values.") }
     }
     return $fail
@@ -755,6 +805,7 @@ function Test-CmTwin {
 
 $headerText = if (Test-Path -LiteralPath $versionHeader) { [System.IO.File]::ReadAllText($versionHeader) } else { "" }
 $valsText = if (Test-Path -LiteralPath $valsSource) { [System.IO.File]::ReadAllText($valsSource) } else { "" }
+$valsHeaderText = if (Test-Path -LiteralPath $valsHeader) { [System.IO.File]::ReadAllText($valsHeader) } else { "" }
 # The bridge ids the filter INFs bind, which no $CHICAGO$ INF may bind.
 $filterIds = @()
 foreach ($k in @("filter-x86", "filter-amd64")) {
@@ -798,7 +849,7 @@ if ($SelfTest) {
                     @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,DevLoader,,*NTKERN", "HKR,,DevLoader,,*CONFIGMG") },
                     @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,DevLoader,,*NTKERN", "HKR,Wrong,DevLoader,,*NTKERN") },
                     @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,NTMPDriver,,xhcicm.sys", "HKR,,NTMPDriver,0x00010001,xhcicm.sys") },
-                    @{ Rule = "BOTH-DEST";      Text = $t.Replace("[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values`r`nCopyFiles=Cm.CopyFiles", "[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values`r`nCopyFiles=Cm.CopyFiles9").Replace("Cm.CopyFiles=10,System32\Drivers", "Cm.CopyFiles=10,System32\Drivers`r`nCm.CopyFiles9=10,System").Replace("[Inf.CopyFiles]", "[Cm.CopyFiles9]`r`nxhcicm.sys`r`n`r`n[Inf.CopyFiles]") },
+                    @{ Rule = "BOTH-DEST";      Text = $t.Replace("[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values,Cm.Values9x`r`nCopyFiles=Cm.CopyFiles", "[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values,Cm.Values9x`r`nCopyFiles=Cm.CopyFiles9").Replace("Cm.CopyFiles=10,System32\Drivers", "Cm.CopyFiles=10,System32\Drivers`r`nCm.CopyFiles9=10,System").Replace("[Inf.CopyFiles]", "[Cm.CopyFiles9]`r`nxhcicm.sys`r`n`r`n[Inf.CopyFiles]") },
                     @{ Rule = "PATH-NT";        Text = $t.Replace("[Cm.Dev.NTx86.Services]", "[Cm.Dev.NTx86.Svc]") },
                     @{ Rule = "PATH-NT";        Text = $t.Replace("AddService=xhcicm,0x00000002,Cm.AddService`r`n`r`n; --- Windows Vista", "AddService=xhcicm,,Cm.AddService`r`n`r`n; --- Windows Vista") },
                     @{ Rule = "PATH-NT6";       Text = $t.Replace("[Cm.Dev6.NTx86]", "[Cm.Dev6.NTx86.Old]") },
@@ -812,6 +863,13 @@ if ($SelfTest) {
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmLogVerbosity,0x00010003,2", "XhciCmLogVerbosity,0x00010003,0") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmLogDebugView,0x00010003,0`r`n", "") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmSafeEject,0x00010003,1`r`n", "") },
+                    @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmNoIrqStart,0x00010003,1`r`n", "") },
+                    @{ Rule = "VAL-MISSING";    Text = $t.Replace("AddReg=Cm.AddReg,Cm.Values,Cm.Values9x", "AddReg=Cm.AddReg,Cm.Values") },
+                    @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmBridgeNumbering,0x00010003,1", "XhciCmBridgeNumbering,0x00010003,0") },
+                    @{ Rule = "VAL-FLAG";       Text = $t.Replace("XhciCmNoIrqStart,0x00010003,1", "XhciCmNoIrqStart,0x00010001,1") },
+                    @{ Rule = "VAL-EXTRA";      Text = $t.Replace("[Cm.Dev.NTx86]`r`nAddReg=Cm.Values", "[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.Values9x") },
+                    @{ Rule = "VAL-EXTRA";      Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.Values9x") },
+                    @{ Rule = "VAL-EXTRA";      Text = $t.Replace("HKR,,XhciCmLogDebugView,0x00010003,0`r`n", "HKR,,XhciCmLogDebugView,0x00010003,0`r`nHKR,,XhciCmBridgeNumbering,0x00010003,1`r`n") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3`r`n", "").Replace("%U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3`r`n", "") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n", "%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_1234`r`n").Replace("%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n", "%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1234`r`n") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669`r`n", "").Replace("%U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669`r`n", "") },
@@ -850,6 +908,7 @@ if ($SelfTest) {
                     @{ Rule = "PATH-NT";        Text = $t.Replace("[Cm.Dev.NTamd64.Services]", "[Cm.Dev.NTamd64.Svc]") },
                     @{ Rule = "PATH-NT6";       Text = $t.Replace("[Cm.Dev6.NTamd64.Services]", "[Cm.Dev6.NTamd64.Svc]") },
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmApproveTimeoutMs,0x00010003,10000", "XhciCmApproveTimeoutMs,0x00010003,1000") },
+                    @{ Rule = "VAL-EXTRA";      Text = $t.Replace("HKR,,XhciCmLogDebugView,0x00010003,0`r`n", "HKR,,XhciCmLogDebugView,0x00010003,0`r`nHKR,,XhciCmNoIrqStart,0x00010003,1`r`n") },
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace("[CmModels.NTamd64]`r`n", "[CmModels.NTamd64]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D3`r`n") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%Tb2FrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156C", "%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('Tb2FrDesc="xHCI98 TB2 Controller (Intel Falcon Ridge)"', 'Tb2FrDesc="xHCI98 Thunderbolt 2 Controller (Intel Falcon Ridge)"') },
@@ -890,7 +949,8 @@ if ($SelfTest) {
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0", "%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133", "%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001", "%TbBridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001") },
-                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423", "%BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4AsBridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423", "%U4BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('U4AsBridgeDesc="xHCI98 USB4 PCI Bridge (ASMedia ASM4242)"', 'U4AsBridgeDesc="xHCI98 USB4 PCI Bridge (ASMedia)"') },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('BridgeDesc="xHCI98 PCI Bridge"', 'BridgeDesc="xHCI98 Thunderbolt 3 Tunnel Port Filter"') },
                     @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile.NTx86=xhcicmf.cat") }
                 )
@@ -932,6 +992,20 @@ if ($SelfTest) {
     if ($valsMut -eq $valsText -or @($got | Where-Object { $_.StartsWith("VAL-DEFAULT ") }).Count -eq 0) {
         $bad++; Write-Err "a default changed in src\cm\cm_vals.c alone was not refused by VAL-DEFAULT."
     } else { Write-Ok "VAL-DEFAULT follows src\cm\cm_vals.c" }
+    # The Windows 98 SE and ME values (task 44.46): their defaults follow
+    # src\cm\cm_vals.h, and a header the gate cannot read is refused.
+    $total++
+    $hdrMut = $valsHeaderText -replace '(#define\s+CM_NOIRQ_START_DEFAULT\s+)1UL', '${1}0UL'
+    $got = @(Test-CmInfText -Bytes ([System.IO.File]::ReadAllBytes($infFor["nhi-x86"])) -HeaderText $headerText -ValsText $valsText -Package "" -Profile "x86" -Kind "nhi" -FilterIds $filterIds -NineXText $hdrMut)
+    if ($hdrMut -eq $valsHeaderText -or @($got | Where-Object { $_.StartsWith("VAL-DEFAULT ") }).Count -eq 0) {
+        $bad++; Write-Err "a 98 SE and ME default changed in src\cm\cm_vals.h alone was not refused by VAL-DEFAULT."
+    } else { Write-Ok "VAL-DEFAULT follows src\cm\cm_vals.h for the 98 SE and ME values" }
+    $total++
+    $hdrMut = $valsHeaderText -replace '#define\s+CM_BRIDGE_NUMBERING_DEFAULT\b', '#define CM_BRIDGE_NUMBERING_DEF'
+    $got = @(Test-CmInfText -Bytes ([System.IO.File]::ReadAllBytes($infFor["nhi-x86"])) -HeaderText $headerText -ValsText $valsText -Package "" -Profile "x86" -Kind "nhi" -FilterIds $filterIds -NineXText $hdrMut)
+    if ($hdrMut -eq $valsHeaderText -or @($got | Where-Object { $_.StartsWith("VAL-SOURCE ") }).Count -eq 0) {
+        $bad++; Write-Err "a 98 SE and ME default src\cm\cm_vals.h no longer names was not refused by VAL-SOURCE."
+    } else { Write-Ok "VAL-SOURCE refuses a 98 SE and ME default it cannot read" }
     # CM-NO9XBRIDGE's package half: the filter INF in nt\ alone, nowhere
     # else, and the one gated against the package is that one; in the x64
     # package (Rel xhcicmf.inf) at the root alone, with no nt\; and a

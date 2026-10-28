@@ -38,6 +38,25 @@ advances an entry already `UP`; a tunnel named after a resume while the
 secondary bus is not yet numbered labels later publications and is never
 paid by a later exposure that names none.
 
+Revised 2026-10-25 (task 44.26, planned as RESUME.1; found by task 43.71):
+section 9.4, new - an instance hands its successor on the same NHI a
+record of the tunnels it built, so that a tunnel found preserved after a
+PnP stop and start of the NHI is still rebuilt across a sleep that lost
+the domain's configuration (section 7.6); sections 7.6 and 11 point to it.
+
+Revised 2026-10-25 (task 44.39, planned as U4HW.1): section 18, new - the
+ASMedia ASM4242, a USB4 host whose firmware can boot a CSM, as
+`usb4-emu`'s asm4242 model and data record it: the firmware's
+pre-OS tunnel, the host router, the tunnel-port set's gap on this host,
+the legacy targets' open questions and the bench (task 44-E.6); sections
+9.1, 14.4 and 16 point to it. No code changes with it. Revised the same
+day with the owner's answers to section 18.7: the ASM4242 family (task
+44.40, the one code change, in `cm_ports.c`) closes section 18.4 item 3's
+gap. Revised
+again that day: the credits question answered with an opt-in bench
+switch, `XhciCmAsmediaPcie7Credits` (task 44.41, section 18.8; sections
+6.8 and 12 point to it).
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection
@@ -72,7 +91,8 @@ The sources, and the tag each fact carries below:
 This project holds no capture of a USB4 host of its own. Every statement
 below about a real USB4 host is [obs] from the Framework capture as
 `usb4-emu` records it, [linux] or [bsd], or untested, and the release notes
-say which.
+say which. (Superseded for one host on 2026-10-25: section 18 reads the
+ASM4242 from `usb4-emu`'s asm4242 model and data, tagged [hw].)
 
 ## 1. Purpose, scope and what it is not
 
@@ -142,6 +162,8 @@ Out, each with where it goes:
   downstream port is acknowledged and the port left locked (section 7.1).
   A later revision. Discovery of tunnels already present reads paths at
   any depth (section 9.2).
+  Design record 34 designs a minimal two-level, PCIe-only chain for a
+  later release.
 - DisplayPort tunnels, DP resources and DP bandwidth allocation: a DP plug
   event is acknowledged and ignored.
 - CLx low-power states: never enabled; runtime power management: none.
@@ -223,10 +245,13 @@ never run there.
 More host models are coming (its maintainer's note of 2026-10-15: an AMD
 USB4 host, in `docs/CONTROLLER-CATALOG.md`, in progress). Since its `main`
 at `a50c19e` a third host model is there, `host-model=asm4242` (ASMedia's
-ASM4242 of AM5 X870 boards, from public sources only), a host with no
+ASM4242, from public sources only), a host with no
 firmware connection manager: under a CSM, this record's connection
-manager is the only one it can have. The legacy operating systems need a
-CSM, so the realistic USB4 targets are such AM5 X870 boards; the
+manager is the only one it can have. (Since 2026-10-25, section 18: the
+ASM4242 has no firmware connection manager an operating
+system can talk to, but its firmware does run a pre-OS one that builds a
+PCIe tunnel before the hand-off.) The legacy operating systems need a
+CSM, so the realistic USB4 targets are such ASM4242 hosts; the
 Framework laptop behind `intel-adl` is UEFI-only, a reference capture and
 not a run target. The connection
 manager is therefore developed against `minimal` and `intel-adl` and
@@ -1025,7 +1050,11 @@ link it preserves:
    (Freq Measurement Window 800, the averaging constants 8); the HiFi-Bi
    enable of Guide 7.4.3.4.1 step 3 (EnableUniDirectionalMode 0 on both
    ports, TSPacketInterval 16 in the downstream router, Disable Time Sync 0
-   upstream then downstream); clear the Time Disruption bit; then 50 ms
+   upstream then downstream: the device router's upstream adapter first,
+   an order from Linux ([linux]), where Guide 7.4.3.4.1 steps 3c and 3d
+   name the host router first; the USB4 Specification sets no order
+   between the routers, and the owner kept this order for `3.3.0.0` on
+   2026-10-26, to be read on the hardware bench, roadmap 44-E.6); clear the Time Disruption bit; then 50 ms
    before any USB3 path (Guide 7.4.3.1 step 4). The host router's own TMU
    is enabled once at start, inside its own time disruption, as Linux's
    `tb_start` does for the root ([linux] `tb.c` `tb_start`, `tmu.c`
@@ -1089,7 +1118,7 @@ the same shape with HopID 8 at both protocol adapters):
 
 | Entry | Ingress | Output | Attributes |
 |---|---|---|---|
-| downstream, segment 1 | host PCIe Down, HopID 8 | host lane 0, HopID `hd` | priority 3, weight 1, EFC 1, ESE 0; credits, IFC and ISE as read |
+| downstream, segment 1 | host PCIe Down, HopID 8 | host lane 0, HopID `hd` | priority 3, weight 1, EFC 1, ESE 0; credits, IFC and ISE as read (but for section 18.8's experiment) |
 | downstream, segment 2 | device lane 0, HopID `hd` | device PCIe Up, HopID 8 | priority 3, weight 1, IFC 1, EFC 0, ISE 0, ESE 0, credits per the accounting below |
 | upstream, segment 1 | device PCIe Up, HopID 8 | device lane 0, HopID `hu` | as downstream segment 1 |
 | upstream, segment 2 | host lane 0, HopID `hu` | host PCIe Down, HopID 8 | as downstream segment 2, the host's credits |
@@ -1533,6 +1562,88 @@ learning calls), with the choices marked as the orchestrator's of
   member with no secondary bus blocks learning for the domain, and a
   conflicted port's live tunnel blocks it until that tunnel is proven down
   (orchestrator).
+- **The learning's window** (task 44.57; the owner, 2026-10-27: a bounded
+  retry with back-off or a terminal state). The window bounds how often
+  and how long a pending port is *read*; it never changes whether the
+  port is pending. A port stays pending, with everything that follows
+  from it above and in section 7.7 part 4's handoff, until it is learned
+  or proven down, exactly as before; a port whose window has closed is
+  simply no longer tried.
+  - **Clock and attempts.** Times are the instance's millisecond counter
+    (the one its liveness monitor reads), compared as unsigned elapsed
+    time, so a wrap is harmless. An *attempt* is one try to learn the
+    port (an `XhciTbtLearn` call, or the same try declined because the
+    set cannot be read now), from an idle pass or from the delivery of
+    its `TUNNEL_UP`; every attempt that leaves the port pending -
+    whatever its outcome (`NOT_GAINED`, `UNREAD`, `NOT_ARMED`,
+    `SEVERAL`, `INACTIVE`, `CONFLICT`) - counts as a miss.
+  - **The schedule.** While less than 1000 ms have passed since the
+    window opened, the next attempt is at the next idle pass (never a
+    second one in the same pass, a delivery's included). From the
+    first miss at 1000 ms or later, the next attempt is a gap later: the
+    first gap is `XhciCmPollIdleMs` as read for the instance (50 to
+    5000 ms), each later gap twice the one before, every gap held to at
+    most 5000 ms. An idle pass makes an attempt only when the gap has
+    run out.
+  - **The end of the window.** Wherever an attempt is due - at an idle
+    pass or at a delivery - when 60000 ms or more have passed since the
+    window opened (read just before the attempt), the window closes
+    instead: no attempt is made for the port again until a window opens
+    again, and `u4.learn.expired` is logged once. The port stays
+    pending. What a closed window stops is the reading only: at every
+    idle pass a pending port that has a binding by now (a naming at a
+    discovery or a recovery after the window closed) has its pending
+    mark consumed as `XhciTbtLearn`'s `KNOWN` outcome consumes it, with
+    no configuration read, whatever its window.
+  - **What opens a window.** (a) The first idle pass that finds the port
+    pending with no window open and none closed for its connection
+    generation (`TBT_U4_PORT.Generation`, recorded when the window
+    opens). (b) Each
+    `TUNNEL_UP` of the port that marks it pending (the batch's
+    `XhciTbtLearnUp`: not one whose generation's path was already proven
+    closed), open or closed before, the same connection generation or a
+    new one: a tunnel brought up again (a recovery's rebuild keeps the
+    generation) can bring a new function. The reconciliation's marking
+    of a port pending never opens or renews a window. A tunnel found up
+    at start, or preserved through a recovery, queues no `TUNNEL_UP`, so
+    its window is the one (a) opened.
+  - **What ends it.** The pending mark cleared - learned, bound,
+    released by the reconciliation, or marked down on a path proven
+    closed (a teardown's read-back, a recovery's drain) - forgets the
+    window and any closure where the mark is cleared, and an idle pass
+    that finds the port not pending forgets them too. A window, open or
+    closed, recorded for another connection generation than the port's
+    now is forgotten at the idle pass that sees it, before (a): a
+    replacement connection whose tunnel failed queues no `TUNNEL_UP` but
+    may be marked pending again by the reconciliation within the same
+    tick, and it gets a window of its own. Time passes for a
+    window while the instance is suspended or contained (no attempt is
+    made then: section 7.7 attributes nothing after the loss), so a
+    window may close during either; a rebuild's `TUNNEL_UP` reopens it.
+  - **The citations, as policy.** The first second follows the PCI
+    Express Base Specification's Conventional Reset rule (section
+    6.6.1: at least 1.0 s before software may judge a function that has
+    not returned a Successful Completion to be broken, which Request
+    Retry Status completions may extend without an upper limit), and the
+    60 s is of the order of [linux] `drivers/pci/pci.c`'s
+    `PCIE_RESET_READY_POLL_MS` (60000, v6.12), the time Linux allows a
+    function after a reset. Both are chosen bounds for how long a
+    function is waited for; neither proves that a later gain is not the
+    port's, which is why the port stays pending.
+  Why: a tunnel found up at start (section 9.2) whose function already
+  answered when the baseline was taken never shows a gain, so its port
+  stays pending for the instance's life. Without a window every idle
+  pass read each member's secondary bus for it (33 configuration reads a
+  member: the bridge's bus numbers and one function-0 probe per device
+  number), at the 200 ms default, for as long as the instance ran (task
+  44.57, on the `asm4242` model with the ASM2464 enclosure attached at
+  power-on, where the host router answers Get PCIe Downstream Entry
+  Mapping Not Supported, so no router-named correspondence takes the
+  port out of learning). Such a port still blocks the learning of
+  another port's tunnel while it is pending (the rule above, unchanged).
+  Only a router-named or a learned correspondence binds a port;
+  `XhciCmTunnelBridge` selects the domain's tunnel-port set and does not
+  itself resolve a pending port.
 - Bindings, named or learned, are kept by bridge for the instance's life.
   A port bound to two bridges, or a bridge to two ports, withdraws both
   bindings for the rest of the instance (orchestrator); the bridges keep
@@ -1570,8 +1681,10 @@ its removal. Under this profile:
 - **Succeeded** means every obligation is met: its tunnel verified by
   section 9.2's reads; or, where the domain lost its configuration across
   the sleep (the device router uninitialised, its link connected again)
-  and the port is one this driver built, rebuilt through sections 6.4 to
-  6.9 with the Detect gate of section 6.8, before the hold is released; or
+  and the tunnel is one this driver built - in this instance, or in an
+  earlier instance on the same NHI whose record section 9.4 matched -
+  rebuilt through sections 6.4 to 6.9 with the Detect gate of section
+  6.8, before the hold is released; or
   its port showing removal evidence of the router (section 7.1 items 1 to
   3: CLd, Lock set again, a changed identity, ERR_CONN), torn down
   (section 7.3), the device being gone and the OS removing it. Section 7.1
@@ -1580,9 +1693,10 @@ its removal. Under this profile:
   the same port still has to be verified.
 - **Failed** is any obligation not met: a rebuild that fails; a
   verification that fails without removal evidence (the port is then
-  HELD, untouched); a HELD port's preserved tunnel that did not survive,
-  which this driver does not rebuild, its configuration being someone
-  else's; the NHI's own resume failing. The failure path is record 21's:
+  HELD, untouched); a preserved tunnel that did not survive and that
+  section 9.4 did not match to this driver's earlier instance (on a HELD
+  port it is never matched), which this driver does not rebuild, its
+  configuration being someone else's; the NHI's own resume failing. The failure path is record 21's:
   the member's mark cleared and, with re-enumeration on, an invalidation
   asked of its filter, so the functions that did not come back are
   reported missing (since task 43.24h the same release follows a resume
@@ -2191,7 +2305,9 @@ unchanged - no `DOWN_QUIESCED` (no quiescence is claimed), no increment
   "re-established" of a link nobody saw go down (R8b). Such a tunnel is
   reclassified by step 4 as to be rebuilt and drained by step 5 at both
   ends, so that its rebuild's new generation is true; its member takes
-  the removal debt and the barrier (decision U22).
+  the removal debt and the barrier (decision U22). On Windows 98 SE and
+  ME every member is so marked at the containment, whose removal waits
+  for the commit (record 21 section 6.1.2, task 44.54).
 - **A rebuilt PCIe tunnel**: once its member's barrier is clear, the
   tunnel is rebuilt by a **per-tunnel rebuild transition** of the core
   (decision U28, new for 42-A.10: the ordinary connect of section 6.4
@@ -2379,7 +2495,8 @@ in the kept buffer, a tunnel up at the loss preserved with its generation
 unchanged and nothing published - on NT its drive kept; on 98 SE and ME
 the devnode as the containment worker's removal left it, removed and
 found again by the re-enumeration where that removal ran, the tunnel and
-the entry unchanged either way); the bridge restored with the host router reset (the
+the entry unchanged either way; since task 44.54 that removal waits for
+the commit and a closed path, record 21 section 6.1.2); the bridge restored with the host router reset (the
 drain, the barrier, the rebuild through the Detect gate, the drive back
 after the re-enumeration with a new generation); a device unplugged
 during the loss (departed, its entry retired, no statement); a `restore`
@@ -2583,14 +2700,17 @@ firmware and the operating system find them at boot [model] (`USB4-HOSTS`
 section 3). The same state is left by this driver's earlier instance (its
 stop leaves tunnels up, section 11), by `USB4CM.EXE` run from the DOS prompt
 before `win` [obs] (the `usb4cm` README's Windows 98 validation), and by a
-real USB4 BIOS booting a CSM, which is uncaptured (`PLATFORM-MATRIX`
-section 4).
+real USB4 BIOS booting a CSM, unread when this was written
+(`PLATFORM-MATRIX` section 4), and the ASM4242's firmware (section 18)
+builds a PCIe tunnel for an NVMe enclosure attached at power-on and
+hands over without tearing it down (section 18.3).
 
 Windows 11 cleans such a fabric and rebuilds every tunnel [obs]; Linux does
 by default, through Downstream Port Reset on every downstream lane adapter
 and the deactivation of every path entry on a version 1 host, and through
 Host Router Reset on a version 2 host ([linux] `tb.c` `tb_start`,
-`switch.c` `tb_switch_reset_host`, `nhi.c` `nhi_reset`), and keeps the
+`switch.c` `tb_switch_reset_host`, `nhi.c` `nhi_reset`; the ASM4242's
+host router is a version 1 one, section 18.2), and keeps the
 tunnels when its `host_reset` parameter is off, through
 `tb_discover_tunnels` and `tunnel.c` `tb_tunnel_discover_pci`. Both load
 before any storage behind the tunnel is mounted. This driver may load after
@@ -2754,6 +2874,135 @@ On a version 2 host interface, value 2 uses the Host Router Reset of Guide
 ms, the host router enumerated afresh). Step 1 of section 9.3 is also the
 teardown of section 6.8 step 5 and of section 10.4's eject, with the
 device present.
+
+### 9.4 A tunnel an earlier instance of this driver built
+
+Task 44.26 (planned as RESUME.1), found by task 43.71
+(`runs/run-43.md`, "43.71", runs 1 and 2). Section 9.2 cannot tell a
+tunnel that a firmware or another connection manager left from one that
+this driver's own earlier instance on the same NHI left: both are found,
+verified and preserved. Section 7.6 rebuilds across a sleep only a tunnel
+this driver built, so a tunnel it built, then found again as preserved
+after a PnP stop and start of the NHI, was not rebuilt when the domain
+lost its configuration across a hibernate. On 7 x86 in the emulator,
+with the enclosure attached at boot, Windows removed and added the NHI's
+function driver once after the boot; at the resume the port was HELD and
+the disk reported missing. This section carries what the earlier
+instance knew across that restart.
+
+**The record.** At its stop (a PnP stop or removal, section 11) an
+instance hands its successor on the same NHI a record of the tunnels it
+owns:
+
+- the host router's vendor and device;
+- per port whose device router is present with its UUID read: the
+  port's lane 0 adapter; the device router's vendor, device, kind (USB4
+  or Thunderbolt 3) and UUID; and, for each of its PCIe and USB3 tunnels
+  that is up and owned - built by this instance, or itself matched under
+  this section - its lane HopIDs `Hd` and `Hu`.
+
+An instance hands a fresh record only while its view of the fabric is
+current: it reached its running stage, and since its start it never
+failed (at start, or at a resume - a resume that left an obligation
+unmet counts) and was never contained (section 7.7) -
+a latch, so an instance that recovered from a containment hands none -
+and it is not suspended or inside a resume or a recovery when it stops.
+The disposition is latched while the instance runs, since its stop
+clears the stage. An instance whose start never reached the host router
+(its rings refused before activation, so no router was read and no
+fabric configuration attempted) hands on the record it was given,
+unchanged and with its original stamp (below), so that forwarding never
+makes a record younger. Any other instance hands none, and its successor
+finds every tunnel as section 9.2 says.
+
+**Where it is kept.** In the image, not in the instance: four slots,
+each keyed by the NHI's physical device object and its configuration
+space's vendor, device and subsystem vendor as read at the start, and
+stamped with the tick count when a running instance wrote it (a
+forwarded record keeps the stamp it had). The unbind writes its NHI's
+slot (an empty record empties it). Every start of that NHI takes the
+slot and empties it, whatever the start then does, so an ICM start, an
+inert start or a start that never activates this profile discards it;
+only an activation of this profile hands it to the core. A surprise
+removal of the NHI empties its slot even when the instance had already
+stopped. A record older than 120 s at the take is discarded: no
+reference is held on the physical device object, so the stamp, the ids
+and the match below are what stand between a record and a device object
+reused at the same address (an NHI removed while no instance of this
+driver ran). The record lives no longer than the image: for the boot on
+98 SE and ME (no `DriverUnload`), and on NT while any device object of
+this driver - a bridge filter among them - keeps the image loaded. An
+image unloaded between the two instances, a reboot, a restart that takes
+longer than 120 s (a Device Manager disable left a while, say), a change
+of the NHI's ids or a full table loses it, and the successor preserves
+as section 9.2 says. No registry value and no pool.
+
+The identity of "the same NHI" is therefore a heuristic, not a proof,
+and its false positives are accepted: a different NHI of the same ids
+whose device object took the old one's address within 120 s, or another
+connection manager configuring the NHI while no instance of this driver
+ran on it (another driver installed and started on it within 120 s), with
+the same enclosure, the same device router and the same HopIDs. What a
+false positive costs is said under "Why it is safe" below.
+
+**What the successor does with it.** Discovery is unchanged and still
+only reads. Where section 9.2's outcome is "all four" (the port UP and
+preserved), the port is checked against the record as a whole, because
+section 7.6's rebuild of a port that lost its configuration rebuilds the
+port, not one tunnel: the host router found already enumerated, with the
+recorded vendor and device; an entry for the same lane 0 adapter; the
+same device router vendor, device, kind and UUID, read by this
+discovery; the PCIe tunnel recorded up at the same `Hd` and `Hu`; a USB3
+tunnel up on the port recorded up at its own `Hd` and `Hu` (none up and
+none recorded is a match too); and no preserved DisplayPort tunnel on
+the port, proven rather than assumed. A USB3 side that is not up must
+read empty: no host or device entry found for it, none unreadable,
+both USB3 protocol adapters with Path Enable clear and HopID 8 neither
+Valid nor pending, and on both routers' lane adapters no Valid entry
+leading to them and no entry left pending. No DisplayPort entry on the host leads to the port's
+lanes, every such entry read successfully. The match is made only after
+the port's discovery completed (section 7.7's `Discovered`: no transport
+failure inside it, the budget not spent), and its own reads are judged
+the same way: one that fails is no match. Only when all of these hold
+are the port's tunnels marked as this driver's own; one mismatch, a missing field or no record leaves
+every tunnel on the port preserved as someone else's. An own tunnel
+stays preserved for every other rule of this record - hot plug, lanes,
+the TMU and credits left as found, its teardown the registers', section
+7.7's recovery as for any preserved tunnel - and section 7.6 counts it
+as built here: its suspend obligation is rebuilt where the domain lost
+its configuration across the sleep. The mark is kept through a resume's
+verification and goes with the tunnel: its teardown, a rebuild (which
+makes it built here) or a cleaning (section 9.3) clears it. Logged once
+per port as `u4.preserved.own` (the port in bits 16 and up, bit 0 PCIe,
+bit 1 USB3).
+
+Only the "all four" outcome is matched. A tunnel on a HELD port is left
+as found whatever the record says, and so is a USB3 tunnel left alone on
+its port after its PCIe tunnel was ejected or failed: section 9.2 finds
+such a port HELD, so a sleep that loses its configuration leaves it HELD
+as before, even where the earlier instance recorded the USB3 tunnel.
+
+**Why it is safe.** The match can only err towards rebuilding. A false
+match needs, within 120 s and between the two instances, either the
+heuristic's false positive above or, on the same NHI with no connection
+manager running, another configuration through the same device router
+(the same UUID) at the same HopIDs - and with no connection manager
+running nothing serves a hot plug, so a router re-plugged meanwhile
+comes back unenumerated and carries no tunnel. Even a false match costs
+only what this driver does for every port it built: at a sleep that
+lost the domain's configuration, the port's host side closed and the
+port rebuilt through sections 6.4 to 6.9, where without the match it
+would have been HELD and its devices reported missing. Nothing is
+torn down or rebuilt by the match itself, and a configuration that
+survived the sleep is verified, not rebuilt, as for any port. Every
+other failure of the record (lost, refused, unmatched) is the behaviour
+without this section.
+
+Not changed by this section: section 9.2's discovery, a preserved
+tunnel's teardown, the resume's verification (section 9.2's reads),
+section 7.7's recovery, and the release notes' standby and hibernation
+limitation, which rests on task 43.71's native hot-plug reading and on
+decision U15 as before.
 
 ## 10. The contract with Stor98 (formerly `nvme98`)
 
@@ -2992,7 +3241,9 @@ so it stays up, as on a port FAILED for PCIe (section 7.2).
   Routers keep
   retransmitting unacknowledged hot plug events until the next start
   (Guide 4.3), which discovers and preserves the fabric (section 9.2).
-  Decision U7.
+  A stop also hands the next instance on the same NHI section 9.4's
+  record of the tunnels this one built, so that they are still rebuilt
+  across a sleep. Decision U7.
 - **Shutdown**: the same.
 - **System suspend** (D3 for S3 or S4): the NHI marks its tunnel-port
   set's active members held (section 7.6), then the same as stop. The
@@ -3041,6 +3292,7 @@ at its default under the don't-overwrite flag, each read once at start
 | `XhciCmUsb3Tunnel` | 1 | 1 build USB3 tunnels (section 6.9); 0 disconnect the USB3 adapters of routers this driver configures (Guide 5.5.3); a preserved USB3 tunnel is left as found either way (decision U3) |
 | `XhciCmLaneBonding` | 1 | 1 bond (section 6.5); 0 never bond, disable lane 1 where section 6.5 step 6 can verify it, and run single-lane; a preserved link keeps its configuration either way (decision U4) |
 | `XhciCmPreOsCleanup` | 0 | 0 discover and preserve, hold what does not verify (section 9.2); 1 clean what does not verify; 2 clean everything (section 9.3) (decision U2) |
+| `XhciCmAsmediaPcie7Credits` | absent (0) | a bench experiment, not written by any INF and not asked by the installer: 1 writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCIe tunnel this driver builds between an ASM4242 host router and an ASM2464 device router; 0 keeps them as read; any other value refused, 0 standing (section 18.8, task 44.41) |
 | `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
 
 `XhciCmCmdTimeoutMs` and `XhciCmApproveTimeoutMs` are the ICM profile's
@@ -3109,6 +3361,17 @@ a file taken from `3c74189` or later is an adaptation under the rule above
 Behaviour taken from Linux alone stays tagged [linux], unconfirmed, until a
 hardware capture shows it, whether or not its code was adapted.
 
+From 2026-10-26 (roadmap-usb4 task 44.38) this project's code is
+GPL-2.0-or-later. The portions of `tbt_u4cm.c` and `tbt_ring.c` adapted
+from Linux under the rule above were rewritten from the specifications,
+the request traces of the host suites and the cross-check unchanged
+(`legal-provenance.md` section 2a, "Rewritten from"; `runs/run-44.md`,
+"44.38"); from then on code is not adapted from a file whose SPDX
+identifier is `GPL-2.0` or `GPL-2.0-only`, Linux's among them, which is
+read for facts only, a fact from Linux alone tagged [linux] (owner, 2026-10-26). The owner, `usb4-emu`'s copyright
+holder, offers what this project takes from `usb4-emu` under
+GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays GPL-2.0-only.
+
 ## 14. Verification
 
 ### 14.1 Host suites
@@ -3168,6 +3431,18 @@ hardware capture shows it, whether or not its code was adapted.
   (verified, nothing written to the router), never set, the budget spent
   inside its wait, and another router (another UUID) in its place during
   it (never verified as the first).
+- **`test_u4cm`, an earlier instance's tunnels** (section 9.4): an
+  instance builds a tunnel, stops and hands its record; a second
+  instance on the same fabric finds it preserved and its own, and a sleep
+  that loses the domain's configuration rebuilds it; a sleep that keeps
+  it, then one that loses it, rebuilds it too. The same with no record,
+  another UUID, other HopIDs, another host router, a recorded PCIe
+  tunnel beside an unrecorded USB3 one, a HELD port and a USB3 tunnel
+  left alone after an eject: preserved as someone else's and HELD at the
+  resume, as before. The record handed on through a second instance to a
+  third; none from a contained, failed, recovered or suspended instance;
+  the given record handed on unchanged by an instance whose rings were
+  refused.
 - **`test_u4cm`, containment** (section 7.7): the fake fabric's host
   interface can be lost at any request (reads all ones, writes dropped,
   nothing consumed), with or without the gate's cancellation. Cases:
@@ -3189,7 +3464,16 @@ hardware capture shows it, whether or not its code was adapted.
   Against a fork that has the `asm2464` model (QEMU fork `20655c3` and
   later) it also links `usb4-router-img.c` and `usb4-router-asm2464.c`
   and runs section 6.11's device on `intel-adl`: cold, hot plug, unplug,
-  re-plug, the pre-OS tunnel preserved and cleaned.
+  re-plug, the pre-OS tunnel preserved and cleaned. Since task 44.42 it
+  needs QEMU fork `02dda40` or later and builds the `asm4242` host as
+  that fork's `usb4-host` does by default, the emulator's asm4242 preset, the
+  ASM4242 host router of section 18.2 (lanes 1-4, the host
+  interface 5 with 21 paths, PCIe Down 6-7, USB3 Down 8-9, DP IN 10-11,
+  an ASM2464 leaving the link 10 s after a plug with no tunnel; section
+  18.2), checking that layout; and it runs section 6.11's device on it
+  too, cold, hot plug, unplug, re-plug and the pre-OS tunnel, once with
+  `XhciCmAsmediaPcie7Credits` 1 (section 18.8: the gate opened for each
+  of the three tunnels built, and its lines logged).
 
 ### 14.2 The virtual-machine legs
 
@@ -3242,9 +3526,10 @@ id out of the `$CHICAGO$` INF.
 
 ### 14.4 Hardware
 
-None is a condition of the cut (decision U10): the owner holds no USB4 host
-whose behaviour under a legacy operating system has been read, and task
-U4HW.1 (real USB4 devices; task 40.4 until 2026-10-16) waits on a USB4 host that boots these systems.
+None is a condition of the cut (decision U10): no USB4 host's behaviour
+under a legacy operating system has been read. Task U4HW.1 (real USB4
+hardware; task 40.4 until 2026-10-16) is Phase 44's 44.39 (section 18)
+and 44-E.6 (the hardware bench, section 18.6).
 The release notes say the USB4 profile has run on the emulator only, and
 that every real host id acts untested.
 
@@ -3280,7 +3565,11 @@ from their first form, as each row says.
 
 - **Every real USB4 host is untested.** The emulator's two host models are
   the only fabrics this has run against; the owner's decision makes every
-  listed id act by default with a warning.
+  listed id act by default with a warning. The ASM4242, a candidate
+  host for the targets (no Windows target read on it yet), is recorded
+  in section 18; its tunnel-port
+  set comes from the ASM4242 family since task 44.40 (section 18.4 item
+  3), which only the hardware bench (task 44-E.6) can confirm.
 - **Polling on real hardware**: no reader has run a host interface with no
   interrupt; the done-bit model is what all three rely on, but a host that
   writes descriptors back only with an interrupt enabled would hang the
@@ -3336,7 +3625,8 @@ from their first form, as each row says.
   written in its HopID 8 entry (it resets to none; this driver keeps them
   as read, as Linux does), what its unused adapter 4 answers if read, and
   the PCIe switch in front of the NVMe under Windows 98 SE and 2000 are
-  unread; planned task U4HW.1 (40.4 until 2026-10-16) waits on a USB4 host that boots them.
+  unread; planned task U4HW.1 (40.4 until 2026-10-16) waits on a USB4 host that boots them
+  (section 18; the hardware bench, task 44-E.6).
 
 ## 17. What this record needs record 21 to say differently
 
@@ -3377,6 +3667,403 @@ them:
   port's member known by correspondence allows it in a set of more than
   one (this record's section 7.6).
 
+## 18. The ASMedia ASM4242 (task 44.39)
+
+Added 2026-10-25 for task 44.39, the plan half of U4HW.1 (roadmap-usb4,
+decisions table, "U4HW.1"). The ASMedia ASM4242 is a USB4 host with no
+firmware connection manager an operating system can talk to, on
+platforms whose firmware can boot a compatibility support module (CSM):
+a candidate host for this project's legacy targets (no Windows target
+has been read on it yet, section 18.6 step 1). This section records its
+PCI side, its host router and its firmware's pre-OS tunnel as
+`usb4-emu`'s asm4242 model and data record them, what that means for this driver,
+and the hardware bench's steps (task 44-E.6). Nothing in `src\` changes
+with it.
+
+Tags: **[hw]** the ASM4242's own state as `usb4-emu`'s asm4242 model
+and data record it (`usb4-emu` `7ec3865`, `5d7345a` and `9f333f3`, read
+there and never modified from here, `usb4-emu`'s asm4242 research note
+being that repository's own reading); where that data came from is
+recorded in `usb4-emu`; nothing of it is in this repository. **[inf]** an
+inference, and this record's own [linux] and [model]. The enclosure
+throughout is the ORICO (ASMedia ASM2464PD device router, Toshiba XG6
+NVMe).
+
+`legal-provenance.md` section 4 has the row for every fact below.
+
+### 18.1 The platform [hw]
+
+The ASM4242 sits on CPU root port 00:02.2 (`1022:14DB`, no hot-plug
+slot), as the public dumps of section 2.1 and `usb4-emu`'s asm4242
+research note said: upstream port 13:00.0 (`1B21:2421`), downstream ports 14:00.0 to
+14:03.0 (`1B21:2423`), the xHCI 79:00.0 (`1B21:2426` rev 01) behind
+14:02.0 and the host interface 7A:00.0 (`1B21:2425` rev 01, class
+`0C0340`) behind 14:03.0:
+
+| Downstream port | Buses | I/O | Memory | Prefetchable | Slot |
+|---|---|---|---|---|---|
+| 14:00.0, USB4 port 1 | 19-48 | 12 KB | A4000000-BBFFFFFF (384 MB) | 128 GB, above 4 GB | Hot-Plug Capable, Hot-Plug Surprise; no power controller, attention button or MRL; link-active reporting |
+| 14:01.0, USB4 port 2 | 49-78 | 12 KB | BC000000-D3FFFFFF (384 MB) | 128 GB, above 4 GB | the same |
+| 14:02.0 (xHCI) | 79 | none | D4000000-D43FFFFF | none | no slot |
+| 14:03.0 (host interface) | 7A | none | D4400000-D47FFFFF | none | no slot |
+
+- **Every BAR is below 4 GB**: the xHCI's BAR0 D4000000 (32 KB), the
+  host interface's BAR0 D4400000 (256 KB) and BAR2 D4440000 (64 KB), the
+  enclosure's NVMe BC000000 (16 KB), all 64-bit and non-prefetchable.
+- **The prefetchable windows of 00:02.2, 13:00.0, 14:00.0 and 14:01.0
+  are 64-bit and above 4 GB** [inf: 128 GB per port does not fit below
+  4 GB]. On the emulator's 4G-off layout on the `pentium3` bases the
+  firmware programs the root port 1_0000_0000 to 40_FFFF_FFFF, its low
+  registers (`24h`, `26h`) reading `0001h` and `FFF1h` [emu]
+  (`runs/run-44.md`, "44.49").
+- **Interrupts**: the xHCI and the host interface are PCIe Legacy
+  Endpoints with INTA#, MSI (8 vectors) and MSI-X (8 and 16).
+- **The host interface**: Total Paths 21 (`39640h` reads `15h`). Nothing
+  here relies on the firmware's enabling: the operating system's PCI
+  driver enables memory decoding at the start, this driver sets Bus
+  Master through the PDO and checks that `39640h` decodes (section 3.2).
+- **ACPI**: an SSDT with OEM table id `DISCUSB4` carries the `_DSD`
+  properties `usb4-host-interface` and `usb4-port-number` (with
+  `ExternalFacingPort` and `HotPlugSupportInD3`), another (`CPMMSOSC`)
+  the platform `_OSC` with USB4. No target of this project evaluates
+  either (section 3.4).
+- **The ASM4242's xHCI** (79:00.0) is the controller the host router's
+  USB3 Down adapters lead to, and `xhci98.sys` takes it by class like any
+  other.
+
+### 18.2 The host router [hw]
+
+`174C:2428`, Max Adapter 11, NVM `200011.241022`, a version 1 router. The
+adapters, in the order section 6.1's capability walk finds them: lane
+adapters 1 to 4 (USB4 port 1 is 1-2, port 2 is 3-4), the host interface
+5 (the Upstream Adapter), PCIe Down 6 and 7, USB3 Down 8 and 9, DP IN 10
+and 11; Max HopID 27 on the lanes; lane Total Buffers 174 (two for the
+control path); its Buffer Allocation USB3 64, DP AUX 2, DP
+main 0, PCIe 64 and DMA 32. This differs from the `usb4-emu` `asm4242`
+preset's default layout ([model]: DP IN 5-6, host interface 7, PCIe Down
+8-9, USB3 10-11), which this driver never assumed: it walks the adapters
+and pairs the Nth PCIe Down adapter with the Nth USB4 port (section 6.3),
+and the firmware's tunnels keep that pairing on this router (section
+18.3).
+174 buffers do not fit the 7-bit Path Credits field, which section 6.8's
+accounting already bounds (`TBT_PATH_CREDITS_MAX`).
+
+### 18.3 The firmware's tunnel, and Linux's reset [hw]
+
+**With the enclosure attached at power-on, the firmware builds its PCIe
+tunnel before the operating system.** The first PCI scan finds the
+tunnel port, the enclosure's switch (`1B21:2463`, its upstream and
+downstream ports) and the NVMe behind it. The host router as the
+firmware leaves it:
+
+- ROUTER_CS_1 to 4 `0002C520h 00000000h 80000000h 200010FFh`: Topology ID
+  Valid set (depth 0, Topology ID 0), Notification Timeout 255.
+- On the second USB4 port: PCIe Down adapter 7 ADP_PCIE_CS_0 `8C010400h`
+  (Path Enable, LTSSM L0); adapter 6 `00060400h`, USB3 Down 8 and 9
+  `40000400h`: no Path Enable. Adapter 7 HopID 8: `80001808h 03000301h`
+  (Valid, to lane adapter 3 HopID 8, 0 credits, IFC and EFC set, ISE and
+  ESE clear). Lane adapter 3 HopID 8: `80803808h 01802301h` (Valid, to
+  adapter 7 HopID 8, 64 credits). So `hd` = `hu` = 8, on the second USB4
+  port and its PCIe Down adapter, landing on 14:01.0.
+- The host router's TMU: bi-directional HiFi.
+
+**The firmware's tunnel, whole** (the enclosure on the first USB4 port:
+lane adapters 1-2, PCIe Down 6, DSP 14:00.0, its switch at 19:00.0 and
+1A:00.0 and the NVMe at 1B:00.0 with BAR0 A4000000, so the pairing holds
+on this port too) [hw]. The four entries, all at HopID 8 (`hd` = `hu` =
+8): the host's PCIe Down 6 `80000808h 03000301h` and the device's PCIe Up
+3 `80000808h 03000301h` (each to its lane at HopID 8, **0 credits, IFC
+and EFC set**, ISE and ESE clear); the device's lane 1 `80801808h
+01802301h` and the host's lane 1 `80803008h 01802301h` (each to its PCIe
+adapter at HopID 8, 64 credits, IFC, counter 2 enabled). Both PCIe
+adapters read ADP_PCIE_CS_0 `8C010400h` (Path Enable, L0). The device
+router: ROUTER_CS_1 to 4 `001101C0h 00000001h 80000000h 200010FEh`
+(upstream adapter 1, route 1, Topology ID Valid), ROUTER_CS_5 `81000000h`
+(Configuration Valid, PCIe Tunneling On), ROUTER_CS_6 `03000000h` (Router
+Ready, Configuration Ready); the lanes bonded (LANE_ADP_CS_1 `4824003Ch`,
+dual lanes); its USB4 port marked configured; its TMU uni-directional
+HiFi.
+
+**Linux's reset**: by default Linux resets such a fabric when its driver
+binds: on a version 1 host, Downstream Port Reset on every downstream lane
+adapter and the deactivation of every path entry, so the firmware's
+tunnel is gone; with its `host_reset` parameter off it discovers the
+tunnel instead ([linux] `tb.c` `tb_start`, `switch.c`
+`tb_switch_reset_host`, `tunnel.c` `tb_tunnel_discover_pci`; section
+9.1). The reset is exactly what section 9.1 rules out for this driver.
+
+**After a hot plug with no tunnel built, the enclosure leaves the link
+10 s later** in the emulator's asm2464 model [model] (section 14.1). On
+the P14s's Thunderbolt 3 host the same enclosure falls back to USB about
+9.4 s after its announcement (task 44.16; `usb4-emu`
+`P14S-ORICO-2026-10-15.md` section 2.2).
+
+**A tunnel Linux builds** leaves a USB4 router's protocol-adapter
+credits, IFC and ISE as read ([linux] `path.c` `tb_path_activate`), as
+this driver's does (section 6.8). The firmware's protocol-adapter
+entries, by contrast, carry **0 credits** with IFC set, and its lane
+entries enable counter 2.
+
+### 18.4 What this driver does on this host, and what it must not do
+
+As built and as this record says, read against sections 18.1 to 18.3 (item 3's
+Stor98 binding as design record 31 will have it after task 44.3);
+nothing below is a change:
+
+1. **Admission**: the host interface is matched by `PCI\CC_0C0340` on
+   every path (section 3.7) and admitted as a software-only candidate
+   (section 3.4, case 1); its firmware-status register is never read
+   (section 3.3). Every real host id acts untested (section 16); this is
+   the first that can be read.
+2. **No reset, no takeover.** The host router arrives with Topology ID
+   Valid set, so section 6.1 verifies depth and Topology ID and writes
+   nothing to ROUTER_CS_1 to 4. With `XhciCmPreOsCleanup` 0, the default,
+   section 9.2 discovers the firmware's tunnel. Section 18.3's tunnel
+   meets everything section 9.2 checks [hw]: the device router at depth 1 with
+   Router Ready, PTO, CV and Configuration Ready (step 2), the lanes
+   bonded (step 3), and the four entries chained at HopID 8 with Path
+   Enable and L0 at both PCIe adapters (step 4). So the port is UP and
+   preserved [inf: the registers read against the rules; the host suite's
+   `test_u4cm` `test_asm4242_preos` holds the same four entries preserved
+   and unwritten]. A HELD port would still leave the boot drive working
+   [inf], served only by its own unplug. **This
+   driver must not do what Linux does by default** (section 18.3): `XhciCmPreOsCleanup` 2
+   removes a drive the system booted with, and 1 does so for a HELD port;
+   the bench never sets either with the drive attached at power-on.
+3. **The tunnel-port set: the gap.** The downstream ports are
+   `1B21:2423`, which the filter INFs name (section 3.7) and
+   `cm_ports.c` keeps as an id no family carries (`cmUnpaired`), because
+   the host is matched by class and `CmPortsFamily` finds no family for
+   `1B21:2425`. Section 7.6's discovery therefore finds no listed port:
+   14:00.0 and 14:01.0 are candidates (Hot-Plug Capable, [hw]), 14:02.0
+   and 14:03.0 are not (no slot), and the outcome is `UNLISTED`. The set
+   then comes only from the router-named source, if this router answers
+   Get PCIe Downstream Entry Mapping (unknown), or
+   from `XhciCmTunnelBridge` (`14:00.0,14:01.0` in section 18.1's layout;
+   the bus numbers move with a platform's PCIe population). With an
+   empty set: no re-enumeration after a hot plug (NT's and 9x's routes
+   alike), no safe-eject mark, and on 98 SE and ME no
+   `PCI\XHCI98_TUNNEL&CC_010802` for the boot-time drive, since the
+   CONFIGMG worker gives it only below an active member (design record 31
+   section 5.1), so once task 44.3 has made Stor98's INFs match that id
+   alone, Stor98 does not bind it there (until then they match
+   `PCI\CC_010802`, so it binds by class); on 2000 and later the filter
+   on 14:01.0 gives the id at enumeration by record 31 section 4's
+   structural rule (task 44.3, not yet built) whether or not the port is
+   a member. **Proposed, not taken** (section 18.7): a family for the
+   ASM4242, NHI `1B21:2425` with switch ports `1B21:2423`, so section 7.6's
+   switch source applies (Hot-Plug Capable ports only), as for Maple
+   Ridge. **Taken** by the owner on 2026-10-25 and built as task 44.40:
+   `cm_ports.c`'s family `asmedia-asm4242` (record 21 sections 3.3 and
+   6.3), the INFs unchanged; the host suite's `test_asm4242_host` holds
+   this topology to the set {14:00.0, 14:01.0} by the switch source,
+   14:02.0 and 14:03.0 out. The text above stays as the reading that led
+   to it.
+4. **Hot plug**: polled (200 ms idle), enumerated, bonded and tunnelled
+   with `XhciCmApprove` 1, the default, which has to complete within the
+   enclosure's 10 s [model]; with `XhciCmApprove` 0 the enclosure leaves
+   the link [model]. The tunnel ports' windows (48 buses, 384 MB, 12 KB I/O) stay
+   in place with nothing attached [hw], so the ASM2464's two bridges and
+   the NVMe fit them: on 98 SE and ME record 21 section 6.1's bridge
+   numbering (section 6.1.1) places them inside 14:00.0's or 14:01.0's
+   window, and the NVMe's pin, device 0 behind two bridges at device 0
+   [hw], swizzles onto the port's own pin, whose Interrupt Line, where
+   the CSM writes one, is the known wire that section's interrupt step
+   needs [inf].
+5. **Credits, TMU, CLx**: section 6.8 bounds the 174 buffers to the field;
+   a preserved tunnel keeps the firmware's credits (64 on lane 3's entry)
+   and the host's HiFi TMU mode until the unplug (section 9.2's stated
+   cost); no CL state is enabled (the link reports none).
+6. **The tunnel this driver builds at a plug** uses section 6.3's
+   pairing and HopID 8 on the protocol adapters, its lane HopIDs and
+   credits by section 6.8's allocation and accounting. On the two
+   protocol-adapter entries section 6.8 keeps credits, IFC and ISE as
+   read: on a router fresh from its reset or plug that is what the router
+   reset them to, and after an earlier connection manager's teardown
+   whatever it left. The firmware's tunnels carry PCIe with 0 credits and
+   IFC set on both protocol-adapter entries, the host's PCIe Down and the
+   device's PCIe Up [hw]; whether an entry with IFC clear carries PCIe on
+   this host is not known. This is the open item section 16 already names for the
+   ASM2464 ("the PCIe Up adapter credits kept as read"), and the first
+   thing 44-E.6's hot plug reads (section 18.6 step 3).
+
+### 18.5 Windows 98 SE, ME, 2000 and XP on an ASM4242 [inf unless marked]
+
+- **A drive attached at power-on is plain PCI at boot**: the firmware's
+  tunnel is up when the operating system's PCI enumerator scans, the
+  NVMe's BAR is below 4 GB inside 14:01.0's window [hw]. On 98 SE and ME that is the case the
+  BIOS numbered at POST, which worked on the P14s with the enclosure
+  present at power-on (record 21 section 6.1.1); the bridge numbering of
+  that section and record 28's forms concern a drive that arrives
+  later.
+- **The 64-bit prefetchable windows above 4 GB** are the first unknown.
+  A reader of only the low registers sees each as 0 to 4 GB. Whether 98
+  SE's and ME's `PCI.VXD` reads the upper halves, ignores the window,
+  rewrites it or reports a conflict is unread; so is what Windows 2000's
+  and XP's `pci.sys` make of a bridge window above 4 GB on a system that
+  addresses no memory there. Nothing behind the tunnel uses a
+  prefetchable BAR (the NVMe's is not), so closing those windows would
+  lose nothing here. "Above 4G Decoding" is on throughout sections 18.1
+  to 18.3.
+- **"Above 4G Decoding" off does not move them**: the firmware still
+  programs the bridges' prefetchable windows 64-bit and above 4 GB, and
+  what changes is the host bridge's `_CRS`, which then offers no window
+  above 4 GB. The emulator's 4G-off layout is that case [emu]
+  (`runs/run-44.md`, "44.48" and "44.49"). Linux gives a bridge window it
+  cannot claim space of its own ([linux] `drivers/pci/setup-bus.c`;
+  record 32 section 4.2). So an operating system that keeps the
+  firmware's bridge windows, as 98 SE, ME and 2000 do, still meets
+  windows above 4 GB with the option off [inf]; in the emulator, on that
+  layout, 2000 stops at "Starting up" and 98 SE and ME give the empty
+  tunnel port Code 12, the latter probably an artifact of where SeaBIOS
+  placed that window (`runs/run-44.md`, "44.48"). Not read on the
+  hardware bench.
+- **Which systems meet them, and the step for 98 SE and ME** (task
+  44.49, `runs/run-44.md` "44.49") [emu]: on the emulator's firmware
+  layout 32-bit Vista, 7, 8.1 and 10 give the ASM4242's root port
+  problem 12 and enumerate nothing behind it, 32-bit 8 does not start,
+  10 x64 needs the option on, XP moves the windows itself; 98 SE and ME
+  write only the windows' low registers, and 2000's `pci.sys` writes the
+  root port's window as 0 to `FFFFFFFF_FFFFFFFF` and loops in its range
+  code (the "Starting up" stop); the tunnel port 98 SE leaves at problem
+  12 is, in that kit, the one the enclosure is on, not the empty one. The
+  step that closes those windows before 98 SE and ME read them is design
+  record 32 (before code).
+- **The firmware's own reservation settings** (Advanced, AMD PBS,
+  "USB4 configuration (ASM4242 Controller)"):
+  per USB4 port, PCIe Bus Number 16 to 56, Non-Prefetchable MMIO 256 to
+  4096 MB, Prefetchable MMIO 1 to 512 GB; the defaults are 48
+  buses, 384 MB and 128 GB, section 18.1's layout.
+  The prefetchable reservation cannot be set to none, and no setting the
+  firmware's documentation names places those windows below 4 GB. That documentation also states that "Re-Size BAR" on disables the CSM, so it stays off
+  for these systems.
+- **Interrupts**: none of this driver's (section 5, polling).
+- A platform's memory size and processor are the operating systems' own
+  preparation (98 SE's memory limit and the like), outside this record.
+
+### 18.6 The hardware bench, task 44-E.6
+
+After the cut, on the `3.3.0.0` asset (decision D13); step 1 uses no
+build of this release, and whether it may be read before the cut is the
+owner's question (section 18.7). Each step records the system, the BIOS
+settings, Device Manager's resources and problem codes, the connection
+manager's log or XHCITR's snapshot, and the time an event took.
+
+1. **The platform, no driver of this release.** The BIOS settings: CSM,
+   "Above 4G Decoding", Re-Size BAR, the USB4 items (PCIe tunnelling, the
+   controller), the serial port. Then, booted by the CSM with the
+   enclosure attached at power-on, 98 SE first, then ME, 2000 and XP:
+   Device Manager's view of 00:02.2, 13:00.0, 14:00.0 to 14:03.0, the two
+   ASMedia bridges and the NVMe (resources, problem codes), or a crash and
+   its text; `usb4-emu`'s DOS `PCIDUMP` for the same functions under the
+   CSM. Again with "Above 4G Decoding" off if any target fails.
+2. **The drive present at boot, `3.3.0.0` installed** (connection manager
+   and Stor98), on 98 SE, then 2000 and XP: the connection manager's
+   discovery outcome for each USB4 port (preserved, HELD, empty) and the
+   tunnel-port set's outcome and source; Stor98 bound or not; the drive's
+   letter, a file copied and read back.
+3. **Hot plug**: the enclosure unplugged (ejected first where the system
+   offers it) and plugged again, five times per port, both ports: the time
+   from the plug to the tunnel and to the drive's letter, and whether any
+   plug lost the 10 s; whether the tunnel
+   carries PCIe at all (the bridges and the NVMe enumerated; section 18.4
+   item 6), with the path entries the log records; then, only if the
+   default's tunnel does not carry PCIe, `XhciCmAsmediaPcie7Credits` 1
+   (section 18.8) from a verified fresh state - the machine and the
+   enclosure powered off, not a warm restart or a replug, since setting
+   the value back to 0 keeps whatever the entries hold - and the same
+   plugs again, the log's `u4.asm7.*` lines kept; then, with
+   `XhciCmApprove` 0 set and the system restarted (the driver reads its
+   values once per start), one plug (the enclosure expected to leave the
+   link and not to appear as USB), and the value set back.
+4. **If step 2 found the set empty**: `XhciCmTunnelBridge` set to the two
+   tunnel ports read in step 1, the system restarted, and steps 2 and 3
+   again.
+5. **Windows 7 x64** (test-signing), the same steps 2 and 3, as the target
+   whose PCI stack is newest.
+6. **The ASM4242's xHCI under `xhci98.sys`**: a USB 3 stick and a USB 2
+   device on each USB4 port's connector with no tunnel involved, on 98 SE
+   and 2000.
+
+Evidence goes to the run sheet's 44-E.6 section and, for logs and
+screenshots, the git-ignored `xhciqual/results/` or `temp\` as the run
+sheets do.
+
+### 18.7 Open, and the owner's
+
+- **The tunnel-port set (section 18.4 item 3)**: answered by the owner on
+  2026-10-25, (a), built as task 44.40. The question as it was put: (a)
+  the ASM4242 family
+  row in `cm_ports.c` and record 21 section 3.3's table (NHI `1B21:2425`,
+  switch ports `1B21:2423`; a few lines and a host vector, the INFs
+  unchanged), before the bench; (b) the README's `XhciCmTunnelBridge`
+  procedure alone, the bus numbers board- and population-specific; (c)
+  wait for the bench's reading of Get PCIe Downstream Entry Mapping.
+  Recommended: (a), reviewed as a code change of its own, since without a
+  set 98 SE and ME bind no driver to the boot-time drive and no target
+  re-enumerates after a hot plug.
+- **When step 1 is read**: after the cut as D13 says, or now, since it
+  needs no build of this release and decides whether the targets boot at
+  all on an ASM4242. Recommended: now. The owner, 2026-10-25: whenever
+  the hardware bench is set up.
+- **What sections 18.1 to 18.3 leave**: Get PCIe Downstream Entry
+  Mapping; the 64-bit windows under each target (step 1); whether a
+  tunnel built inside the 10 s timer keeps the enclosure, as it does in
+  the emulator's model [model].
+- **The protocol-adapter entries (section 18.4 item 6)**: (a) build as
+  designed and read it on the bench first, a quirk row of section 6.10
+  for `174C` routers (7 credits and IFC on the PCIe adapters' HopID 8
+  entries) taken only if the tunnel does not carry
+  PCIe; (b) take that row now, before the bench. Recommended: (a), since
+  the firmware's own tunnel shows the host side working with 0 credits,
+  and a row taken without a failing reading would change every USB4
+  host's ASMedia device; the bench reading is cheap and the fallback
+  small. Answered (the owner, 2026-10-25, through the coordinator): an
+  opt-in bench switch, the default unchanged (section 18.8, task 44.41).
+
+### 18.8 `XhciCmAsmediaPcie7Credits`, the credits experiment (task 44.41)
+
+An explicit, opt-in exception to section 6.8's rule for one router pair,
+so that the bench can try 7 credits and IFC on those entries without a
+rebuild; the default is unchanged, and the experiment is read on the
+hardware bench (section 18.6 step 3). The rule
+it departs from: on a USB4 protocol adapter the path entry's Path Credits
+Allocated, IFC and ISE are vendor-defined, and the connection manager
+keeps them as read (USB4 Specification 2.0 Table 8-23; Connection Manager
+Guide 2.0 Table 5-2, note 1); a protocol adapter's 0 is therefore not
+invalid for PCIe, and 7 is no USB4 requirement.
+
+- **The value**: `XhciCmAsmediaPcie7Credits`, `REG_DWORD`, read once per
+  start under the usual precedence (the machine-wide key, then the host
+  interface's driver key); absent or 0 is today's behaviour, 1 the
+  experiment; any other value is refused, 0 stands, and the log says so
+  (`cm.asm.pcie7`, bit 8 found, bit 9 refused, then `cm.asm.pcie7.raw`).
+  No INF writes it; the installer neither asks for it nor writes it.
+- **Where it acts**: only on a PCIe tunnel this driver builds (a plug, a
+  re-plug, a rebuild after a resume of a tunnel it built), only when the
+  host router reads `174C:2428` and the connected device router
+  `174C:2463` (a USB4 router, not a Thunderbolt 3 one), and only on the
+  two protocol-adapter source entries: the host's PCIe Down HopID 8 and
+  the device's PCIe Up HopID 8, written with Path Credits Allocated 7,
+  IFC 1, ISE 0 and, as always, EFC 1, ESE 0. The lane entries keep
+  section 6.8's accounting; USB3 and DisplayPort paths, preserved or HELD
+  tunnels (which discovery never writes), and every other router pair are
+  untouched, whatever the value.
+- **The log**: `u4.asm7.gate` once per tunnel built while the value is 1
+  (1 applied, 0 not this pair or not PCIe); then for each of the two
+  entries, under `u4.asm7.host` and `u4.asm7.dev`, six lines: the two
+  DWs as read, as written and as read back.
+- **On the bench** (section 18.6 step 3): the default first; the
+  experiment only if the default's tunnel does not carry PCIe, and only
+  from a verified fresh state, the machine and the enclosure powered off,
+  since setting the value back to 0 keeps the 7 credits the hardware
+  then holds (0 means "as read").
+- **Host vectors**: `test_cm` (the value's rule) and `test_u4cm`'s
+  `test_asm7` (off: the entries as read and nothing logged; on: 7, IFC,
+  EFC, ISE 0 on both protocol entries with the lane entries unchanged,
+  the thirteen log lines; on with an Intel host or another device: the
+  gate closed; on with a pre-OS tunnel: preserved, nothing written).
+
 ## Sources
 
 - USB4 Specification 2.0 (sections 4.4.5.2, 5.2.1, 5.2.5, 5.4, 6.4, 6.8,
@@ -3404,3 +4091,10 @@ them:
 - `nvme98/docs/PLAN.md` section 0.10, gate G3, decisions MD-1 and MD-2, as
   record 21 read them.
 - This repository: design record 21; `AGENTS.md`; `src\xhci98.inf`.
+- For section 18 (read 2026-10-25): `usb4-emu`'s asm4242 model and data
+  (`7ec3865`, `5d7345a`, `9f333f3`) and its asm4242 research note
+  (`3090d19`), where that data came from is recorded in `usb4-emu`;
+  nothing of it is in this repository; `docs/captures/P14S-ORICO-2026-10-15.md`
+  section 2.2;
+  design records 21, 28 and 31; `src\cm\cm_ports.c`, `cm_reenum.c`,
+  `tbt_topo.c`.

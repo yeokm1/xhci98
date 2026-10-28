@@ -29,20 +29,20 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 1224,
-             "a 306-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
-             "154, 36.9 two, 36.24 and 36.25 33, 36.38 69)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 2516,
+             "a 629-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
+             "154, 36.9 two, 36.24 and 36.25 33, 36.38 69, 44.35 323)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
              "a sixteen-word record");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 2516,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 246,
-             "the whole counter block (38.12's composite selects: 241 to "
-             "245)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 252,
+             "the whole counter block (44.35's transport decisions: 246 to "
+             "251)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             1224 + 18 * 64, "counters after the last record");
+             2516 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
@@ -61,8 +61,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 246, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 306 + 246,
+    CHECK_EQ(XhciSnapHcdWords(18), 629 + 18 * 16 + 252, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 629 + 252,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -849,7 +849,42 @@ static void test_counter_tail(void)
              244 * 4, "CompositeMismatches at 244");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeIntervals), 245 * 4,
              "CompositeIntervals at 245");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 246 * 4, "246 words in all");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XportUas), 246 * 4,
+             "XportUas at 246");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XportUasOnly), 247 * 4,
+             "XportUasOnly at 247");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XportUasOnlyForced), 248 * 4,
+             "XportUasOnlyForced at 248");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XportBotForced), 249 * 4,
+             "XportBotForced at 249");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XportBotNoStreams), 250 * 4,
+             "XportBotNoStreams at 250");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XportNoStreams), 251 * 4,
+             "XportNoStreams at 251");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 252 * 4, "252 words in all");
+}
+
+/* 44.35: the transport records' header words (tr_snap.c's print_xport
+ * reads these places). */
+static void test_xport_words(void)
+{
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_RECORDS, 306,
+             "after 36.38's records, the header's old end");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_WORDS, 307, "the record size");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_FIRST, 308, "the first record's word");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_AT, 309, "the records");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPORT_RECORDS), 32,
+             "32 records");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPORT_WORDS), 10,
+             "of ten words");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPORT_FIRST), 309,
+             "placed at 309");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPORT_AT), 0,
+             "a record is a reading, the door's");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_AT + 32 * 10, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+             "the records end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_X_SLOT, 0, "slot first");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_X_COUNT, 9, "count last");
 }
 
 /* 36.38: selective suspend's stage B header words and the counters
@@ -870,8 +905,8 @@ static void test_ssusp_words(void)
              "of eight words");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_DNCTRL_LIVE), 0,
              "DNCTRL is a reading, the door's");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_SUSP_AT + 8 * 8, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
-             "the records end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_SUSP_AT + 8 * 8, XHCI_SNAPSHOT_HCD_XPORT_RECORDS,
+             "the records end 36.38's words");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SsSuspArms), 142 * 4,
              "SsSuspArms at word 142");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, FuncWakeEvents), 152 * 4,
@@ -897,6 +932,7 @@ int main(void)
     test_msi_words();
     test_counter_tail();
     test_ssusp_words();
+    test_xport_words();
     test_xstat_math();
     test_xpol();
     test_walk(0);

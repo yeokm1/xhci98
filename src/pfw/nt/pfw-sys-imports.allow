@@ -1,0 +1,22 @@
+# pfw-sys-imports.allow - the imports XHCIPFW.SYS may have (design record
+# 32 section 11.2), one module!name a line, held by check-pfwsys.ps1. Each
+# is exported by the kernel and the HAL of Windows 2000 SP4 and of every
+# later 32-bit Windows (the documented kernel routines of the 2000 DDK;
+# InitSafeBootMode is 2000's export too). KeIpiGenericCall is never imported: the driver
+# finds it with MmGetSystemRoutineAddress (Server 2003 SP1 and later).
+ntoskrnl.exe!InitSafeBootMode
+ntoskrnl.exe!KeNumberProcessors
+ntoskrnl.exe!PsGetVersion
+ntoskrnl.exe!MmGetSystemRoutineAddress
+ntoskrnl.exe!RtlInitUnicodeString
+ntoskrnl.exe!InterlockedExchange
+ntoskrnl.exe!ZwOpenKey
+ntoskrnl.exe!ZwCreateKey
+ntoskrnl.exe!ZwSetValueKey
+ntoskrnl.exe!ZwClose
+HAL.dll!KfRaiseIrql
+HAL.dll!KfLowerIrql
+HAL.dll!KeQueryPerformanceCounter
+HAL.dll!READ_PORT_ULONG
+HAL.dll!WRITE_PORT_ULONG
+HAL.dll!WRITE_PORT_UCHAR

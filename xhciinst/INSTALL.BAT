@@ -49,11 +49,10 @@ set XDIR=
 goto end
 
 :toomany
-echo Too many arguments for INSTALL.BAT on this Windows (eight at most, seven
-echo after /console; /set Name=Value counts as three, and a /wdmfree:stage=
-echo list one more than its packages). Run
-echo TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with the same arguments
-echo instead, or use fewer arguments.
+rem The console tool says it and exits with 1: COMMAND.COM sets an
+rem errorlevel only from a program, and a script reads that one.
+TOOLS\XHCIINST\XHCIINST.EXE /toomany
+set XDIR=
 goto end
 
 :nodir

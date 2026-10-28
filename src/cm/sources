@@ -19,8 +19,11 @@
 # 9x bus numbering of the bridges below them, tbt_brnum.c (test_tbt_brnum;
 # record 21 section 6.1.1); the 9x start of a function with no interrupt,
 # cm_noirq.c (test_cm_noirq; design record 28); the
-# re-enumeration's own pure half, cm_ports.c (test_cm_ports), the marks
-# answer's table, cm_marks.c (test_cm_marks; task 42-A.5), and the
+# re-enumeration's own pure half, cm_ports.c (test_cm_ports), the
+# interrupt of a function hot-added on 2000, cm_irq.c (test_cm_irq; task
+# 44.53, record 21 section 6.2.1), the marks
+# answer's table, cm_marks.c (test_cm_marks; task 42-A.5), the 9x
+# tunnel id's pure half, cm_tagid.c (test_cm_tagid; task 44.3), and the
 # query device's answers, cm_query.c and cm_qpci.c (test_cm_query); the
 # shared log ring ..\xhci_log.c (test\test_log.c), compiled in by path; and
 # the registry values' precedence, ..\xhci_regsrc.c (test\test_regsrc.c;
@@ -60,7 +63,9 @@ SOURCES=cm_vals.c      \
         tbt_brnum.c    \
         cm_noirq.c     \
         cm_ports.c     \
+        cm_irq.c       \
         cm_marks.c     \
+        cm_tagid.c     \
         cm_nvlink.c    \
         ..\xhci_log.c  \
         ..\xhci_regsrc.c \

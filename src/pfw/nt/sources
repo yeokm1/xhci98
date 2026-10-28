@@ -1,0 +1,34 @@
+#
+# sources - Windows 2000 DDK (x86) build description for XHCIPFW.SYS, the
+# boot-start driver that closes PCI bridges' prefetchable windows lying
+# wholly above 4 GB before the PCI driver of Windows 2000 or the 32-bit
+# Vista, 7, 8, 8.1 and 10 reads them (roadmap-usb4.md task 44.49, design
+# record 32 section 11). Built by build.cmd beside this file, which
+# scripts\build-driver.cmd calls on the x86 run: obj<fre|fre_qemu>\i386\.
+# The step is ..\pfw_scan.c and the decision ..\pfw_ntdec.c, the pure
+# halves test\test_pfw.c checks on the host.
+#
+TARGETNAME=xhcipfw
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+SUBSYSTEM_VERSION=5.00
+
+INCLUDES=$(DDK_INC_PATH)
+
+SOURCES=pfw_nt.c          \
+        ..\pfw_scan.c     \
+        ..\pfw_ntdec.c    \
+        xhcipfw.rc
+
+!IF "$(BUILD_ALT_DIR)" == "fre_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)": XHCIPFW.SYS builds as fre (release) or fre_qemu (qemu). Build through src\pfw\nt\build.cmd.
+!ENDIF
+
+!IF "$(386)" != "1"
+!ERROR XHCIPFW.SYS is x86 only (design record 32 section 11.3).
+!ENDIF

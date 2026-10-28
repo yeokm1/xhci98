@@ -287,16 +287,67 @@ static void test_report_line(void)
 
     for (i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
         pf_tx_init(&t, buf, sizeof(buf));
-        s98_report_line(&t, v[i].state, 1, 3);
+        s98_report_line(&t, v[i].state, 1, 3, NULL);
         CHECK(!t.overflow && strcmp(buf, v[i].want) == 0, "the report's Stor98 line for each state");
     }
     /* the page's sentence: empty for OK, the line's text otherwise */
     pf_tx_init(&t, buf, sizeof(buf));
-    s98_state_sentence(&t, S98_ST_OK, 0, 0);
+    s98_state_sentence(&t, S98_ST_OK, 0, 0, NULL);
     CHECK_EQ((int)strlen(buf), 0, "no sentence when the search found Stor98");
     pf_tx_init(&t, buf, sizeof(buf));
-    s98_state_sentence(&t, S98_ST_AMBIG, 2, 0);
+    s98_state_sentence(&t, S98_ST_AMBIG, 2, 0, NULL);
     CHECK(strstr(buf, "model: 2; present disks of its id: 0).") != NULL, "an ambiguity gives its counts");
+    /* where a 9x search ended (record 29 section 16.5) */
+    {
+        S98_WHY w;
+        static const char longid[] = "NVME____QEMU_NVME_CTRL__1.0_0123456789012345678901234567890123456789";
+
+        memset(&w, 0, sizeof(w));
+        s98_why_set(&w, S98_WHY_NOLETTER, 'F', 0, NULL);
+        w.cmAnswered = 1;
+        pf_tx_init(&t, buf, sizeof(buf));
+        s98_report_line(&t, S98_ST_NONE, 0, 0, &w);
+        CHECK(strcmp(buf, "Stor98: Stor98's counters are not reported by this disk's driver: it is not Stor98, or a "
+                          "Stor98 without the counter answer. No present disk under Enum\\SCSI holds F:.\r\n") == 0,
+              "no present disk holds the letter");
+        w.cmAnswered = 0;
+        pf_tx_init(&t, buf, sizeof(buf));
+        s98_state_sentence(&t, S98_ST_NONE, 0, 0, &w);
+        CHECK(strstr(buf, " No disk under Enum\\SCSI holds F: (the configuration manager found none of its disks present, so the "
+                          "registry's claims were taken).") != NULL, "presence not known");
+        s98_why_set(&w, S98_WHY_NOTARGET, 'F', 2, "QEMU____QEMU_HARDDISK____2.5+");
+        pf_tx_init(&t, buf, sizeof(buf));
+        s98_state_sentence(&t, S98_ST_NONE, 0, 0, &w);
+        CHECK(strstr(buf, " The disk holding F: (QEMU____QEMU_HARDDISK____2.5+) is on no adapter that answers as "
+                          "Stor98 (ASPI adapters: 2).") != NULL, "no Stor98 target");
+        s98_why_set(&w, S98_WHY_NOMATCH, 'F', 1, longid);
+        CHECK_EQ((int)strlen(w.id), 60, "the id cut to 60");
+        w.models = 0;
+        pf_tx_init(&t, buf, sizeof(buf));
+        s98_state_sentence(&t, S98_ST_NONE, 0, 0, &w);
+        CHECK(strstr(buf, " Stor98 answers on 1 targets, but the model of 1 of them could not be read, so whether one "
+                          "is the disk holding F: (NVME____") != NULL && strstr(buf, ") is not known.") != NULL,
+              "an unread model is not a mismatch");
+        w.models = 1;
+        pf_tx_init(&t, buf, sizeof(buf));
+        s98_state_sentence(&t, S98_ST_NONE, 0, 0, &w);
+        CHECK(strstr(buf, " Stor98 answers on 1 targets (models read: 1), but none is the disk holding F: (NVME____") != NULL,
+              "no Stor98 target is the letter's disk");
+        /* the longest sentence whole in the window's 512 bytes */
+        s98_why_set(&w, S98_WHY_NOTARGET, 'F', 255, longid);
+        pf_tx_init(&t, buf, 512);
+        s98_state_sentence(&t, S98_ST_NONE, 0, 0, &w);
+        CHECK(!t.overflow && strstr(buf, "(ASPI adapters: 255).") != NULL, "the longest sentence fits 512");
+        s98_why_set(&w, S98_WHY_NOMATCH, 'F', 255, longid);
+        pf_tx_init(&t, buf, 512);
+        s98_state_sentence(&t, S98_ST_NONE, 0, 0, &w);
+        CHECK(!t.overflow && strstr(buf, ") is not known.") != NULL, "and the unread-model one");
+        s98_why_set(&w, S98_WHY_NOMATCH, 'F', 1, "A\001Z");
+        CHECK(strcmp(w.id, "A?Z") == 0, "a control byte is not copied");
+        pf_tx_init(&t, buf, sizeof(buf));
+        s98_state_sentence(&t, S98_ST_DEAD, 0, 0, &w);
+        CHECK(strstr(buf, "answers on") == NULL, "only the not-reported sentence says where");
+    }
 }
 
 int main(void)

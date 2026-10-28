@@ -1,0 +1,211 @@
+; xhcicmf-amd64.inf - xhcicm.sys as the upper filter of the Thunderbolt and
+; USB4 tunnel ports, the 64-bit package's NT-only filter INF (design record
+; 21 section 3.3; design record 22 section 3.7; roadmap-usb4.md tasks 39-A.1
+; and 40-0.2).
+;
+; The amd64 counterpart of src\cm\xhcicmf.inf, on the pattern of
+; xhcicm-amd64.inf: [Manufacturer] carries the NTamd64,NTamd64.6.0 pair and
+; there is no undecorated models or install section, which a 32-bit engine
+; would fall back to. The model lines and the install sections are
+; xhcicmf.inf's (see that file's header for task 39-0.4's readings; the
+; 64-bit guests are not read yet). make-package.ps1 stages this file as
+; xhcicmf.inf at the root of the x64 flavour directory, beside xhcicm.inf
+; and xhcicm.sys, its source disk being that directory (the driver store
+; refuses a source outside the INF's directory; see xhcicmf.inf's header).
+; It needs no nt\ subdirectory and no second copy of xhcicm.sys, as the
+; x86 package's does: Windows 98 and ME never read the x64 package, and no
+; other INF there binds a PCI bridge (3.1.0.0; 3.0.0.0 staged it in nt\).
+;
+; scripts\inf-gate\check-cm-inf.ps1 -Filter -Arch amd64 gates this file on
+; every build.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+; Must equal src\xhci_version.h.
+DriverVer=10/28/2026,3.3.0.0
+; Made and test-signed by the packager alone (design record 19).
+CatalogFile=xhcicmf.cat
+
+[Manufacturer]
+%Mfg%=CmFilterModels,NTamd64,NTamd64.6.0
+
+[CmFilterModels.NTamd64]
+; Record 21 section 3.3's list. The discrete controllers' switch ports;
+; 15C0 has been read by this project, every other line is untested.
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_156B&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_156D&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1576&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1578&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15D3&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15DA&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15E7&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15EA&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1133&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1136&CC_0604
+; The integrated controllers' tunnel root ports (Ice Lake to Raptor Lake),
+; untested; the filter acts only on ports the NHI verifies and assigns.
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A1D&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A1F&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A21&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A23&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A23&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A25&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A27&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A29&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A2B&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A2D&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A2F&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A31&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_466E&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_463F&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_462F&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_461F&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_A76E&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_A71F&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_A72F&CC_0604
+; Design record 22 section 3.7 (task 40-0.2): the USB4-only hosts' tunnel
+; ports where pci.ids 2026.10.14 labels a port as such - the Barlow Ridge
+; host bridges, AMD's USB4 PCIe tunnel ports and bridge, ASMedia's ASM4242
+; downstream port. Lunar, Panther and Wildcat Lake name none; their sets
+; come from XhciCmTunnelBridge. All untested.
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_5780&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_5783&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14CD&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14EF&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_150A&CC_0604
+%U4AsBridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423&CC_0604
+; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
+; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
+%BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001&CC_0604
+%BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_000C&CC_0604
+
+[CmFilterModels.NTamd64.6.0]
+; Record 21 section 3.3's list. The discrete controllers' switch ports;
+; 15C0 has been read by this project, every other line is untested.
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15C0&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156B&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156D&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1576&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1578&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15D3&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15DA&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15E7&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15EA&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1136&CC_0604
+; The integrated controllers' tunnel root ports (Ice Lake to Raptor Lake),
+; untested; the filter acts only on ports the NHI verifies and assigns.
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A1D&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A1F&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A21&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A23&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A25&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A27&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A29&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A2B&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A2D&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A2F&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A31&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_466E&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_463F&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_462F&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_461F&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A76E&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A71F&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A72F&CC_0604
+; Design record 22 section 3.7 (task 40-0.2): the USB4-only hosts' tunnel
+; ports where pci.ids 2026.10.14 labels a port as such - the Barlow Ridge
+; host bridges, AMD's USB4 PCIe tunnel ports and bridge, ASMedia's ASM4242
+; downstream port. Lunar, Panther and Wildcat Lake name none; their sets
+; come from XhciCmTunnelBridge. All untested.
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_5780&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_5783&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14CD&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14EF&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_150A&CC_0604
+%U4AsBridgeDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2423&CC_0604
+; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
+; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
+%BridgeDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_0001&CC_0604
+%BridgeDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_000C&CC_0604
+
+[SourceDisksNames]
+1=%DiskName%,xhcicm.sys,,
+
+[SourceDisksFiles]
+xhcicm.sys=1
+
+[DestinationDirs]
+DefaultDestDir=10
+CmFilter.CopyFiles=10,System32\Drivers
+
+; --- Windows XP x64 and Server 2003 x64 -------------------------------------
+
+[CmF.Dev.NTamd64]
+Include=machine.inf
+Needs=PCI_DRV
+CopyFiles=CmFilter.CopyFiles
+
+[CmF.Dev.NTamd64.HW]
+Include=machine.inf
+Needs=PCI_DRV.HW
+AddReg=CmFilter.HW.AddReg
+
+[CmF.Dev.NTamd64.Services]
+Include=machine.inf
+Needs=PCI_DRV.Services
+AddService=xhcicm,,CmFilter.AddService
+
+; --- Windows Vista x64 and 7 x64 --------------------------------------------
+
+[CmF.Dev6.NTamd64]
+Include=machine.inf
+Needs=PCI_DRV
+CopyFiles=CmFilter.CopyFiles
+
+[CmF.Dev6.NTamd64.HW]
+Include=machine.inf
+Needs=PCI_DRV.HW
+AddReg=CmFilter.HW.AddReg
+
+[CmF.Dev6.NTamd64.Services]
+Include=machine.inf
+Needs=PCI_DRV.Services
+AddService=xhcicm,,CmFilter.AddService
+
+; --- Shared -----------------------------------------------------------------
+
+; The bridge devnode's hardware key: this driver above pci.sys, by service
+; name, as a device-specific filter (not a class filter), appended to the
+; value (FLG_ADDREG_APPEND) so a filter already there is kept.
+[CmFilter.HW.AddReg]
+HKR,,UpperFilters,0x00010008,"xhcicm"
+
+; The same service as the NHI's, demand-started with the devnode it filters.
+[CmFilter.AddService]
+DisplayName=%CmSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhcicm.sys
+LoadOrderGroup=Base
+
+[CmFilter.CopyFiles]
+xhcicm.sys,,xhcicm.tmp
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+TbBridgeDesc="xHCI98 Thunderbolt PCI Bridge"
+U4BridgeDesc="xHCI98 USB4 PCI Bridge"
+U4AsBridgeDesc="xHCI98 USB4 PCI Bridge (ASMedia ASM4242)"
+BridgeDesc="xHCI98 PCI Bridge"
+CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

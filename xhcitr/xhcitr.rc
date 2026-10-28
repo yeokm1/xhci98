@@ -31,7 +31,7 @@ BEGIN
             VALUE "FileDescription",  "xHCI98 USB Tree\0"
             VALUE "FileVersion",      XHCI_VER_STR "\0"
             VALUE "InternalName",     "xhcitr\0"
-            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2 or later.\0"
             VALUE "OriginalFilename", "XHCITR.EXE\0"
             VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
             VALUE "ProductVersion",   XHCI_VER_STR "\0"
@@ -72,6 +72,7 @@ BEGIN
         MENUITEM "Start at &login",                     IDM_LOGIN
         MENUITEM "&Warn when a device is removed unexpectedly", IDM_RMWARN
         MENUITEM "Tell me when a device can run &faster", IDM_FAST
+        MENUITEM "Watch Windows' own USB &ports too",   IDM_FAST_WIN
         MENUITEM SEPARATOR
         MENUITEM "Logging le&vel...",                   IDM_LEVEL
     END

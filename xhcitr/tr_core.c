@@ -12,6 +12,7 @@
 #include "../xhciinst/inst_core.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/xhci_qry.h"
 
 /* cm_live.h's states, which that header cannot give a tool: it includes
  * the driver's compatibility header. The host suite checks them against
@@ -972,6 +973,7 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
         q->RmCount = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_COUNT);
         q->RmMember = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_MEMBER);
         q->RmLost = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_LOST);
+        q->RmDriver = tr_d32(b + CM_Q_HDR_BYTES + CM_Q_RM_DRIVER);
     } else {
         q->RmMember = CM_Q_UNKNOWN;
     }
@@ -1302,6 +1304,297 @@ void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
         tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, lanes not "
                    "known%s", (unsigned long)x->Rate, src);
     }
+}
+
+int tr_up_of_profile(TR_U32 profile)
+{
+    switch (profile) {
+    case TR_PROFILE_ICM_FR:
+        return TR_UP_TBT2;
+    case TR_PROFILE_ICM_AR:
+    case TR_PROFILE_ICM_TR:
+    case TR_PROFILE_ICM_ICL:
+        return TR_UP_TBT3;
+    case TR_PROFILE_ICM_MR:
+    case TR_PROFILE_ICM_TGL:
+    case TR_PROFILE_USB4:
+        return TR_UP_USB4;
+    default:
+        return TR_UP_UNKNOWN;
+    }
+}
+
+TR_U32 tr_profile_of_nhi(TR_U32 nhiId)
+{
+    static const TR_U32 intel[][2] = {
+        { 0x156A, TR_PROFILE_ICM_FR },  { 0x156C, TR_PROFILE_ICM_FR },
+        { 0x1575, TR_PROFILE_ICM_AR },  { 0x1577, TR_PROFILE_ICM_AR },
+        { 0x15BF, TR_PROFILE_ICM_AR },  { 0x15D2, TR_PROFILE_ICM_AR },
+        { 0x15D9, TR_PROFILE_ICM_AR },  { 0x15E8, TR_PROFILE_ICM_TR },
+        { 0x15EB, TR_PROFILE_ICM_TR },  { 0x1134, TR_PROFILE_ICM_MR },
+        { 0x1137, TR_PROFILE_ICM_MR },  { 0x8A0D, TR_PROFILE_ICM_ICL },
+        { 0x8A17, TR_PROFILE_ICM_ICL }, { 0x9A1B, TR_PROFILE_ICM_TGL },
+        { 0x9A1D, TR_PROFILE_ICM_TGL }, { 0x9A1F, TR_PROFILE_ICM_TGL },
+        { 0x9A21, TR_PROFILE_ICM_TGL }, { 0x463E, TR_PROFILE_ICM_TGL },
+        { 0x466D, TR_PROFILE_ICM_TGL }, { 0xA73E, TR_PROFILE_ICM_TGL },
+        { 0xA76D, TR_PROFILE_ICM_TGL }, { 0x7EB2, TR_PROFILE_ICM_TGL },
+        { 0x7EC2, TR_PROFILE_ICM_TGL }, { 0x7EC3, TR_PROFILE_ICM_TGL },
+        { 0xA833, TR_PROFILE_USB4 },    { 0xA834, TR_PROFILE_USB4 },
+        { 0xE333, TR_PROFILE_USB4 },    { 0xE334, TR_PROFILE_USB4 },
+        { 0xE433, TR_PROFILE_USB4 },    { 0xE434, TR_PROFILE_USB4 },
+        { 0x4D33, TR_PROFILE_USB4 },    { 0x5781, TR_PROFILE_USB4 },
+        { 0x5784, TR_PROFILE_USB4 }
+    };
+    TR_U32 dev = (nhiId >> 16) & 0xFFFFUL;
+    size_t i;
+
+    if ((nhiId & 0xFFFFUL) == 0x1022UL && (dev == 0x1668 || dev == 0x1669)) {
+        return TR_PROFILE_USB4;
+    }
+    if ((nhiId & 0xFFFFUL) != 0x8086UL) {
+        return 0;
+    }
+    for (i = 0; i < sizeof(intel) / sizeof(intel[0]); i++) {
+        if (intel[i][0] == dev) {
+            return intel[i][1];
+        }
+    }
+    return 0;
+}
+
+int tr_up_of_gen(TR_U32 gen)
+{
+    if (tr_gen_tbt3(gen)) {
+        return TR_UP_TBT3;
+    }
+    /* A USB4 entry with no version read is still a USB4 router. */
+    if ((gen & 0xFFUL) == CM_ST_GEN_USB4) {
+        return TR_UP_USB4;
+    }
+    return TR_UP_UNKNOWN;
+}
+
+TR_U32 tr_route_depth(TR_U32 lo, TR_U32 hi)
+{
+    TR_U32 depth;
+
+    for (depth = 0; depth < 8; depth++) {
+        TR_U32 w = depth < 4 ? lo : hi;
+        if (((w >> (8 * (depth & 3UL))) & 0xFFUL) == 0) {
+            break;
+        }
+    }
+    return depth;
+}
+
+int tr_up_of_path(int host, TR_U32 between, TR_U32 tbt3, TR_U32 usb4)
+{
+    /* A Thunderbolt 2 host runs every link below it as Thunderbolt 2. */
+    if (host == TR_UP_TBT2) {
+        return TR_UP_TBT2;
+    }
+    if (host == TR_UP_TBT3 || tbt3 != 0) {
+        return TR_UP_TBT3;
+    }
+    if (host == TR_UP_USB4 && usb4 == between) {
+        return TR_UP_USB4;
+    }
+    return TR_UP_UNKNOWN;
+}
+
+int tr_route_parent(TR_U32 depth, TR_U32 lo, TR_U32 hi, TR_U32 *parentLo,
+                    TR_U32 *parentHi)
+{
+    TR_U32 byte;
+
+    if (depth < 2 || depth > 8) {
+        return 0;
+    }
+    byte = depth - 1;
+    if (byte < 4) {
+        lo &= ~(0xFFUL << (8 * byte));
+    } else {
+        hi &= ~(0xFFUL << (8 * (byte - 4)));
+    }
+    *parentLo = lo;
+    *parentHi = hi;
+    return 1;
+}
+
+int tr_runs_as_tbt3(TR_U32 gen, int up)
+{
+    return up == TR_UP_TBT3 && tr_up_of_gen(gen) == TR_UP_USB4;
+}
+
+void tr_gen_link_text(TR_U32 gen, int up, char *out, size_t cap)
+{
+    char own[32];
+
+    if (up == TR_UP_TBT2 && (gen & 0xFFUL) != CM_ST_GEN_UNKNOWN &&
+        ((gen & 0xFFUL) == CM_ST_GEN_TBT3 ||
+         (gen & 0xFFUL) == CM_ST_GEN_USB4)) {
+        tr_gen_text(gen, own, sizeof(own));
+        tr_sprintf(out, cap, "%s device, running as Thunderbolt 2", own);
+        return;
+    }
+    if (!tr_runs_as_tbt3(gen, up)) {
+        tr_gen_text(gen, out, cap);
+        return;
+    }
+    tr_gen_text(gen, own, sizeof(own));
+    tr_sprintf(out, cap, "%s device, running as Thunderbolt 3", own);
+}
+
+int tr_path_route(const char *path, TR_U32 *root, TR_U32 *route)
+{
+    TR_U32 part;
+    TR_U32 tier = 0;
+    int digits;
+
+    *root = 0;
+    *route = 0;
+    if (path == NULL) {
+        return 0;
+    }
+    for (;;) {
+        part = 0;
+        digits = 0;
+        while (*path >= '0' && *path <= '9' && digits < 4) {
+            part = part * 10 + (TR_U32)(*path - '0');
+            path++;
+            digits++;
+        }
+        if (digits == 0 || (*path != '.' && *path != '\0')) {
+            return 0;
+        }
+        if (tier == 0) {
+            if (part == 0 || part > 255) {
+                return 0;
+            }
+            *root = part;
+        } else {
+            if (part == 0 || part > 15 || tier > 5) {
+                return 0;
+            }
+            *route |= part << (4 * (tier - 1));
+        }
+        tier++;
+        if (*path == '\0') {
+            return 1;
+        }
+        path++;
+    }
+}
+
+int tr_ver_state(int haveRunning, TR_U32 running, const TR_U32 *file)
+{
+    TR_U32 packed;
+
+    if (!haveRunning || file == NULL) {
+        return TR_VER_UNKNOWN;
+    }
+    if (file[0] > 255 || file[1] > 255 || file[2] > 255 || file[3] > 255) {
+        return TR_VER_UNKNOWN;
+    }
+    packed = (file[0] << 24) | (file[1] << 16) | (file[2] << 8) | file[3];
+    if (running == 0) {
+        /* A driver that does not say predates 3.3.0.0, the first that
+         * does. */
+        return packed >= 0x03030000UL ? TR_VER_DIFFERS : TR_VER_UNKNOWN;
+    }
+    return running == packed ? TR_VER_SAME : TR_VER_DIFFERS;
+}
+
+void tr_ver_text(TR_U32 packed, char *out, size_t cap)
+{
+    tr_sprintf(out, cap, "%lu.%lu.%lu.%lu",
+               (unsigned long)((packed >> 24) & 0xFFUL),
+               (unsigned long)((packed >> 16) & 0xFFUL),
+               (unsigned long)((packed >> 8) & 0xFFUL),
+               (unsigned long)(packed & 0xFFUL));
+}
+
+void tr_ver_line(int state, TR_U32 running, const TR_U32 *file, char *out,
+                 size_t cap)
+{
+    char run[32];
+    char inst[32];
+
+    if (running == 0) {
+        tr_copy(run, "older than 3.3.0.0", sizeof(run));
+    } else {
+        tr_ver_text(running, run, sizeof(run));
+    }
+    if (file != NULL) {
+        tr_sprintf(inst, sizeof(inst), "%lu.%lu.%lu.%lu",
+                   (unsigned long)file[0], (unsigned long)file[1],
+                   (unsigned long)file[2], (unsigned long)file[3]);
+    } else {
+        tr_copy(inst, "not read", sizeof(inst));
+    }
+    if (state == TR_VER_SAME) {
+        tr_sprintf(out, cap, "%s running, the installed file's", run);
+    } else {
+        tr_sprintf(out, cap, "%s running; the installed file is %s. Restart "
+                   "Windows to run the installed driver.", run, inst);
+    }
+}
+
+/* s without a leading "\??\" and, for a target, a "!". */
+static const char *tr_pfro_strip(const char *s, int target)
+{
+    if (target && s[0] == '!') {
+        s++;
+    }
+    if (s[0] == '\\' && s[1] == '?' && s[2] == '?' && s[3] == '\\') {
+        s += 4;
+    }
+    return s;
+}
+
+int tr_pfro_find(const char *msz, size_t bytes, const char *target,
+                 char *out, size_t cap)
+{
+    size_t at = 0;
+    size_t n;
+    const char *src;
+    const char *dst;
+    int found = 0;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (msz == NULL || target == NULL) {
+        return 0;
+    }
+    while (at < bytes && msz[at] != '\0') {
+        src = msz + at;
+        n = 0;
+        while (at + n < bytes && src[n] != '\0') {
+            n++;
+        }
+        if (at + n >= bytes) {
+            return 0;               /* not terminated */
+        }
+        at += n + 1;
+        if (at >= bytes) {
+            return 0;               /* a source with no target */
+        }
+        dst = msz + at;
+        n = 0;
+        while (at + n < bytes && dst[n] != '\0') {
+            n++;
+        }
+        if (at + n >= bytes) {
+            return 0;
+        }
+        at += n + 1;
+        if (dst[0] != '\0' && tr_eq(tr_pfro_strip(dst, 1), target)) {
+            tr_copy(out, tr_pfro_strip(src, 0), cap);
+            found = 1;
+        }
+    }
+    return found;
 }
 
 void tr_router_name(const unsigned char *entry, char *out, size_t cap)
@@ -2060,7 +2353,7 @@ void tr_protocols_text(TR_U32 proto, char *out, size_t cap)
         any = 1;
     }
     if (proto & 4UL) {
-        tr_printf(&t, "%sUSB 3.x", any ? ", " : "");
+        tr_printf(&t, "%sUSB 3", any ? ", " : "");
         any = 1;
     }
     if (!any) {
@@ -2807,16 +3100,148 @@ void tr_qual_end(TR_QUAL_CACHE *c)
     c->N = n;
 }
 
+int tr_fast_top_add(int top, int read, const unsigned char *ports,
+                    unsigned int n)
+{
+    unsigned int i;
+
+    if (!read) {
+        return top > TR_SPEED_SUPER ? top : TR_SPEED_SUPER;
+    }
+    for (i = 0; ports != NULL && i < n; i++) {
+        if (ports[i] == XHQ_PT_SSP) {
+            top = TR_SPEED_SUPERPLUS;
+        } else if (ports[i] == XHQ_PT_SS && top < TR_SPEED_SUPER) {
+            top = TR_SPEED_SUPER;
+        }
+    }
+    return top;
+}
+
+int tr_fast_hub_cap(int haveConn, int haveV2, TR_U32 flags)
+{
+    if (!haveConn || !haveV2) {
+        return 1;
+    }
+    if (flags & TR_V2_F_SSP_CAPABLE) {
+        return 0;
+    }
+    return (flags & (TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW)) != 0;
+}
+
+int tr_bos_top(const unsigned char *d, size_t n)
+{
+    size_t total;
+    size_t off;
+    unsigned int caps = 0;
+    int top = -1;
+
+    if (d == NULL || n < 5 || d[0] < 5 || d[1] != 0x0F) {
+        return -1;
+    }
+    total = (size_t)d[2] | ((size_t)d[3] << 8);
+    if (total < d[0] || total > n) {
+        return -1;
+    }
+    for (off = d[0]; off < total; off += d[off]) {
+        if (total - off < 3 || d[off] < 3 || d[off] > total - off ||
+            d[off + 1] != 0x10) {
+            return -1;
+        }
+        caps++;
+        if (d[off + 2] == 0x0A) {
+            /* USB 3.2 section 9.6.2.5: 12 bytes and one 4-byte sublink
+             * attribute per SSAC + 1 (bmAttributes 4:0). */
+            if (d[off] < 16 ||
+                d[off] != 12 + 4 * ((d[off + 4] & 0x1F) + 1)) {
+                return -1;
+            }
+            top = TR_SPEED_SUPERPLUS;
+        } else if (d[off + 2] == 0x03) {
+            /* USB 3.2 section 9.6.2.2: 10 bytes. */
+            if (d[off] != 10) {
+                return -1;
+            }
+            if (top < TR_SPEED_SUPER) {
+                top = TR_SPEED_SUPER;
+            }
+        }
+    }
+    if (caps != d[4]) {
+        return -1;
+    }
+    return top;
+}
+
+int tr_fast_wants_bos(const TR_FAST_IN *in)
+{
+    return in != NULL && !in->Ours && in->WinWatch &&
+           (in->WinCtrl == TR_WC_EHCI || in->WinCtrl == TR_WC_USB1) &&
+           in->Connected && !in->IsHub && in->BcdUsb >= 0x0210U &&
+           in->Top >= TR_SPEED_SUPER;
+}
+
+/* The fastest the path lets a device of xhci98's run (item 10). */
+static int tr_fast_limit(const TR_FAST_IN *in)
+{
+    if (in->HubSs && in->Top > TR_SPEED_SUPER) {
+        return TR_SPEED_SUPER;
+    }
+    return in->Top;
+}
+
+/* A device on a Windows port (item 11). */
+static int tr_fast_win(const TR_FAST_IN *in, TR_FAST *f)
+{
+    int now;
+
+    if (!tr_fast_wants_bos(in) || in->WinBos < TR_SPEED_SUPER) {
+        return 0;
+    }
+    if (in->WinCtrl == TR_WC_USB1) {
+        now = in->ExSpeed == TR_SPEED_LOW ? TR_SPEED_LOW : TR_SPEED_FULL;
+    } else if (in->ExSpeed <= TR_SPEED_HIGH) {
+        now = (int)in->ExSpeed;
+    } else {
+        return 0;
+    }
+    f->Now = now;
+    f->Can = in->WinBos < in->Top ? in->WinBos : in->Top;
+    f->Where = TR_FW_WIN2;
+    return 1;
+}
+
+const char *tr_fast_note(const TR_FAST_IN *in)
+{
+    if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
+        tr_fast_can(in->HaveV2, in->V2Flags) != TR_SPEED_SUPERPLUS) {
+        return NULL;
+    }
+    if (in->Top == TR_SPEED_SUPER) {
+        return "This computer's USB 3 ports run at 5 Gbit/s at most.";
+    }
+    if (in->Top == TR_SPEED_SUPERPLUS && in->HubSs) {
+        return "A hub it is behind runs at 5 Gbit/s at most.";
+    }
+    return NULL;
+}
+
 int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f)
 {
     int hubCan;
+    int limit;
 
     f->Now = -1;
     f->Can = -1;
     f->Where = TR_FW_NONE;
     f->HubNow = -1;
-    if (in == NULL || !in->Ours || !in->Connected || in->IsHub ||
-        !in->HaveV2) {
+    if (in == NULL || !in->Connected || in->IsHub) {
+        return 0;
+    }
+    if (!in->Ours) {
+        return tr_fast_win(in, f);
+    }
+    if (!in->HaveV2) {
         return 0;
     }
     if (tr_fast_wants_qual(in)) {
@@ -2831,7 +3256,11 @@ int tr_fast_check(const TR_FAST_IN *in, TR_FAST *f)
     }
     f->Can = tr_fast_can(in->HaveV2, in->V2Flags);
     f->Now = tr_fast_now(in->HaveV2, in->V2Flags, in->ExSpeed);
-    if (f->Can < 0 || f->Now < 0 || f->Now >= f->Can) {
+    limit = tr_fast_limit(in);
+    if (f->Can > limit) {
+        f->Can = limit;
+    }
+    if (f->Can < TR_SPEED_SUPER || f->Now < 0 || f->Now >= f->Can) {
         f->Now = -1;
         f->Can = -1;
         return 0;
@@ -2892,6 +3321,8 @@ const char *tr_fast_where(int where)
         return "on a 5 Gbit/s link";
     case TR_FW_HUBFS:
         return "behind a Full Speed hub";
+    case TR_FW_WIN2:
+        return "on a USB 2.0 port";
     default:
         return "";
     }
@@ -2919,6 +3350,8 @@ const char *tr_fast_try(int where)
     case TR_FW_HUBFS:
         return "Connect it to a port of this computer, or through a USB 2.0 "
                "or USB 3 hub, rather than through this Full Speed hub.";
+    case TR_FW_WIN2:
+        return "Connect it to a USB 3 port of this computer.";
     default:
         return "";
     }
@@ -2929,6 +3362,89 @@ void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
 {
     tr_sprintf(out, cap, "%s|%s|%04X:%04X", ctrlKey != NULL ? ctrlKey : "",
                path != NULL ? path : "", vid & 0xFFFFU, pid & 0xFFFFU);
+}
+
+void tr_wbos_key(char *out, size_t cap, const char *fastKey,
+                 unsigned int address)
+{
+    tr_sprintf(out, cap, "%s|a%u", fastKey != NULL ? fastKey : "",
+               address & 0xFFFFU);
+}
+
+static int tr_wbos_find(const TR_WBOS_CACHE *c, const char *key)
+{
+    int i;
+
+    for (i = 0; i < c->N && i < TR_WBOS_MAX; i++) {
+        if (strcmp(c->Key[i], key) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int tr_wbos_get(TR_WBOS_CACHE *c, const char *key)
+{
+    int i;
+
+    if (c == NULL || key == NULL || (i = tr_wbos_find(c, key)) < 0) {
+        return -2;
+    }
+    c->Seen[i] = 1;
+    return c->Val[i];
+}
+
+int tr_wbos_room(const TR_WBOS_CACHE *c, const char *key)
+{
+    return c != NULL && key != NULL &&
+           (c->N < TR_WBOS_MAX || tr_wbos_find(c, key) >= 0);
+}
+
+void tr_wbos_put(TR_WBOS_CACHE *c, const char *key, int val)
+{
+    int i;
+
+    if (!tr_wbos_room(c, key)) {
+        return;
+    }
+    i = tr_wbos_find(c, key);
+    if (i < 0) {
+        i = c->N++;
+        tr_copy(c->Key[i], key, TR_FAST_KEY);
+    }
+    c->Val[i] = val;
+    c->Seen[i] = 1;
+}
+
+void tr_wbos_begin(TR_WBOS_CACHE *c)
+{
+    int i;
+
+    for (i = 0; c != NULL && i < TR_WBOS_MAX; i++) {
+        c->Seen[i] = 0;
+    }
+}
+
+void tr_wbos_end(TR_WBOS_CACHE *c)
+{
+    int i;
+    int n = 0;
+
+    if (c == NULL) {
+        return;
+    }
+    for (i = 0; i < c->N && i < TR_WBOS_MAX; i++) {
+        if (!c->Seen[i]) {
+            continue;
+        }
+        if (n != i) {
+            tr_copy(c->Key[n], c->Key[i], TR_FAST_KEY);
+            c->Val[n] = c->Val[i];
+            c->Seen[n] = c->Seen[i];
+        }
+        n++;
+    }
+    c->N = n;
 }
 
 int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key)
@@ -3671,7 +4187,7 @@ void tr_roothub_label(char *out, size_t cap, unsigned int ports, int known,
     } else if (!known) {
         tr_sprintf(out, cap, "Root hub - %u port%s", ports, tr_plural((long)ports));
     } else {
-        tr_sprintf(out, cap, "Root hub - %u port%s (%u USB 2.0, %u USB 3.x)", ports,
+        tr_sprintf(out, cap, "Root hub - %u port%s (%u USB 2.0, %u USB 3)", ports,
                    tr_plural((long)ports), usb2, usb3);
     }
 }

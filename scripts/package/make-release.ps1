@@ -206,13 +206,6 @@ existed - where rebuilding to acquire one would move the PE link timestamp and
 invalidate every reading already taken on these exact bytes. Without this the
 cut refuses; a stamp that MISMATCHES is refused either way.
 
-.PARAMETER CleanToolDir
-Where `XHCICLN.EXE` and `XHCICL64.EXE` are built. Defaults to `xhcicln\` in the
-repository. Both are staged into `releases\<version>\tools\xhcicln\` with a
-readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
-7 removes, the devnodes a driver before 2.4.0.0 left under `XHCI98\`
-(roadmap-hcd task 38.8, design record 13 section 10.13.8).
-
 .PARAMETER InstallToolDir
 Where `XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE` and `XHCIIN64.EXE` are
 built. Defaults to `xhciinst\` in the repository. All four are staged into
@@ -260,11 +253,6 @@ tool. For a host that cannot build it (it needs Open Watcom and the Windows
 98 SE DDK's `setupx.h` and `setupx.lib`); a package without it installs on
 98 SE and ME through the printed Update Driver steps only, and the release
 says so on the console and in its readme. A real cut carries it.
-
-.PARAMETER SkipCleanTool
-Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
-half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
-without it, and says so on the console.
 
 .PARAMETER QualtoolDir
 Where to take `XHCIQUAL.EXE` and its `.MAP` from. Defaults to `xhciqual\` in the
@@ -416,7 +404,7 @@ which -UploadSetOnly rebuilds them.
 .PARAMETER NoWdmFree
 Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
-every cut does; from 3.2.0.0 it names v0.1.0.
+every cut does; 3.2.0.0's named v0.1.0, and from 3.3.0.0 it names v0.1.4.
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
@@ -498,8 +486,6 @@ param(
     [string]$ReleasesDir = "",
     [string]$QualtoolDir = "",
     [switch]$SkipQualtool,
-    [string]$CleanToolDir = "",
-    [switch]$SkipCleanTool,
     [string]$MarkToolDir = "",
     [switch]$SkipMarkTool,
     [string]$InstallToolDir = "",
@@ -576,9 +562,8 @@ was asked for, and nothing else.
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
-# The five tools whose README.TXT the cut reads, from package-common.ps1's
+# The tools whose README.TXT the cut reads, from package-common.ps1's
 # table, which the gated build's readme check reads too (task 43.61).
-if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo $script:ToolReadmeDirs.Clean }
 if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo $script:ToolReadmeDirs.Mark }
 if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo $script:ToolReadmeDirs.Install }
 if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo $script:ToolReadmeDirs.Tray }
@@ -645,7 +630,11 @@ function Write-GeneratedText {
     }
     # The rule is package-common.ps1's Get-PlainTextFaults, which the gated
     # build's scripts\check-readme-text.ps1 also holds the tracked tool
-    # readmes to (task 43.61).
+    # readmes to (task 43.61). And scripts\check-text.ps1, the gated build's
+    # first step (task 44.1), holds every here-string this script assigns to
+    # a variable to it before any build: an assigned here-string is a
+    # published text here, so an error message is thrown or passed to
+    # Stop-CutCheck as written, never assigned.
     foreach ($fault in @(Get-PlainTextFaults -Name $name -Lines $Lines)) {
         Stop-CutCheck $fault
     }
@@ -758,7 +747,6 @@ if ($SelfTestCatalogThumbprint -ne "") {
     Write-Warn "-SelfTestCatalogThumbprint: the upload set's x64 catalogs are judged against a self-test certificate; this run is the packager's self-test, not a cut"
 }
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
-$CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $MarkToolDir = Resolve-DirectoryArgument $MarkToolDir
 $InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
 $TrayToolDir = Resolve-DirectoryArgument $TrayToolDir
@@ -897,20 +885,22 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # assembly reads the layout off the tree as Assert-PortSwitchLayout does: a
 # tree with tools\ is held to it at any version (a dry cut before the version
 # is stamped has one), and a tree without it is accepted only before 2.4.0.0.
-# xhcicln\, the cleanup tool of task 38.8, is first published in 2.4.0.0 too,
-# and only ever under tools\. xhciinst\, the install tool of task 40.6, is
-# first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root,
-# and so is xhcitr\, the USB tree tool of task 41-A.6 that XHCIINST installs.
+# xhciinst\, the install tool of task 40.6, is first published in 3.0.0.0,
+# under tools\, with INSTALL.BAT at the root, and so is xhcitr\, the USB
+# tree tool of task 41-A.6 that XHCIINST installs.
 # xhcisnap\ was published from 2.4.0.0 to 3.0.0.0 and retired in 3.1.0.0
 # (task 42-A.4, into XHCITR): $retiredToolNames admits it in a tree the
 # upload assembly reads at a version that published it, and never in a cut.
+# xhcicln\, the cleanup tool of task 38.8, was published from 2.4.0.0 to
+# 3.2.0.0, only ever under tools\, and dropped in 3.3.0.0 (task 44.82).
+# $retiredToolNames admits it the same way.
 # xhcimark\, the mark service of task 42-A.5, is first published in 3.1.0.0.
 # xhciperf\, the disk benchmark of task 43.50, is a developer tool in the source
 # tree and is not published (owner, 2026-10-23: dropped from 3.2.0.0).
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")
-$retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0" }
+$toolNames = @("xhciqual", "portsw", "silent", "xhciinst", "xhcitr", "xhcimark")
+$retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0"; "xhcicln" = [version]"3.3.0.0" }
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -2532,7 +2522,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }))
+                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }) + @("XHCIPFW.VXD", "XHCIPFW.SYS"))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -3183,7 +3173,10 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
         # maintainer, the overlaps no line states.
         $otherCheck = $null
         try {
-            $otherCheck = Invoke-OtherSetChecks -Repo $repo -ReleasesDir $ReleasesDir -Version $Version -Free $wdmFreeSet -NonFree $nonFreeSet
+            # The version is read from the INF further down; the history check
+            # needs it here, or it finds no previous record (task 44.34).
+            $otherVersion = $(if ($Version -ne "") { $Version } else { Get-InfDriverVersion -Path $infPath })
+            $otherCheck = Invoke-OtherSetChecks -Repo $repo -ReleasesDir $ReleasesDir -Version $otherVersion -Free $wdmFreeSet -NonFree $nonFreeSet
         } catch {
             Stop-CutCheck ("the other USB drivers' sets: " + $_.Exception.Message)
         }
@@ -3594,52 +3587,14 @@ hand and re-run.
     $versionPattern = '^##\s+' + [regex]::Escape($Version) + '(\s|$)'
     $releaseDate = Get-InfDriverDate -Path $infPath
     $headings = @($historyLines | Where-Object { $_ -match $versionPattern })
-    # Each refusal below is one a -CheckOnly run notes and goes on from; what
-    # follows a refused heading is checked only where it can be.
-    $headingOk = $false
-    if ($headings.Count -eq 0) {
-        Stop-CutCheck @"
-'$historyPath' has no entry for $Version.
-Add one - a '## $Version - $releaseDate' heading and what changed for the
-person installing it - then cut the release again. A published version nobody
-wrote a changelog entry for is one no user can tell apart from its predecessor.
-"@
-    # **Exactly one, and dated, and dated the same as the INF.** All three parts
-    # were missing until a later review. The heading match alone accepted a bare
-    # "## 0.0.0.2" with no date at all, so the cross-check below silently did
-    # nothing; and a second heading for the same version would have made "the"
-    # entry ambiguous. The INF is the authority for the version everywhere else
-    # in this script, so it is the authority for the date - the readme prints
-    # that date beside this very entry, and the two disagreeing is what this
-    # replaced. Checked here, before anything is built or staged.
-    } elseif ($headings.Count -gt 1) {
-        Stop-CutCheck "'$historyPath' has $($headings.Count) headings for $Version; a version has one changelog entry."
-    } else {
-        $headingDate = [datetime]::MinValue
-        if ($headings[0] -match '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\S+)\s*$' -and
-            -not [datetime]::TryParseExact($Matches[1], 'yyyy-MM-dd',
-                    [Globalization.CultureInfo]::InvariantCulture,
-                    [Globalization.DateTimeStyles]::None, [ref]$headingDate)) {
-            Stop-CutCheck "'$historyPath' dates $Version as '$($Matches[1])', which is not a calendar date in yyyy-mm-dd form."
-        } elseif ($headings[0] -notmatch '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\d{4}-\d{2}-\d{2})\s*$') {
-            Stop-CutCheck @"
-'$historyPath' heading for $Version is not a dated entry:
-  $($headings[0])
-Write it as '## $Version - $releaseDate'. The generated readme.txt prints the
-release date beside this entry, so an undated or differently shaped heading
-leaves that date unchecked - which is how a release came to date itself two
-different ways in one file.
-"@
-        } elseif ($Matches[1] -ne $releaseDate) {
-            Stop-CutCheck @"
-releases\history.md dates $Version as $($Matches[1]), but src\xhci98.inf's
-DriverVer dates it $releaseDate. A release has one date; the generated
-readme.txt prints it beside the history entry, so the two cannot disagree.
-"@
-        } else {
-            $headingOk = $true
-        }
-    }
+    # Each refusal is one a -CheckOnly run notes and goes on from; what
+    # follows a refused heading is checked only where it can be. The checks
+    # are package-common.ps1's Get-ChangelogEntryFaults, which
+    # scripts\check-text.ps1 holds the tree to before any build (task
+    # 44.1). Checked here, before anything is built or staged.
+    $headingFaults = @(Get-ChangelogEntryFaults -Lines $historyLines -Version $Version -ReleaseDate $releaseDate -Label $historyPath)
+    foreach ($fault in $headingFaults) { Stop-CutCheck $fault }
+    $headingOk = ($headingFaults.Count -eq 0)
     if ($headingOk) {
         Write-Ok ("changelog entry for {0} found in releases\history.md, dated {1} in agreement with the INF" -f $Version, $releaseDate)
     }
@@ -3761,6 +3716,58 @@ the result in place of the marker, then cut again. The first:
         }
     }
 
+    # --- XHCIPFW.VXD (task 44.49, design record 32 section 8) ---------------
+    #
+    # Every x86 package carries it, release and debug, with or without
+    # Stor98; make-package.ps1 stages it and holds it to
+    # src\pfw\check-pfw.ps1, and goes without it only on a host that could
+    # not build it, which a cut is not. Checked here, after the cut's
+    # inputs and before anything is built.
+    if (-not $UploadSetOnly -and $Arch -contains "x86") {
+        $pfwImage = Join-Path $repo "src\pfw\obj\XHCIPFW.VXD"
+        if (-not (Test-Path -LiteralPath $pfwImage -PathType Leaf)) {
+            Stop-CutCheck "no XHCIPFW.VXD at '$pfwImage': build it (scripts\build-driver.cmd builds src\pfw on the x86 run; it needs Open Watcom 2.0 and the Windows 98 SE DDK)."
+        } else {
+            $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\pfw\check-pfw.ps1") $pfwImage 2>&1
+            if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("XHCIPFW.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+            else {
+                # Not older than any of its inputs, as S98VSD.VXD is held above.
+                $pfwTime = (Get-Item -LiteralPath $pfwImage).LastWriteTimeUtc
+                $pfwInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\pfw") -File |
+                               Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".allow") }) +
+                             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
+                $pfwNewer = @($pfwInputs | Where-Object { $_.LastWriteTimeUtc -gt $pfwTime })
+                if ($pfwNewer.Count -gt 0) {
+                    Stop-CutCheck ("XHCIPFW.VXD is older than {0}: rebuild it (src\pfw\build.cmd, or scripts\build-driver.cmd)." -f (($pfwNewer | ForEach-Object { $_.Name }) -join ", "))
+                } else {
+                    Write-Ok "XHCIPFW.VXD built from src\pfw: its DDB, services, stamp and no debug-port write checked, newer than its sources"
+                }
+            }
+        }
+        # XHCIPFW.SYS (design record 32 section 11), held the same way.
+        $pfwSysImage = Join-Path $repo "src\pfw\nt\objfre\i386\xhcipfw.sys"
+        if (-not (Test-Path -LiteralPath $pfwSysImage -PathType Leaf)) {
+            Stop-CutCheck "no XHCIPFW.SYS at '$pfwSysImage': build it (scripts\build-driver.cmd builds src\pfw\nt on the x86 run; it needs the Windows 2000 DDK)."
+        } else {
+            $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1") $pfwSysImage 2>&1
+            if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("XHCIPFW.SYS failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+            else {
+                $pfwSysTime = (Get-Item -LiteralPath $pfwSysImage).LastWriteTimeUtc
+                $pfwSysInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\pfw\nt") -File |
+                                  Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".cmd", ".ps1", ".allow") -or $_.Name -in @("sources", "makefile") }) +
+                                @(Get-ChildItem -LiteralPath (Join-Path $repo "src\pfw") -File |
+                                  Where-Object { $_.Name -in @("pfw_scan.c", "pfw_scan.h", "pfw_ntdec.c", "pfw_ntdec.h") }) +
+                                @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
+                $pfwSysNewer = @($pfwSysInputs | Where-Object { $_.LastWriteTimeUtc -gt $pfwSysTime })
+                if ($pfwSysNewer.Count -gt 0) {
+                    Stop-CutCheck ("XHCIPFW.SYS is older than {0}: rebuild it (src\pfw\nt\build.cmd, or scripts\build-driver.cmd)." -f (($pfwSysNewer | ForEach-Object { $_.Name }) -join ", "))
+                } else {
+                    Write-Ok "XHCIPFW.SYS built from src\pfw\nt: its imports, stamp, flavour marker and no debug-port writer checked, newer than its sources"
+                }
+            }
+        }
+    }
+
     # --- build and gate each flavour, then take only what may be tracked -----
     $makePackage = Join-Path $PSScriptRoot "make-package.ps1"
     $staged = @{}
@@ -3834,6 +3841,11 @@ the result in place of the marker, then cut again. The first:
             } else {
                 $pkgArgs += "-NoStor98"
             }
+            # XHCIPFW.VXD (task 44.49): make-package.ps1 stages it in every x86
+            # package, release and debug alike, as the gated build's bytes; it
+            # is accepted and published with the bundled files.
+            if ($leg.PkgArch -eq "x86") { $legStor98 += "XHCIPFW.VXD" }
+            if ($leg.PkgArch -eq "x86") { $legStor98 += "XHCIPFW.SYS" }
             # ErrorActionPreference relaxed across the call, as every other native
             # call in this script does and this one did not until the audit of
             # 2026-09-07. In Windows PowerShell 5.1 a native command's stderr line
@@ -3936,6 +3948,17 @@ runs are what stand between a broken binary and a guest that cannot boot.
                 (Get-FileHash -LiteralPath (Join-Path $destDir "S98VSD.VXD") -Algorithm SHA256).Hash -ne
                 (Get-FileHash -LiteralPath (Join-Path $repo "src\vsd\obj\S98VSD.VXD") -Algorithm SHA256).Hash) {
                 throw "the $($leg.Dir)\S98VSD.VXD about to be published is not the build at src\vsd\obj\S98VSD.VXD."
+            }
+            # XHCIPFW.VXD and XHCIPFW.SYS published are the gated builds', byte for byte.
+            if ($legStor98 -contains "XHCIPFW.VXD" -and
+                (Get-FileHash -LiteralPath (Join-Path $destDir "XHCIPFW.VXD") -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $repo "src\pfw\obj\XHCIPFW.VXD") -Algorithm SHA256).Hash) {
+                throw "the $($leg.Dir)\XHCIPFW.VXD about to be published is not the build at src\pfw\obj\XHCIPFW.VXD."
+            }
+            if ($legStor98 -contains "XHCIPFW.SYS" -and
+                (Get-FileHash -LiteralPath (Join-Path $destDir "XHCIPFW.SYS") -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $repo "src\pfw\nt\objfre\i386\xhcipfw.sys") -Algorithm SHA256).Hash) {
+                throw "the $($leg.Dir)\XHCIPFW.SYS about to be published is not the build at src\pfw\nt\objfre\i386\xhcipfw.sys."
             }
             # The certificate beside a signed leg's binaries must be this key's
             # public half, byte for byte - the one a user would inspect or import.
@@ -4283,80 +4306,16 @@ driver".
                    "with a .MAP no older than itself, and QUALREP.BAT beside it") -f $toolVersion)
     }
 
-    # --- the cleanup tool (task 38.8) ----------------------------------------
-    #
-    # XHCICLN.EXE (MSVC 6.0, the 32-bit targets) and XHCICL64.EXE (WDK 7.1
-    # amd64, the 64-bit ones), one source: the opt-in tool that lists, and on
-    # Windows 2000 to 7 removes, the devnodes a driver before 2.4.0.0 left
-    # under XHCI98\ (design record 13 section 10.13.8). The same staleness
-    # rule as XHCIQUAL's - each EXE newer than every source beside it and than
-    # src\xhci_version.h - and the same version rule: the source expands the
-    # shared macro and the macro is this release's. Not a driver, so the
-    # packager's test signing of the x64 drivers (design record 19) does not
-    # reach XHCICL64.EXE.
-    $cleantoolStaged = $null
-    if (-not $SkipCleanTool) {
-        Write-Step "cleanup tool"
-        $cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")
-        foreach ($name in $cleanExes) {
-            if (-not (Test-Path -LiteralPath (Join-Path $CleanToolDir $name) -PathType Leaf)) {
-                throw @"
-'$CleanToolDir' has no $name.
-Build both first:  xhcicln\build.cmd
-It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipCleanTool
-cuts without the tool on a host that cannot build it.
-"@
-            }
-        }
-        $cleanReadmeSrc = Join-Path $CleanToolDir "README.TXT"
-        if (-not (Test-Path -LiteralPath $cleanReadmeSrc -PathType Leaf)) {
-            throw "'$CleanToolDir' has no README.TXT, the text the tool's published readme.txt is made from."
-        }
-        $cleanSources = @(@(Get-ChildItem -LiteralPath $CleanToolDir -File |
-            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
-            @(Get-Item -LiteralPath $versionHeader) +
-            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")) +
-            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))
-        foreach ($name in $cleanExes) {
-            $cleanTime = (Get-Item -LiteralPath (Join-Path $CleanToolDir $name)).LastWriteTimeUtc
-            $cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })
-            if ($cleanNewer.Count -gt 0) {
-                Stop-CutCheck @"
-'$(Join-Path $CleanToolDir $name)' is older than $($cleanNewer.Count) of its own source file(s):
-  - $(($cleanNewer | ForEach-Object { $_.Name }) -join "`n  - ")
-Rebuild it (xhcicln\build.cmd) before releasing: a stale copy prints a version
-that is not this release's, or decides with rules the source no longer has.
-"@
-            }
-        }
-        $cleanSource = Join-Path $CleanToolDir "xhcicln.c"
-        Assert-TakesSharedVersion -Path $cleanSource -Macro "XHCICLN_VERSION"
-        $cleanVersion = Get-DeclaredVersion -Path $versionHeader
-        if (-not (Test-DriverVersionMatches -Reported $cleanVersion -Declared $Version)) {
-            Stop-CutCheck @"
-'$versionHeader' declares the version as "$cleanVersion", but this release is $Version.
-XHCICLN prints that string first on every run, so the two must agree. Bump the
-version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
-"@
-        }
-        $cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")
-        Ensure-Directory $cleanDir
-        foreach ($name in $cleanExes) {
-            Copy-Item -LiteralPath (Join-Path $CleanToolDir $name) -Destination (Join-Path $cleanDir $name) -Force
-        }
-        $cleantoolStaged = $cleanDir
-        Write-Ok (("XHCICLN.EXE and XHCICL64.EXE staged at version {0} from src\xhci_version.h, " +
-                   "newer than every source beside them and than that header") -f $cleanVersion)
-    }
-
     # --- the mark service (task 42-A.5) -------------------------------------
     #
     # XHCIMARK.EXE (MSVC 6.0) and XHCIMK64.EXE (WDK 7.1 amd64), one source:
     # the safe-removal mark service of design record 21 section 7.4, revision
     # 3, which the installer copies into %SystemRoot%\system32 and registers
     # (Windows 2000 to 7, with the Thunderbolt 3 / USB4 component). The same
-    # staleness and version rules as XHCICLN's. Not a driver: the packager's
-    # test signing does not reach XHCIMK64.EXE.
+    # staleness rule as XHCIQUAL's - each EXE newer than every source beside
+    # it and than src\xhci_version.h - and a version rule: the source expands
+    # the shared macro and the macro is this release's. Not a driver: the
+    # packager's test signing does not reach XHCIMK64.EXE.
     $marktoolStaged = $null
     if (-not $SkipMarkTool) {
         Write-Step "mark service"
@@ -4414,11 +4373,11 @@ version in src\xhci_version.h and rebuild the service (xhcimark\build.cmd).
     # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), the console
     # tool, and XHCIWIZ.EXE and XHCIWZ64.EXE, the window SETUP.EXE and
     # INSTALL.BAT open (design record 26 sections 2 and 4), built from
-    # xhciinst\ as XHCICLN is from xhcicln\ (design record 23 section 3), and
-    # at the version root SETUP.EXE, the entry point a person double-clicks
-    # (task 42-A.31), and INSTALL.BAT, the command line's. The same staleness
-    # and version rules as XHCICLN's, SETUP.EXE included. Not drivers: the packager's test signing does not reach the
-    # x64 executables.
+    # xhciinst\ (design record 23 section 3), and at the version root
+    # SETUP.EXE, the entry point a person double-clicks (task 42-A.31), and
+    # INSTALL.BAT, the command line's. The same staleness and version rules
+    # as the mark service's, SETUP.EXE included. Not drivers: the packager's
+    # test signing does not reach the x64 executables.
     $insttoolStaged = $null
     if (-not $SkipInstallTool) {
         Write-Step "install tool"
@@ -4833,22 +4792,6 @@ helper (xhciinst\di\build.cmd).
         $contents += "      update or a disable and enable."
         $contents += ""
     }
-    if ($null -ne $cleantoolStaged) {
-        $c32 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICLN.EXE")
-        $c64 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICL64.EXE")
-        $contents += "  TOOLS\XHCICLN\  - removes what an update from 2.3.x left behind"
-        $contents += ""
-        $contents += ("      XHCICLN.EXE  {0:N0} bytes, for 32-bit Windows" -f $c32.Length)
-        $contents += ("      XHCICL64.EXE {0:N0} bytes, for 64-bit Windows" -f $c64.Length)
-        $contents += "      readme.txt"
-        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
-        $contents += ""
-        $contents += "      Optional: nothing needs it (section 4, updating from"
-        $contents += "      2.3.x or earlier). It lists the old, inert devnodes"
-        $contents += "      under XHCI98\ and, on Windows 2000 to 7, removes them"
-        $contents += "      when asked; on 98 SE and ME it lists only."
-        $contents += ""
-    }
     if ($null -ne $insttoolStaged) {
         $w32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIWIZ.EXE")
         $w64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIWZ64.EXE")
@@ -4955,9 +4898,9 @@ helper (xhciinst\di\build.cmd).
 
     $contents += "  LICENSE"
     $contents += ""
-    $contents += "  The GNU GPL v2 this driver is published under, with the note on"
-    $contents += "  what in the wider project is third-party material and is NOT"
-    $contents += "  covered by it. The LICENCE section at the end points here."
+    $contents += "  The GNU GPL v2 or later this driver is published under, with the"
+    $contents += "  note on what in the wider project is third-party material and is"
+    $contents += "  NOT covered by it. The LICENCE section at the end points here."
     $contents += ""
 
     # The bundled Stor98 build (task 42-A.30): in the release- directories.
@@ -4975,13 +4918,12 @@ helper (xhciinst\di\build.cmd).
             " and date, and its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
             " and stor98-readme.txt is its guide. SETUP.EXE installs it with the Thunderbolt 3 / USB4 support (its box under that one on the installer's Components page, ticked with it but on Windows 10, where Windows' own stornvme stays and Stor98 is yours to tick; untick it to leave Stor98 out)," +
             " and only on NVMe drives behind a Thunderbolt or USB4 tunnel: the installer selects tunnel drives only" +
-            " and leaves an internal NVMe drive as it is. On 2000 to 7 its INF matches every NVMe controller (PCI\CC_010802), so Windows may still offer it for an" +
-            " internal NVMe drive that has no driver: decline it there, as Stor98 is not for internal NVMe drives. Windows 8 has no NVMe driver of its own, and there" +
-            " Windows itself puts the staged Stor98 on an internal NVMe drive that has no driver: without a prompt when this package's test certificate is trusted," +
-            " and otherwise through the ""can't verify the publisher"" prompt (not read). The drive then runs on Stor98, and the uninstall leaves Stor98 in place," +
-            " on every drive, while that drive uses it. On 8.1 and 10 it names PCI\CC_010802 as a compatible id only," +
-            " which Windows' own NVMe driver (stornvme) outranks, so there Stor98 goes only on a drive the installer or you put it on. To install it by hand on a tunnel drive, in the hardware" +
-            " wizard (Have Disk), point at " +
+            " and leaves an internal NVMe drive as it is. Stor98 is not for internal NVMe drives. The package gives a drive behind a Thunderbolt or USB4 port an id" +
+            " of its own, PCI\XHCI98_TUNNEL&CC_010802, and on Windows 2000 to 8 stor98.inf matches that id alone, so Windows never offers Stor98 for an internal" +
+            " drive there. On 8.1 and 10 it names PCI\CC_010802 as a compatible id only, which Windows' own NVMe driver (stornvme) outranks, so there Stor98 goes" +
+            " only on a drive the installer, its safe-removal mark service or you put it on. On 98 SE and ME, which have no NVMe driver of their own, Stor98 installs" +
+            " from stor98w9.inf, which matches every NVMe controller, so Windows may offer it for an internal NVMe drive that has no driver: decline it there." +
+            " To install it by hand on a tunnel drive, in the hardware wizard (Have Disk), point at " +
             $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")
         if ($stor98X64) {
@@ -5574,7 +5516,8 @@ dialog. Nothing changes before you click Install, and then it:
 
 It ends by offering to restart Windows. Add/Remove Programs (Programs and
 Features on Vista and later, in Control Panel) lists the package as "xHCI98
-USB 3.x drivers"; Remove there takes every driver of the package away
+USB 3 drivers" ("xHCI98 Thunderbolt 3 / USB4 connection manager" when that
+is all it installed); Remove there takes every driver of the package away
 again (it warns first: on a machine whose only USB controller is xHCI,
 the USB keyboard and mouse stop working).
 
@@ -5646,7 +5589,7 @@ CD, a shared folder - then:
       code 1 until a restart. Both have only been run in virtual
       machines.{ARCHINSTALL}
 
-It installs as "xHCI98 USB 3 Controller", with "xHCI98 USB 3.x Root Hub"
+It installs as "xHCI98 USB 3 Controller", with "xHCI98 USB 3 Root Hub"
 underneath it; SETUP.EXE adds the controller's maker and product, as in
 "xHCI98 USB 3 Controller (Renesas uPD720202)", and a hand install does
 not. Neither should carry a warning mark.
@@ -5671,7 +5614,7 @@ txtsetup.oem, xhci98.sys and xhci98.inf, and from RELEASE-X86\ also
 xhcihlpr.sys, which Setup copies for later and does not load. Start
 Setup, press F6 when "Press F6 if you need to install a third party SCSI
 or RAID driver" shows, press S at the next screen, insert the floppy, and
-pick "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)" (on XP x64,
+pick "xHCI98 USB 3 Controller (32-bit Windows 2000/XP)" (on XP x64,
 the x64 entry). Setup then uses its own keyboard, mouse and USB storage
 drivers above it.
 
@@ -5679,8 +5622,8 @@ INSTALLING WINDOWS 2000: use the second entry, with three files from your
 CD. Before Setup, copy USBD.SY_, HIDCLASS.SY_ and HIDPARSE.SY_ from the
 I386 folder of the Windows 2000 CD you install from to the root of the
 same floppy, as they are (do not expand or rename them; this package does
-not carry them). At the F6 list press the Down arrow to "xHCI98 USB 3.x
-Host Controller (32-bit Windows 2000, files from CD)" and press Enter.
+not carry them). At the F6 list press the Down arrow to "xHCI98 USB 3
+Controller (32-bit Windows 2000, files from CD)" and press Enter.
 Text mode then copies those files to the new system as well, so a USB
 keyboard, mouse or stick used during Setup works when it first starts.
 If the files are not on the floppy, Setup stops while copying files with
@@ -5756,9 +5699,10 @@ UPDATING FROM AN EARLIER RELEASE
 
 Run SETUP.EXE over the installed release: it handles the traps below
 itself. By hand, install over it with Update Driver on the controller
-("xHCI98 USB 3.x eXtensible Host Controller" until this release renamed
-it), then on "xHCI98 USB 3.x Root Hub", both pointed at the same
-directory as a new install. On 98 SE and ME too, Update Driver replaces
+("xHCI98 USB 3 Controller", or by its older name "xHCI98 USB 3.x
+eXtensible Host Controller"), then on the root hub ("xHCI98 USB 3 Root
+Hub", or "xHCI98 USB 3.x Root Hub"), both pointed at the same directory
+as a new install. On 98 SE and ME too, Update Driver replaces
 xhci98.sys. Nothing needs renaming first. (From 2.3.x or
 earlier the controller alone: the root hub is a new one and installs by
 itself - read FROM 2.3.x below first.) As read in virtual machines:
@@ -5791,12 +5735,8 @@ itself - read FROM 2.3.x below first.) As read in virtual machines:
   THE UPDATE AND THE RESTART. The earlier release still runs until then
   and would give it an old name.
 
-  THE OLD ENTRIES ARE HARMLESS and nothing needs them removed. To remove
-  them anyway, after the update and its restart, run TOOLS\XHCICLN\
-  (section 8): it lists them, and on Windows 2000 to 7 removes them when
-  asked; on 98 SE and ME it lists only. Going back to 2.3.x brings each old
-  entry back with its driver - or, if the tool removed it, found and
-  installed afresh.
+  THE OLD ENTRIES ARE HARMLESS and nothing needs them removed. They stay.
+  Going back to 2.3.x brings each old entry back with its driver.
 
   WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
   The new file waits to replace the old one at the next start, and until
@@ -5866,7 +5806,8 @@ itself - read FROM 2.3.x below first.) As read in virtual machines:
 
   THE ROOT HUB'S DRIVER TAB STILL SHOWS THE EARLIER VERSION (on 98 SE and
   ME, its date), although it runs the new file. To change it, run Update
-  Driver on "xHCI98 USB 3.x Root Hub" too: on Vista and 7, "Let me pick
+  Driver on the root hub ("xHCI98 USB 3 Root Hub", or by its older name
+  "xHCI98 USB 3.x Root Hub") too: on Vista and 7, "Let me pick
   from a list of device drivers on my computer" and the new entry;
   elsewhere Have Disk. (Not from 2.3.x or earlier: there the root hub is
   new and installed from this release.)
@@ -5901,7 +5842,7 @@ Things specific to this driver, worth knowing in advance:
 
   * HUBS HAVE ENTRIES OF THEIR OWN IN DEVICE MANAGER. A hub appears as
     "xHCI98 USB Hub", with the devices behind it beneath it. A USB 3 hub
-    appears twice, the second time as "xHCI98 USB 3.x Hub" for its
+    appears twice, the second time as "xHCI98 USB 3 Hub" for its
     SuperSpeed half. Each hub has a Power tab. A hub installs from the
     driver already installed: on Windows 98 SE and 2000 with nothing to
     answer, on Windows XP with the Found New Hardware wizard and the
@@ -6853,11 +6794,11 @@ A value that is absent means the default each one states.
  LICENCE
 ==============================================================================
 
-GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
-applies to this project's own code in xhci98.sys, xhciuas.sys, xhcicm.sys
-and the 32-bit helper xhcihlpr.sys, and to their INFs. The 64-bit builds of
-the first three, and xhcihlpr.sys, also carry a few small support routines
-that Microsoft's driver kit links in (a stack-cookie check, and in
+GNU GPL v2 or later - see the LICENSE file in this directory, beside this
+readme. This applies to this project's own code in xhci98.sys, xhciuas.sys,
+xhcicm.sys and the 32-bit helper xhcihlpr.sys, and to their INFs. The 64-bit
+builds of the first three, and xhcihlpr.sys, also carry a few small support
+routines that Microsoft's driver kit links in (a stack-cookie check, and in
 xhcihlpr.sys a device-security helper), which are not this project's work;
 docs/contributing/legal-provenance.md, in the project's source repository,
 records them.
@@ -6938,9 +6879,8 @@ which XHCITR matches this driver by that number; correct the sentence.
     #
     $missingTools = @()
     if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
-    if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
-    if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal mark service of section 4)" }
-    if ($null -eq $insttoolStaged) { $missingTools += "SETUP.EXE, INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
+    if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal service of section 4)" }
+    if ($null -eq $insttoolStaged) { $missingTools += "SETUP.EXE, INSTALL.BAT and TOOLS\XHCIINST\ (the installer of section 4)" }
     if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
     if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }
     $incomplete = ""
@@ -7355,11 +7295,11 @@ behind.
 Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCIQUAL.EXE is not only this project's code: it is linked
-as a DOS/32 Advanced DOS Extender executable and statically includes that
-extender and the Open Watcom C runtime, which carry their own notices. Those
-notices are in NOTICE.TXT beside this file, and this product uses DOS/32
+This project's own code is under the GNU GPL v2 or later - see the LICENSE
+file two directories up. XHCIQUAL.EXE is not only this project's code: it is
+linked as a DOS/32 Advanced DOS Extender executable and statically includes
+that extender and the Open Watcom C runtime, which carry their own notices.
+Those notices are in NOTICE.TXT beside this file, and this product uses DOS/32
 Advanced DOS Extender technology.
 '@
         $qualReadme = $qualReadme.Replace("{VERSION}", $Version)
@@ -7393,7 +7333,7 @@ Advanced DOS Extender technology.
 ==============================================================================
 
 XHCIQUAL.EXE is built from this project's own C and assembly sources, which
-are under the GNU GPL v2 - see the LICENSE file two directories up.
+are under the GNU GPL v2 or later - see the LICENSE file two directories up.
 
 It is linked as a DOS/32 Advanced DOS Extender (LE-style) executable. That
 means the extender itself is embedded in the EXE as its stub, so the tool is a
@@ -7468,64 +7408,12 @@ provenance record is docs\contributing\legal-provenance.md, section 2a.
         Write-Ok "NOTICE.TXT written beside XHCIQUAL.EXE (DOS/32A + Open Watcom runtime)"
     }
 
-    # --- the cleanup tool's readme and notices (task 38.8) --------------------
+    # --- the mark service's readme and notices (task 42-A.5) ----------------
     #
-    # The readme is xhcicln\README.TXT, tracked beside the source, with the
+    # The readme is xhcimark\README.TXT, tracked beside the source, with the
     # release's footer; NOTICE.TXT records the two statically linked runtimes
     # as XHCISNAP's recorded its one, for the same reason and on the same terms
     # (legal-provenance.md section 2a).
-    if ($null -ne $cleantoolStaged) {
-        $cleanReadme = @(Read-ToolReadmeLines (Join-Path $CleanToolDir $script:ToolReadmeName))
-        $cleanFooter = @'
-
-------------------------------------------------------------------------------
-Part of the xhci98 {VERSION} release. See the readme.txt two directories up
-for the driver itself.
-
-This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCICLN.EXE and XHCICL64.EXE are not only this project's
-code: a C runtime is statically linked into each, which NOTICE.TXT beside
-this file records.
-'@
-        $cleanLines = @($cleanReadme) + @($cleanFooter.Replace("{VERSION}", $Version) -split "`r?`n")
-        Write-GeneratedText -Path (Join-Path $cleantoolStaged "readme.txt") -Lines $cleanLines
-        Write-Ok "readme.txt written beside XHCICLN.EXE and XHCICL64.EXE"
-
-        $cleanNotice = @'
-==============================================================================
-                          x h c i 9 8   {VERSION}
-           THIRD-PARTY NOTICES FOR XHCICLN.EXE AND XHCICL64.EXE
-==============================================================================
-
-XHCICLN.EXE and XHCICL64.EXE are built from this project's own C source,
-which is under the GNU GPL v2 - see the LICENSE file two directories up.
-
-They are not only this project's code. XHCICLN.EXE is compiled with
-Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
-runtime; XHCICL64.EXE is compiled with the Windows Driver Kit 7.1's amd64
-compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
-runtime modules are bound into each executable rather than loaded from a
-DLL when it runs, which is what makes each tool a single file. You can see
-it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
-no C runtime DLL.
-
-Those runtime modules are Microsoft's. They are not covered by the GPL grant
-above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
-Driver Kit 7.1. What this file records is the linkage; the project's full
-provenance record is docs\contributing\legal-provenance.md, section 2a.
-Nothing in this file is a statement that the arrangement is or is not
-sufficient.
-'@
-        $cleanNotice = $cleanNotice.Replace("{VERSION}", $Version)
-        Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT") `
-                            -Lines ($cleanNotice -split "`r?`n")
-        Write-Ok "NOTICE.TXT written beside XHCICLN.EXE and XHCICL64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
-    }
-
-    # --- the mark service's readme and notices (task 42-A.5) ----------------
-    #
-    # As the cleanup tool's: xhcimark\README.TXT with the release's footer,
-    # and NOTICE.TXT recording the two statically linked runtimes.
     if ($null -ne $marktoolStaged) {
         $markReadme = @(Read-ToolReadmeLines (Join-Path $MarkToolDir $script:ToolReadmeName))
         $markFooter = @'
@@ -7534,10 +7422,10 @@ sufficient.
 Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCIMARK.EXE and XHCIMK64.EXE are not only this project's
-code: a C runtime is statically linked into each, which NOTICE.TXT beside
-this file records.
+This project's own code is under the GNU GPL v2 or later - see the LICENSE
+file two directories up. XHCIMARK.EXE and XHCIMK64.EXE are not only this
+project's code: a C runtime is statically linked into each, which NOTICE.TXT
+beside this file records.
 '@
         $markLines = @($markReadme) + @($markFooter.Replace("{VERSION}", $Version) -split "`r?`n")
         Write-GeneratedText -Path (Join-Path $marktoolStaged "readme.txt") -Lines $markLines
@@ -7549,7 +7437,8 @@ this file records.
 ==============================================================================
 
 XHCIMARK.EXE and XHCIMK64.EXE are built from this project's own C source,
-which is under the GNU GPL v2 - see the LICENSE file two directories up.
+which is under the GNU GPL v2 or later - see the LICENSE file two directories
+up.
 
 They are not only this project's code. XHCIMARK.EXE is compiled with
 Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
@@ -7575,7 +7464,7 @@ sufficient.
 
     # --- the install tool's readme and notices (task 40.6) --------------------
     #
-    # As the cleanup tool's, above: xhciinst\README.TXT with the release's
+    # As the mark service's, above: xhciinst\README.TXT with the release's
     # footer, and NOTICE.TXT recording the two statically linked runtimes
     # (legal-provenance.md section 2a).
     if ($null -ne $insttoolStaged) {
@@ -7586,10 +7475,11 @@ sufficient.
 Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE, and
-SETUP.EXE two directories up, are not only this project's code: a C runtime
-is statically linked into each, which NOTICE.TXT beside this file records.
+This project's own code is under the GNU GPL v2 or later - see the LICENSE
+file two directories up. XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and
+XHCIIN64.EXE, and SETUP.EXE two directories up, are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside this
+file records.
 "@
         $instLines = @($instReadme) + @($instFooter.Replace("{VERSION}", $Version) -split "`r?`n")
         Write-GeneratedText -Path (Join-Path $insttoolStaged "readme.txt") -Lines $instLines
@@ -7600,7 +7490,7 @@ is statically linked into each, which NOTICE.TXT beside this file records.
                                "The base download's only Microsoft files are NUSB 3.3's Windows 98 SE`r`n" +
                                "storage files, in a folder of their own with their own NOTICE.md; the`r`n" +
                                "non-free download also carries other manufacturers' drivers in`r`n" +
-                               "USBDRV\NONFREE\, two KMDF co-installers of Microsoft's among them, with`r`n" +
+                               "USBDRV\NONFREE\, KMDF co-installers of Microsoft's among them, with`r`n" +
                                "their NOTICE.md."
                            } else {
                                "The download's only Microsoft files are NUSB 3.3's Windows 98 SE storage`r`n" +
@@ -7615,9 +7505,9 @@ is statically linked into each, which NOTICE.TXT beside this file records.
            THIRD-PARTY NOTICES FOR THE INSTALLER'S EXECUTABLES
 ==============================================================================
 
-XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE, and SETUP.EXE at
-the package's top directory, are built from this project's own C source,
-which is under the GNU GPL v2 - see the LICENSE file two directories up.
+XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE, and SETUP.EXE at the
+package's top directory, are built from this project's own C source, which is
+under the GNU GPL v2 or later - see the LICENSE file two directories up.
 
 They are not only this project's code. XHCIINST.EXE, XHCIWIZ.EXE and
 SETUP.EXE are compiled with Microsoft Visual C++ 6.0 and linked against
@@ -7657,10 +7547,10 @@ $instMsFiles
 Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCITR.EXE and XHCITR64.EXE are not only this project's
-code: a C runtime is statically linked into each, which NOTICE.TXT beside
-this file records.
+This project's own code is under the GNU GPL v2 or later - see the LICENSE
+file two directories up. XHCITR.EXE and XHCITR64.EXE are not only this
+project's code: a C runtime is statically linked into each, which NOTICE.TXT
+beside this file records.
 "@
         $trayLines = @($trayReadme) + @($trayFooter.Replace("{VERSION}", $Version) -split "`r?`n")
         Write-GeneratedText -Path (Join-Path $traytoolStaged "readme.txt") -Lines $trayLines
@@ -7672,8 +7562,8 @@ this file records.
             THIRD-PARTY NOTICES FOR XHCITR.EXE AND XHCITR64.EXE
 ==============================================================================
 
-XHCITR.EXE and XHCITR64.EXE are built from this project's own C source,
-which is under the GNU GPL v2 - see the LICENSE file two directories up.
+XHCITR.EXE and XHCITR64.EXE are built from this project's own C source, which
+is under the GNU GPL v2 or later - see the LICENSE file two directories up.
 Their icon was drawn for this project.
 
 They are not only this project's code. XHCITR.EXE is compiled with
@@ -7718,11 +7608,11 @@ sufficient.
 ------------------------------------------------------------------------------
 
 XHCIDI.EXE, the Windows 98 SE and ME device install helper the install tool
-starts, is built from this project's own C source, under the GNU GPL v2,
-with Open Watcom 2.0's 16-bit compiler. It is not only this project's code:
-it statically links modules from the Open Watcom C runtime library for
-16-bit Windows (clibl.lib). The Open Watcom linker records its own
-copyright at the head of the map it wrote for this build:
+starts, is built from this project's own C source, under the GNU GPL v2 or
+later, with Open Watcom 2.0's 16-bit compiler. It is not only this project's
+code: it statically links modules from the Open Watcom C runtime library for
+16-bit Windows (clibl.lib). The Open Watcom linker records its own copyright
+at the head of the map it wrote for this build:
 
 {MAPLINES}
 
@@ -7743,7 +7633,7 @@ docs\contributing\legal-provenance.md, section 2a.
 
     # --- the licence the readme sends the reader to --------------------------
     #
-    # **The generated guide says "GNU GPL v2 - see LICENSE", so LICENSE has to
+    # **The generated guide says "GNU GPL v2 or later - see LICENSE", so LICENSE has to
     # be in the directory it says that in.** A release directory is described by
     # that same guide as a standalone thing someone may have downloaded on its
     # own, and the repository root is exactly what such a person does not have.
@@ -7754,7 +7644,7 @@ docs\contributing\legal-provenance.md, section 2a.
     if (-not (Test-Path -LiteralPath $licenseSrc)) {
         throw @"
 no LICENSE at '$licenseSrc'.
-The per-release readme.txt tells the reader "GNU GPL v2 - see LICENSE", and a release
+The per-release readme.txt tells the reader "GNU GPL v2 or later - see LICENSE", and a release
 directory is meant to stand on its own, so it cannot be published without it.
 "@
     }
@@ -8024,9 +7914,6 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $qualtoolStaged) {
         Write-Warn "no tools\xhciqual\ in this release (-SkipQualtool) - it is incomplete."
-    }
-    if ($null -eq $cleantoolStaged) {
-        Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."
     }
     if ($null -eq $marktoolStaged) {
         Write-Warn "no tools\xhcimark\ in this release (-SkipMarkTool) - a Thunderbolt device's safe-removal mark is lost at a rebuild of its drivers, as before 3.1.0.0."

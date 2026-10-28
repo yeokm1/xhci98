@@ -990,6 +990,8 @@ static void test_odd_frames(void)
     CHECK_EQ(start(), TBT_OK, "bind");
     dw[0] = 0x01000033UL;
     dw[1] = 0;
+    dw[2] = 0;
+    dw[3] = 0;
     fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
     dw[0] = 0x0100000aUL;
     fakeQueue(TBT_PDF_ICM_RESP, dw, 2, 0, 0);
@@ -2427,36 +2429,40 @@ static void test_router_version(void)
     }
 }
 
+/* Each vector named in the request trace (tbt_fake.h, task 44.38). */
+#define RUN_VEC(fn) do { fakeTraceMark(#fn); fn(); } while (0)
+
 int main(void)
 {
-    test_frames_ar();
-    test_names();
-    test_bind_rebind();
-    test_plug_approve_unplug();
-    test_policy();
-    test_resume_refresh_and_reconcile();
-    test_disconnect_during_approve();
-    test_timeouts_and_errors();
-    test_wrong_layout();
-    test_odd_frames();
-    test_event_queued_in_wait();
-    test_dual_link_and_replace();
-    test_titan_ridge();
-    test_ice_lake();
-    test_falcon_ridge();
-    test_late_reply_same_device();
-    test_subtree_disconnect();
-    test_queue_overflow_and_coalescing();
-    test_action_overflow();
-    test_session_boundary();
-    test_refresh_reapplies_policy();
-    test_reconcile_bounded();
-    test_short_answers_and_retirement();
-    test_settings();
-    test_resume_budget();
-    test_lost_and_recover();
-    test_unsent_and_stalled();
-    test_router_version();
+    RUN_VEC(test_frames_ar);
+    RUN_VEC(test_names);
+    RUN_VEC(test_bind_rebind);
+    RUN_VEC(test_plug_approve_unplug);
+    RUN_VEC(test_policy);
+    RUN_VEC(test_resume_refresh_and_reconcile);
+    RUN_VEC(test_disconnect_during_approve);
+    RUN_VEC(test_timeouts_and_errors);
+    RUN_VEC(test_wrong_layout);
+    RUN_VEC(test_odd_frames);
+    RUN_VEC(test_event_queued_in_wait);
+    RUN_VEC(test_dual_link_and_replace);
+    RUN_VEC(test_titan_ridge);
+    RUN_VEC(test_ice_lake);
+    RUN_VEC(test_falcon_ridge);
+    RUN_VEC(test_late_reply_same_device);
+    RUN_VEC(test_subtree_disconnect);
+    RUN_VEC(test_queue_overflow_and_coalescing);
+    RUN_VEC(test_action_overflow);
+    RUN_VEC(test_session_boundary);
+    RUN_VEC(test_refresh_reapplies_policy);
+    RUN_VEC(test_reconcile_bounded);
+    RUN_VEC(test_short_answers_and_retirement);
+    RUN_VEC(test_settings);
+    RUN_VEC(test_resume_budget);
+    RUN_VEC(test_lost_and_recover);
+    RUN_VEC(test_unsent_and_stalled);
+    RUN_VEC(test_router_version);
+    fakeTraceMark("end");
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

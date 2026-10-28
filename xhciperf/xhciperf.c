@@ -186,6 +186,15 @@ static HINSTANCE g_inst;
 static HWND g_wnd;
 static HWND g_tab, g_view, g_disk, g_s98, g_log, g_status, g_s98test, g_s98admin;
 static HFONT g_font, g_big;
+/* The window's pixel layout is drawn for 96 dpi; at large fonts it grows
+ * with the screen's dpi, as far as the work area holds it (record 29
+ * section 16.1), in percent */
+static int g_scale = 100;
+
+static int sc(int v)
+{
+    return v * g_scale / 100;
+}
 static int g_os;
 static int g_preVista;
 static DWORD g_ncpu;
@@ -694,6 +703,7 @@ static volatile pf_u32 g_endUnchecked;
 /* The run's search state, as its report states it: set as the run starts
  * and changed only by the run's own counter reads */
 static int g_runS98state, g_runS98matches, g_runS98ids;
+static S98_WHY g_runS98why;
 static char g_s98drive;
 static UCHAR g_s98port, g_s98path, g_s98target, g_s98lun;
 static HMODULE g_aspi;
@@ -703,6 +713,7 @@ static BYTE g_aspiHa, g_aspiTarget;
  * while ASPI may still write their SRB or buffer */
 static volatile LONG g_aspiOut;
 static int g_s98matches, g_s98ids;   /* the last 9x search's counts */
+static S98_WHY g_s98why;            /* and where it ended (record 29 section 16.5) */
 /* Threads that may send to ASPI (counter reads, searches), alive */
 static volatile LONG g_aspiThreads;
 /* Set as the process ends: no ASPI request is sent after it */
@@ -886,7 +897,12 @@ static int aspi_exec(BYTE ha, BYTE target, const BYTE *cdb, int cdbLen, BYTE *bu
     }
     InterlockedDecrement((LONG *)&g_aspiOut);
     CloseHandle(ev);
-    if (s.Status != PF_SS_COMP || s.TargStat != 0) {
+    /* SS_COMP is ASPI's word that the request succeeded. The target
+     * status beside it is not read: on ME a request Stor98 answers
+     * itself (INQUIRY, READ BUFFER) can come back with a stale value
+     * there, as Stor98 sets no SCSI status on that path (record 29
+     * section 16.8); the answer is still checked by what it holds */
+    if (s.Status != PF_SS_COMP) {
         return 0;
     }
     *got = len;
@@ -919,6 +935,7 @@ typedef struct s98_find_req {
     BYTE ha, target;
     volatile LONG done;
     int matches, idCount;   /* what decided an ambiguity, for the page */
+    S98_WHY why;            /* where a search that found none ended */
 } S98_FIND_REQ;
 
 typedef DWORD (WINAPI *PF_CMLOCATE)(DWORD *, char *, ULONG);
@@ -930,34 +947,44 @@ typedef DWORD (WINAPI *PF_CMLOCATE)(DWORD *, char *, ULONG);
  * none present at all (it does not answer this program), the letter's
  * only claimant counts. 1 and id; 0 when no disk of Enum\SCSI holds it;
  * -1 and *claims when more than one does and none can be told present. */
-static int devnode_of_letter(char letter, char *id, size_t cap, int *claims)
+static int devnode_of_letter(char letter, char *id, size_t cap, int *claims, int *cmAnswered)
 {
     HKEY scsi, dev, inst;
     char dn[256], in[256], v[32], full[600], one[256], live[256];
     DWORD i, j, n, type;
-    int total = 0, present = 0, answers = 0;
+    LONG rc;
+    int total = 0, present = 0, answers = 0, instances = 0, whole = 1;
     HMODULE cm = LoadLibraryA("CFGMGR32.DLL");
     PF_CMLOCATE locate = (cm != NULL) ? (PF_CMLOCATE)GetProcAddress(cm, "CM_Locate_DevNodeA") : NULL;
 
     *claims = 0;
+    *cmAnswered = 0;
     one[0] = 0;
     live[0] = 0;
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\SCSI", 0, KEY_READ, &scsi) != ERROR_SUCCESS) {
+    rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\SCSI", 0, KEY_READ, &scsi);
+    if (rc != ERROR_SUCCESS) {
         if (cm != NULL) {
             FreeLibrary(cm);
         }
+        /* no Enum\SCSI at all: no disk to ask about */
+        *cmAnswered = (rc == ERROR_FILE_NOT_FOUND);
         return 0;
     }
-    for (i = 0; RegEnumKeyA(scsi, i, dn, sizeof(dn)) == ERROR_SUCCESS; i++) {
+    for (i = 0; (rc = RegEnumKeyA(scsi, i, dn, sizeof(dn))) == ERROR_SUCCESS; i++) {
+        LONG rj;
+
         if (RegOpenKeyExA(scsi, dn, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            whole = 0;
             continue;
         }
-        for (j = 0; RegEnumKeyA(dev, j, in, sizeof(in)) == ERROR_SUCCESS; j++) {
+        for (j = 0; (rj = RegEnumKeyA(dev, j, in, sizeof(in))) == ERROR_SUCCESS; j++) {
             int holds = 0, here = 0;
 
             if (RegOpenKeyExA(dev, in, 0, KEY_READ, &inst) != ERROR_SUCCESS) {
+                whole = 0;
                 continue;
             }
+            instances++;
             n = sizeof(v);
             if (RegQueryValueExA(inst, "CurrentDriveLetterAssignment", NULL, &type, (LPBYTE)v, &n) == ERROR_SUCCESS &&
                 type == REG_SZ) {
@@ -984,12 +1011,21 @@ static int devnode_of_letter(char letter, char *id, size_t cap, int *claims)
                 }
             }
         }
+        if (rj != ERROR_NO_MORE_ITEMS) {
+            whole = 0;
+        }
         RegCloseKey(dev);
+    }
+    if (rc != ERROR_NO_MORE_ITEMS) {
+        whole = 0;
     }
     RegCloseKey(scsi);
     if (cm != NULL) {
         FreeLibrary(cm);
     }
+    /* with no instance at all, read to its end, there is no presence to
+     * ask about */
+    *cmAnswered = answers || (instances == 0 && whole);
     if (answers) {
         if (present == 1) {
             sz_cpy(id, cap, live);
@@ -1158,12 +1194,15 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
     rq->state = S98_ST_NONE;
     found[0] = 0;
     {
-        int claims = 0;
-        int r = devnode_of_letter(letter, devid, sizeof(devid), &claims);
+        int claims = 0, cmAnswered = 0;
+        int r = devnode_of_letter(letter, devid, sizeof(devid), &claims, &cmAnswered);
 
         if (r < 0) {
             rq->state = S98_ST_LETTER;
             rq->idCount = claims;
+        } else if (r == 0) {
+            s98_why_set(&rq->why, S98_WHY_NOLETTER, letter, 0, NULL);
+            rq->why.cmAnswered = cmAnswered;
         }
         if (r != 1) {
             return;
@@ -1189,6 +1228,7 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
         return;
     }
     nha = (BYTE)(si & 0xFF);
+    s98_why_set(&rq->why, S98_WHY_NOTARGET, letter, (int)nha, devid);
     for (ha = 0; ha < nha; ha++) {
         for (t = 0; t < 8; t++) {
             PF_SRB_GDEV g;
@@ -1224,6 +1264,10 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
             if (!aspi_exec(ha, t, cdb, 6, page, S98_VPD_LEN, &got) || !s98_identity(page, S98_VPD_LEN, &pci)) {
                 continue;
             }
+            if (rq->why.why == S98_WHY_NOTARGET) {
+                s98_why_set(&rq->why, S98_WHY_NOMATCH, letter, 0, devid);
+            }
+            rq->why.n++;
             cdb[1] = 0;
             cdb[2] = 0;
             cdb[4] = sizeof(std);
@@ -1233,6 +1277,9 @@ static void aspi_find(const char *folder, S98_FIND_REQ *rq)
             }
             norm((char *)std + 8, 24, v, sizeof(v));
             sz_cpy(want, sizeof(want), v);
+            if (want[0] != 0) {
+                rq->why.models++;
+            }
             if (want[0] != 0 && strstr(ndev, want) != NULL) {
                 int k;
 
@@ -1382,6 +1429,7 @@ static void s98_find(const char *folder)
         return;
     }
     g_s98state = S98_ST_NONE;
+    memset(&g_s98why, 0, sizeof(g_s98why));
     if (g_aspiHung || g_findOut) {
         g_s98state = S98_ST_DEAD;
         return;
@@ -1417,17 +1465,190 @@ static void s98_find(const char *folder)
     g_s98state = rq->state;
     g_s98matches = rq->matches;
     g_s98ids = rq->idCount;
+    g_s98why = rq->why;
     HeapFree(GetProcessHeap(), 0, rq);
 }
 
 static const char *s98_state_text(void)
 {
-    static char b[256];
+    static char b[512];
     PF_TEXT t;
 
     pf_tx_init(&t, b, sizeof(b));
-    s98_state_sentence(&t, g_s98state, g_s98matches, g_s98ids);
+    s98_state_sentence(&t, g_s98state, g_s98matches, g_s98ids, &g_s98why);
     return b;
+}
+
+/* ------------------------------------------------------------------------ */
+/* The processor's cost (record 29 section 16.2)                             */
+/* ------------------------------------------------------------------------ */
+
+/* NT: SystemProcessorPerformanceInformation, one entry a processor: idle,
+ * kernel (idle included), user, DPC and interrupt time, 100 ns units */
+typedef struct pf_sppi {
+    LARGE_INTEGER idle;
+    LARGE_INTEGER kernel;
+    LARGE_INTEGER user;
+    LARGE_INTEGER dpc;
+    LARGE_INTEGER intr;
+    ULONG count;
+} PF_SPPI;
+#define PF_SPPI_MAX         64
+/* 48 bytes an entry on x86 and x64: five times, the count, padding */
+typedef char pf_sppi_size_check[(sizeof(PF_SPPI) == 48) ? 1 : -1];
+typedef LONG (WINAPI *PF_NTQSI)(ULONG, PVOID, ULONG, PULONG);
+typedef DWORD (WINAPI *PF_GETACTIVEPROCS)(WORD);
+typedef BOOL (WINAPI *PF_GETPROCTIMES)(HANDLE, FILETIME *, FILETIME *, FILETIME *, FILETIME *);
+
+static PF_NTQSI g_ntqsi;
+static DWORD g_cpuTotal;            /* every active processor, every group */
+static PF_GETPROCTIMES g_getProcTimes;
+static int g_stat9xOn;              /* 9x: this run started the statistic */
+static HKEY g_statData;             /* 9x: PerfStats\StatData, open while a run lasts */
+
+typedef struct cpu_read {
+    int ok;
+    int count;
+    pf_u64 busy, intr;              /* 100 ns, summed over the processors */
+    int ownOk;
+    pf_u64 own;                     /* 100 ns, this process */
+} CPU_READ;
+
+/* 9x: the time-weighted sum of KERNEL\CPUUsage over a step */
+typedef struct cpu9x {
+    int ok;
+    pf_u64 prev;                    /* the counter at the last reading */
+    pf_u64 busyUs;
+    int readings;
+} CPU9X;
+
+static PF_SPPI g_sppi[PF_SPPI_MAX];
+
+static pf_u64 li64(LARGE_INTEGER v)
+{
+    return (pf_u64)v.QuadPart;
+}
+
+static pf_u64 ft64(FILETIME f)
+{
+    return ((pf_u64)f.dwHighDateTime << 32) | (pf_u64)f.dwLowDateTime;
+}
+
+static void cpu_nt_read(CPU_READ *c)
+{
+    ULONG got = 0;
+    int i, n;
+
+    memset(c, 0, sizeof(*c));
+    if (g_ntqsi != NULL && g_ntqsi(8, g_sppi, (ULONG)sizeof(g_sppi), &got) >= 0 && got != 0 &&
+        got % sizeof(PF_SPPI) == 0) {
+        n = (int)(got / sizeof(PF_SPPI));
+        /* class 8 answers for the caller's processor group alone: a
+         * part of the system is no figure (record 29 section 16.2) */
+        if ((DWORD)n != g_cpuTotal) {
+            return;
+        }
+        for (i = 0; i < n; i++) {
+            pf_u64 k = li64(g_sppi[i].kernel), u = li64(g_sppi[i].user), id = li64(g_sppi[i].idle);
+
+            /* kernel time holds idle time; a processor whose idle time
+             * exceeds it gives no reading rather than a negative one */
+            if (id > k) {
+                return;
+            }
+            c->busy += k - id + u;
+            c->intr += li64(g_sppi[i].dpc) + li64(g_sppi[i].intr);
+        }
+        c->count = n;
+        c->ok = 1;
+    }
+    if (g_getProcTimes != NULL) {
+        FILETIME a, b, k, u;
+
+        if (g_getProcTimes(GetCurrentProcess(), &a, &b, &k, &u)) {
+            c->own = ft64(k) + ft64(u);
+            c->ownOk = 1;
+        }
+    }
+}
+
+static int cpu9x_value(DWORD *pct)
+{
+    DWORD type, v = 0, n = sizeof(v);
+
+    if (g_statData == NULL ||
+        RegQueryValueExA(g_statData, "KERNEL\\CPUUsage", NULL, &type, (LPBYTE)&v, &n) != ERROR_SUCCESS ||
+        n != sizeof(v) || v > 100) {
+        return 0;
+    }
+    *pct = v;
+    return 1;
+}
+
+/* 9x: start Windows' own statistic for the run, or stop it */
+static void cpu9x_run(int start)
+{
+    HKEY k;
+    DWORD type, v, n = sizeof(v);
+
+    LONG rc = ERROR_FILE_NOT_FOUND;
+
+    if (g_os != PF_OS_9X || (!start && !g_stat9xOn) || (start && g_stat9xOn)) {
+        return;
+    }
+    if (!start && g_statData != NULL) {
+        RegCloseKey(g_statData);
+        g_statData = NULL;
+    }
+    /* the query of the value, not the opening of the key, starts or stops
+     * the collection (KB Q174631) */
+    if (RegOpenKeyExA(HKEY_DYN_DATA, start ? "PerfStats\\StartStat" : "PerfStats\\StopStat", 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        rc = RegQueryValueExA(k, "KERNEL\\CPUUsage", NULL, &type, (LPBYTE)&v, &n);
+        RegCloseKey(k);
+    }
+    if (!start) {
+        g_stat9xOn = 0;
+        return;
+    }
+    if (rc != ERROR_SUCCESS) {
+        return;     /* not started: no figure, and nothing to stop */
+    }
+    g_stat9xOn = 1;
+    if (RegOpenKeyExA(HKEY_DYN_DATA, "PerfStats\\StatData", 0, KEY_READ, &g_statData) != ERROR_SUCCESS) {
+        g_statData = NULL;
+    }
+}
+
+/* 9x: a reading at the step's start (its value is not counted), then one
+ * at every wake of the controlling thread and at the end */
+static void cpu9x_begin(CPU9X *s)
+{
+    DWORD pct;
+
+    memset(s, 0, sizeof(*s));
+    if (g_os == PF_OS_9X && g_highRes && cpu9x_value(&pct)) {
+        s->ok = 1;
+        s->prev = qpc_now();
+    }
+}
+
+static void cpu9x_sample(CPU9X *s)
+{
+    DWORD pct;
+    pf_u64 now;
+
+    if (!s->ok) {
+        return;
+    }
+    now = qpc_now();
+    if (now < s->prev || !cpu9x_value(&pct)) {
+        s->ok = 0;
+        return;
+    }
+    s->busyUs += ticks_us(now - s->prev) * (pf_u64)pct / 100u;
+    s->prev = now;
+    s->readings++;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1457,6 +1678,11 @@ typedef struct worker {
     pf_u32 bad;
     pf_u64 inflight[PF_MAX_DEPTH];
     int busy[PF_MAX_DEPTH];
+    /* the step's course (record 29 section 16.4) */
+    pf_u64 lastIssue;       /* the counter at the last request's issue; 0 none */
+    pf_u64 ended;           /* the counter as the worker ended */
+    DWORD lastCheck;        /* the tick count at the last deadline check */
+    int checked;
 } WORKER;
 
 struct run {
@@ -1569,9 +1795,15 @@ static int pick(WORKER *w, pf_u64 *off, int write, int depth)
     }
     /* A timed step's end is also the workers' to see: on 98 SE and ME a
      * synchronous request may keep the controller from running on time */
-    if (r->timed && (LONG)(GetTickCount() - r->deadline) >= 0) {
-        InterlockedExchange((LONG *)&r->issueEnd, 1);
-        return 0;
+    if (r->timed) {
+        DWORD now = GetTickCount();
+
+        w->lastCheck = now;
+        w->checked = 1;
+        if ((LONG)(now - r->deadline) >= 0) {
+            InterlockedExchange((LONG *)&r->issueEnd, 1);
+            return 0;
+        }
     }
     if (s->budget != 0 && w->budgetLeft < s->size) {
         return 0;
@@ -1662,7 +1894,7 @@ static void complete_one(WORKER *w, unsigned char *buf, pf_u64 off, pf_u32 gen, 
 {
     RUN *r = w->run;
     const PF_STEP *s = r->step;
-    pf_u64 us = since_us(issued, &w->timerBack);
+    pf_u64 us = g_p.noLatency ? 0 : since_us(issued, &w->timerBack);
 
     if (!ok || got != s->size) {
         if (write) {
@@ -1683,7 +1915,9 @@ static void complete_one(WORKER *w, unsigned char *buf, pf_u64 off, pf_u32 gen, 
     }
     w->bytes += s->size;
     w->reqs++;
-    pf_lat_add(&w->lat, us);
+    if (!g_p.noLatency) {
+        pf_lat_add(&w->lat, us);
+    }
 }
 
 static void worker_sync(WORKER *w)
@@ -1712,7 +1946,8 @@ static void worker_sync(WORKER *w)
             worker_fail(w, GetLastError());
             break;
         }
-        t0 = qpc_now();
+        t0 = g_p.noLatency ? 0 : qpc_now();
+        w->lastIssue = t0;
         ok = write ? WriteFile(w->h, buf, s->size, &got, NULL) : ReadFile(w->h, buf, s->size, &got, NULL);
         if (!ok || got != s->size) {
             DWORD e = ok ? ERROR_HANDLE_EOF : GetLastError();
@@ -1787,7 +2022,8 @@ static void worker_async(WORKER *w)
             ResetEvent(ov[k].hEvent);
             w->inflight[k] = off;
             gens[k] = gen;
-            issued[k] = qpc_now();
+            issued[k] = g_p.noLatency ? 0 : qpc_now();
+            w->lastIssue = issued[k];
             ok = write ? WriteFile(w->h, buf, s->size, &got, &ov[k]) : ReadFile(w->h, buf, s->size, &got, &ov[k]);
             if (!ok && GetLastError() != ERROR_IO_PENDING) {
                 DWORD e = GetLastError();
@@ -1898,6 +2134,7 @@ static unsigned __stdcall worker_main(void *arg)
     } else {
         worker_sync(w);
     }
+    w->ended = qpc_now();
     return 0;
 }
 
@@ -2419,6 +2656,8 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
     unsigned id;
     pf_u64 part = r->region / (pf_u64)nt;
     DWORD thErr = 0;
+    CPU_READ c0, c1;
+    CPU9X s9;
 
     if (gotBefore != NULL) {
         *gotBefore = 0;
@@ -2503,20 +2742,44 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
     }
     r->timed = (s->budget == 0);
     r->deadline = GetTickCount() + (DWORD)s->timeSec * 1000u;
+    if (g_os == PF_OS_NT) {
+        cpu_nt_read(&c0);
+    }
+    cpu9x_begin(&s9);
     k0 = GetTickCount();
     t0 = qpc_now();
     SetEvent(r->go);
     if (s->budget == 0) {
         HANDLE ends[2];
+        DWORD limit = (DWORD)s->timeSec * 1000u;
 
         ends[0] = r->stepEnd;
         ends[1] = g_stopEvent;
-        WaitForMultipleObjects(2, ends, FALSE, (DWORD)s->timeSec * 1000u);
+        /* on 9x the controller wakes every 250 ms to read the processor
+         * statistic (record 29 section 16.2) */
+        for (;;) {
+            DWORD el = GetTickCount() - k0;
+            DWORD wt;
+
+            if (el >= limit) {
+                break;
+            }
+            wt = limit - el;
+            if (s9.ok && wt > 250u) {
+                wt = 250u;
+            }
+            if (WaitForMultipleObjects(2, ends, FALSE, wt) != WAIT_TIMEOUT) {
+                break;
+            }
+            cpu9x_sample(&s9);
+        }
         InterlockedExchange((LONG *)&r->issueEnd, 1);
     }
     for (t = 0; t < nt; t++) {
         if (th[t] != NULL) {
-            WaitForSingleObject(th[t], INFINITE);
+            while (WaitForSingleObject(th[t], s9.ok ? 250u : INFINITE) == WAIT_TIMEOUT) {
+                cpu9x_sample(&s9);
+            }
             CloseHandle(th[t]);
         }
     }
@@ -2532,6 +2795,10 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
     }
     t1 = qpc_now();
     k1 = GetTickCount();
+    cpu9x_sample(&s9);
+    if (g_os == PF_OS_NT) {
+        cpu_nt_read(&c1);
+    }
     if (after != NULL && gotAfter != NULL && gotBefore != NULL && *gotBefore) {
         *gotAfter = s98_read(after);
     }
@@ -2580,6 +2847,53 @@ static void run_step(RUN *r, int i, PF_RESULT *res, S98_ANSWER *before, int *got
         /* the counter is not to be trusted: no latency, no stamping share */
         pf_lat_init(&res->lat);
         res->stampUs = 0;
+    }
+    /* the processor figures (record 29 section 16.2) */
+    if (g_os == PF_OS_NT && c0.ok && c1.ok && c0.count == c1.count && c1.busy >= c0.busy && c1.intr >= c0.intr) {
+        res->cpuKind = PF_CPU_NT;
+        res->cpuCount = c1.count;
+        res->cpuBusyUs = (c1.busy - c0.busy) / 10u;
+        res->cpuIntUs = (c1.intr - c0.intr) / 10u;
+        if (c0.ownOk && c1.ownOk && c1.own >= c0.own) {
+            res->cpuOwnUs = (c1.own - c0.own) / 10u;
+            res->haveOwn = 1;
+        }
+    } else if (g_os == PF_OS_9X && s9.ok && s9.readings > 0 && !res->timerBad) {
+        res->cpuKind = PF_CPU_9X;
+        res->cpuCount = 1;
+        res->cpuBusyUs = s9.busyUs;
+    }
+    /* the step's course (record 29 section 16.4) */
+    /* only where one counter serves every processor: before Vista on SMP
+     * the controller and the workers run on different processors, whose
+     * counters may differ (record 29 section 3.6) */
+    if (g_highRes && !res->timerBad && !g_p.noLatency && !(g_os == PF_OS_NT && g_preVista && g_ncpu > 1)) {
+        pf_u64 li = 0, en = 0;
+        DWORD lc = k0;
+        int any = 0;
+
+        for (t = 0; t < nt; t++) {
+            WORKER *w = &r->w[t];
+
+            if (w->lastIssue > li) {
+                li = w->lastIssue;
+            }
+            if (w->ended > en) {
+                en = w->ended;
+            }
+            if (w->checked && (LONG)(w->lastCheck - lc) > 0) {
+                lc = w->lastCheck;
+            }
+            any |= w->checked;
+        }
+        if (en >= t0 && (li == 0 || li >= t0)) {
+            res->issuedAny = (li != 0);
+            res->lastIssueUs = li != 0 ? ticks_us(li - t0) : 0;
+            res->workersEndUs = ticks_us(en - t0);
+            res->checkedAny = any;
+            res->lastCheckMs = any ? (pf_u64)(DWORD)(lc - k0) : 0;
+            res->haveCourse = 1;
+        }
     }
     res->cpuLimited = pf_cpu_limited(res->stampUs, res->us);
     if (res->status == PF_ST_OK && res->badUnits != 0) {
@@ -2751,6 +3065,7 @@ static unsigned __stdcall run_main(void *arg)
     }
     code = 0;
     r->s98ok = 0;
+    cpu9x_run(1);
     if (g_s98state == S98_ST_OK) {
         post_log("Stor98 drives this disk; its counters are read before and after each test.");
     }
@@ -2892,6 +3207,7 @@ done:
     if (why[0] != 0) {
         post_log(why);
     }
+    cpu9x_run(0);
     cleanup_file(r);
     free_buffers(r);
     if (g_setExec != NULL) {
@@ -2940,7 +3256,19 @@ static void system_text(char *out, size_t cap)
 #ifdef _WIN64
     sz_cat(out, cap, " x64");
 #else
-    sz_cat(out, cap, g_os == PF_OS_9X ? "" : " x86");
+    if (g_os != PF_OS_9X) {
+        /* this 32-bit image alone on a 64-bit Windows (no XHCIPF64.EXE
+         * beside it) runs under WOW64: the system is not x86; kept short,
+         * the report's System: line is not wrapped (79 columns) */
+        PF_ISWOW64 isw = (PF_ISWOW64)GetProcAddress(GetModuleHandleA("KERNEL32.DLL"), "IsWow64Process");
+        BOOL wow = FALSE;
+
+        if (isw != NULL && isw(GetCurrentProcess(), &wow) && wow) {
+            sz_cat(out, cap, " 64-bit (WOW64)");
+        } else {
+            sz_cat(out, cap, " x86");
+        }
+    }
 #endif
 }
 
@@ -2983,7 +3311,7 @@ static char *build_report(size_t *lenOut)
         PF_TEXT lt;
 
         pf_tx_init(&lt, pages, pcap);
-        s98_report_line(&lt, g_runS98state, g_runS98matches, g_runS98ids);
+        s98_report_line(&lt, g_runS98state, g_runS98matches, g_runS98ids, &g_runS98why);
     }
     memset(&ri, 0, sizeof(ri));
     ri.toolVersion = XHCIPERF_VERSION;
@@ -3100,7 +3428,12 @@ static void cell_text(int step, char *big, size_t bcap, char *sub, size_t scap)
         sz_cat(sub, scap, ", not accepted");
     }
     if (sh.cpuLimited) {
-        sz_cat(sub, scap, ", cpu");
+        sz_cat(sub, scap, ", stamping");
+    }
+    pf_cpu_short(&sh, a, sizeof(a));
+    if (a[0] != 0) {
+        sz_cat(sub, scap, ", ");
+        sz_cat(sub, scap, a);
     }
     sv = saved_row(step);
     if (sv != NULL) {
@@ -3121,19 +3454,19 @@ static void cell_text(int step, char *big, size_t bcap, char *sub, size_t scap)
 
 static void paint_summary(HDC dc, RECT *rc)
 {
-    int i, j, y = 4, rowh = 44;
-    int colw = (rc->right - 200) / 2;
+    int i, j, y = sc(4), rowh = sc(44);
+    int colw = (rc->right - sc(200)) / 2;
     char big[40], sub[120], hdr[80];
     HFONT old = (HFONT)SelectObject(dc, g_font);
     int shown[PF_MAX_STEPS];
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
-    TextOutA(dc, 210, y, "Write", 5);
-    TextOutA(dc, 210 + colw, y, "Read", 4);
+    TextOutA(dc, sc(210), y, "Write", 5);
+    TextOutA(dc, sc(210) + colw, y, "Read", 4);
     sz_cpy(hdr, sizeof(hdr), g_p.unitMiB ? "MiB/s" : "MB/s");
-    TextOutA(dc, 8, y, hdr, (int)strlen(hdr));
-    y += 20;
+    TextOutA(dc, sc(8), y, hdr, (int)strlen(hdr));
+    y += sc(20);
     memset(shown, 0, sizeof(shown));
     for (i = 0; i < g_plan.nsteps; i++) {
         int wr = -1, rd = -1;
@@ -3157,25 +3490,25 @@ static void paint_summary(HDC dc, RECT *rc)
         pf_test_long(g_plan.steps[i].kind, g_plan.steps[i].size, g_plan.steps[i].depth, g_plan.steps[i].threads, lbl,
                      sizeof(lbl));
         SelectObject(dc, g_font);
-        cell.left = 4;
+        cell.left = sc(4);
         cell.top = y;
-        cell.right = 200;
-        cell.bottom = y + rowh - 4;
+        cell.right = sc(200);
+        cell.bottom = y + rowh - sc(4);
         FillRect(dc, &cell, GetSysColorBrush(COLOR_BTNFACE));
-        cell.left += 4;
+        cell.left += sc(4);
         DrawTextA(dc, lbl, -1, &cell, DT_LEFT | DT_WORDBREAK);
         if ((g_runP.bufMask & (g_runP.bufMask - 1)) != 0) {
-            cell.top += 28;
+            cell.top += sc(28);
             DrawTextA(dc, pf_buf_name(g_plan.steps[i].buffer), -1, &cell, DT_LEFT);
         }
         for (j = 0; j < 2; j++) {
             int st = j == 0 ? wr : rd;
             RECT c;
 
-            c.left = 206 + j * colw;
+            c.left = sc(206) + j * colw;
             c.top = y;
-            c.right = c.left + colw - 6;
-            c.bottom = y + rowh - 4;
+            c.right = c.left + colw - sc(6);
+            c.bottom = y + rowh - sc(4);
             FillRect(dc, &c, GetSysColorBrush(COLOR_WINDOW));
             FrameRect(dc, &c, GetSysColorBrush(COLOR_BTNSHADOW));
             if (st < 0) {
@@ -3183,10 +3516,10 @@ static void paint_summary(HDC dc, RECT *rc)
             }
             cell_text(st, big, sizeof(big), sub, sizeof(sub));
             SelectObject(dc, g_big);
-            c.right -= 6;
+            c.right -= sc(6);
             DrawTextA(dc, big, -1, &c, DT_RIGHT | DT_TOP | DT_SINGLELINE);
             SelectObject(dc, g_font);
-            c.top += 26;
+            c.top += sc(26);
             DrawTextA(dc, sub, -1, &c, DT_RIGHT | DT_TOP | DT_SINGLELINE);
         }
         y += rowh;
@@ -3213,9 +3546,9 @@ static int sweep_first(int i)
 
 static void paint_sweep(HDC dc, RECT *rc)
 {
-    int i, y = 4, barh = 7;
+    int i, y = sc(4), barh = sc(7);
     pf_u64 maxv = 1, scale;
-    int x0 = 140, w = rc->right - x0 - 110;
+    int x0 = sc(140), w = rc->right - x0 - sc(110);
     HFONT old = (HFONT)SelectObject(dc, g_font);
     char lbl[64], v[32];
     HBRUSH rb = GetSysColorBrush(COLOR_HIGHLIGHT);
@@ -3242,8 +3575,8 @@ static void paint_sweep(HDC dc, RECT *rc)
     sz_cat(lbl, sizeof(lbl), g_p.unitMiB ? "MiB/s; axis " : "MB/s; axis ");
     pf_fmt_tenths(scale, v, sizeof(v));
     sz_cat(lbl, sizeof(lbl), v);
-    TextOutA(dc, 8, y, lbl, (int)strlen(lbl));
-    y += 18;
+    TextOutA(dc, sc(8), y, lbl, (int)strlen(lbl));
+    y += sc(18);
     for (i = 0; i < g_plan.nsteps && y < rc->bottom; i++) {
         const PF_STEP *s = &g_plan.steps[i];
         RECT b;
@@ -3256,7 +3589,7 @@ static void paint_sweep(HDC dc, RECT *rc)
                 sz_cat(lbl, sizeof(lbl), " ");
                 sz_cat(lbl, sizeof(lbl), pf_buf_name(s->buffer));
             }
-            TextOutA(dc, 8, y, lbl, (int)strlen(lbl));
+            TextOutA(dc, sc(8), y, lbl, (int)strlen(lbl));
         }
         len = (int)((sh.rate10 * (pf_u64)w) / scale);
         b.left = x0;
@@ -3277,10 +3610,10 @@ static void paint_sweep(HDC dc, RECT *rc)
                 sz_cat(v, sizeof(v), v[0] != 0 ? " " : "");
                 sz_cat(v, sizeof(v), w);
             }
-            TextOutA(dc, x0 + len + 4, b.top - 3, v, (int)strlen(v));
+            TextOutA(dc, x0 + len + sc(4), b.top - sc(3), v, (int)strlen(v));
         }
         if (sweep_first(i + 1)) {
-            y += 2 * barh + 6;
+            y += 2 * barh + sc(6);
         }
     }
     DeleteObject(wb);
@@ -3302,7 +3635,7 @@ static LRESULT CALLBACK view_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 
             SelectObject(dc, g_font);
             SetBkMode(dc, TRANSPARENT);
-            TextOutA(dc, 8, 8, s, (int)strlen(s));
+            TextOutA(dc, sc(8), sc(8), s, (int)strlen(s));
         } else if (g_tabSel == 1 || g_runP.sweep) {
             paint_sweep(dc, &rc);
         } else {
@@ -3329,7 +3662,8 @@ static HWND ctl(int id)
 
 static HWND mk(const char *cls, const char *text, DWORD style, int x, int y, int w, int h, int id)
 {
-    HWND c = CreateWindowExA(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, g_wnd, (HMENU)(INT_PTR)id,
+    HWND c = CreateWindowExA(0, cls, text, WS_CHILD | WS_VISIBLE | style, sc(x), sc(y), sc(w), sc(h), g_wnd,
+                             (HMENU)(INT_PTR)id,
                              g_inst, NULL);
 
     SendMessageA(c, WM_SETFONT, (WPARAM)g_font, TRUE);
@@ -3447,6 +3781,7 @@ static void update_estimate(void)
     PF_PLAN pl;
     char why[400], t[440];
     char canon[MAX_PATH];
+    int refused = 0;
 
     if (g_running) {
         return;
@@ -3466,32 +3801,40 @@ static void update_estimate(void)
             }
         } else {
             sz_cpy(t, sizeof(t), why);
+            refused = 1;
         }
     } else {
         sz_cpy(t, sizeof(t), why);
+        refused = 1;
     }
     SetWindowTextA(ctl(IDC_ESTIMATE), t);
+    /* a refusal longer than the line is whole in the status bar */
+    SetWindowTextA(g_status, refused ? t : "Ready");
 }
 
 static void layout(void)
 {
     RECT rc, tr;
-    int y0 = 116;
+    int y0 = sc(116);
 
     GetClientRect(g_wnd, &rc);
     SendMessageA(g_status, WM_SIZE, 0, 0);
     GetWindowRect(g_status, &tr);
-    MoveWindow(g_tab, 4, y0, rc.right - 8, rc.bottom - y0 - (tr.bottom - tr.top) - 4, TRUE);
+    MoveWindow(g_tab, sc(4), y0, rc.right - sc(8), rc.bottom - y0 - (tr.bottom - tr.top) - sc(4), TRUE);
     GetClientRect(g_tab, &tr);
     TabCtrl_AdjustRect(g_tab, FALSE, &tr);
     MapWindowPoints(g_tab, g_wnd, (POINT *)&tr, 2);
     MoveWindow(g_view, tr.left, tr.top, tr.right - tr.left, tr.bottom - tr.top, TRUE);
     MoveWindow(g_disk, tr.left, tr.top, tr.right - tr.left, tr.bottom - tr.top, TRUE);
-    MoveWindow(g_s98, tr.left, tr.top + 28, tr.right - tr.left, tr.bottom - tr.top - 28, TRUE);
-    MoveWindow(g_s98test, tr.left, tr.top + 2, 300, 200, TRUE);
-    MoveWindow(g_s98admin, tr.left + 306, tr.top + 2, 180, 23, TRUE);
+    MoveWindow(g_s98, tr.left, tr.top + sc(28), tr.right - tr.left, tr.bottom - tr.top - sc(28), TRUE);
+    MoveWindow(g_s98test, tr.left, tr.top + sc(2), sc(300), sc(200), TRUE);
+    MoveWindow(g_s98admin, tr.left + sc(306), tr.top + sc(2), sc(180), sc(23), TRUE);
     MoveWindow(g_log, tr.left, tr.top, tr.right - tr.left, tr.bottom - tr.top, TRUE);
-    MoveWindow(ctl(IDC_ESTIMATE), 4, 94, rc.right - 8, 18, TRUE);
+    /* the line ends before Start: wider, it painted over Start and Stop
+     * (record 29 section 16.1) */
+    GetWindowRect(ctl(IDC_START), &tr);
+    MapWindowPoints(NULL, g_wnd, (POINT *)&tr, 2);
+    MoveWindow(ctl(IDC_ESTIMATE), sc(4), sc(94), tr.left - sc(8) > sc(4) ? tr.left - sc(8) : sc(4), sc(18), TRUE);
 }
 
 static void show_tab(void)
@@ -3583,13 +3926,17 @@ static void save_settings(void)
     HKEY k;
     unsigned char b[8 + sizeof(PF_PARAMS)];
     DWORD n = (DWORD)sizeof(PF_PARAMS);
+    PF_PARAMS sp;
 
     if (RegCreateKeyA(HKEY_CURRENT_USER, PF_KEY, &k) != ERROR_SUCCESS) {
         return;
     }
     memcpy(b, "XPP1", 4);
     memcpy(b + 4, &n, 4);
-    memcpy(b + 8, &g_p, sizeof(PF_PARAMS));
+    /* /nolatency is a command line's alone: the window has no box for it */
+    sp = g_p;
+    sp.noLatency = 0;
+    memcpy(b + 8, &sp, sizeof(PF_PARAMS));
     RegSetValueExA(k, "Params", 0, REG_BINARY, b, sizeof(b));
     RegSetValueExA(k, "Folder", 0, REG_SZ, (const BYTE *)g_folder, (DWORD)strlen(g_folder) + 1);
     RegCloseKey(k);
@@ -3618,6 +3965,7 @@ static void load_settings(void)
         e.os = g_os;
         e.sector = 512;
         e.freeUser = e.freeTotal = e.volumeBytes = (pf_u64)1 << 50;
+        p.noLatency = 0;
         if (p.ntests >= 0 && p.ntests <= PF_MAX_TESTS && pf_plan(&p, &e, &pl, why, sizeof(why)) == PF_OK) {
             g_p = p;
         }
@@ -3809,6 +4157,7 @@ static void start_run(void)
     g_runS98state = g_s98state;
     g_runS98matches = g_s98matches;
     g_runS98ids = g_s98ids;
+    g_runS98why = g_s98why;
     memset(g_res, 0, sizeof(g_res));
     g_runWhy[0] = 0;
     memset(g_s98steps, 0, sizeof(g_s98steps));
@@ -4059,7 +4408,7 @@ static BOOL CALLBACK about_proc(HWND d, UINT m, WPARAM wp, LPARAM lp)
     (void)lp;
     if (m == WM_INITDIALOG) {
         SetDlgItemTextA(d, IDC_ABOUT_TEXT, "xHCI98 Disk Benchmark " XHCIPERF_VERSION "\r\n"
-                        "Part of xHCI98. Free software under the GNU General Public License, version 2.\r\n"
+                        "Part of xHCI98. Free software under the GNU GPL, version 2 or later.\r\n"
                         "Laid out after the familiar disk benchmarks; none of their code, names or artwork is used.");
         return TRUE;
     }
@@ -4107,7 +4456,7 @@ static void create_controls(void)
         combo_add(IDC_PRESET, pf_preset_name(i));
     }
     combo_add(IDC_PRESET, "Custom");
-    SendMessageA(ctl(IDC_PRESET), CB_SETDROPPEDWIDTH, 260, 0);
+    SendMessageA(ctl(IDC_PRESET), CB_SETDROPPEDWIDTH, sc(260), 0);
 
     mk("STATIC", "File:", 0, 6, 36, 30, 16, -1);
     mk("COMBOBOX", "", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 38, 33, 84, 200, IDC_FSIZE);
@@ -4175,7 +4524,7 @@ static void create_controls(void)
         combo_add(IDC_THREADS, s);
     }
     mk("BUTTON", "More...", BS_PUSHBUTTON | WS_TABSTOP, 572, 60, 58, 22, IDC_MORE);
-    mk("STATIC", "", SS_LEFTNOWORDWRAP, 4, 94, 500, 18, IDC_ESTIMATE);
+    mk("STATIC", "", SS_LEFTNOWORDWRAP | WS_CLIPSIBLINGS, 4, 94, 498, 18, IDC_ESTIMATE);
     mk("BUTTON", "Start", BS_DEFPUSHBUTTON | WS_TABSTOP, 506, 90, 60, 23, IDC_START);
     mk("BUTTON", "Stop", BS_PUSHBUTTON | WS_TABSTOP, 570, 90, 60, 23, IDC_STOP);
     EnableWindow(ctl(IDC_STOP), FALSE);
@@ -4226,8 +4575,8 @@ static LRESULT CALLBACK main_proc(HWND w, UINT m, WPARAM wp, LPARAM lp)
         layout();
         return 0;
     case WM_GETMINMAXINFO:
-        ((MINMAXINFO *)lp)->ptMinTrackSize.x = 640;
-        ((MINMAXINFO *)lp)->ptMinTrackSize.y = 440;
+        ((MINMAXINFO *)lp)->ptMinTrackSize.x = sc(640);
+        ((MINMAXINFO *)lp)->ptMinTrackSize.y = sc(440);
         return 0;
     case WM_NOTIFY:
         if (((NMHDR *)lp)->hwndFrom == g_tab && ((NMHDR *)lp)->code == TCN_SELCHANGE) {
@@ -4516,6 +4865,20 @@ static int selftest(void)
             res[i * PF_MAX_PASSES].reqs = 99999999u;
             pf_lat_init(&res[i * PF_MAX_PASSES].lat);
             pf_lat_add(&res[i * PF_MAX_PASSES].lat, 1234567u);
+            /* the processor figures and an overrun at their longest */
+            res[i * PF_MAX_PASSES].cpuKind = (i % 2) ? PF_CPU_9X : PF_CPU_NT;
+            res[i * PF_MAX_PASSES].cpuCount = (i % 2) ? 1 : 32;
+            res[i * PF_MAX_PASSES].cpuBusyUs = 999999u;
+            res[i * PF_MAX_PASSES].cpuIntUs = 99999u;
+            res[i * PF_MAX_PASSES].cpuOwnUs = 9999u;
+            res[i * PF_MAX_PASSES].haveOwn = 1;
+            if (i == 0 && pl.steps[0].budget == 0) {
+                res[0].us = (pf_u64)(pl.steps[0].timeSec + 99) * 1000000u;
+                res[0].lastIssueUs = 59999999u;
+                res[0].workersEndUs = 99999999u;
+                res[0].lastCheckMs = 99999u;
+                res[0].haveCourse = 1;
+            }
         }
         memset(&ri, 0, sizeof(ri));
         ri.toolVersion = XHCIPERF_VERSION;
@@ -4640,6 +5003,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
         g_freq = (pf_u64)f.QuadPart;
     }
     g_getFreeEx = (PF_GETFREEEX)GetProcAddress(k32, "GetDiskFreeSpaceExA");
+    if (g_os == PF_OS_NT) {
+        HMODULE nt = GetModuleHandleA("NTDLL.DLL");
+
+        PF_GETACTIVEPROCS gap = (PF_GETACTIVEPROCS)GetProcAddress(k32, "GetActiveProcessorCount");
+
+        g_ntqsi = (nt != NULL) ? (PF_NTQSI)GetProcAddress(nt, "NtQuerySystemInformation") : NULL;
+        g_getProcTimes = (PF_GETPROCTIMES)GetProcAddress(k32, "GetProcessTimes");
+        g_cpuTotal = (gap != NULL) ? gap(0xFFFF) : si.dwNumberOfProcessors;
+    }
     g_getLongPath = (PF_GETLONGPATH)GetProcAddress(k32, "GetLongPathNameA");
     g_cancelIo = (PF_CANCELIO)GetProcAddress(k32, "CancelIo");
     g_setExec = (PF_SETEXEC)GetProcAddress(k32, "SetThreadExecutionState");
@@ -4696,6 +5068,25 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     lf.lfHeight = lf.lfHeight * 2;
     lf.lfWeight = FW_BOLD;
     g_big = CreateFontIndirectA(&lf);
+    {
+        HDC sdc = GetDC(NULL);
+        RECT wa;
+        int dpi = (sdc != NULL) ? GetDeviceCaps(sdc, LOGPIXELSY) : 96;
+
+        if (sdc != NULL) {
+            ReleaseDC(NULL, sdc);
+        }
+        g_scale = dpi > 96 ? dpi * 100 / 96 : 100;
+        if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+            /* never larger than the work area holds */
+            while (g_scale > 100 && (sc(648) > wa.right - wa.left || sc(476) > wa.bottom - wa.top)) {
+                g_scale -= 5;
+            }
+            if (g_scale < 100) {
+                g_scale = 100;
+            }
+        }
+    }
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = view_proc;
@@ -4713,7 +5104,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     wc.lpszClassName = "XhciPerfMain";
     RegisterClassA(&wc);
     w = CreateWindowExA(0, "XhciPerfMain", "xHCI98 Disk Benchmark", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                        648, 476, NULL, NULL, inst, NULL);
+                        sc(648), sc(476), NULL, NULL, inst, NULL);
     if (w == NULL) {
         return 2;
     }

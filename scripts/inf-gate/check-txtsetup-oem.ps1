@@ -71,7 +71,10 @@ families.
   OEM-IDS  [HardwareIds.scsi.XHCI98] maps exactly the INF's model ids
            (PCI\CC_0C0330, USB\XHCI98_ROOT_HUB, USB\XHCI98_HUB,
            USB\XHCI98_HUB30 and USB\XHCI98_COMPOSITE) to that service; an old
-           XHCI98\ row is not one of them (task 38.8, a clean move).
+           XHCI98\ row is not one of them (task 38.8, a clean move). A
+           controller's name line (task 44.5: PCI\VEN_xxxx&DEV_xxxx alone,
+           installing the class line's own section) is that line's alias
+           and maps nothing of its own: the class id brings the driver.
            OEM-USBID: no USB\ id but those four bases of the bus's own (under
            USB\ since 2.4.0.0; design record 13 section 10.13) - USB\ROOT_HUB,
            USB\COMPOSITE and the class ids belong to Setup's own drivers
@@ -264,6 +267,15 @@ function Get-InfFacts {
         if ($line -match '^AddService\s*=\s*([^,\s]+)' -and $matches[1] -ine "xhcihlpr") { $services[$matches[1].ToLowerInvariant()] = $true }
     }
     $current = ""
+    # The controller's name lines (task 44.5; the INF gate's HCD-DESC): a
+    # PCI\VEN_xxxx&DEV_xxxx line of the 32-bit file's undecorated section
+    # installs the class line's own section, under its product's name, so
+    # the class id this file maps already brings xhci98.sys to that device
+    # in text mode (its compatible ids hold PCI\CC_0C0330). Such a line
+    # names no id of its own here; one whose section is not the class
+    # line's still does, and is then refused unmapped.
+    $classSect = @{}
+    $aliases = @()
     foreach ($rawLine in ($Text -split "`r`n")) {
         $line = $rawLine
         $semi = $line.IndexOf(';')
@@ -271,11 +283,19 @@ function Get-InfFacts {
         $line = $line.Trim()
         if ($line -eq "") { continue }
         if ($line -match '^\[(.+)\]$') { $current = $matches[1].Trim(); continue }
-        if ($mfgTargets -contains $current -and $line -match '=\s*[^,]+,\s*(.+)$') {
-            foreach ($id in @($matches[1].Split(',') | ForEach-Object { $_.Trim() })) {
-                if ($id -ne "") { $ids[$id.ToUpperInvariant()] = $true }
+        if ($mfgTargets -contains $current -and $line -match '=\s*([^,]+),\s*(.+)$') {
+            $sect = $matches[1].Trim()
+            $lineIds = @($matches[2].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+            if ($lineIds.Count -eq 1 -and $lineIds[0] -ieq "PCI\CC_0C0330") { $classSect[($current + "|" + $sect).ToLowerInvariant()] = $true }
+            if ($lineIds.Count -eq 1 -and $lineIds[0] -cmatch '^PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}$') {
+                $aliases += @{ Key = ($current + "|" + $sect).ToLowerInvariant(); Id = $lineIds[0].ToUpperInvariant() }
+                continue
             }
+            foreach ($id in $lineIds) { $ids[$id.ToUpperInvariant()] = $true }
         }
+    }
+    foreach ($a in $aliases) {
+        if (-not $classSect.ContainsKey($a.Key)) { $ids[$a.Id] = $true }
     }
     return @{ Services = $services; Ids = $ids }
 }
@@ -779,7 +799,7 @@ if ($SelfTest) {
         $word = if ($profile -eq "amd64") { "x64" } else { "32-bit" }
         $cases = @(
             @{ Rule = "FILE-EOL";     Text = $text.Replace("`r`n[Defaults]", "`n[Defaults]") },
-            @{ Rule = "FILE-ASCII";   Text = $text.Replace('= "xHCI98 USB 3.x Host', ('= "' + [char]0xE9 + 'xHCI98 USB 3.x Host')) },
+            @{ Rule = "FILE-ASCII";   Text = $text.Replace('= "xHCI98 USB 3 Controller', ('= "' + [char]0xE9 + 'xHCI98 USB 3 Controller')) },
             @{ Rule = "FILE-CTRL";    Text = $text.Replace("scsi = XHCI98", ("scsi = XHCI98" + [char]7)) },
             @{ Rule = "FILE-BOM";     Text = ([string][char]0xEF + [char]0xBB + [char]0xBF + $text) },
             @{ Rule = "OEM-SECTION";  Text = $text.Replace("[Defaults]", "[Keyboard]`r`nXHCI98 = `"x`"`r`n`r`n[Defaults]") },
@@ -914,6 +934,11 @@ if ($SelfTest) {
             # line is then surplus, which proves the NT 6 models section is
             # not read as 2000's or XP's.
             $infCases += @{ Rule = "OEM-COPY"; Inf = $inf.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI,XhciHlpr.CopyFiles", "CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI") }
+            # A controller's name line (task 44.5) counts as the class
+            # line's alias only while it installs the class line's section:
+            # one installing any other names an id this file must map.
+            $infCases += @{ Rule = "OEM-IDS"; Inf = $inf.Replace("%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D", "%XRedHatQEMUxHCIDesc%=RootHub.Dev,PCI\VEN_1B36&DEV_000D"); Match = "VEN_1B36&DEV_000D" }
+            $infCases += @{ Rule = "OEM-IDS"; Inf = $inf.Replace("%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D", "%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D&SUBSYS_11001AF4"); Match = "SUBSYS_11001AF4" }
         }
         foreach ($c in $infCases) {
             $total++

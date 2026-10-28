@@ -2387,6 +2387,23 @@ ULONG XhciPortRateFor(const XHCI_PORT_MAP *map,
 /* Whether a port is one of a USB 3.x protocol group (a SuperSpeed link). */
 ULONG XhciPortIsUsb3(const XHCI_PORT_MAP *map, ULONG port);
 
+/*
+ * The fastest a root port can run (roadmap-usb4 44.80; design record 13
+ * section 8.12, the query's ports part): XHCI_PORT_TOP_USB2 for a port of a
+ * USB 2.0 group; for a USB 3.x group XHCI_PORT_TOP_SSP when a PSI DWORD of
+ * its table states SuperSpeedPlus (LP 1) or a rate above Gen 1x1's, else
+ * XHCI_PORT_TOP_SS. A USB 3.x group with no table is SuperSpeed whatever
+ * its minor revision: only a table is read as saying SuperSpeedPlus.
+ * XHCI_PORT_TOP_NONE for a port no group claims, or a group of another
+ * major revision. The values are the query's XHQ_PT_* (xhci_qry.h).
+ * IRQL: any.
+ */
+#define XHCI_PORT_TOP_NONE      0UL
+#define XHCI_PORT_TOP_USB2      1UL
+#define XHCI_PORT_TOP_SS        2UL
+#define XHCI_PORT_TOP_SSP       3UL
+ULONG XhciPortTop(const XHCI_PORT_MAP *map, ULONG port);
+
 /* ------------------------------------------------------------------ */
 /* PORTSC write construction (src/xhci_port.c)                         */
 /* ------------------------------------------------------------------ */
@@ -9186,7 +9203,35 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_SUSP_ARMED    6   /* the union of its PDOs' FwArmed */
 #define XHCI_SNAPSHOT_HCD_SUSP_LAST     7   /* XHCI_SNAPSHOT_HCD_SL_LAST_*  */
 #define XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS 8UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    306UL /* the records end the header */
+/*
+ * Appended by roadmap-usb4 task 44.35, version unchanged, after 36.38's
+ * records (design record 13 section 10.7, "The decision kept"): the
+ * storage transport the bus decided for each device, the first
+ * XHCI_SNAPSHOT_HCD_XPORT_COUNT device records holding one in Slot ID
+ * order, each the words below (XHQ_X_* of the query request, xhci_qry.h,
+ * in the same order), all 0 past the last (Slot ID 0). The record count,
+ * the words of one and the first record's word index come first. A
+ * header shorter than this is an earlier driver's, which kept none.
+ */
+#define XHCI_SNAPSHOT_HCD_XPORT_RECORDS 306 /* device records              */
+#define XHCI_SNAPSHOT_HCD_XPORT_WORDS   307 /* one record, in words        */
+#define XHCI_SNAPSHOT_HCD_XPORT_FIRST   308 /* the first record's word     */
+#define XHCI_SNAPSHOT_HCD_XPORT_AT      309
+#define XHCI_SNAPSHOT_HCD_XPORT_COUNT   32UL
+#define XHCI_SNAPSHOT_HCD_X_SLOT        0   /* Slot ID, 0: no record        */
+#define XHCI_SNAPSHOT_HCD_X_PORT        1   /* root port, 1-based           */
+#define XHCI_SNAPSHOT_HCD_X_ROUTE       2   /* Route String                 */
+#define XHCI_SNAPSHOT_HCD_X_IFACE       3   /* bInterfaceNumber, 0xFF a
+                                             * device PDO                   */
+#define XHCI_SNAPSHOT_HCD_X_TRANSPORT   4   /* XHCI_XPORT_NONE .. _REFUSED  */
+#define XHCI_SNAPSHOT_HCD_X_WHY         5   /* XHCI_XPORT_WHY_*             */
+#define XHCI_SNAPSHOT_HCD_X_ALTERNATE   6   /* the setting selected         */
+#define XHCI_SNAPSHOT_HCD_X_INPUTS      7   /* XHCI_XPORT_F_*               */
+#define XHCI_SNAPSHOT_HCD_X_TRIPLE      8   /* class 7:0, subclass 15:8,
+                                             * protocol 23:16               */
+#define XHCI_SNAPSHOT_HCD_X_COUNT       9   /* storage interfaces decided   */
+#define XHCI_SNAPSHOT_HCD_X_RECORD_WORDS 10UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    629UL /* the records end the header */
 #define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
 
 /* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
@@ -9229,7 +9274,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 246UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 252UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 

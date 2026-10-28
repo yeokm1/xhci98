@@ -49,14 +49,14 @@ $disk = Join-Path $dir 'disk.qcow2'
 $idle = Join-Path $dir 'idle.iso'
 $prep = Join-Path $dir 'prep.iso'
 New-LegOverlay $cfg $g.Base $disk
-New-LegIdleIso $idle $dir
+New-LegIdleIso $idle $dir $g
 $pd = Join-Path $dir 'prep-cd'
 New-Item -ItemType Directory -Force $pd | Out-Null
 $legDir = Join-Path $PSScriptRoot 'leg'
 if ($g.Family -eq '9x') { $files = 'XHSETUP.BAT', 'XHSETUP.REG', 'XHPOLL.BAT'; $setup = 'XHSETUP.BAT' }
-else { $files = 'XHSETUP.CMD', 'XHPOLL.CMD'; $setup = 'XHSETUP.CMD' }
+else { $files = 'XHSETUP.CMD', 'XHPOLL.CMD', 'XHSETNT.REG', 'XHOFF.VBS'; $setup = 'XHSETUP.CMD' }
 foreach ($f in $files) { Copy-Item -LiteralPath (Join-Path $legDir $f) -Destination $pd }
-New-LegIso -SourceDir $pd -Path $prep -Label 'XHPREP'
+New-LegMedium -Guest $g -SourceDir $pd -Path $prep -Label 'XHPREP'
 Remove-LegTree $pd
 
 $layout = $g.Layout
@@ -77,14 +77,16 @@ function Wait-Line {
 
 # SetupElevated (Vista, 7): the setup must run elevated to create its logon
 # task, so it is typed into the Start menu's search box and started with
-# Ctrl+Shift+Enter, and the consent prompt answered Yes (Alt+Y).
+# Ctrl+Shift+Enter, and the consent prompt answered (ConsentKey).
 function Invoke-ElevatedBox {
     param([string]$Text)
     Send-QmpChord -Port $ports.Qmp -Chord 'esc' -Layout $layout; Start-Sleep -Seconds 2
     Send-QmpChord -Port $ports.Qmp -Chord 'meta_l' -Layout $layout; Start-Sleep -Seconds 4
     Send-QmpText -Port $ports.Qmp -Text $Text -Layout $layout; Start-Sleep -Seconds 3
     Send-QmpChord -Port $ports.Qmp -Chord 'ctrl-shift-ret' -Layout $layout; Start-Sleep -Seconds 8
-    Send-QmpChord -Port $ports.Qmp -Chord 'alt-y' -Layout $layout
+    # ConsentKey: the consent prompt's Yes (7: Alt+Y) or Continue (Vista: Alt+C).
+    $ck = 'alt-y'; if ($g.ContainsKey('ConsentKey') -and $g.ConsentKey) { $ck = $g.ConsentKey }
+    Send-QmpChord -Port $ports.Qmp -Chord $ck -Layout $layout
 }
 
 function Invoke-RunBox {
@@ -127,9 +129,12 @@ try {
             if ($r -match 'FAILED') { throw "guest ${Guest}: $r" }
         }
     }
-    if ($g.Family -eq '9x') { Invoke-RunBox 'rundll32.exe shell32.dll,SHExitWindowsEx 5' }
+    # ShutdownCommand: Windows 2000 has no shutdown.exe (XHOFF.VBS, which
+    # XHSETUP.CMD copied).
+    if ($g.ContainsKey('ShutdownCommand') -and $g.ShutdownCommand) { Invoke-RunBox $g.ShutdownCommand }
+    elseif ($g.Family -eq '9x') { Invoke-RunBox 'rundll32.exe shell32.dll,SHExitWindowsEx 5' }
     else { Invoke-RunBox 'shutdown -s -f -t 0' }
-    if (-not $proc.WaitForExit(300000)) { Save-LegShot $ports.Qmp $dir 'prep-noshutdown'; throw "guest $Guest did not power off after the shut down" }
+    if (-not (Wait-LegPowerOff -Config $cfg -Guest $g -Ports $ports -Process $proc -Dir $dir -Tag 'prep')) { Save-LegShot $ports.Qmp $dir 'prep-noshutdown'; throw "guest $Guest did not power off after the shut down" }
     Add-LegPidLog $cfg "exited pid $($proc.Id) (start $Guest prep)"
 } catch {
     Stop-LegQemu $cfg $proc $ports.Qmp 'make-start failed'

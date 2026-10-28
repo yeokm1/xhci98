@@ -46,9 +46,11 @@
  *     nothing is sent to the fabric (no Guide chapter 8 sleep flow).
  *   D3, shutdown: the unbind, if the stop has not already run it, and the
  *     Bus Master bit and platform power restored as at a stop. On Windows
- *     98 SE and ME a shutdown takes this as the direct transition, with no
- *     device IRP (cm_pwrr.h, task 43.65): the D3 passed down from this
- *     thread did not always return from the bus there.
+ *     98 SE and ME a shutdown requests no device IRP (cm_pwrr.h, task
+ *     43.65: the D3 passed down from this thread did not always return
+ *     from the bus there), sends no configuration IRP (task 44.43), and
+ *     does not retain the system IRP for the quiescence (task 44.47: the
+ *     thread, inside a ring transfer, did not always run again there).
  *   D0 after a suspend this driver ran: the integrated family's force
  *     power, firmware-ready poll and LTR again, the Bus Master bit, then
  *     the client's resume and reconciliation (the USB4 profile: TbtU4Resume,
@@ -203,14 +205,23 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
         if (CmNhiHwAccess(nhi) && !(nhi->U4On && nhi->U4.Contained)) {
             CmNhiUnbind(nhi);
             CmNhiDrainActions(nhi);
-            (VOID)CmNhiSetBusMaster(nhi, FALSE);
+            if (CmPowerShutdownConfig((ULONG)nhi->SystemPower,
+                                      nhi->PowerOnNt)) {
+                (VOID)CmNhiSetBusMaster(nhi, FALSE);
+            }
         } else {
             /* The liveness gate is closed: nothing is written to a host
              * interface that stopped answering (record 21 section 5.6). */
             CmLogNote(nhi, "cm.shutdown.no-access", nhi->Live.State);
             CmNhiDrainActions(nhi);
         }
-        CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
+        if (CmPowerShutdownConfig((ULONG)nhi->SystemPower, nhi->PowerOnNt)) {
+            CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
+        } else {
+            /* Windows 98 SE and ME: no configuration IRP once the system
+             * IRP has gone down (cm_pwrr.h, task 44.43). */
+            CmLogNote(nhi, "cm.shutdown.no-config", nhi->Stage);
+        }
         return;
     }
     if (!cmLive(nhi)) {
@@ -458,6 +469,20 @@ VOID CmPowerDirectWork(PCM_NHI nhi, PIRP irp)
     CmPowerSystemWork(nhi, irp);
 }
 
+/*
+ * A 9x shutdown's quiescence, queued by the completion routine, which
+ * does not retain the system IRP for it (CM_PWR_DETACH, task 44.47): the
+ * same quiescence as the direct route's, with no IRP to complete, before
+ * or after that IRP has gone on. It runs only if the thread takes it
+ * before the machine powers off or restarts.
+ * IRQL: PASSIVE_LEVEL, the thread.
+ */
+VOID CmPowerQuiesceWork(PCM_NHI nhi)
+{
+    CmLogNote(nhi, "cm.power.detached", (ULONG)nhi->SystemPower);
+    CmNhiQuiesce(nhi);
+}
+
 /* ---------------------------------------------------------------------- */
 /* Dispatch and completion                                                */
 /* ---------------------------------------------------------------------- */
@@ -574,6 +599,14 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                          nhi->PowerOnNt, &w);
     want = (DEVICE_POWER_STATE)w;
     if (route == CM_PWR_PASS) {
+        return cmSystemPass(nhi, Irp);
+    }
+    if (route == CM_PWR_DETACH) {
+        /* Queued before the release, and nothing of the extension's is
+         * touched after it: a removal stops and joins the thread before
+         * the extension goes. Not queued (no thread): nothing of this
+         * driver's runs to be quiesced. */
+        (VOID)CmThrQueue(nhi, CM_WORK_QUIESCE, NULL);
         return cmSystemPass(nhi, Irp);
     }
     if (route == CM_PWR_DIRECT) {

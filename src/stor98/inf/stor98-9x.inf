@@ -1,0 +1,71 @@
+; SPDX-License-Identifier: BSD-3-Clause
+; Copyright (c) 2025 SweetLow (nvme9x.inf)
+; Copyright (c) 2025 Dominik Behr + Ray Hinchliffe (NVMe2K.inf)
+; Copyright (c) 2026 Yeo Kheng Meng
+;
+; stor98-9x.inf - the Windows 98 SE and ME install of stor98, shipped as
+; x86\stor98w9.inf next to stor98.mpd: stor98.mpd into SYSTEM\IOSUBSYS
+; (DIRID 12), loaded by IOS as the SCSI port driver of the device
+; (DevLoader *IOS, PortDriver). Derived from SweetLow's nvme9x.inf, without
+; its NVMEVSD.VXD helper (docs/PLAN.md 0.12). It has no Windows NT section:
+; Windows 2000 and later install from stor98.inf.
+;
+; The model matches xhci98's tunnel id, PCI\XHCI98_TUNNEL&CC_010802, and
+; also the class, PCI\CC_010802 (class 01, subclass 08, interface 02), as
+; its compatible id: on 98 SE and ME xhci98's connection manager gives the
+; id only after the hardware wizard may already have searched, and their
+; wizard does not search again for a drive whose first search found
+; nothing (xhci98 design record 31 section 5.2, owner 2026-10-25). Neither
+; system has an NVMe driver of its own; xhci98's installer stages this INF
+; on them alone, and puts Stor98 only on drives behind a tunnel, but
+; Windows may offer it for an internal NVMe drive.
+;
+; DriverVer is xhci98's package version and release date, from
+; src\xhci_version.h (XHCI_VER_STR, XHCI_DRIVERVER_DATE), as in the other
+; INFs; xhci98's scripts\inf-gate\check-stor98-inf.ps1 checks it.
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$CHICAGO$"
+Class=SCSIAdapter
+ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=10/28/2026,3.3.0.0
+
+[DestinationDirs]
+; DIRID 12: Windows\System\IoSubsys on Windows 9x, system32\drivers on NT.
+DefaultDestDir=12
+
+[SourceDisksNames]
+1=%DiskName%,,
+
+[SourceDisksFiles]
+stor98.mpd=1
+
+[Manufacturer]
+%Mfg%=Stor98_Models
+
+[Stor98_Models]
+%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802,PCI\CC_010802
+
+; ---- Windows 98 SE and ME --------------------------------------------------
+
+[Stor98_Inst]
+CopyFiles=Stor98_Files_9x
+AddReg=Stor98_IOS,Stor98_AddReg_9x
+
+[Stor98_Files_9x]
+stor98.mpd
+
+[Stor98_IOS]
+HKR,,DevLoader,,*IOS
+HKR,,DontLoadIfConflict,,"Y"
+
+[Stor98_AddReg_9x]
+HKR,,PortDriver,,stor98.mpd
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="Stor98 Project"
+Stor98.DeviceDesc="Stor98 Storage Controller for NVMe SSDs"
+DiskName="Stor98 Storage Controller Disk"

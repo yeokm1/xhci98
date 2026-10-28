@@ -61,8 +61,6 @@ objfre/
 # ...but this project's build/test scripts are .cmd files. Without these
 # negations they are silently ignored (the tracked ones had to be git add -f).
 !xhciqual/build.cmd
-!xhcicln/build.cmd
-!xhcicln/selftest.cmd
 !xhciinst/build.cmd
 !xhciinst/selftest.cmd
 !xhcitr/build.cmd
@@ -76,6 +74,8 @@ objfre/
 !xhciinst/di/build.cmd
 !xhciinst/di/selftest.cmd
 !src/vsd/build.cmd
+!src/pfw/build.cmd
+!src/pfw/nt/build.cmd
 !xhciinst/di/test/build.cmd
 !xhciqual/test/*.cmd
 !scripts/**/*.cmd
@@ -257,3 +257,4 @@ src/hlpr/build*.wrn
 # debug-console logs its dated gate records cite (docs/gates/**/*.log).
 !src/stor98/**/*.cmd
 !src/stor98/docs/**/*.log
+src/pfw/nt/objfre_qemu/

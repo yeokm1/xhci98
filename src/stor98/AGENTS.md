@@ -66,7 +66,7 @@ they were written with; do not rewrite them. Apart from those, the rename record
   accepted risk.
   - **The one exception (decision MD-1, maintainer, 2026-10-14):** when presence is lost
     and no isolation evidence arrives by the gone deadline (a tunable, default 5 s,
-    `gone=` on NT, README "Settings"; evidence arriving earlier always wins), the held SRBs are completed with the
+    `storgonems=` on NT and `StorGoneMs` on 9x since xhci98 3.3.0.0, README "Settings"; evidence arriving earlier always wins), the held SRBs are completed with the
     terminal device-gone status, so the callers' buffers go back to the OS. Driver-owned
     DMA memory is still quarantined, never freed. The event is logged and counted. The
     owner accepted the residual risk: if the all-ones reads were not caused by a real

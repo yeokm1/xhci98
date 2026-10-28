@@ -38,7 +38,16 @@ function New-LegIso {
         [string]$Label = 'XHLEG'
     )
     if (-not (Test-Path -LiteralPath $SourceDir -PathType Container)) { throw "no directory $SourceDir" }
-    $fsi = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
+    # The image builder's COM class can refuse an instance for a moment
+    # (0xC0AAB138, read on 2026-10-25 with two legs started together), so
+    # it is asked again a few times.
+    $fsi = $null
+    for ($i = 1; -not $fsi; $i++) {
+        try { $fsi = New-Object -ComObject IMAPI2FS.MsftFileSystemImage } catch {
+            if ($i -ge 5) { throw }
+            Start-Sleep -Seconds (5 * $i)
+        }
+    }
     # 1 = ISO 9660, 2 = Joliet (FsiFileSystems).
     $fsi.FileSystemsToCreate = 3
     $fsi.VolumeName = $Label

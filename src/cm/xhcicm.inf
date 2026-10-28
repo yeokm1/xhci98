@@ -40,6 +40,9 @@
 ; FLG_ADDREG_NOCLOBBER (0x00010003), so a value a user set survives a
 ; reinstall and a written default reads exactly as an absent one - except
 ; XhciCmTunnelBridge, whose absence is meaningful and which no INF writes.
+; The two values the driver reads on Windows 98 SE and ME alone,
+; XhciCmBridgeNumbering and XhciCmNoIrqStart, are written by the 98 SE and
+; ME install alone (task 44.46).
 ;
 ; scripts\inf-gate\check-cm-inf.ps1 gates this file on every build.
 ;
@@ -51,7 +54,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/24/2026,3.2.0.0
+DriverVer=10/28/2026,3.3.0.0
 
 [Manufacturer]
 %Mfg%=CmModels,NTx86.6.0
@@ -161,7 +164,7 @@ Inf.CopyFiles=17
 ; --- Windows 98 SE and ME ---------------------------------------------------
 
 [Cm.Dev]
-AddReg=Cm.AddReg,Cm.Values
+AddReg=Cm.AddReg,Cm.Values,Cm.Values9x
 CopyFiles=Cm.CopyFiles
 
 [Cm.AddReg]
@@ -205,6 +208,15 @@ HKR,,XhciCmLaneBonding,0x00010003,1
 HKR,,XhciCmPreOsCleanup,0x00010003,0
 ; The log's emission (record 21 section 8): 1 prints it to a debugger.
 HKR,,XhciCmLogDebugView,0x00010003,0
+
+; The values the driver reads on Windows 98 SE and ME alone (record 21
+; section 8; task 44.46), written by their install alone, each at the
+; driver's default: the set-up of the bridges a tunnel brings up after the
+; start (record 21 section 6.1.1) and the start of an NVMe drive whose
+; interrupt cannot be routed (design record 28 section 7).
+[Cm.Values9x]
+HKR,,XhciCmBridgeNumbering,0x00010003,1
+HKR,,XhciCmNoIrqStart,0x00010003,1
 
 [Cm.AddService]
 DisplayName=%CmSvcDesc%

@@ -13,7 +13,9 @@
  *     hardware part;
  *   - the bridge filter's snapshot (section 7.4): which PDOs of a
  *     BusRelations answer were not in the previous one;
- *   - the resume's logged bounds (section 6.3; diagnostics since task 43.24h).
+ *   - the resume's logged bounds (section 6.3; diagnostics since task 43.24h);
+ *   - design record 31's tunnel id: the compatible-id rewrite, the chain's
+ *     depth and the Removable answer's gate.
  *
  * C89, DDK-free, no allocation, no lock. IRQL: any.
  */
@@ -154,20 +156,103 @@ ULONG CmPortsStaleWhy(ULONG serialChanged, ULONG genChanged,
 #define CM_CHILD_ATTACH         1UL
 #define CM_CHILD_ATTACH_OVER    2UL
 #define CM_CHILD_WALK           3UL
+#define CM_CHILD_KEEP           4UL
 #define CM_CHILD_CHAIN_MAX      4UL
 ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
                          ULONG chainCount, PVOID busDriver, PVOID self);
 
 /*
  * The step before it, which decides whether the caller may walk the chain
- * at all: CM_CHILD_ATTACH when nothing is attached (`hasAttached` 0),
- * CM_CHILD_SKIP when something is and the previous snapshot was truncated
- * (a PDO past CM_SNAP_MAX reads as new on every answer and may carry a
- * built stack, whose objects another driver can detach and delete at any
- * time, so they are not dereferenced), CM_CHILD_WALK otherwise: walk the
- * chain, then CmPortsChildAttach.
+ * at all. For a PDO new by a whole snapshot (`isNew` 1): CM_CHILD_ATTACH
+ * when nothing is attached (`hasAttached` 0), CM_CHILD_SKIP when something
+ * is and the previous snapshot was truncated (a PDO past CM_SNAP_MAX reads
+ * as new on every answer and may carry a built stack, whose objects
+ * another driver can detach and delete at any time, so they are not
+ * dereferenced), CM_CHILD_WALK otherwise: walk the chain, then
+ * CmPortsChildAttach.
+ *
+ * For a PDO already in the snapshot (`isNew` 0), the re-attach of design
+ * record 31 section 4.3: CM_CHILD_ATTACH when no attachment of this
+ * driver is on it any more (`hasOurs` 0) and nothing at all is attached
+ * (`hasAttached` 0) - a device whose stack was taken down and not yet
+ * built again, as the first-time install of a bridge below a tunnel port
+ * does on Windows 2000 and XP, so the child goes back below the stack the
+ * PnP manager builds next. CM_CHILD_KEEP otherwise: nothing is done and
+ * nothing counted, and a built stack's objects are never walked.
  */
-ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached);
+ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached, ULONG isNew,
+                        ULONG hasOurs);
+
+/*
+ * ---- The tunnel id (design record 31 sections 3 and 4) ----
+ *
+ * A child filter of this driver rewrites the BusQueryCompatibleIDs answer
+ * of an NVMe-class PCI function (PCI\CC_010802 among its compatible ids)
+ * so that CM_TUNNEL_ID is the first compatible id; the hardware ids are
+ * never touched. CmPortsTunnelIds reads one answer, a MULTI_SZ of 16-bit
+ * characters (`list`, NULL for none), and:
+ *
+ *   CM_TID_LEAVE    no PCI\CC_010802 among the strings: left as it came;
+ *   CM_TID_PRESENT  CM_TUNNEL_ID already among them: left (idempotent);
+ *   CM_TID_OVER     no terminating empty string within CM_TID_MAX_CHARS
+ *                   characters (4 KiB): left, and the caller counts it;
+ *   CM_TID_TAG      to be rewritten: *chars is the new list's length in
+ *                   characters, CM_TID_ID_CHARS more than the old one's
+ *                   (both terminators included), and when `out` is not
+ *                   NULL and `outChars` holds *chars the new list - the id,
+ *                   then the old strings in their order, then the empty
+ *                   string - is written there.
+ *
+ * Otherwise *chars is the old list's length (0 for NULL or OVER). *kind
+ * gets CM_TID_KIND_NVME when PCI\CC_010802 is among the strings and
+ * CM_TID_KIND_BRIDGE when PCI\CC_0604 is (a PCI-to-PCI bridge, the
+ * chain's link of section 4.3). Strings are compared whole, ASCII case
+ * ignored.
+ */
+#define CM_TUNNEL_ID            "PCI\\XHCI98_TUNNEL&CC_010802"
+#define CM_TID_ID_CHARS         28UL    /* CM_TUNNEL_ID and its NUL      */
+#define CM_TID_MAX_CHARS        2048UL  /* 4 KiB of WCHARs                */
+#define CM_TID_LEAVE            0UL
+#define CM_TID_TAG              1UL
+#define CM_TID_PRESENT          2UL
+#define CM_TID_OVER             3UL
+#define CM_TID_KIND_NVME        0x1UL
+#define CM_TID_KIND_BRIDGE      0x2UL
+ULONG CmPortsTunnelIds(const USHORT *list, USHORT *out, ULONG outChars,
+                       PULONG chars, PULONG kind);
+
+/*
+ * The chain's depth (record 31 section 4.3): the topmost bridge filter is
+ * depth 0 and each child one more than the filter whose BusRelations
+ * attached it. On a discrete controller that is its switch's upstream
+ * port, two levels above the tunnel port (read on 7, 2026-10-25). A child
+ * that is a PCI-to-PCI bridge reads its own BusRelations and attaches
+ * children below it while its depth is below CM_TUNNEL_DEPTH_MAX: the
+ * controller's two switch levels, a dock's upstream and downstream ports,
+ * an enclosure's upstream and downstream ports and the function at depth
+ * 7, with one to spare. 1 when a child at `depth` that is a bridge
+ * (`isBridge`) does, 0 otherwise.
+ */
+#define CM_TUNNEL_DEPTH_MAX     8UL
+ULONG CmPortsChainReads(ULONG depth, ULONG isBridge);
+
+/*
+ * The Removable answer's gate (record 21 section 7.4; record 31 section
+ * 4.1), for one member of a listed domain on the filter route, against an
+ * attachment located on bus `locBus` (`located`): CM_MM_YES when the
+ * member is active and exclusive, its secondary bus is known and is that
+ * bus, the marks table has an entry for the attachment's PDO (`inMarks`)
+ * and the domain's XhciCmSafeEject is on; CM_MM_SEEN for all of that but
+ * safe eject; CM_MM_NO otherwise. Every kind of attachment answers by it:
+ * since record 31 a child attached at BusRelations exists on every
+ * filtered bridge, not only on an active one with safe eject on.
+ */
+#define CM_MM_NO                0UL
+#define CM_MM_SEEN              1UL
+#define CM_MM_YES               2UL
+ULONG CmPortsMayMark(ULONG located, ULONG locBus, ULONG active,
+                     ULONG exclusive, ULONG secBusValid, ULONG secBus,
+                     ULONG inMarks, ULONG safeEject);
 
 /*
  * Whether a function behind a bridge is without a device stack, for the

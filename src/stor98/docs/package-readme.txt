@@ -64,17 +64,20 @@ The xhci98 installer (SETUP.EXE) installs Stor98 with the Thunderbolt 3
 Components page and is ticked with it. It installs Stor98 only on NVMe
 drives behind a Thunderbolt or USB4 tunnel, and updates an earlier
 Stor98 the same way. Stor98 is not for internal NVMe drives: do not
-install it on one, and decline it if Windows offers it for one. By
-hand, for a drive behind a tunnel:
+install it on one, and decline it if Windows offers it for one. On
+Windows 2000 to 8 stor98.inf matches only the id xhci98 gives a drive
+behind a tunnel (PCI\XHCI98_TUNNEL&CC_010802), so Windows does not offer
+it for an internal drive; on 98 SE and ME stor98w9.inf matches every
+NVMe controller. By hand, for a drive behind a tunnel:
 
 Windows 98 SE / ME
   Device Manager lists the NVMe controller as a PCI device without a
   driver. Open it, choose Update Driver (or Reinstall Driver), pick
   'Display a list of all the drivers in a specific location', then Have
-  Disk, and point it at the 32-bit package's folder. stor98.mpd is
-  copied to WINDOWS\SYSTEM\IOSUBSYS. Restart when asked. The Found New
-  Hardware wizard works the same way: search a specific location, that
-  folder.
+  Disk, and point it at the 32-bit package's folder (stor98w9.inf).
+  stor98.mpd is copied to WINDOWS\SYSTEM\IOSUBSYS. Restart when asked.
+  The Found New Hardware wizard works the same way: search a specific
+  location, that folder.
 
 Windows 2000, XP, Vista, 7, 8, 8.1, 10 (32-bit)
   In Device Manager open the controller (often shown as 'Mass Storage
@@ -139,7 +142,7 @@ whenever the controller starts (at boot, or when it is plugged in).
 Windows 2000 to 10: one REG_SZ value DriverParameter in
 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\stor98\
 Parameters\Device, holding lower-case key=value pairs separated by
-semicolons, for example maxtransferkb=128;pollmode=1. Read when the
+semicolons, for example stormaxtransferkb=128;storpollmode=1. Read when the
 controller starts (at boot, or after disabling and enabling it; a resume
 keeps what was read at the start). In the table '2000 to 7' covers
 Windows 8, 8.1 and 10 as well.
@@ -147,32 +150,49 @@ Windows 8, 8.1 and 10 as well.
   9x name / NT key        Unit  Default            Range
   ----------------------  ----  -----------------  ------------------------
   StorMaxTransferKB       KiB   2048 on 98 SE / ME 64 to the default, in
-  maxtransferkb=                256 on 2000 to 7   multiples of 4; anything
+  stormaxtransferkb=            256 on 2000 to 7   multiples of 4; anything
                                                    else is refused and the
                                                    default stands
   StorWriteThrough        -     auto               auto, off, cacheoff, fua
-  writethrough=                 (cacheoff on ME,   (string only on 9x); an
+  storwritethrough=             (cacheoff on ME,   (string only on 9x); an
                                 off elsewhere)     unknown word is auto
   StorPollMode            -     0                  0 = poll only without an
-  pollmode=                                        interrupt, 1 = always
+  storpollmode=                                    interrupt, 1 = always
   StorPollBusyUs          us    1000               1000-100000, 0 = default;
-  pollbusyus=                                      2000 to 7 use at least
+  storpollbusyus=                                  2000 to 7 use at least
                                                    10 ms (their clock tick)
   StorPollIdleMs          ms    1000               100-60000, 0 = no polling
-  pollidlems=                                      when idle
+  storpollidlems=                                  when idle
   StorPollSpinUs          us    500 on 2000 to 7,  0-500, 0 = none (check
-  pollspinus=                   0 on 98 SE / ME    for a completion right
+  storpollspinus=               0 on 98 SE / ME    for a completion right
                                                    after a request)
-  (NT only) gone=         ms    5000               1-600000: how long held
-                                                   requests wait for proof
+  StorGoneMs              ms    5000               1-600000: how long held
+  storgonems=                                      requests wait for proof
                                                    after the drive is gone;
                                                    advanced: leave at the
                                                    default
-  (NT only) idle=         ms    1000               10 and up: write-idle
-                                                   time before a flush
+  StorWriteIdleMs         ms    1000               10 and up: write-idle
+  storwriteidlems=                                 time before a flush
+  StorHold9xMs            ms    4000               1000-10000, anything
+  98 SE / ME only                                  else is refused and the
+                                                   default stands: how long
+                                                   a request waits for room
+                                                   in the driver before it
+                                                   is answered busy (2000
+                                                   to 7 use each request's
+                                                   own timeout); advanced
 
 Polling values outside their range are clamped to the nearer end;
 refusals and clamps are recorded only in the driver's debug log.
+
+Renamed in xhci98 3.3.0.0, so that every name starts with Stor and the
+two families match: the NT keys maxtransferkb=, writethrough=,
+pollmode=, pollbusyus=, pollidlems=, pollspinus=, gone= and idle= are
+now stormaxtransferkb=, storwritethrough=, storpollmode=,
+storpollbusyus=, storpollidlems=, storpollspinus=, storgonems= and
+storwriteidlems=, and 98 SE and ME gain StorGoneMs and StorWriteIdleMs.
+98 SE and ME also gain StorHold9xMs, new in xhci98 3.3.0.0.
+A key of the old names is ignored: rename it in DriverParameter.
 
 Write-through: cacheoff turns the drive's volatile write cache off (fua
 if the drive refuses), fua marks every write Force Unit Access, off

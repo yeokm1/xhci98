@@ -763,7 +763,7 @@ static VOID test_go_and_crs(VOID)
 
 /* The ORICO's NVMe as the BIOS left it under DOS: BAR0/1 a 64-bit 16 KiB
  * BAR, BAR2 and BAR3 4 KiB each (usb4-emu A0P1_OR PCIDUMP, 08:00.0; the
- * three ranges Windows 98 listed in the owner's capture). */
+ * three ranges Windows 98 listed in that dump). */
 static VOID mnvmebars(ULONG n)
 {
     m.N[n].BarSize[0] = 0x4000UL;

@@ -47,6 +47,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "../src/cm/tbt_topo.h"
 #include "test_harness.h"
 
@@ -902,6 +903,110 @@ static void test_emu_q35_switch(void)
              "q35 switch with hotplug=off on the plain ports");
     CHECK(topo.Tunnels == 1 && topo.Tunnel == B(2, 1, 0),
           "q35 switch: then 02:01.0 alone");
+}
+
+/* ---- the ASM4242 (task 44.40) ------------------------------------------ */
+
+/*
+ * The complex as the emulator's asm4242 model lays it out (design
+ * record 22 section 18.1): CPU root port 00:02.2 (no slot), the ASM4242's
+ * upstream port 13:00.0, its downstream ports 14:00.0 and 14:01.0 (the
+ * tunnel ports, Hot-Plug Capable and Surprise, link-active reporting),
+ * 14:02.0 to the xHCI 79:00.0 and 14:03.0 to the NHI 7A:00.0 (no slot);
+ * `drive` puts the firmware's tunnel (the ASM2464's two bridges and the
+ * NVMe) behind 14:01.0.
+ */
+static const ULONG asmNhi[1] = { 0x24251B21UL };
+static const ULONG asmPort[1] = { 0x24231B21UL };
+
+static VOID family_asm(ULONG listed)
+{
+    famNhi = asmNhi;
+    famNhiN = listed ? 1UL : 0UL;
+    famSw = listed ? asmPort : NULL;
+    famSwN = listed ? 1UL : 0UL;
+    famRp = NULL;
+    famRpN = 0;
+}
+
+static VOID asmHost(ULONG drive)
+{
+    MODEL_FN *f;
+    ULONG hp = XHCI_TBT_SLOTCAP_HPC | XHCI_TBT_SLOTCAP_HPS;
+
+    mreset();
+    mdev(0, 0, 0, 0x1022, 0x14D8, 0x060000UL);
+    f = mbridge(0, 2, 2, 0x1022, 0x14DB, 0x13, 0x7A);
+    mpcie(f, 0x58, XHCI_TBT_PCIE_TYPE_ROOT, 1, 0, 0, 0, 0);
+    mdev(0, 2, 0, 0x1022, 0x14DA, 0x060000UL);
+    mmulti(0, 2);
+    f = mbridge(0x13, 0, 0, 0x1B21, 0x2421, 0x14, 0x7A);
+    mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_UP, 0, 0, 0, 0, 0);
+    f = mbridge(0x14, 0, 0, 0x1B21, 0x2423, 0x19, 0x48);
+    mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_DOWN, 1, XHCI_TBT_LINKCAP_DLLLARC,
+          0, hp, 0);
+    f = mbridge(0x14, 1, 0, 0x1B21, 0x2423, 0x49, 0x78);
+    mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_DOWN, 1, XHCI_TBT_LINKCAP_DLLLARC,
+          drive ? XHCI_TBT_LINKSTA_DLLLA : 0, hp,
+          drive ? XHCI_TBT_SLOTSTA_PDS : 0);
+    f = mbridge(0x14, 2, 0, 0x1B21, 0x2423, 0x79, 0x79);
+    mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_DOWN, 0, 0, 0, 0, 0);
+    f = mbridge(0x14, 3, 0, 0x1B21, 0x2423, 0x7A, 0x7A);
+    mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_DOWN, 0, 0, 0, 0, 0);
+    mdev(0x79, 0, 0, 0x1B21, 0x2426, 0x0C0330UL);
+    mdev(0x7A, 0, 0, 0x1B21, 0x2425, 0x0C0340UL);
+    if (drive) {
+        f = mbridge(0x49, 0, 0, 0x1B21, 0x2463, 0x4A, 0x4B);
+        mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_UP, 0, 0, 0, 0, 0);
+        f = mbridge(0x4A, 0, 0, 0x1B21, 0x2463, 0x4B, 0x4B);
+        mpcie(f, 0x80, XHCI_TBT_PCIE_TYPE_DOWN, 1, 0, 0, 0, 0);
+        mdev(0x4B, 0, 0, 0x1179, 0x011A, 0x010802UL);
+    }
+}
+
+static void test_asm4242_host(void)
+{
+    ULONG drive;
+
+    for (drive = 0; drive < 2; drive++) {
+        /* Before task 44.40: no family, so the two hot-plug ports are
+         * candidates that no source names. */
+        asmHost(drive);
+        family_asm(0);
+        CHECK_EQ(find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_UNLISTED,
+                 "ASM4242 host without the family: UNLISTED");
+        CHECK_EQ(topo.Tunnels, 0, "ASM4242 host without the family: no member");
+        CHECK(topo.Candidates == 2 && topo.Cand[0] == B(0x14, 0, 0) &&
+              topo.Cand[1] == B(0x14, 1, 0),
+              "ASM4242 host without the family: 14:00.0 and 14:01.0 the candidates");
+
+        /* With it: the switch source takes exactly the two tunnel ports. */
+        family_asm(1);
+        CHECK_EQ(find(B(0x7A, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+                 "ASM4242 host: a set");
+        CHECK_EQ(topo.Parent, B(0x14, 3, 0), "ASM4242 host: the NHI's parent 14:03.0");
+        CHECK_EQ(topo.ParentType, XHCI_TBT_PCIE_TYPE_DOWN,
+                 "ASM4242 host: the parent a downstream port");
+        CHECK(topo.Tunnels == 2 && topo.Set[0] == B(0x14, 0, 0) &&
+              topo.Set[1] == B(0x14, 1, 0),
+              "ASM4242 host: 14:00.0 and 14:01.0, in bus order");
+        CHECK(topo.Source[0] == XHCI_TBT_SRC_SWITCH &&
+              topo.Source[1] == XHCI_TBT_SRC_SWITCH, "ASM4242 host: by the switch");
+        CHECK(sibling(B(0x14, 2, 0)) != NULL &&
+              !(sibling(B(0x14, 2, 0))->Flags & XHCI_TBT_BR_MEMBER),
+              "ASM4242 host: the xHCI's port, with no slot, is no member");
+        CHECK(sibling(B(0x14, 3, 0)) == NULL, "ASM4242 host: the NHI's parent is not a sibling");
+        CHECK_EQ(topo.Tunnel, B(0x14, 0, 0), "ASM4242 host: the first");
+    }
+
+    /* The override still narrows it. */
+    asmHost(1);
+    family_asm(1);
+    CHECK_EQ(find(B(0x7A, 0, 0), B(0x14, 1, 0)), XHCI_TBT_TOPO_OVERRIDE,
+             "ASM4242 host: the override");
+    CHECK(topo.Tunnels == 1 && topo.Tunnel == B(0x14, 1, 0),
+          "ASM4242 host: 14:01.0 alone");
+    family_ar();
 }
 
 /* ---- the generic rule's edges ------------------------------------------ */
@@ -2294,6 +2399,217 @@ static void test_learned(void)
              "learned: a bridge out of the set answers for no port");
 }
 
+/*
+ * The learning's window (record 22 section 7.6, task 44.57): every pass
+ * for the first second, a gap doubling from the poll period to 5 s, the
+ * window over at 60 s, closed with no more tries until XhciTbtLearnOpen,
+ * forgotten by XhciTbtLearnEnd; wrap-safe times; bad ports and a NULL
+ * clock ignored.
+ */
+static void test_learn_window(void)
+{
+    XHCI_TBT_LEARN_CLOCK clk;
+    XHCI_TBT_BINDS bb;
+    ULONG t;
+    ULONG tries;
+    ULONG last;
+
+    memset(&clk, 0, sizeof(clk));
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 0), XHCI_TBT_LEARN_TRY,
+             "window: a port whose window is not open is tried");
+    XhciTbtLearnOpen(&clk, 1, 1000, 0);
+    CHECK_EQ(clk.Open, 1, "window: opened");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 1000), XHCI_TBT_LEARN_TRY,
+             "window: the first try at once");
+
+    /* The first second: every 200 ms pass. */
+    for (t = 1000; t < 2000; t += 200) {
+        CHECK_EQ(XhciTbtLearnDue(&clk, 1, t), XHCI_TBT_LEARN_TRY,
+                 "window: eager pass due");
+        XhciTbtLearnMissed(&clk, 1, t, 200);
+        XhciTbtLearnPass(&clk);
+        CHECK_EQ(clk.Gap[0], 0, "window: no gap while eager");
+    }
+    /* Then 200, 400, 800, 1600, 3200, 5000, 5000 ... */
+    XhciTbtLearnMissed(&clk, 1, 2000, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 200, "window: the gap starts at one period");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 2199), XHCI_TBT_LEARN_WAIT,
+             "window: not before the gap");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 2200), XHCI_TBT_LEARN_TRY,
+             "window: due at the gap");
+    XhciTbtLearnMissed(&clk, 1, 2200, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 400, "window: doubled");
+    XhciTbtLearnMissed(&clk, 1, 2600, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 800, "window: doubled again");
+    XhciTbtLearnMissed(&clk, 1, 3400, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 1600, "window: 1600");
+    XhciTbtLearnMissed(&clk, 1, 5000, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 3200, "window: 3200");
+    XhciTbtLearnMissed(&clk, 1, 8200, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 5000, "window: held to 5 s");
+    XhciTbtLearnMissed(&clk, 1, 13200, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 5000, "window: stays at 5 s");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 60999), XHCI_TBT_LEARN_TRY,
+             "window: open until 60 s");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 61000), XHCI_TBT_LEARN_OVER,
+             "window: over at 60 s");
+
+    /* How many tries a whole window costs at 200 ms passes. */
+    XhciTbtLearnOpen(&clk, 2, 0, 0);
+    tries = 0;
+    for (t = 0; XhciTbtLearnDue(&clk, 2, t) != XHCI_TBT_LEARN_OVER;
+         t += 200) {
+        if (XhciTbtLearnDue(&clk, 2, t) == XHCI_TBT_LEARN_TRY) {
+            tries++;
+            XhciTbtLearnMissed(&clk, 2, t, 200);
+            XhciTbtLearnPass(&clk);
+        }
+    }
+    CHECK_EQ(t, XHCI_TBT_LEARN_WINDOW_MS, "window: over at the 60 s pass");
+    CHECK(tries >= 10 && tries <= 30, "window: a bounded count of tries");
+
+    /* Other poll periods: 50 ms and 5000 ms; a period of 0. */
+    XhciTbtLearnOpen(&clk, 3, 0, 0);
+    XhciTbtLearnMissed(&clk, 3, 1000, 50);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[2], 50, "window: 50 ms period starts the gap");
+    XhciTbtLearnOpen(&clk, 3, 0, 0);
+    XhciTbtLearnMissed(&clk, 3, 1000, 5000);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[2], 5000, "window: 5 s period is the cap at once");
+    XhciTbtLearnMissed(&clk, 3, 6000, 5000);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[2], 5000, "window: and stays there");
+    XhciTbtLearnOpen(&clk, 3, 0, 0);
+    XhciTbtLearnMissed(&clk, 3, 1000, 0);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[2], 1, "window: a period of 0 counts as 1 ms");
+    XhciTbtLearnOpen(&clk, 3, 0, 0);
+    XhciTbtLearnMissed(&clk, 3, 1000, 9000);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[2], 5000, "window: a period above the cap is held");
+
+    /* Wrap: a window opened just before the counter wraps. */
+    t = 0xFFFFFF00UL;
+    XhciTbtLearnOpen(&clk, 4, t, 0);
+    last = t + 1500UL;      /* past the wrap */
+    XhciTbtLearnMissed(&clk, 4, last, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(XhciTbtLearnDue(&clk, 4, last + 199UL), XHCI_TBT_LEARN_WAIT,
+             "window: wrap, not yet");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 4, last + 200UL), XHCI_TBT_LEARN_TRY,
+             "window: wrap, due");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 4, t + 60000UL),
+             XHCI_TBT_LEARN_OVER, "window: wrap, over at 60 s");
+
+    /* Close: no more tries until opened again; End forgets it. */
+    XhciTbtLearnClose(&clk, 1);
+    CHECK_EQ(clk.Open & 1UL, 0, "close: the window is not open");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 61000), XHCI_TBT_LEARN_CLOSED,
+             "close: no more tries");
+    XhciTbtLearnMissed(&clk, 1, 61000, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 99000), XHCI_TBT_LEARN_CLOSED,
+             "close: a miss does not reopen it");
+    XhciTbtLearnOpen(&clk, 1, 100000, 0);
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 100000), XHCI_TBT_LEARN_TRY,
+             "close: a TUNNEL_UP's open makes it due at once");
+    CHECK_EQ(clk.Closed & 1UL, 0, "close: and clears the closure");
+    XhciTbtLearnClose(&clk, 1);
+    XhciTbtLearnEnd(&clk, 1);
+    CHECK_EQ((clk.Open | clk.Closed) & 1UL, 0, "end: forgotten");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 1, 0), XHCI_TBT_LEARN_TRY,
+             "end: a port with no window is tried (opened first)");
+    XhciTbtLearnMissed(&clk, 1, 5000, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(clk.Gap[0], 0, "missed: a window not open is left alone");
+
+    /* A binding made after the window closed: its mark consumed, no read. */
+    XhciTbtBindsInit(&bb);
+    XhciTbtLearnUp(&bb, 2);
+    CHECK_EQ(XhciTbtLearnBound(&bb, 2), 0, "bound: not bound yet");
+    CHECK_EQ(bb.Pending, 2, "bound: still pending");
+    bb.Count = 1;
+    bb.Port[0] = 2;
+    bb.Bdf[0] = B(0, 4, 0);
+    bb.How[0] = XHCI_TBT_CORR_NAMED;
+    CHECK_EQ(XhciTbtLearnBound(&bb, 2), 1, "bound: named now");
+    CHECK_EQ(bb.Pending, 0, "bound: the mark consumed");
+    bb.How[0] = XHCI_TBT_CORR_LEARNED;
+    XhciTbtLearnUp(&bb, 3);
+    CHECK_EQ(XhciTbtLearnBound(&bb, 3), 0, "bound: another port's binding");
+    CHECK_EQ(bb.Pending, 4, "bound: port 3 stays pending");
+    CHECK_EQ(XhciTbtLearnBound(&bb, 0), 0, "bound: port 0");
+    CHECK_EQ(XhciTbtLearnBound(&bb, XHCI_TBT_MAX_PORTS + 1), 0,
+             "bound: port 33");
+    CHECK_EQ(XhciTbtLearnBound(NULL, 2), 0, "bound: no binds");
+
+    /* The generation kept for the caller. */
+    XhciTbtLearnOpen(&clk, 5, 0, 9);
+    CHECK_EQ(clk.Tag[4], 9, "open: the generation kept");
+
+    /* Once a pass: a port tried (a delivery's miss) is not tried again
+     * in the same pass, eager or not; the next pass may. */
+    XhciTbtLearnOpen(&clk, 6, 0, 0);
+    XhciTbtLearnMissed(&clk, 6, 0, 200);
+    CHECK_EQ(XhciTbtLearnDue(&clk, 6, 0), XHCI_TBT_LEARN_WAIT,
+             "pass: not twice in one pass");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 7, 0), XHCI_TBT_LEARN_TRY,
+             "pass: another port is not held");
+    XhciTbtLearnPass(&clk);
+    CHECK_EQ(XhciTbtLearnDue(&clk, 6, 200), XHCI_TBT_LEARN_TRY,
+             "pass: due at the next pass");
+    XhciTbtLearnMissed(&clk, 8, 0, 200);
+    CHECK_EQ(clk.Tried & 0x80UL, 0x80UL,
+             "pass: a miss with no window still marks the pass");
+    XhciTbtLearnOpen(&clk, 8, 0, 0);
+    XhciTbtLearnPass(&clk);
+    XhciTbtLearnPass(NULL);
+    CHECK_EQ(clk.Tried, 0, "pass: cleared");
+    /* A miss before a suspend, then the resume's pass and a rebuilt
+     * tunnel's window: its delivery is tried. */
+    XhciTbtLearnMissed(&clk, 6, 300000, 200);
+    XhciTbtLearnPass(&clk);
+    XhciTbtLearnOpen(&clk, 6, 900000, 1);
+    CHECK_EQ(XhciTbtLearnDue(&clk, 6, 900000), XHCI_TBT_LEARN_TRY,
+             "pass: a resume's delivery after a new pass is tried");
+
+    /* Port 32 is the last; 0, 33 and a NULL clock are ignored. */
+    XhciTbtLearnOpen(&clk, XHCI_TBT_MAX_PORTS, 0, 0);
+    CHECK_EQ(clk.Open & 0x80000000UL, 0x80000000UL, "window: port 32");
+    XhciTbtLearnClose(&clk, XHCI_TBT_MAX_PORTS);
+    CHECK_EQ(clk.Closed & 0x80000000UL, 0x80000000UL, "close: port 32");
+    t = clk.Open;
+    last = clk.Closed;
+    XhciTbtLearnOpen(&clk, 0, 0, 0);
+    XhciTbtLearnOpen(&clk, XHCI_TBT_MAX_PORTS + 1, 0, 0);
+    XhciTbtLearnClose(&clk, 0);
+    XhciTbtLearnClose(&clk, XHCI_TBT_MAX_PORTS + 1);
+    XhciTbtLearnEnd(&clk, 0);
+    XhciTbtLearnEnd(&clk, XHCI_TBT_MAX_PORTS + 1);
+    XhciTbtLearnMissed(&clk, 0, 0, 200);
+    XhciTbtLearnPass(&clk);
+    CHECK(clk.Open == t && clk.Closed == last,
+          "window: bad ports change nothing");
+    CHECK_EQ(XhciTbtLearnDue(&clk, 0, 0), XHCI_TBT_LEARN_CLOSED,
+             "window: port 0 never due");
+    CHECK_EQ(XhciTbtLearnDue(&clk, XHCI_TBT_MAX_PORTS + 1, 0),
+             XHCI_TBT_LEARN_CLOSED, "window: port 33 never due");
+    XhciTbtLearnOpen(NULL, 1, 0, 0);
+    XhciTbtLearnMissed(NULL, 1, 0, 200);
+    XhciTbtLearnClose(NULL, 1);
+    XhciTbtLearnEnd(NULL, 1);
+    CHECK_EQ(XhciTbtLearnDue(NULL, 1, 0), XHCI_TBT_LEARN_CLOSED,
+             "window: NULL clock never due");
+}
+
 int main(void)
 {
     test_decoders();
@@ -2302,6 +2618,7 @@ int main(void)
     test_emu_i440fx();
     test_emu_generic();
     test_emu_q35_switch();
+    test_asm4242_host();
     test_generic_edges();
     test_parent_search();
     test_parse();
@@ -2311,6 +2628,7 @@ int main(void)
     test_poll();
     test_named();
     test_learned();
+    test_learn_window();
     printf("test_tbt_topo: %d checks, %d failures\n", checks, failures);
     return failures;
 }

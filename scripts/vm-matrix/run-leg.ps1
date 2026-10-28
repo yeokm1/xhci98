@@ -19,10 +19,15 @@ allows, and no step failed.
 restoring its saved state: the same leg, timed the way legs ran before the
 starting points (a cold start to the desktop first).
 
--Window is the leg kept for the installer's window: the guest is restored with
-the CD in and VNC on 127.0.0.1, the operator runs SETUP.EXE and shuts Windows
-down, and the host then runs the same checks as the console leg. Nothing here
-opens a viewer.
+A window leg (Mode window) installs with the installer's window instead:
+the guest is restored with the CD in, and the host types SETUP.EXE into
+Start, Run and walks the window's pages with the leg's WindowKeys through
+QMP send-key, a screendump after each, then takes Finish's restart
+(lib\legwin.ps1; build-and-test.md, "The installer's window, driven from
+the host"). The same checks as the console leg follow. A window leg with no
+WindowKeys, or -Operator, waits instead for an operator at VNC on
+127.0.0.1 to run SETUP.EXE and shut Windows down. Nothing here opens a
+viewer.
 
 The package is never run on the host: the host only copies it into the CD.
 #>
@@ -35,11 +40,13 @@ param(
     [string]$RunDir = '',
     [int]$Slot = 0,
     [switch]$Cold,
+    [switch]$Operator,
     [int]$LegMinutes = 0
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\legvm.ps1')
 . (Join-Path $PSScriptRoot 'lib\leghost.ps1')
+. (Join-Path $PSScriptRoot 'lib\legwin.ps1')
 
 $cfg = Read-LegConfig $Config
 if (-not $Legs) { $Legs = Join-Path $PSScriptRoot 'release-legs.psd1' }
@@ -51,11 +58,16 @@ $guest = Get-LegGuest $cfg $def.Guest
 $mode = $def.Mode
 if ($mode -notin 'console', 'window') { throw "leg ${Leg}: Mode is console or window" }
 if (-not (Test-Path -LiteralPath (Join-Path $Package 'INSTALL.BAT'))) { throw "$Package has no INSTALL.BAT at its top: give the unpacked download" }
+if ($def.ContainsKey('Needs') -and $def.Needs -and -not (Test-Path -LiteralPath (Join-Path $Package $def.Needs))) {
+    throw "leg ${Leg}: $Package has no $($def.Needs) (the download this leg needs)"
+}
 if (-not $RunDir) { $RunDir = Join-Path $cfg.WorkDir ("runs\{0}-{1}" -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $Leg) }
 New-Item -ItemType Directory -Force $RunDir | Out-Null
 $ports = Get-LegPorts $cfg $Slot
 $qver = Get-LegQemuVersion $cfg
 $start = Get-LegStartPoint $cfg $guest $qver
+# A disk-medium guest's medium is there from power-on, so its legs start cold.
+if (Test-LegDiskMedium $guest) { $Cold = [switch]$true }
 if (-not $cfg.ContainsKey('StickImage') -or -not (Test-Path -LiteralPath (Resolve-RepoPath $cfg.StickImage))) {
     throw 'StickImage: a qcow2 USB stick image with TESTDATA.BIN at its root'
 }
@@ -63,6 +75,12 @@ $stickBase = Resolve-RepoPath $cfg.StickImage
 if ($LegMinutes -le 0) { $LegMinutes = 90; if ($def.ContainsKey('Minutes')) { $LegMinutes = [int]$def.Minutes } }
 $stall = 900; if ($def.ContainsKey('StallSeconds')) { $stall = [int]$def.StallSeconds }
 $hostSteps = @{}; if ($def.ContainsKey('HostSteps')) { $hostSteps = $def.HostSteps }
+# InstallArgs: more switches for the console install (e.g. /nonfreestage).
+$installArgs = ''; if ($def.ContainsKey('InstallArgs')) { $installArgs = [string]$def.InstallArgs }
+# Letters, digits, blanks and / : = , - _ only: the value is written into a batch file.
+if ($installArgs -notmatch '^[A-Za-z0-9/ :=,_-]*$') { throw "leg ${Leg}: InstallArgs takes letters, digits, blanks and / : = , - _ only" }
+# The window's first start is driven by the host when the leg names its keys.
+$autoWindow = ($mode -eq 'window' -and $def.ContainsKey('WindowKeys') -and @($def.WindowKeys).Count -gt 0 -and -not $Operator)
 
 $rec = [ordered]@{
     leg = $Leg; guest = $guest.Id; mode = $mode; cold = [bool]$Cold; package = (Resolve-Path -LiteralPath $Package).Path
@@ -80,18 +98,18 @@ New-Item -ItemType Directory -Force $cd, (Join-Path $cd 'XHDATA') | Out-Null
 $legDir = Join-Path $PSScriptRoot 'leg'
 if ($guest.Family -eq '9x') {
     Copy-Item -LiteralPath (Join-Path $legDir 'LEG9X.BAT') -Destination (Join-Path $cd 'XHLEG.BAT')
-    foreach ($f in 'XHEXIT.BAT', 'XHSEND.BAT') { Copy-Item -LiteralPath (Join-Path $legDir $f) -Destination $cd }
-    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.BAT'), "@echo off`r`nset XHMODE=$mode`r`n", [Text.Encoding]::ASCII)
+    foreach ($f in 'XHEXIT.BAT', 'XHSEND.BAT', 'XHWEXIT.BAT', 'XHWFIND.BAT', 'XHWREP.BAT') { Copy-Item -LiteralPath (Join-Path $legDir $f) -Destination $cd }
+    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.BAT'), "@echo off`r`nset XHMODE=$mode`r`nset XHARGS=$installArgs`r`n", [Text.Encoding]::ASCII)
 } else {
     Copy-Item -LiteralPath (Join-Path $legDir 'LEGNT.CMD') -Destination (Join-Path $cd 'XHLEG.CMD')
-    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.CMD'), "@echo off`r`nset `"XHMODE=$mode`"`r`n", [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText((Join-Path $cd 'XHMODE.CMD'), "@echo off`r`nset `"XHMODE=$mode`"`r`nset `"XHARGS=$installArgs`"`r`n", [Text.Encoding]::ASCII)
 }
 Copy-Item -LiteralPath $Package -Destination (Join-Path $cd 'PKG') -Recurse
 $rnd = New-Object byte[] (4MB)
 (New-Object System.Random 4312).NextBytes($rnd)
 [IO.File]::WriteAllBytes((Join-Path $cd 'XHDATA\RAND.BIN'), $rnd)
 $legIso = Join-Path $RunDir 'leg.iso'
-New-LegIso -SourceDir $cd -Path $legIso -Label 'XHLEG'
+New-LegMedium -Guest $guest -SourceDir $cd -Path $legIso -Label 'XHLEG'
 Remove-LegTree $cd
 
 $disk = Join-Path $RunDir 'disk.qcow2'
@@ -165,6 +183,13 @@ try {
                 Set-LegCd $ports $legIso
                 $null = Invoke-Qmp -Port $ports.Qmp -Command 'cont'
                 $b.restoreSeconds = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+            } elseif ($boot -eq 1 -and $guest.ContainsKey('ColdStep') -and (Test-LegDiskMedium $guest)) {
+                # A disk medium is there from power-on; the cold step clears
+                # the way while the poller may already have started the leg.
+                $proc = Start-LegQemu -Config $cfg -Guest $guest -Ports $ports -Disk $disk -Iso $legIso -RunDir $RunDir -Tag $tag -Name "xhleg-$Leg"
+                $r = Invoke-LegHostStep -Step $guest.ColdStep -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag -Layout $guest.Layout
+                $rec.steps += "boot $boot $r"
+                if ($r -match 'FAILED|no BOOT line') { throw "cold step: $r" }
             } elseif ($boot -eq 1 -and $guest.ContainsKey('ColdStep')) {
                 # A cold first start (-Cold) takes the guest's cold step with
                 # the empty CD in, and only then the leg's CD: the leg must not
@@ -182,7 +207,14 @@ try {
             $step = ''
             if ($boot -gt 1 -and $pendingStep) { $step = $pendingStep; $pendingStep = '' }
             if ($mode -eq 'window' -and $boot -eq 1) {
-                Write-Host "OPERATOR: VNC 127.0.0.1:$($ports.Vnc). Run the installer's window from the CD (PKG\SETUP.EXE), take the defaults, Finish; then shut Windows down (98 SE: never Restart). The host waits."
+                if ($autoWindow) {
+                    $r = Invoke-LegWindow -Def $def -Guest $guest -Config $cfg -Ports $ports -Dir $RunDir -Process $proc -SerialPath $serial -Tag $tag
+                    $rec.steps += "boot $boot $r"
+                    if ($r -match 'FAILED') { throw $r }
+                    if ($r -match 'QEMU ended at the restart') { $stepEnded = $true }
+                } else {
+                    Write-Host "OPERATOR: VNC 127.0.0.1:$($ports.Vnc). Run the installer's window from the CD (PKG\SETUP.EXE), take the defaults, Finish; then shut Windows down (98 SE: never Restart). The host waits."
+                }
             }
             if ($step) {
                 $r = Invoke-LegHostStep -Step $step -QmpPort $ports.Qmp -Dir $RunDir -Since $t0 -Process $proc -SerialPath $serial -Tag $tag
@@ -210,6 +242,16 @@ try {
                     $rec.pausedSeconds = [math]::Round($rec.pausedSeconds + $gap.TotalSeconds, 1)
                 }
                 if (Read-LegLines $serial $proc $tag) { $lastNew = Get-Date }
+                # A guest that cannot switch the machine off (HostPowerOff):
+                # the host ends QEMU once the shut down has finished.
+                if ($sawPowerOff -and $guest.ContainsKey('HostPowerOff') -and $guest.HostPowerOff) {
+                    $null = Wait-LegPowerOff -Config $cfg -Guest $guest -Ports $ports -Process $proc -Dir $RunDir -Tag $tag
+                    if ($proc.HasExited) { break }
+                }
+                if ($def.ContainsKey('PromptStep') -and $def.PromptStep -eq 'nt6' -and -not ($mode -eq 'window' -and $boot -eq 1) -and ((Get-Date) - $lastPrompt).TotalSeconds -ge 6) {
+                    $lastPrompt = Get-Date
+                    if (Invoke-LegNt6UnsignedAnswer -QmpPort $ports.Qmp -Dir $RunDir -Tag $tag -Layout $guest.Layout) { $prompts++; $lastNew = Get-Date }
+                }
                 if ($def.ContainsKey('PromptStep') -and $def.PromptStep -eq 'xp' -and -not ($mode -eq 'window' -and $boot -eq 1) -and ((Get-Date) - $lastPrompt).TotalSeconds -ge 6) {
                     $lastPrompt = Get-Date
                     if (Invoke-LegXpLogoAnswer -QmpPort $ports.Qmp -Dir $RunDir -Tag $tag) { $prompts++; $lastNew = Get-Date }
@@ -217,7 +259,7 @@ try {
                 }
                 if (((Get-Date) - $lastShot).TotalSeconds -ge 60) { Save-LegShot $ports.Qmp $RunDir "$tag-last"; $lastShot = Get-Date }
                 $waitLimit = $stall
-                if ($mode -eq 'window' -and $boot -eq 1) { $waitLimit = 4 * 3600 }
+                if ($mode -eq 'window' -and $boot -eq 1 -and -not $autoWindow) { $waitLimit = 4 * 3600 }
                 if (((Get-Date) - $lastNew).TotalSeconds -gt $waitLimit) {
                     Save-LegShot $ports.Qmp $RunDir "$tag-stalled"
                     $rec.reasons += "boot $boot stalled: nothing new on COM1 for $waitLimit s"
@@ -276,7 +318,7 @@ try {
 } catch {
     $rec.reasons += "host: $_"
 }
-if ($prompts) { $rec.steps += "unsigned-driver question answered Continue Anyway $prompts times" }
+if ($prompts) { $rec.steps += "driver-install questions answered (Continue Anyway, Install anyway or Install) $prompts times" }
 if ($fnhPages) { $rec.steps += "Found New Hardware wizard pages answered: $fnhPages" }
 # The verdict.
 if (-not $ended) { $rec.reasons += 'the guest never said END' }
@@ -300,6 +342,6 @@ if ($rec.reasons.Count -eq 0) { $rec.verdict = 'PASS' } else { $rec.verdict = 'F
 $rec.seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
 $rec.finished = (Get-Date -Format s)
 $rec | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $RunDir 'result.json') -Encoding ASCII
-Remove-Item -LiteralPath $legIso -Force -ErrorAction SilentlyContinue
+Remove-LegMedium $legIso
 Write-Host ("{0} {1} in {2} s{3}" -f $Leg, $rec.verdict, $rec.seconds, $(if ($rec.reasons.Count) { ': ' + ($rec.reasons -join '; ') } else { '' }))
 if ($rec.verdict -eq 'PASS') { exit 0 } else { exit 1 }

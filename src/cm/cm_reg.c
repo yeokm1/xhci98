@@ -8,9 +8,10 @@
  *
  * The rules each value is held to are cm_vals.c's; this file only fetches.
  * A value absent, unreadable or of another type is "not found" and its
- * default stands, which is also what the written default reads as. The
- * two values no INF writes, XhciCmTunnelBridge and XhciCmBridgeNumbering,
- * are read from the same key.
+ * default stands, which is also what the written default reads as.
+ * XhciCmTunnelBridge, which no INF writes, and the two values only the
+ * 98 SE and ME install writes, XhciCmBridgeNumbering and XhciCmNoIrqStart
+ * (task 44.46), are read from the same key.
  *
  * From 3.1.0.0 every value is read first from the machine-wide key
  * HKLM\System\CurrentControlSet\Services\USB, the one xhci98.sys reads
@@ -18,8 +19,12 @@
  * machine-wide value wins when present (task 42-A.17, ..\xhci_regsrc.h).
  * The machine-wide key is read even when the driver key cannot be opened.
  *
+ * Since task 44.53 it also reads, once in DriverEntry on the NT role, the
+ * gate of design record 21 section 6.2.1 (CmReadIrqGate): the HAL's
+ * hardware id, from the machine's enumeration key.
+ *
  * IRQL: PASSIVE_LEVEL, in the system thread PnP's start runs in, as
- * IoOpenDeviceRegistryKey needs.
+ * IoOpenDeviceRegistryKey needs (DriverEntry's thread for the gate).
  */
 
 #include "cm.h"
@@ -45,10 +50,13 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 
 /* Not written by any INF (record 21 section 8): absent is no override. */
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
-/* Not written by any INF either (record 21 section 6.1.1): absent is the
- * default, CM_BRIDGE_NUMBERING_DEFAULT. */
+/* Written by the 98 SE and ME install alone (record 21 section 6.1.1,
+ * task 44.46): absent is the default, CM_BRIDGE_NUMBERING_DEFAULT, as is
+ * XhciCmNoIrqStart's absence CM_NOIRQ_START_DEFAULT. */
 #define CM_VALUE_BRIDGE_NUMBERING L"XhciCmBridgeNumbering"
 #define CM_VALUE_NOIRQ_START L"XhciCmNoIrqStart"
+/* Not written by any INF (record 22 section 18.8): absent is 0. */
+#define CM_VALUE_ASM_PCIE7 L"XhciCmAsmediaPcie7Credits"
 
 typedef struct _CM_TAKE {
     ULONG Seen;                 /* the routine was called with a value    */
@@ -165,6 +173,66 @@ static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
     }
 }
 
+/* ---- The interrupt gate (design record 21 section 6.2.1) ---- */
+
+ULONG CmIrqGate;
+
+/* The HAL devnode's hardware ids: a REG_MULTI_SZ (read whole, with
+ * RTL_QUERY_REGISTRY_NOEXPAND) or a REG_SZ; the first string tested. */
+#define CM_HAL_KEY \
+    L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Enum\\Root\\PCI_HAL\\0000"
+#define CM_HAL_CHARS 16UL
+
+static NTSTATUS NTAPI cmTakeHal(PWSTR ValueName, ULONG ValueType,
+                                PVOID ValueData, ULONG ValueLength,
+                                PVOID Context, PVOID EntryContext)
+{
+    PULONG std;
+    USHORT ids[CM_HAL_CHARS];
+    const USHORT *from;
+    ULONG chars;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+    std = (PULONG)EntryContext;
+    if ((ValueType != REG_MULTI_SZ && ValueType != REG_SZ) ||
+        ValueData == NULL) {
+        return STATUS_SUCCESS;
+    }
+    from = (const USHORT *)ValueData;
+    chars = ValueLength / sizeof(USHORT);
+    if (chars > CM_HAL_CHARS) {
+        chars = CM_HAL_CHARS;
+    }
+    for (i = 0; i < chars; i++) {
+        ids[i] = from[i];
+    }
+    *std = (ULONG)CmIrqHalStdPc(ids, chars);
+    return STATUS_SUCCESS;
+}
+
+VOID CmReadIrqGate(VOID)
+{
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    ULONG std;
+
+    CmIrqGate = 0;
+    if (SharedUserData->NtMajorVersion != 5 ||
+        SharedUserData->NtMinorVersion != 0) {
+        return;
+    }
+    std = 0;
+    CmZero(table, sizeof(table));
+    table[0].QueryRoutine = cmTakeHal;
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = L"HardwareID";
+    table[0].EntryContext = &std;
+    (VOID)RtlQueryRegistryValues(RTL_REGISTRY_ABSOLUTE, (PWSTR)CM_HAL_KEY,
+                                 table, NULL, NULL);
+    CmIrqGate = std;
+}
+
 VOID CmReadValues(PCM_NHI nhi)
 {
     HANDLE key;
@@ -190,6 +258,8 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeBridgeNumbering(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_NOIRQ_START, &take, 0);
     CmValuesTakeNoIrqStart(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_ASM_PCIE7, &take, 0);
+    CmValuesTakeAsmPcie7(&nhi->Values, take.Found, take.Dword);
     if (key != NULL) {
         ZwClose(key);
     }

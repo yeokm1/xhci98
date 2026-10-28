@@ -27,7 +27,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/24/2026,3.2.0.0
+DriverVer=10/28/2026,3.3.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhcicmf.cat
 
@@ -79,7 +79,7 @@ CatalogFile=xhcicmf.cat
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14CD&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14EF&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_150A&CC_0604
-%U4BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423&CC_0604
+%U4AsBridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423&CC_0604
 ; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
 ; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
 %BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001&CC_0604
@@ -130,7 +130,7 @@ CatalogFile=xhcicmf.cat
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14CD&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14EF&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_150A&CC_0604
-%U4BridgeDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2423&CC_0604
+%U4AsBridgeDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2423&CC_0604
 ; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
 ; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
 %BridgeDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_0001&CC_0604
@@ -206,5 +206,6 @@ Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
 TbBridgeDesc="xHCI98 Thunderbolt PCI Bridge"
 U4BridgeDesc="xHCI98 USB4 PCI Bridge"
+U4AsBridgeDesc="xHCI98 USB4 PCI Bridge (ASMedia ASM4242)"
 BridgeDesc="xHCI98 PCI Bridge"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

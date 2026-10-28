@@ -53,6 +53,7 @@
 #include "tr_core.h"
 #include "tr_log.h"
 #include "tr_pci.h"
+#include "tr_diag.h"
 #include "tr_red.h"
 #include "tr_popw.h"
 #include "tr_res.h"
@@ -281,6 +282,17 @@ typedef struct _UCTRL {
     int Ours;               /* xhci98 drives it                            */
     int RootErr;            /* its root hub: 1 not opened, 2 no answer     */
     char Behind[TR_NAME_CHARS + 16];
+    /* The running driver's version (record 25 section 18): VerHave 1 when
+     * the query's header answered, VerRunning its packed version, 0 from
+     * a driver before 3.3.0.0. */
+    int VerHave;
+    TR_U32 VerRunning;
+    /* The query's whole answer, read once a refresh when a device of this
+     * controller is shown (section 19 item 5): XqState 0 not asked, 1
+     * read, -1 refused or failed. */
+    int XqState;
+    unsigned char *Xq;
+    TR_XHQ X;
 } UCTRL;
 
 typedef struct _UPORT {
@@ -333,6 +345,8 @@ typedef struct _UPORT {
 #define LOG_CM      1
 #define K_PCI       13      /* PCI configuration: A the controller or NHI, B
                                LOG_HCD or LOG_CM (record 25 section 3.6) */
+#define K_DIAG      14      /* the PCI and bridge diagnostics (record 25
+                               section 20, revision 23)                  */
 
 typedef struct _TNODE {
     int Parent;
@@ -362,7 +376,16 @@ static int upCount;
 static TNODE *tn;
 static int tnCount;
 static int usbDevices;
-static DWORD hcdOpenError;      /* why \\.\HCD0 did not open, 0 when it did */
+/* The installed files' versions (record 25 section 18), read at each
+ * refresh, and whether any running driver differs from its file. */
+static TR_U32 verFileHcd[4];
+static int verFileHcdOk;
+static TR_U32 verFileCm[4];
+static int verFileCmOk;
+static int verWarn;
+static DWORD hcdOpenError;      /* why controller 0's door did not open, 0
+                                 * when it did (tr_door_stem) */
+static const char *tr_door_stem(void);
 static int hcdNameRefused;      /* controllers that did not name their key */
 static int tbDevices;
 static DWORD viewFlags = TR_V_DEFAULT;
@@ -439,6 +462,7 @@ static void pci_node_add(int parentT, int which, int index, const char *id);
 static void say(const char *text, int warn);
 static void fast_scan(void);
 static int fast_port(int k, TR_FAST *f, int ask);
+static void fast_in(int k, TR_FAST_IN *in0, int ask);
 static void fast_name(int k, char *out, size_t cap);
 static unsigned int fast_vid(const UPORT *p);
 static unsigned int fast_pid(const UPORT *p);
@@ -2066,7 +2090,9 @@ static int ctrl_add(const char *path, const char *hcd)
     }
     h = open_device(path);
     if (h == INVALID_HANDLE_VALUE) {
-        if (hcd != NULL && strcmp(hcd, "HCD0") == 0) {
+        if (hcd != NULL && strncmp(hcd, tr_door_stem(), strlen(tr_door_stem()))
+                               == 0 &&
+            strcmp(hcd + strlen(tr_door_stem()), "0") == 0) {
             hcdOpenError = GetLastError();
         }
         return -1;
@@ -2098,6 +2124,38 @@ static int ctrl_add(const char *path, const char *hcd)
     return ucCount++;
 }
 
+/* xhci98.sys's door name: XHCI98HC<k> on NT, HCD<n> on 98 SE and ME, where
+ * Windows' own USB stack names its controllers HCD<n> too (roadmap-usb4
+ * 44.81; design record 13 section 8.8). On 2000, XP and XP x64 the driver
+ * also makes an HCD<m> alias of its door, which the HCD scan finds and
+ * ctrl_add folds into the same controller by its driver key. */
+static const char *tr_door_stem(void)
+{
+    return envNt ? "XHCI98HC" : "HCD";
+}
+
+/* 1 when controller 0's door failing is worth saying: the device tree
+ * holds a PCI function on xhci98 and no door of one opened. On a machine
+ * with no such controller the name is simply absent, which is no
+ * failure. */
+static int usb_door_missed(void)
+{
+    int i;
+
+    for (i = 0; i < ucCount; i++) {
+        if (uc[i].Ours) {
+            return 0;
+        }
+    }
+    for (i = 0; i < gw.Count; i++) {
+        if (tr_eq(gw.N[i].Service, "xhci98") &&
+            strncmp(gw.N[i].Id, "PCI\\", 4) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void usb_controllers(void)
 {
     int n;
@@ -2105,6 +2163,12 @@ static void usb_controllers(void)
 
     hcdOpenError = 0;
     hcdNameRefused = 0;
+    if (envNt) {
+        for (n = 0; n < 64; n++) {
+            tr_sprintf(name, sizeof(name), "XHCI98HC%d", n);
+            ctrl_add(name, name);
+        }
+    }
     for (n = 0; n < 64; n++) {
         tr_sprintf(name, sizeof(name), "HCD%d", n);
         ctrl_add(name, name);
@@ -2585,8 +2649,329 @@ static void model_free_usb(void)
         free(up[i].Cfg);
         free(up[i].Bos);
     }
+    for (i = 0; i < ucCount; i++) {
+        free(uc[i].Xq);
+        uc[i].Xq = NULL;
+        uc[i].XqState = 0;
+    }
     upCount = 0;
     ucCount = 0;
+}
+
+/* ---- the running drivers' versions (record 25 section 18) --------------- */
+
+static int hcd_query(int c, unsigned char **buf, TR_XHQ *x, DWORD *err);
+
+typedef DWORD (WINAPI *PFN_TRGFVIS)(LPCSTR, LPDWORD);
+typedef BOOL (WINAPI *PFN_TRGFVI)(LPCSTR, DWORD, DWORD, LPVOID);
+typedef BOOL (WINAPI *PFN_TRVQV)(LPCVOID, LPCSTR, LPVOID *, PUINT);
+typedef BOOL (WINAPI *PFN_TRW64DIS)(PVOID *);
+typedef BOOL (WINAPI *PFN_TRW64REV)(PVOID);
+
+/* A file's VS_FIXEDFILEINFO file version, read with WOW64's redirection
+ * off around the reads alone (version.dll loaded before, with it on). */
+static int file_version_of(const char *path, TR_U32 v[4])
+{
+    HMODULE ver;
+    HMODULE k32;
+    PFN_TRGFVIS gfvis;
+    PFN_TRGFVI gfvi;
+    PFN_TRVQV vqv;
+    PFN_TRW64DIS dis = NULL;
+    PFN_TRW64REV rev = NULL;
+    PVOID redir = NULL;
+    BOOL off = FALSE;
+    DWORD size = 0;
+    DWORD dummy;
+    void *block = NULL;
+    VS_FIXEDFILEINFO *ffi;
+    UINT len;
+    int ok = 0;
+
+    ver = LoadLibraryA("version.dll");
+    if (ver == NULL) {
+        return 0;
+    }
+    gfvis = (PFN_TRGFVIS)GetProcAddress(ver, "GetFileVersionInfoSizeA");
+    gfvi = (PFN_TRGFVI)GetProcAddress(ver, "GetFileVersionInfoA");
+    vqv = (PFN_TRVQV)GetProcAddress(ver, "VerQueryValueA");
+    k32 = GetModuleHandleA("kernel32.dll");
+    if (k32 != NULL) {
+        dis = (PFN_TRW64DIS)GetProcAddress(k32, "Wow64DisableWow64FsRedirection");
+        rev = (PFN_TRW64REV)GetProcAddress(k32, "Wow64RevertWow64FsRedirection");
+    }
+    if (gfvis != NULL && gfvi != NULL && vqv != NULL) {
+        if (dis != NULL && rev != NULL) {
+            off = dis(&redir);
+        }
+        size = gfvis(path, &dummy);
+        block = size != 0 ? malloc(size) : NULL;
+        if (block != NULL && gfvi(path, 0, size, block) &&
+            vqv(block, "\\", (LPVOID *)&ffi, &len) &&
+            len >= sizeof(VS_FIXEDFILEINFO)) {
+            v[0] = HIWORD(ffi->dwFileVersionMS);
+            v[1] = LOWORD(ffi->dwFileVersionMS);
+            v[2] = HIWORD(ffi->dwFileVersionLS);
+            v[3] = LOWORD(ffi->dwFileVersionLS);
+            ok = 1;
+        }
+        if (off) {
+            rev(redir);
+        }
+        free(block);
+    }
+    FreeLibrary(ver);
+    return ok;
+}
+
+typedef struct _TRPEND {
+    const char *Target;
+    char Short[MAX_PATH];
+    char *Out;
+    size_t Cap;
+    int Hit;
+} TRPEND;
+
+static int pending_9x_line(void *ctx, const char *key, const char *value)
+{
+    TRPEND *p = (TRPEND *)ctx;
+    char sk[MAX_PATH];
+    DWORD n;
+
+    if (key[0] == '\0' || inst_eq(key, "NUL")) {
+        return 1;
+    }
+    n = GetShortPathNameA(key, sk, sizeof(sk));
+    if (n == 0 || n >= sizeof(sk)) {
+        tr_copy(sk, key, sizeof(sk));
+    }
+    if (inst_eq(key, p->Target) || inst_eq(sk, p->Short)) {
+        tr_copy(p->Out, value, p->Cap);
+        p->Hit = 1;
+    }
+    return 1;
+}
+
+/* The source of a replacement of `target` pending for the next start:
+ * WININIT.INI's [rename] on 98 SE and ME, PendingFileRenameOperations on
+ * NT. 1 and out; 0 none. */
+static int pending_source(const char *target, char *out, size_t cap)
+{
+    char win[MAX_PATH];
+    char ini[MAX_PATH + 16];
+    char *text;
+    HANDLE f;
+    DWORD size;
+    DWORD got = 0;
+    TRPEND p;
+    DWORD n;
+    HKEY k;
+    DWORD type;
+
+    out[0] = '\0';
+    if (!envNt) {
+        if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+            return 0;
+        }
+        tr_sprintf(ini, sizeof(ini), "%s\\WININIT.INI", win);
+        f = CreateFileA(ini, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        NULL, OPEN_EXISTING, 0, NULL);
+        if (f == INVALID_HANDLE_VALUE) {
+            return 0;
+        }
+        size = GetFileSize(f, NULL);
+        text = (size != 0xFFFFFFFFUL && size < 262144UL)
+                   ? (char *)malloc(size + 1) : NULL;
+        if (text != NULL && !ReadFile(f, text, size, &got, NULL)) {
+            got = 0;
+        }
+        CloseHandle(f);
+        if (text == NULL) {
+            return 0;
+        }
+        text[got] = '\0';
+        memset(&p, 0, sizeof(p));
+        p.Target = target;
+        n = GetShortPathNameA(target, p.Short, sizeof(p.Short));
+        if (n == 0 || n >= sizeof(p.Short)) {
+            tr_copy(p.Short, target, sizeof(p.Short));
+        }
+        p.Out = out;
+        p.Cap = cap;
+        (void)inst_rename_scan(text, pending_9x_line, &p);
+        free(text);
+        return p.Hit;
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "SYSTEM\\CurrentControlSet\\Control\\Session Manager", 0,
+                      KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    size = 0;
+    n = 0;
+    text = NULL;
+    if (RegQueryValueExA(k, "PendingFileRenameOperations", NULL, &type, NULL,
+                         &size) == ERROR_SUCCESS && type == REG_MULTI_SZ &&
+        size != 0 && size < 262144UL) {
+        text = (char *)malloc(size + 2);
+        if (text != NULL &&
+            RegQueryValueExA(k, "PendingFileRenameOperations", NULL, &type,
+                             (LPBYTE)text, &size) == ERROR_SUCCESS) {
+            text[size] = '\0';
+            text[size + 1] = '\0';
+            n = tr_pfro_find(text, size + 2, target, out, cap) ? 1UL : 0UL;
+        }
+        free(text);
+    }
+    RegCloseKey(k);
+    return n != 0;
+}
+
+/* The version of the driver file the next start loads (section 18 item
+ * 2): a pending replacement's source, else system32\drivers\<sys>. */
+static int installed_version(const char *sys, TR_U32 v[4])
+{
+    char win[MAX_PATH];
+    char drv[MAX_PATH + 32];
+    char src[MAX_PATH + 32];
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    tr_sprintf(drv, sizeof(drv), "%s\\system32\\drivers\\%s", win, sys);
+    if (pending_source(drv, src, sizeof(src))) {
+        return file_version_of(src, v);
+    }
+    return file_version_of(drv, v);
+}
+
+/* Each xhci98 controller's running version: the query's header alone. */
+static void hc_ver_read(void)
+{
+    int c;
+
+    for (c = 0; c < ucCount; c++) {
+        unsigned char b[XHQ_HDR_BYTES];
+        DWORD got = 0;
+        HANDLE h;
+        uc[c].VerHave = 0;
+        uc[c].VerRunning = 0;
+        if (!uc[c].Ours) {
+            continue;
+        }
+        h = open_device(uc[c].Path);
+        if (h == INVALID_HANDLE_VALUE) {
+            continue;
+        }
+        memset(b, 0, sizeof(b));
+        if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, sizeof(b), &got, NULL) &&
+            tr_xhq_driver(b, got, &uc[c].VerRunning) >= 0) {
+            uc[c].VerHave = 1;
+        }
+        CloseHandle(h);
+    }
+}
+
+static void ver_refresh(void)
+{
+    int c;
+
+    verWarn = 0;
+    verFileHcdOk = installed_version("xhci98.sys", verFileHcd);
+    verFileCmOk = installed_version("xhcicm.sys", verFileCm);
+    hc_ver_read();
+    for (c = 0; c < ucCount; c++) {
+        if (uc[c].Ours &&
+            tr_ver_state(uc[c].VerHave, uc[c].VerRunning,
+                         verFileHcdOk ? verFileHcd : NULL) == TR_VER_DIFFERS) {
+            verWarn = 1;
+        }
+    }
+    for (c = 0; c < nhiCount; c++) {
+        if (nhi[c].HaveQ &&
+            tr_ver_state(1, nhi[c].Q.Version == CM_Q_VERSION_1
+                                ? 0 : nhi[c].Q.RmDriver,
+                         verFileCmOk ? verFileCm : NULL) == TR_VER_DIFFERS) {
+            verWarn = 1;
+        }
+    }
+}
+
+/* The "Driver version:" line (section 18 item 4), when it says anything. */
+static void ver_details(TR_TEXT *t, int have, TR_U32 running,
+                        const TR_U32 *file)
+{
+    char line[200];
+    int st = tr_ver_state(have, running, file);
+
+    if (st == TR_VER_UNKNOWN) {
+        return;
+    }
+    tr_ver_line(st, running, file, line, sizeof(line));
+    tr_printf(t, "  Driver version: %s\n", line);
+}
+
+/* The device record of controller c's port path, reading the query once
+ * a refresh (record 25 section 19 items 2 and 5): 1 and *r; 0 no record;
+ * -1 the driver serves none. */
+static int uport_xport(const UPORT *p, TR_XPORT *r)
+{
+    UCTRL *c = &uc[p->Ctrl];
+    TR_U32 root;
+    TR_U32 route;
+    DWORD err;
+
+    if (c->XqState == 0) {
+        c->XqState = hcd_query(p->Ctrl, &c->Xq, &c->X, &err) == 1 ? 1 : -1;
+    }
+    if (c->XqState != 1 || c->X.Version < XHQ_VERSION_2) {
+        return -1;
+    }
+    if (!tr_path_route(p->Path, &root, &route)) {
+        return 0;
+    }
+    return tr_xhq_xport_find(&c->X, root, route, r);
+}
+
+/* 1 when the port's device is mass storage by what the tool read: its
+ * class, or an interface of class 08 in its configuration. */
+static int uport_is_storage(const UPORT *p)
+{
+    DWORD at = 0;
+
+    if (p->Conn.Dev[4] == 0x08) {
+        return 1;
+    }
+    while (p->Cfg != NULL && at + 2 <= p->CfgN && p->Cfg[at] >= 2) {
+        if (p->Cfg[at + 1] == 4 && p->Cfg[at] >= 9 && at + 9 <= p->CfgN &&
+            p->Cfg[at + 5] == 0x08) {
+            return 1;
+        }
+        at += p->Cfg[at];
+    }
+    return 0;
+}
+
+/* The service of the devnode the record's interface is: the device's own
+ * for a device PDO, else its child with that interface's &MI_. */
+static const char *uport_xport_service(const UPORT *p, const TR_XPORT *r)
+{
+    char mi[8];
+    int i;
+
+    if (p->Dn < 0) {
+        return NULL;
+    }
+    if (r->Iface == 0xFFUL) {
+        return gw.N[p->Dn].Service;
+    }
+    tr_sprintf(mi, sizeof(mi), "&MI_%02lX", (unsigned long)(r->Iface & 0xFFUL));
+    for (i = 0; i < gw.Count; i++) {
+        if (gw.N[i].Parent == p->Dn && strstr(gw.N[i].Id, mi) != NULL) {
+            return gw.N[i].Service;
+        }
+    }
+    return NULL;
 }
 
 /* The device tree, the NHIs and their units; the USB branch too when
@@ -2624,6 +3009,7 @@ static void refresh_model(int withUsb)
     derive(&gw, nhi, nhiCount);
     usb_scan_all();
     usb_derive();
+    ver_refresh();
     if (envNt) {
         disk_letters_nt(&gw);
     }
@@ -2653,6 +3039,8 @@ static void refresh_model(int withUsb)
         add_tnode(root, K_NOTE, gw.Bad, 0, 0, -1,
                   "(some device entries could not be read whole)", "N:bad");
     }
+    add_tnode(root, K_DIAG, 0, 0, 0, -1, "PCI and bridge diagnostics",
+              "R:diag");
 }
 
 /* ======================================================================== */
@@ -2886,6 +3274,9 @@ static void details_nhi(TR_TEXT *t, int k)
 
     tr_printf(t, "Thunderbolt / USB4 host interface\n");
     lv_details(t, h->Node, TR_LV_XHCICM);
+    ver_details(t, h->HaveQ,
+                h->Q.Version == CM_Q_VERSION_1 ? 0 : h->Q.RmDriver,
+                verFileCmOk ? verFileCm : NULL);
     if (R == NULL) {
         tr_printf(t, "  The Thunderbolt driver has not published its device "
                      "list (%s).\n", h->Why);
@@ -2958,6 +3349,61 @@ static void details_nhi(TR_TEXT *t, int k)
     details_devnode(t, h->Node);
 }
 
+/* The upstream side of router r's link (record 25 section 17 item 2):
+ * the host's class by the NHI's profile, and each router between found
+ * by route, its depth from the route (the software connection manager's
+ * entries behind a router carry depth 0 in their place). */
+static int router_up(int k, int r)
+{
+    const unsigned char *e = router_entry(k, r);
+    const unsigned char *p;
+    TR_U32 depth;
+    TR_U32 lo;
+    TR_U32 hi;
+    TR_U32 tbt3 = 0;
+    TR_U32 usb4 = 0;
+    TR_U32 profile;
+    TR_U32 d;
+    int host;
+    int up;
+    int i;
+
+    if (e == NULL) {
+        return TR_UP_UNKNOWN;
+    }
+    profile = inst_get32(nhi[k].R, CM_ST_O_PROFILE);
+    if (profile == 0) {
+        /* 98 SE and ME: the driver started before it read the NHI's ids. */
+        profile = tr_profile_of_nhi(inst_get32(nhi[k].R, CM_ST_O_NHI_ID));
+    }
+    host = tr_up_of_profile(profile);
+    lo = inst_get32(e, CM_ST_E_ROUTE_LO);
+    hi = inst_get32(e, CM_ST_E_ROUTE_HI);
+    if (lo == CM_ST_UNKNOWN && hi == CM_ST_UNKNOWN) {
+        depth = (inst_get32(e, CM_ST_E_PLACE) >> 8) & 0xFFUL;
+        return tr_up_of_path(host, depth == 1 ? 0 : 1, 0, 0);
+    }
+    depth = tr_route_depth(lo, hi);
+    if (depth == 0) {
+        return TR_UP_UNKNOWN;
+    }
+    for (d = depth; tr_route_parent(d, lo, hi, &lo, &hi); d--) {
+        for (i = 0; (p = router_entry(k, i)) != NULL; i++) {
+            if (inst_get32(p, CM_ST_E_ROUTE_LO) == lo &&
+                inst_get32(p, CM_ST_E_ROUTE_HI) == hi) {
+                up = tr_up_of_gen(inst_get32(p, CM_ST_E_GEN));
+                if (up == TR_UP_TBT3) {
+                    tbt3++;
+                } else if (up == TR_UP_USB4) {
+                    usb4++;
+                }
+                break;
+            }
+        }
+    }
+    return tr_up_of_path(host, depth - 1, tbt3, usb4);
+}
+
 static void details_router(TR_TEXT *t, int k, int r)
 {
     const NHI *h;
@@ -2970,8 +3416,9 @@ static void details_router(TR_TEXT *t, int k, int r)
     TR_EXT x;
     int haveX;
     char name[TR_NAME_CHARS];
-    char gen[32];
+    char gen[64];
     char link[96];
+    int up;
     int i;
 
     if (e == NULL) {
@@ -2986,10 +3433,14 @@ static void details_router(TR_TEXT *t, int k, int r)
     bridge = inst_get32(e, CM_ST_E_BRIDGE);
     haveX = h->HaveQ && tr_query_ext(&h->Q, (TR_U32)r, &x);
     tr_router_name(e, name, sizeof(name));
-    tr_gen_text(inst_get32(e, CM_ST_E_GEN), gen, sizeof(gen));
-    tr_link_text_gen(inst_get32(e, CM_ST_E_GEN), kind,
-                     inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL, link,
-                     sizeof(link));
+    up = router_up(k, r);
+    tr_gen_link_text(inst_get32(e, CM_ST_E_GEN), up, gen, sizeof(gen));
+    /* A USB4 router running as Thunderbolt 3 has its link worded as a
+     * Thunderbolt 3 router's (section 17 item 4). */
+    tr_link_text_gen(tr_runs_as_tbt3(inst_get32(e, CM_ST_E_GEN), up)
+                         ? CM_ST_GEN_TBT3 : inst_get32(e, CM_ST_E_GEN),
+                     kind, inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL,
+                     link, sizeof(link));
     tr_printf(t, "Thunderbolt / USB4 device\n");
     tr_printf(t, "  Name:          %s\n", name);
     tr_printf(t, "  Kind:          %s\n",
@@ -3119,12 +3570,49 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
             }
         }
     }
+    {
+        /* Item 10's note: SuperSpeedPlus declared, not to be had here. */
+        TR_FAST_IN fin;
+        const char *why;
+        fast_in(i, &fin, 0);
+        why = tr_fast_note(&fin);
+        if (why != NULL) {
+            tr_printf(t, "  Note:          This device can run at "
+                         "SuperSpeedPlus.\n                 %s\n", why);
+        }
+    }
     tr_printf(t, "  Address:       %u\n", p->Conn.Address);
     tr_printf(t, "  VID:PID:       %04X:%04X\n",
               (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8),
               (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8));
     tr_printf(t, "  Class:         0x%02X (%s)\n", (unsigned int)p->Conn.Dev[4],
               tr_class_name(p->Conn.Dev[4]));
+    if (c->Ours) {
+        /* The storage transport the bus chose (record 25 section 19). */
+        TR_XPORT xr;
+        char xt[200];
+        const char *svc;
+        int got = uport_xport(p, &xr);
+        if (got < 0 && uport_is_storage(p)) {
+            tr_put(t, "  Transport:     not reported by this xhci98.sys\n");
+        } else if (got > 0) {
+            tr_xport_text(&xr, xt, sizeof(xt));
+            tr_printf(t, "  Transport:     %s\n", xt);
+            svc = uport_xport_service(p, &xr);
+            if (tr_xport_stale(&xr, svc)) {
+                tr_printf(t, "  Note:          Windows bound this drive to %s, not to "
+                             "the UAS driver: most\n"
+                             "                 likely its Device Manager entry was "
+                             "first installed while the\n"
+                             "                 drive was offered as Bulk-Only, and "
+                             "Windows keeps that driver\n"
+                             "                 for it. To run it as UAS, uninstall "
+                             "the entry in Device\n"
+                             "                 Manager, then unplug the drive and "
+                             "plug it in again.\n", svc);
+            }
+        }
+    }
     if (p->HaveStr[0]) {
         tr_printf(t, "  Manufacturer:  %s\n", p->Str[0]);
     }
@@ -3359,6 +3847,36 @@ done:
     free(b);
 }
 
+/* xhcicm's log answer for NHI k into a buffer the caller frees (*buf,
+ * NULL where it could not be allocated): tr_qlog_parse's result, 0 with
+ * *err where the call itself failed. The query must have answered. */
+static int cm_log_get(int k, unsigned char **buf, TR_QLOG *l, DWORD *err)
+{
+    unsigned char *b;
+    DWORD got = 0;
+    HANDLE h;
+    int r = 0;
+
+    *err = 0;
+    b = (unsigned char *)malloc(CM_QL_ASK_BYTES);
+    h = open_device(nhi[k].QName);
+    if (b != NULL && h != INVALID_HANDLE_VALUE) {
+        if (DeviceIoControl(h, CM_QL_IOCTL, NULL, 0, b, CM_QL_ASK_BYTES, &got,
+                            NULL) && got <= CM_QL_ASK_BYTES) {
+            r = tr_qlog_parse(b, got, l);
+        } else {
+            *err = GetLastError();
+        }
+    } else {
+        *err = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_OUTOFMEMORY;
+    }
+    if (h != INVALID_HANDLE_VALUE) {
+        CloseHandle(h);
+    }
+    *buf = b;
+    return r;
+}
+
 /* xhcicm's log (section 4.5), asked of the query device the tree's
  * answer came from, kept only for that answer's start. */
 static void log_cm(TR_TEXT *t, int k)
@@ -3366,10 +3884,8 @@ static void log_cm(TR_TEXT *t, int k)
     const NHI *n = &nhi[k];
     char path[300];
     unsigned char *b;
-    DWORD got = 0;
     DWORD err = 0;
     TR_QLOG l;
-    HANDLE h;
     int r = 0;
 
     if (!n->HaveQ) {
@@ -3377,21 +3893,7 @@ static void log_cm(TR_TEXT *t, int k)
                   n->Why[0] ? n->Why : "the driver did not answer");
         return;
     }
-    b = (unsigned char *)malloc(CM_QL_ASK_BYTES);
-    h = open_device(n->QName);
-    if (b != NULL && h != INVALID_HANDLE_VALUE) {
-        if (DeviceIoControl(h, CM_QL_IOCTL, NULL, 0, b, CM_QL_ASK_BYTES, &got,
-                            NULL) && got <= CM_QL_ASK_BYTES) {
-            r = tr_qlog_parse(b, got, &l);
-        } else {
-            err = GetLastError();
-        }
-    } else {
-        err = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_OUTOFMEMORY;
-    }
-    if (h != INVALID_HANDLE_VALUE) {
-        CloseHandle(h);
-    }
+    r = cm_log_get(k, &b, &l, &err);
     if (r == 1 && (l.EpochLo != n->Q.EpochLo || l.EpochHi != n->Q.EpochHi)) {
         tr_put(t, "xhcicm driver log\n  The controller has restarted since "
                   "the tree was read: press F5.\n");
@@ -3525,6 +4027,141 @@ static void details_pci(TR_TEXT *t, int index, int which)
     }
 }
 
+/* ======================================================================== */
+/* The PCI and bridge diagnostics (record 25 section 20, revision 23)        */
+/* ======================================================================== */
+
+/* Value `name` of key k into v; absent where it cannot be read. */
+static void diag_value(HKEY k, const char *name, TR_DVAL *v)
+{
+    DWORD type = 0;
+    DWORD n = TR_DV_MAX;
+    LONG r;
+
+    memset(v, 0, sizeof(*v));
+    r = RegQueryValueExA(k, name, NULL, &type, v->Data, &n);
+    if (r == ERROR_SUCCESS && n <= TR_DV_MAX) {
+        v->State = TR_DV_OK;
+        v->Type = type;
+        v->Len = n;
+    } else if (r == ERROR_MORE_DATA) {
+        v->State = TR_DV_LONG;
+        v->Type = type;
+    }
+}
+
+/* HKEY_LOCAL_MACHINE\path, for reading values: TR_DK_*. */
+static int diag_key(const char *path, HKEY *k, DWORD *err)
+{
+    LONG r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_QUERY_VALUE, k);
+
+    *err = (DWORD)r;
+    if (r == ERROR_SUCCESS) {
+        return TR_DK_OPEN;
+    }
+    /* Windows 98 and ME can answer ERROR_BADKEY for a key not there. */
+    return r == ERROR_FILE_NOT_FOUND || r == ERROR_PATH_NOT_FOUND ||
+                   r == ERROR_BADKEY
+               ? TR_DK_ABSENT : TR_DK_ERROR;
+}
+
+/* Task 44.53's records in NHI k's log (section 20 item 5). */
+static void diag_irq(TR_TEXT *t, int k)
+{
+    const NHI *n = &nhi[k];
+    unsigned char *b;
+    DWORD err = 0;
+    TR_QLOG l;
+    int r;
+
+    if (!n->HaveQ) {
+        tr_printf(t, "    Its log cannot be read: %s.\n",
+                  n->Why[0] ? n->Why : "the driver did not answer");
+        return;
+    }
+    r = cm_log_get(k, &b, &l, &err);
+    if (r == 1 && (l.EpochLo != n->Q.EpochLo || l.EpochHi != n->Q.EpochHi)) {
+        tr_put(t, "    The controller has restarted since the tree was "
+                  "read: press F5.\n");
+    } else if (r == 1 && (l.Flags & CM_QL_F_RECORDING) == 0) {
+        tr_printf(t, "    Its log is not recording (XhciCmLogVerbosity %lu), "
+                     "so it holds no such\n    record. To record it, set "
+                     "xhcicm's level to 2 in View > Logging level,\n    then "
+                     "restart Windows.\n", (unsigned long)l.Verbosity);
+    } else if (r == 1) {
+        if (tr_irq_lines(t, l.Log, l.LogBytes, 4, TR_IRQ_SHOWN) == 0) {
+            tr_put(t, "    None in its log.\n");
+        }
+    } else if (err == ERROR_INVALID_FUNCTION || err == ERROR_NOT_SUPPORTED) {
+        tr_put(t, "    This xhcicm.sys does not serve its log: it is older "
+                  "than this tool.\n");
+    } else if (err != 0) {
+        tr_printf(t, "    Its log could not be read (error %lu).\n",
+                  (unsigned long)err);
+    } else {
+        tr_put(t, "    The driver's answer is not one this tool reads.\n");
+    }
+    free(b);
+}
+
+static void details_diag(TR_TEXT *t)
+{
+    static TR_DVAL v[TR_PFW_COUNT];
+    static TR_DVAL d;
+    char path[INST_ID_CHARS + 96];
+    HKEY key;
+    DWORD err;
+    int ks;
+    int i;
+
+    tr_diag_head(t);
+    memset(v, 0, sizeof(v));
+    ks = diag_key(envNt ? TR_PFW_KEY_NT : TR_PFW_KEY_9X, &key, &err);
+    if (ks == TR_DK_OPEN) {
+        for (i = 0; i < TR_PFW_COUNT; i++) {
+            diag_value(key, tr_pfw_name(i), &v[i]);
+        }
+        RegCloseKey(key);
+    }
+    tr_pfw_text(t, ks, (TR_U32)err, v, envNt);
+    tr_put(t, "\nThunderbolt and USB4: the connection manager's bridge "
+              "records\n");
+    if (nhiCount == 0) {
+        tr_put(t, "  No host interface driven by xhcicm was found.\n");
+    }
+    for (i = 0; i < nhiCount; i++) {
+        tr_diag_nhi(t, dn_name(&gw.N[nhi[i].Node]), nhi[i].Id);
+        nhi_hw_key(nhi[i].Id, path, sizeof(path));
+        ks = diag_key(path, &key, &err);
+        if (ks != TR_DK_OPEN) {
+            tr_printf(t, "    Its hardware key could not be read (error "
+                         "%lu).\n", (unsigned long)err);
+            continue;
+        }
+        diag_value(key, TR_BRDIAG_VALUE, &d);
+        tr_brdiag_text(t, &d, envNt);
+        diag_value(key, TR_NIDIAG_VALUE, &d);
+        tr_nidiag_text(t, &d, envNt);
+        RegCloseKey(key);
+    }
+    tr_put(t, "\nWindows 2000: the interrupt given to a function hot-added "
+              "behind a tunnel\n");
+    if (!envNt) {
+        tr_put(t, "  Not on this system (Windows 2000 on the Standard PC HAL "
+                  "only).\n");
+        return;
+    }
+    tr_put(t, "  The connection manager's log records it, on Windows 2000 "
+              "with the\n  Standard PC HAL alone.\n");
+    if (nhiCount == 0) {
+        tr_put(t, "  No host interface driven by xhcicm was found.\n");
+    }
+    for (i = 0; i < nhiCount; i++) {
+        tr_diag_wrap(t, 2, dn_name(&gw.N[nhi[i].Node]));
+        diag_irq(t, i);
+    }
+}
+
 static void details_of(TR_TEXT *t, int i, int fetch)
 {
     const TNODE *n = &tn[i];
@@ -3584,9 +4221,9 @@ static void details_of(TR_TEXT *t, int i, int fetch)
     case K_USBROOT:
         tr_printf(t, "%d USB host controller%s, %d USB device%s.\n", ucCount,
                   tr_plural(ucCount), usbDevices, tr_plural(usbDevices));
-        if (hcdOpenError != 0) {
-            tr_printf(t, "\\\\.\\HCD0 did not open (error %lu).\n",
-                      (unsigned long)hcdOpenError);
+        if (hcdOpenError != 0 && usb_door_missed()) {
+            tr_printf(t, "\\\\.\\%s0 did not open (error %lu).\n",
+                      tr_door_stem(), (unsigned long)hcdOpenError);
         }
         if (hcdNameRefused != 0) {
             tr_printf(t, "%d controllers did not report their driver key.\n",
@@ -3608,6 +4245,8 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         }
         if (c->Ours) {
             lv_details(t, c->Dn, TR_LV_XHCI98);
+            ver_details(t, c->VerHave, c->VerRunning,
+                        verFileHcdOk ? verFileHcd : NULL);
         }
         details_devnode(t, c->Dn);
         break;
@@ -3626,6 +4265,9 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         break;
     case K_PCI:
         details_pci(t, n->A, n->B);
+        break;
+    case K_DIAG:
+        details_diag(t);
         break;
     default:
         tr_printf(t, "%s\n", n->Label);
@@ -6377,6 +7019,14 @@ static char fastTextKey[TR_FAST_KEY];   /* the device fastText names        */
 static TR_QUAL_CACHE qualCache;
 /* Every port of the model has room for its answer (tr_core.h). */
 typedef char tr_qual_fits[(TR_QUAL_MAX >= TR_MAX_UPORTS) ? 1 : -1];
+/* The path's limit (item 10): the fastest this computer's xHCI98 USB 3
+ * ports run, read at each scan. */
+static int fastTop = -1;
+/* Windows' own ports (item 11): the option in force at the last scan (and
+ * the notice with it), and the BOS answers by key. */
+static int fastWin;
+static int fastQuiet;           /* a scan that sends no balloon (item 11)   */
+static TR_WBOS_CACHE wbosCache;
 static HWND hFastWnd;           /* the list's window, while it is open      */
 static HWND hFastEdit;
 static HWND hFastOk;
@@ -6427,6 +7077,103 @@ static void fast_set(int on)
     RegCloseKey(k);
 }
 
+/* Windows' own ports watched too (item 11): the user's DWORD 1; absent,
+ * 0, another type or another number leave it off. */
+static int fast_win_setting(void)
+{
+    DWORD v;
+
+    return fast_dword(HKEY_CURRENT_USER, TR_SETTINGS_KEY, TR_FAST_WIN_VALUE,
+                      &v) && v == 1;
+}
+
+static void fast_win_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_FAST_WIN_VALUE, 0, REG_DWORD, (const BYTE *)&v,
+                   sizeof(v));
+    RegCloseKey(k);
+}
+
+/* What a Windows controller is (item 11), by its PCI class: EHCI, OHCI
+ * or UHCI; anything else (xHCI, a class not read) is never watched. */
+static int fast_win_ctrl(int c)
+{
+    int dn = uc[c].Dn;
+    const DNODE *n;
+
+    if (uc[c].Ours || dn < 0 || dn >= gw.Count) {
+        return TR_WC_OTHER;
+    }
+    n = &gw.N[dn];
+    if (inst_msz_has_class(n->Hw, n->HwBytes, "0C0320") ||
+        inst_msz_has_class(n->Compat, n->CompatBytes, "0C0320")) {
+        return TR_WC_EHCI;
+    }
+    if (inst_msz_has_class(n->Hw, n->HwBytes, "0C0310") ||
+        inst_msz_has_class(n->Compat, n->CompatBytes, "0C0310") ||
+        inst_msz_has_class(n->Hw, n->HwBytes, "0C0300") ||
+        inst_msz_has_class(n->Compat, n->CompatBytes, "0C0300")) {
+        return TR_WC_USB1;
+    }
+    return TR_WC_OTHER;
+}
+
+/* The fastest this computer's xHCI98 USB 3 ports run (item 10): each
+ * xhci98 controller's query, read once a refresh. */
+static void fast_top_read(void)
+{
+    int c;
+    DWORD err;
+
+    fastTop = -1;
+    for (c = 0; c < ucCount; c++) {
+        if (!uc[c].Ours) {
+            continue;
+        }
+        if (uc[c].XqState == 0) {
+            uc[c].XqState = hcd_query(c, &uc[c].Xq, &uc[c].X, &err) == 1
+                                ? 1 : -1;
+        }
+        if (uc[c].XqState == 1 && uc[c].X.Version >= XHQ_VERSION) {
+            fastTop = tr_fast_top_add(fastTop, 1, uc[c].X.Ports,
+                                      (unsigned int)uc[c].X.PortCount);
+        } else {
+            fastTop = tr_fast_top_add(fastTop, 0, NULL, 0);
+        }
+    }
+}
+
+/* A Windows port's BOS through its hub (item 11): the header, then the
+ * whole set; tr_bos_top's answer, -1 for any failure. */
+static int fast_win_bos(const UPORT *p)
+{
+    unsigned char *b;
+    DWORD n;
+    unsigned int total;
+    int v = -1;
+
+    n = usb_desc(p->Hub, p->Conn.Port, 0x0F, 0, 0, 5, &b);
+    if (n >= 5) {
+        total = (unsigned int)b[2] | ((unsigned int)b[3] << 8);
+        free(b);
+        b = NULL;
+        if (total >= 5 && total <= 4096) {
+            n = usb_desc(p->Hub, p->Conn.Port, 0x0F, 0, 0, total, &b);
+            v = tr_bos_top(b, n);
+        }
+    }
+    free(b);
+    return v;
+}
+
 static void fast_key_of(int k, char *key, size_t cap)
 {
     const UCTRL *c = &uc[up[k].Ctrl];
@@ -6456,10 +7203,10 @@ static int fast_qual(int k, int ask)
     return v;
 }
 
-/* Port k as tr_fast_check reads it; 1 when it counts, with *f. Only the
- * scan (ask set) sends a device_qualifier request; the details pane and the
- * list read the answers it settled. */
-static int fast_port(int k, TR_FAST *f, int ask)
+/* Port k as tr_fast_check reads it into *in. Only the scan (ask set)
+ * sends a device_qualifier or BOS request; the details pane and the list
+ * read the answers it settled. */
+static void fast_in(int k, TR_FAST_IN *in0, int ask)
 {
     const UPORT *p = &up[k];
     TR_FAST_IN in;
@@ -6473,6 +7220,15 @@ static int fast_port(int k, TR_FAST *f, int ask)
     in.V2Flags = p->V2Flags;
     in.ExSpeed = p->Conn.Speed;
     in.Root = p->ParentUp < 0;
+    in.Top = fastTop;
+    in.WinWatch = fastWin;
+    in.WinCtrl = fast_win_ctrl(p->Ctrl);
+    in.WinBos = -1;
+    for (a = p->ParentUp; a >= 0; a = up[a].ParentUp) {
+        if (tr_fast_hub_cap(up[a].HaveConn, up[a].HaveV2, up[a].V2Flags)) {
+            in.HubSs = 1;
+        }
+    }
     if (p->ParentUp >= 0) {
         const UPORT *h = &up[p->ParentUp];
         in.HubKnown = h->HaveConn;
@@ -6490,6 +7246,32 @@ static int fast_port(int k, TR_FAST *f, int ask)
     }
     in.BcdUsb = (unsigned int)p->Conn.Dev[2] | ((unsigned int)p->Conn.Dev[3] << 8);
     in.HsQual = tr_fast_wants_qual(&in) ? fast_qual(k, ask) : -1;
+    if (!in.Ours && in.Connected && !in.IsHub) {
+        /* Every plug present keeps its answer (item 11), asked or not and
+         * whether the option is on or off now, so a plug is asked once. */
+        char fk[TR_FAST_KEY];
+        char key[TR_FAST_KEY];
+        int v;
+        fast_key_of(k, fk, sizeof(fk));
+        tr_wbos_key(key, sizeof(key), fk, p->Conn.Address);
+        v = tr_wbos_get(&wbosCache, key);
+        if (tr_fast_wants_bos(&in)) {
+            if (v == -2 && ask && tr_wbos_room(&wbosCache, key)) {
+                v = fast_win_bos(p);
+                tr_wbos_put(&wbosCache, key, v);
+            }
+            in.WinBos = v >= TR_SPEED_SUPER ? v : -1;
+        }
+    }
+    *in0 = in;
+}
+
+/* Port k as tr_fast_check reads it; 1 when it counts, with *f. */
+static int fast_port(int k, TR_FAST *f, int ask)
+{
+    TR_FAST_IN in;
+
+    fast_in(k, &in, ask);
     return tr_fast_check(&in, f);
 }
 
@@ -6727,16 +7509,21 @@ static void fast_scan(void)
     int k;
 
     fastOn = fast_setting();
+    fastWin = fastOn && fast_win_setting();
+    fast_top_read();
     fastCount = 0;
     memset(&firstF, 0, sizeof(firstF));
     /* The candidates present marked first, so the answers of those gone
-     * are dropped before any new one is asked (section 7.7 item 1). */
+     * are dropped before any new one is asked (section 7.7 items 1 and
+     * 11). */
     tr_qual_begin(&qualCache);
+    tr_wbos_begin(&wbosCache);
     for (k = 0; k < upCount; k++) {
         TR_FAST f;
         (void)fast_port(k, &f, 0);
     }
     tr_qual_end(&qualCache);
+    tr_wbos_end(&wbosCache);
     for (k = 0; k < upCount; k++) {
         TR_FAST f;
         char key[TR_FAST_KEY];
@@ -6773,7 +7560,7 @@ static void fast_scan(void)
         fastHold = 0;
         fast_balloon_event(TR_BE_DROP);
     }
-    if (fresh > 0 && first >= 0) {
+    if (fresh > 0 && first >= 0 && !fastQuiet) {
         if (fastHold && fastPending) {
             /* Held for the first device's devnode: these join it. */
             fastHoldCount += fresh;
@@ -7003,6 +7790,29 @@ static void fast_item(HMENU m, int append)
     }
 }
 
+/* Item 11's option, under the notice's item; greyed while the notice is
+ * off, which turns it off too. */
+static void fast_win_item(HMENU m, int append)
+{
+    UINT flags = MF_STRING | (fast_win_setting() ? MF_CHECKED : MF_UNCHECKED) |
+                 (fast_setting() ? MF_ENABLED : MF_GRAYED);
+    const char *text = "Watch Windows' own USB &ports too";
+
+    if (append) {
+        AppendMenuA(m, flags, IDM_FAST_WIN, text);
+    } else {
+        ModifyMenuA(m, IDM_FAST_WIN, MF_BYCOMMAND | flags, IDM_FAST_WIN, text);
+    }
+}
+
+/* Item 11's option turned over: a refresh, so the ports are read at once
+ * (or let go). */
+static void fast_win_toggle(void)
+{
+    fast_win_set(!fast_win_setting());
+    refresh_window();
+}
+
 /* The menu item chosen: the user's value turned over, the icon at once. */
 static void fast_toggle(void)
 {
@@ -7010,6 +7820,14 @@ static void fast_toggle(void)
     fastOn = fast_setting();
     fastPending = 0;
     fast_balloon_event(TR_BE_DROP);
+    if (fastOn && fast_win_setting()) {
+        /* Item 11's ports are read only by a scan: one now, with no
+         * balloon, as turning the notice on gives none (item 7). Nothing
+         * is owed by then, so the scan's announcement sends nothing. */
+        fastQuiet = 1;
+        refresh_window();
+        fastQuiet = 0;
+    }
     if (hTray != NULL) {
         tray_red();             /* the icon at once (section 7.2.1 item 2) */
     }
@@ -7098,11 +7916,12 @@ static void show_details(void)
 
 static void update_status(void)
 {
-    char text[128];
+    char text[192];
 
-    tr_sprintf(text, sizeof(text), "%d USB device%s, %d Thunderbolt/USB4 device%s%s",
+    tr_sprintf(text, sizeof(text), "%d USB device%s, %d Thunderbolt/USB4 device%s%s%s",
                usbDevices, tr_plural(usbDevices), tbDevices, tr_plural(tbDevices),
-               viewStale ? " - changed, press F5" : "");
+               viewStale ? " - changed, press F5" : "",
+               verWarn ? " - restart Windows to finish the driver update" : "");
     SendMessageA(hStatus, SB_SETTEXTA, 0, (LPARAM)text);
 }
 
@@ -7360,7 +8179,7 @@ static BOOL CALLBACK about_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                    "Shows every USB and Thunderbolt/USB4 controller and device, "
                    "and stops a USB storage device or a device behind a "
                    "Thunderbolt or USB4 port safely.\r\n\r\n"
-                   "Free software under the GNU General Public License, version 2.",
+                   "Free software under the GNU GPL, version 2 or later.",
                    XHCITR_VERSION, XHCI_VER_STR);
         SetDlgItemTextA(dlg, IDC_ABOUT_TEXT, text);
         SendDlgItemMessageA(dlg, IDC_ABOUT_ICON, STM_SETICON, (WPARAM)hIconBig, 0);
@@ -7417,6 +8236,9 @@ static void init_menu(HMENU m)
     if (GetMenuState(m, IDM_FAST, MF_BYCOMMAND) != (UINT)-1) {
         fast_item(m, 0);
     }
+    if (GetMenuState(m, IDM_FAST_WIN, MF_BYCOMMAND) != (UINT)-1) {
+        fast_win_item(m, 0);
+    }
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
                                           ? MF_ENABLED : MF_GRAYED));
@@ -7453,6 +8275,9 @@ static int command(HWND w, UINT id)
         return 1;
     case IDM_FAST:
         fast_toggle();
+        return 1;
+    case IDM_FAST_WIN:
+        fast_win_toggle();
         return 1;
     case IDM_LEVEL:
         level_dialog(w, lv_driver_of_node(tree_selected()));
@@ -7865,7 +8690,8 @@ static void tray_balloon(const char *title, const char *text, int warn)
 /* ---- the red icon (record 25 section 7.2.1, task 43.57) ------------------ */
 
 /* 43.27's set, handed over (section 7.2.1 item 2): each device of it that
- * is red - TR_RED_SLOW3 for TR_FW_PORT2, HUB2, HUB1 and HUB3, TR_RED_SLOW2
+ * is red - TR_RED_SLOW3 for TR_FW_PORT2, HUB2, HUB1, HUB3 and WIN2,
+ * TR_RED_SLOW2
  * for TR_FW_HUBFS, never TR_FW_LINK - with its name and its port's tree
  * key, and only while 43.27's notice is in force. The model's ports read
  * as fast_scan read them, with no request sent (the device_qualifier
@@ -7886,7 +8712,8 @@ static int red_slow(TR_REDDEV *dev, char (*keys)[TR_RED_KEY], int cap)
         if (f.Where == TR_FW_HUBFS) {
             dev[n].Kind = TR_RED_SLOW2;
         } else if (f.Where == TR_FW_PORT2 || f.Where == TR_FW_HUB2 ||
-                   f.Where == TR_FW_HUB1 || f.Where == TR_FW_HUB3) {
+                   f.Where == TR_FW_HUB1 || f.Where == TR_FW_HUB3 ||
+                   f.Where == TR_FW_WIN2) {
             dev[n].Kind = TR_RED_SLOW3;
         } else {
             continue;
@@ -7926,7 +8753,8 @@ static void red_hc_read(void)
         if (h != INVALID_HANDLE_VALUE) {
             memset(b, 0, sizeof(b));
             if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, sizeof(b), &got, NULL) &&
-                got >= XHQ_HDR_BYTES && inst_get32(b, XHQ_O_MAGIC) == XHQ_MAGIC) {
+                got >= XHQ_HDR_BYTES_V1 &&
+                inst_get32(b, XHQ_O_MAGIC) == XHQ_MAGIC) {
                 r->Failed = (inst_get32(b, XHQ_O_FLAGS) & XHQ_F_FAILED) != 0;
             }
             CloseHandle(h);
@@ -8278,6 +9106,7 @@ static void tray_context_menu(void)
     login_item(m, 1);
     warn_item(m, 1);
     fast_item(m, 1);
+    fast_win_item(m, 1);
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_EXIT, "E&xit");
     SetMenuDefaultItem(m, IDM_OPEN, FALSE);
@@ -8308,6 +9137,10 @@ static void tray_context_menu(void)
         break;
     case IDM_FAST:
         fast_toggle();
+        break;
+    case IDM_FAST_WIN:
+        fast_win_toggle();
+        tray_update();
         break;
     case IDM_EXIT:
         quit_all();
@@ -8707,18 +9540,23 @@ static int snap_child(const char *args, const char *dir, char *outPath,
     return (int)code;
 }
 
-/* The HCD number of a controller, from its \\.\HCD<n> name, or -1. */
+/* The /c number of a controller, from the door name it was found by, or
+ * -1. XHCITR /snapshot /c N opens XHCI98HC<N> on NT and, when there is no
+ * such name, HCD<N> (a driver before 3.3.0.0); HCD<N> on 98 SE and ME.
+ * The XHCI98HC scan runs first, so a 3.3.0.0 controller on 2000 or XP,
+ * found again by its HCD<m> alias, keeps its XHCI98HC number. */
 static int snap_hcd_number(const UCTRL *c)
 {
-    const char *p = c->Hcd;
     const char *q;
     int n = 0;
 
-    q = strstr(p, "HCD");
-    if (q == NULL) {
+    if (envNt && strncmp(c->Hcd, "XHCI98HC", 8) == 0) {
+        q = c->Hcd + 8;
+    } else if (strncmp(c->Hcd, "HCD", 3) == 0) {
+        q = c->Hcd + 3;
+    } else {
         return -1;
     }
-    q += 3;
     if (*q < '0' || *q > '9') {
         return -1;
     }
@@ -8870,7 +9708,7 @@ static int report_snapshots(HANDLE f)
         int level;
 
         if (!snap_temp_dir(dir, sizeof(dir))) {
-            tr_sprintf(line, sizeof(line), "HCD%d: no snapshot: no temporary "
+            tr_sprintf(line, sizeof(line), "Controller %d: no snapshot: no temporary "
                        "directory could be made.\r\n\r\n", hcd);
             ok = snap_say(f, line);
             continue;
@@ -8884,7 +9722,7 @@ static int report_snapshots(HANDLE f)
          * record 25 section 15): 0 both complete, 3 the dump's .TXT
          * incomplete, 4 no dump (the .DEV says why), 5 the .DEV
          * incomplete; anything else is said with its number. */
-        tr_sprintf(line, sizeof(line), "HCD%d: snapshot %s (exit %d)\r\n",
+        tr_sprintf(line, sizeof(line), "Controller %d: snapshot %s (exit %d)\r\n",
                    hcd,
                    rc == 0   ? "complete"
                    : rc == 3 ? "taken, but its dump .TXT is NOT complete"
@@ -8912,13 +9750,13 @@ static int report_snapshots(HANDLE f)
             level = snap_txt_level(file);
             if (GetFileAttributesA(file) == 0xFFFFFFFFUL) {
                 if (nh != 0) {
-                    tr_sprintf(line, sizeof(line), "HCD%d: no dump (the "
+                    tr_sprintf(line, sizeof(line), "Controller %d: no dump (the "
                                "snapshot answered %d; the device report says "
                                "why).\r\n\r\n", hcd, rc);
                     ok = ok && snap_say(f, line);
                 }
             } else if (level < 0 || level >= 4) {
-                tr_sprintf(line, sizeof(line), "HCD%d: the dump is withheld: "
+                tr_sprintf(line, sizeof(line), "Controller %d: the dump is withheld: "
                            "%s Use level 2.\r\n\r\n", hcd,
                            level < 0 ? "its level could not be read."
                                      : "at level 4 it can hold memory "

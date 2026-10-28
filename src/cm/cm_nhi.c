@@ -68,6 +68,166 @@
 
 #include "cm.h"
 #include "cm_nvlink.h"
+#include "cm_pwrr.h"
+
+/*
+ * Record 22 section 9.4: the record a USB4 instance hands the next one on
+ * the same NHI, kept in the image between the two (never the extension,
+ * which a removal deletes), one slot per NHI, keyed by its physical
+ * device object and its configuration ids, stamped with the tick count.
+ * Written by the unbind; taken (and emptied) by every start of the NHI,
+ * whatever it then does, and handed to the core only by an activation of
+ * the USB4 profile whose ids are the slot's; emptied by a surprise
+ * removal. No reference is held on the device object: a record older
+ * than CM_U4_CARRY_MS at the take is dropped. cmU4CarryLock guards the
+ * slots and the tick and is never held across anything else. IRQL:
+ * PASSIVE_LEVEL callers.
+ */
+#define CM_U4_CARRY_SLOTS   4UL
+#define CM_U4_CARRY_MS      120000UL
+
+typedef struct _CM_U4_CARRY_SLOT {
+    PDEVICE_OBJECT Pdo;     /* NULL: free */
+    ULONG Ids;              /* configuration DW 0 */
+    ULONG SubVendor;
+    ULONG Tick;             /* KeQueryTickCount's low word when written */
+    TBT_U4_CARRY Carry;
+} CM_U4_CARRY_SLOT;
+
+static KSPIN_LOCK cmU4CarryLock;
+static CM_U4_CARRY_SLOT cmU4Carry[CM_U4_CARRY_SLOTS];
+static ULONG cmU4CarryTicks;    /* CM_U4_CARRY_MS in ticks */
+static TBT_U4_CARRY cmU4CarryNone;      /* all zero, never written */
+
+VOID CmNhiCarryInit(VOID)
+{
+    ULONG unit;
+
+    KeInitializeSpinLock(&cmU4CarryLock);
+    /* 100 ns units to microseconds; 10 to 55 ms ticks. */
+    unit = KeQueryTimeIncrement() / 10UL;
+    if (unit == 0) {
+        unit = 1000UL;
+    }
+    cmU4CarryTicks = (CM_U4_CARRY_MS * 1000UL) / unit + 1UL;
+}
+
+static ULONG cmU4CarryNow(VOID)
+{
+    LARGE_INTEGER ticks;
+
+    KeQueryTickCount(&ticks);
+    return ticks.LowPart;
+}
+
+/* At every start, before anything else: this NHI's slot emptied and its
+ * record, ids and all, kept on the instance when it is recent enough
+ * (cmU4Activate checks the ids once the start has read them). */
+static VOID cmU4CarryTake(PCM_NHI nhi)
+{
+    KIRQL irql;
+    ULONG now;
+    ULONG i;
+
+    CmZero(&nhi->U4Carry, sizeof(nhi->U4Carry));
+    nhi->U4CarryIds = 0;
+    nhi->U4CarrySub = 0;
+    nhi->U4CarryTick = 0;
+    now = cmU4CarryNow();
+    KeAcquireSpinLock(&cmU4CarryLock, &irql);
+    for (i = 0; i < CM_U4_CARRY_SLOTS; i++) {
+        if (cmU4Carry[i].Pdo == nhi->Common.Pdo) {
+            if (now - cmU4Carry[i].Tick <= cmU4CarryTicks) {
+                nhi->U4Carry = cmU4Carry[i].Carry;
+                nhi->U4CarryIds = cmU4Carry[i].Ids;
+                nhi->U4CarrySub = cmU4Carry[i].SubVendor;
+                nhi->U4CarryTick = cmU4Carry[i].Tick;
+            }
+            CmZero(&cmU4Carry[i], sizeof(cmU4Carry[i]));
+        }
+    }
+    KeReleaseSpinLock(&cmU4CarryLock, irql);
+}
+
+/* This NHI's slot written (an empty record frees it). What became of it,
+ * for the log: CM_U4_CARRY_*. */
+#define CM_U4_CARRY_EMPTY   0UL
+#define CM_U4_CARRY_STORED  1UL
+#define CM_U4_CARRY_EXPIRED 2UL     /* a forwarded record past its age */
+#define CM_U4_CARRY_FULL    3UL     /* every slot another NHI's */
+
+static ULONG cmU4CarryPut(PCM_NHI nhi, const TBT_U4_CARRY *in)
+{
+    KIRQL irql;
+    ULONG i;
+    ULONG at;
+    ULONG now;
+    ULONG how;
+
+    at = CM_U4_CARRY_SLOTS;
+    how = in->Valid ? CM_U4_CARRY_STORED : CM_U4_CARRY_EMPTY;
+    now = cmU4CarryNow();
+    if (in->Valid && in->Forwarded) {
+        /* Handed on unchanged: never younger than when it was written. */
+        if (now - nhi->U4CarryTick > cmU4CarryTicks) {
+            in = &cmU4CarryNone;
+            how = CM_U4_CARRY_EXPIRED;
+        }
+        now = nhi->U4CarryTick;
+    }
+    KeAcquireSpinLock(&cmU4CarryLock, &irql);
+    for (i = 0; i < CM_U4_CARRY_SLOTS; i++) {
+        if (cmU4Carry[i].Pdo == nhi->Common.Pdo) {
+            CmZero(&cmU4Carry[i], sizeof(cmU4Carry[i]));
+        }
+    }
+    if (in->Valid) {
+        for (i = 0; i < CM_U4_CARRY_SLOTS && at == CM_U4_CARRY_SLOTS; i++) {
+            if (cmU4Carry[i].Pdo == NULL) {
+                at = i;
+            }
+        }
+        if (at < CM_U4_CARRY_SLOTS) {
+            cmU4Carry[at].Pdo = nhi->Common.Pdo;
+            cmU4Carry[at].Ids = nhi->LiveIds;
+            cmU4Carry[at].SubVendor = nhi->SubVendor;
+            cmU4Carry[at].Tick = now;
+            cmU4Carry[at].Carry = *in;
+        }
+    }
+    KeReleaseSpinLock(&cmU4CarryLock, irql);
+    if (in->Valid && at == CM_U4_CARRY_SLOTS) {
+        how = CM_U4_CARRY_FULL;
+    }
+    return how;
+}
+
+/* This NHI's slot emptied (a surprise removal). */
+static VOID cmU4CarryDrop(PCM_NHI nhi)
+{
+    TBT_U4_CARRY none;
+
+    CmZero(&none, sizeof(none));
+    (VOID)cmU4CarryPut(nhi, &none);
+}
+
+/* The unbind's half: what the stopped core hands on, logged as what
+ * became of it (CM_U4_CARRY_*, bits 8 to 15) and the number of tunnels
+ * it names. */
+static VOID cmU4CarryOut(PCM_NHI nhi)
+{
+    TBT_U4_CARRY c;
+    ULONG i;
+    ULONG n;
+
+    TbtU4GetCarry(&nhi->U4, &c);
+    n = 0;
+    for (i = 0; i < TBT_U4_MAX_PORTS; i++) {
+        n += (c.Port[i].Pcie.Up ? 1UL : 0UL) + (c.Port[i].Usb3.Up ? 1UL : 0UL);
+    }
+    n |= cmU4CarryPut(nhi, &c) << 8;
+    CmLogNote(nhi, "u4.carry.out", n);
+}
 
 /* cm.h: an address record, at XhciCmLogVerbosity 4 alone (the shared ring's
  * own gate, XhciLogAppendAddress). Here rather than beside CmLogNote in
@@ -468,6 +628,7 @@ VOID CmNhiUnbind(PCM_NHI nhi)
             nhi->U4ClearOk = 0;
             TbtU4Contain(&nhi->U4);
             TbtU4Stop(&nhi->U4);
+            cmU4CarryOut(nhi);
             nhi->Counters.U4ContainRefused++;
             CmLogNote(nhi, "u4.stop.contained", nhi->Live.State);
             return;
@@ -483,6 +644,7 @@ VOID CmNhiUnbind(PCM_NHI nhi)
         TbtU4Stop(&nhi->U4);
         CmLogNote(nhi, "u4.stop", (nhi->U4.Failed ? 1UL : 0UL) |
                                       (nhi->U4ClearOk ? 2UL : 0UL));
+        cmU4CarryOut(nhi);
         return;
     }
     TbtIcmUnbind(&nhi->Icm);
@@ -696,6 +858,15 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
         } else {
             CmReenumLossEnd(nhi);
         }
+    }
+    if (nhi->Reenum.Deferred != 0) {
+        /* Record 21 section 6.1.2: on 98 SE and ME, where the loss
+         * changes no entry, each member whose removal is held is marked
+         * as U22 marks a tunnel whose entry lost UP: the recovery drains
+         * and rebuilds its PCIe tunnel, so the held removal is made with
+         * the endpoint absent behind it. */
+        nhi->RecLostUp |= nhi->Reenum.Deferred;
+        CmLogNote(nhi, "u4.contained.lost-up", nhi->RecLostUp);
     }
 }
 
@@ -922,7 +1093,8 @@ static BOOLEAN cmU4StopWaiting(PCM_NHI nhi)
     waiting = (BOOLEAN)(nhi->Live.Revoked || nhi->PnpStopPending ||
                         (nhi->WorkBits & (CM_WORK_STOP | CM_WORK_EXIT |
                                           CM_WORK_D3 | CM_WORK_SYSTEM |
-                                          CM_WORK_DIRECT)) != 0);
+                                          CM_WORK_DIRECT |
+                                          CM_WORK_QUIESCE)) != 0);
     KeReleaseSpinLock(&nhi->WorkLock, irql);
     return waiting;
 }
@@ -1161,6 +1333,55 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
 }
 
 /*
+ * Record 21 section 6.1.2 (task 44.54): the members whose re-enumeration
+ * the 98 SE and ME worker holds - the barred ones, and every member a
+ * port's PCIe rebuild is still owed behind (every member, where that
+ * port's member is not known) - so that no re-enumeration of a member
+ * runs between its retirement and its tunnel's rebuild: one that numbered
+ * an empty bus and then met the rebuilt bridges unnumbered would leave
+ * them at problem 29. The rebuild's own post, refused meanwhile, is
+ * retried once the hold lifts, the tunnel up.
+ */
+ULONG CmNhiU4WorkerHold(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    ULONG hold;
+    ULONG member;
+    ULONG i;
+
+    hold = nhi->RecBarred;
+    for (i = 1; i <= nhi->U4.PortCount && i <= TBT_U4_MAX_PORTS; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p == NULL || !p->RebuildPcie || p->Pcie.Up) {
+            continue;
+        }
+        member = cmTopoUsable(nhi)
+                     ? XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, i)
+                     : XHCI_TBT_NO_MEMBER;
+        if (member != XHCI_TBT_NO_MEMBER && member < 32) {
+            hold |= 1UL << member;
+        } else {
+            hold |= cmU4AllMembers(nhi);
+        }
+    }
+    return hold;
+}
+
+/* The worker's hold set to CmNhiU4WorkerHold's mask, posted only when it
+ * changes (each post wakes the worker); a new worker takes the mask in
+ * force when it is made (cm_reenum.c). */
+static VOID cmU4SetWorkerHold(PCM_NHI nhi)
+{
+    ULONG hold;
+
+    hold = CmNhiU4WorkerHold(nhi);
+    if (hold != nhi->RecWkHold && CmReenumHold(nhi, hold)) {
+        /* Cached only once a worker took it. */
+        nhi->RecWkHold = hold;
+    }
+}
+
+/*
  * Part 4's barrier, every pass: each barred member whose devnode is now
  * retired (CmReenumRetired) has mode retire applied to its channel
  * entries and its barrier lifted; one still standing gets its
@@ -1194,6 +1415,7 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
         /* No seam (never started): no devnode this driver re-enumerates,
          * retires or publishes for. */
         nhi->RecBarred = 0;
+        nhi->RecWkHold = 0;
     }
     if (nhi->RecBarred != 0 && cmTopoUsable(nhi)) {
         now = nhi->Host.NowMs(nhi);
@@ -1206,7 +1428,7 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
             if ((nhi->RecRetireSent & bit) != 0 &&
                 CmReenumRetired(nhi, i, nhi->RecRetireAns[i])) {
                 nhi->RecBarred &= ~bit;
-                CmReenumHold(nhi, nhi->RecBarred);
+                cmU4SetWorkerHold(nhi);
                 CmNvlinkRetireMember(nhi, nhi->Reenum.Topo.Set[i]);
                 if ((nhi->RecBusChanged & bit) != 0) {
                     /* The observed retirement authorises R8a's release. */
@@ -1297,6 +1519,11 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
             CmLogNote(nhi, "u4.recover.barred", (i << 8) | (barred ? 1UL : 0UL));
         }
     }
+    if (nhi->ReenumOn) {
+        /* Record 21 section 6.1.2: the worker's hold follows the barrier
+         * and the rebuilds still owed, every pass. */
+        cmU4SetWorkerHold(nhi);
+    }
 }
 
 /* After the commit, with the lock released, admitted (Delivering): the
@@ -1308,9 +1535,19 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
     TBT_ICM_ACTION a;
     const TBT_U4_PORT *p;
     ULONG i;
+    ULONG member;
+    ULONG bound;
+    ULONG open;
+    ULONG closed;
+    BOOLEAN debt;
+    BOOLEAN proved;
+    BOOLEAN unknownOpen;
 
     CmLogNote(nhi, "u4.recover.ok", CmLiveEpisode(&nhi->Live));
     nhi->Counters.U4RecoverOk++;
+    bound = 0;
+    open = 0;
+    unknownOpen = FALSE;
     for (i = 1; i <= nhi->U4.PortCount && i <= TBT_U4_MAX_PORTS; i++) {
         p = TbtU4Port(&nhi->U4, i);
         if (p == NULL) {
@@ -1320,14 +1557,39 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
             nhi->U4UpGen[i - 1] == p->Generation) {
             nhi->U4UpValid |= 1UL << (i - 1);
         }
-        if (TbtU4TakeDebt(&nhi->U4, i)) {
+        debt = TbtU4TakeDebt(&nhi->U4, i);
+        if (debt) {
             CmLogNote(nhi, "u4.recover.debt", i);
+        }
+        /* Record 21 section 6.1.2: a port drained in this loss with its
+         * read-back passed (debt, no tunnel up, no drain unproved, no host
+         * entry unswept), or vacant now (no router behind it: its lane
+         * read DISCONNECTED, nothing recorded on it), is proved closed;
+         * any other proves nothing. Read while the bindings still stand,
+         * and only while a removal is held. */
+        if (nhi->Reenum.Deferred != 0) {
+            proved = (BOOLEAN)((debt && !p->Pcie.Up && !p->RecDrainPcie &&
+                                !p->HostResidual) ||
+                               (!debt && TbtU4PortVacant(&nhi->U4, i)));
+            member = cmTopoUsable(nhi)
+                         ? XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds,
+                                             i)
+                         : XHCI_TBT_NO_MEMBER;
+            if (member != XHCI_TBT_NO_MEMBER && member < 32) {
+                bound |= 1UL << member;
+                if (!proved) {
+                    open |= 1UL << member;
+                }
+            } else if (!proved) {
+                unknownOpen = TRUE;
+            }
         }
         if (p->RebuildPcie && !p->RecDrainPcie && !p->Pcie.Up &&
             i <= XHCI_TBT_MAX_PORTS) {
             /* Step 5's read-back is the closure the pending mark waits
              * for; a fresh occupancy baseline follows. */
             XhciTbtLearnDown(&nhi->Binds, i);
+            XhciTbtLearnEnd(&nhi->U4LearnClock, i);
             nhi->ArmOwed = 1;
         }
     }
@@ -1353,7 +1615,20 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
     nhi->RecBusPend = 0;
     CmLogNote(nhi, "u4.recover.barrier", nhi->RecBarred);
     nhi->RecRetireSent = 0;
-    CmReenumHold(nhi, nhi->RecBarred);
+    cmU4SetWorkerHold(nhi);
+    if (nhi->ReenumOn) {
+        /* Record 21 section 6.1.2: on 98 SE and ME the loss's held
+         * removal of each member whose ports were proved closed above
+         * (drained in this loss, or vacant) is released - after the
+         * barrier's hold above, before its removal-only requests below.
+         * One not proved keeps it until the restart. */
+        /* A member with ports bound to it is closed when each of those
+         * is (a bridge carries one port's tunnel, so no other port can
+         * reach its endpoint); one with none bound when no port whose
+         * member is not known is left unproved. */
+        closed = (bound & ~open) | (unknownOpen ? 0 : ~bound);
+        CmReenumLossReturned(nhi, nhi->Reenum.Deferred & closed);
+    }
     if (nhi->U4LossFrom == 1) {
         /* The bind the loss interrupted: its remaining steps, as the bind
          * would have run them (the seam's start, the hooks, the first
@@ -1439,7 +1714,8 @@ static VOID cmU4Recover(PCM_NHI nhi)
     committed = FALSE;
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
     power = (BOOLEAN)((nhi->WorkBits & (CM_WORK_D3 | CM_WORK_SYSTEM |
-                                        CM_WORK_DIRECT)) != 0 ||
+                                        CM_WORK_DIRECT |
+                                        CM_WORK_QUIESCE)) != 0 ||
                       nhi->DevicePower != PowerDeviceD0);
     if (power && !final && nhi->Live.State == CM_LIVE_RECOVERING) {
         /* A power transition queued meanwhile: the attempt ends as part
@@ -1739,6 +2015,42 @@ static VOID cmU4Learn(PCM_NHI nhi, ULONG port)
     }
 }
 
+/*
+ * One try of `port`'s learning where one is due (record 22 section 7.6's
+ * attempt, task 44.57), for the idle passes and the deliveries alike: the
+ * window's state read just before it, so a window whose 60 s ran out
+ * closes instead (u4.learn.expired) and a closed one, or a port already
+ * tried in this pass, is not read. Any try that leaves the port pending,
+ * whatever its outcome or when the set cannot be read now, is a miss;
+ * one that leaves it not pending forgets its window at once.
+ */
+static VOID cmU4LearnTry(PCM_NHI nhi, ULONG port)
+{
+    ULONG now;
+
+    if (port == 0 || port > XHCI_TBT_MAX_PORTS) {
+        return;
+    }
+    now = nhi->Host.NowMs(nhi);
+    switch (XhciTbtLearnDue(&nhi->U4LearnClock, port, now)) {
+    case XHCI_TBT_LEARN_OVER:
+        XhciTbtLearnClose(&nhi->U4LearnClock, port);
+        CmLogNote(nhi, "u4.learn.expired", port);
+        return;
+    case XHCI_TBT_LEARN_TRY:
+        break;
+    default:
+        return;
+    }
+    cmU4Learn(nhi, port);
+    if ((nhi->Binds.Pending & (1UL << (port - 1))) != 0) {
+        XhciTbtLearnMissed(&nhi->U4LearnClock, port, now,
+                           nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+    } else {
+        XhciTbtLearnEnd(&nhi->U4LearnClock, port);
+    }
+}
+
 /* Whether the core holds a quarantined entry or blocked enable of `port`
  * (record 22 section 7.3): a path not proven invalid and drained. */
 static BOOLEAN cmU4Quarantined(PCM_NHI nhi, ULONG port)
@@ -1795,18 +2107,30 @@ static VOID cmU4Reconcile(PCM_NHI nhi)
         } else if ((nhi->Binds.Pending & bit) != 0 &&
                    p->State == TBT_U4_EMPTY && !p->Dev.Present) {
             XhciTbtLearnDown(&nhi->Binds, port);
+            XhciTbtLearnEnd(&nhi->U4LearnClock, port);
             nhi->ArmOwed = 1;
             CmLogNote(nhi, "u4.learn.released", port);
         }
     }
 }
 
-/* Every port whose tunnel came up and is not attributed yet, tried again
- * at each idle tick: its device may answer Configuration Request Retry for
- * a while (tbt_topo.h, XhciTbtLearn). */
+/*
+ * Every port whose tunnel came up and is not attributed yet, tried again
+ * at the idle passes while its learning window is open: its device may
+ * answer Configuration Request Retry for a while (tbt_topo.h,
+ * XhciTbtLearn). The window (record 22 section 7.6, task 44.57;
+ * tbt_topo.h, XhciTbtLearnDue): every pass for the first second, then a
+ * gap doubling from one poll period to 5 s, closed at 60 s. A closed
+ * window stops the tries only: the port stays pending (a tunnel found up
+ * at start whose function answered before the baseline was taken never
+ * shows a gain).
+ */
 static VOID cmU4LearnPending(PCM_NHI nhi)
 {
+    const TBT_U4_PORT *p;
     ULONG port;
+    ULONG bit;
+    ULONG gen;
 
     if (cmU4Contained(nhi)) {
         return;     /* nothing is attributed after the loss */
@@ -1815,14 +2139,34 @@ static VOID cmU4LearnPending(PCM_NHI nhi)
     if (nhi->ArmOwed) {
         cmU4Arm(nhi);
     }
-    if (nhi->Binds.Pending == 0) {
-        return;
-    }
     for (port = 1; port <= nhi->U4.PortCount && port <= XHCI_TBT_MAX_PORTS;
          port++) {
-        if (nhi->Binds.Pending & (1UL << (port - 1))) {
-            cmU4Learn(nhi, port);
+        bit = 1UL << (port - 1);
+        if ((nhi->Binds.Pending & bit) != 0 &&
+            XhciTbtLearnBound(&nhi->Binds, port)) {
+            /* Bound since (a naming), whatever its window: KNOWN's
+             * bookkeeping, nothing read. */
+            CmLogNote(nhi, "u4.learn", (port << 8) | XHCI_TBT_MAP_KNOWN);
         }
+        if ((nhi->Binds.Pending & bit) == 0) {
+            /* Learned, bound, released or proven down: forgotten. */
+            XhciTbtLearnEnd(&nhi->U4LearnClock, port);
+            continue;
+        }
+        p = TbtU4Port(&nhi->U4, port);
+        gen = p != NULL ? p->Generation : 0UL;
+        if (((nhi->U4LearnClock.Open | nhi->U4LearnClock.Closed) & bit) !=
+                0 &&
+            nhi->U4LearnClock.Tag[port - 1] != gen) {
+            /* Another connection's window: forgotten before (a). */
+            XhciTbtLearnEnd(&nhi->U4LearnClock, port);
+        }
+        if (((nhi->U4LearnClock.Open | nhi->U4LearnClock.Closed) & bit) ==
+            0) {
+            XhciTbtLearnOpen(&nhi->U4LearnClock, port,
+                             nhi->Host.NowMs(nhi), gen);
+        }
+        cmU4LearnTry(nhi, port);
     }
 }
 
@@ -1925,6 +2269,10 @@ VOID CmNhiU4Take(PCM_NHI nhi)
             u->Port <= XHCI_TBT_MAX_PORTS &&
             !cmU4ClosedFor(nhi, u->Port, u->Generation)) {
             XhciTbtLearnUp(&nhi->Binds, u->Port);
+            /* Each such TUNNEL_UP opens the port's learning window
+             * again (record 22 section 7.6, task 44.57). */
+            XhciTbtLearnOpen(&nhi->U4LearnClock, u->Port,
+                             nhi->Host.NowMs(nhi), u->Generation);
         }
     }
     if (nhi->U4UpHook != NULL) {
@@ -2013,7 +2361,7 @@ static VOID cmU4Deliver(PCM_NHI nhi)
             nhi->U4SeamValid |= 1UL << (u->Port - 1);
         }
         if (u->Kind == TBT_U4_ACT_TUNNEL_UP && CmNhiActionLive(nhi, &a)) {
-            cmU4Learn(nhi, u->Port);
+            cmU4LearnTry(nhi, u->Port);
         } else if (u->Kind == TBT_U4_ACT_TUNNEL_DOWN ||
                    u->Kind == TBT_U4_ACT_DEEP_REMOVED) {
             nhi->ArmOwed = 1;
@@ -2078,6 +2426,7 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
         nhi->Counters.U4PathsClosed++;
         if (info->Port >= 1 && info->Port <= XHCI_TBT_MAX_PORTS) {
             XhciTbtLearnDown(&nhi->Binds, info->Port);
+            XhciTbtLearnEnd(&nhi->U4LearnClock, info->Port);
             nhi->ArmOwed = 1;
         }
         if (info->Port >= 1 && info->Port <= TBT_U4_MAX_PORTS) {
@@ -2319,16 +2668,25 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.LaneBonding =
         (BOOLEAN)(nhi->Values.Value[CM_VAL_LANE_BONDING] != 0);
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
+    nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
     /* The bind takes the tunnel ports' learning baseline between the
      * start and the first tick, before any cold device is connected. */
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
+    /* Section 9.4: the record of the earlier instance on this NHI, taken
+     * at this start, given to the core only for the same ids. */
+    if (nhi->U4CarryIds != nhi->LiveIds || nhi->U4CarrySub != nhi->SubVendor) {
+        CmZero(&nhi->U4Carry, sizeof(nhi->U4Carry));
+    }
+    TbtU4SetCarry(&nhi->U4, &nhi->U4Carry);
+    CmLogNote(nhi, "u4.carry.in", nhi->U4Carry.Valid ? 1UL : 0UL);
     TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
     /* The stor98 channel's two moments (task 40-A.7, cm_nvlink.h). */
     CmNhiSetU4Hooks(nhi, CmNvlinkU4Up, CmNvlinkU4Down, nhi);
     XhciTbtBindsInit(&nhi->Binds);
+    CmZero(&nhi->U4LearnClock, sizeof(nhi->U4LearnClock));
     nhi->ArmOwed = 0;
     nhi->U4On = 1;
     /* The liveness monitor's USB4 rule (record 22 section 7.7): a loss
@@ -2505,6 +2863,14 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     mode = nhi->Values.Value[CM_VAL_MODE];
     if (mode == CM_MODE_OFF) {
         cmInert(nhi, CM_INERT_MODE_OFF);
+        return;
+    }
+    /* A start queued beside a 9x shutdown's system IRP, which the thread
+     * took first: no configuration IRP after it (cm_pwrr.h, task 44.43),
+     * so nothing of the start is read. */
+    if (CmPowerSleeping(nhi) &&
+        !CmPowerShutdownConfig((ULONG)nhi->SystemPower, nhi->PowerOnNt)) {
+        cmInert(nhi, CM_INERT_POWER);
         return;
     }
 
@@ -2736,7 +3102,12 @@ VOID CmNhiStopWork(PCM_NHI nhi)
               (nhi->Live.Counters.RefusedWrites << 16) |
                   (nhi->Live.Counters.RefusedReads & 0xFFFFUL));
     CmDmaClose(nhi);
-    if (powered && active) {
+    if (powered && active &&
+        !CmPowerShutdownConfig((ULONG)nhi->SystemPower, nhi->PowerOnNt)) {
+        /* A stop that runs after a 9x shutdown took the system IRP down:
+         * no configuration IRP either (cm_pwrr.h, task 44.43). */
+        CmLogNote(nhi, "cm.shutdown.no-config", nhi->Stage);
+    } else if (powered && active) {
         (VOID)CmNhiSetBusMaster(nhi, FALSE);
         CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
     } else if (nhi->BusMasterSetHere) {
@@ -2791,6 +3162,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     CmLogApply(nhi);
     nhi->Starts++;
     CmLogNote(nhi, "cm.start", nhi->Starts);
+    cmU4CarryTake(nhi);
     CmLogNote(nhi, "cm.nhi.vendor", nhi->Ids.Vendor);
     CmLogNote(nhi, "cm.nhi.device", nhi->Ids.Device);
     CmLogNote(nhi, "cm.nhi.class", nhi->Ids.ClassCode);
@@ -2824,6 +3196,14 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
         CmLogNote(nhi, "cm.bridge.numbering.raw",
                   nhi->Values.BridgeNumberingRaw);
     }
+    /* XhciCmAsmediaPcie7Credits as run with; bit 8 found, bit 9 refused
+     * (the value read is then the next note's). */
+    CmLogNote(nhi, "cm.asm.pcie7",
+              nhi->Values.AsmPcie7 | (nhi->Values.AsmPcie7Found << 8) |
+                  (nhi->Values.AsmPcie7Refused << 9));
+    if (nhi->Values.AsmPcie7Refused) {
+        CmLogNote(nhi, "cm.asm.pcie7.raw", nhi->Values.AsmPcie7Raw);
+    }
 
     cmFindBar(nhi, irp);
     CmLogNote(nhi, "cm.bar.length", nhi->BarLength);
@@ -2840,6 +3220,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     CmZero(&nhi->Counters, sizeof(nhi->Counters));
     CmZero(&nhi->U4, sizeof(nhi->U4));
     CmZero(&nhi->Binds, sizeof(nhi->Binds));
+    CmZero(&nhi->U4LearnClock, sizeof(nhi->U4LearnClock));
     nhi->U4On = 0;
     nhi->ArmOwed = 0;
     nhi->U4ClosedValid = 0;
@@ -2854,6 +3235,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->RecLostUp = 0;
     nhi->RecCmdSet = 0;
     nhi->RecBarred = 0;
+    nhi->RecWkHold = 0;
     nhi->RecDebtMask = 0;
     nhi->RecChanged = 0;
     nhi->RecBusChanged = 0;
@@ -2951,6 +3333,11 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
             CmNhiRevoke(nhi);
         }
         cmNhiStop(nhi, stack->MinorFunction);
+        if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
+            /* Record 22 section 9.4: the NHI gone, whatever an earlier
+             * stop recorded for it is void. */
+            cmU4CarryDrop(nhi);
+        }
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
 

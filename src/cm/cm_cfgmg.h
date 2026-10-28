@@ -81,6 +81,8 @@
 #define CMG_SVC_DISABLE_DEVNODE         64  /* line 597, _CONFIGMG_Disable_DevNode */
 #define CMG_SVC_ENABLE_DEVNODE          65  /* line 598, _CONFIGMG_Enable_DevNode */
 #define CMG_SVC_BROADCAST_DEVICE_CHANGE 88  /* line 621, _CONFIGMG_Broadcast_Device_Change_Message */
+/* Design record 31 section 5 (task 44.3): the tunnel id on 98 SE and ME. */
+#define CMG_SVC_ADD_ID                  85  /* line 618, _CONFIGMG_Add_ID */
 #define CMG_SVC_CHANGE_DEVNODE_STATUS   91  /* line 627, _CONFIGMG_Change_DevNode_Status, first of the "4.0 OPK2" group */
 #define CMG_SVC_SET_DEVNODE_PROBLEM     122 /* line 661, _CONFIGMG_Set_DevNode_Problem, in the "4.1 Services" group */
 
@@ -136,7 +138,12 @@
 #define CMG_CR_NO_MORE_LOG_CONF     0x0E    /* line 951, CR_NO_MORE_LOG_CONF */
 #define CMG_CR_NO_MORE_RES_DES      0x0F    /* line 952, CR_NO_MORE_RES_DES */
 #define CMG_CR_NO_SUCH_VALUE        0x25    /* line 974, CR_NO_SUCH_VALUE */
+#define CMG_CR_WRONG_TYPE           0x26    /* line 975, CR_WRONG_TYPE */
 #define CMG_REG_SZ                  0x01    /* VMM.H line 2231, REG_SZ */
+#define CMG_REG_BINARY              0x03    /* VMM.H line 2232, REG_BINARY */
+#define CMG_REGISTRY_HARDWARE       0x00    /* line 1226, CM_REGISTRY_HARDWARE */
+#define CMG_ADD_ID_HARDWARE         0x00    /* line 1252, CM_ADD_ID_HARDWARE */
+#define CMG_ADD_ID_COMPATIBLE       0x01    /* line 1253, CM_ADD_ID_COMPATIBLE */
 
 /*
  * Devnode status bits, as Get_DevNode_Status returns them (CONFIGMG.H
@@ -205,5 +212,24 @@
 #define CMG_PROB_NO_VALID_LOG_CONF  0x1B    /* line 1074, CM_PROB_NO_VALID_LOG_CONF */
 #define CMG_PROB_FAILED_INSTALL     0x1C    /* line 1075, CM_PROB_FAILED_INSTALL */
 #define CMG_PROB_HARDWARE_DISABLED  0x1D    /* line 1076, CM_PROB_HARDWARE_DISABLED */
+
+/*
+ * This project's own entry points for record 31 section 5 (task 44.3),
+ * in cm_cfgmg.c beside the others (whose prototypes are cm_reenum.h's).
+ * Declared here through the structure's tag, since cm_reenum.h includes
+ * this file before it defines CM_CFGMG.
+ *
+ * CmCfgmgAddCompatibleId: Add_ID(devnode, id, CM_ADD_ID_COMPATIBLE).
+ * CmCfgmgReadHardwareValue: Read_Registry_Value of the devnode's hardware
+ * (Enum) key, no subkey, of the type given (CMG_REG_SZ or CMG_REG_BINARY);
+ * *bytes in, the buffer's size, out what was read.
+ * IRQL: PASSIVE_LEVEL, the CONFIGMG worker's thread.
+ */
+struct _CM_CFGMG;
+ULONG CmCfgmgAddCompatibleId(struct _CM_CFGMG *cfg, ULONG devnode,
+                             char *id);
+ULONG CmCfgmgReadHardwareValue(struct _CM_CFGMG *cfg, ULONG devnode,
+                               char *name, ULONG type, char *buffer,
+                               PULONG bytes);
 
 #endif /* CM_CFGMG_H */

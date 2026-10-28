@@ -244,11 +244,6 @@ xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
                 `3.0.0.0` (design record 23), and its window
                 (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`) over the same engine, from
                 `3.1.0.0` (design record 26). Tracked.
-xhcicln/        The optional cleanup tool (`XHCICLN.EXE`, `XHCICL64.EXE`)
-                for the devnodes a driver before `2.4.0.0` left under
-                `XHCI98\`, from `2.4.0.0` (roadmap-hcd task 38.8, design
-                record 13 section 10.13.8); `xhcicln/README.TXT` is its
-                guide. Tracked.
 xhcitr/         The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`), the
                 graphical tree, eject and tray tool, from `3.0.0.0`
                 (roadmap-usb4 Phase 41, design record 25), and from
@@ -329,10 +324,11 @@ never modified, with design record 21 as Phase 39's plan (the Thunderbolt
 firmware connection manager client) and design record 22 as Phase 40's
 (the USB4 software connection manager); both phases opened 2026-10-15 and
 shipped together as `3.0.0.0`, cut on 2026-10-17 with Phase 41 (XHCITR,
-design record 25). **The open phase is that file's Phase 42**, opened by
-the owner on 2026-10-18 for release `3.1.0.0` (the windowed installer,
-the uninstall, the Windows 98 SE and ME device install, `XHCISNAP`
-retired, and the connection-manager follow-ups), on branch `3.1.0.0`;
+design record 25). **The open phase is that file's Phase 44**, opened by
+the owner on 2026-10-25 for release `3.3.0.0` (Stor98 for tunnelled
+drives only, the connection manager off the boot path, the hibernate
+resume, the installer's pages, and what `3.2.0.0` owed), on branch
+`3.3.0.0`;
 the file's status line and decisions table are the current state. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
@@ -704,13 +700,23 @@ design records 21 and 22, `src\cm\`) has its own references:
   codes and layouts, register offsets, constants, sequences and controller
   quirks are still cited by file and symbol where they are used.
 - Every adapted file keeps the copyright lines of each source file it came
-  from and its SPDX tag (`SPDX-License-Identifier: GPL-2.0-only` with
-  Linux's or `usb4-emu`'s lines; the BSD-2-Clause notice of a FreeBSD
-  file, the MIT notice of tbtools data or of a `usb4cm` file lifted before
-  the relicensing, kept verbatim), and gains a `legal-provenance.md`
-  section 2a entry naming the source file, the pinned commit actually read
-  (`external/README.md`'s for Linux and FreeBSD; the `usb4-emu` or tbtools
-  commit read) and what was adapted.
+  from and its SPDX tag (`usb4-emu`'s lines and tag quoted; the
+  BSD-2-Clause notice of a FreeBSD file, the MIT notice of tbtools data or
+  of a `usb4cm` file lifted before the relicensing, kept verbatim), and
+  gains a `legal-provenance.md` section 2a entry naming the source file,
+  the pinned commit actually read (`external/README.md`'s for Linux and
+  FreeBSD; the `usb4-emu` or tbtools commit read) and what was adapted.
+- Since 2026-10-26 (roadmap-usb4 task 44.38) this project's code is
+  GPL-2.0-or-later. The portions once adapted from Linux were rewritten
+  from the specifications (`legal-provenance.md` section 2a, "Rewritten
+  from"), and code is no longer adapted from a file whose SPDX identifier
+  is `GPL-2.0` or `GPL-2.0-only` (Linux among them): such a file is read
+  for facts only, cited by file and symbol, a behaviour from Linux alone
+  tagged [linux] (owner, 2026-10-26, confirming a worker's note following the
+  relicence; `legal-provenance.md` section 3). The owner,
+  `usb4-emu`'s copyright holder, offers what this project takes from
+  `usb4-emu` under GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays
+  GPL-2.0-only.
   Adapting is translating: the code is still C89, safe on Windows 98 and
   2000, free of 64-bit arithmetic and in this file's style, never a paste
   of a Linux kernel API.
@@ -769,7 +775,9 @@ bytes, which `scripts\check-stor98-header.ps1` holds on every gated build
 
 ## Third-Party Material and Provenance
 
-This project is GPL-2.0-only licensed and depends on material that is not.
+This project is GPL-2.0-or-later licensed (since 2026-10-26, roadmap-usb4
+task 44.38; GPL-2.0-only before, in every release up to `3.2.0.0`) and
+depends on material that is not.
 The full record is `docs/contributing/legal-provenance.md`; these are the
 rules that bind day-to-day work, and none of them is optional.
 
@@ -807,7 +815,7 @@ rules that bind day-to-day work, and none of them is optional.
   under any name, without a decision recorded there**, and do not write
   "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP` up to
-  `3.0.0.0`, from `2.4.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0`
+  `3.0.0.0`, from `2.4.0.0` to `3.2.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0`
   `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, from `3.1.0.0`
   `XHCIWIZ` and `XHCIWZ64`)
   carry statically linked runtimes (section 2a).

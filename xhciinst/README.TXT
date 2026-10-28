@@ -29,6 +29,48 @@ A device the helper cannot install gets its Device Manager steps on a page
 of their own, which you can save to a text file; the rest of the install
 completes.
 
+On Windows 98 SE and ME the Components page also offers "Close PCI
+windows above 4 GB (XHCIPFW.VXD)", under the Thunderbolt 3 / USB4 box and
+above Stor98's: a small part Windows loads at each start, before it reads
+the PCI bridges, which closes every bridge's prefetchable memory window
+that lies wholly above 4 GB. Those systems cannot use such a window, and
+a board that leaves one there (a USB4 controller's ports with "Above 4G
+Decoding" off, for one) otherwise leaves the devices behind it without
+resources. It is part of the Thunderbolt 3 / USB4 support: ticked with
+that box, unticked and greyed without it. It writes nothing on a computer
+without such windows, and records what it did under
+HKLM\System\CurrentControlSet\Services\VxD\XHCIPFW, in values whose
+names begin with XhciPfw. Untick it, or uninstall, to remove it.
+
+On Windows 2000, XP and the 32-bit Vista and 7 the same box, "Close
+PCI windows above 4 GB (XHCIPFW.SYS)", offers XHCIPFW.SYS. It is a small
+driver Windows loads at each start before its PCI driver, and it does
+the same. As on 98 SE and ME it is ticked whenever the Thunderbolt 3 /
+USB4 box is. Without that box it is unticked and greyed. You may untick
+it. A USB4 or Thunderbolt controller behind a bridge with such a window
+is not found until the window is closed. Device Manager then shows the
+bridge with "This device cannot find enough free resources" (code 12).
+On such a computer tick the Thunderbolt 3 / USB4 box yourself (or use
+/thunderbolt). That also ticks this one. The console says so when it
+sees such a bridge. On Windows 2000 and XP it acts only when one
+processor runs. On a computer with several, start them with /NUMPROC=1
+in BOOT.INI if they need this. It records what it did under
+HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters. No 64-bit
+Windows is offered it.
+
+The 32-bit Windows 8, 8.1 and 10 are not offered XHCIPFW.SYS. There it
+may start after Windows has read the PCI bridges. On a board that leaves
+the USB4 ports' windows above 4 GB, these systems cannot use the devices
+behind those ports. Windows 8 may not start at all on such a board. An
+XHCIPFW.SYS this installer placed there before is removed. /xhcipfw and
+/noxhcipfw are refused there.
+
+On the 32-bit Vista, 7, 8, 8.1 and 10, set "Above 4G Decoding" off in
+the computer's firmware setup where it offers that. With it on, those
+systems can stop at start on a board that offers much memory space above
+4 GB. Nothing here can help then. With it off, XHCIPFW.SYS closes the
+windows the firmware still leaves above 4 GB on Vista and 7.
+
 It uses only routines Windows documents for this. It is not devcon, and
 this package's own files include no Microsoft file (the downloads'
 USBDRV\NUSB33, and USBDRV\NONFREE in the -nonfree download, carry
@@ -39,8 +81,10 @@ The names in Device Manager: each USB 3 controller the installer knows is
 named with its maker and product, as in "xHCI98 USB 3 Controller (Renesas
 uPD720202)". Every install or update run writes that name (the device's
 FriendlyName), even one that had nothing to reinstall, and the uninstall
-removes it; a name you gave the controller yourself is kept. A controller
-installed from the INF alone shows the plain "xHCI98 USB 3 Controller".
+removes it; a name you gave the controller yourself is kept. Installed
+from the INF alone, a controller the table knows takes the same name on
+Windows 98 SE, ME, 2000 and XP, and any other controller, or any on Vista
+and later, the plain "xHCI98 USB 3 Controller".
 Thunderbolt and USB4 controllers take theirs from the INF, as in "xHCI98
 TB3 Controller (Intel Titan Ridge)" and "xHCI98 USB4 Router (Intel Meteor
 Lake)" - TB2 and TB3 are Thunderbolt 2 and Thunderbolt 3.
@@ -110,7 +154,7 @@ The window walks you through:
                    Thunderbolt 3 / USB4 support with Stor98 under it
                    (where the package carries it), the USB storage
                    drivers (98 SE only, where the download carries them),
-                   the xHCI98 USB Tree started at login, and the tools
+                   the xHCI98 USB Tree started at login, and the install
                    folder (Change folder...); a warning on Next for a box
                    that does not apply there. Settings... opens one
                    dialog with a tab each for USB, Thunderbolt and
@@ -146,7 +190,13 @@ driver runs (but on 8.1, and on 10 when you tick it, on a tunnel drive
 that Windows' own stornvme runs, which it replaces), nor on an internal
 drive - and an
 older Stor98 is
-updated. Its tab in the Settings dialog shows
+updated. (Updating from 3.2.0.0 on an ASMedia ASM4242 USB4 controller,
+the first run leaves Stor98 and says so: 3.2.0.0's Thunderbolt driver
+does not list that controller's tunnel ports. Run the installer again
+after the restart; it updates Stor98 then, unless another Stor98
+binding keeps the shared file - an internal drive on it, say - which the
+run then says.)
+Its tab in the Settings dialog shows
 each of Stor98's options as it is now ("not set" means Stor98's built-in
 default); a row left alone writes nothing. On Windows 98 SE and ME an
 older Stor98 is updated as a file, replaced when Windows next starts
@@ -159,13 +209,18 @@ drive behind a Thunderbolt or USB4 port is unplugged and plugged in again
 after its update; the installer asks for that and waits up to two
 minutes. The uninstall removes Stor98 only where this installer put it
 there: a Stor98 installed before, by hand or by an earlier tool, stays.
-Stor98 is not for internal NVMe drives. Windows 8 has no NVMe driver of
-its own, and there Windows itself puts the staged Stor98 on an internal
-NVMe drive that has no driver: without a prompt when this package's test
-certificate is trusted, and otherwise through the "can't verify the
-publisher" prompt (not read). The drive then runs on Stor98, and the
-uninstall leaves Stor98 in place, on every drive, while that drive uses
-it.
+Stor98 is not for internal NVMe drives. The package gives a drive
+behind a Thunderbolt or USB4 port an id of its own,
+PCI\XHCI98_TUNNEL&CC_010802, and on Windows 2000 to 8 Stor98's INF
+matches that id alone, so Windows never offers Stor98 for an internal
+drive there; on 8.1 and 10 it keeps 3.2.0.0's model, which stornvme
+outranks; on 98 SE and ME the installer stages stor98w9.inf, which
+matches every NVMe controller. An update removes the earlier release's
+Stor98 INF from the driver store (on Windows 2000 only once no drive
+names it: the installer says which drive keeps it). A tunnel drive that
+Windows found before it had the id gets Stor98 from the safe-removal
+mark service within seconds on Vista to 8.1; on 2000 and XP the service
+restarts the enclosure so that Windows' own wizard offers Stor98.
 
 USB storage drivers (Windows 98 SE only). Windows 98 SE has no USB
 mass-storage driver: every USB disk, Bulk-Only or UAS under xhciuas.sys,
@@ -192,55 +247,66 @@ put in the INF folder, the copies Windows made of their INFs for it and
 the devices installed from them (a stick first plugged in after the
 install included), never while NUSB is installed.
 
-Other USB drivers (the page after Components). A release has up to
-three downloads: xhci98-<version>.zip, -free.zip, which adds the free
-USB class drivers of usb-wdm-free in USBDRV\FREE ("These drivers are
-experimental. They may not work with every device and can make Windows
-unstable. Report problems at https://github.com/yeokm1/usb-wdm-free."),
-and -nonfree.zip, which adds the non-free driver pack of
-usb-wdm-nonfree in USBDRV\NONFREE: other manufacturers' drivers, not
-this project's work. The page shows a row for each set this
-download carries and, for each it does not, which download and which
-address have it (https://github.com/yeokm1/usb-wdm-free and
+Free USB drivers and Non-free USB drivers (the pages after Components).
+A release has up to three downloads: xhci98-<version>.zip, -free.zip,
+which adds the free USB class drivers of usb-wdm-free in USBDRV\FREE
+("These drivers are experimental. They may not work with every device
+and can make Windows unstable. Report problems at
+https://github.com/yeokm1/usb-wdm-free."), and -nonfree.zip, which adds
+the non-free driver pack of usb-wdm-nonfree in USBDRV\NONFREE: other
+manufacturers' Ethernet, HID and serial drivers, not this project's
+work. Wi-Fi drivers are not in this download: they are in
+usb-wdm-nonfree's own release. Each set this download carries has a
+page of its own; a set it does not carry has no page, and
+the Finish page says which download and which address have it
+(https://github.com/yeokm1/usb-wdm-free and
 https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers
-are). Every row is unticked unless you tick it. Ticked, the set is
-copied to USBDRV\FREE or USBDRV\NONFREE in the tools folder and nothing is
-installed. Below the rows, under "Let Windows choose these drivers
-automatically for matching devices", is a box for each driver package
-of a set that has an INF for this Windows, grouped by kind (Audio,
-Video, HID, Network, Storage, Serial, Other), each unticked and open
-only while its set's row is ticked; a ticked package's INFs for this
-Windows are staged in the driver store, and Windows may still ask for
-the folder of the files the first time. On Windows 98 SE and ME no
-package is offered: the sets are copied only, and none of their
-folders is added to DevicePath (a long DevicePath stops 98 SE's
-hardware wizard finding any driver). There, when the wizard asks for a
-driver, choose "Specify a location" and point it at the package's
-folder, USBDRV\FREE\<class>\<package>\<folder> (or USBDRV\NONFREE\...)
-in the install directory; an install over a run that added such
+are). The set's row on its page is unticked unless you tick it. Ticked,
+the set is copied to USBDRV\FREE or USBDRV\NONFREE in the install folder
+and nothing is installed. Below the row, under "Let Windows choose these
+drivers automatically for matching devices", is a box for each driver
+package of the set that has an INF for this Windows, grouped by kind
+(Audio, Video, HID, Network, Storage, Serial, Other), each unticked and
+open only while its set's row is ticked; a ticked package's INFs for
+this Windows are staged in the driver store, and Windows may still ask
+for the folder of the files the first time. On Windows 98 SE and ME two
+free packages are offered, uac2 (98 SE and ME) and usbmidi (98 SE),
+because Windows' own USB audio INF would otherwise take their devices
+first: ticked, its folder is added to DevicePath. Every other package
+there is copied only, and none of its folders is added to DevicePath (a
+long DevicePath stops 98 SE's hardware wizard finding any driver; the
+installer keeps it within 280 characters and offers no box that would
+pass that). There, when the wizard asks for a driver, choose "Specify a
+location" and point it at the package's folder,
+USBDRV\FREE\<class>\<package>\<folder> (or USBDRV\NONFREE\...) in the
+install directory; an install over a run that added another package's
 folders to DevicePath takes them out again. Two packages that would
-claim the same device are not
-offered together, and the box below the list says why. What an earlier
-run staged is listed there too: leaving a box unticked does not undo
-it. On 64-bit Vista and later, with a free package ticked, one more box
-offers to trust usb-wdm-free's own test certificate (its 64-bit drivers
-are signed with it and load only in test-signing mode; the console's
-switch is /wdmfree:trust); the uninstall removes the trust it added. No
-trust is added for the non-free drivers. Trusting the certificate lets
-Windows load the set's test-signed 64-bit drivers, but Windows still
-says "Windows can't verify the publisher of this driver software" when
-it stages one of these packages, because they carry no catalog: answer
-"Install this driver software anyway". The Finish page lists the folders
-to point the hardware wizard at.
-The uninstall removes the copies, the DevicePath entries and the
-staged INFs it made; a driver a device installed from them stays
-installed, and so does a folder whose INF a device still uses.
+claim the same device are not offered together, and the box below the
+list says why. What an earlier run staged is listed there too: leaving a
+box unticked does not undo it. On 64-bit Vista and later, with a free
+package ticked, one more box offers to trust usb-wdm-free's own test
+certificate (its 64-bit drivers are signed with it and load only in
+test-signing mode; the console's switch is /wdmfree:trust); the
+uninstall removes the trust it added. No trust is added for the non-free
+drivers. Trusting the certificate lets Windows load the set's
+test-signed 64-bit drivers, but Windows still says "Windows can't verify
+the publisher of this driver software" when it stages one of these
+packages, because they carry no catalog: answer "Install this driver
+software anyway". The Finish page lists the folders to point the
+hardware wizard at. The uninstall removes the copies, the DevicePath
+entries and the staged INFs it made; a driver a device installed from
+them stays installed, and so does a folder whose INF a device still
+uses.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
-(the tools folder, preselected), /thunderbolt, /stor98 (only with
+(the install folder, preselected), /thunderbolt, /stor98 (only with
 /thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and
 /nos98vsd (98 SE and ME: S98VSD.VXD, Stor98's large transfers, ticked or
-unticked; /s98vsd needs Stor98 in the run), /faster and /nofaster
+unticked; /s98vsd needs Stor98 in the run), /xhcipfw and /noxhcipfw
+(98 SE, ME, 2000, XP and the 32-bit Vista and 7: XHCIPFW.VXD or
+XHCIPFW.SYS, PCI windows above 4 GB closed at each start, ticked or
+unticked; /xhcipfw only with /thunderbolt or /cmonly),
+/faster and /nofaster
 (the USB Tree's "can run faster" notice on or off for this computer),
 /notray,
 /nouas, /storage, /nostorage, /cmonly, /usb, /wdmfree:copy,
@@ -290,7 +356,7 @@ The console tool
   INSTALL /console /storage     Windows 98 SE: installs the USB storage
                                 drivers without asking; on any other
                                 system it only copies their files to
-                                USBDRV\NUSB33 in the tools folder, with a
+                                USBDRV\NUSB33 in the install folder, with a
                                 warning; /nostorage leaves them out on any
                                 system; without either the console asks
                                 on 98 SE, and /yes takes the row's default
@@ -306,9 +372,11 @@ The console tool
                                 and /nonfreestage are refused: name the
                                 packages. Without them the console asks,
                                 Enter for N, and /yes takes N. On 98 SE
-                                and ME the sets are copied only, and
-                                /wdmfree:stage= and /wdmnonfree:stage=
-                                are refused, with nothing changed
+                                and ME only audio/uac2 (and on 98 SE
+                                audio/usbmidi) can be staged: any other
+                                package in /wdmfree:stage=, and
+                                /wdmnonfree:stage=, are refused, with
+                                nothing changed
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /faster      turns the xHCI98 USB Tree's "can run
@@ -321,7 +389,8 @@ The console tool
 Its other switches are the window's, and /nopause. On Windows 98 SE and
 ME, INSTALL.BAT takes eight arguments at most, seven after /console, and
 COMMAND.COM splits them at = and at commas: /set Name=Value counts as
-three. It refuses more rather than run a shortened command.
+three. It refuses more rather than run a shortened command, and ends
+with exit code 1 (a refusal).
 Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with the same arguments
 instead for a longer one. On 98 SE and ME the console tool installs each
 device through the helper too; a Windows dialog may open (the Windows CD
@@ -352,58 +421,71 @@ the connection manager alone, uninstall (Add/Remove Programs, or INSTALL
 go the other way, run the installer again with them ticked. Add/Remove
 Programs lists one entry either way, named for what is installed.
 
-Windows 8 and 8.1, 32-bit and 64-bit, were run with this package in
-virtual machines only (QEMU, its emulated Thunderbolt 3 controller and
-NVMe enclosure): the connection manager, Stor98 and the USB drivers
-installed, worked and uninstalled as on Windows 7. An uninstall with the
-USB drivers may stop part-way and ask for a restart and a second run; do
-both (on Windows 10 too). On 64-bit Windows 8 and 8.1 this
-package's x64 drivers, being test-signed, load in test-signing mode, which
-those systems let you turn on only with Secure Boot off in the computer's
-firmware setup, or on a start with driver signature enforcement disabled.
-The connection manager needs test-signing mode itself: Windows makes it a
-boot driver there (it filters a PCI bridge), and a start without
-test-signing mode then stops in Automatic Repair (read on 64-bit Windows
-8). So on 64-bit 8 and 8.1 the installer installs it only in test-signing
-mode; a start with enforcement disabled is not enough. Keep test-signing
-mode on while it is installed. From Automatic Repair the way back is a
-start with enforcement disabled (Advanced startup, Troubleshoot, Advanced
-options, Startup Settings, 7), then test-signing mode on again, or the
-uninstall. It is not Microsoft-signed. When the installer asks for a
-restart, use Restart, not Shut down: Windows 8's Shut down does not start
-the drivers afresh (nor does Windows 10's).
+Windows 8, 8.1 and 10. The installer installs the connection manager,
+with Stor98 ticked on 8 and 8.1 and unticked on 10 (Windows' own
+stornvme stays there; /stor98 asks for Stor98), and the USB drivers only
+when you tick them: Windows' own USB 3 driver keeps the controllers
+otherwise. It admits every release of Windows 10, 1507 to 22H2 and the
+LTSC releases, and Windows Server 2016, 2019 and 2022, which it treats
+as Windows 10; Windows 11 is refused. Should an uninstall with the USB
+drivers stop part-way, it says so: restart and run it again. When the
+installer asks for a restart, use Restart, not Shut down: Windows 8's
+and 10's Shut down does not start the drivers afresh. Windows 10 has no
+Thunderbolt or USB4 driver of its own (USB4 support came with Windows
+11), but many computers come with Intel's Thunderbolt driver. Where it
+runs the Thunderbolt controller, the installer says so and leaves the
+Thunderbolt support unticked (the console asks, N the default); ticked
+(/thunderbolt), it replaces Intel's driver on that controller after a
+warning. The uninstall gives the controller back to Intel's driver, and
+Windows Update may also put Intel's driver back.
 
-Windows 10 is installable. Its drivers were read in virtual machines of
-22H2, each installed by a script; the installer's console install and
-uninstall were read there in task 43.59's legs (10 x86 and x64), and the
-full matrix through the installer in task 43.24's (an uninstall there may
-need a restart and a second run). It admits every release of Windows 10,
-1507 to 22H2 and the LTSC releases, and Windows Server 2016, 2019 and
-2022, which it
-treats as Windows 10 and which are untested; only 22H2 is to be tested.
-It installs there as on Windows 8.1 but for Stor98: the connection manager,
-with Stor98 unticked (Windows' own stornvme stays; /stor98 asks for Stor98),
-and the USB drivers only when you tick them. Windows 10 has no Thunderbolt
-or USB4 driver of its own (USB4 support came with Windows 11), but many
-computers come with Intel's Thunderbolt driver: where it runs the
-Thunderbolt controller, the installer leaves it as it is. On 64-bit Windows
-10 the drivers load as on 64-bit Windows 8: in test-signing mode, which
-needs Secure Boot off in the computer's firmware setup, or on a start with
-enforcement disabled; and the installer installs the connection manager
-there only in test-signing mode, as on 64-bit 8 (whether 10 too makes it a
-boot driver has not been read). With Secure Boot on, Windows 10 from 1607
-loads only drivers Microsoft has signed (and some older cross-signed ones),
-and this package's are neither. The 64-bit package carries a catalog for
-each driver (xhci98.cat and the others, from 3.2.0.0), signed with the same
-test certificate: Windows 8, 8.1 and 10 x64 refuse a 64-bit driver package
-without one in test-signing mode (error 0xE000022F; design record 23 section
-5.12), so keep the .cat files beside the INFs. Whether 32-bit Windows 10
-with Secure Boot on refuses this package's 32-bit drivers, which are not
-signed, has not been read.
+On 64-bit Windows 8, 8.1 and 10 this package's drivers, being
+test-signed, load in test-signing mode, which those systems let you turn
+on only with Secure Boot off in the computer's firmware setup, or on a
+start with driver signature enforcement disabled (Advanced startup,
+Troubleshoot, Advanced options, Startup Settings, 7). They are not
+Microsoft-signed. The 64-bit package carries a catalog for each driver
+(xhci98.cat and the others), signed with the same test certificate:
+in test-signing mode these systems refuse a 64-bit driver package
+without one, so keep the .cat files beside the INFs. With Secure Boot
+on, Windows 10 from 1607
+loads only drivers Microsoft has signed (and some older cross-signed
+ones), and Windows 8, 8.1 and 10 refuse unsigned drivers on 32-bit too.
 
-Neither ever runs XHCICLN. After an update from 2.3.x or earlier they say,
-in one line, when old XHCI98\ entries are still recorded; nothing needs
-them removed, and tools\xhcicln\ lists and removes them if you want.
+The connection manager on 64-bit Vista, 7, 8, 8.1 and 10. Windows makes
+it a boot driver when it installs its filter on the Thunderbolt
+controller's PCI ports, and while it is one, a start that cannot load it
+(test-signing mode off) does not finish: 64-bit Windows 8 stopped in
+Automatic Repair, and 7 undid the whole install. So the installer
+installs it there only in test-signing mode it can confirm (a start with
+enforcement disabled is not enough), and at the end of each run sets it
+back to start on demand; the mark service does the same after an install
+the installer did not run. A start without test-signing mode then
+reaches the desktop, with the Thunderbolt devices and this package's USB
+controllers at Code 52 (Code 39 on Vista) until test-signing mode is on
+again. Where the disk Windows starts from is below a device the filter
+is on, it stays a boot driver, and the installer says so. Keep
+test-signing mode on while it is installed. Should a start stop in
+Automatic Repair or undo the install, the way back is a start with
+enforcement disabled (F8 on Vista and 7; on 8 to 10 Advanced startup,
+Troubleshoot, Advanced options, Startup Settings, 7), test-signing mode
+turned on again there, a restart, and the installer run again.
+
+Where the installer reads Secure Boot as on (Windows 8, 8.1 and 10), it
+refuses before changing anything a run with the USB drivers ticked (Windows
+would load none of them, and every USB 3 controller, the keyboard's and
+mouse's included, would stop working) and the connection manager on 32-bit
+Windows (Windows would not load it, and Windows makes it a boot driver
+while it installs its filter: a start then would stop in Automatic
+Repair), as it already refused the connection manager on 64-bit Windows.
+Turn Secure Boot off in the computer's firmware setup first. On 64-bit
+Windows 10 it also reads whether memory integrity (Windows Security,
+Device security, Core isolation) is turned on, and if it is, says that
+Windows refuses a driver it finds incompatible with it.
+
+After an update from 2.3.x or earlier they say, in one line, when old
+XHCI98\ entries are still recorded. They do no harm, and nothing needs
+them removed.
 
 Before you start
 ----------------
@@ -416,7 +498,7 @@ answered: have a keyboard and mouse that do not go through this driver
 
 On Windows 98 SE and ME, Windows' own hardware wizards open for the
 devices the controller shows after it starts: answer them (Next, Next,
-Finish, and type the tools folder where they ask for a folder or for the
+Finish, and type the install folder where they ask for a folder or for the
 "xhci98 xHCI Host Controller Disk"). Finish every such wizard, Next
 through Finish, even when it finds no driver; never cancel one: on 98 SE
 a cancelled wizard hides its device until Windows restarts, and the
@@ -436,7 +518,8 @@ test-signing mode (bcdedit /set testsigning on, then restart) or on a
 start where F8 chose "Disable Driver Signature Enforcement"; on 8, 8.1
 and 10 x64 test-signing mode needs Secure Boot off first (above). The
 installer says whether it could confirm test-signing mode; it never
-changes it.
+changes it. It installs the Thunderbolt 3 / USB4 support on 64-bit Vista
+to 10 only when it can confirm test-signing mode (above).
 
 The options
 -----------
@@ -457,9 +540,14 @@ driver's next start. Advanced... on each tab holds the values for the
 release notes' advice and a tester's use (XhciInterruptMode,
 XhciForceBulkOnly, XhciPollFineTimer, XhciSelectiveSuspend, XhciCmReenum,
 XhciCmUsb3Tunnel, XhciCmLaneBonding, XhciCmPreOsCleanup, the connection
-manager's waits and its log, XhciCmNoIrqStart on 98 SE and ME, and the
-mark service's Restart on 2000 to 10); the console sets them only with
-/set Name=Value.
+manager's waits and its log, XhciCmBridgeNumbering and XhciCmNoIrqStart
+on 98 SE and ME, and the mark service's Restart on 2000 to 10); the
+console sets them only with /set Name=Value. The drivers' own install
+writes each value of the release notes' "Registry settings" and "The
+connection manager's registry values" at its default where it is
+missing, so it is already in the controller's key (XhciCmBridgeNumbering
+and XhciCmNoIrqStart on 98 SE and ME alone, the systems that read them);
+XhciCmTunnelBridge, whose absence means no override, is never written.
 
 When Windows starts installing a device by itself while the installer
 runs - a Found New Hardware window, perhaps behind the installer's - it
@@ -542,22 +630,23 @@ same text.
 Uninstall
 ---------
 
-Add/Remove Programs (Control Panel) lists the package as "xHCI98 USB 3.x
-drivers" with its version; Remove there runs the installer's uninstall
-(INSTALL /uninstall does the same, and INSTALL /console /uninstall in the
-console). It first warns that on a machine whose only USB controller is
-xHCI the USB keyboard and mouse stop working until another driver is
-installed, and goes on only when you tick that you have another keyboard
-and mouse or accept it (the console: when you type REMOVE). It removes, in
-this order and stopping at the first step that fails or waits for a
-restart: on Windows 2000 to 7 this package's filter from a Thunderbolt
-port, every device entry of the package, its INFs, its services and its
-files; on Windows 98 SE and ME every device entry through the helper,
-then the package copy and its search path, the INF copies Windows kept
-and the driver files. Then the xHCI98 tools and the installer, the
-options it wrote machine-wide, its records in the registry, the
-Add/Remove Programs entry and the install directory if nothing else is in
-it.
+Add/Remove Programs (Control Panel) lists the package as "xHCI98 USB 3
+drivers" with its version ("xHCI98 Thunderbolt 3 / USB4 connection
+manager" when that is all it installed); Remove there runs the installer's
+uninstall (INSTALL /uninstall does the same, and INSTALL /console
+/uninstall in the console). It first warns that on a machine whose only
+USB controller is xHCI the USB keyboard and mouse stop working until
+another driver is installed, and goes on only when you tick that you have
+another keyboard and mouse or accept it (the console: when you type
+REMOVE). It removes, in this order and stopping at the first step that
+fails or waits for a restart: on Windows 2000 to 7 this package's filter
+from a Thunderbolt port, every device entry of the package, its INFs, its
+services and its files; on Windows 98 SE and ME every device entry through
+the helper, then the package copy and its search path, the INF copies
+Windows kept and the driver files. Then the xHCI98 tools and the
+installer, the options it wrote machine-wide, its records in the registry,
+the Add/Remove Programs entry and the install directory if nothing else is
+in it.
 
 An uninstall that stops part-way keeps the installer, its records and the
 Add/Remove Programs entry, named "(incomplete: run again)": restart

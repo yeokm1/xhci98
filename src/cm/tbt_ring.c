@@ -24,6 +24,17 @@
  * to the USB4 Specification 2.0 (November 2025), sections 6.4, 12.3, 12.4
  * and 12.6.
  *
+ * The notices of this file. The text lifted from u4hi.c at a68bc74 keeps
+ * that commit's MIT notice, below. Task 40-A.1 took u4hi.c's u4_hp_ack,
+ * u4cm_unsolicited and u4_xfer from usb4-emu main 3c74189, Copyright (c)
+ * 2026 usb4-emu contributors; usb4-emu's copyright holder offers what
+ * this project takes from it under GPL-2.0-or-later (owner, 2026-10-25;
+ * legal-provenance.md section 2a).
+ * This project's own changes are under its LICENSE, GPL-2.0-or-later. The
+ * acknowledgement packets (Spec 6.4.2.7 to 6.4.2.10), first adapted in
+ * part from Linux drivers/thunderbolt ctl.c, were rewritten from the
+ * specification in task 44.38 (2026-10-26).
+ *
  * ------------------------------------------------------------------------
  * Original notice of u4hi.c:
  *
@@ -369,10 +380,12 @@ VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context)
 }
 
 /*
- * Record 22 section 4.4 step 2 (Guide 5.7.3; Linux nhi.c tb_ring_stop,
- * which also clears the index register): ring 0 disabled whatever state a
+ * Record 22 section 4.4 step 2: ring 0 disabled whatever state a
  * predecessor left it in, before any descriptor address is written, then
- * the settle. Rings 1 and up are only looked at.
+ * the settle; Guide 5.7.3's order (Ring Control to its default, then Base
+ * Address Low and High and the Ring Size), each ring's Producer and
+ * Consumer Indexes register (Spec 12.6.3.2.3, 12.6.3.3.3) back to its
+ * default 0 as well. Rings 1 and up are only looked at.
  */
 /* DmaMayRun cleared only on evidence: after the settle, both ring 0
  * controls read back, readable (not all ones) and with Valid clear. A
@@ -1027,32 +1040,42 @@ static VOID tbtCtlRouteOf(const TBT_FRAME *f, PTBT_ROUTE r)
     r->Lo = f->Dw[1];
 }
 
-/* Spec 6.4.2.8 (two DWs: the route) and 6.4.2.9 (the route and the
- * Sequence bit); Linux ctl.c tb_cfg_ack_notification sends the first. */
+/*
+ * The answer to a notification that asks for one (Spec 6.6). Plain: a
+ * Notification Acknowledgement Packet, PDF 4h, whose payload is the route
+ * string of the router that notified and nothing else (6.4.2.8, Table
+ * 6-7). Enhanced, for a router whose Sequence bit capability is on: PDF
+ * 8h, the route string, then one DW whose bit 0 hands the notification's
+ * Sq back (6.4.2.9, Table 6-8). The connection manager's per-router
+ * answer (TBT_CTL.AckForm) picks the form.
+ */
 static VOID tbtCtlSendAck(PTBT_CTL ctl, const TBT_NOTE *n, ULONG form)
 {
-    ULONG dw[3];
-    LONG rc;
+    ULONG pkt[3];
+    ULONG pdf;
+    ULONG words;
+    BOOLEAN enhanced;
 
-    dw[0] = n->Route.Hi & TBT_ROUTE_HI_TOPOLOGY;
-    dw[1] = n->Route.Lo;
-    if (form == TBT_ACK_ENHANCED) {
-        dw[2] = n->Sq ? TBT_NOTIFY_ACK_ENH_SQ : 0;
-        rc = TbtRingSendUs(ctl->Ring, TBT_PDF_NOTIFY_ACK_ENH, dw, 3,
-                           TBT_TX_CONSUME_U4_US);
-        if (rc == TBT_OK) {
-            ctl->Counters.AcksEnhanced++;
-        }
-    } else {
-        rc = TbtRingSendUs(ctl->Ring, TBT_PDF_NOTIFY_ACK, dw, 2,
-                           TBT_TX_CONSUME_U4_US);
-        if (rc == TBT_OK) {
-            ctl->Counters.AcksPlain++;
+    enhanced = (BOOLEAN)(form == TBT_ACK_ENHANCED);
+    pkt[0] = n->Route.Hi & TBT_ROUTE_HI_TOPOLOGY;
+    pkt[1] = n->Route.Lo;
+    pkt[2] = 0;
+    pdf = TBT_PDF_NOTIFY_ACK;
+    words = 2;
+    if (enhanced) {
+        pdf = TBT_PDF_NOTIFY_ACK_ENH;
+        words = 3;
+        if (n->Sq) {
+            pkt[2] = TBT_NOTIFY_ACK_ENH_SQ;
         }
     }
-    if (rc != TBT_OK) {
+    if (TbtRingSendUs(ctl->Ring, pdf, pkt, words, TBT_TX_CONSUME_U4_US) != TBT_OK) {
         ctl->Counters.AckFailures++;
         tbtLog(ctl->Ring->Host, "tbt.ctl.ack-failed", n->Code);
+    } else if (enhanced) {
+        ctl->Counters.AcksEnhanced++;
+    } else {
+        ctl->Counters.AcksPlain++;
     }
 }
 
@@ -1092,30 +1115,40 @@ static VOID tbtCtlQueueNote(PTBT_CTL ctl, const TBT_NOTE *n)
     ctl->NoteCount++;
 }
 
-/* Spec 6.4.2.10, Table 6-12 HP_ACK; Linux ctl.c tb_cfg_ack_plug (a
- * Notification Packet with the adapter and PG); acknowledged before it is
- * processed, in the order received (Guide 4.3). */
+/*
+ * A Hot Plug Acknowledgment Packet (Spec 6.4.2.7, 6.8): a Notification
+ * Packet, PDF 3h, to the route the event came from, Event Code HP_ACK with
+ * the event's Adapter Num as its Event Info (Table 6-12) and PG 10b for a
+ * plug, 11b for an unplug (Table 6-6); as usb4-emu u4hi.c u4_hp_ack.
+ */
+static VOID tbtCtlHpAck(PTBT_CTL ctl, const TBT_HP_EVENT *e)
+{
+    ULONG pkt[3];
+    ULONG pg;
+
+    pg = e->Unplug ? TBT_NOTIFY_PG_UNPLUG : TBT_NOTIFY_PG_PLUG;
+    pkt[0] = e->Route.Hi;
+    pkt[1] = e->Route.Lo;
+    pkt[2] = (pg << TBT_NOTIFY_PG_SHIFT) | (e->Adapter << TBT_NOTIFY_INFO_SHIFT) |
+             TBT_EV_HP_ACK;
+    if (TbtRingSendUs(ctl->Ring, TBT_PDF_NOTIFY, pkt, 3, TBT_TX_CONSUME_U4_US) != TBT_OK) {
+        ctl->Counters.HotPlugAckFailures++;
+        tbtLog(ctl->Ring->Host, "tbt.ctl.hp-ack-failed", e->Adapter);
+    }
+}
+
+/* A Hot Plug Event Packet (Spec 6.4.2.10, Table 6-9): acknowledged first,
+ * every copy, then queued, in the order received (Guide 4.3). */
 static VOID tbtCtlHotPlug(PTBT_CTL ctl, const TBT_FRAME *f)
 {
     TBT_HP_EVENT e;
-    ULONG dw[3];
     ULONG k;
     PTBT_HP_EVENT q;
 
     tbtCtlRouteOf(f, &e.Route);
     e.Adapter = TBT_HOTPLUG_ADAPTER(f->Dw[2]);
     e.Unplug = (BOOLEAN)((f->Dw[2] & TBT_HOTPLUG_UPG) != 0);
-
-    dw[0] = e.Route.Hi;
-    dw[1] = e.Route.Lo;
-    dw[2] = TBT_EV_HP_ACK | (e.Adapter << TBT_NOTIFY_INFO_SHIFT) |
-            ((e.Unplug ? TBT_NOTIFY_PG_UNPLUG : TBT_NOTIFY_PG_PLUG) <<
-             TBT_NOTIFY_PG_SHIFT);
-    if (TbtRingSendUs(ctl->Ring, TBT_PDF_NOTIFY, dw, 3,
-                      TBT_TX_CONSUME_U4_US) != TBT_OK) {
-        ctl->Counters.HotPlugAckFailures++;
-        tbtLog(ctl->Ring->Host, "tbt.ctl.hp-ack-failed", e.Adapter);
-    }
+    tbtCtlHpAck(ctl, &e);
 
     /* A retransmitted copy of a queued event is dropped (u4hi.c). */
     for (k = 0; k < ctl->HpCount; k++) {

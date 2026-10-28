@@ -29,7 +29,7 @@ BEGIN
             VALUE "FileDescription",  "xhci98 helper for 32-bit Windows 2000, XP, Vista and 7\0"
             VALUE "FileVersion",      XHCI_VER_STR "\0"
             VALUE "InternalName",     "xhcihlpr.sys\0"
-            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2 or later.\0"
             VALUE "OriginalFilename", "xhcihlpr.sys\0"
             VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
             VALUE "ProductVersion",   XHCI_VER_STR "\0"

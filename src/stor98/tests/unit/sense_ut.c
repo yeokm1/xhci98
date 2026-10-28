@@ -47,11 +47,14 @@
 static int failures;
 static int completions;
 
-/* The two completion helpers sense.c uses (nvme2k_scsi.c in the driver). */
+/* The two completion helpers sense.c uses (nvme2k_scsi.c in the driver;
+ * their completion, EngCompleteSrb, applies ScsiCompletionStatus). */
 BOOLEAN ScsiSuccess(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 {
     (void)DevExt;
     Srb->SrbStatus = SRB_STATUS_SUCCESS;
+    Srb->ScsiStatus = SCSISTAT_GOOD;
+    ScsiCompletionStatus(Srb);
     completions++;
     return TRUE;
 }
@@ -64,6 +67,7 @@ BOOLEAN ScsiError(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN
         SrbStatus |= SRB_STATUS_AUTOSENSE_VALID;
     }
     Srb->SrbStatus = SrbStatus;
+    ScsiCompletionStatus(Srb);
     completions++;
     return TRUE;
 }
@@ -272,6 +276,54 @@ int main(void)
     c.SenseInfoBuffer = NULL;
     ScsiSetSense(NULL, &c, SCSI_SENSE_ILLEGAL_REQUEST, 0x25, 0);
     check(dev.SenseCount == 0, "LU 0 unaffected");
+
+    printf("10. SCSI status of a completion: never the stale byte the port's SRB held (xhci98 44.58)\n");
+    {
+        static const UCHAR other[] = {
+            SRB_STATUS_SUCCESS, SRB_STATUS_BUSY, SRB_STATUS_NO_DEVICE, SRB_STATUS_SELECTION_TIMEOUT,
+            SRB_STATUS_ABORTED, SRB_STATUS_BUS_RESET, SRB_STATUS_INVALID_REQUEST, SRB_STATUS_DATA_OVERRUN,
+            SRB_STATUS_ABORT_FAILED
+        };
+        int bad = 0;
+
+        for (i = 0; i < (int)(sizeof(other) / sizeof(other[0])); i++) {
+            memset(&c, 0, sizeof(c));
+            c.SrbStatus = other[i];
+            c.ScsiStatus = 0x05;
+            ScsiCompletionStatus(&c);
+            if (c.ScsiStatus != SCSISTAT_GOOD || c.SrbStatus != other[i]) {
+                bad++;
+            }
+        }
+        check(bad == 0, "every status but ERROR: GOOD, the SrbStatus unchanged");
+    }
+    failreq(&b, bb, 18, 0, SCSI_SENSE_ILLEGAL_REQUEST, 0x24);
+    ScsiError(&dev, &b, SRB_STATUS_ERROR);
+    check(b.ScsiStatus == SCSISTAT_CHECK_CONDITION &&
+          b.SrbStatus == (SRB_STATUS_ERROR | SRB_STATUS_AUTOSENSE_VALID) && bb[2] == 5 && bb[12] == 0x24,
+          "ERROR with autosense: CHECK CONDITION, AUTOSENSE_VALID and the sense kept");
+    failreq(&a, ba, 0, 0, SCSI_SENSE_ILLEGAL_REQUEST, 0x20);
+    ScsiError(&dev, &a, SRB_STATUS_ERROR);
+    check(a.ScsiStatus == SCSISTAT_CHECK_CONDITION && a.SrbStatus == SRB_STATUS_ERROR,
+          "ERROR without autosense: CHECK CONDITION, no AUTOSENSE_VALID");
+    key = reqsense(18, &asc, &len, 0);
+    check(key == 5 && asc == 0x20, "its sense kept for REQUEST SENSE");
+    memset(&c, 0, sizeof(c));
+    c.SrbStatus = SRB_STATUS_ERROR;
+    c.ScsiStatus = SCSISTAT_GOOD;
+    ScsiCompletionStatus(&c);
+    check(c.ScsiStatus == SCSISTAT_GOOD, "ERROR its path left GOOD (HwStartIo's start): GOOD");
+    memset(&c, 0, sizeof(c));
+    c.Function = SRB_FUNCTION_EXECUTE_SCSI;
+    c.Cdb[0] = SCSIOP_INQUIRY;
+    c.ScsiStatus = 0x05;
+    ScsiSuccess(&dev, &c);
+    check(c.ScsiStatus == SCSISTAT_GOOD && c.SrbStatus == SRB_STATUS_SUCCESS, "a self-answered success: GOOD");
+    failreq(&c, bc, 18, 0, SCSI_SENSE_ILLEGAL_REQUEST, 0x24);
+    c.SrbStatus = SRB_STATUS_ABORTED;
+    ScsiCompletionStatus(&c);
+    check(c.ScsiStatus == SCSISTAT_GOOD, "a CHECK CONDITION never goes with a status other than ERROR");
+    ScsiSenseReset(&dev);
 
     printf("%s: %d failed check(s), %d completions\n", failures ? "FAIL" : "PASS", failures, completions);
     return failures > 250 ? 250 : failures;     /* a count of 256 would exit 0 */

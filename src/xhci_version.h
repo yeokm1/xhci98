@@ -13,8 +13,8 @@
  *   - Stor98 (roadmap-usb4 task 42-A.30): `src\stor98\src\stor98ver.h`,
  *     which `nvme2k.rc` reads for stor98.mpd and both stor98.sys images
  *   - the tools: `xhciqual\qual.h`'s `TOOL_VERSION`, `xhcisnap\xhcisnap.c`'s
- *     `XHCISNAP_VERSION`, `xhciinst\xhciinst.c`, `xhcicln\xhcicln.c`,
- *     `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`
+ *     `XHCISNAP_VERSION`, `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and
+ *     `xhcitr\xhcitr.rc`
  *
  * Eleven cannot include it, because an INF and a manifest are not compiled, and
  * keep a literal that a gate **checks** against this file on every build
@@ -69,16 +69,16 @@
 
 /* The four-part package version, as four integers - what FILEVERSION and
  * PRODUCTVERSION take, and what the Windows shell sorts by. */
-#define XHCI_VER_CSV            3,2,0,0
+#define XHCI_VER_CSV            3,3,0,0
 
 /* The same number as a string - the resource's two version strings, the DOS
  * qualifier's banner, and the snapshot reader's report header. Must agree with
  * XHCI_VER_CSV above; the INF gate refuses a build where it does not. */
-#define XHCI_VER_STR            "3.2.0.0"
+#define XHCI_VER_STR            "3.3.0.0"
 
 /* The release date, in the MM/DD/YYYY form `DriverVer` takes, zero-padded -
  * the INF gate refuses an unpadded one, because Windows 98's 16-bit parser is
  * the reason the padding rule exists. */
-#define XHCI_DRIVERVER_DATE     "10/24/2026"
+#define XHCI_DRIVERVER_DATE     "10/28/2026"
 
 #endif /* XHCI_VERSION_H */

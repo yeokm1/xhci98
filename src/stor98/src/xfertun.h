@@ -9,8 +9,9 @@
 // Where the value comes from (read once in HwFindAdapter, kept in the device
 // extension, which survives an NT resume that brings no ArgumentString):
 //   NT  DriverParameter (REG_SZ) in HKLM\System\CurrentControlSet\Services\
-//       stor98\Parameters\Device: maxtransferkb=<n> (decimal). No older
-//       DriverParameter key is a suffix of it, and it is a suffix of none.
+//       stor98\Parameters\Device: stormaxtransferkb=<n> (decimal;
+//       maxtransferkb=, its name before xhci98 3.3.0.0, is ignored). No key
+//       occurs inside it, and it occurs inside none (dpkeys.h).
 //   9x  REG_SZ (decimal) or REG_DWORD value StorMaxTransferKB in
 //       HKLM\System\CurrentControlSet\Services\stor98.
 //

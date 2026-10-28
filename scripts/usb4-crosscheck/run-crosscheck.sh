@@ -12,9 +12,12 @@
 # repository, or the main checkout's sibling for a worktree).
 #
 # Adapted from usb4-emu's run-host-test.sh (Copyright (c) 2026 usb4-emu
-# contributors, SPDX-License-Identifier: GPL-2.0-only); the fabric file
+# contributors); the fabric file
 # list follows src/qemu/tests/usb4/run-fabric-test.sh. Changed for xhci98
 # by Yeo Kheng Meng and Claude, 2026-10-15. A reading, not a gate.
+# usb4-emu's copyright holder offers what this project takes from it under
+# GPL-2.0-or-later (owner, 2026-10-25; legal-provenance.md section 2a).
+# This script is under this project's LICENSE, GPL-2.0-or-later.
 set -e
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
@@ -45,6 +48,12 @@ python3 "$qemu/tests/usb4/gen-trace-stub.py" "$qemu/hw/usb4/trace-events" \
 # checkout must have it (usb4-emu main a50c19e or later).
 if [ ! -f "$qemu/hw/usb4/usb4-router-asm.c" ]; then
     echo "usb4-emu checkout too old: no hw/usb4/usb4-router-asm.c (asm4242)" >&2
+    exit 1
+fi
+# The asm4242 host as the emulator's asm4242 preset has it (usb4-emu QEMU
+# fork 02dda40 and later), which the cases use.
+if ! grep -q usb4_asm_config_public "$qemu/hw/usb4/usb4-internal.h"; then
+    echo "usb4-emu checkout too old: no asm4242 preset (QEMU fork 02dda40)" >&2
     exit 1
 fi
 # The asm2464 device model (the ORICO AAGM2-U4 capture, usb4-emu QEMU fork

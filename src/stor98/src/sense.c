@@ -127,6 +127,23 @@ VOID ScsiSetSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN
              ((Srb->SenseInfoBufferLength > 0xFE ? 0xFE : Srb->SenseInfoBufferLength) << 24));
 }
 
+//
+// SCSI status of a completing SRB (PLAN "SCSI status of a completion"):
+// every status other than SRB_STATUS_ERROR carries GOOD (a success, or a
+// port-level status for which no target status exists: BUSY, NO_DEVICE,
+// SELECTION_TIMEOUT, ABORTED, BUS_RESET, INVALID_REQUEST, DATA_OVERRUN,
+// ...). An ERROR keeps the status its path set (CHECK CONDITION with its
+// sense, or GOOD), which starts as GOOD at HwStartIo's entry, since not
+// every port clears the SRB it hands over (on ME an ASPI caller read a
+// target status 05h from requests Stor98 answers itself).
+//
+VOID ScsiCompletionStatus(IN PSCSI_REQUEST_BLOCK Srb)
+{
+    if (SRB_STATUS(Srb->SrbStatus) != SRB_STATUS_ERROR) {
+        Srb->ScsiStatus = SCSISTAT_GOOD;
+    }
+}
+
 // Every kept entry ends (new start, resume, acknowledged reset).
 VOID ScsiSenseReset(IN PHW_DEVICE_EXTENSION DevExt)
 {

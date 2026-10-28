@@ -10,23 +10,34 @@
  *       through that entry the NHI's thread asks for
  *       IoInvalidateDeviceRelations on its PDO (section 6.2). It reads
  *       every BusRelations answer on its way back, keeps the snapshot and
- *       the baseline, and on an active bridge with safe eject on attaches
- *       a child filter to each new PDO (section 7.4). A device D0 request
+ *       the baseline, and on every bridge it sits on, active or not,
+ *       attaches a child filter to each new PDO (section 7.4; design
+ *       record 31 section 4.1, the tunnel id's vehicle). A device D0 request
  *       on a bridge the NHI marked for its resume is passed down at once
  *       and counted; the NHI's release then invalidates the bridge
  *       (section 6.3).
  *   [CM_KIND_CHILD]   role 3, safe eject's child filter, created by the
  *       bridge filter above a new device's PDO (directly, or above the bus
- *       filters already there, CmPortsChildAttach), or since task 42-A.5
- *       by AddDevice for a device whose LowerFilters value names this
- *       driver (CmChildAddDevice; record 21 section 7.4, revision 3). Its
- *       one act is Removable in the IRP_MN_QUERY_CAPABILITIES answer, on
- *       the way up - always for the first kind, and for the second only
- *       while its location is a unit on an active member's secondary bus
- *       with safe eject on (CmRegAttMayMark); a removal after a
- *       query-remove is recorded on the PDO's marks entry as a pending
- *       departure (CmRegAttRemoved), and an eject follows only on its
- *       confirmation.
+ *       filters already there, CmPortsChildAttach), by a child on a
+ *       PCI-to-PCI bridge below it (the chain of design record 31 section
+ *       4.3, to CM_TUNNEL_DEPTH_MAX), or since task 42-A.5 by AddDevice
+ *       for a device whose LowerFilters value names this driver
+ *       (CmChildAddDevice; record 21 section 7.4, revision 3). It answers
+ *       Removable in the IRP_MN_QUERY_CAPABILITIES answer, on the way up,
+ *       only while its location is a unit on an active member's secondary
+ *       bus with safe eject on (CmRegAttMayMark), whatever made it; a
+ *       removal after a query-remove is recorded on the PDO's marks entry
+ *       as a pending departure (CmRegAttRemoved), and an eject follows
+ *       only on its confirmation. Since record 31 it also puts the tunnel
+ *       id, PCI\XHCI98_TUNNEL&CC_010802, first among the compatible ids
+ *       of an NVMe-class function (cmChildIds), and on a PCI-to-PCI bridge
+ *       within the depth bound reads that bridge's BusRelations as the
+ *       bridge filter does (cmChainRelations). Since task 44.53, on
+ *       Windows 2000 with the Standard PC HAL alone, it gives a function
+ *       pci.sys gave no interrupt the IRQ of the tunnel port's own wire,
+ *       in the requirements, and keeps it out of pci.sys's start (design
+ *       record 21 section 6.2.1; cmChildReqQuery, cmChildReqFilter,
+ *       cmChildStartIrq).
  *
  * Every attachment, bridge or child, is on the registration list's
  * attachment list from its attach to its removal and reads its PDO's
@@ -44,6 +55,7 @@
  */
 
 #include "cm.h"
+#include "cm_ports.h"
 
 NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
@@ -111,6 +123,8 @@ NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     child->Common.Pdo = pdo;
     child->Outstanding = 1;
     child->AddDev = 1;
+    /* A unit: the device on a tunnel port's secondary bus. */
+    child->Depth = 1;
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
     CmRegFilterInit(child);
@@ -224,6 +238,125 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
     return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 }
 
+/*
+ * The tunnel id (design record 31 section 4.2): a BusQueryCompatibleIDs
+ * answer, on its way back, read by CmPortsTunnelIds. For an NVMe-class
+ * function without the id the answer is replaced by a new list, the id
+ * first, from paged pool as IRP_MN_QUERY_ID's contract requires, the old
+ * one freed; the PnP manager frees the new one. Every other answer, a
+ * failed request, a list over the bound and a failed allocation go up as
+ * they came (the device then has its plain ids, for the mark service's
+ * fallback, section 6.2), counted. What the strings say of a PCI-to-PCI
+ * bridge is kept for the chain (ChainKind). PASSIVE_LEVEL.
+ */
+/*
+ * Whether this system takes the tunnel id: Windows 2000 to 8 alone (NT
+ * 6.2 and below). 8.1 and later choose a driver again when a device
+ * restarts with ids that changed since its enumeration (read on 8.1,
+ * design record 31 section 4.8), and there Stor98's INF keeps 3.2.0.0's
+ * class model, so the id would only undo the safe-removal mark service's
+ * install. The version is the kernel's shared data page's
+ * (NtMajorVersion, NtMinorVersion: 6.3 on 8.1, 10.0 on 10), since
+ * IoIsWdmVersionAvailable does not tell 8 from 8.1 and no import is
+ * added. PASSIVE_LEVEL.
+ */
+static BOOLEAN cmChildTagOs(VOID)
+{
+    ULONG major = SharedUserData->NtMajorVersion;
+    ULONG minor = SharedUserData->NtMinorVersion;
+
+    return (BOOLEAN)(major < 6 || (major == 6 && minor < 3));
+}
+
+static NTSTATUS cmChildIds(PCM_FILTER child, PIRP irp)
+{
+    NTSTATUS status;
+    const USHORT *list;
+    USHORT *fresh;
+    ULONG chars;
+    ULONG kind;
+    ULONG verdict;
+
+    status = CmForwardSync(&child->Common, irp);
+    if (!NT_SUCCESS(status)) {
+        return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+    }
+    list = (const USHORT *)irp->IoStatus.Information;
+    verdict = CmPortsTunnelIds(list, NULL, 0, &chars, &kind);
+    if (list != NULL && verdict != CM_TID_OVER &&
+        child->ChainKind == CM_CHAIN_UNKNOWN) {
+        child->ChainKind = (kind & CM_TID_KIND_BRIDGE) != 0 ? CM_CHAIN_BRIDGE
+                                                            : CM_CHAIN_OTHER;
+        if (child->ChainKind == CM_CHAIN_BRIDGE) {
+            CmRegChainNote(child, CM_CHAIN_EV_BRIDGE);
+        }
+    }
+    if (verdict == CM_TID_OVER) {
+        CmRegChainNote(child, CM_CHAIN_EV_OVER);
+    } else if (verdict == CM_TID_TAG && cmChildTagOs()) {
+        fresh = (USHORT *)CmAllocPaged(chars * (ULONG)sizeof(USHORT));
+        if (fresh == NULL) {
+            CmRegChainNote(child, CM_CHAIN_EV_NOMEM);
+        } else {
+            (VOID)CmPortsTunnelIds(list, fresh, chars, &chars, &kind);
+            CmFree((PVOID)list);
+            irp->IoStatus.Information = (ULONG_PTR)fresh;
+            CmRegChainNote(child, CM_CHAIN_EV_ID);
+        }
+    }
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
+/*
+ * Whether a child sits on a PCI-to-PCI bridge: what its own
+ * BusQueryCompatibleIDs answer said (cmChildIds), or, for a child that
+ * never saw one - made by AddDevice, or re-attached after the ids were
+ * read - the devnode's recorded compatible ids, read once at its first
+ * BusRelations, when the devnode exists. A list the buffer cannot hold is
+ * no bridge's. PASSIVE_LEVEL.
+ */
+static ULONG cmChainKindOf(PCM_FILTER child)
+{
+    USHORT buf[258];
+    ULONG bytes;
+    ULONG chars;
+    ULONG kind;
+    NTSTATUS status;
+
+    if (child->ChainKind != CM_CHAIN_UNKNOWN) {
+        return child->ChainKind;
+    }
+    bytes = 0;
+    status = IoGetDeviceProperty(child->Common.Pdo,
+                                 DevicePropertyCompatibleIDs,
+                                 256 * (ULONG)sizeof(USHORT), buf, &bytes);
+    child->ChainKind = CM_CHAIN_OTHER;
+    if (NT_SUCCESS(status) && bytes <= 256 * (ULONG)sizeof(USHORT)) {
+        buf[bytes / sizeof(USHORT)] = 0;
+        buf[bytes / sizeof(USHORT) + 1] = 0;
+        if (CmPortsTunnelIds(buf, NULL, 0, &chars, &kind) != CM_TID_OVER &&
+            (kind & CM_TID_KIND_BRIDGE) != 0) {
+            child->ChainKind = CM_CHAIN_BRIDGE;
+            CmRegChainNote(child, CM_CHAIN_EV_BRIDGE);
+        }
+    }
+    return child->ChainKind;
+}
+
+/* A chain child's BusRelations (record 31 section 4.3), read on the way
+ * back once its device has started. PASSIVE_LEVEL. */
+static NTSTATUS cmChainRelations(PCM_FILTER child, PIRP irp)
+{
+    NTSTATUS status;
+
+    status = CmForwardSync(&child->Common, irp);
+    if (NT_SUCCESS(status) && child->Started) {
+        CmRegChainRelations(
+            child, (const DEVICE_RELATIONS *)irp->IoStatus.Information);
+    }
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
 /* A bridge's BusRelations, read on the way back (section 6.2) on every
  * bridge from its start, whatever its active mark says. */
 static NTSTATUS cmBridgeRelations(PCM_FILTER filter, PIRP irp)
@@ -241,6 +374,252 @@ static NTSTATUS cmBridgeRelations(PCM_FILTER filter, PIRP irp)
     return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 }
 
+/*
+ * A child's interrupt (design record 21 section 6.2.1, task 44.53):
+ * Windows 2000 on the Standard PC HAL gives a function hot-added behind a
+ * tunnel no interrupt (Interrupt Line 0, no routing), and SCSIport fails
+ * its start. A child filter on such a system (CmIrqGate) adds, to a query
+ * answer of pci.sys's without an interrupt, the IRQ the tunnel port's own
+ * wire carries (CmRegIrqWire), adds it again to a filter request's list
+ * that lacks it, and takes it out of the start it passes to pci.sys, which
+ * never asked for it (the contract of IRP_MN_QUERY_RESOURCE_REQUIREMENTS
+ * for a bus filter's added resource). The records and their sequences are
+ * cm_irq.c's (CmIrqQueryStep, CmIrqFilterStep, CmIrqStartStep); the lists
+ * are read as bytes at the offsets cm_irq.h names, asserted here against
+ * the DDK's structures. PASSIVE_LEVEL.
+ */
+XHCI_C_ASSERT(cm_irq_req_alts,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, AlternativeLists) ==
+        CM_IRQ_REQ_ALTS_AT);
+XHCI_C_ASSERT(cm_irq_req_list,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List) == CM_IRQ_REQ_HDR);
+XHCI_C_ASSERT(cm_irq_iol_count,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_LIST, Count) == CM_IRQ_IOL_COUNT_AT);
+XHCI_C_ASSERT(cm_irq_iol_desc,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) == CM_IRQ_IOL_HDR);
+XHCI_C_ASSERT(cm_irq_iod_size,
+    sizeof(IO_RESOURCE_DESCRIPTOR) == CM_IRQ_IOD_SIZE);
+XHCI_C_ASSERT(cm_irq_iod_type,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_DESCRIPTOR, Type) == CM_IRQ_IOD_TYPE_AT);
+XHCI_C_ASSERT(cm_irq_iod_share,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_DESCRIPTOR, ShareDisposition) ==
+        CM_IRQ_IOD_SHARE_AT);
+XHCI_C_ASSERT(cm_irq_iod_flags,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_DESCRIPTOR, Flags) == CM_IRQ_IOD_FLAGS_AT);
+/* A nested member's offset is no constant expression for the 2000 DDK's
+ * compiler, so each level is asserted on its own: the union at 8, and
+ * u.Interrupt's MinimumVector and MaximumVector its first two ULONGs (the
+ * DDK's declaration order). */
+XHCI_C_ASSERT(cm_irq_iod_min,
+    XHCI_FIELD_OFFSET(IO_RESOURCE_DESCRIPTOR, u) == CM_IRQ_IOD_MIN_AT);
+XHCI_C_ASSERT(cm_irq_iod_max,
+    CM_IRQ_IOD_MAX_AT == CM_IRQ_IOD_MIN_AT + sizeof(ULONG));
+XHCI_C_ASSERT(cm_irq_cml_list,
+    XHCI_FIELD_OFFSET(CM_RESOURCE_LIST, List) == CM_IRQ_CML_HDR);
+XHCI_C_ASSERT(cm_irq_cmf_count,
+    XHCI_FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList) +
+        XHCI_FIELD_OFFSET(CM_PARTIAL_RESOURCE_LIST, Count) ==
+        CM_IRQ_CMF_COUNT_AT);
+XHCI_C_ASSERT(cm_irq_cmf_desc,
+    XHCI_FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList) +
+        XHCI_FIELD_OFFSET(CM_PARTIAL_RESOURCE_LIST, PartialDescriptors) ==
+        CM_IRQ_CMF_HDR);
+XHCI_C_ASSERT(cm_irq_cmd_size,
+    sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR) == CM_IRQ_CMD_SIZE);
+/* The union at 4: u.Interrupt.Level and u.DeviceSpecificData.DataSize
+ * are each the first ULONG of their member (the DDK's declaration). */
+XHCI_C_ASSERT(cm_irq_cmd_level,
+    XHCI_FIELD_OFFSET(CM_PARTIAL_RESOURCE_DESCRIPTOR, u) ==
+        CM_IRQ_CMD_LEVEL_AT);
+XHCI_C_ASSERT(cm_irq_cmd_datasize,
+    CM_IRQ_CMD_DATASIZE_AT == CM_IRQ_CMD_LEVEL_AT);
+XHCI_C_ASSERT(cm_irq_type_int, CmResourceTypeInterrupt == CM_IRQ_TYPE_INTERRUPT);
+XHCI_C_ASSERT(cm_irq_type_dev,
+    CmResourceTypeDeviceSpecific == CM_IRQ_TYPE_DEVSPECIFIC);
+XHCI_C_ASSERT(cm_irq_share, CmResourceShareShared == CM_IRQ_SHARE_SHARED);
+XHCI_C_ASSERT(cm_irq_level,
+    CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE == CM_IRQ_FLAGS_LEVEL);
+
+/* The answer's list replaced by one with the interrupt added: TRUE when it
+ * was; the old one freed, the new one from paged pool. */
+static BOOLEAN cmIrqReplace(PIRP irp, ULONG newBytes, ULONG line)
+{
+    const UCHAR *list;
+    UCHAR *fresh;
+
+    list = (const UCHAR *)irp->IoStatus.Information;
+    fresh = (UCHAR *)CmAllocPaged(newBytes);
+    if (fresh == NULL) {
+        return FALSE;
+    }
+    if (CmIrqReqAdd(list, fresh, newBytes, line) != newBytes) {
+        CmFree(fresh);
+        return FALSE;
+    }
+    CmFree((PVOID)list);
+    irp->IoStatus.Information = (ULONG_PTR)fresh;
+    return TRUE;
+}
+
+static NTSTATUS cmChildReqQuery(PCM_FILTER child, PIRP irp)
+{
+    NTSTATUS status;
+    const UCHAR *list;
+    ULONG ok;
+    ULONG scan;
+    ULONG newBytes;
+    ULONG wire;
+    ULONG why;
+    ULONG line;
+    ULONG address;
+    ULONG bytes;
+
+    status = CmForwardSync(&child->Common, irp);
+    list = (const UCHAR *)irp->IoStatus.Information;
+    ok = (ULONG)(NT_SUCCESS(status) && list != NULL);
+    newBytes = 0;
+    scan = ok ? CmIrqReqScan(list, &newBytes) : CM_IRQ_REQ_BAD;
+    wire = 0;
+    why = CM_IRQ_WHY_GIVEN;
+    if (ok && scan == CM_IRQ_REQ_NONE) {
+        /* The function's device and function: DevicePropertyAddress (its
+         * bus is not yet answered on 2000 here; CmRegIrqWire reads it from
+         * the bridge above). The PnP manager answers the property with an
+         * IRP_MN_QUERY_CAPABILITIES through this stack, which passes this
+         * object unlocated (InLocate), as CmRegAttLocate's does. */
+        address = 0;
+        bytes = 0;
+        child->InLocate++;
+        if (NT_SUCCESS(IoGetDeviceProperty(child->Common.Pdo,
+                                           DevicePropertyAddress,
+                                           sizeof(address), &address,
+                                           &bytes))) {
+            child->InLocate--;
+            wire = CmRegIrqWire(child, address, &why, &child->IrqBdf);
+        } else {
+            child->InLocate--;
+            why = CM_IRQ_WHY_UNREAD;
+        }
+    }
+    if (CmIrqQueryStep(&child->Irq, ok, scan, wire, &line) == CM_IRQ_ACT_ADD) {
+        if (cmIrqReplace(irp, newBytes, line)) {
+            CmIrqQueryAdded(&child->Irq, line);
+            CmRegIrqNote(child, "cm.chain.irq", (line << 16) | child->IrqBdf);
+        } else {
+            CmRegIrqNote(child, "cm.chain.irq.nomem", child->IrqBdf);
+        }
+    } else if (ok && scan == CM_IRQ_REQ_NONE) {
+        CmRegIrqNote(child, "cm.chain.irq.no", (why << 16) | child->IrqBdf);
+    }
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
+static NTSTATUS cmChildReqFilter(PCM_FILTER child, PIRP irp)
+{
+    NTSTATUS status;
+    const UCHAR *list;
+    ULONG ok;
+    ULONG scan;
+    ULONG newBytes;
+    ULONG line;
+
+    status = CmForwardSync(&child->Common, irp);
+    /* Read afresh: a driver below may have replaced the list it carried. */
+    list = (const UCHAR *)irp->IoStatus.Information;
+    ok = (ULONG)((NT_SUCCESS(status) || status == STATUS_NOT_SUPPORTED) &&
+                 list != NULL);
+    newBytes = 0;
+    scan = ok ? CmIrqReqScan(list, &newBytes) : CM_IRQ_REQ_BAD;
+    if (CmIrqFilterStep(&child->Irq, ok, scan, &line) == CM_IRQ_ACT_ADD) {
+        if (cmIrqReplace(irp, newBytes, line)) {
+            status = STATUS_SUCCESS;
+            CmRegIrqNote(child, "cm.chain.irq.filter",
+                         (line << 16) | child->IrqBdf);
+        } else {
+            CmRegIrqNote(child, "cm.chain.irq.nomem", child->IrqBdf);
+        }
+    }
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
+static NTSTATUS cmIrqStartDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
+{
+    UNREFERENCED_PARAMETER(device);
+    UNREFERENCED_PARAMETER(irp);
+    KeSetEvent((PKEVENT)context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+/*
+ * A start on a child that added an interrupt: CM_IRQ_ACT_PASS (forward it
+ * as it is), CM_IRQ_ACT_FAIL (fail it), or CM_IRQ_ACT_STRIP with the start
+ * forwarded here, the next stack location given copies of both lists
+ * without the added interrupt, waited for, the copies freed; *status is
+ * then its status. The lists of this and the upper stack locations, which
+ * the PnP manager owns, are not touched.
+ */
+static ULONG cmChildStartIrq(PCM_FILTER child, PIRP irp, NTSTATUS *status)
+{
+    PIO_STACK_LOCATION stack;
+    PIO_STACK_LOCATION next;
+    const UCHAR *raw;
+    const UCHAR *tr;
+    UCHAR *raw2;
+    UCHAR *tr2;
+    CM_IRQ_STRIP s;
+    ULONG act;
+    ULONG bytes;
+    KEVENT done;
+
+    *status = STATUS_SUCCESS;
+    if (!CmIrqStartNeedsScan(&child->Irq)) {
+        return CM_IRQ_ACT_PASS;
+    }
+    stack = IoGetCurrentIrpStackLocation(irp);
+    raw = (const UCHAR *)stack->Parameters.StartDevice.AllocatedResources;
+    tr = (const UCHAR *)
+             stack->Parameters.StartDevice.AllocatedResourcesTranslated;
+    act = CmIrqStartStep(&child->Irq, CmIrqStartScan(raw, tr,
+                                                     child->Irq.Added, &s));
+    if (act != CM_IRQ_ACT_STRIP) {
+        if (act == CM_IRQ_ACT_FAIL) {
+            CmRegIrqNote(child, "cm.chain.irq.start.refused",
+                         child->IrqBdf);
+        }
+        return act;
+    }
+    bytes = s.Bytes - CM_IRQ_CMD_SIZE;
+    raw2 = (UCHAR *)CmAlloc(bytes);
+    tr2 = (UCHAR *)CmAlloc(bytes);
+    if (raw2 == NULL || tr2 == NULL ||
+        CmIrqStartStrip(raw, raw2, bytes, &s) != bytes ||
+        CmIrqStartStrip(tr, tr2, bytes, &s) != bytes) {
+        if (raw2 != NULL) {
+            CmFree(raw2);
+        }
+        if (tr2 != NULL) {
+            CmFree(tr2);
+        }
+        CmRegIrqNote(child, "cm.chain.irq.start.nomem", child->IrqBdf);
+        return CM_IRQ_ACT_FAIL;
+    }
+    KeInitializeEvent(&done, NotificationEvent, FALSE);
+    IoCopyCurrentIrpStackLocationToNext(irp);
+    next = IoGetNextIrpStackLocation(irp);
+    next->Parameters.StartDevice.AllocatedResources = (PCM_RESOURCE_LIST)raw2;
+    next->Parameters.StartDevice.AllocatedResourcesTranslated =
+        (PCM_RESOURCE_LIST)tr2;
+    CM_SET_COMPLETION_ALWAYS(irp, cmIrqStartDone, &done);
+    (VOID)IoCallDriver(child->Common.Lower, irp);
+    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    *status = irp->IoStatus.Status;
+    CmFree(raw2);
+    CmFree(tr2);
+    CmRegIrqNote(child, "cm.chain.irq.start.stripped",
+                 (child->Irq.Added << 16) | child->IrqBdf);
+    return CM_IRQ_ACT_STRIP;
+}
+
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -249,6 +628,7 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
     KIRQL irql;
     BOOLEAN child;
     BOOLEAN started;
+    ULONG irqAct;
 
     child = (BOOLEAN)(filter->Common.Kind == CM_KIND_CHILD);
     stack = IoGetCurrentIrpStackLocation(irp);
@@ -274,7 +654,19 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
             CmRegAttEvent(filter, CM_MK_START_FAILED);
             return CmCompleteIrp(irp, STATUS_DEVICE_NOT_READY, 0);
         }
-        status = CmForwardSync(&filter->Common, irp);
+        irqAct = CM_IRQ_ACT_PASS;
+        if (child && CmIrqGate) {
+            /* Design record 21 section 6.2.1: the added interrupt kept
+             * from pci.sys (stripped), or the start failed. */
+            irqAct = cmChildStartIrq(filter, irp, &status);
+        }
+        if (irqAct == CM_IRQ_ACT_FAIL) {
+            CmRegAttEvent(filter, CM_MK_START_FAILED);
+            return CmCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+        }
+        if (irqAct != CM_IRQ_ACT_STRIP) {
+            status = CmForwardSync(&filter->Common, irp);
+        }
         CmRegAttLocate(filter);
         if (NT_SUCCESS(status)) {
             filter->Started = 1;
@@ -282,6 +674,8 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
             filter->SurpriseRemoved = 0;
             if (!child) {
                 CmRegPublish(filter);
+            } else {
+                CmRegChainNote(filter, CM_CHAIN_EV_START);
             }
         } else {
             CmRegAttEvent(filter, CM_MK_START_FAILED);
@@ -295,9 +689,36 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         break;
 
     case IRP_MN_QUERY_DEVICE_RELATIONS:
-        if (!child && stack->Parameters.QueryDeviceRelations.Type ==
-                          BusRelations) {
+        if (stack->Parameters.QueryDeviceRelations.Type != BusRelations) {
+            break;
+        }
+        if (!child) {
             return cmBridgeRelations(filter, irp);
+        }
+        if (filter->Started && cmChainKindOf(filter) == CM_CHAIN_BRIDGE) {
+            if (CmPortsChainReads(filter->Depth, 1)) {
+                return cmChainRelations(filter, irp);
+            }
+            CmRegChainNote(filter, CM_CHAIN_EV_DEEP);
+        }
+        break;
+
+    case IRP_MN_QUERY_RESOURCE_REQUIREMENTS:
+        if (child && CmIrqGate) {
+            return cmChildReqQuery(filter, irp);
+        }
+        break;
+
+    case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
+        if (child && CmIrqGate) {
+            return cmChildReqFilter(filter, irp);
+        }
+        break;
+
+    case IRP_MN_QUERY_ID:
+        if (child &&
+            stack->Parameters.QueryId.IdType == BusQueryCompatibleIDs) {
+            return cmChildIds(filter, irp);
         }
         break;
 
@@ -344,6 +765,7 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
              * and only then records the departure (CmRegAttRemoved), so it
              * is recorded once this function's stack is gone. */
             status = CmForwardSync(&filter->Common, irp);
+            CmRegChainNote(filter, CM_CHAIN_EV_REMOVE);
             cmFilterRelease(filter);
             (VOID)KeWaitForSingleObject(&filter->Drained, Executive,
                                         KernelMode, FALSE, NULL);

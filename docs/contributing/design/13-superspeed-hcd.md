@@ -166,7 +166,13 @@ is the index; this is the same list in the proposal's order:
   descriptions on every path. From 3.2.0.0 the controller's is `xHCI98 USB
   3 Controller`, and the installer gives each controller its table knows
   its maker and product through the FriendlyName (roadmap-usb4 task 43.73,
-  design record 23 section 5.13).
+  design record 23 section 5.13). From 3.3.0.0 (amended 2026-10-27,
+  roadmap-usb4 task 44.61, owner) the package's own names say "USB 3", not
+  "USB 3.x": the root hub `xHCI98 USB 3 Root Hub` (the INFs' `RootHubDesc`
+  and the root-hub PDO's device text), a hub's SuperSpeed half `xHCI98 USB
+  3 Hub` (`Hub30Desc` and section 10.11's device text) and the service
+  `xHCI98 USB 3 Controller Driver` (`XhciSvcDesc`, and the binary's
+  `FileDescription`).
 - **The root hub is a devnode, and both property tabs are kept** (owner,
   2026-10-02, reversing a narrower answer given on the review earlier
   that day). The controller FDO creates a root-hub PDO under a
@@ -544,7 +550,8 @@ from `2.4.0.0`; the hub and composite models of 10.11 and 10.12 beside them), bo
 `xhci98.sys` through one service, `xhci98`. The device descriptions are
 the owner's names: `xHCI98 USB 3.x eXtensible Host Controller` (from
 3.2.0.0 `xHCI98 USB 3 Controller`, design record 23 section 5.13) and
-`xHCI98 USB 3.x Root Hub`. Both files pass the INF gate under its HCD profile
+`xHCI98 USB 3.x Root Hub` (from 3.3.0.0 `xHCI98 USB 3 Root Hub`, task
+44.61). Both files pass the INF gate under its HCD profile
 (section 9).
 
 What they fetch from the OS through `LayoutFile`, and what they refuse to:
@@ -5068,6 +5075,31 @@ enumerates `GUID_DEVINTERFACE_USB_HOST_CONTROLLER`. Windows 98's
 `SYSTRAY.EXE` also carries `\\.\HCD%d` (already recorded in
 `build-and-test.md`).
 
+The loop's bound and gaps, read for roadmap-usb4 task 44.81 [static]. On
+2000 SP4 (`usbui.dll` 59,664 bytes, SHA-256 `fc106598...`, from the
+image's `driver.cab`) `EnumerateAll` opens `\\.\HCD<n>` for n from 0 while
+n < 10 (`cmp dword ptr [ebp-10h],0Ah` / `jl` at `0x666B3224`), and a name
+that does not open goes straight to the next n (`je 0x666B3221`). XP SP3
+(`usbui.dll` 74,240 bytes, from `sp3.cab`) has the same loop
+(`0x5AF6527E` to `0x5AF65345`). So the walk sees `HCD0` to `HCD9` and
+nothing above, and a gap costs nothing. Since `3.3.0.0` the HCD's door on
+NT is `\DosDevices\XHCI98HC<k>`, and on 2000, XP and XP x64 an alias
+`\DosDevices\HCD<m>` from `HCD9` down names the door's link, so this walk
+still finds the controller there (section 8.8).
+
+Vista to 10, read for the same task [static]. Their `usbui.dll` carries no
+`HCD` string and finds controllers by the interface, as above. Their
+`stobject.dll`, the notification area's USB service probe that loads
+`usbui.dll` and calls `USBErrorHandler`, carries `\\.\HCD%d` and the
+host controller interface's GUID [static: the strings]. That it tries
+`\\.\HCD0` to `HCD9` and then the interface (`SetupDiGetClassDevs` with
+flags `0x12`) is the helper reading's account, whose code sites are not
+recorded here [inf]. On that reading a controller with no `HCD<n>` is
+still found there, and no alias is made on NT 6.x.
+Read in the images of Vista SP2, 7 SP1 (x86 and x64), 8, 8.1 and 10 x86
+(`stobject.dll` of 7 x86, SHA-256 `049dfa9e...`; the scans and every
+file's hash are held with the 44.81 evidence, `runs/run-44.md`).
+
 ### 8.2 How the pages find their device
 
 This is the load-bearing part, and it splits by generation:
@@ -5465,7 +5497,9 @@ install that writes no hub page or the wrong one (section 9).
    `{3ABF6F2D-71C4-462A-8A92-1E6861E6AF27}` (WDK 7.1 `usbiodef.h`; absent from
    the Windows 2000 DDK, so defined locally); write `SymbolicName` REG_SZ to
    the controller devnode's hardware key (`IoOpenDeviceRegistryKey`,
-   `PLUGPLAY_REGKEY_DEVICE`); create `\DosDevices\HCD<n>`.
+   `PLUGPLAY_REGKEY_DEVICE`); create the controller's `\DosDevices` name
+   (`HCD<n>` on 98 SE and ME; since `3.3.0.0` `XHCI98HC<k>` on NT and, on
+   2000, XP and XP x64, an `HCD<m>` alias of it - section 8.8).
 2. **Root-hub devnode**: the same with `GUID_DEVINTERFACE_USB_HUB`, and
    `SymbolicName` on the root-hub devnode's hardware key.
 3. **Controller FDO answers** `0x220424` and `0x220408` with usbport's
@@ -5511,10 +5545,37 @@ it and `XHCISNAP -probe` checks it:
 
 `IRP_MJ_CREATE` and `IRP_MJ_CLOSE` on the controller FDO complete with no
 work (usbport does that, with no access check; `FILE_ANY_ACCESS`). The HCD
-names its FDO (usbport's is `\Device\USBFDO-<n>`) and creates
-`\DosDevices\HCD<n>` at the first free `n`, because on a machine with other
-usbport controllers `HCD0` and up are theirs (the tool's `-c N` already
-covers that). The handler runs at PASSIVE in the HCD's own dispatch, so the
+names its FDO (usbport's is `\Device\USBFDO-<n>`) and gives it a
+`\DosDevices` name of its own. Up to `3.2.0.0` that was `\DosDevices\HCD<n>`
+at the first free `n` on every target. Since `3.3.0.0` (roadmap-usb4 task
+44.81, `src\xhci_dname.c`) it is:
+
+- 98 SE and ME: `\DosDevices\HCD<n>` at the first free `n`, as before.
+- NT (2000 to 10): `\DosDevices\XHCI98HC<k>`, a name only this driver makes,
+  from 0 up. Before each name is created on NT it is probed
+  (`IoGetDeviceObjectPointer`, which 98's NTKERN exports; it has no
+  `ZwOpenSymbolicLinkObject`), and a name that answers is passed over.
+- 2000, XP and XP x64: also `\DosDevices\HCD<m>`, whose target is the
+  string `\DosDevices\XHCI98HC<k>`, not the FDO's name. It is taken from
+  `HCD9` down, for the walk of section 8.1.
+
+Why. On Windows 2000 a create that collides with an existing `\DosDevices`
+link leaves a pointer reference on the existing link, and a `\??` link to a
+device object holds that object (its `LinkTargetObject`) until the link is
+freed. usbport's AddDevice takes the lowest free `\Device\USBFDO-<i>` and
+then creates `\DosDevices\HCD<i>` once, with no retry (2000 SP4
+`usbport.sys`, `0x1C59D` to `0x1C5DD` and `0x11D4C` [static]). So when this
+driver held the `HCD<i>` that a later usbport controller wanted, its FDO, and
+so its image, stayed after the remove, and the next start failed with Code
+31 until Windows restarted [runtime]. A link whose target names another
+`\DosDevices` link was read with no `LinkTargetObject`, so a collision on
+the alias keeps nothing of this driver's [runtime]. `runs/run-44.md`,
+"44.81", has the readings and `docs/issues/20-w2k-hcd-link-collision-code-31.md` the case.
+
+The alias from the top meets usbport only when more than ten USB host
+controllers run at once. The tool's `/c N` opens `XHCI98HC<N>` on NT,
+and `HCD<N>` when that name is not there (a driver before `3.3.0.0`), and
+`HCD<N>` on 98 SE and ME. The handler runs at PASSIVE in the HCD's own dispatch, so the
 "non-paged kernel copy" clause is the HCD's to keep (the `METHOD_BUFFERED`
 system buffer is non-paged already). Answering request 1 for `usbui.dll` and
 request 3 for the tool from one dispatcher keeps the "8-entry table" refusal
@@ -5902,6 +5963,62 @@ the USBUSER pass-through of section 8.8, which stays byte-compatible for
   A failure with a recovery still owed (1) does not set it. The layout
   and `XHQ_VERSION` do not change: a driver from before it leaves the
   bit clear, which `XHCITR` reads as not failed.
+
+- **Version 2** (`3.3.0.0`; roadmap-usb4 tasks 44.8 and 44.35, design
+  record 25 sections 18 and 19). The header grows to 80 bytes and the
+  answer carries a fourth part; the first 64 bytes keep version 1's
+  words in their places.
+  - Word 64 (`XHQ_O_DRIVER_VERSION`) is the driver's version, one byte
+    a field from the most significant (`3.3.0.0` is `0x03030000`), made
+    at compile time from `XHCI_VER_CSV` (`src\xhci_verpk.h`), at every
+    level.
+  - Words 68 to 76 place the storage transport part (`XHQ_O_XPORT_OFFSET`,
+    `_BYTES`, `_RECORD`): one `XHQ_XPORT_RECORD_BYTES` (40) record per
+    device record holding a storage decision (section 10.7, "The
+    decision kept"), in Slot ID order, at most `XHCI_MAX_SLOTS` - Slot
+    ID, root port, route string, interface (`0xFF` for a device PDO),
+    transport, why, alternate, inputs, class triple (class 7:0, subclass
+    15:8, protocol 23:16), count - after the configuration space, at
+    every level, 0 included: it is the bus's own decision, not the log,
+    and holds no address. It is filled under the controller lock with
+    the counters, from `SlotDevice[]` as the slots region reads it.
+  - A buffer of 64 to 79 bytes is answered with the header's first 64
+    bytes and success (`3.2.0.0`'s `XHCITR` reads the failed flag that
+    way); under 64 `STATUS_BUFFER_TOO_SMALL` as before; 80 bytes and
+    more but under the whole, the 80-byte header alone with the size
+    needed. The largest answer grows by 16 bytes and 32 records
+    (20,048 bytes).
+  - A reader of version 2 takes version 1, which has no version word
+    and no records; a version 1 reader refuses version 2.
+
+- **Version 3** (`3.3.0.0`; roadmap-usb4 task 44.80, design record 25
+  section 7.7 item 10). The header grows to 88 bytes and the answer
+  carries a fifth part; the first 80 bytes keep version 2's words in
+  their places.
+  - Words 80 and 84 place the ports part (`XHQ_O_PORTS_OFFSET`,
+    `_BYTES`): one byte per root port, port n at byte n - 1, for
+    HCSPARAMS1.MaxPorts ports, last in the answer, at every level 0
+    included (like the configuration space, it is not the log and holds
+    no address). Each byte is the fastest that port can run as the
+    controller's Supported Protocol capabilities state it
+    (`XhciPortTop`, `src\xhci_caps.c`, host-tested in
+    `test\test_caps.c`): 1 (`XHQ_PT_USB2`) a port of a USB 2.0 group; for
+    a USB 3 group 3 (`XHQ_PT_SSP`) when a PSI DWORD of its table states
+    SuperSpeedPlus (LP 1) or a rate above Gen 1x1's 5 Gbit/s, else 2
+    (`XHQ_PT_SS`); 0 for a port no group claims or a group of another
+    major revision. A USB 3 group with no PSI table is 2 whatever its
+    minor revision: with no table the default speed IDs apply, and they
+    name the Gen 2 rates on any USB 3 group (xHCI 1.2c Table 7-13), so
+    only a table is taken as saying SuperSpeedPlus. The map is the one
+    parsed at the start; no port is read, and nothing is served while
+    the controller is not started (the part is then empty). It is
+    filled under the door gate after the records, by the door
+    (`hcdDoorQuery`), and `XhciQryAnswer` writes it zero first.
+  - A buffer of 64 to 87 bytes is answered with the header's first 64
+    bytes; 88 and more but under the whole, the 88-byte header alone.
+    The largest answer grows by 8 bytes and 255 (20,311 bytes).
+  - A reader of version 3 takes versions 1 and 2; a version 2 reader
+    refuses version 3 (it asks for 80 bytes and is given 64).
 
 ## 9. The harness and the gates (task 25.5)
 
@@ -6917,6 +7034,39 @@ under `USB\XHCI98_HUB` or `USB\XHCI98_HUB30` from `2.4.0.0`; still never a
 `USB\CLASS_09*`, `USB\ROOT_HUB*` or `USB\COMPOSITE` id. `USB\MS_COMP_*` is
 out of scope for 2.0.0.0.
 
+**The decision kept** (`3.3.0.0`; roadmap-usb4 task 44.35, design
+record 25 section 19). Until `3.3.0.0` the decision lived on the PDO and
+in `hc->XportDecisions`, and only the debug trace said it. From it:
+
+- The counts move into `XHCIHC_COUNTERS`, appended at words 246 to 251
+  (`XportUas`, `XportUasOnly`, `XportUasOnlyForced`, `XportBotForced`,
+  `XportBotNoStreams`, `XportNoStreams`, one per `XHCI_XPORT_WHY_*` but
+  `NOT_UAS`), counted by the thread at the PDO's creation as before and
+  now zeroed at each start with the block; `hc->XportDecisions` goes.
+- `hcdXportDecide` also keeps the decision on the device record
+  (`HCD_USB_DEVICE`, the record the snapshot and the query read without
+  walking a PDO chain): for a PDO whose interface the policy answered
+  for and whose class is mass storage (08), Bulk-Only alone included
+  (`XHCI_XPORT_WHY_NOT_UAS`, alternate 0's triple) and a refused one
+  (which exposes no triple), the interface
+  (`0xFF` for a device PDO), the transport, the why, the alternate, the
+  inputs (`XHCI_XPORT_F_*`) and the triple, and the interfaces seen (a
+  mask, a device PDO's as bit 31) and their count; the lowest-numbered
+  interface's decision kept, a decision for an interface already seen
+  replacing it rather than counted again. Written under the controller
+  lock, read under it by the door. A revived dormant PDO has the same
+  decision (`hcdDormantSame`); a function PDO made again by
+  `HcdDevicePdoRepresentFunctions` takes the old PDO's decision after
+  `hcdPdoNew` decided afresh, and is recorded again then, so the record
+  is the final PDO's. The counters count every decision, a function
+  made again included, as `hc->XportDecisions` did.
+- Served by the query request's version 2 (section 8.12) and by the
+  snapshot's HCD region, whose header appends `XHCI_SNAPSHOT_HCD_XPORT_*`
+  - the record count (32), the record's words (10) and the first word's
+  place - then the records, the first 32 devices with a decision in Slot
+  ID order, all 0 past the last (Slot ID 0); the region's version stays
+  1, its readers walking by the header's size.
+
 #### 10.7.1 A refused interface's device id (tasks 43.14 and 43.15, was NOX.1)
 
 **Status.** Read and changed in `3.2.0.0`: task 43.14 read route 1 on 98
@@ -7319,7 +7469,7 @@ IOCTLs are independent, for a cosmetic gain. Decided: two.
 | `BusQueryHardwareIDs` | `XHCI98\HUB&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\HUB&VID_vvvv&PID_pppp`, `XHCI98\HUB` | the same with `HUB30` |
 | `BusQueryCompatibleIDs` | none | none |
 | `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, task 33.2): the hub's serial id when it has a usable one, else the instance key in decimal | the same |
-| Device text | `xHCI98 USB Hub` | `xHCI98 USB 3.x Hub` |
+| Device text | `xHCI98 USB Hub` | `xHCI98 USB 3.x Hub` (`xHCI98 USB 3 Hub` from 3.3.0.0, roadmap-usb4 task 44.61) |
 
 **Amended 2026-10-14 (task 38.8, section 10.13):** from `2.4.0.0` the bases are `USB\XHCI98_HUB` and
 `USB\XHCI98_HUB30` (`XHCI_ID_HUB` and `XHCI_ID_HUB30` in `xhci_hub.h`), so
@@ -8390,6 +8540,13 @@ notes and the readme say when to run it - after an update from `2.3.x` or
 earlier and its restart - and that nothing needs it. On 98 SE and ME it
 lists only in this release (10.13.8).
 
+**Historical: XHCICLN was dropped in `3.3.0.0`** (roadmap-usb4 task 44.82,
+owner). From that release the download carries no cleanup tool, and the
+old devnodes stay, non-present and harmless. On Windows 2000 and later
+XHCIINST's uninstall still removes them with the rest of its set (record
+23 section 9.2). The
+downloads from `2.4.0.0` to `3.2.0.0` still carry the tool.
+
 #### 10.13.7 Every reader of the ids
 
 Built from a whole-tree search for `XHCI98\` (fixed string, every tracked
@@ -8429,6 +8586,11 @@ file, case-insensitive too) and for `ROOT_HUB`, `HUB30`, `COMPOSITE`,
 | run records, `docs/issues/10-xp-f6-gui-mode-usb-input.md`, `releases\` | what was read under the old ids | unchanged: a record keeps what it read |
 
 #### 10.13.8 The cleanup tool
+
+**Historical: XHCICLN was dropped in `3.3.0.0`** (roadmap-usb4 task 44.82,
+owner). Its source left the tree and the cut no longer stages
+`tools\xhcicln\`. This section, 10.13.12's D6 to D10 and 10.13.13 are the
+design and the build of `2.4.0.0` to `3.2.0.0`, kept as written.
 
 **What it is** (D6). A console program, `XHCICLN.EXE`, its source in
 `xhcicln\` at the repository root beside `xhcisnap\` and `xhciqual\`,

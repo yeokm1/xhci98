@@ -23,7 +23,8 @@
  * the packed word the counter block and the log carry (section 6.4).
  *
  * DDK-free: part of the pure core. C89. IRQL: any; nothing here takes a lock
- * or touches a register.
+ * or touches a register, except XhciQuirkAsmWait, which runs at its
+ * callbacks' IRQL (the driver's read is PASSIVE_LEVEL).
  */
 
 #ifndef XHCI_QUIRK_H
@@ -239,5 +240,21 @@ ULONG XhciQuirkMsiAvoidDecide(ULONG mode, ULONG identityKnown,
  * (bits 15:12) cleared when XhciStreamsOff applies, so both the transport
  * decision and OPEN_STREAMS read a controller with no streams. */
 ULONG XhciQuirkStreamsHcc1(ULONG streamsOff, ULONG hccparams1);
+
+/*
+ * Q9 (section 4.8): the ASM1042A's wait for its control byte's write bit
+ * to clear before each half of the vendor write. Up to `tries` reads of the
+ * byte through `read`, with one `stall` after each read that finds the bit
+ * still set: XHCI_QK_WHY_NONE at the first read with `busyBit` clear,
+ * XHCI_QK_WHY_READ_FF at a read of FFh (the read callback returns FFh when
+ * the access fails), XHCI_QK_WHY_BUSY when every read found the bit set.
+ * The driver passes 1000 tries and a 50 us stall (hcd_quirk.c).
+ * IRQL: the callbacks'; the driver's read needs PASSIVE_LEVEL.
+ */
+typedef UCHAR (*XHCI_QK_READ_BYTE)(PVOID context);
+typedef VOID (*XHCI_QK_STALL)(PVOID context);
+
+ULONG XhciQuirkAsmWait(XHCI_QK_READ_BYTE read, XHCI_QK_STALL stall,
+                       PVOID context, UCHAR busyBit, ULONG tries);
 
 #endif /* XHCI_QUIRK_H */

@@ -7,7 +7,8 @@
  * vendor constants in include/linux/pci_ids.h there; the line beside each
  * list names where. Nothing of Linux's code is copied (section 6.6).
  *
- * DDK-free: part of the pure core. C89. IRQL: any.
+ * DDK-free: part of the pure core. C89. IRQL: any, except XhciQuirkAsmWait,
+ * which runs at its callbacks' IRQL.
  */
 
 #include "xhci_compat.h"
@@ -373,4 +374,23 @@ ULONG XhciQuirkMsiAvoidDecide(ULONG mode, ULONG identityKnown,
 ULONG XhciQuirkStreamsHcc1(ULONG streamsOff, ULONG hccparams1)
 {
     return streamsOff ? (hccparams1 & ~0x0000F000UL) : hccparams1;
+}
+
+ULONG XhciQuirkAsmWait(XHCI_QK_READ_BYTE read, XHCI_QK_STALL stall,
+                       PVOID context, UCHAR busyBit, ULONG tries)
+{
+    ULONG n;
+    UCHAR control;
+
+    for (n = 0; n < tries; n++) {
+        control = read(context);
+        if (control == 0xFF) {
+            return XHCI_QK_WHY_READ_FF;
+        }
+        if ((control & busyBit) == 0) {
+            return XHCI_QK_WHY_NONE;
+        }
+        stall(context);
+    }
+    return XHCI_QK_WHY_BUSY;
 }

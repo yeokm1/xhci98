@@ -932,6 +932,57 @@ if ($models.Count -eq 0) {
 }
 
 #
+# ---- HCD-DESC: the controller's Device Manager names (tasks 43.73, 44.5) --
+#
+# The class line keeps the one plain name, "xHCI98 USB 3 Controller". The
+# section 98 SE, ME, 2000 and XP read (the 32-bit file's undecorated one)
+# may also carry the installer's name table's ids (xhciinst\inst_core.c,
+# instXhciNames), one PCI\VEN_xxxx&DEV_xxxx a line, so that 98 SE's and
+# ME's Properties title, which shows the model's string and not the
+# FriendlyName, names the product (owner, 2026-10-25): each such string is
+# "xHCI98 USB 3 Controller (<maker product>)" within 46 characters, the
+# longest 98 SE's Device Manager showed whole at 640x480 (task 43.73's
+# reading, INST_NAME_MAX). No hardware-id line in an NT 6.x section or in
+# the 64-bit file: there it would outrank Windows' own usbxhci on 8 to 10,
+# and the installer names the controller through its FriendlyName.
+# test_inst holds the lines to the table string for string.
+#
+$descStr = @{}
+foreach ($e in (Get-Section $inf "Strings")) {
+    if ($e.Text -match '^\s*(.+?)\s*=\s*"(.*)"\s*$') { $descStr[$matches[1].Trim().ToLowerInvariant()] = $matches[2] }
+}
+foreach ($m in $models) {
+    if ($m.Role -ne "controller") { continue }
+    $tok = $m.Desc.Trim()
+    $s = $null
+    if ($tok -match '^%([^%]+)%$' -and $descStr.ContainsKey($matches[1].ToLowerInvariant())) { $s = $descStr[$matches[1].ToLowerInvariant()] }
+    if (@($m.Ids | Where-Object { $_ -ieq "PCI\CC_0C0330" }).Count -gt 0) {
+        if ($m.Ids.Count -ne 1) {
+            Add-Failure "HCD-DESC" ("models line {0}: the class line binds PCI\CC_0C0330 alone (found '{1}'); an id beside it would match a device ahead of the class with the plain name, and in an NT 6.x section ahead of Windows' own usbxhci." -f $m.Line, ($m.Ids -join ','))
+        }
+        if ($s -cne "xHCI98 USB 3 Controller") {
+            Add-Failure "HCD-DESC" ("models line {0}: the class line's name must be the plain ""xHCI98 USB 3 Controller"" (found '{1}'); a product's name belongs to its own id line." -f $m.Line, $s)
+        }
+        continue
+    }
+    if ($m.Id -cnotmatch '^PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}$' -or $m.Ids.Count -ne 1) {
+        Add-Failure "HCD-DESC" ("models line {0} binds '{1}': a controller line other than the class line names one PCI\VEN_xxxx&DEV_xxxx id of the installer's name table, alone." -f $m.Line, ($m.Ids -join ','))
+        continue
+    }
+    if ($Arch -eq "amd64" -or $m.Decoration -ne "") {
+        Add-Failure "HCD-DESC" ("models line {0} binds {1} (decoration {2}): a hardware-id line outside the 32-bit file's undecorated section outranks Windows' own usbxhci on 8 to 10. Name the controller through the installer's FriendlyName there." -f $m.Line, $m.Id, $m.Decoration)
+        continue
+    }
+    $classHere = @($models | Where-Object { $_.Role -eq "controller" -and $_.Decoration -eq $m.Decoration -and $_.Ids.Count -eq 1 -and $_.Id -ieq "PCI\CC_0C0330" })
+    if ($classHere.Count -eq 0 -or @($classHere | Where-Object { $_.Section -ieq $m.Section }).Count -eq 0) {
+        Add-Failure "HCD-DESC" ("models line {0} ({1}) installs [{2}]: a controller's name line installs the class line's own section, so it changes the name and nothing else." -f $m.Line, $m.Id, $m.Section)
+    }
+    if ($null -eq $s -or $s.Length -gt 46 -or $s -cnotmatch '^xHCI98 USB 3 Controller \([\x20-\x7E]+\)$' -or $s.Contains('"') -or $s.Contains('%')) {
+        Add-Failure "HCD-DESC" ("models line {0} ({1}): its name '{2}' must read ""xHCI98 USB 3 Controller (<maker product>)"", printable ASCII, within 46 characters (98 SE's Device Manager cut a longer one, task 43.73)." -f $m.Line, $m.Id, $s)
+    }
+}
+
+#
 # ---- HCD-ROOTHUB: the successor's two device roles (task 25.8) ----------
 #
 # One binary is the function driver of the controller and of the root hub the
@@ -3073,8 +3124,20 @@ if ($EmitFootprint -ne "") {
     # NT 6.x) and one right-click section rather than two of each, and so a
     # footprint file of its own - the two are different claims about
     # different media and comparing them to each other would mean nothing.
+    # The controller's name lines (task 44.5, HCD-DESC: one
+    # PCI\VEN_xxxx&DEV_xxxx installing the class line's own section) are
+    # that line's install again, so they add no path.
     $fpPaths = New-Object System.Collections.ArrayList
+    $fpClass = @{}
     foreach ($m in $models) {
+        if ($m.Role -eq "controller" -and $m.Ids.Count -eq 1 -and $m.Id -ieq "PCI\CC_0C0330") {
+            $fpClass[($m.Decoration + "|" + $m.Section).ToLowerInvariant()] = $true
+        }
+    }
+    foreach ($m in $models) {
+        if ($m.Role -eq "controller" -and $m.Ids.Count -eq 1 -and
+            $m.Id -cmatch '^PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}$' -and
+            $fpClass.ContainsKey(($m.Decoration + "|" + $m.Section).ToLowerInvariant())) { continue }
         foreach ($ap in @(Get-ModelPaths $m)) {
             [void]$fpPaths.Add(@{ Os = $ap.Os; Kind = "device install"; Install = ($m.Section + $ap.Suffix) })
         }

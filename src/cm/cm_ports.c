@@ -13,7 +13,11 @@
  * matched only beside an NHI of its own processor (section 6.3 source 3).
  * Meteor Lake has no root port id in the listing: its set comes from the
  * override. Design record 22 section 3.7 adds the USB4-only hosts' rows
- * (task 40-0.2's ids, as both INFs carry them).
+ * (task 40-0.2's ids, as both INFs carry them), and its section 18 the
+ * ASMedia ASM4242's (task 44.40): its NHI is matched by the INFs' class
+ * line alone, but a family keyed by the NHI's own id pairs it with its
+ * switch's downstream ports, the hot-plug capable ones of which carry its
+ * tunnels (record 22 section 18.1).
  */
 
 #include "cm_ports.h"
@@ -63,20 +67,24 @@ static const ULONG cmAmdNhi[] = { CM_PORTS_ID(0x1022, 0x1668),
 static const ULONG cmAmdRoot[] = { CM_PORTS_ID(0x1022, 0x14CD),
                                    CM_PORTS_ID(0x1022, 0x14EF),
                                    CM_PORTS_ID(0x1022, 0x150A) };
+/* ASMedia's ASM4242: host interface 2425 behind the downstream port 2423
+ * of its own switch, whose two hot-plug capable 2423 ports are the
+ * tunnel ports and whose two others hold the xHCI and the NHI. */
+static const ULONG cmAsmNhi[] = { CM_PORTS_ID(0x1B21, 0x2425) };
+static const ULONG cmAsmPort[] = { CM_PORTS_ID(0x1B21, 0x2423) };
 /* The emulator's generic USB4 host (usb4-emu usb4-generic, 1B36:00F4) and
  * its q35 tunnel port, a root port beside it. */
 static const ULONG cmEmuNhi[] = { CM_PORTS_ID(0x1B36, 0x00F4) };
 static const ULONG cmEmuRoot[] = { CM_PORTS_ID(0x1B36, 0x000C) };
 
 /*
- * Bridge ids xhcicmf.inf names that no family carries: ASMedia's ASM4242
- * downstream port, whose host is matched by class alone (no NHI id to
- * pair it with), and QEMU's generic PCI-to-PCI bridge, the emulator's
- * i440FX tunnel bridge, which the SHPC source finds and which is far too
- * common an id to be a family's.
+ * The bridge id xhcicmf.inf names that no family carries: QEMU's generic
+ * PCI-to-PCI bridge, the emulator's i440FX tunnel bridge, which the SHPC
+ * source finds and which is far too common an id to be a family's.
+ * (ASMedia's ASM4242 downstream port was here until task 44.40 gave it a
+ * family.)
  */
-static const ULONG cmUnpaired[] = { CM_PORTS_ID(0x1B21, 0x2423),
-                                    CM_PORTS_ID(0x1B36, 0x0001) };
+static const ULONG cmUnpaired[] = { CM_PORTS_ID(0x1B36, 0x0001) };
 
 static const CM_FAMILY cmFamilies[] = {
     { "falcon-ridge", cmFrNhi, CM_N(cmFrNhi), cmFrPort, CM_N(cmFrPort),
@@ -105,6 +113,8 @@ static const CM_FAMILY cmFamilies[] = {
       NULL, 0 },
     { "amd-usb4", cmAmdNhi, CM_N(cmAmdNhi), NULL, 0,
       cmAmdRoot, CM_N(cmAmdRoot) },
+    { "asmedia-asm4242", cmAsmNhi, CM_N(cmAsmNhi), cmAsmPort,
+      CM_N(cmAsmPort), NULL, 0 },
     { "usb4-emu", cmEmuNhi, CM_N(cmEmuNhi), NULL, 0,
       cmEmuRoot, CM_N(cmEmuRoot) }
 };
@@ -466,12 +476,121 @@ ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
     return 1;
 }
 
-ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached)
+ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached, ULONG isNew,
+                        ULONG hasOurs)
 {
+    if (!isNew) {
+        return (!hasOurs && !hasAttached) ? CM_CHILD_ATTACH : CM_CHILD_KEEP;
+    }
     if (!hasAttached) {
         return CM_CHILD_ATTACH;
     }
     return prevTruncated ? CM_CHILD_SKIP : CM_CHILD_WALK;
+}
+
+/* ---- the tunnel id (record 31) ----------------------------------------- */
+
+/* TRUE when list[from..from+n) is `lit`, ASCII case ignored. */
+static BOOLEAN cmWideIs(const USHORT *list, ULONG from, ULONG n,
+                        const char *lit)
+{
+    ULONG i;
+    USHORT c;
+
+    for (i = 0; i < n; i++) {
+        if (lit[i] == 0) {
+            return FALSE;
+        }
+        c = list[from + i];
+        if (c >= 'a' && c <= 'z') {
+            c = (USHORT)(c - 'a' + 'A');
+        }
+        if (c != (USHORT)(UCHAR)cmUpper(lit[i])) {
+            return FALSE;
+        }
+    }
+    return (BOOLEAN)(lit[n] == 0);
+}
+
+ULONG CmPortsTunnelIds(const USHORT *list, USHORT *out, ULONG outChars,
+                       PULONG chars, PULONG kind)
+{
+    ULONG at;
+    ULONG start;
+    ULONG total;
+    ULONG i;
+    BOOLEAN present;
+    static const char id[] = CM_TUNNEL_ID;
+
+    *chars = 0;
+    *kind = 0;
+    if (list == NULL) {
+        return CM_TID_LEAVE;
+    }
+    present = FALSE;
+    at = 0;
+    for (;;) {
+        if (at >= CM_TID_MAX_CHARS) {
+            *kind = 0;
+            return CM_TID_OVER;
+        }
+        if (list[at] == 0) {
+            break;
+        }
+        start = at;
+        while (at < CM_TID_MAX_CHARS && list[at] != 0) {
+            at++;
+        }
+        if (at >= CM_TID_MAX_CHARS) {
+            *kind = 0;
+            return CM_TID_OVER;
+        }
+        if (cmWideIs(list, start, at - start, "PCI\\CC_010802")) {
+            *kind |= CM_TID_KIND_NVME;
+        }
+        if (cmWideIs(list, start, at - start, "PCI\\CC_0604")) {
+            *kind |= CM_TID_KIND_BRIDGE;
+        }
+        if (cmWideIs(list, start, at - start, id)) {
+            present = TRUE;
+        }
+        at++;
+    }
+    total = at + 1;
+    if ((*kind & CM_TID_KIND_NVME) == 0) {
+        *chars = total;
+        return CM_TID_LEAVE;
+    }
+    if (present) {
+        *chars = total;
+        return CM_TID_PRESENT;
+    }
+    *chars = CM_TID_ID_CHARS + total;
+    if (out != NULL && outChars >= *chars) {
+        for (i = 0; i < CM_TID_ID_CHARS; i++) {
+            out[i] = (USHORT)(UCHAR)id[i];
+        }
+        for (i = 0; i < total; i++) {
+            out[CM_TID_ID_CHARS + i] = list[i];
+        }
+    }
+    return CM_TID_TAG;
+}
+
+ULONG CmPortsChainReads(ULONG depth, ULONG isBridge)
+{
+    return (isBridge && depth < CM_TUNNEL_DEPTH_MAX) ? 1UL : 0UL;
+}
+
+ULONG CmPortsMayMark(ULONG located, ULONG locBus, ULONG active,
+                     ULONG exclusive, ULONG secBusValid, ULONG secBus,
+                     ULONG inMarks, ULONG safeEject)
+{
+    if (!located || !active || !exclusive || !secBusValid ||
+        secBus != locBus || !inMarks) {
+        return CM_MM_NO;
+    }
+    return safeEject ? CM_MM_YES : CM_MM_SEEN;
 }
 
 /* ---- the hold's bound ------------------------------------------------- */

@@ -10,6 +10,8 @@ source comments, scripts, and other docs use these same locations.
 - [Tuning](using/tuning.md) - every registry setting of the controller
   driver and of the Thunderbolt and USB4 driver: where it is, its range and
   default, and what it does.
+- [Controller names](using/controller-names.md) - the name Device Manager
+  shows for each USB 3 controller, by PCI id.
 - [Release acceptance test](using/release-acceptance-test.md) - the fixed
   procedure a stranger runs against a published release on a machine this
   project has never seen: nine steps, the longer ones a checklist table of
@@ -29,8 +31,9 @@ source comments, scripts, and other docs use these same locations.
   [its second file](contributing/roadmap-miniport-updates.md), and Phases 25
   onward, the successor host controller driver's, in
   [its third](contributing/roadmap-hcd.md); the USB4 and Thunderbolt 3
-  connection-manager work, Phases 39 to 41 (`3.0.0.0`) and the open Phase
-  42 (`3.1.0.0`), is in [its fourth](contributing/roadmap-usb4.md).
+  connection-manager work, Phases 39 to 41 (`3.0.0.0`), 42 (`3.1.0.0`),
+  43 (`3.2.0.0`) and the open Phase 44 (`3.3.0.0`), is in
+  [its fourth](contributing/roadmap-usb4.md).
 - [Source files](contributing/source-files.md) - what every file in `src/` is
   for, and which belong to the host-tested pure core.
 - [Architecture](contributing/architecture.md) - component boundaries and data
@@ -90,6 +93,15 @@ source comments, scripts, and other docs use these same locations.
 - [Phase 43, the Windows 8 to 10 installer legs](contributing/runs/run-43-24.md) -
   tasks 43.24, 43.31 and 43.37: the installer's own route on 8, 8.1 and
   10, x86 and x64, in QEMU with the emulated Thunderbolt 3 controller.
+- [Phase 44 record](contributing/runs/run-44.md) - release `3.3.0.0`'s
+  readings, one section per task: the installer's pages and legs on 98 SE,
+  ME and 7; the USB Tree's generation line, version warning and storage
+  transport; the emulator legs `3.1.0.0` left (44.14 to 44.18); Windows 8
+  to 10 under `xhci98.sys`, Secure Boot and Intel's Thunderbolt driver; the
+  tunnel rebuilt across a hibernate and the resume matrix; the 98 SE stall
+  read to Windows' own mouse driver; a 9x function with no interrupt
+  started on its memory alone; the connection manager off the boot path;
+  and the free driver pack at `usb-wdm-free` 0.1.4.
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
@@ -188,7 +200,10 @@ turn out to need.
 | Phases 25-32 (the successor host controller driver, `xhci98.sys` since 2026-10-02: the design record and contract capture, the USB 2.0 bus driver on root ports, USB 2.0 hubs inside the bus, the other targets and the bench, SuperSpeed on root ports, SuperSpeed hubs, streams and UAS, **and the `2.0.0.0` cut**) | `docs/contributing/roadmap-hcd.md` (the decisions table, the shape of the successor, every phase's task table and checkpoint); `docs/contributing/runs/run-26.md` (what each Phase 26 task did and every guest reading); `docs/contributing/design/13-superspeed-hcd.md` (the design record, grown from the future-plans page on 2026-10-02 and filled by Phase 25: the design, the per-target contract, the Windows 98 export evidence, the door, the harness plan, hubs and composites, and the transfer-buffer policy); `docs/usb-xhci-info/win98-wdm.md` "PnP Dispatch Requirements", "Power Management", "IOCTL_INTERNAL_USB_* Codes", "URB Function Codes" and "DMA Memory Allocation" (written as the Option B checklist, which this is) | `docs/contributing/architecture.md` "Fallback: Option B"; `docs/contributing/design/02-hub-topology-route-string.md`, `04-controller-common-buffer.md` and `05-locking-model.md` (what the bus keeps and what it re-derives); `docs/contributing/test-equipment.md` (the SuperSpeed, UAS and hub units every bench clause names); the superspeed-storage-behind-a-switch proposal (the SuperSpeed transcription list its `-0` batch drew up, which Phase 29's reuses; removed with `docs/future-plans/` on 2026-10-12, in git history at `00a3b9e`) |
 | Phase 39 (the Thunderbolt firmware connection manager client `xhcicm.sys`, tunnel re-enumeration and safe eject; closed by `39.final` with a dry build, cut with Phase 40 as `3.0.0.0`) | `docs/contributing/roadmap-usb4.md` (the decisions table and Phase 39's tasks); `docs/contributing/design/21-thunderbolt3-icm-client.md` (the design record: selection and profiles, INFs and ids, the ICM client, re-enumeration, the Stor98 contract, safe eject, the legs); `docs/contributing/design/24-thunderbolt-device-tool.md` (the device viewer and eject, `XHCIINST /devices` and `/eject`, and the status record `xhcicm.sys` publishes for it); `usb4-emu`'s `docs/XHCI98-HANDOFF.md` and `docs/ICM-PROTOCOL.md` (read there, never modified) | `docs/usb-xhci-info/win98-wdm.md` (the WDM rules on 98); Linux `drivers/thunderbolt` and FreeBSD `sys/dev/thunderbolt` under `external/` as interface documentation (`legal-provenance.md` section 3); `docs/references/README.md` (the USB4 2.0 bundle and the Windows 98 DDK) |
 | Phase 40 (the USB4 software connection manager, and the `3.0.0.0` cut) | `docs/contributing/roadmap-usb4.md` (Phase 40's tasks); design record 22 (the software connection manager); design record 21 sections 1.4 and 13 (what the two profiles share); `docs/contributing/design/23-install-upgrade-tool.md` (the install, update and uninstall tool `INSTALL.BAT` runs, tasks 40.4 to 40.6, and its value table) | `usb4-emu`'s `tools/usb4cm` and `docs/ARCHITECTURE.md`; the USB4 Specification 2.0 and Connection Manager Guide 2.0 |
+| Phase 41 (XHCITR, the USB and Thunderbolt tree with eject and tray icon, cut with Phases 39 and 40 as `3.0.0.0`) | `docs/contributing/roadmap-usb4.md` (Phase 41's tasks); `docs/contributing/runs/run-41.md` (every task's readings); `docs/contributing/design/25-usb-tree-tool.md` (the design record: the tree, the details, the eject, the tray icon in its section 7, the legs in its section 11); design record 24 (`INSTALL /devices` and `/eject`, which stay as they are, and the status record `xhcicm.sys` publishes); design record 21 section 8 | `xhcitr\README.TXT` (the tool as it ships); design record 13 section 8 (the door the snapshot is read through) |
 | Phase 42 (the windowed installer, the uninstall from Add/Remove Programs, the Windows 98 SE and ME device install, `XHCISNAP` retired, the safe-removal mark across a stack rebuild, the connection-manager follow-ups, and the `3.1.0.0` cut) | `docs/contributing/roadmap-usb4.md` (Phase 42's tasks and the decisions table); `docs/contributing/design/23-install-upgrade-tool.md` (the install tool, its routes per system, its value table and its uninstall); design record 26 (the windowed installer) and design record 27 (the Windows 98 SE and ME device install through the 16-bit setup engine's documented device installer); design record 25 (XHCITR, which takes over from `XHCISNAP`); design record 21 sections 7.2 and 7.4 (the Stor98 channel's 9x half and the safe-removal mark across a stack rebuild, revised 2026-10-18) and design record 24 (the device viewer and eject, revision 6); design record 22 sections 7.7 and 10 (the USB4 host's recovery after loss, revised 2026-10-18, and the channel's USB4 half); design record 28 (a 9x function with no interrupt) | `xhciinst\README.TXT` and `xhcisnap\README.md` (the tools as they ship in `3.0.0.0`); the Windows 98 DDK's `SETUPX` documentation (`docs/references/README.md`) |
+| Phase 43 (the cut's text checks, faster emulator legs, NUSB 3.3's 98 SE storage files and the three downloads, the unsafe-unplug and "can run faster" notices, the 9x Stor98 channel and `S98VSD.VXD`, Windows 8, 8.1 and 10, **and the `3.2.0.0` cut**) | `docs/contributing/roadmap-usb4.md` (Phase 43's tasks and the decisions table, "Phase 43"); `docs/contributing/runs/run-43.md` and `run-43-24.md` (every task's readings; the Windows 8 to 10 installer legs); design record 26 sections 6.5 (the 98 SE storage row) and 6.7 (the three downloads and the other USB drivers' pages); design record 13 sections 6.12, 6.13 and 6.14 (what Windows 8, 8.1 and 10 ask of the bus) and section 14 (a cancelled TD behind the head); design record 23 sections 5.10, 5.12 and 5.13 (the connection manager's start type, Windows 10's signature policy, the controller names); design record 19 section 3a (the catalogs); design record 21 section 7.2 (the 9x Stor98 channel and eject); design record 25 sections 7 and 16 (the red tray icon and the 98 SE pop-up); design record 30 (`S98VSD.VXD`); design record 29 (XHCIPERF, kept as a developer diagnostic) | `docs/contributing/legal-provenance.md` section 5 (NUSB 3.3's files, the one Microsoft-file exception); `docs/contributing/build-and-test.md` (the release matrix and the cut's checks) |
+| Phase 44 (Stor98 for tunnelled drives only, the connection manager off the boot path, the hibernate resume, the installer's pages, the emulator and virtual-machine legs owed, **and the `3.3.0.0` cut**, its bench after it) | `docs/contributing/roadmap-usb4.md` (Phase 44's tasks and the decisions table, "Phase 44"); `docs/contributing/runs/run-44.md` (every task's readings); design record 31 (Stor98 for tunnelled drives only, 44.2 and 44.3); design record 23 section 5.14 (the connection manager off the boot path and the boot-driver gate, 44.32 and 44.12), section 5.13.7 (the 98 SE and ME Properties title, 44.5), section 6.6 (a leftover `xhci98.tmp`, 44.13) and section 8.5.1 (Intel's Thunderbolt driver, 44.28); design record 22 section 9.4 (a tunnel an earlier instance built, rebuilt across a hibernate, 44.26); design record 25 sections 17 to 19 (the USB Tree's generation line, version warning and storage transport, 44.9, 44.8 and 44.35); design record 26 sections 5.1 (the Welcome page, 44.7), 5.3.3 (Secure Boot and memory integrity, 44.25), 6.5.2 (the storage row, 44.37) and 6.7.12 (the two driver-pack pages and the two packages staged on 98 SE and ME, 44.10 and 44.11); design record 28 section 12 (a 9x function with no interrupt, the memory-only form, 44.30); design record 13 section 6.14.7 (what Windows 10 loses under `xhci98.sys`, 44.24); design record 17 section 4.13 (44.33); `docs/contributing/runs/run-43.md` and `run-43-24.md` (what each 43 item left) | `usb4-emu`'s `docs/XHCI98-HANDOFF.md` (the root hot-plug modes and `device-model=asm2464`, 44.15 to 44.18); `build-and-test.md` (the release matrix and the window legs, 44.19 and 44.20) |
 | Any debugging or real-hardware qualification | `docs/contributing/lessons.md`; `docs/contributing/failure-diagnosis.md` | The phase-specific sources above |
 
 When a phase checkpoint fails or goes silent, read
@@ -223,10 +238,6 @@ reachable from here or from `AGENTS.md`'s repository layout.
   holds one README per machine and run.
 - [`xhcisnap/README.md`](../xhcisnap/README.md) - the host-side reader for the
   driver's log channel, and what it can and cannot get off a Windows 98 machine.
-- [`xhcicln/README.TXT`](../xhcicln/README.TXT) - the optional tool that
-  lists, and on Windows 2000 to 7 removes, the devnodes a driver before
-  `2.4.0.0` left under `XHCI98\` (roadmap-hcd task 38.8, design record 13
-  section 10.13.8); published as the tool's `readme.txt`.
 - [`xhciinst/README.TXT`](../xhciinst/README.TXT) - the install, update and
   uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.4,
   design record 23), with its Thunderbolt and USB4 device modes `/devices`

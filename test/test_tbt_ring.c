@@ -1199,30 +1199,34 @@ static void test_u4_safe_point_and_routes(void)
     CHECK(!TbtRouteChild(&a, 64, &c), "nor 64");
 }
 
+/* Each vector named in the request trace (tbt_fake.h, task 44.38). */
+#define RUN_VEC(fn) do { fakeTraceMark(#fn); fn(); } while (0)
+
 int main(void)
 {
-    test_crc_vectors();
-    test_start();
-    test_start_refusals();
-    test_send();
-    test_send_limits();
-    test_tx_exhaustion();
-    test_receive_wrap();
-    test_rx_exhaustion();
-    test_overflow_and_malformed();
-    test_trailer();
-    test_ctl_read();
-    test_stopped_clock_and_flood();
-    test_stop();
-    test_routes();
-    test_u4_geometry_and_takeover();
-    test_u4_write_and_read();
-    test_u4_echo();
-    test_u4_budget();
-    test_u4_notifications();
-    test_u4_hotplug();
-    test_u4_waits();
-    test_u4_safe_point_and_routes();
+    RUN_VEC(test_crc_vectors);
+    RUN_VEC(test_start);
+    RUN_VEC(test_start_refusals);
+    RUN_VEC(test_send);
+    RUN_VEC(test_send_limits);
+    RUN_VEC(test_tx_exhaustion);
+    RUN_VEC(test_receive_wrap);
+    RUN_VEC(test_rx_exhaustion);
+    RUN_VEC(test_overflow_and_malformed);
+    RUN_VEC(test_trailer);
+    RUN_VEC(test_ctl_read);
+    RUN_VEC(test_stopped_clock_and_flood);
+    RUN_VEC(test_stop);
+    RUN_VEC(test_routes);
+    RUN_VEC(test_u4_geometry_and_takeover);
+    RUN_VEC(test_u4_write_and_read);
+    RUN_VEC(test_u4_echo);
+    RUN_VEC(test_u4_budget);
+    RUN_VEC(test_u4_notifications);
+    RUN_VEC(test_u4_hotplug);
+    RUN_VEC(test_u4_waits);
+    RUN_VEC(test_u4_safe_point_and_routes);
+    fakeTraceMark("end");
     printf("test_tbt_ring: %d checks, %d failures\n", checks, failures);
     return failures;
 }

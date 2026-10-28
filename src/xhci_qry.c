@@ -28,13 +28,17 @@ ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
     ULONG skip;
     ULONG logBytes;
     ULONG pciBytes;
+    ULONG xportBytes;
+    ULONG portBytes;
+    ULONG records;
     ULONG whole;
+    UCHAR head[XHQ_HDR_BYTES];
     ULONG at;
     ULONG i;
     UCHAR c;
 
     *info = 0;
-    if (out == NULL || room < XHQ_HDR_BYTES) {
+    if (out == NULL || room < XHQ_HDR_BYTES_V1) {
         return XHQ_ANS_TOO_SMALL;
     }
     flags = 0;
@@ -86,30 +90,52 @@ ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
     logBytes = used - skip;
     pciBytes = (in->PciState == XHQ_PCI_READ && in->Pci != NULL)
                    ? XHQ_PCI_BYTES : 0;
-    whole = XHQ_HDR_BYTES + ctr + logBytes + pciBytes;
+    records = (in->XportRecords < XHQ_XPORT_MAX) ? in->XportRecords
+                                                 : XHQ_XPORT_MAX;
+    xportBytes = records * XHQ_XPORT_RECORD_BYTES;
+    portBytes = (in->Ports < XHQ_PORTS_MAX) ? in->Ports : XHQ_PORTS_MAX;
+    whole = XHQ_HDR_BYTES + ctr + logBytes + pciBytes + xportBytes +
+            portBytes;
 
+    /* Built aside, so a room under the whole header gets its first
+     * XHQ_HDR_BYTES_V1 bytes and nothing past the room is written. */
     for (i = 0; i < XHQ_HDR_BYTES; i++) {
-        out[i] = 0;
+        head[i] = 0;
     }
-    xhqPut(out, XHQ_O_MAGIC, XHQ_MAGIC);
-    xhqPut(out, XHQ_O_VERSION, XHQ_VERSION);
-    xhqPut(out, XHQ_O_BYTES, whole);
-    xhqPut(out, XHQ_O_FLAGS, flags);
-    xhqPut(out, XHQ_O_VERBOSITY, in->Verbosity);
-    xhqPut(out, XHQ_O_VERBOSITY_READ, in->VerbosityRead);
-    xhqPut(out, XHQ_O_CTR_OFFSET, XHQ_HDR_BYTES);
-    xhqPut(out, XHQ_O_CTR_BYTES, ctr);
-    xhqPut(out, XHQ_O_LOG_OFFSET, XHQ_HDR_BYTES + ctr);
-    xhqPut(out, XHQ_O_LOG_BYTES, logBytes);
-    xhqPut(out, XHQ_O_PCI_OFFSET, XHQ_HDR_BYTES + ctr + logBytes);
-    xhqPut(out, XHQ_O_PCI_BYTES, pciBytes);
-    xhqPut(out, XHQ_O_APPENDS, in->Appends);
-    xhqPut(out, XHQ_O_DROPPED, in->Dropped);
-    xhqPut(out, XHQ_O_PCI_STATE, in->PciState);
-    xhqPut(out, XHQ_O_FLAVOUR, in->Flavour);
+    xhqPut(head, XHQ_O_MAGIC, XHQ_MAGIC);
+    xhqPut(head, XHQ_O_VERSION, XHQ_VERSION);
+    xhqPut(head, XHQ_O_BYTES, whole);
+    xhqPut(head, XHQ_O_FLAGS, flags);
+    xhqPut(head, XHQ_O_VERBOSITY, in->Verbosity);
+    xhqPut(head, XHQ_O_VERBOSITY_READ, in->VerbosityRead);
+    xhqPut(head, XHQ_O_CTR_OFFSET, XHQ_HDR_BYTES);
+    xhqPut(head, XHQ_O_CTR_BYTES, ctr);
+    xhqPut(head, XHQ_O_LOG_OFFSET, XHQ_HDR_BYTES + ctr);
+    xhqPut(head, XHQ_O_LOG_BYTES, logBytes);
+    xhqPut(head, XHQ_O_PCI_OFFSET, XHQ_HDR_BYTES + ctr + logBytes);
+    xhqPut(head, XHQ_O_PCI_BYTES, pciBytes);
+    xhqPut(head, XHQ_O_APPENDS, in->Appends);
+    xhqPut(head, XHQ_O_DROPPED, in->Dropped);
+    xhqPut(head, XHQ_O_PCI_STATE, in->PciState);
+    xhqPut(head, XHQ_O_FLAVOUR, in->Flavour);
+    xhqPut(head, XHQ_O_DRIVER_VERSION, in->DriverVersion);
+    xhqPut(head, XHQ_O_XPORT_OFFSET,
+           XHQ_HDR_BYTES + ctr + logBytes + pciBytes);
+    xhqPut(head, XHQ_O_XPORT_BYTES, xportBytes);
+    xhqPut(head, XHQ_O_XPORT_RECORD, XHQ_XPORT_RECORD_BYTES);
+    xhqPut(head, XHQ_O_PORTS_OFFSET,
+           XHQ_HDR_BYTES + ctr + logBytes + pciBytes + xportBytes);
+    xhqPut(head, XHQ_O_PORTS_BYTES, portBytes);
     if (room < whole) {
-        *info = XHQ_HDR_BYTES;
+        at = (room < XHQ_HDR_BYTES) ? XHQ_HDR_BYTES_V1 : XHQ_HDR_BYTES;
+        for (i = 0; i < at; i++) {
+            out[i] = head[i];
+        }
+        *info = at;
         return XHQ_ANS_HEADER;
+    }
+    for (i = 0; i < XHQ_HDR_BYTES; i++) {
+        out[i] = head[i];
     }
     at = XHQ_HDR_BYTES;
     for (i = 0; i < ctr / 4; i++) {
@@ -125,6 +151,9 @@ ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,
     }
     for (i = 0; i < pciBytes; i++) {
         out[at++] = in->Pci[i];
+    }
+    for (i = 0; i < xportBytes + portBytes; i++) {
+        out[at++] = 0;
     }
     *info = whole;
     return XHQ_ANS_WHOLE;

@@ -60,15 +60,15 @@
 # ASCII only, CRLF line endings.
 
 [Disks]
-d1 = "xHCI98 USB 3.x Driver Disk (32-bit)", \xhci98.sys, \
+d1 = "xHCI98 USB 3 Driver Disk (32-bit)", \xhci98.sys, \
 d2 = "USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_ from the 32-bit Windows 2000 CD", \usbd.sy_, \
 
 [Defaults]
 scsi = XHCI98
 
 [scsi]
-XHCI98 = "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)"
-XHCI98W2K = "xHCI98 USB 3.x Host Controller (32-bit Windows 2000, files from CD)"
+XHCI98 = "xHCI98 USB 3 Controller (32-bit Windows 2000/XP)"
+XHCI98W2K = "xHCI98 USB 3 Controller (32-bit Windows 2000, files from CD)"
 
 [Files.scsi.XHCI98]
 driver = d1, xhci98.sys, xhci98

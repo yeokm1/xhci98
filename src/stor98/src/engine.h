@@ -251,13 +251,22 @@ typedef struct _ENG_BUSY {
 // kept in the device extension, which survives resume (where ArgumentString
 // is NULL). Defaults are the test build settings of TESTING.md.
 //
+// The 9x hold bound (StorHold9xMs, README "Settings"): a value outside the
+// range is refused and the default stands. The top stays below the shortest
+// 9x port timeout measured (13.2 s on 98 SE, PLAN "9x: no never resets
+// guarantee"); the bottom keeps a full admission from turning into a run of
+// BUSY completions.
+#define ENG_HOLD9X_DEF_MS       4000UL
+#define ENG_HOLD9X_MIN_MS       1000UL
+#define ENG_HOLD9X_MAX_MS       10000UL
+
 typedef struct _ENG_TUNABLES {
     ULONG Magic;            // ENG_TUNABLES_MAGIC once parsed
     ULONG GoneMs;           // gone deadline (MD-1), 5 s
     ULONG IdleFlushMs;      // MD-7 (a) write-idle time before the timer's Flush
     ULONG GoneMarginMs;     // per-SRB bound margin (R6-6)
     ULONG HoldMarginMs;     // hold-then-BUSY: TimeOutValue minus this (0.3)
-    ULONG Hold9xMs;         // 9x fixed hold bound (TimeOutValue unusable, G9)
+    ULONG Hold9xMs;         // 9x fixed hold bound (TimeOutValue unusable, G9); StorHold9xMs
     ULONG FragBytes;        // test: maximum child size (0 = MDTS / port limit)
     ULONG ForceBounce;      // test: bounce every data child (exercises 0.4 bounce)
     ULONG Sg9xFailEvery;    // test (9x): every Nth caller-buffer copy reports unresolved (failure paths)
@@ -269,7 +278,7 @@ typedef struct _ENG_TUNABLES {
     ULONG StormInts;        // test: empty interrupts per window taken as a storm (0 = ENG_STORM_INTS; shared-line tests)
     ULONG IdleFlushToMs;    // test: idle Flush deadline (0 = ENG_IDLE_FLUSH_TO_MS; held-idle-Flush test)
     POLL_SETTINGS Poll;     // polling mode (polltun.h; PLAN "Polling mode"), product settings
-    ULONG MaxXferKb;        // maximum transfer, KiB (xfertun.h; StorMaxTransferKB / maxtransferkb=), product setting
+    ULONG MaxXferKb;        // maximum transfer, KiB (xfertun.h; StorMaxTransferKB / stormaxtransferkb=), product setting
     ULONG MaxXferWhy;       // XFER_DEFAULT, XFER_SET or XFER_REFUSED, from the last parse
 } ENG_TUNABLES;
 

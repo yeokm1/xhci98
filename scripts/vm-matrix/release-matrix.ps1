@@ -12,7 +12,9 @@ the slots and the budget allow: the matrix's own vCPUs at most MaxVcpu
 (configuration or -MaxVcpu; 0 = no cap of its own) and every QEMU's on the
 host together at most the host's logical processors. Writes results.md and
 results.csv in the run's directory, each leg's evidence beside them, and
-lists the Manual legs (the installer's window, one a system) as owed.
+lists the Manual legs (a window leg with no WindowKeys is one) as owed,
+and a leg whose guest the configuration does not have as not configured
+(-Only naming such a leg is an error).
 
 The package is the unpacked download (INSTALL.BAT at its top); it goes onto
 each leg's CD and is never run on the host.
@@ -41,18 +43,41 @@ if (-not (Test-Path -LiteralPath (Join-Path $Package 'INSTALL.BAT'))) { throw "$
 $Package = (Resolve-Path -LiteralPath $Package).Path
 
 $qver = Get-LegQemuVersion $cfg
+function Test-LegManual {
+    param($L)
+    if ($L.ContainsKey('Manual') -and $L.Manual) { return $true }
+    return ($L.Mode -eq 'window' -and -not ($L.ContainsKey('WindowKeys') -and @($L.WindowKeys).Count -gt 0))
+}
+function Test-LegInPackage {
+    param($L)
+    if (-not ($L.ContainsKey('Needs') -and $L.Needs)) { return $true }
+    return (Test-Path -LiteralPath (Join-Path $Package $L.Needs))
+}
+function Test-LegConfigured {
+    param($L)
+    return [bool](@($cfg.Guests | Where-Object { $_.Id -eq $L.Guest }).Count)
+}
 $todo = New-Object System.Collections.ArrayList
 $manual = @()
+$unconfigured = @()
 foreach ($l in $legSet.Legs) {
     if ($Only.Count -and $Only -notcontains $l.Id) { continue }
-    if ($l.ContainsKey('Manual') -and $l.Manual) { $manual += $l; continue }
+    if (-not (Test-LegConfigured $l)) {
+        if ($Only.Count) { throw "leg $($l.Id): guest $($l.Guest) is not in the configuration" }
+        $unconfigured += $l; continue
+    }
+    if (-not (Test-LegInPackage $l)) {
+        if ($Only.Count) { throw "leg $($l.Id): the package has no $($l.Needs)" }
+        continue
+    }
+    if (Test-LegManual $l) { $manual += $l; continue }
     $g = Get-LegGuest $cfg $l.Guest
     $null = Get-LegStartPoint $cfg $g $qver
     if ($MaxVcpu -gt 0 -and [int]$g.Smp -gt $MaxVcpu) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over MaxVcpu $MaxVcpu" }
     if ([int]$g.Smp -gt $logical) { throw "leg $($l.Id) needs $($g.Smp) vCPUs, over the host's $logical" }
     [void]$todo.Add(@{ Def = $l; Smp = [int]$g.Smp })
 }
-if ($todo.Count -eq 0 -and $manual.Count -eq 0) { throw 'no leg selected' }
+if ($todo.Count -eq 0 -and $manual.Count -eq 0) { throw 'no leg selected (or no leg has a configured guest)' }
 
 $runRoot = Join-Path $cfg.WorkDir ("runs\" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 New-Item -ItemType Directory -Force $runRoot | Out-Null
@@ -109,7 +134,15 @@ $rows = @()
 foreach ($l in $legSet.Legs) {
     if ($Only.Count -and $Only -notcontains $l.Id) { continue }
     $res = Join-Path (Join-Path $runRoot $l.Id) 'result.json'
-    if ($l.ContainsKey('Manual') -and $l.Manual) {
+    if (-not (Test-LegConfigured $l)) {
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'NOT CONFIGURED'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no guest $($l.Guest) in the configuration" }
+        continue
+    }
+    if (-not (Test-LegInPackage $l)) {
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'NOT IN PACKAGE'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "the package has no $($l.Needs)" }
+        continue
+    }
+    if (Test-LegManual $l) {
         $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'OWED (manual)'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "run-leg.ps1 -Leg $($l.Id) with an operator at VNC" }
         continue
     }
@@ -133,5 +166,5 @@ Set-Content -LiteralPath (Join-Path $runRoot 'results.md') -Value $md -Encoding 
 $rows | Export-Csv -LiteralPath (Join-Path $runRoot 'results.csv') -NoTypeInformation -Encoding ASCII
 $rows | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 Write-Host "results: $(Join-Path $runRoot 'results.md')"
-if (@($rows | Where-Object { $_.Verdict -ne 'PASS' -and $_.Verdict -notlike 'OWED*' }).Count) { exit 1 }
+if (@($rows | Where-Object { $_.Verdict -ne 'PASS' -and $_.Verdict -notlike 'OWED*' -and $_.Verdict -ne 'NOT CONFIGURED' -and $_.Verdict -ne 'NOT IN PACKAGE' }).Count) { exit 1 }
 exit 0

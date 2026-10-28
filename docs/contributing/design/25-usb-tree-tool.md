@@ -1,6 +1,20 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 20, 2026-10-23 (revision 20, 98 SE's tooltip after a
+Status: revision 24, 2026-10-28 (revision 24, roadmap-usb4 task 44.80:
+the "can run faster" notice held to what this computer and the path
+give, and Windows' own ports as an option, section 7.7 items 10 and 11,
+with sections 7.2.1, 10 and 12 and record 13 section 8.12's version 3);
+revision 23, 2026-10-27 (revision 23, roadmap-usb4 task 44.62:
+the PCI and bridge diagnostics node, section 20, with sections 3.1,
+3.2, 10, 11 and 12);
+revision 22, 2026-10-27 (roadmap-usb4 task 44.61, the owner's
+decision of that day: the root hub's count and the protocol list say "USB
+3", not "USB 3.x", section 7.4's root-hub line);
+revision 21, 2026-10-25 (revision 21, roadmap-usb4 tasks 44.8,
+44.9 and 44.35: what a link runs as, the running driver's version and
+the storage transport, sections 17 to 19, with sections 3.3, 10, 11
+and 12 and record 13 sections 8.12 and 10.7);
+revision 20, 2026-10-23 (revision 20, 98 SE's tooltip after a
 long hover and the balloon a click is on, roadmap-usb4 task 43.72:
 sections 7.1, 7.7 item 6 and 16 item 11, with sections 10 and 11);
 revision 19, 2026-10-22 (revision 19, the red tray icon,
@@ -222,7 +236,9 @@ authentication material.
   - **File**: Refresh (F5), Save Report... (the whole tree with every
     node's details as text, for a bug report, the driver logs of section
     3.5 included), Exit.
-  - **Edit**: Copy, Select All (the details pane).
+  - **Edit**: Copy, Select All (the details pane). Copy with nothing
+    selected copies the whole pane (as built; section 20 relies on
+    it).
   - **View** (check boxes): Thunderbolt and USB4; USB controllers;
     Windows' own USB controllers (not xhci98's); Empty ports;
     Descriptors; Devices behind each tunnel; Auto Refresh.
@@ -254,7 +270,11 @@ My Computer
         [Port 2] <hub description>     High Speed
           [Port 1] <device>
         [Port 3] (empty)
+  PCI and bridge diagnostics
 ```
+
+The last child of "My Computer", since revision 23, is the "PCI and
+bridge diagnostics" node (section 20); no View check box hides it.
 
 A dock's own xHCI controller sits behind a PCIe tunnel; it appears under
 the tunnel (as a Windows device) and, with its USB devices, in the USB
@@ -277,15 +297,20 @@ branch, marked "(behind <router name>)".
   removable", with section 6.6's route; and a Thunderbolt 3 router behind
   a USB4 host (generation Thunderbolt 3, or USB4 Version major 0) has its
   lane-adapter rate worded "Thunderbolt 3, 20 Gbit/s per lane, x2 (40
-  Gbit/s)", never as a USB4 generation (`tr_link_text_gen`).
+  Gbit/s)", never as a USB4 generation (`tr_link_text_gen`). Since
+  revision 21 a USB4 router whose link runs as Thunderbolt 3 says so
+  (section 17).
 - **USB controller**: description, PCI ID, driver, `HCD<n>` name, root
-  port count, problem code.
+  port count, problem code; since revision 21 the running driver's
+  version against the installed file's (section 18), as on the NHI.
 - **Hub**: hub descriptor (ports, power switching, compound, over-current),
   self/bus power, speed.
 - **USB device**: port, connection status, speed (Low, Full, High,
   SuperSpeed, SuperSpeedPlus, or unknown), address, VID:PID, class,
   product and manufacturer strings, driver and driver key, problem code,
-  current configuration, MaxPower; with Descriptors on, every descriptor
+  current configuration, MaxPower; since revision 21 on an xhci98
+  controller the storage transport the bus chose and why (section 19);
+  with Descriptors on, every descriptor
   decoded field by field, then in hex. The BOS's SuperSpeedPlus sublink
   speeds are labelled what the device supports; the negotiated lane rate
   and count are "not reported" (decision T3).
@@ -1326,7 +1351,8 @@ a disconnection or an eject.
    model's ports as `fast_scan` does and sends no request of its own: a
    device qualifier is the answer the scan settled). Its kinds map as
    follows: `TR_FW_PORT2`, `TR_FW_HUB2`, `TR_FW_HUB1` and `TR_FW_HUB3`
-   are `TR_RED_SLOW3`; `TR_FW_HUBFS`, 43.27's High Speed case (a High
+   are `TR_RED_SLOW3`, and since revision 24 `TR_FW_WIN2` (section 7.7
+   item 11); `TR_FW_HUBFS`, 43.27's High Speed case (a High
    Speed-capable device at Full Speed behind a Full Speed hub, its
    device qualifier answered, section 7.7 item 1), is `TR_RED_SLOW2`;
    `TR_FW_LINK` (a SuperSpeedPlus device at 5 Gbit/s) is **not** red -
@@ -1515,7 +1541,8 @@ Gen 1):
   device (an integrated controller), or behind a bridge beside the
   controller's under one switch (a discrete one); never a guess, so a
   PCH xHCI on the root bus is not one.
-- The root hub reads "Root hub - N ports (a USB 2.0, b USB 3.x)" from
+- The root hub reads "Root hub - N ports (a USB 2.0, b USB 3)" ("USB 3.x"
+  until revision 22) from
   each port's `_EX_V2` protocols, without the split when a port did not
   report them; each port label carries its protocol ("[Port 15, USB 3]").
   No pairing of a connector's USB 2 and USB 3 ports is shown: the tool
@@ -1873,6 +1900,7 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    | `TR_FW_HUB1` | behind a hub at Full Speed that declares no SuperSpeed | the same; for the High Speed case (declared High Speed): "Connect it to a port of this computer, or through a USB 2.0 or USB 3 hub, rather than through this Full Speed hub." |
    | `TR_FW_HUB3` | behind a hub that declares SuperSpeed and runs below it | "Connect the hub to a USB 3 port of this computer with a USB 3 cable. If it already is, try another cable for the hub, then for the device." |
    | `TR_FW_LINK` | a SuperSpeedPlus device at 5 Gbit/s | "Connect it to a port rated 10 Gbit/s or more (USB 3.1 Gen 2 or USB 3.2), with a cable rated for that speed. A 5 Gbit/s port is the most it gets there." |
+   | `TR_FW_WIN2` | on a USB 2.0 port Windows' own driver runs (item 11) | "Connect it to a USB 3 port of this computer." |
 
    A hub whose own connection was not read (another controller's, or
    `_EX_V2` refused) is taken as `TR_FW_HUB2` by its speed.
@@ -2069,13 +2097,14 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
      nothing red; a condition of section 7.2.1 outside it, a controller
      or a device waiting for approval, still does. On, a `TR_FW_LINK`
      device alone does not.)
-8. **Not done.** Windows' own controllers' devices; the pairing of a USB
-   3 hub's two halves (item 1); and the top rate of a port, which no
-   request the tool sends reads (the root hub answers no speed table), so
-   a SuperSpeedPlus device on a computer whose every port runs at 5
-   Gbit/s stays counted (balloon, list) until the notice is turned off,
-   as 43.27's text counts it; since revision 19 it does not turn the
-   icon red (section 7.2.1 item 2).
+8. **Not done.** Windows' own controllers' devices, but for item 11's
+   option; the pairing of a USB 3 hub's two halves (item 1). Until
+   revision 24 the top rate of a port was not done either: no request
+   the tool sent read it (the root hub answers no speed table), so a
+   SuperSpeedPlus device on a computer whose every port runs at 5
+   Gbit/s stayed counted (balloon, list) until the notice was turned
+   off, and "Can run at" said SuperSpeedPlus for it at High Speed too
+   (the report of 2026-10-28, item 10). Item 10 reads it now.
 
 9. **A balloon the shell did not show** (task 43.66, 2026-10-23;
    `tr_bsend_step`, host-tested). Item 4 gives each new key one balloon,
@@ -2134,8 +2163,96 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    naming the device it named; the 60 s and 40 s are judgements, not
    readings, to be read again against 7's timing in the leg.
 
+10. **What the path can give** (revision 24, roadmap-usb4 44.80). A
+    user's report (2026-10-28, XP, a VIA VL805, a USB 3 port of 5 Gbit/s
+    at most): an RTL8157 (SuperSpeedPlus-capable) behind a hub plugged
+    in by its USB 2.0 pins was listed "Can run at: SuperSpeedPlus (10
+    Gbit/s or more)", and plugged in properly it runs at 5 Gbit/s, the
+    best that computer gives, yet stayed counted (`TR_FW_LINK`). Item
+    1's "declared" was the device's own top, never held to the path.
+    Since this revision the speed it can run at is the least of:
+    - what it declares (item 1);
+    - the fastest this computer's xHCI98 USB 3 ports run
+      (`tr_fast_top_add`, host-tested): each `xhci98.sys` controller's
+      query answer, version 3's ports part (record 13 section 8.12), read
+      once a refresh (`fast_top_read`, `xhcitr.c`; the whole answer the
+      transport part already reads): SuperSpeedPlus when a port says so,
+      else SuperSpeed when a port is USB 3; a controller whose ports
+      cannot be read (a driver before 44.80, a refused or failed query)
+      counts as SuperSpeed, never SuperSpeedPlus, since nothing says
+      more; none when no controller has a USB 3 port. The computer's
+      best rather than the device's own root port's: the advice of
+      every kind but `TR_FW_HUB3` is to move the device to another port
+      of this computer, and the root port a fallen-back path is on is a
+      USB 2.0 port, whose USB 3 partner is paired by convention only
+      (AGENTS.md, "Port Strategy");
+    - SuperSpeed when a hub on the path holds it there
+      (`tr_fast_hub_cap`, host-tested): a hub whose connection declares
+      or runs at SuperSpeed without declaring SuperSpeedPlus, or whose
+      connection or `_EX_V2` was not read. A hub that declares no
+      SuperSpeed (a USB 2.0 hub) holds nothing, since the advice for it
+      is to go around it.
+    A device counts only when it runs below that, so on a computer whose
+    USB 3 ports run at 5 Gbit/s a SuperSpeedPlus device at SuperSpeed is
+    never counted, and the report's case still counts, "Can run at:
+    SuperSpeed (5 Gbit/s)", `TR_FW_HUB3`. A SuperSpeed device is never
+    raised, and the High Speed case (item 1) does not depend on it. With
+    no xHCI98 USB 3 port at all nothing counts but that case. The
+    details pane says what is not counted, for a device declaring
+    SuperSpeedPlus held to SuperSpeed (`tr_fast_note`, host-tested): "Note:
+    This device can run at SuperSpeedPlus." and "This computer's USB 3
+    ports run at 5 Gbit/s at most." or "A hub it is behind runs at 5
+    Gbit/s at most."; the tray says nothing of it. Not done: a port's
+    own top among several of different rates on one controller (the
+    computer's best is taken), and a controller that states
+    SuperSpeedPlus in a PSI table whose connector or retimer cannot
+    carry it (the capability is all that is read).
+11. **Windows' own ports** (revision 24; the owner, 2026-10-28: an
+    option, off by default). "Watch Windows' own USB ports too", a
+    checkable item under "Tell me when a device can run faster" in the
+    View menu and the icon's right-click menu, greyed while the notice is
+    off, writes the DWORD `FasterWindowsPorts` under
+    `HKCU\Software\xHCI98\XHCITR` (1 on; absent, 0, another type or
+    number off; there is no computer-wide value). On, and with the notice
+    on, a port of a controller Windows' own driver runs counts when all
+    of these hold (`tr_fast_wants_bos`, `tr_fast_check`, host-tested):
+    the controller is EHCI, OHCI or UHCI by its PCI class (`0C0320`,
+    `0C0310`, `0C0300`; an xHCI controller of Windows' own is never
+    watched: Windows has its own notice where it drives one); a device
+    is connected and is not a hub; its device descriptor's `bcdUSB` is
+    0x0210 or later (Windows asks a BOS from 0x0201; a USB 3 device at
+    High Speed reports 2.10, so `bcdUSB` alone says nothing of
+    SuperSpeed); this computer has an xHCI98 USB 3 port (item 10); and
+    its BOS, asked through Windows' hub
+    (`IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`, type 0Fh, its
+    5-byte header and then the whole, `fast_win_bos`), declares
+    SuperSpeed (capability 03h) or SuperSpeedPlus (0Ah) (`tr_bos_top`,
+    host-tested). It is asked once per plug: the answer is kept by
+    item 4's key with the device's address (`tr_wbos_*`, host-tested,
+    64 keys; a new key with no room is not asked), dropped by the scan
+    that no longer sees it, and any failure (the hub refusing type 0Fh,
+    a stall, a malformed set) is kept as "unknown", with no notice. It
+    runs at the `_EX` speed, or on an OHCI or UHCI controller Full Speed
+    (Low Speed when the original request says so) when only the
+    original request answered; on EHCI with no `_EX` it does not count.
+    It can run at the least of what its BOS declares and item 10's
+    computer's best. Its kind is `TR_FW_WIN2`, "on a USB 2.0 port",
+    "Try: Connect it to a USB 3 port of this computer.", and it turns
+    the icon red as `TR_RED_SLOW3` (section 7.2.1 item 2). Turned on or
+    off, the model is read again at once; so is it when the notice is
+    turned on with the option on, with no balloon (item 7: turning the
+    notice on sends none). Off by default because the
+    request goes to a device on a stack this package does not run; the
+    request is the one Windows' own hub sends at enumeration for such a
+    device, and is sent only for the devices the gate admits. Off, only
+    xHCI98's ports are watched, as before. Read on XP (EHCI: one BOS pair
+    per plug, none with the option off) and on 98 SE, where the tool's
+    scan lists no port of Windows' own UHCI controller at all, so the
+    option asks nothing and says nothing there (`runs/run-44.md`,
+    "44.80").
+
 The legs are roadmap-usb4 43.28 (section 11, T.13), and 43.66's for
-item 9.
+item 9; 44.80's for items 10 and 11 (`runs/run-44.md`, "44.80").
 
 ## 8. Install, upgrade and uninstall
 
@@ -2291,6 +2408,38 @@ the poll, the last move counting, once per hover, resting on the icon,
 another double-click time, across `GetTickCount`'s wrap) in
 `test\test_tr.c`.
 
+Revision 21: the generation line (`tr_gen_link_text`,
+`tr_route_parent`, section 17 item 6), the version comparison
+(`tr_ver_state`, `tr_pfro_find`, section 18 item 7) and the
+storage transport (`tr_path_route`, the lines and the binding check,
+section 19 item 8) in `test\test_tr.c`, `test\test_trlog.c`,
+`test\test_xhq.c`, `test\test_snap.c` and `test\test_cm_query.c`.
+
+Revision 23: the diagnostics' decoders (`xhcitr\tr_diag.c`, section 20
+item 8) in `test\test_trdiag.c`.
+
+Revision 24: the path's limit and Windows' own ports (section 7.7 items
+10 and 11) in `test\test_tr.c`'s `test_fast_path`: the computer's top
+controller by controller (5 Gbit/s, 10 Gbit/s, two in either order, a
+controller not read, USB 2.0 ports alone, a stopped one, values not
+known), what a hub holds, a SuperSpeedPlus device direct and behind a
+SuperSpeed or SuperSpeedPlus hub on a 5 Gbit/s, a 10 Gbit/s and an
+unread computer, at SuperSpeed and at High Speed (the report's case and
+its entry text), a SuperSpeed device never raised, no USB 3 port at all
+with the High Speed case still counted, the note; Windows' ports with
+the option on and off, each clause of the gate (`bcdUSB` 2.00, 2.01,
+2.10 and 3.00, a hub, nothing connected, an xHCI or unread class,
+xHCI98's own port, no xHCI98 USB 3 port), the speed from `_EX` and from
+the original request, the BOS parse (SuperSpeed, SuperSpeedPlus, the
+USB 2.0 extension alone, short, wrong type, a capability of length 0,
+past the end, not a device capability) and the once-per-plug cache
+(asked, kept, dropped when gone, another address, full). Record 13
+section 8.12's version 3 in `test\test_xhq.c` (`test_v3`: the part at
+every level, its place and bound, the reader, a stopped controller, a
+version 2 answer) and `XhciPortTop` in `test\test_caps.c`
+(`test_port_top`: qemu-xhci's shape, 3.1 without a table, a 3.2 table,
+a Gen 1 table, a rate above 5 Gbit/s with LP 0, the VL805's capture).
+
 ## 11. Legs
 
 | Leg | Systems | What it reads |
@@ -2310,6 +2459,10 @@ another double-click time, across `GetTickCount`'s wrap) in
 | T.13 | 98 SE, ME, 2000, XP, 7 x86 and x64, 8 and 8.1 (roadmap-usb4 43.28) | revision 18: a SuperSpeed stick on a USB 2.0 root port and behind a High Speed hub (the balloon, 98 SE's tooltip, the red icon, the box), then moved to a USB 3 port (the icon clears); two such devices with one moved; a High Speed-only device never counted on a High Speed port or hub, and counted at Full Speed behind a Full Speed hub (item 1's High Speed case, its device_qualifier answered); the default per target; the setting turned off in the tool and by the installer |
 | T.14 | 98 SE, ME, 2000, XP, 7 x86 and x64 (with 43.28) | revision 19, by screenshot: the icon red and its tooltip for a SuperSpeed stick on a USB 2.0 port, a High Speed stick behind a Full Speed hub, the Thunderbolt emulator's device left unapproved, and two at once ("and 1 more"; 98 SE's 63 characters); each put right and the icon back; a sleep and resume leaving it as it was; an Explorer restart while red; the menu's first item and the double click opening the window on the device; the notice turned off clearing conditions 1 and 2; 98 SE at 16 colours |
 | T.15 | 98 SE; 2000 and XP | revision 20 (read 2026-10-23, QEMU, 43.28's installed guests, by screenshot): on 98 SE a pointer resting on the red icon until its tooltip timed out, then away, and back, twice - the tooltip shows again each time (with `3.2.0.0`'s and 43.57's XHCITR it never does again), and the "can run faster" pop-up at the tray's start; a stick that raised the Add New Hardware wizard, the pop-up when the wizard finished (`USBSTOR.INF` from NUSB 3.3 given to it); on 2000 the notice's balloon "Click the icon for what to try.", a click on it and on an eject's "Device stopped" opening nothing, the icon's first item opening the tree on the port; on XP a click on the notice's balloon opening the list and one on "Device stopped" opening nothing |
+| T.16 | 98 SE and one NT target (the Thunderbolt and USB4 emulator) | revision 21, section 17: on the Alpine Ridge profile the USB4 device reads "USB4 v1.0 device, running as Thunderbolt 3" and the Thunderbolt 3 dock "Thunderbolt 3"; on the USB4 profile the USB4 device "USB4 v1.0" and the dock "Thunderbolt 3" |
+| T.17 | 98 SE, 7 x86 | revision 21, section 18: an update to a higher version not restarted into - the status bar and the controller's and NHI's details say the running and installed versions differ; after the restart, the same |
+| T.18 | 7 x86 (QEMU `usb-uas` with a serial, UAS alone); the transport line on 98 SE | revision 21, section 19 item 7: the transport line and counters for the emulated drive; a stand-in INF binding Windows' `usbstor` to its devnode, the tool's binding check, the binding kept across an unplug and replug; the stand-in removed from the store, the entry uninstalled and the drive plugged in again, on `xhciuas`. The natural case (a drive offering both) is 44-E.5 |
+| T.19 | 98 SE (q35, `XHCIPFW.VXD` installed, the ASM4242 with its windows above 4 GB, the ORICO plugged after the start); 7 x86 or XP (q35, `xhcicm` with the emulator's NHI); 2000 on the Standard PC HAL once 44.53's code is merged | revision 23, section 20: the node's text in the window, Edit > Copy with nothing selected, and the same text in Save Report; on 98 SE `XHCIPFW`'s values and the connection manager's records decoded; on the NT system their NT wording and the slot of item 5 read through the log; on 2000 a hot plug's `cm.chain.irq` records in the slot |
 
 ## 12. Decisions
 
@@ -2456,6 +2609,45 @@ another double-click time, across `GetTickCount`'s wrap) in
   concerned (section 7.2.1). The ranking of the conditions, the
   double click and menu item as "a click", `TR_FW_LINK` left out and
   `xhci98.sys`'s failed flag are orchestrator decisions for the owner to confirm.
+- **T25** (task 44.9; revision 21) A USB4 router whose upstream side
+  is Thunderbolt 3 - a Thunderbolt 3 host by its profile, or a
+  Thunderbolt 3 router above it - says "running as Thunderbolt 3"; an
+  unknown host is not guessed at (section 17). **Owner, 2026-10-25**:
+  Falcon Ridge hosts are classed, and a router on one says "running as
+  Thunderbolt 2".
+- **T26** (task 44.8; revision 21) The running version is the drivers'
+  own word in their query answers (xhci98's query version 2, xhcicm's
+  removal block), compared with the file the next start loads, a
+  pending replacement first; the status bar and the details warn, the
+  tray does not (section 18). **Owner, 2026-10-25**: confirmed - the
+  status bar and the details only, not the tray; xhciuas and Stor98 not
+  compared.
+- **T27** (task 44.35; revision 21) The transport decision is the
+  driver's own, per device record, served by the query request at
+  every level and by the snapshot; the tool matches it by port path
+  and says when the devnode's driver disagrees (section 19). **Owner,
+  2026-10-25**: QEMU's `usb-uas` offers UAS alone (one interface,
+  protocol 62h), so the emulator cannot build a drive offering both; the
+  stale binding is read there with a stand-in INF that binds Windows'
+  `usbstor` to the emulated drive's devnode, and the natural case is
+  read on the P14s Gen 1 (44-E.5).
+- **T29** (task 44.80; revision 24) "Can run at" is held to the fastest
+  of this computer's xHCI98 USB 3 ports and to SuperSpeed by a hub on the
+  path that declares no more; a controller whose ports cannot be read
+  is taken as SuperSpeed (section 7.7 item 10). The computer's best, not
+  the root port's, and the details pane's note in place of a tray
+  notice, are orchestrator decisions for the owner to confirm.
+  **Owner, 2026-10-28**: Windows' own EHCI, OHCI and UHCI ports are
+  watched only when the user turns the option on; off by default; the
+  BOS is asked only from `bcdUSB` 0x0210, once per plug, never on
+  xHCI98's ports, and a failure is "unknown, no notice" (item 11).
+- **T28** (task 44.62; revision 23) The PCI and bridge diagnostics are
+  one tree node, not a window of their own: the details pane already is
+  a read-only text with Edit > Copy of the whole, and Save Report
+  already carries every node, so the owner's "without having to save the
+  report and open it" is met with no new window, dialog or menu
+  (section 20). The node reads only what the drivers already write, and
+  writes nothing.
 
 ## 13. Open
 
@@ -2794,3 +2986,425 @@ The tooltip's last event (section 7.1) is kept as it is.
     and its notice's pop-up shows, then, for its 10 s; nothing is lost,
     and a check made while the wizard is up sees none (read both
     with the wizard cancelled and with it finished on `USBSTOR.INF`).
+
+## 17. What the link runs as (revision 21, task 44.9)
+
+Roadmap-usb4 44.9 (was TRGEN.1; owner, 2026-10-24): a USB4 device on a
+Thunderbolt 3 host runs its link as Thunderbolt 3, and the "Generation"
+line says both: "USB4 v1.0 device, running as Thunderbolt 3". Before
+this revision the line said "USB4 v1.0" alone, which reads as a USB4
+link.
+
+1. **The router's own generation** stays what the connection manager
+   reported (`CM_ST_E_GEN`: on every ICM row the router's USB4 Version
+   from `ROUTER_CS_4` since task 43.44, record 21 section 5.3; under
+   the USB4 software connection manager the router's own reading).
+   Nothing in either driver changes for this section.
+2. **The upstream side of its link.** Every link below a Thunderbolt 3
+   link runs as Thunderbolt 3 (the USB4 Connection Manager Guide), so a
+   router's link runs as Thunderbolt 3 when the host's router or any
+   router between it and the host is Thunderbolt 3.
+   - **The host's router** is classed by the NHI's profile
+     (`CM_ST_O_PROFILE`, `src\cm\cm_vals.h`): Alpine Ridge, Titan Ridge
+     and Ice Lake (`CM_PROFILE_ICM_AR`, `_ICM_TR`, `_ICM_ICL`) are
+     Thunderbolt 3 hosts; Maple Ridge, Tiger Lake to Meteor Lake and the
+     USB4 software connection manager (`_ICM_MR`, `_ICM_TGL`, `_USB4`)
+     USB4 hosts; Falcon Ridge (`CM_PROFILE_ICM_FR`) a Thunderbolt 2 host
+     (the owner, 2026-10-25, decision T25); an unknown profile is not
+     classed. A record whose profile is 0 is classed by
+     its NHI's PCI id (`CM_ST_O_NHI_ID`) through `cm_vals.c`'s table
+     (`tr_profile_of_nhi`): on 98 SE and ME the driver starts before it
+     reads the NHI's ids and its record says profile 0 (read on 98 SE's
+     Alpine Ridge, task 44.9's leg).
+   - **The routers between** are found by route: an entry's depth is the
+     count of its route string's nonzero bytes from the lowest (a hop a
+     byte, record 22; `tr_route_depth`), and its parent the entry of the
+     same NHI whose route is this one's with the byte at depth - 1
+     cleared (`tr_route_parent`), and so on up to depth 1. The depth comes
+     from the route and not from `CM_ST_E_PLACE`, because the software
+     connection manager's entries behind a router (`CM_ST_KIND_USB4_LINK`,
+     `cm_status.c`) carry depth 0 there. An ICM entry whose route was not
+     given (`CM_ST_UNKNOWN`) takes its place's depth, and has no routers
+     between found unless it is at depth 1.
+   - A router between is Thunderbolt 3 when its own generation is
+     (`tr_gen_tbt3`: `CM_ST_GEN_TBT3`, or a USB4 Version of major 0) and
+     USB4 when it is any other USB4 entry, its version read or not (the
+     software connection manager's entries behind a router carry none).
+   - The result (`tr_up_of_path`): Thunderbolt 2 when the host is (a
+     Thunderbolt 2 host runs every link below it as Thunderbolt 2);
+     else Thunderbolt 3 when the host or any router between is; USB4
+     when the host is USB4 and every router between was found and is
+     USB4; else not known.
+3. **The line.** A USB4 router (a USB4 entry that is not Thunderbolt 3
+   by item 2's test) whose upstream side is Thunderbolt 3 reads "USB4 v<major>.<minor>
+   device, running as Thunderbolt 3" ("USB4 device, running as
+   Thunderbolt 3" where the version byte is 0). Every other case reads
+   as before - "Thunderbolt 3", "USB4 v1.0", "USB4", "generation not
+   known": a USB4 router whose upstream side is USB4 or not known says
+   nothing about the link, and an unknown profile is not guessed at. A
+   Thunderbolt 3 router stays "Thunderbolt 3", but on a Falcon Ridge
+   host: there every router of a known generation reads "<its
+   generation> device, running as Thunderbolt 2" ("Thunderbolt 3
+   device, running as Thunderbolt 2", "USB4 v1.0 device, running as
+   Thunderbolt 2"; the owner, 2026-10-25).
+4. **The link line follows** (section 3.3, `tr_link_text_gen`): a USB4
+   router running as Thunderbolt 3 has its lane-adapter rate worded as a
+   Thunderbolt 3 router's ("Thunderbolt 3, 20 Gbit/s per lane, x2 (40
+   Gbit/s)"), never as a USB4 generation. Under the ICM the line is the
+   firmware's, as before.
+5. **Where.** The details pane's "Generation" line of a router (section
+   3.3), and Save Report and `/report` with it. The tree's label and the
+   tray's balloons keep `tr_gen_text`'s words.
+6. **Host vectors** (`test\test_tr.c`: `tr_gen_link_text`,
+   `tr_route_depth`, `tr_route_parent`, `tr_up_of_path`): a USB4 v1.0
+   router at depth 1 on each profile; a Thunderbolt 3 and a USB4 router
+   on a Falcon Ridge host ("running as Thunderbolt 2"); a Thunderbolt 3
+   router on each; a
+   USB4 router behind a Thunderbolt 3 router on a USB4 host, and two
+   USB4 routers below a Thunderbolt 3 router (the last still running as
+   Thunderbolt 3); a USB4 router behind a USB4 router on a Thunderbolt 3
+   host; an unversioned USB4 entry behind a router; a parent route
+   matching no entry; an unknown route; a USB4 Version byte of 0 and one
+   of major 0; the link line of a USB4 router running as Thunderbolt 3,
+   with and without a width.
+7. **Leg T.16** (section 11): the emulator's Alpine Ridge profile with
+   its USB4 device (`device-model=asm2464`) - "USB4 v1.0 device, running
+   as Thunderbolt 3" - and with its Thunderbolt 3 dock; its USB4 profile
+   with the same device - "USB4 v1.0" - and with the Thunderbolt 3 dock
+   - "Thunderbolt 3"; on 98 SE and one NT target.
+
+## 18. The running driver's version (revision 21, task 44.8)
+
+Roadmap-usb4 44.8 (was TRVER.1): after an update the installed files
+are new and the running drivers old until Windows restarts (on 98 SE
+and ME the new file even waits beside the old one, named in
+`WININIT.INI`'s `[rename]`, record 26 section 5.0); the tool says so.
+
+1. **The running version.** Neither driver says its version before this
+   revision. From it:
+   - `xhci98.sys` answers its query request in version 2 (record 13
+     section 8.12): an 80-byte header whose word at 64 is the driver's
+     version packed one byte a field (`3.3.0.0` is `0x03030000`), made
+     at compile time from `src\xhci_version.h`'s `XHCI_VER_CSV`, so it
+     cannot drift from the version resource. A version 1 answer is a
+     driver from before `3.3.0.0`; a refusal, a driver from before
+     `3.0.0.0` or not this one.
+   - `xhcicm.sys`'s query answer (`XCMQ`, version 2) gives the same word
+     in its removal block's first reserved word (`CM_Q_RM_DRIVER`, at
+     16), which every version 2 answer carries; 0 there is a driver from
+     before `3.3.0.0`, and a version 1 answer one from before `3.2.0.0`.
+     The layout keeps its shape, so `CM_Q_VERSION` stays 2 and the mark
+     service and XHCIINST read it as before.
+   - `xhciuas.sys`, `xhcihlpr.sys` and Stor98 have no query and are not
+     compared: the package updates every driver together, so these two
+     stand for it. A machine with neither running (no xhci98 controller
+     and no NHI) shows nothing.
+2. **The installed version** of the same driver is the file the next
+   start loads: `%windir%\system32\drivers\xhci98.sys` (or `xhcicm.sys`),
+   as the snapshot's `.DEV` names it, read with WOW64's redirection off
+   - unless a replacement of that file is pending, whose source is then
+   the file read: on 98 SE and ME a `WININIT.INI` `[rename]` line naming
+   it (`inst_rename_scan`, as XHCIINST reads it), on NT a pair of
+   `PendingFileRenameOperations` (`HKLM\SYSTEM\CurrentControlSet\Control\
+   Session Manager`) whose target names it. The version is the file's
+   `VS_FIXEDFILEINFO` file version; a file that cannot be read is "not
+   read".
+3. **The comparison** (`tr_ver_state`, pure): the running version known
+   (a version 2 answer, or `CM_Q_RM_DRIVER` nonzero) and equal to the
+   installed one: the same; known and different, either way: **differs**;
+   not known (a version 1 answer, or 0) with an installed version of
+   `3.3.0.0` or later: **differs** (the running driver predates the first
+   that says it); anything else, or an installed version not read: not
+   known, and nothing is said.
+4. **The warning.** Where it differs:
+   - the status bar's text ends "- restart Windows to finish the driver
+     update";
+   - the xhci98 controller's details (section 3.3) and the NHI's carry
+     "Driver version: 3.2.0.0 running; the installed file is 3.3.0.0.
+     Restart Windows to run the installed driver." ("older than 3.3.0.0
+     running" for a driver that does not say); where it is the same,
+     "Driver version: 3.3.0.0 running, the installed file's"; not known,
+     no line;
+   - Save Report and `/report` carry the details.
+   The tray's icon, tooltip and balloons do not change: an update not
+   restarted into is not a condition section 7.2.1 turns red for, and
+   the installer has already asked for the restart.
+5. **When it is read.** At each refresh, from what the refresh already
+   reads: the header-alone answer of xhci98's query (section 7.2.1 item
+   3's read, now with an 80-byte buffer) and xhcicm's answer; the
+   installed file once per refresh per driver. No new request, no timer.
+6. **An older tool** (`3.2.0.0`'s) asks xhci98 for the header with a
+   64-byte buffer: the version 2 driver answers a buffer of 64 to 79
+   bytes with the header's first 64 bytes, whose words keep version 1's
+   places, so that tool's red icon still reads the failed flag; its full
+   read meets version 2 and shows the log as not served. It reads
+   xhcicm's answer as before.
+7. **Host vectors** (`test\test_tr.c`, `test\test_xhq.c`,
+   `test\test_cm_query.c`): `tr_ver_state` over each case of item 3;
+   the packed version against `XHCI_VER_STR`; the header's version word
+   and a 64-byte ask's answer; `CM_Q_RM_DRIVER` in a version 2 answer;
+   the `PendingFileRenameOperations` reader (`tr_pfro_find`: the `\??\`
+   and `!` prefixes, a delete, a target named twice, an odd count, a
+   list not terminated).
+8. **Leg T.17** (section 11): on 98 SE and 7 x86, the package installed;
+   then an update to a build of a higher version, not restarted: the
+   status bar and both details say it differs; restart: they say the
+   same and the status bar nothing.
+
+## 19. The storage transport (revision 21, task 44.35)
+
+Roadmap-usb4 44.35 (owner, 2026-10-25): a drive that offers UAS ran
+Bulk-Only under Windows' `usbstor` on the owner's P14s Gen 1, and the
+bus's transport decision (record 13 section 10.7, `src\xhci_xport.h`)
+was visible only in the debug trace. The tool shows it, and says when a
+devnode's driver disagrees with it.
+
+1. **The driver's half** (record 13 sections 8.12 and 10.7):
+   - The six decisions counted (`hc->XportDecisions`, each
+     `XHCI_XPORT_WHY_*` but `NOT_UAS`) move into the counter block,
+     appended at words 246 to 251 (`XportUas`, `XportUasOnly`,
+     `XportUasOnlyForced`, `XportBotForced`, `XportBotNoStreams`,
+     `XportNoStreams`), zeroed at each start as the block is; the
+     snapshot's HCD region and the query request carry them by name.
+   - Each device record (`HCD_USB_DEVICE`) keeps its storage decision:
+     the interface (0xFF for a device PDO), the transport, the why, the
+     alternate the class driver selects, the inputs (`XHCI_XPORT_F_*`:
+     SuperSpeed, the controller streams, `XhciForceBulkOnly` set), the
+     class triple exposed and a count of the storage interfaces decided
+     on it; written by the thread at the PDO's creation, under the
+     controller lock, for a PDO whose interface is mass storage (class
+     08), Bulk-Only alone included (`XHCI_XPORT_WHY_NOT_UAS` with its
+     triple), and for a refused one, which exposes no triple. The record is keyed by the interface: a decision for an
+     interface already recorded replaces it (a function PDO made again by
+     `HcdDevicePdoRepresentFunctions` is recorded again after it takes
+     the old PDO's decision, so the record is the PDO's final one), and a
+     new interface is counted (a mask of the interfaces seen); a
+     composite device with more than one keeps the lowest-numbered and
+     counts the rest. The six counters count each decision as before, a
+     function made again included.
+   - The query answer's version 2 carries one 40-byte record per device
+     with a decision, in Slot ID order (Slot ID, root port, route
+     string, interface, transport, why, alternate, inputs, triple,
+     count), at every level - it is not the log - after the
+     configuration space; the snapshot's HCD region appends the same
+     records, 32 of them, to its header (its version 1 unchanged: a
+     reader walks by the header's size).
+2. **The match.** A USB device node on an xhci98 controller is matched
+   to its record by place: the node's port path (`3.2.1`) gives the root
+   port (its first number, 1 to 255) and the route string (each further
+   number a nibble, the first hub's lowest; `tr_path_route`), and the
+   record with that root port and route is the device's. A path deeper
+   than five hubs, or with a hub port of 0 or above 15, matches none. Windows' own controllers
+   have no record and show nothing.
+3. **The line**, in the USB device's details (section 3.3) after
+   "Class", and in Save Report and `/report`:
+   - "Transport:     UAS (the device offers Bulk-Only and UAS; UAS
+     chosen)";
+   - "UAS (the only transport the device offers)", with the force value
+     set "...; XhciForceBulkOnly does not apply to it";
+   - "Bulk-Only (the device offers UAS too; XhciForceBulkOnly is set on
+     this controller)";
+   - "Bulk-Only (the device offers UAS too; this controller cannot
+     stream at SuperSpeed)";
+   - "none (the device offers UAS alone, at SuperSpeed on a controller
+     that cannot stream)";
+   - "Bulk-Only (the device offers no UAS setting)" for a mass-storage
+     interface whose alternate 0 is Bulk-Only with no UAS setting;
+     another triple with none: "class 08, subclass ss, protocol pp (no
+     UAS setting)";
+   - for a composite device "(interface n)" after the transport's word,
+     and "and N more storage interfaces" where the count says so;
+   - a version 1 answer or a refusal, for a device whose class or
+     configuration (where the tool read it) names mass storage:
+     "Transport:     not reported by this xhci98.sys"; for any other
+     device, nothing (read on 98 SE under `3.2.0.0`'s driver, where the
+     tablet showed the line).
+4. **The binding check.** Where the transport is UAS and the device's
+   devnode (for a composite, the function's) is bound to Windows'
+   Bulk-Only driver (`usbstor`, `USBSTOR.SYS` on 98 SE and ME; compared
+   without case or extension) - not to another UAS driver, such as
+   Windows 8's `uaspstor` - the details add: "Windows bound this drive to
+   <service>, not to the UAS driver: most likely its Device Manager
+   entry was first installed while the drive was offered as Bulk-Only,
+   and Windows keeps that driver for it. To run it as UAS, uninstall the
+   entry in Device Manager, then unplug the drive and plug it in again."
+   The words are the reading's of item 7; if it shows another cause, the
+   note says that cause instead.
+5. **What it reads.** The query request's whole answer, once per
+   controller per refresh, when a USB device of that controller is
+   shown or a report is made - the read the "Driver log" and "PCI
+   configuration" nodes already make.
+6. **The snapshot's `.TXT`** (`XHCITR /snapshot`, `/dump`): a "storage
+   transport" section after the root ports, each record by Slot ID and
+   place with item 3's words, and the six counters by name in the
+   counter list (`scripts\check-counter-names.ps1` holds them to
+   `src\xhci_counters.h`). A header shorter than the records' is a
+   driver from before them, and the section says so.
+7. **The reading** (leg T.18, section 11). QEMU's `usb-uas` offers UAS
+   alone (`hw\usb\dev-uas.c`: one interface, protocol 62h; read on 7
+   x86 on 2026-10-25, where with `XhciForceBulkOnly` 1 the drive still
+   took `xhciuas`), so the emulator cannot build a drive that offers
+   both. By the owner's decision of 2026-10-25 (T27) the stale binding
+   is read there with a stand-in: a test INF of the leg's own, never
+   shipped, that binds Windows' `usbstor` (`usbstor.inf`'s
+   `USBSTOR_BULK` sections) to the emulated drive's devnode
+   (`USB\VID_46F4&PID_0003`, named by its serial number), standing in
+   for an entry installed while a drive was offered Bulk-Only. Read on 7
+   x86 (and the transport line on 98 SE): the devnode, its driver and its
+   compatible ids, the tool's two lines; the drive unplugged and plugged
+   in again (the binding kept); then the stand-in INF removed from the
+   driver store, the entry uninstalled and the drive plugged in again:
+   `xhciuas`. The natural case, a drive offering both, is 44-E.5 on the
+   owner's P14s Gen 1. What the readings show is written into item 4 and
+   the release notes (how such a drive is given back to UAS).
+8. **Host vectors**: `test_xhq` (the version 2 layout, the records' part
+   at levels 0 to 4, the sizing); `test_snap` (the header's new words and
+   the records' place); `test_trlog` and `test_tr` (`tr_xhq_parse` of
+   both versions, the records' bounds, `tr_path_route`, each line of
+   item 3 and the binding check's cases); the snapshot reader's
+   `-selftest-xport` over canned headers.
+
+## 20. The PCI and bridge diagnostics (revision 23, task 44.62)
+
+The owner, 2026-10-27: XHCITR shows the PCI and bridge diagnostics the
+package's drivers leave in the registry, in the report and in the tool
+itself, "without having to save the report and open it". Until now they
+were read with a registry editor or an export.
+
+1. **Where.** One node, "PCI and bridge diagnostics", the last child of
+   "My Computer" (section 3.2), present at every refresh on every system
+   whatever the View check boxes say, since `XHCIPFW` concerns any
+   bridge and not only the Thunderbolt branch. A refresh adds it and
+   reads nothing; selecting it reads then, and so do Save Report and
+   `/report`, once, as the "Driver log" nodes do (section 3.5). The
+   details pane shows the text; Edit > Copy with nothing selected copies
+   all of it (section 3.1), so no window, dialog or menu is added
+   (decision T28).
+2. **What it shows**, in this order, each value by its registry name
+   with its raw form beside the plain words (a dword in hex, a binary
+   value in hex bytes, a string as written), and "not recorded" for a
+   value that is absent:
+   - **`XHCIPFW`'s log** (design record 32 sections 6 and 11.2): on 98
+     SE and ME the values under
+     `HKLM\System\CurrentControlSet\Services\VxD\XHCIPFW`, on 2000 and
+     later those under
+     `HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters`. The
+     key's absence reads "not recorded: XHCIPFW is not installed, or has
+     not run since it was installed".
+   - **Per NHI that `xhcicm` drives** (the NHIs of section 3.2, by
+     description and instance id), from the NHI's hardware key
+     (`Enum\<id>` on 98 SE and ME, `Enum\<id>\Device Parameters` on NT,
+     where `XhciCmStatus` is read): the bridge numbering's last attempt
+     `XhciCmBridgeDiag` (record 21 section 6.1.1) and the no-interrupt
+     start's last attempt `XhciCmNoIrqDiag` (record 28 section 7). Both
+     are written on 98 SE and ME alone; on NT each reads "not recorded
+     (written on Windows 98 SE and ME only)". With no such NHI the part
+     says so in one line.
+   - **The interrupt of a function hot-added behind a tunnel on 2000**
+     (roadmap-usb4 task 44.53, record 21 section 6.2.1 on the branch that
+     builds it): item 5.
+3. **`XHCIPFW`'s values**, decoded (the names, types and layouts are
+   record 32's; the tool keeps them in one table in `tr_diag.c`, so a
+   rename touches one place):
+   - `XhciPfwVersion` (`REG_SZ`): the image that wrote the log.
+   - NT only, written first: `XhciPfwSkipped` (`REG_DWORD`, bits: 0 not
+     a system it acts on, 1 Safe Mode, 2 not at the boot drivers' time,
+     3 several processors and no way to hold them; 0 "it ran"),
+     `XhciPfwMode` (0 nothing done, 1 one processor, 2 inside
+     `KeIpiGenericCall`), `XhciPfwHoldTicks` and `XhciPfwTickHz` (the
+     step's length in performance-counter ticks and the counter's
+     frequency, low dwords; also said in microseconds where the
+     frequency is not 0).
+   - `XhciPfwResult` (`REG_DWORD`): each set bit named (0 the scan
+     finished, 1 a bridge read otherwise at the close, 2 a write refused,
+     3 a bridge parked, 4 a window across 4 GB, 5 a table full, 6 an xHCI
+     controller's BAR above 4 GB); an unknown bit by number.
+   - The counts `XhciPfwClosed`, `XhciPfwRefused`, `XhciPfwParked`,
+     `XhciPfwAcross`, `XhciPfwBarsInside`, `XhciPfwFunctions`,
+     `XhciPfwXhciHigh` (`REG_DWORD`), each with its meaning.
+   - `XhciPfwBridges` (28-byte records): per record the bridge's
+     location, its action (closed, refused, parked, across 4 GB, left;
+     another value by number), and `24h`, `28h`, `2Ch` before and after,
+     with each prefetchable window as a 64-bit range or "closed".
+   - `XhciPfwBars` (8-byte records): the function, the BAR's offset and
+     its upper dword.
+   - `XhciPfwXhci` (16-byte records): the function, the BAR's offset, the
+     vendor and device ids and the address.
+   - A binary value whose length is not a whole number of records, or
+     longer than its table (16, 16 and 8 records), is shown raw with
+     "not a layout this tool reads"; a value of another type likewise.
+4. **`XhciCmBridgeDiag`** (`REG_BINARY`, 20 dwords, `cm_statb.h`): the
+   attempt's sequence and tunnel port; when flag bit 0 is set, "not
+   attempted: a device below the port was still listed, or the list
+   could not be read whole" (`cmWkChildren` incomplete sets it too);
+   when bit 1,
+   "not attempted: PCI.VXD's configuration route failed its check" with
+   the guard's reading; otherwise the outcome (`tbt_brnum.h`'s
+   `XHCI_TBT_BRNUM_*` in words), what was seen (functions, bridges,
+   tries), the port's bus numbers, the windows' outcome with the port's
+   memory window and the bytes they needed (the window for the outcomes
+   after which `tbt_brnum.c` has read it, the need only after outcome 1,
+   since a refusal can stop its sizing part-way; otherwise "not
+   recorded", the raw dwords kept), where a refusal stopped, the
+   bridges undone and those that could not be, the first two bridges'
+   bus numbers and memory windows as left, flag bit 2 ("the port read
+   up"), the interrupt lines' outcome with the port's line and pin and
+   the functions' counts (likewise: the line and pin for outcomes 1, 2
+   and 4, the counts for 1 and 4, "not recorded" for 3). A length other than 80 bytes is shown raw with
+   "not a layout this tool reads". `XhciCmNoIrqDiag` (`REG_BINARY`, 12
+   dwords, `cm_noirq.h`): the sequence, the member and the function,
+   its pin and line as read, the interrupt outcome, the entry's state
+   and reason (`CM_NI_IRQ_*`, `CM_NI_S_*`, `CM_NI_W_*` in words), the
+   problem before, the step reached (`CM_NI_OP_*`) and its `CONFIGRET`,
+   the status and problem after ("not recorded" where both are 0, as an
+   exclusion writes them), the configurations created and the
+   candidates, the refusals by reason (1 to 8, each held at 15), the
+   pin-0 functions seen and started; a length other than 48 bytes is
+   shown raw likewise. Every dword is also listed raw, five to a line.
+5. **The 44.53 slot.** The child filter keeps no registry record of the
+   interrupt it adds on 2000's Standard PC HAL: it logs it, to the NHI's
+   `xhcicm` log, as `cm.chain.irq` (the Line in bits 31:16, the
+   function's location in 15:0), `cm.chain.irq.filter` (the same),
+   `cm.chain.irq.no` (a reason in 31:16), `cm.chain.irq.nomem`,
+   `cm.chain.irq.start.refused`, `cm.chain.irq.start.nomem` and
+   `cm.chain.irq.start.stripped` (the Line added in 31:16). On NT the
+   node reads each NHI's log as its "Driver log" node does (section 4.5)
+   and lists those records, decoded, each with its raw line, the last
+   16 of them per NHI (and how many there are), so that the text stays
+   within the details pane's 64 KiB whatever the ring holds; a log at a
+   level below 2 records none, and the node says so, with the advice to
+   set xhcicm's level to 2 in View > Logging level (section 7.5) and
+   restart. On 98 SE and ME it reads "not on this system (Windows 2000
+   on the Standard PC HAL only)". The labels are in the same table as
+   item 3's names; should 44.53 gain a registry record, the slot reads
+   that instead.
+6. **Text.** Every line within 79 columns (a name, an instance id or a
+   version string too long for its line is put on lines of its own); every byte of a string value
+   outside printable ASCII shown as `.`; no address of the drivers' own
+   is shown (none of these values holds one: they hold PCI locations,
+   configuration registers and counts).
+7. **What does not change.** Nothing is written to the registry or to a
+   device; no driver changes; the tool needs no rights for these keys
+   (reading values under `HKLM\SYSTEM` is open to every user on each
+   target, as the `XhciCmStatus` read already relies on).
+8. **Host vectors** (`test\test_trdiag.c`, over `xhcitr\tr_diag.c`):
+   each `XHCIPFW` value present and absent, a 98 SE and an NT set, the
+   result bits and an unknown bit, each action, a 64-bit window and a
+   closed one, a value of the wrong type or a length that is not a
+   whole number of records, a table longer than the bound;
+   `XhciCmBridgeDiag` for each outcome, the two "not attempted" flags
+   and a short value; `XhciCmNoIrqDiag` with a refusal mix and a short
+   value; the 44.53 lines picked from a log with a partial first line
+   and other records; and no line over 79 columns on a worst case.
+9. **The legs** (T.19, section 11): 98 SE on q35 with `XHCIPFW.VXD`
+   installed and the emulator's ASM4242 with its prefetchable windows
+   above 4 GB, so that `XHCIPFW` closes some, and the ORICO enclosure
+   plugged after the start, so that the bridge numbering writes
+   `XhciCmBridgeDiag` (and, where its rules admit the NVMe,
+   `XhciCmNoIrqDiag`): every part read with values, in the node and in
+   Save Report; 7 x86 or XP on q35 with `xhcicm` driving the emulator's
+   NHI: the NT wording of both records and the slot read through the
+   log. 44.53's records themselves come only from Windows 2000 on the
+   Standard PC HAL with 44.53's code, which is on its own branch: until
+   the two are merged the host vectors hold the decoding, and a 2000
+   Standard PC hot plug read through the node is owed at the merge.

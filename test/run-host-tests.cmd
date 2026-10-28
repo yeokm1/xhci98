@@ -202,6 +202,13 @@ rem   test_trpci   - the PCI configuration answers (src\cm\cm_qpci.c and
 rem                  xhcitr\tr_pci.c, design record 25 revision 12): the
 rem                  bounded walk below a tunnel port, the capability walk
 rem                  with bad lists, the decoders, 79 columns
+rem   test_trdiag  - XHCITR's PCI and bridge diagnostics (xhcitr\tr_diag.c,
+rem                  task 44.62, design record 25 section 20): XHCIPFW's
+rem                  values, XhciCmBridgeDiag, XhciCmNoIrqDiag, task
+rem                  44.53's log records, bad shapes, 79 columns
+rem   test_dname   - the controller's \DosDevices name (src\xhci_dname.c,
+rem                  task 44.81): HCD<n> on 98 SE and ME, XHCI98HC<k> on
+rem                  NT, the numbers held, a probe's and a delete's status
 rem   test_xhq     - xhci98.sys's query answer (src\xhci_qry.c, design
 rem                  record 13 section 8.12): what each log level serves,
 rem                  the ring's text and cut, the PCI states, the sizing,
@@ -211,6 +218,11 @@ rem                  43.46, design record 30 section 9.1): the claim, the
 rem                  function table, the physical list and its refusals,
 rem                  the request plan (a list that came is replaced) and
 rem                  unaligned buffers and IOS's double-buffer pieces (43.79)
+rem   test_pfw     - XHCIPFW.VXD's pure half (src\pfw\pfw_scan.c, task
+rem                  44.49, design record 32 section 10.1): the
+rem                  classification, the close with every state checked,
+rem                  each write ignored or a third value and the undo,
+rem                  the scan's bounds, the BARs inside, the xHCI log
 rem   test_di      - XHCIDI.EXE's pure part (xhciinst\di\di_core.c, task
 rem                  42-A.1, design record 27 section 11): the command line
 rem                  and its refusals, the result file's lines, the verdicts,
@@ -275,12 +287,19 @@ rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
 rem                  switch port and root port ids, checked against
 rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
 rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
-rem                  the bridge filter's snapshot, and the resume hold's
-rem                  watchdog bound
+rem                  the bridge filter's snapshot, the resume hold's
+rem                  watchdog bound, and design record 31's tunnel id
+rem                  (the compatible-id rewrite, the chain's depth bound
+rem                  and its re-attach)
 rem   test_cm_marks - the marks answer's table (src\cm\cm_marks.c, task
 rem                  42-A.5, design record 21 section 7.4 revision 3): the
 rem                  current and tombstone sets, eviction once seen, the
-rem                  answer layout and the confirmation's checks
+rem                  answer layout and the confirmation's checks, and
+rem                  the Removable answer's gate (design record 31)
+rem   test_cm_tagid - the tunnel id on Windows 98 SE and ME
+rem                  (src\cm\cm_tagid.c, design record 31 section 5): the
+rem                  id list's test in both separators, the step, what
+rem                  follows an Add_ID, and the per-boot record
 rem   test_cm_status - the status record xhcicm.sys publishes for the install
 rem                  tool's viewer (src\cm\cm_status.c, design record 24
 rem                  section 3): the record from an ICM table and a USB4
@@ -554,9 +573,14 @@ rem mapping (task 36.24, design record 13 section 11.6) is pure.
 call :run test_xpipe "test_xpipe.c ..\src\xhci_xpipe.c"
 call :run test_poll "test_poll.c ..\src\xhci_poll.c"
 rem test_quirk links nothing else: Linux's xHCI controller quirks' values,
-rem lists, match and packed word are pure (task 38.10, design record 20);
-rem their executors' vectors are in the suites of the files they act in.
+rem lists, match and packed word are pure (task 38.10, design record 20),
+rem as is Q9's bounded wait for the ASMedia control byte (task 44.65);
+rem the other executors' vectors are in the suites of the files they act in.
 call :run test_quirk "test_quirk.c ..\src\xhci_quirk.c"
+rem test_dname links nothing else: the controller's \DosDevices name - the
+rem form per system, the numbers held, a probe's and a delete's status -
+rem is pure (roadmap-usb4 task 44.81).
+call :run test_dname "test_dname.c ..\src\xhci_dname.c"
 rem test_own links nothing else: who holds an endpoint's ring across an
 rem interface switch - each step's decision, the one-setting walk - is pure,
 rem and the suite drives it over a modelled controller and pool (task 38.10).
@@ -604,7 +628,8 @@ rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
-rem record 25 section 10) and the install tool's, for the record's check.
+rem record 25 section 10) and the install tool's, for the record's check,
+rem and the mark service's pure half (its self-test; task 44.52).
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_trred links the red tray icon's decision and tooltip (xhcitr\tr_red.c,
 rem task 43.57, design record 25 section 7.2.1) over XHCITR's pure half.
@@ -630,9 +655,20 @@ rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
 rem resume hold's bound (39-A.5 driver half, 39-A.8).
 call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
-rem test_cm_marks links the marks answer's table alone (task 42-A.5,
-rem design record 21 section 7.4 revision 3).
-call :run test_cm_marks "test_cm_marks.c ..\src\cm\cm_marks.c"
+rem test_cm_irq links the pure half of the interrupt a child filter gives
+rem a function hot-added behind a tunnel on 2000's Standard PC HAL
+rem (src\cm\cm_irq.c, task 44.53, design record 21 section 6.2.1): the
+rem HAL id, the swizzle, the requirements and start lists and the records'
+rem sequences; built for amd64 too (below), whose resource descriptor is
+rem larger.
+call :run test_cm_irq "test_cm_irq.c ..\src\cm\cm_irq.c"
+rem test_cm_marks links the marks answer's table (task 42-A.5, design
+rem record 21 section 7.4 revision 3) and the re-enumeration's pure half
+rem for the Removable answer's gate (design record 31 section 4.1).
+call :run test_cm_marks "test_cm_marks.c ..\src\cm\cm_marks.c ..\src\cm\cm_ports.c"
+rem test_cm_tagid links the 9x tunnel id's pure half alone (task 44.3,
+rem design record 31 section 5).
+call :run test_cm_tagid "test_cm_tagid.c ..\src\cm\cm_tagid.c"
 rem test_cm_status links the status record's builder alone (design record
 rem 24 section 3), over its own fake configuration space.
 call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"
@@ -644,6 +680,9 @@ rem modelled buses and XHCITR's reader and decoders of it (xhcitr\tr_pci.c):
 rem the bounds, the capability walk with bad lists, the decoders, 79 columns
 rem (design record 25 sections 3.6 and 4.7, revision 12).
 call :run test_trpci "test_trpci.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_qpci.c ..\xhciinst\inst_core.c"
+rem test_trdiag links XHCITR's PCI and bridge diagnostics decoders
+rem (xhcitr\tr_diag.c, task 44.62, design record 25 section 20).
+call :run test_trdiag "test_trdiag.c ..\xhcitr\tr_diag.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c"
 rem test_xhq links xhci98.sys's query answer composer (src\xhci_qry.c,
 rem design record 13 section 8.12) and XHCITR's reader of it and the texts
 rem it makes (xhcitr\tr_log.c, tr_pci.c); the shared default level.
@@ -668,12 +707,16 @@ call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_cor
 rem test_vsd_list links S98VSD.VXD's pure half (src\vsd\vsd_list.c, task
 rem 43.46, design record 30 section 9.1).
 call :run test_vsd_list "test_vsd_list.c ..\src\vsd\vsd_list.c"
+rem test_pfw links XHCIPFW.VXD's pure half (src\pfw\pfw_scan.c, task
+rem 44.49, design record 32 section 10.1).
+call :run test_pfw "test_pfw.c ..\src\pfw\pfw_scan.c ..\src\pfw\pfw_ntdec.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
 if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if not defined PROCESSOR_ARCHITEW6432 set "NORUN=1"
 call :run test_packet_amd64 "test_packet.c" amd64
 call :run test_membuf_amd64 "test_membuf.c ..\src\xhci_mem.c" amd64
+call :run test_cm_irq_amd64 "test_cm_irq.c ..\src\cm\cm_irq.c" amd64
 set "NORUN="
 goto amd64done
 

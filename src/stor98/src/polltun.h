@@ -8,10 +8,11 @@
 // Where the values come from (read once in HwFindAdapter, kept in the device
 // extension, which survives an NT resume that brings no ArgumentString):
 //   NT  DriverParameter (REG_SZ) in HKLM\System\CurrentControlSet\Services\
-//       stor98\Parameters\Device: pollmode=<n>;pollbusyus=<n>;pollidlems=<n>;
-//       pollspinus=<n> (decimal). The keys avoid every older DriverParameter
-//       key as a suffix: the parser finds a key anywhere in the string, so a
-//       name such as "pollidle=" would also set "idle=".
+//       stor98\Parameters\Device: storpollmode=<n>;storpollbusyus=<n>;
+//       storpollidlems=<n>;storpollspinus=<n> (decimal; pollmode= and the
+//       other names before xhci98 3.3.0.0 are ignored). No key may occur
+//       inside another (dpkeys.h): the parser finds a key anywhere in the
+//       string.
 //   9x  REG_SZ (decimal) or REG_DWORD values StorPollMode, StorPollBusyUs,
 //       StorPollIdleMs, StorPollSpinUs in HKLM\System\CurrentControlSet\
 //       Services\stor98, the key StorWriteThrough also uses (PLAN D3).
@@ -24,14 +25,14 @@
 #ifndef _STOR98_POLLTUN_H_
 #define _STOR98_POLLTUN_H_
 
-// PollMode (9x value StorPollMode, NT key pollmode=).
+// PollMode (9x value StorPollMode, NT key storpollmode=).
 // 0 = automatic (poll only when the OS gives the controller no
 // usable interrupt), 1 = always poll (testing; the interrupt is not used even
 // where one exists). Anything above 1 is clamped to 1.
 #define POLL_MODE_AUTO          0
 #define POLL_MODE_FORCE         1
 
-// PollBusyUs (9x value StorPollBusyUs, NT key pollbusyus=).
+// PollBusyUs (9x value StorPollBusyUs, NT key storpollbusyus=).
 // the timer period, in microseconds, while any command is issued
 // or any request is held. 0 = the default. Bounds: 1 ms (the finest period
 // the 9x port expresses; 98 SE delivered 1 ms periods on time, PLAN
@@ -44,7 +45,7 @@
 #define POLL_BUSY_US_MIN        1000
 #define POLL_BUSY_US_MAX        100000
 
-// PollIdleMs (9x value StorPollIdleMs, NT key pollidlems=).
+// PollIdleMs (9x value StorPollIdleMs, NT key storpollidlems=).
 // the timer period, in milliseconds, while nothing is issued or
 // held and nothing is unflushed. 0 = no idle polling: the timer stops when
 // idle, as it does with an interrupt, and the next request restarts it.
@@ -53,7 +54,7 @@
 #define POLL_IDLE_MS_MIN        100
 #define POLL_IDLE_MS_MAX        60000
 
-// PollSpinUs (9x value StorPollSpinUs, NT key pollspinus=).
+// PollSpinUs (9x value StorPollSpinUs, NT key storpollspinus=).
 // after HwStartIo has submitted work, poll the completion queue
 // for at most this many microseconds, in stalls of POLL_SPIN_STEP_US, so a
 // short command completes in the same callback instead of at the next tick.

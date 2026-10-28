@@ -336,7 +336,7 @@ child is issued, new SRBs are fast-failed with the terminal status of 2.2 (safe,
 never reached the device), and SRBs already issued stay held with their buffers owned. The
 driver then waits for evidence 1 (if CSTS becomes readable again) or 2, up to the **gone
 deadline**. The deadline is a tunable, measured from entering `gone`: default 5 s in every build
-(`gone=` on NT; README "Settings"), the same budget as T1-T2 in removal acceptance. Measured by
+(`storgonems=` on NT, `StorGoneMs` on 9x; README "Settings"), the same budget as T1-T2 in removal acceptance. Measured by
 G2 and G9, it is set as follows:
 
 - It is measured as **elapsed time** against a clock (TSC or the port's/VMM's system time),
@@ -747,7 +747,7 @@ the timer and interrupts active throughout (R6-5).
 | 3.1 | PnP-constrained discovery (only the supplied function); `ConfigInfo` bus/slot consistent | N4; backport |
 | 3.2 | Port/HAL interrupt routing on PnP targets; manual routing only where needed | N6; backport |
 | 3.3 | Full 64-bit BAR decoding, sizing with decode disabled | #13 |
-| 3.4 | **PCI config access only from permitted callbacks** (R4-2). NT: `ScsiPortGetBusData` only in `HwFindAdapter` and `ScsiSetRunningConfig`, `ScsiPortSetBusDataByOffset` likewise; no raw mechanism #1 (CF8/CFC) access on NT, since it cannot be serialised against the HAL's config cycles on another processor. The base reads and writes the PCI command register from `HwInitialize` (src/nvme2k.c:925); that moves to `HwFindAdapter`. 9x: per G9. Return lengths (the helpers request 256 bytes and ignore the count, src/utils.c:752, 770, 788): request only the bytes needed from offset 0; a return of 0 (no such bus) or 2 (no function; only the invalid Vendor ID is returned) is "not found" and `HwFindAdapter` returns `SP_RETURN_NOT_FOUND`; a Vendor ID of 0xFFFF is the same; a short return makes every field beyond it unavailable, and a needed field that is unavailable fails `HwFindAdapter` with `SP_RETURN_ERROR` before CC.EN is written. `ScsiPortSetBusDataByOffset` must return the requested length, and a Bus Master Enable or Command change is read back. No runtime callback reads config space for presence on NT (presence comes from MMIO; isolation from 0.10) | #10, R4-2; src/utils.c:752, 770, 788; src/nvme2k.c:925 |
+| 3.4 | **PCI config access only from permitted callbacks** (R4-2). NT: `ScsiPortGetBusData` only in `HwFindAdapter` and `ScsiSetRunningConfig`, `ScsiPortSetBusDataByOffset` likewise; no raw mechanism #1 (CF8/CFC) access on NT, since it cannot be serialised against the HAL's config cycles on another processor. The base reads and writes the PCI command register from `HwInitialize` (src/nvme2k.c:925); that moves to `HwFindAdapter`. 9x: per G9. Return lengths (the helpers request 256 bytes and ignore the count, src/utils.c:752, 770, 788): request only the bytes needed from offset 0; a return of 0 (no such bus) or 2 (no function; only the invalid Vendor ID is returned) is "not found" and `HwFindAdapter` returns `SP_RETURN_NOT_FOUND`; a Vendor ID of 0xFFFF is the same; on the NT4-ABI scan, which 9x uses (`HwContext` set), each slot's Vendor ID is probed with a 4-byte read before the header is read, and the scan walks every bus number, 0 to 255 (`src/pciscan.h`; xhci98 3.3.0.0): the base stopped after bus 15, and a firmware numbers a hot-plug port's bus range far up (the emulator's asm4242 model gives its two USB4 ports buses 19h-48h and 49h-78h), so a drive tunnelled there was never found and its devnode stayed at problem 10 (98 SE in the emulator with the asm4242 model's bus ranges, xhci98's `docs/contributing/runs/run-44.md`, "44.45"); the found path resumes through the same walk, so a find at the last slot of bus 255 ends the scan (`Again` FALSE); read on 98 SE in the emulator, the scan from bus 0 to the drive on bus 35h took about 5 ms (the debug-port stages' TSC), so the whole 0-255 walk is a few tens of milliseconds there; the scan reads other slots, as the base's did, and on 9x such a read can return garbage (G9 recorded a Vendor ID of `003E` for a function that does not exist, in `HwFindAdapter`): a probe that does so leads only to the header read, whose checked length and class check decide as before; a short return makes every field beyond it unavailable, and a needed field that is unavailable fails `HwFindAdapter` with `SP_RETURN_ERROR` before CC.EN is written. `ScsiPortSetBusDataByOffset` must return the requested length, and a Bus Master Enable or Command change is read back. No runtime callback reads config space for presence on NT (presence comes from MMIO; isolation from 0.10) | #10, R4-2; src/utils.c:752, 770, 788; src/nvme2k.c:925 |
 | 3.5 | (Moved to 0.9.) | #14, R2-10 |
 | 3.6 | Windows 9x cache-mode fallback: supported VMM memory-type call or proper TLB/cache sync | N7 |
 
@@ -842,6 +842,20 @@ first release. Sense data follows the sense rules below.
 Tests: inject a media error on the native block that an unaligned write must pre-read
 (QEMU `blkdebug` on the backing image); the write fails with 03/11/00, no write-back of that
 block is issued, other blocks are unchanged. Sense construction cases in TESTING.md.
+
+**SCSI status of a completion (xhci98 3.3.0.0, its roadmap 44.58).** `ScsiStatus` is an
+output only. HwStartIo sets it to GOOD for every SRB the port hands over, since a port does
+not always clear it (on ME an ASPI caller read a target status 05h from requests Stor98
+answers itself, which never set the byte; that the 05h was the SRB's stale byte is inferred
+from that code, and the legs of xhci98's 44.58 read the fix); a path failing with CHECK
+CONDITION sets that with its sense, except that sense for another LU is neither given as
+autosense without a usable sense buffer nor kept (only LU 0's sense is kept). At completion (`EngCompleteSrb`, and the
+answer for another target or LU in HwStartIo) every `SrbStatus` other than `ERROR` carries
+GOOD (`ScsiCompletionStatus`, src/sense.c): a success, and the port-level statuses
+(`BUSY`, `NO_DEVICE`, `SELECTION_TIMEOUT`, `ABORTED`, `BUS_RESET`, `INVALID_REQUEST`,
+`DATA_OVERRUN`, ...) for which no target status exists. An `ERROR` keeps the status its
+path set: CHECK CONDITION with the sense rules above, or GOOD (the parent error mapping's
+`ERROR` without sense). Host unit test `tests/unit/sense_ut.c` (case 10).
 
 ## 4 KiB-sector namespaces
 
@@ -980,7 +994,7 @@ isolation evidence.
   option (b).** When presence is lost and neither an acknowledged disable nor a G3
   link-down statement arrives by the gone deadline, the driver completes the held SRBs with
   the terminal device-gone status (2.2) and quarantines (never frees) driver-owned DMA
-  memory. The deadline stays a tunable (default 5 s, `gone=` on NT; README "Settings"); evidence that arrives
+  memory. The deadline stays a tunable (default 5 s, `storgonems=` on NT, `StorGoneMs` on 9x; README "Settings"); evidence that arrives
   earlier always takes precedence; the event is logged and counted. Accepted residual risk,
   as an explicit owner-accepted exception to the DMA-ownership principle: if the all-ones
   reads were not caused by a real link-down, late DMA may corrupt pages the OS has reused.
@@ -1581,7 +1595,7 @@ review loop and a 9x/NT requalification before the release.
    "Polling mode (0.4.0.0)" below.
 4. **Settings (owner decisions 2026-10-16; branch `maxxfer`).** (a) **Maximum transfer
    size setting:** 9x `StorMaxTransferKB` (REG_DWORD or decimal REG_SZ, Services\stor98),
-   NT `maxtransferkb=` in DriverParameter; 64 KiB to the build's maximum
+   NT `maxtransferkb=` in DriverParameter (`stormaxtransferkb=` since xhci98 3.3.0.0); 64 KiB to the build's maximum
    (`STOR98_MAX_TRANSFER`: 512 on 9x, 256 on NT) in multiples of 4, default the maximum.
    Anything else (out of range, off the step, not a whole decimal number, unreadable) is
    refused, the maximum stands, and the refusal is logged (debug-port stages
@@ -1652,16 +1666,18 @@ receiver and the 9x 512 KiB transfer) before its emulator legs. The design was r
 and revised.
 
 **When it polls (`HwFindAdapter`).** The adapter polls exactly when the interrupt it would
-report to the port is none, or when `StorPollMode` / `pollmode=` = 1 forces it (`PollDecide`,
+report to the port is none, or when `StorPollMode` / `storpollmode=` = 1 forces it (`PollDecide`,
 `src/polltun.h`). The reasons, in order (a natural reason is reported ahead of "forced"):
 
 1. Interrupt Pin 0: the function has no INTx, for example an MSI-only controller. No
    system in scope gives a SCSIport miniport MSI.
 2. NT 2000 and later: the port supplied no interrupt (`BusInterruptLevel` and
-   `BusInterruptVector` both 0 on entry), meaning the OS assigned no interrupt resource.
+   `BusInterruptVector` both 0 on entry), meaning the OS assigned no interrupt resource
+   (on the Windows 2000 guest read so far SCSIport failed such a start before
+   `HwFindAdapter`; finding below).
 3. Interrupt Line 0 or FFh: no IRQ routed. The base reported 0/0 to the port in this case
    and then had no interrupt at all; it now polls.
-4. `StorPollMode` / `pollmode=` = 1, for testing.
+4. `StorPollMode` / `storpollmode=` = 1, for testing.
 
 Pin and Line are read from the length-checked configuration header that `HwFindAdapter`
 reads (PLAN 3.4). A header too short to hold them counts as "configuration unreadable" and
@@ -1688,6 +1704,19 @@ accounting.
 *Finding:* with 0/0 reported, `HwInterrupt` was called 0 times on 98 SE, 2000, XP x64 and
 7 x86 (stage 0x156 never logged). Both ports start the adapter and send it I/O normally.
 
+*Finding (measured, xhci98 3.3.0.0, its run sheet "44.50"):* on the one Windows 2000
+configuration read (a QEMU q35 guest under the Standard PC HAL) reason 2 was not reached.
+A function the OS assigned no interrupt resource (a drive hot-plugged behind an
+enclosure's switch, its requirement 16 KB of memory and no IRQ) never got to
+`HwFindAdapter`: SCSIport failed the PnP start first and logged
+event 13, "The driver was configured with an incorrect interrupt" (`IO_ERR_INCORRECT_IRQ`,
+the packet's major function `IRP_MJ_PNP`, unique value 418h); the debug port shows
+`DriverEntry` and no find-adapter stage. A test image with `HwInterrupt` NULL in
+`HW_INITIALIZATION_DATA` (not kept) failed the same way, and `storpollmode=` is parsed in
+`HwFindAdapter`, so nothing in this driver changed it there. The polling mode still covers the
+cases the port passes on (forced, Pin 0, Line 0 or FFh beside an IRQ resource) and the
+9x port.
+
 **Completion paths.** There are two. Both consume the completion queues only through the
 phase bit, exactly as the ISR does; nothing in 0.10 changes.
 
@@ -1700,7 +1729,7 @@ periodic duty, in this order:
 3. the hold check and dispatch.
 
 The period is the shortest any duty wants (`LcWantedPeriod`, `PollCombine`):
-- **Work outstanding while running:** `StorPollBusyUs` / `pollbusyus=`. NT never gets less than the 10 ms
+- **Work outstanding while running:** `StorPollBusyUs` / `storpollbusyus=`. NT never gets less than the 10 ms
   fast tick (`LcPollBusyUs`), because its port rounds a timer period up to the OS clock
   tick (10-15.6 ms). A shorter request there would change nothing, and every callback
   would look late against its nominal period (see "Clock").
@@ -1710,7 +1739,7 @@ The period is the shortest any duty wants (`LcWantedPeriod`, `PollCombine`):
   deadline is measured.
 - **Unflushed writes and nothing outstanding:** the watchdog tick, for MD-7 (a)'s idle
   Flush.
-- **Idle and clean:** `StorPollIdleMs` / `pollidlems=`, or no timer when it is 0.
+- **Idle and clean:** `StorPollIdleMs` / `storpollidlems=`, or no timer when it is 0.
 - **Bring-up, the SHST wait and resets:** they keep the 10 ms fast tick.
 
 `EngTimerEnsure` shortens a request to the busy period only while work is outstanding
@@ -1718,7 +1747,7 @@ The period is the shortest any duty wants (`LcWantedPeriod`, `PollCombine`):
 without the polling mode, the cadence is main's.
 
 *`HwStartIo`.* After handling the request, `HwStartIo` polls the queues once. While
-children are issued, it then keeps polling for at most `StorPollSpinUs` / `pollspinus=`, in 10 us stalls (at
+children are issued, it then keeps polling for at most `StorPollSpinUs` / `storpollspinus=`, in 10 us stalls (at
 most 500 us, half the per-callback stall budget of 0.10). It does this only in running and
 gone, where the ISR would consume, and never inside a 9x removal transaction past its
 drain. A request completed there goes through the normal `EngCompleteSrb` and readiness
@@ -1735,9 +1764,10 @@ NT's port replaces a pending request, as documented.
 
 **Settings.** They are read once in `HwFindAdapter` and kept in the device extension, so
 an NT resume, which brings no `ArgumentString`, keeps them (0.5).
-- **NT:** `DriverParameter` keys `pollmode=`, `pollbusyus=`, `pollidlems=` and
-  `pollspinus=`. The names avoid every older key as a suffix, because the parser finds a
-  key anywhere in the string.
+- **NT:** `DriverParameter` keys `storpollmode=`, `storpollbusyus=`, `storpollidlems=`
+  and `storpollspinus=` (`pollmode=` and the others without the `stor` prefix up to
+  xhci98 3.2.0.0, ignored since). No key may occur inside another (`src/dpkeys.h`),
+  because the parser finds a key anywhere in the string.
 - **9x:** REG_SZ (decimal) or REG_DWORD values `StorPollMode`, `StorPollBusyUs`,
   `StorPollIdleMs` and `StorPollSpinUs` in `HKLM\System\CurrentControlSet\Services\stor98`
   (the key of D3's write-through value), read through VMM at every load. The legs below
@@ -1750,10 +1780,10 @@ an NT resume, which brings no `ArgumentString`, keeps them (0.5).
 
 | Value | Unit | Default | Range | 0 means | Why the bounds |
 |---|---|---|---|---|---|
-| `StorPollMode` / `pollmode=` | - | 0 | 0-1 | automatic | above 1 clamps to 1 |
-| `StorPollBusyUs` / `pollbusyus=` | us | 1000 (NT: at least the 10 ms fast tick) | 1000-100000 | the default | 1 ms is the finest period the 9x port expresses, and 98 SE delivered it on time; 100 ms is the watchdog tick, so polling is never slower than the interrupt mode's lost-interrupt check |
-| `StorPollIdleMs` / `pollidlems=` | ms | 1000 | 100-60000 | no idle polling (the timer stops as with an interrupt; the idle Flush and the CM link poll can still run it) | 60 s caps how long a removal goes unseen while idle |
-| `StorPollSpinUs` / `pollspinus=` | us | 500 on NT, 0 on 9x | 0-500 | no spin | half the 1 ms per-callback stall budget |
+| `StorPollMode` / `storpollmode=` | - | 0 | 0-1 | automatic | above 1 clamps to 1 |
+| `StorPollBusyUs` / `storpollbusyus=` | us | 1000 (NT: at least the 10 ms fast tick) | 1000-100000 | the default | 1 ms is the finest period the 9x port expresses, and 98 SE delivered it on time; 100 ms is the watchdog tick, so polling is never slower than the interrupt mode's lost-interrupt check |
+| `StorPollIdleMs` / `storpollidlems=` | ms | 1000 | 100-60000 | no idle polling (the timer stops as with an interrupt; the idle Flush and the CM link poll can still run it) | 60 s caps how long a removal goes unseen while idle |
+| `StorPollSpinUs` / `storpollspinus=` | us | 500 on NT, 0 on 9x | 0-500 | no spin | half the 1 ms per-callback stall budget |
 
 The defaults are the maintainer's, set from the measurements below (2026-10-16):
 - **Busy 1 ms:** on 98 SE, 10 ms gave about half the interrupt throughput at QD1 in the

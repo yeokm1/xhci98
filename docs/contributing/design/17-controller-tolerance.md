@@ -1701,7 +1701,10 @@ for ever on the transfers it keeps. Why it was deferred:
   unreachable configuration window alone proves nothing.
 - **The only safe evidence is a real PnP removal** - the bus driver
   reporting the function gone - **and a disable never gives one**, so no
-  proof reachable on a disable would release anything.
+  proof reachable on a disable would release anything. (Qualified on
+  2026-10-25, section 4.13.5: a removal notice alone is not enough;
+  `pci.sys` reports one on a vendor id of all ones, so the isolation
+  or reset behind a removal must itself be established.)
 
 #### 4.13.1 The problem, as read
 
@@ -1816,6 +1819,250 @@ raised on the draft:
   a `STOP`), ME in it, every target's PnP order rather than five, and the
   sequences `SURPRISE_REMOVAL` then `REMOVE` with no proof and a release, a
   cancelled query and a later stop.
+
+#### 4.13.5 The proof routes read for roadmap-usb4 task 44.33 (2026-10-25)
+
+Task 44.33 is research only, with no code. It looked for a proof route
+this section had not found, on 98 SE and 2000. The verdict above still
+stands: nothing here releases a kept transfer. One route, the parent
+bridge, is the only one left that might; it is set out last, with what a
+reopening would need.
+
+**What a route must give.** A containment pins only when the driver's
+own proof has failed (section 4.6). That proof is Bus Master Enable
+cleared and read back clear. It fails when configuration space reads all
+ones, when the read itself fails, or when the bit will not clear. So a
+route counts only if it meets three conditions:
+
+- It rests on evidence other than the reading that failed: another
+  device's, or the function's own once a validated read shows that the
+  function answers again. That a failure at containment leaves the
+  function silent for good is not established either way.
+- It gives that evidence before a class driver's teardown waits on a
+  kept transfer.
+- It keeps the controller from mastering through any later return to
+  service until HCRST has completed. This is the condition section 4.13
+  sets for D3hot.
+
+**Route 1: what Windows 2000 SP4's `pci.sys` does at the function's stop
+or remove.** Read statically from version 5.00.2195.6655
+(`legal-provenance.md` section 4):
+
+- `STOP` clears IO, Memory and Bus Master Enable (`Command & 0xFFF8`),
+  written only if the value changed and never read back. It does not
+  enter D3.
+- `REMOVE` and `SURPRISE_REMOVAL` clear the same three bits and then
+  enter D3 through the PM capability. They wait 10 ms, read PMCSR's
+  PowerState back and retry up to 100 times at 1 ms, then ignore the
+  result. Both steps are skipped when the PDO is marked not present.
+- `QUERY_REMOVE` and `QUERY_STOP` touch no hardware.
+- `START` sets Bus Master Enable before the function driver's start
+  runs.
+- The return to D0 rewrites the configuration header and puts back the
+  Command bits saved before D3. No code tests `No_Soft_Reset`.
+- At a bus rescan, a child is reported missing when its vendor id reads
+  `0xFFFF` or 0, or its identity has changed.
+- No child path touches the parent bridge.
+
+It fails on every count:
+
+- **Too late.** On 2000 a disable sends the controller `QUERY_REMOVE`,
+  which touches nothing. The PDO's `REMOVE` comes only after the
+  children's REMOVEs, and those are the requests that wait on the kept
+  transfers (section 4.13.1).
+- **No evidence.** The only read-back, PMCSR, goes through the same
+  configuration space whose failure made the pin.
+- **The restart is unsafe.** `START` sets Bus Master Enable before this
+  driver's halt and HCRST can run.
+- **"A real PnP removal" on 2000 is weaker than it sounds.** Such a
+  removal rests on a vendor id of `0xFFFF`, the reading this section
+  already found proves no isolation. After it, `pci.sys` writes nothing
+  to the device. So the removal adds nothing beyond its own trigger.
+  Whether a removal reported by another bus driver (ACPI eject, a
+  Thunderbolt connection manager) carries stronger evidence was not
+  read.
+
+**Route 2: what Windows 98 SE's `PCI.VXD` does at the devnode's stop or
+remove.** Read statically from version 4.10.2222:
+
+- `CONFIG_STOP`, `CONFIG_REMOVE` and an APM set-D3 write `Command &
+  0xFFF8` as a dword with Status 0, but only when an allocated log
+  configuration exists.
+- They read back the decode bits alone; Bus Master Enable is never read
+  back.
+- Where a PM capability exists, they then enter D3, wait 10 ms and poll
+  PowerState, returning `CR_FAILURE` on a timeout.
+- Configuration space that reads all ones gets the write sent into the
+  void and a success returned.
+- `START` and the D0 path set Bus Master Enable.
+- No child path touches the parent bridge.
+
+The order is no better than 2000's. The Windows 98 DDK's `configmg.h`
+says it in the comment above the `CONFIG_*` codes (lines 1400 to 1440 of
+`tools\win98ddk-extracted\all\INCS_DDK\INC_WIN98_CONFIGMG.H`):
+
+- `CONFIG_STOP` goes to "each devnode, branch going up".
+- `CONFIG_REMOVE` goes to "each sub tree node, doing branch going up".
+
+So the controller's own handler (NTKERN, then this driver's `STOP`) and
+its children come before the parent's enumerator. `PCI.VXD` acts last,
+after the client's wait has begun (section 4.13.1: run-36's 98 SE hang
+followed the controller's `QUERY_STOP`). This is the header's word,
+not a reading of `CONFIGMG.VXD`.
+
+**Route 3: the xHCI specification's own guarantees.**
+
+- HCRST resets the controller's "internal pipelines, timers, counters,
+  state machines". It leaves "PCI Configuration registers ... not
+  affected". And "software shall not set this bit to '1' when the
+  HCHalted (HCH) bit ... is a '0'" (xHCI 1.2c 5.4.1, USBCMD bit 1).
+- Section 4.21.2 asks that the controller be halted, HCH read 1, before
+  Bus Master Enable is cleared. It warns that clearing it on a running
+  controller may raise HCE.
+
+Both guarantees need a register window that decodes, and both need the
+halt that failed on the unproven-invalidation branch. Section 4.6
+already uses what they give: HCH on a decoding window (revision 11) and
+HCRST at a recovery or start. They add nothing on the branches that
+pin.
+
+**Route 4: an IOMMU.** These readings establish no usable route. A
+byte search for the DMA remapping table's signature `DMAR` found none
+in:
+
+- Windows 2000 SP4's eight HALs, `ntoskrnl.exe`, `ntkrnlmp.exe` or
+  `acpi.sys`;
+- Windows 98 SE's `acpi.sys`, `ntkern.vxd`, `PCI.VXD` or
+  `CONFIGMG.VXD`.
+
+`DSDT` is found in both `acpi.sys` builds, so the search sees a table
+signature compiled into these files. 98 SE's `VMM32.VXD` on the CD is
+compressed and was not searched. That is a narrow static result: no
+file read names the table. It does not exclude a signature built at run
+time, another component, another kind of remapping unit, or firmware
+that leaves one enabled, none of which was read.
+
+**Route 5: Function Level Reset.** It is a write to the function's own
+configuration space, so it can serve only once that space answers again
+(the first condition). The 8 Series PCH datasheet lists that PCH's xHCI
+function's capabilities as PCI Power Management and MSI (section 16.1,
+`PWR_CAPID` to `MSI_MCTL`), with no FLR capability. Whether AMD's,
+Thunderbolt's or ASMedia's controllers advertise FLR was not read, nor
+what a completed FLR would prove there.
+
+**Route 6: the parent bridge.** This is the only route read that meets
+the first condition without waiting for the function to answer again. It applies to a controller behind a bridge. Two
+readings of the bridge would serve; both are reads of a device whose
+configuration space did not fail:
+
+- **(b1) The bridge's own Bus Master Enable, cleared and read back
+  clear.** The 8 Series PCH datasheet says of its root ports' `PCICMD`
+  bit 2: "0 = Disable. Memory and I/O requests received at a Root Port
+  must be handled as Unsupported Requests" (19.1.3, p. 681). Once that
+  holds, a new request from below is refused, whatever state the
+  controller is in. It says nothing of writes the bridge accepted
+  before the bit cleared: that they have reached memory by the time the
+  read-back completes is not established, and a reopening must find an
+  ordering or drain guarantee before anything is released. Only a bridge whose own reading is validated
+  counts: its vendor and device id read back as expected, through the
+  paired read of section 4.13.3.
+- **(b2) The link to the controller down.** The datasheet says of the
+  root port's `LSTS` bit 13, "0 = Data Link Control and Management
+  State Machine is not in the DL_Active state" (19.1.30, p. 695). It is
+  meaningful only where Link Active Reporting Capable is set, which
+  those root ports hardwire to 1. Its reading needs no write. **It does
+  not meet the third condition alone**: it fences nothing and resets
+  nothing, and the link can come back before this driver has run HCRST.
+  It can serve only beside (b1), as further evidence.
+
+That a link not in DL_Active carries no requests from below is the PCI
+Express Base Specification's rule; it is not in `docs/references`.
+Bridges other than Intel's root ports (AMD's internal bridges,
+Thunderbolt downstream ports, PCIe switches) are not read here.
+
+Where it reaches:
+
+- `XHCIQUAL`'s readings place every Intel PCH controller read so far on
+  bus 0 at `00:14.0`: `8086:1E31`, `9CB1`, `9D2F`, `02ED`. These are
+  root-complex integrated, with no bridge above them, and this route
+  does nothing for them.
+- The controllers on other buses are behind a bridge:
+  - AMD's `1022:15B6`, `15B7` and `15B8` (`0D:00.3`, `0D:00.4`,
+    `0E:00.0`; `7B:00.3`, `7B:00.4`, `7C:00.0`);
+  - AMD's chipset `1022:43F7` (`0A:00.0`);
+  - Intel's Thunderbolt `8086:15DB` (`3B:00.0`);
+  - an ASM4242's `1B21:2426` (`79:00.0`).
+
+  (Runtime, `xhciqual/results/`, held on the maintainer's disk.)
+- A tunnelled controller lost with its tunnel is the likeliest pin of
+  all. The bridge above it stays on the host, whose link to the gone
+  device would read down.
+
+Both targets can reach the parent bridge:
+
+- **98 SE:** `PCI.VXD`'s `_PCI_Read_Config` and `_PCI_Write_Config`, the
+  services record 21 section 6.1.1 already calls.
+- **2000:** `HalGetBusData`, already imported (`hcd_ctl.c`). Writing
+  the bit would need `HalSetBusData`, which has no row.
+
+What it would cost, and what a reopening would have to settle:
+
+- **It writes a register another driver owns, with no owner for how
+  long it stays clear.** `pci.sys` and `PCI.VXD` own the bridge's
+  Command register. Routes 1 and 2 show they rewrite it at the bridge's
+  own start and D0 return, not at a child's, but nothing coordinates
+  with those writers. A reopening must cover every path that can set
+  the bit again or run the controller before HCRST:
+  - the bridge's own power transitions;
+  - a rebalance;
+  - this controller's removal and the image's unload;
+  - a replacement FDO.
+
+  Or it must prove that each such path resets the controller first.
+  Whether a driver may clear a parent bridge's Bus Master Enable at all
+  is the owner's question.
+- **It cuts off the bridge's other functions.** It stops their DMA and
+  their MSI too, which a root port with one device below it does not
+  feel. A bridge with more than one function below it would have to be
+  refused.
+- **The bit must stay clear until HCRST.** Clearing it blocks only
+  requests going up, so a later start can still reach the controller's
+  registers through the bridge's memory window. The start would have to
+  halt and reset the controller before setting the bridge's bit again,
+  while the controller's own bit is already set by `pci.sys` or
+  `PCI.VXD`. A start that cannot do that keeps the transfers, and the
+  bridge stays closed.
+- **Where it would run.** It belongs at the containment itself, in
+  `hcdContainProve` beside the controller's own bit, rather than at the
+  stop. A containment proven that way takes the proven branch and never
+  pins, so the disable never waits and section 4.13.4's teardown-ordering
+  points do not arise. A pin left from before would still need the
+  release of section 4.13.3.
+- **Its readings and legs.** For a reopening:
+  - a reading per target of how to find the parent: its bus, device and
+    function from this function's own location;
+  - whether QEMU's `pcie-root-port` honours its Bus Master Enable for
+    requests from below, and whether it models Data Link Layer Link
+    Active, so that a q35 leg can show both;
+  - a leg that closes the tunnel under a running transfer.
+
+**Recommendation.** None of the routes that need no new owner decision is
+strong enough to reopen PCR.1's code. Routes 1 to 5 prove nothing on the
+branches that pin, and the known limitation stays as the release notes
+state it.
+
+Route 6 is worth an owner's question, not code. It would be a
+narrower PCR.1: a proof through the parent bridge, taken at the
+containment, for a controller behind a bridge with nothing else below
+it. Before any design, the owner would have to answer whether this
+driver may clear a parent bridge's Bus Master Enable, (b1). Reading the
+link down, (b2), is no alternative on its own. Even with the owner's
+yes, three things are open and must be settled first:
+
+- the guarantee that writes accepted before the bit cleared have
+  drained;
+- every path that could set the bit again before HCRST;
+- the readings and legs above.
 
 ### 4.14 Controllers below xHCI 1.0: version 0.96 accepted (38.11, revision 14)
 

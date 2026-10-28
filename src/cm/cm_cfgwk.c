@@ -33,7 +33,12 @@
  * which removes the children retained at a member's last healthy walk -
  * each revalidated by the instance id recorded then, and found through the
  * CONFIGMG tree alone, never by reading a bridge header the loss may have
- * reset - before any further re-enumeration of that member.
+ * reset - before any further re-enumeration of that member. Under the
+ * USB4 profile that removal is held (Defer) until the recovery's commit
+ * proves the path behind the member closed (CmCfgwkRelease, record 21
+ * section 6.1.2, task 44.54): read on 98 SE, a removal made while the
+ * member and everything above it read all ones leaves the drive's next
+ * devnode at problem 14 until a restart.
  *
  * LIFETIME. The worker's state is its own pool block, never the NHI's
  * extension. CmCfgwkStop detaches the NHI under the worker's lock; when
@@ -79,6 +84,25 @@
  * stop, the claim and CONTROLLER_UNAVAILABLE's owed removal or no-scan
  * re-enumeration (cmWkNiGate).
  *
+ * THE TUNNEL ID (design record 31 section 5, task 44.3). Windows 98 SE
+ * and ME give no driver of this project a place on a bridge's devnode, so
+ * the id PCI\XHCI98_TUNNEL&CC_010802 that Stor98's INF matches is given
+ * here: in a window (CM_WK_MARK_MS) opened at the start for each active
+ * member, when a member becomes active, and after each of its successful
+ * Reenumerate_DevNode calls, every devnode below the member - six levels,
+ * CM_WK_WALK_NODES nodes at most, as record 28's walk - whose
+ * CompatibleIDs (Read_Registry_Value of its Enum key) carry
+ * PCI\CC_010802 and not the id gets it from Add_ID as a compatible id,
+ * a statement of where the drive sits: 98 SE and ME install Stor98 by its
+ * INF's class match, since their hardware wizard does not search again
+ * for a drive whose first search found nothing (record 31 section 5.2,
+ * owner 2026-10-25). Each devnode is dealt with once (cm_tagid.c's
+ * record, by handle and instance id), the record cleared at each
+ * re-enumeration of a member so that a devnode made again is read again.
+ * The set is an active member's descendants: the member is the port the
+ * domain verified, so on 9x the id is the verified port's by
+ * construction (record 31 section 5.1).
+ *
  * IRQL: CmCfgwkStart, CmCfgwkStop, CmCfgwkPciAsk, CmCfgwkPciTake and the
  * worker at PASSIVE_LEVEL; CmCfgwkPost and CmCfgwkOpenState at <=
  * DISPATCH_LEVEL.
@@ -91,6 +115,7 @@
 #include "cm_qryb.h"
 #include "tbt_brnum.h"
 #include "cm_noirq.h"
+#include "cm_tagid.h"
 
 #if defined(_WIN64) && defined(NO_LEGACY_DRIVERS)
 NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
@@ -169,6 +194,13 @@ typedef struct _CM_WK_NI_NODE {
     ULONG Path[CM_PORTS_PATH_MAX];
 } CM_WK_NI_NODE;
 
+/* The tunnel id's walk (cmWkTag): a node and its level. */
+typedef struct _CM_WK_TAG_NODE {
+    ULONG Node;
+    ULONG Depth;            /* 1 for the member's children                */
+} CM_WK_TAG_NODE;
+#define CM_WK_TAG_LIST      1024UL  /* a CompatibleIDs value read whole    */
+
 /* A PCI answer asked of the worker (CmCfgwkPciAsk). */
 #define CM_WK_PCI_POSTED    0UL
 #define CM_WK_PCI_DONE      1UL
@@ -227,6 +259,15 @@ typedef struct _CM_CFGWK {
                                removal-only request (CmCfgwkGone): every
                                child found then is removed, and it is
                                clean only once the bridge has none        */
+    ULONG Defer;            /* members held: their CONTROLLER_UNAVAILABLE
+                               removal, and any request merged into it,
+                               waits until the commit proves the path
+                               closed (record 21 section 6.1.2,
+                               CmCfgwkRelease)                            */
+    ULONG DeferReenum;      /* ... and the re-enumeration owed after it,
+                               dropped when the hold ends: a released
+                               member's tunnel is rebuilt, and the
+                               rebuild's own post re-enumerates it       */
     ULONG EnumBusy;         /* members with a CmCfgmgReenumerate or a
                                no-IRQ operation admitted and not yet
                                returned (cmWkEnumAdmit, cmWkNiAdmit): the
@@ -261,6 +302,17 @@ typedef struct _CM_CFGWK {
                                the worker last looked (bit per index)    */
     ULONG NiBase;           /* the no-IRQ clock's origin (tick count)     */
     CM_WK_NI_NODE NiStack[CM_WK_NI_STACK];
+    /* Design record 31 section 5: the tunnel id. TagReq under Lock (the
+     * members newly active, posted); the rest the worker thread's own. */
+    ULONG TagReq;
+    ULONG TagOpen;          /* members whose window is open (bit each)    */
+    ULONG TagFrom[XHCI_TBT_MAX_TUNNELS]; /* each window's opening, ticks */
+    ULONG TagGiven;         /* ids given since the start                  */
+    ULONG TagFailures;      /* Add_ID refused                             */
+    ULONG TagUnread;        /* lists not read whole                       */
+    CM_TAG_SEEN TagSeen;
+    CM_WK_TAG_NODE TagStack[CM_WK_NI_STACK];
+    char TagList[CM_WK_TAG_LIST + 2];
     CM_CFGMG Cfgmg;
     CM_CFGWK_COUNTERS C;
 } CM_CFGWK, *PCM_CFGWK;
@@ -1040,6 +1092,23 @@ static VOID cmWkEnumDone(PCM_CFGWK w, ULONG i)
     KeAcquireSpinLock(&w->Lock, &irql);
     w->EnumBusy &= ~(1UL << i);
     KeReleaseSpinLock(&w->Lock, irql);
+}
+
+/* Record 21 section 6.1.2: TRUE when member i's removal is held and still
+ * owed; its re-enumeration then joins the held one (DeferReenum, dropped
+ * at the release) instead of a retry. Under the lock. */
+static BOOLEAN cmWkDeferOwed(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN held;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    held = (BOOLEAN)((w->Defer & w->ReqGone & (1UL << i)) != 0);
+    if (held) {
+        w->DeferReenum |= 1UL << i;
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    return held;
 }
 
 static BOOLEAN cmWkGoneOwed(PCM_CFGWK w, ULONG i)
@@ -1856,8 +1925,27 @@ static VOID cmWkDiag(PCM_CFGWK w, ULONG bdf, PXHCI_TBT_BRNUM r, ULONG tries,
 /*
  * PCI.VXD's configuration-space route, opened once: a read of `bdf` (a
  * member, which PCI.VXD knows) through _PCI_Read_Config must equal the
- * HAL's. A refusal stands for the worker's life and is logged once.
+ * HAL's. A refusal stands for the worker's life and is logged once. A
+ * member that does not answer through the HAL (no read, all ones, no
+ * vendor, or Configuration Request Retry Status: the controller lost, as
+ * when the USB Tree asks during a loss, or not ready yet), or stops
+ * answering so before the guard's own read, gives no verdict:
+ * nothing is latched, the route stays closed and is tried again at the
+ * next need (record 21 section 6.1.2, task 44.54; read on ME, where such
+ * an attempt during a loss turned the numbering off for the boot).
  */
+/* A function's identity dword that names a function: not all ones, and a
+ * vendor neither 0, FFFFh nor 0001h (Configuration Request Retry Status:
+ * not ready yet). */
+static BOOLEAN cmWkIdAnswers(ULONG id)
+{
+    ULONG vendor;
+
+    vendor = id & 0xFFFFUL;
+    return (BOOLEAN)(id != 0xFFFFFFFFUL && vendor != 0 &&
+                     vendor != 0xFFFFUL && vendor != 0x0001UL);
+}
+
 static BOOLEAN cmWkPciRoute(PCM_CFGWK w, ULONG bdf)
 {
     ULONG id;
@@ -1868,8 +1956,16 @@ static BOOLEAN cmWkPciRoute(PCM_CFGWK w, ULONG bdf)
     if (w->PciRefused) {
         return FALSE;
     }
-    if (!cmWkCfgRead(bdf, XHCI_TBT_CFG_ID, &id) ||
-        !CmCfgmgPciOpen(&w->Cfgmg, bdf, id)) {
+    if (!cmWkCfgRead(bdf, XHCI_TBT_CFG_ID, &id) || !cmWkIdAnswers(id)) {
+        return FALSE;
+    }
+    if (!CmCfgmgPciOpen(&w->Cfgmg, bdf, id) &&
+        !cmWkIdAnswers(w->Cfgmg.PciGuard)) {
+        /* Gone or not ready between the two reads: no verdict either
+         * (the route stays closed, so nothing is written through it). */
+        return FALSE;
+    }
+    if (!w->Cfgmg.PciOpen) {
         w->PciRefused = 1;
         cmWkLog(w, "cm.brnum.9x.pci-refused", w->Cfgmg.PciGuard);
         cmWkDiag(w, bdf, NULL, 0, 2);
@@ -2024,6 +2120,8 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
  * outdated - the one exception being the Remove_SubTree, and its rescan,
  * that complete a query already accepted (cmWkRemoveChild).
  */
+static VOID cmWkTagWindow(PCM_CFGWK w, ULONG members);
+
 static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
                           ULONG gen)
 {
@@ -2154,6 +2252,12 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
          * later CONTROLLER_UNAVAILABLE. */
         cmWkRetain(w, i, bridge);
     }
+    if (cr == CMG_CR_SUCCESS) {
+        /* Record 31 section 5.1: the tunnel id's window, every devnode
+         * read again (one made anew may have an old handle). */
+        CmTagSeenInit(&w->TagSeen);
+        cmWkTagWindow(w, 1UL << i);
+    }
     /* Admitted until its bookkeeping is done: a removal-only request
      * posted after this sees the generation and the inventory it left. */
     cmWkEnumDone(w, i);
@@ -2272,6 +2376,189 @@ static BOOLEAN cmWkNiAdmit(PCM_CFGWK w, ULONG i)
     }
     KeReleaseSpinLock(&w->Lock, irql);
     return open;
+}
+
+/* ---- the tunnel id (design record 31 section 5, task 44.3) ------------ */
+
+/* Non-const: the services take them as far pointers to writable data. */
+static char cmWkTagId[] = CM_TAG_ID;
+static char cmWkTagCompat[] = "CompatibleIDs";
+/* A window opened for the members in `members` (the thread's own). */
+static VOID cmWkTagWindow(PCM_CFGWK w, ULONG members)
+{
+    ULONG i;
+
+    for (i = 0; i < w->Members; i++) {
+        if (members & (1UL << i)) {
+            w->TagOpen |= 1UL << i;
+            w->TagFrom[i] = cmWkNowTicks();
+        }
+    }
+}
+
+/* The devnode's CompatibleIDs into w->TagList: CONFIGRET, *bytes what
+ * was read; REG_SZ first, REG_BINARY where the value has that type. */
+static ULONG cmWkTagRead(PCM_CFGWK w, ULONG node, PULONG bytes,
+                         PULONG binary)
+{
+    ULONG cr;
+
+    *binary = 0;
+    *bytes = CM_WK_TAG_LIST;
+    cr = CmCfgmgReadHardwareValue(&w->Cfgmg, node, cmWkTagCompat,
+                                  CMG_REG_SZ, w->TagList, bytes);
+    if (cr == CMG_CR_WRONG_TYPE) {
+        *binary = 1;
+        *bytes = CM_WK_TAG_LIST;
+        cr = CmCfgmgReadHardwareValue(&w->Cfgmg, node, cmWkTagCompat,
+                                      CMG_REG_BINARY, w->TagList, bytes);
+    }
+    if (cr == CMG_CR_SUCCESS && *bytes > CM_WK_TAG_LIST) {
+        cr = CMG_CR_BUFFER_SMALL;
+    }
+    if (cr != CMG_CR_SUCCESS) {
+        *bytes = 0;
+    }
+    w->TagList[*bytes] = 0;
+    w->TagList[*bytes + 1] = 0;
+    return cr;
+}
+
+/* A read as one log value: CONFIGRET 31:24; bit 16 the class there, 17
+ * the id, 18 read as REG_BINARY; the bytes 15:0. */
+static ULONG cmWkTagWord(ULONG cr, ULONG bytes, ULONG binary, ULONG hasClass,
+                         ULONG hasId)
+{
+    return ((cr & 0xFFUL) << 24) | (bytes & 0xFFFFUL) | (hasClass << 16) |
+           (hasId << 17) | (binary << 18);
+}
+
+/* One devnode below an active member (record 31 sections 5.1 and 5.2). */
+static VOID cmWkTagNode(PCM_CFGWK w, ULONG node)
+{
+    ULONG cr;
+    ULONG bytes;
+    ULONG binary;
+    ULONG hash;
+    ULONG vd;
+    ULONG readOk;
+    ULONG hasClass;
+    ULONG hasId;
+    ULONG decision;
+    ULONG addCr;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    if (CmCfgmgDeviceId(&w->Cfgmg, node, text, sizeof(text)) !=
+        CMG_CR_SUCCESS) {
+        return;
+    }
+    text[CMG_MAX_DEVICE_ID_LEN] = '\0';
+    hash = cmWkIdHash(text);
+    if (CmTagSeenHas(&w->TagSeen, node, hash)) {
+        return;
+    }
+    if (!CmPortsIdVenDev(text, sizeof(text), &vd)) {
+        vd = 0;
+    }
+    if (!cmWkGo(w)) {
+        return;
+    }
+    cr = cmWkTagRead(w, node, &bytes, &binary);
+    /* A devnode with no CompatibleIDs at all reads as an empty list. */
+    readOk = (ULONG)(cr == CMG_CR_SUCCESS || cr == CMG_CR_NO_SUCH_VALUE);
+    hasClass = (ULONG)(cr == CMG_CR_SUCCESS &&
+                       CmTagListHas(w->TagList, bytes, CM_TAG_CLASS));
+    hasId = (ULONG)(cr == CMG_CR_SUCCESS &&
+                    CmTagListHas(w->TagList, bytes, CM_TAG_ID));
+    decision = CmTagDecide(readOk, hasClass, hasId);
+    /* Once a devnode, whatever the outcome: a list not read is counted
+     * and logged, not read again every tick. */
+    CmTagSeenAdd(&w->TagSeen, node, hash);
+    if (decision == CM_TAG_NOT_CLASS) {
+        return;
+    }
+    cmWkLogAddress(w, "cm.reenum.9x.id.node", node);
+    cmWkLog(w, "cm.reenum.9x.id.devid", vd);
+    cmWkLog(w, "cm.reenum.9x.id.read",
+            cmWkTagWord(cr, bytes, binary, hasClass, hasId));
+    if (decision == CM_TAG_NO_READ) {
+        w->TagUnread++;
+        cmWkLog(w, "cm.reenum.9x.id.unread", w->TagUnread);
+        return;
+    }
+    if (decision != CM_TAG_ADD || !cmWkGo(w)) {
+        return;
+    }
+    addCr = CmCfgmgAddCompatibleId(&w->Cfgmg, node, cmWkTagId);
+    cmWkLog(w, "cm.reenum.9x.id.add", addCr);
+    if (addCr == CMG_CR_SUCCESS) {
+        w->TagGiven++;
+        cmWkLog(w, "cm.reenum.9x.id.given", w->TagGiven);
+    } else {
+        w->TagFailures++;
+        cmWkLog(w, "cm.reenum.9x.id.failed", w->TagFailures);
+    }
+    if (!cmWkGo(w)) {
+        return;
+    }
+    /* What the call left in the Enum key (record 31 section 9.3 item 5). */
+    cr = cmWkTagRead(w, node, &bytes, &binary);
+    hasClass = (ULONG)(cr == CMG_CR_SUCCESS &&
+                       CmTagListHas(w->TagList, bytes, CM_TAG_CLASS));
+    hasId = (ULONG)(cr == CMG_CR_SUCCESS &&
+                    CmTagListHas(w->TagList, bytes, CM_TAG_ID));
+    cmWkLog(w, "cm.reenum.9x.id.after",
+            cmWkTagWord(cr, bytes, binary, hasClass, hasId));
+}
+
+/* Member i's descendants, six levels and CM_WK_WALK_NODES nodes at most,
+ * each one through cmWkTagNode, depth first; the member's gate
+ * (cmWkNiGate) after every call that may have blocked, as record 28's
+ * walk. A level past the stack's room is left for the next tick. */
+static VOID cmWkTag(PCM_CFGWK w, ULONG i)
+{
+    CM_WK_TAG_NODE cur;
+    ULONG bridge;
+    ULONG depth;
+    ULONG nodes;
+    ULONG child;
+    ULONG cr;
+
+    bridge = cmWkFindDevnode(w, i);
+    if (bridge == 0 || !cmWkGo(w) || !cmWkNiGate(w, i)) {
+        return;
+    }
+    depth = 0;
+    nodes = 0;
+    cur.Node = bridge;
+    cur.Depth = 0;
+    for (;;) {
+        if (cur.Depth < CM_WK_NI_DEPTH) {
+            cr = CmCfgmgChild(&w->Cfgmg, cur.Node, &child);
+            if (cr != CMG_CR_SUCCESS) {
+                child = 0;
+            }
+            while (child != 0 && depth < CM_WK_NI_STACK) {
+                w->TagStack[depth].Node = child;
+                w->TagStack[depth].Depth = cur.Depth + 1;
+                depth++;
+                if (CmCfgmgSibling(&w->Cfgmg, child, &child) !=
+                    CMG_CR_SUCCESS) {
+                    child = 0;
+                }
+            }
+        }
+        if (depth == 0 || nodes >= CM_WK_WALK_NODES || !cmWkGo(w) ||
+            !cmWkNiGate(w, i)) {
+            return;
+        }
+        cur = w->TagStack[--depth];
+        nodes++;
+        cmWkTagNode(w, cur.Node);
+        if (!cmWkGo(w) || !cmWkNiGate(w, i)) {
+            return;
+        }
+    }
 }
 
 /* The installer's record of Stor98 (rule 4): CM_NI_STOR98_*. */
@@ -3101,6 +3388,9 @@ static VOID cmWkOpen(PCM_CFGWK w)
                 cmWkRetain(w, i, w->Port[i].Devnode);
             }
         }
+        /* Record 31 section 5.1: the start baseline's tunnel id, a
+         * pre-boot tunnel's drive included. */
+        cmWkTagWindow(w, w->Active);
     }
     KeAcquireSpinLock(&w->Lock, &irql);
     w->OpenState = state;
@@ -3125,9 +3415,12 @@ static VOID cmWkThread(PVOID context)
     ULONG noScan;
     ULONG goneRc;
     ULONG goneOnly;
+    ULONG defer;
+    ULONG trivial;
     ULONG seq[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
     ULONG lostClaim;
+    ULONG tagNew;
     PCM_CFGWK_PCI pci;
     BOOLEAN clean;
     BOOLEAN only;
@@ -3170,6 +3463,8 @@ static VOID cmWkThread(PVOID context)
          * the one the worker took (its sequence) is taken again: the
          * retained set merged into the owed one. */
         w->ReqGone &= w->Active;
+        w->Defer &= w->Active;
+        w->DeferReenum &= w->Active;
         /* Record 28: a lost claim ends the member's no-IRQ state and its
          * journal (retired below, outside the lock; nothing freed). */
         lostClaim = w->NiClaimLost | (w->NiActive & ~w->Active);
@@ -3190,6 +3485,9 @@ static VOID cmWkThread(PVOID context)
              * interval; one just taken at once. */
             gone = take;
         }
+        /* Record 21 section 6.1.2: a held removal waits for the hold's
+         * end (taken below all the same, so its set is the loss's). */
+        defer = w->Defer;
         noScan = w->NoScan;
         vanish &= ~noScan;
         prune = w->PruneOwed;
@@ -3206,6 +3504,9 @@ static VOID cmWkThread(PVOID context)
         }
         pci = w->PciReq;
         w->PciReq = NULL;
+        /* Record 31 section 5.1: members newly active, still active. */
+        tagNew = w->TagReq & w->Active;
+        w->TagReq = 0;
         w->InCall = 1;
         KeReleaseSpinLock(&w->Lock, irql);
 
@@ -3257,6 +3558,21 @@ static VOID cmWkThread(PVOID context)
                 w->Port[i].TakenSeq = seq[i];
             }
         }
+        /* A held removal with nothing to remove (no child retained, no
+         * removal-only request merged) is resolved at once: no devnode is
+         * named, so no closure is owed; its held re-enumeration is
+         * dropped with it (below), but the member stays held (Defer), so
+         * any later request on it waits for CmCfgwkRelease. Any other
+         * held one waits. */
+        trivial = 0;
+        for (i = 0; i < w->Members; i++) {
+            if ((defer & gone & (1UL << i)) != 0 &&
+                w->Port[i].Gone.Count == 0 &&
+                (goneOnly & (1UL << i)) == 0) {
+                trivial |= 1UL << i;
+            }
+        }
+        gone &= ~(defer & ~trivial);
         if (go && w->OpenState == CM_CFGWK_OPEN_OK && gone != 0) {
             /* CONTROLLER_UNAVAILABLE's removals before any re-enumeration
              * of the same members (the lost connection's children before
@@ -3321,6 +3637,11 @@ static VOID cmWkThread(PVOID context)
                     if (clean) {
                         w->GoneClean |= 1UL << i;
                     }
+                    if ((trivial & (1UL << i)) != 0) {
+                        /* Record 21 section 6.1.2: nothing was named,
+                         * nothing is owed after it; the hold stands. */
+                        w->DeferReenum &= ~(1UL << i);
+                    }
                 }
                 KeReleaseSpinLock(&w->Lock, irql);
             }
@@ -3355,6 +3676,11 @@ static VOID cmWkThread(PVOID context)
                      * through its gate instead. */
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
+                    continue;
+                }
+                if (cmWkDeferOwed(w, i)) {
+                    /* Held with the removal (record 21 section 6.1.2):
+                     * no retry, no timer; dropped at the release. */
                     continue;
                 }
                 if (cmWkGoneOwed(w, i) || cmWkHeld(w, i) ||
@@ -3408,6 +3734,27 @@ static VOID cmWkThread(PVOID context)
                     w->MarkOpen = 0;
                 }
             }
+            /* Record 31 section 5: the tunnel id below each member whose
+             * window is open, once a tick. */
+            cmWkTagWindow(w, tagNew);
+            for (i = 0; i < w->Members && go; i++) {
+                if ((w->TagOpen & (1UL << i)) == 0) {
+                    continue;
+                }
+                cmWkLeave(w);
+                go = cmWkEnter(w);
+                if (!go) {
+                    break;
+                }
+                cmWkOp(w, i, cmWkGenOf(w, i));
+                if (cmWkGo(w)) {
+                    cmWkTag(w, i);
+                }
+                if (cmWkSince(w->TagFrom[i]) >= CM_WK_MARK_MS) {
+                    w->TagOpen &= ~(1UL << i);
+                }
+            }
+            cmWkOp(w, CM_WK_NO_OP, 0);
             /* Record 28: each member's no-IRQ work, once a tick. */
             for (i = 0; i < w->Members && go; i++) {
                 if (!CmNiBusy(&w->Port[i].Ni)) {
@@ -3445,7 +3792,7 @@ static VOID cmWkThread(PVOID context)
             w->MarkFrom = cmWkNowTicks();
         }
         timed = (BOOLEAN)(w->Retry != 0 || w->MarkOpen || w->PruneOwed != 0 ||
-                          w->ReqGone != 0);
+                          (w->ReqGone & ~w->Defer) != 0 || w->TagOpen != 0);
         for (i = 0; i < w->Members && !timed; i++) {
             if (CmNiBusy(&w->Port[i].Ni) ||
                 CmEjectParkedAny(w->Port[i].Bdf)) {
@@ -3565,6 +3912,9 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
     /* A claim lost, however soon regained, ends the member's no-IRQ
      * state: latched for the worker (record 28, "a lost claim"). */
     w->NiClaimLost |= w->Active & ~active;
+    /* Record 31 section 5.1: a member newly active opens its tunnel id
+     * window (a pre-boot tunnel's drive, once the member is verified). */
+    w->TagReq |= active & ~w->Active;
     w->Active = active;
     if (mark) {
         w->ReqMark = 1;
@@ -3575,18 +3925,39 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
 }
 
 static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
-                        BOOLEAN reenum);
+                        BOOLEAN reenum, BOOLEAN defer);
 
-VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active)
+VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active, BOOLEAN defer)
 {
-    cmWkGoneReq(w, active, active, TRUE);
+    cmWkGoneReq(w, active, active, TRUE, defer);
 }
 
 VOID CmCfgwkGone(PCM_CFGWK w, ULONG members, ULONG active)
 {
     /* Removal only: no re-enumeration is asked (the barrier's member is
-     * re-enumerated by the change that lifts it). */
-    cmWkGoneReq(w, members, active, FALSE);
+     * re-enumerated by the change that lifts it). On a held member it
+     * merges into the hold and waits with it (record 21 section 6.1.2). */
+    cmWkGoneReq(w, members, active, FALSE, FALSE);
+}
+
+VOID CmCfgwkRelease(PCM_CFGWK w, ULONG members)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    /* The hold on `members` ended: the worker now makes the removal. The
+     * held re-enumeration is dropped, not posted: a released member's
+     * tunnel was drained, and the rebuild's own post re-enumerates it
+     * with the rebuilt bridges numbered first (record 21 sections 6.1.1
+     * and 6.1.2) - this no-scan one, retried until the barrier lifted,
+     * could run before that post and let PCI.VXD meet them unnumbered
+     * (read on 98 SE: problem 29) - or vacant, with nothing to bring
+     * back. */
+    members &= w->Defer;
+    w->DeferReenum &= ~members;
+    w->Defer &= ~members;
+    KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&w->Lock, irql);
 }
 
 VOID CmCfgwkTakeover(PCM_CFGWK w, ULONG members)
@@ -3603,19 +3974,28 @@ VOID CmCfgwkHold(PCM_CFGWK w, ULONG members)
     KIRQL irql;
 
     KeAcquireSpinLock(&w->Lock, &irql);
+    /* Record 21 section 6.1.2: a member leaves the hold once it is past
+     * the commit, its retirement and its tunnel's rebuild (the caller
+     * holds it until then), so its next re-enumeration reads
+     * configuration space again and numbers the rebuilt bridges before
+     * PCI.VXD meets them (section 6.1.1), whichever request it is. */
+    w->NoScan &= ~(w->Hold & ~members);
     w->Hold = members;
     KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
 static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
-                        BOOLEAN reenum)
+                        BOOLEAN reenum, BOOLEAN defer)
 {
     KIRQL irql;
     ULONG i;
 
     KeAcquireSpinLock(&w->Lock, &irql);
     w->NiClaimLost |= w->Active & ~active;
+    /* Record 31 section 5.1: a member newly active opens its tunnel id
+     * window (a pre-boot tunnel's drive, once the member is verified). */
+    w->TagReq |= active & ~w->Active;
     w->Active = active;
     members &= active;
     w->ReqGone |= members;
@@ -3626,9 +4006,25 @@ static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
         }
     }
     /* The re-enumeration after the removal reads no configuration space:
-     * no vanished-child scan, here or in a coalesced earlier request. */
+     * no vanished-child scan, here or in a coalesced earlier request. A
+     * held removal keeps its re-enumeration with it until the hold ends
+     * (record 21 section 6.1.2); a request merged into a held one (the
+     * barrier's removal-only request) waits with it - only
+     * CmCfgwkRelease ends a hold. */
+    if (defer) {
+        w->Defer |= members;
+    }
+    if ((w->Defer & members) != 0) {
+        /* A re-enumeration already queued for a held member waits with
+         * the hold too. */
+        w->DeferReenum |= w->ReqReenum & w->Defer & members;
+        w->ReqReenum &= ~(w->Defer & members);
+        if (reenum) {
+            w->DeferReenum |= w->Defer & members;
+        }
+    }
     if (reenum) {
-        w->ReqReenum |= members;
+        w->ReqReenum |= members & ~w->Defer;
     } else {
         w->GoneOnly |= members;
     }

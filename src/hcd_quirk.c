@@ -317,25 +317,30 @@ static ULONG hcdQuirkConfigWrite(PHCD_CONTROLLER hc, ULONG offset,
            MP_STATUS_SUCCESS;
 }
 
+/* Q9's wait, the driver's half: one read of the control byte, FFh when
+ * the read fails. IRQL: PASSIVE_LEVEL. */
+static UCHAR hcdQuirkAsmControl(PVOID context)
+{
+    return hcdQuirkConfigByte((PHCD_CONTROLLER)context, HCD_QK_ASM_CONTROL);
+}
+
+/* The 50 us stall after a read that found the write bit set. IRQL:
+ * PASSIVE_LEVEL (the wait's). */
+static VOID hcdQuirkAsmStall(PVOID context)
+{
+    UNREFERENCED_PARAMETER(context);
+    KeStallExecutionProcessor(HCD_QK_ASM_WAIT_US);
+}
+
 /* Q9's wait for the write bit of the control byte to clear, bounded at
- * 1000 x 50 us, giving up on a read of FFh. XHCI_QK_WHY_NONE when clear.
- * IRQL: PASSIVE_LEVEL. */
+ * 1000 reads 50 us apart (XhciQuirkAsmWait, the pure loop): XHCI_QK_WHY_NONE
+ * when clear, XHCI_QK_WHY_READ_FF at a read of FFh, XHCI_QK_WHY_BUSY at the
+ * bound. IRQL: PASSIVE_LEVEL. */
 static ULONG hcdQuirkAsmWait(PHCD_CONTROLLER hc)
 {
-    UCHAR b;
-    ULONG i;
-
-    for (i = 0; i < HCD_QK_ASM_WAIT_TRIES; i++) {
-        b = hcdQuirkConfigByte(hc, HCD_QK_ASM_CONTROL);
-        if (b == 0xFF) {
-            return XHCI_QK_WHY_READ_FF;
-        }
-        if ((b & HCD_QK_ASM_WRITE_BIT) == 0) {
-            return XHCI_QK_WHY_NONE;
-        }
-        KeStallExecutionProcessor(HCD_QK_ASM_WAIT_US);
-    }
-    return XHCI_QK_WHY_BUSY;
+    return XhciQuirkAsmWait(hcdQuirkAsmControl, hcdQuirkAsmStall, hc,
+                            (UCHAR)HCD_QK_ASM_WRITE_BIT,
+                            HCD_QK_ASM_WAIT_TRIES);
 }
 
 /*

@@ -393,12 +393,13 @@ int mk_s98_inf_ok(const char *inf, const char *windir)
 }
 
 static const char *const mkS98Text[] = {
-    NULL, "disable", "install", "done", "busy", "failed", "enable", "restart"
+    NULL, "disable", "install", "done", "busy", "failed", "enable", "restart",
+    "give", "give-restart"
 };
 
 const char *mk_s98_rec_text(int state)
 {
-    if (state < MK_S98_DISABLE || state > MK_S98_RESTART) {
+    if (state < MK_S98_DISABLE || state > MK_S98_GIVE_RESTART) {
         return NULL;
     }
     return mkS98Text[state];
@@ -411,7 +412,7 @@ int mk_s98_rec_parse(const char *text)
     if (text == NULL) {
         return MK_S98_NONE;
     }
-    for (s = MK_S98_DISABLE; s <= MK_S98_RESTART; s++) {
+    for (s = MK_S98_DISABLE; s <= MK_S98_GIVE_RESTART; s++) {
         if (strcmp(text, mkS98Text[s]) == 0) {
             return s;
         }
@@ -448,12 +449,86 @@ int mk_s98_below(const int *parent, int n, int node, const int *member)
     return 0;
 }
 
+int mk_s98_os(INST_U32 major, INST_U32 minor, INST_U32 build)
+{
+    if (major == 5UL || (major == 6UL && minor <= 2UL)) {
+        return MK_S98_OS_LOW;
+    }
+    if (major == 6UL && minor == 3UL) {
+        return build < 10000UL ? MK_S98_OS_81 : MK_S98_OS_10;
+    }
+    if ((major == 6UL && minor > 3UL) || major >= 10UL) {
+        return MK_S98_OS_10;
+    }
+    return MK_S98_OS_NONE;
+}
+
+int mk_s98_os_both(int a, int b)
+{
+    return a == b ? a : MK_S98_OS_NONE;
+}
+
+int mk_s98_inbox(const char *service)
+{
+    return service != NULL && inst_eq(service, "stornvme");
+}
+
+int mk_s98_noid_why(int hasId, int portFilter, int depth)
+{
+    if (hasId) {
+        return MK_S98_ID_HAS;
+    }
+    if (portFilter < 0) {
+        return MK_S98_ID_UNKNOWN;
+    }
+    if (portFilter == 0) {
+        return MK_S98_ID_NOFILTER;
+    }
+    if (depth > MK_S98_DEPTH_MAX - 1) {
+        return MK_S98_ID_DEPTH;
+    }
+    return MK_S98_ID_EARLY;
+}
+
+const char *mk_s98_noid_text(int why)
+{
+    switch (why) {
+    case MK_S98_ID_HAS:
+        return "it carries the tunnel id; Windows put no driver or another one on it";
+    case MK_S98_ID_NOFILTER:
+        return "no id: its tunnel port carries no filter of this driver's";
+    case MK_S98_ID_DEPTH:
+        return "no id: below the filter chain's depth";
+    case MK_S98_ID_EARLY:
+        return "no id: the filter chain did not reach its first enumeration (a never-seen enclosure's bridges)";
+    case MK_S98_ID_UNKNOWN:
+        return "no id: its tunnel port's filters could not be read";
+    case MK_S98_ID_OS:
+        return "no id on Windows 8.1 and later, by design";
+    }
+    return "?";
+}
+
+int mk_s98_displaces(const MK_S98_IN *in)
+{
+    return in->Os == MK_S98_OS_81 && mk_s98_inbox(in->Service);
+}
+
 int mk_s98_wanted(const MK_S98_IN *in)
 {
+    int none;
+
     if (!in->IsPci || !in->Nvme) {
         return MK_S98_W_CLASS;
     }
-    if (!inst_s98_over_inbox(1, in->Service)) {
+    if (in->Os != MK_S98_OS_LOW && in->Os != MK_S98_OS_81) {
+        return MK_S98_W_OS;
+    }
+    if (in->Service == NULL) {
+        return MK_S98_W_SERVICE;
+    }
+    none = in->Service[0] == '\0';
+    if (!none && !mk_s98_displaces(in)) {
         return MK_S98_W_SERVICE;
     }
     if (!in->PolicyOk) {
@@ -468,7 +543,12 @@ int mk_s98_wanted(const MK_S98_IN *in)
     if (in->Protected) {
         return MK_S98_W_PROTECTED;
     }
-    if (!in->StatusOk || !in->Started || in->Problem) {
+    if (!in->StatusOk) {
+        return MK_S98_W_STATE;
+    }
+    if (none ? in->Started ||
+                   (in->Problem && in->ProblemCode == MK_S98_PROB_DISABLED)
+             : !in->Started || in->Problem) {
         return MK_S98_W_STATE;
     }
     if (!mk_s98_retry(in->Record, in->Attempts, in->SinceMs)) {
@@ -484,11 +564,13 @@ const char *mk_s98_why_text(int why)
 {
     switch (why) {
     case MK_S98_GO:
-        return "to be switched";
+        return "to be given Stor98";
     case MK_S98_W_CLASS:
         return "not a PCI NVMe controller";
     case MK_S98_W_SERVICE:
-        return "not on stornvme";
+        return "it has a driver of its own";
+    case MK_S98_W_OS:
+        return "not Windows 2000 to 8.1";
     case MK_S98_W_POLICY:
         return "no staged Stor98 named (Parameters\\Stor98Inf)";
     case MK_S98_W_WALK:
@@ -498,7 +580,8 @@ const char *mk_s98_why_text(int why)
     case MK_S98_W_PROTECTED:
         return "a protected device";
     case MK_S98_W_STATE:
-        return "not started, or with a problem";
+        return "its state does not allow it (disabled, or on stornvme and not "
+               "running)";
     case MK_S98_W_RECORD:
         return "its record allows no attempt now";
     case MK_S98_W_PENDING:
@@ -507,18 +590,53 @@ const char *mk_s98_why_text(int why)
     return "?";
 }
 
+int mk_s98_driverless(int started, int problem, INST_U32 code)
+{
+    if (started) {
+        return 0;
+    }
+    if (!problem) {
+        return 1;
+    }
+    return code == 0x01UL || code == 0x1CUL || code == 0x12UL;
+}
+
+int mk_s98_rerun_flags(INST_U32 cfg, INST_U32 *out)
+{
+    *out = cfg;
+    if ((cfg & MK_CONFIGFLAG_FAILEDINSTALL) == 0 &&
+        (cfg & MK_CONFIGFLAG_REINSTALL) != 0) {
+        return 0;
+    }
+    *out = (cfg & ~(INST_U32)MK_CONFIGFLAG_FAILEDINSTALL) |
+           MK_CONFIGFLAG_REINSTALL;
+    return 1;
+}
+
+int mk_s98_mark_sets(const MK_S98_MF *in)
+{
+    return in->Nt5 && in->PolicyOk && in->Below && in->Nvme && !in->HasId &&
+           in->Service != NULL && in->Service[0] == '\0' && !in->Declined &&
+           !in->Protected && in->StatusOk &&
+           mk_s98_driverless(in->Started, in->Problem, in->ProblemCode);
+}
+
 int mk_s98_recover(int record, int present, int disabled, int s98Started,
                    int firstPoll)
 {
     if (!present) {
         return MK_S98_R_NOTHING;
     }
+    if (record == MK_S98_GIVE) {
+        return s98Started ? MK_S98_R_DONE : MK_S98_R_FAIL;
+    }
     if (record == MK_S98_DISABLE || record == MK_S98_INSTALL ||
         record == MK_S98_ENABLE) {
         if (disabled) {
             return MK_S98_R_ENABLE;
         }
-    } else if (record != MK_S98_RESTART || !firstPoll) {
+    } else if ((record != MK_S98_RESTART && record != MK_S98_GIVE_RESTART) ||
+               !firstPoll) {
         return MK_S98_R_NOTHING;
     }
     return s98Started ? MK_S98_R_DONE : MK_S98_R_FAIL;
@@ -527,6 +645,11 @@ int mk_s98_recover(int record, int present, int disabled, int s98Started,
 /* ======================================================================== */
 /* The self-test                                                            */
 /* ======================================================================== */
+
+static int mk_s98_parse_round(const char *text)
+{
+    return strcmp(mk_s98_rec_text(mk_s98_rec_parse(text)), text) == 0;
+}
 
 static int mkFails;
 static void (*mkReport)(int ok, const char *what);
@@ -766,6 +889,11 @@ int mk_selftest(void (*report)(int ok, const char *what))
              mk_get32(c, CM_QC_O_ADDRESS) == 0x00010000UL && mk_get32(c, CM_QC_O_GEN) == 9,
              "the confirmation's layout");
     mk_check(mk_poll_ms(1) == 1000 && mk_poll_ms(0) == 10000, "the cadence");
+    /* Record 23 section 5.14: xhcicm's start type put back at each poll. */
+    mk_check(inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 0UL) &&
+             !inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 3UL) &&
+             !inst_cm_start_fix(0, INST_REG_DWORD_TYPE, 0UL),
+             "xhcicm's start type: boot set back, demand left");
 
     mk_check(mk_s98_inf_ok("C:\\WINDOWS\\INF\\oem12.inf", "C:\\Windows") &&
              mk_s98_inf_ok("c:\\windows\\inf\\OEM0.INF", "C:\\WINDOWS\\") &&
@@ -787,7 +915,9 @@ int mk_selftest(void (*report)(int ok, const char *what))
              strcmp(mk_s98_rec_text(MK_S98_FAILED), "failed") == 0 &&
              strcmp(mk_s98_rec_text(MK_S98_ENABLE), "enable") == 0 &&
              strcmp(mk_s98_rec_text(MK_S98_RESTART), "restart") == 0 &&
-             mk_s98_rec_text(MK_S98_NONE) == NULL && mk_s98_rec_text(9) == NULL,
+             mk_s98_rec_text(MK_S98_NONE) == NULL &&
+             strcmp(mk_s98_rec_text(MK_S98_GIVE_RESTART), "give-restart") == 0 &&
+             mk_s98_rec_text(MK_S98_GIVE_RESTART + 1) == NULL,
              "the switch record's texts");
     mk_check(mk_s98_rec_parse(NULL) == MK_S98_NONE &&
              mk_s98_rec_parse("install") == MK_S98_INSTALL &&
@@ -803,7 +933,9 @@ int mk_selftest(void (*report)(int ok, const char *what))
              "busy: a new arrival, or two retries 10 s apart");
     mk_check(!mk_s98_retry(MK_S98_DONE, 0, 0) && !mk_s98_retry(MK_S98_FAILED, 0, 0) &&
              !mk_s98_retry(MK_S98_DISABLE, 0, 0) && !mk_s98_retry(MK_S98_INSTALL, 0, 0) &&
-             !mk_s98_retry(MK_S98_ENABLE, 0, 0) && !mk_s98_retry(MK_S98_RESTART, 0, 0),
+             !mk_s98_retry(MK_S98_ENABLE, 0, 0) && !mk_s98_retry(MK_S98_RESTART, 0, 0) &&
+             !mk_s98_retry(MK_S98_GIVE, 0, 0) &&
+             !mk_s98_retry(MK_S98_GIVE_RESTART, 0, 0),
              "done, failed, restart and a switch's own states: never");
     {
         /* 0 root, 1 the tunnel port (a member), 2 a USP, 3 a DSP, 4 the
@@ -832,7 +964,9 @@ int mk_selftest(void (*report)(int ok, const char *what))
         s.StatusOk = 1;
         s.Started = 1;
         s.Below = 1;
-        mk_check(mk_s98_wanted(&s) == MK_S98_GO, "a tunnelled stornvme drive: switched");
+        s.Os = MK_S98_OS_81;
+        mk_check(mk_s98_wanted(&s) == MK_S98_GO && mk_s98_displaces(&s),
+                 "8.1: a tunnelled stornvme drive: the 8.1 arm");
         s.Service = "StorNVMe";
         mk_check(mk_s98_wanted(&s) == MK_S98_GO, "the service in any case");
         s.Below = 0;
@@ -845,8 +979,62 @@ int mk_selftest(void (*report)(int ok, const char *what))
         s.Service = "stornvme2";
         mk_check(mk_s98_wanted(&s) == MK_S98_W_SERVICE, "a longer name: left");
         s.Service = NULL;
-        mk_check(mk_s98_wanted(&s) == MK_S98_W_SERVICE, "no service: left");
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_SERVICE, "an unread service: left");
         s.Service = "stornvme";
+        s.Os = MK_S98_OS_LOW;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_SERVICE && !mk_s98_displaces(&s),
+                 "2000 to 8: stornvme is never displaced");
+        s.Os = MK_S98_OS_10;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_OS, "10: stornvme kept");
+        s.Os = MK_S98_OS_NONE;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_OS, "a system not told: nothing");
+        s.Service = "";
+        s.Started = 0;
+        s.Problem = 1;
+        s.ProblemCode = 28;
+        s.Os = MK_S98_OS_LOW;
+        mk_check(mk_s98_wanted(&s) == MK_S98_GO && !mk_s98_displaces(&s),
+                 "2000 to 8: no driver (Code 28): installed over nothing");
+        s.Os = MK_S98_OS_81;
+        mk_check(mk_s98_wanted(&s) == MK_S98_GO && !mk_s98_displaces(&s),
+                 "8.1: no driver: installed over nothing");
+        s.Os = MK_S98_OS_10;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_OS, "10: no driver: nothing");
+        s.Os = MK_S98_OS_LOW;
+        s.Problem = 0;
+        s.ProblemCode = 0;
+        mk_check(mk_s98_wanted(&s) == MK_S98_GO, "no driver, no problem: installed");
+        s.Problem = 1;
+        s.ProblemCode = MK_S98_PROB_DISABLED;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_STATE, "no driver, disabled: left");
+        s.ProblemCode = 28;
+        s.Started = 1;
+        s.Problem = 0;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_STATE, "no driver and started: left");
+        s.Started = 0;
+        s.Problem = 1;
+        s.Below = 0;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_TUNNEL, "no driver, internal: never");
+        s.Below = 1;
+        s.Protected = 1;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_PROTECTED, "no driver, protected: never");
+        s.Protected = 0;
+        s.InstallPending = 1;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_PENDING, "no driver, wizard open: wait");
+        s.InstallPending = 0;
+        s.Record = MK_S98_FAILED;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_RECORD, "no driver, failed once: not again");
+        s.Record = MK_S98_NONE;
+        s.PolicyOk = 0;
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_POLICY, "no driver, no Stor98Inf: nothing");
+        s.PolicyOk = 1;
+        s.Service = "stor98";
+        mk_check(mk_s98_wanted(&s) == MK_S98_W_SERVICE, "on Stor98, not started: left");
+        s.Service = "stornvme";
+        s.Os = MK_S98_OS_81;
+        s.Started = 1;
+        s.Problem = 0;
+        s.ProblemCode = 0;
         s.Nvme = 0;
         mk_check(mk_s98_wanted(&s) == MK_S98_W_CLASS, "not NVMe: not");
         s.Nvme = 1;
@@ -883,9 +1071,42 @@ int mk_selftest(void (*report)(int ok, const char *what))
         mk_check(mk_s98_wanted(&s) == MK_S98_W_PENDING, "an installation pending: wait");
         mk_check(strcmp(mk_s98_why_text(MK_S98_W_TUNNEL),
                         "not below a verified tunnel port") == 0 &&
+                 strcmp(mk_s98_why_text(MK_S98_W_OS),
+                        "not Windows 2000 to 8.1") == 0 &&
                  strcmp(mk_s98_why_text(42), "?") == 0,
                  "the reasons' texts");
     }
+    mk_check(mk_s98_os(5, 0, 2195) == MK_S98_OS_LOW &&
+             mk_s98_os(5, 1, 2600) == MK_S98_OS_LOW &&
+             mk_s98_os(5, 2, 3790) == MK_S98_OS_LOW &&
+             mk_s98_os(6, 0, 6002) == MK_S98_OS_LOW &&
+             mk_s98_os(6, 1, 7601) == MK_S98_OS_LOW &&
+             mk_s98_os(6, 2, 9200) == MK_S98_OS_LOW,
+             "the systems: 2000, XP, 2003, Vista, 7 and 8 the install over nothing");
+    mk_check(mk_s98_os(6, 3, 9600) == MK_S98_OS_81 &&
+             mk_s98_os(6, 3, 10240) == MK_S98_OS_10 &&
+             mk_s98_os(6, 4, 9841) == MK_S98_OS_10 &&
+             mk_s98_os(10, 0, 19045) == MK_S98_OS_10 &&
+             mk_s98_os(10, 0, 22000) == MK_S98_OS_10,
+             "the systems: 8.1 its own; 10 and later nothing");
+    mk_check(mk_s98_os(4, 0, 1381) == MK_S98_OS_NONE &&
+             mk_s98_os(0, 0, 0) == MK_S98_OS_NONE &&
+             mk_s98_os_both(MK_S98_OS_81, MK_S98_OS_81) == MK_S98_OS_81 &&
+             mk_s98_os_both(MK_S98_OS_LOW, MK_S98_OS_81) == MK_S98_OS_NONE,
+             "the systems: NT 4 none; two readings that disagree none");
+    mk_check(mk_s98_inbox("stornvme") && mk_s98_inbox("STORNVME") &&
+             !mk_s98_inbox("stor98") && !mk_s98_inbox("") && !mk_s98_inbox(NULL),
+             "stornvme read as the in-box driver");
+    mk_check(mk_s98_noid_why(1, 0, 9) == MK_S98_ID_HAS &&
+             mk_s98_noid_why(0, -1, 1) == MK_S98_ID_UNKNOWN &&
+             mk_s98_noid_why(0, 0, 1) == MK_S98_ID_NOFILTER &&
+             mk_s98_noid_why(0, 1, 5) == MK_S98_ID_EARLY &&
+             mk_s98_noid_why(0, 1, 6) == MK_S98_ID_DEPTH &&
+             strcmp(mk_s98_noid_text(MK_S98_ID_NOFILTER),
+                    "no id: its tunnel port carries no filter of this "
+                    "driver's") == 0 &&
+             strcmp(mk_s98_noid_text(9), "?") == 0,
+             "why the id was absent");
     mk_check(mk_s98_recover(MK_S98_DISABLE, 1, 1, 0, 0) == MK_S98_R_ENABLE &&
              mk_s98_recover(MK_S98_INSTALL, 1, 1, 1, 1) == MK_S98_R_ENABLE &&
              mk_s98_recover(MK_S98_ENABLE, 1, 1, 0, 0) == MK_S98_R_ENABLE,
@@ -897,6 +1118,17 @@ int mk_selftest(void (*report)(int ok, const char *what))
              mk_s98_recover(MK_S98_ENABLE, 1, 0, 1, 0) == MK_S98_R_DONE &&
              mk_s98_recover(MK_S98_DISABLE, 1, 0, 0, 1) == MK_S98_R_FAIL,
              "enabled: done on Stor98, failed otherwise");
+    mk_check(mk_s98_recover(MK_S98_GIVE, 1, 1, 0, 0) == MK_S98_R_FAIL &&
+             mk_s98_recover(MK_S98_GIVE, 1, 0, 1, 0) == MK_S98_R_DONE &&
+             mk_s98_recover(MK_S98_GIVE, 0, 0, 0, 1) == MK_S98_R_NOTHING &&
+             strcmp(mk_s98_rec_text(MK_S98_GIVE), "give") == 0 &&
+             mk_s98_rec_parse("give") == MK_S98_GIVE,
+             "a cut-short install over no driver: done or failed once present, never an enable");
+    mk_check(mk_s98_recover(MK_S98_GIVE_RESTART, 1, 1, 1, 0) == MK_S98_R_NOTHING &&
+             mk_s98_recover(MK_S98_GIVE_RESTART, 1, 1, 1, 1) == MK_S98_R_DONE &&
+             mk_s98_recover(MK_S98_GIVE_RESTART, 1, 0, 0, 1) == MK_S98_R_FAIL &&
+             mk_s98_parse_round("give-restart"),
+             "an install over no driver that asked for a restart: decided at the first poll, never an enable");
     mk_check(mk_s98_recover(MK_S98_RESTART, 1, 0, 1, 0) == MK_S98_R_NOTHING &&
              mk_s98_recover(MK_S98_RESTART, 1, 0, 1, 1) == MK_S98_R_DONE &&
              mk_s98_recover(MK_S98_RESTART, 1, 0, 0, 1) == MK_S98_R_FAIL &&
@@ -907,5 +1139,81 @@ int mk_selftest(void (*report)(int ok, const char *what))
              mk_s98_recover(MK_S98_FAILED, 1, 1, 0, 1) == MK_S98_R_NOTHING &&
              mk_s98_recover(MK_S98_NONE, 1, 1, 0, 1) == MK_S98_R_NOTHING,
              "done, busy, failed and no record: nothing");
+    {
+        MK_S98_MF f;
+        MK_S98_MF g;
+        INST_U32 v;
+        memset(&f, 0, sizeof(f));
+        f.Nt5 = 1;
+        f.PolicyOk = 1;
+        f.Below = 1;
+        f.Nvme = 1;
+        f.Service = "";
+        f.StatusOk = 1;
+        f.Problem = 1;
+        f.ProblemCode = 0x1CUL;
+        mk_check(mk_s98_mark_sets(&f),
+                 "the mark's restart: a plain driverless drive, failed install, set to run again");
+        g = f;
+        g.Problem = 0;
+        mk_check(mk_s98_mark_sets(&g), "not configured yet (no problem): set too");
+        g.ProblemCode = 0x01UL;
+        g.Problem = 1;
+        mk_check(mk_s98_mark_sets(&g), "problem 1: set too");
+        g.ProblemCode = 0x12UL;
+        mk_check(mk_s98_mark_sets(&g), "problem 18: set too");
+        g = f;
+        g.Service = "stor98";
+        mk_check(!mk_s98_mark_sets(&g), "a drive with a driver: never");
+        g.Service = "stornvme";
+        mk_check(!mk_s98_mark_sets(&g), "a drive on another driver: never");
+        g.Service = NULL;
+        mk_check(!mk_s98_mark_sets(&g), "a Service unread: never");
+        g = f;
+        g.Started = 1;
+        g.Problem = 0;
+        mk_check(!mk_s98_mark_sets(&g), "a started function: never");
+        g = f;
+        g.ProblemCode = MK_S98_PROB_DISABLED;
+        mk_check(!mk_s98_mark_sets(&g), "a disabled drive: never");
+        g.ProblemCode = 0x0AUL;
+        mk_check(!mk_s98_mark_sets(&g), "another problem: never");
+        g = f;
+        g.HasId = 1;
+        mk_check(!mk_s98_mark_sets(&g), "a drive with the id (offered Stor98): left");
+        g = f;
+        g.Declined = 1;
+        mk_check(!mk_s98_mark_sets(&g), "declined in this arrival: left");
+        g = f;
+        g.Nt5 = 0;
+        mk_check(!mk_s98_mark_sets(&g), "Vista and later: no step");
+        g = f;
+        g.PolicyOk = 0;
+        mk_check(!mk_s98_mark_sets(&g), "Stor98 not staged: no step");
+        g = f;
+        g.Below = 0;
+        mk_check(!mk_s98_mark_sets(&g), "not below the unit: never");
+        g = f;
+        g.Nvme = 0;
+        mk_check(!mk_s98_mark_sets(&g), "not a drive (a dock's xHCI or network function): never");
+        g = f;
+        g.Protected = 1;
+        mk_check(!mk_s98_mark_sets(&g), "a protected function: never");
+        g = f;
+        g.StatusOk = 0;
+        mk_check(!mk_s98_mark_sets(&g), "a status unread: never");
+        mk_check(mk_s98_rerun_flags(0x40UL, &v) == 1 && v == 0x20UL &&
+                 mk_s98_rerun_flags(0x440UL, &v) == 1 && v == 0x420UL &&
+                 mk_s98_rerun_flags(0x0UL, &v) == 1 && v == 0x20UL &&
+                 mk_s98_rerun_flags(0x60UL, &v) == 1 && v == 0x20UL,
+                 "the flag step: failed cleared, reinstall set, the rest kept");
+        mk_check(mk_s98_rerun_flags(0x20UL, &v) == 0 && v == 0x20UL &&
+                 mk_s98_rerun_flags(0x420UL, &v) == 0 && v == 0x420UL,
+                 "the flag step: already so, nothing written");
+        mk_check(mk_s98_driverless(0, 0, 0) && mk_s98_driverless(0, 1, 0x1CUL) &&
+                 !mk_s98_driverless(1, 0, 0) &&
+                 !mk_s98_driverless(0, 1, MK_S98_PROB_DISABLED),
+                 "the driverless states the restarts admit");
+    }
     return mkFails;
 }

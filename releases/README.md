@@ -128,7 +128,8 @@ releases/
     tools/
       xhciinst/          XHCIINST.EXE, XHCIIN64.EXE - the install tool
       xhcitr/            XHCITR.EXE, XHCITR64.EXE - the USB tree tool
-      xhcicln/           XHCICLN.EXE, XHCICL64.EXE - the cleanup tool
+      xhcicln/           XHCICLN.EXE, XHCICL64.EXE - the cleanup tool,
+                         2.4.0.0 to 3.2.0.0
       xhcisnap/          XHCISNAP.EXE with SNAPON.BAT, SNAPGET.BAT and
                          SNAPOFF.BAT - reads the driver's own log off a
                          running machine into a report for a bug report; on
@@ -171,11 +172,11 @@ way to tell is to look in it rather than here.
 
 Each tool directory is absent under its skip switch, its `NOTICE.TXT` with it:
 `tools\xhciqual\` under `-SkipQualtool`, `tools\xhcisnap\` under
-`-SkipSnapTool`, `tools\xhcicln\` under `-SkipCleanTool`, `tools\xhcitr\` under
-`-SkipTrayTool`, and `tools\xhciinst\` and `INSTALL.BAT` under
-`-SkipInstallTool`. None of them belongs in a real cut: a release cut with
-`-SkipSnapTool` publishes a driver whose read channel nobody can open, which on
-Windows 98 is the whole of what a user could have sent back.
+`-SkipSnapTool`, `tools\xhcicln\` under `-SkipCleanTool` (up to 3.2.0.0),
+`tools\xhcitr\` under `-SkipTrayTool`, and `tools\xhciinst\` and
+`INSTALL.BAT` under `-SkipInstallTool`. None of them belongs in a real cut: a
+release cut with `-SkipSnapTool` publishes a driver whose read channel nobody
+can open, which on Windows 98 is the whole of what a user could have sent back.
 
 The published files are `readme.txt`, not `README.md`. They are read on the
 target machine, in Windows 98's Notepad or DOS `EDIT`, where a `.md` file is
@@ -476,11 +477,47 @@ Read it before installing anything.
 ## Cutting a release
 
 ```
+powershell -ExecutionPolicy Bypass -File scripts\check-text.ps1
+powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree <second tree>
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -CheckOnly
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <path to xhci98-test.pfx>
 ```
 
-**Run `-CheckOnly` first, after the builds** (roadmap-usb4 task 43.9;
+**The text checks come before the builds** (roadmap-usb4 task 44.1):
+`scripts\check-text.ps1` runs in seconds every text check of the gated
+build and those of the cut that need no build (the cut's own templates and
+readme parts at 78 columns of printable ASCII, its readme template's other
+refusals, the changelog entry for the version, the draft markers of the
+release notes and the history, the shipped batches' content), and
+`build-driver.cmd` runs it as its first step, so a text failure costs no
+build. What the cut renders from a build is left to `-CheckOnly`.
+
+**The two builds run at once, in two worktrees** (roadmap-usb4 task 44.31;
+`docs\contributing\build-and-test.md`, "The cut's two builds at once").
+This tree builds x86 and makes the cut; a second worktree of the
+repository, at this tree's commit, builds amd64, and the script then
+copies its amd64 build and gated records into this tree, each record held
+to its binaries before and after the copy, so `-CheckOnly`, the cut and
+`make-package.ps1 -SignOnly` read both architectures here. Once, then
+before each cut:
+
+```
+git worktree add --detach <second tree> HEAD
+(junction each tools\ entry of this tree into the second tree's tools\)
+git -C <second tree> checkout --detach <this tree's HEAD>
+powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree <second tree>
+```
+
+It refuses unless both trees are clean at one commit and no build runs in
+either; each build has its own temporary folder and log
+(`out\cut-build-<arch>.log` in its tree). `-ImportOnly` takes builds run
+by hand (`scripts\build-driver.cmd all` here, `all -amd64` there), and
+`-Serial` runs the two one after the other. The x64 binaries' debug
+directory names the second tree's path, so give it a plain name. A cut
+from one tree, `scripts\build-driver.cmd all` and then `all -amd64`, is
+made as before.
+
+**Run `-CheckOnly` next, after the builds** (roadmap-usb4 task 43.9;
 owner, 2026-10-20, after the `3.1.0.0` cut stopped twice on text that only
 its last steps read, among them two lines past 78 columns in
 `tools\xhciinst\readme.txt`). It runs the cut's own checks of text, readmes
@@ -553,8 +590,9 @@ build (rule BOTH-VERSION in each): `scripts\inf-gate\check-inf.ps1` the two
 UAS INFs and `scripts\inf-gate\check-cm-inf.ps1` the four connection manager
 INFs; the self-tests also check the two `xhci98` INFs against each other. Five
 tools expand the header's macro - `xhciqual/qual.h`, `xhcisnap/xhcisnap.c`,
-`xhciinst/xhciinst.c`, `xhcicln/xhcicln.c` and `xhcitr/xhcitr.c` - because each
-is published inside the release directory and prints or compares its version,
+`xhciinst/xhciinst.c`, `xhcicln/xhcicln.c` (up to 3.2.0.0) and
+`xhcitr/xhcitr.c` - because each is published inside the release directory
+and prints or compares its version,
 and `make-release.ps1` throws on a staged tool older than its sources or the
 header, or on a tool source that has stopped expanding it.
 `docs/contributing/build-and-test.md`, "Versioning the driver", is the
