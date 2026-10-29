@@ -595,6 +595,10 @@ typedef struct _HCD_USB_DEVICE {
                              * them SET_INTERFACE (hcd_cfg.c)            */
     ULONG Abandoned;        /* off its port with the slot still enabled:
                              * the next powered pass disables it        */
+    ULONG ResumeRef;        /* task 45.23: the temporary pool reference
+                             * its rings are held under while kept across
+                             * a resume, before its new slot; 0 none
+                             * (hcd_enum.c); thread                      */
     ULONG HoldAsked;        /* a send-back to USB 2.0 was accepted for it
                              * (HcdHoldRequestUsb2): no PDO, Present until
                              * the hold service disconnects or refuses it */
@@ -1549,6 +1553,29 @@ typedef struct _HCD_CONTROLLER {
      * controllerStopped 0) and not yet followed by a completed HCRST
      * (XhciSlotInit): the drain waits for a proof (HcdEnumService). */
     ULONG SlotsUnproven;
+    /* Task 45.23 (design record 20 section 4.3.2): devices kept across a
+     * resume's re-initialization. ResumeInvalidating is set by the resume
+     * around XhciResumeController (hcd_power.c); XhciSlotInvalidateAll
+     * notes an invalidation it raises (ResumeSlotsInvalidated) and drops
+     * any keep owed by an earlier one; ResumeKeepReady is set once that
+     * resume succeeded - its HCRST done - and taken by the thread's
+     * invalidation (HcdEnumService). Under the power gate. ResumeKeepOn is
+     * XhciResumeKeep, read at the start (absent, or anything but a DWORD
+     * 0, is on). The counts are the snapshot's log notes. */
+    ULONG ResumeInvalidating;
+    ULONG ResumeSlotsInvalidated;
+    ULONG ResumeKeepReady;
+    /* Set with ResumeKeepReady by the resume, cleared by the thread once
+     * its pass has taken the invalidation (or by any other invalidation):
+     * the D0 waits for it before it completes, so no function driver above
+     * - started again only after its parent's D0 - submits to a device
+     * the thread has not yet kept or dropped (hcd_power.c, hcdD0Finish). */
+    volatile LONG ResumeKeepPending;
+    ULONG ResumeKeepOn;
+    ULONG ResumeKept;               /* devices restored in place          */
+    ULONG ResumeKeepRefused;        /* not kept, by XhciEnumResumeKeep    */
+    ULONG ResumeKeepFailed;         /* kept, then dropped: the restore
+                                     * failed                              */
     /* The invalidation a terminal no recovery acts on raised for itself
      * (hcd_ctl.c, hcdTerminalRelease): once per lifetime. */
     ULONG TerminalReleased;
@@ -2083,7 +2110,11 @@ typedef struct _HCD_HUB_FDO {
     /* System power (design record 13 section 10.12): the system IRP held
      * while the device IRP it asked for runs, and the work item that
      * completes it at PASSIVE_LEVEL when that IRP finished above it. One
-     * system IRP at a time - the power manager serializes them. */
+     * system IRP at a time - the power manager serializes them. One item
+     * is enough, unlike the controller's pair (hcdPowerDefer): a device
+     * D0 that overlaps the system IRP completes in its own completion
+     * routine (hcdHubD0Done), which needs no PASSIVE_LEVEL, so only the
+     * system IRP ever queues it. */
     PIRP PendingSystemIrp;
     WORK_QUEUE_ITEM PowerWork;
 } HCD_HUB_FDO, *PHCD_HUB_FDO;
@@ -2384,6 +2415,12 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
  * thread transfer too). The caller has checked dev->Location and the PDO.
  * Thread only. */
 VOID HcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* Task 45.23 (design record 20 section 4.3.2): a device kept across a
+ * resume's re-initialization, quieted with its slot gone and replayed on
+ * its new one (hcd_cfg.c). Thread only. */
+VOID HcdCfgResumeQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdCfgResumeSettle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdCfgResumeReplay(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* The shutdown latch's flush of the queued commands (37.3, record 13
  * section 5.8); returns how many it completed. IRQL: PASSIVE_LEVEL, the
  * power gate held. */

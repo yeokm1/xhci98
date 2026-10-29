@@ -62,6 +62,7 @@
 #include "cm_qryb.h"
 #include "cm_eject.h"
 #include "cm_irq.h"
+#include "cm_breq.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -436,6 +437,14 @@ typedef struct _CM_NHI {
     ULONG NiDiag[CM_NIDIAG_WORDS];
     ULONG NiDiagSeq;
     ULONG NiDiagWritten;
+    /* Design record 33 section 9.2's XhciCmBridgeReqDiag
+     * (CM_BQDIAG_WORDS), posted by the child filters' PnP dispatch under
+     * BrDiagLock (CmRegBreqPost) and written by the thread when BqDiagGen
+     * changed: the start of an attempt already recorded changes it too. */
+    ULONG BqDiag[CM_BQDIAG_WORDS];
+    ULONG BqDiagSeq;
+    ULONG BqDiagGen;
+    ULONG BqDiagWritten;
     KSPIN_LOCK BrDiagLock;  /* BrDiag and BrDiagSeq; taken inside the
                                worker's own lock, never around a call     */
 
@@ -657,6 +666,14 @@ typedef struct _CM_FILTER {
     ULONG IrqBdf;           /* the function's location as CmRegIrqWire read
                                it (XHCI_TBT_BDF, 16 bits), for the log;
                                0 before                                  */
+
+    /* ---- a bridge's requirements (design record 33, task 45.12), NT 5.x
+     * alone; the PnP dispatch's alone ---- */
+    ULONG BreqTimes;        /* lists of this bridge rewritten since the
+                               attachment                                 */
+    ULONG BreqStart;        /* a rewrite whose start is not yet seen       */
+    ULONG BreqBdf;          /* the bridge's location at that rewrite       */
+    ULONG BreqPort;         /* its tunnel port's                           */
 } CM_FILTER, *PCM_FILTER;
 
 #define CM_CHAIN_UNKNOWN    0UL
@@ -812,6 +829,11 @@ VOID CmReadValues(PCM_NHI nhi);
  * role, PASSIVE_LEVEL, and only read after. */
 extern ULONG CmIrqGate;
 VOID CmReadIrqGate(VOID);
+/* Design record 33's gate (task 45.12): the NT minor version plus one on
+ * NT 5.x (1 on 2000, 2 on XP, 3 on XP x64), else 0; read once by
+ * CmReadBreqGate in DriverEntry on the NT role, and only read after. */
+extern ULONG CmBreqGate;
+VOID CmReadBreqGate(VOID);
 
 /* cm_statos.c: CmStatusOpen in the PnP start's dispatch (the keys and the
  * first record); CmStatusPass once per thread pass; CmStatusStopped after

@@ -383,6 +383,325 @@ is that a device in use across standby or hibernate is re-enumerated, as on
 any controller without FSC today. The matching is vendor-wide for VIA
 (section 6.2).
 
+#### 4.3.1 Devices kept across a resume's re-initialization (task 45.23; draft, put to the owner)
+
+Status: draft of 2026-10-29, reviewed and revised; the owner decided
+option (a) the same day, and section 4.3.2 is what was built. Written
+from roadmap-usb4 task 45.23's reading (`runs/run-45.md`, "45.23").
+
+**The report.** A UAS flash drive behind a VIA VL805 (`1106:3483`), a
+virtual machine's disk image open on it, failed its writes after the
+machine resumed from standby ("Delayed Write Failed", Windows XP).
+
+**What the code does (the reading).** On a listed controller the suspend
+takes no save (`XhciSuspendController`, this section), and on any
+controller without Force Save Context - QEMU's included - the save is
+not restorable either, so the resume takes `XhciResumeController`'s
+re-initialization: `XhciSlotInvalidateAll` sets `SlotsInvalidated`, the
+controller thread's next pass runs `hcdInvalidate`, and `hcdDropAll`
+drains every device's URBs, reports every device PDO missing
+(`HcdDevicePdoGone`) and frees every record. The bus then enumerates each
+device afresh, as a new PDO under the same instance id where the device
+has a serial number. To the storage stack above that is a surprise
+removal and a new disk: a request in flight fails, cached writes not yet
+on the medium are lost ("Delayed Write Failed"), and every handle opened
+on the old volume - a virtual machine's disk image - fails for good,
+while a program that opens the file again finds the volume back. No
+code path keeps a device across the re-initialization: the dormant PDOs
+of design record 13 section 5.2 are kept across a controller stop, which
+PnP announces to the children first; a resume announces nothing to them.
+`xhciuas.sys` passes its power IRPs down and keeps no state of its own
+across them (`uas_fdo.c`, `UasFdoPower`). Read on q35 XP with `3.3.0.0`
+(`runs/run-45.md`): across a hibernation under a write loop, eight
+copies failed in the 4 s after the resume and the next ones passed on
+the same drive letter.
+
+**What Linux does [linux].** With `XHCI_RESET_ON_RESUME` the USB core
+does not disconnect the devices: each is reset and verified
+(`usb_reset_and_verify_device`, through the `reset_resume` path), its
+configuration and alternate settings are applied again, and the class
+driver's `reset_resume` restores what it needs; a device whose
+descriptors changed is disconnected instead. Mass storage and UAS keep
+their disks.
+
+**The proposal (K1 to K9).**
+
+- K1. Scope: the re-initialization of a resume (`XhciResumeController`,
+  the quirk's and a failed restore's), never a 35-T recovery, a stop or
+  a start, which keep today's drop.
+- K2. Proof first. `XhciSlotInvalidateAll` runs before
+  `XhciInitController` has reset anything, and the reset can fail before
+  HCRST; the thread's `SlotsUnproven` path (`HcdEnumService`, design
+  record 17 section 4.6) then contains the controller. Keeping devices
+  applies only once the re-initialization has run HCRST and the slots
+  are proven gone; an unproven invalidation keeps today's containment
+  and drop, and nothing kept may bypass it. The ordering: publication
+  to the old rings closes at the suspend, before the halt, for every
+  device - a deferred mapping (`HcdIoMapped` and the promoted transfers
+  of `HcdIoDeferred`), which today can still publish while the
+  controller is not initialized and only records that it did, finds the
+  device resuming and does not publish, but hands its URB to K4 - and
+  stays closed until K6 has rebuilt that device's rings; nothing is
+  reclaimed or rebuilt before the proof. A resume whose restore
+  succeeded (`XhciResumeController`'s restored branch, no
+  re-initialization) reopens publication at once against the preserved
+  rings, with nothing of K4 to K8 applied; the gate is new on that path
+  too, so it is read in K9's legs as well.
+- K3. What is kept: each device record on a root port or behind a hub
+  that is reported and started, with its composite group's function
+  PDOs and, for a hub, its whole subtree, marked resuming; its PDOs stay
+  listed. Its pipe objects are kept too - the pipe handles a function
+  driver holds are those objects (for streams, `hcd_cfg.c` hands out
+  `st->Pipe[id]`), so their DMA rings and endpoint contexts are rebuilt
+  under the same objects, never reallocated.
+- K4. The transfers. Today's drain completes them DEVICE_GONE, and a
+  DEVICE_GONE completion on a started PDO is parked on it until a cancel
+  or its removal (`hcd_io.c`, `HcdIoPark`), which a kept PDO never
+  reaches; so a kept device takes another route. A URB counts as exposed
+  when any part of it was ever published to the controller over its
+  lifetime - not by what its ring holds at the suspend: `HcdIoDeferred`
+  can have finished one piece and be mapping the next. An exposed URB
+  cannot continue after the device's reset, which ends the device-side
+  command: it is completed with a transport error (as a transfer the
+  controller ended with an error) as soon as the device is known kept,
+  before the restore, and never replayed. On a storage interface (class
+  08) the command spans several URBs - a Bulk-Only CBW, its data and its
+  CSW, a UAS command and its streams - and a phase never published can
+  belong to a command whose CBW the device took before the sleep; so
+  every URB of a storage interface outstanding at the reset, exposed or
+  not, is completed with that transport error, and the class driver's
+  own recovery (K8, and `usbstor`'s reset of its pipes) starts its
+  commands again after the restore. No age is inferred per URB: a
+  storage interface with a URB outstanding at the reset is quarantined
+  from the reset, and every URB on it
+  - a late phase of a command the reset ended, or a new command whose
+  status and data URBs UAS posts before its command IU (`uasPump`) - is
+  completed with the same transport error, never published, until the
+  function driver asks for the recovery it already asks for after a
+  transport error: for UAS the port reset of K8, for Bulk-Only the
+  class's Bulk-Only Mass Storage Reset, the request that begins the
+  class's reset recovery - never a RESET_PIPE alone, which a function
+  driver may send inside a command before asking for its CSW. That
+  request is held until K6 ends, then served, and it ends the
+  quarantine: what the driver sends after it is new. That each
+  `usbstor` this bus serves (NUSB's on 98 SE, ME's, 2000's to 7's)
+  sends that reset after a transport error is read before the code, and
+  a driver that does not is not kept. A function driver that retries
+  without such a request meets the quarantine until its own retry
+  limit, or until K7's bound, which then drops the device. No URB
+  outstanding does not prove no command outstanding: a Bulk-Only command
+  can sit between its finished CBW and its data or CSW. So an interface
+  with nothing outstanding at the reset is taken as idle, with no
+  quarantine and its next URB a new command, only where the stack above
+  is read to finish every command before its D3 - each `usbstor` this
+  bus serves and `xhciuas.sys`, read before the code; on a stack not so
+  read the storage device is not kept, and takes K7. An idle disk so
+  kept stays kept however long it stays idle. On any
+  other interface a URB never
+  exposed, and one submitted while the device is resuming, is held on
+  its pipe and submitted after the restore (K6), or completed
+  DEVICE_GONE where K7 drops the device. A cancel or an abort-pipe
+  during the hold completes the held URBs as either does today.
+- K5. The re-enumeration, in tier order (a hub before what is behind
+  it): port reset, Enable Slot, Address Device, the device descriptor
+  and the whole configuration descriptor read and compared with the
+  record's - the fields `hcdDormantSame` compares (device descriptor,
+  filtered configuration, speed, the transport decision) and the serial
+  string where one was read - on the same port behind the same parent.
+  A device with no usable serial number cannot be told from another of
+  the same model put on that port while the machine slept, and a storage
+  device's queued and cached writes would then reach the other medium:
+  such a storage device (class 08) is never kept and takes K7; another
+  class without a serial number is kept on the descriptors and the
+  place alone, a twin's risk the record names.
+- K6. The restore, on an equal device: Set Configuration with the
+  record's `ConfigValue`, Set Interface for each interface whose
+  alternate is not 0, Configure Endpoint for the kept pipes' endpoints
+  (each at sequence 0 on both sides, as after any Configure Endpoint),
+  the kept stream blocks given new rings and stream contexts at their
+  counts, and a hub's hub descriptor read and its ports powered before
+  its children. The reset also cleared the device's remote-wake and
+  function-suspend settings: the selective suspend's armed state is
+  cleared with it (record 14; `hcdSuspSsArm` skips a function it thinks
+  armed), a pending WAIT_WAKE stays pending and is armed again only
+  through the selective suspend's own path, and a device that was in D2
+  at the sleep is restored, then suspended again through that path; a
+  D0 asked during the restore waits for its end as a held URB does.
+- K7. Not equal, a read or command failed, the port is empty, or the
+  hold's or the quarantine's bound (`HCD_TRANSFER_WAIT_MS` per device;
+  for the quarantine, from the first URB it failed after the restore's
+  end) passed: that device
+  takes today's drop - with its subtree for a hub and its whole PDO group
+  for a composite device, as today's teardown takes them - and the held
+  URBs complete DEVICE_GONE; unrelated devices stay kept.
+- K8. `xhciuas.sys`: a UAS command whose transfer K4 failed takes the
+  driver's existing recovery - `uasXferDone` marks the transport failure
+  and asks for recovery, `uasResetDevice` cancels the transfers, waits
+  for the tags to be free and asks the bus for RESET_PORT - which must
+  wait for the restore's end (the RESET_PORT is held as a URB is) and
+  then resets a device K6 has just configured; tags are free once that
+  recovery has run, and new commands start after it. The class driver
+  above retries the failed command. Whether that second reset is needed
+  at all after K5's, or the recovery should be told the bus already
+  reset the device, is decided in the design round that builds this.
+- K9. A switch, `XhciResumeKeep` (0 drop as today, 1 keep), default to
+  be decided; counters for kept, dropped by K7, transfers failed by K4
+  and the hold's longest wait; the snapshot names them. Legs: q35
+  hibernation on 2000, XP and 7 and standby and hibernation on ME, each
+  with a UAS drive and a Bulk-Only drive under a write loop whose every
+  pass is compared byte for byte after the resume, a file held open
+  across the sleep, a HID device and a hub; then each new branch: a
+  serial-less drive of the same model swapped on its port while asleep
+  (K5: dropped, its writes not on the swapped medium), a D2 device with
+  a WAIT_WAKE pending and a D0 arriving during the restore (K6), a
+  cancel and a pipe abort during the hold (K4), a resume whose save
+  restored (K2's gate reopened on the restored path), storage requests
+  arriving during the restore and a fresh UAS command posting its status
+  and data URBs before its command IU, before and after the recovery's
+  port reset (K4's quarantine), an idle drive left untouched past the
+  bound after the resume and then written through a handle opened before
+  the sleep (no quarantine), a sleep entered with a Bulk-Only command
+  between its CBW and its data and no URB outstanding (the drain
+  contract's own reading), a mapping deferred
+  across the suspend's closing of publication and a Bulk-Only command
+  whose CBW was sent before the sleep with its data or CSW not (K2,
+  K4), a restore failed by a
+  device unplugged while asleep and a hold that reaches its bound (K7).
+  The real VL805 is 45-E.12.
+
+**Cost and risk.** K5 and K6 are a second enumeration path beside the state
+machine of record 13 section 5.3, sharing its commands but restoring a
+configuration a function driver chose; they are the larger part. A device
+that answers the same descriptors but lost internal state the class
+driver relies on (a UAS device mid-command at the sleep, an audio
+device's sample rate) is the case Linux handles in each driver's
+`reset_resume`; here K8 covers UAS storage only and every other class
+re-selects nothing, so audio and other classes that set state with a
+class request would come back with the device's defaults.
+
+**Options for the owner.** (a) build K1 to K9 in Phase 45 (a design
+round, the code, the legs of K9); (b) record it as a planned item for the
+next release and meanwhile publish the limitation in the release notes'
+"Known limitations" with the workaround "close what is open on a USB
+drive before standby"; (c) as (b), and also ask the reporter to try
+`XhciResumeReinit` 0, which takes the save and restore on the VL805 at
+the user's own risk (Linux does not, so that restore is unread there).
+Recommendation: (b), with the reporter's (c) as an experiment. It can
+show only that the VL805 restores in the reporter's workload - counted
+by the snapshot's restore counters, not by the absence of a failure -
+and a save that fails (no FSC, a transfer outstanding, a spoiled image)
+still takes the re-initialization, so a positive answer narrows the
+report and does not remove the need for (a) on every controller without
+a usable save.
+
+#### 4.3.2 As built (task 45.23, 2026-10-29)
+
+The owner decided (a) on 2026-10-29: K1 to K9 are built in `3.4.0.0`.
+What is built is the subset of K1 to K9 that keeps the device the report
+was about - a device on a root port, a UAS drive among them - and takes
+today's drop (K7) for every case the subset does not cover, so nothing
+outside it changes:
+
+- The switch, `XhciResumeKeep` (`hcd_ctl.c`): absent, or anything but a
+  DWORD 0, is on; no INF writes it, as `XhciUsb2Bos`. Log notes
+  `resume.keep.on` at each start, `resume.keep.port` (the root port and
+  its decision) and `resume.keep` (kept, failed and refused, a byte
+  each) at each resume that re-initialized.
+- K1 and K2: `hcdResume` (`hcd_power.c`) marks the invalidation its
+  `XhciResumeController` raises (`XhciSlotInvalidateAll`, `hcd_dev.c`)
+  and arms the keep only once that resume returned success, its HCRST
+  done; any other invalidation disarms it, and the thread takes it at
+  most once (`HcdEnumService`). An unproven invalidation keeps today's
+  containment: the keep runs only where `hcdInvalidate` would have. K2's
+  other half - publication closed from the suspend's halt until the
+  restore - is not built: the pipes are paused at the thread's pass after
+  the re-initialization (`HcdCfgResumeQuiet`), and a deferred mapping can
+  still publish while the controller is not initialized, as before this
+  change; whatever it published is completed with the transport error at
+  the quiet.
+- The decision is pure, `XhciEnumResumeKeep` (`xhci_enum.c`, host
+  vectors in `test_enum`): the switch off, a device that is gone or owes
+  a fault's cycle, a send-back or a slot fault, a device behind a hub, a
+  hub (and so its subtree), a PDO not started or removed, a device whose
+  selective suspend is not active or that has a wake armed or pending
+  (K6's D2 and WAIT_WAKE cases), an isochronous pipe open, and storage
+  that is not one interface on UAS (`xhciuas.sys`), has no serial number
+  taken as its instance id, or has a URB outstanding on its PDOs, each
+  take K7. A HID device with its poll outstanding is kept.
+- K3 and K4 (`hcdResumeInvalidate`, `hcd_enum.c`; `HcdCfgResumeQuiet`,
+  `hcd_cfg.c`): a kept device stays on its port with its PDOs listed and
+  its record and pipe objects whole; it leaves `SlotDevice[]` and its
+  slot id is 0, so no command names the slot HCRST took; every pipe is
+  paused and everything it held - published or only waiting - completes
+  with `USBD_STATUS_DEV_NOT_RESPONDING`, never replayed (stricter than K4,
+  which held the unpublished ones: an idle storage interface has none,
+  and a HID poll is reissued by its driver), and the closed pipes and
+  retired blocks HCRST released are freed. Its pool rings, freed by the
+  re-initialization's `XhciPoolInit`, are claimed back before any device
+  is restored, under a temporary reference above every slot id
+  (`XhciPoolClaim`, `xhci_mem.c`, host vectors in `test_membuf`). Every
+  other device is drained and dropped as `hcdDropAll` drops it.
+- K5 and K6 (`hcdRkeepRestore`): the link awaited up to 1 s (a
+  SuperSpeed link trains by itself after HCRST), the port reset and its
+  speed compared, Enable Slot, the record put on the new slot and its
+  rings moved to it (`XhciPoolRehome`), Address Device at its EP0 size
+  (the port's change bits are acknowledged once, right after the reset
+  and before Enable Slot);
+  the SuperSpeed link rank, the device descriptor, the whole
+  configuration descriptor and - where one was taken - the serial number
+  compared; then `HcdCfgResumeReplay`: each pipe's pool ring laid again
+  (the re-initialization zeroed the carve it is in), each stream ring
+  restarted at its base, one Configure Endpoint for every open endpoint,
+  SET_CONFIGURATION and the nonzero alternates, each endpoint's sequence
+  and halt records cleared, the pipes resumed - RESET_PORT's replay,
+  which is now shared code (`hcdCfgReplayConfig`, `hcdCfgReplayResume`);
+  last, the port read again: not connected or not enabled, or a
+  connection or enable change since the acknowledgement, fails the
+  restore (K7), and the change is left for the port's inspection.
+  The selective suspend's state is not touched: only a device with none
+  armed is kept.
+- K7 (`hcdRkeepDrop`): any failure drops that device alone, through the
+  teardown every departure takes - a new slot the restore enabled goes
+  through Disable Slot, and when the controller refuses it (a halted one
+  does) the record stays quarantined in `SlotDevice[]`, freed only by a
+  later Disable Slot or a proven reset, as any departure's - and the
+  port's next inspection enumerates what is there. A command that fails
+  asks for the controller reset; what is left is the invalidation's of
+  that reset if one runs, and a recovery refused leaves it quarantined.
+- The D0 waits for the keep (`hcdResumeKeepWait`, `hcd_power.c`): the
+  D0 of a resume that armed a keep polls, outside the power gate and
+  bounded at 15 s, until the thread's pass has kept or dropped the
+  devices, so the function drivers above - powered only after their
+  parent's D0 - do not submit to a device left between the two (the XP
+  leg's first reading, `runs/run-45.md`, "45.23"); log note
+  `resume.keep.d0wait`. Past the bound the D0 completes all the same, and
+  what the function drivers then send to a device the pass has not yet
+  kept or dropped goes as it did before this change.
+- K8 needs no change in `xhciuas.sys`: a UAS drive is kept only with no
+  URB pending on its PDOs when the thread's pass looks (`UrbsPending`, the
+  count the check reads), and its stream handles are the kept pipes'.
+  That count is not a reading of `xhciuas.sys`'s command state at the
+  power-down; it shows a command in flight because `xhciuas.sys` posts a
+  command's status URB before its command IU and keeps it until the
+  command ends (`uas_xport.c`, `uasPump`). A Bulk-Only drive is not kept until the
+  drain contract of each `usbstor` is read (K4).
+- Read on q35 XP (`runs/run-45.md`, "45.23"): a UAS drive idle at the
+  hibernation, a file held open on it and written every second, is
+  restored in place and the file goes on growing with no error; the
+  same drive under a copy loop had three URBs pending on its PDO when the
+  resume's pass looked (the count alone: which URBs, and whether they
+  were there at the power-down, was not read), is dropped as K4 says, and
+  XP reports "Delayed Write Failed" as before. Whether
+  `xhciuas.sys` should wait out its commands before it passes a
+  power-down on, so that a busy drive is idle by the sleep, is left open.
+- Not built, and dropped as before: devices behind a hub and hubs (K3's
+  subtree restore), isochronous devices, a selectively suspended device's
+  restore and re-suspension (K6), the quarantine of a busy storage
+  interface (K4), and the counters in the snapshot's counter block (K9;
+  the log notes carry them).
+
+The legs read are `runs/run-45.md`, "45.23".
+
 ### 4.4 Q4, `XhciIntelShutdownToEhci` (`XHCI_SPURIOUS_REBOOT`)
 
 Linux writes both routing registers (`USB3_PSSEN` D8h, `XUSB2PR` D0h) to 0
@@ -1359,7 +1678,7 @@ so no static or runtime tag applies and no `legal-provenance.md` row is
 owed. xHCI facts: xHCI 1.2c as `docs/references/README.md` pins it, by
 page. Driver facts: read from `src` on `phase-38`, by file and function.
 Project machines and their ids: `docs/contributing/runs/run-35.md` (E460
-9D2F, P14s Gen 1 02ED, B490 1E31, the AM5 CSM board) and `run-36.md` (E7250
+9D2F, P14s Gen 1 02ED, B490 1E31, a desktop CSM board) and `run-36.md` (E7250
 9CB1); the VL805: issue 13. The standing column of section 3.0: the owner's
 rulings and the readings named in it, nothing else.
 

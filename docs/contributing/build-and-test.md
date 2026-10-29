@@ -184,7 +184,7 @@ Run all setup helpers (both target VMs):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-all.ps1 `
-  -Win98Iso D:\isos\Win98SE.iso -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
+  -Win98Iso <iso folder>\Win98SE.iso -Win2KIso <iso folder>\win2ksp4.ISO -CreateDisk
 ```
 
 Or run only one component:
@@ -192,8 +192,8 @@ Or run only one component:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-msvc6.ps1
 powershell -ExecutionPolicy Bypass -File scripts\setup-w2kddk.ps1
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu.ps1 -Win98Iso D:\isos\Win98SE.iso -CreateDisk
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu.ps1 -Win98Iso <iso folder>\Win98SE.iso -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 -Win2KIso <iso folder>\win2ksp4.ISO -CreateDisk
 ```
 
 Setup scripts:
@@ -206,7 +206,7 @@ Setup scripts:
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
 | `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers `src\`, `test\`, `scripts\`, `xhcisnap\` and `xhciqual\` through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `scripts\check-text.ps1`, the first step of `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
-| `scripts\check-readme-text.ps1` | Holds the four tool readmes `make-release.ps1` publishes (`xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50; `xhcicln` was a fifth until the tool was dropped in `3.3.0.0`, task 44.82) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut embeds it in the top-level `readme.txt` (`Get-HistoryEmbedLines` and `ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `scripts\check-text.ps1` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text, which `check-text.ps1` reads from its templates. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
+| `scripts\check-readme-text.ps1` | Holds the four tool readmes `make-release.ps1` publishes (`xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50; `xhcicln` was a fifth until the tool was dropped in `3.3.0.0`, task 44.82) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut renders an entry of it in the top-level `readme.txt` (`ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it; every entry, though since roadmap-usb4 task 45.29 the readme carries the version's own entry alone, `Get-HistoryEntryLines`, and a one-line list of the earlier releases, `Get-HistoryEarlierText`) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `scripts\check-text.ps1` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text, which `check-text.ps1` reads from its templates. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
 | `scripts\check-text.ps1` | Every text check of the gated build and of the release cut, run as `build-driver.cmd`'s first step so a text failure costs no build, and on its own in seconds (roadmap-usb4 task 44.1; the `3.2.0.0` builds of 2026-10-24 stopped twice on a line past 78 columns). It runs the build's three, each its own script: `xhciqual\test\check-bat-eol.ps1`, `check-source-charset.ps1` and `check-readme-text.ps1`. Then it runs the cut's checks that need no build, from the cut's own code. It reads `make-release.ps1`'s syntax tree for every text the cut publishes from a template: each here-string assigned to a variable (the readme template and its parts, the qualifier's readme, each tool's readme footer and `NOTICE.TXT`), and each line added to the readme's file list (`$contents`, a paragraph wrapped with `Format-Wrapped` included) or to an incomplete cut's list (`$missingTools`). Each line is held to 78 columns of printable ASCII. Placeholders take the width the cut gives them (`{VERSION}` from `src\xhci_version.h`, the directory names of a two-architecture cut), or nothing where the cut puts a block of its own. Expansions and format items count as nothing, or as their alignment's width, so the width is a lower bound. A placeholder that no `Replace()` on that same text substitutes is a fault, and so are a `TODO(...)` or `TBD` and a claim of `package-common.ps1`'s `$script:ReadmeForbiddenPhrases` in any of them. The readme template is also held to the cut's rules on a version written by hand and on the snapshot schema (`$allowedTemplateVersions`, `Get-SnapSchema` and `Find-DraftMarkers`, read from `make-release.ps1`). It renders `package-common.ps1`'s download readme parts for every download of every set, with and without the driver pack. It requires the changelog entry for the tree's version, one `releases\history.md` heading dated as the INF (`Get-ChangelogEntryFaults`, which the cut calls too), so a version bump carries its entry's heading from the start. It finds draft markers in the release notes and the history. And it holds the shipped silent-install batches, `SILENT.REG`, the port switchover's two batches and `portsw.vbs`, and the field report batches to `package-common.ps1`'s content checks. The cut's checks that two sources agree on a number (XHCITR's snapshot schema against the driver's, each tool's shared version macro) are not text and stay the cut's. So `make-release.ps1` keeps one shape: an error message is thrown or passed to `Stop-CutCheck` as written, never assigned, because an assigned here-string is read as published text. It does not check what the cut renders from a build or a pin: the sizes and hashes in the readme's file list, a `NOTICE.TXT`'s linker copyright lines, the driver pack's texts and the release notes' Stor98 declaration. Those are `make-release.ps1`'s, and `-CheckOnly`'s before it. Every check runs and every fault is listed; exit 1 if any. `-SelfTest` drives the readers and rules over a stand-in cut script and stand-in trees, and runs `check-readme-text.ps1 -SelfTest` |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
 | `scripts\test-qemu-launchers.ps1` | Generates all eleven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP, Windows XP x64, Windows Vista, Windows 7, and - since roadmap task 21.8's generators were written on 2026-09-10 - Windows Vista x64 and Windows 7 x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that each of the four 6.x generators and the XP x64 one refuses `pentium3` **and names the feature that guest is missing** - long mode for the three 64-bit guests, the NX bit for the two 32-bit 6.x ones, so that nobody "fixes" a 64-bit refusal by reaching for a model with NX and no long mode - that no two launchers share a QEMU monitor port, that task 21.8's two guests still hold 55563 and 55564 (the assertion that replaced the one holding those ports for guests which did not exist yet), and that every launcher's run-time QEMU resolver announces which rung answered. Those last four read the preamble's **real output** rather than its source, because an `echo` that does not survive `cmd`'s parsing is worth nothing; run by `build-driver.cmd` |
@@ -221,7 +221,8 @@ Setup scripts:
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
 | `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under. `-TestSignPfx <pfx> -SignOnly` test-signs the binaries a gated `build-driver.cmd` run recorded in `out\gated-<arch>-<flavour>.txt` without running its host suite and import gates again ("Since 2.3.0.0 the x64 package is test-signed") |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
-| `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" below |
+| `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`; by default `<this tree>-x64`, made or brought to this tree's HEAD by the script, task 45.3), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" and "A faster gated build" below |
+| `scripts\build-steps.ps1` | The checks of a gated build that need no DDK, run at once as separate processes, each with its own `TEMP` and log under `out\steps-<arch>\`, at most `XHCI98_BUILD_STEPS` at a time (default 4), each step's output printed whole when it ends and a table of results and times after them; `-SelfTest` on stand-in steps. Run by `build-driver.cmd` after its text checks. Roadmap-usb4 task 45.3; "A faster gated build" below |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
 
 The Phase 2d SMP Win2000 VM has its own script and is not part of
@@ -1556,7 +1557,7 @@ controller-free preparation launcher:
 7z e win2ksp4.ISO -o<dir> I386\USBD.SY_
 expand <dir>\USBD.SY_ <dir>\USBD.SYS        (5.00.2195.6658, 20688 bytes)
 powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 \
-  -Win2KIso D:\isos\win2ksp4.ISO -Win2KUsbdSys <dir>\USBD.SYS
+  -Win2KIso <iso folder>\win2ksp4.ISO -Win2KUsbdSys <dir>\USBD.SYS
 scripts\local\qemu-win2k-prepare-usbd.cmd
 copy X:\USBD.SYS C:\WINNT\system32\drivers\ (in the guest; X: = QEMU VVFAT)
 ```
@@ -1694,7 +1695,7 @@ The recipe, `scripts\setup-qemu-win2k-xonly.ps1` and the two launchers it
 writes:
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-xonly.ps1 -Win2KIso D:\isos\win2ksp4-retail.ISO -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-xonly.ps1 -Win2KIso <iso folder>\win2ksp4-retail.ISO -CreateDisk
 scripts\local\qemu-win2k-xonly-install.cmd        (the owner drives Setup; retail media asks for the key)
     on the desktop, before any controller exists:  dir %windir%\system32\drivers\usb*.sys
     shut down from the Start menu; quit at the monitor (port 55560) once "safe to turn off" is up
@@ -2408,7 +2409,7 @@ guest shut down from inside and the image cold - `qemu-img check` reported no
 errors first, and the snapshot lists with `VM_SIZE` 0 B, which is what a
 powered-off snapshot should read. Revert with `qemu-img snapshot -a
 winxp64-clean-install vm\winxp64.img`, guest off. Media
-`D:\isos\Win XP SP2 VL x64.iso`
+`<iso folder>\Win XP SP2 VL x64.iso`
 (628,168,704 bytes), the owner's own XP x64 SP2 media, which is also where
 `tools\winxp64-extracted\` came from. WHPX with `kernel-irqchip=off` probed OK
 on this host as a partition - and then wedged the guest, which is how the TCG
@@ -2459,7 +2460,7 @@ difference belongs in a parameter, never in a second copy of the body.
 
 | | value |
 |---|---|
-| Media | `D:\isos\en_windows_vista_sp2_x86_dvd_342266.iso` (Vista SP2 x86, Business is image 1 of seven) and `D:\isos\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso` (Windows 7 SP1 x86 VL, Professional, one image) - **the same media tasks 22.1 and 22.2 read their measurements out of** on 2026-09-09, so the stack a guest installs is the stack that was measured. `usbport.sys` is byte-identical across Vista editions, so that does not rest on the edition alone |
+| Media | `<iso folder>\en_windows_vista_sp2_x86_dvd_342266.iso` (Vista SP2 x86, Business is image 1 of seven) and `<iso folder>\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso` (Windows 7 SP1 x86 VL, Professional, one image) - **the same media tasks 22.1 and 22.2 read their measurements out of** on 2026-09-09, so the stack a guest installs is the stack that was measured. `usbport.sys` is byte-identical across Vista editions, so that does not rest on the edition alone |
 | Images | `vm\vista.img` and `vm\win7.img`, 32 GB qcow2 each (Windows 7 x86 wants 16 GB free, Vista 15 GB; qcow2 is sparse, so the file costs what the install writes) |
 | Monitor ports | **55565** (Vista) and **55566** (Windows 7) - *not* the next two free numbers; see the reservation above |
 | CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
@@ -2764,7 +2765,7 @@ through the committed INF rather than a staged copy of the same sections.
 
 | | Vista Business SP2 x64 | Windows 7 Professional SP1 x64 |
 |---|---|---|
-| Media | `D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso` | `D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` |
+| Media | `<iso folder>\en_windows_vista_sp2_x64_dvd_342267.iso` | `<iso folder>\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` |
 | Generator | `scripts\setup-qemu-vista-x64.ps1` | `scripts\setup-qemu-win7-x64.ps1` |
 | Image | `vm\vista-x64.img`, 32 GB | `vm\win7-x64.img`, 32 GB |
 | Monitor | 55563 | 55564 |
@@ -3386,6 +3387,247 @@ revised).
   changed since, a junction in a path it would delete); and A left with no
   amd64 record when the copies' check fails.
 
+#### A faster gated build (roadmap-usb4 task 45.3)
+
+The `3.3.0.0` cut built amd64 and then x86 in one tree, about 67 and 55
+minutes one after the other, although `cut-builds.ps1` (44.31, above)
+runs them at once: the second tree had to be made by hand first. And
+inside one build every step ran in turn, the self-tests and host suites
+that need no DDK among them (the packager's self-tests alone took 20
+minutes on 2026-10-29). Task 45.3 (was BUILDFAST.1; owner, 2026-10-28)
+takes both. This is its design, settled before its code (2026-10-29;
+reviewed and revised).
+
+- **The second tree made by the launcher.** `cut-builds.ps1`'s `-X64Tree`
+  becomes optional. Without it tree B is `<A>-x64`, beside tree A (the
+  name the PDB path of each x64 image carries, so it holds no more of a
+  person's or a machine's name than A's own path does). When that
+  directory does not exist the script makes it before any build, `git
+  worktree add --detach <B> HEAD`, and marks it as its own
+  (`out\cut-x64-tree.txt` in B, naming A; `out\` is ignored, so B stays
+  clean). It then prepares B only when B carries that mark for this A,
+  is detached, clean and holds no build lock, and it holds both of B's
+  build locks while it does: it moves B to A's HEAD (`git -C <B>
+  checkout --detach <A's HEAD>`) and links, as a junction, each
+  directory of A's `tools\` that B's lacks (the archives and installers
+  at `tools\`'s top level are no build's input and are not linked; a
+  directory B has of its own is left and said). A tree at that path
+  that the script did not make - the main checkout, a worktree on a
+  branch, any other - is never moved or linked; it is taken as it is,
+  and 44.31's checks then take or refuse it. A link that cannot be made
+  stops the run with B kept: the next run links what B lacks. A tree
+  named with `-X64Tree` is only checked, as before, and `-ImportOnly`
+  takes `<A>-x64` or the named tree as it is, since what it imports was
+  built at the commit it holds. So the cut is one command,
+  `cut-builds.ps1`, and the one-tree route stays for a host that wants
+  it. B is an ordinary worktree, listed by `git worktree list`; remove
+  its `tools\` junctions (`rmdir`, which does not follow them) before
+  `git worktree remove`.
+- **One build's checks at once.** `build-driver.cmd` keeps its order
+  around them: the text checks first (seconds, and a text failure costs no
+  build, task 44.1), then the DDK chosen and checked, then the block that
+  needs no DDK, then the Stor98, VxD and XHCIPFW builds and the flavours.
+  The block - the import gate's self-tests, the INF, UAS, CM, Stor98 and
+  `txtsetup.oem` gates with their self-tests, the packager's, the QEMU
+  launchers' and the VM matrix's self-tests, the Stor98 header check, on
+  the x86 run XHCITR and XHCIPERF rebuilt, the XHCITR, XHCIPERF,
+  XHCIINST, XHCIMARK and XHCIDI self-tests on either run when their EXEs
+  are there, the host suite and on the x86 run Stor98's unit suite - is
+  handed to one new script, `scripts\build-steps.ps1 -Arch <arch>`, which
+  holds the steps as a table and runs them as separate processes at
+  once. It is a build input like `build-driver.cmd` (`package-common.ps1`,
+  `$script:BuildInputScripts`), so a change to it is a change to the
+  gated build. The steps were written to run alone, so the runner gives
+  each its own: its own `TEMP` and `TMP` (`out\steps-<arch>\tmp\<step>\`),
+  its own log (`out\steps-<arch>\<step>.log`, stdout and stderr through
+  `cmd /c` redirection), the repository root as its working directory as
+  `build-driver.cmd` gave it (the `.cmd` steps `cd` to their own), and no
+  `U4_TRACE` (the path `test\u4_fakefab.c` writes its trace to, which two
+  host suites at once - the suite's own step and the one the packager's
+  binary-gate case starts - would share). Ordering that matters is a
+  dependency in the table: each gate waits for its own self-test, as it
+  ran after it before; on the x86 run XHCITR's and XHCIPERF's self-tests
+  wait for their rebuilds, and whether their EXE is there is read when
+  the step is due, after its build; XHCITR's snapshot self-test waits for
+  its own self-test. Two steps writing one file would be the hazard, and
+  none does: the host suite builds into a run directory of its own
+  (`/Fo`), the tool builds into their own folders, Stor98's unit suite
+  into its own, XHCITR's `/selftest` returns before its tray mutex, the
+  VM matrix's port probes skip a port in use, the packager's lock and
+  record cases use fixture trees, and the gates read the tree and write
+  under their `TEMP`. No step writes a gated record; the record's token
+  and lock stay `build-driver.cmd`'s.
+- **How many at once, and in which order.** At most `XHCI98_BUILD_STEPS`
+  processes (default 4, so a cut's two builds start eight on a host other
+  work shares; `1` runs them one at a time, in the table's order). The
+  five longest come first in the table - the packager's self-tests, the
+  host suite, the two tool builds and Stor98's unit suite - so the short
+  ones fill in beside them. A step whose EXE is absent (XHCIINST,
+  XHCIMARK, XHCIDI, and on the amd64 run XHCITR and XHCIPERF where they
+  were never built) is said and passed over, as `build-driver.cmd` passed
+  over it.
+- **What the log shows.** When a step ends its log is printed whole under
+  its old `=== <title> ===` heading, followed by `--- <title>: passed
+  (exit 0, m:ss)` or `failed`, so a step's output is never interleaved
+  with another's; the order is the order they end in. After the block, a
+  table of every step in the table's order with its result and time, and
+  the block's wall time.
+- **A failure.** No step starts after a failure, and a step that cannot be
+  started is one; the steps running then are left to finish (a `cmd /c`
+  stopped from outside leaves its children). Whatever ends the runner - a
+  failure, an exception, Ctrl+C - every step it started has ended before it
+  returns, so `build-driver.cmd` never drops its lock under a step still
+  writing. It exits 1 with each failed step's message - the texts of
+  `build-driver.cmd`'s old failure labels, moved into the table - and its
+  log's name. The host suite's own "inconclusive" (exit 2: Smart App
+  Control blocked a freshly linked EXE) stays 2 when nothing else failed,
+  and `build-driver.cmd` goes to `:inconclusive` as before.
+- **Each step timed.** Every step of `build-driver.cmd` outside the block
+  (the text checks, the block itself, the Stor98 build, `S98VSD.VXD`,
+  `XHCIPFW.VXD`, `XHCIPFW.SYS`, each flavour's build and gates) prints
+  `--- <step>: m:ss` when it has passed, and the run ends with its total.
+  The clock is `%TIME%` (labels `:stepclock` and `:steptime`): hours,
+  minutes, seconds and hundredths, the space before a one-digit hour made
+  a 0 and each field read with a 1 in front less 100, so `08` and `09` are
+  not octal; a step that crossed midnight once is given a day. Each
+  timer has a variable of its own (the run's, a step's, a flavour's), and
+  a timer is read only after its step's `if errorlevel` lines, so it never
+  changes where a failure goes. So the next cut's log says where its time
+  went.
+- **The packager's self-tests depend on no earlier build** (a problem
+  measured on 2026-10-29). `make-package.ps1` staged `XHCIPFW.VXD` and
+  `XHCIPFW.SYS` from `src\pfw\obj\` and `src\pfw\nt\objfre\i386\` of the
+  tree it runs in whatever its caller was, and gated them unless
+  `-SkipBinaryGates`; so the self-test that runs the packager with its
+  binary gates on reached the tree's own images, and a stale one (a build
+  of an earlier version) failed `check-pfw.ps1` with "no stamp
+  'XHCIPFW.VXD 3.3.0.0'" (and the same for `XHCIPFW.SYS`) before the build
+  that would rebuild them had run; a missing one was passed over. Of the
+  two ways out - build them before the self-tests, or take the self-tests
+  off them - this takes the second, because the first would still leave
+  an amd64 run (which builds neither) reading whatever x86 images the tree
+  holds, and a self-test whose verdict turns on an earlier build is not a
+  self-test. The packager's own idiom for stand-ins decides it: a caller
+  that names `-DriverPath` (the self-tests' stand-in drivers) stages
+  `XHCIPFW.VXD`, `XHCIPFW.SYS` and `S98VSD.VXD` only when it names them
+  too (`-PfwVxdPath`, `-PfwSysPath`, `-VsdPath`, as `-OemPath` and the UAS
+  pair already are), and a caller that names none - `make-release.ps1`, a
+  person staging a package - gets the tree's images exactly as before. A
+  named image must be there (a missing one is refused, never passed over
+  to the tree's), is gated unless `-SkipBinaryGates`, and is refused for
+  an amd64 package; `-VsdPath` is refused for a package without Stor98.
+  New self-tests stage stand-ins through the three and check where they
+  land, that a stand-in package naming none carries none, and the
+  refusals. So the order of `build-driver.cmd` does not matter to the
+  self-tests, and running `src\pfw\build.cmd` before a first build is no
+  longer needed.
+- **Nor on where `TEMP` is.** The same day's new self-test that "a
+  directory that is no git checkout is not read as a missing tag" made its
+  directory under `TEMP`; with `TEMP` under a worktree's `out\` (as
+  `cut-builds.ps1`, the runner and the phase's workers set it) `git -C
+  <dir>` found the enclosing worktree, and the check failed, so at the
+  phase's base commit every gated build with such a `TEMP` failed its
+  packager self-tests. `Invoke-DriverPackGit` now runs git with
+  `GIT_CEILING_DIRECTORIES` set, for that one child, to the full path of
+  the parent of the checkout it was given, so git never takes an
+  enclosing repository for the pack's; the checkout it is given must be a
+  checkout's top (a `.git` directory or a worktree's `.git` file there,
+  through a junction or not), which every caller's root-relative reads
+  already assumed. A fix of the packager, not of the test.
+- **What does not change.** The steps themselves, their order outside the
+  block, their gates and their exit codes; the gated record and its lock;
+  `cut-builds.ps1`'s checks, import and `-Serial` / `-ImportOnly` modes,
+  and a named `-X64Tree`. **Checked by** the packager's self-tests (the
+  default tree B on a fixture repository: made with its link, moved with
+  A, not moved when dirty, unmarked or on a branch, no lock left, a
+  directory that is no worktree refused; the stand-in PFW and VSD staging
+  and its refusals; the runner as a build input) and the runner's own
+  `-SelfTest` on stand-in steps (two at once, one at a time in order with a
+  dependency, a failure stopping later starts with its message, the
+  inconclusive code alone and beside a failure, an absent EXE passed over,
+  each step's own `TEMP`, `TMP` and directory, a dangling wait refused, and
+  the build's two tables), which `build-driver.cmd` runs before the block.
+
+#### The INF gate's self-tests, in process and skipped when unchanged (roadmap-usb4 task 45.30)
+
+`scripts\inf-gate\test-inf-checks.ps1` ran `check-inf.ps1` as a new
+`powershell.exe` for every case, several hundred of them, and took 56 of a
+gated build's 60 minutes on 2026-10-29 (task 45.3's readings, a loaded
+host). The owner chose both ways out (2026-10-29). This is the design,
+settled before the code (reviewed and revised).
+
+- **In process.** Each case calls the gate as `& $gate -InfPath ... *>&1`
+  in the self-test's own process, not through `powershell.exe -File`. A
+  script invoked with `&` runs in a new script scope every time, so its
+  `$script:` variables (the failure and warning lists among them), its
+  functions, `Set-StrictMode` and `$ErrorActionPreference` are its own for
+  that call and gone after it: each case starts from the gate's own
+  initial state, and nothing a case sets reaches the next (what does
+  persist in one process - loaded assemblies, the error history - the gate
+  does not use; it adds no type and changes no culture). The arguments the
+  cases give as `powershell -File` words (`-Arch amd64`,
+  `-AllowUnpaddedDriverVer`) are turned into a hashtable splat, a name
+  with its value or a switch, since an array splatted on a script binds by
+  position. `exit` in the gate ends the gate, not the self-test, and sets
+  the global `$LASTEXITCODE`; the caller sets `$global:LASTEXITCODE` to 0
+  first and reads it back the same way, so a gate that ends without
+  `exit` reads as 0, and a terminating error that escapes the gate (an
+  exception, a parameter that does not bind) is caught and read as exit 1
+  with its message in the output, as the child process printed it and
+  exited 1.
+  `*>&1` takes every stream, `Write-Host`'s among them, into the text the
+  assertions read. `check-inf.ps1` itself does not change: `build-driver.cmd`,
+  `make-package.ps1` and every other caller still run it with
+  `powershell -File` exactly as before, and its exit codes and output are
+  the same either way. The one case that is about the process stays a
+  process: "a relative `-ManifestPath` after `Set-Location`", which starts
+  a `powershell.exe` from another directory on purpose. (Reshaping the
+  gate into a function returning its verdict was the other way; it would
+  mean rewriting a 3,600-line script's top level and its every `exit`, for
+  the same isolation a script scope already gives.)
+- **Skipped when nothing it reads has changed.** The self-test first
+  hashes (SHA-256) every file it and the gate read: the two scripts and
+  everything else under `scripts\inf-gate\` (the footprints, allowlists and
+  the other gates' files are there), `scripts\common.ps1`,
+  `scripts\test-harness.ps1`, every file directly in `src\` (the two INFs
+  and what the gate reads beside them: `xhci_version.h`, `xhci98.rc`,
+  `xhci_hub.h` and the rest) and `xhcitr\xhcitr.manifest`, each by its
+  path under the repository and its content, into one digest with the
+  PowerShell version's. When `out\inf-selftest-pass.txt` holds that digest
+  and this tree's full path, with its time and count - every field there,
+  or the record is no record - it prints one line, that it was skipped
+  and why (the time and count of the passing run, the digest), and exits
+  0. Otherwise it deletes the record before anything runs, runs the whole
+  suite and, if every check passed and the digest taken again at the end
+  is the one it began with (a file changed during the run makes it run
+  again next time), writes the record to a temporary name and moves it
+  into place. A file added, removed or changed in that set changes the
+  digest. It assumes no one edits those files while a run is reading
+  them; the end-of-run digest catches an edit that is not undone. `-Force`
+  runs it regardless, and so does `XHCI98_FULL_SELFTESTS=1`, which
+  `build-driver.cmd all` sets - `all` is what every cut builds, through
+  `cut-builds.ps1` or by hand for `-ImportOnly` or a one-tree cut - and
+  `cut-builds.ps1` sets for its builds too, so a cut always runs it in
+  full (`make-release.ps1` runs the gate, not its self-tests). An
+  ordinary `build-driver.cmd` (`both`, or one flavour) takes the skip.
+  `out\` is git-ignored, so the record never reaches a commit or a clone.
+- **Not to the other gates.** `check-uas-inf.ps1`, `check-cm-inf.ps1`,
+  `check-stor98-inf.ps1` and `test-flavour-rules.ps1` start no process per
+  case and take seconds; they keep running in full.
+- **Checked by** the self-test itself: the in-process call's exit code,
+  output and isolation (two calls in a row, the second not seeing the
+  first's failures, and a parameter that does not bind read as exit 1),
+  and the skip's digest moving when one file in the set changes, staying
+  when a file outside it does, and the record written only after a pass.
+- **A self-test that cannot run says so.** A gated build's self-tests that
+  need git (the packager's builds fixture repositories) fail at once,
+  naming git, when it is not on `PATH`, and the two places the cut's
+  launcher read `$LASTEXITCODE` after a `git` that may not have run
+  (making and moving tree B) refuse instead of reading an earlier
+  program's code. A build whose packager self-test failed this way was
+  reported (2026-10-29) to have ended with exit 0; that could not be
+  reproduced: the self-test exits 1 and the build stops at its failure.
+
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
 The release download's `release-x86\` and `release-x64\` carry Stor98, the
@@ -3546,14 +3788,14 @@ VM disk of development host A, outside the tree:
 | | value |
 |---|---|
 | Media | the owner's `Win10_22H2_English_x64v1.iso` and `Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965 (the GVLK selects Pro; the guests are never activated) |
-| Pristine images | `E:\xhci98-vm\win8-10\w10x64\w10x64-pristine.qcow2` (SHA-256 `770f2795...6fdb636`) and `...\w10x86\w10x86-pristine.qcow2` (`10bfd472...135c92d`), read-only, 64 GiB, one NTFS partition on MBR; built 2026-10-22 by `E:\xhci98-vm\win8-10\scripts\install2.sh` (`RECIPE.txt` there has the recipe and the full hashes): WinPE and the image copy under WHPX, specialize, OOBE and the first logon under TCG. Local administrator `xhci` / `xhci98` with autologon; `bcdedit /set testsigning on` (the desktop shows "Test Mode"); hibernation and Windows Update off; no network |
-| Prepared starting points | `E:\xhci98-vm\p43-33\<g>\prep.qcow2` (read-only) over each pristine image: a scheduled task `xrun` (highest privileges, as `xhci`) that runs `<transfer drive>\auto\go.cmd`. A leg starts it with Win+R `schtasks /run /tn xrun`, elevated without a consent prompt; its logon trigger does not fire on these images |
-| Leg overlays | `E:\xhci98-vm\p43-33\<g>-<set>\disk.qcow2` over `prep.qcow2`, one directory per leg, never reused across legs; a fresh `out.qcow2` (1 GiB, formatted `OUT` as O: by the leg's script, read after power-off with 7-Zip) |
-| Launcher | `E:\xhci98-vm\p43-33\scripts\launch.ps1 -Guest w10x86\|w10x64 -Set <leg> [-Out] [-Devs ...]`; `q.ps1` (screendump, keys, typing, Win+R, the CD) and `stop.ps1` (ACPI power-off of only the pid the kit started) beside it |
+| Pristine images | `<vm root>\win8-10\w10x64\w10x64-pristine.qcow2` (SHA-256 `770f2795...6fdb636`) and `...\w10x86\w10x86-pristine.qcow2` (`10bfd472...135c92d`), read-only, 64 GiB, one NTFS partition on MBR; built 2026-10-22 by `<vm root>\win8-10\scripts\install2.sh` (`RECIPE.txt` there has the recipe and the full hashes): WinPE and the image copy under WHPX, specialize, OOBE and the first logon under TCG. Local administrator `xhci` / `xhci98` with autologon; `bcdedit /set testsigning on` (the desktop shows "Test Mode"); hibernation and Windows Update off; no network |
+| Prepared starting points | `<vm root>\p43-33\<g>\prep.qcow2` (read-only) over each pristine image: a scheduled task `xrun` (highest privileges, as `xhci`) that runs `<transfer drive>\auto\go.cmd`. A leg starts it with Win+R `schtasks /run /tn xrun`, elevated without a consent prompt; its logon trigger does not fire on these images |
+| Leg overlays | `<vm root>\p43-33\<g>-<set>\disk.qcow2` over `prep.qcow2`, one directory per leg, never reused across legs; a fresh `out.qcow2` (1 GiB, formatted `OUT` as O: by the leg's script, read after power-off with 7-Zip) |
+| Launcher | `<vm root>\p43-33\scripts\launch.ps1 -Guest w10x86\|w10x64 -Set <leg> [-Out] [-Devs ...]`; `q.ps1` (screendump, keys, typing, Win+R, the CD) and `stop.ps1` (ACPI power-off of only the pid the kit started) beside it |
 | QEMU | the usb4-emu build `vm\usb4\bin-2a893ea\qemu-system-x86_64.exe` (hash checked by the launcher), `-machine pc` (SeaBIOS), `-accel tcg,thread=multi`, `-cpu qemu64,+3dnowprefetch` (8.1 and 10 x64 need PrefetchW), `-smp 2`, 2048 MB, `-vga std`, `-display none`, `-nic none` |
 | Ports | QMP **48660** (`w10x86`) and **48661** (`w10x64`), from the block 48660-48689 |
 | USB | `qemu-xhci,p2=8,p3=4` at 00:03 (QEMU ports 1-4 USB 3 and 2.0, 5-8 USB 2.0 only): `usb-tablet` port 5, `usb-storage` on a USB 3 port (1) and a USB 2.0-only port (6), `usb-uas` port 2, `usb-audio` port 7, `usb-hub` port 8 with `usb-kbd` behind it; the emulator's Thunderbolt 3 NHI (`tb3-alpine-ridge`, 00:04), its xHCI (00:07) and tunnel bridge (00:05) |
-| Transfer | `E:\xhci98-vm\p43-33\xfer` as an IDE VVFAT drive (read at launch only): `auto\` the leg scripts, `pkg\` the package under test |
+| Transfer | `<vm root>\p43-33\xfer` as an IDE VVFAT drive (read at launch only): `auto\` the leg scripts, `pkg\` the package under test |
 | Secure Boot | none: SeaBIOS has none, which is why test-signing mode needs no firmware change. The OVMF guest with Secure Boot on that 43.32 asks for (for 43.36's refusal case) is **not built** (run sheet 43.32) |
 
 **The speed under TCG** (2026-10-22, host loaded): from power-on to the
@@ -3952,8 +4194,8 @@ Two host-specific traps in those launchers, both of which cost time:
 - The QEMU path is hard-coded. It happens to be identical on development host A
   and development host B, so it has not bitten yet, but it is the standing trap
   when moving hosts.
-- The ISO path differs per host: `D:\isos\win2ksp4.ISO` on development host A,
-  `D:\isos\win2ksp4-retail.ISO` on development host B.
+- The ISO path differs per host: `<iso folder>\win2ksp4.ISO` on development host A,
+  `<iso folder>\win2ksp4-retail.ISO` on development host B.
   `qemu-win2k-acpi-whpx-continue.cmd` probes a candidate list instead of
   hard-coding one; do the same in any new launcher.
 
@@ -5989,7 +6231,7 @@ binaries and the INF without a device present.
 #### Verified model: Windows 2000 SP4 `USB.INF` EHCI service install
 
 Transcribed from `I386\USB.IN_` on the Windows 2000 SP4 retail ISO
-(`D:\isos\win2ksp4-retail.ISO`, the same media the import gate's baselines come
+(`<iso folder>\win2ksp4-retail.ISO`, the same media the import gate's baselines come
 from), expanded with `expand.exe`. The file is Microsoft's
 `; USB.INF -- This file contains descriptions of all the HCD (USB controller)`,
 `DriverVer=06/19/2003,5.00.2195.6717`. Windows 2000 SP4 ships no separate
@@ -8498,11 +8740,11 @@ Express platform closer to the real boards' topology than `pc` (i440FX); the i44
 results already recorded stay as they are. Read-only q35 base images of every
 target, each made from that target's existing base image (not reinstalled),
 live outside the repository on development host A in
-`E:\xhci98-vm\q35-bases\<os>\disk.qcow2`, each with a `README.txt` that
+`<vm root>\q35-bases\<os>\disk.qcow2`, each with a `README.txt` that
 gives its exact command line, firmware (SeaBIOS), how it was made, its
 SHA-256 and what was checked. `STATE.md` there lists which are ready. None
 carries any of this project's drivers. They are booted only through an
-overlay, which `E:\xhci98-vm\q35-bases\launch-q35.ps1 -Os <os> -Dir <folder>
+overlay, which `<vm root>\q35-bases\launch-q35.ps1 -Os <os> -Dir <folder>
 -Qmp <port>` makes and starts; `-Usb4 asm4242|tb3ar|tb3tr|adl` adds the
 emulator's ASMedia ASM4242 (the emulator's asm4242 preset), Alpine Ridge, Titan Ridge
 or Intel USB4 host topology, and `-EncAtBoot` the enclosure with its NVMe at
@@ -8631,7 +8873,7 @@ Traps found while making it (development host A, 2026-10-25, QEMU 11.1.0):
   window's leg allows both.
 
 On QEMU's `q35` machine (owner, 2026-10-25), from the bases of
-`E:\xhci98-vm\q35-bases` (2026-10-26):
+`<vm root>\q35-bases` (2026-10-26):
 
 - **98 SE sees no CD on `q35`.** It reaches the board's AHCI through
   INT 13h alone, and a piix3-ide added beside it for a CD stopped its start

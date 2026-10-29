@@ -58,6 +58,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | `0` |
 | `XhciSilentInstall` | Windows 98 SE and ME: `1` installs a device whose class is in the `SilentClasses` list with no wizard (`silent-on.bat` and `silent-off.bat` in `tools\silent\`; see "The silent install" below) | `0` | `1` | `0` | `0` |
 | `XhciUsb2Bos` | From `3.2.0.0`: a device declaring USB 2.1 or later asked for its BOS descriptor at High or Full Speed, which tells Windows and the xHCI98 USB Tree's "can run faster" notice that it can run at SuperSpeed; `0` stops the request for every device, any other value is on (the release notes, "XhciUsb2Bos") | `0` | `1` | `1` | not written |
+| `XhciResumeKeep` | From `3.4.0.0`: after standby or hibernation that started the controller afresh (`XhciResumeReinit` below, and every controller that cannot save its state), a device on a root port is kept as it was - its drive letter and the files open on it - instead of being removed and found again; a hub and what is behind it, a Bulk-Only drive, a drive with no serial number or busy at the sleep, an isochronous (audio, video) device and a device selective suspend held are still found again; `0` turns it off, any other value is on | `0` | `1` | `1` | not written |
 
 **Hardware quirks**, each for a particular controller or chipset
 
@@ -119,7 +120,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 
 The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs. From `3.1.0.0` it also shows the machine-wide value and, under it, each device's own value that it overrides; where the machine-wide value is set, "Set" writes that one, the value in force for every device.
 
-The install writes every value in these tables but the three marked "not written" (`XhciUsb2Bos`, `XhciCmTunnelBridge`, whose absence means no override, and `XhciCmAsmediaPcie7Credits`), at the number in its last column, so each one is already in the key, ready to change; a value marked "98 SE and ME" is written there alone, the systems that read it. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
+The install writes every value in these tables but the four marked "not written" (`XhciUsb2Bos`, `XhciResumeKeep`, `XhciCmTunnelBridge`, whose absence means no override, and `XhciCmAsmediaPcie7Credits`), at the number in its last column, so each one is already in the key, ready to change; a value marked "98 SE and ME" is written there alone, the systems that read it. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value.
 
@@ -243,7 +244,7 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
   3. Polling: no interrupt pin, none assigned, or a granted message that could not connect.
   4. After the start, a line the driver sees raised that never reaches it switches to polling by itself.
 - `1`: the interrupt line only. With no line, the controller fails to start (Code 10).
-- `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers.
+- `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers. On Windows 98 SE it is also the way round an IRQ that another device holds raised with no working driver (an NVMe drive the BIOS still runs, in MS-DOS compatibility mode, for example), which makes Windows crawl or freeze once any driver uses that IRQ: under `2` the driver connects no interrupt, so Windows leaves the IRQ masked as before the install, and USB keeps working (read in QEMU on 98 SE, roadmap-usb4 task 45.33; ME is expected to behave the same, not tested). That holds only while no other working driver uses the IRQ; otherwise the device holding it needs a working driver or removing. Set it in the machine-wide key for every controller, or in the key of each controller on that IRQ, and restart Windows (or disable and enable each of those controllers): the value is read at the controller's start.
 - `3`: a message-signalled interrupt only (Vista and 7). With no message, the controller fails to start (Code 10).
 
 Under `1`, Vista and 7 are asked for the line, and a controller that is given a message instead (for example because it has no line) fails to start. Under `3`, Vista and 7 are asked for the message; it fails to start when none is granted or it cannot be connected, which on 32-bit means `xhcihlpr.sys` is not running. Windows 98 SE, ME, 2000 and XP have no message-signalled interrupts, so `3` always fails there.
@@ -396,3 +397,14 @@ other value is refused and `1` stands. The install writes it at `1` on
 with `INSTALL /set XhciCmBridgeNumbering=0` (or `1`) or the installer's
 Thunderbolt "Advanced...", which write it machine-wide, or with Regedit,
 and restart Windows or disable and enable the controller.
+
+Whether the bundled Stor98 runs a drive on its interrupt or polls it is
+recorded at each start of the drive: a string value named `StorInterrupt
+<bus>.<device>.<function>` in `HKLM\System\CurrentControlSet\Services\stor98`, on every
+system, ending in `interrupt` or in `polling (...)` with the reason -
+`forced by StorPollMode` (98 SE and ME) or `forced by storpollmode` (2000
+to 10), `no interrupt pin`, `no interrupt assigned`, `interrupt line not
+set`, `configuration unreadable`, and from `3.4.0.0` `INTx would not
+enable`: the drive's interrupt enable did not take when Stor98 set it, so
+it polls rather than wait for interrupts that would not come. Stor98's
+own README, "Interrupt report", says what the rest of the value holds.

@@ -1409,8 +1409,8 @@ and the owner's decision.
 Tags in this section, beside the record's own: **[hw]** read on
 hardware - the owner's P14s bench of 2026-10-22 (`runs/run-43.md`, "The
 first real-hardware reading") or the ASM4242's own state as
-`usb4-emu`'s asm4242 data records it (record 22 section 18; `9f333f3`, the
-`lspci -vvv` of the tunnel's functions with the enclosure attached at
+`usb4-emu`'s asm4242 data records it (record 22 section 18; `a0b6749` on its `main`, `9f333f3` before
+the 2026-10-29 squash, the `lspci -vvv` of the tunnel's functions with the enclosure attached at
 power-on; read there, never modified from here); **[src]** read in this tree's sources at
 `3.3.0.0`; **[model]** this section's arithmetic on [hw] figures. A
 [hyp] here is read on the bench or in the emulator before anything rests
@@ -1782,4 +1782,5 @@ is unchanged (task 45-E.9).
   `src/nvme2k.h`, `src/pool9x.c`, `README.md` ("Settings") and
   `docs/PLAN.md` ("Polling mode"); `src/cm/tbt_u4cm.c` (`tbtU4Bond`,
   `tbtU4Paths`) and `tbt_regs.h`; design record 29; `usb4-emu`'s
-  asm4242 data (`9f333f3`; record 22 section 18).
+  asm4242 data (`a0b6749`; `9f333f3` before the 2026-10-29 squash;
+  record 22 section 18).

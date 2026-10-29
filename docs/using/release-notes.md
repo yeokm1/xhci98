@@ -1941,7 +1941,7 @@ detail, and what each rests on.
 - **`XHCISNAP`'s and `XHCIQUAL`'s reports name the system** they were
   taken on, with no serial numbers or names; `XHCISNAP -nosysinfo` and
   `XHCIQUAL --no-sysinfo` skip it ("The log, and how to send one", and
-  "Before you install: check the machine").
+  "XHCIQUAL: checking a machine's controller (optional)").
 - **Driver Verifier no longer stops the machine at boot.** On 32-bit
   Windows 7 under `verifier /standard /driver xhci98.sys`, `2.2.0.0`
   stopped Windows with bugcheck C9 (0x220) as the root hub started,
@@ -2142,7 +2142,7 @@ unplug the UAS drive and plug it back in ("Known limitations").
 **The UAS driver on Windows 98 SE installs with no restart.** Its INF
 copies no file in use, so the first UAS device installs and works at once.
 
-## Before you install: check the machine
+## XHCIQUAL: checking a machine's controller (optional)
 
 `XHCIQUAL.EXE` is a DOS tool that reads the machine's xHCI controller and says
 whether the driver can work on it. Run it with no arguments for a read-only

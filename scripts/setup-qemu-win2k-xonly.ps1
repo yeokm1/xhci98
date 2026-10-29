@@ -35,14 +35,14 @@ the owner types). The install launcher requires it; the run launcher keeps it
 attached when it exists and boots with no CD when it does not, and says so.
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-xonly.ps1 -Win2KIso D:\isos\win2ksp4-retail.ISO -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-xonly.ps1 -Win2KIso <iso folder>\win2ksp4-retail.ISO -CreateDisk
 #>
 
 [CmdletBinding()]
 param(
     [string]$VmDir = "",
     [string]$LocalScriptDir = "",
-    [string]$Win2KIso = "D:\isos\win2ksp4.ISO",
+    [string]$Win2KIso = "",
     [string]$DiskSize = "4G",
     [string]$QemuBinDir = "",
     [string]$XhciDevice = "qemu-xhci,p3=0",
@@ -98,7 +98,7 @@ Write-Ok "VM directory: $VmDir"
 Write-Ok "Local script directory: $LocalScriptDir"
 Write-Ok "Transfer (VVFAT) directory: $xferDir"
 
-if (-not (Test-Path -LiteralPath $Win2KIso)) {
+if (-not $Win2KIso -or -not (Test-Path -LiteralPath $Win2KIso)) {
     Write-Warn "Windows 2000 ISO not found at: $Win2KIso (pass -Win2KIso to override)."
 } else {
     Write-Ok "Windows 2000 ISO: $Win2KIso"

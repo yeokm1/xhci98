@@ -4468,7 +4468,7 @@ note; the `-vga std` prescription there is refuted in place),
 
 Development host A, scoop QEMU 11.0.0, `qemu-system-x86_64`. Operation:
 install a new uniprocessor Windows 2000 SP4 VM (`vm\win2k-acpi.img`, fresh
-4 G qcow2, same `D:\isos\win2ksp4.ISO`) with ACPI enabled, in order to obtain
+4 G qcow2, same `<iso folder>\win2ksp4.ISO`) with ACPI enabled, in order to obtain
 a guest with sleep states, because `ResumeController` has never executed on
 Windows 2000 and 2b cannot produce a D-state transition at all. This is
 therefore also the Setup-workload experiment the Phase 2d WHPX entry asks for
@@ -4566,7 +4566,7 @@ the Phase 3-5 evidence VM.
 
 Development host A, scoop QEMU 11.0.0, `qemu-system-x86_64`. Installing
 the roadmap Phase 21 guest, Windows XP Professional x64 SP2, from
-`D:\isos\Win XP SP2 VL x64.iso` onto a fresh 16 GB qcow2. Machine `-machine
+`<iso folder>\Win XP SP2 VL x64.iso` onto a fresh 16 GB qcow2. Machine `-machine
 pc` (ACPI on), `-cpu qemu64`, `-m 2048`, `-vga std`, `-boot d`, no USB
 controller. One flag differed between the two runs.
 
@@ -7181,7 +7181,7 @@ in-box `usbehci.sys`:
 |---|---|---|
 | Win98 + NUSB 3.3 | `5.00.2195.5652` | `tools/nusb-extracted/` |
 | Win2000 SP4 | `5.00.2195.6681` | `tools/win2ksp4-extracted/` |
-| Windows XP SP3 (best-effort) | `5.1.2600.5512` | `tools/winxpsp3-extracted/`, newly extracted from `D:\isos\Win XP Pro SP3 OEM original.iso` |
+| Windows XP SP3 (best-effort) | `5.1.2600.5512` | `tools/winxpsp3-extracted/`, newly extracted from `<iso folder>\Win XP Pro SP3 OEM original.iso` |
 
 The extracted routines are kept verbatim as
 `tools/<dir>/usbport-registration-disasm.txt` and
@@ -7967,7 +7967,7 @@ Phase 2b. Host: Windows 11 x64, scoop QEMU 11.0.0, `qemu-system-i386`, TCG
 only (that binary reports `-accel help` = `tcg`; the same scoop package's
 `qemu-system-x86_64.exe` reports `tcg`, `whpx`, and that x86_64+WHPX path is
 the basis of roadmap Phase 2c; everything below concerns the i386 binary).
-Guest: Windows 2000 Professional SP4 integrated (`D:\isos\win2ksp4.ISO`,
+Guest: Windows 2000 Professional SP4 integrated (`<iso folder>\win2ksp4.ISO`,
 volume `ZRMPFPP_EN`, retail FPP, `SETUPP.INI Pid=...000`). Booting the CD
 reaches the text-mode banner and then hangs indefinitely at "Setup is
 starting Windows 2000", the blue text screen that precedes "Welcome to

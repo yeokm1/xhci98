@@ -431,6 +431,16 @@ ULONG CmMarksBuild(UCHAR *out, const CM_MARKS *m, const CM_QM_IN *in)
         }
     }
     flags = 0;
+    if (in->Bridges != NULL) {
+        /* Design record 33 section 4.3: after the entries and tombstones. */
+        for (i = 0; i < CM_QB_WORDS; i++) {
+            cmMkPut32(out, at + 4UL * i, in->Bridges[i]);
+        }
+        cmMkPut32(out, CM_QM_O_BR_OFFSET, at);
+        cmMkPut32(out, CM_QM_O_BR_BYTES, CM_QB_BYTES);
+        at += CM_QB_BYTES;
+        flags |= CM_QM_F_BRIDGES;
+    }
     if (m->Incomplete) {
         flags |= CM_QM_F_INCOMPLETE;
     }

@@ -75,7 +75,7 @@ Who collides. Windows 2000's `usbport.sys` takes the lowest free
 retry [static]. With this driver holding `HCD0` or `HCD1`, a usbport
 controller that started later at that index collided (boot w: the second
 EHCI got no `HCD` name). XP SP3 and 7 SP1 x86 show that missing name too,
-but no Code 31 (the helper leg, `E:\xhci98-vm\p44\p44-c31x\`).
+but no Code 31 (the helper leg, `<vm root>\p44\p44-c31x\`).
 
 ## 4. The fix
 
@@ -166,12 +166,12 @@ Read on 2000 with the built package (the gated build of `c260abd1`,
 ## 7. Evidence
 
 - `runs/run-44.md`, "44.81": every boot, the dumps' readings, the legs.
-- `E:\xhci98-vm\p44\p44-c31\` (held on the development host): `STATE.md`,
+- `<vm root>\p44\p44-c31\` (held on the development host): `STATE.md`,
   `pids.txt`, `w2b\` and `w2i\` with each boot's serial log and command
   line, `shots\`, `tools\`.
-- `E:\xhci98-scratch\p44-c31\`: the dumps `m3.elf`, `r2.elf` and `c3.elf`,
+- `<scratch root>\p44-c31\`: the dumps `m3.elf`, `r2.elf` and `c3.elf`,
   the pool reader `an2\syms.py`, and the disassembly listings under `ui\`.
-- The XP and 7 helper leg: `E:\xhci98-vm\p44\p44-c31x\`.
+- The XP and 7 helper leg: `<vm root>\p44\p44-c31x\`.
 
 ## Sources
 

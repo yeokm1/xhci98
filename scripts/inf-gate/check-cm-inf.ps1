@@ -72,7 +72,9 @@ rule named as the other gates name their families.
            defaults in src\cm\cm_vals.h, and by no NT install path.
   CM-NHIHW No [<install>.HW] section: the NHI writes nothing to its
            hardware key, so no filter value can ride on it.
-  CM-TMPNAME (x86) xhcicm.sys is copied with no temporary-file name.
+  CM-TMPNAME xhcicm.sys is copied with no temporary-file name, in all four
+           INFs: on Windows 98 one routes a first install through
+           WININIT.INI and a restart, and no NT install takes that route.
   Filter INFs (-Filter):
   CM-PORTCC Every model binds PCI\VEN_xxxx&DEV_xxxx&CC_0604 and nothing
            else: the code tells the roles apart by class 06/04 (cm_vals.c),
@@ -405,8 +407,8 @@ function Test-CmInfText {
                 $fields = @($l.Raw -split ',')
                 $file = $fields[0].Trim()
                 if ($file -notmatch '^[A-Za-z0-9_\-]{1,8}(\.[A-Za-z0-9_]{1,3})?$') { & $add "W98-83" "[$name] copies '$file', not an 8.3 name." }
-                if ($Kind -eq "nhi" -and $Profile -eq "x86" -and $file -ieq $binary -and $fields.Count -ge 3 -and $fields[2].Trim() -ne "") {
-                    & $add "CM-TMPNAME" "[$name] gives $binary the temporary name '$($fields[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded."
+                if ($file -ieq $binary -and $fields.Count -ge 3 -and $fields[2].Trim() -ne "") {
+                    & $add "CM-TMPNAME" "[$name] gives $binary the temporary name '$($fields[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded, and no NT install takes that route."
                 }
                 $copied[$file.ToLowerInvariant()] = $destOf[$name.ToLowerInvariant()]
                 # Every copy of the driver is held to its directory where it
@@ -910,6 +912,7 @@ if ($SelfTest) {
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmApproveTimeoutMs,0x00010003,10000", "XhciCmApproveTimeoutMs,0x00010003,1000") },
                     @{ Rule = "VAL-EXTRA";      Text = $t.Replace("HKR,,XhciCmLogDebugView,0x00010003,0`r`n", "HKR,,XhciCmLogDebugView,0x00010003,0`r`nHKR,,XhciCmNoIrqStart,0x00010003,1`r`n") },
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace("[CmModels.NTamd64]`r`n", "[CmModels.NTamd64]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D3`r`n") },
+                    @{ Rule = "CM-TMPNAME";     Text = $t.Replace("[Cm.CopyFiles]`r`nxhcicm.sys", "[Cm.CopyFiles]`r`nxhcicm.sys,,xhcicm.tmp") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%Tb2FrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156C", "%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('Tb2FrDesc="xHCI98 TB2 Controller (Intel Falcon Ridge)"', 'Tb2FrDesc="xHCI98 Thunderbolt 2 Controller (Intel Falcon Ridge)"') },
                     @{ Rule = "BOTH-VERSION";   Text = ($t -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
@@ -922,6 +925,7 @@ if ($SelfTest) {
                 $cases = @(
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace('Signature="$Windows NT$"', 'Signature="$CHICAGO$"') },
                     @{ Rule = "CM-PORTCC";      Text = $t.Replace("DEV_15EA&CC_0604", "DEV_15EA") },
+                    @{ Rule = "CM-TMPNAME";     Text = $t.Replace("[CmFilter.CopyFiles]`r`nxhcicm.sys", "[CmFilter.CopyFiles]`r`nxhcicm.sys,,xhcicm.tmp") },
                     @{ Rule = "CM-PORTCC";      Text = $t.Replace("PCI\VEN_1B36&DEV_0001&CC_0604", "PCI\CC_0604") },
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("PCI\VEN_8086&DEV_5783&CC_0604", "PCI\VEN_8086&DEV_5786&CC_0604") },
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("PCI\VEN_8086&DEV_15EA&CC_0604", "PCI\VEN_8086&DEV_15EF&CC_0604") },
@@ -961,6 +965,7 @@ if ($SelfTest) {
                     @{ Rule = "PATH-NO9X";      Text = $t.Replace("[CmFilterModels.NTamd64]", "[CmFilterModels]`r`n%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`r`n`r`n[CmFilterModels.NTamd64]") },
                     @{ Rule = "PATH-MFGDEC";    Text = $t.Replace("%Mfg%=CmFilterModels,NTamd64,NTamd64.6.0", "%Mfg%=CmFilterModels,NTamd64") },
                     @{ Rule = "CM-FILTER";      Text = $t.Replace('UpperFilters,0x00010008,"xhcicm"', 'UpperFilters,0x00010008,"other"') },
+                    @{ Rule = "CM-TMPNAME";     Text = $t.Replace("[CmFilter.CopyFiles]`r`nxhcicm.sys", "[CmFilter.CopyFiles]`r`nxhcicm.sys,,xhcicm.tmp") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23", "%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"', 'CmSvcDesc="xHCI98 Thunderbolt 3 Connection Manager (xhcicm)"') },
                     @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicmf.cat`r`n", "") },
