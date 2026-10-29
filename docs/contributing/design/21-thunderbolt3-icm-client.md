@@ -1969,6 +1969,11 @@ sections and their gate rows.
 
 #### 4.5.10 The owner's
 
+Decided by the owner on 2026-10-29: Q1 (a), coded in this release behind
+`XhciCmRingInterrupt` 0; Q2 (b), 0 everywhere until a hardware reading;
+Q3 (a), the line only first; Q4 (a), the idle period unchanged. The
+options as they were put:
+
 - **Q1, whether to code it.** (a) Code it now, line only, behind
   `XhciCmRingInterrupt` 0; (b) later, as an opt-in, after the q35
   readings show the gain; (c) not at all, and shorten the idle period
