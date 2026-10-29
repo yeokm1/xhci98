@@ -4182,7 +4182,9 @@ and the hardware bench's steps (task 44-E.6). Nothing in `src\` changes
 with it.
 
 Tags: **[hw]** the ASM4242's own state as `usb4-emu`'s asm4242 model
-and data record it (`usb4-emu` `7ec3865`, `5d7345a` and `9f333f3`, read
+and data record it (`usb4-emu` `a0b6749` and `376e2aa` on its `main`
+after the merge, the capture archives kept outside that repository;
+`7ec3865`, `5d7345a` and `9f333f3` before the 2026-10-29 squash), read
 there and never modified from here, `usb4-emu`'s asm4242 research note
 being that repository's own reading); where that data came from is
 recorded in `usb4-emu`; nothing of it is in this repository. **[inf]** an
@@ -4896,8 +4898,10 @@ profile in `usb4-emu` before any code. The options as they were put:
   record 21 read them.
 - This repository: design record 21; `AGENTS.md`; `src\xhci98.inf`.
 - For section 18 (read 2026-10-25): `usb4-emu`'s asm4242 model and data
-  (`7ec3865`, `5d7345a`, `9f333f3`) and its asm4242 research note
-  (`3090d19`), where that data came from is recorded in `usb4-emu`;
+  (`a0b6749` and `376e2aa` on `usb4-emu` `main` after the merge;
+  `7ec3865`, `5d7345a`, `9f333f3` before the 2026-10-29 squash) and its
+  asm4242 research note (section 11 at `a0b6749`; `3090d19` before the
+  squash), where that data came from is recorded in `usb4-emu`;
   nothing of it is in this repository; `docs/captures/P14S-ORICO-2026-10-15.md`
   section 2.2;
   design records 21, 28 and 31; `src\cm\cm_ports.c`, `cm_reenum.c`,
