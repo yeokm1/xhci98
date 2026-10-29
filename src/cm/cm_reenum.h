@@ -306,6 +306,9 @@ ULONG CmCfgmgStor98Version(PCM_CFGMG cfg, char *buffer, PULONG bytes,
                            PULONG type);
 ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode);
 
+/* Task 45.13: owed chain actions kept per domain (record 34 section 3.9). */
+#define CM_CHAIN_OWED_MAX   4UL
+
 typedef struct _CM_REENUM {
     /* The registration list's link (cm_reenum.c), and whether this domain
      * is on it. Under the list's lock. */
@@ -402,6 +405,23 @@ typedef struct _CM_REENUM {
     ULONG ConfirmsRefused;  /* ... read and refused (CM_MK_CONF_*)        */
     ULONG Departures;       /* departures after a query-remove recorded   */
     ULONG DeparturesDropped;    /* ... dropped on a connection change     */
+
+    /* Task 45.13 (design record 34 section 3.9): the NT chain action's
+     * owed entries, each with the action it owes, and its counters. The
+     * thread's alone. */
+    XHCI_TBT_CHAIN_OWED ChainOwed[CM_CHAIN_OWED_MAX];
+    TBT_ICM_ACTION ChainAction[CM_CHAIN_OWED_MAX];
+    XHCI_TBT_CHAIN_SET ChainSet;    /* the last walk's                  */
+    ULONG ChainPorts;       /* candidates recorded, summed over walks     */
+    ULONG ChainInvalidate;  /* invalidations through a chain port's filter */
+    ULONG ChainNoFilter;    /* owed actions dropped with no child filter  */
+    ULONG ChainOwedCount;   /* actions owed (first time)                  */
+    ULONG ChainOwedExpired; /* owed actions dropped at 10 s otherwise     */
+    ULONG ChainOwedFull;    /* actions not kept: every entry in use       */
+    ULONG ChainIncomplete;  /* incomplete walks                           */
+    ULONG ChainUnpowered;   /* candidates read with slot power off        */
+    ULONG ChainOver;        /* candidates past XHCI_TBT_CHAIN_MAX         */
+    ULONG ChainCancelled;   /* owed actions no longer live, lost or stopped */
 } CM_REENUM, *PCM_REENUM;
 
 VOID CmReenumStart(struct _CM_NHI *nhi);

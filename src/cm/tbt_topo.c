@@ -1762,3 +1762,251 @@ ULONG XhciTbtPollWait(const XHCI_TBT_POLL *poll, ULONG nowMs)
     left = poll->Budget - elapsed;
     return left < XHCI_TBT_POLL_STEP_MS ? left : XHCI_TBT_POLL_STEP_MS;
 }
+
+/* ---- chain ports (record 34 sections 3.1 and 3.9) --------------------- */
+
+static ULONG xhciTbtChainFail(PXHCI_TBT_CHAIN_SET out, ULONG why, ULONG bdf)
+{
+    out->Incomplete = 1;
+    out->Why = why;
+    out->FailBdf = bdf;
+    return XHCI_TBT_CHAIN_INCOMPLETE;
+}
+
+/*
+ * One function the walk found present: a chain-port candidate is recorded;
+ * any other bridge whose secondary bus is above its own and inside
+ * [lo, hi] is pushed for the walk, unless it is at the last level.
+ * Returns 0 when the walk is incomplete (out says why).
+ */
+static ULONG xhciTbtChainFn(PXHCI_TBT_CFG io, ULONG bdf, ULONG id,
+                            ULONG header, ULONG member, ULONG level,
+                            ULONG lo, ULONG hi, PULONG stack,
+                            PULONG levels, PULONG top, PULONG visited,
+                            PXHCI_TBT_CHAIN_SET out)
+{
+    ULONG buses;
+    ULONG sec;
+    ULONG sub;
+    ULONG off;
+    ULONG cap;
+    ULONG caps;
+    ULONG slotCap;
+    ULONG slotCtl;
+    PXHCI_TBT_CHAIN_PORT p;
+
+    if (XHCI_TBT_HDR_LAYOUT(header >> 16) != XHCI_TBT_HDR_BRIDGE) {
+        return 1;
+    }
+    if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_BUSES, &buses)) {
+        xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_READ, bdf);
+        return 0;
+    }
+    sec = (buses >> 8) & 0xFFUL;
+    sub = (buses >> 16) & 0xFFUL;
+    cap = XhciTbtFindCapStatus(io, bdf, XHCI_TBT_CAP_PCIE, &off);
+    if (cap == XHCI_TBT_CAP_FAILED || cap == XHCI_TBT_CAP_GONE) {
+        xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_CAP, bdf);
+        return 0;
+    }
+    if (cap == XHCI_TBT_CAP_FOUND) {
+        if (!xhciTbtRead(io, bdf, off + XHCI_TBT_PCIE_CAPS, &caps) ||
+            !xhciTbtRead(io, bdf, off + XHCI_TBT_PCIE_SLOTCAP, &slotCap)) {
+            xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_READ, bdf);
+            return 0;
+        }
+        caps = (caps >> 16) & 0xFFFFUL;
+        if (XHCI_TBT_PCIE_TYPE(caps) == XHCI_TBT_PCIE_TYPE_DOWN &&
+            XhciTbtPcieHotPlug(caps, slotCap)) {
+            if (out->Count >= XHCI_TBT_CHAIN_MAX) {
+                out->Over++;
+                return 1;
+            }
+            p = &out->Port[out->Count];
+            p->Bdf = bdf;
+            p->Id = id;
+            p->Secondary = sec;
+            p->Member = member;
+            p->Depth = level + 1;
+            p->Unpowered = 0;
+            if (slotCap & XHCI_TBT_SLOTCAP_PCP) {
+                if (!xhciTbtRead(io, bdf, off + XHCI_TBT_PCIE_SLOTSTA,
+                                 &slotCtl)) {
+                    xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_READ, bdf);
+                    return 0;
+                }
+                p->Unpowered = (slotCtl & XHCI_TBT_SLOTCTL_PCC_OFF) ? 1UL
+                                                                     : 0UL;
+            }
+            out->Count++;
+            /* One level of chain ports: nothing below a candidate. */
+            return 1;
+        }
+    }
+    if (sec <= XHCI_TBT_BDF_BUS(bdf) || sec < lo || sec > hi || sub < sec ||
+        sub > hi || level + 1 >= XHCI_TBT_CHAIN_LEVELS ||
+        ((visited[sec >> 5] >> (sec & 31UL)) & 1UL)) {
+        /* Unnumbered, outside the member's range, too deep, or walked. */
+        return 1;
+    }
+    if (*top >= XHCI_TBT_CHAIN_STACK) {
+        xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_STACK, bdf);
+        return 0;
+    }
+    visited[sec >> 5] |= 1UL << (sec & 31UL);
+    stack[*top] = sec;
+    levels[*top] = level + 1;
+    (*top)++;
+    return 1;
+}
+
+ULONG XhciTbtChainPorts(PXHCI_TBT_CFG io, ULONG memberBdf, ULONG member,
+                        PXHCI_TBT_CHAIN_SET out)
+{
+    ULONG stack[XHCI_TBT_CHAIN_STACK];
+    ULONG levels[XHCI_TBT_CHAIN_STACK];
+    ULONG visited[8];
+    ULONG top;
+    ULONG bus;
+    ULONG level;
+    ULONG buses;
+    ULONG lo;
+    ULONG hi;
+    ULONG dev;
+    ULONG fn;
+    ULONG fns;
+    ULONG bdf;
+    ULONG id;
+    ULONG header;
+    ULONG vendor;
+    ULONG i;
+
+    if (out == NULL) {
+        return XHCI_TBT_CHAIN_BAD_PARAM;
+    }
+    for (i = 0; i < sizeof(*out) / sizeof(ULONG); i++) {
+        ((PULONG)out)[i] = 0;
+    }
+    out->FailBdf = XHCI_TBT_NO_BDF;
+    if (io == NULL || io->Read == NULL || memberBdf > 0xFFFFUL) {
+        return XHCI_TBT_CHAIN_BAD_PARAM;
+    }
+    if (!xhciTbtRead(io, memberBdf, XHCI_TBT_CFG_BUSES, &buses) ||
+        buses == XHCI_TBT_ALL_ONES) {
+        return xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_MEMBER, memberBdf);
+    }
+    lo = (buses >> 8) & 0xFFUL;
+    hi = (buses >> 16) & 0xFFUL;
+    if (lo <= XHCI_TBT_BDF_BUS(memberBdf) || hi < lo) {
+        return xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_MEMBER, memberBdf);
+    }
+    xhciTbtZero(visited, 8);
+    visited[lo >> 5] |= 1UL << (lo & 31UL);
+    stack[0] = lo;
+    levels[0] = 0;
+    top = 1;
+    while (top != 0) {
+        top--;
+        bus = stack[top];
+        level = levels[top];
+        for (dev = 0; dev < 32; dev++) {
+            fns = 1;
+            for (fn = 0; fn < fns; fn++) {
+                bdf = XHCI_TBT_BDF(bus, dev, fn);
+                if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_ID, &id)) {
+                    return xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_READ,
+                                            bdf);
+                }
+                vendor = id & 0xFFFFUL;
+                if (vendor == 0xFFFFUL || vendor == 0UL) {
+                    continue;
+                }
+                if (vendor == 0x0001UL) {
+                    return xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_RETRY,
+                                            bdf);
+                }
+                if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_HEADER, &header) ||
+                    header == XHCI_TBT_ALL_ONES) {
+                    return xhciTbtChainFail(out, XHCI_TBT_CHAIN_WHY_READ,
+                                            bdf);
+                }
+                if (fn == 0 && ((header >> 16) & XHCI_TBT_HDR_MF) != 0) {
+                    fns = 8;
+                }
+                if (!xhciTbtChainFn(io, bdf, id, header, member, level, lo,
+                                    hi, stack, levels, &top, visited, out)) {
+                    return XHCI_TBT_CHAIN_INCOMPLETE;
+                }
+            }
+        }
+    }
+    return XHCI_TBT_CHAIN_COMPLETE;
+}
+
+ULONG XhciTbtChainOwe(PXHCI_TBT_CHAIN_OWED owed, ULONG count, ULONG key,
+                      ULONG serial, ULONG missing, ULONG nowMs)
+{
+    ULONG i;
+    ULONG slot;
+
+    if (owed == NULL) {
+        return count;
+    }
+    slot = count;
+    for (i = 0; i < count; i++) {
+        if (owed[i].Used && owed[i].Key == key) {
+            if (owed[i].Serial != serial) {
+                owed[i].Serial = serial;
+                owed[i].Since = nowMs;
+                owed[i].DoneCount = 0;
+            }
+            owed[i].Missing = missing;
+            return i;
+        }
+        if (!owed[i].Used && slot == count) {
+            slot = i;
+        }
+    }
+    if (slot == count) {
+        return count;
+    }
+    owed[slot].Used = 1;
+    owed[slot].Key = key;
+    owed[slot].Serial = serial;
+    owed[slot].Since = nowMs;
+    owed[slot].Missing = missing;
+    owed[slot].DoneCount = 0;
+    return slot;
+}
+
+ULONG XhciTbtChainDone(const XHCI_TBT_CHAIN_OWED *e, ULONG bdf)
+{
+    ULONG i;
+
+    if (e == NULL) {
+        return 0;
+    }
+    for (i = 0; i < e->DoneCount; i++) {
+        if (e->Done[i] == bdf) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+VOID XhciTbtChainMark(PXHCI_TBT_CHAIN_OWED e, ULONG bdf)
+{
+    if (e == NULL || XhciTbtChainDone(e, bdf) ||
+        e->DoneCount >= sizeof(e->Done) / sizeof(e->Done[0])) {
+        return;
+    }
+    e->Done[e->DoneCount++] = bdf;
+}
+
+ULONG XhciTbtChainOwedExpired(const XHCI_TBT_CHAIN_OWED *e, ULONG nowMs)
+{
+    if (e == NULL || !e->Used) {
+        return 0;
+    }
+    return (nowMs - e->Since >= XHCI_TBT_CHAIN_OWED_MS) ? 1UL : 0UL;
+}
