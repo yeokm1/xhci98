@@ -194,20 +194,6 @@ Nothing from `USBDRV\` is installed unless you tick it on the installer's Free U
 - 98 SE storage of any kind needs NUSB's mass-storage files ([details](docs/using/release-notes.md#windows-98-se-and-me-the-stock-install-and-storage)).
 - On an xHCI-only 98 SE or ME machine, **have the Windows CD (or its files) at hand**: Windows may ask for files.
 
-### Check the machine first (optional, recommended)
-
-Boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from `TOOLS\XHCIQUAL\`. It says whether the driver can work on the machine before you install anything. A controller with no legacy interrupt pin is not refused: the driver polls it, or uses a message-signalled interrupt on Vista and 7, and `XHCIQUAL` reports `QUALIFIED WITH CAVEATS`.
-
-<img src="images/xhci98-xhciqual-basic.jpg" width="800">
-
-The read-only quick scan answers in one line. The `xhci` run exercises the controller (handoff, reset, DMA, interrupt, port resets) and ends with a verdict:
-
-<img src="images/xhci98-xhciqual-full-start.jpg" width="800">
-
-<img src="images/xhci98-xhciqual-full-end.jpg" width="800">
-
-XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
-
 ### Install with SETUP.EXE
 
 You can also install by hand from Device Manager ([Install by hand](#install-by-hand)).
@@ -363,9 +349,9 @@ Each driver directory holds:
 
 Bugs in the free USB class drivers go to [usb-wdm-free's issues](https://github.com/yeokm1/usb-wdm-free/issues). The non-free drivers are from their manufacturers, as released, unchanged by this project. Everything else: open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
 
-- **The DOS report:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names (read-only). If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **resets the controller and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
 - **The driver's report:** make the problem happen, then in the xHCI98 USB Tree use File > Save Report (or `XHCITR /report <file>`) and attach the `.TXT`. It needs the logging level at 2 or more (the default; View > Logging level...).
 - **The driver's snapshot:** right after the report, use File > Save Snapshot... (or `XHCITR /snapshot`; `XHCITR64` on 64-bit Windows) and attach the four files it writes (`.DEV`, `.TXT`, `.BIN` and `.PSC`, named from the date and time).
+- **The DOS report, if a maintainer asks for it:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names (read-only). If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **resets the controller and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
 - **An install problem:** `XHCIINST.LOG` from the root of the system drive.
 
 ## Known limitations/issues
