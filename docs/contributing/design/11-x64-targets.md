@@ -150,7 +150,7 @@ WIM-based rather than the flat `I386`/`AMD64` directory the XP media has, so the
 route is one level deeper, and the ISO can be mounted rather than copied:
 
 ```powershell
-$r = Mount-DiskImage -ImagePath "D:\isos\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso" -PassThru
+$r = Mount-DiskImage -ImagePath "<iso folder>\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso" -PassThru
 ($r | Get-Volume).DriveLetter        # F, below
 ```
 ```bat

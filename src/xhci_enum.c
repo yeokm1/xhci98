@@ -533,6 +533,43 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived)
     return (listed && reported && removeReceived) ? 1UL : 0UL;
 }
 
+ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
+{
+    if (!on) {
+        return XHCI_RKEEP_WHY_OFF;
+    }
+    if ((flags & XHCI_RKEEP_F_FAULTED) != 0) {
+        return XHCI_RKEEP_WHY_FAULTED;
+    }
+    if ((flags & XHCI_RKEEP_F_ROOT) == 0) {
+        return XHCI_RKEEP_WHY_NOT_ROOT;
+    }
+    if ((flags & XHCI_RKEEP_F_HUB) != 0) {
+        return XHCI_RKEEP_WHY_HUB;
+    }
+    if ((flags & XHCI_RKEEP_F_STARTED) == 0) {
+        return XHCI_RKEEP_WHY_NOT_STARTED;
+    }
+    if ((flags & XHCI_RKEEP_F_SUSPENDED) != 0) {
+        return XHCI_RKEEP_WHY_SUSPENDED;
+    }
+    if ((flags & XHCI_RKEEP_F_ISOCH) != 0) {
+        return XHCI_RKEEP_WHY_ISOCH;
+    }
+    if ((flags & XHCI_RKEEP_F_STORAGE) != 0) {
+        if ((flags & XHCI_RKEEP_F_UAS) == 0) {
+            return XHCI_RKEEP_WHY_BULK_ONLY;
+        }
+        if ((flags & XHCI_RKEEP_F_SERIAL) == 0) {
+            return XHCI_RKEEP_WHY_NO_SERIAL;
+        }
+        if ((flags & XHCI_RKEEP_F_BUSY) != 0) {
+            return XHCI_RKEEP_WHY_BUSY;
+        }
+    }
+    return XHCI_RKEEP_KEEP;
+}
+
 ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
                             ULONG letGo)
 {

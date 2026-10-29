@@ -4102,7 +4102,7 @@ log, the registry, `msinfo32`, a screendump), **documentation**
 Windows 10 x86 only, in one guest leg (6.14.5); on 10 x64 the forced
 install was refused before any file was copied.
 
-**Method.** The two images of 43.32 (`E:\xhci98-vm\win8-10`, built
+**Method.** The two images of 43.32 (`<vm root>\win8-10`, built
 2026-10-22 from the owner's `Win10_22H2_English_x64v1.iso` and
 `Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965).
 Files taken read-only with `7z e <image>.qcow2` (7-Zip reads the

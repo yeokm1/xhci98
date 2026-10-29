@@ -34,7 +34,7 @@ design record 22 is Phase 40's.
 ## The sources this roadmap rests on
 
 The test bed and the hardware contract are the `usb4-emu` repository's
-(`D:\OneDrive\git-projects\usb4-emu`, branch `main`), which this project
+(the `usb4-emu` checkout beside this repository, branch `main`), which this project
 reads and never modifies, and whose QEMU processes it never stops:
 `docs/XHCI98-HANDOFF.md` is the entry point and names the rest
 (`ICM-PROTOCOL.md`, `PLATFORM-MATRIX.md`, `REENUM-EXPERIMENT.md`,
@@ -49,7 +49,7 @@ and SPDX tag and gaining a `legal-provenance.md` section 2a entry with the
 pinned commit (`AGENTS.md`, "Reference Implementations";
 `legal-provenance.md` section 3). The
 NVMe driver behind the tunnel is `nvme98`
-(`D:\OneDrive\git-projects\nvme98`, `docs/PLAN.md`), read-only here too;
+(the `nvme98` checkout beside this repository, `docs/PLAN.md`), read-only here too;
 what it asks of this connection manager is design record 21 section 7.
 Every virtual-machine leg in this file runs with this project's own
 overlays under the git-ignored `vm\usb4\` and its own QMP and VNC ports,
@@ -165,7 +165,7 @@ the host interface, the re-enumeration of the tunnel ports' buses after
 each change, and the removable mark on the devices behind them; with the
 other Intel firmware-connection-manager hosts claimed on profiles read from
 the Linux driver, untested and said so. The first of the three steps the
-`usb4-emu` handoff orders (`D:\OneDrive\git-projects\usb4-emu\docs\XHCI98-HANDOFF.md`
+`usb4-emu` handoff orders (`usb4-emu`'s `docs\XHCI98-HANDOFF.md`
 section 2, maintainer 2026-10-14): this, then the USB4 software connection
 manager (Phase 40), then real USB4 devices once the ORICO enclosure capture
 exists.
@@ -395,10 +395,10 @@ section 7.7. Released on `main` as the squash commit `6b74d071` ("3.1.0.0 (#23)"
 - [x] 42-A.31 `SETUP.EXE` at the package root (owner, 2026-10-19) (done 2026-10-19, `p42-batlaunch`, merged d1ac2b45; `runs/run-42.md`)
 - [x] 42-A.32 the 42-A.12 follow-up: the acknowledgement waits during back-to-back busy waits, and held work kept through a transport loss on NT (done 2026-10-19, `p42-callfix`, merged; host vectors only)
 - [x] 42-A.33 Stor98's 9x bounce copy across scatter/gather fragments (done 2026-10-19, `stor98-spd`, merged 38df05c1; Stor98's `docs/TESTING.md`)
-- [x] 42-V.1 the installer's legs, as read for `3.1.0.0` (done 2026-10-20, `E:\xhci98-vm\m31\N1` to `N5` and the final cut's legs; the rest in OWED31.1)
+- [x] 42-V.1 the installer's legs, as read for `3.1.0.0` (done 2026-10-20, `<vm root>\m31\N1` to `N5` and the final cut's legs; the rest in OWED31.1)
 - [x] 42-V.2 the connection-manager legs, as read for `3.1.0.0` (done 2026-10-20, matrices N3 to N5; the rest in OWED31.1)
 - [x] 42-V.3 the VM matrix on the `release` flavour, as read for `3.1.0.0` (done 2026-10-20, matrices N1 to N5 and the final cut's legs; the rest in OWED31.1)
-- [x] 42-V.7 more than one NVMe drive on 98 SE (was GEN1.2), as read for `3.1.0.0` (done 2026-10-19, `E:\xhci98-vm\m31\v7\RESULT.md`; the rest in GEN1.3)
+- [x] 42-V.7 more than one NVMe drive on 98 SE (was GEN1.2), as read for `3.1.0.0` (done 2026-10-19, `<vm root>\m31\v7\RESULT.md`; the rest in GEN1.3)
 - [x] 42-V.9 the legs of Stor98's audit fixes (42-A.19), as read for `3.1.0.0` (done 2026-10-20, Stor98's `docs/TESTING.md`; the rest in OWED31.1)
 - [x] 42.final `README.md`, the release notes (what `3.1.0.0` adds, "Installing" rewritten around the installer, "Untested ground" naming what is owed), `releases/history.md`, `source-files.md`, `docs/README.md`; the builds, the dry cut, the owner's signed cut of `3.1.0.0` and the install legs from the asset (done 2026-10-20: README, the release notes, `releases/history.md` and the release readme; cut at 354a4403, release commit 051c38d3; the legs on the final cut and the owner's P14s run in `runs/run-42.md`)
 

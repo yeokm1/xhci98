@@ -39,7 +39,7 @@ otherwise report success having staged nothing.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\extract-usbd-sources.ps1 `
-    -Win2KIso D:\isos\win2ksp4.ISO -Win98Iso D:\isos\Win98SE.iso
+    -Win2KIso <iso folder>\win2ksp4.ISO -Win98Iso <iso folder>\Win98SE.iso
 
 Examples; the ISO paths differ per host, so name your own.
 #>

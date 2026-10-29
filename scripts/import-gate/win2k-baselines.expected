@@ -6,7 +6,7 @@
 # NTKRNLMP for the Phase 2d SMP VM, and the ACPI HALs for real hardware, not
 # only the Standard-PC/MPS images used by the current VMs.
 #
-# Source: D:\isos\win2ksp4-retail.ISO, I386\, measured.
+# Source: <iso folder>\win2ksp4-retail.ISO, I386\, measured.
 #
 # **Eight** HAL images, not seven. HALBORG.DLL was missed on the first pass
 # because it is the one kernel HAL the media ships *uncompressed*, so it does

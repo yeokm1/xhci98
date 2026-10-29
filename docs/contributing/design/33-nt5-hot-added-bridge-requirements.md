@@ -126,7 +126,7 @@ In:
 
 ### 2.1 What 2000 and XP did with the hot-added dock [run]
 
-From 44.63 (evidence `E:\xhci98-vm\p44\p44-xpdock\`, decoded lists in
+From 44.63 (evidence `<vm root>\p44\p44-xpdock\`, decoded lists in
 `xp\reqs-a.txt` and `w2k\reqs-w.txt`, traces `xp\trace-a.log` from line
 1123 and `w2k\trace-w.log` from line 926):
 
@@ -168,7 +168,7 @@ From 44.63 (evidence `E:\xhci98-vm\p44\p44-xpdock\`, decoded lists in
 
 ### 2.2 A bridge with an earlier assignment [run]
 
-From 44.64 Part A (evidence `E:\xhci98-vm\p44\p44-chain\xp\serial-b.log`,
+From 44.64 Part A (evidence `<vm root>\p44\p44-chain\xp\serial-b.log`,
 decoded 2026-10-27 with 44.63's decoder): a chain first laid out by the
 firmware at power-on, then unplugged and plugged in again while XP ran,
 came back with the same instance ids, and XP's lists were:
@@ -1584,10 +1584,10 @@ diagnostic (section 9.2) is not counted.
   Specification: the Type 1 header's bus-number, base and limit
   registers, the BARs' read-only type bits, the PCI Express capability's
   Device/Port Type and Slot Capabilities (not held in this repository).
-- `runs/run-44.md`, "44.63" (evidence `E:\xhci98-vm\p44\p44-xpdock\`,
-  the decoder in `E:\xhci98-scratch\p44-p44-xpdock\tools\`), "44.45
+- `runs/run-44.md`, "44.63" (evidence `<vm root>\p44\p44-xpdock\`,
+  the decoder in `<scratch root>\p44-p44-xpdock\tools\`), "44.45
   (continued, 2)", and on branch `p44-chain` at `d95506fc` "44.64 Part A"
-  and "44.64 Part B" (evidence `E:\xhci98-vm\p44\p44-chain\`).
+  and "44.64 Part B" (evidence `<vm root>\p44\p44-chain\`).
 - Design records 21 (sections 3.3 and decision D2, 6.1.1, 6.2.1, 7.4 and
   its revision 3, 8), 23 (sections 5 and 9.2), 24 (section 4.3), 25, 26,
   28, 31 (sections 3.4, 4.1 to 4.4, 6.2), 32 and 34 (sections 2, 3.1,

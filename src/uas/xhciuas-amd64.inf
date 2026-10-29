@@ -58,8 +58,10 @@ ErrorControl=1                      ; SERVICE_ERROR_NORMAL
 ServiceBinary=%12%\xhciuas.sys
 LoadOrderGroup=Base
 
+; No temporary-file field, as in xhciuas.inf: that field is the 9x engine's
+; replace-a-loaded-file route through WININIT.INI, which no NT install takes.
 [Uas.CopyFiles]
-xhciuas.sys,,xhciuas.tmp
+xhciuas.sys
 
 ; Right-click Install pre-stages the driver with no device present.
 [DefaultInstall.NTamd64]

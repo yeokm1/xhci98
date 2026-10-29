@@ -42,11 +42,11 @@ reports that the half did not run.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\extract-target-baselines.ps1 `
-    -Win2KIso D:\isos\win2ksp4.ISO -Win98Iso D:\isos\Win98SE.iso
+    -Win2KIso <iso folder>\win2ksp4.ISO -Win98Iso <iso folder>\Win98SE.iso
 
 The paths are examples and differ per host - name your own. The baselines in
 scripts\import-gate\win2k-baselines.expected were measured from
-D:\isos\win2ksp4-retail.ISO on development host B, which is a provenance
+<iso folder>\win2ksp4-retail.ISO on development host B, which is a provenance
 record rather than a path to type: any SP4 media whose files match the
 manifest satisfies this script.
 #>

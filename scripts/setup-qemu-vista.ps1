@@ -50,7 +50,7 @@ host's media is a tracked file that names nothing on any other host. The
 generated launchers carry the "edit this file or pass -VistaIso" guard.
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-vista.ps1 -VistaIso "D:\isos\en_windows_vista_sp2_x86_dvd_342266.iso" -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-vista.ps1 -VistaIso "<iso folder>\en_windows_vista_sp2_x86_dvd_342266.iso" -CreateDisk
 #>
 
 [CmdletBinding()]

@@ -1294,6 +1294,19 @@ ULONG XhciPoolRelease(PXHCI_RING_POOL pool, ULONG deviceRef, ULONG poolIndex);
 ULONG XhciPoolReleaseDevice(PXHCI_RING_POOL pool, ULONG deviceRef);
 
 /*
+ * Task 45.23 (design record 20 section 4.3.2): a device kept across a
+ * resume's re-initialization, which ran XhciPoolInit, takes back the very
+ * rings its pipes still hold. XhciPoolClaim gives `poolIndex` to
+ * `deviceRef` when it is free, and refuses (XHCI_POOL_BAD_PARAM) an index
+ * out of range or owned. The kept device holds them under a temporary
+ * reference until its new slot is enabled; XhciPoolRehome then moves every
+ * ring of `fromRef` to `toRef` and returns how many, refusing (0) a `toRef`
+ * that already holds one. IRQL: any (the caller holds the lock).
+ */
+ULONG XhciPoolClaim(PXHCI_RING_POOL pool, ULONG deviceRef, ULONG poolIndex);
+ULONG XhciPoolRehome(PXHCI_RING_POOL pool, ULONG fromRef, ULONG toRef);
+
+/*
  * There is deliberately **no way to disown a ring without releasing it**, and
  * that is a decision an earlier draft got wrong in an instructive way.
  *

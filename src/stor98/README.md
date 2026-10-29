@@ -295,8 +295,9 @@ It gives the controller's Interrupt Pin (0 = none, 1-4 = INTA-INTD) and Interrup
 from its PCI configuration space, and whether it has the MSI and MSI-X capabilities
 (reported only; Stor98 uses neither). `port` is the interrupt level and vector Windows
 handed the driver. The last part is the outcome: `interrupt`, or `polling` with its
-reason (`forced by StorPollMode` on Windows 98 SE / ME, `forced by pollmode` on Windows
-2000 to 10, when polling was forced). Open it with Regedit, or export it with
+reason (`forced by StorPollMode` on Windows 98 SE / ME, `forced by storpollmode` on
+Windows 2000 to 10, when polling was forced; `INTx would not enable` when the
+controller's INTx enable did not read back as set). Open it with Regedit, or export it with
 `regedit /e report.reg "HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98"`.
 On Windows 2000 to 10 it is not rewritten when the system resumes from hibernation.
 

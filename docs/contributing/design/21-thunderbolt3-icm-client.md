@@ -71,7 +71,7 @@ profiles, the timed wait and polling kept as the fallback; decision D3
 stands, and whether it is coded is the owner's.
 
 The sources this record rests on are in the `usb4-emu` repository
-(`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
+(the `usb4-emu` checkout beside this repository, branch `main`, commit `eba0cf1`; `main`
 moved to `a68bc74` by 2026-10-15, and the two commits' trees are identical,
 read that day), which
 this project reads and never modifies: `docs/XHCI98-HANDOFF.md` (the
@@ -504,7 +504,8 @@ and no capture of it exists. On such a machine the driver may start and do
 nothing; the `debug` flavour's log says why. `XhciCmMode` 0 turns the
 driver off."
 `XhciCmMode` 2 in section 8 stays the experimental route for an Intel id
-no row lists, and it needs the INF to match that id first.
+no row lists and not of class `0x0C0340`, and it needs the INF to match
+that id first.
 
 So the honest claim for the first cut is "any Thunderbolt 3 device, on the
 Alpine Ridge JHL6240 host that was captured", with every other listed
@@ -2093,8 +2094,8 @@ response flags; an unknown event code is logged and ignored. The encoders
 and decoders sit behind section 1.4's profiles, the AR row filled from the
 observed frames and the FR, TR and ICL rows from the Linux structures
 [linux]; the profile is chosen by the NHI device id at `AddDevice` and
-confirmed after start, and `XhciCmMode` 2 maps an unknown Intel id onto the
-AR row. Every decoder length-checks its frame against its row's structure
+confirmed after start, and `XhciCmMode` 2 maps an unknown Intel id of
+any class but `0x0C0340` onto the AR row (section 8). Every decoder length-checks its frame against its row's structure
 before reading a field and hands back "malformed" rather than a partial
 decode; section 1.4.6 says what the client then does. FR's topology
 answer is the one multi-frame response this driver accepts, assembled by
@@ -3931,7 +3932,7 @@ change list, and section 7.2 follows it. Its maintainer decisions (MD-1 to
 MD-6) and gates (G3, Q-9x) keep their names, and sections 7.1 and 7.3 cite
 its plan as it was read under the former name.
 
-`nvme98` (`D:\OneDrive\git-projects\nvme98`, `docs/PLAN.md` section 0.10 and
+`nvme98` (the `nvme98` checkout beside this repository, `docs/PLAN.md` section 0.10 and
 gate G3; maintainer decision MD-2 of 2026-10-14) accepts, under assumption
 A1, that a tunnel's PCIe link going down resets the endpoint, and places two
 obligations on this connection manager:
@@ -6936,7 +6937,7 @@ record 13 section 5.5). The INFs still write only the driver key:
 
 | Value | Default | Meaning |
 |---|---|---|
-| `XhciCmMode` | 1 | the master switch (decision D11): 0 off - the inert start of section 1.4.2: the driver binds the NHI, logs it, touches no ring, approves nothing, re-enumerates nothing; 1 auto - section 1.4.2's selection: the ICM client where its four tests pass, design record 22's software connection manager where that record's selection takes the start, and the inert start otherwise; 2 the experimental route for an Intel NHI id the profile table does not list: the ICM client with the Alpine Ridge table, at the user's own risk (the `XhciIntelPortSwitch` 2 pattern, said in the same words in the README and release notes). A registry value cannot make PnP bind a driver to an id its INF does not name, so 2 also needs the id matched: the user adds a model line for it to a copy of `xhcicm.inf` and installs through Have Disk, a procedure the README spells out. What 2 bypasses is the id-to-candidate lookup alone; the readiness, ownership and version tests of section 1.4.2 still give the inert start when they fail; 3 the experimental user override that forces design record 22's software connection manager (its section 3.6, decision U1), at the user's own risk: refused on the Falcon, Alpine and Titan Ridge hosts and on Ice Lake, whose host routers are not USB4 routers, and on an NHI whose ids were not read; never a takeover of a domain whose firmware connection manager runs (`ICM_EN` read set vetoes it on the Intel rows); and it bypasses none of the readiness, protocol, tunnel-preservation and DMA-cleanup tests |
+| `XhciCmMode` | 1 | the master switch (decision D11): 0 off - the inert start of section 1.4.2: the driver binds the NHI, logs it, touches no ring, approves nothing, re-enumerates nothing; 1 auto - section 1.4.2's selection: the ICM client where its four tests pass, design record 22's software connection manager where that record's selection takes the start, and the inert start otherwise; 2 the experimental route for an Intel NHI id the profile table does not list and whose class is not the USB4 host interface's `0x0C0340`: the ICM client with the Alpine Ridge table, at the user's own risk. `TbtHwMatch` (`tbt_hw.c`) tries the listed ids first, then the class `0x0C0340`, and only then the unlisted Intel id, so an unlisted Intel NHI of class `0x0C0340` stays the software connection manager's candidate, which value 2 refuses (design record 22 section 12: the ICM experiment is refused on an id with no ICM row) (the `XhciIntelPortSwitch` 2 pattern, said in the same words in the README and release notes). A registry value cannot make PnP bind a driver to an id its INF does not name, so 2 also needs the id matched: the user adds a model line for it to a copy of `xhcicm.inf` and installs through Have Disk, a procedure the README spells out. What 2 bypasses is the id-to-candidate lookup alone; the readiness, ownership and version tests of section 1.4.2 still give the inert start when they fail; 3 the experimental user override that forces design record 22's software connection manager (its section 3.6, decision U1), at the user's own risk: refused on the Falcon, Alpine and Titan Ridge hosts and on Ice Lake, whose host routers are not USB4 routers, and on an NHI whose ids were not read; never a takeover of a domain whose firmware connection manager runs (`ICM_EN` read set vetoes it on the Intel rows); and it bypasses none of the readiness, protocol, tunnel-preservation and DMA-cleanup tests |
 | `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
