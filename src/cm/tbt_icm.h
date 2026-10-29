@@ -282,6 +282,15 @@ typedef struct _TBT_ICM_DEVICE {
     TBT_ICM_NAMES Names;
     ULONG VersionState;     /* TBT_ICM_VER_*: this occupancy's router read */
     ULONG Usb4Version;      /* ROUTER_CS_4 31:24 where VersionState says USB4 */
+    /* The policy approved it, but its parent's approval is not yet
+     * established (record 34 section 4.6): no approve sent. OwedParent is
+     * the parent entry's serial then, 0 when there was none. */
+    BOOLEAN ApproveOwed;
+    ULONG OwedParent;
+    /* Kept from before a driver ready and not announced since: set with
+     * Stale, but cleared only by an announcement, never by a driver
+     * ready that failed (record 34 section 4.6). */
+    BOOLEAN Unconfirmed;
 } TBT_ICM_DEVICE, *PTBT_ICM_DEVICE;
 
 /* The router's generation, read once per occupancy where the driver asked
@@ -466,6 +475,7 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG Recoveries;       /* TbtIcmRecover called */
     ULONG VersionReads;     /* router reads for the generation */
     ULONG VersionFailures;  /* of them, no generation known */
+    ULONG ApprovalsOwed;    /* deferred behind a parent (record 34 4.6) */
 } TBT_ICM_COUNTERS;
 
 typedef struct _TBT_ICM {

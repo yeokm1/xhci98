@@ -84,6 +84,14 @@ typedef struct FW {
     unsigned long DevReadDw3;
     unsigned long DisconnectInReadUs;   /* the device leaves during the read */
     const unsigned long *AnnounceUuid;  /* NULL: kUuid */
+    int ChildPresent;           /* a router chained behind the dock */
+    int ChildApproved;          /* its tunnel exists */
+    int ChildFirst;             /* announced before the dock (an order
+                                   the firmware is not known to use) */
+    int ChildAlone;             /* announced with the dock absent */
+    unsigned long ChildOnApprove;   /* announce the child, with this id,
+                                       unapproved, inside the dock's
+                                       approve (0: not) */
 } FW;
 
 static FW g_fw;
@@ -308,9 +316,25 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
         }
         fakeQueue(TBT_PDF_ICM_RESP, r, i, 6000, 0);
         g_fw.HoldUntil = g_fake.NowUs + g_fw.HoldUs;
+        if (g_fw.ChildAlone && g_fw.ChildPresent) {
+            g_fw.ConnId++;
+            arConnected(g_fw.ConnId, g_fw.ChildApproved, 1, 2, kUuid2,
+                        g_fw.HoldUs - 5000UL);
+        }
         if (g_fw.Present) {
             g_fw.ConnId++;
-            fwAnnounce(g_fw.HoldUs - 10000UL);
+            fwAnnounce(g_fw.HoldUs - (g_fw.ChildFirst ? 2000UL : 10000UL));
+            if (g_fw.ChildPresent) {
+                /* depth order, the parent first (usb4-emu R39) */
+                g_fw.ConnId++;
+                if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
+                    trConnected(g_fw.ConnId, g_fw.ChildApproved, 0x0301,
+                                kUuid2, g_fw.HoldUs - 5000UL, 0);
+                } else {
+                    arConnected(g_fw.ConnId, g_fw.ChildApproved, 1, 2,
+                                kUuid2, g_fw.HoldUs - 5000UL);
+                }
+            }
         }
         return;
     }
@@ -323,6 +347,10 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
         r[1] = dw[1];
         r[2] = 0;
         r[3] = (dw[1] >> 16) & 7;   /* the route of a depth-1 device is its link */
+        if (((dw[1] >> 20) & 0xF) == 2) {
+            /* depth 2 behind the dock's adapter 3 (usb4-emu R36) */
+            r[3] |= 0x0300UL;
+        }
         fakeQueue(TBT_PDF_ICM_RESP, r, 4, 3000, 0);
         return;
     }
@@ -340,6 +368,14 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
     }
     if (code == 0x04) {
         g_fw.Approves++;
+        if (g_fw.ChildOnApprove != 0 && words >= 2 && dw[1] == kUuid[0]) {
+            if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
+                trConnected(g_fw.ChildOnApprove, 0, 0x0301, kUuid2, 1000, 0);
+            } else {
+                arConnected(g_fw.ChildOnApprove, 0, 1, 2, kUuid2, 1000);
+            }
+            g_fw.ChildOnApprove = 0;
+        }
         memcpy(g_fw.LastApprove, dw, 4 * (words < 8 ? words : 8));
         g_fw.LastApproveWords = words;
         if (g_fw.DisconnectInApproveUs != 0) {
@@ -360,7 +396,11 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
             r[0] |= 0x100UL;
         }
         if (g_fw.ApproveMode == MODE_ANSWER && !(r[0] & 0x100UL)) {
-            g_fw.Approved = 1;
+            if (words >= 2 && dw[1] == kUuid2[0]) {
+                g_fw.ChildApproved = 1;
+            } else {
+                g_fw.Approved = 1;
+            }
         }
         fakeQueue(TBT_PDF_ICM_RESP, r, words, g_fw.ApproveDelayUs, 0);
         return;
@@ -2432,6 +2472,464 @@ static void test_router_version(void)
 /* Each vector named in the request trace (tbt_fake.h, task 44.38). */
 #define RUN_VEC(fn) do { fakeTraceMark(#fn); fn(); } while (0)
 
+/* ------------------------------------------------------------------ */
+/* The approval order behind a parent (record 34 sections 4.1, 4.6)   */
+/* ------------------------------------------------------------------ */
+
+/* How many approves the firmware received for `uuid`. */
+static unsigned long approvesFor(const unsigned long *uuid)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = 0; i < g_fake.TxCount && i < FAKE_TXLOG; i++) {
+        if (g_fake.TxLogPdf[i] == TBT_PDF_ICM_CMD &&
+            (g_fake.TxLogDw[i][0] & 0xFF) == 0x04 &&
+            g_fake.TxLogDw[i][1] == uuid[0]) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The slot holding `uuid`, or -1. */
+static long slotOf(const unsigned long *uuid)
+{
+    unsigned long i;
+    const TBT_ICM_DEVICE *d;
+
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        d = TbtIcmDevice(&g_icm, i);
+        if (d != NULL && d->Uuid[0] == uuid[0]) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+static int approvedNow(const unsigned long *uuid)
+{
+    long s = slotOf(uuid);
+
+    return s >= 0 && TbtIcmDevice(&g_icm, (ULONG)s)->Approved;
+}
+
+/* Index in the TX log of the n-th (0-based) approve, or -1. */
+static long nthApprove(unsigned long nth)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = 0; i < g_fake.TxCount && i < FAKE_TXLOG; i++) {
+        if (g_fake.TxLogPdf[i] == TBT_PDF_ICM_CMD &&
+            (g_fake.TxLogDw[i][0] & 0xFF) == 0x04) {
+            if (n == nth) {
+                return (long)i;
+            }
+            n++;
+        }
+    }
+    return -1;
+}
+
+static void test_chain_order_ar(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    long a0;
+    long a1;
+
+    /* The child announced first, with no parent in the table: owed. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for an orphan child");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    CHECK(slotOf(kUuid2) >= 0 &&
+              TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid2))->ApproveOwed,
+          "marked owed");
+    /* The parent arrives unapproved: its approve, then the child's. */
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid), 1, "the parent approved");
+    CHECK_EQ(approvesFor(kUuid2), 1, "then the child");
+    a0 = nthApprove(0);
+    a1 = nthApprove(1);
+    CHECK(a0 >= 0 && a1 > a0 && g_fake.TxLogDw[a0][1] == kUuid[0] &&
+              g_fake.TxLogDw[a1][1] == kUuid2[0],
+          "parent's approve first");
+    CHECK(approvedNow(kUuid) && approvedNow(kUuid2), "both approved");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-ups");
+    CHECK_EQ(act[0].Depth, 1, "the parent's first");
+    CHECK_EQ(act[1].Depth, 2, "the child's carries depth 2");
+    CHECK_EQ(act[1].Kind, TBT_ICM_ACT_TUNNEL_UP, "up");
+    CHECK_EQ(act[1].Why, TBT_ICM_WHY_APPROVED, "approved");
+
+    /* The child announced during the parent's approve (the firmware
+     * sends it while the approve is in flight): queued in the wait,
+     * decided after it with the parent established. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ChildOnApprove = 6;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(2000);
+    CHECK(g_icm.Counters.EventsQueued >= 1, "the child's event queued in the wait");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 0, "never owed");
+    CHECK_EQ(approvesFor(kUuid2), 1, "approved after the parent");
+    a0 = nthApprove(0);
+    a1 = nthApprove(1);
+    CHECK(a0 >= 0 && a1 > a0 && g_fake.TxLogDw[a0][1] == kUuid[0] &&
+              g_fake.TxLogDw[a1][1] == kUuid2[0],
+          "the parent's approve answered before the child's is sent");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The child after the parent's approve: approved at once. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 0, "nothing owed");
+    CHECK(approvedNow(kUuid2), "child approved");
+    {
+        long r = findTx(TBT_PDF_ICM_CMD, 0x0A);
+        CHECK(r >= 0, "get route sent");
+    }
+    CHECK(slotOf(kUuid2) >= 0 &&
+              TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid2))->Route.Lo == 0x0301,
+          "the child's route from get route (link 1, depth 2)");
+}
+
+static void test_chain_parent_outcomes(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    /* The parent refused (the error flag): the child stays owed; the
+     * parent's next announcement approves it, then the child. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ErrorApproves = 1;
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "the parent's approve failed");
+    CHECK_EQ(approvesFor(kUuid2), 0, "the child not approved");
+    CHECK(!approvedNow(kUuid2), "child unapproved");
+    arConnected(7, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "parent approved on its re-announcement");
+    CHECK_EQ(approvesFor(kUuid2), 1, "then the owed child");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The parent disconnected with the child's approve owed: both leave,
+     * nothing is sent for the child. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed");
+    actions(act, 8);
+    arDisconnected(1, 1, 0);
+    idle(200);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "both gone");
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for the child");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-downs");
+    CHECK_EQ(act[0].Depth, 2, "deepest first");
+    CHECK(!act[0].WasApproved, "the child never had a tunnel");
+
+    /* The parent already approved, announced after its child. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid), 0, "the approved parent needs no approve");
+    CHECK_EQ(approvesFor(kUuid2), 1, "the child's approve follows its announcement");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The parent's approve times out (outcome unknown): the child waits;
+     * an announcement settling the parent approved releases it. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetTimeouts(&g_icm, 1000, 1000);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(10000);
+    CHECK_EQ(g_icm.Counters.ApprovalsUnknown, 1, "outcome unknown");
+    CHECK_EQ(approvesFor(kUuid2), 0, "the child waits");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    g_fw.ApproveMode = MODE_ANSWER;
+    arConnected(8, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "settled approved");
+    CHECK_EQ(approvesFor(kUuid2), 1, "the child approved");
+
+    /* A parent replaced while its child waits: the child goes with it;
+     * announced again, it is owed behind the new parent. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    {
+        unsigned long u4[4] = { 0x44444444UL, 0x55555555UL, 0xffffffffUL, 0xffffffffUL };
+
+        arConnected(8, 0, 1, 1, u4, 0);
+        idle(1000);
+        CHECK(slotOf(kUuid2) < 0, "the child left with the old parent");
+        arConnected(9, 0, 1, 2, kUuid2, 0);
+        idle(1000);
+        CHECK_EQ(approvesFor(kUuid2), 0, "owed behind the new, unapproved parent");
+        g_fw.ApproveMode = MODE_ANSWER;
+        arConnected(10, 0, 1, 1, u4, 0);
+        idle(1000);
+        CHECK(approvedNow(u4), "the new parent approved");
+        CHECK_EQ(approvesFor(kUuid2), 1, "then the child");
+    }
+
+    /* The policy withholds the parent: the child stays owed. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetApproveHook(&g_icm, onApproveHook, NULL);
+    g_hookAnswer = TRUE;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    g_hookAnswer = FALSE;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsWithheld, 1, "parent withheld");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "no approve at all");
+}
+
+static void test_chain_route_rows(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    long a0;
+    long a1;
+
+    /* Titan Ridge: the route in the event; the child at 0x0301 waits for
+     * route 1's approve. */
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    trConnected(6, 0, 0x0301, kUuid2, 0, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed");
+    CHECK_EQ(approvesFor(kUuid2), 0, "nothing sent for it");
+    trConnected(5, 0, 1, kUuid, 0, 0);
+    idle(1000);
+    a0 = nthApprove(0);
+    a1 = nthApprove(1);
+    CHECK(a0 >= 0 && a1 > a0 && g_fake.TxLogDw[a0][1] == kUuid[0] &&
+              g_fake.TxLogDw[a1][1] == kUuid2[0],
+          "route 1 approved, then route 0x0301");
+    if (a1 >= 0) {
+        CHECK_EQ(g_fake.TxLogDw[a1][6], 0x0301, "the child's route in its approve");
+    }
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-ups");
+    CHECK_EQ(act[1].Depth, 2, "depth 2 from the route");
+    CHECK_EQ(act[1].Route.Lo, 0x0301, "and its route");
+
+    /* A route not below the approved one is not its child. */
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    trConnected(5, 0, 1, kUuid, 0, 0);
+    idle(1000);
+    trConnected(6, 0, 0x0303, kUuid2, 0, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid2), 0, "0x0303's parent is route 3, absent");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+
+    /* Falcon Ridge: link and depth, the route from the topology. */
+    setup(GEN_FR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(approvesFor(kUuid2), 0, "owed on Falcon Ridge too");
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(2000);
+    CHECK(approvedNow(kUuid) && approvedNow(kUuid2), "both approved, parent first");
+}
+
+static void test_chain_rebind_and_reconcile(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    /* A chain tunnelled before the start: both announced approved at the
+     * driver ready, both up, nothing approved. */
+    setup(GEN_AR, 1, 1);
+    g_fw.ChildPresent = 1;
+    g_fw.ChildApproved = 1;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "both in the table");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "no approve");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-ups");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_ANNOUNCED, "as announced");
+    CHECK_EQ(act[1].Depth, 2, "the chained one at depth 2");
+
+    /* Resume with both re-announced: refreshes, no change. */
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(actions(act, 8), 0, "no tunnel change");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "both kept");
+
+    /* The child not re-announced: reconciled away, its tunnel-down at
+     * depth 2; the parent kept. */
+    TbtIcmSuspend(&g_icm);
+    g_fw.ChildPresent = 0;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the parent kept");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "tunnel down");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_RECONCILED, "reconciled");
+    CHECK_EQ(act[0].Depth, 2, "at depth 2");
+}
+
+/* The hook: no for the dock (kUuid), yes for anything else. */
+static BOOLEAN onApproveNotDock(PVOID ctx, const TBT_ICM_DEVICE *dev)
+{
+    (void)ctx;
+    g_hookCalls++;
+    return (BOOLEAN)(dev->Uuid[0] != kUuid[0]);
+}
+
+static void test_chain_settled_in_place(void)
+{
+    long s2;
+
+    /* A withheld parent later announced approved settles in place: the
+     * owed child is kept and approved, not dropped with a replacement. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetApproveHook(&g_icm, onApproveNotDock, NULL);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsWithheld, 1, "the dock withheld");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed");
+    s2 = slotOf(kUuid2);
+    arConnected(7, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "the dock approved by the firmware");
+    CHECK_EQ(slotOf(kUuid2), s2, "the child kept in its slot");
+    CHECK_EQ(approvesFor(kUuid2), 1, "and approved");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 1, "the dock's own never sent");
+
+    /* A child owed, then announced approved: it owes nothing; the
+     * parent's approval later sends no approve for it. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    arConnected(7, 1, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK(approvedNow(kUuid2), "the child approved by its announcement");
+    CHECK(!TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid2))->ApproveOwed,
+          "owed mark cleared");
+    g_fw.ApproveMode = MODE_ANSWER;
+    arConnected(8, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "the parent approved");
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for the approved child");
+}
+
+static void test_chain_resume_child_first(void)
+{
+    TBT_ICM_ACTION act[8];
+
+    /* Resume: the child announced unapproved before its parent; the kept,
+     * approved parent is not established until it is announced again. */
+    setup(GEN_AR, 1, 1);
+    g_fw.ChildPresent = 1;
+    g_fw.ChildApproved = 1;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    TbtIcmSuspend(&g_icm);
+    g_fw.ChildApproved = 0;
+    g_fw.ChildFirst = 1;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed behind the stale parent");
+    CHECK_EQ(approvesFor(kUuid2), 1, "approved once the parent was announced");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The parent gone across the suspension: the child stays owed, no
+     * approve, and the parent's entry is reconciled away. */
+    setup(GEN_AR, 1, 1);
+    g_fw.ChildPresent = 1;
+    g_fw.ChildApproved = 1;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    TbtIcmSuspend(&g_icm);
+    g_fw.Present = 0;
+    g_fw.ChildApproved = 0;
+    g_fw.ChildAlone = 1;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK(slotOf(kUuid) < 0, "the parent reconciled away");
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for the orphan child");
+}
+
+static void test_chain_queued_and_unconfirmed(void)
+{
+    long a1;
+
+    /* An owed child with a newer announcement queued during its parent's
+     * approve: the debt is left to that announcement, which approves it
+     * with its own (latest) connection id, once. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    g_fw.ChildOnApprove = 9;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(2000);
+    CHECK_EQ(approvesFor(kUuid2), 1, "one approve for the child");
+    a1 = nthApprove(1);
+    CHECK(a1 >= 0 && g_fake.TxLogDw[a1][1] == kUuid2[0] &&
+              ((g_fake.TxLogDw[a1][5] >> 8) & 0xFF) == 9,
+          "with the id of its queued announcement");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* A rediscovery whose driver ready failed: the kept parent stays
+     * unconfirmed, so a child announced then is owed, not approved; the
+     * parent's own announcement releases it. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.Present = 0;
+    g_fw.ReadyMode = MODE_NEVER;
+    g_icm.RediscoverPending = TRUE;
+    idle(30000);
+    CHECK(slotOf(kUuid) >= 0, "the parent kept across the failed rediscovery");
+    CHECK(TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid))->Unconfirmed,
+          "unconfirmed");
+    g_fw.ReadyMode = MODE_ANSWER;
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve behind an unconfirmed parent");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    arConnected(7, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid2), 1, "released by the parent's announcement");
+}
+
 int main(void)
 {
     RUN_VEC(test_frames_ar);
@@ -2462,6 +2960,13 @@ int main(void)
     RUN_VEC(test_lost_and_recover);
     RUN_VEC(test_unsent_and_stalled);
     RUN_VEC(test_router_version);
+    RUN_VEC(test_chain_order_ar);
+    RUN_VEC(test_chain_parent_outcomes);
+    RUN_VEC(test_chain_route_rows);
+    RUN_VEC(test_chain_rebind_and_reconcile);
+    RUN_VEC(test_chain_settled_in_place);
+    RUN_VEC(test_chain_resume_child_first);
+    RUN_VEC(test_chain_queued_and_unconfirmed);
     fakeTraceMark("end");
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;
