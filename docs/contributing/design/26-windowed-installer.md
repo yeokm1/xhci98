@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 47, 2026-10-29 (roadmap-usb4 tasks 45.7, 45.8 and 45.6: on
+Status: draft 48, 2026-10-29 (roadmap-usb4 task 45.28, the owner's
+decision of that day: the Components page evenly spaced, every shown
+row's sentence at the height its words take and the rows stacked with
+one gap, the buttons at the page's foot, section 5.3.4);
+draft 47, 2026-10-29 (roadmap-usb4 tasks 45.7, 45.8 and 45.6: on
 98 SE and ME every package with a STAGE line is stageable again within
 the 280-character DevicePath, the console and the window reading the
 ticks in order, and the page listing the copied-only packages and
@@ -1644,6 +1648,98 @@ not known keeps the notes and runs as they were; memory integrity adds
 its sentence and refuses nothing. (The alternatives were a warning for
 the USB drivers, or for both.)
 
+#### 5.3.4 The page evenly spaced (task 45.28; draft 48)
+
+The owner, 2026-10-29: the Components page (`IDD_COMPONENTS`) is evenly
+spaced. Until then its rows sat at the template's fixed places, whose
+gaps ran from 1 to 3 dialog units with each sentence a fixed height
+whatever its words took, and `comp_layout` moved them by hand-chosen
+amounts per system - the storage row on 98 SE (the rows below moved
+down by 22, 21, 20 or 19 units), XHCIPFW's row (the rows below 11 units
+up where it is hidden, against its 12-unit pitch), the "Replace the
+stored build" box (the buttons 14 units up where it is hidden) - and a
+row hidden by `comp_fill` (Stor98's and `S98VSD.VXD`'s where the
+flavour directory lacks them, the tray boxes where the package lacks
+the tool) left its place empty. So the spacing differed by system and by
+package.
+
+**The stack** (`comp_layout`, run at the end of `comp_fill` - every time
+the page is entered - once every row's words and its shown state are
+set, and again by `comp_usb_state` when the USB drivers' box changes its
+sentence's words; the other clicks on the page change ticks and greying,
+not words or shown rows, and the folder's line at the foot is cut to its
+width, so they lay nothing out; it places every control from the page's
+edges, so it is the same however often it runs). The rows, in the page's order, each a box and, for some,
+its sentence:
+
+| Row | Box (indent) | Sentence (indent) | Shown |
+|---|---|---|---|
+| USB drivers | `IDC_C_DRIVERS` (8) | `IDC_C_DRIVERS_T` (20) | always; the sentence not on 98 SE (the storage row's layout, section 5.3.1) |
+| UAS | `IDC_C_UAS` (20) | `IDC_C_UAS_T` (32) | always |
+| USB storage | `IDC_C_STOR` (8) | `IDC_C_STOR_T` (20) | 98 SE alone |
+| Thunderbolt 3 / USB4 | `IDC_C_TB` (8) | `IDC_C_TB_T` (20) | always |
+| XHCIPFW | `IDC_C_PFW` (20) | - | where offered (section 5.3, its row) |
+| Stor98 | `IDC_C_S98` (20) | `IDC_C_S98_T` (32) | when the flavour directory carries it |
+| Large transfers | `IDC_C_VSD` (32) | - | as section 5.3 has it |
+| Tray tool | `IDC_C_TRAY` (8) | - | when the package carries the tool |
+| Faster notice | `IDC_C_FAST` (20) | - | with the tray box |
+| Replace the stored build | `IDC_C_RESTAGE` (8) | - | Vista and later |
+
+The indents are the template's, unchanged. A box keeps the template's
+height (10 dialog units, one line). A sentence takes the height its
+words take at its control's width and font (`text_h`, as the storage
+row's already did, `comp_stor_h`), one line at least. A hidden row takes
+no room. The first shown box sits 2 dialog units from the page's top
+(the other pages' top margin); a sentence sits **1 dialog unit** under
+its box; the next row's box sits **G dialog units** under the bottom of
+the row above it (its box, or its sentence where it has one). The
+Settings and Change folder buttons sit at the page's foot, 2 dialog
+units from its bottom as the first box is from its top (194 to 208 of the
+210 units; the template had them at 189, and 98 SE's storage layout
+moved them to 195), the folder's line 2 units under their top as the
+template has it, on every system the same; the page's height and its
+640 by 480 fit on 98 SE are unchanged.
+
+**The gap G** is one for the whole page: 4 dialog units where the stack
+then ends at least G above the buttons, else 3, else 2, else 1. So 2000
+to 10 take 3 or 4 and 98 SE, whose page carries the storage row with its
+words whole, as little as 1 where the detection's longest line takes a
+fourth line; each page is evenly spaced at its own G. A stack that does
+not fit with 1 is laid out with 1 all the same and the self-test fails,
+which is how a longer text or a new row is caught before it ships.
+Measured in pixels from dialog units (`MapDialogRect`) at each layout,
+so 96 and 120 DPI and the large-font NT systems keep the same
+proportions.
+
+**What it replaces.** `comp_layout`'s per-system moves (`below[]`,
+`afterPfw[]`, `last[]`, the 2-unit and 19-unit moves of the USB drivers'
+and UAS rows) and `compLaidOut`. The storage row's words keep section
+6.5.2's rule (static text, whole, no scroll bar): its sentence is a
+stacked sentence like the others, at the height its words take; the
+framed-box sizing and the offsets section 5.4's "Three whole lines" note
+gives it are superseded.
+
+**The self-test** (`XHCIWIZ /selftest`, `st_comp_layout` and
+`st_comp_layout_nt`): the page laid out with every row's longest words
+(each sentence's longest form the engine can give: the Thunderbolt
+sentence with the longest controller name, the storage row with each
+detection line of `st_comp_layout`'s list) in each variant of shown
+rows - 98 SE (storage row, XHCIPFW, Stor98, `S98VSD.VXD`, tray), ME (no
+storage row), 2000 and XP (XHCIPFW.SYS, `S98VSD.VXD` greyed), Vista and 7
+32-bit (XHCIPFW.SYS and the restage box), 64-bit Vista to 10 (no
+XHCIPFW), and a package without Stor98 or the tray tool - and in each:
+every hidden row's controls hidden, the first box 2 units from the top,
+every gap between rows the one G, every sentence 1 unit under its box
+at the height its words take, the last row G above the buttons, the
+buttons on the page and the folder's line beside them, XHCIPFW's box
+indented under the Thunderbolt box, and on 98 SE the storage words whole
+with no scroll bar.
+
+**The legs** (`runs/run-45.md`, "45.28"): the page by screenshot (QMP
+`screendump`) on 98 SE, ME, 2000, XP, 7 and 10 from this tree's package,
+each with the rows that system shows (98 SE and ME with and without the
+Thunderbolt support's files in the download where the variant exists).
+
 ### 5.4 The USB settings
 
 The values of record 23 section 8.1 whose "Asked when" holds for this
@@ -1821,7 +1917,9 @@ under the rows 20 dialog units tall, two lines.
   faster boxes), 18 (the folder's line, at 184) and 17 (the buttons,
   195 to 209 of the page's 210), each one dialog unit under the one
   above; the "Replace the stored build" box is never shown with the
-  storage row (Vista and later only). The Other USB drivers page's
+  storage row (Vista and later only). (Draft 48: section 5.3.4's stack
+  replaces these moves; the storage words keep this rule, whole and
+  with no scroll bar, at the height they take.) The Other USB drivers page's
   details box (`IDC_O_DETAIL`, 29 dialog units) holds three whole lines
   as it is (47 pixels at 96 DPI, the three lines, frame and margins
   46) and is unchanged; the Settings note's least height is six lines,
