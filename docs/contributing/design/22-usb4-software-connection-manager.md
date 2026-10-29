@@ -60,8 +60,8 @@ switch, `XhciCmAsmediaPcie7Credits` (task 44.41, section 18.8; sections
 6.8 and 12 point to it).
 
 Revised 2026-10-29 (task 45.20, the design half, reviewed and revised
-the same day; no code with it, and decisions U30 to U32 the owner's to
-confirm before the code): section 6.2 rewritten - a USB4
+the same day; no code with it; decisions U30 to U32 confirmed by the
+owner on 2026-10-29, each as recommended): section 6.2 rewritten - a USB4
 version 2 router, Barlow Ridge among them, is run as a version 2 one:
 CMUV 2.0, the Sequence bit capability set by Set Capabilities, path
 entries written as two dwords, PCIe Extended Encapsulation, the HiFi
@@ -867,7 +867,7 @@ items 6 and 7) is used only where both are version 2 routers.
    7), for a bench comparison or a
    router that misbehaves as version 2; item 4's two-dword path writes
    and section 6.2.3 item 4 stay, being right for both. A preserved router keeps its CMUV
-   whatever the value. (Owner's to confirm: section 15, U30.)
+   whatever the value. (Section 15, U30, confirmed by the owner on 2026-10-29.)
 
 #### 6.2.2 What a Ver. 2 Connection Manager owes, router by router
 
@@ -1012,7 +1012,7 @@ one does:
    single-lane link they could leave a new PCIe path less than 1.5
    Gb/s. A new PCIe tunnel beside a preserved DP tunnel is still built,
    as today, logged `u4.bw.dp-unaccounted`, and the floor there is not
-   verified: decision U32, the owner's to confirm.
+   verified: decision U32, (a), the owner's on 2026-10-29.
 9. **No Host Interface Reset** of a version 2 host router (Spec Table
    12-14's recommendation): already so (section 2.2, section 4.4).
 10. **USB3 Gen T** is not supported: a USB3 Gen T adapter (Spec Table
@@ -3971,9 +3971,9 @@ from their first form, as each row says.
 | U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": since task 43.24h the NT bridge's D0 is not held at all, because a held D0 deadlocks the NT resume (a bug check on 8 to 10, the five-minute watchdog's release on 2000 to 7), and after any resume each member still marked is released and, with re-enumeration on, invalidated, which is record 21's old failure path taken every time; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
 | U16 | The TMU | since task 45.20, on a link of two version 2 routers that this driver enumerates, HiFi Enhanced Uni-Directional whatever the tunnels (section 6.2.2 item 6, the Specification's "shall"); otherwise configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; other PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
 | U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in `3.0.0.0`. **Revised 2026-10-18** by the owner's opening of Phase 42, which promoted the planned recovery (`U4REC.1`) into `3.1.0.0` as tasks 42-0.5 and 42-A.10: CONTAINED is no longer terminal, the recovery of section 7.7's revision following on its precondition (decisions U18 to U29 there, the orchestrator's) | 7.7 |
-| U30 | USB4 version 2 routers (task 45.20) | run as version 2 by default: CMUV 2.0 written to a major 2 router this driver enumerates; the version 2 obligations keyed on the routers' own version (the Sequence bit capability enabled with a read-back, Extended Encapsulation on a PCIe tunnel between two version 2 routers, HiFi Enhanced Uni-Directional TMU on their links, a preserved CV never reconfigured, a preserved Gen 4 Link Recovery enable cleared); path entries written as two dwords on every router; `XhciCmUsb4V2` 0, a bench switch written by no INF, restores the version 1 run; owner to confirm, recommended over making version 1 the default because the Guide ties the CMUV to the router's version and Linux does the same | 6.2, 6.6, 12 |
-| U31 | Asymmetric Gen 4 links (task 45.20) | never initiated (no DisplayPort tunnel needs one) and, found, used as found, never transitioned back to symmetric; owner to confirm, recommended over a transition to symmetric before the first path, which would touch a link that may carry a preserved tunnel | 6.2.3 |
-| U32 | A new PCIe tunnel beside a preserved DisplayPort tunnel (task 45.20) | built as before, its 1.5 Gb/s floor (Spec 5.3.3.1, Guide 6.2.4) not verified, logged; owner to choose: (a) build it, as now, recommended, since a dock a predecessor left with DP alone would otherwise lose its PCIe devices, and a single-lane 10 Gb/s link with a DP stream large enough to starve PCIe is the rare case; (b) build none until the DP tunnel goes, which meets the floor and costs those devices; (c) read the DP adapters' allocated bandwidth (DP bandwidth allocation mode, out of scope here, section 1.3) | 6.2.2, 9.2 |
+| U30 | USB4 version 2 routers (task 45.20) | run as version 2 by default: CMUV 2.0 written to a major 2 router this driver enumerates; the version 2 obligations keyed on the routers' own version (the Sequence bit capability enabled with a read-back, Extended Encapsulation on a PCIe tunnel between two version 2 routers, HiFi Enhanced Uni-Directional TMU on their links, a preserved CV never reconfigured, a preserved Gen 4 Link Recovery enable cleared); path entries written as two dwords on every router; `XhciCmUsb4V2` 0, a bench switch written by no INF, restores the version 1 run; confirmed by the owner, 2026-10-29, over making version 1 the default, because the Guide ties the CMUV to the router's version and Linux does the same | 6.2, 6.6, 12 |
+| U31 | Asymmetric Gen 4 links (task 45.20) | never initiated (no DisplayPort tunnel needs one) and, found, used as found, never transitioned back to symmetric; confirmed by the owner, 2026-10-29, over a transition to symmetric before the first path, which would touch a link that may carry a preserved tunnel | 6.2.3 |
+| U32 | A new PCIe tunnel beside a preserved DisplayPort tunnel (task 45.20) | built as before, its 1.5 Gb/s floor (Spec 5.3.3.1, Guide 6.2.4) not verified, logged; the owner chose (a), 2026-10-29: (a) build it, as now, since a dock a predecessor left with DP alone would otherwise lose its PCIe devices, and a single-lane 10 Gb/s link with a DP stream large enough to starve PCIe is the rare case; (b) build none until the DP tunnel goes, which meets the floor and costs those devices; (c) read the DP adapters' allocated bandwidth (DP bandwidth allocation mode, out of scope here, section 1.3) | 6.2.2, 9.2 |
 
 ## 16. What is open, and what is a risk
 
