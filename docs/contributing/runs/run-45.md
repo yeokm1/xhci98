@@ -631,3 +631,162 @@ Found New Hardware wizard instead of Windows' USB Audio 1.0 driver, and `uac2`
 installs from it with nothing to tear down. A machine that already holds
 a "USB Audio Device" devnode for such a device keeps it; the way out is
 the `w1` row above (record 13 section 10.7.2, the release notes).
+
+## 45.33 98 SE crawling once xHCI98 is installed, the system drive in MS-DOS compatibility mode (2026-10-29)
+
+A report on a desktop board with six xHCI controllers, under CSM:
+Windows 98 SE, whose system drive is an internal NVMe drive it reads
+through the BIOS ("Drive C is using MS-DOS compatibility mode file
+system" on the Performance tab, before and after), was usable before
+xHCI98 and very slow after it, "as if polling", also without the
+Thunderbolt 3 / USB4 support. 98 SE's own IRQ list put five of the six
+xHCI controllers on lines shared with NVMe drives: IRQ 15 with three xHCI
+controllers, two NVMe drives (the system drive one of them), an audio
+function and chipset bridges; IRQ 11 with two xHCI controllers, a third
+NVMe drive and a parallel port; IRQ 14 with the sixth xHCI controller;
+IRQ 4 with the USB4 NHI.
+Readings in QEMU on development host A, 22:09 to 23:41; the owner's on the
+board, relayed the same evening.
+
+**Verdict: not an xHCI98 defect, and narrowed to documentation (owner,
+2026-10-29, 23:30).** A device on the shared line holds its
+level-triggered interrupt asserted with no Windows driver to acknowledge
+it. Windows 98 keeps such a line masked while no driver uses it, so the
+holder costs nothing; once any driver connects to the line, Windows
+unmasks it and the holder's interrupt storms. xHCI98's ISR rightly
+declines each entry. On the board the holder is the BIOS-driven system
+NVMe drive [inf: the owner's readings below point to it; not read at the
+register]. The way round it, `XhciInterruptMode` `2`, was read to leave
+the line masked with USB working; it is now in `README.md`'s known
+issues and `docs/using/tuning.md`. No driver change in `3.4.0.0`.
+
+### The owner's readings on the board
+
+In the order they came, each relayed by the coordinator:
+
+1. With xHCI98 not installed and a third-party Windows 98 NVMe driver
+   on two of the NVMe drives instead: just as slow; the system drive
+   still in compatibility mode.
+2. That driver then on all three NVMe drives: still slow; the system
+   drive's own instance at Code 10, so the BIOS still runs that drive.
+3. The audio card taken out: still slow - not the holder.
+4. The one other driver on IRQ 15 (the third-party NVMe driver's
+   instance on the second NVMe drive there) disabled in Device Manager,
+   with xHCI98 not installed: **responsive again**. So IRQ 15 storms as
+   soon as any driver uses it.
+5. The BIOS's legacy USB support had been off throughout, so no xHCI
+   controller was the BIOS's: not the holder.
+6. The system drive moved to the CPU-attached M.2 slot (now IRQ 11):
+   its driver instance still at Code 10, still compatibility mode - the
+   failure follows the drive, not the slot or its routing.
+7. The owner's interim set-up: xHCI98 installed with the three IRQ 15
+   xHCI controllers disabled in Device Manager.
+
+`IOS.LOG` read "Unit number 02 going through real mode drivers"; the
+real-mode drivers in `CONFIG.SYS` hook nothing unsafe for IOS.
+
+### The vehicle
+
+- Guests: q35 98 SE, overlays of `E:\xhci98-vm\q35-bases\w98se\disk.qcow2`
+  (`ab1d4d65...`), the bases' emulator (QEMU 11.1.2, `da60139f...`),
+  TCG, one vCPU, 512 MB. The base's C: is on the ICH9 AHCI controller,
+  which 98 SE has no driver for, so it already reads C: (and the `-Xfer`
+  disk, D:) through SeaBIOS's INT 13h: compatibility mode, as on the
+  board. SeaBIOS's disk code polls and asserts nothing.
+- The holder: `pci-serial` (`1B36:0002`) at 01:00.1 beside the
+  `qemu-xhci` at 01:00.0 (`multifunction=on`, behind the root port at
+  00:1C.0), so both are INTA of one slot: `info pci` gave both IRQ 10, and
+  I/O C000h to the serial function. 98 SE found no driver for it ("PCI
+  Serial Controller", Other devices). Writing `02h` to its Interrupt
+  Enable register (`o c001 2` in `DEBUG`) makes it hold INTx asserted
+  until its IIR is read, which nothing does; `o c001 0` releases it. From
+  `AUTOEXEC.BAT` (`if exist D:\ARMBOOT.FLG debug < D:\ARM.SCR`) it is held
+  from before Windows starts.
+- Timing: batch files on D: copy a 4 MB file and echo marks to COM1; the
+  host time-stamps the serial log's lines.
+- Packages: `out\3.2.0.0`'s release package (`xfer320\PKG`), installed
+  with `XHCIINST /dir release-x86 /yes /nopause`.
+
+### What was read
+
+| # | Set-up | Result |
+|---|---|---|
+| 1 | No xHCI98, holder armed (`DEBUG` in a DOS box) | Slave 8259 `irr=04 imr=8c elcr=0e`: IRQ 10 level, asserted, **masked**; copies unchanged (4 MB from D: 7.8 s cold; cached 0.6 s before and after arming) |
+| 2 | xHCI98 `3.2.0.0`, `XhciInterruptMode` 0, no holder | IRQ 10 unmasked (`imr=88`) from the start; 4 MB cold copies 5.0 and 5.8 s: xHCI98's timers and poller cost nothing visible in compatibility mode |
+| 3 | As 2, holder armed | About 78,000 interrupts a second on the cascade; keystrokes no longer processed; QEMU stopped about 70 s later on a **triple fault** (`-d cpu_reset`); twice of two |
+| 4 | As 2, the controller disabled in Device Manager, then the holder armed | The line stayed unmasked after the disconnect until the holder's first assertion, then Windows **masked IRQ 10 again** (`imr=8c`); the system ran normally |
+| 5 | `XhciInterruptMode` 2 (machine-wide key), the controller enabled with the holder already armed | IRQ 10 stayed masked, no storm; 4 MB cold copy 8.6 s |
+| 6 | Fresh overlay, `3.2.0.0`, `XhciInterruptMode` 2, holder armed from `AUTOEXEC.BAT` | IRQ 10 masked all session (`irr=04 imr=8c`, 118 cascade interrupts in all); a USB stick (`usb-storage` on `xh` port 3, plugged after the start) found by polling, "USB Mass Storage Device" installed, E: listed, a 4 MB file copied to C: and compared clean (`fc /b`); `XHCITR /dump`: `IntrMode 2`, delivery POLLING, reason "forced polling (XhciInterruptMode 2)", 5924 poll runs |
+
+So on 98 SE a held, unacknowledged level line is harmless while no
+driver uses it and ruinous once one does, and polling (mode 2), which
+connects no interrupt, leaves it as Windows had it. QEMU's holder never
+lets go and the guest dies; the board's lets go now and then
+[inf: around the BIOS's own disk commands] and the system crawls.
+
+### A prototype that was not kept
+
+Before the owner narrowed the task, a fix was designed and prototyped in
+this worktree (uncommitted; kept untracked as
+`E:\xhci98-scratch\p45-w45-compat\45-33-draft.patch`, the design as a
+section 4.4 of record 15, reviewed and revised): on 98 SE and ME
+under mode 0, (1) the start setting its own controller's PCI Interrupt
+Disable before the connection when its Interrupt Status bit was set,
+(2) a walk of PCI configuration space through `HalGetBusData` for a
+function on the same Interrupt Line with Interrupt Status set and
+Interrupt Disable clear, confirmed four times 10 ms apart, which then
+polled the controller with a new reason, and (3) a storm detector in the
+ISR wrapper (2048 declined entries within 100 ms, a window over the
+system time's two words) latching a move to polling by the dead-line
+watcher and a disconnect by the controller thread. Read with a `qemu`
+build of it swapped into the guest of reading 2 (diagnostic only, never
+packaged):
+
+- (2) worked: with the holder armed from `AUTOEXEC.BAT`, the start chose
+  polling, IRQ 10 stayed masked, and the snapshot named the holder
+  (01:00.1, `1B36:0002`, IRQ 10, eight functions read).
+- (3) did not: with the holder armed after the start, the ISR latched the
+  storm 30 to 35 ms in, and the watcher's DPC never ran again; the guest
+  stopped on a triple fault within seconds. The same with the holder
+  pulsed - from `DEBUG`-assembled code in a DOS box (which the storm
+  starved before it could release the line) and from a Win32 program in
+  the System VM (2000 loop iterations held, then `Sleep(20)`): latched,
+  no move, triple fault. Meanwhile the slave IMR alternated between IRQ
+  10 masked and unmasked (`imr=8c`, `88`, IRQ 10 sometimes in service),
+  so VPICD masks and unmasks the line around each pass: a mask written
+  at the 8259 by the driver would not hold either.
+
+That left only (2) as something that works, and only for a holder
+already asserting at the start; the owner chose documentation instead
+(owner, 23:30).
+
+### What changed
+
+- `README.md`, Known limitations/issues, Windows 98 SE (ME expected the
+  same, not tested): the symptom, how to spot it in Device Manager, and
+  the ways round it (a working driver or removing the device; and, where
+  no other working driver uses that IRQ, disabling the xHCI98 controllers
+  on it or `XhciInterruptMode` `2` with a restart).
+- `docs/using/tuning.md`, `XhciInterruptMode` `2`: the same case, with
+  reading 6 behind it.
+- The release notes' text is the coordinator's for `45.final`.
+
+### Evidence
+
+`E:\xhci98-vm\p45\w45-compat\g1\` (readings 1 to 5 and the prototype's:
+`ts-*.txt` time-stamped serial marks, `qemu-c.log`, `qemu-f.log`,
+`qemu-h.log`, `qemu-k.log`, `qemu-l.log` with the triple faults,
+`debugcon-h.log` with the latch, `serial-i.log` with the prototype's
+snapshot, screenshots `s01.png` to `s38.png`, `pids.txt`) and
+`E:\xhci98-vm\p45\w45-compat\g2\` (reading 6: `serial-b.log` with the
+snapshot and the `fc` result, `ts-b.txt`, `s01.png` to `s09.png`,
+`pids.txt`); the transfer folder `E:\xhci98-scratch\p45-w45-compat\xfer\`
+(`ARM.SCR`, `CT.BAT`, `CR.BAT`, `STK.BAT`, `MODE2.REG`, `BURST.COM`,
+`BURSTW.EXE`). Not tracked.
+
+### Owed
+
+- The board: whether `XhciInterruptMode` `2` leaves IRQ 15 masked there
+  too and the system usable with the three IRQ 15 controllers enabled
+  (the owner's reading, when convenient). Windows ME: not read; the
+  documentation says it is expected to behave as 98 SE, not tested.
