@@ -5914,6 +5914,27 @@ static void test_kid_adopt(void)
         CHECK_EQ(n, 0, "the link freed into the kid");
     }
 
+    /* The same behind the Thunderbolt 3 dock, its PCIe Down reading
+     * LTSSM 3: the USB4 end's LTSSM and both Path Enables verify it. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_DOCK);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 0);
+    g_fab.RxQCount = 0;
+    mark = g_fab.WrCount;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP && k->Pcie.Preserved,
+          "a preserved chain behind the dock: adopted");
+    CHECK_EQ(configWritesTo(&g_fab, mark, child) + configWritesTo(&g_fab, mark, dev), 0,
+             "no configuration written to the dock or the child");
+    CHECK(fabChainPcieUp(&g_fab, dev), "both Path Enables kept");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "nothing re-enumerated");
+
     /* Half-built (the child's Path Enable clear): a watched link. */
     fabInit(&g_fab);
     fabHostMinimal(&g_fab);
@@ -5981,6 +6002,18 @@ static void test_kid_resume(void)
     CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
     CHECK_EQ(configWritesTo(&g_fab, mark, child), 0,
              "no configuration written to the child (router operations aside)");
+
+    /* Verified behind the Thunderbolt 3 dock, its PCIe Down reading
+     * LTSSM 3 throughout: nothing written. */
+    dev = setupKid(FAB_DEV_TBT3_DOCK, &child);
+    TbtU4Suspend(&g_cm);
+    mark = g_fab.WrCount;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume behind the dock: verified");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
+    CHECK_EQ(configWritesTo(&g_fab, mark, child) + configWritesTo(&g_fab, mark, dev), 0,
+             "nothing written to the dock or the child");
+    CHECK(fabChainPcieUp(&g_fab, dev), "its tunnel kept");
 
     /* The domain lost its configuration: rebuilt after its parent. */
     dev = setupKid(FAB_DEV_USB4, &child);

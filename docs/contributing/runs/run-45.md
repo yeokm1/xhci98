@@ -58,7 +58,8 @@ The revision was reviewed and revised before its commit (`bb3434c7`).
   (Spec 3.3), the host-only reset kept local, no Lock on a Thunderbolt 3
   router's lanes; `FAB_DEV_TBT3_DOCK`, the Thunderbolt 3 dock with a
   downstream port as `usb4-emu`'s `usb4-router-tb3.c` device router has
-  it (lanes 1 to 4, PCIe Up 6, PCIe Down 7); `fabHotPlugChild`,
+  it (lanes 1 to 4, PCIe Up 6, PCIe Down 7, the latter's LTSSM field
+  fixed at 3 as the emulator reads it); `fabHotPlugChild`,
   `fabHotUnplugChild`, `fabPreosChild`, `fabDownLane0` and
   `fabChainPcieUp`.
 - `test/test_u4cm.c`: `test_chain_fabric` runs today (the dock at depth
@@ -68,20 +69,22 @@ The revision was reviewed and revised before its commit (`bb3434c7`).
   checks, 0 failures (1,362 before). Ten vectors under
   `#ifdef TBT_U4_MAX_KIDS`, written against section 6's names and
   compiled only once `tbt_u4cm.h` defines it: the connect behind a USB4
-  parent and behind the dock (sections 6.4 and 6.6, bonding before
-  Configuration Valid, the child's Path Enable first), the refusals (a
-  Thunderbolt 3 child, no PCIe Down, Detect not reached, no PCIe tunnel
-  on the parent), the end device's unplug and a quick re-plug, a child's
-  ERR_CONN never the parent's unplug, a stale unplug event during a
-  healthy connect, the middle unplug with the kid UP and CONNECTING, a
+  parent and behind the dock (sections 6.4 and 6.6, all four entries,
+  bonding before Configuration Valid, the child's Path Enable first),
+  the refusals (a Thunderbolt 3 child, no PCIe Down, Detect not reached,
+  no PCIe tunnel on the parent), the end device's unplug and a quick
+  re-plug, a child's ERR_CONN never the parent's unplug, a stale unplug
+  event during a healthy connect, the middle unplug with no write even
+  attempted on the departed routers with the kid UP and CONNECTING, a
   kid's unplug at another port's safe point served at the next tick and
   a depth-3 link dropped with its kid, the parent's PCIe loss and both
   ejects, adoption (a preserved chain, a half-built one, one with a
-  second path, one with no tunnel), and the resume (verified, rebuilt
-  after the parent, the parent HELD with its kid, and behind the dock a
-  power cycle and the dock re-plugged with its child attached). Checked
-  to compile under `/Za /W3 /WX` against a copy of the header with
-  section 6's fields added; not run.
+  second path, one with no tunnel, and a preserved chain behind the
+  dock), and the resume (verified, also behind the dock, rebuilt after
+  the parent, the parent HELD with its kid, and behind the dock a power
+  cycle and the dock re-plugged with its child attached). Checked to
+  compile under `/Za /W3 /WX` against a copy of the header with section
+  6's fields added; not run.
 
 ### Left
 
