@@ -2493,6 +2493,22 @@ VOID TbtIcmPoll(PTBT_ICM icm)
     }
 }
 
+VOID TbtIcmRingWake(PTBT_ICM icm)
+{
+    TBT_FRAME f;
+    ULONG frames;
+
+    if (!icm->Bound) {
+        return;
+    }
+    frames = 0;
+    while (frames < TBT_ICM_POLL_FRAMES && TbtRingReceive(icm->Ring, &f)) {
+        frames++;
+        tbtIcmFrame(icm, &f);
+    }
+    tbtIcmDrainQueue(icm, TBT_ICM_POLL_EVENTS);
+}
+
 VOID TbtIcmService(PTBT_ICM icm)
 {
     TBT_FRAME f;

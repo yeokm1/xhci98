@@ -190,6 +190,10 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     if (nhi->DevicePower != PowerDeviceD0) {
         return;
     }
+    /* The ring interrupt down while the function is still in D0, before
+     * any ring stops and before the D3 is forwarded (record 21 section
+     * 4.5.6): never connected outside D0. */
+    CmRirqDown(nhi, CM_RIRQ_DOWN_D3);
     /* At shutdown a client already suspended in D0 (the direct
      * transition) still owes its unbind and its ownership cleanup. */
     if (nhi->SystemPower == PowerSystemShutdown) {
@@ -320,6 +324,9 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
     }
+    /* The ring interrupt's intent before the resume restarts the rings;
+     * the re-arm follows on the thread's pass (cm_rirqos.c). */
+    CmRirqIntent(nhi);
     held = FALSE;
     if (ok && nhi->U4On) {
         ran = TRUE;

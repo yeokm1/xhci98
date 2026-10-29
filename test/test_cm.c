@@ -359,6 +359,26 @@ static void test_values(void)
     CmValuesTakeAsmPcie7(&v, 0, 0);
     CHECK_EQ(v.AsmPcie7Found | v.AsmPcie7Refused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
+
+    /* XhciCmRingInterrupt (task 45.22, record 21 section 4.5.4): 0 by
+     * default (owner, 2026-10-29), 0 or 1 taken, 2 and above refused. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_RING_IRQ_DEFAULT, 0, "XhciCmRingInterrupt defaults to 0");
+    CHECK_EQ(v.RingIrq, 0, "0 after CmValuesDefault");
+    CmValuesTakeRingIrq(&v, 0, 1);
+    CHECK_EQ(v.RingIrq | v.RingIrqFound | v.RingIrqRefused, 0, "absent: 0, nothing found");
+    CmValuesTakeRingIrq(&v, 1, 1);
+    CHECK(v.RingIrq == 1 && v.RingIrqFound == 1 && v.RingIrqRefused == 0, "1 is taken");
+    CmValuesTakeRingIrq(&v, 1, 0);
+    CHECK(v.RingIrq == 0 && v.RingIrqFound == 1, "0 is taken");
+    CmValuesTakeRingIrq(&v, 1, 2);
+    CHECK(v.RingIrq == 0 && v.RingIrqRefused == 1 && v.RingIrqRaw == 2,
+          "2 (the reserved message step) is refused: 0 stands");
+    CmValuesTakeRingIrq(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.RingIrq, 0, "all-ones is refused");
+    CmValuesTakeRingIrq(&v, 0, 0);
+    CHECK_EQ(v.RingIrqFound | v.RingIrqRefused, 0, "a later absent read clears both");
+    CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 
 static void test_decision(void)

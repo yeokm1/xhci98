@@ -63,6 +63,7 @@
 #include "cm_eject.h"
 #include "cm_irq.h"
 #include "cm_breq.h"
+#include "cm_rirqos.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -101,6 +102,8 @@
                                   then its completion                      */
 #define CM_WORK_QUIESCE 0x80UL /* a 9x shutdown's quiescence, its system
                                   IRP not retained for it (CM_PWR_DETACH)  */
+#define CM_WORK_RING   0x100UL /* the ring interrupt's DPC: RX ring 0 may
+                                  hold a frame (cm_rirqos.c, task 45.22)   */
 
 /* BAR0's extent this driver reads up to: the firmware status at 39944h
  * is the highest register touched (tbt_regs.h). A smaller window is
@@ -424,6 +427,10 @@ typedef struct _CM_NHI {
     BOOLEAN PowerOnNt;
 
     CM_COUNTERS Counters;
+
+    /* The ring interrupt (cm_rirqos.h; design record 21 section 4.5, task
+     * 45.22). */
+    CM_RIRQ_DRV Rirq;
 
     /* The status record for the install tool's viewer (cm_statos.c,
      * design record 24 section 3). */

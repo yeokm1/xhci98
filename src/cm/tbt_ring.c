@@ -360,7 +360,7 @@ static volatile UCHAR *tbtRxDesc(PTBT_RING ring, ULONG i)
 }
 
 /* Spec 12.4.1 Table 12-7: the buffer's address, RS set so the status is
- * written back, DD clear. */
+ * written back, DD clear; IE as the ring interrupt's intent says (RxIe). */
 static VOID tbtRxPost(PTBT_RING ring, ULONG i)
 {
     volatile UCHAR *d;
@@ -369,7 +369,8 @@ static VOID tbtRxPost(PTBT_RING ring, ULONG i)
     tbtStoreLe32(d + TBT_DESC_ADDR_LO,
                  ring->Phys + tbtRxBufOff(ring) + TBT_RING_BUF_BYTES * i);
     tbtStoreLe32(d + TBT_DESC_ADDR_HI, 0);
-    tbtStoreLe32(d + TBT_DESC_DW2, TBT_DESC_RS);
+    tbtStoreLe32(d + TBT_DESC_DW2,
+                 TBT_DESC_RS | (ring->RxIe ? TBT_DESC_IE : 0UL));
     tbtStoreLe32(d + TBT_DESC_DW3, 0);
 }
 
@@ -834,6 +835,18 @@ BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame)
     TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, i);
     ring->RxNext = (i + 1) % ring->Entries;
     return TRUE;
+}
+
+BOOLEAN TbtRingRxPending(const TBT_RING *ring)
+{
+    const volatile UCHAR *d;
+
+    if (!ring->Running || ring->Va == NULL || ring->Entries == 0) {
+        return FALSE;
+    }
+    d = ring->Va + TBT_DESC_BYTES * ring->Entries +
+        TBT_DESC_BYTES * ring->RxNext;
+    return (BOOLEAN)((tbtLoadLe32(d + TBT_DESC_DW2) & TBT_DESC_DD) != 0);
 }
 
 /* ---------------------------------------------------------------------- */
