@@ -655,10 +655,25 @@ outside it changes:
   had enabled one - and the port's next inspection enumerates what is
   there afresh. A command that fails asks for the controller reset, whose
   invalidation takes what is left.
+- The D0 waits for the keep (`hcdResumeKeepWait`, `hcd_power.c`): the
+  D0 of a resume that armed a keep polls, outside the power gate and
+  bounded at 15 s, until the thread's pass has kept or dropped the
+  devices, so the function drivers above - powered only after their
+  parent's D0 - never submit to a device left between the two (the XP
+  leg's first reading, `runs/run-45.md`, "45.23"); log note
+  `resume.keep.d0wait`.
 - K8 needs no change in `xhciuas.sys`: a UAS drive is kept only with
   nothing outstanding, so no command spans the reset, and its stream
   handles are the kept pipes'. A Bulk-Only drive is not kept until the
   drain contract of each `usbstor` is read (K4).
+- Read on q35 XP (`runs/run-45.md`, "45.23"): a UAS drive idle at the
+  hibernation, a file held open on it and written every second, is
+  restored in place and the file goes on growing with no error; the
+  same drive under a copy loop had a command outstanding across the
+  hibernation (three URBs pending on its PDO at the resume), is dropped as
+  K4 says, and XP reports "Delayed Write Failed" as before. Whether
+  `xhciuas.sys` should wait out its commands before it passes a
+  power-down on, so that a busy drive is idle by the sleep, is left open.
 - Not built, and dropped as before: devices behind a hub and hubs (K3's
   subtree restore), isochronous devices, a selectively suspended device's
   restore and re-suspension (K6), the quarantine of a busy storage

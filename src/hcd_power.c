@@ -141,7 +141,8 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
     }
     hc->ResumeInvalidating = 0;
     hc->ResumeKeepReady = hc->ResumeSlotsInvalidated;
-    hc->ResumeKeepPending = hc->ResumeKeepReady ? 1L : 0L;
+    hc->ResumeKeepPending = (hc->ResumeKeepReady && hc->ResumeKeepOn) ? 1L
+                                                                      : 0L;
     HcdQuirkResumed(hc, restores);
 }
 
@@ -304,6 +305,9 @@ static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
     HcdPowerGateEnter(hc);
     flush = hcdDirectTransitionGated(hc);
     HcdPowerGateLeave(hc);
+    /* A resume this route made waits for its keep as a D0 does (task
+     * 45.23), before the system IRP completes and the children follow. */
+    hcdResumeKeepWait(hc);
     /* Task 38.10: the shutdown's records flushed, the gate left (design
      * record 20 section 6.4). */
     if (flush) {

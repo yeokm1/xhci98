@@ -925,7 +925,6 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
      * that resume has succeeded; any other drops a keep still owed. */
     hc->ResumeSlotsInvalidated = hc->ResumeInvalidating;
     hc->ResumeKeepReady = 0;
-    hc->ResumeKeepPending = 0;
     if (!controllerStopped) {
         hc->SlotsUnproven = 1;
     }

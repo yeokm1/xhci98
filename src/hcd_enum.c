@@ -5744,11 +5744,6 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
          * done (hcd_power.c); taken once, whatever the pass decides. */
         keepReady = invalidated && hc->ResumeKeepReady;
         hc->ResumeKeepReady = 0;
-        if (!keepReady) {
-            /* Nothing of this pass will keep a device: the D0 waits no
-             * longer (hcd_power.c, hcdResumeKeepWait). */
-            hc->ResumeKeepPending = 0;
-        }
     }
     XhciControllerLockRelease(ext, oldIrql);
 
@@ -5789,9 +5784,10 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
             hcdInvalidate(hc);
         }
     }
-    if (keepReady) {
-        /* Kept, dropped or contained: the D0 waits no longer
-         * (hcd_power.c, hcdResumeKeepWait). */
+    if (invalidated) {
+        /* The invalidation taken - devices kept, dropped or contained - so
+         * the D0 waits no longer (hcd_power.c, hcdResumeKeepWait); never
+         * before, whatever disarmed the keep. */
         (VOID)InterlockedExchange((PLONG)&hc->ResumeKeepPending, 0);
     }
     if (detach) {
