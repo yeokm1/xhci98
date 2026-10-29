@@ -277,6 +277,11 @@ typedef struct _TBT_U4_TUNNEL {
                                                unclassified, or drained and
                                                waiting for its rebuild */
 
+/* TBT_U4CM.IsoWord (record 22 section 10.5). */
+#define TBT_U4_ISO_VALID        0x80000000UL
+#define TBT_U4_ISO_GEN_MASK     0x00FFFFFFUL
+#define TBT_U4_ISO_WORD(gen)    (TBT_U4_ISO_VALID | ((gen) & TBT_U4_ISO_GEN_MASK))
+
 typedef struct _TBT_U4_PORT {
     ULONG Index;            /* 1-based */
     ULONG Lane0;            /* host lane 0 adapter; lane 1 is Lane0 + 1 */
@@ -639,6 +644,13 @@ typedef struct _TBT_U4CM {
     TBT_U4_ROUTER HostRouter;
     ULONG PortCount;
     TBT_U4_PORT Ports[TBT_U4_MAX_PORTS];
+    /* Record 22 section 10.5 (task 45.35), per port (index port - 1):
+     * TBT_U4_ISO_WORD of the generation whose PCIe path step 1 read back
+     * closed, else 0. Set before the statement upcall; written 0 before
+     * anything that can enable a PCIe path or reinitialize the core. Kept
+     * apart from Ports, which the snapshots and the resume copy whole.
+     * Read by another thread (TbtU4PortIsolated), one aligned word. */
+    volatile ULONG IsoWord[TBT_U4_MAX_PORTS];
     TBT_U4_PORT ResumeSaved[TBT_U4_MAX_PORTS];  /* TbtU4Resume's copy: kept
                                                  * off the kernel stack */
     TBT_U4_LINK Links[TBT_U4_MAX_LINKS];
@@ -773,6 +785,14 @@ ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs);
 /* Stop (section 11): rings stopped, nothing on the fabric changed.
  * Idempotent. */
 VOID TbtU4Stop(PTBT_U4CM cm);
+/* Record 22 section 10.5: TRUE while port `port`'s (1-based) PCIe path of
+ * connection generation `gen` stands read back closed. One read of the
+ * port's IsoWord; any thread, any IRQL. */
+BOOLEAN TbtU4PortIsolated(const TBT_U4CM *cm, ULONG port, ULONG gen);
+/* The generation of port `port`'s PCIe tunnel when one is up, through
+ * *gen: TRUE when it is. Read from another thread at a controller's start
+ * (the binding of record 22 section 10.5). */
+BOOLEAN TbtU4PortPcieGen(const TBT_U4CM *cm, ULONG port, PULONG gen);
 
 /*
  * Section 9.4. TbtU4SetCarry, after TbtU4Init and before TbtU4Start: the

@@ -47,6 +47,41 @@ static int has(const char *hay, const char *needle)
     return strstr(hay, needle) != NULL;
 }
 
+/* ---- the main window's title (task 45.4) ---------------------------------- */
+
+#define TR_T_STR2(x) #x
+#define TR_T_STR(x) TR_T_STR2(x)
+
+/* The title against the version's other spelling, XHCI_VER_CSV, with its
+ * commas read as dots: the two forms in src\xhci_version.h agree, and the
+ * title is the name, one space and that version. */
+static void test_main_title(void)
+{
+    char want[64];
+    const char *csv = TR_T_STR(XHCI_VER_CSV);
+    size_t i;
+    size_t n;
+    int dots = 0;
+
+    strcpy(want, "xHCI98 USB Tree ");
+    n = strlen(want);
+    for (i = 0; csv[i] != '\0' && n + 1 < sizeof(want); i++) {
+        if (csv[i] == ' ') {
+            continue;
+        }
+        if (csv[i] == ',') {
+            want[n++] = '.';
+            dots++;
+        } else {
+            want[n++] = csv[i];
+        }
+    }
+    want[n] = '\0';
+    CHECK(dots == 3, "title: the version has four parts");
+    CHECK(strcmp(TR_MAIN_TITLE, want) == 0, "title: the name and the package version");
+    CHECK(strcmp(TR_MAIN_TITLE + 16, XHCI_VER_STR) == 0, "title: ends in XHCI_VER_STR");
+}
+
 /* ---- text ---------------------------------------------------------------- */
 
 static void test_printf(void)
@@ -4485,6 +4520,7 @@ static void test_ver_route(void)
 
 int main(void)
 {
+    test_main_title();
     test_printf();
     test_hex_names();
     test_conn();

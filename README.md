@@ -194,20 +194,6 @@ Nothing from `USBDRV\` is installed unless you tick it on the installer's Free U
 - 98 SE storage of any kind needs NUSB's mass-storage files ([details](docs/using/release-notes.md#windows-98-se-and-me-the-stock-install-and-storage)).
 - On an xHCI-only 98 SE or ME machine, **have the Windows CD (or its files) at hand**: Windows may ask for files.
 
-### Check the machine first (optional, recommended)
-
-Boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from `TOOLS\XHCIQUAL\`. It says whether the driver can work on the machine before you install anything. A controller with no legacy interrupt pin is not refused: the driver polls it, or uses a message-signalled interrupt on Vista and 7, and `XHCIQUAL` reports `QUALIFIED WITH CAVEATS`.
-
-<img src="images/xhci98-xhciqual-basic.jpg" width="800">
-
-The read-only quick scan answers in one line. The `xhci` run exercises the controller (handoff, reset, DMA, interrupt, port resets) and ends with a verdict:
-
-<img src="images/xhci98-xhciqual-full-start.jpg" width="800">
-
-<img src="images/xhci98-xhciqual-full-end.jpg" width="800">
-
-XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
-
 ### Install with SETUP.EXE
 
 You can also install by hand from Device Manager ([Install by hand](#install-by-hand)).
@@ -363,9 +349,9 @@ Each driver directory holds:
 
 Bugs in the free USB class drivers go to [usb-wdm-free's issues](https://github.com/yeokm1/usb-wdm-free/issues). The non-free drivers are from their manufacturers, as released, unchanged by this project. Everything else: open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
 
-- **The DOS report:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names (read-only). If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **resets the controller and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
 - **The driver's report:** make the problem happen, then in the xHCI98 USB Tree use File > Save Report (or `XHCITR /report <file>`) and attach the `.TXT`. It needs the logging level at 2 or more (the default; View > Logging level...).
 - **The driver's snapshot:** right after the report, use File > Save Snapshot... (or `XHCITR /snapshot`; `XHCITR64` on 64-bit Windows) and attach the four files it writes (`.DEV`, `.TXT`, `.BIN` and `.PSC`, named from the date and time).
+- **The DOS report, if a maintainer asks for it:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names (read-only). If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **resets the controller and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
 - **An install problem:** `XHCIINST.LOG` from the root of the system drive.
 
 ## Known limitations/issues
@@ -380,6 +366,7 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - Windows 98 SE: the first USB audio device plugged in after a boot (a webcam with a microphone included) can freeze Windows, with Windows' own drivers too. Plug it in before switching on and leave it plugged in; for a webcam whose microphone you do not need, usb-wdm-free's `NOAUD98.INF` avoids it.
   - Windows 98 SE and ME: a USB Audio Class 2.0 device needs the free UAC 2.0 driver before its first plug: tick `uac2` on the installer's Free USB drivers page (the `-free` download); `uac2` matches these devices by their class. Otherwise Windows' own USB audio driver (USB Audio Class 1.0 only) takes the device and can stop Windows with a fatal exception 0E in `USBAUDIO`. Then unplug it and restart (Safe Mode if needed), then Update Driver on its audio entry -> "Display a list of all the drivers in a specific location" -> Have Disk -> `C:\XHCI98\USBDRV\FREE\audio\uac2\w98se-me`, and restart with it plugged in.
   - Windows 98 SE and ME: installing the free audio or MIDI driver, Windows may ask for `wdmaudio.cat`, `ks.cat` and other files of its own from the Windows CD. Point it at the CD's `WIN98` folder, or click Skip File for the `.cat` files: they only hold signatures, which 98 SE and ME do not check.
+  - Windows 98 SE (ME is expected to behave the same; not tested): Windows crawls or freezes once xHCI98 is installed, when a device with no working Windows driver holds the IRQ an xHCI98 controller shares - for example an NVMe drive the BIOS still runs (System Properties, Performance: "MS-DOS compatibility mode"), or one whose driver failed (Code 10). Windows ignores that IRQ until a driver uses it; then xHCI98, or any other driver on that IRQ, cannot quiet it. Look in Device Manager (Computer, Properties, View Resources, Interrupt request (IRQ)) for such a device on an xHCI98 controller's IRQ. Then give the device a working driver, or remove it. Or, if no other working driver uses that IRQ, disable the xHCI98 controllers on it, or set [`XhciInterruptMode`](docs/using/tuning.md#polling-and-message-signalled-interrupts-xhciinterruptmode-xhcipollidlems-xhcipollactivems-xhcipollfinetimer) to `2` (polling) and restart Windows, so that xHCI98 leaves the IRQ unused and USB keeps working.
 - **Windows 2000**
   - A mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it, or disable and enable it.
 - **Windows XP**

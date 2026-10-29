@@ -1350,28 +1350,90 @@ int inst_path_append(const char *list, const char *dir, char *out, size_t cap)
     return 1;
 }
 
-static const char *const instOther9xStage[] = {
-    "audio/uac2", "audio/usbmidi"
-};
-
 int inst_other_9x_stageable(int set, const char *id)
 {
-    size_t i;
+    return (set == INST_SET_FREE || set == INST_SET_NONFREE) && id != NULL &&
+           id[0] != '\0';
+}
 
-    if (set != INST_SET_FREE || id == NULL) {
-        return 0;
+int inst_other_9x_keeps(int carried, int stageHere)
+{
+    return !carried || stageHere;
+}
+
+void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
+                               const char *const *folders, int n)
+{
+    int i;
+    int any = 0;
+
+    if (cap == 0) {
+        return;
     }
-    for (i = 0; i < sizeof(instOther9xStage) / sizeof(instOther9xStage[0]);
-         i++) {
-        if (inst_eq(id, instOther9xStage[i])) {
-            return 1;
+    inst_copy(out, desc != NULL ? desc : "", cap);
+    for (i = 0; i < n; i++) {
+        if (folders[i] == NULL || folders[i][0] == '\0') {
+            continue;
         }
+        strncat(out, any ? "; " : ": ", cap - strlen(out) - 1);
+        strncat(out, folders[i], cap - strlen(out) - 1);
+        any = 1;
     }
-    return 0;
+}
+
+void inst_other_rest_text(char *out, size_t cap, int part, int set,
+                          const char *dir, int copy, int replaced,
+                          int earlier)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!copy) {
+        if (part != 0) {
+            return;
+        }
+        inst_copy(out, "Nothing of this set is copied in this run: tick the "
+                  "box above to copy it and to choose packages to stage.",
+                  cap);
+        if (earlier) {
+            strncat(out, " Earlier staging kept is listed above.",
+                    cap - strlen(out) - 1);
+        }
+        return;
+    }
+    if (part == 0) {
+        inst_copy(out, "Ticked: staged, so Windows' hardware wizard finds the "
+                  "driver by itself", cap);
+        strncat(out, replaced ? "; this run replaces the set's earlier copy "
+                "and takes its earlier staging out." : earlier ? "; earlier "
+                "staging kept is listed above." : ".", cap - strlen(out) - 1);
+        return;
+    }
+    inst_copy(out, "Not ticked: copied only; when the wizard asks for a "
+              "driver, choose Specify a location and the package's folder "
+              "under ", cap);
+    strncat(out, dir != NULL && dir[0] != '\0' ? dir : "the install folder",
+            cap - strlen(out) - 1);
+    strncat(out, "\\", cap - strlen(out) - 1);
+    strncat(out, set == INST_SET_FREE ? INST_WDMFREE_DIR : INST_NONFREE_DIR,
+            cap - strlen(out) - 1);
+    strncat(out, ".", cap - strlen(out) - 1);
+}
+
+int inst_9x_devicepath_max(int me)
+{
+    return me ? INST_ME_DEVICEPATH_MAX : INST_9X_DEVICEPATH_MAX;
+}
+
+const char *inst_9x_devicepath_harm(int me)
+{
+    return me ? "Windows ME's hardware wizard stops responding" :
+                "Windows 98 SE's hardware wizard finds no driver";
 }
 
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
-                               int n, int *fits)
+                               int n, int *fits, int max)
 {
     char cur[INST_9X_DEVICEPATH_MAX + 2];
     char next[INST_9X_DEVICEPATH_MAX + 2];
@@ -1381,7 +1443,10 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
     for (i = 0; i < n; i++) {
         fits[i] = 0;
     }
-    if (strlen(base) > INST_9X_DEVICEPATH_MAX) {
+    if (max <= 0 || max > INST_9X_DEVICEPATH_MAX) {
+        max = INST_9X_DEVICEPATH_MAX;
+    }
+    if (strlen(base) > (size_t)max) {
         return -1;
     }
     inst_copy(cur, base, sizeof(cur));
@@ -1393,7 +1458,7 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
         }
         /* next holds at most the limit and its zero: a longer result is a
          * refusal of inst_path_append, so the folder is left out. */
-        if (inst_path_append(cur, f, next, INST_9X_DEVICEPATH_MAX + 1) < 0) {
+        if (inst_path_append(cur, f, next, (size_t)max + 1) < 0) {
             continue;
         }
         inst_copy(cur, next, sizeof(cur));
@@ -1402,9 +1467,9 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
     return bad ? -1 : (int)strlen(cur);
 }
 
-int inst_9x_devicepath_room(const char *withDir)
+int inst_9x_devicepath_room(const char *withDir, int max)
 {
-    return withDir != NULL && strlen(withDir) <= INST_9X_DEVICEPATH_MAX;
+    return withDir != NULL && max > 0 && strlen(withDir) <= (size_t)max;
 }
 
 int inst_path_remove(const char *list, const char *dir, char *out, size_t cap)
@@ -1967,6 +2032,18 @@ const INST_VALUE instValues[] = {
       "0 leaves such a drive at its problem code.", 0x1UL,
       { "no", "yes", NULL, NULL },
       0, 0, 0, 1UL },
+    /* Design record 33 section 9.1 (task 45.12): the hot-added bridges'
+     * requirement lists on 2000 and XP, not written by the INFs (NoInf,
+     * the driver's default 1); never asked, the Thunderbolt page's
+     * Advanced row and /set (record 26 section 5.5). */
+    { "XhciCmBridgeReq", INST_INF_CM, INST_APPLY_NT5_CM, 0x0UL, 0x7UL,
+      "give a dock or enclosure hot-plugged on Windows 2000 or XP the "
+      "bridge windows its devices need",
+      "0 leaves the lists as Windows makes them: a dock plugged in while "
+      "Windows runs may then get only one of its ports. 2 only records "
+      "what would be done, for a report.", 0x5UL,
+      { "off", "on", "record only, change nothing", NULL },
+      0, 0, 1, 1UL },
     /* Record 26 section 5.0: the mark service's own value, in its
      * Parameters key and never under Services\USB, read once at its start
      * (xhcimark.c) and written in its step of the run; never asked. */
@@ -2090,6 +2167,8 @@ int inst_value_relevant(int index, const INST_ENV *env)
         return (!env->Nt && env->CmNhi) ? 1 : 0;
     case INST_APPLY_MARK:
         return inst_mk_system(env);
+    case INST_APPLY_NT5_CM:
+        return (env->Nt && env->Major == 5 && env->CmNhi) ? 1 : 0;
     default:
         return 0;
     }
@@ -2111,6 +2190,8 @@ int inst_value_greyed(int index, const INST_ENV *env)
         return env->Nt ? 1 : 0;
     case INST_APPLY_MARK:
         return inst_mk_system(env) ? 0 : 1;
+    case INST_APPLY_NT5_CM:
+        return (env->Nt && env->Major == 5) ? 0 : 1;
     default:
         return 0;
     }
@@ -2129,6 +2210,8 @@ const char *inst_value_only(int index)
         return "Windows 98 SE and ME only";
     case INST_APPLY_MARK:
         return "Windows 2000 to 10 only";
+    case INST_APPLY_NT5_CM:
+        return "Windows 2000 and XP only";
     default:
         return NULL;
     }
@@ -2199,6 +2282,10 @@ INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
     }
     if (instValues[index].Apply == INST_APPLY_MARK && !inst_mk_system(env)) {
         return 0;   /* no mark service on this system */
+    }
+    if (instValues[index].Apply == INST_APPLY_NT5_CM &&
+        !(env->Nt && env->Major == 5)) {
+        return 0;   /* read by the driver on 2000 and XP alone */
     }
     if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
         !(env->Nt && env->Major >= 6)) {
@@ -5172,9 +5259,17 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
 /* The gate before a pass on 98 SE and ME (record 27 section 6)             */
 /* ======================================================================== */
 
-int inst_gate_ask(int asked, int wizard)
+int inst_gate_ask(int asked, int wizard, int english)
 {
-    return !asked || wizard != 0;
+    return (!asked && english != 1) || wizard != 0;
+}
+
+int inst_gate_english(int sysLang, int resLang)
+{
+    if (sysLang < 0 || resLang < 0) {
+        return -1;
+    }
+    return ((sysLang & 0x3FF) == 0x09 && (resLang & 0x3FF) == 0x09) ? 1 : 0;
 }
 
 /* The titles the hardware wizards of 98 SE and ME open under: the small
@@ -9067,6 +9162,42 @@ const INST_OTHER_PKG *inst_other_pkg(int set, const char *id)
     return NULL;
 }
 
+/* 1 when a row of kind names the pair on tok. */
+static int inst_other_rel_has(int kind, int setA, const char *a, int setB,
+                              const char *b, int tok)
+{
+    INST_U32 bit = tok >= 0 && tok < 32 ? ((INST_U32)1 << tok) : 0;
+    int i;
+
+    for (i = 0; i < instOtherRelCount; i++) {
+        const INST_OTHER_REL *r = &instOtherRels[i];
+        if (r->Excludes != kind || !(r->Systems & bit)) {
+            continue;
+        }
+        if ((r->SetA == setA && inst_eq(r->A, a) && r->SetB == setB &&
+             inst_eq(r->B, b)) ||
+            (r->SetA == setB && inst_eq(r->A, b) && r->SetB == setA &&
+             inst_eq(r->B, a))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_other_lifted(int setA, const char *a, int setB, const char *b,
+                      int tok)
+{
+    return inst_other_rel_has(INST_REL_LIFTED, setA, a, setB, b, tok);
+}
+
+int inst_other_rel_bars(int kind, int earlier, int sameRelease)
+{
+    if (kind == INST_REL_EXCLUDES) {
+        return 1;
+    }
+    return kind == INST_REL_LIFTED && earlier && !sameRelease;
+}
+
 int inst_other_excludes(int setA, const char *a, int setB, const char *b,
                         int tok)
 {
@@ -9075,7 +9206,7 @@ int inst_other_excludes(int setA, const char *a, int setB, const char *b,
 
     for (i = 0; i < instOtherRelCount; i++) {
         const INST_OTHER_REL *r = &instOtherRels[i];
-        if (!r->Excludes || !(r->Systems & bit)) {
+        if (r->Excludes != INST_REL_EXCLUDES || !(r->Systems & bit)) {
             continue;
         }
         if ((r->SetA == setA && inst_eq(r->A, a) && r->SetB == setB &&

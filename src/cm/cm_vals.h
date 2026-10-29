@@ -66,6 +66,18 @@ ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out);
 ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed);
 
 /*
+ * The role by position (design record 33 section 4.4, task 45.12), after
+ * CmRoleDecide, whose NHI answer stands whatever the stack holds: a
+ * CM_ROLE_FILTER answer (a bridge the filter INF lists) becomes the child
+ * when `pciAbove` is 0 - AddDevice found no device of the PCI driver above
+ * the PDO, so this call is the device's LowerFilters registration, made
+ * before the PCI driver's FDO - and stays the bridge filter when the PCI
+ * driver's FDO is above it (the filter INF's UpperFilters). Every other
+ * role is returned as it came.
+ */
+ULONG CmRolePlace(ULONG role, ULONG pciAbove);
+
+/*
  * The NHI profiles (record 21 section 1.4, and the coverage plan of the
  * owner's 2026-10-15 decisions; orchestrator's table, owner to confirm):
  * which connection manager a matched NHI gets and, for the firmware one
@@ -264,6 +276,23 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  */
 #define CM_ASM_PCIE7_DEFAULT 0UL
 
+/*
+ * XhciCmBridgeReq, REG_DWORD, Windows 2000, XP and XP x64 only (design
+ * record 33 section 9.1, task 45.12): 1 rewrites the requirement list of
+ * a hot-added bridge below an active tunnel port (record 33 section 6)
+ * and lets the mark service write its bridge marks (section 4.3); 0 does
+ * neither, lists passing untouched and each attempt still recorded with
+ * outcome "off"; 2 computes and records every attempt, replaces no list
+ * and writes no bridge mark (a reading mode for the bench). No INF writes
+ * it; absent reads as 1, any other value is refused and 1 stands. Read
+ * once per start, machine-wide key first, as every value, and never on
+ * Vista and later or on 98 SE and ME.
+ */
+#define CM_BRIDGE_REQ_DEFAULT 1UL
+#define CM_BRIDGE_REQ_OFF     0UL
+#define CM_BRIDGE_REQ_ON      1UL
+#define CM_BRIDGE_REQ_RECORD  2UL
+
 typedef struct _CM_VALUES {
     ULONG Value[CM_VAL_COUNT];  /* what the driver runs with                */
     ULONG Raw[CM_VAL_COUNT];    /* what the registry gave, when Found       */
@@ -285,6 +314,10 @@ typedef struct _CM_VALUES {
     ULONG AsmPcie7Found;
     ULONG AsmPcie7Raw;
     ULONG AsmPcie7Refused;
+    ULONG BridgeReq;            /* XhciCmBridgeReq as run with              */
+    ULONG BridgeReqFound;
+    ULONG BridgeReqRaw;
+    ULONG BridgeReqRefused;
 } CM_VALUES, *PCM_VALUES;
 
 /* Every value at its default, nothing found. */
@@ -316,6 +349,9 @@ VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmAsmediaPcie7Credits: 0 or 1, anything else refused. */
 VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
+VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

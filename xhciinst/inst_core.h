@@ -475,6 +475,8 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
 #define INST_APPLY_MARK     6   /* where the mark service runs (inst_mk_system) */
+#define INST_APPLY_NT5_CM   7   /* 2000, XP and XP x64 with the connection
+                                   manager (record 33 section 9.1) */
 
 /* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
  * or the mark service's own Parameters key (its Restart). */
@@ -1446,11 +1448,19 @@ int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 
 /* ---- the gate before a pass on 98 SE and ME (record 27 section 6) ---- */
 
-/* Whether the gate asks the user: always the first time in a run (asked
- * 0), and afterwards only when a hardware wizard was seen open (wizard 1)
- * or the look could not be made (wizard -1); wizard 0, none seen, goes on
- * without asking. 1 ask, 0 not. */
-int inst_gate_ask(int asked, int wizard);
+/* Whether the gate asks the user: a hardware wizard seen open (wizard 1)
+ * or a look that could not be made (wizard -1) asks; none seen (wizard 0)
+ * goes on without asking, except at the first gate of a run (asked 0) on
+ * a system not read as English (english 0, or -1 unread), which asks once
+ * as before, the look knowing only the English titles (task 45.32, record
+ * 27 section 6). 1 ask, 0 not. */
+int inst_gate_ask(int asked, int wizard, int english);
+/* Whether the system reads as English for the gate: 1 when both the
+ * system's default language (GetSystemDefaultLangID) and the language of
+ * KERNEL32's version resource have the primary language LANG_ENGLISH
+ * (0x09), 0 when either has another, -1 when either could not be read
+ * (a negative argument). */
+int inst_gate_english(int sysLang, int resLang);
 
 /* 1 when a visible top-level window's title is a hardware wizard's on 98
  * SE or ME (Found New Hardware, New Hardware Found, Add New Hardware
@@ -2381,7 +2391,14 @@ typedef struct _INST_OTHER_PKG {
 extern const INST_OTHER_PKG instOtherPkgs[];
 extern const int instOtherPkgCount;
 
-/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems. */
+/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems;
+ * 2 a COEXISTS lifted from an EXCLUDES where the cut read the two apart
+ * (record 26 section 6.7.14): COEXISTS between the packages of the
+ * releases a download carries, EXCLUDES against an earlier staging of
+ * another release (inst_other_rel_bars). */
+#define INST_REL_COEXISTS   0
+#define INST_REL_EXCLUDES   1
+#define INST_REL_LIFTED     2
 typedef struct _INST_OTHER_REL {
     int SetA;
     const char *A;
@@ -2401,34 +2418,74 @@ int inst_other_heading_index(const char *heading);
 
 /* The package of a path under a set's folder: its first two parts. */
 void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
-/* Record 26 section 6.7.12 (task 44.11): on 98 SE and ME only these free
- * packages are staged (on DevicePath), the ones whose devices 98 SE's and
- * ME's own USB audio INF would take by class; every other package of
- * either set is copy-only there. 1 when set:id is one of them. */
+/* Record 26 section 6.7.13 (task 45.7): on 98 SE and ME every package of
+ * either set may be staged (on DevicePath) where its set has a STAGE line
+ * for the system, within the system's limit; section 6.7.12's list of
+ * two free packages is gone. 1 for any package id of a known set. */
 int inst_other_9x_stageable(int set, const char *id);
+/* Section 6.7.13's rule for an earlier run's DevicePath entry of a
+ * package: kept (1) when its set is not carried in this download (its
+ * lines are not known), or when it is and the package has a STAGE line
+ * for this system; 0 (taken out) when the set is carried and the package
+ * has none. */
+int inst_other_9x_keeps(int carried, int stageHere);
+/* Section 6.7.13's page and console on 98 SE and ME: a package with only
+ * COPY lines for the system, as "<desc>: <folder>[; <folder>...]" (the
+ * folders given, each "USBDRV\FREE\<class>\<package>\<folder>"). */
+void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
+                               const char *const *folders, int n);
+/* Section 6.7.13's words for the rest of a set's packages, in two parts
+ * (part 0: what a tick does, or that nothing is copied; part 1: what an
+ * unticked package is and where its folder is, "" when nothing is
+ * copied): copy ticked or not; replaced, this run's copy taking out what
+ * an earlier run staged of the set; earlier, an earlier run's staging of
+ * it shown on the page; dir the install directory. */
+void inst_other_rest_text(char *out, size_t cap, int part, int set,
+                          const char *dir, int copy, int replaced,
+                          int earlier);
 /* The longest DevicePath with which 98 SE's hardware wizard was read to
  * find a driver (280 characters; none with 285 or more, section 6.7.6). */
 #define INST_9X_DEVICEPATH_MAX  280
+/* ME's (task 45.7's ME leg, section 6.7.13): its wizard found a driver
+ * with 259 characters and stopped responding, its window "locating the
+ * software" for good, with 260, 270 and 280. */
+#define INST_ME_DEVICEPATH_MAX  259
+/* The limit on this system: me 1 for ME, 0 for 98 SE. */
+int inst_9x_devicepath_max(int me);
+/* What a longer DevicePath does there, after "past which ": "Windows 98
+ * SE's hardware wizard finds no driver" or ME's words. */
+const char *inst_9x_devicepath_harm(int me);
 /* Section 6.7.12's projection: base (DevicePath as this run will leave it
  * before any staging: its own changes and withdrawals made) with each of
- * the n folders appended in order where the value stays within
- * INST_9X_DEVICEPATH_MAX; fits[i] 1 for a folder appended or already an
- * entry, 0 for one left out (then counted no further). Returns the
- * projected length, or -1 when base alone passes the limit (every fits[i]
- * then 0) or a folder is not a valid entry (empty, or holding ';'). */
+ * the n folders appended in order where the value stays within max (the
+ * system's limit, at most INST_9X_DEVICEPATH_MAX); fits[i] 1 for a folder
+ * appended or already an entry, 0 for one left out (then counted no
+ * further). Returns the projected length, or -1 when base alone passes
+ * the limit (every fits[i] then 0) or a folder is not a valid entry
+ * (empty, or holding ';'). */
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
-                               int n, int *fits);
+                               int n, int *fits, int max);
 /* The same limit for the install directory's own entry: 1 when withDir,
- * DevicePath as the run would write it with that entry, stays within
- * INST_9X_DEVICEPATH_MAX; 0 when it passes it, and the entry is left off
- * (a longer value takes every driver from the wizard, not only this
- * package's). */
-int inst_9x_devicepath_room(const char *withDir);
+ * DevicePath as the run would write it with that entry, stays within max;
+ * 0 when it passes it, and the entry is left off (a longer value takes
+ * every driver from the wizard, not only this package's). */
+int inst_9x_devicepath_room(const char *withDir, int max);
 /* The table's row of a package, or NULL. */
 const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
-/* 1 when the table's relations exclude the pair on system token tok. */
+/* 1 when the table's relations exclude the pair on system token tok
+ * (an EXCLUDES row; a lifted row does not, between this download's
+ * releases). */
 int inst_other_excludes(int setA, const char *a, int setB, const char *b,
                         int tok);
+/* 1 when a lifted row of the table (INST_REL_LIFTED) names the pair on
+ * system token tok. */
+int inst_other_lifted(int setA, const char *a, int setB, const char *b,
+                      int tok);
+/* Record 26 section 6.7.14: 1 when a relation of kind (INST_REL_*) bars a
+ * package against its partner - ticked now (earlier 0), or staged by an
+ * earlier run (earlier 1) from the release of its set this download
+ * carries (sameRelease 1) or from another or an unknown one (0). */
+int inst_other_rel_bars(int kind, int earlier, int sameRelease);
 /* 1 when a description keeps the rules: printable ASCII, no '|', at most
  * INST_PKG_DESC_MAX characters, and for a CLASS row no brand word. */
 int inst_other_desc_ok(int kind, const char *desc);

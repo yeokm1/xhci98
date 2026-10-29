@@ -21,7 +21,10 @@
 # cm_noirq.c (test_cm_noirq; design record 28); the
 # re-enumeration's own pure half, cm_ports.c (test_cm_ports), the
 # interrupt of a function hot-added on 2000, cm_irq.c (test_cm_irq; task
-# 44.53, record 21 section 6.2.1), the marks
+# 44.53, record 21 section 6.2.1), the requirement lists of a hot-added
+# bridge on 2000 and XP, cm_breq.c (test_cm_breq; task 45.12, design
+# record 33), the isolation statement's decision, cm_iso.c (test_cm_iso;
+# task 45.35, design record 22 section 10.5), the marks
 # answer's table, cm_marks.c (test_cm_marks; task 42-A.5), the 9x
 # tunnel id's pure half, cm_tagid.c (test_cm_tagid; task 44.3), and the
 # query device's answers, cm_query.c and cm_qpci.c (test_cm_query); the
@@ -66,6 +69,8 @@ SOURCES=cm_vals.c      \
         cm_noirq.c     \
         cm_ports.c     \
         cm_irq.c       \
+        cm_breq.c      \
+        cm_iso.c       \
         cm_marks.c     \
         cm_tagid.c     \
         cm_nvlink.c    \

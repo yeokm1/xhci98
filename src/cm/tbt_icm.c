@@ -1368,6 +1368,141 @@ static VOID tbtIcmLogApprove(PTBT_ICM icm, const ULONG *req, ULONG words,
     }
 }
 
+/* ====================================================================== */
+/* The approval order at depth 2 and deeper (record 34 section 4.6)       */
+/* ====================================================================== */
+
+/* Whether entry `p` is entry `c`'s parent: by route, `c`'s route with its
+ * last level removed; by link and depth, one level up on the same physical
+ * port (the subtree removal's rule, tbtIcmAtOrUnder). */
+static BOOLEAN tbtIcmIsParent(PTBT_ICM icm, ULONG p, ULONG c)
+{
+    const TBT_ICM_DEVICE *pd;
+    const TBT_ICM_DEVICE *cd;
+    ULONG depth;
+    ULONG i;
+
+    pd = &icm->Devices[p];
+    cd = &icm->Devices[c];
+    if (p == c || !pd->InUse || !cd->InUse || cd->Depth < 2) {
+        return FALSE;
+    }
+    if (tbtIcmByRoute(icm)) {
+        if (!pd->RouteValid || !cd->RouteValid) {
+            return FALSE;
+        }
+        depth = TbtRouteDepth(&cd->Route);
+        if (depth < 2 || TbtRouteDepth(&pd->Route) != depth - 1) {
+            return FALSE;
+        }
+        for (i = 0; i + 1 < depth; i++) {
+            if (TbtRouteLevel(&pd->Route, i) != TbtRouteLevel(&cd->Route, i)) {
+                return FALSE;
+            }
+        }
+        return TRUE;
+    }
+    return (BOOLEAN)(pd->Depth + 1 == cd->Depth &&
+                     tbtIcmPhyPort(pd->Link) == tbtIcmPhyPort(cd->Link));
+}
+
+static ULONG tbtIcmParentOf(PTBT_ICM icm, ULONG slot)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (tbtIcmIsParent(icm, i, slot)) {
+            return i;
+        }
+    }
+    return TBT_ICM_NO_SLOT;
+}
+
+/* A parent's approval is established: approved, its outcome known, and
+ * confirmed in this session (not Unconfirmed: kept across a resume, a
+ * rediscovery or a recovery and not yet announced again). The host router
+ * is a depth-1 entry's parent and always is. */
+static BOOLEAN tbtIcmEstablished(const TBT_ICM_DEVICE *d)
+{
+    return (BOOLEAN)(d->InUse && d->Approved && !d->ApproveUnknown &&
+                     !d->Unconfirmed);
+}
+
+/* An announcement of `uuid` is waiting in the queue. */
+static BOOLEAN tbtIcmQueuedFor(PTBT_ICM icm, const ULONG *uuid)
+{
+    ULONG i;
+
+    for (i = 0; i < icm->QueueCount; i++) {
+        if (tbtIcmUuidEqual(icm->Queue[(icm->QueueHead + i) %
+                                       TBT_ICM_EVENT_QUEUE].Uuid, uuid)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* An approve refused, failed or withheld for `slot`: each child owed
+ * behind it is logged, and stays owed. */
+static VOID tbtIcmOwedParentNote(PTBT_ICM icm, ULONG slot)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (icm->Devices[i].InUse && icm->Devices[i].ApproveOwed &&
+            tbtIcmIsParent(icm, slot, i)) {
+            tbtIcmLog(icm, "tbt.icm.approve-owed-parent", (slot << 8) | i);
+        }
+    }
+}
+
+static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a);
+
+/*
+ * `slot`'s approval became established: each child owed behind it is asked
+ * again, the policy first, in table order. A child owed behind another
+ * occupancy of that place, one not confirmed in this session, one without
+ * its route (record 21 section 5.5), or one with a newer announcement
+ * still queued (whose refresh settles it with the latest fields) is left
+ * for that announcement; one approved or of unknown outcome meanwhile
+ * owes nothing. Every candidate is re-checked after the one before it,
+ * whose approve may have waited through a disconnect.
+ */
+static VOID tbtIcmOwedAfter(PTBT_ICM icm, ULONG slot)
+{
+    ULONG serial;
+    ULONG i;
+    PTBT_ICM_DEVICE c;
+
+    serial = icm->Devices[slot].Serial;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (!icm->Devices[slot].InUse || icm->Devices[slot].Serial != serial ||
+            !tbtIcmEstablished(&icm->Devices[slot])) {
+            return;
+        }
+        c = &icm->Devices[i];
+        if (!c->InUse || !c->ApproveOwed || !tbtIcmIsParent(icm, slot, i)) {
+            continue;
+        }
+        if (c->Approved || c->ApproveUnknown) {
+            c->ApproveOwed = FALSE;
+            c->OwedParent = 0;
+            continue;
+        }
+        if (c->Unconfirmed || (!c->RouteValid && tbtIcmAsksRoute(icm)) ||
+            tbtIcmQueuedFor(icm, c->Uuid)) {
+            continue;
+        }
+        if (c->OwedParent != 0 && c->OwedParent != serial) {
+            tbtIcmLog(icm, "tbt.icm.approve-owed-stale", (slot << 8) | i);
+            continue;
+        }
+        c->ApproveOwed = FALSE;
+        c->OwedParent = 0;
+        tbtIcmPolicy(icm, i, NULL);
+    }
+}
+
 static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a)
 {
     PTBT_ICM_DEVICE d;
@@ -1396,6 +1531,7 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a)
          * (ICM 4.3 [obs]). */
         tbtIcmQueueAction(icm, TBT_ICM_ACT_TUNNEL_UP, TBT_ICM_WHY_APPROVED,
                           slot, FALSE);
+        tbtIcmOwedAfter(icm, slot);
     } else if (rc == TBT_E_GONE || !d->InUse) {
         icm->Counters.ApprovalsAbandoned++;
         tbtIcmLog(icm, "tbt.icm.approve-abandoned", slot);
@@ -1419,6 +1555,7 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a)
         icm->Counters.ApprovalsFailed++;
         tbtIcmLog(icm, "tbt.icm.approve-failed", (ULONG)(-rc));
         tbtIcmLogApprove(icm, req, words, a);
+        tbtIcmOwedParentNote(icm, slot);
     }
 }
 
@@ -1442,6 +1579,7 @@ static VOID tbtIcmFill(PTBT_ICM_DEVICE d, const TBT_ICM_ANNOUNCE *a)
     d->Boot = a->Boot;
     d->Names = a->Names;
     d->Stale = FALSE;
+    d->Unconfirmed = FALSE;
     if (a->RouteValid) {
         d->Route = a->Route;
         d->RouteValid = TRUE;
@@ -1451,13 +1589,17 @@ static VOID tbtIcmFill(PTBT_ICM_DEVICE d, const TBT_ICM_ANNOUNCE *a)
 /* Record 21 section 5.4: an announced, unapproved, unrejected device is
  * approved when the policy says so - on every such announcement, a refresh
  * included, so an approval that failed is tried again when the firmware
- * announces the device again. */
+ * announces the device again. Below depth 1 only once its parent's
+ * approval is established (record 34 section 4.6); `a` may be NULL. */
 static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a)
 {
     PTBT_ICM_DEVICE d;
     BOOLEAN approve;
+    ULONG parent;
 
     d = &icm->Devices[slot];
+    d->ApproveOwed = FALSE;
+    d->OwedParent = 0;
     if ((icm->Profile->Caps & TBT_ICM_CAP_APPROVE) == 0 ||
         icm->Profile->EncodeApprove == NULL) {
         icm->Counters.ApprovalsUnsupported++;
@@ -1472,7 +1614,29 @@ static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a)
     if (!approve) {
         icm->Counters.ApprovalsWithheld++;
         tbtIcmLog(icm, "tbt.icm.approve-withheld", slot);
+        tbtIcmOwedParentNote(icm, slot);
         return;
+    }
+    if (d->Depth > 1) {
+        parent = tbtIcmParentOf(icm, slot);
+        if (parent == TBT_ICM_NO_SLOT ||
+            !tbtIcmEstablished(&icm->Devices[parent])) {
+            d->ApproveOwed = TRUE;
+            d->OwedParent = parent == TBT_ICM_NO_SLOT
+                                ? 0 : icm->Devices[parent].Serial;
+            icm->Counters.ApprovalsOwed++;
+            tbtIcmLog(icm, "tbt.icm.approve-owed",
+                      (slot << 8) |
+                          (parent == TBT_ICM_NO_SLOT ? 0xFFUL : parent));
+            /* The event as received, for the record a later failure of
+             * the deferred approve refers to (record 21 section 1.4.6):
+             * the slot above and its serial correlate them. */
+            tbtIcmLog(icm, "tbt.icm.approve-owed-serial", d->Serial);
+            if (a != NULL) {
+                tbtIcmLogApprove(icm, NULL, 0, a);
+            }
+            return;
+        }
     }
     tbtIcmApprove(icm, slot, a);
 }
@@ -1514,9 +1678,12 @@ static VOID tbtIcmSettle(PTBT_ICM icm, ULONG slot, BOOLEAN routed,
     }
     if (d->Approved) {
         /* Tunnelled before this driver bound it, or by an approve whose
-         * answer was lost (record 21 section 6.5). */
+         * answer was lost (record 21 section 6.5): nothing owed for it. */
+        d->ApproveOwed = FALSE;
+        d->OwedParent = 0;
         tbtIcmQueueAction(icm, TBT_ICM_ACT_TUNNEL_UP, TBT_ICM_WHY_ANNOUNCED,
                           slot, FALSE);
+        tbtIcmOwedAfter(icm, slot);
         return;
     }
     if (routed) {
@@ -1561,9 +1728,13 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
                              tbtIcmPhyPort(d->Link) == tbtIcmPhyPort(a->Link));
         }
         /* An entry needing recovery (record 21 section 5.3): unrouted by
-         * a failed route request, an approve outcome unknown, or
-         * unapproved after an approve answered with the error flag. */
+         * a failed route request, an approve outcome unknown,
+         * unapproved after an approve answered with the error flag, owed
+         * behind its parent, or unapproved (withheld, owed) and now
+         * announced approved, which settles it in place with its subtree
+         * (record 34 section 4.6). */
         recovery = (BOOLEAN)(d->ApproveUnknown || d->ApproveFailed ||
+                             d->ApproveOwed || (!d->Approved && a->Approved) ||
                              (!d->RouteValid && tbtIcmAsksRoute(icm)));
         /* A device the firmware approved and now announces unapproved was
          * re-plugged unseen: a replacement, below, whatever else it needs.
@@ -1582,10 +1753,13 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
             d->Link = a->Link;
             d->EventFlags = a->EventFlags;
             d->Stale = FALSE;
+            d->Unconfirmed = FALSE;
             icm->Counters.Refreshes++;
             tbtIcmLog(icm, "tbt.icm.refresh", slot);
             if (!recovery && d->RouteValid) {
-                /* The resume case (ICM 6.5 [obs]): nothing else. */
+                /* The resume case (ICM 6.5 [obs]): nothing else but the
+                 * children owed behind it, now it is confirmed. */
+                tbtIcmOwedAfter(icm, slot);
                 return;
             }
             routed = tbtIcmRouteOk(icm, slot);
@@ -1597,6 +1771,7 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
              * already approved and announced approved needed only its
              * route. */
             if (d->Approved && a->Approved) {
+                tbtIcmOwedAfter(icm, slot);
                 return;
             }
             d->ApproveUnknown = FALSE;
@@ -1882,6 +2057,7 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
         for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
             if (icm->Devices[i].InUse) {
                 icm->Devices[i].Stale = TRUE;
+                icm->Devices[i].Unconfirmed = TRUE;
             }
         }
     }

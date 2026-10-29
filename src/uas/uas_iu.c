@@ -820,3 +820,131 @@ ULONG UasDeviceLimit(ULONG busBytes, ULONG busSource, ULONG found,
     *source = XHCI98_TELE_SRC_DEVICE;
     return bytes;
 }
+
+/* ------------------------------------------------------------------ */
+/* Task 45.23: the wake check and the medium check                    */
+/* ------------------------------------------------------------------ */
+
+ULONG UasSenseClass(const UCHAR *sense, ULONG length)
+{
+    ULONG code;
+    ULONG key;
+    ULONG asc;
+
+    if (sense == NULL || length < 3) {
+        return UAS_SENSE_OTHER;
+    }
+    code = sense[0] & 0x7FUL;
+    if (code == 0x70UL || code == 0x71UL) {
+        if (length < 13) {
+            return UAS_SENSE_OTHER;
+        }
+        key = sense[2] & 0x0FUL;
+        asc = sense[12];
+    } else if (code == 0x72UL || code == 0x73UL) {
+        key = sense[1] & 0x0FUL;
+        asc = sense[2];
+    } else {
+        return UAS_SENSE_OTHER;
+    }
+    switch (key) {
+    case 0x06UL:    /* UNIT ATTENTION */
+        return (asc == 0x28UL) ? UAS_SENSE_UA_MEDIUM : UAS_SENSE_UA;
+    case 0x02UL:    /* NOT READY */
+        if (asc == 0x3AUL) {
+            return UAS_SENSE_NO_MEDIUM;
+        }
+        return (asc == 0x04UL) ? UAS_SENSE_BECOMING : UAS_SENSE_OTHER;
+    case 0x05UL:    /* ILLEGAL REQUEST */
+        return UAS_SENSE_ILLEGAL;
+    default:
+        return UAS_SENSE_OTHER;
+    }
+}
+
+ULONG UasVpdListComplete(const UCHAR *page0, ULONG length)
+{
+    if (page0 == NULL || length < 4 || page0[1] != 0x00) {
+        return 0;
+    }
+    return (uasGet16(page0 + 2) <= length - 4) ? 1UL : 0UL;
+}
+
+ULONG UasVpdListHas(const UCHAR *page0, ULONG length, UCHAR page)
+{
+    ULONG n;
+    ULONG i;
+
+    if (!UasVpdListComplete(page0, length)) {
+        return 0;
+    }
+    n = uasGet16(page0 + 2);
+    for (i = 0; i < n; i++) {
+        if (page0[4 + i] == page) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static ULONG uasSame(const UCHAR *a, const UCHAR *b, ULONG n)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+ULONG UasIdMatch(const UAS_LUN_ID *was, const UAS_LUN_ID *now)
+{
+    if (was == NULL || now == NULL || !was->Read || !now->Read ||
+        now->MediumChanged || was->Removable != now->Removable) {
+        return 0;
+    }
+    if (was->Removable) {
+        return (was->CapState == UAS_ID_CAP_NO_MEDIUM &&
+                now->CapState == UAS_ID_CAP_NO_MEDIUM) ? 1UL : 0UL;
+    }
+    if (was->SerialLength == 0 && was->DevIdLength == 0) {
+        return 0;
+    }
+    if (was->SerialLength > UAS_ID_SERIAL_MAX ||
+        was->DevIdLength > UAS_ID_DEVID_MAX ||
+        was->SerialLength != now->SerialLength ||
+        was->DevIdLength != now->DevIdLength ||
+        !uasSame(was->Serial, now->Serial, was->SerialLength) ||
+        !uasSame(was->DevId, now->DevId, was->DevIdLength)) {
+        return 0;
+    }
+    if (was->CapState != UAS_ID_CAP_VALID ||
+        now->CapState != UAS_ID_CAP_VALID) {
+        return 0;
+    }
+    return uasSame(was->Cap, now->Cap, sizeof(was->Cap));
+}
+
+ULONG UasWakeDecide(ULONG busKnown, ULONG withdrawOk, ULONG declareTried,
+                    ULONG queryOk, ULONG state, ULONG epoch, ULONG verified,
+                    ULONG pastDeadline)
+{
+    if (!busKnown) {
+        return UAS_WAKE_RELEASE;
+    }
+    if (withdrawOk && !declareTried) {
+        return UAS_WAKE_RELEASE;
+    }
+    if (!queryOk || state == XHCI98_RESUME_FAILED) {
+        return UAS_WAKE_FAIL;
+    }
+    if (state == XHCI98_RESUME_PENDING) {
+        return pastDeadline ? UAS_WAKE_FAIL : UAS_WAKE_WAIT;
+    }
+    if (state != XHCI98_RESUME_RUNNING) {
+        return UAS_WAKE_FAIL;
+    }
+    return (epoch == verified) ? UAS_WAKE_SAME : UAS_WAKE_CHECK;
+}

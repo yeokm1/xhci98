@@ -72,7 +72,7 @@ file that names nothing on any other host. The generated launchers carry the
 Defaults to the measured value, tcg. See above for what WHPX does instead.
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-vista-x64.ps1 -VistaX64Iso "D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso" -Accel tcg -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-vista-x64.ps1 -VistaX64Iso "<iso folder>\en_windows_vista_sp2_x64_dvd_342267.iso" -Accel tcg -CreateDisk
 #>
 
 [CmdletBinding()]

@@ -67,7 +67,7 @@ guest gets further under WHPX than its 64-bit sibling does and still does not
 finish. See above.
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win7-x64.ps1 -Win7X64Iso "D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso" -Accel whpx,kernel-irqchip=off -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win7-x64.ps1 -Win7X64Iso "<iso folder>\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso" -Accel whpx,kernel-irqchip=off -CreateDisk
 #>
 
 [CmdletBinding()]

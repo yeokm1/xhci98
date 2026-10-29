@@ -936,6 +936,43 @@ static void test_context_strides(void)
              XHCI_LAYOUT_BAD_INDEX, "slot past MaxSlotsEn rejected");
 }
 
+/* Task 45.23: a kept device's rings taken back after XhciPoolInit, under a
+ * temporary reference, then moved to its new slot id. */
+static void test_pool_claim_rehome(void)
+{
+    XHCI_RING_POOL pool;
+    ULONG idx;
+
+    XhciPoolInit(&pool);
+    CHECK_EQ(XhciPoolClaim(&pool, 0x101UL, 5UL), XHCI_POOL_OK,
+             "a free index claimed");
+    CHECK_EQ(XhciPoolClaim(&pool, 0x101UL, 9UL), XHCI_POOL_OK,
+             "a second free index claimed");
+    CHECK_EQ(XhciPoolClaim(&pool, 0x102UL, 5UL), XHCI_POOL_BAD_PARAM,
+             "an owned index refused");
+    CHECK_EQ(XhciPoolClaim(&pool, 0x102UL, XHCI_MAX_POOL_RINGS),
+             XHCI_POOL_BAD_PARAM, "an index past the pool refused");
+    CHECK_EQ(XhciPoolClaim(&pool, 0UL, 6UL), XHCI_POOL_BAD_PARAM,
+             "no owner refused");
+    CHECK_EQ(pool.InUse, 2UL, "two in use");
+    CHECK_EQ(XhciPoolFree(&pool), XHCI_MAX_POOL_RINGS - 2UL, "free counts them");
+    /* An acquire never hands out a claimed index. */
+    CHECK_EQ(XhciPoolAcquire(&pool, 3UL, 0UL, &idx), XHCI_POOL_OK,
+             "another device acquires");
+    CHECK(idx != 5UL && idx != 9UL, "not a claimed index");
+    CHECK_EQ(XhciPoolRehome(&pool, 0x101UL, 3UL), 0UL,
+             "a new owner that holds a ring is refused");
+    CHECK_EQ(XhciPoolDeviceCount(&pool, 0x101UL), 2UL, "nothing moved");
+    CHECK_EQ(XhciPoolRehome(&pool, 0x101UL, 7UL), 2UL, "both moved");
+    CHECK_EQ(XhciPoolDeviceCount(&pool, 7UL), 2UL, "the new slot holds both");
+    CHECK_EQ(XhciPoolDeviceCount(&pool, 0x101UL), 0UL, "the temporary none");
+    CHECK_EQ(XhciPoolRelease(&pool, 7UL, 5UL), XHCI_POOL_OK,
+             "released under the new slot id");
+    CHECK_EQ(XhciPoolRehome(&pool, 7UL, 7UL), 0UL, "to itself refused");
+    CHECK_EQ(XhciPoolRehome(&pool, 0UL, 8UL), 0UL, "from no owner refused");
+    CHECK_EQ(XhciPoolReleaseDevice(&pool, 7UL), 1UL, "the rest released");
+}
+
 int main(void)
 {
     test_declared_size();
@@ -950,6 +987,7 @@ int main(void)
     test_pool_release();
     test_pool_reserved();
     test_pool_large_configurations();
+    test_pool_claim_rehome();
     test_resource_base();
     test_context_strides();
 

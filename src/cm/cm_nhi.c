@@ -296,7 +296,8 @@ static const char *const cmIcmCounterNames[] = {
     "cm.icm.mailbox.errors", "cm.icm.mailbox.timeouts",
     "cm.icm.hostpoll.tries", "cm.icm.hostpoll.answered", "cm.icm.idle-polls",
     "cm.icm.rediscoveries", "cm.icm.resume-budget-expired", "cm.icm.lost",
-    "cm.icm.recoveries", "cm.icm.version.reads", "cm.icm.version.failures"
+    "cm.icm.recoveries", "cm.icm.version.reads", "cm.icm.version.failures",
+    "cm.icm.approve.owed"
 };
 
 static const char *const cmRingCounterNames[] = {
@@ -322,7 +323,8 @@ static const char *const cmNhiCounterNames[] = {
     "u4.drv.force-power.kept", "u4.drv.contained", "u4.drv.contain-refused",
     "u4.recover.probes", "u4.recover.refused", "u4.recover.ok",
     "u4.recover.final", "u4.recover.retire-requests",
-    "u4.recover.retirement-owed", "u4.recover.rearm"
+    "u4.recover.retirement-owed", "u4.recover.rearm", "cm.iso.asked",
+    "cm.iso.yes", "cm.iso.no"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,

@@ -105,6 +105,13 @@
 #define XHCI_TOL_CONTAIN_NONE       0UL
 #define XHCI_TOL_CONTAIN_RELEASED   1UL     /* Bus Master Enable read clear  */
 #define XHCI_TOL_CONTAIN_PINNED     2UL     /* no proof                      */
+#define XHCI_TOL_CONTAIN_TUNNEL     3UL     /* released on the USB4 tunnel's
+                                               closed path (4.13.6)          */
+
+/* hcdContainProve's verdict (record 17 section 4.13.6, task 45.35). */
+#define XHCI_TOL_PROOF_NONE         0UL
+#define XHCI_TOL_PROOF_BME          1UL     /* Bus Master Enable read clear  */
+#define XHCI_TOL_PROOF_TUNNEL       2UL     /* the tunnel's isolation        */
 
 /* Where the controller stands (35-T.8, the dump's terminal reason). */
 #define XHCI_TOL_TERMINAL_NONE      0UL     /* running                       */
@@ -679,6 +686,12 @@ ULONG XhciTolDeadStep(PXHCI_TOL_DEAD dead, ULONG tolerance, ULONG admitted,
  * deferred, uncharged, until the window answers again or the controller is
  * contained. */
 ULONG XhciTolRecoverDefer(ULONG tolerance, ULONG admitted, ULONG allOnes);
+/* Record 17 section 4.13.6: the proof a containment or an unproven
+ * invalidation takes (XHCI_TOL_PROOF_*). `bme`: configuration space
+ * answered and Bus Master Enable read back clear; `asked`: the tunnel's
+ * statement was asked, which is done only where `bme` failed; `isolated`:
+ * its answer. Pure. */
+ULONG XhciTolProof(ULONG bme, ULONG asked, ULONG isolated);
 
 /*
  * The counters a user can send (35-T.8, record 17 section 4.8), in the

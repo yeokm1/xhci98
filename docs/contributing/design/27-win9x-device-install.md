@@ -1,6 +1,9 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 15, 2026-10-24 (the owner's decision of that day,
+Status: draft 16, 2026-10-29 (task 45.32, the owner's decision of that
+day: on a system read as English the first gate looks for a wizard too
+and asks only when it finds one or cannot look, section 6 and H6);
+draft 15, 2026-10-24 (the owner's decision of that day,
 W9XGATE.1: the gate of section 6 asks once in a run, and before a later
 pass only when it finds a hardware wizard's window open or cannot look,
 section 6 and H6); draft 14, 2026-10-24 (the owner's decision of that day, record
@@ -780,6 +783,26 @@ its three calls missing, the enumeration failed) asks, as before
 (`inst_gate_ask`). `/yes` asks nothing, as before. The titles are the
 English systems'; on another language's the look finds nothing, and the
 first gate's page and the settle are what stand.
+
+Since draft 16 (task 45.32, the owner's decision of 2026-10-29) the first
+gate looks too on a system read as English, and shows the page only when
+the look finds a wizard open (its title said) or cannot be made; none
+found goes on without it, as at a later gate. A system is read as English
+(`inst_gate_english`) when two languages read through `KERNEL32` alone
+both have the primary language `LANG_ENGLISH`: the system's default
+language (`GetSystemDefaultLangID`) and the language of `KERNEL32.DLL`'s
+own version resource (`EnumResourceLanguagesA` on its `RT_VERSION`
+entry). The resource's language is the one the system's files were built
+in, which is what the wizards' titles are in, and Regional Settings do not
+change it; the default language alone could read English on a localised
+system whose user chose English settings, or the reverse, so both are
+asked and either one in another language keeps the first gate's page. A
+language that cannot be read (a default language of 0, no version
+resource, or one in two primary languages) counts as not English. On any
+system not read as English the first gate asks as before. The run's log
+names both languages and the reading. `GetUserDefaultLangID` is not used:
+on 98 SE and ME it follows the user's Regional Settings, which say nothing
+about the language of the system's windows.
 The page says not to cancel a wizard, because a cancelled one removes its
 device until the next start (section 5.1); a device the helper then
 answers `not-present` for is a step of the finish page (restart, finish
@@ -1083,7 +1106,8 @@ found through `DevicePath`.
   settle gates every pass, the user's Next the first, and a later pass
   the user's Next again only when a wizard's window is found open or the
   look cannot be made (section 6, draft 15; record 23 decision D13 on
-  these systems).
+  these systems); on a system read as English the first pass too (draft
+  16).
 - **H7** Removal through `DIF_REMOVE` with an explicit global
   `REMOVEDEVICE_PARAMS`, entries present or not, children first, the
   controller last; an entry left stops the uninstall's destructive steps;

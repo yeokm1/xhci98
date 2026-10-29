@@ -81,7 +81,7 @@ the HAL's NMI halt never runs bugcheck callbacks. The E7250 read:
 **A missing AHCI driver.** STATUS_OBJECT_NAME_NOT_FOUND on the boot device
 is the classic sign of a SATA controller XP has no driver for, and the
 roadmap first recorded that theory. The ISO carried a generic AHCI driver
-(AHCINT, by ages2001, on `PCI\CC_010601`), and the stop came at text-mode
+(on `PCI\CC_010601`), and the stop came at text-mode
 start, before any disk mattered; the boot device was the stick.
 
 **UAS.** An `XHCISNAP` of the installed XP x64 with the stick present at

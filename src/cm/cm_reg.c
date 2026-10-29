@@ -24,7 +24,9 @@
  *
  * Since task 44.53 it also reads, once in DriverEntry on the NT role, the
  * gate of design record 21 section 6.2.1 (CmReadIrqGate): the HAL's
- * hardware id, from the machine's enumeration key.
+ * hardware id, from the machine's enumeration key. Since task 45.12 the
+ * gate of design record 33 (CmReadBreqGate, NT 5.x alone from the shared
+ * data page) and, where it is open, XhciCmBridgeReq.
  *
  * IRQL: PASSIVE_LEVEL, in the system thread PnP's start runs in, as
  * IoOpenDeviceRegistryKey needs (DriverEntry's thread for the gate).
@@ -60,6 +62,9 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_NOIRQ_START L"XhciCmNoIrqStart"
 /* Not written by any INF (record 22 section 18.8): absent is 0. */
 #define CM_VALUE_ASM_PCIE7 L"XhciCmAsmediaPcie7Credits"
+/* Not written by any INF (record 33 section 9.1): absent is 1; read on
+ * NT 5.x alone. */
+#define CM_VALUE_BRIDGE_REQ L"XhciCmBridgeReq"
 
 typedef struct _CM_TAKE {
     ULONG Seen;                 /* the routine was called with a value    */
@@ -215,6 +220,20 @@ static NTSTATUS NTAPI cmTakeHal(PWSTR ValueName, ULONG ValueType,
     return STATUS_SUCCESS;
 }
 
+/* ---- The bridge requirements' gate (design record 33 section 4.4) ---- */
+
+ULONG CmBreqGate;
+
+VOID CmReadBreqGate(VOID)
+{
+    CmBreqGate = 0;
+    if (SharedUserData->NtMajorVersion == 5) {
+        /* The minor version plus one: 1 on 2000, 2 on XP, 3 on XP x64 and
+         * Server 2003. */
+        CmBreqGate = SharedUserData->NtMinorVersion + 1UL;
+    }
+}
+
 VOID CmReadIrqGate(VOID)
 {
     RTL_QUERY_REGISTRY_TABLE table[2];
@@ -263,6 +282,10 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeNoIrqStart(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_ASM_PCIE7, &take, 0);
     CmValuesTakeAsmPcie7(&nhi->Values, take.Found, take.Dword);
+    if (CmBreqGate != 0) {
+        cmQuery(key, CM_VALUE_BRIDGE_REQ, &take, 0);
+        CmValuesTakeBridgeReq(&nhi->Values, take.Found, take.Dword);
+    }
     if (key != NULL) {
         ZwClose(key);
     }

@@ -40,6 +40,14 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
+# The fixtures are git repositories (the driver pack, the free set, the
+# import's two trees, the records' commits): with no git to run, the
+# suite cannot read what it means to and fails here, at once, saying why
+# (task 45.30).
+if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+    Write-Err "packager self-tests FAILED: git is not on PATH, and the fixtures these tests build are git repositories. Put git on PATH and run again."
+    exit 1
+}
 $packager = Join-Path $PSScriptRoot "make-package.ps1"
 $releaser = Join-Path $PSScriptRoot "make-release.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
@@ -426,6 +434,45 @@ try {
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OemPath", (Join-Path $repo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
     Assert-True ($r.ExitCode -ne 0) "the amd64 txtsetup.oem was staged into an x86 package."
+
+    # --- XHCIPFW.VXD, XHCIPFW.SYS and S98VSD.VXD (roadmap-usb4 task 45.3) ---
+    #
+    # A stand-in caller stages none of the tree's images, so no case here
+    # turns on what an earlier build left in src\pfw\ or src\vsd\: only the
+    # images it names, at the package root (S98VSD.VXD beside stor98.mpd),
+    # byte for byte; and the amd64 package refuses them.
+    Write-Step "the PFW and VSD images: a stand-in caller's own or none, never the tree's"
+    $pfwNone = Join-Path $script:work "pkg-pfw-none"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $pfwNone)
+    Assert-True ($r.ExitCode -eq 0) ("a stand-in package was rejected:`n" + $r.Output)
+    Assert-True (@(Get-ChildItem -LiteralPath $pfwNone -Recurse -Force | Where-Object { $_.Name -like "XHCIPFW*" -or $_.Name -like "S98VSD*" }).Count -eq 0) `
+        "a stand-in package that named no PFW or VSD image carries one (the tree's)."
+    Assert-True ($r.Output -notmatch "XHCIPFW|S98VSD") ("a stand-in package that named no PFW or VSD image read the tree's. Output:`n" + $r.Output)
+    $pfwVxdIn = Join-Path $script:work "stand-in-XHCIPFW.VXD"
+    $pfwSysIn = Join-Path $script:work "stand-in-xhcipfw.sys"
+    $vsdIn = Join-Path $script:work "stand-in-S98VSD.VXD"
+    [System.IO.File]::WriteAllText($pfwVxdIn, "stand-in pfw vxd", (New-Object System.Text.ASCIIEncoding))
+    [System.IO.File]::WriteAllText($pfwSysIn, "stand-in pfw sys", (New-Object System.Text.ASCIIEncoding))
+    [System.IO.File]::WriteAllText($vsdIn, "stand-in vsd", (New-Object System.Text.ASCIIEncoding))
+    $pfwOut = Join-Path $script:work "pkg-pfw"
+    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $pfwOut,
+                            "-PfwVxdPath", $pfwVxdIn, "-PfwSysPath", $pfwSysIn, "-VsdPath", $vsdIn) + (Get-NvArgs $nvRoot))
+    Assert-True ($r.ExitCode -eq 0) ("a package naming the PFW and VSD stand-ins was rejected:`n" + $r.Output)
+    foreach ($pc in @(@{ In = $pfwVxdIn; Dest = "XHCIPFW.VXD" }, @{ In = $pfwSysIn; Dest = "XHCIPFW.SYS" }, @{ In = $vsdIn; Dest = "S98VSD.VXD" })) {
+        $at = Join-Path $pfwOut $pc.Dest
+        Assert-True ((Test-Path -LiteralPath $at -PathType Leaf) -and
+                     (Get-FileHash -LiteralPath $at -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $pc.In -Algorithm SHA256).Hash) `
+            ("the package has no {0} at its root, or not the stand-in it named." -f $pc.Dest)
+    }
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $nvAmd64Inf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-pfw-amd64"),
+                           "-PfwVxdPath", $pfwVxdIn)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "x86 package alone") ("an amd64 package took a PFW image. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-pfw-missing"),
+                           "-PfwSysPath", (Join-Path $script:work "no-such-xhcipfw.sys"))
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "-PfwSysPath: there is no file") ("a named PFW image that is not there was passed over. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-vsd-nostor98"),
+                           "-VsdPath", $vsdIn)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "carries no Stor98") ("-VsdPath was taken for a package without Stor98. Output:`n" + $r.Output)
 
     # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
     #
@@ -2281,6 +2328,79 @@ try {
         $msg = ""
         try { Test-OtherPkgsTransition -Prev $recA -Now $recK } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("only known, not shipped")) ("a shipped package made known only was accepted: '" + $msg + "'")
+        # Record 26 section 6.7.14 (task 45.6): an EXCLUDES lifted to a
+        # COEXISTS only where the cut reads the two apart, recorded LIFTED and
+        # proved again by the next cut.
+        $lpF = Join-Path $script:work "oth-lift-free"
+        $lpN = Join-Path $script:work "oth-lift-nonfree"
+        foreach ($d in @("net\a\x", "net\c\x")) { Ensure-Directory (Join-Path $lpF $d) }
+        foreach ($d in @("net\b\xp", "net\b\w7", "net\b\cls")) { Ensure-Directory (Join-Path $lpN $d) }
+        [System.IO.File]::WriteAllText((Join-Path $lpF "net\a\x\A.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_1111&PID_0001`r`nE=I,USB\VID_1111&PID_0002&REV_0100`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpF "net\c\x\C.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\Class_02&SubClass_06`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpN "net\b\xp\B.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_2222&PID_0001&MI_00`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpN "net\b\w7\B7.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_1111&PID_0002`r`n")
+        $setLift = @(
+            [pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $lpF; Lines = @(Read-StageText -Text "COPY | WXP W7 | free/net/a/x/A.INF | a`nSTAGE | WXP | free/net/c/x/C.INF | c" -Label "lf") },
+            [pscustomobject]@{ Name = "nonfree"; Prefix = "non-free"; Dir = $lpN; Lines = @(Read-StageText -Text "STAGE | WXP | non-free/net/b/xp/B.INF | b`nSTAGE | W7 | non-free/net/b/w7/B7.INF | b7`nCOPY | W2K | non-free/net/b/cls/NONE.INF | n" -Label "ln") })
+        $liftRows = @(foreach ($q in @("free:net/a", "nonfree:net/b", "free:net/c")) { [pscustomobject]@{ Id = $q; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (x): adapters"; State = "current" } })
+        $mkRel = { param($k, $a, $b, $s) [pscustomobject]@{ Kind = $k; A = $a; B = $b; Systems = @($s); Desc = "t" } }
+        $liftPrev = [pscustomobject]@{ Version = "3.3.0.0"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP", "W7", "W2K"))); Lifted = @() }
+        # Apart on WXP (a &MI_ and a plain id of other devices), the same
+        # device on W7 by a &REV_ id against a plain one, no line on W2K.
+        $liftNow = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "nonfree:net/b" "free:net/a" @("WXP")), (& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7", "W2K"))) }
+        $lifted = @(Get-OtherLifted -Prev $liftPrev -Now $liftNow -Sets $setLift)
+        Assert-True ($lifted.Count -eq 1 -and ($lifted[0].Systems -join " ") -eq "WXP") "a COEXISTS on a system the cut reads apart, endpoints reversed, was not lifted."
+        Test-OtherPkgsTransition -Prev $liftPrev -Now $liftNow -Lifted $lifted
+        $recL = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.4.0.0" -Table ([pscustomobject]@{ Pkgs = @(); Rels = @() }) -Meta @() -Lifted $lifted) -join "`r`n") -Label "l"
+        Assert-True ($recL.Lifted.Count -eq 1 -and ($recL.Lifted[0].Systems -join " ") -eq "WXP") "the record's LIFTED line does not read back."
+        foreach ($bad in @(
+                @{ S = @("W7"); Want = "both match VID_1111&PID_0002"; Why = "a &REV_ id and a plain id of one device" },
+                @{ S = @("W2K"); Want = "has no line for W2K"; Why = "a system one package has no line on" })) {
+            $nowBad = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" $bad.S), (& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @(@("WXP", "W7", "W2K") | Where-Object { $bad.S -cnotcontains $_ }))) }
+            $msg = ""
+            try { Get-OtherLifted -Prev $liftPrev -Now $nowBad -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("a lift with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # A class id, a CLASS package, a set not carried, a system with no
+        # line: no answer; an interface id folded into its device.
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/c" -Sys "WXP").Ok) "a class id was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/a" -Sys "WXP" -Kind "CLASS").Ok) "a CLASS package was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets @($setLift[0]) -Pkg "nonfree:net/b" -Sys "WXP").Ok) "a set not carried was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/a" -Sys "W2K").Ok) "a system with no line was read as devices."
+        Assert-True ((Get-OtherPkgDevices -Sets $setLift -Pkg "nonfree:net/b" -Sys "W2K").Why.Contains("cannot be read")) "an INF that cannot be read was read as devices."
+        Assert-True (((Get-OtherPkgDevices -Sets $setLift -Pkg "nonfree:net/b" -Sys "WXP").Keys -join ",") -eq "VID_2222&PID_0001") "an &MI_ id was not folded into its device."
+        # The dropped EXCLUDES with no COEXISTS still refused; the next cut
+        # proves the lift again, and an EXCLUDES there ends it.
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $liftPrev -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7", "W2K"))) }) -Lifted @() } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the EXCLUDES line")) ("an EXCLUDES dropped with no COEXISTS was not refused: '" + $msg + "'")
+        $liftPrev2 = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("W7"))); Lifted = @([pscustomobject]@{ A = "free:net/a"; B = "nonfree:net/b"; Systems = @("W7") }) }
+        $msg = ""
+        try { Get-OtherLifted -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("W7"))) }) -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("both match")) ("a LIFTED system was not proved again: '" + $msg + "'")
+        Assert-True (@(Get-OtherLifted -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7"))) }) -Sets $setLift).Count -eq 0) "an EXCLUDES again on a LIFTED system did not end the lift."
+        # The transition admits that EXCLUDES in place of the lifted
+        # COEXISTS, whole or on part of its systems, and nowhere else.
+        Test-OtherPkgsTransition -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7"))) }) -Lifted @()
+        $liftPrev3 = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP", "W7"))); Lifted = @([pscustomobject]@{ A = "free:net/a"; B = "nonfree:net/b"; Systems = @("W7") }) }
+        Test-OtherPkgsTransition -Prev $liftPrev3 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP")), (& $mkRel "EXCLUDES" "nonfree:net/b" "free:net/a" @("W7"))) }) -Lifted @()
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $liftPrev3 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP", "W7"))) }) -Lifted @() } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the COEXISTS line")) ("a COEXISTS the previous release did not lift, made an EXCLUDES, was not refused: '" + $msg + "'")
+        # A table row of kind 2 must be covered by this cut's lifts.
+        $msg = ""
+        try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("lifted on W7")) ("a lifted table row past this cut's lifts was not refused: '" + $msg + "'")
+        Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted
+        # ...and a lift with no lifted row of the table, or a part of one,
+        # refused: the installer's hold against an earlier release is that row.
+        foreach ($case in @(0, 1)) {
+            $tr = @()
+            if ($case -eq 1) { $tr = @([pscustomobject]@{ Kind = "COEXISTS"; A = "nonfree:net/b"; B = "free:net/a"; Systems = @("W7"); Desc = "t"; Lifted = $true }) }
+            $msg = ""
+            try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @($tr) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains("no lifted row") -or $msg.Contains("lifted on W7")) ("a lift the table does not mark lifted was not refused: '" + $msg + "'")
+        }
         $xq = Join-Path $osp "net\a\w98\Q.INF"
         [System.IO.File]::WriteAllText($xq, "[Manufacturer]`r`nM=Mo,`"NTamd64`"`r`n[Mo.NTamd64]`r`nD=I,ID\Q64`r`n")
         Assert-True ((Get-InfModelIds -Inf (Read-InfText -Path $xq) -Sys "W7X64") -join "," -eq "ID\Q64") "a quoted decoration was not read."
@@ -3983,8 +4103,8 @@ try {
            Why  = "a cut no longer puts SETUP.EXE, the program a person double-clicks, at the version root (task 42-A.31, design record 26 section 2)" },
         @{ Find = 'foreach ($name in ($instExes + $rootExes)) {';
            Why  = "a cut no longer refuses a SETUP.EXE older than its sources (task 42-A.31)" },
-        @{ Find = 'THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE. To';
-           Why  = "the readme's section 4 no longer sends a person to SETUP.EXE first (task 42-A.31)" },
+        @{ Find = 'SETUP.EXE IS THE RECOMMENDED WAY TO INSTALL OR UPDATE. Double-click it in';
+           Why  = "the readme's section 2 no longer sends a person to SETUP.EXE first (tasks 42-A.31 and 45.29)" },
         @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"';
            Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
         @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
@@ -4035,10 +4155,10 @@ try {
            Why  = "a cut no longer adds XHCIDI.EXE's statically linked runtime and import library to the install tool's NOTICE.TXT (legal-provenance.md section 2a)" },
         @{ Find = 'if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }';
            Why  = "a cut without the helper no longer says so in its readme (design record 27 section 3.3)" },
-        @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }';
+        @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of sections 2 and 4)" }';
            Why  = "a cut without the USB tree tool no longer says so in its readme (task 41-A.6)" },
-        @{ Find = "administrator to run. The installer's Components page can leave out its";
-           Why  = "the readme's section 4 no longer describes the xHCI98 USB Tree INSTALL.BAT installs, or /notray (task 41-A.6)" },
+        @{ Find = "It also installs the xHCI98 USB Tree (XHCITR), which shows every USB and";
+           Why  = "the readme's section 2 no longer says SETUP.EXE installs the xHCI98 USB Tree (tasks 41-A.6 and 45.29)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';
@@ -5674,6 +5794,7 @@ try {
         @{ P = "xhcitr/tr_core.c";                   In = $true },
         @{ P = "scripts/import-gate/xhci98-imports.allow"; In = $true },
         @{ P = "scripts/build-driver.cmd";           In = $true },
+        @{ P = "scripts/build-steps.ps1";            In = $true },
         @{ P = "scripts\source-stamp.ps1";           In = $true },
         @{ P = "scripts/common.ps1";                 In = $true },
         @{ P = "scripts/import-gate/evidence-common.ps1"; In = $true }
@@ -5762,7 +5883,7 @@ try {
         return $o.Trim()
     }
     [void](Invoke-ImGit $imA @("init", "-q"))
-    [System.IO.File]::WriteAllText((Join-Path $imA ".gitignore"), "out/`nobj*/`nsrc/stor98/out/`n")
+    [System.IO.File]::WriteAllText((Join-Path $imA ".gitignore"), "out/`nobj*/`nsrc/stor98/out/`ntools/`n")
     [System.IO.File]::WriteAllText((Join-Path $imA "src\xhci_ring.c"), "a")
     [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "a")
     [void](Invoke-ImGit $imA @("add", "-A")); [void](Invoke-ImGit $imA @("commit", "-q", "-m", "A"))
@@ -6094,6 +6215,59 @@ try {
     } finally {
         Pop-Location
     }
+    # The default tree B (task 45.3): <A>-x64 made beside A at A's HEAD
+    # with A's tools\ directories linked, moved when A moves on, left when
+    # it is dirty, and refused when it is no worktree of A's repository.
+    Write-Step "the default tree B: made, its tools linked, moved with A, left when dirty, refused when foreign"
+    $dtTools = Join-Path $imA "tools\kit"
+    New-Item -ItemType Directory -Force -Path $dtTools | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $dtTools "kit.txt"), "kit")
+    $dtB = Get-DefaultCutX64Tree -Repo $imA
+    Assert-True ($dtB -eq (Join-Path $imRoot "a-x64")) ("the default tree B is '{0}', not a-x64 beside A" -f $dtB)
+    $r = $null
+    try { $r = Initialize-CutX64Tree -Repo $imA -X64Tree $dtB } catch { $r = $_.Exception.Message }
+    $dtHead = Invoke-ImGit $imA @("rev-parse", "HEAD")
+    Assert-True ($r -eq $dtB -and (Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead -and
+                 (Test-Path -LiteralPath (Join-Path $dtB "tools\kit\kit.txt")) -and
+                 ((Get-Item -LiteralPath (Join-Path $dtB "tools\kit") -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) `
+        ("the default tree B was not made at A's HEAD with A's tools linked: '{0}'" -f $r)
+    Assert-True ((Get-GatedImportTreeFault -Repo $imA -From $dtB) -eq "") "the default tree B is not another worktree of A's repository."
+    [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "e")
+    [void](Invoke-ImGit $imA @("commit", "-q", "-am", "E"))
+    $dtHead2 = Invoke-ImGit $imA @("rev-parse", "HEAD")
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2) "the default tree B was not moved to A's new HEAD."
+    [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "f")
+    [void](Invoke-ImGit $imA @("commit", "-q", "-am", "F"))
+    [System.IO.File]::WriteAllText((Join-Path $dtB "notes.md"), "dirty")
+    New-Item -ItemType Directory -Force -Path (Join-Path $imA "tools\kit2") | Out-Null
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2 -and [System.IO.File]::ReadAllText((Join-Path $dtB "notes.md")) -eq "dirty") `
+        "a dirty default tree B was moved."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dtB "tools\kit2"))) "a dirty default tree B was given a link."
+    # A tree there that this script did not make (no marker naming A) is
+    # never moved, even clean.
+    [void](Invoke-ImGit $dtB @("checkout", "-q", "--", "notes.md"))
+    Remove-Item -LiteralPath (Join-Path $dtB "out\cut-x64-tree.txt") -Force
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2) "a default tree B this script did not make was moved."
+    # Nor one on a branch, though marked.
+    [System.IO.File]::WriteAllText((Join-Path $dtB "out\cut-x64-tree.txt"), $imA)
+    [void](Invoke-ImGit $dtB @("checkout", "-q", "-b", "bside"))
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2 -and -not (Test-Path -LiteralPath (Join-Path $dtB "tools\kit2"))) `
+        "a default tree B on a branch was moved or given a link."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dtB "out\gated-x86.lock")) -and -not (Test-Path -LiteralPath (Join-Path $dtB "out\gated-amd64.lock"))) `
+        "preparing tree B left a lock in it."
+    [System.IO.Directory]::Delete((Join-Path $dtB "tools\kit"))
+    [void](Invoke-ImGit $imA @("worktree", "remove", "--force", $dtB))
+    $dtForeign = Join-Path $imRoot "foreign-x64"
+    New-Item -ItemType Directory -Force -Path $dtForeign | Out-Null
+    $r = ""
+    try { [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtForeign) } catch { $r = $_.Exception.Message }
+    Assert-True ($r.Contains("tree B") -and $r -match "not a git worktree|not the top of a worktree|another repository") ("a directory that is no worktree was taken as tree B: '{0}'" -f $r)
+    Remove-Item -LiteralPath (Join-Path $imA "tools") -Recurse -Force
+    [void](Invoke-ImGit $imA @("branch", "-D", "bside"))
     [System.IO.Directory]::Delete($cbAlias)
     if (Test-Path -LiteralPath $imAlias) { [System.IO.Directory]::Delete($imAlias) }
     [void](Invoke-ImGit $imA @("worktree", "remove", "--force", $imB))
@@ -6103,6 +6277,8 @@ try {
     $pcText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "package-common.ps1"))
     Assert-True ($pcText.Contains('$psi.EnvironmentVariables["TEMP"] = $tmp') -and $pcText.Contains('$psi.EnvironmentVariables["TMP"] = $tmp')) `
         "Start-CutBuild no longer gives each build its own TEMP and TMP."
+    Assert-True ($pcText.Contains('$psi.EnvironmentVariables["XHCI98_FULL_SELFTESTS"] = "1"')) `
+        "Start-CutBuild no longer has a cut's builds run every self-test in full (task 45.30)."
 
     # --- make-release.ps1 -CheckOnly (task 43.9) -----------------------------
     #

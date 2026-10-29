@@ -62,6 +62,7 @@
 #include "cm_qryb.h"
 #include "cm_eject.h"
 #include "cm_irq.h"
+#include "cm_breq.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -184,6 +185,9 @@ typedef struct _CM_COUNTERS {
     ULONG U4RetireRequests; /* removal-only requests made                  */
     ULONG U4RetirementOwed; /* a pass that found a barrier still standing  */
     ULONG U4RecoverRearm;   /* an attempt that ended on an all-ones read   */
+    ULONG IsoAsked;         /* record 22 10.5: isolation asked by xhci98   */
+    ULONG IsoYes;           /* ... and answered yes                        */
+    ULONG IsoNo;            /* ... and refused (the reason in cm.iso)      */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -436,6 +440,14 @@ typedef struct _CM_NHI {
     ULONG NiDiag[CM_NIDIAG_WORDS];
     ULONG NiDiagSeq;
     ULONG NiDiagWritten;
+    /* Design record 33 section 9.2's XhciCmBridgeReqDiag
+     * (CM_BQDIAG_WORDS), posted by the child filters' PnP dispatch under
+     * BrDiagLock (CmRegBreqPost) and written by the thread when BqDiagGen
+     * changed: the start of an attempt already recorded changes it too. */
+    ULONG BqDiag[CM_BQDIAG_WORDS];
+    ULONG BqDiagSeq;
+    ULONG BqDiagGen;
+    ULONG BqDiagWritten;
     KSPIN_LOCK BrDiagLock;  /* BrDiag and BrDiagSeq; taken inside the
                                worker's own lock, never around a call     */
 
@@ -657,6 +669,26 @@ typedef struct _CM_FILTER {
     ULONG IrqBdf;           /* the function's location as CmRegIrqWire read
                                it (XHCI_TBT_BDF, 16 bits), for the log;
                                0 before                                  */
+
+    /* ---- a bridge's requirements (design record 33, task 45.12), NT 5.x
+     * alone; the PnP dispatch's alone ---- */
+    ULONG BreqTimes;        /* lists of this bridge rewritten since the
+                               attachment                                 */
+    ULONG BreqStart;        /* a rewrite whose start is not yet seen       */
+    ULONG BreqBdf;          /* the bridge's location at that rewrite       */
+    ULONG BreqPort;         /* its tunnel port's                           */
+
+    /* ---- the isolation statement (design record 22 section 10.5, task
+     * 45.35), a child's, NT 5.x alone; written under cmRegLock ---- */
+    ULONG IsoBound;         /* the binding was taken (CmRegIsoBind)        */
+    ULONG IsoGone;          /* its removal has begun                       */
+    PVOID IsoDom;           /* the bound domain's NHI object, compared only */
+    ULONG IsoStarts;        /* its Reenum.Starts at the binding            */
+    ULONG IsoMember;        /* the member's location (XHCI_TBT_BDF, 16 bits) */
+    ULONG IsoUpMask;        /* bit n-1: USB4 port n's PCIe tunnel was up at
+                               the binding, of generation IsoGens[n-1]     */
+    ULONG IsoGens[TBT_U4_MAX_PORTS];
+    LONG IsoRefs;           /* the interface's references held by xhci98   */
 } CM_FILTER, *PCM_FILTER;
 
 #define CM_CHAIN_UNKNOWN    0UL
@@ -812,6 +844,22 @@ VOID CmReadValues(PCM_NHI nhi);
  * role, PASSIVE_LEVEL, and only read after. */
 extern ULONG CmIrqGate;
 VOID CmReadIrqGate(VOID);
+/* Design record 33's gate (task 45.12): the NT minor version plus one on
+ * NT 5.x (1 on 2000, 2 on XP, 3 on XP x64), else 0; read once by
+ * CmReadBreqGate in DriverEntry on the NT role, and only read after. */
+extern ULONG CmBreqGate;
+/* Design record 22 section 10.5 (task 45.35), cm_reenum.c: the binding of
+ * a child filter to the USB4 port whose PCIe tunnel its device started
+ * under (TRUE when taken), the decision for it (cm_iso.h CM_ISO_*), and
+ * its end at the child's removal. PASSIVE_LEVEL or below; cmRegLock taken
+ * inside. */
+BOOLEAN CmRegIsoBind(PCM_FILTER child);
+ULONG CmRegIsoAsk(PCM_FILTER child);
+VOID CmRegIsoGone(PCM_FILTER child);
+/* The binding retired once the interface's last reference is released, so
+ * the next start binds afresh. */
+VOID CmRegIsoUnbind(PCM_FILTER child);
+VOID CmReadBreqGate(VOID);
 
 /* cm_statos.c: CmStatusOpen in the PnP start's dispatch (the keys and the
  * first record); CmStatusPass once per thread pass; CmStatusStopped after

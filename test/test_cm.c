@@ -113,6 +113,25 @@ static void test_role_decide(void)
     CHECK_EQ(CmClassifyIds(NULL, 0, &ids), CM_ROLE_NONE, "no list");
     CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD,
              "an unreadable list is a child: a lower filter's AddDevice never fails");
+
+    /* The role by position (design record 33 section 4.4, task 45.12). */
+    classify(bridge, sizeof(bridge), &ids);
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1), CM_ROLE_FILTER,
+             "an INF-listed bridge with the PCI driver's FDO above: the bridge "
+             "filter (its UpperFilters)");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0), CM_ROLE_CHILD,
+             "an INF-listed bridge with nothing of the PCI driver's above: the "
+             "child (its LowerFilters bridge mark)");
+    classify(nhi, sizeof(nhi), &ids);
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0), CM_ROLE_NHI,
+             "the NHI with nothing above its PDO stays the NHI");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1), CM_ROLE_NHI,
+             "the NHI whatever is above it");
+    classify(usp, sizeof(usp), &ids);
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 1), CM_ROLE_CHILD,
+             "an unlisted bridge is a child in either order");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 0), CM_ROLE_CHILD,
+             "an unlisted bridge, below the FDO");
 }
 
 static void test_profiles(void)
@@ -218,6 +237,19 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_APPROVE], 0, "approve 0 is taken");
     CmValuesTake(&v, CM_VAL_APPROVE, 0, 0);
     CHECK_EQ(v.Value[CM_VAL_APPROVE], 1, "absent is the default");
+
+    /* XhciCmBridgeReq (design record 33 section 9.1). */
+    CHECK_EQ(v.BridgeReq, 1, "XhciCmBridgeReq defaults to 1");
+    CmValuesTakeBridgeReq(&v, 1, 0);
+    CHECK_EQ(v.BridgeReq, 0, "XhciCmBridgeReq 0 is taken");
+    CmValuesTakeBridgeReq(&v, 1, 2);
+    CHECK_EQ(v.BridgeReq, 2, "XhciCmBridgeReq 2 is taken");
+    CmValuesTakeBridgeReq(&v, 1, 3);
+    CHECK(v.BridgeReq == 1 && v.BridgeReqRefused,
+          "XhciCmBridgeReq 3 is refused, 1 stands");
+    CmValuesTakeBridgeReq(&v, 0, 0);
+    CHECK(v.BridgeReq == 1 && !v.BridgeReqFound,
+          "XhciCmBridgeReq absent reads as 1");
 
     CmValuesTake(&v, CM_VAL_SAFE_EJECT, 1, 0);
     CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 0, "safe eject 0 is taken");

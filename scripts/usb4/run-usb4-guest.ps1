@@ -105,6 +105,9 @@ param(
     # -boot strict=on with bootindex=0 on the IDE boot disk (one of the
     # workarounds for an NVMe present at POST on Windows 98).
     [switch]$BootStrict,
+    # The usb4-emu checkout; default the checkout beside the main one
+    # (..\usb4-emu), or USB4EMU_ROOT when set.
+    [string]$EmuRoot = '',
     # Add this project's usual xHCI (qemu-xhci,p3=0 on NT, qemu-xhci on 9x).
     [switch]$Xhci,
 
@@ -150,8 +153,14 @@ $branch = (& git -C $scriptRepo rev-parse --abbrev-ref HEAD).Trim()
 $vmRoot = Join-Path $mainRoot 'vm'
 $usb4Root = Join-Path $vmRoot 'usb4'
 $lockRoot = Join-Path $mainRoot 'out\vmlocks'
-$emuRoot = 'D:\OneDrive\git-projects\usb4-emu'
-if ($env:USB4EMU_ROOT) { $emuRoot = $env:USB4EMU_ROOT }
+# The usb4-emu checkout: -EmuRoot, else USB4EMU_ROOT, else the checkout
+# beside the main one (..\usb4-emu from its root).
+# PowerShell names are case-blind: $emuRoot is the -EmuRoot parameter, so
+# the choice is made in a variable of its own first.
+$emuChosen = $EmuRoot
+if (-not $emuChosen) { $emuChosen = $env:USB4EMU_ROOT }
+if (-not $emuChosen) { $emuChosen = Join-Path (Split-Path -Parent $mainRoot) 'usb4-emu' }
+$emuRoot = $emuChosen
 $emuBin = Join-Path $emuRoot 'toolchain\msys64\ucrt64\bin'
 $emuShare = Join-Path $emuRoot 'vms\qemu-baseline\share'
 $emuQemu = Join-Path $emuRoot 'src\qemu\build\qemu-system-x86_64.exe'

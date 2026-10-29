@@ -7,7 +7,8 @@ build into the cut's tree (roadmap-usb4.md task 44.31).
 docs\contributing\build-and-test.md, "The cut's two builds at once", is the
 design. This tree is the cut's (tree A): it builds x86, and the tools and
 make-release.ps1 run here. -X64Tree names tree B, a second worktree of the
-same repository at this tree's commit, which builds amd64 and nothing else.
+same repository at this tree's commit, which builds amd64 and nothing else;
+by default <this tree>-x64, made or moved here (-X64Tree below).
 
 The script starts scripts\build-driver.cmd all here and
 scripts\build-driver.cmd all -amd64 in tree B as two processes at once,
@@ -25,7 +26,12 @@ repository at this tree's HEAD, both trees are clean, and neither holds
 either architecture's gated build lock.
 
 .PARAMETER X64Tree
-Tree B, the worktree that builds amd64.
+Tree B, the worktree that builds amd64. Without it tree B is <this tree>-x64,
+beside this tree (roadmap-usb4 task 45.3; build-and-test.md, "A faster gated
+build"): made with git worktree add --detach when it is not there, moved to
+this tree's HEAD when it is a clean worktree at another commit with no build
+lock, and each directory of this tree's tools\ it lacks linked as a junction;
+-ImportOnly takes it as it is. A tree named here is only checked, as before.
 
 .PARAMETER Serial
 Run the two builds one after the other, x86 first, rather than at once:
@@ -43,13 +49,15 @@ asks for its own -NoTargetEvidence. A run that builds refuses it: the x86
 build a cut takes needs the evidence (the helper's import gate).
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree E:\xhci98-wt\cut-x64
+powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1
+
+.EXAMPLE
+powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree <worktree folder>\cut-x64
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$X64Tree,
+    [string]$X64Tree = "",
     [switch]$Serial,
     [switch]$ImportOnly,
     [switch]$NoTargetEvidence

@@ -362,6 +362,13 @@ rem                  behind a tunnel on 2000's Standard PC HAL (src\cm\cm_irq.c,
 rem                  task 44.53, design record 21 section 6.2.1): the HAL id,
 rem                  the swizzle, the requirements and start lists, the
 rem                  records' sequences; also built for amd64 (below)
+rem   test_cm_breq - the requirement lists of a hot-added bridge on 2000 and
+rem                  XP (src\cm\cm_breq.c, task 45.12, design record 33):
+rem                  the templates, the rules, the writer, the diagnostic;
+rem                  also built for amd64 (below)
+rem   test_cm_iso  - the isolation statement's decision (src\cm\cm_iso.c,
+rem                  task 45.35, design record 22 section 10.5): the one
+rem                  yes and every condition's refusal in order
 rem   test_ej9x    - the tools' half of the 9x eject asked of xhcicm.sys
 rem                  (xhciinst\inst_ej9x.c, task 43.18) over the install
 rem                  tool's pure half
@@ -375,7 +382,8 @@ rem
 rem THE SECOND ARCHITECTURE (roadmap task 21.4). Three suites are compiled and
 rem run twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
 rem compiler, as test_packet_amd64, test_membuf_amd64 and (task 44.53)
-rem test_cm_irq_amd64, whose resource descriptor is larger on amd64.
+rem test_cm_irq_amd64, whose resource descriptor is larger on amd64, and
+rem (task 45.12) test_cm_breq_amd64, the requirement lists' rewriter.
 rem
 rem   test_packet_amd64  src\xhci_usbport.h declares three structures and a
 rem                      registration packet that change shape under _WIN64 -
@@ -647,6 +655,11 @@ rem and the mark service's pure half (its self-test; task 44.52).
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_trred links the red tray icon's decision and tooltip (xhcitr\tr_red.c,
 rem task 43.57, design record 25 section 7.2.1) over XHCITR's pure half.
+rem test_mark runs the mark service's pure half through its own
+rem self-test (xhcimark\mark_core.c, mk_selftest; since task 45.12 the
+rem bridge inventory and the bridge marks of design record 33 section
+rem 4.3), with inst_core.c, which it links against.
+call :run test_mark "test_mark.c ..\xhcimark\mark_core.c ..\xhciinst\inst_core.c"
 call :run test_trred "test_trred.c ..\xhcitr\tr_red.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_ej9x links the tools' half of the 9x eject asked of xhcicm.sys
 rem (xhciinst\inst_ej9x.c, task 43.18) with the pure half it maps through.
@@ -676,6 +689,17 @@ rem HAL id, the swizzle, the requirements and start lists and the records'
 rem sequences; built for amd64 too (below), whose resource descriptor is
 rem larger.
 call :run test_cm_irq "test_cm_irq.c ..\src\cm\cm_irq.c"
+rem test_cm_breq links the pure half of the requirement lists of a
+rem hot-added bridge on 2000 and XP (src\cm\cm_breq.c, task 45.12, design
+rem record 33 section 10.1): the templates on the captured lists, the
+rem worked examples byte for byte, the rules' edges, the arithmetic bounds,
+rem the diagnostic and a seeded sweep of the invariants; built for amd64
+rem too (below), whose descriptor layout cm_filt.c asserts the same.
+call :run test_cm_breq "test_cm_breq.c ..\src\cm\cm_breq.c"
+rem test_cm_iso links the isolation statement's decision (src\cm\cm_iso.c,
+rem task 45.35, design record 22 section 10.5): the one yes, each
+rem condition refused alone, and all 1024 patterns' first failing one.
+call :run test_cm_iso "test_cm_iso.c ..\src\cm\cm_iso.c"
 rem test_cm_marks links the marks answer's table (task 42-A.5, design
 rem record 21 section 7.4 revision 3) and the re-enumeration's pure half
 rem for the Removable answer's gate (design record 31 section 4.1).
@@ -731,13 +755,14 @@ if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if not defined PROCESSOR_ARCHITEW6432 se
 call :run test_packet_amd64 "test_packet.c" amd64
 call :run test_membuf_amd64 "test_membuf.c ..\src\xhci_mem.c" amd64
 call :run test_cm_irq_amd64 "test_cm_irq.c ..\src\cm\cm_irq.c" amd64
+call :run test_cm_breq_amd64 "test_cm_breq.c ..\src\cm\cm_breq.c" amd64
 set "NORUN="
 goto amd64done
 
 :noamd64
 set "SUITESKIPPED=1"
 echo.
-echo === test_packet_amd64, test_membuf_amd64, test_cm_irq_amd64 === SKIPPED
+echo === test_packet_amd64, test_membuf_amd64, test_cm_irq_amd64, test_cm_breq_amd64 === SKIPPED
 echo WDK 7.1 was not found at %WDK71%, and its amd64 compiler is the only thing
 echo here that compiles the _WIN64 half of src\xhci_usbport.h and the amd64
 echo resource lists of src\cm\cm_irq.c. Those are therefore unchecked in this

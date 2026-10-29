@@ -38,9 +38,10 @@ OS file, each rule named as check-inf.ps1 names its families.
            nothing else - NUSB's USBSTOR.INF value, without which NUSB's
            port driver fails every unit (Code 10) - naming the file, never
            copying it; no .NTx86.HW or .NTamd64.HW section exists, so the NT
-           path is unchanged. UAS-TMPNAME (x86): xhciuas.sys is copied with
-           no temporary-file name; one would route the copy on Windows 98
-           through WININIT.INI and a restart even at a first install.
+           path is unchanged. UAS-TMPNAME: xhciuas.sys is copied with no
+           temporary-file name, in both INFs; one would route the copy on
+           Windows 98 through WININIT.INI and a restart even at a first
+           install, and no NT install takes that route.
   PKG-*    With -PackageDir: every [SourceDisksFiles] entry is in the staged
            package (PKG-LAYOUT), and no Microsoft file is, under any of the
            names UAS-MSFILE knows, at the root or below it (PKG-MSFILE).
@@ -215,8 +216,8 @@ function Test-UasInfText {
                 $file = ($l.Raw -split ',')[0].Trim()
                 if ($file -notmatch '^[A-Za-z0-9_\-]{1,8}(\.[A-Za-z0-9_]{1,3})?$') { & $add "W98-83" "[$name] copies '$file', not an 8.3 name." }
                 $tmpField = @($l.Raw -split ',')
-                if ($Profile -eq "x86" -and $file -ieq $binary -and $tmpField.Count -ge 3 -and $tmpField[2].Trim() -ne "") {
-                    & $add "UAS-TMPNAME" "[$name] gives $binary the temporary name '$($tmpField[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded."
+                if ($file -ieq $binary -and $tmpField.Count -ge 3 -and $tmpField[2].Trim() -ne "") {
+                    & $add "UAS-TMPNAME" "[$name] gives $binary the temporary name '$($tmpField[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded, and no NT install takes that route."
                 }
                 $copied[$file.ToLowerInvariant()] = $destOf[$name.ToLowerInvariant()]
                 $file.ToLowerInvariant()
@@ -435,7 +436,8 @@ if ($SelfTest) {
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[UasModels.NTamd64]", "[UasModels]`r`n%UasDesc%=Uas.Dev,USB\Class_08&SubClass_06&Prot_62`r`n`r`n[UasModels.NTamd64]") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64]", "[Uas.Dev]`r`nCopyFiles=Uas.CopyFiles`r`n`r`n[Uas.Dev.NTamd64]") },
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
-                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") },
+                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys`r`nusbd.sys,,,16") },
+                @{ Rule = "UAS-TMPNAME";   Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys,,xhciuas.tmp") },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
                 @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat`r`n", "") },

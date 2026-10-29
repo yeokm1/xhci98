@@ -33,7 +33,7 @@ and boots with no CD when it does not, and says so; Setup's own reboots need
 falls through to the hard disk).
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-winxp.ps1 -WinXpIso D:\isos\winxp-sp3.iso -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-winxp.ps1 -WinXpIso <iso folder>\winxp-sp3.iso -CreateDisk
 #>
 
 [CmdletBinding()]

@@ -59,6 +59,7 @@
 
 static VOID cmStBrDiag(PCM_NHI nhi);
 static VOID cmStNiDiag(PCM_NHI nhi);
+static VOID cmStBqDiag(PCM_NHI nhi);
 
 static BOOLEAN cmStNt(VOID)
 {
@@ -413,6 +414,11 @@ VOID CmStatusOpen(PCM_NHI nhi)
     s = &nhi->StatusPub;
     cmStClose(s);
     CmZero(s, sizeof(*s));
+    /* Before the domain is listed: no child posts to it yet. */
+    CmZero(nhi->BqDiag, sizeof(nhi->BqDiag));
+    nhi->BqDiagSeq = 0;
+    nhi->BqDiagGen = 0;
+    nhi->BqDiagWritten = 0;
     KeInitializeSpinLock(&nhi->BrDiagLock);
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
                                            PLUGPLAY_REGKEY_DEVICE, KEY_WRITE,
@@ -502,6 +508,7 @@ static VOID cmStBrDiag(PCM_NHI nhi)
     KIRQL irql;
 
     cmStNiDiag(nhi);
+    cmStBqDiag(nhi);
     if (nhi->StatusPub.DevKey == NULL) {
         return;
     }
@@ -518,6 +525,36 @@ static VOID cmStBrDiag(PCM_NHI nhi)
     if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
                                  REG_BINARY, (PVOID)copy, sizeof(copy)))) {
         nhi->BrDiagWritten = seq;
+    }
+}
+
+/* XhciCmBridgeReqDiag (design record 33 section 9.2), the same way, when
+ * its generation changed (a start seen after a rewrite changes the ring
+ * but not its last sequence). NT 5.x alone: nothing posts elsewhere. */
+static VOID cmStBqDiag(PCM_NHI nhi)
+{
+    UNICODE_STRING name;
+    ULONG copy[CM_BQDIAG_WORDS];
+    ULONG gen;
+    ULONG i;
+    KIRQL irql;
+
+    if (nhi->StatusPub.DevKey == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&nhi->BrDiagLock, &irql);
+    for (i = 0; i < CM_BQDIAG_WORDS; i++) {
+        copy[i] = nhi->BqDiag[i];
+    }
+    gen = nhi->BqDiagGen;
+    KeReleaseSpinLock(&nhi->BrDiagLock, irql);
+    if (gen == 0 || gen == nhi->BqDiagWritten) {
+        return;
+    }
+    RtlInitUnicodeString(&name, L"XhciCmBridgeReqDiag");
+    if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
+                                 REG_BINARY, (PVOID)copy, sizeof(copy)))) {
+        nhi->BqDiagWritten = gen;
     }
 }
 

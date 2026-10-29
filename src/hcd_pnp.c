@@ -110,6 +110,9 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     if (hc->ControllerStarted) {
         HcdStopController(hc);
     }
+    /* Record 17 section 4.13.6: released whatever the start reached
+     * (idempotent), before the removal reaches xhcicm.sys's filter. */
+    HcdCtlIsoRelease(hc);
     /* Before the IRP goes down: the interface belongs to the PCI PDO. */
     HcdDoorControllerRemove(hc);
     /* After the stop's release disconnected any message: the x86 helper's
