@@ -1113,10 +1113,7 @@ every PCI root bus devnode** (hardware or compatible id `*PNP0A03` or
   synchronization event), the step's state being the driver's. A start
   whose resources carry no bus number range runs nothing and logs the
   "no range" bit (bit 5). Every later start of the same root bus (a
-  rebalance, a stop and start) passes down with nothing run. The flat
-  scan covers every bus number, so one run before the first root bus's
-  start closes the windows of every root bus's bridges before the PCI
-  driver enumerates any of them.
+  rebalance, a stop and start) passes down with nothing run.
 - **The "late" check** (section 11.2: the `SOFTWARE` hive not yet loaded)
   stays, unchanged, the gate against a start long after the boot. That a
   root bus's first start comes before that hive is loaded at every start

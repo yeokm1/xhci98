@@ -20536,18 +20536,32 @@ static int pfw_rootbus_filters(int add)
     for (i = 0;; i++) {
         data.cbSize = sizeof(data);
         if (!api.EnumInfo(set, i, &data)) {
+            if (GetLastError() != ERROR_NO_MORE_ITEMS) {
+                out("XHCIPFW.SYS: the device list could not be read to its "
+                    "end (error 0x%08lX).\n", (unsigned long)GetLastError());
+                failed = 1;
+            }
             break;
         }
         memset(hw, 0, sizeof(hw));
         memset(cp, 0, sizeof(cp));
         hwN = 0;
         cpN = 0;
+        /* An id list that cannot be read (other than absent) leaves the
+         * devnode unknown: a root bus may hide there, so taking out fails
+         * rather than miss one (record 32 section 11.5.2). */
         if (!api.GetRegProp(set, &data, SPDRP_HARDWAREID, &type, (PBYTE)hw,
                             sizeof(hw) - 2, &hwN)) {
+            if (!add && GetLastError() != ERROR_INVALID_DATA) {
+                failed = 1;
+            }
             hwN = 0;
         }
         if (!api.GetRegProp(set, &data, SPDRP_COMPATIBLEIDS, &type, (PBYTE)cp,
                             sizeof(cp) - 2, &cpN)) {
+            if (!add && GetLastError() != ERROR_INVALID_DATA) {
+                failed = 1;
+            }
             cpN = 0;
         }
         if (!inst_pfw_rootbus(hw, hwN, cp, cpN)) {
@@ -20874,12 +20888,12 @@ static int pfwsys_run(int mode)
         return mode == INST_VSD_SELECTED ? 0 : 1;
     }
     if (mode == INST_VSD_DESELECTED || mode == INST_VSD_UNINSTALL) {
-        /* An entry naming this service goes before anything of it, even
-         * with no service left (it would name an image never loaded). */
-        if (!pfw_entries_out()) {
-            return 0;
-        }
         if (!r.Any && img == 0) {
+            /* No service: an entry naming it would name an image never
+             * loaded, so it goes whoever wrote it. */
+            if (!pfw_entries_out()) {
+                return 0;
+            }
             step(INST_STEP_DONE, "XHCIPFW.SYS: as it is");
             return 1;
         }
@@ -20908,6 +20922,12 @@ static int pfwsys_run(int mode)
                      "installation's image");
                 return 1;
             }
+        }
+        /* The service and its image are this installer's: every entry
+         * naming it goes before anything of it (record 32 section
+         * 11.5.2). */
+        if (!pfw_entries_out()) {
+            return 0;
         }
         if (!pfwsys_service_delete()) {
             flagFailed = 1;
