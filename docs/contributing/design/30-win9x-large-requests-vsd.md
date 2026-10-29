@@ -1710,11 +1710,29 @@ the never-complete-early rule of its `AGENTS.md` excludes.
 
 ### 13.7 The emulator's readings
 
-None were taken for this draft. The rule for new legs (QEMU's q35
-machine, 98 SE and ME through AHCI) needs a q35 98 SE base, which was not
-ready on 2026-10-25; the readings of section 13.4's "can" list (C2's
-relative cost, two threads' overlap, the sizes at 4 and 8 MiB) are owed
-to that base and go to the run sheet `runs/run-44.md`, under a section "44.36".
+None were taken for the first draft (the q35 98 SE base was not ready
+on 2026-10-25). Taken on 2026-10-29 for task 45.10 on a q35 98 SE guest
+with this tree's package at `1765b18c` (`runs/run-45.md`, "45.10", has
+the vehicle and every figure), comparable within that run only:
+
+- **Two and four threads** put no more than two commands at the drive,
+  what one 1 MiB request's two children already do at one thread, and
+  raised no rate: 98 SE's requests from several threads did not overlap
+  at Stor98 there [read]. Item 2 is no lever in the emulator.
+- **4 and 8 MiB requests** reach Stor98 as 63 KiB scatter/gather pieces,
+  each double-buffered, at about 80 to 107 MB/s against 215 to 250 at
+  2 MiB, Stor98's granted maximum being 2048 KiB [read]: item 4's cut
+  above the maximum is real, and C4 is what would remove it for a program
+  that asks for more than 2 MiB.
+- **A scattered buffer** reaches Stor98 as pieces below 63 KiB, one
+  command at a time, at about a third of the aligned rate at 1 and 2 MiB
+  [read]: the aligned-against-scattered difference there is IOS's cut,
+  not Stor98's per-page mapping, which this reading cannot isolate [inf].
+  C2's gain needs another reading (a counter of the mapping's time, or
+  B4's refit of B).
+
+C1 to C5 stay planned, each decided by its reading; the bench B1 to B7
+is unchanged (task 45-E.9).
 
 ### 13.8 Open, and the owner's
 
