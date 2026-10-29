@@ -5614,26 +5614,52 @@ static int failWriteHook(struct FAB *f, unsigned long pdf, int router, unsigned 
     return FAB_HOOK_GO;
 }
 
-/* No entry of the kid's tunnel left Valid on either end unless the
- * quarantine holds something. */
-static int kidPathsClosed(const FAB *f, int dev, int child)
+/* Whether the quarantine holds `adp`'s entry `hop` (or, with `enable`,
+ * its Path Enable) on `route` for host port 1 and a kid. */
+static int kidQuarantined(const TBT_ROUTE *route, ULONG adp, ULONG hop, int enable)
+{
+    ULONG i;
+    const TBT_U4_QENTRY *q;
+
+    for (i = 0; i < TBT_U4_QUARANTINE; i++) {
+        q = &g_cm.Quarantine[i];
+        if (q->Used && q->Port == 1 && q->Kid != 0 && TbtRouteEqual(&q->Route, route) &&
+            q->Adapter == adp && (enable ? q->Enable : (!q->Enable && q->Hop == hop))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Every entry of the kid's tunnel, and each Path Enable, on either end:
+ * closed, or held by a quarantine record of its own. */
+static int kidPathsClosed(const FAB *f, int dev, int child, const TBT_ROUTE *dr,
+                          const TBT_ROUTE *cr)
 {
     int a = fabDownLane0(f, dev);
     int h;
 
-    if (quarantineCount(&g_cm) != 0) {
-        return 1;
-    }
     for (h = 8; h < 24; h++) {
-        if ((fabPath0(f, dev, a, h) & TBT_PATH0_VALID) ||
-            (fabPath0(f, child, 1, h) & TBT_PATH0_VALID)) {
+        if ((fabPath0(f, dev, a, h) & TBT_PATH0_VALID) && !kidQuarantined(dr, (ULONG)a, (ULONG)h, 0)) {
+            return 0;
+        }
+        if ((fabPath0(f, child, 1, h) & TBT_PATH0_VALID) && !kidQuarantined(cr, 1, (ULONG)h, 0)) {
             return 0;
         }
     }
-    return (fabPath0(f, dev, 7, 8) & TBT_PATH0_VALID) == 0 &&
-           (fabPath0(f, child, 5, 8) & TBT_PATH0_VALID) == 0 &&
-           (fabAdp(f, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE) == 0 &&
-           (fabAdp(f, child, 5, FAB_CAP_ADP) & TBT_PCIE0_PE) == 0;
+    if ((fabPath0(f, dev, 7, 8) & TBT_PATH0_VALID) && !kidQuarantined(dr, 7, 8, 0)) {
+        return 0;
+    }
+    if ((fabPath0(f, child, 5, 8) & TBT_PATH0_VALID) && !kidQuarantined(cr, 5, 8, 0)) {
+        return 0;
+    }
+    if ((fabAdp(f, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE) && !kidQuarantined(dr, 7, 0, 1)) {
+        return 0;
+    }
+    if ((fabAdp(f, child, 5, FAB_CAP_ADP) & TBT_PCIE0_PE) && !kidQuarantined(cr, 5, 0, 1)) {
+        return 0;
+    }
+    return 1;
 }
 
 /* Section 6.6: a failure after any write - the orderly teardown of the
@@ -5666,7 +5692,14 @@ static void test_kid_path_failures(void)
         poll(&g_cm, &g_fab, 4);
         g_fab.Hook = NULL;
         CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "a write never answered: the kid FAILED");
-        CHECK(kidPathsClosed(&g_fab, dev, child), "what it wrote closed or quarantined");
+        {
+            TBT_ROUTE cr;
+            const TBT_U4_KID *k = kidOf(&g_cm, 1);
+
+            cr = k != NULL ? k->Dev.Route : TbtU4Port(&g_cm, 1)->Dev.Route;
+            CHECK(k != NULL && kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &cr),
+                  "each entry and Path Enable it wrote closed or quarantined itself");
+        }
         CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
         CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
     }
@@ -5687,6 +5720,9 @@ static void test_kid_path_failures(void)
     g_fab.Hook = NULL;
     CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "stuck drain: FAILED");
     CHECK(quarantineCount(&g_cm) >= 1, "the undrained entry quarantined");
+    CHECK(kidOf(&g_cm, 1) != NULL &&
+          kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &kidOf(&g_cm, 1)->Dev.Route),
+          "each one held by its own record");
     {
         ULONG i;
         int kidOwned = 0;
