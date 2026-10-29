@@ -1720,3 +1720,58 @@ On a USB4 host that this release's connection manager runs, the legs
 above removed the dock cleanly, the closure having been recorded before
 the proof was asked; the reverse order keeps the pin (record 17 section
 4.13.6).
+
+## 45.31 the connection manager's unload under Driver Verifier (2026-10-30, the `xhcicm.sys` half)
+
+The `xhcicm.sys` unload stop that 45.11's reading found (bug check 0xC4,
+0x62, at the uninstall on 8.1 and 8 and during the boot on 7 x86) and
+what it hid. Stor98's start with `MSISupported` 1 on 8.1, the task's
+other half, is not read here.
+
+### The reading
+
+- 7 x86, `3.3.0.0`'s release `xhcicm.sys` under Verifier, the ORICO at
+  boot: bug check 0xA (0x827E9FB7, 2, 8, 0x827E9FB7), `ntkrnlpa.exe`
+  code executed at `DISPATCH_LEVEL` from `xhcicm.sys` `+36B1E`, which the
+  release image's disassembly places in `cmQNt` (`IoIsWdmVersionAvailable`)
+  called from `CmQueryPublish` under the query device's lock: fixed by
+  `3967a033` (45.11, merged), here a page fault where the routine is
+  pageable. Read from the minidump, exported over COM1 and parsed on the
+  host.
+- The 0x62: `cm.nvlink.queries` 1, then every device of the driver
+  removed (the boot's device installs on 7; the uninstall on 8 and 8.1)
+  and the driver unloaded. The one allocation of the driver that outlives
+  its devices is the link-state table, which `stor98cm.h` interface 2
+  never frees once a stor98 holds it; its R4 asks the CM to stay loaded
+  for the boot, and on NT the driver had an unload routine.
+
+### The fix
+
+- `1ecdd85a`: on NT the unload frees a table no stor98 received.
+- `ec1b21f0`: on NT the load that registers the callback takes its own
+  `DriverUnload` away before the registration (restored if it fails), so
+  it stays loaded for the boot and its table is never left behind;
+  `DriverEntry` sets the unload routine before `CmNvlinkInit` and no
+  more. Reviewed and revised.
+
+### The legs (2026-10-30)
+
+The gated `qemu` build of `ec1b21f0` (x86: "BUILD + GATES PASSED (debug
+release qemu)", host tests passed; `xhcicm.sys` `50457b54...`), copied
+over the `3.3.0.0` release package's `xhcicm.sys` after its install
+(`INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`), Verifier's
+standard checks on `xhcicm.sys`, q35 with the ASM4242 model and the ORICO
+at boot, fresh overlays `k7b` and `k81b`.
+
+| System | The first boot after the install | The uninstall |
+|---|---|---|
+| 7 x86 | the NHI's driver installed at that boot: `cm.nvlink.queries` 1, `cm.stop` 2, `cm.start` again, the driver resident, no stop; ORICO (D:) on Stor98 | exit 3; the NHI stopped and started three more times, Stor98 asking again (`cm.nvlink.queries` 2 after the first restart), no stop; the restart after it clean |
+| 8.1 x86 | `stornvme` first, the mark service's 8.1 arm by the class model, Stor98 running, ORICO (E:); no stop | exit 3; `cm.stop` 2 three times with the table held, no stop; the restart after it clean |
+
+With the prototype of 45.11 and these two commits (7 x86, `k7a`): the
+same boot and the uninstall with no stop (`runs/run-45.md`, "45.11").
+
+### Owed
+
+Stor98's start with `MSISupported` 1 on 8.1; the amd64 half read on a
+64-bit guest (the gated amd64 build is the coordinator's record).
