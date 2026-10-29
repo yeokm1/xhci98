@@ -54,6 +54,18 @@ typedef struct _MK_ENTRY {
     INST_U32 PendingGen;
 } MK_ENTRY;
 
+/* The bridge inventory's section of one member (cm_query.h CM_QB_*;
+ * design record 33 section 4.3, task 45.12). */
+#define MK_QB_MEMBERS       4       /* CM_QM_MAX_MEMBERS */
+#define MK_QB_MAX           16      /* CM_QB_MAX_BRIDGES */
+typedef struct _MK_BRSEC {
+    int Valid;              /* the section names a member                */
+    int Complete;           /* every attachment below it listed          */
+    INST_U32 Member;
+    INST_U32 Count;
+    INST_U32 Loc[MK_QB_MAX];
+} MK_BRSEC;
+
 typedef struct _MK_MARKS {
     INST_U32 Bytes;
     INST_U32 EpochLo;
@@ -63,6 +75,8 @@ typedef struct _MK_MARKS {
     INST_U32 Dropped;
     INST_U32 Count;
     MK_ENTRY E[MK_MAX_ENTRIES];
+    int HasBridges;         /* the answer carried the bridge inventory   */
+    MK_BRSEC Br[MK_QB_MEMBERS];
 } MK_MARKS;
 
 /* As mk_query_parse, for the marks answer. */
@@ -156,6 +170,51 @@ int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
 int mk_listed(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
               INST_U32 address, const MK_ENTRY **entry);
 
+/* ---- the bridge marks (design record 33 section 4.3, task 45.12) ------- */
+
+/* Whether this driver's filter is on the bridge at `bdf` below member
+ * `member` (mk_bridge_attached): attached (its location in the member's
+ * section), missing (the section complete and the location not in it),
+ * or unknown (no inventory, an incomplete section, no section for the
+ * member). Unknown never asks for a restart. */
+#define MK_BA_UNKNOWN       0
+#define MK_BA_ATTACHED      1
+#define MK_BA_MISSING       2
+int mk_bridge_attached(const MK_MARKS *m, INST_U32 member, INST_U32 bdf);
+
+/* A bridge's install as the service reads it: pending (1) when its
+ * devnode has no driver, its flags could not be read, or
+ * CONFIGFLAG_REINSTALL or CONFIGFLAG_FINISH_INSTALL is set; done (0)
+ * otherwise. Only a bridge whose install is done gets its bridge mark. */
+#define MK_CONFIGFLAG_FINISH_INSTALL 0x00000400UL
+int mk_bridge_pending(int hasDriver, int flagsRead, INST_U32 flags);
+
+/* Whether a bridge asks for its unit's restart: at problem 12 (no
+ * resources), or started without a problem with its attachment missing.
+ * A status that could not be read asks for nothing. */
+#define MK_PROB_NORMAL_CONFLICT 0x0000000CUL
+int mk_bridge_needs(int statusOk, int started, int hasProblem,
+                    INST_U32 problem, int attached);
+
+/* The widened restart gate's test of one devnode below the unit (record
+ * 33 section 4.3, the owner's answer to Q1): 1 (refuse) for a started
+ * disk, volume or CD-ROM drive, or a started devnode whose setup class
+ * could not be read; 0 for anything else, a started dock's xHCI or
+ * network function included. */
+#define MK_CLASS_DISK       "{4D36E967-E325-11CE-BFC1-08002BE10318}"
+#define MK_CLASS_CDROM      "{4D36E965-E325-11CE-BFC1-08002BE10318}"
+#define MK_CLASS_VOLUME     "{71A27CDD-812A-11D0-BEC7-08002BE2092F}"
+int mk_bridge_gate_refuses(int statusOk, int started, int classRead,
+                           const char *classGuid);
+
+/* The other restarts' wait for the bridge marks (section 4.3): from the
+ * unit's arrival as the service first saw it, at most this long. */
+#define MK_BRIDGE_WAIT      60000UL
+/* 1 while a unit's other restarts wait: some bridge below it has its
+ * install pending or its mark not written, and less than MK_BRIDGE_WAIT
+ * has passed since its arrival. */
+int mk_bridge_wait(int allMarked, INST_U32 sinceArrivalMs);
+
 /* ---- the multi-string ----------------------------------------------------- */
 
 /* `in` (inBytes, possibly 0 or one empty string) with MK_NAME appended as
@@ -172,9 +231,18 @@ size_t mk_msz_append(const char *in, size_t inBytes, char *out, size_t cap);
  * epoch high and low words, the state). */
 void mk_rec_format(char *out, size_t cap, INST_U32 member, INST_U32 epochHi,
                    INST_U32 epochLo, int state);
-/* 1 with the fields when `text` is that form; 0 otherwise. */
+/* 1 with the fields when `text` is that form, with or without the
+ * bridge mark's suffix; 0 otherwise. */
 int mk_rec_parse(const char *text, INST_U32 *member, INST_U32 *epochHi,
                  INST_U32 *epochLo, int *state);
+/* A bridge mark's record (design record 33 section 4.3): the same form
+ * and MK_REC_BRIDGE after it ("... s=written k=bridge"), the same records
+ * and reconciliation as a unit's. */
+#define MK_REC_BRIDGE       " k=bridge"
+void mk_rec_format_bridge(char *out, size_t cap, INST_U32 member,
+                          INST_U32 epochHi, INST_U32 epochLo, int state);
+/* 1 when a record that parses carries the suffix. */
+int mk_rec_is_bridge(const char *text);
 
 /* ---- the confirmation (cm_query.h CM_QC_*) ------------------------------- */
 

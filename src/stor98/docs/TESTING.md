@@ -154,7 +154,7 @@ the `DriverVer` date.
 ## Windows 8 and 8.1 (xhci98 roadmap 43.23, 2026-10-22)
 
 Stor98 on NT 6.2 and 6.3, read in QEMU on xhci98's pristine Windows 8 and 8.1 images
-(`E:\xhci98-vm\win8-10\<name>\<name>-pristine.qcow2` on development host A, through
+(`<vm root>\win8-10\<name>\<name>-pristine.qcow2` on development host A, through
 overlays; `-machine pc`, TCG, `-cpu qemu64,+3dnowprefetch`, 2 vCPUs, 2 GB, test-signing on):
 Windows 8 Pro x86 and x64 (6.2.9200) and Windows 8.1 Pro x64 (6.3.9600, with Update). There
 was no Windows 8.1 x86 medium for this reading, so 32-bit Windows 8.1 was not run here; it

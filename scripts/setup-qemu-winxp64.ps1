@@ -75,7 +75,7 @@ launcher uses every boot (the CD's "Press any key" falls through to the hard
 disk).
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-winxp64.ps1 -WinXp64Iso "D:\isos\Win XP SP2 VL x64.iso" -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-winxp64.ps1 -WinXp64Iso "<iso folder>\Win XP SP2 VL x64.iso" -CreateDisk
 #>
 
 [CmdletBinding()]

@@ -8483,7 +8483,7 @@ static void open_window(void)
             }
         }
     }
-    hMain = CreateWindowExA(0, "Xhci98TrMain", "xHCI98 USB Tree",
+    hMain = CreateWindowExA(0, "Xhci98TrMain", TR_MAIN_TITLE,
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, cx, cy,
                             NULL, LoadMenuA(hInst, MAKEINTRESOURCEA(IDR_MENU)),
                             hInst, NULL);

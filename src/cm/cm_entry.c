@@ -80,9 +80,11 @@ NTSTATUS CmForwardSync(PCM_COMMON common, PIRP irp)
 /* TRUE when a bridge filter of this driver is already on the PDO's stack:
  * a bridge the filter INF names and whose LowerFilters value the mark
  * service wrote calls AddDevice twice, once as a lower and once as an
- * upper filter, and the first object serves both (decision M15). The
- * stack is being built by the PnP manager, which is this call's caller,
- * so it holds still. PASSIVE_LEVEL. */
+ * upper filter. Until task 45.12 the first object served both (decision
+ * M15); since then the lower call is the child (CmRolePlace, design record
+ * 33 section 4.4) and this guards the upper one against a second bridge
+ * filter. The stack is being built by the PnP manager, which is this
+ * call's caller, so it holds still. PASSIVE_LEVEL. */
 static BOOLEAN cmBridgeOnStack(PDEVICE_OBJECT pdo)
 {
     PDEVICE_OBJECT walk;
@@ -100,6 +102,27 @@ static BOOLEAN cmBridgeOnStack(PDEVICE_OBJECT pdo)
     return FALSE;
 }
 
+/* TRUE when a device of the PCI driver (the PDO's own driver, which is a
+ * bridge's function driver too) is already above the PDO: this AddDevice
+ * is an upper filter's, made after the FDO (design record 33 section 4.4).
+ * The stack is being built by the PnP manager, this call's caller, so it
+ * holds still. PASSIVE_LEVEL. */
+static BOOLEAN cmPciAbove(PDEVICE_OBJECT pdo)
+{
+    PDEVICE_OBJECT walk;
+    ULONG n;
+
+    n = 0;
+    for (walk = pdo->AttachedDevice; walk != NULL && n < 16;
+         walk = walk->AttachedDevice) {
+        if (walk->DriverObject == pdo->DriverObject) {
+            return TRUE;
+        }
+        n++;
+    }
+    return FALSE;
+}
+
 /*
  * Which role this PDO is (record 21 section 3.2; since task 42-A.5,
  * section 7.4 revision 3's CmRoleDecide). Windows 98 SE and ME
@@ -108,7 +131,10 @@ static BOOLEAN cmBridgeOnStack(PDEVICE_OBJECT pdo)
  * service runs there, and a WDM driver on a bridge devnode there breaks
  * the bridge (section 6.1), so the ids are not read. On the NT targets the
  * ids decide, and every PDO that is neither an NHI nor a filter INF's
- * bridge is the LowerFilters child, which never fails AddDevice.
+ * bridge is the LowerFilters child, which never fails AddDevice. Since
+ * task 45.12 a filter INF's bridge is the bridge filter only above the
+ * PCI driver's FDO (its UpperFilters) and the child below it (its
+ * LowerFilters bridge mark), CmRolePlace.
  */
 static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
@@ -137,6 +163,10 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     role = CmRoleDecide(&idsSeen,
                         (ULONG)CmPortsFilterId(CM_PORTS_ID(idsSeen.Vendor,
                                                            idsSeen.Device)));
+    /* Since task 45.12 (design record 33 section 4.4): a listed bridge's
+     * LowerFilters registration, made before the PCI driver's FDO, is the
+     * child; the NHI's answer stands whatever is above its PDO. */
+    role = CmRolePlace(role, (ULONG)cmPciAbove(pdo));
     if (role == CM_ROLE_FILTER) {
         if (cmBridgeOnStack(pdo)) {
             return STATUS_SUCCESS;
@@ -209,6 +239,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     CmDriverObject = DriverObject;
+    /* The unload routine is set before CmNvlinkInit: on NT, the load that
+     * publishes the link-state table takes the routine away there, before
+     * its callback can answer (task 45.31), and nothing after gives it
+     * back. Windows 98 SE and ME: resident for the boot, whatever the PnP
+     * devices do (stor98cm.h R4: the link-state channel's proof key is
+     * answered from this image, cm_nvlinkos.c), as a CONFIGMG worker's
+     * start made it before. */
+    DriverObject->DriverUnload =
+        IoIsWdmVersionAvailable(1, 0x10) ? cmUnload : NULL;
     CmRegInit();
     CmNvlinkInit();
     CmEjectInit();
@@ -220,16 +259,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DriverObject->MajorFunction[IRP_MJ_PNP] = cmDispatchPnp;
     DriverObject->MajorFunction[IRP_MJ_POWER] = cmDispatchPower;
     DriverObject->DriverExtension->AddDevice = cmAddDevice;
-    DriverObject->DriverUnload = cmUnload;
-    if (!IoIsWdmVersionAvailable(1, 0x10)) {
-        /* Windows 98 SE and ME: resident for the boot, whatever the PnP
-         * devices do (stor98cm.h R4: the link-state channel's proof key is
-         * answered from this image, cm_nvlinkos.c), as a CONFIGMG worker's
-         * start made it before. */
-        DriverObject->DriverUnload = NULL;
-    } else {
-        /* Design record 21 section 6.2.1's gate, read once (cm_reg.c). */
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        /* Design record 21 section 6.2.1's gate, read once (cm_reg.c), and
+         * design record 33's. */
         CmReadIrqGate();
+        CmReadBreqGate();
     }
     return STATUS_SUCCESS;
 }

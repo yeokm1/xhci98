@@ -1276,7 +1276,7 @@ Evidence, all under `vm\`:
   `readings.md`, full debug log, QEMU trace, `read-v300` verdicts, live
   counter reads per stage and screenshots; `winme-r1\` also keeps the two
   old-build logs. The work images are under
-  `C:\Users\yeokm1\xhci98-work\i8tier\` on development host A
+  a work folder on development host A
 - `vm\issue8-kd\i7smp4b\` - the 2026-09-14 retake (section 7.8): `part1\`
   (launcher tag `i7smp4b`: the debug log of the swap boot, the five cycles,
   the remove, the wrong-binary rescan and the restart; `gdb-load1..8-*.log`;

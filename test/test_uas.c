@@ -4,7 +4,8 @@
  * unit encoders and the parser, the SAM LUN field, the tag allocator, the
  * configuration walk for the UAS alternate setting and its Pipe Usage
  * descriptors, the REPORT LUNS parse, the status fold, the CDB direction
- * table and the storage id strings.
+ * table and the storage id strings; and task 45.23's sense fold, vital
+ * product data list, medium identity comparison and wake decision.
  *
  * Every expected byte was worked by hand from the UAS 1.0 specification's
  * IU layouts (COMMAND IU section 6.2.1, SENSE IU 6.2.2, RESPONSE IU 6.2.3,
@@ -786,6 +787,181 @@ static void test_devlim(void)
     CHECK_EQ(why, UAS_DEVLIM_RANGE, "range before the bus");
 }
 
+/* Task 45.23 (design record 20 section 4.3.3): the sense fold, from SPC's
+ * fixed and descriptor formats worked by hand. */
+static void test_sense_class(void)
+{
+    UCHAR s[18];
+
+    memset(s, 0, sizeof(s));
+    s[0] = 0x70; s[2] = 0x06; s[12] = 0x29;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_UA, "fixed: power on, reset");
+    s[12] = 0x28;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_UA_MEDIUM,
+             "fixed: not ready to ready, medium may have changed");
+    s[2] = 0x02; s[12] = 0x3A;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_NO_MEDIUM, "fixed: no medium");
+    s[12] = 0x04;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_BECOMING,
+             "fixed: becoming ready or a start needed");
+    s[12] = 0x05;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_OTHER,
+             "fixed: NOT READY of another kind");
+    s[2] = 0x05; s[12] = 0x20;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_ILLEGAL, "fixed: illegal");
+    s[2] = 0x03;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_OTHER, "fixed: medium error");
+    s[2] = 0x06; s[12] = 0x28;
+    CHECK_EQ(UasSenseClass(s, 12), UAS_SENSE_OTHER,
+             "fixed, too short for its ASC");
+    s[0] = 0xF1;
+    CHECK_EQ(UasSenseClass(s, 18), UAS_SENSE_UA_MEDIUM,
+             "fixed deferred, valid bit set");
+    memset(s, 0, sizeof(s));
+    s[0] = 0x72; s[1] = 0x06; s[2] = 0x28;
+    CHECK_EQ(UasSenseClass(s, 8), UAS_SENSE_UA_MEDIUM, "descriptor: 28h");
+    s[1] = 0x02; s[2] = 0x3A;
+    CHECK_EQ(UasSenseClass(s, 8), UAS_SENSE_NO_MEDIUM, "descriptor: 3Ah");
+    s[0] = 0x00;
+    CHECK_EQ(UasSenseClass(s, 8), UAS_SENSE_OTHER, "no response code");
+    CHECK_EQ(UasSenseClass(NULL, 18), UAS_SENSE_OTHER, "no sense");
+    CHECK_EQ(UasSenseClass(s, 2), UAS_SENSE_OTHER, "two bytes");
+}
+
+static void test_vpd_list(void)
+{
+    static const UCHAR p0[] = { 0x00, 0x00, 0x00, 0x03, 0x00, 0x80, 0x83 };
+    static const UCHAR other[] = { 0x00, 0x80, 0x00, 0x01, 0x80 };
+    static const UCHAR longer[] = { 0x00, 0x00, 0x00, 0x09, 0x00, 0x80 };
+
+    CHECK_EQ(UasVpdListHas(p0, sizeof(p0), 0x80), 1, "page 0x80 listed");
+    CHECK_EQ(UasVpdListHas(p0, sizeof(p0), 0x83), 1, "page 0x83 listed");
+    CHECK_EQ(UasVpdListHas(p0, sizeof(p0), 0x89), 0, "page 0x89 not");
+    CHECK_EQ(UasVpdListHas(p0, 5, 0x80), 0,
+             "a list cut short names nothing, not even what came");
+    CHECK_EQ(UasVpdListComplete(p0, 5), 0, "a list cut short is incomplete");
+    CHECK_EQ(UasVpdListComplete(p0, sizeof(p0)), 1, "the whole list");
+    CHECK_EQ(UasVpdListHas(other, sizeof(other), 0x80), 0,
+             "not page 0x00");
+    CHECK_EQ(UasVpdListHas(longer, sizeof(longer), 0x80), 0,
+             "a list longer than what came: no page taken from it");
+    CHECK_EQ(UasVpdListComplete(longer, sizeof(longer)), 0,
+             "nor is it complete");
+    CHECK_EQ(UasVpdListHas(p0, 3, 0x00), 0, "no header");
+}
+
+static void id_fixed(UAS_LUN_ID *id)
+{
+    memset(id, 0, sizeof(*id));
+    id->Read = 1;
+    id->SerialLength = 4;
+    memcpy(id->Serial, "S123", 4);
+    id->DevIdLength = 8;
+    memcpy(id->DevId, "\x01\x03\x00\x04\x50\x01\x02\x03", 8);
+    id->CapState = UAS_ID_CAP_VALID;
+    id->Cap[7] = 0xFF;
+    id->Cap[10] = 0x02;
+}
+
+static void test_id_match(void)
+{
+    UAS_LUN_ID was;
+    UAS_LUN_ID now;
+
+    id_fixed(&was);
+    id_fixed(&now);
+    CHECK_EQ(UasIdMatch(&was, &now), 1, "the same fixed disk");
+    now.Serial[3] = '4';
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "another unit serial");
+    id_fixed(&now);
+    now.SerialLength = 3;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "a serial of another length");
+    id_fixed(&now);
+    now.DevId[7] = 0x04;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "another designator");
+    id_fixed(&now);
+    now.Cap[7] = 0xFE;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "another capacity");
+    id_fixed(&now);
+    now.Cap[2] = 0x01;
+    CHECK_EQ(UasIdMatch(&was, &now), 0,
+             "a capacity differing above READ CAPACITY (10)'s range");
+    id_fixed(&now);
+    now.Cap[10] = 0x10;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "another block length");
+    id_fixed(&now);
+    now.MediumChanged = 1;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "attention 28h fails the check");
+    id_fixed(&now);
+    now.Read = 0;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "a read that failed now");
+    id_fixed(&now);
+    was.Read = 0;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "a record never read");
+    id_fixed(&was);
+    was.SerialLength = 0;
+    now.SerialLength = 0;
+    CHECK_EQ(UasIdMatch(&was, &now), 1, "the designator page alone");
+    was.DevIdLength = 0;
+    now.DevIdLength = 0;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "neither page: fails safe");
+    id_fixed(&was);
+    id_fixed(&now);
+    was.DevIdLength = 0;
+    CHECK_EQ(UasIdMatch(&was, &now), 0,
+             "a page that appeared since the record");
+    id_fixed(&was);
+    now.CapState = UAS_ID_CAP_NO_MEDIUM;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "a fixed disk with no medium now");
+    id_fixed(&now);
+    was.CapState = UAS_ID_CAP_FAILED;
+    now.CapState = UAS_ID_CAP_FAILED;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "capacity unread both times");
+
+    id_fixed(&was);
+    id_fixed(&now);
+    was.Removable = 1;
+    now.Removable = 1;
+    CHECK_EQ(UasIdMatch(&was, &now), 0,
+             "removable with a medium: fails safe, however alike");
+    was.CapState = UAS_ID_CAP_NO_MEDIUM;
+    now.CapState = UAS_ID_CAP_NO_MEDIUM;
+    CHECK_EQ(UasIdMatch(&was, &now), 1, "removable, empty both times");
+    now.CapState = UAS_ID_CAP_VALID;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "removable, a medium inserted");
+    now.Removable = 0;
+    CHECK_EQ(UasIdMatch(&was, &now), 0, "the removable bit changed");
+    CHECK_EQ(UasIdMatch(NULL, &now), 0, "no record");
+}
+
+static void test_wake(void)
+{
+    CHECK_EQ(UasWakeDecide(0, 0, 0, 0, 0, 0, 0, 0), UAS_WAKE_RELEASE,
+             "an older bus: nothing kept, released");
+    CHECK_EQ(UasWakeDecide(1, 1, 0, 0, 0, 0, 0, 0), UAS_WAKE_RELEASE,
+             "withdrawn and not declared: released unasked");
+    CHECK_EQ(UasWakeDecide(1, 0, 0, 1, XHCI98_RESUME_RUNNING, 3, 3, 0),
+             UAS_WAKE_SAME,
+             "a withdrawal that failed takes the query path");
+    CHECK_EQ(UasWakeDecide(1, 1, 1, 1, XHCI98_RESUME_RUNNING, 3, 3, 0),
+             UAS_WAKE_SAME, "declared, no re-initialization: released");
+    CHECK_EQ(UasWakeDecide(1, 1, 1, 1, XHCI98_RESUME_RUNNING, 4, 3, 0),
+             UAS_WAKE_CHECK, "declared and kept: the medium is checked");
+    CHECK_EQ(UasWakeDecide(1, 1, 1, 1, XHCI98_RESUME_PENDING, 3, 3, 0),
+             UAS_WAKE_WAIT, "the bus's pass still to end: wait");
+    CHECK_EQ(UasWakeDecide(1, 1, 1, 1, XHCI98_RESUME_PENDING, 3, 3, 1),
+             UAS_WAKE_FAIL, "still pending at the deadline: failed");
+    CHECK_EQ(UasWakeDecide(1, 1, 1, 1, XHCI98_RESUME_FAILED, 3, 3, 0),
+             UAS_WAKE_FAIL, "a failed resume: failed, never released");
+    CHECK_EQ(UasWakeDecide(1, 1, 1, 0, XHCI98_RESUME_RUNNING, 3, 3, 0),
+             UAS_WAKE_FAIL, "the query failed: failed");
+    CHECK_EQ(UasWakeDecide(1, 1, 1, 1, 7, 3, 3, 0), UAS_WAKE_FAIL,
+             "a state out of contract: failed");
+    CHECK_EQ(UasWakeDecide(1, 0, 1, 1, XHCI98_RESUME_RUNNING, 0, 0xFFFFFFFFUL,
+                           0),
+             UAS_WAKE_CHECK, "an epoch that wrapped is still a change");
+}
+
 int main(void)
 {
     test_tags();
@@ -801,6 +977,10 @@ int main(void)
     test_status();
     test_direction();
     test_ids();
+    test_sense_class();
+    test_vpd_list();
+    test_id_match();
+    test_wake();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

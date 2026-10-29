@@ -359,6 +359,49 @@ static int setupMinimal(int plugged, const TBT_U4_CONFIG *c)
 
 /* ------------------------------------------------------------------ */
 
+/* Record 22 section 10.5 (task 45.35): the isolation statement, set by a
+ * closure read back and withdrawn before a path can open again or the core
+ * reinitializes. */
+static void test_isolation_word(void)
+{
+    int dev;
+    ULONG gen;
+    ULONG gen2;
+    const TBT_U4_PORT *p;
+
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "up at the start");
+    CHECK(TbtU4PortPcieGen(&g_cm, 1, &gen), "a PCIe tunnel up: its generation");
+    CHECK_EQ(gen, p->Generation, "the port's generation");
+    CHECK(!TbtU4PortIsolated(&g_cm, 1, gen), "not isolated while up");
+    CHECK(!TbtU4PortPcieGen(&g_cm, 2, &gen2), "no tunnel on port 2");
+    CHECK(!TbtU4PortPcieGen(&g_cm, 0, &gen2), "port 0 refused");
+
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(g_ld.PathClosed, "the path read back closed");
+    CHECK(TbtU4PortIsolated(&g_cm, 1, gen), "isolated for its generation");
+    CHECK(!TbtU4PortPcieGen(&g_cm, 1, &gen2), "no PCIe tunnel once torn down");
+
+    /* The same device again: a new generation, the statement withdrawn
+     * before the path was enabled. */
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "re-plug: UP");
+    CHECK(!TbtU4PortIsolated(&g_cm, 1, gen), "the old statement withdrawn");
+    CHECK(TbtU4PortPcieGen(&g_cm, 1, &gen2), "the new tunnel's generation");
+    CHECK(gen2 != gen, "a new generation");
+    CHECK(!TbtU4PortIsolated(&g_cm, 1, gen2), "not isolated while up");
+
+    /* Withdrawn by a stop as well. */
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(TbtU4PortIsolated(&g_cm, 1, gen2), "closed again");
+    TbtU4Stop(&g_cm);
+    CHECK(!TbtU4PortIsolated(&g_cm, 1, gen2), "a stop withdraws it");
+}
+
 static void test_hot_plug_unplug(void)
 {
     int dev;
@@ -394,6 +437,13 @@ static void test_hot_plug_unplug(void)
           "and what is left of 3 s");
     CHECK_EQ(g_ld.Port, 1, "for port 1");
     CHECK(g_ld.MapValid && g_ld.MapRid == 0x0108, "with its router-named bridge");
+    /* Record 22 section 10.5 (task 45.35): the closure read back is the
+     * port's isolation statement, for that generation only. */
+    CHECK(TbtU4PortIsolated(&g_cm, 1, gen), "isolated: the path read back closed");
+    CHECK(!TbtU4PortIsolated(&g_cm, 1, gen + 1), "not for another generation");
+    CHECK(!TbtU4PortIsolated(&g_cm, 2, gen), "not for another port");
+    CHECK(!TbtU4PortIsolated(&g_cm, 0, gen), "port 0 refused");
+    CHECK(!TbtU4PortIsolated(&g_cm, TBT_U4_MAX_PORTS + 1, gen), "a port past the table refused");
     CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "a removal queued");
     CHECK_EQ(fabAdp(&g_fab, 0, lane, FAB_CAP_PORT + 19) & 8UL, 0, "Port Configured cleared");
     CHECK_EQ(fabAdp(&g_fab, 0, lane, FAB_CAP_LANE + 1) & 0x30UL, 0x10UL,
@@ -1162,6 +1212,8 @@ static void test_statement(void)
     poll(&g_cm, &g_fab, 1);
     CHECK_EQ(g_ldCalls, 1, "the upcall ran");
     CHECK(!g_ld.PathClosed, "path not proven closed: the statement's prerequisite failed");
+    CHECK(!TbtU4PortIsolated(&g_cm, 1, p->Generation),
+          "no isolation statement without the read-back (record 22 section 10.5)");
     CHECK_EQ(quarantineCount(&g_cm), 1, "the entry quarantined");
     CHECK_EQ(g_cm.Counters.PendingTimeouts, 1, "Pending Packets timeout counted");
     g_fab.R[0].Adp[lane].PpStuck[9] = 0;
@@ -6301,6 +6353,7 @@ int main(void)
     RUN_VEC(test_eject_pcie);
     RUN_VEC(test_defer_first_poll);
     RUN_VEC(test_hot_plug_unplug);
+    RUN_VEC(test_isolation_word);
     RUN_VEC(test_unplug_everywhere);
     RUN_VEC(test_unplug_nested);
     RUN_VEC(test_quick_replug);

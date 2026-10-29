@@ -121,17 +121,25 @@ static const GUID cmQueryClass = {
     0xE3E4EF80, 0x9744, 0x4323, {0xA4, 0x89, 0x06, 0x6E, 0x78, 0xAD, 0x2F, 0xA9}
 };
 
+/* Whether this is an NT system, read once at DriverEntry (CmQueryInit):
+ * cmQNt is also asked under the query device's Lock (CmQueryPublish, the
+ * PCI answer), where IoIsWdmVersionAvailable may not be called (8.1's
+ * Driver Verifier, its DDI compliance rule 0x2000E, read 2026-10-29). */
+static BOOLEAN cmQIsNt;
+
 VOID CmQueryInit(VOID)
 {
     KeInitializeSpinLock(&CmQueryGlobalLock);
     CmQueryUsed = 0;
     CmQueryLastLo = 0;
     CmQueryLastHi = 0;
+    cmQIsNt = IoIsWdmVersionAvailable(1, 0x10);
 }
 
+/* Any IRQL. */
 static BOOLEAN cmQNt(VOID)
 {
-    return IoIsWdmVersionAvailable(1, 0x10);
+    return cmQIsNt;
 }
 
 /* "<stem><n>" into a UNICODE_STRING over `buf` (CM_Q_NAME_CHARS), n < 100. */

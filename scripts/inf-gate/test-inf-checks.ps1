@@ -28,6 +28,17 @@ before), the OS-supplied lists are
 [Xhci.CopyOS] (usbd.sys) and [Xhci.CopyUI] (usbui.dll), and usbport.sys,
 usbhub.sys and the virtual-hub values are refused rather than required.
 
+Since roadmap-usb4 task 45.30 each case runs the gate in this process (a
+script called with & has a script scope of its own each time, so no case
+sees another's state), and the whole run is skipped when nothing it and
+the gate read has changed since this tree's last passing run
+(out\inf-selftest-pass.txt). build-and-test.md, "The INF gate's self-tests,
+in process and skipped when unchanged", is the design.
+
+.PARAMETER Force
+Run every case even when the last passing run read the same files.
+XHCI98_FULL_SELFTESTS=1 does the same; cut-builds.ps1 sets it for a cut.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\inf-gate\test-inf-checks.ps1
 #>
@@ -60,7 +71,7 @@ powershell -ExecutionPolicy Bypass -File scripts\inf-gate\test-inf-checks.ps1
 #
 
 [CmdletBinding()]
-param()
+param([switch]$Force)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -71,28 +82,125 @@ $gate = Join-Path $PSScriptRoot "check-inf.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
 $prodInfAmd64 = Join-Path $repo "src\xhci98-amd64.inf"
 
+function Get-InfSelfTestDigest {
+    # One SHA-256 over every file this self-test and the gate read, each by
+    # its path under -Root and its content, and the PowerShell version: the
+    # two scripts and the rest of scripts\inf-gate\, common.ps1 and
+    # test-harness.ps1, every file directly in src\ (the INFs and what the
+    # gate reads beside them) and XHCITR's manifest (task 45.30).
+    param([string]$Root)
+    $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    $files = @()
+    $gateDir = Join-Path $root "scripts\inf-gate"
+    if (Test-Path -LiteralPath $gateDir) { $files += @(Get-ChildItem -LiteralPath $gateDir -File -Recurse -Force) }
+    $srcDir = Join-Path $root "src"
+    if (Test-Path -LiteralPath $srcDir) { $files += @(Get-ChildItem -LiteralPath $srcDir -File -Force) }
+    foreach ($one in @("scripts\common.ps1", "scripts\test-harness.ps1", "xhcitr\xhcitr.manifest")) {
+        $f = Join-Path $root $one
+        if (Test-Path -LiteralPath $f -PathType Leaf) { $files += @(Get-Item -LiteralPath $f -Force) }
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $rows = @()
+        foreach ($f in $files) {
+            $rel = $f.FullName.Substring($root.Length).ToLowerInvariant()
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+            $rows += ($rel + ":" + (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join ""))
+        }
+        $rows = @($rows | Sort-Object -CaseSensitive)
+        $rows += ("powershell:" + $PSVersionTable.PSVersion.ToString())
+        $all = [System.Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
+        return (($sha.ComputeHash($all) | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+# **Skipped when nothing it reads has changed** (task 45.30): the record of
+# this tree's last passing run, out\inf-selftest-pass.txt, names the digest
+# it read. -Force and XHCI98_FULL_SELFTESTS=1 (a cut's builds) run it all.
+$passRecord = Join-Path $repo "out\inf-selftest-pass.txt"
+$digest = Get-InfSelfTestDigest -Root $repo
+$fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
+if (-not $fullAsked -and (Test-Path -LiteralPath $passRecord -PathType Leaf)) {
+    # A record is taken whole or not at all: exactly its four lines, in
+    # order, then the end line - the digest, the tree it was made in (a
+    # copied or junctioned out\ is no other tree's pass), its time and a
+    # count of one check or more - or it is no record and the suite runs.
+    $recLines = @([System.IO.File]::ReadAllLines($passRecord))
+    $recOk = $recLines.Count -eq 5 -and
+             $recLines[0] -match '^digest=[0-9a-f]{64}$' -and $recLines[1] -match '^tree=.+$' -and
+             $recLines[2] -match '^time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$' -and $recLines[3] -match '^checks=[1-9]\d*$' -and
+             $recLines[4] -eq "end"
+    if ($recOk -and $recLines[0].Substring(7) -eq $digest -and
+        [string]::Equals($recLines[1].Substring(5), [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $rec = @{ time = $recLines[2].Substring(5); checks = $recLines[3].Substring(7) }
+        Write-Ok ("INF gate self-tests skipped: nothing they or the gate read has changed since the run that passed at {0} ({1} checks; digest {2}). -Force runs them." -f
+                  $rec["time"], $rec["checks"], $digest.Substring(0, 16))
+        exit 0
+    }
+}
+# A record that no longer matches is gone before anything runs, so a run
+# stopped half-way leaves none.
+if (Test-Path -LiteralPath $passRecord) { Remove-Item -LiteralPath $passRecord -Force }
+
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
 
-function Invoke-Gate {
-    param([string]$Path, [string]$PackageDir = "", [string[]]$Extra = @())
-    $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate, "-InfPath", $Path)
-    if ($PackageDir -ne "") { $psArgs += @("-PackageDir", $PackageDir) }
-    if ($Extra.Count -gt 0) { $psArgs += $Extra }
-    # ErrorActionPreference relaxed across the call, as
-    # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin: in
-    # Windows PowerShell 5.1 each stderr line from a native command
-    # becomes an ErrorRecord, and under "Stop" the first one aborts this
-    # self-test with an empty message. That matters most here, because the gate
-    # under test is *expected* to fail on most of these cases and its diagnosis
-    # is what the assertions read.
+function Invoke-GateHere {
+    # The gate in this process (task 45.30), as `powershell -File` ran it:
+    # a script called with & gets a script scope of its own each time, so
+    # its state, functions, StrictMode and ErrorActionPreference are its own
+    # and go with the call; `exit` ends it with $LASTEXITCODE, a gate that
+    # ends without one reads as 0, and a terminating error that leaves it -
+    # an exception, a parameter that does not bind - reads as exit 1 with
+    # its message, as the child process printed it and exited 1. Every
+    # stream, Write-Host's among them, is the text returned.
+    param([string[]]$GateArgs)
+    # An array splatted on a script binds by position, so the arguments
+    # are named here as powershell -File names them: "-Name value", or
+    # "-Name" alone for a switch; anything else is positional.
+    $named = @{}
+    $positional = @()
+    for ($i = 0; $i -lt $GateArgs.Count; $i++) {
+        $a = $GateArgs[$i]
+        if ($a -match '^-([A-Za-z][A-Za-z0-9]*)$') {
+            # Taken before the next match, which replaces $Matches.
+            $name = $Matches[1]
+            if ($i + 1 -lt $GateArgs.Count -and $GateArgs[$i + 1] -notmatch '^-[A-Za-z]') {
+                $named[$name] = $GateArgs[$i + 1]
+                $i++
+            } else {
+                $named[$name] = $true
+            }
+        } else {
+            $positional += $a
+        }
+    }
     $saved = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+    # Collected as they come, so what the gate printed before a terminating
+    # error is kept with it.
+    $items = New-Object System.Collections.ArrayList
+    $code = 0
     try {
-        $out = & powershell.exe @psArgs 2>&1 | Out-String
+        $global:LASTEXITCODE = 0
+        & $gate @named @positional *>&1 | ForEach-Object { [void]$items.Add($_) }
+        $code = $global:LASTEXITCODE
+    } catch {
+        [void]$items.Add($_)
+        $code = 1
     } finally {
         $ErrorActionPreference = $saved
     }
-    return @{ Output = $out; ExitCode = $LASTEXITCODE }
+    return @{ Output = ($items | Out-String); ExitCode = $code }
+}
+
+function Invoke-Gate {
+    param([string]$Path, [string]$PackageDir = "", [string[]]$Extra = @())
+    $gateArgs = @("-InfPath", $Path)
+    if ($PackageDir -ne "") { $gateArgs += @("-PackageDir", $PackageDir) }
+    if ($Extra.Count -gt 0) { $gateArgs += $Extra }
+    return (Invoke-GateHere -GateArgs $gateArgs)
 }
 
 function New-MutatedInf {
@@ -198,6 +306,51 @@ try {
     $baseline = Invoke-Gate -Path $prodInf
     Assert-True ($baseline.ExitCode -eq 0) ("src\xhci98.inf does not pass its own gate:`n" + $baseline.Output)
     Assert-True ($baseline.Output -notmatch "FAIL \[") "src\xhci98.inf produced a FAIL line."
+
+    # The gate in this process (task 45.30): a failing case leaves nothing
+    # for the next, a parameter that does not bind is exit 1 with its
+    # message, and an exit code is the gate's own.
+    Write-Step "the gate in process: each call its own state, its own exit code"
+    $isoBroken = New-MutatedInf -Name "inproc-broken" -Mutate { param($t) $t.Replace("Signature=`"`$CHICAGO`$`"", "Signature=`"`$Windows NT`$`"") }
+    $isoR1 = Invoke-Gate -Path $isoBroken
+    $isoR2 = Invoke-Gate -Path $prodInf
+    Assert-True ($isoR1.ExitCode -ne 0 -and $isoR1.Output -match "FAIL \[") ("inproc-broken : the broken INF was not refused in process:`n" + $isoR1.Output)
+    Assert-True ($isoR2.ExitCode -eq 0 -and $isoR2.Output -notmatch "FAIL \[") ("inproc-after : the production INF, run after a failing case, saw that case's failures:`n" + $isoR2.Output)
+    $isoOrder = Invoke-GateHere -GateArgs @("-InfPath", $prodInfAmd64, "-AllowUnpaddedDriverVer", "-Arch", "amd64")
+    Assert-True ($isoOrder.ExitCode -eq 0) ("inproc-order : a switch named before another parameter did not bind as written:`n" + $isoOrder.Output)
+    $isoBind = Invoke-GateHere -GateArgs @("-InfPath", $prodInf, "-NoSuchSwitch")
+    Assert-True ($isoBind.ExitCode -eq 1 -and $isoBind.Output -match "NoSuchSwitch") ("inproc-bind : a parameter that does not bind was not exit 1 with its message:`n" + $isoBind.Output)
+    Assert-True ("$ErrorActionPreference" -eq "Stop") "inproc-eap : a gate call changed this self-test's ErrorActionPreference."
+
+    # The skip's digest (task 45.30): it moves when a file in its set
+    # changes or appears, and stays when one outside it does.
+    Write-Step "the skip's digest: every file in the set, and none outside it"
+    $dg = Join-Path $script:work "digest-tree"
+    foreach ($d in @("scripts\inf-gate", "src\sub", "xhcitr", "elsewhere")) { New-Item -ItemType Directory -Force -Path (Join-Path $dg $d) | Out-Null }
+    foreach ($f in @("scripts\inf-gate\check-inf.ps1", "scripts\common.ps1", "scripts\test-harness.ps1", "src\xhci98.inf",
+                     "src\xhci_version.h", "xhcitr\xhcitr.manifest")) {
+        [System.IO.File]::WriteAllText((Join-Path $dg $f), "a")
+    }
+    $dg0 = Get-InfSelfTestDigest -Root $dg
+    $dgCases = @(
+        @{ Why = "an INF changed";                File = "src\xhci98.inf";                 Moves = $true },
+        @{ Why = "a header beside it added";      File = "src\xhci_new.h";                 Moves = $true },
+        @{ Why = "a gate file in a subfolder";    File = "scripts\inf-gate\sub\list.txt";  Moves = $true },
+        @{ Why = "the manifest changed";          File = "xhcitr\xhcitr.manifest";         Moves = $true },
+        @{ Why = "common.ps1 changed";            File = "scripts\common.ps1";             Moves = $true },
+        @{ Why = "a file under a src\ subfolder"; File = "src\sub\other.c";                Moves = $false },
+        @{ Why = "another script";                File = "scripts\other.ps1";              Moves = $false },
+        @{ Why = "a file elsewhere";              File = "elsewhere\x.txt";                Moves = $false }
+    )
+    foreach ($c in $dgCases) {
+        $f = Join-Path $dg $c.File
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $f) | Out-Null
+        [System.IO.File]::WriteAllText($f, "b-" + $c.File)
+        $dg1 = Get-InfSelfTestDigest -Root $dg
+        Assert-True (($dg1 -ne $dg0) -eq $c.Moves) ("digest : {0}: the digest {1}." -f $c.Why, $(if ($c.Moves) { "did not move" } else { "moved" }))
+        $dg0 = $dg1
+    }
+    Assert-True ((Get-InfSelfTestDigest -Root $dg) -eq $dg0) "digest : the digest of one tree is not the same twice."
     Assert-True ($baseline.Output -notmatch "WARN:") ("src\xhci98.inf produced a warning:`n" + $baseline.Output)
     # Both models sections READ - the undecorated one and NT 6.x's - for the
     # reason the 64-bit baseline below gives, each with the controller and
@@ -1551,8 +1704,7 @@ try {
     function Get-Footprint {
         param([string]$Path)
         $out = Join-Path $script:work ("fp-" + [System.IO.Path]::GetRandomFileName() + ".txt")
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate `
-            -InfPath $Path -EmitFootprint $out | Out-Null
+        [void](Invoke-GateHere -GateArgs @("-InfPath", $Path, "-EmitFootprint", $out))
         if (-not (Test-Path -LiteralPath $out)) { return $null }
         # Comment lines carry the source path and the legend, neither of which
         # is a claim about this INF's contents.
@@ -2632,8 +2784,7 @@ try {
     Assert-True (Test-Path -LiteralPath $tracked64) "scripts\inf-gate\expected-footprint-amd64.txt is missing; regenerate it with -Arch amd64 -EmitFootprint."
     if (Test-Path -LiteralPath $tracked64) {
         $out64 = Join-Path $script:work ("fp64-" + [System.IO.Path]::GetRandomFileName() + ".txt")
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate `
-            -InfPath $prodInfAmd64 -Arch amd64 -EmitFootprint $out64 | Out-Null
+        [void](Invoke-GateHere -GateArgs @("-InfPath", $prodInfAmd64, "-Arch", "amd64", "-EmitFootprint", $out64))
         Assert-True (Test-Path -LiteralPath $out64) "-EmitFootprint wrote no file for the 64-bit INF."
         if (Test-Path -LiteralPath $out64) {
             $actual64 = @(Get-Content -LiteralPath $out64 | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne "" })
@@ -2663,6 +2814,21 @@ Write-Host ""
 if ($script:failures.Count -gt 0) {
     Write-Err ("INF gate self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
     exit 1
+}
+# The record of this pass, for the next run's skip: written whole to a
+# temporary name and moved into place, and only if what was read is still
+# what the run began with (a file changed during the run runs it again).
+if ((Get-InfSelfTestDigest -Root $repo) -eq $digest) {
+    Ensure-Directory (Split-Path -Parent $passRecord)
+    # A name of this run's own, so two runs at once never write one file.
+    $tmpRecord = $passRecord + "." + [System.IO.Path]::GetRandomFileName() + ".tmp"
+    try {
+        [System.IO.File]::WriteAllText($tmpRecord, ("digest={0}`r`ntree={1}`r`ntime={2}`r`nchecks={3}`r`nend`r`n" -f $digest,
+            [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"), $script:checks))
+        Move-Item -LiteralPath $tmpRecord -Destination $passRecord -Force
+    } finally {
+        if (Test-Path -LiteralPath $tmpRecord) { Remove-Item -LiteralPath $tmpRecord -Force -ErrorAction SilentlyContinue }
+    }
 }
 Write-Ok ("INF gate self-tests passed ({0} checks)" -f $script:checks)
 exit 0

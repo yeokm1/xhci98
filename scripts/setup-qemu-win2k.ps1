@@ -32,14 +32,14 @@ The same qemu-xhci device model and GDB/monitor conventions as the Win98 VM appl
 the monitor port is 55556 (vs Win98's 55555) so both VMs can run at once.
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 -Win2KIso <iso folder>\win2ksp4.ISO -CreateDisk
 #>
 
 [CmdletBinding()]
 param(
     [string]$VmDir = "",
     [string]$LocalScriptDir = "",
-    [string]$Win2KIso = "D:\isos\win2ksp4.ISO",
+    [string]$Win2KIso = "",
     [string]$Win2KUsbdSys = "",
     # Size of the qcow2 created by -CreateDisk, in qemu-img's own notation.
     # Only read on creation: it cannot resize an image that already exists.
@@ -153,7 +153,7 @@ Write-Ok "VM directory: $VmDir"
 Write-Ok "Local script directory: $LocalScriptDir"
 Write-Ok "Transfer (VVFAT) directory: $xferDir"
 
-if (-not (Test-Path -LiteralPath $Win2KIso)) {
+if (-not $Win2KIso -or -not (Test-Path -LiteralPath $Win2KIso)) {
     Write-Warn "Win2000 ISO not found at: $Win2KIso (pass -Win2KIso to override)."
 } else {
     Write-Ok "Win2000 ISO: $Win2KIso"

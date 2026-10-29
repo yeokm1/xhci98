@@ -179,7 +179,7 @@ So the drive's interrupt does fire on the tunnel port's wire once
 
 ## 6. Evidence
 
-`E:\xhci98-vm\p44\` (git-ignored, on the development host):
+`<vm root>\p44\` (git-ignored, on the development host):
 
 - `p44-w2khp\w2k\`: 44.50's debug-port traces `debugcon-a.log` to
   `-d.log` and `infopci-a-plug.txt`.
@@ -203,4 +203,4 @@ So the drive's interrupt does fire on the tunnel port's wire once
   "Polling mode".
 - `src/cm/cm_irq.c`, `cm_filt.c`, `cm_reenum.c` (`CmRegIrqWire`),
   `cm_reg.c` (`CmReadIrqGate`); `test/test_cm_irq.c`.
-- The q35 bases' READMEs, `E:\xhci98-vm\q35-bases\w2k\` and `w2kacpi\`.
+- The q35 bases' READMEs, `<vm root>\q35-bases\w2k\` and `w2kacpi\`.

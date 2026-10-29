@@ -36,3 +36,19 @@ int PfwNtDecide(PFW_U32 major, PFW_U32 minor, PFW_U32 nproc, int safeMode,
     }
     return PFW_NT_RUN_IPI;
 }
+
+int PfwNtRole(PFW_U32 major, PFW_U32 minor)
+{
+    if (major == 5) {
+        return (minor == 0 || minor == 1) ? PFW_ROLE_ENTRY : PFW_ROLE_NONE;
+    }
+    if (major == 6) {
+        if (minor <= 1) {
+            return PFW_ROLE_ENTRY;
+        }
+        if (minor <= 3) {
+            return PFW_ROLE_FILTER;
+        }
+    }
+    return PFW_ROLE_NONE;
+}

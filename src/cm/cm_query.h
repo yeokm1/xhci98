@@ -383,7 +383,9 @@
                                            answer showed them */
 #define CM_QM_O_NHI_BDF         48UL    /* as CM_Q_O_NHI_BDF */
 #define CM_QM_O_CURRENT         52UL    /* of the entries, current ones */
-/* 56..63 reserved, 0 */
+#define CM_QM_O_BR_OFFSET       56UL    /* the bridge inventory (below), 0
+                                           from a driver without it      */
+#define CM_QM_O_BR_BYTES        60UL    /* its length, CM_QB_BYTES        */
 
 #define CM_QM_F_INCOMPLETE      0x01UL  /* a current PDO could not be listed
                                            (a set full, a truncated
@@ -391,6 +393,8 @@
                                            as departed from this answer */
 #define CM_QM_F_STOPPING        0x02UL  /* the NHI is stopping */
 #define CM_QM_F_SAFE_EJECT_OFF  0x04UL  /* XhciCmSafeEject 0 on this domain */
+#define CM_QM_F_BRIDGES         0x08UL  /* the bridge inventory follows the
+                                           entries (task 45.12)          */
 
 /* One entry. */
 #define CM_QM_ENT_BYTES         64UL
@@ -442,8 +446,33 @@
 #define CM_QM_MAX_TOMBS         32UL    /* per member */
 #define CM_QM_MAX_ENTRIES       (CM_QM_MAX_MEMBERS * \
                                  (CM_QM_MAX_CURRENT + CM_QM_MAX_TOMBS))
+/*
+ * The bridge inventory (design record 33 section 4.3, task 45.12), beside
+ * the entries and tombstones and never mixed with them: for each member
+ * of the set, the location of every child filter of this driver that is
+ * attached, located, not removed and on a PCI-to-PCI bridge below that
+ * member (its ancestry reaching the member's bridge filter), whichever
+ * way it came (at BusRelations or by AddDevice). One section a member,
+ * CM_QM_MAX_MEMBERS of them in member order, CM_QB_SEC_BYTES each:
+ *   dword 0   the member's location (bus 15:8, device 7:3, function 2:0)
+ *             in 15:0, the locations listed in 23:16, CM_QB_F_* in 31:24;
+ *   dwords 1 to CM_QB_MAX_BRIDGES  the locations, the same packing.
+ * Complete only when every such attachment was listed and located: an
+ * attachment whose location or kind is not known yet, a child filter not
+ * yet placed below any bridge, or more than CM_QB_MAX_BRIDGES leave it
+ * clear, and the mark service then reads every bridge of that member as
+ * unknown (mk_bridge_attached).
+ */
+#define CM_QB_MAX_BRIDGES       16UL
+#define CM_QB_SEC_BYTES         (4UL + 4UL * CM_QB_MAX_BRIDGES)
+#define CM_QB_BYTES             (CM_QM_MAX_MEMBERS * CM_QB_SEC_BYTES)
+#define CM_QB_WORDS             (CM_QB_BYTES / 4UL)
+#define CM_QB_F_MEMBER          0x40UL  /* the section names a member     */
+#define CM_QB_F_COMPLETE        0x80UL
+
 #define CM_QM_MAX_BYTES         (CM_QM_HDR_BYTES + \
-                                 CM_QM_MAX_ENTRIES * CM_QM_ENT_BYTES)
+                                 CM_QM_MAX_ENTRIES * CM_QM_ENT_BYTES + \
+                                 CM_QB_BYTES)
 
 /*
  * The confirmation of an eject (record 21 section 7.4, revision 3,

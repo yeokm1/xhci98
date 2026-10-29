@@ -168,6 +168,9 @@ typedef struct _CM_QM_IN {
     ULONG EpochHi;
     ULONG NhiBdf;
     ULONG SafeEjectOff;
+    /* The bridge inventory (cm_query.h CM_QB_*), CM_QB_WORDS dwords laid
+     * out as the answer carries them, or NULL for none. */
+    const ULONG *Bridges;
 } CM_QM_IN, *PCM_QM_IN;
 
 /* The answer into out (at least CM_QM_MAX_BYTES), PASS 0 and no stopping

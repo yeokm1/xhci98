@@ -813,6 +813,17 @@ ULONG XhciTolDeadStep(PXHCI_TOL_DEAD dead, ULONG tolerance, ULONG admitted,
     return XhciTolElapsed(now, dead->Stamp, XHCI_TOL_CONTAIN_TICKS);
 }
 
+ULONG XhciTolProof(ULONG bme, ULONG asked, ULONG isolated)
+{
+    if (bme) {
+        return XHCI_TOL_PROOF_BME;
+    }
+    if (asked && isolated) {
+        return XHCI_TOL_PROOF_TUNNEL;
+    }
+    return XHCI_TOL_PROOF_NONE;
+}
+
 ULONG XhciTolRecoverDefer(ULONG tolerance, ULONG admitted, ULONG allOnes)
 {
     return (tolerance && admitted && allOnes) ? 1UL : 0UL;

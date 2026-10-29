@@ -51,9 +51,9 @@ if [ ! -f "$qemu/hw/usb4/usb4-router-asm.c" ]; then
     exit 1
 fi
 # The asm4242 host as the emulator's asm4242 preset has it (usb4-emu QEMU
-# fork 02dda40 and later), which the cases use.
+# fork 2e063be and later), which the cases use.
 if ! grep -q usb4_asm_config_public "$qemu/hw/usb4/usb4-internal.h"; then
-    echo "usb4-emu checkout too old: no asm4242 preset (QEMU fork 02dda40)" >&2
+    echo "usb4-emu checkout too old: no asm4242 preset (QEMU fork 2e063be)" >&2
     exit 1
 fi
 # The asm2464 device model (the ORICO AAGM2-U4 capture, usb4-emu QEMU fork

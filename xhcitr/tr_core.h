@@ -21,8 +21,14 @@
 #include "../xhcimark/mark_core.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/xhci_version.h"
 
 typedef unsigned long TR_U32;
+
+/* The main window's title carries the package version, so a screenshot
+ * or a report says which build it came from (roadmap-usb4 task 45.4);
+ * the message boxes keep the plain name. */
+#define TR_MAIN_TITLE           "xHCI98 USB Tree " XHCI_VER_STR
 
 #define TR_ID_CHARS             208
 #define TR_PATH_CHARS           260

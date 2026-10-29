@@ -74,6 +74,7 @@
 #include "cm_ports.h"
 #include "cm_nvlink.h"
 #include "cm_call.h"
+#include "cm_iso.h"
 
 /* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
  * cmU4ToIcm); its stor98 statement is made at the core's upcall, not here. */
@@ -1109,6 +1110,734 @@ VOID CmRegIrqNote(PCM_FILTER f, const char *label, ULONG value)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* ====================================================================== */
+/* A bridge's requirements (design record 33, task 45.12)                */
+/* ====================================================================== */
+
+/* The counts of record 33 section 9.3, emitted at the stop (cm.breq.*). */
+#define CM_BQC_SEEN         0
+#define CM_BQC_REWRITTEN    1
+#define CM_BQC_DROP_IO      2
+#define CM_BQC_DROP_MEM     3
+#define CM_BQC_DROP_PREF    4
+#define CM_BQC_UNMET        5
+#define CM_BQC_SHAPE        6
+#define CM_BQC_PARENT       7
+#define CM_BQC_NOTALONE     8
+#define CM_BQC_NOBRIDGE     9
+#define CM_BQC_NOMEM        10
+#define CM_BQC_NOWIN        11
+#define CM_BQC_LOWER        12
+#define CM_BQC_START_OK     13
+#define CM_BQC_START_FAIL   14
+#define CM_BQC_COUNT        15
+static ULONG cmBqCount[CM_BQC_COUNT];
+static const char *const cmBqNames[CM_BQC_COUNT] = {
+    "cm.breq.seen", "cm.breq.rewritten", "cm.breq.dropped.io",
+    "cm.breq.dropped.mem", "cm.breq.dropped.pref", "cm.breq.unmet",
+    "cm.breq.shape", "cm.breq.parent", "cm.breq.notalone",
+    "cm.breq.nobridge", "cm.breq.nomem", "cm.breq.nowin", "cm.breq.lower",
+    "cm.breq.start.ok", "cm.breq.start.fail"
+};
+
+/* The domain whose set holds `bdf` (16-bit) as an active member, or NULL.
+ * Under the list's lock. */
+static PCM_NHI cmRegMemberDom(ULONG bdf)
+{
+    PLIST_ENTRY e;
+    PCM_REENUM r;
+    ULONG i;
+
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        r = CONTAINING_RECORD(e, CM_REENUM, Link);
+        if (r->Route != CM_ROUTE_FILTER) {
+            continue;
+        }
+        for (i = 0; i < r->Members; i++) {
+            if ((r->Port[i].Bdf & 0xFFFFUL) == bdf &&
+                (r->Port[i].Flags & CM_PORT_ACTIVE) != 0) {
+                return CONTAINING_RECORD(r, CM_NHI, Reenum);
+            }
+        }
+    }
+    return NULL;
+}
+
+BOOLEAN CmRegBreqFind(PCM_FILTER child, PULONG parent, PULONG port,
+                      PULONG mode)
+{
+    PCM_FILTER f;
+    PCM_FILTER a;
+    PCM_NHI dom;
+    ULONG bdf;
+    ULONG n;
+    BOOLEAN found;
+    KIRQL irql;
+
+    *parent = 0xFFFFUL;
+    *port = 0xFFFFUL;
+    *mode = CM_BRIDGE_REQ_OFF;
+    found = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    f = child;
+    for (n = 0; n <= CM_TUNNEL_DEPTH_MAX; n++) {
+        a = f->Parent;
+        if (a == NULL && f->Common.Kind == CM_KIND_CHILD) {
+            a = f->Bridge;
+        }
+        if (a == NULL) {
+            break;
+        }
+        bdf = cmFiltBdf(a);
+        if (n == 0) {
+            *parent = bdf;
+        }
+        if (bdf == 0xFFFFUL) {
+            break;
+        }
+        dom = cmRegMemberDom(bdf);
+        if (dom != NULL) {
+            *port = bdf;
+            *mode = dom->Values.BridgeReq;
+            found = TRUE;
+            break;
+        }
+        f = a;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return found;
+}
+
+/*
+ * Design record 22 section 10.5 (task 45.35). The member above `child`
+ * (its ancestry, as CmRegBreqFind walks it), that member's domain when it
+ * runs the USB4 software connection manager, the USB4 port whose member by
+ * correspondence it is, and that port's generation while its PCIe tunnel
+ * is up: the binding, kept in the filter. Taken once a start; a later call
+ * keeps the first. Under cmRegLock.
+ */
+BOOLEAN CmRegIsoBind(PCM_FILTER child)
+{
+    PCM_FILTER f;
+    PCM_FILTER a;
+    PCM_NHI dom;
+    ULONG bdf;
+    ULONG n;
+    ULONG port;
+    ULONG gen;
+    BOOLEAN bound;
+    KIRQL irql;
+
+    bound = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (child->IsoBound && child->IsoRefs != 0) {
+        /* Immutable while a reference is held. */
+        KeReleaseSpinLock(&cmRegLock, irql);
+        return TRUE;
+    }
+    child->IsoBound = 0;
+    dom = NULL;
+    bdf = 0xFFFFUL;
+    f = child;
+    for (n = 0; n <= CM_TUNNEL_DEPTH_MAX; n++) {
+        a = f->Parent;
+        if (a == NULL && f->Common.Kind == CM_KIND_CHILD) {
+            a = f->Bridge;
+        }
+        if (a == NULL) {
+            break;
+        }
+        bdf = cmFiltBdf(a);
+        if (bdf == 0xFFFFUL) {
+            break;
+        }
+        dom = cmRegMemberDom(bdf);
+        if (dom != NULL) {
+            break;
+        }
+        f = a;
+    }
+    if (dom != NULL && dom->U4On && !child->IsoGone) {
+        /* Every USB4 port's tunnel up at this start, by generation: the
+         * port that feeds the member is named at the ask, by the
+         * correspondence then (it may be learned after the start). */
+        child->IsoUpMask = 0;
+        for (port = 1; port <= TBT_U4_MAX_PORTS; port++) {
+            child->IsoGens[port - 1] = 0;
+            if (TbtU4PortPcieGen(&dom->U4, port, &gen)) {
+                child->IsoGens[port - 1] = gen;
+                child->IsoUpMask |= 1UL << (port - 1);
+            }
+        }
+        if (child->IsoUpMask != 0) {
+            child->IsoDom = (PVOID)dom;
+            child->IsoStarts = dom->Reenum.Starts;
+            child->IsoMember = bdf;
+            child->IsoBound = 1;
+            bound = TRUE;
+            CmLogNote(dom, "cm.iso.bind", (child->IsoUpMask << 24) | bdf);
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return bound;
+}
+
+ULONG CmRegIsoAsk(PCM_FILTER child)
+{
+    PLIST_ENTRY e;
+    PCM_NHI d;
+    PCM_NHI dom;
+    CM_ISO_IN in;
+    ULONG why;
+    ULONG m;
+    ULONG p;
+    ULONG port;
+    ULONG gen;
+    KIRQL irql;
+
+    RtlZeroMemory(&in, sizeof(in));
+    port = 0;
+    gen = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    in.Bound = child->IsoBound;
+    in.Gone = child->IsoGone;
+    dom = NULL;
+    if (in.Bound) {
+        for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+            d = CONTAINING_RECORD(CONTAINING_RECORD(e, CM_REENUM, Link),
+                                  CM_NHI, Reenum);
+            if ((PVOID)d == child->IsoDom) {
+                dom = d;
+                break;
+            }
+        }
+    }
+    if (dom != NULL) {
+        in.DomainListed = 1;
+        in.StartsSame = (dom->Reenum.Starts == child->IsoStarts) ? 1UL : 0UL;
+        in.U4On = dom->U4On ? 1UL : 0UL;
+        in.StageActive = (dom->Stage == CM_STAGE_ACTIVE) ? 1UL : 0UL;
+        in.LiveActive = (dom->Live.State == CM_LIVE_ACTIVE) ? 1UL : 0UL;
+        in.LossDrain = dom->Reenum.LossDrain ? 1UL : 0UL;
+        /* The port that feeds the bound member now, by correspondence;
+         * exactly one, else none is named. */
+        for (p = 1; p <= TBT_U4_MAX_PORTS; p++) {
+            m = XhciTbtPortMember(&dom->Reenum.Topo, &dom->Binds, p);
+            if (m != XHCI_TBT_NO_MEMBER && m < dom->Reenum.Topo.Tunnels &&
+                (dom->Reenum.Topo.Set[m] & 0xFFFFUL) == child->IsoMember) {
+                port = (port == 0) ? p : 0xFFFFFFFFUL;
+            }
+        }
+        if (port != 0 && port != 0xFFFFFFFFUL) {
+            in.Corresponds = 1;
+            gen = child->IsoGens[port - 1];
+            in.Isolated =
+                ((child->IsoUpMask & (1UL << (port - 1))) != 0 &&
+                 TbtU4PortIsolated(&dom->U4, port, gen))
+                    ? 1UL
+                    : 0UL;
+        } else {
+            port = 0;
+        }
+    }
+    why = CmIsoDecide(&in);
+    if (dom != NULL) {
+        dom->Counters.IsoAsked++;
+        if (why == CM_ISO_YES) {
+            dom->Counters.IsoYes++;
+        } else {
+            dom->Counters.IsoNo++;
+        }
+        CmLogNote(dom, "cm.iso", (why << 24) | ((port & 0xFFUL) << 16) |
+                                     (gen & 0xFFFFUL));
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return why;
+}
+
+VOID CmRegIsoUnbind(PCM_FILTER child)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (child->IsoRefs == 0) {
+        child->IsoBound = 0;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegIsoGone(PCM_FILTER child)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    child->IsoGone = 1;
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/* One function's id and header type: TRUE when it answers (not all-ones,
+ * not Configuration Request Retry Status); *ok 0 when a read failed or it
+ * answered Retry Status, which makes what it is unknown. PASSIVE_LEVEL. */
+static BOOLEAN cmBqPresent(ULONG bdf, PULONG hdr, PULONG ok)
+{
+    ULONG id;
+    ULONG v;
+
+    *ok = 1;
+    *hdr = 0;
+    if (!cmCfgRead(NULL, bdf, 0x00UL, &id)) {
+        *ok = 0;
+        return FALSE;
+    }
+    if ((id & 0xFFFFUL) == 0xFFFFUL) {
+        return FALSE;
+    }
+    if ((id & 0xFFFFUL) == 0x0001UL || !cmCfgRead(NULL, bdf, 0x0CUL, &v)) {
+        *ok = 0;
+        return FALSE;
+    }
+    *hdr = (v >> 16) & 0xFFUL;
+    return TRUE;
+}
+
+/* A function's PCI Express Device/Port Type and Slot Implemented from its
+ * capability list, *capAt its offset: CM_BQ_PCIE when found, CM_BQ_NONE
+ * when the function reads as having none (no list, or a list that ends
+ * without it), CM_BQ_UNREAD when a read failed or the list does not end
+ * within its bound (what it is, unknown). PASSIVE_LEVEL. */
+#define CM_BQ_NONE      0UL
+#define CM_BQ_PCIE      1UL
+#define CM_BQ_UNREAD    2UL
+static ULONG cmBqPcie(ULONG bdf, PULONG type, PULONG slot, PULONG capAt)
+{
+    ULONG v;
+    ULONG at;
+    ULONG steps;
+
+    if (!cmCfgRead(NULL, bdf, 0x04UL, &v)) {
+        return CM_BQ_UNREAD;
+    }
+    if ((v & (1UL << 20)) == 0) {
+        return CM_BQ_NONE;
+    }
+    if (!cmCfgRead(NULL, bdf, 0x34UL, &v)) {
+        return CM_BQ_UNREAD;
+    }
+    at = v & 0xFCUL;
+    for (steps = 0; steps < 48; steps++) {
+        if (at == 0) {
+            return CM_BQ_NONE;
+        }
+        if (at < 0x40UL || !cmCfgRead(NULL, bdf, at, &v)) {
+            return CM_BQ_UNREAD;
+        }
+        if ((v & 0xFFUL) == 0x10UL) {
+            *type = (v >> 20) & 0xFUL;
+            *slot = (v >> 24) & 1UL;
+            *capAt = at;
+            return CM_BQ_PCIE;
+        }
+        at = (v >> 8) & 0xFCUL;
+    }
+    return CM_BQ_UNREAD;
+}
+
+/* A bridge's secondary and subordinate buses: TRUE when numbered
+ * (secondary not 0 and not FFh, subordinate not below it). */
+static BOOLEAN cmBqNumbered(ULONG bdf, PULONG sec)
+{
+    ULONG v;
+    ULONG s;
+    ULONG sub;
+
+    if (!cmCfgRead(NULL, bdf, 0x18UL, &v)) {
+        return FALSE;
+    }
+    s = (v >> 8) & 0xFFUL;
+    sub = (v >> 16) & 0xFFUL;
+    *sec = s;
+    return (BOOLEAN)(s != 0 && s != 0xFFUL && sub >= s);
+}
+
+/* What a downstream port's secondary bus holds (section 5.2): device 0
+ * alone answers below a PCI Express downstream port. */
+static ULONG cmBqBehind(ULONG sec, PULONG anyIo, PULONG anyPref)
+{
+    ULONG fn;
+    ULONG fns;
+    ULONG hdr;
+    ULONG hdr2;
+    ULONG ok;
+    ULONG bdf;
+    ULONG bars[6];
+    ULONG io;
+    ULONG pref;
+    ULONG k;
+    ULONG seen;
+    ULONG behind;
+
+    *anyIo = 0;
+    *anyPref = 0;
+    seen = 0;
+    behind = CM_BREQ_B_TYPE0;
+    fns = 1;
+    for (fn = 0; fn < fns; fn++) {
+        bdf = XHCI_TBT_BDF(sec, 0, fn) & 0xFFFFUL;
+        if (!cmBqPresent(bdf, &hdr, &ok)) {
+            if (!ok) {
+                return CM_BREQ_B_UNREAD;
+            }
+            continue;
+        }
+        if (fn == 0 && (hdr & 0x80UL) != 0) {
+            fns = 8;
+        }
+        seen++;
+        if ((hdr & 0x7FUL) == 1UL) {
+            behind = CM_BREQ_B_TYPE1;
+            continue;
+        }
+        if ((hdr & 0x7FUL) != 0) {
+            return CM_BREQ_B_UNREAD;
+        }
+        for (k = 0; k < 6; k++) {
+            if (!cmCfgRead(NULL, bdf, 0x10UL + 4UL * k, &bars[k])) {
+                return CM_BREQ_B_UNREAD;
+            }
+        }
+        if (!cmBqPresent(bdf, &hdr2, &ok) || hdr2 != hdr ||
+            !CmBreqBars(bars, &io, &pref)) {
+            return CM_BREQ_B_UNREAD;
+        }
+        *anyIo |= io;
+        *anyPref |= pref;
+    }
+    return seen == 0 ? CM_BREQ_B_NONE : behind;
+}
+
+VOID CmRegBreqSnap(ULONG parent, ULONG address, PCM_BREQ_SNAP s, PULONG bdf,
+                   PULONG bus)
+{
+    ULONG sec;
+    ULONG own;
+    ULONG me;
+    ULONG hdr;
+    ULONG ok;
+    ULONG type;
+    ULONG slot;
+    ULONG capAt;
+    ULONG dev;
+    ULONG fn;
+    ULONG fns;
+    ULONG f;
+    ULONG count;
+    ULONG unread;
+    ULONG v;
+    ULONG k;
+    CM_BREQ_SIB *b;
+
+    CmZero(s, sizeof(*s));
+    s->Role = CM_BREQ_ROLE_OTHER;
+    s->Alone = CM_BREQ_UNKNOWN;
+    s->N = CM_BREQ_N_UNKNOWN;
+    *bdf = 0xFFFFUL;
+    *bus = 0;
+    if (parent == 0xFFFFUL || ((address >> 16) & 0xFFFFUL) > 31UL ||
+        (address & 0xFFFFUL) > 7UL || !cmIrqBridgeSec(parent, &sec)) {
+        return;
+    }
+    me = XHCI_TBT_BDF(sec, (address >> 16) & 0x1FUL, address & 7UL) &
+         0xFFFFUL;
+    *bdf = me;
+    /* The parent's windows, as the PCI driver programmed them at its
+     * start. */
+    s->ParentRead = 1;
+    for (k = 0; k < 6; k++) {
+        static const UCHAR at[6] = { 0x1C, 0x20, 0x24, 0x28, 0x2C, 0x30 };
+
+        if (!cmCfgRead(NULL, parent, at[k], &s->Par[k])) {
+            s->ParentRead = 0;
+        }
+    }
+    if (!cmIrqBridgeSec(parent, &v) || v != sec) {
+        s->ParentRead = 0;
+    }
+    /* This bridge. */
+    if (!cmBqPresent(me, &hdr, &ok) || (hdr & 0x7FUL) != 1UL) {
+        return;
+    }
+    if (cmCfgRead(NULL, me, 0x18UL, &v)) {
+        *bus = v;
+    }
+    if (cmBqPcie(me, &type, &slot, &capAt) == CM_BQ_PCIE) {
+        if (type == 5UL) {
+            s->Role = CM_BREQ_ROLE_UP;
+        } else if (type == 6UL) {
+            s->Role = CM_BREQ_ROLE_DOWN;
+        }
+    }
+    /* Alone on the parent's secondary bus. */
+    count = 0;
+    unread = 0;
+    for (dev = 0; dev < 32 && !unread; dev++) {
+        fns = 1;
+        for (fn = 0; fn < fns; fn++) {
+            f = XHCI_TBT_BDF(sec, dev, fn) & 0xFFFFUL;
+            if (!cmBqPresent(f, &hdr, &ok)) {
+                if (!ok) {
+                    unread = 1;
+                }
+                if (fn == 0) {
+                    break;
+                }
+                continue;
+            }
+            if (fn == 0 && (hdr & 0x80UL) != 0) {
+                fns = 8;
+            }
+            count++;
+        }
+    }
+    if (!unread) {
+        s->Alone = count == 1 ? CM_BREQ_YES : CM_BREQ_NO;
+    }
+    if (s->Role == CM_BREQ_ROLE_UP) {
+        if (!cmBqNumbered(me, &own)) {
+            return;
+        }
+        s->SecNumbered = 1;
+        count = 0;
+        for (dev = 0; dev < 32; dev++) {
+            fns = 1;
+            for (fn = 0; fn < fns; fn++) {
+                f = XHCI_TBT_BDF(own, dev, fn) & 0xFFFFUL;
+                if (!cmBqPresent(f, &hdr, &ok)) {
+                    if (!ok) {
+                        return;
+                    }
+                    if (fn == 0) {
+                        break;
+                    }
+                    continue;
+                }
+                if (fn == 0 && (hdr & 0x80UL) != 0) {
+                    fns = 8;
+                }
+                if ((hdr & 0x7FUL) != 1UL) {
+                    continue;
+                }
+                k = cmBqPcie(f, &type, &slot, &capAt);
+                if (k == CM_BQ_UNREAD) {
+                    /* What it is cannot be told: N stays unknown. */
+                    return;
+                }
+                if (k == CM_BQ_PCIE && type == 6UL) {
+                    count++;
+                }
+            }
+        }
+        s->N = count > 0xFEUL ? 0xFEUL : count;
+        return;
+    }
+    if (s->Role != CM_BREQ_ROLE_DOWN) {
+        return;
+    }
+    /* The siblings: every function on this bridge's own bus, the upstream
+     * port's secondary, in device and function order. */
+    s->Index = CM_BREQ_SIBS_MAX;
+    for (dev = 0; dev < 32; dev++) {
+        fns = 1;
+        for (fn = 0; fn < fns; fn++) {
+            f = XHCI_TBT_BDF(sec, dev, fn) & 0xFFFFUL;
+            if (!cmBqPresent(f, &hdr, &ok)) {
+                if (!ok) {
+                    return;
+                }
+                if (fn == 0) {
+                    break;
+                }
+                continue;
+            }
+            if (fn == 0 && (hdr & 0x80UL) != 0) {
+                fns = 8;
+            }
+            if (s->Sibs >= CM_BREQ_SIBS_MAX) {
+                return;
+            }
+            b = &s->Sib[s->Sibs];
+            if (f == me) {
+                s->Index = s->Sibs;
+            }
+            s->Sibs++;
+            type = 0;
+            slot = 0;
+            if ((hdr & 0x7FUL) != 1UL) {
+                continue;
+            }
+            k = cmBqPcie(f, &type, &slot, &capAt);
+            if (k == CM_BQ_UNREAD) {
+                /* A sibling that cannot be told from a downstream port:
+                 * no division over this bus. */
+                return;
+            }
+            if (k != CM_BQ_PCIE || type != 6UL) {
+                continue;
+            }
+            b->Dsp = 1;
+            if (!cmBqNumbered(f, &own)) {
+                b->Behind = CM_BREQ_B_UNREAD;
+                continue;
+            }
+            b->Numbered = 1;
+            if (slot) {
+                if (!cmCfgRead(NULL, f, capAt + 0x14UL, &v)) {
+                    /* Hot-plug capable or not, unknown: its claims too. */
+                    b->Behind = CM_BREQ_B_UNREAD;
+                    continue;
+                }
+                b->HotPlug = (ULONG)((v & (1UL << 6)) != 0);
+            }
+            b->Behind = cmBqBehind(own, &b->AnyIo, &b->AnyPref);
+        }
+    }
+    s->SibsRead = (ULONG)(s->Index < s->Sibs);
+}
+
+/* Under the list's lock: a count raised, saturating. */
+static VOID cmBqBump(ULONG which)
+{
+    if (cmBqCount[which] != 0xFFFFFFFFUL) {
+        cmBqCount[which]++;
+    }
+}
+
+VOID CmRegBreqPost(ULONG port, const ULONG *e, const CM_BREQ_PLAN *plan,
+                   ULONG bus)
+{
+    KIRQL irql;
+    KIRQL inner;
+    PCM_NHI dom;
+    ULONG outcome;
+    ULONG k;
+    ULONG j;
+
+    outcome = (e[1] >> 12) & 0xFUL;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    cmBqBump(CM_BQC_SEEN);
+    switch (outcome) {
+    case CM_BREQ_OUT_REWRITTEN:
+        cmBqBump(CM_BQC_REWRITTEN);
+        break;
+    case CM_BREQ_OUT_SHAPE:
+        cmBqBump(CM_BQC_SHAPE);
+        break;
+    case CM_BREQ_OUT_PARENT:
+        cmBqBump(CM_BQC_PARENT);
+        break;
+    case CM_BREQ_OUT_NOTALONE:
+        cmBqBump(CM_BQC_NOTALONE);
+        break;
+    case CM_BREQ_OUT_NOMEM:
+        cmBqBump(CM_BQC_NOMEM);
+        break;
+    case CM_BREQ_OUT_NOWIN:
+        cmBqBump(CM_BQC_NOWIN);
+        break;
+    case CM_BREQ_OUT_LOWER:
+        cmBqBump(CM_BQC_LOWER);
+        break;
+    default:
+        break;
+    }
+    if (outcome == CM_BREQ_OUT_REWRITTEN || outcome == CM_BREQ_OUT_RECORD) {
+        for (k = 0; k < CM_BREQ_KINDS; k++) {
+            if ((plan->Dropped & (1UL << k)) != 0) {
+                cmBqBump(CM_BQC_DROP_IO + k);
+            }
+        }
+    }
+    if (plan->Unmet != 0) {
+        cmBqBump(CM_BQC_UNMET);
+    }
+    dom = cmRegMemberDom(port & 0xFFFFUL);
+    if (dom != NULL) {
+        KeAcquireSpinLock(&dom->BrDiagLock, &inner);
+        dom->BqDiagSeq++;
+        if (dom->BqDiagSeq == 0) {
+            dom->BqDiagSeq = 1;
+        }
+        CmBreqDiagAdd(dom->BqDiag, dom->BqDiagSeq, e);
+        dom->BqDiagGen++;
+        if (dom->BqDiagGen == 0) {
+            dom->BqDiagGen = 1;
+        }
+        KeReleaseSpinLock(&dom->BrDiagLock, inner);
+        /* Order: cmRegLock, then the log's own lock. */
+        CmLogNote(dom, "cm.breq", e[0]);
+        CmLogNote(dom, "cm.breq.how", e[1]);
+        CmLogNote(dom, "cm.breq.sibs", e[2]);
+        CmLogNote(dom, "cm.breq.bus", bus);
+        if (outcome == CM_BREQ_OUT_REWRITTEN ||
+            outcome == CM_BREQ_OUT_RECORD) {
+            for (k = 0; k < CM_BREQ_KINDS; k++) {
+                for (j = 0; plan->Keep[k] && plan->Sized[k] &&
+                            j < plan->Steps[k];
+                     j++) {
+                    CmLogNote(dom, "cm.breq.list",
+                              (k << 28) | (plan->Len[k][j] >> 12));
+                }
+            }
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegBreqStarted(ULONG port, ULONG bdf, BOOLEAN ok, NTSTATUS status)
+{
+    KIRQL irql;
+    KIRQL inner;
+    PCM_NHI dom;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    cmBqBump(ok ? CM_BQC_START_OK : CM_BQC_START_FAIL);
+    dom = cmRegMemberDom(port & 0xFFFFUL);
+    if (dom != NULL) {
+        KeAcquireSpinLock(&dom->BrDiagLock, &inner);
+        if (CmBreqDiagStart(dom->BqDiag, bdf, ok)) {
+            dom->BqDiagGen++;
+            if (dom->BqDiagGen == 0) {
+                dom->BqDiagGen = 1;
+            }
+        }
+        KeReleaseSpinLock(&dom->BrDiagLock, inner);
+        CmLogNote(dom, "cm.breq.start", (ULONG)status);
+        CmLogNote(dom, "cm.breq.start.bdf", bdf);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegBreqNoBridge(PCM_FILTER child)
+{
+    KIRQL irql;
+    KIRQL inner;
+    PCM_NHI dom;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    cmBqBump(CM_BQC_NOBRIDGE);
+    dom = cmLogDom(cmTopOf(child));
+    if (dom != NULL) {
+        KeAcquireSpinLock(&dom->BrDiagLock, &inner);
+        CmBreqDiagNoBridge(dom->BqDiag);
+        dom->BqDiagGen++;
+        if (dom->BqDiagGen == 0) {
+            dom->BqDiagGen = 1;
+        }
+        KeReleaseSpinLock(&dom->BrDiagLock, inner);
+        CmLogNote(dom, "cm.breq.nobridge", cmFiltBdf(child));
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 VOID CmRegIdCounters(PULONG given, PULONG nomem, PULONG over, PULONG deep,
                      PULONG reattached)
 {
@@ -1397,6 +2126,28 @@ VOID CmRegAttLink(PCM_FILTER filter)
                     }
                 }
             }
+            /* Record 33 section 4.4: else the child filter on a bridge
+             * whose last BusRelations reported it (a registered child below
+             * a dock's child-filtered upstream port), its immediate
+             * ancestor as Parent, the chain's root as Bridge, one deeper. */
+            for (e = cmRegAtts.Flink;
+                 e != &cmRegAtts && filter->Bridge == NULL &&
+                 filter->Parent == NULL;
+                 e = e->Flink) {
+                f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+                if (f == filter || f->Common.Kind != CM_KIND_CHILD ||
+                    f->SurpriseRemoved) {
+                    continue;
+                }
+                for (i = 0; i < f->SnapCount; i++) {
+                    if (f->Snap[i] == (PVOID)filter->Common.Pdo) {
+                        filter->Parent = f;
+                        filter->Bridge = cmTopOf(f);
+                        filter->Depth = f->Depth + 1UL;
+                        break;
+                    }
+                }
+            }
         }
         if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge != NULL &&
             !filter->ChildCounted) {
@@ -1610,6 +2361,14 @@ VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
     BOOLEAN left;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
+    /* Record 33 section 4.4: no child keeps naming this one (a device's
+     * children are removed before it, so this only guards the order). */
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        other = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (other->Parent == filter) {
+            other->Parent = NULL;
+        }
+    }
     if (filter->AttListed) {
         RemoveEntryList(&filter->AttLink);
         InitializeListHead(&filter->AttLink);
@@ -1726,6 +2485,110 @@ static VOID cmConnGens(PCM_NHI nhi)
     }
 }
 
+/*
+ * The bridge inventory of the marks answer (design record 33 section 4.3,
+ * cm_query.h CM_QB_*): for each member, every child filter on the
+ * attachment list whose ancestry reaches the member's published bridge
+ * filter and whose device is a PCI-to-PCI bridge, by its location. A child
+ * whose kind or location is not known yet, any child no bridge has been
+ * named for, or a member with more than CM_QB_MAX_BRIDGES leaves the
+ * section incomplete. Under the list's lock.
+ */
+static VOID cmBridgeInventory(PCM_REENUM r, PULONG br)
+{
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    PCM_FILTER a;
+    PCM_FILTER p;
+    ULONG bdf;
+    ULONG unresolved;
+    ULONG i;
+    ULONG n;
+    ULONG count[CM_QM_MAX_MEMBERS];
+    ULONG complete[CM_QM_MAX_MEMBERS];
+    ULONG member;
+    ULONG at;
+
+    for (i = 0; i < CM_QB_WORDS; i++) {
+        br[i] = 0;
+    }
+    for (i = 0; i < CM_QM_MAX_MEMBERS; i++) {
+        count[i] = 0;
+        complete[i] = (ULONG)(cmRegUnattributed == 0);
+    }
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (f->Common.Kind != CM_KIND_CHILD || f->SurpriseRemoved ||
+            f->ChainKind == CM_CHAIN_OTHER) {
+            continue;
+        }
+        /* Up the ancestry (Parent, else Bridge) to the first ancestor
+         * that is one of this set's active members, as CmRegBreqFind
+         * walks it: the chain can pass through a member below an inactive
+         * filter (a discrete controller's upstream switch port). */
+        member = CM_QM_MAX_MEMBERS;
+        unresolved = 0;
+        a = f;
+        for (n = 0; n <= CM_TUNNEL_DEPTH_MAX + 1UL; n++) {
+            p = a->Parent;
+            if (p == NULL && a->Common.Kind == CM_KIND_CHILD) {
+                p = a->Bridge;
+            }
+            if (p == NULL) {
+                /* The root reached, a bridge filter with no member above
+                 * it: no member's; or a child no bridge is named for. */
+                unresolved = (ULONG)(a->Common.Kind == CM_KIND_CHILD);
+                break;
+            }
+            bdf = cmFiltBdf(p);
+            if (bdf == 0xFFFFUL) {
+                unresolved = 1;
+                break;
+            }
+            for (i = 0; i < r->Members && i < CM_QM_MAX_MEMBERS; i++) {
+                if ((r->Port[i].Bdf & 0xFFFFUL) == bdf &&
+                    (r->Port[i].Flags & CM_PORT_ACTIVE) != 0) {
+                    member = i;
+                }
+            }
+            if (member != CM_QM_MAX_MEMBERS) {
+                break;
+            }
+            a = p;
+        }
+        if (member == CM_QM_MAX_MEMBERS && (unresolved ||
+                                            n > CM_TUNNEL_DEPTH_MAX + 1UL)) {
+            /* Whose it is cannot be told: no section may be read as
+             * complete. */
+            for (i = 0; i < CM_QM_MAX_MEMBERS; i++) {
+                complete[i] = 0;
+            }
+            continue;
+        }
+        if (member == CM_QM_MAX_MEMBERS) {
+            continue;
+        }
+        if (f->ChainKind == CM_CHAIN_UNKNOWN || !f->Located ||
+            count[member] >= CM_QB_MAX_BRIDGES) {
+            complete[member] = 0;
+            continue;
+        }
+        at = member * (CM_QB_SEC_BYTES / 4UL) + 1UL + count[member];
+        br[at] = XHCI_TBT_BDF(f->LocBus, f->LocAddress >> 16,
+                              f->LocAddress & 0xFFFFUL) & 0xFFFFUL;
+        count[member]++;
+    }
+    for (i = 0; i < r->Members && i < CM_QM_MAX_MEMBERS; i++) {
+        if ((r->Port[i].Flags & CM_PORT_ACTIVE) == 0) {
+            continue;
+        }
+        br[i * (CM_QB_SEC_BYTES / 4UL)] =
+            (r->Port[i].Bdf & 0xFFFFUL) | (count[i] << 16) |
+            ((CM_QB_F_MEMBER | (complete[i] ? CM_QB_F_COMPLETE : 0UL))
+             << 24);
+    }
+}
+
 ULONG CmReenumMarksBuild(PCM_NHI nhi, UCHAR *out, BOOLEAN readAny,
                          ULONG readGen)
 {
@@ -1733,13 +2596,16 @@ ULONG CmReenumMarksBuild(PCM_NHI nhi, UCHAR *out, BOOLEAN readAny,
     CM_QM_IN in;
     KIRQL irql;
     ULONG bytes;
+    ULONG br[CM_QB_WORDS];
 
     r = &nhi->Reenum;
     in.EpochLo = nhi->QueryEpochLo;
     in.EpochHi = nhi->QueryEpochHi;
     in.NhiBdf = nhi->QueryBdf;
     in.SafeEjectOff = (ULONG)(r->SafeEject == 0);
+    in.Bridges = br;
     KeAcquireSpinLock(&cmRegLock, &irql);
+    cmBridgeInventory(r, br);
     if (readAny) {
         CmMarksSeen(&r->Marks, readGen);
     }
@@ -2741,6 +3607,251 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* ---- NT: the chain action (task 45.13, design record 34 section 3.9) -- */
+
+/*
+ * The child filter on the PDO located at `bdf` (16-bit XHCI_TBT_BDF), its
+ * removal reference taken under the list's lock (CmFilterTryHold): TRUE
+ * with *child and *pdo. Release with CmFilterUnhold.
+ */
+static BOOLEAN cmChainTake(ULONG bdf, PCM_FILTER *child, PDEVICE_OBJECT *pdo)
+{
+    KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    BOOLEAN ok;
+
+    ok = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegAtts.Flink; e != &cmRegAtts && !ok; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (f->Common.Kind != CM_KIND_CHILD || !f->AttListed ||
+            !f->Located || f->SurpriseRemoved ||
+            XHCI_TBT_BDF(f->LocBus, f->LocAddress >> 16,
+                         f->LocAddress & 0xFFFFUL) != bdf) {
+            continue;
+        }
+        if (CmFilterTryHold(f)) {
+            *child = f;
+            *pdo = f->Common.Pdo;
+            ok = TRUE;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return ok;
+}
+
+/*
+ * One try of a chain action: every active member this domain owns (the
+ * action's own member once one is named) walked, each candidate not yet
+ * done for the entry `e` invalidated through the child filter on it and
+ * recorded done. TRUE when every walk was complete, at least one candidate
+ * was found, and every candidate found is done; else *missing says what
+ * was lacking (XHCI_TBT_CHAIN_MISS_*). PASSIVE_LEVEL, the thread.
+ */
+static BOOLEAN cmChainTry(PCM_NHI nhi, const TBT_ICM_ACTION *action,
+                          PXHCI_TBT_CHAIN_OWED e, PULONG missing)
+{
+    PCM_REENUM r;
+    PXHCI_TBT_CHAIN_SET s;
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    ULONG member;
+    ULONG i;
+    ULONG k;
+    ULONG found;
+    ULONG left;
+    BOOLEAN incomplete;
+
+    r = &nhi->Reenum;
+    s = &r->ChainSet;
+    member = nhi->U4On ? CmNhiActionMember(nhi, action) : XHCI_TBT_NO_MEMBER;
+    found = 0;
+    left = 0;
+    incomplete = FALSE;
+    for (i = 0; i < r->Members; i++) {
+        if ((member != XHCI_TBT_NO_MEMBER && i != member) ||
+            (cmFlags(nhi, i) & CM_PORT_ACTIVE) == 0 ||
+            (nhi->RecBarred & (1UL << i)) != 0) {
+            continue;
+        }
+        if (XhciTbtChainPorts(&r->Cfg, r->Port[i].Bdf, i, s) !=
+            XHCI_TBT_CHAIN_COMPLETE) {
+            incomplete = TRUE;
+            r->ChainIncomplete++;
+            CmLogNote(nhi, "cm.chain.incomplete",
+                      (s->Why << 24) | (i << 16) | (s->FailBdf & 0xFFFFUL));
+            continue;
+        }
+        r->ChainPorts += s->Count;
+        CmLogNote(nhi, "cm.chain.ports", (i << 16) | s->Count);
+        if (s->Over != 0) {
+            r->ChainOver += s->Over;
+            CmLogNote(nhi, "cm.chain.over", (i << 16) | s->Over);
+        }
+        for (k = 0; k < s->Count; k++) {
+            found++;
+            if (XhciTbtChainDone(e, s->Port[k].Bdf)) {
+                continue;
+            }
+            if (s->Port[k].Unpowered) {
+                r->ChainUnpowered++;
+                CmLogNote(nhi, "cm.chain.port-unpowered", s->Port[k].Bdf);
+            }
+            if (!cmChainTake(s->Port[k].Bdf, &f, &pdo)) {
+                left++;
+                continue;
+            }
+            IoInvalidateDeviceRelations(pdo, BusRelations);
+            CmFilterUnhold(f);
+            XhciTbtChainMark(e, s->Port[k].Bdf);
+            r->ChainInvalidate++;
+            r->Calls++;
+            CmLogNote(nhi, "cm.chain.invalidate",
+                      (action->Kind << 24) | ((action->Depth & 0xFFUL) << 16) |
+                      s->Port[k].Bdf);
+        }
+    }
+    if (incomplete) {
+        *missing = XHCI_TBT_CHAIN_MISS_WALK;
+    } else if (found == 0) {
+        *missing = XHCI_TBT_CHAIN_MISS_NONE;
+    } else {
+        *missing = XHCI_TBT_CHAIN_MISS_FILTER;
+    }
+    return (BOOLEAN)(!incomplete && found != 0 && left == 0);
+}
+
+/* Every owed chain action dropped (a loss, the stop), counted. */
+static VOID cmChainDropAll(PCM_NHI nhi, const char *why)
+{
+    PCM_REENUM r;
+    ULONG k;
+
+    r = &nhi->Reenum;
+    for (k = 0; k < CM_CHAIN_OWED_MAX; k++) {
+        if (r->ChainOwed[k].Used) {
+            r->ChainOwed[k].Used = 0;
+            r->ChainCancelled++;
+            CmLogNote(nhi, why, (r->ChainAction[k].Depth << 16) |
+                                (r->ChainOwed[k].Key & 0xFFFFUL));
+        }
+    }
+}
+
+/*
+ * A tunnel change at depth 2 or more on the NT filter route, after the
+ * members' own handling (record 34 sections 3.2 and 3.9). An up is tried
+ * now and kept owed, keyed by the chained device's identity (the action's
+ * Slot), until every candidate is invalidated; a down, and a
+ * reconciliation (RESYNC), is tried once.
+ */
+static VOID cmChainAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
+{
+    PCM_REENUM r;
+    XHCI_TBT_CHAIN_OWED once;
+    ULONG missing;
+    ULONG k;
+    ULONG what;
+    BOOLEAN fresh;
+
+    r = &nhi->Reenum;
+    missing = XHCI_TBT_CHAIN_MISS_NONE;
+    what = (action->Depth << 16) | (action->Slot & 0xFFFFUL);
+    if (action->Kind != TBT_ICM_ACT_TUNNEL_UP) {
+        CmZero(&once, sizeof(once));
+        if (!cmChainTry(nhi, action, &once, &missing) &&
+            missing != XHCI_TBT_CHAIN_MISS_NONE) {
+            CmLogNote(nhi, "cm.chain.down.missed",
+                      (action->Kind << 28) | (missing << 24) | what);
+        }
+        return;
+    }
+    fresh = TRUE;
+    for (k = 0; k < CM_CHAIN_OWED_MAX; k++) {
+        if (r->ChainOwed[k].Used && r->ChainOwed[k].Key == action->Slot &&
+            r->ChainOwed[k].Serial == action->Serial) {
+            fresh = FALSE;
+        }
+    }
+    k = XhciTbtChainOwe(r->ChainOwed, CM_CHAIN_OWED_MAX, action->Slot,
+                        action->Serial, missing, cmNow(nhi));
+    if (k >= CM_CHAIN_OWED_MAX) {
+        /* Tried once, not kept. */
+        r->ChainOwedFull++;
+        CmLogNote(nhi, "cm.chain.owed-full", what);
+        CmZero(&once, sizeof(once));
+        (VOID)cmChainTry(nhi, action, &once, &missing);
+        return;
+    }
+    r->ChainAction[k] = *action;
+    if (cmChainTry(nhi, action, &r->ChainOwed[k], &missing)) {
+        r->ChainOwed[k].Used = 0;
+        return;
+    }
+    r->ChainOwed[k].Missing = missing;
+    if (fresh) {
+        r->ChainOwedCount++;
+    }
+    CmLogNote(nhi, "cm.chain.owed", (missing << 24) | what);
+}
+
+/*
+ * Each pass of the thread: every owed chain action tried again, cancelled
+ * when no longer live, dropped at 10 s (record 34 section 3.9).
+ */
+static VOID cmChainService(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    PXHCI_TBT_CHAIN_OWED e;
+    ULONG missing;
+    ULONG k;
+    ULONG what;
+
+    r = &nhi->Reenum;
+    for (k = 0; k < CM_CHAIN_OWED_MAX; k++) {
+        e = &r->ChainOwed[k];
+        if (!e->Used) {
+            continue;
+        }
+        what = (r->ChainAction[k].Depth << 16) | (e->Key & 0xFFFFUL);
+        if (r->Route != CM_ROUTE_FILTER || r->Reenum == 0 ||
+            !CmNhiActionLive(nhi, &r->ChainAction[k])) {
+            e->Used = 0;
+            r->ChainCancelled++;
+            CmLogNote(nhi, "cm.chain.cancelled", what);
+            continue;
+        }
+        if (!cmTransport(nhi)) {
+            /* No bridge read while the host interface is lost; the loss
+             * drops the entry (CmReenumLossBegin). */
+            continue;
+        }
+        if (XhciTbtChainOwedExpired(e, cmNow(nhi))) {
+            /* The deadline first: an entry past it is never acted
+             * on, however late this pass runs. */
+            missing = e->Missing;
+            e->Used = 0;
+            if (missing == XHCI_TBT_CHAIN_MISS_FILTER) {
+                r->ChainNoFilter++;
+                CmLogNote(nhi, "cm.chain.nofilter", what);
+            } else {
+                r->ChainOwedExpired++;
+                CmLogNote(nhi, "cm.chain.owed-expired",
+                          (missing << 24) | what);
+            }
+            continue;
+        }
+        missing = e->Missing;
+        if (cmChainTry(nhi, &r->ChainAction[k], e, &missing)) {
+            e->Used = 0;
+            CmLogNote(nhi, "cm.chain.owed.done", what);
+            continue;
+        }
+        e->Missing = missing;
+    }
+}
+
 VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
     PCM_REENUM r;
@@ -2808,6 +3919,10 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             r->PollTimeouts++;
         }
         cmReenumAll(nhi, FALSE, TRUE, action);
+        if (action->Depth >= 2 && r->Route == CM_ROUTE_FILTER) {
+            /* A chained tunnel: its chain port's bus (task 45.13). */
+            cmChainAction(nhi, action);
+        }
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
         /* The 9x statement decision's allowance counts from here (task
          * 43.18). */
@@ -2843,8 +3958,19 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         /* The acknowledgement before the removal is per member: a member
          * with a statement pending is held, the rest go on (cmHeld). */
         cmReenumAll(nhi, TRUE, FALSE, action);
+        if (action->Depth >= 2 && r->Route == CM_ROUTE_FILTER) {
+            /* A chained tunnel down: its chain port's bus (task 45.13). */
+            cmChainAction(nhi, action);
+        }
     } else {
         cmReenumAll(nhi, TRUE, TRUE, action);
+        if (r->Route == CM_ROUTE_FILTER &&
+            action->Why != TBT_ICM_WHY_RECOVERED &&
+            action->Why != TBT_ICM_WHY_UNAVAILABLE) {
+            /* A reconciliation may concern a chained device: its
+             * chain port's bus too (task 45.13). */
+            cmChainAction(nhi, action);
+        }
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
         r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -2879,6 +4005,8 @@ VOID CmReenumService(PCM_NHI nhi)
     /* The stor98 acknowledgement waits, stepped once per pass whatever
      * else the pass does (task 42-A.12). */
     CmNvlinkStep(nhi);
+    /* Owed chain actions, tried again each pass (task 45.13). */
+    cmChainService(nhi);
     /* The stor98 channel's per-pass work: on 98 SE and ME the rescan of a
      * bus a fresh exposure found silent; under the USB4 profile the
      * presence samples for the statement's anchor (record 22 section
@@ -3325,6 +4453,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     }
     r->Stops++;
     cmReleaseHeld(nhi, TRUE, 0xFFFFFFFFUL);
+    cmChainDropAll(nhi, "cm.chain.cancelled.stop");
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (r->Listed) {
         RemoveEntryList(&r->Link);
@@ -3405,6 +4534,16 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
     CmLogNote(nhi, "cm.reenum.holds", r->Holds);
+    CmLogNote(nhi, "cm.chain.ports", r->ChainPorts);
+    CmLogNote(nhi, "cm.chain.invalidate", r->ChainInvalidate);
+    CmLogNote(nhi, "cm.chain.nofilter", r->ChainNoFilter);
+    CmLogNote(nhi, "cm.chain.owed", r->ChainOwedCount);
+    CmLogNote(nhi, "cm.chain.owed-expired", r->ChainOwedExpired);
+    CmLogNote(nhi, "cm.chain.owed-full", r->ChainOwedFull);
+    CmLogNote(nhi, "cm.chain.incomplete", r->ChainIncomplete);
+    CmLogNote(nhi, "cm.chain.port-unpowered", r->ChainUnpowered);
+    CmLogNote(nhi, "cm.chain.over", r->ChainOver);
+    CmLogNote(nhi, "cm.chain.cancelled", r->ChainCancelled);
     CmRegCounters(&attached, &over, &skipped, &refused, &passed);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
     CmLogNote(nhi, "cm.reenum.child.over", over);
@@ -3418,6 +4557,9 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.id.over", skipped);
     CmLogNote(nhi, "cm.reenum.chain.deep", refused);
     CmLogNote(nhi, "cm.reenum.child.reattached", passed);
+    for (i = 0; i < CM_BQC_COUNT; i++) {
+        CmLogNote(nhi, cmBqNames[i], cmBqCount[i]);
+    }
     CmLogNote(nhi, "cm.reenum.departures", r->Departures);
     CmLogNote(nhi, "cm.reenum.departures.dropped", r->DeparturesDropped);
     CmLogNote(nhi, "cm.reenum.confirms", r->Confirms);
@@ -3438,6 +4580,7 @@ VOID CmReenumStop(PCM_NHI nhi)
 VOID CmReenumLossBegin(PCM_NHI nhi)
 {
     nhi->Reenum.LossDrain = 1;
+    cmChainDropAll(nhi, "cm.chain.cancelled.loss");
     CmNvlinkDropLate(nhi);
     if (nhi->Reenum.Wk == NULL) {
         /* No 98 worker running (not started yet, or the set still being

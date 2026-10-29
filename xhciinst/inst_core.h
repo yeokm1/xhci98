@@ -273,6 +273,14 @@ int inst_path_remove_copies(const char *list, const char *root, char *out,
 size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
                        char *out, size_t cap, int *removed);
 
+/* The multi-string with name appended as its last entry, the others kept
+ * in order, unless an entry already equals it (compared without case):
+ * then the same list and *added 0. Returns the new length in bytes
+ * including the final NUL pair; (size_t)-1 when out is too small. in may
+ * be NULL or empty (inBytes 0). */
+size_t inst_msz_append(const char *in, size_t inBytes, const char *name,
+                       char *out, size_t cap, int *added);
+
 /* A filter list value (LowerFilters or UpperFilters, read as a
  * multi-string of inBytes; a REG_SZ is passed with its NUL pair) with
  * every entry equal to `name` taken out, the other names kept in order
@@ -475,6 +483,8 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
 #define INST_APPLY_MARK     6   /* where the mark service runs (inst_mk_system) */
+#define INST_APPLY_NT5_CM   7   /* 2000, XP and XP x64 with the connection
+                                   manager (record 33 section 9.1) */
 
 /* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
  * or the mark service's own Parameters key (its Restart). */
@@ -1446,11 +1456,19 @@ int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 
 /* ---- the gate before a pass on 98 SE and ME (record 27 section 6) ---- */
 
-/* Whether the gate asks the user: always the first time in a run (asked
- * 0), and afterwards only when a hardware wizard was seen open (wizard 1)
- * or the look could not be made (wizard -1); wizard 0, none seen, goes on
- * without asking. 1 ask, 0 not. */
-int inst_gate_ask(int asked, int wizard);
+/* Whether the gate asks the user: a hardware wizard seen open (wizard 1)
+ * or a look that could not be made (wizard -1) asks; none seen (wizard 0)
+ * goes on without asking, except at the first gate of a run (asked 0) on
+ * a system not read as English (english 0, or -1 unread), which asks once
+ * as before, the look knowing only the English titles (task 45.32, record
+ * 27 section 6). 1 ask, 0 not. */
+int inst_gate_ask(int asked, int wizard, int english);
+/* Whether the system reads as English for the gate: 1 when both the
+ * system's default language (GetSystemDefaultLangID) and the language of
+ * KERNEL32's version resource have the primary language LANG_ENGLISH
+ * (0x09), 0 when either has another, -1 when either could not be read
+ * (a negative argument). */
+int inst_gate_english(int sysLang, int resLang);
 
 /* 1 when a visible top-level window's title is a hardware wizard's on 98
  * SE or ME (Found New Hardware, New Hardware Found, Add New Hardware
@@ -1499,6 +1517,14 @@ int inst_di_cmdline(char *out, size_t cap, const char *version,
 int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet);
+/* The same with nocopy, the FLAGS word that has the helper set
+ * DI_NOFILECOPY: a later controller of an INF whose files a controller's
+ * job of the same run copied (record 27 sections 4.1 and 6, task 45.38):
+ * setupx, one instance for every process, then asks for "xhci98 xHCI
+ * Host Controller Disk" at the Windows source for the second copy. */
+int inst_di_jobfile_ex(char *out, size_t cap, int job, const char *result,
+                       unsigned long hwnd, const char *devId, const char *inf,
+                       int force, int quiet, int nocopy);
 
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another
@@ -2022,9 +2048,13 @@ int inst_vsd_next(const INST_VSDFACTS *f);
 #define INST_PFW_SYS_SEEN   3   /* XP, Vista and 7 (x86): XHCIPFW.SYS;
                                    the installer reads the problem for
                                    its note                              */
-#define INST_PFW_SYS_GONE   4   /* 8, 8.1 and 10 (x86): not offered; an
-                                   XHCIPFW.SYS this installer placed is
-                                   removed (record 32 section 11.3)      */
+#define INST_PFW_SYS_GONE   4   /* 10 (x86): not offered; an XHCIPFW.SYS
+                                   this installer placed is removed
+                                   (record 32 sections 11.3 and 11.5.2) */
+#define INST_PFW_SYS_FILTER 5   /* 8 and 8.1 (x86): XHCIPFW.SYS as an upper
+                                   filter of every PCI root bus (record
+                                   32 section 11.5.2), offered as on
+                                   Vista and 7                           */
 /* nt 0: 98 SE or ME. major.minor: the version (RtlGetVersion's); x86: a
  * 32-bit system. */
 int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86);
@@ -2043,6 +2073,11 @@ int inst_pfw_box(int sysKind, int havePfw, int tbTicked, int noSwitch,
  * DESELECTED unticked. */
 int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
                   int ticked);
+/* 1 when a devnode's hardware or compatible ids (multi-strings of the
+ * byte lengths given) name a PCI root bus, *PNP0A03 or *PNP0A08: the
+ * devnodes XHCIPFW.SYS filters on 8 and 8.1. */
+int inst_pfw_rootbus(const char *hw, size_t hwBytes, const char *compat,
+                     size_t compatBytes);
 /* A device's BootConfig (REG_RESOURCE_LIST, as the registry holds it):
  * 1 when it holds a prefetchable memory window (CmResourceTypeMemory or
  * CmResourceTypeMemoryLarge, CM_RESOURCE_MEMORY_PREFETCHABLE and
@@ -2381,7 +2416,14 @@ typedef struct _INST_OTHER_PKG {
 extern const INST_OTHER_PKG instOtherPkgs[];
 extern const int instOtherPkgCount;
 
-/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems. */
+/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems;
+ * 2 a COEXISTS lifted from an EXCLUDES where the cut read the two apart
+ * (record 26 section 6.7.14): COEXISTS between the packages of the
+ * releases a download carries, EXCLUDES against an earlier staging of
+ * another release (inst_other_rel_bars). */
+#define INST_REL_COEXISTS   0
+#define INST_REL_EXCLUDES   1
+#define INST_REL_LIFTED     2
 typedef struct _INST_OTHER_REL {
     int SetA;
     const char *A;
@@ -2401,34 +2443,74 @@ int inst_other_heading_index(const char *heading);
 
 /* The package of a path under a set's folder: its first two parts. */
 void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
-/* Record 26 section 6.7.12 (task 44.11): on 98 SE and ME only these free
- * packages are staged (on DevicePath), the ones whose devices 98 SE's and
- * ME's own USB audio INF would take by class; every other package of
- * either set is copy-only there. 1 when set:id is one of them. */
+/* Record 26 section 6.7.13 (task 45.7): on 98 SE and ME every package of
+ * either set may be staged (on DevicePath) where its set has a STAGE line
+ * for the system, within the system's limit; section 6.7.12's list of
+ * two free packages is gone. 1 for any package id of a known set. */
 int inst_other_9x_stageable(int set, const char *id);
+/* Section 6.7.13's rule for an earlier run's DevicePath entry of a
+ * package: kept (1) when its set is not carried in this download (its
+ * lines are not known), or when it is and the package has a STAGE line
+ * for this system; 0 (taken out) when the set is carried and the package
+ * has none. */
+int inst_other_9x_keeps(int carried, int stageHere);
+/* Section 6.7.13's page and console on 98 SE and ME: a package with only
+ * COPY lines for the system, as "<desc>: <folder>[; <folder>...]" (the
+ * folders given, each "USBDRV\FREE\<class>\<package>\<folder>"). */
+void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
+                               const char *const *folders, int n);
+/* Section 6.7.13's words for the rest of a set's packages, in two parts
+ * (part 0: what a tick does, or that nothing is copied; part 1: what an
+ * unticked package is and where its folder is, "" when nothing is
+ * copied): copy ticked or not; replaced, this run's copy taking out what
+ * an earlier run staged of the set; earlier, an earlier run's staging of
+ * it shown on the page; dir the install directory. */
+void inst_other_rest_text(char *out, size_t cap, int part, int set,
+                          const char *dir, int copy, int replaced,
+                          int earlier);
 /* The longest DevicePath with which 98 SE's hardware wizard was read to
  * find a driver (280 characters; none with 285 or more, section 6.7.6). */
 #define INST_9X_DEVICEPATH_MAX  280
+/* ME's (task 45.7's ME leg, section 6.7.13): its wizard found a driver
+ * with 259 characters and stopped responding, its window "locating the
+ * software" for good, with 260, 270 and 280. */
+#define INST_ME_DEVICEPATH_MAX  259
+/* The limit on this system: me 1 for ME, 0 for 98 SE. */
+int inst_9x_devicepath_max(int me);
+/* What a longer DevicePath does there, after "past which ": "Windows 98
+ * SE's hardware wizard finds no driver" or ME's words. */
+const char *inst_9x_devicepath_harm(int me);
 /* Section 6.7.12's projection: base (DevicePath as this run will leave it
  * before any staging: its own changes and withdrawals made) with each of
- * the n folders appended in order where the value stays within
- * INST_9X_DEVICEPATH_MAX; fits[i] 1 for a folder appended or already an
- * entry, 0 for one left out (then counted no further). Returns the
- * projected length, or -1 when base alone passes the limit (every fits[i]
- * then 0) or a folder is not a valid entry (empty, or holding ';'). */
+ * the n folders appended in order where the value stays within max (the
+ * system's limit, at most INST_9X_DEVICEPATH_MAX); fits[i] 1 for a folder
+ * appended or already an entry, 0 for one left out (then counted no
+ * further). Returns the projected length, or -1 when base alone passes
+ * the limit (every fits[i] then 0) or a folder is not a valid entry
+ * (empty, or holding ';'). */
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
-                               int n, int *fits);
+                               int n, int *fits, int max);
 /* The same limit for the install directory's own entry: 1 when withDir,
- * DevicePath as the run would write it with that entry, stays within
- * INST_9X_DEVICEPATH_MAX; 0 when it passes it, and the entry is left off
- * (a longer value takes every driver from the wizard, not only this
- * package's). */
-int inst_9x_devicepath_room(const char *withDir);
+ * DevicePath as the run would write it with that entry, stays within max;
+ * 0 when it passes it, and the entry is left off (a longer value takes
+ * every driver from the wizard, not only this package's). */
+int inst_9x_devicepath_room(const char *withDir, int max);
 /* The table's row of a package, or NULL. */
 const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
-/* 1 when the table's relations exclude the pair on system token tok. */
+/* 1 when the table's relations exclude the pair on system token tok
+ * (an EXCLUDES row; a lifted row does not, between this download's
+ * releases). */
 int inst_other_excludes(int setA, const char *a, int setB, const char *b,
                         int tok);
+/* 1 when a lifted row of the table (INST_REL_LIFTED) names the pair on
+ * system token tok. */
+int inst_other_lifted(int setA, const char *a, int setB, const char *b,
+                      int tok);
+/* Record 26 section 6.7.14: 1 when a relation of kind (INST_REL_*) bars a
+ * package against its partner - ticked now (earlier 0), or staged by an
+ * earlier run (earlier 1) from the release of its set this download
+ * carries (sameRelease 1) or from another or an unknown one (0). */
+int inst_other_rel_bars(int kind, int earlier, int sameRelease);
 /* 1 when a description keeps the rules: printable ASCII, no '|', at most
  * INST_PKG_DESC_MAX characters, and for a CLASS row no brand word. */
 int inst_other_desc_ok(int kind, const char *desc);
@@ -2531,6 +2613,15 @@ void inst_other_warn_text(INST_U32 set, char *out, size_t cap);
 #define INST_PFWSYS_NAME_A      "xhcipfw.sys"
 #define INST_PFWSYS_NAME_B      "xhcipf2.sys"
 #define INST_PFWSYS_GROUP       "System Reserved"
+/* The filter role on 8 and 8.1 (record 32 section 11.5.2): its group, and
+ * a service, two image names and a record of its own, which 3.3.0.0's
+ * installer (it removes the xhcipfw service there without its root bus
+ * entries) does not recognise. */
+#define INST_PFWSYS_GROUP_FILTER "PnP Filter"
+#define INST_PFWSYS_SERVICE_F   "xhcipff"
+#define INST_PFWSYS_NAME_FA     "xhcipff.sys"
+#define INST_PFWSYS_NAME_FB     "xhcipff2.sys"
+#define INST_PFW_KEY_F          "Software\\xhci98\\XhciPfwFilter"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
 

@@ -294,6 +294,58 @@ ULONG XhciEnumSettleReached(ULONG done, ULONG target);
  * device comes back as a new PDO at the same instance id. */
 ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 
+/*
+ * Task 45.23 (design record 20 sections 4.3.1 to 4.3.3): whether a device
+ * is kept across a resume's re-initialization (K1 to K9 as built, and a
+ * UAS drive only on its driver's quiet declaration), from
+ * what the caller read of it, as XHCI_RKEEP_F_* flags; `on` is the switch
+ * (XhciResumeKeep). Returns XHCI_RKEEP_KEEP, or the first reason it is
+ * not kept, XHCI_RKEEP_WHY_*. Pure; any IRQL.
+ */
+#define XHCI_RKEEP_F_ROOT        0x0001UL /* on a root port                  */
+#define XHCI_RKEEP_F_HUB         0x0002UL /* the device is a hub              */
+#define XHCI_RKEEP_F_STARTED     0x0004UL /* every PDO of it listed, reported
+                                           * and started, none removed,
+                                           * surprised, closing or let go    */
+#define XHCI_RKEEP_F_SUSPENDED   0x0008UL /* selective suspend not running,
+                                           * or a wake armed or pending       */
+#define XHCI_RKEEP_F_ISOCH       0x0010UL /* an isochronous pipe open         */
+#define XHCI_RKEEP_F_STORAGE     0x0020UL /* an interface of class 08         */
+#define XHCI_RKEEP_F_UAS         0x0040UL /* every storage interface runs UAS */
+#define XHCI_RKEEP_F_SERIAL      0x0080UL /* a serial number taken as its id  */
+#define XHCI_RKEEP_F_BUSY        0x0100UL /* a URB outstanding on its PDOs    */
+#define XHCI_RKEEP_F_FAULTED     0x0200UL /* gone, EP0 stuck, a cycle, a
+                                           * send-back or a slot fault owed  */
+#define XHCI_RKEEP_F_QUIET       0x0400UL /* its function declared itself
+                                           * quiet for this sleep and has
+                                           * sent nothing since (4.3.3)      */
+
+#define XHCI_RKEEP_KEEP              0UL
+#define XHCI_RKEEP_WHY_OFF           1UL
+#define XHCI_RKEEP_WHY_FAULTED       2UL
+#define XHCI_RKEEP_WHY_NOT_ROOT      3UL
+#define XHCI_RKEEP_WHY_HUB           4UL
+#define XHCI_RKEEP_WHY_NOT_STARTED   5UL
+#define XHCI_RKEEP_WHY_SUSPENDED     6UL
+#define XHCI_RKEEP_WHY_ISOCH         7UL
+#define XHCI_RKEEP_WHY_BULK_ONLY     8UL  /* storage not on UAS: the Bulk-Only
+                                           * stacks' drain is unread          */
+#define XHCI_RKEEP_WHY_NO_SERIAL     9UL
+#define XHCI_RKEEP_WHY_BUSY         10UL
+#define XHCI_RKEEP_WHY_NOT_QUIET    11UL  /* UAS storage with no quiet
+                                           * declaration (4.3.3)              */
+
+ULONG XhciEnumResumeKeep(ULONG on, ULONG flags);
+
+/* Task 45.23 (design record 20 section 4.3.3): a function's quiet
+ * declaration, made while the controller's mark generation is `markGen`
+ * (one more at every resume's end): XhciEnumQuietMark is the device
+ * record's mark for it, and XhciEnumQuietValid 1 while `mark` still
+ * counts, so a declaration lasts to the end of the resume that follows it
+ * and no further. 0 is no mark (a withdrawal, a transfer since). Pure. */
+ULONG XhciEnumQuietMark(ULONG markGen);
+ULONG XhciEnumQuietValid(ULONG mark, ULONG markGen);
+
 /* 1 when a relations answer for the parent `answering` (0 the root hub,
  * else the hub PDO's serial) carries a listed PDO presented under
  * `parentSerial`: its own children, never one PnP let go of. */

@@ -37,7 +37,11 @@
  *       pci.sys gave no interrupt the IRQ of the tunnel port's own wire,
  *       in the requirements, and keeps it out of pci.sys's start (design
  *       record 21 section 6.2.1; cmChildReqQuery, cmChildReqFilter,
- *       cmChildStartIrq).
+ *       cmChildStartIrq). Since task 45.12, on Windows 2000, XP and XP x64,
+ *       on a PCI-to-PCI bridge below an active tunnel port it rewrites the
+ *       fixed requirement list the PCI driver gives a hot-added bridge
+ *       found closed, so a dock's downstream ports share its upstream
+ *       port's windows (design record 33; cmBridgeReqFilter).
  *
  * Every attachment, bridge or child, is on the registration list's
  * attachment list from its attach to its removal and reads its PDO's
@@ -56,6 +60,8 @@
 
 #include "cm.h"
 #include "cm_ports.h"
+#include "cm_iso.h"
+#include "../xhci_cmiso.h"
 
 NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
@@ -184,6 +190,25 @@ static VOID cmFilterRelease(PCM_FILTER filter)
     if (InterlockedDecrement(&filter->Outstanding) == 0) {
         KeSetEvent(&filter->Drained, IO_NO_INCREMENT, FALSE);
     }
+}
+
+/*
+ * Task 45.13 (design record 34 section 3.9): the chain action holds a
+ * child filter's removal reference across its IoInvalidateDeviceRelations
+ * on the PDO below, so the call is made before the filter's removal has
+ * begun and while that removal, if it comes, waits for the release. The
+ * caller takes it under the registration list's lock (the list's lock,
+ * then the filter's: no path takes them the other way round).
+ * IRQL: <= DISPATCH_LEVEL.
+ */
+BOOLEAN CmFilterTryHold(PCM_FILTER filter)
+{
+    return (BOOLEAN)NT_SUCCESS(cmFilterAcquire(filter));
+}
+
+VOID CmFilterUnhold(PCM_FILTER filter)
+{
+    cmFilterRelease(filter);
 }
 
 /* IRQL: <= DISPATCH_LEVEL (a completion routine). */
@@ -542,6 +567,134 @@ static NTSTATUS cmChildReqFilter(PCM_FILTER child, PIRP irp)
     return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 }
 
+/*
+ * A bridge's requirements (design record 33 section 5.1, task 45.12): on
+ * NT 5.x, for a child on a PCI-to-PCI bridge below an active tunnel port
+ * (CmRegBreqFind) that is the lowest of this driver's filters in the
+ * stack, the list the PCI driver answered rewritten by the pure rules
+ * (cm_breq.c) from a snapshot read at this IRP (CmRegBreqSnap); every
+ * attempt posted to the member's domain (XhciCmBridgeReqDiag). Anything
+ * else goes down untouched. PASSIVE_LEVEL.
+ */
+
+/* TRUE when no other device object of this driver is between `f` and its
+ * PDO: the lowest of a kernel-attached and a registered child acts alone
+ * (record 33 section 6.1). The stack is the PnP manager's to change and
+ * this IRP is its own, so it holds still. */
+static BOOLEAN cmBreqLowest(PCM_FILTER f)
+{
+    PDEVICE_OBJECT walk;
+    ULONG n;
+
+    n = 0;
+    for (walk = f->Common.Pdo->AttachedDevice;
+         walk != NULL && walk != f->Common.Self && n < 32;
+         walk = walk->AttachedDevice) {
+        if (walk->DriverObject == CmDriverObject) {
+            return FALSE;
+        }
+        n++;
+    }
+    return (BOOLEAN)(walk == f->Common.Self);
+}
+
+/* The plan of an attempt that could not be planned (zero throughout). */
+static const CM_BREQ_PLAN cmBreqNoPlan = { 0 };
+
+static NTSTATUS cmBridgeReqFilter(PCM_FILTER child, PIRP irp)
+{
+    NTSTATUS status;
+    const UCHAR *list;
+    UCHAR *fresh;
+    ULONG parent;
+    ULONG port;
+    ULONG mode;
+    ULONG address;
+    ULONG bytes;
+    ULONG bdf;
+    ULONG bus;
+    ULONG minor;
+    ULONG outcome;
+    ULONG e[7];
+    CM_BREQ_SNAP *snap;
+    CM_BREQ_PLAN *plan;
+
+    if (!CmRegBreqFind(child, &parent, &port, &mode)) {
+        CmRegBreqNoBridge(child);
+        IoSkipCurrentIrpStackLocation(irp);
+        return IoCallDriver(child->Common.Lower, irp);
+    }
+    minor = CmBreqGate - 1UL;
+    status = CmForwardSync(&child->Common, irp);
+    /* Read afresh: a driver below may have replaced the list it carried. */
+    list = (const UCHAR *)irp->IoStatus.Information;
+    snap = (CM_BREQ_SNAP *)CmAlloc(sizeof(CM_BREQ_SNAP) +
+                                   sizeof(CM_BREQ_PLAN));
+    if (snap == NULL) {
+        /* No room to plan in: the list goes up as it came, the attempt
+         * recorded with an empty plan. */
+        CmBreqEntry(&cmBreqNoPlan, 0xFFFFUL, port, minor, CM_BREQ_OUT_NOMEM,
+                    child->BreqTimes, e);
+        CmRegBreqPost(port, e, &cmBreqNoPlan, 0);
+        return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+    }
+    plan = (CM_BREQ_PLAN *)(snap + 1);
+    CmZero(plan, sizeof(*plan));
+    bdf = 0xFFFFUL;
+    bus = 0;
+    if (!(NT_SUCCESS(status) || status == STATUS_NOT_SUPPORTED) ||
+        list == NULL) {
+        outcome = CM_BREQ_OUT_LOWER;
+    } else if (mode == CM_BRIDGE_REQ_OFF) {
+        plan->Shape = CmBreqShape(list, minor);
+        outcome = CM_BREQ_OUT_OFF;
+    } else {
+        /* The bridge's device and function; its bus is the parent's
+         * secondary (DevicePropertyBusNumber may not be answered yet, as
+         * CmRegIrqWire found on 2000). The property's own capability
+         * request passes this object unlocated (InLocate). */
+        address = 0;
+        bytes = 0;
+        child->InLocate++;
+        if (!NT_SUCCESS(IoGetDeviceProperty(child->Common.Pdo,
+                                            DevicePropertyAddress,
+                                            sizeof(address), &address,
+                                            &bytes))) {
+            address = 0xFFFFFFFFUL;
+        }
+        child->InLocate--;
+        CmRegBreqSnap(parent, address, snap, &bdf, &bus);
+        outcome = CmBreqPlan(list, minor, snap, plan);
+        if (outcome == CM_BREQ_OUT_REWRITTEN && mode == CM_BRIDGE_REQ_RECORD) {
+            outcome = CM_BREQ_OUT_RECORD;
+        }
+        if (outcome == CM_BREQ_OUT_REWRITTEN) {
+            fresh = (UCHAR *)CmAllocPaged(plan->Bytes);
+            if (fresh == NULL ||
+                CmBreqWrite(list, plan, fresh, plan->Bytes) != plan->Bytes) {
+                if (fresh != NULL) {
+                    CmFree(fresh);
+                }
+                outcome = CM_BREQ_OUT_NOMEM;
+            } else {
+                CmFree((PVOID)list);
+                irp->IoStatus.Information = (ULONG_PTR)fresh;
+                status = STATUS_SUCCESS;
+                if (child->BreqTimes != 0xFFFFFFFFUL) {
+                    child->BreqTimes++;
+                }
+                child->BreqStart = 1;
+                child->BreqBdf = bdf;
+                child->BreqPort = port;
+            }
+        }
+    }
+    CmBreqEntry(plan, bdf, port, minor, outcome, child->BreqTimes, e);
+    CmRegBreqPost(port, e, plan, bus);
+    CmFree(snap);
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
 static NTSTATUS cmIrqStartDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
 {
     UNREFERENCED_PARAMETER(device);
@@ -620,6 +773,79 @@ static ULONG cmChildStartIrq(PCM_FILTER child, PIRP irp, NTSTATUS *status)
     return CM_IRQ_ACT_STRIP;
 }
 
+/* ---- the isolation statement (design record 22 section 10.5) ---- */
+
+static const GUID cmIsoGuid = XHCI_CM_ISO_GUID_INIT;
+
+static BOOLEAN cmIsoIsGuid(const GUID *g)
+{
+    ULONG i;
+
+    if (g == NULL || g->Data1 != cmIsoGuid.Data1 ||
+        g->Data2 != cmIsoGuid.Data2 || g->Data3 != cmIsoGuid.Data3) {
+        return FALSE;
+    }
+    for (i = 0; i < 8; i++) {
+        if (g->Data4[i] != cmIsoGuid.Data4[i]) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* The interface's references: counted on the filter. xhci98.sys drops its
+ * last before its own REMOVE goes down to this filter (record 17 section
+ * 4.13.6), so the device object outlives every call. IRQL: any. */
+static VOID cmIsoRef(PVOID context)
+{
+    (VOID)InterlockedIncrement(&((PCM_FILTER)context)->IsoRefs);
+}
+
+static VOID cmIsoDeref(PVOID context)
+{
+    if (InterlockedDecrement(&((PCM_FILTER)context)->IsoRefs) == 0) {
+        CmRegIsoUnbind((PCM_FILTER)context);
+    }
+}
+
+/* 1 when the bound tunnel's path stands read back closed (CmRegIsoAsk,
+ * cm_iso.h CM_ISO_YES). PASSIVE_LEVEL. */
+static ULONG cmIsoIsolated(PVOID context)
+{
+    return CmRegIsoAsk((PCM_FILTER)context) == CM_ISO_YES ? 1UL : 0UL;
+}
+
+/*
+ * IRP_MN_QUERY_INTERFACE for GUID_XHCI_CM_ISOLATION on a child (task
+ * 45.35): answered when the version and size fit and the binding can be
+ * taken (CmRegIsoBind), with the one reference the caller then owns;
+ * otherwise passed down as it came. NT 5.x alone (CmBreqGate).
+ * PASSIVE_LEVEL.
+ */
+static NTSTATUS cmIsoQuery(PCM_FILTER filter, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PXHCI_CM_ISO_INTERFACE out;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    out = (PXHCI_CM_ISO_INTERFACE)stack->Parameters.QueryInterface.Interface;
+    if (out == NULL ||
+        stack->Parameters.QueryInterface.Version != XHCI_CM_ISO_VERSION ||
+        stack->Parameters.QueryInterface.Size < sizeof(XHCI_CM_ISO_INTERFACE) ||
+        !CmRegIsoBind(filter)) {
+        IoSkipCurrentIrpStackLocation(irp);
+        return IoCallDriver(filter->Common.Lower, irp);
+    }
+    out->Header.Size = (USHORT)sizeof(XHCI_CM_ISO_INTERFACE);
+    out->Header.Version = XHCI_CM_ISO_VERSION;
+    out->Header.Context = (PVOID)filter;
+    out->Header.InterfaceReference = cmIsoRef;
+    out->Header.InterfaceDereference = cmIsoDeref;
+    out->Isolated = cmIsoIsolated;
+    cmIsoRef(filter);
+    return CmCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
+}
+
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -668,6 +894,12 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
             status = CmForwardSync(&filter->Common, irp);
         }
         CmRegAttLocate(filter);
+        if (child && filter->BreqStart) {
+            /* The start after a rewrite (record 33 section 9.2). */
+            filter->BreqStart = 0;
+            CmRegBreqStarted(filter->BreqPort, filter->BreqBdf,
+                             (BOOLEAN)NT_SUCCESS(status), status);
+        }
         if (NT_SUCCESS(status)) {
             filter->Started = 1;
             filter->QueryRemoved = 0;
@@ -710,6 +942,15 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         break;
 
     case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
+        if (child && CmBreqGate != 0 &&
+            cmChainKindOf(filter) == CM_CHAIN_BRIDGE) {
+            /* Design record 33: a bridge, never given an interrupt by the
+             * branch below (CmRegIrqWire refuses a type 1 header). */
+            if (!cmBreqLowest(filter)) {
+                break;
+            }
+            return cmBridgeReqFilter(filter, irp);
+        }
         if (child && CmIrqGate) {
             return cmChildReqFilter(filter, irp);
         }
@@ -719,6 +960,13 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         if (child &&
             stack->Parameters.QueryId.IdType == BusQueryCompatibleIDs) {
             return cmChildIds(filter, irp);
+        }
+        break;
+
+    case IRP_MN_QUERY_INTERFACE:
+        if (child && CmBreqGate != 0 &&
+            cmIsoIsGuid(stack->Parameters.QueryInterface.InterfaceType)) {
+            return cmIsoQuery(filter, irp);
         }
         break;
 
@@ -743,6 +991,9 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         started = (BOOLEAN)(filter->Started != 0);
         filter->Started = 0;
         filter->SurpriseRemoved = 1;
+        if (child) {
+            CmRegIsoGone(filter);
+        }
         CmRegAttSurprise(filter, started);
         if (!child) {
             CmRegWithdraw(filter);
@@ -761,6 +1012,7 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         filter->Removing = 1;
         KeReleaseSpinLock(&filter->Lock, irql);
         if (child) {
+            CmRegIsoGone(filter);
             /* The child waits for the removal to finish below, detaches,
              * and only then records the departure (CmRegAttRemoved), so it
              * is recorded once this function's stack is gone. */

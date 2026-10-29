@@ -435,9 +435,11 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
         hcdPut(buf, &n, L"&SubClass_");
         hcdPutHex(buf, &n, sub, 2);
         buf[n++] = 0;
-        hcdPut(buf, &n, L"USB\\Class_");
-        hcdPutHex(buf, &n, cls, 2);
-        buf[n++] = 0;
+        if (XhciFuncCompatCount(cls, sub, prot) == 3) {
+            hcdPut(buf, &n, L"USB\\Class_");
+            hcdPutHex(buf, &n, cls, 2);
+            buf[n++] = 0;
+        }
         buf[n++] = 0;
         break;
 

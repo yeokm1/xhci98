@@ -3534,6 +3534,11 @@ static LONG tbtU4PcieTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
     LONG rc;
     TBT_WAIT w;
 
+    /* Record 22 section 10.5: the port's isolation statement withdrawn
+     * before anything below can enable its path. */
+    if (p->Index >= 1 && p->Index <= TBT_U4_MAX_PORTS) {
+        cm->IsoWord[p->Index - 1] = 0;
+    }
     h = &cm->HostRouter;
     d = &p->Dev;
     dp = tbtU4FirstOf(d, TBT_ADP_TYPE_PCIE_UP);
@@ -4055,6 +4060,11 @@ static VOID tbtU4LinkDownUpcall(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN closed,
          * makes no statement (section 10.2). */
         cm->Counters.StatementsWithheld++;
         return;
+    }
+    /* Record 22 section 10.5: a path read back closed is that port's
+     * isolation statement, before the upcall (whatever it decides). */
+    if (closed && p->Index >= 1 && p->Index <= TBT_U4_MAX_PORTS) {
+        cm->IsoWord[p->Index - 1] = TBT_U4_ISO_WORD(p->Generation);
     }
     info.Port = p->Index;
     info.Generation = p->Generation;
@@ -6063,6 +6073,55 @@ VOID TbtU4Init(PTBT_U4CM cm, PTBT_RING ring, const TBT_HOST *host,
     }
 }
 
+/* Record 22 section 10.5: every port's isolation statement withdrawn, one
+ * aligned store each. */
+static VOID tbtU4IsoRevokeAll(PTBT_U4CM cm)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_U4_MAX_PORTS; i++) {
+        cm->IsoWord[i] = 0;
+    }
+}
+
+BOOLEAN TbtU4PortIsolated(const TBT_U4CM *cm, ULONG port, ULONG gen)
+{
+    ULONG w;
+
+    if (cm == NULL || port < 1 || port > TBT_U4_MAX_PORTS) {
+        return FALSE;
+    }
+    w = cm->IsoWord[port - 1];
+    return (BOOLEAN)(w == TBT_U4_ISO_WORD(gen));
+}
+
+BOOLEAN TbtU4PortPcieGen(const TBT_U4CM *cm, ULONG port, PULONG gen)
+{
+    const TBT_U4_PORT *p;
+    ULONG g1;
+    ULONG g2;
+    BOOLEAN up;
+
+    *gen = 0;
+    if (cm == NULL || port < 1 || port > TBT_U4_MAX_PORTS ||
+        port > cm->PortCount) {
+        return FALSE;
+    }
+    p = &cm->Ports[port - 1];
+    /* Another thread's sample of the connection manager's fields: the
+     * generation read on both sides of Up, so an Up and a generation of
+     * two different connections are never paired (a teardown clears Up,
+     * a reconnect moves the generation). */
+    g1 = *(volatile const ULONG *)&p->Generation;
+    up = *(volatile const BOOLEAN *)&p->Pcie.Up;
+    g2 = *(volatile const ULONG *)&p->Generation;
+    if (!up || g1 != g2) {
+        return FALSE;
+    }
+    *gen = g1;
+    return TRUE;
+}
+
 VOID TbtU4SetLinkDown(PTBT_U4CM cm, TBT_U4_LINKDOWN_FN fn, PVOID context)
 {
     cm->LinkDown = fn;
@@ -6193,6 +6252,7 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
         cm->Counters.ContainedRefused++;
         return TBT_E_STOPPED;
     }
+    tbtU4IsoRevokeAll(cm);
     cm->Va = va;
     cm->Phys = phys;
     cm->Bytes = bytes;
@@ -6889,6 +6949,7 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     if (cm->Failed) {
         return TBT_E_STATE;
     }
+    tbtU4IsoRevokeAll(cm);
     cm->Suspended = FALSE;
     /* Several kilobytes: in the instance, never on the stack (a kernel
      * stack has no probe, __chkstk). */
@@ -7169,6 +7230,7 @@ VOID TbtU4GetCarry(const TBT_U4CM *cm, PTBT_U4_CARRY out)
 
 VOID TbtU4Stop(PTBT_U4CM cm)
 {
+    tbtU4IsoRevokeAll(cm);
     if (!cm->Contained) {
         TbtRingStop(cm->Ring);
     }
@@ -7182,6 +7244,7 @@ VOID TbtU4Contain(PTBT_U4CM cm)
     if (cm->Contained) {
         return;
     }
+    tbtU4IsoRevokeAll(cm);
     cm->Contained = TRUE;
     cm->Disturbed = TRUE;
     cm->Counters.ContainedRetired += cm->ActionCount;
@@ -8050,6 +8113,7 @@ LONG TbtU4Recover(PTBT_U4CM cm, BOOLEAN *final)
     if (!cm->Contained || !cm->SnapValid || cm->Va == NULL) {
         return TBT_E_STATE;
     }
+    tbtU4IsoRevokeAll(cm);
     cm->Counters.RecoverAttempts++;
     cm->Recovering = TRUE;
     cm->RecoverRings = FALSE;

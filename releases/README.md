@@ -478,7 +478,7 @@ Read it before installing anything.
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\check-text.ps1
-powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree <second tree>
+powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -CheckOnly
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <path to xhci98-test.pfx>
 ```
@@ -498,8 +498,13 @@ This tree builds x86 and makes the cut; a second worktree of the
 repository, at this tree's commit, builds amd64, and the script then
 copies its amd64 build and gated records into this tree, each record held
 to its binaries before and after the copy, so `-CheckOnly`, the cut and
-`make-package.ps1 -SignOnly` read both architectures here. Once, then
-before each cut:
+`make-package.ps1 -SignOnly` read both architectures here. The second tree
+is `<this tree>-x64` beside this one, which the script makes the first
+time (`git worktree add --detach`, its `tools\` directories junctioned to
+this tree's) and brings to this tree's HEAD before each cut (roadmap-usb4
+task 45.3; `build-and-test.md`, "A faster gated build"); it never moves
+or links a tree there that it did not make. A tree of your own is named
+with `-X64Tree <second tree>` and is only checked, as before:
 
 ```
 git worktree add --detach <second tree> HEAD

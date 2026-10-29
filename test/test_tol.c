@@ -1308,6 +1308,38 @@ static void test_dead(void)
  * it - is deferred, so the episode keeps its stamp and the controller is
  * contained; each pass is the thread's order, recovery then containment,
  * and a recovery begun is a new start generation. */
+/* Record 17 section 4.13.6 (task 45.35): the proof a containment takes.
+ * Bus Master Enable read back clear is the proof as before, whatever the
+ * tunnel says; the tunnel's isolation is the proof only where that failed
+ * and the statement was asked; nothing else is. */
+static void test_proof(void)
+{
+    ULONG bme;
+    ULONG asked;
+    ULONG iso;
+    ULONG want;
+
+    CHECK_EQ(XhciTolProof(1, 0, 0), XHCI_TOL_PROOF_BME, "Bus Master Enable clear");
+    CHECK_EQ(XhciTolProof(0, 1, 1), XHCI_TOL_PROOF_TUNNEL, "the tunnel read back closed");
+    CHECK_EQ(XhciTolProof(0, 1, 0), XHCI_TOL_PROOF_NONE, "the tunnel open: no proof");
+    CHECK_EQ(XhciTolProof(0, 0, 1), XHCI_TOL_PROOF_NONE, "an answer never asked counts nothing");
+    CHECK_EQ(XhciTolProof(0, 0, 0), XHCI_TOL_PROOF_NONE, "nothing: no proof");
+    for (bme = 0; bme < 2; bme++) {
+        for (asked = 0; asked < 2; asked++) {
+            for (iso = 0; iso < 2; iso++) {
+                want = bme ? XHCI_TOL_PROOF_BME
+                     : (asked && iso) ? XHCI_TOL_PROOF_TUNNEL
+                                      : XHCI_TOL_PROOF_NONE;
+                CHECK_EQ(XhciTolProof(bme, asked, iso), want, "every combination");
+            }
+        }
+    }
+    CHECK(XHCI_TOL_CONTAIN_TUNNEL != XHCI_TOL_CONTAIN_RELEASED &&
+          XHCI_TOL_CONTAIN_TUNNEL != XHCI_TOL_CONTAIN_PINNED &&
+          XHCI_TOL_CONTAIN_TUNNEL != XHCI_TOL_CONTAIN_NONE,
+          "the tunnel's branch recorded apart");
+}
+
 static void test_dead_recover(void)
 {
     XHCI_TOL_DEAD d;
@@ -1737,6 +1769,7 @@ static void test_quirk_caps(void)
 
 int main(void)
 {
+    test_proof();
     test_quirk_caps();
     test_values();
     test_qemu_stream_quirk();

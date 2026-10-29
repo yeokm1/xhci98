@@ -1789,12 +1789,20 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         /* A sibling function's handle (design record 13 section 10.9). */
         pipe = NULL;
     }
+    if (pipe != NULL && pipe != &dev->Ep0Pipe) {
+        /* Task 45.23 (design record 20 section 4.3.3): a transfer taken or
+         * parked off EP0 voids the function's quiet declaration. */
+        dev->QuietMark = 0;
+    }
     if (unreadable) {
         /* Only compared later, never dereferenced (hcdAbortedLocked). The
          * handle is resolved even on a Gone device, whose pipes stay
          * allocated while this reference is held, so a stream's request
          * keeps its endpoint and an abort of either covers it. */
         pipe = hcdPipeFromHandle(dev, req->Handle);
+        if (pipe != NULL && pipe != &dev->Ep0Pipe) {
+            dev->QuietMark = 0;
+        }
         handle = (pipe == NULL) ? req->Handle
                  : (pipe == &dev->Ep0Pipe) ? NULL : (PVOID)pipe;
         endpoint = (pipe != NULL) ? (PVOID)pipe->Parent : NULL;

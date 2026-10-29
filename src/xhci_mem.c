@@ -538,6 +538,43 @@ ULONG XhciPoolReleaseDevice(PXHCI_RING_POOL pool, ULONG deviceRef)
     return released;
 }
 
+ULONG XhciPoolClaim(PXHCI_RING_POOL pool, ULONG deviceRef, ULONG poolIndex)
+{
+    if (pool == NULL || deviceRef == 0 || poolIndex >= XHCI_MAX_POOL_RINGS ||
+        pool->Owner[poolIndex] != 0) {
+        return XHCI_POOL_BAD_PARAM;
+    }
+    pool->Owner[poolIndex] = deviceRef;
+    pool->InUse++;
+    if (pool->InUse > pool->PeakInUse) {
+        pool->PeakInUse = pool->InUse;
+    }
+    return XHCI_POOL_OK;
+}
+
+ULONG XhciPoolRehome(PXHCI_RING_POOL pool, ULONG fromRef, ULONG toRef)
+{
+    ULONG i;
+    ULONG moved;
+
+    if (pool == NULL || fromRef == 0 || toRef == 0 || fromRef == toRef) {
+        return 0;
+    }
+    /* Refused whole when the new owner already holds a ring: a slot id
+     * just enabled holds none, and a merge would hide that it did. */
+    if (XhciPoolDeviceCount(pool, toRef) != 0) {
+        return 0;
+    }
+    moved = 0;
+    for (i = 0; i < XHCI_MAX_POOL_RINGS; i++) {
+        if (pool->Owner[i] == fromRef) {
+            pool->Owner[i] = toRef;
+            moved++;
+        }
+    }
+    return moved;
+}
+
 ULONG XhciScratchpadPageOffset(const XHCI_HC_LAYOUT *layout,
                                ULONG index,
                                ULONG *offset)

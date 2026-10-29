@@ -1968,6 +1968,7 @@ $script:BuildInputPrefixes = @(
 )
 $script:BuildInputScripts = @(
     "scripts\build-driver.cmd",
+    "scripts\build-steps.ps1",
     "scripts\build-all.cmd",
     "scripts\source-stamp.ps1",
     "scripts\check-flavour-marker.ps1",
@@ -2463,6 +2464,9 @@ function Start-CutBuild {
     $psi.UseShellExecute = $false
     $psi.EnvironmentVariables["TEMP"] = $tmp
     $psi.EnvironmentVariables["TMP"] = $tmp
+    # A cut runs every self-test in full, never skipping one whose inputs
+    # its last passing run read (the INF gate's, task 45.30).
+    $psi.EnvironmentVariables["XHCI98_FULL_SELFTESTS"] = "1"
     $p = [System.Diagnostics.Process]::Start($psi)
     [void]$Started.Add($p)
     Write-Host ("  {0}: {1} in {2} (PID {3}), log {4}" -f $Arch, $Command, $Tree, $p.Id, $log)
@@ -2492,6 +2496,108 @@ function Format-CutSpan {
     return ("{0}:{1:00}:{2:00}" -f [int][Math]::Floor($Span.TotalHours), $Span.Minutes, $Span.Seconds)
 }
 
+function Get-DefaultCutX64Tree {
+    # Tree B when -X64Tree is not given (task 45.3): <A>-x64 beside tree A.
+    param([string]$Repo)
+    $Repo = Resolve-TreePath $Repo
+    return (Join-Path (Split-Path -Parent $Repo) ((Split-Path -Leaf $Repo) + "-x64"))
+}
+
+function Invoke-CutTreeGit {
+    # git in -At for Initialize-CutX64Tree; throws with git's own words.
+    param([string]$At, [string[]]$GitArgs)
+    # With no git to run, $LASTEXITCODE would still be some earlier
+    # program's, and a failure would read as git's success.
+    if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH: tree B is made and moved with git; put git on PATH and run again."
+    }
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    try { $o = (& git -C $At @GitArgs 2>&1 | Out-String) } finally { $ErrorActionPreference = $eap }
+    if ($LASTEXITCODE -ne 0) { throw ("git {0} in '{1}' failed (exit {2}): {3}" -f ($GitArgs -join " "), $At, $LASTEXITCODE, $o.Trim()) }
+    return $o.Trim()
+}
+
+function Initialize-CutX64Tree {
+    # The default tree B made or brought to tree A's HEAD before the builds
+    # (task 45.3; build-and-test.md, "A faster gated build"). Absent, it is
+    # made with `git worktree add --detach` and marked as the launcher's
+    # (out\cut-x64-tree.txt, naming A). Only a tree so marked, for this A,
+    # detached, clean and with no build lock, is ever moved (`git checkout
+    # --detach`) or given links: each directory of A's tools\ that its
+    # tools\ lacks, as a junction. Any other tree at that path is left as it
+    # is, for Invoke-CutBuilds's checks to take or refuse. Both of B's build
+    # locks are held while it is changed. Returns B's path.
+    param([string]$Repo, [string]$X64Tree)
+    $Repo = Resolve-TreePath $Repo
+    $X64Tree = [System.IO.Path]::GetFullPath($X64Tree).TrimEnd('\')
+    $marker = Join-Path $X64Tree "out\cut-x64-tree.txt"
+    if (-not (Test-Path -LiteralPath $X64Tree)) {
+        Write-Step ("tree B: made at {0}" -f $X64Tree)
+        [void](Invoke-CutTreeGit -At $Repo -GitArgs @("worktree", "add", "--detach", $X64Tree, "HEAD"))
+        Ensure-Directory (Join-Path $X64Tree "out")
+        [System.IO.File]::WriteAllText($marker, ($Repo + "`r`n"))
+    }
+    $why = Get-GatedImportTreeFault -Repo $Repo -From $X64Tree
+    if ($why -ne "") { throw "tree B ($X64Tree): $why." }
+    $owned = (Test-Path -LiteralPath $marker -PathType Leaf) -and
+             [string]::Equals(([System.IO.File]::ReadAllText($marker)).Trim(), $Repo, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $owned) {
+        Write-Warn ("tree B ({0}) was not made by this script for this tree: it is taken as it is, never moved or linked" -f $X64Tree)
+        return $X64Tree
+    }
+    $held = @()
+    try {
+        foreach ($ar in @("x86", "amd64")) {
+            if (-not (Enter-GatedLock -Root $X64Tree -Arch $ar -Owner "cut-builds")) {
+                Write-Warn ("tree B ({0}) holds a build lock: left as it is" -f $X64Tree)
+                return $X64Tree
+            }
+            $held += Join-Path $X64Tree ("out\gated-{0}.lock" -f $ar)
+        }
+        $a = Get-GitTreeState -Repo $Repo
+        $b = Get-GitTreeState -Repo $X64Tree
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 128
+        try { & git -C $X64Tree symbolic-ref -q HEAD 2>&1 | Out-Null; $onBranch = ($LASTEXITCODE -ne 1) } finally { $ErrorActionPreference = $eap }
+        if ($b.Head -eq "none" -or $b.Dirty -or $onBranch) {
+            Write-Warn ("tree B ({0}) is {1}: left as it is, neither moved nor linked" -f $X64Tree,
+                        $(if ($b.Head -eq "none") { "not readable by git" } elseif ($onBranch) { "on a branch" } else { "not clean" }))
+            return $X64Tree
+        }
+        if ($a.Head -ne "none" -and $a.Head -ne $b.Head) {
+            Write-Step ("tree B: moved from {0} to {1}" -f $b.Head, $a.Head)
+            [void](Invoke-CutTreeGit -At $X64Tree -GitArgs @("checkout", "--quiet", "--detach", $a.Head))
+        }
+        $aTools = Join-Path $Repo "tools"
+        if (Test-Path -LiteralPath $aTools -PathType Container) {
+            $bTools = Join-Path $X64Tree "tools"
+            Ensure-Directory $bTools
+            foreach ($d in @(Get-ChildItem -LiteralPath $aTools -Directory -Force)) {
+                $link = Join-Path $bTools $d.Name
+                if (Test-Path -LiteralPath $link) {
+                    $item = Get-Item -LiteralPath $link -Force
+                    if (-not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                        Write-Warn ("tree B's tools\{0} is a directory of its own, not a link to this tree's; left as it is" -f $d.Name)
+                    }
+                    continue
+                }
+                $ErrorActionPreference = "Continue"
+                try { & cmd.exe /d /c ('mklink /J "{0}" "{1}" >nul 2>nul' -f $link, $d.FullName) | Out-Null } finally { $ErrorActionPreference = $eap }
+                if (-not (Test-Path -LiteralPath $link -PathType Container)) {
+                    throw "tree B's tools\$($d.Name) could not be linked to '$($d.FullName)'; the tree is kept, and the next run links what it lacks."
+                }
+                Write-Ok ("tree B's tools\{0} linked to {1}" -f $d.Name, $d.FullName)
+            }
+        }
+    } finally {
+        foreach ($l in $held) { Remove-Item -LiteralPath $l -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    return $X64Tree
+}
+
 function Invoke-CutBuilds {
     # scripts\package\cut-builds.ps1's work (its help, and build-and-test.md,
     # "The cut's two builds at once"): the checks of the two trees, the two
@@ -2508,6 +2614,12 @@ function Invoke-CutBuilds {
     if ($Serial -and $ImportOnly) { throw "-Serial and -ImportOnly contradict each other: -ImportOnly builds nothing." }
     if ($NoTargetEvidence -and -not $ImportOnly) {
         throw "-NoTargetEvidence goes with -ImportOnly alone: the x86 build a cut takes needs the target evidence (the helper's import gate), so build without it, or build by hand and import with -ImportOnly."
+    }
+    if ($X64Tree -eq "") {
+        # Tree B by default (task 45.3): <A>-x64, made or brought to A's
+        # HEAD here, except for -ImportOnly, which takes it as it is.
+        $X64Tree = Get-DefaultCutX64Tree -Repo $Repo
+        if (-not $ImportOnly) { $X64Tree = Initialize-CutX64Tree -Repo $Repo -X64Tree $X64Tree }
     }
     if (-not (Test-Path -LiteralPath $X64Tree -PathType Container)) { throw "-X64Tree: there is no directory '$X64Tree'." }
     $Repo = Resolve-TreePath $Repo
@@ -2703,6 +2815,12 @@ function Invoke-DriverPackGit {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.CreateNoWindow = $true
+    # git looks no higher than -Root: a directory that is not a checkout
+    # itself, lying inside another one (a temporary folder under a
+    # worktree's out\, as a gated build sets TEMP), is refused rather than
+    # read as the enclosing repository (task 45.3).
+    $ceiling = Split-Path -Parent ([System.IO.Path]::GetFullPath($Root.TrimEnd('\')))
+    if ("$ceiling" -ne "") { $psi.EnvironmentVariables["GIT_CEILING_DIRECTORIES"] = $ceiling }
     try {
         $p = [System.Diagnostics.Process]::Start($psi)
     } catch {
@@ -3091,6 +3209,47 @@ function Get-HistoryEmbedLines {
     })
 }
 
+function Get-HistoryEntryLines {
+    # history.md's entry for -Version, without its '##' heading: what the
+    # readme's section 1 renders (roadmap-usb4 task 45.29). Empty when there
+    # is no such entry; the changelog check refuses that before any build.
+    param([string[]]$Lines, [string]$Version)
+
+    if ($null -eq $Lines) { return @() }
+    $head = '^##\s+' + [regex]::Escape($Version) + '(\s|$)'
+    $start = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match $head) { $start = $i; break }
+    }
+    if ($start -lt 0 -or $start + 1 -ge $Lines.Count) { return @() }
+    $end = $Lines.Count
+    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^##\s') { $end = $i; break }
+    }
+    while ($end -gt $start + 1 -and $Lines[$end - 1].Trim() -eq "") { $end-- }
+    while ($end -gt $start + 1 -and $Lines[$start + 1].Trim() -eq "") { $start++ }
+    if ($end -le $start + 1) { return @() }
+    return @($Lines[($start + 1)..($end - 1)])
+}
+
+function Get-HistoryEarlierText {
+    # The versions history.md lists after -Version's entry (the earlier
+    # releases, newest first), as one comma-separated sentence wrapped to
+    # -Width with a two-space margin: the readme's section 6.
+    param([string[]]$Lines, [string]$Version, [int]$Width = 78)
+
+    $versions = @()
+    $past = $false
+    foreach ($l in @($Lines)) {
+        if ($l -match '^##\s+(\d+\.\d+\.\d+\.\d+)(\s|$)') {
+            if ($past) { $versions += $Matches[1] }
+            if ($Matches[1] -eq $Version) { $past = $true }
+        }
+    }
+    if ($versions.Count -eq 0) { return @("  None: this is the first release.") }
+    return @(Format-Wrapped -Text (($versions -join ", ") + ".") -Width $Width -FirstPrefix "  " -RestPrefix "  ")
+}
+
 function Format-Wrapped {
     # Greedy word wrap with a separate first-line and continuation prefix, so a
     # bullet hangs under its own text rather than under the marker.
@@ -3121,7 +3280,9 @@ function Format-Wrapped {
 
 function ConvertFrom-MarkdownBlocks {
     # The narrow subset releases\history.md actually uses: '###' headings,
-    # '-' bullets that may continue on indented lines, and plain paragraphs.
+    # '-' bullets that may continue on indented lines, '-' bullets indented
+    # by two spaces under them and by four under those (task 45.29), and
+    # plain paragraphs.
     # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
     # rendered - there is nothing to render them with in a .txt file.
     param([string[]]$Lines, [int]$Width = 78)
@@ -3135,6 +3296,12 @@ function ConvertFrom-MarkdownBlocks {
         if ($Text -eq "") { return @($Acc) }
         if ($Kind -eq "bullet") {
             return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
+        }
+        if ($Kind -eq "subsub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "            - " -RestPrefix "              "))
+        }
+        if ($Kind -eq "sub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "        - " -RestPrefix "          "))
         }
         return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
     }
@@ -3157,6 +3324,16 @@ function ConvertFrom-MarkdownBlocks {
             if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
             $out += ("  " + $Matches[1].Trim())
             $out += ""
+            continue
+        }
+        if ($line -match '^\s{4,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "subsub"
+            continue
+        }
+        if ($line -match '^\s{2,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "sub"
             continue
         }
         if ($line -match '^\s*-\s+(.*)$') {
@@ -3835,7 +4012,7 @@ function Get-InstOtherTable {
     if ($pkgs.Count -eq 0 -or $pkgs.Count -ne $rows) { throw "xhciinst\inst_core.c's instOtherPkgs has $rows rows and this reader took $($pkgs.Count): change the reader with the table." }
     $rels = @()
     $body = Get-Block "instOtherRels"
-    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*([A-Z_]+|0x[0-9A-Fa-f]+UL?)\s*,\s*([01])\s*\}')) {
+    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*([A-Z_]+|0x[0-9A-Fa-f]+UL?)\s*,\s*([012])\s*\}')) {
         $mask = $m.Groups[5].Value
         if ($mask -eq "INST_SYS_ALL") { $sys = @($script:StageSystems) }
         elseif ($mask -match '^0x([0-9A-Fa-f]+)') {
@@ -3848,6 +4025,9 @@ function Get-InstOtherTable {
             B = ($(if ($m.Groups[3].Value -eq "INST_SET_FREE") { "free:" } else { "nonfree:" }) + $m.Groups[4].Value)
             Systems = $sys
             Desc = "the installer's table"
+            # Kind 2: a COEXISTS the cut lifted from an EXCLUDES (record 26
+            # section 6.7.14), held to this cut's proof.
+            Lifted = ($m.Groups[6].Value -eq "2")
         }
     }
     $relRows = @([regex]::Matches($body, '\{\s*INST_SET_')).Count
@@ -4167,6 +4347,129 @@ function Test-OtherStageIds {
     }
 }
 
+function Get-OtherPkgDevices {
+    # Record 26 section 6.7.14: the devices a package ("<set>:<class>/
+    # <package>") matches on one system token, over every STAGE and COPY
+    # line of it naming the system, each id of its INF's models there
+    # (Get-InfModelIds) as the key VID_<v>&PID_<p>, a revision, an
+    # interface or any other "&" suffix folded into its device. Ok $false
+    # with Why when there is no answer: a CLASS package, its set not
+    # carried, no line for the system, an INF that cannot be read or has no
+    # models section the system reads, or an id of any other form (a class
+    # or compatible id does not say which devices it takes).
+    param($Sets, [string]$Pkg, [string]$Sys, [string]$Kind = "DEVICE")
+    $none = { param($w) [pscustomobject]@{ Ok = $false; Why = $w; Keys = @() } }
+    if ($Kind -ceq "CLASS") { return (& $none "$Pkg is a CLASS package, whose INF does not show which devices its class line takes") }
+    $c = $Pkg.IndexOf(":")
+    if ($c -lt 1) { return (& $none "$Pkg is not set-qualified") }
+    $setName = $Pkg.Substring(0, $c)
+    $id = $Pkg.Substring($c + 1)
+    $s = @($Sets | Where-Object { $_.Name -ceq $setName })
+    if ($s.Count -ne 1) { return (& $none "the $setName set is not carried in this cut") }
+    $pre = $s[0].Prefix + "/"
+    $lines = @($s[0].Lines | Where-Object { (Get-OtherPkgOf -Path $_.Inf -Prefix $s[0].Prefix) -ceq $id -and $_.Systems -ccontains $Sys })
+    if ($lines.Count -eq 0) { return (& $none "$Pkg has no line for $Sys") }
+    $keys = @()
+    foreach ($l in $lines) {
+        $path = Join-Path $s[0].Dir ($l.Inf.Substring($pre.Length).Replace('/', '\'))
+        $inf = $null
+        try { $inf = Read-InfText -Path $path } catch { $inf = $null }
+        if ($null -eq $inf) { return (& $none "$($l.Inf) cannot be read") }
+        $ids = @(Get-InfModelIds -Inf $inf -Sys $Sys)
+        if ($ids.Count -eq 0) { return (& $none "$($l.Inf) has no models section $Sys reads") }
+        foreach ($i in $ids) {
+            $m = [regex]::Match($i, '^USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})(&.*)?$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if (-not $m.Success) { return (& $none "$($l.Inf) matches $i, which does not name one device") }
+            $keys += ("VID_" + $m.Groups[1].Value.ToUpperInvariant() + "&PID_" + $m.Groups[2].Value.ToUpperInvariant())
+        }
+    }
+    return [pscustomobject]@{ Ok = $true; Why = ""; Keys = @($keys | Sort-Object -Unique) }
+}
+
+function Get-OtherRelPairKey {
+    # An unordered pair of set-qualified ids as one key.
+    param([string]$A, [string]$B)
+    if ([string]::CompareOrdinal($A, $B) -le 0) { return ($A + "|" + $B) }
+    return ($B + "|" + $A)
+}
+
+function Get-OtherLifted {
+    # Record 26 section 6.7.14: every pair and system this cut takes from an
+    # EXCLUDES of the previous record (-Prev, ConvertFrom-OtherPkgsRecord's)
+    # or keeps from its LIFTED lines to a COEXISTS of this cut's lines
+    # (-Now, the same, of this cut's record before its LIFTED lines), each
+    # proved apart over the carried sets (-Sets) with this cut's rows' kinds;
+    # throws the first that is not. A system the pair has neither kind on
+    # now is left to Test-OtherPkgsTransition, which refuses the drop.
+    # Returns @{ A; B; Systems } per pair lifted.
+    param($Prev, $Now, $Sets)
+    $prevSys = [ordered]@{}
+    $ends = @{}
+    $prevLifted = @()
+    if ($Prev.PSObject.Properties.Name -contains "Lifted") { $prevLifted = @($Prev.Lifted) }
+    foreach ($r in @(@($Prev.Rels | Where-Object { $_.Kind -ceq "EXCLUDES" }) + $prevLifted)) {
+        if ($null -eq $r) { continue }
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        if (-not $prevSys.Contains($k)) { $prevSys[$k] = @(); $ends[$k] = @($r.A, $r.B) }
+        $prevSys[$k] = @($prevSys[$k] + $r.Systems | Sort-Object -Unique)
+    }
+    $out = @()
+    foreach ($k in @($prevSys.Keys)) {
+        $a = $ends[$k][0]; $b = $ends[$k][1]
+        $same = @($Now.Rels | Where-Object { (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })
+        $ex = @(); $co = @()
+        foreach ($r in $same) {
+            if ($r.Kind -ceq "EXCLUDES") { $ex += $r.Systems } elseif ($r.Kind -ceq "COEXISTS") { $co += $r.Systems }
+        }
+        $lift = @($prevSys[$k] | Where-Object { $ex -cnotcontains $_ -and $co -ccontains $_ })
+        if ($lift.Count -eq 0) { continue }
+        $kindA = "DEVICE"; $kindB = "DEVICE"
+        $ra = @($Now.Rows | Where-Object { $_.Id -ceq $a }); if ($ra.Count -gt 0) { $kindA = $ra[0].Kind }
+        $rb = @($Now.Rows | Where-Object { $_.Id -ceq $b }); if ($rb.Count -gt 0) { $kindB = $rb[0].Kind }
+        foreach ($sys in $lift) {
+            $da = Get-OtherPkgDevices -Sets $Sets -Pkg $a -Sys $sys -Kind $kindA
+            $db = Get-OtherPkgDevices -Sets $Sets -Pkg $b -Sys $sys -Kind $kindB
+            $why = ""
+            if (-not $da.Ok) { $why = $da.Why }
+            elseif (-not $db.Ok) { $why = $db.Why }
+            else {
+                $common = @($da.Keys | Where-Object { $db.Keys -ccontains $_ })
+                if ($common.Count -gt 0) { $why = "both match $($common[0])" }
+            }
+            if ($why -ne "") {
+                throw "$a and $b were excluded on $sys by $($Prev.Version), and this cut's COEXISTS there is admitted only where the cut reads them apart (design record 26 section 6.7.14): $why."
+            }
+        }
+        $out += [pscustomobject]@{ A = $a; B = $b; Systems = @($lift) }
+    }
+    return $out
+}
+
+function Test-OtherTableLifts {
+    # The installer's table and this cut's lifts the same (section 6.7.14):
+    # every system a row of kind 2 (lifted) names lifted for its pair, and
+    # every lifted pair and system named by such a row, since the installer
+    # holds a lifted pair against an earlier staging of another release only
+    # through that row.
+    param($Table, $Lifted)
+    $rows = @($Table.Rels | Where-Object { $_.PSObject.Properties.Name -contains "Lifted" -and $_.Lifted })
+    foreach ($r in $rows) {
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        $have = @()
+        foreach ($l in @($Lifted)) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $have += $l.Systems } }
+        $miss = @($r.Systems | Where-Object { $have -cnotcontains $_ })
+        if ($miss.Count -gt 0) { throw "the installer's table marks $($r.A) and $($r.B) lifted on $($miss -join ' '), and this cut lifts no EXCLUDES of the pair there (design record 26 section 6.7.14)." }
+    }
+    foreach ($l in @($Lifted)) {
+        if ($null -eq $l) { continue }
+        $k = Get-OtherRelPairKey -A $l.A -B $l.B
+        $have = @()
+        foreach ($r in $rows) { if ((Get-OtherRelPairKey -A $r.A -B $r.B) -ceq $k) { $have += $r.Systems } }
+        $miss = @($l.Systems | Where-Object { $have -cnotcontains $_ })
+        if ($miss.Count -gt 0) { throw "this cut lifts the EXCLUDES of $($l.A) and $($l.B) on $($miss -join ' '), and the installer's table has no lifted row (kind 2, INST_REL_LIFTED) for the pair there, which holds it against an earlier staging of another release (design record 26 section 6.7.14)." }
+    }
+}
+
 function Get-OtherScopes {
     # Each package of -Sets with the systems its STAGE lines name:
     # "<set>:<class>/<package>" to a list of tokens.
@@ -4319,7 +4622,7 @@ function Get-OtherOverlaps {
 function ConvertTo-OtherPkgsRecord {
     # releases\<version>\otherpkgs.txt: the table's rows, current and
     # withdrawn, and every relationship line of the table and both sets.
-    param([string]$Version, $Table, $Meta)
+    param([string]$Version, $Table, $Meta, $Lifted = @())
     $lines = @(
         "# otherpkgs.txt - the other USB drivers' package table this release was cut with",
         "#",
@@ -4329,6 +4632,8 @@ function ConvertTo-OtherPkgsRecord {
         "#",
         "#   ROW | <set>:<class>/<package> | CLASS or DEVICE | <heading> | <description> | current, withdrawn or known",
         "#   EXCLUDES or COEXISTS | <set>:<id> | <set>:<id> | <systems> | <why>",
+        "#   LIFTED | <set>:<id> | <set>:<id> | <systems> | <why> (section 6.7.14: an EXCLUDES",
+        "#     this cut proved apart and admitted as COEXISTS; the next cut proves it again)",
         "",
         "Version: $Version")
     foreach ($r in (Get-OtherEffectiveRows -Table $Table -Meta $Meta)) {
@@ -4336,6 +4641,10 @@ function ConvertTo-OtherPkgsRecord {
     }
     foreach ($r in (@($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" }))) {
         $lines += ("{0} | {1} | {2} | {3} | {4}" -f $r.Kind, $r.A, $r.B, ($r.Systems -join " "), $r.Desc)
+    }
+    foreach ($l in @($Lifted)) {
+        if ($null -eq $l) { continue }
+        $lines += ("LIFTED | {0} | {1} | {2} | ids read apart by the cut" -f $l.A, $l.B, ($l.Systems -join " "))
     }
     return $lines
 }
@@ -4345,7 +4654,7 @@ function ConvertFrom-OtherPkgsRecord {
     # a record whose Version line is empty (3.2.0.0's, cut before the
     # version reached the check; task 44.34).
     param([string]$Text, [string]$Label, [string]$Fallback = "")
-    $rows = @(); $rels = @(); $ver = ""
+    $rows = @(); $rels = @(); $lifted = @(); $ver = ""
     foreach ($line in ($Text -split "`r?`n")) {
         $t = $line.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
@@ -4356,13 +4665,15 @@ function ConvertFrom-OtherPkgsRecord {
             $rows += [pscustomobject]@{ Id = $f[1]; Kind = $f[2]; Heading = $f[3]; Desc = $f[4]; State = $f[5] }
         } elseif (($f[0] -ceq "EXCLUDES" -or $f[0] -ceq "COEXISTS") -and $f.Count -eq 5) {
             $rels += [pscustomobject]@{ Kind = $f[0]; A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }); Desc = $f[4] }
+        } elseif ($f[0] -ceq "LIFTED" -and $f.Count -eq 5) {
+            $lifted += [pscustomobject]@{ A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }) }
         } else {
             throw "$Label has a line it cannot read: '$line'."
         }
     }
     if ($ver -eq "") { $ver = $Fallback }
     if ($ver -eq "") { throw "$Label names no version." }
-    return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels }
+    return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels; Lifted = $lifted }
 }
 
 function Test-OtherPkgsTransition {
@@ -4371,8 +4682,10 @@ function Test-OtherPkgsTransition {
     # kind; a withdrawn row stays withdrawn with its words, or returns to
     # current only as a package a carried set ships in this cut (-Shipped,
     # Get-OtherPresent's "<set>:<class>/<package>" ids; task 44.34); every
-    # relationship line is still there, on at least its systems.
-    param($Prev, $Now, [string[]]$Shipped = @())
+    # relationship line is still there, on at least its systems - an
+    # EXCLUDES except on a system -Lifted (Get-OtherLifted's) proves its
+    # pair apart (section 6.7.14).
+    param($Prev, $Now, [string[]]$Shipped = @(), $Lifted = @())
     foreach ($r in $Prev.Rows) {
         $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
         if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
@@ -4391,6 +4704,30 @@ function Test-OtherPkgsTransition {
         $n = @($Now.Rels | Where-Object { $_.Kind -ceq $r.Kind -and (($_.A -ceq $r.A -and $_.B -ceq $r.B) -or ($_.A -ceq $r.B -and $_.B -ceq $r.A)) })
         $kept = $false
         foreach ($x in $n) { if (@($r.Systems | Where-Object { $x.Systems -cnotcontains $_ }).Count -eq 0) { $kept = $true } }
+        if (-not $kept -and $r.Kind -ceq "EXCLUDES") {
+            # Each system kept by one of the pair's EXCLUDES lines, or lifted.
+            $k = Get-OtherRelPairKey -A $r.A -B $r.B
+            $cover = @()
+            foreach ($x in $n) { $cover += $x.Systems }
+            foreach ($l in @($Lifted)) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $cover += $l.Systems } }
+            $kept = @($r.Systems | Where-Object { $cover -cnotcontains $_ }).Count -eq 0
+        }
+        if (-not $kept -and $r.Kind -ceq "COEXISTS") {
+            # A system the previous release lifted may be excluded again,
+            # which ends its lift (section 6.7.14); every other system kept
+            # by one of the pair's COEXISTS lines.
+            $k = Get-OtherRelPairKey -A $r.A -B $r.B
+            $cover = @()
+            foreach ($x in $n) { $cover += $x.Systems }
+            $prevLifted = @()
+            if ($Prev.PSObject.Properties.Name -contains "Lifted") { $prevLifted = @($Prev.Lifted) }
+            $was = @()
+            foreach ($l in $prevLifted) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $was += $l.Systems } }
+            foreach ($x in @($Now.Rels | Where-Object { $_.Kind -ceq "EXCLUDES" -and (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })) {
+                $cover += @($x.Systems | Where-Object { $was -ccontains $_ })
+            }
+            $kept = @($r.Systems | Where-Object { $cover -cnotcontains $_ }).Count -eq 0
+        }
         if (-not $kept) { throw "the package table drops the $($r.Kind) line of $($r.A) and $($r.B) on $($r.Systems -join ' '), which $($Prev.Version) carried: a line is never removed (design record 26 section 6.7.11)." }
     }
 }
@@ -4463,13 +4800,19 @@ function Invoke-OtherSetChecks {
     Test-OtherPkgTable -Table $table -Sets $sets -Meta $meta -Brands $brands -Headings $headings
     $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta
     $prev = $null
+    $lifted = @()
     $vParsed = $null
     if ([version]::TryParse($Version, [ref]$vParsed)) { $prev = Find-PreviousOtherPkgs -ReleasesDir $ReleasesDir -Version $Version }
     if ($null -ne $prev) {
         $p = ConvertFrom-OtherPkgsRecord -Text ([System.IO.File]::ReadAllText($prev.Path)) -Label "'$($prev.Path)'" -Fallback ($prev.V.ToString())
         $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
-        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets)
+        # An EXCLUDES lifted to a COEXISTS only where proved apart, and an
+        # earlier lift proved again (record 26 section 6.7.14).
+        $lifted = @(Get-OtherLifted -Prev $p -Now $n -Sets $sets)
+        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets) -Lifted $lifted
     }
+    Test-OtherTableLifts -Table $table -Lifted $lifted
+    if ($lifted.Count -gt 0) { $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta -Lifted $lifted }
     return [pscustomobject]@{ Record = $record; Overlaps = @(Get-OtherOverlaps -Table $table -Sets $sets -Meta $meta); Previous = $prev }
 }
 
