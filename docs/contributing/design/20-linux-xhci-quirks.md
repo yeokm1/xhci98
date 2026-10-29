@@ -612,7 +612,13 @@ outside it changes:
   and arms the keep only once that resume returned success, its HCRST
   done; any other invalidation disarms it, and the thread takes it at
   most once (`HcdEnumService`). An unproven invalidation keeps today's
-  containment: the keep runs only where `hcdInvalidate` would have.
+  containment: the keep runs only where `hcdInvalidate` would have. K2's
+  other half - publication closed from the suspend's halt until the
+  restore - is not built: the pipes are paused at the thread's pass after
+  the re-initialization (`HcdCfgResumeQuiet`), and a deferred mapping can
+  still publish while the controller is not initialized, as before this
+  change; whatever it published is completed with the transport error at
+  the quiet.
 - The decision is pure, `XhciEnumResumeKeep` (`xhci_enum.c`, host
   vectors in `test_enum`): the switch off, a device that is gone or owes
   a fault's cycle, a send-back or a slot fault, a device behind a hub, a
@@ -638,7 +644,9 @@ outside it changes:
 - K5 and K6 (`hcdRkeepRestore`): the link awaited up to 1 s (a
   SuperSpeed link trains by itself after HCRST), the port reset and its
   speed compared, Enable Slot, the record put on the new slot and its
-  rings moved to it (`XhciPoolRehome`), Address Device at its EP0 size;
+  rings moved to it (`XhciPoolRehome`), Address Device at its EP0 size
+  (the port's change bits are acknowledged once, right after the reset
+  and before Enable Slot);
   the SuperSpeed link rank, the device descriptor, the whole
   configuration descriptor and - where one was taken - the serial number
   compared; then `HcdCfgResumeReplay`: each pipe's pool ring laid again
@@ -647,7 +655,9 @@ outside it changes:
   SET_CONFIGURATION and the nonzero alternates, each endpoint's sequence
   and halt records cleared, the pipes resumed - RESET_PORT's replay,
   which is now shared code (`hcdCfgReplayConfig`, `hcdCfgReplayResume`);
-  last, the port's change bits the re-initialization left acknowledged.
+  last, the port read again: not connected or not enabled, or a
+  connection or enable change since the acknowledgement, fails the
+  restore (K7), and the change is left for the port's inspection.
   The selective suspend's state is not touched: only a device with none
   armed is kept.
 - K7 (`hcdRkeepDrop`): any failure drops that device alone, through the
@@ -659,12 +669,18 @@ outside it changes:
   D0 of a resume that armed a keep polls, outside the power gate and
   bounded at 15 s, until the thread's pass has kept or dropped the
   devices, so the function drivers above - powered only after their
-  parent's D0 - never submit to a device left between the two (the XP
+  parent's D0 - do not submit to a device left between the two (the XP
   leg's first reading, `runs/run-45.md`, "45.23"); log note
-  `resume.keep.d0wait`.
-- K8 needs no change in `xhciuas.sys`: a UAS drive is kept only with
-  nothing outstanding, so no command spans the reset, and its stream
-  handles are the kept pipes'. A Bulk-Only drive is not kept until the
+  `resume.keep.d0wait`. Past the bound the D0 completes all the same, and
+  what the function drivers then send to a device the pass has not yet
+  kept or dropped goes as it did before this change.
+- K8 needs no change in `xhciuas.sys`: a UAS drive is kept only with no
+  URB pending on its PDOs when the thread's pass looks (`UrbsPending`, the
+  count the check reads), and its stream handles are the kept pipes'.
+  That count is not a reading of `xhciuas.sys`'s command state at the
+  power-down; it shows a command in flight because `xhciuas.sys` posts a
+  command's status URB before its command IU and keeps it until the
+  command ends (`uas_xport.c`, `uasPump`). A Bulk-Only drive is not kept until the
   drain contract of each `usbstor` is read (K4).
 - Read on q35 XP (`runs/run-45.md`, "45.23"): a UAS drive idle at the
   hibernation, a file held open on it and written every second, is

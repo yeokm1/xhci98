@@ -9,13 +9,16 @@ that took it; they are not files a clone has.
 
 ## 45.23 a UAS drive behind a VIA VL805 that fails writes after standby (2026-10-29)
 
-**Verdict: the report is the driver's resume re-initialization, reproduced
-on q35 XP with the report's own words; the owner decided the same day to
-keep devices across it, and that is built (design record 20 sections
-4.3.1 and 4.3.2). A UAS drive idle at the sleep now keeps its files; one
-with a command outstanding across the sleep is still dropped.** The
-reporter's system, Windows version, xHCI98 version and log were not had;
-the reading is the code's and the emulator's. The real VL805 is 45-E.12.
+**Verdict: the report's symptom was reproduced on q35 XP through the
+driver's resume re-initialization, in the report's own words; the owner
+decided the same day to keep devices across it, and that is built (design
+record 20 sections 4.3.1 and 4.3.2). A UAS drive with a serial number on a
+root port and idle at the sleep was restored in place and kept its open
+file; one with URBs pending across the sleep is still dropped.** The
+reporter's system, Windows version, xHCI98 version and log were not had,
+and hibernation stands in for standby, so the reporter's cause is not
+confirmed; the reading is the code's and the emulator's. The real VL805
+is 45-E.12.
 
 ### The reading of the code
 
@@ -91,26 +94,27 @@ package `xhci98-3.3.0.0.zip` of the gated x86 build of `06642a74`, release
 |---|---|---|
 | `06642a74`, `qemu` (`8b294fec...`) | copy loop and held file | the tablet kept ("resume keep, restored, port/slot=00000601"); the UAS drive not kept, its note `resume.keep.port=0000030A` (busy: a URB outstanding on its PDO); dropped and found again, "Delayed Write Failed" as before |
 | `7e1b1934` (the D0 waits for the keep), `qemu` (`8fc7337b...`) | held file alone | the UAS drive kept: "resume keep, port/flags/why=0300E500" (root, started, storage, UAS, serial; kept), "endpoints replayed, mask=000001A4" (its four bulk endpoints), "restored, port/slot=00000301"; no popup, the held window shows no error, and `D:\LONG4.TXT` grew from 858 to 990 bytes after the resume |
-| the same | copy loop and held file | "a PDO's URBs pending=00000003" (a UAS command - status, data and command - outstanding across the hibernation), `why` 0x0A: dropped, "Delayed Write Failed ... D:\LONG4.TXT" |
+| the same | copy loop and held file | "a PDO's URBs pending=00000003" (three URBs pending on the UAS PDO when the pass looked, the count alone: which they were was not read), `why` 0x0A: dropped, "Delayed Write Failed ... D:\LONG4.TXT" |
 
-So the fix keeps the files of a drive that is idle when the machine
-sleeps; a drive with a command outstanding across the sleep is dropped,
-as record 20's K4 rules for a storage interface busy at the reset. Whether
+So the fix keeps the files of a drive the decision keeps and the restore
+succeeds on - here one idle when the machine slept; a drive with URBs
+pending across the sleep is dropped, as record 20's K4 rules for a
+storage interface busy at the reset. Whether
 `xhciuas.sys` should wait out its commands before it passes a power-down
 on, so that a busy drive is idle by the sleep, is left open (the record's
-section 4.3.2). The `87d3d489` revision of the wait (armed only with the
-switch on, released only once the invalidation is taken, and on the
-direct-transition route too) is the one the final gated build carries;
-its leg is listed under "45.27's builds" below.
+section 4.3.2). The wait was revised after these legs (`87d3d489` and
+`0e9a6151`: armed only with the switch on, released only once the
+invalidation is taken, on the direct-transition route too, and settled by
+a stop or a fresh start); FINAL-LEG
 
 ## 45.27 the legs the fixes of 2026-10-29 owe, and what that reading left (2026-10-29)
 
 **Verdict: the small items are done (`4fe3d9b1`; the developer paths
 `4f9c775d` and `984fcc36`, owner 2026-10-29); the installer's DevicePath
-limit read on 98 SE; the update over `3.3.0.0` read on 98 SE and ME,
-with one first-boot hang on each that did not come back in three more
-tries; the XP hibernation resumes as the D0 reading; the rest owed, each
-named below.**
+limit read on 98 SE; the update over `3.3.0.0` read on 98 SE and ME, with
+a first-boot hang on each in the first run that the repeats did not show;
+98 SE's and ME's event-wait paths read under load and replug; the rest
+owed, each named below.**
 
 ### The small items
 
@@ -170,23 +174,48 @@ managers" answered, the NVMe drive "install (no driver)"), so the
 | `w98up2`: the same as `w98up`, the `qemu` `xhci98.sys` put in place of the queued `xhci98.tmp` | desktop; the 0xE9 trace runs to the root hub's start | - |
 | `w98up3`, `meup3`: the same as the first row, release | desktop | desktop |
 
-The hang came once on each system and not in three more tries; it is not
-explained and stays open (evidence `w98up\`, `meup\`).
+The update leg itself ran three times on 98 SE (the first run, which
+hung; `w98up3`, release; `w98up2`, the `qemu` driver in place of the
+queued one) and twice on ME (the first run, which hung; `meup3`); only the
+first run hung on each. The control installs `3.3.0.0` over itself and
+says nothing of the test cut's update. The hang is not explained and
+stays open (evidence `w98up\`, `meup\`).
+
+### The event waits on 98 SE and ME
+
+The waits that a Windows 98 unsatisfied `KeWaitForSingleObject` return no
+longer ends (`HcdWaitEvent`, `UasWaitEvent`): the code cannot force the
+0xFFFFFFFF return, so the leg runs the paths that wait - the remove
+events, the forward-and-wait of PnP IRPs, the UAS driver's rundowns, the
+door's gate - many times under load and reads that none of them hangs
+and that no gate wait was abandoned. Fresh q35 98 SE and ME overlays
+(`w98ev\`, `meev\`), the test cut of `06642a74` installed (98 SE with
+`/storage`, NUSB 3.3's files), a cold start, a Bulk-Only stick
+(`usb-storage`, port 1) and a UAS stick (`usb-uas`, port 2, plugged
+detached and then attached) hot-plugged and installed, `W9.BAT E:` (an
+8 MiB random file copied and compared in a loop); then four Bulk-Only
+and two UAS unplug-and-replug cycles, 15 s out and 25 to 30 s back, during
+the loop; then `XHCITR /dump`. On both: each removal during a write gave
+9x's own "Disk Write Error ... Unable to write to disk in drive E:";
+once dismissed, both sticks were addressed again (`info usb`), the loop ran
+on to its end, the snapshot was written through the door, and the
+driver's notes hold no `gate.power.missed` or `gate.door.missed` (the
+waits' abandonment record). What this proves is the paths' completion
+under load and replug, not the unsatisfied return's handling, which only
+a machine that produces it can show. PASS.
 
 ### A D0 overlapping a system power IRP
 
 XP: every hibernation resume above (seven) completed with the devices
-back and no hang; which route each D0 took (inline or through its work
-item) was not read. 2000 and 7 are owed.
+back and no hang, but whether a D0 and the system IRP's completion were
+ever deferred together - the case the fix is for - was not observed, so
+the leg is owed on XP as on 2000 and 7.
 
 ### Owed
 
-- The event waits a Windows 98 unsatisfied return no longer ends
-  (`HcdWaitEvent`, `UasWaitEvent`) on 98 SE and ME: the code cannot force
-  0xFFFFFFFF, and the plug-cycle legs under load were not run in this
-  session (a Bulk-Only stick on the DevicePath leg's guest found no driver
-  there, `w98dp\`); owed.
-- A D0 overlapping a system power IRP on 2000 and 7; owed.
+- The power gate's wait under a standby on 98 SE or ME (ME's standby
+  works in QEMU); owed.
+- A D0 overlapping a system power IRP on 2000, XP and 7; owed.
 - A UAS STOP and START with a LUN gone, a short REPORT LUNS answer, and
   ATA pass-through and SMART from a tool: owed (no such tool on the
   guests).
