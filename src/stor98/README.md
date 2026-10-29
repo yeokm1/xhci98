@@ -168,23 +168,32 @@ Where they are set:
 - **Windows 2000 to 10:** one string value, `DriverParameter` (REG_SZ), in
   `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\stor98\Parameters\Device`, holding
   lower-case `key=value` pairs separated by semicolons, for example
-  `maxtransferkb=128;pollmode=1;pollbusyus=20000`. It is read when the controller starts:
+  `stormaxtransferkb=128;storpollmode=1;storpollbusyus=20000`. It is read when the controller starts:
   at boot, or after disabling and enabling it in Device Manager (not at a resume from
   standby or hibernation, which keeps what was read at the start).
 
 | Setting | Windows 98 SE / ME value | Windows 2000 to 10 key | Unit | Default | Range | Outside the range |
 |---|---|---|---|---|---|---|
-| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `maxtransferkb=` | KiB | 2048 on 98 SE / ME, 256 on 2000 to 10 | 64 to the default, in multiples of 4 | refused: the default stands |
-| Write-through | `StorWriteThrough` (string only) | `writethrough=` | - | `auto`: `cacheoff` on ME, `off` on 98 SE and on 2000 to 10 | `auto`, `off`, `cacheoff`, `fua` | an unknown word means `auto` |
-| Polling mode | `StorPollMode` (DWORD or string) | `pollmode=` | - | 0 | 0-1 | clamped to the nearer end |
-| Polling period while busy | `StorPollBusyUs` (DWORD or string) | `pollbusyus=` | microseconds | 1000 (1 ms); on 2000 to 10 in effect at least 10 ms | 1000-100000; 0 = the default | clamped to the nearer end |
-| Polling period when idle | `StorPollIdleMs` (DWORD or string) | `pollidlems=` | milliseconds | 1000 (1 s) | 100-60000; 0 = no polling when idle | clamped to the nearer end |
-| Completion spin after a request | `StorPollSpinUs` (DWORD or string) | `pollspinus=` | microseconds | 500 on 2000 to 10, 0 on 98 SE / ME | 0-500; 0 = no spin | clamped to the nearer end |
-| Gone deadline (advanced: leave at the default) | - (not settable) | `gone=` | milliseconds | 5000 (5 s) | 1-600000 | 0 or above the range: the default |
-| Write-idle time before a flush | - (not settable) | `idle=` | milliseconds | 1000 (1 s) | 10 and up | below 10: 10 |
+| Maximum transfer size | `StorMaxTransferKB` (DWORD or string) | `stormaxtransferkb=` | KiB | 2048 on 98 SE / ME, 256 on 2000 to 10 | 64 to the default, in multiples of 4 | refused: the default stands |
+| Write-through | `StorWriteThrough` (string only) | `storwritethrough=` | - | `auto`: `cacheoff` on ME, `off` on 98 SE and on 2000 to 10 | `auto`, `off`, `cacheoff`, `fua` | an unknown word means `auto` |
+| Polling mode | `StorPollMode` (DWORD or string) | `storpollmode=` | - | 0 | 0-1 | clamped to the nearer end |
+| Polling period while busy | `StorPollBusyUs` (DWORD or string) | `storpollbusyus=` | microseconds | 1000 (1 ms); on 2000 to 10 in effect at least 10 ms | 1000-100000; 0 = the default | clamped to the nearer end |
+| Polling period when idle | `StorPollIdleMs` (DWORD or string) | `storpollidlems=` | milliseconds | 1000 (1 s) | 100-60000; 0 = no polling when idle | clamped to the nearer end |
+| Completion spin after a request | `StorPollSpinUs` (DWORD or string) | `storpollspinus=` | microseconds | 500 on 2000 to 10, 0 on 98 SE / ME | 0-500; 0 = no spin | clamped to the nearer end |
+| Gone deadline (advanced: leave at the default) | `StorGoneMs` (DWORD or string) | `storgonems=` | milliseconds | 5000 (5 s) | 1-600000 | 0 or above the range: the default |
+| Write-idle time before a flush | `StorWriteIdleMs` (DWORD or string) | `storwriteidlems=` | milliseconds | 1000 (1 s) | 10 and up | below 10: 10 |
+| Hold before busy, 98 SE / ME (advanced: leave at the default) | `StorHold9xMs` (DWORD or string) | none | milliseconds | 4000 (4 s) | 1000-10000 | refused: the default stands |
 
 Each refusal or clamp is recorded in the driver's debug log (the debug-port build), not
 shown to the user.
+
+**Renamed in xhci98 3.3.0.0**, so that every name starts with Stor and the two families
+match: the Windows 2000 to 10 keys `maxtransferkb=`, `writethrough=`, `pollmode=`,
+`pollbusyus=`, `pollidlems=`, `pollspinus=`, `gone=` and `idle=` are now
+`stormaxtransferkb=`, `storwritethrough=`, `storpollmode=`, `storpollbusyus=`,
+`storpollidlems=`, `storpollspinus=`, `storgonems=` and `storwriteidlems=`, and Windows 98
+SE / ME gain `StorGoneMs` and `StorWriteIdleMs`. A key with an old name is ignored after
+the update and the default applies: rename it in `DriverParameter`, with the same value.
 
 - **Maximum transfer size** is the largest request Stor98 tells Windows to send it
   (MaximumTransferLength, with as many physical breaks as pages plus one). It can only
@@ -209,8 +218,16 @@ shown to the user.
   MD-1 (late DMA into memory Windows has reused); a higher value makes a pulled drive
   take longer to fail. **Write-idle time** is how
   long the drive must have had no writes before Stor98 flushes its write cache from
-  its timer. Neither can be set on Windows 98 SE / ME, where the driver gets no
-  `DriverParameter`.
+  its timer. Both can be set on Windows 98 SE / ME too since xhci98 3.3.0.0
+  (`StorGoneMs`, `StorWriteIdleMs`).
+- **Hold before busy** (Windows 98 SE / ME only, new in xhci98 3.3.0.0) is how long a
+  request waits for room in the driver, when its limits on requests in flight are
+  reached, before it is completed busy and Windows sends it again. On Windows 2000 to 10
+  the driver holds each request for most of its own timeout instead, so there is no key
+  there. It is advanced: leave it at the default. The range stays below the shortest
+  time after which the 98 SE port was seen to reset the bus over a request held too
+  long (13.2 s, PLAN "Gone state and its deadline", 9x); a lower value means
+  more busy completions while the driver is full.
 
 ### Polling mode
 
@@ -222,18 +239,18 @@ gets no MSI on these systems), when Windows assigned it no interrupt, or when it
 interrupt line is not set. Polling can also be forced, for testing. Four values control
 it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 
-- **StorPollMode** (`pollmode=`): 0 polls only when there is no usable interrupt; 1
+- **StorPollMode** (`storpollmode=`): 0 polls only when there is no usable interrupt; 1
   always polls.
-- **StorPollBusyUs** (`pollbusyus=`) is the polling period while requests are
+- **StorPollBusyUs** (`storpollbusyus=`) is the polling period while requests are
   outstanding. It only takes full effect on Windows 98 SE and ME. On Windows 2000 to 8.1
   the port rounds every timer period up to the OS clock tick (10-15.6 ms), so Stor98
   uses at least 10 ms there and a value below that changes nothing; Windows 10's
   rounding is not read yet (Stor98 asks for the same 10 ms minimum there). A shorter period
   completes requests sooner, at a higher CPU cost while busy.
-- **StorPollIdleMs** (`pollidlems=`) is the period with nothing outstanding and nothing
+- **StorPollIdleMs** (`storpollidlems=`) is the period with nothing outstanding and nothing
   left to flush. 0 stops polling when idle, as with an interrupt; the timer still runs
   for unflushed writes and for the connection manager's link check.
-- **StorPollSpinUs** (`pollspinus=`) lets the driver keep checking for a completion for
+- **StorPollSpinUs** (`storpollspinus=`) lets the driver keep checking for a completion for
   that long right after sending a request, which helps short requests at a CPU cost (a
   busy-wait of at most that long per request while one is outstanding, only in the
   polling mode). The defaults differ by family: on Windows 2000 to 8.1 the timer cannot run
@@ -334,7 +351,7 @@ BSD-3-Clause) to Windows 9x and NT4, with 64-bit LBA support and fixes.
 
 Stor98 ships inside xhci98's release download (its `release-x86` and `release-x64`
 directories), built from this source with xhci98's drivers and at their version. xhci98 is
-GPL-2.0-only; Stor98 stays BSD-3-Clause, and its files keep their own names and licence
+GPL-2.0-or-later; Stor98 stays BSD-3-Clause, and its files keep their own names and licence
 there:
 
 | File in the xhci98 package | Needed for |

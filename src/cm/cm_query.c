@@ -15,6 +15,7 @@
  */
 
 #include "cm_qryb.h"
+#include "../xhci_verpk.h"
 
 static VOID cmQPut(UCHAR *buf, ULONG offset, ULONG value)
 {
@@ -196,6 +197,9 @@ ULONG CmQueryBuild(UCHAR *buf, const CM_QUERY_IN *in)
     } else {
         cmQPut(buf + CM_Q_HDR_BYTES, CM_Q_RM_MEMBER, CM_Q_UNKNOWN);
     }
+    /* Which driver is running (roadmap-usb4 44.8): in every answer,
+     * whoever built the block. */
+    cmQPut(buf + CM_Q_HDR_BYTES, CM_Q_RM_DRIVER, XHCI_VER_PACKED);
     n = cmQRouters(in->Record, in->RecordBytes);
     rec = 0;
     if (in->Record != NULL && in->RecordBytes >= CM_ST_HDR_BYTES &&

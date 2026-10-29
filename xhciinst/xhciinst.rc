@@ -1,6 +1,6 @@
 /*
  * xhciinst.rc - the one resource of XHCIINST.EXE and XHCIIN64.EXE: the
  * manifest asking for elevation (xhciinst.manifest), as resource 1 of type
- * 24 (RT_MANIFEST), the form xhcicln.rc uses.
+ * 24 (RT_MANIFEST).
  */
 1 24 "xhciinst.manifest"

@@ -205,8 +205,9 @@ Setup scripts:
 | `scripts\install-w2kddk-cabs.ps1` | Unpacks the DDK build environment into `tools\ntddk` directly from the `WIN2KDDK.EXE` payload CABs: no GUI installer, no registry, nothing under `C:\`. `-DdkPath` puts it elsewhere (see notes below) |
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
-| `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers `src\`, `test\`, `scripts\`, `xhcisnap\` and `xhciqual\` through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
-| `scripts\check-readme-text.ps1` | Holds the five tool readmes `make-release.ps1` publishes (`xhcicln`, `xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut embeds it in the top-level `readme.txt` (`Get-HistoryEmbedLines` and `ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `build-driver.cmd` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text and are met only at a cut. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
+| `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers `src\`, `test\`, `scripts\`, `xhcisnap\` and `xhciqual\` through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `scripts\check-text.ps1`, the first step of `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
+| `scripts\check-readme-text.ps1` | Holds the four tool readmes `make-release.ps1` publishes (`xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50; `xhcicln` was a fifth until the tool was dropped in `3.3.0.0`, task 44.82) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut embeds it in the top-level `readme.txt` (`Get-HistoryEmbedLines` and `ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `scripts\check-text.ps1` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text, which `check-text.ps1` reads from its templates. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
+| `scripts\check-text.ps1` | Every text check of the gated build and of the release cut, run as `build-driver.cmd`'s first step so a text failure costs no build, and on its own in seconds (roadmap-usb4 task 44.1; the `3.2.0.0` builds of 2026-10-24 stopped twice on a line past 78 columns). It runs the build's three, each its own script: `xhciqual\test\check-bat-eol.ps1`, `check-source-charset.ps1` and `check-readme-text.ps1`. Then it runs the cut's checks that need no build, from the cut's own code. It reads `make-release.ps1`'s syntax tree for every text the cut publishes from a template: each here-string assigned to a variable (the readme template and its parts, the qualifier's readme, each tool's readme footer and `NOTICE.TXT`), and each line added to the readme's file list (`$contents`, a paragraph wrapped with `Format-Wrapped` included) or to an incomplete cut's list (`$missingTools`). Each line is held to 78 columns of printable ASCII. Placeholders take the width the cut gives them (`{VERSION}` from `src\xhci_version.h`, the directory names of a two-architecture cut), or nothing where the cut puts a block of its own. Expansions and format items count as nothing, or as their alignment's width, so the width is a lower bound. A placeholder that no `Replace()` on that same text substitutes is a fault, and so are a `TODO(...)` or `TBD` and a claim of `package-common.ps1`'s `$script:ReadmeForbiddenPhrases` in any of them. The readme template is also held to the cut's rules on a version written by hand and on the snapshot schema (`$allowedTemplateVersions`, `Get-SnapSchema` and `Find-DraftMarkers`, read from `make-release.ps1`). It renders `package-common.ps1`'s download readme parts for every download of every set, with and without the driver pack. It requires the changelog entry for the tree's version, one `releases\history.md` heading dated as the INF (`Get-ChangelogEntryFaults`, which the cut calls too), so a version bump carries its entry's heading from the start. It finds draft markers in the release notes and the history. And it holds the shipped silent-install batches, `SILENT.REG`, the port switchover's two batches and `portsw.vbs`, and the field report batches to `package-common.ps1`'s content checks. The cut's checks that two sources agree on a number (XHCITR's snapshot schema against the driver's, each tool's shared version macro) are not text and stay the cut's. So `make-release.ps1` keeps one shape: an error message is thrown or passed to `Stop-CutCheck` as written, never assigned, because an assigned here-string is read as published text. It does not check what the cut renders from a build or a pin: the sizes and hashes in the readme's file list, a `NOTICE.TXT`'s linker copyright lines, the driver pack's texts and the release notes' Stor98 declaration. Those are `make-release.ps1`'s, and `-CheckOnly`'s before it. Every check runs and every fault is listed; exit 1 if any. `-SelfTest` drives the readers and rules over a stand-in cut script and stand-in trees, and runs `check-readme-text.ps1 -SelfTest` |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
 | `scripts\test-qemu-launchers.ps1` | Generates all eleven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP, Windows XP x64, Windows Vista, Windows 7, and - since roadmap task 21.8's generators were written on 2026-09-10 - Windows Vista x64 and Windows 7 x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that each of the four 6.x generators and the XP x64 one refuses `pentium3` **and names the feature that guest is missing** - long mode for the three 64-bit guests, the NX bit for the two 32-bit 6.x ones, so that nobody "fixes" a 64-bit refusal by reaching for a model with NX and no long mode - that no two launchers share a QEMU monitor port, that task 21.8's two guests still hold 55563 and 55564 (the assertion that replaced the one holding those ports for guests which did not exist yet), and that every launcher's run-time QEMU resolver announces which rung answered. Those last four read the preamble's **real output** rather than its source, because an `echo` that does not survive `cmd`'s parsing is worth nothing; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
@@ -220,6 +221,7 @@ Setup scripts:
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
 | `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under. `-TestSignPfx <pfx> -SignOnly` test-signs the binaries a gated `build-driver.cmd` run recorded in `out\gated-<arch>-<flavour>.txt` without running its host suite and import gates again ("Since 2.3.0.0 the x64 package is test-signed") |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
+| `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" below |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
 
 The Phase 2d SMP Win2000 VM has its own script and is not part of
@@ -378,13 +380,13 @@ kit's defaults and imports nothing from `usbport.sys` (the miniport's
 
 The version and the release date are edited in one place, `src\xhci_version.h`. It declares three macros: `XHCI_VER_CSV` (the four-part number as four integers, which is what a `VERSIONINFO` resource takes), `XHCI_VER_STR` (the same number as a string, which is what everything else takes) and `XHCI_DRIVERVER_DATE` (the release date, in the `MM/DD/YYYY` form `DriverVer` takes). The file is `#define` lines and comments only, because three toolchains include it: the DDK's `rc.exe`, MSVC 6.0's `cl.exe`, and Open Watcom's `wcc386`.
 
-Every compiled site includes it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in each driver's version resource (`src\xhci98.rc`, `src\uas\xhciuas.rc`, `src\cm\xhcicm.rc`, `src\hlpr\xhcihlpr.rc`), each driver's version string (`src\hcd_entry.c`, `src\hcd_msi86.c`, `src\uas\uas_entry.c`, `src\cm\cm_entry.c`, `src\hlpr\hlpr_entry.c`), and the user-mode tools across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h`, `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`, and `xhcicln\xhcicln.c`, `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`. `XHCIQUAL` and `XHCISNAP` were the first tools published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
+Every compiled site includes it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in each driver's version resource (`src\xhci98.rc`, `src\uas\xhciuas.rc`, `src\cm\xhcicm.rc`, `src\hlpr\xhcihlpr.rc`), each driver's version string (`src\hcd_entry.c`, `src\hcd_msi86.c`, `src\uas\uas_entry.c`, `src\cm\cm_entry.c`, `src\hlpr\hlpr_entry.c`), and the user-mode tools across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h`, `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`, and `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`. `XHCIQUAL` and `XHCISNAP` were the first tools published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
 
 The INFs cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so **every `*.inf` under `src\`, `src\uas\` and `src\cm\`** keeps a `DriverVer` literal and is checked against the header instead: `src\xhci98.inf` and `src\xhci98-amd64.inf` (two since roadmap task 21.3), `src\uas\xhciuas.inf` and `xhciuas-amd64.inf`, and `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and `xhcicmf-amd64.inf`, and since `3.1.0.0` (roadmap-usb4 task 42-A.30) Stor98's `src\stor98\inf\stor98-x86.inf` and `stor98-x64.inf` - ten literals to bump with the header, and an eleventh outside the INFs, the `version` of `xhcitr\xhcitr.manifest`'s `assemblyIdentity`, which `check-inf.ps1` holds to `XHCI_VER_STR` under the same rule name `BOTH-VERSION`. Each has its gate: `check-inf.ps1 -Arch` cross-checks whichever of the first two it is given against the `xhci_version.h` beside it, and `scripts\inf-gate\check-uas-inf.ps1` and `scripts\inf-gate\check-cm-inf.ps1` hold the UAS and connection-manager INFs to the header's `XHCI_VER_STR` and `XHCI_DRIVERVER_DATE` by their rule `BOTH-VERSION`, and `scripts\inf-gate\check-stor98-inf.ps1` holds Stor98's two to the same two values (one `DriverVer` line each, zero-padded). `build-driver.cmd` runs all four over every one of the ten on every build - so a bumped header with a stale date in any INF fails the build rather than shipping. Three gates cover what is left:
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
-- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (`XHCISNAP.EXE` up to `3.0.0.0`; from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
+- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (`XHCISNAP.EXE` up to `3.0.0.0`; from `2.4.0.0` to `3.2.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
 
 The header spells the number out twice because `FILEVERSION` takes four comma-separated integers and cannot be given a string, and deriving one form from the other needs preprocessor stringizing that this era's `rc.exe` does not handle reliably. So both are written and the INF gate compares them. Two adjacent lines a gate reads beat one clever line no toolchain agrees about.
 
@@ -392,7 +394,7 @@ One trap is worth knowing before anyone improves on this. An earlier attempt at 
 
 The build stamps are not in the header. `XHCIQUAL` and `XHCITR`'s snapshot (`XHCISNAP` up to `3.0.0.0`) each print a `built <date> <time>` line from their compiler's `__DATE__`/`__TIME__`. That is a different fact from the version and must stay one: between cuts the version does not move and the tools are rebuilt many times a day, so the stamp is what tells a guest's stale copy from the one just staged. The driver has no such banner in a release build (`DriverEntry (built ...)` is inside `XHCI_DBG_TEXT` and compiles out), so a release binary is identified by its version resource and its SHA-256; a byte compare cannot stand in for either (task 13-L.4 in the roadmap records why).
 
-A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` (and, from `3.1.0.0`, for `XHCIDI.EXE`, which also needs the Windows 98 SE DDK's `setupx.h`, `prsht.h` and `setupx.lib` in `tools\win98ddk-extracted\` at the hashes `docs\references\README.md` records; design record 27 section 3.3) and the in-repo MSVC 6.0 for `XHCITR.EXE`, which since `3.1.0.0` also reads the driver's snapshot (roadmap-usb4 42-A.4; `XHCISNAP.EXE` was retired). `-SkipQualtool` exists for a host that cannot build the qualifier; it is not for a real cut. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
+A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` (and, from `3.1.0.0`, for `XHCIDI.EXE`, which also needs the Windows 98 SE DDK's `setupx.h`, `prsht.h` and `setupx.lib` in `tools\win98ddk-extracted\` at the hashes `docs\references\README.md` records; design record 27 section 3.3) and the in-repo MSVC 6.0 for `XHCITR.EXE`, which since `3.1.0.0` also reads the driver's snapshot (roadmap-usb4 42-A.4; `XHCISNAP.EXE` was retired). `-SkipQualtool` exists for a host that cannot build the qualifier; it is not for a real cut. From `2.4.0.0` to `3.2.0.0` the cut also staged the cleanup tool, `XHCICLN.EXE` and `XHCICL64.EXE` (roadmap-hcd task 38.8). It was dropped in `3.3.0.0` (task 44.82), and its source left the tree.
 
 The scheme is one four-part version per released package, and all four fields have a meaning, settled by the project owner on 2026-09-10 after `1.1.0.0` moved the second one and nothing here said what that meant:
 
@@ -3204,8 +3206,13 @@ binaries are never signed.
   list); a `.c`, `.h`, `.rc`, `.asm`, `.def`, `.mc` or `.inc` file, or a
   `sources`, `makefile`, `makefile.inc` or `dirs`, in those files'
   directories, so that a file added or removed since counts too; a file
-  `test\run-host-tests.cmd` compiles and the same kinds beside it (the
-  installer's, XHCITR's and XHCIMARK's pure halves); anything under
+  `test\run-host-tests.cmd` compiles (the installer's, XHCITR's and
+  XHCIMARK's pure halves) and every header it or a `test\*.c` file
+  includes by a quoted `#include`, followed to its end - by name, not by
+  directory, so a change to the installer's window alone (`xhciwiz.c`,
+  `xhciwiz.rc`, beside the suite's `wiz_lay.c`) costs a rebuild of the
+  installer (`xhciinst\build.cmd`), not of the drivers (task 44.6; owner,
+  2026-10-24); anything under
   `test\`, `scripts\import-gate\` and Stor98's `src\`, `include\`,
   `scripts\`, `tests\` and `third_party\`; and `build-driver.cmd`,
   `build-all.cmd`, `source-stamp.ps1`, the build's binary checks and the
@@ -3219,7 +3226,9 @@ binaries are never signed.
 - **The cut's checks without the cut: `make-release.ps1 -CheckOnly`**
   (task 43.9). Releases `README.md`, "Cutting a release", says what it runs.
   It reports each leg's gated build record as above, as a warning only,
-  since the cut itself does not read it.
+  since the cut itself does not read it. Its text checks that need no
+  build run before any build in `scripts\check-text.ps1` (task 44.1),
+  the gated build's first step, which also runs on its own in seconds.
 - **Verifying.** `tools\WinDDK71\bin\x86\SignTool.exe verify /pa /v
   <dir>\xhci98.sys` shows the SHA-1 file hash, the chain with the
   certificate's SHA-1 hash, "File is not timestamped", and then fails on
@@ -3242,6 +3251,139 @@ binaries are never signed.
   for an ordinary start, and Vista x64 shows its "Test Mode" text only while
   its activation is in grace (`-Rtc base=2026-09-20T12:00:00`); with it
   expired the not-genuine watermark replaces it and the mode is still on.
+
+#### The cut's two builds at once (roadmap-usb4 task 44.31)
+
+A cut needs `scripts\build-driver.cmd all` and `all -amd64`, and until
+`3.3.0.0` it ran them one after the other in the one tree the cut is made
+from: two runs in one tree write the same files outside the
+per-architecture object directories (the host suite's and the self-tests'
+outputs, the DDK's build logs and `_objects.mac`, Stor98's objects) and
+share one temporary folder. Task 44.31 (was TREESPLIT.1) runs them at
+once in two worktrees of the repository, about 30 minutes saved a cut.
+This is its design, settled before its code (2026-10-25; reviewed and
+revised).
+
+- **Two trees, two roles.** Tree A is the cut's: the x86 build, the tools,
+  `make-release.ps1` and the `releases\<version>\` it writes. Tree B is a
+  second worktree of the same repository at A's commit, made once with
+  `git worktree add --detach <B> HEAD` and its `tools\` junctioned to A's
+  toolchain, and moved to A's commit before each cut (`git -C <B> checkout
+  --detach <commit>`); it builds amd64 and nothing else. Only amd64 moves:
+  the x86 run also builds what the cut reads beside the drivers
+  (`S98VSD.VXD`, the helper's build log), and the cut is made in one tree.
+- **Why B's build is valid in A.** Neither thing that ties a build to its
+  tree names a path. A source stamp (`*.srcstamp`) lists the sources by
+  their path under `src\` with their content hashes and the binary's hash
+  (`scripts\source-stamp.ps1`), so B's stamps check against A's sources
+  when the two hold the same content. The gated record
+  (`out\gated-<arch>-<flavour>.txt`) names the architecture, the flavour,
+  the commit, whether the tree was clean, whether the import gates had
+  their target evidence, and each binary's hash; B's commit is a commit of
+  A's repository, since worktrees share one object store, so the record's
+  commit rule - HEAD that commit, or a newer one with no build input
+  changed since (task 43.9) - applies in A as it is. One thing does carry
+  B's path: the PDB path in each image's debug directory (`3.2.0.0`'s
+  `release-x64\xhci98.sys` names `...\integ12\src\objfre\amd64\xhci98.pdb`),
+  so B is named like any worktree here, with no machine or user name in
+  it.
+- **B's build is imported into A, not read where it is.** A new script,
+  `scripts\package\cut-builds.ps1`, copies B's amd64 output directories
+  into the same paths in A and then B's records into A's `out\`, and every
+  later step reads A as if A had built amd64 itself: `make-release.ps1
+  -CheckOnly` reports both architectures' records, the cut runs every gate
+  on every leg as before (the host suite, and the import gates on the
+  copies, whose `SITES` rule finds the objects beside each image because
+  whole directories are copied), and `make-package.ps1 -SignOnly` signs
+  from the imported record. Reading B in place would instead give
+  `make-package.ps1`, `make-release.ps1`, `Resolve-Stor98Build` and
+  `-CheckOnly` a second root for six binaries, their stamps and their
+  objects; the copy costs seconds. The directories are, per flavour,
+  `src\<obj>\amd64`, `src\uas\<obj>\amd64` and `src\cm\<obj>\amd64`
+  (`<obj>` `objfre`, `objchk` or `objchk_qemu`), and once,
+  `src\stor98\out\free\amd64`, which every flavour's record covers.
+- **What the import holds before it copies, and after.** It refuses
+  unless B is another worktree of A's repository: `git rev-parse
+  --path-format=absolute --git-common-dir` the same for both, and B not A
+  under another name (a file the import writes in A's `out\` must not
+  appear in B's, which catches a junction or another spelling of A's
+  path). No directory it deletes or copies may be, or lie under, a
+  junction or symbolic link inside either tree, so a delete in A can never
+  reach B's files. It takes `out\gated-amd64.lock` in both trees as
+  `build-driver.cmd` takes it (`mkdir`, which fails when the directory is
+  there), B's first (A's comes already held from the launcher, below),
+  and holds both until it ends, so no amd64 build can
+  start in either tree while it runs and it refuses while one is running
+  or a stopped one left its lock; a `.pending` record in B (a build that
+  did not finish) is refused too. A must be clean (`Get-GitTreeState`).
+  Then each flavour's record in B (`release` and `debug`, and `qemu` where
+  B has its record) is read once, as bytes, and must admit B's binaries
+  against A's HEAD and A's state exactly as `-SignOnly` admits its own
+  (`Get-GatedManifestFault` with `Get-GatedHeadAdvance`): that
+  architecture and flavour, the four binaries an amd64 build records and
+  no other, each at its recorded hash, a clean build, A's HEAD its commit
+  or an admitted advance, target evidence unless `-NoTargetEvidence`.
+  Only when every flavour is admitted does it change A. It first deletes
+  every amd64 record in A, the three flavours' whatever it imports, since
+  Stor98's directory, which it replaces, is in each of them; then it
+  replaces each directory with B's; then it holds the copies to each
+  record again (`Get-GatedManifestFault` with A's paths), and only then
+  writes each record from the bytes it read, unchanged (a record with
+  `target_evidence=0` stays so, and `-SignOnly` still asks for its own
+  `-NoTargetEvidence`). If any of that fails, it deletes the records it
+  has written: after an import A's amd64 records are exactly the imported
+  ones, or there are none. A refusal names the record and the reason, as
+  `-SignOnly`'s do.
+- **The builds at once.** `cut-builds.ps1 -X64Tree <B>` starts
+  `scripts\build-driver.cmd all` in A and `scripts\build-driver.cmd all
+  -amd64` in B as two processes at once, each with `TEMP` and `TMP` set to
+  its own tree's `out\tmp-<arch>\` (the shared temporary folder is where
+  two builds collided), each writing its tree's `out\cut-build-<arch>.log`;
+  waits for both; prints each one's exit code and time; and imports when
+  both passed. Before either build starts, in both modes, it makes the
+  import's checks of the two trees (another worktree of the same
+  repository, not A under another name) and refuses unless both trees are
+  clean, B is at A's HEAD (stricter than the records: a record is admitted
+  when its commit is A's HEAD or an ancestor of it with no build input
+  changed since, but the two builds are meant to be of one commit), and
+  both have the toolchain. It then takes, by `mkdir` as above, the two
+  locks its builds do not take, A's `out\gated-amd64.lock` and B's
+  `out\gated-x86.lock`, refusing if either is held, and holds them through
+  the builds, so no build of the other architecture can start in either
+  tree beside its own (the collision two trees avoid; each build takes its
+  own architecture's lock as always). The import is handed A's amd64 lock
+  as it is held and takes B's, which B's build has dropped. The launcher
+  drops its two locks when it ends, whatever the outcome, but only once
+  every build it started has ended: on a failure with one build still
+  running (the second failing to start, say) it waits for that build
+  first, and if that wait is itself interrupted the locks stay, to be
+  deleted by hand once no build runs, as a stopped build's own lock is. `-Serial` runs the two one after the other
+  (the baseline the saving is measured against); `-ImportOnly` imports
+  builds already made, for builds run by hand. `-NoTargetEvidence`, for a
+  host with no target binaries staged, goes with `-ImportOnly` alone: an
+  x86 cut needs the evidence (the helper's import gate), so a run that
+  builds refuses it. The x86 run builds and self-tests XHCITR and
+  XHCIPERF as it always has (XHCICLN too, until it was dropped in
+  `3.3.0.0`); the tools the cut stages are built in A as before.
+- **What does not change.** `build-driver.cmd`, the record's format and
+  `write-gated-manifest.ps1`; `make-release.ps1`'s legs and its gates, so
+  a cut still runs every gate on every leg and does not take a record in
+  place of a gate ("A documentation commit after the gated build" above
+  holds as written); `make-package.ps1 -SignOnly`'s rules. What
+  `make-release.ps1 -CheckOnly` reports changes only in that both
+  architectures' records are now there to report. A cut from one tree,
+  built one architecture after the other, is made exactly as before. The
+  cut's commands, with the import between the builds and `-CheckOnly`, are
+  releases `README.md`, "Cutting a release".
+- **Checked by** `scripts\package\test-package.ps1`, on a fixture
+  repository with a second worktree and stand-in binaries and records: an
+  import that passes, with a qemu record in A that it removes; each
+  refusal above (another repository, the same tree, the same tree through
+  a junction, a lock in either tree, a pending record, A dirty, a dirty or
+  foreign-commit record, a record without target evidence, with and
+  without `-NoTargetEvidence`, a binary not its record's, a build input
+  changed since, a junction in a path it would delete); and A left with no
+  amd64 record when the copies' check fails.
 
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
@@ -4388,11 +4530,11 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    200 ms every 350 ms rather than tapping it, or Setup goes straight on
    to Welcome. At the screen that follows, press S, then Enter at the
    prompt for the disk in drive A:. Expect the list to offer "xHCI98 USB
-   3.x Host Controller (32-bit Windows 2000/XP)" (or "... (Windows XP
-   x64)"); choose it with Enter, and press Enter again at the screen that
+   3 Controller (32-bit Windows 2000/XP)" (or "... (Windows XP x64)";
+   "xHCI98 USB 3.x Host Controller ..." before `3.3.0.0`); choose it with Enter, and press Enter again at the screen that
    lists it as the device Setup will load. On the 32-bit floppy the list
-   has a second entry, "xHCI98 USB 3.x Host Controller (32-bit Windows
-   2000, files from CD)" (Down arrow, then Enter): the Windows 2000 leg
+   has a second entry, "xHCI98 USB 3 Controller (32-bit Windows 2000,
+   files from CD)" (Down arrow, then Enter): the Windows 2000 leg
    with the three files picks it; a 32-bit XP leg keeps the first.
 5. Setup loads its files and starts the kernel. Expect: the Welcome screen
    answers keystrokes sent to `ukbd` (the BIOS has handed the controller to
@@ -4420,8 +4562,9 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    GUI-mode boot goes on. With the first entry and no USB keyboard, mouse
    or storage device during text mode (a hub and an audio device only),
    the first GUI-mode boot went on too (2026-10-14).
-7. In the installed system: Device Manager shows "xHCI98 USB 3.x eXtensible
-   Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
+7. In the installed system: Device Manager shows "xHCI98 USB 3 Controller"
+   and "xHCI98 USB 3 Root Hub" (up to `3.1.0.0` "xHCI98 USB 3.x eXtensible
+   Host Controller" and "xHCI98 USB 3.x Root Hub") with no warning mark, the
    service `xhci98` is the INF's (`Start` 3, not the boot start text mode
    gave it), the USB keyboard types, and the stick has a drive letter with
    the file put in it in step 2. On 2000 and 32-bit XP the service
@@ -8206,7 +8349,18 @@ phase ends by switching the machine off:
    - the driver file is checked;
    - `INSTALL /console /list` must show the controller current;
    - a USB stick the host plugs in on request must show up, and a 4 MiB
-     file copied to it must compare equal with `fc /b`;
+     file copied to it must compare equal with `fc /b`. On 2000 to 7 the
+     copy first waits for the stick's volume to be installed: Windows'
+     device-install log must show it finished (2000 and XP: one more
+     `STORAGE\` line saying "finished successfully" in `setupapi.log`;
+     Vista and 7: more `STORAGE\` lines in `setupapi.dev.log` and no
+     section left open) and then not grow for 15 s, at most 200 s. A stick
+     whose volume was installed before logs nothing new: once the log is
+     quiet the copy goes on, with a note on COM1. Anything else at the bound
+     fails the check. The stick's letter is then found again. XP restarts a
+     stick's volume at the end of its first install, and a file copied
+     before the restart was not found after it (`runs/run-44.md`, "44.20
+     (continued, 2)");
    - `INSTALL /console /uninstall /yes /nopause` runs.
 3. After the next start, `/list` must succeed and show nothing current.
 
@@ -8257,11 +8411,13 @@ deadlines, so a freeze during one can fail that step and the leg.
 `-Cold` runs the same leg from a cold start instead of the saved state.
 That is the measurement of what the starting points save.
 
-**One leg per system stays with the installer's window.** These are the
-Manual legs, run as `run-leg.ps1 -Leg <id>-window`. The guest is restored
-with the CD in and VNC on `127.0.0.1`. The operator runs `PKG\SETUP.EXE`
-and shuts Windows down, and the same checks follow unattended. The script
-opens no viewer.
+**One leg per system installs with the installer's window**
+(`run-leg.ps1 -Leg <id>-window`). The guest is restored with the CD in,
+and the host walks `PKG\SETUP.EXE` itself through QMP, as the next section
+describes; the same checks follow unattended. A window leg with no
+`WindowKeys`, or one run with `-Operator`, waits instead for an operator
+at VNC on `127.0.0.1`, who runs `PKG\SETUP.EXE` and shuts Windows down.
+The script opens no viewer.
 
 **The release matrix** (`release-matrix.ps1 -Package <dir>`). It checks
 every leg's starting point and starts nothing if one is stale. It then
@@ -8277,7 +8433,11 @@ too. Other QEMUs on the host are counted as they run.
 
 It writes one table, `results.md` and `results.csv`, with each leg's
 verdict, minutes, starts, restore time, exit codes and reasons. The Manual
-legs appear in it as owed. The package goes onto each CD and is never run
+legs appear in it as owed, and a leg whose guest the configuration does
+not have as not configured. A leg that needs a part only another
+download carries (the 43.48 legs need the -nonfree download's
+`USBDRV\NONFREE`) is listed as not in the package and not started.
+The package goes onto each CD and is never run
 on the host.
 
 Per-host settings live in `release.config.psd1`, a copy of
@@ -8330,6 +8490,205 @@ Making a starting point took 206 s on 98 SE (state 36 MB) and 335 s on XP
 in both columns, so the saving is in the first start: the cold boot, and
 on 98 SE the wizard escaped. Before 43.12 the same checks were typed or
 clicked in a guest by an operator or by an agent reading screenshots.
+### The q35 base images (Phase 44, from 2026-10-26)
+
+Since 2026-10-25 (owner) new guest legs run on QEMU's `q35` machine, a PCI
+Express platform closer to the real boards' topology than `pc` (i440FX); the i440FX
+results already recorded stay as they are. Read-only q35 base images of every
+target, each made from that target's existing base image (not reinstalled),
+live outside the repository on development host A in
+`E:\xhci98-vm\q35-bases\<os>\disk.qcow2`, each with a `README.txt` that
+gives its exact command line, firmware (SeaBIOS), how it was made, its
+SHA-256 and what was checked. `STATE.md` there lists which are ready. None
+carries any of this project's drivers. They are booted only through an
+overlay, which `E:\xhci98-vm\q35-bases\launch-q35.ps1 -Os <os> -Dir <folder>
+-Qmp <port>` makes and starts; `-Usb4 asm4242|tb3ar|tb3tr|adl` adds the
+emulator's ASMedia ASM4242 (the emulator's asm4242 preset), Alpine Ridge, Titan Ridge
+or Intel USB4 host topology, and `-EncAtBoot` the enclosure with its NVMe at
+power-on. The launcher's header documents the rest.
+
+How each target's system disk is attached, and why:
+
+| Targets | System disk | Why |
+|---|---|---|
+| 98 SE | the q35 board's own ICH9 AHCI controller | 98 SE has no AHCI driver; it runs the disk through the BIOS (INT 13h, "MS-DOS compatibility mode"), as the owner proposed |
+| ME | a `piix3-ide` added on `pcie.0` | on AHCI, ME stops at every boot with "Cannot find or load required file KRNL386.EXE. Access to the file was denied" (98 SE on the same controller boots); not investigated further |
+| 2000, XP, XP x64 | a `piix3-ide` added on `pcie.0` | no inbox AHCI driver; the owner's rule for them is a legacy IDE controller on q35 when AHCI cannot boot |
+| Vista to 10 | ICH9 AHCI | `msahci` (Vista, 7) or `storahci` (8 to 10) set to start at boot (Start=0) while the image ran on q35 with an added `piix3-ide`, then moved to AHCI |
+
+Two settings make the IDE targets boot. Read on XP: SeaBIOS has no geometry for
+a disk on an added `piix3-ide` and falls back to no translation and 16 heads,
+which the image's NTFS boot sector (255 heads) answers with "A disk read error
+occurred"; `lcyls=1024,lheads=255,lsecs=63` on the `ide-hd` makes it use 255
+heads, and the other IDE targets are given the same hints.
+And with the default 64-bit PCI hole in the q35 `_CRS`, XP stops with 0xA5
+(0x2); `-global q35-pcihost.pci-hole64-size=0` avoids it, and the 2000 and XP
+x64 bases run with it too, so those guests have no 64-bit window above 4 GB. Windows 7 and Vista keep a fixed
+clock (`-rtc base=2026-09-20T12:00:00`, as the i440FX kits); with the host's
+date they report that the activation period has expired.
+
+### The installer's window, driven from the host (roadmap-usb4 44.19)
+
+The window legs used to need an operator at VNC, or an agent typing blind
+into the guest. Since 44.19 the host walks the installer's window itself,
+with the keys a person would press, sent through QMP `send-key`, and a QMP
+`screendump` after each. No viewer is opened, and one thing only is
+clicked: the unsigned-driver question of Vista and 7, which takes no key
+(below).
+`lib\legwin.ps1` (`Invoke-LegWindow`) does it, and `run-leg.ps1` calls it
+for the first start of every window leg that lists `WindowKeys` in
+`release-legs.psd1`. Everything else in the leg is as above: the same
+starting point, the same CD, and the same checks after the restart.
+
+The host cannot tell the window's pages apart by their pixels, and it does
+not try. It knows two things only:
+
+- whether the screen changed after a key. The comparison leaves out the
+  bottom 150 rows, because the taskbar's clock changes once a minute and
+  a balloon over the notification area comes and goes, and counts a change
+  only when more than 0.5 % of what is left changed from dark to light or
+  back (by more than 300 of the three colours' 765), as a page's text does;
+- what the guest says on COM1. In window mode the guest's leg script
+  (`LEG9X.BAT`, `LEGNT.CMD`) moves any earlier `C:\XHCIINST.LOG` to
+  `C:\XHLEG\PRIOR.LOG`. It then says `XHLEG OPERATOR <CD letter>` and waits
+  for the installer's log to end with "Exit code N.". When it does, the
+  script says `XHLEG EXIT install N`, sends the log, and says
+  `XHLEG WINDOW done`. The run's end is the one thing the screen cannot
+  tell the host.
+
+The first start of a window leg, step by step:
+
+1. The host waits for the `OPERATOR` line and for a still screen. It opens
+   Start, Run (Ctrl+Esc then R on 98 SE and ME, Windows+R on 2000 and
+   later), and types `<CD>:\PKG\SETUP.EXE` through the guest's keyboard
+   layout.
+2. `ConsentKeys`, on Vista and 7 only: the consent prompt that the
+   window's manifest raises, answered once the screen is still.
+3. `WindowKeys`: the page keys, from Welcome up to and including Install.
+   Each is sent again, up to six times, until the screen changes, because
+   the Welcome page's Next stays disabled while the installer reads the
+   machine.
+4. The run. The host waits for `WINDOW done`. When the leg's `PromptStep`
+   is `xp` (XP and 2000), it answers the unsigned-driver question and walks
+   any Found New Hardware wizard meanwhile.
+5. Enter, then Enter again if QEMU is still running 120 s later. When
+   there is a "Steps left for you" page, the first Enter takes it as Next;
+   that page's Cancel is disabled, so no Enter can cancel there. On Finish,
+   Enter takes the default "Restart Windows now", and QEMU ends at the
+   restart (`-action reboot=shutdown`). The next start is cold, as in every
+   leg. A run that left steps (exit 4) defaults to "Restart Windows later",
+   and its Finish only closes the window: when QEMU is still running 120 s
+   after the second Enter, the host shuts Windows down from Start, Run.
+
+The screendumps are `<start>-w-NN-<what>.png` in the leg's directory: the
+desktop, the Run box, each page after its key, one a minute during the
+run, and the run's end. A step that fails says where in `result.json`
+(`window: FAILED, ...`), and the leg stops there.
+
+The key sequences (`release-legs.psd1`), read with `3.2.0.0` on the `pc`
+machine on 2026-10-25, then on `q35` (Vista and 7 on `q35` only) on
+2026-10-26 (`runs/run-44.md`, "44.19 and 44.20"):
+
+| System | Start, Run | ConsentKeys | WindowKeys | During the run, and after |
+|---|---|---|---|---|
+| 98 SE | Ctrl+Esc, R | - | Alt+N, `until-install` | - |
+| ME | Ctrl+Esc, R | - | the same | on `pc` the run left a step, so Finish did not restart: the host shut down, and at the next start ME installed the controller itself and asked to restart (`restart-me`); on `q35` the run installed it (exit 3) and the installer's OK/Cancel box came during the run |
+| 2000, XP | Windows+R (Dvorak) | - | the same | Found New Hardware walked, unsigned-driver question answered |
+| Vista | Windows+R (Dvorak) | Alt+A (Allow: the window has no publisher; Alt+C is Cancel here) | the same | the unsigned-driver question answered (`PromptStep` `nt6`) |
+| 7 | Windows+R (Dvorak) | Alt+Y (Yes) | the same | the unsigned-driver question answered (`PromptStep` `nt6`) |
+
+`until-install` walks however many pages are left to Install: on each
+page Alt+I first, which only the Summary page's Install answers (no other
+control of the window has that accelerator), and Alt+N where Alt+I changed
+nothing. The pages a download shows differ (from `3.3.0.0` the Other USB
+drivers pages appear only for the sets the download carries), so no count
+of page keys is written down. A page that takes neither key stops the
+step.
+Traps found while making it (development host A, 2026-10-25, QEMU 11.1.0):
+
+- **On 98 SE the window keeps its log open until it exits.** A DOS
+  program's read of the log is then a sharing violation, and the hidden
+  poller box stops at "Abort, Retry, Fail?" for good. The read therefore
+  runs under `COMMAND /F`, which fails the read instead of asking
+  (`XHWFIND.BAT`). Its result comes back as a marker file, because
+  `COMMAND /C` does not hand back an exit code.
+- **A 98 SE box left "Finished" takes the focus.** When the leg script
+  ends, its minimised MS-DOS box comes forward and takes the keys meant for
+  the installer's window. A box whose screen is blank when its batch ends
+  closes instead, so the script ends with `CLS`.
+- **Windows 2000 has no `reg.exe` and no `shutdown.exe`.** On 2000,
+  `XHSETUP.CMD` writes its two values from `XHSETNT.REG` with `regedit /s`,
+  and the leg shuts down through WMI (`XHOFF.VBS`, `Win32Shutdown` 12). A
+  guest marked `HostPowerOff` that stops at "It is now safe to turn off
+  your computer" is quit by the host, once its disk has taken no write for
+  30 s and its screen is still (`Wait-LegPowerOff`). The 2000 image used
+  here powered itself off all the same.
+- **2000's Found New Hardware wizard is a different navy.** Its left panel
+  is 0,0,132 at 16-bit colour, not XP's 0,0,128, and its active title bar
+  is a darker blue. `esc-fnh` and the wizard walk accept both.
+- **The window exits 3 on 98 SE where the console install exits 4.** The
+  window's leg allows both.
+
+On QEMU's `q35` machine (owner, 2026-10-25), from the bases of
+`E:\xhci98-vm\q35-bases` (2026-10-26):
+
+- **98 SE sees no CD on `q35`.** It reaches the board's AHCI through
+  INT 13h alone, and a piix3-ide added beside it for a CD stopped its start
+  at the logo. Its leg's files are a read-only FAT disk on AHCI port 1
+  (QEMU's vvfat over the staged folder, `CdBus = 'disk'`), which it reads
+  as D:. A disk cannot be changed under a running guest, so its legs start
+  cold, and its starting point's state is not used.
+- **The QEMU build matters.** With QEMU 11.1.0 98 SE's start on `q35`
+  stopped at the logo; the build the bases were checked with (usb4-emu's
+  QEMU 11.1.2) reached the desktop with the same disk. A copy of it runs the
+  `q35` legs (`QemuDllPath` for its DLLs, `-L` for its firmware).
+- **2000 on `q35` raises a wizard per platform device with no driver at
+  every start**, and an install or a stick waits on any of them, open or
+  cancelled. Its starting point walks them to their end once
+  (`walk-fnh`), after which they do not come back.
+- **The 9x installer asks during the run** whether a hardware wizard is
+  open (OK/Cancel over the Progress page); the host answers OK.
+- **XP's wizard can open behind the installer's window**, its panel
+  hidden, and the installer then waits out its ten minutes and ends with a
+  step left. When 90 s have passed since its last answer or Alt+Tab and
+  the screen has then been still for 5 s, the host sends Alt+Tab, walks the
+  wizard if one came forward, and sends Alt+Tab back if not.
+- **Vista and 7 restart their clock at the same date** (the bases run
+  with `-rtc base=` a fixed date: at the host's date they say they are not
+  genuine). A logon task made at a later minute of that day was never due
+  again, so the poller never started: `XHSETUP.CMD` makes it with the clock
+  set to 2020 for an instant. It starts the poller minimised, whose window
+  would otherwise stand over the installer's.
+- **On 7 the first elevation after a restored state can be refused at
+  once**, with no prompt ("needs an administrator's approval, which was not
+  given"), and the next one prompts. The consent prompt dims the screen;
+  when the screen did not dim, the host takes the refusal's OK and runs
+  `SETUP.EXE` again (three times at most).
+- **On Vista and 7 the window the elevation started can open without the
+  keyboard focus.** When its Welcome page takes no key, the host sends Alt+Tab once
+  and the key again.
+- **The unsigned-driver question of Vista and 7 opens without the focus**
+  ("Windows can't verify the publisher of this driver software", recognised
+  by its red band). Keys reach it only through the taskbar, which differs
+  between the two; the host clicks instead, where the pointer rests, never
+  moved, at the middle of the screen, on "Install this driver software
+  anyway" (`PromptStep` `nt6`).
+- **7's question for a signed package from a publisher it does not trust
+  yet** ("Would you like to install this device software?", the `-nonfree`
+  `x360c` package) also opens without the focus, its default button Don't
+  Install. It is recognised by its white upper part meeting its grey lower
+  part at one height in two columns right of the middle, with the yellow
+  shield of its warning at the lower part's left; the host clicks where the
+  pointer rests (inside the box), which gives it the focus, and sends
+  Alt+I, Install (`PromptStep` `nt6`). Should the box still stand, the
+  focus is on "Always trust software from ..." when the click changed its
+  tick (it fell on it; the leg's guest is a throwaway: Tab) and on Don't
+  Install when it did not (Shift+Tab), and Space presses Install. Each
+  screen is kept.
+- **7's default button pulses and its balloons come and go.** A page is
+  taken as changed only when its text changed (above), not its frame's
+  colours or a pulsing button.
+
 ### Testing Checklist
 
 From Phase 3 onward, run every applicable checklist item on both target VMs
@@ -8455,9 +8814,9 @@ The package's third driver (design record 21; source map in `source-files.md`, "
 | `CM-CLASSLINE` | Every NHI models section carries exactly one class line, `PCI\CC_0C0340` (design record 22 section 3.7), which its id lines outrank, and no other `PCI\CC_` id. |
 | `CM-NOROUTER` | No device router's or device-side bridge's id (Titan Ridge DD, Goshen Ridge, the Barlow Ridge hubs, AMD's USB4 router functions, ASM2464PD), no USB-only NHI and no unclaimed generation's id in any of the four (design record 22 section 3.1). |
 | `CM-PORTCC` | Every filter model binds `PCI\VEN_xxxx&DEV_xxxx&CC_0604` and nothing else: the driver takes the filter role by that class, and 98 SE's and ME's automatic search did not choose that form. |
-| `VAL-*` | Every install path writes every value the driver reads, once, at the default `cm_vals.c`'s rule table holds, as a `REG_DWORD` under `FLG_ADDREG_NOCLOBBER`, and nothing else; `XhciCmTunnelBridge` is never written (its absence is meaningful, record 21 section 8). |
+| `VAL-*` | Every install path writes every value the driver reads, once, at the default `cm_vals.c`'s rule table holds, as a `REG_DWORD` under `FLG_ADDREG_NOCLOBBER`, and nothing else; `XhciCmTunnelBridge` is never written (its absence is meaningful, record 21 section 8); `XhciCmBridgeNumbering` and `XhciCmNoIrqStart`, read on 98 SE and ME alone, are written by the x86 INF's undecorated install alone, at their defaults in `cm_vals.h` (task 44.46). |
 | `CM-FILTER` | The install sections include `machine.inf` and need `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services` (the 39-0.4 shape) so `pci.sys` stays the port's service, copy the driver from a source disk with no path (the `xhcicm.sys` beside the INF - `nt\`'s own in x86, the root's in x64: Vista's and 7's driver store refuses a source outside the INF's directory, error `0xA1`), write `HKR,,UpperFilters,0x00010008,"xhcicm"` in `.HW` and nothing else, and add the service without the function-driver flag. |
-| `CM-TWIN` | The x86 and amd64 INF of each kind bind the same ids and, for the NHI, write the same values. |
+| `CM-TWIN` | The x86 and amd64 INF of each kind bind the same ids and, for the NHI, write the same values but `XhciCmBridgeNumbering` and `XhciCmNoIrqStart`, which the x86 INF's 98 SE and ME install alone writes (task 44.46). |
 | `CM-DESC` | Every model line's description names its controller's generation, never the connection manager running it, and every description string reads as decided (record 21 section 3.3, "Class and names"): NHI lines `Tb2Desc` (Falcon Ridge), `NhiDesc` (Alpine Ridge, Titan Ridge, Ice Lake) or `U4Desc` (every other id and the class line); filter lines `TbBridgeDesc` (the Thunderbolt 2 and 3 generation's ports), `BridgeDesc` (QEMU's `1B36` bridges) or `U4BridgeDesc`; `CmSvcDesc` the same in all four. |
 | `PATH-NO9X`, `PATH-MFGDEC` | As for the other two drivers: the amd64 INFs carry `NTamd64,NTamd64.6.0` and no undecorated section; the x86 NHI INF `NTx86.6.0` alone. |
 
@@ -8465,4 +8824,4 @@ The package's third driver (design record 21; source map in `source-files.md`, "
 
 **Installing it by hand.** On Windows 98 SE and ME, Device Manager -> the NHI ("PCI System peripheral" or "Base system device", class 08/80) -> Update Driver -> Specify a location -> the package directory; on Windows 2000 and later, Update Driver -> Have Disk -> the same directory, `xhcicm.inf`. The filter INF (`nt\xhcicmf.inf` in the x86 package, `xhcicmf.inf` at the root of the x64 one) is for the NT targets alone, never pointed at from Windows 98 or ME: on each tunnel port (a Thunderbolt switch port, or the root port the platform tunnels through), Update Driver -> "Don't search" -> Have Disk -> the `nt\` directory on x86, the flavour directory itself on x64, which Windows 2000 also takes unforced and XP and 7 need (the unsigned INF otherwise loses to `machine.inf`; task 39-0.4, record 21 section 3.3). Once installed, the NHI reads "xHCI98 Thunderbolt 2 Controller", "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" by its generation, and each port the filter attaches to "xHCI98 Thunderbolt PCI Bridge", "xHCI98 USB4 PCI Bridge" or "xHCI98 PCI Bridge".
 
-**The registry values** (record 21 section 8), in the NHI's driver key, each written by the INF at its default: `XhciCmMode` (1; 0 off, 2 the ICM client on an unlisted Intel NHI, 3 the software connection manager), `XhciCmApprove` (1), `XhciCmReenum` (1), `XhciCmPollIdleMs` (200, held to 50-5000), `XhciCmCmdTimeoutMs` (5000, held to 1000-60000), `XhciCmApproveTimeoutMs` (10000, the same bounds), `XhciCmSafeEject` (1), `XhciLogVerbosity` (0), and the USB4 profile's three of design record 22 section 12, `XhciCmUsb3Tunnel` (1), `XhciCmLaneBonding` (1) and `XhciCmPreOsCleanup` (0; 1 cleans what does not verify, 2 everything); and `XhciCmTunnelBridge` (`REG_SZ`, never written: a comma-separated `bb:dd.f` list that replaces the tunnel-port discovery). A switch out of its range is refused and its default stands; a period is held to its bounds; both are recorded in the log ring at start (`cm.values.refused`, `cm.values.clamped`).
+**The registry values** (record 21 section 8), in the NHI's driver key, each written by the INF at its default: `XhciCmMode` (1; 0 off, 2 the ICM client on an unlisted Intel NHI, 3 the software connection manager), `XhciCmApprove` (1), `XhciCmReenum` (1), `XhciCmPollIdleMs` (200, held to 50-5000), `XhciCmCmdTimeoutMs` (5000, held to 1000-60000), `XhciCmApproveTimeoutMs` (10000, the same bounds), `XhciCmSafeEject` (1), `XhciLogVerbosity` (0), and the USB4 profile's three of design record 22 section 12, `XhciCmUsb3Tunnel` (1), `XhciCmLaneBonding` (1) and `XhciCmPreOsCleanup` (0; 1 cleans what does not verify, 2 everything); on 98 SE and ME `XhciCmBridgeNumbering` (1) and `XhciCmNoIrqStart` (1) (task 44.46); and `XhciCmTunnelBridge` (`REG_SZ`, never written: a comma-separated `bb:dd.f` list that replaces the tunnel-port discovery). A switch out of its range is refused and its default stands; a period is held to its bounds; both are recorded in the log ring at start (`cm.values.refused`, `cm.values.clamped`).

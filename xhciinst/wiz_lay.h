@@ -5,7 +5,7 @@
  * Pure: no Windows header, every size an int in the caller's units (the
  * window passes pixels it measured from the page's own font and size), so
  * the host suite test\test_wizlay.c checks it as the window runs it. A
- * file of its own rather than part of inst_core.c, which XHCICLN, the mark
+ * file of its own rather than part of inst_core.c, which the mark
  * service and XHCITR also compile.
  */
 

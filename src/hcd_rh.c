@@ -27,7 +27,7 @@
 #include "xhci_dbg.h"
 
 static const WCHAR hcdRootHubId[] = XHCI_ID_WIDE(XHCI_ID_ROOT_HUB);
-static const WCHAR hcdRootHubText[] = L"xHCI98 USB 3.x Root Hub";
+static const WCHAR hcdRootHubText[] = L"xHCI98 USB 3 Root Hub";
 
 static LONG hcdRootHubSerial;
 

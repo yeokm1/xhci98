@@ -1,0 +1,36 @@
+/*
+ * xhcipfw.rc - the file version resource of XHCIPFW.SYS (design record 32
+ * section 11), the package's version from src\xhci_version.h.
+ */
+
+#include <windows.h>
+#include "../../xhci_version.h"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     XHCI_VER_CSV
+PRODUCTVERSION  XHCI_VER_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_DRV
+FILESUBTYPE     VFT2_DRV_SYSTEM
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Yeo Kheng Meng\0"
+            VALUE "FileDescription",  "xhci98: PCI windows above 4 GB closed at start (2000, 32-bit Vista to 10)\0"
+            VALUE "FileVersion",      XHCI_VER_STR "\0"
+            VALUE "InternalName",     "xhcipfw.sys\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2 or later.\0"
+            VALUE "OriginalFilename", "xhcipfw.sys\0"
+            VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
+            VALUE "ProductVersion",   XHCI_VER_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

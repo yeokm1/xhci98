@@ -38,6 +38,7 @@
 
 #include "nvme2k.h"
 #include "utils.h"
+#include "pciscan.h"
 
 //
 // The build's flavour, found in the file by a byte scan (xhci98's
@@ -140,7 +141,7 @@ ULONG DriverEntry(IN PVOID DriverObject, IN PVOID Argument2)
 //
 // DMA and transfer negotiation (PLAN 0.8), before ScsiPortGetUncachedExtension
 // fixes the DMA adapter from these values. The driver's limit is the
-// StorMaxTransferKB / maxtransferkb= setting (xfertun.h, parsed by
+// StorMaxTransferKB / stormaxtransferkb= setting (xfertun.h, parsed by
 // EngParseTunables before this), at most STOR98_MAX_TRANSFER. A lower limit
 // the port supplied (registry MaximumSGList and the like) is kept;
 // SP_UNINITIALIZED_VALUE (and 0) mean the port sets no limit.
@@ -578,6 +579,21 @@ ULONG HwFindAdapter(
     }
 
 scanloop:
+    // The vendor id alone first: on 9x the scan below walks every bus a
+    // hot-plug port may have been given, and almost every slot it visits
+    // is empty.
+    RtlZeroMemory(pciBuffer, 4);
+    bytesRead = ScsiPortGetBusData(
+        DeviceExtension,
+        PCIConfiguration,
+        busNumber,
+        slotNumber,
+        pciBuffer,
+        4);
+    if (PciScanAbsent(bytesRead, *(USHORT*)&pciBuffer[PCI_VENDOR_ID_OFFSET])) {
+        goto notmatched;
+    }
+
     // Read PCI configuration space for THIS slot only, into a zeroed buffer
     // (only the bytesRead returned are used).
     RtlZeroMemory(pciBuffer, sizeof(pciBuffer));
@@ -613,13 +629,14 @@ scanloop:
         DevExt->BusNumber = busNumber;
         DevExt->SlotNumber = slotNumber;
         if (HwContext) {
-            ((PULONG)HwContext)[0] = DevExt->BusNumber;
-            ((PULONG)HwContext)[1] = DevExt->SlotNumber + 1;
-            if (((PULONG)HwContext)[1] >= (PCI_MAX_DEVICES*PCI_MAX_FUNCTION)) {
-                ((PULONG)HwContext)[1] = 0;
-                ((PULONG)HwContext)[0]++;
-            }
-            *Again = TRUE;
+            ULONG nextBus = busNumber;
+            ULONG nextSlot = slotNumber;
+
+            // The next call resumes after this slot; after the last slot
+            // of the last bus there is no next call (pciscan.h).
+            *Again = (BOOLEAN)PciScanNext(&nextBus, &nextSlot);
+            ((PULONG)HwContext)[0] = nextBus;
+            ((PULONG)HwContext)[1] = nextSlot;
         } else {
             *Again = FALSE;
         }
@@ -644,15 +661,11 @@ notmatched:
         return SP_RETURN_NOT_FOUND;
     }
 
-    // NT4 ABI (9x) or install time: Continue scanning the bus
-    slotNumber++;
-    if (slotNumber == (PCI_MAX_DEVICES*PCI_MAX_FUNCTION)) {
-        busNumber++;
-        slotNumber = 0;
-        if (busNumber == 16) {
-            *Again = FALSE;
-            return SP_RETURN_NOT_FOUND;
-        }
+    // NT4 ABI (9x) or install time: Continue scanning, to the last bus
+    // (pciscan.h).
+    if (!PciScanNext(&busNumber, &slotNumber)) {
+        *Again = FALSE;
+        return SP_RETURN_NOT_FOUND;
     }
     goto scanloop;
 }
@@ -824,6 +837,11 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
 {
     PHW_DEVICE_EXTENSION DevExt = (PHW_DEVICE_EXTENSION)DeviceExtension;
 
+    // The SCSI status is an output only: it starts as GOOD, whatever the
+    // port's SRB held (PLAN "SCSI status of a completion"); a path that
+    // fails with CHECK CONDITION sets it.
+    Srb->ScsiStatus = SCSISTAT_GOOD;
+
     // Check if the request is for our device (PathId=0, TargetId=0, Lun=0)
     if (Srb->PathId != 0 || Srb->TargetId != 0 || Srb->Lun != 0) {
         if (Srb->Function == SRB_FUNCTION_EXECUTE_SCSI) {
@@ -839,6 +857,7 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         } else {
             Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
         }
+        ScsiCompletionStatus(Srb);
         ScsiPortNotification(RequestComplete, DeviceExtension, Srb);
         ScsiPortNotification(NextRequest, DeviceExtension, NULL);
         return TRUE;

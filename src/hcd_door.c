@@ -56,7 +56,9 @@
 #include "hcd.h"
 #include "hcd_svc.h"
 #include "xhci_hw.h"
+#include "xhci_dname.h"
 #include "xhci_qryb.h"
+#include "xhci_verpk.h"
 
 /* CTL_CODE(FILE_DEVICE_USB = 0x22, fn, METHOD_BUFFERED, FILE_ANY_ACCESS);
  * design record 13 sections 8.1 and 8.3. */
@@ -120,10 +122,6 @@
 
 /* Open pipes a connection answer carries at most; usbview asks for 30. */
 #define HCD_DOOR_PIPES             30UL
-
-/* The highest \DosDevices\HCD<n> tried: other usbport controllers own the
- * low numbers on a machine that has them (section 8.8). */
-#define HCD_DOOR_HCD_MAX           64UL
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define HCD_SNAPSHOT_FLAVOUR XHCI_SNAPSHOT_FLAVOUR_QEMU
@@ -400,6 +398,158 @@ static NTSTATUS hcdLink(const WCHAR *link, const WCHAR *target, ULONG create)
     return IoCreateSymbolicLink(&l, &t);
 }
 
+/*
+ * The controller's \DosDevices names (xhci_dname.h; roadmap-usb4 44.81):
+ * the door, HCD<n> on Windows 98 SE and ME and XHCI98HC<k> on NT, and on
+ * 2000, XP and XP x64 an alias HCD<m> naming the door's link rather than
+ * the FDO, for the pages and pop-ups that walk \\.\HCD<n> there (design
+ * record 13 section 8.1). One record of numbers held per stem, under
+ * hcdNameLock. IRQL: PASSIVE_LEVEL callers; the lock raises to
+ * DISPATCH_LEVEL for the read and the write.
+ */
+static KSPIN_LOCK hcdNameLock;
+static ULONG hcdNameTaken[XHCI_DNAME_WORDS];
+static ULONG hcdAliasTaken[XHCI_DNAME_WORDS];
+static ULONG hcdNameNt;
+static ULONG hcdNameAlias;
+static const WCHAR *hcdNameStem;
+
+/* IRQL: PASSIVE_LEVEL (DriverEntry). */
+VOID HcdDoorInit(VOID)
+{
+    KeInitializeSpinLock(&hcdNameLock);
+    XhciDnameInit(hcdNameTaken);
+    XhciDnameInit(hcdAliasTaken);
+    hcdNameNt = IoIsWdmVersionAvailable(1, 0x10) ? 1UL : 0UL;
+    hcdNameStem = XhciDnameForm(hcdNameNt) == XHCI_DNAME_FORM_PROJECT
+                      ? L"XHCI98HC" : L"HCD";
+    hcdNameAlias = XhciDnameAlias(hcdNameNt,
+                                  IoIsWdmVersionAvailable(6, 0) ? 1UL : 0UL);
+}
+
+static ULONG hcdNameClaim(ULONG *taken, ULONG from)
+{
+    KIRQL oldIrql;
+    ULONG n;
+
+    KeAcquireSpinLock(&hcdNameLock, &oldIrql);
+    n = XhciDnameClaim(taken, from);
+    KeReleaseSpinLock(&hcdNameLock, oldIrql);
+    return n;
+}
+
+static ULONG hcdNameClaimDown(ULONG *taken, ULONG top)
+{
+    KIRQL oldIrql;
+    ULONG n;
+
+    KeAcquireSpinLock(&hcdNameLock, &oldIrql);
+    n = XhciDnameClaimDown(taken, top);
+    KeReleaseSpinLock(&hcdNameLock, oldIrql);
+    return n;
+}
+
+static VOID hcdNameRelease(ULONG *taken, ULONG n)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hcdNameLock, &oldIrql);
+    XhciDnameRelease(taken, n);
+    KeReleaseSpinLock(&hcdNameLock, oldIrql);
+}
+
+/* On NT, whether anything answers to `link` before it is created: a
+ * create that collides leaves a reference on the link already there
+ * (xhci_dname.h), so a name that opens, or that fails in any way but "not
+ * found", is passed over. IoGetDeviceObjectPointer rather than
+ * ZwOpenSymbolicLinkObject, which Windows 98's NTKERN does not export:
+ * the one x86 binary imports nothing 98 lacks. It opens what the name
+ * names, so it sees a link whose target opens or refuses; a link whose
+ * target is gone reads "not found" and is created over. That collision
+ * adds its reference to a link that no longer names a live device, which
+ * keeps no driver loaded that its own link did not already keep. Not
+ * asked on 98 SE and ME, which keep the create-and-see of every release
+ * before 3.3.0.0. IRQL: PASSIVE_LEVEL. */
+static ULONG hcdNameFree(const WCHAR *link)
+{
+    UNICODE_STRING l;
+    PFILE_OBJECT file;
+    PDEVICE_OBJECT device;
+    NTSTATUS status;
+
+    if (!hcdNameNt) {
+        return 1;
+    }
+    RtlInitUnicodeString(&l, link);
+    file = NULL;
+    device = NULL;
+    status = IoGetDeviceObjectPointer(&l, FILE_READ_ATTRIBUTES, &file,
+                                      &device);
+    if (NT_SUCCESS(status)) {
+        ObDereferenceObject(file);
+    }
+    return XhciDnameProbeFree((ULONG)status);
+}
+
+/* \DosDevices\<stem><n> to `target` at the first n that `taken` does not
+ * hold and, on NT, nothing answers to: from 0 up, or with `down` from
+ * XHCI_DNAME_ALIAS_TOP down to 0. A number whose probe or create fails is
+ * given back and the next one tried, so the walk ends within
+ * XHCI_DNAME_MAX tries. The name as made, its length and number on
+ * success. IRQL: PASSIVE_LEVEL. */
+static ULONG hcdNameMake(PHCD_CONTROLLER hc, ULONG *taken, ULONG down,
+                         const WCHAR *stem, const WCHAR *target, PWCHAR name,
+                         PULONG chars, PULONG index)
+{
+    WCHAR link[40];
+    ULONG len;
+    ULONG n;
+    NTSTATUS status;
+
+    for (n = down ? hcdNameClaimDown(taken, XHCI_DNAME_ALIAS_TOP)
+                  : hcdNameClaim(taken, 0);
+         n < XHCI_DNAME_MAX;
+         n = down ? (n == 0 ? XHCI_DNAME_MAX
+                            : hcdNameClaimDown(taken, n - 1))
+                  : hcdNameClaim(taken, n + 1)) {
+        len = hcdFormatName(link, 40, hcdDosDevices, stem, n);
+        if (len != 0 && hcdNameFree(link)) {
+            status = hcdLink(link, target, 1);
+            if (NT_SUCCESS(status)) {
+                RtlCopyMemory(name, link, (len + 1) * sizeof(WCHAR));
+                *chars = len;
+                *index = n;
+                return 1;
+            }
+            XhciLogNote(&hc->Hc, "door.name.create", (ULONG)status);
+        } else if (len != 0) {
+            XhciLogNote(&hc->Hc, "door.name.inuse", n);
+        }
+        hcdNameRelease(taken, n);
+    }
+    return 0;
+}
+
+/* Deletes a name hcdNameMake made, as made, once. Its number goes back
+ * only when the delete succeeded or the name is already gone: after any
+ * other failure the name may still be there, and keeping the number held
+ * keeps every later start off it (xhci_dname.h). IRQL: PASSIVE_LEVEL. */
+static VOID hcdNameDelete(PHCD_CONTROLLER hc, ULONG *taken, PWCHAR name,
+                          ULONG index, PULONG made)
+{
+    NTSTATUS status;
+
+    if (!*made) {
+        return;
+    }
+    *made = 0;
+    status = hcdLink(name, NULL, 0);
+    XhciLogNote(&hc->Hc, "door.name.delete", (ULONG)status);
+    if (XhciDnameDeleteReleases((ULONG)status)) {
+        hcdNameRelease(taken, index);
+    }
+}
+
 /* ----------------------------------------------------------------------- */
 /* The door's lifetime                                                      */
 /* ----------------------------------------------------------------------- */
@@ -418,37 +568,45 @@ VOID HcdDoorGateLeave(PHCD_CONTROLLER hc)
 }
 
 /*
- * The controller's names, at every successful start: \DosDevices\HCD<n> at
- * the first free n, made once and kept until the remove (a Windows 98
- * disable is a stop with no remove, and its re-enable a start), the host
- * controller interface enabled, and SymbolicName written. IRQL:
- * PASSIVE_LEVEL.
+ * The controller's names, at every successful start: the door's
+ * \DosDevices name (HCD<n> on 98 SE and ME, XHCI98HC<k> on NT) to the
+ * FDO's name and, on 2000, XP and XP x64, the alias HCD<m> to the door's
+ * name - the door's from 0 up, the alias from HCD9 down, above the
+ * numbers usbport takes (xhci_dname.h) - each at its first free number
+ * (hcdNameMake), made once and kept until the remove (a Windows 98
+ * disable is a stop with no remove, and its re-enable a start); the host
+ * controller interface enabled; and SymbolicName written, the door's
+ * name. The alias names a link, not the FDO: on 2000 a create of HCD<m>
+ * by another stack after this one holds it leaves its reference on the
+ * alias's link, which keeps nothing of this driver's (runs/run-44.md,
+ * "44.81"). IRQL: PASSIVE_LEVEL.
  */
 VOID HcdDoorControllerStart(PHCD_CONTROLLER hc)
 {
     WCHAR target[40];
-    WCHAR link[40];
-    ULONG n;
+    WCHAR door[40];
 
     if (!hc->HcdLinkMade &&
         hcdFormatName(target, 40, hcdDevice, L"XHCI98HC", hc->FdoSerial) !=
             0) {
-        for (n = 0; n < HCD_DOOR_HCD_MAX; n++) {
-            if (hcdFormatName(link, 40, hcdDosDevices, L"HCD", n) != 0 &&
-                NT_SUCCESS(hcdLink(link, target, 1))) {
-                hc->HcdIndex = n;
-                hc->HcdLinkMade = 1;
-                break;
-            }
-        }
+        hc->HcdLinkMade = hcdNameMake(hc, hcdNameTaken, 0, hcdNameStem,
+                                      target, hc->HcdLinkName,
+                                      &hc->HcdLinkChars, &hc->HcdIndex);
+    }
+    if (hcdNameAlias && hc->HcdLinkMade && !hc->HcdAliasMade &&
+        hcdFormatName(door, 40, hcdDosDevices, hcdNameStem, hc->HcdIndex) !=
+            0) {
+        hc->HcdAliasMade = hcdNameMake(hc, hcdAliasTaken, 1, L"HCD", door,
+                                       hc->HcdAliasName, &hc->HcdAliasChars,
+                                       &hc->HcdAliasIndex);
+        XhciLogNote(&hc->Hc, "door.alias", hc->HcdAliasMade
+                                               ? hc->HcdAliasIndex
+                                               : 0xFFFFFFFFUL);
     }
     hcdInterfaceOn(hc->Pdo, &hcdGuidHostController, &hc->HcInterface,
                    &hc->HcInterfaceOn);
     if (hc->HcdLinkMade) {
-        n = hcdFormatName(link, 40, hcdDosDevices, L"HCD", hc->HcdIndex);
-        if (n != 0) {
-            hcdWriteSymbolicName(hc->Pdo, link, n);
-        }
+        hcdWriteSymbolicName(hc->Pdo, hc->HcdLinkName, hc->HcdLinkChars);
     }
     XhciLogNote(&hc->Hc, "door.hcd", hc->HcdLinkMade ? hc->HcdIndex
                                                      : 0xFFFFFFFFUL);
@@ -462,17 +620,15 @@ VOID HcdDoorControllerStop(PHCD_CONTROLLER hc)
     hcdInterfaceOff(&hc->HcInterface, &hc->HcInterfaceOn, 0);
 }
 
-/* At the remove, before the FDO is deleted. IRQL: PASSIVE_LEVEL. */
+/* At the remove, before the FDO is deleted: the alias, then the door's
+ * name; a second call does nothing. IRQL: PASSIVE_LEVEL. */
 VOID HcdDoorControllerRemove(PHCD_CONTROLLER hc)
 {
-    WCHAR link[40];
-
     hcdInterfaceOff(&hc->HcInterface, &hc->HcInterfaceOn, 1);
-    if (hc->HcdLinkMade &&
-        hcdFormatName(link, 40, hcdDosDevices, L"HCD", hc->HcdIndex) != 0) {
-        (VOID)hcdLink(link, NULL, 0);
-    }
-    hc->HcdLinkMade = 0;
+    hcdNameDelete(hc, hcdAliasTaken, hc->HcdAliasName, hc->HcdAliasIndex,
+                  &hc->HcdAliasMade);
+    hcdNameDelete(hc, hcdNameTaken, hc->HcdLinkName, hc->HcdIndex,
+                  &hc->HcdLinkMade);
 }
 
 /*
@@ -947,6 +1103,99 @@ static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word, ULONG mmio)
 }
 
 /*
+ * The storage transport records (roadmap-usb4 44.35; design record 13
+ * section 10.7, "The decision kept"): how many device records hold a
+ * decision, and word `word` (XHCI_SNAPSHOT_HCD_X_*) of the record-th of
+ * them in Slot ID order, 0 past the last. The snapshot's HCD region and the
+ * query request read the same words. Controller lock held, under which
+ * hcdXportKeep writes them and SlotDevice[] loses a record before it is
+ * freed. IRQL: DISPATCH_LEVEL.
+ */
+static ULONG hcdDoorXportCount(PHCD_CONTROLLER hc)
+{
+    ULONG count;
+    ULONG slot;
+
+    count = 0;
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        if (hc->SlotDevice[slot] != NULL &&
+            hc->SlotDevice[slot]->XportCount != 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static ULONG hcdDoorXportWord(PHCD_CONTROLLER hc, ULONG record, ULONG word)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG seen;
+    ULONG slot;
+
+    dev = NULL;
+    seen = 0;
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        if (hc->SlotDevice[slot] == NULL ||
+            hc->SlotDevice[slot]->XportCount == 0) {
+            continue;
+        }
+        if (seen == record) {
+            dev = hc->SlotDevice[slot];
+            break;
+        }
+        seen++;
+    }
+    if (dev == NULL) {
+        return 0;
+    }
+    switch (word) {
+    case XHCI_SNAPSHOT_HCD_X_SLOT:
+        return slot;
+    case XHCI_SNAPSHOT_HCD_X_PORT:
+        return dev->Port;
+    case XHCI_SNAPSHOT_HCD_X_ROUTE:
+        return dev->Route;
+    case XHCI_SNAPSHOT_HCD_X_IFACE:
+        return dev->XportIface;
+    case XHCI_SNAPSHOT_HCD_X_TRANSPORT:
+        return dev->XportTransport;
+    case XHCI_SNAPSHOT_HCD_X_WHY:
+        return dev->XportWhy;
+    case XHCI_SNAPSHOT_HCD_X_ALTERNATE:
+        return dev->XportAlternate;
+    case XHCI_SNAPSHOT_HCD_X_INPUTS:
+        return dev->XportInputs;
+    case XHCI_SNAPSHOT_HCD_X_TRIPLE:
+        return dev->XportTriple;
+    case XHCI_SNAPSHOT_HCD_X_COUNT:
+        return dev->XportCount;
+    default:
+        return 0;
+    }
+}
+
+/* The query's part is the records' words in order (xhci_qry.h). */
+typedef char hcdXportRecordBytes[XHQ_XPORT_RECORD_BYTES ==
+                                         XHCI_SNAPSHOT_HCD_X_RECORD_WORDS * 4UL &&
+                                     XHQ_X_COUNT ==
+                                         XHCI_SNAPSHOT_HCD_X_COUNT * 4UL &&
+                                     XHQ_X_TRIPLE ==
+                                         XHCI_SNAPSHOT_HCD_X_TRIPLE * 4UL &&
+                                     XHQ_X_SLOT == 0 &&
+                                     XHQ_XPORT_MAX >= XHCI_MAX_SLOTS
+                                 ? 1
+                                 : -1];
+
+/* The ports part's bytes are XhciPortTop's values (xhci_qry.h). */
+typedef char hcdPortTopValues[XHQ_PT_NONE == XHCI_PORT_TOP_NONE &&
+                                      XHQ_PT_USB2 == XHCI_PORT_TOP_USB2 &&
+                                      XHQ_PT_SS == XHCI_PORT_TOP_SS &&
+                                      XHQ_PT_SSP == XHCI_PORT_TOP_SSP &&
+                                      XHQ_PORTS_MAX >= XHCI_MAX_ROOT_PORTS
+                                  ? 1
+                                  : -1];
+
+/*
  * Usb2HubSpeedFallbackSlots (issue 18): bit (Slot ID - 1) for each live
  * record HcdHubPlace gave the default ID, from SlotDevice[] as the slots
  * region reads it. Controller lock held. IRQL: DISPATCH_LEVEL.
@@ -1029,7 +1278,20 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
-            /* 36.38's words, past 36.24's counters; they end the header. */
+            /* 44.35's transport records end the header. */
+            if (word >= XHCI_SNAPSHOT_HCD_XPORT_AT) {
+                value = hcdDoorXportWord(
+                    hc, (word - XHCI_SNAPSHOT_HCD_XPORT_AT) /
+                            XHCI_SNAPSHOT_HCD_X_RECORD_WORDS,
+                    (word - XHCI_SNAPSHOT_HCD_XPORT_AT) %
+                        XHCI_SNAPSHOT_HCD_X_RECORD_WORDS);
+                break;
+            }
+            if (word >= XHCI_SNAPSHOT_HCD_XPORT_RECORDS) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
+            /* 36.38's words, past 36.24's counters. */
             if (word >= XHCI_SNAPSHOT_HCD_DNCTRL_LIVE) {
                 value = hcdDoorSuspWord(hc, word, mmio);
                 break;
@@ -1342,10 +1604,12 @@ static NTSTATUS hcdDoorQuery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
     ULONG written;
     ULONG rc;
     ULONG at;
+    ULONG r;
+    ULONG w;
     KIRQL oldIrql;
 
     *info = 0;
-    if (buf == NULL || outLen < XHQ_HDR_BYTES) {
+    if (buf == NULL || outLen < XHQ_HDR_BYTES_V1) {
         return STATUS_BUFFER_TOO_SMALL;
     }
     ext = &hc->Hc;
@@ -1357,7 +1621,12 @@ static NTSTATUS hcdDoorQuery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
     in.Started = hc->ControllerStarted ? 1UL : 0UL;
     in.Counters = (const ULONG *)&hc->Counters;
     in.CounterWords = XHCI_SNAPSHOT_HCD_COUNTER_WORDS;
+    in.DriverVersion = XHCI_VER_PACKED;
+    /* The map is parsed at the start and kept until the stop, neither of
+     * which runs while the door gate is held. */
+    in.Ports = hc->ControllerStarted ? ext->PortMap.PortCount : 0UL;
     XhciControllerLockAcquire(ext, &oldIrql);
+    in.XportRecords = hcdDoorXportCount(hc);
     if (ext->Signature == XHCI_EXTENSION_SIGNATURE &&
         ext->TrailingSignature == XHCI_EXTENSION_TRAILING) {
         in.Verbosity = ext->Log.Verbosity;
@@ -1384,6 +1653,22 @@ static NTSTATUS hcdDoorQuery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
         at = hcdGet32(buf, XHQ_O_CTR_OFFSET) +
              XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS * 4;
         hcdPut32(buf, at, hcdDoorFallbackSlots(hc));
+    }
+    /* 44.35's records, counted and filled under the one hold. */
+    if (rc == XHQ_ANS_WHOLE) {
+        at = hcdGet32(buf, XHQ_O_XPORT_OFFSET);
+        for (r = 0; r < in.XportRecords && r < XHQ_XPORT_MAX; r++) {
+            for (w = 0; w < XHCI_SNAPSHOT_HCD_X_RECORD_WORDS; w++) {
+                hcdPut32(buf, at, hcdDoorXportWord(hc, r, w));
+                at += 4;
+            }
+        }
+        /* 44.80's ports part: root port n at byte n - 1. */
+        at = hcdGet32(buf, XHQ_O_PORTS_OFFSET);
+        w = hcdGet32(buf, XHQ_O_PORTS_BYTES);
+        for (r = 0; r < w; r++) {
+            buf[at + r] = (UCHAR)XhciPortTop(&ext->PortMap, r + 1);
+        }
     }
     XhciControllerLockRelease(ext, oldIrql);
     HcdDoorGateLeave(hc);

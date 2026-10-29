@@ -522,6 +522,35 @@ ULONG XhciPortIsUsb3(const XHCI_PORT_MAP *map, ULONG port)
             portClass == XHCI_PORT_CLASS_USB3_ORPHAN) ? 1 : 0;
 }
 
+static ULONG xhciPsiKilobits(ULONG psi);
+
+ULONG XhciPortTop(const XHCI_PORT_MAP *map, ULONG port)
+{
+    const XHCI_PROTOCOL *proto;
+    ULONG i;
+
+    if (map == NULL || port == 0 || port > map->PortCount ||
+        port > XHCI_MAX_ROOT_PORTS ||
+        map->Protocol[port - 1] >= XHCI_MAX_PROTOCOLS ||
+        map->Protocol[port - 1] >= map->ProtocolCount) {
+        return XHCI_PORT_TOP_NONE;
+    }
+    proto = &map->Protocols[map->Protocol[port - 1]];
+    if (proto->Major == 2) {
+        return XHCI_PORT_TOP_USB2;
+    }
+    if (proto->Major != 3) {
+        return XHCI_PORT_TOP_NONE;
+    }
+    for (i = 0; i < proto->PsiCount && i < XHCI_MAX_PSI; i++) {
+        if (XHCI_PSI_LP(proto->Psi[i]) == XHCI_PSI_LP_SSP ||
+            xhciPsiKilobits(proto->Psi[i]) > XHCI_RATE_GEN1_KBPS) {
+            return XHCI_PORT_TOP_SSP;
+        }
+    }
+    return XHCI_PORT_TOP_SS;
+}
+
 ULONG XhciPortSlotType(const XHCI_PORT_MAP *map, ULONG port, ULONG *slotType)
 {
     if (slotType == NULL) {

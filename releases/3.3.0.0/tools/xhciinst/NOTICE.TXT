@@ -1,0 +1,53 @@
+==============================================================================
+                          x h c i 9 8   3.3.0.0
+           THIRD-PARTY NOTICES FOR THE INSTALLER'S EXECUTABLES
+==============================================================================
+
+XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE, and SETUP.EXE at the
+package's top directory, are built from this project's own C source, which is
+under the GNU GPL v2 or later - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCIINST.EXE, XHCIWIZ.EXE and
+SETUP.EXE are compiled with Microsoft Visual C++ 6.0 and linked against
+that compiler's STATIC C runtime (LIBC and LIBCMT); XHCIIN64.EXE and
+XHCIWZ64.EXE are compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. You can see
+it in the import tables, which name Windows' own DLLs and no C runtime
+DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient. The tools call Windows' own setup routines at run time; they
+carry no Microsoft setup program.
+The base download's only Microsoft files are NUSB 3.3's Windows 98 SE
+storage files, in a folder of their own with their own NOTICE.md; the
+non-free download also carries other manufacturers' drivers in
+USBDRV\NONFREE\, KMDF co-installers of Microsoft's among them, with
+their NOTICE.md.
+
+------------------------------------------------------------------------------
+ XHCIDI.EXE
+------------------------------------------------------------------------------
+
+XHCIDI.EXE, the Windows 98 SE and ME device install helper the install tool
+starts, is built from this project's own C source, under the GNU GPL v2 or
+later, with Open Watcom 2.0's 16-bit compiler. It is not only this project's
+code: it statically links modules from the Open Watcom C runtime library for
+16-bit Windows (clibl.lib). The Open Watcom linker records its own copyright
+at the head of the map it wrote for this build:
+
+  Copyright (c) 2002-2026 The Open Watcom Contributors. All Rights Reserved.
+  Portions Copyright (c) 1985-2002 Sybase, Inc. All Rights Reserved.
+
+Open Watcom is distributed under the Sybase Open Watcom Public License.
+
+It is linked against setupx.lib of the Windows 98 SE DDK, an import library:
+the executable carries references, by module name and ordinal, to the
+SETUPX.DLL of the Windows it runs on, and no code or text of the DDK. What
+this file records is the linkage; the project's full provenance record is
+docs\contributing\legal-provenance.md, section 2a.

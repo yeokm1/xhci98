@@ -42,6 +42,7 @@
 #include "cm.h"
 #include "cm_nvlink.h"
 #include "cm_call.h"
+#include "cm_pwrr.h"
 
 /* 100 ns units per millisecond, for the relative due times. */
 #define CM_CLOCK_UNITS_PER_MS 10000UL
@@ -95,6 +96,13 @@ static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
         /* Read again before each request: a surprise removal during the
          * first of a strict read's two stops the second. */
         return STATUS_DEVICE_REMOVED;
+    }
+    if (CmPowerSleeping(nhi) &&
+        !CmPowerShutdownConfig((ULONG)nhi->SystemPower, nhi->PowerOnNt)) {
+        /* Once a 9x shutdown's system IRP has gone down, no configuration
+         * IRP from any work, one already running included (cm_pwrr.h,
+         * task 44.43): the bus does not complete it. */
+        return STATUS_UNSUCCESSFUL;
     }
     irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
     if (irp == NULL) {
@@ -783,6 +791,10 @@ static VOID NTAPI cmThread(PVOID context)
         nhi->ThreadWait = CM_Q_WAIT_BUSY;
         nhi->Counters.Passes++;
         (VOID)cmNowMs(nhi);
+        /* A new pass for the learning window's once-a-pass rule (record
+         * 22 section 7.6, task 44.57), before any work of it: a resume's
+         * deliveries (CM_WORK_D0) and the idle pass alike. */
+        XhciTbtLearnPass(&nhi->U4LearnClock);
 
         KeAcquireSpinLock(&nhi->WorkLock, &irql);
         bits = nhi->WorkBits;
@@ -799,6 +811,9 @@ static VOID NTAPI cmThread(PVOID context)
             CmPowerDirectWork(nhi, systemIrp);
         } else if (bits & CM_WORK_SYSTEM) {
             CmPowerSystemWork(nhi, systemIrp);
+        }
+        if (bits & CM_WORK_QUIESCE) {
+            CmPowerQuiesceWork(nhi);
         }
         if (bits & CM_WORK_D0) {
             CmPowerD0Work(nhi, d0Irp);

@@ -217,7 +217,7 @@ VOID PlatDmaRelinquish(IN struct _HW_DEVICE_EXTENSION *DevExt);
 
 //
 // Write-through (PLAN D3). PlatWriteThroughSetting resolves the write-through
-// setting (9x `StorWriteThrough`; NT `writethrough=`) once per HwFindAdapter
+// setting (9x `StorWriteThrough`; NT `storwritethrough=`) once per HwFindAdapter
 // into DevExt->WtMode (PLAT_WT_*): `auto` (the default) is on only on
 // Windows Me (VMM 4.90), where removals that bypass the CM get no stop
 // callback; elsewhere off.
@@ -255,6 +255,13 @@ VOID PlatPollRaw(OUT POLL_RAW *Raw);
 // 9x only: the StorMaxTransferKB value (REG_SZ decimal or REG_DWORD) of the
 // same key (xfertun.h). Present: found; Valid: a number (*RawKb).
 VOID PlatXferRaw(OUT BOOLEAN *Present, OUT BOOLEAN *Valid, OUT ULONG *RawKb);
+// 9x only: the StorGoneMs, StorWriteIdleMs and StorHold9xMs values (REG_SZ
+// decimal or REG_DWORD) of the same key; the first two are the NT keys
+// storgonems= and storwriteidlems=, the third has no NT key (NT holds by
+// each request's TimeOutValue). Each is left as it came where absent or
+// unreadable (EngParseTunables then applies the ranges).
+VOID PlatTunMsRaw(IN OUT ULONG *GoneMs, IN OUT ULONG *WriteIdleMs,
+                  IN OUT ULONG *Hold9xMs);
 #endif
 VOID PlatIrqReport(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PCHAR ArgumentString);
 // TRUE in a crash dump or hibernation instance (NT "dump=1"; 9x never).

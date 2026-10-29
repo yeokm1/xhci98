@@ -1350,6 +1350,58 @@ int inst_path_append(const char *list, const char *dir, char *out, size_t cap)
     return 1;
 }
 
+static const char *const instOther9xStage[] = {
+    "audio/uac2", "audio/usbmidi"
+};
+
+int inst_other_9x_stageable(int set, const char *id)
+{
+    size_t i;
+
+    if (set != INST_SET_FREE || id == NULL) {
+        return 0;
+    }
+    for (i = 0; i < sizeof(instOther9xStage) / sizeof(instOther9xStage[0]);
+         i++) {
+        if (inst_eq(id, instOther9xStage[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_9x_devicepath_project(const char *base, const char *const *folders,
+                               int n, int *fits)
+{
+    char cur[INST_9X_DEVICEPATH_MAX + 2];
+    char next[INST_9X_DEVICEPATH_MAX + 2];
+    int i;
+    int bad = 0;
+
+    for (i = 0; i < n; i++) {
+        fits[i] = 0;
+    }
+    if (strlen(base) > INST_9X_DEVICEPATH_MAX) {
+        return -1;
+    }
+    inst_copy(cur, base, sizeof(cur));
+    for (i = 0; i < n; i++) {
+        const char *f = folders[i];
+        if (f == NULL || f[0] == '\0' || strchr(f, ';') != NULL) {
+            bad = 1;
+            continue;
+        }
+        /* next holds at most the limit and its zero: a longer result is a
+         * refusal of inst_path_append, so the folder is left out. */
+        if (inst_path_append(cur, f, next, INST_9X_DEVICEPATH_MAX + 1) < 0) {
+            continue;
+        }
+        inst_copy(cur, next, sizeof(cur));
+        fits[i] = 1;
+    }
+    return bad ? -1 : (int)strlen(cur);
+}
+
 int inst_path_remove(const char *list, const char *dir, char *out, size_t cap)
 {
     char entry[INST_LINE_CHARS];
@@ -1553,7 +1605,7 @@ int inst_sig_note_kind(int arch, int nt, INST_U32 major, int osKind)
         return INST_SIG_NONE;
     }
     if (arch == INST_ARCH_AMD64) {
-        return INST_SIG_X64;
+        return osKind == INST_OS_CMONLY ? INST_SIG_X64_8 : INST_SIG_X64;
     }
     return osKind == INST_OS_CMONLY ? INST_SIG_X86_SB : INST_SIG_NONE;
 }
@@ -1570,35 +1622,76 @@ const char *inst_sig_x86_sb_text(void)
            "Windows 7.\n";
 }
 
-int inst_cm_boot_gate(int arch, int osKind, int cmSigned, int tsOn)
+int inst_cm_boot_gate(int arch, int nt, INST_U32 major, int osKind,
+                      int cmSigned, int tsOn)
 {
-    if (arch != INST_ARCH_AMD64 || osKind != INST_OS_CMONLY) {
+    /* Every 64-bit NT 6.0 and later the tool installs on (record 23
+     * section 5.14, task 44.12): Vista and 7 x64 as 8 to 10. */
+    if (arch != INST_ARCH_AMD64 || !nt || major < 6UL ||
+        osKind == INST_OS_REFUSED) {
         return INST_CMBOOT_NONE;
     }
     return (cmSigned == 1 && tsOn) ? INST_CMBOOT_WARN : INST_CMBOOT_REFUSE;
 }
 
+int inst_cm_start_fix(int found, INST_U32 type, INST_U32 start)
+{
+    return found && type == INST_REG_DWORD_TYPE && start < 3UL;
+}
+
+int inst_cm_start_action(int fix, int bootPath)
+{
+    if (!fix) {
+        return INST_CMST_NONE;
+    }
+    if (bootPath == 0) {
+        return INST_CMST_SET;
+    }
+    return bootPath > 0 ? INST_CMST_KEEP_PATH : INST_CMST_KEEP_UNREAD;
+}
+
+int inst_bp_prop_verdict(INST_U32 cr, INST_U32 type, const char *buf,
+                         size_t len, const char *svc)
+{
+    if (cr == INST_CR_NO_SUCH_VALUE) {
+        return 0;
+    }
+    if (cr == INST_CR_BUFFER_SMALL) {
+        return INST_BP_GROW;
+    }
+    if (cr != 0UL || type != INST_REG_MULTI_SZ_TYPE || buf == NULL) {
+        return -1;
+    }
+    return inst_msz_has(buf, len, svc) ? 1 : 0;
+}
+
 const char *inst_cm_boot_warn_text(void)
 {
-    return "This Windows makes the connection manager a boot driver (it "
-           "filters a PCI\nbridge). Keep test-signing mode on, and Secure Boot "
-           "off, while it is installed:\nstarted without test-signing mode, "
-           "Windows stops in Automatic Repair until a\nstart with driver "
-           "signature enforcement disabled (Advanced startup,\n"
-           "Troubleshoot, Advanced options, Startup Settings, Restart, "
-           "then 7). From such a\nstart, turn test-signing mode on again or run the "
-           "uninstall.\n";
+    return "Windows makes the connection manager a boot driver when it "
+           "installs its filter\non a PCI bridge. This installer sets it "
+           "back to start on demand at the end of\nthe run, and the "
+           "safe-removal mark service, where it is installed, after "
+           "a\nlater install. Keep test-signing mode on, and Secure Boot "
+           "off, while it is\ninstalled: with signature enforcement on and "
+           "test-signing mode off, the\nThunderbolt 3 / USB4 support does "
+           "not load, and a start while the connection\nmanager is still a "
+           "boot driver does not finish (Automatic Repair, or "
+           "Windows\nundoing the install). From there, start once with "
+           "driver signature enforcement\ndisabled (F8, or Startup "
+           "Settings), turn test-signing mode on again, restart,\nand run "
+           "INSTALL.BAT again.\n";
 }
 
 const char *inst_cm_boot_refuse_text(void)
 {
     return "REFUSED: on this 64-bit Windows the connection manager is "
            "installed only in\ntest-signing mode, from a test-signed package. "
-           "Windows makes it a boot driver,\nand a start that cannot load it "
-           "does not finish (Automatic Repair). Turn\ntest-signing mode on - "
-           "Secure Boot off in the firmware setup, then in an\nelevated "
-           "Command Prompt: bcdedit /set testsigning on  - restart, and run "
-           "this\nagain. Nothing was changed.\n";
+           "Windows makes it a boot driver\nwhile it installs it, and a start "
+           "that cannot load a boot driver does not\nfinish. Turn test-signing "
+           "mode on - Secure Boot off in the firmware setup where\nit has one, "
+           "then in an elevated Command Prompt: bcdedit /set testsigning on  -"
+           "\nrestart, and run this again; or leave the Thunderbolt 3 / USB4 "
+           "support out.\nNothing was changed.\n";
 }
 
 const char *inst_stage_error_text(INST_U32 err, int arch, int osKind)
@@ -1665,6 +1758,76 @@ const char *inst_sb_text(int arch, int state)
 int inst_ts_confirmed(int tsOption, int sbState)
 {
     return tsOption && sbState != INST_SB_ON;
+}
+
+int inst_cm_sb_refused(int arch, int osKind, int cmInRun, int sbState)
+{
+    return arch == INST_ARCH_X86 && osKind == INST_OS_CMONLY && cmInRun &&
+           sbState == INST_SB_ON;
+}
+
+const char *inst_cm_sb_refuse_text(void)
+{
+    return "REFUSED: Secure Boot is on, and Windows then does not load the "
+           "connection\nmanager (the 32-bit drivers are not signed). Windows "
+           "makes it a boot driver\nwhile it installs its filter, and a start "
+           "that cannot load a boot driver does\nnot finish. Turn Secure Boot "
+           "off in the computer's firmware setup, then run\nthis again. "
+           "Nothing was changed.\n";
+}
+
+const char *inst_cm_x86_boot_text(void)
+{
+    return "Windows makes the connection manager a boot driver when it "
+           "installs its\nfilter. This installer sets it back to start on "
+           "demand at the end of the\nrun. It keeps it a boot driver where "
+           "the disk Windows starts from is below\na device the filter is on, "
+           "or where it cannot tell. With Secure Boot on, a\nstart while it "
+           "is still a boot driver would stop in Automatic Repair.\n";
+}
+
+int inst_usb_sb_refused(int nt, int osKind, int usbInclude, int sbState)
+{
+    return nt && osKind == INST_OS_CMONLY && usbInclude &&
+           sbState == INST_SB_ON;
+}
+
+const char *inst_usb_sb_refuse_text(void)
+{
+    return "REFUSED: Secure Boot is on, and Windows does not load the xHCI98 "
+           "USB drivers\nthen: every USB 3 controller, the keyboard's and "
+           "mouse's included, would stop\nworking after the restart. Turn "
+           "Secure Boot off in the computer's firmware\nsetup first, or leave "
+           "the USB drivers out. Nothing was changed.\n";
+}
+
+int inst_hvci_state(int found, INST_U32 type, INST_U32 value)
+{
+    return inst_sb_state(found, type, value);
+}
+
+int inst_hvci_applies(int arch, int osKind, INST_U32 major)
+{
+    return arch == INST_ARCH_AMD64 && osKind == INST_OS_CMONLY &&
+           major == 10UL;
+}
+
+const char *inst_hvci_text(int state, int cmInRun)
+{
+    if (state != INST_SB_ON) {
+        return NULL;
+    }
+    if (cmInRun) {
+        return "Memory integrity (Windows Security, Device security, Core "
+               "isolation) is on:\nif it refuses the connection manager "
+               "while Windows has it as a boot driver,\nWindows stops in "
+               "Automatic Repair. Turn memory integrity off and restart\n"
+               "before you install, to be sure.\n";
+    }
+    return "Memory integrity (Windows Security, Device security, Core "
+           "isolation) is on:\nWindows refuses a driver it finds incompatible "
+           "with it, and its device then\nshows Code 39. If one does, turn "
+           "memory integrity off and restart.\n";
 }
 
 /* ======================================================================== */
@@ -1763,8 +1926,7 @@ const INST_VALUE instValues[] = {
       { "kept", "cleaned where they do not verify", "all cleaned", NULL } },
     /* Record 26 section 5.5 (task 42-A.2): the Thunderbolt page's
      * "Advanced..." rows from the release notes' table, never asked by
-     * the console; the ranges are cm_vals.c's. XhciCmBridgeNumbering is
-     * not written by the INF: its default is the driver's. */
+     * the console; the ranges are cm_vals.c's. */
     { "XhciCmPollIdleMs", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
       "how often, in ms, the driver looks at the controller with nothing "
       "happening", NULL, 0, { NULL, NULL, NULL, NULL }, 50UL, 5000UL, 0, 0 },
@@ -1781,20 +1943,25 @@ const INST_VALUE instValues[] = {
     { "XhciCmLogDebugView", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
       "the connection manager's log also to a debugger or DebugView", NULL, 0,
       { "no", "yes", NULL, NULL } },
+    /* Task 44.46 (owner, 2026-10-26): the two values the driver reads on
+     * 98 SE and ME alone are written by the x86 xhcicm.inf's 98 SE and ME
+     * install at their default 1, as every other value; their default is
+     * that INF's AddReg line, and Def the same 1 for the amd64 INF, which
+     * has no 98 SE and ME install (inst_value_default; the row greyed). */
     { "XhciCmBridgeNumbering", INST_INF_CM, INST_APPLY_9X_CM, 0x0UL, 0x3UL,
       "set up the bridges a device brings up behind a tunnel",
       "0 leaves them as they come up: a device behind a switch may then "
       "show Code 29 until a restart.", 0x1UL,
       { "leave them as they come up", "set them up", NULL, NULL },
-      0, 0, 1, 1UL },
+      0, 0, 0, 1UL },
     /* Record 26 section 5.0 (draft 35): never asked, the Thunderbolt tab's
-     * Advanced row; not written by the INF, the driver's default 1. */
+     * Advanced row. */
     { "XhciCmNoIrqStart", INST_INF_CM, INST_APPLY_9X_CM, 0x0UL, 0x3UL,
       "start an NVMe drive behind a tunnel whose interrupt cannot be routed, "
       "for Stor98 to poll",
       "0 leaves such a drive at its problem code.", 0x1UL,
       { "no", "yes", NULL, NULL },
-      0, 0, 1, 1UL },
+      0, 0, 0, 1UL },
     /* Record 26 section 5.0: the mark service's own value, in its
      * Parameters key and never under Services\USB, read once at its start
      * (xhcimark.c) and written in its step of the run; never asked. */
@@ -1971,8 +2138,20 @@ int inst_value_default(int index, const char *infText, INST_U32 *def)
         *def = instValues[index].Def;
         return 1;
     }
-    return infText != NULL &&
-           inst_inf_addreg_default(infText, instValues[index].Name, def);
+    if (infText == NULL) {
+        return 0;
+    }
+    if (inst_inf_addreg_default(infText, instValues[index].Name, def)) {
+        return 1;
+    }
+    /* A 98 SE and ME Thunderbolt value and the amd64 xhcicm.inf, which has
+     * no 98 SE and ME install to write it (task 44.46): the table's
+     * default, the x86 INF's (test_inst holds the two equal). */
+    if (instValues[index].Apply == INST_APPLY_9X_CM) {
+        *def = instValues[index].Def;
+        return 1;
+    }
+    return 0;
 }
 
 int inst_value_allowed(int index, const INST_ENV *env, INST_U32 v)
@@ -2188,6 +2367,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Stor98Vxd = 1;
         } else if (inst_switch(a, "nos98vsd")) {
             opts->NoStor98Vxd = 1;
+        } else if (inst_switch(a, "xhcipfw")) {
+            opts->Pfw = 1;
+        } else if (inst_switch(a, "noxhcipfw")) {
+            opts->NoPfw = 1;
         } else if (inst_switch(a, "nouas")) {
             opts->NoUas = 1;
         } else if (inst_switch(a, "storage")) {
@@ -2470,6 +2653,25 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         inst_err(err, errCap, opts->Stor98Vxd ?
                  "/s98vsd belongs to an install" :
                  "/nos98vsd belongs to an install", NULL);
+        return 1;
+    }
+    /* Design record 32 sections 8 and 11.3: XHCIPFW's box, a child of
+     * the Thunderbolt one (the owner, 2026-10-27). */
+    if ((opts->Pfw || opts->NoPfw) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->Pfw ? "/xhcipfw belongs to an install" :
+                 "/noxhcipfw belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Pfw && opts->NoPfw) {
+        inst_err(err, errCap, "/xhcipfw and /noxhcipfw contradict each "
+                 "other", NULL);
+        return 1;
+    }
+    if (opts->Pfw && !opts->Thunderbolt && !opts->CmOnly) {
+        inst_err(err, errCap, "/xhcipfw needs /thunderbolt (or /cmonly): "
+                 "XHCIPFW is part of the Thunderbolt 3 / USB4 support",
+                 NULL);
         return 1;
     }
     if (opts->Stor98Vxd && opts->NoStor98Vxd) {
@@ -3182,6 +3384,17 @@ int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
     return INST_MK_LEAVE;
 }
 
+int inst_mk_put_next(int had, INST_U32 err, int timeLeft)
+{
+    if (err != 5UL && err != 32UL) {
+        return INST_MK_PUT_FAIL;
+    }
+    if (timeLeft) {
+        return INST_MK_PUT_RETRY;
+    }
+    return had ? INST_MK_PUT_QUEUE : INST_MK_PUT_FAIL;
+}
+
 int inst_cddb_service_gone(const char *service, const char *const *gone,
                            int n)
 {
@@ -3811,9 +4024,13 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 }
 
 INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
-                            int usb, int stor, int s98)
+                            int usb, int stor, int s98, int tb, int intel)
 {
     INST_U32 w = 0;
+
+    if (haveCm && tb && intel) {
+        w |= INST_CW_INTELTB;
+    }
 
     if (is8 && !haveCm) {
         w |= INST_CW_NOCM8;
@@ -3878,14 +4095,27 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
         inst_cat_para(out, cap,
                       "On Windows 8, 8.1 and 10 the xHCI98 USB drivers replace "
                       "Windows' own USB 3 driver on every xHCI controller, the "
-                      "one your keyboard and mouse may use included. The "
+                      "one your keyboard and mouse may use included. Windows' "
+                      "own USB notices and settings then do not apply "
+                      "(Explorer's \"can perform faster\", Devices and "
+                      "Printers' status, USB error messages, the USB power "
+                      "settings); the xHCI98 USB Tree tells you when a device "
+                      "can run faster. The "
                       "uninstall gives the controllers back to Windows' own "
-                      "driver, and may need a restart and a second run to "
-                      "finish. There the UAS disk driver, when "
+                      "driver. There the UAS disk driver, when "
                       "ticked, is staged: Windows keeps its own UAS driver "
                       "unless this package's test certificate is trusted, "
                       "when Windows may choose xhciuas.sys; either can be "
                       "chosen for a disk in Device Manager.");
+    }
+    if (set & INST_CW_INTELTB) {
+        inst_cat_para(out, cap,
+                      "Intel's Thunderbolt driver runs this computer's "
+                      "Thunderbolt controller. Ticked, the xHCI98 connection "
+                      "manager replaces it there, and Intel's Thunderbolt "
+                      "software no longer controls it. The uninstall gives "
+                      "the controller back to Intel's driver. Windows Update "
+                      "may also put Intel's driver back.");
     }
     if (set & INST_CW_NOCM8) {
         inst_cat_para(out, cap,
@@ -3896,12 +4126,66 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
     }
 }
 
+size_t inst_wrap_lines(const char *lead, const char *text, size_t width,
+                      char *out, size_t cap)
+{
+    size_t lw = strlen(lead);
+    size_t room = width > lw + 8 ? width - lw : 8;
+    size_t used = 0;
+    const char *p = text;
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    while (*p != '\0') {
+        size_t n = 0;
+        size_t cut;
+        while (p[n] != '\0' && p[n] != '\n') {
+            n++;
+        }
+        cut = n;
+        if (n > room) {
+            cut = room;
+            while (cut > 0 && p[cut] != ' ') {
+                cut--;
+            }
+            if (cut == 0) {
+                cut = room;
+            }
+        }
+        if (used + lw + cut + 2 > cap) {
+            break;
+        }
+        memcpy(out + used, lead, lw);
+        used += lw;
+        memcpy(out + used, p, cut);
+        used += cut;
+        out[used++] = '\n';
+        out[used] = '\0';
+        p += cut;
+        while (*p == ' ') {
+            p++;
+        }
+        if (*p == '\n') {
+            p++;
+        }
+    }
+    return used;
+}
+
 /* ======================================================================== */
 /* The Thunderbolt 3 / USB4 question (record 23 section 8.5)                 */
 /* ======================================================================== */
 
+int inst_tb_intel(const char *service)
+{
+    return service != NULL && inst_eq(service, "nhi");
+}
+
 int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
-                   int optList, int *ask, int *defaultYes)
+                   int cmAlone, int intel, int optList, int *ask,
+                   int *defaultYes)
 {
     (void)nhiPresent;
     *ask = 0;
@@ -3912,11 +4196,27 @@ int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
     if (optThunderbolt) {
         return 1;
     }
+    /* The connection manager alone is in the run unasked, but not over
+     * Intel's driver (record 23 section 8.5.1; owner, 2026-10-25: ask, the
+     * default leave). */
+    if (cmAlone && !intel) {
+        return 1;
+    }
     if (optYes || optList) {
         return *defaultYes;
     }
     *ask = 1;
     return 0;
+}
+
+int inst_tb_box_default(int haveCm, int nhiPresent, int optThunderbolt,
+                        int intel)
+{
+    int ask;
+    int def;
+
+    return inst_tb_decide(haveCm, nhiPresent, 1, optThunderbolt, 0, intel, 0,
+                          &ask, &def);
 }
 
 int inst_tb_answer(const char *line, int defaultYes)
@@ -5332,9 +5632,10 @@ const char *inst_self_file(int arch, int which)
     return which == INST_OWN_WINDOW ? "XHCIWIZ.EXE" : "XHCIINST.EXE";
 }
 
-int inst_arp_cm_only(int xhciService, int cmService, int runCmOnly)
+int inst_arp_cm_only(int xhciService, int cmService, int runCmOnly,
+                     int runUsb)
 {
-    return xhciService == 0 && (cmService == 1 || runCmOnly);
+    return xhciService == 0 && !runUsb && (cmService == 1 || runCmOnly);
 }
 
 void inst_arp_name(char *out, size_t cap, const char *version, int incomplete,
@@ -5346,7 +5647,7 @@ void inst_arp_name(char *out, size_t cap, const char *version, int incomplete,
     out[0] = '\0';
     inst_cat(out, cap, cmOnly ? "xHCI98 Thunderbolt 3 / USB4 connection "
                                 "manager "
-                              : "xHCI98 USB 3.x drivers ");
+                              : "xHCI98 USB 3 drivers ");
     inst_cat(out, cap, version);
     if (incomplete) {
         inst_cat(out, cap, " (incomplete: run again)");
@@ -5466,18 +5767,18 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv)
 
 const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_WELCOME,
-      "This installs or updates the xHCI98 USB 3.x drivers on this "
+      "This installs or updates the xHCI98 USB 3 drivers on this "
       "computer, puts the xHCI98 tools in a folder you choose, and asks "
       "you to restart Windows at the end. Nothing is changed until you "
       "click Install on the Summary page. Help opens the readme.",
-      284, 58 },
+      284, 42 },
     { INST_PT_WAIT, "Please wait: reading this computer's devices ...",
       284, 54 },
     { INST_PT_FOUND,
       "The devices this package's drivers are for, and what will be done:",
       284, 10 },
     { INST_PT_DRIVERS,
-      "xHCI98 USB 3.x host controller driver (xhci98.sys)", 270, 10 },
+      "xHCI98 USB 3 host controller driver (xhci98.sys)", 270, 10 },
     { INST_PT_DRIVERS_T,
       "The controller, its hubs and devices, and Bulk-Only disks.",
       272, 16 },
@@ -5488,13 +5789,12 @@ const INST_PAGE_TEXT instPageTexts[] = {
       260, 18 },
     { INST_PT_STOR, "USB storage drivers for Windows 98 SE (NUSB 3.3's)",
       284, 10 },
-    /* In a box that scrolls under the row, with the detection's line. */
+    /* Under the row with the detection's line, whole (owner, 2026-10-25:
+     * succinct, no box that scrolls; task 44.36). */
     { INST_PT_STOR_T,
-      "Windows 98 SE needs these files for every USB disk: Bulk-Only disks, "
-      "and UAS disks under xhciuas.sys too (its INF names USBNTMAP.SYS as a "
-      "filter; without it a UAS disk stays at Code 2). Install them unless "
-      "NUSB is installed.",
-      0, 0 },
+      "Every USB disk on Windows 98 SE needs these, Bulk-Only and UAS "
+      "alike. Leave this unticked if NUSB is installed.",
+      272, 16 },
     { INST_PT_TB,
       "Thunderbolt 3 / USB4 support (experimental) (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,
@@ -5546,13 +5846,20 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
     { INST_PT_S98, "Stor98 (hot-pluggable NVMe driver)", 258, 10 },
     { INST_PT_S98_T,
-      "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
-      "selects tunnel drives only.",
+      "For NVMe drives behind a Thunderbolt or USB4 tunnel.",
       260, 16 },
     { INST_PT_VSD, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB",
       246, 10 },
     { INST_PT_VSD_OTHER,
       "Large transfers for Stor98 (Windows 98 SE and ME only)", 246, 10 },
+    { INST_PT_PFW, "Close PCI windows above 4 GB (XHCIPFW.VXD)", 272, 10 },
+    { INST_PT_PFW_SYS, "Close PCI windows above 4 GB (XHCIPFW.SYS)", 272,
+      10 },
+    { INST_PT_TB_INTEL,
+      "Intel's Thunderbolt driver is in use; ticked, this replaces it. With "
+      "this, a device plugged into its port can reach the computer's "
+      "memory: see XhciCmApprove.",
+      272, 24 },
     { INST_PT_S98SET,
       "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
       "nothing; Stor98 keeps its built-in default.",
@@ -5566,14 +5873,14 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "choose, and asks you to restart Windows at the end. Windows' own USB "
       "3 driver keeps running the USB controllers. Nothing is changed until "
       "you click Install on the Summary page. Help opens the readme.",
-      284, 58 },
+      284, 42 },
     { INST_PT_WELCOME_TOOLS,
       "This puts the xHCI98 tools in a folder you choose, and installs the "
-      "xHCI98 USB 3.x drivers only if you tick them on the next page "
+      "xHCI98 USB 3 drivers only if you tick them on the next page "
       "(on this Windows its own USB 3 driver runs the controllers). "
       "Nothing is changed until you click Install on the "
       "Summary page. Help opens the readme.",
-      284, 58 },
+      284, 42 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "
       "replaces it.",
@@ -5593,7 +5900,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "I have closed every program that uses a device connected through a "
       "Thunderbolt or USB4 port.",
       270, 20 },
-    { INST_PT_UN_TITLE, "Remove the xHCI98 USB 3.x drivers", 284, 10 },
+    { INST_PT_UN_TITLE, "Remove the xHCI98 USB 3 drivers", 284, 10 },
     { INST_PT_UN_WARN,
       "This removes the xhci98 drivers from Windows. On a machine whose "
       "only USB controller is xHCI, the USB keyboard and mouse stop working "
@@ -5691,7 +5998,7 @@ INST_U32 inst_page_rows(INST_U32 heightDlu)
 /* Copied from Stor98's readme.txt, "SETTINGS", at INST_S98_TABLE_VERSION;
  * test_inst holds each row to test\stor98-settings.txt, that table. */
 const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
-    { "StorWriteThrough", "writethrough", INST_S98_WORDS, 1, "",
+    { "StorWriteThrough", "storwritethrough", INST_S98_WORDS, 1, "",
       "auto", "auto", 0UL, 0UL, 0UL, 0, NULL,
       { "auto", "off", "cacheoff", "fua" },
       { "the default: cacheoff on ME, off elsewhere",
@@ -5699,35 +6006,39 @@ const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
         "turns the drive's write cache off (fua if it refuses)",
         "marks every write Force Unit Access" },
       "how writes reach the drive's media" },
-    { "StorPollMode", "pollmode", INST_S98_NUMBER, 1, "",
+    { "StorPollMode", "storpollmode", INST_S98_NUMBER, 1, "",
       "0", "0", 0UL, 1UL, 1UL, 0, NULL,
       { NULL, NULL, NULL, NULL },
       { "poll only without an interrupt", "always poll", NULL, NULL },
       "when the driver polls the controller for completed requests" },
-    { "StorMaxTransferKB", "maxtransferkb", INST_S98_NUMBER, 0, "KiB",
+    { "StorMaxTransferKB", "stormaxtransferkb", INST_S98_NUMBER, 0, "KiB",
       "2048", "256", 64UL, 2048UL, 4UL, 0, NULL,
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "the largest request Windows sends the driver" },
-    { "StorPollBusyUs", "pollbusyus", INST_S98_NUMBER, 0, "us",
+    { "StorPollBusyUs", "storpollbusyus", INST_S98_NUMBER, 0, "us",
       "1000", "1000", 1000UL, 100000UL, 1UL, 1, "the default",
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "the polling interval while requests are outstanding" },
-    { "StorPollIdleMs", "pollidlems", INST_S98_NUMBER, 0, "ms",
+    { "StorPollIdleMs", "storpollidlems", INST_S98_NUMBER, 0, "ms",
       "1000", "1000", 100UL, 60000UL, 1UL, 1, "no polling when idle",
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "the polling interval while the drive is idle" },
-    { "StorPollSpinUs", "pollspinus", INST_S98_NUMBER, 0, "us",
+    { "StorPollSpinUs", "storpollspinus", INST_S98_NUMBER, 0, "us",
       "0", "500", 0UL, 500UL, 1UL, 0, NULL,
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "how long to check for a completion right after a request" },
-    { NULL, "gone", INST_S98_NUMBER, 0, "ms",
-      NULL, "5000", 1UL, 600000UL, 1UL, 0, NULL,
+    { "StorGoneMs", "storgonems", INST_S98_NUMBER, 0, "ms",
+      "5000", "5000", 1UL, 600000UL, 1UL, 0, NULL,
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "how long held requests wait for proof the drive is gone" },
-    { NULL, "idle", INST_S98_NUMBER, 0, "ms",
-      NULL, "1000", 10UL, 4294967295UL, 1UL, 0, NULL,
+    { "StorWriteIdleMs", "storwriteidlems", INST_S98_NUMBER, 0, "ms",
+      "1000", "1000", 10UL, 4294967295UL, 1UL, 0, NULL,
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
-      "the write-idle time before a flush" }
+      "the write-idle time before a flush" },
+    { "StorHold9xMs", NULL, INST_S98_NUMBER, 0, "ms",
+      "4000", "", 1000UL, 10000UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "how long a request waits for room before it is answered busy" }
 };
 
 int inst_s98_applies(int i, int nt)
@@ -6056,6 +6367,18 @@ int inst_s98_service_removable(int devnodesLeft, int preExisting)
     return !devnodesLeft && !preExisting;
 }
 
+int inst_s98_version_owed(int include, int baseline, int list,
+                          int installed, int nt, int copy9x, int fileUpd)
+{
+    if (!include || !baseline || list) {
+        return 0;
+    }
+    /* An owed replacement of an installed stor98.mpd is the run's to
+     * make: until it is made the older image loads, and the copy alone
+     * proves nothing about it. */
+    return installed || (!nt && copy9x && !fileUpd);
+}
+
 int inst_s98_cold_start(int nt)
 {
     return !nt;
@@ -6127,10 +6450,27 @@ int inst_s98_over_inbox(int is8, const char *service)
     return is8 && service != NULL && inst_eq(service, "stornvme");
 }
 
-int inst_s98_auto_value(int cmOnly, int s98In, int staged, int mkAction,
-                        int os81)
+int inst_s98_auto_value(int fallbackOs, int s98In, int staged,
+                        int mkAction)
 {
-    return cmOnly && os81 && s98In && staged && mkAction == INST_MK_INSTALL;
+    return fallbackOs && s98In && staged && mkAction == INST_MK_INSTALL;
+}
+
+int inst_s98_fallback_os(int nt, INST_U32 major, INST_U32 minor,
+                         INST_U32 build)
+{
+    if (!nt || major < 5UL || major > 6UL) {
+        return 0;
+    }
+    if (major == 5UL) {
+        return 1;
+    }
+    return minor < 3UL || (minor == 3UL && build < 10000UL);
+}
+
+int inst_s98_dev_forced(int action, int overInbox)
+{
+    return action != INST_ACT_INSTALL || overInbox;
 }
 
 int inst_s98_switch_os(int nt, INST_U32 major, INST_U32 minor,
@@ -6216,6 +6556,113 @@ int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
         return INST_VSD_INACTIVE;
     }
     return vsdTicked ? INST_VSD_SELECTED : INST_VSD_DESELECTED;
+}
+
+/* ---- XHCIPFW.VXD (design record 32 section 8) --------------------------- */
+
+int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86)
+{
+    if (!nt) {
+        return INST_PFW_SYS_9X;
+    }
+    if (!x86) {
+        return INST_PFW_SYS_NONE;
+    }
+    if (major == 5) {
+        /* 2000 does not start with such a window; XP moves the windows
+         * itself on the emulator (record 32 section 7): the kinds differ
+         * only in the console's note, the default being Q9's on both. */
+        return minor == 0 ? INST_PFW_SYS_ALWAYS :
+               minor == 1 ? INST_PFW_SYS_SEEN : INST_PFW_SYS_NONE;
+    }
+    /* From 8 on the boot drivers of System Reserved and the PCI driver's
+     * read of the root bus are not ordered, so the step may come after
+     * it (run-44 "44.72"; the owner, 2026-10-28: offered up to 7). */
+    if (major == 6) {
+        return minor <= 1 ? INST_PFW_SYS_SEEN :
+               minor <= 3 ? INST_PFW_SYS_GONE : INST_PFW_SYS_NONE;
+    }
+    return major == 10 ? INST_PFW_SYS_GONE : INST_PFW_SYS_NONE;
+}
+
+int inst_pfw_box(int sysKind, int havePfw, int tbTicked, int noSwitch,
+                 int *shown, int *open)
+{
+    *shown = (sysKind != INST_PFW_SYS_NONE && sysKind != INST_PFW_SYS_GONE &&
+              havePfw) ? 1 : 0;
+    *open = (*shown && tbTicked) ? 1 : 0;
+    /* Ticked whenever its parent is (the owner's Q9, 2026-10-27, which
+     * replaced Q7's rule): on every system it is offered. */
+    return *open && !noSwitch;
+}
+
+int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
+                  int ticked)
+{
+    if (sysKind == INST_PFW_SYS_NONE) {
+        return INST_VSD_NONE;
+    }
+    if (uninstall) {
+        return INST_VSD_UNINSTALL;
+    }
+    if (sysKind == INST_PFW_SYS_GONE) {
+        /* An earlier test install's own removed, whatever the boxes. */
+        return INST_VSD_DESELECTED;
+    }
+    if (!tbTicked || !havePfw) {
+        /* Left out with its parent (an installed one stays, as a No to
+         * the Thunderbolt question leaves that driver), or nothing to
+         * place. */
+        return INST_VSD_INACTIVE;
+    }
+    return ticked ? INST_VSD_SELECTED : INST_VSD_DESELECTED;
+}
+
+int inst_pfw_bootcfg_high(const unsigned char *buf, unsigned long n)
+{
+    unsigned long lists;
+    unsigned long l;
+    unsigned long count;
+    unsigned long i;
+    unsigned long o = 4;
+    const unsigned char *d;
+
+    if (buf == NULL || n < 4) {
+        return 0;
+    }
+    lists = inst_le32(buf);
+    for (l = 0; l < lists; l++) {
+        /* InterfaceType, BusNumber, then Version, Revision and Count. */
+        if (n - o < 16) {
+            return 0;
+        }
+        count = inst_le32(buf + o + 12);
+        o += 16;
+        for (i = 0; i < count; i++) {
+            if (n - o < 16) {
+                return 0;
+            }
+            d = buf + o;
+            o += 16;
+            /* Type 3 CmResourceTypeMemory, 7 CmResourceTypeMemoryLarge:
+             * Flags 0004h CM_RESOURCE_MEMORY_PREFETCHABLE and 0040h
+             * CM_RESOURCE_MEMORY_WINDOW_DECODE (a bridge's window, not a
+             * BAR of its own), the start's upper dword at offset 8. */
+            if ((d[0] == 3 || d[0] == 7) && (d[2] & 0x44) == 0x44 &&
+                inst_le32(d + 8) != 0) {
+                return 1;
+            }
+            if (d[0] == 5) {
+                /* CmResourceTypeDeviceSpecific: its data follow. */
+                unsigned long size = inst_le32(d + 4);
+                if (size > n - o) {
+                    return 0;
+                }
+                o += size;
+            }
+        }
+    }
+    return 0;
 }
 
 /* Removing what the record names, for the deselected and uninstall modes:
@@ -6396,6 +6843,43 @@ int inst_le_ddb_name(const unsigned char *buf, size_t n, char name[9])
     }
     name[8] = '\0';
     return 1;
+}
+
+typedef struct _INST_TMPNAMED {
+    const char *Tmp;
+    const char *TmpS;
+    int Hit;
+} INST_TMPNAMED;
+
+static int inst_tmp_named_line(void *ctx, const char *key, const char *value)
+{
+    INST_TMPNAMED *t = (INST_TMPNAMED *)ctx;
+
+    (void)key;
+    if ((t->Tmp != NULL && t->Tmp[0] != '\0' && inst_eq(value, t->Tmp)) ||
+        (t->TmpS != NULL && t->TmpS[0] != '\0' && inst_eq(value, t->TmpS))) {
+        t->Hit = 1;
+        return 0;
+    }
+    return 1;
+}
+
+int inst_tmp_named(const char *text, const char *tmp, const char *tmpS)
+{
+    INST_TMPNAMED t;
+    int whole;
+
+    if (text == NULL) {
+        return 0;
+    }
+    t.Tmp = tmp;
+    t.TmpS = tmpS;
+    t.Hit = 0;
+    whole = inst_rename_scan(text, inst_tmp_named_line, &t);
+    if (t.Hit) {
+        return 1;
+    }
+    return whole ? 0 : -1;
 }
 
 int inst_rename_scan(const char *text, INST_RENAME_FN fn, void *ctx)
@@ -6654,6 +7138,34 @@ int inst_vsd_next(const INST_VSDFACTS *f)
     return INST_VOP_START;
 }
 
+int inst_tb_cm_changes(int present, int isCm, int runs, int action)
+{
+    return present && isCm && runs &&
+           (action == INST_ACT_INSTALL || action == INST_ACT_UPDATE);
+}
+
+int inst_s98_read_later(int present, int olderStor98, int place,
+                        int cmChanges)
+{
+    return present && olderStor98 && place == INST_S98_AT_UNKNOWN &&
+           cmChanges;
+}
+
+int inst_s98_mpd_place(int nt, int carried, int share, int fileState,
+                       int list)
+{
+    return !nt && carried && share == INST_S98_SHARE_FREE &&
+           fileState == 0 && !list;
+}
+
+int inst_s98_later_said(int why, int devLater, int held, int holdLater)
+{
+    if (why == INST_S98_SKIP_UNKNOWN) {
+        return devLater && (!held || holdLater);
+    }
+    return why == INST_S98_SKIP_SHARED && held && holdLater;
+}
+
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel)
 {
@@ -6763,6 +7275,212 @@ int inst_s98_share(int otherBound, int fileSame)
         return INST_S98_SHARE_FREE;
     }
     return fileSame ? INST_S98_SHARE_SAME : INST_S98_SHARE_HOLD;
+}
+
+int inst_s98_by_class(const char *compat, size_t compatBytes)
+{
+    return inst_msz_has(compat, compatBytes, INST_S98_CLASS_ID);
+}
+
+int inst_s98_candidate(const char *hw, size_t hwBytes, const char *compat,
+                       size_t compatBytes, const INST_IDLIST *ids)
+{
+    return inst_s98_by_class(compat, compatBytes) ||
+           (ids != NULL &&
+            inst_ids_match(hw, hwBytes, compat, compatBytes, ids) >= 0);
+}
+
+static int inst_s98_inf_file_ok(const char *name)
+{
+    return inst_eq(name, "stor98.mpd") || inst_eq(name, "stor98.sys");
+}
+
+#define INST_S98_INF_SECTIONS 16
+
+/* The sections a CopyFiles value names, added to names[] (at most
+ * INST_S98_INF_SECTIONS); a file named directly ("@file") checked at
+ * once, *ntFile set when it is not stor98.mpd. 0 when it names another
+ * file, or too many sections. */
+static int inst_s98_inf_copyfiles(const char *value,
+                                  char names[][INST_LINE_CHARS], int *count,
+                                  int *ntFile)
+{
+    char field[INST_LINE_CHARS];
+    int i;
+
+    for (i = 0; inst_inf_field(value, i, field, sizeof(field)); i++) {
+        if (field[0] == '\0') {
+            continue;
+        }
+        if (field[0] == '@') {
+            inst_copy(field, field + 1, sizeof(field));
+            inst_trim(field);
+            if (!inst_s98_inf_file_ok(field)) {
+                return 0;
+            }
+            if (!inst_eq(field, "stor98.mpd")) {
+                *ntFile = 1;
+            }
+            continue;
+        }
+        if (*count >= INST_S98_INF_SECTIONS) {
+            return 0;
+        }
+        inst_copy(names[(*count)++], field, INST_LINE_CHARS);
+    }
+    return 1;
+}
+
+int inst_s98_inf_identity(const char *text)
+{
+    static char copy[INST_S98_INF_SECTIONS][INST_LINE_CHARS];
+    char line[INST_LINE_CHARS];
+    char name[INST_LINE_CHARS];
+    char key[INST_LINE_CHARS];
+    char value[INST_LINE_CHARS];
+    char field[INST_LINE_CHARS];
+    char provider[INST_LINE_CHARS];
+    const char *p;
+    int sources = 0;
+    int services = 0;
+    int ntFile = 0;
+    int providerOk = 0;
+    int count = 0;
+    int in = 0;
+    int i;
+
+    if (text == NULL) {
+        return 0;
+    }
+    p = inst_inf_section(text, "Version");
+    while ((p = inst_inf_line(p, line, sizeof(line))) != NULL) {
+        if (inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) &&
+            inst_eq(key, "Provider")) {
+            inst_unquote(value);
+            providerOk = inst_inf_expand(text, value, provider,
+                                         sizeof(provider)) &&
+                         inst_eq(provider, "Yeo Kheng Meng");
+            break;
+        }
+    }
+    if (!providerOk) {
+        return 0;
+    }
+    p = text;
+    while ((p = inst_raw_line(p, line, sizeof(line))) != NULL) {
+        if (inst_header(line, name, sizeof(name))) {
+            in = inst_eq(name, "SourceDisksFiles") ||
+                 inst_starts(name, "SourceDisksFiles.");
+            continue;
+        }
+        if (line[0] == '\0') {
+            continue;
+        }
+        if (in) {
+            if (!inst_inf_kv(line, key, sizeof(key), value, sizeof(value))) {
+                inst_copy(key, line, sizeof(key));
+            }
+            inst_unquote(key);
+            if (!inst_s98_inf_file_ok(key)) {
+                return 0;
+            }
+            if (!inst_eq(key, "stor98.mpd")) {
+                ntFile = 1;
+            }
+            sources++;
+            continue;
+        }
+        if (!inst_inf_kv(line, key, sizeof(key), value, sizeof(value))) {
+            continue;
+        }
+        if (inst_eq(key, "CopyFiles")) {
+            if (!inst_s98_inf_copyfiles(value, copy, &count, &ntFile)) {
+                return 0;
+            }
+        } else if (inst_eq(key, "AddService")) {
+            if (!inst_inf_field(value, 0, field, sizeof(field)) ||
+                !inst_eq(field, "stor98")) {
+                return 0;
+            }
+            services++;
+        } else if (inst_eq(key, "DelService") || inst_eq(key, "CopyINF")) {
+            return 0;
+        }
+    }
+    if (sources == 0) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        p = inst_inf_section(text, copy[i]);
+        if (p == NULL) {
+            return 0;
+        }
+        while ((p = inst_inf_line(p, line, sizeof(line))) != NULL) {
+            if (!inst_inf_field(line, 0, field, sizeof(field)) ||
+                !inst_s98_inf_file_ok(field)) {
+                return 0;
+            }
+            if (!inst_eq(field, "stor98.mpd")) {
+                ntFile = 1;
+            }
+            if (inst_inf_field(line, 1, field, sizeof(field)) &&
+                field[0] != '\0') {
+                if (!inst_s98_inf_file_ok(field)) {
+                    return 0;
+                }
+                if (!inst_eq(field, "stor98.mpd")) {
+                    ntFile = 1;
+                }
+            }
+        }
+    }
+    /* A copy with no service is the 98 SE and ME INF alone, whose every
+     * file, listed or copied, is stor98.mpd (stor98w9.inf, record 31
+     * section 5.2). */
+    return services > 0 || !ntFile;
+}
+
+int inst_s98_inf_kind(const char *text, const INST_U32 pkg[4])
+{
+    INST_U32 v[4];
+
+    if (!inst_s98_inf_identity(text) || !inst_inf_driverver(text, v)) {
+        return INST_S98_INF_OTHER;
+    }
+    return inst_ver_cmp(v, pkg) < 0 ? INST_S98_INF_OLDER :
+           INST_S98_INF_CURRENT;
+}
+
+const char *inst_s98_left_text(int why, int fallback, int later, int brief)
+{
+    if (why == INST_S98_SKIP_UNKNOWN && later) {
+        return brief ? "left: run the installer again after the restart "
+                       "(where it sits is read then)" :
+               "where it sits could not be read: the Thunderbolt driver "
+               "running now does not list its port, and this run installs "
+               "or updates that driver. Run the installer again after the "
+               "restart: it reads the place again and updates Stor98 on a "
+               "drive behind a tunnel (an internal drive is left alone)";
+    }
+    if (why == INST_S98_SKIP_SHARED && later) {
+        return brief ? "left: run the installer again after the restart" :
+               "Stor98's shared file stays at another release in this run, "
+               "for a Stor98 drive whose place could not be read when the "
+               "run began: no Stor98 change in this run. Run the installer "
+               "again after the restart";
+    }
+    if (why == INST_S98_SKIP_UNKNOWN && fallback) {
+        return brief ? "left: where it sits could not be read (Stor98 "
+                       "follows if the mark service finds it behind a "
+                       "tunnel)" :
+               "where it sits could not be read (no Thunderbolt connection "
+               "manager answered, or the reading was not whole): left as it "
+               "is; if the Thunderbolt driver confirms it is behind a "
+               "tunnel, the safe-removal mark service sees to Stor98 then "
+               "(on Windows 2000 and XP through Windows' own wizard); an "
+               "internal drive is left alone";
+    }
+    return inst_s98_skip_text(why, brief);
 }
 
 /* ---- SHA-256 (FIPS 180-4): the 98 SE and ME INF listings' file hashes ---- */
@@ -7217,14 +7935,10 @@ int inst_stor_half_default(int def, int usb20u, int pair, int route)
 const char *inst_stor_half_text(int fixable)
 {
     return fixable ?
-        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
-        "own NTMAP.INF would take a new USB disk and stop Windows. Installing "
-        "these drivers puts USBNTMAP.INF beside it; until then, plug in no "
-        "new USB disk." :
-        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: Windows' "
-        "own NTMAP.INF would take a new USB disk and stop Windows. This run "
-        "cannot complete the pair: remove that copy of USBSTOR.INF before "
-        "plugging in a new USB disk.";
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF: until "
+        "these drivers complete the pair, a new USB disk would stop Windows." :
+        "USBSTOR.INF is in the INF directory without USBNTMAP.INF, so a new "
+        "USB disk would stop Windows: remove that copy of USBSTOR.INF first.";
 }
 
 static void inst_stor_names(char *out, size_t cap,
@@ -7285,6 +7999,48 @@ void inst_stor_found_text(char *out, size_t cap,
     inst_stor_names(out, cap, st);
     strncat(out, ". Only some of the seven: USB storage is not known to be "
             "ready.", cap - strlen(out) - 1);
+}
+
+void inst_stor_short_text(char *out, size_t cap, int pack,
+                          const int st[INST_STOR_COUNT], int usb20u,
+                          int half, int fixable)
+{
+    int i;
+    int found = 0;
+    int own = 0;
+    const char *t;
+
+    if (cap == 0) {
+        return;
+    }
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (st[i] == INST_STOR_SAME || st[i] == INST_STOR_OTHER) {
+            found++;
+        } else if (st[i] == INST_STOR_OWN) {
+            own++;
+        }
+    }
+    if (half) {
+        t = fixable ? "USBSTOR.INF is there without USBNTMAP.INF: tick this." :
+                      "USBSTOR.INF is there without USBNTMAP.INF: see the "
+                      "Summary.";
+    } else if (pack == 0) {
+        t = "Not in this download (USBDRV\\NUSB33\\W98SE).";
+    } else if (pack < 0) {
+        t = "This download's files are not this release's (see the log).";
+    } else if (usb20u) {
+        t = "NUSB is installed on this computer: leave this unticked.";
+    } else if (found == 0 && own == 0) {
+        t = "Not installed now: USB disks do not work without them.";
+    } else if (found == 0) {
+        t = own == INST_STOR_COUNT ? "Installed by this installer earlier." :
+            "Installed by this installer earlier (some of the seven only).";
+    } else if (found + own == INST_STOR_COUNT) {
+        t = "Installed now (all seven files); they are left as they are.";
+    } else {
+        t = "Only some of the seven are installed (the Summary names them).";
+    }
+    inst_copy(out, t, cap);
 }
 
 void inst_stor_note_text(char *out, size_t cap,
@@ -7478,43 +8234,106 @@ int inst_other_rel_ok(const char *rel)
  * lines of xhcicm.inf and xhcicm-amd64.inf. */
 const INST_NAMEROW instXhciNames[] = {
     { 0x1002UL, 0x7316UL, INST_NB_USB3, "AMD Navi 10" },
+    { 0x1022UL, 0x1118UL, INST_NB_USB3, "AMD Krackan" },
+    { 0x1022UL, 0x111CUL, INST_NB_USB3, "AMD Krackan" },
+    { 0x1022UL, 0x111EUL, INST_NB_USB3, "AMD Krackan" },
+    { 0x1022UL, 0x1128UL, INST_NB_USB3, "AMD Krackan" },
+    { 0x1022UL, 0x1135UL, INST_NB_USB3, "AMD Krackan2 USB 2" },
+    { 0x1022UL, 0x1138UL, INST_NB_USB3, "AMD Krackan2" },
+    { 0x1022UL, 0x1139UL, INST_NB_USB3, "AMD Krackan2" },
+    { 0x1022UL, 0x113AUL, INST_NB_USB3, "AMD Krackan2" },
     { 0x1022UL, 0x13EDUL, INST_NB_USB3, "AMD Ariel" },
     { 0x1022UL, 0x13EEUL, INST_NB_USB3, "AMD Ariel" },
+    { 0x1022UL, 0x145CUL, INST_NB_USB3, "AMD Family 17h" },
+    { 0x1022UL, 0x145FUL, INST_NB_USB3, "AMD Zeppelin" },
     { 0x1022UL, 0x148CUL, INST_NB_USB3, "AMD Starship" },
+    { 0x1022UL, 0x149CUL, INST_NB_USB3, "AMD Matisse" },
+    { 0x1022UL, 0x151AUL, INST_NB_USB3, "AMD Strix" },
+    { 0x1022UL, 0x151BUL, INST_NB_USB3, "AMD Strix" },
+    { 0x1022UL, 0x151EUL, INST_NB_USB3, "AMD Strix" },
+    { 0x1022UL, 0x151FUL, INST_NB_USB3, "AMD Strix" },
+    { 0x1022UL, 0x1587UL, INST_NB_USB3, "AMD Strix Halo" },
+    { 0x1022UL, 0x1588UL, INST_NB_USB3, "AMD Strix Halo" },
+    { 0x1022UL, 0x1589UL, INST_NB_USB3, "AMD Strix Halo" },
+    { 0x1022UL, 0x158BUL, INST_NB_USB3, "AMD Strix Halo" },
+    { 0x1022UL, 0x15B6UL, INST_NB_USB3, "AMD Raphael" },
+    { 0x1022UL, 0x15B7UL, INST_NB_USB3, "AMD Raphael" },
+    { 0x1022UL, 0x15B8UL, INST_NB_USB3, "AMD Raphael USB 2" },
+    { 0x1022UL, 0x15BBUL, INST_NB_USB3, "AMD Phoenix2" },
+    { 0x1022UL, 0x15C2UL, INST_NB_USB3, "AMD Phoenix2" },
+    { 0x1022UL, 0x15C3UL, INST_NB_USB3, "AMD Phoenix2" },
     { 0x1022UL, 0x15D4UL, INST_NB_USB3, "AMD FireFlight" },
     { 0x1022UL, 0x15D5UL, INST_NB_USB3, "AMD FireFlight" },
+    { 0x1022UL, 0x15D6UL, INST_NB_USB3, "AMD Rembrandt" },
+    { 0x1022UL, 0x15D7UL, INST_NB_USB3, "AMD Rembrandt" },
     { 0x1022UL, 0x15E0UL, INST_NB_USB3, "AMD Raven" },
     { 0x1022UL, 0x15E1UL, INST_NB_USB3, "AMD Raven" },
     { 0x1022UL, 0x15E5UL, INST_NB_USB3, "AMD Raven2" },
-    { 0x1022UL, 0x1639UL, INST_NB_USB3, "AMD Renoir" },
+    { 0x1022UL, 0x161AUL, INST_NB_USB3, "AMD Rembrandt" },
+    { 0x1022UL, 0x161BUL, INST_NB_USB3, "AMD Rembrandt" },
+    { 0x1022UL, 0x161CUL, INST_NB_USB3, "AMD Rembrandt" },
+    { 0x1022UL, 0x161DUL, INST_NB_USB3, "AMD Rembrandt" },
+    { 0x1022UL, 0x161EUL, INST_NB_USB3, "AMD Rembrandt" },
+    { 0x1022UL, 0x161FUL, INST_NB_USB3, "AMD Rembrandt" },
+    { 0x1022UL, 0x1639UL, INST_NB_USB3, "AMD Renoir/Cezanne" },
+    { 0x1022UL, 0x163AUL, INST_NB_USB3, "AMD Van Gogh" },
+    { 0x1022UL, 0x163BUL, INST_NB_USB3, "AMD Van Gogh" },
     { 0x1022UL, 0x43B9UL, INST_NB_USB3, "AMD X370" },
     { 0x1022UL, 0x43BAUL, INST_NB_USB3, "AMD X399" },
     { 0x1022UL, 0x43BBUL, INST_NB_USB3, "AMD 300 Series" },
     { 0x1022UL, 0x43BCUL, INST_NB_USB3, "AMD A320" },
+    { 0x1022UL, 0x43D5UL, INST_NB_USB3, "AMD 400 Series" },
+    { 0x1022UL, 0x43ECUL, INST_NB_USB3, "AMD A520" },
+    { 0x1022UL, 0x43EEUL, INST_NB_USB3, "AMD 500 Series" },
+    { 0x1022UL, 0x43F7UL, INST_NB_USB3, "AMD 600 Series" },
+    { 0x1022UL, 0x43FAUL, INST_NB_USB3, "AMD A620" },
+    { 0x1022UL, 0x43FCUL, INST_NB_USB3, "AMD 800 Series" },
+    { 0x1022UL, 0x43FDUL, INST_NB_USB3, "AMD 800 Series" },
+    { 0x1022UL, 0x7812UL, INST_NB_USB3, "AMD FCH" },
     { 0x1022UL, 0x7814UL, INST_NB_USB3, "AMD FCH" },
+    { 0x1022UL, 0x7914UL, INST_NB_USB3, "AMD FCH" },
     { 0x1033UL, 0x0194UL, INST_NB_USB3, "NEC uPD720200" },
     { 0x104CUL, 0x8241UL, INST_NB_USB3, "TI TUSB73x0" },
+    { 0x10DEUL, 0x1AD6UL, INST_NB_USB3, "NVIDIA TU102" },
+    { 0x10DEUL, 0x1AD8UL, INST_NB_USB3, "NVIDIA TU104" },
+    { 0x10DEUL, 0x1ADAUL, INST_NB_USB3, "NVIDIA TU106" },
+    { 0x10DEUL, 0x1AECUL, INST_NB_USB3, "NVIDIA TU116" },
     { 0x1106UL, 0x3432UL, INST_NB_USB3, "VIA VL800/VL801" },
     { 0x1106UL, 0x3483UL, INST_NB_USB3, "VIA VL805/VL806" },
+    { 0x15ADUL, 0x0778UL, INST_NB_USB3, "VMware USB3 xHCI" },
+    { 0x15ADUL, 0x0779UL, INST_NB_USB3, "VMware USB3 xHCI" },
     { 0x1912UL, 0x0014UL, INST_NB_USB3, "Renesas uPD720201" },
     { 0x1912UL, 0x0015UL, INST_NB_USB3, "Renesas uPD720202" },
+    { 0x1B21UL, 0x1040UL, INST_NB_USB3, "ASMedia ASM1040" },
+    { 0x1B21UL, 0x1041UL, INST_NB_USB3, "ASMedia ASM1041" },
     { 0x1B21UL, 0x1042UL, INST_NB_USB3, "ASMedia ASM1042" },
     { 0x1B21UL, 0x1142UL, INST_NB_USB3, "ASMedia ASM1042A" },
     { 0x1B21UL, 0x1242UL, INST_NB_USB3, "ASMedia ASM1142" },
+    { 0x1B21UL, 0x1343UL, INST_NB_USB3, "ASMedia ASM1143" },
     { 0x1B21UL, 0x2142UL, INST_NB_USB3, "ASMedia ASM2142" },
+    { 0x1B21UL, 0x2426UL, INST_NB_USB3, "ASMedia ASM4242" },
     { 0x1B21UL, 0x3042UL, INST_NB_USB3, "ASMedia ASM3042" },
+    { 0x1B21UL, 0x3142UL, INST_NB_USB3, "ASMedia ASM3142" },
+    { 0x1B21UL, 0x3241UL, INST_NB_USB3, "ASMedia ASM3241" },
     { 0x1B21UL, 0x3242UL, INST_NB_USB3, "ASMedia ASM3242" },
     { 0x1B36UL, 0x000DUL, INST_NB_USB3, "Red Hat QEMU xHCI" },
     { 0x1B6FUL, 0x7023UL, INST_NB_USB3, "Etron EJ168" },
-    { 0x1B6FUL, 0x7052UL, INST_NB_USB3, "Etron EJ188" },
+    { 0x1B6FUL, 0x7052UL, INST_NB_USB3, "Etron EJ188/EJ198" },
     { 0x1B73UL, 0x1000UL, INST_NB_USB3, "Fresco Logic FL1000" },
     { 0x1B73UL, 0x1009UL, INST_NB_USB3, "Fresco Logic FL1009" },
     { 0x1B73UL, 0x1100UL, INST_NB_USB3, "Fresco Logic FL1100" },
     { 0x1B73UL, 0x1400UL, INST_NB_USB3, "Fresco Logic FL1400" },
     { 0x1D17UL, 0x9202UL, INST_NB_USB3, "Zhaoxin ZX-100" },
     { 0x1D17UL, 0x9203UL, INST_NB_USB3, "Zhaoxin ZX-200" },
+    { 0x1D17UL, 0x9204UL, INST_NB_USB3, "Zhaoxin KX-6000" },
+    { 0x1D17UL, 0x9205UL, INST_NB_USB3, "Zhaoxin KH-40000" },
+    { 0x1D17UL, 0x9207UL, INST_NB_USB3, "Zhaoxin KH-50000" },
     { 0x8086UL, 0x02EDUL, INST_NB_USB3, "Intel 400 Series LP" },
+    { 0x8086UL, 0x06EDUL, INST_NB_USB3, "Intel 400 Series" },
     { 0x8086UL, 0x0AA8UL, INST_NB_USB3, "Intel Broxton" },
+    { 0x8086UL, 0x0B27UL, INST_NB_USB3, "Intel Goshen Ridge" },
+    { 0x8086UL, 0x0F35UL, INST_NB_USB3, "Intel Bay Trail" },
+    { 0x8086UL, 0x1135UL, INST_NB_USB3, "Intel Maple Ridge" },
     { 0x8086UL, 0x1138UL, INST_NB_USB3, "Intel Maple Ridge" },
     { 0x8086UL, 0x15B5UL, INST_NB_USB3, "Intel Alpine Ridge" },
     { 0x8086UL, 0x15B6UL, INST_NB_USB3, "Intel Alpine Ridge" },
@@ -7528,20 +8347,44 @@ const INST_NAMEROW instXhciNames[] = {
     { 0x8086UL, 0x1AA8UL, INST_NB_USB3, "Intel Broxton" },
     { 0x8086UL, 0x1E31UL, INST_NB_USB3, "Intel 7 Series" },
     { 0x8086UL, 0x22B5UL, INST_NB_USB3, "Intel Cherryview" },
+    { 0x8086UL, 0x31A8UL, INST_NB_USB3, "Intel Pentium Silver" },
+    { 0x8086UL, 0x34EDUL, INST_NB_USB3, "Intel Ice Lake-LP" },
+    { 0x8086UL, 0x43EDUL, INST_NB_USB3, "Intel 500 Series" },
+    { 0x8086UL, 0x461EUL, INST_NB_USB3, "Intel Alder Lake" },
+    { 0x8086UL, 0x464EUL, INST_NB_USB3, "Intel Alder Lake-N" },
+    { 0x8086UL, 0x4B7DUL, INST_NB_USB3, "Intel Elkhart Lake" },
+    { 0x8086UL, 0x4DEDUL, INST_NB_USB3, "Intel Jasper Lake" },
     { 0x8086UL, 0x51EDUL, INST_NB_USB3, "Intel Alder Lake PCH" },
     { 0x8086UL, 0x54EDUL, INST_NB_USB3, "Intel Alder Lake-N" },
+    { 0x8086UL, 0x5782UL, INST_NB_USB3, "Intel Barlow Ridge" },
+    { 0x8086UL, 0x5785UL, INST_NB_USB3, "Intel Barlow Ridge" },
     { 0x8086UL, 0x5AA8UL, INST_NB_USB3, "Intel Apollo Lake" },
+    { 0x8086UL, 0x777DUL, INST_NB_USB3, "Intel Core Ultra 200" },
+    { 0x8086UL, 0x7A60UL, INST_NB_USB3, "Intel 700 Series" },
+    { 0x8086UL, 0x7AE0UL, INST_NB_USB3, "Intel 600 Series" },
+    { 0x8086UL, 0x7E7DUL, INST_NB_USB3, "Intel Meteor Lake-P" },
+    { 0x8086UL, 0x7EC0UL, INST_NB_USB3, "Intel Core Ultra 200" },
+    { 0x8086UL, 0x7F6EUL, INST_NB_USB3, "Intel 800 Series" },
     { 0x8086UL, 0x8A13UL, INST_NB_USB3, "Intel Ice Lake" },
     { 0x8086UL, 0x8C31UL, INST_NB_USB3, "Intel 8 Series" },
     { 0x8086UL, 0x8CB1UL, INST_NB_USB3, "Intel 9 Series" },
     { 0x8086UL, 0x8D31UL, INST_NB_USB3, "Intel C610/X99" },
     { 0x8086UL, 0x9A13UL, INST_NB_USB3, "Intel Tiger Lake" },
+    { 0x8086UL, 0x9A17UL, INST_NB_USB3, "Intel Tiger Lake" },
     { 0x8086UL, 0x9C31UL, INST_NB_USB3, "Intel 8 Series LP" },
     { 0x8086UL, 0x9CB1UL, INST_NB_USB3, "Intel 9 Series LP" },
     { 0x8086UL, 0x9D2FUL, INST_NB_USB3, "Intel 100 Series LP" },
+    { 0x8086UL, 0x9DEDUL, INST_NB_USB3, "Intel 300 Series LP" },
     { 0x8086UL, 0xA0EDUL, INST_NB_USB3, "Intel 500 Series LP" },
     { 0x8086UL, 0xA12FUL, INST_NB_USB3, "Intel 100 Series" },
-    { 0x8086UL, 0xA3AFUL, INST_NB_USB3, "Intel 400 Series" }
+    { 0x8086UL, 0xA1AFUL, INST_NB_USB3, "Intel C620 Series" },
+    { 0x8086UL, 0xA22FUL, INST_NB_USB3, "Intel C620 Series" },
+    { 0x8086UL, 0xA2AFUL, INST_NB_USB3, "Intel 200 Series" },
+    { 0x8086UL, 0xA36DUL, INST_NB_USB3, "Intel 300 Series" },
+    { 0x8086UL, 0xA3AFUL, INST_NB_USB3, "Intel 400 Series" },
+    { 0x8086UL, 0xA71EUL, INST_NB_USB3, "Intel Raptor Lake" },
+    { 0x8086UL, 0xA831UL, INST_NB_USB3, "Intel Core Ultra 200" },
+    { 0x8086UL, 0xA87DUL, INST_NB_USB3, "Intel Core Ultra 200" }
 };
 const int instXhciNameCount =
     (int)(sizeof(instXhciNames) / sizeof(instXhciNames[0]));
@@ -7585,6 +8428,15 @@ const INST_NAMEROW instNhiNames[] = {
 };
 const int instNhiNameCount =
     (int)(sizeof(instNhiNames) / sizeof(instNhiNames[0]));
+
+/* Task 44.55 (2026-10-25): matched by the class
+ * line, named by the FriendlyName; test_inst holds that no NHI INF binds
+ * these ids. */
+const INST_NAMEROW instNhiFnNames[] = {
+    { 0x1B21UL, 0x2425UL, INST_NB_USB4, "ASMedia ASM4242" }
+};
+const int instNhiFnNameCount =
+    (int)(sizeof(instNhiFnNames) / sizeof(instNhiFnNames[0]));
 
 const char *inst_name_base(int base)
 {
@@ -7951,15 +8803,20 @@ void inst_other_sentence(char *out, size_t cap, int set, const char *dir,
     }
 }
 
-const char *inst_other_none_text(int nt)
+const char *inst_other_none_text(int nt, int set)
 {
     if (!nt) {
-        return "On Windows 98 SE and ME these drivers are copied only, not "
+        return set == INST_SET_FREE ?
+               "On this Windows these drivers are copied only, not staged: "
+               "when Windows' hardware wizard asks for a driver, choose "
+               "Specify a location and point it at the package's folder in "
+               "the install directory: USBDRV\\FREE\\<class>\\<package>\\"
+               "<folder>." :
+               "On Windows 98 SE and ME these drivers are copied only, not "
                "staged: when Windows' hardware wizard asks for a driver, "
                "choose Specify a location and point it at the package's "
-               "folder in the install directory: USBDRV\\FREE\\<class>\\"
-               "<package>\\<folder>, or USBDRV\\NONFREE\\... for the "
-               "non-free drivers.";
+               "folder in the install directory: USBDRV\\NONFREE\\<class>\\"
+               "<package>\\<folder>.";
     }
     return "None of the drivers carried has one for this Windows.";
 }
@@ -8073,8 +8930,9 @@ const int instOtherHeadingCount =
  * xpad98's is the owner's compatibility wording of 2026-10-23, a DEVICE
  * row, with the trademark notice in the release notes. */
 const INST_OTHER_PKG instOtherPkgs[] = {
-    /* uac1 and ax88179 are in no usb-wdm-free release 3.2.0.0 carries
-     * (v0.1.0): withdrawn, their words and ids kept. */
+    /* uac1 is in no usb-wdm-free release: withdrawn, its words and id
+     * kept. ax88179, withdrawn in 3.2.0.0 (v0.1.0 lacked it), is current
+     * again with v0.1.1 (task 44.34). */
     { INST_SET_FREE, "audio/uac1", INST_PKG_CLASS, "Audio",
       "USB audio (uac1): USB Audio Class 1.0 speakers, headsets and "
       "microphones", 1 },
@@ -8089,7 +8947,8 @@ const INST_OTHER_PKG instOtherPkgs[] = {
     { INST_SET_FREE, "net/cdcnet", INST_PKG_CLASS, "Network",
       "USB Ethernet (cdcnet): CDC ECM, CDC NCM and RNDIS adapters", 0 },
     { INST_SET_FREE, "net/ax88179", INST_PKG_DEVICE, "Network",
-      "USB Ethernet (ax88179): adapters with an ASIX AX88179 chip", 1 },
+      "USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A "
+      "chip", 0 },
     { INST_SET_FREE, "net/rtl815x", INST_PKG_DEVICE, "Network",
       "USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or "
       "RTL8153 chip", 0 },
@@ -8100,11 +8959,29 @@ const INST_OTHER_PKG instOtherPkgs[] = {
     { INST_SET_FREE, "generic/libusb0", INST_PKG_CLASS, "Other",
       "libusb (libusb0): libusb-win32 0.1, for programs that talk to a "
       "device", 0 },
+    { INST_SET_NONFREE, "ethernet/ax88172", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88172): adapters with an ASIX AX88172 chip", 0 },
+    { INST_SET_NONFREE, "ethernet/ax88172a", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88172a): adapters with an ASIX AX88172A chip", 0 },
+    { INST_SET_NONFREE, "ethernet/ax88178", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88178): Gigabit adapters with an ASIX AX88178 chip",
+      0 },
     { INST_SET_NONFREE, "ethernet/ax88179", INST_PKG_DEVICE, "Network",
       "USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A "
       "chip", 0 },
     { INST_SET_NONFREE, "ethernet/ax88772", INST_PKG_DEVICE, "Network",
       "USB Ethernet (ax88772): adapters with an ASIX AX88772 chip", 0 },
+    { INST_SET_NONFREE, "ethernet/ax88772b", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88772b): adapters with an ASIX AX88772B or "
+      "AX88772C chip", 0 },
+    { INST_SET_NONFREE, "ethernet/dm96xx", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (dm96xx): adapters with a Davicom DM9601 or DM962x "
+      "chip", 0 },
+    { INST_SET_NONFREE, "ethernet/mcs7830", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (mcs7830): MosChip MCS7830, MCS7832 and MCS7730 "
+      "adapters", 0 },
+    { INST_SET_NONFREE, "ethernet/rtl8150", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (rtl8150): adapters with a Realtek RTL8150 chip", 0 },
     { INST_SET_NONFREE, "ethernet/rtl815x", INST_PKG_DEVICE, "Network",
       "USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or "
       "RTL8153 chip", 0 },
@@ -8420,6 +9297,21 @@ int inst_xhci_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
 int inst_nhi_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
 {
     const INST_NAMEROW *r = name_row(instNhiNames, instNhiNameCount, ven, dev);
+
+    if (r == NULL) {
+        r = name_row(instNhiFnNames, instNhiFnNameCount, ven, dev);
+    }
+    if (r == NULL) {
+        name_put(out, cap, INST_NB_USB4, NULL);
+        return 0;
+    }
+    return name_put(out, cap, r->Base, r->Product);
+}
+
+int inst_nhi_fname(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
+{
+    const INST_NAMEROW *r = name_row(instNhiFnNames, instNhiFnNameCount, ven,
+                                     dev);
 
     if (r == NULL) {
         name_put(out, cap, INST_NB_USB4, NULL);

@@ -318,27 +318,27 @@ static void test_counters(void)
     put32(img, 8, 2);
     put32(img, 12, 64);
     put32(img, 16, 32);
-    put32(img, 20, 250);
+    put32(img, 20, 254);
     put32(img, 24, at);
     put32(img, at + 0, 5);              /* SlotsEnabled */
     put32(img, at + 4 * 3, 7);          /* PortSpeedFull */
-    put32(img, at + 4 * 249, 9);        /* past the table */
+    put32(img, at + 4 * 253, 9);        /* past the table */
     tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 250 * 4), 1, "decoded");
+    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 254 * 4), 1, "decoded");
     CHECK(strstr(text, "SlotsEnabled                         5") != NULL,
           "named");
     CHECK(strstr(text, "PortSpeedFull") != NULL, "named 3");
     CHECK(strstr(text, "DevicesAddressed") == NULL, "zero not shown");
-    CHECK(strstr(text, "counter 249") != NULL, "past the table by number");
-    CHECK(strstr(text, "(3 of 250 nonzero.)") != NULL, "count");
-    put32(img, 20, 251);
+    CHECK(strstr(text, "counter 253") != NULL, "past the table by number");
+    CHECK(strstr(text, "(3 of 254 nonzero.)") != NULL, "count");
+    put32(img, 20, 255);
     tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 250 * 4), 0,
+    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 254 * 4), 0,
              "counters past the image");
-    put32(img, 20, 250);
+    put32(img, 20, 254);
     put32(img, 0, 2);
     tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 250 * 4), 0, "version 2");
+    CHECK_EQ(tr_hcd_counters_text(&t, img, at + 254 * 4), 0, "version 2");
     CHECK(strstr(text, "does not read") != NULL, "said so");
     CHECK_EQ(tr_hcd_counters_text(&t, NULL, 0), 0, "none");
 }

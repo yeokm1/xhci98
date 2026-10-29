@@ -176,7 +176,7 @@ ntoskrnl.exe!WRITE_REGISTER_USHORT         all  required  w2k-export; ntkern-nam
 # (IoIsWdmVersionAvailable(6, 0)). Windows 98 SE's own 1394bus.sys imports
 # the pair (hint 48), so the one x86 binary still loads there; the Windows
 # 98 SE install leg is a required check of it (record 18 section 10, D2).
-ntoskrnl.exe!IoGetDeviceObjectPointer        all  required  w2k-export; win98-precedent 1394bus.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDeviceObjectPointer, hint 48) (+compbatt.sys); design record 13 Appendix A row 43; task 36.15, the x86 helper's channel (design record 18 section 3)
+ntoskrnl.exe!IoGetDeviceObjectPointer        all  required  w2k-export; win98-precedent 1394bus.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDeviceObjectPointer, hint 48) (+compbatt.sys); design record 13 Appendix A row 43; task 36.15, the x86 helper's channel (design record 18 section 3); task 44.81, on NT the probe of the controller's \DosDevices name before it is created (hcd_door.c)
 ntoskrnl.exe!KeSynchronizeExecution        all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSynchronizeExecution, hint 92) (+openhci.sys); task 36.7, the dead line's retirement under the ISR's lock (design record 15 section 4.2)
 
 [deny]

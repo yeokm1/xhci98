@@ -5,7 +5,12 @@ rem "Faster emulator legs"). One phase per Windows start, chosen by the marker
 rem files in C:\XHLEG; each phase ends by switching the machine off, and the
 rem host starts it again cold. The host reads COM1 and gives the verdict.
 rem XHMODE.BAT on the CD sets XHMODE: console (INSTALL /console /yes) or
-rem window (the operator runs the installer's window, then the same checks).
+rem window (the host or an operator runs the installer's window, then the
+rem same checks). In window mode the first phase says the CD's letter, then
+rem waits for the installer's log to end with "Exit code N." and says that
+rem code and "WINDOW done": the run's end, which the screen cannot tell the
+rem host. A log from before is moved to C:\XHLEG\PRIOR.LOG first. XHARGS,
+rem set there too, is added to the console install (a leg's InstallArgs).
 set XC=%1
 call %XC%:\XHMODE.BAT
 if exist C:\XHLEG\PH4.ON goto again
@@ -19,17 +24,40 @@ call %XC%:\XHSEND.BAT ver C:\XHLEG\VER.TXT
 if "%XHMODE%"=="window" goto operator
 %XC%:
 cd \PKG
-call INSTALL.BAT /console /yes /nopause /log C:\XHLEG\INSTALL.LOG
+call INSTALL.BAT /console /yes /nopause /log C:\XHLEG\INSTALL.LOG %XHARGS%
 call %XC%:\XHEXIT.BAT install
 C:
 cd \
 call %XC%:\XHSEND.BAT install C:\XHLEG\INSTALL.LOG
 goto off
 :operator
-echo XHLEG OPERATOR install with the window, then shut down>COM1
+if exist C:\XHCIINST.LOG copy C:\XHCIINST.LOG C:\XHLEG\PRIOR.LOG>NUL
+if exist C:\XHCIINST.LOG del C:\XHCIINST.LOG
+echo XHLEG OPERATOR %XC% install with the window, then shut down>COM1
+rem The window holds its log open until the run ends, and a DOS program's
+rem read of it meanwhile is a sharing violation: COMMAND /F fails it rather
+rem than waiting at "Abort, Retry, Fail?" in this hidden box. XHWFIND.BAT
+rem leaves a marker, since COMMAND /C does not hand back an exit code.
+if exist C:\XHLEG\WDONE.ON del C:\XHLEG\WDONE.ON
+:wwait
+if not exist C:\XHCIINST.LOG goto wnap
+command /f /c %XC%:\XHWFIND.BAT
+if exist C:\XHLEG\WDONE.ON goto wdone
+:wnap
+choice /c:x /t:x,5 /n >NUL
+goto wwait
+:wdone
+call %XC%:\XHWREP.BAT %XC%
+echo XHLEG WINDOW done>COM1
+rem A box whose screen is blank when its batch ends closes; one left
+rem "Finished" takes the focus from the installer's window.
+cls
 goto end
 
 :ph2
+rem A restart taken before the wait above read the log (an operator's quick
+rem Finish): the run's exit code and log, said now.
+if "%XHMODE%"=="window" if not exist C:\XHLEG\WSENT.ON call %XC%:\XHWREP.BAT %XC%
 if exist C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS goto ph2go
 echo XHLEG CHECK driver-file FAIL no XHCI98.SYS in SYSTEM32\DRIVERS>COM1
 echo x>C:\XHLEG\PH3.ON
@@ -78,8 +106,14 @@ goto unplug
 echo XHLEG CHECK stick-copy FAIL>COM1
 call %XC%:\XHSEND.BAT fc C:\XHLEG\FC.TXT
 :unplug
+rem 44.59: give the copy 20 s to reach the stick before the unplug, and
+rem ME 60 s to finish removing the stick before the uninstall. With 5 s
+rem the uninstall's first removal most likely met ME's own removal of a
+rem stick pulled with data unwritten, and both appear to have waited (8
+rem of 53 runs). See run-44, 44.59.
+choice /c:x /t:x,20 /n >NUL
 echo XHLEG WANT unplug-stick>COM1
-choice /c:x /t:x,5 /n >NUL
+choice /c:x /t:x,60 /n >NUL
 
 :unin
 %XC%:

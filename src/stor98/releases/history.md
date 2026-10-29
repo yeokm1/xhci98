@@ -4,6 +4,21 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.3.0.0 - not yet released
+
+- Windows 98 SE and ME: a drive on a PCI bus numbered above 15 is
+  found. Stor98 looked for its drive on buses 0 to 15 only, and a
+  board can number a Thunderbolt or USB4 port far higher (the
+  emulator's ASM4242 gives its USB4 ports buses 19h to 78h); such a
+  drive stayed at "This device cannot start" (Code 10). Every bus
+  number is looked at now.
+- Every request Stor98 answers itself successfully (INQUIRY, READ
+  CAPACITY, TEST UNIT READY, its counters and others) reports the SCSI
+  status GOOD.
+  Before, it kept whatever status byte the request arrived with; on
+  Windows ME a program using ASPI could read a target status of 05h
+  after another such program had run.
+
 ## 3.2.0.0 - not yet released
 
 - Windows 8, 8.1 and 10 (below build 22000): xhci98's installer

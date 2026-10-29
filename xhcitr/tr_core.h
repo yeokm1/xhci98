@@ -220,7 +220,7 @@ int tr_dec_string(const unsigned char *d, size_t n, char *out, size_t cap);
 int tr_bos_ssp_text(const unsigned char *d, size_t n, char *out, size_t cap);
 
 /* The protocols a port supports (_EX_V2's SupportedUsbProtocols) as a
- * list: "USB 1.1, USB 2.0, USB 3.x", or "none reported". */
+ * list: "USB 1.1, USB 2.0, USB 3", or "none reported". */
 void tr_protocols_text(TR_U32 proto, char *out, size_t cap);
 
 /* The configuration descriptor's bMaxPower in mA for the speed (2 mA units
@@ -253,6 +253,8 @@ typedef struct _TR_QUERY {
     TR_U32 RmCount;
     TR_U32 RmMember;            /* CM_Q_UNKNOWN in version 1                */
     TR_U32 RmLost;
+    TR_U32 RmDriver;            /* CM_Q_RM_DRIVER: 0 before 3.3.0.0 and in
+                                   version 1                                */
 } TR_QUERY;
 
 /* An answer of n bytes (no more than the call returned), version 1 or
@@ -327,6 +329,108 @@ int tr_gen_tbt3(TR_U32 gen);
  * generation. */
 void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
                       char *out, size_t cap);
+
+/* What the upstream side of a router's link is (record 25 section 17):
+ * the host's router, classed by the NHI's profile, or the router one hop
+ * nearer the host, classed by its own generation. */
+#define TR_UP_UNKNOWN   0
+#define TR_UP_TBT3      1
+#define TR_UP_USB4      2
+#define TR_UP_TBT2      3   /* a Falcon Ridge host (owner, 2026-10-25)  */
+
+/* cm_vals.h's CM_PROFILE_* (that header needs the driver's compatibility
+ * header; test_cm.c holds the values). */
+#define TR_PROFILE_ICM_FR   1UL
+#define TR_PROFILE_ICM_AR   2UL
+#define TR_PROFILE_ICM_TR   3UL
+#define TR_PROFILE_ICM_ICL  4UL
+#define TR_PROFILE_USB4     5UL
+#define TR_PROFILE_ICM_MR   6UL
+#define TR_PROFILE_ICM_TGL  7UL
+
+/* The host's router by the NHI's profile: Falcon Ridge Thunderbolt 2;
+ * Alpine Ridge, Titan Ridge and Ice Lake Thunderbolt 3; Maple Ridge,
+ * Tiger Lake on and the USB4 software connection manager USB4; an
+ * unknown profile not known. */
+int tr_up_of_profile(TR_U32 profile);
+
+/* The profile of an NHI by its PCI id (vendor 15:0, device 31:16, the
+ * record's CM_ST_O_NHI_ID), cm_vals.c's table as of 3.3.0.0, for a record
+ * whose profile is 0: on 98 SE and ME the driver starts before it reads
+ * the NHI's ids. 0 for an id not listed. test_tr and test_cm hold the same
+ * pairs. */
+TR_U32 tr_profile_of_nhi(TR_U32 nhiId);
+
+/* An upstream router by its own generation: Thunderbolt 3 (tr_gen_tbt3),
+ * USB4 (a USB4 entry otherwise, its version read or not), else not
+ * known. */
+int tr_up_of_gen(TR_U32 gen);
+
+/* A route string's depth: its nonzero bytes counted from the lowest, up
+ * to the first zero (a hop a byte), 0 to 8. */
+TR_U32 tr_route_depth(TR_U32 lo, TR_U32 hi);
+
+/* The route of the router one hop nearer the host than the one at
+ * `depth` with route (hi:lo): the route's byte at depth - 1 cleared.
+ * 1 for depth 2 to 8; 0 otherwise (depth 1's upstream is the host). */
+int tr_route_parent(TR_U32 depth, TR_U32 lo, TR_U32 hi, TR_U32 *parentLo,
+                    TR_U32 *parentHi);
+
+/* A router's upstream side from its path (record 25 section 17 item 2):
+ * `host` the host's class (tr_up_of_profile), `between` the routers
+ * between it and the host, `tbt3` and `usb4` how many of them were found
+ * and classed so (tr_up_of_gen). Thunderbolt 3 when the host or any
+ * router between is; USB4 when the host is and all `between` were found
+ * USB4; else not known. */
+int tr_up_of_path(int host, TR_U32 between, TR_U32 tbt3, TR_U32 usb4);
+
+/* 1 for a USB4 router (tr_up_of_gen's USB4) whose upstream side
+ * is Thunderbolt 3: its link runs as Thunderbolt 3. */
+int tr_runs_as_tbt3(TR_U32 gen, int up);
+
+/* The "Generation" line: tr_gen_text's words, or "USB4 v1.0 device,
+ * running as Thunderbolt 3" where tr_runs_as_tbt3, or "... device,
+ * running as Thunderbolt 2" for any router on a Thunderbolt 2 host. */
+void tr_gen_link_text(TR_U32 gen, int up, char *out, size_t cap);
+
+/* ---- the storage transport's match (record 25 section 19 item 2) ------ */
+
+/* A USB port path ("3", "3.2.1") as the root port (1 to 255) and the
+ * route string (each further number a nibble, the first hub's lowest):
+ * 1; 0 for a path deeper than five hubs, a hub port of 0 or above 15, a
+ * root port of 0 or above 255, or anything not numbers and dots. */
+int tr_path_route(const char *path, TR_U32 *root, TR_U32 *route);
+
+/* ---- the running driver's version (record 25 section 18) --------------- */
+
+#define TR_VER_UNKNOWN  0   /* nothing is said                          */
+#define TR_VER_SAME     1
+#define TR_VER_DIFFERS  2
+
+/* The comparison: `running` the packed version a driver said (a byte a
+ * field from the most significant), or 0 for a driver that does not say
+ * (a version 1 answer, or CM_Q_RM_DRIVER 0); `haveRunning` 0 when no
+ * answer was read at all; `file` the installed file's four fields, or
+ * NULL when it was not read. */
+int tr_ver_state(int haveRunning, TR_U32 running, const TR_U32 *file);
+
+/* "3.3.0.0" from a packed version. */
+void tr_ver_text(TR_U32 packed, char *out, size_t cap);
+
+/* The details line (section 18 item 4), without the label, for a state
+ * not TR_VER_UNKNOWN: "3.2.0.0 running; the installed file is 3.3.0.0.
+ * Restart Windows to run the installed driver." or "3.3.0.0 running, the
+ * installed file's"; "older than 3.3.0.0" for a running 0. */
+void tr_ver_line(int state, TR_U32 running, const TR_U32 *file, char *out,
+                 size_t cap);
+
+/* PendingFileRenameOperations (a REG_MULTI_SZ of `bytes` bytes, pairs of
+ * source and target, a target "" for a delete, "!" before a target to
+ * replace it, "\??\" before either): the source of the last pair whose
+ * target names `target` (compared without case, the prefixes removed)
+ * into out, 1; 0 for none or a list that does not parse whole. */
+int tr_pfro_find(const char *msz, size_t bytes, const char *target,
+                 char *out, size_t cap);
 
 /* A router entry's name: "<vendor> <model>", or "(no name given)". */
 void tr_router_name(const unsigned char *entry, char *out, size_t cap);
@@ -683,6 +787,12 @@ int tr_warn_removed(int haveValue, TR_U32 value);
 #define TR_FW_HUB3      4   /* behind a hub declaring SS, running below   */
 #define TR_FW_LINK      5   /* a SuperSpeedPlus device at 5 Gbit/s        */
 #define TR_FW_HUBFS     6   /* a High Speed device behind a Full Speed hub */
+#define TR_FW_WIN2      7   /* on a USB 2.0 port Windows' own driver runs  */
+
+/* What a Windows controller is (item 11), from its PCI class. */
+#define TR_WC_OTHER     0   /* xHCI, or not read: never watched           */
+#define TR_WC_EHCI      1   /* High Speed                                 */
+#define TR_WC_USB1      2   /* OHCI or UHCI: Full and Low Speed           */
 
 /* One port as the scan read it, and its parent hub's own connection. */
 typedef struct _TR_FAST_IN {
@@ -703,6 +813,18 @@ typedef struct _TR_FAST_IN {
     int UnderTt;                /* a hub further up runs at High Speed or
                                    faster, or was not read: the device is
                                    behind a TT, so it is not asked         */
+    /* The path's limit (item 10, roadmap-usb4 44.80). */
+    int Top;                    /* the fastest this computer's xHCI98 USB 3
+                                   ports run (tr_fast_top_add):
+                                   TR_SPEED_SUPERPLUS, TR_SPEED_SUPER, or
+                                   -1 when it has none                    */
+    int HubSs;                  /* a hub on the path holds it to SuperSpeed
+                                   (tr_fast_hub_cap)                       */
+    /* Windows' own ports (item 11). */
+    int WinWatch;               /* the option is on                        */
+    int WinCtrl;                /* TR_WC_* of the port's controller        */
+    int WinBos;                 /* the device's BOS as Windows' hub gave
+                                   it (tr_bos_top), -1 unknown or unread   */
 } TR_FAST_IN;
 
 typedef struct _TR_FAST {
@@ -715,6 +837,34 @@ typedef struct _TR_FAST {
 /* The speed a connection declares from its _EX_V2 flags: SuperSpeedPlus
  * (bit 3), SuperSpeed (bit 1), or -1. */
 int tr_fast_can(int haveV2, TR_U32 flags);
+
+/* The computer's top (item 10): top so far (-1 to begin) with one more
+ * xhci98 controller folded in. read: its query had a ports part (n bytes
+ * of XHQ_PT_*, ports may be NULL when n is 0); a port of XHQ_PT_SSP is
+ * SuperSpeedPlus, of XHQ_PT_SS SuperSpeed. A controller whose ports were
+ * not read (an older driver, a refused query) counts as SuperSpeed: it
+ * is an xHCI controller, and nothing says SuperSpeedPlus. */
+int tr_fast_top_add(int top, int read, const unsigned char *ports,
+                    unsigned int n);
+
+/* 1 when a hub on a device's path holds it to SuperSpeed (item 10): its
+ * connection read with _EX_V2 declaring or running at SuperSpeed but not
+ * declaring SuperSpeedPlus, or its connection or _EX_V2 not read. A hub
+ * declaring no SuperSpeed (a USB 2.0 hub) holds nothing: the advice is to
+ * go around it. */
+int tr_fast_hub_cap(int haveConn, int haveV2, TR_U32 flags);
+
+/* The fastest a BOS descriptor set (n bytes) declares: TR_SPEED_SUPERPLUS
+ * with a SuperSpeedPlus capability (type 0Ah), TR_SPEED_SUPER with a
+ * SuperSpeed one (03h), -1 otherwise or when the set is malformed
+ * (item 11). */
+int tr_bos_top(const unsigned char *d, size_t n);
+
+/* 1 when the device on a Windows port has its BOS asked (item 11): the
+ * option on, a controller of TR_WC_EHCI or TR_WC_USB1, connected, not a
+ * hub, bcdUSB 0x0210 or later, and Top SuperSpeed or faster. WinBos is not
+ * looked at. */
+int tr_fast_wants_bos(const TR_FAST_IN *in);
 
 /* 1 when the port holds a device that runs slower than it declares (item
  * 1), with *f filled; 0 otherwise, *f zeroed but Now and Can -1. The High
@@ -751,6 +901,41 @@ void tr_fast_key(char *out, size_t cap, const char *ctrlKey, const char *path,
 
 /* 1 when key is not among the n keys of old (each TR_FAST_KEY wide). */
 int tr_fast_new(const char (*old)[TR_FAST_KEY], int n, const char *key);
+
+/* The BOS answers of Windows' ports by key (item 11): one request per
+ * plug, its answer kept while the key stays. Val TR_SPEED_SUPERPLUS,
+ * TR_SPEED_SUPER or -1 (asked: no answer, or one declaring neither). The
+ * key carries the device's address, so a plug that gives it another is
+ * asked again. A new key that finds no room is not asked. Zeroed is
+ * empty. */
+#define TR_WBOS_MAX     64
+typedef struct _TR_WBOS_CACHE {
+    char Key[TR_WBOS_MAX][TR_FAST_KEY];
+    int Val[TR_WBOS_MAX];
+    int Seen[TR_WBOS_MAX];
+    int N;
+} TR_WBOS_CACHE;
+
+/* The key of a Windows port's device: tr_fast_key's, then its address. */
+void tr_wbos_key(char *out, size_t cap, const char *fastKey,
+                 unsigned int address);
+/* The answer kept for key, marking it seen; -2 when not asked. */
+int tr_wbos_get(TR_WBOS_CACHE *c, const char *key);
+/* 1 when key has an entry or there is room for one. */
+int tr_wbos_room(const TR_WBOS_CACHE *c, const char *key);
+/* The answer for key kept (when there is room), marked seen. */
+void tr_wbos_put(TR_WBOS_CACHE *c, const char *key, int val);
+/* A scan's marking: begin, tr_wbos_get for every port present, end; the
+ * end drops the keys not marked. */
+void tr_wbos_begin(TR_WBOS_CACHE *c);
+void tr_wbos_end(TR_WBOS_CACHE *c);
+
+/* The details pane's note (item 10) for an xhci98 port's device that
+ * declares SuperSpeedPlus where the path gives SuperSpeed at most, under
+ * "This device can run at SuperSpeedPlus.": "This computer's USB 3 ports
+ * run at 5 Gbit/s at most." or "A hub it is behind runs at 5 Gbit/s at
+ * most."; NULL otherwise. */
+const char *tr_fast_note(const TR_FAST_IN *in);
 
 /* 1 when name is one of Windows' class names for a USB device ("USB
  * Input Device", "HID-compliant mouse", "USB Mass Storage Device", ...),
@@ -827,6 +1012,11 @@ void tr_fast_menu(char *out, size_t cap, int count);
 /* The per-user value under HKCU\Software\xHCI98\XHCITR (item 7); the
  * computer's is INST_FAST_VALUE under INST_DIR_KEY (inst_core.h). */
 #define TR_FAST_VALUE   "FasterNotice"
+
+/* Item 11's option, the user's alone: the DWORD under the same key, 1 on;
+ * absent, 0, another type or another number off (the owner, 2026-10-28:
+ * opt-in). */
+#define TR_FAST_WIN_VALUE "FasterWindowsPorts"
 
 /* A balloon the shell did not show (item 9, task 43.66). After
  * NIM_SETVERSION 3 the shell sends NIN_BALLOONSHOW when it shows the
@@ -974,7 +1164,7 @@ const char *tr_pci_vendor(unsigned int ven);
 void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
                     unsigned int dev, int tbKind, int named);
 
-/* "Root hub - 18 ports (14 USB 2.0, 4 USB 3.x)"; without the split when
+/* "Root hub - 18 ports (14 USB 2.0, 4 USB 3)"; without the split when
  * known is 0 (a port did not report its protocols); "Root hub" for 0
  * ports. */
 void tr_roothub_label(char *out, size_t cap, unsigned int ports, int known,

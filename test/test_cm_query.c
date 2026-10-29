@@ -13,6 +13,7 @@
 #include "../src/cm/cm_statb.h"
 #include "../src/cm/cm_qryb.h"
 #include "../src/cm/cm_live.h"
+#include "../src/xhci_verpk.h"
 #include "test_harness.h"
 
 static TBT_ICM icm;
@@ -71,7 +72,8 @@ static void test_layout(void)
     CHECK(CM_Q_BUILD_MAX <= CM_Q_ASK_BYTES, "one ask holds the largest");
     CHECK_EQ(CM_Q_BUILD_MAX, 64 + 32 + 3200 + 768 + 200, "the largest answer");
     CHECK_EQ(CM_Q_REC_AT, 96, "version 2: the record after the block");
-    CHECK_EQ(CM_Q_RM_LOST + 4 + 16, CM_Q_RM_BYTES, "16 bytes reserved");
+    CHECK_EQ(CM_Q_RM_LOST + 4, CM_Q_RM_DRIVER, "the driver word after LOST");
+    CHECK_EQ(CM_Q_RM_DRIVER + 4 + 12, CM_Q_RM_BYTES, "12 bytes reserved");
 }
 
 /* The USB4 connection manager: two host ports, one read within its
@@ -151,6 +153,8 @@ static void test_u4(void)
     CHECK_EQ(get32(built, 64 + CM_Q_RM_FLAGS), 0, "no block given: not watched");
     CHECK_EQ(get32(built, 64 + CM_Q_RM_COUNT), 0, "none counted");
     CHECK_EQ(get32(built, 64 + CM_Q_RM_MEMBER), CM_Q_UNKNOWN, "no member");
+    CHECK_EQ(get32(built, 64 + CM_Q_RM_DRIVER), XHCI_VER_PACKED,
+             "the running driver's version (44.8)");
     CHECK_EQ(get32(built, CM_Q_O_BYTES), bytes, "size");
     CHECK_EQ(get32(built, CM_Q_O_PASS), 0, "no pass in the build");
     CHECK_EQ(get32(built, CM_Q_O_PASS_AGE_MS), CM_Q_UNKNOWN, "no age");
@@ -383,6 +387,8 @@ static void test_content_gen(void)
         memset(rm, 0, sizeof(rm));
         put32(rm, CM_Q_RM_FLAGS, CM_Q_RF_WATCHED);
         put32(rm, CM_Q_RM_MEMBER, CM_Q_UNKNOWN);
+        /* The builder writes the driver word whoever gave the block. */
+        put32(rm, CM_Q_RM_DRIVER, XHCI_VER_PACKED);
         q.Removal = rm;
         b = CmQueryBuild(built, &q);
         CHECK(memcmp(built + 64, rm, CM_Q_RM_BYTES) == 0,
@@ -397,6 +403,8 @@ static void test_content_gen(void)
         b = CmQueryBuild(built, &q);
         CHECK_EQ(get32(built, 64 + CM_Q_RM_COUNT), 1, "the count");
         CHECK_EQ(get32(built, 64 + CM_Q_RM_MEMBER), 0x0400, "the member");
+    CHECK_EQ(get32(built, 64 + CM_Q_RM_DRIVER), XHCI_VER_PACKED,
+             "the version over a given block");
         CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 3,
                  "a removal counted: a change");
         q.Removal = NULL;

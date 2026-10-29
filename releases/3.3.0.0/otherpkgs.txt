@@ -1,0 +1,48 @@
+# otherpkgs.txt - the other USB drivers' package table this release was cut with
+#
+# Written by scripts\package\make-release.ps1 (design record 26 section
+# 6.7.11). The next cut reads it and refuses a table that drops a row or a
+# line: a row is only ever marked withdrawn, with its words kept.
+#
+#   ROW | <set>:<class>/<package> | CLASS or DEVICE | <heading> | <description> | current, withdrawn or known
+#   EXCLUDES or COEXISTS | <set>:<id> | <set>:<id> | <systems> | <why>
+
+Version: 3.3.0.0
+ROW | free:audio/uac1 | CLASS | Audio | USB audio (uac1): USB Audio Class 1.0 speakers, headsets and microphones | withdrawn
+ROW | free:audio/uac2 | CLASS | Audio | USB audio (uac2): USB Audio Class 2.0 sound cards and DACs | current
+ROW | free:audio/usbmidi | CLASS | Audio | MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces | current
+ROW | free:video/uvc98 | CLASS | Video | Webcams (uvc98): USB Video Class 1.0 and 1.5 cameras | current
+ROW | free:hid/xpad98 | DEVICE | HID | Game pads (xpad98): for Xbox 360 and Xbox One controllers | current
+ROW | free:net/cdcnet | CLASS | Network | USB Ethernet (cdcnet): CDC ECM, CDC NCM and RNDIS adapters | current
+ROW | free:net/ax88179 | DEVICE | Network | USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A chip | current
+ROW | free:net/rtl815x | DEVICE | Network | USB Ethernet (rtl815x): Realtek RTL8152, 8153, 8156, 8157 and 8159 adapters | current
+ROW | free:serial/usbcom | CLASS | Serial | USB serial (usbcom): CDC ACM serial ports and modems | current
+ROW | free:storage/usbflop | CLASS | Storage | USB floppy (usbflop): USB Mass Storage UFI floppy drives | current
+ROW | free:generic/libusb0 | DEVICE | Other | libusb (libusb0): libusb-win32 0.1 for listed programmer devices | current
+ROW | nonfree:ethernet/ax88172 | DEVICE | Network | USB Ethernet (ax88172): adapters with an ASIX AX88172 chip | current
+ROW | nonfree:ethernet/ax88172a | DEVICE | Network | USB Ethernet (ax88172a): adapters with an ASIX AX88172A chip | current
+ROW | nonfree:ethernet/ax88178 | DEVICE | Network | USB Ethernet (ax88178): Gigabit adapters with an ASIX AX88178 chip | current
+ROW | nonfree:ethernet/ax88179 | DEVICE | Network | USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A chip | current
+ROW | nonfree:ethernet/ax88772 | DEVICE | Network | USB Ethernet (ax88772): adapters with an ASIX AX88772 chip | current
+ROW | nonfree:ethernet/ax88772b | DEVICE | Network | USB Ethernet (ax88772b): adapters with an ASIX AX88772B or AX88772C chip | current
+ROW | nonfree:ethernet/dm96xx | DEVICE | Network | USB Ethernet (dm96xx): adapters with a Davicom DM9601 or DM962x chip | current
+ROW | nonfree:ethernet/mcs7830 | DEVICE | Network | USB Ethernet (mcs7830): MosChip MCS7830, MCS7832 and MCS7730 adapters | current
+ROW | nonfree:ethernet/rtl8150 | DEVICE | Network | USB Ethernet (rtl8150): adapters with a Realtek RTL8150 chip | current
+ROW | nonfree:ethernet/rtl815x | DEVICE | Network | USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or RTL8153 chip | current
+ROW | nonfree:hid/x360c | DEVICE | HID | Game pads (x360c): for Xbox 360 controllers | current
+ROW | nonfree:hid/x360wc | DEVICE | HID | Game pads (x360wc): for the Xbox 360 wireless receiver | current
+ROW | nonfree:serial/ch341 | DEVICE | Serial | USB serial (ch341): adapters with a WCH CH340 or CH341 chip | current
+ROW | nonfree:serial/ft2232d | DEVICE | Serial | USB serial (ft2232d): adapters with an FTDI FT2232D chip | current
+ROW | nonfree:serial/ftdi | DEVICE | Serial | USB serial (ftdi): adapters with an FTDI FT232 family chip | current
+ROW | free:audio/noaud | DEVICE | Other | No driver (noaud): leaves a webcam microphone driverless on 98 SE | current
+EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the installer's table
+EXCLUDES | free:net/ax88179 | nonfree:ethernet/ax88179 | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the installer's table
+EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the installer's table
+EXCLUDES | free:hid/xpad98 | nonfree:hid/x360wc | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the installer's table
+COEXISTS | free:hid/xpad98 | nonfree:hid/x360c | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the installer's table
+EXCLUDES | free:audio/uac1 | free:audio/usbmidi | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | uac1 (not in 0.1.0) serves MIDI-only functions by class; usbmidi by its ids
+EXCLUDES | free:net/rtl815x | nonfree:ethernet/rtl815x | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips; on XP to 7 RTLXP7.INF lists only chips the nonfree INFs leave out, but xHCI98 3.2.0.0 excluded the pair everywhere and its rule is kept (xhci98, 2026-10-28)
+EXCLUDES | free:net/ax88179 | nonfree:ethernet/ax88179 | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | the same chips
+EXCLUDES | free:hid/xpad98 | nonfree:hid/x360wc | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 W8 W8X64 W10 W10X64 | both bind the Play and Charge Kit 045E:028F
+COEXISTS | free:hid/xpad98 | nonfree:hid/x360c | W98SE WME W2K WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint ids: xpad98 takes the pads outside x360c list and the Xbox One pads
+COEXISTS | free:video/uvc98 | free:audio/noaud | W98SE | one webcam, different interfaces: uvc98 the video function, noaud the microphone

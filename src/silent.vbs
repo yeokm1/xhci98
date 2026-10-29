@@ -40,7 +40,9 @@
 
 Option Explicit
 
-' The controller's description from 3.2.0.0 (task 43.73), and before it.
+' The controller's names: the plain one (3.2.0.0, task 43.73; from
+' 3.3.0.0 a controller the INF does not list), and before 3.2.0.0 the old
+' one. IsXhciDesc also takes a listed model's name (task 44.55).
 Const XHCI_DESC = "xHCI98 USB 3 Controller"
 Const XHCI_DESC_OLD = "xHCI98 USB 3.x eXtensible Host Controller"
 Const VALUE_NAME = "XhciSilentInstall"
@@ -133,6 +135,23 @@ Function ReadValue(path, ok)
     Err.Clear
 End Function
 
+' True for a DriverDesc this driver's controller carries or has carried:
+' XHCI_DESC, XHCI_DESC_OLD, or XHCI_DESC followed by " (<maker product>)",
+' the name 3.3.0.0's INF gives each controller it lists (task 44.55).
+' Case does not matter. scripts\check-text.ps1 holds this function, the
+' same in silent.vbs and portsw.vbs, to every name the INFs give.
+Function IsXhciDesc(desc)
+    Dim d, p
+    d = LCase(desc)
+    p = LCase(XHCI_DESC)
+    IsXhciDesc = False
+    If d = p Or d = LCase(XHCI_DESC_OLD) Then
+        IsXhciDesc = True
+    ElseIf Len(d) >= Len(p) + 4 Then
+        If Left(d, Len(p) + 2) = p & " (" And Right(d, 1) = ")" Then IsXhciDesc = True
+    End If
+End Function
+
 ' Every NNNN under the USB class key whose DriverDesc is this driver's
 ' controller and whose NTMPDriver is xhci98.sys.
 Function FindKeys()
@@ -145,7 +164,7 @@ Function FindKeys()
         desc = ReadValue(base & name & "\DriverDesc", ok)
         If ok Then
             If VarType(desc) = vbString Then
-                If LCase(desc) = LCase(XHCI_DESC) Or LCase(desc) = LCase(XHCI_DESC_OLD) Then
+                If IsXhciDesc(desc) Then
                     drv = ReadValue(base & name & "\NTMPDriver", ok)
                     If ok Then
                         If VarType(drv) = vbString Then

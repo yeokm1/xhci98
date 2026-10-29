@@ -12,6 +12,15 @@
     # another version refuses it.
     Qemu = ''
 
+    # QemuDllPath: the folder of the DLLs a QEMU build needs on PATH. The q35
+    # guests run on the build their bases were made and checked with (a copy
+    # of E:\xhci98-vm\q35-bases\bin\...\qemu-system-x86_64.exe, usb4-emu's
+    # QEMU 11.1.2, with usb4-emu's toolchain\msys64\ucrt64\bin here and its
+    # vms\qemu-baseline\share as -L in each guest's Extra): read on 2026-10-26,
+    # QEMU 11.1.0 (scoop) stopped 98 SE's start on q35 at the logo, where
+    # that build reached the desktop with the same disk.
+    QemuDllPath = ''
+
     # Starting points (start\<guest>\), leg runs (runs\<run>\<leg>\) and
     # pids.txt, the record of every QEMU started and stopped.
     WorkDir = 'E:\xhci98-vm\release-matrix'
@@ -42,19 +51,73 @@
     # Every guest runs on TCG (owner, 2026-10-20: no WHPX). A 9x guest takes
     # a CPU with a local APIC (pentium3, not pentium3,-apic): QEMU 11.1
     # cannot load a qemu-xhci's saved state when MSI-X could not be set up.
+    # Machine: q35 for every new leg (owner, 2026-10-25), as the q35 bases
+    # run (E:\xhci98-vm\q35-bases, launch-q35.ps1); without it, pc
+    # (i440FX), the machine of the legs read before. On q35: DiskBus ahci
+    # (the board's ICH9 AHCI) or piix (a piix3-ide at 00:1e.0: 2000 and XP
+    # have no inbox AHCI driver, ME fails on AHCI); CdBus, the leg's CD, the
+    # same unless given, or disk: a read-only FAT disk on AHCI port 1 (98 SE
+    # reaches AHCI through INT 13h alone and sees no CD there; a piix3-ide
+    # beside it stopped its start), and that guest's legs start cold; Hole64Off and Win2kHack
+    # as the bases were made (2000, XP); Rtc a fixed date (Vista and 7 say
+    # "not genuine" at the host's date). Vga overrides std. HostPowerOff: the
+    # guest cannot switch the machine off (2000 with the Standard PC HAL
+    # stops at "It is now safe to turn off your computer"), so the host quits
+    # QEMU once the disk is quiet after the shut down. ShutdownCommand
+    # replaces make-start.ps1's shut down (2000 has no shutdown.exe).
+    # SetupElevated (Vista, 7): the poller's setup is started elevated from
+    # the Start menu's search box, and its consent prompt answered with
+    # ConsentKey (default alt-y, Yes on 7; Vista's Continue is alt-c).
     Guests = @(
         @{
             Id = 'w98se'; Name = 'Windows 98 SE'; Family = '9x'
-            Base = 'E:\xhci98-vm\release-matrix\base\w98se-pristine.qcow2'
-            Cpu = 'pentium3'; Smp = 1; Memory = 256; Layout = 'qwerty'
+            Base = 'E:\xhci98-vm\q35-bases\w98se\disk.qcow2'
+            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'ahci'; CdBus = 'disk'
+            Cpu = 'pentium3'; Smp = 1; Memory = 512; Layout = 'qwerty'
             ColdStep = 'esc-wizard98'; CdLetter = 'D'; BootSeconds = 600; SettleSeconds = 30
         }
         @{
+            Id = 'me'; Name = 'Windows ME'; Family = '9x'
+            Base = 'E:\xhci98-vm\q35-bases\me\disk.qcow2'
+            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'piix'
+            Cpu = 'pentium3'; Smp = 1; Memory = 512; Layout = 'qwerty'
+            ColdStep = 'esc-wizard98'; CdLetter = 'D'; BootSeconds = 600; SettleSeconds = 30
+        }
+        @{
+            Id = 'w2k'; Name = 'Windows 2000 SP4'; Family = 'nt'
+            Base = 'E:\xhci98-vm\q35-bases\w2k\disk.qcow2'
+            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'piix'; Hole64Off = $true; Win2kHack = $true; Vga = 'cirrus'
+            Cpu = 'pentium3'; Smp = 1; Memory = 512; Layout = 'dvorak'
+            ColdStep = 'walk-fnh'; HostPowerOff = $true; ShutdownCommand = 'cscript //nologo C:\XHLEG\XHOFF.VBS'
+            BootSeconds = 900; SettleSeconds = 30
+        }
+        @{
             Id = 'xp'; Name = 'Windows XP SP3'; Family = 'nt'
-            Base = 'vm\winxp.img'
+            Base = 'E:\xhci98-vm\q35-bases\xp\disk.qcow2'
+            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'piix'; Hole64Off = $true
             Cpu = 'pentium3'; Smp = 2; Memory = 1024; Layout = 'dvorak'
             ColdStep = 'esc-fnh'; PrepSteps = @('xp-signing-ignore')
             BootSeconds = 900; SettleSeconds = 30
+        }
+        @{
+            Id = 'vista'; Name = 'Windows Vista SP2'; Family = 'nt'
+            Base = 'E:\xhci98-vm\q35-bases\vx86\disk.qcow2'; ConsentKey = 'alt-c'
+            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'ahci'; Rtc = '2026-09-20T12:00:00'
+            Cpu = 'qemu64'; Smp = 2; Memory = 2048; Layout = 'dvorak'; SetupElevated = $true
+            BootSeconds = 1200; SettleSeconds = 60
+        }
+        @{
+            Id = 'w7'; Name = 'Windows 7 SP1'; Family = 'nt'
+            Base = 'E:\xhci98-vm\q35-bases\w7x86\disk.qcow2'
+            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Machine = 'q35'; DiskBus = 'ahci'; Rtc = '2026-09-20T12:00:00'
+            Cpu = 'qemu64'; Smp = 2; Memory = 2048; Layout = 'dvorak'; SetupElevated = $true
+            BootSeconds = 1200; SettleSeconds = 60
         }
     )
 }

@@ -970,23 +970,56 @@ static VOID niGate(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         niExclude(m, d, CM_NI_W_CONFIG);
         return;
     }
-    if (j != NULL && j->Created >= CM_NOIRQ_ATTEMPTS) {
-        niExclude(m, d, CM_NI_W_ATTEMPTS);
-        return;
-    }
+    /* The creation bound is tested once the descriptors say a
+     * configuration is to be created (niDescriptor): the memory-only form
+     * creates none. */
     d->HaveIrq = 0;
     d->MemCount = 0;
     d->MemAdded = 0;
     d->RdAt = d->Source;
     d->RdPhase = 0;
     d->RdAllSeen = 0;
+    d->RdAllIrq = 0;
     d->Step = NI_AD_RD;
+}
+
+/* The memory-only form (record 28 section 12): PCI.VXD's own
+ * configuration already holds the memory alone and the problem is the 29 it
+ * set once at the devnode's creation, so no configuration is added; the
+ * attempt is the reprocess-only one, once a generation (the journal's
+ * reprocess mark, with no configuration in it). */
+static VOID niMemOnly(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx)
+{
+    CM_NI_JRN *j;
+
+    j = niJrn(m, d->Dn, d->Hash, 1);
+    if (j == NULL || j->ReprocGen == m->Gen + 1) {
+        niExclude(m, d, CM_NI_W_ATTEMPTS);
+        return;
+    }
+    if (!niWindowLive(m, ctx->Now)) {
+        niExclude(m, d, CM_NI_W_NOT_IN_TIME);
+        return;
+    }
+    j->ReprocGen = m->Gen + 1;
+    m->C.Candidates++;
+    m->C.Reprocesses++;
+    m->C.MemOnly++;
+    d->State = CM_NI_S_ACTIVE;
+    d->Deadline = ctx->Now + CM_NOIRQ_TXN_MS;
+    d->ReprocOnly = 1;
+    d->Alt = 0;
+    d->AltDone = 0;
+    d->Step = NI_TX_R_STATUS;
+    niDiag(m, d, 0, d->ProbBefore);
 }
 
 /* One of the source's descriptors (RD_READ's result). */
 static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
                          const CM_NI_RES *res)
 {
+    CM_NI_JRN *j;
+
     if (res->Cr == CM_NI_CR_NO_MORE_RES_DES && d->RdPhase < 4) {
         /* This type read to its end: the next, from the configuration;
          * the last phase reads every type, for any other one. */
@@ -998,8 +1031,14 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         /* The every-type read must have met each descriptor the typed
          * reads found; fewer leaves the absence of any other type
          * unproven, and the attempt is refused. */
-        if (d->RdAllSeen != d->MemCount + d->HaveIrq) {
+        if (d->RdAllSeen != d->MemCount + d->HaveIrq ||
+            d->RdAllIrq != d->HaveIrq) {
             niExclude(m, d, CM_NI_W_CONFIG);
+            return;
+        }
+        if (!d->HaveIrq && d->MemCount != 0 &&
+            d->ProbBefore == CM_NI_PROB_HW_DISABLED) {
+            niMemOnly(m, d, ctx);
             return;
         }
         if (!d->HaveIrq || d->MemCount == 0) {
@@ -1008,6 +1047,11 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         }
         if (!niWindowLive(m, ctx->Now)) {
             niExclude(m, d, CM_NI_W_NOT_IN_TIME);
+            return;
+        }
+        j = niJrn(m, d->Dn, d->Hash, 0);
+        if (j != NULL && j->Created >= CM_NOIRQ_ATTEMPTS) {
+            niExclude(m, d, CM_NI_W_ATTEMPTS);
             return;
         }
         /* Every rule passed: ACTIVE, on its own deadline. */
@@ -1034,6 +1078,9 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
             return;
         }
         d->RdAllSeen++;
+        if (res->Type == CM_NI_RES_IRQ) {
+            d->RdAllIrq++;
+        }
         return;
     }
     if (res->Type == CM_NI_RES_IRQ) {

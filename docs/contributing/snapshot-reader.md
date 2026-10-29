@@ -23,7 +23,8 @@ counters from user mode, and writes a report a user can send back.
 
 Two drivers answer it. From 2.0.0.0 `xhci98.sys` is the successor host
 controller driver (`docs/contributing/roadmap-hcd.md`, design record 13): it
-owns its driver object, creates `\DosDevices\HCD<n>` itself and answers the
+owns its driver object, creates its own `\DosDevices` name (`HCD<n>` on 98 SE
+and ME, `XHCI98HC<k>` on NT from 3.3.0.0) and answers the
 same USBUSER `PassThru` request through its own door (`src/hcd_door.c`, schema
 5 unchanged, the slots and HCD regions added). The 1.x miniport ran under usbport and
 was reached through usbport's `PassThru` vendor escape. Most of this document
@@ -112,7 +113,7 @@ longer names. The registry cannot tell those apart. The level actually
 applied travels in a dump's header, which is where to read it.
 
 Once a capture at level 3 or 4 has been sent, set the level back to 2.
-While the level is above 0, any local user who can open `\\.\HCD<n>` can
+While the level is above 0, any local user who can open the door can
 read this driver's diagnostic state through the door. That is accepted
 rather than overlooked: under the 1.x miniport this driver could not tighten
 the door, because usbport owned the device object, hardcoded the name,
@@ -859,6 +860,14 @@ another `bInterval`, and those it changed in more than `bInterval` (not
 taken); and the function endpoints built at a recorded rate. A block
 shorter than 246 words is a driver from before it, and the section is not
 printed.
+Task 44.35's six follow (246 to 251, `XportUas`, `XportUasOnly`,
+`XportUasOnlyForced`, `XportBotForced`, `XportBotNoStreams`,
+`XportNoStreams`; roadmap-usb4 44.35, design record 13 section 10.7,
+"The decision kept"): the storage transport decisions the bus made, one
+per reason, in the counter list by name. Until `3.3.0.0` they were
+`hc->XportDecisions`, outside the block and never zeroed; in the block
+they are zeroed at each start with it. A block shorter than 252 words is
+a driver from before it.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`
@@ -881,6 +890,23 @@ read back, and the records of the first eight devices in slot order, of
 any speed (a USB 2.0 device takes a record too, so a later SuperSpeed
 device can be left out; the `Ss` column marks SuperSpeed) - slot, link state,
 the window, armed functions and the last step's outcome.
+
+From `3.3.0.0` the HCD header ends with **"storage transport"** (roadmap-usb4
+task 44.35; design record 13 section 10.7, "The decision kept", and design
+record 25 section 19; `-selftest-xport`): at words 306 to 308 the record
+count (32), a record's words (10) and the first record's word (309), then
+one record per device holding a mass-storage decision, in Slot ID order -
+Slot ID, root port, route string, interface (`0xFF` for a device PDO),
+transport, why, alternate, the inputs (`XHCI_XPORT_F_*`), the class triple
+and the count of storage interfaces decided - all 0 past the last. The
+header is 629 words, the region's version still 1: a reader walks it by
+the header's size. The section prints each record with the words
+`XHCITR`'s details pane uses ("UAS (the device offers Bulk-Only and UAS;
+UAS chosen)"); a header shorter than 629 words is a driver from before
+it, and the section says so. The same records reach `XHCITR`'s window
+through the query request's version 2 (design record 13 section 8.12),
+at every level, which also carries the driver's version (design record
+25 section 18).
 
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
@@ -1042,7 +1068,7 @@ single-packet" in `docs/usb-xhci-info/usbport-miniport-abi.md`, and
 |---|---|
 | IOCTL | `0x00220438` - `IOCTL_USB_USER_REQUEST`, `METHOD_BUFFERED`, `FILE_ANY_ACCESS` |
 | Request | `UsbUserRequest = 3` (`USBUSER_PASS_THRU`) |
-| Device | `\\.\HCD<n>`, from the `\DosDevices\HCD<n>` link the HCD FDO's start path always creates |
+| Device | the controller's door: `\\.\HCD<n>` on 98 SE and ME, `\\.\XHCI98HC<k>` on NT from 3.3.0.0 (`HCD<n>` on every target before), the `\DosDevices` link the HCD FDO's start path creates |
 | Buffer | one buffer, in length == out length, at least `0x28`; `RequestBufferLength` must equal that length exactly |
 | Gate | none |
 

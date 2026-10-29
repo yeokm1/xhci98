@@ -58,25 +58,30 @@ What it does
     you stopped it, the service tells the driver, which then tears its
     tunnel down (the USB4 connection manager).
 
-Stor98 on a drive plugged in later (Windows 8.1)
-------------------------------------------------
+Stor98 on a drive Windows left without it (Windows 2000 to 8.1)
+---------------------------------------------------------------
 
-Windows 8.1 has its own NVMe driver, stornvme, and gives it to an NVMe
-drive behind a Thunderbolt or USB4 tunnel that is plugged in after the
-install; but 8.1's stornvme holds a write for good when such a drive is
-unplugged without Safely Remove, so on 8.1 the tunnelled drive gets the
-bundled Stor98 (Windows 10 keeps its own stornvme, which does not, and
-the service moves nothing there). When the installer installed Stor98 on
-8.1, it names the staged Stor98 in the setting
-Stor98Inf below, and the service then moves each such drive to Stor98,
-once, a second or two after Windows started it: it stops the drive (as
-Device Manager's Disable does), installs Stor98 on that one device and
-starts it again. An internal NVMe drive is never touched, nor a drive
-with another maker's driver. A drive with a file open, a paging file or
-Windows itself on it refuses the stop and stays on stornvme. A drive
-moved to Stor98 is never moved again by the service, so a driver you
-choose later for it stays. While the installer runs, the service waits.
-Its records are under ...\Services\xhcimark\Stor98, one per drive.
+The package gives an NVMe drive behind a Thunderbolt or USB4 port an id
+of its own, and the bundled Stor98 matches that id alone, so Windows
+puts Stor98 on such a drive by itself. A drive Windows enumerated before
+the id reached it (the first plug of an enclosure Windows has never
+seen, a port the package does not know) has no driver on Windows 2000
+to 8; on 8.1 it gets Windows' own NVMe driver, stornvme, which also
+takes a drive whose Stor98 package does not rank with Windows' own. When
+the installer installed Stor98, it names the staged Stor98 in the
+setting Stor98Inf below, and the service then gives each such drive
+Stor98, once, a second or two after Windows has finished with it: a
+drive with no driver is installed directly; on 8.1 a drive on stornvme
+is stopped (as Device Manager's Disable does), given Stor98 and started
+again, since 8.1's stornvme holds a write for good when such a drive is
+unplugged without Safely Remove. Windows 10 keeps its own stornvme, and
+the service gives Stor98 to nothing there. An internal NVMe drive is
+never touched, nor a drive with another maker's driver. A drive with a
+file open, a paging file or Windows itself on it refuses the stop and
+stays on stornvme. A drive given Stor98 is never given it again by the
+service, so a driver you choose later for it stays. While Windows' own
+hardware wizard or the installer runs, the service waits. Its records
+are under ...\Services\xhcimark\Stor98, one per drive.
 
 The log
 -------
@@ -95,10 +100,10 @@ optional:
              start.
   LogBytes   REG_DWORD. The log's size bound, 262144 by default.
   Stor98Inf  REG_SZ. The staged Stor98 INF (%SystemRoot%\INF\oemNN.inf)
-             that drives on stornvme behind a tunnel are moved to.
-             Written by the installer on Windows 8.1 when Stor98 is
-             installed, and deleted on any other system; absent, or on
-             any Windows but 8.1: no drive is moved.
+             that drives behind a tunnel left without it are given.
+             Written by the installer on Windows 2000 to 8.1 when Stor98
+             is installed, and deleted on 10; absent, or on Windows 10:
+             no drive is given Stor98.
 
 For testing only
 ----------------

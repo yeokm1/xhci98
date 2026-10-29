@@ -111,6 +111,14 @@ cl /nologo /W3 /WX /O2 /Fo"%OUT%\sg9x.obj" /Fe"%OUT%\sg9x_ut.exe" "%~dp0sg9x_ut.
 if not defined FAILED "%OUT%\sg9x_ut.exe" || set "FAILED=1"
 if defined SGFAILED set "FAILED=1"
 
+rem The NT4-ABI bus scan (src/pciscan.h), no DDK header needed
+set "PSFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /Fo"%OUT%\pciscan.obj" /Fe"%OUT%\pciscan_ut.exe" "%~dp0pciscan_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\pciscan_ut.exe" || set "FAILED=1"
+if defined PSFAILED set "FAILED=1"
+
 rem The counter answer's pure half (src/pfstat.c; docs/PLAN.md MD-8)
 set "PFFAILED=%FAILED%"
 set "FAILED="

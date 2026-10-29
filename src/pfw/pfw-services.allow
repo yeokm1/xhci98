@@ -1,0 +1,8 @@
+# pfw-services.allow - the VxD services XHCIPFW.VXD may call (design record
+# 32 section 8; check-pfw.ps1). One row per service: its dword (device id in
+# the high word, ordinal in the low), the name, and where the value is read
+# (src\pfw\pfw_vmm.h has the citation). A service not listed fails the gate;
+# a row no call uses fails it too.
+0x00010149  VMM _RegCloseKey      VMM.H 2217 (VMM device 1)
+0x0001014A  VMM _RegCreateKey     VMM.H 2218 (VMM device 1)
+0x00010152  VMM _RegSetValueEx    VMM.H 2226 (VMM device 1)

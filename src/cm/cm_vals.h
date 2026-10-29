@@ -229,10 +229,13 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * section 6.1.1): 1 numbers the bridges a tunnel brings up below a tunnel
  * port before the CONFIGMG re-enumeration (tbt_brnum.c), 0 leaves them as
  * they came up (the behaviour before it: Code 29 on a hot-added bridge
- * until a restart). Ignored on the NT targets. No INF writes it (the
- * owner, 2026-10-16): absent reads as the default, and the installer
- * neither asks for it nor writes it. A value other than 0 or 1 is refused
- * and the default stands.
+ * until a restart). Ignored on the NT targets. The x86 xhcicm.inf's 98 SE
+ * and ME install writes it at this default, only where it is missing (task
+ * 44.46, owner 2026-10-26, replacing the owner's 2026-10-16 "no INF writes
+ * it"; the INF gate reads the default from this line); absent reads as
+ * the default, and the installer never asks for it (/set and the window's
+ * Advanced row set it). A value other than 0 or 1 is refused and the
+ * default stands.
  */
 #define CM_BRIDGE_NUMBERING_DEFAULT 1UL
 
@@ -241,11 +244,25 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * section 7, task 42-A.15): 1 starts an NVMe function below a tunnel port
  * whose interrupt cannot be routed with no interrupt, for a bound Stor98
  * that polls (record 28 section 4); 0 leaves such a function at its
- * problem code. Read where XhciCmBridgeNumbering is read; no INF writes
- * it, absent reads as the default, any other value is refused and the
- * default stands. Ignored on the NT targets.
+ * problem code. Read where XhciCmBridgeNumbering is read and written as
+ * it is (task 44.46: the x86 xhcicm.inf's 98 SE and ME install, at this
+ * default, which the INF gate reads from this line); absent reads as the
+ * default, any other value is refused and the default stands. Ignored on
+ * the NT targets.
  */
 #define CM_NOIRQ_START_DEFAULT 1UL
+
+/*
+ * XhciCmAsmediaPcie7Credits, REG_DWORD (design record 22 section 18.8,
+ * task 44.41): a bench experiment. 1 writes 7 credits, IFC 1 and ISE 0
+ * into the two protocol-adapter HopID 8 entries of a PCIe tunnel this
+ * driver builds between an ASM4242 host router and an ASM2464 device
+ * router (tbt_u4cm.h, TBT_U4_CONFIG AsmPcie7Credits); 0 keeps them as
+ * read. No INF writes it and the installer does not ask for it; absent
+ * reads as 0, and any other value is refused and 0 stands. Read once per
+ * start, machine-wide key first, as every value.
+ */
+#define CM_ASM_PCIE7_DEFAULT 0UL
 
 typedef struct _CM_VALUES {
     ULONG Value[CM_VAL_COUNT];  /* what the driver runs with                */
@@ -264,6 +281,10 @@ typedef struct _CM_VALUES {
     ULONG NoIrqStartFound;
     ULONG NoIrqStartRaw;
     ULONG NoIrqStartRefused;
+    ULONG AsmPcie7;             /* XhciCmAsmediaPcie7Credits as run with    */
+    ULONG AsmPcie7Found;
+    ULONG AsmPcie7Raw;
+    ULONG AsmPcie7Refused;
 } CM_VALUES, *PCM_VALUES;
 
 /* Every value at its default, nothing found. */
@@ -292,6 +313,9 @@ VOID CmValuesTakeBridgeNumbering(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmNoIrqStart, under XhciCmBridgeNumbering's rule. */
 VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmAsmediaPcie7Credits: 0 or 1, anything else refused. */
+VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

@@ -91,6 +91,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     HcdPdoRetireInit();
     HcdSuspDriverInit();
     HcdSerialInit();
+    HcdDoorInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = hcdDispatchOther;
     }
@@ -135,8 +136,9 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
         return HcdRootHubAddDevice(DriverObject, Pdo);
     }
 
-    /* Named, because \DosDevices\HCD<n> must point at a name (hcd_door.c);
-     * usbport names its FDO \Device\USBFDO-<n> for the same link. */
+    /* Named, because the controller's \DosDevices name (HCD<n> on 98 SE
+     * and ME, XHCI98HC<k> on NT) must point at a name (hcd_door.c); usbport
+     * names its FDO \Device\USBFDO-<n> for its \DosDevices\HCD<n>. */
     /* One read of the counter for the name and FdoSerial both: a second
      * controller's AddDevice may bump it in between, and the door's link
      * must name this FDO (hcd_door.c). */

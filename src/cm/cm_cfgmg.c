@@ -69,7 +69,9 @@
 #define CMG_T_REG_OPEN      23
 #define CMG_T_REG_CLOSE     24
 #define CMG_T_REG_QUERY     25
-#define CMG_T_COUNT         26
+/* Design record 31 section 5 (task 44.3). */
+#define CMG_T_ADD_ID        26
+#define CMG_T_COUNT         27
 
 #define CMG_THUNK_BYTES     8
 
@@ -101,7 +103,8 @@ static const USHORT cmgServices[CMG_T_COUNT] = {
     CMG_SVC_SETUP_DEVNODE,
     CMG_VMM_REG_OPEN_KEY,
     CMG_VMM_REG_CLOSE_KEY,
-    CMG_VMM_REG_QUERY_VALUE_EX
+    CMG_VMM_REG_QUERY_VALUE_EX,
+    CMG_SVC_ADD_ID
 };
 
 /* Each thunk's VxD: CONFIGMG's, but for PCI.VXD's two and the VMM's
@@ -500,6 +503,28 @@ ULONG CmCfgmgStor98Version(PCM_CFGMG cfg, char *buffer, PULONG bytes,
     return error;
 }
 
+/* Record 31 section 5.1: the id appended to the devnode's compatible
+ * ids. */
+ULONG CmCfgmgAddCompatibleId(PCM_CFGMG cfg, ULONG devnode, char *id)
+{
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN3)cmgThunk(cfg, CMG_T_ADD_ID))(
+        devnode, (ULONG)(ULONG_PTR)id, CMG_ADD_ID_COMPATIBLE);
+}
+
+ULONG CmCfgmgReadHardwareValue(PCM_CFGMG cfg, ULONG devnode, char *name,
+                               ULONG type, char *buffer, PULONG bytes)
+{
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN7)cmgThunk(cfg, CMG_T_READ_REG))(
+        devnode, 0, (ULONG)(ULONG_PTR)name, type, (ULONG)(ULONG_PTR)buffer,
+        (ULONG)(ULONG_PTR)bytes, CMG_REGISTRY_HARDWARE);
+}
+
 #else /* !_X86_ */
 
 /* No amd64 target runs CONFIGMG: the route is refused, and every call
@@ -716,6 +741,26 @@ ULONG CmCfgmgSetupReady(PCM_CFGMG cfg, ULONG devnode)
 {
     UNREFERENCED_PARAMETER(cfg);
     UNREFERENCED_PARAMETER(devnode);
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgAddCompatibleId(PCM_CFGMG cfg, ULONG devnode, char *id)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(devnode);
+    UNREFERENCED_PARAMETER(id);
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgReadHardwareValue(PCM_CFGMG cfg, ULONG devnode, char *name,
+                               ULONG type, char *buffer, PULONG bytes)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(devnode);
+    UNREFERENCED_PARAMETER(name);
+    UNREFERENCED_PARAMETER(type);
+    UNREFERENCED_PARAMETER(buffer);
+    UNREFERENCED_PARAMETER(bytes);
     return CMG_CR_FAILURE;
 }
 

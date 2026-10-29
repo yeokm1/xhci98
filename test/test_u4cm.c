@@ -89,6 +89,67 @@ static ULONG state(const TBT_U4CM *cm, ULONG port)
 
 /* ------------------------------------------------------------------ */
 
+/*
+ * The USB3 bandwidth conversions, exhaustively (task 44.38). Spec Table
+ * 8-14: the Consumed and Allocated fields count bytes per 1 ms USB3 frame
+ * in units of 512 * 2^Scale bytes; one Mb/s is 125 bytes per 1 ms. So an
+ * allocation of M Mb/s takes ceil(M * 125 / (512 << s)) units, and U units
+ * read back as U * 2^s * 512 * 8 / 1000 Mb/s, here rounded to nearest. The
+ * expected values are computed in floating point, apart from the code
+ * under test's integer forms; every Mb/s up to 40,000 and every 12-bit
+ * value, at each scale 0 to 16. One check per scale and direction, so a
+ * failure names the first value that differs.
+ */
+static void test_bw_units(void)
+{
+    unsigned long s;
+    unsigned long m;
+    unsigned long u;
+    unsigned long bad;
+    unsigned long first;
+    double want;
+    unsigned long wantU;
+
+    for (s = 0; s <= 16; s++) {
+        bad = 0;
+        first = 0;
+        for (m = 0; m <= 40000UL; m++) {
+            want = (double)m * 125.0 / (512.0 * (double)(1UL << s));
+            wantU = (unsigned long)want;
+            if ((double)wantU < want) {
+                wantU++;
+            }
+            if (TbtU4TestBwUnits(m, s) != wantU) {
+                if (bad == 0) {
+                    first = m;
+                }
+                bad++;
+            }
+        }
+        if (bad != 0) {
+            printf("    scale %lu: %lu Mb/s values differ, the first %lu\n", s, bad, first);
+        }
+        CHECK(bad == 0, "Mb/s to units, one scale, every Mb/s to 40000");
+        bad = 0;
+        for (u = 0; u <= 0xFFFUL; u++) {
+            want = (double)u * (double)(1UL << s) * 512.0 * 8.0 / 1000.0;
+            wantU = (unsigned long)(want + 0.5);
+            if (TbtU4TestBwMbps(u, s) != wantU) {
+                if (bad == 0) {
+                    first = u;
+                }
+                bad++;
+            }
+        }
+        if (bad != 0) {
+            printf("    scale %lu: %lu unit values differ, the first %lu\n", s, bad, first);
+        }
+        CHECK(bad == 0, "units to Mb/s, one scale, every 12-bit value");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+
 static void test_cold_minimal(void)
 {
     TBT_U4_CONFIG c;
@@ -3444,7 +3505,7 @@ static void test_lock_across_sleep(void)
     (void)dev;
 }
 
-/* usb4-emu's `asm4242` host model (ASMedia ASM4242, AM5 X870): the CSM
+/* usb4-emu's `asm4242` host model (ASMedia ASM4242): the CSM
  * desktop case where this software CM is the only CM. */
 static void test_asm4242(void)
 {
@@ -3549,6 +3610,272 @@ static void asmQuiet(const TBT_U4CM *cm, const FAB *f, int dev, const char *what
     CHECK_EQ(f->R[dev].AdpTouches[4], 0, what);
     CHECK_EQ(f->R[dev].NvmOps, 0, what);
     CHECK(noClxWritten(f), what);
+}
+
+/*
+ * XhciCmAsmediaPcie7Credits (record 22 section 18.8, task 44.41): the
+ * ASM4242 host with the ASM2464 behind it, the value off and on; the other
+ * pairs and a preserved tunnel untouched.
+ */
+static void asm7Watch(FAB *f)
+{
+    f->Watch = "u4.asm7";
+    f->WatchCount = 0;
+}
+
+/* The host's PCIe Down HopID 8 entry as the real ASM4242 reads it fresh
+ * (record 22 section 18.3: 00000008h 00000000h); the fabric's own reset
+ * value carries credits. */
+static void asm7Fresh(FAB *f, int port)
+{
+    int hp = fabPortPcie(f, port);
+
+    f->R[0].Adp[hp].Path[16] = 0x00000008UL;
+    f->R[0].Adp[hp].Path[17] = 0;
+}
+
+static void test_asm7(void)
+{
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+    int dev;
+    unsigned long hp;
+    unsigned long hostLane;
+    unsigned long devLane;
+
+    /* Off, the default: section 6.8 as before - protocol credits, IFC and
+     * ISE as read (0 on the fabric's fresh entries). */
+    cfgDefault(&c);
+    CHECK(!c.AsmPcie7Credits, "asm7: off by default");
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    asm7Fresh(&g_fab, 1);
+    asm7Watch(&g_fab);
+    CHECK_EQ(start(&g_fab, &g_ring, &g_cm, &c), TBT_OK, "asm7 off: start");
+    p = TbtU4Port(&g_cm, 1);
+    hp = p->PcieDown;
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Up, "asm7 off: UP");
+    CHECK_EQ(fabPath0(&g_fab, 0, (int)hp, 8) & 0x00FE0000UL, 0, "asm7 off: host credits as read");
+    CHECK_EQ(fabPath1(&g_fab, 0, (int)hp, 8) & 0x05000000UL, 0, "asm7 off: host IFC, ISE as read");
+    CHECK_EQ(fabPath0(&g_fab, dev, 3, 8) & 0x00FE0000UL, 0, "asm7 off: device credits as read");
+    CHECK_EQ(g_fab.WatchCount, 0, "asm7 off: nothing logged");
+    hostLane = fabPath0(&g_fab, 0, (int)p->Lane0, (int)p->Pcie.Hu);
+    devLane = fabPath0(&g_fab, dev, 1, (int)p->Pcie.Hd);
+
+    /* On: 7 credits, IFC 1, ISE 0, EFC 1, ESE 0 on both protocol entries;
+     * the lane entries exactly as with it off. */
+    c.AsmPcie7Credits = TRUE;
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    asm7Fresh(&g_fab, 1);
+    asm7Watch(&g_fab);
+    CHECK_EQ(start(&g_fab, &g_ring, &g_cm, &c), TBT_OK, "asm7 on: start");
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Up && fabPcieUp(&g_fab, 1), "asm7 on: UP");
+    CHECK_EQ((fabPath0(&g_fab, 0, (int)hp, 8) >> 17) & 0x7F, 7, "asm7 on: host 7 credits");
+    CHECK_EQ(fabPath1(&g_fab, 0, (int)hp, 8) & 0x0F000000UL, 0x03000000UL,
+             "asm7 on: host IFC 1, EFC 1, ISE 0, ESE 0");
+    CHECK_EQ((fabPath0(&g_fab, dev, 3, 8) >> 17) & 0x7F, 7, "asm7 on: device 7 credits");
+    CHECK_EQ(fabPath1(&g_fab, dev, 3, 8) & 0x0F000000UL, 0x03000000UL,
+             "asm7 on: device IFC 1, EFC 1, ISE 0, ESE 0");
+    CHECK_EQ(fabPath0(&g_fab, 0, (int)p->Lane0, (int)p->Pcie.Hu), hostLane,
+             "asm7 on: the host lane entry unchanged");
+    CHECK_EQ(fabPath0(&g_fab, dev, 1, (int)p->Pcie.Hd), devLane,
+             "asm7 on: the device lane entry unchanged");
+    CHECK_EQ(g_fab.WatchCount, 13, "asm7 on: the gate and six lines per entry");
+    CHECK(strcmp(g_fab.WatchLabel[0], "u4.asm7.gate") == 0 && g_fab.WatchValue[0] == 1,
+          "asm7 on: the gate applied");
+    CHECK(strcmp(g_fab.WatchLabel[1], "u4.asm7.host") == 0 &&
+          strcmp(g_fab.WatchLabel[7], "u4.asm7.dev") == 0, "asm7 on: host, then device");
+    CHECK_EQ((g_fab.WatchValue[1] >> 17) & 0x7F, 0, "asm7 on: the host entry before, 0 credits");
+    CHECK_EQ((g_fab.WatchValue[3] >> 17) & 0x7F, 7, "asm7 on: as written, 7");
+    CHECK_EQ(g_fab.WatchValue[5], fabPath0(&g_fab, 0, (int)hp, 8), "asm7 on: as read back");
+    CHECK_EQ(g_fab.WatchValue[12], fabPath1(&g_fab, dev, 3, 8), "asm7 on: the device's read back");
+    asmQuiet(&g_cm, &g_fab, dev, "asm7 on: quiet");
+
+    /* On, another host (intel-adl): nothing applied. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    asm7Watch(&g_fab);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP, "asm7 on, ADL host: UP");
+    CHECK_EQ(fabPath0(&g_fab, dev, 3, 8) & 0x00FE0000UL, 0, "asm7 on, ADL host: device as read");
+    CHECK(g_fab.WatchCount == 1 && g_fab.WatchValue[0] == 0, "asm7 on, ADL host: the gate closed");
+
+    /* On, the ASM4242 with another USB4 device: nothing applied. */
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    asm7Fresh(&g_fab, 1);
+    asm7Watch(&g_fab);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP, "asm7 on, generic device: UP");
+    CHECK_EQ(fabPath0(&g_fab, 0, (int)p->PcieDown, 8) & 0x00FE0000UL, 0,
+             "asm7 on, generic device: host as read");
+    CHECK(g_fab.WatchCount >= 1 && g_fab.WatchValue[0] == 0,
+          "asm7 on, generic device: the gate closed");
+
+    /* On, each of the four ids wrong alone: the gate closed each time. */
+    {
+        static const unsigned long ids[4][2] = {
+            { 0x2428174DUL, 0x2463174CUL },   /* host vendor */
+            { 0x2429174CUL, 0x2463174CUL },   /* host device */
+            { 0x2428174CUL, 0x2463174DUL },   /* device vendor */
+            { 0x2428174CUL, 0x2464174CUL }    /* device device */
+        };
+        int k;
+
+        for (k = 0; k < 4; k++) {
+            fabInit(&g_fab);
+            fabHostAsm4242(&g_fab);
+            g_fab.R[0].Rcs[0] = ids[k][0];
+            dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+            g_fab.R[dev].Rcs[0] = ids[k][1];
+            fabPlug(&g_fab, 1, dev);
+            asm7Fresh(&g_fab, 1);
+            asm7Watch(&g_fab);
+            (void)start(&g_fab, &g_ring, &g_cm, &c);
+            p = TbtU4Port(&g_cm, 1);
+            CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Up, "asm7 on, one id wrong: UP");
+            CHECK_EQ(fabPath0(&g_fab, 0, (int)p->PcieDown, 8) & 0x00FE0000UL, 0,
+                     "asm7 on, one id wrong: host as read");
+            CHECK_EQ(fabPath0(&g_fab, dev, 3, 8) & 0x00FE0000UL, 0,
+                     "asm7 on, one id wrong: device as read");
+            CHECK(g_fab.WatchCount == 1 && g_fab.WatchValue[0] == 0,
+                  "asm7 on, one id wrong: the gate closed");
+        }
+    }
+
+    /* On, the right pair with a USB3 tunnel too (a USB4 device router
+     * reporting the ASM2464's id, with USB3 Up adapters): the PCIe
+     * tunnel takes the experiment, the USB3 tunnel never does. */
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Rcs[0] = 0x2463174CUL;
+    fabPlug(&g_fab, 1, dev);
+    asm7Fresh(&g_fab, 1);
+    asm7Watch(&g_fab);
+    {
+        int hu3 = fabPortUsb3(&g_fab, 1);
+        unsigned long u0 = fabPath0(&g_fab, 0, hu3, 8);
+        unsigned long u1 = fabPath1(&g_fab, 0, hu3, 8);
+
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        p = TbtU4Port(&g_cm, 1);
+        CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Up && p->Usb3.Up,
+              "asm7 on, with USB3: both tunnels up");
+        CHECK_EQ((fabPath0(&g_fab, 0, (int)p->PcieDown, 8) >> 17) & 0x7F, 7,
+                 "asm7 on, with USB3: the PCIe entry 7 credits");
+        CHECK_EQ(fabPath0(&g_fab, 0, hu3, 8) & 0x00FE0000UL, u0 & 0x00FE0000UL,
+                 "asm7 on, with USB3: the USB3 entry's credits as read");
+        CHECK_EQ(fabPath1(&g_fab, 0, hu3, 8) & 0x05000000UL, u1 & 0x05000000UL,
+                 "asm7 on, with USB3: its IFC and ISE as read");
+        CHECK(g_fab.WatchCount == 14 && g_fab.WatchValue[0] == 1 &&
+              strcmp(g_fab.WatchLabel[13], "u4.asm7.gate") == 0 && g_fab.WatchValue[13] == 0,
+              "asm7 on, with USB3: the gate open for PCIe, closed for USB3");
+    }
+
+    /* On, a preserved pre-OS tunnel: discovery writes nothing. */
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    hostLane = fabPath0(&g_fab, 0, (int)hp, 8);
+    devLane = fabPath0(&g_fab, dev, 3, 8);
+    asm7Watch(&g_fab);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Preserved, "asm7 on, pre-OS: preserved");
+    CHECK(fabPath0(&g_fab, 0, (int)hp, 8) == hostLane && fabPath0(&g_fab, dev, 3, 8) == devLane,
+          "asm7 on, pre-OS: both protocol entries as the firmware left them");
+    CHECK_EQ(g_fab.WatchCount, 0, "asm7 on, pre-OS: the gate never asked");
+    g_fab.Watch = NULL;
+}
+
+/*
+ * The ASM4242 firmware's own pre-OS tunnel, as usb4-emu's asm4242
+ * model sets it up (record 22 section 18.3):
+ * HopID 8 in all four entries, 0 credits with IFC and EFC on both
+ * protocol-adapter entries, 64 credits, IFC and counter 2 on both lane
+ * entries. Discovery must preserve it and write none of them, with
+ * XhciCmAsmediaPcie7Credits on as well.
+ */
+static void fwEntry(FAB *f, int r, unsigned adp, unsigned outAdp,
+                    unsigned long credits, unsigned long dw1)
+{
+    f->R[r].Adp[adp].Path[16] = 0x80000000UL | (credits << 17) |
+                                ((unsigned long)outAdp << 11) | 8UL;
+    f->R[r].Adp[adp].Path[17] = dw1;
+}
+
+static void test_asm4242_preos(void)
+{
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+    int dev;
+    int lane;
+    unsigned hp;
+    unsigned long before[8];
+    int on;
+
+    for (on = 0; on < 2; on++) {
+        cfgDefault(&c);
+        c.AsmPcie7Credits = (BOOLEAN)on;
+        fabInit(&g_fab);
+        fabHostAsm4242(&g_fab);
+        dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+        fabPlug(&g_fab, 1, dev);
+        fabPreos(&g_fab, 1, 0);
+        lane = fabPortLane0(&g_fab, 1);
+        hp = (unsigned)fabPortPcie(&g_fab, 1);
+        fwEntry(&g_fab, 0, hp, (unsigned)lane, 0, 0x03000301UL);
+        fwEntry(&g_fab, dev, (unsigned)g_fab.R[dev].UpAdp, 3, 64, 0x01802301UL);
+        fwEntry(&g_fab, dev, 3, (unsigned)g_fab.R[dev].UpAdp, 0, 0x03000301UL);
+        fwEntry(&g_fab, 0, (unsigned)lane, hp, 64, 0x01802301UL);
+        g_fab.R[0].Adp[lane].Path[18] = 0;
+        g_fab.R[0].Adp[lane].Path[19] = 0;
+        g_fab.R[dev].Adp[g_fab.R[dev].UpAdp].Path[18] = 0;
+        g_fab.R[dev].Adp[g_fab.R[dev].UpAdp].Path[19] = 0;
+        before[0] = fabPath0(&g_fab, 0, (int)hp, 8);
+        before[1] = fabPath1(&g_fab, 0, (int)hp, 8);
+        before[2] = fabPath0(&g_fab, 0, lane, 8);
+        before[3] = fabPath1(&g_fab, 0, lane, 8);
+        before[4] = fabPath0(&g_fab, dev, 3, 8);
+        before[5] = fabPath1(&g_fab, dev, 3, 8);
+        before[6] = fabPath0(&g_fab, dev, g_fab.R[dev].UpAdp, 8);
+        before[7] = fabPath1(&g_fab, dev, g_fab.R[dev].UpAdp, 8);
+        g_fab.RxQCount = 0;
+        asm7Watch(&g_fab);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        p = TbtU4Port(&g_cm, 1);
+        CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Preserved,
+              "ASM4242 firmware tunnel: preserved UP");
+        CHECK(p->Pcie.Hd == 8 && p->Pcie.Hu == 8, "ASM4242 firmware tunnel: HopID 8 both ways");
+        CHECK(fabPath0(&g_fab, 0, (int)hp, 8) == before[0] &&
+              fabPath1(&g_fab, 0, (int)hp, 8) == before[1] &&
+              fabPath0(&g_fab, 0, lane, 8) == before[2] &&
+              fabPath1(&g_fab, 0, lane, 8) == before[3] &&
+              fabPath0(&g_fab, dev, 3, 8) == before[4] &&
+              fabPath1(&g_fab, dev, 3, 8) == before[5] &&
+              fabPath0(&g_fab, dev, g_fab.R[dev].UpAdp, 8) == before[6] &&
+              fabPath1(&g_fab, dev, g_fab.R[dev].UpAdp, 8) == before[7],
+              "ASM4242 firmware tunnel: all four entries as the firmware left them");
+        CHECK_EQ(g_cm.Counters.DownstreamPortResets, 0, "ASM4242 firmware tunnel: no reset");
+        CHECK_EQ(g_fab.WatchCount, 0, "ASM4242 firmware tunnel: the credits switch never asked");
+        g_fab.Watch = NULL;
+    }
 }
 
 /*
@@ -4433,52 +4760,368 @@ static void test_recover(void)
     (void)dev;
 }
 
+/* ------------------------------------------------------------------ */
+/* Record 22 section 9.4: a tunnel an earlier instance built (44.26)    */
+/* ------------------------------------------------------------------ */
+
+/* Instance B on the fabric instance A left: g_cm2 over g_fab, with the
+ * record `carry` (NULL for none). */
+static LONG carryStartB(const TBT_U4_CARRY *carry)
+{
+    TBT_U4_CONFIG c;
+
+    cfgDefault(&c);
+    memset(&g_ring2, 0, sizeof(g_ring2));
+    TbtU4Init(&g_cm2, &g_ring2, &g_fab.Host, &c);
+    TbtU4SetLinkDown(&g_cm2, linkDown, NULL);
+    TbtU4SetCarry(&g_cm2, carry);
+    return TbtU4Start(&g_cm2, fabMem(&g_fab), FAB_PHYS, FAB_MEM_BYTES);
+}
+
+/* Instance A builds both tunnels on port 1, stops, and hands its record. */
+static int carryA(TBT_U4_CARRY *out)
+{
+    int dev;
+
+    dev = setupMinimal(1, NULL);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, out);
+    return dev;
+}
+
+/* A sleep across which the domain lost its configuration. */
+static LONG carryLose(TBT_U4CM *cm, int dev)
+{
+    TbtU4Suspend(cm);
+    fabPowerCycle(&g_fab);
+    (void)dev;
+    return TbtU4Resume(cm);
+}
+
+/* B with `carry` must find port 1 preserved and not its own, and a sleep
+ * that loses the configuration must leave it HELD (no rebuild). */
+static void carryForeign(const TBT_U4_CARRY *carry, int dev, const char *what)
+{
+    const TBT_U4_PORT *p;
+    LONG rc;
+    char m[96];
+
+    rc = carryStartB(carry);
+    p = TbtU4Port(&g_cm2, 1);
+    sprintf(m, "%s: B started", what);
+    CHECK_EQ(rc, TBT_OK, m);
+    sprintf(m, "%s: not its own", what);
+    CHECK(!p->Pcie.Own && !p->Usb3.Own, m);
+    if (p->State != TBT_U4_UP || !p->Pcie.Up) {
+        return;
+    }
+    rc = carryLose(&g_cm2, dev);
+    sprintf(m, "%s: the lost sleep unmet", what);
+    CHECK_EQ(rc, TBT_E_STATE, m);
+    sprintf(m, "%s: HELD, not rebuilt", what);
+    CHECK_EQ(state(&g_cm2, 1), TBT_U4_HELD, m);
+}
+
+static void test_carry(void)
+{
+    TBT_U4_CARRY k;
+    TBT_U4_CARRY k2;
+    TBT_U4_CARRY k3;
+    TBT_U4_CONFIG cfg;
+    const TBT_U4_PORT *p;
+    BOOLEAN final;
+    int dev;
+    LONG rc;
+
+    /* The 43.71 case: A built it, B adopts it as preserved and its own,
+     * and a sleep that loses the configuration rebuilds it. */
+    dev = carryA(&k);
+    CHECK(k.Valid && !k.Forwarded, "carry: A hands a fresh record");
+    CHECK(k.Port[0].Used && k.Port[0].Lane0 == 1, "carry: port 1 recorded");
+    CHECK(k.Port[0].Pcie.Up && k.Port[0].Pcie.Hd == 8 && k.Port[0].Pcie.Hu == 9,
+          "carry: PCIe at 8 and 9");
+    CHECK(k.Port[0].Usb3.Up && k.Port[0].Usb3.Hd == 10 && k.Port[0].Usb3.Hu == 11,
+          "carry: USB3 at 10 and 11");
+    CHECK(k.Port[0].Uuid[0] == g_fab.R[dev].Rcs[7] && k.Port[0].Uuid[1] == g_fab.R[dev].Rcs[8],
+          "carry: the router's UUID");
+    CHECK(!k.Port[1].Used, "carry: port 2 not recorded");
+    rc = carryStartB(&k);
+    p = TbtU4Port(&g_cm2, 1);
+    CHECK_EQ(rc, TBT_OK, "carry: B started");
+    CHECK(p->State == TBT_U4_UP && p->Pcie.Preserved && p->Usb3.Preserved,
+          "carry: B finds both preserved");
+    CHECK(p->Pcie.Own && p->Usb3.Own, "carry: and its own");
+    rc = carryLose(&g_cm2, dev);
+    CHECK_EQ(rc, TBT_OK, "carry: the lost sleep rebuilt");
+    poll(&g_cm2, &g_fab, 2);
+    CHECK_EQ(state(&g_cm2, 1), TBT_U4_UP, "carry: UP after the resume");
+    CHECK(p->Pcie.Up && !p->Pcie.Preserved && !p->Pcie.Own, "carry: rebuilt, built here now");
+    CHECK(fabPcieUp(&g_fab, 1), "carry: the fabric's PCIe tunnel up again");
+
+    /* No record: preserved as someone else's, HELD as before 44.26. */
+    dev = carryA(&k);
+    carryForeign(NULL, dev, "carry, no record");
+
+    /* Another UUID, other HopIDs, another host router, a recorded PCIe
+     * tunnel beside an unrecorded USB3 one. */
+    dev = carryA(&k);
+    k2 = k;
+    k2.Port[0].Uuid[0] ^= 1UL;
+    carryForeign(&k2, dev, "carry, another UUID");
+    dev = carryA(&k);
+    k2 = k;
+    k2.Port[0].Pcie.Hd = 12;
+    carryForeign(&k2, dev, "carry, other HopIDs");
+    dev = carryA(&k);
+    k2 = k;
+    k2.HostVendor ^= 1UL;
+    carryForeign(&k2, dev, "carry, another host router");
+    dev = carryA(&k);
+    k2 = k;
+    k2.Port[0].Usb3.Up = FALSE;
+    carryForeign(&k2, dev, "carry, USB3 not recorded");
+    dev = carryA(&k);
+    k2 = k;
+    k2.Port[0].Lane0 = 3;
+    carryForeign(&k2, dev, "carry, another port");
+
+    /* A USB3 side found but not verified (its device entry broken), with
+     * the record naming PCIe alone: not proven empty, so not its own. */
+    dev = carryA(&k);
+    k2 = k;
+    k2.Port[0].Usb3.Up = FALSE;
+    g_fab.R[dev].Adp[1].Path[2 * 10] &= ~0x80000000UL;
+    carryForeign(&k2, dev, "carry, a USB3 side not empty");
+
+    /* A HELD port (the device's PCIe entry broken): never matched. */
+    dev = carryA(&k);
+    g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    rc = carryStartB(&k);
+    p = TbtU4Port(&g_cm2, 1);
+    CHECK_EQ(p->State, TBT_U4_HELD, "carry, HELD: HELD at start");
+    CHECK(!p->Pcie.Own && !p->Usb3.Own, "carry, HELD: not its own");
+    (void)carryLose(&g_cm2, dev);
+    CHECK_EQ(state(&g_cm2, 1), TBT_U4_HELD, "carry, HELD: still HELD after a lost sleep");
+    CHECK(!fabPcieUp(&g_fab, 1), "carry, HELD: nothing rebuilt");
+
+    /* A USB3 tunnel left alone after an eject: recorded, but its port is
+     * HELD at B's start and never matched. */
+    dev = setupMinimal(1, NULL);
+    CHECK_EQ(TbtU4EjectPcie(&g_cm, 1), TBT_OK, "carry, ejected: PCIe ejected");
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, &k);
+    CHECK(k.Valid && k.Port[0].Used && !k.Port[0].Pcie.Up && k.Port[0].Usb3.Up,
+          "carry, ejected: the USB3 tunnel alone recorded");
+    rc = carryStartB(&k);
+    p = TbtU4Port(&g_cm2, 1);
+    CHECK(p->State != TBT_U4_UP, "carry, ejected: not UP at B's start");
+    CHECK(!p->Pcie.Own && !p->Usb3.Own, "carry, ejected: not its own");
+    (void)carryLose(&g_cm2, dev);
+    CHECK(state(&g_cm2, 1) != TBT_U4_UP && !fabPcieUp(&g_fab, 1),
+          "carry, ejected: not rebuilt after a lost sleep");
+
+    /* A sleep that keeps the configuration (verified, the mark kept), then
+     * one that loses it (rebuilt). */
+    dev = carryA(&k);
+    (void)carryStartB(&k);
+    p = TbtU4Port(&g_cm2, 1);
+    TbtU4Suspend(&g_cm2);
+    rc = TbtU4Resume(&g_cm2);
+    CHECK_EQ(rc, TBT_OK, "carry, kept: verified");
+    CHECK(p->Pcie.Preserved && p->Pcie.Own && p->Usb3.Own, "carry, kept: still its own");
+    rc = carryLose(&g_cm2, dev);
+    CHECK_EQ(rc, TBT_OK, "carry, kept then lost: rebuilt");
+
+    /* Handed on: B (own) to C. */
+    dev = carryA(&k);
+    (void)carryStartB(&k);
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k3);
+    CHECK(k3.Valid && !k3.Forwarded && k3.Port[0].Used && k3.Port[0].Pcie.Up &&
+          k3.Port[0].Usb3.Up, "carry, chain: B hands its own tunnels on");
+    rc = carryStartB(&k3);
+    p = TbtU4Port(&g_cm2, 1);
+    CHECK(p->Pcie.Own && p->Usb3.Own, "carry, chain: C finds them its own");
+    /* ...but B with no record hands nothing for them. */
+    dev = carryA(&k);
+    (void)carryStartB(NULL);
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k3);
+    CHECK(k3.Valid && !k3.Port[0].Used, "carry, chain: someone else's tunnels never recorded");
+
+    /* PCIe alone (no USB3 tunnel built): the empty USB3 side proven, its
+     * own; then the same with an orphaned USB3 entry on the device's
+     * lane and both USB3 adapters empty: not its own. */
+    cfgDefault(&cfg);
+    cfg.Usb3Tunnel = FALSE;
+    dev = setupMinimal(1, &cfg);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, &k);
+    CHECK(k.Valid && k.Port[0].Pcie.Up && !k.Port[0].Usb3.Up, "carry, PCIe alone: recorded");
+    (void)carryStartB(&k);
+    p = TbtU4Port(&g_cm2, 1);
+    CHECK(p->Pcie.Own && !p->Usb3.Up, "carry, PCIe alone: its own");
+    rc = carryLose(&g_cm2, dev);
+    CHECK_EQ(rc, TBT_OK, "carry, PCIe alone: rebuilt");
+    dev = setupMinimal(1, &cfg);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, &k);
+    g_fab.R[dev].Adp[1].Path[2 * 12] = 0x80000000UL | (6UL << 11) | 8UL;
+    carryForeign(&k, dev, "carry, an orphaned USB3 lane entry");
+
+    /* None from a contained or a suspended instance. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Contain(&g_cm);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, &k3);
+    CHECK(!k3.Valid, "carry: none from a contained instance");
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, &k3);
+    CHECK(!k3.Valid, "carry: none from a suspended instance");
+
+    /* None after a resume that left an obligation unmet, even after a
+     * later resume that met every one. */
+    dev = carryA(&k);
+    (void)carryStartB(&k);
+    TbtU4Suspend(&g_cm2);
+    g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    rc = TbtU4Resume(&g_cm2);
+    CHECK_EQ(rc, TBT_E_STATE, "carry, failed resume: unmet");
+    g_fab.R[dev].Adp[1].Path[2 * 8] |= 0x80000000UL;
+    TbtU4Suspend(&g_cm2);
+    rc = TbtU4Resume(&g_cm2);
+    CHECK(rc == TBT_OK && !g_cm2.ResumeHeld, "carry, failed resume: a later resume met every obligation");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k3);
+    CHECK(!k3.Valid, "carry: none after a resume left an obligation unmet");
+
+    /* None from a recovered instance (contained, recovered, committed). */
+    dev = setupMinimal(1, NULL);
+    lossThenBack();
+    CHECK_EQ(TbtU4Recover(&g_cm, &final), TBT_OK, "carry, recovered: recovered");
+    TbtU4RecoverCommit(&g_cm);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, &k3);
+    CHECK(!k3.Valid, "carry: none from a recovered instance");
+
+    /* None from a start that failed after activation, record given. */
+    dev = carryA(&k);
+    g_fab.Stopped = 1;
+    rc = carryStartB(&k);
+    g_fab.Stopped = 0;
+    CHECK(rc != TBT_OK && g_cm2.Failed, "carry, failed start: failed");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k3);
+    CHECK(!k3.Valid, "carry: none from a failed start");
+
+    /* Rings refused before activation (a block too small): the record
+     * handed on, forwarded. */
+    dev = carryA(&k);
+    memset(&g_ring2, 0, sizeof(g_ring2));
+    TbtU4Init(&g_cm2, &g_ring2, &g_fab.Host, NULL);
+    TbtU4SetCarry(&g_cm2, &k);
+    rc = TbtU4Start(&g_cm2, fabMem(&g_fab), FAB_PHYS, 16);
+    CHECK(rc != TBT_OK && !g_cm2.Failed, "carry, rings refused: refused before activation");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k3);
+    CHECK(k3.Valid && k3.Forwarded, "carry: forwarded by a start whose rings were refused");
+
+    /* A start that never reached the host router hands the record on
+     * unchanged, marked forwarded. */
+    dev = carryA(&k);
+    memset(&g_ring2, 0, sizeof(g_ring2));
+    TbtU4Init(&g_cm2, &g_ring2, &g_fab.Host, NULL);
+    TbtU4SetCarry(&g_cm2, &k);
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k3);
+    CHECK(k3.Valid && k3.Forwarded, "carry: forwarded by a start that never ran");
+    k3.Forwarded = FALSE;
+    CHECK(memcmp(&k3, &k, sizeof(k)) == 0, "carry: forwarded unchanged");
+    (void)dev;
+}
+
+/* Each vector named in the request trace (u4_fakefab.h, task 44.38). */
+#define RUN_VEC(fn) do { fabTraceMark(#fn); fn(); } while (0)
+
+/* Record 21 section 6.1.2 (task 44.54): a port with no router on its link
+ * and nothing recorded reads vacant; one with a device, or a router on its
+ * link not yet classified, does not. */
+static void test_port_vacant(void)
+{
+    int dev;
+
+    dev = setupMinimal(1, NULL);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "vacant: port 1 UP");
+    CHECK(!TbtU4PortVacant(&g_cm, 1), "vacant: a device behind port 1");
+    CHECK(TbtU4PortVacant(&g_cm, 2), "vacant: nothing behind port 2");
+    CHECK(!TbtU4PortVacant(&g_cm, 0), "vacant: no port 0");
+    CHECK(!TbtU4PortVacant(&g_cm, TBT_U4_MAX_PORTS + 1), "vacant: no such port");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "vacant: port 1 EMPTY after the unplug");
+    CHECK(TbtU4PortVacant(&g_cm, 1), "vacant: port 1 vacant after the unplug");
+    fabPlug(&g_fab, 2, dev);
+    CHECK(!TbtU4PortVacant(&g_cm, 2),
+          "vacant: a router on port 2's link, not yet classified");
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "vacant: port 2 UP");
+    CHECK(!TbtU4PortVacant(&g_cm, 2), "vacant: a device behind port 2");
+}
+
 int main(void)
 {
-    test_cold_minimal();
-    test_eject_pcie();
-    test_defer_first_poll();
-    test_hot_plug_unplug();
-    test_unplug_everywhere();
-    test_unplug_nested();
-    test_quick_replug();
-    test_bonding();
-    test_rops();
-    test_detect_and_hca();
-    test_approve_and_usb3_off();
-    test_quirks();
-    test_preos();
-    test_dp_preserved();
-    test_statement();
-    test_caps_preserved();
-    test_inert_and_domains();
-    test_adl();
-    test_tbt3();
-    test_tbt3_adopted();
-    test_links();
-    test_loss_and_eject();
-    test_suspend_resume();
-    test_coarse_clock();
-    test_edge_enumeration();
-    test_edge_lost_answer();
-    test_edge_held_inventory();
-    test_edge_quarantine();
-    test_edge_resume();
-    test_edge_bandwidth_and_tmu();
-    test_edge_ba_and_closure();
-    test_edge_identity();
-    test_edge_budget();
-    test_edge_identity_and_links();
-    test_edge_restore();
-    test_dark_port_incomplete_pcie();
-    test_budget_and_pending_entries();
-    test_ring_wrap_and_owed_teardown();
-    test_transitional_and_config_loss();
-    test_lock_across_sleep();
-    test_asm4242();
-    test_asm2464();
-    test_contain();
-    test_recover();
+    RUN_VEC(test_bw_units);
+    RUN_VEC(test_cold_minimal);
+    RUN_VEC(test_eject_pcie);
+    RUN_VEC(test_defer_first_poll);
+    RUN_VEC(test_hot_plug_unplug);
+    RUN_VEC(test_unplug_everywhere);
+    RUN_VEC(test_unplug_nested);
+    RUN_VEC(test_quick_replug);
+    RUN_VEC(test_bonding);
+    RUN_VEC(test_rops);
+    RUN_VEC(test_detect_and_hca);
+    RUN_VEC(test_approve_and_usb3_off);
+    RUN_VEC(test_quirks);
+    RUN_VEC(test_preos);
+    RUN_VEC(test_dp_preserved);
+    RUN_VEC(test_statement);
+    RUN_VEC(test_caps_preserved);
+    RUN_VEC(test_inert_and_domains);
+    RUN_VEC(test_adl);
+    RUN_VEC(test_tbt3);
+    RUN_VEC(test_tbt3_adopted);
+    RUN_VEC(test_links);
+    RUN_VEC(test_loss_and_eject);
+    RUN_VEC(test_suspend_resume);
+    RUN_VEC(test_carry);
+    RUN_VEC(test_coarse_clock);
+    RUN_VEC(test_edge_enumeration);
+    RUN_VEC(test_edge_lost_answer);
+    RUN_VEC(test_edge_held_inventory);
+    RUN_VEC(test_edge_quarantine);
+    RUN_VEC(test_edge_resume);
+    RUN_VEC(test_edge_bandwidth_and_tmu);
+    RUN_VEC(test_edge_ba_and_closure);
+    RUN_VEC(test_edge_identity);
+    RUN_VEC(test_edge_budget);
+    RUN_VEC(test_edge_identity_and_links);
+    RUN_VEC(test_edge_restore);
+    RUN_VEC(test_dark_port_incomplete_pcie);
+    RUN_VEC(test_budget_and_pending_entries);
+    RUN_VEC(test_ring_wrap_and_owed_teardown);
+    RUN_VEC(test_transitional_and_config_loss);
+    RUN_VEC(test_lock_across_sleep);
+    RUN_VEC(test_asm4242);
+    RUN_VEC(test_asm2464);
+    RUN_VEC(test_asm7);
+    RUN_VEC(test_asm4242_preos);
+    RUN_VEC(test_contain);
+    RUN_VEC(test_recover);
+    RUN_VEC(test_port_vacant);
+    fabTraceMark("end");
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

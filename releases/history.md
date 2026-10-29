@@ -12,6 +12,208 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 3.3.0.0 - 2026-10-28
+
+Every system `3.2.0.0` supports is supported. The Thunderbolt 3 / USB4
+connection manager no longer stays a boot driver, the installer reads
+Secure Boot and Intel's Thunderbolt driver before it changes anything,
+and the USB Tree says more about each device. It was read in QEMU
+virtual machines, the Thunderbolt 3 and USB4 parts against the emulated
+hosts and enclosure; the release notes say what was read where.
+
+### What changed
+
+- The connection manager is set back to start on demand: Windows makes
+  it a boot driver when it puts its filter on the controller's PCI
+  ports, and the installer sets it back at the end of each run (the
+  safe-removal mark service after a later install). On 64-bit Vista to
+  10 a start without test-signing mode then leaves the Thunderbolt and
+  USB4 devices at Code 52 (Code 39 on Vista) and the rest of the install
+  as it was, where under `3.2.0.0` such a start stopped 64-bit 8 in
+  Automatic Repair and rolled the install back on 7 x64. It stays a boot
+  driver where Windows starts from a disk behind a port it filters. Keep
+  test-signing mode on all the same: there the 64-bit drivers load only
+  in it, or on a start with signature enforcement disabled.
+- On Vista x64 and 7 x64 the installer installs the Thunderbolt 3 / USB4
+  support only in test-signing mode, as on 64-bit 8 to 10.
+- Stor98 is only for NVMe drives behind a Thunderbolt or USB4 port. The
+  connection manager gives such a drive an id of its own, and on 2000 to
+  8 Stor98's INF matches only that id, so Windows never offers Stor98
+  for an internal NVMe drive. On 8.1 and 10 Windows' own `stornvme`
+  keeps an internal drive. On 98 SE and ME Windows may still offer it for
+  an internal drive with no driver: decline it. An internal drive that
+  already runs Stor98 keeps it.
+- Stor98's settings are named alike on every system, each name starting
+  with Stor. On 2000 to 10 the `DriverParameter` keys are renamed
+  (`maxtransferkb=` is now `stormaxtransferkb=`, and so on; the release
+  notes list them all). A key of an old name is ignored after the
+  update: rename it and keep its value. 98 SE and ME gain `StorGoneMs`,
+  `StorWriteIdleMs` and `StorHold9xMs`.
+- Windows 8, 8.1 and 10: where Secure Boot is on, the installer refuses
+  a run with the USB drivers, and on 32-bit Windows one with the
+  Thunderbolt 3 / USB4 support, before any change; on 64-bit 10 it says
+  when memory integrity is on. Where Intel's Thunderbolt driver runs the
+  controller, the Thunderbolt 3 / USB4 support is unticked; ticked, it
+  replaces Intel's driver after a warning, and the uninstall gives the
+  controller back to it.
+- Windows 8, 8.1 and 10: the uninstall of the USB drivers was read to
+  finish in one run, and the installer no longer says it may need a
+  restart and a second run.
+- USB4 hosts with an ASMedia ASM4242: the
+  connection manager finds the PCI ports its tunnels arrive on, so a
+  tunnelled drive there is treated as one behind any other USB4 host.
+  Read on the emulator's ASM4242 host. Not yet read on real hardware.
+- The installer's Other USB drivers page is two pages, "Free USB
+  drivers" and "Non-free USB drivers", each shown only when the download
+  carries that set. The Welcome page shows more of the device list.
+- On 98 SE the free `uac2` and `usbmidi` drivers, and on ME `uac2`, can
+  again be ticked for Windows to use at a device's first plug, so a USB
+  Audio Class 2.0 device gets `uac2`, which matches the class, and not
+  Windows' own USB audio driver, which stopped Windows with a fatal
+  exception 0E.
+- The `-free` download carries usb-wdm-free 0.1.4, which adds `ax88179`
+  for USB Gigabit Ethernet adapters with an AX88179 or AX88178A chip
+  (98 SE, ME and 2000), and `uac2` on ME. Its drivers are now under
+  GPL-2.0-or-later, `rtl815x`'s chip core is rewritten, and its class
+  drivers match their USB class where Windows has no class driver of its
+  own (USB CDC serial devices now too, on 98 SE, ME and 2000). `rtl815x`
+  adds the Realtek RTL8153D, RTL8156, RTL8156B, RTL8157 and RTL8159,
+  read on a simulator only. `uac2` adds playback volume and mute.
+- The `-nonfree` download carries usb-wdm-nonfree 1.1.0's Ethernet, HID
+  and serial drivers, with more USB Ethernet adapters: ASIX AX88172,
+  AX88172A, AX88178, AX88772B and AX88772C, MosChip MCS7830, Realtek
+  RTL8150 and Davicom DM96xx. Wi-Fi drivers are not in this download.
+  Get them from the usb-wdm-nonfree release.
+- On 98 SE and ME the controller's Properties window names its maker and
+  product, as Device Manager's list does.
+- The xHCI98 USB Tree: a USB4 device on a Thunderbolt 3 controller reads
+  "USB4 v1.0 device, running as Thunderbolt 3"; the status bar says when
+  a driver update waits for a restart; a USB storage device shows
+  whether it runs UAS or Bulk-Only and why, with a note when a UAS
+  drive's entry is bound to Windows' Bulk-Only driver (the release notes
+  say how to give it back to UAS).
+- USB4 hosts whose tunnels the connection manager builds: a tunnel it
+  built is built again after a hibernation also when Windows had
+  restarted the controller's driver in between; the drive was missing
+  after the resume. Standby or hibernation with a tunnelled device attached is
+  still not supported.
+- 98 SE and ME: an NVMe drive behind a tunnel that the BIOS gives no
+  interrupt (Code 29) now starts, with Stor98 polling it, when the
+  installer installed or staged the bundled Stor98
+  (`XhciCmNoIrqStart`, on by default).
+- 98 SE and ME: the install now writes `XhciCmBridgeNumbering` and
+  `XhciCmNoIrqStart` at their default 1 where they are missing, like
+  every other connection-manager value (`XhciCmTunnelBridge` stays
+  unwritten, its absence meaning no override); `INSTALL /set` sets
+  both.
+- Fixed: on 98 SE an `xhci98.tmp` left in `SYSTEM32\DRIVERS` could
+  replace `xhci98.sys` at the start after a controller was added; the
+  installer deletes such a leftover. `INSTALL.BAT` refusing too many
+  arguments exits with errorlevel 1 on 98 SE and ME.
+- Fixed: Windows 98 SE and ME could hang at Shut Down or Restart with a
+  USB4 enclosure attached and the connection manager running.
+- Fixed: on 98 SE and ME Stor98 looked for its drive on the first 16 PCI
+  buses only; it now looks on every bus, as a drive behind a USB4 port
+  can be (on the emulator's ASM4242 those ports have buses 19h to 78h).
+- Fixed: on Windows 2000 and XP the first plug of a Thunderbolt or USB4
+  enclosure never seen before could leave its drive without a driver
+  after its first Found New Hardware wizard; the safe-removal mark
+  service's restart of the enclosure now sets the drive's install to run
+  again, so Windows offers Stor98 for it.
+- XHCIPFW: a small part of the install that runs at Windows start.
+  Where the firmware leaves the USB4 ports' windows above 4 GB it closes
+  them, so Windows finds the devices behind them. It is a choice under
+  the Thunderbolt 3 / USB4 box and ticked with it. It can be unticked.
+  It is offered on 32-bit Windows 2000 to 7 (and on 98 SE and ME as
+  XHCIPFW.VXD). It is not offered on 32-bit Windows 8, 8.1 and 10.
+- Device Manager names many more USB 3 controllers by maker and product
+  (AMD 400 to 800 Series chipsets and Zeppelin to Strix Halo
+  processors, Intel 200 to 800 Series chipsets and later processors,
+  ASMedia ASM4242 and others); the ASM4242's USB4 router and, on 2000
+  to 7, its downstream ports are named too.
+- The package's own names say "USB 3", not "USB 3.x": "xHCI98 USB 3
+  Root Hub", "xHCI98 USB 3 Hub" for a hub's SuperSpeed half, the service
+  "xHCI98 USB 3 Controller Driver", the F6 floppy's list ("xHCI98 USB 3
+  Controller (...)"), the USB Tree's port counts, and the installer's
+  title, pages and Add/Remove Programs entry ("xHCI98 USB 3 drivers").
+  An update renames the existing entry in place; the Intel Bay Trail
+  controller (`8086:0F35`) is named too.
+- Fixed: an install of the connection manager alone (`/cmonly`) on 98
+  SE and ME was listed in Add/Remove Programs as "xHCI98 USB 3.x
+  drivers"; it is now "xHCI98 Thunderbolt 3 / USB4 connection manager",
+  and ME no longer prints its UAS hint in such a run.
+- Stor98: a request it answers itself successfully (INQUIRY, READ
+  CAPACITY, TEST UNIT READY, its counters and others) reports the SCSI
+  status GOOD;
+  before, it kept whatever value the request arrived with, and on
+  Windows ME a program using ASPI could read a target status of 05h
+  after another such program had run.
+- USB4 hosts whose tunnels the connection manager builds: with a drive
+  attached at power-on whose host names no tunnel port to it (as with
+  the ASM4242), the connection manager no longer reads the tunnel ports
+  every 200 ms for as long as Windows runs; it tries for a minute and
+  then stops.
+- Windows 2000 with the Standard PC HAL (`hal.dll`, hardware id
+  `e_isa_up`): a tunnelled NVMe drive plugged after the system started
+  now gets an interrupt from the connection manager and starts on
+  Stor98, which runs it polled (it was left at Code 10; issue 19).
+- Windows 98 SE and ME, USB4: a tunnelled drive that drops off with the
+  whole USB4 controller now comes back with its files once the
+  controller returns. No restart is needed. While the controller is away
+  the drive stays listed and its reads and writes fail. Before, it was
+  removed at once and came back only after a restart. Read on the
+  emulated ASM4242 host.
+- XHCITR has a new item, "PCI and bridge diagnostics". It shows what the
+  drivers recorded about PCI bridges and interrupts, decoded beside the
+  raw values. Edit > Copy copies it and Save Report includes it.
+- The USB Tree's "can run faster" notice no longer asks for more than this
+  computer gives. Under `3.2.0.0` a 10 Gbit/s device stayed listed at 5
+  Gbit/s on a computer whose USB 3 ports run at 5 Gbit/s at most, and
+  "Can run at" said 10 Gbit/s there. The tool now reads each port's top
+  speed from `xhci98.sys`. A hub of 5 Gbit/s on the way holds a device
+  to 5 Gbit/s too. A device behind a hub plugged in by its USB 2.0 pins
+  is still listed, with "SuperSpeed (5 Gbit/s)" on such a computer.
+- New option in the USB Tree: "Watch Windows' own USB ports too". It is
+  off by default. Turned on, a USB 3 device on a USB 2.0 port that
+  Windows' own driver runs is listed too, with "Connect it to a USB 3
+  port of this computer." The tool then asks such a device for one
+  descriptor once per plug.
+- The rare stall on 98 SE and ME after closing a program that had a file
+  open on an unplugged Thunderbolt or USB4 drive was read on 98 SE to be
+  Windows 98 SE's own mouse driver (`VMOUSE.VXD`); it stays a known
+  limitation.
+- Updating from `3.2.0.0` with an ASMedia ASM4242 USB4 controller: the
+  first run leaves Stor98 on a tunnel drive it already runs. The
+  Thunderbolt driver of `3.2.0.0` does not list that controller's
+  tunnel ports. The run now says to run the installer again after the
+  restart. That run updates Stor98, unless another Stor98 drive keeps
+  the shared file. The run then says so.
+- Windows 98 SE and ME: the installer puts `stor98.mpd` in place
+  before the first tunnel drive is plugged. Windows no longer asks for
+  the "Stor98 Storage Controller Disk" when it installs the drive.
+- Fixed: on Windows 2000 a controller's restart, disable or update no
+  longer fails with Code 31 until a restart when Windows' own EHCI
+  driver, or a second controller on this driver, starts after it
+  (issue 20). The controller's name on Windows 2000 and later is now
+  `\DosDevices\XHCI98HC<k>`, with an `HCD<m>` alias on 2000, XP and XP
+  x64 so Windows' USB control panel (usbui's walk) still lists it there.
+  98 SE and ME keep `HCD<n>`. The fix works from the first start of
+  `3.3.0.0`: an update from `3.2.0.0` or earlier on such a 2000 machine
+  may still end at Code 31 and ask for the restart, once. XHCITR
+  `3.2.0.0` cannot take a snapshot from this driver on Vista and later.
+- Fixed: on Windows 2000 the update over `3.2.0.0` with the
+  Thunderbolt 3 / USB4 support could stop with "XHCIMARK.EXE could not
+  be put into ... (error 5)" and keep the old safe-removal mark service.
+  The installer now waits for the old service to end. If its program is
+  still in use, it is replaced at the restart.
+- This project's own source is now under GPL-2.0-or-later. Every
+  release up to `3.2.0.0` was GPL-2.0-only. Stor98 stays BSD-3-Clause.
+- The cleanup tool `XHCICLN` is no longer in the download. The old
+  `XHCI98\` entries an update from `2.3.x` or earlier left stay. They
+  do no harm. The downloads from `2.4.0.0` to
+  `3.2.0.0` still carry the tool.
+- Updating from `3.2.0.0`: run `SETUP.EXE`.
+
 ## 3.2.0.0 - 2026-10-24
 
 Every system `3.1.0.0` supports is supported, and Windows 10 is added. A release now comes as up to three downloads, and the

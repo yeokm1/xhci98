@@ -233,7 +233,7 @@ log:
 
 //
 // Maximum transfer size (xfertun.h; PLAN "0.4.0.0 plan", owner decision
-// 2026-10-16). NT: maxtransferkb= in DriverParameter; a resume brings no
+// 2026-10-16). NT: stormaxtransferkb= in DriverParameter; a resume brings no
 // ArgumentString and keeps what was parsed. 9x: StorMaxTransferKB, read
 // through VMM at every load (PlatXferRaw). It only lowers the build's
 // maximum, STOR98_MAX_TRANSFER, which the compile-time PRP list and NLB
@@ -283,7 +283,7 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         t->IdleFlushMs = 1000;
         t->GoneMarginMs = 1500;
         t->HoldMarginMs = 1000;
-        t->Hold9xMs = 4000;
+        t->Hold9xMs = ENG_HOLD9X_DEF_MS;
 #if (defined(STOR98_TEST_FRAG_KB) || defined(STOR98_TEST_SG9X_FAIL)) && !defined(STOR98_DBGPORT)
 #error STOR98_TEST_FRAG_KB and STOR98_TEST_SG9X_FAIL are test-only: build them with STOR98_DBGPORT=1
 #endif
@@ -324,8 +324,10 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         parsed = TRUE;
         t->GoneMs = LcNum(LcFind(ArgumentString, DPK_GONE), t->GoneMs);
         t->IdleFlushMs = LcNum(LcFind(ArgumentString, DPK_IDLE), t->IdleFlushMs);
-        t->Hold9xMs = LcNum(LcFind(ArgumentString, DPK_HOLD9X), t->Hold9xMs);
 #ifdef STOR98_DBGPORT
+        // hold9x= is a test key: the 9x hold bound it sets is used on 9x
+        // alone, whose port passes no ArgumentString (dpkeys.h).
+        t->Hold9xMs = LcNum(LcFind(ArgumentString, DPK_HOLD9X), t->Hold9xMs);
         // Test-only shapes of the engine's work (test builds only).
         t->FragBytes = LcNum(LcFind(ArgumentString, DPK_FRAG), t->FragBytes / 1024) * 1024;
         t->ForceBounce = LcNum(LcFind(ArgumentString, DPK_BOUNCE), t->ForceBounce);
@@ -349,6 +351,19 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         t->IdleFlushToMs = LcNum(LcFind(ArgumentString, DPK_IDLETO), t->IdleFlushToMs);
 #endif
     }
+#ifdef NVME2K_W9X
+    // 9x: StorGoneMs and StorWriteIdleMs, read through VMM at every load
+    // (the port passes no ArgumentString); the same ranges as NT's below.
+    // StorHold9xMs, the 9x hold bound, has no NT key (xhci98 3.3.0.0).
+    PlatTunMsRaw(&t->GoneMs, &t->IdleFlushMs, &t->Hold9xMs);
+#endif
+    if (t->Hold9xMs < ENG_HOLD9X_MIN_MS || t->Hold9xMs > ENG_HOLD9X_MAX_MS) {
+        DBGSTAGE(STG_HOLD9X_REFUSED, t->Hold9xMs);
+        t->Hold9xMs = ENG_HOLD9X_DEF_MS;
+    }
+#ifdef NVME2K_W9X
+    DBGSTAGE(STG_HOLD9X, t->Hold9xMs);
+#endif
     if (t->GoneMs == 0 || t->GoneMs > 600000) {
         t->GoneMs = 5000;
     }
@@ -724,7 +739,7 @@ static VOID LcBringupDone(IN PHW_DEVICE_EXTENSION DevExt)
         DevExt->ChildLimitIo = ENG_MAX_CHILDREN;
     }
     // Child size: the transfer limit reported to the port (the
-    // StorMaxTransferKB / maxtransferkb= setting, at most
+    // StorMaxTransferKB / stormaxtransferkb= setting, at most
     // STOR98_MAX_TRANSFER), MDTS (1.4, units of CAP.MPSMIN = 4 KiB) and the
     // test fragment size.
     lim = DevExt->Tun.MaxXferKb * 1024;

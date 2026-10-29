@@ -18,6 +18,7 @@
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
 #include "../xhciinst/inst_core.h"
+#include "../src/xhci_qry.h"
 #include "test_harness.h"
 
 #define QB_ID "PCI\\VEN_8086&DEV_15EB&SUBSYS_00000000&REV_06\\4&2B3C0E5&0&00E4"
@@ -2676,7 +2677,352 @@ static TR_FAST_IN fast_in(TR_U32 flags, unsigned int ex)
     in.V2Flags = flags;
     in.ExSpeed = ex;
     in.Root = 1;
+    /* A computer with a SuperSpeedPlus port: the device's own declaration
+     * is the limit, as before 44.80 (item 10's vectors set it). */
+    in.Top = TR_SPEED_SUPERPLUS;
     return in;
+}
+
+/* A device behind one hub, the hub's connection given (item 10). */
+static TR_FAST_IN fast_behind(TR_U32 flags, unsigned int ex, TR_U32 hubFlags,
+                              unsigned int hubEx, int top)
+{
+    TR_FAST_IN in = fast_in(flags, ex);
+
+    in.Root = 0;
+    in.HubKnown = 1;
+    in.HubHaveV2 = 1;
+    in.HubFlags = hubFlags;
+    in.HubExSpeed = hubEx;
+    in.HubSs = tr_fast_hub_cap(1, 1, hubFlags);
+    in.Top = top;
+    return in;
+}
+
+/* A device on a port Windows' own driver runs (item 11). */
+static TR_FAST_IN fast_win(int ctrl, unsigned int ex, int bos, int top)
+{
+    TR_FAST_IN in;
+
+    memset(&in, 0, sizeof(in));
+    in.Ours = 0;
+    in.Connected = 1;
+    in.ExSpeed = ex;
+    in.Root = 1;
+    in.BcdUsb = 0x0210;
+    in.Top = top;
+    in.WinWatch = 1;
+    in.WinCtrl = ctrl;
+    in.WinBos = bos;
+    return in;
+}
+
+/* Roadmap-usb4 44.80 (record 25 section 7.7 items 10 and 11): the speed a
+ * device can run at, held to what this computer and the path give, and
+ * Windows' own ports. */
+static void test_fast_path(void)
+{
+    static const unsigned char p5[4] = { XHQ_PT_USB2, XHQ_PT_USB2,
+                                         XHQ_PT_SS, XHQ_PT_SS };
+    static const unsigned char p10[3] = { XHQ_PT_USB2, XHQ_PT_SSP, XHQ_PT_SS };
+    static const unsigned char p2[2] = { XHQ_PT_USB2, XHQ_PT_NONE };
+    static const unsigned char pOdd[2] = { 7, 0xFF };
+    /* bLength, type 0F, wTotalLength, bNumDeviceCaps, then the caps: USB
+     * 2.0 Extension (02h), SuperSpeed (03h), SuperSpeedPlus (0Ah). */
+    static const unsigned char bosSs[22] = {
+        5, 0x0F, 22, 0, 2,
+        7, 0x10, 0x02, 0x02, 0, 0, 0,
+        10, 0x10, 0x03, 0, 0x0E, 0, 1, 10, 0xFF, 0x07 };
+    /* The SuperSpeedPlus capability: SSAC 0, one sublink attribute. */
+    static const unsigned char bosSsp[38] = {
+        5, 0x0F, 38, 0, 3,
+        7, 0x10, 0x02, 0x02, 0, 0, 0,
+        10, 0x10, 0x03, 0, 0x0E, 0, 1, 10, 0xFF, 0x07,
+        16, 0x10, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x30, 0x40, 0x0A, 0 };
+    /* A capability of three bytes tagged SuperSpeed. */
+    static const unsigned char bosCut[8] = { 5, 0x0F, 8, 0, 1, 3, 0x10, 0x03 };
+    static const unsigned char bos2[12] = {
+        5, 0x0F, 12, 0, 1,
+        7, 0x10, 0x02, 0x02, 0, 0, 0 };
+    unsigned char bad[38];
+    TR_FAST_IN in;
+    TR_FAST f;
+    TR_WBOS_CACHE *c;
+    char key[TR_FAST_KEY];
+    char fk[TR_FAST_KEY];
+    char box[2048];
+    char out[400];
+    TR_TEXT t;
+    int i;
+    static TR_WBOS_CACHE cache;
+
+    /* The computer's top, controller by controller. */
+    CHECK_EQ(tr_fast_top_add(-1, 1, p5, 4), TR_SPEED_SUPER,
+             "top: a 5 Gbit/s controller");
+    CHECK_EQ(tr_fast_top_add(-1, 1, p10, 3), TR_SPEED_SUPERPLUS,
+             "top: a 10 Gbit/s port");
+    CHECK_EQ(tr_fast_top_add(tr_fast_top_add(-1, 1, p5, 4), 1, p10, 3),
+             TR_SPEED_SUPERPLUS, "top: the faster of two controllers");
+    CHECK_EQ(tr_fast_top_add(tr_fast_top_add(-1, 1, p10, 3), 1, p5, 4),
+             TR_SPEED_SUPERPLUS, "top: in either order");
+    CHECK_EQ(tr_fast_top_add(-1, 0, NULL, 0), TR_SPEED_SUPER,
+             "top: ports not read: SuperSpeed, never SuperSpeedPlus");
+    CHECK_EQ(tr_fast_top_add(TR_SPEED_SUPERPLUS, 0, NULL, 0),
+             TR_SPEED_SUPERPLUS, "top: an unread one lowers nothing");
+    CHECK_EQ(tr_fast_top_add(-1, 1, p2, 2), -1, "top: USB 2.0 ports alone");
+    CHECK_EQ(tr_fast_top_add(-1, 1, NULL, 0), -1,
+             "top: a stopped controller (no ports)");
+    CHECK_EQ(tr_fast_top_add(-1, 1, pOdd, 2), -1, "top: values not known");
+    CHECK_EQ(tr_fast_top_add(-1, 1, NULL, 3), -1, "top: no bytes");
+
+    /* What a hub on the path holds. */
+    CHECK_EQ(tr_fast_hub_cap(1, 1, TR_V2_F_SS_CAPABLE), 1, "hub: SS only holds");
+    CHECK_EQ(tr_fast_hub_cap(1, 1, TR_V2_F_SS_NOW | TR_V2_F_SS_CAPABLE), 1,
+             "hub: at SS, SS only holds");
+    CHECK_EQ(tr_fast_hub_cap(1, 1, TR_V2_F_SS_NOW), 1,
+             "hub: at SS, nothing declared, holds");
+    CHECK_EQ(tr_fast_hub_cap(1, 1, TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE), 0,
+             "hub: SSP declared holds nothing");
+    CHECK_EQ(tr_fast_hub_cap(1, 1, 0), 0, "hub: a USB 2.0 hub holds nothing");
+    CHECK_EQ(tr_fast_hub_cap(0, 1, 0), 1, "hub: not read holds");
+    CHECK_EQ(tr_fast_hub_cap(1, 0, 0), 1, "hub: no _EX_V2 holds");
+
+    /* A 5 Gbit/s computer (the report: a VIA VL805). A SuperSpeedPlus
+     * device at SuperSpeed: the best this computer gives. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2);
+    in.Top = TR_SPEED_SUPER;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "5G: SSP device at SS: no notice");
+    CHECK(f.Now == -1 && f.Can == -1, "5G: nothing filled");
+    CHECK(tr_fast_note(&in) != NULL &&
+              strcmp(tr_fast_note(&in), "This computer's USB 3 ports run at "
+                                        "5 Gbit/s at most.") == 0,
+          "5G: the details' note");
+    in.ExSpeed = 3;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "5G: 98's byte 3: no notice");
+    /* ... at High Speed on a USB 2.0 root port. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH);
+    in.Top = TR_SPEED_SUPER;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_PORT2 &&
+              f.Can == TR_SPEED_SUPER, "5G: SSP device at HS: can SuperSpeed");
+    /* ... behind a SuperSpeedPlus hub plugged in by its USB 2.0 pins: the
+     * report's case. */
+    in = fast_behind(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH,
+                     TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH,
+                     TR_SPEED_SUPER);
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "5G: the hub at HS: still counts");
+    CHECK(f.Where == TR_FW_HUB3 && f.Now == TR_SPEED_HIGH &&
+              f.Can == TR_SPEED_SUPER && f.HubNow == TR_SPEED_HIGH,
+          "5G: behind a USB 3 hub at HS, can SuperSpeed");
+    tr_text_init(&t, box, sizeof(box));
+    tr_fast_entry(&t, "USB 10/100/1G/2.5G/5G LAN", 0x0BDA, 0x8157,
+                  "Port 1.3 of xHCI98 USB 3 Controller (VIA VL805/VL806)",
+                  "xHCI98 USB Hub", &f);
+    CHECK(strstr(box, "  Can run at: SuperSpeed (5 Gbit/s)\r\n") != NULL ||
+              strstr(box, "  Can run at: SuperSpeed (5 Gbit/s)\n") != NULL,
+          "5G: the entry says SuperSpeed (5 Gbit/s)");
+    CHECK(strstr(box, "SuperSpeedPlus") == NULL, "5G: and never SuperSpeedPlus");
+    CHECK(strstr(box, "Connect the hub to a USB 3 port") != NULL,
+          "5G: the hub's advice");
+    /* ... the hub put right: the device at SuperSpeed behind it. */
+    in = fast_behind(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2,
+                     TR_V2_F_SS_NOW | TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, 2,
+                     TR_SPEED_SUPER);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "5G: behind the hub at SS: no notice");
+    /* An SS-only device on that computer is unchanged. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Top = TR_SPEED_SUPER;
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPER, "5G: SS at HS");
+    CHECK(tr_fast_note(&in) == NULL, "5G: no note for an SS device");
+
+    /* A controller whose ports were not read: SuperSpeed, conservatively. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2);
+    in.Top = tr_fast_top_add(-1, 0, NULL, 0);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "unread: SSP at SS: no claim");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH);
+    in.Top = tr_fast_top_add(-1, 0, NULL, 0);
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPER,
+          "unread: SSP at HS: can SuperSpeed, not more");
+
+    /* A 10 Gbit/s computer. */
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2);
+    in.Top = TR_SPEED_SUPERPLUS;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_LINK &&
+              f.Can == TR_SPEED_SUPERPLUS, "10G: SSP at SS direct: the link");
+    CHECK(tr_fast_note(&in) == NULL, "10G: counted, no note");
+    in = fast_behind(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2,
+                     TR_V2_F_SS_NOW | TR_V2_F_SS_CAPABLE, 2, TR_SPEED_SUPERPLUS);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "10G: behind an SS-only hub at SS: no");
+    CHECK(tr_fast_note(&in) != NULL &&
+              strcmp(tr_fast_note(&in),
+                     "A hub it is behind runs at 5 Gbit/s at most.") == 0,
+          "10G: the hub's note");
+    in = fast_behind(TR_V2_F_SS_CAPABLE | TR_V2_F_SS_NOW | TR_V2_F_SSP_CAPABLE, 2,
+                     TR_V2_F_SS_NOW | TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, 2,
+                     TR_SPEED_SUPERPLUS);
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_LINK,
+          "10G: behind an SSP hub at SS: the link");
+    in = fast_behind(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH,
+                     TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH, TR_SPEED_SUPERPLUS);
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB3 &&
+              f.Can == TR_SPEED_SUPER, "10G: an SS-only hub at HS: can SS");
+    in = fast_behind(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH,
+                     0, TR_SPEED_HIGH, TR_SPEED_SUPERPLUS);
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUB2 &&
+              f.Can == TR_SPEED_SUPERPLUS, "10G: a USB 2.0 hub holds nothing");
+    in = fast_in(TR_V2_F_SS_CAPABLE | TR_V2_F_SSP_CAPABLE, TR_SPEED_HIGH);
+    in.Top = TR_SPEED_SUPERPLUS;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_PORT2 &&
+              f.Can == TR_SPEED_SUPERPLUS, "10G: SSP at HS: can SSP");
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Top = TR_SPEED_SUPERPLUS;
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPER,
+          "10G: an SS device is never raised");
+
+    /* No USB 3 port at all: nothing to move to, but the High Speed case. */
+    in = fast_in(TR_V2_F_SS_CAPABLE, TR_SPEED_HIGH);
+    in.Top = -1;
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "no USB 3 port: no notice");
+    in = fast_behind(0, TR_SPEED_FULL, 0, TR_SPEED_FULL, -1);
+    in.BcdUsb = 0x0200;
+    in.HsQual = 1;
+    CHECK(tr_fast_check(&in, &f) && f.Where == TR_FW_HUBFS,
+          "no USB 3 port: the High Speed case still counts");
+
+    /* Windows' own ports (the owner, 2026-10-28: opt-in). */
+    in = fast_win(TR_WC_EHCI, TR_SPEED_HIGH, -1, TR_SPEED_SUPER);
+    CHECK_EQ(tr_fast_wants_bos(&in), 1, "win: asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "win: BOS unknown: no notice");
+    in.WinBos = TR_SPEED_SUPER;
+    CHECK_EQ(tr_fast_check(&in, &f), 1, "win: SS declared at HS: counts");
+    CHECK(f.Where == TR_FW_WIN2 && f.Now == TR_SPEED_HIGH &&
+              f.Can == TR_SPEED_SUPER, "win: on a USB 2.0 port, can SS");
+    CHECK(strcmp(tr_fast_try(TR_FW_WIN2),
+                 "Connect it to a USB 3 port of this computer.") == 0,
+          "win: try");
+    tr_fast_balloon(out, sizeof(out), "USB Flash Disk (G:)", &f, 1, 1);
+    CHECK(strcmp(out, "USB Flash Disk (G:) runs at High Speed (480 Mbit/s) on "
+                      "a USB 2.0 port; it can run at SuperSpeed (5 Gbit/s). "
+                      "Click here for what to try.") == 0, "win: the balloon");
+    in.WinBos = TR_SPEED_SUPERPLUS;
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPER,
+          "win: SSP declared, 5G computer: can SS");
+    in.Top = TR_SPEED_SUPERPLUS;
+    CHECK(tr_fast_check(&in, &f) && f.Can == TR_SPEED_SUPERPLUS,
+          "win: SSP declared, 10G computer: can SSP");
+    in = fast_win(TR_WC_EHCI, TR_SPEED_HIGH, TR_SPEED_SUPER, TR_SPEED_SUPER);
+    in.WinWatch = 0;
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: option off: not asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "win: option off: no notice");
+    in = fast_win(TR_WC_EHCI, TR_SPEED_HIGH, TR_SPEED_SUPER, -1);
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: no xHCI98 USB 3 port: not asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "win: no xHCI98 USB 3 port: no notice");
+    in = fast_win(TR_WC_EHCI, TR_SPEED_HIGH, TR_SPEED_SUPER, TR_SPEED_SUPER);
+    in.BcdUsb = 0x0201;
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: bcdUSB 2.01: not asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "win: bcdUSB 2.01: no notice");
+    in.BcdUsb = 0x0200;
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: bcdUSB 2.00: not asked");
+    in.BcdUsb = 0x0300;
+    CHECK_EQ(tr_fast_wants_bos(&in), 1, "win: bcdUSB 3.00: asked");
+    in.BcdUsb = 0x0210;
+    in.IsHub = 1;
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: a hub: not asked");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "win: a hub: no notice");
+    in.IsHub = 0;
+    in.Connected = 0;
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: nothing connected: not asked");
+    in.Connected = 1;
+    in.WinCtrl = TR_WC_OTHER;
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: an xHCI or unread class: never");
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "win: an xHCI or unread class: no");
+    in.WinCtrl = TR_WC_EHCI;
+    in.Ours = 1;
+    CHECK_EQ(tr_fast_wants_bos(&in), 0, "win: never on xhci98's ports");
+    in = fast_win(TR_WC_EHCI, TR_SPEED_UNKNOWN, TR_SPEED_SUPER, TR_SPEED_SUPER);
+    CHECK_EQ(tr_fast_check(&in, &f), 0, "win: EHCI, speed not reported: no");
+    in = fast_win(TR_WC_USB1, TR_SPEED_UNKNOWN, TR_SPEED_SUPER, TR_SPEED_SUPER);
+    CHECK(tr_fast_check(&in, &f) && f.Now == TR_SPEED_FULL,
+          "win: USB 1.1 controller, original request: Full Speed");
+    in.ExSpeed = TR_SPEED_LOW;
+    CHECK(tr_fast_check(&in, &f) && f.Now == TR_SPEED_LOW,
+          "win: USB 1.1 controller, Low Speed");
+    CHECK(tr_fast_note(&in) == NULL, "win: no note");
+
+    /* The BOS read through Windows' hub. */
+    CHECK_EQ(tr_bos_top(bosSs, sizeof(bosSs)), TR_SPEED_SUPER, "bos: SS");
+    CHECK_EQ(tr_bos_top(bosSsp, sizeof(bosSsp)), TR_SPEED_SUPERPLUS, "bos: SSP");
+    CHECK_EQ(tr_bos_top(bos2, sizeof(bos2)), -1, "bos: USB 2.0 extension alone");
+    CHECK_EQ(tr_bos_top(bosCut, sizeof(bosCut)), -1,
+             "bos: a SuperSpeed capability cut short");
+    memcpy(bad, bosSsp, sizeof(bosSsp));
+    bad[26] = 1;
+    CHECK_EQ(tr_bos_top(bad, sizeof(bosSsp)), -1,
+             "bos: SSP length not as its sublink count says");
+    memcpy(bad, bosSsp, sizeof(bosSsp));
+    bad[4] = 2;
+    CHECK_EQ(tr_bos_top(bad, sizeof(bosSsp)), -1,
+             "bos: not as many capabilities as it says");
+    CHECK_EQ(tr_bos_top(bosSs, 21), -1, "bos: shorter than its total");
+    CHECK_EQ(tr_bos_top(bosSs, 4), -1, "bos: no header");
+    CHECK_EQ(tr_bos_top(NULL, 22), -1, "bos: nothing");
+    memcpy(bad, bosSs, sizeof(bosSs));
+    bad[1] = 0x01;
+    CHECK_EQ(tr_bos_top(bad, sizeof(bosSs)), -1, "bos: not type 0Fh");
+    memcpy(bad, bosSs, sizeof(bosSs));
+    bad[12] = 0;
+    CHECK_EQ(tr_bos_top(bad, sizeof(bosSs)), -1, "bos: a capability of length 0");
+    memcpy(bad, bosSs, sizeof(bosSs));
+    bad[13] = 0x04;
+    CHECK_EQ(tr_bos_top(bad, sizeof(bosSs)), -1, "bos: not a device capability");
+    memcpy(bad, bosSs, sizeof(bosSs));
+    bad[12] = 11;
+    CHECK_EQ(tr_bos_top(bad, sizeof(bosSs)), -1, "bos: a capability past the end");
+    memcpy(bad, bosSs, sizeof(bosSs));
+    bad[12] = 9;
+    bad[2] = 21;
+    CHECK_EQ(tr_bos_top(bad, 21), -1, "bos: a SuperSpeed capability of 9 bytes");
+    memcpy(bad, bosSs, sizeof(bosSs));
+    bad[2] = 4;
+    CHECK_EQ(tr_bos_top(bad, sizeof(bosSs)), -1, "bos: a total under the header");
+
+    /* One request per plug: kept by key while it stays. */
+    tr_fast_key(fk, sizeof(fk), "{36fc9e60}\\0001", "2", 0x0BDA, 0x8157);
+    tr_wbos_key(key, sizeof(key), fk, 3);
+    CHECK(strcmp(key, "{36fc9e60}\\0001|2|0BDA:8157|a3") == 0, "wbos: the key");
+    c = &cache;
+    memset(c, 0, sizeof(*c));
+    CHECK_EQ(tr_wbos_get(c, key), -2, "wbos: not asked");
+    CHECK_EQ(tr_wbos_room(c, key), 1, "wbos: room");
+    tr_wbos_put(c, key, -1);
+    CHECK_EQ(tr_wbos_get(c, key), -1, "wbos: asked, no answer: kept, not asked again");
+    tr_wbos_put(c, key, TR_SPEED_SUPER);
+    CHECK_EQ(tr_wbos_get(c, key), TR_SPEED_SUPER, "wbos: an answer kept");
+    tr_wbos_begin(c);
+    CHECK_EQ(tr_wbos_get(c, key), TR_SPEED_SUPER, "wbos: present, marked");
+    tr_wbos_end(c);
+    CHECK_EQ(c->N, 1, "wbos: kept while it stays");
+    tr_wbos_begin(c);
+    tr_wbos_end(c);
+    CHECK_EQ(c->N, 0, "wbos: dropped when gone");
+    CHECK_EQ(tr_wbos_get(c, key), -2, "wbos: plugged again: asked again");
+    tr_wbos_key(fk, sizeof(fk), "x", 4);
+    CHECK(strcmp(fk, "x|a4") == 0, "wbos: another address, another key");
+    for (i = 0; i < TR_WBOS_MAX; i++) {
+        tr_sprintf(fk, sizeof(fk), "k%d", i);
+        tr_wbos_put(c, fk, TR_SPEED_SUPER);
+    }
+    CHECK_EQ(c->N, TR_WBOS_MAX, "wbos: full");
+    CHECK_EQ(tr_wbos_room(c, key), 0, "wbos: no room for a new key");
+    CHECK_EQ(tr_wbos_room(c, "k5"), 1, "wbos: room for one kept");
+    tr_wbos_put(c, key, TR_SPEED_SUPER);
+    CHECK_EQ(tr_wbos_get(c, key), -2, "wbos: a new key without room: not kept");
+    tr_wbos_begin(c);
+    (void)tr_wbos_get(c, "k7");
+    tr_wbos_end(c);
+    CHECK(c->N == 1 && strcmp(c->Key[0], "k7") == 0 &&
+              c->Val[0] == TR_SPEED_SUPER, "wbos: the one present moved down");
+    CHECK_EQ(tr_wbos_get(NULL, key), -2, "wbos: no cache");
+    CHECK_EQ(tr_wbos_room(NULL, key), 0, "wbos: no cache, no room");
 }
 
 static int fast_lines_fit(const char *s)
@@ -3583,9 +3929,9 @@ static void test_labels(void)
     CHECK(out[0] == '\0', "controller: nothing read, nothing added");
 
     tr_roothub_label(out, sizeof(out), 18, 1, 14, 4);
-    CHECK(strcmp(out, "Root hub - 18 ports (14 USB 2.0, 4 USB 3.x)") == 0, "root hub: split");
+    CHECK(strcmp(out, "Root hub - 18 ports (14 USB 2.0, 4 USB 3)") == 0, "root hub: split");
     tr_roothub_label(out, sizeof(out), 1, 1, 1, 0);
-    CHECK(strcmp(out, "Root hub - 1 port (1 USB 2.0, 0 USB 3.x)") == 0, "root hub: one port");
+    CHECK(strcmp(out, "Root hub - 1 port (1 USB 2.0, 0 USB 3)") == 0, "root hub: one port");
     tr_roothub_label(out, sizeof(out), 2, 0, 0, 0);
     CHECK(strcmp(out, "Root hub - 2 ports") == 0, "root hub: protocols unknown");
     tr_roothub_label(out, sizeof(out), 0, 1, 0, 0);
@@ -3807,6 +4153,67 @@ static void test_marks(void)
 }
 
 /* The tunnel watch after an NT eject: who confirms, how long, what is said. */
+/* The mark service's restart and a plain drive's install (design record 31
+ * section 6.2, "The mark's restart", task 44.52): which functions below a
+ * unit the safe-removal mark restarts have their install set to run
+ * again first on 2000 and XP, and the flag step itself. */
+static int markSelftestFails;
+static void mark_report(int ok, const char *what)
+{
+    if (!ok) {
+        markSelftestFails++;
+        printf("  mark self-test: FAIL %s\n", what);
+    }
+}
+
+static void test_mark_rerun(void)
+{
+    MK_S98_MF f;
+    MK_S98_MF g;
+    INST_U32 v = 0;
+
+    memset(&f, 0, sizeof(f));
+    f.Nt5 = 1;
+    f.PolicyOk = 1;
+    f.Below = 1;
+    f.Nvme = 1;
+    f.Service = "";
+    f.StatusOk = 1;
+    f.Problem = 1;
+    f.ProblemCode = 0x1CUL;     /* XP's wizard answered with its defaults */
+    CHECK(mk_s98_mark_sets(&f), "a plain driverless drive with problem 28: set");
+    g = f;
+    g.Service = "stor98";
+    CHECK(!mk_s98_mark_sets(&g), "a function with a driver: never touched");
+    g = f;
+    g.Nvme = 0;
+    CHECK(!mk_s98_mark_sets(&g), "a dock's other function: never touched");
+    g = f;
+    g.HasId = 1;
+    CHECK(!mk_s98_mark_sets(&g), "a drive with the id: left");
+    g = f;
+    g.Nt5 = 0;
+    CHECK(!mk_s98_mark_sets(&g), "Vista to 8.1: the service's install instead");
+    g = f;
+    g.PolicyOk = 0;
+    CHECK(!mk_s98_mark_sets(&g), "Stor98 not staged: nothing");
+    g = f;
+    g.Declined = 1;
+    CHECK(!mk_s98_mark_sets(&g), "the user's refusal in this arrival: left");
+    g = f;
+    g.ProblemCode = MK_S98_PROB_DISABLED;
+    CHECK(!mk_s98_mark_sets(&g), "a disabled drive: left");
+    CHECK(mk_s98_rerun_flags(0x40UL, &v) == 1 && v == 0x20UL,
+          "flags 0x40 (failed install) become 0x20 (reinstall)");
+    CHECK(mk_s98_rerun_flags(0x20UL, &v) == 0 && v == 0x20UL,
+          "flags already 0x20: nothing written");
+    CHECK(mk_s98_rerun_flags(0x0UL, &v) == 1 && v == 0x20UL,
+          "no flags (verifiably absent): reinstall alone");
+    markSelftestFails = 0;
+    CHECK_EQ(mk_selftest(mark_report), 0, "XHCIMARK's own self-test passes");
+    CHECK_EQ(markSelftestFails, 0, "no self-test case failed");
+}
+
 static void test_eject_watch(void)
 {
     int s;
@@ -3861,6 +4268,221 @@ static void test_eject_watch(void)
                  "this tool itself.") == 0, "unconfirmed text");
 }
 
+/* Record 25 section 17 (task 44.9): what a router's link runs as. */
+static void test_gen_link(void)
+{
+    char out[96];
+    TR_EXT x;
+    TR_U32 lo;
+    TR_U32 hi;
+    const TR_U32 u4v10 = CM_ST_GEN_USB4 | 0x2000UL;
+
+    CHECK(tr_up_of_profile(TR_PROFILE_ICM_AR) == TR_UP_TBT3, "AR host TBT3");
+    CHECK(tr_up_of_profile(TR_PROFILE_ICM_TR) == TR_UP_TBT3, "TR host TBT3");
+    CHECK(tr_up_of_profile(TR_PROFILE_ICM_ICL) == TR_UP_TBT3, "ICL host TBT3");
+    CHECK(tr_up_of_profile(TR_PROFILE_ICM_MR) == TR_UP_USB4, "MR host USB4");
+    CHECK(tr_up_of_profile(TR_PROFILE_ICM_TGL) == TR_UP_USB4, "TGL host USB4");
+    CHECK(tr_up_of_profile(TR_PROFILE_USB4) == TR_UP_USB4, "USB4 CM host");
+    CHECK(tr_up_of_profile(TR_PROFILE_ICM_FR) == TR_UP_TBT2, "FR host TBT2");
+    CHECK(tr_up_of_profile(0UL) == TR_UP_UNKNOWN, "unknown profile");
+    CHECK(tr_up_of_profile(8UL) == TR_UP_UNKNOWN, "profile 8");
+
+    /* The ids test_cm.c holds to cm_vals.c's CmProfileFor. */
+    CHECK_EQ(tr_profile_of_nhi(0x15BF8086UL), TR_PROFILE_ICM_AR, "AR LP");
+    CHECK_EQ(tr_profile_of_nhi(0x15EB8086UL), TR_PROFILE_ICM_TR, "TR 4C");
+    CHECK_EQ(tr_profile_of_nhi(0x8A178086UL), TR_PROFILE_ICM_ICL, "ICL");
+    CHECK_EQ(tr_profile_of_nhi(0x11378086UL), TR_PROFILE_ICM_MR, "MR 4C");
+    CHECK_EQ(tr_profile_of_nhi(0x9A1B8086UL), TR_PROFILE_ICM_TGL, "TGL");
+    CHECK_EQ(tr_profile_of_nhi(0x156A8086UL), TR_PROFILE_ICM_FR, "FR");
+    CHECK_EQ(tr_profile_of_nhi(0xA8338086UL), TR_PROFILE_USB4, "Lunar Lake");
+    CHECK_EQ(tr_profile_of_nhi(0x16681022UL), TR_PROFILE_USB4, "AMD");
+    CHECK_EQ(tr_profile_of_nhi(0x00F41B36UL), 0, "the emulator's generic host");
+    CHECK_EQ(tr_profile_of_nhi(0x12348086UL), 0, "an Intel id not listed");
+
+    CHECK(tr_up_of_gen(CM_ST_GEN_TBT3) == TR_UP_TBT3, "up TBT3");
+    CHECK(tr_up_of_gen(CM_ST_GEN_USB4 | 0x1000UL) == TR_UP_TBT3,
+          "up USB4 Version major 0");
+    CHECK(tr_up_of_gen(u4v10) == TR_UP_USB4, "up USB4 v1.0");
+    CHECK(tr_up_of_gen(CM_ST_GEN_USB4) == TR_UP_USB4, "up USB4, no version");
+    CHECK(tr_up_of_gen(CM_ST_GEN_UNKNOWN) == TR_UP_UNKNOWN, "up unknown");
+
+    /* The route's byte at depth - 1 cleared. */
+    CHECK(!tr_route_parent(1, 0x01UL, 0, &lo, &hi), "depth 1: the host");
+    CHECK(!tr_route_parent(0, 0, 0, &lo, &hi), "depth 0");
+    CHECK(!tr_route_parent(9, 0, 0, &lo, &hi), "depth 9");
+    CHECK(tr_route_parent(2, 0x0301UL, 0, &lo, &hi) && lo == 0x01UL && hi == 0,
+          "depth 2");
+    CHECK(tr_route_parent(4, 0x03020301UL, 0, &lo, &hi) &&
+              lo == 0x00020301UL && hi == 0, "depth 4");
+    CHECK(tr_route_parent(5, 0x03020301UL, 0x05UL, &lo, &hi) &&
+              lo == 0x03020301UL && hi == 0, "depth 5: the high word");
+    CHECK(tr_route_parent(8, 0x01010101UL, 0x07010101UL, &lo, &hi) &&
+              lo == 0x01010101UL && hi == 0x00010101UL, "depth 8");
+
+    CHECK(tr_route_depth(0, 0) == 0, "depth of route 0");
+    CHECK(tr_route_depth(0x01UL, 0) == 1, "depth 1");
+    CHECK(tr_route_depth(0x0301UL, 0) == 2, "depth 2");
+    CHECK(tr_route_depth(0x03020301UL, 0) == 4, "depth 4");
+    CHECK(tr_route_depth(0x03020301UL, 0x0105UL) == 6, "depth 6");
+    CHECK(tr_route_depth(0x01010101UL, 0x01010101UL) == 8, "depth 8");
+    CHECK(tr_route_depth(0x00000301UL, 0x01UL) == 2, "stops at a zero byte");
+
+    /* Every link below a Thunderbolt 3 link runs as Thunderbolt 3. */
+    CHECK(tr_up_of_path(TR_UP_TBT3, 0, 0, 0) == TR_UP_TBT3, "TBT3 host");
+    CHECK(tr_up_of_path(TR_UP_TBT3, 2, 0, 2) == TR_UP_TBT3,
+          "TBT3 host, USB4 routers between");
+    CHECK(tr_up_of_path(TR_UP_USB4, 0, 0, 0) == TR_UP_USB4, "USB4 host");
+    CHECK(tr_up_of_path(TR_UP_USB4, 2, 1, 1) == TR_UP_TBT3,
+          "TBT3 -> USB4 -> USB4 on a USB4 host");
+    CHECK(tr_up_of_path(TR_UP_USB4, 2, 0, 2) == TR_UP_USB4,
+          "USB4 routers all the way");
+    CHECK(tr_up_of_path(TR_UP_USB4, 2, 0, 1) == TR_UP_UNKNOWN,
+          "a router between not found");
+    CHECK(tr_up_of_path(TR_UP_TBT2, 0, 0, 0) == TR_UP_TBT2, "TBT2 host");
+    CHECK(tr_up_of_path(TR_UP_TBT2, 2, 1, 1) == TR_UP_TBT2,
+          "TBT2 host, routers between: still TBT2");
+    CHECK(tr_up_of_path(TR_UP_UNKNOWN, 0, 0, 0) == TR_UP_UNKNOWN,
+          "host not classed");
+    CHECK(tr_up_of_path(TR_UP_UNKNOWN, 1, 1, 0) == TR_UP_TBT3,
+          "host not classed, a TBT3 router between");
+
+    CHECK(tr_runs_as_tbt3(u4v10, TR_UP_TBT3), "USB4 on a TBT3 side");
+    CHECK(tr_runs_as_tbt3(CM_ST_GEN_USB4, TR_UP_TBT3), "USB4 unversioned");
+    CHECK(!tr_runs_as_tbt3(u4v10, TR_UP_USB4), "USB4 on USB4");
+    CHECK(!tr_runs_as_tbt3(u4v10, TR_UP_UNKNOWN), "USB4 on unknown");
+    CHECK(!tr_runs_as_tbt3(CM_ST_GEN_TBT3, TR_UP_TBT3), "TBT3 stays TBT3");
+    CHECK(!tr_runs_as_tbt3(CM_ST_GEN_USB4 | 0x1000UL, TR_UP_TBT3),
+          "a major-0 router is TBT3 itself");
+    CHECK(!tr_runs_as_tbt3(CM_ST_GEN_UNKNOWN, TR_UP_TBT3), "unknown router");
+
+    tr_gen_link_text(u4v10, TR_UP_TBT3, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v1.0 device, running as Thunderbolt 3") == 0,
+          "line: USB4 v1.0 on TBT3");
+    tr_gen_link_text(CM_ST_GEN_USB4, TR_UP_TBT3, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 device, running as Thunderbolt 3") == 0,
+          "line: USB4 unversioned on TBT3");
+    tr_gen_link_text(u4v10, TR_UP_USB4, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v1.0") == 0, "line: USB4 on USB4");
+    tr_gen_link_text(u4v10, TR_UP_UNKNOWN, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v1.0") == 0, "line: USB4, host not classed");
+    tr_gen_link_text(CM_ST_GEN_TBT3, TR_UP_USB4, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3") == 0, "line: TBT3 on USB4");
+    tr_gen_link_text(u4v10, TR_UP_TBT2, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v1.0 device, running as Thunderbolt 2") == 0,
+          "line: USB4 on a Falcon Ridge host");
+    tr_gen_link_text(CM_ST_GEN_TBT3, TR_UP_TBT2, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3 device, running as Thunderbolt 2") == 0,
+          "line: TBT3 on a Falcon Ridge host");
+    tr_gen_link_text(CM_ST_GEN_UNKNOWN, TR_UP_TBT2, out, sizeof(out));
+    CHECK(strcmp(out, "generation not known") == 0, "line: unknown on FR");
+    tr_gen_link_text(CM_ST_GEN_UNKNOWN, TR_UP_TBT3, out, sizeof(out));
+    CHECK(strcmp(out, "generation not known") == 0, "line: unknown");
+
+    /* The link of a USB4 router running as TBT3 (the caller passes TBT3). */
+    memset(&x, 0, sizeof(x));
+    x.Rate = 20;
+    x.Width = 2;
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_LINK,
+                     CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, x2 (40 Gbit/s)") == 0,
+          "link: running as TBT3, x2");
+    x.Width = 0;
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_LINK,
+                     CM_ST_LANES_UNKNOWN, &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, lanes not known") == 0,
+          "link: running as TBT3, no width");
+}
+
+/* Record 25 sections 18 and 19 (tasks 44.8 and 44.35): the version
+ * comparison and its line, the pending-rename reader, the port path's
+ * route. */
+static void test_ver_route(void)
+{
+    static const TR_U32 f330[4] = { 3, 3, 0, 0 };
+    static const TR_U32 f320[4] = { 3, 2, 0, 0 };
+    static const TR_U32 f340[4] = { 3, 4, 0, 0 };
+    static const TR_U32 fbad[4] = { 256, 0, 0, 0 };
+    static const char pfro[] =
+        "\\??\\C:\\WINDOWS\\system32\\drivers\\xhci98.new\0"
+        "!\\??\\C:\\WINDOWS\\system32\\drivers\\xhci98.sys\0"
+        "\\??\\C:\\temp\\gone.tmp\0"
+        "\0"
+        "\\??\\C:\\x\\second.sys\0"
+        "!\\??\\c:\\windows\\SYSTEM32\\drivers\\XHCI98.SYS\0"
+        "\0";
+    static const char odd[] = "\\??\\C:\\a\0";
+    static const char open1[] = { 'a', 0, 'b' };
+    char out[200];
+    TR_U32 root;
+    TR_U32 route;
+
+    CHECK_EQ(tr_ver_state(1, 0x03030000UL, f330), TR_VER_SAME, "the same");
+    CHECK_EQ(tr_ver_state(1, 0x03030000UL, f340), TR_VER_DIFFERS,
+             "an update not restarted into");
+    CHECK_EQ(tr_ver_state(1, 0x03040000UL, f330), TR_VER_DIFFERS,
+             "a downgrade not restarted into");
+    CHECK_EQ(tr_ver_state(1, 0, f330), TR_VER_DIFFERS,
+             "a driver that does not say, under a 3.3.0.0 file");
+    CHECK_EQ(tr_ver_state(1, 0, f340), TR_VER_DIFFERS, "and a later file");
+    CHECK_EQ(tr_ver_state(1, 0, f320), TR_VER_UNKNOWN,
+             "does not say, a 3.2.0.0 file: not known");
+    CHECK_EQ(tr_ver_state(0, 0x03030000UL, f340), TR_VER_UNKNOWN,
+             "no answer at all");
+    CHECK_EQ(tr_ver_state(1, 0x03030000UL, NULL), TR_VER_UNKNOWN,
+             "the file not read");
+    CHECK_EQ(tr_ver_state(1, 0x03030000UL, fbad), TR_VER_UNKNOWN,
+             "a field past a byte");
+
+    tr_ver_line(TR_VER_DIFFERS, 0x03020000UL, f330, out, sizeof(out));
+    CHECK(strcmp(out, "3.2.0.0 running; the installed file is 3.3.0.0. "
+                      "Restart Windows to run the installed driver.") == 0,
+          "differs");
+    tr_ver_line(TR_VER_DIFFERS, 0, f330, out, sizeof(out));
+    CHECK(strcmp(out, "older than 3.3.0.0 running; the installed file is "
+                      "3.3.0.0. Restart Windows to run the installed driver.")
+              == 0, "does not say");
+    tr_ver_line(TR_VER_SAME, 0x03030000UL, f330, out, sizeof(out));
+    CHECK(strcmp(out, "3.3.0.0 running, the installed file's") == 0, "same");
+    tr_ver_text(0x0A0B0C0DUL, out, sizeof(out));
+    CHECK(strcmp(out, "10.11.12.13") == 0, "packed to text");
+
+    CHECK(tr_pfro_find(pfro, sizeof(pfro),
+                       "C:\\WINDOWS\\system32\\drivers\\xhci98.sys", out,
+                       sizeof(out)), "a pending replacement");
+    CHECK(strcmp(out, "C:\\x\\second.sys") == 0,
+          "the last pair naming it, without case or prefixes");
+    CHECK(!tr_pfro_find(pfro, sizeof(pfro), "C:\\temp\\gone.tmp", out,
+                        sizeof(out)), "a delete names no target");
+    CHECK(!tr_pfro_find(pfro, sizeof(pfro),
+                        "C:\\WINDOWS\\system32\\drivers\\xhcicm.sys", out,
+                        sizeof(out)), "another file");
+    CHECK(!tr_pfro_find(odd, sizeof(odd), "C:\\a", out, sizeof(out)),
+          "a source alone");
+    CHECK(!tr_pfro_find(open1, sizeof(open1), "b", out, sizeof(out)),
+          "not terminated");
+    CHECK(!tr_pfro_find(NULL, 0, "b", out, sizeof(out)), "none");
+
+    CHECK(tr_path_route("3", &root, &route) && root == 3 && route == 0,
+          "a root port");
+    CHECK(tr_path_route("3.2", &root, &route) && root == 3 && route == 0x2,
+          "behind a hub");
+    CHECK(tr_path_route("3.2.15", &root, &route) && root == 3 &&
+              route == 0xF2, "two hubs, the first lowest");
+    CHECK(tr_path_route("20.2", &root, &route) && root == 20 && route == 2,
+          "a root port above 15");
+    CHECK(tr_path_route("255.1.2.3.4.5", &root, &route) && root == 255 &&
+              route == 0x54321UL, "five hubs");
+    CHECK(!tr_path_route("1.1.1.1.1.1.1", &root, &route), "six hubs");
+    CHECK(!tr_path_route("256", &root, &route), "root port 256");
+    CHECK(!tr_path_route("0", &root, &route), "root port 0");
+    CHECK(!tr_path_route("3.16", &root, &route), "hub port 16");
+    CHECK(!tr_path_route("3.0", &root, &route), "hub port 0");
+    CHECK(!tr_path_route("3.", &root, &route), "an empty part");
+    CHECK(!tr_path_route("3a", &root, &route), "not a number");
+    CHECK(!tr_path_route("", &root, &route), "empty");
+    CHECK(!tr_path_route(NULL, &root, &route), "none");
+}
+
 int main(void)
 {
     test_printf();
@@ -3870,6 +4492,8 @@ int main(void)
     test_bos_hub_string();
     test_query();
     test_texts();
+    test_gen_link();
+    test_ver_route();
     test_events();
     test_removals();
     test_keys_args_report();
@@ -3883,10 +4507,12 @@ int main(void)
     test_bkind();
     test_hover();
     test_fast();
+    test_fast_path();
     test_levels();
     test_labels();
     test_resources();
     test_marks();
+    test_mark_rerun();
     test_eject_watch();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
@@ -3997,9 +4623,9 @@ int main(void)
         tr_protocols_text(3UL, out, sizeof(out));
         CHECK(strcmp(out, "USB 1.1, USB 2.0") == 0, "protocols: two, no stray space");
         tr_protocols_text(4UL, out, sizeof(out));
-        CHECK(strcmp(out, "USB 3.x") == 0, "protocols: one");
+        CHECK(strcmp(out, "USB 3") == 0, "protocols: one");
         tr_protocols_text(7UL, out, sizeof(out));
-        CHECK(strcmp(out, "USB 1.1, USB 2.0, USB 3.x") == 0, "protocols: three");
+        CHECK(strcmp(out, "USB 1.1, USB 2.0, USB 3") == 0, "protocols: three");
         tr_protocols_text(0UL, out, sizeof(out));
         CHECK(strcmp(out, "none reported") == 0, "protocols: none");
     }

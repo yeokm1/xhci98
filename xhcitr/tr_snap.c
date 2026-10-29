@@ -6,7 +6,8 @@
  *
  * TWO DRIVERS ANSWER IT. From 2.0.0.0 xhci98.sys is the successor host
  * controller driver (roadmap-hcd.md, design record 13): it owns its driver
- * object, creates \DosDevices\HCD<n> itself and answers the same USBUSER
+ * object, creates its own \DosDevices name (HCD<n> on 98 SE and ME,
+ * XHCI98HC<k> on NT from 3.3.0.0) and answers the same USBUSER
  * PassThru request through its own door (src/hcd_door.c, schema 5
  * unchanged, the slots region added). Most of the history below is the 1.x
  * miniport's, which ran under usbport.sys and reached this tool through
@@ -48,7 +49,8 @@
  * recorded in docs/usb-xhci-info/usbport-miniport-abi.md under "Debug /
  * single-packet": usbport's vendor escape is IOCTL_USB_USER_REQUEST
  * (0x00220438, METHOD_BUFFERED) with UsbUserRequest = 3, reached through the
- * \DosDevices\HCD<n> symbolic link the HCD FDO's start path always creates.
+ * \DosDevices\HCD<n> symbolic link usbport makes; xhci98.sys's door is the
+ * name its FDO's start path makes (snap_door_path).
  * It is not gated: IOCTL_USB_DIAGNOSTIC_MODE_ON is NOT a prerequisite.
  *
  * WINDOWING. usbport refuses ParameterLength > 0x10000 before the miniport is
@@ -149,6 +151,7 @@
  * compiler's, because it is the fact the version cannot carry.
  */
 #include "../src/xhci_version.h"
+#include "tr_log.h"
 
 #define XHCISNAP_VERSION XHCI_VER_STR
 #define XHCISNAP_BUILT   __DATE__ " " __TIME__
@@ -3206,6 +3209,16 @@ static const char *const compsel_counter_names[SNAP_COMPSEL_WORDS] = {
     "CompositeMismatches", "CompositeIntervals"
 };
 
+/* Task 44.35's six (the storage transport decisions, design record 13
+ * section 10.7, "The decision kept") follow at 246, by name in the list
+ * and summed up by print_xport. */
+#define SNAP_XPORTC_AT              246UL
+#define SNAP_XPORTC_WORDS           6UL
+static const char *const xportc_counter_names[SNAP_XPORTC_WORDS] = {
+    "XportUas", "XportUasOnly", "XportUasOnlyForced", "XportBotForced",
+    "XportBotNoStreams", "XportNoStreams"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3303,6 +3316,9 @@ static const char *hcd_counter_name(unsigned long i)
     }
     if (i >= SNAP_COMPSEL_AT && i - SNAP_COMPSEL_AT < SNAP_COMPSEL_WORDS) {
         return compsel_counter_names[i - SNAP_COMPSEL_AT];
+    }
+    if (i >= SNAP_XPORTC_AT && i - SNAP_XPORTC_AT < SNAP_XPORTC_WORDS) {
+        return xportc_counter_names[i - SNAP_XPORTC_AT];
     }
     return NULL;
 }
@@ -5603,6 +5619,73 @@ static void print_ssusp(const unsigned char *image, unsigned long bytes)
 }
 
 /*
+ * Task 44.35's header words (src/xhci.h, XHCI_SNAPSHOT_HCD_XPORT_RECORDS
+ * onward; design record 13 section 10.7, "The decision kept"; record 25
+ * section 19): the storage transport the bus decided for each device, in
+ * Slot ID order, with the words XHCITR's details pane uses. A header
+ * shorter than them is an earlier driver's, which kept none.
+ */
+#define SNAP_HCD_XPORT_HEAD         306UL
+#define SNAP_HCD_XPORT_HEAD_WORDS   629UL
+static void print_xport(const unsigned char *image, unsigned long bytes)
+{
+    unsigned long headBytes;
+    unsigned long records;
+    unsigned long words;
+    unsigned long at;
+    unsigned long i;
+    unsigned long shown = 0;
+    const unsigned char *r;
+    TR_XPORT x;
+    char text[200];
+
+    headBytes = get32(image, 4);
+    comp("\nstorage transport (task 44.35):\n");
+    if (headBytes < SNAP_HCD_XPORT_HEAD_WORDS * 4 || bytes < headBytes) {
+        comp("  not kept by this driver (a %lu-byte header; from 3.3.0.0 "
+             "on).\n", headBytes);
+        return;
+    }
+    records = get32(image, SNAP_HCD_XPORT_HEAD * 4);
+    words = get32(image, (SNAP_HCD_XPORT_HEAD + 1) * 4);
+    at = get32(image, (SNAP_HCD_XPORT_HEAD + 2) * 4);
+    if (words < 10 || words > 64 || records > 255 ||
+        at < SNAP_HCD_XPORT_HEAD + 3 || at > headBytes / 4 ||
+        records > (headBytes / 4 - at) / words) {
+        comp("  device records: %lu of %lu words at %lu - not a shape this "
+             "build reads\n", records, words, at);
+        return;
+    }
+    for (i = 0; i < records; i++) {
+        r = image + (at + i * words) * 4;
+        if (get32(r, 0) == 0) {
+            continue;
+        }
+        memset(&x, 0, sizeof(x));
+        x.Slot = get32(r, 0);
+        x.Port = get32(r, 4);
+        x.Route = get32(r, 8);
+        x.Iface = get32(r, 12);
+        x.Transport = get32(r, 16);
+        x.Why = get32(r, 20);
+        x.Alternate = get32(r, 24);
+        x.Inputs = get32(r, 28);
+        x.Triple = get32(r, 32);
+        x.Count = get32(r, 36);
+        tr_xport_text(&x, text, sizeof(text));
+        comp("  slot %2lu, root port %lu, route %05lX: %s\n", x.Slot, x.Port,
+             x.Route, text);
+        comp("           transport %lu, why %lu, alternate %lu, inputs 0x%lX, "
+             "triple %06lX\n", x.Transport, x.Why, x.Alternate, x.Inputs,
+             x.Triple);
+        shown++;
+    }
+    if (shown == 0) {
+        comp("  no device with a mass-storage interface.\n");
+    }
+}
+
+/*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
  * says so and nothing else is decoded from it (task 36.9),
@@ -5634,6 +5717,8 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     print_xpipe(hcd, bytes);
     /* 36.38: selective suspend's stage B words, from the header alone. */
     print_ssusp(hcd, bytes);
+    /* 44.35: the storage transport records, from the header alone. */
+    print_xport(hcd, bytes);
 }
 
 /*
@@ -5666,7 +5751,7 @@ static int selftest_hcd_bad(void)
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_COMPSEL_AT + SNAP_COMPSEL_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_XPORTC_AT + SNAP_XPORTC_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
@@ -6083,6 +6168,68 @@ static int selftest_ssusp(void)
     put32(hcd, SNAP_XPIPE_COUNT_AT * 4, 0xFFFFFFFFUL);
     print_xpipe(hcd, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
     print_ssusp(hcd, SNAP_HCD_SSUSP_BRANCH_WORDS * 4);
+    return 0;
+}
+
+/*
+ * `-selftest-xport`: task 44.35's decode over canned headers: a UAS drive
+ * on root port 3, a Bulk-Only stick forced behind a hub, a composite's
+ * second storage interface, a device with no UAS setting, then a header
+ * from before 44.35 and one whose count it cannot hold.
+ */
+static int selftest_xport(void)
+{
+    static unsigned char hcd[SNAP_HCD_XPORT_HEAD_WORDS * 4];
+    unsigned char *r;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_XPORT_HEAD_WORDS * 4);
+    put32(hcd, SNAP_HCD_XPORT_HEAD * 4, 32);
+    put32(hcd, (SNAP_HCD_XPORT_HEAD + 1) * 4, 10);
+    put32(hcd, (SNAP_HCD_XPORT_HEAD + 2) * 4, SNAP_HCD_XPORT_HEAD + 3);
+    r = hcd + (SNAP_HCD_XPORT_HEAD + 3) * 4;
+    put32(r, 0, 2);
+    put32(r, 4, 3);
+    put32(r, 12, 0xFF);
+    put32(r, 16, 2);
+    put32(r, 20, 1);
+    put32(r, 24, 1);
+    put32(r, 28, 3);
+    put32(r, 32, 0x620608);
+    put32(r, 36, 1);
+    r += 40;
+    put32(r, 0, 5);
+    put32(r, 4, 1);
+    put32(r, 8, 0x2);
+    put32(r, 12, 0xFF);
+    put32(r, 16, 1);
+    put32(r, 20, 4);
+    put32(r, 28, 7);
+    put32(r, 32, 0x500608);
+    put32(r, 36, 1);
+    r += 40;
+    put32(r, 0, 7);
+    put32(r, 4, 20);
+    put32(r, 8, 0x21);
+    put32(r, 12, 1);
+    put32(r, 16, 2);
+    put32(r, 20, 2);
+    put32(r, 24, 0);
+    put32(r, 32, 0x620608);
+    put32(r, 36, 2);
+    r += 40;
+    put32(r, 0, 9);
+    put32(r, 4, 2);
+    put32(r, 12, 0xFF);
+    put32(r, 32, 0x500608);
+    put32(r, 36, 1);
+    print_xport(hcd, sizeof(hcd));
+    put32(hcd, 4, SNAP_HCD_SSUSP_HEAD_WORDS * 4);
+    print_xport(hcd, SNAP_HCD_SSUSP_HEAD_WORDS * 4);
+    put32(hcd, 4, SNAP_HCD_XPORT_HEAD_WORDS * 4);
+    put32(hcd, SNAP_HCD_XPORT_HEAD * 4, 33);
+    print_xport(hcd, sizeof(hcd));
     return 0;
 }
 
@@ -9519,6 +9666,17 @@ static int on_nt(void)
     return ((GetVersion() & 0x80000000UL) == 0) ? 1 : 0;
 }
 
+/* Controller N's door: \\.\XHCI98HC<N> on NT, \\.\HCD<N> on 98 SE and
+ * ME - the \DosDevices name xhci98.sys makes there from 3.3.0.0
+ * (roadmap-usb4 44.81, design record 13 section 8.8); with `legacy` on NT,
+ * \\.\HCD<N>, the name every earlier driver made there and the 1.x
+ * miniport's usbport makes. `out` holds 24 bytes. */
+static void snap_door_path(char *out, unsigned long controller, int legacy)
+{
+    sprintf(out, (on_nt() && !legacy) ? "\\\\.\\XHCI98HC%lu" : "\\\\.\\HCD%lu",
+            controller);
+}
+
 /*
  * **The last line a run of -report prints names what to attach** (owner,
  * 2026-10-13): SNAPGET.BAT runs this tool as its last step and prints
@@ -9542,6 +9700,7 @@ static int take_report(unsigned long controller, const char *given)
 {
     char base[16];
     char devPath[32];
+    char door[24];
     char name[32];
     const char *again;
     int rc;
@@ -9657,7 +9816,10 @@ named:
     comp("  tool               XHCITR %s, built %s\n", XHCISNAP_VERSION,
          XHCISNAP_BUILT);
     write_dev_time();
-    comp("  controller asked   /c %lu, \\\\.\\HCD%lu\n", controller, controller);
+    snap_door_path(door, controller, 0);
+    comp("  controller asked   /c %lu, %s%s\n", controller, door,
+         on_nt() ? " (else \\\\.\\HCD of that number, a driver before "
+                   "3.3.0.0)" : "");
     comp("  files              %s.DEV (this), %s.TXT, %s.BIN, %s.PSC\n", base,
          base, base, base);
     write_companion_system();
@@ -9726,9 +9888,9 @@ named:
             if (devOurCtl > 1) {
                 dev_line("", "device %d above, one of the %d xHCI "
                          "controllers xhci98 drives here, is one Device "
-                         "Manager reports as %s; if \\\\.\\HCD%lu is that "
+                         "Manager reports as %s; if %s is that "
                          "one, the dump was taken from it as it is",
-                         devFlagNo, devOurCtl, devFlag, controller);
+                         devFlagNo, devOurCtl, devFlag, door);
             } else {
                 dev_line("", "dump taken from a controller Device Manager "
                          "reports as %s (device %d above): it shows the "
@@ -9751,9 +9913,9 @@ named:
                          ? dumpWhy : "see the lines on the screen");
             dev_line("", "This report above still stands. A controller "
                      "whose driver is not loaded (as before the restart "
-                     "after an install), one with no \\\\.\\HCD%lu, or a log "
+                     "after an install), one with no %s, or a log "
                      "channel that is off (xhci98's Logging level 2 in the "
-                     "xHCI98 USB Tree, then restart), gives no dump.", controller);
+                     "xHCI98 USB Tree, then restart), gives no dump.", door);
         }
         comp("end of device report\n");
         appendOk = finish_companion();
@@ -10007,7 +10169,7 @@ static void usage(void)
 "  XHCITR /probe                   check the ROUTE only, dump nothing\n"
 "  XHCITR /snapshot /?             the long version\n"
 "\n"
-"  /c N        controller index, opens \\\\.\\HCDN (default 0)\n"
+"  /c N        controller index, opens \\\\.\\XHCI98HCN (98, ME: HCDN)\n"
 "  /o BASE     output basename (default XHCISNAP)\n"
 "  /nosysinfo  with a dump: skip reading the OS, BIOS, CPU and RAM\n"
 "\n"
@@ -10051,8 +10213,10 @@ static void usage_long(void)
 "  /dump         a dump alone: BASE.BIN (the raw extension image), BASE.PSC\n"
 "                (the raw PORTSC array) and BASE.TXT, replacing an earlier\n"
 "                set of that BASE; prints the resolved path.\n"
-"  /c N          controller index; opens \\\\.\\HCDN.  Default 0.  A machine\n"
-"                whose own USB stack owns HCD0 leaves xhci98 at 1 or 2.\n"
+"  /c N          controller index, default 0: opens \\\\.\\XHCI98HCN, else\n"
+"                \\\\.\\HCDN (a driver before 3.3.0.0); on 98 SE and ME\n"
+"                \\\\.\\HCDN, where Windows' own USB stack may hold HCD0\n"
+"                and leave xhci98 at 1 or 2.\n"
 "  /o BASENAME   output basename.  Default XHCISNAP, in the current\n"
 "                directory (beside /snapshot an 8.3 name only).\n"
 "  /probe        four controls on the route, for when nothing came back.\n"
@@ -10458,6 +10622,8 @@ int tr_snap_main(int argc, char **argv)
             return selftest_xpipe();
         } else if (strcmp(argv[i], "-selftest-ssusp") == 0) {
             return selftest_ssusp();
+        } else if (strcmp(argv[i], "-selftest-xport") == 0) {
+            return selftest_xport();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write
@@ -10587,7 +10753,7 @@ static int take_dump(unsigned long controller, const char *base,
 
     run_time_once();
     lastWindowWhy[0] = '\0';
-    sprintf(devicePath, "\\\\.\\HCD%lu", controller);
+    snap_door_path(devicePath, controller, 0);
     sprintf(extPath, "%s.BIN", base);
     sprintf(portscPath, "%s.PSC", base);
     sprintf(textPath, "%s.TXT", base);
@@ -10604,6 +10770,16 @@ static int take_dump(unsigned long controller, const char *base,
     device = CreateFileA(devicePath, GENERIC_READ | GENERIC_WRITE,
                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                          OPEN_EXISTING, 0, NULL);
+    if (device == INVALID_HANDLE_VALUE && on_nt() &&
+        GetLastError() == ERROR_FILE_NOT_FOUND) {
+        /* No XHCI98HC<N>: a driver before 3.3.0.0, or the 1.x miniport
+         * under usbport, whose door is HCD<N> on NT too. */
+        snap_door_path(devicePath, controller, 1);
+        printf("XHCITR: opening %s\n", devicePath);
+        device = CreateFileA(devicePath, GENERIC_READ | GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                             OPEN_EXISTING, 0, NULL);
+    }
     if (device == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
 

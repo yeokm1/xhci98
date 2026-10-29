@@ -594,12 +594,81 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 }
 
 /*
+ * The decision kept on the device record (roadmap-usb4 44.35; design
+ * record 13 section 10.7, "The decision kept"), for a PDO whose interface
+ * the policy answered for as mass storage: keyed by the interface, so a
+ * function made again replaces its own entry, and the lowest-numbered
+ * interface's decision is the one kept. Thread only, PASSIVE_LEVEL; takes
+ * the controller lock, under which the door reads it.
+ */
+static VOID hcdXportKeep(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    PHCD_USB_DEVICE dev;
+    ULONG iface;
+    ULONG bit;
+    KIRQL oldIrql;
+
+    dev = pdo->Device;
+    /* A refused interface exposes no triple (XhciXportChoose), and is
+     * kept all the same. */
+    if (dev == NULL || (pdo->Xport.Class != XHCI_XPORT_CLASS_STORAGE &&
+                        pdo->Xport.Transport != XHCI_XPORT_REFUSED)) {
+        return;
+    }
+    iface = pdo->Function ? (pdo->Func.FirstInterface & 0xFFUL) : 0xFFUL;
+    bit = (iface < 31) ? (1UL << iface) : 0x80000000UL;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if ((dev->XportSeen & bit) == 0) {
+        dev->XportSeen |= bit;
+        dev->XportCount++;
+    }
+    if (dev->XportCount == 1 || iface <= dev->XportIface) {
+        dev->XportIface = iface;
+        dev->XportTransport = pdo->Xport.Transport;
+        dev->XportWhy = pdo->Xport.Why;
+        dev->XportAlternate = pdo->Xport.Alternate;
+        dev->XportInputs = pdo->XportInputs;
+        dev->XportTriple = (pdo->Xport.Class & 0xFFUL) |
+                           ((pdo->Xport.SubClass & 0xFFUL) << 8) |
+                           ((pdo->Xport.Protocol & 0xFFUL) << 16);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+static VOID hcdXportCount(PHCD_CONTROLLER hc, ULONG why)
+{
+    switch (why) {
+    case XHCI_XPORT_WHY_UAS:
+        hc->Counters.XportUas++;
+        break;
+    case XHCI_XPORT_WHY_UAS_ONLY:
+        hc->Counters.XportUasOnly++;
+        break;
+    case XHCI_XPORT_WHY_UAS_ONLY_FORCED:
+        hc->Counters.XportUasOnlyForced++;
+        break;
+    case XHCI_XPORT_WHY_BOT_FORCED:
+        hc->Counters.XportBotForced++;
+        break;
+    case XHCI_XPORT_WHY_BOT_NO_STREAMS:
+        hc->Counters.XportBotNoStreams++;
+        break;
+    case XHCI_XPORT_WHY_NO_STREAMS:
+        hc->Counters.XportNoStreams++;
+        break;
+    default:
+        break;
+    }
+}
+
+/*
  * The storage transport for a new PDO (roadmap-hcd.md 31-A.3; xhci_xport.h),
  * decided once from its own configuration copy: a device PDO's one interface
  * when the device's class is its interfaces' (section 10.7), or a function's
  * one interface when no IAD groups it. Anything else keeps section 10.7's ids
- * (XHCI_XPORT_NONE). Each branch but NOT_UAS is counted and traced. Thread
- * only, PASSIVE_LEVEL.
+ * (XHCI_XPORT_NONE). Each branch but NOT_UAS is counted and traced, and a
+ * mass-storage decision is kept on the device record (hcdXportKeep).
+ * Thread only, PASSIVE_LEVEL.
  */
 static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
                            ULONG flags)
@@ -608,6 +677,7 @@ static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
 
     pdo->Xport.Transport = XHCI_XPORT_NONE;
     pdo->Xport.Why = XHCI_XPORT_WHY_NOT_UAS;
+    pdo->Xport.Class = 0;
     if (pdo->Function) {
         if (pdo->Func.InterfaceCount != 1 || pdo->Func.IadOffset != 0) {
             return;
@@ -621,16 +691,19 @@ static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
     if (pdo->SpeedClass >= XHCI_SPEED_SUPER) {
         flags |= XHCI_XPORT_F_SUPERSPEED;
     }
+    pdo->XportInputs = flags;
     if (XhciXportChoose(pdo->Config, pdo->ConfigLength, iface, flags,
                         &pdo->Xport) != XHCI_XPORT_OK) {
         pdo->Xport.Transport = XHCI_XPORT_NONE;
         pdo->Xport.Why = XHCI_XPORT_WHY_NOT_UAS;
+        pdo->Xport.Class = 0;
         return;
     }
+    hcdXportKeep(hc, pdo);
     if (pdo->Xport.Why == XHCI_XPORT_WHY_NOT_UAS) {
         return;
     }
-    hc->XportDecisions[pdo->Xport.Why]++;
+    hcdXportCount(hc, pdo->Xport.Why);
     XHCI_DBG_VALUE("hcd: storage transport, port/transport/why/alternate",
                    (pdo->Port << 16) | (pdo->Xport.Transport << 12) |
                        (pdo->Xport.Why << 8) | (pdo->Xport.Alternate & 0xFFUL));
@@ -2453,6 +2526,9 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         nu->InstanceKey = olds[i]->InstanceKey;
         nu->SerialUnread = olds[i]->SerialUnread;
         nu->Xport = olds[i]->Xport;
+        nu->XportInputs = olds[i]->XportInputs;
+        /* The device record keeps the final PDO's decision (44.35). */
+        hcdXportKeep(hc, nu);
         for (k = 0; k < sizeof(nu->SerialId); k++) {
             nu->SerialId[k] = olds[i]->SerialId[k];
             nu->ReadSerialId[k] = olds[i]->ReadSerialId[k];
@@ -3029,7 +3105,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     if (pdo->Hub && stack->MinorFunction == IRP_MN_QUERY_DEVICE_TEXT &&
         stack->Parameters.QueryDeviceText.DeviceTextType ==
             DeviceTextDescription) {
-        text = pdo->HubUsb3 ? hcdHandOff(L"xHCI98 USB 3.x Hub", 19)
+        text = pdo->HubUsb3 ? hcdHandOff(L"xHCI98 USB 3 Hub", 17)
                             : hcdHandOff(L"xHCI98 USB Hub", 15);
         if (text == NULL) {
             return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);

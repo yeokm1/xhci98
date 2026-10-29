@@ -304,11 +304,12 @@ static const char *const pf_preset_names[PF_PRESETS] = {
     "Standard for Windows 98 and ME",
     "Request-size study for Windows 98 and ME",
     "Sweep",
-    "Quick"
+    "Quick",
+    "Sequential throughput"
 };
 
 static const char *const pf_preset_keys[PF_PRESETS] = {
-    "standard", "standard9x", "study9x", "sweep", "quick"
+    "standard", "standard9x", "study9x", "sweep", "quick", "seqmax"
 };
 
 const char *pf_preset_name(int preset)
@@ -412,6 +413,28 @@ void pf_preset(PF_PARAMS *p, int preset)
         p->ntests = 2;
         pf_set_test(&p->tests[0], PF_SEQ, 1048576u, 1, 1);
         pf_set_test(&p->tests[1], PF_RND, 4096u, 1, 1);
+        break;
+    case PF_PRESET_SEQMAX:
+        /* nothing per request but the transfer: a pattern filled once, no
+         * verification, no write-through (section 16.3) */
+        p->fileMiB = 1024;
+        p->passes = 3;
+        p->timeSec = 5;
+        p->pattern = PF_PAT_RANDOM;
+        p->ntests = 4;
+        if (os == PF_OS_9X) {
+            p->ntests = 5;
+            pf_set_test(&p->tests[0], PF_SEQ, 512u * 1024u, 1, 1);
+            pf_set_test(&p->tests[1], PF_SEQ, 1048576u, 1, 1);
+            pf_set_test(&p->tests[2], PF_SEQ, 2u * 1048576u, 1, 1);
+            pf_set_test(&p->tests[3], PF_SEQ, 8u * 1048576u, 1, 1);
+            pf_set_test(&p->tests[4], PF_SEQ, 1048576u, 1, 2);
+        } else {
+            pf_set_test(&p->tests[0], PF_SEQ, 1048576u, 1, 1);
+            pf_set_test(&p->tests[1], PF_SEQ, 1048576u, 8, 1);
+            pf_set_test(&p->tests[2], PF_SEQ, 8u * 1048576u, 1, 1);
+            pf_set_test(&p->tests[3], PF_SEQ, 8u * 1048576u, 8, 1);
+        }
         break;
     default:
         p->preset = PF_PRESET_STANDARD;
@@ -1076,6 +1099,106 @@ int pf_cpu_limited(pf_u64 stampUs, pf_u64 us)
     return us != 0 && stampUs * 10u > us;
 }
 
+/* The processor figures over the passes that count (section 16.2): the
+ * sums of every such pass that has them, whatever Show says */
+static void pf_cpu_shown(const PF_RESULT *pa, const int *okIdx, int nok, PF_SHOWN *out)
+{
+    pf_u64 busy = 0, intr = 0, own = 0, us = 0, reqs = 0, cap;
+    int i, kind = PF_CPU_NONE, count = 0, haveOwn = 1;
+
+    for (i = 0; i < nok; i++) {
+        const PF_RESULT *r = &pa[okIdx[i]];
+
+        if (r->us == 0) {
+            continue;
+        }
+        if (r->cpuKind == PF_CPU_NONE || r->cpuCount < 1) {
+            return;     /* a pass that counts without it: no figure */
+        }
+        if (kind != PF_CPU_NONE && (r->cpuKind != kind || r->cpuCount != count)) {
+            return;     /* passes that cannot be added up: no figure */
+        }
+        kind = r->cpuKind;
+        count = r->cpuCount;
+        busy += r->cpuBusyUs;
+        intr += r->cpuIntUs;
+        own += r->cpuOwnUs;
+        haveOwn &= r->haveOwn;
+        us += r->us;
+        reqs += r->reqs;
+    }
+    if (kind == PF_CPU_NONE) {
+        return;
+    }
+    cap = us * (pf_u64)count;
+    if (busy > cap) {
+        busy = cap;
+    }
+    if (intr > busy) {
+        intr = busy;
+    }
+    out->cpuKind = kind;
+    out->cpuCount = count;
+    out->busy10 = (busy * 1000u + cap / 2) / cap;
+    out->int10 = (intr * 1000u + cap / 2) / cap;
+    out->busyPerReqUs = reqs != 0 ? (busy + reqs / 2) / reqs : 0;
+    out->haveOwn = (kind == PF_CPU_NT && haveOwn && reqs != 0);
+    out->ownPerReqUs = out->haveOwn ? (own + reqs / 2) / reqs : 0;
+}
+
+void pf_cpu_text(const PF_SHOWN *sh, char *out, size_t cap)
+{
+    char n[32];
+
+    pf_cpy(out, cap, "");
+    if (sh->cpuKind == PF_CPU_NONE) {
+        return;
+    }
+    pf_cat(out, cap, "busy ");
+    pf_fmt_tenths(sh->busy10, n, sizeof(n));
+    pf_cat(out, cap, n);
+    pf_cat(out, cap, "%");
+    if (sh->cpuKind == PF_CPU_NT) {
+        pf_cat(out, cap, " of ");
+        pf_fmt_u64((pf_u64)sh->cpuCount, n, sizeof(n));
+        pf_cat(out, cap, n);
+        pf_cat(out, cap, ", interrupts and DPCs ");
+        pf_fmt_tenths(sh->int10, n, sizeof(n));
+        pf_cat(out, cap, n);
+        pf_cat(out, cap, "%");
+    } else {
+        pf_cat(out, cap, " (Windows' own figure)");
+    }
+    pf_cat(out, cap, ", ");
+    pf_fmt_us(sh->busyPerReqUs, n, sizeof(n));
+    pf_cat(out, cap, n);
+    pf_cat(out, cap, " a request");
+    if (sh->haveOwn) {
+        pf_cat(out, cap, ", this program ");
+        pf_fmt_us(sh->ownPerReqUs, n, sizeof(n));
+        pf_cat(out, cap, n);
+    }
+}
+
+void pf_cpu_short(const PF_SHOWN *sh, char *out, size_t cap)
+{
+    char n[32];
+
+    pf_cpy(out, cap, "");
+    if (sh->cpuKind == PF_CPU_NONE) {
+        return;
+    }
+    pf_cat(out, cap, "cpu ");
+    pf_fmt_u64((sh->busy10 + 5u) / 10u, n, sizeof(n));
+    pf_cat(out, cap, n);
+    pf_cat(out, cap, "%");
+}
+
+int pf_overran(const PF_STEP *s, const PF_RESULT *r)
+{
+    return s->budget == 0 && r->status != PF_ST_NONE && r->us > (pf_u64)s->timeSec * 1000000u + 1000000u;
+}
+
 void pf_shown(const PF_RESULT *pa, int n, int show, int mib, int highRes, PF_SHOWN *out)
 {
     pf_u64 rates[PF_MAX_PASSES];
@@ -1116,6 +1239,7 @@ void pf_shown(const PF_RESULT *pa, int n, int show, int mib, int highRes, PF_SHO
             out->cpuLimited = 1;
         }
     }
+    pf_cpu_shown(pa, okIdx, nok, out);
     pf_lat_init(&merged);
     if (show == PF_SHOW_BEST) {
         const PF_RESULT *r = &pa[okIdx[best]];
@@ -1322,6 +1446,10 @@ void pf_key(const PF_PARAMS *p, int highRes, char *out, size_t cap)
     pf_key_put(out, cap, "seed", p->seed);
     pf_key_put(out, cap, "show", (pf_u64)p->show);
     pf_key_put(out, cap, "timer", (pf_u64)(highRes ? 1 : 0));
+    if (p->noLatency) {
+        /* only when set, so a saved key from before still compares */
+        pf_key_put(out, cap, "nolat", 1u);
+    }
 }
 
 static const char *pf_key_field(const char *key, const char *name, size_t *vlen)
@@ -1350,7 +1478,7 @@ int pf_key_same(const char *a, const char *b, char *diff, size_t cap)
 {
     static const char *const names[] = {
         "file", "access", "wt", "flush", "pattern", "verify", "time", "total", "budget", "passes",
-        "warmup", "pause", "seed", "show", "timer"
+        "warmup", "pause", "seed", "show", "timer", "nolat"
     };
     int i, same = 1;
 
@@ -1362,6 +1490,17 @@ int pf_key_same(const char *a, const char *b, char *diff, size_t cap)
         const char *va = pf_key_field(a, names[i], &la);
         const char *vb = pf_key_field(b, names[i], &lb);
 
+        if (strcmp(names[i], "nolat") == 0) {
+            /* written only when set: absent is 0 */
+            if (va == NULL) {
+                va = "0";
+                la = 1;
+            }
+            if (vb == NULL) {
+                vb = "0";
+                lb = 1;
+            }
+        }
         if (va == NULL || vb == NULL || la != lb || memcmp(va, vb, la) != 0) {
             same = 0;
             if (cap != 0) {
@@ -1480,7 +1619,7 @@ void pf_summary_line(PF_TEXT *t, const PF_STEP *s, const PF_SHOWN *sh, int mib)
             pf_tx_s(t, pf_status_text(sh->status));
         }
         if (sh->cpuLimited) {
-            pf_tx_s(t, " cpu");
+            pf_tx_s(t, " stamping");
         }
         if (sh->timerBad) {
             pf_tx_s(t, " timer");
@@ -1607,7 +1746,7 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
     pf_tx_nl(t);
     pf_tx_s(t, "Units:       ");
     pf_tx_s(t, p->unitMiB ? "MiB/s (1,048,576 bytes)" : "MB/s (1,000,000 bytes)");
-    pf_tx_s(t, "; latency is the mean");
+    pf_tx_s(t, p->noLatency ? "; latency not measured" : "; latency is the mean");
     pf_tx_nl(t);
     if (ri->stopped != NULL && ri->stopped[0] != 0) {
         pf_tx_wrapped(t, "Stopped:     ", ri->stopped);
@@ -1616,6 +1755,51 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
     for (i = 0; i < plan->nsteps; i++) {
         pf_shown(&res[i * PF_MAX_PASSES], npasses, p->show, p->unitMiB, highRes, &sh);
         pf_summary_line(t, &plan->steps[i], &sh, p->unitMiB);
+    }
+    for (i = 0, k = 0; i < plan->nsteps && k == 0; i++) {
+        int m;
+
+        for (m = 0; m < npasses && plan->steps[i].kind == PF_SEQ && plan->steps[i].budget == 0; m++) {
+            if (res[i * PF_MAX_PASSES + m].bytes > plan->regionBytes) {
+                k = 1;
+            }
+        }
+    }
+    if (k) {
+        /* section 16.3: what a timed sequential test measures */
+        char w[200], n[24];
+
+        pf_fmt_u64(plan->regionBytes / 1048576u, n, sizeof(n));
+        pf_cpy(w, sizeof(w), "Sequential tests went over the file's ");
+        pf_cat(w, sizeof(w), n);
+        pf_cat(w, sizeof(w), " MiB again: a drive's own cache is part of these rates.");
+        pf_tx_nl(t);
+        pf_tx_wrapped(t, "", w);
+    }
+    for (i = 0, k = 0; i < plan->nsteps; i++) {
+        char c[160];
+
+        pf_shown(&res[i * PF_MAX_PASSES], npasses, p->show, p->unitMiB, highRes, &sh);
+        if (sh.cpuKind == PF_CPU_NONE) {
+            continue;
+        }
+        if (k == 0) {
+            pf_tx_nl(t);
+            pf_tx_s(t, "Processor (the whole system, over every pass that counts):");
+            pf_tx_nl(t);
+            k = 1;
+        }
+        pf_cpu_text(&sh, c, sizeof(c));
+        {
+            char lb[40];
+            PF_TEXT lt;
+
+            pf_tx_init(&lt, lb, sizeof(lb));
+            pf_tx_pad(&lt, plan->steps[i].label, 15, 0);
+            pf_tx_pad(&lt, pf_op_name(plan->steps[i].op), 6, 0);
+            pf_tx_pad(&lt, pf_buf_name(plan->steps[i].buffer), 10, 0);
+            pf_tx_wrapped(t, lb, c);
+        }
     }
     if (ri->stor98[0] != 0) {
         pf_tx_nl(t);
@@ -1645,6 +1829,41 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
             pf_tx_s(t, r->status == PF_ST_OK ? "" : " ");
             pf_tx_s(t, r->status == PF_ST_OK ? "" : pf_status_text(r->status));
             pf_tx_nl(t);
+            if (pf_overran(&plan->steps[i], r)) {
+                /* section 16.4: where a timed pass's time went */
+                char w[300];
+
+                pf_cpy(w, sizeof(w), "ran ");
+                pf_fmt_us(r->us, a, sizeof(a));
+                pf_cat(w, sizeof(w), a);
+                pf_cat(w, sizeof(w), " for ");
+                pf_fmt_u64((pf_u64)plan->steps[i].timeSec, a, sizeof(a));
+                pf_cat(w, sizeof(w), a);
+                pf_cat(w, sizeof(w), " s");
+                if (r->haveCourse) {
+                    if (r->issuedAny) {
+                        pf_cat(w, sizeof(w), ": last request issued at ");
+                        pf_fmt_us(r->lastIssueUs, a, sizeof(a));
+                        pf_cat(w, sizeof(w), a);
+                    } else {
+                        pf_cat(w, sizeof(w), ": no request issued");
+                    }
+                    if (r->lat.count != 0) {
+                        pf_cat(w, sizeof(w), ", longest request ");
+                        pf_fmt_us(r->lat.maxUs, a, sizeof(a));
+                        pf_cat(w, sizeof(w), a);
+                    }
+                    pf_cat(w, sizeof(w), ", workers ended at ");
+                    pf_fmt_us(r->workersEndUs, a, sizeof(a));
+                    pf_cat(w, sizeof(w), a);
+                    if (r->checkedAny) {
+                        pf_cat(w, sizeof(w), ", tick count at the last check ");
+                        pf_fmt_us(r->lastCheckMs * 1000u, a, sizeof(a));
+                        pf_cat(w, sizeof(w), a);
+                    }
+                }
+                pf_tx_wrapped(t, "    ", w);
+            }
         }
     }
 
@@ -1685,6 +1904,28 @@ void pf_report(PF_TEXT *t, const PF_PARAMS *p, const PF_PLAN *plan, const PF_RES
             pf_tx_s(t, "|");
             pf_tx_u(t, pf_lat_mean(&r->lat) * 1000u);
             pf_tx_nl(t);
+            if (r->cpuKind != PF_CPU_NONE) {
+                /* section 16.2; a reader that does not know it skips it */
+                pf_tx_s(t, "XPRF-CPU 1 ");
+                pf_tx_s(t, plan->steps[i].label);
+                pf_tx_s(t, "|");
+                pf_tx_s(t, pf_op_name(plan->steps[i].op));
+                pf_tx_s(t, "|");
+                pf_tx_s(t, pf_buf_name(plan->steps[i].buffer));
+                pf_tx_s(t, "|");
+                pf_tx_u(t, (pf_u64)(k + 1));
+                pf_tx_s(t, "|");
+                pf_tx_s(t, r->cpuKind == PF_CPU_NT ? "nt" : "9x");
+                pf_tx_s(t, "|");
+                pf_tx_u(t, (pf_u64)r->cpuCount);
+                pf_tx_s(t, "|");
+                pf_tx_u(t, r->cpuBusyUs * 1000u);
+                pf_tx_s(t, "|");
+                pf_tx_u(t, r->cpuIntUs * 1000u);
+                pf_tx_s(t, "|");
+                pf_tx_u(t, r->haveOwn ? r->cpuOwnUs * 1000u : 0u);
+                pf_tx_nl(t);
+            }
         }
     }
 }
@@ -1841,6 +2082,19 @@ long pf_saved_parse(const char *text, size_t len, PF_SAVED *sv)
 /* The command line                                                          */
 /* ------------------------------------------------------------------------ */
 
+/* 1 when s begins with pre, without case */
+static int pf_prefix(const char *s, const char *pre)
+{
+    while (*pre != 0) {
+        if (*s == 0 || pf_up(*s) != pf_up(*pre)) {
+            return 0;
+        }
+        s++;
+        pre++;
+    }
+    return 1;
+}
+
 static int pf_num(const char *s, pf_u32 lo, pf_u32 hi, pf_u32 *v)
 {
     pf_u64 x;
@@ -1878,6 +2132,9 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
             p->access = PF_ACC_CACHED;
         } else if (pf_ieq(a, "writethrough")) {
             p->writeThrough = 1;
+        } else if (pf_ieq(a, "nolatency")) {
+            p->noLatency = 1;
+            p->preset = PF_PRESET_CUSTOM;
         } else if (pf_ieq(a, "verify")) {
             p->verify = 1;
             p->pattern = PF_PAT_VERIFY;
@@ -1894,6 +2151,7 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
                 return 1;
             }
             pf_preset(p, pr);
+            c->ntest = 0;
             i++;
         } else if (pf_ieq(a, "folder")) {
             if (strlen(nx) >= sizeof(c->folder)) {
@@ -1923,6 +2181,7 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
                 pf_cpy(why, whyCap, "/min and /max take a power of two from 1 to 8192 (KiB).");
                 return 1;
             }
+            c->sweepSwitch = 1;
             if (pf_ieq(a, "min")) {
                 p->sweepMin = v * 1024u;
             } else {
@@ -1980,6 +2239,68 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
             }
             p->preset = PF_PRESET_CUSTOM;
             i++;
+        } else if (pf_ieq(a, "test")) {
+            /* seq|rnd,<KiB>,<depth>,<threads> (section 16.3) */
+            pf_u32 f[3];
+            int kind, nf = 0;
+            const char *q = nx;
+
+            if (pf_prefix(q, "seq,")) {
+                kind = PF_SEQ;
+            } else if (pf_prefix(q, "rnd,")) {
+                kind = PF_RND;
+            } else {
+                kind = -1;
+            }
+            q += (kind >= 0) ? 4 : 0;
+            while (kind >= 0 && nf < 3) {
+                char d[12];
+                size_t n = 0;
+
+                while (q[n] >= '0' && q[n] <= '9' && n < sizeof(d) - 1) {
+                    d[n] = q[n];
+                    n++;
+                }
+                d[n] = 0;
+                if (n == 0 || q[n] != (nf < 2 ? ',' : 0) ||
+                    !pf_num(d, 1, nf == 0 ? 8192u : (nf == 1 ? (pf_u32)PF_MAX_DEPTH : (pf_u32)PF_MAX_THREADS), &f[nf])) {
+                    break;
+                }
+                q += n + (nf < 2 ? 1 : 0);
+                nf++;
+            }
+            if (kind < 0 || nf != 3) {
+                pf_cpy(why, whyCap, "/test takes seq or rnd, the size in KiB (1 to 8192), the depth (1 to 32) and the "
+                                    "threads (1 to 8), as seq,1024,8,1.");
+                return 1;
+            }
+            if (c->ntest >= PF_MAX_TESTS) {
+                pf_cpy(why, whyCap, "At most 16 /test switches.");
+                return 1;
+            }
+            if (c->ntest == 0) {
+                p->ntests = 0;
+            }
+            pf_set_test(&p->tests[p->ntests], kind, f[0] * 1024u, (int)f[1], (int)f[2]);
+            p->ntests++;
+            c->ntest++;
+            c->anyTest = 1;
+            p->sweep = 0;
+            p->preset = PF_PRESET_CUSTOM;
+            i++;
+        } else if (pf_ieq(a, "ops")) {
+            if (pf_ieq(nx, "read")) {
+                p->ops = PF_OP_READ;
+            } else if (pf_ieq(nx, "write")) {
+                p->ops = PF_OP_WRITE;
+            } else if (pf_ieq(nx, "both")) {
+                p->ops = PF_OP_BOTH;
+            } else {
+                pf_cpy(why, whyCap, "/ops takes read, write or both.");
+                return 1;
+            }
+            p->preset = PF_PRESET_CUSTOM;
+            i++;
         } else if (pf_ieq(a, "pattern")) {
             if (pf_ieq(nx, "verifiable")) {
                 p->pattern = PF_PAT_VERIFY;
@@ -2000,6 +2321,10 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
             pf_cat(why, whyCap, a);
             return 1;
         }
+    }
+    if (c->anyTest && c->sweepSwitch) {
+        pf_cpy(why, whyCap, "/test sets fixed tests and /min and /max a sweep; use one or the other.");
+        return 1;
     }
     return 0;
 }

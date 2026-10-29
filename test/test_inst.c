@@ -245,22 +245,22 @@ static void test_cm_only(void)
         CHECK(inst_sig_note_kind(INST_ARCH_X86, 1, 10, k10) ==
               INST_SIG_X86_SB &&
               inst_sig_note_kind(INST_ARCH_AMD64, 1, 10, k10) ==
-              INST_SIG_X64 &&
+              INST_SIG_X64_8 &&
               inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, k10)
               != NULL &&
               inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_X86, k10)
               == NULL &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k10, 1, 1) ==
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 10, k10, 1, 1) ==
               INST_CMBOOT_WARN &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k10, 1,
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 10, k10, 1,
                                 inst_ts_confirmed(1, INST_SB_ON)) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k10, 0, 1) ==
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 10, k10, 0, 1) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_X86, k10, 0, 0) ==
+              inst_cm_boot_gate(INST_ARCH_X86, 1, 10, k10, 0, 0) ==
               INST_CMBOOT_NONE &&
               inst_sb_applies(1, k10) && !inst_sb_applies(1, k11) &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k11, 0, 0) ==
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 10, k11, 0, 0) ==
               INST_CMBOOT_NONE &&
               inst_stage_error_text(INST_E_NO_CATALOG, INST_ARCH_AMD64, k11)
               == NULL,
@@ -283,10 +283,13 @@ static void test_cm_only(void)
         CHECK(inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, kVista) ==
               INST_SIG_X64 &&
               inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k7) == INST_SIG_X64 &&
-              inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k8) == INST_SIG_X64 &&
-              inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k81) == INST_SIG_X64 &&
+              inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k8) ==
+              INST_SIG_X64_8 &&
+              inst_sig_note_kind(INST_ARCH_AMD64, 1, 6, k81) ==
+              INST_SIG_X64_8 &&
               inst_sig_note_kind(INST_ARCH_AMD64, 1, 10, INST_OS_CMONLY) ==
-              INST_SIG_X64, "x64 Vista and later: the test-signing note");
+              INST_SIG_X64_8, "x64 Vista and 7: the test-signing note; 8 and "
+              "later its own words (record 26 section 5.3.3)");
         CHECK(strstr(inst_sig_x86_sb_text(), "Secure Boot") != NULL &&
               strstr(inst_sig_x86_sb_text(), "test-signing mode does not help")
               != NULL && strstr(inst_sig_x86_sb_text(), "Windows 8") == NULL,
@@ -319,39 +322,103 @@ static void test_cm_only(void)
               INST_COLUMNS,
               "no catalog: restore the package with its .cat files");
         /* 8 and 8.1 x64 make xhcicm a boot driver (task 43.22). */
-        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1, 1) == INST_CMBOOT_WARN &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 1, 1) ==
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k8, 1, 1) == INST_CMBOOT_WARN &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k81, 1, 1) ==
               INST_CMBOOT_WARN,
               "8 and 8.1 x64, test-signed, test-signing on: the warning");
-        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1, 0) ==
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k8, 1, 0) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 0, 1) ==
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k81, 0, 1) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k8, -1, 1) ==
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k8, -1, 1) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 0, 0) ==
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k81, 0, 0) ==
               INST_CMBOOT_REFUSE,
               "8 and 8.1 x64: refused without test-signing or a test signature");
-        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_CMONLY, 1, 1) ==
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, INST_OS_CMONLY, 1, 1) ==
               INST_CMBOOT_WARN &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_CMONLY, 1, 0) ==
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, INST_OS_CMONLY, 1, 0) ==
               INST_CMBOOT_REFUSE, "any system of the kind: gated alike");
-        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k7, 0, 0) == INST_CMBOOT_NONE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, kVista, 1, 0) ==
+        /* Vista and 7 x64 make xhcicm a boot driver too (the 3.2.0.0 cut,
+         * task 44.32's reading): gated as 8 to 10 (task 44.12). */
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k7, 0, 0) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, kVista, 1, 0) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k7, 0, 1) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, kVista, -1, 1) ==
+              INST_CMBOOT_REFUSE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k7, 1, 1) ==
+              INST_CMBOOT_WARN &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, kVista, 1, 1) ==
+              INST_CMBOOT_WARN, "Vista and 7 x64: gated as 8 to 10");
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, 0, 4, k98, 0, 0) ==
               INST_CMBOOT_NONE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, kXp64, 0, 0) ==
+              inst_cm_boot_gate(INST_ARCH_X86, 1, 6, k7, 0, 0) ==
               INST_CMBOOT_NONE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_REFUSED, 0, 0) ==
+              inst_cm_boot_gate(INST_ARCH_X86, 1, 6, kVista, 0, 0) ==
               INST_CMBOOT_NONE &&
-              inst_cm_boot_gate(INST_ARCH_X86, k8, 0, 0) == INST_CMBOOT_NONE &&
-              inst_cm_boot_gate(INST_ARCH_X86, k81, 0, 0) == INST_CMBOOT_NONE,
-              "Vista, 7, XP x64 and 32-bit 8 and 8.1: not gated");
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 5, kXp64, 0, 0) ==
+              INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, INST_OS_REFUSED, 0, 0) ==
+              INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_X86, 1, 6, k8, 0, 0) == INST_CMBOOT_NONE &&
+              inst_cm_boot_gate(INST_ARCH_X86, 1, 6, k81, 0, 0) == INST_CMBOOT_NONE,
+              "XP x64, the 32-bit systems and the refused: not gated");
         CHECK(strstr(inst_cm_boot_refuse_text(), "bcdedit /set testsigning on")
               != NULL &&
               strstr(inst_cm_boot_warn_text(), "Automatic Repair") != NULL &&
               strstr(inst_cm_boot_refuse_text(), "Windows 8") == NULL &&
               strstr(inst_cm_boot_warn_text(), "Windows 8") == NULL,
               "the gate's words, no version named");
+
+        /* The connection manager off the boot path (record 23 section
+         * 5.14; task 44.32): 0, 1 and 2 set back to demand start; 3, 4,
+         * another type or nothing read left alone. */
+        CHECK(inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 0UL) &&
+              inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 1UL) &&
+              inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 2UL) &&
+              !inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 3UL) &&
+              !inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 4UL) &&
+              !inst_cm_start_fix(1, INST_REG_DWORD_TYPE, 0xFFFFFFFFUL) &&
+              !inst_cm_start_fix(1, 1UL, 0UL) &&
+              !inst_cm_start_fix(0, INST_REG_DWORD_TYPE, 0UL) &&
+              INST_CM_START_DEMAND == 3UL, "xhcicm's start type put back");
+        /* Only where no devnode on the system disk's path names it. */
+        CHECK(inst_cm_start_action(1, 0) == INST_CMST_SET &&
+              inst_cm_start_action(1, 1) == INST_CMST_KEEP_PATH &&
+              inst_cm_start_action(1, -1) == INST_CMST_KEEP_UNREAD &&
+              inst_cm_start_action(0, 0) == INST_CMST_NONE &&
+              inst_cm_start_action(0, 1) == INST_CMST_NONE &&
+              inst_cm_start_action(0, -1) == INST_CMST_NONE,
+              "set back only off the system disk's path");
+        CHECK(inst_bp_prop_verdict(INST_CR_NO_SUCH_VALUE, 0UL, NULL, 0,
+                                   "xhcicm") == 0 &&
+              inst_bp_prop_verdict(INST_CR_BUFFER_SMALL, 0UL, NULL, 0,
+                                   "xhcicm") == INST_BP_GROW &&
+              inst_bp_prop_verdict(0x13UL, 0UL, NULL, 0, "xhcicm") == -1 &&
+              inst_bp_prop_verdict(0x05UL, 0UL, NULL, 0, "xhcicm") == -1 &&
+              inst_bp_prop_verdict(0UL, INST_REG_MULTI_SZ_TYPE, NULL, 0,
+                                   "xhcicm") == -1,
+              "the system disk's path: no value, a small buffer, errors");
+        /* A whole REG_MULTI_SZ: a name matches whole, in any case. */
+        CHECK(inst_bp_prop_verdict(0UL, INST_REG_MULTI_SZ_TYPE,
+                                   "pcifilt\0xhcicm\0", 16, "xhcicm") == 1 &&
+              inst_bp_prop_verdict(0UL, INST_REG_MULTI_SZ_TYPE,
+                                   "XHCICM\0", 8, "xhcicm") == 1 &&
+              inst_bp_prop_verdict(0UL, INST_REG_MULTI_SZ_TYPE,
+                                   "xhcicmx\0", 9, "xhcicm") == 0 &&
+              inst_bp_prop_verdict(0UL, INST_REG_MULTI_SZ_TYPE,
+                                   "xhci", 4, "xhcicm") == 0 &&
+              inst_bp_prop_verdict(0UL, 1UL, "xhcicm\0", 7, "xhcicm") ==
+              -1, "the system disk's path: a filter value's names");
+        CHECK(strstr(inst_cm_boot_warn_text(), "demand") != NULL &&
+              strstr(inst_cm_boot_refuse_text(), "Windows 7") == NULL &&
+              inst_text_width(inst_cm_boot_warn_text()) <= INST_COLUMNS &&
+              inst_text_width(inst_cm_boot_refuse_text()) <= INST_COLUMNS,
+              "the gate's words: the start type put back, no version, "
+              "the width");
 
         /* Secure Boot's state (record 26 section 5.3.2; owner,
          * 2026-10-22): three answers, read on 8, 8.1 and 10 alone. */
@@ -388,19 +455,19 @@ static void test_cm_only(void)
               "Secure Boot on: TESTSIGNING never confirmed");
         /* Secure Boot on, TESTSIGNING in the options, 8, 8.1 and the kind
          * x64: not confirmed, so the connection manager is refused. */
-        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1,
+        CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k8, 1,
                                 inst_ts_confirmed(1, INST_SB_ON)) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 1,
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k81, 1,
                                 inst_ts_confirmed(1, INST_SB_ON)) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, INST_OS_CMONLY, 1,
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, INST_OS_CMONLY, 1,
                                 inst_ts_confirmed(1, INST_SB_ON)) ==
               INST_CMBOOT_REFUSE &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k81, 1,
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k81, 1,
                                 inst_ts_confirmed(1, INST_SB_OFF)) ==
               INST_CMBOOT_WARN &&
-              inst_cm_boot_gate(INST_ARCH_AMD64, k8, 1,
+              inst_cm_boot_gate(INST_ARCH_AMD64, 1, 6, k8, 1,
                                 inst_ts_confirmed(1, INST_SB_UNKNOWN)) ==
               INST_CMBOOT_WARN,
               "the state through the gate, each system");
@@ -456,7 +523,7 @@ static void test_cm_only(void)
                 int stor = (box & 2) != 0;
                 int s98 = (box & 4) != 0;
                 INST_U32 w = inst_comp_warnings(sys == 0, sys <= 1, sys == 3,
-                                                1, usb, stor, s98);
+                                                1, usb, stor, s98, 1, 0);
                 INST_U32 want = 0;
                 if (stor && sys != 0) {
                     want |= INST_CW_STOR;
@@ -475,9 +542,19 @@ static void test_cm_only(void)
             }
         }
         CHECK(!bad, "the warnings: exactly the owner's four cases");
-        CHECK(inst_comp_warnings(0, 0, 1, 0, 0, 0, 0) == INST_CW_NOCM8 &&
-              inst_comp_warnings(0, 0, 0, 0, 1, 0, 0) == 0,
+        CHECK(inst_comp_warnings(0, 0, 1, 0, 0, 0, 0, 0, 0) ==
+              INST_CW_NOCM8 &&
+              inst_comp_warnings(0, 0, 0, 0, 1, 0, 0, 0, 0) == 0,
               "8 and 8.1 without the connection manager: warned (case 5)");
+        CHECK(inst_comp_warnings(0, 0, 1, 1, 0, 0, 0, 1, 1) ==
+              INST_CW_INTELTB &&
+              inst_comp_warnings(0, 0, 0, 1, 1, 0, 0, 1, 1) ==
+              INST_CW_INTELTB &&
+              inst_comp_warnings(0, 0, 1, 1, 0, 0, 0, 0, 1) == 0 &&
+              inst_comp_warnings(0, 0, 1, 1, 0, 0, 0, 1, 0) == 0 &&
+              inst_comp_warnings(0, 0, 1, 0, 0, 0, 0, 1, 1) ==
+              INST_CW_NOCM8,
+              "over Intel's Thunderbolt driver: warned only when ticked");
         inst_comp_warn_text(0, "C:\\XHCI98", text, sizeof(text));
         CHECK(text[0] == '\0', "no warning: no text");
         inst_comp_warn_text(INST_CW_STOR | INST_CW_CMALONE | INST_CW_USB8 |
@@ -488,7 +565,8 @@ static void test_cm_only(void)
               strstr(text, "On Windows 8, 8.1 and 10 the xHCI98 USB drivers "
                      "replace Windows' own USB 3 driver on every xHCI "
                      "controller") != NULL &&
-              strstr(text, "may need a restart and a second run") != NULL &&
+              strstr(text, "may need a restart and a second run") == NULL &&
+              strstr(text, "The uninstall gives the controllers back") != NULL &&
               strstr(text, "tested") == NULL &&
               strstr(text, "UAS disk driver, when ticked, is staged") !=
                   NULL &&
@@ -649,9 +727,12 @@ static void test_real_infs(void)
     CHECK(has_id(&ids, "PCI\\CC_0C0330"), "98: the controller");
     CHECK(has_id(&ids, "USB\\XHCI98_ROOT_HUB"), "98: the root hub");
     CHECK(has_id(&ids, "USB\\XHCI98_COMPOSITE"), "98: composite");
-    CHECK_EQ(ids.Count, 5, "98: five ids");
+    /* And the name table's controllers by id (task 44.5). */
+    CHECK(has_id(&ids, "PCI\\VEN_1B36&DEV_000D"), "98: QEMU's controller by id");
+    CHECK_EQ(ids.Count, 5 + instXhciNameCount, "98: five ids and the table's");
     e = env(1, 5, 0, INST_ARCH_X86);
-    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 5, "2000: five ids");
+    CHECK(inst_inf_models(x86, &e, &ids) &&
+          ids.Count == 5 + instXhciNameCount, "2000: the same section");
     e = env(1, 6, 1, INST_ARCH_X86);
     CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 5 &&
           has_id(&ids, "USB\\XHCI98_HUB30"), "7 x86: five ids");
@@ -740,74 +821,106 @@ static void test_stor98_infs(void)
         "PCI\\VEN_1B36&DEV_0010&REV_02\0PCI\\VEN_1B36&DEV_0010\0"
         "PCI\\VEN_1B36&CC_010802\0PCI\\VEN_1B36&CC_0108\0PCI\\VEN_1B36\0"
         "PCI\\CC_010802\0PCI\\CC_0108\0\0";
+    static const char tunCompat[] =
+        "PCI\\XHCI98_TUNNEL&CC_010802\0"
+        "PCI\\VEN_1B36&DEV_0010&REV_02\0PCI\\VEN_1B36&DEV_0010\0"
+        "PCI\\VEN_1B36&CC_010802\0PCI\\VEN_1B36&CC_0108\0PCI\\VEN_1B36\0"
+        "PCI\\CC_010802\0PCI\\CC_0108\0\0";
     char *x86 = load("..\\src\\stor98\\inf\\stor98-x86.inf");
     char *a64 = load("..\\src\\stor98\\inf\\stor98-x64.inf");
+    char *w9x = load("..\\src\\stor98\\inf\\stor98-9x.inf");
     INST_ENV e;
     INST_IDLIST ids;
+    int sys;
+    static const struct {
+        int Nt;
+        INST_U32 Major;
+        INST_U32 Minor;
+        int Arch;
+        const char *What;
+    } systems[] = {
+        { 0, 4, 10, INST_ARCH_X86, "98 SE" },
+        { 1, 5, 0, INST_ARCH_X86, "2000" },
+        { 1, 6, 2, INST_ARCH_X86, "8 x86" },
+        { 1, 6, 2, INST_ARCH_AMD64, "8 x64" },
+        { 1, 6, 3, INST_ARCH_X86, "8.1 x86" },
+        { 1, 6, 3, INST_ARCH_AMD64, "8.1 x64" },
+        { 1, 10, 0, INST_ARCH_X86, "10 x86" },
+        { 1, 10, 0, INST_ARCH_AMD64, "10 x64" }
+    };
 
-    CHECK(x86 != NULL && a64 != NULL, "Stor98's two INFs read");
-    if (x86 == NULL || a64 == NULL) {
+    CHECK(x86 != NULL && a64 != NULL && w9x != NULL, "Stor98's three INFs read");
+    if (x86 == NULL || a64 == NULL || w9x == NULL) {
         free(x86);
         free(a64);
+        free(w9x);
         return;
     }
     CHECK(inst_inf_arch_ok(x86, INST_ARCH_X86), "stor98-x86.inf is x86");
     CHECK(inst_inf_arch_ok(a64, INST_ARCH_AMD64), "stor98-x64.inf is amd64");
-    e = env(0, 4, 10, INST_ARCH_X86);
-    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "98 SE: the class match");
-    e = env(1, 5, 0, INST_ARCH_X86);
-    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "2000: the class match");
-    e = env(1, 6, 2, INST_ARCH_X86);
-    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "8 x86: the class match");
-    e = env(1, 6, 2, INST_ARCH_AMD64);
-    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "8 x64: the class match");
-    e = env(1, 6, 3, INST_ARCH_X86);
-    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "8.1 x86: the class id");
-    CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
-                         sizeof(nvmeCompat), &ids) >= 0,
-          "8.1 x86: the installer still finds an NVMe controller");
-    e = env(1, 6, 3, INST_ARCH_AMD64);
-    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "8.1 x64: the class id");
-    e = env(1, 10, 0, INST_ARCH_AMD64);
-    CHECK(inst_inf_models(a64, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "10 x64: the class id");
-    CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
-                         sizeof(nvmeCompat), &ids) >= 0,
-          "10 x64: the installer still finds an NVMe controller");
-    e = env(1, 10, 0, INST_ARCH_X86);
-    CHECK(inst_inf_models(x86, &e, &ids) && ids.Count == 1 &&
-          has_id(&ids, "PCI\\CC_010802"), "10 x86: the class id");
+    /* Record 31 sections 4.7, 4.8 and 5.2 (owner, 2026-10-25): stor98.inf
+     * the tunnel id alone on 2000 to 8 (Windows 2000 reads the undecorated
+     * section), the class as the compatible id on 8.1 and 10, as 3.2.0.0;
+     * stor98w9.inf, which 98 SE and ME install from, the id and the class.
+     * The installer finds its candidates by class (section 7.2), a tagged
+     * drive by the INF's id too. */
+    for (sys = 0; sys < (int)(sizeof(systems) / sizeof(systems[0])); sys++) {
+        char what[96];
+        int undecorated = !systems[sys].Nt;
+        int nt63 = systems[sys].Nt && (systems[sys].Major > 6 ||
+                   (systems[sys].Major == 6 && systems[sys].Minor >= 3));
+        e = env(systems[sys].Nt, systems[sys].Major, systems[sys].Minor,
+                systems[sys].Arch);
+        sprintf(what, "%s: the models' ids", systems[sys].What);
+        CHECK(inst_inf_models(systems[sys].Arch != INST_ARCH_X86 ? a64 :
+                              undecorated ? w9x : x86, &e, &ids) &&
+              ids.Count == (undecorated ? 2 : 1) &&
+              has_id(&ids, INST_S98_TUNNEL_ID) == !nt63 &&
+              has_id(&ids, INST_S98_CLASS_ID) == (undecorated || nt63), what);
+        sprintf(what, "%s: a plain NVMe drive matches only a class model",
+                systems[sys].What);
+        CHECK((inst_ids_match(nvmeHw, sizeof(nvmeHw), nvmeCompat,
+                              sizeof(nvmeCompat), &ids) >= 0) ==
+              (undecorated || nt63), what);
+        sprintf(what, "%s: a tagged drive matches the model", systems[sys].What);
+        CHECK(inst_ids_match(nvmeHw, sizeof(nvmeHw), tunCompat,
+                             sizeof(tunCompat), &ids) >= 0, what);
+        sprintf(what, "%s: a plain drive is still a candidate", systems[sys].What);
+        CHECK(inst_s98_candidate(nvmeHw, sizeof(nvmeHw), nvmeCompat,
+                                 sizeof(nvmeCompat), &ids), what);
+    }
     {
         char hw[128];
         char cp[128];
-        static const char vmd[] =
-            "PCI\\VEN_8086&DEV_0B60\0\0";
-        static const char vmdCompat[] =
-            "PCI\\VEN_8086&CC_010803\0PCI\\CC_010803\0PCI\\CC_0108\0\0";
-        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.6.3", hw, cp) &&
-              hw[0] == '\0' && inst_eq(cp, "PCI\\CC_010802"),
-              "x64 NT 6.3 models: no hardware id, the class id compatible");
-        CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.6.3", hw, cp) &&
-              hw[0] == '\0' && inst_eq(cp, "PCI\\CC_010802"),
-              "x86 NT 6.3 models: no hardware id, the class id compatible");
-        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64", hw, cp) &&
-              inst_eq(hw, "PCI\\CC_010802"), "x64 models before 6.3: the hardware id");
+        CHECK(s98_model_fields(w9x, "Stor98_Models", hw, cp) &&
+              inst_eq(hw, INST_S98_TUNNEL_ID) && inst_eq(cp, INST_S98_CLASS_ID),
+              "98 SE and ME models: the id, and the class as its compatible id");
         CHECK(s98_model_fields(x86, "Stor98_Models", hw, cp) &&
-              inst_eq(hw, "PCI\\CC_010802"), "x86 models before 6.3: the hardware id");
-        e = env(1, 10, 0, INST_ARCH_AMD64);
-        CHECK(inst_inf_models(a64, &e, &ids) &&
-              inst_ids_match(vmd, sizeof(vmd), vmdCompat, sizeof(vmdCompat),
-                             &ids) < 0,
-              "10 x64: an 01:08 device of another interface is no candidate");
+              inst_eq(hw, INST_S98_TUNNEL_ID) && cp[0] == '\0',
+              "x86 models before 6.3 (2000 too): the id as the hardware id");
+        CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.6.3", hw, cp) &&
+              hw[0] == '\0' && inst_eq(cp, INST_S98_CLASS_ID),
+              "x86 6.3 models: the class as the compatible id, as 3.2.0.0");
+        CHECK(s98_model_fields(x86, "Stor98_Models.NTx86.10.0", hw, cp) == 0,
+              "x86: no 10.0 models");
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64", hw, cp) &&
+              inst_eq(hw, INST_S98_TUNNEL_ID) && cp[0] == '\0',
+              "x64 models before 6.3: the id as the hardware id");
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.6.3", hw, cp) &&
+              hw[0] == '\0' && inst_eq(cp, INST_S98_CLASS_ID),
+              "x64 6.3 models: the class as the compatible id, as 3.2.0.0");
+        CHECK(s98_model_fields(a64, "Stor98_Models.NTamd64.10.0", hw, cp) == 0,
+              "x64: no 10.0 models");
     }
+    /* Record 31 section 7.1: the bundled INFs are this project's Stor98
+     * INF by the identity test the store removal and the 98 SE sweep
+     * make. */
+    CHECK(inst_s98_inf_identity(x86), "stor98-x86.inf: the identity test");
+    CHECK(inst_s98_inf_identity(a64), "stor98-x64.inf: the identity test");
+    CHECK(inst_s98_inf_identity(w9x), "stor98-9x.inf: the identity test");
     free(x86);
     free(a64);
+    free(w9x);
 }
 
 /* The Thunderbolt INFs in src\cm\ (task 39-A.1). A missing one is a
@@ -851,11 +964,26 @@ static void test_cm_infs(void)
                   !inst_inf_addreg_default(c64, instValues[i].Name, &d64),
                   "a NoInf row is written by no INF");
             d = instValues[i].Def;
+        } else if (instValues[i].Apply == INST_APPLY_9X_CM) {
+            /* Task 44.46: written by the x86 INF's 98 SE and ME install;
+             * the amd64 INF, with no such install, does not write it and
+             * the table's default, the x86 INF's, stands for it. */
+            CHECK(inst_inf_addreg_default(cm, instValues[i].Name, &d) &&
+                      d == instValues[i].Def,
+                  "a 98 SE and ME cm value: the x86 INF writes the "
+                  "table's default");
+            CHECK(!inst_inf_addreg_default(c64, instValues[i].Name, &d64),
+                  "a 98 SE and ME cm value: the amd64 INF does not write it");
+            CHECK(inst_value_default(i, c64, &d64) && d64 == d,
+                  "a 98 SE and ME cm value: the same default for the amd64 "
+                  "INF");
         } else {
             CHECK(inst_inf_addreg_default(cm, instValues[i].Name, &d),
                   instValues[i].Name);
             CHECK(inst_inf_addreg_default(c64, instValues[i].Name, &d64) &&
                       d64 == d, "the amd64 INF writes the same default");
+            CHECK(!inst_value_default(i, NULL, &d64),
+                  "an INF-written value has no default without its INF");
         }
         CHECK(inst_value_default(i, cm, &d64) && d64 == d,
               "inst_value_default gives the same default");
@@ -1421,11 +1549,11 @@ static void test_values(void)
               inst_value_set_mask(fb, &e) == 0x3,
               "ForceBulkOnly: Advanced, /set 0 and 1");
         CHECK(ni >= 0 && instValues[ni].Inf == INST_INF_CM &&
-              instValues[ni].NoInf && instValues[ni].Def == 1 &&
+              !instValues[ni].NoInf && instValues[ni].Def == 1 &&
               !inst_value_applies(ni, &e2) &&
               inst_value_set_mask(ni, &e2) == 0x3,
-              "XhciCmNoIrqStart: 98 SE, default 1, not written by the "
-              "INF, Advanced");
+              "XhciCmNoIrqStart: 98 SE, default 1, written by the INF "
+              "(task 44.46), Advanced");
         e2 = env(1, 6, 1, INST_ARCH_X86);
         e2.AnyXhci = 1;
         e2.CmNhi = 1;
@@ -1680,8 +1808,9 @@ static void test_args(void)
     CHECK_EQ(parse(2, a10, &o), 1, "/dir without a name");
     CHECK_EQ(parse(6, a11, &o), 0, "/uninstall /yes /nopause /log");
     CHECK(o.Uninstall && o.Yes && o.NoPause && inst_eq(o.Log, "C:\\L"), "fields");
-    /* Owner, 2026-10-15: the installer never runs XHCICLN, so the switch
-     * that once did is gone - an unknown argument. */
+    /* Owner, 2026-10-15: /clean, the switch that once ran the cleanup
+     * tool, is gone - an unknown argument. The tool itself, XHCICLN, was
+     * dropped in 3.3.0.0. */
     CHECK_EQ(parse(2, a12, &o), 1, "/clean is no switch");
 
     CHECK_EQ(inst_exit_code(0, 0, 0, 0), 0, "done");
@@ -2392,28 +2521,71 @@ static void test_tb_question(void)
     /* A controller present: asked, default no (owner, 2026-10-19: the
      * support is experimental and ticked only on purpose); /yes leaves it
      * out. */
-    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 0, &ask, &def), 0, "present: asked");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 0, 0, 0, &ask, &def), 0, "present: asked");
     CHECK(ask && !def, "present: default no");
-    CHECK_EQ(inst_tb_decide(1, 1, 1, 0, 0, &ask, &def), 0, "present, /yes: no");
+    CHECK_EQ(inst_tb_decide(1, 1, 1, 0, 0, 0, 0, &ask, &def), 0, "present, /yes: no");
     CHECK(!ask, "present, /yes: not asked");
     /* None found: still asked, default no; /yes skips it. */
-    CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 0, &ask, &def), 0, "absent: asked");
+    CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 0, 0, 0, &ask, &def), 0, "absent: asked");
     CHECK(ask && !def, "absent: default no");
-    CHECK_EQ(inst_tb_decide(1, 0, 1, 0, 0, &ask, &def), 0, "absent, /yes: no");
+    CHECK_EQ(inst_tb_decide(1, 0, 1, 0, 0, 0, 0, &ask, &def), 0, "absent, /yes: no");
     CHECK(!ask, "absent, /yes: not asked");
     /* /thunderbolt: yes, unasked, present or not, /yes or not. */
-    CHECK_EQ(inst_tb_decide(1, 0, 0, 1, 0, &ask, &def), 1, "/thunderbolt, absent");
+    CHECK_EQ(inst_tb_decide(1, 0, 0, 1, 0, 0, 0, &ask, &def), 1, "/thunderbolt, absent");
     CHECK(!ask, "/thunderbolt: not asked");
-    CHECK_EQ(inst_tb_decide(1, 0, 1, 1, 0, &ask, &def), 1, "/thunderbolt /yes");
-    CHECK_EQ(inst_tb_decide(1, 1, 0, 1, 0, &ask, &def), 1, "/thunderbolt, present");
+    CHECK_EQ(inst_tb_decide(1, 0, 1, 1, 0, 0, 0, &ask, &def), 1, "/thunderbolt /yes");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 1, 0, 0, 0, &ask, &def), 1, "/thunderbolt, present");
     /* /list: not asked, the default shown. */
-    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 1, &ask, &def), 0, "/list, present");
-    CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 1, &ask, &def), 0, "/list, absent");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 0, 0, 1, &ask, &def), 0, "/list, present");
+    CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 0, 0, 1, &ask, &def), 0, "/list, absent");
     CHECK(!ask, "/list: not asked");
     /* A package without the Thunderbolt driver: nothing, whatever the
      * switches. */
-    CHECK_EQ(inst_tb_decide(0, 1, 0, 1, 0, &ask, &def), 0, "no driver: no");
+    CHECK_EQ(inst_tb_decide(0, 1, 0, 1, 0, 0, 0, &ask, &def), 0, "no driver: no");
     CHECK(!ask, "no driver: not asked");
+    /* The connection manager alone (the USB drivers out of the run): in
+     * unasked - but over Intel's Thunderbolt driver asked, the default no
+     * (record 23 section 8.5.1; owner, 2026-10-25: ask, the default
+     * leave). */
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 1, 0, 0, &ask, &def), 1,
+             "the connection manager alone: in");
+    CHECK(!ask, "the connection manager alone: not asked");
+    CHECK_EQ(inst_tb_decide(1, 1, 1, 0, 1, 0, 0, &ask, &def), 1,
+             "the connection manager alone, /yes: in");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 1, 1, 0, &ask, &def), 0,
+             "alone over Intel's driver: asked");
+    CHECK(ask && !def, "alone over Intel's driver: the default no");
+    CHECK_EQ(inst_tb_decide(1, 1, 1, 0, 1, 1, 0, &ask, &def), 0,
+             "alone over Intel's driver, /yes: no");
+    CHECK(!ask, "alone over Intel's driver, /yes: not asked");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 1, 1, 1, &ask, &def), 0,
+             "alone over Intel's driver, /list: no");
+    CHECK_EQ(inst_tb_decide(1, 1, 1, 1, 1, 1, 0, &ask, &def), 1,
+             "over Intel's driver, /thunderbolt /yes: in");
+    CHECK(!ask, "/thunderbolt over Intel's driver: not asked");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 0, 1, 0, &ask, &def), 0,
+             "with the USB drivers, over Intel's driver: asked");
+    CHECK(ask && !def, "with the USB drivers, over Intel's: the default no");
+    /* The window's Thunderbolt box's own state (task 44.79): the console's
+     * answer with the USB drivers in the run, which the box opens with and
+     * takes back when they are ticked again after the connection manager
+     * alone - unticked, a controller found or not, but by /thunderbolt;
+     * never the connection manager alone's unasked yes. */
+    CHECK(inst_tb_box_default(1, 0, 0, 0) == 0 &&
+          inst_tb_box_default(1, 1, 0, 0) == 0,
+          "the box's own state: unticked, a controller found or not");
+    CHECK(inst_tb_box_default(1, 0, 1, 0) == 1 &&
+          inst_tb_box_default(1, 1, 1, 1) == 1,
+          "the box's own state: /thunderbolt ticks it");
+    CHECK(inst_tb_box_default(1, 1, 0, 1) == 0 &&
+          inst_tb_box_default(0, 1, 1, 0) == 0,
+          "the box's own state: over Intel's driver unticked, no driver none");
+    CHECK(inst_tb_decide(1, 0, 1, 0, 1, 0, 0, &ask, &def) == 1 &&
+          inst_tb_box_default(1, 0, 0, 0) == 0,
+          "the connection manager alone's yes is not the box's own state");
+    CHECK(inst_tb_intel("nhi") && inst_tb_intel("NHI") &&
+          !inst_tb_intel("xhcicm") && !inst_tb_intel("") &&
+          !inst_tb_intel(NULL), "Intel's Thunderbolt driver by its service");
 
     /* The answers. */
     CHECK_EQ(inst_tb_answer("", 1), 1, "Enter: the default yes");
@@ -3730,7 +3902,7 @@ static void test_mw_values(void)
           "not set on the device: its default counts");
     CHECK(inst_mw_write_needed(0, 0, now, 0, 0, 0),
           "no device yet (a controller to come): written machine-wide");
-    /* The ranges and the value no INF writes (record 26 section 5.5). */
+    /* The ranges (record 26 section 5.5) and a 98 SE and ME value. */
     CHECK(poll >= 0 && inst_value_allowed(poll, &e, 50) &&
           inst_value_allowed(poll, &e, 5000) &&
           !inst_value_allowed(poll, &e, 49) &&
@@ -3738,9 +3910,15 @@ static void test_mw_values(void)
     CHECK(inst_value_set("XhciCmCmdTimeoutMs=60000", &mode, &d) == 1 && d == 60000UL &&
           inst_value_set("XhciCmCmdTimeoutMs=60001", &mode, &d) == -1,
           "/set takes a range's values");
+    CHECK(br >= 0 && !instValues[br].NoInf && instValues[br].Def == 1UL &&
+          !inst_value_default(br, NULL, &d),
+          "XhciCmBridgeNumbering: written by the INF (task 44.46), so "
+          "its default needs it");
+    CHECK(inst_value_set("XhciCmBridgeNumbering=0", &mode, &d) == 1 &&
+          mode == br && d == 0UL &&
+          inst_value_set("XhciCmBridgeNumbering=2", &mode, &d) == -1,
+          "/set takes XhciCmBridgeNumbering 0 and 1");
     mode = inst_value_find("XhciInterruptMode");
-    CHECK(br >= 0 && inst_value_default(br, NULL, &d) && d == 1UL,
-          "the value no INF writes has the table's default");
     CHECK(inst_value_set_mask(br, &e) == 0, "a 98 SE and ME value on NT");
     e = env(0, 4, 10, INST_ARCH_X86);
     e.CmNhi = 1;
@@ -3795,17 +3973,23 @@ static void test_greyed(void)
     e.AnyXhci = 0;
     CHECK(!inst_value_greyed(fine, &e) && !inst_value_greyed(psw, &e),
           "no controller: nothing greyed for it");
-    CHECK(inst_s98_greyed(INST_S98_GONE, 0) &&
-          inst_s98_greyed(INST_S98_IDLE, 0) &&
+    CHECK(!inst_s98_greyed(INST_S98_GONE, 0) &&
+          !inst_s98_greyed(INST_S98_IDLE, 0) &&
           !inst_s98_greyed(INST_S98_GONE, 1) &&
           !inst_s98_greyed(INST_S98_WRITETHROUGH, 0) &&
           !inst_s98_greyed(INST_S98_WRITETHROUGH, 1) &&
           !inst_s98_greyed(-1, 0),
-          "Stor98: gone and idle greyed on 98 SE and ME alone");
-    CHECK(strcmp(inst_s98_only(INST_S98_GONE), "Windows 2000 to 7 only") == 0 &&
+          "Stor98: gone, idle and the rest settable everywhere (3.3.0.0)");
+    CHECK(!inst_s98_greyed(INST_S98_HOLD9X, 0) &&
+          inst_s98_greyed(INST_S98_HOLD9X, 1) &&
+          strcmp(inst_s98_only(INST_S98_HOLD9X),
+                 "Windows 98 SE and ME only") == 0,
+          "Stor98: StorHold9xMs greyed on 2000 to 10, 98 SE and ME only");
+    CHECK(inst_s98_only(INST_S98_GONE) == NULL &&
+          inst_s98_only(INST_S98_IDLE) == NULL &&
           inst_s98_only(INST_S98_WRITETHROUGH) == NULL &&
           inst_s98_only(INST_S98_COUNT) == NULL,
-          "Stor98: the words of a greyed row");
+          "Stor98: no other row says it is for one family");
 }
 
 /* ---- record 26 section 5.3: the UAS driver's box (owner, 2026-10-19) --- */
@@ -3888,9 +4072,9 @@ static void test_uninstall_entry(void)
     char *argv[5];
 
     inst_arp_name(out, sizeof(out), "3.1.0.0", 0, 0);
-    CHECK(strcmp(out, "xHCI98 USB 3.x drivers 3.1.0.0") == 0, "the name");
+    CHECK(strcmp(out, "xHCI98 USB 3 drivers 3.1.0.0") == 0, "the name");
     inst_arp_name(out, sizeof(out), "3.1.0.0", 1, 0);
-    CHECK(strcmp(out, "xHCI98 USB 3.x drivers 3.1.0.0 (incomplete: run "
+    CHECK(strcmp(out, "xHCI98 USB 3 drivers 3.1.0.0 (incomplete: run "
                       "again)") == 0, "an incomplete uninstall's name");
     /* Record 26 section 9.1, draft 8: named by what is registered. */
     inst_arp_name(out, sizeof(out), "3.1.0.0", 0, 1);
@@ -3900,16 +4084,33 @@ static void test_uninstall_entry(void)
     CHECK(strcmp(out, "xHCI98 Thunderbolt 3 / USB4 connection manager "
                       "3.1.0.0 (incomplete: run again)") == 0,
           "the connection manager alone, incomplete");
-    CHECK(inst_arp_cm_only(0, 1, 0) && !inst_arp_cm_only(1, 1, 0) &&
-          !inst_arp_cm_only(-1, 1, 0) && !inst_arp_cm_only(0, 0, 0) &&
-          !inst_arp_cm_only(0, -1, 0) && !inst_arp_cm_only(1, 0, 0),
+    CHECK(inst_arp_cm_only(0, 1, 0, 0) && !inst_arp_cm_only(1, 1, 0, 0) &&
+          !inst_arp_cm_only(-1, 1, 0, 0) && !inst_arp_cm_only(0, 0, 0, 0) &&
+          !inst_arp_cm_only(0, -1, 0, 0) && !inst_arp_cm_only(1, 0, 0, 0),
           "the connection manager alone: xhci98 absent, xhcicm registered");
     /* A run without the USB drivers that only staged (no controller yet,
      * no service registered) is named for the connection manager; an
      * xhci98 still registered keeps the USB drivers' name. */
-    CHECK(inst_arp_cm_only(0, 0, 1) && inst_arp_cm_only(0, -1, 1) &&
-          !inst_arp_cm_only(1, 0, 1) && !inst_arp_cm_only(-1, 0, 1),
+    CHECK(inst_arp_cm_only(0, 0, 1, 0) && inst_arp_cm_only(0, -1, 1, 0) &&
+          !inst_arp_cm_only(1, 0, 1, 0) && !inst_arp_cm_only(-1, 0, 1, 0),
           "the connection manager alone: a staging-only run");
+    /* Task 44.60: a run that installs the USB drivers is named for them
+     * though their service is not registered yet (a staging-only run, or
+     * 98 SE and ME before Update Driver), and xhcicm's is. */
+    CHECK(!inst_arp_cm_only(0, 1, 0, 1) && !inst_arp_cm_only(0, 0, 0, 1) &&
+          !inst_arp_cm_only(0, -1, 0, 1),
+          "a run with the USB drivers: their name");
+    /* Task 44.60: /cmonly on 98 SE and ME, no xhci98.sys, xhcicm.sys
+     * copied by the run (or not yet): the connection manager's name;
+     * /cmonly with the connection manager declined (runCmOnly 0) and
+     * nothing of it there keeps the package's name. */
+    CHECK(inst_arp_cm_only(0, 1, 1, 0) && inst_arp_cm_only(0, 0, 1, 0) &&
+          !inst_arp_cm_only(0, 0, 0, 0),
+          "/cmonly: the connection manager's name");
+    inst_arp_name(out, sizeof(out), "3.3.0.0", 0,
+                  inst_arp_cm_only(0, 1, 1, 0));
+    CHECK(strcmp(out, "xHCI98 Thunderbolt 3 / USB4 connection manager "
+                      "3.3.0.0") == 0, "/cmonly: the entry's name");
     /* The owner's rule (2026-10-19): one entry for every set of
      * components, an install over any of them an update in place. The
      * key is one constant, whatever the name says. */
@@ -3978,11 +4179,170 @@ static void test_uninstall_entry(void)
           "/thunderbolt and /to preselect the window's pages");
 }
 
+/* ---- record 26 section 5.3.3: Secure Boot and memory integrity (44.25) -- */
+
+/* Every line of text at most cols characters. */
+static int lines_within(const char *text, size_t cols)
+{
+    const char *p = text;
+
+    while (*p != '\0') {
+        const char *e = strchr(p, '\n');
+        size_t n = e != NULL ? (size_t)(e - p) : strlen(p);
+        if (n > cols) {
+            printf("too long (%u): %.*s\n", (unsigned)n, (int)n, p);
+            return 0;
+        }
+        p += n;
+        if (*p == '\n') {
+            p++;
+        }
+    }
+    return 1;
+}
+
+static void test_secure_boot_refusals(void)
+{
+    int kind[4];
+    int a;
+    int k;
+    int cm;
+    int st;
+    int bad = 0;
+    INST_U32 set;
+    char text[4096];
+    char block[8192];
+
+    kind[0] = INST_OS_FULL;
+    kind[1] = INST_OS_CMONLY;
+    kind[2] = INST_OS_REFUSED;
+    kind[3] = INST_OS_CMONLY;
+    /* The x86 connection manager: refused only on the CM-alone kind, in
+     * the run, Secure Boot read as on; x64 left to inst_cm_boot_gate. */
+    for (a = 0; a < 2; a++) {
+        for (k = 0; k < 3; k++) {
+            for (cm = 0; cm < 2; cm++) {
+                for (st = INST_SB_UNKNOWN; st <= INST_SB_ON; st++) {
+                    int arch = a ? INST_ARCH_AMD64 : INST_ARCH_X86;
+                    int want = arch == INST_ARCH_X86 &&
+                               kind[k] == INST_OS_CMONLY && cm &&
+                               st == INST_SB_ON;
+                    if (inst_cm_sb_refused(arch, kind[k], cm, st) != want) {
+                        printf("cm sb: arch %d kind %d cm %d state %d\n", a,
+                               kind[k], cm, st);
+                        bad = 1;
+                    }
+                    want = kind[k] == INST_OS_CMONLY && cm &&
+                           st == INST_SB_ON;
+                    if (inst_usb_sb_refused(1, kind[k], cm, st) != want ||
+                        inst_usb_sb_refused(0, kind[k], cm, st) != 0) {
+                        printf("usb sb: kind %d usb %d state %d\n", kind[k],
+                               cm, st);
+                        bad = 1;
+                    }
+                }
+            }
+        }
+    }
+    CHECK(!bad, "Secure Boot on: the x86 connection manager and the USB "
+          "drivers refused on 8 to 10 alone");
+    /* The x64 gate is unchanged: Secure Boot on never confirms
+     * test-signing mode, so the gate refuses there. */
+    CHECK(inst_cm_boot_gate(INST_ARCH_AMD64, 1, 10UL, INST_OS_CMONLY, 1,
+                            inst_ts_confirmed(1, INST_SB_ON)) ==
+          INST_CMBOOT_REFUSE &&
+          inst_cm_boot_gate(INST_ARCH_AMD64, 1, 10UL, INST_OS_CMONLY, 1,
+                            inst_ts_confirmed(1, INST_SB_OFF)) ==
+          INST_CMBOOT_WARN, "x64: the gate as before");
+    /* Memory integrity: inst_sb_state's rule; read on x64 10 alone. */
+    CHECK(inst_hvci_state(1, INST_REG_DWORD_TYPE, 1UL) == INST_SB_ON &&
+          inst_hvci_state(1, INST_REG_DWORD_TYPE, 0UL) == INST_SB_OFF &&
+          inst_hvci_state(1, INST_REG_DWORD_TYPE, 2UL) == INST_SB_UNKNOWN &&
+          inst_hvci_state(1, 1UL, 1UL) == INST_SB_UNKNOWN &&
+          inst_hvci_state(0, INST_REG_DWORD_TYPE, 1UL) == INST_SB_UNKNOWN,
+          "memory integrity: on, off, not known");
+    CHECK(inst_hvci_applies(INST_ARCH_AMD64, INST_OS_CMONLY, 10UL) &&
+          !inst_hvci_applies(INST_ARCH_AMD64, INST_OS_CMONLY, 6UL) &&
+          !inst_hvci_applies(INST_ARCH_X86, INST_OS_CMONLY, 10UL) &&
+          !inst_hvci_applies(INST_ARCH_AMD64, INST_OS_FULL, 6UL),
+          "memory integrity read on 64-bit 10 alone");
+    CHECK(inst_hvci_text(INST_SB_ON, 0) != NULL &&
+          strstr(inst_hvci_text(INST_SB_ON, 0), "Code 39") != NULL &&
+          inst_hvci_text(INST_SB_ON, 1) != NULL &&
+          strstr(inst_hvci_text(INST_SB_ON, 1), "Automatic") != NULL &&
+          inst_hvci_text(INST_SB_OFF, 1) == NULL &&
+          inst_hvci_text(INST_SB_UNKNOWN, 0) == NULL,
+          "memory integrity's sentence: the boot-driver form with the "
+          "connection manager");
+    CHECK(lines_within(inst_cm_sb_refuse_text(), 78) &&
+          lines_within(inst_usb_sb_refuse_text(), 78) &&
+          lines_within(inst_cm_x86_boot_text(), 78) &&
+          strstr(inst_cm_x86_boot_text(), "sets it back") != NULL &&
+          strstr(inst_cm_x86_boot_text(), "boot driver here") == NULL &&
+          lines_within(inst_hvci_text(INST_SB_ON, 0), 78) &&
+          lines_within(inst_hvci_text(INST_SB_ON, 1), 78) &&
+          strstr(inst_cm_sb_refuse_text(), "Nothing was changed") != NULL &&
+          strstr(inst_usb_sb_refuse_text(), "Nothing was changed") != NULL,
+          "the refusals' and the notes' lines within 78 columns");
+    /* Every set of the Components warnings, rendered as the console renders
+     * it ("  " before each line), within 78 columns (record 26 section
+     * 5.3.2); a long tools folder included. */
+    bad = 0;
+    for (set = 0; set < 64; set++) {
+        char *p;
+        char *q;
+        inst_comp_warn_text(set, "C:\\Program Files\\xHCI98 tools folder",
+                            text, sizeof(text));
+        for (p = text; *p != '\0' && !bad; p = q) {
+            q = strstr(p, "\n\n");
+            if (q != NULL) {
+                *q = '\0';
+                q += 2;
+            } else {
+                q = p + strlen(p);
+            }
+            inst_wrap_lines("  ", p, INST_WARN_COLUMNS, block, sizeof(block));
+            if (!lines_within(block, 78) || block[0] != ' ') {
+                printf("warning set %lu\n", (unsigned long)set);
+                bad = 1;
+            }
+        }
+    }
+    CHECK(!bad, "every Components warning set within 78 columns");
+    inst_comp_warn_text(INST_CW_USB8, "C:\\XHCI98", text, sizeof(text));
+    CHECK(strstr(text, "do not apply") != NULL &&
+          strstr(text, "USB power settings") != NULL &&
+          strstr(text, "USB Tree tells you") != NULL,
+          "the USB drivers' warning names what is lost (44.24)");
+    inst_comp_warn_text(INST_CW_INTELTB, "C:\\XHCI98", text, sizeof(text));
+    CHECK(strstr(text, "Intel's Thunderbolt driver runs") != NULL &&
+          strstr(text, "Windows Update") != NULL,
+          "Intel's driver: the warning");
+    inst_wrap_lines("", "aaaa bbbb cccc", 9, block, sizeof(block));
+    CHECK(strcmp(block, "aaaa bbbb\ncccc\n") == 0, "wrap: at the width");
+    inst_wrap_lines("", "one\ntwo", 78, block, sizeof(block));
+    CHECK(strcmp(block, "one\ntwo\n") == 0, "wrap: a newline kept");
+    (void)kind[3];
+}
+
 /* ---- record 26 section 11: the window's texts ------------------------- */
 
 static void test_page_texts(void)
 {
     int i;
+
+    {
+        /* Task 44.4: INSTALL.BAT /toomany's text, printed by the console
+         * tool, each line within 79 columns, ending with its line. */
+        const char *t = INST_TOOMANY_TEXT;
+        size_t col = 0;
+        CHECK(t[strlen(t) - 1] == '\n' && strchr(t, '\r') == NULL,
+              "toomany: whole lines");
+        for (i = 0; t[i] != '\0'; i++) {
+            col = t[i] == '\n' ? 0 : col + 1;
+            CHECK(col <= 79, "toomany: within 79 columns");
+        }
+    }
 
     for (i = 0; i < instPageTextCount; i++) {
         const INST_PAGE_TEXT *t = &instPageTexts[i];
@@ -3994,7 +4354,15 @@ static void test_page_texts(void)
                   "control at the dialog font's average width");
         }
         CHECK(strcmp(inst_page_text(t->Id), t->Text) == 0, "by its id");
+        /* Task 44.61: the package's own things say "USB 3". */
+        CHECK(strstr(t->Text, "xHCI98 USB 3.x") == NULL,
+              "a page text: xHCI98 USB 3, not 3.x");
     }
+    CHECK(strcmp(inst_page_text(INST_PT_UN_TITLE),
+                 "Remove the xHCI98 USB 3 drivers") == 0 &&
+          strcmp(inst_page_text(INST_PT_DRIVERS),
+                 "xHCI98 USB 3 host controller driver (xhci98.sys)") == 0,
+          "the Remove page's title and the Components row (task 44.61)");
     CHECK(inst_text_lines("aaa bbb ccc", 7) == 2 &&
           inst_text_lines("aaa bbb", 7) == 1 &&
           inst_text_lines("", 7) == 0 &&
@@ -4075,9 +4443,14 @@ static void test_s98(void)
         char num[16];
         CHECK(s98_block(table, i, block, sizeof(block)),
               "each Stor98 row names a row of its readme's table");
-        strcpy(key, v->KeyNt);
-        strcat(key, "=");
-        CHECK(has_text(block, key), "the row's DriverParameter key");
+        if (v->KeyNt != NULL) {
+            strcpy(key, v->KeyNt);
+            strcat(key, "=");
+            CHECK(has_text(block, key), "the row's DriverParameter key");
+        } else {
+            CHECK(has_text(block, "98 SE / ME only"),
+                  "a row with no DriverParameter key says so");
+        }
         CHECK(has_text(block, v->Unit[0] ? v->Unit : NULL), "the row's unit");
         CHECK(has_text(block, v->Def9x) && has_text(block, v->DefNt),
               "the row's defaults");
@@ -4095,15 +4468,18 @@ static void test_s98(void)
         }
     }
     free(table);
-    CHECK(strcmp(INST_S98_TABLE_VERSION, "3.2.0.0") == 0,
+    CHECK(strcmp(INST_S98_TABLE_VERSION, "3.3.0.0") == 0,
           "the table is the bundled Stor98's");
 
     /* Which system each row is for. */
     CHECK(inst_s98_applies(INST_S98_GONE, 1) &&
-          !inst_s98_applies(INST_S98_GONE, 0) &&
-          !inst_s98_applies(INST_S98_IDLE, 0) &&
-          inst_s98_applies(INST_S98_WRITETHROUGH, 0),
-          "gone and idle are 2000-to-7 only");
+          inst_s98_applies(INST_S98_GONE, 0) &&
+          inst_s98_applies(INST_S98_IDLE, 0) &&
+          inst_s98_applies(INST_S98_WRITETHROUGH, 0) &&
+          inst_s98_only(INST_S98_GONE) == NULL &&
+          strcmp(instS98Values[INST_S98_GONE].Name9x, "StorGoneMs") == 0 &&
+          strcmp(instS98Values[INST_S98_IDLE].KeyNt, "storwriteidlems") == 0,
+          "every setting on every system, its names starting Stor (3.3.0.0)");
     CHECK(strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 0), "2048") == 0 &&
           strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 1), "256") == 0 &&
           strcmp(inst_s98_default(INST_S98_POLLSPINUS, 0), "0") == 0 &&
@@ -4160,8 +4536,11 @@ static void test_s98(void)
           !inst_s98_check(INST_S98_POLLMODE, 0, "0x1", w, sizeof(w), &why) &&
           !inst_s98_check(INST_S98_POLLMODE, 0, "-1", w, sizeof(w), &why),
           "decimal only");
-    CHECK(!inst_s98_check(INST_S98_GONE, 0, "5000", w, sizeof(w), &why),
-          "an NT-only row refused on 98 SE and ME");
+    CHECK(inst_s98_check(INST_S98_GONE, 0, "5000", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_GONE, 0, "600001", w, sizeof(w), &why) &&
+          inst_s98_check(INST_S98_IDLE, 0, "10", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_IDLE, 0, "9", w, sizeof(w), &why),
+          "gone and idle settable on 98 SE and ME too, the same ranges");
     CHECK(!inst_s98_check(INST_S98_POLLIDLEMS, 1, "   ", w, sizeof(w),
                           &why) &&
           !inst_s98_check(INST_S98_WRITETHROUGH, 1, " ", w, sizeof(w), &why),
@@ -4178,6 +4557,18 @@ static void test_s98(void)
           !inst_s98_check(INST_S98_GONE, 1, "600001", w, sizeof(w), &why) &&
           !inst_s98_check(INST_S98_GONE, 1, "0", w, sizeof(w), &why),
           "gone: 1 to 600000");
+    CHECK(inst_s98_check(INST_S98_HOLD9X, 0, "1000", w, sizeof(w), &why) &&
+          strcmp(w, "1000") == 0 &&
+          inst_s98_check(INST_S98_HOLD9X, 0, "10000", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_HOLD9X, 0, "999", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_HOLD9X, 0, "10001", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_HOLD9X, 0, "0", w, sizeof(w), &why),
+          "hold9x: 1000 to 10000 on 98 SE and ME");
+    CHECK(!inst_s98_check(INST_S98_HOLD9X, 1, "4000", w, sizeof(w), &why) &&
+          why != NULL && !inst_s98_applies(INST_S98_HOLD9X, 1) &&
+          strcmp(inst_s98_default(INST_S98_HOLD9X, 0), "4000") == 0 &&
+          strcmp(instS98Values[INST_S98_HOLD9X].Name9x, "StorHold9xMs") == 0,
+          "hold9x: no setting of 2000 to 10, its default 4000 on 9x");
 
     /* DriverParameter, edited one key at a time. */
     CHECK(inst_s98_param_get("maxtransferkb=128;pollmode=1", "pollmode", w,
@@ -4280,17 +4671,17 @@ static void test_s98(void)
               "table line 0, /yes: N");
         CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, 0, &asked, &def) && !asked,
               "table line 0, /stor98: installed unasked");
-        CHECK(inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL, 1),
-              "43.59: 8, 8.1 and 10 with Stor98 staged and the service: the value written");
-        CHECK(!inst_s98_auto_value(0, 1, 1, INST_MK_INSTALL, 1) &&
-              !inst_s98_auto_value(1, 0, 1, INST_MK_INSTALL, 1) &&
-              !inst_s98_auto_value(1, 1, 0, INST_MK_INSTALL, 1) &&
-              !inst_s98_auto_value(1, 1, 1, INST_MK_LEAVE, 1) &&
-              !inst_s98_auto_value(1, 1, 1, INST_MK_REMOVE, 1),
-              "43.59: 2000 to 7, Stor98 not in the run or not staged, or no service: not written");
-        /* Task 43.59, owner 2026-10-23: the switch on 8.1 alone. */
-        CHECK(!inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL, 0),
-              "not 8.1: no Stor98Inf");
+        /* Record 31 section 6.2: the value on 2000 to 8.1, for the mark
+         * service's fallback; deleted on 10. */
+        CHECK(inst_s98_auto_value(1, 1, 1, INST_MK_INSTALL),
+              "2000 to 8.1 with Stor98 staged and the service: the value written");
+        CHECK(!inst_s98_auto_value(0, 1, 1, INST_MK_INSTALL),
+              "10: no Stor98Inf");
+        CHECK(!inst_s98_auto_value(1, 0, 1, INST_MK_INSTALL) &&
+              !inst_s98_auto_value(1, 1, 0, INST_MK_INSTALL) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_LEAVE) &&
+              !inst_s98_auto_value(1, 1, 1, INST_MK_REMOVE),
+              "Stor98 not in the run or not staged, or no service: not written");
         CHECK(inst_s98_switch_os(1, 6, 3, 9600), "8.1 (6.3.9600)");
         CHECK(inst_s98_switch_os(1, 6, 3, 9601), "an 8.1 build past 9600");
         CHECK(!inst_s98_switch_os(1, 6, 2, 9200), "8 (6.2.9200)");
@@ -4412,6 +4803,24 @@ static void test_s98(void)
           "the service goes only when nothing is bound and none was there");
     CHECK(inst_s98_cold_start(0) && !inst_s98_cold_start(1),
           "98 SE and ME: shut down, not restart");
+    /* The record's Version (record 26 draft 43, task 44.30). */
+    CHECK(inst_s98_version_owed(1, 1, 0, 0, 0, 1, 0),
+          "98 SE and ME: a new copy carrying Stor98, no drive: written");
+    CHECK(!inst_s98_version_owed(1, 1, 0, 0, 1, 1, 0),
+          "NT: the copy alone writes nothing");
+    CHECK(inst_s98_version_owed(1, 1, 0, 1, 1, 0, 0) &&
+          inst_s98_version_owed(1, 1, 0, 1, 0, 0, 0),
+          "a device installed or updated: written on both");
+    CHECK(!inst_s98_version_owed(1, 1, 0, 0, 0, 0, 0),
+          "98 SE and ME: no new copy and no device: nothing");
+    CHECK(!inst_s98_version_owed(1, 1, 0, 0, 0, 1, 1),
+          "a new copy, the owed file update not made: nothing");
+    CHECK(inst_s98_version_owed(1, 1, 0, 1, 0, 1, 1),
+          "a new copy and the file update made: written");
+    CHECK(!inst_s98_version_owed(0, 1, 0, 1, 0, 1, 0) &&
+          !inst_s98_version_owed(1, 0, 0, 1, 0, 1, 0) &&
+          !inst_s98_version_owed(1, 1, 1, 1, 0, 1, 0),
+          "not included, no baseline, or a listing: nothing");
     CHECK(inst_s98_await_reconnect(1, 1, 1, 1) &&
           !inst_s98_await_reconnect(0, 1, 1, 1) &&
           !inst_s98_await_reconnect(1, 0, 1, 1) &&
@@ -4561,9 +4970,10 @@ static void test_s98(void)
     CHECK(inst_s98_stray_inf_ours(0, 1) && !inst_s98_stray_inf_ours(1, 1) &&
           !inst_s98_stray_inf_ours(0, 0),
           "a stray INF copy: the package's when Stor98's and none before");
-    CHECK(strstr(inst_page_text(INST_PT_S98_T), "tunnel drives only") !=
-              NULL &&
-          strstr(inst_page_text(INST_PT_S98_T), "internal") == NULL,
+    /* The owner, 2026-10-27: "the installer selects tunnel drives only"
+     * dropped from it. */
+    CHECK(strcmp(inst_page_text(INST_PT_S98_T),
+                 "For NVMe drives behind a Thunderbolt or USB4 tunnel.") == 0,
           "the Components page's sentence");
     /* The owner, 2026-10-23 (replacing roadmap 43.7's "the bundled"). */
     CHECK(strcmp(inst_page_text(INST_PT_S98),
@@ -4572,6 +4982,319 @@ static void test_s98(void)
 }
 
 /* ---- task 42-A.17's reading rule; task 42-A.5's installer hooks --------- */
+
+/* Design record 31 (Stor98 for tunnelled drives only), the installer's
+ * pure half: the candidates by class, the systems of the mark service's
+ * fallback, the per-device route's force, the earlier INF's identity and
+ * kind, and the LEFT sentence of an unknown place. */
+static const char s98TestInf[] =
+    "[Version]\r\n"
+    "Signature=\"$CHICAGO$\"\r\n"
+    "Class=SCSIAdapter\r\n"
+    "ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}\r\n"
+    "Provider=%Provider%\r\n"
+    "DriverVer=10/24/2026,3.2.0.0\r\n"
+    "[DestinationDirs]\r\nDefaultDestDir=12\r\n"
+    "[SourceDisksNames]\r\n1=%DiskName%,,\r\n"
+    "[SourceDisksFiles]\r\nstor98.mpd=1\r\nstor98.sys=1\r\n"
+    "[Manufacturer]\r\n%Mfg%=Stor98_Models,NTx86.6.3\r\n"
+    "[Stor98_Models]\r\n%Stor98.DeviceDesc%=Stor98_Inst,PCI\\CC_010802\r\n"
+    "[Stor98_Models.NTx86.6.3]\r\n"
+    "%Stor98.DeviceDesc%=Stor98_Inst,,PCI\\CC_010802\r\n"
+    "[Stor98_Inst]\r\nCopyFiles=Stor98_Files_9x\r\n"
+    "AddReg=Stor98_IOS,Stor98_AddReg_9x\r\n"
+    "[Stor98_Files_9x]\r\nstor98.mpd\r\n"
+    "[Stor98_IOS]\r\nHKR,,DevLoader,,*IOS\r\n"
+    "[Stor98_AddReg_9x]\r\nHKR,,PortDriver,,stor98.mpd\r\n"
+    "[Stor98_Inst.NTx86]\r\nCopyFiles=Stor98_Files_NT\r\n"
+    "[Stor98_Inst.NTx86.Services]\r\n"
+    "AddService=stor98,%SPSVCINST_ASSOCSERVICE%,Stor98_Service\r\n"
+    "[Stor98_Files_NT]\r\nstor98.sys ; the NT miniport\r\n"
+    "[Stor98_Service]\r\nServiceBinary=%12%\\stor98.sys\r\n"
+    "[Strings]\r\nProvider=\"Yeo Kheng Meng\"\r\nMfg=\"Stor98 Project\"\r\n"
+    "Stor98.DeviceDesc=\"Stor98 Storage Controller for NVMe SSDs\"\r\n"
+    "DiskName=\"Stor98 Storage Controller Disk\"\r\n"
+    "SPSVCINST_ASSOCSERVICE=0x00000002\r\n";
+
+/* A copy of s98TestInf with one string replaced (the first occurrence). */
+static char *s98_inf_with(const char *from, const char *to)
+{
+    const char *at = strstr(s98TestInf, from);
+    size_t n = strlen(s98TestInf) - strlen(from) + strlen(to) + 1;
+    char *out = (char *)malloc(n);
+
+    if (out == NULL || at == NULL) {
+        free(out);
+        return NULL;
+    }
+    memcpy(out, s98TestInf, (size_t)(at - s98TestInf));
+    strcpy(out + (at - s98TestInf), to);
+    strcat(out, at + strlen(from));
+    return out;
+}
+
+static void test_s98_tunnel(void)
+{
+    static const char nvme[] =
+        "PCI\\VEN_1B36&DEV_0010&REV_02\0PCI\\VEN_1B36&DEV_0010\0"
+        "PCI\\VEN_1B36&CC_010802\0PCI\\VEN_1B36&CC_0108\0PCI\\VEN_1B36\0"
+        "PCI\\CC_010802\0PCI\\CC_0108\0\0";
+    static const char nvmeLower[] = "pci\\cc_010802\0\0";
+    static const char tagged[] =
+        "PCI\\XHCI98_TUNNEL&CC_010802\0PCI\\CC_010802\0\0";
+    static const char tagOnly[] = "PCI\\XHCI98_TUNNEL&CC_010802\0\0";
+    static const char bridge[] =
+        "PCI\\VEN_1B21&DEV_2421&REV_01\0PCI\\VEN_1B21&CC_060400\0"
+        "PCI\\VEN_1B21&CC_0604\0PCI\\CC_060400\0PCI\\CC_0604\0\0";
+    static const char usb[] =
+        "PCI\\VEN_1B36&CC_0C0330\0PCI\\CC_0C0330\0PCI\\CC_0C03\0\0";
+    static const char vendorOnly[] = "PCI\\VEN_1B36&CC_010802\0\0";
+    static const char vmd[] = "PCI\\CC_010803\0PCI\\CC_0108\0\0";
+    static const char hw[] = "PCI\\VEN_1B36&DEV_0010\0\0";
+    static const INST_U32 pkg[4] = { 3, 3, 0, 0 };
+    static const INST_U32 same[4] = { 3, 2, 0, 0 };
+    static const INST_U32 older[4] = { 3, 1, 0, 0 };
+    INST_IDLIST ids;
+    char *t;
+    const char *s;
+
+    /* Section 7.2: the candidates by class. */
+    CHECK(inst_s98_by_class(nvme, sizeof(nvme)),
+          "an NVMe function: PCI\\CC_010802 among its compatible ids");
+    CHECK(inst_s98_by_class(nvmeLower, sizeof(nvmeLower)),
+          "the class compared case aside");
+    CHECK(inst_s98_by_class(tagged, sizeof(tagged)),
+          "a tagged drive: a candidate by class too");
+    CHECK(!inst_s98_by_class(bridge, sizeof(bridge)),
+          "a PCI-to-PCI bridge: refused");
+    CHECK(!inst_s98_by_class(usb, sizeof(usb)),
+          "a USB controller: refused");
+    CHECK(!inst_s98_by_class(vendorOnly, sizeof(vendorOnly)),
+          "the class inside a vendor's id is not the class id");
+    CHECK(!inst_s98_by_class(vmd, sizeof(vmd)),
+          "another 01:08 interface: refused");
+    CHECK(!inst_s98_by_class(NULL, 0) && !inst_s98_by_class("\0", 2),
+          "no list, an empty list: refused");
+    memset(&ids, 0, sizeof(ids));
+    ids.Count = 1;
+    inst_copy(ids.Id[0], INST_S98_TUNNEL_ID, sizeof(ids.Id[0]));
+    CHECK(inst_s98_candidate(hw, sizeof(hw), nvme, sizeof(nvme), &ids),
+          "a plain drive, the INF naming the tunnel id alone: a candidate");
+    CHECK(inst_s98_candidate(hw, sizeof(hw), tagOnly, sizeof(tagOnly), &ids),
+          "the INF's id alone: a candidate");
+    CHECK(!inst_s98_candidate(hw, sizeof(hw), bridge, sizeof(bridge), &ids) &&
+          !inst_s98_candidate(hw, sizeof(hw), bridge, sizeof(bridge), NULL),
+          "a bridge: no candidate");
+
+    /* Section 6.2: the fallback's systems, 2000 to 8.1. */
+    CHECK(inst_s98_fallback_os(1, 5, 0, 2195) &&
+          inst_s98_fallback_os(1, 5, 1, 2600) &&
+          inst_s98_fallback_os(1, 5, 2, 3790) &&
+          inst_s98_fallback_os(1, 6, 0, 6002) &&
+          inst_s98_fallback_os(1, 6, 1, 7601) &&
+          inst_s98_fallback_os(1, 6, 2, 9200) &&
+          inst_s98_fallback_os(1, 6, 3, 9600),
+          "2000, XP, 2003, Vista, 7, 8 and 8.1: the fallback");
+    CHECK(!inst_s98_fallback_os(1, 10, 0, 10240) &&
+          !inst_s98_fallback_os(1, 10, 0, 19045) &&
+          !inst_s98_fallback_os(1, 6, 3, 10240) &&
+          !inst_s98_fallback_os(1, 6, 4, 9841),
+          "10, and 6.3 or 6.4 at a 10 build: none");
+    CHECK(!inst_s98_fallback_os(0, 4, 10, 2222) &&
+          !inst_s98_fallback_os(0, 4, 90, 3000) &&
+          !inst_s98_fallback_os(1, 4, 0, 1381),
+          "98 SE, ME and NT 4: none");
+
+    /* Section 7.2: the per-device route's force. */
+    CHECK(!inst_s98_dev_forced(INST_ACT_INSTALL, 0),
+          "a first install on a drive with no driver: unforced");
+    CHECK(inst_s98_dev_forced(INST_ACT_INSTALL, 1),
+          "case 3b, over stornvme: forced");
+    CHECK(inst_s98_dev_forced(INST_ACT_UPDATE, 0) &&
+          inst_s98_dev_forced(INST_ACT_CURRENT, 0) &&
+          inst_s98_dev_forced(INST_ACT_NEWER, 0),
+          "an update, a /force reinstall: forced");
+
+    /* Section 7.1: the identity test and the kind. */
+    CHECK(inst_s98_inf_identity(s98TestInf),
+          "a Stor98 INF of this project's: taken");
+    CHECK(inst_s98_inf_kind(s98TestInf, pkg) == INST_S98_INF_OLDER,
+          "3.2.0.0's INF under a 3.3.0.0 package: older, removed");
+    CHECK(inst_s98_inf_kind(s98TestInf, same) == INST_S98_INF_CURRENT &&
+          inst_s98_inf_kind(s98TestInf, older) == INST_S98_INF_CURRENT,
+          "the package's version or later: left");
+    t = s98_inf_with("[SourceDisksFiles]\r\nstor98.mpd=1\r\nstor98.sys=1\r\n",
+                     "[SourceDisksFiles]\r\nxhci98.sys=1\r\n");
+    CHECK(t != NULL && !inst_s98_inf_identity(t) &&
+          inst_s98_inf_kind(t, pkg) == INST_S98_INF_OTHER,
+          "an xhci98.inf (this project's Provider, another file): refused");
+    free(t);
+    t = s98_inf_with("AddService=stor98,", "AddService=xhciuas,");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "an xhciuas.inf (another service): refused");
+    free(t);
+    t = s98_inf_with("AddService=stor98,", "; AddService=stor98,");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "stor98.sys with no service: refused (only a stor98.mpd INF has none)");
+    free(t);
+    {
+        char *w9 = load("..\\src\\stor98\\inf\\stor98-9x.inf");
+        char *m9 = NULL;
+        CHECK(w9 != NULL && inst_s98_inf_identity(w9),
+              "the 98 SE and ME INF (stor98.mpd alone, no service): taken");
+        if (w9 != NULL) {
+            const char *at = strstr(w9, "CopyFiles=Stor98_Files_9x");
+            if (at != NULL) {
+                size_t pre = (size_t)(at - w9);
+                m9 = (char *)malloc(strlen(w9) + 32);
+                if (m9 != NULL) {
+                    memcpy(m9, w9, pre);
+                    strcpy(m9 + pre, "CopyFiles=Stor98_Files_9x,@stor98.sys");
+                    strcat(m9, at + strlen("CopyFiles=Stor98_Files_9x"));
+                }
+            }
+        }
+        CHECK(m9 != NULL && !inst_s98_inf_identity(m9),
+              "a no-service INF copying stor98.sys by name: refused");
+        free(m9);
+        free(w9);
+    }
+    t = s98_inf_with("stor98.sys=1\r\n", "stor98.sys=1\r\nS98VSD.VXD=1\r\n");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "a Stor98 INF with an added source file: refused");
+    free(t);
+    t = s98_inf_with("[Stor98_Files_9x]\r\nstor98.mpd\r\n",
+                     "[Stor98_Files_9x]\r\nstor98.mpd\r\nother.vxd\r\n");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "a Stor98 INF copying another file: refused");
+    free(t);
+    t = s98_inf_with("CopyFiles=Stor98_Files_NT", "CopyFiles=@other.sys");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "a Stor98 INF copying another file by name: refused");
+    free(t);
+    t = s98_inf_with("CopyFiles=Stor98_Files_NT", "CopyFiles=@stor98.sys");
+    CHECK(t != NULL && inst_s98_inf_identity(t),
+          "stor98.sys copied by name: taken");
+    free(t);
+    t = s98_inf_with("[Stor98_Service]",
+                     "AddService=other,0,Stor98_Service\r\n[Stor98_Service]");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "a Stor98 INF with an added service: refused");
+    free(t);
+    t = s98_inf_with("[Stor98_Service]",
+                     "DelService=other\r\n[Stor98_Service]");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "a Stor98 INF that deletes a service: refused");
+    free(t);
+    t = s98_inf_with("CopyFiles=Stor98_Files_NT", "CopyFiles=Stor98_None");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "a CopyFiles section that is not there: refused");
+    free(t);
+    t = s98_inf_with("Provider=\"Yeo Kheng Meng\"", "Provider=\"Someone Else\"");
+    CHECK(t != NULL && !inst_s98_inf_identity(t) &&
+          inst_s98_inf_kind(t, pkg) == INST_S98_INF_OTHER,
+          "another Provider's Stor98: refused, left");
+    free(t);
+    t = s98_inf_with("[Stor98_Inst.NTx86.Services]\r\n"
+                     "AddService=stor98,%SPSVCINST_ASSOCSERVICE%,"
+                     "Stor98_Service\r\n", "");
+    CHECK(t != NULL && !inst_s98_inf_identity(t),
+          "no stor98 service: refused");
+    free(t);
+    t = s98_inf_with("DriverVer=10/24/2026,3.2.0.0\r\n", "");
+    CHECK(t != NULL && inst_s98_inf_identity(t) &&
+          inst_s98_inf_kind(t, pkg) == INST_S98_INF_OTHER,
+          "no DriverVer: left");
+    free(t);
+    CHECK(!inst_s98_inf_identity(NULL) && !inst_s98_inf_identity(""),
+          "no text: refused");
+
+    /* Section 7.2's last paragraph: the LEFT sentence names the service. */
+    s = inst_s98_left_text(INST_S98_SKIP_UNKNOWN, 1, 0, 0);
+    CHECK(s != NULL && strstr(s, "mark service") != NULL &&
+          strstr(s, "run the installer again") == NULL,
+          "2000 to 8.1, place unknown: the mark service takes it");
+    s = inst_s98_left_text(INST_S98_SKIP_UNKNOWN, 1, 0, 1);
+    CHECK(s != NULL && strstr(s, "mark service") != NULL,
+          "the window's short form says it too");
+    CHECK(inst_s98_left_text(INST_S98_SKIP_UNKNOWN, 0, 0, 0) ==
+              inst_s98_skip_text(INST_S98_SKIP_UNKNOWN, 0) &&
+          inst_s98_left_text(INST_S98_SKIP_INTERNAL, 1, 0, 0) ==
+              inst_s98_skip_text(INST_S98_SKIP_INTERNAL, 0) &&
+          inst_s98_left_text(INST_S98_ELIGIBLE, 1, 0, 0) == NULL,
+          "10 and 98 SE: the sentence as before; another reason unchanged");
+
+    /* Record 31 section 9.3 item 10 (c), task 44.77: an update over a
+     * connection manager that lists none of the host's tunnel ports
+     * (3.2.0.0's on an ASMedia ASM4242) leaves Stor98 for the run after
+     * the restart, and says so rather than "by hand". */
+    CHECK(inst_tb_cm_changes(1, 1, 1, INST_ACT_UPDATE) &&
+          inst_tb_cm_changes(1, 1, 1, INST_ACT_INSTALL) &&
+          !inst_tb_cm_changes(1, 1, 1, INST_ACT_CURRENT) &&
+          !inst_tb_cm_changes(1, 1, 1, INST_ACT_NEWER) &&
+          !inst_tb_cm_changes(1, 1, 0, INST_ACT_UPDATE) &&
+          !inst_tb_cm_changes(0, 1, 1, INST_ACT_UPDATE) &&
+          !inst_tb_cm_changes(1, 0, 1, INST_ACT_UPDATE),
+          "the connection manager changes: present, its INF, run, no "
+          "driver or older");
+    CHECK(inst_s98_read_later(1, 1, INST_S98_AT_UNKNOWN, 1) &&
+          !inst_s98_read_later(1, 1, INST_S98_AT_UNKNOWN, 0) &&
+          !inst_s98_read_later(1, 1, INST_S98_AT_INTERNAL, 1) &&
+          !inst_s98_read_later(1, 1, INST_S98_AT_TUNNEL, 1) &&
+          !inst_s98_read_later(1, 0, INST_S98_AT_UNKNOWN, 1) &&
+          !inst_s98_read_later(0, 1, INST_S98_AT_UNKNOWN, 1),
+          "read after the restart: present, an older Stor98, unknown, the "
+          "connection manager changed; an internal drive never");
+    s = inst_s98_left_text(INST_S98_SKIP_UNKNOWN, 1, 1, 0);
+    CHECK(s != NULL && strstr(s, "Run the installer again after the "
+                                 "restart") != NULL &&
+          strstr(s, "mark service") == NULL &&
+          strstr(s, "by hand") == NULL &&
+          strstr(s, "internal drive is left alone") != NULL,
+          "unknown, read later: run again after the restart, on 2000 to "
+          "8.1 too");
+    CHECK(inst_s98_left_text(INST_S98_SKIP_UNKNOWN, 0, 1, 0) == s,
+          "unknown, read later: the same on 10 and 98 SE");
+    s = inst_s98_left_text(INST_S98_SKIP_UNKNOWN, 1, 1, 1);
+    CHECK(s != NULL && strstr(s, "after the restart") != NULL,
+          "unknown, read later: the window's short form");
+    s = inst_s98_left_text(INST_S98_SKIP_SHARED, 1, 1, 0);
+    CHECK(s != NULL && strstr(s, "after the restart") != NULL &&
+          strstr(s, "by hand") == NULL &&
+          inst_s98_left_text(INST_S98_SKIP_SHARED, 1, 0, 0) ==
+              inst_s98_skip_text(INST_S98_SKIP_SHARED, 0) &&
+          inst_s98_left_text(INST_S98_SKIP_SHARED, 0, 1, 1) != NULL,
+          "shared, held for a later reading: after the restart; otherwise "
+          "as before");
+    CHECK(inst_s98_later_said(INST_S98_SKIP_UNKNOWN, 1, 0, 0) &&
+          inst_s98_later_said(INST_S98_SKIP_UNKNOWN, 1, 1, 1) &&
+          !inst_s98_later_said(INST_S98_SKIP_UNKNOWN, 1, 1, 0) &&
+          !inst_s98_later_said(INST_S98_SKIP_UNKNOWN, 0, 1, 1),
+          "unknown: after the restart unless another drive keeps the hold "
+          "(an internal drive on an older Stor98 beside it)");
+    CHECK(inst_s98_later_said(INST_S98_SKIP_SHARED, 0, 1, 1) &&
+          !inst_s98_later_said(INST_S98_SKIP_SHARED, 0, 1, 0) &&
+          !inst_s98_later_said(INST_S98_SKIP_SHARED, 0, 0, 1) &&
+          !inst_s98_later_said(INST_S98_SKIP_INTERNAL, 1, 1, 1) &&
+          !inst_s98_later_said(INST_S98_NEEDS_TB, 1, 0, 0),
+          "shared: after the restart only when every holder is read then; "
+          "no other reason");
+    /* 98 SE and ME: stor98.mpd put in IOSUBSYS before the first plug. */
+    CHECK(inst_s98_mpd_place(0, 1, INST_S98_SHARE_FREE, 0, 0) &&
+          !inst_s98_mpd_place(1, 1, INST_S98_SHARE_FREE, 0, 0) &&
+          !inst_s98_mpd_place(0, 0, INST_S98_SHARE_FREE, 0, 0) &&
+          !inst_s98_mpd_place(0, 1, INST_S98_SHARE_SAME, 0, 0) &&
+          !inst_s98_mpd_place(0, 1, INST_S98_SHARE_HOLD, 0, 0) &&
+          !inst_s98_mpd_place(0, 1, INST_S98_SHARE_FREE, 1, 0) &&
+          !inst_s98_mpd_place(0, 1, INST_S98_SHARE_FREE, -1, 0) &&
+          !inst_s98_mpd_place(0, 1, INST_S98_SHARE_FREE, 0, 1),
+          "stor98.mpd placed: 9x, carried, free, absent, not a listing");
+    CHECK(inst_s98_left_text(INST_S98_SKIP_INTERNAL, 1, 1, 0) ==
+              inst_s98_skip_text(INST_S98_SKIP_INTERNAL, 0) &&
+          inst_s98_left_text(INST_S98_NEEDS_TB, 0, 1, 0) ==
+              inst_s98_skip_text(INST_S98_NEEDS_TB, 0),
+          "later changes no other reason's sentence");
+}
 
 static void test_marks(void)
 {
@@ -4629,6 +5352,19 @@ static void test_marks(void)
           inst_mk_end_action(-1, 1, 1, 0) == INST_MK_LEAVE,
           "a run's end with XhciCmSafeEject 0: no service, every mark gone "
           "(a run that set it without the Thunderbolt component too)");
+    CHECK(inst_mk_put_next(1, 5UL, 1) == INST_MK_PUT_RETRY &&
+          inst_mk_put_next(1, 32UL, 1) == INST_MK_PUT_RETRY &&
+          inst_mk_put_next(0, 5UL, 1) == INST_MK_PUT_RETRY &&
+          inst_mk_put_next(1, 5UL, 0) == INST_MK_PUT_QUEUE &&
+          inst_mk_put_next(1, 32UL, 0) == INST_MK_PUT_QUEUE &&
+          inst_mk_put_next(0, 5UL, 0) == INST_MK_PUT_FAIL &&
+          inst_mk_put_next(0, 32UL, 0) == INST_MK_PUT_FAIL,
+          "the mark service's copy in use: tried again, then replaced at the "
+          "restart when the service was registered (task 44.76)");
+    CHECK(inst_mk_put_next(1, 2UL, 1) == INST_MK_PUT_FAIL &&
+          inst_mk_put_next(1, 112UL, 0) == INST_MK_PUT_FAIL &&
+          inst_mk_put_next(1, 0UL, 1) == INST_MK_PUT_FAIL,
+          "any other error fails the mark service's copy at once");
     {
         static const char *const gone[] = { "xhci98", "xhcicm" };
 
@@ -4858,9 +5594,8 @@ static void test_storage(void)
     inst_stor_note_text(text, sizeof(text), st, 1);
     CHECK(strcmp(text, "Not installed: USB disks do not work on Windows 98 "
                  "SE without them. NUSB is installed on this computer "
-                 "(found its Uninstall\\USB20U entry). It already provides "
-                 "the USB storage drivers, so you can leave this "
-                 "unticked.") == 0, "none, NUSB installed: the note");
+                 "(found its Uninstall\\USB20U entry).") == 0,
+          "none, NUSB installed: the note");
 
     stor_fill(st, INST_STOR_SAME);
     CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE &&
@@ -5142,14 +5877,14 @@ static void test_storage(void)
         const char *t0 = inst_stor_half_text(0);
         CHECK(strstr(t1, "USBSTOR.INF is in the INF directory without "
                      "USBNTMAP.INF") == t1 && strstr(t1, "stop Windows") &&
-              strstr(t1, "puts USBNTMAP.INF beside it") &&
-              strstr(t1, "plug in no new USB disk") != NULL,
+              strstr(t1, "until these drivers complete the pair") != NULL,
               "lone USBSTOR.INF: the fixable sentence");
-        CHECK(strstr(t0, "stop Windows") && strstr(t0, "cannot complete") &&
+        CHECK(strstr(t0, "stop Windows") &&
               strstr(t0, "remove that copy of USBSTOR.INF") != NULL &&
-              strstr(t0, "beside it") == NULL,
+              strstr(t0, "complete the pair") == NULL,
               "lone USBSTOR.INF: the sentence when the run cannot fix it");
-        CHECK(strlen(t1) < 300 && strlen(t0) < 300,
+        /* Task 44.36: short enough to show whole under the row. */
+        CHECK(strlen(t1) <= 140 && strlen(t0) <= 140,
               "lone USBSTOR.INF: the sentences fit the row's note");
     }
 
@@ -5476,6 +6211,191 @@ static int count_rename(void *ctx, const char *key, const char *value)
 
 /* WININIT.INI as 98 SE leaves it after this installer's write, and the
  * variants a run meets (task 43.80). */
+/* Task 44.11 (record 26 section 6.7.12): the two free packages staged on
+ * 98 SE and ME, and the 280-character projection of DevicePath. */
+static void test_9x_stage(void)
+{
+    static const char base[] = "C:\\WINDOWS\\INF;C:\\XHCI98";
+    static const char *const two[] = {
+        "C:\\XHCI98\\USBDRV\\FREE\\audio\\uac2\\w98se-me",
+        "C:\\XHCI98\\USBDRV\\FREE\\audio\\usbmidi\\w98se"
+    };
+    const char *f[3];
+    char b[400];
+    char fold[300];
+    int fits[3];
+    int r;
+
+    CHECK(inst_other_9x_stageable(INST_SET_FREE, "audio/uac2") &&
+          inst_other_9x_stageable(INST_SET_FREE, "AUDIO/USBMIDI"),
+          "9x stage: uac2 and usbmidi");
+    CHECK(!inst_other_9x_stageable(INST_SET_FREE, "audio/uac1") &&
+          !inst_other_9x_stageable(INST_SET_FREE, "video/uvc98") &&
+          !inst_other_9x_stageable(INST_SET_NONFREE, "audio/uac2") &&
+          !inst_other_9x_stageable(INST_SET_FREE, NULL),
+          "9x stage: every other package copy-only");
+
+    r = inst_9x_devicepath_project(base, two, 2, fits);
+    CHECK(r == (int)(strlen(base) + 2 + strlen(two[0]) + strlen(two[1])) &&
+          fits[0] && fits[1], "9x project: the default folders, 84 more");
+    CHECK(r - (int)strlen(base) == 84, "9x project: about 90 characters");
+
+    /* A value of 269, 270 and 271 characters with an entry of 10 (11 with
+     * its separator): 280 fits, 281 does not, 279 fits. */
+    f[0] = "C:\\X\\12345";
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[269] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits);
+    CHECK(r == INST_9X_DEVICEPATH_MAX && fits[0], "9x project: 280 fits");
+    b[269] = 'A';
+    b[270] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits);
+    CHECK(r == 270 && !fits[0], "9x project: 281 does not");
+    b[268] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits);
+    CHECK(r == INST_9X_DEVICEPATH_MAX - 1 && fits[0], "9x project: 279 fits");
+
+    /* An oversized value as read is the caller's to shrink first; once
+     * this run's withdrawals bring it under the limit, the folders count. */
+    b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
+    memset(b, 'A', INST_9X_DEVICEPATH_MAX + 1);
+    r = inst_9x_devicepath_project(b, two, 2, fits);
+    CHECK(r == -1 && !fits[0] && !fits[1], "9x project: over the limit as read");
+    r = inst_9x_devicepath_project(base, two, 2, fits);
+    CHECK(r > 0 && fits[0] && fits[1], "9x project: after the withdrawals");
+
+    /* Two folders of which only the first fits; a folder already there
+     * counted once. */
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[INST_9X_DEVICEPATH_MAX - 1 - (int)strlen(two[0]) - 10] = '\0';
+    r = inst_9x_devicepath_project(b, two, 2, fits);
+    CHECK(fits[0] && !fits[1] && r <= INST_9X_DEVICEPATH_MAX,
+          "9x project: the first fits, the second not");
+    _snprintf(fold, sizeof(fold) - 1, "%s;%s", base, two[0]);
+    fold[sizeof(fold) - 1] = '\0';
+    f[0] = two[0];
+    f[1] = two[0];
+    f[2] = two[1];
+    r = inst_9x_devicepath_project(fold, f, 3, fits);
+    CHECK(fits[0] && fits[1] && fits[2] &&
+          r == (int)(strlen(fold) + 1 + strlen(two[1])),
+          "9x project: an entry already there counted once");
+    f[0] = "";
+    CHECK(inst_9x_devicepath_project(base, f, 1, fits) == -1 && !fits[0],
+          "9x project: an empty folder is no entry");
+}
+
+/* Task 44.36: the Components page's one line for the storage row, each
+ * state's within 62 characters, the most pressing first. */
+static void test_stor_short(void)
+{
+    int st[INST_STOR_COUNT];
+    char t[200];
+    int i;
+    int pack;
+    int nusb;
+    int half;
+    int fix;
+    int kind;
+
+    for (kind = 0; kind < 5; kind++) {
+        for (i = 0; i < INST_STOR_COUNT; i++) {
+            st[i] = kind == 0 ? INST_STOR_ABSENT : kind == 1 ? INST_STOR_SAME :
+                    kind == 2 ? (i < 3 ? INST_STOR_OTHER : INST_STOR_ABSENT) :
+                    kind == 3 ? INST_STOR_OWN :
+                    (i < 3 ? INST_STOR_OWN : INST_STOR_ABSENT);
+        }
+        for (pack = -1; pack <= 1; pack++) {
+            for (nusb = 0; nusb <= 1; nusb++) {
+                for (half = 0; half <= 1; half++) {
+                    for (fix = 0; fix <= 1; fix++) {
+                        inst_stor_short_text(t, sizeof(t), pack, st, nusb,
+                                             half, fix);
+                        CHECK(t[0] != '\0' && strlen(t) <= 62,
+                              "storage short: one line within 62");
+                    }
+                }
+            }
+        }
+    }
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        st[i] = INST_STOR_ABSENT;
+    }
+    inst_stor_short_text(t, sizeof(t), 1, st, 0, 0, 0);
+    CHECK(strstr(t, "Not installed") == t, "storage short: none found");
+    inst_stor_short_text(t, sizeof(t), 1, st, 1, 0, 0);
+    CHECK(strstr(t, "NUSB is installed") == t &&
+          strstr(t, "leave this unticked") != NULL,
+          "storage short: NUSB over what was found");
+    inst_stor_short_text(t, sizeof(t), 0, st, 1, 0, 0);
+    CHECK(strstr(t, "Not in this download") == t,
+          "storage short: the download's pack first");
+    inst_stor_short_text(t, sizeof(t), -1, st, 1, 0, 0);
+    CHECK(strstr(t, "not this release's") != NULL,
+          "storage short: the pack not this release's");
+    inst_stor_short_text(t, sizeof(t), 0, st, 1, 1, 0);
+    CHECK(strstr(t, "without USBNTMAP.INF") != NULL &&
+          strstr(t, "Summary") != NULL, "storage short: the lone half first");
+    inst_stor_short_text(t, sizeof(t), 1, st, 0, 1, 1);
+    CHECK(strstr(t, "tick this") != NULL, "storage short: the half fixable");
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        st[i] = INST_STOR_SAME;
+    }
+    inst_stor_short_text(t, sizeof(t), 1, st, 0, 0, 0);
+    CHECK(strstr(t, "all seven") != NULL, "storage short: all found");
+    st[0] = INST_STOR_ABSENT;
+    inst_stor_short_text(t, sizeof(t), 1, st, 0, 0, 0);
+    CHECK(strstr(t, "Only some") == t, "storage short: some found");
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        st[i] = INST_STOR_OWN;
+    }
+    inst_stor_short_text(t, sizeof(t), 1, st, 0, 0, 0);
+    CHECK(strcmp(t, "Installed by this installer earlier.") == 0,
+          "storage short: this installer's");
+}
+
+/* Task 44.13: an xhci98.tmp no [rename] line names is an orphan. */
+static void test_tmp_named(void)
+{
+    static const char T[] = "C:\\WINDOWS\\System32\\Drivers\\xhci98.tmp";
+    static const char TS[] = "C:\\WINDOWS\\SYSTEM32\\DRIVERS\\XHCI98.TMP";
+    char big[INST_RENAME_LINE + 64];
+
+    CHECK(inst_tmp_named("[rename]\r\nC:\\WINDOWS\\System32\\Drivers\\"
+                         "xhci98.sys=C:\\WINDOWS\\System32\\Drivers\\"
+                         "xhci98.tmp\r\n", T, TS) == 1,
+          "tmp: the setup engine's line, as read on 98 SE: named");
+    CHECK(inst_tmp_named("[Rename]\nc:\\windows\\system32\\drivers\\"
+                         "xhci98.sys = c:\\windows\\system32\\drivers\\"
+                         "xhci98.tmp", T, TS) == 1,
+          "tmp: any case, spaces round '=': named");
+    CHECK(inst_tmp_named("[rename]\r\nNUL=C:\\WINDOWS\\SYSTEM32\\DRIVERS\\"
+                         "XHCI98.TMP\r\n", T, TS) == 1,
+          "tmp: a deletion of it by its 8.3 path: named");
+    CHECK(inst_tmp_named(NULL, T, TS) == 0, "tmp: no WININIT.INI: an orphan");
+    CHECK(inst_tmp_named("", T, TS) == 0 &&
+          inst_tmp_named("[rename]\r\n", T, TS) == 0,
+          "tmp: an empty section: an orphan");
+    CHECK(inst_tmp_named("[rename]\r\nC:\\WINDOWS\\System32\\Drivers\\"
+                         "xhci98.tmp=C:\\WINDOWS\\X.TMP\r\n", T, TS) == 0,
+          "tmp: named as a target only: an orphan");
+    CHECK(inst_tmp_named("[other]\r\nC:\\WINDOWS\\System32\\Drivers\\"
+                         "xhci98.sys=C:\\WINDOWS\\System32\\Drivers\\"
+                         "xhci98.tmp\r\n", T, TS) == 0,
+          "tmp: a line of another section: an orphan");
+    CHECK(inst_tmp_named("[rename]\r\n;C:\\WINDOWS\\System32\\Drivers\\"
+                         "xhci98.sys=C:\\WINDOWS\\System32\\Drivers\\"
+                         "xhci98.tmp\r\n", T, TS) == 0,
+          "tmp: a comment: an orphan");
+    memset(big, 'A', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    memcpy(big, "[rename]\r\nX=", 12);
+    CHECK(inst_tmp_named(big, T, TS) == -1,
+          "tmp: a line too long to read: nothing decided");
+}
+
 static void test_wininit_text(void)
 {
     static const char D[] = "C:\\WINDOWS\\SYSTEM\\IOSUBSYS\\S98VSD.VXD";
@@ -5636,6 +6556,175 @@ static void test_vsd_names(void)
     CHECK(inst_vsd_old_is_own(NULL, 0, "CD", "", "cd"),
           "the record's Pending bytes, case ignored: own");
     CHECK(!inst_vsd_old_is_own(NULL, 0, "", "", ""), "unreadable: not own");
+}
+
+/* XHCIPFW's box, switches and mode (design record 32 sections 8 and
+ * 11.3; the owner, 2026-10-27: a box of its own, the Thunderbolt box's
+ * child, ticked whenever it is, on every system offered it, Q9); the
+ * VxD's placement is S98VSD.VXD's table (test_vsd). */
+static void test_pfw_inst(void)
+{
+    char *argv1[4];
+    char err[256];
+    INST_OPTS o;
+    int shown;
+    int open;
+
+    argv1[0] = "x";
+    argv1[1] = "/xhcipfw";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
+          strstr(err, "/thunderbolt") != NULL,
+          "/xhcipfw alone: refused, the Thunderbolt part not in the run");
+    argv1[2] = "/thunderbolt";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 && o.Pfw &&
+          !o.NoPfw, "/xhcipfw /thunderbolt");
+    argv1[2] = "/cmonly";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 && o.Pfw,
+          "/xhcipfw /cmonly");
+    argv1[1] = "/noxhcipfw";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.NoPfw &&
+          !o.Pfw, "/noxhcipfw alone");
+    argv1[2] = "/xhcipfw";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1 &&
+          strstr(err, "contradict") != NULL,
+          "/noxhcipfw /xhcipfw: a contradiction");
+    argv1[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1 &&
+          strstr(err, "belongs to an install") != NULL,
+          "/noxhcipfw /uninstall: refused");
+    argv1[1] = "/xhcipfw";
+    argv1[2] = "/devices";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+          "/xhcipfw /devices: refused");
+    argv1[2] = "/thunderbolt";
+    argv1[3] = "/nostor98";
+    CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 0 && o.Pfw,
+          "/xhcipfw /thunderbolt /nostor98: not Stor98's child");
+
+    /* Which systems (record 32 sections 7 and 11; the owner's Q6). */
+    CHECK(inst_pfw_sys(0, 4, 10, 1) == INST_PFW_SYS_9X, "98 SE, ME: the VxD");
+    CHECK(inst_pfw_sys(1, 5, 0, 1) == INST_PFW_SYS_ALWAYS, "2000: offered");
+    CHECK(inst_pfw_sys(1, 5, 1, 1) == INST_PFW_SYS_SEEN,
+          "XP: offered, the problem read for the note");
+    CHECK(inst_pfw_sys(1, 5, 2, 1) == INST_PFW_SYS_NONE,
+          "Server 2003: not offered");
+    CHECK(inst_pfw_sys(1, 6, 0, 1) == INST_PFW_SYS_SEEN &&
+          inst_pfw_sys(1, 6, 1, 1) == INST_PFW_SYS_SEEN,
+          "Vista, 7 x86: offered");
+    /* Task 44.72 (the owner, 2026-10-28): from 8 on the step's start
+     * races the PCI driver's. */
+    CHECK(inst_pfw_sys(1, 6, 2, 1) == INST_PFW_SYS_GONE &&
+          inst_pfw_sys(1, 6, 3, 1) == INST_PFW_SYS_GONE &&
+          inst_pfw_sys(1, 10, 0, 1) == INST_PFW_SYS_GONE,
+          "8, 8.1, 10 x86: not offered, an earlier one removed");
+    CHECK(inst_pfw_sys(1, 6, 4, 1) == INST_PFW_SYS_NONE &&
+          inst_pfw_sys(1, 11, 0, 1) == INST_PFW_SYS_NONE,
+          "an unknown NT 6 or later: nothing");
+    CHECK(inst_pfw_sys(1, 6, 1, 0) == INST_PFW_SYS_NONE &&
+          inst_pfw_sys(1, 6, 2, 0) == INST_PFW_SYS_NONE &&
+          inst_pfw_sys(1, 10, 0, 0) == INST_PFW_SYS_NONE,
+          "64-bit: not offered");
+
+    /* The box: the one decision (the owner's Q9), the Thunderbolt box's
+     * child, ticked with it on every system offered it. */
+    CHECK(inst_pfw_box(INST_PFW_SYS_9X, 1, 1, 0, &shown, &open) && shown &&
+          open, "98 SE and ME with the file, Thunderbolt ticked: ticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_9X, 1, 0, 0, &shown, &open) && shown &&
+          !open, "Thunderbolt unticked: shown, greyed and unticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_SEEN, 1, 0, 0, &shown, &open) &&
+          shown && !open, "XP to 10, Thunderbolt unticked: unticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_9X, 1, 1, 1, &shown, &open) && shown &&
+          open, "/noxhcipfw: shown, open, unticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_9X, 0, 1, 0, &shown, &open) && !shown &&
+          !open, "no file in the package: not shown");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_NONE, 1, 1, 0, &shown, &open) &&
+          !shown && !open, "a system not offered it: not shown, never ticked");
+    CHECK(inst_pfw_box(INST_PFW_SYS_ALWAYS, 1, 1, 0, &shown, &open) &&
+          shown && open, "2000, Thunderbolt ticked: ticked");
+    CHECK(inst_pfw_box(INST_PFW_SYS_SEEN, 1, 1, 0, &shown, &open) &&
+          shown && open,
+          "XP, Vista and 7, Thunderbolt ticked: ticked, seen or not");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_SEEN, 1, 1, 1, &shown, &open),
+          "XP to 7, /noxhcipfw: unticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_GONE, 1, 1, 0, &shown, &open) &&
+          !shown && !open, "8, 8.1 and 10 x86: not shown, never ticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_GONE, 1, 0, 0, &shown, &open) &&
+          !shown && !open, "8 to 10, Thunderbolt unticked: not shown");
+
+    CHECK(inst_pfw_mode(INST_PFW_SYS_NONE, 0, 1, 1, 1) == INST_VSD_NONE &&
+          inst_pfw_mode(INST_PFW_SYS_NONE, 1, 1, 1, 1) == INST_VSD_NONE,
+          "not offered: nothing");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_9X, 1, 0, 0, 0) == INST_VSD_UNINSTALL &&
+          inst_pfw_mode(INST_PFW_SYS_SEEN, 1, 1, 1, 1) == INST_VSD_UNINSTALL,
+          "uninstall, whatever the Thunderbolt box");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_ALWAYS, 0, 0, 1, 1) ==
+          INST_VSD_INACTIVE, "no file in the package: an installed one kept");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_9X, 0, 1, 0, 0) == INST_VSD_INACTIVE &&
+          inst_pfw_mode(INST_PFW_SYS_SEEN, 0, 1, 0, 1) == INST_VSD_INACTIVE,
+          "the Thunderbolt support out of the run: left as it is");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_SEEN, 0, 1, 1, 1) == INST_VSD_SELECTED,
+          "ticked");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_9X, 0, 1, 1, 0) == INST_VSD_DESELECTED,
+          "unticked: removed");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_GONE, 0, 1, 1, 1) ==
+              INST_VSD_DESELECTED &&
+          inst_pfw_mode(INST_PFW_SYS_GONE, 0, 1, 0, 0) ==
+              INST_VSD_DESELECTED &&
+          inst_pfw_mode(INST_PFW_SYS_GONE, 0, 0, 1, 1) ==
+              INST_VSD_DESELECTED,
+          "8 to 10 x86: an earlier one of this installer's removed, "
+          "whatever the boxes or the package");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_GONE, 1, 1, 1, 1) == INST_VSD_UNINSTALL,
+          "8 to 10 x86: the uninstall removes it");
+
+    /* BootConfig: 7 x86's root port on the 4G-off layout, as read
+     * (runs/run-44.md "44.49"): a memory range, a second, the 64-bit
+     * prefetchable window (MemoryLarge, flags 0244h, start 7F_8000_0000),
+     * a port range and an interrupt. */
+    {
+        static const unsigned char rp[] = {
+            0x01,0,0,0, 0x05,0,0,0, 0,0,0,0, 0x01,0x00,0x01,0x00, 0x05,0,0,0,
+            0x03,0x01,0x80,0x00, 0x00,0x10,0xA1,0xFE, 0,0,0,0, 0x00,0x10,0,0,
+            0x03,0x01,0x40,0x00, 0x00,0x00,0x00,0xCE, 0,0,0,0, 0x00,0x00,0x80,0x30,
+            0x07,0x01,0x44,0x02, 0x00,0x00,0x00,0x00, 0x80,0x7F,0x00,0x00, 0x00,0x00,0x00,0x40,
+            0x01,0x01,0xA1,0x00, 0x00,0x10,0,0, 0,0,0,0, 0x00,0x60,0,0,
+            0x02,0x03,0x00,0x00, 0x0B,0,0,0, 0x0B,0,0,0, 0xFF,0xFF,0xFF,0xFF
+        };
+        unsigned char b[sizeof(rp) + 16];
+
+        CHECK(inst_pfw_bootcfg_high(rp, sizeof(rp)) == 1,
+              "7's root port: the prefetchable window above 4 GB seen");
+        CHECK(inst_pfw_bootcfg_high(rp, sizeof(rp) - 1) == 1,
+              "the window's descriptor is before the cut");
+        CHECK(inst_pfw_bootcfg_high(rp, 60) == 0,
+              "cut before the window: not seen");
+        memcpy(b, rp, sizeof(rp));
+        b[20 + 32 + 2] = 0x40;     /* not prefetchable */
+        CHECK(inst_pfw_bootcfg_high(b, sizeof(rp)) == 0,
+              "a window above 4 GB, not prefetchable: not seen");
+        memcpy(b, rp, sizeof(rp));
+        b[20 + 32 + 2] = 0x04;     /* prefetchable, not a window: a BAR */
+        CHECK(inst_pfw_bootcfg_high(b, sizeof(rp)) == 0,
+              "a prefetchable range above 4 GB that is no window: not seen");
+        memcpy(b, rp, sizeof(rp));
+        b[20 + 32 + 8 + 1] = 0x00; /* start 0000_0000_0000_0000 */
+        b[20 + 32 + 8 + 0] = 0x00;
+        CHECK(inst_pfw_bootcfg_high(b, sizeof(rp)) == 0,
+              "a prefetchable window below 4 GB: not seen");
+        memcpy(b, rp, sizeof(rp));
+        b[20] = 0x05;                   /* a device-specific first, size 0 */
+        b[24] = 0; b[25] = 0; b[26] = 0; b[27] = 0;
+        CHECK(inst_pfw_bootcfg_high(b, sizeof(rp)) == 1,
+              "a device-specific descriptor skipped");
+        b[24] = 0xFF;                   /* its size past the end */
+        CHECK(inst_pfw_bootcfg_high(b, sizeof(rp)) == 0,
+              "a device-specific size past the end: not a list");
+        CHECK(inst_pfw_bootcfg_high(NULL, 0) == 0 &&
+              inst_pfw_bootcfg_high(rp, 3) == 0, "no list");
+    }
+    CHECK(inst_base_differs(INST_PFW_FILE, INST_PFW_TMPNAME) == 0 &&
+          inst_base_differs(INST_PFW_FILE, INST_VSD_FILE),
+          "the .TMP beside it shares its base name; S98VSD.VXD's differs");
 }
 
 static void test_vsd(void)
@@ -6110,7 +7199,7 @@ static void test_other_sets(void)
     inst_other_warn_text(0, text, sizeof(text));
     CHECK(text[0] == '\0', "warn: none, no box");
     /* The compiled record of each set: each this release's (the free set's
-     * from usb-wdm-free v0.1.0, scripts\package\wdmfree-pin.txt). */
+     * from the usb-wdm-free release scripts\package\wdmfree-pin.txt names). */
     CHECK(strlen(inst_other_sums(INST_SET_NONFREE)) == 64 &&
           strlen(inst_other_sums(INST_SET_FREE)) == 64, "sums: the record");
 }
@@ -6178,12 +7267,12 @@ static void names_inf(const char *text, const char *section, const char *label)
     char desc[256];
     char name[INST_NAME_MAX + 8];
     char what[256];
-    int seen[128];
+    int seen[256];
     int lines = 0;
     int i;
 
     memset(seen, 0, sizeof(seen));
-    CHECK(p != NULL && instNhiNameCount <= 128, label);
+    CHECK(p != NULL && instNhiNameCount <= 256, label);
     while (p != NULL && (p = inst_inf_line(p, line, sizeof(line))) != NULL) {
         INST_U32 vd;
         INST_U32 ven;
@@ -6204,6 +7293,9 @@ static void names_inf(const char *text, const char *section, const char *label)
         sprintf(what, "%s %s: '%s' is the table's name", label, id, desc);
         CHECK(inst_nhi_name(ven, dev, name, sizeof(name)) == 1 &&
               strcmp(desc, name) == 0 && name_ok(desc), what);
+        sprintf(what, "%s %s: no id line for a FriendlyName NHI (no rank change)",
+                label, id);
+        CHECK(inst_nhi_fname(ven, dev, name, sizeof(name)) == 0, what);
         for (i = 0; i < instNhiNameCount; i++) {
             if (instNhiNames[i].Ven == ven && instNhiNames[i].Dev == dev) {
                 seen[i] = 1;
@@ -6219,6 +7311,190 @@ static void names_inf(const char *text, const char *section, const char *label)
     }
 }
 
+/* Task 44.5: xhci98.inf's controller lines against the table. With ids
+ * (the 32-bit file's undecorated section, which 98 SE and ME read): every
+ * id line's string is the table's name for its id, every row of the table
+ * a line, the class line the plain name. Without (the NT 6.x sections and
+ * the 64-bit file): the class line alone. */
+static void names_xhci_inf(const char *text, const char *section, int ids,
+                           const char *label)
+{
+    const char *p = inst_inf_section(text, section);
+    char line[512];
+    char key[128];
+    char value[256];
+    char sect[128];
+    char id[128];
+    char desc[256];
+    char name[INST_NAME_MAX + 8];
+    char what[256];
+    int seen[256];
+    int lines = 0;
+    int i;
+
+    memset(seen, 0, sizeof(seen));
+    CHECK(p != NULL && instXhciNameCount <= 256, label);
+    while (p != NULL && (p = inst_inf_line(p, line, sizeof(line))) != NULL) {
+        INST_U32 vd;
+        INST_U32 ven;
+        INST_U32 dev;
+        if (!inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) ||
+            !inst_inf_field(value, 0, sect, sizeof(sect)) ||
+            !inst_inf_field(value, 1, id, sizeof(id)) ||
+            strncmp(sect, "Xhci.Dev", 8) != 0) {
+            continue;
+        }
+        lines++;
+        CHECK(inst_inf_expand(text, key, desc, sizeof(desc)), "the token is defined");
+        sprintf(what, "%s %s: one id a line", label, id);
+        CHECK(!inst_inf_field(value, 2, sect, sizeof(sect)), what);
+        if (inst_eq(id, "PCI\\CC_0C0330")) {
+            CHECK(strcmp(desc, INST_NAME_USB3) == 0, "the class line: the plain name");
+            continue;
+        }
+        sprintf(what, "%s %s: an id line only where 98 SE and ME read", label, id);
+        CHECK(ids, what);
+        CHECK(inst_pci_vendev(id, &vd), "a controller line binds a PCI id");
+        ven = vd & 0xFFFFUL;
+        dev = vd >> 16;
+        sprintf(what, "%s %s: '%s' is the table's name", label, id, desc);
+        CHECK(inst_xhci_name(ven, dev, name, sizeof(name)) == 1 &&
+              strcmp(desc, name) == 0 && name_ok(desc), what);
+        for (i = 0; i < instXhciNameCount; i++) {
+            if (instXhciNames[i].Ven == ven && instXhciNames[i].Dev == dev) {
+                seen[i] = 1;
+            }
+        }
+    }
+    CHECK_EQ(lines, ids ? instXhciNameCount + 1 : 1,
+             "one line per row and the class line, or the class line alone");
+    for (i = 0; ids && i < instXhciNameCount; i++) {
+        sprintf(what, "%s binds %04lX:%04lX", label,
+                (unsigned long)instXhciNames[i].Ven,
+                (unsigned long)instXhciNames[i].Dev);
+        CHECK(seen[i], what);
+    }
+}
+
+/* Task 44.55: a document's table of the USB 3 controllers (the page
+ * controller-names.md, the release notes' "Controller names in Device
+ * Manager") against the table: every table row of that section that names
+ * "xHCI98 USB 3 Controller (...)" lists its ids as `VVVV:DDDD`, each the
+ * table's id for that name, and every row of the table is listed once. */
+static int hex4(const char *s, INST_U32 *out)
+{
+    INST_U32 v = 0;
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        char c = s[i];
+        v <<= 4;
+        if (c >= '0' && c <= '9') {
+            v |= (INST_U32)(c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            v |= (INST_U32)(c - 'A' + 10);
+        } else {
+            return 0;
+        }
+    }
+    *out = v;
+    return 1;
+}
+
+static void names_doc(const char *text, const char *heading, const char *label)
+{
+    const char *s = text != NULL ? strstr(text, heading) : NULL;
+    const char *end;
+    const char *p;
+    char line[1024];
+    char name[INST_NAME_MAX + 8];
+    char what[256];
+    int seen[256];
+    int rows = 0;
+    int i;
+
+    memset(seen, 0, sizeof(seen));
+    sprintf(what, "%s: the section and its table", label);
+    CHECK(s != NULL && instXhciNameCount <= 256, what);
+    if (s == NULL) {
+        return;
+    }
+    end = strstr(s + 1, "\n## ");
+    if (end == NULL) {
+        end = s + strlen(s);
+    }
+    for (p = s; p < end; ) {
+        const char *eol = strchr(p, '\n');
+        const char *nm;
+        const char *q;
+        size_t len;
+        int ids = 0;
+
+        if (eol == NULL || eol > end) {
+            eol = end;
+        }
+        len = (size_t)(eol - p);
+        if (len >= sizeof(line)) {
+            len = sizeof(line) - 1;
+        }
+        memcpy(line, p, len);
+        line[len] = '\0';
+        p = eol < end ? eol + 1 : end;
+        nm = strstr(line, INST_NAME_USB3 " (");
+        if (line[0] != '|' || nm == NULL) {
+            continue;
+        }
+        rows++;
+        q = strchr(nm, ')');
+        CHECK(q != NULL && (size_t)(q - nm) + 1 < sizeof(name), "the row's name");
+        if (q == NULL || (size_t)(q - nm) + 1 >= sizeof(name)) {
+            continue;
+        }
+        memcpy(name, nm, (size_t)(q - nm) + 1);
+        name[(q - nm) + 1] = '\0';
+        for (q = line; (q = strchr(q, '`')) != NULL; q++) {
+            INST_U32 ven;
+            INST_U32 dev;
+            char want[INST_NAME_MAX + 8];
+
+            if (strlen(q) < 11 || q[5] != ':' || q[10] != '`') {
+                continue;
+            }
+            /* An id-shaped token must be one: upper-case hex, as written. */
+            sprintf(what, "%s: the row '%s': an id in upper-case hex", label, name);
+            CHECK(hex4(q + 1, &ven) && hex4(q + 6, &dev), what);
+            if (!hex4(q + 1, &ven) || !hex4(q + 6, &dev)) {
+                q += 10;
+                continue;
+            }
+            ids++;
+            sprintf(what, "%s: %04lX:%04lX is the table's '%s'", label,
+                    (unsigned long)ven, (unsigned long)dev, name);
+            CHECK(inst_xhci_name(ven, dev, want, sizeof(want)) == 1 &&
+                  strcmp(want, name) == 0, what);
+            for (i = 0; i < instXhciNameCount; i++) {
+                if (instXhciNames[i].Ven == ven && instXhciNames[i].Dev == dev) {
+                    sprintf(what, "%s: %04lX:%04lX listed once", label,
+                            (unsigned long)ven, (unsigned long)dev);
+                    CHECK(!seen[i], what);
+                    seen[i] = 1;
+                }
+            }
+            q += 10;
+        }
+        sprintf(what, "%s: the row '%s' lists its ids", label, name);
+        CHECK(ids > 0, what);
+    }
+    sprintf(what, "%s: a table of the USB 3 controllers", label);
+    CHECK(rows > 0, what);
+    for (i = 0; i < instXhciNameCount; i++) {
+        sprintf(what, "%s lists %04lX:%04lX", label,
+                (unsigned long)instXhciNames[i].Ven,
+                (unsigned long)instXhciNames[i].Dev);
+        CHECK(seen[i], what);
+    }
+}
+
 static void test_names(void)
 {
     char name[INST_NAME_MAX + 8];
@@ -6227,6 +7503,8 @@ static void test_names(void)
     char *c64 = load("..\\src\\cm\\xhcicm-amd64.inf");
     char *x86 = load("..\\src\\xhci98.inf");
     char *a64 = load("..\\src\\xhci98-amd64.inf");
+    char *readme = load("..\\docs\\using\\controller-names.md");
+    char *notes = load("..\\docs\\using\\release-notes.md");
     int rec;
     static const char hwQ[] = "PCI\\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01\0"
                               "PCI\\VEN_1B36&DEV_000D\0";
@@ -6237,6 +7515,18 @@ static void test_names(void)
 
     names_table(instXhciNames, instXhciNameCount, 0);
     names_table(instNhiNames, instNhiNameCount, 1);
+    names_table(instNhiFnNames, instNhiFnNameCount, 1);
+    {
+        int a;
+        int b;
+        for (a = 0; a < instNhiFnNameCount; a++) {
+            for (b = 0; b < instNhiNameCount; b++) {
+                CHECK(instNhiFnNames[a].Ven != instNhiNames[b].Ven ||
+                      instNhiFnNames[a].Dev != instNhiNames[b].Dev,
+                      "an NHI is named by its INF line or by FriendlyName, not both");
+            }
+        }
+    }
     CHECK(name_ok(INST_NAME_USB3) && name_ok(INST_NAME_USB4) &&
           name_ok(INST_NAME_TB2) && name_ok(INST_NAME_TB3), "the plain names");
 
@@ -6252,6 +7542,33 @@ static void test_names(void)
     CHECK(inst_xhci_name(0x8086UL, 0x15C1UL, name, sizeof(name)) == 1 &&
           strcmp(name, "xHCI98 USB 3 Controller (Intel Alpine Ridge)") == 0,
           "the emulator's Alpine Ridge xHCI");
+    /* Task 44.55: the ASM4242's and AMD's ids, 2026-10-25. */
+    CHECK(inst_xhci_name(0x1B21UL, 0x2426UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (ASMedia ASM4242)") == 0,
+          "the ASM4242's xHCI");
+    CHECK(inst_nhi_name(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0 &&
+          inst_nhi_fname(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0,
+          "the ASM4242's router: named by the FriendlyName");
+    CHECK(inst_nhi_fname(0x8086UL, 0x15BFUL, name, sizeof(name)) == 0 &&
+          strcmp(name, INST_NAME_USB4) == 0,
+          "an NHI its INF line names: no FriendlyName");
+    {
+        static const char hwA[] = "PCI\\VEN_1B21&DEV_2425&SUBSYS_24211B21\0";
+        static const char ccA[] = "PCI\\CC_0C0340\0";
+        CHECK(inst_dev_canon(hwA, sizeof(hwA), ccA, sizeof(ccA), "xhcicm", name,
+                             sizeof(name)) &&
+              strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0,
+              "XHCITR: the ASM4242's router under xhcicm");
+    }
+    CHECK(inst_xhci_name(0x1022UL, 0x43FDUL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (AMD 800 Series)") == 0 &&
+          inst_xhci_name(0x1022UL, 0x15B7UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (AMD Raphael)") == 0 &&
+          inst_xhci_name(0x1022UL, 0x15B8UL, name, sizeof(name)) == 1 &&
+          strcmp(name, "xHCI98 USB 3 Controller (AMD Raphael USB 2)") == 0,
+          "the AMD chipset and processor controllers");
     CHECK(inst_xhci_name(0xABCDUL, 0x0001UL, name, sizeof(name)) == 0 &&
           strcmp(name, INST_NAME_USB3) == 0, "an id the table lacks: the plain name");
     CHECK(inst_nhi_name(0x8086UL, 0x15BFUL, name, sizeof(name)) == 1 &&
@@ -6323,11 +7640,22 @@ static void test_names(void)
               inst_inf_expand(a64, "%XhciDesc%", name, sizeof(name)) &&
               strcmp(name, INST_NAME_USB3) == 0,
               "xhci98.inf's class line: the one plain name");
+        names_xhci_inf(x86, "XhciModels", 1, "xhci98.inf [XhciModels]");
+        names_xhci_inf(x86, "XhciModels.NTx86.6.0", 0,
+                       "xhci98.inf [XhciModels.NTx86.6.0]");
+        names_xhci_inf(a64, "XhciModels.NTamd64", 0,
+                       "xhci98-amd64.inf [XhciModels.NTamd64]");
+        names_xhci_inf(a64, "XhciModels.NTamd64.6.0", 0,
+                       "xhci98-amd64.inf [XhciModels.NTamd64.6.0]");
     }
+    names_doc(readme, "# Controller names", "controller-names.md");
+    names_doc(notes, "## Controller names in Device Manager", "release-notes.md");
     free(cm);
     free(c64);
     free(x86);
     free(a64);
+    free(readme);
+    free(notes);
 }
 
 /* Record 26 section 6.7.11 (draft 37): the driver packages of the other
@@ -6627,14 +7955,20 @@ int main(void)
     test_uas();
     test_uninstall_entry();
     test_page_texts();
+    test_secure_boot_refusals();
     test_s98();
+    test_s98_tunnel();
     test_marks();
     test_storage();
     test_vsd();
+    test_pfw_inst();
     test_vsd_names();
     test_wininit_text();
     test_other_sets();
     test_names();
+    test_tmp_named();
+    test_stor_short();
+    test_9x_stage();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

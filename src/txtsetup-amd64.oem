@@ -27,13 +27,13 @@
 # ASCII only, CRLF line endings.
 
 [Disks]
-d1 = "xHCI98 USB 3.x Driver Disk (x64)", \xhci98.sys, \
+d1 = "xHCI98 USB 3 Driver Disk (x64)", \xhci98.sys, \
 
 [Defaults]
 scsi = XHCI98
 
 [scsi]
-XHCI98 = "xHCI98 USB 3.x Host Controller (Windows XP x64)"
+XHCI98 = "xHCI98 USB 3 Controller (Windows XP x64)"
 
 [Files.scsi.XHCI98]
 driver = d1, xhci98.sys, xhci98

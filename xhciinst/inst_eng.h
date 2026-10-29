@@ -39,6 +39,7 @@
 #define INST_Q_STOR         13  /* 98 SE: the USB storage drivers?         */
 #define INST_Q_VSD          14  /* 98 SE and ME: S98VSD.VXD?               */
 #define INST_Q_OTHER        15  /* a free or non-free set: copy it, stage it? */
+#define INST_Q_PFW          16  /* XHCIPFW.VXD or XHCIPFW.SYS?             */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -135,6 +136,16 @@ void inst_eng_tb_question(void);
 int inst_eng_tb_state(int *haveCm, int *present, int *defaultYes,
                       int *installed);
 void inst_eng_tb_choose(int include);
+/* 1 when Intel's Thunderbolt driver runs a controller (record 23 section
+ * 8.5.1): the Thunderbolt box is then the user's, unticked until ticked. */
+int inst_eng_tb_intel(void);
+/* Record 26 section 5.3.3: the Components page's refusal for the boxes as
+ * ticked (Secure Boot read as on), shown with OK alone; NULL to go on. */
+const char *inst_eng_comp_refusal(int usb, int tb);
+/* The text of the refusal the last plan made (a gate of record 23 section
+ * 5.10 or record 26 section 5.3.3); NULL when it refused for no such
+ * reason or did not refuse. */
+const char *inst_eng_plan_refusal(void);
 
 /* The connection manager alone (record 23 section 4.5; record 26 section
  * 5.3, draft 8): the USB drivers' box, offered (can be unticked) or not,
@@ -253,6 +264,12 @@ const char *inst_eng_summary_head(int writes, int other);
 int inst_eng_vsd_state(int *shown, int *sys9x);
 void inst_eng_vsd_choose(int ticked);
 const char *inst_eng_vsd_plan(void);
+/* XHCIPFW.VXD and XHCIPFW.SYS (design record 32 sections 8 and 11): the
+ * window's box (its default, the one decision; *shown whether the page
+ * shows it), the choice made, and the Summary's line (NULL: none). */
+int inst_eng_pfw_default(int *shown, int *nt);
+void inst_eng_pfw_choose(int ticked);
+const char *inst_eng_pfw_plan(void);
 
 /* 1 when the xHCI98 USB Tree is started at login now (its Run value is
  * there). */
@@ -274,11 +291,19 @@ int inst_eng_s98_state(int *have, char *version, size_t cap);
  * *def the box's state now (the default and the switches), note the
  * detection's line or why it is greyed. */
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap);
+/* The Components page's one line under the row's sentence, the most
+ * pressing state alone (task 44.36; inst_stor_short_text). */
+void inst_eng_stor_short(char *out, size_t cap);
+/* The install directory the window has chosen, for the 98 SE and ME
+ * projection of DevicePath that bars a package box (record 26 section
+ * 6.7.12); the boxes' bars made again. */
+void inst_eng_other_dir(const char *dir);
 void inst_eng_stor_choose(int include);
 /* Record 26 section 5.3.1 (task 43.43): the Components page's warnings for
- * the boxes as ticked (stor: the storage row), their text for dir; 0 none. */
-INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, const char *dir,
-                            char *text, size_t cap);
+ * the boxes as ticked (stor: the storage row; tb: the Thunderbolt box),
+ * their text for dir; 0 none. */
+INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, int tb,
+                            const char *dir, char *text, size_t cap);
 /* The Summary's line for it, "" when it is not shown. */
 void inst_eng_stor_summary(char *out, size_t cap);
 
@@ -287,9 +312,9 @@ void inst_eng_stor_summary(char *out, size_t cap);
  * 0 before the read. Its sentence for dir and the line under its row; the
  * choice; the page's warnings on Next ("" for none); the Summary's lines;
  * the Finish page's paragraph. */
-/* The Other USB drivers page's line when no package is offered: on 98 SE
- * and ME the copy-only note (inst_other_none_text). */
-const char *inst_eng_other_none_text(void);
+/* A set's page's line when it offers no package: on 98 SE and ME the
+ * copy-only note (inst_other_none_text). */
+const char *inst_eng_other_none_text(int set);
 
 int inst_eng_other_state(int set, int *state, int *forThis, int *include,
                          int *stage);
@@ -322,6 +347,8 @@ int inst_eng_other_trust(int *offered);
 int inst_eng_other_trust_possible(void);
 void inst_eng_other_trust_choose(int on);
 void inst_eng_other_warnings(char *text, size_t cap);
+/* The same for one set's page alone (record 26 section 6.7.12). */
+void inst_eng_other_warnings_set(int set, char *text, size_t cap);
 void inst_eng_other_summary(const char *dir, char *text, size_t cap);
 void inst_eng_other_finish(char *text, size_t cap);
 void inst_eng_s98_choose(int include);

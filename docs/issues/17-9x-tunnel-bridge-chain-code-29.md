@@ -136,9 +136,10 @@ It was not read with a bridge chain under the USB4 profile
 `XhciCmBridgeNumbering`, a `REG_DWORD` in the Thunderbolt or USB4
 controller's driver key: 1 by default, 0 to restore the old behaviour (a
 hot-added bridge left as it came up: Code 29 until a restart); any other
-value is refused and 1 stands. It is read on Windows 98 SE and ME only,
-it is set in the registry only, and the install does not write it or
-ask for it (`docs/using/tuning.md`; the release notes' "Thunderbolt 3
+value is refused and 1 stands. It is read on Windows 98 SE and ME only;
+from `3.3.0.0` the install writes it at 1 there, only where it is
+missing, and never asks for it, and `INSTALL /set` or the installer's
+Thunderbolt "Advanced..." sets it, as Regedit does (`docs/using/tuning.md`; the release notes' "Thunderbolt 3
 and USB4: registry settings").
 
 On every attempt the worker records what it did, and the driver writes

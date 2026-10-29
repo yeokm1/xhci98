@@ -36,8 +36,13 @@
  *
  * SAFE EJECT (section 7.4). NT: the bridge filter's BusRelations reading
  * (CmRegRelations) attaches a child filter (CM_KIND_CHILD) above each PDO
- * new since its snapshot, on an active bridge with XhciCmSafeEject 1; the
- * child answers IRP_MN_QUERY_CAPABILITIES with Removable (cm_filt.c).
+ * new since its snapshot, on every bridge it filters (design record 31
+ * section 4.1: the child is also the tunnel id's vehicle, cm_filt.c
+ * cmChildIds, and a child on a PCI-to-PCI bridge reads that bridge's
+ * BusRelations in turn, CmRegChainRelations, to CM_TUNNEL_DEPTH_MAX); the
+ * child answers IRP_MN_QUERY_CAPABILITIES with Removable (cm_filt.c) only
+ * as a unit of an active, exclusive member with XhciCmSafeEject 1
+ * (CmRegAttMayMark).
  * Since task 42-A.5 (revision 3) a child is also made by AddDevice for a
  * device whose LowerFilters value the mark service wrote, so the mark
  * survives a rebuild of the device's stack; every attachment is on the
@@ -113,9 +118,17 @@ static ULONG cmRegPassed;
  * "The marks"), and the LowerFilters children no active member owned. */
 static LIST_ENTRY cmRegAtts;
 static ULONG cmRegStray;
+/* The tunnel id's chain (design record 31 sections 4.2 and 4.3), under
+ * the lock: ids given, rewrites refused for want of pool and over the
+ * size bound, bridges past the depth bound, and re-attaches. */
+static ULONG cmRegIdGiven;
+static ULONG cmRegIdNomem;
+static ULONG cmRegIdOver;
+static ULONG cmRegChainDeep;
+static ULONG cmRegReattached;
 
-static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
-                              PULONG over);
+static NTSTATUS cmChildCreate(PCM_FILTER parent, PDEVICE_OBJECT pdo,
+                              ULONG isNew, PULONG over, PULONG again);
 static VOID cmDiscoverAndList(PCM_NHI nhi);
 static VOID cmMarksSyncAll(VOID);
 
@@ -429,6 +442,114 @@ ULONG CmRegRelationsBegin(PCM_FILTER filter)
     return seq;
 }
 
+/* The filter whose registration a child's records and counts go under:
+ * a bridge filter is its own, a child names the tunnel-port bridge filter
+ * its chain started from (CM_FILTER.Bridge, NULL when none is known). */
+static PCM_FILTER cmTopOf(PCM_FILTER f)
+{
+    return f->Common.Kind == CM_KIND_FILTER ? f : f->Bridge;
+}
+
+/* The domain a chain record is written to: the top bridge's owner, else
+ * the first listed domain on the filter route (a bridge that is not
+ * active has no owner, and the chain's reading is wanted all the same),
+ * else none: the counts alone. Under the lock. */
+static PCM_NHI cmLogDom(PCM_FILTER top)
+{
+    PLIST_ENTRY e;
+    PCM_REENUM r;
+
+    if (top != NULL && top->Owner != NULL) {
+        return top->Owner;
+    }
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        r = CONTAINING_RECORD(e, CM_REENUM, Link);
+        if (r->Route == CM_ROUTE_FILTER) {
+            return CONTAINING_RECORD(r, CM_NHI, Reenum);
+        }
+    }
+    return NULL;
+}
+
+/* A filter's location for the chain's records: a published bridge
+ * filter's, a located attachment's, else 0xFFFF. Under the lock. */
+static ULONG cmFiltBdf(PCM_FILTER f)
+{
+    if (f == NULL) {
+        return 0xFFFFUL;
+    }
+    if (f->Common.Kind == CM_KIND_FILTER && f->Published) {
+        return f->Bdf & 0xFFFFUL;
+    }
+    if (f->Located) {
+        return XHCI_TBT_BDF(f->LocBus, f->LocAddress >> 16,
+                            f->LocAddress & 0xFFFFUL) & 0xFFFFUL;
+    }
+    return 0xFFFFUL;
+}
+
+/* One BusRelations answer read by `f`, a bridge filter or a chain child,
+ * as the chain's trace records it: the count (bits 31:24), the depth
+ * (23:16) and the location, then how many PDOs are new by its snapshot. */
+static VOID cmChainRelNote(PCM_FILTER f, ULONG count, ULONG fresh)
+{
+    KIRQL irql;
+    PCM_NHI dom;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    dom = cmLogDom(cmTopOf(f));
+    if (dom != NULL) {
+        CmLogNote(dom, "cm.chain.rel", ((count & 0xFFUL) << 24) |
+                                           ((f->Depth & 0xFFUL) << 16) |
+                                           cmFiltBdf(f));
+        CmLogNote(dom, "cm.chain.rel.new", fresh);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/*
+ * A child filter on the PDOs of a BusRelations answer `parent` read - a
+ * bridge filter, or a chain child on a PCI-to-PCI bridge (design record
+ * 31 sections 4.1 and 4.3): on each PDO new by a whole snapshot, and
+ * again on one whose child was lost to a rebuild of its stack
+ * (CmPortsChildFirst's re-attach), on every filtered bridge whatever its
+ * active mark and XhciCmSafeEject say. What a child answers is the marks'
+ * gate's (CmRegAttMayMark). PASSIVE_LEVEL, the parent's PnP dispatch,
+ * before the snapshot is replaced.
+ */
+static VOID cmAttachNew(PCM_FILTER parent, PVOID const *now, ULONG count,
+                        const ULONG *isNew)
+{
+    ULONG i;
+    ULONG over;
+    ULONG again;
+    KIRQL irql;
+    NTSTATUS status;
+
+    for (i = 0; i < count; i++) {
+        status = cmChildCreate(parent, (PDEVICE_OBJECT)now[i], isNew[i],
+                               &over, &again);
+        if (status == STATUS_NOT_FOUND) {
+            continue;
+        }
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        if (NT_SUCCESS(status)) {
+            cmRegAttached++;
+            if (over) {
+                cmRegOver++;
+            }
+            if (again) {
+                cmRegReattached++;
+            }
+        } else if (status == STATUS_DEVICE_BUSY) {
+            cmRegSkipped++;
+        } else {
+            cmRegRefused++;
+        }
+        KeReleaseSpinLock(&cmRegLock, irql);
+    }
+}
+
 VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
                     ULONG seq)
 {
@@ -443,10 +564,7 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     ULONG j;
     PLIST_ENTRY e;
     PCM_FILTER child;
-    ULONG attach;
-    ULONG over;
     KIRQL irql;
-    NTSTATUS status;
 
     count = 0;
     if (relations != NULL) {
@@ -465,32 +583,8 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     }
     fresh = CmPortsNewPdos((PVOID const *)filter->Snap, filter->SnapCount,
                            (PVOID const *)now, count, isNew);
-
-    /* Whether this answer is one an active bridge with safe eject sees:
-     * read before the baseline below can make the bridge active. */
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    attach = filter->Published && !filter->Gone && filter->Active &&
-             filter->SafeEject != 0;
-    KeReleaseSpinLock(&cmRegLock, irql);
-
-    for (i = 0; i < count; i++) {
-        if (!isNew[i] || !attach) {
-            continue;
-        }
-        status = cmChildCreate(filter, (PDEVICE_OBJECT)now[i], &over);
-        KeAcquireSpinLock(&cmRegLock, &irql);
-        if (NT_SUCCESS(status)) {
-            cmRegAttached++;
-            if (over) {
-                cmRegOver++;
-            }
-        } else if (status == STATUS_DEVICE_BUSY) {
-            cmRegSkipped++;
-        } else {
-            cmRegRefused++;
-        }
-        KeReleaseSpinLock(&cmRegLock, irql);
-    }
+    cmChainRelNote(filter, count, fresh);
+    cmAttachNew(filter, (PVOID const *)now, count, isNew);
 
     /* The snapshot is replaced under the lock, since the eject's
      * eligibility (cmEjectReady) reads it from the child's removal. A
@@ -618,43 +712,66 @@ static ULONG cmNameChars(PDRIVER_OBJECT driver, ULONG from)
 }
 
 /*
- * A child filter above a PDO pci.sys newly reported on an active bridge,
- * before the PnP manager builds that device's stack (section 7.4 step 1):
- * directly above the PDO, or (revision 2) above the bus filters a driver
- * below the bridge filter already put on it, which is where an ACPI
- * machine leaves a PCI-to-PCI bridge; CmPortsChildAttach decides.
- * STATUS_SUCCESS, with *over 1 when it went above bus filters;
- * STATUS_DEVICE_BUSY when anything else is attached, so nothing is.
- * PASSIVE_LEVEL.
+ * A child filter above a PDO pci.sys reported to `parent` (cmAttachNew),
+ * before the PnP manager builds that device's stack (record 21 section 7.4
+ * step 1): directly above the PDO, or (revision 2) above the bus filters a
+ * driver below the parent already put on it, which is where an ACPI
+ * machine leaves a PCI-to-PCI bridge; CmPortsChildAttach decides. A PDO
+ * already in the snapshot (`isNew` 0) gets one again only when nothing at
+ * all is on it and no attachment of this driver is (record 31 section
+ * 4.3's re-attach; CmPortsChildFirst), and its chain is never walked.
+ * STATUS_SUCCESS, with *over 1 when it went above bus filters and *again 1
+ * for a re-attach; STATUS_DEVICE_BUSY when anything else is attached, so
+ * nothing is; STATUS_NOT_FOUND when nothing was to be done. The child is
+ * one deeper than its parent and names the parent's tunnel-port bridge
+ * filter (cmTopOf). PASSIVE_LEVEL.
  */
-static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
-                              PULONG over)
+static NTSTATUS cmChildCreate(PCM_FILTER parent, PDEVICE_OBJECT pdo,
+                              ULONG isNew, PULONG over, PULONG again)
 {
     PDEVICE_OBJECT self;
     PDEVICE_OBJECT lower;
     PDEVICE_OBJECT walk;
     PCM_FILTER child;
+    PCM_FILTER f;
+    PLIST_ENTRY e;
     PVOID chain[CM_CHILD_CHAIN_MAX + 1];
     ULONG chainCount;
     ULONG decision;
-    PCM_NHI owner;
+    PCM_FILTER top;
+    PCM_NHI dom;
     ULONG name0;
     ULONG name1;
     KIRQL irql;
     ULONG truncated;
+    ULONG hasOurs;
     NTSTATUS status;
 
     *over = 0;
+    *again = 0;
     chainCount = 0;
     name0 = 0;
     name1 = 0;
-    /* SnapTruncated is written by this bridge's PnP dispatch alone, which
+    hasOurs = 0;
+    top = cmTopOf(parent);
+    /* SnapTruncated is written by the parent's PnP dispatch alone, which
      * is where this runs, so the value read stays the value. */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    truncated = bridge->SnapTruncated;
+    truncated = parent->SnapTruncated;
+    for (e = cmRegAtts.Flink; e != &cmRegAtts && !isNew; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (f->Common.Pdo == pdo) {
+            hasOurs = 1;
+            break;
+        }
+    }
     KeReleaseSpinLock(&cmRegLock, irql);
     walk = pdo->AttachedDevice;
-    decision = CmPortsChildFirst(truncated, (ULONG)(walk != NULL));
+    decision = CmPortsChildFirst(truncated, (ULONG)(walk != NULL), isNew,
+                                 hasOurs);
+    if (decision == CM_CHILD_KEEP) {
+        return STATUS_NOT_FOUND;
+    }
     if (decision == CM_CHILD_WALK) {
         /* Only for a PDO that is new by a whole snapshot: nothing the PnP
          * manager builds can attach or detach before this answer reaches
@@ -672,16 +789,23 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
                                       chainCount, (PVOID)pdo->DriverObject,
                                       (PVOID)CmDriverObject);
     }
-    /* The owner is used under the registration list's lock only: its
+    /* The domain is used under the registration list's lock only: its
      * delisting (CmReenumStop) takes the same lock, so the NHI cannot
      * leave while its log is written. Order: cmRegLock, then LogLock. */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    owner = bridge->Owner;
-    if (chainCount != 0 && owner != NULL) {
-        CmLogNote(owner, "cm.reenum.child.under", name0);
-        CmLogNote(owner, "cm.reenum.child.under2", name1);
-        CmLogNote(owner, "cm.reenum.child.under.count", chainCount);
-        CmLogNote(owner, "cm.reenum.child.decision", decision);
+    dom = cmLogDom(top);
+    if (dom != NULL) {
+        if (chainCount != 0) {
+            CmLogNote(dom, "cm.reenum.child.under", name0);
+            CmLogNote(dom, "cm.reenum.child.under2", name1);
+            CmLogNote(dom, "cm.reenum.child.under.count", chainCount);
+            CmLogNote(dom, "cm.reenum.child.decision", decision);
+        }
+        CmLogNote(dom, isNew ? "cm.chain.attach" : "cm.chain.reattach",
+                  ((decision & 0xFFUL) << 24) |
+                      (((parent->Depth + 1) & 0xFFUL) << 16) |
+                      cmFiltBdf(parent));
+        CmLogNoteAddress(dom, "cm.chain.attach.pdo", (ULONG)(ULONG_PTR)pdo);
     }
     KeReleaseSpinLock(&cmRegLock, irql);
     if (decision == CM_CHILD_SKIP) {
@@ -698,7 +822,9 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
     child->Common.Self = self;
     child->Common.Pdo = pdo;
     child->Outstanding = 1;
-    child->Bridge = bridge;
+    child->Bridge = top;
+    child->Parent = parent;
+    child->Depth = parent->Depth + 1;
 
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
@@ -720,7 +846,280 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
     self->Flags &= ~DO_DEVICE_INITIALIZING;
     CmRegAttLink(child);
     *over = (ULONG)(decision == CM_CHILD_ATTACH_OVER);
+    *again = (ULONG)(isNew == 0);
     return STATUS_SUCCESS;
+}
+
+VOID CmRegChainRelations(PCM_FILTER child, const DEVICE_RELATIONS *relations)
+{
+    PVOID now[CM_SNAP_MAX];
+    ULONG isNew[CM_SNAP_MAX];
+    ULONG count;
+    ULONG fresh;
+    ULONG truncated;
+    ULONG i;
+    KIRQL irql;
+
+    count = 0;
+    if (relations != NULL) {
+        count = relations->Count;
+    }
+    truncated = (ULONG)(count > CM_SNAP_MAX);
+    if (truncated) {
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        cmRegSkipped += count - CM_SNAP_MAX;
+        KeReleaseSpinLock(&cmRegLock, irql);
+        count = CM_SNAP_MAX;
+    }
+    for (i = 0; i < count; i++) {
+        now[i] = (PVOID)relations->Objects[i];
+    }
+    fresh = CmPortsNewPdos((PVOID const *)child->Snap, child->SnapCount,
+                           (PVOID const *)now, count, isNew);
+    cmChainRelNote(child, count, fresh);
+    cmAttachNew(child, (PVOID const *)now, count, isNew);
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < count; i++) {
+        child->Snap[i] = now[i];
+    }
+    child->SnapCount = count;
+    child->SnapTruncated = truncated;
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegChainNote(PCM_FILTER f, ULONG event)
+{
+    static const char *const labels[] = {
+        "cm.chain.id", "cm.chain.id.nomem", "cm.chain.id.over",
+        "cm.chain.deep", "cm.chain.bridge", "cm.chain.start",
+        "cm.chain.remove"
+    };
+    KIRQL irql;
+    PCM_NHI dom;
+    PCM_FILTER at;
+
+    if (event >= sizeof(labels) / sizeof(labels[0])) {
+        return;
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    switch (event) {
+    case CM_CHAIN_EV_ID:
+        cmRegIdGiven++;
+        break;
+    case CM_CHAIN_EV_NOMEM:
+        cmRegIdNomem++;
+        break;
+    case CM_CHAIN_EV_OVER:
+        cmRegIdOver++;
+        break;
+    case CM_CHAIN_EV_DEEP:
+        cmRegChainDeep++;
+        break;
+    default:
+        break;
+    }
+    /* The bridge the device sits on: the filter that attached this one,
+     * or its own location for one AddDevice made. The parent outlives the
+     * child: the PnP manager removes a device's children before it. */
+    at = f->Parent != NULL ? f->Parent : f;
+    dom = cmLogDom(cmTopOf(f));
+    if (dom != NULL) {
+        CmLogNote(dom, labels[event], ((f->Depth & 0xFFUL) << 16) |
+                                          cmFiltBdf(at));
+        if (event == CM_CHAIN_EV_ID || event == CM_CHAIN_EV_NOMEM) {
+            CmLogNoteAddress(dom, "cm.chain.id.pdo",
+                             (ULONG)(ULONG_PTR)f->Common.Pdo);
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/* ====================================================================== */
+/* A child's interrupt (design record 21 section 6.2.1, task 44.53)      */
+/* ====================================================================== */
+
+/* TRUE when `bdf` (16-bit XHCI_TBT_BDF) is an active member of a filter
+ * route's set. Under the list's lock. */
+static BOOLEAN cmRegIsActiveMember(ULONG bdf)
+{
+    PLIST_ENTRY e;
+    PCM_REENUM r;
+    ULONG i;
+
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        r = CONTAINING_RECORD(e, CM_REENUM, Link);
+        if (r->Route != CM_ROUTE_FILTER) {
+            continue;
+        }
+        for (i = 0; i < r->Members; i++) {
+            if ((r->Port[i].Bdf & 0xFFFFUL) == bdf &&
+                (r->Port[i].Flags & CM_PORT_ACTIVE) != 0) {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+/* A bridge's secondary bus: TRUE with *sec when `bdf` answers as a present
+ * type 1 header (not all-ones, not Retry Status) with a secondary bus that
+ * is neither 0 nor FFh. PASSIVE_LEVEL. */
+static BOOLEAN cmIrqBridgeSec(ULONG bdf, PULONG sec)
+{
+    ULONG id;
+    ULONG v;
+
+    if (!cmCfgRead(NULL, bdf, 0x00UL, &id) ||
+        (id & 0xFFFFUL) == 0xFFFFUL || (id & 0xFFFFUL) == 0x0001UL ||
+        !cmCfgRead(NULL, bdf, 0x0CUL, &v) || ((v >> 16) & 0x7FUL) != 1UL ||
+        !cmCfgRead(NULL, bdf, 0x18UL, &v)) {
+        return FALSE;
+    }
+    *sec = (v >> 8) & 0xFFUL;
+    return (BOOLEAN)(*sec != 0 && *sec != 0xFFUL);
+}
+
+ULONG CmRegIrqWire(PCM_FILTER child, ULONG address, PULONG why,
+                   PULONG fnBdf)
+{
+    ULONG sec;
+    ULONG path[CM_IRQ_PATH_MAX];
+    ULONG devs[CM_IRQ_PATH_MAX];
+    ULONG n;
+    ULONG port;
+    ULONG bdf;
+    ULONG k;
+    ULONG v;
+    ULONG id;
+    ULONG pin;
+    ULONG portPin;
+    ULONG portLine;
+    BOOLEAN found;
+    PCM_FILTER f;
+    PCM_FILTER a;
+    KIRQL irql;
+
+    /* The ancestry: each ancestor's location, up to the first that is an
+     * active tunnel port; path[0] is kept for the function itself, whose
+     * bus is read below from the bridge above it. A chain child's Parent
+     * is the filter whose BusRelations attached it; a child AddDevice made
+     * has none, and its Bridge is the bridge whose snapshot reported it.
+     * Each outlives the child (its device's children are removed before
+     * it), and only the locations are kept past the lock. */
+    *fnBdf = 0xFFFFUL;
+    if (((address >> 16) & 0xFFFFUL) > 31UL || (address & 0xFFFFUL) > 7UL) {
+        *why = CM_IRQ_WHY_UNREAD;
+        return 0;
+    }
+    n = 1;
+    path[0] = 0;
+    port = 0;
+    found = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    f = child;
+    for (;;) {
+        a = f->Parent;
+        if (a == NULL && f->Common.Kind == CM_KIND_CHILD) {
+            a = f->Bridge;
+        }
+        if (a == NULL) {
+            break;
+        }
+        bdf = cmFiltBdf(a);
+        if (bdf == 0xFFFFUL) {
+            break;
+        }
+        if (cmRegIsActiveMember(bdf)) {
+            port = bdf;
+            found = TRUE;
+            break;
+        }
+        if (n >= CM_IRQ_PATH_MAX) {
+            break;
+        }
+        path[n++] = bdf;
+        f = a;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (!found) {
+        *why = CM_IRQ_WHY_NO_PORT;
+        return 0;
+    }
+    /* The function's bus: the secondary bus of the bridge directly above
+     * it (path[1], or the tunnel port for a function on the tunnel bus).
+     * On Windows 2000 DevicePropertyBusNumber is not yet answered when the
+     * requirements are queried (read on q35: STATUS_OBJECT_NAME_NOT_FOUND),
+     * DevicePropertyAddress is. */
+    if (!cmIrqBridgeSec((n > 1) ? path[1] : port, &sec)) {
+        *why = CM_IRQ_WHY_UNREAD;
+        return 0;
+    }
+    path[0] = XHCI_TBT_BDF(sec, (address >> 16) & 0x1FUL,
+                           address & 0x7UL) & 0xFFFFUL;
+    *fnBdf = path[0];
+
+    /* The function: present, a type 0 header, its pin. */
+    if (!cmCfgRead(NULL, path[0], 0x00UL, &id) ||
+        (id & 0xFFFFUL) == 0xFFFFUL || (id & 0xFFFFUL) == 0x0001UL ||
+        !cmCfgRead(NULL, path[0], 0x0CUL, &v) ||
+        ((v >> 16) & 0x7FUL) != 0 ||
+        !cmCfgRead(NULL, path[0], 0x3CUL, &v)) {
+        *why = CM_IRQ_WHY_UNREAD;
+        return 0;
+    }
+    pin = (v >> 8) & 0xFFUL;
+    /* Each bridge, and the tunnel port, must answer as a present bridge
+     * with the link below it on its secondary bus (for the bridge above
+     * the function a second read, which catches a change between the
+     * two). */
+    for (k = 1; k <= n; k++) {
+        bdf = (k < n) ? path[k] : port;
+        if (!cmIrqBridgeSec(bdf, &sec)) {
+            *why = CM_IRQ_WHY_UNREAD;
+            return 0;
+        }
+        if (sec != XHCI_TBT_BDF_BUS(path[k - 1])) {
+            *why = CM_IRQ_WHY_MOVED;
+            return 0;
+        }
+    }
+    if (!cmCfgRead(NULL, port, 0x3CUL, &v)) {
+        *why = CM_IRQ_WHY_UNREAD;
+        return 0;
+    }
+    portLine = v & 0xFFUL;
+    portPin = (v >> 8) & 0xFFUL;
+    for (k = 0; k < n; k++) {
+        devs[k] = XHCI_TBT_BDF_DEV(path[k]);
+    }
+    return CmIrqWire(pin, devs, n, portPin, portLine, why);
+}
+
+VOID CmRegIrqNote(PCM_FILTER f, const char *label, ULONG value)
+{
+    KIRQL irql;
+    PCM_NHI dom;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    dom = cmLogDom(cmTopOf(f));
+    if (dom != NULL) {
+        CmLogNote(dom, label, value);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegIdCounters(PULONG given, PULONG nomem, PULONG over, PULONG deep,
+                     PULONG reattached)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    *given = cmRegIdGiven;
+    *nomem = cmRegIdNomem;
+    *over = cmRegIdOver;
+    *deep = cmRegChainDeep;
+    *reattached = cmRegReattached;
+    KeReleaseSpinLock(&cmRegLock, irql);
 }
 
 /*
@@ -1083,44 +1482,44 @@ BOOLEAN CmRegAttMayMark(PCM_FILTER filter)
 {
     PLIST_ENTRY e;
     PCM_REENUM r;
-    PCM_NHI d;
     KIRQL irql;
     ULONG i;
-    ULONG want;
+    ULONG v;
     BOOLEAN may;
     BOOLEAN seen;
 
-    if (filter->Common.Kind == CM_KIND_CHILD && !filter->AddDev) {
-        return TRUE;
-    }
     may = FALSE;
     seen = FALSE;
-    want = CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (filter->Located) {
         for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
             r = CONTAINING_RECORD(e, CM_REENUM, Link);
-            d = CONTAINING_RECORD(r, CM_NHI, Reenum);
             if (r->Route != CM_ROUTE_FILTER) {
                 continue;
             }
             for (i = 0; i < r->Members; i++) {
-                if ((r->Port[i].Flags & want) == want &&
-                    r->Port[i].SecBusValid &&
-                    r->Port[i].SecBus == filter->LocBus &&
-                    CmMarksFind(&r->Marks, (PVOID)filter->Common.Pdo) !=
-                        NULL) {
+                v = CmPortsMayMark(
+                    1, filter->LocBus,
+                    (ULONG)((r->Port[i].Flags & CM_PORT_ACTIVE) != 0),
+                    (ULONG)((r->Port[i].Flags & CM_PORT_EXCLUSIVE) != 0),
+                    (ULONG)(r->Port[i].SecBusValid != 0), r->Port[i].SecBus,
+                    (ULONG)(CmMarksFind(&r->Marks,
+                                        (PVOID)filter->Common.Pdo) != NULL),
+                    (ULONG)(r->SafeEject != 0));
+                if (v != CM_MM_NO) {
                     seen = TRUE;
-                    if (r->SafeEject != 0) {
-                        may = TRUE;
-                    }
+                }
+                if (v == CM_MM_YES) {
+                    may = TRUE;
                 }
             }
-            UNREFERENCED_PARAMETER(d);
         }
     }
-    if (!seen && filter->Common.Kind == CM_KIND_CHILD && !filter->Stray) {
-        /* A value on a device outside every set: attached and passive. */
+    if (!seen && filter->Common.Kind == CM_KIND_CHILD && filter->AddDev &&
+        !filter->Stray) {
+        /* A value on a device outside every set: attached and passive. A
+         * child attached at BusRelations outside every active set is the
+         * tunnel id's chain (record 31 section 4.1), not a stray. */
         filter->Stray = 1;
         cmRegStray++;
     }
@@ -2085,6 +2484,7 @@ VOID CmReenumStart(PCM_NHI nhi)
     r->CfgmgOwed = 0;
     r->LossDrain = 0;
     r->LossSeen = 0;
+    r->Deferred = 0;
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         r->KnownCount[i] = 0;
         r->Port[i].SecBus = 0;
@@ -2246,6 +2646,13 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
      * (CmReenumService posts the mask as the openings are read back). */
     r->CallUsable = 0;
     CmCfgwkTakeover(r->Wk, 0);
+    if (nhi->U4On) {
+        /* Record 21 section 6.1.2: a worker made after a recovery's commit
+         * (a loss during the bind) takes the hold in force before any
+         * work is posted to it. */
+        nhi->RecWkHold = CmNhiU4WorkerHold(nhi);
+        CmCfgwkHold(r->Wk, nhi->RecWkHold);
+    }
 }
 
 /*
@@ -2970,6 +3377,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     }
     r->WkOpenSeen = 0;
     r->WkActive = 0;
+    r->Deferred = 0;
     r->Route = CM_ROUTE_NONE;
     for (i = 0; i < r->Members; i++) {
         /* Held work belongs to this start (task 42-A.12). */
@@ -3003,6 +3411,12 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
     CmLogNote(nhi, "cm.reenum.hold.passed", passed);
     CmLogNote(nhi, "cm.reenum.child.stray", cmRegStray);
+    CmRegIdCounters(&attached, &over, &skipped, &refused, &passed);
+    CmLogNote(nhi, "cm.reenum.id.given", attached);
+    CmLogNote(nhi, "cm.reenum.id.nomem", over);
+    CmLogNote(nhi, "cm.reenum.id.over", skipped);
+    CmLogNote(nhi, "cm.reenum.chain.deep", refused);
+    CmLogNote(nhi, "cm.reenum.child.reattached", passed);
     CmLogNote(nhi, "cm.reenum.departures", r->Departures);
     CmLogNote(nhi, "cm.reenum.departures.dropped", r->DeparturesDropped);
     CmLogNote(nhi, "cm.reenum.confirms", r->Confirms);
@@ -3040,6 +3454,7 @@ VOID CmReenumLossEnd(PCM_NHI nhi)
 VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
 {
     PCM_REENUM r;
+    BOOLEAN defer;
 
     r = &nhi->Reenum;
     r->LossDrain = 0;
@@ -3048,9 +3463,34 @@ VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
         return;
     }
     r->WkActive = cmOwnedMask(nhi);
-    CmCfgwkUnavailable(r->Wk, r->WkActive);
+    /* Record 21 section 6.1.2: under the USB4 profile, whose loss has a
+     * recovery, the removal waits until the commit proves the path
+     * behind the member closed. */
+    defer = (BOOLEAN)(nhi->U4On != 0);
+    CmCfgwkUnavailable(r->Wk, r->WkActive, defer);
     r->Unavailable++;
     CmLogNote(nhi, "cm.reenum.9x.unavailable.members", r->WkActive);
+    if (defer) {
+        r->Deferred |= r->WkActive;
+        CmLogNote(nhi, "cm.reenum.9x.unavailable.deferred", r->WkActive);
+    } else {
+        r->Deferred = 0;
+    }
+}
+
+VOID CmReenumLossReturned(PCM_NHI nhi, ULONG members)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    members &= r->Deferred;
+    if (r->Route != CM_ROUTE_CONFIGMG || r->Wk == NULL || members == 0) {
+        return;
+    }
+    CmCfgwkRelease(r->Wk, members);
+    r->Deferred &= ~members;
+    CmLogNote(nhi, "cm.reenum.9x.unavailable.released",
+              (r->Deferred << 16) | (members & 0xFFFFUL));
 }
 /* ---- record 22 section 7.7: the retirement barrier ------------------- */
 
@@ -3092,7 +3532,7 @@ BOOLEAN CmReenumRetire(PCM_NHI nhi, ULONG i, PULONG answers)
         return TRUE;
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
-        CmCfgwkHold(r->Wk, nhi->RecBarred);
+        CmCfgwkHold(r->Wk, CmNhiU4WorkerHold(nhi));
         if ((CmCfgwkEnumBusy(r->Wk) & (1UL << i)) != 0) {
             /* A re-enumeration admitted before the hold has not returned:
              * the removal follows it, never precedes it (asked again at
@@ -3142,11 +3582,13 @@ BOOLEAN CmReenumRetired(PCM_NHI nhi, ULONG i, ULONG answers)
     return FALSE;
 }
 
-VOID CmReenumHold(PCM_NHI nhi, ULONG members)
+BOOLEAN CmReenumHold(PCM_NHI nhi, ULONG members)
 {
     if (nhi->Reenum.Route == CM_ROUTE_CONFIGMG && nhi->Reenum.Wk != NULL) {
         CmCfgwkHold(nhi->Reenum.Wk, members);
+        return TRUE;
     }
+    return FALSE;
 }
 
 BOOLEAN CmReenumSourcesHold(PCM_NHI nhi)

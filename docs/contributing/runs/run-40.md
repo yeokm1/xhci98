@@ -280,7 +280,7 @@ present): 32449 checks, 0 failures.
 
 **The `asm4242` host model** (usb4-emu `main` `ce13e0e`, a descendant of
 the `a50c19e` the handoff names; its `docs/USB4-HOSTS.md` section 5: the
-ASMedia ASM4242 of AM5 X870 boards, router `174c:2428`, from public
+ASMedia ASM4242, router `174c:2428`, from public
 sources only, nothing captured, with its three quirks on). The CSM
 desktop case where this connection manager is the only one. The same
 cases on it, plus the run before: 45469 checks, 0 failures.

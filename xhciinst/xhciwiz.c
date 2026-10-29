@@ -105,8 +105,10 @@
 #define P_PROGRESS          7
 #define P_STEPS             8
 #define P_FINISH            9
-#define P_OTHER             10  /* after P_COMP (record 26 section 6.7.4) */
-#define P_COUNT             11
+#define P_OTHER             10  /* the free set's page, after P_COMP (record
+                                   26 sections 6.7.4 and 6.7.12)          */
+#define P_OTHERNF           11  /* the non-free set's page, after it       */
+#define P_COUNT             12
 
 #define WIZ_PATH            520
 #define WIZ_ROWS            12
@@ -161,6 +163,7 @@ static int storShown;
 static int storOffered;
 static int storChoice;
 static char storNote[600];
+static char storShort[200];     /* the page's one line (task 44.36)        */
 static int compLaidOut;
 
 /* Stor98, the bundled NVMe driver (record 26 sections 5.3 and 5.6): the
@@ -179,6 +182,16 @@ static int vsdChoice;
 static int s98Own = 1;
 static int vsdOwn = 1;
 static int restageSys;          /* Vista and later: the row is on the page */
+/* The box of XHCIPFW.VXD (98 SE, ME) or XHCIPFW.SYS (2000, XP and the
+ * 32-bit Vista and 7, pfwNt), design record 32 sections 8 and 11.3, where
+ * the package carries the file: under the Thunderbolt box, above
+ * Stor98's, its child (the owner, 2026-10-27); pfwOwn its own state, the
+ * engine's default or the user's, kept while the Thunderbolt box is
+ * unticked. */
+static int pfwShown;
+static int pfwNt;
+static int pfwChoice;
+static int pfwOwn;
 static int restageHere;         /* the store trap found: the row open      */
 static int restageChoice;
 static int readDone;            /* the reading's job has ended */
@@ -440,10 +453,16 @@ static unsigned __stdcall job_main(void *arg)
             inst_eng_tb_state(&tbHave, &tbPresent, &tbDefault, &tbInstalled);
             /* Owner, 2026-10-19: unticked unless asked for, a
              * controller found or not (record 26 section 5.3, draft
-             * 16); tbDefault is 0. */
-            tbChoice = tbHave && (opts->Thunderbolt || tbDefault);
-            tbOwn = tbChoice;
-            if (!usbChoice) {
+             * 16). The box's own state is the console's with the USB
+             * drivers in the run, not tbDefault: with them out the
+             * engine's yes is the connection manager alone's, which the
+             * box took back when they were ticked (task 44.79). */
+            tbOwn = inst_tb_box_default(tbHave, tbPresent, opts->Thunderbolt,
+                                        inst_eng_tb_intel());
+            tbChoice = tbOwn;
+            if (!usbChoice && !inst_eng_tb_intel()) {
+                /* Over Intel's Thunderbolt driver the box stays the user's,
+                 * unticked until ticked (record 23 section 8.5.1). */
                 tbChoice = tbHave;
             }
             inst_eng_tb_choose(tbChoice);
@@ -464,8 +483,14 @@ static unsigned __stdcall job_main(void *arg)
                                          opts->NoStor98Vxd, &sh, &op);
                 inst_eng_vsd_choose(vsdChoice);
             }
+            /* The default is the engine's one decision (record 32
+             * section 9 Q9), with its parent ticked (section 11.3). */
+            pfwOwn = inst_eng_pfw_default(&pfwShown, &pfwNt);
+            pfwChoice = pfwShown && tbChoice && pfwOwn;
+            inst_eng_pfw_choose(pfwChoice);
             storShown = inst_eng_stor_state(&storOffered, &storChoice,
                                             storNote, sizeof(storNote));
+            inst_eng_stor_short(storShort, sizeof(storShort));
             /* The other USB drivers' boxes: unticked, but by /free,
              * /nonfree and the /wdm...: switches (record 26 sections 6.7.4
              * and 6.7.11), which the read applied to the engine's choices. */
@@ -680,6 +705,71 @@ static void open_devmgr(HWND owner)
 /* ---- the welcome pages ----------------------------------------------------- */
 
 static void found_fill(HWND dlg);
+static void found_columns(HWND lv);
+static int dlu_y(HWND dlg, int y);
+static int text_h(HDC dc, const char *text, int w, int *wide);
+
+/* The install's Welcome page laid out from its texts (owner, 2026-10-25;
+ * task 44.7): the paragraph, the system's line and the log's line each at
+ * the height it takes, one under another, and the device table given the
+ * room that leaves above the status box, so that it shows four rows at
+ * least (the template's places are the longest paragraph's). The
+ * uninstall's page has its own template and is left as it is. */
+static void welcome_flow(HWND dlg)
+{
+    static const int ids[] = { IDC_TEXT, IDC_SYSTEM, IDC_LOG };
+    HWND list = GetDlgItem(dlg, IDC_LIST);
+    HWND status = GetDlgItem(dlg, IDC_STATUS);
+    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    HFONT old;
+    HDC dc;
+    RECT r;
+    POINT pt;
+    char text[1200];
+    int y;
+    size_t i;
+
+    if (list == NULL || status == NULL || GetDlgItem(dlg, IDC_U_AGREE) != NULL) {
+        return;
+    }
+    dc = GetDC(dlg);
+    if (dc == NULL) {
+        return;
+    }
+    old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
+    GetWindowRect(GetDlgItem(dlg, IDC_TEXT), &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(dlg, &pt);
+    y = pt.y;
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        HWND c = GetDlgItem(dlg, ids[i]);
+        int h;
+        GetWindowRect(c, &r);
+        GetWindowTextA(c, text, sizeof(text));
+        h = text_h(dc, text, r.right - r.left, NULL);
+        if (h < dlu_y(dlg, 8)) {
+            h = dlu_y(dlg, 8);
+        }
+        SetWindowPos(c, NULL, pt.x, y, r.right - r.left, h, SWP_NOZORDER |
+                     SWP_NOACTIVATE);
+        y += h + dlu_y(dlg, i == 0 ? 4 : 2);
+    }
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(dlg, dc);
+    GetWindowRect(status, &r);
+    {
+        POINT st;
+        st.x = r.left;
+        st.y = r.top;
+        ScreenToClient(dlg, &st);
+        GetWindowRect(list, &r);
+        SetWindowPos(list, NULL, pt.x, y, r.right - r.left,
+                     st.y - dlu_y(dlg, 3) - y, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
 
 static void welcome_texts(HWND dlg)
 {
@@ -697,7 +787,7 @@ static void welcome_texts(HWND dlg)
                                              INST_PT_UN_TITLE)
                             : cm ? "xHCI98 Thunderbolt 3 / USB4 connection "
                                    "manager, release"
-                                 : "xHCI98 USB 3.x drivers, release",
+                                 : "xHCI98 USB 3 drivers, release",
               uninstallMode ? "" : XHCI_VER_STR);
     title[sizeof(title) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_TITLE, title);
@@ -719,6 +809,7 @@ static void welcome_texts(HWND dlg)
               "(opened when the installer starts)");
     logLine[sizeof(logLine) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_LOG, logLine);
+    welcome_flow(dlg);
 }
 
 static void welcome_state(HWND dlg)
@@ -774,7 +865,6 @@ static void welcome_state(HWND dlg)
 static void found_fill(HWND dlg)
 {
     HWND lv = GetDlgItem(dlg, IDC_LIST);
-    LVCOLUMNA c;
     LVITEMA it;
     INST_FOUND f;
     int i;
@@ -785,17 +875,7 @@ static void found_fill(HWND dlg)
     }
     if (ListView_GetItemCount(lv) == 0 &&
         Header_GetItemCount(ListView_GetHeader(lv)) == 0) {
-        memset(&c, 0, sizeof(c));
-        c.mask = LVCF_TEXT | LVCF_WIDTH;
-        c.cx = 200;
-        c.pszText = "Device";
-        ListView_InsertColumn(lv, 0, &c);
-        c.cx = 120;
-        c.pszText = "Runs now";
-        ListView_InsertColumn(lv, 1, &c);
-        c.cx = 150;
-        c.pszText = "Will be done";
-        ListView_InsertColumn(lv, 2, &c);
+        found_columns(lv);
     }
     ListView_DeleteAllItems(lv);
     for (i = 0; inst_eng_found(i, &f); i++) {
@@ -817,6 +897,33 @@ static void found_fill(HWND dlg)
     }
 }
 
+/* The device table's three columns across the table's own width, so no
+ * horizontal bar takes a row's room (task 44.7): the device's name the
+ * widest, the action the rest. */
+static void found_columns(HWND lv)
+{
+    LVCOLUMNA c;
+    RECT r;
+    int w;
+
+    GetClientRect(lv, &r);
+    w = r.right - GetSystemMetrics(SM_CXVSCROLL);
+    if (w < 300) {
+        w = 300;
+    }
+    memset(&c, 0, sizeof(c));
+    c.mask = LVCF_TEXT | LVCF_WIDTH;
+    c.cx = w * 44 / 100;
+    c.pszText = "Device";
+    ListView_InsertColumn(lv, 0, &c);
+    c.cx = w * 24 / 100;
+    c.pszText = "Runs now";
+    ListView_InsertColumn(lv, 1, &c);
+    c.cx = w - w * 44 / 100 - w * 24 / 100;
+    c.pszText = "Will be done";
+    ListView_InsertColumn(lv, 2, &c);
+}
+
 /* The plan made again for the choices as they stand (record 26 section
  * 3.3): on the window's own thread, no job running. */
 static void replan(void)
@@ -829,6 +936,7 @@ static void replan(void)
     inst_eng_tb_choose(tbChoice);
     inst_eng_s98_choose(s98Choice);
     inst_eng_vsd_choose(vsdChoice);
+    inst_eng_pfw_choose(pfwChoice);
     inst_eng_stor_choose(storChoice);
     EnterCriticalSection(&textLock);
     tb_clear(&planText);
@@ -848,6 +956,27 @@ static void replan(void)
 }
 
 /* ---- the Components page (record 26 section 5.3) ------------------------- */
+
+/* XHCIPFW's box, under the Thunderbolt one and above Stor98's (record 32
+ * section 11.3, the owner, 2026-10-27): open only while that is ticked,
+ * unticked and greyed without it. */
+static void comp_pfw_sync(HWND dlg)
+{
+    int open = pfwShown && IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
+
+    if (!open) {
+        CheckDlgButton(dlg, IDC_C_PFW, BST_UNCHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_C_PFW), open);
+}
+
+/* Its own state with its parent ticked, unticked without it. */
+static void comp_pfw_follow(HWND dlg)
+{
+    CheckDlgButton(dlg, IDC_C_PFW, IsDlgButtonChecked(dlg, IDC_C_TB) ==
+                   BST_CHECKED && pfwOwn ? BST_CHECKED : BST_UNCHECKED);
+    comp_pfw_sync(dlg);
+}
 
 /* Stor98's box, under the Thunderbolt one: open only while that is
  * ticked; unticking it unticks Stor98 (owner, 2026-10-19). */
@@ -873,6 +1002,7 @@ static void comp_s98_sync(HWND dlg)
         CheckDlgButton(dlg, IDC_C_VSD, BST_UNCHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_VSD), vopen);
+    comp_pfw_sync(dlg);
 }
 
 /* Ticked whenever Stor98 is ticked (owner, 2026-10-22), unless the user
@@ -913,15 +1043,19 @@ static void comp_usb_state(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_DRIVERS_T, inst_page_text(
                     usbNotHere ? INST_PT_DRIVERS_T8 :
                     usb ? INST_PT_DRIVERS_T : INST_PT_DRIVERS_OFF));
-    if (!usb && tbHave) {
+    if (!usb && tbHave && !inst_eng_tb_intel()) {
         /* Locked on: Stor98 follows its parent here too (owner,
-         * 2026-10-19), as on a click of the Thunderbolt box. */
+         * 2026-10-19), as on a click of the Thunderbolt box. Not over
+         * Intel's Thunderbolt driver, where the box stays the user's
+         * (record 23 section 8.5.1). */
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
+        CheckDlgButton(dlg, IDC_C_PFW, pfwOwn ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(dlg, IDC_C_S98, s98Own ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(dlg, IDC_C_VSD, s98Own && vsdOwn ? BST_CHECKED :
                                                          BST_UNCHECKED);
     }
-    EnableWindow(GetDlgItem(dlg, IDC_C_TB), usb && tbHave);
+    EnableWindow(GetDlgItem(dlg, IDC_C_TB), (usb || inst_eng_tb_intel()) &&
+                                            tbHave);
     comp_s98_sync(dlg);
 }
 
@@ -929,7 +1063,9 @@ static void comp_usb_click(HWND dlg)
 {
     int usb = IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED;
 
-    if (!usb) {
+    if (inst_eng_tb_intel()) {
+        /* The box is the user's whatever the USB drivers' box does. */
+    } else if (!usb) {
         tbOwn = IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
     } else {
         CheckDlgButton(dlg, IDC_C_TB, tbOwn ? BST_CHECKED : BST_UNCHECKED);
@@ -938,11 +1074,12 @@ static void comp_usb_click(HWND dlg)
 }
 
 static int dlu_y(HWND dlg, int y);
+static int text_h(HDC dc, const char *text, int w, int *wide);
 
 /* A read-only edit box's height for a number of lines of its font: the
  * lines, its frame (the control's window less its client height) and
  * 2 dialog units for the edit control's own margins (record 26 section
- * 5.4: the Settings note, and the Components page's storage box). */
+ * 5.4: the Settings note). */
 static int box_lines_h(HWND dlg, int id, int lines)
 {
     HWND box = GetDlgItem(dlg, id);
@@ -978,6 +1115,35 @@ static void comp_move(HWND dlg, int id, int dy)
     SetWindowPos(h, NULL, pt.x, pt.y + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 }
 
+/* The storage row's words: its sentence, then the detection's line. */
+static void comp_stor_text(const char *note, char *out, size_t cap)
+{
+    _snprintf(out, cap - 1, "%s\r\n%s", inst_page_text(INST_PT_STOR_T),
+              note);
+    out[cap - 1] = '\0';
+}
+
+/* Their height in pixels at the storage control's width and font. */
+static int comp_stor_h(HWND dlg)
+{
+    HWND box = GetDlgItem(dlg, IDC_C_STOR_T);
+    HFONT f = (HFONT)SendMessageA(box, WM_GETFONT, 0, 0);
+    HDC dc = GetDC(box);
+    HFONT old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+    char text[1200];
+    RECT cli;
+    int h;
+
+    GetClientRect(box, &cli);
+    comp_stor_text(storShort, text, sizeof(text));
+    h = text_h(dc, text, cli.right, NULL);
+    if (old != NULL) {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(box, dc);
+    return h;
+}
+
 /* The page as 98 SE shows it (record 26 section 5.3, draft 17): the USB
  * storage drivers' row under the UAS box, in the place the locked USB
  * drivers' sentence leaves, and the rows below it moved down; on every
@@ -985,27 +1151,34 @@ static void comp_move(HWND dlg, int id, int dy)
  * "Replace the stored build" box on Vista and later (never with the
  * storage row), open only where the store trap was found: elsewhere the
  * folder's line and the buttons take its place (record 26 section 5.0,
- * draft 35). The storage row's box shows three whole lines of its font at
- * least (owner, 2026-10-24), and more where its template's room holds
- * more: its height is measured (box_lines_h), never past the room unless
- * three lines need it, when the rows below move down by the difference
- * too. The rows below move down by a little less each, the page keeping
- * its height: each pair is a control and its move, in dialog units. */
+ * draft 35). The storage row's words are shown whole, never in a box that
+ * scrolls (owner, 2026-10-25; task 44.36): the sentence and the
+ * detection's line at the height they take at the control's width, and
+ * the rows below moved by its difference from the template's 31 units,
+ * up as well as down. The rows below move down by a little less each,
+ * the page keeping its height: each pair is a control and its move, in
+ * dialog units. */
 static void comp_layout(HWND dlg)
 {
     static const int below[][2] = {
-        { IDC_C_TB, 22 }, { IDC_C_TB_T, 22 }, { IDC_C_S98, 20 },
-        { IDC_C_S98_T, 20 }, { IDC_C_VSD, 20 }, { IDC_C_TRAY, 19 },
-        { IDC_C_FAST, 19 }, { IDC_C_RESTAGE, 19 }, { IDC_C_DIRLINE, 18 },
-        { IDC_C_SETTINGS, 17 }, { IDC_C_FOLDER, 17 }
+        { IDC_C_TB, 22 }, { IDC_C_TB_T, 22 }, { IDC_C_PFW, 21 },
+        { IDC_C_S98, 20 }, { IDC_C_S98_T, 20 }, { IDC_C_VSD, 20 },
+        { IDC_C_TRAY, 19 }, { IDC_C_FAST, 19 }, { IDC_C_RESTAGE, 19 },
+        { IDC_C_SETTINGS, 20 }, { IDC_C_FOLDER, 20 }, { IDC_C_DIRLINE, 20 }
     };
-    static const int last[] = { IDC_C_DIRLINE, IDC_C_SETTINGS, IDC_C_FOLDER };
+    static const int last[] = {
+        IDC_C_SETTINGS, IDC_C_FOLDER, IDC_C_DIRLINE
+    };
+    /* The rows under XHCIPFW's, 11 units higher where it is not shown. */
+    static const int afterPfw[] = {
+        IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_C_TRAY, IDC_C_FAST,
+        IDC_C_RESTAGE, IDC_C_DIRLINE, IDC_C_SETTINGS, IDC_C_FOLDER
+    };
     RECT r;
     HWND h;
     POINT pt;
     int up;
     int room;
-    int lines;
     int more;
     size_t i;
 
@@ -1013,6 +1186,21 @@ static void comp_layout(HWND dlg)
         return;
     }
     compLaidOut = 1;
+    /* XHCIPFW's row (record 32 section 11.3) under the Thunderbolt box's
+     * words: where it is not shown, the rows below take its place. The
+     * folder's line beside the buttons, right of Change folder, gave it
+     * the room (the page stays 210 units high: 640 by 480 on 98 SE). */
+    ShowWindow(GetDlgItem(dlg, IDC_C_PFW), pfwShown ? SW_SHOW : SW_HIDE);
+    if (!pfwShown) {
+        r.left = 0;
+        r.top = 0;
+        r.right = 0;
+        r.bottom = 11;
+        MapDialogRect(dlg, &r);
+        for (i = 0; i < sizeof(afterPfw) / sizeof(afterPfw[0]); i++) {
+            comp_move(dlg, afterPfw[i], -r.bottom);
+        }
+    }
     if (!restageSys) {
         r.left = 0;
         r.top = 0;
@@ -1057,21 +1245,12 @@ static void comp_layout(HWND dlg)
     pt.y = r.top;
     ScreenToClient(dlg, &pt);
     SetWindowPos(h, NULL, pt.x, pt.y - up, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-    /* The storage box: the most whole lines its room holds, three at
-     * least. */
     h = GetDlgItem(dlg, IDC_C_STOR_T);
     GetWindowRect(h, &r);
     room = r.bottom - r.top;
-    lines = 3;
-    while (lines < 20 && box_lines_h(dlg, IDC_C_STOR_T, lines + 1) <= room) {
-        lines++;
-    }
-    more = box_lines_h(dlg, IDC_C_STOR_T, lines) - room;
+    more = comp_stor_h(dlg) - room;
     SetWindowPos(h, NULL, 0, 0, r.right - r.left, room + more,
                  SWP_NOMOVE | SWP_NOZORDER);
-    if (more < 0) {
-        more = 0;
-    }
     for (i = 0; i < sizeof(below) / sizeof(below[0]); i++) {
         r.left = 0;
         r.top = 0;
@@ -1087,7 +1266,7 @@ static void comp_dirline(HWND dlg)
 {
     char text[WIZ_PATH + 32];
 
-    _snprintf(text, sizeof(text) - 1, "Tools folder: %s", dirChoice);
+    _snprintf(text, sizeof(text) - 1, "Install folder: %s", dirChoice);
     text[sizeof(text) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_C_DIRLINE, text);
 }
@@ -1099,9 +1278,7 @@ static void comp_fill(HWND dlg)
     comp_layout(dlg);
     if (storShown) {
         SetDlgItemTextA(dlg, IDC_C_STOR, inst_page_text(INST_PT_STOR));
-        _snprintf(text, sizeof(text) - 1, "%s\r\n%s",
-                  inst_page_text(INST_PT_STOR_T), storNote);
-        text[sizeof(text) - 1] = '\0';
+        comp_stor_text(storShort, text, sizeof(text));
         SetDlgItemTextA(dlg, IDC_C_STOR_T, text);
         CheckDlgButton(dlg, IDC_C_STOR, storOffered && storChoice ?
                        BST_CHECKED : BST_UNCHECKED);
@@ -1113,7 +1290,9 @@ static void comp_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_UAS, inst_page_text(INST_PT_UAS));
     SetDlgItemTextA(dlg, IDC_C_UAS_T, inst_page_text(INST_PT_UAS_T));
     SetDlgItemTextA(dlg, IDC_C_TB, inst_page_text(INST_PT_TB));
-    if (tbPresent) {
+    if (tbPresent && inst_eng_tb_intel()) {
+        SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_INTEL));
+    } else if (tbPresent) {
         char found[300];
         inst_tb_found_text(found, sizeof(found), inst_eng_tb_name());
         SetDlgItemTextA(dlg, IDC_C_TB_T, found);
@@ -1122,6 +1301,10 @@ static void comp_fill(HWND dlg)
     }
     CheckDlgButton(dlg, IDC_C_TB, tbChoice ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave);
+    /* Named by its file, per system (the owner, 2026-10-27). */
+    SetDlgItemTextA(dlg, IDC_C_PFW, inst_page_text(pfwNt ? INST_PT_PFW_SYS :
+                                                   INST_PT_PFW));
+    CheckDlgButton(dlg, IDC_C_PFW, pfwChoice ? BST_CHECKED : BST_UNCHECKED);
     comp_usb_state(dlg);
     SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
     SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
@@ -1247,13 +1430,15 @@ static void comp_take(HWND dlg)
     int stor;
     int vsd;
     int rs;
+    int pfw;
 
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
     fastChoice = IsDlgButtonChecked(dlg, IDC_C_FAST) == BST_CHECKED;
     usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
                      : usbChoice;
-    tb = tbHave && (!usb || IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
-    if (usb) {
+    tb = tbHave && ((!usb && !inst_eng_tb_intel()) ||
+                    IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
+    if (usb || inst_eng_tb_intel()) {
         tbOwn = tb;
     }
     s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
@@ -1272,6 +1457,12 @@ static void comp_take(HWND dlg)
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
     rs = restageHere && IsDlgButtonChecked(dlg, IDC_C_RESTAGE) == BST_CHECKED;
+    pfw = pfwShown && tb &&
+          IsDlgButtonChecked(dlg, IDC_C_PFW) == BST_CHECKED;
+    if (pfw != pfwChoice) {
+        pfwChoice = pfw;
+        inst_eng_pfw_choose(pfw);
+    }
     if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
         uas != uasChoice || stor != storChoice || vsd != vsdChoice ||
         rs != restageChoice) {
@@ -1313,12 +1504,21 @@ static int comp_leave(HWND dlg)
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
                      : usbChoice;
-    tb = tbHave && (!usb || IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
+    tb = tbHave && ((!usb && !inst_eng_tb_intel()) ||
+                    IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
     s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
           IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
-    if (inst_eng_comp_warn(usb, stor, s98, checked, warn,
+    why = inst_eng_comp_refusal(usb, tb);
+    if (why != NULL) {
+        /* Record 26 section 5.3.3: Secure Boot on refuses these boxes; the
+         * page stays as it was. */
+        MessageBoxA(GetParent(dlg), why, "xHCI98 Setup", MB_OK |
+                    MB_ICONSTOP);
+        return 0;
+    }
+    if (inst_eng_comp_warn(usb, stor, s98, tb, checked, warn,
                            sizeof(warn)) != 0) {
         _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays "
                   "on this page to change the choice.", warn);
@@ -1329,6 +1529,16 @@ static int comp_leave(HWND dlg)
         }
     }
     comp_take(dlg);
+    if (planCode >= 0) {
+        /* The plan made for these boxes refuses the run (record 26 section
+         * 5.3.3: the x64 gate with the Thunderbolt box ticked over Intel's
+         * driver, say): said here, the page kept to change the choice. */
+        why = inst_eng_plan_refusal();
+        MessageBoxA(GetParent(dlg), why != NULL ? why : "The installer "
+                    "cannot go on with this choice; the log says why.",
+                    "xHCI98 Setup", MB_OK | MB_ICONSTOP);
+        return 0;
+    }
     return 1;
 }
 
@@ -1344,6 +1554,10 @@ static int oth_id(int set, int what)
 {
     return IDC_O_BASE + IDC_O_STRIDE * set + what;
 }
+
+/* The set the page shown holds (record 26 section 6.7.12, task 44.10: one
+ * page per set, both from IDD_OTHER, the other set's controls hidden). */
+static int othPageSet = INST_SET_FREE;
 
 /* The packages' list: a child dialog in IDC_O_AREA's place, with a heading
  * per set and class and one plain check box per package for this system,
@@ -1770,6 +1984,9 @@ static void othlist_build(HWND page)
     old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
     othBoxH = text_h(dc, "Xg", w, NULL) + 2;
     for (set = 0; set < INST_SET_COUNT; set++) {
+        if (set != othPageSet) {
+            continue;
+        }
         for (h = 0; h < instOtherHeadingCount; h++) {
             INST_OTHPKG_VIEW v;
             int any = 0;
@@ -1844,7 +2061,7 @@ static void othlist_build(HWND page)
     if (y == 0) {
         /* On 98 SE and ME no package is offered: the sets are copied only,
          * and the line says where to point the hardware wizard. */
-        const char *none = inst_eng_other_none_text();
+        const char *none = inst_eng_other_none_text(othPageSet);
         int nh = text_h(dc, none, w, NULL) + 2;
         int vsdShown;
         int sys9x;
@@ -1909,6 +2126,9 @@ static void oth_flow(HWND dlg)
         HWND ln = GetDlgItem(dlg, oth_id(set, IDC_O_LINE));
         /* Alone, the line has the whole row's place, so all of it shows. */
         int most = dlu_y(dlg, 60);
+        if (set != othPageSet) {
+            continue;
+        }
         if (GetWindowLongA(box, GWL_STYLE) & WS_VISIBLE) {
             most = dlu_y(dlg, 16);
             SetWindowPos(box, NULL, x, y, w, dlu_y(dlg, 10), SWP_NOZORDER |
@@ -1969,19 +2189,29 @@ static void oth_fill(HWND dlg)
         RECT r;
 
         inst_eng_other_state(set, &state, &forThis, &inc, &stage);
-        inst_eng_other_texts(set, dirChoice[0] ? dirChoice : "the tools folder",
+        if (set != othPageSet) {
+            /* The other set's page holds it (section 6.7.12). */
+            for (w = IDC_O_BOX; w <= IDC_O_LINE; w++) {
+                ShowWindow(GetDlgItem(dlg, oth_id(set, w)), SW_HIDE);
+            }
+            continue;
+        }
+        inst_eng_other_texts(set,
+                             dirChoice[0] ? dirChoice : "the install folder",
                              sentence, sizeof(sentence), line, sizeof(line));
         shown = state == INST_OTHER_CARRIED;
         SetDlgItemTextA(dlg, oth_id(set, IDC_O_BOX), inst_other_label(set));
         SetDlgItemTextA(dlg, oth_id(set, IDC_O_TEXT), sentence);
         SetDlgItemTextA(dlg, oth_id(set, IDC_O_LINE), line);
+        ShowWindow(GetDlgItem(dlg, oth_id(set, IDC_O_LINE)), SW_SHOW);
         for (w = IDC_O_BOX; w <= IDC_O_TEXT; w++) {
             ShowWindow(GetDlgItem(dlg, oth_id(set, w)), shown ? SW_SHOW
                                                               : SW_HIDE);
         }
-        /* Absent or not this release's, the line takes the row's place. */
+        /* Absent or not this release's, the line takes the row's place;
+         * either set's row at the page's top (section 6.7.12). */
         r.left = 8;
-        r.top = set == INST_SET_FREE ? (shown ? 46 : 2) : (shown ? 107 : 63);
+        r.top = shown ? 46 : 2;
         r.right = 8 + 284;
         r.bottom = r.top + 16;
         top = r;
@@ -2005,7 +2235,7 @@ static int oth_leave(HWND dlg)
     char box[2200];
 
     (void)dlg;
-    inst_eng_other_warnings(warn, sizeof(warn));
+    inst_eng_other_warnings_set(othPageSet, warn, sizeof(warn));
     if (warn[0] != '\0') {
         _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays on "
                   "this page to change the choice.", warn);
@@ -3151,8 +3381,8 @@ static int s98_adv_take(HWND dlg)
         char msg[160];
         _snprintf(msg, sizeof(msg) - 1, "%s: %s.", text, why);
         msg[sizeof(msg) - 1] = '\0';
-        MessageBoxA(dlg, msg, instS98Values[i].KeyNt, MB_OK |
-                    MB_ICONWARNING);
+        MessageBoxA(dlg, msg, is_9x() ? instS98Values[i].Name9x :
+                    instS98Values[i].KeyNt, MB_OK | MB_ICONWARNING);
         return 0;
     } else {
         s98AdvSet[s98AdvCur] = 1;
@@ -3625,7 +3855,7 @@ static void summary_fill(HWND dlg)
              * 5.0): each one's first sentence. */
             char warn[2048];
             if (inst_eng_comp_warn(usbChoice, storShown && storChoice,
-                                   s98Choice, dirChoice, warn,
+                                   s98Choice, tbChoice, dirChoice, warn,
                                    sizeof(warn)) != 0) {
                 first_sentences(&t, warn);
                 tb_add(&t, "\n");
@@ -3680,6 +3910,16 @@ static void summary_fill(HWND dlg)
             const char *vl = inst_eng_vsd_plan();
             if (vl != NULL) {
                 _snprintf(line, sizeof(line) - 1, "- %s\n", vl);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
+            }
+        }
+        {
+            /* Also where the box is not shown: on 8, 8.1 and 10 x86 an
+             * earlier XHCIPFW.SYS of this installer's is removed. */
+            const char *pl = inst_eng_pfw_plan();
+            if (pl != NULL) {
+                _snprintf(line, sizeof(line) - 1, "- %s\n", pl);
                 line[sizeof(line) - 1] = '\0';
                 tb_add(&t, line);
             }
@@ -3770,7 +4010,7 @@ static void summary_fill(HWND dlg)
                 tb_add(&t, line);
             }
         }
-        _snprintf(line, sizeof(line) - 1, "\nThe tools folder: %s\n",
+        _snprintf(line, sizeof(line) - 1, "\nThe install folder: %s\n",
                   dirChoice);
         line[sizeof(line) - 1] = '\0';
         tb_add(&t, line);
@@ -3783,7 +4023,7 @@ static void summary_fill(HWND dlg)
         if (is_9x()) {
             tb_add(&t, "\nWindows' own wizards may open for the devices the "
                    "controller shows after its\nrestart: answer them (Next, "
-                   "Next, Finish), and type the tools folder where\nthey ask "
+                   "Next, Finish), and type the install folder where\nthey ask "
                    "for a folder or for the \"xhci98 xHCI Host Controller "
                    "Disk\". Finish\neach one, even when it finds no driver; "
                    "never cancel one (a cancelled\nwizard hides its device "
@@ -4023,6 +4263,20 @@ static int page_skipped(int page)
     int idx[WIZ_ROWS];
 
     switch (page) {
+    case P_OTHER:
+    case P_OTHERNF:
+        /* Shown when the download carries the set's folder (record 26
+         * section 6.7.12): carried, or there and not this release's. */
+        {
+            int state = INST_OTHER_ABSENT;
+            int forThis = 0;
+            int inc = 0;
+            int stage = 0;
+            inst_eng_other_state(page == P_OTHER ? INST_SET_FREE :
+                                 INST_SET_NONFREE, &state, &forThis, &inc,
+                                 &stage);
+            return state == INST_OTHER_ABSENT;
+        }
     case P_USB:
         return rows_for(P_USB, 0, idx, WIZ_ROWS) == 0 &&
                rows_for(P_USB, 1, idx, WIZ_ROWS) == 0;
@@ -4119,6 +4373,13 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                  * state with it, unticked without it (record 26 section
                  * 5.0, draft 35). */
                 comp_s98_follow(dlg);
+                comp_pfw_follow(dlg);
+            }
+            return TRUE;
+        case IDC_C_PFW:
+            if (HIWORD(wp) == BN_CLICKED &&
+                IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED) {
+                pfwOwn = IsDlgButtonChecked(dlg, IDC_C_PFW) == BST_CHECKED;
             }
             return TRUE;
         case IDC_C_S98:
@@ -4210,6 +4471,10 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
             case P_OTHER:
+            case P_OTHERNF:
+                othPageSet = page == P_OTHER ? INST_SET_FREE :
+                                               INST_SET_NONFREE;
+                inst_eng_other_dir(dirChoice);
                 oth_fill(dlg);
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
@@ -4274,7 +4539,7 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 inst_eng_s98_file_ok(ok);
             }
             if ((page == P_COMP && !comp_leave(dlg)) ||
-                (page == P_OTHER && !oth_leave(dlg)) ||
+                ((page == P_OTHER || page == P_OTHERNF) && !oth_leave(dlg)) ||
                 ((page == P_USB || page == P_TBS) &&
                  !settings_leave(dlg, page))) {
                 SET_RESULT(dlg, -1);
@@ -4440,19 +4705,20 @@ static int run_wizard(void)
     /* Record 26 section 5.0: Welcome, Components, Summary, Progress,
      * (Steps), Finish; the settings in the Settings dialog. */
     static const int order[] = {
-        P_WELCOME, P_COMP, P_OTHER, P_SUMMARY, P_PROGRESS, P_STEPS,
-        P_FINISH
+        P_WELCOME, P_COMP, P_OTHER, P_OTHERNF, P_SUMMARY, P_PROGRESS,
+        P_STEPS, P_FINISH
     };
     static const int uorder[] = { P_WELCOME, P_SUMMARY, P_PROGRESS, P_FINISH };
     static const int tmpl[P_COUNT] = {
         IDD_WELCOME, IDD_FOUND, IDD_COMPONENTS, IDD_SETTINGS, IDD_SETTINGS,
         IDD_SETTINGS, IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH,
-        IDD_OTHER
+        IDD_OTHER, IDD_OTHER
     };
     static const char *const title[P_COUNT] = {
         "Welcome", "What was found", "Components", "USB settings",
         "Thunderbolt settings", "Stor98 settings", "Summary", "Progress",
-        "Steps left for you", "Finish", "Other USB drivers"
+        "Steps left for you", "Finish", "Free USB drivers",
+        "Non-free USB drivers"
     };
     PROPSHEETPAGEA pg[P_COUNT];
     HPROPSHEETPAGE hp[P_COUNT];
@@ -4666,15 +4932,209 @@ static void st_box_lines(HWND box, int lines, const char *what)
     st(fmt.bottom - fmt.top >= lines * tm.tmHeight, msg);
 }
 
+/* The install's Welcome page laid out by welcome_flow with its longest
+ * paragraph and a two-line system line (task 44.7): the device table
+ * holds four whole rows at least, under its header, with no row of it
+ * lost to a horizontal bar. */
+static void st_welcome_rows(HWND parent)
+{
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_WELCOME), parent,
+                                st_proc, 0);
+    HWND lv;
+    LVITEMA it;
+    RECT row;
+    RECT cli;
+    char msg[200];
+    int i;
+
+    st(d != NULL, "the welcome, laid out");
+    if (d == NULL) {
+        return;
+    }
+    SetDlgItemTextA(d, IDC_TEXT, inst_page_text(INST_PT_WELCOME_CM));
+    SetDlgItemTextA(d, IDC_SYSTEM, "This computer: Windows 98 SE (4.10.2222 "
+                    "A), 32-bit; the longest line this page gives a system, "
+                    "and a second line.");
+    SetDlgItemTextA(d, IDC_LOG, "The log: C:\\XHCIINST.LOG");
+    welcome_flow(d);
+    lv = GetDlgItem(d, IDC_LIST);
+    found_columns(lv);
+    for (i = 0; i < 6; i++) {
+        memset(&it, 0, sizeof(it));
+        it.mask = LVIF_TEXT;
+        it.iItem = i;
+        it.pszText = "xHCI98 USB 3 Controller (Intel Alpine Ridge)";
+        ListView_InsertItem(lv, &it);
+        ListView_SetItemText(lv, i, 1, "xhci98 3.2.0.0");
+        ListView_SetItemText(lv, i, 2, "update (an older release)");
+    }
+    GetClientRect(lv, &cli);
+    ListView_GetItemRect(lv, 3, &row, LVIR_BOUNDS);
+    _snprintf(msg, sizeof(msg) - 1, "the welcome: the fourth row ends at %ld, "
+              "the table's client at %ld", (long)row.bottom, (long)cli.bottom);
+    msg[sizeof(msg) - 1] = '\0';
+    st(row.bottom > 0 && row.bottom <= cli.bottom, msg);
+    DestroyWindow(d);
+}
+
 /* The Components page as 98 SE lays it out (comp_layout, record 26
  * section 5.3, draft 17): the rows one below another, none overlapping,
- * the last inside the page. */
+ * the last inside the page, and the storage row's words whole in their
+ * control (task 44.36), with each of the longest notes the detection
+ * gives: every file found with NUSB's sentence, some found with the lone
+ * USBSTOR.INF's sentence, and the download's files not this release's:
+ * since task 44.36 the page's line is inst_stor_short_text's, each of its
+ * states laid out in turn. */
+static void st_comp_layout_note(HWND parent, const char *note,
+                                const char *what);
+static RECT st_rect(HWND d, HWND c);
+
+/* The folder's line beside the buttons: right of Change folder, within its
+ * height, on the page. */
+static int st_comp_dirline_ok(HWND d, const RECT *page)
+{
+    RECT l = st_rect(d, GetDlgItem(d, IDC_C_DIRLINE));
+    RECT fo = st_rect(d, GetDlgItem(d, IDC_C_FOLDER));
+
+    return l.left >= fo.right && l.top >= fo.top && l.bottom <= fo.bottom &&
+           l.right <= page->right && l.bottom <= page->bottom;
+}
+
+/* The Components page as Vista and later lay it out (no storage row, the
+ * "Replace the stored build" row shown), with XHCIPFW.SYS's box (a 32-bit
+ * system) and without it (a 64-bit one, whose rows below move up into its
+ * place): the rows one below another, none overlapping, the last inside
+ * the page (record 32 section 11.3). */
+static void st_comp_layout_nt(HWND parent)
+{
+    static const int order[] = {
+        IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_UAS, IDC_C_UAS_T, IDC_C_TB,
+        IDC_C_TB_T, IDC_C_PFW, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD,
+        IDC_C_TRAY, IDC_C_FAST, IDC_C_RESTAGE, IDC_C_SETTINGS
+    };
+    int savedStor = storShown;
+    int savedRs = restageSys;
+    int savedPfw = pfwShown;
+    int shown;
+
+    for (shown = 0; shown <= 1; shown++) {
+        HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
+                                    parent, st_proc, 0);
+        RECT prev;
+        RECT r;
+        RECT page;
+        RECT gap;
+        size_t i;
+        int ok = 1;
+        int first = 1;
+
+        st(d != NULL, "the components, as Vista and later lay them out");
+        if (d == NULL) {
+            break;
+        }
+        storShown = 0;
+        restageSys = 1;
+        pfwShown = shown;
+        compLaidOut = 0;
+        comp_layout(d);
+        GetClientRect(d, &page);
+        /* More than 6 units between Stor98's box and the words above: a
+         * row left empty. */
+        gap.left = 0;
+        gap.top = 0;
+        gap.right = 0;
+        gap.bottom = 6;
+        MapDialogRect(d, &gap);
+        memset(&prev, 0, sizeof(prev));
+        for (i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+            if (order[i] == IDC_C_PFW && !shown) {
+                continue;
+            }
+            r = st_rect(d, GetDlgItem(d, order[i]));
+            if ((!first && r.top < prev.bottom) || r.bottom > page.bottom) {
+                printf("components on Vista and later (XHCIPFW.SYS's box %s):"
+                       " control %d at %ld..%ld, the one before ends at %ld, "
+                       "the page at %ld\n", shown ? "shown" : "hidden",
+                       order[i], (long)r.top, (long)r.bottom,
+                       (long)prev.bottom, (long)page.bottom);
+                ok = 0;
+            }
+            if (order[i] == IDC_C_S98 && !shown &&
+                r.top - prev.bottom > gap.bottom) {
+                printf("components on Vista and later (XHCIPFW.SYS's box "
+                       "hidden): Stor98's box at %ld, the words above end at "
+                       "%ld: its row left empty\n", (long)r.top,
+                       (long)prev.bottom);
+                ok = 0;
+            }
+            prev = r;
+            first = 0;
+        }
+        if (!st_comp_dirline_ok(d, &page)) {
+            printf("components on Vista and later (XHCIPFW.SYS's box %s): "
+                   "the folder's line not beside the buttons\n",
+                   shown ? "shown" : "hidden");
+            ok = 0;
+        }
+        st(ok, shown ? "the components on Vista and later, XHCIPFW.SYS's "
+                       "box shown: no row over another, all on the page" :
+                       "the components on Vista and later, no XHCIPFW.SYS "
+                       "box: no row over another, none left empty");
+        DestroyWindow(d);
+    }
+    storShown = savedStor;
+    restageSys = savedRs;
+    pfwShown = savedPfw;
+    compLaidOut = 0;
+}
+
 static void st_comp_layout(HWND parent)
+{
+    static const int kinds[][2] = {
+        /* found, own, of the seven */
+        { 0, 0 }, { 7, 0 }, { 3, 0 }, { 0, 7 }, { 0, 3 }
+    };
+    int st7[INST_STOR_COUNT];
+    char note[200];
+    char last[20][200];
+    int seen = 0;
+    int k;
+    int i;
+    int pack;
+    int nusb;
+    int half;
+
+    for (k = 0; k < (int)(sizeof(kinds) / sizeof(kinds[0])); k++) {
+        for (i = 0; i < INST_STOR_COUNT; i++) {
+            st7[i] = i < kinds[k][0] ? INST_STOR_SAME :
+                     i < kinds[k][1] ? INST_STOR_OWN : INST_STOR_ABSENT;
+        }
+        for (pack = -1; pack <= 1; pack++) {
+            for (nusb = 0; nusb <= 1; nusb++) {
+                for (half = 0; half <= 3; half++) {
+                    int j;
+                    inst_stor_short_text(note, sizeof(note), pack, st7, nusb,
+                                         half > 1, half & 1);
+                    for (j = 0; j < seen && strcmp(last[j], note) != 0; j++) {
+                    }
+                    if (j < seen || seen >= 20) {
+                        continue;
+                    }
+                    inst_copy(last[seen++], note, sizeof(last[0]));
+                    st_comp_layout_note(parent, note, note);
+                }
+            }
+        }
+    }
+}
+
+static void st_comp_layout_note(HWND parent, const char *note,
+                                const char *what)
 {
     static const int order[] = {
         IDC_C_DRIVERS, IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR, IDC_C_STOR_T,
-        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_C_TRAY,
-        IDC_C_FAST, IDC_C_DIRLINE, IDC_C_SETTINGS
+        IDC_C_TB, IDC_C_TB_T, IDC_C_PFW, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD,
+        IDC_C_TRAY, IDC_C_FAST, IDC_C_SETTINGS
     };
     HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
                                 parent, st_proc, 0);
@@ -4685,12 +5145,21 @@ static void st_comp_layout(HWND parent)
     size_t i;
     int ok = 1;
     int saved = storShown;
+    int savedRs = restageSys;
+    int savedPfw = pfwShown;
+    char savedNote[sizeof(storShort)];
+    int need;
 
     st(d != NULL, "the components, as 98 SE lays them out");
     if (d == NULL) {
         return;
     }
+    inst_copy(savedNote, storShort, sizeof(savedNote));
+    inst_copy(storShort, note, sizeof(storShort));
     storShown = 1;
+    /* As 98 SE has it: no restage row, XHCIPFW.VXD's box shown. */
+    restageSys = 0;
+    pfwShown = 1;
     compLaidOut = 0;
     comp_layout(d);
     GetClientRect(d, &page);
@@ -4703,18 +5172,55 @@ static void st_comp_layout(HWND parent)
         r.bottom = pt.y + (r.bottom - r.top);
         r.top = pt.y;
         if ((i > 0 && r.top < prev.bottom) || r.bottom > page.bottom) {
-            printf("components on 98 SE: control %d at %ld..%ld, the one "
-                   "before ends at %ld, the page at %ld\n", order[i],
-                   (long)r.top, (long)r.bottom, (long)prev.bottom,
+            printf("components on 98 SE (%s): control %d at %ld..%ld, the "
+                   "one before ends at %ld, the page at %ld\n", what,
+                   order[i], (long)r.top, (long)r.bottom, (long)prev.bottom,
                    (long)page.bottom);
             ok = 0;
         }
         prev = r;
     }
     st(ok, "the components on 98 SE: no row over another, all on the page");
-    st_box_lines(GetDlgItem(d, IDC_C_STOR_T), 3, "the components on 98 SE: "
-                 "the storage box");
+    {
+        /* XHCIPFW.VXD's box under the Thunderbolt box's words, above
+         * Stor98's, indented as Stor98's is, its parent's child (record 32
+         * section 11.3; the order above holds the rows). */
+        RECT p = st_rect(d, GetDlgItem(d, IDC_C_PFW));
+        RECT s = st_rect(d, GetDlgItem(d, IDC_C_S98));
+        RECT t = st_rect(d, GetDlgItem(d, IDC_C_TB));
+        if (p.left != s.left || p.left <= t.left || p.right > page.right) {
+            printf("components on 98 SE (%s): XHCIPFW.VXD's box at "
+                   "%ld,%ld..%ld,%ld, Stor98's at %ld, the Thunderbolt "
+                   "box's at %ld, the page %ld\n", what, (long)p.left,
+                   (long)p.top, (long)p.right, (long)p.bottom, (long)s.left,
+                   (long)t.left, (long)page.right);
+            st(0, "the components on 98 SE: XHCIPFW.VXD's box indented "
+               "under the Thunderbolt box");
+        }
+        if (!st_comp_dirline_ok(d, &page)) {
+            printf("components on 98 SE (%s): the folder's line not beside "
+                   "the buttons\n", what);
+            st(0, "the components on 98 SE: the folder's line right of "
+               "Change folder, on the page");
+        }
+    }
+    {
+        HWND box = GetDlgItem(d, IDC_C_STOR_T);
+        RECT cli;
+        GetClientRect(box, &cli);
+        need = comp_stor_h(d);
+        if (need > cli.bottom || need <= 0 ||
+            (GetWindowLongA(box, GWL_STYLE) & WS_VSCROLL) != 0) {
+            printf("components on 98 SE (%s): the storage words take %d px, "
+                   "the control holds %ld\n", what, need, (long)cli.bottom);
+            st(0, "the components on 98 SE: the storage words whole, with "
+               "no scroll bar");
+        }
+    }
+    inst_copy(storShort, savedNote, sizeof(storShort));
     storShown = saved;
+    restageSys = savedRs;
+    pfwShown = savedPfw;
     compLaidOut = 0;
     DestroyWindow(d);
 }
@@ -5236,6 +5742,8 @@ static int selftest(void)
     static const int n2Texts[] = { INST_PT_SHUT_NOW, INST_PT_SHUT_LATER };
     static const int c2Ids[] = { IDC_C_TB_T };
     static const int c2Texts[] = { INST_PT_TB_ABSENT };
+    static const int c4Ids[] = { IDC_C_PFW, IDC_C_PFW };
+    static const int c4Texts[] = { INST_PT_PFW, INST_PT_PFW_SYS };
     static const int c3Ids[] = { IDC_C_DRIVERS_T, IDC_C_DRIVERS_T };
     static const int c3Texts[] = { INST_PT_DRIVERS_T8, INST_PT_DRIVERS_OFF };
     static const int w2Ids[] = { IDC_TEXT };
@@ -5296,9 +5804,11 @@ static int selftest(void)
         st_page(parent, IDD_WELCOME, wIds, wTexts, 1, "the welcome");
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
-        st_page(parent, IDD_FOLDER, fIds, fTexts, 2, "the tools folder");
+        st_page(parent, IDD_FOLDER, fIds, fTexts, 2, "the install folder");
         st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
+        st_welcome_rows(parent);
         st_comp_layout(parent);
+        st_comp_layout_nt(parent);
         st_other_layout(parent);
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
@@ -5307,6 +5817,8 @@ static int selftest(void)
                 "no controller");
         st_page(parent, IDD_COMPONENTS, c3Ids, c3Texts, 2, "the components, "
                 "the connection manager alone");
+        st_page(parent, IDD_COMPONENTS, c4Ids, c4Texts, 2, "the components, "
+                "XHCIPFW's box on each system");
         st_page(parent, IDD_WELCOME, w2Ids, w2Texts, 1, "the welcome, the "
                 "connection manager alone");
         st_page(parent, IDD_UWELCOME, u2Ids, u2Texts, 3, "the uninstall's "

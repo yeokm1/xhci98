@@ -228,6 +228,8 @@ VOID EngCompleteSrb(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
             break;
         }
     }
+    // Never a stale SCSI status (PLAN "SCSI status of a completion").
+    ScsiCompletionStatus(Srb);
     DBGSTAGE(STG_SRB_COMPLETE, ((ULONG)Srb->SrbStatus << 24) | ((ULONG)Srb->Cdb[0] << 8) | Srb->Function);
     ScsiPortNotification(RequestComplete, DevExt, Srb);
 }
@@ -897,7 +899,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     // PRP list: pages - 1 entries, at most one list page (children are at
     // most STOR98_MAX_TRANSFER, 64 pages on NT and 512 on 9x, at most
     // STOR98_PRP_PER_PAGE: checked at compile time in nvme2k.h; the
-    // StorMaxTransferKB / maxtransferkb= setting only lowers it).
+    // StorMaxTransferKB / stormaxtransferkb= setting only lowers it).
     if (pages - 1 > STOR98_PRP_PER_PAGE) {
         return 2;
     }

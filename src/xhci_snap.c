@@ -78,6 +78,24 @@ XHCI_C_ASSERT(xhci_snap_hcd_susp,
               XHCI_SNAPSHOT_HCD_SUSP_AT +
                       XHCI_SNAPSHOT_HCD_SUSP_COUNT *
                           XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS ==
+                  XHCI_SNAPSHOT_HCD_XPORT_RECORDS);
+
+/* 44.35: three words, then the records, which end the header. */
+XHCI_C_ASSERT(xhci_snap_hcd_xport,
+              XHCI_SNAPSHOT_HCD_SUSP_AT +
+                      XHCI_SNAPSHOT_HCD_SUSP_COUNT *
+                          XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS ==
+                  XHCI_SNAPSHOT_HCD_XPORT_RECORDS &&
+              XHCI_SNAPSHOT_HCD_XPORT_RECORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_XPORT_WORDS &&
+              XHCI_SNAPSHOT_HCD_XPORT_WORDS + 1 ==
+                  XHCI_SNAPSHOT_HCD_XPORT_FIRST &&
+              XHCI_SNAPSHOT_HCD_XPORT_FIRST + 1 == XHCI_SNAPSHOT_HCD_XPORT_AT &&
+              XHCI_SNAPSHOT_HCD_X_COUNT + 1 ==
+                  XHCI_SNAPSHOT_HCD_X_RECORD_WORDS &&
+              XHCI_SNAPSHOT_HCD_XPORT_AT +
+                      XHCI_SNAPSHOT_HCD_XPORT_COUNT *
+                          XHCI_SNAPSHOT_HCD_X_RECORD_WORDS ==
                   XHCI_SNAPSHOT_HCD_HEAD_WORDS);
 
 /* The image carries the counter block whole, word for word. */
@@ -158,11 +176,17 @@ ULONG XhciSnapHcdHead(ULONG ports, ULONG word)
         return XHCI_SNAPSHOT_HCD_SUSP_COUNT;
     case XHCI_SNAPSHOT_HCD_SUSP_WORDS:
         return XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS;
+    case XHCI_SNAPSHOT_HCD_XPORT_RECORDS:
+        return XHCI_SNAPSHOT_HCD_XPORT_COUNT;
+    case XHCI_SNAPSHOT_HCD_XPORT_WORDS:
+        return XHCI_SNAPSHOT_HCD_X_RECORD_WORDS;
+    case XHCI_SNAPSHOT_HCD_XPORT_FIRST:
+        return XHCI_SNAPSHOT_HCD_XPORT_AT;
     default:
         /* XHCI_SNAPSHOT_HCD_TERMINAL, the routing record, the transfer
-         * readings, the class driver records, and 36.38's DNCTRL words and
-         * device records are readings, not layout: the door fills them
-         * (hcd_door.c). */
+         * readings, the class driver records, 36.38's DNCTRL words and
+         * device records and 44.35's transport records are readings, not
+         * layout: the door fills them (hcd_door.c). */
         return 0;
     }
 }

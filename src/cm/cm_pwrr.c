@@ -24,7 +24,12 @@ ULONG CmPowerRoute(BOOLEAN ok, BOOLEAN started, ULONG systemState,
         return (w == CM_PWR_D0 && suspended) ? CM_PWR_DIRECT : CM_PWR_PASS;
     }
     if (!nt && systemState == CM_PWR_S_SHUTDOWN) {
-        return CM_PWR_DIRECT;
+        return CM_PWR_DETACH;
     }
     return CM_PWR_REQUEST;
+}
+
+BOOLEAN CmPowerShutdownConfig(ULONG systemState, BOOLEAN nt)
+{
+    return (BOOLEAN)(nt || systemState != CM_PWR_S_SHUTDOWN);
 }

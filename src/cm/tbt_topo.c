@@ -1242,6 +1242,134 @@ ULONG XhciTbtPortMember(const XHCI_TBT_TOPO *topo,
     return xhciTbtMemberOf(topo, binds->Bdf[e]);
 }
 
+/* ---- the learning's window --------------------------------------------- */
+
+static ULONG xhciTbtClockPort(const XHCI_TBT_LEARN_CLOCK *clk, ULONG port)
+{
+    return (clk != NULL && port != 0 && port <= XHCI_TBT_MAX_PORTS) ? 1UL
+                                                                    : 0UL;
+}
+
+VOID XhciTbtLearnOpen(PXHCI_TBT_LEARN_CLOCK clk, ULONG port, ULONG nowMs,
+                      ULONG tag)
+{
+    ULONG bit;
+
+    if (!xhciTbtClockPort(clk, port)) {
+        return;
+    }
+    bit = xhciTbtPortBit(port);
+    clk->Open |= bit;
+    clk->Closed &= ~bit;
+    clk->Since[port - 1] = nowMs;
+    clk->Next[port - 1] = nowMs;
+    clk->Gap[port - 1] = 0;
+    clk->Tag[port - 1] = tag;
+}
+
+ULONG XhciTbtLearnDue(const XHCI_TBT_LEARN_CLOCK *clk, ULONG port,
+                      ULONG nowMs)
+{
+    ULONG bit;
+
+    if (!xhciTbtClockPort(clk, port)) {
+        return XHCI_TBT_LEARN_CLOSED;
+    }
+    bit = xhciTbtPortBit(port);
+    if (clk->Closed & bit) {
+        return XHCI_TBT_LEARN_CLOSED;
+    }
+    if (clk->Tried & bit) {
+        return XHCI_TBT_LEARN_WAIT;     /* once a pass */
+    }
+    if (!(clk->Open & bit)) {
+        return XHCI_TBT_LEARN_TRY;
+    }
+    if (nowMs - clk->Since[port - 1] >= XHCI_TBT_LEARN_WINDOW_MS) {
+        return XHCI_TBT_LEARN_OVER;
+    }
+    /* Unsigned: the time since the window opened against the time the
+     * next try is due after it, both below the window. */
+    return (nowMs - clk->Since[port - 1] >=
+            clk->Next[port - 1] - clk->Since[port - 1])
+               ? XHCI_TBT_LEARN_TRY
+               : XHCI_TBT_LEARN_WAIT;
+}
+
+VOID XhciTbtLearnMissed(PXHCI_TBT_LEARN_CLOCK clk, ULONG port, ULONG nowMs,
+                        ULONG periodMs)
+{
+    ULONG gap;
+
+    if (!xhciTbtClockPort(clk, port)) {
+        return;
+    }
+    clk->Tried |= xhciTbtPortBit(port);
+    if (!(clk->Open & xhciTbtPortBit(port))) {
+        return;
+    }
+    if (nowMs - clk->Since[port - 1] < XHCI_TBT_LEARN_EAGER_MS) {
+        /* The first second: again at the next pass. */
+        clk->Gap[port - 1] = 0;
+        clk->Next[port - 1] = nowMs;
+        return;
+    }
+    gap = clk->Gap[port - 1];
+    if (gap == 0) {
+        gap = periodMs != 0 ? periodMs : 1UL;
+    } else if (gap >= XHCI_TBT_LEARN_GAP_MAX_MS / 2UL) {
+        gap = XHCI_TBT_LEARN_GAP_MAX_MS;
+    } else {
+        gap *= 2UL;
+    }
+    if (gap > XHCI_TBT_LEARN_GAP_MAX_MS) {
+        gap = XHCI_TBT_LEARN_GAP_MAX_MS;
+    }
+    clk->Gap[port - 1] = gap;
+    clk->Next[port - 1] = nowMs + gap;
+}
+
+VOID XhciTbtLearnClose(PXHCI_TBT_LEARN_CLOCK clk, ULONG port)
+{
+    ULONG bit;
+
+    if (!xhciTbtClockPort(clk, port)) {
+        return;
+    }
+    bit = xhciTbtPortBit(port);
+    clk->Open &= ~bit;
+    clk->Closed |= bit;
+}
+
+VOID XhciTbtLearnEnd(PXHCI_TBT_LEARN_CLOCK clk, ULONG port)
+{
+    ULONG bit;
+
+    if (!xhciTbtClockPort(clk, port)) {
+        return;
+    }
+    bit = xhciTbtPortBit(port);
+    clk->Open &= ~bit;
+    clk->Closed &= ~bit;
+}
+
+VOID XhciTbtLearnPass(PXHCI_TBT_LEARN_CLOCK clk)
+{
+    if (clk != NULL) {
+        clk->Tried = 0;
+    }
+}
+
+ULONG XhciTbtLearnBound(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS ||
+        xhciTbtBindOfPort(binds, port) == XHCI_TBT_NO_MEMBER) {
+        return 0;
+    }
+    binds->Pending &= ~xhciTbtPortBit(port);
+    return 1;
+}
+
 /* ---- the port reading -------------------------------------------------- */
 
 /*

@@ -3,7 +3,9 @@
  * eject (src/cm/cm_ports.c; roadmap-usb4.md tasks 39-A.5 and 39-A.8;
  * design record 21 sections 3.3, 6.1, 6.3 and 7.4): the families' id
  * lists, checked against the INFs that match them; Windows 98's PCI
- * device ids; the bridge filter's snapshot; the resume hold's bound.
+ * device ids; the bridge filter's snapshot; the resume hold's bound; and
+ * design record 31's tunnel id: the compatible-id rewrite, the chain's
+ * depth bound and its re-attach.
  */
 
 #include <stdio.h>
@@ -54,12 +56,24 @@ static void test_families(void)
     CHECK(CmPortsFamily(CM_PORTS_ID(0x1234, 0x15BF)) == NULL, "the vendor counts");
 
     n = CmPortsFamilyCount();
-    CHECK_EQ(n, 16, "sixteen families: ten of record 21, six of record 22");
+    CHECK_EQ(n, 17, "seventeen families: ten of record 21, seven of record 22");
     f = CmPortsFamily(CM_PORTS_ID(0x1022, 0x1669));
     CHECK(f != NULL && f->RootPortIdCount == 3 && f->NhiIdCount == 2,
           "AMD's two routers share their root ports (ambiguous: the override assigns them)");
     f = CmPortsFamily(ID(0x5784));
     CHECK(f != NULL && f->SwitchPortIdCount == 2, "Barlow Ridge has its own switch ports");
+    /* Task 44.40, record 22 section 18: the ASM4242's NHI, matched by the
+     * INFs' class line alone, pairs with its own switch's ports. */
+    f = CmPortsFamily(CM_PORTS_ID(0x1B21, 0x2425));
+    CHECK(f != NULL && strcmp(f->Name, "asmedia-asm4242") == 0, "1B21:2425 is the ASM4242");
+    CHECK(f != NULL && f->NhiIdCount == 1 && f->SwitchPortIdCount == 1 &&
+          f->SwitchPortIds[0] == CM_PORTS_ID(0x1B21, 0x2423) && f->RootPortIdCount == 0,
+          "the ASM4242: its downstream port 2423, no root port");
+    CHECK(CmPortsFamily(CM_PORTS_ID(0x1B21, 0x2423)) == NULL, "the ASM4242's port is no NHI");
+    CHECK(CmPortsFamily(CM_PORTS_ID(0x1B21, 0x2426)) == NULL, "nor is its xHCI");
+    CHECK(CmPortsFilterId(CM_PORTS_ID(0x1B21, 0x2423)), "the filter still takes 2423");
+    CHECK_EQ(CmPortsUnpairedCount(), 1, "one unpaired id left, the emulator's bridge");
+    CHECK_EQ(CmPortsUnpairedAt(0), CM_PORTS_ID(0x1B36, 0x0001), "1B36:0001");
     CHECK(CmPortsFamilyAt(n) == NULL, "past the table is NULL");
     /* No id twice anywhere, and every family names its NHIs. */
     twice = 0;
@@ -230,8 +244,10 @@ static void test_infs(void)
     for (i = 0; i < CmPortsFamilyCount(); i++) {
         f = CmPortsFamilyAt(i);
         for (k = 0; k < f->NhiIdCount; k++) {
-            /* The emulator's host is matched by the class line alone. */
-            if ((f->NhiIds[k] & 0xFFFFUL) == 0x1B36UL) {
+            /* The emulator's host and the ASM4242 are matched by the
+             * class line alone (task 44.40 left the INFs unchanged). */
+            if ((f->NhiIds[k] & 0xFFFFUL) == 0x1B36UL ||
+                f->NhiIds[k] == CM_PORTS_ID(0x1B21, 0x2425)) {
                 continue;
             }
             missing += inList(seen, seenCount, f->NhiIds[k]) ? 0 : 1;
@@ -409,15 +425,30 @@ static void test_child_attach(void)
              "stackless: another driver's objects and no child of this one's: a "
              "stack, not read");
 
-    CHECK_EQ(CmPortsChildFirst(0, 0), CM_CHILD_ATTACH,
+    CHECK_EQ(CmPortsChildFirst(0, 0, 1, 0), CM_CHILD_ATTACH,
              "the first step: nothing attached attaches with no walk");
-    CHECK_EQ(CmPortsChildFirst(1, 0), CM_CHILD_ATTACH,
+    CHECK_EQ(CmPortsChildFirst(1, 0, 1, 0), CM_CHILD_ATTACH,
              "the first step: nothing attached, truncated or not");
-    CHECK_EQ(CmPortsChildFirst(0, 1), CM_CHILD_WALK,
+    CHECK_EQ(CmPortsChildFirst(0, 1, 1, 0), CM_CHILD_WALK,
              "the first step: something attached after a whole snapshot: walk it");
-    CHECK_EQ(CmPortsChildFirst(1, 1), CM_CHILD_SKIP,
+    CHECK_EQ(CmPortsChildFirst(1, 1, 1, 0), CM_CHILD_SKIP,
              "the first step: something attached after a truncated snapshot: skip "
              "without touching another driver's objects");
+
+    /* Record 31 section 4.3: the re-attach of a PDO already in the
+     * snapshot whose child was lost to a rebuild of its stack. */
+    CHECK_EQ(CmPortsChildFirst(0, 0, 0, 0), CM_CHILD_ATTACH,
+             "re-attach: in the snapshot, nothing on it and none of ours: attach again");
+    CHECK_EQ(CmPortsChildFirst(1, 0, 0, 0), CM_CHILD_ATTACH,
+             "re-attach: the same after a truncated snapshot (it was kept in it)");
+    CHECK_EQ(CmPortsChildFirst(0, 0, 0, 1), CM_CHILD_KEEP,
+             "re-attach: our child still there: nothing");
+    CHECK_EQ(CmPortsChildFirst(0, 1, 0, 1), CM_CHILD_KEEP,
+             "re-attach: our child under a built stack: nothing");
+    CHECK_EQ(CmPortsChildFirst(0, 1, 0, 0), CM_CHILD_KEEP,
+             "re-attach: a stack already built without ours: never walked, nothing");
+    CHECK_EQ(CmPortsChildFirst(1, 1, 0, 0), CM_CHILD_KEEP,
+             "re-attach: a built stack after a truncated snapshot: nothing");
 
     CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 0, &pci, &cm), CM_CHILD_ATTACH,
              "nothing attached: directly above the PDO, as revision 1 did");
@@ -585,6 +616,180 @@ static void test_release(void)
              "any nonzero mark counts");
 }
 
+/* ---- the tunnel id (design record 31 sections 3 and 4) ----------------- */
+
+static USHORT tidIn[CM_TID_MAX_CHARS + 64];
+static USHORT tidOut[CM_TID_MAX_CHARS + 128];
+
+/* A MULTI_SZ from `strs`, '|' between strings, into tidIn; its length. */
+static ULONG tidMake(const char *strs)
+{
+    ULONG n = 0;
+    ULONG i;
+
+    if (strs[0] == 0) {
+        tidIn[0] = 0;
+        return 1;
+    }
+    for (i = 0; strs[i] != 0; i++) {
+        tidIn[n++] = (USHORT)(strs[i] == '|' ? 0 : (UCHAR)strs[i]);
+    }
+    tidIn[n++] = 0;
+    tidIn[n++] = 0;
+    return n;
+}
+
+/* 1 when tidOut[0..chars) is the MULTI_SZ of `strs`. */
+static int tidIs(ULONG chars, const char *strs)
+{
+    ULONG i;
+    ULONG n = 0;
+
+    for (i = 0; strs[i] != 0; i++, n++) {
+        if (n >= chars ||
+            tidOut[n] != (USHORT)(strs[i] == '|' ? 0 : (UCHAR)strs[i])) {
+            return 0;
+        }
+    }
+    return n + 2 == chars && tidOut[n] == 0 && tidOut[n + 1] == 0;
+}
+
+#define NVME_HW "PCI\\VEN_1B36&DEV_0010&SUBSYS_11001AF4&REV_02|PCI\\VEN_1B36&DEV_0010"
+#define NVME_CC "PCI\\VEN_1B36&DEV_0010&REV_02|PCI\\VEN_1B36&DEV_0010|" \
+                "PCI\\VEN_1B36&CC_010802|PCI\\VEN_1B36&CC_0108|PCI\\VEN_1B36|" \
+                "PCI\\CC_010802|PCI\\CC_0108"
+
+static void test_tunnel_ids(void)
+{
+    ULONG len;
+    ULONG chars;
+    ULONG kind;
+    ULONG i;
+    ULONG v;
+
+    CHECK_EQ(sizeof(CM_TUNNEL_ID), CM_TID_ID_CHARS, "the id's length with its NUL");
+    CHECK(strstr(CM_TUNNEL_ID, "NVMe") == NULL && strstr(CM_TUNNEL_ID, "NVME") == NULL,
+          "no NVMe word in the id (Stor98's naming rule)");
+
+    len = tidMake(NVME_CC);
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_TAG, "an NVMe function's compatible ids are tagged");
+    CHECK_EQ(chars, len + CM_TID_ID_CHARS, "the new length: the id and its NUL more");
+    CHECK_EQ(kind, CM_TID_KIND_NVME, "the kind: NVMe, no bridge");
+    for (i = 0; i < sizeof(tidOut) / sizeof(tidOut[0]); i++) {
+        tidOut[i] = 0xEEEE;
+    }
+    v = CmPortsTunnelIds(tidIn, tidOut, chars - 1, &chars, &kind);
+    CHECK_EQ(v, CM_TID_TAG, "a buffer one short: still TAG");
+    CHECK_EQ(tidOut[0], 0xEEEE, "and nothing written into it");
+    v = CmPortsTunnelIds(tidIn, tidOut, chars, &chars, &kind);
+    CHECK_EQ(v, CM_TID_TAG, "a buffer that holds it: TAG");
+    CHECK(tidIs(chars, "PCI\\XHCI98_TUNNEL&CC_010802|" NVME_CC),
+          "the id first, every old string after it in its order, the double terminator");
+    CHECK_EQ(tidOut[chars], 0xEEEE, "not a character past the new list");
+
+    /* Idempotent: the new list again is left. */
+    for (i = 0; i < chars; i++) {
+        tidIn[i] = tidOut[i];
+    }
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_PRESENT, "an answer that has the id already is left");
+    CHECK_EQ(kind, CM_TID_KIND_NVME, "and still read as NVMe");
+    len = tidMake("pci\\xhci98_tunnel&cc_010802|PCI\\CC_010802");
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_PRESENT, "the id in another case is the id");
+    CHECK_EQ(chars, len, "the old length when left");
+
+    /* Not the class: left. */
+    len = tidMake("PCI\\VEN_8086&DEV_15C0&REV_02|PCI\\VEN_8086&CC_060400|"
+                  "PCI\\VEN_8086&CC_0604|PCI\\VEN_8086|PCI\\CC_060400|PCI\\CC_0604");
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_LEAVE, "a bridge's answer is left");
+    CHECK_EQ(kind, CM_TID_KIND_BRIDGE, "and read as a bridge (PCI\\CC_0604)");
+    CHECK_EQ(chars, len, "with its own length");
+    tidMake("PCI\\VEN_1B36&DEV_000D&REV_01|PCI\\VEN_1B36&CC_0C0330|PCI\\CC_0C0330|"
+            "PCI\\CC_0C03");
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_LEAVE, "a USB controller's answer is left");
+    CHECK_EQ(kind, 0, "neither NVMe nor a bridge");
+    tidMake("PCI\\VEN_8086&CC_0108020|PCI\\CC_0108020|PCI\\CC_01080|XPCI\\CC_010802");
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_LEAVE, "only the whole string PCI\\CC_010802 is the class");
+    tidMake("PCI\\CC_06040|PCI\\CC_060");
+    (VOID)CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(kind, 0, "only the whole string PCI\\CC_0604 is a bridge");
+
+    len = tidMake("");
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_LEAVE, "an empty list is left");
+    CHECK_EQ(chars, 1, "an empty list is one NUL");
+    v = CmPortsTunnelIds(NULL, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_LEAVE, "a null buffer is left");
+    CHECK_EQ(chars, 0, "a null buffer has no length");
+    CHECK_EQ(kind, 0, "and no kind");
+
+    /* Case, and the class as the last string. */
+    len = tidMake("pci\\ven_1b36&dev_0010|pci\\cc_010802");
+    v = CmPortsTunnelIds(tidIn, tidOut, sizeof(tidOut) / sizeof(tidOut[0]), &chars, &kind);
+    CHECK_EQ(v, CM_TID_TAG, "case is ignored, and the class may be the last string");
+    CHECK(tidIs(chars, "PCI\\XHCI98_TUNNEL&CC_010802|pci\\ven_1b36&dev_0010|pci\\cc_010802"),
+          "the id in its own case, then the old strings untouched");
+    len = tidMake("PCI\\CC_010802");
+    v = CmPortsTunnelIds(tidIn, tidOut, sizeof(tidOut) / sizeof(tidOut[0]), &chars, &kind);
+    CHECK(v == CM_TID_TAG && tidIs(chars, "PCI\\XHCI98_TUNNEL&CC_010802|PCI\\CC_010802"),
+          "the class alone gains the id");
+
+    /* The size bound: a list ending exactly at the bound is read, one
+     * character more is over, and a list with no terminator is over. */
+    for (i = 0; i < CM_TID_MAX_CHARS; i++) {
+        tidIn[i] = 'A';
+    }
+    for (i = 0; i < 13; i++) {
+        tidIn[i] = (USHORT)"PCI\\CC_010802"[i];
+    }
+    tidIn[13] = 0;
+    tidIn[CM_TID_MAX_CHARS - 2] = 0;
+    tidIn[CM_TID_MAX_CHARS - 1] = 0;
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_TAG, "a list ending at the bound is read");
+    CHECK_EQ(chars, CM_TID_MAX_CHARS + CM_TID_ID_CHARS, "and its new length");
+    v = CmPortsTunnelIds(tidIn, tidOut, sizeof(tidOut) / sizeof(tidOut[0]), &chars, &kind);
+    CHECK(v == CM_TID_TAG && tidOut[CM_TID_ID_CHARS] == 'P' &&
+              tidOut[chars - 1] == 0 && tidOut[chars - 2] == 0,
+          "and built whole");
+    tidIn[CM_TID_MAX_CHARS - 2] = 'A';
+    tidIn[CM_TID_MAX_CHARS - 1] = 0;
+    tidIn[CM_TID_MAX_CHARS] = 0;
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_OVER, "one character past the bound: over, left");
+    CHECK_EQ(chars, 0, "over: no length");
+    CHECK_EQ(kind, 0, "over: no kind (nothing is trusted of it)");
+    tidIn[CM_TID_MAX_CHARS - 1] = 'A';
+    tidIn[CM_TID_MAX_CHARS] = 'A';
+    v = CmPortsTunnelIds(tidIn, NULL, 0, &chars, &kind);
+    CHECK_EQ(v, CM_TID_OVER, "no terminator within the bound: over, never read past it");
+}
+
+static void test_chain_depth(void)
+{
+    ULONG d;
+    ULONG n;
+
+    CHECK_EQ(CM_TUNNEL_DEPTH_MAX, 8, "the depth bound is 8 (record 31 section 4.3)");
+    n = 0;
+    for (d = 0; d <= 10; d++) {
+        n += CmPortsChainReads(d, 1);
+    }
+    CHECK_EQ(n, CM_TUNNEL_DEPTH_MAX, "a bridge reads its BusRelations at depths 0 to 7 alone");
+    CHECK_EQ(CmPortsChainReads(1, 1), 1, "an enclosure's upstream port (depth 1) reads");
+    CHECK_EQ(CmPortsChainReads(4, 1), 1,
+             "a dock's and an enclosure's ports: the enclosure's downstream port (4) reads");
+    CHECK_EQ(CmPortsChainReads(7, 1), 1, "the spare level reads");
+    CHECK_EQ(CmPortsChainReads(8, 1), 0, "a bridge at the bound attaches nothing");
+    CHECK_EQ(CmPortsChainReads(9, 1), 0, "nor past it");
+    CHECK_EQ(CmPortsChainReads(1, 0), 0, "a function that is not a bridge never reads");
+}
+
 int main(void)
 {
     test_families();
@@ -597,6 +802,8 @@ int main(void)
     test_watchdog();
     test_release();
     test_keep_present();
+    test_tunnel_ids();
+    test_chain_depth();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

@@ -405,7 +405,77 @@ void s98_page(PF_TEXT *t, const S98_ANSWER *a, const S98_DELTA *d, int is9x, pf_
     s98_facts(t, a, is9x);
 }
 
-void s98_state_sentence(PF_TEXT *t, int state, int matches, int ids)
+void s98_why_set(S98_WHY *w, int why, char letter, int n, const char *id)
+{
+    size_t i;
+
+    w->why = why;
+    w->letter = letter;
+    w->n = n;
+    w->models = 0;
+    w->cmAnswered = 0;
+    for (i = 0; id != NULL && id[i] != 0 && i < 60; i++) {
+        w->id[i] = (id[i] >= 0x20 && id[i] < 0x7F) ? id[i] : '?';
+    }
+    w->id[i] = 0;
+}
+
+static void s98_why_sentence(PF_TEXT *t, const S98_WHY *w)
+{
+    char l[3];
+
+    l[0] = w->letter;
+    l[1] = ':';
+    l[2] = 0;
+    switch (w->why) {
+    case S98_WHY_NOLETTER:
+        if (w->cmAnswered) {
+            pf_tx_s(t, " No present disk under Enum\\SCSI holds ");
+            pf_tx_s(t, l);
+            pf_tx_s(t, ".");
+        } else {
+            pf_tx_s(t, " No disk under Enum\\SCSI holds ");
+            pf_tx_s(t, l);
+            pf_tx_s(t, " (the configuration manager found none of its disks present, so the registry's claims were taken).");
+        }
+        break;
+    case S98_WHY_NOTARGET:
+        pf_tx_s(t, " The disk holding ");
+        pf_tx_s(t, l);
+        pf_tx_s(t, " (");
+        pf_tx_s(t, w->id);
+        pf_tx_s(t, ") is on no adapter that answers as Stor98 (ASPI adapters: ");
+        pf_tx_u(t, (pf_u64)(w->n < 0 ? 0 : w->n));
+        pf_tx_s(t, ").");
+        break;
+    case S98_WHY_NOMATCH:
+        pf_tx_s(t, " Stor98 answers on ");
+        pf_tx_u(t, (pf_u64)(w->n < 0 ? 0 : w->n));
+        if (w->models < w->n) {
+            /* a target whose model was not read may be this disk */
+            pf_tx_s(t, " targets, but the model of ");
+            pf_tx_u(t, (pf_u64)(w->n - (w->models < 0 ? 0 : w->models)));
+            pf_tx_s(t, " of them could not be read, so whether one is the disk holding ");
+            pf_tx_s(t, l);
+            pf_tx_s(t, " (");
+            pf_tx_s(t, w->id);
+            pf_tx_s(t, ") is not known.");
+            break;
+        }
+        pf_tx_s(t, " targets (models read: ");
+        pf_tx_u(t, (pf_u64)(w->models < 0 ? 0 : w->models));
+        pf_tx_s(t, "), but none is the disk holding ");
+        pf_tx_s(t, l);
+        pf_tx_s(t, " (");
+        pf_tx_s(t, w->id);
+        pf_tx_s(t, ").");
+        break;
+    default:
+        break;
+    }
+}
+
+void s98_state_sentence(PF_TEXT *t, int state, int matches, int ids, const S98_WHY *w)
 {
     switch (state) {
     case S98_ST_OK:
@@ -434,17 +504,20 @@ void s98_state_sentence(PF_TEXT *t, int state, int matches, int ids)
     default:
         pf_tx_s(t, "Stor98's counters are not reported by this disk's driver: it is not Stor98, "
                    "or a Stor98 without the counter answer.");
+        if (w != NULL) {
+            s98_why_sentence(t, w);
+        }
         break;
     }
 }
 
-void s98_report_line(PF_TEXT *t, int state, int matches, int ids)
+void s98_report_line(PF_TEXT *t, int state, int matches, int ids, const S98_WHY *w)
 {
     pf_tx_s(t, "Stor98: ");
     if (state == S98_ST_OK) {
         pf_tx_s(t, "Stor98 drives this disk, but no test's counters were taken.");
     } else {
-        s98_state_sentence(t, state, matches, ids);
+        s98_state_sentence(t, state, matches, ids, w);
     }
     pf_tx_nl(t);
 }

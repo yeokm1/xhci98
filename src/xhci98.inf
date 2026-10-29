@@ -17,7 +17,9 @@
 ; were XHCI98\ROOT_HUB, XHCI98\HUB, XHCI98\HUB30 and XHCI98\COMPOSITE. This
 ; file names only the new ones (a clean move): an update gives each root
 ; hub, hub and composite device a new devnode, and the old ones stay
-; non-present until XHCICLN.EXE (tools\xhcicln\) removes them, if ever.
+; non-present and do no harm. XHCIINST's uninstall removes them on NT with
+; the rest. XHCICLN.EXE, which could remove them alone, was dropped in
+; 3.3.0.0.
 ; src\xhci_hub.h spells the four once, and the gate ties these lines to it
 ; (HCD-IDSRC) and refuses any other USB\XHCI98_ id here (HCD-USBRES).
 ;
@@ -45,13 +47,172 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=10/24/2026,3.2.0.0
+DriverVer=10/28/2026,3.3.0.0
 
 [Manufacturer]
 %Mfg%=XhciModels,NTx86.6.0
 
 [XhciModels]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+; The controllers of the installer's name table (xhciinst\inst_core.c,
+; instXhciNames; record 23 section 5.13), each under its product's name,
+; so that 98 SE's and ME's Properties title, which shows this string and
+; not the installer's FriendlyName, names the product too (task 44.5;
+; owner, 2026-10-25). test_inst holds these lines to the table string for
+; string, and the gate (HCD-DESC) holds each string to 46 characters and
+; keeps every such line out of the NT 6.x section.
+%XAMDNavi10Desc%=Xhci.Dev,PCI\VEN_1002&DEV_7316
+%XAMDKrackanDesc%=Xhci.Dev,PCI\VEN_1022&DEV_1118
+%XAMDKrackanDesc%=Xhci.Dev,PCI\VEN_1022&DEV_111C
+%XAMDKrackanDesc%=Xhci.Dev,PCI\VEN_1022&DEV_111E
+%XAMDKrackanDesc%=Xhci.Dev,PCI\VEN_1022&DEV_1128
+%XAMDKrackan2USB2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_1135
+%XAMDKrackan2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_1138
+%XAMDKrackan2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_1139
+%XAMDKrackan2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_113A
+%XAMDArielDesc%=Xhci.Dev,PCI\VEN_1022&DEV_13ED
+%XAMDArielDesc%=Xhci.Dev,PCI\VEN_1022&DEV_13EE
+%XAMDFamily17hDesc%=Xhci.Dev,PCI\VEN_1022&DEV_145C
+%XAMDZeppelinDesc%=Xhci.Dev,PCI\VEN_1022&DEV_145F
+%XAMDStarshipDesc%=Xhci.Dev,PCI\VEN_1022&DEV_148C
+%XAMDMatisseDesc%=Xhci.Dev,PCI\VEN_1022&DEV_149C
+%XAMDStrixDesc%=Xhci.Dev,PCI\VEN_1022&DEV_151A
+%XAMDStrixDesc%=Xhci.Dev,PCI\VEN_1022&DEV_151B
+%XAMDStrixDesc%=Xhci.Dev,PCI\VEN_1022&DEV_151E
+%XAMDStrixDesc%=Xhci.Dev,PCI\VEN_1022&DEV_151F
+%XAMDStrixHaloDesc%=Xhci.Dev,PCI\VEN_1022&DEV_1587
+%XAMDStrixHaloDesc%=Xhci.Dev,PCI\VEN_1022&DEV_1588
+%XAMDStrixHaloDesc%=Xhci.Dev,PCI\VEN_1022&DEV_1589
+%XAMDStrixHaloDesc%=Xhci.Dev,PCI\VEN_1022&DEV_158B
+%XAMDRaphaelDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15B6
+%XAMDRaphaelDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15B7
+%XAMDRaphaelUSB2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_15B8
+%XAMDPhoenix2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_15BB
+%XAMDPhoenix2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_15C2
+%XAMDPhoenix2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_15C3
+%XAMDFireFlightDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15D4
+%XAMDFireFlightDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15D5
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15D6
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15D7
+%XAMDRavenDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15E0
+%XAMDRavenDesc%=Xhci.Dev,PCI\VEN_1022&DEV_15E1
+%XAMDRaven2Desc%=Xhci.Dev,PCI\VEN_1022&DEV_15E5
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_161A
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_161B
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_161C
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_161D
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_161E
+%XAMDRembrandtDesc%=Xhci.Dev,PCI\VEN_1022&DEV_161F
+%XAMDRenoirCezanneDesc%=Xhci.Dev,PCI\VEN_1022&DEV_1639
+%XAMDVanGoghDesc%=Xhci.Dev,PCI\VEN_1022&DEV_163A
+%XAMDVanGoghDesc%=Xhci.Dev,PCI\VEN_1022&DEV_163B
+%XAMDX370Desc%=Xhci.Dev,PCI\VEN_1022&DEV_43B9
+%XAMDX399Desc%=Xhci.Dev,PCI\VEN_1022&DEV_43BA
+%XAMD300SeriesDesc%=Xhci.Dev,PCI\VEN_1022&DEV_43BB
+%XAMDA320Desc%=Xhci.Dev,PCI\VEN_1022&DEV_43BC
+%XAMD400SeriesDesc%=Xhci.Dev,PCI\VEN_1022&DEV_43D5
+%XAMDA520Desc%=Xhci.Dev,PCI\VEN_1022&DEV_43EC
+%XAMD500SeriesDesc%=Xhci.Dev,PCI\VEN_1022&DEV_43EE
+%XAMD600SeriesDesc%=Xhci.Dev,PCI\VEN_1022&DEV_43F7
+%XAMDA620Desc%=Xhci.Dev,PCI\VEN_1022&DEV_43FA
+%XAMD800SeriesDesc%=Xhci.Dev,PCI\VEN_1022&DEV_43FC
+%XAMD800SeriesDesc%=Xhci.Dev,PCI\VEN_1022&DEV_43FD
+%XAMDFCHDesc%=Xhci.Dev,PCI\VEN_1022&DEV_7812
+%XAMDFCHDesc%=Xhci.Dev,PCI\VEN_1022&DEV_7814
+%XAMDFCHDesc%=Xhci.Dev,PCI\VEN_1022&DEV_7914
+%XNECuPD720200Desc%=Xhci.Dev,PCI\VEN_1033&DEV_0194
+%XTITUSB73x0Desc%=Xhci.Dev,PCI\VEN_104C&DEV_8241
+%XNVIDIATU102Desc%=Xhci.Dev,PCI\VEN_10DE&DEV_1AD6
+%XNVIDIATU104Desc%=Xhci.Dev,PCI\VEN_10DE&DEV_1AD8
+%XNVIDIATU106Desc%=Xhci.Dev,PCI\VEN_10DE&DEV_1ADA
+%XNVIDIATU116Desc%=Xhci.Dev,PCI\VEN_10DE&DEV_1AEC
+%XVIAVL800VL801Desc%=Xhci.Dev,PCI\VEN_1106&DEV_3432
+%XVIAVL805VL806Desc%=Xhci.Dev,PCI\VEN_1106&DEV_3483
+%XVMwareUSB3xHCIDesc%=Xhci.Dev,PCI\VEN_15AD&DEV_0778
+%XVMwareUSB3xHCIDesc%=Xhci.Dev,PCI\VEN_15AD&DEV_0779
+%XRenesasuPD720201Desc%=Xhci.Dev,PCI\VEN_1912&DEV_0014
+%XRenesasuPD720202Desc%=Xhci.Dev,PCI\VEN_1912&DEV_0015
+%XASMediaASM1040Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_1040
+%XASMediaASM1041Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_1041
+%XASMediaASM1042Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_1042
+%XASMediaASM1042ADesc%=Xhci.Dev,PCI\VEN_1B21&DEV_1142
+%XASMediaASM1142Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_1242
+%XASMediaASM1143Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_1343
+%XASMediaASM2142Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_2142
+%XASMediaASM4242Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_2426
+%XASMediaASM3042Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_3042
+%XASMediaASM3142Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_3142
+%XASMediaASM3241Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_3241
+%XASMediaASM3242Desc%=Xhci.Dev,PCI\VEN_1B21&DEV_3242
+%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D
+%XEtronEJ168Desc%=Xhci.Dev,PCI\VEN_1B6F&DEV_7023
+%XEtronEJ188EJ198Desc%=Xhci.Dev,PCI\VEN_1B6F&DEV_7052
+%XFrescoLogicFL1000Desc%=Xhci.Dev,PCI\VEN_1B73&DEV_1000
+%XFrescoLogicFL1009Desc%=Xhci.Dev,PCI\VEN_1B73&DEV_1009
+%XFrescoLogicFL1100Desc%=Xhci.Dev,PCI\VEN_1B73&DEV_1100
+%XFrescoLogicFL1400Desc%=Xhci.Dev,PCI\VEN_1B73&DEV_1400
+%XZhaoxinZX100Desc%=Xhci.Dev,PCI\VEN_1D17&DEV_9202
+%XZhaoxinZX200Desc%=Xhci.Dev,PCI\VEN_1D17&DEV_9203
+%XZhaoxinKX6000Desc%=Xhci.Dev,PCI\VEN_1D17&DEV_9204
+%XZhaoxinKH40000Desc%=Xhci.Dev,PCI\VEN_1D17&DEV_9205
+%XZhaoxinKH50000Desc%=Xhci.Dev,PCI\VEN_1D17&DEV_9207
+%XIntel400SeriesLPDesc%=Xhci.Dev,PCI\VEN_8086&DEV_02ED
+%XIntel400SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_06ED
+%XIntelBroxtonDesc%=Xhci.Dev,PCI\VEN_8086&DEV_0AA8
+%XIntelGoshenRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_0B27
+%XIntelBayTrailDesc%=Xhci.Dev,PCI\VEN_8086&DEV_0F35
+%XIntelMapleRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_1135
+%XIntelMapleRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_1138
+%XIntelAlpineRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15B5
+%XIntelAlpineRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15B6
+%XIntelAlpineRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15C1
+%XIntelAlpineRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15D4
+%XIntelAlpineRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15DB
+%XIntelTitanRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15E9
+%XIntelTitanRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15EC
+%XIntelTitanRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_15F0
+%XIntelDenvertonDesc%=Xhci.Dev,PCI\VEN_8086&DEV_19D0
+%XIntelBroxtonDesc%=Xhci.Dev,PCI\VEN_8086&DEV_1AA8
+%XIntel7SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_1E31
+%XIntelCherryviewDesc%=Xhci.Dev,PCI\VEN_8086&DEV_22B5
+%XIntelPentiumSilverDesc%=Xhci.Dev,PCI\VEN_8086&DEV_31A8
+%XIntelIceLakeLPDesc%=Xhci.Dev,PCI\VEN_8086&DEV_34ED
+%XIntel500SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_43ED
+%XIntelAlderLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_461E
+%XIntelAlderLakeNDesc%=Xhci.Dev,PCI\VEN_8086&DEV_464E
+%XIntelElkhartLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_4B7D
+%XIntelJasperLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_4DED
+%XIntelAlderLakePCHDesc%=Xhci.Dev,PCI\VEN_8086&DEV_51ED
+%XIntelAlderLakeNDesc%=Xhci.Dev,PCI\VEN_8086&DEV_54ED
+%XIntelBarlowRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_5782
+%XIntelBarlowRidgeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_5785
+%XIntelApolloLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_5AA8
+%XIntelCoreUltra200Desc%=Xhci.Dev,PCI\VEN_8086&DEV_777D
+%XIntel700SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_7A60
+%XIntel600SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_7AE0
+%XIntelMeteorLakePDesc%=Xhci.Dev,PCI\VEN_8086&DEV_7E7D
+%XIntelCoreUltra200Desc%=Xhci.Dev,PCI\VEN_8086&DEV_7EC0
+%XIntel800SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_7F6E
+%XIntelIceLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_8A13
+%XIntel8SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_8C31
+%XIntel9SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_8CB1
+%XIntelC610X99Desc%=Xhci.Dev,PCI\VEN_8086&DEV_8D31
+%XIntelTigerLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_9A13
+%XIntelTigerLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_9A17
+%XIntel8SeriesLPDesc%=Xhci.Dev,PCI\VEN_8086&DEV_9C31
+%XIntel9SeriesLPDesc%=Xhci.Dev,PCI\VEN_8086&DEV_9CB1
+%XIntel100SeriesLPDesc%=Xhci.Dev,PCI\VEN_8086&DEV_9D2F
+%XIntel300SeriesLPDesc%=Xhci.Dev,PCI\VEN_8086&DEV_9DED
+%XIntel500SeriesLPDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A0ED
+%XIntel100SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A12F
+%XIntelC620SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A1AF
+%XIntelC620SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A22F
+%XIntel200SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A2AF
+%XIntel300SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A36D
+%XIntel400SeriesDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A3AF
+%XIntelRaptorLakeDesc%=Xhci.Dev,PCI\VEN_8086&DEV_A71E
+%XIntelCoreUltra200Desc%=Xhci.Dev,PCI\VEN_8086&DEV_A831
+%XIntelCoreUltra200Desc%=Xhci.Dev,PCI\VEN_8086&DEV_A87D
 %RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB
 %HubDesc%=Hub.Dev,USB\XHCI98_HUB
 %Hub30Desc%=Hub.Dev,USB\XHCI98_HUB30
@@ -366,15 +527,124 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 Provider="Yeo Kheng Meng"
 Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
-; XhciDesc is the one plain name of the class line, which no hardware-id
-; line may join (it would outrank Windows' own usbxhci on 8 to 10): the
-; installer names each controller its table knows (xHCI98 USB 3
-; Controller (Renesas uPD720202)) through its FriendlyName (record 23
-; section 5.13, task 43.73).
+; XhciDesc is the one plain name of the class line. In the NT 6.x
+; section no hardware-id line may join it (it would outrank Windows' own
+; usbxhci on 8 to 10): there the installer names each controller its
+; table knows (xHCI98 USB 3 Controller (Renesas uPD720202)) through its
+; FriendlyName (record 23 section 5.13, task 43.73). The section 98 SE,
+; ME, 2000 and XP read carries the table's ids, each with the name below
+; (task 44.5).
 XhciDesc="xHCI98 USB 3 Controller"
-RootHubDesc="xHCI98 USB 3.x Root Hub"
+XAMDNavi10Desc="xHCI98 USB 3 Controller (AMD Navi 10)"
+XAMDKrackanDesc="xHCI98 USB 3 Controller (AMD Krackan)"
+XAMDKrackan2USB2Desc="xHCI98 USB 3 Controller (AMD Krackan2 USB 2)"
+XAMDKrackan2Desc="xHCI98 USB 3 Controller (AMD Krackan2)"
+XAMDArielDesc="xHCI98 USB 3 Controller (AMD Ariel)"
+XAMDFamily17hDesc="xHCI98 USB 3 Controller (AMD Family 17h)"
+XAMDZeppelinDesc="xHCI98 USB 3 Controller (AMD Zeppelin)"
+XAMDStarshipDesc="xHCI98 USB 3 Controller (AMD Starship)"
+XAMDMatisseDesc="xHCI98 USB 3 Controller (AMD Matisse)"
+XAMDStrixDesc="xHCI98 USB 3 Controller (AMD Strix)"
+XAMDStrixHaloDesc="xHCI98 USB 3 Controller (AMD Strix Halo)"
+XAMDRaphaelDesc="xHCI98 USB 3 Controller (AMD Raphael)"
+XAMDRaphaelUSB2Desc="xHCI98 USB 3 Controller (AMD Raphael USB 2)"
+XAMDPhoenix2Desc="xHCI98 USB 3 Controller (AMD Phoenix2)"
+XAMDFireFlightDesc="xHCI98 USB 3 Controller (AMD FireFlight)"
+XAMDRembrandtDesc="xHCI98 USB 3 Controller (AMD Rembrandt)"
+XAMDRavenDesc="xHCI98 USB 3 Controller (AMD Raven)"
+XAMDRaven2Desc="xHCI98 USB 3 Controller (AMD Raven2)"
+XAMDRenoirCezanneDesc="xHCI98 USB 3 Controller (AMD Renoir/Cezanne)"
+XAMDVanGoghDesc="xHCI98 USB 3 Controller (AMD Van Gogh)"
+XAMDX370Desc="xHCI98 USB 3 Controller (AMD X370)"
+XAMDX399Desc="xHCI98 USB 3 Controller (AMD X399)"
+XAMD300SeriesDesc="xHCI98 USB 3 Controller (AMD 300 Series)"
+XAMDA320Desc="xHCI98 USB 3 Controller (AMD A320)"
+XAMD400SeriesDesc="xHCI98 USB 3 Controller (AMD 400 Series)"
+XAMDA520Desc="xHCI98 USB 3 Controller (AMD A520)"
+XAMD500SeriesDesc="xHCI98 USB 3 Controller (AMD 500 Series)"
+XAMD600SeriesDesc="xHCI98 USB 3 Controller (AMD 600 Series)"
+XAMDA620Desc="xHCI98 USB 3 Controller (AMD A620)"
+XAMD800SeriesDesc="xHCI98 USB 3 Controller (AMD 800 Series)"
+XAMDFCHDesc="xHCI98 USB 3 Controller (AMD FCH)"
+XNECuPD720200Desc="xHCI98 USB 3 Controller (NEC uPD720200)"
+XTITUSB73x0Desc="xHCI98 USB 3 Controller (TI TUSB73x0)"
+XNVIDIATU102Desc="xHCI98 USB 3 Controller (NVIDIA TU102)"
+XNVIDIATU104Desc="xHCI98 USB 3 Controller (NVIDIA TU104)"
+XNVIDIATU106Desc="xHCI98 USB 3 Controller (NVIDIA TU106)"
+XNVIDIATU116Desc="xHCI98 USB 3 Controller (NVIDIA TU116)"
+XVIAVL800VL801Desc="xHCI98 USB 3 Controller (VIA VL800/VL801)"
+XVIAVL805VL806Desc="xHCI98 USB 3 Controller (VIA VL805/VL806)"
+XVMwareUSB3xHCIDesc="xHCI98 USB 3 Controller (VMware USB3 xHCI)"
+XRenesasuPD720201Desc="xHCI98 USB 3 Controller (Renesas uPD720201)"
+XRenesasuPD720202Desc="xHCI98 USB 3 Controller (Renesas uPD720202)"
+XASMediaASM1040Desc="xHCI98 USB 3 Controller (ASMedia ASM1040)"
+XASMediaASM1041Desc="xHCI98 USB 3 Controller (ASMedia ASM1041)"
+XASMediaASM1042Desc="xHCI98 USB 3 Controller (ASMedia ASM1042)"
+XASMediaASM1042ADesc="xHCI98 USB 3 Controller (ASMedia ASM1042A)"
+XASMediaASM1142Desc="xHCI98 USB 3 Controller (ASMedia ASM1142)"
+XASMediaASM1143Desc="xHCI98 USB 3 Controller (ASMedia ASM1143)"
+XASMediaASM2142Desc="xHCI98 USB 3 Controller (ASMedia ASM2142)"
+XASMediaASM4242Desc="xHCI98 USB 3 Controller (ASMedia ASM4242)"
+XASMediaASM3042Desc="xHCI98 USB 3 Controller (ASMedia ASM3042)"
+XASMediaASM3142Desc="xHCI98 USB 3 Controller (ASMedia ASM3142)"
+XASMediaASM3241Desc="xHCI98 USB 3 Controller (ASMedia ASM3241)"
+XASMediaASM3242Desc="xHCI98 USB 3 Controller (ASMedia ASM3242)"
+XRedHatQEMUxHCIDesc="xHCI98 USB 3 Controller (Red Hat QEMU xHCI)"
+XEtronEJ168Desc="xHCI98 USB 3 Controller (Etron EJ168)"
+XEtronEJ188EJ198Desc="xHCI98 USB 3 Controller (Etron EJ188/EJ198)"
+XFrescoLogicFL1000Desc="xHCI98 USB 3 Controller (Fresco Logic FL1000)"
+XFrescoLogicFL1009Desc="xHCI98 USB 3 Controller (Fresco Logic FL1009)"
+XFrescoLogicFL1100Desc="xHCI98 USB 3 Controller (Fresco Logic FL1100)"
+XFrescoLogicFL1400Desc="xHCI98 USB 3 Controller (Fresco Logic FL1400)"
+XZhaoxinZX100Desc="xHCI98 USB 3 Controller (Zhaoxin ZX-100)"
+XZhaoxinZX200Desc="xHCI98 USB 3 Controller (Zhaoxin ZX-200)"
+XZhaoxinKX6000Desc="xHCI98 USB 3 Controller (Zhaoxin KX-6000)"
+XZhaoxinKH40000Desc="xHCI98 USB 3 Controller (Zhaoxin KH-40000)"
+XZhaoxinKH50000Desc="xHCI98 USB 3 Controller (Zhaoxin KH-50000)"
+XIntel400SeriesLPDesc="xHCI98 USB 3 Controller (Intel 400 Series LP)"
+XIntel400SeriesDesc="xHCI98 USB 3 Controller (Intel 400 Series)"
+XIntelBroxtonDesc="xHCI98 USB 3 Controller (Intel Broxton)"
+XIntelGoshenRidgeDesc="xHCI98 USB 3 Controller (Intel Goshen Ridge)"
+XIntelBayTrailDesc="xHCI98 USB 3 Controller (Intel Bay Trail)"
+XIntelMapleRidgeDesc="xHCI98 USB 3 Controller (Intel Maple Ridge)"
+XIntelAlpineRidgeDesc="xHCI98 USB 3 Controller (Intel Alpine Ridge)"
+XIntelTitanRidgeDesc="xHCI98 USB 3 Controller (Intel Titan Ridge)"
+XIntelDenvertonDesc="xHCI98 USB 3 Controller (Intel Denverton)"
+XIntel7SeriesDesc="xHCI98 USB 3 Controller (Intel 7 Series)"
+XIntelCherryviewDesc="xHCI98 USB 3 Controller (Intel Cherryview)"
+XIntelPentiumSilverDesc="xHCI98 USB 3 Controller (Intel Pentium Silver)"
+XIntelIceLakeLPDesc="xHCI98 USB 3 Controller (Intel Ice Lake-LP)"
+XIntel500SeriesDesc="xHCI98 USB 3 Controller (Intel 500 Series)"
+XIntelAlderLakeDesc="xHCI98 USB 3 Controller (Intel Alder Lake)"
+XIntelAlderLakeNDesc="xHCI98 USB 3 Controller (Intel Alder Lake-N)"
+XIntelElkhartLakeDesc="xHCI98 USB 3 Controller (Intel Elkhart Lake)"
+XIntelJasperLakeDesc="xHCI98 USB 3 Controller (Intel Jasper Lake)"
+XIntelAlderLakePCHDesc="xHCI98 USB 3 Controller (Intel Alder Lake PCH)"
+XIntelBarlowRidgeDesc="xHCI98 USB 3 Controller (Intel Barlow Ridge)"
+XIntelApolloLakeDesc="xHCI98 USB 3 Controller (Intel Apollo Lake)"
+XIntelCoreUltra200Desc="xHCI98 USB 3 Controller (Intel Core Ultra 200)"
+XIntel700SeriesDesc="xHCI98 USB 3 Controller (Intel 700 Series)"
+XIntel600SeriesDesc="xHCI98 USB 3 Controller (Intel 600 Series)"
+XIntelMeteorLakePDesc="xHCI98 USB 3 Controller (Intel Meteor Lake-P)"
+XIntel800SeriesDesc="xHCI98 USB 3 Controller (Intel 800 Series)"
+XIntelIceLakeDesc="xHCI98 USB 3 Controller (Intel Ice Lake)"
+XIntel8SeriesDesc="xHCI98 USB 3 Controller (Intel 8 Series)"
+XIntel9SeriesDesc="xHCI98 USB 3 Controller (Intel 9 Series)"
+XIntelC610X99Desc="xHCI98 USB 3 Controller (Intel C610/X99)"
+XIntelTigerLakeDesc="xHCI98 USB 3 Controller (Intel Tiger Lake)"
+XIntel8SeriesLPDesc="xHCI98 USB 3 Controller (Intel 8 Series LP)"
+XIntel9SeriesLPDesc="xHCI98 USB 3 Controller (Intel 9 Series LP)"
+XIntel100SeriesLPDesc="xHCI98 USB 3 Controller (Intel 100 Series LP)"
+XIntel300SeriesLPDesc="xHCI98 USB 3 Controller (Intel 300 Series LP)"
+XIntel500SeriesLPDesc="xHCI98 USB 3 Controller (Intel 500 Series LP)"
+XIntel100SeriesDesc="xHCI98 USB 3 Controller (Intel 100 Series)"
+XIntelC620SeriesDesc="xHCI98 USB 3 Controller (Intel C620 Series)"
+XIntel200SeriesDesc="xHCI98 USB 3 Controller (Intel 200 Series)"
+XIntel300SeriesDesc="xHCI98 USB 3 Controller (Intel 300 Series)"
+XIntelRaptorLakeDesc="xHCI98 USB 3 Controller (Intel Raptor Lake)"
+RootHubDesc="xHCI98 USB 3 Root Hub"
 HubDesc="xHCI98 USB Hub"
-Hub30Desc="xHCI98 USB 3.x Hub"
+Hub30Desc="xHCI98 USB 3 Hub"
 CompositeDesc="xHCI98 USB Composite Device"
-XhciSvcDesc="xHCI98 USB 3.x eXtensible Host Controller Driver (xhci98)"
+XhciSvcDesc="xHCI98 USB 3 Controller Driver"
 XhciHlprSvcDesc="xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)"

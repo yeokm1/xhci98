@@ -698,6 +698,21 @@ typedef struct _HCD_USB_DEVICE {
     ULONG FwArmedAll;       /* the union of its PDOs' FwArmed, kept by the
                              * thread under the controller lock for the
                              * snapshot, which walks no PDO chain        */
+    /* Its storage transport decision (roadmap-usb4 44.35; design record
+     * 13 section 10.7, "The decision kept"), for the snapshot and the
+     * query, which walk no PDO chain: the interfaces with a mass-storage
+     * decision seen (bit n: interface n below 31, bit 31 a device PDO or
+     * a higher number) and their count, and the lowest-numbered one's
+     * decision. Written by the thread under the controller lock
+     * (hcdXportKeep); XportCount 0: none. */
+    ULONG XportSeen;
+    ULONG XportCount;
+    ULONG XportIface;       /* bInterfaceNumber, 0xFF a device PDO       */
+    ULONG XportTransport;
+    ULONG XportWhy;
+    ULONG XportAlternate;
+    ULONG XportInputs;      /* XHCI_XPORT_F_*                            */
+    ULONG XportTriple;      /* class 7:0, subclass 15:8, protocol 23:16  */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* Distinct pipe handles a PDO keeps an abort horizon for: more than any
@@ -814,6 +829,8 @@ typedef struct _HCD_DEVICE_PDO {
      * (31-A.3; xhci_xport.h), fixed at creation so every id query answers
      * alike. Transport XHCI_XPORT_NONE: section 10.7's ids unchanged. */
     XHCI_XPORT Xport;
+    ULONG XportInputs;              /* the XHCI_XPORT_F_* it was decided
+                                       under, copied with Xport          */
     /* Every PDO of one device: the serial a port waits on and a cycle
      * names (Group, the first PDO's Serial; a lone device PDO's own), and
      * the chain HcdDevicePdoGone walks when the device leaves (Sibling,
@@ -1753,7 +1770,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjBulkLostEvents;
 #endif
     /* The door (hcd_door.c, 26-A.8; design record 13 section 8): the
-     * FDO's name's number, \DosDevices\HCD<n>, the host controller
+     * FDO's name's number, its \DosDevices name as made (HCD<n> on 98 SE
+     * and ME, XHCI98HC<k> on NT; roadmap-usb4 44.81) and its HCD<m> alias
+     * on 2000, XP and XP x64, the host controller
      * interface, and the root hub's name GET_ROOT_HUB_NAME returns (under
      * PdoListLock). DoorGate is a synchronization event used as a mutex:
      * held by a start, a stop and a door request that reads the extension
@@ -1762,6 +1781,12 @@ typedef struct _HCD_CONTROLLER {
     ULONG FdoSerial;
     ULONG HcdIndex;
     ULONG HcdLinkMade;
+    WCHAR HcdLinkName[40];
+    ULONG HcdLinkChars;
+    WCHAR HcdAliasName[40];
+    ULONG HcdAliasChars;
+    ULONG HcdAliasIndex;
+    ULONG HcdAliasMade;
     UNICODE_STRING HcInterface;
     ULONG HcInterfaceOn;
     WCHAR RootHubName[24];
@@ -1794,11 +1819,6 @@ typedef struct _HCD_CONTROLLER {
      * tell a restart from a block that did not move. */
     XHCIHC_COUNTERS Counters;
     ULONG CountersStart;
-    /* The storage transport decisions (31-A.3), one per XHCI_XPORT_WHY_*
-     * but NOT_UAS, by the controller thread at PDO creation; never zeroed,
-     * and outside the matrix block, whose offsets the harness reads (the
-     * matrix's transport field is 31-A.3's harness half, not drafted). */
-    ULONG XportDecisions[XHCI_XPORT_WHY_COUNT];
     /* Each refused device once (31-A.3), by where it sits
      * (XHCI_XPORT_AT_*), and the companion-port requests the 29-A.5 hold
      * did not take - all of them until its executor is wired. */
@@ -2497,6 +2517,7 @@ ULONG HcdTolNow(PHCD_CONTROLLER hc);
 VOID HcdCtlBackstopTick(PHCD_CONTROLLER hc);
 
 /* hcd_door.c */
+VOID HcdDoorInit(VOID);
 VOID HcdDoorGateEnter(PHCD_CONTROLLER hc);
 VOID HcdDoorGateLeave(PHCD_CONTROLLER hc);
 VOID HcdDoorControllerStart(PHCD_CONTROLLER hc);

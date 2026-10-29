@@ -2398,6 +2398,83 @@ static void test_hub_child_fallback(void)
              "masked");
 }
 
+/* Roadmap-usb4 44.80: the fastest each root port can run, as the query's
+ * ports part serves it. */
+static void test_port_top(void)
+{
+    static const ULONG psi2[3] = { PSI_FS, PSI_LS, PSI_HS };
+    static const ULONG ssp[4] = { PSI_SS_FD, PSI_G2X1, PSI_G1X2, PSI_G2X2 };
+    static const ULONG ssOnly[1] = { PSI_SS_FD };
+    /* PSIV 5, Gb/s, 10, LP 0: a rate above Gen 1x1's without the bit. */
+    static const ULONG tenNoLp[2] = { PSI_SS_FD, 0x000A0135UL };
+    static const ULONG vl805u3[1] = { 0x00050134UL };
+    XHCI_PORT_MAP map;
+    ULONG i;
+
+    /* qemu-xhci: no tables; USB 2.0 then USB 3.0. */
+    bar_reset(0x800);
+    put_protocol(0x100, 4, 2, 0, 1, 4, 9, NULL, 0);
+    put_protocol(0x104, 0, 3, 0, 5, 4, 10, NULL, 0);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "top: qemu shape parsed");
+    for (i = 1; i <= 4; i++) {
+        CHECK_EQ(XhciPortTop(&map, i), XHCI_PORT_TOP_USB2, "top: USB 2.0 port");
+    }
+    for (i = 5; i <= 8; i++) {
+        CHECK_EQ(XhciPortTop(&map, i), XHCI_PORT_TOP_SS, "top: USB 3.0, 5 Gbit/s");
+    }
+    CHECK_EQ(XhciPortTop(&map, 0), XHCI_PORT_TOP_NONE, "top: port 0");
+    CHECK_EQ(XhciPortTop(&map, 9), XHCI_PORT_TOP_NONE, "top: past the ports");
+    CHECK_EQ(XhciPortTop(NULL, 1), XHCI_PORT_TOP_NONE, "top: no map");
+
+    /* A USB 3.1 group with no table: SuperSpeed, nothing says more. */
+    bar_reset(0x800);
+    put_protocol(0x100, 4, 2, 0, 1, 2, 9, NULL, 0);
+    put_protocol(0x104, 0, 3, 0x10, 3, 2, 10, NULL, 0);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 4, &map),
+             XHCI_CAPS_OK, "top: 3.1 without a table parsed");
+    CHECK_EQ(XhciPortTop(&map, 3), XHCI_PORT_TOP_SS,
+             "top: 3.1, no table: SuperSpeed");
+
+    /* A USB 3.2 group with Gen 2 entries: SuperSpeedPlus. */
+    bar_reset(0x800);
+    put_protocol(0x100, 8, 2, 0, 1, 4, 9, psi2, 3);
+    put_protocol(0x108, 0, 3, 0x20, 5, 4, 10, ssp, 4);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "top: 3.2 parsed");
+    CHECK_EQ(XhciPortTop(&map, 2), XHCI_PORT_TOP_USB2, "top: its USB 2.0 port");
+    CHECK_EQ(XhciPortTop(&map, 6), XHCI_PORT_TOP_SSP, "top: SuperSpeedPlus");
+
+    /* A table of Gen 1 alone, whatever the minor revision. */
+    bar_reset(0x800);
+    put_protocol(0x100, 8, 2, 0, 1, 4, 9, psi2, 3);
+    put_protocol(0x108, 0, 3, 0x10, 5, 4, 10, ssOnly, 1);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "top: 3.1 Gen 1 table parsed");
+    CHECK_EQ(XhciPortTop(&map, 5), XHCI_PORT_TOP_SS, "top: Gen 1 table: SS");
+
+    /* A rate above 5 Gbit/s with LP 0: SuperSpeedPlus by the rate. */
+    bar_reset(0x800);
+    put_protocol(0x100, 8, 2, 0, 1, 4, 9, psi2, 3);
+    put_protocol(0x108, 0, 3, 0x10, 5, 4, 10, tenNoLp, 2);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 8, &map),
+             XHCI_CAPS_OK, "top: 10 Gb/s LP 0 parsed");
+    CHECK_EQ(XhciPortTop(&map, 5), XHCI_PORT_TOP_SSP, "top: by the rate");
+
+    /* The VL805 of the report (its capture's shape, test_replay_vl805). */
+    bar_reset(0x800);
+    put_protocol(0x2C, 8, 2, 0, 1, 1, 0, psi2, 1);
+    bar[0x2C + 2] = 0x10060101UL;
+    put_protocol(0x34, 0, 3, 0, 2, 4, 0, vl805u3, 1);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x2C, 0x800, 5, &map),
+             XHCI_CAPS_OK, "top: VL805 parsed");
+    CHECK_EQ(XhciPortTop(&map, 1), XHCI_PORT_TOP_USB2, "top: VL805 port 1");
+    for (i = 2; i <= 5; i++) {
+        CHECK_EQ(XhciPortTop(&map, i), XHCI_PORT_TOP_SS,
+                 "top: VL805's USB 3 ports, 5 Gbit/s");
+    }
+}
+
 int main(void)
 {
     test_field_macros();
@@ -2423,6 +2500,7 @@ int main(void)
     test_capability_loop_refused();
     test_replay_vl805();
     test_hub_child_fallback();
+    test_port_top();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

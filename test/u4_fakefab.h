@@ -221,7 +221,12 @@ typedef struct FAB {
     unsigned long LogCount;
     const char *LastLabel;
     unsigned long LastValue;
+    const char *Watch;              /* a label prefix whose lines are kept */
+    unsigned long WatchCount;
+    const char *WatchLabel[16];
+    unsigned long WatchValue[16];
     int Verbose;
+    unsigned long TraceId;          /* this fabric's number in the request trace */
 } FAB;
 
 /* Build */
@@ -289,5 +294,16 @@ unsigned long fabCrcOf(const unsigned char *p, unsigned long n);
 
 /* The block for TbtU4Start */
 void *fabMem(FAB *f);
+
+/* The request trace (task 44.38). When the environment variable U4_TRACE
+ * names a file, every frame the code under test transmits (route, the
+ * request's space, adapter, offset and count, the values written, each
+ * acknowledgement's DWs), every host-interface register write and every
+ * log line are written to it in order, each with
+ * its fabric's number and the virtual clock; fabTraceMark writes a vector's
+ * name between them; "end" closes it, and a failed open or write ends the
+ * run. scripts\usb4-trace\u4-trace.ps1 captures it and compares two
+ * captures. Nothing is written when U4_TRACE is unset. */
+void fabTraceMark(const char *name);
 
 #endif /* U4_FAKEFAB_H */

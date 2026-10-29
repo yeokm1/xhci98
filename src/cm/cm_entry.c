@@ -213,6 +213,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     CmNvlinkInit();
     CmEjectInit();
     CmQueryInit();
+    CmNhiCarryInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = cmDispatchOther;
     }
@@ -226,6 +227,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
          * answered from this image, cm_nvlinkos.c), as a CONFIGMG worker's
          * start made it before. */
         DriverObject->DriverUnload = NULL;
+    } else {
+        /* Design record 21 section 6.2.1's gate, read once (cm_reg.c). */
+        CmReadIrqGate();
     }
     return STATUS_SUCCESS;
 }

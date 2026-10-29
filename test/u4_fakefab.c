@@ -8,13 +8,15 @@
  *
  * One exception: the Thunderbolt 3 router's EEPROM (fabEeByte, fabEeCtl)
  * is adapted from usb4-emu src/qemu/hw/usb4/usb4-router-tb3.c
- * (eeprom_byte, eeprom_ctl; QEMU fork 2a893ea, read 2026-10-16), whose
- * notice reads:
- *   Copyright (c) 2026 usb4-emu contributors
- *   SPDX-License-Identifier: GPL-2.0-only
+ * (eeprom_byte, eeprom_ctl; QEMU fork 2a893ea, read 2026-10-16),
+ * Copyright (c) 2026 usb4-emu contributors. usb4-emu's copyright holder
+ * offers what this project takes from it under GPL-2.0-or-later (owner,
+ * 2026-10-25; legal-provenance.md section 2a).
+ * This file is under this project's LICENSE, GPL-2.0-or-later.
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "u4_fakefab.h"
 
@@ -89,6 +91,70 @@ unsigned long fabCrcOf(const unsigned char *p, unsigned long n)
 void *fabMem(FAB *f)
 {
     return f->MemDw;
+}
+
+/* ---------------------------------------------------------------------- */
+/* The request trace (u4_fakefab.h)                                       */
+/* ---------------------------------------------------------------------- */
+
+static FILE *fabTraceFp;
+static int fabTraceOpened;
+static unsigned long fabTraceFabs;
+
+static FILE *fabTraceOut(void)
+{
+    const char *p;
+
+    if (!fabTraceOpened) {
+        fabTraceOpened = 1;
+        p = getenv("U4_TRACE");
+        if (p != NULL && p[0] != '\0') {
+            fabTraceFp = fopen(p, "w");
+            if (fabTraceFp == NULL) {
+                fprintf(stderr, "U4_TRACE: cannot open %s\n", p);
+                exit(2);
+            }
+        }
+    }
+    return fabTraceFp;
+}
+
+/* A write that failed ends the run: a trace with a hole in it must not
+ * compare as identical. "end" closes the trace. */
+void fabTraceMark(const char *name)
+{
+    FILE *t = fabTraceOut();
+
+    if (t != NULL) {
+        fprintf(t, "== %s\n", name);
+        if (fflush(t) != 0 || ferror(t)) {
+            fprintf(stderr, "U4_TRACE: write failed\n");
+            exit(2);
+        }
+        if (strcmp(name, "end") == 0) {
+            fabTraceFp = NULL;
+            if (fclose(t) != 0) {
+                fprintf(stderr, "U4_TRACE: close failed\n");
+                exit(2);
+            }
+        }
+    }
+}
+
+static void fabTraceFrame(const FAB *f, const char *what, unsigned long pdf,
+                          const unsigned long *dw, unsigned long words)
+{
+    FILE *t = fabTraceOut();
+    unsigned long i;
+
+    if (t == NULL) {
+        return;
+    }
+    fprintf(t, "%lu %lu %s %lx", f->TraceId, f->NowUs, what, pdf);
+    for (i = 0; i < words && i < 64; i++) {
+        fprintf(t, " %08lx", dw[i]);
+    }
+    fputc('\n', t);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -937,9 +1003,11 @@ static void fabProcessTx(FAB *f)
         }
         if (fabCrc(buf, len - 4) != getBe(buf + len - 4)) {
             f->TxBadCrc++;
+            fabTraceFrame(f, "TXBADCRC", (dw2 >> 12) & 0xFUL, dw, words);
             continue;
         }
         f->TxCount++;
+        fabTraceFrame(f, "TX", (dw2 >> 12) & 0xFUL, dw, words);
         fabTx(f, (dw2 >> 12) & 0xFUL, dw, words);
     }
     fabPump(f);
@@ -981,6 +1049,10 @@ static void fabWrite32(PVOID ctx, ULONG off, ULONG v)
     FAB *f = (FAB *)ctx;
 
     f->MmioWrites++;
+    if (fabTraceOut() != NULL) {
+        fprintf(fabTraceOut(), "%lu %lu MW %05lx %08lx%s\n", f->TraceId, f->NowUs,
+                (unsigned long)off, (unsigned long)v, f->Gone ? " gone" : "");
+    }
     if (f->Gone) {
         f->GoneWrites++;
         return;
@@ -1086,6 +1158,17 @@ static void fabLog(PVOID ctx, const char *label, ULONG value)
     f->LogCount++;
     f->LastLabel = label;
     f->LastValue = value;
+    if (fabTraceOut() != NULL) {
+        fprintf(fabTraceOut(), "%lu %lu L %s %08lx\n", f->TraceId, f->NowUs, label,
+                (unsigned long)value);
+    }
+    if (f->Watch != NULL && strncmp(label, f->Watch, strlen(f->Watch)) == 0) {
+        if (f->WatchCount < 16) {
+            f->WatchLabel[f->WatchCount] = label;
+            f->WatchValue[f->WatchCount] = value;
+        }
+        f->WatchCount++;
+    }
     if (f->Verbose) {
         printf("    [log] %s %08lx\n", label, (unsigned long)value);
     }
@@ -1100,6 +1183,10 @@ void fabInit(FAB *f)
     int i;
 
     memset(f, 0, sizeof(*f));
+    f->TraceId = ++fabTraceFabs;
+    if (fabTraceOut() != NULL) {
+        fprintf(fabTraceOut(), "%lu new\n", f->TraceId);
+    }
     f->Host.Context = f;
     f->Host.Read32 = fabRead32;
     f->Host.Write32 = fabWrite32;

@@ -137,12 +137,28 @@ void s98_facts(PF_TEXT *t, const S98_ANSWER *a, int is9x);
 #define S98_ST_AMBIG    4   /* 9x: the disk's adapter could not be told apart */
 #define S98_ST_DEAD     5   /* did not answer in time */
 #define S98_ST_LETTER   6   /* 9x: several disks claim the letter, none told present */
+/* 9x: where a search that found no Stor98 disk ended (record 29 section
+ * 16.5) */
+#define S98_WHY_NONE        0   /* not said (NT) */
+#define S98_WHY_NOLETTER    1   /* no disk under Enum\SCSI holds the letter */
+#define S98_WHY_NOTARGET    2   /* no ASPI target answers as Stor98; n: ASPI adapters */
+#define S98_WHY_NOMATCH     3   /* n Stor98 targets answer, none the letter's disk */
+typedef struct s98_why {
+    int why;                /* S98_WHY_* */
+    char letter;
+    int n;
+    int models;             /* NOMATCH: Stor98 targets whose model was read */
+    int cmAnswered;         /* NOLETTER: the configuration manager answered */
+    char id[64];            /* the letter's disk id, cut to 60 characters */
+} S98_WHY;
+void s98_why_set(S98_WHY *w, int why, char letter, int n, const char *id);
 /* The Stor98 page's sentence for a state that is not OK (OK: empty);
  * matches and ids are a 9x search's counts, for an ambiguity (for
- * S98_ST_LETTER, ids is how many disks claim the letter) */
-void s98_state_sentence(PF_TEXT *t, int state, int matches, int ids);
+ * S98_ST_LETTER, ids is how many disks claim the letter); w (may be NULL)
+ * where a 9x search ended, for S98_ST_NONE */
+void s98_state_sentence(PF_TEXT *t, int state, int matches, int ids, const S98_WHY *w);
 /* The report's line when it carries no test's Stor98 page: "Stor98: "
  * and the state's sentence, or for OK that no test's counters were taken */
-void s98_report_line(PF_TEXT *t, int state, int matches, int ids);
+void s98_report_line(PF_TEXT *t, int state, int matches, int ids, const S98_WHY *w);
 
 #endif /* XHCIPERF_PF_S98_H */

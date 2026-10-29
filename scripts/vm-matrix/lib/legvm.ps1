@@ -21,6 +21,16 @@ function Read-LegConfig {
         if (-not $c.ContainsKey($k)) { throw "$Path has no $k" }
     }
     $c.WorkDir = Resolve-RepoPath $c.WorkDir
+    # QemuDllPath: a QEMU build that needs its runtime DLLs on PATH (the
+    # usb4-emu build the q35 bases run on); prepended for this process and
+    # every QEMU it starts.
+    if ($c.ContainsKey('QemuDllPath') -and $c.QemuDllPath) {
+        $c.QemuDllPath = Resolve-RepoPath $c.QemuDllPath
+        if (-not (Test-Path -LiteralPath $c.QemuDllPath)) { throw "QemuDllPath $($c.QemuDllPath) does not exist" }
+        # First on PATH even when already on it further down: another toolchain's
+        # DLLs before it would be loaded instead.
+        $env:PATH = ((@($c.QemuDllPath) + @($env:PATH -split ';' | Where-Object { $_ -and $_ -ne $c.QemuDllPath })) -join ';')
+    }
     $c.QemuExe = Resolve-QemuBinary -Hint ([string]$c.Qemu)
     $c.QemuImg = Join-Path (Split-Path -Parent $c.QemuExe) 'qemu-img.exe'
     if (-not (Test-Path -LiteralPath $c.QemuImg)) { throw "no qemu-img.exe beside $($c.QemuExe)" }
@@ -73,12 +83,44 @@ function Get-LegHardwareArgs {
     if ($Guest.ContainsKey('Machine') -and $Guest.Machine) { $machine = $Guest.Machine }
     $vga = 'std'
     if ($Guest.ContainsKey('Vga') -and $Guest.Vga) { $vga = $Guest.Vga }
+    $rtc = 'base=localtime'
+    if ($Guest.ContainsKey('Rtc') -and $Guest.Rtc) { $rtc = "base=$($Guest.Rtc)" }
     $a = @('-machine', $machine, '-accel', $accel, '-cpu', $Guest.Cpu, '-smp', [string]$Guest.Smp,
-        '-m', [string]$Guest.Memory, '-vga', $vga, '-nic', 'none', '-rtc', 'base=localtime',
-        '-device', 'ide-hd,drive=hd0,bus=ide.0,unit=0',
-        '-device', 'ide-cd,id=cd,drive=cdd,bus=ide.1,unit=0',
-        '-device', 'isa-debugcon,iobase=0xe9,chardev=dbg',
-        '-device', 'qemu-xhci,id=xh,p2=4,p3=4')
+        '-m', [string]$Guest.Memory, '-vga', $vga, '-nic', 'none', '-rtc', $rtc)
+    if ($machine -notlike 'q35*') {
+        $a += @('-device', 'ide-hd,drive=hd0,bus=ide.0,unit=0',
+            '-device', 'ide-cd,id=cd,drive=cdd,bus=ide.1,unit=0',
+            '-device', 'isa-debugcon,iobase=0xe9,chardev=dbg',
+            '-device', 'qemu-xhci,id=xh,p2=4,p3=4')
+    } else {
+        # The q35 machine as the q35 bases run it (E:\xhci98-vm\q35-bases,
+        # launch-q35.ps1; owner, 2026-10-25): native PCIe hot-plug, the
+        # controller behind a root port as on a board. DiskBus ahci puts the
+        # disk on the board's ICH9 AHCI port 0; piix (2000, XP: no inbox AHCI
+        # driver; ME: fails on AHCI) on a piix3-ide at 00:1e.0 with the LBA
+        # geometry the bases were made with. CdBus (default: DiskBus) puts the
+        # leg's CD on AHCI port 2 or on that piix3-ide's secondary channel.
+        # CdBus disk: 98 SE reaches AHCI through INT 13h alone, so it sees no
+        # CD there, and a piix3-ide beside the AHCI stopped its start at the
+        # logo (read 2026-10-26); its leg's files are a read-only FAT disk
+        # on AHCI port 1 instead (QEMU's vvfat over the staged folder), which
+        # 98 SE reads as D:. A disk cannot be changed under a running guest,
+        # so such a guest's legs start cold with it (Test-LegDiskMedium).
+        $disk = 'ahci'; if ($Guest.ContainsKey('DiskBus') -and $Guest.DiskBus) { $disk = $Guest.DiskBus }
+        $cdb = $disk; if ($Guest.ContainsKey('CdBus') -and $Guest.CdBus) { $cdb = $Guest.CdBus }
+        $a += @('-global', 'ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off')
+        if ($Guest.ContainsKey('Hole64Off') -and $Guest.Hole64Off) { $a += @('-global', 'q35-pcihost.pci-hole64-size=0') }
+        if ($Guest.ContainsKey('Win2kHack') -and $Guest.Win2kHack) { $a += @('-global', 'ide-device.win2k-install-hack=on') }
+        if ($disk -eq 'piix' -or $cdb -eq 'piix') { $a += @('-device', 'piix3-ide,id=pide,bus=pcie.0,addr=0x1e') }
+        if ($disk -eq 'piix') { $a += @('-device', 'ide-hd,drive=hd0,bus=pide.0,unit=0,bootindex=0,lcyls=1024,lheads=255,lsecs=63') }
+        else { $a += @('-device', 'ide-hd,drive=hd0,bus=ide.0,bootindex=0') }
+        if ($cdb -eq 'piix') { $a += @('-device', 'ide-cd,id=cd,drive=cdd,bus=pide.1,unit=0') }
+        elseif ($cdb -eq 'disk') { $a += @('-device', 'ide-hd,id=cd,drive=cdd,bus=ide.1') }
+        else { $a += @('-device', 'ide-cd,id=cd,drive=cdd,bus=ide.2') }
+        $a += @('-device', 'isa-debugcon,iobase=0xe9,chardev=dbg',
+            '-device', 'pcie-root-port,id=rpx,bus=pcie.0,addr=0x1c.0,chassis=20,slot=20',
+            '-device', 'qemu-xhci,id=xh,p2=4,p3=4,bus=rpx')
+    }
     if ($Guest.ContainsKey('Extra') -and $Guest.Extra) { $a += @($Guest.Extra) }
     return , $a
 }
@@ -119,7 +161,7 @@ function Start-LegQemu {
         '-qmp', "tcp:127.0.0.1:$($Ports.Qmp),server=on,wait=off",
         '-action', 'reboot=shutdown',
         '-drive', "if=none,id=hd0,format=qcow2,file=$Disk",
-        '-drive', "if=none,id=cdd,format=raw,readonly=on,media=cdrom,file=$Iso",
+        '-drive', (Get-LegMediumDrive $Guest $Iso),
         '-chardev', "file,id=dbg,path=$(Join-Path $RunDir "debugcon-$Tag.log")",
         '-serial', "file:$serial",
         '-boot', 'order=c')
@@ -150,6 +192,85 @@ function Start-LegQemu {
         throw
     }
     return $p
+}
+
+# The writes the guest's disk has taken so far (query-blockstats, drive hd0);
+# -1 when it cannot be read.
+function Get-LegDiskWrites {
+    param([int]$QmpPort)
+    try {
+        foreach ($d in @(Invoke-Qmp -Port $QmpPort -Command 'query-blockstats' -TimeoutMs 5000)) {
+            if ($d.device -eq 'hd0') { return [int64]$d.stats.wr_operations }
+        }
+    } catch { }
+    return -1
+}
+
+# Whether every processor of the guest is halted with interrupts off, in five
+# samples a second apart: where an NT kernel ends its shut down on a machine
+# it cannot switch off ("It is now safe to turn off your computer"). A
+# shut down that hangs instead keeps a processor running, or interrupts on.
+function Test-LegCpuHalted {
+    param([int]$QmpPort)
+    for ($i = 0; $i -lt 5; $i++) {
+        try { $r = [string](Invoke-Hmp -Port $QmpPort -Line 'info registers -a') } catch { return $false }
+        $cpus = @([regex]::Matches($r, 'EFL=([0-9a-fA-F]+)[^\n]*HLT=(\d)'))
+        if ($cpus.Count -eq 0) { return $false }
+        foreach ($m in $cpus) {
+            if ($m.Groups[2].Value -ne '1') { return $false }
+            if (([Convert]::ToInt64($m.Groups[1].Value, 16) -band 0x200) -ne 0) { return $false }
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $true
+}
+
+# Waits for a guest's shut down to end QEMU. A guest marked HostPowerOff
+# (Windows 2000 on a machine without ACPI, which stops at "It is now safe to
+# turn off your computer") cannot switch the machine off: once its disk has
+# taken no write for 30 s, at least 45 s after the shut down began, its
+# screen is still and its processors are halted (Test-LegCpuHalted), the host
+# quits QEMU over QMP. Returns $true when QEMU has
+# ended.
+function Wait-LegPowerOff {
+    param($Config, $Guest, [hashtable]$Ports, $Process, [string]$Dir, [string]$Tag, [int]$Seconds = 300)
+    if (-not ($Guest.ContainsKey('HostPowerOff') -and $Guest.HostPowerOff)) { return $Process.WaitForExit($Seconds * 1000) }
+    $t0 = Get-Date
+    $deadline = $t0.AddSeconds($Seconds)
+    $last = -2; $since = Get-Date
+    while ((Get-Date) -lt $deadline) {
+        if ($Process.HasExited) { return $true }
+        $w = Get-LegDiskWrites $Ports.Qmp
+        if ($w -ne $last -or $w -lt 0) { $last = $w; $since = Get-Date }
+        elseif (((Get-Date) - $since).TotalSeconds -ge 30 -and ((Get-Date) - $t0).TotalSeconds -ge 45 -and (Test-ScreenSettled -QmpPort $Ports.Qmp -Dir $Dir) -and (Test-LegCpuHalted $Ports.Qmp)) {
+            try { Save-QmpScreen -Port $Ports.Qmp -Path (Join-Path $Dir "$Tag-poweroff.png") } catch { }
+            try { $null = Invoke-Qmp -Port $Ports.Qmp -Command 'quit' -AllowError -TimeoutMs 5000 } catch { }
+            $null = $Process.WaitForExit(15000)
+            Add-LegPidLog $Config "quit pid $($Process.Id) at the guest's shut down (HostPowerOff, $Tag)"
+            return $Process.HasExited
+        }
+        Start-Sleep -Seconds 5
+    }
+    return $Process.HasExited
+}
+
+# A guest whose leg medium is a disk (CdBus disk), not a CD.
+function Test-LegDiskMedium {
+    param($Guest)
+    return ($Guest.ContainsKey('CdBus') -and $Guest.CdBus -eq 'disk')
+}
+
+# The medium's -drive: a CD image, or for a disk-medium guest the staged
+# folder beside it (<image>.dir) as a read-only FAT16 disk.
+function Get-LegMediumDrive {
+    param($Guest, [string]$Iso)
+    if (Test-LegDiskMedium $Guest) { return "if=none,id=cdd,format=raw,snapshot=on,file=fat:16:$(Get-LegMediumDir $Iso)" }
+    return "if=none,id=cdd,format=raw,readonly=on,media=cdrom,file=$Iso"
+}
+
+function Get-LegMediumDir {
+    param([string]$Iso)
+    return "$Iso.dir"
 }
 
 function Test-LegPortFree {

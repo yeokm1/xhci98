@@ -89,6 +89,7 @@ typedef struct pf_params {
     pf_u32 seed;
     int show;               /* PF_SHOW_* */
     int unitMiB;            /* 1: MiB/s, else MB/s */
+    int noLatency;          /* 1: no counter read per request (section 16.3) */
 } PF_PARAMS;
 
 /* What the system says about the volume and the machine. */
@@ -144,7 +145,8 @@ typedef struct pf_plan {
 #define PF_PRESET_STUDY     2
 #define PF_PRESET_SWEEP     3
 #define PF_PRESET_QUICK     4
-#define PF_PRESETS          5
+#define PF_PRESET_SEQMAX    5   /* sequential throughput (section 16.3) */
+#define PF_PRESETS          6
 #define PF_PRESET_CUSTOM    (-1)
 
 const char *pf_preset_name(int preset);
@@ -227,6 +229,10 @@ int pf_timer_plausible(pf_u64 qpcUs, pf_u64 tickMs);
 #define PF_ST_FAILED        3
 #define PF_ST_DATAERR       4
 #define PF_ST_SKIPPED       5   /* the disk refused a misaligned buffer */
+/* The processor figures' source (section 16.2) */
+#define PF_CPU_NONE         0
+#define PF_CPU_NT           1   /* the system's processor times */
+#define PF_CPU_9X           2   /* KERNEL\CPUUsage, sampled */
 typedef struct pf_result {
     int status;
     pf_u64 bytes;
@@ -238,6 +244,19 @@ typedef struct pf_result {
     pf_u32 error;           /* the system's error code of a failure */
     pf_u32 badUnits;
     PF_LAT lat;
+    int cpuKind;            /* PF_CPU_* */
+    int cpuCount;           /* processors the figures cover */
+    pf_u64 cpuBusyUs;       /* the whole system's busy processor time */
+    pf_u64 cpuIntUs;        /* NT: of it, interrupts and DPCs */
+    pf_u64 cpuOwnUs;        /* NT: this program's own; 0 not read */
+    int haveOwn;
+    /* a timed pass's course (section 16.4), from T0; 0 not known */
+    pf_u64 lastIssueUs;     /* the last request issued */
+    pf_u64 workersEndUs;    /* the last worker ended */
+    pf_u64 lastCheckMs;     /* the tick count at the workers' last deadline check */
+    int haveCourse;
+    int issuedAny;          /* a request was issued (lastIssueUs holds) */
+    int checkedAny;         /* a deadline check was made (lastCheckMs holds) */
 } PF_RESULT;
 
 typedef struct pf_shown {
@@ -248,6 +267,14 @@ typedef struct pf_shown {
     int haveLat;
     int timerBad;
     int cpuLimited;
+    /* the processor figures over every pass that counts (section 16.2) */
+    int cpuKind;            /* PF_CPU_NONE: none */
+    int cpuCount;
+    pf_u64 busy10;          /* tenths of a percent of the interval times the processors */
+    pf_u64 int10;           /* NT: interrupts and DPCs, the same way */
+    pf_u64 busyPerReqUs;    /* busy processor time per request */
+    pf_u64 ownPerReqUs;     /* NT: this program's, per request */
+    int haveOwn;
 } PF_SHOWN;
 
 /* The value shown for a step over its passes (section 3.6). */
@@ -255,6 +282,13 @@ void pf_shown(const PF_RESULT *passes, int npasses, int show, int mib, int highR
 
 /* The processor share mark */
 int pf_cpu_limited(pf_u64 stampUs, pf_u64 us);
+/* The processor figures as text: "busy 23.4% of 2, interrupts and DPCs
+ * 5.1%, 41 us a request, this program 30 us"; "" when there are none */
+void pf_cpu_text(const PF_SHOWN *sh, char *out, size_t cap);
+/* The short form for the window's cell: "cpu 23%"; "" when none */
+void pf_cpu_short(const PF_SHOWN *sh, char *out, size_t cap);
+/* 1 when a timed pass ran more than a second past its time (section 16.4) */
+int pf_overran(const PF_STEP *s, const PF_RESULT *r);
 
 /* Text */
 typedef struct pf_text {
@@ -365,6 +399,9 @@ long pf_change10(pf_u64 cur, pf_u64 old);
 
 /* The command line (section 5.7): 0, or 1 with the refusal in why. */
 typedef struct pf_cmdline {
+    int ntest;              /* /test switches since the start or the last /preset */
+    int anyTest;            /* a /test was given */
+    int sweepSwitch;        /* /min or /max was given */
     int run;
     int exitAtEnd;
     int selftest;

@@ -46,6 +46,7 @@
 #define IDM_FAST                40051   /* the notice on or off          */
 #define IDM_FAST_SHOW           40052   /* the devices that can run faster */
 #define IDM_RED                 40053   /* the tray menu red item */
+#define IDM_FAST_WIN            40054   /* Windows' own ports watched too */
 #define IDM_UNIT0               41000   /* 41000..41063: the tray's units */
 
 #endif /* TR_RES_H */

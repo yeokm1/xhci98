@@ -282,8 +282,9 @@ static void test_values(void)
     CHECK_EQ(v.TunnelBridgeRefused, 0, "and the refusal cleared");
 
     /* XhciCmBridgeNumbering (record 21 section 6.1.1): not in the rule
-     * table, since no INF writes it; default on, 0 and 1 taken, anything
-     * else refused with the default standing. */
+     * table, since only the 98 SE and ME install writes it (task 44.46;
+     * the INF gate reads its default from cm_vals.h); default on, 0 and 1
+     * taken, anything else refused with the default standing. */
     CmValuesDefault(&v);
     CHECK_EQ(CM_BRIDGE_NUMBERING_DEFAULT, 1, "XhciCmBridgeNumbering defaults to 1 (owner, 2026-10-16)");
     CHECK_EQ(v.BridgeNumbering, CM_BRIDGE_NUMBERING_DEFAULT, "the default after CmValuesDefault");
@@ -306,6 +307,26 @@ static void test_values(void)
     CmValuesTakeBridgeNumbering(&v, 0, 0);
     CHECK_EQ(v.BridgeNumberingRefused | v.BridgeNumberingFound, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched");
+
+    /* XhciCmAsmediaPcie7Credits (task 44.41): 0 by default, 0 or 1 taken,
+     * anything else refused with 0 standing. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_ASM_PCIE7_DEFAULT, 0, "XhciCmAsmediaPcie7Credits defaults to 0");
+    CHECK_EQ(v.AsmPcie7, 0, "0 after CmValuesDefault");
+    CmValuesTakeAsmPcie7(&v, 0, 1);
+    CHECK_EQ(v.AsmPcie7 | v.AsmPcie7Found | v.AsmPcie7Refused, 0, "absent: 0, nothing found");
+    CmValuesTakeAsmPcie7(&v, 1, 1);
+    CHECK(v.AsmPcie7 == 1 && v.AsmPcie7Found == 1 && v.AsmPcie7Refused == 0, "1 is taken");
+    CmValuesTakeAsmPcie7(&v, 1, 0);
+    CHECK(v.AsmPcie7 == 0 && v.AsmPcie7Found == 1, "0 is taken");
+    CmValuesTakeAsmPcie7(&v, 1, 7);
+    CHECK(v.AsmPcie7 == 0 && v.AsmPcie7Refused == 1 && v.AsmPcie7Raw == 7,
+          "7 is refused: 0 stands, the value recorded");
+    CmValuesTakeAsmPcie7(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.AsmPcie7, 0, "all-ones is refused");
+    CmValuesTakeAsmPcie7(&v, 0, 0);
+    CHECK_EQ(v.AsmPcie7Found | v.AsmPcie7Refused, 0, "a later absent read clears both");
+    CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 
 static void test_decision(void)
@@ -377,11 +398,42 @@ static void test_decision(void)
              "a profile past the mask is never built");
 }
 
+/* XHCITR mirrors the profiles' values (xhcitr\tr_core.h, TR_PROFILE_*;
+ * record 25 section 17), since it cannot include cm_vals.h. */
+static void test_profile_values(void)
+{
+    CHECK_EQ(CM_PROFILE_ICM_FR, 1, "FR is XHCITR's 1");
+    CHECK_EQ(CM_PROFILE_ICM_AR, 2, "AR is XHCITR's 2");
+    CHECK_EQ(CM_PROFILE_ICM_TR, 3, "TR is XHCITR's 3");
+    CHECK_EQ(CM_PROFILE_ICM_ICL, 4, "ICL is XHCITR's 4");
+    CHECK_EQ(CM_PROFILE_USB4, 5, "USB4 is XHCITR's 5");
+    CHECK_EQ(CM_PROFILE_ICM_MR, 6, "MR is XHCITR's 6");
+    CHECK_EQ(CM_PROFILE_ICM_TGL, 7, "TGL is XHCITR's 7");
+    /* The pairs test_tr.c holds tr_profile_of_nhi to. */
+    {
+        static const ULONG pairs[][3] = {
+            { 0x8086, 0x15BF, 2 }, { 0x8086, 0x15EB, 3 }, { 0x8086, 0x8A17, 4 },
+            { 0x8086, 0x1137, 6 }, { 0x8086, 0x9A1B, 7 }, { 0x8086, 0x156A, 1 },
+            { 0x8086, 0xA833, 5 }, { 0x1022, 0x1668, 5 }, { 0x8086, 0x1234, 0 }
+        };
+        CM_IDS ids;
+        ULONG i;
+        for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
+            memset(&ids, 0, sizeof(ids));
+            ids.Role = CM_ROLE_NHI;
+            ids.Vendor = pairs[i][0];
+            ids.Device = pairs[i][1];
+            CHECK_EQ(CmProfileFor(&ids), pairs[i][2], "XHCITR's NHI table");
+        }
+    }
+}
+
 int main(void)
 {
     test_roles();
     test_role_decide();
     test_profiles();
+    test_profile_values();
     test_decision();
     test_values();
 

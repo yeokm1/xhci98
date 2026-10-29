@@ -9,7 +9,11 @@
  * Record 28 section 4 gives it a second basic logical configuration at
  * LCPRI_SUBOPTIMAL: the enumerator's memory descriptors copied as read, no
  * IRQ descriptor, created at LCPRI_DISABLED and enabled last, then
- * Reprocess_DevNode. Stor98 (0.4.0.0 or later) then reads pin and a line
+ * Reprocess_DevNode. Where PCI.VXD's configuration already holds the
+ * memory alone and the problem is the 29 PCI.VXD set at the devnode's
+ * creation (the memory-only form, record 28 section 12; read on 98 SE,
+ * task 44.30), nothing is added and the devnode is reprocessed once a
+ * generation. Stor98 (0.4.0.0 or later) then reads pin and a line
  * of 0 or FFh and polls. This file holds everything of that which reads
  * no OS state: the candidate rules (section 4 rules 1 to 5), the result
  * table, the per-device attempt state and the journal across generations,
@@ -76,6 +80,7 @@
 #define CM_NI_CR_FAILURE        0x13UL
 #define CM_NI_DN_STARTED        0x00000008UL
 #define CM_NI_DN_HAS_PROBLEM    0x00000400UL
+#define CM_NI_PROB_HW_DISABLED  0x1DUL  /* CM_PROB_HARDWARE_DISABLED       */
 
 /* Device states (section 4, "the attempt state"). */
 #define CM_NI_S_FREE            0UL
@@ -289,6 +294,7 @@ typedef struct _CM_NI_DEV {
     ULONG RdPhase;          /* the type being read: 0 memory, 1 IRQ, 2 I/O,
                                3 DMA, 4 every type                       */
     ULONG RdAllSeen;        /* descriptors the every-type read met        */
+    ULONG RdAllIrq;         /* ... of them IRQ ones                       */
     ULONG LastStep;         /* the diagnostic's step reached              */
     ULONG LastCr;
     ULONG Pin0Gen;          /* a pin-0 function counted for gen + 1       */
@@ -299,6 +305,7 @@ typedef struct _CM_NI_COUNTERS {
     ULONG Candidates;       /* admitted                                   */
     ULONG Attempts;         /* configurations created                     */
     ULONG Reprocesses;      /* reprocess-only attempts                    */
+    ULONG MemOnly;          /* ... of them the memory-only form           */
     ULONG Started;          /* DONE                                       */
     ULONG Unstarted;        /* FAILED after a reprocess (timeout)         */
     ULONG Refused[CM_NI_W_COUNT];   /* EXCLUDED and FAILED, by reason     */

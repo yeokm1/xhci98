@@ -170,7 +170,7 @@ typedef UCHAR HW_INITIALIZATION_DATA_SIZE_CHECK[sizeof(HW_INITIALIZATION_DATA) =
 #define UNCACHED_EXTENSION_SIZE     (PAGE_SIZE * UNCACHED_EXTENSION_PAGES)
 
 // Largest transfer offered to the port before its own limits (PLAN 0.8),
-// the build's maximum: the setting StorMaxTransferKB (9x) or maxtransferkb=
+// the build's maximum: the setting StorMaxTransferKB (9x) or stormaxtransferkb=
 // (NT) can lower it at load time, never raise it (xfertun.h).
 // Windows 9x: 2 MiB (owner, 2026-10-22; PLAN "Decided 2026-10-22"; 512 KiB
 // from PLAN "0.4.0.0 plan", item 1). IOS sends a request whole only up to
@@ -501,6 +501,7 @@ VOID ScsiSetSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN
 BOOLEAN ScsiHandleRequestSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 VOID ScsiSenseNewCommand(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 VOID ScsiSenseReset(IN PHW_DEVICE_EXTENSION DevExt);
+VOID ScsiCompletionStatus(IN PSCSI_REQUEST_BLOCK Srb);
 
 // Dispatch of an SRB to its handler (running state; also replays held SRBs)
 BOOLEAN ScsiDispatch(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);

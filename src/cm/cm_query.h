@@ -132,7 +132,16 @@
 #define CM_Q_RM_LOST            12UL    /* surprise removals in a loss of
                                            the host interface, counted
                                            apart; wraps                   */
-/* 16..31 reserved, 0 */
+#define CM_Q_RM_DRIVER          16UL    /* the running xhcicm.sys's
+                                           version, a byte a field from
+                                           the most significant
+                                           (xhci_verpk.h); 0 from a driver
+                                           before 3.3.0.0, whose word was
+                                           reserved (roadmap-usb4 44.8;
+                                           design record 25 section 18).
+                                           Not a layout change: the
+                                           version stays 2              */
+/* 20..31 reserved, 0 */
 
 #define CM_Q_RF_WATCHED         0x01UL  /* this domain's removals are
                                            watched (NT, the filter route) */

@@ -14,7 +14,23 @@ question the redesign starts from: does `Reprocess_DevNode` or
 itself set on a memory-only configuration, and where (which event, on
 what reading of the function or its route) does `PCI.VXD` set it?
 
-Status: draft 11, 2026-10-18, reviewed and revised (an unstarted device
+**Note, 2026-10-25 (task 44.30): both answered, and the memory-only
+form.** Section 12 has the readings and the design that follows from
+them. [static] `PCI.VXD` itself disables such a function, once, while it
+enumerates the parent bus: an interrupt pin, no routing-table link, a
+line of 0 or `FFh` and its decode off give no IRQ descriptor and
+`Disable_DevNode(dn, CM_DISABLE_HARDWARE)`, which sets problem 29;
+nothing of `PCI.VXD` refuses a later configuration without an IRQ.
+[obs, 98 SE in the emulator] `Reprocess_DevNode` alone cleared the
+problem and the function started on its memory alone, Stor98 polling.
+So for that case nothing is added: the attempt is the reprocess-only
+one (section 12.2). Sections 3 to 5 stand for a configuration that
+carries an IRQ descriptor, which no reading has met.
+
+Status: draft 12, 2026-10-25 (task 44.30: section 12, the memory-only
+form; the note above, the result table's configuration rows, N11, the
+legs of section 8.2 item 1 and section 10 brought in line); draft 11,
+2026-10-18, reviewed and revised (an unstarted device
 with no problem kept ATTEMPTED, the disabled forced leftover's exception
 carried into section 5.3 and N8, the re-creation leg split by what is
 observed, the detached-call overlap marked as a hypothesis with a leg of
@@ -645,7 +661,9 @@ a terminal failure makes it EXCLUDED:
    `PortDriver`, no installer record (a hand-installed Stor98) or an
    older recorded version is EXCLUDED: the design fails closed, and the
    release notes say that a hand-installed Stor98 is not started this
-   way. What the record proves is that this installer last installed a
+   way. What the record proves is that this installer last installed (or, on
+   98 SE and ME since record 26 draft 43, staged with no owed update
+   left unmade) a
    polling-capable release, not which `stor98.mpd` runs this devnode: an
    update of Stor98 on 98 SE and ME takes effect at the shutdown record
    26 section 6.3 asks for, and until it a devnode may still load the
@@ -706,7 +724,9 @@ cover each row):
 | UNROUTABLE or PORT_NO_LINE (rule 5) | candidate |
 | ROUTED_WRITTEN, ROUTED_ALREADY, a line that reads set, a write not held; a fresh classification finding the swizzle on the port's pin with the port's line valid (routable, whether or not a line is set: the stage's business, not this record's) (rule 5) | EXCLUDED, "interrupt" |
 | a read that failed or Retry Status in the fresh classification (rule 5) | PENDING |
-| the source configuration (the first eligible basic one, "The existing configurations") without an IRQ descriptor, with another resource type, with more than `CM_WK_NOIRQ_MEM` memory descriptors or with a descriptor larger than the buffer; no basic configuration at all ("The existing configurations") | EXCLUDED, "configuration" |
+| a PENDING entry, every rule passed, whose source configuration (the first eligible basic one, "The existing configurations") passes every descriptor check of that paragraph but the IRQ one - one to `CM_WK_NOIRQ_MEM` memory descriptors, each within the buffer, no other type - and holds no IRQ descriptor, its problem as admitted 29, and its devnode's reprocess mark of this generation unused (section 12, the memory-only form) | ACTIVE, the reprocess-only attempt, the mark taken; no configuration added |
+| the same PENDING entry with its devnode's reprocess mark of this generation already taken (the devnode met as new again within the generation, section 12.2) | EXCLUDED, "attempts" |
+| the source configuration without an IRQ descriptor at a problem other than 29, or with no memory descriptor; with another resource type, with more than `CM_WK_NOIRQ_MEM` memory descriptors or with a descriptor larger than the buffer; no basic configuration at all ("The existing configurations") | EXCLUDED, "configuration" |
 | a basic configuration not at `LCPRI_DISABLED`, not the journal's valid committed match, at or above `LCPRI_SUBOPTIMAL` ("Across generations and starts", rule 3) | EXCLUDED, "configuration" (`refused.left-over` where it reads exactly `LCPRI_SUBOPTIMAL`) |
 | a basic configuration at `LCPRI_DISABLED` (rule 2) | ignored |
 | the journal's own committed alternative found as a valid committed match (its kind's list, its committing priority), the devnode unstarted (rule 1) | no new transaction; one `Reprocess_DevNode` per generation, whatever the attempts count |
@@ -1118,8 +1138,9 @@ problem code as it shows any other.
   read from `3.1.0.0` (task 42-A.17): the machine-wide key
   `HKLM\System\CurrentControlSet\Services\USB` first, and where absent
   there the NHI's driver key; once at start. Not written by the INFs (as
-  `XhciCmBridgeNumbering` is not; record 21 section 8's table gains the
-  row with the code). 1 (the default; absent in both places reads as 1)
+  `XhciCmBridgeNumbering` was not; record 21 section 8's table gains the
+  row with the code); from task 44.46 (owner, 2026-10-26) the x86 INF's
+  98 SE and ME install writes both at 1, only where missing. 1 (the default; absent in both places reads as 1)
   runs section 4 for the functions its rules admit; 0 turns it off,
   leaving such a function as it came up. Any other value is refused and 1
   stands. Windows 98 SE and ME only; the NT route never reads it. The
@@ -1375,15 +1396,19 @@ turns up.
 | N2 | The form | a second basic logical configuration at `LCPRI_SUBOPTIMAL` with the enumerator's memory descriptors copied as read and no IRQ descriptor, created disabled and enabled last, allocated by the configuration manager; the forced form with fixed ranges kept as the fallback the leg decides | 4, 5 |
 | N3 | Which functions | class code `010802h` alone, a type 0 header with no I/O register, a pin and a line reading 0 or `FFh`, a devnode with a configuration problem, bound to `stor98.mpd` with an installer record of Stor98 `0.4.0.0` or later, its interrupt recorded UNROUTABLE or PORT_NO_LINE; never a bridge, never another class or driver, never UNKNOWN; failing closed | 1.3, 4 |
 | N4 | Persistence | none: no `CM_SETUP_WRITE_LOG_CONFS`, no forced configuration in the registry; a device present at POST is `PCI.VXD`'s | 4 |
-| N5 | The switch | `XhciCmNoIrqStart`, default 1, 98 SE and ME only, read machine-wide first then per driver key (42-A.17), not INF-written, never asked by the installer, editable under "Advanced..." and written machine-wide when changed | 7 |
+| N5 | The switch | `XhciCmNoIrqStart`, default 1, 98 SE and ME only, read machine-wide first then per driver key (42-A.17), written at 1 where missing by the x86 INF's 98 SE and ME install (task 44.46; not INF-written before), never asked by the installer, editable under "Advanced..." and written machine-wide when changed | 7 |
 | N6 | The MSI-only function | nothing done; a hypothesis until its leg is read, recorded in the diagnostic | 5.4 |
 | N7 | Retries and budgets | one configuration transaction per devnode per publication generation of its member and at most `CM_NOIRQ_ATTEMPTS` (3) configurations created in the member's life, the bound never refusing an owed reprocess; a new generation reads the device again, reprocesses the journal's committed alternative once where it is still found, marks it gone where it is not, and may create another after an uncommitted or gone one; pending readings are re-read at every pass of the 10 s window, terminal exclusions once; a transaction runs on its own 30 s budget at the 50 ms cadence, completion-driven | 4 |
 | N8 | What this driver adds, and never frees or recognises | no configuration of anyone's is ever freed (`Free_Log_Conf` is not called), and no configuration is ever recognised as this driver's except through its journal while the member's state lives; a configuration at `LCPRI_DISABLED` is ignored by its priority alone for allocation, reuse and the threshold, a disabled forced one still blocking any further forced creation until a re-plug; a committed alternative an earlier start left refuses the device until its re-plug; before each write to the handle it holds the transaction reads the handle's place again on the list of its kind, which catches what those reads can tell and not a replacement indistinguishable by them nor a reuse between the read and the write; a committed alternative is reused only as a valid committed match, by kind and committing priority | 4, 5.3 |
 | N10 | The update-pending exception | admission on the installer's recorded version although, between a Stor98 update on 98 SE or ME and the shutdown the installer asks for, a devnode may still load the older image, no documented mechanism telling which image a devnode loaded; the older image's behaviour unmeasured until the leg, and the release notes saying a drive plugged in during that window may not start until the shutdown | 4 |
+| N11 | The memory-only form (task 44.30) | where `PCI.VXD`'s own configuration holds the memory alone and the problem is the 29 it set at the devnode's creation, no configuration is added and the devnode is reprocessed once a generation, under every other rule of section 4 unchanged (the switch, the header, the binding and the installer record, the interrupt outcome, the gate over the existing configurations, the changeable conditions read again before the call, the one `READY` fallback, the budget); read on 98 SE in the emulator, the orchestrator's for the owner to confirm | 12 |
 | N9 | The existing priorities | read before anything is added, one priority read per configuration; refused unless every basic configuration of the devnode not at `LCPRI_DISABLED` and not the journal's own committed one reads below `LCPRI_SUBOPTIMAL` | 4 |
 
 ## 10. Open, and the risks
 
+- **Task 44.30** (section 12): `Setup_DevNode(READY)` alone not read
+  (the reprocess sufficed); rule 4's installer record on an install that
+  bound no Stor98 device, decided by the owner (section 12.3).
 - Whether the configuration manager allocates a second basic
   configuration for a devnode whose enumerator built the first, whether
   `Reprocess_DevNode` is the call that makes it, and whether a
@@ -1447,6 +1472,10 @@ turns up.
 
 ## 11. Files
 
+Task 44.30 (section 12) is to change `src\cm\cm_noirq.c` and
+`cm_noirq.h` (the form, its counter) and `test\test_cm_noirq.c` (its
+vectors) alone.
+
 | File | What |
 |---|---|
 | `src\cm\cm_cfgmg.h`, `cm_cfgmg.c` | the service numbers added with their table lines - `Add_Empty_Log_Conf` 24, `Get_First_Log_Conf` 26, `Get_Next_Log_Conf` 27, `Add_Res_Des` 28, `Get_Next_Res_Des` 31, `Get_Res_Des_Data_Size` 33, `Get_Res_Des_Data` 34, `Get_Alloc_Log_Conf` 59, `Read_Registry_Value` 62, `Reprocess_DevNode` 92, `Get_Set_Log_Conf_Priority` 106, `Detect_Resource_Conflict` 112 (lines 557, 559, 560, 561, 564, 566, 567, 592, 595, 628, 642 and 651 of the table that opens at line 532, counted as `legal-provenance.md`'s CONFIGMG row counts them); the flag and priority values (`BASIC_LOG_CONF` 0, `FORCED_LOG_CONF` 4, `PRIORITY_EQUAL_LAST` 0, `LCPRI_SUBOPTIMAL` `0x5000`, `LCPRI_DISABLED` `0xFFFF`, `LCPRI_FORCECONFIG` 0, `CM_GET_LOG_CONF_PRIORITY` 0, `CM_SET_LOG_CONF_PRIORITY` 1, `CM_REGISTRY_SOFTWARE` 1, `ResType_Mem` 1, `ResType_IRQ` 4, `ResType_All` 0, `MType_Range`, `CM_REPROCESS_DEVNODE_ASYNCHRONOUS` 0, `CR_NO_MORE_LOG_CONF` `0x0E`, `CR_NO_MORE_RES_DES` `0x0F`, `CM_PROB_NORMAL_CONFLICT` `0x0C`, `CM_PROB_PARTIAL_LOG_CONF` `0x10`, `CM_PROB_NO_VALID_LOG_CONF` `0x1B`, `CM_PROB_HARDWARE_DISABLED` `0x1D`); the thunks behind the `Get_Version` guard |
@@ -1459,7 +1488,187 @@ turns up.
 | `docs\contributing\legal-provenance.md` section 4 | the CONFIGMG row extended with the new numbers and lines; a new row for the VMM registry services the Stor98 locator uses (`_RegOpenKey` `0x148`, `_RegCloseKey` `0x149`, `_RegCreateKey` `0x14A`, `_RegDeleteKey` `0x14B`, `_RegSetValueEx` `0x152`, `_RegCreateDynKey` `0x176`, `VMM.H`'s table from line 2216 and `VXDWRAPS.H`'s signatures), which no row carries today, with `_RegQueryValueEx` `0x151` added to it, each a text read of the headers as the CONFIGMG row's; Stor98's INF lines `PCI\CC_010802`, `DevLoader` and `PortDriver` cited as the ownership evidence |
 | design record 21 sections 6.1.1 and 8; design record 26 sections 5.4 and 5.5; `docs\using\release-notes.md`; `docs\using\tuning.md` | the pointer, the value's row and its machine-wide reading, the release-notes lines (Stor98's polling mode for a device started this way; a hand-installed Stor98 not started this way; the pinless case unread until its leg; the emulator-only standing) |
 
+## 12. The memory-only form (task 44.30)
+
+### 12.1 What was read
+
+**Static** (`legal-provenance.md` section 4, the rows "`PCI.VXD`'s Code
+29 on 98 SE and ME" and "CONFIGMG's `Disable_DevNode` and the problem it
+clears"): Windows 98 SE's `PCI.VXD` 4.10.2222 and `CONFIGMG.VXD`, and
+ME's `PCI.VXD` 4.90.3000 for the one path compared, read with an LE
+parser and a disassembler; nothing executed.
+
+1. **Where.** At the parent's `CONFIG_ENUMERATE`, `PCI.VXD` scans the
+   bus, and a per-function callback builds each new devnode's basic
+   configuration: the interrupt first, then the memory and I/O base
+   address registers. For the interrupt it reads Interrupt Pin and
+   Interrupt Line; a pin other than 0 is looked up in the routing table
+   (the BIOS's `$PIR` or the registry's copy), by bus and device, walking
+   up through PCI-to-PCI bridges with the standard swizzle. A link found
+   gives an IRQ descriptor of the link's mask; none, with a line of 1 to
+   15, an IRQ fixed to that line (record 21 section 6.1.1's written line
+   is this case); none with a line of 0 or `FFh` gives **no IRQ
+   descriptor**, and when the function's command register has neither
+   I/O nor memory decode on and it is neither a display device nor a
+   CardBus bridge, `Disable_DevNode(dn, CM_DISABLE_HARDWARE)`.
+2. **What it sets.** CONFIGMG's `Disable_DevNode` with
+   `CM_DISABLE_HARDWARE` sets problem 29 (`CM_PROB_HARDWARE_DISABLED`)
+   and does not count a disable.
+3. **Once.** The callback builds only a devnode it creates: a function
+   whose devnode exists with a basic configuration is skipped, so a later
+   re-enumeration of the parent (this driver's, or a Device Manager
+   Refresh) does not disable it again.
+4. **Nothing later refuses it.** `PCI.VXD`'s `CONFIG_FILTER` for a child
+   returns the default; its `CONFIG_START` programs the allocated
+   resources - the Interrupt Line only from an allocated IRQ - and fails
+   only a failed power-state change.
+5. **What clears it.** `Reprocess_DevNode` and `Setup_DevNode(READY)`
+   both reach CONFIGMG's routine that clears a devnode's problem whatever
+   its code (problem 22 set again only where the disable count is not
+   zero) and re-runs its configuration; the paths followed are the ones
+   these calls take, not every path of CONFIGMG.
+6. **The machine-wide case.** The routing table is dropped for the whole
+   machine when a bus-0 function with a pin has no entry in it (its
+   validation at load) - the reading behind `runs/run-43.md` 43.20's kit
+   finding, inferred from the rule read, not observed.
+
+**Runtime** (`runs/run-44.md`, "44.30"): on 98 SE in the emulator, the
+NVMe of an enclosure directly below a tunnel port at 00:1Ch, where the
+BIOS's table has no entry, bound to Stor98 with the installer record
+present: problem 29, one basic configuration at `LCPRI_NORMAL` holding
+one memory descriptor and no IRQ (as 42-A.15 read). With a reading build
+that took the reprocess-only attempt for it, `Reprocess_DevNode`
+answered `CR_SUCCESS`, the next status reads showed no problem and a
+later one `DN_STARTED`; Stor98 recorded `pin 1 line 0 msi no msix no port
+0/0 polling (interrupt line not set)`; the volume listed and a 16 MiB
+file written to it compared equal. `Setup_DevNode(READY)` was not
+reached.
+
+### 12.2 The form
+
+A function every candidate rule of section 4 admits (rules 1 to 5 as
+they stand), whose problem as admitted is 29, and whose source
+configuration ("The existing configurations", the gate unchanged) holds
+**memory descriptors only** - one or more of `ResType_Mem`, no IRQ, I/O
+or DMA, the every-type read meeting exactly those - is the
+**memory-only form**. Nothing is added to it: the attempt is section
+4's reprocess-only attempt ("Across generations and starts", rule 1),
+run as that one is:
+
+1. ACTIVE on its own deadline (`CM_NOIRQ_TXN_MS`), the admission inside
+   the window as for any attempt.
+2. The changeable admission conditions read again (step 3 of "The
+   transaction"): rule 2 (unstarted, a configuration problem; a device
+   the user disabled meanwhile reads 22 and is not reprocessed) and rule
+   4 (the binding still `*IOS` and `stor98.mpd`); one no longer met is
+   FAILED "admission".
+3. `Reprocess_DevNode(dn, CM_REPROCESS_DEVNODE_ASYNCHRONOUS)`;
+   ATTEMPTED.
+4. The outcome read at each pass (step 5): `DN_STARTED` with no problem
+   is DONE, the Interrupt Line read and logged (read 0 in the leg);
+   the problem still there after `CM_NI_READY_AFTER_MS`, the one
+   `Setup_DevNode(READY)` fallback after the same reads; the deadline
+   FAILED "timeout".
+
+Why this and not a configuration: the configuration `PCI.VXD` built is
+already the one section 4 would add (memory, no IRQ), and what stands
+between it and an allocation is the problem `PCI.VXD` set once, at the
+devnode's creation, which nothing sets again (12.1 items 3 and 4).
+Problems 12, 16 and 27 with such a configuration are not this case and
+stay EXCLUDED "configuration".
+
+**Bounds.** One such attempt per devnode per publication generation, by
+the journal's reprocess mark (a journal entry for the devnode that
+holds no configuration, so `CM_NOIRQ_ATTEMPTS`, which counts
+configurations created, is untouched). The mark is tested only for a
+PENDING entry that has passed every rule and every descriptor check:
+an entry ACTIVE or ATTEMPTED runs to its deadline, and DONE, EXCLUDED
+and FAILED stand for the generation, as section 4 has them; a PENDING
+entry of the form whose devnode's mark this generation already took (the
+devnode met as new again within it) is EXCLUDED "attempts". The next
+generation (a re-plug is a new devnode; this driver's next
+re-enumeration of the member) judges the device anew. Counted: a
+candidate, a reprocess, and `MemOnly`.
+
+**What it writes.** The reprocess, and the fallback where it is
+reached; no configuration added, changed or freed, no line written,
+nothing persisted. N8's rules have nothing to hold here.
+
+**What it overrides, and why that is safe.** `PCI.VXD`'s disable says
+the BIOS gave the function no interrupt (12.1 item 1's condition). The
+start is made only for a function bound to a Stor98 the installer
+recorded at `0.4.0.0` or later, which polls when it finds no line (rule
+4, unchanged), so its driver needs nothing that was withheld; the line
+stays as it was ([static] `CONFIG_START` writes it only from an
+allocated IRQ; [obs] 0). The user's own disable is never undone: it
+reads 22 before the call (step 2), and a disable count above zero makes
+CONFIGMG set 22 again rather than start the device [static].
+
+**Across a restart and a Refresh.** A function present at POST is
+`PCI.VXD`'s afresh, with whatever routing the BIOS gives; nothing of this
+form persists. A Refresh after the start re-enumerates the parent; where
+it keeps the existing devnode and its basic configuration, `PCI.VXD`
+skips it (12.1 item 3) and the function stays started [static,
+inferred; no leg has read a Refresh after the start]. A Refresh that
+removes and re-creates the devnode gives a new one that `PCI.VXD` judges
+afresh - at problem 29 again only where 12.1 item 1's conditions hold
+again, its decode off among them [inferred, unread]; such a devnode is
+seen by this driver only inside a window, the current one if it is
+still open, otherwise the next (section 4, "When"), with the limits on
+telling a re-created devnode from the old one that section 4 states.
+
+**ME.** Its `PCI.VXD` takes the same path [static, compared]; the leg
+reads it (section 8.2 item 10).
+
+### 12.3 Rule 4's installer record, as installs leave it
+
+On the 98 SE image read here, installed by the `3.1.0.0` package with
+no drive attached, `HKLM\Software\xhci98\Stor98` held `PreExisting` and
+no `Version`: record 26 section 6.3 writes the version in a run that
+installed or updated the bundled Stor98 on a device or its file
+(`s98_record_version`, `xhciinst\inst_eng.c`), and that run bound none.
+A drive first plugged in after such an install is then refused "not
+Stor98's" by rule 4 until a later run of the installer records the
+version, so the form started no such drive. This record does not change
+rule 4, which N10 rests on. **The owner's decision of 2026-10-25**
+(`roadmap-usb4.md`, decisions table, "44.30"): the installer records
+the version whenever it stages the bundled Stor98 on 98 SE or ME, drive
+present or not (record 26 draft 43, section 6.3, "The record"), so a
+drive first plugged in after such an install meets rule 4. Rule 4's
+`Version` then says the bundled release was installed or staged; a run
+that owed the file update of an older installed `stor98.mpd` and did not
+make it writes no value from the copy (record 26 draft 43), so N10's
+exception stays the one it names - an update made and its shutdown
+pending. The legs of
+section 12.4 imported the record by hand, as 42-A.15's did; the leg of
+the installer change installs with no drive attached and plugs the
+drive afterwards, with nothing imported.
+
+### 12.4 Host vectors and legs
+
+Host vectors (`test\test_cm_noirq.c`, `test_memonly` and `test_gate`):
+the form at problem 29 reprocessed with nothing added, placed or
+written, then DONE with the line read; problems 12, 16 and 27 with the
+same configuration, and an IRQ descriptor with no memory one, refused
+"configuration"; the `READY` fallback and the deadline with nothing
+added; the same generation not reprocessed twice, a new generation
+reprocessed once more with the attempts bound untouched; the user's
+disable and another driver met before the call (FAILED "admission"); the
+window closed before the form is reached; two memory descriptors; the
+switch 0 and no installer record.
+
+Legs, on 98 SE and ME in the emulator with the IRQ withheld (the tunnel
+bridge at 00:1Ch): problem 29 before; the form taken, started on its
+memory alone, Stor98 polling, a file written and compared; an unplug
+and re-plug (a new devnode) started again; `XhciCmNoIrqStart` 0 leaving
+it at problem 29; and the routed control (the tunnel bridge at 00:05),
+where the function starts on its IRQ and is never a candidate.
+
 ## Sources
+
+- Windows 98 SE's `PCI.VXD` 4.10.2222 and `CONFIGMG.VXD`, and ME's
+  `PCI.VXD` 4.90.3000, from the owner's install media, read statically
+  on 2026-10-25 (`legal-provenance.md` section 4); section 12.
 
 - The Windows 98 Second Edition DDK's `INC_WIN98_CONFIGMG.H`,
   `INC_WIN98_CFGMGR32.H` and `INC_WIN98_PCI.H` (`tools\win98ddk-extracted\incs\`;

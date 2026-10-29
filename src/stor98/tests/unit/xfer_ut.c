@@ -3,7 +3,7 @@
  * Copyright (c) 2026, Yeo Kheng Meng
  *
  * xfer_ut - host unit test of the maximum transfer size setting
- * (src/xfertun.h: StorMaxTransferKB on 9x, maxtransferkb= on NT; absent,
+ * (src/xfertun.h: StorMaxTransferKB on 9x, stormaxtransferkb= on NT; absent,
  * accepted, refused below 64, above the build's maximum, off the 4 KiB step,
  * not a number, trailing garbage), with the strict decimal parsing the
  * driver uses for it (XferParseDec). PLAN "0.4.0.0 plan", owner decision
@@ -95,7 +95,7 @@ static void test_text(void)
     check(fromText(NULL, 512, &kb) == XFER_DEFAULT && kb == 512, "absent: 512 on 9x");
     check(fromText("256", 512, &kb) == XFER_SET && kb == 256, "\"256\" on 9x: 256");
     check(fromText("  128", 256, &kb) == XFER_SET && kb == 128, "leading blanks: 128");
-    check(fromTextF("128;pollmode=1", TRUE, 256, &kb) == XFER_SET && kb == 128, "NT field stops at ';'");
+    check(fromTextF("128;storpollmode=1", TRUE, 256, &kb) == XFER_SET && kb == 128, "NT field stops at ';'");
     check(fromTextF("128;garbage", FALSE, 512, &kb) == XFER_REFUSED && kb == 512, "9x REG_SZ \"128;garbage\": refused");
     check(fromTextF("128;", FALSE, 512, &kb) == XFER_REFUSED && kb == 512, "9x REG_SZ \"128;\": refused");
     check(fromText("512", 256, &kb) == XFER_REFUSED && kb == 256, "\"512\" on NT: refused, 256 stands");
@@ -108,7 +108,7 @@ static void test_text(void)
     check(fromText("128k", 512, &kb) == XFER_REFUSED && kb == 512, "\"128k\": refused");
     check(fromText("128,256", 256, &kb) == XFER_REFUSED && kb == 256, "\"128,256\": refused");
     check(fromText("128 ", 512, &kb) == XFER_SET && kb == 128, "trailing blanks: 128");
-    check(fromTextF("128 ;idle=10", TRUE, 256, &kb) == XFER_SET && kb == 128, "NT field, blank then ';': 128");
+    check(fromTextF("128 ;storwriteidlems=10", TRUE, 256, &kb) == XFER_SET && kb == 128, "NT field, blank then ';': 128");
     check(fromText(" ", 512, &kb) == XFER_REFUSED && kb == 512, "blank only: refused");
 }
 
@@ -125,7 +125,7 @@ static void test_keys(void)
 
     printf("DriverParameter keys\n");
     for (i = 0; i < n; i++) {
-        if (strcmp(keys[i], "maxtransferkb=") == 0) {
+        if (strcmp(keys[i], "stormaxtransferkb=") == 0) {
             mine++;
         }
         for (j = 0; j < n; j++) {
@@ -135,7 +135,7 @@ static void test_keys(void)
             }
         }
     }
-    check(mine == 1, "maxtransferkb= is in the key list once");
+    check(mine == 1, "stormaxtransferkb= is in the key list once");
     check((int)ok, "no DriverParameter key occurs inside another");
 }
 

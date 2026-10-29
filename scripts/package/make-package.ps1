@@ -235,7 +235,9 @@ Stage no Stor98. By default (since 3.1.0.0, roadmap-usb4 task 42-A.30,
 owner 2026-10-19) every package bundles the Stor98 that
 scripts\build-driver.cmd built and gated from src\stor98 for this
 architecture: the x86 package stor98.mpd, the x86 stor98.sys and
-inf\stor98-x86.inf as stor98.inf, the amd64 package the amd64 stor98.sys
+inf\stor98-x86.inf as stor98.inf and inf\stor98-9x.inf as stor98w9.inf
+(the 98 SE and ME install, design record 31 section 5.2), the amd64
+package the amd64 stor98.sys
 and inf\stor98-x64.inf as stor98.inf, each with Stor98's LICENSE, NOTICE
 and docs\package-readme.txt as stor98-LICENSE.txt, stor98-NOTICE.txt and
 stor98-readme.txt (package-common.ps1, "Stor98, the bundled NVMe driver").
@@ -792,6 +794,52 @@ time; they land in different directories on purpose.
             } else {
                 Write-Warn ("no S98VSD.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdPath)
             }
+        }
+    }
+    # XHCIPFW.VXD (task 44.49, design record 32 section 8), the 98 SE and ME
+    # static VxD that closes PCI bridges' prefetchable windows lying wholly
+    # above 4 GB before the configuration manager reads them: this project's
+    # own image, in every x86 package whether or not it carries Stor98, the
+    # qemu flavour's image in the qemu package; held to src\pfw\check-pfw.ps1
+    # again here, and staged under the hash it had then. A package built where
+    # src\pfw\build.cmd could not build it goes without it (make-release.ps1
+    # refuses that for a cut).
+    $pfwFile = $null
+    if ($Arch -eq "x86") {
+        $pfwPath = Join-Path $repo ("src\pfw\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "XHCIPFW.VXD")
+        if (Test-Path -LiteralPath $pfwPath -PathType Leaf) {
+            if (-not $SkipBinaryGates) {
+                $pfwArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\check-pfw.ps1"), $pfwPath)
+                if ($Flavor -eq "qemu") { $pfwArgs += "-Qemu" }
+                $out = & powershell.exe @pfwArgs 2>&1
+                if ($LASTEXITCODE -ne 0) { throw ("XHCIPFW.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+            }
+            $pfwFile = [pscustomobject]@{ FullPath = $pfwPath; Dest = "XHCIPFW.VXD"
+                                          Sha256 = (Get-FileHash -LiteralPath $pfwPath -Algorithm SHA256).Hash }
+            Write-Ok ("XHCIPFW.VXD from {0}" -f $pfwPath)
+        } else {
+            Write-Warn ("no XHCIPFW.VXD at {0}: this package goes without it (src\pfw\build.cmd builds it)" -f $pfwPath)
+        }
+    }
+    # XHCIPFW.SYS (task 44.49, design record 32 section 11): the same step for
+    # 2000 and the 32-bit Vista and 7 (task 44.72), beside it in every x86 package, the
+    # qemu image in the qemu package; held to src\pfw\nt\check-pfwsys.ps1
+    # again here and staged under the hash it had then.
+    $pfwSysFile = $null
+    if ($Arch -eq "x86") {
+        $pfwSysPath = Join-Path $repo ("src\pfw\nt\" + $(if ($Flavor -eq "qemu") { "objfre_qemu" } else { "objfre" }) + "\i386\xhcipfw.sys")
+        if (Test-Path -LiteralPath $pfwSysPath -PathType Leaf) {
+            if (-not $SkipBinaryGates) {
+                $pfwSysArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1"), $pfwSysPath)
+                if ($Flavor -eq "qemu") { $pfwSysArgs += "-Qemu" }
+                $out = & powershell.exe @pfwSysArgs 2>&1
+                if ($LASTEXITCODE -ne 0) { throw ("XHCIPFW.SYS failed its gate:`n" + (($out | Out-String).TrimEnd())) }
+            }
+            $pfwSysFile = [pscustomobject]@{ FullPath = $pfwSysPath; Dest = "XHCIPFW.SYS"
+                                             Sha256 = (Get-FileHash -LiteralPath $pfwSysPath -Algorithm SHA256).Hash }
+            Write-Ok ("XHCIPFW.SYS from {0}" -f $pfwSysPath)
+        } else {
+            Write-Warn ("no XHCIPFW.SYS at {0}: this package goes without it (src\pfw\nt\build.cmd builds it)" -f $pfwSysPath)
         }
     }
 
@@ -1479,6 +1527,18 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
     $rootInf = Join-Path $stageDir "xhci98.inf"
     if (-not (Test-Path -LiteralPath $rootInf)) {
         Copy-Item -LiteralPath $InfPath -Destination $rootInf -Force
+    }
+    # XHCIPFW.VXD and XHCIPFW.SYS at the root of the x86 package, as gated above.
+    foreach ($pf in @($pfwFile, $pfwSysFile)) {
+        if ($null -eq $pf) { continue }
+        $dest = Join-Path $stageDir $pf.Dest
+        if (Test-Path -LiteralPath $dest) {
+            throw "$($pf.Dest) would land at '$dest', where this package already has a file."
+        }
+        Copy-Item -LiteralPath $pf.FullPath -Destination $dest
+        if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -ne $pf.Sha256) {
+            throw "the staged copy of $($pf.Dest) is not the file that was gated; it changed while it was being copied."
+        }
     }
     # The bundled Stor98 build, last, so a name it shares with anything this
     # project staged is a refusal rather than an overwrite; and each copy is

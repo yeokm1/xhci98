@@ -32,11 +32,18 @@ typedef struct _XHCI_QRY_IN {
     ULONG CounterWords;     /* the door computes already put in            */
     const UCHAR *Pci;       /* XHQ_PCI_BYTES, or NULL                      */
     ULONG PciState;         /* XHQ_PCI_*                                   */
+    ULONG DriverVersion;    /* XHCI_VER_PACKED (version 2)                 */
+    ULONG XportRecords;     /* the transport part's records, at most
+                             * XHQ_XPORT_MAX; left 0 for the caller to
+                             * fill (version 2)                            */
+    ULONG Ports;            /* the ports part's bytes, at most
+                             * XHQ_PORTS_MAX; written XHQ_PT_NONE for the
+                             * caller to fill (version 3)                  */
 } XHCI_QRY_IN, *PXHCI_QRY_IN;
 
 #define XHQ_ANS_WHOLE           0UL
 #define XHQ_ANS_HEADER          1UL     /* room < the whole: header alone  */
-#define XHQ_ANS_TOO_SMALL       2UL     /* room < XHQ_HDR_BYTES            */
+#define XHQ_ANS_TOO_SMALL       2UL     /* room < XHQ_HDR_BYTES_V1         */
 
 /*
  * The answer into out (room bytes). What it serves follows the level, as
@@ -46,7 +53,12 @@ typedef struct _XHCI_QRY_IN {
  * written as text, oldest byte first, a byte outside 0x20..0x7E, CR and LF
  * as '.'; XHQ_F_FAILED at every level from Terminal; when the oldest
  * bytes may be a record's tail (Dropped != 0, or
- * Emitted) it starts after the first LF (XHQ_F_LOG_CUT). Returns
+ * Emitted) it starts after the first LF (XHQ_F_LOG_CUT). The transport
+ * part, XportRecords records at every level, and then the ports part,
+ * Ports bytes at every level, are placed last and written zero: the caller
+ * fills them under the lock it counted them under. With
+ * room for less than the whole, the header alone, cut to its first
+ * XHQ_HDR_BYTES_V1 bytes in a room under XHQ_HDR_BYTES. Returns
  * XHQ_ANS_*; *info the bytes written.
  */
 ULONG XhciQryAnswer(UCHAR *out, ULONG room, const XHCI_QRY_IN *in,

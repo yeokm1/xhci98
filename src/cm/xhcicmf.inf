@@ -30,9 +30,10 @@
 ; This INF becomes the port's device INF, so its description replaces the
 ; OS's bridge name: TbBridgeDesc for the Thunderbolt 2 and 3 generation's
 ; ports (Falcon, Alpine and Titan Ridge, Ice Lake), U4BridgeDesc for the
-; USB4 generation's (Maple Ridge, Tiger Lake onward, Barlow Ridge, AMD,
-; ASMedia), BridgeDesc for the emulator's generic bridges (record 21
-; section 3.3; the gate's CM-DESC).
+; USB4 generation's (Maple Ridge, Tiger Lake onward, Barlow Ridge, AMD),
+; U4AsBridgeDesc for ASMedia's ASM4242 downstream ports, which name their
+; maker and product as its NHI does (task 44.55), BridgeDesc for the
+; emulator's generic bridges (record 21 section 3.3; the gate's CM-DESC).
 ;
 ; The filter reads no registry value; the NHI's values are xhcicm.inf's.
 ;
@@ -46,7 +47,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/24/2026,3.2.0.0
+DriverVer=10/28/2026,3.3.0.0
 
 [Manufacturer]
 %Mfg%=CmFilterModels,NTx86.6.0
@@ -96,7 +97,7 @@ DriverVer=10/24/2026,3.2.0.0
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14CD&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14EF&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_150A&CC_0604
-%U4BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423&CC_0604
+%U4AsBridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423&CC_0604
 ; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
 ; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
 %BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001&CC_0604
@@ -147,7 +148,7 @@ DriverVer=10/24/2026,3.2.0.0
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14CD&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14EF&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_150A&CC_0604
-%U4BridgeDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2423&CC_0604
+%U4AsBridgeDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2423&CC_0604
 ; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
 ; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
 %BridgeDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_0001&CC_0604
@@ -223,5 +224,6 @@ Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
 TbBridgeDesc="xHCI98 Thunderbolt PCI Bridge"
 U4BridgeDesc="xHCI98 USB4 PCI Bridge"
+U4AsBridgeDesc="xHCI98 USB4 PCI Bridge (ASMedia ASM4242)"
 BridgeDesc="xHCI98 PCI Bridge"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

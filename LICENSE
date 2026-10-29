@@ -5,8 +5,9 @@ for Windows 98 SE to Windows 7.
 Copyright (c) 2026 Yeo Kheng Meng
 
 This program is free software; you can redistribute it and/or modify it under
-the terms of the GNU General Public License, version 2, as published by the
-Free Software Foundation.
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
@@ -16,7 +17,7 @@ You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc., 51 Franklin
 Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-SPDX-License-Identifier: GPL-2.0-only
+SPDX-License-Identifier: GPL-2.0-or-later
 
 The complete text of the GNU General Public License, version 2, follows. It is
 reproduced verbatim; nothing above or below it modifies it. The scope note
@@ -403,12 +404,17 @@ recorded exception, and some of its files are not only this project's code.
 src/cm/tbt_ring.c and src/cm/tbt_regs.h were lifted from the usb4-emu
 project's tools/usb4cm while that code was under the MIT licence, and keep its
 copyright line and MIT permission notice. Since 2026-10-15, when usb4-emu was
-relicensed to GPL-2.0-only, code may also be adapted from usb4-emu and from
-Linux's drivers/thunderbolt (GPL-2.0): src/cm/tbt_u4cm.c is adapted from both
-and carries their copyright lines and SPDX-License-Identifier: GPL-2.0-only,
-and outside src/ the host-test file test/u4_fakefab.c and the cross-check
-files scripts/usb4-crosscheck/u4cm-crosscheck.c and run-crosscheck.sh adapt
-usb4-emu code and keep its notice.
+relicensed to GPL-2.0-only, code may also be adapted from usb4-emu:
+src/cm/tbt_u4cm.c and src/cm/tbt_ring.c adapt it, and outside src/ the
+host-test file test/u4_fakefab.c and the cross-check files
+scripts/usb4-crosscheck/u4cm-crosscheck.c and run-crosscheck.sh; each keeps
+the notice of the usb4-emu file it came from. usb4-emu's copyright holder,
+this project's author, offers what this project takes from usb4-emu under
+GPL-2.0-or-later (2026-10-25); usb4-emu itself stays GPL-2.0-only. The
+portions of src/cm/tbt_u4cm.c and src/cm/tbt_ring.c first adapted from
+Linux's drivers/thunderbolt (GPL-2.0) were rewritten from the USB4
+specifications on 2026-10-26 (roadmap-usb4 task 44.38), and neither file
+carries a Linux copyright line.
 Each adapted file keeps the copyright lines and the licence notice of every
 file it came from. docs/contributing/legal-provenance.md section 2a lists each
 file, the source file, the commit read and what was taken, and section 3
@@ -427,12 +433,12 @@ This project's tools are compiled binaries that statically contain
 third-party code; the drivers are not among them. There are five tools and,
 for 3.0.0.0, eight executables: XHCIQUAL.EXE, the DOS qualification tool;
 XHCISNAP.EXE, the Windows snapshot reader; XHCICLN.EXE and XHCICL64.EXE, the
-cleanup tool, from release 2.4.0.0; and XHCIINST.EXE and XHCIIN64.EXE, the
-install tool, and XHCITR.EXE and XHCITR64.EXE, the xHCI98 USB Tree, from
-release 3.0.0.0. None is one file: every cut keeps its own copies, so the
-repository tracks each under releases/<version>/tools/<tool>/ (XHCIQUAL and
-XHCISNAP at the version root, without tools/, in a release before 2.4.0.0),
-and a download carries them in the same places.
+cleanup tool, from release 2.4.0.0 to 3.2.0.0; and XHCIINST.EXE and
+XHCIIN64.EXE, the install tool, and XHCITR.EXE and XHCITR64.EXE, the xHCI98
+USB Tree, from release 3.0.0.0. None is one file: every cut keeps its own
+copies, so the repository tracks each under releases/<version>/tools/<tool>/
+(XHCIQUAL and XHCISNAP at the version root, without tools/, in a release
+before 2.4.0.0), and a download carries them in the same places.
 XHCIQUAL.EXE is linked as a DOS/32 Advanced DOS Extender executable, which
 embeds that extender as the program's stub, and it statically links the Open
 Watcom C runtime. XHCISNAP.EXE and the 32-bit XHCICLN.EXE, XHCIINST.EXE and

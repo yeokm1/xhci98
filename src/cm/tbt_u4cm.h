@@ -26,14 +26,15 @@
  * SOURCES. "Spec" is the USB4 Specification 2.0 and "Guide" the USB4
  * Connection Manager Guide 2.0 (November 2025 bundle,
  * docs/references/usb4_202511/). The sequence starts from usb4-emu's
- * tools/usb4cm/core/u4cm.c (main 3c74189, GPL-2.0-only), adapted under the
- * owner's rule of 2026-10-15 (the run brief's addendum 7) and changed as
- * design record 22 section 2.2's table says; Linux drivers/thunderbolt
- * (c6859eed, GPL-2.0: tb.c, switch.c, tunnel.c, path.c, usb4.c, tmu.c,
- * lc.c, quirks.c, cap.c) is the cross-check and the source of what usb4cm
- * lacks, translated to C89 for this driver, its notices kept in
- * tbt_u4cm.c. Behaviour taken from Linux alone is [linux]: unconfirmed
- * until a hardware capture shows it. Every real USB4 host is untested; the
+ * tools/usb4cm/core/u4cm.c (main 3c74189), adapted under the owner's rule
+ * of 2026-10-15 and changed as design record 22 section 2.2's table says;
+ * its notice is kept in tbt_u4cm.c, and usb4-emu's copyright holder
+ * offers it to this project under GPL-2.0-or-later (owner, 2026-10-25).
+ * What usb4cm lacks is written from the Spec, the Guide, the USB4 DROM
+ * Specification and usb4-emu's ICM-PROTOCOL.md (task 44.38 rewrote the
+ * portions once translated from Linux drivers/thunderbolt). Behaviour
+ * taken from Linux's alone is [linux]: unconfirmed until a hardware
+ * capture shows it. Every real USB4 host is untested; the
  * emulator's two host models are the only fabrics this has met.
  *
  * Use (record 22 section 4.4, after tbt_hw.h's TbtHwSelect returned
@@ -76,19 +77,19 @@
 #define TBT_U4_DROM_MAX             512UL
 #define TBT_U4_DEPTH_MAX            5UL     /* Guide 3.2.1 step 2 */
 
-#define TBT_U4_ROUTER_READY_US      500000UL    /* Guide 3.2.1 note; Linux usb4_switch_setup */
+#define TBT_U4_ROUTER_READY_US      500000UL    /* Guide 3.2.1 note */
 #define TBT_U4_ENUM_TRIES           20UL        /* usb4cm u4cm_connect */
 #define TBT_U4_ENUM_GAP_US          50000UL
-#define TBT_U4_ROP_US               500000UL    /* Linux usb4.c usb4_native_switch_op */
+#define TBT_U4_ROP_US               500000UL    /* record 22 section 5.2, [linux] */
 #define TBT_U4_CONFIG_READY_US      500000UL    /* Guide 3.2.3 note */
-#define TBT_U4_LANE1_CL0_US         1000000UL   /* Linux switch.c tb_wait_for_port */
-#define TBT_U4_BONDING_US           500000UL    /* Guide 7.1 tBonding */
+#define TBT_U4_LANE1_CL0_US         1000000UL   /* record 22 section 5.2, [linux] */
+#define TBT_U4_BONDING_US           500000UL    /* record 22 section 5.2 */
 #define TBT_U4_LANE_DISABLE_US      500000UL
 #define TBT_U4_DETECT_US            500000UL    /* Guide 5.3.1 step 1 */
 #define TBT_U4_L0_US                1000000UL   /* usb4cm u4cm_pcie_tunnel */
 #define TBT_U4_DRAIN_US             500000UL    /* Guide 5.2.2 */
 #define TBT_U4_TEARDOWN_GAP_US      2UL         /* Spec Table 5-16 tTeardown, a minimum */
-#define TBT_U4_HCA_US               1500000UL   /* Linux usb4.c usb4_usb3_port_cm_request */
+#define TBT_U4_HCA_US               1500000UL   /* record 22 section 5.2, [linux] */
 #define TBT_U4_DPR_HOLD_US          10000UL     /* Spec 6.9 tClearDPR, a minimum */
 #define TBT_U4_DPR_CL0_US           2000000UL
 #define TBT_U4_CONNECT_US           2000000UL   /* usb4cm connect_wait_us */
@@ -108,10 +109,20 @@
 #define TBT_U4_SERVICE_BATCH        16UL        /* frames a budgeted safe point takes */
 #define TBT_U4_USB3_MAX_MBPS        80000UL     /* above any USB4 link: unrepresentable */
 
-/* USB3 bandwidth (record 22 section 6.9; Linux usb4.c, tunnel.c, quirks.c). */
+/* USB3 bandwidth (record 22 section 6.9): the quirk's clamp (section 6.10,
+ * [linux]), the floor of a release (section 7.3 step 4, [linux]) and the
+ * PCIe path's minimum (Guide 6.1.2.3). */
 #define TBT_U4_USB3_QUIRK_MBPS      16376UL
-#define TBT_U4_USB3_KEEP_MBPS       900UL       /* usb4_usb3_port_release_bandwidth */
+#define TBT_U4_USB3_KEEP_MBPS       900UL
 #define TBT_U4_PCIE_RESERVE_MBPS    1500UL
+
+/* XhciCmAsmediaPcie7Credits (record 22 section 18.8): the one router pair
+ * it acts on, and the credits it writes there (an
+ * experiment read on the hardware bench). */
+#define TBT_U4_ASM_VENDOR           0x174CUL
+#define TBT_U4_ASM_HOST             0x2428UL    /* the ASM4242's host router */
+#define TBT_U4_ASM_DEVICE           0x2463UL    /* the ASM2464PD */
+#define TBT_U4_ASM7_CREDITS         7UL
 
 /* ---------------------------------------------------------------------- */
 /* Configuration (record 22 section 12)                                   */
@@ -129,6 +140,16 @@ typedef struct _TBT_U4_CONFIG {
      * first TbtU4Poll: the driver takes its learning baseline of the
      * tunnel ports between the two (record 22 section 7.6). Default FALSE. */
     BOOLEAN DeferFirstPoll;
+    /* XhciCmAsmediaPcie7Credits, default 0 (record 22 section 18.8, task
+     * 44.41): a bench experiment, an explicit exception to section 6.8's
+     * keeping of a USB4 protocol adapter's credits, IFC and ISE as read
+     * (Spec Table 8-23; Guide Table 5-2 note 1). TRUE writes 7 credits,
+     * IFC 1 and ISE 0 into the two protocol-adapter HopID 8 entries of a
+     * PCIe tunnel this driver builds between an ASM4242 host router
+     * (174C:2428) and an ASM2464 device router (174C:2463), an
+     * experiment for the hardware bench; nothing
+     * else changes. */
+    BOOLEAN AsmPcie7Credits;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -145,7 +166,7 @@ typedef struct _TBT_U4_ADP {
     UCHAR CapTmu;
     UCHAR MaxInHop;         /* ADP_CS_5 6:0 */
     UCHAR MaxOutHop;        /* ADP_CS_5 17:11 */
-    UCHAR CtlCredits;       /* the HopID 0 entry's credits (Linux tb_init_port) */
+    UCHAR CtlCredits;       /* the HopID 0 entry's credits (Guide 5.1.4 step 2) */
     UCHAR Present;
 } TBT_U4_ADP, *PTBT_U4_ADP;
 
@@ -206,6 +227,10 @@ typedef struct _TBT_U4_ROUTER {
 typedef struct _TBT_U4_TUNNEL {
     BOOLEAN Up;
     BOOLEAN Preserved;      /* found at start, never built here */
+    BOOLEAN Own;            /* preserved, and its port matched to the record
+                             * of this driver's earlier instance on the same
+                             * NHI (section 9.4): rebuilt across a sleep as
+                             * if built here; set only with Preserved */
     BOOLEAN Incomplete;     /* an entry could not be read: never proven closed */
     ULONG Hd;               /* lane HopID downstream */
     ULONG Hu;               /* lane HopID upstream */
@@ -464,8 +489,38 @@ typedef struct _TBT_U4_OBLIGATION {
     ULONG Hu;
 } TBT_U4_OBLIGATION, *PTBT_U4_OBLIGATION;
 
+/* Section 9.4: what an instance hands its successor on the same NHI - the
+ * tunnels it owns (built here, or Own), per port with the device router's
+ * identity. Kept by the driver between the two instances. */
+typedef struct _TBT_U4_CARRY_TUN {
+    BOOLEAN Up;
+    ULONG Hd;
+    ULONG Hu;
+} TBT_U4_CARRY_TUN;
+
+typedef struct _TBT_U4_CARRY_PORT {
+    BOOLEAN Used;
+    ULONG Lane0;
+    ULONG Vendor;
+    ULONG Device;
+    BOOLEAN Tbt3;
+    ULONG Uuid[4];
+    TBT_U4_CARRY_TUN Pcie;
+    TBT_U4_CARRY_TUN Usb3;
+} TBT_U4_CARRY_PORT;
+
+typedef struct _TBT_U4_CARRY {
+    BOOLEAN Valid;
+    BOOLEAN Forwarded;      /* TbtU4GetCarry: handed on unchanged, the start
+                             * never reaching the host router (the driver
+                             * keeps its original stamp) */
+    ULONG HostVendor;
+    ULONG HostDevice;
+    TBT_U4_CARRY_PORT Port[TBT_U4_MAX_PORTS];
+} TBT_U4_CARRY, *PTBT_U4_CARRY;
+
 /* ---------------------------------------------------------------------- */
-/* The quirk table (section 6.10)                                         */
+/* The quirk table (section 6.10; the quirks by Linux's names, [linux])   */
 /* ---------------------------------------------------------------------- */
 
 #define TBT_U4_QUIRK_USB3_MAX_BW    0x01UL  /* quirk_usb3_maximum_bandwidth */
@@ -474,8 +529,8 @@ typedef struct _TBT_U4_OBLIGATION {
 #define TBT_U4_QUIRK_BLOCK_RPM      0x08UL  /* quirk_block_rpm_in_redrive: nothing */
 #define TBT_U4_QUIRK_FORCE_POWER    0x10UL  /* quirk_force_power_link: nothing */
 
-/* The router configuration space's vendor and device (Linux quirks.c
- * tb_check_quirks); DROM ids for the one row matched by them. Any IRQL. */
+/* The router configuration space's vendor and device (record 22 section
+ * 6.10, [linux]); DROM ids for the one row matched by them. Any IRQL. */
 ULONG TbtU4QuirkMatch(ULONG vendor, ULONG device);
 ULONG TbtU4QuirkMatchDrom(ULONG dromVendor, ULONG dromDevice);
 
@@ -641,6 +696,13 @@ typedef struct _TBT_U4CM {
                                back over the host router's fresh walk: until
                                then a failure restores them whole, so the
                                next snapshot copies no half-built table */
+    /* Section 9.4: the record this instance was given (TbtU4SetCarry),
+     * and whether its start reached the host router (a start that did
+     * not hands the record on unchanged) and its running stage. */
+    TBT_U4_CARRY Carried;
+    BOOLEAN HostReached;
+    BOOLEAN RanHealthy;
+    BOOLEAN Disturbed;      /* failed or contained since the start: a latch */
     ULONG HwErrors;         /* the core's requests that ended with no answer
                                (the ring not moving or stopped, or no reply
                                at all): a section 9.2 discovery that saw one
@@ -713,6 +775,18 @@ ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs);
 VOID TbtU4Stop(PTBT_U4CM cm);
 
 /*
+ * Section 9.4. TbtU4SetCarry, after TbtU4Init and before TbtU4Start: the
+ * record the earlier instance on the same NHI handed on (NULL or not
+ * Valid: none). TbtU4GetCarry, after TbtU4Stop: the record this instance
+ * hands on - a fresh one when it ran healthy (its running stage reached,
+ * never failed, not contained, not suspended, no resume running), the one
+ * it was given when its start never reached the host router, otherwise
+ * none (out->Valid FALSE). No access; any IRQL.
+ */
+VOID TbtU4SetCarry(PTBT_U4CM cm, const TBT_U4_CARRY *in);
+VOID TbtU4GetCarry(const TBT_U4CM *cm, PTBT_U4_CARRY out);
+
+/*
  * The host interface lost (record 22 section 7.7, record 21 section 5.5's
  * monitor): the instance contained for good, with no register access of
  * any kind - every request refused before the transport, every wait of
@@ -769,6 +843,14 @@ VOID TbtU4Contain(PTBT_U4CM cm);
  *
  * TbtU4TakeDebt: RemovalDebt read and cleared for `port`.
  * TbtU4SetBarred: the driver's barrier for `port`.
+ *
+ * TbtU4PortVacant (record 21 section 6.1.2, task 44.54): TRUE when `port`
+ * has no device router behind it now - its host lane 0 adapter read and
+ * DISCONNECTED - and nothing of this driver's is recorded on it (no
+ * device, no tunnel up, owed or unproved, no host entry unswept, no
+ * departed router). FALSE where any of that holds or the read fails. One
+ * read through the control channel: PASSIVE_LEVEL, the connection-manager
+ * thread, after the recovery's commit.
  */
 VOID TbtU4Snapshot(PTBT_U4CM cm);
 LONG TbtU4Recover(PTBT_U4CM cm, BOOLEAN *final);
@@ -776,6 +858,7 @@ BOOLEAN TbtU4RecoverDemote(PTBT_U4CM cm, ULONG port);
 VOID TbtU4RecoverCommit(PTBT_U4CM cm);
 VOID TbtU4RecoverFail(PTBT_U4CM cm);
 BOOLEAN TbtU4TakeDebt(PTBT_U4CM cm, ULONG port);
+BOOLEAN TbtU4PortVacant(PTBT_U4CM cm, ULONG port);
 VOID TbtU4SetBarred(PTBT_U4CM cm, ULONG port, BOOLEAN barred);
 
 /* Whether a device router is connected on any port (record 22 section
@@ -791,5 +874,13 @@ BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm);
 
 /* A port by its 1-based index, for the log and the snapshot. */
 const TBT_U4_PORT *TbtU4Port(const TBT_U4CM *cm, ULONG port);
+
+#ifdef XHCI_HOST_TEST
+/* The USB3 bandwidth conversions, for the host suite's exhaustive vectors
+ * (task 44.38): Mb/s to units of 512 << scale bytes per 1 ms frame,
+ * rounded up, and units back to Mb/s, rounded to nearest. */
+ULONG TbtU4TestBwUnits(ULONG mbps, ULONG scale);
+ULONG TbtU4TestBwMbps(ULONG units, ULONG scale);
+#endif
 
 #endif /* TBT_U4CM_H */

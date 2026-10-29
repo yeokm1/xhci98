@@ -5,7 +5,9 @@
  * generator, the verifiable pattern and its check, the generation
  * allocator at its limit, the statistics at their bounds, the latency
  * histogram, the header and the leftover rule, paths, the workload key,
- * the saved file read back, and the command line.
+ * the saved file read back, and the command line; task 44.21 (record 29
+ * section 16): the Sequential throughput preset, /test and /ops, the
+ * processor figures and their text, the overrun line, the XPRF-CPU line.
  */
 
 #include <stdio.h>
@@ -461,6 +463,12 @@ static void test_key_saved(void)
         res[i * PF_MAX_PASSES].reqs = 100;
         pf_lat_init(&res[i * PF_MAX_PASSES].lat);
         pf_lat_add(&res[i * PF_MAX_PASSES].lat, 250);
+        res[i * PF_MAX_PASSES].cpuKind = (i % 2) ? PF_CPU_9X : PF_CPU_NT;
+        res[i * PF_MAX_PASSES].cpuCount = (i % 2) ? 1 : 32;
+        res[i * PF_MAX_PASSES].cpuBusyUs = 999999u;
+        res[i * PF_MAX_PASSES].cpuIntUs = 99999u;
+        res[i * PF_MAX_PASSES].cpuOwnUs = 9999u;
+        res[i * PF_MAX_PASSES].haveOwn = 1;
     }
     memset(&ri, 0, sizeof(ri));
     ri.toolVersion = "3.2.0.0";
@@ -748,6 +756,243 @@ static void test_cmdline(void)
     CHECK_EQ(pf_cmdline(3, a6, &p, &c, why, sizeof(why)), 1, "not a power of two");
 }
 
+/* Record 29 section 16.3 */
+static void test_seqmax(void)
+{
+    PF_PARAMS p;
+    PF_ENV e;
+    PF_PLAN pl;
+    PF_CMDLINE c;
+    char why[300];
+    char *a1[] = { "x", "/preset", "seqmax", "/test", "seq,2048,1,1", "/test", "RND,4,32,2", "/ops", "read" };
+    char *a2[] = { "x", "/test", "seq,0,1,1" };
+    char *a3[] = { "x", "/test", "seq,1024,33,1" };
+    char *a4[] = { "x", "/test", "seq,1024,1" };
+    char *a5[] = { "x", "/test", "seq,1024,1,1,1" };
+    char *a6[] = { "x", "/test", "big,1024,1,1" };
+    char *a7[] = { "x", "/ops", "sideways" };
+    char *a8[] = { "x", "/test", "seq,8192,1,9" };
+    char *a9[] = { "x", "/test", "seq,1024,1,1x" };
+    char *a10[] = { "x", "/preset", "sweep", "/test", "seq,64,1,1" };
+    char *a11[] = { "x", "/test", "seq,64,1,1", "/max", "1024" };
+    char *a12[] = { "x", "/min", "64", "/test", "seq,64,1,1" };
+    char *a13[] = { "x", "/test", "seq,64,1,1", "/preset", "quick", "/test", "rnd,4,1,1", "/test", "seq,128,1,1" };
+    char *a14[] = { "x", "/nolatency", "/preset", "quick" };
+    char *many[2 + 2 * 17];
+    int i;
+
+    env_nt(&e);
+    pf_defaults(&p, PF_OS_NT);
+    pf_preset(&p, PF_PRESET_SEQMAX);
+    CHECK(strcmp(pf_preset_name(PF_PRESET_SEQMAX), "Sequential throughput") == 0, "its name");
+    CHECK_EQ(pf_preset_by_name("seqmax"), PF_PRESET_SEQMAX, "its key");
+    CHECK(p.pattern == PF_PAT_RANDOM && !p.verify && !p.writeThrough, "nothing per request");
+    CHECK_EQ(p.fileMiB, 1024, "1 GiB");
+    CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_OK, "plans on NT");
+    CHECK(strcmp(pl.steps[0].label, "Seq 1M d1 t1") == 0, "NT: the like-for-like row first");
+    CHECK(strcmp(pl.steps[6].label, "Seq 8M d8 t1") == 0, "NT: Seq 8M d8 last");
+    CHECK_EQ(pl.maxSize, 8u * 1048576u, "8 MiB the largest");
+    e.memBytes = (pf_u64)256 * 1048576u;
+    CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_REFUSE, "NT: too little memory for its buffers");
+    CHECK(strstr(why, "buffers would be too large") != NULL, "with the buffer sentence");
+    e.os = PF_OS_9X;
+    e.memBytes = (pf_u64)512 * 1048576u;
+    e.fat = 1;
+    pf_defaults(&p, PF_OS_9X);
+    pf_preset(&p, PF_PRESET_SEQMAX);
+    CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_OK, "plans on 9x, FAT");
+    CHECK(strcmp(pl.steps[0].label, "Seq 512K d1 t1") == 0, "9x: the 512 KiB baseline first");
+    CHECK(strcmp(pl.steps[4].label, "Seq 2M d1 t1") == 0, "9x: 2 MiB");
+    CHECK(strcmp(pl.steps[8].label, "Seq 1M d1 t2") == 0, "9x: two threads last");
+    CHECK_EQ(pl.slots, 2, "9x: depth 1, at most two threads");
+
+    pf_defaults(&p, PF_OS_NT);
+    CHECK_EQ(pf_cmdline(9, a1, &p, &c, why, sizeof(why)), 0, "/test and /ops");
+    CHECK_EQ(p.ntests, 2, "the first /test replaces the preset's tests");
+    CHECK(p.tests[0].kind == PF_SEQ && p.tests[0].size == 2097152u && p.tests[0].depth == 1, "seq,2048,1,1");
+    CHECK(p.tests[1].kind == PF_RND && p.tests[1].size == 4096u && p.tests[1].depth == 32 &&
+          p.tests[1].threads == 2, "RND,4,32,2, any case");
+    CHECK_EQ(p.ops, PF_OP_READ, "/ops read");
+    CHECK_EQ(p.preset, PF_PRESET_CUSTOM, "custom");
+    CHECK_EQ(pf_cmdline(3, a2, &p, &c, why, sizeof(why)), 1, "size 0");
+    CHECK(strstr(why, "as seq,1024,8,1") != NULL, "the /test sentence");
+    CHECK_EQ(pf_cmdline(3, a3, &p, &c, why, sizeof(why)), 1, "depth 33");
+    CHECK_EQ(pf_cmdline(3, a4, &p, &c, why, sizeof(why)), 1, "three fields");
+    CHECK_EQ(pf_cmdline(3, a5, &p, &c, why, sizeof(why)), 1, "five fields");
+    CHECK_EQ(pf_cmdline(3, a6, &p, &c, why, sizeof(why)), 1, "an unknown kind");
+    CHECK_EQ(pf_cmdline(3, a7, &p, &c, why, sizeof(why)), 1, "an unknown /ops");
+    CHECK_EQ(pf_cmdline(3, a8, &p, &c, why, sizeof(why)), 1, "nine threads");
+    CHECK_EQ(pf_cmdline(3, a9, &p, &c, why, sizeof(why)), 1, "a trailing letter");
+    pf_defaults(&p, PF_OS_NT);
+    CHECK_EQ(pf_cmdline(5, a10, &p, &c, why, sizeof(why)), 0, "a /test after a sweep preset");
+    CHECK(!p.sweep && p.ntests == 1, "makes it fixed tests");
+    CHECK_EQ(pf_cmdline(5, a11, &p, &c, why, sizeof(why)), 1, "/test then /max refused");
+    CHECK(strstr(why, "use one or the other") != NULL, "with its sentence");
+    CHECK_EQ(pf_cmdline(5, a12, &p, &c, why, sizeof(why)), 1, "/min then /test refused");
+    pf_defaults(&p, PF_OS_NT);
+    CHECK_EQ(pf_cmdline(9, a13, &p, &c, why, sizeof(why)), 0, "/test, /preset, /test, /test");
+    CHECK(p.ntests == 2 && p.tests[0].kind == PF_RND && p.tests[1].size == 131072u, "a /preset begins a new list");
+    pf_defaults(&p, PF_OS_NT);
+    CHECK_EQ(pf_cmdline(4, a14, &p, &c, why, sizeof(why)), 0, "/nolatency");
+    CHECK_EQ(p.noLatency, 0, "a later /preset resets it, as every setting");
+    many[0] = "x";
+    for (i = 0; i < 17; i++) {
+        many[1 + 2 * i] = "/test";
+        many[2 + 2 * i] = "seq,64,1,1";
+    }
+    pf_defaults(&p, PF_OS_NT);
+    CHECK_EQ(pf_cmdline(1 + 2 * 16, many, &p, &c, why, sizeof(why)), 0, "sixteen /test");
+    CHECK_EQ(p.ntests, 16, "sixteen tests");
+    CHECK_EQ(pf_cmdline(1 + 2 * 17, many, &p, &c, why, sizeof(why)), 1, "seventeen refused");
+}
+
+/* Record 29 section 16.2 */
+static void test_cpu(void)
+{
+    PF_RESULT r[3];
+    PF_SHOWN sh;
+    char s[200];
+    int i;
+
+    memset(r, 0, sizeof(r));
+    for (i = 0; i < 3; i++) {
+        r[i].status = PF_ST_OK;
+        r[i].us = 1000000u;
+        r[i].reqs = 1000;
+        r[i].bytes = 1000000000u;
+        r[i].cpuKind = PF_CPU_NT;
+        r[i].cpuCount = 2;
+        r[i].cpuBusyUs = 468000u;
+        r[i].cpuIntUs = 102000u;
+        r[i].cpuOwnUs = 30000u;
+        r[i].haveOwn = 1;
+        pf_lat_init(&r[i].lat);
+    }
+    pf_shown(r, 3, PF_SHOW_BEST, 0, 1, &sh);
+    CHECK_EQ(sh.cpuKind, PF_CPU_NT, "NT figures");
+    CHECK_EQ(sh.busy10, 234, "busy 23.4% of 2");
+    CHECK_EQ(sh.int10, 51, "interrupts and DPCs 5.1%");
+    CHECK_EQ(sh.busyPerReqUs, 468, "468 us a request");
+    CHECK_EQ(sh.ownPerReqUs, 30, "this program 30 us");
+    pf_cpu_text(&sh, s, sizeof(s));
+    CHECK(strcmp(s, "busy 23.4% of 2, interrupts and DPCs 5.1%, 468 us a request, this program 30 us") == 0,
+          "the text");
+    pf_cpu_short(&sh, s, sizeof(s));
+    CHECK(strcmp(s, "cpu 23%") == 0, "the short text");
+    r[1].cpuKind = PF_CPU_NONE;
+    pf_shown(r, 3, PF_SHOW_MEAN, 0, 1, &sh);
+    CHECK_EQ(sh.cpuKind, PF_CPU_NONE, "a counting pass without the figure: none");
+    r[1].cpuKind = PF_CPU_NT;
+    r[1].status = PF_ST_FAILED;
+    r[1].cpuBusyUs = 2000000u;
+    pf_shown(r, 3, PF_SHOW_MEAN, 0, 1, &sh);
+    CHECK_EQ(sh.busy10, 234, "a failed pass does not count");
+    r[2].cpuBusyUs = 5000000u;
+    pf_shown(r, 3, PF_SHOW_MEAN, 0, 1, &sh);
+    CHECK_EQ(sh.busy10, 1000, "never above the processors' time");
+    r[2].cpuCount = 4;
+    pf_shown(r, 3, PF_SHOW_MEAN, 0, 1, &sh);
+    CHECK_EQ(sh.cpuKind, PF_CPU_NONE, "passes over different processor counts: no figure");
+    r[2].cpuCount = 2;
+    r[2].haveOwn = 0;
+    r[2].cpuBusyUs = 468000u;
+    pf_shown(r, 3, PF_SHOW_MEAN, 0, 1, &sh);
+    CHECK(sh.cpuKind == PF_CPU_NT && !sh.haveOwn, "this program's only when every pass has it");
+    for (i = 0; i < 3; i++) {
+        r[i].status = PF_ST_OK;
+        r[i].cpuKind = PF_CPU_9X;
+        r[i].cpuCount = 1;
+        r[i].cpuBusyUs = 250000u;
+        r[i].haveOwn = 0;
+    }
+    pf_shown(r, 3, PF_SHOW_BEST, 0, 1, &sh);
+    pf_cpu_text(&sh, s, sizeof(s));
+    CHECK(strcmp(s, "busy 25.0% (Windows' own figure), 250 us a request") == 0, "the 9x text");
+    r[0].cpuKind = r[1].cpuKind = r[2].cpuKind = PF_CPU_NONE;
+    pf_shown(r, 3, PF_SHOW_BEST, 0, 1, &sh);
+    pf_cpu_text(&sh, s, sizeof(s));
+    CHECK(s[0] == 0, "no figure, no text");
+}
+
+/* Record 29 section 16.4, and the report's new lines */
+static void test_overrun(void)
+{
+    PF_PARAMS p;
+    PF_ENV e;
+    static PF_PLAN pl;
+    static PF_RESULT res[PF_MAX_STEPS * PF_MAX_PASSES];
+    PF_RUNINFO ri;
+    PF_TEXT t;
+    PF_SAVED sv;
+    static char buf[65536];
+    char why[200];
+    int i;
+
+    env_nt(&e);
+    pf_defaults(&p, PF_OS_NT);
+    pf_preset(&p, PF_PRESET_QUICK);
+    CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_OK, "Quick plans");
+    memset(res, 0, sizeof(res));
+    for (i = 0; i < pl.nsteps; i++) {
+        PF_RESULT *r = &res[i * PF_MAX_PASSES];
+
+        r->status = PF_ST_OK;
+        r->bytes = 2000000u;
+        r->reqs = 2;
+        r->us = 2000000u;
+        pf_lat_init(&r->lat);
+        pf_lat_add(&r->lat, 1000u);
+    }
+    CHECK(!pf_overran(&pl.steps[0], &res[0]), "2 s for 2 s is no overrun");
+    res[0].us = 3000000u;
+    CHECK(!pf_overran(&pl.steps[0], &res[0]), "1 s over is none");
+    res[PF_MAX_PASSES].us = 27800000u;
+    pf_lat_add(&res[PF_MAX_PASSES].lat, 26000000u);
+    res[PF_MAX_PASSES].lastIssueUs = 1900000u;
+    res[PF_MAX_PASSES].workersEndUs = 27700000u;
+    res[PF_MAX_PASSES].lastCheckMs = 1200u;
+    res[PF_MAX_PASSES].haveCourse = 1;
+    res[PF_MAX_PASSES].issuedAny = 1;
+    res[PF_MAX_PASSES].checkedAny = 1;
+    /* a pass that issued nothing in its time (the 98 SE IDE reading) */
+    res[3 * PF_MAX_PASSES].us = 22400000u;
+    res[3 * PF_MAX_PASSES].reqs = 0;
+    res[3 * PF_MAX_PASSES].bytes = 0;
+    pf_lat_init(&res[3 * PF_MAX_PASSES].lat);
+    res[3 * PF_MAX_PASSES].workersEndUs = 22390000u;
+    res[3 * PF_MAX_PASSES].haveCourse = 1;
+    res[PF_MAX_PASSES].cpuKind = PF_CPU_NT;
+    res[PF_MAX_PASSES].cpuCount = 2;
+    res[PF_MAX_PASSES].cpuBusyUs = 1000000u;
+    CHECK(pf_overran(&pl.steps[1], &res[PF_MAX_PASSES]), "27.8 s for 2 s is");
+    memset(&ri, 0, sizeof(ri));
+    ri.toolVersion = "3.3.0.0";
+    ri.date = "2026-10-25 12:00";
+    ri.system = "Windows 4.10.2222 A";
+    ri.drive = "C:\\";
+    ri.fileSystem = "FAT32";
+    ri.model = "";
+    ri.sector = 512;
+    ri.timerFreq = 1193180u;
+    ri.stor98 = "";
+    pf_tx_init(&t, buf, sizeof(buf));
+    pf_report(&t, &p, &pl, res, 1, &ri);
+    CHECK(!t.overflow, "the report fits");
+    CHECK(strstr(buf, "    ran 27.80 s for 2 s: last request issued at 1.90 s, longest request ") != NULL,
+          "the overrun line");
+    CHECK(strstr(buf, "workers ended at 27.70 s, tick count at the last check 1.20 s") != NULL,
+          "the overrun line's end, wrapped");
+    CHECK(strstr(buf, "    ran 22.40 s for 2 s: no request issued, workers ended at 22.39 s\r\n") != NULL,
+          "a pass that issued nothing");
+    CHECK(strstr(buf, "Processor (the whole system, over every pass that counts):\r\nSeq 1M d1 t1   read  aligned   busy 1.8% of 2")
+          != NULL, "the processor block");
+    CHECK(strstr(buf, "500.00\r\n                               ms a request") != NULL,
+          "its line wrapped under its text");
+    CHECK(strstr(buf, "XPRF-CPU 1 Seq 1M d1 t1|read|aligned|1|nt|2|1000000000|0|0\r\n") != NULL, "the machine line");
+    CHECK_EQ(pf_saved_parse(buf, strlen(buf), &sv), 0, "a report with XPRF-CPU lines reads back");
+    CHECK_EQ(sv.nrows, pl.nsteps, "every step");
+}
+
 static void test_labels(void)
 {
     char s[64];
@@ -779,6 +1024,9 @@ int main(void)
     test_paths();
     test_key_saved();
     test_cmdline();
+    test_seqmax();
+    test_cpu();
+    test_overrun();
     test_labels();
     printf("test_pf: %d checks, %d failures\n", checks, failures);
     return failures != 0;

@@ -479,9 +479,24 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG CompositeRewrites;
     ULONG CompositeMismatches;
     ULONG CompositeIntervals;
+    /* The storage transport decisions (31-A.3; roadmap-usb4 44.35, design
+     * record 13 section 10.7, "The decision kept"), appended at word 246:
+     * one per XHCI_XPORT_WHY_* but NOT_UAS, in that order - UAS chosen of
+     * the two, UAS alone, UAS alone with the force value set, Bulk-Only by
+     * the force value, Bulk-Only for want of streams at SuperSpeed, and no
+     * transport (UAS alone at SuperSpeed without streams). Counted by the
+     * thread, plainly, at each PDO's creation (a function made again
+     * included); hc->XportDecisions until 3.3.0.0, which was never
+     * zeroed. */
+    ULONG XportUas;
+    ULONG XportUasOnly;
+    ULONG XportUasOnlyForced;
+    ULONG XportBotForced;
+    ULONG XportBotNoStreams;
+    ULONG XportNoStreams;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 246 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 252 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

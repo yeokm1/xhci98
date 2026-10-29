@@ -19,7 +19,7 @@ typedef unsigned long INST_U32;
 
 #define INST_ID_CHARS       208     /* MAX_DEVICE_ID_LEN 200, and a NUL     */
 #define INST_LINE_CHARS     1024
-#define INST_MAX_IDS        96
+#define INST_MAX_IDS        256     /* xhci98.inf's 9x section: 156 (44.55) */
 #define INST_NAME_CHARS     64
 
 /* ---- architectures and systems -------------------------------------------- */
@@ -314,32 +314,79 @@ int inst_testsigning(const char *options);
  * inst_os_kind: 8 and 8.1, and every later Windows that kind admits), the
  * Secure Boot note, since Microsoft's Driver Signing Policy lists 32-bit
  * beside 64-bit for 8 and later with Secure Boot on and the x86 drivers
- * are never signed (AGENTS.md). arch is INST_ARCH_*; nt and major as
+ * are never signed (AGENTS.md); on x64 the connection-manager-alone kind
+ * takes INST_SIG_X64_8, whose words are 8's and later's (no F8 menu, no
+ * Vista; record 26 section 5.3.3). arch is INST_ARCH_*; nt and major as
  * RtlGetVersion reads them. */
 #define INST_SIG_NONE       0
 #define INST_SIG_X64        1
 #define INST_SIG_X86_SB     2
+#define INST_SIG_X64_8      3   /* x64, the CM-alone kind (8 to 10)  */
 int inst_sig_note_kind(int arch, int nt, INST_U32 major, int osKind);
 /* The Secure Boot note's text, INST_SIG_X86_SB. */
 const char *inst_sig_x86_sb_text(void);
 
-/* 64-bit systems of the connection-manager-alone kind and the connection
- * manager (record 23 section 5.10, revision 30): Windows makes xhcicm a
+/* 64-bit NT 6.0 and later and the connection manager (record 23 section
+ * 5.10, revision 30; section 5.14, revision 46): Windows makes xhcicm a
  * boot-start driver when it installs the tunnel-port filter on a PCI
- * bridge, and a start that cannot load it then goes to Automatic Repair
- * (read on 8 x64; the boot-start rewrite on 8.1 x64 and 8 x86 too; task
- * 43.22). So on those systems the connection manager is installed only
- * with a test-signed package (cmSigned 1) in confirmed test-signing mode
- * (tsOn); INST_CMBOOT_WARN goes on with the boot-driver warning,
- * INST_CMBOOT_REFUSE refuses the run, INST_CMBOOT_NONE is every other
- * system. Keyed on osKind, not the version, so a system inst_os_kind
- * admits to that kind later (10, task 43.34) takes the gate with it. */
+ * bridge (read on 8 x64, 8.1 x64 and 8 x86, task 43.22; on 7 x64 at the
+ * 3.2.0.0 cut and task 44.32), and a start that cannot load a boot driver
+ * does not finish. The tool sets the start type back at the end of its
+ * run (inst_cm_start_fix), but until then, and after any later install
+ * of the filter until the mark service sets it back, it is a boot driver.
+ * So on 64-bit Vista to 10 (nt, major 6 and later, a kind the tool
+ * installs on) the connection manager is installed only with a
+ * test-signed package (cmSigned 1) in confirmed test-signing mode (tsOn);
+ * INST_CMBOOT_WARN goes on with the warning, INST_CMBOOT_REFUSE refuses
+ * the run, INST_CMBOOT_NONE is every other system (XP x64, the 32-bit
+ * systems). Task 44.12 widened it from the connection-manager-alone kind
+ * to Vista and 7 x64. */
 #define INST_CMBOOT_NONE    0
 #define INST_CMBOOT_WARN    1
 #define INST_CMBOOT_REFUSE  2
-int inst_cm_boot_gate(int arch, int osKind, int cmSigned, int tsOn);
+int inst_cm_boot_gate(int arch, int nt, INST_U32 major, int osKind,
+                      int cmSigned, int tsOn);
 const char *inst_cm_boot_warn_text(void);
 const char *inst_cm_boot_refuse_text(void);
+
+/* The connection manager off the boot path (record 23 section 5.14; task
+ * 44.32, owner 2026-10-25): 1 when xhcicm's Start value, read (found 1)
+ * as a REG_DWORD (type), is 0, 1 or 2 - Windows made it a boot driver
+ * when it installed the filter on a bridge - and is to be set back to
+ * demand start (3); 0 for 3, for 4 (disabled, the user's) and for a
+ * value not read or of another type. The installer at the end of a run
+ * and the mark service at each poll ask it. */
+#define INST_CM_START_DEMAND 3UL
+int inst_cm_start_fix(int found, INST_U32 type, INST_U32 start);
+
+/* What is done about it (record 23 section 5.14): fix is
+ * inst_cm_start_fix's answer, bootPath whether a devnode on the path of
+ * the disk Windows starts from (the disk and every ancestor) names xhcicm
+ * in its UpperFilters or LowerFilters (1), none does (0), or it could not
+ * be read (-1). A device the system starts from needs every driver of its
+ * stack boot start, so the start type is set back only when no such
+ * devnode is there (INST_CMST_SET); otherwise it is kept, and said
+ * (INST_CMST_KEEP_PATH, INST_CMST_KEEP_UNREAD). INST_CMST_NONE: nothing
+ * to do. */
+#define INST_CMST_NONE          0
+#define INST_CMST_SET           1
+#define INST_CMST_KEEP_PATH     2
+#define INST_CMST_KEEP_UNREAD   3
+int inst_cm_start_action(int fix, int bootPath);
+
+/* One filter property of a devnode on the system disk's path, as
+ * CM_Get_DevNode_Registry_Property answered it (inst_bootp.c): cr its
+ * CONFIGRET, type the value's type, buf[0..len) the value read (len 0
+ * where nothing was read). 1 a REG_MULTI_SZ naming svc; 0 one that does
+ * not, or no such value (CR_NO_SUCH_VALUE); INST_BP_GROW the buffer was
+ * too small (CR_BUFFER_SMALL: read again with the size the call gave);
+ * -1 anything else - an error, another type - which proves nothing. */
+#define INST_BP_GROW            2
+#define INST_CR_BUFFER_SMALL    0x1AUL
+#define INST_CR_NO_SUCH_VALUE   0x25UL
+#define INST_REG_MULTI_SZ_TYPE  7UL
+int inst_bp_prop_verdict(INST_U32 cr, INST_U32 type, const char *buf,
+                         size_t len, const char *svc);
 
 /* What a refused staging means (record 23 section 5.10, revision 30): for
  * SPAPI_E_NO_CATALOG_FOR_OEM_INF on a 64-bit system of the
@@ -374,6 +421,43 @@ const char *inst_sb_text(int arch, int state);
 /* Test-signing mode counts as confirmed only when SystemStartOptions
  * holds TESTSIGNING (tsOption) and Secure Boot is not read as on. */
 int inst_ts_confirmed(int tsOption, int sbState);
+
+/* Record 26 section 5.3.3 (task 44.25; owner, 2026-10-25): with Secure Boot
+ * read as on, the connection manager on a 32-bit system of the
+ * connection-manager-alone kind is refused before any change, as the x64
+ * gate refuses it (Windows makes it a boot driver there, and the unsigned
+ * 32-bit driver does not load with Secure Boot on: the start would stop in
+ * Automatic Repair). cmInRun: the connection manager is in this run. 1
+ * refused. The x64 rule stays inst_cm_boot_gate's. */
+int inst_cm_sb_refused(int arch, int osKind, int cmInRun, int sbState);
+const char *inst_cm_sb_refuse_text(void);
+/* The x86 note's sentence when Secure Boot is not known and the connection
+ * manager is in the run: Windows makes it a boot driver while it installs
+ * its filter, and the run sets it back but where the system disk is below
+ * a filtered device or its path cannot be read (record 23 section 5.14;
+ * task 44.79: since 44.32 it is no longer a boot driver after the run but
+ * there). */
+const char *inst_cm_x86_boot_text(void);
+/* With Secure Boot read as on, a run with the USB drivers on a system of
+ * the connection-manager-alone kind is refused before any change: Windows
+ * loads none of them, and every xHCI controller would stop working. 1
+ * refused. */
+int inst_usb_sb_refused(int nt, int osKind, int usbInclude, int sbState);
+const char *inst_usb_sb_refuse_text(void);
+
+/* Memory integrity's configuration (record 26 section 5.3.3): the value
+ * INST_HVCI_VALUE under HKLM\INST_HVCI_KEY, read on 64-bit 10 only (the
+ * kind INST_OS_CMONLY, NT 10.0), shown, never changed. The same three
+ * answers as inst_sb_state, by the same rule. */
+#define INST_HVCI_KEY "SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\" \
+                      "Scenarios\\HypervisorEnforcedCodeIntegrity"
+#define INST_HVCI_VALUE     "Enabled"
+int inst_hvci_state(int found, INST_U32 type, INST_U32 value);
+/* 1 where it is read: x64, the connection-manager-alone kind, NT 10. */
+int inst_hvci_applies(int arch, int osKind, INST_U32 major);
+/* The note's sentence for memory integrity read as on; cmInRun picks the
+ * boot-driver form. NULL for any other state. */
+const char *inst_hvci_text(int state, int cmInRun);
 
 /* ---- registry values (record 23 section 8) ---------------------------------------- */
 
@@ -416,7 +500,9 @@ typedef struct _INST_VALUE {
     /* Record 26 section 11 (task 42-A.2): a value whose allowed set is a
      * range rather than a list (Hi nonzero: Lo to Hi, the masks unused),
      * and a value the INFs do not write (NoInf: Def is its default, the
-     * driver's built-in one). */
+     * driver's built-in one). A 98 SE and ME Thunderbolt value (task
+     * 44.46) has Def too: the x86 INF's default, for the amd64 INF, which
+     * does not write it. */
     INST_U32 Lo;
     INST_U32 Hi;
     int NoInf;
@@ -481,7 +567,8 @@ int inst_value_greyed(int index, const INST_ENV *env);
 const char *inst_value_only(int index);
 
 /* The value's default: the INF's AddReg line, or, for a value no INF
- * writes (NoInf), the table's. 1 when there is one. */
+ * writes (NoInf) and for a 98 SE and ME Thunderbolt value the INF does
+ * not write (the amd64 xhcicm.inf), the table's. 1 when there is one. */
 int inst_value_default(int index, const char *infText, INST_U32 *def);
 
 /* An answer: 0 keep (empty line), 1 *value set, -1 not an allowed value. */
@@ -699,6 +786,10 @@ typedef struct _INST_OPTS {
     int Stor98Vxd;          /* /s98vsd: S98VSD.VXD ticked, 98 SE and
                                ME only (design record 30 section 7.2)  */
     int NoStor98Vxd;        /* /nos98vsd: S98VSD.VXD unticked        */
+    int Pfw;                /* /xhcipfw: XHCIPFW.VXD or .SYS ticked,
+                               with the Thunderbolt part (design record
+                               32 sections 8 and 11)                   */
+    int NoPfw;              /* /noxhcipfw: it unticked                */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -717,6 +808,17 @@ typedef struct _INST_OPTS {
     int SetIndex[INST_MAX_SET];
     INST_U32 SetValue[INST_MAX_SET];
 } INST_OPTS;
+
+/* XHCIINST /toomany's text (task 44.4; record 23 section 2): INSTALL.BAT's
+ * refusal of a command line that reaches %9 on 98 SE and ME, said by the
+ * console tool so that the batch file ends with its exit code, 1. Each
+ * line within 79 columns (test_inst). */
+#define INST_TOOMANY_TEXT \
+    "Too many arguments for INSTALL.BAT on this Windows (eight at most, " \
+    "seven\nafter /console; /set Name=Value counts as three, and a " \
+    "/wdmfree:stage=\nlist one more than its packages). Run\n" \
+    "TOOLS\\XHCIINST\\XHCIINST.EXE /dir release-x86 with the same " \
+    "arguments\ninstead, or use fewer arguments.\n"
 
 /* Returns 0 with opts filled, 1 refused with why in err. */
 int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
@@ -889,7 +991,7 @@ const char *inst_confirm_text(int runs, int writes, int nt, int unsure);
 /* The window's Summary headline (matrix N1, 2026-10-19): runs, a device
  * installed or updated; writes, a setting the pages chose (the drivers'
  * or Stor98's); other, any other change the page lists (a component
- * added, the tools folder moved). "Every device is current" only when
+ * added, the install folder moved). "Every device is current" only when
  * nothing at all changes. */
 const char *inst_summary_head(int runs, int writes, int other, int nt);
 
@@ -1127,12 +1229,22 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 #define INST_CW_CMALONE     0x02UL  /* 98 SE, ME: the CM alone           */
 #define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
 #define INST_CW_NOCM8       0x10UL  /* 8, 8.1: no connection manager     */
+#define INST_CW_INTELTB     0x20UL  /* over Intel's Thunderbolt driver   */
+/* tb: the Thunderbolt component ticked; intel: Intel's Thunderbolt driver
+ * runs a controller (record 23 section 8.5.1). */
 INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
-                            int usb, int stor, int s98);
+                            int usb, int stor, int s98, int tb, int intel);
 /* Every warning of the set, one paragraph each in that order, separated by
- * a blank line; dir the tools folder. "" for none. */
+ * a blank line; dir the install folder. "" for none. */
 void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                          size_t cap);
+/* text (paragraphs; a newline ends a line) wrapped into lines of at most
+ * width characters, lead included, each line starting with lead and ending
+ * with a newline; the length written. The Components warnings are rendered
+ * at INST_WARN_COLUMNS (record 26 section 5.3.2). */
+#define INST_WARN_COLUMNS   78
+size_t inst_wrap_lines(const char *lead, const char *text, size_t width,
+                      char *out, size_t cap);
 
 /* The UAS disk driver, xhciuas.sys (owner, 2026-10-19): a child of the
  * USB drivers, in the run only with them and unless /nouas or its
@@ -1211,9 +1323,26 @@ const char *inst_cmf_where(int arch);
  *                                and ticked only on purpose; nhiPresent
  *                                is said, it no longer decides).
  * A no never removes or updates a Thunderbolt driver already installed: it
- * only leaves this package's out of the copy, the store and the run. */
+ * only leaves this package's out of the copy, the store and the run.
+ * cmAlone: the USB drivers are out of the run (the connection manager
+ * alone), which includes the component unasked - unless intel: Intel's
+ * Thunderbolt driver runs a controller (inst_tb_intel), when it is asked
+ * with no the default (record 23 section 8.5.1; owner, 2026-10-25: ask,
+ * the default leave). */
 int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
-                   int optList, int *ask, int *defaultYes);
+                   int cmAlone, int intel, int optList, int *ask,
+                   int *defaultYes);
+/* The window's Thunderbolt box's own state (record 26 section 5.3, task
+ * 44.79): the one it opens with when the USB drivers are ticked, and the one
+ * it takes back when they are ticked again after the connection manager
+ * alone. It is the console's answer with the USB drivers in the run and
+ * /yes: unticked, a controller found or not, but by /thunderbolt - never
+ * the connection-manager-alone run's unasked yes. */
+int inst_tb_box_default(int haveCm, int nhiPresent, int optThunderbolt,
+                        int intel);
+/* 1 when a controller's service is Intel's Thunderbolt driver's, nhi (its
+ * older package and its DCH driver alike; record 21 section 3.6). */
+int inst_tb_intel(const char *service);
 
 /* The answer to the question: 1 yes, 0 no (Enter: the default), -1 not an
  * answer (asked again). */
@@ -1445,17 +1574,21 @@ const char *inst_self_file(int arch, int which);
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\xhci98"
 #define INST_PUBLISHER          "Yeo Kheng Meng"
 
-/* "xHCI98 USB 3.x drivers <version>", ending " (incomplete: run again)"
+/* "xHCI98 USB 3 drivers <version>", ending " (incomplete: run again)"
  * for an uninstall that stopped part-way; with cmOnly (no xhci98 service
  * registered, xhcicm's registered: record 26 section 9.1, draft 8) "xHCI98
  * Thunderbolt 3 / USB4 connection manager <version>". */
 void inst_arp_name(char *out, size_t cap, const char *version, int incomplete,
                    int cmOnly);
 /* 1 when the entry names the connection manager alone: the xhci98 service
- * read as absent (0), and xhcicm's registered (1) or this run one without
- * the USB drivers (runCmOnly: a staging-only run registers no service);
- * -1 is unreadable. The uninstall's warning takes runCmOnly 0. */
-int inst_arp_cm_only(int xhciService, int cmService, int runCmOnly);
+ * read as absent (0), this run not installing the USB drivers (runUsb 0),
+ * and xhcicm's registered (1) or this run one that installs the connection
+ * manager without the USB drivers (runCmOnly: a staging-only run registers
+ * no service); -1 is unreadable. On 98 SE and ME, which register no
+ * service, "registered" is the driver's file in System32\Drivers (task
+ * 44.60). The uninstall's warning takes runCmOnly and runUsb 0. */
+int inst_arp_cm_only(int xhciService, int cmService, int runCmOnly,
+                     int runUsb);
 
 /* The UninstallString: the window in dir, /uninstall. NT quotes the path;
  * 98 SE and ME, whose install directory is 8.3 with no space, take it as
@@ -1544,6 +1677,14 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
  * every other system. */
 #define INST_PT_VSD             44
 #define INST_PT_VSD_OTHER       45
+/* Record 23 section 8.5.1 (task 44.28): the Thunderbolt box's line over
+ * Intel's Thunderbolt driver. */
+#define INST_PT_TB_INTEL        46
+/* Design record 32 sections 8 and 11.3 (task 44.49): the box under the
+ * Thunderbolt one, naming its file: XHCIPFW.VXD on 98 SE and ME, .SYS on
+ * the NT systems. */
+#define INST_PT_PFW             47
+#define INST_PT_PFW_SYS         48
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1574,7 +1715,7 @@ INST_U32 inst_page_rows(INST_U32 heightDlu);
  * (test\stor98-settings.txt, a copy make-release.ps1 compares with the
  * bundled readme), so a Stor98 release that renames or retypes a value
  * fails the build rather than the user. */
-#define INST_S98_TABLE_VERSION  "3.2.0.0"
+#define INST_S98_TABLE_VERSION  "3.3.0.0"
 
 #define INST_S98_WORDS      0   /* a word of a list (StorWriteThrough)       */
 #define INST_S98_NUMBER     1   /* a decimal number in a range               */
@@ -1587,14 +1728,16 @@ INST_U32 inst_page_rows(INST_U32 heightDlu);
 #define INST_S98_POLLSPINUS     5
 #define INST_S98_GONE           6
 #define INST_S98_IDLE           7
-#define INST_S98_COUNT          8
+#define INST_S98_HOLD9X         8   /* 98 SE and ME only (3.3.0.0)          */
+#define INST_S98_COUNT          9
 
 #define INST_S98_WORDS_MAX      4
 
 typedef struct _INST_S98_VALUE {
     const char *Name9x;     /* the value under Services\stor98 (98 SE, ME);
                                NULL: not settable there                    */
-    const char *KeyNt;      /* the DriverParameter key, without '='      */
+    const char *KeyNt;      /* the DriverParameter key, without '=';
+                               NULL: not settable there (StorHold9xMs)   */
     int Kind;               /* INST_S98_*                                */
     int Asked;              /* on the page (1) or behind Advanced (0)     */
     const char *Unit;       /* "KiB", "us", "ms" or ""                   */
@@ -1612,12 +1755,13 @@ typedef struct _INST_S98_VALUE {
 
 extern const INST_S98_VALUE instS98Values[INST_S98_COUNT];
 
-/* 1 when row i is settable on this system (the NT-only two are not on
- * 98 SE and ME). */
+/* 1 when row i is settable on this system (since 3.3.0.0 every row but
+ * StorHold9xMs, 98 SE and ME only, is on every system; up to 3.2.0.0 gone
+ * and idle were not on 98 SE and ME). */
 int inst_s98_applies(int i, int nt);
 
 /* 1 when Stor98's row i is shown greyed on this system: settable on the
- * other systems only (gone and idle on 98 SE and ME). */
+ * other systems only (no row since 3.3.0.0). */
 int inst_s98_greyed(int i, int nt);
 
 /* What such a row says it is for, or NULL for a row of every system. */
@@ -1666,6 +1810,15 @@ int inst_s98_owned_by_settle(int before, int afterS98, int nt,
  * recorded settings go only when no devnode is bound to Stor98 any more
  * and no Stor98 was there before this installer's first run. */
 int inst_s98_service_removable(int devnodesLeft, int preExisting);
+
+/* The record's Version (record 26 section 6.3, draft 43): written by a run
+ * that includes the bundled Stor98 with its baseline read, not a listing,
+ * when it installed or updated Stor98 (a device or the 9x file update)
+ * or, on 98 SE and ME, made a new local copy carrying it with no
+ * replacement of an installed stor98.mpd owed at any point of the run
+ * (fileUpd) - drive present or not (owner, 2026-10-25, task 44.30). */
+int inst_s98_version_owed(int include, int baseline, int list,
+                          int installed, int nt, int copy9x, int fileUpd);
 
 /* An update's precautions (Stor98's readme, "Updating"): on 98 SE and ME
  * nothing may be using the drive's volume and the machine is shut down,
@@ -1721,14 +1874,15 @@ const char *inst_cm_cat_refusal(int arch, int haveCm, int cat);
  * is. 1 when the drive is installed over. */
 int inst_s98_over_inbox(int is8, const char *service);
 
-/* Record 21 section 7.5 (roadmap-usb4 task 43.59): whether an install or
- * update run writes the mark service's Parameters\Stor98Inf, the staged
- * stor98.inf the service puts on a tunnelled drive Windows gave stornvme:
- * on the INST_OS_CMONLY kind (cmOnly), with Stor98 in the run (s98In), its
- * INF staged by this run (staged) and the service installed or kept at the
- * run's end (mkAction INST_MK_INSTALL). 1 to write it. */
-int inst_s98_auto_value(int cmOnly, int s98In, int staged, int mkAction,
-                        int os81);
+/* Record 31 section 6.2 (record 21 section 7.5 before it): whether an
+ * install or update run writes the mark service's Parameters\Stor98Inf,
+ * the staged stor98.inf the service puts on a tunnelled drive that
+ * arrived without Stor98: on 2000 to 8.1 (fallbackOs,
+ * inst_s98_fallback_os), with Stor98 in the run (s98In), its INF staged
+ * by this run (staged) and the service installed or kept at the run's end
+ * (mkAction INST_MK_INSTALL). 1 to write it. */
+int inst_s98_auto_value(int fallbackOs, int s98In, int staged,
+                        int mkAction);
 
 /* Record 21 section 7.5 (task 43.59, owner 2026-10-23): whether Windows is
  * 8.1 - NT 6.3 with a build below 10000 (8.1 is 6.3.9600; 10 builds from
@@ -1801,6 +1955,16 @@ int inst_vsd_mode(int sys9x, int uninstall, int haveVsd, int s98Ticked,
 #define INST_RENAME_LINE    1040
 typedef int (*INST_RENAME_FN)(void *ctx, const char *key, const char *value);
 int inst_rename_scan(const char *text, INST_RENAME_FN fn, void *ctx);
+/* Task 44.13 (record 23 section 6.6): whether WININIT.INI's text names
+ * the file tmp (its long path, or tmpS, its 8.3 form; without regard to
+ * case) as the source of a [rename] line. 1 named (a swap is pending, the
+ * file is the setup engine's); 0 named by no line (an orphan: 98 SE's
+ * engine, installing a controller added later with xhci98.sys loaded and
+ * of the same version, queues xhci98.sys=xhci98.tmp without writing the
+ * file, so an orphan of that name would be put in place of xhci98.sys at
+ * the next start); -1 the text not read whole (nothing decided). A NULL
+ * text (no WININIT.INI) names nothing. */
+int inst_tmp_named(const char *text, const char *tmp, const char *tmpS);
 /* S98VSD.VXD's entry in that text: INST_VE_*, the long and the 8.3 path
  * of each file compared without regard to case; a text not read whole is
  * INST_VE_CONFLICT. */
@@ -1840,6 +2004,50 @@ typedef struct _INST_VSDFACTS {
 #define INST_VOP_MOVE       17  /* move the .TMP into an absent S98VSD.VXD */
 #define INST_VOP_WRITE_ENTRY 18 /* write this installer's exact line       */
 int inst_vsd_next(const INST_VSDFACTS *f);
+
+/* ---- The step that closes PCI bridges' prefetchable windows above 4 GB
+ * at each start (design record 32): XHCIPFW.VXD on 98 SE and ME (section
+ * 8), XHCIPFW.SYS on 2000, XP and the 32-bit Vista and 7 (section 11;
+ * the owner, 2026-10-27: Q9 the box ticked whenever the Thunderbolt box
+ * is; 2026-10-28, task 44.72: not on the 32-bit 8, 8.1 and 10, where its
+ * start races the PCI driver's) ------------------------------------------- */
+
+/* Which kind of system, for the box. */
+/* CM_PROB_NORMAL_CONFLICT: Device Manager's code 12. */
+#define INST_CM_PROB_NORMAL_CONFLICT 12UL
+#define INST_PFW_SYS_NONE   0   /* 64-bit, any other: not offered        */
+#define INST_PFW_SYS_9X     1   /* 98 SE and ME: XHCIPFW.VXD, ticked     */
+#define INST_PFW_SYS_ALWAYS 2   /* 2000: XHCIPFW.SYS (it does not start
+                                   with such a window)                   */
+#define INST_PFW_SYS_SEEN   3   /* XP, Vista and 7 (x86): XHCIPFW.SYS;
+                                   the installer reads the problem for
+                                   its note                              */
+#define INST_PFW_SYS_GONE   4   /* 8, 8.1 and 10 (x86): not offered; an
+                                   XHCIPFW.SYS this installer placed is
+                                   removed (record 32 section 11.3)      */
+/* nt 0: 98 SE or ME. major.minor: the version (RtlGetVersion's); x86: a
+ * 32-bit system. */
+int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86);
+/* The box, the one place its default is decided (record 32 section 9 Q9
+ * and section 11.3): shown where the system is offered it and the package
+ * carries its file; open (*open) only while the Thunderbolt 3 / USB4
+ * support is in the run (tbTicked), unticked and greyed otherwise; when
+ * open, ticked on every system, /noxhcipfw unticking it. Returns whether
+ * ticked. */
+int inst_pfw_box(int sysKind, int havePfw, int tbTicked, int noSwitch,
+                 int *shown, int *open);
+/* The run's mode for it, as INST_VSD_*: NONE where it is not offered,
+ * UNINSTALL, DESELECTED on GONE whatever the boxes (its own removed),
+ * INACTIVE where the Thunderbolt support is not in the run or
+ * the package does not carry it (an installed one kept), SELECTED ticked,
+ * DESELECTED unticked. */
+int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
+                  int ticked);
+/* A device's BootConfig (REG_RESOURCE_LIST, as the registry holds it):
+ * 1 when it holds a prefetchable memory window (CmResourceTypeMemory or
+ * CmResourceTypeMemoryLarge, CM_RESOURCE_MEMORY_PREFETCHABLE and
+ * CM_RESOURCE_MEMORY_WINDOW_DECODE) starting at or above 4 GB; 0 when not, or when the bytes are not such a list. */
+int inst_pfw_bootcfg_high(const unsigned char *buf, unsigned long n);
 
 /* The layer's file names in IOSUBSYS. Windows loads an IOSUBSYS driver by
  * its base name, so the layer's must differ from Stor98's (stor98.mpd):
@@ -1928,6 +2136,96 @@ int inst_s98_svc_value_stor98(const char *name);
 #define INST_S98_SHARE_HOLD     2
 int inst_s98_share(int otherBound, int fileSame);
 
+/* ---- Stor98 for tunnelled drives only (design record 31) ---------------- */
+
+/* The id the connection manager gives a tunnelled NVMe function (record
+ * 31 section 3.1), and the class every candidate carries. */
+#define INST_S98_TUNNEL_ID      "PCI\\XHCI98_TUNNEL&CC_010802"
+#define INST_S98_CLASS_ID       "PCI\\CC_010802"
+
+/* Record 31 section 7.2: Stor98's candidates are found by class, not by
+ * the INF's ids, since the INF matches the tunnel id alone. 1 when the
+ * compatible ids carry PCI\CC_010802 as a whole string. */
+int inst_s98_by_class(const char *compat, size_t compatBytes);
+/* A devnode the plan, the baseline, the shared-file reading and the
+ * uninstall's inventory take as Stor98's: by class, or by the INF's ids. */
+int inst_s98_candidate(const char *hw, size_t hwBytes, const char *compat,
+                       size_t compatBytes, const INST_IDLIST *ids);
+
+/* Record 31 section 6.2: the systems where the mark service installs
+ * Stor98 on a tunnelled drive left without it - NT 5.0 to 8.1 (6.3 below
+ * build 10000); not 10 (10.0, or 6.3 and 6.4 at a 10 build), not 98 SE
+ * or ME. Major, minor and build as RtlGetVersion gives them. */
+int inst_s98_fallback_os(int nt, INST_U32 major, INST_U32 minor,
+                         INST_U32 build);
+
+/* Record 31 section 7.2: the per-device install of a planned Stor98
+ * device replaces the driver it has (forced) for an update, a /force
+ * reinstall, or an install over Windows' own stornvme (overInbox:
+ * inst_s98_over_inbox); a first install on a device with no driver is
+ * unforced. 1 forced. */
+int inst_s98_dev_forced(int action, int overInbox);
+
+/* Record 31 section 7.1: what an INF copy found in the store (NT) or in
+ * INF and INF\OTHER (98 SE and ME) is to this package. OTHER: not this
+ * project's Stor98 INF (another Provider, another file or service, or a
+ * text that cannot be read as one) - left. OLDER: this project's Stor98
+ * INF at a DriverVer below the package's - removed (NT) or replaced by
+ * the bundled one (98 SE and ME). CURRENT: this project's Stor98 INF at
+ * the package's version or later - left. */
+#define INST_S98_INF_OTHER      0
+#define INST_S98_INF_OLDER      1
+#define INST_S98_INF_CURRENT    2
+/* 1 when the text is this project's Stor98 INF: its [Version] Provider
+ * this project's, every [SourceDisksFiles] entry and every file of every
+ * CopyFiles section stor98.mpd or stor98.sys (at least one entry), every
+ * AddService line naming stor98 (at least one, unless stor98.mpd is the
+ * one file: the 98 SE and ME INF), and no DelService. */
+int inst_s98_inf_identity(const char *text);
+int inst_s98_inf_kind(const char *text, const INST_U32 pkg[4]);
+
+/* The LEFT sentence of a Stor98 device the installer leaves (long: the
+ * console and the log; short: the window's found page). fallback: the
+ * mark service puts Stor98 on such a drive later (inst_s98_fallback_os),
+ * which the sentence for an unknown place then says; later: the place is
+ * read again after the restart (inst_s98_read_later), which the sentences
+ * for an unknown place and a shared file then say instead. NULL for
+ * INST_S98_ELIGIBLE. */
+const char *inst_s98_left_text(int why, int fallback, int later, int brief);
+
+/* Record 31 section 9.3 item 10 (c), read 2026-10-28 (task 44.77): the
+ * running connection manager gives the places, and one of an earlier
+ * release may list none of a host's tunnel ports (3.2.0.0's had no
+ * family for the ASMedia ASM4242), so a tunnel drive Stor98 runs reads as
+ * of unknown place until the connection manager this run installs runs,
+ * after the restart. 1 when the run installs or updates the connection
+ * manager: a present device of its INF (isCm) that this plan runs, with
+ * no driver or an older release. */
+int inst_tb_cm_changes(int present, int isCm, int runs, int action);
+/* 1 when that reading is owed for a device: present, run by an older
+ * Stor98 than the bundled one (olderStor98), of unknown place, and the
+ * run changes the connection manager. */
+int inst_s98_read_later(int present, int olderStor98, int place,
+                        int cmChanges);
+/* 1 when a device's LEFT sentence, and the run's end, send the user to a
+ * run after the restart: of unknown place with that reading owed
+ * (devLater), unless the shared file is held (held) by a drive that the
+ * reading would not free (holdLater clear: an internal one, or one not
+ * read again), whose hold would stand at that run too; or held by the
+ * shared file when every drive holding it is read again (holdLater). */
+int inst_s98_later_said(int why, int devLater, int held, int holdLater);
+
+/* 98 SE and ME (task 44.77, from 44.78's reading): the bundled
+ * stor98.mpd is put in SYSTEM\IOSUBSYS by the run itself, so the first
+ * device install finds it there and asks for no disk. 1 when: not NT,
+ * Stor98 ticked and in the package (carried), the shared file is free
+ * (share INST_S98_SHARE_FREE: no other Stor98), no stor98.mpd is there
+ * (fileState 0; -1 unreadable is not absence), and not a listing. An
+ * installed stor98.mpd is the file update's (s98_file_update_9x), never
+ * this placement's. */
+int inst_s98_mpd_place(int nt, int carried, int share, int fileState,
+                       int list);
+
 /* ---- the machine-wide value as the drivers read it (task 42-A.17) ------ */
 
 /* xhci_regsrc.c's rule (XhciRegCallSeen, XhciRegPick): `found` is whether
@@ -1960,6 +2258,17 @@ int inst_mk_system(const INST_ENV *env);
 int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
                        int safeEject);
 
+/* The service's copy moved over system32's failed with Win32 error err
+ * (task 44.76): the old copy still in use (5, access denied, or 32, a
+ * sharing violation; Windows 2000 reports a service stopped before its
+ * process has let go of its image) is tried again while timeLeft, then,
+ * when the service was registered (had), replaced at the restart. Any
+ * other error fails the step. */
+#define INST_MK_PUT_FAIL    0
+#define INST_MK_PUT_RETRY   1
+#define INST_MK_PUT_QUEUE   2
+int inst_mk_put_next(int had, INST_U32 err, int timeLeft);
+
 /* The XhciCmSafeEject in force after a run, by task 42-A.17's precedence:
  * the machine-wide value when present (mwState 1, mwValue; -1 present and
  * not a DWORD, which the driver reads as its default 1), else each
@@ -1988,8 +2297,8 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "A089EA7DDE174D533B719401B38B99950AB47F48CBF02D52E4072D807923B561"
-#define INST_NONFREE_SUMS     "E3EA38F94C0C30E1804FE1CA6D89F5E0EB671EE4DBFA31A71FBD151AA12845C1"
+#define INST_WDMFREE_SUMS       "0CBF177CF2AEBEE20DF28DFEFE9DFA33A7141D74868AF2FEB8ADC5F28C7FFA75"
+#define INST_NONFREE_SUMS     "F85B52D1D1249B819FA8233DC5C5F974A06F604086E2019E3140F5E9D8C71866"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */
 #define INST_USBDRV_DIR         "USBDRV"
@@ -2092,6 +2401,23 @@ int inst_other_heading_index(const char *heading);
 
 /* The package of a path under a set's folder: its first two parts. */
 void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
+/* Record 26 section 6.7.12 (task 44.11): on 98 SE and ME only these free
+ * packages are staged (on DevicePath), the ones whose devices 98 SE's and
+ * ME's own USB audio INF would take by class; every other package of
+ * either set is copy-only there. 1 when set:id is one of them. */
+int inst_other_9x_stageable(int set, const char *id);
+/* The longest DevicePath with which 98 SE's hardware wizard was read to
+ * find a driver (280 characters; none with 285 or more, section 6.7.6). */
+#define INST_9X_DEVICEPATH_MAX  280
+/* Section 6.7.12's projection: base (DevicePath as this run will leave it
+ * before any staging: its own changes and withdrawals made) with each of
+ * the n folders appended in order where the value stays within
+ * INST_9X_DEVICEPATH_MAX; fits[i] 1 for a folder appended or already an
+ * entry, 0 for one left out (then counted no further). Returns the
+ * projected length, or -1 when base alone passes the limit (every fits[i]
+ * then 0) or a folder is not a valid entry (empty, or holding ';'). */
+int inst_9x_devicepath_project(const char *base, const char *const *folders,
+                               int n, int *fits);
 /* The table's row of a package, or NULL. */
 const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
 /* 1 when the table's relations exclude the pair on system token tok. */
@@ -2139,16 +2465,17 @@ void inst_rec_header(char *out, size_t cap, int set, const char *dir);
 int inst_rec_parse(const char *line, INST_REC_LINE *out);
 
 /* The page's texts (section 6.7.4; proposals for the owner): the box, its
- * sentence (dir the tools folder), the stage box and its line for n INFs,
+ * sentence (dir the install folder), the stage box and its line for n INFs,
  * and the line under the row or in its place for the set's state; version
  * the release's, releaseHas 0 when the release has no such set. */
 const char *inst_other_label(int set);
 void inst_other_sentence(char *out, size_t cap, int set, const char *dir,
                          int nt);
-/* The Other USB drivers page's line when no package is offered: on 98 SE
- * and ME (nt 0) that the drivers are copied, not staged, and where to
- * point the hardware wizard; elsewhere that none is for this Windows. */
-const char *inst_other_none_text(int nt);
+/* A set's page's line when it offers no package (record 26 section
+ * 6.7.12: one page per set): on 98 SE and ME (nt 0) that the set's
+ * drivers are copied, not staged, and where in the set's folder to point
+ * the hardware wizard; elsewhere that none is for this Windows. */
+const char *inst_other_none_text(int nt, int set);
 const char *inst_other_stage_label(void);
 void inst_other_stage_text(char *out, size_t cap, int n);
 void inst_other_line(char *out, size_t cap, int set, int state,
@@ -2182,6 +2509,22 @@ void inst_other_warn_text(INST_U32 set, char *out, size_t cap);
 /* S98VSD.VXD's own record (design record 30 section 7.4): File and
  * Pending, apart from Stor98's. */
 #define INST_VSD_KEY            "Software\\xhci98\\Stor98Vxd"
+/* XHCIPFW.VXD's own record (design record 32 section 8), File and
+ * Pending as S98VSD.VXD's, and the static-VxD key 98 SE and ME load it
+ * by (record 32 section 5.1), where the VxD writes its log (section 6). */
+#define INST_PFW_KEY            "Software\\xhci98\\XhciPfw"
+#define INST_PFW_VXD_KEY \
+    "System\\CurrentControlSet\\Services\\VxD\\XHCIPFW"
+#define INST_PFW_FILE           "XHCIPFW.VXD"
+#define INST_PFW_TMPNAME        "XHCIPFW.TMP"
+/* XHCIPFW.SYS (record 32 section 11): the package's file, its service and
+ * the two image names an update alternates between (the loader reads a
+ * boot-start image before a pending rename runs). */
+#define INST_PFWSYS_FILE        "XHCIPFW.SYS"
+#define INST_PFWSYS_SERVICE     "xhcipfw"
+#define INST_PFWSYS_NAME_A      "xhcipfw.sys"
+#define INST_PFWSYS_NAME_B      "xhcipf2.sys"
+#define INST_PFWSYS_GROUP       "System Reserved"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
 
@@ -2327,13 +2670,23 @@ void inst_stor_found_text(char *out, size_t cap,
                           const int st[INST_STOR_COUNT]);
 /* The row's note on every page and in the console: the detection's text,
  * and with usb20u (NUSB's Uninstall\USB20U entry) a sentence saying NUSB
- * is installed and the row can be left unticked (owner, 2026-10-22). */
+ * is installed (owner, 2026-10-22); the row's own sentence says to leave
+ * it unticked then (task 44.36: the words short enough to show whole). */
 #define INST_STOR_NUSB_TEXT \
     "NUSB is installed on this computer (found its Uninstall\\USB20U " \
-    "entry). It already provides the USB storage drivers, so you can " \
-    "leave this unticked."
+    "entry)."
 void inst_stor_note_text(char *out, size_t cap,
                          const int st[INST_STOR_COUNT], int usb20u);
+/* The Components page's one line under the row's sentence (owner,
+ * 2026-10-25; task 44.36: the row's words shown whole, no box that
+ * scrolls), the Summary and the console keeping the note above whole. The
+ * most pressing state alone: the lone USBSTOR.INF (half; fixable as for
+ * inst_stor_half_text), then the download's files (pack: 1 carried, 0
+ * absent, -1 not this release's), then NUSB installed, then what was
+ * found. Each within 62 characters, one line of the page at its width. */
+void inst_stor_short_text(char *out, size_t cap, int pack,
+                          const int st[INST_STOR_COUNT], int usb20u,
+                          int half, int fixable);
 
 /* A device's storage kind by its ids (record 26 section 6.5.5). */
 #define INST_STOR_KIND_NONE     0
@@ -2400,6 +2753,11 @@ extern const INST_NAMEROW instXhciNames[];  /* xHCI controllers (0C0330) */
 extern const int instXhciNameCount;
 extern const INST_NAMEROW instNhiNames[];   /* xhcicm.inf's NHI ids      */
 extern const int instNhiNameCount;
+/* NHIs xhcicm.inf matches by its class line alone, named, as the xHCI
+ * controllers are, by the installer's FriendlyName (task 44.55: no id line,
+ * so no change of rank; record 23 section 5.13.8). */
+extern const INST_NAMEROW instNhiFnNames[];
+extern const int instNhiFnNameCount;
 const char *inst_name_base(int base);
 /* The canonical name of an xHCI controller (1: a row of the table, the
  * product in parentheses; 0: not one, the plain name) and of an NHI (1: a
@@ -2407,6 +2765,10 @@ const char *inst_name_base(int base);
  * INST_NAME_MAX + 1 bytes. */
 int inst_xhci_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
 int inst_nhi_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
+/* The FriendlyName the installer gives an NHI (1: a row of instNhiFnNames,
+ * the name in out; 0: none, the INF's own name stands, out the plain
+ * name). inst_nhi_name names both tables' rows, for XHCITR. */
+int inst_nhi_fname(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
 /* A devnode's canonical name: 1 for an xHCI controller (PCI\CC_0C0330 in
  * its ids) whose service is xhci98, or a PCI device whose service is
  * xhcicm (the NHI), out then the name; 0 for any other. */
@@ -2414,7 +2776,7 @@ int inst_dev_canon(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const char *service, char *out,
                    size_t cap);
 /* The reconciliation of one controller's FriendlyName (record 23 section
- * 5.13): ours whether xhci98 drives it, canon its table name or NULL (an
+ * 5.13): ours whether xhci98 drives it (an NHI of instNhiFnNames: xhcicm), canon its table name or NULL (an
  * id the table does not hold), current the FriendlyName now ("" none),
  * recorded the name this installer recorded writing or NULL. *record is
  * set to 1 when the record is to hold canon afterwards, 0 when it is to be

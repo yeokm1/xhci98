@@ -400,7 +400,8 @@ static ULONG __declspec(naked) _cdecl PlatRegSetValueEx(ULONG hkey, PCHAR Name, 
 // documented VMM registry services. No other name is read (owner decision
 // 2026-10-16): 0.3.0.0 and 0.3.0.1 read `WriteThrough`, and a value of that
 // name is ignored from 0.4.0.0 (README "Settings" tells users to rename it).
-// NT: `writethrough=` in DriverParameter
+// NT: `storwritethrough=` in DriverParameter (writethrough=, its name
+// before xhci98 3.3.0.0, is ignored)
 // (the service's Parameters\Device key, the only per-adapter registry data a
 // SCSIport miniport gets); kept in the device extension because a resume
 // brings no ArgumentString. Unknown values fall back to `auto`.
@@ -508,6 +509,41 @@ VOID PlatPollRaw(OUT POLL_RAW *Raw)
     PlatRegCloseKey(hk);
 }
 
+// One decimal REG_SZ or REG_DWORD value of the key; TRUE when read.
+static BOOLEAN PlatMsValue(IN ULONG hk, IN PCHAR Name, OUT ULONG *Value)
+{
+    ULONG type = 0, cb;
+    CHAR buf[16];
+
+    cb = sizeof(buf) - 1;
+    if (PlatRegQueryValueEx(hk, Name, NULL, &type, buf, &cb) != 0) {
+        return FALSE;
+    }
+    if (type == PLAT_REG_DWORD && cb == sizeof(ULONG)) {
+        *Value = *(ULONG UNALIGNED *)buf;
+        return TRUE;
+    }
+    if (type == PLAT_REG_SZ && cb < sizeof(buf)) {
+        buf[cb] = 0;
+        return PollParseDec(buf, Value);
+    }
+    return FALSE;
+}
+
+VOID PlatTunMsRaw(IN OUT ULONG *GoneMs, IN OUT ULONG *WriteIdleMs,
+                  IN OUT ULONG *Hold9xMs)
+{
+    ULONG hk = 0;
+
+    if (PlatRegOpenKey(PLAT_HKLM, PLAT_WT_KEY, &hk) != 0) {
+        return;
+    }
+    (VOID)PlatMsValue(hk, "StorGoneMs", GoneMs);
+    (VOID)PlatMsValue(hk, "StorWriteIdleMs", WriteIdleMs);
+    (VOID)PlatMsValue(hk, "StorHold9xMs", Hold9xMs);
+    PlatRegCloseKey(hk);
+}
+
 VOID PlatXferRaw(OUT BOOLEAN *Present, OUT BOOLEAN *Valid, OUT ULONG *RawKb)
 {
     ULONG hk = 0, type = 0, cb, rc;
@@ -572,7 +608,7 @@ static const char *PlatPollWhyText(IN ULONG Why)
 #ifdef NVME2K_W9X
     case POLL_WHY_FORCED:       return "polling (forced by StorPollMode)";
 #else
-    case POLL_WHY_FORCED:       return "polling (forced by pollmode)";
+    case POLL_WHY_FORCED:       return "polling (forced by storpollmode)";
 #endif
     case POLL_WHY_NO_PIN:       return "polling (no interrupt pin)";
     case POLL_WHY_NO_PORT_IRQ:  return "polling (no interrupt assigned)";

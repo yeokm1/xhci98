@@ -1,14 +1,18 @@
 /*
  * test_cm_marks.c - the marks answer's table (src/cm/cm_marks.c; task
  * 42-A.5; design record 21 section 7.4, revision 3): the current and
- * tombstone sets kept apart, a tombstone kept until a poll has seen it and
+ * tombstone kept until a poll has seen it and
  * CM_QM_TOMB_MS has passed, the oldest evicted when full and counted when
- * unseen, the answer's layout, and the confirmation's checks.
+ * unseen, the answer's layout, and the confirmation's checks; and the
+ * Removable answer's gate (src/cm/cm_ports.c CmPortsMayMark; design record
+ * 31 section 4.1), which every attachment answers by since a child is
+ * attached on every filtered bridge.
  */
 
 #include <stdio.h>
 #include <string.h>
 #include "../src/cm/cm_marks.h"
+#include "../src/cm/cm_ports.h"
 #include "test_harness.h"
 
 static CM_MARKS t;
@@ -514,8 +518,35 @@ static void test_removals(void)
           "a member past the mask: no loss by it");
 }
 
+/* Record 31 section 4.1: a child attached for the id on a bridge that is
+ * not active marks nothing; on an active, exclusive member with safe
+ * eject on, its unit does. */
+static void test_may_mark(void)
+{
+    /* located, locBus, active, exclusive, secBusValid, secBus, inMarks, safeEject */
+    CHECK_EQ(CmPortsMayMark(1, 5, 1, 1, 1, 5, 1, 1), CM_MM_YES,
+             "a unit of an active, exclusive member with safe eject on: Removable");
+    CHECK_EQ(CmPortsMayMark(1, 5, 0, 1, 1, 5, 1, 1), CM_MM_NO,
+             "the bridge not active (the NHI's or the host xHCI's switch port): nothing");
+    CHECK_EQ(CmPortsMayMark(1, 5, 1, 0, 1, 5, 1, 1), CM_MM_NO,
+             "not exclusive (another domain claims it): nothing");
+    CHECK_EQ(CmPortsMayMark(1, 5, 1, 1, 1, 5, 1, 0), CM_MM_SEEN,
+             "safe eject off: seen, not Removable");
+    CHECK_EQ(CmPortsMayMark(1, 5, 0, 0, 1, 5, 1, 0), CM_MM_NO,
+             "none of the three: nothing");
+    CHECK_EQ(CmPortsMayMark(0, 5, 1, 1, 1, 5, 1, 1), CM_MM_NO,
+             "not located: nothing");
+    CHECK_EQ(CmPortsMayMark(1, 6, 1, 1, 1, 5, 1, 1), CM_MM_NO,
+             "a deeper bus (a function behind the enclosure's switch): nothing");
+    CHECK_EQ(CmPortsMayMark(1, 5, 1, 1, 0, 5, 1, 1), CM_MM_NO,
+             "the member's secondary bus unknown: nothing");
+    CHECK_EQ(CmPortsMayMark(1, 5, 1, 1, 1, 5, 0, 1), CM_MM_NO,
+             "no marks entry for the PDO: nothing");
+}
+
 int main(void)
 {
+    test_may_mark();
     test_removals();
     test_sync();
     test_relocate();

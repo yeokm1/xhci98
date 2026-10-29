@@ -606,6 +606,72 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
 ULONG XhciTbtPortMember(const XHCI_TBT_TOPO *topo,
                         const XHCI_TBT_BINDS *binds, ULONG port);
 
+/*
+ * The learning's window (record 22 section 7.6, task 44.57): when each
+ * pending port is tried again, and when its tries stop. It bounds the
+ * reads only: a port whose window closed stays pending (XHCI_TBT_BINDS),
+ * exactly as before; it is simply not tried. The clock is the caller's,
+ * one per instance beside its XHCI_TBT_BINDS; it reads nothing and calls
+ * nothing. Times are milliseconds of a free-running counter, compared as
+ * unsigned elapsed time (a wrap is harmless).
+ *   - XhciTbtLearnOpen opens port `port`'s window at `nowMs` for
+ *     connection generation `tag` (kept in Tag[], for the caller to
+ *     compare), whatever it held (open, closed or neither): the next try
+ *     due at once.
+ *   - XhciTbtLearnDue: CLOSED for a closed window; WAIT for a port tried
+ *     in the current pass; TRY for a port with no window (the caller
+ *     opens one first); for an open one OVER once XHCI_TBT_LEARN_WINDOW_MS
+ *     have passed since it opened, else TRY when the next try is due,
+ *     else WAIT.
+ *   - XhciTbtLearnPass starts a pass: no port counts as tried in it.
+ *   - XhciTbtLearnMissed after a try that left the port pending marks
+ *     it tried in the current pass (any window or none), then: while
+ *     less than XHCI_TBT_LEARN_EAGER_MS have passed since the window
+ *     opened, the next try is due at once (the next pass); after that the
+ *     first gap is `periodMs` (at least 1), each later one twice the one
+ *     before, every gap held to XHCI_TBT_LEARN_GAP_MAX_MS. Nothing for a
+ *     window not open.
+ *   - XhciTbtLearnClose closes the window (OVER seen): no more tries
+ *     until XhciTbtLearnOpen.
+ *   - XhciTbtLearnEnd forgets the window, open or closed (the port is not
+ *     pending any more, or the window was another generation's).
+ *   - XhciTbtLearnBound consumes port `port`'s pending mark when the port
+ *     has a binding now, as XhciTbtLearn's KNOWN outcome does, reading
+ *     nothing; 1 then, else 0 (a closed window stops the reads, never
+ *     this bookkeeping).
+ * A port of 0 or above XHCI_TBT_MAX_PORTS, or a NULL clock, is ignored
+ * (Due: CLOSED).
+ */
+#define XHCI_TBT_LEARN_EAGER_MS     1000UL  /* PCIe Base 6.6.1's 1.0 s      */
+#define XHCI_TBT_LEARN_GAP_MAX_MS   5000UL
+#define XHCI_TBT_LEARN_WINDOW_MS    60000UL /* [linux] 60 s after a reset   */
+
+#define XHCI_TBT_LEARN_WAIT         0UL
+#define XHCI_TBT_LEARN_TRY          1UL
+#define XHCI_TBT_LEARN_OVER         2UL
+#define XHCI_TBT_LEARN_CLOSED       3UL
+
+typedef struct _XHCI_TBT_LEARN_CLOCK {
+    ULONG Open;         /* bit n-1: port n's window is open                */
+    ULONG Closed;       /* bit n-1: port n's window closed, no more tries  */
+    ULONG Tried;        /* bit n-1: port n tried in the current pass       */
+    ULONG Since[XHCI_TBT_MAX_PORTS];    /* when the window opened          */
+    ULONG Next[XHCI_TBT_MAX_PORTS];     /* when the next try is due        */
+    ULONG Gap[XHCI_TBT_MAX_PORTS];      /* the last gap, 0 while eager     */
+    ULONG Tag[XHCI_TBT_MAX_PORTS];      /* the generation it was opened for */
+} XHCI_TBT_LEARN_CLOCK, *PXHCI_TBT_LEARN_CLOCK;
+
+VOID XhciTbtLearnOpen(PXHCI_TBT_LEARN_CLOCK clk, ULONG port, ULONG nowMs,
+                      ULONG tag);
+ULONG XhciTbtLearnDue(const XHCI_TBT_LEARN_CLOCK *clk, ULONG port,
+                      ULONG nowMs);
+VOID XhciTbtLearnMissed(PXHCI_TBT_LEARN_CLOCK clk, ULONG port, ULONG nowMs,
+                        ULONG periodMs);
+VOID XhciTbtLearnClose(PXHCI_TBT_LEARN_CLOCK clk, ULONG port);
+VOID XhciTbtLearnPass(PXHCI_TBT_LEARN_CLOCK clk);
+VOID XhciTbtLearnEnd(PXHCI_TBT_LEARN_CLOCK clk, ULONG port);
+ULONG XhciTbtLearnBound(PXHCI_TBT_BINDS binds, ULONG port);
+
 /* ---- the port reading (record 21 section 6.5) -------------------------- */
 
 /* XHCI_TBT_PORT.Verdict and XhciTbtPortRead's return. */

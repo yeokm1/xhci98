@@ -6,11 +6,12 @@
  *
  * Adapted from usb4-emu's tools/usb4cm/host/cm-host-test.c and
  * src/qemu/tests/usb4/fabric-test.c (usb4-emu main 3c74189 and the
- * working tree's QEMU fork at 178237c, read 2026-10-15), whose notices
- * are:
- *
- *   Copyright (c) 2026 usb4-emu contributors
- *   SPDX-License-Identifier: GPL-2.0-only
+ * working tree's QEMU fork at 178237c, read 2026-10-15), Copyright (c)
+ * 2026 usb4-emu contributors. usb4-emu's copyright holder offers what
+ * this project takes from it under GPL-2.0-or-later (owner, 2026-10-25;
+ * legal-provenance.md section 2a).
+ * This file is under this project's LICENSE, GPL-2.0-or-later; the
+ * QEMU fabric it compiles in place keeps its own notices.
  *
  * What is kept: the fakes for the fabric's neighbours, the virtual clock
  * and timers, and the ring 0 host interface shim (Spec 12.3, 12.4, 12.6).
@@ -31,6 +32,34 @@
 int usb4_test_trace;
 static int failures, checks;
 static int verbose;
+
+/* The request trace (task 44.38): when XC_REQ_TRACE names a file, every
+ * frame the core transmits, every host-interface register write and every
+ * log line go to it in order with the virtual clock, each case's call
+ * named before it; "end" closes it, and a failed open or write ends the
+ * run. */
+static FILE *req_trace;
+static uint32_t now_us;
+
+static void trace_mark(const char *what)
+{
+    if (req_trace) {
+        fprintf(req_trace, "== %s\n", what);
+        if (fflush(req_trace) != 0 || ferror(req_trace)) {
+            fprintf(stderr, "XC_REQ_TRACE: write failed\n");
+            exit(2);
+        }
+        if (strcmp(what, "end") == 0) {
+            FILE *t = req_trace;
+
+            req_trace = NULL;
+            if (fclose(t) != 0) {
+                fprintf(stderr, "XC_REQ_TRACE: close failed\n");
+                exit(2);
+            }
+        }
+    }
+}
 
 #define CHECK(cond, ...) do { \
     checks++; \
@@ -83,9 +112,19 @@ void usb4_icm_hotplug(USB4ICM *icm, USB4Router *r, unsigned adapter,
     CHECK(0, "ICM hot plug without an ICM");
 }
 
-void usb4_icm_reset(USB4ICM *icm)
+void usb4_icm_reset(USB4ICM *icm, bool wakeup)
 {
     CHECK(0, "ICM reset without an ICM");
+}
+
+/* usb4-emu QEMU fork 02dda40 (as its fabric-test.c): the link retrain's
+ * recheck and a tunnel port's reattach have no PCIe side here. */
+void usb4_tunnel_retrain_recheck(void)
+{
+}
+
+void usb4_tunnel_port_reattach(USB4TunnelPort *p, USB4Device *dev)
+{
 }
 
 USB4Fabric *usb4_host_get_fabric(USB4Host *h)
@@ -191,7 +230,6 @@ struct USB4Timer {
 };
 
 static int64_t now_ms;
-static uint32_t now_us;
 #define MAX_TIMERS 32
 static USB4Timer *timers[MAX_TIMERS];
 
@@ -334,6 +372,14 @@ static void shim_tx_kick(void)
             usb4_st_le32(d + 8, dw2 | (1u << 21));
         }
         txr.ci = (txr.ci + 1) % txr.size;
+        if (req_trace) {
+            fprintf(req_trace, "%u TX %x", now_us, (dw2 >> 12) & 0xf);
+            for (uint32_t i = 0; i + 8 <= len; i += 4) {
+                fprintf(req_trace, " %08x", ((uint32_t)buf[i] << 24) |
+                        ((uint32_t)buf[i + 1] << 16) | ((uint32_t)buf[i + 2] << 8) | buf[i + 3]);
+            }
+            fputc('\n', req_trace);
+        }
         usb4_fabric_tx_frame(fab, (dw2 >> 12) & 0xf, buf, len);
     }
 }
@@ -358,6 +404,9 @@ static void shim_wr(unsigned long off, unsigned long v)
     ShimFrame *f;
 
     n_mmio++;
+    if (req_trace) {
+        fprintf(req_trace, "%u MW %05lx %08lx\n", now_us, off, v);
+    }
     switch (off) {
     case 0x39858:
         CHECK(0, "a Host Interface Reset: record 22 section 4.4 forbids it");
@@ -414,9 +463,23 @@ static void shim_advance(unsigned long us)
     advance_us((uint32_t)us);
 }
 
+/* XhciCmAsmediaPcie7Credits's log (task 44.41): the gate's openings and
+ * every line under u4.asm7. */
+static int asm7_open, asm7_lines;
+
 static void shim_log(const char *label, unsigned long value)
 {
+    if (req_trace) {
+        fprintf(req_trace, "%u L %s %08lx\n", now_us, label, value);
+    }
+    if (strncmp(label, "u4.asm7", 7) == 0) {
+        asm7_lines++;
+        if (strcmp(label, "u4.asm7.gate") == 0 && value == 1) {
+            asm7_open++;
+        }
+    }
     if (verbose || strstr(label, "u4.port") || strstr(label, "u4.pcie") ||
+        strstr(label, "u4.asm7") ||
         strstr(label, "u4.usb3") || strstr(label, "u4.preserved") ||
         strstr(label, "u4.held") || strstr(label, "u4.inert")) {
         printf("  [cm] %s %08lx\n", label, value);
@@ -437,11 +500,14 @@ static void new_fabric(USB4HostModel model, bool preos)
         .profile = USB4_PROFILE_USB4_GENERIC, .dialect = USB4_DIALECT_USB4,
         .router_vendor_id = 0x46f4, .router_device_id = 0x4040,
         .num_usb4_ports = 2, .host_model = model, .preos_cm = preos,
-        /* asm4242's defaults, as usb4-emu's usb4-host properties and its
-         * fabric-test.c ASM_CFG_DEFAULT set them: the quirks on */
-        .asm4242 = { .adp_dp = 5, .adp_hi = 7, .adp_pcie = 8, .adp_usb3 = 10,
-                     .quirk_pending = true, .quirk_credits = true,
-                     .nvm_version = 0x200011, .nvm_date = 0x250708 },
+        /* asm4242 as usb4-host sets it by default since usb4-emu's QEMU
+         * fork 02dda40 (its fabric-test.c asm4242 configuration): the
+         * emulator's asm4242 preset, its ASM4242 host router as usb4-emu
+         * records it (lanes 1-4, the host interface 5 with 21 paths,
+         * PCIe Down 6-7, USB3 Down 8-9, DP IN 10-11), an ASM2464 leaving
+         * the link 10 s after a plug with no tunnel (task 44.42) */
+        .asm4242 = { .quirk_pending = true, .quirk_credits = true,
+                     .depart_ms = 10000 },
     };
     ShimFrame *f;
 
@@ -517,10 +583,26 @@ static void test_cold_hot_unplug(USB4HostModel model)
         CHECK(xc_get(XC_HOST_QUIRKS, 0) & xc_quirk_usb3(), "the 8087:463E quirk");
     }
     if (model == USB4_HOST_MODEL_ASM4242) {
-        CHECK(xc_get(XC_PCIE_DOWN, 1) == 8, "asm4242: PCIe Down 8 on port 1 (%lu)",
+        /* The asm4242 preset's layout: port 1 is lanes 1-2, its PCIe
+         * Down 6 and USB3 Down 8; DP IN 10 and 11 present too. */
+        CHECK(xc_get(XC_PCIE_DOWN, 1) == 6, "asm4242: PCIe Down 6 on port 1 (%lu)",
               xc_get(XC_PCIE_DOWN, 1));
-        CHECK(xc_get(XC_HOST_ADP_PRESENT, 10) && xc_get(XC_HOST_ADP_PRESENT, 11),
-              "asm4242: USB3 Down 10 and 11 present");
+        {
+            /* Every adapter's type as the preset gives it (ADP_CS_2):
+             * lanes 1-4, the host interface 5, PCIe Down 6-7, USB3 Down
+             * 8-9, DP IN 10-11. */
+            static const unsigned long type[12] = {
+                0, 0x000001, 0x000001, 0x000001, 0x000001, 0x000002,
+                0x100101, 0x100101, 0x200101, 0x200101, 0x0e0101, 0x0e0101
+            };
+            for (unsigned a = 1; a < 12; a++) {
+                CHECK(xc_get(XC_HOST_ADP_PRESENT, a) && xc_get(XC_HOST_ADP_TYPE, a) == type[a],
+                      "asm4242: adapter %u type %06lx (want %06lx)", a,
+                      xc_get(XC_HOST_ADP_TYPE, a), type[a]);
+            }
+        }
+        CHECK(xc_get(XC_USB3_DOWN, 1) == 8, "asm4242: USB3 Down 8 on port 1 (%lu)",
+              xc_get(XC_USB3_DOWN, 1));
     }
 
     CHECK(usb4_fabric_attach(fab, 2, &dev2, NULL), "attach 2");
@@ -528,6 +610,11 @@ static void test_cold_hot_unplug(USB4HostModel model)
     CHECK(ST(2) == (unsigned long)xc_state_up(), "hot plug: port 2 UP (state %lu why %lu)",
           ST(2), WHY(2));
     CHECK(usb4_fabric_tunnel_state(fab, 2) == USB4_TUNNEL_UP, "the model's port 2 up");
+    if (model == USB4_HOST_MODEL_ASM4242) {
+        CHECK(xc_get(XC_PCIE_DOWN, 2) == 7 && xc_get(XC_USB3_DOWN, 2) == 9,
+              "asm4242: PCIe Down 7 and USB3 Down 9 on port 2 (%lu, %lu)",
+              xc_get(XC_PCIE_DOWN, 2), xc_get(XC_USB3_DOWN, 2));
+    }
 
     usb4_fabric_detach(fab, 2);
     cm_poll(2);
@@ -624,12 +711,16 @@ static void asm2464_quiet(const char *what)
     CHECK(xc_get(XC_DROM_CRC, 0) == 0, "%s: DROM CRC good", what);
 }
 
-static void test_asm2464_cold_hot(void)
+static void test_asm2464_cold_hot(USB4HostModel model, int asm7)
 {
     long rc;
 
-    printf("== intel-adl + asm2464: cold on port 1, hot plug on port 2, unplug, re-plug\n");
-    new_fabric(USB4_HOST_MODEL_INTEL_ADL, false);
+    printf("== %s + asm2464: cold on port 1, hot plug on port 2, unplug, re-plug%s\n",
+           model_name(model), asm7 ? ", XhciCmAsmediaPcie7Credits 1" : "");
+    new_fabric(model, false);
+    xc_set_asm7(asm7);
+    asm7_open = 0;
+    asm7_lines = 0;
     CHECK(usb4_fabric_attach(fab, 1, &asm1, NULL), "attach 1");
     rc = cm_start(true);
     CHECK(rc == 0, "start %ld (inert reason %lu)", rc, xc_get(XC_INERT, 0));
@@ -666,7 +757,17 @@ static void test_asm2464_cold_hot(void)
            " %lu hot plug events\n",
            xc_get(XC_REQUESTS, 0), xc_get(XC_ROP_ISSUED, 0), xc_get(XC_ENUMERATED, 0),
            xc_get(XC_HOTPLUGS, 0));
+    if (asm7) {
+        /* Three tunnels built: port 1 cold, port 2 plugged and re-plugged;
+         * a gate line and twelve entry lines each. */
+        CHECK(asm7_open == 3 && asm7_lines == 39,
+              "the experiment applied to the three tunnels (%d gates, %d lines)",
+              asm7_open, asm7_lines);
+    } else {
+        CHECK(asm7_lines == 0, "off: nothing logged (%d)", asm7_lines);
+    }
     xc_stop();
+    xc_set_asm7(0);
     usb4_fabric_detach(fab, 1);
     usb4_fabric_detach(fab, 2);
 }
@@ -674,13 +775,14 @@ static void test_asm2464_cold_hot(void)
 /* The pre-OS connection manager's tunnel to the asm2464: preserved; then
  * XhciCmPreOsCleanup 2: a Downstream Port Reset, the router back about
  * 590 ms later, and the tunnel built afresh with no retry storm. */
-static void test_asm2464_preos(unsigned long clean)
+static void test_asm2464_preos(USB4HostModel model, unsigned long clean)
 {
     int calls;
     unsigned long req;
 
-    printf("== intel-adl + asm2464: pre-OS tunnel, XhciCmPreOsCleanup %lu\n", clean);
-    new_fabric(USB4_HOST_MODEL_INTEL_ADL, true);
+    printf("== %s + asm2464: pre-OS tunnel, XhciCmPreOsCleanup %lu\n", model_name(model),
+           clean);
+    new_fabric(model, true);
     CHECK(usb4_fabric_attach(fab, 1, &asm1, NULL), "pre-OS attach");
     CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "pre-OS tunnel up");
     usb4_fabric_preos_end(fab);
@@ -748,26 +850,42 @@ static void test_empty(void)
     xc_stop();
 }
 
+#define RUN(call) do { trace_mark(#call); call; } while (0)
+
 int main(int argc, char **argv)
 {
     usb4_test_trace = getenv("USB4_TRACE") != NULL;
     verbose = getenv("U4CM_VERBOSE") != NULL;
     g_queue_init(&rx_fifo);
-    test_cold_hot_unplug(USB4_HOST_MODEL_MINIMAL);
-    test_cold_hot_unplug(USB4_HOST_MODEL_INTEL_ADL);
-    test_preos(USB4_HOST_MODEL_MINIMAL);
-    test_preos(USB4_HOST_MODEL_INTEL_ADL);
-    test_cold_hot_unplug(USB4_HOST_MODEL_ASM4242);
-    test_preos(USB4_HOST_MODEL_ASM4242);
-    test_restart();
+    if (getenv("XC_REQ_TRACE") && *getenv("XC_REQ_TRACE")) {
+        req_trace = fopen(getenv("XC_REQ_TRACE"), "w");
+        if (!req_trace) {
+            fprintf(stderr, "XC_REQ_TRACE: cannot open %s\n", getenv("XC_REQ_TRACE"));
+            return 2;
+        }
+    }
+    RUN(test_cold_hot_unplug(USB4_HOST_MODEL_MINIMAL));
+    RUN(test_cold_hot_unplug(USB4_HOST_MODEL_INTEL_ADL));
+    RUN(test_preos(USB4_HOST_MODEL_MINIMAL));
+    RUN(test_preos(USB4_HOST_MODEL_INTEL_ADL));
+    RUN(test_cold_hot_unplug(USB4_HOST_MODEL_ASM4242));
+    RUN(test_preos(USB4_HOST_MODEL_ASM4242));
+    RUN(test_restart());
 #ifdef XC_HAVE_ASM2464
-    test_asm2464_cold_hot();
-    test_asm2464_preos(0);
-    test_asm2464_preos(2);
+    RUN(test_asm2464_cold_hot(USB4_HOST_MODEL_INTEL_ADL, 0));
+    RUN(test_asm2464_preos(USB4_HOST_MODEL_INTEL_ADL, 0));
+    RUN(test_asm2464_preos(USB4_HOST_MODEL_INTEL_ADL, 2));
+    /* The emulator's asm4242 preset: the ASM4242 host with the ORICO's
+     * ASM2464 behind it (task 44.42), and the credits experiment (44.41). */
+    RUN(test_asm2464_cold_hot(USB4_HOST_MODEL_ASM4242, 0));
+    RUN(test_asm2464_cold_hot(USB4_HOST_MODEL_ASM4242, 1));
+    RUN(test_asm2464_preos(USB4_HOST_MODEL_ASM4242, 0));
+    RUN(test_asm2464_preos(USB4_HOST_MODEL_ASM4242, 2));
 #endif
-    test_tb3_dock(USB4_HOST_MODEL_MINIMAL);
-    test_tb3_dock(USB4_HOST_MODEL_INTEL_ADL);
-    test_empty();
+    RUN(test_tb3_dock(USB4_HOST_MODEL_MINIMAL));
+    RUN(test_tb3_dock(USB4_HOST_MODEL_INTEL_ADL));
+    RUN(test_empty());
+    trace_mark("end");
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

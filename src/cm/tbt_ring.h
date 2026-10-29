@@ -244,7 +244,7 @@ typedef struct _TBT_RING {
     ULONG LastEventRouteLo;
     /* The Adapter Num of the last Read Response taken in the router space:
      * the adapter the request arrived at, the router's upstream adapter
-     * (Spec Table 6-3; Linux ctl.c tb_cfg_get_upstream_port). */
+     * (Spec 6.4.2.4, Table 6-3). */
     ULONG LastReadAdapter;
 
     TBT_RING_COUNTERS Counters;
@@ -449,7 +449,8 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
 /* ---------------------------------------------------------------------- */
 
 /* Record 22 section 5.1: 100 ms per attempt, 4 attempts, a fresh sequence
- * number each (Linux tb.c TB_TIMEOUT, ctl.c TB_CTL_RETRIES). */
+ * number each. Guide 4.2 leaves the timeout and the retries to the
+ * connection manager, the timeout at least 10 ms within a domain. */
 #define TBT_CTL_TIMEOUT_US      100000UL
 #define TBT_CTL_ATTEMPTS        4UL
 #define TBT_CTL_HP_QUEUE        16UL

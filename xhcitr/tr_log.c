@@ -400,11 +400,39 @@ const char *tr_hc_name(TR_U32 i)
 /* xhci98.sys's query request (src\xhci_qry.h)                               */
 /* ======================================================================== */
 
-/* A part [off, off + len) inside an answer of `bytes`, no wider than max. */
-static int trlPart(TR_U32 off, TR_U32 len, TR_U32 bytes, TR_U32 max)
+/* A part [off, off + len) inside an answer of `bytes` whose header is
+ * `head` bytes, no wider than max. */
+static int trlPart(TR_U32 off, TR_U32 len, TR_U32 bytes, TR_U32 max,
+                   TR_U32 head)
 {
-    return off >= XHQ_HDR_BYTES && off <= bytes && len <= bytes - off &&
-           len <= max;
+    return off >= head && off <= bytes && len <= bytes - off && len <= max;
+}
+
+int tr_xhq_driver(const unsigned char *b, size_t n, TR_U32 *packed)
+{
+    *packed = 0;
+    if (b == NULL || n < XHQ_HDR_BYTES_V1 ||
+        trlGet(b, XHQ_O_MAGIC) != XHQ_MAGIC) {
+        return -1;
+    }
+    if (trlGet(b, XHQ_O_VERSION) == XHQ_VERSION_1) {
+        return 0;
+    }
+    if (!(trlGet(b, XHQ_O_VERSION) == XHQ_VERSION_2 &&
+          n >= XHQ_HDR_BYTES_V2) &&
+        !(trlGet(b, XHQ_O_VERSION) == XHQ_VERSION && n >= XHQ_HDR_BYTES)) {
+        return -1;
+    }
+    *packed = trlGet(b, XHQ_O_DRIVER_VERSION);
+    return 1;
+}
+
+int tr_xhq_port_top(const TR_XHQ *x, TR_U32 port)
+{
+    if (x == NULL || x->Ports == NULL || port == 0 || port > x->PortCount) {
+        return -1;
+    }
+    return (int)x->Ports[port - 1];
 }
 
 int tr_xhq_parse(const unsigned char *b, size_t n, TR_XHQ *x)
@@ -412,17 +440,31 @@ int tr_xhq_parse(const unsigned char *b, size_t n, TR_XHQ *x)
     TR_U32 ctrAt;
     TR_U32 logAt;
     TR_U32 pciAt;
+    TR_U32 xAt;
+    TR_U32 xBytes;
+    TR_U32 pAt;
+    TR_U32 head;
 
     memset(x, 0, sizeof(*x));
-    if (b == NULL || n < XHQ_HDR_BYTES || trlGet(b, XHQ_O_MAGIC) != XHQ_MAGIC ||
-        trlGet(b, XHQ_O_VERSION) != XHQ_VERSION) {
+    if (b == NULL || n < XHQ_HDR_BYTES_V1 ||
+        trlGet(b, XHQ_O_MAGIC) != XHQ_MAGIC) {
+        return 0;
+    }
+    x->Version = trlGet(b, XHQ_O_VERSION);
+    if (x->Version == XHQ_VERSION_1) {
+        head = XHQ_HDR_BYTES_V1;
+    } else if (x->Version == XHQ_VERSION_2 && n >= XHQ_HDR_BYTES_V2) {
+        head = XHQ_HDR_BYTES_V2;
+    } else if (x->Version == XHQ_VERSION && n >= XHQ_HDR_BYTES) {
+        head = XHQ_HDR_BYTES;
+    } else {
         return 0;
     }
     x->Bytes = trlGet(b, XHQ_O_BYTES);
-    if (x->Bytes < XHQ_HDR_BYTES || x->Bytes > XHQ_MAX_BYTES) {
+    if (x->Bytes < head || x->Bytes > XHQ_MAX_BYTES) {
         return 0;
     }
-    if (x->Bytes > n || (n == XHQ_HDR_BYTES && x->Bytes != n)) {
+    if (x->Bytes > n || (n == head && x->Bytes != n)) {
         return -1;
     }
     x->Flags = trlGet(b, XHQ_O_FLAGS);
@@ -438,17 +480,157 @@ int tr_xhq_parse(const unsigned char *b, size_t n, TR_XHQ *x)
     x->Dropped = trlGet(b, XHQ_O_DROPPED);
     x->PciState = trlGet(b, XHQ_O_PCI_STATE);
     x->Flavour = trlGet(b, XHQ_O_FLAVOUR);
-    if (!trlPart(ctrAt, x->CtrBytes, x->Bytes, XHQ_CTR_MAX) ||
+    if (!trlPart(ctrAt, x->CtrBytes, x->Bytes, XHQ_CTR_MAX, head) ||
         (x->CtrBytes & 3UL) != 0 ||
-        !trlPart(logAt, x->LogBytes, x->Bytes, XHQ_LOG_MAX) ||
-        !trlPart(pciAt, x->PciBytes, x->Bytes, XHQ_PCI_BYTES) ||
+        !trlPart(logAt, x->LogBytes, x->Bytes, XHQ_LOG_MAX, head) ||
+        !trlPart(pciAt, x->PciBytes, x->Bytes, XHQ_PCI_BYTES, head) ||
         (x->PciBytes != 0 && x->PciBytes != XHQ_PCI_BYTES)) {
         return 0;
+    }
+    if (x->Version >= XHQ_VERSION_2) {
+        x->DriverVersion = trlGet(b, XHQ_O_DRIVER_VERSION);
+        xAt = trlGet(b, XHQ_O_XPORT_OFFSET);
+        xBytes = trlGet(b, XHQ_O_XPORT_BYTES);
+        x->XportRecord = trlGet(b, XHQ_O_XPORT_RECORD);
+        /* A later driver may grow a record: walk by its size. */
+        if (x->XportRecord < XHQ_XPORT_RECORD_BYTES ||
+            x->XportRecord > 1024 || (x->XportRecord & 3UL) != 0 ||
+            !trlPart(xAt, xBytes, x->Bytes,
+                     XHQ_XPORT_MAX * x->XportRecord, head) ||
+            xBytes % x->XportRecord != 0) {
+            return 0;
+        }
+        x->XportCount = xBytes / x->XportRecord;
+        x->Xport = b + xAt;
+    }
+    if (x->Version >= XHQ_VERSION) {
+        pAt = trlGet(b, XHQ_O_PORTS_OFFSET);
+        x->PortCount = trlGet(b, XHQ_O_PORTS_BYTES);
+        if (!trlPart(pAt, x->PortCount, x->Bytes, XHQ_PORTS_MAX, head)) {
+            return 0;
+        }
+        x->Ports = x->PortCount != 0 ? b + pAt : NULL;
     }
     x->Ctr = b + ctrAt;
     x->Log = b + logAt;
     x->Pci = x->PciBytes != 0 ? b + pciAt : NULL;
     return 1;
+}
+
+int tr_xhq_xport_find(const TR_XHQ *x, TR_U32 port, TR_U32 route,
+                      TR_XPORT *r)
+{
+    TR_U32 i;
+    const unsigned char *p;
+
+    memset(r, 0, sizeof(*r));
+    if (x == NULL || x->Xport == NULL) {
+        return 0;
+    }
+    for (i = 0; i < x->XportCount; i++) {
+        p = x->Xport + i * x->XportRecord;
+        if (trlGet(p, XHQ_X_SLOT) == 0 || trlGet(p, XHQ_X_PORT) != port ||
+            trlGet(p, XHQ_X_ROUTE) != route) {
+            continue;
+        }
+        r->Slot = trlGet(p, XHQ_X_SLOT);
+        r->Port = port;
+        r->Route = route;
+        r->Iface = trlGet(p, XHQ_X_IFACE);
+        r->Transport = trlGet(p, XHQ_X_TRANSPORT);
+        r->Why = trlGet(p, XHQ_X_WHY);
+        r->Alternate = trlGet(p, XHQ_X_ALTERNATE);
+        r->Inputs = trlGet(p, XHQ_X_INPUTS);
+        r->Triple = trlGet(p, XHQ_X_TRIPLE);
+        r->Count = trlGet(p, XHQ_X_COUNT);
+        return 1;
+    }
+    return 0;
+}
+
+void tr_xport_text(const TR_XPORT *r, char *out, size_t cap)
+{
+    char what[96];
+    char iface[24];
+    char more[48];
+
+    switch (r->Why) {
+    case TR_XPORT_WHY_UAS:
+        tr_copy(what, "UAS%s (the device offers Bulk-Only and UAS; UAS chosen)",
+                sizeof(what));
+        break;
+    case TR_XPORT_WHY_UAS_ONLY:
+        tr_copy(what, "UAS%s (the only transport the device offers)",
+                sizeof(what));
+        break;
+    case TR_XPORT_WHY_UAS_ONLY_FORCED:
+        tr_copy(what, "UAS%s (the only transport the device offers; "
+                      "XhciForceBulkOnly does not apply to it)", sizeof(what));
+        break;
+    case TR_XPORT_WHY_BOT_FORCED:
+        tr_copy(what, "Bulk-Only%s (the device offers UAS too; "
+                      "XhciForceBulkOnly is set on this controller)",
+                sizeof(what));
+        break;
+    case TR_XPORT_WHY_BOT_NO_STREAMS:
+        tr_copy(what, "Bulk-Only%s (the device offers UAS too; this "
+                      "controller cannot stream at SuperSpeed)", sizeof(what));
+        break;
+    case TR_XPORT_WHY_NO_STREAMS:
+        tr_copy(what, "none%s (the device offers UAS alone, at SuperSpeed on "
+                      "a controller that cannot stream)", sizeof(what));
+        break;
+    default:
+        if (((r->Triple >> 16) & 0xFFUL) == 0x50UL) {
+            tr_copy(what, "Bulk-Only%s (the device offers no UAS setting)",
+                    sizeof(what));
+        } else {
+            tr_sprintf(what, sizeof(what), "class %02lX, subclass %02lX, "
+                       "protocol %02lX%%s (no UAS setting)",
+                       (unsigned long)(r->Triple & 0xFFUL),
+                       (unsigned long)((r->Triple >> 8) & 0xFFUL),
+                       (unsigned long)((r->Triple >> 16) & 0xFFUL));
+        }
+        break;
+    }
+    iface[0] = '\0';
+    if (r->Iface != 0xFFUL) {
+        tr_sprintf(iface, sizeof(iface), " (interface %lu)",
+                   (unsigned long)r->Iface);
+    }
+    more[0] = '\0';
+    if (r->Count > 1) {
+        tr_sprintf(more, sizeof(more), "; and %lu more storage interface%s",
+                   (unsigned long)(r->Count - 1), r->Count == 2 ? "" : "s");
+    }
+    tr_sprintf(out, cap, what, iface);
+    tr_sprintf(out + strlen(out), cap - strlen(out), "%s", more);
+}
+
+int tr_xport_stale(const TR_XPORT *r, const char *service)
+{
+    char s[16];
+    size_t n;
+    size_t i;
+
+    if (r == NULL || service == NULL || r->Transport != TR_XPORT_UAS) {
+        return 0;
+    }
+    n = strlen(service);
+    if (n >= 4 && service[n - 4] == '.' &&
+        (service[n - 3] | 0x20) == 's' && (service[n - 2] | 0x20) == 'y' &&
+        (service[n - 1] | 0x20) == 's') {
+        n -= 4;
+    }
+    if (n != 7) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char c = service[i];
+        s[i] = (char)((c >= 'A' && c <= 'Z') ? c + 32 : c);
+    }
+    s[n] = '\0';
+    return strcmp(s, "usbstor") == 0;
 }
 
 void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt)
@@ -461,6 +643,13 @@ void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt)
 
     tr_put(t, "xhci98 driver log\n");
     tr_printf(t, "  Build:      %s\n", trlFlavour(x->Flavour));
+    if (x->Version >= XHQ_VERSION_2) {
+        tr_printf(t, "  Version:    %lu.%lu.%lu.%lu\n",
+                  (unsigned long)((x->DriverVersion >> 24) & 0xFFUL),
+                  (unsigned long)((x->DriverVersion >> 16) & 0xFFUL),
+                  (unsigned long)((x->DriverVersion >> 8) & 0xFFUL),
+                  (unsigned long)(x->DriverVersion & 0xFFUL));
+    }
     if (x->Flags & XHQ_F_REFUSED) {
         tr_printf(t, "  XhciLogVerbosity %lu was refused (out of range); "
                      "level %lu applies.\n",

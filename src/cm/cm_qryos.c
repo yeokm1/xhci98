@@ -87,6 +87,7 @@
  */
 
 #include "cm.h"
+#include "cm_pwrr.h"
 
 /* How long a 98 PCI request waits for the worker's walk: a walk of the
  * largest answer is a few thousand PCI.VXD reads, well inside it; a worker
@@ -226,6 +227,12 @@ static ULONG cmQId(PCM_NHI nhi, BUS_QUERY_ID_TYPE type, char *id, ULONG at)
     ULONG i;
     NTSTATUS status;
 
+    if (CmPowerSleeping(nhi) &&
+        !CmPowerShutdownConfig((ULONG)nhi->SystemPower, nhi->PowerOnNt)) {
+        /* No IRP to the bus once a 9x shutdown's system IRP has gone
+         * down (cm_pwrr.h, task 44.43): no identity read then. */
+        return 0;
+    }
     irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
     if (irp == NULL) {
         return 0;
@@ -341,7 +348,8 @@ static ULONG cmQBdf(PCM_NHI nhi)
  * The counters' text (record 25 section 4.5) into out (room bytes): the
  * stop dump's blocks (CmNhiCounterLines), the re-enumeration's - a 98 SE
  * or ME worker's running counts added to those its predecessors left -
- * the child filters', and the liveness state and refusals. Returns its
+ * the child filters' with the tunnel id's (design record 31 section
+ * 4.2), and the liveness state and refusals. Returns its
  * length; *cut 1 where it did not all fit. On the connection-manager
  * thread (or the PnP path with no thread), PASSIVE_LEVEL, no lock held.
  */
@@ -359,7 +367,9 @@ static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
         "cm.reenum.child.skipped",
         "cm.reenum.child.refused", "cm.reenum.hold.passed",
         "cm.live.state", "cm.live.refused",
-        "cm.log.debugview"
+        "cm.log.debugview",
+        "cm.reenum.id.given", "cm.reenum.id.nomem", "cm.reenum.id.over",
+        "cm.reenum.chain.deep", "cm.reenum.child.reattached"
     };
     ULONG v[sizeof(names) / sizeof(names[0])];
     CM_CFGWK_COUNTERS wc;
@@ -394,6 +404,7 @@ static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
     v[24] = (nhi->Live.Counters.RefusedWrites << 16) |
             (nhi->Live.Counters.RefusedReads & 0xFFFFUL);
     v[25] = nhi->Values.Value[CM_VAL_LOG_DEBUGVIEW];
+    CmRegIdCounters(&v[26], &v[27], &v[28], &v[29], &v[30]);
     at = 0;
     *cut = 0;
     CmNhiCounterLines(nhi, out, room, &at, cut);

@@ -9,6 +9,17 @@ rem
 rem Non-interactive: DDK build, then the gates that must pass before a binary
 rem is allowed near a VM (roadmap Phase 3 task 5):
 rem
+rem   0. every text check of this build and of the release cut, first, so a
+rem      text failure costs no build (roadmap-usb4 task 44.1;
+rem      scripts\check-text.ps1, self-tested first): the tracked batch
+rem      files' line endings - MS-DOS 7.1 COMMAND.COM can fail on an
+rem      LF-only .BAT, and the field wrappers are .BAT files - the source
+rem      charset, the tool readmes and the release history the cut
+rem      publishes held to its 78-column printable-ASCII rule (task 43.61),
+rem      and the texts make-release.ps1 renders from its own templates and
+rem      package-common.ps1's readme parts, held to the same rule and to
+rem      the cut's other text refusals, the changelog entry for the
+rem      version, and the content rules of the batches the cut publishes
 rem   1. XHCI_EXTRA_DEFINES is unset - the HCD has no diagnostic builds
 rem   2. the import gate's evidence-manifest regression tests, and its
 rem      three-flavor FLAVORS-column tests
@@ -23,20 +34,13 @@ rem      falsely attribute an earlier DriverEntry to the current binary, and
 rem      two launchers sharing a monitor port cannot both run
 rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
 rem      pass makes every later FAIL and NODRIVER word untrustworthy
-rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
-rem      fail on an LF-only .BAT, and the field wrappers are .BAT files -
-rem      then the source charset, the tool readmes and the release history
-rem      the release cut publishes held to its 78-column printable-ASCII
-rem      rule (task 43.61,
-rem      scripts\check-readme-text.ps1, self-tested first), and the two
-rem      copies of Stor98's interface
+rem   7. the two copies of Stor98's interface
 rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1),
-rem      and on the x86 run XHCICLN and XHCITR rebuilt (xhcicln\build.cmd,
-rem      xhcitr\build.cmd), the two tools that compile xhciinst\inst_core.c
-rem   8. the XHCICLN self-test, when that EXE has been built (it has a
-rem      build.cmd of its own, and a clone without Open Watcom still runs
-rem      everything else here; task 38.8; xhcicln\build.cmd), XHCITR's own
-rem      and its snapshot self-tests when that one has (xhcitr\snaptest.cmd,
+rem      and on the x86 run XHCITR rebuilt (xhcitr\build.cmd), the tool
+rem      that compiles xhciinst\inst_core.c (XHCICLN did too, until it was
+rem      dropped in 3.3.0.0)
+rem   8. XHCITR's own and its snapshot self-tests, when that EXE has been
+rem      built (xhcitr\snaptest.cmd,
 rem      XHCISNAP's, moved by roadmap-usb4 task 42-A.4), and the XHCIINST self-test and import
 rem      check when that one has (task 40.5; xhciinst\build.cmd), and the
 rem      XHCIDI import gate when the 16-bit helper has (task 42-A.1;
@@ -279,6 +283,25 @@ exit /b 1
 
 :mainbody
 setlocal
+rem Every text check of this build and of the release cut, before anything
+rem else: none needs a toolchain, and each costs seconds against a build's
+rem hour (task 44.1). Until then the build met its text checks after its
+rem other self-tests and the cut met its own only after the gated builds;
+rem the 3.2.0.0 builds of 2026-10-24 stopped twice on a line past 78
+rem columns. Self-tested first. The bytes inside tracked source are among
+rem them (task 22.7): every other gate here reads src\ through a compiler
+rem or a parser that accepts any byte inside a comment or a string literal,
+rem and a BEL written into src\xhci_slot.c by a PowerShell escape passed
+rem all three x86 flavours and every gate on 2026-09-12.
+echo.
+echo === text checks ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-text.ps1" -SelfTest
+if errorlevel 1 goto textfail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-text.ps1"
+if errorlevel 1 goto textfail
+
 rem The DDK output directory for the target architecture - build.exe's own
 rem <arch> component, and the one place this script turns ARCH into a path.
 set "ARCHDIR=i386"
@@ -526,48 +549,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\vm-matrix\check-msi86-trace.ps1" -SelfTest
 if errorlevel 1 goto matrixtestfail
 
-echo.
-echo === batch-file line endings ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\xhciqual\test\check-bat-eol.ps1"
-if errorlevel 1 goto eoltestfail
+rem The batch-file line endings, the source charset and the readme text
+rem ran first, in scripts\check-text.ps1 (task 44.1), at the top of
+rem :mainbody.
 
-rem And the bytes INSIDE tracked source, which nothing checked until task
-rem 22.7: every other gate here reads src\ through a compiler or a parser
-rem that accepts any byte at all inside a comment or a string literal. A BEL
-rem written into src\xhci_slot.c by a PowerShell escape passed all three x86
-rem flavours and every gate on 2026-09-12.
-echo.
-echo === source charset ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\check-source-charset.ps1"
-if errorlevel 1 goto charsetfail
-
-rem The tool readmes make-release.ps1 publishes, and releases\history.md as
-rem rendered into the release readme (task 43.61): a line past 78
-rem columns or a character that is not printable ASCII stops a cut, and until
-rem this gate nothing met it before one - 43.11's test cut found two such
-rem lines that two merges had left. The rule and the list are
-rem package-common.ps1's, which the cut reads too.
-echo.
-echo === tool readme text ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\check-readme-text.ps1" -SelfTest
-if errorlevel 1 goto readmetextfail
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\check-readme-text.ps1"
-if errorlevel 1 goto readmetextfail
-
-rem XHCICLN and XHCITR compile the installer's pure half
-rem (xhciinst\inst_core.c), so a change there makes both stale and
-rem make-release.ps1 refuses them; the x86 run rebuilds both, the x64 halves
-rem included, before their self-tests below, so a cut never needs them
-rem built by hand.
+rem XHCITR compiles the installer's pure half (xhciinst\inst_core.c), so a
+rem change there makes it stale and make-release.ps1 refuses it; the x86
+rem run rebuilds it, the x64 half included, before its self-tests below, so
+rem a cut never needs it built by hand.
 if /i "%ARCH%"=="x86" (
     echo.
-    echo === xhcicln and xhcitr, rebuilt ===
-    call "%REPO%\xhcicln\build.cmd"
-    if errorlevel 1 goto toolbuildfail
+    echo === xhcitr and xhciperf, rebuilt ===
     call "%REPO%\xhcitr\build.cmd"
     if errorlevel 1 goto toolbuildfail
     rem The disk benchmark (task 43.50, design record 29 section 10), which
@@ -587,15 +579,6 @@ if errorlevel 1 goto stor98hdrfail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-stor98-header.ps1"
 if errorlevel 1 goto stor98hdrfail
-
-rem The cleanup tool's pure half (task 38.8), when its EXE has been built (it
-rem has a build.cmd of its own).
-if exist "%REPO%\xhcicln\XHCICLN.EXE" (
-    echo.
-    echo === xhcicln self-test ===
-    call "%REPO%\xhcicln\selftest.cmd"
-    if errorlevel 1 goto clntestfail
-)
 
 rem The install tool (task 40.5, design record 23), when its EXE has been
 rem built: its /selftest, its switch refusals and its import table, which
@@ -713,6 +696,52 @@ goto skipvsd
 :vsdnotbuilt
 echo S98VSD.VXD was not built on this host (see above); the package goes without it.
 :skipvsd
+
+rem XHCIPFW.VXD (task 44.49, design record 32 section 8), the Windows 98
+rem SE and ME static VxD that closes PCI bridges' prefetchable windows
+rem lying wholly above 4 GB before the configuration manager reads them,
+rem on the x86 run as S98VSD.VXD is: the release image always, the qemu
+rem flavour's when this run builds qemu, each link gated by
+rem src\pfw\check-pfw.ps1 inside src\pfw\build.cmd; a 2 is "not built"
+rem (no Open Watcom or no 98 SE DDK on this host), said and passed over.
+if /i "%ARCH%"=="amd64" goto skippfw
+echo.
+echo === build XHCIPFW.VXD ===
+for %%V in (obj\XHCIPFW.VXD obj\qemu\XHCIPFW.VXD) do if exist "%REPO%\src\pfw\%%V" del "%REPO%\src\pfw\%%V"
+call "%REPO%\src\pfw\build.cmd"
+if errorlevel 2 goto pfwnotbuilt
+if errorlevel 1 goto pfwfail
+set "PFWQ="
+for %%F in (%FLAVORS%) do if /i "%%F"=="qemu" set "PFWQ=1"
+if not defined PFWQ goto skippfw
+call "%REPO%\src\pfw\build.cmd" qemu
+if errorlevel 1 goto pfwfail
+goto skippfw
+:pfwnotbuilt
+echo XHCIPFW.VXD was not built on this host (see above); the package goes without it.
+:skippfw
+
+rem XHCIPFW.SYS (task 44.49, design record 32 section 11), the same step for
+rem Windows 2000 and the 32-bit Vista, 7, 8, 8.1 and 10: a boot-start driver
+rem built with the Windows 2000 DDK by src\pfw\nt\build.cmd on the x86 run,
+rem the release image always and the qemu image when this run builds qemu,
+rem each gated there (the import gate's hlprx86 profile, check-pfwsys.ps1).
+if /i "%ARCH%"=="amd64" goto skippfwsys
+echo.
+echo === build XHCIPFW.SYS ===
+for %%V in (objfre\i386\xhcipfw.sys objfre_qemu\i386\xhcipfw.sys) do if exist "%REPO%\src\pfw\nt\%%V" del "%REPO%\src\pfw\nt\%%V"
+call "%REPO%\src\pfw\nt\build.cmd"
+if errorlevel 2 goto pfwsysnotbuilt
+if errorlevel 1 goto pfwsysfail
+set "PFWQ="
+for %%F in (%FLAVORS%) do if /i "%%F"=="qemu" set "PFWQ=1"
+if not defined PFWQ goto skippfwsys
+call "%REPO%\src\pfw\nt\build.cmd" qemu
+if errorlevel 1 goto pfwsysfail
+goto skippfwsys
+:pfwsysnotbuilt
+echo XHCIPFW.SYS was not built on this host (see above); the package goes without it.
+:skippfwsys
 
 rem `if errorlevel` inside the block is evaluated per iteration, so a first
 rem flavor that fails cannot be masked by a second one that succeeds.
@@ -996,6 +1025,18 @@ if errorlevel 1 exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\source-stamp.ps1" -Driver %~3 -Write "%REPO%\src\stor98\out\free\%~1"
 exit /b %errorlevel%
+
+:pfwsysfail
+echo.
+echo ERROR: XHCIPFW.SYS (src\pfw\nt) failed to build or its gate failed - see above.
+endlocal
+exit /b 1
+
+:pfwfail
+echo.
+echo ERROR: XHCIPFW.VXD (src\pfw) failed to build or its gate failed - see above.
+endlocal
+exit /b 1
 
 :vsdfail
 echo.
@@ -1410,25 +1451,15 @@ echo FAIL and NODRIVER words cannot be trusted. Fix scripts\vm-matrix first.
 endlocal
 exit /b 1
 
-:eoltestfail
+:textfail
 echo.
-echo ERROR: a tracked batch file is not CRLF. MS-DOS 7.1 COMMAND.COM can fail
-echo to find goto labels in an LF-only file, silently breaking its error paths.
-endlocal
-exit /b 1
-
-:charsetfail
-echo.
-echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
-echo 1998-era toolchain cannot read one. See the check's output above.
-endlocal
-exit /b 1
-
-:readmetextfail
-echo.
-echo ERROR: a tool readme or the release history the release cut publishes has
-echo a line past 78 columns or a character that is not printable ASCII, and make-release.ps1 would
-echo refuse it - see the check's output above.
+echo ERROR: a text check failed - see its output above. Nothing was built.
+echo Each FAIL line names the file and line: a batch file that is not CRLF,
+echo a byte the toolchain should not see in tracked source, or a text the
+echo release cut publishes with a line past 78 columns, a character that is
+echo not printable ASCII, or another of the cut's text refusals. The same
+echo checks run alone, in seconds:
+echo   powershell -ExecutionPolicy Bypass -File scripts\check-text.ps1
 endlocal
 exit /b 1
 
@@ -1476,15 +1507,8 @@ exit /b 1
 
 :toolbuildfail
 echo.
-echo ERROR: xhcicln\build.cmd, xhcitr\build.cmd or xhciperf\build.cmd failed: the tools that
-echo compile the installer's pure half are not current.
-endlocal
-exit /b 1
-
-:clntestfail
-echo.
-echo ERROR: xhcicln's self-test failed, so its choice of which old devnodes
-echo to remove cannot be trusted.
+echo ERROR: xhcitr\build.cmd or xhciperf\build.cmd failed: XHCITR, which
+echo compiles the installer's pure half, or XHCIPERF is not current.
 endlocal
 exit /b 1
 

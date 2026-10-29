@@ -1,7 +1,0 @@
-/*
- * xhcicln.rc - the one resource of XHCICLN.EXE and XHCICL64.EXE: the
- * manifest asking for elevation (xhcicln.manifest), as resource 1 of type 24
- * (RT_MANIFEST, CREATEPROCESS_MANIFEST_RESOURCE_ID), a form MSVC 6.0's
- * resource compiler takes by number.
- */
-1 24 "xhcicln.manifest"

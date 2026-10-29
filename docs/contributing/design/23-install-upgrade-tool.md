@@ -1,6 +1,39 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 44, 2026-10-24 (record 26 section 5.0's draft 40, the
+Status: revision 49, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61 and
+the owner's decision of that day on `8086:0F35`: the uninstall's
+connection-manager warning, like record 26's Add/Remove Programs name,
+read on 98 SE and ME too, by the two drivers' files, section 9.1; the
+package's own names "USB 3", not "USB 3.x" (the root hub, a hub's
+SuperSpeed half, the service, the F6 list, the installer's texts); the
+Bay Trail controller `8086:0F35` named "Intel Bay Trail", section
+5.13.2);
+revision 48, 2026-10-27 (roadmap-usb4 task 44.55, the owner's
+decisions of that day: the name table widened to the ASM4242's and
+AMD 800 Series' controllers and to every widely used controller a source names,
+pci.ids now a source for names where no other exists; the ASM4242's
+router named by the installer's FriendlyName with no change of rank, its
+downstream ports by the filter INF's line; README's and the release
+notes' tables of the USB 3 controllers held to the table; section
+5.13.8);
+revision 47, 2026-10-25 (roadmap-usb4 tasks 44.25 and 44.28,
+the owner's decisions of that day: Intel's Thunderbolt driver on the
+NHI asked about, the default leaving it, section 8.5.1; with Secure
+Boot read as on, the connection manager refused on 32-bit 8, 8.1 and
+10 too and a run with the USB drivers refused, record 26 section
+5.3.3); revision 46, 2026-10-25 (roadmap-usb4 tasks 44.32 and 44.12,
+the owner's decision of that day, section 5.14: `xhcicm` set back to
+demand start at the end of every NT run and by the mark service after
+a later install of the filter, which Windows makes a boot driver; the
+boot-driver gate on 64-bit Vista and 7 as on 8 to 10, its texts
+revised); revision 45, 2026-10-25 (roadmap-usb4 tasks 44.4 and 44.5, the
+owner's decision of that day: `xhci98.inf`'s undecorated models section
+carries the name table's ids, each under its product's name, so that 98
+SE's and ME's Properties title names the product, section 5.13.7; and
+`INSTALL.BAT`'s refusal of too many arguments on 98 SE and ME exits
+with 1, said by `XHCIINST /toomany`, section 2; task 44.13: a leftover
+`xhci98.tmp` no pending rename names deleted on 98 SE and ME, since a
+controller added later would put it in place of the driver, section 6.6); revision 44, 2026-10-24 (record 26 section 5.0's draft 40, the
 owner's decision of that day: on 98 SE and ME xhci98.inf's controller
 install is 3.1.0.0's again, its temporary-name row replacing the file,
 so an Update Driver by hand updates as before, and revision 42's helper
@@ -213,8 +246,9 @@ from Add/Remove Programs. What changes here, section by section:
   each device's own); the question shows the machine-wide value beside
   each device's own; a per-controller value is left as it is. The table
   gains the connection manager's waits and log values (ranges) and
-  `XhciCmBridgeNumbering` (98 SE and ME, written by no INF), all never
-  asked, set with `/set` or the window's Advanced dialog.
+  `XhciCmBridgeNumbering` (98 SE and ME, written by no INF until task
+  44.46, by the x86 INF's 98 SE and ME install since), all never asked,
+  set with `/set` or the window's Advanced dialog.
 - **Section 9**: every install and update writes the Add/Remove Programs
   entry (record 26 section 9.1) once the installer's own files are in the
   install directory (record 26 section 6.2); an uninstall started from the
@@ -496,7 +530,11 @@ arguments on:
   arguments; the tool joins them (section 7.1). A tenth argument would be
   lost silently, so the batch file refuses any command line that uses
   `%9` at all, and names `TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86`
-  as the way to pass more.
+  as the way to pass more. The refusal is the console tool's
+  (`XHCIINST /toomany`, a switch of `INSTALL.BAT`'s alone): it prints the
+  text and exits with 1, since `COMMAND.COM` takes an errorlevel only from
+  a program, so a script sees the refusal (task 44.4; until `3.3.0.0` the
+  batch file echoed the text itself and left the errorlevel as it was).
 - `Windows_NT`, `PROCESSOR_ARCHITECTURE` or `PROCESSOR_ARCHITEW6432` equal
   to `AMD64`: `XHCIIN64.EXE`, `release-x64`, the arguments passed with
   `%*`.
@@ -794,7 +832,11 @@ is another release than the bundled one, or cannot be read, the run
 makes **no Stor98 change at all** - `stor98.inf` is not staged, no
 `stor98` file goes into the 98 SE and ME install directory, no device is
 installed or updated and no setting is written - and says so, naming
-Stor98's readme for an update by hand; when it is the bundled release,
+Stor98's readme for an update by hand (but where every other is a drive
+whose place is read again after the restart, by the connection manager
+the run installs or updates, it says to run the installer again then:
+record 31 section 9.4, the reading of 2026-10-28); when it is the
+bundled release,
 tunnel drives are installed (the file stays what it is) but no setting
 is written, and that is said too. A run whose copy was made held stays
 held to its end, even when a later reading would lift the hold, since
@@ -838,7 +880,13 @@ bundled release, so a refresh cut short is finished then.
 A device with no driver behind a tunnel is still installed by the
 helper. NT is unchanged: SetupAPI updates Stor98 there.
 
-What remains, said in the release notes and the package's readme:
+What remains, said in the release notes and the package's readme (for
+`3.2.0.0`; design record 31, tasks 44.2 and 44.3, replaces it in
+`3.3.0.0`: on 2000 to 8 the INF matches a tunnel id of this project's own
+and no class, on 8.1 and 10 it keeps the model below, on 98 SE and ME a
+separate INF, `stor98w9.inf`, keeps the class match; the installer
+installs each present tunnel drive by itself by model selection, and the
+shared-id refusals below go):
 `stor98.inf` matches every NVMe controller (`PCI\CC_010802`), and it is
 staged on NT and in the install directory on 98 SE and ME so that a
 tunnel drive that appears later - the usual case, since the tunnel may
@@ -1054,7 +1102,8 @@ reading for 8.1.
     (section 5.9): bound to this package's service at the package version,
     started, or a stated reason why not.
 11. Report the restart (section 5.9), and, where old `XHCI98\` entries
-    exist, one line naming `tools\xhcicln\` (section 5.11).
+    exist, one line naming `tools\xhcicln\` (section 5.11; since `3.3.0.0`
+    the line names no tool).
 12. **The marks' invariant** (revision 12; record 21 section 7.4, decision
     M13), at the end of every run that got this far or stopped on the
     way, whatever its verdict: a `LowerFilters` value naming `xhcicm`
@@ -1179,7 +1228,9 @@ problem code turns it into an install. Then:
 
 The controller's model id is the class id `PCI\CC_0C0330`, so every xHCI
 controller in the machine is matched; one running another vendor's driver
-is foreign and left. The same holds for a UAS device another driver holds.
+is foreign and left. (Since revision 45 the section 2000 and XP read also
+names the name table's ids, each under its product's name, section
+5.13.7; the matching and the rule above are unchanged.) The same holds for a UAS device another driver holds.
 
 **A missing or older payload is repaired.** When the group's installed
 binary is missing or older than the package's - or, for `xhci98` on 32-bit
@@ -1375,7 +1426,8 @@ controller changes.
 From `2.4.0.0` onward the root hub, hubs and composite devices keep their
 ids, so step 8 updates them as section 5.4 says: each is bound to `xhci98`
 with an older driver key, which is what the release notes' "then on xHCI98
-USB 3.x Root Hub" does by hand. From `2.3.x` they are new devnodes after
+USB 3.x Root Hub" (from 3.3.0.0 "xHCI98 USB 3 Root Hub", task 44.61) does
+by hand. From `2.3.x` they are new devnodes after
 the controller's update (record 13 section 10.13.4):
 
 **Every dependent phase has the same barrier.** Installing a root hub or a
@@ -1650,7 +1702,9 @@ Boot note with it. Whether 10 makes `xhcicm` boot start and refuses a
 package with no catalog in test-signing mode was unread here (the same
 setup engine and code integrity, so likely); 10 x64's refusal of the
 catalog-less package was read since (section 5.12), and whether 10 makes
-`xhcicm` boot start is still unread.
+`xhcicm` boot start is still unread. Revision 46 (section 5.14, task
+44.12) keys `inst_cm_boot_gate` on the system instead, every 64-bit NT
+6.0 and later, Vista and 7 x64 included, and sets the start type back.
 
 The installer still signs nothing and changes no boot setting (D6). A
 catalog would remove item 1's detour (a test-signed catalog is accepted
@@ -1732,6 +1786,13 @@ removes them if the user wants. The line changes no exit code. The
 uninstall (section 9) does not run `XHCICLN` either: it removes the old
 bus's devnodes itself, through the same `DIF_REMOVE` route, as part of
 its set.
+
+**Historical: XHCICLN was dropped in `3.3.0.0`** (roadmap-usb4 task 44.82,
+owner). The line now names no tool. It reads `<n> old XHCI98\ entries from
+2.3.x remain. Nothing needs them removed.` It still changes no
+exit code, and the uninstall still removes the old devnodes. Elsewhere in
+this record, `XHCICLN` as a model for the build, the manifest, the
+packaging and the gates is the design as written up to `3.2.0.0`.
 
 ### 5.12 Windows 10: the signature policy and the version (task 43.33 (d) and (e), 2026-10-22; a reading)
 
@@ -1880,7 +1941,10 @@ in the description's place (read on 98 SE below; on NT
 other case: `xhcicm.inf` already carries a line per NHI id beside its class
 line (record 21 section 3.3), so its names are those lines' own
 descriptions, one `[Strings]` entry per product, and no FriendlyName is
-written for an NHI. A description is no input to the ranking - a driver's
+written for such an NHI. An NHI the class line alone matches and a
+second table names (`instNhiFnNames`, task 44.55: the ASMedia ASM4242,
+section 5.13.8) is named by the FriendlyName, as a controller is, since
+an id line of its own would change its rank. A description is no input to the ranking - a driver's
 rank comes from which of the device's ids the line matched and where that
 id stands in its list, then the signature, date and version (Microsoft,
 "How Windows Ranks Drivers"; on 98 SE and ME the setup engine's `DRIVER_NODE` rank, "0 is the most compatible", which record 27 section 5 reads, is the match's too) - so a
@@ -1888,7 +1952,8 @@ different string on the same line ranks the same; no line was added,
 removed or moved, and the gates' `CM-IDLIST`, `CM-IDSET` and
 `CM-CLASSLINE` still hold the lines to the table of `src\cm\cm_vals.c`.
 The tunnel ports' bridges keep the filter INF's names (record 21 section
-3.3) and are never given a FriendlyName, so the uninstall's `unfilter_nt`,
+3.3; the ASM4242's downstream ports' line names the product, section
+5.13.8) and are never given a FriendlyName, so the uninstall's `unfilter_nt`,
 which gives a bridge back to `machine.inf` and leaves its devnode, has no
 name of this package's to clear there.
 
@@ -1940,23 +2005,33 @@ INF's plain name. Its ids are the controllers this repository knows: the
 quirk surveys (design record 20 and its Linux mirror `xhci-pci.c`, whose
 `PCI_DEVICE_ID_*` names are cited by symbol), record 16's PCH list, the
 controller list of `docs/contributing/build-and-test.md` ("Tier 2", "Tier
-3"), the machines the project has run (`runs/run-35.md`, `run-36.md`), and
-QEMU's. The product is the form those sources give, shortened only to an
+3"), the machines the project has run (`runs/run-35.md`, `run-36.md`), pci.ids
+and Linux's ids (section 5.13.8), and QEMU's. The product is the form those sources give, shortened only to an
 established alias within the 46 characters (the Intel chipsets by their
 series, an "LP" for the on-package PCH that the sources call PCH-LP, as
 Linux's `LYNXPOINT_LP` and record 16's "Lynx Point-LP"); pci.ids
-(2026.10.23) was read as a cross-check only.
+(2026.10.23) was read as a cross-check only. **From task 44.55 (the
+owner, 2026-10-27) pci.ids is a source for a name, and for nothing else,
+where none of the sources above names the controller**: the version read
+is `2026.10.27` (dated 2026-10-27 03:15:02, SHA-256
+`d74137d070767260e19a0cd4d80ae9ac39d30cbd2872306490d392bfde4d323a`, ids
+and names only, the file not tracked), and its form is shortened by the
+same aliases within the 46 characters.
 
 | Id | Product | Source (repository first) |
 |---|---|---|
 | `1002:7316` | AMD Navi 10 | record 20 Q11 (ATI Navi10); Linux `PCI_DEVICE_ID_ATI_NAVI10_7316_XHCI` |
 | `1022:13ED`, `13EE` | AMD Ariel | Linux `PCI_DEVICE_ID_AMD_ARIEL_TYPEC_XHCI`, `_TYPEA_`; record 20 (interval-9 row) |
 | `1022:148C` | AMD Starship | Linux `PCI_DEVICE_ID_AMD_STARSHIP_XHCI`; record 20 |
+| `1022:15B6`, `15B7` | AMD Raphael | pci.ids "Raphael/Granite Ridge USB 3.1 xHCI": the processor's controllers; Raphael and Granite Ridge share the ids, so a Granite Ridge processor's read "AMD Raphael" too |
+| `1022:15B8` | AMD Raphael USB 2 | pci.ids "Raphael/Granite Ridge USB 2.0 xHCI": the processor's USB 2.0-only xHCI, Granite Ridge's the same |
 | `1022:15D4`, `15D5` | AMD FireFlight | Linux `PCI_DEVICE_ID_AMD_FIREFLIGHT_15D4_XHCI`, `_15D5_`; record 20 |
 | `1022:15E0`, `15E1` | AMD Raven | Linux `PCI_DEVICE_ID_AMD_RAVEN_15E0_XHCI`, `_15E1_`; record 20 Q7 |
 | `1022:15E5` | AMD Raven2 | Linux `PCI_DEVICE_ID_AMD_RAVEN2_XHCI`; record 20 Q3, Q16 |
-| `1022:1639` | AMD Renoir | Linux `PCI_DEVICE_ID_AMD_RENOIR_XHCI` (pci.ids: Renoir/Cezanne) |
+| `1022:1639` | AMD Renoir/Cezanne | Linux `PCI_DEVICE_ID_AMD_RENOIR_XHCI`; pci.ids "Renoir/Cezanne" (task 44.55: Cezanne shares the id; "AMD Renoir" before) |
 | `1022:43B9`, `43BA`, `43BB`, `43BC` | AMD X370, AMD X399, AMD 300 Series, AMD A320 | Linux `PCI_DEVICE_ID_AMD_PROMONTORYA_4` to `_1`; record 20 Q7, U2 rows; the chipset names pci.ids' |
+| `1022:43F7` | AMD 600 Series | the chipset controller of AMD's 600 Series; Linux names the id by number alone (`xhci-pci.c`, `XHCI_DEFAULT_PM_RUNTIME_ALLOW`); pci.ids "600 Series Chipset USB 3.2 Controller" |
+| `1022:43FD` | AMD 800 Series | the chipset controller of AMD's 800 Series; Linux `PCI_DEVICE_ID_AMD_PROM21_XHCI_43FD` (`xhci-pci.h`; the part, Promontory 21, not a series); pci.ids "800 Series Chipset USB 3.x XHCI Controller" |
 | `1022:7814` | AMD FCH | build-and-test Tier 2 (Kaveri/Carrizo APU); pci.ids "FCH USB XHCI Controller" |
 | `1033:0194` | NEC uPD720200 | build-and-test Tier 2 |
 | `104C:8241` | TI TUSB73x0 | record 20 Q10; pci.ids "TUSB73x0" |
@@ -1967,10 +2042,11 @@ Linux's `LYNXPOINT_LP` and record 16's "Lynx Point-LP"); pci.ids
 | `1B21:1142` | ASMedia ASM1042A | Linux `PCI_DEVICE_ID_ASMEDIA_1042A_XHCI`; record 20 Q9 |
 | `1B21:1242` | ASMedia ASM1142 | Linux `PCI_DEVICE_ID_ASMEDIA_1142_XHCI` |
 | `1B21:2142` | ASMedia ASM2142 | Linux `PCI_DEVICE_ID_ASMEDIA_2142_XHCI` (pci.ids: ASM2142/ASM3142, 49 characters with the base, so Linux's form) |
+| `1B21:2426` | ASMedia ASM4242 | behind the ASM4242's switch `2421`/`2423`; record 22 section 18; record 17 ("Where it reaches"); pci.ids "ASM4242 USB 3.2 xHCI Controller" |
 | `1B21:3042` | ASMedia ASM3042 | Linux `PCI_DEVICE_ID_ASMEDIA_3042_XHCI`; record 20 Q3 |
 | `1B21:3242` | ASMedia ASM3242 | Linux `PCI_DEVICE_ID_ASMEDIA_3242_XHCI`; the owner's example |
 | `1B36:000D` | Red Hat QEMU xHCI | record 13 (qemu-xhci); the owner's example |
-| `1B6F:7023`, `7052` | Etron EJ168, EJ188 | Linux `PCI_DEVICE_ID_ETRON_EJ168`, `_EJ188`; record 20 Q14a |
+| `1B6F:7023`, `7052` | Etron EJ168, EJ188/EJ198 | Linux `PCI_DEVICE_ID_ETRON_EJ168`, `_EJ188`; record 20 Q14a; pci.ids "EJ188/EJ198" (task 44.55: the EJ198 shares `7052`; "Etron EJ188" before) |
 | `1B73:1000` | Fresco Logic FL1000 | Linux `PCI_DEVICE_ID_FRESCO_LOGIC_PDK`; record 20 Q1 ("FL1000/PDK") |
 | `1B73:1009`, `1100`, `1400` | Fresco Logic FL1009, FL1100, FL1400 | Linux `PCI_DEVICE_ID_FRESCO_LOGIC_FL1009`, `_FL1100`, `_FL1400`; record 20 Q1, Q2 |
 | `1D17:9202`, `9203` | Zhaoxin ZX-100, ZX-200 | record 20 Q3, Q13; pci.ids |
@@ -1997,11 +2073,70 @@ Linux's `LYNXPOINT_LP` and record 16's "Lynx Point-LP"); pci.ids
 | `8086:15B5`, `15B6`, `15C1`, `15D4`, `15DB` | Intel Alpine Ridge | Linux `PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_2C_XHCI`, `_4C_`, `_LP_`, `_C_4C_`, `_C_2C_`; `15C1` the P14s's and the emulator's `usb4-tb3-xhci` |
 | `8086:15E9`, `15EC`, `15F0` | Intel Titan Ridge | Linux `PCI_DEVICE_ID_INTEL_TITAN_RIDGE_2C_XHCI`, `_4C_`, `_DD_` |
 
-Left out, for the owner (the controller keeps the plain name meanwhile):
-`1022:145C` (pci.ids "Family 17h (Models 00h-0fh)", no product name in any
-source here), `1022:43FC` and `43FD` (Promontory 21, record 20; the 600 or
-800 series is not established here), `17CD:0200` (Cadence, no product in
-any source), and the non-x86 `1DB7:DC27`, `14E4:9026`, `177D:9026`. Two
+Added by task 44.55 with pci.ids as the source of the name (section
+5.13.8 has the survey):
+
+| Id | Product | Source |
+|---|---|---|
+| `1022:145C` | AMD Family 17h | Linux names the id by number alone (`xhci-pci.c`); pci.ids 2026.10.27 "Family 17h (Models 00h-0fh) USB 3.0 Host Controller" |
+| `1022:145F` | AMD Zeppelin | pci.ids 2026.10.27 "Zeppelin USB 3.0 xHCI Compliant Host Controller" |
+| `1022:149C` | AMD Matisse | pci.ids 2026.10.27 "Matisse USB 3.0 Host Controller" |
+| `1022:1118`, `111C`, `111E`, `1128` | AMD Krackan | pci.ids 2026.10.27 "Krackan USB 3.1 xHCI" |
+| `1022:1135` | AMD Krackan2 USB 2 | pci.ids 2026.10.27 "Krackan2 USB 2.0 xHCI" |
+| `1022:1138`, `1139`, `113A` | AMD Krackan2 | pci.ids 2026.10.27 "Krackan2 USB 3.1 xHCI" |
+| `1022:151A`, `151B`, `151E`, `151F` | AMD Strix | pci.ids 2026.10.27 "Strix USB 3.1 xHCI" |
+| `1022:1587`, `1588`, `1589`, `158B` | AMD Strix Halo | `1022:1587` read on development host A (`runs/run-41.md`); pci.ids 2026.10.27 "Strix Halo USB 3.1 xHCI" |
+| `1022:15BB`, `15C2`, `15C3` | AMD Phoenix2 | pci.ids 2026.10.27 "Phoenix2 USB 3.1 xHCI" |
+| `1022:15D6`, `15D7`, `161A`, `161B`, `161C`, `161D`, `161E`, `161F` | AMD Rembrandt | pci.ids 2026.10.27 "Rembrandt USB4 XHCI controller #5"; "Rembrandt USB4 XHCI controller #6"; "Rembrandt USB4 XHCI controller #1"; "Rembrandt USB4 XHCI controller #2"; "Rembrandt USB4 XHCI controller #7"; "Rembrandt USB4 XHCI controller #3"; "Rembrandt USB4 XHCI controller #4"; "Rembrandt USB4 XHCI controller #8" |
+| `1022:163A`, `163B` | AMD Van Gogh | pci.ids 2026.10.27 "VanGogh USB0"; "VanGogh USB1" |
+| `1022:43D5` | AMD 400 Series | pci.ids 2026.10.27 "400 Series Chipset USB 3.1 xHCI Compliant Host Controller" |
+| `1022:43EC` | AMD A520 | pci.ids 2026.10.27 "A520 Series Chipset USB 3.1 XHCI Controller" |
+| `1022:43EE` | AMD 500 Series | pci.ids 2026.10.27 "500 Series Chipset USB 3.1 XHCI Controller" |
+| `1022:43FA` | AMD A620 | pci.ids 2026.10.27 "A620 Series Chipset USB 3.1 Controller" |
+| `1022:43FC` | AMD 800 Series | pci.ids 2026.10.27 "800 Series Chipset USB 3.x XHCI Controller"; Linux `PCI_DEVICE_ID_AMD_PROM21_XHCI_43FC` (the part, Promontory 21), as `43FD` |
+| `1022:7812`, `7914` | AMD FCH | pci.ids 2026.10.27 "FCH USB XHCI Controller" |
+| `10DE:1AD6` | NVIDIA TU102 | pci.ids 2026.10.27 "TU102 USB 3.1 Host Controller" |
+| `10DE:1AD8` | NVIDIA TU104 | pci.ids 2026.10.27 "TU104 USB 3.1 Host Controller" |
+| `10DE:1ADA` | NVIDIA TU106 | pci.ids 2026.10.27 "TU106 USB 3.1 Host Controller" |
+| `10DE:1AEC` | NVIDIA TU116 | pci.ids 2026.10.27 "TU116 USB 3.1 Host Controller" |
+| `15AD:0778`, `0779` | VMware USB3 xHCI | vendor `15AD` VMware; pci.ids 2026.10.27 "USB3 xHCI 0.96 Controller"; "USB3 xHCI 1.0 Controller" |
+| `1B21:1040` | ASMedia ASM1040 | pci.ids 2026.10.27 "ASM1040 SuperSpeed USB Host Controller" |
+| `1B21:1041` | ASMedia ASM1041 | pci.ids 2026.10.27 "ASM1041 SuperSpeed USB Host Controller" |
+| `1B21:1343` | ASMedia ASM1143 | pci.ids 2026.10.27 "ASM1143 USB 3.1 Host Controller" |
+| `1B21:3142` | ASMedia ASM3142 | pci.ids 2026.10.27 "ASM3142 USB 3.2 Gen 2x1 xHCI Controller" |
+| `1B21:3241` | ASMedia ASM3241 | pci.ids 2026.10.27 "ASM3241 USB 3.2 Gen 2 Host Controller" |
+| `1D17:9204` | Zhaoxin KX-6000 | pci.ids 2026.10.27 "KX-6000/KX-6000G/KX-7000 USB3 xHCI Host Controller" |
+| `1D17:9205` | Zhaoxin KH-40000 | pci.ids 2026.10.27 "KH-40000 USB eXtensible Host Controller" |
+| `1D17:9207` | Zhaoxin KH-50000 | pci.ids 2026.10.27 "KH-50000 USB eXtensible Host Controller" |
+| `8086:06ED` | Intel 400 Series | pci.ids 2026.10.27 "400 Series Chipset Family USB 3.2 Gen 2x1 (10 Gbs) xHCI Host Controller" |
+| `8086:0F35` | Intel Bay Trail | the owner's name (2026-10-27, revision 49): the platform's, not one product line's, the same id being on the Atom Z3700, Celeron and Pentium N2800/J2800/N3500 and Atom E3800 parts; pci.ids 2026.10.27 "Atom Processor Z36xxx/Z37xxx, Celeron N2000 Series USB xHCI"; Linux names the platform's other functions `BYT` (`PCI_DEVICE_ID_INTEL_HDA_BYT`, `0x0f04`) [linux] |
+| `8086:0B27` | Intel Goshen Ridge | pci.ids 2026.10.27 "Thunderbolt 4 USB Controller [Goshen Ridge 2020]" |
+| `8086:1135` | Intel Maple Ridge | pci.ids 2026.10.27 "Thunderbolt 4 USB Controller [Maple Ridge 2C 2020]" |
+| `8086:31A8` | Intel Pentium Silver | pci.ids' processor name (the listing names no "Gemini Lake"); pci.ids 2026.10.27 "Celeron/Pentium Silver Processor USB 3.0 xHCI Controller" |
+| `8086:34ED` | Intel Ice Lake-LP | pci.ids 2026.10.27 "Ice Lake-LP USB 3.1 xHCI Host Controller" |
+| `8086:43ED` | Intel 500 Series | pci.ids 2026.10.27 "500 Series Chipset Family USB 3.2 Gen 2x2 (20 Gbs) xHCI Host Controller" |
+| `8086:461E` | Intel Alder Lake | the family; pci.ids 2026.10.27 "Alder Lake-P Thunderbolt 4 USB Controller" |
+| `8086:464E` | Intel Alder Lake-N | pci.ids 2026.10.27 "Alder Lake-N Processor USB 3.2 xHCI Controller" |
+| `8086:4B7D` | Intel Elkhart Lake | pci.ids 2026.10.27 "Elkhart Lake USB 3.10 XHCI" |
+| `8086:4DED` | Intel Jasper Lake | pci.ids 2026.10.27 "Jasper Lake USB 3.1 xHCI Host Controller" |
+| `8086:5782`, `5785` | Intel Barlow Ridge | `8086:5782` read on development host A (`runs/run-41.md`, "The tree's labels"); pci.ids 2026.10.27 "JHL9580 Thunderbolt 5 80/120G USB Controller [Barlow Ridge Host 80G 2023]"; "JHL9540 Thunderbolt 4 USB Controller [Barlow Ridge Host 40G 2023]" |
+| `8086:777D`, `7EC0`, `A831`, `A87D` | Intel Core Ultra 200 | the H and V parts under one name, within the 46 characters; pci.ids 2026.10.27 "Core Ultra 200H/200V Series Processors Standalone xHCI Controller"; "Core Ultra 200 Series Processors USB xHCI"; "Core Ultra 200V Series Processors Type-C Subsystem xHCI"; "Core Ultra 200V Series Processors Standalone xHCI Controller" |
+| `8086:7A60` | Intel 700 Series | pci.ids 2026.10.27 "700 Series Chipset Family USB 3.2 Gen 2x2 (20 Gbs) xHCI Host Controller" |
+| `8086:7AE0` | Intel 600 Series | pci.ids 2026.10.27 "600 Series Chipset Family USB 3.2 Gen 2x2 (20Gbs) XHCI Host Controller" |
+| `8086:7E7D` | Intel Meteor Lake-P | pci.ids 2026.10.27 "Meteor Lake-P USB 3.2 Gen 2x1 xHCI Host Controller" |
+| `8086:7F6E` | Intel 800 Series | pci.ids 2026.10.27 "800 Series Chipset Family USB 3.1 xHCI HC" |
+| `8086:9A17` | Intel Tiger Lake | the family, as `9A13`; pci.ids 2026.10.27 "Tiger Lake-H Thunderbolt 4 USB Controller" |
+| `8086:9DED` | Intel 300 Series LP | pci.ids 2026.10.27 "Cannon Point-LP USB 3.1 xHCI Controller" (Cannon Point is the 300 Series PCH, `A36D`'s "300/C240 Series"; LP as `8 Series LP`) |
+| `8086:A1AF`, `A22F` | Intel C620 Series | pci.ids 2026.10.27 "C620 Series Chipset Family USB 3.0 xHCI Controller"; "C620 Series Chipset Family (Super) USB 3.0 xHCI Controller" |
+| `8086:A2AF` | Intel 200 Series | pci.ids 2026.10.27 "200 Series/Z370 Chipset Family USB 3.0 xHCI Controller" |
+| `8086:A36D` | Intel 300 Series | pci.ids 2026.10.27 "300/C240 Series Chipset Family USB 3.1 xHCI" |
+| `8086:A71E` | Intel Raptor Lake | the family; pci.ids 2026.10.27 "Raptor Lake-P Thunderbolt 4 USB Controller" |
+
+Left out (the controller keeps the plain name): `17CD:0200` (Cadence, no
+product in any source), the non-x86 `1DB7:DC27`, `14E4:9026`,
+`177D:9026`, and of pci.ids' xHCI controllers those whose name gives no
+product within the 46 characters or that are not widely used on these
+systems' machines (section 5.13.8). Two
 rows of build-and-test's Tier 3 carried ids that are not PCI controllers'
 (`1D5C:1000` for the FL1000, whose vendor is `1B73`; `2109:0812` and
 `0813`, VIA Labs' USB hub ids, for the VL805/VL806, whose PCI id is
@@ -2015,12 +2150,19 @@ the generation's base, `xHCI98 TB2 Controller`, `xHCI98 TB3 Controller` or
 `xHCI98 USB4 Router`, and the maker and product, one string per product in
 both NHI INFs; `test_inst` holds every model line of `xhcicm.inf` and
 `xhcicm-amd64.inf` to the table string for string, and the gate's
-`CM-DESC` holds each id to its product's token.
+`CM-DESC` holds each id to its product's token. The second table,
+`instNhiFnNames` (task 44.55), holds the NHIs the class line alone
+matches that are named by the FriendlyName (section 5.13.4), today the
+ASMedia ASM4242 (`1B21:2425`, `xHCI98 USB4 Router (ASMedia ASM4242)`);
+`test_inst` holds that no NHI INF line binds one of its ids and that no
+id is in both tables. On 98 SE and ME its Properties title shows the
+class line's `xHCI98 USB4 Router`, as an xHCI controller's did before
+section 5.13.7 (an id line would be the rank change the owner ruled out).
 
 #### 5.13.4 The reconciliation
 
 `names_reconcile` (`xhciinst\inst_eng.c`) runs at the normal end of every
-install run with the USB drivers in it - never in a run that was refused,
+install run with the USB drivers or the connection manager in it - never in a run that was refused,
 stopped (a changed plan, an unsettled tree, a barrier that failed) or
 cancelled, and never under `/list` - **whatever the run installed**: a run
 that found every device current reinstalled nothing (`inst_action_runs`),
@@ -2028,7 +2170,8 @@ and a machine updated by hand through Have Disk and then given to the
 installer is named all the same. On 98 SE and ME it runs before the run
 opens Device Manager. It runs again at the end of the uninstall, before its
 records go. It scans the devices again (after the run's last use of its
-plan) and, for each xHCI controller and each instance the record
+plan) and, for each xHCI controller, each NHI of `instNhiFnNames` (the
+driver of "ours" then `xhcicm`, task 44.55) and each instance the record
 names, takes `inst_name_action`'s decision (`inst_core.c`, the host suite's
 vectors):
 
@@ -2094,7 +2237,358 @@ FriendlyName) and cleared with its devnode at the uninstall, the
 **98 SE's Properties caption shows the DeviceDesc**, not the FriendlyName
 ("xHCI98 USB 3 Controller Properties"), where 7's shows the FriendlyName:
 on 98 SE and ME the product shows in the tree and on the General tab only.
-Whether the installer should write the 9x DeviceDesc too is the owner's.
+Whether the installer should write the 9x DeviceDesc too was the owner's;
+section 5.13.7 has the answer.
+
+#### 5.13.7 The 98 SE and ME Properties title (task 44.5; revision 45)
+
+The owner, 2026-10-25: the controller's Properties title on 98 SE and ME
+names the maker and product, as the tree does. The title shows the
+devnode's `DeviceDesc`, which the setup engine writes from the model
+line it installed; so the undecorated `[XhciModels]` of the 32-bit
+`xhci98.inf` carries, beside the class line, one line per id of the name
+table (`instXhciNames`, 151 ids under 106 names from task 44.55, 65
+under 55 before), `PCI\VEN_xxxx&DEV_xxxx`,
+the form 98 SE's PCI enumerator lists among a device's hardware ids and
+the NHI lines of `xhcicm.inf` were read with, each under a string token
+whose string is the table's name for that id ("xHCI98 USB 3 Controller
+(Intel Alpine Ridge)"); an id the table lacks keeps the class line and
+its plain name. The installer's FriendlyName stays as section 5.13.4 has
+it, and on 98 SE and ME it now equals the `DeviceDesc` for a table id.
+
+- **What else reads that section.** 2000 and XP read the undecorated
+  section too (the 32-bit file's `[Manufacturer]` line carries only
+  `NTx86.6.0`, which they do not take). There the lines give the same
+  product name as the `DeviceDesc` (the FriendlyName already showed it),
+  and they change the rank: a controller of the table now matches this
+  INF by its hardware id, where it matched by the class compatible id
+  before. Against another maker's 2000 or XP driver for the same
+  controller that matches by id, the ranks tie and the setup engine's
+  later tie-breaks decide (on XP a signed driver first, on both the newer
+  date), where this INF lost by rank before. This changes nothing the
+  installer does (it never installs over another maker's driver, section
+  5.4), but Windows' own choice at a new controller can now be this INF
+  where it was that maker's: stated, for the owner (a question in the
+  task's report).
+- **NT 6.x and the 64-bit file** keep the class line alone: an id line
+  there would outrank Windows' own `usbxhci` on 8 to 10 (the reason
+  section 5.13's class line keeps one name).
+- **The checks.** The INF gate's `HCD-DESC`: the class line's name is
+  the plain one; every other controller line binds one
+  `PCI\VEN_xxxx&DEV_xxxx` alone, only in the 32-bit file's undecorated
+  section, under a string "xHCI98 USB 3 Controller (<maker product>)",
+  printable ASCII, within 46 characters (`INST_NAME_MAX`, task 43.73's
+  reading of 98 SE's Device Manager at 640x480); its self-test refuses a
+  long name, another form, a named class line, an id line in an NT 6.x
+  section or the 64-bit file, and an id with a subsystem. `test_inst`
+  holds every id line's string to the table's name for its id and every
+  row of the table to a line (`names_xhci_inf`).
+- **An update.** A controller installed under the class line keeps its
+  `DeviceDesc` until it is installed again; the installer's update
+  installs it again on 98 SE and ME whenever its version is older, so an
+  update from `3.2.0.0` gives the title; a same-version run that
+  reinstalls nothing leaves it (`/force` reinstalls).
+- **The reading** (owed with the legs of `runs/run-44.md`, "44.5"): on 98
+  SE and ME, `qemu-xhci` (`1B36:000D`) installed by the package shows
+  "xHCI98 USB 3 Controller (Red Hat QEMU xHCI) Properties".
+
+#### 5.13.8 The widening (task 44.55; revision 48)
+
+The owner, 2026-10-27 (the ASM4242's ids as record 22 section 18 gives
+them, the AMD ids as pci.ids and Linux name them): the ASMedia ASM4242's
+xHCI `1B21:2426` is `xHCI98 USB 3 Controller
+(ASMedia ASM4242)`; its USB4 host router (the NHI) `1B21:2425` is `xHCI98
+USB4 Router (ASMedia ASM4242)`; AMD's 800 Series chipset controller
+`1022:43FD` is `(AMD 800 Series)`; the Raphael processor's `1022:15B6`
+and `15B7` are `(AMD Raphael)`, Granite Ridge sharing the ids, and its
+USB 2.0-only xHCI `15B8` `(AMD Raphael USB 2)`. Then, the same day: every widely used xHCI controller
+the survey found named only in pci.ids joins the table with pci.ids as
+the source of its name (section 5.13.2), and the router's name changes
+no rank.
+
+- **The survey.** Read for ids the table lacked: Linux's `xhci-pci.c`,
+  `xhci-pci.h` and `pci_ids.h` (every `PCI_DEVICE_ID_*` of an xHCI
+  controller, and every id a quirk names by number), records 13, 16, 17
+  and 20, build-and-test's tiers, the run sheets, and the XHCIQUAL
+  readings of the machines the project has run (the B490, the E460, the
+  E7250, the HP EliteBook 850 G5 and the P14s Gen 1). Besides the five
+  ids above, one has a source in Linux: `1022:43F7`, AMD's 600 Series
+  chipset controller, which `xhci-pci.c` names by number, `(AMD 600
+  Series)`. No
+  maker's datasheet was read: the repository references none for a
+  controller the table lacked. Then pci.ids `2026.10.27`, every device of
+  Intel, AMD, ASMedia, Etron, Renesas, VIA, Fresco Logic, TI, Zhaoxin and
+  the other vendors whose name says xHCI or USB 3 (and Intel's and AMD's
+  Thunderbolt and USB4 hosts' USB controllers): the 80 ids of section
+  5.13.2's second table joined, and two names were widened to what
+  pci.ids says shares the id (`AMD Renoir/Cezanne`, `Etron EJ188/EJ198`).
+  Not taken: the Bay Trail (`8086:0F35`), whose listed name ("Atom
+  Processor Z36xxx/Z37xxx, Celeron N2000 Series") gives no product within
+  the 46 characters; the Core Ultra Series 3 and 4 and Nova Lake parts
+  and the C740 and Atom P5xxx and Puma 7 server and network parts; the
+  console, GPU-dock and other-architecture vendors' parts; and the ids
+  whose name names no product (`1106:9201` "USB3.0 Controller", Hygon
+  `1D94`'s). A Linux symbol or a reading still outranks pci.ids for an
+  id it names, as for `43FC`, `1022:1587` and `8086:5782`.
+- **The 9x models section** (section 5.13.7) carries a line for each id
+  of the table, under its name, 151 lines; `test_inst`
+  (`names_xhci_inf`) holds it to the table, and the INF gate's `HCD-DESC`
+  each string to 46 characters. The longest new names are 46 characters
+  (`(Intel Core Ultra 200)`, `(Intel Pentium Silver)`).
+- **The router: no change of rank.** `xhcicm.inf` and `xhcicm-amd64.inf`
+  are unchanged: the ASM4242's NHI is matched by the class line alone, as
+  before, and named as the xHCI controllers are, by the FriendlyName the
+  installer writes (`instNhiFnNames`, sections 5.13.3 and 5.13.4); a hand
+  install from the INF shows the class line's `xHCI98 USB4 Router`, and
+  on 98 SE and ME the Properties title does too. `names_reconcile` takes
+  the NHIs of that table beside the controllers, with `xhcicm` as the
+  driver that makes the devnode ours, in a run with the USB drivers or
+  with the connection manager; the plan prints the name as it does a
+  controller's. XHCITR names the router from the same table (section
+  5.13.5).
+- **The ports.** The filter INF becomes a tunnel port's device INF on 2000
+  to 7, its line's description the port's name (record 21 section 3.3,
+  "Class and names"), so the ASM4242's downstream port `1B21:2423` (the
+  four of its switch) takes `xHCI98 USB4 PCI Bridge (ASMedia ASM4242)`
+  (`U4AsBridgeDesc`, 40 characters), the gate's `CM-DESC` holding the line
+  to it. The line already bound `PCI\VEN_1B21&DEV_2423&CC_0604`; only its
+  string changed, and a string is no input to the rank (section 5.13), so
+  the filter INF ranks against another driver for that port as before.
+  The upstream port `1B21:2421` is bound by no filter line, so it keeps
+  Windows' own bridge name; nothing was added for it. 98 SE and ME
+  install no filter: their bridges keep their names.
+- **The documents.** README's "SuperSpeed and UAS" and the release notes'
+  "Controller names in Device Manager" carry a table of the USB 3
+  controllers, one row per name with every id as `VVVV:DDDD`, generated
+  from the table; `test_inst` (`names_doc`) holds every id of each to the
+  table's name, refuses an id-shaped token that is not upper-case hex, and
+  holds every row of the table to one id of each. README's "Thunderbolt 3
+  and USB4" table and the release notes' "Which controllers" carry the
+  ASM4242's router.
+- **The reading** (`runs/run-44.md`, "44.55", pass): on q35 with the
+  emulated ASM4242, the xHCI's name on 98 SE and ME (Device
+  Manager's list and the Properties title, section 5.13.7) and on 7 x86,
+  the router's (the list; the title the plain name on 98 SE and ME), and
+  `qemu-xhci`'s name unchanged.
+
+### 5.14 The connection manager off the boot path (roadmap-usb4 tasks 44.32 and 44.12; owner, 2026-10-25)
+
+Revision 46. Section 5.10's revision 30 found that Windows' setup engine
+makes `xhcicm` a boot-start driver when `xhcicmf.inf` puts the filter on
+a PCI bridge, whose function driver `pci` is boot start, although both
+INFs say `StartType=3`; `runs/run-39.md` had read `Start` 0 on 2000, XP
+and 7 x86 after the filter's install. On 7 x64 it was read at the
+`3.2.0.0` cut's matrix (2026-10-24) and again by task 44.32 (2026-10-25,
+`runs/run-44.md`, "44.32"): `setupapi.dev.log` "Filter Service:
+Modified service 'xhcicm'" at the bridge's install, and the System log's
+event 7040, "The start type of the ... (xhcicm) service was changed from
+demand start to boot start". A boot-start driver must load at every
+start, so on 64-bit Windows a start with signature enforcement on and
+test-signing mode off cannot load it: 8 x64 stopped in Automatic Repair
+(revision 30; 8.1 and 10 are expected to do the same and are task 44.32's
+readings), and 7 x64 reached the desktop with the whole install undone,
+its controllers at Code 52 (the `3.2.0.0` matrix; the mechanism unread;
+each driver package's install there leaves a restore point, "Device
+Driver Package Install", which task 44.32's reading lists). Anything that
+turns test-signing mode off - a feature update, Secure Boot turned on, a
+boot repair - does the same, and on every system a fault of the driver
+at boot needs Safe Mode or the last known good configuration.
+
+#### 5.14.1 The options
+
+1. **The start type put back.** The filter stays on every bridge
+   `xhcicmf.inf` names, and `xhcicm`'s start type is set back to demand
+   start (3) after Windows changes it. Design record 31's vehicle (its
+   section 4.5: a filter of this driver in the tunnel port's stack at
+   every enumeration of the port's children) is kept. What it rests on is
+   that Windows builds a bridge's stack with a demand-start upper filter -
+   at boot, the PnP manager loading the filter when it reaches the bridge,
+   after the boot drivers - and at a hot plug.
+2. **Only tunnel ports filtered.** The filter put on the ports a tunnel
+   uses and on no other (on a discrete controller the switch's ports
+   share one id, record 21 section 3.3, so this is by location: the
+   port's `UpperFilters` value written for each port the NHI verifies).
+   It narrows what a filter that cannot load takes down - the tunnel
+   ports, not the ports to the controller's own NHI and xHCI - but not
+   the promotion, every one of them being a bridge on `pci`, unless the
+   value is written directly instead of by a setup-engine install, which
+   needs a writer at every first appearance of a port and leaves a port's
+   first enumeration unfiltered. It is the fallback should option 1 not
+   hold.
+3. **No bridge filter.** Another route to see a device plugged in later.
+   Record 31 section 4.5 rules it out: the tunnel id is given at
+   `IRP_MN_QUERY_ID` by a filter above the new PDO, attached in its
+   parent bridge's `BusRelations` answer, and only a filter in the
+   bridge's stack is there.
+
+**Decision (owner, 2026-10-25): option 1**, on the condition that it is
+read first to hold on 2000 to 10 - a demand-start filter attaching to the
+bridges enumerated at boot, a pre-boot or preserved tunnel's included,
+and at a hot plug; on x64 with test-signing mode on and off - with
+option 2 as the fallback where it does not.
+
+#### 5.14.2 The readings (task 44.32, from 2026-10-25)
+
+Runtime, QEMU under TCG with the emulator's tunnel bridge (`1B36:0001`,
+a line of `xhcicmf.inf`), an NHI, the ASM2464 enclosure with an NVMe
+drive; the published `3.2.0.0` package (on x64 test-signed, the
+certificate trusted in the guest), its install with the Thunderbolt
+support, then `xhcicm`'s `Start` set to 3 by hand standing for the
+put-back; `runs/run-44.md`, "44.32", has every step. The evidence of the
+filter at work is the bridge started with `UpperFilters` `xhcicm` (a
+stack with an upper filter that does not load does not start: Code 52 or
+39, below), the tunnelled function enumerated below it, and, where read,
+the driver's `cm.reenum.child.attached` count (`XHCITR /report`): a
+child filter the bridge filter attached in a `BusRelations` answer.
+
+| System | Boot at demand start | Hot plug | Pre-boot tunnel at boot | Signature enforcement on, test-signing off |
+|---|---|---|---|---|
+| 7 x64 | `Start` stays 3; bridge Code 0 with its filter, NHI on `xhcicm`, the service running | tunnel up, the drive on Stor98, its volume | the tunnelled drive on Stor98 at boot, Code 0 | a plain start, no repair, the install whole; bridge, NHI, controllers and drives Code 52 (Kernel-PnP 219 "failed to load"; Code Integrity 3004); test-signing on again: all back |
+| 10 x64 (19045) | promoted at the install ("Updated service 'xhcicm' to be boot start."); at demand start `Start` stays 3, bridge Code 0 with its filter, NHI on `xhcicm` | tunnel up, the drive on `stornvme`, its disk, the mark | the tunnelled drive on `stornvme` at boot, Code 0 | a plain start, no Automatic Repair, the install whole; bridge and NHI Code 52 (Kernel-PnP 219; Code Integrity 3004) |
+| Vista SP2 x64 | promoted at the install (the mark service's log: start type 0 set back); at demand start every device Code 0 | the tunnelled drive Code 0 | the tunnelled drive Code 0 at boot | a plain start, no repair, the install whole; bridge, NHI and controllers Code 39 |
+| 8.1 x64, 8 x64 | promoted at the install; at demand start `Start` stays 3, every device Code 0, no `StartOverride` key | tunnel up, the drive on Stor98, the mark | the tunnelled drive on Stor98 at boot, Code 0 | a plain start, no Automatic Repair, the install whole; bridge and NHI Code 52; no `StartOverride` |
+| 10 x86 (19045) | promoted at the install; at demand start `Start` stays 3, every device Code 0 | the drive on `stornvme`, the mark | the tunnelled drive Code 0 at boot | (no signature enforced) |
+| 7, Vista, 8 and 8.1 x86 (q35) | promoted at the install; at demand start `Start` stays 3, the filter in each tunnel port's stack (`Services\xhcicm\Enum`) | the enclosure enumerated below the port (a first plug's Code 31, the same at boot start in the control on 7 x86); the next plug, the drive's volume | the drive's volume at boot | (no signature enforced) |
+| XP SP3 (q35) | promoted at the install; at demand start `Start` stays 3, the filter in each tunnel port's stack | not read: no enumeration below the port at either start type on q35 | the enclosure's switch enumerated at boot below the filtered port | (no kernel-mode signing) |
+| 2000 SP4 | promoted at the install (`Start` 0); at demand start `Start` stays 3, the service's `Enum` key listing the NHI and the bridge, the bridge registered with the NHI (`/devices`, "Behind the Thunderbolt port") | tunnel up (the software connection manager), the NVMe function below the bridge, "removable: yes", listed in Safely Remove Hardware (the child filter's answer) | the enclosure attached at power-on: the NVMe function found at boot below the bridge, removable, listed | (no kernel-mode signing) |
+
+XP x64 is not read. The q35 rows used the emulator's ASM4242 profile on
+QEMU q35 (`runs/run-44.md`, "The q35 legs"); the rest QEMU `pc`. On 2000 the reading used the emulator's USB4 profile (software
+connection manager); 7 and 10 its Thunderbolt 3 profile.
+The emulator gives a drive attached across a restart (not a pre-boot
+tunnel) back as a USB device on the controller's own xHCI, with the boot
+start as with the demand start: its approval is the firmware's, not the
+start type's.
+
+#### 5.14.3 What changes
+
+- **The INFs: nothing.** `StartType=3` stays; the promotion is Windows'
+  and comes back at every install of the filter on a bridge - a port
+  that first appears after the install, an update of the package, Update
+  Driver by hand.
+- **The installer** sets it back in one finalizer at the end of every NT
+  run that reached its changes: an install or update (console and window
+  share the engine), `/restage`, a run that failed midway, and an
+  uninstall that keeps the connection manager. Never in a run that
+  refused or was cancelled before its changes (their "Nothing was
+  changed" stays true) nor in `/list`. It reads the service's `Start`; 0,
+  1 or 2 is to be changed (`inst_cm_start_fix`); 3, 4 (disabled, the
+  user's), a value not read and a service marked for deletion are left
+  alone. Before the change the system disk's path is read (below): where
+  a devnode on it names `xhcicm`, or the path could not be read, the
+  start type is kept and said, a step for the user (exit code 4 by
+  section 7.4). Otherwise it is changed to 3 through
+  `ChangeServiceConfig` (`SERVICE_DEMAND_START`, nothing else changed),
+  and the value is read back: only a 3 read back is success, with one
+  line, "The Thunderbolt driver (xhcicm) is set back to start on demand
+  (Windows made it a boot driver when it installed its filter).", and
+  the log; anything else is a failed step (exit code 2 by section 7.4)
+  with its error and the value read. The decisions are pure
+  (`inst_cm_start_fix`, `inst_cm_start_action`), host-tested.
+- **The mark service** does the same at every poll (record 21 section
+  7.4): one registry read a poll, the system disk's path read only when
+  the value is to be changed, the change read back, a success logged each
+  time, a failure and a kept value once until that changes. A promotion by an
+  install the installer did not run - a port that first appears, Update
+  Driver by hand, an install of a unit's driver over the service's own
+  `LowerFilters` mark (a filter on a device whose driver is boot start
+  is promoted the same way), a device that took the mark from the
+  CriticalDeviceDatabase before the service's scrub (record 21 section
+  7.4) - is undone at the next poll, and one made while the setup engine
+  is still busy is caught by a later poll.
+- **What it does not cover**, said in the warning: where the service is
+  not installed (`XhciCmSafeEject` 0, decision M13) or not running, and a
+  restart before its poll, `xhcicm` stays a boot driver until the
+  installer's next run that reaches its changes; a start then without
+  test-signing mode does not finish, and the way back is one start with
+  signature enforcement disabled (F8 on Vista and 7, Startup Settings on
+  8 to 10), test-signing mode turned on again there, a restart, and then
+  the installer run again, which sets the start type back where the
+  system disk's path allows it. The warning gives no way to set it back
+  by hand: only that check can tell whether demand start is safe on that
+  machine, and where it is not the boot start is what keeps it starting.
+- **A device the system starts from** must have every driver of its
+  stack boot start: Windows defers a device whose drivers are not all
+  boot start past the boot drivers' phase (Microsoft's "Specifying driver
+  load order", learn.microsoft.com, read 2026-10-25). A system disk below
+  a devnode that names `xhcicm` would no longer start at demand start:
+  Windows on a tunnelled drive (not supported), a QEMU guest's system
+  disk behind a `pcie-root-port`, which the emulator's line `1B36:000C`
+  matches (this project's kits put it on the IDE or AHCI controller of the
+  root complex), or the system disk's controller carrying the mark the
+  CriticalDeviceDatabase copied before the service's scrub. So both
+  writers read that path first (`inst_bootp.c`, shared): the volume of the
+  Windows directory gives its disk (`IOCTL_STORAGE_GET_DEVICE_NUMBER`, or
+  a single extent by `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`), the disk
+  interface answering that number its devnode, and the walk to the root
+  each devnode's `UpperFilters` and `LowerFilters`. Where one names
+  `xhcicm` the start type stays boot, said ("the disk Windows starts from
+  is below a device it filters ... Windows started from a Thunderbolt or
+  USB4 drive is not supported"); where the path cannot be read (a volume
+  over several disks, a routine missing) it stays as well, said: a kept
+  boot start costs what `3.2.0.0` cost, a wrong demand start costs the
+  start.
+- **The driver: nothing.** `DriverEntry` and the filter role use nothing
+  a demand start lacks (`runs/run-39.md`); the readings are its check.
+- **Windows 8 and later's `StartOverride`** (a per-service key that can
+  override `Start` at boot): read in the 8 x64 and 8.1 x64 guests at
+  each step (`runs/run-44.md`, "44.32"); Windows wrote none for `xhcicm`.
+- **The gate (task 44.12).** Revision 30's gate (`inst_cm_boot_gate`)
+  keyed on the connection-manager-alone kind; it now takes the system
+  (NT, major version) and answers for every 64-bit NT 6.0 and later the
+  tool installs on - Vista and 7 x64 as 8 to 10 - since Windows makes
+  `xhcicm` a boot driver there too and, until the run's end puts it back
+  (or after a later install until the mark service does), a start that
+  cannot load it does not finish: the connection manager is installed
+  only with a test-signed package in confirmed test-signing mode, else
+  refused, nothing changed, the refusal naming the other way (the run
+  without the Thunderbolt support). XP x64 and every 32-bit system stay
+  ungated (no kernel-mode signing; the 32-bit Secure Boot note of
+  revision 30 is unchanged). Where the gate refuses, the refusal is the
+  only note: the USB drivers' note (signature unreadable, none, or
+  test-signing mode not confirmed, each ending "If this start is an F8
+  start, go on") is not printed in a run with the Thunderbolt support, and
+  the connection-manager-alone note's three cases on Vista and 7 x64 are
+  gone, each being the refusal now; so a clone's unsigned package is
+  refused on an F8 start with the Thunderbolt support, and goes on without
+  it. The texts name no version: the warning says that Windows makes the
+  connection manager a boot driver when it installs its filter, that this
+  installer sets it back at the run's end and the mark service, where it
+  is installed, after a later install, that with signature enforcement on
+  and test-signing mode off the support does not load and a start while
+  it is still a boot driver does not finish (Automatic Repair, or Windows
+  undoing the install), and the way back; the refusal, that it is a boot
+  driver while Windows installs it. Host vectors: the gate on Vista and 7
+  x64 in each case, XP x64 and the 32-bit systems ungated, the start-type
+  decision, the texts' width and words.
+
+#### 5.14.4 The legs
+
+Task 44.12's on Vista x64 and 7 x64, test-signing on and off, with this
+release's package signed in the guest by a throwaway certificate (task
+43.36's route; a clone has no key): the refusal with test-signing off,
+nothing changed (`Start` as it was); the warning with it on, the
+install, `Start` 3 read after the run and its line; the filter installed
+again on the bridge by Update Driver, `Start` 0, set back by the mark
+service within a poll (its log line); the same with the service stopped
+and a restart before it runs (`Start` 0 kept: the warning's case), then
+the installer run again setting it back; an update over a `3.2.0.0`
+install (whose `xhcicm` is boot start) leaving it at 3; a run with the
+USB drivers and the Thunderbolt support on an unsigned package: the
+refusal alone; a restart with test-signing mode off at the end: a plain
+start with the Thunderbolt devices at Code 52 or 39 and the install
+whole. And the finalizer's branches, each with `Start` read after, the
+lines and the exit code: `/restage`; a run that fails after the filter's
+install (a later step made to fail); an uninstall that keeps the
+connection manager; `XhciCmSafeEject` 0 (no service: a later promotion
+stays, the warning's case); the change refused (a service security
+descriptor that denies the administrators `SERVICE_CHANGE_CONFIG`, by
+`sc sdset`): exit code 2 and no success line (a change that succeeds
+and then reads back other than 3 has no fault a guest can inject without
+a hook in the tool, so that branch rests on its code being read); the
+system disk's path naming `xhcicm` (a
+`LowerFilters` value naming it set by hand on the system disk's
+controller, then removed): the start type kept, the note, exit code 4.
 
 ## 6. The Windows 98 SE and ME route
 
@@ -2321,6 +2815,56 @@ section 6.4 sees it and asks the registry questions for the controllers
 and NHIs now bound to this package (section 8). It does nothing else on
 these systems.
 
+
+### 6.6 A leftover `xhci98.tmp` (task 44.13; revision 45)
+
+`xhci98.inf`'s `[Xhci.CopyFiles]` row is `xhci98.sys,,xhci98.tmp`: when
+`xhci98.sys` is loaded the setup engine copies the new file to
+`SYSTEM32\DRIVERS\xhci98.tmp` and asks for the swap in `WININIT.INI`'s
+`[rename]` section (`xhci98.sys=...\xhci98.tmp`), done before Windows
+starts next. Read on 98 SE on 2026-10-25 (`runs/run-44.md`, "44.13";
+the `3.2.0.0` package installed, two `qemu-xhci` controllers, a third
+added at a cold start):
+
+- **Why the line comes with no file.** The wizard of the controller added
+  later found `C:\XHCI98\XHCI98.INF` and installed with no prompt; with
+  `xhci98.sys` loaded and the package's file of the same version, the
+  engine copied nothing but still wrote the `[rename]` line. At the next
+  start `WININIT.INI` skips a line whose source is not there (the
+  3.2.0.0 matrix, O2), so on its own the line is harmless.
+- **A stale file does replace the driver.** With a file of another
+  content planted as `xhci98.tmp` before the wizard (93,890 bytes,
+  `COMMAND.COM`'s), the wizard left it as it was and wrote the line; at
+  the next cold start `XHCI98.SYS` was that file, 93,890 bytes, and
+  `WININIT.BAK` held the line. Any file of that name left in
+  `SYSTEM32\DRIVERS` (the `1.x` releases left one there after an update,
+  release notes, `1.x`'s known limitations) is put in place of the driver
+  at the first start after a controller is added.
+
+**The fix.** Every install, update and repair run on 98 SE and ME, once
+its plan is confirmed and read again and before its first change, and
+the uninstall, once its pending-rename check has passed (section 9),
+look for `SYSTEM32\DRIVERS\xhci98.tmp` (`tmp_orphan_9x`, `inst_eng.c`):
+one that `WININIT.INI`'s `[rename]` section names as a source (its long
+or 8.3 path, any case; `inst_tmp_named`, host-tested) is the engine's
+pending swap and is left; one no line names is an earlier install's
+leftover and is deleted, said, with the run's changed flag. When the
+leftover stays or cannot be told (the deletion fails, the file's
+attributes cannot be read for a reason other than its absence,
+`WININIT.INI` cannot be read whole), the install run stops there with
+nothing changed and a step (delete the file, or restart Windows, then run
+again), since a controller it installed could then put the leftover in
+place of the driver; the uninstall says it and goes on (it removes the
+driver anyway). The plan, `/list` among them, says what the run will
+delete. The uninstall's check for a pending swap (section 9,
+`rename_pending_9x`) no longer counts a line whose source file is
+confirmed absent (`ERROR_FILE_NOT_FOUND` or `ERROR_PATH_NOT_FOUND`),
+since `WININIT.INI` skips it: an uninstall after a controller was added
+no longer asks for a restart first; any other failure to read the source
+still counts the line as pending. Not done: the `[rename]` line itself is left (the engine's, and
+harmless without its file), and a `xhci98.tmp` a line does name is not
+second-guessed (it may be an Update Driver's file waiting for its swap).
+
 ## 7. Modes, switches, rights, the routines, exit codes, the log
 
 ### 7.1 Switches
@@ -2340,9 +2884,10 @@ these systems.
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
 | `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
 | `/storage`, `/nostorage` | (revision 24) Windows 98 SE: install the USB storage drivers of record 26 section 6.5 without asking, or leave them out; `/storage` refused on any other system, where the download does not carry them or carries other bytes, and with `/nostorage`; both refused with `/uninstall`, `/devices` and `/eject`; `/nostorage` changes nothing on another system |
-| `/usb` | (revision 26, proposal) Windows 8 and 8.1: put the USB drivers in the run, which there are otherwise left out, with record 26 section 5.3.1 case 3a's warning; elsewhere it changes nothing; refused with `/cmonly`, `/uninstall`, `/devices` and `/eject`. Revision 26 also lifts `/cmonly`'s refusal on 98 SE and ME (case 2's warning), `/storage`'s on any system but 98 SE (case 1: the copy to the tools folder), and `/stor98`'s "never offered on 8 and 8.1" (case 3b), each warning printed before the go-ahead question and printed and logged under `/yes` |
+| `/usb` | (revision 26, proposal) Windows 8 and 8.1: put the USB drivers in the run, which there are otherwise left out, with record 26 section 5.3.1 case 3a's warning; elsewhere it changes nothing; refused with `/cmonly`, `/uninstall`, `/devices` and `/eject`. Revision 26 also lifts `/cmonly`'s refusal on 98 SE and ME (case 2's warning), `/storage`'s on any system but 98 SE (case 1: the copy to the install folder), and `/stor98`'s "never offered on 8 and 8.1" (case 3b), each warning printed before the go-ahead question and printed and logged under `/yes` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/s98vsd`, `/nos98vsd` | (revision 36) preselect `S98VSD.VXD`, Stor98's large-transfer layer on 98 SE and ME, ticked or unticked (design record 30 section 7.2); without either it follows Stor98 (ticked whenever Stor98 is, the owner, 2026-10-22), and the console asks after Stor98's question, Enter and `/yes` giving Y. `/s98vsd` needs Stor98 in the run (`/stor98`, or `/thunderbolt` or `/cmonly` without `/nostor98`); refused together, with `/uninstall`, `/devices` and `/eject`, and both on every system but 98 SE and ME |
+| `/xhcipfw`, `/noxhcipfw` | (task 44.49; owner, 2026-10-27) preselect the step that closes PCI bridges' prefetchable windows lying wholly above 4 GB at each start, ticked or unticked: `XHCIPFW.VXD` on 98 SE and ME (design record 32 section 8), `XHCIPFW.SYS` on 2000, XP and the 32-bit Vista and 7 (section 11; on the 32-bit 8, 8.1 and 10 not offered since 2026-10-28, task 44.72: `/xhcipfw` refused there with "REFUSED: /xhcipfw: XHCIPFW.SYS may start too late on Windows 8, 8.1 and 10.", `/noxhcipfw` with the 64-bit systems' line, and a run removes an `XHCIPFW.SYS` this installer's record holds, record 32 section 11.3). It is the Thunderbolt 3 / USB4 support's child (the owner, 2026-10-27): with that support out of the run it is left out (an installed one kept as it is, with a line saying so), and `/xhcipfw` without `/thunderbolt` or `/cmonly` is refused, as `/s98vsd` is without Stor98. Without either switch the default is `inst_pfw_box`'s (the owner's Q9, which replaced Q7's rule): ticked whenever the Thunderbolt support is in the run, on every system offered it; with that support left out on 2000 to 7, the console says when it sees a PCI bridge at problem 12 with its firmware's prefetchable window above 4 GB and names `/thunderbolt`; the console asks right after the Thunderbolt question and before Stor98's, naming the file ("Close PCI windows above 4 GB (XHCIPFW.SYS)"), Enter and `/yes` giving that default, and on the 32-bit Vista and 7 says to set "Above 4G Decoding" off; refused together, with `/uninstall`, `/devices` and `/eject`, and both on every 64-bit system |
 | `/faster`, `/nofaster` | (revision 35) the computer's choice of XHCITR's "can run faster" notice, on or off (section 9.5 item 7; record 25 section 7.7); refused together, and with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista to 10: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
@@ -2727,6 +3272,122 @@ it is.
   Thunderbolt driver is staged" is printed only when this run staged
   `xhcicm.inf`.
 
+### 8.5.1 Intel's Thunderbolt driver on the controller (revision 47; roadmap-usb4 task 44.28, owner 2026-10-25)
+
+Design record 21 section 3.6 read Intel's Thunderbolt driver packages
+statically: the older package (`tbt100x.inf` 17.4.77.13, with the
+Thunderbolt Software tray application and its service in `setup.msi`)
+and the DCH driver (`TbtHostController.inf` 1.41.x, with the Thunderbolt
+Control Center from the Store), both 64-bit only, both naming their
+service `nhi`, both signed by Microsoft's hardware publisher and naming
+the NHI by a hardware id, so Windows never ranks `xhcicm.inf` above them
+and only the tool's forced install puts `xhcicm.sys` on such an NHI.
+Until this revision the plan treated such an NHI as any other vendor's
+device (decision D3, `INST_ACT_FOREIGN`, "Another driver runs it; this
+tool leaves it"), while the Thunderbolt component, in the run unasked on
+8, 8.1 and 10 (the connection manager alone), still put the tunnel-port
+filter on the bridges and the mark service in: a half that cannot work
+without the NHI's other half.
+
+**The owner's decision (2026-10-25; roadmap-usb4's decisions table,
+"44.28"): ask, the default leave.** The tool detects Intel's driver on
+the NHI; the Thunderbolt row then says that Intel's driver is in use and
+starts unticked; ticked, it replaces Intel's driver after a warning, and
+Windows Update may put Intel's back.
+
+**Detection.** A present devnode that `xhcicm.inf` matches (section 8.2's
+detection, the NHI) whose service is `nhi` (case-insensitive;
+`inst_tb_intel(service)`, pure) is "Intel's driver on the controller".
+The service name is the one both of Intel's packages install (record 21
+section 3.6, static; measured on 10 x64 with the DCH driver,
+`runs/run-44.md` "44.28"); the check is made on every NT system and is
+false on 98 SE and ME, where no `nhi` service exists. The name of the
+first such controller is kept for the texts as `tbNhiName` is.
+
+**The decision** (`inst_tb_decide` gains the input `intel`; its table,
+amended):
+
+| Situation | Asked | Enter, and `/yes` |
+|---|---|---|
+| Intel's driver on a controller, the USB drivers in the run | yes, the controller and Intel's driver named | N |
+| Intel's driver on a controller, the USB drivers out of the run (`/cmonly`, and 8, 8.1 and 10 by default) | yes, as above (in place of "installed unasked") | N |
+| `/thunderbolt` with Intel's driver on a controller | no | Y, the warning printed |
+
+Every other row is unchanged. The engine today passes one input,
+`opts.Thunderbolt || !usbInclude`, for both "asked for by `/thunderbolt`"
+and "in the run unasked because the USB drivers are out"; the two answer
+differently here, so `inst_tb_decide` takes them apart: `explicitTb`
+(`/thunderbolt`, or the window's box ticked by the user) and `cmAlone`
+(the USB drivers out of the run), with `intel` beside them. With `intel`
+set, `cmAlone` no longer includes the component unasked; `explicitTb`
+does. The window follows the same rule in the three places that tick
+the component today without its box: the first choice after the reading
+(`xhciwiz.c`, `tbChoice = tbHave` when the USB drivers' box is
+unticked), and the choices gathered on the Components page's Next and on
+the box's own click (the lock that ticks and greys the box while the
+USB drivers' box is unticked); with Intel's driver on a controller the
+box stays the user's there, unticked until ticked, and Stor98's box, its
+child, stays closed while it is unticked (`inst_s98_box_open`). With N on such a machine and the USB
+drivers out of the run, the run installs what is left - the tools (and
+the other boxes the user ticked), as record 26 section 5.3.1's case 5
+runs - and says why: "Intel's Thunderbolt driver runs <name>: left as it
+is (/thunderbolt replaces it)."
+
+**The texts** (each within 78 columns in the console and its box in the
+window with no scroll bar, the owner's rule of 2026-10-25; the warning
+rendered through the Components warnings' wrapper at 78 columns, its
+prefix included, and held there by a host vector of the rendered lines,
+as record 26 section 5.3.2 says for the warnings it changes):
+
+- The console's heading line, in place of "A Thunderbolt 3 / USB4
+  controller was found: <name>.": "Intel's Thunderbolt driver runs
+  <name>." The question's N line: "leave it out (Intel's driver stays)".
+- The window's Thunderbolt box: unticked and not locked (the lock that
+  ticks it while the USB drivers are unticked does not apply), its line
+  "Intel's Thunderbolt driver is in use; ticked, this replaces it."
+- The warning (record 26 section 5.3.1's mechanism: a bit of
+  `inst_comp_warnings`, `INST_CW_INTELTB`, shown on Next from the
+  Components page with the box ticked; the console prints it under
+  "WARNING:" before the go-ahead, and under `/thunderbolt /yes`):
+  "Intel's Thunderbolt driver runs this computer's Thunderbolt
+  controller. Ticked, the xHCI98 connection manager replaces it there,
+  and Intel's Thunderbolt software no longer controls it. The uninstall
+  gives the controller back to Intel's driver. Windows Update may also
+  put Intel's driver back."
+
+**The run with it ticked.** The NHI whose service is `nhi` is planned as
+an install, not as another vendor's device - the narrow exception to
+decision D3 that revision 26 made for Windows' own `USBXHCI` on a
+controller, now for Intel's `nhi` on an NHI with the Thunderbolt box
+ticked - and installed as every NHI is, by `UpdateDriverForPlugAndPlay
+DevicesW` with `INSTALLFLAG_FORCE` on its own first hardware id (section
+5.5). It becomes this package's from then on: the uninstall removes its
+devnode and rescans (section 9.2), after which Windows binds the
+best-ranked driver its store holds, Intel's while its package stays
+there. Intel's packages are not removed or changed: their files, their
+user-mode service (`TbtP2pShortcutService`, Intel's tray application on
+the older package) and their store entries stay; the tool touches only
+the NHI's driver. An update over an install that already runs
+`xhcicm.sys` on the NHI meets no `nhi` service and is unchanged.
+
+**Not decided here.** What Intel's own software does while
+`xhcicm.sys` runs its controller (its service finds no driver to talk
+to) is read on the leg, not designed for; the tool says nothing about
+it beyond the warning.
+
+**Host vectors.** `inst_tb_intel` (`nhi`, `NHI`, `xhcicm`, empty);
+`inst_tb_decide`'s new rows (each with and without the USB drivers,
+`/thunderbolt`, `/yes`, `/list`); `inst_comp_warnings` with the new bit
+on every system kind; the plan's action for an NHI on `nhi` with the box
+ticked (install) and unticked (out of the run); each text's width.
+
+**The leg** (roadmap-usb4 task 44.28): 10 x64 in the emulator's Alpine
+Ridge profile with Intel's DCH driver installed by `pnputil` on the NHI:
+the window's row and the console's question unticked, N (the run with
+the tools alone, Intel's driver kept), then `/thunderbolt` (the warning,
+the NHI on `xhcicm.sys` after the restart), then the uninstall (the NHI
+given back to Intel's driver).
+
 
 ## 9. The uninstall
 
@@ -2745,7 +3406,9 @@ Type REMOVE and press Enter to go on; anything else cancels.
 
 Where the `xhci98` service is read as not registered and `xhcicm`'s as
 registered (revision 13: a machine that has the connection manager alone;
-read before anything else, and on NT only), the first lines read
+read before anything else; on NT the two services, and from revision 49
+(task 44.60) on 98 SE and ME, which register none, the two drivers' files
+`xhci98.sys` and `xhcicm.sys` in `System32\Drivers`), the first lines read
 instead:
 
 ```
@@ -3384,6 +4047,7 @@ the user.
   applies, written only on an explicit answer.
 - **D10** (owner, 2026-10-15) The tool never runs `XHCICLN`; where old
   entries exist it prints one line naming `tools\xhcicln\` (section 5.11).
+  Since `3.3.0.0` XHCICLN is dropped and the line names no tool.
 - **D11** The uninstall leaves the OS's `usbd.sys` and `usbui.dll`, other
   drivers' devnodes and every filter host's devnode, gates each phase on
   the one before, uses `SetupUninstallOEMInf` without force, and on
@@ -3485,6 +4149,7 @@ the user.
 |---|---|
 | `xhciinst\xhciinst.c` | the tool: the system half |
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 10) |
+| `xhciinst\inst_bootp.c`, `inst_bootp.h` | the system disk's path (section 5.14), also linked by the mark service |
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
 | `xhciinst\INSTALL.BAT` | staged at the package root |

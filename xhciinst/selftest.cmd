@@ -135,7 +135,7 @@ rem An unknown switch, an unknown /set name, /list with /yes and /selftest
 rem with company are refused with exit 1 before anything is read.
 call :refused %1 /frobnicate
 if errorlevel 1 exit /b 1
-rem The installer never runs XHCICLN (owner, 2026-10-15): /clean is gone.
+rem /clean, which once ran the cleanup tool, is gone (owner, 2026-10-15).
 call :refused %1 /clean
 if errorlevel 1 exit /b 1
 call :refused %1 /set Bogus=1

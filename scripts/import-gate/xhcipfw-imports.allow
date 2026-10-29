@@ -1,0 +1,31 @@
+# xhcipfw-imports.allow - XHCIPFW.SYS (design record 32 section 11.2), built
+# with the Windows 2000 DDK for x86 by src\pfw\nt\build.cmd, which passes it
+# with -AllowPath and -GateProfile hlprx86: every import resolves in the export
+# table of every authenticated kernel and HAL of Windows 2000 SP4, XP SP3 x86,
+# Vista SP2 x86 and 7 SP1 x86 (the hlprx86 profile's evidence, xhcihlpr-
+# imports.allow's header). KeIpiGenericCall is denied: the driver looks it up
+# with MmGetSystemRoutineAddress, and a static import would keep the image
+# from loading on 2000.
+
+[imports]
+
+ntoskrnl.exe!InitSafeBootMode                all    required  w2k-export; xp-x86-export; nt6-x86-export; Safe Mode read before any access (a data import)
+ntoskrnl.exe!KeNumberProcessors              all    required  w2k-export; xp-x86-export; nt6-x86-export; one processor or several (a data import)
+ntoskrnl.exe!PsGetVersion                    all    required  w2k-export; xp-x86-export; nt6-x86-export; 2000, XP or Vista and later
+ntoskrnl.exe!MmGetSystemRoutineAddress       all    required  w2k-export; xp-x86-export; nt6-x86-export; KeIpiGenericCall found at run time
+ntoskrnl.exe!RtlInitUnicodeString            all    required  w2k-export; xp-x86-export; nt6-x86-export; the names
+ntoskrnl.exe!InterlockedExchange             all    required  w2k-export; xp-x86-export; nt6-x86-export; the hold's flags
+ntoskrnl.exe!ZwOpenKey                       all    required  w2k-export; xp-x86-export; nt6-x86-export; the late check, the SOFTWARE hive looked up
+ntoskrnl.exe!ZwCreateKey                     all    required  w2k-export; xp-x86-export; nt6-x86-export; the log
+ntoskrnl.exe!ZwSetValueKey                   all    required  w2k-export; xp-x86-export; nt6-x86-export; the log
+ntoskrnl.exe!ZwClose                         all    required  w2k-export; xp-x86-export; nt6-x86-export; the log
+HAL.dll!KfRaiseIrql                          all    required  w2k-export; xp-x86-export; nt6-x86-export; HIGH_LEVEL around the step on one processor
+HAL.dll!KfLowerIrql                          all    required  w2k-export; xp-x86-export; nt6-x86-export; the same
+HAL.dll!KeQueryPerformanceCounter            all    required  w2k-export; xp-x86-export; nt6-x86-export; the hold's length
+HAL.dll!READ_PORT_ULONG                      all    required  w2k-export; xp-x86-export; nt6-x86-export; configuration mechanism #1, CFCh
+HAL.dll!WRITE_PORT_ULONG                     all    required  w2k-export; xp-x86-export; nt6-x86-export; configuration mechanism #1, CF8h and CFCh
+HAL.dll!WRITE_PORT_UCHAR                     qemu   required  w2k-export; xp-x86-export; nt6-x86-export; the qemu flavour's debug-console lines
+
+[deny]
+
+KeIpiGenericCall            found at run time (record 32 section 11.2); absent from 2000's kernel

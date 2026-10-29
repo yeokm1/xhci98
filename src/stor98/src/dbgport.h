@@ -58,6 +58,8 @@
 #define STG_FIND_RESULT         0x03    // arg: SP_RETURN_*
 #define STG_OPTIONS             0x04    // arg: gone ms (15:0) | idle-flush ms / 10 << 16 (clamped)
 #define STG_FIND_BAR            0x05    // arg: BAR_F_* flags (7:0) | BAR_* reason << 8 | length in 4 KiB (or the command register read back) << 16 (nvme2k.c)
+#define STG_HOLD9X              0x06    // arg: the 9x hold bound used, ms (StorHold9xMs or its default); 9x, every HwFindAdapter
+#define STG_HOLD9X_REFUSED      0x07    // arg: a hold bound outside 1000-10000 ms as read (StorHold9xMs, or hold9x= in a test build); the default stands
 #define STG_STARTIO             0x10    // arg: STG_SRB_ARG(Srb, state)
 #define STG_SRB_HELD            0x11    // arg: STG_SRB_ARG | TimeOutValue << 24 (low byte); held while not dispatchable
 #define STG_SRB_DISPATCH_HELD   0x12    // arg: held ms << 8 | cdb0

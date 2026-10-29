@@ -1,6 +1,8 @@
 # Design Record 30 - S98VSD.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 13, 2026-10-24 (roadmap 43.79: a list that arrives with
+Status: draft 14, 2026-10-25 (task 44.36: section 13, where 98 SE's
+and ME's time goes on a tunnelled drive and what could reach about
+3000 MB/s, read first, no code); draft 13, 2026-10-24 (roadmap 43.79: a list that arrives with
 `IORF_PHYS_SGDS` is replaced, never passed down, after IOS's double
 buffer was found sending one with a linear address, which corrupted
 every unbuffered transfer at an unaligned buffer; sections 4.1, 4.6 and
@@ -1391,6 +1393,351 @@ stamp, `S98VSD.VXD` where it read `STOR98.VXD` (SHA-256
 | `docs/contributing/legal-provenance.md` | section 2's row for the image, section 4's row for these readings |
 | `docs/contributing/build-and-test.md`, `source-files.md`, `README.md`, the release notes | the build, the files, the user's text |
 
+## 13. Toward 3000 MB/s: where 98 SE's and ME's time goes (task 44.36)
+
+Added 2026-10-25 for `roadmap-usb4.md` task 44.36, the read-first half:
+a tunnelled NVMe drive on 98 SE and ME toward about 3000 MB/s, the rate
+the owner read on Windows 10 x64 with the ORICO USB4 enclosure on his
+Framework 13 (Intel 12th generation, USB4, `xhcicm.sys` as the USB4
+router's driver and Windows' own `stornvme`). It lists every limit that
+could stand between 98 SE or ME and that rate, with the evidence for
+each, how each is measured, the owner's bench steps and the code changes
+ranked by expected gain and risk. **Nothing in `src\` changes with it**;
+each change of section 13.6 is a proposal, made only after its reading
+and the owner's decision.
+
+Tags in this section, beside the record's own: **[hw]** read on
+hardware - the owner's P14s bench of 2026-10-22 (`runs/run-43.md`, "The
+first real-hardware reading") or the ASM4242's own state as
+`usb4-emu`'s asm4242 data records it (record 22 section 18; `9f333f3`, the
+`lspci -vvv` of the tunnel's functions with the enclosure attached at
+power-on; read there, never modified from here); **[src]** read in this tree's sources at
+`3.3.0.0`; **[model]** this section's arithmetic on [hw] figures. A
+[hyp] here is read on the bench or in the emulator before anything rests
+on it.
+
+### 13.1 The figures, and what they do and do not say
+
+| Figure | System and host | Tool and shape | Source |
+|---|---|---|---|
+| about 3000 MB/s | Windows 10 x64, Framework 13 (USB4), `stornvme` | not recorded (owner question Q1) | the owner, 2026-10-25 |
+| 1,396 MB/s read | Windows 10, P14s (Thunderbolt 3) | one request at a time (Q1T1), the size not recorded | `runs/run-43.md`, as above |
+| 1,151 read, 1,013 write | Windows 7, P14s, Stor98 | CrystalDiskMark 2.2, sequential | `README.md` |
+| 1,020 read, 891 write | 98 SE, P14s, Stor98 and `S98VSD.VXD` | CrystalDiskMark 2.2, sequential | `README.md` |
+| 785 / 996 / 1,123 read; 683 / 800 / 877 write | 98 SE, P14s, the same | `PERF2`, unbuffered, write-through, 512 KiB / 1 MiB / 2 MiB, one request at a time | `runs/run-43.md`, as above |
+
+The drive in the ORICO enclosure is a Toshiba XG6 (`KXG60ZNV256G`) behind
+an ASMedia ASM2464PD device router, on a PCIe 3.0 x4 link (8 GT/s x4) [hw:
+the asm4242 data]. Whether the Framework reading used the same drive is
+the owner's (Q1). What the figures settle:
+
+- **98 SE is not far behind on one host at one request at a time**: at
+  1 MiB, `PERF2` read 996 MB/s and CrystalDiskMark 2.2 1,020 [hw]; at
+  2 MiB 98 SE read 1,123, below Windows 10's 1,396 at Q1T1 on the same
+  drive and host [hw]. Windows 10's request size is not recorded, so
+  this compares rates only: whether the 9x path pays more time per
+  request than Windows 10's waits for a reading at one size on both
+  (B2 against B4).
+- **CrystalDiskMark 2.2 is not shown to be a ceiling.** Its 98 SE reading
+  matches `PERF2` at 1 MiB to within 3 %, which is what a tool that
+  issues 1 MiB requests one at a time would read [inf]. Nothing of that
+  program was read for this project (record 29 section 12): its request
+  size, its depth and its timer are not established here, so the owner's
+  reading of Windows 7's 1,151 as the tool's limit is neither confirmed
+  nor refuted. Windows 7's Stor98 takes at most 256 KiB a request
+  (`STOR98_MAX_TRANSFER`, `nvme2k.h`) [src]; how Windows 7's disk class
+  driver issues the pieces of a larger request is not read. XHCIPERF on 7
+  and 98 SE with the same parameters settles it (section 13.5, B3 and B4).
+- **The 3000 figure is the drive's own order of magnitude, not a
+  tunnel's** [inf: a PCIe 3.0 x4 drive, behind a 40 Gbit/s USB4 link].
+  A sequential reading at that rate is normally taken with several
+  requests in flight; at one request at a time, Windows 10 read 1,396 on
+  the P14s. Which shape the Framework reading had is Q1, and it decides
+  what "the same as Windows 10" means for 98 SE (Q2).
+
+### 13.2 The model: time per request at one request at a time
+
+At one request at a time a request of S bytes takes `t(S) = F + S / B`:
+F the fixed time of a request (the path down, the drive's first data, the
+completion back up, the program issuing the next), B the rate while data
+moves. From the owner's three `PERF2` sizes [model on hw]:
+
+| | t(512 KiB) | t(1 MiB) | t(2 MiB) | B, 1 to 2 MiB | B, 512 KiB to 1 MiB | F |
+|---|---|---|---|---|---|---|
+| read | 0.668 ms | 1.053 ms | 1.868 ms | 1.29 GB/s | 1.36 GB/s | 0.24 ms |
+| write | 0.768 ms | 1.311 ms | 2.392 ms | 0.97 GB/s | 0.97 GB/s | 0.23 ms |
+
+(t = bytes / rate, with MB = 10^6 bytes; B from the difference of two
+sizes; F = t(2 MiB) - 2 MiB / B.) The two estimates of B agree within
+6 %, so the line fits. What it implies, on the P14s:
+
+- **Neither F nor S alone reaches 3000.** At 1 MiB, 3000 MB/s is
+  0.350 ms a request: with F at 0.24 ms, B would have to be 9.6 GB/s. At
+  2 MiB it is 0.699 ms, and B would have to be 4.6 GB/s, above what the
+  XG6's own link carries [inf]. With B at 3.5 GB/s, 2 MiB reaches 3000
+  only with F at about 0.1 ms; 8 MiB reaches it with F as it is
+  (2.40 + 0.24 ms, about 3,180 MB/s) [model].
+- **B at one request at a time is low**: 1.3 GB/s read, near Windows
+  10's 1,396 at Q1T1 on the same host. A request reaches the drive as
+  `ceil(S / child)` commands, all issued at once [src: `engine.c`, the
+  dispatch loop issues every child of a parent before the next parent;
+  `lifecycle.c` `LcBringupDone`, the child size the smallest of the
+  transfer limit, MDTS and the test fragment size]. B therefore holds
+  the drive's rate at that depth **and** every cost that grows with the
+  request's size: Stor98's per-page list (item 3 of section 13.3), this
+  layer's pass over the page entries; the fit does not separate them
+  [model]. With MDTS of 2 MiB or more, a 2 MiB request is one command:
+  depth 1 at the drive.
+- So the levers are **more commands in flight** and **less work per
+  page** (both in B), **less fixed time per request** (F) and **larger
+  requests** (S). Which part of B dominates is read before C1 or C2 is
+  chosen (B4's depth histogram and refit, the emulator's per-page cost,
+  section 13.6).
+
+The model is the P14s's; its Thunderbolt 3 host carries less PCIe
+bandwidth than a USB4 host [inf], so on the bench host B may be higher at
+the same depth. The bench refits it (B4).
+
+### 13.3 The candidate limits
+
+Each with where it is, the evidence, what it would cost and how it is
+read. "E" is whether the emulator can show it (section 13.4); "H" the
+bench step that reads it (section 13.5).
+
+1. **Depth at the drive (B).** 98 SE and ME issue one request at a time
+   per thread: their file systems do no overlapped I/O on a disk file
+   (record 29 section 3.5; Stor98's investigation, section 3) [static,
+   hyp for P.1's reading]. Stor98 then puts `ceil(S / child)` commands in
+   flight, at most `ENG_PRP_PAGES` (8) of them with a PRP list
+   [src: `engine.h`; a child of more than two pages takes a list page,
+   `EngMapCaller`], and at most `ChildLimitIo` (the I/O queue's size less
+   one, at most 64) in all [src: `lifecycle.c`]. The XG6's MDTS is not
+   read; if it is 2 MiB or more, a 2 MiB request is depth 1, and if it
+   is 128 KiB, 16 children of which 8 are in flight. E: the depth
+   histogram and the command sizes of record 29 section 6.3 items 3 and 6
+   (the emulator's MDTS is 512 KiB). H: B4, the Stor98 page's MDTS,
+   `MaxChildBytes`, command-size and outstanding-commands histograms.
+2. **Several threads on 98 SE and ME.** The only way to two requests at
+   once there; whether VFAT and IOS let two reach Stor98 together is
+   unread ("at most 2 outstanding seen", Stor98's investigation section
+   3) [hyp]. E: yes, XHCIPERF `/threads 2` and `4` with the
+   outstanding-commands histogram (section 13.7 records what was taken).
+   H: B4.
+3. **The fixed time F (0.24 ms on the P14s).** The path of one request:
+   the program, `VWIN32`, `IFSMgr`, VFAT, IOS, the layers above this one
+   (`DISKTSD.VXD`, `DISKVSD.VXD`, section 2.3), this layer (one
+   `_CopyPageTable` call a fragment and a pass over the page entries,
+   section 4.2), `SCSIPORT.PDR`, Stor98, the doorbell, the drive's first
+   data, the interrupts, and the completions back up the same chain. Two parts of it are this project's to change:
+   - **Stor98's PRP list**: `EngMapCaller` calls
+     `ScsiPortGetPhysicalAddress` once **per page** (512 calls for a
+     2 MiB command) [src: `engine.c`], and on 9x that service walks the
+     list this layer built by byte offset (section 2.2 item 4) [static],
+     so on a buffer of many runs each call walks further [inf: whether
+     it walks from the list's start each time is the static reading's
+     detail, to be read before C2]. Its work grows with the pages: for
+     a request of one command the whole list is built before the
+     command is issued, and that work is in B's slope, not in F; for a
+     request of several commands the later lists are built while the
+     first moves. Only a constant part (the call setup) is in F.
+   - **The interrupts**, on INTx (Stor98 on 9x has no MSI; PLAN,
+     "Polling mode") [src]; one call of the handler drains every
+     completion it finds (`EngInterrupt`, `NvmeProcessQueue`), and the
+     handler is also called on a shared line [src]; how many fire per
+     request is unread.
+   The rest is Windows'. E: relative cost only (section 13.4), by
+   XHCIPERF's mean time per request against the size, with an aligned
+   and a scattered buffer. H: B4, refitting F and B from the sweep.
+4. **The request size S.** Stor98's 9x maximum is 2 MiB (`STOR98_MAX_TRANSFER`,
+   512 pages) [src]; this layer's room is sized for it (D6, section 3.4);
+   over it IOS cuts a request into 63 KiB pieces (section 1.3). VFAT
+   passes 128 KiB to 1 MiB requests whole (Stor98's investigation,
+   section 2); whether it passes more than 2 MiB is unread [hyp]. A
+   program that issues 1 MiB requests (as CrystalDiskMark 2.2 is commonly
+   described to; not read here) gains nothing from a larger maximum.
+   E: yes, the request sizes reaching Stor98 at 4 and 8 MiB with
+   `StorMaxTransferKB` at its default. H: B4's sweep to 8 MiB.
+5. **Interrupt or polling on 9x.** In polling mode a request waits for
+   the 1 ms busy tick: 98 SE ran at about 4.9 ms per 64 KiB request in
+   the emulator (Stor98 `docs/PLAN.md`, "Polling mode", measurements)
+   [obs]. Whether 98 SE gives the tunnelled NVMe an IRQ, shares one or
+   leaves it without one,
+   and so whether Stor98 polls, is unread [hyp]. H: B1, Stor98's
+   `StorInterrupt <bus>.<device>.<function>` value (`interrupt` or
+   `polling (<reason>)`).
+6. **Write-through on ME.** `StorWriteThrough` is `auto`, which is
+   `cacheoff` on ME: the drive's volatile write cache is turned off
+   (Stor98 `README.md`, "Settings") [src], so ME's writes are not
+   comparable with 98 SE's or 10's. H: B6, ME's writes read with `auto`
+   and with `off`; the default stays the owner's (it guards a removal
+   that bypasses the connection manager).
+7. **The tunnel's lanes.** USB4 carries 40 Gbit/s with both lanes
+   bonded, half with one. The firmware's tunnel on the ASM4242 is bonded at
+   20 Gbit/s a lane [hw]. `xhcicm.sys` bonds by default
+   (`XhciCmLaneBonding` 1; `tbtU4Bond`, `tbt_u4cm.c`) and falls back to
+   one lane, with a `u4.bond.*` log line, when bonding is not possible or
+   times out [src]. A preserved firmware tunnel keeps the firmware's
+   lanes (record 22's discovery). H: B1, the connection manager's log or
+   XHCITR's snapshot for the port.
+8. **The tunnel's path.** The lane entries' credits come from the
+   router's Buffer Allocation (PCIe 64 on the ASM4242 [hw]) bounded by
+   what the lane has left after the USB3 preference (`tbtU4Paths`,
+   `tbt_u4cm.c`) [src]: 64 on the ASM4242, as the firmware's
+   tunnel has [inf from hw]. The protocol-adapter entries keep their
+   credits as read (0), where the opt-in switch writes 7: an open item of
+   the hardware bench (task 44-E.6), whose first question
+   is whether a tunnel this driver builds carries PCIe at all; whether 0
+   against 7 changes the rate is a second reading [hyp]. The path weights
+   (PCIe 1, USB3 2, `tbt_regs.h`) matter only while a USB3 tunnel moves
+   data at the same time. On the P14s the Thunderbolt 3 controller's firmware
+   connection manager builds the tunnel and this driver writes no path
+   entry (record 21) [src]. H: B2 against B4 on the same host.
+9. **PCIe settings along the path** [hyp; what 98 SE sees is read on
+   the bench]:
+   - **Max Payload Size:** on the emulator's asm4242 model the tunnel
+     port supports 128 bytes, so no operating system can raise it there
+     and it is not a difference between 98 SE and 10 [emu].
+   - **Max Read Request Size and Extended Tags** on the NVMe bound how
+     many reads of host memory (a disk write) the drive keeps
+     outstanding, which over a tunnel's round trip may bound the write
+     rate [inf]. 98 SE leaves them as the firmware set them; whether
+     Windows 10 raises them is unread [hyp].
+   - **ASPM L1** on the links to the USB4 host, as the firmware left it:
+     at one request at a time a link may enter L1 between requests and
+     leave it at the next [hyp]; 98 SE changes nothing, a Windows 10
+     power plan may. H: B7.
+   - The tunnelled links' negotiated speed and width do not describe the
+     tunnel's rate [inf].
+10. **The benchmark.** Covered in section 13.1. XHCIPERF times with the
+    performance counter (record 29 section 3.6), shows the request and
+    command sizes and the depth, and runs the same parameters on 98 SE,
+    ME, 7 and 10; it is not shipped (owner, 2026-10-23), so the bench
+    takes it from the release's tree (Q4).
+11. **The caller's buffer.** A buffer of many physical runs costs this
+    layer one `_CopyPageTable` call per fragment, not per run, but costs
+    Stor98's list one walk per page (item 3). XHCIPERF's aligned and
+    scattered buffers bracket it. VCACHE's path (64 KiB reads) is out of
+    this section, as section 1.3 says.
+
+### 13.4 What the emulator can and cannot show
+
+**Can**: what reaches Stor98 and the drive (request and command sizes,
+splits, the depth at each command's issue, MDTS and `MaxChildBytes`, the
+DCB's flags), whether two 98 SE or ME threads overlap at Stor98, and the
+relative software cost of one request against another on the same
+guest (an aligned against a scattered buffer, a 64 KiB against a 2 MiB
+request, Stor98 with one change against without), because a TCG guest's
+time is mostly the guest's own instructions.
+
+**Cannot**: any absolute rate (TCG runs the guest tens of times slower
+than the hardware, and QEMU's NVMe and `usb4-emu`'s tunnel model no
+link timing, no credits' effect and no payload size), the drive's
+behaviour at depth, interrupt latency on real hardware, ASPM, and the
+cost of a PCIe round trip through a real tunnel. A figure taken in the
+emulator compares within one table, never with a bench figure, as
+Stor98's `docs/PLAN.md` says of its own.
+
+### 13.5 The bench (the owner's, after the cut)
+
+On real USB4 hardware with an ASM4242 under a CSM, with the ORICO
+enclosure and its XG6, after the hardware bench (task 44-E.6) has shown
+the drive working on each system. The Framework 13 boots neither
+98 SE nor ME. One XHCIPERF build for every system; each run saved and
+the files compared (record 29 section 5.6). Each step records the
+system, the settings changed, the saved result and its Stor98 page.
+
+**The common shape**, so that the systems are compared on one workload:
+sequential, unbuffered, write-through off, the random fixed pattern with
+verification off (no per-request stamping inside the timed interval,
+record 29 section 3.3), the aligned buffer, one 1 GiB file, three passes
+of 5 s. The 9x standard preset (256 MiB, write-through, the verifiable
+pattern) is run as well, for its data check, and is never compared with
+another system's row.
+
+- **B1, the path.** Per system, before any timing: the connection
+  manager's log or XHCITR's snapshot for the port (bonded or one lane,
+  the tunnel built or preserved), and on 98 SE and ME Stor98's
+  `StorInterrupt` value.
+- **B2, the ceiling on this host.** Windows 10 x64 with this package's
+  connection manager and `stornvme`: XHCIPERF in the common shape at
+  1 MiB and 2 MiB, depth 1 and depth 8, one thread, read and write. Then, if the owner has it there, the
+  tool and parameters of the Framework figure (Q1) for the same row.
+- **B3, Windows 7 x64 with Stor98.** As B2, and the Stor98 page.
+- **B4, 98 SE with Stor98 and `S98VSD.VXD`.** The common shape at 1 MiB
+  and 2 MiB, depth 1, one thread; the 9x standard preset for its data
+  check; then a sweep 64 KiB to 2 MiB at one thread in the common shape,
+  aligned and scattered; the
+  same at 2 and 4 threads; then `StorMaxTransferKB` unchanged and a
+  request of 4 and 8 MiB (to read item 4). From each run's Stor98 page:
+  the request and command sizes, MDTS, `MaxChildBytes`, the
+  outstanding-commands histogram, `phys_sgd` not demanded. F and B
+  refitted from the sweep.
+- **B5, CrystalDiskMark 2.2** on 98 SE and Windows 7, on the same drive
+  and file size as B3 and B4, beside XHCIPERF's 1 MiB depth 1 one thread
+  row: settles the tool question of section 13.1.
+- **B6, ME** as B4 (the drive's letter found by the Stor98 page is an
+  open item of task 44.21), and its writes with `StorWriteThrough` `auto`
+  and `off`.
+- **B7, ASPM.** With the firmware's ASPM setting off (where the firmware
+  offers one), B4's 1 MiB and 2 MiB rows at one thread again.
+
+What decides the code: B4's MDTS and depth histogram decide C1, the
+per-page mapping cost (the emulator's, section 13.4) and B4's refit of
+both F and B decide C2, the depth histogram at 8 commands decides C3, the 4 and
+8 MiB rows decide C4, and B2 against B4 at depth 1
+is what 98 SE can still gain at one request at a time.
+
+### 13.6 Code changes, ranked by expected gain and risk
+
+None is made before its reading and the owner's decision; each is
+Stor98's under `src/stor98/AGENTS.md` unless it says otherwise, and each
+gets the emulator test that file requires.
+
+| | Change | Expected gain | Size | Risk | Read first |
+|---|---|---|---|---|---|
+| C1 | **A child size setting on 9x** (a `StorChildKB`-like value, 64 KiB up to the transfer limit, default unchanged), so one request becomes several commands in flight | raises B toward the drive's rate at depth 4 to 8 [hyp], where MDTS lets a request be one or two commands; nothing where MDTS is already small | small: the limit already exists as a test value (`FragBytes`, `lifecycle.c`; in the debug-port test builds on 9x `Software\stor98\Q9x\Frag`, at most 64 KiB), made a product tunable with a host vector | low: the same path as an MDTS split, every child already counted for PRP pages and quarantine | B4: MDTS and the depth |
+| C2 | **One `ScsiPortGetPhysicalAddress` call per run, not per page**, in `EngMapCaller`, the following pages' entries taken from the returned length | lowers the per-page work in B and the CPU per MB, most on buffers of long physical runs (one call then covers a run of many pages); on a buffer of one page a run it saves almost nothing, and the walk's cost stays [hyp] | small (about 30 lines and host vectors) | low to medium: the per-page DWORD and span checks must hold for every entry, which the vectors cover | the emulator's per-page mapping cost, aligned and scattered; B4's refit of F and B |
+| C3 | **More `ENG_PRP_PAGES`** (8 today) | where MDTS is small, more than 8 commands of one request in flight [hyp] | small in code; the uncached extension and the 9x pool block grow | medium: the 9x pool block and its boot-wide budget (Stor98 PLAN, 0.4.0.0 plan item 1) | B4's depth histogram at 8 |
+| C4 | **A 9x maximum above 2 MiB** (4 or 8 MiB a request, the child size kept at most 2 MiB), with this layer's room raised | helps only programs that ask for more than 2 MiB a request: the model's 8 MiB reaches about 3,180 MB/s at B 3.5 GB/s [model] | medium: Stor98's parent and child limits split, this layer's room per IOP (about 10 KiB today, section 3.4) doubled or quadrupled, D6 | medium: IOS and VFAT above 2 MiB unread, IOP size | B4's 4 and 8 MiB rows |
+| C5 | Fewer interrupts per request (NVMe interrupt coalescing) | a part of F at many commands per request [hyp] | small | medium: every completion path, polling's interplay | B4 shows F after C1 and C2 |
+| - | Raising the NVMe's Max Read Request Size on 9x (`xhcicm.sys` or Stor98) | writes, if B2's writes outrun B4's by more than reads do [hyp] | small | medium: a PCIe setting written by a driver that owns neither the bridge nor the port | B2 against B4 |
+
+Not proposed: Max Payload Size (the ASM4242's tunnel port allows 128
+bytes only, item 9); the path credits (the bench of task 44-E.6 reads them first, with 44.41's `XhciCmAsmediaPcie7Credits`); lane
+bonding (on by default); anything in IOS, VFAT or `SCSIPORT.PDR`, which
+this project does not patch; read-ahead or write-behind in Stor98, which
+the never-complete-early rule of its `AGENTS.md` excludes.
+
+### 13.7 The emulator's readings
+
+None were taken for this draft. The rule for new legs (QEMU's q35
+machine, 98 SE and ME through AHCI) needs a q35 98 SE base, which was not
+ready on 2026-10-25; the readings of section 13.4's "can" list (C2's
+relative cost, two threads' overlap, the sizes at 4 and 8 MiB) are owed
+to that base and go to the run sheet `runs/run-44.md`, under a section "44.36".
+
+### 13.8 Open, and the owner's
+
+- **Q1, the Framework figure.** Which tool and version, request size,
+  depth and threads gave about 3000 MB/s, and with which drive. Options:
+  (a) the owner states them; (b) B2 reads the same drive with XHCIPERF at
+  depth 1 and 8 on the bench host. Recommended: both, (b) being what the
+  98 SE figure is compared with.
+- **Q2, what the target means for 98 SE and ME.** (a) one thread, one
+  request at a time, as a 9x program issues by default: the model puts
+  3000 out of reach at 1 MiB and needs F near 0.1 ms at 2 MiB (section
+  13.2); (b) the best of any 9x program's shape (threads, larger
+  requests), each stated with its figure. Recommended: (b), with (a)
+  always reported beside it.
+- **Q3, C1 before the bench.** (a) a test build with the child size
+  setting for B4, so the bench reads the gain in one visit; (b) wait for
+  B4's MDTS first. Recommended: (a) if the owner has one bench visit
+  only, (b) otherwise, since C1 gains nothing where MDTS is already
+  small.
+- **Q4, XHCIPERF on the bench.** It stays unshipped; the bench takes the
+  release tree's build in a folder of its own, as task 43.50's bench did.
+  Recommended: yes, after task 44.21's open items.
+
 ## Sources
 
 - `docs/contributing/runs/run-43.md`, "43.46 read first", "The C port",
@@ -1408,3 +1755,11 @@ stamp, `S98VSD.VXD` where it read `STOR98.VXD` (SHA-256
   requests".
 - Design records 08 (flavours), 23 (the console tool), 26 (the window,
   sections 5.3, 5.4, 6.3, 6.5.4 and 9.3) and 27 (the 9x device install).
+- For section 13 (read 2026-10-25): `runs/run-43.md`, "The first
+  real-hardware reading"; `README.md`'s two CrystalDiskMark readings;
+  Stor98 `src/engine.c` (`EngMapCaller`, `EngIssueRwChild`, the dispatch
+  loop), `src/engine.h`, `src/lifecycle.c` (`LcBringupDone`),
+  `src/nvme2k.h`, `src/pool9x.c`, `README.md` ("Settings") and
+  `docs/PLAN.md` ("Polling mode"); `src/cm/tbt_u4cm.c` (`tbtU4Bond`,
+  `tbtU4Paths`) and `tbt_regs.h`; design record 29; `usb4-emu`'s
+  asm4242 data (`9f333f3`; record 22 section 18).

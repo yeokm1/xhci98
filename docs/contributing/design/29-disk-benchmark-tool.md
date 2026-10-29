@@ -1,6 +1,9 @@
 # Design Record 29 - XHCIPERF, the Disk Benchmark
 
-Status: draft 9, 2026-10-22 (roadmap-usb4 task 43.50): the owner's
+Status: draft 12, 2026-10-27: section 16.9 (task 44.21's third pass).
+Draft 11, 2026-10-27: section 16.8 (task 44.21's second pass).
+Draft 10, 2026-10-25: section 16 (roadmap-usb4 task 44.21). Draft 9,
+2026-10-22 (roadmap-usb4 task 43.50): the owner's
 decisions of that day folded in (section 13: P3, P4, P7 and P9 are the
 owner's; Stor98's change recorded as its decision MD-8), and the code
 written against it. Draft 8, before code,
@@ -1261,7 +1264,8 @@ section 4):
   floating point in the pure half.
 - `xhciperf\build.cmd` builds both, `build.cmd x86` the 32-bit one;
   `scripts\build-driver.cmd` builds and self-tests it as it does XHCITR
-  (its "xhcicln and xhcitr, rebuilt" step), and `make-release.ps1` takes
+  (its "xhcitr and xhciperf, rebuilt" step, "xhcicln and xhcitr, rebuilt"
+  until XHCICLN was dropped in `3.3.0.0`), and `make-release.ps1` takes
   them as it takes XHCITR's pair.
 
 ### 10.2 Imports
@@ -1655,3 +1659,418 @@ a choice:
   virtual machines or the owner's hardware; until then its readings are
   the 98 SE smoke runs and the owner's 98 SE bench above, not the
   acceptance matrix.
+
+## 16. Task 44.21: the open items, and a benchmark that is not the bottleneck (2026-10-25)
+
+Roadmap-usb4 task 44.21 (PERF.1 until Phase 44) fixes and reads what
+section 15 left open; XHCIPERF stays a developer diagnostic, built and
+host-tested at every gated build and not shipped (owner, 2026-10-23 and
+2026-10-25). Task 44.36 (a tunnelled NVMe drive on 98 SE and ME at about
+3000 MB/s) asks first for a benchmark that is not itself the bottleneck
+on 98 SE, ME and 7 with one drive, reporting the transfer sizes and the
+processor's cost per request; sections 16.2 and 16.3 are what XHCIPERF
+adds for it. Nothing here changes Stor98, its counter answer (MD-8) or
+any driver.
+
+### 16.1 The Start and Stop buttons
+
+**Read** (`xhciperf.c`, `create_controls` and `layout`): the estimate
+line (`IDC_ESTIMATE`) is created 500 pixels wide, ending before Start
+(x 506) and Stop (x 570), but `layout()`, which runs at every `WM_SIZE`
+including the first, moves it to the client area's whole width. It is
+created before the two buttons, so it is above them in the sibling
+order, has no `WS_CLIPSIBLINGS`, and paints its background over both
+whenever its text changes (`update_estimate`, at every change of a
+setting). Whether the 98 SE report of clipping at a high resolution has
+a second cause (a font larger than the fixed 23-pixel button height at
+large fonts) is read on the leg, at 640x480 first and then at 1024x768
+with large fonts (P.4b, section 16.6).
+
+The fix: `layout()` keeps the estimate line ending 4 pixels before
+Start's left edge as Start actually is, and the line is given
+`WS_CLIPSIBLINGS` so that it can never paint over a sibling again. The
+buttons keep their fixed positions in the column of More... above them.
+A sentence longer than the line is cut at its end as before; the whole
+sentence is also put in the status bar when the plan refuses, so a
+refusal is never only half visible.
+
+**Read** on the leg (section 16.7): at 640x480 and small fonts Start and
+Stop were whole before and after the estimate changed. With large fonts
+(120 dpi) the fixed 96-dpi pixel layout clipped the labels ("Passe",
+"Thread", "Prese") although not Start and Stop. So the window's layout
+also grows with the screen's dpi: every control's position and size, the
+window's first and smallest size and the Summary and Sweep pages'
+drawing are scaled by dpi / 96, as far as the work area holds a window
+of that size (at 640x480 with large fonts it stays at 96-dpi pixels and
+the labels are cut as before). The More... and About dialogs are
+resources in dialog units and scale by themselves.
+
+### 16.2 The processor's cost
+
+What the tool has today is the stamping share (section 3.3): the time
+its own workers spend stamping and checking the verifiable pattern,
+marked "cpu" above 10%. It says nothing of the time the system spends
+per request in the file system, the disk layer and the driver, which is
+what task 44.36 needs (polling or interrupt completion, the IOS path on
+9x, double-buffering).
+
+Each measured step therefore takes two readings of the system's
+processor time, at T0 and at T1 (section 3.6), from the controlling
+thread, next to its performance-counter readings:
+
+- **NT** (2000 and later): `NtQuerySystemInformation` with
+  `SystemProcessorPerformanceInformation` (class 8; `ntdll.dll`, found
+  with `GetProcAddress`, never imported: section 10.2's seven modules
+  stay the import table). Each processor's entry is 48 bytes on x86 and
+  x64 alike: five 64-bit times - idle, kernel (which includes idle),
+  user, and the two `winternl.h` names reserved and the NT 4.0 to 10
+  layout holds as DPC and interrupt time - then a 32-bit interrupt count
+  and 4 bytes of padding; the code asserts that size at compile time and
+  takes an answer only when its returned length is a whole number of
+  entries. The step's **busy** processor time is the sum over processors
+  of (kernel + user - idle) between the readings, its **interrupt and
+  DPC** time the sum of those two (a part of kernel time, so a part of
+  busy, never added to it), both in 100 ns units made microseconds. On a
+  system with processor groups (7 and later) class 8 answers for the
+  calling thread's group alone, so the answer's processor count is
+  compared with every active processor's (`GetActiveProcessorCount` with
+  `ALL_PROCESSOR_GROUPS` where it exists, `GetSystemInfo`'s count before
+  7): when they differ the step has no processor figure rather than a
+  part of the system's. A result is taken only when both readings
+  succeed with that full count and every difference is not negative;
+  otherwise the step has no processor figure. The tool's own time
+  (`GetProcessTimes`, kernel + user, through `GetProcAddress`) is read
+  beside it: the part of the busy time spent in the threads of this
+  program, issue and completion paths included, not the interrupts and
+  DPCs.
+- **98 SE and ME**: there is no per-processor time. The tool starts
+  Windows' own statistic `KERNEL\CPUUsage` once per run by querying that
+  value under `HKEY_DYN_DATA\PerfStats\StartStat` (Microsoft's
+  documented protocol: the query of the value, not the opening of the
+  key, starts the collection), reads it under `PerfStats\StatData`
+  during the steps, and stops it by querying it under
+  `PerfStats\StopStat` on every end of the run, a refused or failed one
+  included. During a step the controlling thread reads it (an integer
+  percentage) at T0, every 250 ms, and once more after T1, so the last
+  reading covers the interval through T1; the step's busy time is the
+  sum over the readings after T0 of the percentage times the time since
+  the reading before it (performance counter). Which window the
+  statistic averages over is not documented: if it is the share since
+  its previous reading this sum is the busy time to within the
+  percentage's rounding; if it is a recent average it can carry the
+  time before T0 into the step and smooth a short burst. P.11 read it
+  on 98 SE (2026-10-26, section 16.7): the share since the previous
+  reading, at a 1 s and at a 250 ms cadence alike, so the figure is
+  shown as Windows' own without a further label ("busy 25.0%, Windows'
+  own figure"). A step with no reading after T0 has no processor
+  figure. Interrupt and DPC time and the tool's own
+  time are not reported on 9x.
+From these, each result carries `cpuKind` (none, NT, 9x), `cpuBusyUs`,
+`cpuIntUs`, `cpuOwnUs` and the processor count; the window and the
+report show, per test, **busy** as a percentage of the step's interval
+times the processors, **interrupts and DPCs** as a percentage the same
+way (NT), and the **processor time per request** (busy over requests,
+in microseconds), with "this program" beside it on NT. Over several
+passes the figures are those of every pass that counts for the rate
+(section 3.6), summed, whatever Show says; the report says so, and a
+test one of whose counting passes has no figure shows none. On 9x a run
+whose `StartStat` query fails has no figure at all, and a reading above
+100 ends the step's figure. The
+figures cover everything the system did in the interval, from any
+program, as the Stor98 page does; the report's line says "of the whole
+system". The 9x preset's verifiable pattern also costs processor time,
+and the stamping share stays as before.
+
+The report adds, after the summary, a "Processor:" block, one line per
+test ("Seq 1M d8 t1   read  aligned    busy 23.4% of 2, interrupts and
+DPCs 5.1%, 41 us a request, this program 30 us"), and the machine lines
+add `XPRF-CPU 1 <label>|<op>|<buffer>|<pass>|<kind>|<processors>|<busy
+ns>|<interrupt ns>|<own ns>` beside each `XPRF-RESULT`; a saved file
+from before reads as before (the parser skips lines it does not know,
+and this one is not compared). The window's cell shows "cpu 23%" in its
+small text, and the "cpu" mark of the stamping share becomes "stamping"
+there and in the report's summary lines, to be told apart.
+
+### 16.3 Large sequential transfers
+
+**Read**: XHCIPERF already issues requests of up to 8 MiB, at a depth
+of up to 32 on NT (the two together limited by section 3.4's buffer
+rule: 8 MiB at depth 32 is refused), and its rate (section 3.6) has no
+ceiling below 2^59 bytes. What it lacks for a throughput reading: the
+9x default preset stamps every write with the verifiable pattern inside
+the timed interval (its verification of reads is outside it), which on a
+fast drive measures the processor; the fixed tests come only from the
+presets, so a chosen size, depth and thread count for a test is
+reachable from the window's Depth and Threads boxes (one value for every
+test) or the sweep (time or bytes per size, depth at most 4), not as a
+stated list of tests on a command line; and nothing shows the system's
+processor cost (section 16.2) or the tool's own cost per request.
+
+- A sixth preset, **Sequential throughput** (`/preset seqmax`), after
+  Quick in the list: read and write, unbuffered, not write-through,
+  random fixed pattern (filled once, no work per request), no
+  verification, 1 GiB, 3 passes of 5 s. On NT: `Seq 1M d1 t1` (the
+  size and depth CrystalDiskMark 2.2's sequential test uses, for a
+  like-for-like row), `Seq 1M d8 t1`, `Seq 8M d1 t1`, `Seq 8M d8 t1`.
+  On 98 SE and ME: `Seq 512K d1 t1` (the largest request IOS passes
+  whole without `S98VSD.VXD`, sections 1.1 and 3.7: the baseline),
+  `Seq 1M d1 t1`, `Seq 2M d1 t1`, `Seq 8M d1 t1`, and `Seq 1M d1 t2`
+  (two threads: whether IOS lets two requests to the drive at once,
+  which the Stor98 page's "most commands at the drive at once" shows).
+  A size above what IOS or Stor98 passes whole is a comparison of large
+  requests from the program, not a command of that size at the drive:
+  the Stor98 page says what reached it. Its buffers need about 80 MiB on
+  NT and 32 MiB on 9x, so a system with less than about 320 MiB (NT) or
+  128 MiB (9x) of memory is refused by section 3.4's rule with its
+  sentence.
+- **What a timed sequential test measures.** A sequential test wraps at
+  the end of its part of the file (section 3.5): at 3000 MB/s a 1 GiB
+  region is traversed about every 0.36 s, about fourteen times in a 5 s
+  pass. Unbuffered I/O bypasses Windows' file cache, not the drive's own
+  cache, and the preset does not write through. So the rate is that of
+  repeated access to a bounded region, not sustained media throughput,
+  and the report says so under the summary whenever a timed sequential
+  test moved more than its region ("Sequential tests went over the
+  file's 1,024 MiB again: a drive's own cache is part of these rates");
+  on NT `/size` up to 16,384 MiB gives a larger region, on FAT (9x) the
+  region stays at most 1 GiB (section 3.1).
+- **`/test <seq|rnd>,<KiB>,<depth>,<threads>`**, repeatable up to 16
+  times: the size is 1 to 8192 KiB, the depth 1 to 32, the threads 1 to
+  8, each refused with its sentence, and the plan's rules apply as to
+  any test (a depth above 1 on 98 SE and ME is refused there). The
+  command line is read left to right, as today: the first `/test` after
+  the start or after a `/preset` replaces the tests (a `/preset` resets
+  everything, its tests included, and the next `/test` begins a new
+  list), each further one adds one, and the run becomes Custom fixed
+  tests. `/depth` and `/threads` change every test given before them.
+  `/test` and the sweep's `/min` or `/max` in one command line are
+  refused ("/test sets fixed tests and /min and /max a sweep; use one or
+  the other"), in either order.
+- **`/ops read|write|both`**: the operations, as the window's list.
+- **`/nolatency`**: the workers read no counter per request and keep no
+  latency (the result shows "-" for it and the report says "latency not
+  measured"); the course of section 16.4 is not kept either. It exists
+  to measure the tool's own cost: a run with and without it on the same
+  drive bounds what the per-request timing costs the rate (P.13). It is
+  part of the workload key, so the two do not compare as like; a later
+  `/preset` resets it as every other setting, and the window's kept
+  settings never keep it.
+
+With these a throughput reading is, for example, `XHCIPERF /run /preset
+seqmax /folder F:\ /report R.TXT /exit` on every system, or `/test
+seq,2048,1,1 /test seq,8192,1,1 /pattern random /ops read` for reads
+alone.
+
+### 16.4 The two long timed steps on the emulator's IDE disk
+
+**Read** (the 98 SE emulator's Quick run of 2026-10-23,
+`E:\xhci98-vm\p43-50\runs\pl\r-l1.txt`, i440FX, a 16 MiB file on C:
+behind ESDI_506, 2 s steps): `Seq 1M d1 t1` write 127 requests in
+2.0 s, mean latency 15.6 ms; `Seq 1M d1 t1` read 67 requests in 27.8 s,
+mean latency 414 ms (the requests' latencies add up to about 27.7 s);
+`Rnd 4K d1 t1` write 8422 requests in 28.7 s, mean latency 144 us (the
+latencies add up to about 1.2 s); `Rnd 4K d1 t1` read 8460 requests in
+2.0 s. Both clocks agreed over each whole step (section 14.2). What the
+report shows is that the two **measured intervals overran** their 2 s;
+it does not show that a request was issued after the deadline: the read
+fits many fast requests and one very long one issued before 2 s, and the
+random write fits every request issued before 2 s and then a long wait
+before the step's end was taken (a worker or the controller not run).
+Nor does the write's 66 MB/s alone show a cache, without that emulated
+disk's own ceiling measured.
+
+So each pass also records when its last request was issued and when its
+last worker ended, both from T0 (performance counter), and its longest
+request (the latency's maximum, which the histogram already keeps); and
+the tick count read by the workers at their last deadline check. They
+are kept only where one counter serves every processor (not on NT before
+Vista with more than one, where the controller and the workers run on
+different processors, section 3.6). A timed
+pass that ran more than 1 s past its time gets a line in the report's
+"Every pass" block: "ran 27.80 s for 2 s: last request issued at 1.90 s,
+longest request 26.00 s, workers ended at 27.70 s, tick count at the
+last check 1.20 s". That line is the reading (P.12, section 16.6); the
+fix follows it, under this section's review, if it is the tool's.
+
+P.12 runs on q35 with the 98 SE system disk on the launcher's piix3-ide
+controller (`-Ide piix`), which 98 SE drives with ESDI_506 as on the
+original i440FX run, and also on the q35 board's own AHCI (through the
+BIOS, MS-DOS compatibility mode). If neither reproduces the overrun, the
+original IDE item stays open as an unresolved limitation, recorded so,
+on the owner's real-check list (section 14.2); a clean q35 run then
+shows the diagnostics work, not that the item is closed.
+
+### 16.5 ME's second run with S98VSD.VXD
+
+**Read** (section 15, `runs/mp5v`): on ME with `S98VSD.VXD` the first
+study run read Stor98's counters; an ASPI probe then ran; the second run,
+a new process, said "not reported by this disk's driver" and its
+scattered tests ran at 6 to 25 MB/s. That sentence covers three
+different ends of the 9x search (section 6.2): no present disk under
+`Enum\SCSI` holds the letter; ASPI lists no target that answers Stor98's
+identity page; or such targets answer but none of their models is in
+the letter's disk id. The report cannot tell which.
+
+So the 9x search keeps which end it reached, with what it counted, and
+the sentence names it: "no present disk under Enum\SCSI holds F:" (the
+configuration manager found one of its disks present, or there was none
+to ask about) or "no disk under Enum\SCSI holds F: (the configuration
+manager found none of its disks present, so the registry's claims were
+taken)" - which is also what a configuration manager that does not
+answer this program gives; "the disk holding F: (`<id>`) is on no adapter that answers as
+Stor98 (ASPI adapters: n)"; "Stor98 answers on n targets (models read:
+m), but none is the disk holding F: (`<id>`)" - a target whose standard
+INQUIRY failed or gave an empty model is not counted as read, so a
+failure inside the search is not reported as a mismatch. The device id
+is the registry key's name, printable ASCII, cut to 60 characters. The
+ME leg (P.5b, section 16.6) repeats the two runs with the probe between
+them; the fix follows the reading.
+
+### 16.6 The legs of task 44.21 (as planned)
+
+Every new leg runs on QEMU's q35 machine (owner, 2026-10-25), from the
+bases in `E:\xhci98-vm\q35-bases\`, recorded in
+`docs/contributing/runs/run-44.md` section 44.21. Section 14.2's
+narrowed set, as the roadmap line names it: ME's P.1, P.2, P.7 and P.8;
+P.3, P.4 and P.6 on 2000, XP, 7 and 10; a Quick run (P.4) on 8 and 8.1.
+Added by this section:
+
+| Leg | Systems | What it reads |
+|---|---|---|
+| P.4b | 98 SE | the window at 640x480 and at 1024x768 with large fonts: Start and Stop whole before and after a setting changes; the cause of section 16.1 |
+| P.5b | ME, Stor98's disk behind the emulated tunnel, with S98VSD.VXD | the study run, an ASPI probe, the study run again: the Stor98 line of each (section 16.5) |
+| P.11 | 98 SE, ME, 2000, 7 x64 (the 32-bit tool alone, under WOW64, and XHCIPF64) | the processor figures of a Quick run idle, with a busy-loop program running beside it, and with one that starts and stops within a step: that they move as they should; on 9x which meaning `KERNEL\CPUUsage` has (the step after a busy one reads idle or not), so the "estimate" label can be kept or dropped |
+| P.12 | 98 SE | the Quick run on C: on piix3-ide (ESDI_506) and on AHCI: the overrun line of every long timed step (16.4) |
+| P.13 | 98 SE, ME, 7 | Sequential throughput on Stor98's drive behind the emulated tunnel: every test's rate, processor figures and Stor98 page; then its `Seq 1M d1 t1` with and without `/nolatency`, which bounds the per-request timing's cost; read for task 44.36 as a functional leg, not as its target, which needs real hardware |
+
+### 16.7 What the legs read (2026-10-26)
+
+On q35 (`E:\xhci98-vm\q35-bases`), the tool of this section's commits;
+the run sheet `runs/run-44.md`, section 44.21, has the commands, the
+hashes and every figure.
+
+- **16.1, the window** (98 SE): Start and Stop whole at 640x480 before
+  and after the estimate line's text changed; with large fonts the
+  labels were cut by the 96-dpi layout, which led to the scaling above;
+  scaled, at 1024x768 with large fonts (Cirrus), every control and the
+  Summary page whole.
+- **16.2, the processor** (P.11): on 98 SE and ME `KERNEL\CPUUsage` is the
+  share since its previous reading - idle 0 to 3, a busy loop 100, the
+  change complete within one reading, on 98 SE at a 1 s and a 250 ms
+  cadence, on ME at a 1 s and a 500 ms one - so the 9x figure is shown
+  without the "estimate" label. On the emulator's disks almost every
+  9x step read 99.7 to 100% busy (one ME step in which no request was
+  issued read 29.7%). On 7 x86 (2 processors) the figures
+  moved with a busy loop beside the run (busy 22 to 73% without it, 75
+  to 93% with it); interrupts and DPCs 0.4 to 7.8%.
+- **16.4, the long steps** (P.12): reproduced on both 98 SE disk paths
+  and on ME, and read: in every overrun the last request was issued
+  before the time ran out (the workers' last deadline check came after
+  the long request returned where one was still due, before it
+  otherwise); the time went into one request that lasted 3 to 166 s,
+  always after writes - those of the pass before or of the file's
+  preparation - or, in three passes, into the wait before the first
+  request could be issued (13 to 22 s, no request issued). So the system
+  held the program, not the tool's deadline; a synchronous request
+  cannot be ended early, and the overrun line now says where the time
+  went. Nothing in the tool is changed for it.
+- **16.3, the tool's own cost**: one performance-counter reading costs
+  15 to 18 us on 98 SE and ME in the emulator (8254) and about 1 us on
+  7; with and without `/nolatency`, matched 1 MiB sequential reads on 98
+  SE read 45.8 against 45.1 and 46.5 MB/s, and 7's Sequential throughput
+  rows differed by 2 to 13% either way between single passes, within
+  the run-to-run spread; so the per-request timing does not bound the
+  rate at these speeds, and above about 1000 requests a second on 9x
+  (where two readings take 30 to 36 us) `/nolatency` is the safer
+  choice.
+- **16.5, ME's second run**: not read; Stor98 on ME behind the tunnel
+  has no install route on the q35 bases yet (task 44.3), so P.5b is
+  owed (read in section 16.8).
+
+### 16.8 The second pass (2026-10-27)
+
+Task 44.21 again, on q35, with `3.3.0.0`'s Stor98 route on ME (task
+44.3) and the other bases ready; `runs/run-44.md`, "44.21, the second
+pass", has the commands and the figures.
+
+- **16.1, the cause read on the build before the fix.** The bench build of
+  2026-10-23 (`317f39a0`, before section 16.1's change), on 98 SE with
+  Windows' own Cirrus driver and small fonts, showed Start and Stop as
+  two thin lines, their faces painted over, at 1280x1024 and at 640x480
+  alike, before and after a setting changed the estimate line - the
+  owner's report, and the same at the lowest resolution, so the
+  estimate line over the buttons was the whole cause and the
+  resolution only where it was seen. This section's build at both: every
+  button whole.
+- **16.5, ME's second run, read and fixed.** Two study runs in one ME
+  session with `S98VSD.VXD` read Stor98's page for every step when
+  nothing ran between them. With another program between them that
+  loaded `WNASPI32.DLL` (a probe asking only the support information,
+  with or without freeing the library), the second run read no counters
+  for 9 to 12 of its 12 steps ("Stor98's counters could not be read");
+  after a probe that had sent INQUIRY and READ BUFFER and then failed,
+  the second run's search ended "is on no adapter that answers as
+  Stor98 (ASPI adapters: 1)", section 16.5's sentence naming the end. A
+  probe printing every request's ASPI fields read what XHCIPERF met:
+  once an XHCIPERF run had ended, every request a later program sent to
+  Stor98 came back `SS_COMP` with a target status of 05h (no SCSI status
+  has that value), an empty sense, the data right; after a further
+  XHCIPERF run, 00h again; and XHCIPERF refused any request whose target
+  status was not 0. Where the 05h comes from is inferred, not read:
+  Stor98 completes the requests it answers itself (INQUIRY, the identity
+  page, READ BUFFER) with `SRB_STATUS_SUCCESS` and leaves the SRB's SCSI
+  status as it found it, so a value left in that field earlier is the
+  likely one. Fixed in XHCIPERF: `SS_COMP` alone is the request's success,
+  the target status is not read, and the answers are still checked by
+  what they hold (the identity page, the model, the counter answer's
+  signature, version and epoch). With it, three study runs in one ME
+  session with both probes between them read all twelve pages each
+  while the probe still read 05h. Whether Stor98 should set
+  `SCSISTAT_GOOD` on that path is Stor98's to decide, not this
+  record's.
+- **What a second 9x run measures.** In those sessions the second run's
+  requests often reached Stor98 in another shape than the first's - a
+  256 KiB request as 128 KiB pieces, reads as scatter/gather lists, once
+  Stor98 splitting and bouncing - and a third run as the first again:
+  the buffer's physical pages, as on 98 SE (section 15), with
+  `S98VSD.VXD` present. The Stor98 page shows it; nothing in XHCIPERF
+  changes for it.
+- **The system line under WOW64.** The 32-bit XHCIPERF alone on 7 x64
+  wrote "x86" for the system (the word was the compiler's); it now asks
+  `IsWow64Process` and writes "64-bit (WOW64)".
+- **The legs left by section 16.7.** ME: P.2 (every study step "scattered,
+  as seen by Stor98", aligned buffers included, and passed whole with
+  `S98VSD.VXD`; stamping marked on every write), P.7 (the enclosure
+  removed during a write test: "The disk stopped answering (error 31
+  ...)", the run stopped, the window closed by `/exit`; at the next
+  start no `XHCIPERF.TMP` on the drive and no record to offer), P.8's
+  `SUBST` drive refused. P.3, P.4 and P.6 on 2000, XP and 10 x86 with
+  Stor98 behind the tunnel (the page read through the volume, the
+  outstanding-commands histogram 5-8 at depth 8; on 10 an unelevated
+  user read it too, the volume being removable); a Quick run on 8 and
+  8.1; the 32-bit tool alone under WOW64 on 7 x64 (P.11: busy 13 to 19%
+  of 2 idle, 68 to 82% with a busy loop beside it).
+- **Left.** P.4's Browse... and its run on a USB stick, and P.6's
+  standard-user refusal and "Read as administrator..." button on 2000,
+  XP and 7; and the readings section 14.2 puts on the owner's real-check
+  list: 98 SE at a high resolution on real hardware, the Quick preset's
+  2 s steps on a real IDE disk, P.10.
+
+### 16.9 The third pass (2026-10-27)
+
+On q35 (`runs/run-44.md`, "44.21, the third pass"): P.6's standard
+user on 2000, XP and 7 - the report's Stor98 line and the Stor98 tab say
+"This disk is driven by Stor98. Reading its counters needs
+administrator rights.", and "Read as administrator..." shows the
+message on 2000 and XP and, on 7, Windows' administrator prompt, after
+which a new window as the administrator read the page and the first
+closed (a refused prompt left the window as it was); P.4's Browse... on
+2000, XP, 7 and 10, and a Quick run on a USB stick on each (the file
+lowered to 32 MiB to fit the 128 MB stick); ME's P.1 file calls (an
+`OVERLAPPED` read or write refused with error 87,
+`FILE_FLAG_DELETE_ON_CLOSE` ignored) its P.7 safe removal refused during a run,
+and the rest of its P.8 (the free
+space on Stor98's drive and the Windows drive's reserve, a CD drive
+refused, a half-prepared leftover offered after a power cut, a
+header without a record asked about). Nothing in the tool changed. What is left is the bench's: 98 SE at a high resolution and
+the Quick preset's 2 s steps on real hardware, and P.10.

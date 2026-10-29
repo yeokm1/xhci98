@@ -56,6 +56,7 @@
 #define IDC_C_SETTINGS          1033    /* Settings...                    */
 #define IDC_C_FOLDER            1034    /* Change folder...               */
 #define IDC_S_PART              1035    /* a tab's next part              */
+#define IDC_C_PFW               1036    /* XHCIPFW.VXD or XHCIPFW.SYS     */
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

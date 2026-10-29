@@ -36,11 +36,14 @@
 
 //
 // Completion of SRBs the driver answers itself (no NVMe command). The
-// engine decides about NextRequest (EngStartIo).
+// engine decides about NextRequest (EngStartIo). A success carries GOOD:
+// the port's SRB may arrive with any SCSI status byte, which a caller can
+// read as the target status (docs/PLAN.md, "SCSI status of a completion").
 //
 BOOLEAN ScsiSuccess(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
 {
     Srb->SrbStatus = SRB_STATUS_SUCCESS;
+    Srb->ScsiStatus = SCSISTAT_GOOD;
     EngCompleteSrb(DevExt, Srb);
     return TRUE;
 }

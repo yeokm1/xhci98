@@ -205,7 +205,11 @@ try {
     # root-hub installs are exempt from the controller's VAL-*/PROP-*/OS-*
     # rules: [RootHub.AddReg] and [RootHub.AddReg.NT] write none of the log or
     # moderation values and copy no OS file.
-    Assert-True ($baseline.Output -match "models: 10\b") ("src\xhci98.inf: expected the gate to gather ten models (controller, root hub, the two external-hub ids of task 33.4 and the composite parent of task 36.43, in the undecorated section and NTx86.6.0). Output:`n" + $baseline.Output)
+    # Plus the controller's name lines of the undecorated section (task
+    # 44.5, HCD-DESC: PCI\VEN_xxxx&DEV_xxxx alone, installing Xhci.Dev).
+    $nameLines = @([System.IO.File]::ReadAllText($prodInf) -split "`r`n" |
+                   Where-Object { $_ -cmatch '^\s*%[^%]+%\s*=\s*Xhci\.Dev\s*,\s*PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}\s*$' }).Count
+    Assert-True ($nameLines -gt 0 -and $baseline.Output -match ("models: " + (10 + $nameLines) + "\b")) ("src\xhci98.inf: expected the gate to gather ten models (controller, root hub, the two external-hub ids of task 33.4 and the composite parent of task 36.43, in the undecorated section and NTx86.6.0) and the $nameLines controller name lines of task 44.5. Output:`n" + $baseline.Output)
 
     Write-Step "file format"
     Assert-RuleFires "utf16" "FILE-ENCODING" { param($t) $t } -Utf16
@@ -1686,6 +1690,18 @@ try {
             "expected footprint row '$want'. Rows:`n" + ($fp -join "`n"))
     }
 
+    # The controller's name lines (task 44.5) add no path while they install
+    # the class line's section, and one that installs another section keeps
+    # that section's own path in the footprint.
+    Assert-True (@($fp | Where-Object { $_ -eq "path|Windows 98|device install|Xhci.Dev" }).Count -eq 1) (
+        "the name lines must add no Windows 98 path of their own. Rows:`n" + ($fp -join "`n"))
+    $infAlias = New-MutatedInf -Name "fp-namealias-section" -Mutate {
+        param($t) $t.Replace("%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D", "%XRedHatQEMUxHCIDesc%=RootHub.Dev,PCI\VEN_1B36&DEV_000D")
+    }
+    $fpAlias = Get-Footprint -Path $infAlias
+    Assert-True (@($fpAlias | Where-Object { $_ -eq "path|Windows 98|device install|RootHub.Dev" }).Count -eq 2) (
+        "a name line installing another section must keep that section's path. Rows:`n" + ($fpAlias -join "`n"))
+
     # AddService's own flags field was dropped entirely by the first two drafts.
     Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 5) (
         "the service row must carry the AddService flags field. Rows:`n" + ($fp -join "`n"))
@@ -2281,6 +2297,45 @@ try {
     Assert-RuleFires "x86-catalog" "BOTH-CATALOG" {
         param($t) $t.Replace("[Version]`r`n", "[Version]`r`nCatalogFile=xhci98.cat`r`n")
     }
+    # HCD-DESC (task 44.5): the product names of the 9x section's id lines
+    # within 98 SE's 46 characters and in their form, the class line's the
+    # plain name, and no id line where it would outrank Windows' usbxhci.
+    Assert-RuleFires "x86-desc-long" "HCD-DESC" {
+        param($t) $t.Replace("XRedHatQEMUxHCIDesc=`"xHCI98 USB 3 Controller (Red Hat QEMU xHCI)`"",
+                             "XRedHatQEMUxHCIDesc=`"xHCI98 USB 3 Controller (Red Hat QEMU xHCI Host)`"")
+    }
+    Assert-RuleFires "x86-desc-form" "HCD-DESC" {
+        param($t) $t.Replace("XRedHatQEMUxHCIDesc=`"xHCI98 USB 3 Controller (Red Hat QEMU xHCI)`"",
+                             "XRedHatQEMUxHCIDesc=`"xHCI98 USB 3.x Controller (QEMU)`"")
+    }
+    Assert-RuleFires "x86-desc-class" "HCD-DESC" {
+        param($t) $t.Replace("XhciDesc=`"xHCI98 USB 3 Controller`"", "XhciDesc=`"xHCI98 USB 3 Controller (any)`"")
+    }
+    Assert-RuleFires "x86-desc-nt6" "HCD-DESC" {
+        param($t) $t.Replace("%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n",
+                             "%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n%XRedHatQEMUxHCIDesc%=Xhci.Dev6,PCI\VEN_1B36&DEV_000D`r`n")
+    }
+    Assert-RuleFires "x86-desc-subsys" "HCD-DESC" {
+        param($t) $t.Replace("%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D",
+                             "%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D&SUBSYS_11001AF4")
+    }
+    Assert-RuleFires "x86-desc-section" "HCD-DESC" {
+        param($t) $t.Replace("%XRedHatQEMUxHCIDesc%=Xhci.Dev,PCI\VEN_1B36&DEV_000D", "%XRedHatQEMUxHCIDesc%=RootHub.Dev,PCI\VEN_1B36&DEV_000D")
+    }
+    Assert-RuleFires "x86-desc-classplus" "HCD-DESC" {
+        param($t) $t.Replace("%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`r`n", "%XhciDesc%=Xhci.Dev,PCI\CC_0C0330,PCI\VEN_1B36&DEV_000D`r`n")
+    }
+    Assert-RuleFires "x86-desc-nt6-classplus" "HCD-DESC" {
+        param($t) $t.Replace("%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n", "%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330,PCI\VEN_1B36&DEV_000D&SUBSYS_11001AF4`r`n")
+    }
+    Assert-RuleFires "amd64-desc-classplus" "HCD-DESC" {
+        param($t) $t.Replace("[XhciModels.NTamd64.6.0]`r`n%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n",
+                             "[XhciModels.NTamd64.6.0]`r`n%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330,PCI\VEN_1B36&DEV_000D`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-desc-idline" "HCD-DESC" {
+        param($t) $t.Replace("[XhciModels.NTamd64.6.0]`r`n%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n",
+                             "[XhciModels.NTamd64.6.0]`r`n%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n%XhciDesc%=Xhci.Dev6,PCI\VEN_1B36&DEV_000D`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
     # The 64-bit file must refuse the same two spellings. Both files carry the
     # rules, but the accepted cost of two INFs is that they can drift, and this
     # is the drift that would matter: the 64-bit half is the one whose targets
@@ -2506,7 +2561,12 @@ try {
     # differently named sections, but each section carries the same two lines -
     # the controller and the root hub - so the bodies compare whole. What must
     # match is what the engine binds on and the install section it binds to.
-    $idX86 = @(Get-InfSection -Path $prodInf -Name "XhciModels")
+    # The 32-bit file's own controller name lines (task 44.5; the gate's
+    # HCD-DESC: PCI\VEN_xxxx&DEV_xxxx alone, installing Xhci.Dev, under the
+    # product's name, for 98 SE's and ME's Properties title) are not
+    # compared: the 64-bit file has no 9x half and keeps the class line.
+    $idX86 = @(Get-InfSection -Path $prodInf -Name "XhciModels" |
+               Where-Object { $_ -cnotmatch '^\s*%[^%]+%\s*=\s*Xhci\.Dev\s*,\s*PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}\s*$' })
     $id64  = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64")
     Assert-True ($idX86.Count -eq 5 -and $id64.Count -eq 5) "INF-SYNC: each file's NT 5.x / 9x models section must have exactly five lines (controller, root hub, the two external-hub ids of task 33.4, and the composite parent of task 36.43)."
     Assert-True ((($idX86 -join "`n")) -eq (($id64 -join "`n"))) (

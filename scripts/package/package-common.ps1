@@ -1022,6 +1022,221 @@ function Get-TestSignCertificate {
     }
 }
 
+# --- the port switchover's two batch files (roadmap-hcd task 36.56) ------
+#
+# portsw-on.bat and portsw-off.bat, published in tools\portsw\, are run by
+# COMMAND.COM on Windows 98 SE and ME and by cmd.exe elsewhere (design
+# record 16 section 5a). Every line is held to a short list of the commands
+# both interpreters run, rather than searched for constructs one of them
+# lacks: a list of forbidden words misses the one nobody listed (four such
+# escapes were found that way). The only lines outside that list are the
+# split's: the OS test, and the cd /d that only cmd.exe reaches. Here since
+# task 44.1, so scripts\check-text.ps1 holds the files to it before any
+# build as test-package.ps1 does.
+function Get-PswBatchFaults {
+    param([string]$Text, [string]$Value)
+    $faults = @()
+    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+    if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+    $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+    if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+    if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+    $code = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+    }
+    $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
+    for ($k = 0; $k -lt $split.Count; $k++) {
+        if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
+            $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+        }
+    }
+    $osLine = -1
+    $ntLine = -1
+    if ($code.Count -gt 0) { $osLine = $code[0] }
+    if ($code.Count -gt 3) { $ntLine = $code[3] }
+    $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                 '^if not exist portsw\.vbs goto [a-z]+$', '^if errorlevel [0-9] goto [a-z]+$',
+                 '^if not "%OS%"=="Windows_NT" goto [a-z]+$', '^cscript //nologo portsw\.vbs (show|[0-9])$')
+    $labels = @{}
+    $gotos = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+        if ($i -ne $osLine -and $i -ne $ntLine) {
+            $ok = $false
+            foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+            if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+        }
+        if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
+            $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+        }
+        if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+        if ($line -cmatch '^:([a-z]+)$') {
+            if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+            $labels[$Matches[1]] = $i
+        }
+        if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+    }
+    foreach ($g in $gotos) {
+        if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+        if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+    }
+    $sets = @($lines | Where-Object { $_ -cmatch '^cscript //nologo portsw\.vbs [0-9]$' })
+    if ($sets.Count -ne 1 -or $sets[0] -cne ('cscript //nologo portsw.vbs ' + $Value)) {
+        $faults += "it does not set exactly one value, $Value (2 is a hand edit)"
+    }
+    $last = -1
+    foreach ($pin in @('if not exist portsw.vbs goto nofile', 'cscript //nologo portsw.vbs show',
+                       'if errorlevel 1 goto end', ('cscript //nologo portsw.vbs ' + $Value),
+                       'if errorlevel 3 goto elevate', 'if errorlevel 1 goto refused')) {
+        $at = [Array]::IndexOf($lines, $pin)
+        if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
+    }
+    foreach ($needle in @('Vista and 7: right-click it', 'choose Run as administrator')) {
+        if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
+    }
+    # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.6).
+    if ($Text.Contains('echo RESTART WINDOWS')) { $faults += "it echoes 'RESTART WINDOWS', which portsw.vbs already prints" }
+    return $faults
+}
+
+function Get-PlainScriptFaults {
+    # A script a 1998-era host reads as text (src\portsw.vbs, which Windows
+    # 98's Script Host runs): a byte outside printable ASCII, TAB, CR and LF,
+    # or a line not ended by CRLF. Read as bytes.
+    param([byte[]]$Bytes)
+    $faults = @()
+    if (@($Bytes | Where-Object { $_ -ge 0x80 -or ($_ -lt 0x20 -and $_ -ne 9 -and $_ -ne 10 -and $_ -ne 13) }).Count -gt 0) {
+        $faults += "a byte outside printable ASCII, TAB, CR and LF"
+    }
+    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($Bytes)
+    if ($text -match "(?<!`r)`n") { $faults += "a line not ended by CRLF" }
+    return $faults
+}
+
+# How src\silent.vbs and src\portsw.vbs know this driver's controller
+# (roadmap-usb4 task 44.75): by the DriverDesc of its class key, through one
+# function, IsXhciDesc, which both carry word for word. 3.3.0.0's INF gave
+# each controller it lists a name of its own (task 44.55), and the two
+# scripts, which took the plain name and the pre-3.2.0.0 one alone, found
+# none of those controllers. Get-ControllerDescFaults holds both scripts to
+# the pinned function and runs Test-XhciDesc, its rule in PowerShell, over
+# every name the two INFs give a controller (each must be taken), the names
+# earlier releases gave it, which a machine keeps until it is updated (each
+# must be taken), and every other device name of those INFs (each must be
+# refused). A change to the function changes the pin and Test-XhciDesc
+# together.
+$script:XhciDescFunction = @(
+    'Function IsXhciDesc(desc)',
+    '    Dim d, p',
+    '    d = LCase(desc)',
+    '    p = LCase(XHCI_DESC)',
+    '    IsXhciDesc = False',
+    '    If d = p Or d = LCase(XHCI_DESC_OLD) Then',
+    '        IsXhciDesc = True',
+    '    ElseIf Len(d) >= Len(p) + 4 Then',
+    '        If Left(d, Len(p) + 2) = p & " (" And Right(d, 1) = ")" Then IsXhciDesc = True',
+    '    End If',
+    'End Function'
+) -join "`r`n"
+$script:XhciDescEarlier = @(
+    @{ Name = "xHCI98 USB 3 Controller";                   Release = "3.2.0.0" },
+    @{ Name = "xHCI98 USB 3.x eXtensible Host Controller"; Release = "2.0.0.0 to 3.1.0.0" }
+)
+
+function Test-XhciDesc {
+    # IsXhciDesc, with XHCI_DESC as -Plain and XHCI_DESC_OLD as -Old.
+    param([string]$Desc, [string]$Plain, [string]$Old)
+    $d = $Desc.ToLowerInvariant()
+    $p = $Plain.ToLowerInvariant()
+    if ($d -ceq $p -or $d -ceq $Old.ToLowerInvariant()) { return $true }
+    return ($d.Length -ge ($p.Length + 4) -and
+            $d.StartsWith($p + " (", [System.StringComparison]::Ordinal) -and
+            $d.EndsWith(")", [System.StringComparison]::Ordinal))
+}
+
+function Get-InfModelNames {
+    # Any line of the form %key%=section,... counts, wherever it is and
+    # however indented, so a models line the check misread could only add a
+    # name to hold, never drop one; a key with no [Strings] entry is kept as
+    # $null so the caller can refuse it.
+    param([string]$Text)
+    $strings = @{}
+    $inStrings = $false
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '^\s*\[([^\]]+)\]') { $inStrings = ($Matches[1].Trim() -eq "Strings"); continue }
+        if ($inStrings -and $line -match '^\s*([A-Za-z0-9_.]+)\s*=\s*"([^"]*)"') { $strings[$Matches[1]] = $Matches[2] }
+    }
+    $models = @()
+    foreach ($m in [regex]::Matches($Text, '(?m)^[ \t]*%([A-Za-z0-9_.]+)%\s*=\s*([A-Za-z0-9_.]+)\s*,')) {
+        $key = $m.Groups[1].Value
+        $name = $null
+        if ($strings.ContainsKey($key)) { $name = $strings[$key] }
+        $models += [pscustomobject]@{ Key = $key; Name = $name; Section = $m.Groups[2].Value }
+    }
+    return $models
+}
+
+function Get-ControllerDescFaults {
+    # -Root is a tree, not this repository, so check-text.ps1's self-test can
+    # run it over mutated copies.
+    param([string]$Root)
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $faults = @()
+    $plain = $null
+    $old = $null
+    foreach ($rel in @("src\silent.vbs", "src\portsw.vbs")) {
+        $path = Join-Path $Root $rel
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $faults += "$rel is missing; the cut publishes it."; continue }
+        $text = $latin1.GetString([System.IO.File]::ReadAllBytes($path))
+        $c = @([regex]::Matches($text, '(?m)^Const XHCI_DESC = "([^"]*)"\r?$'))
+        $o = @([regex]::Matches($text, '(?m)^Const XHCI_DESC_OLD = "([^"]*)"\r?$'))
+        if ($c.Count -ne 1 -or $o.Count -ne 1) {
+            $faults += "${rel}: not one Const XHCI_DESC and one Const XHCI_DESC_OLD this check can read."
+            continue
+        }
+        if (-not $text.Contains($script:XhciDescFunction + "`r`n")) {
+            $faults += "${rel}: its IsXhciDesc is not package-common.ps1's `$script:XhciDescFunction word for word (change both, and Test-XhciDesc)."
+        }
+        if (@([regex]::Matches($text, '(?m)^\s*If IsXhciDesc\(desc\) Then\r?$')).Count -ne 1) {
+            $faults += "${rel}: FindKeys does not take a controller by one 'If IsXhciDesc(desc) Then'."
+        }
+        if ($null -eq $plain) {
+            $plain = $c[0].Groups[1].Value
+            $old = $o[0].Groups[1].Value
+        } elseif ($c[0].Groups[1].Value -cne $plain -or $o[0].Groups[1].Value -cne $old) {
+            $faults += "${rel}: its XHCI_DESC or XHCI_DESC_OLD differs from src\silent.vbs's."
+        }
+    }
+    if ($null -eq $plain) { return $faults }
+    foreach ($e in $script:XhciDescEarlier) {
+        if (-not (Test-XhciDesc -Desc $e.Name -Plain $plain -Old $old)) {
+            $faults += "the scripts' IsXhciDesc refuses '$($e.Name)', the controller's name in $($e.Release), which a machine keeps until it is updated."
+        }
+    }
+    foreach ($rel in @("src\xhci98.inf", "src\xhci98-amd64.inf")) {
+        $path = Join-Path $Root $rel
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $faults += "$rel is missing."; continue }
+        $models = @(Get-InfModelNames -Text $latin1.GetString([System.IO.File]::ReadAllBytes($path)))
+        $controllers = 0
+        foreach ($m in $models) {
+            if ($null -eq $m.Name) { $faults += "${rel}: models line %$($m.Key)% has no [Strings] entry this check can read."; continue }
+            $isController = ($m.Section -match '^Xhci\.Dev')
+            if ($isController) { $controllers++ }
+            $taken = Test-XhciDesc -Desc $m.Name -Plain $plain -Old $old
+            if ($isController -and -not $taken) {
+                $faults += "${rel}: the controller's name '$($m.Name)' (%$($m.Key)%) is refused by IsXhciDesc in src\silent.vbs and src\portsw.vbs, so they would find no controller of that model."
+            } elseif (-not $isController -and $taken) {
+                $faults += "${rel}: '$($m.Name)' (%$($m.Key)%, $($m.Section)) is not the controller and IsXhciDesc takes it."
+            }
+        }
+        if ($controllers -eq 0) { $faults += "${rel}: no models line installs Xhci.Dev*, so this check read no controller name." }
+    }
+    return $faults
+}
+
 # The field reports' batch files (roadmap-hcd task 38.1): QUALREP.BAT beside
 # XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries no split. A
 # Win spec (run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe from
@@ -1339,8 +1554,10 @@ function Get-SilentRegFaults {
 # What one package carries, every name at its root starting with "stor98" so
 # none can clash with this project's own files:
 #   x86    stor98.mpd (98 SE, ME) and stor98.sys (2000 to 7) from
-#          src\stor98\out\free\win9x and \x86, and inf\stor98-x86.inf as
-#          stor98.inf
+#          src\stor98\out\free\win9x and \x86, inf\stor98-x86.inf as
+#          stor98.inf, and inf\stor98-9x.inf as stor98w9.inf, the INF the
+#          installer stages on 98 SE and ME alone (design record 31
+#          section 5.2)
 #   amd64  stor98.sys from src\stor98\out\free\amd64, and inf\stor98-x64.inf
 #          as stor98.inf
 #   both   LICENSE, NOTICE and docs\package-readme.txt as stor98-LICENSE.txt,
@@ -1354,6 +1571,7 @@ $script:Stor98Images = @{
     "amd64" = @(@{ Source = "out\free\amd64\stor98.sys"; Dest = "stor98.sys"; Target = "amd64"; Stamp = "stor98" })
 }
 $script:Stor98Infs = @{ "x86" = "inf\stor98-x86.inf"; "amd64" = "inf\stor98-x64.inf" }
+$script:Stor98Inf9x = "inf\stor98-9x.inf"
 $script:Stor98RenamedTop = [ordered]@{
     "LICENSE"                  = "stor98-LICENSE.txt"
     "NOTICE"                   = "stor98-NOTICE.txt"
@@ -1407,6 +1625,7 @@ function Resolve-Stor98Build {
     foreach ($a in $Arch) {
         $list = @()
         $items = @($script:Stor98Images[$a]) + @(@{ Source = $script:Stor98Infs[$a]; Dest = "stor98.inf" })
+        if ($a -eq "x86") { $items += @{ Source = $script:Stor98Inf9x; Dest = "stor98w9.inf" } }
         foreach ($k in $script:Stor98RenamedTop.Keys) { $items += @{ Source = $k; Dest = $script:Stor98RenamedTop[$k] } }
         foreach ($it in $items) {
             $full = Join-Path $Root $it.Source
@@ -1717,13 +1936,22 @@ function Get-GitTreeState {
 # source-stamp.ps1 -List, the stamp's own list); a file of the kinds a build
 # reads (Get-BuildInputRules) in those files' directories, since a file added
 # or removed since is not in today's list; a file the host test suite
-# compiles (test\run-host-tests.cmd) and the same kinds in its directory;
+# compiles (test\run-host-tests.cmd), and every header those files and the
+# suite's own test\*.c include by a quoted #include, followed to its end;
 # test\ itself; the import gates' scripts\import-gate\; Stor98's sources,
 # build scripts and unit tests; and the scripts that build the binaries and
 # judge them for the record, with scripts\common.ps1, which they dot-source.
 # Over-covering is the safe side: a file wrongly
 # counted costs a rebuild, one wrongly left out lets the host suite's and the
-# import gates' old verdict stand for a tree they never read. What the
+# import gates' old verdict stand for a tree they never read. The host
+# suite's files count by name and by what they include, not by their
+# directory (roadmap-usb4 task 44.6; owner, 2026-10-24): xhciinst\ holds the
+# installer's window (xhciwiz.c, xhciwiz.rc) beside wiz_lay.c, which the
+# suite compiles, and a change to the window alone costs a rebuild of the
+# installer (xhciinst\build.cmd, which the cut's staleness check asks for),
+# not of the drivers. A file the suite starts to compile changes
+# test\run-host-tests.cmd, and a header newly included changes the file
+# that includes it, so neither escapes the rule. What the
 # record's commit also stood for - the INFs and the packaging scripts the
 # package is staged with - is read again by every run that stages: the INF
 # gates and the package's own gate run under -SignOnly too.
@@ -1768,12 +1996,29 @@ function Get-BuildInputRules {
     }
     $root = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\') + '\'
     $hostSuite = Join-Path $Repo "test\run-host-tests.cmd"
+    # The host suite's files by name, then every quoted #include of them
+    # and of test\*.c, resolved beside the including file, to its end.
+    $queue = New-Object System.Collections.Generic.Queue[string]
     foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText($hostSuite), '\.\.\\[^\s"]+')) {
         $full = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $Repo "test") $m.Value))
         if (-not $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-        $rel = $full.Substring($root.Length)
-        [void]$exact.Add($rel)
-        [void]$dirs.Add((Split-Path -Parent $rel))
+        $queue.Enqueue($full)
+    }
+    foreach ($t in @(Get-ChildItem -LiteralPath (Join-Path $Repo "test") -Filter "*.c" -File)) {
+        $queue.Enqueue($t.FullName)
+    }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    while ($queue.Count -gt 0) {
+        $full = $queue.Dequeue()
+        if (-not $seen.Add($full)) { continue }
+        [void]$exact.Add($full.Substring($root.Length))
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+        $here = Split-Path -Parent $full
+        foreach ($inc in [regex]::Matches([System.IO.File]::ReadAllText($full), '(?m)^\s*#\s*include\s+"([^"]+)"')) {
+            $f = [System.IO.Path]::GetFullPath((Join-Path $here ($inc.Groups[1].Value.Replace('/', '\'))))
+            if (-not $f.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            $queue.Enqueue($f)
+        }
     }
     foreach ($s in $script:BuildInputScripts) { [void]$exact.Add($s) }
     return @{ Exact = $exact; Dirs = $dirs; Prefixes = $script:BuildInputPrefixes }
@@ -1845,6 +2090,532 @@ function Get-GatedHeadAdvance {
                     $hits.Count, $r.Changed.Count, $r.Commits, $shown)
     }
     return $r
+}
+
+# ------------------------------------------------------------------
+# The cut's amd64 build taken from a second worktree (roadmap-usb4 task 44.31)
+# ------------------------------------------------------------------
+#
+# A cut's two gated builds run at once in two worktrees of this repository
+# at one commit: the x86 build in the cut's tree, the amd64 build in a
+# second (docs\contributing\build-and-test.md, "The cut's two builds at
+# once"). Neither the source stamps nor the gated record name a path, so
+# the second tree's amd64 output directories and records are copied into
+# the cut's tree whole, and every later step - make-release.ps1 -CheckOnly,
+# the cut with every gate, make-package.ps1 -SignOnly - reads them there as
+# if the cut's tree had built amd64 itself. Each record is held, before the
+# copy against the second tree's files and after it against the copies, to
+# the same comparison -SignOnly makes (Get-GatedManifestFault), and written
+# into the cut's tree last, byte for byte, so a failure part-way leaves no
+# record that admits anything. Like the record itself this protects against
+# a mismatch by accident, not against someone who forges one.
+$script:ImportArch = "amd64"
+$script:ImportObjDirs = [ordered]@{ "release" = "objfre"; "debug" = "objchk"; "qemu" = "objchk_qemu" }
+$script:ImportStor98Dir = "src\stor98\out\free\amd64"
+
+function Get-GatedImportDirs {
+    # The directories an amd64 build of one flavour writes and the packager
+    # reads, relative to a tree's root.
+    param([string]$Flavor)
+    $obj = $script:ImportObjDirs[$Flavor]
+    return @(("src\{0}\amd64" -f $obj), ("src\uas\{0}\amd64" -f $obj), ("src\cm\{0}\amd64" -f $obj))
+}
+
+function Get-GatedImportBinaries {
+    # Each binary an amd64 record of one flavour names, as a path under $Root
+    # (write-gated-manifest.ps1 -Finish's expected set for amd64).
+    param([string]$Root, [string]$Flavor)
+    $obj = $script:ImportObjDirs[$Flavor]
+    return @{
+        "xhci98.sys"  = (Join-Path $Root ("src\{0}\amd64\xhci98.sys" -f $obj))
+        "xhciuas.sys" = (Join-Path $Root ("src\uas\{0}\amd64\xhciuas.sys" -f $obj))
+        "xhcicm.sys"  = (Join-Path $Root ("src\cm\{0}\amd64\xhcicm.sys" -f $obj))
+        "stor98.sys"  = (Join-Path $Root ($script:ImportStor98Dir + "\stor98.sys"))
+    }
+}
+
+function Get-GitWorktreeIdentity {
+    # A tree's top directory and its repository's common git directory, both
+    # absolute and normalised, or $null when git cannot say.
+    param([string]$Path)
+    $top = ""
+    $common = ""
+    $topRc = -1
+    $commonRc = -1
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $top = (& git -C $Path rev-parse --path-format=absolute --show-toplevel 2>$null | Out-String).Trim()
+        $topRc = $LASTEXITCODE
+        $common = (& git -C $Path rev-parse --path-format=absolute --git-common-dir 2>$null | Out-String).Trim()
+        $commonRc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($topRc -ne 0 -or $commonRc -ne 0 -or $top -eq "" -or $common -eq "") { return $null }
+    return @{ Top = [System.IO.Path]::GetFullPath($top.Replace('/', '\')).TrimEnd('\')
+              Common = [System.IO.Path]::GetFullPath($common.Replace('/', '\')).TrimEnd('\') }
+}
+
+function Resolve-TreePath {
+    # $Path absolute, a relative one taken against PowerShell's location as
+    # the caller sees it (not the process's working directory, which
+    # Set-Location does not move), with no trailing separator.
+    param([string]$Path)
+    if (Test-Path -LiteralPath $Path) { $Path = (Resolve-Path -LiteralPath $Path).ProviderPath }
+    elseif (-not [System.IO.Path]::IsPathRooted($Path)) { $Path = Join-Path $PWD.ProviderPath $Path }
+    return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+}
+
+function Get-GatedImportTreeFault {
+    # "" when $From is the top of another worktree of $Repo's repository,
+    # else why not. "Another" is read from the files, not the names: a file
+    # written into $Repo's out\ must not appear in $From's, which catches a
+    # junction to $Repo or another spelling of its path.
+    param([string]$Repo, [string]$From)
+    if (-not (Test-Path -LiteralPath $From -PathType Container)) { return "there is no directory '$From'" }
+    $a = Get-GitWorktreeIdentity -Path $Repo
+    $b = Get-GitWorktreeIdentity -Path $From
+    if ($null -eq $a) { return "git could not say what tree '$Repo' is" }
+    if ($null -eq $b) { return "'$From' is not a git worktree" }
+    if (-not [string]::Equals($b.Top, (Resolve-TreePath $From), [System.StringComparison]::OrdinalIgnoreCase)) {
+        return "'$From' is not the top of a worktree (that is '$($b.Top)')"
+    }
+    if ([string]::Equals($a.Top, $b.Top, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return "'$From' is this tree itself"
+    }
+    if (-not [string]::Equals($a.Common, $b.Common, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return "'$From' is a worktree of another repository ($($b.Common), not $($a.Common))"
+    }
+    # out\ holds the probe, the locks and the records this deletes and
+    # writes, so in neither tree may it be, or lie under, a link.
+    foreach ($t in @($Repo, $From)) {
+        $rp = Get-ReparseOnPath -Root $t -Rel "out"
+        if ($rp -ne "") { return "'$rp' is a junction or a symbolic link, and the import writes and deletes in a tree's own out\ only" }
+    }
+    Ensure-Directory (Join-Path $Repo "out")
+    $probe = "import-probe-" + [System.IO.Path]::GetRandomFileName() + ".tmp"
+    $mine = Join-Path $Repo ("out\" + $probe)
+    [System.IO.File]::WriteAllText($mine, "")
+    try {
+        if (Test-Path -LiteralPath (Join-Path $From ("out\" + $probe))) { return "'$From' is this tree itself, under another name" }
+    } finally {
+        Remove-Item -LiteralPath $mine -Force -ErrorAction SilentlyContinue
+    }
+    return ""
+}
+
+function Get-ReparseOnPath {
+    # The first existing directory from $Root down to $Root\$Rel (both
+    # included) that is a junction or a symbolic link, or "" when none is.
+    param([string]$Root, [string]$Rel)
+    $p = $Root
+    $parts = @("") + @($Rel.Split('\') | Where-Object { $_ -ne "" })
+    foreach ($part in $parts) {
+        if ($part -ne "") { $p = Join-Path $p $part }
+        if (-not (Test-Path -LiteralPath $p)) { break }
+        $item = Get-Item -LiteralPath $p -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $p }
+    }
+    return ""
+}
+
+function Get-ReparseUnder {
+    # The first file or directory under $Dir that is a junction or a
+    # symbolic link, or "" when none is; the walk never enters one. $Dir
+    # itself is Get-ReparseOnPath's. "" when $Dir is not there.
+    param([string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return "" }
+    $stack = New-Object System.Collections.Stack
+    $stack.Push((New-Object System.IO.DirectoryInfo $Dir))
+    while ($stack.Count -gt 0) {
+        $d = $stack.Pop()
+        foreach ($e in $d.GetFileSystemInfos()) {
+            if (($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $e.FullName }
+            if ($e -is [System.IO.DirectoryInfo]) { $stack.Push($e) }
+        }
+    }
+    return ""
+}
+
+function Get-GatedRunFault {
+    # "" when no build-driver.cmd run of $Arch holds $Root's lock or has a
+    # record pending there, else what does.
+    param([string]$Root, [string]$Arch, [string[]]$Flavor)
+    $lock = Join-Path $Root ("out\gated-{0}.lock" -f $Arch)
+    if (Test-Path -LiteralPath $lock) {
+        return "'$lock' is held: a build-driver.cmd $Arch run or an import is in progress there, or one was stopped and left it (delete it when none is running)"
+    }
+    foreach ($f in $Flavor) {
+        $pending = [System.IO.Path]::ChangeExtension((Get-GatedManifestPath -Repo $Root -Arch $Arch -Flavor $f), ".pending")
+        if (Test-Path -LiteralPath $pending) { return "'$pending' is there: the $f $Arch build in that tree did not finish" }
+    }
+    return ""
+}
+
+function Enter-GatedLock {
+    # Takes $Root's out\gated-<arch>.lock as build-driver.cmd does, with
+    # mkdir, which fails when the directory is there; $true when taken. Its
+    # run.txt names $Owner, not a build-driver.cmd run's token, so
+    # write-gated-manifest.ps1 refuses to record anything under it.
+    # -BeforeMarker is the self-tests', run between the two.
+    param([string]$Root, [string]$Arch, [string]$Owner = "import", [scriptblock]$BeforeMarker = $null)
+    Ensure-Directory (Join-Path $Root "out")
+    $lock = Join-Path $Root ("out\gated-{0}.lock" -f $Arch)
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & cmd.exe /d /c ('mkdir "{0}" 2>nul' -f $lock) | Out-Null
+        $rc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($rc -ne 0) { return $false }
+    # The lock is this caller's from the mkdir on; if its marker cannot be
+    # written it is given up here, since no caller has it to drop yet.
+    try {
+        if ($null -ne $BeforeMarker) { & $BeforeMarker }
+        [System.IO.File]::WriteAllText((Join-Path $lock "run.txt"), ($Owner + "`r`n"))
+    } catch {
+        $why = $_.Exception.Message
+        Remove-Item -LiteralPath $lock -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $lock) {
+            throw "'$lock' was taken and its run.txt could not be written ($why), and the lock could not be removed again: delete it by hand."
+        }
+        throw "'$lock' was taken and its run.txt could not be written ($why); the lock was removed again."
+    }
+    return $true
+}
+
+function Import-GatedBuild {
+    # Copies the amd64 build of each flavour in $Flavor from the worktree
+    # $From into the same directories of the tree $Repo, with its records,
+    # under the rules above. With no -Flavor: release and debug, and qemu
+    # where $From has its record. Throws with every reason when it refuses;
+    # returns one object per flavour (Flavor, Commit, Time, Advance, Sha256,
+    # Record). -RepoLockHeld: the caller (cut-builds.ps1) already holds
+    # $Repo's amd64 lock, taken with Enter-GatedLock -Owner cut-builds, and
+    # keeps it; it is checked to be there and is not dropped here. -Rules
+    # -AfterCopy and -BeforeWrite are the self-tests': the build-input
+    # rules for a fixture repository, a step run between the copy and its
+    # check, and one run with each flavour before its record is written.
+    param([string]$Repo, [string]$From, [string[]]$Flavor = @(), [bool]$NoTargetEvidence = $false,
+          [switch]$RepoLockHeld, $Rules = $null, [scriptblock]$AfterCopy = $null, [scriptblock]$BeforeWrite = $null)
+    $arch = $script:ImportArch
+    $Repo = Resolve-TreePath $Repo
+    $From = Resolve-TreePath $From
+    $why = Get-GatedImportTreeFault -Repo $Repo -From $From
+    if ($why -ne "") { throw "the amd64 build cannot be imported: $why." }
+    if ($Flavor.Count -eq 0) {
+        $Flavor = @("release", "debug")
+        if (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $From -Arch $arch -Flavor "qemu") -PathType Leaf) { $Flavor += "qemu" }
+    }
+    foreach ($f in $Flavor) {
+        if (-not $script:ImportObjDirs.Contains($f)) { throw "'$f' is not a flavour (release, debug or qemu)." }
+    }
+    $dirs = @()
+    foreach ($f in $Flavor) { $dirs += Get-GatedImportDirs -Flavor $f }
+    $dirs += $script:ImportStor98Dir
+    foreach ($rel in $dirs) {
+        foreach ($t in @($From, $Repo)) {
+            $rp = Get-ReparseOnPath -Root $t -Rel $rel
+            if ($rp -eq "") { $rp = Get-ReparseUnder -Dir (Join-Path $t $rel) }
+            if ($rp -ne "") { throw "the amd64 build cannot be imported: '$rp' is a junction or a symbolic link, and the import deletes and copies '$rel' only in a tree's own directories." }
+        }
+    }
+    $held = @()
+    try {
+        $toTake = @($From)
+        if ($RepoLockHeld) {
+            $mine = Join-Path $Repo ("out\gated-{0}.lock\run.txt" -f $arch)
+            if (-not (Test-Path -LiteralPath $mine -PathType Leaf) -or
+                [System.IO.File]::ReadAllText($mine).Trim() -ne "cut-builds") {
+                throw "the amd64 build cannot be imported: -RepoLockHeld, and '$Repo' holds no amd64 lock of cut-builds.ps1's."
+            }
+        } else {
+            $toTake += $Repo
+        }
+        foreach ($t in $toTake) {
+            if (-not (Enter-GatedLock -Root $t -Arch $arch)) {
+                throw ("the amd64 build cannot be imported: {0}." -f (Get-GatedRunFault -Root $t -Arch $arch -Flavor @()))
+            }
+            $held += Join-Path $t ("out\gated-{0}.lock" -f $arch)
+        }
+        # Every flavour's, whichever are imported: a stopped qemu build
+        # leaves its .pending and no record.
+        foreach ($f in $script:ImportObjDirs.Keys) {
+            $pending = [System.IO.Path]::ChangeExtension((Get-GatedManifestPath -Repo $From -Arch $arch -Flavor $f), ".pending")
+            if (Test-Path -LiteralPath $pending) { throw "the amd64 build cannot be imported: '$pending' is there: the $f amd64 build in that tree did not finish." }
+        }
+        $tree = Get-GitTreeState -Repo $Repo
+        if ($tree.Head -eq "none") { throw "the amd64 build cannot be imported: git could not say what '$Repo' is at." }
+        if ($tree.Dirty) {
+            throw "the amd64 build cannot be imported: '$Repo' has uncommitted changes, so no record could be admitted there (commit them first)."
+        }
+
+        # Every record read once, as bytes, and judged against $From's files.
+        $records = @()
+        $faults = @()
+        $advances = @{}
+        foreach ($f in $Flavor) {
+            $src = Get-GatedManifestPath -Repo $From -Arch $arch -Flavor $f
+            if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+                $faults += ("{0}: no gated build record at '{1}' (scripts\build-driver.cmd {0} -amd64 writes it there)" -f $f, $src)
+                continue
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($src)
+            try {
+                $m = ConvertFrom-GatedManifest -Text ([System.Text.Encoding]::ASCII.GetString($bytes))
+            } catch {
+                $faults += ("{0}: '{1}' is not a gated build record this script can read: {2}" -f $f, $src, $_.Exception.Message)
+                continue
+            }
+            $advance = $null
+            if ($m.Commit -ne $tree.Head.ToLowerInvariant()) {
+                if (-not $advances.ContainsKey($m.Commit)) {
+                    $advances[$m.Commit] = Get-GatedHeadAdvance -Repo $Repo -From $m.Commit -To $tree.Head -Rules $Rules
+                }
+                $advance = $advances[$m.Commit]
+            }
+            $bins = Get-GatedImportBinaries -Root $From -Flavor $f
+            $extra = @($m.Sha256.Keys | Where-Object { -not $bins.ContainsKey($_) })
+            if ($extra.Count -ne 0) {
+                $faults += ("{0}: '{1}' records {2}, which an amd64 build does not make" -f $f, $src, ($extra -join ", "))
+                continue
+            }
+            $why = Get-GatedManifestFault -Manifest $m -Arch $arch -Flavor $f -Binaries $bins `
+                -Head $tree.Head -Dirty $false -NoTargetEvidence $NoTargetEvidence -Advance $advance
+            if ($why -ne "") {
+                $faults += ("{0}: '{1}' does not admit its build: {2}" -f $f, $src, $why)
+                continue
+            }
+            $records += [pscustomobject]@{ Flavor = $f; Bytes = $bytes; Manifest = $m; Advance = $advance }
+        }
+        if ($faults.Count -ne 0) {
+            throw ("the amd64 build in '{0}' cannot be imported, and nothing in '{1}' was changed:`n  {2}" -f $From, $Repo, ($faults -join "`n  "))
+        }
+
+        # Every amd64 record in $Repo goes first, whichever flavours are
+        # imported: Stor98's directory, replaced below, is in each of them.
+        foreach ($f in $script:ImportObjDirs.Keys) {
+            $dst = Get-GatedManifestPath -Repo $Repo -Arch $arch -Flavor $f
+            if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
+        }
+        foreach ($rel in $dirs) {
+            $s = Join-Path $From $rel
+            $d = Join-Path $Repo $rel
+            if (-not (Test-Path -LiteralPath $s -PathType Container)) { throw "the amd64 build in '$From' has no '$rel'; no amd64 record was written." }
+            if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+            Ensure-Directory (Split-Path -Parent $d)
+            Copy-Item -LiteralPath $s -Destination $d -Recurse -Force
+        }
+        if ($null -ne $AfterCopy) { & $AfterCopy }
+
+        # The copies, held to the records again, against this tree as it is now.
+        $now = Get-GitTreeState -Repo $Repo
+        $faults = @()
+        foreach ($r in $records) {
+            $why = Get-GatedManifestFault -Manifest $r.Manifest -Arch $arch -Flavor $r.Flavor `
+                -Binaries (Get-GatedImportBinaries -Root $Repo -Flavor $r.Flavor) `
+                -Head $now.Head -Dirty $now.Dirty -NoTargetEvidence $NoTargetEvidence -Advance $r.Advance
+            if ($why -ne "") { $faults += ("{0}: {1}" -f $r.Flavor, $why) }
+        }
+        if ($faults.Count -ne 0) {
+            throw ("the amd64 build was copied from '{0}', and the copies in '{1}' are not what its records admitted; no amd64 record was written:`n  {2}" -f $From, $Repo, ($faults -join "`n  "))
+        }
+        $out = @()
+        $written = @()
+        try {
+            foreach ($r in $records) {
+                $dst = Get-GatedManifestPath -Repo $Repo -Arch $arch -Flavor $r.Flavor
+                if ($null -ne $BeforeWrite) { & $BeforeWrite $r.Flavor }
+                $tmp = $dst + ".tmp"
+                [System.IO.File]::WriteAllBytes($tmp, $r.Bytes)
+                Move-Item -LiteralPath $tmp -Destination $dst -Force
+                $written += $dst
+                $out += [pscustomobject]@{ Flavor = $r.Flavor; Commit = $r.Manifest.Commit; Time = $r.Manifest.Time
+                                           Advance = $r.Advance; Sha256 = $r.Manifest.Sha256; Record = $dst }
+            }
+        } catch {
+            foreach ($w in $written) { Remove-Item -LiteralPath $w -Force -ErrorAction SilentlyContinue }
+            throw ("writing the amd64 records into '{0}' failed, and every one written was deleted again: {1}" -f $Repo, $_.Exception.Message)
+        }
+        return $out
+    } finally {
+        foreach ($l in $held) { Remove-Item -LiteralPath $l -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Start-CutBuild {
+    # One build in $Tree, its output in out\cut-build-<arch>.log and TEMP and
+    # TMP its own out\tmp-<arch>\; returns the build (Arch, Process, Log).
+    # $Command is the cmd.exe command line (Get-CutBuildCommand's, or the
+    # self-tests' stand-in). The process is added to $Started before
+    # anything else can fail, so the caller's cleanup waits for it.
+    param([string]$Tree, [string]$Arch, [string]$Command, [System.Collections.ArrayList]$Started)
+    $tmp = Join-Path $Tree ("out\tmp-" + $Arch)
+    Ensure-Directory $tmp
+    $log = Join-Path $Tree ("out\cut-build-" + $Arch + ".log")
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $psi.Arguments = ('/d /c "{0} > "{1}" 2>&1"' -f $Command, $log)
+    $psi.WorkingDirectory = $Tree
+    $psi.UseShellExecute = $false
+    $psi.EnvironmentVariables["TEMP"] = $tmp
+    $psi.EnvironmentVariables["TMP"] = $tmp
+    $p = [System.Diagnostics.Process]::Start($psi)
+    [void]$Started.Add($p)
+    Write-Host ("  {0}: {1} in {2} (PID {3}), log {4}" -f $Arch, $Command, $Tree, $p.Id, $log)
+    return [pscustomobject]@{ Arch = $Arch; Process = $p; Log = $log }
+}
+
+function Get-CutBuildCommand {
+    # The build each tree runs: build-driver.cmd all, or all -amd64.
+    param([string]$Tree, [string]$Arch)
+    $c = '"{0}" all' -f (Join-Path $Tree "scripts\build-driver.cmd")
+    if ($Arch -eq "amd64") { $c += " -amd64" }
+    return $c
+}
+
+function Wait-CutBuild {
+    # Waits for one build; its exit code and its own run time, from its
+    # process's start to its end (not to when this caller got to it).
+    param($Build)
+    $Build.Process.WaitForExit()
+    $Build | Add-Member -NotePropertyName ExitCode -NotePropertyValue $Build.Process.ExitCode
+    $Build | Add-Member -NotePropertyName Elapsed -NotePropertyValue ($Build.Process.ExitTime - $Build.Process.StartTime)
+    return $Build
+}
+
+function Format-CutSpan {
+    param([TimeSpan]$Span)
+    return ("{0}:{1:00}:{2:00}" -f [int][Math]::Floor($Span.TotalHours), $Span.Minutes, $Span.Seconds)
+}
+
+function Invoke-CutBuilds {
+    # scripts\package\cut-builds.ps1's work (its help, and build-and-test.md,
+    # "The cut's two builds at once"): the checks of the two trees, the two
+    # reservation locks, the two builds at once (or -Serial) and the import,
+    # or the import alone (-ImportOnly). Throws when it refuses or a build
+    # fails; returns Builds (Arch, ExitCode, Elapsed, Log), Wall and
+    # Imported. Its locks are dropped only once every build it started has
+    # ended. -CommandFor (a scriptblock of Tree and Arch giving a cmd.exe
+    # command line), -BeforeStart (run with Arch before each start),
+    # -NoToolchainCheck and -Rules are the self-tests'.
+    param([string]$Repo, [string]$X64Tree, [switch]$Serial, [switch]$ImportOnly, [switch]$NoTargetEvidence,
+          [scriptblock]$CommandFor = $null, [scriptblock]$BeforeStart = $null, [switch]$NoToolchainCheck,
+          $Rules = $null)
+    if ($Serial -and $ImportOnly) { throw "-Serial and -ImportOnly contradict each other: -ImportOnly builds nothing." }
+    if ($NoTargetEvidence -and -not $ImportOnly) {
+        throw "-NoTargetEvidence goes with -ImportOnly alone: the x86 build a cut takes needs the target evidence (the helper's import gate), so build without it, or build by hand and import with -ImportOnly."
+    }
+    if (-not (Test-Path -LiteralPath $X64Tree -PathType Container)) { throw "-X64Tree: there is no directory '$X64Tree'." }
+    $Repo = Resolve-TreePath $Repo
+    $X64Tree = Resolve-TreePath $X64Tree
+    $why = Get-GatedImportTreeFault -Repo $Repo -From $X64Tree
+    if ($why -ne "") { throw "-X64Tree: $why." }
+    if ($null -eq $CommandFor) { $CommandFor = { param($Tree, $Arch) Get-CutBuildCommand -Tree $Tree -Arch $Arch } }
+
+    $reserved = @()
+    $started = New-Object System.Collections.ArrayList
+    $result = [pscustomobject]@{ Builds = @(); Wall = [TimeSpan]::Zero; Imported = @() }
+    try {
+        if (-not $ImportOnly) {
+            Write-Step "the two trees, before any build"
+            $a = Get-GitTreeState -Repo $Repo
+            $b = Get-GitTreeState -Repo $X64Tree
+            $faults = @()
+            if ($a.Head -eq "none" -or $b.Head -eq "none") { $faults += "git could not say what one of the trees is at" }
+            if ($a.Dirty) { $faults += "'$Repo' has uncommitted changes" }
+            if ($b.Dirty) { $faults += "'$X64Tree' has uncommitted changes" }
+            if ($a.Head -ne $b.Head) {
+                $faults += ("'{0}' is at {1} and '{2}' at {3}: move it with git -C ""{2}"" checkout --detach {1}" -f $Repo, $a.Head, $X64Tree, $b.Head)
+            }
+            # Either architecture's lock in either tree: a build of the other
+            # architecture in the same tree is the collision two trees avoid.
+            foreach ($t in @($Repo, $X64Tree)) {
+                foreach ($ar in @("x86", "amd64")) {
+                    $w = Get-GatedRunFault -Root $t -Arch $ar -Flavor @($script:ImportObjDirs.Keys)
+                    if ($w -ne "") { $faults += $w }
+                }
+            }
+            if (-not $NoToolchainCheck) {
+                foreach ($t in @($Repo, $X64Tree)) {
+                    if (-not (Test-Path -LiteralPath (Join-Path $t "tools\WinDDK71\bin\setenv.bat") -PathType Leaf)) {
+                        $faults += "'$t' has no tools\WinDDK71 (junction the toolchain into its tools\)"
+                    }
+                }
+            }
+            if ($faults.Count -ne 0) { throw ("the builds were not started:`n  " + ($faults -join "`n  ")) }
+            Write-Ok ("both trees clean at {0}" -f $a.Head)
+
+            # The two locks the builds do not take, held until every build
+            # started here has ended: no build of the other architecture can
+            # start beside either.
+            foreach ($c in @(@{ Tree = $Repo; Arch = "amd64" }, @{ Tree = $X64Tree; Arch = "x86" })) {
+                if (-not (Enter-GatedLock -Root $c.Tree -Arch $c.Arch -Owner "cut-builds")) {
+                    throw ("the builds were not started: {0}." -f (Get-GatedRunFault -Root $c.Tree -Arch $c.Arch -Flavor @()))
+                }
+                $reserved += Join-Path $c.Tree ("out\gated-{0}.lock" -f $c.Arch)
+            }
+
+            $wall = [System.Diagnostics.Stopwatch]::StartNew()
+            $plan = @(@{ Tree = $Repo; Arch = "x86" }, @{ Tree = $X64Tree; Arch = "amd64" })
+            $done = @()
+            if ($Serial) {
+                Write-Step "the two builds, one after the other (-Serial)"
+                foreach ($s in $plan) {
+                    if ($null -ne $BeforeStart) { & $BeforeStart $s.Arch }
+                    $done += Wait-CutBuild (Start-CutBuild -Tree $s.Tree -Arch $s.Arch -Command (& $CommandFor $s.Tree $s.Arch) -Started $started)
+                }
+            } else {
+                Write-Step "the two builds, at once"
+                $running = @()
+                foreach ($s in $plan) {
+                    if ($null -ne $BeforeStart) { & $BeforeStart $s.Arch }
+                    $running += Start-CutBuild -Tree $s.Tree -Arch $s.Arch -Command (& $CommandFor $s.Tree $s.Arch) -Started $started
+                }
+                foreach ($r in $running) { $done += Wait-CutBuild $r }
+            }
+            $wall.Stop()
+            $result.Builds = $done
+            $result.Wall = $wall.Elapsed
+            foreach ($d in $done) {
+                $line = "{0}: exit {1} after {2} ({3})" -f $d.Arch, $d.ExitCode, (Format-CutSpan $d.Elapsed), $d.Log
+                if ($d.ExitCode -eq 0) { Write-Ok $line } else { Write-Err $line }
+            }
+            Write-Host ("  both: {0} from the first start to the last end" -f (Format-CutSpan $wall.Elapsed))
+            $failed = @($done | Where-Object { $_.ExitCode -ne 0 })
+            if ($failed.Count -ne 0) {
+                throw ("the {0} build failed; nothing was imported. Its log says why." -f (($failed | ForEach-Object { $_.Arch }) -join " and "))
+            }
+        }
+
+        Write-Step ("the amd64 build of {0}, into this tree" -f $X64Tree)
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $result.Imported = @(Import-GatedBuild -Repo $Repo -From $X64Tree -NoTargetEvidence ([bool]$NoTargetEvidence) `
+                                               -RepoLockHeld:(-not $ImportOnly) -Rules $Rules)
+        $watch.Stop()
+        foreach ($r in $result.Imported) {
+            $at = if ($null -eq $r.Advance) { "" } else { (", HEAD {0} commit(s) past it with no build input changed" -f $r.Advance.Commits) }
+            Write-Ok ("{0}: the build of commit {1} at {2}{3}, now {4}" -f $r.Flavor, $r.Commit.Substring(0, 8), $r.Time, $at, $r.Record)
+            foreach ($n in ($r.Sha256.Keys | Sort-Object)) { Write-Host ("  {0,-13} {1}" -f $n, $r.Sha256[$n]) }
+        }
+        Write-Host ("  imported in {0}" -f (Format-CutSpan $watch.Elapsed))
+        return $result
+    } finally {
+        # The reservations go only once every build started here has ended:
+        # a build still running beside a dropped lock is the collision they
+        # exist to prevent. If this wait is itself interrupted, they stay,
+        # to be deleted by hand once no build runs.
+        foreach ($p in $started) {
+            if (-not $p.HasExited) {
+                Write-Warn ("waiting for the build (PID {0}) to end before the locks this run holds are dropped" -f $p.Id)
+                $p.WaitForExit()
+            }
+        }
+        foreach ($l in $reserved) { Remove-Item -LiteralPath $l -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # --- NUSB 3.3's 98 SE storage files, from the driver pack (task 43.3) -----
@@ -2162,15 +2933,15 @@ function ConvertFrom-DriverPackRecord {
 # runs, holds the tracked readmes the cut reads to the same function.
 #
 # The tool readmes the cut reads, by the tool's directory under the
-# repository: make-release.ps1 takes its default -CleanToolDir,
-# -MarkToolDir, -InstallToolDir and -TrayToolDir from this table and reads
-# README.TXT in each, and the gate reads all five, xhciperf's included
-# (a developer tool since 3.2.0.0, not shipped: task 43.50). A sixth
-# tool's readme is added here, or the gate does not see it.
+# repository: make-release.ps1 takes its default -MarkToolDir,
+# -InstallToolDir and -TrayToolDir from this table and reads README.TXT in
+# each, and the gate reads all four, xhciperf's included (a developer tool
+# since 3.2.0.0, not shipped: task 43.50). XHCICLN's was the fifth until the
+# tool was dropped in 3.3.0.0 (task 44.82). A further tool's readme is added
+# here, or the gate does not see it.
 $script:PlainTextColumns = 78
 $script:ToolReadmeName = "README.TXT"
 $script:ToolReadmeDirs = [ordered]@{
-    Clean   = "xhcicln"
     Mark    = "xhcimark"
     Install = "xhciinst"
     Tray    = "xhcitr"
@@ -2220,6 +2991,79 @@ function Read-ToolReadmeLines {
         $lines = @($lines | Select-Object -First ($lines.Count - 1))
     }
     return $lines
+}
+
+# --- two claims no published text may make (roadmap Phase 20, F7) ----------
+#
+# "WINDOWS 98 ONLY" described DisableSelectiveSuspend as a Windows 98
+# setting after 1.0.1.0 had made the NT path write it too, and the shipped
+# readme contradicted itself; "redistributes nothing" is the sentence
+# AGENTS.md forbids, since the tools carry statically linked runtimes.
+# test-package.ps1 holds make-release.ps1's source to the list and
+# scripts\check-text.ps1 every text the cut publishes (task 44.1), each
+# case-insensitively.
+$script:ReadmeForbiddenPhrases = @("WINDOWS 98 ONLY", "redistributes nothing")
+
+# --- the changelog entry a cut requires (task 44.1) --------------------------
+#
+# make-release.ps1 refuses a cut whose version has no single releases\
+# history.md heading dated as the INF's DriverVer; scripts\check-text.ps1
+# holds the tree to the same function before any build. The messages are
+# the cut's.
+
+function Get-ChangelogEntryFaults {
+    # The faults of history.md's entry for -Version against -ReleaseDate
+    # (yyyy-mm-dd, the INF's): none, or the one the cut stops on. -Label
+    # names the file in the messages.
+    param([string[]]$Lines, [string]$Version, [string]$ReleaseDate, [string]$Label)
+
+    if ($null -eq $Lines) { $Lines = @() }
+    $versionPattern = '^##\s+' + [regex]::Escape($Version) + '(\s|$)'
+    $headings = @($Lines | Where-Object { $_ -match $versionPattern })
+    if ($headings.Count -eq 0) {
+        return @(@"
+'$Label' has no entry for $Version.
+Add one - a '## $Version - $ReleaseDate' heading and what changed for the
+person installing it - then cut the release again. A published version nobody
+wrote a changelog entry for is one no user can tell apart from its predecessor.
+"@)
+    # **Exactly one, and dated, and dated the same as the INF.** All three parts
+    # were missing until a later review. The heading match alone accepted a bare
+    # "## 0.0.0.2" with no date at all, so the cross-check below silently did
+    # nothing; and a second heading for the same version would have made "the"
+    # entry ambiguous. The INF is the authority for the version everywhere else
+    # in the cut, so it is the authority for the date - the readme prints
+    # that date beside this very entry, and the two disagreeing is what this
+    # replaced.
+    }
+    if ($headings.Count -gt 1) {
+        return @("'$Label' has $($headings.Count) headings for $Version; a version has one changelog entry.")
+    }
+    $headingDate = [datetime]::MinValue
+    if ($headings[0] -match '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\S+)\s*$' -and
+        -not [datetime]::TryParseExact($Matches[1], 'yyyy-MM-dd',
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::None, [ref]$headingDate)) {
+        return @("'$Label' dates $Version as '$($Matches[1])', which is not a calendar date in yyyy-mm-dd form.")
+    }
+    if ($headings[0] -notmatch '^##\s+' + [regex]::Escape($Version) + '\s+-\s+(\d{4}-\d{2}-\d{2})\s*$') {
+        return @(@"
+'$Label' heading for $Version is not a dated entry:
+  $($headings[0])
+Write it as '## $Version - $ReleaseDate'. The generated readme.txt prints the
+release date beside this entry, so an undated or differently shaped heading
+leaves that date unchecked - which is how a release came to date itself two
+different ways in one file.
+"@)
+    }
+    if ($Matches[1] -ne $ReleaseDate) {
+        return @(@"
+releases\history.md dates $Version as $($Matches[1]), but src\xhci98.inf's
+DriverVer dates it $ReleaseDate. A release has one date; the generated
+readme.txt prints it beside the history entry, so the two cannot disagree.
+"@)
+    }
+    return @()
 }
 
 # --- the release history the top-level readme embeds (task 43.61) -----------
@@ -2348,11 +3192,16 @@ $script:NonFreeFolder = "USBDRV\NONFREE"
 $script:NonFreePrefix = "non-free"
 $script:NonFreeExtras = @("NOTICE.md", "README.md", "STAGE.TXT")
 $script:NonFreePin = [pscustomobject]@{
-    Tag        = "v1.0.0"
-    Commit     = "3b558c04a462a643abec84b31e5611c866e3a72d"
+    Tag        = "v1.1.0"
+    Commit     = "565d11b40fbeb53f5a576c01b5ceba331892c610"
     # The SHA-256 of the pack's own SHA256.TXT blob at that commit.
-    PackSums   = "D48C086301074793D6F0ED26798425EBD70345C977F11FADE9C47531956D070E"
+    PackSums   = "2208E5B4F68DE00938C20DFE6B3520DA22A1AD3CDF7489BAED01F3AF4FDE8D87"
 }
+# The folders of non-free/ that download 3 leaves out, and their STAGE.TXT
+# lines with them. The owner, 2026-10-28: the Wi-Fi drivers stay in
+# usb-wdm-nonfree and its own release, where people get them; download 3
+# keeps the Ethernet, HID and serial drivers.
+$script:NonFreeExcluded = @("wifi")
 $script:WdmFreeFolder = "USBDRV\FREE"
 $script:WdmFreePrefix = "free"
 $script:WdmFreeExtras = @("LICENSE", "NOTICE.md", "STAGE.TXT")
@@ -2514,7 +3363,10 @@ function Export-NonFreeSet {
     # commit, the pack's SHA256.TXT there the pinned bytes, and non-free/
     # exactly the files it lists under non-free/, each a plain file with
     # its listed bytes and a path the installer accepts; STAGE.TXT must
-    # read and put every INF of non-free/ on exactly one line.
+    # read and put every INF of non-free/ on exactly one line. The folders
+    # of $script:NonFreeExcluded are held to the list too but not written,
+    # and their STAGE.TXT lines are left out of the folder's STAGE.TXT
+    # (every other line kept as it is).
     param([string]$Root, $Pin = $null, [string]$Dest)
     if ($null -eq $Pin) { $Pin = $script:NonFreePin }
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "no checkout at '$Root' for the download's driver set: clone it there, make a junction there to a clone, or name one." }
@@ -2541,25 +3393,78 @@ function Export-NonFreeSet {
     }
     $files = [ordered]@{}
     $infs = @()
+    $allInfs = @()
     foreach ($p in $want.Keys) {
         if ($tree[$p] -ne "100644 blob") { throw "usb-wdm-nonfree $($Pin.Tag)'s $p is not a plain file ($($tree[$p]))." }
+        $isInf = $p.EndsWith(".inf", [System.StringComparison]::OrdinalIgnoreCase)
+        if ($isInf) { $allInfs += $p }
+        if (Test-NonFreeExcluded -Path $p) {
+            # Held to its listed bytes too, then not written.
+            $xf = Join-Path $Dest ".excluded-blob"
+            $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $p -OutFile $xf
+            Remove-Item -LiteralPath $xf -Force
+            if ($h -ne $want[$p]) { throw "usb-wdm-nonfree $($Pin.Tag)'s $p does not hash as its SHA256.TXT lists it ($h)." }
+            continue
+        }
         $rel = $p.Substring($pre.Length)
         if (-not (Test-OtherSetRelPath -Rel $rel)) { throw "usb-wdm-nonfree $($Pin.Tag)'s $p has a path the installer does not accept." }
         $h = Get-OtherSetBlob -Root $Root -Rev $rev -Path $p -OutFile (Join-Path $Dest $rel.Replace('/', '\'))
         if ($h -ne $want[$p]) { throw "usb-wdm-nonfree $($Pin.Tag)'s $p does not hash as its SHA256.TXT lists it ($h)." }
         $files[$rel.Replace('/', '\')] = $h
-        if ($p.EndsWith(".inf", [System.StringComparison]::OrdinalIgnoreCase)) { $infs += $p }
+        if ($isInf) { $infs += $p }
     }
     foreach ($x in $script:NonFreeExtras) {
         if ($files.Contains($x)) { throw "usb-wdm-nonfree $($Pin.Tag)'s non-free/ holds a $x, which would clash with the pack's own." }
         $files[$x] = Get-OtherSetBlob -Root $Root -Rev $rev -Path $x -OutFile (Join-Path $Dest $x)
     }
-    $stage = Read-StageText -Text ([System.IO.File]::ReadAllText((Join-Path $Dest "STAGE.TXT"))) -Label "usb-wdm-nonfree $($Pin.Tag)'s STAGE.TXT"
-    Assert-StageCovers -Lines $stage -Infs $infs -Label "usb-wdm-nonfree $($Pin.Tag)'s STAGE.TXT"
+    $stagePath = Join-Path $Dest "STAGE.TXT"
+    $stageText = [System.IO.File]::ReadAllText($stagePath)
+    $stage = Read-StageText -Text $stageText -Label "usb-wdm-nonfree $($Pin.Tag)'s STAGE.TXT"
+    Assert-StageCovers -Lines $stage -Infs $allInfs -Label "usb-wdm-nonfree $($Pin.Tag)'s STAGE.TXT"
+    $kept = Remove-NonFreeExcludedStageLines -Text $stageText
+    if ($kept -cne $stageText) {
+        [System.IO.File]::WriteAllText($stagePath, $kept, (New-Object System.Text.ASCIIEncoding))
+        $files["STAGE.TXT"] = Get-FileSha256 -Path $stagePath
+        $stage = Read-StageText -Text $kept -Label "the download's NONFREE\STAGE.TXT"
+        Assert-StageCovers -Lines $stage -Infs $infs -Label "the download's NONFREE\STAGE.TXT"
+    }
     $own = Write-OtherSetSums -Dir $Dest -Files $files
     $files[$script:OtherSums] = $own
-    return [pscustomobject]@{ Kind = "nonfree"; Folder = $script:NonFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev;
+    return [pscustomobject]@{ Kind = "nonfree"; Folder = $script:NonFreeFolder; Root = $Root; Tag = $Pin.Tag; Revision = $rev; FullStage = $stageText;
                               PackSums = $Pin.PackSums.ToUpperInvariant(); Dir = $Dest; Sums = $own; Files = $files }
+}
+
+function Test-NonFreeExcluded {
+    # A path of the pack ("non-free/wifi/...") under a folder of
+    # $script:NonFreeExcluded.
+    param([string]$Path)
+    foreach ($x in $script:NonFreeExcluded) {
+        if ($Path.StartsWith($script:NonFreePrefix + "/" + $x + "/", [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+function Remove-NonFreeExcludedStageLines {
+    # The pack's STAGE.TXT without the INF lines and PACKAGE lines of the
+    # excluded folders, under one comment line that says so; every other
+    # line, and each line's end, as it was, so a pack with nothing excluded
+    # gives the same bytes. EXCLUDES and COEXISTS lines are kept whatever
+    # they name, as the free set's are.
+    param([string]$Text)
+    $out = New-Object System.Text.StringBuilder
+    $dropped = 0
+    foreach ($line in [regex]::Split($Text, '(?<=\n)')) {
+        $f = @($line -split '\|' | ForEach-Object { $_.Trim() })
+        $drop = $false
+        if (-not $line.Trim().StartsWith("#")) {
+            if ($f.Count -eq 4 -and ($f[0] -ceq "STAGE" -or $f[0] -ceq "COPY")) { $drop = Test-NonFreeExcluded -Path $f[2] }
+            elseif ($f[0] -ceq "PACKAGE" -and $f.Count -ge 2) { $drop = Test-NonFreeExcluded -Path ($script:NonFreePrefix + "/" + $f[1] + "/") }
+        }
+        if ($drop) { $dropped++ } else { [void]$out.Append($line) }
+    }
+    if ($dropped -eq 0) { return $Text }
+    $dirs = @($script:NonFreeExcluded | ForEach-Object { $script:NonFreePrefix + "/" + $_ + "/" }) -join ", "
+    return ("# xHCI98's download leaves out $dirs and its lines here (make-release.ps1).`r`n" + $out.ToString())
 }
 
 function Read-NonFreePinFile {
@@ -3431,12 +4336,15 @@ function ConvertTo-OtherPkgsRecord {
 }
 
 function ConvertFrom-OtherPkgsRecord {
-    param([string]$Text, [string]$Label)
+    # -Fallback: the version of the release folder the record is in, for
+    # a record whose Version line is empty (3.2.0.0's, cut before the
+    # version reached the check; task 44.34).
+    param([string]$Text, [string]$Label, [string]$Fallback = "")
     $rows = @(); $rels = @(); $ver = ""
     foreach ($line in ($Text -split "`r?`n")) {
         $t = $line.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
-        if ($t -match '^Version: (\S+)$') { $ver = $Matches[1]; continue }
+        if ($t -match '^Version:\s*(\S*)$') { $ver = $Matches[1]; continue }
         $f = @($line -split '\|' | ForEach-Object { $_.Trim() })
         if ($f[0] -ceq "ROW" -and $f.Count -eq 6 -and @("current", "withdrawn", "known") -ccontains $f[5]) {
             if (@($rows | Where-Object { $_.Id -ceq $f[1] }).Count -gt 0) { throw "$Label has two rows for $($f[1])." }
@@ -3447,6 +4355,7 @@ function ConvertFrom-OtherPkgsRecord {
             throw "$Label has a line it cannot read: '$line'."
         }
     }
+    if ($ver -eq "") { $ver = $Fallback }
     if ($ver -eq "") { throw "$Label names no version." }
     return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels }
 }
@@ -3454,9 +4363,11 @@ function ConvertFrom-OtherPkgsRecord {
 function Test-OtherPkgsTransition {
     # The previous release's record (-Prev, ConvertFrom-OtherPkgsRecord's)
     # against this cut's (-Now, the same): every row is still there with its
-    # kind; a withdrawn row stays withdrawn with its words; every
+    # kind; a withdrawn row stays withdrawn with its words, or returns to
+    # current only as a package a carried set ships in this cut (-Shipped,
+    # Get-OtherPresent's "<set>:<class>/<package>" ids; task 44.34); every
     # relationship line is still there, on at least its systems.
-    param($Prev, $Now)
+    param($Prev, $Now, [string[]]$Shipped = @())
     foreach ($r in $Prev.Rows) {
         $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
         if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
@@ -3464,8 +4375,8 @@ function Test-OtherPkgsTransition {
         if ($r.State -cne "known" -and $n[0].State -ceq "known") {
             throw "$($r.Id) was $($r.State) in $($Prev.Version), and this cut has it only known, not shipped: a package a release carried is withdrawn, with its words."
         }
-        if ($r.State -ceq "withdrawn" -and $n[0].State -cne "withdrawn") {
-            throw "$($r.Id) was withdrawn in $($Prev.Version), and this table makes it $($n[0].State): a withdrawn row stays withdrawn and keeps its words."
+        if ($r.State -ceq "withdrawn" -and $n[0].State -cne "withdrawn" -and @($Shipped) -cnotcontains $r.Id) {
+            throw "$($r.Id) was withdrawn in $($Prev.Version), and this table makes it $($n[0].State) though no carried set ships it: a withdrawn row stays withdrawn and keeps its words, or returns to current only with a set that ships it."
         }
         if ($n[0].State -ceq "withdrawn" -and ($n[0].Desc -cne $r.Desc -or $n[0].Heading -cne $r.Heading)) {
             throw "$($r.Id) is withdrawn here with words other than $($Prev.Version)'s: a withdrawn row keeps its words."
@@ -3550,9 +4461,9 @@ function Invoke-OtherSetChecks {
     $vParsed = $null
     if ([version]::TryParse($Version, [ref]$vParsed)) { $prev = Find-PreviousOtherPkgs -ReleasesDir $ReleasesDir -Version $Version }
     if ($null -ne $prev) {
-        $p = ConvertFrom-OtherPkgsRecord -Text ([System.IO.File]::ReadAllText($prev.Path)) -Label "'$($prev.Path)'"
+        $p = ConvertFrom-OtherPkgsRecord -Text ([System.IO.File]::ReadAllText($prev.Path)) -Label "'$($prev.Path)'" -Fallback ($prev.V.ToString())
         $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
-        Test-OtherPkgsTransition -Prev $p -Now $n
+        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets)
     }
     return [pscustomobject]@{ Record = $record; Overlaps = @(Get-OtherOverlaps -Table $table -Sets $sets -Meta $meta); Previous = $prev }
 }
@@ -3655,16 +4566,17 @@ function Get-ReadmeMsFilesText {
     if ($Kind -eq "nonfree") {
         if (-not $DriverPackIncluded) { throw "a download with USBDRV\NONFREE\ is cut only with the driver pack, which also gives USBDRV\NUSB33\." }
         return @'
-Microsoft files are in this download in two places: the seven Windows 98 SE
-storage files of section 3, in a folder of their own, copied unmodified from
-NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third party's); and, among the
-other manufacturers' drivers in USBDRV\NONFREE\, the two KMDF co-installers
-ASIX ships with its AX88772 and AX88179 drivers (WdfCoInstaller01007.dll and
-WdfCoInstaller01009.dll), as ASIX ships them. None of them is this project's
-work. No licence to redistribute them has been established, nothing here
-grants you any right in them, and the NOTICE.md beside each says whose they
-are. The usbd.sys and usbui.dll the install needs are not in this download:
-Windows copies them from your own Windows installation source (section 3).
+Microsoft files are in this download in two places. The first is the seven
+Windows 98 SE storage files of section 3, in a folder of their own, copied
+unmodified from NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third
+party's). The second is the KMDF co-installers WdfCoInstaller01007.dll and
+WdfCoInstaller01009.dll. Makers ship them with some of their USB Ethernet
+drivers, and they are in several of those drivers' folders in
+USBDRV\NONFREE\, unmodified. None of them is this project's work. No
+licence to redistribute them has been established, nothing here grants you
+any right in them, and the NOTICE.md beside each says whose they are. The
+usbd.sys and usbui.dll the install needs are not in this download: Windows
+copies them from your own Windows installation source (section 3).
 '@.TrimEnd()
     }
     if ($DriverPackIncluded) {
@@ -3740,12 +4652,15 @@ function Get-ReadmeDownloadText {
             if ($FreeTag -ne "") {
                 $L += Format-ReadmeWrap -Text ("This is ${z3}: $z2 (the base download with the free USB " +
                                               "class drivers of usb-wdm-free $FreeTag in USBDRV\FREE\), with " +
-                                              "the non-free driver pack of usb-wdm-nonfree $NonFreeTag " +
-                                              "added in USBDRV\NONFREE\.")
+                                              "the makers' Ethernet, HID and serial drivers of usb-wdm-nonfree " +
+                                              "$NonFreeTag added in USBDRV\NONFREE\.")
             } else {
-                $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the non-free " +
-                                              "driver pack of usb-wdm-nonfree $NonFreeTag added in USBDRV\NONFREE\.")
+                $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the makers' " +
+                                              "Ethernet, HID and serial drivers of usb-wdm-nonfree $NonFreeTag " +
+                                              "added in USBDRV\NONFREE\.")
             }
+            $L += Format-ReadmeWrap -Text ("Wi-Fi drivers are not in this download. Get them from the " +
+                                          "usb-wdm-nonfree release (https://github.com/yeokm1/usb-wdm-nonfree).")
         }
         default { throw "no download '$Kind'." }
     }
@@ -3754,6 +4669,8 @@ function Get-ReadmeDownloadText {
     $L += ""
     $L += ("  {0,-26} the base download" -f $z1)
     if ($Kinds -contains "free") { $L += ("  {0,-26} adds the free USB class drivers (USBDRV\FREE\)" -f $z2) }
+    # Download 1's own text, which ConvertTo-DownloadReadme finds in a
+    # published readme: keep it as 3.2.0.0 published it.
     if ($Kinds -contains "nonfree") { $L += ("  {0,-26} adds the non-free driver pack (USBDRV\NONFREE\)" -f $z3) }
     $L += ""
     if ($Kinds -notcontains "free") {

@@ -64,6 +64,7 @@
 #include "../src/xhci_version.h"
 #include "../src/cm/cm_query.h"
 #include "mark_core.h"
+#include "../xhciinst/inst_bootp.h"
 
 #define XHCIMARK_VERSION XHCI_VER_STR
 
@@ -97,6 +98,7 @@
 #define MK_CM_DRP_COMPATIBLEIDS     0x00000003UL
 #define MK_CM_DRP_SERVICE           0x00000005UL
 #define MK_CM_DRP_DRIVER            0x0000000AUL
+#define MK_CM_DRP_CONFIGFLAGS       0x0000000BUL
 #define MK_CM_DRP_LOWERFILTERS      0x00000013UL
 #define MK_CM_DRP_BUSNUMBER         0x00000016UL
 #define MK_CM_DRP_ADDRESS           0x0000001DUL
@@ -1248,6 +1250,13 @@ static int mk_fresh_unit(const char *id, const MK_ENTRY *e, DWORD *dn)
  * install removes the BusRelations child after a query-remove and builds
  * the stack again, and the fresh status below (started, no problem) is
  * what tells that from a unit Windows holds for eject or a disabled one. */
+/* A unit restart made in this poll: the walk no longer shows the tree. */
+static int mkRestartMade;
+
+/* Record 31 section 6.2, "The mark's restart" (task 44.52): defined with
+ * the Stor98 fallback below. */
+static const char *mk_mark_rerun(int unit, DWORD unitDn, HANDLE *sm);
+
 static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
 {
     MK_TRIED *t;
@@ -1260,6 +1269,7 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     ULONG st;
     ULONG pr;
     BOOL called;
+    HANDLE sm = NULL;
     const char *why = NULL;
 
     t = mk_tried(h, e->Serial, 1);
@@ -1276,6 +1286,12 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
         why = "the driver's answer changed since the sample";
     } else if (!mk_fresh_unit(nodes[unit].Id, e, &dn)) {
         why = "the unit's identity or mark changed";
+    } else {
+        /* On 2000 and XP each plain driverless drive below the unit has
+         * its install set to run again first, so that Windows offers
+         * Stor98 when it comes back with the id (with the switch mutex
+         * then held to the call). */
+        why = mk_mark_rerun(unit, dn, &sm);
     }
     if (why == NULL) {
         set = api.CreateList(NULL, NULL);
@@ -1301,6 +1317,9 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
         if (!t->Gated) {
             t->Gated = 1;
             mk_log("restart not made yet: %s: %s", nodes[unit].Id, why);
+        }
+        if (sm != NULL) {
+            mk_unlock(sm);
         }
         mk_unlock(em);
         return;
@@ -1330,11 +1349,15 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     }
     api.Destroy(set);
     if (called) {
+        mkRestartMade = 1;
         mk_log("restart made: %s (serial %lu)", nodes[unit].Id, e->Serial);
     } else if (!t->Outcome) {
         mk_log("restart failed: %s (error %lu); the tool's fallback stands",
                nodes[unit].Id, GetLastError());
         t->Outcome = 1;
+    }
+    if (sm != NULL) {
+        mk_unlock(sm);
     }
     mk_unlock(em);
 }
@@ -1953,15 +1976,16 @@ static void mk_inventory(int quiet)
 }
 
 /* ======================================================================== */
-/* Stor98 on a tunnelled drive (record 21 section 7.5, task 43.59)          */
+/* Stor98 on a tunnelled drive (record 31 section 6)                        */
 /* ======================================================================== */
 
-/* On 8, 8.1 and 10 Windows gives a tunnelled NVMe drive first plugged
- * after the install its own stornvme, which outranks the uncatalogued
- * Stor98 on the signature score. With Parameters\Stor98Inf naming the
- * staged Stor98 (the installer writes it on those systems alone), each
- * started stornvme devnode below a verified tunnel port is stopped, given
- * that one INF's driver and started again. Its record under
+/* The fallback for a tunnelled NVMe drive Windows did not give Stor98 by
+ * the tunnel id (record 31 sections 4.4 and 6.2): on 2000 to 8.1 a devnode
+ * below a verified tunnel port with no driver of its own is given the
+ * staged Stor98 that Parameters\Stor98Inf names, by model selection, since
+ * Stor98's INF matches only the id; on 8.1 one Windows started on
+ * stornvme is stopped, given it and started again (the 8.1 arm, record 21
+ * section 7.5's switch). Nothing on 10. Its record under
  * Services\xhcimark\Stor98 is written before each act; a disable is never
  * left behind unrecorded, and a record owing an enable stays until the
  * enable is seen. */
@@ -1976,10 +2000,21 @@ static void mk_inventory(int quiet)
 #define MK_DICS_ENABLE      0x00000001UL
 #define MK_DICS_DISABLE     0x00000002UL
 #define MK_DICS_FLAG_CONFIGSPECIFIC 0x00000002UL
-#define MK_DIF_SELECTBESTCOMPATDRV 0x00000017UL
+#define MK_DIF_INSTALLDEVICE 0x00000002UL
 #define MK_DI_ENUMSINGLEINF 0x00010000UL
-#define MK_SPDIT_COMPATDRIVER 0x00000002UL
+#define MK_DI_QUIETINSTALL  0x00800000UL
+#define MK_DI_FLAGSEX_ALLOWEXCLUDEDDRVS 0x00000800UL
+#define MK_SPDIT_CLASSDRIVER 0x00000001UL
+#define MK_SPDRP_CLASSGUID  0x00000008UL
 #define MK_DIIDFLAG_NOFINISHINSTALLUI 0x00000002UL
+#define MK_CM_DRP_UPPERFILTERS 0x00000012UL
+#define MK_S98_DRV_MAX      16
+#define MK_S98_SCSI_CLASS   "{4D36E97B-E325-11CE-BFC1-08002BE10318}"
+
+static const GUID mkScsiClass = {
+    0x4D36E97BUL, 0xE325, 0x11CE,
+    { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 }
+};
 
 typedef BOOL (WINAPI *PFN_SETDIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
                                        PSP_DEVINSTALL_PARAMS_A);
@@ -1988,13 +2023,19 @@ typedef DWORD (WINAPI *PFN_HWPROFFLAGS)(LPSTR, ULONG, PULONG, ULONG);
 #define MK_CSCONFIGFLAG_DISABLED 0x00000001UL
 #define MK_SPDRP_CONFIGFLAGS    0x0000000AUL
 #define MK_CONFIGFLAG_DISABLED  0x00000001UL
-typedef BOOL (WINAPI *PFN_GETSELDRVW)(HDEVINFO, PSP_DEVINFO_DATA,
+typedef BOOL (WINAPI *PFN_SETSELDRVW)(HDEVINFO, PSP_DEVINFO_DATA,
                                       PSP_DRVINFO_DATA_W);
+typedef BOOL (WINAPI *PFN_ENUMDRVW)(HDEVINFO, PSP_DEVINFO_DATA, DWORD, DWORD,
+                                    PSP_DRVINFO_DATA_W);
+typedef BOOL (WINAPI *PFN_SETREGPROP)(HDEVINFO, PSP_DEVINFO_DATA, DWORD,
+                                      const BYTE *, DWORD);
 typedef BOOL (WINAPI *PFN_DIINSTALL)(HWND, HDEVINFO, PSP_DEVINFO_DATA,
                                      PSP_DRVINFO_DATA_W, DWORD, PBOOL);
+typedef BOOL (WINAPI *PFN_NONINTERACTIVE)(BOOL);
 
-/* Looked up at the first switch, so 2000 to 7, which never have the
- * value, never ask for newdev.dll's DiInstallDevice (Vista and later). */
+/* Looked up at the first install. newdev.dll's DiInstallDevice is Vista's
+ * and later's and required there; 2000 and XP install through the class
+ * installer (DIF_INSTALLDEVICE) instead. */
 static struct {
     int Tried;
     int Ok;
@@ -2002,18 +2043,23 @@ static struct {
     PFN_SETDIPARAMS SetDiParams;
     PFN_DRVLIST Build;
     PFN_DRVLIST DestroyDrv;
-    PFN_GETSELDRVW GetSelected;
-    PFN_DIINSTALL Install;
+    PFN_ENUMDRVW EnumDrv;
+    PFN_SETSELDRVW SetSelected;
+    PFN_SETREGPROP SetRegProp;
+    PFN_DIINSTALL Install;          /* Vista and later                  */
     PFN_HWPROFFLAGS HwProfFlags;    /* optional: CM_Get_HW_Prof_FlagsA */
 } s98api;
 
-/* The devnodes on stornvme seen at whole walks: their arrival. */
+/* The candidate devnodes seen at whole walks: their arrival. */
 static struct {
     char Id[INST_ID_CHARS];
     DWORD Walk;             /* the last whole walk that saw it            */
     int Attempts;           /* in this arrival                            */
     DWORD At;               /* the last attempt                           */
     int Why;                /* the reason last logged, -1 none            */
+    int Declined;           /* 2000/XP: seen with the id and no driver in
+                               this arrival - the wizard's offer was the
+                               user's to take; never restarted for     */
 } s98Seen[MK_S98_SEEN_MAX];
 static int s98SeenCount;
 static DWORD s98Walk;           /* whole walks so far                     */
@@ -2024,49 +2070,65 @@ static char s98EnableLogged[MK_S98_TODO_MAX][INST_ID_CHARS];
 
 static int mk_s98_api(void)
 {
+    PFN_NONINTERACTIVE nonInteractive;
     int missing = 0;
 
     if (s98api.Tried) {
         return s98api.Ok;
     }
     s98api.Tried = 1;
-    s98api.NewDev = LoadLibraryA("newdev.dll");
     s98api.SetDiParams = (PFN_SETDIPARAMS)mk_proc(api.SetupApi,
                              "SetupDiSetDeviceInstallParamsA", &missing);
     s98api.Build = (PFN_DRVLIST)mk_proc(api.SetupApi,
                        "SetupDiBuildDriverInfoList", &missing);
     s98api.DestroyDrv = (PFN_DRVLIST)mk_proc(api.SetupApi,
                             "SetupDiDestroyDriverInfoList", &missing);
-    s98api.GetSelected = (PFN_GETSELDRVW)mk_proc(api.SetupApi,
-                             "SetupDiGetSelectedDriverW", &missing);
-    s98api.Install = (PFN_DIINSTALL)mk_proc(s98api.NewDev, "DiInstallDevice",
-                                            &missing);
+    s98api.EnumDrv = (PFN_ENUMDRVW)mk_proc(api.SetupApi,
+                         "SetupDiEnumDriverInfoW", &missing);
+    s98api.SetSelected = (PFN_SETSELDRVW)mk_proc(api.SetupApi,
+                             "SetupDiSetSelectedDriverW", &missing);
+    s98api.SetRegProp = (PFN_SETREGPROP)mk_proc(api.SetupApi,
+                            "SetupDiSetDeviceRegistryPropertyA", &missing);
+    if (osv.dwMajorVersion >= 6) {
+        s98api.NewDev = LoadLibraryA("newdev.dll");
+        s98api.Install = (PFN_DIINSTALL)mk_proc(s98api.NewDev,
+                                                "DiInstallDevice", &missing);
+    }
     s98api.HwProfFlags = (PFN_HWPROFFLAGS)GetProcAddress(api.SetupApi,
                              "CM_Get_HW_Prof_FlagsA");
+    /* A service has no desktop: a question Windows would ask during an
+     * install (2000 and XP ask before an unsigned driver) would wait
+     * forever with the tools' eject mutex held (2026-10-25, record 31
+     * section 9.3 item 8). Non-interactive, the install fails instead. */
+    nonInteractive = (PFN_NONINTERACTIVE)GetProcAddress(api.SetupApi,
+                         "SetupSetNonInteractiveMode");
+    if (nonInteractive != NULL) {
+        (void)nonInteractive(TRUE);
+    }
     s98api.Ok = missing == 0;
     if (!s98api.Ok) {
-        mk_log("Stor98: the switch's routines are missing; no drive is "
-               "switched");
+        mk_log("Stor98: the install's routines are missing; no drive is "
+               "given Stor98");
     }
     return s98api.Ok;
 }
 
-/* The value, when it names a staged INF that exists: 1 with inf filled. */
-/* 1 on Windows 8.1 (inst_s98_switch_os), 0 elsewhere or where it cannot
- * be read: RtlGetVersion's answer (the service has no compatibility
- * manifest, so GetVersionEx says 6.2 build 9200 on 8.1 and 10 alike), and
- * the major and minor version the kernel keeps in the shared user data
- * page (KUSER_SHARED_DATA NtMajorVersion, NtMinorVersion at 0x7FFE026C and
- * 0x7FFE0270 on every NT), which no compatibility shim reaches, must both
- * pass (record 21 section 7.5, the 8.1 gate). Read once; *major, *minor
- * and *build for the log, the shared page's major and minor. */
+/* The system (mk_s98_os): RtlGetVersion's answer (the service has no
+ * compatibility manifest, so GetVersionEx says 6.2 build 9200 on 8.1 and
+ * 10 alike; GetVersionEx is read only where ntdll has no RtlGetVersion,
+ * which no shimmed system lacks) and the major and minor version the
+ * kernel keeps in the shared user data page (KUSER_SHARED_DATA
+ * NtMajorVersion, NtMinorVersion at 0x7FFE026C and 0x7FFE0270 on every
+ * NT), which no compatibility shim reaches, must give the same system.
+ * Read once; *major, *minor and *build for the log, the shared page's
+ * major and minor. */
 #define MK_KUSD_NT_MAJOR ((const volatile ULONG *)0x7FFE026CUL)
 #define MK_KUSD_NT_MINOR ((const volatile ULONG *)0x7FFE0270UL)
 typedef LONG (WINAPI *PFN_RTLGETVERSION)(OSVERSIONINFOW *);
-static int mk_s98_os81(DWORD *major, DWORD *minor, DWORD *build)
+static int mk_s98_sys(DWORD *major, DWORD *minor, DWORD *build)
 {
     static int done;
-    static int is81;
+    static int sys;
     static DWORD ma;
     static DWORD mi;
     static DWORD bu;
@@ -2085,16 +2147,23 @@ static int mk_s98_os81(DWORD *major, DWORD *minor, DWORD *build)
         mi = *MK_KUSD_NT_MINOR;
         if (rtl != NULL && rtl(&w) == 0) {
             bu = w.dwBuildNumber & 0xFFFFUL;
-            is81 = inst_s98_switch_os(1, w.dwMajorVersion, w.dwMinorVersion,
-                                      bu) &&
-                   inst_s98_switch_os(1, ma, mi, bu);
+            sys = mk_s98_os_both(mk_s98_os(w.dwMajorVersion,
+                                           w.dwMinorVersion, bu),
+                                 mk_s98_os(ma, mi, bu));
+        } else if (rtl == NULL) {
+            bu = osv.dwBuildNumber & 0xFFFFUL;
+            sys = mk_s98_os_both(mk_s98_os(osv.dwMajorVersion,
+                                           osv.dwMinorVersion, bu),
+                                 mk_s98_os(ma, mi, bu));
         }
     }
     *major = ma;
     *minor = mi;
     *build = bu;
-    return is81;
+    return sys;
 }
+
+/* The value, when it names a staged INF that exists: 1 with inf filled. */
 
 static int mk_s98_policy(char *inf, size_t cap)
 {
@@ -2107,6 +2176,7 @@ static int mk_s98_policy(char *inf, size_t cap)
     DWORD ma;
     DWORD mi;
     DWORD bu;
+    int sys;
 
     memset(inf, 0, cap);
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_PARAMS_KEY, 0, KEY_READ, &k) ==
@@ -2120,9 +2190,10 @@ static int mk_s98_policy(char *inf, size_t cap)
         }
         RegCloseKey(k);
     }
-    /* Record 21 section 7.5: the switch on Windows 8.1 alone, whatever the
-     * value says (a stale one after an upgrade to 10). */
-    if (state == 1 && !mk_s98_os81(&ma, &mi, &bu)) {
+    /* Record 31 section 6.2: 2000 to 8.1 alone, whatever the value says
+     * (a stale one after an upgrade to 10). */
+    sys = mk_s98_sys(&ma, &mi, &bu);
+    if (state == 1 && sys != MK_S98_OS_LOW && sys != MK_S98_OS_81) {
         state = 4;
     }
     if (state == 1) {
@@ -2139,14 +2210,17 @@ static int mk_s98_policy(char *inf, size_t cap)
     if (state != s98PolicyState) {
         s98PolicyState = state;
         if (state == 1) {
-            mk_log("Stor98: tunnelled drives on stornvme are switched to %s",
-                   inf);
+            mk_log("Stor98: a tunnelled drive left with no driver%s is given "
+                   "%s (Windows %lu.%lu build %lu)",
+                   sys == MK_S98_OS_81 ? ", or on stornvme," : "", inf,
+                   (unsigned long)ma, (unsigned long)mi, (unsigned long)bu);
         } else if (state == 4) {
             mk_log("Stor98: %s names %s, and Windows is %lu.%lu build %lu, "
-                   "not 8.1; no drive is switched", MK_S98_VALUE, inf,
-                   (unsigned long)ma, (unsigned long)mi, (unsigned long)bu);
+                   "not 2000 to 8.1; no drive is given Stor98", MK_S98_VALUE,
+                   inf, (unsigned long)ma, (unsigned long)mi,
+                   (unsigned long)bu);
         } else if (state != 0) {
-            mk_log("Stor98: %s names %s, %s; no drive is switched",
+            mk_log("Stor98: %s names %s, %s; no drive is given Stor98",
                    MK_S98_VALUE, inf, state == 2 ? "not a staged INF"
                                                  : "a file that is not there");
         }
@@ -2244,10 +2318,12 @@ static int mk_s98_own(const char *id)
 /* A final state, after the ownership entry when the devnode is bound to
  * Stor98 (its Service value, started or not): an entry that cannot be
  * written leaves the record "enable", so the recovery tries again. */
-static void mk_s98_finish(const char *id, int state, int bound)
+static void mk_s98_finish(const char *id, int state, int bound, int give)
 {
     if (bound && !mk_s98_own(id)) {
-        (void)mk_s98_rec_set(id, MK_S98_ENABLE);
+        /* An install over no driver stopped nothing: it owes no enable,
+         * and its record is read again as a "give". */
+        (void)mk_s98_rec_set(id, give ? MK_S98_GIVE : MK_S98_ENABLE);
         return;
     }
     (void)mk_s98_rec_set(id, state);
@@ -2372,17 +2448,194 @@ static HDEVINFO mk_s98_open(const char *id, SP_DEVINFO_DATA *data)
     return set;
 }
 
+static void mk_s98_w2a(const WCHAR *w, char *out, size_t cap)
+{
+    size_t i;
+
+    for (i = 0; i + 1 < cap && w[i] != 0; i++) {
+        out[i] = (w[i] >= 0x20 && w[i] < 0x7F) ? (char)w[i] : '?';
+    }
+    out[i] = '\0';
+}
+
+static void mk_s98_guid_text(const GUID *g, char *out)
+{
+    sprintf(out, "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+            (unsigned long)g->Data1, (unsigned)g->Data2, (unsigned)g->Data3,
+            (unsigned)g->Data4[0], (unsigned)g->Data4[1],
+            (unsigned)g->Data4[2], (unsigned)g->Data4[3],
+            (unsigned)g->Data4[4], (unsigned)g->Data4[5],
+            (unsigned)g->Data4[6], (unsigned)g->Data4[7]);
+}
+
+/* Record 31 section 6.2, the per-device route: Stor98's model selected
+ * from the staged INF alone, whatever ids the devnode carries (Have Disk
+ * with "Show all devices"), and installed on that one devnode. A
+ * class-driver list is restricted to the device's own setup class, so a
+ * devnode of another class or none is put in SCSIAdapter first (through
+ * SPDRP_CLASSGUID, which writes the class name with it), and given back
+ * its own when nothing is installed. *set may be reopened. 1 when the
+ * install call succeeded (*reboot its restart answer). */
+static int mk_s98_model(HDEVINFO *set, SP_DEVINFO_DATA *data, const char *id,
+                        const char *inf, BOOL *reboot)
+{
+    SP_DEVINSTALL_PARAMS_A ip;
+    SP_DRVINFO_DATA_W drv;
+    SP_DRVINFO_DATA_W first;
+    GUID was;
+    char text[64];
+    char desc[128];
+    char mfg[128];
+    DWORD n;
+    DWORD err;
+    int changed = 0;
+    int built = 0;
+    int installed = 0;
+
+    *reboot = FALSE;
+    was = data->ClassGuid;
+    mk_s98_guid_text(&was, text);
+    if (memcmp(&was, &mkScsiClass, sizeof(was)) != 0) {
+        if (!s98api.SetRegProp(*set, data, MK_SPDRP_CLASSGUID,
+                               (const BYTE *)MK_S98_SCSI_CLASS,
+                               (DWORD)sizeof(MK_S98_SCSI_CLASS))) {
+            mk_log("Stor98: %s: its setup class %s could not be set to "
+                   "SCSIAdapter (error %lu)", id, text, GetLastError());
+            return 0;
+        }
+        changed = 1;
+        api.Destroy(*set);
+        *set = mk_s98_open(id, data);
+        if (*set == INVALID_HANDLE_VALUE) {
+            mk_log("Stor98: %s: not opened again after its class was set "
+                   "(error %lu)", id, GetLastError());
+            *set = mk_s98_open(id, data);
+            if (*set == INVALID_HANDLE_VALUE) {
+                mk_log("Stor98: %s: its setup class %s could not be given "
+                       "back (error %lu)", id, text, GetLastError());
+                return 0;
+            }
+            goto restore;
+        }
+        mk_log("Stor98: %s: setup class %s set to SCSIAdapter (%s read back)",
+               id, text, memcmp(&data->ClassGuid, &mkScsiClass,
+                                sizeof(GUID)) == 0 ? "it" : "another");
+    } else {
+        mk_log("Stor98: %s: setup class already SCSIAdapter", id);
+    }
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (!api.GetDiParams(*set, data, &ip)) {
+        mk_log("Stor98: %s: its install parameters did not read (error %lu)",
+               id, GetLastError());
+        goto restore;
+    }
+    ip.Flags |= MK_DI_ENUMSINGLEINF | MK_DI_QUIETINSTALL;
+    ip.FlagsEx |= MK_DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
+    inst_copy(ip.DriverPath, inf, sizeof(ip.DriverPath));
+    if (!s98api.SetDiParams(*set, data, &ip) ||
+        !s98api.Build(*set, data, MK_SPDIT_CLASSDRIVER)) {
+        mk_log("Stor98: %s: no class-driver list over %s (error %lu)", id,
+               inf, GetLastError());
+        goto restore;
+    }
+    built = 1;
+    memset(&first, 0, sizeof(first));
+    for (n = 0; n < MK_S98_DRV_MAX; n++) {
+        memset(&drv, 0, sizeof(drv));
+        drv.cbSize = sizeof(drv);
+        if (!s98api.EnumDrv(*set, data, MK_SPDIT_CLASSDRIVER, n, &drv)) {
+            break;
+        }
+        if (n == 0) {
+            first = drv;
+        }
+    }
+    err = GetLastError();
+    mk_log("Stor98: %s: %lu model(s) in %s for the class (the list ended "
+           "with error %lu)", id, (unsigned long)n, inf, err);
+    if (n == 0) {
+        goto restore;
+    }
+    mk_s98_w2a(first.Description, desc, sizeof(desc));
+    mk_s98_w2a(first.MfgName, mfg, sizeof(mfg));
+    if (!s98api.SetSelected(*set, data, &first)) {
+        mk_log("Stor98: %s: model \"%s\" (%s) not selected (error %lu)", id,
+               desc, mfg, GetLastError());
+        goto restore;
+    }
+    mk_log("Stor98: %s: model \"%s\" (%s) selected", id, desc, mfg);
+    if (s98api.Install != NULL) {
+        installed = s98api.Install(NULL, *set, data, &first,
+                                   MK_DIIDFLAG_NOFINISHINSTALLUI, reboot) ?
+                    1 : 0;
+        err = installed ? 0 : GetLastError();
+        mk_log("Stor98: %s: DiInstallDevice answered %s (error %lu)%s", id,
+               installed ? "success" : "failure", err,
+               installed && *reboot ? ", a restart asked" : "");
+    } else {
+        installed = api.CallCi(MK_DIF_INSTALLDEVICE, *set, data) ? 1 : 0;
+        err = installed ? 0 : GetLastError();
+        memset(&ip, 0, sizeof(ip));
+        ip.cbSize = sizeof(ip);
+        if (installed && api.GetDiParams(*set, data, &ip) &&
+            (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
+            *reboot = TRUE;
+        }
+        mk_log("Stor98: %s: DIF_INSTALLDEVICE answered %s (error %lu)%s", id,
+               installed ? "success" : "failure", err,
+               *reboot ? ", a restart asked" : "");
+        if (!installed) {
+            mk_log("Stor98: %s: where Windows asks before an unsigned driver, "
+                   "the service cannot answer; unplug the enclosure and plug "
+                   "it in again, and Windows' own wizard offers Stor98", id);
+        }
+    }
+restore:
+    if (built) {
+        (void)s98api.DestroyDrv(*set, data, MK_SPDIT_CLASSDRIVER);
+    }
+    if (!installed && changed) {
+        int zero = 1;
+        for (n = 0; n < sizeof(was.Data4); n++) {
+            if (was.Data4[n] != 0) {
+                zero = 0;
+            }
+        }
+        zero = zero && was.Data1 == 0 && was.Data2 == 0 && was.Data3 == 0;
+        if (zero ? s98api.SetRegProp(*set, data, MK_SPDRP_CLASSGUID, NULL, 0)
+                 : s98api.SetRegProp(*set, data, MK_SPDRP_CLASSGUID,
+                                     (const BYTE *)text,
+                                     (DWORD)strlen(text) + 1)) {
+            mk_log("Stor98: %s: its setup class given back (%s)", id,
+                   zero ? "none" : text);
+        } else {
+            mk_log("Stor98: %s: its setup class %s not given back (error "
+                   "%lu)", id, text, GetLastError());
+        }
+    }
+    return installed;
+}
+
 /* The devnode's fresh state: present, its service, started, its problem. */
 static int mk_s98_fresh(const char *id, char *service, size_t cap,
                         ULONG *st, ULONG *pr, DWORD *dn)
 {
+    DWORD cr;
+
     memset(service, 0, cap);
     *st = 0;
     *pr = 0;
     if (api.Locate(dn, (char *)id, MK_CM_LOCATE_NORMAL) != MK_CR_SUCCESS) {
         return 0;
     }
-    (void)mk_prop_text(*dn, MK_CM_DRP_SERVICE, service, cap, NULL);
+    /* No Service value reads as no driver; a read that fails is no
+     * reading at all. */
+    cr = mk_prop_text(*dn, MK_CM_DRP_SERVICE, service, cap, NULL);
+    if (cr != MK_CR_SUCCESS && cr != MK_CR_NO_SUCH_VALUE) {
+        memset(service, 0, cap);
+        return 0;
+    }
     if (api.Status(st, pr, *dn, 0) != MK_CR_SUCCESS) {
         *st = 0;
         *pr = 0;
@@ -2443,19 +2696,19 @@ static int mk_s98_domain_fresh(const MK_NHI *h, INST_U32 member)
            mk_member_active(&f.Q, member);
 }
 
-/* The switch of one devnode (section 7.5.3, "The switch"), under the tools'
- * eject mutex and the switch mutex, with no installer pause. Returns the
+/* Stor98 put on one devnode (record 31 section 6.2), under the tools'
+ * eject mutex and the switch mutex, with no installer pause: over nothing
+ * (displace 0), or on 8.1 over stornvme (displace 1: stopped, installed
+ * and started again, the 8.1 arm). `why` is logged with it. Returns the
  * state recorded, or MK_S98_NONE when nothing was done (a lock held, the
  * pause on, a fresh read changed). */
-static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
-                         const char *inf)
+static int mk_s98_give(const char *id, const MK_NHI *h, INST_U32 member,
+                       const char *inf, int displace, const char *why)
 {
     HANDLE em;
     HANDLE sm;
     HDEVINFO set = INVALID_HANDLE_VALUE;
     SP_DEVINFO_DATA data;
-    SP_DEVINSTALL_PARAMS_A ip;
-    SP_DRVINFO_DATA_W drv;
     char service[64];
     ULONG st;
     ULONG pr;
@@ -2463,23 +2716,29 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
     BOOL reboot = FALSE;
     int vetoed;
     int result = MK_S98_NONE;
-    int built = 0;
     int installed = 0;
     int enabled;
     int fresh;
+    int same;
     DWORD err = 0;
 
     /* An installer run keeps its pause event open from its plan to its
-     * end: no switch beside its reads and Stor98 jobs. */
+     * end: no install beside its reads and Stor98 jobs. */
     if (!mk_s98_lock(&em, &sm)) {
         return MK_S98_NONE;
     }
-    if (!mk_no_install_pending() ||
-        !mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn) ||
-        !inst_s98_over_inbox(1, service) || (st & MK_DN_STARTED) == 0 ||
-        (st & MK_DN_HAS_PROBLEM) != 0 || !mk_s98_still_below(dn, member) ||
-        !mk_s98_domain_fresh(h, member)) {
-        mk_log("Stor98: %s or its domain changed before its switch; looked "
+    same = mk_no_install_pending() &&
+           mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn) &&
+           mk_s98_still_below(dn, member) && mk_s98_domain_fresh(h, member);
+    if (same && displace) {
+        same = mk_s98_inbox(service) && (st & MK_DN_STARTED) != 0 &&
+               (st & MK_DN_HAS_PROBLEM) == 0;
+    } else if (same) {
+        same = service[0] == '\0' && (st & MK_DN_STARTED) == 0 &&
+               !mk_s98_disabled(st, pr);
+    }
+    if (!same) {
+        mk_log("Stor98: %s or its domain changed before its install; looked "
                "at again", id);
         goto out;
     }
@@ -2489,10 +2748,39 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
                GetLastError());
         goto out;
     }
+    if (!displace) {
+        if (!mk_s98_rec_set(id, MK_S98_GIVE)) {
+            goto out;
+        }
+        mk_log("Stor98: giving %s Stor98: it has no driver (status %08lX "
+               "problem %lu; member %04lX; %s)", id, st, pr, member, why);
+        installed = mk_s98_model(&set, &data, id, inf, &reboot);
+        if (set == INVALID_HANDLE_VALUE) {
+            result = MK_S98_FAILED;
+            goto record;
+        }
+        if (!mk_s98_fresh(id, service, sizeof(service), &st, &pr, &dn)) {
+            mk_log("Stor98: %s is not there after its install", id);
+            result = installed && reboot ? MK_S98_GIVE_RESTART :
+                     MK_S98_FAILED;
+        } else if (mk_s98_runs(service, st)) {
+            result = MK_S98_DONE;
+            mk_log("Stor98: %s now runs Stor98", id);
+        } else {
+            result = installed && reboot ? MK_S98_GIVE_RESTART :
+                     MK_S98_FAILED;
+            mk_log("Stor98: %s reads service %s, status %08lX, problem %lu "
+                   "after the install (%s)", id,
+                   service[0] ? service : "(none)", st, pr,
+                   mk_s98_rec_text(result));
+        }
+        goto record;
+    }
     if (!mk_s98_rec_set(id, MK_S98_DISABLE)) {
         goto out;
     }
-    mk_log("Stor98: switching %s from stornvme (member %04lX)", id, member);
+    mk_log("Stor98: switching %s from stornvme (member %04lX; %s)", id,
+           member, why);
     if (!mk_s98_propchange(set, &data, MK_DICS_DISABLE, &vetoed)) {
         int refused = vetoed;
         err = GetLastError();
@@ -2532,34 +2820,14 @@ static int mk_s98_switch(const char *id, const MK_NHI *h, INST_U32 member,
     } else if (!mk_s98_rec_set(id, MK_S98_INSTALL)) {
         result = MK_S98_FAILED;
     } else {
-        memset(&ip, 0, sizeof(ip));
-        ip.cbSize = sizeof(ip);
-        if (api.GetDiParams(set, &data, &ip)) {
-            ip.Flags |= MK_DI_ENUMSINGLEINF;
-            inst_copy(ip.DriverPath, inf, sizeof(ip.DriverPath));
-            if (s98api.SetDiParams(set, &data, &ip) &&
-                s98api.Build(set, &data, MK_SPDIT_COMPATDRIVER)) {
-                built = 1;
-                memset(&drv, 0, sizeof(drv));
-                drv.cbSize = sizeof(drv);
-                if (api.CallCi(MK_DIF_SELECTBESTCOMPATDRV, set, &data) &&
-                    s98api.GetSelected(set, &data, &drv)) {
-                    installed = s98api.Install(NULL, set, &data, &drv,
-                                               MK_DIIDFLAG_NOFINISHINSTALLUI,
-                                               &reboot) ? 1 : 0;
-                }
-            }
+        installed = mk_s98_model(&set, &data, id, inf, &reboot);
+        if (set == INVALID_HANDLE_VALUE) {
+            mk_log("Stor98: %s: its enable is owed", id);
+            result = MK_S98_ENABLE;
+            goto record;
         }
         if (!installed) {
-            err = GetLastError();
-            mk_log("Stor98: %s: Stor98 was not installed (error %lu)", id,
-                   err);
-        } else if (reboot) {
-            mk_log("Stor98: %s: the install asked for a restart of Windows",
-                   id);
-        }
-        if (built) {
-            (void)s98api.DestroyDrv(set, &data, MK_SPDIT_COMPATDRIVER);
+            mk_log("Stor98: %s: Stor98 was not installed", id);
         }
     }
     enabled = mk_s98_propchange(set, &data, MK_DICS_ENABLE, &vetoed);
@@ -2586,7 +2854,7 @@ record:
     if (result == MK_S98_ENABLE || result == MK_S98_BUSY) {
         (void)mk_s98_rec_set(id, result);
     } else {
-        mk_s98_finish(id, result, inst_eq(service, "stor98"));
+        mk_s98_finish(id, result, inst_eq(service, "stor98"), !displace);
     }
 out:
     if (set != INVALID_HANDLE_VALUE) {
@@ -2687,7 +2955,9 @@ static void mk_s98_recover_all(void)
         id[sizeof(id) - 1] = '\0';
         r = type == REG_SZ ? mk_s98_rec_parse(text) : MK_S98_FAILED;
         if (r == MK_S98_DISABLE || r == MK_S98_INSTALL ||
-            r == MK_S98_ENABLE || (r == MK_S98_RESTART && !s98FirstDone)) {
+            r == MK_S98_ENABLE || r == MK_S98_GIVE ||
+            ((r == MK_S98_RESTART || r == MK_S98_GIVE_RESTART) &&
+             !s98FirstDone)) {
             inst_copy(todo[nTodo++], id, sizeof(todo[0]));
         }
     }
@@ -2711,7 +2981,7 @@ static void mk_s98_recover_all(void)
     (void)mk_s98_api();
     for (j = 0; j < nTodo; j++) {
         r = mk_s98_rec_get(todo[j]);
-        if (r == MK_S98_RESTART && !first) {
+        if ((r == MK_S98_RESTART || r == MK_S98_GIVE_RESTART) && !first) {
             continue;
         }
         present = mk_s98_fresh(todo[j], service, sizeof(service), &st, &pr,
@@ -2762,7 +3032,8 @@ static void mk_s98_recover_all(void)
         if (a == MK_S98_R_DONE || a == MK_S98_R_FAIL) {
             mk_s98_finish(todo[j], a == MK_S98_R_DONE ? MK_S98_DONE
                                                       : MK_S98_FAILED,
-                          inst_eq(service, "stor98"));
+                          inst_eq(service, "stor98"),
+                          r == MK_S98_GIVE || r == MK_S98_GIVE_RESTART);
             mk_log("Stor98: %s recorded %s (service %s)", todo[j],
                    a == MK_S98_R_DONE ? "done" : "failed",
                    service[0] ? service : "(none)");
@@ -2805,7 +3076,7 @@ static void mk_s98_prune(void)
         id[sizeof(id) - 1] = '\0';
         r = type == REG_SZ ? mk_s98_rec_parse(text) : MK_S98_FAILED;
         if (r != MK_S98_DISABLE && r != MK_S98_INSTALL &&
-            r != MK_S98_ENABLE &&
+            r != MK_S98_ENABLE && r != MK_S98_GIVE &&
             api.Locate(&dn, id, MK_CM_LOCATE_PHANTOM) ==
                 MK_CR_NO_SUCH_DEVNODE) {
             inst_copy(gone[nGone++], id, sizeof(gone[0]));
@@ -2837,6 +3108,7 @@ static int mk_s98_seen(const char *id, int create)
             if (s98Seen[i].Walk != s98Walk && s98Seen[i].Walk + 1 != s98Walk) {
                 s98Seen[i].Attempts = 0;
                 s98Seen[i].Why = -1;
+                s98Seen[i].Declined = 0;
             }
             s98Seen[i].Walk = s98Walk;
             return i;
@@ -2877,9 +3149,658 @@ static int mk_s98_member_node(int node, const int *member)
     return -1;
 }
 
-/* One poll's switch: records settled first, then at most one devnode
- * switched; every candidate's arrival entry is kept at every walk, the
- * ones after the switched one too, so no retry budget or delay restarts
+/* Why the id was absent from node `i` below member node `m`, as far as the
+ * service can tell (record 31 section 6.2's log). */
+static int mk_s98_noid_code(int i, int m);
+
+static const char *mk_s98_noid(int i, int m)
+{
+    return mk_s98_noid_text(mk_s98_noid_code(i, m));
+}
+
+/* The system of this poll (mk_s98_sys), for the reason texts. */
+static int s98PollSys;
+
+/* Why the id was absent, as mk_s98_noid_why's code. */
+static int mk_s98_noid_code(int i, int m)
+{
+    char f[256];
+    size_t fb = 0;
+    DWORD cr;
+    int filt;
+    int depth = 0;
+    int p;
+
+    cr = mk_prop_text(nodes[m].Dn, MK_CM_DRP_UPPERFILTERS, f, sizeof(f), &fb);
+    if (cr == MK_CR_SUCCESS) {
+        filt = inst_msz_has(f, fb, "xhcicm") ? 1 : 0;
+    } else {
+        filt = cr == MK_CR_NO_SUCH_VALUE ? 0 : -1;
+    }
+    for (p = i; p >= 0 && p != m && depth < 64; p = nodes[p].Parent) {
+        depth++;
+    }
+    if (s98PollSys == MK_S98_OS_81 || s98PollSys == MK_S98_OS_10) {
+        return MK_S98_ID_OS;
+    }
+    return mk_s98_noid_why(
+        inst_msz_has(nodes[i].Compat, nodes[i].CompatBytes,
+                     MK_S98_TUNNEL_ID), filt, depth);
+}
+
+/* ---- 2000 and XP: the unit restarted (record 31 section 6.2, Q2) ---- */
+
+#define MK_S98_BRIDGE_CC    "PCI\\CC_0604"
+
+/* 1 when node k is node u or below it in this walk. */
+static int mk_s98_within(int k, int u)
+{
+    int steps;
+
+    for (steps = 0; k >= 0 && steps < 64; k = nodes[k].Parent, steps++) {
+        if (k == u) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The unit of node i below member node m: the ancestor of i (or i) whose
+ * parent is m; -1 when none in 64 steps. */
+static int mk_s98_unit_of(int i, int m)
+{
+    int steps;
+
+    for (steps = 0; i >= 0 && steps < 64; steps++) {
+        if (nodes[i].Parent == m) {
+            return i;
+        }
+        i = nodes[i].Parent;
+    }
+    return -1;
+}
+
+/* A driverless NVMe function's state the tag restart admits: no driver
+ * and either no problem or "not configured" (1), "failed install" (28) or
+ * "reinstall" (18) - never disabled or any other problem. */
+static int mk_s98_driverless_ok(ULONG st, ULONG pr)
+{
+    return mk_s98_driverless((st & MK_DN_STARTED) != 0,
+                             (st & MK_DN_HAS_PROBLEM) != 0, pr);
+}
+
+/* The gate over the current walk: the unit's whole subtree holds only
+ * bridges that are started with a driver and NVMe-class functions with
+ * none (in an admitted state), at least one of them without the id. NULL
+ * when it passes, else why not. */
+static const char *mk_s98_unit_gate(int u)
+{
+    char service[64];
+    ULONG st;
+    ULONG pr;
+    int k;
+    int plain = 0;
+
+    if (walkBad != 0) {
+        return "this walk of the device tree was not whole";
+    }
+    if (!inst_msz_has(nodes[u].Compat, nodes[u].CompatBytes,
+                      MK_S98_BRIDGE_CC)) {
+        return "the drive is its own unit (no switch above it)";
+    }
+    for (k = 0; k < nodeCount; k++) {
+        if (!mk_s98_within(k, u)) {
+            continue;
+        }
+        if (!nodes[k].StatusOk || nodes[k].ServiceBad || nodes[k].IdsBad) {
+            return "a device of the enclosure could not be read";
+        }
+        inst_copy(service, nodes[k].Service, sizeof(service));
+        st = nodes[k].Status;
+        pr = nodes[k].Problem;
+        if (inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes,
+                         MK_S98_BRIDGE_CC)) {
+            if (service[0] == '\0' || (st & MK_DN_STARTED) == 0 ||
+                (st & MK_DN_HAS_PROBLEM) != 0) {
+                return "a bridge of the enclosure is not installed and "
+                       "started yet";
+            }
+            continue;
+        }
+        if (inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes, MK_S98_CC) &&
+            service[0] == '\0' && mk_s98_driverless_ok(st, pr)) {
+            if (!inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes,
+                              MK_S98_TUNNEL_ID)) {
+                plain++;
+            }
+            continue;
+        }
+        return "something below the unit runs, is disabled or is not a drive";
+    }
+    return plain > 0 ? NULL : "no drive below the unit lacks the id";
+}
+
+/* XP's and 2000's wizard leaves a drive it found no driver for either
+ * failed (CONFIGFLAG_FAILEDINSTALL) or, after XP's default-ticked "Don't
+ * prompt me again", installed with the null driver: either way Windows
+ * asks nothing when the drive comes back with the id (read on XP,
+ * 2026-10-25, record 31 section 6.2). Before the tag restart each plain
+ * driverless drive below the unit has the failed flag cleared and
+ * CONFIGFLAG_REINSTALL set, every other flag kept, so Windows installs it
+ * again, by the id, when it returns (the safe-removal mark's restart makes
+ * the same step, mk_mark_rerun). 1 when the flags read so afterwards. */
+static int mk_s98_clear_failed(const char *id)
+{
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    DWORD type = 0;
+    DWORD cfg = 0;
+    DWORD dn;
+    ULONG cmType = 0;
+    ULONG cmCfg = 0;
+    ULONG cmBytes = sizeof(cmCfg);
+    int ok = 0;
+
+    set = mk_s98_open(id, &data);
+    if (set == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    if (!api.GetRegProp(set, &data, MK_SPDRP_CONFIGFLAGS, &type,
+                        (PBYTE)&cfg, sizeof(cfg), NULL)) {
+        /* SetupAPI answers a value that is not there and one it cannot
+         * read alike; the configuration manager tells them apart. Only a
+         * value verifiably absent (a devnode not yet installed) reads as
+         * no flags; anything else is not known to be clear. */
+        type = 0;
+        cfg = 0;
+        if (api.Locate(&dn, (char *)id, MK_CM_LOCATE_NORMAL) ==
+                MK_CR_SUCCESS &&
+            api.GetProp(dn, MK_CM_DRP_CONFIGFLAGS, &cmType, &cmCfg, &cmBytes,
+                        0) == MK_CR_NO_SUCH_VALUE) {
+            type = REG_DWORD;
+        }
+    }
+    if (type == REG_DWORD) {
+        INST_U32 next;
+        if (!mk_s98_rerun_flags((INST_U32)cfg, &next)) {
+            ok = 1;
+        } else {
+            DWORD was = cfg;
+            cfg = (DWORD)next;
+            ok = s98api.SetRegProp(set, &data, MK_SPDRP_CONFIGFLAGS,
+                                   (const BYTE *)&cfg, sizeof(cfg)) ? 1 : 0;
+            mk_log("Stor98: %s: its install %s to run again before its "
+                   "unit's restart (flags %08lX -> %08lX)", id,
+                   ok ? "set" : "could not be set", was, cfg);
+        }
+    }
+    api.Destroy(set);
+    return ok;
+}
+
+/* 1 when the drive was seen, in this arrival, with the id and no driver
+ * (mk_s98_nt5): the user's choice stands, nothing set to run again. Read
+ * only, so that it leaves the arrival bookkeeping to mk_s98_poll: the
+ * entry counts when it was seen at the fallback's last walk (s98Walk:
+ * this poll's inside mk_s98_poll, the previous poll's before it, in
+ * mk_restart), else the drive is a new arrival with no refusal. */
+static int mk_s98_declined(const char *id)
+{
+    int i;
+
+    for (i = 0; i < s98SeenCount; i++) {
+        if (inst_eq(s98Seen[i].Id, id)) {
+            return s98Seen[i].Walk == s98Walk && s98Seen[i].Declined;
+        }
+    }
+    return 0;
+}
+
+/* Whether devnode `dn`'s ancestors reach `unitDn`: 1 below it, 0 not
+ * (the root reached first), -1 not known (a parent unread, or 64 steps
+ * without an answer). */
+static int mk_mark_below(DWORD dn, DWORD unitDn)
+{
+    DWORD p;
+    DWORD cr;
+    int steps;
+
+    for (steps = 0; steps < 64; steps++) {
+        cr = api.Parent(&p, dn, 0);
+        if (cr == MK_CR_NO_SUCH_DEVNODE) {
+            return 0;
+        }
+        if (cr != MK_CR_SUCCESS) {
+            return -1;
+        }
+        if (p == unitDn) {
+            return 1;
+        }
+        dn = p;
+    }
+    return -1;
+}
+
+/* The safe-removal mark's restart of unit `unit` (devnode `unitDn`, read
+ * fresh by mk_fresh_unit), on 2000 and XP: each plain driverless drive
+ * below it has its install set to run again first, the tag restart's flag
+ * step (record 31 section 6.2, "The mark's restart", task 44.52; read on
+ * XP and XP x64, 2026-10-27: without it the drive came back with the id,
+ * its failed install left, and Windows asked nothing). Called under the
+ * tools' eject mutex, after the restart's fresh reads. Each drive this
+ * poll's walk lists below the unit is read again (its driver, status,
+ * ids, and its place below the unit) before its flags are touched; one
+ * that has found a driver or the id since is left. NULL when the restart
+ * may be made (*sm the Stor98 switch mutex when it was taken: the caller
+ * holds it to the call and releases it); else why the restart waits for
+ * the next poll, with nothing held. */
+static const char *mk_mark_rerun(int unit, DWORD unitDn, HANDLE *sm)
+{
+    static char why[INST_ID_CHARS + 64];
+    static char compat[sizeof(nodes[0].Compat)];
+    char inf[MAX_PATH];
+    char service[64];
+    MK_S98_MF in;
+    size_t cb;
+    DWORD dn;
+    DWORD cr;
+    ULONG st;
+    ULONG pr;
+    int policy;
+    int k;
+    int n = 0;
+
+    *sm = NULL;
+    if (osv.dwMajorVersion != 5) {
+        return NULL;
+    }
+    policy = mk_s98_policy(inf, sizeof(inf));
+    for (k = 0; k < nodeCount; k++) {
+        if (k == unit || !mk_s98_within(k, unit)) {
+            continue;
+        }
+        memset(&in, 0, sizeof(in));
+        in.Nt5 = 1;
+        in.PolicyOk = policy;
+        in.Below = 1;
+        in.Nvme = inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes,
+                               MK_S98_CC);
+        in.HasId = inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes,
+                                MK_S98_TUNNEL_ID);
+        in.Service = nodes[k].ServiceBad ? NULL : nodes[k].Service;
+        in.Declined = mk_s98_declined(nodes[k].Id);
+        in.Protected = curProt != NULL && curProt[k];
+        in.StatusOk = nodes[k].StatusOk && !nodes[k].IdsBad;
+        in.Started = (nodes[k].Status & MK_DN_STARTED) != 0;
+        in.Problem = (nodes[k].Status & MK_DN_HAS_PROBLEM) != 0;
+        in.ProblemCode = nodes[k].Problem;
+        if (mk_s98_mark_sets(&in)) {
+            n++;
+        }
+    }
+    if (n == 0) {
+        return NULL;
+    }
+    if (!mk_s98_api()) {
+        /* Logged by mk_s98_api: the flags cannot be written, so the
+         * restart waits, as for any flag that cannot be written. */
+        return "the routines that set a drive's install to run again are "
+               "missing";
+    }
+    *sm = mk_lock(MK_S98_SWITCH_MUTEX, 1000);
+    if (*sm == NULL) {
+        return "the Stor98 switch mutex is held; a drive's install is not "
+               "set to run again yet";
+    }
+    if (mk_s98_paused()) {
+        mk_unlock(*sm);
+        *sm = NULL;
+        return "an installer run is in progress; a drive's install is not "
+               "set to run again yet";
+    }
+    for (k = 0; k < nodeCount; k++) {
+        if (k == unit || !mk_s98_within(k, unit)) {
+            continue;
+        }
+        if (!inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes, MK_S98_CC)) {
+            continue;
+        }
+        /* The walk's reading first (as counted above), then the fresh one. */
+        memset(&in, 0, sizeof(in));
+        in.Nt5 = 1;
+        in.PolicyOk = policy;
+        in.Below = 1;
+        in.Nvme = 1;
+        in.HasId = inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes,
+                                MK_S98_TUNNEL_ID);
+        in.Service = nodes[k].ServiceBad ? NULL : nodes[k].Service;
+        in.Declined = mk_s98_declined(nodes[k].Id);
+        in.Protected = curProt != NULL && curProt[k];
+        in.StatusOk = nodes[k].StatusOk && !nodes[k].IdsBad;
+        in.Started = (nodes[k].Status & MK_DN_STARTED) != 0;
+        in.Problem = (nodes[k].Status & MK_DN_HAS_PROBLEM) != 0;
+        in.ProblemCode = nodes[k].Problem;
+        if (!mk_s98_mark_sets(&in)) {
+            continue;
+        }
+        cb = 0;
+        if (!mk_s98_fresh(nodes[k].Id, service, sizeof(service), &st, &pr,
+                          &dn)) {
+            sprintf(why, "%.*s could not be read again",
+                    (int)(sizeof(why) - 40), nodes[k].Id);
+            mk_unlock(*sm);
+            *sm = NULL;
+            return why;
+        }
+        cr = mk_prop_text(dn, MK_CM_DRP_COMPATIBLEIDS, compat,
+                          sizeof(compat), &cb);
+        if (cr != MK_CR_SUCCESS && cr != MK_CR_NO_SUCH_VALUE) {
+            sprintf(why, "%.*s could not be read again",
+                    (int)(sizeof(why) - 40), nodes[k].Id);
+            mk_unlock(*sm);
+            *sm = NULL;
+            return why;
+        }
+        if (cr == MK_CR_NO_SUCH_VALUE) {
+            cb = 0;
+        }
+        in.Below = mk_mark_below(dn, unitDn);
+        if (in.Below < 0) {
+            sprintf(why, "%.*s could not be placed below its unit again",
+                    (int)(sizeof(why) - 50), nodes[k].Id);
+            mk_unlock(*sm);
+            *sm = NULL;
+            return why;
+        }
+        in.Nvme = inst_msz_has(compat, cb, MK_S98_CC);
+        in.HasId = inst_msz_has(compat, cb, MK_S98_TUNNEL_ID);
+        in.Service = service;
+        in.StatusOk = 1;
+        in.Started = (st & MK_DN_STARTED) != 0;
+        in.Problem = (st & MK_DN_HAS_PROBLEM) != 0;
+        in.ProblemCode = pr;
+        if (!mk_s98_mark_sets(&in)) {
+            /* A driver, the id or another state since the walk: left. */
+            continue;
+        }
+        if (!mk_s98_clear_failed(nodes[k].Id)) {
+            sprintf(why, "the install of %.*s could not be set to run again",
+                    (int)(sizeof(why) - 50), nodes[k].Id);
+            mk_unlock(*sm);
+            *sm = NULL;
+            return why;
+        }
+    }
+    return NULL;
+}
+
+#define MK_S98_UR_DEFER     0   /* nothing done: try again next poll      */
+#define MK_S98_UR_MADE      1   /* the restart made                        */
+#define MK_S98_UR_REFUSED   2   /* refused, vetoed or failed: budget spent */
+
+/* The restart itself, under the tools' eject mutex and the switch mutex
+ * with no installer pause (mk_s98_lock): no installation pending; the
+ * device tree walked again under the locks, the unit found again below
+ * the same tunnel port with the drive below it, still without the id and
+ * a driver, and the subtree's gate passed on that walk; the unit started
+ * with no problem; then DICS_PROPCHANGE as the safe-removal mark's
+ * restart makes it (mk_restart). The budget is spent (*spent) only at the
+ * call. *rewalked 1 when the walk was made again (the caller's indices
+ * are then stale). */
+static int mk_s98_unit_restart(int u, int i, const char *why, int *spent,
+                               int *rewalked, const MK_NHI *h,
+                               INST_U32 member)
+{
+    static MK_NHI hh;
+    char nhiKeep[INST_ID_CHARS];
+    char unitKeep[INST_ID_CHARS];
+    char driveKeep[INST_ID_CHARS];
+    char whyKeep[160];
+    ULONG portBus;
+    ULONG portAddr;
+    int portLoc;
+    int d2;
+    HANDLE em;
+    HANDLE sm;
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    SP_PROPCHANGE_PARAMS pcp;
+    SP_DEVINSTALL_PARAMS_A ip;
+    DWORD dn;
+    ULONG st;
+    ULONG pr;
+    BOOL called = FALSE;
+    const char *no = NULL;
+    const char *unitId = unitKeep;
+
+    *spent = 0;
+    *rewalked = 0;
+    if (!mk_s98_api()) {
+        return MK_S98_UR_DEFER;
+    }
+    inst_copy(unitKeep, nodes[u].Id, sizeof(unitKeep));
+    inst_copy(driveKeep, nodes[i].Id, sizeof(driveKeep));
+    inst_copy(whyKeep, why, sizeof(whyKeep));
+    why = whyKeep;
+    portLoc = nodes[u].Parent >= 0 && nodes[nodes[u].Parent].HasLoc;
+    portBus = portLoc ? nodes[nodes[u].Parent].Bus : 0;
+    portAddr = portLoc ? nodes[nodes[u].Parent].Address : 0;
+    if (!mk_s98_lock(&em, &sm)) {
+        return MK_S98_UR_DEFER;
+    }
+    if (!mk_no_install_pending()) {
+        mk_unlock(sm);
+        mk_unlock(em);
+        return MK_S98_UR_DEFER;
+    }
+    hh = *h;
+    inst_copy(nhiKeep, nodes[h->Node].Id, sizeof(nhiKeep));
+    *rewalked = 1;
+    if (!mk_walk() || walkBad != 0) {
+        mk_unlock(sm);
+        mk_unlock(em);
+        return MK_S98_UR_DEFER;
+    }
+    u = mk_find_id(unitKeep);
+    d2 = mk_find_id(driveKeep);
+    if (u < 0 || d2 < 0 || !portLoc || nodes[u].Parent < 0 ||
+        !nodes[nodes[u].Parent].HasLoc ||
+        nodes[nodes[u].Parent].Bus != portBus ||
+        nodes[nodes[u].Parent].Address != portAddr ||
+        !mk_s98_within(d2, u)) {
+        mk_unlock(sm);
+        mk_unlock(em);
+        return MK_S98_UR_DEFER;
+    }
+    /* The domain read again on the new walk: the same NHI, its epoch,
+     * the port still an active member. */
+    hh.Node = mk_find_id(nhiKeep);
+    if (hh.Node < 0 || !mk_s98_domain_fresh(&hh, member)) {
+        mk_unlock(sm);
+        mk_unlock(em);
+        return MK_S98_UR_DEFER;
+    }
+    if (nodes[d2].ServiceBad || nodes[d2].Service[0] != '\0' ||
+        inst_msz_has(nodes[d2].Compat, nodes[d2].CompatBytes,
+                     MK_S98_TUNNEL_ID)) {
+        /* The drive found a driver or its id since the poll's walk. */
+        mk_unlock(sm);
+        mk_unlock(em);
+        return MK_S98_UR_DEFER;
+    }
+    no = mk_s98_unit_gate(u);
+    if (no == NULL &&
+        (api.Locate(&dn, (char *)unitId, MK_CM_LOCATE_NORMAL) !=
+             MK_CR_SUCCESS ||
+         api.Status(&st, &pr, dn, 0) != MK_CR_SUCCESS ||
+         (st & MK_DN_STARTED) == 0 || (st & MK_DN_HAS_PROBLEM) != 0)) {
+        no = "the unit is not started";
+    }
+    if (no == NULL) {
+        int k;
+        for (k = 0; k < nodeCount; k++) {
+            if (k != u && mk_s98_within(k, u) &&
+                inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes,
+                             MK_S98_CC) &&
+                !inst_msz_has(nodes[k].Compat, nodes[k].CompatBytes,
+                              MK_S98_TUNNEL_ID) &&
+                nodes[k].Service[0] == '\0' &&
+                !mk_s98_declined(nodes[k].Id) &&
+                !mk_s98_clear_failed(nodes[k].Id)) {
+                /* A drive that would come back with its install still
+                 * failed is not restarted for: deferred, unspent. */
+                mk_unlock(sm);
+                mk_unlock(em);
+                mk_log("Stor98: restart of %s deferred: %s's failed "
+                       "install could not be read or cleared", unitId,
+                       nodes[k].Id);
+                return MK_S98_UR_DEFER;
+            }
+        }
+        set = mk_s98_open(unitId, &data);
+        if (set == INVALID_HANDLE_VALUE) {
+            no = "the unit could not be opened";
+        } else {
+            memset(&pcp, 0, sizeof(pcp));
+            pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+            pcp.ClassInstallHeader.InstallFunction = MK_DIF_PROPERTYCHANGE;
+            pcp.StateChange = MK_DICS_PROPCHANGE;
+            pcp.Scope = MK_DICS_FLAG_GLOBAL;
+            pcp.HwProfile = 0;
+            if (api.SetCiParams(set, &data, &pcp.ClassInstallHeader,
+                                sizeof(pcp))) {
+                *spent = 1;
+                called = api.CallCi(MK_DIF_PROPERTYCHANGE, set, &data);
+                memset(&ip, 0, sizeof(ip));
+                ip.cbSize = sizeof(ip);
+                if (called && api.GetDiParams(set, &data, &ip) &&
+                    (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
+                    no = "Windows vetoed it or asks for a restart";
+                    called = FALSE;
+                }
+            }
+            if (!called && no == NULL) {
+                no = "the restart failed";
+            }
+            api.Destroy(set);
+        }
+    }
+    mk_unlock(sm);
+    mk_unlock(em);
+    if (called) {
+        mkRestartMade = 1;
+        mk_log("Stor98: restart made: %s, so that its drives come back "
+               "through the filter chain with the tunnel id (%s)", unitId,
+               why);
+        return MK_S98_UR_MADE;
+    }
+    mk_log("Stor98: restart of %s not made: %s; unplug the enclosure and "
+           "plug it in again, and Windows' own wizard offers Stor98", unitId,
+           no);
+    return *spent ? MK_S98_UR_REFUSED : MK_S98_UR_DEFER;
+}
+
+/* Node i (a candidate with no driver below member node m) on 2000 and
+ * XP: its unit restarted once per arrival of the unit in this service's
+ * run, or why not, once per reason. Returns 1 when a restart was made
+ * (the walk no longer shows the tree: the poll stops). */
+static int mk_s98_nt5(int i, int m, int s, const MK_NHI *h, INST_U32 member)
+{
+    int code;
+    int noRoute;
+    int u;
+    int us;
+    int r;
+    int spent;
+    const char *no;
+
+    if (mkRestartMade) {
+        return 1;
+    }
+    if (s98Seen[s].Declined ||
+        inst_msz_has(nodes[i].Compat, nodes[i].CompatBytes,
+                     MK_S98_TUNNEL_ID)) {
+        /* Offered Stor98 by the wizard and declined, or its wizard still
+         * open: the user's, for the rest of this arrival, whatever its
+         * ids read later. */
+        s98Seen[s].Declined = 1;
+        if (s98Seen[s].Why != MK_S98_W_DECLINED) {
+            mk_log("Stor98: %s carries the tunnel id and has no driver: "
+                   "Windows' wizard offers Stor98 for it; left to the user",
+                   nodes[i].Id);
+            s98Seen[s].Why = MK_S98_W_DECLINED;
+        }
+        return 0;
+    }
+    u = mk_s98_unit_of(i, m);
+    us = u >= 0 ? mk_s98_seen(nodes[u].Id, 1) : -1;
+    if (us >= 0 && s98Seen[us].Attempts > 0) {
+        /* The unit's restart of this arrival was made (or refused at the
+         * call): a drive still without the id is said once. */
+        if (s98Seen[s].Why != MK_S98_W_AFTER) {
+            code = mk_s98_noid_code(i, m);
+            noRoute = code == MK_S98_ID_NOFILTER;
+            mk_log("Stor98: %s still has no tunnel id after its unit's "
+                   "restart (or a refused one; %s): %s", nodes[i].Id,
+                   mk_s98_noid_text(code),
+                   noRoute ? "no route puts Stor98 on it by itself here: run "
+                             "INSTALL.BAT, or Update Driver in Device "
+                             "Manager" :
+                             "unplug the enclosure and plug it in again, and "
+                             "Windows' own wizard offers Stor98");
+            s98Seen[s].Why = MK_S98_W_AFTER;
+        }
+        return 0;
+    }
+    no = u < 0 ? "its unit was not found" : mk_s98_unit_gate(u);
+    if (no == NULL) {
+        code = mk_s98_noid_code(i, m);
+        if (code == MK_S98_ID_NOFILTER) {
+            /* A restart cannot give the id where no filter of this
+             * driver sits on the port. (The depth estimate here counts
+             * from the port, the chain's bound from the topmost filtered
+             * bridge: it refuses nothing.) */
+            no = mk_s98_noid_text(code);
+        }
+    }
+    if (no != NULL || us < 0) {
+        if (s98Seen[s].Why != MK_S98_W_UNIT) {
+            int own = u < 0 || !inst_msz_has(nodes[u].Compat,
+                                              nodes[u].CompatBytes,
+                                              MK_S98_BRIDGE_CC);
+            code = mk_s98_noid_code(i, m);
+            own = own || code == MK_S98_ID_NOFILTER;
+            mk_log("Stor98: %s has no tunnel id and no driver; its unit is "
+                   "not restarted: %s. %s", nodes[i].Id,
+                   no != NULL ? no : "no room to track it",
+                   own ? "No route puts Stor98 on it by itself here: run "
+                         "INSTALL.BAT, or Update Driver in Device Manager" :
+                         "Unplug the enclosure and plug it in again, and "
+                         "Windows' own wizard offers Stor98");
+            s98Seen[s].Why = MK_S98_W_UNIT;
+        }
+        return 0;
+    }
+    {
+        char unitKeep[INST_ID_CHARS];
+        int rewalked;
+        inst_copy(unitKeep, nodes[u].Id, sizeof(unitKeep));
+        r = mk_s98_unit_restart(u, i, mk_s98_noid(i, m), &spent, &rewalked,
+                                h, member);
+        if (spent) {
+            us = mk_s98_seen(unitKeep, 1);
+            if (us >= 0) {
+                s98Seen[us].Attempts++;
+                s98Seen[us].At = GetTickCount();
+            }
+        }
+        return r == MK_S98_UR_MADE || rewalked;
+    }
+}
+
+/* One poll's fallback: records settled first, then at most one devnode
+ * given Stor98; every candidate's arrival entry is kept at every walk, the
+ * ones after the one given it too, so no retry budget or delay restarts
  * for a drive that stayed. */
 static void mk_s98_poll(const int *prot)
 {
@@ -2894,8 +3815,14 @@ static void mk_s98_poll(const int *prot)
     int m;
     INST_U32 p;
     int done = 0;
+    int sys;
+    DWORD ma;
+    DWORD mi;
+    DWORD bu;
 
     s98Walk++;
+    sys = mk_s98_sys(&ma, &mi, &bu);
+    s98PollSys = sys;
     policy = mk_s98_policy(inf, sizeof(inf));
     /* An enable owed is made whatever the value says now. */
     mk_s98_recover_all();
@@ -2931,12 +3858,14 @@ static void mk_s98_poll(const int *prot)
         int w;
         int r;
         memset(&in, 0, sizeof(in));
+        in.Os = sys;
         in.IsPci = mk_is_pci(&nodes[i]);
         in.Nvme = inst_msz_has(nodes[i].Compat, nodes[i].CompatBytes,
                                MK_S98_CC);
         in.Service = nodes[i].ServiceBad ? NULL : nodes[i].Service;
         w = mk_s98_wanted(&in);
-        if (w == MK_S98_W_CLASS || w == MK_S98_W_SERVICE) {
+        if (w == MK_S98_W_CLASS || w == MK_S98_W_SERVICE ||
+            w == MK_S98_W_OS) {
             continue;
         }
         s = mk_s98_seen(nodes[i].Id, 1);
@@ -2948,6 +3877,7 @@ static void mk_s98_poll(const int *prot)
         in.StatusOk = nodes[i].StatusOk;
         in.Started = (nodes[i].Status & MK_DN_STARTED) != 0;
         in.Problem = (nodes[i].Status & MK_DN_HAS_PROBLEM) != 0;
+        in.ProblemCode = nodes[i].Problem;
         in.Below = mk_s98_below(parent, nodeCount, i, member);
         in.Protected = prot[i];
         in.Record = mk_s98_rec_get(nodes[i].Id);
@@ -2965,10 +3895,17 @@ static void mk_s98_poll(const int *prot)
         }
         if (w != MK_S98_GO) {
             if (w != s98Seen[s].Why && w != MK_S98_W_POLICY) {
-                mk_log("Stor98: %s on stornvme: %s", nodes[i].Id,
+                mk_log("Stor98: %s (service %s): %s", nodes[i].Id,
+                       nodes[i].Service[0] ? nodes[i].Service : "none",
                        mk_s98_why_text(w));
             }
             s98Seen[s].Why = w;
+            continue;
+        }
+        if (osv.dwMajorVersion == 5) {
+            if (mk_s98_nt5(i, m, s, &nhis[owner[m]], bdf[m])) {
+                done = 1;
+            }
             continue;
         }
         if (!mk_s98_api()) {
@@ -2977,7 +3914,8 @@ static void mk_s98_poll(const int *prot)
         s98Seen[s].Attempts++;
         s98Seen[s].At = GetTickCount();
         s98Seen[s].Why = -1;
-        r = mk_s98_switch(nodes[i].Id, &nhis[owner[m]], bdf[m], inf);
+        r = mk_s98_give(nodes[i].Id, &nhis[owner[m]], bdf[m], inf,
+                        mk_s98_displaces(&in), mk_s98_noid(i, m));
         if (r == MK_S98_NONE) {
             s98Seen[s].Attempts--;  /* nothing was attempted */
         }
@@ -2986,11 +3924,93 @@ static void mk_s98_poll(const int *prot)
 }
 
 /* One poll; returns the milliseconds to the next. */
+/* The connection manager off the boot path (design record 23 section
+ * 5.14; task 44.32, owner 2026-10-25): the setup engine makes xhcicm a
+ * boot driver whenever it installs the filter on a PCI bridge - a port
+ * that first appears after the install, an update by hand - and a start
+ * that cannot load a boot driver does not finish; each poll sets it back
+ * to demand start, the INFs' StartType=3. A failure is logged once until
+ * a change succeeds. */
+static int cmStartFailLogged;
+static int cmStartKeepLast = -1;    /* the last kept answer, -1 none     */
+static DWORD cmStartKeepStart;      /* the start type it was kept at      */
+static DWORD cmStartKeepTick;       /* when the path was last read        */
+
+static void mk_cm_start(void)
+{
+    SC_HANDLE scm;
+    SC_HANDLE s;
+    DWORD start;
+    DWORD e = 0;
+    int ok = 0;
+    int keep;
+
+    start = mk_reg_dword(HKEY_LOCAL_MACHINE,
+                         "SYSTEM\\CurrentControlSet\\Services\\" MK_NAME,
+                         "Start", 0xFFFFFFFFUL);
+    if (!inst_cm_start_fix(start != 0xFFFFFFFFUL, INST_REG_DWORD_TYPE,
+                           (INST_U32)start)) {
+        cmStartKeepLast = -1;
+        return;
+    }
+    /* The disk Windows starts from needs every driver of its path at boot
+     * (inst_bootp.c): read when the value is to be changed, and while it
+     * is kept again once a minute or when the value changes. */
+    if (cmStartKeepLast >= 0 && start == cmStartKeepStart &&
+        GetTickCount() - cmStartKeepTick < MK_INVENTORY_MS) {
+        return;
+    }
+    keep = inst_cm_start_action(1, inst_boot_path_names(MK_NAME));
+    if (keep != INST_CMST_SET) {
+        if (keep != cmStartKeepLast || start != cmStartKeepStart) {
+            mk_log("xhcicm: start type %lu kept: %s", (unsigned long)start,
+                   keep == INST_CMST_KEEP_PATH ?
+                   "the system disk's path names it" :
+                   "the system disk's path could not be read");
+        }
+        cmStartKeepLast = keep;
+        cmStartKeepStart = start;
+        cmStartKeepTick = GetTickCount();
+        return;
+    }
+    cmStartKeepLast = -1;
+    scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    s = scm != NULL ? OpenServiceA(scm, MK_NAME, SERVICE_CHANGE_CONFIG) : NULL;
+    if (s != NULL &&
+        ChangeServiceConfigA(s, SERVICE_NO_CHANGE, SERVICE_DEMAND_START,
+                             SERVICE_NO_CHANGE, NULL, NULL, NULL, NULL, NULL,
+                             NULL, NULL)) {
+        /* Only the value read back counts: what the next start reads. */
+        ok = mk_reg_dword(HKEY_LOCAL_MACHINE,
+                          "SYSTEM\\CurrentControlSet\\Services\\" MK_NAME,
+                          "Start", 0xFFFFFFFFUL) == INST_CM_START_DEMAND;
+        e = ok ? 0 : ERROR_INVALID_DATA;
+    } else {
+        e = GetLastError();
+    }
+    if (s != NULL) {
+        CloseServiceHandle(s);
+    }
+    if (scm != NULL) {
+        CloseServiceHandle(scm);
+    }
+    if (ok) {
+        mk_log("xhcicm: start type %lu set back to demand start",
+               (unsigned long)start);
+        cmStartFailLogged = 0;
+    } else if (!cmStartFailLogged) {
+        mk_log("xhcicm: start type %lu could not be set back to demand start "
+               "(error %lu)", (unsigned long)start, (unsigned long)e);
+        cmStartFailLogged = 1;
+    }
+}
+
 static DWORD mk_poll(void)
 {
     int any;
     int *prot;
 
+    mk_cm_start();
     if (!mk_walk()) {
         mk_log("the device tree could not be walked");
         return 10000;
@@ -3030,6 +4050,7 @@ static DWORD mk_poll(void)
                walkBad);
         return mk_poll_ms(any);
     }
+    mkRestartMade = 0;
     mk_entries(prot);
     mk_reconcile_all();
     mk_s98_poll(prot);

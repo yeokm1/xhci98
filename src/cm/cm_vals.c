@@ -302,6 +302,25 @@ VOID CmValuesDefault(PCM_VALUES v)
     }
     v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
     v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
+    v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
+}
+
+VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
+    v->AsmPcie7Found = 0;
+    v->AsmPcie7Raw = 0;
+    v->AsmPcie7Refused = 0;
+    if (!found) {
+        return;
+    }
+    v->AsmPcie7Found = 1;
+    v->AsmPcie7Raw = raw;
+    if (raw > 1) {
+        v->AsmPcie7Refused = 1;
+        return;
+    }
+    v->AsmPcie7 = raw;
 }
 
 VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw)

@@ -33,7 +33,7 @@ BEGIN
             VALUE "FileDescription",  "xHCI98 Setup\0"
             VALUE "FileVersion",      XHCI_VER_STR "\0"
             VALUE "InternalName",     "xhciwiz\0"
-            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2 or later.\0"
             VALUE "OriginalFilename", "XHCIWIZ.EXE\0"
             VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
             VALUE "ProductVersion",   XHCI_VER_STR "\0"
@@ -51,13 +51,13 @@ CAPTION "Welcome"
 FONT 8, "MS Sans Serif"
 BEGIN
     LTEXT           "", IDC_TITLE, 8, 4, 284, 10
-    LTEXT           "", IDC_TEXT, 8, 18, 284, 58
-    LTEXT           "", IDC_SYSTEM, 8, 78, 284, 18
-    LTEXT           "", IDC_LOG, 8, 97, 284, 10
+    LTEXT           "", IDC_TEXT, 8, 18, 284, 42
+    LTEXT           "", IDC_SYSTEM, 8, 62, 284, 18
+    LTEXT           "", IDC_LOG, 8, 81, 284, 10
     CONTROL         "", IDC_LIST, "SysListView32", LVS_REPORT |
                     LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER |
-                    WS_TABSTOP, 8, 109, 284, 46
-    EDITTEXT        IDC_STATUS, 8, 158, 284, 48, ES_MULTILINE | ES_READONLY |
+                    WS_TABSTOP, 8, 93, 284, 70
+    EDITTEXT        IDC_STATUS, 8, 166, 284, 40, ES_MULTILINE | ES_READONLY |
                     ES_AUTOVSCROLL | WS_VSCROLL
 END
 
@@ -99,26 +99,27 @@ BEGIN
     AUTOCHECKBOX    "", IDC_C_UAS, 20, 33, 272, 10, WS_TABSTOP
     LTEXT           "", IDC_C_UAS_T, 32, 44, 260, 18
     AUTOCHECKBOX    "", IDC_C_STOR, 8, 44, 284, 10, WS_TABSTOP
-    EDITTEXT        IDC_C_STOR_T, 20, 55, 272, 31, ES_MULTILINE | ES_READONLY |
-                    ES_AUTOVSCROLL | WS_VSCROLL | NOT WS_TABSTOP
+    LTEXT           "", IDC_C_STOR_T, 20, 55, 272, 31, SS_NOPREFIX
     AUTOCHECKBOX    "", IDC_C_TB, 8, 65, 284, 10, WS_TABSTOP
     LTEXT           "", IDC_C_TB_T, 20, 76, 272, 24
-    AUTOCHECKBOX    "", IDC_C_S98, 20, 103, 272, 10, WS_TABSTOP
-    LTEXT           "", IDC_C_S98_T, 32, 114, 260, 16
-    AUTOCHECKBOX    "", IDC_C_VSD, 32, 131, 260, 10, WS_TABSTOP
-    AUTOCHECKBOX    "", IDC_C_TRAY, 8, 143, 284, 10, WS_TABSTOP
-    AUTOCHECKBOX    "", IDC_C_FAST, 20, 154, 272, 10, WS_TABSTOP
+    AUTOCHECKBOX    "", IDC_C_PFW, 20, 102, 272, 10, WS_TABSTOP
+    AUTOCHECKBOX    "", IDC_C_S98, 20, 114, 272, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_S98_T, 32, 125, 260, 16
+    AUTOCHECKBOX    "", IDC_C_VSD, 32, 142, 260, 10, WS_TABSTOP
+    AUTOCHECKBOX    "", IDC_C_TRAY, 8, 154, 284, 10, WS_TABSTOP
+    AUTOCHECKBOX    "", IDC_C_FAST, 20, 165, 272, 10, WS_TABSTOP
     AUTOCHECKBOX    "Replace the stored build of this package's drivers",
-                    IDC_C_RESTAGE, 8, 166, 284, 10, WS_TABSTOP
-    LTEXT           "", IDC_C_DIRLINE, 8, 180, 284, 10, SS_NOPREFIX
-    PUSHBUTTON      "&Settings...", IDC_C_SETTINGS, 8, 192, 70, 14
-    PUSHBUTTON      "&Change folder...", IDC_C_FOLDER, 84, 192, 70, 14
+                    IDC_C_RESTAGE, 8, 177, 284, 10, WS_TABSTOP
+    PUSHBUTTON      "&Settings...", IDC_C_SETTINGS, 8, 189, 70, 14
+    PUSHBUTTON      "&Change folder...", IDC_C_FOLDER, 84, 189, 70, 14
+    LTEXT           "", IDC_C_DIRLINE, 160, 191, 132, 10,
+                    SS_NOPREFIX | SS_PATHELLIPSIS
 END
 
 IDD_FOLDER DIALOG 0, 0, 300, 92
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION |
       WS_SYSMENU
-CAPTION "The tools folder"
+CAPTION "The install folder"
 FONT 8, "MS Sans Serif"
 BEGIN
     LTEXT           "", IDC_C_DIR_L, 8, 6, 284, 10
