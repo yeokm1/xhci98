@@ -6,12 +6,14 @@
  *
  * ONE TABLE PER BOOT. CmNvlinkInit allocates it (CmAlloc, so in
  * cm_pool.c's one pool site) and nothing frees it once it has been handed
- * out; on NT an unload frees a table no stor98 asked for (CmNvlinkUnload:
- * a reload's, which is never published, or the first load's before any
- * HwFindAdapter asked), so Driver Verifier's unload check has nothing to
- * find then (task 45.31; read 2026-10-29 on 7 x86, an unload during the
- * boot, and on 8 and 8.1 at the uninstall). A table handed out stays, as
- * stor98cm.h interface 2 requires. A reload of this
+ * out. On NT the load that registers the callback takes its own
+ * DriverUnload away first (CmNvlinkInit; stor98cm.h R4), so it stays
+ * loaded for the boot and its table is never left behind by an unload; a
+ * load that publishes nothing (a reload, a failed registration) can still
+ * unload and frees its table, which no stor98 received (CmNvlinkUnload).
+ * Driver Verifier's unload check then finds nothing (task 45.31; read
+ * 2026-10-29 on 7 x86, an unload during the boot's device installs, and on
+ * 8 and 8.1 at the uninstall). A reload of this
  * driver in the same boot (every NHI and filter gone, then back) finds the
  * callback object the first load made and publishes nothing (stor98cm.h,
  * "CM lifetime (NT)": no second table, and the old one is not written
@@ -340,6 +342,7 @@ VOID CmNvlinkInit(VOID)
     UNICODE_STRING text;
     OBJECT_ATTRIBUTES attributes;
     NTSTATUS status;
+    PDRIVER_UNLOAD unload;
 
     KeInitializeSpinLock(&cmNvLock);
     cmNvNt = IoIsWdmVersionAvailable(1, 0x10);
@@ -389,8 +392,20 @@ VOID CmNvlinkInit(VOID)
         cmNvObject = NULL;
         return;
     }
+    /* The load that publishes the table stays for the boot (stor98cm.h,
+     * "CM lifetime (NT)" and R4): its unload routine goes before the
+     * callback can answer, so no unload can be in progress or decided
+     * once a stor98 holds the table, and a removal of every PnP device of
+     * this driver (read on 7 x86 during the boot's device installs, task
+     * 45.31) leaves the callback answering and the table being written
+     * when the devices return. DriverEntry set the routine before this
+     * call and sets it no more; a failed registration, which published
+     * nothing, gives it back. */
+    unload = CmDriverObject->DriverUnload;
+    CmDriverObject->DriverUnload = NULL;
     cmNvRegistration = ExRegisterCallback(cmNvObject, cmNvCallback, NULL);
     if (cmNvRegistration == NULL) {
+        CmDriverObject->DriverUnload = unload;
         ObDereferenceObject(cmNvObject);
         cmNvObject = NULL;
     }

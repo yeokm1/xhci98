@@ -239,6 +239,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     CmDriverObject = DriverObject;
+    /* The unload routine is set before CmNvlinkInit: on NT, the load that
+     * publishes the link-state table takes the routine away there, before
+     * its callback can answer (task 45.31), and nothing after gives it
+     * back. Windows 98 SE and ME: resident for the boot, whatever the PnP
+     * devices do (stor98cm.h R4: the link-state channel's proof key is
+     * answered from this image, cm_nvlinkos.c), as a CONFIGMG worker's
+     * start made it before. */
+    DriverObject->DriverUnload =
+        IoIsWdmVersionAvailable(1, 0x10) ? cmUnload : NULL;
     CmRegInit();
     CmNvlinkInit();
     CmEjectInit();
@@ -250,14 +259,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DriverObject->MajorFunction[IRP_MJ_PNP] = cmDispatchPnp;
     DriverObject->MajorFunction[IRP_MJ_POWER] = cmDispatchPower;
     DriverObject->DriverExtension->AddDevice = cmAddDevice;
-    DriverObject->DriverUnload = cmUnload;
-    if (!IoIsWdmVersionAvailable(1, 0x10)) {
-        /* Windows 98 SE and ME: resident for the boot, whatever the PnP
-         * devices do (stor98cm.h R4: the link-state channel's proof key is
-         * answered from this image, cm_nvlinkos.c), as a CONFIGMG worker's
-         * start made it before. */
-        DriverObject->DriverUnload = NULL;
-    } else {
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
         /* Design record 21 section 6.2.1's gate, read once (cm_reg.c), and
          * design record 33's. */
         CmReadIrqGate();
