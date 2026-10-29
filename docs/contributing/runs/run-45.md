@@ -12,7 +12,7 @@ that took it; they are not files a clone has.
 Design record 22 section 6.2 rewritten so a USB4 version 2 router is run
 as a version 2 one, with the sections it touches (the record's revision
 note of 2026-10-29 lists them). Reading only: no code, no build, no
-guest; development host A, 16:05 to 18:30.
+guest; development host A, 16:05 to 17:00.
 
 ### What was read
 
@@ -73,8 +73,29 @@ bandwidth floor, Gen T out); Gen 4 and asymmetric links (classified from
 Current Link Speed and Negotiated Link Width, never bonded, an
 asymmetric link never initiated and used as found, Gen 4 Link Recovery
 never enabled, the raw bandwidth of Table 6-2); and the code and the
-host vectors that follow. Decisions U30 and U31 are new, the owner's to
-confirm.
+host vectors that follow. Decisions U30 to U32 are new, the owner's to
+confirm: U30 version 2 by default with the bench switch `XhciCmUsb4V2`,
+U31 asymmetric links never initiated and used as found, U32 a new PCIe
+tunnel beside a preserved DisplayPort tunnel built without its 1.5 Gb/s
+floor verified.
+
+Reviewed and revised over five rounds the same day. What the rounds
+changed: the version 2 obligations keyed on the routers' own version and
+the capabilities they report, not on a predecessor's CMUV; the Sequence
+bit Set Capabilities and the rule against reconfiguring a preserved
+router's CV on every USB4 router; the enhanced TMU on every link of two
+version 2 routers whatever the tunnels, with DirSwitchN and the
+replenish values on both ports; a predecessor's Gen 4 Link Recovery
+enable cleared on every preserved link, a LINK_RECOVERY queueing the
+existing port check, and what a recovery leaves unverified recorded as a
+limitation; the bandwidth floor beside a preserved DisplayPort tunnel
+made decision U32. The last round left only U32, which is the owner's.
+
+The host vectors were not written: each one tests behaviour the code
+task adds, and the fake fabric (`test/u4_fakefab.c`) needs a version 2
+router first (CMUV, Set Capabilities, Current Link Speed Gen 4 and the
+asymmetric widths, ADP_PCIE_CS_1, the enhanced TMU fields), so they land
+with the code.
 
 ### What is left
 

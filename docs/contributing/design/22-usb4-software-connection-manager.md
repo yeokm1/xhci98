@@ -59,15 +59,16 @@ again that day: the credits question answered with an opt-in bench
 switch, `XhciCmAsmediaPcie7Credits` (task 44.41, section 18.8; sections
 6.8 and 12 point to it).
 
-Revised 2026-10-29 (task 45.20, the design half; a draft until its
-review converges, and no code with it): section 6.2 rewritten - a USB4
+Revised 2026-10-29 (task 45.20, the design half, reviewed and revised
+the same day; no code with it, and decisions U30 to U32 the owner's to
+confirm before the code): section 6.2 rewritten - a USB4
 version 2 router, Barlow Ridge among them, is run as a version 2 one:
 CMUV 2.0, the Sequence bit capability set by Set Capabilities, path
 entries written as two dwords, PCIe Extended Encapsulation, the HiFi
 Enhanced Uni-Directional TMU between two such routers, and Gen 4 links,
 symmetric or asymmetric, classified and used as found; sections 1.3,
-6.1, 6.4, 6.5, 6.6, 6.8, 7.3, 9.3, 12, 15 (U6, U16, the new U30 and
-U31) and 16 follow it.
+5.1, 6.1, 6.4, 6.5, 6.6, 6.7, 6.8, 7.1, 7.3, 9.2, 9.3, 12, 15 (U6,
+U16, the new U30 to U32) and 16 follow it.
 
 The sources, and the tag each fact carries below:
 
