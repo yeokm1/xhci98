@@ -293,6 +293,11 @@ static char helperResult[INST_PATH_CHARS];  /* the result file            */
 static char helperJobFile[INST_PATH_CHARS]; /* the job file (section 4.1) */
 static int helperRan;       /* a device job ran: the steps are per device  */
 static int helperLastOut;   /* the last job's INST_DI_OUT_*, -1 none made  */
+/* Record 27 section 6 (task 45.38): a controller's job of this run that
+ * installed an INF's driver, per INF; a later controller's job of the
+ * same INF passes nocopy (helperNoCopy, read by helper_job). */
+static int helperCtlCopied[INST_INF_COUNT];
+static int helperNoCopy;
 static int parentJobs;      /* parents' jobs (or NT calls) that reached
                                their device this run: inst_absent_retry */
 static int helperStop;      /* a settle inside a helper job failed: the
@@ -9212,8 +9217,8 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     if (owner > 65535UL) {
         owner = 0;
     }
-    if (!inst_di_jobfile(jobText, sizeof(jobText), job, helperResult, owner,
-                         id, inf, force, 1) ||
+    if (!inst_di_jobfile_ex(jobText, sizeof(jobText), job, helperResult,
+                            owner, id, inf, force, 1, helperNoCopy) ||
         !inst_di_cmdline(tail, sizeof(tail), XHCIINST_VERSION,
                          helperJobFile)) {
         logonly("helper: the job cannot be written (%s %s, result %s, job "
@@ -9658,6 +9663,11 @@ static int helper_install(DEVREC *d)
     /* Every helper install is bracketed by the INF listings (record 26
      * section 6.3): a copy made in it is that device's step. */
     s98_inf_sync();
+    helperNoCopy = is_controller(d) && helperCtlCopied[d->Inf];
+    if (helperNoCopy) {
+        logonly("helper: nocopy: a controller's job of this run copied "
+                "%s's files\n", infRel[d->Inf]);
+    }
     v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
     if (d->Inf != INST_INF_S98 && helperState >= 0 &&
         inst_absent_retry(inst_di_outcome(INST_DI_INSTALL, v), parentJobs, 0)) {
@@ -9684,6 +9694,11 @@ static int helper_install(DEVREC *d)
         s98_inf_after(infPath, 0);
     }
     out9x = inst_di_outcome(INST_DI_INSTALL, v);
+    helperNoCopy = 0;
+    if (is_controller(d) && (out9x == INST_DI_OUT_OK ||
+                             out9x == INST_DI_OUT_RESTART)) {
+        helperCtlCopied[d->Inf] = 1;
+    }
     helperLastOut = out9x;
     if (inst_settle_after_job(inst_parent_kind(d->Id, is_controller(d)),
                               out9x, 1)) {

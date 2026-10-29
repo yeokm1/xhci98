@@ -3712,6 +3712,19 @@ static void test_di_helper(void)
           strstr(tail, "FLAGS") == NULL &&
           strstr(tail, ".INF\r\nEND\r\n") != NULL,
           "no flag: no FLAGS line");
+    /* Record 27 section 4.1 (task 45.38): nocopy after force and quiet. */
+    CHECK(inst_di_jobfile_ex(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                             id, inf, 1, 1, 1) &&
+          strstr(tail, "\r\nFLAGS force quiet nocopy\r\nEND\r\n") != NULL,
+          "force, quiet and nocopy");
+    CHECK(inst_di_jobfile_ex(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                             id, inf, 0, 0, 1) &&
+          strstr(tail, "\r\nFLAGS nocopy\r\nEND\r\n") != NULL,
+          "nocopy alone");
+    CHECK(inst_di_jobfile_ex(tail, sizeof(tail), INST_DI_REMOVE, res, 0UL,
+                             id, NULL, 0, 0, 1) &&
+          strstr(tail, "FLAGS") == NULL,
+          "a removal takes no nocopy");
     CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_REMOVE, res, 65535UL,
                           id, NULL, 1, 1) &&
           strstr(tail, "INF") == NULL && strstr(tail, "FLAGS") == NULL &&

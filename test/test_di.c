@@ -127,6 +127,22 @@ static void test_parse_ok(void)
              "an INF at a drive's root, hwnd 65535");
     CHECK_EQ(c.flags, DI_FLAG_QUIET, "quiet alone");
 
+    /* nocopy (record 27 section 4.1, task 45.38): with both others, alone,
+     * at most once. */
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF force quiet nocopy", &c),
+             DI_PARSE_OK, "install with the three flags");
+    CHECK_EQ(c.flags, DI_FLAG_FORCE | DI_FLAG_QUIET | DI_FLAG_NOCOPY, "three flags");
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF quiet nocopy", &c),
+             DI_PARSE_OK, "quiet and nocopy");
+    CHECK_EQ(c.flags, DI_FLAG_QUIET | DI_FLAG_NOCOPY, "quiet and nocopy flags");
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF nocopy nocopy", &c),
+             DI_PARSE_COMMAND, "nocopy twice");
+    CHECK_EQ(c.flags, 0, "nocopy twice: no flags kept");
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF force quiet nocopy quiet", &c),
+             DI_PARSE_COMMAND, "four flags");
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF NoCopy", &c),
+             DI_PARSE_COMMAND, "nocopy in another case");
+
     CHECK_EQ(parse("remove C:\\XHCI98\\DI2.TXT 77 USB\\XHCI98_HUB\\6&2&1", &c), DI_PARSE_OK,
              "remove parses");
     CHECK_EQ(c.job, DI_JOB_REMOVE, "remove: job");

@@ -462,7 +462,7 @@ int di_parse(const char *cmdline, const char *jobtext, const char *own_version,
     }
     p = di_line(p, t, DI_MAX_TOKENS, &n);
     if (cmd->job == DI_JOB_INSTALL && n >= 1 && di_tok_is(&t[0], "FLAGS")) {
-        if (n < 2 || n > 3) {
+        if (n < 2 || n > 4) {
             cmd->job = DI_JOB_NONE;
             cmd->why = "flags";
             return DI_PARSE_COMMAND;
@@ -473,6 +473,8 @@ int di_parse(const char *cmdline, const char *jobtext, const char *own_version,
                 bit = DI_FLAG_FORCE;
             } else if (di_tok_is(&t[i], "quiet")) {
                 bit = DI_FLAG_QUIET;
+            } else if (di_tok_is(&t[i], "nocopy")) {
+                bit = DI_FLAG_NOCOPY;
             } else {
                 bit = 0;
             }
