@@ -1068,12 +1068,11 @@ every PCI root bus devnode** (hardware or compatible id `*PNP0A03` or
   `DO_DEVICE_INITIALIZING`, as the probe did. **It never fails**: if the
   object cannot be created or attached it returns `STATUS_SUCCESS`
   without attaching (a filter's failed `AddDevice` would fail the root
-  bus, which is the hazard below), sets a global "not attached" flag, and
-  writes `XhciPfwSkipped` with the "not attached" bit (bit 4) itself,
-  there and then, at `PASSIVE_LEVEL`, since a root bus it is not on
-  sends it no start to log from. With that flag set the step never runs
-  in this boot (below): that root bus may start, and its bridges be read,
-  before another root bus's start reaches this driver.
+  bus, which is the hazard below), and writes `XhciPfwSkipped` with the
+  "not attached" bit (bit 4) itself, there and then, at `PASSIVE_LEVEL`,
+  since a root bus it is not on sends it no start to log from. That root
+  bus's bridges are then not closed; no other root bus's step reaches
+  them (below).
 - **A remove lock** (`IO_REMOVE_LOCK`, `IoInitializeRemoveLockEx` at
   `AddDevice`) guards every dispatch: each request acquires it before it
   is passed down and releases it after the call down returns (a failed
@@ -1094,22 +1093,27 @@ every PCI root bus devnode** (hardware or compatible id `*PNP0A03` or
   event the dispatch waits on) and, on its return, the flag is cleared
   when the lower object is no longer pageable, then the request is
   completed with the lower driver's status.
-- **`IRP_MN_START_DEVICE`**: at the first one any instance receives in
-  the boot (an interlocked flag), **before** it is passed down, the step
-  runs - unless the "not attached" flag is set, which runs nothing - as
-  section 11.2 runs it at `DriverEntry`: the same
+- **`IRP_MN_START_DEVICE`**: at the first one each instance receives (a
+  flag of that instance's), **before** it is passed down, the step runs
+  over **that root bus's own bus numbers** only - the bus number range of
+  the start's resources (`AllocatedResources`, the
+  `CmResourceTypeBusNumber` descriptor ACPI's `_CRS` gives a root bus) -
+  as section 11.2 runs it at `DriverEntry` over every bus: the same
   decision (`PfwNtDecide`: Safe Mode, "late", the processors), the same
   hold inside `KeIpiGenericCall`, the same log under the service's
   `Parameters`, with `XhciPfwMode` and the new `XhciPfwRole` (1 entry, 2
-  filter). It is called at `PASSIVE_LEVEL` in the PnP manager's thread,
-  as `DriverEntry` is. A start that arrives on another instance while
-  the step runs waits (a notification event the first start sets when
-  the step and its log are done) before it is passed down, so no root bus
-  under this filter starts during the scan. Every later start (a second
-  root bus, a rebalance, a stop and start) passes down with nothing run.
-  A root bus that appears after the installer ran (hot-added, or on a
-  board changed since) carries no entry and is not covered; the next run
-  of the installer adds the entry. The flat
+  filter, and `XhciPfwBuses`, the range scanned). It is called at
+  `PASSIVE_LEVEL` in the PnP manager's thread, as `DriverEntry` is. A
+  root bus's start comes before the PCI driver enumerates that bus, so
+  each filtered root bus's bridges are closed before they are read, and
+  no step ever writes a bridge of another root bus, which may already
+  have been read (a root bus not filtered: one added after the installer
+  ran, or one an interrupted install left without its entry, or one not
+  attached). The steps of several root buses run one after the other (a
+  synchronization event), the step's state being the driver's. A start
+  whose resources carry no bus number range runs nothing and logs the
+  "no range" bit (bit 5). Every later start of the same root bus (a
+  rebalance, a stop and start) passes down with nothing run. The flat
   scan covers every bus number, so one run before the first root bus's
   start closes the windows of every root bus's bridges before the PCI
   driver enumerates any of them.
@@ -1126,7 +1130,10 @@ every PCI root bus devnode** (hardware or compatible id `*PNP0A03` or
   `IofCompleteRequest`, `PoStartNextPowerIrp`, `PoCallDriver`,
   `IoInitializeRemoveLockEx`, `IoAcquireRemoveLockEx`,
   `IoReleaseRemoveLockEx`, `IoReleaseRemoveLockAndWaitEx`,
-  `KeInitializeEvent`, `KeSetEvent`, `KeWaitForSingleObject`; each in the 2000, XP, Vista and
+  `KeInitializeEvent`, `KeSetEvent`, `KeWaitForSingleObject`;
+  `pfw_scan.c` gains `PfwRunBuses`, the step over a range of buses
+  (`PfwRun` is it over 0 to 255, unchanged for the VxD and the entry
+  role); each in the 2000, XP, Vista and
   7 x86 kernels the import gate's `hlprx86` profile reads, so the one
   image still loads on every system it is offered on.
 
@@ -1140,11 +1147,9 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
   of every present devnode whose `HardwareID` or `CompatibleIDs` holds
   `*PNP0A03` or `*PNP0A08`, through `SetupDiSetDeviceRegistryProperty`
   (`SPDRP_UPPERFILTERS`), the other filters kept in their order, a
-  devnode already naming it left as it is. Before each devnode is
-  changed its instance id is added to the record (`Filtered`, a
-  multi-string), so a run cut short never leaves an entry the record
-  does not name. With no root bus devnode found the run says so and
-  places nothing (the service would never run).
+  devnode already naming it left as it is. No record of the devnodes is
+  kept: every change below takes the entry out of every root bus devnode
+  that names it.
 - **The hazard, and the order of every change**: a root bus whose stack
   names a filter that is not loaded does not start, and with it no disk:
   Windows stops with `INACCESSIBLE_BOOT_DEVICE` (10's readings, section
@@ -1179,18 +1184,19 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
   kept, since its start is not ordered there (`inst_pfw_mode` takes a
   "legacy role found" input for this).
 - **10** (`INST_PFW_SYS_GONE`): as section 11.3, and the removal also
-  takes out the entries the record names, first.
+  takes out first every root bus entry naming `xhcipfw`, present or not,
+  as on 8 and 8.1, an entry left stopping the removal.
 - **Safe Mode** does not avoid a broken filter: the devnode names it in
   every mode. The installer's readme gives the recovery in its
   troubleshooting part: if 8 or 8.1 stops at start with
   `INACCESSIBLE_BOOT_DEVICE` after this package, start Windows' recovery
   environment, open the registry editor, load the system's `SYSTEM` hive
-  (`Windows\System32\config\SYSTEM`), read `Select\Current` in it for the
-  control set the start uses (`ControlSet00n`), and under that set's
-  `Enum\ACPI\PNP0A08` and `Enum\ACPI\PNP0A03` remove the line `xhcipfw`
-  from the `UpperFilters` of every instance that has it, keeping any
-  other line; do not set the `xhcipfw` service to disabled while an entry
-  is there, which stops the start the same way.
+  (`Windows\System32\config\SYSTEM`), read `Select\Default` in it for
+  the control set the next start uses (`ControlSet00n`), search that
+  set's `Enum` key for `xhcipfw` (Find, values and data), and remove the
+  line `xhcipfw` from every `UpperFilters` that has it, keeping any other
+  line; do not set the `xhcipfw` service to disabled while an entry is
+  there, which stops the start the same way.
 - **Fast startup** on 8 and 8.1 resumes the kernel without a root bus
   start, as section 11.2 already says for the boot driver: the step does
   not run then, and the windows are those Windows assigned at the full
@@ -1198,8 +1204,8 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
 
 #### 11.5.3 Verification
 
-- **Host vectors**: `PfwNtRole` for every version; the step's gate (first
-  start, "not attached", the waiting start); `PfwNtDecide` with the
+- **Host vectors**: `PfwNtRole` for every version; `PfwRunBuses` over a
+  range leaving a bridge outside it untouched; `PfwNtDecide` with the
   filter role; `inst_pfw_sys` for 6.2 and 6.3 (the new kind), `inst_pfw_box`
   and `inst_pfw_mode` for it; the multi-string append (empty, one other
   filter, already present, too long) and the root bus id test.
