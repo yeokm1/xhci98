@@ -46,6 +46,11 @@ record of the tunnels it built, so that a tunnel found preserved after a
 PnP stop and start of the NHI is still rebuilt across a sleep that lost
 the domain's configuration (section 7.6); sections 7.6 and 11 point to it.
 
+Revised 2026-10-29 (task 45.22, the owner's "Phase 45 additions"; a
+design, reviewed and revised, no code): section 5.4, new - the ring
+interrupt for this profile, designed with the ICM client's in record 21
+section 4.5; section 1.3's "polling only" stands until it is coded.
+
 Revised 2026-10-25 (task 44.39, planned as U4HW.1): section 18, new - the
 ASMedia ASM4242, a USB4 host whose firmware can boot a CSM, as
 `usb4-emu`'s asm4242 model and data record it: the firmware's
@@ -150,7 +155,9 @@ In:
   Windows 98 SE and Windows 2000 SP4 (the primary targets) and the
   virtual-machine tiers under the standing rule for those tiers.
 - Polling only: no interrupt is connected, as record 21 section 4.3
-  decided for the ICM client (decision D3).
+  decided for the ICM client (decision D3); a ring interrupt beside the
+  idle poll is designed in section 5.4 and record 21 section 4.5 (task
+  45.22), not coded.
 - The Intel integrated hosts' platform preparation through PCI
   configuration space (section 4), shared with record 21's ICM rows.
 - The host router, its adapters discovered from their capability chains,
@@ -188,7 +195,8 @@ Out, each with where it goes:
   lists. A version 2 router is run as a version 2 one since task 45.20:
   CMUV 2.0, the Sequence bit capability set, Gen 4 links symmetric or
   asymmetric used as found (section 6.2).
-- Interrupts, MSI and MSI-X: polling only.
+- Interrupts, MSI and MSI-X: polling only (section 5.4 designs the line
+  interrupt beside the idle poll, task 45.22; not coded).
 - Firmware upgrade (NVM operations), retimers, and the firmware start or
   CIO reset of a stopped Intel firmware: never touched.
 - ACPI: no `_OSC`, no WMI force power of an absent discrete controller, no
@@ -783,6 +791,63 @@ adds them to the allowlists with that evidence. `KeQuerySystemTime`, which
 the HCD already imports, is not used: system time can be set backwards. Waits
 under a millisecond stay `KeStallExecutionProcessor` busy-polls, as record
 21 section 4.3 allows on this thread only.
+
+### 5.4 Ring interrupts (task 45.22)
+
+Added 2026-10-29 for `roadmap-usb4.md` task 45.22. The idle wait of this
+profile is the ICM client's (record 21 section 4.4), and the task designs
+one interrupt for both in record 21 section 4.5: RX ring 0's Receive Data
+Buffer cause ends the thread's idle wait early, the timed wait stays at
+its period, requests stay busy-polled (section 5.2), and every failure
+returns to polling. **A design only; section 1.3's "polling only" and the
+non-goal in section 1.3's "Out" stand until it is coded, which is the
+owner's (record 21 section 4.5.10).** What this profile adds:
+
+- **One cause covers its events.** A hot-plug packet and a notification
+  arrive on RX ring 0 (section 5.1), so the interrupt wakes the thread for
+  each, and the wake runs only the RX ring 0 drain (record 21 section
+  4.5.1): a hot-plug packet's port check of section 7.1 is queued and runs
+  on the thread as today, and so do the router operations and every wait
+  of section 5.2. The idle tick's port scan is not run by an interrupt
+  wake: its control reads' responses would raise the interrupt again and
+  the scan would never stop. A chain is
+  enumerated hop by hop, each router's own hot-plug packet waited for, so
+  the gain on this profile is up to one idle period per hop.
+- **The maintenance pass keeps its deadline, because this profile hangs
+  work on it.** The idle tick's port scan (section 7.1 item 2) and the
+  presence sample that anchors Stor98's latency budget (section 10.3,
+  "normally no older than one idle period") run on the maintenance pass
+  only, when its deadline is due (record 21 section 4.5.3), never on an
+  interrupt wake; the wait is computed to that deadline, so no scan or
+  sample comes later than today's, and an interrupt wake neither runs nor
+  postpones them.
+- **A USB4 host need not wire INTx**: a PCIe host router shall support MSI
+  or MSI-X, and INTx emulation is optional (Spec 12.5). Whether the
+  ASM4242, the AMD hosts and the Intel integrated hosts wire it is not
+  read here (`usb4-emu`'s `CONTROLLER-CATALOG.md` records INTx pin A on
+  the captured Alpine Ridge LP and Alder Lake functions [obs there], and
+  nothing for the others). On 98 SE, ME, 2000 and XP, which have no MSI, a
+  host without INTx has no interrupt resource and polls as today; a host
+  whose pin is advertised but not delivered fails record 21 section
+  4.5.5's self-test and polls.
+- **The status contract is the host's**: the cause is opened through
+  Interrupt Mask Set and closed through Interrupt Mask Clear, and the
+  status is cleared by the service routine's read of every status dword
+  or, where Disable ISR Auto-Clear is set, by Interrupt Status Clear
+  (record 21 section 4.5.2). The Intel integrated hosts (vendor `8086`)
+  take Intel's contract, the mask register written directly, as the
+  ring code already masks them (`TBT_HW_INTEL_INTERRUPTS`, `tbt_hw.h`;
+  record 21 section 4.3). The arm also writes ITR[0], which section 4.4
+  step 1 leaves untouched while polling.
+- **The emulator**: `usb4-host`'s generic and ASM4242 profiles implement
+  every register record 21 section 4.5.2 names, INTx level-triggered
+  while any unmasked status bit is set, one MSI, and an `intx=off`
+  property that removes the pin (`usb4-host.c` [emu]), which is what the
+  q35 legs of record 21 section 4.5.9 use; a lost-interrupt injection for
+  the NHI does not exist there yet.
+- **Containment** (section 7.7) takes the interrupt down on entry (record
+  21 section 4.5.6) and up only on the recovery's return to ACTIVE; the
+  probing passes of CONTAINED keep their own once-a-second period.
 
 ## 6. The connection manager
 
