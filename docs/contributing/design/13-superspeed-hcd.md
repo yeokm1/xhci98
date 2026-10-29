@@ -7348,11 +7348,12 @@ id and keeps the other two:
 
 **When.** Microsoft's composite-parent rule, as `XhciFuncSplit`
 (`xhci_func.c`) implements it: split only a device with
-`bNumConfigurations` 1, two or more interfaces (counted over
+`bNumConfigurations` 1 (since task 45.34 also more than 1, by
+configuration index 0; below), two or more interfaces (counted over
 `bAlternateSetting` 0 descriptors), and `bDeviceClass` 0 or
 class/subclass/protocol `EF/02/01` (the IAD device class). Every other
-device - several configurations, or a device class of its own, IADs or not -
-is one device PDO with the whole-device ids of 10.7, which keeps the
+device - a device class of its own, IADs or not (until task 45.34 also
+several configurations) - is one device PDO with the whole-device ids of 10.7, which keeps the
 `USB\VID_vvvv&PID_pppp` id a whole-device driver matched on; so is a device
 with more than 16 functions or IADs, or an interface number of 32 or more. A
 multi-interface device left whole no longer reports its first interface's
@@ -7366,6 +7367,60 @@ IADs", left any other device class unsplit "until it is read", and had the
 bus split using "the first configuration", leaving the multi-configuration
 rule (`ParentFindOriginalConfiguration`, `ParentFindAltConfiguration`)
 unread. A device with more than one configuration is now never split.
+
+**Several configurations (task 45.34, `3.4.0.0`; owner, 2026-10-29).**
+Superseding "never split" just above: a device whose `bNumConfigurations`
+is above 1 is split by the same rule over its configuration index 0, the
+one the bus reads at enumeration (`hcd_enum.c`), and nothing else of it
+changes - the class test, the interface count, IADs, the legacy audio
+rule, the limits. The bus configures it as any split device
+(`HcdCfgParentConfigure`, SET_CONFIGURATION with configuration 0's
+`bConfigurationValue`); its other configurations are never read, never
+selected and never shown: a function's GET_DESCRIPTOR(CONFIGURATION) for
+an index above 0 is refused as before (10.9); a function's
+SELECT_CONFIGURATION whose configuration descriptor carries another
+`bConfigurationValue` than the one the bus set is refused with
+`USBD_STATUS_INVALID_PARAMETER` before any pipe changes
+(`hcdCfgSelectFunction`, as the composite parent's `hcdCompSelect`
+already refuses one, 10.14), so GET_CONFIGURATION and a RESET_PORT replay
+keep naming the configuration the functions run in; and the device
+descriptor a client reads from the device still carries the device's own
+`bNumConfigurations`.
+
+- Why: a USB Audio 3.0 device must carry an ADC 1.0 or 2.0 function in
+  its first configuration (index 0) and its 3.0 functions in later ones
+  (ADC 3.0 with errata, section 3.3 "Backwards Compatibility"). Left
+  whole, under this bus it had no driver at all (`usb-wdm-free`'s
+  `docs/design/uac2.md` section 16.6: only index 0 read, no configuration
+  selected, Found New Hardware without a driver). Split by configuration
+  0, its 2.0 function is a function PDO with the `01/00/20` ids of 10.7,
+  which `uac2` matches.
+- What Windows' own stacks do, read on XP SP3 (the same section 16.6, a
+  simulated two-configuration device under `usbehci.sys`): the hub reads
+  configuration index 0 only, sends SET_CONFIGURATION 0 and presents the
+  whole device to one driver - no `USB\COMPOSITE` match, since
+  Microsoft's rule ("Enumeration of the composite parent device") reports
+  that id only for `bNumConfigurations` 1 - and that driver (here `usbaudio.sys`, by the
+  whole device's compatible ids) selects configuration 0 itself. Windows
+  98 SE and ME never see this rule: under xHCI98 the bus presents the
+  devices on every target alike (10.12), so the change is the same on all.
+- What it costs: a driver written for Windows' own stack that binds such
+  a device whole, by `USB\VID_vvvv&PID_pppp`, no longer matches it, since
+  the split device's own PDO carries the project-owned composite ids
+  (10.12) and its functions `&MI_nn` ones. Single-configuration composite
+  devices are already split that way under this bus; for several
+  configurations Windows makes no composite match by itself, so such
+  INFs exist: a vendor driver for the whole device, or a vendor INF that
+  loads `usbccgp.sys` on it and lets it choose a configuration, which
+  Microsoft documents. Neither binds here any more. Recorded here as the
+  owner's trade: the UAC 3.0 case over that one; a device list to keep
+  whole can be added if one is reported.
+- `XhciFuncSplit` (`xhci_func.c`, pure) drops its `bNumConfigurations == 1`
+  test; host vectors in `test_func`: a two-configuration IAD audio device
+  splits as its one-configuration twin, a two-configuration device with a
+  class of its own (`bDeviceClass` 02) stays whole, and a
+  two-configuration device of one interface stays whole; the
+  configuration-value refusal of a function's select is read in the leg.
 
 The bus configures a split device itself, once, before any function PDO
 exists (`HcdCfgParentConfigure`): SET_CONFIGURATION with its one

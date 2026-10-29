@@ -67,9 +67,10 @@ typedef struct _XHCI_FUNC_SET {
 
 /*
  * The functions of a device with the 18-byte `device` descriptor and the
- * whole configuration `config` of `length` bytes. Split only as Microsoft's
- * composite parent is: bNumConfigurations 1, at least two interfaces, and
- * bDeviceClass 0 or class/subclass/protocol EF/02/01. Grouped by IAD; with
+ * whole configuration `config` of `length` bytes (configuration index 0).
+ * Split as Microsoft's composite parent is - at least two interfaces and
+ * bDeviceClass 0 or class/subclass/protocol EF/02/01 - and, since task
+ * 45.34, whatever bNumConfigurations above 0 the device has. Grouped by IAD; with
  * no IAD in the configuration at all, by the positional audio rule; else
  * one interface per function. XHCI_FUNC_OK with Count >= 1 when the bus
  * splits it, in the order of their first interfaces' descriptors;

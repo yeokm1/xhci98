@@ -141,12 +141,13 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
     }
 
     /* Microsoft's composite-parent rule ("Enumeration of the composite
-     * parent device"), not design record 13 section 10.8's wider one: a
-     * device Windows leaves under one whole-device driver (several
-     * configurations, or a class of its own, IADs or not) must keep the
-     * USB\VID_v&PID_p id that driver matched on. */
+     * parent device"): a device of a class of its own, IADs or not, keeps
+     * the USB\VID_v&PID_p id a whole-device driver matched on. Several
+     * configurations no longer keep a device whole (task 45.34; design
+     * record 13 section 10.8): `config` is configuration index 0, the one
+     * the bus reads and sets. */
     cls = (ULONG)device[4];
-    if ((ULONG)device[17] != 1UL || count < 2 ||
+    if ((ULONG)device[17] == 0UL || count < 2 ||
         !(cls == 0 ||
           (cls == 0xEFUL && device[5] == 0x02 && device[6] == 0x01))) {
         return XHCI_FUNC_NO_SPLIT;
