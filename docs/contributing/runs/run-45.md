@@ -999,7 +999,7 @@ a child's authorisation before its parent's, `domain.c`
 Guest readings are 45.17's (the ICM client on `tb3-alpine-ridge` and
 `tb3-titan-ridge`) and 45.13's to 45.15's legs.
 
-## 45.17 record 34 Part 2: the ICM client's approval order (2026-10-29, partial)
+## 45.17 record 34 Part 2: the ICM client's approval order (2026-10-29 and 30, partial)
 
 Design record 34 section 4.6 (revision 5) makes section 4.1 step 3 and
 section 4.2 exact for `src\cm\tbt_icm.c`, reviewed and revised before
@@ -1036,9 +1036,49 @@ Builds: the gated x86 build `scripts\build-driver.cmd all` of
 `E:\xhci98-scratch\p45-w45-emu\build-x86.log`); the full host suite
 `test\run-host-tests.cmd` passed (`hosttests.log`: test_tbt_icm 777,
 test_tbt_hw 174, test_tbt_select 219, test_u4cm 1362, each 0
-failures). The amd64 gated build is owed (the work paused before it).
+failures). After 3.4.0.0 was merged at `bcc4bc35` (45.12 in it), the
+merge `1a2a72ca` passed both gated builds, `all` x86 and `all -amd64`
+("BUILD + GATES PASSED (debug release qemu)" each, `build-x86-2.log`,
+`build-amd64-2.log`).
 
-Owed: the q35 legs on `tb3-alpine-ridge` and `tb3-titan-ridge` (record
-34 section 9.3), which the Phase 45 order puts after 45.12, and which
-need 45.13's chain action for a chained NVMe to appear; the emulator
-side is ready (45.16).
+### The legs (2026-10-30, q35, 7 SP1 x86)
+
+**Vehicle.** The release x86 package of `1a2a72ca`
+(`make-package.ps1 -Flavor release -Arch x86`; `xhcicm.sys`
+`d012fccf...`, `xhci98.sys` `30b79dc6...`) laid into the
+`3.3.0.0` download's layout with 45.12's gated `XHCIMARK.EXE`, installed
+on a fresh overlay of the q35 7 x86 base with nothing attached
+(`INSTALL /console /yes /thunderbolt /stor98`: exit 3, then after the
+restart exit 0), kept as the legs' golden (`f0d7caf2...`); each leg a
+fresh child overlay of it. Emulator: `usb4-emu` QEMU at `0b4a259`
+(45.16's code; `qemu-system-x86_64.exe` `c1227fda...`), the q35 Thunderbolt
+3 topology of the q35 bases' launcher (`-Usb4 tb3ar` / `tb3tr`: the
+controller's switch, the NHI, tunnel port `tp0`, the TB xHCI), the dock
+`usb4-device dialect=tb3,downstream-ports=1,chain-power-controller=off`
+and a USB4 device router chained behind it, each with an NVMe; the
+emulator's `usb4_icm_*` trace and `XHCIINST /devices` read on COM1.
+Evidence: `E:\xhci98-vm\p45\w45-emu\w7g\` (`serial-<leg>.log`,
+`trace-<leg>.log`, `cmdline-<leg>.txt`, screenshots).
+
+| Leg | Setup | Read | Verdict |
+|---|---|---|---|
+| a | Alpine Ridge, security user, pre-boot off; the dock hot-plugged at the desktop, then the chained router | the dock announced (link 1, depth 1), get route, approved; the child announced at link 1 depth 2, get route (1, 2) answered `0x301`, approved after its parent (`ICM approve link 1 depth 2: tunnel up`); `XHCIINST /devices`: "USB4 (version 1.0), link 1, depth 2, approved". The child unplugged: one disconnect at depth 2, its entry gone, the dock kept; plugged again: approved again. The dock unplugged with the child attached: the child's disconnect, then the dock's; the table empty; no hang; shutdown in 13 s | client: pass. PCI side: not reached, see below |
+| b | Alpine Ridge, pre-boot on, the chain attached at power-on | both levels "approved before Windows started"; announced approved at link 1 depth 1 and depth 2 after each driver ready, nothing approved; the dock's switch, both downstream ports and both NVMe functions started, both on Stor98, two disks; one volume (D:), the other disk offline because both test disks are overlays of one image (Windows' duplicate-signature rule) | pass |
+| c | Titan Ridge 4C, pre-boot off, the chain attached at power-on | both announced with their routes (no get route), unapproved; the dock approved, then the child; both "approved" in `XHCIINST /devices` (the Titan Ridge controller's tunnel ports were never given this package's filter on this Alpine Ridge golden, so no volume was expected) | client: pass |
+| d | control: Alpine Ridge, a plain dock (`dock=on`, no chain port) hot-plugged | approved; the dock's switch upstream port at Code 31 | see below |
+
+**A finding outside 45.17.** On 7 x86 with the Thunderbolt 3 topology
+(the tunnel port a downstream port of the controller's own switch), a
+switch hot-plugged behind the tunnel port does not start: its upstream
+port (`104C:8232`) carries `LowerFilters` `xhcicm` and fails with
+`CM_PROB_FAILED_ADD` (Code 31; setupapi.dev.log: "Device not started:
+Device has problem: 0x1f"), with a chain port (leg a) and without
+(leg d). A switch present at power-on starts (leg b). The chained
+device's PCI side under a hot-plugged dock was therefore not read here.
+Reported to the coordinator as 45.12's area (the bridge marks).
+
+Owed: the PCI side of a hot-plugged chain under the firmware connection
+manager (record 34 section 9.3 clauses 1 to 3 and 5 to 8: the chain
+action is 45.13's, and on 7 the Code 31 above first); the other systems
+(98 SE, ME, 2000, XP, 10 x64); Titan Ridge with its tunnel ports
+installed.
