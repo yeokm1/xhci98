@@ -4796,27 +4796,24 @@ its copy box, sentence and line:
    `NONFREE`; `inst_other_copy_only_line`, more folders separated by
    "; "), past eight folders "and more: see USBDRV\FREE\STAGE.TXT" (the
    set's own list of every folder);
-3. then the sentence for the rest (`inst_other_rest_text`), which
-   depends on the copy box: ticked, "A ticked package is staged: its
-   folder goes on DevicePath, where Windows' hardware wizard finds its
-   driver by itself; what an earlier run staged and this run keeps is
-   listed above. Every other package is copied only: when the wizard
-   asks for a driver, choose Specify a location and point it at the
-   package's folder under <dir>\USBDRV\FREE." (or `NONFREE`), the
-   install directory the window chose; unticked, "Nothing of this set is
-   copied in this run: tick the box above to copy it and to choose
-   packages to stage." and, where the set's earlier-staging line is
-   shown, "What an earlier run staged and this run keeps is listed
-   above." The earlier-staging line is the run's own decision
-   (`other_earlier`, read at the start): it shows only what the run
-   keeps by `other_9x_keeps`. Where the copy box is ticked and the run
-   replaces the set's copy (`other_9x_replaced`: an earlier copy of
-   another release or in another folder, read again as the copy box and
-   the install directory change), the earlier-staging line is not shown
-   and the sentence's middle clause is "this run copies this set over an
-   earlier copy, so what an earlier run staged of it is taken out and
-   only what is ticked here is staged", so the page never promises
-   staging the run withdraws;
+3. then the words for the rest (`inst_other_rest_text`), two lines so
+   that each is whole in the list's least height, which depend on the
+   copy box: ticked, "Ticked: staged, so Windows' hardware wizard finds
+   the driver by itself; earlier staging kept is listed above." and "Not
+   ticked: copied only; when the wizard asks for a driver, choose Specify
+   a location and the package's folder under <dir>\USBDRV\FREE." (or
+   `NONFREE`), the install directory the window chose; unticked, one
+   line, "Nothing of this set is copied in this run: tick the box above to
+   copy it and to choose packages to stage.", with "Earlier staging kept
+   is listed above." where the set's earlier-staging line is shown. The
+   earlier-staging line is the run's own decision (`other_earlier`, read
+   at the start): it shows only what the run keeps by `other_9x_keeps`.
+   Where the copy box is ticked and the run replaces the set's copy
+   (`other_9x_replaced`: an earlier copy of another release or in another
+   folder, read again as the copy box and the install directory change),
+   the earlier-staging line is not shown and the first line ends "this
+   run replaces the set's earlier copy and takes its earlier staging
+   out.", so the page never promises staging the run withdraws;
 4. and, when no package of the set has a box on this system, the set's
    `inst_other_none_text` line in place of item 1 (unchanged, as the
    ME `usbmidi` case can make it for a set), followed by items 2 and 3.

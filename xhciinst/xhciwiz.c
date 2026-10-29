@@ -2060,9 +2060,12 @@ static int othlist_9x_rest(HWND page, HDC dc, HFONT font, int set, int w,
         y = othlist_static(page, dc, font, line, dlu_x(page, 10), y,
                            w - dlu_x(page, 10));
     }
-    inst_eng_other_rest(set, dirChoice, line, sizeof(line));
-    if (line[0] != '\0') {
-        y = othlist_static(page, dc, font, line, dlu_x(page, 2), y + 2, w);
+    for (i = 0; i < 2; i++) {
+        inst_eng_other_rest(set, dirChoice, i, line, sizeof(line));
+        if (line[0] != '\0') {
+            y = othlist_static(page, dc, font, line, dlu_x(page, 2), y + 2,
+                               w);
+        }
     }
     return y;
 }
@@ -5957,16 +5960,26 @@ static void st_other_layout(HWND parent)
     for (set = 0; set < INST_SET_COUNT; set++) {
         char line[700];
         int copy;
+        int part;
         for (copy = 0; copy < 2; copy++) {
-            inst_other_rest_text(line, sizeof(line), set, "C:\\Program Files"
-                                 "\\xHCI98 USB 3 drivers\\install folder", copy,
-                                 copy, 1);
-            lh = text_h(dc, line, w, &wide);
-            _snprintf(msg, sizeof(msg) - 1, "the %s set's sentence for the "
-                      "rest (copy %d): whole in the list's window", set ==
-                      INST_SET_FREE ? "free" : "non-free", copy);
-            msg[sizeof(msg) - 1] = '\0';
-            st(lh > 0 && lh + 2 <= c.bottom, msg);
+            for (part = 0; part < 2; part++) {
+                /* A long install directory of 98 SE's 8.3 rule (the words
+                 * are shown on 98 SE and ME alone); copied, the longer
+                 * form, a copy replaced. */
+                inst_other_rest_text(line, sizeof(line), part, set,
+                                     "C:\\DRIVERS\\USB3\\XHCI98\\TOOLS", copy,
+                                     copy, 1);
+                if (line[0] == '\0') {
+                    continue;
+                }
+                lh = text_h(dc, line, w, &wide);
+                _snprintf(msg, sizeof(msg) - 1, "the %s set's words for the "
+                          "rest (copy %d, part %d): whole in the list's "
+                          "window", set == INST_SET_FREE ? "free" :
+                          "non-free", copy, part);
+                msg[sizeof(msg) - 1] = '\0';
+                st(lh > 0 && lh + 2 <= c.bottom, msg);
+            }
         }
     }
     if (old != NULL) {

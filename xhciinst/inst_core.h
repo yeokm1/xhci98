@@ -2424,12 +2424,15 @@ int inst_other_9x_keeps(int carried, int stageHere);
  * folders given, each "USBDRV\FREE\<class>\<package>\<folder>"). */
 void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
                                const char *const *folders, int n);
-/* Section 6.7.13's sentence for the rest of a set's packages: copy ticked
- * or not; replaced, this run's copy taking out what an earlier run staged
- * of the set; earlier, an earlier run's staging of it shown on the page;
- * dir the install directory. */
-void inst_other_rest_text(char *out, size_t cap, int set, const char *dir,
-                          int copy, int replaced, int earlier);
+/* Section 6.7.13's words for the rest of a set's packages, in two parts
+ * (part 0: what a tick does, or that nothing is copied; part 1: what an
+ * unticked package is and where its folder is, "" when nothing is
+ * copied): copy ticked or not; replaced, this run's copy taking out what
+ * an earlier run staged of the set; earlier, an earlier run's staging of
+ * it shown on the page; dir the install directory. */
+void inst_other_rest_text(char *out, size_t cap, int part, int set,
+                          const char *dir, int copy, int replaced,
+                          int earlier);
 /* The longest DevicePath with which 98 SE's hardware wizard was read to
  * find a driver (280 characters; none with 285 or more, section 6.7.6). */
 #define INST_9X_DEVICEPATH_MAX  280

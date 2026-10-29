@@ -25286,9 +25286,11 @@ static void other_9x_rest_out(int set)
             stor_out_wrapped("    ", line);
         }
     }
-    inst_eng_other_rest(set, toolDir, line, sizeof(line));
-    if (line[0] != '\0') {
-        stor_out_wrapped("  ", line);
+    for (i = 0; i < 2; i++) {
+        inst_eng_other_rest(set, toolDir, i, line, sizeof(line));
+        if (line[0] != '\0') {
+            stor_out_wrapped("  ", line);
+        }
     }
 }
 
@@ -29359,7 +29361,8 @@ int inst_eng_other_copy_only(int set, int i, char *out, size_t cap)
     return 1;
 }
 
-void inst_eng_other_rest(int set, const char *dir, char *out, size_t cap)
+void inst_eng_other_rest(int set, const char *dir, int part, char *out,
+                         size_t cap)
 {
     int earlier;
 
@@ -29371,7 +29374,8 @@ void inst_eng_other_rest(int set, const char *dir, char *out, size_t cap)
         return;
     }
     earlier = other_earlier_text(set)[0] != '\0';
-    inst_other_rest_text(out, cap, set, dir != NULL && dir[0] != '\0' ? dir :
+    inst_other_rest_text(out, cap, part, set,
+                         dir != NULL && dir[0] != '\0' ? dir :
                          toolDir, oth[set].Include,
                          oth[set].Include && other_9x_replacing(set), earlier);
 }

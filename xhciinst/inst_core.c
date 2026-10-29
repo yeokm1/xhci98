@@ -1381,33 +1381,38 @@ void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
     }
 }
 
-void inst_other_rest_text(char *out, size_t cap, int set, const char *dir,
-                          int copy, int replaced, int earlier)
+void inst_other_rest_text(char *out, size_t cap, int part, int set,
+                          const char *dir, int copy, int replaced,
+                          int earlier)
 {
     if (cap == 0) {
         return;
     }
+    out[0] = '\0';
     if (!copy) {
+        if (part != 0) {
+            return;
+        }
         inst_copy(out, "Nothing of this set is copied in this run: tick the "
                   "box above to copy it and to choose packages to stage.",
                   cap);
         if (earlier) {
-            strncat(out, " What an earlier run staged and this run keeps is "
-                    "listed above.", cap - strlen(out) - 1);
+            strncat(out, " Earlier staging kept is listed above.",
+                    cap - strlen(out) - 1);
         }
         return;
     }
-    inst_copy(out, "A ticked package is staged: its folder goes on "
-              "DevicePath, where Windows' hardware wizard finds its driver "
-              "by itself", cap);
-    strncat(out, replaced ? "; this run copies this set over an earlier "
-            "copy, so what an earlier run staged of it is taken out and only "
-            "what is ticked here is staged. " : earlier ? "; what an earlier "
-            "run staged and this run keeps is listed above. " : ". ",
-            cap - strlen(out) - 1);
-    strncat(out, "Every other package is copied only: when the wizard asks "
-            "for a driver, choose Specify a location and point it at the "
-            "package's folder under ", cap - strlen(out) - 1);
+    if (part == 0) {
+        inst_copy(out, "Ticked: staged, so Windows' hardware wizard finds the "
+                  "driver by itself", cap);
+        strncat(out, replaced ? "; this run replaces the set's earlier copy "
+                "and takes its earlier staging out." : earlier ? "; earlier "
+                "staging kept is listed above." : ".", cap - strlen(out) - 1);
+        return;
+    }
+    inst_copy(out, "Not ticked: copied only; when the wizard asks for a "
+              "driver, choose Specify a location and the package's folder "
+              "under ", cap);
     strncat(out, dir != NULL && dir[0] != '\0' ? dir : "the install folder",
             cap - strlen(out) - 1);
     strncat(out, "\\", cap - strlen(out) - 1);

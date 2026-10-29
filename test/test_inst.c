@@ -6271,32 +6271,35 @@ static void test_9x_stage(void)
         CHECK(strcmp(line, "USB Ethernet: USBDRV\\FREE\\net\\rtl815x\\"
                      "w98se-me; USBDRV\\FREE\\net\\rtl815x\\w2k") == 0,
               "9x copied only: two folders, an empty one skipped");
-        inst_other_rest_text(rest, sizeof(rest), INST_SET_NONFREE,
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_NONFREE,
                              "C:\\XHCI98", 1, 0, 0);
-        CHECK(strstr(rest, "A ticked package is staged") == rest &&
-              strstr(rest, "by itself. Every other package") != NULL &&
+        CHECK(strcmp(rest, "Ticked: staged, so Windows' hardware wizard finds "
+                     "the driver by itself.") == 0, "9x rest: what a tick does");
+        inst_other_rest_text(rest, sizeof(rest), 1, INST_SET_NONFREE,
+                             "C:\\XHCI98", 1, 0, 0);
+        CHECK(strstr(rest, "Not ticked: copied only") == rest &&
               strstr(rest, "under C:\\XHCI98\\USBDRV\\NONFREE.") != NULL,
-              "9x rest: copied, the set's folder named");
-        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "C:\\X", 1, 0,
-                             1);
-        CHECK(strstr(rest, "by itself; what an earlier run staged and this "
-                     "run keeps is listed above. Every") != NULL,
-              "9x rest: copied, earlier staging kept");
-        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "C:\\X", 1, 1,
-                             1);
-        CHECK(strstr(rest, "taken out and only what is ticked here is "
-                     "staged. Every") != NULL &&
+              "9x rest: what an unticked package is, the set's folder named");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "C:\\X", 1,
+                             0, 1);
+        CHECK(strstr(rest, "by itself; earlier staging kept is listed above.") !=
+              NULL, "9x rest: copied, earlier staging kept");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "C:\\X", 1,
+                             1, 1);
+        CHECK(strstr(rest, "takes its earlier staging out.") != NULL &&
               strstr(rest, "listed above") == NULL,
               "9x rest: copied over another release, earlier staging out");
-        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "", 0, 0, 0);
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "", 0, 0, 0);
         CHECK(strstr(rest, "Nothing of this set is copied") == rest &&
-              strstr(rest, "earlier run") == NULL,
+              strstr(rest, "arlier") == NULL,
               "9x rest: not copied, no earlier staging");
-        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "", 0, 0, 1);
-        CHECK(strstr(rest, "What an earlier run staged and this run keeps is "
-                     "listed above.") != NULL,
+        inst_other_rest_text(rest, sizeof(rest), 1, INST_SET_FREE, "", 0, 0, 1);
+        CHECK(rest[0] == '\0', "9x rest: not copied, no second part");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "", 0, 0, 1);
+        CHECK(strstr(rest, "Earlier staging kept is listed above.") != NULL,
               "9x rest: not copied, with earlier staging");
-        inst_other_rest_text(rest, 20, INST_SET_FREE, "C:\\XHCI98", 1, 0, 1);
+        inst_other_rest_text(rest, 20, 1, INST_SET_FREE, "C:\\XHCI98", 1, 0,
+                             1);
         CHECK(strlen(rest) == 19, "9x rest: held to its buffer");
     }
     /* Record 26 section 6.7.14 (task 45.6): a lifted pair bars only an
