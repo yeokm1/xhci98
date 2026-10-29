@@ -4022,8 +4022,8 @@ try {
            Why  = "a cut no longer puts SETUP.EXE, the program a person double-clicks, at the version root (task 42-A.31, design record 26 section 2)" },
         @{ Find = 'foreach ($name in ($instExes + $rootExes)) {';
            Why  = "a cut no longer refuses a SETUP.EXE older than its sources (task 42-A.31)" },
-        @{ Find = 'THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE. To';
-           Why  = "the readme's section 4 no longer sends a person to SETUP.EXE first (task 42-A.31)" },
+        @{ Find = 'SETUP.EXE IS THE RECOMMENDED WAY TO INSTALL OR UPDATE. Double-click it in';
+           Why  = "the readme's section 2 no longer sends a person to SETUP.EXE first (tasks 42-A.31 and 45.29)" },
         @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"';
            Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
         @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
@@ -4074,10 +4074,10 @@ try {
            Why  = "a cut no longer adds XHCIDI.EXE's statically linked runtime and import library to the install tool's NOTICE.TXT (legal-provenance.md section 2a)" },
         @{ Find = 'if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }';
            Why  = "a cut without the helper no longer says so in its readme (design record 27 section 3.3)" },
-        @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }';
+        @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of sections 2 and 4)" }';
            Why  = "a cut without the USB tree tool no longer says so in its readme (task 41-A.6)" },
-        @{ Find = "administrator to run. The installer's Components page can leave out its";
-           Why  = "the readme's section 4 no longer describes the xHCI98 USB Tree INSTALL.BAT installs, or /notray (task 41-A.6)" },
+        @{ Find = "It also installs the xHCI98 USB Tree (XHCITR), which shows every USB and";
+           Why  = "the readme's section 2 no longer says SETUP.EXE installs the xHCI98 USB Tree (tasks 41-A.6 and 45.29)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';
