@@ -1448,11 +1448,19 @@ int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 
 /* ---- the gate before a pass on 98 SE and ME (record 27 section 6) ---- */
 
-/* Whether the gate asks the user: always the first time in a run (asked
- * 0), and afterwards only when a hardware wizard was seen open (wizard 1)
- * or the look could not be made (wizard -1); wizard 0, none seen, goes on
- * without asking. 1 ask, 0 not. */
-int inst_gate_ask(int asked, int wizard);
+/* Whether the gate asks the user: a hardware wizard seen open (wizard 1)
+ * or a look that could not be made (wizard -1) asks; none seen (wizard 0)
+ * goes on without asking, except at the first gate of a run (asked 0) on
+ * a system not read as English (english 0, or -1 unread), which asks once
+ * as before, the look knowing only the English titles (task 45.32, record
+ * 27 section 6). 1 ask, 0 not. */
+int inst_gate_ask(int asked, int wizard, int english);
+/* Whether the system reads as English for the gate: 1 when both the
+ * system's default language (GetSystemDefaultLangID) and the language of
+ * KERNEL32's version resource have the primary language LANG_ENGLISH
+ * (0x09), 0 when either has another, -1 when either could not be read
+ * (a negative argument). */
+int inst_gate_english(int sysLang, int resLang);
 
 /* 1 when a visible top-level window's title is a hardware wizard's on 98
  * SE or ME (Found New Hardware, New Hardware Found, Add New Hardware

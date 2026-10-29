@@ -5245,9 +5245,17 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
 /* The gate before a pass on 98 SE and ME (record 27 section 6)             */
 /* ======================================================================== */
 
-int inst_gate_ask(int asked, int wizard)
+int inst_gate_ask(int asked, int wizard, int english)
 {
-    return !asked || wizard != 0;
+    return (!asked && english != 1) || wizard != 0;
+}
+
+int inst_gate_english(int sysLang, int resLang)
+{
+    if (sysLang < 0 || resLang < 0) {
+        return -1;
+    }
+    return ((sysLang & 0x3FF) == 0x09 && (resLang & 0x3FF) == 0x09) ? 1 : 0;
 }
 
 /* The titles the hardware wizards of 98 SE and ME open under: the small

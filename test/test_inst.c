@@ -3581,12 +3581,30 @@ static const char *diFile(const char *body)
  * look fails. */
 static void test_gate(void)
 {
-    CHECK_EQ(inst_gate_ask(0, 1), 1, "gate: the first call asks");
-    CHECK_EQ(inst_gate_ask(0, 0), 1, "gate: the first call asks, none seen");
-    CHECK_EQ(inst_gate_ask(0, -1), 1, "gate: the first call asks, no look");
-    CHECK_EQ(inst_gate_ask(1, 0), 0, "gate: later, no wizard: not asked");
-    CHECK_EQ(inst_gate_ask(1, 1), 1, "gate: later, a wizard open: asked");
-    CHECK_EQ(inst_gate_ask(1, -1), 1, "gate: later, no look: asked");
+    CHECK_EQ(inst_gate_ask(0, 1, 0), 1, "gate: the first call asks");
+    CHECK_EQ(inst_gate_ask(0, 0, 0), 1, "gate: the first call asks, none seen");
+    CHECK_EQ(inst_gate_ask(0, -1, 0), 1, "gate: the first call asks, no look");
+    CHECK_EQ(inst_gate_ask(0, 0, -1), 1, "gate: first, language unread: asks");
+    CHECK_EQ(inst_gate_ask(0, 0, 1), 0, "gate: first, English, none seen: not asked");
+    CHECK_EQ(inst_gate_ask(0, 1, 1), 1, "gate: first, English, a wizard open: asked");
+    CHECK_EQ(inst_gate_ask(0, -1, 1), 1, "gate: first, English, no look: asked");
+    CHECK_EQ(inst_gate_ask(1, 0, 0), 0, "gate: later, no wizard: not asked (0)");
+    CHECK_EQ(inst_gate_ask(1, 1, 0), 1, "gate: later, a wizard open: asked (0)");
+    CHECK_EQ(inst_gate_ask(1, -1, 0), 1, "gate: later, no look: asked (0)");
+    CHECK_EQ(inst_gate_ask(1, 0, 1), 0, "gate: later, no wizard: not asked (1)");
+    CHECK_EQ(inst_gate_ask(1, 1, 1), 1, "gate: later, a wizard open: asked (1)");
+    CHECK_EQ(inst_gate_ask(1, -1, 1), 1, "gate: later, no look: asked (1)");
+    CHECK_EQ(inst_gate_ask(1, 0, -1), 0, "gate: later, no wizard: not asked (-1)");
+    CHECK_EQ(inst_gate_ask(1, 1, -1), 1, "gate: later, a wizard open: asked (-1)");
+    CHECK_EQ(inst_gate_ask(1, -1, -1), 1, "gate: later, no look: asked (-1)");
+    CHECK_EQ(inst_gate_english(0x0409, 0x0409), 1, "gate: US English");
+    CHECK_EQ(inst_gate_english(0x0809, 0x0409), 1, "gate: UK default, US build");
+    CHECK_EQ(inst_gate_english(0x0407, 0x0409), 0, "gate: German default, US build");
+    CHECK_EQ(inst_gate_english(0x0409, 0x0407), 0, "gate: US default, German build");
+    CHECK_EQ(inst_gate_english(0x040C, 0x040C), 0, "gate: French");
+    CHECK_EQ(inst_gate_english(-1, 0x0409), -1, "gate: default unread");
+    CHECK_EQ(inst_gate_english(0x0409, -1), -1, "gate: resource unread");
+    CHECK_EQ(inst_gate_english(0x0009, 0x0009), 1, "gate: neutral English");
 
     CHECK(inst_wizard_title("Found New Hardware"), "wizard: Found New Hardware");
     CHECK(inst_wizard_title("New Hardware Found"), "wizard: New Hardware Found");

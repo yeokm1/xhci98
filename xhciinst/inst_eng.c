@@ -9470,14 +9470,79 @@ static int wizard_open_9x(char *title, size_t cap)
     return r;
 }
 
-/* Whether the gate has asked in this run: it asks once, and afterwards
- * only when it sees a wizard open or cannot look (W9XGATE.1). */
+/* Whether the gate has asked in this run: on a system not read as English
+ * it asks once, and afterwards only when it sees a wizard open or cannot
+ * look (W9XGATE.1); on an English one it looks from the first gate (task
+ * 45.32). */
 static int gateAsked;
 
+/* The languages of KERNEL32's version resource (task 45.32): Lang the
+ * first one's, Other set when another primary language is there too. */
+typedef struct _LANG_LOOK {
+    int Lang;
+    int Other;
+} LANG_LOOK;
+
+static BOOL CALLBACK version_lang(HMODULE m, LPCSTR type, LPCSTR name,
+                                  WORD lang, LPARAM lp)
+{
+    LANG_LOOK *s = (LANG_LOOK *)lp;
+
+    (void)m;
+    (void)type;
+    (void)name;
+    if (s->Lang < 0) {
+        s->Lang = (int)lang;
+    } else if ((lang & 0x3FF) != (s->Lang & 0x3FF)) {
+        s->Other = 1;
+    }
+    return TRUE;
+}
+
+/* Whether the gate's look knows this system's wizard titles (task 45.32,
+ * record 27 section 6): the system's default language and the language
+ * KERNEL32's own version resource is in, both read through KERNEL32 (the
+ * console tool's imports stay KERNEL32 and ADVAPI32). The resource's is
+ * the language Windows was built in, which Regional Settings leave; the
+ * default language is the one Setup set, which they may move. Both
+ * English: 1; either another: 0; either unread: -1. Read once in a run. */
+static int gateEnglish = -2;
+
+static int system_english_9x(void)
+{
+    HMODULE k32;
+    LANG_LOOK s;
+    LANGID sys;
+
+    if (gateEnglish != -2) {
+        return gateEnglish;
+    }
+    s.Lang = -1;
+    s.Other = 0;
+    sys = GetSystemDefaultLangID();
+    k32 = GetModuleHandleA("kernel32.dll");
+    if (k32 != NULL) {
+        EnumResourceLanguagesA(k32, (LPCSTR)RT_VERSION, MAKEINTRESOURCEA(1),
+                               (ENUMRESLANGPROC)version_lang, (LPARAM)&s);
+    }
+    if (s.Other) {
+        s.Lang = 0;     /* two languages: not read as one */
+    }
+    gateEnglish = inst_gate_english(sys == 0 ? -1 : (int)sys, s.Lang);
+    logonly("gate: system language %04X, KERNEL32's version resource "
+            "%s%04X: %s\n", (unsigned)sys, s.Lang < 0 ? "unread " : "",
+            (unsigned)(s.Lang < 0 ? 0 : s.Lang),
+            gateEnglish > 0 ? "English, the first gate looks" :
+            gateEnglish == 0 ? "not English, the first gate asks" :
+            "unread, the first gate asks");
+    return gateEnglish;
+}
+
 /* The gate before a pass (record 27 section 6): the tree settled, then
- * the user's word that no hardware wizard is open - asked the first time,
- * and afterwards only when a wizard's window is found open or the look
- * cannot be made. 1 go on, 0 stop. */
+ * the user's word that no hardware wizard is open - asked when a wizard's
+ * window is found open or the look cannot be made, and at the first gate
+ * of a run also on a system not read as English, where the look knows no
+ * title (task 45.32). 1 go on, 0 stop. */
 static int gate_9x(int first)
 {
     char line[16];
@@ -9500,7 +9565,7 @@ static int gate_9x(int first)
     }
     w = 1;
     title[0] = '\0';
-    if (gateAsked) {
+    if (gateAsked || system_english_9x() == 1) {
         w = wizard_open_9x(title, sizeof(title));
         if (w > 0) {
             out("A hardware wizard is open (\"%s\").\n", title);
@@ -9508,7 +9573,7 @@ static int gate_9x(int first)
             logonly("gate: the open windows could not be read\n");
         }
     }
-    if (!inst_gate_ask(gateAsked, w)) {
+    if (!inst_gate_ask(gateAsked, w, system_english_9x())) {
         logonly("gate: no hardware wizard open\n");
         return go_on();
     }
