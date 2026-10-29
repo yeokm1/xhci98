@@ -5283,6 +5283,19 @@ static void test_chain_fabric(void)
     fabUnplug(&g_fab, 1);
     CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "the middle unplug resets it");
     CHECK_EQ(g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].Peer, child, "still attached");
+
+    /* A pre-OS chain reads as a chained tunnel up, and not with one of
+     * its four entries missing. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 0);
+    CHECK(fabChainPcieUp(&g_fab, dev), "fabPreosChild: the chained tunnel up");
+    g_fab.R[child].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    CHECK(!fabChainPcieUp(&g_fab, dev), "an entry missing: not up");
 }
 
 #ifdef TBT_U4_MAX_KIDS

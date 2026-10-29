@@ -2228,6 +2228,38 @@ int fabChainPcieUp(const FAB *f, int dev)
     if (dp == 0 || cu == 0) {
         return 0;
     }
+    {
+        /* The four entries of record 34 section 6.6, chained: the
+         * parent's PCIe Down HopID 8 into its lane at hd, the child's lane
+         * hd to its PCIe Up 8, its PCIe Up 8 to its lane at hu, the
+         * parent's lane hu back to the PCIe Down 8. */
+        unsigned cl = f->R[child].UpAdp;
+        unsigned long e;
+        unsigned hd;
+        unsigned hu;
+
+        e = f->R[dev].Adp[dp].Path[2 * 8];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != a) {
+            return 0;
+        }
+        hd = (unsigned)(e & 0x7FUL);
+        e = f->R[child].Adp[cu].Path[2 * 8];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != cl) {
+            return 0;
+        }
+        hu = (unsigned)(e & 0x7FUL);
+        if (hd >= FAB_HOPS || hu >= FAB_HOPS) {
+            return 0;
+        }
+        e = f->R[child].Adp[cl].Path[2 * hd];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != cu || (e & 0x7FUL) != 8) {
+            return 0;
+        }
+        e = f->R[dev].Adp[a].Path[2 * hu];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != dp || (e & 0x7FUL) != 8) {
+            return 0;
+        }
+    }
     return (f->R[dev].Adp[dp].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
            (f->R[child].Adp[cu].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
            ((f->R[child].Adp[cu].Cs[FAB_CAP_ADP] >> 25) & 0xF) == 6;

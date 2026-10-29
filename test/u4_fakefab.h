@@ -265,8 +265,9 @@ void fabUnplugChild(FAB *f, int dev);
 void fabHotPlugChild(FAB *f, int dev, int child);
 void fabHotUnplugChild(FAB *f, int dev);
 /* `dev`'s downstream lane 0 adapter (3 on every fixture), and whether the
- * chained PCIe tunnel is up: the parent's PCIe Down and the child's PCIe
- * Up both with Path Enable, and the child's LTSSM in L0. */
+ * chained PCIe tunnel is up: record 34 section 6.6's four entries Valid
+ * and chained, the parent's PCIe Down and the child's PCIe Up both with
+ * Path Enable, and the child's LTSSM in L0. */
 int  fabDownLane0(const FAB *f, int dev);
 /* A pre-OS chain on `dev`'s downstream port, as record 34 section 6.9
  * adopts it: the child enumerated at depth 2, Router Ready, PTO, CV and

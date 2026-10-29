@@ -60,12 +60,13 @@ The revision was reviewed and revised before its commit (`bb3434c7`).
   downstream port as `usb4-emu`'s `usb4-router-tb3.c` device router has
   it (lanes 1 to 4, PCIe Up 6, PCIe Down 7, the latter's LTSSM field
   fixed at 3 as the emulator reads it); `fabHotPlugChild`,
-  `fabHotUnplugChild`, `fabPreosChild`, `fabDownLane0` and
-  `fabChainPcieUp`.
+  `fabHotUnplugChild`, `fabPreosChild`, `fabDownLane0`,
+  `fabChainPcieUp` (the four entries chained and both Path Enables) and
+  `fabTriedTo` (writes sent to a route, delivered or not).
 - `test/test_u4cm.c`: `test_chain_fabric` runs today (the dock at depth
   1, a hot-plugged child locked and uninitialised, the chained pair
   trained only with both Path Enables, Lock again after the parent's
-  power loss, an enumerated child reset by its parent's unplug): 1,373
+  power loss, an enumerated child reset by its parent's unplug): 1,375
   checks, 0 failures (1,362 before). Eleven vectors under
   `#ifdef TBT_U4_MAX_KIDS`, written against section 6's names and
   compiled only once `tbt_u4cm.h` defines it: the connect behind a USB4
