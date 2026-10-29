@@ -3253,6 +3253,16 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (!dev->Split || dev->Selected == NULL || dev->ConfigValue == 0) {
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
+    /* A device of several configurations is split by its first one
+     * (design record 13 section 10.8, task 45.34): a function may not
+     * select another one through it. */
+    if (sc->ConfigurationDescriptor != NULL &&
+        (ULONG)sc->ConfigurationDescriptor->bConfigurationValue !=
+            dev->ConfigValue) {
+        XHCI_DBG_VALUE("hcd: function select refused, configuration value",
+                       sc->ConfigurationDescriptor->bConfigurationValue);
+        return hcdCfgCountEnd(hc, asked, HCD_USBD_INVALID_PARAMETER);
+    }
     for (dci = 0; dci < 32; dci++) {
         alt[dci] = 0;
     }

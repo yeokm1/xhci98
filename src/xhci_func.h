@@ -67,9 +67,10 @@ typedef struct _XHCI_FUNC_SET {
 
 /*
  * The functions of a device with the 18-byte `device` descriptor and the
- * whole configuration `config` of `length` bytes. Split only as Microsoft's
- * composite parent is: bNumConfigurations 1, at least two interfaces, and
- * bDeviceClass 0 or class/subclass/protocol EF/02/01. Grouped by IAD; with
+ * whole configuration `config` of `length` bytes (configuration index 0).
+ * Split as Microsoft's composite parent is - at least two interfaces and
+ * bDeviceClass 0 or class/subclass/protocol EF/02/01 - and, since task
+ * 45.34, whatever bNumConfigurations above 0 the device has. Grouped by IAD; with
  * no IAD in the configuration at all, by the positional audio rule; else
  * one interface per function. XHCI_FUNC_OK with Count >= 1 when the bus
  * splits it, in the order of their first interfaces' descriptors;
@@ -126,6 +127,16 @@ ULONG XhciFuncOwnerOf(const ULONG *masks, ULONG count, ULONG iface);
  * the device's to answer. */
 ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
                            ULONG deviceMask);
+
+/*
+ * How many compatible ids a function or device with the class triple
+ * cls/sub/prot carries (design record 13 section 10.7.2): 2 - the
+ * &SubClass_ss&Prot_pp form and the &SubClass_ss form - for the audio
+ * class (01) with protocol 20h (USB Audio 2.0) or 30h (3.0), which the
+ * bare USB\Class_01 would hand to a USB Audio 1.0 driver; 3, the bare
+ * class id last, for every other triple.
+ */
+ULONG XhciFuncCompatCount(ULONG cls, ULONG sub, ULONG prot);
 
 #define XHCI_FUNC_ID_DEVICE     0UL
 #define XHCI_FUNC_ID_HARDWARE   1UL

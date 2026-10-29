@@ -64,6 +64,11 @@ downstream ports names it, `xHCI98 USB4 PCI Bridge (ASMedia ASM4242)`.
 Section 6.1.2, added 2026-10-27 (task 44.54, the owner's decision of
 that day): on 98 SE and ME, under the USB4 profile, the removal of a
 drive that left with the controller waits for its return.
+Section 4.5, added 2026-10-29 (task 45.22, the owner's "Phase 45
+additions"; a design, reviewed and revised, no code): RX ring 0's
+interrupt ends the connection-manager thread's idle wait early for both
+profiles, the timed wait and polling kept as the fallback; decision D3
+stands, and whether it is coded is the owner's.
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -1326,7 +1331,8 @@ looked at every 100 to 250 ms when idle for unsolicited events (section
 section 8, default 200). Data traffic (NVMe, USB) never crosses the NHI, so
 the idle period costs only hot-plug latency. The design leaves an interrupt
 mode for a later revision, behind a value of its own, once INTx has been
-read on real hardware.
+read on real hardware; section 4.5 (task 45.22) designs it, beside the
+idle poll rather than in its place.
 
 Polling still masks every interrupt cause at ring start, since this
 driver never resets the host interface (section 5.1) and so cannot rely
@@ -1390,6 +1396,605 @@ budget for the statement, against `nvme98`'s gone deadline (5 s in its
 test build, measured from the endpoint's own presence loss), is section
 7.2's; it needs more than this paragraph, since the idle poll, the port
 reading and the recipient lookup each cost time of their own.
+
+### 4.5 Ring interrupts beside the idle poll (task 45.22)
+
+Added 2026-10-29 for `roadmap-usb4.md` task 45.22 (the owner, the
+decisions table's "Phase 45 additions": hot plug and chains want lower
+latency than decision D3's idle poll). **A design only; nothing in
+`src\` changes with it, and whether it is coded at all is the owner's
+(section 4.5.10, Q1).** Decision D3 stands until then. It serves both
+profiles: this record's ICM client and record 22's USB4 software
+connection manager (record 22 section 5.4 points here and adds what is
+the USB4 hosts' own).
+
+Tags, beside this record's own: **[spec]** USB4 Specification 2.0
+(November 2025), sections 12.5 and 12.6.3.4 and Table 12-14; **[linux]**
+Linux `drivers/thunderbolt` (`external/linux/thunderbolt`, GPL-2.0-only),
+facts only, cited by file and symbol, nothing adapted; **[emu]**
+`usb4-emu`'s `docs/ARCHITECTURE.md` section 5, `docs/HARNESS.md` and
+`src/qemu/hw/usb4/usb4-host.c` (read, not run).
+
+#### 4.5.1 What changes, and what stays
+
+Only **how the idle wait ends** changes. Today the thread's wait at the
+top of its loop (`cm_thr.c`, `cmThread`) is `KeWaitForSingleObject` on
+`WorkEvent` with a timeout of `CmNvlinkIdleMs(XhciCmPollIdleMs)` (200 ms,
+250 ms at most while a Stor98 entry reads `UP`), and RX ring 0 is looked at
+for an unsolicited frame (a notification, a hot-plug packet) only when it
+returns, so an event waits up to one idle period (on 98 SE and ME up to a
+clock tick more, record 22 section 5.3). With the interrupt, RX ring 0's
+frame also ends the wait, through a new work bit; nothing else changes:
+
+- **The timed wait stays, with the period it has today.** The idle pass
+  carries more than the RX look: the liveness sample (section 5.5,
+  `CmThrLiveness`, ABSENT at three all-ones samples in a row), the USB4
+  profile's port scan and the presence sample that anchors Stor98's
+  latency budget (record 22 sections 7.1 item 2 and 10.3), and the Stor98
+  acknowledgement passes. Lengthening the period to save idle cost would
+  slow every one of them, so the first code keeps it; a longer period with
+  nothing attached is an owner question of its own (Q4).
+- **Commands stay busy-polled** on the thread (section 4.3: about 156 us a
+  round trip, below any interrupt and DPC latency on these targets); the
+  TX ring is still read by its consumer index; every frame is still
+  decoded on the thread, never in the interrupt or its DPC.
+- **The interrupt carries no information.** It says "RX ring 0 may hold a
+  frame"; the thread decides from the ring's descriptors. A spurious or
+  coalesced interrupt costs one drain; a lost one costs at most one idle
+  period, which is today's latency.
+- **An interrupt wake drains; it does not run the idle pass.** The idle
+  pass's maintenance (the liveness sample, the ICM client's and the USB4
+  profile's polls, `CmNhiPollPass`, whose USB4 port scan sends control
+  reads even to empty ports) keeps its own deadline: it runs when one idle
+  period has passed on section 5.3's clock since it last ran, whatever
+  woke the thread, and an interrupt wake does not advance or reset that
+  deadline. Were an interrupt wake to run it, the scan's own responses
+  (each carries IE, section 4.5.2) would wake the thread again for another
+  scan, and the thread would never idle. A wake for `CM_WORK_RING` runs
+  only the RX ring 0 drain the idle pass starts with: frames decoded, each
+  event's own action queued (a notification's handling under the ICM; a
+  hot-plug packet's port check under the USB4 profile, record 22 section
+  7.1); those actions run as they do today. A drain that finds the ring
+  empty sends nothing, so the responses to the thread's own commands,
+  already consumed by its busy-poll, end in one empty drain and no
+  further wake.
+
+So the gain is bounded by the idle period: up to 200 ms (on average about
+half that) off each event that the thread was idle for, and nothing off a
+frame that lands while a command is being busy-polled, which is serviced
+at once today (section 4.4).
+
+#### 4.5.2 The cause and its registers [spec unless marked]
+
+The registers, as the specification's register map lists them (Spec
+12.6.3, the "Interrupts" rows) and as Linux (`nhi_regs.h` [linux]) and
+the emulator (`usb4-host.c` `R_ISR` to `R_IVAR` [emu]) agree, each array
+`ceiling(3N/32)` dwords for N = Total Paths: Interrupt Status (ISR)
+`37800h`, Interrupt Status Clear (ISC) `37808h`, Interrupt Status Set
+(ISS) `37810h`, Interrupt Mask (IMR) `38200h`, Interrupt Mask Clear (IMC)
+`38208h`, Interrupt Mask Set (IMS) `38210h`, Interrupt Throttling Rate
+ITR[0] `38C00h`; the Host Interface Control register `39864h` holds
+"Disable ISR Auto-Clear" in bit 17 (Table 12-14; Linux's
+`REG_DMA_MISC_DISABLE_AUTO_CLEAR`), and bit 2 there is Intel's vendor
+auto-clear for MSI-X (`REG_DMA_MISC_INT_AUTO_CLEAR` [linux]).
+
+- **One cause**: RX ring 0's Receive Data Buffer interrupt, cause bit
+  N + 0 (TX causes 0 to N - 1, RX N to 2N - 1, vacancy 2N to 3N - 1; Spec
+  12.5.1, Figure 12-8; `nhi.c` `ring_interrupt_index` [linux]). For
+  N = 12 (Alpine Ridge) that is bit 12 of dword 0. Every other cause stays
+  masked, as section 4.3 masks all 3N today.
+- **The descriptor's Interrupt Enable** (bit 23 of DW2, `TBT_DESC_IE` in
+  `tbt_regs.h`, today "never set here") is set in every RX ring 0
+  descriptor posted while the interrupt is intended, so that the status
+  bit is set after each frame is written back (Spec 12.5.1). The intent is
+  decided **before the ring start**, not at the arm: an activation, a D0
+  or a recovery whose interrupt will be tried (`XhciCmRingInterrupt` 1, a
+  resource, `IrqFailed` clear) posts every initial RX descriptor with IE,
+  while every cause is still masked, so that the first frame after the
+  unmask raises the interrupt without waiting for a ring wrap; a
+  descriptor the host owns is never rewritten in place. If the connection
+  or the arm then fails, those descriptors keep IE until consumed, which
+  only sets a masked status bit. Polling posts them with it clear, as
+  today.
+- **Unmask** by each host's contract, as section 4.3 masks: on Intel
+  hosts (`QUIRK_AUTO_CLEAR_INT`, `pci.c` `nhi_pci_check_quirks` [linux]) a
+  read-modify-write of IMR, as Linux's `ring_interrupt_active` does
+  [linux]; on every other host one write of the bit to IMS (Spec
+  12.6.3.4.6). Masking is section 4.3's own write (IMR on Intel, IMC
+  elsewhere). Each is read back from IMR; a read-back that disagrees is a
+  failed arm (section 4.5.5).
+- **Moderation**: ITR[0] moderates INTx and MSI (Spec 12.5.4); it is
+  written 0 (none) at the arm, since hot-plug frames are rare and each
+  wants to be seen at once, and a burst during an enumeration is
+  coalesced by the thread anyway (section 4.5.3).
+- **Status is read whole.** The service routine reads every ISR dword,
+  not only the one holding bit N + 0: Linux records that the host fires
+  "new interrupts only after ALL registers have been read (even those
+  containing only disabled rings)" (`nhi_regs.h`, above
+  `REG_RING_NOTIFY_BASE` [linux]), and on a level-triggered line the
+  request falls only when no unmasked status bit is left set (the
+  emulator's `usb4_host_update_intx` [emu]). The read clears what it reads
+  (Spec 12.6.3.4.1) unless Disable ISR Auto-Clear is set. This driver
+  never sets that bit; it already reads `39864h` at start for the log, and
+  where it finds bit 17 set (firmware's or an earlier driver's) the
+  routine also writes the bits it read to ISC (Spec 12.6.3.4.2). Clearing
+  the other causes' status costs nothing: they are masked and this driver
+  reads them nowhere else. Section 4.3's "the interrupt status register is
+  never read" becomes: read only by the service routine, the arm and the
+  self-test, always every dword.
+- **Stale status before the unmask.** Polling leaves status bits set
+  (IE is clear, but nothing else clears a cause either), and a host may
+  raise the interrupt the moment a set cause is unmasked (the emulator
+  does, `usb4_host_mask_changed` [emu]). So the arm reads every ISR dword
+  once (ISC as above) before it unmasks, and the thread drains RX ring 0
+  once after it, so a frame that landed between the clear and the unmask
+  is not left waiting for the next one.
+
+#### 4.5.3 The service routine, its DPC and the thread (IRQL and locking)
+
+Three contexts, with record 05's rules for an interrupt this driver owns
+(record 05 section 4; `implementation-invariants.md`, "Interrupt
+Ordering"): no spin lock of the driver's is taken at DIRQL; the routine
+moves nothing a lower context relies on; and a cause of this device is
+never declined, since "an unacknowledged level-triggered shared INTx
+livelocks the line" (record 05 section 4).
+
+**The service routine** (DIRQL, the interrupt object's own lock held by
+the kernel; the line may be shared):
+
+1. Not `IrqConnected` (written by the thread before `IoConnectInterrupt`
+   returns and cleared only after `IoDisconnectInterrupt`): return FALSE.
+   It cannot be entered then except on a shared line before the connection
+   call returns, when this device's causes are still masked.
+2. Read every ISR dword. All ones in the first: return FALSE, count
+   `IrqOnes` (no answer; the liveness monitor, section 5.5, decides what
+   it means, and an absent device asserts nothing).
+3. Bit N + 0 clear: return FALSE (not this device's request; every other
+   cause is masked).
+4. Bit set: ISC as section 4.5.2 says where auto-clear is disabled; count
+   `IrqClaims`; then the **storm check** (step 5) before anything else.
+5. **A storm is stopped here, not on the thread.** A level line that is
+   asserted again at once after the acknowledgement re-enters the routine
+   before its DPC or the thread can run (on one processor, never). The
+   routine counts its claims since the DPC last ran in `IrqBurst`, a
+   variable only it writes: the DPC raises `IrqDpcSeq`
+   (`InterlockedIncrement`) each time it runs, and the routine, finding
+   `IrqDpcSeq` changed since its own last look, sets `IrqBurst` back to 1;
+   so no context but the routine touches the burst, and the DPC needs no
+   interrupt object. At 64 claims with no DPC between, the routine masks
+   the cause itself (IMC, or on Intel the IMR read-modify-write; the
+   thread's own mask writes are inside `KeSynchronizeExecution`, so they
+   never interleave), clears `IrqArmed`, sets `IrqStormMasked` and returns
+   TRUE without queueing. Masking only lowers an enable, record 05 section
+   4's monotone rule, so it cannot undo the thread's own mask. The thread,
+   when it next runs, takes the activation down to polling (`cm.irq.storm`,
+   section 4.5.6). A host that keeps the line asserted with its cause
+   masked cannot be stopped at DIRQL, where no configuration write is
+   available: the routine keeps claiming, and the thread, if it runs, sets
+   the function's PCI Interrupt Disable (section 4.5.6). On one processor
+   that thread may not run: a residual risk, section 4.5.7.
+6. Otherwise: if `IrqArmed`, queue the DPC (`KeInsertQueueDpc`) with the
+   count of DPCs owed raised first (`InterlockedIncrement`, lowered again
+   if the insertion returns FALSE because it was already queued); return
+   TRUE. A claim while not armed (the window around the unmask and the
+   mask, section 4.5.6) acknowledges and queues nothing: the thread drains
+   the ring after each change anyway.
+
+It writes ISC, and the mask only at step 5; it reads nothing but ISR,
+IMR at step 5, its flags and `IrqDpcSeq`, and touches no ring, no work bit and no lock
+of the driver's. `IrqArmed` is set by the
+thread through `KeSynchronizeExecution` (the 2000 primitive; record 05
+section 4 keeps `KeAcquireInterruptSpinLock` out, XP and later) before it
+unmasks, and cleared the same way after the mask is read back, so a
+routine that sees it clear also sees the cause masked or about to be
+masked. The thread's unmask and mask writes are made inside the same
+`KeSynchronizeExecution` routines, so step 5 and the thread never
+interleave a read-modify-write of IMR.
+
+**The DPC** (DISPATCH_LEVEL): raises `IrqDpcSeq`, then
+`CmThrQueue(nhi, CM_WORK_RING, NULL)`, the queue's existing entry under
+`WorkLock`, which sets the new bit and signals `WorkEvent` (a closed
+queue, `Accepting` 0, takes nothing), then lowers the count of DPCs owed
+as its last access to the extension. It never touches the interrupt
+object, so it is safe whether or not the interrupt is still connected. Lock
+order: `WorkLock` is taken only at or below DISPATCH_LEVEL and never
+inside a `KeSynchronizeExecution` routine, and the interrupt object's lock
+is never taken while `WorkLock` is held, so the two never nest.
+
+**The thread** (PASSIVE_LEVEL): `CM_WORK_RING` runs the RX ring 0 drain
+of section 4.5.1, and the loop runs the idle pass's maintenance only when
+its deadline is due; the loop's own once-a-pass work (the status record,
+the query device's snapshot, the log emission) stays once a pass.
+
+**The wait is computed from deadlines, not as a fresh period.** Today
+each branch of `cmThread`'s wait selection starts a new relative timeout
+(the idle period, the liveness monitor's `CmLiveWaitMs`, the Stor98
+acknowledgement's `CM_NVLINK_PEND_MS`), which is right only because every
+wake runs the whole pass. With interrupt wakes that do not, each of those
+becomes an absolute deadline on section 5.3's clock - `MaintDue` (the idle
+pass, `CmNvlinkIdleMs(XhciCmPollIdleMs)` after the last one ran), the
+liveness monitor's next slow probe and the acknowledgement step - and the
+wait's timeout is the time left to the earliest one that is eligible in
+the current state (the branches as today decide which are), 0 when one is
+already due. A drain at 199 ms of a 200 ms period therefore waits 1 ms,
+not 200. `ThreadWait` and `CmThrInertNext` (the query device's seed) are
+derived from that same decision: a timed wait while any deadline is
+eligible, `CM_Q_WAIT_FOREVER` only when none is. `MaintDue` is set due at
+once by every activation, D0 and recovery that ends ACTIVE, and is not
+consulted while the thread is not polling (the branches that do not poll
+today ignore it, as they ignore the idle period now). With the interrupt
+not in use every wake is a full pass as today, and the deadlines give the
+same waits as the relative timeouts do now. Work
+bits are taken and cleared once per pass under `WorkLock`, so any number
+of interrupts during one pass, or during a busy-polled command (every RX
+descriptor carries IE, so each response raises one), yield one more drain
+at most, and that drain finds the responses already consumed. The thread
+alone connects, arms, masks and disconnects; the self-test and the
+watchdog (section 4.5.5) are its own. The self-test's and the down
+order's waits are `cmSleep` pieces of 1 ms (`KeDelayExecutionThread`,
+already imported) that read `IrqClaims` or the count of DPCs owed; they
+never take or clear work bits, which stay for the loop.
+
+#### 4.5.4 The connection: NT first, then 98 SE and ME
+
+- **2000 and XP, x86 and x64**: the line interrupt of
+  `IRP_MN_START_DEVICE`'s translated resources, `IoConnectInterrupt`, with
+  the vector, level, affinity and share disposition the resource gives
+  and the mode from its flags (`CM_RESOURCE_INTERRUPT_LATCHED` or level).
+  A start with no interrupt resource polls as today. The connection is
+  made on the thread at activation, after the rings start, not in the
+  start dispatch.
+- **Vista to 10**: the same line connection in the first step: the INFs
+  do not opt the NHI into message-signalled interrupts, so the PnP manager
+  grants the line where the function has one. MSI is a second step (Q3):
+  the INF opt-in (`Interrupt Management\MessageSignaledInterruptProperties`,
+  `MSISupported` 1, `MessageNumberLimit` 1) reaches every Vista-to-10
+  install path, and the connection goes through `IoConnectInterruptEx`
+  (`CONNECT_MESSAGE_BASED`), which neither image may import: on amd64 it
+  is found with `MmGetSystemRoutineAddress`, which the amd64 gate admits
+  under a `SITES=` row as it does for `xhci98.sys`'s `hcd_msi86.obj`
+  (design record 15 section 4.3); on x86, where `MmGetSystemRoutineAddress`
+  is on the deny list (`xhcicm-imports.allow`, "Missing on Win98"), it
+  would come through `xhcihlpr.sys`'s channel as `xhci98.sys`'s does
+  (design record 18 section 15), a second client of that helper, opened
+  by `IoGetDeviceObjectPointer` as `xhci98.sys`'s `hcd_msi86.c` opens it,
+  and its reference dropped (`ObfDereferenceObject`) at the stop after the
+  disconnection. A message interrupt keeps the whole status protocol of
+  section 4.5.3: a single MSI's delivery clears no status (Intel's
+  delivery-time clear is MSI-X's, `ICM-PROTOCOL` R6 and R7 [emu]), and the
+  host sends no further message until every status dword is read
+  (section 4.5.2); only step 3's "not this device's" outcome cannot occur,
+  a message being never shared. A single MSI maps every cause to the one
+  vector (Spec 12.5.3). MSI-X is not designed: it needs the vector allocation registers
+  and one vector per ring, for one ring.
+- **98 SE and ME**: `xhcicm.sys` runs under NTKERN, whose
+  `IoConnectInterrupt` connects the IRQ the configuration manager
+  allocated to the devnode, as `xhci98.sys` connects its own there (the
+  import's Windows 98 evidence, `uhcd.sys`, section 4.5.8). What is known
+  of the route, from this tree's records: on i440FX, 98 SE gave the
+  `tb3-alpine-ridge` NHI "IRQ 11 (level, shared)", shared with the tunnel
+  port's bridge (`runs/run-41.md`, "Resources"); on q35 nothing is read
+  for the NHI, and the ASM4242 model's NHI sits behind the chip's own PCIe
+  switch, where routing through bridges is what design record 28 found
+  `PCI.VXD` may fail at for a tunnelled function. **The reading owed
+  before any 98 SE or ME connection**, on the q35 bases with `-Usb4 tb3ar`
+  and `-Usb4 asm4242`, each OS: the NHI devnode's allocated configuration
+  after the start (an IRQ or none; `XHCISNAP` level 2 or Device Manager's
+  Resources page, as run-41 read it), its configuration space's Interrupt
+  Line and Pin, the IRQ's sharers, and whether the IRQ is the one the pin
+  raises (on i440FX and q35 alike, only the self-test of section 4.5.5 can
+  say, so this reading is taken again by the code's first 98 leg). A 98 SE
+  or ME devnode with no IRQ polls; one with an IRQ is connected only
+  after an INTx leg on that OS passes.
+- **Every system**: no interrupt resource, a failed connection, a failed
+  arm or a failed self-test leaves the activation polling as today, with
+  a log line (`cm.irq.none`, `cm.irq.connect.fail`, `cm.irq.arm.fail`,
+  `cm.irq.selftest.fail`) and the counter `IrqMode` 0 (1 the line, 2 a
+  message). `XhciCmRingInterrupt` (new, `REG_DWORD`, section 8 when coded):
+  0 polling only, as today; 1 the interrupt where granted and proven,
+  polling otherwise; 2 and above reserved (the message step). Its default
+  is the owner's from the q35 readings (Q2); this record proposes 0.
+
+#### 4.5.5 Polling kept as the fallback
+
+- **The self-test**, once per activation, after the arm and before the
+  first command: the thread notes `IrqClaims`, writes bit N + 0 to ISS
+  (Spec 12.6.3.4.3; the emulator implements it, `R_ISS` [emu]) and waits up
+  to 100 ms for `CM_WORK_RING` with `IrqClaims` advanced. None: disarm,
+  mask, disconnect and poll for this activation (`cm.irq.selftest.fail`).
+  It needs no device on the port. Whether Alpine Ridge and the other Intel
+  Thunderbolt 3 hosts implement ISS is not read (no capture writes it;
+  Linux never does [linux]); one that ignores it fails the self-test and
+  polls, the safe direction.
+- **The watchdog** is the maintenance pass itself, at today's period.
+  Each maintenance pass (whatever woke the thread, section 4.5.3's
+  deadline being due) that finds a frame on RX ring 0 while `IrqClaims` is unchanged since the end of the previous
+  pass's drain is a **suspected miss**: a frame no interrupt announced,
+  though one is raised within microseconds of the write-back. Two
+  suspected misses in a row (`IrqSuspect`) run the self-test again; its
+  failure returns the activation to polling (`cm.irq.lost`), with no
+  reconnection until the next activation. A frame that landed just before
+  the timeout, its interrupt still in flight, makes at most one suspicion
+  and costs at most one extra self-test.
+- **A claim storm** is stopped at DIRQL (section 4.5.3 step 5); the
+  thread finds `IrqStormMasked` at its next pass and takes the activation
+  down to polling (`cm.irq.storm`). A slower storm the routine's count does
+  not reach (claims that the DPC keeps resetting) is caught by the thread:
+  more than 1000 claims within one idle period with no frame drained
+  (`IrqStorm`) take it down the same way.
+- **Every other wait the thread makes** (the liveness monitor's slow
+  probes, the Stor98 acknowledgement passes, the containment probes, the
+  resume budgets) keeps its own period; the interrupt never lengthens one.
+
+#### 4.5.6 Order down and up: stop, removal, power and containment
+
+- **Down** (stop, removal, surprise removal, D3, a 98 SE or ME shutdown's
+  quiescence, a containment entry, a fall back to polling), on the thread.
+  Retiring the interrupt is apart from quiescing the transport: a fall
+  back to polling keeps both rings running with their buffers and goes on
+  polling them, and only the lifecycle paths that stop the transport today
+  (stop, removal, surprise removal, D3, the quiescence, containment as
+  section 5.5 and record 22 section 7.7 already do) add step 6.
+  1. Clear `IrqArmed` and mask the cause in one `KeSynchronizeExecution`
+     routine, where the liveness gate admits the write; from then on the
+     routine queues no DPC.
+  2. **Drain the DPCs while still connected.** Wait for the count of DPCs
+     owed to reach 0 (1 ms pieces, logged if it passes 100 ms). No new one
+     can be queued (step 1), so the count only falls; the DPC needs no
+     interrupt object (section 4.5.3), and the wait comes before the
+     disconnection so that nothing queued before it outlives the
+     connection unseen.
+  3. **Prove the source quiet**, by a successful hardware read only:
+     IMR read back with the bit clear, and the ISR dwords read so that the
+     status holding the line falls; or, where the mask was refused or its
+     read-back disagrees, the function's PCI Interrupt Disable (Command bit
+     10, PCI 2.3; every PCI Express function implements it) set and read
+     back set (section 4.5.6.1), for a **line** connection only: bit 10
+     suppresses INTx and not a message, so a message connection's only
+     proof is the IMR read-back. Either is a **verified retirement**; PCI
+     Status bit 3 (Interrupt Status) is read for the log only, since it
+     shows the function's condition whatever bit 10 blocks (as record 15's
+     retirement takes the Command bit as its proof). A read that returns
+     all ones, or a configuration access that failed, proves nothing: the
+     source stays **unretired**.
+  4. RX descriptors are posted from then on without IE (the ones already
+     posted keep it until consumed; their status bits are masked). Where
+     step 1's mask was refused by the liveness gate, a D3 first makes one
+     **emergency mask**: the IMC write of the one bit (on Intel, the IMR
+     read-modify-write only if the read is not all ones), made on the
+     thread while the function is in D0 (the D3 not yet forwarded). It
+     bypasses only the gate's recoverable states (SUSPECT, ABSENT,
+     CONFIG_LOST, CONTAINED and the recovery states), whose refusal
+     protects register values this write does not depend on; it is never
+     made after `CmLiveRevoke` (`Revoked` is read first, lock-free, the
+     same check-then-access order every gated access already has, so no
+     lock is nested) nor once BAR0 is unmapped (the thread itself unmaps
+     it, after this step). For a line, the Interrupt Disable write of
+     section 4.5.6.1 follows under the same rule. Either read back is a
+     verified retirement.
+  5. **Disconnect.** Retired: `IoDisconnectInterrupt` (or its `Ex` twin).
+     Unretired: in a fall back to polling and a containment entry, the
+     interrupt is **retained** (section 4.5.6.2) and `cm.irq.unretired`
+     logged, since a function in D0 may still assert the line. In a D3
+     whose emergency mask and Interrupt Disable both failed their
+     read-back, in a stop, a removal and a surprise removal, it is
+     disconnected whatever the proof, before the D3 is forwarded, with
+     `cm.irq.unretired` logged and `IrqFailed` set: the routine never
+     reads a function outside D0, and the resources go back to the PnP
+     manager or the device is gone. That is the supported failure policy,
+     and its window is section 4.5.7's: reaching it in a D3 needs every
+     applicable retirement attempt to stay unproven (a mask and an
+     Interrupt Disable that do not latch, or a failed configuration
+     access) while the function is still in D0 and still asserting. Vetoing the D3 instead (the
+     NHI kept in D0 through a system sleep) was rejected: the platform
+     removes its power in S3 and S4 anyway, and the D0 order on resume
+     would meet the same function. In a 98 SE or ME shutdown's quiescence (section 5.6) the
+     mask is the quiescence's own register write and no configuration
+     write is made; where the mask is refused, the interrupt stays
+     connected and claiming until the system is down.
+  6. The ring stop as today, in the lifecycle paths named above only.
+
+  **The image outlives every DPC.** The count covers the extension, not
+  the DPC's return sequence after its last decrement. As `cm_cfgwk.c`
+  already does for the 9x worker, the first connection of an interrupt
+  sets `DriverUnload` to NULL, so an image that has ever connected one
+  stays resident until the restart, on every system (on 98 SE and ME it
+  already is). `KeFlushQueuedDpcs` would prove the return on its own but
+  is not on 2000's export table, and `KeRemoveQueueDpc` has no Windows 98
+  evidence. The cost: an update over a driver that used the interrupt
+  takes effect at the restart, as on 98 SE and ME today.
+- **The failure latch.** Every fall back to polling (a failed arm or
+  self-test, `cm.irq.lost`, `cm.irq.storm`) sets `IrqFailed` for the
+  activation. While it is set, Up arms nothing: descriptors stay without
+  IE, PCI Interrupt Disable is not restored, and a retained routine stays
+  acknowledge-only. Only a new activation (a start after a stop or a
+  removal) clears it and qualifies the interrupt again, so the watchdog's
+  "no reconnection until the next activation" holds across D0 and
+  recovery.
+- **Up** (an activation, D0, a recovery that returns to ACTIVE, record 22
+  section 7.7's exit), with `IrqFailed` clear: the rings as today; then,
+  if an interrupt is
+  **retained**, it is reused (no second `IoConnectInterrupt`, the saved
+  interrupt object kept), otherwise connected; then PCI Interrupt Disable
+  restored where this driver set it (section 4.5.6.1); then the arm (the
+  stale status read, ITR[0], the unmask and its read-back, `IrqArmed`),
+  the drain, `MaintDue` due at once, and at an activation the self-test.
+  Not the self-test at each D0: a resume re-arms only; a lost interrupt
+  after it is the watchdog's.
+- A contained or absent host interface (section 5.5, record 22 section
+  7.7) is taken down on entry and up only by the recovery's return to
+  ACTIVE; while it is down the thread polls as today.
+
+##### 4.5.6.1 PCI Interrupt Disable: whose it is, and the one write admitted
+
+- **Ownership.** At activation the thread reads Command bit 10 and records
+  it (`IntxDisableFound`). Found set (firmware's or an earlier driver's),
+  it is left set and never cleared by this driver: INTx cannot then be
+  delivered, the self-test fails and the activation polls. Set by this
+  driver's retirement, it is recorded (`IntxDisableOurs`) and cleared at
+  the next Up, after the connection exists and before the unmask, so that
+  a pending condition is acknowledged by the routine the moment it is
+  delivered again; and at a stop or removal it is left set (the next
+  owner's start finds it, as Linux's and Windows' own drivers would, and
+  the PCI bus driver's own Command handling decides). Every other
+  Command write of this driver (the Bus Master write of section 5.1 step
+  1, its repair in the recovery) preserves bit 10 as read.
+- **The access.** The liveness gate refuses ordinary configuration writes
+  outside OFF and ACTIVE (`cmConfig`), CONTAINED and CONFIG_LOST
+  included, which is where a refused mask is met. One narrow access class
+  is added for retirement: a read of the identity dword that must match
+  the NHI's vendor and device ids, then a read-modify-write of the Command
+  word setting bit 10 alone, and its read-back; nothing else. It is refused
+  after `CmLiveRevoke` (surprise removal, stop, removal) and in a 98 SE or
+  ME shutdown's quiescence, which stay authoritative. On 98 SE and ME the
+  write goes through the same PDO path as the Bus Master write; whether
+  `PCI.VXD` itself rewrites the Command word afterwards is not read, and
+  the read-back is what the proof rests on.
+
+##### 4.5.6.2 A retained, unretired interrupt
+
+An interrupt whose source could not be proven quiet in a fall back to
+polling or a containment entry stays connected, so that the line is not
+left asserted with no routine to acknowledge it:
+
+- the routine runs as section 4.5.3 says with `IrqArmed` clear: it reads
+  the status, claims and acknowledges this device's cause, queues no DPC;
+  its MMIO is the same reads the liveness monitor itself makes, and while
+  the device is in D0 they are legal;
+- the thread polls as today, and each later down order (the next
+  maintenance pass's attempt, a containment exit, a D3, the stop) tries
+  the retirement again; a D3 whose emergency mask also fails, a stop, a
+  removal or a surprise removal disconnects it unproven (section 4.5.6
+  step 5), so it is never connected while the function is outside D0;
+- an Up reuses it as above; a second connection is never made while one
+  is retained.
+
+#### 4.5.7 What it costs, and what it gains (expected, to be measured)
+
+- **Gain**: an event that arrives while the thread is idle is decoded
+  within the interrupt and DPC latency (microseconds to a millisecond) in
+  place of up to 200 ms (on 98 SE and ME, plus a tick). For one plug of a
+  single device that is one such wait; on the USB4 profile a chain of k
+  routers enumerated hop by hop waits for each router's own hot-plug
+  packet, so up to k waits; under the ICM each router's `device connected`
+  is one. Nothing else (Stor98's statement, record 22 section 10.3; its
+  data path) gets faster.
+- **Cost, idle**: none saved, since the timed wait stays (section 4.5.1);
+  a few register writes at each activation and resume. **Cost, busy**: one
+  interrupt and DPC per RX frame (about one per command during an
+  enumeration), coalesced into one pass.
+- **Risk**: a shared level-triggered line on 98 SE, ME and 2000's
+  Standard PC HAL, where a defect in the routine livelocks every device on
+  the line (record 05 section 4); INTx on a USB4 host is optional (Spec
+  12.5) and Linux never uses the NHI's INTx at all (it asks for MSI-X,
+  falls back to one MSI and otherwise fails, `pci.c` `nhi_pci_init_msi`
+  [linux]), so the line is the one path no other operating system has
+  exercised on these hosts (section 4.3: wired [obs], never used by a
+  captured system [inf]). Three residual windows remain, none with a
+  driver-side remedy on these systems: a host that holds its line
+  asserted with its cause masked livelocks a uniprocessor before the
+  thread can set PCI Interrupt Disable (section 4.5.3 step 5); a stop,
+  removal or surprise removal disconnects a source it could not prove
+  quiet (section 4.5.6 step 5); and a D3 that does the same (the same
+  step). The first needs a host that ignores its own mask; the other two
+  need every retirement write to have failed its read-back, which a
+  refused liveness gate alone no longer causes (the emergency mask,
+  section 4.5.6 step 4), but a failed configuration access or a host that
+  latches neither its mask nor its Interrupt Disable still can.
+
+#### 4.5.8 Import gates
+
+The line step adds five pairs to `xhcicm-imports.allow` and its amd64
+twin, every one a pair `xhci98.sys` already imports, with that file's
+evidence verbatim, so the rule of this binary's allowlist ("EVERY ROW IS A
+PAIR xhci98.sys ALREADY IMPORTS") holds: `IoConnectInterrupt`,
+`IoDisconnectInterrupt`, `KeInitializeDpc`, `KeInsertQueueDpc` (each
+`w2k-export`, `win98-precedent uhcd.sys 4.10.2222`, `ntkern-name` for the
+first two) and `KeSynchronizeExecution` (`win98-precedent uhcd.sys
+4.10.2222`, with `openhci.sys`). `InterlockedIncrement` and
+`InterlockedDecrement` are already this binary's. No `SITES=` restriction
+is proposed for them. Not used: `KeAcquireInterruptSpinLock` (on the deny
+list), `KeFlushQueuedDpcs`, `KeRemoveQueueDpc`, and on x86
+`IoConnectInterruptEx` and `MmGetSystemRoutineAddress`. The message step
+adds on amd64 `MmGetSystemRoutineAddress` under a `SITES=` row of its
+own, and on x86 `IoGetDeviceObjectPointer` for the helper's channel
+(`xhci98-imports.allow`'s row, `win98-precedent 1394bus.sys 4.10.2222`,
+its evidence verbatim; `ObfDereferenceObject` is already this binary's).
+The PCI Interrupt Disable write of section 4.5.6 uses the configuration
+path the driver already has, no new pair. The INF gate is
+untouched by the line step; the message step changes the Vista-to-10 INF
+sections and their gate rows.
+
+#### 4.5.9 Verification (when it is coded)
+
+- **The first frame before any wrap**: on each leg, the first plug after
+  an activation and after a resume, whose event frame lands in a
+  descriptor of the initial post, must raise the interrupt (section
+  4.5.2, the intent before the ring start).
+- **Host vectors** (the pure half: the cause's dword and bit for N = 12
+  and other Total Paths and the ISR dword count; the unmask and mask by
+  host contract and their read-back; the routine's four outcomes; the
+  watchdog's suspicion and its reset; the storm count; the order down and
+  up as a state table).
+- **q35 readings** that set the default (Q2), on `tb3ar` and `asm4242`,
+  XP, 7 x86 and 10 x64 first, 98 SE and ME after section 4.5.4's reading,
+  interrupt off and on:
+  - **Hot-plug latency**, two figures, both on the host's clock so no
+    guest clock is trusted: (1) **event consumed**, from the host-side QMP
+    plug to the emulator's trace of the RX consumer index passing the
+    descriptor that held **that** plug's own event frame (the ICM's
+    `device connected` for its route, or the USB4 hot-plug packet for its
+    adapter), identified by the frame's type, route and adapter and its
+    ring slot - not the first consumer write after the plug, which may be
+    a scan response or an earlier frame; where the emulator's trace lacks
+    the slot or the frame's identity, that trace is a `usb4-emu` addition
+    owed first; (2) **connection done**, to the connection manager's own
+    `connected` log line for that route, where the guest's log reaches
+    the host. Ten plugs each, median and maximum.
+  - **Idle cost**: ten minutes with nothing attached and ten with a drive
+    attached and idle, the guest's processor time (Performance Monitor's
+    `% Processor Time` and `Interrupts/sec` on NT; on 98 SE and ME the
+    QEMU process's own CPU time on the host, the only measure there),
+    interrupt off, on, and polling at 50 ms for comparison (Q4).
+  - **No interrupt**: `usb4-host`'s `intx=off` property [emu] (no pin, so
+    no resource: `cm.irq.none`); a shared line (the NHI on the q35
+    xHCI's INTx) with traffic on the other device.
+  - **A lost interrupt**: no injection exists for the NHI today; the
+    harness's `x-intx-drop-every` is the NVMe endpoint's (`HARNESS.md`,
+    "Lost interrupts" [emu]), so the watchdog leg is owed to a `usb4-emu`
+    addition (an INTx drop on `usb4-host`), asked of that repository, and
+    the host vectors carry it meanwhile.
+- **Hardware**: the P14s's Alpine Ridge INTx (section 4.3) at the bench of
+  45-E.5, the self-test first (ISS unread there).
+
+#### 4.5.10 The owner's
+
+Decided by the owner on 2026-10-29: Q1 (a), coded in this release behind
+`XhciCmRingInterrupt` 0; Q2 (b), 0 everywhere until a hardware reading;
+Q3 (a), the line only first; Q4 (a), the idle period unchanged. The
+options as they were put:
+
+- **Q1, whether to code it.** (a) Code it now, line only, behind
+  `XhciCmRingInterrupt` 0; (b) later, as an opt-in, after the q35
+  readings show the gain; (c) not at all, and shorten the idle period
+  instead where the readings show its cost is small (Q4). Recommended:
+  (b). The gain is at most one idle period per event; the cost is a new
+  shared-line service routine on the systems where a defect hangs the
+  line, on a pin no other system uses on these hosts.
+- **Q2, the default once coded.** (a) 1 on the NT systems where the q35
+  readings show latency down and idle cost not up, 0 elsewhere; (b) 0
+  everywhere until a hardware reading. Recommended: (b), then (a) on NT
+  after the P14s bench.
+- **Q3, MSI on Vista to 10.** (a) the line only; (b) MSI as a second step,
+  through the helper on x86. Recommended: (a) first; (b) only if a host
+  without INTx is met (a USB4 host need not wire it, Spec 12.5), since on
+  those the line step simply polls.
+- **Q4, the idle period with nothing attached.** (a) unchanged; (b) longer
+  (for example 1000 ms) while no tunnel is up and no Stor98 entry exists,
+  with the interrupt live, to save idle cost; (c) with or without the
+  interrupt, a shorter period (for example 50 ms) if its idle cost
+  measures small. Recommended: (a) until the readings; (c) is the cheapest
+  latency gain, needing no new code path.
 
 ## 5. The ICM client
 
@@ -6798,7 +7403,7 @@ revised to it in draft 6.
 |---|---|---|---|
 | D1 | One binary or two | **Owner, 2026-10-15, as recommended**: a second binary, `xhcicm.sys` in `src\cm\`, with its own INFs, allowlists and gate | 3.1 |
 | D2 | How the NT filter is installed | **Owner, 2026-10-15, as recommended; answered by `39-0.4`**: the device-specific route - a separate NT-only INF (`$Windows NT$`, undecorated Models for Windows 2000, `&CC_0604` lines only, no undecorated install section) whose DDInstall includes `machine.inf` and needs `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services`, adding a device-specific `UpperFilters` with `pci.sys` kept as the service; unforced on 2000, forced on XP and 7 (the unsigned INF ranks `0x8005` against `machine.inf`'s `0x2004`; the installer forces it, a user by hand uses Have Disk); staged in `nt\`, since Windows 98 SE and ME read `$Windows NT$` INFs. No class filter | 3.2, 3.3, 6.2 |
-| D3 | Interrupts | **Owner, 2026-10-15, as recommended**: none; polling only, 200 ms idle; an INTx mode later behind its own value once read on hardware | 4.3 |
+| D3 | Interrupts | **Owner, 2026-10-15, as recommended**: none; polling only, 200 ms idle; an INTx mode later behind its own value once read on hardware (task 45.22 designs it in section 4.5; this decision stands until the owner decides its code) | 4.3, 4.5 |
 | D4 | Approval policy | **Owner, 2026-10-14**: `XhciCmApprove` 0 and 1 only, 1 the default, approve everything, stated plainly as a security property in the release notes; nothing remembered, and the record says why that is harmless; "approve known devices only, from a UUID list under the service key, filled by hand" listed as a later option, not a value | 5.4 |
 | D5 | What to do about a controller absent at boot (Assist on, nothing attached) | **Owner, 2026-10-15, as recommended**: nothing; a known limitation; force power is an ACPI WMI method out of reach on 98 and unread on NT | 1.3, 2 |
 | D6 | The `nvme98` notification channel | **Owner, 2026-10-15, as recommended**: the proposal of 7.2, settled with `nvme98` after the first checkpoint, shipped as `39-A.7`; the statement withheld on any OS until gate G3's ordering is qualified there. Settled by `nvme98` on 2026-10-15 (its MD-6): the link-state table of section 7.2 replaced the proposal | 7.1, 7.2 |

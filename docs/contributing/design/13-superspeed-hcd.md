@@ -6800,7 +6800,7 @@ case-insensitive matching above, and the form most INF lines use.
 |---|---|
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr`, `USB\VID_vvvv&PID_pppp` |
-| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
+| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc` (the last left out for `01/ss/20` and `01/ss/30`, 10.7.2): from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
 | `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form) |
 
 **A function PDO** (one per function of a split device; since task 36.43 a
@@ -6811,7 +6811,7 @@ child of the device's composite-parent PDO, whose own ids are section
 |---|---|
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
-| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03; it was open (10.10) |
+| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc` (the last left out for `01/ss/20` and `01/ss/30`, 10.7.2): for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03; it was open (10.10) |
 | `BusQueryInstanceID` | with the device's serial id, that id, `&` and `nn`, `UniqueID` TRUE: `ABC123&03`; without, the location key in decimal, then `nn`: port 3's `MI_03` is `303`, `UniqueID` FALSE (task 33.2; the location form was corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
 
 **Instance ids from the serial number** (roadmap task 33.2, `2.1.0.0`;
@@ -7252,15 +7252,108 @@ the 9x guests, which decides the change on every target by decision 1.
   any `USB\XHCI98_NOXPORT` line, and the installer's `inst_bus_id` and
   `inst_remove_rank` already treat that form as not the bus's and leave it.
 
+#### 10.7.2 A UAC 2.0 function's compatible ids (task 45.24)
+
+**Status.** Designed 2026-10-29 from task 45.24's reading
+(`runs/run-45.md`, "45.24"), reviewed and revised, for `3.4.0.0`.
+
+**The reading** (runtime, q35 XP SP3 x86 guests, a simulated UAC 2.0
+device - `usb-wdm-free`'s `uacemu.py`, profile `hs24` - over `usb-redir`;
+`3.2.0.0` with `usb-wdm-free` v0.1.0's `uac2`, and `3.3.0.0` with
+v0.1.4's):
+
+- Windows' `wdma_usb.inf` binds `usbaudio.sys`, which on 2000 to 8
+  serves USB Audio 1.0 only, to the bare `USB\CLASS_01` (10.6). On XP
+  that signed generic line outranked `uac2wdm.inf`'s unsigned
+  `USB\Class_01&SubClass_00&Prot_20` and `USB\Class_01&SubClass_01&Prot_20`
+  lines even with `uac2wdm.inf` copied in by `SetupCopyOEMInf` before the
+  plug: the function came up as "USB Audio Device" on `usbaudio`, no
+  wizard asked.
+- From there no change of that devnode completed. Update Driver to
+  `uac2` (Have Disk, or the copied INF's line) stopped at "uac2wdm.sys To
+  C:\WINDOWS\system32\DRIVERS" with `usbaudio` running and `uac2wdm`
+  never started; Disable in Device Manager waited the same way; after an
+  unplug, the update of the non-present devnode waited too, and so did
+  Windows' own shutdown, until a reset. After the reset `uac2` bound and
+  played. Under Windows' own `usbehci.sys` and `usbccgp.sys`, with no
+  xHCI98 on the machine, the same update, and the shutdown after an
+  unplug, waited the same way. That is consistent with a teardown that
+  never ends in Windows' audio stack once `usbaudio` holds a UAC 2.0
+  function, and it shows this bus is not needed for the wait; which
+  component waits (`usbaudio.sys`, KS, PortCls or PnP) was not read, no
+  thread's stack having been taken. `uac2` never loads before it.
+
+**The change.** A function, or an unsplit device, whose class triple is
+`01/ss/20` or `01/ss/30` drops the third, bare `USB\Class_01` compatible
+id and keeps the other two:
+
+| Triple (`cc/ss/pp`) | `BusQueryCompatibleIDs` |
+|---|---|
+| `01/00/20` (a UAC 2.0 IAD) | `USB\Class_01&SubClass_00&Prot_20`, `USB\Class_01&SubClass_00` |
+| `01/01/20` (a UAC 2.0 AudioControl interface, no IAD) | `USB\Class_01&SubClass_01&Prot_20`, `USB\Class_01&SubClass_01` |
+| `01/00/30` (UAC 3.0) | likewise, two ids |
+| `01/ss/00` (UAC 1.0; MIDIStreaming), `01/ss/pp` with any other `pp`, every other class | the three ids, unchanged |
+
+- Why those two protocols: USB Audio 1.0 requires `bInterfaceProtocol` 0
+  (and so does USB MIDI, 1.0 and 2.0); USB Audio 2.0 sets
+  `IP_VERSION_02_00` (20h), in the AudioControl and AudioStreaming
+  interfaces and the IAD's `bFunctionProtocol`, and 3.0
+  `IP_VERSION_03_00` (30h). Neither is a protocol `usbaudio.sys` on 2000
+  to 8 serves. A non-conforming device with some other non-zero protocol
+  is left as it was, its bare id with it.
+- The triple is the one the ids already come from: the IAD's when the
+  function has one, else its first interface's at alternate 0
+  (`XhciFuncSplit`), and for an unsplit device the device descriptor's,
+  or its single interface's when the device class is 0
+  (`hcdClassTriple`). An IAD saying `20` over an AudioControl interface
+  saying `00` is non-conforming and follows the IAD. A MIDIStreaming
+  interface inside a UAC 2.0 IAD shares the IAD's ids, so loses the bare
+  id with it; a separate MIDI function keeps all three.
+- Per target. 98 SE and ME: `wdma_usb.inf`'s `USB\CLASS_01` line no
+  longer matches such a function; on 98 SE `uac2`'s lines ranked above
+  it already (`usb-wdm-free`'s profiles record; ME's ranking was not
+  read). 2000 to 8.1: the generic class-only line no longer matches;
+  `wdma_usb.inf`'s VID/PID lines still do for the devices they name. The
+  function then waits for a driver: Found New Hardware, or a copied
+  `uac2wdm.inf` that matches its specific id. That makes `uac2` a
+  candidate with nothing to tear down first; whether Windows installs it
+  silently is still its signing policy's and the INF's own matter. 10,
+  from 1703: Windows' own USB Audio 2.0 driver matches the protocol 20h
+  ids with subclass 00 to 03 (Microsoft's published "USB Audio 2.0
+  Drivers" documentation), which stay.
+- Hardware ids, the device id and the instance id are unchanged, so a
+  driver matched by VID and PID, `&MI_nn` included, binds as before. No
+  consumer in this tree needs three compatible ids: `XHCITR` and the
+  installer's `inst_msz_has` and `inst_ids_split` walk a list of any
+  length.
+- `XhciFuncCompatCount` (`xhci_func.c`, pure) answers 2 or 3 from the
+  triple; `XhciFuncId`'s `XHCI_FUNC_ID_COMPATIBLE` and
+  `hcdDeviceQueryId`'s device-PDO answer both take it. Host vectors in
+  `test_func`: the rows above, an IAD over a disagreeing AudioControl
+  interface, MIDI beside a UAC 2.0 IAD, a reserved protocol, and the
+  shortened answer's size, its size query and its truncation.
+- A devnode already bound to `usbaudio` keeps it, and its
+  `MatchingDeviceId` (`USB\CLASS_01`) with it: Windows does not rank an
+  installed devnode again when its compatible ids change, and a device
+  with a serial number keeps that devnode on any port. The way out
+  there, read in the last leg: unplug the device, restart Windows (and
+  reset the machine if the shutdown waits), then update the hidden "USB
+  Audio Device" to `uac2` (Device Manager started with
+  `devmgr_show_nonpresent_devices=1`, View, Show hidden devices), which
+  completes, and plug the device in again. The release notes say so.
+- Not this bus's: under Windows' own USB stack the generic id stays, and
+  `usb-wdm-free`'s README carries that known issue for XP and XP x64.
+
 ### 10.8 When and how the bus splits a device
 
 **When.** Microsoft's composite-parent rule, as `XhciFuncSplit`
 (`xhci_func.c`) implements it: split only a device with
-`bNumConfigurations` 1, two or more interfaces (counted over
+`bNumConfigurations` 1 (since task 45.34 also more than 1, by
+configuration index 0; below), two or more interfaces (counted over
 `bAlternateSetting` 0 descriptors), and `bDeviceClass` 0 or
 class/subclass/protocol `EF/02/01` (the IAD device class). Every other
-device - several configurations, or a device class of its own, IADs or not -
-is one device PDO with the whole-device ids of 10.7, which keeps the
+device - a device class of its own, IADs or not (until task 45.34 also
+several configurations) - is one device PDO with the whole-device ids of 10.7, which keeps the
 `USB\VID_vvvv&PID_pppp` id a whole-device driver matched on; so is a device
 with more than 16 functions or IADs, or an interface number of 32 or more. A
 multi-interface device left whole no longer reports its first interface's
@@ -7274,6 +7367,60 @@ IADs", left any other device class unsplit "until it is read", and had the
 bus split using "the first configuration", leaving the multi-configuration
 rule (`ParentFindOriginalConfiguration`, `ParentFindAltConfiguration`)
 unread. A device with more than one configuration is now never split.
+
+**Several configurations (task 45.34, `3.4.0.0`; owner, 2026-10-29).**
+Superseding "never split" just above: a device whose `bNumConfigurations`
+is above 1 is split by the same rule over its configuration index 0, the
+one the bus reads at enumeration (`hcd_enum.c`), and nothing else of it
+changes - the class test, the interface count, IADs, the legacy audio
+rule, the limits. The bus configures it as any split device
+(`HcdCfgParentConfigure`, SET_CONFIGURATION with configuration 0's
+`bConfigurationValue`); its other configurations are never read, never
+selected and never shown: a function's GET_DESCRIPTOR(CONFIGURATION) for
+an index above 0 is refused as before (10.9); a function's
+SELECT_CONFIGURATION whose configuration descriptor carries another
+`bConfigurationValue` than the one the bus set is refused with
+`USBD_STATUS_INVALID_PARAMETER` before any pipe changes
+(`hcdCfgSelectFunction`, as the composite parent's `hcdCompSelect`
+already refuses one, 10.14), so GET_CONFIGURATION and a RESET_PORT replay
+keep naming the configuration the functions run in; and the device
+descriptor a client reads from the device still carries the device's own
+`bNumConfigurations`.
+
+- Why: a USB Audio 3.0 device must carry an ADC 1.0 or 2.0 function in
+  its first configuration (index 0) and its 3.0 functions in later ones
+  (ADC 3.0 with errata, section 3.3 "Backwards Compatibility"). Left
+  whole, under this bus it had no driver at all (`usb-wdm-free`'s
+  `docs/design/uac2.md` section 16.6: only index 0 read, no configuration
+  selected, Found New Hardware without a driver). Split by configuration
+  0, its 2.0 function is a function PDO with the `01/00/20` ids of 10.7,
+  which `uac2` matches.
+- What Windows' own stacks do, read on XP SP3 (the same section 16.6, a
+  simulated two-configuration device under `usbehci.sys`): the hub reads
+  configuration index 0 only, sends SET_CONFIGURATION 0 and presents the
+  whole device to one driver - no `USB\COMPOSITE` match, since
+  Microsoft's rule ("Enumeration of the composite parent device") reports
+  that id only for `bNumConfigurations` 1 - and that driver (here `usbaudio.sys`, by the
+  whole device's compatible ids) selects configuration 0 itself. Windows
+  98 SE and ME never see this rule: under xHCI98 the bus presents the
+  devices on every target alike (10.12), so the change is the same on all.
+- What it costs: a driver written for Windows' own stack that binds such
+  a device whole, by `USB\VID_vvvv&PID_pppp`, no longer matches it, since
+  the split device's own PDO carries the project-owned composite ids
+  (10.12) and its functions `&MI_nn` ones. Single-configuration composite
+  devices are already split that way under this bus; for several
+  configurations Windows makes no composite match by itself, so such
+  INFs exist: a vendor driver for the whole device, or a vendor INF that
+  loads `usbccgp.sys` on it and lets it choose a configuration, which
+  Microsoft documents. Neither binds here any more. Recorded here as the
+  owner's trade: the UAC 3.0 case over that one; a device list to keep
+  whole can be added if one is reported.
+- `XhciFuncSplit` (`xhci_func.c`, pure) drops its `bNumConfigurations == 1`
+  test; host vectors in `test_func`: a two-configuration IAD audio device
+  splits as its one-configuration twin, a two-configuration device with a
+  class of its own (`bDeviceClass` 02) stays whole, and a
+  two-configuration device of one interface stays whole; the
+  configuration-value refusal of a function's select is read in the leg.
 
 The bus configures a split device itself, once, before any function PDO
 exists (`HcdCfgParentConfigure`): SET_CONFIGURATION with its one

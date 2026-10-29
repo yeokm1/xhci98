@@ -1,6 +1,14 @@
 # Design Record 33 - Windows 2000 and XP: the Requirement Lists of Hot-Added Bridges
 
-Status: revision 3, 2026-10-27, before code, reviewed and revised: the
+Status: coded by task 45.12 (2026-10-29): `src/cm/cm_breq.c` and its
+host suite `test\test_cm_breq.c`, the bridge case in `cm_filt.c`, the
+registered child's role (`CmRolePlace`) and ancestry (`CmRegAttLink`),
+the bridge inventory in the marks answer (`cm_query.h` `CM_QB_*`), the
+mark service's bridge marks, restart and wait (`xhcimark\`), and
+`XhciCmBridgeReq` and `XhciCmBridgeReqDiag`; the installer's
+"Advanced..." row for `XhciCmBridgeReq` (section 9.1) is not yet made.
+Section 7.1 states what the bound covers. Revision 3, 2026-10-27, before
+code, reviewed and revised: the
 owner's answers to section 12's questions folded in; the NHI's role
 decided before the position rule; a registered child's immediate
 ancestor in `Parent`, the chain's root kept in `Bridge`; the restart
@@ -1015,11 +1023,14 @@ device not started.
 
 ### 7.1 Never more than the parent has
 
-Every length written is at most the parent window of its kind (capped,
-section 6), and the preferred lengths of the downstream ports sum to at
-most the upstream port's window (section 6.3.4); the host vectors check
-both over every case and over a seeded sweep of window sizes and claims
-(section 10.1). The ladders end at the OS list's own smallest length or
+Every length the rules write is at most the parent window of its kind
+(capped, section 6), and the preferred lengths of the downstream ports sum
+to at most the upstream port's window (section 6.3.4); the host vectors
+check both over every case and over a seeded sweep of window sizes and
+claims (section 10.1). A group the rules keep as the OS list asked it
+(rules 6.2.2 and 6.3.2, the bridges of section 6.4, or beside a rule 6.2.1
+drop) keeps the PCI driver's own lengths and alternatives, as today's
+list has them: on XP its ladder still lets the arbiter take less. The ladders end at the OS list's own smallest length or
 the granule, so a placement the OS list could have made remains
 possible. A parent window that cannot be read makes the rewriter leave
 the list (`cm.breq.parent`). A parent window of 4 GB or more is asked
@@ -1394,8 +1405,9 @@ Then, on the reviewed build:
   written again, no restart): placed again each time; which shape
   arrived, and which of this driver's filters acted, recorded.
 - **R8. Windows 7** x86 (and x64): the dock and the single enclosure
-  unchanged from today: `FilteredConfigVector` equal to
-  `BasicConfigVector`, no diagnostic entries, no bridge marks.
+  unchanged from today: the lists as 7 makes them (7 filters them
+  itself, so `FilteredConfigVector` is not `BasicConfigVector` there;
+  read in 45.12), no diagnostic entries, no bridge marks.
 - **R9. The single enclosure** (the ORICO model) on XP and 2000, hot and
   at a cold start: lists unchanged, the drive working (the regression
   leg).

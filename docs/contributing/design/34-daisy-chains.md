@@ -45,8 +45,9 @@ Tags:
   PCI Express Base Specification's downstream-port registers as record 21
   section 6.5 cites them.
 - **[emu]** the `usb4-emu` repository, read in place and never modified:
-  branch `asm4242-model` at `bf130a8` (its `main` at `e0346a4` is an
-  ancestor), QEMU fork at `fa428b4`: `docs/USB4-HOSTS.md` section 8
+  read on its branch `asm4242-model` before the 2026-10-29 squash; the same
+  text is on `usb4-emu` `main` after its merge of that work (`03d32f2`,
+  QEMU fork `2e063be`): `docs/USB4-HOSTS.md` section 8
   ("Chains"), `docs/XHCI98-HANDOFF.md` (the chain paragraph),
   `docs/ICM-PROTOCOL.md` (R9, R12, R13), `docs/ICM-TITAN-RIDGE.md`,
   `README.md` and `scripts/run-cm-test.sh` (`CHAIN=1`),
@@ -1544,7 +1545,9 @@ to E5 and E7, then E6 and E8, before Part 2's code. Q6: record 33's fix
 - USB4 Specification 2.0 and USB4 Connection Manager Guide 2.0
   (`docs/references/README.md`), the sections design record 22 cites and
   Spec 5.2.5, Guide 3.1, 3.1.1, 3.2.1, 3.4.1, 5.3.1 and 5.3.2.
-- `usb4-emu`, branch `asm4242-model` at `bf130a8` (QEMU fork `fa428b4`):
+- `usb4-emu` `main` after its merge of the asm4242 model (`03d32f2`, QEMU
+  fork `2e063be`; read on branch `asm4242-model` before the 2026-10-29
+  squash):
   `docs/USB4-HOSTS.md` section 8, `docs/XHCI98-HANDOFF.md`,
   `docs/ICM-PROTOCOL.md` sections 4.2, 4.4, 4.5 and 8 (R9 to R13),
   `docs/ICM-TITAN-RIDGE.md` sections 3.2 to 3.5, `README.md`,

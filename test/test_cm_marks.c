@@ -239,6 +239,7 @@ static void test_build(void)
     in.EpochHi = 0x22222222UL;
     in.NhiBdf = 0x0700;
     in.SafeEjectOff = 0;
+    in.Bridges = NULL;
     bytes = CmMarksBuild(buf, &t, &in);
     CHECK_EQ(bytes, CM_QM_HDR_BYTES + 2 * CM_QM_ENT_BYTES, "a header and two entries");
     CHECK_EQ(get32(buf, CM_QM_O_MAGIC), CM_QM_MAGIC, "XCMM");
@@ -251,6 +252,33 @@ static void test_build(void)
     CHECK_EQ(get32(buf, CM_QM_O_ENT_BYTES), 64, "64-byte entries");
     CHECK_EQ(get32(buf, CM_QM_O_FLAGS), 0, "complete, safe eject on");
     CHECK_EQ(get32(buf, CM_QM_O_NHI_BDF), 0x0700, "the NHI");
+    CHECK_EQ(get32(buf, CM_QM_O_BR_OFFSET), 0, "no bridge inventory given");
+    /* The bridge inventory (design record 33 section 4.3, task 45.12):
+     * after the entries, its offset and length in the header, flagged. */
+    {
+        static ULONG br[CM_QB_WORDS];
+        static UCHAR b2[CM_QM_MAX_BYTES];
+        ULONG b2bytes;
+        ULONG k;
+
+        for (k = 0; k < CM_QB_WORDS; k++) {
+            br[k] = 0xA0000000UL + k;
+        }
+        in.Bridges = br;
+        b2bytes = CmMarksBuild(b2, &t, &in);
+        in.Bridges = NULL;
+        CHECK_EQ(b2bytes, bytes + CM_QB_BYTES, "the inventory after them");
+        CHECK_EQ(get32(b2, CM_QM_O_BR_OFFSET), bytes, "its offset");
+        CHECK_EQ(get32(b2, CM_QM_O_BR_BYTES), CM_QB_BYTES, "its length");
+        CHECK_EQ(get32(b2, CM_QM_O_BYTES), b2bytes, "the whole answer");
+        CHECK_EQ(get32(b2, CM_QM_O_FLAGS), CM_QM_F_BRIDGES, "flagged");
+        CHECK_EQ(get32(b2, bytes), 0xA0000000UL, "its first dword");
+        CHECK_EQ(get32(b2, bytes + CM_QB_BYTES - 4), 0xA0000000UL +
+                                                          CM_QB_WORDS - 1,
+                 "its last dword");
+        CHECK(memcmp(b2 + 64, buf + 64, bytes - 64) == 0,
+              "the entries unchanged by it");
+    }
     /* The current entry comes first. */
     CHECK_EQ(get32(buf, 64 + CM_QM_E_MEMBER), 0x0518, "its member");
     CHECK_EQ(get32(buf, 64 + CM_QM_E_BUS), 6, "its bus");

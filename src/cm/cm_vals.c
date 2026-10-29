@@ -243,16 +243,26 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed)
 {
     CM_IDS nhi;
 
-    if (ids->Role == CM_ROLE_FILTER && filterListed) {
-        return CM_ROLE_FILTER;
-    }
+    /* The NHI first (record 33 section 4.4): its own AddDevice finds no
+     * function driver above its PDO, this driver being that driver. */
     if (ids->Role == CM_ROLE_NHI) {
         nhi = *ids;
         if (CmProfileFor(&nhi) != CM_PROFILE_UNKNOWN) {
             return CM_ROLE_NHI;
         }
     }
+    if (ids->Role == CM_ROLE_FILTER && filterListed) {
+        return CM_ROLE_FILTER;
+    }
     return CM_ROLE_CHILD;
+}
+
+ULONG CmRolePlace(ULONG role, ULONG pciAbove)
+{
+    if (role == CM_ROLE_FILTER && !pciAbove) {
+        return CM_ROLE_CHILD;
+    }
+    return role;
 }
 
 ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built)
@@ -303,6 +313,25 @@ VOID CmValuesDefault(PCM_VALUES v)
     v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
     v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
     v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
+    v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
+}
+
+VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
+    v->BridgeReqFound = 0;
+    v->BridgeReqRaw = 0;
+    v->BridgeReqRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->BridgeReqFound = 1;
+    v->BridgeReqRaw = raw;
+    if (raw > CM_BRIDGE_REQ_RECORD) {
+        v->BridgeReqRefused = 1;
+        return;
+    }
+    v->BridgeReq = raw;
 }
 
 VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw)

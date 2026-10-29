@@ -1968,6 +1968,7 @@ $script:BuildInputPrefixes = @(
 )
 $script:BuildInputScripts = @(
     "scripts\build-driver.cmd",
+    "scripts\build-steps.ps1",
     "scripts\build-all.cmd",
     "scripts\source-stamp.ps1",
     "scripts\check-flavour-marker.ps1",
@@ -2463,6 +2464,9 @@ function Start-CutBuild {
     $psi.UseShellExecute = $false
     $psi.EnvironmentVariables["TEMP"] = $tmp
     $psi.EnvironmentVariables["TMP"] = $tmp
+    # A cut runs every self-test in full, never skipping one whose inputs
+    # its last passing run read (the INF gate's, task 45.30).
+    $psi.EnvironmentVariables["XHCI98_FULL_SELFTESTS"] = "1"
     $p = [System.Diagnostics.Process]::Start($psi)
     [void]$Started.Add($p)
     Write-Host ("  {0}: {1} in {2} (PID {3}), log {4}" -f $Arch, $Command, $Tree, $p.Id, $log)
@@ -2492,6 +2496,108 @@ function Format-CutSpan {
     return ("{0}:{1:00}:{2:00}" -f [int][Math]::Floor($Span.TotalHours), $Span.Minutes, $Span.Seconds)
 }
 
+function Get-DefaultCutX64Tree {
+    # Tree B when -X64Tree is not given (task 45.3): <A>-x64 beside tree A.
+    param([string]$Repo)
+    $Repo = Resolve-TreePath $Repo
+    return (Join-Path (Split-Path -Parent $Repo) ((Split-Path -Leaf $Repo) + "-x64"))
+}
+
+function Invoke-CutTreeGit {
+    # git in -At for Initialize-CutX64Tree; throws with git's own words.
+    param([string]$At, [string[]]$GitArgs)
+    # With no git to run, $LASTEXITCODE would still be some earlier
+    # program's, and a failure would read as git's success.
+    if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH: tree B is made and moved with git; put git on PATH and run again."
+    }
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    try { $o = (& git -C $At @GitArgs 2>&1 | Out-String) } finally { $ErrorActionPreference = $eap }
+    if ($LASTEXITCODE -ne 0) { throw ("git {0} in '{1}' failed (exit {2}): {3}" -f ($GitArgs -join " "), $At, $LASTEXITCODE, $o.Trim()) }
+    return $o.Trim()
+}
+
+function Initialize-CutX64Tree {
+    # The default tree B made or brought to tree A's HEAD before the builds
+    # (task 45.3; build-and-test.md, "A faster gated build"). Absent, it is
+    # made with `git worktree add --detach` and marked as the launcher's
+    # (out\cut-x64-tree.txt, naming A). Only a tree so marked, for this A,
+    # detached, clean and with no build lock, is ever moved (`git checkout
+    # --detach`) or given links: each directory of A's tools\ that its
+    # tools\ lacks, as a junction. Any other tree at that path is left as it
+    # is, for Invoke-CutBuilds's checks to take or refuse. Both of B's build
+    # locks are held while it is changed. Returns B's path.
+    param([string]$Repo, [string]$X64Tree)
+    $Repo = Resolve-TreePath $Repo
+    $X64Tree = [System.IO.Path]::GetFullPath($X64Tree).TrimEnd('\')
+    $marker = Join-Path $X64Tree "out\cut-x64-tree.txt"
+    if (-not (Test-Path -LiteralPath $X64Tree)) {
+        Write-Step ("tree B: made at {0}" -f $X64Tree)
+        [void](Invoke-CutTreeGit -At $Repo -GitArgs @("worktree", "add", "--detach", $X64Tree, "HEAD"))
+        Ensure-Directory (Join-Path $X64Tree "out")
+        [System.IO.File]::WriteAllText($marker, ($Repo + "`r`n"))
+    }
+    $why = Get-GatedImportTreeFault -Repo $Repo -From $X64Tree
+    if ($why -ne "") { throw "tree B ($X64Tree): $why." }
+    $owned = (Test-Path -LiteralPath $marker -PathType Leaf) -and
+             [string]::Equals(([System.IO.File]::ReadAllText($marker)).Trim(), $Repo, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $owned) {
+        Write-Warn ("tree B ({0}) was not made by this script for this tree: it is taken as it is, never moved or linked" -f $X64Tree)
+        return $X64Tree
+    }
+    $held = @()
+    try {
+        foreach ($ar in @("x86", "amd64")) {
+            if (-not (Enter-GatedLock -Root $X64Tree -Arch $ar -Owner "cut-builds")) {
+                Write-Warn ("tree B ({0}) holds a build lock: left as it is" -f $X64Tree)
+                return $X64Tree
+            }
+            $held += Join-Path $X64Tree ("out\gated-{0}.lock" -f $ar)
+        }
+        $a = Get-GitTreeState -Repo $Repo
+        $b = Get-GitTreeState -Repo $X64Tree
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 128
+        try { & git -C $X64Tree symbolic-ref -q HEAD 2>&1 | Out-Null; $onBranch = ($LASTEXITCODE -ne 1) } finally { $ErrorActionPreference = $eap }
+        if ($b.Head -eq "none" -or $b.Dirty -or $onBranch) {
+            Write-Warn ("tree B ({0}) is {1}: left as it is, neither moved nor linked" -f $X64Tree,
+                        $(if ($b.Head -eq "none") { "not readable by git" } elseif ($onBranch) { "on a branch" } else { "not clean" }))
+            return $X64Tree
+        }
+        if ($a.Head -ne "none" -and $a.Head -ne $b.Head) {
+            Write-Step ("tree B: moved from {0} to {1}" -f $b.Head, $a.Head)
+            [void](Invoke-CutTreeGit -At $X64Tree -GitArgs @("checkout", "--quiet", "--detach", $a.Head))
+        }
+        $aTools = Join-Path $Repo "tools"
+        if (Test-Path -LiteralPath $aTools -PathType Container) {
+            $bTools = Join-Path $X64Tree "tools"
+            Ensure-Directory $bTools
+            foreach ($d in @(Get-ChildItem -LiteralPath $aTools -Directory -Force)) {
+                $link = Join-Path $bTools $d.Name
+                if (Test-Path -LiteralPath $link) {
+                    $item = Get-Item -LiteralPath $link -Force
+                    if (-not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                        Write-Warn ("tree B's tools\{0} is a directory of its own, not a link to this tree's; left as it is" -f $d.Name)
+                    }
+                    continue
+                }
+                $ErrorActionPreference = "Continue"
+                try { & cmd.exe /d /c ('mklink /J "{0}" "{1}" >nul 2>nul' -f $link, $d.FullName) | Out-Null } finally { $ErrorActionPreference = $eap }
+                if (-not (Test-Path -LiteralPath $link -PathType Container)) {
+                    throw "tree B's tools\$($d.Name) could not be linked to '$($d.FullName)'; the tree is kept, and the next run links what it lacks."
+                }
+                Write-Ok ("tree B's tools\{0} linked to {1}" -f $d.Name, $d.FullName)
+            }
+        }
+    } finally {
+        foreach ($l in $held) { Remove-Item -LiteralPath $l -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    return $X64Tree
+}
+
 function Invoke-CutBuilds {
     # scripts\package\cut-builds.ps1's work (its help, and build-and-test.md,
     # "The cut's two builds at once"): the checks of the two trees, the two
@@ -2508,6 +2614,12 @@ function Invoke-CutBuilds {
     if ($Serial -and $ImportOnly) { throw "-Serial and -ImportOnly contradict each other: -ImportOnly builds nothing." }
     if ($NoTargetEvidence -and -not $ImportOnly) {
         throw "-NoTargetEvidence goes with -ImportOnly alone: the x86 build a cut takes needs the target evidence (the helper's import gate), so build without it, or build by hand and import with -ImportOnly."
+    }
+    if ($X64Tree -eq "") {
+        # Tree B by default (task 45.3): <A>-x64, made or brought to A's
+        # HEAD here, except for -ImportOnly, which takes it as it is.
+        $X64Tree = Get-DefaultCutX64Tree -Repo $Repo
+        if (-not $ImportOnly) { $X64Tree = Initialize-CutX64Tree -Repo $Repo -X64Tree $X64Tree }
     }
     if (-not (Test-Path -LiteralPath $X64Tree -PathType Container)) { throw "-X64Tree: there is no directory '$X64Tree'." }
     $Repo = Resolve-TreePath $Repo
@@ -2703,6 +2815,12 @@ function Invoke-DriverPackGit {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.CreateNoWindow = $true
+    # git looks no higher than -Root: a directory that is not a checkout
+    # itself, lying inside another one (a temporary folder under a
+    # worktree's out\, as a gated build sets TEMP), is refused rather than
+    # read as the enclosing repository (task 45.3).
+    $ceiling = Split-Path -Parent ([System.IO.Path]::GetFullPath($Root.TrimEnd('\')))
+    if ("$ceiling" -ne "") { $psi.EnvironmentVariables["GIT_CEILING_DIRECTORIES"] = $ceiling }
     try {
         $p = [System.Diagnostics.Process]::Start($psi)
     } catch {
@@ -3091,6 +3209,47 @@ function Get-HistoryEmbedLines {
     })
 }
 
+function Get-HistoryEntryLines {
+    # history.md's entry for -Version, without its '##' heading: what the
+    # readme's section 1 renders (roadmap-usb4 task 45.29). Empty when there
+    # is no such entry; the changelog check refuses that before any build.
+    param([string[]]$Lines, [string]$Version)
+
+    if ($null -eq $Lines) { return @() }
+    $head = '^##\s+' + [regex]::Escape($Version) + '(\s|$)'
+    $start = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match $head) { $start = $i; break }
+    }
+    if ($start -lt 0 -or $start + 1 -ge $Lines.Count) { return @() }
+    $end = $Lines.Count
+    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^##\s') { $end = $i; break }
+    }
+    while ($end -gt $start + 1 -and $Lines[$end - 1].Trim() -eq "") { $end-- }
+    while ($end -gt $start + 1 -and $Lines[$start + 1].Trim() -eq "") { $start++ }
+    if ($end -le $start + 1) { return @() }
+    return @($Lines[($start + 1)..($end - 1)])
+}
+
+function Get-HistoryEarlierText {
+    # The versions history.md lists after -Version's entry (the earlier
+    # releases, newest first), as one comma-separated sentence wrapped to
+    # -Width with a two-space margin: the readme's section 6.
+    param([string[]]$Lines, [string]$Version, [int]$Width = 78)
+
+    $versions = @()
+    $past = $false
+    foreach ($l in @($Lines)) {
+        if ($l -match '^##\s+(\d+\.\d+\.\d+\.\d+)(\s|$)') {
+            if ($past) { $versions += $Matches[1] }
+            if ($Matches[1] -eq $Version) { $past = $true }
+        }
+    }
+    if ($versions.Count -eq 0) { return @("  None: this is the first release.") }
+    return @(Format-Wrapped -Text (($versions -join ", ") + ".") -Width $Width -FirstPrefix "  " -RestPrefix "  ")
+}
+
 function Format-Wrapped {
     # Greedy word wrap with a separate first-line and continuation prefix, so a
     # bullet hangs under its own text rather than under the marker.
@@ -3121,7 +3280,9 @@ function Format-Wrapped {
 
 function ConvertFrom-MarkdownBlocks {
     # The narrow subset releases\history.md actually uses: '###' headings,
-    # '-' bullets that may continue on indented lines, and plain paragraphs.
+    # '-' bullets that may continue on indented lines, '-' bullets indented
+    # by two spaces under them and by four under those (task 45.29), and
+    # plain paragraphs.
     # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
     # rendered - there is nothing to render them with in a .txt file.
     param([string[]]$Lines, [int]$Width = 78)
@@ -3135,6 +3296,12 @@ function ConvertFrom-MarkdownBlocks {
         if ($Text -eq "") { return @($Acc) }
         if ($Kind -eq "bullet") {
             return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
+        }
+        if ($Kind -eq "subsub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "            - " -RestPrefix "              "))
+        }
+        if ($Kind -eq "sub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "        - " -RestPrefix "          "))
         }
         return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
     }
@@ -3157,6 +3324,16 @@ function ConvertFrom-MarkdownBlocks {
             if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
             $out += ("  " + $Matches[1].Trim())
             $out += ""
+            continue
+        }
+        if ($line -match '^\s{4,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "subsub"
+            continue
+        }
+        if ($line -match '^\s{2,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "sub"
             continue
         }
         if ($line -match '^\s*-\s+(.*)$') {
