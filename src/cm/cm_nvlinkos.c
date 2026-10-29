@@ -5,7 +5,13 @@
  * record, and the seam's calls, over cm_nvlink.c's pure entry protocol.
  *
  * ONE TABLE PER BOOT. CmNvlinkInit allocates it (CmAlloc, so in
- * cm_pool.c's one pool site) and nothing ever frees it. A reload of this
+ * cm_pool.c's one pool site) and nothing frees it once it has been handed
+ * out; on NT an unload frees a table no stor98 asked for (CmNvlinkUnload:
+ * a reload's, which is never published, or the first load's before any
+ * HwFindAdapter asked), so Driver Verifier's unload check has nothing to
+ * find then (task 45.31; read 2026-10-29 on 7 x86, an unload during the
+ * boot, and on 8 and 8.1 at the uninstall). A table handed out stays, as
+ * stor98cm.h interface 2 requires. A reload of this
  * driver in the same boot (every NHI and filter gone, then back) finds the
  * callback object the first load made and publishes nothing (stor98cm.h,
  * "CM lifetime (NT)": no second table, and the old one is not written
@@ -401,6 +407,14 @@ VOID CmNvlinkUnload(VOID)
     if (cmNvObject != NULL) {
         ObDereferenceObject(cmNvObject);
         cmNvObject = NULL;
+    }
+    /* NT: no callback can run any more, and the callback counts a reply
+     * before it returns, so a count of 0 means no stor98 holds the
+     * pointer; every thread that writes the table has stopped with the
+     * last device object. */
+    if (cmNvNt && cmNvQueries == 0 && cmNvTable != NULL) {
+        CmFree(cmNvTable);
+        cmNvTable = NULL;
     }
 #if defined(_X86_)
     /* 9x: the proof goes before the image that answers it (interface 3,
