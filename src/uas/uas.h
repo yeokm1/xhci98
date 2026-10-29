@@ -307,6 +307,7 @@ VOID UasIrpReset(PIRP irp, USHORT size, CCHAR stackSize);
 NTSTATUS UasCompleteIrp(PIRP irp, NTSTATUS status, ULONG_PTR information);
 VOID UasZero(PVOID p, ULONG n);
 VOID UasCopy(PVOID dst, const VOID *src, ULONG n);
+VOID UasWaitEvent(PKEVENT event);   /* PASSIVE_LEVEL */
 
 /* uas_fdo.c - PASSIVE_LEVEL unless noted. */
 NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp);

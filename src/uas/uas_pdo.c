@@ -171,8 +171,7 @@ static VOID uasPdoUnlink(PUAS_PDO pdo)
     KeReleaseSpinLock(&fdo->Lock, irql);
     pdo->Gone = TRUE;
     if (InterlockedDecrement(&pdo->Busy) != 0) {
-        (VOID)KeWaitForSingleObject(&pdo->BusyIdle, Executive, KernelMode,
-                                    FALSE, NULL);
+        UasWaitEvent(&pdo->BusyIdle);
     }
     pdo->Fdo = NULL;
 }

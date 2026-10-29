@@ -31,6 +31,26 @@ static volatile const char UasVersionString[] = "xhciuas " XHCI_VER_STR;
 
 PDRIVER_OBJECT UasDriverObject;
 
+/*
+ * An event wait that returns only once the event is signalled. Windows 98
+ * can return from KeWaitForSingleObject unsatisfied (0xFFFFFFFF,
+ * docs/usb-xhci-info/win98-wdm.md), and every caller here goes on to
+ * free, delete or reuse what the signaller still holds, so any other
+ * return is waited again after a millisecond. No timeout: each caller's
+ * event is one a completion or a rundown sets. IRQL: PASSIVE_LEVEL.
+ */
+VOID UasWaitEvent(PKEVENT event)
+{
+    LARGE_INTEGER due;
+
+    while (KeWaitForSingleObject(event, Executive, KernelMode, FALSE,
+                                 NULL) != STATUS_SUCCESS) {
+        due.LowPart = (ULONG)-10000L;
+        due.HighPart = -1;
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+}
+
 VOID UasZero(PVOID p, ULONG n)
 {
     PUCHAR b;

@@ -40,7 +40,7 @@ static NTSTATUS uasForwardSync(PUAS_FDO fdo, PIRP irp)
     IoCopyCurrentIrpStackLocationToNext(irp);
     UAS_SET_COMPLETION_ALWAYS(irp, uasSignal, &done);
     (VOID)IoCallDriver(fdo->Lower, irp);
-    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    UasWaitEvent(&done);
     return irp->IoStatus.Status;
 }
 
@@ -63,7 +63,7 @@ static NTSTATUS uasInternalIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1)
     next->Parameters.Others.Argument1 = arg1;
     UAS_SET_COMPLETION_ALWAYS(irp, uasSignal, &done);
     (VOID)IoCallDriver(fdo->Lower, irp);
-    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    UasWaitEvent(&done);
     status = irp->IoStatus.Status;
     IoFreeIrp(irp);
     return status;
@@ -430,7 +430,14 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns, PBOOLEAN answered)
             if (NT_SUCCESS(UasInternalCommand(fdo, 0, cdb, 12, buf, length,
                                               &got, &scsi))) {
                 n = UasParseReportLuns(buf, got, luns, UAS_MAX_LUNS);
-                *answered = TRUE;
+                /* Definite only when the whole list the header announces
+                 * arrived: a short transfer (an overrun counts as success)
+                 * or a list longer than this buffer leaves LUNs unseen. */
+                if (got >= 8 &&
+                    (((ULONG)buf[0] << 24) | ((ULONG)buf[1] << 16) |
+                     ((ULONG)buf[2] << 8) | buf[3]) <= got - 8) {
+                    *answered = TRUE;
+                }
                 break;
             }
         }
@@ -691,8 +698,7 @@ static VOID uasFdoRemove(PUAS_FDO fdo)
         pdo = fdo->Luns[i];
         pdo->Gone = TRUE;
         if (InterlockedDecrement(&pdo->Busy) != 0) {
-            (VOID)KeWaitForSingleObject(&pdo->BusyIdle, Executive,
-                                        KernelMode, FALSE, NULL);
+            UasWaitEvent(&pdo->BusyIdle);
         }
     }
     UasStreamsClose(&fdo->Streams);

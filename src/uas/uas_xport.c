@@ -1787,8 +1787,7 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     fdo->TimerStop = TRUE;
     KeReleaseSpinLock(&fdo->Lock, irql);
     if (wasStarted && !KeCancelTimer(&fdo->Timer)) {
-        (VOID)KeWaitForSingleObject(&fdo->TimerDone, Executive, KernelMode,
-                                    FALSE, NULL);
+        UasWaitEvent(&fdo->TimerDone);
     }
     /* Task 36.21: no telemetry send is built now (Started is FALSE). One
      * a timer run has built is waited for until its IoCallDriver has
@@ -1832,8 +1831,7 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     /* The rundown: drop the bias, wait for 0, take the bias back. */
     KeClearEvent(&fdo->IoIdle);
     if (InterlockedDecrement(&fdo->IoCount) != 0) {
-        (VOID)KeWaitForSingleObject(&fdo->IoIdle, Executive, KernelMode,
-                                    FALSE, NULL);
+        UasWaitEvent(&fdo->IoIdle);
     }
     (VOID)InterlockedIncrement(&fdo->IoCount);
 }
@@ -2067,13 +2065,11 @@ VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus)
         if (queue) {
             ExQueueWorkItem(&fdo->Recovery, DelayedWorkQueue);
         }
-        (VOID)KeWaitForSingleObject(&pdo->CloseDone, Executive, KernelMode,
-                                    FALSE, NULL);
+        UasWaitEvent(&pdo->CloseDone);
     } else if (live) {
         uasEndPdoSlots(fdo, pdo, srbStatus, TRUE);
     }
-    (VOID)KeWaitForSingleObject(&pdo->RequestsIdle, Executive, KernelMode,
-                                FALSE, NULL);
+    UasWaitEvent(&pdo->RequestsIdle);
     uasPump(fdo);
 }
 
@@ -2130,8 +2126,7 @@ NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     KeReleaseSpinLock(&fdo->Lock, irql);
     if (queued) {
         uasPump(fdo);
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                    NULL);
+        UasWaitEvent(&done);
         *scsiStatus = srb->ScsiStatus;
         *transferred = srb->DataTransferLength;
         status = (SRB_STATUS(srb->SrbStatus) == SRB_STATUS_SUCCESS ||

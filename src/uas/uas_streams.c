@@ -39,7 +39,7 @@ static NTSTATUS uasStreamsIoctl(PDEVICE_OBJECT lower, ULONG code,
     next->Parameters.Others.Argument1 = req;
     UAS_SET_COMPLETION_ALWAYS(irp, uasStreamsSignal, &done);
     (VOID)IoCallDriver(lower, irp);
-    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    UasWaitEvent(&done);
     status = irp->IoStatus.Status;
     IoFreeIrp(irp);
     if (NT_SUCCESS(status) && req->Status != XHCI98_STREAMS_SUCCESS) {
