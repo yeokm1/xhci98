@@ -1678,6 +1678,26 @@ static HWND othlist_step(HWND box, int dir)
     }
 }
 
+static void othlist_scroll(int to);
+static int othlist_page(void);
+static WNDPROC othCopyProc;
+
+/* The set's copy box on the page: Page Down, Page Up, End and Home scroll
+ * the list under it, whose boxes are greyed while the copy box is
+ * unticked, so its lines can be read by keyboard in every state (record
+ * 26 section 6.7.13). */
+static LRESULT CALLBACK othcopy_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_KEYDOWN && othList != NULL &&
+        (wp == VK_NEXT || wp == VK_PRIOR || wp == VK_END || wp == VK_HOME)) {
+        othlist_scroll(wp == VK_END ? othListH : wp == VK_HOME ? 0 :
+                       othListPos + (wp == VK_NEXT ? othlist_page() :
+                                     -othlist_page()));
+        return 0;
+    }
+    return CallWindowProcA(othCopyProc, h, msg, wp, lp);
+}
+
 static LRESULT CALLBACK othbox_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_MOUSEWHEEL && othList != NULL) {
@@ -1690,7 +1710,21 @@ static LRESULT CALLBACK othbox_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         HWND n = othlist_step(h, wp == VK_DOWN ? 1 : -1);
         if (n != NULL) {
             SetFocus(n);
+        } else {
+            /* Past the last box (or before the first): the lines under
+             * the boxes, the copied-only packages and the words for the
+             * rest (record 26 section 6.7.13), a line at a time. */
+            othlist_scroll(othListPos + (wp == VK_DOWN ? othBoxH : -othBoxH));
         }
+        return 0;
+    }
+    if (msg == WM_KEYDOWN && (wp == VK_NEXT || wp == VK_PRIOR)) {
+        othlist_scroll(othListPos + (wp == VK_NEXT ? othlist_page() :
+                                     -othlist_page()));
+        return 0;
+    }
+    if (msg == WM_KEYDOWN && (wp == VK_END || wp == VK_HOME)) {
+        othlist_scroll(wp == VK_END ? othListH : 0);
         return 0;
     }
     return CallWindowProcA(othBoxProc, h, msg, wp, lp);
@@ -1946,6 +1980,50 @@ static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
     return FALSE;
 }
 
+/* A line of text in the list at y, w wide: the y below it. */
+static int othlist_static(HWND page, HDC dc, HFONT font, const char *t, int x,
+                          int y, int w)
+{
+    int h = text_h(dc, t, w, NULL) + 2;
+
+    (void)page;
+    if (h < othBoxH) {
+        h = othBoxH;
+    }
+    make_px(othList, "STATIC", t, SS_LEFT | SS_NOPREFIX, x, y, w, h, -1, font);
+    return y + h;
+}
+
+/* 98 SE and ME (record 26 section 6.7.13, task 45.8): the set's packages
+ * copied only, each with its folders, and the sentence for the rest. */
+static int othlist_9x_rest(HWND page, HDC dc, HFONT font, int set, int w,
+                           int y)
+{
+    INST_OTHPKG_VIEW v;
+    char line[700];
+    int any = 0;
+    int i;
+
+    for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
+        if (!inst_eng_other_copy_only(set, i, line, sizeof(line))) {
+            continue;
+        }
+        if (!any) {
+            y = othlist_static(page, dc, font, "Copied only (no automatic "
+                               "install on this Windows):", dlu_x(page, 2), y,
+                               w);
+            any = 1;
+        }
+        y = othlist_static(page, dc, font, line, dlu_x(page, 10), y,
+                           w - dlu_x(page, 10));
+    }
+    inst_eng_other_rest(set, dirChoice, line, sizeof(line));
+    if (line[0] != '\0') {
+        y = othlist_static(page, dc, font, line, dlu_x(page, 2), y + 2, w);
+    }
+    return y;
+}
+
 /* The list made again from the engine's packages, in IDC_O_AREA's place. */
 static void othlist_build(HWND page)
 {
@@ -1961,6 +2039,8 @@ static void othlist_build(HWND page)
     int set;
     int h;
     int i;
+    int vsdShown;
+    int sys9x;
 
     if (othList != NULL) {
         DestroyWindow(othList);
@@ -1983,6 +2063,7 @@ static void othlist_build(HWND page)
     dc = GetDC(othList);
     old = font != NULL ? (HFONT)SelectObject(dc, font) : NULL;
     othBoxH = text_h(dc, "Xg", w, NULL) + 2;
+    (void)inst_eng_vsd_state(&vsdShown, &sys9x);
     for (set = 0; set < INST_SET_COUNT; set++) {
         if (set != othPageSet) {
             continue;
@@ -2048,6 +2129,15 @@ static void othlist_build(HWND page)
             }
             y += th + 3;
         }
+        /* 98 SE and ME with no box: the line saying where to point the
+         * wizard, then the lists below (record 26 section 6.7.13). */
+        if (sys9x && y == 0) {
+            SetDlgItemTextA(page, IDC_O_HEAD,
+                            "Using these drivers on Windows 98 SE and ME:");
+            y = othlist_static(page, dc, font,
+                               inst_eng_other_none_text(set), dlu_x(page, 2),
+                               y, w);
+        }
         {
             const char *e = inst_eng_other_earlier(set);
             if (e[0] != '\0') {
@@ -2057,15 +2147,15 @@ static void othlist_build(HWND page)
                 y += eh + 2;
             }
         }
+        if (sys9x) {
+            y = othlist_9x_rest(page, dc, font, set, w, y);
+        }
     }
     if (y == 0) {
-        /* On 98 SE and ME no package is offered: the sets are copied only,
-         * and the line says where to point the hardware wizard. */
+        /* No package offered: the line says where to point the hardware
+         * wizard. */
         const char *none = inst_eng_other_none_text(othPageSet);
         int nh = text_h(dc, none, w, NULL) + 2;
-        int vsdShown;
-        int sys9x;
-        (void)inst_eng_vsd_state(&vsdShown, &sys9x);
         if (sys9x) {
             SetDlgItemTextA(page, IDC_O_HEAD,
                             "Using these drivers on Windows 98 SE and ME:");
@@ -2091,8 +2181,18 @@ static void othlist_build(HWND page)
 /* A set's copy box: its packages open only while it is ticked. */
 static void oth_sync(HWND dlg, int set)
 {
+    int vsdShown;
+    int sys9x;
+
     inst_eng_other_choose(set, IsDlgButtonChecked(dlg, oth_id(set,
                           IDC_O_BOX)) == BST_CHECKED, 0);
+    /* 98 SE and ME: the sentence for the rest follows the copy box
+     * (record 26 section 6.7.13). */
+    (void)inst_eng_vsd_state(&vsdShown, &sys9x);
+    if (sys9x) {
+        othlist_build(dlg);
+        return;
+    }
     othlist_sync();
 }
 
@@ -2221,6 +2321,13 @@ static void oth_fill(HWND dlg)
                      SWP_NOZORDER);
         CheckDlgButton(dlg, oth_id(set, IDC_O_BOX), shown && inc ?
                        BST_CHECKED : BST_UNCHECKED);
+        {
+            HWND cb = GetDlgItem(dlg, oth_id(set, IDC_O_BOX));
+            if (cb != NULL && GET_PROC(cb) != (WNDPROC)othcopy_sub) {
+                othCopyProc = GET_PROC(cb);
+                SET_PROC(cb, othcopy_sub);
+            }
+        }
     }
     SetDlgItemTextA(dlg, IDC_O_DETAIL, "");
     oth_flow(dlg);
@@ -5709,6 +5816,46 @@ static void st_other_layout(HWND parent)
                 "test-signing mode)", w - dlu_x(d, 22), &wide);
     st(wide <= w - dlu_x(d, 22) && lh + 2 <= c.bottom, "the trust box: whole "
        "in the list's window");
+    /* 98 SE and ME (record 26 section 6.7.13): each package's copied-only
+     * line with two long folders, and the sentence for the rest at a long
+     * install directory, whole in the list's window. */
+    for (i = 0; i < instOtherPkgCount; i++) {
+        const INST_OTHER_PKG *p = &instOtherPkgs[i];
+        char line[700];
+        char f1[WIZ_PATH];
+        char f2[WIZ_PATH];
+        const char *fp[2];
+        _snprintf(f1, sizeof(f1) - 1, "%s\\%s\\w98se-vista\\RTL8187\\Win98",
+                  inst_other_folder(p->Set), p->Id);
+        f1[sizeof(f1) - 1] = '\0';
+        _snprintf(f2, sizeof(f2) - 1, "%s\\%s\\w98se-me\\WIN 1X",
+                  inst_other_folder(p->Set), p->Id);
+        f2[sizeof(f2) - 1] = '\0';
+        fp[0] = f1;
+        fp[1] = f2;
+        inst_other_copy_only_line(line, sizeof(line), p->Desc, fp, 2);
+        lh = text_h(dc, line, w - dlu_x(d, 10), &wide);
+        _snprintf(msg, sizeof(msg) - 1, "%s:%s's copied-only line: whole in "
+                  "the list's window", p->Set == INST_SET_FREE ? "free" :
+                  "nonfree", p->Id);
+        msg[sizeof(msg) - 1] = '\0';
+        st(lh > 0 && lh + 2 <= c.bottom, msg);
+    }
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        char line[700];
+        int copy;
+        for (copy = 0; copy < 2; copy++) {
+            inst_other_rest_text(line, sizeof(line), set, "C:\\Program Files"
+                                 "\\xHCI98 USB 3 drivers\\install folder", copy,
+                                 copy, 1);
+            lh = text_h(dc, line, w, &wide);
+            _snprintf(msg, sizeof(msg) - 1, "the %s set's sentence for the "
+                      "rest (copy %d): whole in the list's window", set ==
+                      INST_SET_FREE ? "free" : "non-free", copy);
+            msg[sizeof(msg) - 1] = '\0';
+            st(lh > 0 && lh + 2 <= c.bottom, msg);
+        }
+    }
     if (old != NULL) {
         SelectObject(dc, old);
     }

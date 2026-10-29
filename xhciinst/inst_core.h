@@ -2381,7 +2381,14 @@ typedef struct _INST_OTHER_PKG {
 extern const INST_OTHER_PKG instOtherPkgs[];
 extern const int instOtherPkgCount;
 
-/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems. */
+/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems;
+ * 2 a COEXISTS lifted from an EXCLUDES where the cut read the two apart
+ * (record 26 section 6.7.14): COEXISTS between the packages of the
+ * releases a download carries, EXCLUDES against an earlier staging of
+ * another release (inst_other_rel_bars). */
+#define INST_REL_COEXISTS   0
+#define INST_REL_EXCLUDES   1
+#define INST_REL_LIFTED     2
 typedef struct _INST_OTHER_REL {
     int SetA;
     const char *A;
@@ -2401,11 +2408,28 @@ int inst_other_heading_index(const char *heading);
 
 /* The package of a path under a set's folder: its first two parts. */
 void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
-/* Record 26 section 6.7.12 (task 44.11): on 98 SE and ME only these free
- * packages are staged (on DevicePath), the ones whose devices 98 SE's and
- * ME's own USB audio INF would take by class; every other package of
- * either set is copy-only there. 1 when set:id is one of them. */
+/* Record 26 section 6.7.13 (task 45.7): on 98 SE and ME every package of
+ * either set may be staged (on DevicePath) where its set has a STAGE line
+ * for the system, within INST_9X_DEVICEPATH_MAX; section 6.7.12's list of
+ * two free packages is gone. 1 for any package id of a known set. */
 int inst_other_9x_stageable(int set, const char *id);
+/* Section 6.7.13's rule for an earlier run's DevicePath entry of a
+ * package: kept (1) when its set is not carried in this download (its
+ * lines are not known), or when it is and the package has a STAGE line
+ * for this system; 0 (taken out) when the set is carried and the package
+ * has none. */
+int inst_other_9x_keeps(int carried, int stageHere);
+/* Section 6.7.13's page and console on 98 SE and ME: a package with only
+ * COPY lines for the system, as "<desc>: <folder>[; <folder>...]" (the
+ * folders given, each "USBDRV\FREE\<class>\<package>\<folder>"). */
+void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
+                               const char *const *folders, int n);
+/* Section 6.7.13's sentence for the rest of a set's packages: copy ticked
+ * or not; replaced, this run's copy taking out what an earlier run staged
+ * of the set; earlier, an earlier run's staging of it shown on the page;
+ * dir the install directory. */
+void inst_other_rest_text(char *out, size_t cap, int set, const char *dir,
+                          int copy, int replaced, int earlier);
 /* The longest DevicePath with which 98 SE's hardware wizard was read to
  * find a driver (280 characters; none with 285 or more, section 6.7.6). */
 #define INST_9X_DEVICEPATH_MAX  280
@@ -2426,9 +2450,20 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
 int inst_9x_devicepath_room(const char *withDir);
 /* The table's row of a package, or NULL. */
 const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
-/* 1 when the table's relations exclude the pair on system token tok. */
+/* 1 when the table's relations exclude the pair on system token tok
+ * (an EXCLUDES row; a lifted row does not, between this download's
+ * releases). */
 int inst_other_excludes(int setA, const char *a, int setB, const char *b,
                         int tok);
+/* 1 when a lifted row of the table (INST_REL_LIFTED) names the pair on
+ * system token tok. */
+int inst_other_lifted(int setA, const char *a, int setB, const char *b,
+                      int tok);
+/* Record 26 section 6.7.14: 1 when a relation of kind (INST_REL_*) bars a
+ * package against its partner - ticked now (earlier 0), or staged by an
+ * earlier run (earlier 1) from the release of its set this download
+ * carries (sameRelease 1) or from another or an unknown one (0). */
+int inst_other_rel_bars(int kind, int earlier, int sameRelease);
 /* 1 when a description keeps the rules: printable ASCII, no '|', at most
  * INST_PKG_DESC_MAX characters, and for a CLASS row no brand word. */
 int inst_other_desc_ok(int kind, const char *desc);

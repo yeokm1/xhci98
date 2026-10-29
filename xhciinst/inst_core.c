@@ -1350,24 +1350,70 @@ int inst_path_append(const char *list, const char *dir, char *out, size_t cap)
     return 1;
 }
 
-static const char *const instOther9xStage[] = {
-    "audio/uac2", "audio/usbmidi"
-};
-
 int inst_other_9x_stageable(int set, const char *id)
 {
-    size_t i;
+    return (set == INST_SET_FREE || set == INST_SET_NONFREE) && id != NULL &&
+           id[0] != '\0';
+}
 
-    if (set != INST_SET_FREE || id == NULL) {
-        return 0;
+int inst_other_9x_keeps(int carried, int stageHere)
+{
+    return !carried || stageHere;
+}
+
+void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
+                               const char *const *folders, int n)
+{
+    int i;
+    int any = 0;
+
+    if (cap == 0) {
+        return;
     }
-    for (i = 0; i < sizeof(instOther9xStage) / sizeof(instOther9xStage[0]);
-         i++) {
-        if (inst_eq(id, instOther9xStage[i])) {
-            return 1;
+    inst_copy(out, desc != NULL ? desc : "", cap);
+    for (i = 0; i < n; i++) {
+        if (folders[i] == NULL || folders[i][0] == '\0') {
+            continue;
         }
+        strncat(out, any ? "; " : ": ", cap - strlen(out) - 1);
+        strncat(out, folders[i], cap - strlen(out) - 1);
+        any = 1;
     }
-    return 0;
+}
+
+void inst_other_rest_text(char *out, size_t cap, int set, const char *dir,
+                          int copy, int replaced, int earlier)
+{
+    if (cap == 0) {
+        return;
+    }
+    if (!copy) {
+        inst_copy(out, "Nothing of this set is copied in this run: tick the "
+                  "box above to copy it and to choose packages to stage.",
+                  cap);
+        if (earlier) {
+            strncat(out, " What an earlier run staged and this run keeps is "
+                    "listed above.", cap - strlen(out) - 1);
+        }
+        return;
+    }
+    inst_copy(out, "A ticked package is staged: its folder goes on "
+              "DevicePath, where Windows' hardware wizard finds its driver "
+              "by itself", cap);
+    strncat(out, replaced ? "; this run copies this set over an earlier "
+            "copy, so what an earlier run staged of it is taken out and only "
+            "what is ticked here is staged. " : earlier ? "; what an earlier "
+            "run staged and this run keeps is listed above. " : ". ",
+            cap - strlen(out) - 1);
+    strncat(out, "Every other package is copied only: when the wizard asks "
+            "for a driver, choose Specify a location and point it at the "
+            "package's folder under ", cap - strlen(out) - 1);
+    strncat(out, dir != NULL && dir[0] != '\0' ? dir : "the install folder",
+            cap - strlen(out) - 1);
+    strncat(out, "\\", cap - strlen(out) - 1);
+    strncat(out, set == INST_SET_FREE ? INST_WDMFREE_DIR : INST_NONFREE_DIR,
+            cap - strlen(out) - 1);
+    strncat(out, ".", cap - strlen(out) - 1);
 }
 
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
@@ -9067,6 +9113,42 @@ const INST_OTHER_PKG *inst_other_pkg(int set, const char *id)
     return NULL;
 }
 
+/* 1 when a row of kind names the pair on tok. */
+static int inst_other_rel_has(int kind, int setA, const char *a, int setB,
+                              const char *b, int tok)
+{
+    INST_U32 bit = tok >= 0 && tok < 32 ? ((INST_U32)1 << tok) : 0;
+    int i;
+
+    for (i = 0; i < instOtherRelCount; i++) {
+        const INST_OTHER_REL *r = &instOtherRels[i];
+        if (r->Excludes != kind || !(r->Systems & bit)) {
+            continue;
+        }
+        if ((r->SetA == setA && inst_eq(r->A, a) && r->SetB == setB &&
+             inst_eq(r->B, b)) ||
+            (r->SetA == setB && inst_eq(r->A, b) && r->SetB == setA &&
+             inst_eq(r->B, a))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_other_lifted(int setA, const char *a, int setB, const char *b,
+                      int tok)
+{
+    return inst_other_rel_has(INST_REL_LIFTED, setA, a, setB, b, tok);
+}
+
+int inst_other_rel_bars(int kind, int earlier, int sameRelease)
+{
+    if (kind == INST_REL_EXCLUDES) {
+        return 1;
+    }
+    return kind == INST_REL_LIFTED && earlier && !sameRelease;
+}
+
 int inst_other_excludes(int setA, const char *a, int setB, const char *b,
                         int tok)
 {
@@ -9075,7 +9157,7 @@ int inst_other_excludes(int setA, const char *a, int setB, const char *b,
 
     for (i = 0; i < instOtherRelCount; i++) {
         const INST_OTHER_REL *r = &instOtherRels[i];
-        if (!r->Excludes || !(r->Systems & bit)) {
+        if (r->Excludes != INST_REL_EXCLUDES || !(r->Systems & bit)) {
             continue;
         }
         if ((r->SetA == setA && inst_eq(r->A, a) && r->SetB == setB &&

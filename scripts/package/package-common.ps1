@@ -3835,7 +3835,7 @@ function Get-InstOtherTable {
     if ($pkgs.Count -eq 0 -or $pkgs.Count -ne $rows) { throw "xhciinst\inst_core.c's instOtherPkgs has $rows rows and this reader took $($pkgs.Count): change the reader with the table." }
     $rels = @()
     $body = Get-Block "instOtherRels"
-    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*([A-Z_]+|0x[0-9A-Fa-f]+UL?)\s*,\s*([01])\s*\}')) {
+    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*([A-Z_]+|0x[0-9A-Fa-f]+UL?)\s*,\s*([012])\s*\}')) {
         $mask = $m.Groups[5].Value
         if ($mask -eq "INST_SYS_ALL") { $sys = @($script:StageSystems) }
         elseif ($mask -match '^0x([0-9A-Fa-f]+)') {
@@ -3848,6 +3848,9 @@ function Get-InstOtherTable {
             B = ($(if ($m.Groups[3].Value -eq "INST_SET_FREE") { "free:" } else { "nonfree:" }) + $m.Groups[4].Value)
             Systems = $sys
             Desc = "the installer's table"
+            # Kind 2: a COEXISTS the cut lifted from an EXCLUDES (record 26
+            # section 6.7.14), held to this cut's proof.
+            Lifted = ($m.Groups[6].Value -eq "2")
         }
     }
     $relRows = @([regex]::Matches($body, '\{\s*INST_SET_')).Count
@@ -4167,6 +4170,129 @@ function Test-OtherStageIds {
     }
 }
 
+function Get-OtherPkgDevices {
+    # Record 26 section 6.7.14: the devices a package ("<set>:<class>/
+    # <package>") matches on one system token, over every STAGE and COPY
+    # line of it naming the system, each id of its INF's models there
+    # (Get-InfModelIds) as the key VID_<v>&PID_<p>, a revision, an
+    # interface or any other "&" suffix folded into its device. Ok $false
+    # with Why when there is no answer: a CLASS package, its set not
+    # carried, no line for the system, an INF that cannot be read or has no
+    # models section the system reads, or an id of any other form (a class
+    # or compatible id does not say which devices it takes).
+    param($Sets, [string]$Pkg, [string]$Sys, [string]$Kind = "DEVICE")
+    $none = { param($w) [pscustomobject]@{ Ok = $false; Why = $w; Keys = @() } }
+    if ($Kind -ceq "CLASS") { return (& $none "$Pkg is a CLASS package, whose INF does not show which devices its class line takes") }
+    $c = $Pkg.IndexOf(":")
+    if ($c -lt 1) { return (& $none "$Pkg is not set-qualified") }
+    $setName = $Pkg.Substring(0, $c)
+    $id = $Pkg.Substring($c + 1)
+    $s = @($Sets | Where-Object { $_.Name -ceq $setName })
+    if ($s.Count -ne 1) { return (& $none "the $setName set is not carried in this cut") }
+    $pre = $s[0].Prefix + "/"
+    $lines = @($s[0].Lines | Where-Object { (Get-OtherPkgOf -Path $_.Inf -Prefix $s[0].Prefix) -ceq $id -and $_.Systems -ccontains $Sys })
+    if ($lines.Count -eq 0) { return (& $none "$Pkg has no line for $Sys") }
+    $keys = @()
+    foreach ($l in $lines) {
+        $path = Join-Path $s[0].Dir ($l.Inf.Substring($pre.Length).Replace('/', '\'))
+        $inf = $null
+        try { $inf = Read-InfText -Path $path } catch { $inf = $null }
+        if ($null -eq $inf) { return (& $none "$($l.Inf) cannot be read") }
+        $ids = @(Get-InfModelIds -Inf $inf -Sys $Sys)
+        if ($ids.Count -eq 0) { return (& $none "$($l.Inf) has no models section $Sys reads") }
+        foreach ($i in $ids) {
+            $m = [regex]::Match($i, '^USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})(&.*)?$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if (-not $m.Success) { return (& $none "$($l.Inf) matches $i, which does not name one device") }
+            $keys += ("VID_" + $m.Groups[1].Value.ToUpperInvariant() + "&PID_" + $m.Groups[2].Value.ToUpperInvariant())
+        }
+    }
+    return [pscustomobject]@{ Ok = $true; Why = ""; Keys = @($keys | Sort-Object -Unique) }
+}
+
+function Get-OtherRelPairKey {
+    # An unordered pair of set-qualified ids as one key.
+    param([string]$A, [string]$B)
+    if ([string]::CompareOrdinal($A, $B) -le 0) { return ($A + "|" + $B) }
+    return ($B + "|" + $A)
+}
+
+function Get-OtherLifted {
+    # Record 26 section 6.7.14: every pair and system this cut takes from an
+    # EXCLUDES of the previous record (-Prev, ConvertFrom-OtherPkgsRecord's)
+    # or keeps from its LIFTED lines to a COEXISTS of this cut's lines
+    # (-Now, the same, of this cut's record before its LIFTED lines), each
+    # proved apart over the carried sets (-Sets) with this cut's rows' kinds;
+    # throws the first that is not. A system the pair has neither kind on
+    # now is left to Test-OtherPkgsTransition, which refuses the drop.
+    # Returns @{ A; B; Systems } per pair lifted.
+    param($Prev, $Now, $Sets)
+    $prevSys = [ordered]@{}
+    $ends = @{}
+    $prevLifted = @()
+    if ($Prev.PSObject.Properties.Name -contains "Lifted") { $prevLifted = @($Prev.Lifted) }
+    foreach ($r in @(@($Prev.Rels | Where-Object { $_.Kind -ceq "EXCLUDES" }) + $prevLifted)) {
+        if ($null -eq $r) { continue }
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        if (-not $prevSys.Contains($k)) { $prevSys[$k] = @(); $ends[$k] = @($r.A, $r.B) }
+        $prevSys[$k] = @($prevSys[$k] + $r.Systems | Sort-Object -Unique)
+    }
+    $out = @()
+    foreach ($k in @($prevSys.Keys)) {
+        $a = $ends[$k][0]; $b = $ends[$k][1]
+        $same = @($Now.Rels | Where-Object { (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })
+        $ex = @(); $co = @()
+        foreach ($r in $same) {
+            if ($r.Kind -ceq "EXCLUDES") { $ex += $r.Systems } elseif ($r.Kind -ceq "COEXISTS") { $co += $r.Systems }
+        }
+        $lift = @($prevSys[$k] | Where-Object { $ex -cnotcontains $_ -and $co -ccontains $_ })
+        if ($lift.Count -eq 0) { continue }
+        $kindA = "DEVICE"; $kindB = "DEVICE"
+        $ra = @($Now.Rows | Where-Object { $_.Id -ceq $a }); if ($ra.Count -gt 0) { $kindA = $ra[0].Kind }
+        $rb = @($Now.Rows | Where-Object { $_.Id -ceq $b }); if ($rb.Count -gt 0) { $kindB = $rb[0].Kind }
+        foreach ($sys in $lift) {
+            $da = Get-OtherPkgDevices -Sets $Sets -Pkg $a -Sys $sys -Kind $kindA
+            $db = Get-OtherPkgDevices -Sets $Sets -Pkg $b -Sys $sys -Kind $kindB
+            $why = ""
+            if (-not $da.Ok) { $why = $da.Why }
+            elseif (-not $db.Ok) { $why = $db.Why }
+            else {
+                $common = @($da.Keys | Where-Object { $db.Keys -ccontains $_ })
+                if ($common.Count -gt 0) { $why = "both match $($common[0])" }
+            }
+            if ($why -ne "") {
+                throw "$a and $b were excluded on $sys by $($Prev.Version), and this cut's COEXISTS there is admitted only where the cut reads them apart (design record 26 section 6.7.14): $why."
+            }
+        }
+        $out += [pscustomobject]@{ A = $a; B = $b; Systems = @($lift) }
+    }
+    return $out
+}
+
+function Test-OtherTableLifts {
+    # The installer's table and this cut's lifts the same (section 6.7.14):
+    # every system a row of kind 2 (lifted) names lifted for its pair, and
+    # every lifted pair and system named by such a row, since the installer
+    # holds a lifted pair against an earlier staging of another release only
+    # through that row.
+    param($Table, $Lifted)
+    $rows = @($Table.Rels | Where-Object { $_.PSObject.Properties.Name -contains "Lifted" -and $_.Lifted })
+    foreach ($r in $rows) {
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        $have = @()
+        foreach ($l in @($Lifted)) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $have += $l.Systems } }
+        $miss = @($r.Systems | Where-Object { $have -cnotcontains $_ })
+        if ($miss.Count -gt 0) { throw "the installer's table marks $($r.A) and $($r.B) lifted on $($miss -join ' '), and this cut lifts no EXCLUDES of the pair there (design record 26 section 6.7.14)." }
+    }
+    foreach ($l in @($Lifted)) {
+        if ($null -eq $l) { continue }
+        $k = Get-OtherRelPairKey -A $l.A -B $l.B
+        $have = @()
+        foreach ($r in $rows) { if ((Get-OtherRelPairKey -A $r.A -B $r.B) -ceq $k) { $have += $r.Systems } }
+        $miss = @($l.Systems | Where-Object { $have -cnotcontains $_ })
+        if ($miss.Count -gt 0) { throw "this cut lifts the EXCLUDES of $($l.A) and $($l.B) on $($miss -join ' '), and the installer's table has no lifted row (kind 2, INST_REL_LIFTED) for the pair there, which holds it against an earlier staging of another release (design record 26 section 6.7.14)." }
+    }
+}
+
 function Get-OtherScopes {
     # Each package of -Sets with the systems its STAGE lines name:
     # "<set>:<class>/<package>" to a list of tokens.
@@ -4319,7 +4445,7 @@ function Get-OtherOverlaps {
 function ConvertTo-OtherPkgsRecord {
     # releases\<version>\otherpkgs.txt: the table's rows, current and
     # withdrawn, and every relationship line of the table and both sets.
-    param([string]$Version, $Table, $Meta)
+    param([string]$Version, $Table, $Meta, $Lifted = @())
     $lines = @(
         "# otherpkgs.txt - the other USB drivers' package table this release was cut with",
         "#",
@@ -4329,6 +4455,8 @@ function ConvertTo-OtherPkgsRecord {
         "#",
         "#   ROW | <set>:<class>/<package> | CLASS or DEVICE | <heading> | <description> | current, withdrawn or known",
         "#   EXCLUDES or COEXISTS | <set>:<id> | <set>:<id> | <systems> | <why>",
+        "#   LIFTED | <set>:<id> | <set>:<id> | <systems> | <why> (section 6.7.14: an EXCLUDES",
+        "#     this cut proved apart and admitted as COEXISTS; the next cut proves it again)",
         "",
         "Version: $Version")
     foreach ($r in (Get-OtherEffectiveRows -Table $Table -Meta $Meta)) {
@@ -4336,6 +4464,10 @@ function ConvertTo-OtherPkgsRecord {
     }
     foreach ($r in (@($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" }))) {
         $lines += ("{0} | {1} | {2} | {3} | {4}" -f $r.Kind, $r.A, $r.B, ($r.Systems -join " "), $r.Desc)
+    }
+    foreach ($l in @($Lifted)) {
+        if ($null -eq $l) { continue }
+        $lines += ("LIFTED | {0} | {1} | {2} | ids read apart by the cut" -f $l.A, $l.B, ($l.Systems -join " "))
     }
     return $lines
 }
@@ -4345,7 +4477,7 @@ function ConvertFrom-OtherPkgsRecord {
     # a record whose Version line is empty (3.2.0.0's, cut before the
     # version reached the check; task 44.34).
     param([string]$Text, [string]$Label, [string]$Fallback = "")
-    $rows = @(); $rels = @(); $ver = ""
+    $rows = @(); $rels = @(); $lifted = @(); $ver = ""
     foreach ($line in ($Text -split "`r?`n")) {
         $t = $line.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
@@ -4356,13 +4488,15 @@ function ConvertFrom-OtherPkgsRecord {
             $rows += [pscustomobject]@{ Id = $f[1]; Kind = $f[2]; Heading = $f[3]; Desc = $f[4]; State = $f[5] }
         } elseif (($f[0] -ceq "EXCLUDES" -or $f[0] -ceq "COEXISTS") -and $f.Count -eq 5) {
             $rels += [pscustomobject]@{ Kind = $f[0]; A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }); Desc = $f[4] }
+        } elseif ($f[0] -ceq "LIFTED" -and $f.Count -eq 5) {
+            $lifted += [pscustomobject]@{ A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }) }
         } else {
             throw "$Label has a line it cannot read: '$line'."
         }
     }
     if ($ver -eq "") { $ver = $Fallback }
     if ($ver -eq "") { throw "$Label names no version." }
-    return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels }
+    return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels; Lifted = $lifted }
 }
 
 function Test-OtherPkgsTransition {
@@ -4371,8 +4505,10 @@ function Test-OtherPkgsTransition {
     # kind; a withdrawn row stays withdrawn with its words, or returns to
     # current only as a package a carried set ships in this cut (-Shipped,
     # Get-OtherPresent's "<set>:<class>/<package>" ids; task 44.34); every
-    # relationship line is still there, on at least its systems.
-    param($Prev, $Now, [string[]]$Shipped = @())
+    # relationship line is still there, on at least its systems - an
+    # EXCLUDES except on a system -Lifted (Get-OtherLifted's) proves its
+    # pair apart (section 6.7.14).
+    param($Prev, $Now, [string[]]$Shipped = @(), $Lifted = @())
     foreach ($r in $Prev.Rows) {
         $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
         if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
@@ -4391,6 +4527,30 @@ function Test-OtherPkgsTransition {
         $n = @($Now.Rels | Where-Object { $_.Kind -ceq $r.Kind -and (($_.A -ceq $r.A -and $_.B -ceq $r.B) -or ($_.A -ceq $r.B -and $_.B -ceq $r.A)) })
         $kept = $false
         foreach ($x in $n) { if (@($r.Systems | Where-Object { $x.Systems -cnotcontains $_ }).Count -eq 0) { $kept = $true } }
+        if (-not $kept -and $r.Kind -ceq "EXCLUDES") {
+            # Each system kept by one of the pair's EXCLUDES lines, or lifted.
+            $k = Get-OtherRelPairKey -A $r.A -B $r.B
+            $cover = @()
+            foreach ($x in $n) { $cover += $x.Systems }
+            foreach ($l in @($Lifted)) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $cover += $l.Systems } }
+            $kept = @($r.Systems | Where-Object { $cover -cnotcontains $_ }).Count -eq 0
+        }
+        if (-not $kept -and $r.Kind -ceq "COEXISTS") {
+            # A system the previous release lifted may be excluded again,
+            # which ends its lift (section 6.7.14); every other system kept
+            # by one of the pair's COEXISTS lines.
+            $k = Get-OtherRelPairKey -A $r.A -B $r.B
+            $cover = @()
+            foreach ($x in $n) { $cover += $x.Systems }
+            $prevLifted = @()
+            if ($Prev.PSObject.Properties.Name -contains "Lifted") { $prevLifted = @($Prev.Lifted) }
+            $was = @()
+            foreach ($l in $prevLifted) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $was += $l.Systems } }
+            foreach ($x in @($Now.Rels | Where-Object { $_.Kind -ceq "EXCLUDES" -and (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })) {
+                $cover += @($x.Systems | Where-Object { $was -ccontains $_ })
+            }
+            $kept = @($r.Systems | Where-Object { $cover -cnotcontains $_ }).Count -eq 0
+        }
         if (-not $kept) { throw "the package table drops the $($r.Kind) line of $($r.A) and $($r.B) on $($r.Systems -join ' '), which $($Prev.Version) carried: a line is never removed (design record 26 section 6.7.11)." }
     }
 }
@@ -4463,13 +4623,19 @@ function Invoke-OtherSetChecks {
     Test-OtherPkgTable -Table $table -Sets $sets -Meta $meta -Brands $brands -Headings $headings
     $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta
     $prev = $null
+    $lifted = @()
     $vParsed = $null
     if ([version]::TryParse($Version, [ref]$vParsed)) { $prev = Find-PreviousOtherPkgs -ReleasesDir $ReleasesDir -Version $Version }
     if ($null -ne $prev) {
         $p = ConvertFrom-OtherPkgsRecord -Text ([System.IO.File]::ReadAllText($prev.Path)) -Label "'$($prev.Path)'" -Fallback ($prev.V.ToString())
         $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
-        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets)
+        # An EXCLUDES lifted to a COEXISTS only where proved apart, and an
+        # earlier lift proved again (record 26 section 6.7.14).
+        $lifted = @(Get-OtherLifted -Prev $p -Now $n -Sets $sets)
+        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets) -Lifted $lifted
     }
+    Test-OtherTableLifts -Table $table -Lifted $lifted
+    if ($lifted.Count -gt 0) { $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta -Lifted $lifted }
     return [pscustomobject]@{ Record = $record; Overlaps = @(Get-OtherOverlaps -Table $table -Sets $sets -Meta $meta); Previous = $prev }
 }
 

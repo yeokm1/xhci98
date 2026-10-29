@@ -6226,14 +6226,94 @@ static void test_9x_stage(void)
     int fits[3];
     int r;
 
+    /* Record 26 section 6.7.13 (task 45.7): every package of either set,
+     * the projection holding DevicePath to the limit. */
     CHECK(inst_other_9x_stageable(INST_SET_FREE, "audio/uac2") &&
-          inst_other_9x_stageable(INST_SET_FREE, "AUDIO/USBMIDI"),
-          "9x stage: uac2 and usbmidi");
-    CHECK(!inst_other_9x_stageable(INST_SET_FREE, "audio/uac1") &&
-          !inst_other_9x_stageable(INST_SET_FREE, "video/uvc98") &&
-          !inst_other_9x_stageable(INST_SET_NONFREE, "audio/uac2") &&
-          !inst_other_9x_stageable(INST_SET_FREE, NULL),
-          "9x stage: every other package copy-only");
+          inst_other_9x_stageable(INST_SET_FREE, "AUDIO/USBMIDI") &&
+          inst_other_9x_stageable(INST_SET_FREE, "video/uvc98") &&
+          inst_other_9x_stageable(INST_SET_NONFREE, "serial/ftdi"),
+          "9x stage: every package of either set");
+    CHECK(!inst_other_9x_stageable(INST_SET_FREE, NULL) &&
+          !inst_other_9x_stageable(INST_SET_NONFREE, "") &&
+          !inst_other_9x_stageable(INST_SET_COUNT, "serial/ftdi") &&
+          !inst_other_9x_stageable(-1, "serial/ftdi"),
+          "9x stage: no id, or no such set");
+    CHECK(inst_other_9x_keeps(1, 1) && !inst_other_9x_keeps(1, 0) &&
+          inst_other_9x_keeps(0, 0) && inst_other_9x_keeps(0, 1),
+          "9x keeps: carried with a STAGE line, or not carried");
+    {
+        static const char *const five[] = {
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\aaaaaa",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\bbbbbb",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\cccccc",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\dddddd",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\eeeeee",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\ffffff"
+        };
+        int six[6];
+        CHECK(strlen(five[0]) == 52, "9x project: the stand-in folder");
+        r = inst_9x_devicepath_project(base, five, 6, six);
+        CHECK(six[0] && six[1] && six[2] && six[3] && !six[4] && !six[5] &&
+              r == (int)strlen(base) + 4 * 53,
+              "9x project: four 52-character folders fit, the fifth not");
+    }
+    {
+        char line[400];
+        char rest[600];
+        const char *fp[3];
+        fp[0] = "USBDRV\\FREE\\net\\rtl815x\\w98se-me";
+        fp[1] = "";
+        fp[2] = "USBDRV\\FREE\\net\\rtl815x\\w2k";
+        inst_other_copy_only_line(line, sizeof(line), "USB Ethernet", fp, 1);
+        CHECK(strcmp(line, "USB Ethernet: USBDRV\\FREE\\net\\rtl815x\\"
+                     "w98se-me") == 0, "9x copied only: one folder");
+        inst_other_copy_only_line(line, sizeof(line), "USB Ethernet", fp, 3);
+        CHECK(strcmp(line, "USB Ethernet: USBDRV\\FREE\\net\\rtl815x\\"
+                     "w98se-me; USBDRV\\FREE\\net\\rtl815x\\w2k") == 0,
+              "9x copied only: two folders, an empty one skipped");
+        inst_other_rest_text(rest, sizeof(rest), INST_SET_NONFREE,
+                             "C:\\XHCI98", 1, 0, 0);
+        CHECK(strstr(rest, "A ticked package is staged") == rest &&
+              strstr(rest, "by itself. Every other package") != NULL &&
+              strstr(rest, "under C:\\XHCI98\\USBDRV\\NONFREE.") != NULL,
+              "9x rest: copied, the set's folder named");
+        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "C:\\X", 1, 0,
+                             1);
+        CHECK(strstr(rest, "by itself; what an earlier run staged and this "
+                     "run keeps is listed above. Every") != NULL,
+              "9x rest: copied, earlier staging kept");
+        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "C:\\X", 1, 1,
+                             1);
+        CHECK(strstr(rest, "taken out and only what is ticked here is "
+                     "staged. Every") != NULL &&
+              strstr(rest, "listed above") == NULL,
+              "9x rest: copied over another release, earlier staging out");
+        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "", 0, 0, 0);
+        CHECK(strstr(rest, "Nothing of this set is copied") == rest &&
+              strstr(rest, "earlier run") == NULL,
+              "9x rest: not copied, no earlier staging");
+        inst_other_rest_text(rest, sizeof(rest), INST_SET_FREE, "", 0, 0, 1);
+        CHECK(strstr(rest, "What an earlier run staged and this run keeps is "
+                     "listed above.") != NULL,
+              "9x rest: not copied, with earlier staging");
+        inst_other_rest_text(rest, 20, INST_SET_FREE, "C:\\XHCI98", 1, 0, 1);
+        CHECK(strlen(rest) == 19, "9x rest: held to its buffer");
+    }
+    /* Record 26 section 6.7.14 (task 45.6): a lifted pair bars only an
+     * earlier staging of another release; EXCLUDES bars always, COEXISTS
+     * never. */
+    CHECK(inst_other_rel_bars(INST_REL_EXCLUDES, 0, 1) &&
+          inst_other_rel_bars(INST_REL_EXCLUDES, 1, 1) &&
+          !inst_other_rel_bars(INST_REL_COEXISTS, 1, 0) &&
+          !inst_other_rel_bars(INST_REL_LIFTED, 0, 0) &&
+          !inst_other_rel_bars(INST_REL_LIFTED, 1, 1) &&
+          inst_other_rel_bars(INST_REL_LIFTED, 1, 0),
+          "lifted: bars an earlier staging of another release alone");
+    CHECK(inst_other_excludes(INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE,
+                              "ethernet/rtl815x", inst_sys_token(1, 5, 1, 2600, 0)) &&
+          !inst_other_lifted(INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE,
+                             "ethernet/rtl815x", inst_sys_token(1, 5, 1, 2600, 0)),
+          "lifted: rtl815x excluded until the free set's pin moves");
 
     r = inst_9x_devicepath_project(base, two, 2, fits);
     CHECK(r == (int)(strlen(base) + 2 + strlen(two[0]) + strlen(two[1])) &&

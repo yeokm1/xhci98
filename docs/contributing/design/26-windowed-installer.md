@@ -1,6 +1,14 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 46, 2026-10-29 (roadmap-usb4 task 45.5: on 98 SE the
+Status: draft 47, 2026-10-29 (roadmap-usb4 tasks 45.7, 45.8 and 45.6: on
+98 SE and ME every package with a STAGE line is stageable again within
+the 280-character DevicePath, the console and the window reading the
+ticks in order, and the page listing the copied-only packages and
+where to point the wizard for the rest, section 6.7.13; an EXCLUDES
+lifted to a COEXISTS only where the cut reads the two packages'
+devices apart, recorded LIFTED and proved at every later cut, and held
+against an earlier staging of another release, section 6.7.14);
+draft 46, 2026-10-29 (roadmap-usb4 task 45.5: on 98 SE the
 storage record's value for each file is written out with `RegFlushKey`,
 and the file's temporary copy with `FlushFileBuffers`, before the file
 is moved into place, section 6.5.6); draft 45, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61, the
@@ -4555,6 +4563,354 @@ bring under the limit, two folders of which only the first fits, and a
 folder already an entry counted once; the exclusion of `usbmidi` by an
 earlier `uac1` staging as a condition at the read. The window self-test
 lays each page out with its own set's rows.
+
+#### 6.7.13 98 SE and ME: every package staged again within 280 characters, and the page that says so (tasks 45.7 and 45.8; draft 47)
+
+Roadmap-usb4 task 45.7 (was W9XSTAGE.1, the owner's item of 2026-10-24,
+kept when section 6.7.6 made 98 SE and ME copy-only): the free and
+non-free drivers found by 98 SE's and ME's hardware wizard again without
+browsing, `DevicePath` kept under about 280 characters. Task 45.8 (was
+W9XOTHERPG.1, the owner, 2026-10-28, after the `3.3.0.0` cut): the free
+page on these systems listed only `uac2` and `usbmidi`, the two packages
+section 6.7.12 stages there, so a user could take the free download to
+hold two drivers and not know that a ticked box means staged on
+`DevicePath`; the other packages were copied and not shown. This section
+amends sections 6.7.4, 6.7.6, 6.7.7, 6.7.11 and 6.7.12 where it says so;
+the rest stands.
+
+**What changes, and what does not.** Section 6.7.12 already keeps a run
+from taking `DevicePath` past the limit: the projection
+(`inst_9x_devicepath_project`, `other_9x_fits`) bars a box whose folders
+would take the value past 280 characters, the run reads the value again
+before each append and leaves a folder out that would pass it, and an
+earlier run's entries take their room first. What made 98 SE and ME
+copy-only on 2026-10-24 was a `DevicePath` of 608 characters, with no
+such limit; with it, the fixed list of section 6.7.12
+(`instOther9xStage`, the free set's `uac2` and `usbmidi`) is no longer
+what keeps the wizard working. It is prevention, not repair: a value
+already past the limit (another program's entries) stays so, bars every
+new box, and is said as section 6.7.12 says it. So:
+
+- **Every package is stageable on 98 SE and ME** that has a `STAGE` line
+  naming the system's token (`W98SE`, `WME`), in either set: the list is
+  gone, `inst_other_9x_stageable` holds for every package id of the free
+  and the non-free set, and `other_count` counts a package's lines as on
+  2000 and later. Its box is offered on its set's page, unticked (the
+  default of every box on every run, section 6.7.11), with section
+  6.7.11's words and its details; `/wdmfree:stage=<ids>` and
+  `/wdmnonfree:stage=<ids>` take it. A package with only `COPY` lines for
+  the system (the free `rtl815x` and `noaud`, the free `usbmidi` on ME)
+  has no box, as on every system, and the stage switch naming it is
+  refused before any change ("its set stages nothing for it on this
+  Windows, so it is copied, not staged ..."). Staging on these systems
+  is still the package's folder appended to `DevicePath` (section
+  6.7.6), one entry per folder, with every section 6.7.11 rule for a
+  folder there (one package per folder, its `COPY` INFs visible with it).
+- **The limit decides what fits.** With the default install directory a
+  folder costs 43 to 65 characters with its separator, and
+  `C:\WINDOWS\INF;C:\XHCI98` (24) leaves 256 of the 280: four to five
+  packages' folders, the pinned sets holding 20 such folders on 98 SE
+  and 17 on ME. On the page an unticked box whose folders would not fit
+  with every ticked box's is barred, as section 6.7.12 has it ("(not
+  available: see below)", the reason in its details: "DevicePath would
+  pass 280 characters, past which Windows 98 SE's hardware wizard finds
+  no driver: point the wizard at <folder> instead"). **The console now
+  checks the ticks it is given**, once the install directory is
+  chosen (`other_9x_after_dir`, after `choose_dir`; the projection
+  reads that directory, so at the read and at the question it has
+  none and counts every tick): the stage switches in their order,
+  each counted only if every one before it fits, the first whose
+  folders do not fit refused with that reason before any change, exit
+  1, as the other switch refusals; the ids typed at the question read
+  again in the page's order (`other_block`, below), a package that no
+  longer fits unticked and said ("Not staged: <id>: <reason>"), before
+  the confirmation. In the window an unticked box that
+  would pass it is barred, and every making of the bars
+  (`other_block`, at each tick and at each change of the install
+  directory, `inst_eng_other_dir`) first reads the ticked boxes the
+  same way, in the page's order (by heading, as the page lays the
+  boxes out, then as the set lists them): a ticked box whose folders no longer
+  fit after the ones before it - the install directory made longer
+  after it was ticked - is unticked and barred with the reason, so the
+  Summary and the run never carry a choice that cannot be staged. The
+  run's own reading before each append stays the last guard.
+- **The projection's room.** `other_9x_fits` holds up to 48 folders
+  (the 24 of section 6.7.12 were for two packages; the pinned sets have
+  20 on 98 SE) and up to 16 of the candidate's own
+  (`other_9x_pkg_folders` says when a package has more than it was given
+  room for, never a part of its list), and more than either holds is
+  read as not fitting.
+- **Earlier staging, by system.** Section 6.7.12 took out of
+  `DevicePath`, at every run, the entries an earlier run's `Staged`
+  record names for a package off its list. The rule now is by the
+  package's lines (`other_9x_keeps`): an earlier run's entry is kept -
+  shown as earlier staging (section 6.7.11), counted first by the
+  projection, restored when `DevicePath` lacks it, removed by the
+  uninstall - when the set is carried in this download and the package
+  has a `STAGE` line for this system in it, or when the set is not
+  carried (its lines are not known: the entry stays until a run that
+  carries the set, or the uninstall, decides). An entry of a carried set's
+  package that has no `STAGE` line for this system any more (its set's
+  lines changed, or it is not in the set) is taken out, as section 6.7.6
+  has it. The published releases staged nothing on 98 SE and ME but
+  section 6.7.12's two packages (`3.2.0.0` none, `3.3.0.0` those two, 84
+  characters), and both keep their `STAGE` lines in the pinned free set,
+  so a `3.3.0.0` install keeps them - unless the run replaces the free
+  set's copy (another release of it, or another folder; below), which
+  takes them out with every entry of that set, staged again only when
+  ticked. (`3.3.0.0`'s free set and this release's have the same
+  `SHA256.TXT`, task 45.2, so its copy is not replaced.)
+- **A set this run replaces, first.** The projection already takes out
+  every entry of a set whose copy this run replaces (an earlier copy of
+  another release or in another folder, section 6.7.5), but the run took
+  them out only in that set's copy step (`other_begin`'s withdrawal),
+  after the other set's restorations and staging may have used the room.
+  So the run's withdrawal step (`other_withdraw_devicepath`, both sets
+  before either stages, section 6.7.12) now takes out every
+  `DevicePath` entry of a set `other_9x_replaced` reads replaced, its
+  `Staged` value with it, as it takes out the entries no longer kept;
+  the copy step's own withdrawal then finds none left. The run's order
+  is then the projection's.
+- **Exclusions.** `EXCLUDES` and `COEXISTS` hold on these systems as on
+  every other (section 6.7.11): of the pinned sets' lines naming `W98SE`
+  or `WME`, `uac1` against `usbmidi` (no `uac1` line stages there), the
+  free and non-free `ax88179` (the non-free one has no 98 SE or ME
+  line), the free and non-free `rtl815x` (the free one is copy-only
+  there), `xpad98` against `x360wc` (no `x360wc` line there) and the
+  `COEXISTS` of `xpad98` and `x360c` and of `uvc98` and `noaud`. None bars
+  a box today; the rule stands for the sets' later releases.
+- **The setup engine's prompt** (section 6.7.12's bullet) stands for
+  every package: the wizard may ask for the folder of the files the first
+  time, and the details name it.
+
+**The page on 98 SE and ME (task 45.8).** Each set's page shows, under
+its copy box, sentence and line:
+
+1. the heading "Let Windows choose these drivers automatically for
+   matching devices:" and the boxes of the packages it can stage on this
+   system, as on 2000 and later, barred ones included, and the set's
+   earlier-staging line;
+2. then, when the set has any package with only `COPY` lines for this
+   system (no box), the heading "Copied only (no automatic install on
+   this Windows):" and one line per such package, its description and
+   every distinct folder its lines for this system name,
+   "<description>: USBDRV\FREE\<class>\<package>\<folder>" (or
+   `NONFREE`; `inst_other_copy_only_line`, more folders separated by
+   "; "), past eight folders "and more: see USBDRV\FREE\STAGE.TXT" (the
+   set's own list of every folder);
+3. then the sentence for the rest (`inst_other_rest_text`), which
+   depends on the copy box: ticked, "A ticked package is staged: its
+   folder goes on DevicePath, where Windows' hardware wizard finds its
+   driver by itself; what an earlier run staged and this run keeps is
+   listed above. Every other package is copied only: when the wizard
+   asks for a driver, choose Specify a location and point it at the
+   package's folder under <dir>\USBDRV\FREE." (or `NONFREE`), the
+   install directory the window chose; unticked, "Nothing of this set is
+   copied in this run: tick the box above to copy it and to choose
+   packages to stage." and, where the set's earlier-staging line is
+   shown, "What an earlier run staged and this run keeps is listed
+   above." The earlier-staging line is the run's own decision
+   (`other_earlier`, read at the start): it shows only what the run
+   keeps by `other_9x_keeps`. Where the copy box is ticked and the run
+   replaces the set's copy (`other_9x_replaced`: an earlier copy of
+   another release or in another folder, read again as the copy box and
+   the install directory change), the earlier-staging line is not shown
+   and the sentence's middle clause is "this run copies this set over an
+   earlier copy, so what an earlier run staged of it is taken out and
+   only what is ticked here is staged", so the page never promises
+   staging the run withdraws;
+4. and, when no package of the set has a box on this system, the set's
+   `inst_other_none_text` line in place of item 1 (unchanged, as the
+   ME `usbmidi` case can make it for a set), followed by items 2 and 3.
+
+The lines are in the list's scrolling area under the boxes, which the
+keyboard reaches too: Down from the last box (Up from the first)
+scrolls the list a line, and Page Down, Page Up, End and Home on a box
+scroll it a page or to its end (`othbox_sub`); the same four keys on the
+set's copy box do too (`othcopy_sub`), since the list's boxes are greyed
+while it is unticked, so the copied-only lines and the sentence can be
+read without a mouse in every state.
+
+So the page lists every package of the set for this system - the boxes
+and the copied-only lines -, says which are staged (a ticked box, and
+the earlier staging) and which are only copied, and names the folder
+the wizard should be pointed at for the rest. The Summary, the Finish
+page and the console's end (section 6.7.7) are unchanged: they list the
+staged packages, and the Finish paragraph's "To install one by hand,
+point the Add New Hardware Wizard ... at one of:" lists the folders as
+now.
+
+On 2000 and later the page is unchanged: a package with no box there is
+one whose set has no `STAGE` line for the system, and its folders are
+listed by section 6.7.7's Finish paragraph as now.
+
+**The console.** On 98 SE and ME the question per set (section 6.7.11)
+lists the stageable packages as now, then the copied-only lines and the
+sentence for the rest (items 2 and 3, for the copy answer given); `/list`
+prints them too.
+
+**Host vectors** (`test_inst.c`): `inst_other_9x_stageable` true for a
+free and a non-free package and false for a NULL or empty id and an
+unknown set; `other_9x_keeps`' rule as a pure function
+(`inst_other_9x_keeps`: carried with a `STAGE` line kept, carried
+without one taken out, not carried kept); the projection with six
+52-character folders after `C:\WINDOWS\INF;C:\XHCI98` (four fit, the
+fifth and sixth do not); the copied-only line with one and with two
+folders, an empty one skipped; the sentence for the rest copied and
+not, replaced and not, with and without earlier staging, and held to
+its buffer. The window self-test lays each package's copied-only line
+with two long folders, and each set's sentence for the rest at a long
+install directory, whole in the list's window. The ticks' reading in
+order (`other_9x_after_dir`, `other_block`) is engine code over the
+registry and the plan, read in the legs.
+
+**The legs** (`runs/run-45.md`, "45.7" and "45.8"): 98 SE and ME, the
+`-free` and `-nonfree` downloads, the window: every stageable box
+offered and unticked, the copied-only lines and the sentence read by
+screenshot, ticked and unticked; ticking boxes until the next is barred,
+`DevicePath` after the run at most 280 characters and holding exactly
+the ticked folders; a QEMU device of a ticked package (`usb-serial`, an
+FTDI FT232, for the non-free `ftdi`; `usb-net` for the free `cdcnet`
+where its INF matches QEMU's model) installed by the wizard from the
+staged folder with no Specify a location; the console's refusal of a
+switch naming too many packages; an update over a `3.3.0.0` install with
+`uac2` staged (kept, shown as earlier staging); a second run showing the
+earlier staging; the uninstall taking the entries out.
+
+#### 6.7.14 An exclusion lifted where the devices are apart (task 45.6; draft 47)
+
+Roadmap-usb4 task 45.6 (was RTLNARROW.1; the owner, 2026-10-28, after
+the `3.3.0.0` cut): the free and the non-free `rtl815x` allowed side by
+side where their INFs list disjoint chips. `3.3.0.0` excludes the pair
+on every system, by the installer's table (`instOtherRels`) and by the
+free set's own `EXCLUDES` line ("the same chips; on XP to 7 `RTLXP7.INF`
+lists only chips the nonfree INFs leave out, but xHCI98 `3.2.0.0`
+excluded the pair everywhere and its rule is kept"), because the cut
+never drops a relationship line an earlier release carried (section
+6.7.11, "The table's history"; `Test-OtherPkgsTransition`). This
+section adds the one way a line may change: an `EXCLUDES` lifted on a
+system where the cut itself reads the two packages' devices apart, and
+kept apart at every later cut.
+
+**What a package matches on a system** (`Get-OtherPkgDevices`, the
+cut): over every `STAGE` and every `COPY` line of the package naming the
+system, the ids its INF's models match there (`Get-InfModelIds`, as
+`Test-OtherStageIds` reads them: the `[Manufacturer]` entries' models
+sections with the decoration that system's engine takes), read from the
+carried set's exported folder, each turned into a device key: an id of
+the form `USB\VID_<4 hex>&PID_<4 hex>` followed by nothing or by `&`
+and more (`&REV_`, `&MI_`, any other) becomes `VID_<v>&PID_<p>`, upper
+case, so a revision or an interface of one device is that device (the
+bus gives a device both forms, `src/hcd_pdo.c`'s hardware ids, and a
+function its interface's). **No answer** for the system (not an empty
+list) when the package's set is not carried in this cut, it has no line
+for the system, an INF of its lines cannot be read, an INF has no
+models section that system reads, or any id it matches is of another
+form (a class id, `USB\Class_...`, a compatible id, another bus): such
+an id does not say which devices it takes, so it cannot be shown apart.
+A `CLASS` package (section 6.7.11) gives no answer either.
+
+**The transition.** Where the previous release's record has an
+`EXCLUDES` line for a pair on a set of systems and this cut's lines for
+the pair (the table's and both sets', whichever source) leave some of
+those systems without an `EXCLUDES`, `Test-OtherPkgsTransition` admits
+it only when every such system is named by a `COEXISTS` line of the
+pair and, on it, both packages give an answer and the two answers have
+no key in common; otherwise it refuses as now, saying why ("the package
+table drops the EXCLUDES line of <a> and <b> on <systems>, which <ver>
+carried ... and the cut does not read them apart on <system>: <key in
+common, or which package gave no answer and why>"). The comparison is
+of unordered pairs (either endpoint first), and of the union of the
+pair's lines of each kind, so a line the table and the pack both carry
+is one statement.
+
+**Kept apart.** A system lifted so is recorded: the cut writes, beside
+the record's `EXCLUDES` and `COEXISTS` lines, a line `LIFTED | <a> | <b>
+| <systems> | <why>` in `otherpkgs.txt` for every pair and system a
+`COEXISTS` holds where an earlier release's record had an `EXCLUDES` or
+a `LIFTED` line (carried forward, its systems the union). The next cut
+reads it back and holds those systems to the same proof: a `COEXISTS`
+there must again show both packages apart, or the cut refuses; an
+`EXCLUDES` there instead is allowed (the pair excluded again) and ends
+the `LIFTED` line for that system. So a later release of either set
+that adds an overlapping id, by a `STAGE` or a `COPY` line, cannot keep
+a lifted pair together unchecked. A `COEXISTS` the maintainer wrote
+where no `EXCLUDES` stood (a considered overlap, section 6.7.11) is not
+held to it.
+
+**Earlier staging of another release.** The cut proves the releases it
+carries apart; an install may also hold a package an earlier run staged
+from another release of its set (an older payload whose ids the cut
+never read), and section 6.7.11 holds exclusions against earlier
+staging. So a lifted system is `COEXISTS` only between the packages this
+download carries: the installer's table marks such a row with a third
+kind, `INST_REL_LIFTED` (`instOtherRels`' kind field: 1 `EXCLUDES`, 0
+`COEXISTS`, 2 lifted), written as `COEXISTS` by the cut (a pack's own
+`COEXISTS` for the pair is the same statement) and recorded `LIFTED`. At
+the installer (`other_pair_excluded`, through `inst_other_lift_bars`) a
+lifted row bars a package against an earlier staging of its partner
+whenever that staging is not of the partner set's release this download
+carries - the set not carried here, or the set's recorded `Sums` (the
+release its copy and staging came from) other than this download's - as
+an `EXCLUDES` would, with the same words ("uninstall the other drivers
+first"); between two packages of the carried releases, ticked now or
+staged earlier from the same release, it bars nothing. The cut holds
+the table and its lifts to each other both ways (`Test-OtherTableLifts`):
+a table row of kind 2 whose pair and systems no lift of this cut covers
+is refused, and so is a lift (a pack's `COEXISTS`, or a table row left of
+kind 0) that no row of kind 2 names on every system it lifts, since the
+installer's hold against an earlier release is that row.
+
+**The pair this is for.** Read at the pins of `3.3.0.0` (free `v0.1.4`
+at `c28fce8`, non-free `v1.1.0` at `565d11b`) with the cut's own
+functions: the free `rtl815x` matches 34 ids on 98 SE, ME and 2000, 4 on
+XP and Vista and 2 on 7, x86 and x64; the non-free one has no line on
+98 SE, ME or 2000, 68 ids on XP and Vista and 315 on 7, x86 and x64;
+neither has a line on 8 or 10; no id in common anywhere (their device
+keys are to be read the same way with the new function before the
+change). Both are `DEVICE` packages. So the lift is possible on XP, XP
+x64, Vista, Vista x64, 7 and 7 x64 alone; on 98 SE, ME, 2000, 8, 8 x64,
+10 and 10 x64 one package gives no answer and the `EXCLUDES` stays (it
+bars nothing there, one of the pair having no line).
+
+**Where each line is.** The free set's line is in `usb-wdm-free`'s
+`STAGE.TXT`, which this repository does not change: its maintainer
+splits it (proposal: "EXCLUDES | free:net/rtl815x |
+nonfree:ethernet/rtl815x | W98SE WME W2K W8 W8X64 W10 W10X64 | kept
+where one of the pair has no INF" and "COEXISTS | free:net/rtl815x |
+nonfree:ethernet/rtl815x | WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint
+chips: RTLXP7.INF lists only chips the nonfree INFs leave out"), and the
+installer's table row (`instOtherRels`) is split the same way in the
+change that moves the free set's pin to that release, since the cut
+refuses a table and a pack line of two kinds for one pair on a common
+system, and the installer reads both and excludes where either does.
+Until then the pair stays excluded everywhere, as in `3.3.0.0`; the
+cut's check and the `LIFTED` record are in place for the move.
+
+**What the user sees.** The free `rtl815x` is copied only on every
+system in `v0.1.4` (no `STAGE` line), so an `EXCLUDES` against it bars
+nothing today: the non-free package's box is offered beside the free
+set's copy either way. The lift matters once the free set stages its
+`rtl815x` on XP to 7, and the page then offers both boxes.
+
+**Host vectors** (`test-package.ps1`, the packager self-tests), with
+stand-in packages: disjoint `VID&PID` ids on one system and a common one
+on another, the previous record's `EXCLUDES` on both: a `COEXISTS` on
+the disjoint system admitted and recorded as `LIFTED`, on the other
+refused naming the key; the same device by a `&REV_` id in one package
+and a plain id in the other refused; a `COPY`-only overlap refused; a
+class id refused; a `CLASS` package refused; a package whose second INF
+cannot be read refused; a system one package has no line on refused; a
+set not carried refused; endpoints reversed in the `COEXISTS` admitted;
+the table's and a pack's `EXCLUDES` for the pair both lifted on part of
+their systems and kept on the rest admitted; an `EXCLUDES` dropped with
+no `COEXISTS` still refused; a `LIFTED` system re-proved at the next
+cut, refused when an overlapping id appears, and ended by an `EXCLUDES`
+there.
+
+**The legs** (`runs/run-45.md`, "45.6"): the install leg on XP and 7
+waits for the pin move (the coordinator's); until then the packager
+self-tests and the cut's `-CheckOnly` are the reading.
 
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 

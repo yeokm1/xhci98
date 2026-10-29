@@ -24747,10 +24747,14 @@ typedef struct _OTHPKG {
     int Heading;                /* index into instOtherHeadings            */
     int Eligible;               /* a STAGE line naming this system         */
     int Infs;                   /* those lines                             */
+    int CopyHere;               /* COPY lines naming this system           */
     int Tick;                   /* its box ticked                          */
     int Earlier;                /* staged by an earlier run (its record)   */
     int Blocked;                /* EXCLUDES bars it, or an unknown staging */
     char Why[200];
+    int Retick;                 /* other_block: ticked, read again          */
+    char Unfit[200];            /* other_block: unticked, its folders past
+                                   the 9x limit after the ones before it  */
     int Staged;                 /* the run: INFs or folders staged         */
     int Failed;
 } OTHPKG;
@@ -25147,39 +25151,61 @@ static void other_read_set(int set)
             o->Src, o->Count, o->StageCount, o->PkgCount);
 }
 
-/* The STAGE lines for this system. On 98 SE and ME only the packages of
- * inst_other_9x_stageable (record 26 section 6.7.12, task 44.11: the free
- * set's uac2 and usbmidi, which 98 SE's own USB audio INF would otherwise
- * take); every other package is copied only there (owner, 2026-10-24:
- * with the packages' folders DevicePath grew to 15 entries and about 600
- * characters, and 98 SE's hardware wizard then found no driver at all,
- * not even in %windir%\INF). */
+/* The STAGE lines for this system, and each package's COPY lines for it.
+ * On 98 SE and ME every package with a STAGE line there is stageable
+ * (record 26 section 6.7.13, task 45.7), DevicePath held within
+ * INST_9X_DEVICEPATH_MAX by the projection (section 6.7.12) rather than by
+ * a list of packages. */
 static void other_count(int set)
 {
     OTHSET *o = &oth[set];
     INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
     char pkg[64];
     int i;
+    int k;
 
     o->ForThis = 0;
     for (i = 0; i < o->StageCount; i++) {
         if (!(o->Stage[i].Systems & bit)) {
             continue;
         }
-        if (o->Stage[i].Stage) {
-            int k;
-            other_pkg_of(o->Stage[i].Inf, pkg, sizeof(pkg));
-            if (!envNow.Nt && !inst_other_9x_stageable(set, pkg)) {
-                continue;
-            }
-            o->ForThis++;
-            k = other_pkg_index(o, pkg);
+        other_pkg_of(o->Stage[i].Inf, pkg, sizeof(pkg));
+        k = other_pkg_index(o, pkg);
+        if (!o->Stage[i].Stage) {
             if (k >= 0) {
-                o->Pkg[k].Eligible = 1;
-                o->Pkg[k].Infs++;
+                o->Pkg[k].CopyHere++;
             }
+            continue;
+        }
+        if (!envNow.Nt && !inst_other_9x_stageable(set, pkg)) {
+            continue;
+        }
+        o->ForThis++;
+        if (k >= 0) {
+            o->Pkg[k].Eligible = 1;
+            o->Pkg[k].Infs++;
         }
     }
+}
+
+static int other_9x_fits(int set, int k, char *why, size_t cap);
+
+/* 98 SE and ME (record 26 section 6.7.13): whether an earlier run's
+ * DevicePath entry of set:id stays - its set not carried here, or the
+ * package staged on this system by the carried set's lines. */
+static int other_9x_keeps(int set, const char *id)
+{
+    const OTHSET *o = &oth[set];
+    int k;
+
+    if (!inst_other_9x_stageable(set, id)) {
+        return 0;
+    }
+    if (o->State != INST_OTHER_CARRIED) {
+        return inst_other_9x_keeps(0, 0);
+    }
+    k = other_pkg_index(o, id);
+    return inst_other_9x_keeps(1, k >= 0 && o->Pkg[k].Eligible);
 }
 
 static void other_read(void)
@@ -25219,6 +25245,53 @@ static const char *other_version(void)
     return XHCIINST_VERSION;
 }
 
+static int other_9x_replaced(int set, const char *dir);
+/* The install directory the window has chosen (inst_eng_other_dir), for
+ * the 98 SE and ME projection of DevicePath; toolDir when none. */
+static char othProjDir[INST_PATH_CHARS];
+
+/* 98 SE and ME (record 26 section 6.7.13): 1 when this run's copy of set
+ * replaces an earlier one, which takes out what an earlier run staged of
+ * it. */
+static int other_9x_replacing(int set)
+{
+    return !envNow.Nt && other_9x_replaced(set, othProjDir[0] != '\0' ?
+                                           othProjDir : toolDir);
+}
+
+/* The set's earlier staging in words, "" where the run replaces the set's
+ * copy and so takes it out (section 6.7.13). */
+static const char *other_earlier_text(int set)
+{
+    return other_9x_replacing(set) ? "" : oth[set].Earlier;
+}
+
+/* 98 SE and ME (record 26 section 6.7.13): the set's copied-only packages
+ * and the sentence for the rest, as its page shows them. */
+static void other_9x_rest_out(int set)
+{
+    char line[700];
+    int any = 0;
+    int i;
+
+    if (envNow.Nt) {
+        return;
+    }
+    for (i = 0; i < oth[set].PkgCount; i++) {
+        if (inst_eng_other_copy_only(set, i, line, sizeof(line))) {
+            if (!any) {
+                out("  Copied only (no automatic install on this Windows):\n");
+                any = 1;
+            }
+            stor_out_wrapped("    ", line);
+        }
+    }
+    inst_eng_other_rest(set, toolDir, line, sizeof(line));
+    if (line[0] != '\0') {
+        stor_out_wrapped("  ", line);
+    }
+}
+
 /* The console's packages of a set (section 6.7.11): listed, then "Stage
  * which?", ids separated by commas, a wrong id asked again. */
 static void other_ask_pkgs(int set)
@@ -25242,9 +25315,10 @@ static void other_ask_pkgs(int set)
             out("      %s\n", p->Why);
         }
     }
-    if (o->Earlier[0] != '\0') {
-        stor_out_wrapped("  ", o->Earlier);
+    if (other_earlier_text(set)[0] != '\0') {
+        stor_out_wrapped("  ", other_earlier_text(set));
     }
+    other_9x_rest_out(set);
     for (k = 0;; k++) {
         int n;
         int bad = 0;
@@ -25266,9 +25340,15 @@ static void other_ask_pkgs(int set)
         }
         for (i = 0; i < n && !bad; i++) {
             int j = other_pkg_index(o, ids + (size_t)i * INST_PKG_ID_CHARS);
+            char why[300];
             if (j < 0 || !o->Pkg[j].Eligible) {
                 out("  %s is not one of the ids above.\n",
                     ids + (size_t)i * INST_PKG_ID_CHARS);
+                bad = 1;
+            } else if (!envNow.Nt && !o->Pkg[j].Tick &&
+                       !other_9x_fits(set, j, why, sizeof(why))) {
+                /* In the order typed (record 26 section 6.7.13). */
+                out("  %s: %s\n", o->Pkg[j].Id, why);
                 bad = 1;
             } else {
                 o->Pkg[j].Tick = 1;
@@ -25332,9 +25412,10 @@ static void other_question(void)
                     out("    %s %s\n", o->Pkg[i].Id, o->Pkg[i].Desc);
                 }
             }
-            if (o->Earlier[0] != '\0') {
-                stor_out_wrapped("  ", o->Earlier);
+            if (other_earlier_text(set)[0] != '\0') {
+                stor_out_wrapped("  ", other_earlier_text(set));
             }
+            other_9x_rest_out(set);
             out("\n");
             continue;
         }
@@ -25351,6 +25432,9 @@ static void other_question(void)
             }
             if (o->Earlier[0] != '\0') {
                 stor_out_wrapped("  ", o->Earlier);
+            }
+            if (opts.List) {
+                other_9x_rest_out(set);
             }
             out("\n");
             continue;
@@ -25373,6 +25457,8 @@ static void other_question(void)
         o->Include = r > 0;
         if (o->Include && o->ForThis > 0) {
             other_ask_pkgs(set);
+        } else if (o->Include) {
+            other_9x_rest_out(set);
         }
         if (set == INST_SET_FREE && other_trust_offered() && !othTrust) {
             inst_yesno_question(text, sizeof(text), "Trust usb-wdm-free's "
@@ -25669,12 +25755,12 @@ static void other_earlier(int set)
         }
         inst_other_pkg_of(rel, id, sizeof(id));
         /* 98 SE and ME: an earlier run's DevicePath entry of a package
-         * staged only on other systems is taken out by this run
-         * (other_withdraw_devicepath), not shown as staged; one of
-         * inst_other_9x_stageable's stays (record 26 section 6.7.12). */
+         * this release does not stage on the system is taken out by this
+         * run (other_withdraw_devicepath), not shown as staged; one
+         * other_9x_keeps keeps stays (record 26 section 6.7.13). */
         if (!envNow.Nt && inst_eq(data, "DevicePath") &&
             (rel[0] == '\0' || strchr(id, '/') == NULL ||
-             !inst_other_9x_stageable(set, id))) {
+             !other_9x_keeps(set, id))) {
             continue;
         }
         if (rel[0] == '\0' || strchr(id, '/') == NULL) {
@@ -25782,10 +25868,9 @@ static int other_sig_kind(void)
     return (envNow.Major == 6 || envNow.Major == 10) ? 2 : 0;
 }
 
-/* The install directory the window has chosen, for the 98 SE and ME
- * projection of DevicePath (record 26 section 6.7.12); the run's toolDir
- * when none was given. */
-static char othProjDir[INST_PATH_CHARS];
+/* othProjDir (above other_9x_replacing): the install directory the window
+ * has chosen, for the 98 SE and ME projection of DevicePath (record 26
+ * section 6.7.12); the run's toolDir when none was given. */
 
 static int other_9x_entry_id(int set, const char *name, char *id, size_t cap);
 static int other_9x_entry_kept(int set, const char *name);
@@ -25793,7 +25878,8 @@ static int other_key_exists(int set);
 
 /* The folders of set's package k on 98 SE and ME (its STAGE lines naming
  * this system), each an absolute path under dir's set folder, appended to
- * fold (at most max). */
+ * fold; max + 1 when another folder would pass max (record 26 section
+ * 6.7.13: the caller reads that as not fitting, never a partial list). */
 static int other_9x_pkg_folders(int set, int k, const char *dir,
                                 char (*fold)[INST_PATH_CHARS], int n, int max)
 {
@@ -25802,11 +25888,12 @@ static int other_9x_pkg_folders(int set, int k, const char *dir,
     char setDir[INST_PATH_CHARS];
     char pkg[INST_PKG_ID_CHARS];
     char folder[INST_OTHER_REL_CHARS];
+    char one[INST_PATH_CHARS];
     int i;
     int j;
 
     join(setDir, sizeof(setDir), dir, inst_other_folder(set));
-    for (i = 0; i < o->StageCount && n < max; i++) {
+    for (i = 0; i < o->StageCount; i++) {
         if (!o->Stage[i].Stage || !(o->Stage[i].Systems & bit)) {
             continue;
         }
@@ -25818,14 +25905,30 @@ static int other_9x_pkg_folders(int set, int k, const char *dir,
         if (strrchr(folder, '/') != NULL) {
             *strrchr(folder, '/') = '\0';
         }
-        other_path(fold[n], INST_PATH_CHARS, setDir, folder);
-        for (j = 0; j < n && !inst_eq(fold[j], fold[n]); j++) {
+        other_path(one, sizeof(one), setDir, folder);
+        for (j = 0; j < n && !inst_eq(fold[j], one); j++) {
         }
-        if (j == n) {
-            n++;
+        if (j < n) {
+            continue;
         }
+        if (n >= max) {
+            return max + 1;
+        }
+        inst_copy(fold[n++], one, INST_PATH_CHARS);
     }
     return n;
+}
+
+/* Record 26 section 6.7.14: 1 when set's earlier copy and staging came from
+ * the release of it this download carries (its recorded Sums this
+ * download's); 0 for another, an unknown one, or a set not carried. */
+static int other_same_release(int set)
+{
+    char sums[80];
+
+    return oth[set].State == INST_OTHER_CARRIED &&
+           other_key_text(set, "Sums", sums, sizeof(sums)) > 0 &&
+           inst_eq(sums, inst_other_sums(set));
 }
 
 /* 1 when this run's copy of set replaces an earlier copy of another release
@@ -25847,6 +25950,11 @@ static int other_9x_replaced(int set, const char *dir)
            !inst_eq(v, want) || !inst_eq(sums, inst_other_sums(set));
 }
 
+/* The folders other_9x_fits projects at most (record 26 section 6.7.13:
+ * the pinned sets stage 20 on 98 SE). */
+#define OTH_9X_FOLDS 48
+#define OTH_9X_CAND 16
+
 /* 98 SE and ME (record 26 section 6.7.12): whether set's package k would
  * fit on DevicePath within INST_9X_DEVICEPATH_MAX, after this run's own
  * changes (the install directory's entry, the withdrawals of the packages
@@ -25856,11 +25964,11 @@ static int other_9x_replaced(int set, const char *dir)
  * append); 0 with why. */
 static int other_9x_fits(int set, int k, char *why, size_t cap)
 {
-    static char fold[24][INST_PATH_CHARS];
-    static char cand[8][INST_PATH_CHARS];
-    const char *ptr[24];
-    int fits[24];
-    int idx[8];
+    static char fold[OTH_9X_FOLDS][INST_PATH_CHARS];
+    static char cand[OTH_9X_CAND][INST_PATH_CHARS];
+    const char *ptr[OTH_9X_FOLDS];
+    int fits[OTH_9X_FOLDS];
+    int idx[OTH_9X_CAND];
     char list[2048];
     char cut[2048];
     char base[2048];
@@ -25878,6 +25986,7 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
     int c;
     int e;
     int r;
+    int full = 0;
 
     if (dir[0] == '\0' || !legacy_dir(rootDir, sizeof(rootDir)) ||
         !reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
@@ -25902,9 +26011,12 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
                 continue;
             }
             if (!replaced && other_9x_entry_kept(s2, name)) {
-                if (n < 24 && inst_path_append(list, name, cut,
-                                               sizeof(cut)) > 0) {
-                    inst_copy(fold[n++], name, INST_PATH_CHARS);
+                if (inst_path_append(list, name, cut, sizeof(cut)) > 0) {
+                    if (n < OTH_9X_FOLDS) {
+                        inst_copy(fold[n++], name, INST_PATH_CHARS);
+                    } else {
+                        full = 1;
+                    }
                 }
                 continue;
             }
@@ -25919,27 +26031,38 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
     for (s2 = 0; s2 < INST_SET_COUNT; s2++) {
         for (j = 0; j < oth[s2].PkgCount; j++) {
             if (oth[s2].Pkg[j].Tick && !(s2 == set && j == k)) {
-                n = other_9x_pkg_folders(s2, j, dir, fold, n, 24);
+                n = other_9x_pkg_folders(s2, j, dir, fold, n, OTH_9X_FOLDS);
+                if (n >= OTH_9X_FOLDS) {
+                    n = OTH_9X_FOLDS;
+                    full = 1;
+                }
             }
         }
     }
     /* The candidate's own folders, each by its index in the whole list,
-     * whether a restoration or a ticked box put it there already. */
-    nc = other_9x_pkg_folders(set, k, dir, cand, 0, 8);
+     * whether a restoration or a ticked box put it there already; more
+     * than cand holds is read as not fitting. */
+    nc = other_9x_pkg_folders(set, k, dir, cand, 0, OTH_9X_CAND);
+    if (nc > OTH_9X_CAND) {
+        nc = OTH_9X_CAND;
+        full = 1;
+    }
     for (c = 0; c < nc; c++) {
         for (j = 0; j < n && !inst_eq(fold[j], cand[c]); j++) {
         }
-        if (j == n && n < 24) {
+        if (j == n && n < OTH_9X_FOLDS) {
             inst_copy(fold[n++], cand[c], INST_PATH_CHARS);
         }
-        idx[c] = j < 24 ? j : -1;
+        idx[c] = j < OTH_9X_FOLDS ? j : -1;
     }
     for (j = 0; j < n; j++) {
         ptr[j] = fold[j];
     }
     r = inst_9x_devicepath_project(base, ptr, n, fits);
+    /* More folders than the projection holds are read as not fitting
+     * (record 26 section 6.7.13). */
     for (c = 0; c < nc && bad == NULL; c++) {
-        if (idx[c] < 0 || r < 0 || !fits[idx[c]]) {
+        if (idx[c] < 0 || r < 0 || full || !fits[idx[c]]) {
             bad = cand[c];
         }
     }
@@ -25972,6 +26095,42 @@ static void other_block(void)
     int s2;
     int j;
 
+    /* 98 SE and ME (record 26 section 6.7.13): the ticks read again in
+     * the page's order, each counted only if its folders fit after the
+     * ones before it; one that no longer fits (the install directory made
+     * longer after it was ticked) is unticked and barred below. */
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < oth[set].PkgCount; i++) {
+            OTHPKG *p = &oth[set].Pkg[i];
+            p->Unfit[0] = '\0';
+            p->Retick = !envNow.Nt && p->Tick;
+            if (p->Retick) {
+                p->Tick = 0;
+            }
+        }
+    }
+    for (set = 0; set < INST_SET_COUNT && !envNow.Nt; set++) {
+        /* The page's order: by heading (othlist_build), then as the set
+         * lists its packages. */
+        for (j = 0; j < instOtherHeadingCount * oth[set].PkgCount; j++) {
+            OTHPKG *p = &oth[set].Pkg[j % oth[set].PkgCount];
+            int ph = p->Heading >= 0 && p->Heading < instOtherHeadingCount ?
+                     p->Heading : instOtherHeadingCount - 1;
+            i = j % oth[set].PkgCount;
+            if (ph != j / oth[set].PkgCount || !p->Retick) {
+                continue;
+            }
+            p->Retick = 0;
+            if (other_9x_fits(set, i, p->Unfit, sizeof(p->Unfit))) {
+                p->Unfit[0] = '\0';
+                p->Tick = 1;
+            } else {
+                p->Unfit[sizeof(p->Unfit) - 1] = '\0';
+                logonly("other: %s:%s unticked: %s\n", other_set_tag(set),
+                        p->Id, p->Unfit);
+            }
+        }
+    }
     for (set = 0; set < INST_SET_COUNT; set++) {
         OTHSET *o = &oth[set];
         for (i = 0; i < o->PkgCount; i++) {
@@ -25979,6 +26138,11 @@ static void other_block(void)
             p->Blocked = 0;
             p->Why[0] = '\0';
             if (!p->Eligible) {
+                continue;
+            }
+            if (p->Unfit[0] != '\0') {
+                p->Blocked = 1;
+                inst_copy(p->Why, p->Unfit, sizeof(p->Why));
                 continue;
             }
             if (unknown) {
@@ -26009,7 +26173,12 @@ static void other_block(void)
                     if (s2 == set && inst_eq(e, p->Id)) {
                         continue;
                     }
-                    if (other_pair_excluded(set, p->Id, s2, e)) {
+                    /* A lifted pair (section 6.7.14) bars an earlier staging
+                     * of another release, whose ids the cut never read. */
+                    if (other_pair_excluded(set, p->Id, s2, e) ||
+                        (inst_other_lifted(set, p->Id, s2, e, othSys) &&
+                         inst_other_rel_bars(INST_REL_LIFTED, 1,
+                                             other_same_release(s2)))) {
                         p->Blocked = 1;
                         _snprintf(p->Why, sizeof(p->Why) - 1, "Not with "
                                   "%s, staged by an earlier run (%s): "
@@ -26035,6 +26204,70 @@ static void other_block(void)
     }
 }
 
+/* 98 SE and ME, the console's ticks once the install directory is chosen
+ * (record 26 section 6.7.13): the projection reads that directory only
+ * now. The stage switches in their order, each fitting after the ones
+ * before it or refused before any change (0, said); the ticks typed at
+ * the question in the page's order (other_block), a package that no
+ * longer fits unticked and said. 1 go on. */
+static int other_9x_after_dir(void)
+{
+    char why[300];
+    int set;
+    int i;
+    int any = 0;
+
+    if (envNow.Nt || !othRead) {
+        return 1;
+    }
+    /* The window's ticks are its final choice (the user may have changed
+     * what a switch preselected): read again as they stand. */
+    for (set = 0; set < INST_SET_COUNT && !instWindow; set++) {
+        any |= opts.StageCount[set] > 0;
+    }
+    if (any) {
+        /* Only what the switches ticked is taken again, in their order,
+         * after the other set's ticks typed at its question. */
+        for (set = 0; set < INST_SET_COUNT; set++) {
+            OTHSET *o = &oth[set];
+            for (i = 0; i < opts.StageCount[set]; i++) {
+                int k = other_pkg_index(o, opts.StageIds[set] +
+                                        (size_t)i * INST_PKG_ID_CHARS);
+                if (k >= 0) {
+                    o->Pkg[k].Tick = 0;
+                }
+            }
+        }
+        for (set = 0; set < INST_SET_COUNT; set++) {
+            OTHSET *o = &oth[set];
+            for (i = 0; i < opts.StageCount[set]; i++) {
+                const char *id = opts.StageIds[set] +
+                                 (size_t)i * INST_PKG_ID_CHARS;
+                int k = other_pkg_index(o, id);
+                if (k < 0 || o->Pkg[k].Tick) {
+                    continue;
+                }
+                if (!other_9x_fits(set, k, why, sizeof(why))) {
+                    out("REFUSED: %s:%s: %s Nothing was changed.\n",
+                        other_set_tag(set), id, why);
+                    return 0;
+                }
+                o->Pkg[k].Tick = 1;
+            }
+        }
+    }
+    other_block();
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < oth[set].PkgCount; i++) {
+            if (oth[set].Pkg[i].Unfit[0] != '\0') {
+                out("Not staged: %s:%s: %s\n", other_set_tag(set),
+                    oth[set].Pkg[i].Id, oth[set].Pkg[i].Unfit);
+            }
+        }
+    }
+    return 1;
+}
+
 /* The read's ticks from /wdmfree:stage= and /wdmnonfree:stage=, every id
  * checked before any change; 0 with othSwitchErr said. */
 static int other_ticks(void)
@@ -26057,22 +26290,31 @@ static int other_ticks(void)
                           "its set" : k < 0 ? "no such package in the set" :
                           envNow.Nt ? "it has nothing to stage on this "
                           "Windows" :
-                          /* A listed package whose set stages nothing for
-                           * this system (usbmidi on ME, record 26 section
-                           * 6.7.12) is told so, not that the list stages
-                           * it. */
-                          inst_other_9x_stageable(set, id) ? "its set "
+                          /* A package whose set stages nothing for this
+                           * system (usbmidi on ME, record 26 section
+                           * 6.7.12) is told so. */
+                          set == INST_SET_FREE ? "its set stages nothing for "
+                          "it on this Windows, so it is copied, not staged "
+                          "(use /wdmfree:copy, then point the hardware "
+                          "wizard at the package's folder)" : "its set "
                           "stages nothing for it on this Windows, so it is "
-                          "copied, not staged (use /wdmfree:copy, then point "
-                          "the hardware wizard at the package's folder)" :
-                          "on Windows 98 SE and ME this package is copied, "
-                          "not staged (only free audio/uac2 and audio/usbmidi "
-                          "can be staged there, each where its set stages "
-                          "it; use /wdmfree:copy or /wdmnonfree:copy, then "
+                          "copied, not staged (use /wdmnonfree:copy, then "
                           "point the hardware wizard at the package's "
                           "folder)");
                 othSwitchErr[sizeof(othSwitchErr) - 1] = '\0';
                 return 0;
+            }
+            /* 98 SE and ME (record 26 section 6.7.13): in the order given,
+             * each package's folders fit on DevicePath after the ones
+             * before it, or the switch is refused before any change. */
+            if (!envNow.Nt && !o->Pkg[k].Tick) {
+                char why[300];
+                if (!other_9x_fits(set, k, why, sizeof(why))) {
+                    _snprintf(othSwitchErr, sizeof(othSwitchErr) - 1,
+                              "%s:%s: %s", other_set_tag(set), id, why);
+                    othSwitchErr[sizeof(othSwitchErr) - 1] = '\0';
+                    return 0;
+                }
             }
             o->Pkg[k].Tick = 1;
         }
@@ -27828,9 +28070,8 @@ static void other_recover_only(int set)
     free(recs);
 }
 
-/* 1 when a 98 SE or ME Staged entry (an absolute folder) lies under the
- * set's recorded Dir and belongs to a package inst_other_9x_stageable
- * keeps on DevicePath (record 26 section 6.7.12). */
+/* 1 with id when a 98 SE or ME Staged entry (an absolute folder) lies
+ * under the set's recorded Dir in a package's folder. */
 static int other_9x_entry_id(int set, const char *name, char *id, size_t cap)
 {
     char dir[INST_PATH_CHARS];
@@ -27856,12 +28097,14 @@ static int other_9x_entry_id(int set, const char *name, char *id, size_t cap)
     return strchr(id, '/') != NULL;
 }
 
+/* 1 when that entry's package keeps it on DevicePath (record 26 section
+ * 6.7.13, other_9x_keeps). */
 static int other_9x_entry_kept(int set, const char *name)
 {
     char id[INST_PKG_ID_CHARS];
 
     return other_9x_entry_id(set, name, id, sizeof(id)) &&
-           inst_other_9x_stageable(set, id);
+           other_9x_keeps(set, id);
 }
 
 /* The package of a DevicePath entry under set's folder, the recorded Dir
@@ -27969,11 +28212,11 @@ static int other_9x_bar_left(int set, const char *id, char *why, size_t cap)
 
 /* 98 SE and ME: each folder an earlier run's Staged record names taken
  * out of DevicePath, and its record value with it, but a folder of a
- * package inst_other_9x_stageable keeps there (record 26 section 6.7.12).
- * Every other package is copied only on these systems (other_count): a
- * DevicePath of many entries left 98 SE's hardware wizard finding no
- * driver at all, so an install, update or repair over such a run gives
- * the wizard its search back. */
+ * package other_9x_keeps keeps there (record 26 section 6.7.13). Every
+ * entry of a set whose copy this run replaces goes here too, before
+ * either set's restorations and staging take the room, as the projection
+ * (other_9x_fits) counts it; the copy step's own withdrawal then finds
+ * none. */
 static void other_withdraw_devicepath(int set)
 {
     char name[INST_PATH_CHARS * 2];
@@ -27983,6 +28226,7 @@ static void other_withdraw_devicepath(int set)
     DWORD type = REG_SZ;
     DWORD i;
     int e;
+    int replaced;
 
     if (envNow.Nt || opts.List) {
         return;
@@ -27997,6 +28241,7 @@ static void other_withdraw_devicepath(int set)
     if (e == 0) {
         return;
     }
+    replaced = other_9x_replaced(set, toolDir);
     for (i = 0;; i++) {
         e = other_staged_enum(set, i, name, sizeof(name), data, sizeof(data));
         if (e < 0) {
@@ -28008,7 +28253,8 @@ static void other_withdraw_devicepath(int set)
         if (e == 0) {
             return;
         }
-        if (!inst_eq(data, "DevicePath") || other_9x_entry_kept(set, name)) {
+        if (!inst_eq(data, "DevicePath") ||
+            (!replaced && other_9x_entry_kept(set, name))) {
             continue;
         }
         if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
@@ -28230,7 +28476,7 @@ static void other_run_set(int set)
 }
 
 /* 98 SE and ME: each folder an earlier run's Staged record names for a
- * package inst_other_9x_stageable keeps, missing from DevicePath now,
+ * package other_9x_keeps keeps, missing from DevicePath now,
  * appended again within the wizard's limit (sections 6.7.11, 6.7.12). */
 static void other_9x_restore(int set)
 {
@@ -29049,12 +29295,93 @@ const char *inst_eng_other_none_text(int set)
     return inst_other_none_text(envNow.Nt, set);
 }
 
+int inst_eng_other_copy_only(int set, int i, char *out, size_t cap)
+{
+    const OTHSET *o;
+    const OTHPKG *p;
+    INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
+    char folders[8][INST_PATH_CHARS];
+    char more[INST_PATH_CHARS];
+    const char *ptr[9];
+    int n = 0;
+    int over = 0;
+    int k;
+    int j;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (envNow.Nt || set < 0 || set >= INST_SET_COUNT || !othRead ||
+        i < 0 || i >= oth[set].PkgCount) {
+        return 0;
+    }
+    o = &oth[set];
+    p = &o->Pkg[i];
+    if (p->Eligible || p->CopyHere == 0) {
+        return 0;
+    }
+    /* Every distinct folder its COPY lines for this system name; past
+     * eight, the set's STAGE.TXT, which lists them all. */
+    for (k = 0; k < o->StageCount && !over; k++) {
+        char id[INST_PKG_ID_CHARS];
+        char rel[INST_OTHER_REL_CHARS];
+        char one[INST_PATH_CHARS];
+        if (o->Stage[k].Stage || !(o->Stage[k].Systems & bit)) {
+            continue;
+        }
+        inst_other_pkg_of(o->Stage[k].Inf, id, sizeof(id));
+        if (!inst_eq(id, p->Id)) {
+            continue;
+        }
+        inst_copy(rel, o->Stage[k].Inf, sizeof(rel));
+        if (strrchr(rel, '/') != NULL) {
+            *strrchr(rel, '/') = '\0';
+        }
+        other_path(one, sizeof(one), inst_other_folder(set), rel);
+        for (j = 0; j < n && !inst_eq(folders[j], one); j++) {
+        }
+        if (j == n && n == 8) {
+            over = 1;
+        } else if (j == n) {
+            inst_copy(folders[n++], one, INST_PATH_CHARS);
+        }
+    }
+    for (j = 0; j < n; j++) {
+        ptr[j] = folders[j];
+    }
+    if (over) {
+        _snprintf(more, sizeof(more) - 1, "and more: see %s\\STAGE.TXT",
+                  inst_other_folder(set));
+        more[sizeof(more) - 1] = '\0';
+        ptr[n++] = more;
+    }
+    inst_other_copy_only_line(out, cap, p->Desc, ptr, n);
+    return 1;
+}
+
+void inst_eng_other_rest(int set, const char *dir, char *out, size_t cap)
+{
+    int earlier;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (envNow.Nt || set < 0 || set >= INST_SET_COUNT || !othRead ||
+        oth[set].State != INST_OTHER_CARRIED) {
+        return;
+    }
+    earlier = other_earlier_text(set)[0] != '\0';
+    inst_other_rest_text(out, cap, set, dir != NULL && dir[0] != '\0' ? dir :
+                         toolDir, oth[set].Include,
+                         oth[set].Include && other_9x_replacing(set), earlier);
+}
+
 const char *inst_eng_other_earlier(int set)
 {
     if (set < 0 || set >= INST_SET_COUNT || !othRead) {
         return "";
     }
-    return oth[set].Earlier;
+    return other_earlier_text(set);
 }
 
 void inst_eng_other_choose(int set, int include, int stage)
@@ -31244,6 +31571,9 @@ int inst_eng_ask(void)
     ask_values();
     s98_ask_values();
     if (!choose_dir()) {
+        return INST_EXIT_REFUSED;
+    }
+    if (!other_9x_after_dir()) {
         return INST_EXIT_REFUSED;
     }
     s98_ask_unused();

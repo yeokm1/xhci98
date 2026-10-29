@@ -341,6 +341,11 @@ const char *inst_eng_other_earlier(int set);
 /* The package's scope on this system in words, for its details. */
 void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
                               size_t cap);
+/* Record 26 section 6.7.13 (task 45.8), 98 SE and ME: 1 with the line when
+ * the i-th package of a set has only COPY lines for this system (no box);
+ * and the sentence for the rest of the set's packages ("" on NT). */
+int inst_eng_other_copy_only(int set, int i, char *out, size_t cap);
+void inst_eng_other_rest(int set, const char *dir, char *out, size_t cap);
 /* The free set's certificate (section 6.7.11): ticked, and *offered the
  * box shown; and its choice. */
 int inst_eng_other_trust(int *offered);
