@@ -2045,6 +2045,18 @@ typedef struct _HCD_CONTROLLER {
     LONG ShutFlushAcked;
     ULONG ShutFlushSink;
     KEVENT ShutFlushDone;
+
+    /* Record 17 section 4.13.6 (task 45.35): xhcicm.sys's isolation
+     * statement for a controller behind a USB4 tunnel, taken at the start
+     * before the thread runs and released after the thread is joined
+     * (hcdIsoAcquire, HcdCtlIsoRelease); the thread's alone in between.
+     * IsoIsolated NULL when none is held. */
+    PVOID IsoContext;
+    PINTERFACE_DEREFERENCE IsoDeref;
+    ULONG (*IsoIsolated)(PVOID Context);
+    ULONG IsoHeldStarts;    /* starts that took the interface              */
+    ULONG IsoAsks;          /* the statement asked (hcdContainProof)       */
+    ULONG IsoProofs;        /* ... and it was the proof                    */
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -2167,6 +2179,10 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc);
 VOID HcdThreadWake(PHCD_CONTROLLER hc);
 VOID HcdControllerFail(PHCD_CONTROLLER hc);
 ULONG HcdCtlProveDmaStopped(PXHCI_EXTENSION ext);
+/* Record 17 section 4.13.6: the isolation statement's interface released,
+ * idempotently, once the controller thread is joined (or never ran).
+ * IRQL: PASSIVE_LEVEL. */
+VOID HcdCtlIsoRelease(PHCD_CONTROLLER hc);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);

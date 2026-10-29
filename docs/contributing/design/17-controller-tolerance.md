@@ -2064,6 +2064,139 @@ yes, three things are open and must be settled first:
 - every path that could set the bit again before HCRST;
 - the readings and legs above.
 
+#### 4.13.6 Reopened for one case: a tunnel the USB4 connection manager closed (task 45.35)
+
+**Why.** Task 45.12 placed a hot-plugged dock whole on XP and 2000, so
+the dock's own xHCI starts there for the first time. A surprise unplug of
+that dock with a USB tablet on its xHCI then stalls Windows' removal of
+the whole dock (`runs/run-45.md`, "45.35"). The controller's window reads
+all ones, a command times out, the recovery is refused, and the unproven
+invalidation pins the buffer and keeps every transfer. The tablet's
+interrupt-IN read is never completed, and no `SURPRISE_REMOVAL` reaches
+this driver's PDOs. With a USB disk in the tablet's place nothing is
+pending, and the removal runs to the controller's stop. This is the case
+section 4.13.5 calls the likeliest pin of all.
+
+**The owner's decision (2026-10-29).** For this case alone, a tunnel path
+that the USB4 software connection manager has closed **and read back
+closed** proves that no function behind that tunnel port can reach host
+memory. The read-back is record 22 section 7.3 step 1:
+- the host PCIe Down adapter's Path Enable 0;
+- both host-side path entries' Valid 0;
+- Pending Packets 0 on both;
+- the adapter's LTSSM in Detect.
+
+That is the core's `TBT_U4_LINKDOWN.PathClosed`. An ingress adapter drops
+every packet of a path once its Valid is 0 and dequeues what it held, so
+nothing from below crosses the host router after it. Writes it forwarded
+before that left it before the read-back completed. The proof is
+**asked** only by a containment or an unproven invalidation, which come
+seconds later (a command's timeout, then the containment's interval).
+
+**What it is not.** It is not a removal notice, not configuration space
+reading all ones, and not a reading of this driver's own. It does not
+apply to:
+- the firmware connection manager's client (the ICM profile, record 21),
+  which reads nothing back;
+- 98 SE and ME;
+- a controller that is not behind a tunnel port of a domain that this
+  release's connection manager runs.
+
+There the limitation of section 4.13 stands as the release notes state
+it.
+
+**Where it acts.** In `hcdContainProve` (`hcd_ctl.c`), the proof that
+both the all-ones containment (section 4.6) and an invalidation no halt
+or HCRST proved (`HcdCtlProveDmaStopped`, `HcdEnumService`) take:
+- When configuration space answers, the proof is today's: Bus Master
+  Enable read back clear.
+- When it does not, or the bit will not clear, the tunnel's statement is
+  asked. A yes is the proof, logged `tol.proof.tunnel`. The dump's
+  tolerance block counts the starts that took the interface, the asks and
+  the proofs (`tol.iso.held`, `tol.iso.asked`, `tol.iso.proofs`).
+
+So a proven containment takes the proven branch (`HcdEnumContain(hc, 1)`:
+every device drained and dropped, every transfer completed). Section
+4.13.4's points do not arise:
+- nothing is released after a pin;
+- the original requests complete as the proven branch already completes
+  them;
+- the proof is taken at the containment, on a live start generation,
+  before any teardown.
+
+**After the proof.** The proven branch drops every device as a port
+disconnect drops it: `hcdDropAll` drains each device's rings with
+`HCD_USBD_DEVICE_GONE`, and each request is then held on its PDO
+(`HcdIoPark`). The request is completed `CANCELED` at the client's cancel
+or abort, or at the PDO's own stop or removal (`HcdIoParkedRelease`). A
+request the client has already cancelled is not held: `HcdIoPark`
+declines it and `HcdIoDeferred` completes it, so it does not wait either. That is the path every ordinary USB unplug takes, the
+dock's HID tablet on a port included.
+
+What the stall lacked was only this step. The tablet's read stayed on a
+ring whose stop could not be commanded, so the cancel its class driver
+issued at the removal never completed. Once dropped, that cancel completes
+it. A new request after the proof reaches no ring:
+- on the containment's branch it is held (`HcdIoHoldUnreadable`, the
+  controller latched `Unreadable`);
+- on the invalidation's branch (`hcdInvalidate`) the controller stays
+  failed with its devices dropped, so a request names no device and is
+  refused at the next tick.
+
+**The residual, stated as such.** The connection manager closes the path
+only when its own poll finds the router gone, in order: the teardown's
+requests, the read-back, then `cmU4LinkDown`. Nothing ties that to this
+driver's thread. In every leg read, the closure came before this driver's
+first command timeout, but that is the common case, not a guarantee; the
+unproven-invalidation route does not wait for the containment's interval.
+
+A proof asked before the statement exists is refused, and the pin it
+then decides is permanent, as today. No pin is released later. The
+release notes' limitation covers this order. The emulator cannot delay
+the closure, so no leg reads it.
+
+**The channel** (record 22 section 10.5): an interface that `xhcicm`'s
+child filter answers on this controller's own PDO. The filter is attached
+there by the kernel chain (record 31 section 4.3), below this driver's
+FDO.
+- **Request.** `IRP_MN_QUERY_INTERFACE` with `GUID_XHCI_CM_ISOLATION`,
+  version 1, size `XHCI_CM_ISO_INTERFACE`. It is sent at the controller's
+  start, after the lower stack has completed `START_DEVICE`, to the object
+  `IoAttachDeviceToDeviceStack` returned, never to the PDO directly. It is
+  sent on NT only (`IoIsWdmVersionAvailable(1, 0x10)`). A refusal leaves
+  the proof as before.
+- **Order.** The interface is taken in `hcdStart` before the controller
+  thread starts, and it is released and its pointer cleared in
+  `hcdStopBody`, after `hcdThreadStop` has joined the thread.
+  `hcdContainProve` runs only on that thread, so no call can overlap the
+  release. `STOP_DEVICE` and `SURPRISE_REMOVAL` reach `hcdStopBody`
+  through `HcdStopController` before the IRP is passed down, and a start
+  that fails after starting the thread reaches it directly. A start that
+  fails before that point releases it on its own failure path before
+  completing the IRP. `hcdRemove` releases it as well, whatever the start
+  reached. The release is idempotent (the pointer cleared under the
+  thread's absence), so a retried start never overwrites a held one. The
+  interface is asked again at the next start.
+- **Use.** `Isolated(Context)` is called at `PASSIVE_LEVEL` from
+  `hcdContainProve` alone.
+- **No new import.** `IoAllocateIrp`, `IoCallDriver` and `IoFreeIrp` are
+  already imported. The callback object Stor98 uses is not taken, because
+  Windows 98's NTKERN has no `ExCreateCallback` and this binary loads
+  there.
+
+**Verification.** Host vectors for both halves:
+- `XhciTolProof` in `xhci_tol.c`, in `test_tol.c`: the proof's
+  inputs to its verdict;
+- `CmIsoDecide` in `cm_iso.c`, in `test_cm_iso.c`: the statement's
+  conditions.
+
+Legs on XP and 2000 (the dock, hot-plugged):
+- the tablet on its xHCI: unplug, then replug, then shutdown;
+- the same with a USB disk;
+- the controller's own report reading `RELEASED` with the tunnel proof;
+- the ASM4242's own xHCI, which is not behind a tunnel port, never
+  answered.
+
 ### 4.14 Controllers below xHCI 1.0: version 0.96 accepted (38.11, revision 14)
 
 Roadmap-hcd task 38.11 (owner, 2026-10-13). Written before code, and

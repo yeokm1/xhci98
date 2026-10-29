@@ -1502,3 +1502,119 @@ this branch: a fix, a `nocopy` job flag with which the helper sets
 `DI_NOFILECOPY` for a later controller of an INF a controller's job of
 the same run installed, is drafted, not committed, for a task of its
 own. **Reproduced; open.**
+
+## 45.35 a dock's xHCI lost with its tunnel stalled Windows' removal on 2000 and XP: the reading, the owner's decision, the code (2026-10-29 to 2026-10-30)
+
+**The reading.** On an XP leg taken from 45.12's R5a disk, the qemu
+flavour of `xhci98.sys` (port `0xE9` log) was put in place and the dock
+was unplugged twice: once with its USB tablet on the dock's xHCI, once
+with a USB disk there. Evidence is in `E:\xhci98-vm\p45\w45-dock\xp\`:
+`debugcon-r7h-tablet.log`, `r7h-unplug.txt` and `r7h-disk-unplug.txt`,
+and `xp2\report-r7b.txt` (the gated release's XHCITR report in the stalled
+state).
+
+| Case | What the logs show |
+|---|---|
+| The tablet | After `cm.reenum.departure` the dock's xHCI read all ones (CRCR, USBSTS). A command timed out, the reset was requested, the recovery was refused (`ctrl.recover.refused=4`) and the unproven invalidation pinned (`slots.unproven.pinned`). XHCITR's report: "containment PINNED: no proof DMA stopped; buffer, transfers kept". No `SURPRISE_REMOVAL` reached any of `xhci98.sys`'s objects: the tablet's interrupt-IN read stayed on a ring whose stop could not be commanded, and the removal waited on it |
+| The USB disk | `SURPRISE_REMOVAL` reached the device PDO, the root hub and the controller in turn. The controller's stop found the function off the bus ("quiesce: device is off the bus - it masters nothing") and released everything |
+
+So the stall was record 17 section 4.13's case, "a tunnelled controller
+lost with its tunnel": the fail-closed rule keeps the transfers of a
+controller whose DMA cannot be proven stopped. It was not seen before
+because, until 45.12 placed the dock whole, the dock's xHCI port stayed
+at problem 12 on XP.
+
+**The owner's decision (2026-10-29): both.**
+- A release-notes limitation for 3.4.0.0. On 2000 and XP, stop a dock
+  first (Safely Remove Hardware, or XHCITR /eject) before unplugging it
+  with a keyboard, mouse or other interrupt device on its own xHCI. This
+  stays for Thunderbolt 3 hosts under the firmware connection manager,
+  and for 98 SE and ME.
+- For this release's own connection manager: a tunnel path that it has
+  closed and read back closed is proof that no function behind that
+  tunnel port can reach host memory. Record 17 section 4.13.6 and record
+  22 section 10.5 set this out. Both were reviewed and revised before any
+  code.
+
+**The code (`8b246287`).**
+- The core keeps one word per USB4 port, `TBT_U4CM.IsoWord[]`.
+  - It is set when step 1 of the teardown read back closed.
+  - It is withdrawn at the top of `tbtU4PcieTunnel`, the only writer that
+    sets a PCIe Path Enable, and for every port by `TbtU4Start`, `Resume`,
+    `Recover`, `Stop` and `Contain`.
+  - `TbtU4PortIsolated` reads it; `TbtU4PortPcieGen` gives the generation
+    of a tunnel that is up.
+- `xhcicm`'s kernel-attached child filter on the controller's PDO answers
+  `IRP_MN_QUERY_INTERFACE` for `GUID_XHCI_CM_ISOLATION`, on NT 5.x.
+  - The binding (`CmRegIsoBind`) records the domain by its NHI object and
+    `Reenum.Starts`, the member, the USB4 port by correspondence, and the
+    tunnel's generation.
+  - `Isolated()` (`CmRegIsoAsk`, pure decision `CmIsoDecide`) answers yes
+    only while all of these hold: the domain is unchanged, it runs this
+    connection manager and is live; the port still corresponds to the
+    member; the port's word carries the bound generation.
+  - It is counted as `cm.iso.asked`, then `cm.iso.yes` or `cm.iso.no`.
+- `xhci98.sys` takes the interface at its start, before its thread runs,
+  and releases it after the thread is joined (and at its removal).
+  - `hcdContainProve` asks the interface only where Bus Master Enable
+    gives no proof (`XhciTolProof`). It logs `tol.proof.tunnel`.
+  - A containment proven this way is recorded `XHCI_TOL_CONTAIN_TUNNEL`,
+    which XHCITR shows as "RELEASED: the USB4 tunnel's path read back
+    closed".
+- No new import in either driver.
+
+Host suites:
+- `test_u4cm`, 1384 checks: the word set on a closure read back, never
+  without the read-back, withdrawn at a replug and at a stop.
+- `test_cm_iso`, 1037 checks: every condition refused alone, and all 1024
+  patterns.
+- `test_tol`, 3420 checks: the proof's verdict.
+
+**A correction found by the legs (`96d01e1f`).** On 2000 the gated
+release of `8b246287` bound nothing. The member's USB4-port
+correspondence was learned (`u4.learn`) only after the dock's xHCI had
+started and asked for the interface, so no port could be named, and the
+tablet's unplug stalled as before. The qemu flavour, slower to the xHCI's
+start, had bound.
+
+Now the binding records every USB4 port whose PCIe tunnel is up at the
+controller's start, with its generation. The port that feeds the member
+is named at each ask, by the correspondence then, and the proof holds
+only for the generation that port carried at the start. Record 22
+section 10.5 was revised to match, and reviewed.
+
+**The legs.** Runtime, development host A, 2026-10-29 23:53 to
+2026-10-30 02:40; at most three virtual processors. The emulator and the
+layout are 45.12's.
+- **Test build:** the qemu flavours of both drivers on child overlays of
+  the R5a disks (XP leg `r7i`, 2000 leg `r7j`).
+- **Release:** the gated release binaries of `8b246287` swapped into the
+  45.12 release installs (`xp2`, `w2k2`). On 2000, the release
+  `xhcicm.sys` of `96d01e1f` was swapped in on top.
+- **2000:** the swap is followed by a shutdown and a cold start. A warm
+  restart hung on a black screen there.
+
+| Leg | System | Result |
+|---|---|---|
+| The tablet, unplugged, replugged, unplugged again (test build) | XP | `SURPRISE_REMOVAL` reached the device PDO, root hub and controller; `cm.iso` yes for generation 1. The replug was enumerated and placed, with the tablet and the HID device back and the binding taken again for generation 2. The second unplug: yes for generation 2. The shutdown completed |
+| The tablet unplugged, then a replug with the USB disk and its unplug (test build) | 2000 | The tablet's unplug: removed, `cm.iso` yes. A replug with the USB disk was enumerated, its unplug removed, and the shutdown reached "It is now safe to turn off your computer" |
+| The tablet twice, then the USB disk (gated release of `8b246287`) | XP | `cm.iso.asked` 2, `cm.iso.yes` 2 (generations 1 and 2). Every replug placed (the dock's functions, the tablet), the disk's cycle removed, the shutdown completed |
+| The same | 2000 | **Bound nothing** (the correspondence came after the start, see above). The first unplug stalled as before 45.35: no re-enumeration after the next plug |
+| The tablet twice, then the USB disk (`96d01e1f`'s release `xhcicm.sys`) | 2000 | `cm.iso.bind` with the port mask, `cm.iso.asked` 2, `cm.iso.yes` 2 (generations 1 and 2), the replug enumerated (16 chain attachments, two plugs), the disk's cycle removed, the shutdown reached "safe to turn off" |
+| The tablet, unplugged, replugged, unplugged again (`96d01e1f`'s release `xhcicm.sys`) | XP | `cm.iso.asked` 2, `cm.iso.yes` 2 (generations 1 and 2), the replug placed with the tablet back, the shutdown completed |
+
+**Release-notes limitation (owner's decision, for 45.final).** On
+Windows 2000 and XP, stop a dock first (Safely Remove Hardware, or
+`XHCITR /eject`) before unplugging it with a keyboard, mouse or other
+interrupt device on the dock's own USB controller.
+- **When the limitation applies:** Thunderbolt 3 hosts under the firmware
+  connection manager, 98 SE and ME, and the residual order of record 17
+  section 4.13.6.
+- **What happens otherwise:** Windows may never finish removing the dock.
+  It is not found again when plugged back, and Windows does not shut
+  down.
+
+On a USB4 host that this release's connection manager runs, the legs
+above removed the dock cleanly, the closure having been recorded before
+the proof was asked; the reverse order keeps the pin (record 17 section
+4.13.6).

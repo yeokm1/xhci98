@@ -366,6 +366,9 @@ rem   test_cm_breq - the requirement lists of a hot-added bridge on 2000 and
 rem                  XP (src\cm\cm_breq.c, task 45.12, design record 33):
 rem                  the templates, the rules, the writer, the diagnostic;
 rem                  also built for amd64 (below)
+rem   test_cm_iso  - the isolation statement's decision (src\cm\cm_iso.c,
+rem                  task 45.35, design record 22 section 10.5): the one
+rem                  yes and every condition's refusal in order
 rem   test_ej9x    - the tools' half of the 9x eject asked of xhcicm.sys
 rem                  (xhciinst\inst_ej9x.c, task 43.18) over the install
 rem                  tool's pure half
@@ -693,6 +696,10 @@ rem worked examples byte for byte, the rules' edges, the arithmetic bounds,
 rem the diagnostic and a seeded sweep of the invariants; built for amd64
 rem too (below), whose descriptor layout cm_filt.c asserts the same.
 call :run test_cm_breq "test_cm_breq.c ..\src\cm\cm_breq.c"
+rem test_cm_iso links the isolation statement's decision (src\cm\cm_iso.c,
+rem task 45.35, design record 22 section 10.5): the one yes, each
+rem condition refused alone, and all 1024 patterns' first failing one.
+call :run test_cm_iso "test_cm_iso.c ..\src\cm\cm_iso.c"
 rem test_cm_marks links the marks answer's table (task 42-A.5, design
 rem record 21 section 7.4 revision 3) and the re-enumeration's pure half
 rem for the Removable answer's gate (design record 31 section 4.1).

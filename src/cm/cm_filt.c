@@ -60,6 +60,8 @@
 
 #include "cm.h"
 #include "cm_ports.h"
+#include "cm_iso.h"
+#include "../xhci_cmiso.h"
 
 NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
@@ -752,6 +754,79 @@ static ULONG cmChildStartIrq(PCM_FILTER child, PIRP irp, NTSTATUS *status)
     return CM_IRQ_ACT_STRIP;
 }
 
+/* ---- the isolation statement (design record 22 section 10.5) ---- */
+
+static const GUID cmIsoGuid = XHCI_CM_ISO_GUID_INIT;
+
+static BOOLEAN cmIsoIsGuid(const GUID *g)
+{
+    ULONG i;
+
+    if (g == NULL || g->Data1 != cmIsoGuid.Data1 ||
+        g->Data2 != cmIsoGuid.Data2 || g->Data3 != cmIsoGuid.Data3) {
+        return FALSE;
+    }
+    for (i = 0; i < 8; i++) {
+        if (g->Data4[i] != cmIsoGuid.Data4[i]) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* The interface's references: counted on the filter. xhci98.sys drops its
+ * last before its own REMOVE goes down to this filter (record 17 section
+ * 4.13.6), so the device object outlives every call. IRQL: any. */
+static VOID cmIsoRef(PVOID context)
+{
+    (VOID)InterlockedIncrement(&((PCM_FILTER)context)->IsoRefs);
+}
+
+static VOID cmIsoDeref(PVOID context)
+{
+    if (InterlockedDecrement(&((PCM_FILTER)context)->IsoRefs) == 0) {
+        CmRegIsoUnbind((PCM_FILTER)context);
+    }
+}
+
+/* 1 when the bound tunnel's path stands read back closed (CmRegIsoAsk,
+ * cm_iso.h CM_ISO_YES). PASSIVE_LEVEL. */
+static ULONG cmIsoIsolated(PVOID context)
+{
+    return CmRegIsoAsk((PCM_FILTER)context) == CM_ISO_YES ? 1UL : 0UL;
+}
+
+/*
+ * IRP_MN_QUERY_INTERFACE for GUID_XHCI_CM_ISOLATION on a child (task
+ * 45.35): answered when the version and size fit and the binding can be
+ * taken (CmRegIsoBind), with the one reference the caller then owns;
+ * otherwise passed down as it came. NT 5.x alone (CmBreqGate).
+ * PASSIVE_LEVEL.
+ */
+static NTSTATUS cmIsoQuery(PCM_FILTER filter, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PXHCI_CM_ISO_INTERFACE out;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    out = (PXHCI_CM_ISO_INTERFACE)stack->Parameters.QueryInterface.Interface;
+    if (out == NULL ||
+        stack->Parameters.QueryInterface.Version != XHCI_CM_ISO_VERSION ||
+        stack->Parameters.QueryInterface.Size < sizeof(XHCI_CM_ISO_INTERFACE) ||
+        !CmRegIsoBind(filter)) {
+        IoSkipCurrentIrpStackLocation(irp);
+        return IoCallDriver(filter->Common.Lower, irp);
+    }
+    out->Header.Size = (USHORT)sizeof(XHCI_CM_ISO_INTERFACE);
+    out->Header.Version = XHCI_CM_ISO_VERSION;
+    out->Header.Context = (PVOID)filter;
+    out->Header.InterfaceReference = cmIsoRef;
+    out->Header.InterfaceDereference = cmIsoDeref;
+    out->Isolated = cmIsoIsolated;
+    cmIsoRef(filter);
+    return CmCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
+}
+
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -869,6 +944,13 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         }
         break;
 
+    case IRP_MN_QUERY_INTERFACE:
+        if (child && CmBreqGate != 0 &&
+            cmIsoIsGuid(stack->Parameters.QueryInterface.InterfaceType)) {
+            return cmIsoQuery(filter, irp);
+        }
+        break;
+
     case IRP_MN_QUERY_REMOVE_DEVICE:
         filter->QueryRemoved = 1;
         CmRegAttEvent(filter, CM_MK_QUERY_REMOVE);
@@ -890,6 +972,9 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         started = (BOOLEAN)(filter->Started != 0);
         filter->Started = 0;
         filter->SurpriseRemoved = 1;
+        if (child) {
+            CmRegIsoGone(filter);
+        }
         CmRegAttSurprise(filter, started);
         if (!child) {
             CmRegWithdraw(filter);
@@ -908,6 +993,7 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         filter->Removing = 1;
         KeReleaseSpinLock(&filter->Lock, irql);
         if (child) {
+            CmRegIsoGone(filter);
             /* The child waits for the removal to finish below, detaches,
              * and only then records the departure (CmRegAttRemoved), so it
              * is recorded once this function's stack is gone. */
