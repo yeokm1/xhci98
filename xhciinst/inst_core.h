@@ -1509,6 +1509,14 @@ int inst_di_cmdline(char *out, size_t cap, const char *version,
 int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet);
+/* The same with nocopy, the FLAGS word that has the helper set
+ * DI_NOFILECOPY: a later controller of an INF whose files a controller's
+ * job of the same run copied (record 27 sections 4.1 and 6, task 45.38):
+ * setupx, one instance for every process, then asks for "xhci98 xHCI
+ * Host Controller Disk" at the Windows source for the second copy. */
+int inst_di_jobfile_ex(char *out, size_t cap, int job, const char *result,
+                       unsigned long hwnd, const char *devId, const char *inf,
+                       int force, int quiet, int nocopy);
 
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another

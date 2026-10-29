@@ -44,6 +44,7 @@
 
 #define DI_FLAG_FORCE       0x0001
 #define DI_FLAG_QUIET       0x0002
+#define DI_FLAG_NOCOPY      0x0004  /* DI_NOFILECOPY (record 27 4.1) */
 
 /*
  * What di_parse found, in the order it looks: the command line and the job

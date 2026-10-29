@@ -5411,6 +5411,14 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet)
 {
+    return inst_di_jobfile_ex(out, cap, job, result, hwnd, devId, inf, force,
+                              quiet, 0);
+}
+
+int inst_di_jobfile_ex(char *out, size_t cap, int job, const char *result,
+                       unsigned long hwnd, const char *devId, const char *inf,
+                       int force, int quiet, int nocopy)
+{
     char t[INST_DI_JOB_BYTES + 64];
     size_t n;
 
@@ -5448,13 +5456,16 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
         inst_cat(t, sizeof(t), "INF ");
         inst_cat(t, sizeof(t), inf);
         inst_cat(t, sizeof(t), "\r\n");
-        if (force || quiet) {
+        if (force || quiet || nocopy) {
             inst_cat(t, sizeof(t), "FLAGS");
             if (force) {
                 inst_cat(t, sizeof(t), " force");
             }
             if (quiet) {
                 inst_cat(t, sizeof(t), " quiet");
+            }
+            if (nocopy) {
+                inst_cat(t, sizeof(t), " nocopy");
             }
             inst_cat(t, sizeof(t), "\r\n");
         }
