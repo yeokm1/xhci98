@@ -20985,11 +20985,6 @@ static int pfwsys_run(int mode)
              "XHCIPFW.SYS: on again at the next start");
         return 1;
     }
-    /* An install or update on 8 and 8.1: the entries out before the
-     * image or the service changes (record 32 section 11.5.2). */
-    if (!pfw_entries_out()) {
-        return 0;
-    }
     /* What earlier runs left of their own (an old image, a copy cut short,
      * an image an uninstall cut short left) goes first, so that no hash
      * the record holds is replaced while its file is still there. The
@@ -21002,12 +20997,32 @@ static int pfwsys_run(int mode)
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its image unreadable");
             return 0;
         }
+        if (c == PFW_F_OTHER) {
+            /* Another installation's bytes under the service's image
+             * path: its service and its root bus entries are left as they
+             * are (record 32 sections 11.2 and 11.5.2). */
+            out("The service's image %s is not this installer's file: "
+                "the service " INST_PFWSYS_SERVICE " is left as it is.\n",
+                cur);
+            steps_add_id(INST_PFWSYS_FILE, "a service named xhcipfw whose "
+                         "image is not this installer's is left as it is");
+            flagSteps = 1;
+            step(INST_STEP_LEFT, "XHCIPFW.SYS: left, another installation's "
+                 "image");
+            return 0;
+        }
         if (c == PFW_F_OURS && !inst_eq(hex, r.File) &&
             !vsd_rec_set(&pfwDesc, "File", hex)) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its record not written");
             return 0;
         }
+    }
+    /* An install or update on 8 and 8.1: the entries out before the
+     * image or the service changes, once the image is known to be this
+     * installer's or absent (record 32 section 11.5.2). */
+    if (!pfw_entries_out()) {
+        return 0;
     }
     /* A service key this installer's creation left without an image path
      * goes before the record that makes it its own. */
