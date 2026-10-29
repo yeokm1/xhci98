@@ -6706,21 +6706,6 @@ static void test_pfw_inst(void)
               INST_VSD_UNINSTALL,
           "8 and 8.1: as on Vista and 7");
 
-    /* The 3.3.0.0 place on 8 and 8.1 never kept (record 32 section
-     * 11.5.2). */
-    CHECK(inst_pfw_mode_legacy(INST_VSD_INACTIVE, INST_PFW_SYS_FILTER, 1) ==
-              INST_VSD_DESELECTED,
-          "8, 8.1: an entry-role install the run would leave: removed");
-    CHECK(inst_pfw_mode_legacy(INST_VSD_INACTIVE, INST_PFW_SYS_FILTER, 0) ==
-              INST_VSD_INACTIVE,
-          "8, 8.1: a filter-role install, the support left out: kept");
-    CHECK(inst_pfw_mode_legacy(INST_VSD_SELECTED, INST_PFW_SYS_FILTER, 1) ==
-              INST_VSD_SELECTED,
-          "8, 8.1: selected: converted by the install");
-    CHECK(inst_pfw_mode_legacy(INST_VSD_INACTIVE, INST_PFW_SYS_SEEN, 1) ==
-              INST_VSD_INACTIVE,
-          "7: the entry role is 7's own: kept");
-
     /* The root bus devnodes (record 32 section 11.5.2). */
     {
         static const char hw[] = "ACPI\\VEN_PNP&DEV_0A08\0ACPI\\PNP0A08\0*PNP0A08\0";

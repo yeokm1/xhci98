@@ -1138,51 +1138,59 @@ every PCI root bus devnode** (hardware or compatible id `*PNP0A03` or
 for 6.2 and 6.3 x86; 10 keeps `INST_PFW_SYS_GONE`; the box, its default
 and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
 
-- **Install**: section 11.2's image, its two names and its record, the
-  service with `Group` `PnP Filter` (in place of `System Reserved`),
-  `Start` 0; then, **last**, `xhcipfw` appended to the `UpperFilters`
-  of every present devnode whose `HardwareID` or `CompatibleIDs` holds
-  `*PNP0A03` or `*PNP0A08`, through `SetupDiSetDeviceRegistryProperty`
-  (`SPDRP_UPPERFILTERS`), the other filters kept in their order, a
-  devnode already naming it left as it is. No record of the devnodes is
-  kept: every change below takes the entry out of every root bus devnode
-  that names it.
+- **A name of its own.** The filter role is installed under a service,
+  two image names and a record of its own: the service `xhcipff`, the
+  images `xhcipff.sys` and `xhcipff2.sys` (the package's `XHCIPFW.SYS`
+  copied under them), the record `HKLM\Software\xhci98\XhciPfwFilter`.
+  `3.3.0.0`'s installer on 8 and 8.1 takes its kind as "not offered" and
+  removes a service `xhcipfw` whose image its record holds, without
+  touching any root bus's filters; under the entry role's names a filter
+  installation would then be left named by every root bus with its
+  image gone, and the next start would stop. Under names it does not
+  know, that installer (or its uninstall) leaves the filter role alone.
+- **Install**: section 11.2's image placement, ownership rules and
+  record, under the filter role's names; the service with `Group` `PnP
+  Filter` and `Start` 0; then, **last**, `xhcipff` appended to the
+  `UpperFilters` of every present devnode whose `HardwareID` or
+  `CompatibleIDs` holds `*PNP0A03` or `*PNP0A08`, through
+  `SetupDiSetDeviceRegistryProperty` (`SPDRP_UPPERFILTERS`), the other
+  filters kept in their order, a devnode already naming it left as it
+  is. No record of the devnodes is kept.
 - **The hazard, and the order of every change**: a root bus whose stack
   names a filter that is not loaded does not start, and with it no disk:
   Windows stops with `INACCESSIBLE_BOOT_DEVICE` (10's readings, section
-  11.5.1, show it). So on this kind, while any devnode names `xhcipfw`,
-  the service is never set to `Start` 4 and its `ImagePath` never names
-  an image not written and compared:
-  - **an update** takes `xhcipfw` out of **every** devnode with a root
-    bus id that names it, present or not (`DIGCF_ALLCLASSES` without
-    `DIGCF_PRESENT`), recorded or not, **first** - an entry naming the
-    service this installer owns refers to this installer's image, so no
-    such entry is another installation's - then runs section 11.2's
-    update of the image and the service (whose `Start` 4 is then
-    harmless), then puts the entries back last as an install does;
+  11.5.1, show it). So while any devnode may name `xhcipff`, its service
+  is never set to `Start` 4 and its `ImagePath` never names an image not
+  written and compared:
+  - **an update** keeps the entries and the service on: the new image is
+    written under the other of the two names and compared, the record's
+    `Slot` and `Pending` set before its bytes as section 11.2 does, and
+    only then the service's values are written, `Start` 0 throughout and
+    `ImagePath` moved to the new image last; the earlier image is
+    deleted (at the next start, being in use). A run cut short at any
+    point leaves the service on the old image or the new, both loadable,
+    and every entry in, so the windows stay closed at the next start;
   - **a removal** (the uninstall, the box unticked, the Thunderbolt
-    support removed) takes those entries out **first**, then section
-    11.2's removal (`Start` 4, the service key, the files, the record).
-  If any entry cannot be taken out, the service and the image are not
-  touched (left at `Start` 0 and loadable) and the run stops with a step
-  said. A run cut short therefore leaves either no entry (the service at
-  most a boot driver that does nothing in the filter role) or every
-  entry with a loadable image and `Start` 0. Where the service is not
-  this installer's (section 11.2's ownership), nothing of it and no entry
-  is touched; a record that cannot be read stops the run with a step
-  said, as section 11.3's removal does.
-- **The installation it replaces**: on 8 and 8.1 `3.3.0.0`'s installer
-  removed an `XHCIPFW.SYS` an earlier test install had placed (section
-  11.3). An entry-role service of this installer's found on 8 or 8.1
-  (group `System Reserved`, no entry on any root bus) is either converted
-  by this run's install of the filter role or, where this run does not
-  install it (the box unticked, the Thunderbolt support left out, the
-  package without the file), removed as `3.3.0.0` removed it; it is never
-  kept, since its start is not ordered there (`inst_pfw_mode` takes a
-  "legacy role found" input for this).
+    support removed) takes `xhcipff` out of **every** devnode with a root
+    bus id that names it, present or not (`DIGCF_ALLCLASSES` without
+    `DIGCF_PRESENT`), **first**, once the service's image is known to be
+    this installer's; then section 11.2's removal (`Start` 4, the service
+    key, the files, the record). An id list or the device list that
+    cannot be read, or an entry that cannot be taken out, stops it before
+    the service is touched (left at `Start` 0 and loadable), a step said.
+  Where the service or its image is not this installer's (section 11.2's
+  ownership), nothing of it and no entry is touched; a record that
+  cannot be read stops the run with a step said, as section 11.3's
+  removal does.
+- **The installation it replaces**: an entry-role install of this
+  installer's on 8 or 8.1 (service `xhcipfw`, its record `XhciPfw`, left
+  by an earlier test install of `3.3.0.0`, unordered there) is removed by
+  its own names and record in a pass of its own, whatever the boxes,
+  before the filter role's run; it never had a root bus entry, and any
+  entry naming `xhcipfw` is taken out first all the same.
 - **10** (`INST_PFW_SYS_GONE`): as section 11.3, and the removal also
   takes out first every root bus entry naming `xhcipfw`, present or not,
-  as on 8 and 8.1, an entry left stopping the removal.
+  an entry left stopping the removal.
 - **Safe Mode** does not avoid a broken filter: the devnode names it in
   every mode. The installer's readme gives the recovery in its
   troubleshooting part: if 8 or 8.1 stops at start with
@@ -1190,9 +1198,9 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
   environment, open the registry editor, load the system's `SYSTEM` hive
   (`Windows\System32\config\SYSTEM`), read `Select\Default` in it for
   the control set the next start uses (`ControlSet00n`), search that
-  set's `Enum` key for `xhcipfw` (Find, values and data), and remove the
-  line `xhcipfw` from every `UpperFilters` that has it, keeping any other
-  line; do not set the `xhcipfw` service to disabled while an entry is
+  set's `Enum` key for `xhcipff` (Find, values and data), and remove the
+  line `xhcipff` from every `UpperFilters` that has it, keeping any other
+  line; do not set the `xhcipff` service to disabled while an entry is
   there, which stops the start the same way.
 - **Fast startup** on 8 and 8.1 resumes the kernel without a root bus
   start, as section 11.2 already says for the boot driver: the step does
@@ -1210,8 +1218,8 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
   x86, from the package: the install (the box, the service's group, the
   entry on `ACPI\PNP0A08\0`, the record), three cold starts each (the
   trace order: the step's close before the PCI driver's probe; no "late"
-  bit; the bridges at problem 0), the update over itself (the entries out
-  and back, the image's slot moved), the uninstall (entries first, then
+  bit; the bridges at problem 0), the update over itself (the entries kept,
+  the image's slot moved), the uninstall (entries first, then
   the service and the files; a cold start after it), and the recovery
   path (the entry left with the image removed by hand: the stop; the
   entry removed from the recovery environment's registry editor: the

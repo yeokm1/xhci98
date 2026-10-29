@@ -6662,15 +6662,6 @@ int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
     return ticked ? INST_VSD_SELECTED : INST_VSD_DESELECTED;
 }
 
-int inst_pfw_mode_legacy(int mode, int sysKind, int legacyOwned)
-{
-    if (sysKind == INST_PFW_SYS_FILTER && mode == INST_VSD_INACTIVE &&
-        legacyOwned) {
-        return INST_VSD_DESELECTED;
-    }
-    return mode;
-}
-
 int inst_pfw_rootbus(const char *hw, size_t hwBytes, const char *compat,
                      size_t compatBytes)
 {

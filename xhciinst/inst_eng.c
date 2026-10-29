@@ -357,6 +357,7 @@ static int havePfwSys;      /* the flavour directory carries XHCIPFW.SYS  */
 static char pfwSysHash[65]; /* its SHA-256                                */
 static int pfwsys_check_package(void);
 static int pfwDid;          /* 1 placed, 2 queued, 4 removed              */
+static int pfwLegacy;       /* XHCIPFW.SYS's entry-role install acted on */
 /* A VxD this installer places in the system directory by record 30
  * section 7.3's table: S98VSD.VXD in IOSUBSYS, XHCIPFW.VXD in the system
  * directory itself (design record 32 section 8). */
@@ -380,6 +381,13 @@ static const VXDDESC vsdDesc = {
 static const VXDDESC pfwDesc = {
     INST_PFW_FILE, INST_PFW_TMPNAME, "", "SYSTEM\\XHCIPFW.VXD",
     "SYSTEM\\XHCIPFW.TMP", INST_PFW_KEY, "xhcipfw", &havePfw, pfwHash,
+    &pfwDid
+};
+/* XHCIPFW.SYS's filter role on 8 and 8.1: its record of its own (record
+ * 32 section 11.5.2); only Key is read for XHCIPFW.SYS's record. */
+static const VXDDESC pfwfDesc = {
+    INST_PFW_FILE, INST_PFW_TMPNAME, "", "SYSTEM\\XHCIPFW.VXD",
+    "SYSTEM\\XHCIPFW.TMP", INST_PFW_KEY_F, "xhcipff", &havePfw, pfwHash,
     &pfwDid
 };
 static int s98TopoFresh;    /* the places were read since the last scan   */
@@ -19836,9 +19844,7 @@ static int pfw_seen(void)
 /* XHCIPFW.SYS already registered by this installer (its record names the
  * image and the service is there). */
 static int pfwsys_installed(void);
-/* The same, in the entry role's group (System Reserved): on 8 and 8.1 the
- * 3.3.0.0 place, never kept there (record 32 section 11.5.2). */
-static int pfwsys_legacy(void);
+
 
 /* The box's default (inst_pfw_box), the one decision, with the
  * Thunderbolt support in the run (tb) or out of it; *open whether the box
@@ -19867,10 +19873,8 @@ static int pfw_mode(int uninstall)
     if (!pfwAsked) {
         pfwChoice = pfw_default(&shown, &open);
     }
-    return inst_pfw_mode_legacy(inst_pfw_mode(pfw_kind(), uninstall,
-                                              pfw_have(), haveCm && tbInclude,
-                                              pfwChoice),
-                                pfw_kind(), pfwsys_legacy());
+    return inst_pfw_mode(pfw_kind(), uninstall, pfw_have(),
+                         haveCm && tbInclude, pfwChoice);
 }
 
 /* 1 when the static-VxD key holds the two values this installer writes
@@ -19994,6 +19998,20 @@ static int pfw_run(int mode)
         if (pfw_kind() == INST_PFW_SYS_GONE && mode != INST_VSD_UNINSTALL &&
             !pfwsys_recorded()) {
             return 1;
+        }
+        if (pfw_kind() == INST_PFW_SYS_FILTER) {
+            /* The entry role's install (3.3.0.0's place, unordered here)
+             * is removed whatever the boxes, by its own name and record,
+             * before the filter role's run (record 32 section 11.5.2). */
+            int ok = 1;
+            pfwLegacy = 1;
+            if (pfwsys_recorded()) {
+                ok = pfwsys_run(INST_VSD_DESELECTED);
+            }
+            pfwLegacy = 0;
+            if (!ok) {
+                return 0;
+            }
         }
         return pfwsys_run(mode);
     }
@@ -20284,10 +20302,51 @@ static int pfwsys_check_package(void)
     return 1;
 }
 
-/* The record's value (INST_PFW_KEY): 1 read, 0 absent, -1 unreadable. */
+/* Which XHCIPFW.SYS installation the pfwsys_ routines act on: the
+ * entry role's (service xhcipfw, 2000 to 7, and 3.3.0.0's on 8 to 10) or,
+ * on 8 and 8.1, the filter role's (service xhcipff), which 3.3.0.0's
+ * installer does not recognise (record 32 section 11.5.2). pfwLegacy set:
+ * the entry role's, for its removal on 8 and 8.1 (pfwLegacy). */
+
+static int pfw_ns_filter(void)
+{
+    return !pfwLegacy && pfw_kind() == INST_PFW_SYS_FILTER;
+}
+
+static const char *pfw_svc(void)
+{
+    return pfw_ns_filter() ? INST_PFWSYS_SERVICE_F : INST_PFWSYS_SERVICE;
+}
+
+static const char *pfw_name_a(void)
+{
+    return pfw_ns_filter() ? INST_PFWSYS_NAME_FA : INST_PFWSYS_NAME_A;
+}
+
+static const char *pfw_name_b(void)
+{
+    return pfw_ns_filter() ? INST_PFWSYS_NAME_FB : INST_PFWSYS_NAME_B;
+}
+
+static const VXDDESC *pfw_desc(void)
+{
+    return pfw_ns_filter() ? &pfwfDesc : &pfwDesc;
+}
+
+/* HKLM's path of the service key, and of a subkey of it (sub NULL: the
+ * key itself). */
+static void pfw_svc_key(char *buf, size_t cap, const char *sub)
+{
+    _snprintf(buf, cap - 1, "SYSTEM\\CurrentControlSet\\Services\\%s%s%s",
+              pfw_svc(), sub != NULL ? "\\" : "", sub != NULL ? sub : "");
+    buf[cap - 1] = '\0';
+}
+
+/* The record's value (INST_PFW_KEY or INST_PFW_KEY_F): 1 read, 0 absent,
+ * -1 unreadable. */
 static int pfwsys_rec_get(const char *name, char *buf, DWORD cap)
 {
-    return vsd_rec_get(&pfwDesc, name, buf, cap);
+    return vsd_rec_get(pfw_desc(), name, buf, cap);
 }
 
 /* The service key's ImagePath, the image's name alone (xhcipfw.sys or
@@ -20302,10 +20361,11 @@ static int pfwsys_image(char *name, DWORD cap)
     DWORD n = sizeof(path) - 1;
     LONG r;
 
+    char key[128];
+
     name[0] = '\0';
-    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
-                      "Services\\" INST_PFWSYS_SERVICE, 0, KEY_QUERY_VALUE,
-                      &k);
+    pfw_svc_key(key, sizeof(key), NULL);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
         return 0;
     }
@@ -20323,8 +20383,7 @@ static int pfwsys_image(char *name, DWORD cap)
     }
     slash = strrchr(path, '\\');
     slash = slash != NULL ? slash + 1 : path;
-    if (!inst_eq(slash, INST_PFWSYS_NAME_A) &&
-        !inst_eq(slash, INST_PFWSYS_NAME_B)) {
+    if (!inst_eq(slash, pfw_name_a()) && !inst_eq(slash, pfw_name_b())) {
         return -1;
     }
     /* The whole path, as this installer writes it or as the system's own
@@ -20452,45 +20511,20 @@ static int pfwsys_installed(void)
 /* The service's Start value: 1 read, 0 no service or unreadable. */
 static int pfwsys_start(DWORD *start)
 {
+    char key[128];
     HKEY k;
     DWORD type = 0;
     DWORD n = sizeof(*start);
     LONG r;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
-                      "Services\\" INST_PFWSYS_SERVICE, 0, KEY_QUERY_VALUE,
-                      &k) != ERROR_SUCCESS) {
+    pfw_svc_key(key, sizeof(key), NULL);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_QUERY_VALUE, &k) !=
+        ERROR_SUCCESS) {
         return 0;
     }
     r = RegQueryValueExA(k, "Start", NULL, &type, (BYTE *)start, &n);
     RegCloseKey(k);
     return r == ERROR_SUCCESS && type == REG_DWORD;
-}
-
-/* The service's Group is `group` (1), another or none (0). */
-static int pfwsys_group_is(const char *group)
-{
-    HKEY k;
-    char g[64];
-    DWORD type = 0;
-    DWORD n = sizeof(g) - 1;
-    LONG r;
-
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
-                      "Services\\" INST_PFWSYS_SERVICE, 0, KEY_QUERY_VALUE,
-                      &k) != ERROR_SUCCESS) {
-        return 0;
-    }
-    memset(g, 0, sizeof(g));
-    r = RegQueryValueExA(k, "Group", NULL, &type, (BYTE *)g, &n);
-    RegCloseKey(k);
-    return r == ERROR_SUCCESS && type == REG_SZ && inst_eq(g, group);
-}
-
-static int pfwsys_legacy(void)
-{
-    return pfw_kind() == INST_PFW_SYS_FILTER && pfwsys_installed() &&
-           pfwsys_group_is(INST_PFWSYS_GROUP);
 }
 
 /* Record 32 section 11.5.2: xhcipfw added to (add) or taken out of the
@@ -20581,10 +20615,10 @@ static int pfw_rootbus_filters(int add)
             }
             upN = 0;
         }
-        n = add ? inst_msz_append(up, upN, INST_PFWSYS_SERVICE, msz,
-                                  sizeof(msz), &changed)
-                : inst_msz_remove(up, upN, INST_PFWSYS_SERVICE, msz,
-                                  sizeof(msz), &changed);
+        n = add ? inst_msz_append(up, upN, pfw_svc(), msz, sizeof(msz),
+                                  &changed)
+                : inst_msz_remove(up, upN, pfw_svc(), msz, sizeof(msz),
+                                  &changed);
         if (n == (size_t)-1) {
             out("XHCIPFW.SYS: the filters of %s are too long.\n", id);
             failed = 1;
@@ -20602,7 +20636,7 @@ static int pfw_rootbus_filters(int add)
         }
         count++;
         logonly("xhcipfw: %s %s the UpperFilters of %s\n",
-                INST_PFWSYS_SERVICE, add ? "added to" : "taken out of", id);
+                pfw_svc(), add ? "added to" : "taken out of", id);
     }
     api.Destroy(set);
     if (count > 0) {
@@ -20665,17 +20699,25 @@ static int pfwsys_service(const char *name, DWORD start)
     DWORD type = SERVICE_KERNEL_DRIVER;
     DWORD err = SERVICE_ERROR_IGNORE;
     DWORD off = SERVICE_DISABLED;
-    const char *group = pfw_kind() == INST_PFW_SYS_FILTER ?
-                        INST_PFWSYS_GROUP_FILTER : INST_PFWSYS_GROUP;
+    const char *group = pfw_ns_filter() ? INST_PFWSYS_GROUP_FILTER :
+                        INST_PFWSYS_GROUP;
+    char key[128];
 
     _snprintf(image, sizeof(image) - 1, "System32\\DRIVERS\\%s", name);
     image[sizeof(image) - 1] = '\0';
-    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
-                        "Services\\" INST_PFWSYS_SERVICE, 0, NULL, 0,
-                        KEY_SET_VALUE, NULL, &k, NULL);
+    pfw_svc_key(key, sizeof(key), NULL);
+    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, key, 0, NULL, 0, KEY_SET_VALUE,
+                        NULL, &k, NULL);
     if (w == ERROR_SUCCESS) {
-        w = RegSetValueExA(k, "Start", 0, REG_DWORD, (const BYTE *)&off,
-                           sizeof(off));
+        /* The filter role's service is never set off while values are
+         * written: a root bus naming it would not start (record 32
+         * section 11.5.2); its ImagePath only ever names an image
+         * written and compared. Off only for its removal, after the
+         * entries are out. */
+        if (start == SERVICE_DISABLED || !pfw_ns_filter()) {
+            w = RegSetValueExA(k, "Start", 0, REG_DWORD, (const BYTE *)&off,
+                               sizeof(off));
+        }
         if (w == ERROR_SUCCESS && start != SERVICE_DISABLED) {
             w = RegSetValueExA(k, "Type", 0, REG_DWORD, (const BYTE *)&type,
                                sizeof(type));
@@ -20739,12 +20781,12 @@ static int pfwsys_delete(const char *path)
  * (Start 4: Windows no longer loads it), said. */
 static int pfwsys_service_delete(void)
 {
-    static const char key[] = "SYSTEM\\CurrentControlSet\\Services\\"
-                              INST_PFWSYS_SERVICE;
-    char sub[sizeof(key) + 16];
+    char key[128];
+    char sub[160];
     HKEY k;
     LONG r;
 
+    pfw_svc_key(key, sizeof(key), NULL);
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
         return 1;
@@ -20780,15 +20822,15 @@ static int pfwsys_service_delete(void)
  * the next start if in use; another program's file is left. 1 done; 0 one could not be read or deleted (the record kept). */
 static int pfwsys_clean(const PFWREC *r, const char *keep)
 {
-    static const char *const names[2] = {
-        INST_PFWSYS_NAME_A, INST_PFWSYS_NAME_B
-    };
+    const char *names[2];
     char path[INST_PATH_CHARS];
     char hex[65];
     int i;
     int c;
     int ok = 1;
 
+    names[0] = pfw_name_a();
+    names[1] = pfw_name_b();
     for (i = 0; i < 2; i++) {
         if (keep != NULL && inst_eq(names[i], keep)) {
             continue;
@@ -20817,12 +20859,12 @@ static int pfwsys_clean(const PFWREC *r, const char *keep)
 /* The record's values named cleared; 1 all gone. */
 static int pfwsys_rec_clear(int file)
 {
-    int ok = vsd_rec_del(&pfwDesc, "Old");
+    int ok = vsd_rec_del(pfw_desc(), "Old");
 
-    ok = vsd_rec_del(&pfwDesc, "Pending") && ok;
-    ok = vsd_rec_del(&pfwDesc, "Slot") && ok;
+    ok = vsd_rec_del(pfw_desc(), "Pending") && ok;
+    ok = vsd_rec_del(pfw_desc(), "Slot") && ok;
     if (file) {
-        ok = vsd_rec_del(&pfwDesc, "File") && ok;
+        ok = vsd_rec_del(pfw_desc(), "File") && ok;
     }
     return ok;
 }
@@ -20877,9 +20919,9 @@ static int pfwsys_run(int mode)
         partial = 1;
     }
     if (img < 0 || (img == 1 && !r.Any)) {
-        out("A service named " INST_PFWSYS_SERVICE " is another installation's "
-            "or unreadable: it is left as it is.\n");
-        steps_add_id(INST_PFWSYS_FILE, "a service named xhcipfw that is not "
+        out("A service named %s is another installation's or unreadable: it "
+            "is left as it is.\n", pfw_svc());
+        steps_add_id(INST_PFWSYS_FILE, "a service of its name that is not "
                      "this installer's is left as it is");
         flagSteps = 1;
         step(INST_STEP_LEFT, "XHCIPFW.SYS: left, another installation's "
@@ -20911,9 +20953,8 @@ static int pfwsys_run(int mode)
             }
             if (c == PFW_F_OTHER) {
                 out("The service's image %s is not this installer's file: "
-                    "the service " INST_PFWSYS_SERVICE " is left as it "
-                    "is.\n", cur);
-                steps_add_id(INST_PFWSYS_FILE, "a service named xhcipfw "
+                    "the service %s is left as it is.\n", cur, pfw_svc());
+                steps_add_id(INST_PFWSYS_FILE, "a service of its name "
                              "whose image is not this installer's is left "
                              "as it is");
                 flagSteps = 1;
@@ -20946,21 +20987,15 @@ static int pfwsys_run(int mode)
         step(INST_STEP_DONE, "XHCIPFW.SYS: removed");
         return 1;
     }
-    /* Selected: this release's image already the service's. */
+    /* Selected: this release's image already the service's, and one the
+     * record holds (another installation's copy of the same bytes is not
+     * this installer's: it goes to the ownership check below). */
     if (img == 1 && pfwsys_path(cur, curPath, sizeof(curPath)) &&
-        stor_hash(curPath, hex) == 1 && inst_eq(hex, pfwSysHash) &&
-        r.Any) {
+        pfwsys_class(curPath, &r, hex) == PFW_F_OURS &&
+        inst_eq(hex, pfwSysHash) && r.Any) {
         int was = pfwsys_start(&start) && start == SERVICE_BOOT_START;
-        /* On 8 and 8.1 a service already as this release writes it is not
-         * rewritten (its Start 4 while written would stop a start with an
-         * entry in); otherwise the entries go out first. */
-        int keep = pfw_kind() == INST_PFW_SYS_FILTER && was &&
-                   pfwsys_group_is(INST_PFWSYS_GROUP_FILTER);
-        if (!keep && !pfw_entries_out()) {
-            return 0;
-        }
-        if (!vsd_rec_set(&pfwDesc, "File", pfwSysHash) ||
-            (!keep && !pfwsys_service(cur, SERVICE_BOOT_START))) {
+        if (!vsd_rec_set(pfw_desc(), "File", pfwSysHash) ||
+            !pfwsys_service(cur, SERVICE_BOOT_START)) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its service not written");
             return 0;
@@ -21002,9 +21037,8 @@ static int pfwsys_run(int mode)
              * path: its service and its root bus entries are left as they
              * are (record 32 sections 11.2 and 11.5.2). */
             out("The service's image %s is not this installer's file: "
-                "the service " INST_PFWSYS_SERVICE " is left as it is.\n",
-                cur);
-            steps_add_id(INST_PFWSYS_FILE, "a service named xhcipfw whose "
+                "the service %s is left as it is.\n", cur, pfw_svc());
+            steps_add_id(INST_PFWSYS_FILE, "a service of its name whose "
                          "image is not this installer's is left as it is");
             flagSteps = 1;
             step(INST_STEP_LEFT, "XHCIPFW.SYS: left, another installation's "
@@ -21012,21 +21046,18 @@ static int pfwsys_run(int mode)
             return 0;
         }
         if (c == PFW_F_OURS && !inst_eq(hex, r.File) &&
-            !vsd_rec_set(&pfwDesc, "File", hex)) {
+            !vsd_rec_set(pfw_desc(), "File", hex)) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its record not written");
             return 0;
         }
     }
-    /* An install or update on 8 and 8.1: the entries out before the
-     * image or the service changes, once the image is known to be this
-     * installer's or absent (record 32 section 11.5.2). */
-    if (!pfw_entries_out()) {
-        return 0;
-    }
+    /* An update of the filter role keeps its entries: its service stays
+     * on and its ImagePath moves to the new image only once that image
+     * is written and compared (record 32 section 11.5.2). */
     /* A service key this installer's creation left without an image path
-     * goes before the record that makes it its own. */
-    if (partial && !pfwsys_service_delete()) {
+     * goes before the record that makes it its own (its entries first). */
+    if (partial && (!pfw_entries_out() || !pfwsys_service_delete())) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: its incomplete service not "
              "removed");
@@ -21039,8 +21070,8 @@ static int pfwsys_run(int mode)
              "removed");
         return 0;
     }
-    target = (img == 1 && inst_eq(cur, INST_PFWSYS_NAME_A)) ?
-             INST_PFWSYS_NAME_B : INST_PFWSYS_NAME_A;
+    target = (img == 1 && inst_eq(cur, pfw_name_a())) ? pfw_name_b() :
+             pfw_name_a();
     join(src, sizeof(src), pkgDir, INST_PFWSYS_FILE);
     if (!pfwsys_path(target, newPath, sizeof(newPath))) {
         flagFailed = 1;
@@ -21069,7 +21100,7 @@ static int pfwsys_run(int mode)
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its image unreadable");
             return 0;
         }
-        if (c == PFW_F_OURS && !vsd_rec_set(&pfwDesc, "Old", hex)) {
+        if (c == PFW_F_OURS && !vsd_rec_set(pfw_desc(), "Old", hex)) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its record not written");
             return 0;
@@ -21077,8 +21108,8 @@ static int pfwsys_run(int mode)
     }
     /* Pending and its Slot before the bytes, so a copy cut short there is
      * this installer's. */
-    if (!vsd_rec_set(&pfwDesc, "Slot", target) ||
-        !vsd_rec_set(&pfwDesc, "Pending", pfwSysHash)) {
+    if (!vsd_rec_set(pfw_desc(), "Slot", target) ||
+        !vsd_rec_set(pfw_desc(), "Pending", pfwSysHash)) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: its record not written");
         return 0;
@@ -21092,8 +21123,8 @@ static int pfwsys_run(int mode)
         return 0;
     }
     if (!pfwsys_service(target, SERVICE_BOOT_START) ||
-        !vsd_rec_set(&pfwDesc, "File", pfwSysHash) ||
-        !vsd_rec_del(&pfwDesc, "Pending") || !vsd_rec_del(&pfwDesc, "Slot")) {
+        !vsd_rec_set(pfw_desc(), "File", pfwSysHash) ||
+        !vsd_rec_del(pfw_desc(), "Pending") || !vsd_rec_del(pfw_desc(), "Slot")) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: its service or record not "
              "written");
@@ -21106,7 +21137,7 @@ static int pfwsys_run(int mode)
     /* The earlier image and anything else of the record's but the new one;
      * the record read again (File now this release's). */
     if (!pfwsys_rec(&r) || !pfwsys_clean(&r, target) ||
-        !vsd_rec_del(&pfwDesc, "Old")) {
+        !vsd_rec_del(pfw_desc(), "Old")) {
         flagSteps = 1;
         steps_add_id(INST_PFWSYS_FILE, "an earlier image could not be "
                      "removed: run the installer again");

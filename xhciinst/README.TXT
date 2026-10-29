@@ -47,7 +47,7 @@ On Windows 2000, XP and the 32-bit Vista, 7, 8 and 8.1 the same box,
 small driver Windows loads at each start before its PCI driver, and it
 does the same. On 8 and 8.1 it is a filter of each PCI root bus (the
 "PCI Express Root Complex" or "PCI bus" in Device Manager), named in that
-device's UpperFilters, and it acts as that bus starts.
+device's UpperFilters as the service xhcipff, and it acts as that bus starts.
 As on 98 SE and ME it is ticked whenever the Thunderbolt 3 /
 USB4 box is. Without that box it is unticked and greyed. You may untick
 it. A USB4 or Thunderbolt controller behind a bridge with such a window
@@ -67,10 +67,10 @@ still names it), start Windows' recovery environment and open the
 registry editor (regedit) from its command prompt. Load the system's
 SYSTEM hive (Windows\System32\config\SYSTEM, File, Load Hive), read
 Select\Default in it for the control set the next start uses
-(ControlSet00n), search that set's Enum key for xhcipfw (Find, values and
-data), and remove the line xhcipfw from every UpperFilters that has it,
+(ControlSet00n), search that set's Enum key for xhcipff (Find, values and
+data), and remove the line xhcipff from every UpperFilters that has it,
 keeping any other line. Then unload the hive and restart. Do not set the
-xhcipfw service to disabled while a root bus names it: that stops the
+xhcipff service to disabled while a root bus names it: that stops the
 start the same way.
 
 The 32-bit Windows 10 is not offered XHCIPFW.SYS: there it cannot start

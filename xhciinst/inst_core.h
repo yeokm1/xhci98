@@ -2055,12 +2055,6 @@ int inst_pfw_box(int sysKind, int havePfw, int tbTicked, int noSwitch,
  * DESELECTED unticked. */
 int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
                   int ticked);
-/* On 8 and 8.1 (INST_PFW_SYS_FILTER) an entry-role XHCIPFW.SYS of this
- * installer's (group System Reserved, the 3.3.0.0 place, unordered there)
- * is never kept: a mode that would leave it (INACTIVE) removes it
- * (DESELECTED). Any other kind or mode is returned as it is (record 32
- * section 11.5.2). */
-int inst_pfw_mode_legacy(int mode, int sysKind, int legacyOwned);
 /* 1 when a devnode's hardware or compatible ids (multi-strings of the
  * byte lengths given) name a PCI root bus, *PNP0A03 or *PNP0A08: the
  * devnodes XHCIPFW.SYS filters on 8 and 8.1. */
@@ -2554,8 +2548,15 @@ void inst_other_warn_text(INST_U32 set, char *out, size_t cap);
 #define INST_PFWSYS_NAME_A      "xhcipfw.sys"
 #define INST_PFWSYS_NAME_B      "xhcipf2.sys"
 #define INST_PFWSYS_GROUP       "System Reserved"
-/* The filter role's group on 8 and 8.1 (record 32 section 11.5.2). */
+/* The filter role on 8 and 8.1 (record 32 section 11.5.2): its group, and
+ * a service, two image names and a record of its own, which 3.3.0.0's
+ * installer (it removes the xhcipfw service there without its root bus
+ * entries) does not recognise. */
 #define INST_PFWSYS_GROUP_FILTER "PnP Filter"
+#define INST_PFWSYS_SERVICE_F   "xhcipff"
+#define INST_PFWSYS_NAME_FA     "xhcipff.sys"
+#define INST_PFWSYS_NAME_FB     "xhcipff2.sys"
+#define INST_PFW_KEY_F          "Software\\xhci98\\XhciPfwFilter"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
 
