@@ -1782,9 +1782,10 @@ never take or clear work bits, which stay for the loop.
      `cm.irq.unretired` logged and `IrqFailed` set: the routine never
      reads a function outside D0, and the resources go back to the PnP
      manager or the device is gone. That is the supported failure policy,
-     and its window is section 4.5.7's: reaching it in a D3 needs a
-     function that answers neither its BAR nor its configuration space
-     while still in D0 and still asserting. Vetoing the D3 instead (the
+     and its window is section 4.5.7's: reaching it in a D3 needs every
+     applicable retirement attempt to stay unproven (a mask and an
+     Interrupt Disable that do not latch, or a failed configuration
+     access) while the function is still in D0 and still asserting. Vetoing the D3 instead (the
      NHI kept in D0 through a system sleep) was rejected: the platform
      removes its power in S3 and S4 anyway, and the D0 order on resume
      would meet the same function. In a 98 SE or ME shutdown's quiescence (section 5.6) the

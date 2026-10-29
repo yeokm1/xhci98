@@ -12,8 +12,9 @@ that took it; they are not files a clone has.
 A design only, no code and no guest run (the owner, 2026-10-29: 45.22 is
 design only this phase, and whether it is coded is the owner's). Written
 into design record 21 section 4.5 (both profiles) and record 22 section
-5.4 (what the USB4 profile adds), reviewed and revised; the task is not
-ticked.
+5.4 (what the USB4 profile adds), reviewed and revised until the review
+found nothing material beyond the residual risks the record names; the
+task is not ticked.
 
 **What was read** (files only, nothing run):
 
@@ -59,8 +60,13 @@ ticked.
   the stop; the NHI lost-interrupt leg owed to a `usb4-emu` addition.
   Revised again after review: an interrupt wake drains RX ring 0 only
   (the scan's responses would otherwise wake the thread forever); a storm
-  masked at DIRQL; disconnection only of a source proven quiet (mask read
-  back, or PCI Interrupt Disable); the image kept resident once an
+  masked at DIRQL; disconnection of a source proven quiet (mask read
+  back, or for a line PCI Interrupt Disable), an unproven one retained in
+  D0 and disconnected unproven only at a stop, a removal, a surprise
+  removal or a D3 whose emergency mask also failed, the residual windows
+  named in record 21 section 4.5.7; the descriptors' Interrupt Enable
+  decided before the ring start; the wait computed from deadlines; an
+  activation-long failure latch; the image kept resident once an
   interrupt was connected; MSI keeps the whole status read; the x86 MSI
   step's `IoGetDeviceObjectPointer`.
 
