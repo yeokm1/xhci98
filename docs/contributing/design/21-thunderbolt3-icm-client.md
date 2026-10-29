@@ -1485,9 +1485,17 @@ auto-clear for MSI-X (`REG_DMA_MISC_INT_AUTO_CLEAR` [linux]).
   masked, as section 4.3 masks all 3N today.
 - **The descriptor's Interrupt Enable** (bit 23 of DW2, `TBT_DESC_IE` in
   `tbt_regs.h`, today "never set here") is set in every RX ring 0
-  descriptor posted while the interrupt is in use, so that the status bit
-  is set after each frame is written back (Spec 12.5.1). Polling posts
-  them with it clear, as today.
+  descriptor posted while the interrupt is intended, so that the status
+  bit is set after each frame is written back (Spec 12.5.1). The intent is
+  decided **before the ring start**, not at the arm: an activation, a D0
+  or a recovery whose interrupt will be tried (`XhciCmRingInterrupt` 1, a
+  resource, `IrqFailed` clear) posts every initial RX descriptor with IE,
+  while every cause is still masked, so that the first frame after the
+  unmask raises the interrupt without waiting for a ring wrap; a
+  descriptor the host owns is never rewritten in place. If the connection
+  or the arm then fails, those descriptors keep IE until consumed, which
+  only sets a masked status bit. Polling posts them with it clear, as
+  today.
 - **Unmask** by each host's contract, as section 4.3 masks: on Intel
   hosts (`QUIRK_AUTO_CLEAR_INT`, `pci.c` `nhi_pci_check_quirks` [linux]) a
   read-modify-write of IMR, as Linux's `ring_interrupt_active` does
@@ -1750,12 +1758,20 @@ never take or clear work bits, which stay for the loop.
      all ones, or a configuration access that failed, proves nothing: the
      source stays **unretired**.
   4. RX descriptors are posted from then on without IE (the ones already
-     posted keep it until consumed; their status bits are masked).
+     posted keep it until consumed; their status bits are masked). Where
+     step 1's mask was refused by the liveness gate, a D3 first makes one
+     **emergency mask**: the IMC write of the one bit (on Intel, the IMR
+     read-modify-write only if the read is not all ones), made while the
+     BAR is still mapped and the function in D0, bypassing the gate,
+     whose refusal protects register values this write does not depend
+     on; and, for a line, the Interrupt Disable write of section 4.5.6.1.
+     Either read back is a verified retirement.
   5. **Disconnect.** Retired: `IoDisconnectInterrupt` (or its `Ex` twin).
-     Unretired: in a fall back to polling, a containment entry and a D3,
-     the interrupt is **retained** (section 4.5.6.2) and `cm.irq.unretired`
-     logged, since a function still in D0 may still assert the line and an
-     impending D3 is no proof that it has stopped; in a stop, a removal or
+     Unretired: in a fall back to polling, a containment entry and a D3
+     whose emergency mask also failed, the interrupt is **retained**
+     (section 4.5.6.2) and `cm.irq.unretired` logged, since a function
+     still in D0 may still assert the line and an impending D3 is no proof
+     that it has stopped; in a stop, a removal or
      a surprise removal it is disconnected whatever the proof (the
      resources go back to the PnP manager, or the device is gone), with
      `cm.irq.unretired` logged where it was unproven: the one residual
@@ -1836,13 +1852,15 @@ left asserted with no routine to acknowledge it:
   maintenance pass's attempt, a containment exit, a D3, the stop) tries
   the retirement again; only a stop, a removal or a surprise removal
   disconnects it unproven;
-- across a D3 it stays connected, and its MMIO is gated: `IrqPowered`,
-  cleared by the thread in a `KeSynchronizeExecution` routine just before
-  the D3 is forwarded and set again at D0 before anything else, makes the
-  routine read nothing and return FALSE, so no routine reads the BAR of a
-  function in D3. A function that went on asserting INTx in D3 would then
-  hold the line: the second residual window of section 4.5.7, reached
-  only when the mask in D0 was refused or failed its read-back;
+- across a D3 it stays connected and **ungated**: it acknowledges what
+  the function raises up to the moment the function leaves D0, and after
+  that its status read reaches a function in D3hot, whose memory space
+  does not decode; on the PC root complexes these systems run on, that
+  read completes as all ones and the routine declines at step 2 (no
+  answer), which is also what it does today for a function that has
+  vanished. A platform on which such a read faults or returns another
+  value is the second residual window of section 4.5.7, reached only when
+  the mask, the emergency mask and Interrupt Disable all failed in D0;
 - an Up reuses it as above; a second connection is never made while one
   is retained.
 
@@ -1872,9 +1890,12 @@ left asserted with no routine to acknowledge it:
   asserted with its cause masked livelocks a uniprocessor before the
   thread can set PCI Interrupt Disable (section 4.5.3 step 5); a stop,
   removal or surprise removal disconnects a source it could not prove
-  quiet (section 4.5.6 step 5); and a retained routine is gated off across
-  a D3 (section 4.5.6.2). Each needs a host that ignores its own mask or
-  refuses every access while still asserting.
+  quiet (section 4.5.6 step 5); and a retained routine reads a function in
+  D3 (section 4.5.6.2). The first needs a host that ignores its own mask;
+  the other two need every retirement write to have failed its read-back,
+  which a refused liveness gate alone no longer causes (the emergency
+  mask, section 4.5.6 step 4), but a failed configuration access or a
+  host that does not latch the mask still can.
 
 #### 4.5.8 Import gates
 
@@ -1901,6 +1922,10 @@ sections and their gate rows.
 
 #### 4.5.9 Verification (when it is coded)
 
+- **The first frame before any wrap**: on each leg, the first plug after
+  an activation and after a resume, whose event frame lands in a
+  descriptor of the initial post, must raise the interrupt (section
+  4.5.2, the intent before the ring start).
 - **Host vectors** (the pure half: the cause's dword and bit for N = 12
   and other Total Paths and the ISR dword count; the unmask and mask by
   host contract and their read-back; the routine's four outcomes; the
