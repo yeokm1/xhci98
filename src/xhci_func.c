@@ -530,11 +530,22 @@ static VOID xhciFuncMi(XHCI_FUNC_TEXT *t, const XHCI_FUNC *func)
     xhciFuncHexN(t, func->FirstInterface, 2);
 }
 
+/* IRQL: any. */
+ULONG XhciFuncCompatCount(ULONG cls, ULONG sub, ULONG prot)
+{
+    (VOID)sub;
+    if (cls == 0x01UL && (prot == 0x20UL || prot == 0x30UL)) {
+        return 2;
+    }
+    return 3;
+}
+
 ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
                  ULONG which, char *out, ULONG capacity, PULONG used)
 {
     XHCI_FUNC_TEXT t;
     ULONG depth;
+    ULONG last;
 
     if (device == NULL || func == NULL || used == NULL ||
         (out == NULL && capacity != 0)) {
@@ -561,7 +572,9 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
         xhciFuncChar(&t, 0);
         break;
     case XHCI_FUNC_ID_COMPATIBLE:
-        for (depth = 3; depth != 0; depth--) {
+        last = 3UL - XhciFuncCompatCount(func->Class, func->SubClass,
+                                         func->Protocol);
+        for (depth = 3; depth != last; depth--) {
             xhciFuncStr(&t, "USB\\Class_");
             xhciFuncHexN(&t, func->Class, 2);
             if (depth >= 2) {
