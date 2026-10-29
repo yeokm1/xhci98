@@ -5631,8 +5631,15 @@ static int kidQuarantined(const TBT_ROUTE *route, ULONG adp, ULONG hop, int enab
     return 0;
 }
 
+/* An entry live or not proven drained: Valid, or Pending Packets set. */
+static int entryOpen(const FAB *f, int r, int adp, int hop)
+{
+    return (fabPath0(f, r, adp, hop) & TBT_PATH0_VALID) != 0 ||
+           (fabPath1(f, r, adp, hop) & TBT_PATH1_PP) != 0;
+}
+
 /* Every entry of the kid's tunnel, and each Path Enable, on either end:
- * closed, or held by a quarantine record of its own. */
+ * closed and drained, or held by a quarantine record of its own. */
 static int kidPathsClosed(const FAB *f, int dev, int child, const TBT_ROUTE *dr,
                           const TBT_ROUTE *cr)
 {
@@ -5640,17 +5647,17 @@ static int kidPathsClosed(const FAB *f, int dev, int child, const TBT_ROUTE *dr,
     int h;
 
     for (h = 8; h < 24; h++) {
-        if ((fabPath0(f, dev, a, h) & TBT_PATH0_VALID) && !kidQuarantined(dr, (ULONG)a, (ULONG)h, 0)) {
+        if (entryOpen(f, dev, a, h) && !kidQuarantined(dr, (ULONG)a, (ULONG)h, 0)) {
             return 0;
         }
-        if ((fabPath0(f, child, 1, h) & TBT_PATH0_VALID) && !kidQuarantined(cr, 1, (ULONG)h, 0)) {
+        if (entryOpen(f, child, 1, h) && !kidQuarantined(cr, 1, (ULONG)h, 0)) {
             return 0;
         }
     }
-    if ((fabPath0(f, dev, 7, 8) & TBT_PATH0_VALID) && !kidQuarantined(dr, 7, 8, 0)) {
+    if (entryOpen(f, dev, 7, 8) && !kidQuarantined(dr, 7, 8, 0)) {
         return 0;
     }
-    if ((fabPath0(f, child, 5, 8) & TBT_PATH0_VALID) && !kidQuarantined(cr, 5, 8, 0)) {
+    if (entryOpen(f, child, 5, 8) && !kidQuarantined(cr, 5, 8, 0)) {
         return 0;
     }
     if ((fabAdp(f, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE) && !kidQuarantined(dr, 7, 0, 1)) {
@@ -5723,6 +5730,20 @@ static void test_kid_path_failures(void)
     CHECK(kidOf(&g_cm, 1) != NULL &&
           kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &kidOf(&g_cm, 1)->Dev.Route),
           "each one held by its own record");
+    {
+        int a = fabDownLane0(&g_fab, dev);
+        int h;
+        int stuck = 0;
+
+        for (h = 8; h <= 9; h++) {
+            if (entryOpen(&g_fab, dev, a, h)) {
+                stuck++;
+                CHECK(kidQuarantined(&TbtU4Port(&g_cm, 1)->Dev.Route, (ULONG)a, (ULONG)h, 0),
+                      "the undrained parent-lane HopID quarantined itself");
+            }
+        }
+        CHECK(stuck >= 1, "an entry left undrained on the parent's lane");
+    }
     {
         ULONG i;
         int kidOwned = 0;
