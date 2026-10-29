@@ -155,9 +155,12 @@ $usb4Root = Join-Path $vmRoot 'usb4'
 $lockRoot = Join-Path $mainRoot 'out\vmlocks'
 # The usb4-emu checkout: -EmuRoot, else USB4EMU_ROOT, else the checkout
 # beside the main one (..\usb4-emu from its root).
-$emuRoot = Join-Path (Split-Path -Parent $mainRoot) 'usb4-emu'
-if ($env:USB4EMU_ROOT) { $emuRoot = $env:USB4EMU_ROOT }
-if ($EmuRoot) { $emuRoot = $EmuRoot }
+# PowerShell names are case-blind: $emuRoot is the -EmuRoot parameter, so
+# the choice is made in a variable of its own first.
+$emuChosen = $EmuRoot
+if (-not $emuChosen) { $emuChosen = $env:USB4EMU_ROOT }
+if (-not $emuChosen) { $emuChosen = Join-Path (Split-Path -Parent $mainRoot) 'usb4-emu' }
+$emuRoot = $emuChosen
 $emuBin = Join-Path $emuRoot 'toolchain\msys64\ucrt64\bin'
 $emuShare = Join-Path $emuRoot 'vms\qemu-baseline\share'
 $emuQemu = Join-Path $emuRoot 'src\qemu\build\qemu-system-x86_64.exe'
