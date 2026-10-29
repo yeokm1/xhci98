@@ -17,14 +17,14 @@ the batching convention and the task-id rules, "observed on both" as
 phase's closing task named `<phase>.final`, and the rule that no phase
 advances past an unobserved checkpoint.
 
-**Status: Phase 44 is closed on the `3.3.0.0` cut of 2026-10-28, its install legs 44-E.7 read after it, its real-hardware bench moved to "Planned - Left by `3.3.0.0`"; Phase 43 is closed on the `3.2.0.0` cut of 2026-10-24; Phase 42 is closed on the `3.1.0.0` cut of 2026-10-20; Phases 39, 40 and 41 are closed on the `3.0.0.0` cut of 2026-10-17.** Phase 44 was opened on 2026-10-25 by the owner from "Planned work", going through every planned item one by one; the decisions table maps the planned ids to its tasks and records what was dropped, closed or kept. Phase 43 was opened on 2026-10-20 by the owner from "Planned work", going through every planned item one by one; the decisions table maps the planned ids to its tasks. Phase 42 was opened on 2026-10-18 by the owner from "Planned work" (the windowed installer, the uninstall as NUSB does it, the Windows 98 SE and ME device install, `XHCISNAP` retired, the safe-removal mark across a stack rebuild, and the connection-manager follow-ups), on branch `3.1.0.0`, and widened the same day after the owner went through every planned item; the decisions table maps the planned ids to its tasks and records what was dropped or closed. The history of the first three: Phases 39 and 40 opened 2026-10-15 by the owner. The two
+**Status: Phase 45 is open for `3.4.0.0` on branch `3.4.0.0`, not started; Phase 44 is closed on the `3.3.0.0` cut of 2026-10-28, its install legs 44-E.7 read after it, its real-hardware bench moved to "Planned - Left by `3.3.0.0`"; Phase 43 is closed on the `3.2.0.0` cut of 2026-10-24; Phase 42 is closed on the `3.1.0.0` cut of 2026-10-20; Phases 39, 40 and 41 are closed on the `3.0.0.0` cut of 2026-10-17.** Phase 45 was opened on 2026-10-29 by the owner from "Planned work", going through every planned item one by one; the decisions table maps the planned ids to its tasks and records what was kept. Phase 44 was opened on 2026-10-25 by the owner from "Planned work", going through every planned item one by one; the decisions table maps the planned ids to its tasks and records what was dropped, closed or kept. Phase 43 was opened on 2026-10-20 by the owner from "Planned work", going through every planned item one by one; the decisions table maps the planned ids to its tasks. Phase 42 was opened on 2026-10-18 by the owner from "Planned work" (the windowed installer, the uninstall as NUSB does it, the Windows 98 SE and ME device install, `XHCISNAP` retired, the safe-removal mark across a stack rebuild, and the connection-manager follow-ups), on branch `3.1.0.0`, and widened the same day after the owner went through every planned item; the decisions table maps the planned ids to its tasks and records what was dropped or closed. The history of the first three: Phases 39 and 40 opened 2026-10-15 by the owner. The two
 pieces of planned work drawn up on 2026-10-14 with the placeholder ids
 `TB3` and `U4CM` are Phase 39 and Phase 40, in the order the `usb4-emu`
 handoff gives (its section 2, maintainer 2026-10-14): Phase 39 the
 Thunderbolt firmware-connection-manager client with tunnel re-enumeration
 and safe eject, because it can be proven on the owner's ThinkPad P14s Gen
 1; Phase 40 the USB4 software connection manager; real USB4 devices third,
-planned task U4HW.1, once a USB4 host that boots these systems is at hand (in Phase 44 from 2026-10-25: 44.39 and 44-E.6). The release is
+planned task U4HW.1, once a USB4 host that boots these systems is at hand (in Phase 44 from 2026-10-25: 44.39 and 44-E.6; its bench 45-E.5 from 2026-10-29). The release is
 `3.0.0.0` and carries both phases (owner, 2026-10-15, decision D7):
 `39.final` closes Phase 39 with its legs and a dry build and cuts nothing;
 `40.final` cuts `3.0.0.0`. Design record 21 is Phase 39's plan, its
@@ -138,6 +138,7 @@ recommendation; the owner's answers are recorded here as
 | 44.71 | Owner, 2026-10-27: a USB Wi-Fi survey for the non-free download, as 44.68's |
 | 44.3 | Owner, 2026-10-25, on design record 31's questions after its section 9.3 readings (its section 10, Q1 to Q3): on 98 SE and ME `Reprocess_DevNode` does not re-run an install that found no driver; clearing the failed install was read first and did not bring the wizard back either, so Stor98's class match is kept on 98 SE and ME alone, through a separate INF, `stor98w9.inf`, staged on those two systems only, and `stor98.inf` matches the id alone on every NT system, Windows 2000 included (2000 reads no models decoration; option a2, the owner the same day); on 2000 and XP the mark service cannot install the unsigned package, so once the enclosure's bridges are installed it restarts the tunnel unit and the drive comes back with the id for Windows' own wizard, and the release notes say a re-plug does the same; on 8.1 without the certificate trusted the package ranks unsigned, so the mark service's 8.1 arm is the normal route there (text only) |
 | 44.3 scope | Owner, 2026-10-25, on design record 31 section 4.8 after its reading 10 (the tunnel id is lost at every restart of a drive's own stack; 7 and 8 keep Stor98 bound, 8.1 chooses `stornvme` again at the install's own restart): option (B) - 98 SE and ME install Stor98 by `stor98w9.inf`'s class match, 2000 to 8 by the tunnel id alone, 8.1 and 10 keep `3.2.0.0`'s models (the class as the compatible id, hardware id empty, no tunnel id), so the 8.1 arm and case 3b work as in `3.2.0.0`; option (A), the kernel child kept attached as long as its PDO, is a task of its own in the next release, prototyped and read under Driver Verifier before any code. Amended the same day: 10 needs no fix (`stornvme` works there); for 8.1 a proper fix is sought, read first, designed and converged, and put to the owner before its code. Then, on the 8.1 reading (record 31 section 4.8: at any restart of a drive's stack 8.1 reads its ids again and chooses a driver again, and no user-mode route keeps an id-only Stor98 bound): 8.1 keeps `3.2.0.0`'s model in `3.3.0.0`, and the kernel child's lifetime limited to NT 6.3 folds into option (A)'s next-release task, designed and read under Driver Verifier first |
+| Phase 45 | Owner, 2026-10-29, going through every planned item one by one: Phase 45, for `3.4.0.0` on branch `3.4.0.0`, the release that brings hot-added docks on 2000 and XP and daisy chains, with plain ids `45.n` and `45.final`, ordered by ease with STORCDDB.1 first, BUILDFAST.1 early, W9XSTAGE.1 before W9XOTHERPG.1 and UN9XLEFT.1 last, and the bench read after the cut as `45-E.n` (as D13). STORCDDB.1 is 45.1, the `usb-wdm-free` pin's move to `c28fce8` 45.2 (new), BUILDFAST.1 45.3, TRTITLE.1 45.4, INSTREC.1 45.5, RTLNARROW.1 45.6, W9XSTAGE.1 45.7, W9XOTHERPG.1 45.8, PFW8.1's reading and design 45.9 (its code only if the reading shows a step there acts in time), NVPERF.1's emulator readings 45.10, option (A) of "44.3 scope" with 8.1's fix 45.11 (KEPTCHILD.1, new: promised to this release but never listed under "Planned work"), DOCK.1 45.12, CHAIN.1 45.13 with CHAIN.4 45.14, CHAIN.2 45.15, CHAIN-EMU 45.16, CHAIN.3 45.17, CHAIN.5 45.18, UN9XLEFT.1 45.19; the bench after the cut DUALMODE.1 45-E.1, NVHW.1 45-E.2, HW32.1 45-E.3, UASHW.1 45-E.4, U4HW.1 45-E.5, B24.5 45-E.6, ICMGEN.1 45-E.7, CHAIN-E 45-E.8 with OWED31.1 folded into it (the same switch chain), NVPERF.1's bench B1 to B7 45-E.9. Kept planned: NVME81.1, ME0E.1 (Phase 45's ME legs record any recurrence, with its address), DEPART.1, ISORING.4, PCR.1, PFW8.1's code and NVPERF.1's changes C1 to C5. The sections of "Planned work" this left empty removed, with "Left by `3.1.0.0`" and the dropped "Stand By on Windows 2000"; 39-E.1 stays recorded as dropped (2026-10-25); nothing new added |
 
 ## Phase sequence
 
@@ -145,7 +146,7 @@ Phase 39 is the Thunderbolt firmware-connection-manager client, tunnel
 re-enumeration and safe eject; Phase 40 the USB4 software connection
 manager; Phase 41 the graphical tree, eject and tray tool XHCITR; all
 three ship as `3.0.0.0`. Real USB4 devices follow the ORICO capture
-and are planned task U4HW.1 (in Phase 44 from 2026-10-25: 44.39 and 44-E.6). The order is the handoff's: the
+and are planned task U4HW.1 (in Phase 44 from 2026-10-25: 44.39 and 44-E.6; its bench 45-E.5 from 2026-10-29). The order is the handoff's: the
 Thunderbolt 3 client is provable on real hardware the owner holds; the
 software connection manager is provable, for now, only against the
 emulator and a Framework 13 capture.
@@ -267,7 +268,7 @@ Status: closed 2026-10-17 on the `3.0.0.0` cut (`40.final`). Opened
 2026-10-15 by the owner, from the planned work
 `U4CM`; released with Phase 39 as `3.0.0.0` (D7), the cut being
 `40.final`'s. Its design record is design record 22. Nothing in it waits
-for the ORICO USB4 enclosure capture except planned task U4HW.1 (now 44.39 and 44-E.6), which adds a real
+for the ORICO USB4 enclosure capture except planned task U4HW.1 (now 44.39, its bench 45-E.5), which adds a real
 device-router preset and a conformance check.
 
 - [x] 40.1 the design record (design record 22): the connection manager's state machine from `u4cm.c` (host router, adapters, device router per port, DROM by router operation, the CV/CR handshake, lane bonding, the PCIe tunnel's four path entries, the optional USB3 tunnel), hot-plug events and unplug handling (which `usb4cm` lacks), the positive admission and the preservation of every existing tunnel and link power state (record 21 sections 1.4.2 and 1.4.5), the router quirks record 21 section 10.1 assigns to it, a Thunderbolt 3 device behind a USB4 host (legacy routers configured router by router, PCIe tunnel first), the pre-OS cleanup, and what the two profiles share (done 2026-10-15: design record 22 (draft 2), reviewed and revised to convergence; decisions U1-U16 taken by the orchestrator, for the owner to confirm, and U17, the host interface lost, the owner's of the same day; the record's table runs U1 to U17)
@@ -656,6 +657,74 @@ named in the release notes' "Untested ground"; `usb-wdm-free` 0.1.4 and
 `usb-wdm-nonfree` v1.1.0 pinned; then the owner's signed cut of
 `3.3.0.0`, and 44-E.7 on the published asset after it.
 
+## Phase 45 - Release `3.4.0.0`: Hot-Added Docks and Daisy Chains, the Kept Child, and What `3.3.0.0` Left
+
+Goal: a dock, or a chain of a device behind a device, plugged in while
+Windows runs, working on every target (design records 33 and 34);
+Stor98 kept bound across a restart of a tunnelled drive's own stack, 8.1
+included, by a kernel child kept attached as long as its PDO, prototyped
+first; the update from `3.2.0.0` no longer leaving the class key on 2000
+and XP; a faster cut build; the USB Tree's version in its title; 98 SE's
+storage record kept across a power cut and its uninstall's leftovers
+cleared; the free and non-free drivers found by 98 SE's and ME's wizard
+again and listed on its page; the free and non-free `rtl815x` side by
+side where their chips differ; the readings for the prefetchable windows
+on the 32-bit 8, 8.1 and 10 and for tunnelled NVMe speed on 98 SE and
+ME; released as `3.4.0.0`, with the bench after the cut.
+
+Status: open, not started. Opened 2026-10-29 by the owner from "Planned
+work", going through every planned item one by one; the decisions table
+("Phase 45") maps the planned ids to its tasks and records what was
+kept. The tasks run in order of ease, STORCDDB.1 first (owner,
+2026-10-29); the chains keep the owner's order of 2026-10-27. The
+real-hardware bench, 45-E.1 to 45-E.9, is read after the cut on the
+published asset (as decision D13), a failure there a re-cut. Its records
+will be `runs/run-45.md`, design records 26, 30, 31, 32, 33 and 34, and
+the sections of the records its items name.
+
+- [ ] 45.1 the update from `3.2.0.0` on 2000 and XP removes the class key `CriticalDeviceDatabase\pci#cc_010802` when its `Service` is `stor98` (was STORCDDB.1; found by the after-cut leg of 44-E.7 on 2000, 2026-10-29: `3.2.0.0`'s class match left it, so an internal NVMe drive added after the update starts on Stor98 with no wizard; owner, 2026-10-29: documented in `3.3.0.0`, fixed next): as the update removes `3.2.0.0`'s `stor98.inf`, never the tunnel id's own key; record 31 section 6.4; host tests, the installer build, the update legs on 2000 and XP with an internal NVMe added after it
+- [ ] 45.2 the `usb-wdm-free` pin moved to `c28fce8` (owner, 2026-10-29): after the `3.3.0.0` cut v0.1.4 moved from `222730c` to `c28fce8` (the changelog and the real-PC records, documents only; `free\`, `STAGE.TXT` and `SHA256.TXT` the same), so `scripts\package\wdmfree-pin.txt`'s Commit line follows it before the phase's first gated build, or `make-release.ps1 -CheckOnly` may refuse
+- [ ] 45.3 a faster cut build (was BUILDFAST.1; owner, 2026-10-28, after the `3.3.0.0` cut): the cut's two gated builds run at once by default (`cut-builds.ps1`, 44.31; the `3.3.0.0` cut built amd64 then x86, about 67 and 55 minutes, one after the other), and within one build the steps that need no compiler run in parallel: the text checks, the INF and import gates, the packager, QEMU launcher and VM matrix self-tests, the tool self-tests and the host suites; each step timed in the build log so the next cut can see where the time goes
+- [ ] 45.4 the USB Tree's window title carries its version, as `xHCI98 USB Tree 3.4.0.0`, so a screenshot or a report says which build it came from (was TRTITLE.1; owner, 2026-10-28, after the `3.3.0.0` cut): the title built from `src\xhci_version.h`, which `xhcitr.c` already includes; the main window only, its message boxes keep the plain name; the build, the window leg on 98 SE and 7
+- [ ] 45.5 98 SE: a power cut during the install's copy loses the run's storage record while the storage files it placed survive, so the next run takes them as found installed and an uninstall leaves them (was INSTREC.1, was 44.69; found by 44.20's 43.5 copy cut, 2026-10-27; owner, 2026-10-28: deferred past `3.3.0.0`): the record flushed before the first storage placement, as the non-free record already is; host tests, builds, the cut leg on 98 SE
+- [ ] 45.6 the free and non-free `rtl815x` allowed side by side where their INFs list disjoint chips (was RTLNARROW.1; owner, 2026-10-28, after the `3.3.0.0` cut): `3.3.0.0` excludes the pair on every system because the packager never drops a rule an earlier release carried; the packs declare their ids, the packager checks they are disjoint per system and only then admits a COEXISTS line in place of the EXCLUDES; the host tests, the packager self-tests, the install leg on XP and 7
+- [ ] 45.7 the free and non-free drivers found by 98 SE's and ME's wizard again without browsing, `DevicePath` kept under about 280 characters; `3.2.0.0` only copies them there (was W9XSTAGE.1; owner, 2026-10-24; design record 26 section 6.7.6); before 45.8, whose page says what is staged
+- [ ] 45.8 98 SE and ME: the free Other USB drivers page lists only `uac2` and `usbmidi`, the two packages staged there (44.11), so a user may take the free download to hold only two drivers and not know that a checked box means staged on `DevicePath`; the other free packages are copied to the disk but not shown (was W9XOTHERPG.1; owner, 2026-10-28, after the `3.3.0.0` cut): the page lists every package copied for this system, says which are staged and which are only copied (as 45.7 leaves them), and names the folder the hardware wizard should be pointed at for the rest; the page's words in record 26 section 6.7.12; the window leg on 98 SE and ME
+- [ ] 45.9 the prefetchable windows above 4 GB on the 32-bit 8, 8.1 and 10, the reading and the design (was PFW8.1's first half, the rest of 44.72, its option (c); owner, 2026-10-28 and 2026-10-29): a step in the PCI root bus's stack (`PNP0A03`, `PNP0A08`), its timing read first - whether a filter there acts before the PCI driver reads the bridges, at every start read - then designed in design record 32 section 11.2's place and put to the owner; the code only if the reading shows such a step acts in time, else PFW8.1 stays planned and `XHCIPFW.SYS` stays not offered there
+- [ ] 45.10 tunnelled NVMe speed on 98 SE and ME, the emulator readings (was NVPERF.1's first part; owner, 2026-10-25 and 2026-10-29): design record 30 section 13.7's readings on a q35 98 SE guest - two threads at Stor98, the per-page mapping cost aligned against scattered, the request sizes reaching Stor98 at 4 and 8 MiB; the bench B1 to B7 is 45-E.9, and the changes C1 to C5 stay planned, each decided by its reading
+- [ ] 45.11 the kernel child kept attached as long as a tunnelled drive's PDO, so Stor98 stays bound across a restart of the drive's own stack (was option (A) of the decisions table's "44.3 scope", KEPTCHILD.1; owner, 2026-10-25: a task of its own in the next release; 2026-10-29: in Phase 45, prototype first): record 31 section 4.8's prototype read under Driver Verifier before any code (its section 9.3 item 11), with the kernel child's lifetime limited to NT 6.3 (section 4.8's candidate 2) and 8.1's proper fix (item 12: why 8.1 chooses a driver again at the install's restart where 7 and 8 keep it, read on 8.1 first); then a design converged and put to the owner before its code; until then 8.1 keeps `3.2.0.0`'s class model
+- [ ] 45.12 (44.66-C) the code of design record 33 (was DOCK.1): `cm_breq.c` and its host vectors, the `cm_filt.c` bridge case, the registered child's role and ancestry, the bridge inventory in the marks answer, the mark service's bridge marks, restart trigger and wait, `XhciCmBridgeReq` and `XhciCmBridgeReqDiag`; first, before record 34's chain code; the readings R1 and R5 on a test build before the code is committed, then legs R3 to R13 (XP, 2000 by HAL, XP x64, 7 unchanged)
+- [ ] 45.13 record 34 Part 1, the NT half (was CHAIN.1): chain ports in `tbt_topo.c`, owed chain actions, invalidation through the chain port's child filter, the chained unit's marks and eject on NT, the connection manager's per-tunnel ownership, names and generations (owner: no statement for a chained drive yet); host vectors; with 45.14 (owner: all targets at once)
+- [ ] 45.14 record 34 section 3.3, the 9x half, with 45.13 (was CHAIN.4): padding through `XHCI_TBT_BRNUM_F_PAD`, chain-port numbering, devnode locate, removal, `DN_REMOVABLE`; first PCI.VXD's reading of an empty padded bridge on 98 SE and ME
+- [ ] 45.15 record 34 Part 3: the USB4 software connection manager's minimal chain (was CHAIN.2): `TBT_U4_KID`, the link view, connect, bond, CV and paths at depth 2, the end and middle unplugs, eject, adoption, the resume obligation; `test_u4cm` and the usb4-emu cross-check on `CHAIN=1`; q35 legs on 98 SE to 10 x64
+- [ ] 45.16 usb4-emu's depth-2 support for the Thunderbolt 3 firmware connection manager (was CHAIN-EMU): record 34's requirements E10 (the chain port's power controller) first, then E1 to E5 and E7, then E6 and E8 (usb4-emu's own repository); before 45.17
+- [ ] 45.17 record 34 Part 2: the ICM client's approval order and depth-2 actions, after 45.16 (was CHAIN.3); q35 legs on `tb3-alpine-ridge` and `tb3-titan-ridge`
+- [ ] 45.18 Stor98's statements for chained drives and their q35 qualification (was CHAIN.5; owner, 2026-10-27: a task of its own after the chains): a fail-closed admission on the emulator's identity, G3's ordering per system for the end and middle unplugs, saturated, at depths 1 and 2
+- [ ] 45.19 the 98 SE uninstall's cosmetic leftovers: SetupX's `OEM Name` records and phantom `Enum\SCSI` disk nodes (was UN9XLEFT.1; the `3.2.0.0` matrix, 2026-10-24); last
+- [ ] 45.final `README.md`, the release notes, `releases/history.md`, `source-files.md`, `docs/README.md`; the builds and the owner's signed cut of `3.4.0.0`; the install legs from the published asset after it, a failure a re-cut
+- [ ] 45-E.1 the dual-mode enclosure's race on the P14s Gen 1 (was DUALMODE.1, was 44-E.1)
+- [ ] 45-E.2 Stor98's MD-2 on the P14s with an NVMe enclosure and one with an internal switch (was NVHW.1, was 44-E.2, NVHW.1 and NVHW.2)
+- [ ] 45-E.3 the real-hardware checks `3.2.0.0` left (was HW32.1, was 44-E.4), on `3.4.0.0`'s asset
+- [ ] 45-E.4 the MSSU10 on the P14s Gen 1's USB-A port (was UASHW.1, was 44-E.5, 44.35's hardware half)
+- [ ] 45-E.5 real USB4 hardware: record 22 section 18.6's steps; 98 SE, XP and, under UEFI, 10 x64 (was U4HW.1, was 44-E.6; owner, 2026-10-27 and 2026-10-28); its data goes into `usb4-emu`, never into this repository; its first step uses no build of this release
+- [ ] 45-E.6 the finer timer while polling, `XhciPollFineTimer` 1, on real hardware (was B24.5; task 38.3, design record 15 section 7.2.4's amendment); its default reconsidered on the reading
+- [ ] 45-E.7 the generation read on the owner's Framework 13 with the ORICO enclosure (was ICMGEN.1, the rest of 43.44; its emulator legs were 44.14)
+- [ ] 45-E.8 the chain bench (was CHAIN-E; owner): a USB4 host with an ASM4242, a TS3 Plus and the ORICO behind it; the P14s and the Framework 13 with the same chain; with 42-A.14 on the P14s's switch chain (was OWED31.1, was 44-E.3; owner, 2026-10-29: folded in here)
+- [ ] 45-E.9 tunnelled NVMe speed, the bench B1 to B7 on real USB4 hardware (was NVPERF.1's second part): CrystalDiskMark 9 Q8T1 and Q1T1 and CrystalDiskMark 2.2 on Windows 10 x64 with `stornvme` as the comparison base, CrystalDiskMark 2.2 with XHCIPERF on 98 SE, ME and 7; the changes C1 to C5 each decided by its reading, under "Planned work"
+
+Checkpoint: 45.1 before any update leg of the phase; 45.2 before the
+first gated build; 45.7 before 45.8; 45.9's reading before its design
+and its design decided before any code; 45.11's prototype read under
+Driver Verifier and its design converged and decided before its code;
+45.12 before 45.13 to 45.18, 45.13 with 45.14, 45.16 before 45.17, and
+45.18 after the chains; each design section converged before its code;
+the host suites green with the gates on both architectures; the legs
+read in the emulator on fresh overlays of clean bases, what wants
+hardware, an image or an emulator model not at hand owed in the bench or
+under "Planned work" and named in the release notes' "Untested ground";
+then the owner's signed cut of `3.4.0.0`, and 45-E.1 to 45-E.9 on the
+published asset after it.
+
 ---
 
 # Planned work
@@ -663,12 +732,6 @@ named in the release notes' "Untested ground"; `usb-wdm-free` 0.1.4 and
 Not phases yet: each takes the next free phase number when the owner opens
 it, and its placeholder ids take that number then (owner, 2026-10-06; the
 decisions table).
-
-## Planned - Left by `3.1.0.0`
-
-Goal: the Phase 42 items the owner moved out of `3.1.0.0` on 2026-10-19 and 2026-10-20, each with what it leaves as it stands: the unsafe-unplug notice is not shown (UNPL.1, as in `3.0.0.0`); the 9x eject of a tunnelled NVMe calls Windows' remove itself, with no Stor98 acknowledgement (NV9X.3); a 9x function with no interrupt stays at Code 29 unless attached at power-on (NOIRQ.1, in the release notes); XHCITR's Safely Remove of a USB stick may stop every port on the owner's P14s (SRSTOP.1: not reproduced in QEMU; `3.1.0.0` logs every stop, and the owner's Save Report from the bench decides the fix); the idle poll default stays (IDLE.1); the emulator legs wait on `usb4-emu` part 2 (EMU.2 to EMU.5).
-
-Status: not opened, unnumbered and unversioned. On 2026-10-20 (owner) the items took planned ids of their own, the earlier one where they had one; each keeps its 42 id as "was", which the release notes, the design records and `runs/run-42.md` cite. Later the same day the owner moved SILENT.2, S98NAME.1, EJTEXT.1, UNPL.1, NV9X.3, IDLE.1, PRECUT.1, EMUFAST.1, most of NV9X.4, and the virtual-machine parts of GEN1.3 and OWED31.1 into Phase 43, and NUSBPKG.1 whole (43.1 to 43.5); what is left of each stays below. On 2026-10-25 (owner) every item still here moved into Phase 44 - RESUME.1, NOIRQ.1 with NV9X.4, EMU.2 to EMU.5 and PERF.1 as tasks, DUALMODE.1, NVHW.1, NVHW.2 and OWED31.1 as its bench clauses after the cut - or was dropped (W9XPROMPT.1, GEN1.3) or closed (SRSTOP.1, no longer seen by the owner); the decisions table, "Phase 44", has the map, and nothing is left here.
 
 ## Planned - Left by `3.2.0.0`
 
@@ -680,61 +743,19 @@ Status: not opened, unnumbered and unversioned. Listed at the `3.2.0.0`
 cut, 2026-10-24; each item names the 43 item it comes from, whose run
 sheet section has the detail. On 2026-10-25 (owner) most of them moved
 into Phase 44 and GEN1.4 was dropped (the decisions table, "Phase 44");
-what is left of each stays below.
+on 2026-10-29 (owner) W9XSTAGE.1, ICMGEN.1, UN9XLEFT.1 and PFW8.1's
+reading and design moved into Phase 45 (the decisions table, "Phase
+45"); what is left of each stays below.
 
 ### The bus and the connection manager
 
-- [ ] W9XSTAGE.1 the free and non-free drivers found by 98 SE's and ME's wizard again without browsing, `DevicePath` kept under about 280 characters; `3.2.0.0` only copies them there (owner, 2026-10-24; design record 26 section 6.7.6)
-- [ ] ICMGEN.1 the generation read on the owner's Framework 13 with the ORICO enclosure (the rest of 43.44; its emulator legs are 44.14)
 - [ ] DEPART.1 the rest of 43.53: a never-completed request to a departed device on real hardware; later, low priority, a departed PDO's start answered on 9x (owner, 2026-10-22; record 13 sections 5.2 and 10.5)
-- [ ] UN9XLEFT.1 the 98 SE uninstall's cosmetic leftovers: SetupX's `OEM Name` records and phantom `Enum\SCSI` disk nodes (the `3.2.0.0` matrix, 2026-10-24)
-- [ ] ME0E.1 ME's first cold start after a fresh install with an NVMe enclosure stopping once at "0E : 0197 : BFF62170" (1 of 7, the `3.2.0.0` matrix): unattributed; owed, a cause and a real ME machine (owner, 2026-10-25: kept here; 44.20's ME legs record any recurrence, with its address)
+- [ ] ME0E.1 ME's first cold start after a fresh install with an NVMe enclosure stopping once at "0E : 0197 : BFF62170" (1 of 7, the `3.2.0.0` matrix): unattributed; owed, a cause and a real ME machine (owner, 2026-10-25: kept here; 44.20's ME legs record any recurrence, with its address; owner, 2026-10-29: kept, Phase 45's ME legs recording it likewise)
 
 ### Windows 8, 8.1 and 10
 
 - [ ] NVME81.1 the installer's per-drive install on a real 8.1 machine (the rest of 43.59; the guest's part is 44.23)
-- [ ] PFW8.1 the prefetchable windows above 4 GB closed on the 32-bit 8, 8.1 and 10 (the rest of 44.72, its option (c); owner, 2026-10-28): a step in the PCI root bus's stack (`PNP0A03`, `PNP0A08`), its timing read first - whether a filter there acts before the PCI driver reads the bridges, at every start read - then designed in design record 32 section 11.2's place; until then `XHCIPFW.SYS` is not offered there
-
-## Planned - Left by `3.3.0.0`
-
-Goal: what the Phase 44 items leave after the `3.3.0.0` cut.
-
-Status: not opened, unnumbered and unversioned. Listed at the `3.3.0.0`
-cut, 2026-10-28; each item names the 44 item it comes from, whose run
-sheet section has the detail.
-
-- [ ] INSTREC.1 98 SE: a power cut during the install's copy loses the run's storage record while the storage files it placed survive, so the next run takes them as found installed and an uninstall leaves them (was 44.69; found by 44.20's 43.5 copy cut, 2026-10-27; owner, 2026-10-28: deferred past `3.3.0.0`): the record flushed before the first storage placement, as the non-free record already is; host tests, builds, the cut leg on 98 SE
-- [ ] BUILDFAST.1 a faster cut build (owner, 2026-10-28, after the `3.3.0.0` cut): the cut's two gated builds run at once by default (`cut-builds.ps1`, 44.31; the `3.3.0.0` cut built amd64 then x86, about 67 and 55 minutes, one after the other), and within one build the steps that need no compiler run in parallel: the text checks, the INF and import gates, the packager, QEMU launcher and VM matrix self-tests, the tool self-tests and the host suites; each step timed in the build log so the next cut can see where the time goes
-- [ ] W9XOTHERPG.1 98 SE and ME: the free Other USB drivers page lists only `uac2` and `usbmidi`, the two packages staged there (44.11), so a user may take the free download to hold only two drivers and not know that a checked box means staged on `DevicePath`; the other free packages are copied to the disk but not shown (owner, 2026-10-28, after the `3.3.0.0` cut): the page lists every package copied for this system, says which are staged and which are only copied, and names the folder the hardware wizard should be pointed at for the rest; the page's words in record 26 section 6.7.12; the window leg on 98 SE and ME
-- [ ] TRTITLE.1 the USB Tree's window title carries its version, as `xHCI98 USB Tree 3.3.0.0`, so a screenshot or a report says which build it came from (owner, 2026-10-28, after the `3.3.0.0` cut): the title built from `src\xhci_version.h`, which `xhcitr.c` already includes; the main window only, its message boxes keep the plain name; the build, the window leg on 98 SE and 7
-- [ ] DUALMODE.1 the dual-mode enclosure's race on the P14s Gen 1 (was 44-E.1; owner, 2026-10-28: moved from the `3.3.0.0` bench)
-- [ ] NVHW.1 Stor98's MD-2 on the P14s with an NVMe enclosure and one with an internal switch (was 44-E.2, NVHW.1 and NVHW.2; owner, 2026-10-28)
-- [ ] OWED31.1 42-A.14 on the P14s with a switch chain (was 44-E.3; owner, 2026-10-28)
-- [ ] HW32.1 the real-hardware checks `3.2.0.0` left (was 44-E.4; owner, 2026-10-28)
-- [ ] UASHW.1 the MSSU10 on the P14s Gen 1's USB-A port (was 44-E.5, 44.35's hardware half; owner, 2026-10-28)
-- [ ] U4HW.1 real USB4 hardware: record 22 section 18.6's steps; 98 SE, XP and, under UEFI, 10 x64 (was 44-E.6; owner, 2026-10-27 and 2026-10-28)
-- [ ] RTLNARROW.1 the free and non-free `rtl815x` allowed side by side where their INFs list disjoint chips (owner, 2026-10-28, after the `3.3.0.0` cut): `3.3.0.0` excludes the pair on every system because the packager never drops a rule an earlier release carried; the packs declare their ids, the packager checks they are disjoint per system and only then admits a COEXISTS line in place of the EXCLUDES; the host tests, the packager self-tests, the install leg on XP and 7
-- [ ] STORCDDB.1 the update from `3.2.0.0` on 2000 and XP removes the class key `CriticalDeviceDatabase\pci#cc_010802` when its `Service` is `stor98` (found by the after-cut leg of 44-E.7 on 2000, 2026-10-29: `3.2.0.0`'s class match left it, so an internal NVMe drive added after the update starts on Stor98 with no wizard; owner, 2026-10-29: documented in `3.3.0.0`, fixed next): as the update removes `3.2.0.0`'s `stor98.inf`, never the tunnel id's own key; record 31 section 6.4; host tests, the installer build, the update legs on 2000 and XP with an internal NVMe added after it
-
-## Planned - Hot-Added Docks on 2000 and XP, and Daisy Chains
-
-Goal: a dock, or a chain of a device behind a device, plugged in while
-Windows runs, working on every target: design records 33 (44.66) and 34
-(44.67).
-
-Status: not opened, unnumbered and unversioned (owner, 2026-10-27). The
-order is the owner's: DOCK.1 first; then CHAIN.1 and CHAIN.4 together
-(all targets at once), CHAIN.2; then CHAIN-EMU before CHAIN.3; CHAIN.5
-after the chains; CHAIN-E is the bench.
-
-- [ ] DOCK.1 (44.66-C) the code of design record 33: `cm_breq.c` and its host vectors, the `cm_filt.c` bridge case, the registered child's role and ancestry, the bridge inventory in the marks answer, the mark service's bridge marks, restart trigger and wait, `XhciCmBridgeReq` and `XhciCmBridgeReqDiag`; first in the release that brings daisy chains and before record 34's chain code; the readings R1 and R5 on a test build before the code is committed, then legs R3 to R13 (XP, 2000 by HAL, XP x64, 7 unchanged)
-- [ ] CHAIN.1 record 34 Part 1, the NT half: chain ports in `tbt_topo.c`, owed chain actions, invalidation through the chain port's child filter, the chained unit's marks and eject on NT, the connection manager's per-tunnel ownership, names and generations (owner: no statement for a chained drive yet); host vectors
-- [ ] CHAIN.4 record 34 section 3.3, the 9x half, with CHAIN.1 (owner: all targets at once): padding through `XHCI_TBT_BRNUM_F_PAD`, chain-port numbering, devnode locate, removal, `DN_REMOVABLE`; first PCI.VXD's reading of an empty padded bridge on 98 SE and ME
-- [ ] CHAIN.2 record 34 Part 3: the USB4 software connection manager's minimal chain (`TBT_U4_KID`, the link view, connect, bond, CV and paths at depth 2, the end and middle unplugs, eject, adoption, the resume obligation); `test_u4cm` and the usb4-emu cross-check on `CHAIN=1`; q35 legs on 98 SE to 10 x64
-- [ ] CHAIN-EMU usb4-emu's depth-2 support for the Thunderbolt 3 firmware connection manager, record 34's requirements E10 (the chain port's power controller) first, then E1 to E5 and E7, then E6 and E8 (usb4-emu's own repository)
-- [ ] CHAIN.3 record 34 Part 2: the ICM client's approval order and depth-2 actions, after CHAIN-EMU; q35 legs on `tb3-alpine-ridge` and `tb3-titan-ridge`
-- [ ] CHAIN.5 Stor98's statements for chained drives and their q35 qualification (a fail-closed admission on the emulator's identity, G3's ordering per system for the end and middle unplugs, saturated), at depths 1 and 2 (owner, 2026-10-27: a task of its own after the chains)
-- [ ] CHAIN-E the bench (owner): a USB4 host with an ASM4242, a TS3 Plus and the ORICO behind it; the P14s and the Framework 13 with the same chain
+- [ ] PFW8.1 the prefetchable windows above 4 GB closed on the 32-bit 8, 8.1 and 10 (the rest of 44.72, its option (c); owner, 2026-10-28): a step in the PCI root bus's stack (`PNP0A03`, `PNP0A08`), its timing read first - whether a filter there acts before the PCI driver reads the bridges, at every start read - then designed in design record 32 section 11.2's place; until then `XHCIPFW.SYS` is not offered there; the reading and the design are 45.9 (owner, 2026-10-29), the code stays here unless that reading allows it in `3.4.0.0`
 
 ## Planned - A Larger Event Ring
 
@@ -745,22 +766,6 @@ Status: not opened, unnumbered and unversioned. Taken into Phase 43 as
 43.41 by the owner on 2026-10-22 and deferred the same day (owner).
 
 - [ ] ISORING.4 a larger event ring (was 43.41; record 13 section 11.8, point 9), which raises the isochronous budget: deferred by the owner on 2026-10-22 because of the risk - the event ring touches every device and every leg, and a ring larger than one page needs physically contiguous memory on 98 SE - while 43.40's legs showed no Event Ring Full and no Missed Service error. To reopen if UVC or UAC 2 with several streams shows an Event Ring Full or Missed Service errors
-
-## Planned - Bench Follow-Up After `2.4.0.0`
-
-Goal: on real hardware, what Phase 38 could read only in virtual
-machines.
-
-Status: not opened, unnumbered and unversioned. Listed by the owner on
-2026-10-14 from what Phase 38's tasks owe after the cut (`runs/run-38.md`,
-each task's "Owed after the cut"). On 2026-10-18 the owner struck
-B24.1 to B24.4 (the Linux quirks on the controllers they name, a real
-xHCI 0.96 controller, hidusbf on a composite HID device, and the High
-Speed and USB 3 hubs under the `2.4.0.0` ids) from the list; the release
-notes' "Untested ground" still says what was not read. A sixth item,
-`XHCICLN`'s veto on XP x64, was read before the cut (task 38.8).
-
-- [ ] B24.5 the finer timer while polling, `XhciPollFineTimer` 1, on real hardware (task 38.3, design record 15 section 7.2.4's amendment); its default reconsidered on the reading
 
 ## Planned - Releasing the Transfers Kept by a Pinned Containment
 
@@ -785,21 +790,8 @@ allows, measured with CrystalDiskMark 2.2 (owner, 2026-10-25).
 
 Status: not opened, unnumbered and unversioned (owner, 2026-10-25: after
 `3.3.0.0`). The reading and the design are task 44.36, design record 30
-section 13; the owner's answers are the decisions table's "44.36".
+section 13; the owner's answers are the decisions table's "44.36". On 2026-10-29 (owner)
+the emulator readings moved into Phase 45 as 45.10 and the bench as
+45-E.9; the changes stay here.
 
-- [ ] NVPERF.1 the emulator readings of design record 30 section 13.7 on a q35 98 SE guest (two threads at Stor98, the per-page mapping cost aligned against scattered, the request sizes reaching Stor98 at 4 and 8 MiB); the bench B1 to B7 on real USB4 hardware (CrystalDiskMark 9 Q8T1 and Q1T1 and CrystalDiskMark 2.2 on Windows 10 x64 with `stornvme` as the comparison base, CrystalDiskMark 2.2 with XHCIPERF on 98 SE, ME and 7); then the changes C1 to C5 each decided by its reading
-
-## Planned - Stand By on Windows 2000 With a Tunnelled Device
-
-Goal: the resume ordering of record 21 section 6.3 and the USB4
-connection manager's suspend obligations read on Windows 2000 on real
-hardware: a resume that succeeds, one that fails, an unplug during sleep,
-and the watchdog's expiry.
-
-Status: dropped by the owner on 2026-10-25 (the decisions table,
-"Phase 44"); until then kept, blocked on a machine (owner, 2026-10-18). Listed on 2026-10-17 by
-the owner, when tasks 39-V.2 and 40-V.2 were closed without it: Windows
-2000 in the emulator offers no Stand by (the Cirrus driver vetoes it), and
-a forced S3 never resumes, even with no `xhcicm.sys` present. The suspend
-half read as designed under both connection managers; ME's S3 readings
-(run-39) stand.
+- [ ] NVPERF.1 the changes C1 to C5, each decided by its reading (45.10's emulator readings, 45-E.9's bench); was: the emulator readings of design record 30 section 13.7 on a q35 98 SE guest (two threads at Stor98, the per-page mapping cost aligned against scattered, the request sizes reaching Stor98 at 4 and 8 MiB); the bench B1 to B7 on real USB4 hardware (CrystalDiskMark 9 Q8T1 and Q1T1 and CrystalDiskMark 2.2 on Windows 10 x64 with `stornvme` as the comparison base, CrystalDiskMark 2.2 with XHCIPERF on 98 SE, ME and 7); then the changes C1 to C5 each decided by its reading

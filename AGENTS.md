@@ -324,11 +324,10 @@ never modified, with design record 21 as Phase 39's plan (the Thunderbolt
 firmware connection manager client) and design record 22 as Phase 40's
 (the USB4 software connection manager); both phases opened 2026-10-15 and
 shipped together as `3.0.0.0`, cut on 2026-10-17 with Phase 41 (XHCITR,
-design record 25). **The open phase is that file's Phase 44**, opened by
-the owner on 2026-10-25 for release `3.3.0.0` (Stor98 for tunnelled
-drives only, the connection manager off the boot path, the hibernate
-resume, the installer's pages, and what `3.2.0.0` owed), on branch
-`3.3.0.0`;
+design record 25). **The open phase is that file's Phase 45**, opened by
+the owner on 2026-10-29 for release `3.4.0.0` (hot-added docks on 2000
+and XP and daisy chains, the kept child, and what `3.3.0.0` left), on
+branch `3.4.0.0`;
 the file's status line and decisions table are the current state. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
