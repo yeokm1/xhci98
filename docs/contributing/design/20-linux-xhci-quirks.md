@@ -1359,7 +1359,7 @@ so no static or runtime tag applies and no `legal-provenance.md` row is
 owed. xHCI facts: xHCI 1.2c as `docs/references/README.md` pins it, by
 page. Driver facts: read from `src` on `phase-38`, by file and function.
 Project machines and their ids: `docs/contributing/runs/run-35.md` (E460
-9D2F, P14s Gen 1 02ED, B490 1E31, the AM5 CSM board) and `run-36.md` (E7250
+9D2F, P14s Gen 1 02ED, B490 1E31, a desktop CSM board) and `run-36.md` (E7250
 9CB1); the VL805: issue 13. The standing column of section 3.0: the owner's
 rulings and the readings named in it, nothing else.
 

@@ -117,9 +117,14 @@ void usb4_icm_reset(USB4ICM *icm, bool wakeup)
     CHECK(0, "ICM reset without an ICM");
 }
 
-/* usb4-emu QEMU fork 02dda40 (as its fabric-test.c): the link retrain's
- * recheck and a tunnel port's reattach have no PCIe side here. */
+/* usb4-emu QEMU fork 2e063be (as its fabric-test.c): the link retrain's
+ * recheck, a tunnel port's cold reconcile and its reattach have no PCIe
+ * side here. */
 void usb4_tunnel_retrain_recheck(void)
+{
+}
+
+void usb4_tunnel_port_cold_reconcile(USB4TunnelPort *p, USB4Device *dev)
 {
 }
 
@@ -500,8 +505,8 @@ static void new_fabric(USB4HostModel model, bool preos)
         .profile = USB4_PROFILE_USB4_GENERIC, .dialect = USB4_DIALECT_USB4,
         .router_vendor_id = 0x46f4, .router_device_id = 0x4040,
         .num_usb4_ports = 2, .host_model = model, .preos_cm = preos,
-        /* asm4242 as usb4-host sets it by default since usb4-emu's QEMU
-         * fork 02dda40 (its fabric-test.c asm4242 configuration): the
+        /* asm4242 as usb4-host sets it by default in usb4-emu's QEMU
+         * fork 2e063be (its fabric-test.c asm4242 configuration): the
          * emulator's asm4242 preset, its ASM4242 host router as usb4-emu
          * records it (lanes 1-4, the host interface 5 with 21 paths,
          * PCIe Down 6-7, USB3 Down 8-9, DP IN 10-11), an ASM2464 leaving

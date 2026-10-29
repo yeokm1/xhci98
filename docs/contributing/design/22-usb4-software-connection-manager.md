@@ -3947,7 +3947,8 @@ GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays GPL-2.0-only.
   later) it also links `usb4-router-img.c` and `usb4-router-asm2464.c`
   and runs section 6.11's device on `intel-adl`: cold, hot plug, unplug,
   re-plug, the pre-OS tunnel preserved and cleaned. Since task 44.42 it
-  needs QEMU fork `02dda40` or later and builds the `asm4242` host as
+  needs QEMU fork `2e063be` (on `usb4-emu` `main` after its merge of the
+  asm4242 model; `02dda40` before the 2026-10-29 squash) or later and builds the `asm4242` host as
   that fork's `usb4-host` does by default, the emulator's asm4242 preset, the
   ASM4242 host router of section 18.2 (lanes 1-4, the host
   interface 5 with 21 paths, PCIe Down 6-7, USB3 Down 8-9, DP IN 10-11,
