@@ -224,6 +224,11 @@ call :readopt "%~2"
 call :readopt "%~3"
 if "%FLAVORS%"=="" set "FLAVORS=both"
 if /i "%FLAVORS%"=="both" set "FLAVORS=debug release"
+rem "all" is what a cut builds (cut-builds.ps1, or by hand for -ImportOnly or
+rem a one-tree cut), so it runs every self-test in full: the INF gate's
+rem self-tests skip themselves when nothing they read has changed since
+rem their last passing run, except under this (roadmap-usb4 task 45.30).
+if /i "%FLAVORS%"=="all" set "XHCI98_FULL_SELFTESTS=1"
 if /i "%FLAVORS%"=="all" set "FLAVORS=debug release qemu"
 if /i "%FLAVORS%"=="debug" set "FLAVORS=debug"
 if /i "%FLAVORS%"=="release" set "FLAVORS=release"

@@ -2464,6 +2464,9 @@ function Start-CutBuild {
     $psi.UseShellExecute = $false
     $psi.EnvironmentVariables["TEMP"] = $tmp
     $psi.EnvironmentVariables["TMP"] = $tmp
+    # A cut runs every self-test in full, never skipping one whose inputs
+    # its last passing run read (the INF gate's, task 45.30).
+    $psi.EnvironmentVariables["XHCI98_FULL_SELFTESTS"] = "1"
     $p = [System.Diagnostics.Process]::Start($psi)
     [void]$Started.Add($p)
     Write-Host ("  {0}: {1} in {2} (PID {3}), log {4}" -f $Arch, $Command, $Tree, $p.Id, $log)

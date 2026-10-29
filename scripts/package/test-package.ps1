@@ -6196,6 +6196,8 @@ try {
     $pcText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "package-common.ps1"))
     Assert-True ($pcText.Contains('$psi.EnvironmentVariables["TEMP"] = $tmp') -and $pcText.Contains('$psi.EnvironmentVariables["TMP"] = $tmp')) `
         "Start-CutBuild no longer gives each build its own TEMP and TMP."
+    Assert-True ($pcText.Contains('$psi.EnvironmentVariables["XHCI98_FULL_SELFTESTS"] = "1"')) `
+        "Start-CutBuild no longer has a cut's builds run every self-test in full (task 45.30)."
 
     # --- make-release.ps1 -CheckOnly (task 43.9) -----------------------------
     #
