@@ -687,7 +687,7 @@ published asset (as decision D13), a failure there a re-cut. Its records
 will be `runs/run-45.md`, design records 26, 30, 31, 32, 33 and 34, and
 the sections of the records its items name.
 
-- [ ] 45.1 the update from `3.2.0.0` on 2000 and XP removes the class key `CriticalDeviceDatabase\pci#cc_010802` when its `Service` is `stor98` (was STORCDDB.1; found by the after-cut leg of 44-E.7 on 2000, 2026-10-29: `3.2.0.0`'s class match left it, so an internal NVMe drive added after the update starts on Stor98 with no wizard; owner, 2026-10-29: documented in `3.3.0.0`, fixed next): as the update removes `3.2.0.0`'s `stor98.inf`, never the tunnel id's own key; record 31 section 6.4; host tests, the installer build, the update legs on 2000 and XP with an internal NVMe added after it; with it, its uninstall-side twin: a `3.2.0.0`-origin system whose internal NVMe drive bound through that class entry is uninstalled with Stor98's service while the class entry is kept (a bound device counts, `inst_eng.c` `s98_un_service` and `s98_bound_any`), so a new NVMe drive keeps binding after the package is gone; the design reports the entry and the drives it binds and offers its deletion when no recorded device remains
+- [-] 45.1 dropped by the owner, 2026-10-29: the update from `3.2.0.0` on 2000 and XP removes the class key `CriticalDeviceDatabase\pci#cc_010802` when its `Service` is `stor98` (was STORCDDB.1; found by the after-cut leg of 44-E.7 on 2000, 2026-10-29: `3.2.0.0`'s class match left it, so an internal NVMe drive added after the update starts on Stor98 with no wizard; owner, 2026-10-29: documented in `3.3.0.0`, fixed next): as the update removes `3.2.0.0`'s `stor98.inf`, never the tunnel id's own key; record 31 section 6.4; host tests, the installer build, the update legs on 2000 and XP with an internal NVMe added after it; with it, its uninstall-side twin: a `3.2.0.0`-origin system whose internal NVMe drive bound through that class entry is uninstalled with Stor98's service while the class entry is kept (a bound device counts, `inst_eng.c` `s98_un_service` and `s98_bound_any`), so a new NVMe drive keeps binding after the package is gone; the design reports the entry and the drives it binds and offers its deletion when no recorded device remains. Dropped because only a 2000 or XP install of `3.2.0.0` with its experimental Thunderbolt 3 / USB4 box ticked (unticked by default there) and Stor98 bound can carry the key, the drive it catches still works on Stor98, and `3.3.0.0`'s release notes already give the manual deletion; 45.final carries that item into `3.4.0.0`'s known limitations
 - [x] 45.2 the `usb-wdm-free` pin moved to `c28fce8` (owner, 2026-10-29): after the `3.3.0.0` cut v0.1.4 moved from `222730c` to `c28fce8` (the changelog and the real-PC records, documents only; `free\`, `STAGE.TXT` and `SHA256.TXT` the same), so `scripts\package\wdmfree-pin.txt`'s Commit line follows it before the phase's first gated build, or `make-release.ps1 -CheckOnly` may refuse (done 2026-10-29: `free\`, `STAGE.TXT` and `SHA256.TXT` read identical at both commits, the pin's Commit line moved and its note added)
 - [ ] 45.3 a faster cut build (was BUILDFAST.1; owner, 2026-10-28, after the `3.3.0.0` cut): the cut's two gated builds run at once by default (`cut-builds.ps1`, 44.31; the `3.3.0.0` cut built amd64 then x86, about 67 and 55 minutes, one after the other), and within one build the steps that need no compiler run in parallel: the text checks, the INF and import gates, the packager, QEMU launcher and VM matrix self-tests, the tool self-tests and the host suites; each step timed in the build log so the next cut can see where the time goes
 - [ ] 45.4 the USB Tree's window title carries its version, as `xHCI98 USB Tree 3.4.0.0`, so a screenshot or a report says which build it came from (was TRTITLE.1; owner, 2026-10-28, after the `3.3.0.0` cut): the title built from `src\xhci_version.h`, which `xhcitr.c` already includes; the main window only, its message boxes keep the plain name; the build, the window leg on 98 SE and 7
@@ -730,22 +730,21 @@ the sections of the records its items name.
 - [ ] 45-E.13 the Realtek ALC4080 under `uac2` on a real board that carries one (45.25): playback and recording on each output and input, 98 SE, XP and 7 x64, from `3.4.0.0`'s asset
 - [ ] 45-E.14 the USB serial bridges of 45.26 on real chips under `usbcom`, 98 SE and ME, from `3.4.0.0`'s asset
 
-Checkpoint: 45.1 before any update leg of the phase; 45.2 before the
-first gated build; 45.7 before 45.8; 45.9's reading before its design
-and its design decided before any code; 45.11's prototype read under
-Driver Verifier and its design converged and decided before its code;
-45.12 before 45.13 to 45.18, 45.13 with 45.14, 45.16 before 45.17, and
-45.18 after the chains; 45.20 to 45.22 each a design section converged
-before its code; 45.23's and 45.24's readings before their fixes; 45.25
-and 45.26 after 45.2; each design section converged before its code;
-the host suites green with the gates on both architectures; the legs
-read in the emulator on fresh overlays of clean bases, what wants
-hardware, an image or an emulator model not at hand owed in the bench or
-under "Planned work" and named in the release notes' "Untested ground";
-then the owner's signed cut of `3.4.0.0`, and 45-E.1 to 45-E.14 on the
-published asset after it.
+Checkpoint: 45.2 before the first gated build; 45.7 before 45.8; 45.9's
+reading before its design and its design decided before any code;
+45.11's prototype read under Driver Verifier and its design converged
+and decided before its code; 45.12 before 45.13 to 45.18, 45.13 with
+45.14, 45.16 before 45.17, and 45.18 after the chains; 45.20 to 45.22
+each a design section converged before its code; 45.23's and 45.24's
+readings before their fixes; 45.25 and 45.26 after 45.2; each design
+section converged before its code; the host suites green with the gates
+on both architectures; the legs read in the emulator on fresh overlays
+of clean bases, what wants hardware, an image or an emulator model not
+at hand owed in the bench or under "Planned work" and named in the
+release notes' "Untested ground"; then the owner's signed cut of
+`3.4.0.0`, and 45-E.1 to 45-E.14 on the published asset after it.
 
-Order (owner, 2026-10-29): 45.2, 45.3, 45.4 and 45.1 first; then the
+Order (owner, 2026-10-29): 45.2, 45.3 and 45.4 first (45.1 dropped); then the
 user reports 45.23 and 45.24 and the fixes' legs 45.27; the installer
 cluster 45.5, 45.6, 45.7 and 45.8; 45.25 and 45.26 in `usb-wdm-free`
 alongside, the free set's pin moved once after both; 45.11, then 45.12,
