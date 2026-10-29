@@ -43,7 +43,8 @@ typedef struct _CM_RIRQ_DRV {
     ULONG CommandRead;      /* Command bit 10 read at this activation      */
     ULONG IntxOurs;         /* this driver set Command bit 10              */
     ULONG Retained;         /* connected, unretired, acknowledge-only      */
-    ULONG MaintDue;         /* the next maintenance pass, NowMs            */
+    ULONG MaintLast;        /* the last maintenance pass, NowMs            */
+    ULONG MaintOwed;        /* the maintenance due at once (an Up)         */
     ULONG RetryDue;         /* a retained one's next retirement attempt    */
     ULONG Noted9x;          /* cm.irq.9x logged                            */
     CM_RIRQ_GEOM Geom;
@@ -98,16 +99,18 @@ VOID CmRirqStart(struct _CM_NHI *nhi, PCM_PARTIAL_RESOURCE_LIST translated);
 
 /* The rest on the connection-manager thread, PASSIVE_LEVEL, no lock held. */
 
-/* Before a ring start (an activation's bind, a resume, a recovery): RX
+/* Before a ring start (an activation's bind, a resume, a recovery): an
+ * armed interrupt taken down (the start masks every cause), then RX
  * descriptors posted with Interrupt Enable where the interrupt will be
  * tried (section 4.5.2, "the intent"), without it otherwise. */
 VOID CmRirqIntent(struct _CM_NHI *nhi);
 /* Whether the thread's waits run to deadlines (armed) rather than for a
- * fresh period; CmRirqLeft the wait to the maintenance pass, at most
- * `limit`; CmRirqMaintenance whether this pass runs it. */
+ * fresh period; CmRirqLeft the wait to the maintenance pass, the last one
+ * plus `periodMs` (the period in force now); CmRirqMaintenance whether
+ * this pass runs it. */
 BOOLEAN CmRirqTimed(struct _CM_NHI *nhi);
-ULONG CmRirqLeft(struct _CM_NHI *nhi, ULONG limit);
-BOOLEAN CmRirqMaintenance(struct _CM_NHI *nhi);
+ULONG CmRirqLeft(struct _CM_NHI *nhi, ULONG periodMs);
+BOOLEAN CmRirqMaintenance(struct _CM_NHI *nhi, ULONG periodMs);
 /* Around the maintenance pass's poll: the watchdog (which may test again
  * or fall back), then the drain's claims and the next deadline. */
 VOID CmRirqBeforeMaint(struct _CM_NHI *nhi);

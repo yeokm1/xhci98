@@ -921,7 +921,11 @@ static VOID NTAPI cmThread(PVOID context)
             if ((bits & CM_WORK_RING) != 0) {
                 CmRirqWake(nhi);
             }
-            if (CmRirqMaintenance(nhi)) {
+            /* The period again: the work and the wake may have changed
+             * the Stor98 entries it is held to. */
+            period = CmNvlinkIdleMs(
+                nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+            if (CmRirqMaintenance(nhi, period)) {
                 nhi->Counters.Polls++;
                 CmRirqBeforeMaint(nhi);
                 CmNhiPollPass(nhi);

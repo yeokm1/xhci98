@@ -2031,10 +2031,13 @@ open, reviewed and revised with it:
   bind, the resume (`CmNhiReinit`) and both recoveries.
 - **When Down runs.** Before the ring stop of a stop (`CmNhiStopWork`, its
   first step) and of every quiescence (`CmNhiQuiesce`: a D3, a sleep in D0
-  and an NT shutdown alike); and at the end of a pass on which the client
-  no longer polls (a containment, a liveness loss, a failure after
-  activation) - the containment itself writes nothing, so taking it down
-  at the end of that pass rather than on entry changes no access.
+  and an NT shutdown alike); before every ring start that finds it armed
+  (`CmRirqIntent`: a ring start masks every cause, and a full recovery
+  can run and return to polling inside one pass); and at the end of a
+  pass on which the client no longer polls (a containment, a liveness
+  loss, a failure after activation) - the containment itself writes
+  nothing, so taking it down at the end of that pass rather than on entry
+  changes no access.
 - **The wake.** The ICM's `TbtIcmRingWake` is `TbtIcmPoll` without the
   router read owed, the rediscovery and the idle-poll count. The USB4
   profile's `TbtU4RingWake` drains the ring and takes the queues as the
@@ -2043,6 +2046,11 @@ open, reviewed and revised with it:
   (a recorded drain, a deferred tail, a discovery owed, the barrier), is
   left for the tick, so no check's responses can mark another and the
   wakes end. The link scan below depth 1 stays the tick's.
+- **The maintenance deadline** is kept as the time of the last
+  maintenance pass, and the deadline is that plus the period in force at
+  each look (`CmNvlinkIdleMs` again after the pass's work), so a period
+  that shrinks to 250 ms when a Stor98 entry reads `UP` brings the next
+  pass forward at once; an Up makes it due at once.
 - **Disable ISR Auto-Clear** is read from `39864h` at each Up (nothing read
   it at start before), and logged.
 - **Command bit 10 found set** at the activation's first Up: nothing is

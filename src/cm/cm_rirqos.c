@@ -49,6 +49,11 @@ typedef struct _CM_RIRQ_SYNC {
     BOOLEAN Open;           /* unmask (the arm) or mask                    */
     BOOLEAN Proven;         /* the read-back showed it                     */
     ULONG Imr;              /* the mask DW read back                       */
+    /* The arm's: what the service routine reads, published under the
+     * interrupt object's lock (a retained interrupt is live meanwhile). */
+    CM_RIRQ_GEOM Geom;
+    ULONG Intel;
+    ULONG AutoClearOff;
 } CM_RIRQ_SYNC;
 
 static ULONG cmRirqRd(PCM_NHI nhi, ULONG offset)
@@ -196,6 +201,9 @@ static BOOLEAN NTAPI cmRirqSyncArm(PVOID Context)
     s = (CM_RIRQ_SYNC *)Context;
     nhi = s->Nhi;
     s->Proven = FALSE;
+    nhi->Rirq.Geom = s->Geom;
+    nhi->Rirq.Intel = s->Intel;
+    nhi->Rirq.AutoClearOff = s->AutoClearOff;
     cmRirqStatus(nhi, v, TRUE);
     cmRirqWr(nhi, TBT_HI_ITR0, 0);
     CmRirqBurstReset(&nhi->Rirq.Burst, nhi->Rirq.DpcSeq);
@@ -344,6 +352,13 @@ static BOOLEAN cmRirqWanted(PCM_NHI nhi)
 
 VOID CmRirqIntent(PCM_NHI nhi)
 {
+    if (nhi->Rirq.Connected && !nhi->Rirq.Retained) {
+        /* Every ring start masks every cause (TbtRingStartEx): an armed
+         * interrupt is taken down first - a full recovery can run and
+         * return to polling inside one pass - so the pass's Up re-arms
+         * it. A retained one stays acknowledge-only through the start. */
+        CmRirqDown(nhi, CM_RIRQ_DOWN_CONTAIN);
+    }
     nhi->Ring.RxIe = cmRirqWanted(nhi);
 }
 
@@ -352,17 +367,24 @@ BOOLEAN CmRirqTimed(PCM_NHI nhi)
     return (BOOLEAN)(nhi->Rirq.Armed != 0);
 }
 
-ULONG CmRirqLeft(PCM_NHI nhi, ULONG limit)
+/* The maintenance deadline is the last pass plus the period in force now,
+ * so a period that shrinks (a Stor98 entry reading UP) brings it forward
+ * at once and one that grows defers it, the elapsed time kept. */
+ULONG CmRirqLeft(PCM_NHI nhi, ULONG periodMs)
 {
-    return CmRirqLeftMs(cmRirqNow(nhi), nhi->Rirq.MaintDue, limit);
+    if (nhi->Rirq.MaintOwed) {
+        return 0;
+    }
+    return CmRirqLeftMs(cmRirqNow(nhi), nhi->Rirq.MaintLast + periodMs,
+                        periodMs);
 }
 
-BOOLEAN CmRirqMaintenance(PCM_NHI nhi)
+BOOLEAN CmRirqMaintenance(PCM_NHI nhi, ULONG periodMs)
 {
-    if (!nhi->Rirq.Armed) {
+    if (!nhi->Rirq.Armed || nhi->Rirq.MaintOwed) {
         return TRUE;
     }
-    return CmRirqDue(cmRirqNow(nhi), nhi->Rirq.MaintDue);
+    return CmRirqDue(cmRirqNow(nhi), nhi->Rirq.MaintLast + periodMs);
 }
 
 /* PCI Interrupt Disable cleared where this driver set it (section
@@ -527,7 +549,11 @@ static VOID cmRirqUp(PCM_NHI nhi)
     ULONG v;
 
     r = &nhi->Rirq;
-    if (!CmRirqGeometry(nhi->Ring.Paths, &r->Geom)) {
+    /* Everything the service routine reads is computed here and published
+     * either before the connection or, for a retained interrupt that is
+     * live meanwhile, inside the arm's synchronize routine (record 05
+     * section 4: the routine must never see a half-written geometry). */
+    if (!CmRirqGeometry(nhi->Ring.Paths, &s.Geom)) {
         CmLogNote(nhi, "cm.irq.none", 0x100UL | nhi->Ring.Paths);
         CmRirqDown(nhi, CM_RIRQ_DOWN_FALLBACK);
         return;
@@ -544,17 +570,21 @@ static VOID cmRirqUp(PCM_NHI nhi)
         }
         r->CommandRead = 1;
     }
-    r->Intel = (nhi->Hw != NULL &&
-                (nhi->Hw->Flags & TBT_HW_INTEL_INTERRUPTS) != 0)
-                   ? 1UL
-                   : 0UL;
+    s.Intel = (nhi->Hw != NULL &&
+               (nhi->Hw->Flags & TBT_HW_INTEL_INTERRUPTS) != 0)
+                  ? 1UL
+                  : 0UL;
     v = nhi->Host.Read32(nhi->Host.Context, TBT_HI_CONTROL);
-    r->AutoClearOff = (v != 0xFFFFFFFFUL &&
-                       (v & TBT_HI_CONTROL_NO_AUTOCLEAR) != 0)
-                          ? 1UL
-                          : 0UL;
+    s.AutoClearOff = (v != 0xFFFFFFFFUL &&
+                      (v & TBT_HI_CONTROL_NO_AUTOCLEAR) != 0)
+                         ? 1UL
+                         : 0UL;
     CmLogNote(nhi, "cm.irq.hi-control", v);
     if (!r->Connected) {
+        /* Nothing is connected: no routine can read these yet. */
+        r->Geom = s.Geom;
+        r->Intel = s.Intel;
+        r->AutoClearOff = s.AutoClearOff;
         r->Connected = 1;
         status = IoConnectInterrupt(&r->Object, cmRirqIsr, nhi, NULL,
                                     r->Vector, r->Irql, r->Irql, r->Mode,
@@ -589,7 +619,7 @@ static VOID cmRirqUp(PCM_NHI nhi)
     }
     nhi->Ring.RxIe = TRUE;
     r->IrqMode = CM_RIRQ_MODE_LINE;
-    r->MaintDue = cmRirqNow(nhi);
+    r->MaintOwed = 1;
     CmRirqWatchStart(&r->Watch, (ULONG)r->Claims, nhi->Ring.Counters.Rx);
     CmLogNote(nhi, "cm.irq.armed", s.Imr);
     /* A frame that landed between the stale status read and the unmask is
@@ -643,8 +673,10 @@ VOID CmRirqAfterMaint(PCM_NHI nhi, ULONG periodMs)
     if (!r->Armed) {
         return;
     }
+    UNREFERENCED_PARAMETER(periodMs);
     CmRirqWatchDrained(&r->Watch, (ULONG)r->Claims);
-    r->MaintDue = cmRirqNow(nhi) + periodMs;
+    r->MaintLast = cmRirqNow(nhi);
+    r->MaintOwed = 0;
 }
 
 VOID CmRirqWake(PCM_NHI nhi)
