@@ -4778,15 +4778,13 @@ static ULONG hcdRkeepClaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return ok;
 }
 
-/* A kept device whose restore failed, on its root port (`taken`: the
- * controller is halted for a reset, so no command is sent and a slot the
- * restore enabled is left to that reset's HCRST): its temporary
+/* A kept device whose restore failed, on its root port: its temporary
  * rings released, then today's departure - its slot given back when the
  * restore had enabled one (HCD_GO_UNPLUG), else none to give (taken by
  * HCRST) - its PDOs reported missing and its URBs completed as any
  * device's, and the machine where a disconnect puts it, so the port's
  * next inspection enumerates what is there afresh (K7). Thread only. */
-static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG taken)
+static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
     XHCI_ENUM_EVENT event;
     XHCI_ENUM_ACTION act;
@@ -4804,9 +4802,8 @@ static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG taken)
     }
     hcdConnectGen(hc, p);
     p->AwaitSerial = hcdSubtreeGo(hc, p,
-                                  (dev->SlotId != 0 && !taken)
-                                      ? HCD_GO_UNPLUG
-                                      : HCD_GO_TAKEN,
+                                  dev->SlotId != 0 ? HCD_GO_UNPLUG
+                                                   : HCD_GO_TAKEN,
                                   1);
     hcdEventInit(&event, XHCI_ENUM_EV_DISCONNECT, 1);
     (VOID)XhciEnumStep(&p->Enum, &event, &act);
@@ -5106,11 +5103,14 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
             hc->ResumeKept++;
             continue;
         }
-        /* A command that failed asked for the controller's reset: from
-         * then on every kept device left is dropped with no command, so
-         * none is left slotless with paused pipes should that reset be
-         * refused (a recovery window spent). */
-        hcdRkeepDrop(hc, &hc->Ports[i], hcdHalted(hc));
+        /* Every kept device left is dropped even once a failed command
+         * has asked for the controller's reset, so none stays slotless with
+         * paused pipes should that reset be refused (a recovery window
+         * spent). A slotless one goes with no command; one whose new slot
+         * the controller may still own goes through Disable Slot, which a
+         * halted controller refuses, leaving the record quarantined in
+         * SlotDevice[] for the reset's invalidation, as any departure's. */
+        hcdRkeepDrop(hc, &hc->Ports[i]);
     }
     XhciLogNote(&hc->Hc, "resume.keep",
                 ((hc->ResumeKept & 0xFFUL) << 16) |
