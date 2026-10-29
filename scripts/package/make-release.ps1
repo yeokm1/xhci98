@@ -5164,10 +5164,11 @@ bugs are not unexpected. Please report what you find:
 
 and attach:
 
-  - The driver's report: make the problem happen, then in the xHCI98 USB
-    Tree use File > Save Report (or XHCITR /report <file>) and attach the
-    .TXT. It needs the logging level at 2 or more (the default; View >
-    Logging level).
+  - The driver's report: set the logging level to 2 (the default; View >
+    Logging level in the xHCI98 USB Tree) and restart if you changed it;
+    make the problem happen, then use File > Save Report (or XHCITR
+    /report <file>) and attach the .TXT. At level 4 the report leaves the
+    log out, as it holds internal addresses.
   - The driver's snapshot: right after the report, File > Save Snapshot
     (or XHCITR /snapshot; XHCITR64 on 64-bit Windows), and attach the four
     files it writes (.DEV, .TXT, .BIN and .PSC).
