@@ -2380,3 +2380,63 @@ High Speed isochronous timings say nothing about the driver's.
 emulator keep time is in `qemu-xhci`'s SIA target: take the previous
 target plus the Interval, however late, while the ring has not run
 empty, up to a bound. That change lies outside this repository.
+
+### 45.36, the second reading: under the gdb stub, cold starts, and a stock comparison (2026-10-30, partial)
+
+`3.4.0.0` merged first (`28900e16`). The trials of the first reading
+went on with a breakpoint on the faulting instruction (`0xBFF72170` on
+98 SE, `0xBFF62170` on ME) through QEMU's gdb stub, every hit logged
+with its ESP and whether the page at ESP read; a stop screen is told by
+its 720 x 400 text mode in the screenshots taken every 30 seconds. The
+scripts are the worker's (`gdb36.py`, `cold.sh`, `trial2.sh`), not
+tracked.
+
+**What the instruction is.** Every hit has EAX to EBP zero and ESP at a
+stack's top less 0x48 (`xxxxFFB8`): it is the first ring-3 instruction
+of a new thread, popping the frame its creator built. A boot of the
+`3.3.0.0` base hits it 27 times on 98 SE and 44 to 45 times on ME; the
+stock base of the same layout (no xHCI98 installed, `s98`) 21 times.
+The six more on 98 SE are threads whose stacks are in the shared arena
+(`82Dxxxxx` to `83xxxxxx`), as `PsCreateSystemThread`'s are: the
+controllers', the connection manager's and Stor98's system threads.
+The page fault of the stop is therefore a new thread whose first stack
+page is not present when it first runs.
+
+**The rate, with the first reading's.**
+
+| Run | Starts | Stops |
+|---|---|---|
+| 98 SE, first start after the update | 7 (`u1` to `u6`, `u8`) | 1 (`u5`, 0E at 019F:BFF72170) |
+| ME, first start after the update | 3 (`um3` to `um5`) | 0 |
+| 98 SE, cold start of the `3.3.0.0` base, no update | 30 (`c1`, `c2`, `r1a`/`b` to `r14a`/`b`, under the stub from `r8`) | 0 |
+| ME, the same | 15 (`cm1`, `r1m` to `r14m` but `r7m`, `um1`) | 1 (`um1`, 0E : 01A7 : BFF62170, before any update) |
+| 98 SE stock, cold start, same layout | 8 (`sk1` to `sk8`) | 0 |
+
+`r7m` was stopped by the first version of the script at a page the
+stub could not read, a page the VMM faults in as it should (the next
+version steps over such a hit and goes on); it is left out.
+
+**What this says.** The stop is not specific to the update: ME stopped
+the same way at a plain cold start, which is ME0E.1's text and address.
+It is rare (2 of 55 starts with xHCI98 installed, 0 of 8 stock), too
+rare to tell the enclosure's or Stor98's part in the hours this reading
+had, and the run under the stub (21 starts from `r8`) never stopped. The
+stub changes the timing of every new thread's first instruction (each
+hit stops the machine), so a race at thread start would hide under it.
+The six system threads this package adds are the plausible exposure; a
+thread's first stack page not being present is the Windows 98 kernel's
+thread creation, not code of this package, unless a creation passes a
+stack size or starts a thread at a moment the kernel does not support.
+Not shown either way.
+
+**Owed.** The comparison with the enclosure and Stor98 left out, and
+the stock layout, each over enough starts for a rate (tens, unattended);
+the creation calls' arguments and timing on 9x (`hcd_ctl.c`,
+`hcd_tmr.c`, `hcd_susp.c`, `cm_thr.c`, `cm_cfgwk.c`, Stor98's); then
+the cause, or the known issue. A text for the release notes if it stays
+unexplained, for the owner's choice: "Windows 98 SE and ME, rarely: the
+first start after the install or an update (and, on ME, any start) can
+stop with 'A fatal exception 0E has occurred at 019F:BFF72170' (98 SE)
+or 'Error: 0E : 01A7 : BFF62170' (ME), then a black or empty screen.
+Turn the computer off and on again; the next start works. The cause is
+not known." **Partial.**
