@@ -21454,6 +21454,25 @@ static int storInfPlaced;       /* this run placed an INF in %windir%\INF */
 static int storInfMissed;       /* an INF's placement failed in this run */
 static int storSourceOff;       /* Source is cleared once the copy is made */
 static int storStepsLeft;
+static int storFlushFailed;     /* the record could not be written out */
+
+/* Record 26 section 6.5.6 (task 45.5): 98 SE writes its registry out
+ * later, so the record is written out before the file it names is put in
+ * place; a power cut would otherwise keep the file and lose the record of
+ * it, with every value written before it. 1 written out. */
+static int stor_rec_flush(void)
+{
+    if (opts.List) {
+        return 1;
+    }
+    if (RegFlushKey(HKEY_LOCAL_MACHINE) != ERROR_SUCCESS) {
+        out("The registry could not be written out after the USB storage "
+            "drivers' record.\n");
+        storFlushFailed = 1;
+        return 0;
+    }
+    return 1;
+}
 
 static int stor_98se(void)
 {
@@ -22296,6 +22315,10 @@ static int stor_place_to(int i, const char *dest, const char *sub)
     }
     w = WriteFile(h, buf, n, &wrote, NULL);
     free(buf);
+    /* The bytes on the disk before a record names them (task 45.5). */
+    if (w && wrote == n && !FlushFileBuffers(h)) {
+        w = FALSE;
+    }
     if (!CloseHandle(h) || !w || wrote != n) {
         out("%s could not be written.\n", tmp);
         delete_file(tmp);
@@ -22309,6 +22332,12 @@ static int stor_place_to(int i, const char *dest, const char *sub)
     SetFileAttributesA(tmp, FILE_ATTRIBUTE_NORMAL);
     if (!stor_rec_text(sub, dest, instStorFile[i].Sha256)) {
         delete_file(tmp);
+        return 0;
+    }
+    if (!stor_rec_flush()) {
+        out("%s is not copied.\n", instStorFile[i].Name);
+        delete_file(tmp);
+        stor_rec_del(sub, dest);
         return 0;
     }
     if (!MoveFileA(tmp, dest)) {
@@ -22530,6 +22559,7 @@ static int stor_run_begin(void)
     storUasWait = 0;
     storInfPlaced = 0;
     storInfMissed = 0;
+    storFlushFailed = 0;
     if (storHere) {
         stor_run_begin_body();
     }
@@ -22794,14 +22824,31 @@ static void stor_place_infs(void)
         }
         if (stor_place(i)) {
             /* A placement publishes the pack: the adoption's evidence
-             * (record 26 section 6.5.6). */
+             * (record 26 section 6.5.6), written out with it. */
             if (!storInfPlaced) {
-                stor_rec_dword("Published", 1);
+                if (stor_rec_dword("Published", 1)) {
+                    (void)stor_rec_flush();
+                }
             }
             storInfPlaced = 1;
         } else {
             storInfMissed = 1;
         }
+        if (storFlushFailed) {
+            break;
+        }
+    }
+    /* A record that could not be written out publishes nothing: the
+     * storage files go no further in this run, and what it placed in
+     * %windir%\INF is withdrawn before the package's copy (task 45.5). */
+    if (storFlushFailed) {
+        out("The USB storage drivers are not published in this run: run "
+            "the installer again.\n");
+        storCopyOk = 0;
+        storInfPlaced = 0;
+        storInfMissed = 1;
+        storStepsLeft = 1;
+        return;
     }
     /* The pair in %windir%\INF whole or not there: a half this installer
      * placed, in this run or an earlier one, is withdrawn, and a step is
@@ -22853,8 +22900,10 @@ static void stor_copy_made(void)
     /* The package's copy with the seven made and DevicePath naming it:
      * the publication the uninstall's adoption rests on, kept for good
      * (record 26 section 6.5.6). */
-    if (storCopyOk && !opts.List) {
-        stor_rec_dword("Published", 1);
+    if (storCopyOk && !opts.List && stor_rec_dword("Published", 1) &&
+        !stor_rec_flush()) {
+        storStepsLeft = 1;
+        flagSteps = 1;
     }
     if (storSourceOff && !storCopyOk && !opts.List &&
         stor_rec_dword("Source", 0)) {

@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 45, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61, the
+Status: draft 46, 2026-10-29 (roadmap-usb4 task 45.5: on 98 SE the
+storage record's value for each file is written out with `RegFlushKey`,
+and the file's temporary copy with `FlushFileBuffers`, before the file
+is moved into place, section 6.5.6); draft 45, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61, the
 owner's decisions of that day: the Add/Remove Programs entry named for
 what the run installs as well as what is registered, on 98 SE and ME too
 (by the two drivers' files), and ME's UAS hint only in a run that
@@ -2769,6 +2772,38 @@ Driver, or the install directory given to the wizard).
 The readings are taken where Stor98's are (`s98_record_devices`): after
 every settle and helper job, at every exit of the helper's passes, and at
 the end of the run; the baseline before the run's first change.
+
+**Written out before each placement** (task 45.5, was INSTREC.1). 98
+SE keeps the registry in memory and writes it out later, and a power cut
+in the copy loses what the run wrote while the files it placed survive:
+read in task 44.20 (`runs/run-44.md`, "43.5's package copy cut between
+the INFs"), where the next run took the seven as found installed (case
+1) and the uninstall left them. So a `Files` or `Placed` value is
+followed by `RegFlushKey(HKEY_LOCAL_MACHINE)` before its file is moved
+into place, as the other USB drivers' `RecordMade` is (section 6.7.5),
+which writes out with it every value written before it - `Choice`,
+`PreExisting`, `Before` and `BeforeOk` - so the record is on the disk
+before the first storage file is. The file's temporary copy is flushed
+(`FlushFileBuffers`) before its value is written, so a value never names
+bytes that were not yet written. `Published` is written out the same
+way when it is first set, at the first INF placement and after the
+package's copy, since the uninstall's adoption rests on it. A flush that
+fails is a failed placement: the temporary copy deleted, the value
+deleted, the file not moved and said ("The registry could not be written
+out after the USB storage drivers' record." and "<file> is not
+copied."). For a binary the storage install then stops as at any failed
+copy (a step left). For an INF it stops the publication too, which a
+failed INF placement alone does not: the run says "The USB storage
+drivers are not published in this run: run the installer again.", the
+seven are left out of the package's copy (`storCopyOk` cleared, a step
+left), and what this run placed in `%windir%\INF` is withdrawn before
+that copy (section 6.5.4's withdrawal, as for any copy made without the
+seven). A failed write-out of `Published` after the package's copy
+leaves a step. A cut after the flush and before the move leaves a value
+with no file at its path and the temporary copy beside it, as a failed
+move does: the value then names nothing, and the next run copies the
+file again once the temporary copy is gone (a temporary copy that is
+there stops that copy, said, as before).
 
 #### 6.5.7 An update over its own install
 
