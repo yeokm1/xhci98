@@ -4233,18 +4233,26 @@ What a Thunderbolt host router needs that a USB4 host router does not
    lane bonding through it; Falcon Ridge and later as section 8 item 3.
    The DROM through the Plug Events EEPROM bit-bang (section 8 item 4)
    applies to every generation.
-3a. **Identity without the fuses**: where the link controller gives no
-   UUID (generation 1, or a read the link controller refuses), the
-   router's UID is read from its DROM alone (`eeprom.c`
-   `tb_drom_read_uid_only`) and its UUID formed as Linux forms it (the
-   UID's two halves, then two dwords of ones, `switch.c`
-   `tb_switch_set_uuid`). Here the DROM read is **not** optional as
-   section 8 item 4 makes it for naming: identity is what preservation
-   (section 9), the replacement check and the resume (section 11)
-   compare. A router whose identity cannot be read is driven for this
-   connection only: never matched to a record, its tunnels never
-   preserved across a resume (they are rebuilt as a new connection's),
-   and the log says so (`u4.tbt.noid`).
+3a. **Identity without the fuses**: the identity's source is chosen once
+   per router, at its first connect, and recorded with it: the link
+   controller's fused UUID where the router has a link controller
+   capability, and only where it has **none** (generation 1) the UID read
+   from its DROM alone (`eeprom.c` `tb_drom_read_uid_only`), the UUID
+   formed as Linux forms it (the UID's two halves, then two dwords of
+   ones). A link-controller read that fails on a router that has the
+   capability is a failed identity read, never a reason to fall back to
+   the DROM, as Linux falls back only when the capability is missing
+   (`switch.c` `tb_switch_set_uuid`, which propagates every other error);
+   every later comparison (the replacement check, the resume) reads the
+   recorded source. Here the DROM read is **not** optional as section 8
+   item 4 makes it for naming: identity is what preservation (section 9),
+   the replacement check and the resume (section 11) compare. A router
+   whose identity cannot be read is driven for this connection only and
+   never matched to a record; after a resume a router whose identity
+   cannot be confirmed is treated as section 11 treats a failed
+   verification - its port held, never rebuilt on that ground alone, as
+   Linux refuses such a router at resume (`switch.c` `tb_switch_resume`)
+   - and the log says so (`u4.tbt.noid`).
 4. **The host's PCIe down adapter for each Thunderbolt port** is fixed per
    controller (`tb.c` `tb_find_pcie_down`): adapter 6 or 7 on Cactus Ridge
    and Alpine Ridge, 6 or 8 on Falcon Ridge, 8 or 9 on Titan Ridge, by the
@@ -4259,9 +4267,12 @@ What a Thunderbolt host router needs that a USB4 host router does not
    line for them is the class form too (`PCI\VEN_8086&DEV_1513&CC_0604`,
    with the NHI's `CC_0880` never matching it). Falcon, Alpine and Titan
    Ridge are in that table already.
-5. **No USB3 tunnel, ever** (every link is Thunderbolt), and no USB4
-   credit negotiation: section 8 item 5's default credits on every
-   router of the domain.
+5. **No USB3 tunnel, ever** (every link is Thunderbolt); and the credits
+   are chosen per router, by what the router reports, as Linux chooses
+   them (`switch.c` `tb_switch_credits_init`): section 8 item 5's
+   defaults, with no USB4 credit negotiation, on every router of
+   generation 1 to 3, the host included; a USB4 child (item 8) keeps
+   section 6.8's own capability and credit rules.
 6. **TMU**: not configured, as section 8 item 6; if a host or device
    router of generation 1 or 2 carries no PCIe tunnel without it, Linux's
    sequence (`tb.c` `tb_enable_tmu`) is the second pass (section 16).
