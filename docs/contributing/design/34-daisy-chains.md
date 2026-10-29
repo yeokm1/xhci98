@@ -1,6 +1,8 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 4, 2026-10-27, before code, reviewed and revised: the
+Status: revision 5, 2026-10-29, task 45.17: section 4.6, the client's
+approval order as coded. Revision 4, 2026-10-27, before code, reviewed
+and revised: the
 Thunderbolt 3 parent's LTSSM never interpreted, at the idle poll and at
 every verification; the kid's state table matched to the parent's three
 cases. Revision 3, 2026-10-27, before code, reviewed and revised: a
@@ -695,9 +697,10 @@ The sequence for a device chained behind an approved dock, security level
    child's too; a child whose parent's occupancy changed is left to its
    own next announcement. A parent refused or failed leaves the child
    unapproved, logged. Linux's ICM client
-   approves only what user space authorises through sysfs, in the order
-   user space chooses [linux]; the firmware announces a parent before its
-   child [inf, emulator requirement E5 of section 5].
+   approves only what user space authorises through sysfs, and refuses a
+   child while its parent is unauthorised before any approve is sent
+   (`domain.c` `tb_domain_approve_switch`) [linux]; the firmware announces
+   a parent before its child [inf, emulator requirement E5 of section 5].
 4. `approve device` for the child; the firmware builds the chained tunnel
    (on the emulator synchronously, R10).
 5. The tunnel-up action carries the entry's depth; at depth 2 the seam
@@ -723,8 +726,10 @@ where the PCI side cannot reach it, and counts it (`icm.chain.declined`).
 
 None new. The table already keys an entry by link and depth (AR, FR) or
 by route (TR, ICL), holds 16 entries, and removes below a departing
-parent. The approval-order rule adds one bit per entry ("approve owed
-behind the parent") and a lookup of the parent's entry.
+parent. The approval-order rule adds three fields per entry,
+`ApproveOwed` ("approve owed behind the parent"), `OwedParent` (the
+parent's serial when it was owed) and `Unconfirmed`, one counter, and a lookup of the
+parent's entry (section 4.6).
 
 ### 4.3 The middle unplug, and Stor98
 
@@ -751,11 +756,105 @@ depth 2.
 
 | File | Change |
 |---|---|
-| `src/cm/tbt_icm.c`, `tbt_icm.h` | the approval order; the action's depth; the 9x decline in an NT-first cut |
-| `src/cm/cm_nhi.c` | the ICM action's depth to the seam (the chain action at depth 2) |
+| `src/cm/tbt_icm.c`, `tbt_icm.h` | the approval order (section 4.6); the action's depth (already carried); no 9x decline (Q1 (b)) |
+| `src/cm/cm_nhi.c` | the counter's label; the action's depth already reaches the seam, whose depth-2 branch is section 3's chain action |
 | `test\test_tbt_icm.c` | section 9.1 |
 
 Everything else of the chain is section 3's.
+
+### 4.6 The client's approval order, as coded (task 45.17)
+
+Section 4.1 step 3 and section 4.2, made exact for `tbt_icm.c`. The
+emulator's side is `usb4-emu`'s requirements R35 to R41
+(`ICM-PROTOCOL.md` section 15), section 5's E1 to E10.
+
+- **The parent's entry.** For an entry at depth 2 or deeper: on a row
+  that addresses by route (Titan Ridge, Ice Lake) the entry whose route
+  is the child's with its last level removed (one level shorter, every
+  level before equal); on a row that addresses by link and depth
+  (Falcon Ridge, Alpine Ridge) the entry at depth - 1 on the same
+  physical port (`tbtIcmPhyPort`, so the port's other link counts, as
+  the subtree removal already takes it). A depth-1 entry's parent is the
+  host router, always established. A child whose route is not yet known
+  on a route row has no parent entry (its own announcement carries the
+  route there, so this does not arise from the firmware).
+- **Established** means the parent's entry is in use, `Approved`, not
+  `ApproveUnknown`, and confirmed in this session (not `Unconfirmed`, a
+  third field set with `Stale` when a driver ready marks the table and
+  cleared only by an announcement of the entry, never by a driver ready
+  that failed, which clears `Stale` so nothing is reconciled away: an
+  entry kept across a resume, a rediscovery or a recovery is established
+  only once announced again, so an old occupancy's approval never
+  releases a child before the parent is seen again). An approve in flight cannot be
+  seen from a child: announcements decoded during a command's wait are queued and
+  handled after it (`EventsQueued`), so the child is decided with the
+  parent's approve answered or timed out.
+- **The order check** runs in `tbtIcmPolicy` after the policy (the hook
+  or `XhciCmApprove`) said approve, and only there: a child the policy
+  withholds is not owed anything. When the parent is not established the
+  child is marked `ApproveOwed`, with `OwedParent` the parent entry's
+  serial (0 when no parent entry exists), counted
+  (`cm.icm.approve.owed`) and logged (`tbt.icm.approve-owed`, the slot
+  and the parent's slot or 0xFF; `tbt.icm.approve-owed-serial`; and the
+  event's words as received, `tbt.icm.approve-event`, so a later failure
+  of the deferred approve, logged with the slot, has its announcement in
+  the log, record 21 section 1.4.6); no approve is sent.
+- **Reconsideration.** When an entry's approval becomes established -
+  its approve answered without the error flag (`tbtIcmApprove`); an
+  announcement leaving it `Approved` (`tbtIcmSettle` with `Approved`,
+  which a new entry announced approved, a refresh settling an "approve
+  outcome unknown" as approved, a refresh of a failed approve announced
+  approved and a withheld entry announced approved all reach); or the
+  refresh of an entry already approved that clears its `Stale` (the
+  resume case, and an approved entry that needed only its route) -
+  every in-use entry marked `ApproveOwed` whose parent (by the lookup
+  above) is that entry is taken in table order. One meanwhile `Approved`
+  or `ApproveUnknown` owes nothing and is unmarked. One `Unconfirmed`,
+  one without its route on a row that asks for it (record 21 section
+  5.5: no approve for an unrouted entry), or one with a newer
+  announcement of its own still queued (decoded during the parent's
+  wait: its refresh settles the debt with the latest key and id, so no
+  approve goes out with superseded ones) is left marked for that
+  announcement, and so is one whose `OwedParent` is neither 0 nor that
+  entry's serial (the parent's occupancy changed since; logged
+  `tbt.icm.approve-owed-stale`). Otherwise the mark is cleared and
+  `tbtIcmPolicy` runs for it again (the policy is asked again, then the
+  order; a refusal then consumes the debt). Each
+  candidate is re-checked in use and still marked after the previous
+  one's approve, because a disconnect decoded during that wait can drop
+  entries. A child's own approve that succeeds reconsiders its children
+  in turn, so a chain is approved top down, bounded by the depth
+  (`TBT_ICM_MAX_DEPTH`).
+- **A refused or failed parent.** An approve answered with the error
+  flag, or withheld by the policy, leaves its owed children marked and
+  logs each (`tbt.icm.approve-owed-parent`, once per such parent
+  outcome); they are approved when the parent's approval is established
+  later by any path above.
+- **The child's own announcement.** An entry marked `ApproveOwed` is a
+  recovery entry for `tbtIcmConnected`'s refresh (as `ApproveFailed`
+  is), so a re-announcement runs the policy and the order again rather
+  than returning at the resume case; one announced approved is settled
+  approved and unmarked. A new occupancy starts unmarked.
+- **Unapproved, then announced approved, in place.** An entry kept
+  unapproved (withheld by the policy, or owed) that the firmware
+  announces approved at the same place is settled in place, its serial
+  and subtree kept, as the other recoveries are; before this task such
+  an announcement replaced the entry and took its owed children with
+  it. An approved entry announced unapproved is still a replacement
+  (record 21 section 5.3).
+- **The depth of the actions.** Every `TBT_ICM_ACTION` already carries
+  the entry's `Depth` (and its link and route), and every action already
+  reaches `CmReenumAction`; the depth-2 branch to section 3's chain
+  action (section 4.1 step 5) belongs to that chain action's code
+  (Part 1, task 45.13, `cm_reenum.c`), not to this one. Until it is in
+  the tree a depth-2 `TUNNEL_UP` takes today's path, `cmReenumAll`: a
+  rescan of the host tunnel ports' members, which does not reach the
+  chain port's bus (section 3.2), so no chained device is guaranteed to
+  be found. Depth 2 works under the firmware connection manager only
+  with section 3's code.
+- **No 9x decline.** The owner chose all targets at once (section 12,
+  Q1 (b)), so section 4.1's NT-first decline (`icm.chain.declined`) is not
+  coded.
 
 ## 5. The emulator's depth-2 firmware connection manager (work for `usb4-emu`)
 
@@ -776,6 +875,15 @@ with a prefix of its own.
 | E8 | `run-cm-test.sh` accepts `CHAIN=1` with `PROFILE=tb3-alpine-ridge` and `tb3-titan-ridge` on q35 | the launcher brings up the dock with the chained device on both profiles |
 | E9 | Documented in `ICM-PROTOCOL.md` and `ICM-TITAN-RIDGE.md` with the tags the repository uses, the scope line of `usb4-icm.c` updated | review of the documents |
 | E10 | The internal chain port's `power-controller` settable from the command line (a `usb4-device` property passed to the `usb4-tunnel-dsp` the slot creates, or the device's global honoured), so a chain can run on systems without PCIe native hot plug | the dock with `downstream-ports=1` and the setting off: the chain port's Slot Capabilities without a Power Controller, and a chained NVMe answering its BAR0 read on 98 SE with no slot write from the guest |
+
+**Done (task 45.16, 2026-10-29)** in `usb4-emu`'s branch `w45-emu`
+(`ae28571`, `4688042`; QEMU fork `51d078a..91610eb`), as that
+repository's requirements R35 to R41 (`ICM-PROTOCOL.md` section 15):
+E10 as `usb4-device chain-power-controller` (the global works too), E1
+to E7 in `usb4-icm.c`, E6's cold insertion in `usb4-fabric.c`, E8 in
+`run-cm-test.sh` (`CHAIN=1`, `CHAIN_PC`), E9 the documents; one chained
+router per host port, depth 3 not modelled. `runs/run-45.md`, "45.16",
+has the acceptance checks as read.
 
 Size, as 44.64 Part B estimated it: 300 to 500 lines in that project, two
 to three days; risk medium, since the order and form of a real
@@ -1145,7 +1253,8 @@ numbered or padded, as today. Chained tunnels follow `XhciCmApprove`,
 log labels, each in the existing families: `cm.chain.ports` (candidates
 found), `cm.chain.learned`, `cm.chain.invalidate`, `cm.chain.nofilter`,
 `cm.chain.9x.pad`, `cm.chain.9x.no-room`, `cm.chain.9x.no-devnode`,
-`icm.chain.order` (an approve held behind a parent), `icm.chain.declined`,
+`cm.icm.approve.owed` (an approve held behind a parent, the ICM
+client's counter block; with the `tbt.icm.approve-owed*` log labels),
 `u4.kid.state`, `u4.kid.no-pcie-down`, `u4.kid.dropped` (the middle
 unplug). `XhciCmBridgeDiag` keeps its layout and describes the latest
 attempt, member or chain port, with a flag bit saying which.
@@ -1173,15 +1282,21 @@ attempt, member or chain port, with a flag bit saying which.
 - `test_cm_marks.c`, `test_cm_ports.c`: `CmRegAttMayMark` on a chain port
   under an active member and under an inactive one; the attachment lookup
   by location.
-- `test_tbt_icm.c`: the approval order on AR (link and depth), FR and TR
+- `test_tbt_icm.c`: the approval order on AR and FR (link and depth) and TR
   (route): child announced before the parent's approve, during it, after
   it; the parent refused; the parent disconnected with the child's approve
   owed; the parent already approved arriving after its child; the
   parent's approve timing out and a later announcement settling it
   approved; a parent replaced (a new occupancy) while its child waits;
-  the depth in the tunnel-up action; the 9x decline in an NT-first
-  cut; a chain re-announced after `driver ready` (both approved) and one
-  not re-announced (the depth-2 tunnel down).
+  the depth in the tunnel-up action; a chain re-announced after `driver
+  ready` (both approved) and one not re-announced (the depth-2 tunnel
+  down); a withheld parent announced approved (settled in place, the
+  child kept and approved); an owed child announced approved (no approve
+  sent for it later); after a resume, the child announced before its
+  kept parent, and with the parent gone; an owed child re-announced
+  during its parent's approve (approved once, with the newer id); a
+  failed rediscovery leaving the kept parent unconfirmed. (No 9x
+  decline: Q1 (b).)
 - `test_u4cm.c` with `u4_fakefab` gaining a parent's downstream port: the
   connect at depth 2 behind a USB4 parent and behind a Thunderbolt 3
   parent, in sections 6.4 and 6.6's order (bonding before Configuration
