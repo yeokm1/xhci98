@@ -1182,6 +1182,11 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
   ownership), nothing of it and no entry is touched; a record that
   cannot be read stops the run with a step said, as section 11.3's
   removal does.
+- **One run at a time**: every change to `XHCIPFW.SYS` (both passes,
+  the service, the images and the root bus entries) is made under a
+  machine-wide lock of its own (`Global\XhciinstPfw`), each pass reading
+  the record and the service again under it, so two installer runs never
+  interleave an install's entries with another's removal.
 - **The installation it replaces**: an entry-role install of this
   installer's on 8 or 8.1 (service `xhcipfw`, its record `XhciPfw`, left
   by an earlier test install of `3.3.0.0`, unordered there) is removed by

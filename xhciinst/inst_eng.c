@@ -19981,6 +19981,54 @@ static int pfwsys_run(int mode);
 /* XHCIPFW.SYS's record holds something, or cannot be read. */
 static int pfwsys_recorded(void);
 
+/* XHCIPFW.SYS's run under a machine-wide lock of its own, so that two
+ * XHCIINST runs never interleave its service, images and root bus
+ * entries (an install appending entries while another run removed the
+ * service would leave a root bus naming a missing filter, record 32
+ * section 11.5.2); each pass reads the record and the service again
+ * under it. On 8 and 8.1 the entry role's install (3.3.0.0's place,
+ * unordered there) is removed whatever the boxes, by its own name and
+ * record, before the filter role's run. */
+static int pfwsys_run_locked(int mode)
+{
+    HANDLE m;
+    DWORD w;
+    int ok = 1;
+
+    m = shared_mutex("Global\\XhciinstPfw");
+    if (m == NULL) {
+        out("XHCIPFW.SYS's lock could not be opened (error %lu): it is left "
+            "as it is.\n", (unsigned long)GetLastError());
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "XHCIPFW.SYS: its lock not opened");
+        return 0;
+    }
+    w = WaitForSingleObject(m, INST_MAINT_WAIT_MS);
+    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        out("Another XHCIINST has been changing XHCIPFW.SYS for a minute: it "
+            "is left as it is;\nrun INSTALL.BAT again when that one has "
+            "finished.\n");
+        CloseHandle(m);
+        flagSteps = 1;
+        steps_add_id(INST_PFWSYS_FILE, "left: another run was changing it");
+        step(INST_STEP_LEFT, "XHCIPFW.SYS: left, another run");
+        return 0;
+    }
+    if (pfw_kind() == INST_PFW_SYS_FILTER) {
+        pfwLegacy = 1;
+        if (pfwsys_recorded()) {
+            ok = pfwsys_run(INST_VSD_DESELECTED);
+        }
+        pfwLegacy = 0;
+    }
+    if (ok) {
+        ok = pfwsys_run(mode);
+    }
+    ReleaseMutex(m);
+    CloseHandle(m);
+    return ok;
+}
+
 static int pfw_run(int mode)
 {
     static const char begin[] =
@@ -19999,21 +20047,7 @@ static int pfw_run(int mode)
             !pfwsys_recorded()) {
             return 1;
         }
-        if (pfw_kind() == INST_PFW_SYS_FILTER) {
-            /* The entry role's install (3.3.0.0's place, unordered here)
-             * is removed whatever the boxes, by its own name and record,
-             * before the filter role's run (record 32 section 11.5.2). */
-            int ok = 1;
-            pfwLegacy = 1;
-            if (pfwsys_recorded()) {
-                ok = pfwsys_run(INST_VSD_DESELECTED);
-            }
-            pfwLegacy = 0;
-            if (!ok) {
-                return 0;
-            }
-        }
-        return pfwsys_run(mode);
+        return pfwsys_run_locked(mode);
     }
     /* Cancelled (an earlier step may have seen it): nothing of it changes,
      * the static-VxD key above all. */
