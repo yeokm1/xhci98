@@ -798,12 +798,14 @@ owner's (record 21 section 4.5.10).** What this profile adds:
   the scan would never stop. A chain is
   enumerated hop by hop, each router's own hot-plug packet waited for, so
   the gain on this profile is up to one idle period per hop.
-- **The timed pass stays at its period, because this profile hangs work
-  on it.** The idle tick's port scan (section 7.1 item 2) and the presence
-  sample that anchors Stor98's latency budget (section 10.3, "normally no
-  older than one idle period") run on every pass; an interrupt pass runs
-  them too, but no pass may come later than today's, so the interrupt
-  never lengthens the timed wait (record 21 section 4.5.1).
+- **The maintenance pass keeps its deadline, because this profile hangs
+  work on it.** The idle tick's port scan (section 7.1 item 2) and the
+  presence sample that anchors Stor98's latency budget (section 10.3,
+  "normally no older than one idle period") run on the maintenance pass
+  only, when its deadline is due (record 21 section 4.5.3), never on an
+  interrupt wake; the wait is computed to that deadline, so no scan or
+  sample comes later than today's, and an interrupt wake neither runs nor
+  postpones them.
 - **A USB4 host need not wire INTx**: a PCIe host router shall support MSI
   or MSI-X, and INTx emulation is optional (Spec 12.5). Whether the
   ASM4242, the AMD hosts and the Intel integrated hosts wire it is not

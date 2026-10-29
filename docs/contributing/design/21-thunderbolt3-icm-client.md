@@ -1544,32 +1544,36 @@ the kernel; the line may be shared):
 3. Bit N + 0 clear: return FALSE (not this device's request; every other
    cause is masked).
 4. Bit set: ISC as section 4.5.2 says where auto-clear is disabled; count
-   `IrqClaims`; if `IrqArmed` (below) queue the DPC (`KeInsertQueueDpc`)
-   with the count of DPCs owed raised first (`InterlockedIncrement`, and
-   lowered again if the insertion returns FALSE because it was already
-   queued); return TRUE. A claim while not armed (the window around the
-   unmask and the mask, section 4.5.6) acknowledges and queues nothing:
-   the thread drains the ring after each change anyway.
+   `IrqClaims`; then the **storm check** (step 5) before anything else.
 5. **A storm is stopped here, not on the thread.** A level line that is
    asserted again at once after the acknowledgement re-enters the routine
-   before its DPC or the thread can run (on one processor, never), so the
-   routine counts its claims since the DPC last ran (`IrqBurst`, reset by
-   the DPC through `KeSynchronizeExecution`). At 64 such claims it masks
-   the cause itself (IMC, or on Intel the IMR read-modify-write, both under
-   the interrupt object's lock, which the thread's own mask writes also
-   hold), clears `IrqArmed`, sets `IrqStormMasked`, and claims. Masking
-   only lowers an enable, record 05 section 4's monotone rule, so it cannot
-   undo the thread's own mask. The thread, when it next runs, takes the
-   activation down to polling (`cm.irq.storm`, section 4.5.6). A host that
-   keeps the line asserted with its cause masked (IMR reading the bit
-   clear, the routine still entered with the status bit set) cannot be
-   stopped at DIRQL, where no configuration write is available: the
-   routine keeps claiming, and the thread, if it runs, sets the function's
-   PCI Interrupt Disable as section 4.5.6 says. On one processor that
-   thread may not run: a residual risk, section 4.5.7.
+   before its DPC or the thread can run (on one processor, never). The
+   routine counts its claims since the DPC last ran in `IrqBurst`, a
+   variable only it writes: the DPC raises `IrqDpcSeq`
+   (`InterlockedIncrement`) each time it runs, and the routine, finding
+   `IrqDpcSeq` changed since its own last look, sets `IrqBurst` back to 1;
+   so no context but the routine touches the burst, and the DPC needs no
+   interrupt object. At 64 claims with no DPC between, the routine masks
+   the cause itself (IMC, or on Intel the IMR read-modify-write; the
+   thread's own mask writes are inside `KeSynchronizeExecution`, so they
+   never interleave), clears `IrqArmed`, sets `IrqStormMasked` and returns
+   TRUE without queueing. Masking only lowers an enable, record 05 section
+   4's monotone rule, so it cannot undo the thread's own mask. The thread,
+   when it next runs, takes the activation down to polling (`cm.irq.storm`,
+   section 4.5.6). A host that keeps the line asserted with its cause
+   masked cannot be stopped at DIRQL, where no configuration write is
+   available: the routine keeps claiming, and the thread, if it runs, sets
+   the function's PCI Interrupt Disable (section 4.5.6). On one processor
+   that thread may not run: a residual risk, section 4.5.7.
+6. Otherwise: if `IrqArmed`, queue the DPC (`KeInsertQueueDpc`) with the
+   count of DPCs owed raised first (`InterlockedIncrement`, lowered again
+   if the insertion returns FALSE because it was already queued); return
+   TRUE. A claim while not armed (the window around the unmask and the
+   mask, section 4.5.6) acknowledges and queues nothing: the thread drains
+   the ring after each change anyway.
 
 It writes ISC, and the mask only at step 5; it reads nothing but ISR,
-IMR at step 5 and its flags, and touches no ring, no work bit and no lock
+IMR at step 5, its flags and `IrqDpcSeq`, and touches no ring, no work bit and no lock
 of the driver's. `IrqArmed` is set by the
 thread through `KeSynchronizeExecution` (the 2000 primitive; record 05
 section 4 keeps `KeAcquireInterruptSpinLock` out, XP and later) before it
@@ -1579,10 +1583,12 @@ masked. The thread's unmask and mask writes are made inside the same
 `KeSynchronizeExecution` routines, so step 5 and the thread never
 interleave a read-modify-write of IMR.
 
-**The DPC** (DISPATCH_LEVEL): `CmThrQueue(nhi, CM_WORK_RING, NULL)`, the
-queue's existing entry under `WorkLock`, which sets the new bit and
-signals `WorkEvent` (a closed queue, `Accepting` 0, takes nothing), then
-lowers the count of DPCs owed as its last access to the extension. Lock
+**The DPC** (DISPATCH_LEVEL): raises `IrqDpcSeq`, then
+`CmThrQueue(nhi, CM_WORK_RING, NULL)`, the queue's existing entry under
+`WorkLock`, which sets the new bit and signals `WorkEvent` (a closed
+queue, `Accepting` 0, takes nothing), then lowers the count of DPCs owed
+as its last access to the extension. It never touches the interrupt
+object, so it is safe whether or not the interrupt is still connected. Lock
 order: `WorkLock` is taken only at or below DISPATCH_LEVEL and never
 inside a `KeSynchronizeExecution` routine, and the interrupt object's lock
 is never taken while `WorkLock` is held, so the two never nest.
@@ -1590,7 +1596,27 @@ is never taken while `WorkLock` is held, so the two never nest.
 **The thread** (PASSIVE_LEVEL): `CM_WORK_RING` runs the RX ring 0 drain
 of section 4.5.1, and the loop runs the idle pass's maintenance only when
 its deadline is due; the loop's own once-a-pass work (the status record,
-the query device's snapshot, the log emission) stays once a pass. Work
+the query device's snapshot, the log emission) stays once a pass.
+
+**The wait is computed from deadlines, not as a fresh period.** Today
+each branch of `cmThread`'s wait selection starts a new relative timeout
+(the idle period, the liveness monitor's `CmLiveWaitMs`, the Stor98
+acknowledgement's `CM_NVLINK_PEND_MS`), which is right only because every
+wake runs the whole pass. With interrupt wakes that do not, each of those
+becomes an absolute deadline on section 5.3's clock - `MaintDue` (the idle
+pass, `CmNvlinkIdleMs(XhciCmPollIdleMs)` after the last one ran), the
+liveness monitor's next slow probe and the acknowledgement step - and the
+wait's timeout is the time left to the earliest one that is eligible in
+the current state (the branches as today decide which are), 0 when one is
+already due. A drain at 199 ms of a 200 ms period therefore waits 1 ms,
+not 200. `ThreadWait` and `CmThrInertNext` (the query device's seed) are
+derived from that same decision: a timed wait while any deadline is
+eligible, `CM_Q_WAIT_FOREVER` only when none is. `MaintDue` is set due at
+once by every activation, D0 and recovery that ends ACTIVE, and is not
+consulted while the thread is not polling (the branches that do not poll
+today ignore it, as they ignore the idle period now). With the interrupt
+not in use every wake is a full pass as today, and the deadlines give the
+same waits as the relative timeouts do now. Work
 bits are taken and cleared once per pass under `WorkLock`, so any number
 of interrupts during one pass, or during a busy-polled command (every RX
 descriptor carries IE, so each response raises one), yield one more drain
@@ -1672,9 +1698,9 @@ never take or clear work bits, which stay for the loop.
   Thunderbolt 3 hosts implement ISS is not read (no capture writes it;
   Linux never does [linux]); one that ignores it fails the self-test and
   polls, the safe direction.
-- **The watchdog** is the timed wait itself, at today's period. Each timed
-  pass (one the timeout ended, not `CM_WORK_RING`) that finds a frame on
-  RX ring 0 while `IrqClaims` is unchanged since the end of the previous
+- **The watchdog** is the maintenance pass itself, at today's period.
+  Each maintenance pass (whatever woke the thread, section 4.5.3's
+  deadline being due) that finds a frame on RX ring 0 while `IrqClaims` is unchanged since the end of the previous
   pass's drain is a **suspected miss**: a frame no interrupt announced,
   though one is raised within microseconds of the write-back. Two
   suspected misses in a row (`IrqSuspect`) run the self-test again; its
@@ -1695,37 +1721,39 @@ never take or clear work bits, which stay for the loop.
 #### 4.5.6 Order down and up: stop, removal, power and containment
 
 - **Down** (stop, removal, surprise removal, D3, a 98 SE or ME shutdown's
-  quiescence, a containment entry, a fall back to polling):
+  quiescence, a containment entry, a fall back to polling), on the thread:
   1. Clear `IrqArmed` and mask the cause in one `KeSynchronizeExecution`
-     routine, where the liveness gate admits the write.
-  2. **Prove the source quiet.** IMR read back with the bit clear, and the
-     ISR dwords read so that the status holding the line falls: a
-     **verified retirement**. Where the mask was refused or its read-back
-     disagrees, the function's PCI Interrupt Disable (Command bit 10,
-     PCI 2.3; every PCI Express function implements it) is set through the
-     configuration path section 5.1 step 1 uses for Bus Master and read
-     back, with Status bit 3 (Interrupt Status) read clear: also a
-     verified retirement. A configuration header that reads all ones is a
-     function that answers nothing and asserts nothing, which counts as
-     retired too; a transient all-ones BAR read alone does not.
-  3. RX descriptors are posted from then on without IE.
-  4. **Disconnect only a retired source.** With a verified retirement,
-     `IoDisconnectInterrupt` (or its `Ex` twin), after which the routine
-     is not called. Without one, a fall back to polling and a containment
-     entry leave the interrupt connected, the routine claiming and
-     acknowledging what the host raises (section 4.5.3 step 4 with
-     `IrqArmed` clear, so no DPC), and log `cm.irq.unretired`; the next
-     down order tries again. A stop, a removal or a surprise removal
-     disconnects whatever the proof, since the resources go back to the
-     PnP manager or the device is gone; that disconnection is logged
-     `cm.irq.unretired` where it was unproven. In a 98 SE or ME shutdown's
-     quiescence (section 5.6) the mask is the quiescence's own register
-     write; where it is refused, the interrupt stays connected and claiming
-     until the system is down, since the quiescence makes no further
-     configuration access.
-  5. Wait, on the thread, for the count of DPCs owed to reach 0 (1 ms
-     pieces, logged if it passes 100 ms), so no DPC touches an extension
-     the removal frees.
+     routine, where the liveness gate admits the write; from then on the
+     routine queues no DPC.
+  2. **Drain the DPCs while still connected.** Wait for the count of DPCs
+     owed to reach 0 (1 ms pieces, logged if it passes 100 ms). No new one
+     can be queued (step 1), so the count only falls; the DPC needs no
+     interrupt object (section 4.5.3), and the wait comes before the
+     disconnection so that nothing queued before it outlives the
+     connection unseen.
+  3. **Prove the source quiet**, by a successful hardware read only:
+     IMR read back with the bit clear, and the ISR dwords read so that the
+     status holding the line falls; or, where the mask was refused or its
+     read-back disagrees, the function's PCI Interrupt Disable (Command bit
+     10, PCI 2.3; every PCI Express function implements it) set and read
+     back set (section 4.5.6.1). Either is a **verified retirement**; PCI
+     Status bit 3 (Interrupt Status) is read for the log only, since it
+     shows the function's condition whatever bit 10 blocks (as record 15's
+     retirement takes the Command bit as its proof). A read that returns
+     all ones, or a configuration access that failed, proves nothing: the
+     source stays **unretired**.
+  4. RX descriptors are posted from then on without IE.
+  5. **Disconnect.** Retired: `IoDisconnectInterrupt` (or its `Ex` twin).
+     Unretired: in a fall back to polling and a containment entry, the
+     interrupt is **retained** (section 4.5.6.2) and `cm.irq.unretired`
+     logged; in a stop, a removal, a surprise removal or a D3, the
+     interrupt is disconnected whatever the proof (the resources go back
+     to the PnP manager, the device is gone, or its registers are about to
+     become inaccessible), and `cm.irq.unretired` logged where it was
+     unproven. In a 98 SE or ME shutdown's quiescence (section 5.6) the
+     mask is the quiescence's own register write and no configuration
+     write is made; where the mask is refused, the interrupt stays
+     connected and claiming until the system is down.
   6. The ring stop as today.
 
   **The image outlives every DPC.** The count covers the extension, not
@@ -1738,13 +1766,61 @@ never take or clear work bits, which stay for the loop.
   evidence. The cost: an update over a driver that used the interrupt
   takes effect at the restart, as on 98 SE and ME today.
 - **Up** (an activation, D0, a recovery that returns to ACTIVE, record 22
-  section 7.7's exit): the rings as today, then connect, arm (the stale
-  status read, ITR[0], the unmask and its read-back, `IrqArmed`), the
-  drain, and at an activation the self-test. Not at each D0: a resume
-  re-arms only; a lost interrupt after it is the watchdog's.
+  section 7.7's exit): the rings as today; then, if an interrupt is
+  **retained**, it is reused (no second `IoConnectInterrupt`, the saved
+  interrupt object kept), otherwise connected; then PCI Interrupt Disable
+  restored where this driver set it (section 4.5.6.1); then the arm (the
+  stale status read, ITR[0], the unmask and its read-back, `IrqArmed`),
+  the drain, `MaintDue` due at once, and at an activation the self-test.
+  Not the self-test at each D0: a resume re-arms only; a lost interrupt
+  after it is the watchdog's.
 - A contained or absent host interface (section 5.5, record 22 section
   7.7) is taken down on entry and up only by the recovery's return to
   ACTIVE; while it is down the thread polls as today.
+
+##### 4.5.6.1 PCI Interrupt Disable: whose it is, and the one write admitted
+
+- **Ownership.** At activation the thread reads Command bit 10 and records
+  it (`IntxDisableFound`). Found set (firmware's or an earlier driver's),
+  it is left set and never cleared by this driver: INTx cannot then be
+  delivered, the self-test fails and the activation polls. Set by this
+  driver's retirement, it is recorded (`IntxDisableOurs`) and cleared at
+  the next Up, after the connection exists and before the unmask, so that
+  a pending condition is acknowledged by the routine the moment it is
+  delivered again; and at a stop or removal it is left set (the next
+  owner's start finds it, as Linux's and Windows' own drivers would, and
+  the PCI bus driver's own Command handling decides). Every other
+  Command write of this driver (the Bus Master write of section 5.1 step
+  1, its repair in the recovery) preserves bit 10 as read.
+- **The access.** The liveness gate refuses ordinary configuration writes
+  outside OFF and ACTIVE (`cmConfig`), CONTAINED and CONFIG_LOST
+  included, which is where a refused mask is met. One narrow access class
+  is added for retirement: a read of the identity dword that must match
+  the NHI's vendor and device ids, then a read-modify-write of the Command
+  word setting bit 10 alone, and its read-back; nothing else. It is refused
+  after `CmLiveRevoke` (surprise removal, stop, removal) and in a 98 SE or
+  ME shutdown's quiescence, which stay authoritative. On 98 SE and ME the
+  write goes through the same PDO path as the Bus Master write; whether
+  `PCI.VXD` itself rewrites the Command word afterwards is not read, and
+  the read-back is what the proof rests on.
+
+##### 4.5.6.2 A retained, unretired interrupt
+
+An interrupt whose source could not be proven quiet in a fall back to
+polling or a containment entry stays connected, so that the line is not
+left asserted with no routine to acknowledge it:
+
+- the routine runs as section 4.5.3 says with `IrqArmed` clear: it reads
+  the status, claims and acknowledges this device's cause, queues no DPC;
+  its MMIO is the same reads the liveness monitor itself makes, and while
+  the device is in D0 they are legal;
+- the thread polls as today, and each later down order (the next
+  maintenance pass's attempt, a containment exit, a D3, the stop) tries
+  the retirement again; a D3, a stop or a removal disconnects it as step
+  5 says, before the D3 is forwarded, so no routine reads the BAR of a
+  function in D3;
+- an Up reuses it as above; a second connection is never made while one
+  is retained.
 
 #### 4.5.7 What it costs, and what it gains (expected, to be measured)
 
