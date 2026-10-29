@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 48, 2026-10-29 (roadmap-usb4 task 45.28, the owner's
+Status: draft 49, 2026-10-29 (task 45.12's `XhciCmBridgeReq` an
+Advanced row of the Thunderbolt page on 2000 and XP, section 5.5);
+draft 48, 2026-10-29 (roadmap-usb4 task 45.28, the owner's
 decision of that day: the Components page evenly spaced, every shown
 row's sentence at the height its words take and the rows stacked with
 one gap, the buttons at the page's foot, section 5.3.4);
@@ -1966,7 +1968,13 @@ each with its default, range and warning (`XhciCmBridgeNumbering` shown
 greyed on 2000 to 7, as section 5.4 says); design record 28's
 `XhciCmNoIrqStart` (98 SE and ME only) and the mark service's `Restart`
 (2000 to 7 only; record 21 section 7.4, revision 3) join these rows with
-their systems, written machine-wide when changed. `XhciCmTunnelBridge` (a string
+their systems, written machine-wide when changed. Since draft 49 (task
+45.12; design record 33 section 9.1) `XhciCmBridgeReq` is one more row,
+2000 and XP (and XP x64) only, shown greyed elsewhere: 0 off, 1 on (the
+default, the driver's own: no INF writes it), 2 record only, with the
+caution that 0 can leave a dock hot-plugged while Windows runs with one
+port and that 2 records and changes nothing; `/set` refuses it on
+another system. `XhciCmTunnelBridge` (a string
 for a machine whose ports the driver does not find) is not offered: it is
 a diagnostic the release notes describe for a hand edit.
 

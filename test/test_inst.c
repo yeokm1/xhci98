@@ -1559,6 +1559,43 @@ static void test_values(void)
         e2.CmNhi = 1;
         CHECK(ni >= 0 && inst_value_set_mask(ni, &e2) == 0,
               "XhciCmNoIrqStart: refused on NT");
+        /* Record 33 section 9.1, record 26 section 5.5 draft 49 (task
+         * 45.12): 2000 and XP (and XP x64) only, never asked, not written
+         * by the INFs, default 1, 0 to 2 by /set. */
+        {
+            int br = inst_value_find("XhciCmBridgeReq");
+            INST_ENV n5 = env(1, 5, 1, INST_ARCH_X86);
+            INST_ENV n2 = env(1, 5, 0, INST_ARCH_X86);
+            INST_ENV n6 = env(1, 6, 1, INST_ARCH_X86);
+            INST_ENV n9 = env(0, 4, 10, INST_ARCH_X86);
+            n5.AnyXhci = n2.AnyXhci = n6.AnyXhci = n9.AnyXhci = 1;
+            n5.CmNhi = n2.CmNhi = n6.CmNhi = n9.CmNhi = 1;
+            CHECK(br >= 0 && instValues[br].Inf == INST_INF_CM &&
+                  instValues[br].Apply == INST_APPLY_NT5_CM &&
+                  instValues[br].Asked == 0 && instValues[br].NoInf &&
+                  instValues[br].Def == 1 && instValues[br].Loc == 0,
+                  "XhciCmBridgeReq: never asked, no INF, default 1");
+            CHECK(br >= 0 && !inst_value_applies(br, &n5) &&
+                  inst_value_relevant(br, &n5) &&
+                  inst_value_relevant(br, &n2) &&
+                  !inst_value_greyed(br, &n5) &&
+                  inst_value_set_mask(br, &n5) == 0x7 &&
+                  inst_value_set_mask(br, &n2) == 0x7,
+                  "XhciCmBridgeReq: 2000 and XP, /set 0 to 2");
+            CHECK(br >= 0 && inst_value_greyed(br, &n6) &&
+                  inst_value_greyed(br, &n9) &&
+                  !inst_value_relevant(br, &n6) &&
+                  !inst_value_relevant(br, &n9) &&
+                  inst_value_set_mask(br, &n6) == 0 &&
+                  inst_value_set_mask(br, &n9) == 0 &&
+                  inst_value_only(br) != NULL &&
+                  strcmp(inst_value_only(br), "Windows 2000 and XP only") == 0,
+                  "XhciCmBridgeReq: greyed and refused on 7 and 98 SE");
+            n5.CmNhi = 0;
+            CHECK(br >= 0 && !inst_value_relevant(br, &n5) &&
+                  inst_value_set_mask(br, &n5) == 0x7,
+                  "XhciCmBridgeReq: XP with no host interface not relevant");
+        }
         {
             int rs = inst_value_find("Restart");
             INST_ENV e9 = env(0, 4, 10, INST_ARCH_X86);

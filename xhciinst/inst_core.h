@@ -475,6 +475,8 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
 #define INST_APPLY_MARK     6   /* where the mark service runs (inst_mk_system) */
+#define INST_APPLY_NT5_CM   7   /* 2000, XP and XP x64 with the connection
+                                   manager (record 33 section 9.1) */
 
 /* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
  * or the mark service's own Parameters key (its Restart). */

@@ -2856,6 +2856,7 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         cmRow = instValues[v].Inf == INST_INF_CM &&
                 (instValues[v].Apply == INST_APPLY_CM ||
                  instValues[v].Apply == INST_APPLY_9X_CM ||
+                 instValues[v].Apply == INST_APPLY_NT5_CM ||
                  instValues[v].Apply == INST_APPLY_MARK);
         asked = inst_value_applies(v, &envNow) ||
                 (cmRow && !greyed && instValues[v].Asked != 0) ||
@@ -3021,6 +3022,8 @@ static int value_needs_write(int v)
     if (!answerSet[v] ||
         (envNow.Nt && (instValues[v].Apply == INST_APPLY_9X_XHCI ||
                        instValues[v].Apply == INST_APPLY_9X_CM)) ||
+        (instValues[v].Apply == INST_APPLY_NT5_CM &&
+         !(envNow.Nt && envNow.Major == 5)) ||
         value_inf(v) == NULL) {
         return 0;
     }
@@ -3079,6 +3082,10 @@ static void write_values(void)
             }
         }
         if (envNow.Nt && instValues[v].Apply == INST_APPLY_9X_CM) {
+            continue;
+        }
+        if (instValues[v].Apply == INST_APPLY_NT5_CM &&
+            !(envNow.Nt && envNow.Major == 5)) {
             continue;
         }
         if (!value_needs_write(v)) {

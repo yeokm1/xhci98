@@ -2018,6 +2018,18 @@ const INST_VALUE instValues[] = {
       "0 leaves such a drive at its problem code.", 0x1UL,
       { "no", "yes", NULL, NULL },
       0, 0, 0, 1UL },
+    /* Design record 33 section 9.1 (task 45.12): the hot-added bridges'
+     * requirement lists on 2000 and XP, not written by the INFs (NoInf,
+     * the driver's default 1); never asked, the Thunderbolt page's
+     * Advanced row and /set (record 26 section 5.5). */
+    { "XhciCmBridgeReq", INST_INF_CM, INST_APPLY_NT5_CM, 0x0UL, 0x7UL,
+      "give a dock or enclosure hot-plugged on Windows 2000 or XP the "
+      "bridge windows its devices need",
+      "0 leaves the lists as Windows makes them: a dock plugged in while "
+      "Windows runs may then get only one of its ports. 2 only records "
+      "what would be done, for a report.", 0x5UL,
+      { "off", "on", "record only, change nothing", NULL },
+      0, 0, 1, 1UL },
     /* Record 26 section 5.0: the mark service's own value, in its
      * Parameters key and never under Services\USB, read once at its start
      * (xhcimark.c) and written in its step of the run; never asked. */
@@ -2141,6 +2153,8 @@ int inst_value_relevant(int index, const INST_ENV *env)
         return (!env->Nt && env->CmNhi) ? 1 : 0;
     case INST_APPLY_MARK:
         return inst_mk_system(env);
+    case INST_APPLY_NT5_CM:
+        return (env->Nt && env->Major == 5 && env->CmNhi) ? 1 : 0;
     default:
         return 0;
     }
@@ -2162,6 +2176,8 @@ int inst_value_greyed(int index, const INST_ENV *env)
         return env->Nt ? 1 : 0;
     case INST_APPLY_MARK:
         return inst_mk_system(env) ? 0 : 1;
+    case INST_APPLY_NT5_CM:
+        return (env->Nt && env->Major == 5) ? 0 : 1;
     default:
         return 0;
     }
@@ -2180,6 +2196,8 @@ const char *inst_value_only(int index)
         return "Windows 98 SE and ME only";
     case INST_APPLY_MARK:
         return "Windows 2000 to 10 only";
+    case INST_APPLY_NT5_CM:
+        return "Windows 2000 and XP only";
     default:
         return NULL;
     }
@@ -2250,6 +2268,10 @@ INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
     }
     if (instValues[index].Apply == INST_APPLY_MARK && !inst_mk_system(env)) {
         return 0;   /* no mark service on this system */
+    }
+    if (instValues[index].Apply == INST_APPLY_NT5_CM &&
+        !(env->Nt && env->Major == 5)) {
+        return 0;   /* read by the driver on 2000 and XP alone */
     }
     if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
         !(env->Nt && env->Major >= 6)) {

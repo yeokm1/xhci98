@@ -541,13 +541,15 @@ release notes' advice and a tester's use (XhciInterruptMode,
 XhciForceBulkOnly, XhciPollFineTimer, XhciSelectiveSuspend, XhciCmReenum,
 XhciCmUsb3Tunnel, XhciCmLaneBonding, XhciCmPreOsCleanup, the connection
 manager's waits and its log, XhciCmBridgeNumbering and XhciCmNoIrqStart
-on 98 SE and ME, and the mark service's Restart on 2000 to 10); the
-console sets them only with /set Name=Value. The drivers' own install
-writes each value of the release notes' "Registry settings" and "The
-connection manager's registry values" at its default where it is
-missing, so it is already in the controller's key (XhciCmBridgeNumbering
-and XhciCmNoIrqStart on 98 SE and ME alone, the systems that read them);
-XhciCmTunnelBridge, whose absence means no override, is never written.
+on 98 SE and ME, XhciCmBridgeReq on 2000 and XP, and the mark service's
+Restart on 2000 to 10); the console sets them only with /set Name=Value.
+The drivers' own install writes each value of the release notes'
+"Registry settings" and "The connection manager's registry values" at
+its default where it is missing, so it is already in the controller's
+key (XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE and ME alone,
+the systems that read them);
+XhciCmTunnelBridge, whose absence means no override, and XhciCmBridgeReq,
+whose absence means its default 1, are never written.
 
 When Windows starts installing a device by itself while the installer
 runs - a Found New Hardware window, perhaps behind the installer's - it
