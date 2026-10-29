@@ -256,9 +256,9 @@ https://github.com/yeokm1/usb-wdm-free."), and -nonfree.zip, which adds
 the non-free driver pack of usb-wdm-nonfree in USBDRV\NONFREE: other
 manufacturers' Ethernet, HID and serial drivers, not this project's
 work. Wi-Fi drivers are not in this download: they are in
-usb-wdm-nonfree's own release. Each set this download carries has a
-page of its own; a set it does not carry has no page, and
-the Finish page says which download and which address have it
+usb-wdm-nonfree's own release. Each set this download carries has a page
+of its own; a set it does not carry has no page, and the Finish page
+says which download and which address have it
 (https://github.com/yeokm1/usb-wdm-free and
 https://github.com/yeokm1/usb-wdm-nonfree, where the up-to-date drivers
 are). The set's row on its page is unticked unless you tick it. Ticked,
@@ -269,34 +269,35 @@ package of the set that has an INF for this Windows, grouped by kind
 (Audio, Video, HID, Network, Storage, Serial, Other), each unticked and
 open only while its set's row is ticked; a ticked package's INFs for
 this Windows are staged in the driver store, and Windows may still ask
-for the folder of the files the first time. On Windows 98 SE and ME two
-free packages are offered, uac2 (98 SE and ME) and usbmidi (98 SE),
-because Windows' own USB audio INF would otherwise take their devices
-first: ticked, its folder is added to DevicePath. Every other package
-there is copied only, and none of its folders is added to DevicePath (a
-long DevicePath stops 98 SE's hardware wizard finding any driver; the
-installer keeps it within 280 characters and offers no box that would
-pass that). There, when the wizard asks for a driver, choose "Specify a
-location" and point it at the package's folder,
+for the folder of the files the first time. On Windows 98 SE and ME
+every package its set stages on the system is offered too: ticked, its
+folder is added to DevicePath, so Windows' hardware wizard finds the
+driver by itself. A long DevicePath stops 98 SE's hardware wizard
+finding any driver and makes ME's stop responding, so the installer
+keeps it within 280 characters on 98 SE and 259 on ME: a box whose
+folders would pass that is shown "(not available: see below)", with the
+reason. The page lists below the boxes the packages copied only on that
+Windows. For a package not staged, when the wizard asks for a driver,
+choose "Specify a location" and point it at the package's folder,
 USBDRV\FREE\<class>\<package>\<folder> (or USBDRV\NONFREE\...) in the
 install directory; an install over a run that added another package's
-folders to DevicePath takes them out again. Two packages that would
-claim the same device are not offered together, and the box below the
-list says why. What an earlier run staged is listed there too: leaving a
-box unticked does not undo it. On 64-bit Vista and later, with a free
-package ticked, one more box offers to trust usb-wdm-free's own test
-certificate (its 64-bit drivers are signed with it and load only in
-test-signing mode; the console's switch is /wdmfree:trust); the
-uninstall removes the trust it added. No trust is added for the non-free
-drivers. Trusting the certificate lets Windows load the set's
-test-signed 64-bit drivers, but Windows still says "Windows can't verify
-the publisher of this driver software" when it stages one of these
-packages, because they carry no catalog: answer "Install this driver
-software anyway". The Finish page lists the folders to point the
-hardware wizard at. The uninstall removes the copies, the DevicePath
-entries and the staged INFs it made; a driver a device installed from
-them stays installed, and so does a folder whose INF a device still
-uses.
+folders to DevicePath takes out what this run does not keep. Two
+packages that would claim the same device are not offered together, and
+the box below the list says why. What an earlier run staged is listed
+there too: leaving a box unticked does not undo it. On 64-bit Vista and
+later, with a free package ticked, one more box offers to trust
+usb-wdm-free's own test certificate (its 64-bit drivers are signed with
+it and load only in test-signing mode; the console's switch is
+/wdmfree:trust); the uninstall removes the trust it added. No trust is
+added for the non-free drivers. Trusting the certificate lets Windows
+load the set's test-signed 64-bit drivers, but Windows still says
+"Windows can't verify the publisher of this driver software" when it
+stages one of these packages, because they carry no catalog: answer
+"Install this driver software anyway". The Finish page lists the folders
+to point the hardware wizard at. The uninstall removes the copies, the
+DevicePath entries and the staged INFs it made; a driver a device
+installed from them stays installed, and so does a folder whose INF a
+device still uses.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the install folder, preselected), /thunderbolt, /stor98 (only with
@@ -541,13 +542,15 @@ release notes' advice and a tester's use (XhciInterruptMode,
 XhciForceBulkOnly, XhciPollFineTimer, XhciSelectiveSuspend, XhciCmReenum,
 XhciCmUsb3Tunnel, XhciCmLaneBonding, XhciCmPreOsCleanup, the connection
 manager's waits and its log, XhciCmBridgeNumbering and XhciCmNoIrqStart
-on 98 SE and ME, and the mark service's Restart on 2000 to 10); the
-console sets them only with /set Name=Value. The drivers' own install
-writes each value of the release notes' "Registry settings" and "The
-connection manager's registry values" at its default where it is
-missing, so it is already in the controller's key (XhciCmBridgeNumbering
-and XhciCmNoIrqStart on 98 SE and ME alone, the systems that read them);
-XhciCmTunnelBridge, whose absence means no override, is never written.
+on 98 SE and ME, XhciCmBridgeReq on 2000 and XP, and the mark service's
+Restart on 2000 to 10); the console sets them only with /set Name=Value.
+The drivers' own install writes each value of the release notes'
+"Registry settings" and "The connection manager's registry values" at
+its default where it is missing, so it is already in the controller's
+key (XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE and ME alone,
+the systems that read them);
+XhciCmTunnelBridge, whose absence means no override, and XhciCmBridgeReq,
+whose absence means its default 1, are never written.
 
 When Windows starts installing a device by itself while the installer
 runs - a Found New Hardware window, perhaps behind the installer's - it

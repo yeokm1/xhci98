@@ -1559,6 +1559,43 @@ static void test_values(void)
         e2.CmNhi = 1;
         CHECK(ni >= 0 && inst_value_set_mask(ni, &e2) == 0,
               "XhciCmNoIrqStart: refused on NT");
+        /* Record 33 section 9.1, record 26 section 5.5 draft 49 (task
+         * 45.12): 2000 and XP (and XP x64) only, never asked, not written
+         * by the INFs, default 1, 0 to 2 by /set. */
+        {
+            int br = inst_value_find("XhciCmBridgeReq");
+            INST_ENV n5 = env(1, 5, 1, INST_ARCH_X86);
+            INST_ENV n2 = env(1, 5, 0, INST_ARCH_X86);
+            INST_ENV n6 = env(1, 6, 1, INST_ARCH_X86);
+            INST_ENV n9 = env(0, 4, 10, INST_ARCH_X86);
+            n5.AnyXhci = n2.AnyXhci = n6.AnyXhci = n9.AnyXhci = 1;
+            n5.CmNhi = n2.CmNhi = n6.CmNhi = n9.CmNhi = 1;
+            CHECK(br >= 0 && instValues[br].Inf == INST_INF_CM &&
+                  instValues[br].Apply == INST_APPLY_NT5_CM &&
+                  instValues[br].Asked == 0 && instValues[br].NoInf &&
+                  instValues[br].Def == 1 && instValues[br].Loc == 0,
+                  "XhciCmBridgeReq: never asked, no INF, default 1");
+            CHECK(br >= 0 && !inst_value_applies(br, &n5) &&
+                  inst_value_relevant(br, &n5) &&
+                  inst_value_relevant(br, &n2) &&
+                  !inst_value_greyed(br, &n5) &&
+                  inst_value_set_mask(br, &n5) == 0x7 &&
+                  inst_value_set_mask(br, &n2) == 0x7,
+                  "XhciCmBridgeReq: 2000 and XP, /set 0 to 2");
+            CHECK(br >= 0 && inst_value_greyed(br, &n6) &&
+                  inst_value_greyed(br, &n9) &&
+                  !inst_value_relevant(br, &n6) &&
+                  !inst_value_relevant(br, &n9) &&
+                  inst_value_set_mask(br, &n6) == 0 &&
+                  inst_value_set_mask(br, &n9) == 0 &&
+                  inst_value_only(br) != NULL &&
+                  strcmp(inst_value_only(br), "Windows 2000 and XP only") == 0,
+                  "XhciCmBridgeReq: greyed and refused on 7 and 98 SE");
+            n5.CmNhi = 0;
+            CHECK(br >= 0 && !inst_value_relevant(br, &n5) &&
+                  inst_value_set_mask(br, &n5) == 0x7,
+                  "XhciCmBridgeReq: XP with no host interface not relevant");
+        }
         {
             int rs = inst_value_find("Restart");
             INST_ENV e9 = env(0, 4, 10, INST_ARCH_X86);
@@ -3544,12 +3581,30 @@ static const char *diFile(const char *body)
  * look fails. */
 static void test_gate(void)
 {
-    CHECK_EQ(inst_gate_ask(0, 1), 1, "gate: the first call asks");
-    CHECK_EQ(inst_gate_ask(0, 0), 1, "gate: the first call asks, none seen");
-    CHECK_EQ(inst_gate_ask(0, -1), 1, "gate: the first call asks, no look");
-    CHECK_EQ(inst_gate_ask(1, 0), 0, "gate: later, no wizard: not asked");
-    CHECK_EQ(inst_gate_ask(1, 1), 1, "gate: later, a wizard open: asked");
-    CHECK_EQ(inst_gate_ask(1, -1), 1, "gate: later, no look: asked");
+    CHECK_EQ(inst_gate_ask(0, 1, 0), 1, "gate: the first call asks");
+    CHECK_EQ(inst_gate_ask(0, 0, 0), 1, "gate: the first call asks, none seen");
+    CHECK_EQ(inst_gate_ask(0, -1, 0), 1, "gate: the first call asks, no look");
+    CHECK_EQ(inst_gate_ask(0, 0, -1), 1, "gate: first, language unread: asks");
+    CHECK_EQ(inst_gate_ask(0, 0, 1), 0, "gate: first, English, none seen: not asked");
+    CHECK_EQ(inst_gate_ask(0, 1, 1), 1, "gate: first, English, a wizard open: asked");
+    CHECK_EQ(inst_gate_ask(0, -1, 1), 1, "gate: first, English, no look: asked");
+    CHECK_EQ(inst_gate_ask(1, 0, 0), 0, "gate: later, no wizard: not asked (0)");
+    CHECK_EQ(inst_gate_ask(1, 1, 0), 1, "gate: later, a wizard open: asked (0)");
+    CHECK_EQ(inst_gate_ask(1, -1, 0), 1, "gate: later, no look: asked (0)");
+    CHECK_EQ(inst_gate_ask(1, 0, 1), 0, "gate: later, no wizard: not asked (1)");
+    CHECK_EQ(inst_gate_ask(1, 1, 1), 1, "gate: later, a wizard open: asked (1)");
+    CHECK_EQ(inst_gate_ask(1, -1, 1), 1, "gate: later, no look: asked (1)");
+    CHECK_EQ(inst_gate_ask(1, 0, -1), 0, "gate: later, no wizard: not asked (-1)");
+    CHECK_EQ(inst_gate_ask(1, 1, -1), 1, "gate: later, a wizard open: asked (-1)");
+    CHECK_EQ(inst_gate_ask(1, -1, -1), 1, "gate: later, no look: asked (-1)");
+    CHECK_EQ(inst_gate_english(0x0409, 0x0409), 1, "gate: US English");
+    CHECK_EQ(inst_gate_english(0x0809, 0x0409), 1, "gate: UK default, US build");
+    CHECK_EQ(inst_gate_english(0x0407, 0x0409), 0, "gate: German default, US build");
+    CHECK_EQ(inst_gate_english(0x0409, 0x0407), 0, "gate: US default, German build");
+    CHECK_EQ(inst_gate_english(0x040C, 0x040C), 0, "gate: French");
+    CHECK_EQ(inst_gate_english(-1, 0x0409), -1, "gate: default unread");
+    CHECK_EQ(inst_gate_english(0x0409, -1), -1, "gate: resource unread");
+    CHECK_EQ(inst_gate_english(0x0009, 0x0009), 1, "gate: neutral English");
 
     CHECK(inst_wizard_title("Found New Hardware"), "wizard: Found New Hardware");
     CHECK(inst_wizard_title("New Hardware Found"), "wizard: New Hardware Found");
@@ -6213,6 +6268,9 @@ static int count_rename(void *ctx, const char *key, const char *value)
  * variants a run meets (task 43.80). */
 /* Task 44.11 (record 26 section 6.7.12): the two free packages staged on
  * 98 SE and ME, and the 280-character projection of DevicePath. */
+/* 98 SE's DevicePath limit, for the projection's vectors. */
+#define DP98 INST_9X_DEVICEPATH_MAX
+
 static void test_9x_stage(void)
 {
     static const char base[] = "C:\\WINDOWS\\INF;C:\\XHCI98";
@@ -6226,16 +6284,99 @@ static void test_9x_stage(void)
     int fits[3];
     int r;
 
+    /* Record 26 section 6.7.13 (task 45.7): every package of either set,
+     * the projection holding DevicePath to the limit. */
     CHECK(inst_other_9x_stageable(INST_SET_FREE, "audio/uac2") &&
-          inst_other_9x_stageable(INST_SET_FREE, "AUDIO/USBMIDI"),
-          "9x stage: uac2 and usbmidi");
-    CHECK(!inst_other_9x_stageable(INST_SET_FREE, "audio/uac1") &&
-          !inst_other_9x_stageable(INST_SET_FREE, "video/uvc98") &&
-          !inst_other_9x_stageable(INST_SET_NONFREE, "audio/uac2") &&
-          !inst_other_9x_stageable(INST_SET_FREE, NULL),
-          "9x stage: every other package copy-only");
+          inst_other_9x_stageable(INST_SET_FREE, "AUDIO/USBMIDI") &&
+          inst_other_9x_stageable(INST_SET_FREE, "video/uvc98") &&
+          inst_other_9x_stageable(INST_SET_NONFREE, "serial/ftdi"),
+          "9x stage: every package of either set");
+    CHECK(!inst_other_9x_stageable(INST_SET_FREE, NULL) &&
+          !inst_other_9x_stageable(INST_SET_NONFREE, "") &&
+          !inst_other_9x_stageable(INST_SET_COUNT, "serial/ftdi") &&
+          !inst_other_9x_stageable(-1, "serial/ftdi"),
+          "9x stage: no id, or no such set");
+    CHECK(inst_other_9x_keeps(1, 1) && !inst_other_9x_keeps(1, 0) &&
+          inst_other_9x_keeps(0, 0) && inst_other_9x_keeps(0, 1),
+          "9x keeps: carried with a STAGE line, or not carried");
+    {
+        static const char *const five[] = {
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\aaaaaa",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\bbbbbb",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\cccccc",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\dddddd",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\eeeeee",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\ffffff"
+        };
+        int six[6];
+        CHECK(strlen(five[0]) == 52, "9x project: the stand-in folder");
+        r = inst_9x_devicepath_project(base, five, 6, six, DP98);
+        CHECK(six[0] && six[1] && six[2] && six[3] && !six[4] && !six[5] &&
+              r == (int)strlen(base) + 4 * 53,
+              "9x project: four 52-character folders fit, the fifth not");
+    }
+    {
+        char line[400];
+        char rest[600];
+        const char *fp[3];
+        fp[0] = "USBDRV\\FREE\\net\\rtl815x\\w98se-me";
+        fp[1] = "";
+        fp[2] = "USBDRV\\FREE\\net\\rtl815x\\w2k";
+        inst_other_copy_only_line(line, sizeof(line), "USB Ethernet", fp, 1);
+        CHECK(strcmp(line, "USB Ethernet: USBDRV\\FREE\\net\\rtl815x\\"
+                     "w98se-me") == 0, "9x copied only: one folder");
+        inst_other_copy_only_line(line, sizeof(line), "USB Ethernet", fp, 3);
+        CHECK(strcmp(line, "USB Ethernet: USBDRV\\FREE\\net\\rtl815x\\"
+                     "w98se-me; USBDRV\\FREE\\net\\rtl815x\\w2k") == 0,
+              "9x copied only: two folders, an empty one skipped");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_NONFREE,
+                             "C:\\XHCI98", 1, 0, 0);
+        CHECK(strcmp(rest, "Ticked: staged, so Windows' hardware wizard finds "
+                     "the driver by itself.") == 0, "9x rest: what a tick does");
+        inst_other_rest_text(rest, sizeof(rest), 1, INST_SET_NONFREE,
+                             "C:\\XHCI98", 1, 0, 0);
+        CHECK(strstr(rest, "Not ticked: copied only") == rest &&
+              strstr(rest, "under C:\\XHCI98\\USBDRV\\NONFREE.") != NULL,
+              "9x rest: what an unticked package is, the set's folder named");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "C:\\X", 1,
+                             0, 1);
+        CHECK(strstr(rest, "by itself; earlier staging kept is listed above.") !=
+              NULL, "9x rest: copied, earlier staging kept");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "C:\\X", 1,
+                             1, 1);
+        CHECK(strstr(rest, "takes its earlier staging out.") != NULL &&
+              strstr(rest, "listed above") == NULL,
+              "9x rest: copied over another release, earlier staging out");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "", 0, 0, 0);
+        CHECK(strstr(rest, "Nothing of this set is copied") == rest &&
+              strstr(rest, "arlier") == NULL,
+              "9x rest: not copied, no earlier staging");
+        inst_other_rest_text(rest, sizeof(rest), 1, INST_SET_FREE, "", 0, 0, 1);
+        CHECK(rest[0] == '\0', "9x rest: not copied, no second part");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "", 0, 0, 1);
+        CHECK(strstr(rest, "Earlier staging kept is listed above.") != NULL,
+              "9x rest: not copied, with earlier staging");
+        inst_other_rest_text(rest, 20, 1, INST_SET_FREE, "C:\\XHCI98", 1, 0,
+                             1);
+        CHECK(strlen(rest) == 19, "9x rest: held to its buffer");
+    }
+    /* Record 26 section 6.7.14 (task 45.6): a lifted pair bars only an
+     * earlier staging of another release; EXCLUDES bars always, COEXISTS
+     * never. */
+    CHECK(inst_other_rel_bars(INST_REL_EXCLUDES, 0, 1) &&
+          inst_other_rel_bars(INST_REL_EXCLUDES, 1, 1) &&
+          !inst_other_rel_bars(INST_REL_COEXISTS, 1, 0) &&
+          !inst_other_rel_bars(INST_REL_LIFTED, 0, 0) &&
+          !inst_other_rel_bars(INST_REL_LIFTED, 1, 1) &&
+          inst_other_rel_bars(INST_REL_LIFTED, 1, 0),
+          "lifted: bars an earlier staging of another release alone");
+    CHECK(inst_other_excludes(INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE,
+                              "ethernet/rtl815x", inst_sys_token(1, 5, 1, 2600, 0)) &&
+          !inst_other_lifted(INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE,
+                             "ethernet/rtl815x", inst_sys_token(1, 5, 1, 2600, 0)),
+          "lifted: rtl815x excluded until the free set's pin moves");
 
-    r = inst_9x_devicepath_project(base, two, 2, fits);
+    r = inst_9x_devicepath_project(base, two, 2, fits, DP98);
     CHECK(r == (int)(strlen(base) + 2 + strlen(two[0]) + strlen(two[1])) &&
           fits[0] && fits[1], "9x project: the default folders, 84 more");
     CHECK(r - (int)strlen(base) == 84, "9x project: about 90 characters");
@@ -6246,14 +6387,14 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[269] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == INST_9X_DEVICEPATH_MAX && fits[0], "9x project: 280 fits");
     b[269] = 'A';
     b[270] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == 270 && !fits[0], "9x project: 281 does not");
     b[268] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == INST_9X_DEVICEPATH_MAX - 1 && fits[0], "9x project: 279 fits");
 
     /* The install directory's own entry, by the same limit: a value of
@@ -6261,20 +6402,52 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[INST_9X_DEVICEPATH_MAX] = '\0';
-    CHECK(inst_9x_devicepath_room(b), "9x own entry: 280 kept");
+    CHECK(inst_9x_devicepath_room(b, DP98), "9x own entry: 280 kept");
     b[INST_9X_DEVICEPATH_MAX] = 'A';
     b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
-    CHECK(!inst_9x_devicepath_room(b), "9x own entry: 281 left off");
-    CHECK(inst_9x_devicepath_room(base), "9x own entry: an ordinary value kept");
-    CHECK(!inst_9x_devicepath_room(NULL), "9x own entry: nothing composed");
+    CHECK(!inst_9x_devicepath_room(b, DP98), "9x own entry: 281 left off");
+    CHECK(inst_9x_devicepath_room(base, DP98), "9x own entry: an ordinary value kept");
+    CHECK(!inst_9x_devicepath_room(NULL, DP98), "9x own entry: nothing composed");
+
+    /* ME's limit (record 26 section 6.7.13, task 45.7's ME leg): 259
+     * fits, 260 does not; 98 SE's stays 280. */
+    CHECK(inst_9x_devicepath_max(0) == 280 && inst_9x_devicepath_max(1) == 259,
+          "9x limit: 280 on 98 SE, 259 on ME");
+    CHECK(strstr(inst_9x_devicepath_harm(1), "ME") != NULL &&
+          strstr(inst_9x_devicepath_harm(0), "98 SE") != NULL,
+          "9x limit: the words name the system");
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[248] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, inst_9x_devicepath_max(1));
+    CHECK(r == 259 && fits[0], "ME project: 259 fits");
+    b[248] = 'A';
+    b[249] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, inst_9x_devicepath_max(1));
+    CHECK(r == 249 && !fits[0], "ME project: 260 does not");
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
+    CHECK(r == 260 && fits[0], "98 SE project: 260 fits");
+    b[249] = 'A';
+    b[259] = '\0';
+    CHECK(inst_9x_devicepath_room(b, inst_9x_devicepath_max(1)),
+          "ME own entry: 259 kept");
+    b[259] = 'A';
+    b[260] = '\0';
+    CHECK(!inst_9x_devicepath_room(b, inst_9x_devicepath_max(1)),
+          "ME own entry: 260 left off");
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[269] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, 0);
+    CHECK(r == DP98 && fits[0], "9x project: no limit given reads as 280");
 
     /* An oversized value as read is the caller's to shrink first; once
      * this run's withdrawals bring it under the limit, the folders count. */
     b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
     memset(b, 'A', INST_9X_DEVICEPATH_MAX + 1);
-    r = inst_9x_devicepath_project(b, two, 2, fits);
+    r = inst_9x_devicepath_project(b, two, 2, fits, DP98);
     CHECK(r == -1 && !fits[0] && !fits[1], "9x project: over the limit as read");
-    r = inst_9x_devicepath_project(base, two, 2, fits);
+    r = inst_9x_devicepath_project(base, two, 2, fits, DP98);
     CHECK(r > 0 && fits[0] && fits[1], "9x project: after the withdrawals");
 
     /* Two folders of which only the first fits; a folder already there
@@ -6282,7 +6455,7 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[INST_9X_DEVICEPATH_MAX - 1 - (int)strlen(two[0]) - 10] = '\0';
-    r = inst_9x_devicepath_project(b, two, 2, fits);
+    r = inst_9x_devicepath_project(b, two, 2, fits, DP98);
     CHECK(fits[0] && !fits[1] && r <= INST_9X_DEVICEPATH_MAX,
           "9x project: the first fits, the second not");
     _snprintf(fold, sizeof(fold) - 1, "%s;%s", base, two[0]);
@@ -6290,12 +6463,12 @@ static void test_9x_stage(void)
     f[0] = two[0];
     f[1] = two[0];
     f[2] = two[1];
-    r = inst_9x_devicepath_project(fold, f, 3, fits);
+    r = inst_9x_devicepath_project(fold, f, 3, fits, DP98);
     CHECK(fits[0] && fits[1] && fits[2] &&
           r == (int)(strlen(fold) + 1 + strlen(two[1])),
           "9x project: an entry already there counted once");
     f[0] = "";
-    CHECK(inst_9x_devicepath_project(base, f, 1, fits) == -1 && !fits[0],
+    CHECK(inst_9x_devicepath_project(base, f, 1, fits, DP98) == -1 && !fits[0],
           "9x project: an empty folder is no entry");
 }
 

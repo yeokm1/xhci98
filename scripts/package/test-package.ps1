@@ -2328,6 +2328,79 @@ try {
         $msg = ""
         try { Test-OtherPkgsTransition -Prev $recA -Now $recK } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("only known, not shipped")) ("a shipped package made known only was accepted: '" + $msg + "'")
+        # Record 26 section 6.7.14 (task 45.6): an EXCLUDES lifted to a
+        # COEXISTS only where the cut reads the two apart, recorded LIFTED and
+        # proved again by the next cut.
+        $lpF = Join-Path $script:work "oth-lift-free"
+        $lpN = Join-Path $script:work "oth-lift-nonfree"
+        foreach ($d in @("net\a\x", "net\c\x")) { Ensure-Directory (Join-Path $lpF $d) }
+        foreach ($d in @("net\b\xp", "net\b\w7", "net\b\cls")) { Ensure-Directory (Join-Path $lpN $d) }
+        [System.IO.File]::WriteAllText((Join-Path $lpF "net\a\x\A.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_1111&PID_0001`r`nE=I,USB\VID_1111&PID_0002&REV_0100`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpF "net\c\x\C.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\Class_02&SubClass_06`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpN "net\b\xp\B.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_2222&PID_0001&MI_00`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpN "net\b\w7\B7.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_1111&PID_0002`r`n")
+        $setLift = @(
+            [pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $lpF; Lines = @(Read-StageText -Text "COPY | WXP W7 | free/net/a/x/A.INF | a`nSTAGE | WXP | free/net/c/x/C.INF | c" -Label "lf") },
+            [pscustomobject]@{ Name = "nonfree"; Prefix = "non-free"; Dir = $lpN; Lines = @(Read-StageText -Text "STAGE | WXP | non-free/net/b/xp/B.INF | b`nSTAGE | W7 | non-free/net/b/w7/B7.INF | b7`nCOPY | W2K | non-free/net/b/cls/NONE.INF | n" -Label "ln") })
+        $liftRows = @(foreach ($q in @("free:net/a", "nonfree:net/b", "free:net/c")) { [pscustomobject]@{ Id = $q; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (x): adapters"; State = "current" } })
+        $mkRel = { param($k, $a, $b, $s) [pscustomobject]@{ Kind = $k; A = $a; B = $b; Systems = @($s); Desc = "t" } }
+        $liftPrev = [pscustomobject]@{ Version = "3.3.0.0"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP", "W7", "W2K"))); Lifted = @() }
+        # Apart on WXP (a &MI_ and a plain id of other devices), the same
+        # device on W7 by a &REV_ id against a plain one, no line on W2K.
+        $liftNow = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "nonfree:net/b" "free:net/a" @("WXP")), (& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7", "W2K"))) }
+        $lifted = @(Get-OtherLifted -Prev $liftPrev -Now $liftNow -Sets $setLift)
+        Assert-True ($lifted.Count -eq 1 -and ($lifted[0].Systems -join " ") -eq "WXP") "a COEXISTS on a system the cut reads apart, endpoints reversed, was not lifted."
+        Test-OtherPkgsTransition -Prev $liftPrev -Now $liftNow -Lifted $lifted
+        $recL = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.4.0.0" -Table ([pscustomobject]@{ Pkgs = @(); Rels = @() }) -Meta @() -Lifted $lifted) -join "`r`n") -Label "l"
+        Assert-True ($recL.Lifted.Count -eq 1 -and ($recL.Lifted[0].Systems -join " ") -eq "WXP") "the record's LIFTED line does not read back."
+        foreach ($bad in @(
+                @{ S = @("W7"); Want = "both match VID_1111&PID_0002"; Why = "a &REV_ id and a plain id of one device" },
+                @{ S = @("W2K"); Want = "has no line for W2K"; Why = "a system one package has no line on" })) {
+            $nowBad = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" $bad.S), (& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @(@("WXP", "W7", "W2K") | Where-Object { $bad.S -cnotcontains $_ }))) }
+            $msg = ""
+            try { Get-OtherLifted -Prev $liftPrev -Now $nowBad -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("a lift with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # A class id, a CLASS package, a set not carried, a system with no
+        # line: no answer; an interface id folded into its device.
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/c" -Sys "WXP").Ok) "a class id was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/a" -Sys "WXP" -Kind "CLASS").Ok) "a CLASS package was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets @($setLift[0]) -Pkg "nonfree:net/b" -Sys "WXP").Ok) "a set not carried was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/a" -Sys "W2K").Ok) "a system with no line was read as devices."
+        Assert-True ((Get-OtherPkgDevices -Sets $setLift -Pkg "nonfree:net/b" -Sys "W2K").Why.Contains("cannot be read")) "an INF that cannot be read was read as devices."
+        Assert-True (((Get-OtherPkgDevices -Sets $setLift -Pkg "nonfree:net/b" -Sys "WXP").Keys -join ",") -eq "VID_2222&PID_0001") "an &MI_ id was not folded into its device."
+        # The dropped EXCLUDES with no COEXISTS still refused; the next cut
+        # proves the lift again, and an EXCLUDES there ends it.
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $liftPrev -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7", "W2K"))) }) -Lifted @() } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the EXCLUDES line")) ("an EXCLUDES dropped with no COEXISTS was not refused: '" + $msg + "'")
+        $liftPrev2 = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("W7"))); Lifted = @([pscustomobject]@{ A = "free:net/a"; B = "nonfree:net/b"; Systems = @("W7") }) }
+        $msg = ""
+        try { Get-OtherLifted -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("W7"))) }) -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("both match")) ("a LIFTED system was not proved again: '" + $msg + "'")
+        Assert-True (@(Get-OtherLifted -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7"))) }) -Sets $setLift).Count -eq 0) "an EXCLUDES again on a LIFTED system did not end the lift."
+        # The transition admits that EXCLUDES in place of the lifted
+        # COEXISTS, whole or on part of its systems, and nowhere else.
+        Test-OtherPkgsTransition -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7"))) }) -Lifted @()
+        $liftPrev3 = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP", "W7"))); Lifted = @([pscustomobject]@{ A = "free:net/a"; B = "nonfree:net/b"; Systems = @("W7") }) }
+        Test-OtherPkgsTransition -Prev $liftPrev3 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP")), (& $mkRel "EXCLUDES" "nonfree:net/b" "free:net/a" @("W7"))) }) -Lifted @()
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $liftPrev3 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP", "W7"))) }) -Lifted @() } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the COEXISTS line")) ("a COEXISTS the previous release did not lift, made an EXCLUDES, was not refused: '" + $msg + "'")
+        # A table row of kind 2 must be covered by this cut's lifts.
+        $msg = ""
+        try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("lifted on W7")) ("a lifted table row past this cut's lifts was not refused: '" + $msg + "'")
+        Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted
+        # ...and a lift with no lifted row of the table, or a part of one,
+        # refused: the installer's hold against an earlier release is that row.
+        foreach ($case in @(0, 1)) {
+            $tr = @()
+            if ($case -eq 1) { $tr = @([pscustomobject]@{ Kind = "COEXISTS"; A = "nonfree:net/b"; B = "free:net/a"; Systems = @("W7"); Desc = "t"; Lifted = $true }) }
+            $msg = ""
+            try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @($tr) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains("no lifted row") -or $msg.Contains("lifted on W7")) ("a lift the table does not mark lifted was not refused: '" + $msg + "'")
+        }
         $xq = Join-Path $osp "net\a\w98\Q.INF"
         [System.IO.File]::WriteAllText($xq, "[Manufacturer]`r`nM=Mo,`"NTamd64`"`r`n[Mo.NTamd64]`r`nD=I,ID\Q64`r`n")
         Assert-True ((Get-InfModelIds -Inf (Read-InfText -Path $xq) -Sys "W7X64") -join "," -eq "ID\Q64") "a quoted decoration was not read."
