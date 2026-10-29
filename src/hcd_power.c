@@ -141,6 +141,7 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
     }
     hc->ResumeInvalidating = 0;
     hc->ResumeKeepReady = hc->ResumeSlotsInvalidated;
+    hc->ResumeKeepPending = hc->ResumeKeepReady ? 1L : 0L;
     HcdQuirkResumed(hc, restores);
 }
 
@@ -207,6 +208,38 @@ static VOID hcdShutClear(PHCD_CONTROLLER hc)
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
+/* How long a D0 waits for the thread's pass to keep or drop the devices
+ * of a resume's re-initialization (task 45.23): every restore is a few
+ * commands and descriptor reads a device, so this bound is only met when
+ * the thread cannot run - the D0 then completes, and what comes after is
+ * the pass's whenever it runs. */
+#define HCD_RKEEP_D0_WAIT_MS    15000UL
+
+/* Task 45.23 (design record 20 section 4.3.2): the D0 of a resume that
+ * re-initialized waits, outside the power gate the thread's pass takes,
+ * until that pass has kept or dropped the devices, so the function
+ * drivers above, which PnP powers only after this D0, never submit to a
+ * device left between the two. Polled at 10 ms - no event wait, whose
+ * unsatisfied return on Windows 98 would need the same loop - and bounded
+ * (HCD_RKEEP_D0_WAIT_MS). IRQL: PASSIVE_LEVEL. */
+static VOID hcdResumeKeepWait(PHCD_CONTROLLER hc)
+{
+    LARGE_INTEGER due;
+    ULONG waited;
+
+    for (waited = 0; hc->ResumeKeepPending != 0 &&
+                     waited < HCD_RKEEP_D0_WAIT_MS;
+         waited += 10) {
+        HcdRelativeMs(&due, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (waited != 0) {
+        XhciLogNote(&hc->Hc, "resume.keep.d0wait",
+                    (waited & 0x00FFFFFFUL) |
+                        (hc->ResumeKeepPending != 0 ? 0x80000000UL : 0UL));
+    }
+}
+
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
 static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 {
@@ -236,6 +269,7 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         HcdPollGrant(hc);
     }
     HcdPowerGateLeave(hc);
+    hcdResumeKeepWait(hc);
     (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                           stack->Parameters.Power.State);
     PoStartNextPowerIrp(irp);

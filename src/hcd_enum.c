@@ -4742,6 +4742,8 @@ static ULONG hcdRkeepFlags(PHCD_CONTROLLER hc, PHCD_PORT p,
             }
             if (pdo->UrbsPending != 0) {
                 flags |= XHCI_RKEEP_F_BUSY;
+                XHCI_DBG_VALUE("hcd: resume keep, a PDO's URBs pending",
+                               (ULONG)pdo->UrbsPending);
             }
         }
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
@@ -4994,6 +4996,7 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
     PHCD_USB_DEVICE dev;
     PHCD_HUB hub;
     KIRQL oldIrql;
+    ULONG flags;
     ULONG why;
     ULONG i;
     ULONG n;
@@ -5006,8 +5009,11 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
         if (dev == NULL) {
             continue;
         }
-        why = XhciEnumResumeKeep(hc->ResumeKeepOn,
-                                 hcdRkeepFlags(hc, &hc->Ports[i], dev));
+        flags = hcdRkeepFlags(hc, &hc->Ports[i], dev);
+        why = XhciEnumResumeKeep(hc->ResumeKeepOn, flags);
+        XHCI_DBG_VALUE("hcd: resume keep, port/flags/why",
+                       ((i + 1UL) << 24) | ((flags & 0xFFFFUL) << 8) |
+                           (why & 0xFFUL));
         XhciLogNote(&hc->Hc, "resume.keep.port",
                     ((i + 1UL) << 8) | (why & 0xFFUL));
         if (why == XHCI_RKEEP_KEEP) {
@@ -5738,6 +5744,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
          * done (hcd_power.c); taken once, whatever the pass decides. */
         keepReady = invalidated && hc->ResumeKeepReady;
         hc->ResumeKeepReady = 0;
+        if (!keepReady) {
+            /* Nothing of this pass will keep a device: the D0 waits no
+             * longer (hcd_power.c, hcdResumeKeepWait). */
+            hc->ResumeKeepPending = 0;
+        }
     }
     XhciControllerLockRelease(ext, oldIrql);
 
@@ -5777,6 +5788,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         } else {
             hcdInvalidate(hc);
         }
+    }
+    if (keepReady) {
+        /* Kept, dropped or contained: the D0 waits no longer
+         * (hcd_power.c, hcdResumeKeepWait). */
+        (VOID)InterlockedExchange((PLONG)&hc->ResumeKeepPending, 0);
     }
     if (detach) {
         hcdDetach(hc, powered);

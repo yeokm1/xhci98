@@ -1565,6 +1565,12 @@ typedef struct _HCD_CONTROLLER {
     ULONG ResumeInvalidating;
     ULONG ResumeSlotsInvalidated;
     ULONG ResumeKeepReady;
+    /* Set with ResumeKeepReady by the resume, cleared by the thread once
+     * its pass has taken the invalidation (or by any other invalidation):
+     * the D0 waits for it before it completes, so no function driver above
+     * - started again only after its parent's D0 - submits to a device
+     * the thread has not yet kept or dropped (hcd_power.c, hcdD0Finish). */
+    volatile LONG ResumeKeepPending;
     ULONG ResumeKeepOn;
     ULONG ResumeKept;               /* devices restored in place          */
     ULONG ResumeKeepRefused;        /* not kept, by XhciEnumResumeKeep    */
