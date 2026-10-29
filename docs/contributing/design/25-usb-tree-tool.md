@@ -227,7 +227,10 @@ authentication material.
 
 ### 3.1 Layout
 
-- Title "xHCI98 USB Tree". A resizable top-level window: tree view (left),
+- Title "xHCI98 USB Tree" and the package version, as `xHCI98 USB Tree
+  3.4.0.0`, built from `src\xhci_version.h` (`TR_MAIN_TITLE`, task 45.4),
+  so a screenshot or a report says which build it came from; the message
+  boxes keep the plain name. A resizable top-level window: tree view (left),
   read-only multi-line edit with both scroll bars (right), a splitter
   between them, a status bar ("N USB devices, M Thunderbolt/USB4
   devices"). Size, splitter position and the View check boxes persist
