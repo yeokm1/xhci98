@@ -3749,12 +3749,17 @@ proof true after a path reopens.
 controller's start. It records:
 - the domain, by its NHI object and `Reenum.Starts`;
 - the member, by its tunnel port's location;
-- the USB4 port, by the member's correspondence at that moment
-  (`XhciTbtPortMember`, the same source the Stor98 statement uses);
-- the port's connection generation, which must carry a PCIe tunnel then
-  (`Pcie.Up`). The generation is read on both sides of `Up`
-  (`TbtU4PortPcieGen`), so an `Up` and a generation of two connections are
-  never paired.
+- for every USB4 port whose PCIe tunnel is up at that moment, its
+  connection generation (`Pcie.Up`). The generation is read on both sides
+  of `Up` (`TbtU4PortPcieGen`), so an `Up` and a generation of two
+  connections are never paired.
+
+The port itself is not named at the binding. The member's correspondence
+may be learned only after the controller's start: a 2000 leg on the gated
+release bound nothing for that reason. So the port is named at each ask,
+by the correspondence then (`XhciTbtPortMember`, the same source the
+Stor98 statement uses). The proof then holds only for the generation that
+port carried at the controller's start.
 
 A domain restart changes `Reenum.Starts`, and a reconnect changes the
 generation. Either makes every later answer no. The binding is immutable
@@ -3782,11 +3787,11 @@ of these holds; the pure decision is `CmIsoDecide` (`cm_iso.c`, host suite
 2. the domain is listed and unchanged, runs this connection manager, is
    started, and its host interface is not lost (`Live.State` active, no
    `LossDrain`);
-3. the bound port still corresponds to the bound member, read now
-   (`XhciTbtPortMember`; a withdrawn or conflicting correspondence
+3. exactly one USB4 port corresponds to the bound member, read now
+   (`XhciTbtPortMember`; none, several, or a conflicting correspondence
    refuses);
-4. the bound port's `IsoWord` is `TBT_U4_ISO_VALID` with the bound
-   generation.
+4. that port carried a PCIe tunnel at the binding, and its `IsoWord` is
+   `TBT_U4_ISO_VALID` with that tunnel's generation.
 
 No spin lock is held across a transport call or a PnP call. Each call is
 counted (`cm.iso.asked`, then `cm.iso.yes` or `cm.iso.no`), and the

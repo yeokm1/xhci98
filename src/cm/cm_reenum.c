@@ -1224,7 +1224,6 @@ BOOLEAN CmRegIsoBind(PCM_FILTER child)
     ULONG bdf;
     ULONG n;
     ULONG port;
-    ULONG m;
     ULONG gen;
     BOOLEAN bound;
     KIRQL irql;
@@ -1259,23 +1258,24 @@ BOOLEAN CmRegIsoBind(PCM_FILTER child)
         f = a;
     }
     if (dom != NULL && dom->U4On && !child->IsoGone) {
-        for (port = 1; port <= TBT_U4_MAX_PORTS && !bound; port++) {
-            m = XhciTbtPortMember(&dom->Reenum.Topo, &dom->Binds, port);
-            if (m == XHCI_TBT_NO_MEMBER || m >= dom->Reenum.Topo.Tunnels ||
-                (dom->Reenum.Topo.Set[m] & 0xFFFFUL) != bdf) {
-                continue;
-            }
+        /* Every USB4 port's tunnel up at this start, by generation: the
+         * port that feeds the member is named at the ask, by the
+         * correspondence then (it may be learned after the start). */
+        child->IsoUpMask = 0;
+        for (port = 1; port <= TBT_U4_MAX_PORTS; port++) {
+            child->IsoGens[port - 1] = 0;
             if (TbtU4PortPcieGen(&dom->U4, port, &gen)) {
-                child->IsoDom = (PVOID)dom;
-                child->IsoStarts = dom->Reenum.Starts;
-                child->IsoPort = port;
-                child->IsoGen = gen;
-                child->IsoMember = bdf;
-                child->IsoBound = 1;
-                bound = TRUE;
-                CmLogNote(dom, "cm.iso.bind",
-                          (port << 24) | ((gen & 0xFFUL) << 16) | bdf);
+                child->IsoGens[port - 1] = gen;
+                child->IsoUpMask |= 1UL << (port - 1);
             }
+        }
+        if (child->IsoUpMask != 0) {
+            child->IsoDom = (PVOID)dom;
+            child->IsoStarts = dom->Reenum.Starts;
+            child->IsoMember = bdf;
+            child->IsoBound = 1;
+            bound = TRUE;
+            CmLogNote(dom, "cm.iso.bind", (child->IsoUpMask << 24) | bdf);
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
@@ -1290,9 +1290,14 @@ ULONG CmRegIsoAsk(PCM_FILTER child)
     CM_ISO_IN in;
     ULONG why;
     ULONG m;
+    ULONG p;
+    ULONG port;
+    ULONG gen;
     KIRQL irql;
 
     RtlZeroMemory(&in, sizeof(in));
+    port = 0;
+    gen = 0;
     KeAcquireSpinLock(&cmRegLock, &irql);
     in.Bound = child->IsoBound;
     in.Gone = child->IsoGone;
@@ -1314,15 +1319,26 @@ ULONG CmRegIsoAsk(PCM_FILTER child)
         in.StageActive = (dom->Stage == CM_STAGE_ACTIVE) ? 1UL : 0UL;
         in.LiveActive = (dom->Live.State == CM_LIVE_ACTIVE) ? 1UL : 0UL;
         in.LossDrain = dom->Reenum.LossDrain ? 1UL : 0UL;
-        in.Isolated = TbtU4PortIsolated(&dom->U4, child->IsoPort,
-                                        child->IsoGen) ? 1UL : 0UL;
-        m = XhciTbtPortMember(&dom->Reenum.Topo, &dom->Binds,
-                              child->IsoPort);
-        in.Corresponds =
-            (m != XHCI_TBT_NO_MEMBER && m < dom->Reenum.Topo.Tunnels &&
-             (dom->Reenum.Topo.Set[m] & 0xFFFFUL) == child->IsoMember)
-                ? 1UL
-                : 0UL;
+        /* The port that feeds the bound member now, by correspondence;
+         * exactly one, else none is named. */
+        for (p = 1; p <= TBT_U4_MAX_PORTS; p++) {
+            m = XhciTbtPortMember(&dom->Reenum.Topo, &dom->Binds, p);
+            if (m != XHCI_TBT_NO_MEMBER && m < dom->Reenum.Topo.Tunnels &&
+                (dom->Reenum.Topo.Set[m] & 0xFFFFUL) == child->IsoMember) {
+                port = (port == 0) ? p : 0xFFFFFFFFUL;
+            }
+        }
+        if (port != 0 && port != 0xFFFFFFFFUL) {
+            in.Corresponds = 1;
+            gen = child->IsoGens[port - 1];
+            in.Isolated =
+                ((child->IsoUpMask & (1UL << (port - 1))) != 0 &&
+                 TbtU4PortIsolated(&dom->U4, port, gen))
+                    ? 1UL
+                    : 0UL;
+        } else {
+            port = 0;
+        }
     }
     why = CmIsoDecide(&in);
     if (dom != NULL) {
@@ -1332,8 +1348,8 @@ ULONG CmRegIsoAsk(PCM_FILTER child)
         } else {
             dom->Counters.IsoNo++;
         }
-        CmLogNote(dom, "cm.iso", (why << 24) | ((child->IsoPort & 0xFFUL) << 16) |
-                                     (child->IsoGen & 0xFFFFUL));
+        CmLogNote(dom, "cm.iso", (why << 24) | ((port & 0xFFUL) << 16) |
+                                     (gen & 0xFFFFUL));
     }
     KeReleaseSpinLock(&cmRegLock, irql);
     return why;

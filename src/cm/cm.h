@@ -684,10 +684,10 @@ typedef struct _CM_FILTER {
     ULONG IsoGone;          /* its removal has begun                       */
     PVOID IsoDom;           /* the bound domain's NHI object, compared only */
     ULONG IsoStarts;        /* its Reenum.Starts at the binding            */
-    ULONG IsoPort;          /* the USB4 port, 1-based                      */
-    ULONG IsoGen;           /* that port's connection generation           */
-    ULONG IsoMember;        /* the member's location (XHCI_TBT_BDF, 16 bits)
-                               the port corresponded to at the binding     */
+    ULONG IsoMember;        /* the member's location (XHCI_TBT_BDF, 16 bits) */
+    ULONG IsoUpMask;        /* bit n-1: USB4 port n's PCIe tunnel was up at
+                               the binding, of generation IsoGens[n-1]     */
+    ULONG IsoGens[TBT_U4_MAX_PORTS];
     LONG IsoRefs;           /* the interface's references held by xhci98   */
 } CM_FILTER, *PCM_FILTER;
 
