@@ -555,11 +555,30 @@ LONG TbtRingStartEx(PTBT_RING ring,
            entries | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT));
     TBT_WR(ring, TBT_RX_PDF(0), rxPdfMask);
     ring->RxPdfMask = rxPdfMask;
-    TBT_WR(ring, TBT_RX_CTRL(0), TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW);
-    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, entries - 1);
 
     ring->TxNext = 0;
     ring->RxNext = 0;
+
+    /* RX's Producer Index is the host interface's: one the base write did
+     * not move to 0 is where the next frame lands, so the receive starts
+     * there; otherwise every answer would be waited for at slot 0. It is
+     * read while the ring is not yet valid and the Consumer Index not yet
+     * written, so no frame can move it between this read and the start,
+     * and none is skipped. An unreadable or out-of-range one is refused. */
+    idx = TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_INDEX);
+    if (TBT_RING_PROD(idx) != 0) {
+        tbtLog(host, "tbt.ring.rx-index", idx);
+        if (idx == 0xFFFFFFFFUL || TBT_RING_PROD(idx) >= entries) {
+            TBT_WR(ring, TBT_TX_CTRL(0), 0);
+            TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, 0);
+            tbtRingVerifyStopped(ring);
+            return TBT_E_HW;
+        }
+        ring->RxNext = TBT_RING_PROD(idx);
+    }
+    TBT_WR(ring, TBT_RX_CTRL(0), TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW);
+    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX,
+           (ring->RxNext + entries - 1) % entries);
 
     /* Writing the base reset both TX indexes (Table 12-17). A ring whose
      * indexes did not move to an agreeing pair is not one to send on. */
@@ -576,25 +595,6 @@ LONG TbtRingStartEx(PTBT_RING ring,
             return TBT_E_HW;
         }
         ring->TxNext = TBT_RING_PROD(idx);
-    }
-    /* The same for RX, whose Producer Index is the host interface's: one
-     * the base write did not move to 0 is where the next frame lands, so
-     * the receive starts there with the Consumer Index one behind it
-     * again; otherwise every answer would be waited for at slot 0. An
-     * unreadable or out-of-range one is refused as the TX pair is. */
-    idx = TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_INDEX);
-    if (TBT_RING_PROD(idx) != 0) {
-        tbtLog(host, "tbt.ring.rx-index", idx);
-        if (idx == 0xFFFFFFFFUL || TBT_RING_PROD(idx) >= entries) {
-            TBT_WR(ring, TBT_TX_CTRL(0), 0);
-            TBT_WR(ring, TBT_RX_CTRL(0), 0);
-            TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, 0);
-            tbtRingVerifyStopped(ring);
-            return TBT_E_HW;
-        }
-        ring->RxNext = TBT_RING_PROD(idx);
-        TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX,
-               (ring->RxNext + entries - 1) % entries);
     }
     ring->Running = TRUE;
     return TBT_OK;
