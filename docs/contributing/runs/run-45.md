@@ -1502,3 +1502,38 @@ this branch: a fix, a `nocopy` job flag with which the helper sets
 `DI_NOFILECOPY` for a later controller of an INF a controller's job of
 the same run installed, is drafted, not committed, for a task of its
 own. **Reproduced; open.**
+
+## 45.38 98 SE's driver-disk prompt at a second xHCI controller (2026-10-30)
+
+The finding above is task 45.38. Commit `a01f9c88` (reviewed and revised):
+a controller's job for an INF that an earlier controller's job of the
+same run installed (outcome installed, or installed with a restart) now
+passes `nocopy` on its `FLAGS` line, and the helper sets `DI_NOFILECOPY`
+for it. The first copy has put the same files in place, or left them
+for `WININIT` at the restart it already asks for. The root hub, the
+hubs, the composite entries and Stor98's devices neither set nor take
+the mark. Design record 27 sections 4.1, 5.3, 6 and H4 (draft 17).
+Why setupx looks at the Windows source for the second copy was not
+read: the prompt offered `C:\WIN98`, the value the first job had
+restored `LDID_SRCPATH` to, and setupx is one instance for every
+process. Keeping `LDID_SRCPATH` set for the whole run was the other
+remedy weighed. It was not taken: it would leave shared setupx state
+changed between helper jobs, while other installs may run, and it needs
+a restore on every way out.
+
+**The legs** (gated build 5, its test cut, fresh overlays with two QEMU
+xHCI controllers, development host A, 2026-10-30): the window install
+with its default rows on 98 SE (`g98`, the `-nonfree` download) and ME
+(`gme`, the `-free` download). On both the first controller's job read
+`FLAGS quiet`, the second's `FLAGS quiet nocopy` with the log line
+"helper: nocopy: a controller's job of this run copied xhci98.inf's
+files", both "installed-restart", and no prompt. After the cold start
+both systems had two xHCI98 root hubs, one under each controller. On
+98 SE, an update with `/force /thunderbolt /stor98` over `3.3.0.0`
+behind the ASM4242 model (task 45.36's `u1`) reinstalled both
+controllers (the ASM4242's own and QEMU's) with no prompt, where the
+same machine's `3.3.0.0` install had prompted. The `3.3.0.0` installs of
+the same layout on ME (`hm1`) did not prompt. The QEMU exit while the
+prompt was up (45.10's leg) did not recur in the four 98 SE installs
+that prompted (`w98x`, `w9w`, and the `3.3.0.0` installs on `h1` and
+`h2`). **Pass.**
