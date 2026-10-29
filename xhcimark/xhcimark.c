@@ -1253,6 +1253,26 @@ static int mk_fresh_unit(const char *id, const MK_ENTRY *e, DWORD *dn)
 /* A unit restart made in this poll: the walk no longer shows the tree. */
 static int mkRestartMade;
 
+/* The bridge marks (design record 33 section 4.3), defined after the
+ * Stor98 fallback below: a unit's other restarts wait for them, and a
+ * restart made for any reason serves them. */
+static int mk_br_waiting(const char *id);
+static void mk_br_spent(const char *id);
+static int mk_br_is_spent(const char *id);
+static int mk_br_cooling(const char *id);
+static void mk_br_cool(const char *id);
+static void mk_s98_spend(const char *id);
+static int mk_br_pending(DWORD dn);
+static int mk_br_follows(const MK_NHI *h, int unit);
+static const char *mk_br_gate(int u);
+static const MK_ENTRY *mk_entry_of(const MK_NHI *h, INST_U32 member,
+                                   int unit);
+static int mkBrRewalked;
+static int mk_is_bridge(const MK_NODE *t);
+static int mk_br_owner(int node, MK_NHI **owner, INST_U32 *memberBdf,
+                       int *unit);
+static DWORD mk_bridge_req(const MK_NHI *h);
+
 /* Record 31 section 6.2, "The mark's restart" (task 44.52): defined with
  * the Stor98 fallback below. */
 static const char *mk_mark_rerun(int unit, DWORD unitDn, HANDLE *sm);
@@ -1271,9 +1291,25 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     BOOL called;
     HANDLE sm = NULL;
     const char *why = NULL;
+    char unitKeep[INST_ID_CHARS];
 
     t = mk_tried(h, e->Serial, 1);
     if (t == NULL || t->Restarted || paramRestart == 0) {
+        return;
+    }
+    inst_copy(unitKeep, nodes[unit].Id, sizeof(unitKeep));
+    if (mk_br_follows(h, unit) && mk_br_is_spent(unitKeep)) {
+        /* This arrival's one restart was made already, whatever for
+         * (record 33 section 4.3). */
+        return;
+    }
+    if (mk_br_follows(h, unit) && (why = mk_br_gate(unit)) != NULL) {
+        /* Refused on this walk already: no walk again for it. */
+        if (!t->Gated) {
+            mk_log("restart not made: %s: %s. Unplug the dock safely and "
+                   "plug it in again", unitKeep, why);
+            t->Gated = 1;
+        }
         return;
     }
     em = mk_lock(MK_EJECT_MUTEX, 1000);
@@ -1293,6 +1329,31 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
          * then held to the call). */
         why = mk_mark_rerun(unit, dn, &sm);
     }
+    if (why == NULL && mk_br_follows(h, unit) && mk_br_cooling(unitKeep)) {
+        why = "an attempt a moment ago did not go through";
+    } else if (why == NULL && mk_br_follows(h, unit)) {
+        /* A unit the bridge marks follow (record 33 section 4.3): the
+         * widened gate, on the tree as it is now. The poll ends after
+         * this walk (mkBrRewalked). */
+        char unitId[INST_ID_CHARS];
+        int u2;
+
+        inst_copy(unitId, nodes[unit].Id, sizeof(unitId));
+        mkBrRewalked = 1;
+        if (!mk_walk() || walkBad != 0) {
+            why = "the device tree could not be walked again";
+        } else if ((u2 = mk_find_id(unitId)) < 0) {
+            why = "the unit is gone";
+        } else {
+            why = mk_br_gate(u2);
+        }
+        if (why != NULL && !t->Gated) {
+            mk_log("restart not made: %s: %s. Unplug the dock safely and "
+                   "plug it in again", unitId, why);
+            t->Gated = 1;
+        }
+        unit = -1;
+    }
     if (why == NULL) {
         set = api.CreateList(NULL, NULL);
         if (set == INVALID_HANDLE_VALUE) {
@@ -1302,7 +1363,7 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     if (why == NULL) {
         memset(&data, 0, sizeof(data));
         data.cbSize = sizeof(data);
-        if (!api.OpenInfo(set, nodes[unit].Id, NULL, 0, &data)) {
+        if (!api.OpenInfo(set, unitKeep, NULL, 0, &data)) {
             why = "the unit could not be opened";
             api.Destroy(set);
         }
@@ -1314,9 +1375,12 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
         api.Destroy(set);
     }
     if (why != NULL) {
+        if (mkBrRewalked) {
+            mk_br_cool(unitKeep);
+        }
         if (!t->Gated) {
             t->Gated = 1;
-            mk_log("restart not made yet: %s: %s", nodes[unit].Id, why);
+            mk_log("restart not made yet: %s: %s", unitKeep, why);
         }
         if (sm != NULL) {
             mk_unlock(sm);
@@ -1324,7 +1388,9 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
         mk_unlock(em);
         return;
     }
-    /* Immediately after the status read: the call itself. */
+    /* Immediately after the status read: the call itself. One restart a
+     * unit's arrival, whatever it is made for and however it ends (record
+     * 33 section 4.3): every budget is spent at the call. */
     t->Restarted = 1;
     t->At = GetTickCount();
     called = FALSE;
@@ -1335,6 +1401,10 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     pcp.Scope = MK_DICS_FLAG_GLOBAL;
     pcp.HwProfile = 0;
     if (api.SetCiParams(set, &data, &pcp.ClassInstallHeader, sizeof(pcp))) {
+        /* The bridge and Stor98 arrivals' budgets go with the call,
+         * whatever its result. */
+        mk_br_spent(unitKeep);
+        mk_s98_spend(unitKeep);
         called = api.CallCi(MK_DIF_PROPERTYCHANGE, set, &data);
         memset(&ip, 0, sizeof(ip));
         ip.cbSize = sizeof(ip);
@@ -1342,7 +1412,7 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
             (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
             mk_log("restart not made now (vetoed or needs a restart of "
                    "Windows): %s; the tool's fallback stands until its "
-                   "next start", nodes[unit].Id);
+                   "next start", unitKeep);
             called = FALSE;
             t->Outcome = 1;
         }
@@ -1350,10 +1420,10 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     api.Destroy(set);
     if (called) {
         mkRestartMade = 1;
-        mk_log("restart made: %s (serial %lu)", nodes[unit].Id, e->Serial);
+        mk_log("restart made: %s (serial %lu)", unitKeep, e->Serial);
     } else if (!t->Outcome) {
         mk_log("restart failed: %s (error %lu); the tool's fallback stands",
-               nodes[unit].Id, GetLastError());
+               unitKeep, GetLastError());
         t->Outcome = 1;
     }
     if (sm != NULL) {
@@ -1432,12 +1502,23 @@ static void mk_confirm(const MK_NHI *h, const MK_ENTRY *e, int unit)
 /* The poll                                                                 */
 /* ======================================================================== */
 
+#define MK_RESTART_CANDS (MK_MAX_NHIS * MK_MAX_ENTRIES)
+static unsigned candRot;
+static struct {
+    int H;
+    int E;
+    int Unit;
+} cand[MK_RESTART_CANDS];
+
 static void mk_entries(const int *prot)
 {
     int i;
     INST_U32 j;
     int w;
     int unit;
+    int c;
+    int k;
+    int nCand = 0;
 
     for (i = 0; i < nhiCount; i++) {
         MK_NHI *h = &nhis[i];
@@ -1457,6 +1538,9 @@ static void mk_entries(const int *prot)
                 mk_confirm(h, e, unit);
             }
             if (w == MK_W_OK) {
+                if (mk_br_follows(h, unit) && mk_br_pending(nodes[unit].Dn)) {
+                    continue;
+                }
                 mk_write(h, e, unit);
                 continue;
             }
@@ -1495,11 +1579,25 @@ static void mk_entries(const int *prot)
             }
             if (mk_restart_wanted(e, 1) &&
                 (nodes[unit].Status & MK_DN_STARTED) != 0 &&
-                (nodes[unit].Status & MK_DN_HAS_PROBLEM) == 0) {
-                mk_restart(h, e, unit);
+                (nodes[unit].Status & MK_DN_HAS_PROBLEM) == 0 &&
+                !mk_br_waiting(nodes[unit].Id) &&
+                nCand < MK_RESTART_CANDS) {
+                cand[nCand].H = i;
+                cand[nCand].E = (int)j;
+                cand[nCand].Unit = unit;
+                nCand++;
             }
         }
     }
+    /* The restarts after every write and confirmation of this poll: a
+     * restart (or its fresh walk of the tree, mkBrRewalked) ends the
+     * poll's use of the walk's indices. */
+    for (c = 0; c < nCand && !mkBrRewalked && !mkRestartMade; c++) {
+        k = (int)((candRot + (unsigned)c) % (unsigned)nCand);
+        mk_restart(&nhis[cand[k].H], &nhis[cand[k].H].M.E[cand[k].E],
+                   cand[k].Unit);
+    }
+    candRot++;
 }
 
 /* The domain whose answer lists location `bdf` as a member, or NULL. */
@@ -1554,6 +1652,9 @@ static void mk_judge(const char *id, const char *text)
     MK_NHI *owner = NULL;
     const MK_ENTRY *le = NULL;
     HANDLE m;
+    int bridge = 0;
+    int bunit = -1;
+    INST_U32 mbdf = 0;
 
     if (!mk_rec_parse(text, &member, &hi, &lo, &state)) {
         member = 0;
@@ -1606,6 +1707,14 @@ static void mk_judge(const char *id, const char *text)
                    (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
                    (nodes[parent].Address & 7UL);
             owner = mk_owner(pbdf);
+            if (owner == NULL && osv.dwMajorVersion == 5 &&
+                mk_is_bridge(&nodes[node]) &&
+                mk_br_owner(node, &owner, &mbdf, &bunit)) {
+                /* A bridge mark (record 33 section 4.3): a bridge in the
+                 * subtree of a unit behind an active member. */
+                bridge = 1;
+                pbdf = mbdf;
+            }
         }
     } else {
         owner = mk_owner(member);
@@ -1625,9 +1734,14 @@ static void mk_judge(const char *id, const char *text)
         safeOff = (owner->M.Flags & MK_F_SAFE_OFF) != 0;
         memberActive = mk_member_active(&owner->Q,
                                         presence == MK_P_PRESENT ? pbdf : member);
+        if (bridge && mk_bridge_req(owner) != 1UL) {
+            /* XhciCmBridgeReq 0 or 2: no bridge mark (section 9.1). */
+            safeOff = 1;
+        }
         if (presence == MK_P_PRESENT && memberActive) {
-            switch (mk_listed(&owner->M, pbdf, nodes[node].Bus,
-                              nodes[node].Address, &le)) {
+            switch (mk_listed(&owner->M, pbdf,
+                              nodes[bridge ? bunit : node].Bus,
+                              nodes[bridge ? bunit : node].Address, &le)) {
             case MK_L_LISTED:
                 listed = 1;
                 break;
@@ -1648,6 +1762,35 @@ static void mk_judge(const char *id, const char *text)
     if (verdict == MK_R_LEAVE) {
         return;
     }
+    if (verdict == MK_R_KEEP && bridge) {
+        /* A bridge mark's replay: the value written again, then the
+         * record completed - under the write's own conditions (record 33
+         * section 4.3): not protected, the bridge's install done. */
+        if (state == MK_REC_WRITING && scrubOk && mk_write_due(id) &&
+            curProt != NULL && !curProt[node] && !mk_br_pending(dn)) {
+            m = mk_lock(MK_WRITE_MUTEX, 5000);
+            if (m != NULL) {
+                char rec[96];
+                HKEY rk;
+                if (mk_filters_add(dn) &&
+                    RegOpenKeyExA(HKEY_LOCAL_MACHINE, MK_MARKS_KEY, 0,
+                                  KEY_SET_VALUE, &rk) == ERROR_SUCCESS) {
+                    mk_rec_format_bridge(rec, sizeof(rec), member, hi, lo,
+                                         MK_REC_WRITTEN);
+                    (void)RegSetValueExA(rk, id, 0, REG_SZ,
+                                         (const BYTE *)rec,
+                                         (DWORD)strlen(rec) + 1);
+                    RegCloseKey(rk);
+                    mk_write_done(id);
+                    mk_log("bridge mark record replayed: %s", id);
+                } else {
+                    mk_write_failed(id);
+                }
+                mk_unlock(m);
+            }
+        }
+        return;
+    }
     if (verdict == MK_R_KEEP) {
         if (state != MK_REC_WRITING || le == NULL || curProt == NULL ||
             !scrubOk) {
@@ -1658,6 +1801,11 @@ static void mk_judge(const char *id, const char *text)
          * one the record names. */
         w = mk_check_entry(owner, le, curProt, &unit);
         if ((w != MK_W_OK && w != MK_W_PRESENT) || unit != node) {
+            return;
+        }
+        if (mk_br_follows(owner, unit) && mk_br_pending(dn)) {
+            /* A bridge unit's mark waits for its install, as its write
+             * does (record 33 section 4.3). */
             return;
         }
         if (mk_write_due(id)) {
@@ -1689,6 +1837,7 @@ static void mk_judge(const char *id, const char *text)
         mk_rec_delete(id);
         mk_log("mark removed: %s (%s; member %04lX)", id,
                presence == MK_P_ABSENT ? "the unit left" :
+               bridge && safeOff ? "safe eject or the bridge marks are off" :
                safeOff ? "safe eject is off" :
                !memberActive ? "its member is not an active tunnel port" :
                "not listed by the driver behind its member",
@@ -3734,7 +3883,8 @@ static int mk_s98_nt5(int i, int m, int s, const MK_NHI *h, INST_U32 member)
     }
     u = mk_s98_unit_of(i, m);
     us = u >= 0 ? mk_s98_seen(nodes[u].Id, 1) : -1;
-    if (us >= 0 && s98Seen[us].Attempts > 0) {
+    if ((us >= 0 && s98Seen[us].Attempts > 0) ||
+        (u >= 0 && mk_br_is_spent(nodes[u].Id))) {
         /* The unit's restart of this arrival was made (or refused at the
          * call): a drive still without the id is said once. */
         if (s98Seen[s].Why != MK_S98_W_AFTER) {
@@ -3781,13 +3931,33 @@ static int mk_s98_nt5(int i, int m, int s, const MK_NHI *h, INST_U32 member)
         }
         return 0;
     }
+    if (mk_br_waiting(nodes[u].Id) || mk_br_cooling(nodes[u].Id)) {
+        /* Its bridge marks first (record 33 section 4.3): one restart then
+         * serves both; and no attempt while an earlier one that walked the
+         * tree again and did not go through cools down. */
+        return 0;
+    }
     {
         char unitKeep[INST_ID_CHARS];
         int rewalked;
+        const MK_ENTRY *ue;
+        MK_TRIED *ut;
         inst_copy(unitKeep, nodes[u].Id, sizeof(unitKeep));
+        /* The unit mark's attempt state, taken before the restart walks
+         * the tree again (mk_tried reads the NHI's node). */
+        ue = mk_entry_of(h, member, u);
+        ut = ue != NULL ? mk_tried(h, ue->Serial, 1) : NULL;
         r = mk_s98_unit_restart(u, i, mk_s98_noid(i, m), &spent, &rewalked,
                                 h, member);
+        if (rewalked && !spent) {
+            mk_br_cool(unitKeep);
+        }
         if (spent) {
+            mk_br_spent(unitKeep);
+            if (ut != NULL) {
+                ut->Restarted = 1;
+                ut->At = GetTickCount();
+            }
             us = mk_s98_seen(unitKeep, 1);
             if (us >= 0) {
                 s98Seen[us].Attempts++;
@@ -3923,6 +4093,714 @@ static void mk_s98_poll(const int *prot)
     }
 }
 
+/* ======================================================================== */
+/* The bridge marks (design record 33 section 4.3, task 45.12)              */
+/* ======================================================================== */
+
+/* On 2000, XP and XP x64 each bridge's first-time install rebuilds its
+ * stack and the child filter the BusRelations chain put there is lost.
+ * Every PCI-to-PCI bridge in a unit's subtree (the unit itself when it is
+ * one) gets a device LowerFilters value naming xhcicm once its install is
+ * done - a bridge mark, recorded and reconciled as a unit mark is - so the
+ * PnP manager builds the filter into its stack again; and the unit is
+ * restarted once where a bridge below it is at problem 12 or runs with no
+ * filter of this driver on it (the driver's bridge inventory), so the
+ * bridges start again with the filter there and their requirement lists
+ * rewritten. The unit's other restarts wait for the bridge marks (at most
+ * MK_BRIDGE_WAIT from the unit's arrival) and for every bridge install
+ * below it, so one restart serves all; one restart a unit's arrival,
+ * whatever it is made for. */
+
+#define MK_CM_DRP_CLASSGUID         0x00000009UL
+#define MK_BR_UNITS_MAX             64
+#define MK_BR_DEPTH_MAX             6   /* below the unit (record 31 4.3) */
+
+static struct {
+    char Id[INST_ID_CHARS];
+    DWORD Walk;             /* the last whole walk that saw it            */
+    DWORD Arrived;          /* the tick of this arrival's first sight     */
+    int Waiting;            /* bridge marks not all written, in the wait  */
+    int Pending;            /* a bridge below with its install pending    */
+    int MarkedInTime;       /* every mark written before the wait ran out */
+    int Spent;              /* this arrival's restart made, any reason    */
+    int Why;                /* the reason last logged, 0 none             */
+    char RestartWhy[96];    /* the restart's reason last logged, or ""    */
+    int NeedLogged;         /* what asked for the restart was logged      */
+    DWORD RetryAt;          /* an attempt that walked the tree again and
+                               ended unspent: none before this tick, so a
+                               failure cannot take every poll (0 none)    */
+} brUnit[MK_BR_UNITS_MAX];
+static int brUnitCount;
+static DWORD brWalk;
+/* mkBrRewalked (declared above): the device tree was walked again inside
+ * this poll (mk_br_restart); its indices no longer hold, and the poll
+ * ends. */
+
+/* Every unit's presence at this whole walk: one seen at the walk before
+ * keeps its arrival; one a whole walk missed starts a new arrival when it
+ * is seen again. Called once per whole walk, before any unit is looked
+ * at. */
+static void mk_br_presence(void)
+{
+    int i;
+
+    brWalk++;
+    for (i = 0; i < brUnitCount; i++) {
+        if (brUnit[i].Id[0] == '\0' || mk_find_id(brUnit[i].Id) < 0) {
+            continue;
+        }
+        if (brUnit[i].Walk + 1 != brWalk) {
+            char keep[INST_ID_CHARS];
+
+            inst_copy(keep, brUnit[i].Id, sizeof(keep));
+            memset(&brUnit[i], 0, sizeof(brUnit[i]));
+            inst_copy(brUnit[i].Id, keep, sizeof(brUnit[i].Id));
+            brUnit[i].Arrived = GetTickCount();
+        }
+        brUnit[i].Walk = brWalk;
+    }
+}
+
+/* The unit's arrival entry (mk_br_presence ran at this walk): an entry
+ * absent at this walk is reused for a new one. -1 when every entry is a
+ * unit present now. */
+static int mk_br_seen(const char *id)
+{
+    int i;
+
+    for (i = 0; i < brUnitCount; i++) {
+        if (brUnit[i].Walk == brWalk && inst_eq(brUnit[i].Id, id)) {
+            return i;
+        }
+    }
+    for (i = 0; i < brUnitCount; i++) {
+        if (brUnit[i].Walk != brWalk) {
+            break;
+        }
+    }
+    if (i == brUnitCount) {
+        if (brUnitCount >= MK_BR_UNITS_MAX) {
+            return -1;
+        }
+        brUnitCount++;
+    }
+    memset(&brUnit[i], 0, sizeof(brUnit[i]));
+    inst_copy(brUnit[i].Id, id, sizeof(brUnit[i].Id));
+    brUnit[i].Walk = brWalk;
+    brUnit[i].Arrived = GetTickCount();
+    return i;
+}
+
+static int mk_br_find(const char *id)
+{
+    int i;
+
+    for (i = 0; i < brUnitCount; i++) {
+        if (brUnit[i].Walk == brWalk && inst_eq(brUnit[i].Id, id)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* 1 while the unit's other restarts wait: its bridge marks not all
+ * written within the wait, or a bridge install below it pending. */
+static int mk_br_waiting(const char *id)
+{
+    int i = mk_br_find(id);
+
+    return i >= 0 && (brUnit[i].Waiting || brUnit[i].Pending);
+}
+
+/* A restart of the unit made for any reason: this arrival's one. */
+static void mk_br_spent(const char *id)
+{
+    int i = mk_br_find(id);
+
+    if (i < 0) {
+        i = mk_br_seen(id);
+    }
+    if (i >= 0) {
+        brUnit[i].Spent = 1;
+    }
+}
+
+static int mk_br_is_spent(const char *id)
+{
+    int i = mk_br_find(id);
+
+    return i >= 0 && brUnit[i].Spent;
+}
+
+/* The cooldown every restart path shares for a unit the bridge marks
+ * follow: an attempt that walked the tree again and ended unspent leaves
+ * the next one MK_RETRY_MS away, so no failure takes every poll. */
+static int mk_br_cooling(const char *id)
+{
+    int i = mk_br_find(id);
+
+    return i >= 0 && brUnit[i].RetryAt != 0 &&
+           (LONG)(GetTickCount() - brUnit[i].RetryAt) < 0;
+}
+
+static void mk_br_cool(const char *id)
+{
+    int i = mk_br_find(id);
+
+    if (i < 0) {
+        /* A unit the bridge marks do not follow (the Stor98 tag
+         * restart's): an entry of its own for the cooldown. */
+        i = mk_br_seen(id);
+    }
+    if (i >= 0) {
+        brUnit[i].RetryAt = GetTickCount() + MK_RETRY_MS;
+        if (brUnit[i].RetryAt == 0) {
+            brUnit[i].RetryAt = 1;
+        }
+    }
+}
+
+/* XhciCmBridgeReq as the driver reads it (record 33 section 9.1): the
+ * machine-wide key first, else the NHI's driver key; 0 to 2, else 1. */
+static DWORD mk_bridge_req(const MK_NHI *h)
+{
+    char path[200];
+    DWORD v;
+
+    v = mk_reg_dword(HKEY_LOCAL_MACHINE,
+                     "SYSTEM\\CurrentControlSet\\Services\\USB",
+                     "XhciCmBridgeReq", 0xFFFFFFFFUL);
+    if (v == 0xFFFFFFFFUL && h->Driver[0] != '\0') {
+        sprintf(path, "SYSTEM\\CurrentControlSet\\Control\\Class\\%.120s",
+                h->Driver);
+        v = mk_reg_dword(HKEY_LOCAL_MACHINE, path, "XhciCmBridgeReq",
+                         0xFFFFFFFFUL);
+    }
+    return v <= 2UL ? v : 1UL;
+}
+
+static int mk_is_bridge(const MK_NODE *t)
+{
+    return mk_is_pci(t) &&
+           inst_msz_has(t->Compat, t->CompatBytes, "PCI\\CC_0604");
+}
+
+/* Node k at most MK_BR_DEPTH_MAX levels below unit u, or u itself. */
+static int mk_br_below(int k, int u)
+{
+    int steps;
+
+    for (steps = 0; k >= 0 && steps <= MK_BR_DEPTH_MAX;
+         k = nodes[k].Parent, steps++) {
+        if (k == u) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static INST_U32 mk_node_bdf(const MK_NODE *t)
+{
+    return (t->Bus << 8) | (((t->Address >> 16) & 0x1FUL) << 3) |
+           (t->Address & 7UL);
+}
+
+/* A bridge's install as Windows has it now (mk_bridge_pending). */
+static int mk_br_pending(DWORD dn)
+{
+    char drv[128];
+    ULONG cfg = 0;
+    int flagsRead;
+
+    drv[0] = '\0';
+    (void)mk_prop_text(dn, MK_CM_DRP_DRIVER, drv, sizeof(drv), NULL);
+    flagsRead = mk_prop_dword(dn, MK_CM_DRP_CONFIGFLAGS, &cfg);
+    return mk_bridge_pending(drv[0] != '\0', flagsRead, cfg);
+}
+
+/* A bridge mark's record, in its state. */
+static int mk_br_rec_set(const char *id, INST_U32 member, INST_U32 hi,
+                         INST_U32 lo, int state)
+{
+    char rec[96];
+    HKEY key;
+    LONG r;
+
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, MK_MARKS_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS) {
+        return 0;
+    }
+    mk_rec_format_bridge(rec, sizeof(rec), member, hi, lo, state);
+    r = RegSetValueExA(key, id, 0, REG_SZ, (const BYTE *)rec,
+                       (DWORD)strlen(rec) + 1);
+    RegCloseKey(key);
+    return r == ERROR_SUCCESS;
+}
+
+/* One bridge mark: the record first, the value, the record completed. */
+static int mk_write_bridge(const MK_NHI *h, const MK_ENTRY *e, int k,
+                           int unit)
+{
+    HANDLE m;
+    int ok;
+
+    if (!mk_write_due(nodes[k].Id) || !scrubOk) {
+        return 0;
+    }
+    m = mk_lock(MK_WRITE_MUTEX, 5000);
+    if (m == NULL) {
+        return 0;
+    }
+    ok = mk_br_rec_set(nodes[k].Id, e->Member, h->M.EpochHi, h->M.EpochLo,
+                       MK_REC_WRITING) &&
+         mk_filters_add(nodes[k].Dn);
+    if (ok) {
+        (void)mk_br_rec_set(nodes[k].Id, e->Member, h->M.EpochHi,
+                            h->M.EpochLo, MK_REC_WRITTEN);
+        mk_write_done(nodes[k].Id);
+        mk_log("bridge mark written: %s (member %04lX, below unit %s)",
+               nodes[k].Id, e->Member, nodes[unit].Id);
+    } else {
+        mk_write_failed(nodes[k].Id);
+        mk_log("bridge mark write failed, retried within a minute: %s "
+               "(error %lu)", nodes[k].Id, GetLastError());
+    }
+    mk_unlock(m);
+    return ok;
+}
+
+/* The widened restart gate over the current walk (record 33 section 4.3):
+ * no devnode below the unit unreadable or a started disk, volume or CD-ROM
+ * drive, and no bridge below it with its install pending. NULL when it
+ * passes, else why not. */
+static const char *mk_br_gate(int u)
+{
+    char cls[64];
+    int k;
+    int read;
+
+    if (walkBad != 0) {
+        return "this walk of the device tree was not whole";
+    }
+    for (k = 0; k < nodeCount; k++) {
+        if (k == u || !mk_s98_within(k, u)) {
+            continue;
+        }
+        read = mk_prop_text(nodes[k].Dn, MK_CM_DRP_CLASSGUID, cls,
+                            sizeof(cls), NULL) == MK_CR_SUCCESS;
+        if (mk_bridge_gate_refuses(nodes[k].StatusOk,
+                                   (nodes[k].Status & MK_DN_STARTED) != 0,
+                                   read, cls)) {
+            return nodes[k].StatusOk
+                       ? "a disk or volume below the unit is in use"
+                       : "a device below the unit could not be read";
+        }
+        if (mk_is_bridge(&nodes[k]) && mk_br_pending(nodes[k].Dn)) {
+            return "a bridge below the unit is still being installed";
+        }
+    }
+    return NULL;
+}
+
+/* One restart a unit's arrival, whatever it is made for: this one's, the
+ * unit mark's (per serial until listed again, mk_entries) and the Stor98
+ * tag restart's (per arrival). */
+static int mk_unit_spent(const MK_NHI *h, const MK_ENTRY *e, const char *id)
+{
+    MK_TRIED *t;
+    int s;
+
+    if (mk_br_is_spent(id)) {
+        return 1;
+    }
+    t = mk_tried(h, e->Serial, 0);
+    if (t != NULL && t->Restarted) {
+        return 1;
+    }
+    s = mk_s98_seen(id, 0);
+    return s >= 0 && s98Seen[s].Attempts > 0;
+}
+
+/* The budget spent: `t` the unit entry's attempt state, taken before a
+ * restart that may walk the tree again (mk_tried reads the NHI's node). */
+static void mk_unit_spend(MK_TRIED *t, const char *id)
+{
+    mk_br_spent(id);
+    if (t != NULL) {
+        t->Restarted = 1;
+        t->At = GetTickCount();
+    }
+    mk_s98_spend(id);
+}
+
+/* The Stor98 tag restart's arrival count for the unit `id`, raised by a
+ * restart made for another reason. */
+static void mk_s98_spend(const char *id)
+{
+    int s = mk_s98_seen(id, 1);
+
+    if (s >= 0) {
+        s98Seen[s].Attempts++;
+        s98Seen[s].At = GetTickCount();
+    }
+}
+
+/* The unit's restart for its bridges, under the tools' eject mutex (and
+ * the Stor98 switch mutex mk_mark_rerun takes): no installation pending,
+ * the driver's answer and the unit as sampled, each plain driverless
+ * drive below set to install again as mk_restart sets it; then the tree
+ * walked again under the locks, the unit found again and the gate passed
+ * on that walk, the unit started; then DICS_PROPCHANGE. *spent 1 once the
+ * class installer was called, made or not (vetoed, failed): the budget is
+ * gone either way. 1 when it was made. Every path past the first checks
+ * walks the tree again (mkBrRewalked). */
+static int mk_br_restart(const MK_NHI *h, const MK_ENTRY *e, int unit,
+                         int *spent, const char **whyOut)
+{
+    char unitId[INST_ID_CHARS];
+    HANDLE em;
+    HANDLE sm = NULL;
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    SP_PROPCHANGE_PARAMS pcp;
+    SP_DEVINSTALL_PARAMS_A ip;
+    DWORD dn;
+    ULONG st;
+    ULONG pr;
+    int u2;
+    BOOL called = FALSE;
+    const char *why = NULL;
+
+    *spent = 0;
+    inst_copy(unitId, nodes[unit].Id, sizeof(unitId));
+    em = mk_lock(MK_EJECT_MUTEX, 1000);
+    if (em == NULL) {
+        return 0;
+    }
+    if (!mk_no_install_pending()) {
+        why = "an installation is pending (or cannot be told)";
+    } else if (!mk_fresh_same(h, e)) {
+        why = "the driver's answer changed since the sample";
+    } else if (!mk_fresh_unit(unitId, e, &dn)) {
+        why = "the unit's identity or mark changed";
+    } else if (api.Status(&st, &pr, dn, 0) != MK_CR_SUCCESS ||
+               (st & MK_DN_STARTED) == 0 || (st & MK_DN_HAS_PROBLEM) != 0) {
+        /* Before any walk: a unit that is not started asks nothing of a
+         * fresh walk, and costs none at each poll. */
+        why = "the unit is not started";
+    } else {
+        why = mk_mark_rerun(unit, dn, &sm);
+    }
+    if (why == NULL) {
+        /* The descendants' state as it is now, not as the poll sampled
+         * it: a disk may have started meanwhile. */
+        mkBrRewalked = 1;
+        if (!mk_walk() || walkBad != 0) {
+            why = "the device tree could not be walked again";
+        } else if ((u2 = mk_find_id(unitId)) < 0) {
+            why = "the unit is gone";
+        } else {
+            why = mk_br_gate(u2);
+        }
+    }
+    if (why == NULL &&
+        (api.Status(&st, &pr, dn, 0) != MK_CR_SUCCESS ||
+         (st & MK_DN_STARTED) == 0 || (st & MK_DN_HAS_PROBLEM) != 0)) {
+        why = "the unit is not started";
+    }
+    set = INVALID_HANDLE_VALUE;
+    if (why == NULL) {
+        set = api.CreateList(NULL, NULL);
+        memset(&data, 0, sizeof(data));
+        data.cbSize = sizeof(data);
+        if (set == INVALID_HANDLE_VALUE ||
+            !api.OpenInfo(set, unitId, NULL, 0, &data)) {
+            why = "the unit could not be opened";
+        }
+    }
+    if (why == NULL) {
+        memset(&pcp, 0, sizeof(pcp));
+        pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+        pcp.ClassInstallHeader.InstallFunction = MK_DIF_PROPERTYCHANGE;
+        pcp.StateChange = MK_DICS_PROPCHANGE;
+        pcp.Scope = MK_DICS_FLAG_GLOBAL;
+        pcp.HwProfile = 0;
+        if (api.SetCiParams(set, &data, &pcp.ClassInstallHeader,
+                            sizeof(pcp))) {
+            *spent = 1;
+            called = api.CallCi(MK_DIF_PROPERTYCHANGE, set, &data);
+            memset(&ip, 0, sizeof(ip));
+            ip.cbSize = sizeof(ip);
+            if (called && api.GetDiParams(set, &data, &ip) &&
+                (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
+                why = "Windows vetoed it or asks for a restart";
+                called = FALSE;
+            }
+        }
+        if (!called && why == NULL) {
+            why = "the restart failed";
+        }
+    }
+    if (set != INVALID_HANDLE_VALUE) {
+        api.Destroy(set);
+    }
+    if (sm != NULL) {
+        mk_unlock(sm);
+    }
+    mk_unlock(em);
+    *whyOut = why;
+    if (called) {
+        mkRestartMade = 1;
+        mk_log("restart made for the bridges: %s, so that its PCI Express "
+               "ports start again with xhcicm below them", unitId);
+        return 1;
+    }
+    if (*spent) {
+        mk_log("restart for the bridges not made: %s: %s. Unplug the dock "
+               "safely and plug it in again: its PCI Express ports are then "
+               "set up with xhcicm", unitId, why);
+    }
+    return 0;
+}
+
+/* One unit of an active member: its bridges marked, its wait, and its
+ * restart when a bridge asks for it. */
+static void mk_br_unit(const MK_NHI *h, const MK_ENTRY *e, int unit,
+                       const int *prot)
+{
+    int u;
+    int k;
+    int any = 0;
+    int allMarked = 1;
+    int anyPending = 0;
+    int needs = 0;
+    int has;
+    int att;
+    int late;
+    int expired;
+    int code;
+    int spent;
+    const char *no;
+
+    u = mk_br_seen(nodes[unit].Id);
+    if (u < 0) {
+        return;
+    }
+    /* Latched before any mark of this poll: a bridge marked after the
+     * wait ran out gets no restart of its own in this arrival. */
+    late = GetTickCount() - brUnit[u].Arrived >= MK_BRIDGE_WAIT;
+    expired = late && !brUnit[u].MarkedInTime;
+    for (k = 0; k < nodeCount; k++) {
+        if (!mk_br_below(k, unit) || !mk_is_bridge(&nodes[k]) || prot[k]) {
+            continue;
+        }
+        any = 1;
+        if (mk_br_pending(nodes[k].Dn)) {
+            /* Left for a later poll: its install would delete the value,
+             * or copy it into the Critical Device Database. */
+            allMarked = 0;
+            anyPending = 1;
+            continue;
+        }
+        if (!mk_filters_has(nodes[k].Dn, &has)) {
+            allMarked = 0;
+            continue;
+        }
+        if (!has) {
+            if (k == unit || !mk_write_bridge(h, e, k, unit)) {
+                /* The unit's own mark is mk_write's. */
+                allMarked = 0;
+                continue;
+            }
+        }
+        if (!nodes[k].HasLoc) {
+            continue;
+        }
+        att = mk_bridge_attached(&h->M, e->Member, mk_node_bdf(&nodes[k]));
+        if (mk_bridge_needs(nodes[k].StatusOk,
+                            (nodes[k].Status & MK_DN_STARTED) != 0,
+                            (nodes[k].Status & MK_DN_HAS_PROBLEM) != 0,
+                            nodes[k].Problem, att)) {
+            if (!brUnit[u].NeedLogged) {
+                mk_log("the bridges of %s ask for its restart: %s %s",
+                       nodes[unit].Id, nodes[k].Id,
+                       (nodes[k].Status & MK_DN_HAS_PROBLEM) != 0
+                           ? "has no resources (problem 12)"
+                           : "runs with no filter of xhcicm below it");
+            }
+            needs = 1;
+        }
+    }
+    if (needs) {
+        brUnit[u].NeedLogged = 1;
+    }
+    if (any && allMarked && !late) {
+        brUnit[u].MarkedInTime = 1;
+    }
+    brUnit[u].Pending = anyPending;
+    brUnit[u].Waiting = any && !allMarked && !late;
+    if (!any || !allMarked || !needs || brUnit[u].Spent) {
+        return;
+    }
+    code = 0;
+    no = NULL;
+    if (expired) {
+        code = 1;
+        no = "its bridges were marked after the wait for them ran out";
+    } else if (paramRestart == 0) {
+        code = 2;
+        no = "the service's restarts are off (Parameters\\Restart 0)";
+    } else if (mk_unit_spent(h, e, nodes[unit].Id)) {
+        brUnit[u].Spent = 1;
+        return;
+    } else if (!nodes[unit].StatusOk ||
+               (nodes[unit].Status & MK_DN_STARTED) == 0 ||
+               (nodes[unit].Status & MK_DN_HAS_PROBLEM) != 0) {
+        code = 4;
+        no = "the unit is not started";
+    } else {
+        no = mk_br_gate(unit);
+        code = no != NULL ? 3 : 0;
+    }
+    if (code != 0) {
+        if (brUnit[u].Why != code) {
+            mk_log("restart for the bridges not made: %s: %s. Unplug the "
+                   "dock safely and plug it in again: its PCI Express ports "
+                   "are then set up with xhcicm", nodes[unit].Id, no);
+        }
+        brUnit[u].Why = code;
+        return;
+    }
+    {
+        char unitId[INST_ID_CHARS];
+        MK_TRIED *t;
+        const char *why = NULL;
+
+        inst_copy(unitId, nodes[unit].Id, sizeof(unitId));
+        if (mk_br_cooling(unitId)) {
+            return;
+        }
+        t = mk_tried(h, e->Serial, 1);
+        (void)mk_br_restart(h, e, unit, &spent, &why);
+        if (!spent && mkBrRewalked) {
+            mk_br_cool(unitId);
+        }
+        if (spent) {
+            mk_unit_spend(t, unitId);
+        } else if (why != NULL &&
+                   strncmp(brUnit[u].RestartWhy, why,
+                           sizeof(brUnit[u].RestartWhy) - 1) != 0) {
+            /* The tree may have been walked again: the entry is the
+             * unit's by its id, which the walk does not move. */
+            mk_log("restart for the bridges not made yet: %s: %s", unitId,
+                   why);
+            inst_copy(brUnit[u].RestartWhy, why,
+                      sizeof(brUnit[u].RestartWhy));
+        }
+    }
+}
+
+/* 1 when the bridge marks follow the unit at `unit` of domain `h`: 2000,
+ * XP or XP x64, safe eject on, XhciCmBridgeReq 1, and the unit a bridge. */
+static int mk_br_follows(const MK_NHI *h, int unit)
+{
+    return osv.dwMajorVersion == 5 && (h->M.Flags & MK_F_SAFE_OFF) == 0 &&
+           mk_bridge_req(h) == 1UL && mk_is_bridge(&nodes[unit]);
+}
+
+/* One poll's bridge marks, on 2000, XP and XP x64, for every unit reported
+ * on an active member of a verifiable domain with safe eject on and
+ * XhciCmBridgeReq 1. The poll ends after it when it walked the tree again
+ * (mkBrRewalked) or made a restart. */
+static void mk_bridges(const int *prot)
+{
+    int i;
+    INST_U32 j;
+    int port;
+    int unit;
+
+    mkBrRewalked = 0;
+    mk_br_presence();
+    if (osv.dwMajorVersion != 5) {
+        return;
+    }
+    for (i = 0; i < nhiCount && !mkRestartMade && !mkBrRewalked; i++) {
+        MK_NHI *h = &nhis[i];
+        if (!h->Verifiable || (h->M.Flags & MK_F_SAFE_OFF) != 0 ||
+            mk_bridge_req(h) != 1UL) {
+            continue;
+        }
+        for (j = 0; j < h->M.Count && !mkRestartMade && !mkBrRewalked; j++) {
+            MK_ENTRY *e = &h->M.E[j];
+            if ((e->Flags & MK_EF_REPORTED) == 0 ||
+                (e->Flags & MK_EF_LOCATED) == 0 ||
+                (e->Flags & MK_EF_SAFE_OFF) != 0 ||
+                !mk_member_active(&h->Q, e->Member)) {
+                continue;
+            }
+            port = mk_find_loc(e->Member);
+            if (port < 0) {
+                continue;
+            }
+            unit = mk_find_unit(port, e->Bus, e->Address);
+            if (unit < 0 || prot[unit] || prot[port] ||
+                !mk_is_bridge(&nodes[unit])) {
+                continue;
+            }
+            mk_br_unit(h, e, unit, prot);
+        }
+    }
+}
+
+/* The reported entry of `h` for the unit at node `unit` behind member
+ * `member`, or NULL. */
+static const MK_ENTRY *mk_entry_of(const MK_NHI *h, INST_U32 member,
+                                   int unit)
+{
+    INST_U32 j;
+
+    for (j = 0; j < h->M.Count; j++) {
+        const MK_ENTRY *e = &h->M.E[j];
+        if ((e->Flags & MK_EF_REPORTED) != 0 &&
+            (e->Flags & MK_EF_LOCATED) != 0 && e->Member == member &&
+            nodes[unit].HasLoc && e->Bus == nodes[unit].Bus &&
+            e->Address == nodes[unit].Address) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+/* A bridge mark's judgement (mk_judge): the domain whose active member is
+ * the nearest ancestor of `node` answered as a member, the unit the
+ * member's child on the way, and whether the domain lists that unit. *bdf
+ * the member's location. 1 when an ancestor is a member of an answered
+ * domain (*owner set), 0 when none is. */
+static int mk_br_owner(int node, MK_NHI **owner, INST_U32 *memberBdf,
+                       int *unit)
+{
+    int p;
+    int c;
+    int steps;
+    MK_NHI *o;
+
+    c = node;
+    for (p = nodes[node].Parent, steps = 0; p >= 0 && steps <= 8;
+         c = p, p = nodes[p].Parent, steps++) {
+        if (!mk_is_pci(&nodes[p]) || !nodes[p].HasLoc) {
+            continue;
+        }
+        o = mk_owner(mk_node_bdf(&nodes[p]));
+        if (o != NULL) {
+            *owner = o;
+            *memberBdf = mk_node_bdf(&nodes[p]);
+            *unit = c;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* One poll; returns the milliseconds to the next. */
 /* The connection manager off the boot path (design record 23 section
  * 5.14; task 44.32, owner 2026-10-25): the setup engine makes xhcicm a
@@ -4051,7 +4929,15 @@ static DWORD mk_poll(void)
         return mk_poll_ms(any);
     }
     mkRestartMade = 0;
+    mk_bridges(prot);
+    if (mkRestartMade || mkBrRewalked) {
+        /* The walk no longer shows the tree: the rest waits a poll. */
+        return mk_poll_ms(any);
+    }
     mk_entries(prot);
+    if (mkRestartMade || mkBrRewalked) {
+        return mk_poll_ms(any);
+    }
     mk_reconcile_all();
     mk_s98_poll(prot);
     return mk_poll_ms(any);
