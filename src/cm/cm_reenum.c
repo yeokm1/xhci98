@@ -74,6 +74,7 @@
 #include "cm_ports.h"
 #include "cm_nvlink.h"
 #include "cm_call.h"
+#include "cm_iso.h"
 
 /* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
  * cmU4ToIcm); its stor98 statement is made at the core's upcall, not here. */
@@ -1205,6 +1206,157 @@ BOOLEAN CmRegBreqFind(PCM_FILTER child, PULONG parent, PULONG port,
     }
     KeReleaseSpinLock(&cmRegLock, irql);
     return found;
+}
+
+/*
+ * Design record 22 section 10.5 (task 45.35). The member above `child`
+ * (its ancestry, as CmRegBreqFind walks it), that member's domain when it
+ * runs the USB4 software connection manager, the USB4 port whose member by
+ * correspondence it is, and that port's generation while its PCIe tunnel
+ * is up: the binding, kept in the filter. Taken once a start; a later call
+ * keeps the first. Under cmRegLock.
+ */
+BOOLEAN CmRegIsoBind(PCM_FILTER child)
+{
+    PCM_FILTER f;
+    PCM_FILTER a;
+    PCM_NHI dom;
+    ULONG bdf;
+    ULONG n;
+    ULONG port;
+    ULONG m;
+    ULONG gen;
+    BOOLEAN bound;
+    KIRQL irql;
+
+    bound = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (child->IsoBound && child->IsoRefs != 0) {
+        /* Immutable while a reference is held. */
+        KeReleaseSpinLock(&cmRegLock, irql);
+        return TRUE;
+    }
+    child->IsoBound = 0;
+    dom = NULL;
+    bdf = 0xFFFFUL;
+    f = child;
+    for (n = 0; n <= CM_TUNNEL_DEPTH_MAX; n++) {
+        a = f->Parent;
+        if (a == NULL && f->Common.Kind == CM_KIND_CHILD) {
+            a = f->Bridge;
+        }
+        if (a == NULL) {
+            break;
+        }
+        bdf = cmFiltBdf(a);
+        if (bdf == 0xFFFFUL) {
+            break;
+        }
+        dom = cmRegMemberDom(bdf);
+        if (dom != NULL) {
+            break;
+        }
+        f = a;
+    }
+    if (dom != NULL && dom->U4On && !child->IsoGone) {
+        for (port = 1; port <= TBT_U4_MAX_PORTS && !bound; port++) {
+            m = XhciTbtPortMember(&dom->Reenum.Topo, &dom->Binds, port);
+            if (m == XHCI_TBT_NO_MEMBER || m >= dom->Reenum.Topo.Tunnels ||
+                (dom->Reenum.Topo.Set[m] & 0xFFFFUL) != bdf) {
+                continue;
+            }
+            if (TbtU4PortPcieGen(&dom->U4, port, &gen)) {
+                child->IsoDom = (PVOID)dom;
+                child->IsoStarts = dom->Reenum.Starts;
+                child->IsoPort = port;
+                child->IsoGen = gen;
+                child->IsoMember = bdf;
+                child->IsoBound = 1;
+                bound = TRUE;
+                CmLogNote(dom, "cm.iso.bind",
+                          (port << 24) | ((gen & 0xFFUL) << 16) | bdf);
+            }
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return bound;
+}
+
+ULONG CmRegIsoAsk(PCM_FILTER child)
+{
+    PLIST_ENTRY e;
+    PCM_NHI d;
+    PCM_NHI dom;
+    CM_ISO_IN in;
+    ULONG why;
+    ULONG m;
+    KIRQL irql;
+
+    RtlZeroMemory(&in, sizeof(in));
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    in.Bound = child->IsoBound;
+    in.Gone = child->IsoGone;
+    dom = NULL;
+    if (in.Bound) {
+        for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+            d = CONTAINING_RECORD(CONTAINING_RECORD(e, CM_REENUM, Link),
+                                  CM_NHI, Reenum);
+            if ((PVOID)d == child->IsoDom) {
+                dom = d;
+                break;
+            }
+        }
+    }
+    if (dom != NULL) {
+        in.DomainListed = 1;
+        in.StartsSame = (dom->Reenum.Starts == child->IsoStarts) ? 1UL : 0UL;
+        in.U4On = dom->U4On ? 1UL : 0UL;
+        in.StageActive = (dom->Stage == CM_STAGE_ACTIVE) ? 1UL : 0UL;
+        in.LiveActive = (dom->Live.State == CM_LIVE_ACTIVE) ? 1UL : 0UL;
+        in.LossDrain = dom->Reenum.LossDrain ? 1UL : 0UL;
+        in.Isolated = TbtU4PortIsolated(&dom->U4, child->IsoPort,
+                                        child->IsoGen) ? 1UL : 0UL;
+        m = XhciTbtPortMember(&dom->Reenum.Topo, &dom->Binds,
+                              child->IsoPort);
+        in.Corresponds =
+            (m != XHCI_TBT_NO_MEMBER && m < dom->Reenum.Topo.Tunnels &&
+             (dom->Reenum.Topo.Set[m] & 0xFFFFUL) == child->IsoMember)
+                ? 1UL
+                : 0UL;
+    }
+    why = CmIsoDecide(&in);
+    if (dom != NULL) {
+        dom->Counters.IsoAsked++;
+        if (why == CM_ISO_YES) {
+            dom->Counters.IsoYes++;
+        } else {
+            dom->Counters.IsoNo++;
+        }
+        CmLogNote(dom, "cm.iso", (why << 24) | ((child->IsoPort & 0xFFUL) << 16) |
+                                     (child->IsoGen & 0xFFFFUL));
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return why;
+}
+
+VOID CmRegIsoUnbind(PCM_FILTER child)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (child->IsoRefs == 0) {
+        child->IsoBound = 0;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegIsoGone(PCM_FILTER child)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    child->IsoGone = 1;
+    KeReleaseSpinLock(&cmRegLock, irql);
 }
 
 /* One function's id and header type: TRUE when it answers (not all-ones,

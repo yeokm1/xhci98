@@ -322,7 +322,8 @@ static const char *const cmNhiCounterNames[] = {
     "u4.drv.force-power.kept", "u4.drv.contained", "u4.drv.contain-refused",
     "u4.recover.probes", "u4.recover.refused", "u4.recover.ok",
     "u4.recover.final", "u4.recover.retire-requests",
-    "u4.recover.retirement-owed", "u4.recover.rearm"
+    "u4.recover.retirement-owed", "u4.recover.rearm", "cm.iso.asked",
+    "cm.iso.yes", "cm.iso.no"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,

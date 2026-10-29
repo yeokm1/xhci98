@@ -4163,6 +4163,8 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
                            "devices dropped"
                 : v == 2 ? "PINNED: no proof DMA stopped; buffer, transfers "
                            "kept"
+                : v == 3 ? "RELEASED: the USB4 tunnel's path read back "
+                           "closed, devices dropped"
                          : "?");
     comp("  all-ones USBSTS  %lu episode(s) begun\n", get32(t, 32 * 4));
     comp("  tolerance clock  %lu ticks (100 ms nominal, at least 45 ms "

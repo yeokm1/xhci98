@@ -3711,6 +3711,100 @@ tears down the PCIe tunnel alone: a USB3 tunnel on the same port carries
 devices of the host's own xHCI tree, which the eject never asked to stop,
 so it stays up, as on a port FAILED for PCIe (section 7.2).
 
+### 10.5 The isolation statement to xHCI98 (task 45.35)
+
+This is a second consumer of section 7.3 step 1's read-back, beside
+Stor98's statement. Its purpose and the owner's decision are in record 17
+section 4.13.6: a USB4 port whose PCIe path this connection manager closed
+and read back closed proves that no function behind that port's tunnel
+port can reach host memory. xHCI98 takes that as the proof that lets a
+contained controller's transfers complete.
+
+**The word it reads.** The domain's driver fields are written by the
+connection manager's thread without a lock, and the path is enabled
+(`tbtU4PcieTunnel`) before any `TUNNEL_UP` reaches the seam. So the
+statement is one word per USB4 port, kept in the core:
+`TBT_U4CM.IsoWord[port - 1]`, either 0, or `TBT_U4_ISO_VALID` together
+with the low 24 bits of the connection generation. It is kept apart from
+the port records, which the snapshots and the resume copy whole, so no
+copy can bring an old word back.
+- **Set.** The core sets it in `tbtU4LinkDownUpcall` when step 1 read
+  back closed (`PathClosed`), before the driver's upcall.
+- **Revoked.** It is written 0, by a single aligned store, before
+  anything that can enable a PCIe path or reinitialize the core: at the
+  top of `tbtU4PcieTunnel`, the only writer of a PCIe Path Enable set
+  (`tbtU4UndoEnable` and `tbtU4Reserve` only clear or hold one). For every
+  port it is cleared by `TbtU4Init`,
+  `TbtU4Start`, `TbtU4Resume`, `TbtU4Recover`, `TbtU4Stop` and
+  `TbtU4Contain`.
+
+The reader reads the word once. A yes answered just before a revocation
+stays true. The revocations other than `tbtU4PcieTunnel`'s open nothing.
+That one opens a new tunnel, which reaches only an endpoint reset since
+the closure: the port reconnected through Detect, the gate of section
+10.1 (MD-2's obligation 4). Section 10.1's reset is what keeps a granted
+proof true after a path reopens.
+
+**The binding.** The binding is taken when the interface is asked, at the
+controller's start. It records:
+- the domain, by its NHI object and `Reenum.Starts`;
+- the member, by its tunnel port's location;
+- the USB4 port, by the member's correspondence at that moment
+  (`XhciTbtPortMember`, the same source the Stor98 statement uses);
+- the port's connection generation, which must carry a PCIe tunnel then
+  (`Pcie.Up`). The generation is read on both sides of `Up`
+  (`TbtU4PortPcieGen`), so an `Up` and a generation of two connections are
+  never paired.
+
+A domain restart changes `Reenum.Starts`, and a reconnect changes the
+generation. Either makes every later answer no. The binding is immutable
+while xHCI98 holds a reference, and it is retired when the last reference
+is released, so the next start binds afresh.
+
+**The answerer.** It is `xhcicm`'s kernel-attached child filter on the
+controller's PDO (record 31 section 4.3), linked below a member of a
+domain's tunnel-port set (`CmRegAttLink`). It answers
+`IRP_MN_QUERY_INTERFACE` for `GUID_XHCI_CM_ISOLATION` (`src/xhci_cmiso.h`,
+shared by both drivers) on NT 5.x only, when the binding can be taken;
+otherwise the IRP passes down untouched. `InterfaceReference` and
+`InterfaceDereference` count on the filter (`IsoRefs`); no object
+reference is taken, because xHCI98 releases the interface before its own
+`REMOVE_DEVICE` goes down to this filter, so the filter outlives every
+call (record 17 section 4.13.6). The binding marks the filter gone at its
+`SURPRISE_REMOVAL` and `REMOVE_DEVICE`, and a call after that answers no.
+
+**The answer.** `Isolated(Context)` is called at `PASSIVE_LEVEL`. Under
+`cmRegLock` it finds the bound domain in the domain list, with the same
+NHI object and the same `Reenum.Starts`. It returns 1 only when every one
+of these holds; the pure decision is `CmIsoDecide` (`cm_iso.c`, host suite
+`test_cm_iso.c`):
+1. the child is not removed;
+2. the domain is listed and unchanged, runs this connection manager, is
+   started, and its host interface is not lost (`Live.State` active, no
+   `LossDrain`);
+3. the bound port still corresponds to the bound member, read now
+   (`XhciTbtPortMember`; a withdrawn or conflicting correspondence
+   refuses);
+4. the bound port's `IsoWord` is `TBT_U4_ISO_VALID` with the bound
+   generation.
+
+No spin lock is held across a transport call or a PnP call. Each call is
+counted (`cm.iso.asked`, then `cm.iso.yes` or `cm.iso.no`), and the
+verdict with the first condition that failed is logged (`cm.iso`). The firmware connection manager's client answers nothing,
+because it has no read-back (section 7.3 is this connection manager's).
+98 SE and ME have no such interface.
+
+**What it is not.** It is not Stor98's statement:
+- it waits for no acknowledgement;
+- it is withheld for no deadline (section 10.3's 3 s is Stor98's
+  latency budget, not a condition of isolation);
+- it is not qualified per OS ordering (section 10.2), because what it
+  proves is the closed path, not the endpoint's reset or the order of
+  events.
+
+A port whose step 1 did not read back (`PathClosed` clear) never answers
+yes. Its controller keeps record 17's limitation.
+
 ## 11. Stop, remove, disable, suspend, resume
 
 - **Stop, remove, disable**: the rings stopped (TX and RX ring control

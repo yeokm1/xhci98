@@ -111,6 +111,12 @@ static VOID hcdLogTolLocked(PXHCI_EXTENSION ext, PXHCI_LOG log)
     XhciLogAppend(log, "tol.window.count", ext->Tol.Window.Count, 1);
     XhciLogAppend(log, "tol.dead.episodes", s->DeadEpisodes, 1);
     XhciLogAppend(log, "tol.contained", s->Contained, 1);
+    /* Record 17 section 4.13.6: the USB4 tunnel's isolation statement. */
+    XhciLogAppend(log, "tol.iso.held",
+                  HcdControllerFromExt(ext)->IsoHeldStarts, 1);
+    XhciLogAppend(log, "tol.iso.asked", HcdControllerFromExt(ext)->IsoAsks, 1);
+    XhciLogAppend(log, "tol.iso.proofs",
+                  HcdControllerFromExt(ext)->IsoProofs, 1);
     XhciLogAppend(log, "tol.clock", ext->Tol.Clock, 1);
     for (i = 0; i < 256; i++) {
         if (s->Codes[i] != 0) {
