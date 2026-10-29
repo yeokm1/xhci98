@@ -221,7 +221,8 @@ Setup scripts:
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
 | `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under. `-TestSignPfx <pfx> -SignOnly` test-signs the binaries a gated `build-driver.cmd` run recorded in `out\gated-<arch>-<flavour>.txt` without running its host suite and import gates again ("Since 2.3.0.0 the x64 package is test-signed") |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
-| `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" below |
+| `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`; by default `<this tree>-x64`, made or brought to this tree's HEAD by the script, task 45.3), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" and "A faster gated build" below |
+| `scripts\build-steps.ps1` | The checks of a gated build that need no DDK, run at once as separate processes, each with its own `TEMP` and log under `out\steps-<arch>\`, at most `XHCI98_BUILD_STEPS` at a time (default 4), each step's output printed whole when it ends and a table of results and times after them; `-SelfTest` on stand-in steps. Run by `build-driver.cmd` after its text checks. Roadmap-usb4 task 45.3; "A faster gated build" below |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
 
 The Phase 2d SMP Win2000 VM has its own script and is not part of
@@ -3385,6 +3386,167 @@ revised).
   without `-NoTargetEvidence`, a binary not its record's, a build input
   changed since, a junction in a path it would delete); and A left with no
   amd64 record when the copies' check fails.
+
+#### A faster gated build (roadmap-usb4 task 45.3)
+
+The `3.3.0.0` cut built amd64 and then x86 in one tree, about 67 and 55
+minutes one after the other, although `cut-builds.ps1` (44.31, above)
+runs them at once: the second tree had to be made by hand first. And
+inside one build every step ran in turn, the self-tests and host suites
+that need no DDK among them (the packager's self-tests alone took 20
+minutes on 2026-10-29). Task 45.3 (was BUILDFAST.1; owner, 2026-10-28)
+takes both. This is its design, settled before its code (2026-10-29;
+reviewed and revised).
+
+- **The second tree made by the launcher.** `cut-builds.ps1`'s `-X64Tree`
+  becomes optional. Without it tree B is `<A>-x64`, beside tree A (the
+  name the PDB path of each x64 image carries, so it holds no more of a
+  person's or a machine's name than A's own path does). When that
+  directory does not exist the script makes it before any build, `git
+  worktree add --detach <B> HEAD`, and marks it as its own
+  (`out\cut-x64-tree.txt` in B, naming A; `out\` is ignored, so B stays
+  clean). It then prepares B only when B carries that mark for this A,
+  is detached, clean and holds no build lock, and it holds both of B's
+  build locks while it does: it moves B to A's HEAD (`git -C <B>
+  checkout --detach <A's HEAD>`) and links, as a junction, each
+  directory of A's `tools\` that B's lacks (the archives and installers
+  at `tools\`'s top level are no build's input and are not linked; a
+  directory B has of its own is left and said). A tree at that path
+  that the script did not make - the main checkout, a worktree on a
+  branch, any other - is never moved or linked; it is taken as it is,
+  and 44.31's checks then take or refuse it. A link that cannot be made
+  stops the run with B kept: the next run links what B lacks. A tree
+  named with `-X64Tree` is only checked, as before, and `-ImportOnly`
+  takes `<A>-x64` or the named tree as it is, since what it imports was
+  built at the commit it holds. So the cut is one command,
+  `cut-builds.ps1`, and the one-tree route stays for a host that wants
+  it. B is an ordinary worktree, listed by `git worktree list`; remove
+  its `tools\` junctions (`rmdir`, which does not follow them) before
+  `git worktree remove`.
+- **One build's checks at once.** `build-driver.cmd` keeps its order
+  around them: the text checks first (seconds, and a text failure costs no
+  build, task 44.1), then the DDK chosen and checked, then the block that
+  needs no DDK, then the Stor98, VxD and XHCIPFW builds and the flavours.
+  The block - the import gate's self-tests, the INF, UAS, CM, Stor98 and
+  `txtsetup.oem` gates with their self-tests, the packager's, the QEMU
+  launchers' and the VM matrix's self-tests, the Stor98 header check, on
+  the x86 run XHCITR and XHCIPERF rebuilt, the XHCITR, XHCIPERF,
+  XHCIINST, XHCIMARK and XHCIDI self-tests on either run when their EXEs
+  are there, the host suite and on the x86 run Stor98's unit suite - is
+  handed to one new script, `scripts\build-steps.ps1 -Arch <arch>`, which
+  holds the steps as a table and runs them as separate processes at
+  once. It is a build input like `build-driver.cmd` (`package-common.ps1`,
+  `$script:BuildInputScripts`), so a change to it is a change to the
+  gated build. The steps were written to run alone, so the runner gives
+  each its own: its own `TEMP` and `TMP` (`out\steps-<arch>\tmp\<step>\`),
+  its own log (`out\steps-<arch>\<step>.log`, stdout and stderr through
+  `cmd /c` redirection), the repository root as its working directory as
+  `build-driver.cmd` gave it (the `.cmd` steps `cd` to their own), and no
+  `U4_TRACE` (the path `test\u4_fakefab.c` writes its trace to, which two
+  host suites at once - the suite's own step and the one the packager's
+  binary-gate case starts - would share). Ordering that matters is a
+  dependency in the table: each gate waits for its own self-test, as it
+  ran after it before; on the x86 run XHCITR's and XHCIPERF's self-tests
+  wait for their rebuilds, and whether their EXE is there is read when
+  the step is due, after its build; XHCITR's snapshot self-test waits for
+  its own self-test. Two steps writing one file would be the hazard, and
+  none does: the host suite builds into a run directory of its own
+  (`/Fo`), the tool builds into their own folders, Stor98's unit suite
+  into its own, XHCITR's `/selftest` returns before its tray mutex, the
+  VM matrix's port probes skip a port in use, the packager's lock and
+  record cases use fixture trees, and the gates read the tree and write
+  under their `TEMP`. No step writes a gated record; the record's token
+  and lock stay `build-driver.cmd`'s.
+- **How many at once, and in which order.** At most `XHCI98_BUILD_STEPS`
+  processes (default 4, so a cut's two builds start eight on a host other
+  work shares; `1` runs them one at a time, in the table's order). The
+  five longest come first in the table - the packager's self-tests, the
+  host suite, the two tool builds and Stor98's unit suite - so the short
+  ones fill in beside them. A step whose EXE is absent (XHCIINST,
+  XHCIMARK, XHCIDI, and on the amd64 run XHCITR and XHCIPERF where they
+  were never built) is said and passed over, as `build-driver.cmd` passed
+  over it.
+- **What the log shows.** When a step ends its log is printed whole under
+  its old `=== <title> ===` heading, followed by `--- <title>: passed
+  (exit 0, m:ss)` or `failed`, so a step's output is never interleaved
+  with another's; the order is the order they end in. After the block, a
+  table of every step in the table's order with its result and time, and
+  the block's wall time.
+- **A failure.** No step starts after a failure, and a step that cannot be
+  started is one; the steps running then are left to finish (a `cmd /c`
+  stopped from outside leaves its children). Whatever ends the runner - a
+  failure, an exception, Ctrl+C - every step it started has ended before it
+  returns, so `build-driver.cmd` never drops its lock under a step still
+  writing. It exits 1 with each failed step's message - the texts of
+  `build-driver.cmd`'s old failure labels, moved into the table - and its
+  log's name. The host suite's own "inconclusive" (exit 2: Smart App
+  Control blocked a freshly linked EXE) stays 2 when nothing else failed,
+  and `build-driver.cmd` goes to `:inconclusive` as before.
+- **Each step timed.** Every step of `build-driver.cmd` outside the block
+  (the text checks, the block itself, the Stor98 build, `S98VSD.VXD`,
+  `XHCIPFW.VXD`, `XHCIPFW.SYS`, each flavour's build and gates) prints
+  `--- <step>: m:ss` when it has passed, and the run ends with its total.
+  The clock is `%TIME%` (labels `:stepclock` and `:steptime`): hours,
+  minutes, seconds and hundredths, the space before a one-digit hour made
+  a 0 and each field read with a 1 in front less 100, so `08` and `09` are
+  not octal; a step that crossed midnight once is given a day. Each
+  timer has a variable of its own (the run's, a step's, a flavour's), and
+  a timer is read only after its step's `if errorlevel` lines, so it never
+  changes where a failure goes. So the next cut's log says where its time
+  went.
+- **The packager's self-tests depend on no earlier build** (a problem
+  measured on 2026-10-29). `make-package.ps1` staged `XHCIPFW.VXD` and
+  `XHCIPFW.SYS` from `src\pfw\obj\` and `src\pfw\nt\objfre\i386\` of the
+  tree it runs in whatever its caller was, and gated them unless
+  `-SkipBinaryGates`; so the self-test that runs the packager with its
+  binary gates on reached the tree's own images, and a stale one (a build
+  of an earlier version) failed `check-pfw.ps1` with "no stamp
+  'XHCIPFW.VXD 3.3.0.0'" (and the same for `XHCIPFW.SYS`) before the build
+  that would rebuild them had run; a missing one was passed over. Of the
+  two ways out - build them before the self-tests, or take the self-tests
+  off them - this takes the second, because the first would still leave
+  an amd64 run (which builds neither) reading whatever x86 images the tree
+  holds, and a self-test whose verdict turns on an earlier build is not a
+  self-test. The packager's own idiom for stand-ins decides it: a caller
+  that names `-DriverPath` (the self-tests' stand-in drivers) stages
+  `XHCIPFW.VXD`, `XHCIPFW.SYS` and `S98VSD.VXD` only when it names them
+  too (`-PfwVxdPath`, `-PfwSysPath`, `-VsdPath`, as `-OemPath` and the UAS
+  pair already are), and a caller that names none - `make-release.ps1`, a
+  person staging a package - gets the tree's images exactly as before. A
+  named image must be there (a missing one is refused, never passed over
+  to the tree's), is gated unless `-SkipBinaryGates`, and is refused for
+  an amd64 package; `-VsdPath` is refused for a package without Stor98.
+  New self-tests stage stand-ins through the three and check where they
+  land, that a stand-in package naming none carries none, and the
+  refusals. So the order of `build-driver.cmd` does not matter to the
+  self-tests, and running `src\pfw\build.cmd` before a first build is no
+  longer needed.
+- **Nor on where `TEMP` is.** The same day's new self-test that "a
+  directory that is no git checkout is not read as a missing tag" made its
+  directory under `TEMP`; with `TEMP` under a worktree's `out\` (as
+  `cut-builds.ps1`, the runner and the phase's workers set it) `git -C
+  <dir>` found the enclosing worktree, and the check failed, so at the
+  phase's base commit every gated build with such a `TEMP` failed its
+  packager self-tests. `Invoke-DriverPackGit` now runs git with
+  `GIT_CEILING_DIRECTORIES` set, for that one child, to the full path of
+  the parent of the checkout it was given, so git never takes an
+  enclosing repository for the pack's; the checkout it is given must be a
+  checkout's top (a `.git` directory or a worktree's `.git` file there,
+  through a junction or not), which every caller's root-relative reads
+  already assumed. A fix of the packager, not of the test.
+- **What does not change.** The steps themselves, their order outside the
+  block, their gates and their exit codes; the gated record and its lock;
+  `cut-builds.ps1`'s checks, import and `-Serial` / `-ImportOnly` modes,
+  and a named `-X64Tree`. **Checked by** the packager's self-tests (the
+  default tree B on a fixture repository: made with its link, moved with
+  A, not moved when dirty, unmarked or on a branch, no lock left, a
+  directory that is no worktree refused; the stand-in PFW and VSD staging
+  and its refusals; the runner as a build input) and the runner's own
+  `-SelfTest` on stand-in steps (two at once, one at a time in order with a
+  dependency, a failure stopping later starts with its message, the
+  inconclusive code alone and beside a failure, an absent EXE passed over,
+  each step's own `TEMP`, `TMP` and directory, a dangling wait refused, and
+  the build's two tables), which `build-driver.cmd` runs before the block.
 
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 

@@ -157,6 +157,23 @@ Staged whenever the package is built from the default paths; a caller that
 names -DriverPath (the self-tests' stand-ins) stages it only when it names
 -OemPath too, as for the UAS pair.
 
+.PARAMETER PfwVxdPath
+XHCIPFW.VXD to stage at the root of the x86 package, overriding
+`src\pfw\obj\XHCIPFW.VXD` (`src\pfw\obj\qemu\` for qemu). Staged from the
+default path whenever the package is built from the default paths; a caller
+that names -DriverPath (the self-tests' stand-ins) stages it only when it
+names -PfwVxdPath too, as for -OemPath, so no self-test reads an image an
+earlier build left in the tree (roadmap-usb4 task 45.3). x86 only.
+
+.PARAMETER PfwSysPath
+XHCIPFW.SYS, the same way: overriding
+`src\pfw\nt\objfre\i386\xhcipfw.sys` (`objfre_qemu` for qemu). x86 only.
+
+.PARAMETER VsdPath
+S98VSD.VXD, the same way, beside stor98.mpd in an x86 package that carries
+Stor98: overriding `src\vsd\obj\S98VSD.VXD` (`src\vsd\obj\qemu\` for qemu).
+x86 only.
+
 .PARAMETER TestSignPfx
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
 sign the staged xhci98.sys, xhciuas.sys, xhcicm.sys and the bundled stor98.sys
@@ -367,6 +384,9 @@ param(
     [string]$CmDriverPath = "",
     [string]$HlprDriverPath = "",
     [string]$OemPath = "",
+    [string]$PfwVxdPath = "",
+    [string]$PfwSysPath = "",
+    [string]$VsdPath = "",
     [string]$TestSignPfx = "",
     [switch]$SignOnly,
     [string]$GatedManifestPath = "",
@@ -414,6 +434,28 @@ $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 # The bundled Stor98 (task 42-A.30): by default with the default paths;
 # a caller naming -DriverPath stages it only with -Stor98Root.
 $stor98ByDefault = ($DriverPath -eq "")
+# XHCIPFW.VXD, XHCIPFW.SYS and S98VSD.VXD (task 45.3), decided as the
+# text-mode Setup description is: the tree's images with the default paths,
+# a stand-in caller's own or none.
+# PowerShell names are not case-sensitive, so the staging blocks below
+# keep their paths in $pfwImage, $pfwSysImage and $vsdImage, and whether
+# each was named in these.
+$namedPfwVxd = ($PfwVxdPath -ne "")
+$namedPfwSys = ($PfwSysPath -ne "")
+$namedVsd = ($VsdPath -ne "")
+$stagePfwVxd = ($DriverPath -eq "") -or $namedPfwVxd
+$stagePfwSys = ($DriverPath -eq "") -or $namedPfwSys
+$stageVsd = ($DriverPath -eq "") -or $namedVsd
+function Resolve-NamedImage {
+    # A named image's full path, a relative one taken against PowerShell's
+    # location (not the process's directory, which Set-Location does not move).
+    param([string]$Path)
+    if (-not [System.IO.Path]::IsPathRooted($Path)) { $Path = Join-Path $PWD.ProviderPath $Path }
+    return [System.IO.Path]::GetFullPath($Path)
+}
+if ($Arch -ne "x86" -and ($PfwVxdPath -ne "" -or $PfwSysPath -ne "" -or $VsdPath -ne "")) {
+    throw "-PfwVxdPath, -PfwSysPath and -VsdPath name images of the x86 package alone; the amd64 package carries none of them."
+}
 if ($OemPath -eq "") {
     $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
 }
@@ -753,6 +795,9 @@ time; they land in different directories on purpose.
     if ($Stor98HeaderPath -eq "") { $Stor98HeaderPath = Join-Path $repo "src\cm\stor98cm.h" }
     $stor98 = $null
     $stor98Files = @()
+    if ($namedVsd -and ($NoStor98 -or -not ($stor98ByDefault -or $Stor98Root -ne ""))) {
+        throw "-VsdPath: S98VSD.VXD goes beside stor98.mpd, and this package carries no Stor98."
+    }
     if (-not $NoStor98 -and ($stor98ByDefault -or $Stor98Root -ne "")) {
         $stor98 = Resolve-Stor98Build -Repo $repo -Root $Stor98Root -Arch @($Arch) -HeaderPath $Stor98HeaderPath `
                                       -SkipBinaryGates:$SkipBinaryGates
@@ -768,19 +813,20 @@ time; they land in different directories on purpose.
         # flavour's image in the qemu package; held to src\vsd\check-vsd.ps1
         # again here. A package built where src\vsd\build.cmd could not build
         # it goes without it (make-release.ps1 refuses that for a cut).
-        if ($Arch -eq "x86") {
-            $vsdPath = Join-Path $repo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD")
-            if (Test-Path -LiteralPath $vsdPath -PathType Leaf) {
+        if ($Arch -eq "x86" -and $stageVsd) {
+            $vsdImage = if ($namedVsd) { Resolve-NamedImage $VsdPath } else {
+                Join-Path $repo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD") }
+            if (Test-Path -LiteralPath $vsdImage -PathType Leaf) {
                 if (-not $SkipBinaryGates) {
-                    $vsdArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\vsd\check-vsd.ps1"), $vsdPath)
+                    $vsdArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\vsd\check-vsd.ps1"), $vsdImage)
                     if ($Flavor -eq "qemu") { $vsdArgs += "-Qemu" }
                     $out = & powershell.exe @vsdArgs 2>&1
                     if ($LASTEXITCODE -ne 0) { throw ("S98VSD.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
                 }
                 $stor98Files += [pscustomobject]@{ Source = "..\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD"
-                                                   FullPath = $vsdPath; Dest = "S98VSD.VXD"
-                                                   Sha256 = (Get-FileHash -LiteralPath $vsdPath -Algorithm SHA256).Hash }
-                Write-Ok ("S98VSD.VXD from {0}" -f $vsdPath)
+                                                   FullPath = $vsdImage; Dest = "S98VSD.VXD"
+                                                   Sha256 = (Get-FileHash -LiteralPath $vsdImage -Algorithm SHA256).Hash }
+                Write-Ok ("S98VSD.VXD from {0}" -f $vsdImage)
                 # Windows loads an IOSUBSYS driver by its base name: a layer
                 # named STOR98.VXD beside stor98.mpd stopped Stor98's start
                 # (Code 10; design record 30 section 3.1, runs/run-43.md).
@@ -791,8 +837,10 @@ time; they land in different directories on purpose.
                 if ($dupNames.Count -ne 0) {
                     throw ("drivers staged for IOSUBSYS share a base name ({0}): Windows would load only one of them." -f ($dupNames -join ", "))
                 }
+            } elseif ($namedVsd) {
+                throw "-VsdPath: there is no file '$vsdImage'."
             } else {
-                Write-Warn ("no S98VSD.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdPath)
+                Write-Warn ("no S98VSD.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdImage)
             }
         }
     }
@@ -805,20 +853,23 @@ time; they land in different directories on purpose.
     # src\pfw\build.cmd could not build it goes without it (make-release.ps1
     # refuses that for a cut).
     $pfwFile = $null
-    if ($Arch -eq "x86") {
-        $pfwPath = Join-Path $repo ("src\pfw\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "XHCIPFW.VXD")
-        if (Test-Path -LiteralPath $pfwPath -PathType Leaf) {
+    if ($Arch -eq "x86" -and $stagePfwVxd) {
+        $pfwImage = if ($namedPfwVxd) { Resolve-NamedImage $PfwVxdPath } else {
+            Join-Path $repo ("src\pfw\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "XHCIPFW.VXD") }
+        if (Test-Path -LiteralPath $pfwImage -PathType Leaf) {
             if (-not $SkipBinaryGates) {
-                $pfwArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\check-pfw.ps1"), $pfwPath)
+                $pfwArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\check-pfw.ps1"), $pfwImage)
                 if ($Flavor -eq "qemu") { $pfwArgs += "-Qemu" }
                 $out = & powershell.exe @pfwArgs 2>&1
                 if ($LASTEXITCODE -ne 0) { throw ("XHCIPFW.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             }
-            $pfwFile = [pscustomobject]@{ FullPath = $pfwPath; Dest = "XHCIPFW.VXD"
-                                          Sha256 = (Get-FileHash -LiteralPath $pfwPath -Algorithm SHA256).Hash }
-            Write-Ok ("XHCIPFW.VXD from {0}" -f $pfwPath)
+            $pfwFile = [pscustomobject]@{ FullPath = $pfwImage; Dest = "XHCIPFW.VXD"
+                                          Sha256 = (Get-FileHash -LiteralPath $pfwImage -Algorithm SHA256).Hash }
+            Write-Ok ("XHCIPFW.VXD from {0}" -f $pfwImage)
+        } elseif ($namedPfwVxd) {
+            throw "-PfwVxdPath: there is no file '$pfwImage'."
         } else {
-            Write-Warn ("no XHCIPFW.VXD at {0}: this package goes without it (src\pfw\build.cmd builds it)" -f $pfwPath)
+            Write-Warn ("no XHCIPFW.VXD at {0}: this package goes without it (src\pfw\build.cmd builds it)" -f $pfwImage)
         }
     }
     # XHCIPFW.SYS (task 44.49, design record 32 section 11): the same step for
@@ -826,20 +877,23 @@ time; they land in different directories on purpose.
     # qemu image in the qemu package; held to src\pfw\nt\check-pfwsys.ps1
     # again here and staged under the hash it had then.
     $pfwSysFile = $null
-    if ($Arch -eq "x86") {
-        $pfwSysPath = Join-Path $repo ("src\pfw\nt\" + $(if ($Flavor -eq "qemu") { "objfre_qemu" } else { "objfre" }) + "\i386\xhcipfw.sys")
-        if (Test-Path -LiteralPath $pfwSysPath -PathType Leaf) {
+    if ($Arch -eq "x86" -and $stagePfwSys) {
+        $pfwSysImage = if ($namedPfwSys) { Resolve-NamedImage $PfwSysPath } else {
+            Join-Path $repo ("src\pfw\nt\" + $(if ($Flavor -eq "qemu") { "objfre_qemu" } else { "objfre" }) + "\i386\xhcipfw.sys") }
+        if (Test-Path -LiteralPath $pfwSysImage -PathType Leaf) {
             if (-not $SkipBinaryGates) {
-                $pfwSysArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1"), $pfwSysPath)
+                $pfwSysArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1"), $pfwSysImage)
                 if ($Flavor -eq "qemu") { $pfwSysArgs += "-Qemu" }
                 $out = & powershell.exe @pfwSysArgs 2>&1
                 if ($LASTEXITCODE -ne 0) { throw ("XHCIPFW.SYS failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             }
-            $pfwSysFile = [pscustomobject]@{ FullPath = $pfwSysPath; Dest = "XHCIPFW.SYS"
-                                             Sha256 = (Get-FileHash -LiteralPath $pfwSysPath -Algorithm SHA256).Hash }
-            Write-Ok ("XHCIPFW.SYS from {0}" -f $pfwSysPath)
+            $pfwSysFile = [pscustomobject]@{ FullPath = $pfwSysImage; Dest = "XHCIPFW.SYS"
+                                             Sha256 = (Get-FileHash -LiteralPath $pfwSysImage -Algorithm SHA256).Hash }
+            Write-Ok ("XHCIPFW.SYS from {0}" -f $pfwSysImage)
+        } elseif ($namedPfwSys) {
+            throw "-PfwSysPath: there is no file '$pfwSysImage'."
         } else {
-            Write-Warn ("no XHCIPFW.SYS at {0}: this package goes without it (src\pfw\nt\build.cmd builds it)" -f $pfwSysPath)
+            Write-Warn ("no XHCIPFW.SYS at {0}: this package goes without it (src\pfw\nt\build.cmd builds it)" -f $pfwSysImage)
         }
     }
 

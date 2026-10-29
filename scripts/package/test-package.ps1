@@ -427,6 +427,45 @@ try {
         "-OemPath", (Join-Path $repo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
     Assert-True ($r.ExitCode -ne 0) "the amd64 txtsetup.oem was staged into an x86 package."
 
+    # --- XHCIPFW.VXD, XHCIPFW.SYS and S98VSD.VXD (roadmap-usb4 task 45.3) ---
+    #
+    # A stand-in caller stages none of the tree's images, so no case here
+    # turns on what an earlier build left in src\pfw\ or src\vsd\: only the
+    # images it names, at the package root (S98VSD.VXD beside stor98.mpd),
+    # byte for byte; and the amd64 package refuses them.
+    Write-Step "the PFW and VSD images: a stand-in caller's own or none, never the tree's"
+    $pfwNone = Join-Path $script:work "pkg-pfw-none"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $pfwNone)
+    Assert-True ($r.ExitCode -eq 0) ("a stand-in package was rejected:`n" + $r.Output)
+    Assert-True (@(Get-ChildItem -LiteralPath $pfwNone -Recurse -Force | Where-Object { $_.Name -like "XHCIPFW*" -or $_.Name -like "S98VSD*" }).Count -eq 0) `
+        "a stand-in package that named no PFW or VSD image carries one (the tree's)."
+    Assert-True ($r.Output -notmatch "XHCIPFW|S98VSD") ("a stand-in package that named no PFW or VSD image read the tree's. Output:`n" + $r.Output)
+    $pfwVxdIn = Join-Path $script:work "stand-in-XHCIPFW.VXD"
+    $pfwSysIn = Join-Path $script:work "stand-in-xhcipfw.sys"
+    $vsdIn = Join-Path $script:work "stand-in-S98VSD.VXD"
+    [System.IO.File]::WriteAllText($pfwVxdIn, "stand-in pfw vxd", (New-Object System.Text.ASCIIEncoding))
+    [System.IO.File]::WriteAllText($pfwSysIn, "stand-in pfw sys", (New-Object System.Text.ASCIIEncoding))
+    [System.IO.File]::WriteAllText($vsdIn, "stand-in vsd", (New-Object System.Text.ASCIIEncoding))
+    $pfwOut = Join-Path $script:work "pkg-pfw"
+    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $pfwOut,
+                            "-PfwVxdPath", $pfwVxdIn, "-PfwSysPath", $pfwSysIn, "-VsdPath", $vsdIn) + (Get-NvArgs $nvRoot))
+    Assert-True ($r.ExitCode -eq 0) ("a package naming the PFW and VSD stand-ins was rejected:`n" + $r.Output)
+    foreach ($pc in @(@{ In = $pfwVxdIn; Dest = "XHCIPFW.VXD" }, @{ In = $pfwSysIn; Dest = "XHCIPFW.SYS" }, @{ In = $vsdIn; Dest = "S98VSD.VXD" })) {
+        $at = Join-Path $pfwOut $pc.Dest
+        Assert-True ((Test-Path -LiteralPath $at -PathType Leaf) -and
+                     (Get-FileHash -LiteralPath $at -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $pc.In -Algorithm SHA256).Hash) `
+            ("the package has no {0} at its root, or not the stand-in it named." -f $pc.Dest)
+    }
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $nvAmd64Inf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-pfw-amd64"),
+                           "-PfwVxdPath", $pfwVxdIn)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "x86 package alone") ("an amd64 package took a PFW image. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-pfw-missing"),
+                           "-PfwSysPath", (Join-Path $script:work "no-such-xhcipfw.sys"))
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "-PfwSysPath: there is no file") ("a named PFW image that is not there was passed over. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-vsd-nostor98"),
+                           "-VsdPath", $vsdIn)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "carries no Stor98") ("-VsdPath was taken for a package without Stor98. Output:`n" + $r.Output)
+
     # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
     #
     # The port switchover's user script. Since task 37.5 no package carries
@@ -5674,6 +5713,7 @@ try {
         @{ P = "xhcitr/tr_core.c";                   In = $true },
         @{ P = "scripts/import-gate/xhci98-imports.allow"; In = $true },
         @{ P = "scripts/build-driver.cmd";           In = $true },
+        @{ P = "scripts/build-steps.ps1";            In = $true },
         @{ P = "scripts\source-stamp.ps1";           In = $true },
         @{ P = "scripts/common.ps1";                 In = $true },
         @{ P = "scripts/import-gate/evidence-common.ps1"; In = $true }
@@ -5762,7 +5802,7 @@ try {
         return $o.Trim()
     }
     [void](Invoke-ImGit $imA @("init", "-q"))
-    [System.IO.File]::WriteAllText((Join-Path $imA ".gitignore"), "out/`nobj*/`nsrc/stor98/out/`n")
+    [System.IO.File]::WriteAllText((Join-Path $imA ".gitignore"), "out/`nobj*/`nsrc/stor98/out/`ntools/`n")
     [System.IO.File]::WriteAllText((Join-Path $imA "src\xhci_ring.c"), "a")
     [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "a")
     [void](Invoke-ImGit $imA @("add", "-A")); [void](Invoke-ImGit $imA @("commit", "-q", "-m", "A"))
@@ -6094,6 +6134,59 @@ try {
     } finally {
         Pop-Location
     }
+    # The default tree B (task 45.3): <A>-x64 made beside A at A's HEAD
+    # with A's tools\ directories linked, moved when A moves on, left when
+    # it is dirty, and refused when it is no worktree of A's repository.
+    Write-Step "the default tree B: made, its tools linked, moved with A, left when dirty, refused when foreign"
+    $dtTools = Join-Path $imA "tools\kit"
+    New-Item -ItemType Directory -Force -Path $dtTools | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $dtTools "kit.txt"), "kit")
+    $dtB = Get-DefaultCutX64Tree -Repo $imA
+    Assert-True ($dtB -eq (Join-Path $imRoot "a-x64")) ("the default tree B is '{0}', not a-x64 beside A" -f $dtB)
+    $r = $null
+    try { $r = Initialize-CutX64Tree -Repo $imA -X64Tree $dtB } catch { $r = $_.Exception.Message }
+    $dtHead = Invoke-ImGit $imA @("rev-parse", "HEAD")
+    Assert-True ($r -eq $dtB -and (Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead -and
+                 (Test-Path -LiteralPath (Join-Path $dtB "tools\kit\kit.txt")) -and
+                 ((Get-Item -LiteralPath (Join-Path $dtB "tools\kit") -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) `
+        ("the default tree B was not made at A's HEAD with A's tools linked: '{0}'" -f $r)
+    Assert-True ((Get-GatedImportTreeFault -Repo $imA -From $dtB) -eq "") "the default tree B is not another worktree of A's repository."
+    [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "e")
+    [void](Invoke-ImGit $imA @("commit", "-q", "-am", "E"))
+    $dtHead2 = Invoke-ImGit $imA @("rev-parse", "HEAD")
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2) "the default tree B was not moved to A's new HEAD."
+    [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "f")
+    [void](Invoke-ImGit $imA @("commit", "-q", "-am", "F"))
+    [System.IO.File]::WriteAllText((Join-Path $dtB "notes.md"), "dirty")
+    New-Item -ItemType Directory -Force -Path (Join-Path $imA "tools\kit2") | Out-Null
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2 -and [System.IO.File]::ReadAllText((Join-Path $dtB "notes.md")) -eq "dirty") `
+        "a dirty default tree B was moved."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dtB "tools\kit2"))) "a dirty default tree B was given a link."
+    # A tree there that this script did not make (no marker naming A) is
+    # never moved, even clean.
+    [void](Invoke-ImGit $dtB @("checkout", "-q", "--", "notes.md"))
+    Remove-Item -LiteralPath (Join-Path $dtB "out\cut-x64-tree.txt") -Force
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2) "a default tree B this script did not make was moved."
+    # Nor one on a branch, though marked.
+    [System.IO.File]::WriteAllText((Join-Path $dtB "out\cut-x64-tree.txt"), $imA)
+    [void](Invoke-ImGit $dtB @("checkout", "-q", "-b", "bside"))
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2 -and -not (Test-Path -LiteralPath (Join-Path $dtB "tools\kit2"))) `
+        "a default tree B on a branch was moved or given a link."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dtB "out\gated-x86.lock")) -and -not (Test-Path -LiteralPath (Join-Path $dtB "out\gated-amd64.lock"))) `
+        "preparing tree B left a lock in it."
+    [System.IO.Directory]::Delete((Join-Path $dtB "tools\kit"))
+    [void](Invoke-ImGit $imA @("worktree", "remove", "--force", $dtB))
+    $dtForeign = Join-Path $imRoot "foreign-x64"
+    New-Item -ItemType Directory -Force -Path $dtForeign | Out-Null
+    $r = ""
+    try { [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtForeign) } catch { $r = $_.Exception.Message }
+    Assert-True ($r.Contains("tree B") -and $r -match "not a git worktree|not the top of a worktree|another repository") ("a directory that is no worktree was taken as tree B: '{0}'" -f $r)
+    Remove-Item -LiteralPath (Join-Path $imA "tools") -Recurse -Force
+    [void](Invoke-ImGit $imA @("branch", "-D", "bside"))
     [System.IO.Directory]::Delete($cbAlias)
     if (Test-Path -LiteralPath $imAlias) { [System.IO.Directory]::Delete($imAlias) }
     [void](Invoke-ImGit $imA @("worktree", "remove", "--force", $imB))
