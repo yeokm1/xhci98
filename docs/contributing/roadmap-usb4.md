@@ -788,6 +788,7 @@ reading and design moved into Phase 45 (the decisions table, "Phase
 
 - [ ] DEPART.1 the rest of 43.53: a never-completed request to a departed device on real hardware; later, low priority, a departed PDO's start answered on 9x (owner, 2026-10-22; record 13 sections 5.2 and 10.5)
 - [ ] ME0E.1 ME's first cold start after a fresh install with an NVMe enclosure stopping once at "0E : 0197 : BFF62170" (1 of 7, the `3.2.0.0` matrix): unattributed; owed, a cause and a real ME machine (owner, 2026-10-25: kept here; 44.20's ME legs record any recurrence, with its address; owner, 2026-10-29: kept, Phase 45's ME legs recording it likewise)
+- [ ] HOLDLINE.1 a held shared IRQ named at start on 98 SE and ME (owner, 2026-10-29, after 45.33's documentation): at each controller's start, before its line is connected, a reading of whether another device on the same line already holds it raised, and if so that device's bus, device, function, vendor and device id and the IRQ recorded in the snapshot and shown by XHCITR; diagnostic only, nothing else changed (no fallback to polling by itself); the draft of 45.33's start-time scan is its starting point (`runs/run-45.md` "45.33")
 
 ### Windows 8, 8.1 and 10
 
